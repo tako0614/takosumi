@@ -176,6 +176,65 @@ test("inventory rejects missing and ambiguous Workspace scope mappings", async (
   });
 });
 
+test("inventory preserves a durable legacy space_ Workspace for migration", async () => {
+  const workspaces = new InMemoryOpenTofuControlStore();
+  await workspaces.putWorkspace(workspace("space_legacy", NOW));
+  const stores = createInMemoryResourceShapeStores();
+  const legacySpace = "space_resources_legacy" as SpaceId;
+  const legacyResource = resource(
+    legacySpace,
+    "ObjectBucket",
+    "legacy-archive",
+  );
+  await stores.resources.upsert(legacyResource);
+
+  const receipt = await new ResourceFormPinInventoryService({
+    workspaces,
+    resources: stores.resources,
+    resolveSpace: (id) => (id === "space_legacy" ? legacySpace : undefined),
+  }).capture();
+  expect(receipt.counts).toMatchObject({ workspaces: 1, resources: 1 });
+  expect(receipt.rows).toEqual([
+    {
+      workspaceId: "space_legacy",
+      space: legacySpace,
+      resourceId: legacyResource.id,
+      name: "legacy-archive",
+      kind: "ObjectBucket",
+      form: null,
+    },
+  ]);
+});
+
+test("inventory paginates more than 200 Workspaces without a bulk id lookup", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  for (let index = 0; index < 205; index += 1) {
+    const id = `ws_${index.toString().padStart(3, "0")}`;
+    await store.putWorkspace(workspace(id, NOW));
+  }
+  const pageLimits: number[] = [];
+  const stores = createInMemoryResourceShapeStores();
+  const service = new ResourceFormPinInventoryService({
+    workspaces: {
+      listWorkspacesPage: async (params) => {
+        pageLimits.push(params.limit);
+        return await store.listWorkspacesPage(params);
+      },
+    },
+    resources: stores.resources,
+    resolveSpace: (id) => `space_${id}`,
+  });
+
+  const receipt = await service.capture();
+  expect(receipt.counts).toMatchObject({
+    workspaces: 205,
+    scopes: 2_050,
+    resources: 0,
+  });
+  expect(pageLimits.length).toBeGreaterThanOrEqual(6);
+  expect(pageLimits.every((limit) => limit === 100)).toBeTrue();
+});
+
 test("inventory rejects incomplete cursor chains and hard-limit overflow", async () => {
   const stores = createInMemoryResourceShapeStores();
   const repeatedCursor = {

@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import type { InstalledFormReference } from "takosumi-contract";
 import { createApiApp } from "../../../core/api/app.ts";
+import { WORKSPACE_ID_PATTERN } from "../../../core/api/deploy_control_shared.ts";
 import { OpenTofuController } from "../../../core/domains/deploy-control/mod.ts";
 import { InMemoryOpenTofuControlStore } from "../../../core/domains/deploy-control/store.ts";
 import type {
@@ -15,6 +16,7 @@ import type {
 
 const TOKEN = "scoped-token";
 const WORKSPACE = "ws_allowed12";
+const LEGACY_WORKSPACE = "space_legacy12";
 const SPACE = "space_resources_a";
 const BASE = `/internal/v1/workspaces/${WORKSPACE}/migrations/resource-form-pins`;
 const INVENTORY_PATH = "/internal/v1/migrations/resource-form-pins/inventory";
@@ -216,6 +218,71 @@ test("exact FormRef routes preserve Workspace-scoped bearer authorization", asyn
     },
   );
   expect(denied.status).toBe(403);
+});
+
+test("exact FormRef migration routes alone accept a durable legacy space_ Workspace id", async () => {
+  expect(WORKSPACE_ID_PATTERN.test(LEGACY_WORKSPACE)).toBeFalse();
+  const legacyBase = `/internal/v1/workspaces/${LEGACY_WORKSPACE}/migrations/resource-form-pins`;
+  const legacy = await fixture(
+    (workspaceId) =>
+      workspaceId === LEGACY_WORKSPACE ? "space_resources_legacy" : undefined,
+    [LEGACY_WORKSPACE],
+  );
+  const backfill = await legacy.app.request(`${legacyBase}/backfill`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      kind: "ObjectBucket",
+      activationIds: ["activation_object_bucket"],
+      dryRun: true,
+    }),
+  });
+  expect(backfill.status).toBe(200);
+  expect(legacy.backfillRequest()).toMatchObject({
+    workspaceId: LEGACY_WORKSPACE,
+    spaceId: "space_resources_legacy",
+  });
+
+  const restore = await legacy.app.request(`${legacyBase}/restore`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ entries: [] }),
+  });
+  expect(restore.status).toBe(200);
+  expect(legacy.restoreRequest()).toMatchObject({
+    workspaceId: LEGACY_WORKSPACE,
+    spaceId: "space_resources_legacy",
+  });
+});
+
+test("exact FormRef migration routes reject adjacent legacy-id prefixes", async () => {
+  const operator = await fixture(() => "space_resources_legacy", "*");
+  for (const workspaceId of [
+    "spaces_legacy12",
+    "spac_legacy12",
+    "project_legacy12",
+  ]) {
+    for (const operation of ["backfill", "restore"]) {
+      const response = await operator.app.request(
+        `/internal/v1/workspaces/${workspaceId}/migrations/resource-form-pins/${operation}`,
+        {
+          method: "POST",
+          headers,
+          body: JSON.stringify(
+            operation === "backfill"
+              ? {
+                  kind: "ObjectBucket",
+                  activationIds: ["activation_object_bucket"],
+                }
+              : { entries: [] },
+          ),
+        },
+      );
+      expect(response.status).toBe(400);
+    }
+  }
+  expect(operator.backfillRequest()).toBeUndefined();
+  expect(operator.restoreRequest()).toBeUndefined();
 });
 
 test("authoritative inventory requires an unrestricted deploy-control bearer", async () => {

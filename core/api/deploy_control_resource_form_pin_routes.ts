@@ -7,7 +7,6 @@ import {
   ensureOperatorPermission,
   ensureWorkspacePermission,
   readJsonBody,
-  WORKSPACE_ID_PATTERN,
 } from "./deploy_control_shared.ts";
 import {
   TAKOSUMI_RESOURCE_FORM_PIN_INVENTORY_ROUTE,
@@ -24,9 +23,16 @@ import type { ResourceFormPinBackupEntry } from "takosumi-contract/backups";
 import { decodeCursor, MAX_PAGE_LIMIT } from "takosumi-contract/pagination";
 import type { SpaceId } from "../shared/ids.ts";
 
+// Migration-local compatibility only. Historical production ledgers can carry
+// durable Workspace owner ids with the retired `space_` prefix. Normal
+// Workspace APIs remain ws_-only; these exact backfill/restore routes must be
+// able to repair either persisted form without broadening product identity.
+const RESOURCE_FORM_PIN_MIGRATION_WORKSPACE_ID_PATTERN =
+  /^(?:ws|space)_[0-9a-zA-Z]{3,64}$/u;
+
 const WORKSPACE_ID_PARAM = {
   param: "workspaceId",
-  pattern: WORKSPACE_ID_PATTERN,
+  pattern: RESOURCE_FORM_PIN_MIGRATION_WORKSPACE_ID_PATTERN,
 } as const;
 
 export const DEPLOY_CONTROL_RESOURCE_FORM_PIN_ENDPOINTS: readonly DeployControlEndpoint[] =
