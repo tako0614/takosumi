@@ -44,26 +44,26 @@ test("operator release activator help exits successfully", () => {
 
 test("operator release activator rejects a raw token argument in every mode", () => {
   for (const mode of ["run", "serve", "tokens-check"]) {
-    const result = spawnSync(
-      "bun",
-      [
-        "scripts/operator-release-activator.ts",
-        mode,
-        "--token",
-        LEGACY_ACTIVATOR_TOKEN,
-      ],
-      {
-        cwd: new URL("../..", import.meta.url),
-        encoding: "utf8",
-      },
-    );
+    for (const tokenArgs of [
+      ["--token", LEGACY_ACTIVATOR_TOKEN],
+      [`--token=${LEGACY_ACTIVATOR_TOKEN}`],
+    ]) {
+      const result = spawnSync(
+        "bun",
+        ["scripts/operator-release-activator.ts", mode, ...tokenArgs],
+        {
+          cwd: new URL("../..", import.meta.url),
+          encoding: "utf8",
+        },
+      );
 
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain(
-      "--token is forbidden because secret values must not be passed in argv",
-    );
-    expect(result.stdout).not.toContain(LEGACY_ACTIVATOR_TOKEN);
-    expect(result.stderr).not.toContain(LEGACY_ACTIVATOR_TOKEN);
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain(
+        "--token is forbidden because secret values must not be passed in argv",
+      );
+      expect(result.stdout).not.toContain(LEGACY_ACTIVATOR_TOKEN);
+      expect(result.stderr).not.toContain(LEGACY_ACTIVATOR_TOKEN);
+    }
   }
 });
 

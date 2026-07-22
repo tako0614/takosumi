@@ -1130,6 +1130,11 @@ function isInside(path: string, root: string): boolean {
 }
 
 async function main(argv = process.argv.slice(2)): Promise<void> {
+  if (argv.some((arg) => arg === "--token" || arg.startsWith("--token="))) {
+    throw new Error(
+      "--token is forbidden because secret values must not be passed in argv; use --token-file",
+    );
+  }
   if (argv[0] === "--help" || argv[0] === "-h") {
     console.log(USAGE);
     return;
