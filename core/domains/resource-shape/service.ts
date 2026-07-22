@@ -790,6 +790,7 @@ export class ResourceShapeService {
     const evidence = await resourceDeploymentEvidence(req, output, plan);
     const adapterInput = {
       resourceId: output.resolutionLock.resourceId,
+      resourceGeneration: (existing?.generation ?? 0) + 1,
       ...(form.value === undefined ? {} : { form: form.value }),
       environment: req.environment ?? existing?.environment ?? "default",
       stateGeneration:
@@ -1331,6 +1332,7 @@ export class ResourceShapeService {
 
       const adapterInput = {
         resourceId: id,
+        resourceGeneration: generation,
         ...(form.value === undefined ? {} : { form: form.value }),
         ...(operationRun
           ? { operationKey: operationRun.resourceOperationKey }
@@ -2054,6 +2056,7 @@ export class ResourceShapeService {
       } else {
         result = await this.#adapter.importResource({
           resourceId: id,
+          resourceGeneration: 1,
           ...(form.value === undefined ? {} : { form: form.value }),
           ...(operationRun
             ? { operationKey: operationRun.resourceOperationKey }
@@ -2574,6 +2577,7 @@ export class ResourceShapeService {
       } else {
         observation = await this.#adapter.observe({
           resourceId: id,
+          resourceGeneration: record.generation,
           ...(record.form === undefined ? {} : { form: record.form }),
           ...(operationRun
             ? { operationKey: operationRun.resourceOperationKey }
@@ -3136,6 +3140,7 @@ export class ResourceShapeService {
       } else {
         result = await this.#adapter.refresh({
           resourceId: id,
+          resourceGeneration: record.generation,
           ...(record.form === undefined ? {} : { form: record.form }),
           ...(operationRun
             ? { operationKey: operationRun.resourceOperationKey }
@@ -3827,6 +3832,7 @@ export class ResourceShapeService {
           // resolve absence through the plugin's read-only observation path.
           const observation = await this.#adapter.observe({
             resourceId: id,
+            resourceGeneration: claimedRecord.generation,
             ...(record.form === undefined ? {} : { form: record.form }),
             operationKey: operationRun.resourceOperationKey,
             environment: claimedRecord.environment ?? "default",
@@ -3866,6 +3872,7 @@ export class ResourceShapeService {
             await withTimeout(
               this.#adapter.delete({
                 resourceId: id,
+                resourceGeneration: claimedRecord.generation,
                 ...(record.form === undefined ? {} : { form: record.form }),
                 operationKey: operationRun.resourceOperationKey,
                 environment: claimedRecord.environment ?? "default",
@@ -3902,6 +3909,7 @@ export class ResourceShapeService {
           await withTimeout(
             this.#adapter.delete({
               resourceId: id,
+              resourceGeneration: claimedRecord.generation,
               ...(record.form === undefined ? {} : { form: record.form }),
               ...(operationRun
                 ? { operationKey: operationRun.resourceOperationKey }
@@ -4998,6 +5006,7 @@ export class ResourceShapeService {
       }
       resolved[name] = {
         resourceId: resource.id,
+        resourceGeneration: resource.generation,
         kind: resource.kind,
         ...(resource.form === undefined ? {} : { form: resource.form }),
         permissions: connection.permissions,

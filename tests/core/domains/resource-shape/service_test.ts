@@ -1118,12 +1118,14 @@ test("exact direct-plugin lifecycle propagates one immutable Form through Runs, 
       form: EXACT_CONTAINER_FORM,
     },
   ]);
+  expect(adapter.previewInputs.at(-1)?.resourceGeneration).toBe(1);
 
   const applied = await service.apply(request, {
     planDigest: preview.value.planDigest,
   });
   expect(applied.ok).toBe(true);
   expect(adapter.applyInputs[0]).toMatchObject({
+    resourceGeneration: 1,
     form: EXACT_CONTAINER_FORM,
     nativeResources: [{ form: EXACT_CONTAINER_FORM }],
   });
@@ -1145,10 +1147,12 @@ test("exact direct-plugin lifecycle propagates one immutable Form through Runs, 
       .ok,
   ).toBe(true);
   expect(adapter.observeInputs.at(-1)).toMatchObject({
+    resourceGeneration: 1,
     form: EXACT_CONTAINER_FORM,
     nativeResources: [{ form: EXACT_CONTAINER_FORM }],
   });
   expect(adapter.refreshInputs.at(-1)).toMatchObject({
+    resourceGeneration: 1,
     form: EXACT_CONTAINER_FORM,
     nativeResources: [{ form: EXACT_CONTAINER_FORM }],
   });
@@ -1164,6 +1168,7 @@ test("exact direct-plugin lifecycle propagates one immutable Form through Runs, 
   });
   expect(imported.ok).toBe(true);
   expect(adapter.importInputs.at(-1)).toMatchObject({
+    resourceGeneration: 1,
     form: EXACT_CONTAINER_FORM,
     nativeResources: [{ form: EXACT_CONTAINER_FORM }],
   });
@@ -1201,6 +1206,7 @@ test("exact direct-plugin lifecycle propagates one immutable Form through Runs, 
       .ok,
   ).toBe(true);
   expect(adapter.deleteInputs.at(-1)).toMatchObject({
+    resourceGeneration: 1,
     form: EXACT_CONTAINER_FORM,
     nativeResources: [{ form: EXACT_CONTAINER_FORM }],
   });
@@ -3039,6 +3045,7 @@ test("portable service shapes resolve, apply, and carry Schedule connections", a
     adapter.previewInputs.at(-1)?.resolvedConnections?.workflow,
   ).toMatchObject({
     resourceId: "tkrn:space_1:DurableWorkflow:ingest",
+    resourceGeneration: 1,
     kind: "DurableWorkflow",
     permissions: ["invoke"],
     projection: "schedule_trigger",
@@ -3172,6 +3179,7 @@ test("EdgeWorker connections resolve Ready resources before preview and apply", 
     adapter.previewInputs.at(-1)?.resolvedConnections?.ASSETS;
   expect(previewConnection).toMatchObject({
     resourceId: "tkrn:space_1:ObjectBucket:assets",
+    resourceGeneration: 1,
     kind: "ObjectBucket",
     permissions: ["read", "write"],
     projection: "runtime_binding",

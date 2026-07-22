@@ -56,6 +56,7 @@ export class PluginResourceShapeAdapter implements ResourceAdapter {
   }
 
   async preview(input: AdapterApplyInput): Promise<AdapterPreviewResult> {
+    assertResourceGeneration(input.resourceGeneration);
     const plugin = this.#pluginFor(input.implementation.plugin);
     if (!plugin) {
       assertExplicitModuleExecution(input);
@@ -73,6 +74,7 @@ export class PluginResourceShapeAdapter implements ResourceAdapter {
   }
 
   async apply(input: AdapterApplyInput): Promise<AdapterApplyResult> {
+    assertResourceGeneration(input.resourceGeneration);
     const plugin = this.#pluginFor(input.implementation.plugin);
     if (!plugin) {
       assertExplicitModuleExecution(input);
@@ -92,6 +94,7 @@ export class PluginResourceShapeAdapter implements ResourceAdapter {
   async importResource(
     input: AdapterImportInput,
   ): Promise<AdapterImportResult> {
+    assertResourceGeneration(input.resourceGeneration);
     const plugin = this.#pluginFor(input.implementation.plugin);
     if (!plugin) {
       assertExplicitModuleExecution(input);
@@ -109,6 +112,7 @@ export class PluginResourceShapeAdapter implements ResourceAdapter {
   }
 
   async observe(input: AdapterApplyInput): Promise<AdapterObserveResult> {
+    assertResourceGeneration(input.resourceGeneration);
     const plugin = this.#pluginFor(input.implementation.plugin);
     if (!plugin) {
       assertExplicitModuleExecution(input);
@@ -126,6 +130,7 @@ export class PluginResourceShapeAdapter implements ResourceAdapter {
   }
 
   async refresh(input: AdapterApplyInput): Promise<AdapterRefreshResult> {
+    assertResourceGeneration(input.resourceGeneration);
     const plugin = this.#pluginFor(input.implementation.plugin);
     if (!plugin) {
       assertExplicitModuleExecution(input);
@@ -143,6 +148,7 @@ export class PluginResourceShapeAdapter implements ResourceAdapter {
   }
 
   async delete(input: AdapterDeleteInput): Promise<void> {
+    assertResourceGeneration(input.resourceGeneration);
     const plugin = this.#pluginFor(input.implementation.plugin);
     if (!plugin) {
       assertExplicitModuleExecution(input);
@@ -210,6 +216,14 @@ export class PluginResourceShapeAdapter implements ResourceAdapter {
       );
     }
     return body;
+  }
+}
+
+function assertResourceGeneration(resourceGeneration: number): void {
+  if (!Number.isSafeInteger(resourceGeneration) || resourceGeneration < 1) {
+    throw new Error(
+      "Resource Shape adapter input must include a positive safe-integer resourceGeneration",
+    );
   }
 }
 

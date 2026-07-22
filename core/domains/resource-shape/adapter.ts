@@ -31,6 +31,8 @@ import type {
  */
 export interface ResolvedResourceConnection {
   readonly resourceId: string;
+  /** Exact Ready incarnation observed while resolving this dependency. */
+  readonly resourceGeneration: number;
   readonly kind: ResourceShapeKind;
   /** Exact owning Form for replay-safe Resource connection evidence. */
   readonly form?: InstalledFormReference;
@@ -45,6 +47,12 @@ export interface ResolvedResourceConnection {
 export interface AdapterApplyInput {
   /** Canonical resource id (`tkrn:{space}:{kind}:{name}`). */
   readonly resourceId: string;
+  /**
+   * Exact canonical Resource generation whose lifecycle operation authorized
+   * this adapter call. Direct adapters must persist it as incarnation
+   * authority when a runtime can outlive request authorization.
+   */
+  readonly resourceGeneration: number;
   /** Exact immutable Form selected by the Resource/ResolutionLock pair. */
   readonly form?: InstalledFormReference;
   /**
@@ -166,6 +174,8 @@ export interface AdapterObserveResult {
 
 export interface AdapterDeleteInput {
   readonly resourceId: string;
+  /** Exact canonical Resource generation being retired. */
+  readonly resourceGeneration: number;
   /** Exact immutable Form selected by the Resource/ResolutionLock pair. */
   readonly form?: InstalledFormReference;
   /**

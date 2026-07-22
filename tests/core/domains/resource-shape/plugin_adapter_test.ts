@@ -59,6 +59,7 @@ function applyInput(
 ): AdapterApplyInput {
   return {
     resourceId: "tkrn:space_1:ObjectBucket:assets",
+    resourceGeneration: 3,
     environment: "default",
     stateGeneration: 1,
     plan,
@@ -74,6 +75,7 @@ function deleteInput(
 ): AdapterDeleteInput {
   return {
     resourceId: "tkrn:space_1:ObjectBucket:assets",
+    resourceGeneration: 3,
     environment: "default",
     stateGeneration: 1,
     plan,
@@ -84,6 +86,31 @@ function deleteInput(
     ...overrides,
   };
 }
+
+test("plugin adapter rejects invalid Resource generation before dispatch", async () => {
+  let called = false;
+  const adapter = new PluginResourceShapeAdapter(
+    new StubResourceShapeAdapter(),
+    {
+      "cloud-managed": {
+        fetch() {
+          called = true;
+          return new Response(null, { status: 204 });
+        },
+      },
+    },
+  );
+
+  await expect(
+    adapter.apply(
+      applyInput({
+        implementation: pluginDescriptor,
+        resourceGeneration: 0,
+      }),
+    ),
+  ).rejects.toThrow("positive safe-integer resourceGeneration");
+  expect(called).toBe(false);
+});
 
 test("plugin adapter routes plugin-backed operations to the injected binding", async () => {
   const calls: { readonly url: string; readonly body: unknown }[] = [];
