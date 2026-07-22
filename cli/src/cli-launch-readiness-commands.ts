@@ -12,7 +12,6 @@ import {
 } from "./cli-help.ts";
 import {
   booleanOption,
-  optionalIntegerOption,
   optionalStringOption,
   parseOptions,
   validateHttpUrl,
@@ -51,6 +50,9 @@ const oidcAccountSecurityEvidenceTypes = [
   "client-secret-rotation",
   "audit-event",
 ] as const;
+
+const identitySecurityRotationLogKind =
+  "takosumi.identity-security-rotation-log@v1";
 
 export async function runLaunchReadinessValidate(
   args: string[],
@@ -183,82 +185,59 @@ export async function runLaunchReadinessOidcAccountSecurityEvidence(
     const issuer = normalizedHttpsIssuer(
       requiredStringOption(options, "issuer"),
     );
-    const keyId = requiredStringOption(options, "keyId");
-    const previousKeyId = requiredStringOption(options, "previousKeyId");
-    if (previousKeyId === keyId) {
-      throw new TypeError("--previous-key-id must differ from --key-id");
-    }
-    const rotationRunId = requiredStringOption(options, "rotationRunId");
-    const clientId = requiredStringOption(options, "clientId");
-    const oldSecretId = requiredStringOption(options, "oldSecretId");
-    const newSecretId = requiredStringOption(options, "newSecretId");
-    if (oldSecretId === newSecretId) {
-      throw new TypeError("--old-secret-id must differ from --new-secret-id");
-    }
-    const overlapWindowSeconds =
-      optionalIntegerOption(options, "overlapWindowSeconds") ??
-      missingNumberOption("overlap-window-seconds");
-    const revocationEventId = requiredStringOption(
-      options,
-      "revocationEventId",
+    const rotationLog = await loadIdentitySecurityRotationLog(
+      requiredStringOption(options, "rotationLogFile"),
+      issuer,
     );
-    const auditEventId = requiredStringOption(options, "auditEventId");
-    const auditSubject = requiredStringOption(options, "auditSubject");
-    const owner = requiredStringOption(options, "owner");
-    const reviewer = requiredStringOption(options, "reviewer");
-    if (owner.trim().toLowerCase() === reviewer.trim().toLowerCase()) {
-      throw new TypeError("--reviewer must differ from --owner");
-    }
-    const environment =
-      optionalStringOption(options, "environment") ?? "production";
-    if (environment !== "production" && environment !== "staging") {
-      throw new TypeError("--environment must be production or staging");
-    }
-    const completedAt =
-      optionalStringOption(options, "completedAt") ?? new Date().toISOString();
-    assertIsoTimestamp(completedAt, "--completed-at");
     const refPrefix =
       optionalStringOption(options, "refPrefix") ??
-      `vault://platform-readiness/${rotationRunId}/domains/oidc-account-security`;
+      `vault://platform-readiness/${rotationLog.rotationRunId}/identity-security-rotation`;
     assertConcreteEvidenceRefPrefix(refPrefix, "--ref-prefix");
 
-    const jwks = await loadJwks({
-      issuer,
-      jwksFile: optionalStringOption(options, "jwksFile"),
-    });
-    const jwksKeyIds = keyIdsFromJwks(jwks);
-    if (!jwksKeyIds.includes(keyId)) {
+    const overlapJwks = await loadPublicJwksFile(
+      requiredStringOption(options, "overlapJwksFile"),
+      "--overlap-jwks-file",
+    );
+    const postRevocationJwks = await loadPublicJwksFile(
+      requiredStringOption(options, "postRevocationJwksFile"),
+      "--post-revocation-jwks-file",
+    );
+    const overlapJwksKeyIds = keyIdsFromJwks(overlapJwks);
+    const postRevocationJwksKeyIds = keyIdsFromJwks(postRevocationJwks);
+    if (!overlapJwksKeyIds.includes(rotationLog.keyRotation.keyId)) {
       throw new TypeError(
-        `JWKS does not contain --key-id ${keyId}; found ${jwksKeyIds.join(", ") || "no kid values"}`,
+        `overlap JWKS does not contain active key id ${rotationLog.keyRotation.keyId}`,
       );
     }
-    if (!jwksKeyIds.includes(previousKeyId)) {
+    if (!overlapJwksKeyIds.includes(rotationLog.keyRotation.previousKeyId)) {
       throw new TypeError(
-        `JWKS does not contain --previous-key-id ${previousKeyId}; overlap JWKS must publish old and new keys`,
+        `overlap JWKS does not contain previous key id ${rotationLog.keyRotation.previousKeyId}`,
       );
     }
-    const overlapJwksDigest = `sha256:${await sha256Hex(canonicalJson(jwks))}`;
+    if (!postRevocationJwksKeyIds.includes(rotationLog.keyRotation.keyId)) {
+      throw new TypeError(
+        `post-revocation JWKS does not contain active key id ${rotationLog.keyRotation.keyId}`,
+      );
+    }
+    if (
+      postRevocationJwksKeyIds.includes(rotationLog.keyRotation.previousKeyId)
+    ) {
+      throw new TypeError(
+        `post-revocation JWKS still contains previous key id ${rotationLog.keyRotation.previousKeyId}`,
+      );
+    }
+    const overlapJwksDigest = `sha256:${await sha256Hex(canonicalJson(overlapJwks))}`;
+    const postRevocationJwksDigest = `sha256:${await sha256Hex(canonicalJson(postRevocationJwks))}`;
 
     const document = JSON.parse(await readFile(file, "utf8"));
     const updatedDocument = mergeOidcAccountSecurityEvidence(document, {
-      auditEventId,
-      auditSubject,
-      clientId,
-      completedAt,
-      environment,
+      ...rotationLog,
       issuer,
-      jwksKeyIds,
-      keyId,
-      newSecretId,
-      oldSecretId,
+      overlapJwksKeyIds,
       overlapJwksDigest,
-      overlapWindowSeconds,
-      owner,
-      previousKeyId,
+      postRevocationJwksKeyIds,
+      postRevocationJwksDigest,
       refPrefix,
-      reviewer,
-      revocationEventId,
-      rotationRunId,
     });
     if (out) {
       await writeFile(out, `${JSON.stringify(updatedDocument, null, 2)}\n`);
@@ -271,10 +250,14 @@ export async function runLaunchReadinessOidcAccountSecurityEvidence(
     const output = {
       kind: "takosumi.oidc-account-security-readiness-evidence@v1",
       issuer,
-      keyId,
-      previousKeyId,
+      keyId: rotationLog.keyRotation.keyId,
+      previousKeyId: rotationLog.keyRotation.previousKeyId,
       overlapJwksDigest,
-      jwksKeyIds,
+      postRevocationJwksDigest,
+      overlapJwksKeyIds,
+      postRevocationJwksKeyIds,
+      rotationRunId: rotationLog.rotationRunId,
+      securityRotationRunLogMerged: true,
       oidcReady,
       ...(oidcGap ? { oidcGap } : {}),
       ...(out ? { out } : { document: updatedDocument }),
@@ -348,24 +331,22 @@ async function runLaunchReadinessPublicSummaryValidate(
 function mergeOidcAccountSecurityEvidence(
   document: unknown,
   input: {
-    auditEventId: string;
-    auditSubject: string;
-    clientId: string;
+    auditEvent: IdentitySecurityRotationLog["auditEvent"];
     completedAt: string;
-    environment: string;
+    environment: "production" | "staging";
     issuer: string;
-    jwksKeyIds: readonly string[];
-    keyId: string;
-    newSecretId: string;
-    oldSecretId: string;
+    keyRotation: IdentitySecurityRotationLog["keyRotation"];
+    clientSecretRotation: IdentitySecurityRotationLog["clientSecretRotation"];
+    overlapJwksKeyIds: readonly string[];
     overlapJwksDigest: string;
-    overlapWindowSeconds: number;
     owner: string;
-    previousKeyId: string;
+    postRevocationJwksKeyIds: readonly string[];
+    postRevocationJwksDigest: string;
     refPrefix: string;
     reviewer: string;
-    revocationEventId: string;
     rotationRunId: string;
+    startedAt: string;
+    result: "passed";
   },
 ): Record<string, unknown> {
   if (!isRecord(document)) {
@@ -393,44 +374,47 @@ function mergeOidcAccountSecurityEvidence(
         ...existingEvidence,
         {
           type: "key-rotation-drill",
-          ref: `${input.refPrefix}/key-rotation-drill`,
+          ref: `${input.refPrefix}/domains/oidc-account-security/key-rotation-drill`,
           summary:
-            "OIDC signing key rotation overlap was verified against the hosted issuer JWKS.",
+            "OIDC signing key overlap and previous-key removal were verified against captured hosted issuer JWKS documents.",
           private: true,
           publicSummary:
-            "OIDC signing key rotation was verified against the hosted issuer JWKS.",
+            "OIDC signing key overlap and previous-key removal were verified.",
           rotationRunId: input.rotationRunId,
-          keyId: input.keyId,
-          previousKeyId: input.previousKeyId,
+          keyId: input.keyRotation.keyId,
+          previousKeyId: input.keyRotation.previousKeyId,
           issuer: input.issuer,
           overlapJwksDigest: input.overlapJwksDigest,
-          jwksKeyIds: input.jwksKeyIds,
+          postRevocationJwksDigest: input.postRevocationJwksDigest,
+          overlapJwksKeyIds: input.overlapJwksKeyIds,
+          postRevocationJwksKeyIds: input.postRevocationJwksKeyIds,
+          previousKeyRemovedAt: input.keyRotation.previousKeyRemovedAt,
         },
         {
           type: "client-secret-rotation",
-          ref: `${input.refPrefix}/client-secret-rotation`,
+          ref: `${input.refPrefix}/domains/oidc-account-security/client-secret-rotation`,
           summary:
             "Upstream OAuth client secret rotation and old-secret revocation were recorded.",
           private: true,
           publicSummary:
             "Upstream OAuth client secret rotation and revocation were recorded.",
           rotationRunId: input.rotationRunId,
-          clientId: input.clientId,
-          oldSecretId: input.oldSecretId,
-          newSecretId: input.newSecretId,
-          overlapWindowSeconds: input.overlapWindowSeconds,
-          revocationEventId: input.revocationEventId,
+          clientId: input.clientSecretRotation.clientId,
+          oldSecretId: input.clientSecretRotation.oldSecretId,
+          newSecretId: input.clientSecretRotation.newSecretId,
+          overlapWindowSeconds: input.clientSecretRotation.overlapWindowSeconds,
+          revocationEventId: input.clientSecretRotation.revocationEventId,
         },
         {
           type: "audit-event",
-          ref: `${input.refPrefix}/audit-event`,
+          ref: `${input.refPrefix}/domains/oidc-account-security/audit-event`,
           summary:
             "OIDC account-security rotation was recorded in the operator audit log.",
           private: true,
           publicSummary:
             "OIDC account-security rotation was recorded in the operator audit log.",
-          auditEventId: input.auditEventId,
-          subject: input.auditSubject,
+          auditEventId: input.auditEvent.id,
+          subject: input.auditEvent.subject,
         },
       ],
     };
@@ -445,7 +429,41 @@ function mergeOidcAccountSecurityEvidence(
       "readiness document is missing domains.oidc-account-security",
     );
   }
-  return { ...document, domains };
+  let foundSecurityOperations = false;
+  const domainsWithRotationLog = domains.map((entry: unknown) => {
+    if (!isRecord(entry) || entry.id !== "security-operations") return entry;
+    foundSecurityOperations = true;
+    const existingEvidence = Array.isArray(entry.evidence)
+      ? entry.evidence.filter(
+          (item: unknown) =>
+            !isRecord(item) || item.type !== "secret-rotation-run-log",
+        )
+      : [];
+    return {
+      ...entry,
+      evidence: [
+        ...existingEvidence,
+        {
+          type: "secret-rotation-run-log",
+          ref: `${input.refPrefix}/domains/security-operations/secret-rotation-run-log`,
+          summary:
+            "Identity security rotation completed with previous key and OAuth client secret revocation recorded.",
+          private: true,
+          publicSummary:
+            "Identity security secret rotation and revocation were recorded.",
+          rotationRunId: input.rotationRunId,
+          completedAt: input.completedAt,
+          result: input.result,
+        },
+      ],
+    };
+  });
+  if (!foundSecurityOperations) {
+    throw new TypeError(
+      "readiness document is missing domains.security-operations",
+    );
+  }
+  return { ...document, domains: domainsWithRotationLog };
 }
 
 function isOidcAccountSecurityEvidenceType(
@@ -459,39 +477,314 @@ function isOidcAccountSecurityEvidenceType(
   );
 }
 
-async function loadJwks(input: {
-  issuer: string;
-  jwksFile?: string;
-}): Promise<Record<string, unknown>> {
-  if (input.jwksFile) {
-    const value = JSON.parse(await readFile(input.jwksFile, "utf8"));
-    if (!isRecord(value))
-      throw new TypeError("--jwks-file must be a JSON object");
-    return value;
-  }
-  const discoveryUrl = `${input.issuer}/.well-known/openid-configuration`;
-  const discovery = await fetchJsonObject(discoveryUrl, "OIDC discovery");
-  if (discovery.issuer !== input.issuer) {
-    throw new TypeError("OIDC discovery issuer does not match --issuer");
-  }
-  const jwksUri =
-    typeof discovery.jwks_uri === "string" ? discovery.jwks_uri : null;
-  if (!jwksUri) throw new TypeError("OIDC discovery is missing jwks_uri");
-  return await fetchJsonObject(jwksUri, "OIDC JWKS");
+interface IdentitySecurityRotationLog {
+  readonly kind: typeof identitySecurityRotationLogKind;
+  readonly rotationRunId: string;
+  readonly environment: "production" | "staging";
+  readonly issuer: string;
+  readonly owner: string;
+  readonly reviewer: string;
+  readonly startedAt: string;
+  readonly completedAt: string;
+  readonly result: "passed";
+  readonly keyRotation: {
+    readonly keyId: string;
+    readonly previousKeyId: string;
+    readonly overlapCapturedAt: string;
+    readonly previousKeyRemovedAt: string;
+    readonly postRevocationCapturedAt: string;
+  };
+  readonly clientSecretRotation: {
+    readonly clientId: string;
+    readonly oldSecretId: string;
+    readonly newSecretId: string;
+    readonly overlapStartedAt: string;
+    readonly oldSecretRevokedAt: string;
+    readonly overlapWindowSeconds: number;
+    readonly revocationEventId: string;
+  };
+  readonly auditEvent: {
+    readonly id: string;
+    readonly subject: string;
+    readonly at: string;
+  };
 }
 
-async function fetchJsonObject(
-  url: string,
+async function loadIdentitySecurityRotationLog(
+  file: string,
+  issuer: string,
+): Promise<IdentitySecurityRotationLog> {
+  const value = JSON.parse(await readFile(file, "utf8")) as unknown;
+  const root = exactRecord(value, "--rotation-log-file", [
+    "kind",
+    "rotationRunId",
+    "environment",
+    "issuer",
+    "owner",
+    "reviewer",
+    "startedAt",
+    "completedAt",
+    "result",
+    "keyRotation",
+    "clientSecretRotation",
+    "auditEvent",
+  ]);
+  if (root.kind !== identitySecurityRotationLogKind) {
+    throw new TypeError(
+      `--rotation-log-file kind must be ${identitySecurityRotationLogKind}`,
+    );
+  }
+  const environment = requiredLogString(root, "environment", "rotation log");
+  if (environment !== "production" && environment !== "staging") {
+    throw new TypeError(
+      "rotation log environment must be production or staging",
+    );
+  }
+  const logIssuer = normalizedHttpsIssuer(
+    requiredLogString(root, "issuer", "rotation log"),
+  );
+  if (logIssuer !== issuer) {
+    throw new TypeError("rotation log issuer does not match --issuer");
+  }
+  const owner = requiredLogString(root, "owner", "rotation log");
+  const reviewer = requiredLogString(root, "reviewer", "rotation log");
+  if (owner.trim().toLowerCase() === reviewer.trim().toLowerCase()) {
+    throw new TypeError("rotation log reviewer must differ from owner");
+  }
+  const startedAt = requiredLogTimestamp(root, "startedAt", "rotation log");
+  const completedAt = requiredLogTimestamp(root, "completedAt", "rotation log");
+  if (timestampMillis(completedAt) < timestampMillis(startedAt)) {
+    throw new TypeError("rotation log completedAt must not precede startedAt");
+  }
+  if (root.result !== "passed") {
+    throw new TypeError("rotation log result must be passed");
+  }
+
+  const keyRotation = exactRecord(
+    root.keyRotation,
+    "rotation log keyRotation",
+    [
+      "keyId",
+      "previousKeyId",
+      "overlapCapturedAt",
+      "previousKeyRemovedAt",
+      "postRevocationCapturedAt",
+    ],
+  );
+  const keyId = requiredLogString(keyRotation, "keyId", "keyRotation");
+  const previousKeyId = requiredLogString(
+    keyRotation,
+    "previousKeyId",
+    "keyRotation",
+  );
+  if (keyId === previousKeyId) {
+    throw new TypeError("rotation log key ids must differ");
+  }
+  const overlapCapturedAt = requiredLogTimestamp(
+    keyRotation,
+    "overlapCapturedAt",
+    "keyRotation",
+  );
+  const previousKeyRemovedAt = requiredLogTimestamp(
+    keyRotation,
+    "previousKeyRemovedAt",
+    "keyRotation",
+  );
+  const postRevocationCapturedAt = requiredLogTimestamp(
+    keyRotation,
+    "postRevocationCapturedAt",
+    "keyRotation",
+  );
+  if (
+    timestampMillis(overlapCapturedAt) < timestampMillis(startedAt) ||
+    timestampMillis(overlapCapturedAt) >=
+      timestampMillis(previousKeyRemovedAt) ||
+    timestampMillis(previousKeyRemovedAt) >
+      timestampMillis(postRevocationCapturedAt) ||
+    timestampMillis(postRevocationCapturedAt) > timestampMillis(completedAt)
+  ) {
+    throw new TypeError(
+      "rotation log key timestamps must order overlap capture, previous-key removal, post-revocation capture, completion",
+    );
+  }
+
+  const clientSecretRotation = exactRecord(
+    root.clientSecretRotation,
+    "rotation log clientSecretRotation",
+    [
+      "clientId",
+      "oldSecretId",
+      "newSecretId",
+      "overlapStartedAt",
+      "oldSecretRevokedAt",
+      "overlapWindowSeconds",
+      "revocationEventId",
+    ],
+  );
+  const oldSecretId = requiredLogString(
+    clientSecretRotation,
+    "oldSecretId",
+    "clientSecretRotation",
+  );
+  const newSecretId = requiredLogString(
+    clientSecretRotation,
+    "newSecretId",
+    "clientSecretRotation",
+  );
+  if (oldSecretId === newSecretId) {
+    throw new TypeError("rotation log client secret ids must differ");
+  }
+  const overlapStartedAt = requiredLogTimestamp(
+    clientSecretRotation,
+    "overlapStartedAt",
+    "clientSecretRotation",
+  );
+  const oldSecretRevokedAt = requiredLogTimestamp(
+    clientSecretRotation,
+    "oldSecretRevokedAt",
+    "clientSecretRotation",
+  );
+  const overlapWindowSeconds = clientSecretRotation.overlapWindowSeconds;
+  if (
+    typeof overlapWindowSeconds !== "number" ||
+    !Number.isInteger(overlapWindowSeconds) ||
+    overlapWindowSeconds <= 0
+  ) {
+    throw new TypeError(
+      "rotation log clientSecretRotation.overlapWindowSeconds must be a positive integer",
+    );
+  }
+  const measuredOverlapSeconds = Math.floor(
+    (timestampMillis(oldSecretRevokedAt) - timestampMillis(overlapStartedAt)) /
+      1000,
+  );
+  if (measuredOverlapSeconds !== overlapWindowSeconds) {
+    throw new TypeError(
+      "rotation log client secret overlapWindowSeconds must match the recorded timestamps",
+    );
+  }
+  if (
+    timestampMillis(overlapStartedAt) < timestampMillis(startedAt) ||
+    timestampMillis(oldSecretRevokedAt) > timestampMillis(completedAt)
+  ) {
+    throw new TypeError(
+      "rotation log client secret overlap must fall within the rotation run",
+    );
+  }
+
+  const auditEvent = exactRecord(root.auditEvent, "rotation log auditEvent", [
+    "id",
+    "subject",
+    "at",
+  ]);
+  const auditAt = requiredLogTimestamp(auditEvent, "at", "auditEvent");
+  if (
+    timestampMillis(auditAt) < timestampMillis(startedAt) ||
+    timestampMillis(auditAt) > timestampMillis(completedAt)
+  ) {
+    throw new TypeError(
+      "rotation log audit event timestamp must fall within the rotation run",
+    );
+  }
+
+  return {
+    kind: identitySecurityRotationLogKind,
+    rotationRunId: requiredLogString(root, "rotationRunId", "rotation log"),
+    environment,
+    issuer: logIssuer,
+    owner,
+    reviewer,
+    startedAt,
+    completedAt,
+    result: "passed",
+    keyRotation: {
+      keyId,
+      previousKeyId,
+      overlapCapturedAt,
+      previousKeyRemovedAt,
+      postRevocationCapturedAt,
+    },
+    clientSecretRotation: {
+      clientId: requiredLogString(
+        clientSecretRotation,
+        "clientId",
+        "clientSecretRotation",
+      ),
+      oldSecretId,
+      newSecretId,
+      overlapStartedAt,
+      oldSecretRevokedAt,
+      overlapWindowSeconds,
+      revocationEventId: requiredLogString(
+        clientSecretRotation,
+        "revocationEventId",
+        "clientSecretRotation",
+      ),
+    },
+    auditEvent: {
+      id: requiredLogString(auditEvent, "id", "auditEvent"),
+      subject: requiredLogString(auditEvent, "subject", "auditEvent"),
+      at: auditAt,
+    },
+  };
+}
+
+async function loadPublicJwksFile(
+  file: string,
   label: string,
 ): Promise<Record<string, unknown>> {
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new TypeError(`${label} request failed: HTTP ${response.status}`);
+  const value = JSON.parse(await readFile(file, "utf8")) as unknown;
+  const jwks = exactRecord(value, label, ["keys"]);
+  if (!Array.isArray(jwks.keys) || jwks.keys.length === 0) {
+    throw new TypeError(`${label} must be a non-empty JWK Set object`);
   }
-  const value = await response.json();
-  if (!isRecord(value))
-    throw new TypeError(`${label} response must be an object`);
-  return value;
+  const seen = new Set<string>();
+  for (const [index, rawEntry] of jwks.keys.entries()) {
+    const entry = exactRecord(rawEntry, `${label}.keys[${index}]`, [
+      "kid",
+      "kty",
+      "crv",
+      "x",
+      "y",
+      "use",
+      "alg",
+      "key_ops",
+    ]);
+    for (const field of ["kid", "kty", "crv", "x", "y"] as const) {
+      if (
+        typeof entry[field] !== "string" ||
+        entry[field].trim().length === 0
+      ) {
+        throw new TypeError(`${label}.keys[${index}].${field} is required`);
+      }
+    }
+    if (entry.kty !== "EC" || entry.crv !== "P-256") {
+      throw new TypeError(
+        `${label}.keys[${index}] must be an ES256 public JWK`,
+      );
+    }
+    if (entry.use !== undefined && entry.use !== "sig") {
+      throw new TypeError(`${label}.keys[${index}].use must be sig`);
+    }
+    if (entry.alg !== undefined && entry.alg !== "ES256") {
+      throw new TypeError(`${label}.keys[${index}].alg must be ES256`);
+    }
+    if (
+      entry.key_ops !== undefined &&
+      (!Array.isArray(entry.key_ops) ||
+        entry.key_ops.length !== 1 ||
+        entry.key_ops[0] !== "verify")
+    ) {
+      throw new TypeError(
+        `${label}.keys[${index}].key_ops must contain only verify`,
+      );
+    }
+    if (seen.has(entry.kid as string)) {
+      throw new TypeError(`${label} contains duplicate kid ${entry.kid}`);
+    }
+    seen.add(entry.kid as string);
+  }
+  return jwks;
 }
 
 function keyIdsFromJwks(jwks: Record<string, unknown>): string[] {
@@ -504,6 +797,49 @@ function keyIdsFromJwks(jwks: Record<string, unknown>): string[] {
     .sort();
 }
 
+function exactRecord(
+  value: unknown,
+  label: string,
+  allowedKeys: readonly string[],
+): Record<string, unknown> {
+  if (!isRecord(value)) throw new TypeError(`${label} must be an object`);
+  const unexpected = Object.keys(value).filter(
+    (key) => !allowedKeys.includes(key),
+  );
+  if (unexpected.length > 0) {
+    throw new TypeError(
+      `${label} contains unexpected fields: ${unexpected.join(", ")}`,
+    );
+  }
+  return value;
+}
+
+function requiredLogString(
+  record: Record<string, unknown>,
+  field: string,
+  label: string,
+): string {
+  const value = record[field];
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new TypeError(`${label}.${field} must be a non-empty string`);
+  }
+  return value.trim();
+}
+
+function requiredLogTimestamp(
+  record: Record<string, unknown>,
+  field: string,
+  label: string,
+): string {
+  const value = requiredLogString(record, field, label);
+  assertIsoTimestamp(value, `${label}.${field}`);
+  return value;
+}
+
+function timestampMillis(value: string): number {
+  return new Date(value).getTime();
+}
+
 function requiredStringOption(
   options: Record<string, string | boolean>,
   key: string,
@@ -511,10 +847,6 @@ function requiredStringOption(
   const value = optionalStringOption(options, key);
   if (!value) throw new TypeError(`--${kebabOption(key)} is required`);
   return value;
-}
-
-function missingNumberOption(key: string): never {
-  throw new TypeError(`--${key} is required`);
 }
 
 function normalizedHttpsIssuer(value: string): string {

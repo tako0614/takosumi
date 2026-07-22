@@ -82,6 +82,16 @@ COPY runner/lib/ ./runner/lib/
 COPY runner/start.sh ./runner/start.sh
 RUN chmod 0755 ./runner/start.sh
 
+# Provider/module code is untrusted workload input. The reference runner must
+# not execute it as container root. Keep only the bounded run/cache directories
+# writable by the image's unprivileged Bun account; application and mirror
+# content remain root-owned and read-only to that account.
+RUN install -d -o bun -g bun -m 0700 \
+    /tmp/takosumi-runs \
+    /tmp/takosumi-provider-cache \
+    /tmp/takosumi-source-build-cache \
+    /workspace
+
 ENV PORT=8080
 ENV TOFU_WORK_DIR=/workspace
 ENV TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR=/tmp/takosumi-provider-cache
@@ -89,4 +99,5 @@ ENV TAKOSUMI_SOURCE_BUILD_CACHE_DIR=/tmp/takosumi-source-build-cache
 ENV TAKOSUMI_RUNNER_START_SERVER=1
 
 EXPOSE 8080
+USER bun
 ENTRYPOINT ["/app/runner/start.sh"]

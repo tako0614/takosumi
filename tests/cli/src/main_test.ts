@@ -2144,9 +2144,58 @@ test("launch-readiness rejects contribution definitions that are not self-contai
   }
 });
 
-test("launch-readiness oidc-account-security evidence merges verified JWKS evidence", async () => {
+function identitySecurityRotationLogForTest() {
+  return {
+    kind: "takosumi.identity-security-rotation-log@v1",
+    rotationRunId: "oidc-rotation-2026-06-23",
+    environment: "staging",
+    issuer: "https://app.takosumi.com",
+    owner: "ops",
+    reviewer: "release-owner",
+    startedAt: "2026-05-12T00:40:00Z",
+    completedAt: "2026-05-12T01:00:00Z",
+    result: "passed",
+    keyRotation: {
+      keyId: "kid-rotated-2026",
+      previousKeyId: "kid-before-2026",
+      overlapCapturedAt: "2026-05-12T00:45:00Z",
+      previousKeyRemovedAt: "2026-05-12T00:55:00Z",
+      postRevocationCapturedAt: "2026-05-12T00:56:00Z",
+    },
+    clientSecretRotation: {
+      clientId: "google-client-rotation",
+      oldSecretId: "google-secret-before-2026",
+      newSecretId: "google-secret-after-2026",
+      overlapStartedAt: "2026-05-12T00:45:00Z",
+      oldSecretRevokedAt: "2026-05-12T00:55:00Z",
+      overlapWindowSeconds: 600,
+      revocationEventId: "google-secret-revocation-2026",
+    },
+    auditEvent: {
+      id: "audit-oidc-rotation-2026",
+      subject: "operator-release-owner",
+      at: "2026-05-12T00:57:00Z",
+    },
+  };
+}
+
+function publicEs256JwkForTest(kid: string) {
+  return {
+    kty: "EC",
+    kid,
+    crv: "P-256",
+    x: `fixture-x-${kid}`,
+    y: `fixture-y-${kid}`,
+    use: "sig",
+    alg: "ES256",
+  };
+}
+
+test("launch-readiness oidc-account-security evidence verifies overlap and previous-key removal", async () => {
   const readinessFile = await makeTempFile({ suffix: ".json" });
-  const jwksFile = await makeTempFile({ suffix: ".json" });
+  const overlapJwksFile = await makeTempFile({ suffix: ".json" });
+  const postRevocationJwksFile = await makeTempFile({ suffix: ".json" });
+  const rotationLogFile = await makeTempFile({ suffix: ".json" });
   const outFile = await makeTempFile({ suffix: ".json" });
   const document = await platformReadinessTemplateForTest();
   const rehearsalRun = completeRehearsalRun();
@@ -2171,13 +2220,21 @@ test("launch-readiness oidc-account-security evidence merges verified JWKS evide
   try {
     await writeTextFile(readinessFile, JSON.stringify(document));
     await writeTextFile(
-      jwksFile,
+      overlapJwksFile,
       JSON.stringify({
         keys: [
-          { kty: "EC", kid: "kid-before-2026", crv: "P-256" },
-          { kty: "EC", kid: "kid-rotated-2026", crv: "P-256" },
+          publicEs256JwkForTest("kid-before-2026"),
+          publicEs256JwkForTest("kid-rotated-2026"),
         ],
       }),
+    );
+    await writeTextFile(
+      postRevocationJwksFile,
+      JSON.stringify({ keys: [publicEs256JwkForTest("kid-rotated-2026")] }),
+    );
+    await writeTextFile(
+      rotationLogFile,
+      JSON.stringify(identitySecurityRotationLogForTest()),
     );
     const stdout: string[] = [];
     const stderr: string[] = [];
@@ -2192,36 +2249,12 @@ test("launch-readiness oidc-account-security evidence merges verified JWKS evide
         outFile,
         "--issuer",
         "https://app.takosumi.com",
-        "--jwks-file",
-        jwksFile,
-        "--key-id",
-        "kid-rotated-2026",
-        "--previous-key-id",
-        "kid-before-2026",
-        "--rotation-run-id",
-        "oidc-rotation-2026-06-23",
-        "--client-id",
-        "google-client-rotation",
-        "--old-secret-id",
-        "google-secret-before-2026",
-        "--new-secret-id",
-        "google-secret-after-2026",
-        "--overlap-window-seconds",
-        "600",
-        "--revocation-event-id",
-        "google-secret-revocation-2026",
-        "--audit-event-id",
-        "audit-oidc-rotation-2026",
-        "--audit-subject",
-        "operator-release-owner",
-        "--owner",
-        "ops",
-        "--reviewer",
-        "release-owner",
-        "--environment",
-        "staging",
-        "--completed-at",
-        "2026-05-12T01:00:00Z",
+        "--overlap-jwks-file",
+        overlapJwksFile,
+        "--post-revocation-jwks-file",
+        postRevocationJwksFile,
+        "--rotation-log-file",
+        rotationLogFile,
         "--ref-prefix",
         "vault://platform-readiness/oidc-rotation-2026/domains/oidc-account-security",
         "--json",
@@ -2246,6 +2279,19 @@ test("launch-readiness oidc-account-security evidence merges verified JWKS evide
         (entry: { type: string }) => entry.type === "key-rotation-drill",
       ).keyId,
     ).toEqual("kid-rotated-2026");
+    expect(
+      updatedOidc.evidence.find(
+        (entry: { type: string }) => entry.type === "key-rotation-drill",
+      ).postRevocationJwksKeyIds,
+    ).toEqual(["kid-rotated-2026"]);
+    const updatedSecurityOperations = updated.domains.find(
+      (entry: { id: string }) => entry.id === "security-operations",
+    );
+    expect(
+      updatedSecurityOperations.evidence.find(
+        (entry: { type: string }) => entry.type === "secret-rotation-run-log",
+      ).rotationRunId,
+    ).toEqual("oidc-rotation-2026-06-23");
     const validateStdout: string[] = [];
     const validateCode = await main(
       ["launch-readiness", "validate", "--file", outFile, "--json"],
@@ -2258,19 +2304,34 @@ test("launch-readiness oidc-account-security evidence merges verified JWKS evide
     expect(JSON.parse(validateStdout.join("\n")).ready).toEqual(true);
   } finally {
     await removePath(readinessFile);
-    await removePath(jwksFile);
+    await removePath(overlapJwksFile);
+    await removePath(postRevocationJwksFile);
+    await removePath(rotationLogFile);
     await removePath(outFile);
   }
 });
 
-test("launch-readiness oidc-account-security evidence rejects missing JWKS kid", async () => {
+test("launch-readiness oidc-account-security evidence rejects previous key after revocation", async () => {
   const readinessFile = await makeTempFile({ suffix: ".json" });
-  const jwksFile = await makeTempFile({ suffix: ".json" });
+  const overlapJwksFile = await makeTempFile({ suffix: ".json" });
+  const postRevocationJwksFile = await makeTempFile({ suffix: ".json" });
+  const rotationLogFile = await makeTempFile({ suffix: ".json" });
   const document = await platformReadinessTemplateForTest();
 
   try {
     await writeTextFile(readinessFile, JSON.stringify(document));
-    await writeTextFile(jwksFile, JSON.stringify({ keys: [{ kid: "other" }] }));
+    const overlapJwks = {
+      keys: [
+        publicEs256JwkForTest("kid-before-2026"),
+        publicEs256JwkForTest("kid-rotated-2026"),
+      ],
+    };
+    await writeTextFile(overlapJwksFile, JSON.stringify(overlapJwks));
+    await writeTextFile(postRevocationJwksFile, JSON.stringify(overlapJwks));
+    await writeTextFile(
+      rotationLogFile,
+      JSON.stringify(identitySecurityRotationLogForTest()),
+    );
     const stderr: string[] = [];
     const code = await main(
       [
@@ -2281,34 +2342,12 @@ test("launch-readiness oidc-account-security evidence rejects missing JWKS kid",
         readinessFile,
         "--issuer",
         "https://app.takosumi.com",
-        "--jwks-file",
-        jwksFile,
-        "--key-id",
-        "kid-rotated-2026",
-        "--previous-key-id",
-        "kid-before-2026",
-        "--rotation-run-id",
-        "oidc-rotation-2026-06-23",
-        "--client-id",
-        "google-client-rotation",
-        "--old-secret-id",
-        "google-secret-before-2026",
-        "--new-secret-id",
-        "google-secret-after-2026",
-        "--overlap-window-seconds",
-        "600",
-        "--revocation-event-id",
-        "google-secret-revocation-2026",
-        "--audit-event-id",
-        "audit-oidc-rotation-2026",
-        "--audit-subject",
-        "operator-release-owner",
-        "--owner",
-        "ops",
-        "--reviewer",
-        "release-owner",
-        "--completed-at",
-        "2026-05-12T01:00:00Z",
+        "--overlap-jwks-file",
+        overlapJwksFile,
+        "--post-revocation-jwks-file",
+        postRevocationJwksFile,
+        "--rotation-log-file",
+        rotationLogFile,
         "--ref-prefix",
         "vault://platform-readiness/oidc-rotation-2026/domains/oidc-account-security",
       ],
@@ -2320,11 +2359,86 @@ test("launch-readiness oidc-account-security evidence rejects missing JWKS kid",
 
     expect(code).toEqual(2);
     expect(stderr.join("\n")).toContain(
-      "JWKS does not contain --key-id kid-rotated-2026",
+      "post-revocation JWKS still contains previous key id kid-before-2026",
+    );
+
+    stderr.length = 0;
+    await writeTextFile(
+      overlapJwksFile,
+      JSON.stringify({
+        keys: [
+          { ...publicEs256JwkForTest("kid-before-2026"), d: "private" },
+          publicEs256JwkForTest("kid-rotated-2026"),
+        ],
+      }),
+    );
+    await writeTextFile(
+      postRevocationJwksFile,
+      JSON.stringify({ keys: [publicEs256JwkForTest("kid-rotated-2026")] }),
+    );
+    const privateJwkCode = await main(
+      [
+        "launch-readiness",
+        "oidc-account-security",
+        "evidence",
+        "--file",
+        readinessFile,
+        "--issuer",
+        "https://app.takosumi.com",
+        "--overlap-jwks-file",
+        overlapJwksFile,
+        "--post-revocation-jwks-file",
+        postRevocationJwksFile,
+        "--rotation-log-file",
+        rotationLogFile,
+        "--ref-prefix",
+        "vault://platform-readiness/oidc-rotation-2026/domains/oidc-account-security",
+      ],
+      {
+        stdout: () => undefined,
+        stderr: (line) => stderr.push(line),
+      },
+    );
+    expect(privateJwkCode).toEqual(2);
+    expect(stderr.join("\n")).toContain("unexpected fields: d");
+
+    stderr.length = 0;
+    await writeTextFile(overlapJwksFile, JSON.stringify(overlapJwks));
+    const outOfRunLog = identitySecurityRotationLogForTest();
+    outOfRunLog.startedAt = "2026-05-12T00:50:00Z";
+    await writeTextFile(rotationLogFile, JSON.stringify(outOfRunLog));
+    const outOfRunTimestampCode = await main(
+      [
+        "launch-readiness",
+        "oidc-account-security",
+        "evidence",
+        "--file",
+        readinessFile,
+        "--issuer",
+        "https://app.takosumi.com",
+        "--overlap-jwks-file",
+        overlapJwksFile,
+        "--post-revocation-jwks-file",
+        postRevocationJwksFile,
+        "--rotation-log-file",
+        rotationLogFile,
+        "--ref-prefix",
+        "vault://platform-readiness/oidc-rotation-2026/domains/oidc-account-security",
+      ],
+      {
+        stdout: () => undefined,
+        stderr: (line) => stderr.push(line),
+      },
+    );
+    expect(outOfRunTimestampCode).toEqual(2);
+    expect(stderr.join("\n")).toContain(
+      "rotation log key timestamps must order",
     );
   } finally {
     await removePath(readinessFile);
-    await removePath(jwksFile);
+    await removePath(overlapJwksFile);
+    await removePath(postRevocationJwksFile);
+    await removePath(rotationLogFile);
   }
 });
 

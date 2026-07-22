@@ -296,6 +296,100 @@ test("Cloudflare identity handler lazily revalidates Interface OAuth against Cor
   });
 });
 
+test("Cloudflare OIDC signing rotation publishes bounded overlap then removes the previous key", async () => {
+  const db = new SqliteFakeD1();
+  const store = new D1AccountsStore(db);
+  await store.initialize();
+  await db
+    .prepare(
+      "CREATE TABLE IF NOT EXISTS takosumi_accounts_schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL)",
+    )
+    .run();
+  await db
+    .prepare(
+      "INSERT INTO takosumi_accounts_schema_migrations (version, name, applied_at) VALUES (?, ?, ?)",
+    )
+    .bind(2, "current", Date.now())
+    .run();
+  const oldKeyPair = await crypto.subtle.generateKey(
+    { name: "ECDSA", namedCurve: "P-256" },
+    true,
+    ["sign", "verify"],
+  );
+  const newKeyPair = await crypto.subtle.generateKey(
+    { name: "ECDSA", namedCurve: "P-256" },
+    true,
+    ["sign", "verify"],
+  );
+  const oldPrivateJwk = await crypto.subtle.exportKey(
+    "jwk",
+    oldKeyPair.privateKey,
+  );
+  const newPrivateJwk = await crypto.subtle.exportKey(
+    "jwk",
+    newKeyPair.privateKey,
+  );
+  const oldPublicJwk = {
+    ...(await crypto.subtle.exportKey("jwk", oldKeyPair.publicKey)),
+    kid: "oidc-key-before-rotation",
+    use: "sig",
+    alg: "ES256",
+  };
+  const worker = createCloudflareWorker();
+  const baseEnv = {
+    TAKOSUMI_ACCOUNTS_DB: db,
+    TAKOSUMI_ACCOUNTS_ISSUER: "https://app.example.test",
+    TAKOSUMI_ACCOUNT_SESSION_HASH_SALT: "cloudflare-rotation-test-session-salt",
+    TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET:
+      "cloudflare-rotation-test-pairwise-secret",
+  };
+
+  const before = await worker.fetch(
+    new Request("https://app.example.test/oauth/jwks"),
+    env({
+      ...baseEnv,
+      TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK: JSON.stringify(oldPrivateJwk),
+      TAKOSUMI_ACCOUNTS_ES256_KEY_ID: "oidc-key-before-rotation",
+    }),
+  );
+  expect(before.status).toBe(200);
+  expect((await before.json()).keys.map((key: JsonWebKey) => key.kid)).toEqual([
+    "oidc-key-before-rotation",
+  ]);
+
+  const overlap = await worker.fetch(
+    new Request("https://app.example.test/oauth/jwks"),
+    env({
+      ...baseEnv,
+      TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK: JSON.stringify(newPrivateJwk),
+      TAKOSUMI_ACCOUNTS_ES256_KEY_ID: "oidc-key-after-rotation",
+      TAKOSUMI_ACCOUNTS_ES256_PREVIOUS_PUBLIC_JWKS: JSON.stringify({
+        keys: [oldPublicJwk],
+      }),
+    }),
+  );
+  expect(overlap.status).toBe(200);
+  const overlapKeys = (await overlap.json()).keys as JsonWebKey[];
+  expect(overlapKeys.map((key) => key.kid)).toEqual([
+    "oidc-key-after-rotation",
+    "oidc-key-before-rotation",
+  ]);
+  expect(overlapKeys.every((key) => key.d === undefined)).toBe(true);
+
+  const after = await worker.fetch(
+    new Request("https://app.example.test/oauth/jwks"),
+    env({
+      ...baseEnv,
+      TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK: JSON.stringify(newPrivateJwk),
+      TAKOSUMI_ACCOUNTS_ES256_KEY_ID: "oidc-key-after-rotation",
+    }),
+  );
+  expect(after.status).toBe(200);
+  expect((await after.json()).keys.map((key: JsonWebKey) => key.kid)).toEqual([
+    "oidc-key-after-rotation",
+  ]);
+});
+
 test("predeployed accounts schema mode performs no request-time DDL", async () => {
   const db = new SqliteFakeD1();
   const store = new D1AccountsStore(db);
