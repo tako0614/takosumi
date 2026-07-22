@@ -184,6 +184,7 @@ export function clearAccountSessionCookie(secure: boolean): string {
 
 export interface AccountSessionMeResponse {
   readonly subject?: TakosumiSubject;
+  readonly createdAt?: number;
   readonly expiresAt?: number;
   readonly primaryAccountId?: string;
   readonly session?: null;
@@ -195,7 +196,7 @@ export interface AccountSessionMeResponse {
  * mirror the HttpOnly session cookie into its local cache without
  * exposing the raw session id to JavaScript.
  *
- * Returns 200 with `{ subject, expiresAt, primaryAccountId? }` on
+ * Returns 200 with `{ subject, createdAt, expiresAt, primaryAccountId? }` on
  * success. Returns 200 with `{ session: null }` when the cookie /
  * bearer is absent or no longer valid. This route is a public session
  * mirror for the browser shell; protected account/control routes still
@@ -221,6 +222,7 @@ export async function handleAccountSessionMeGet(input: {
   // The session existed when requireAccountSession resolved (we re-fetch only
   // to surface expiresAt without re-running the full guard).
   const expiresAt = record?.expiresAt ?? 0;
+  const createdAt = record?.createdAt ?? 0;
   const primaryAccountId = input.resolvePrimaryAccountId
     ? await input.resolvePrimaryAccountId(session.subject)
     : undefined;
@@ -228,11 +230,13 @@ export async function handleAccountSessionMeGet(input: {
     primaryAccountId !== undefined
       ? {
           subject: session.subject,
+          createdAt,
           expiresAt,
           primaryAccountId,
         }
       : {
           subject: session.subject,
+          createdAt,
           expiresAt,
         };
   return json(body, 200, { "cache-control": "no-store" });

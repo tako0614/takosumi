@@ -125,7 +125,7 @@ test("TAKOSUMI_ACCOUNTS_SESSION_ME_PATH is /v1/account/session/me", () => {
   expect(TAKOSUMI_ACCOUNTS_SESSION_ME_PATH).toEqual("/v1/account/session/me");
 });
 
-test("handleAccountSessionMeGet returns subject+expiresAt for a valid cookie", async () => {
+test("handleAccountSessionMeGet returns subject+session times for a valid cookie", async () => {
   const store = new InMemoryAccountsStore();
   const now = Date.now();
   const sessionId = "sess_me_ok";
@@ -150,10 +150,12 @@ test("handleAccountSessionMeGet returns subject+expiresAt for a valid cookie", a
   expect(response.status).toEqual(200);
   const body = (await response.json()) as {
     subject: string;
+    createdAt: number;
     expiresAt: number;
     primaryAccountId?: string;
   };
   expect(body.subject).toEqual("tsub_me");
+  expect(body.createdAt).toEqual(now);
   expect(body.expiresAt).toEqual(now + 60_000);
   expect(body.primaryAccountId).toEqual(undefined);
 });

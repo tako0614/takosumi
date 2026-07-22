@@ -474,6 +474,7 @@ function structuredEvidenceFieldsForTest(
       };
     case "self-host-migration":
       return {
+        exportId: "export_rehearsal",
         migrationId: "migration_rehearsal",
         targetHost: "selfhost.takos.local",
         oidcIssuer: "https://selfhost.takos.local/accounts",
@@ -825,6 +826,8 @@ function structuredEvidenceFieldsForTest(
         migrationId: "migration_rehearsal",
         accountId: "acct_rehearsal",
         sessionSubject: "acct_rehearsal",
+        sessionCreatedAt: "2026-05-12T00:30:00.000Z",
+        verifiedAt: "2026-05-12T00:45:00.000Z",
         expiresAt: "2100-01-01T00:00:00.000Z",
       };
     case "source-retention-state":
@@ -3760,6 +3763,41 @@ test("launch-readiness validate rejects inconsistent staged rehearsal references
     ).toBeTruthy();
     expect(
       report.incompleteRehearsalSteps.includes("export-self-host-migration"),
+    ).toBeTruthy();
+  } finally {
+    await removePath(file);
+  }
+});
+
+test("launch-readiness validate rejects unrelated self-host domain proofs", async () => {
+  const file = await makeTempFile({ suffix: ".json" });
+  const document = await platformReadinessTemplateForTest();
+  const rehearsalRun = completeRehearsalRun();
+  document.rehearsalRun = rehearsalRun;
+  document.domains = document.domains.map((entry) =>
+    completePlatformReadinessEntry(entry),
+  );
+  document.rehearsal = document.rehearsal.map((entry) =>
+    completePlatformReadinessEntry(entry, rehearsalRun.id),
+  );
+  const evidence = document.domains.find(
+    (entry) => entry.id === "export-self-host-sovereignty",
+  )!.evidence as Record<string, unknown>[];
+  evidence.find((entry) => entry.type === "self-host-migration")!.exportId =
+    "export_unrelated";
+  await writeTextFile(file, JSON.stringify(document));
+
+  try {
+    const stdout: string[] = [];
+    const code = await main(
+      ["launch-readiness", "validate", "--file", file, "--json"],
+      { stdout: (line) => stdout.push(line), stderr: () => undefined },
+    );
+    expect(code).toEqual(1);
+    const report = JSON.parse(stdout.join("\n"));
+    expect(report.ready).toEqual(false);
+    expect(
+      report.incompleteDomains.includes("export-self-host-sovereignty"),
     ).toBeTruthy();
   } finally {
     await removePath(file);
