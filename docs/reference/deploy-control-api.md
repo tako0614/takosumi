@@ -356,6 +356,17 @@ ledger 参照と、すでに filter 済みの non-sensitive な output を持つ
 Space / Installation / Deployment の別名は受け付けません。public な readiness の証跡は、
 Workspace / Project / Capsule / StateVersion / Output の主張として表現されます。この
 payload は operator が制御する bridge の契約であり、customer API surface ではありません。
+
+同じ安定した activator endpoint を production / staging など複数の Worker から共有する場合、
+operator-side の `operator:release-activator` は repo 外の mode `0600` token file
+(`takosumi.operator.release-activator-tokens@v1`) から、重複しない `label` / `principal` / bearer
+token を読みます。token は argv、log、job response、activation child env に出ません。比較は
+固定長 SHA-256 digest の constant-time 比較で、job id と保存 key は認証した label/principal
+で分離されます。別の有効な token はその job を GET しても `404` になり、同じ payload の
+POST も別 job になります。従来の single `TAKOSUMI_RELEASE_ACTIVATOR_TOKEN` は legacy
+principal として互換維持されますが、file config と同時指定できません。operator の file
+配置・検証手順は非公開 runbook `docs/operations/release-artifacts.md` を参照してください。
+
 次のいずれかを返す必要があります。
 
 ```json

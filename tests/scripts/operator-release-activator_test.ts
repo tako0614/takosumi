@@ -1,15 +1,29 @@
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   buildWranglerR2GetArgs,
   createReleaseActivatorFetchHandler,
+  loadReleaseActivatorTokenFile,
   parsePayload,
+  parseReleaseActivatorTokenConfig,
+  releaseActivatorChildEnv,
   runReleaseActivation,
 } from "../../scripts/operator-release-activator.ts";
+
+const LEGACY_ACTIVATOR_TOKEN = "legacy_5ybGqZ1Hfx8nVc4Mt2Kr9Pw7Ld3Sj6Ua";
+const PRODUCTION_ACTIVATOR_TOKEN = "production_7mQ2xK9cV4pL8sD1fH6jN3rT5wY0bGz";
+const STAGING_ACTIVATOR_TOKEN = "staging_4vN8kR2mX7cP1sL6hD9qT3yF5wJ0bGa";
 
 test("operator release activator help exits successfully", () => {
   const result = spawnSync(
@@ -23,9 +37,34 @@ test("operator release activator help exits successfully", () => {
 
   expect(result.status).toBe(0);
   expect(result.stdout).toContain(
-    "usage: operator-release-activator.ts <serve|run> ...",
+    "usage: operator-release-activator.ts <serve|run|tokens-check> ...",
   );
   expect(result.stderr).toBe("");
+});
+
+test("operator release activator rejects a raw token argument in every mode", () => {
+  for (const mode of ["run", "serve", "tokens-check"]) {
+    for (const tokenArgs of [
+      ["--token", LEGACY_ACTIVATOR_TOKEN],
+      [`--token=${LEGACY_ACTIVATOR_TOKEN}`],
+    ]) {
+      const result = spawnSync(
+        "bun",
+        ["scripts/operator-release-activator.ts", mode, ...tokenArgs],
+        {
+          cwd: new URL("../..", import.meta.url),
+          encoding: "utf8",
+        },
+      );
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain(
+        "--token is forbidden because secret values must not be passed in argv",
+      );
+      expect(result.stdout).not.toContain(LEGACY_ACTIVATOR_TOKEN);
+      expect(result.stderr).not.toContain(LEGACY_ACTIVATOR_TOKEN);
+    }
+  }
 });
 
 test("operator release activator builds remote R2 object fetch args", () => {
@@ -83,7 +122,9 @@ test("operator release activator rejects credential and reserved command env", (
         env: { TAKOSUMI_RELEASE_ACTIVATOR_TOKEN: "secret" },
       }),
     ),
-  ).toThrow("release command env must not include activator token");
+  ).toThrow(
+    "release command env must not include activator authentication config",
+  );
 
   expect(() =>
     parsePayload(
@@ -406,7 +447,7 @@ test("operator release activator pins temporary and Bun cache dirs to the job wo
 test("operator release activator accepts async jobs and exposes status", async () => {
   let invoked = 0;
   const handler = createReleaseActivatorFetchHandler({
-    token: "release-token",
+    token: LEGACY_ACTIVATOR_TOKEN,
     host: "127.0.0.1",
     port: 8797,
     runActivation: async () => {
@@ -424,7 +465,7 @@ test("operator release activator accepts async jobs and exposes status", async (
     new Request("http://localhost/activate", {
       method: "POST",
       headers: {
-        authorization: "Bearer release-token",
+        authorization: `Bearer ${LEGACY_ACTIVATOR_TOKEN}`,
         "content-type": "application/json",
       },
       body: JSON.stringify(validPayload()),
@@ -447,7 +488,7 @@ test("operator release activator accepts async jobs and exposes status", async (
     const status = await handler(
       new Request(accepted.statusUrl, {
         method: "GET",
-        headers: { authorization: "Bearer release-token" },
+        headers: { authorization: `Bearer ${LEGACY_ACTIVATOR_TOKEN}` },
       }),
     );
     expect(status.status).toBe(200);
@@ -464,6 +505,277 @@ test("operator release activator accepts async jobs and exposes status", async (
     status: "succeeded",
     message: "ran 1 operator release command(s)",
   });
+});
+
+test("operator release activator isolates identical jobs by token label and principal", async () => {
+  let invoked = 0;
+  const handler = createReleaseActivatorFetchHandler({
+    tokens: [
+      {
+        label: "production",
+        principal: "takosumi-cloud/production",
+        token: PRODUCTION_ACTIVATOR_TOKEN,
+      },
+      {
+        label: "staging",
+        principal: "takosumi-cloud/staging",
+        token: STAGING_ACTIVATOR_TOKEN,
+      },
+    ],
+    host: "127.0.0.1",
+    port: 8797,
+    runActivation: async (_payload, options) => {
+      invoked += 1;
+      expect("token" in options).toBe(false);
+      expect("tokens" in options).toBe(false);
+      return {
+        status: "succeeded",
+        kind: "takosumi.operator.release-commands@v1",
+        message: "isolated activation succeeded",
+      };
+    },
+  });
+  const postFor = async (token: string) =>
+    handler(
+      new Request("http://localhost/activate", {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${token}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(validPayload()),
+      }),
+    );
+
+  const productionPost = await postFor(PRODUCTION_ACTIVATOR_TOKEN);
+  expect(productionPost.status).toBe(202);
+  const productionJob = (await productionPost.json()) as {
+    readonly jobId: string;
+    readonly statusUrl: string;
+    readonly metadata: {
+      readonly tokenLabel: string;
+      readonly principal: string;
+    };
+  };
+  expect(productionJob.metadata).toMatchObject({
+    tokenLabel: "production",
+    principal: "takosumi-cloud/production",
+  });
+
+  const crossPrincipalRead = await handler(
+    new Request(productionJob.statusUrl, {
+      method: "GET",
+      headers: { authorization: `Bearer ${STAGING_ACTIVATOR_TOKEN}` },
+    }),
+  );
+  expect(crossPrincipalRead.status).toBe(404);
+
+  const stagingPost = await postFor(STAGING_ACTIVATOR_TOKEN);
+  expect(stagingPost.status).toBe(202);
+  const stagingJob = (await stagingPost.json()) as {
+    readonly jobId: string;
+    readonly statusUrl: string;
+    readonly metadata: {
+      readonly tokenLabel: string;
+      readonly principal: string;
+    };
+  };
+  expect(stagingJob.jobId).not.toBe(productionJob.jobId);
+  expect(stagingJob.metadata).toMatchObject({
+    tokenLabel: "staging",
+    principal: "takosumi-cloud/staging",
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  const productionRead = await handler(
+    new Request(productionJob.statusUrl, {
+      method: "GET",
+      headers: { authorization: `Bearer ${PRODUCTION_ACTIVATOR_TOKEN}` },
+    }),
+  );
+  const stagingRead = await handler(
+    new Request(stagingJob.statusUrl, {
+      method: "GET",
+      headers: { authorization: `Bearer ${STAGING_ACTIVATOR_TOKEN}` },
+    }),
+  );
+  expect(productionRead.status).toBe(200);
+  expect(stagingRead.status).toBe(200);
+  expect(await productionRead.json()).toMatchObject({
+    status: "succeeded",
+    metadata: {
+      tokenLabel: "production",
+      principal: "takosumi-cloud/production",
+    },
+  });
+  expect(await stagingRead.json()).toMatchObject({
+    status: "succeeded",
+    metadata: {
+      tokenLabel: "staging",
+      principal: "takosumi-cloud/staging",
+    },
+  });
+  expect(invoked).toBe(2);
+});
+
+test("operator release activator rejects invalid auth without length-sensitive comparison errors", async () => {
+  const handler = createReleaseActivatorFetchHandler({
+    tokens: [
+      {
+        label: "production",
+        principal: "takosumi-cloud/production",
+        token: PRODUCTION_ACTIVATOR_TOKEN,
+      },
+    ],
+    host: "127.0.0.1",
+    port: 8797,
+  });
+  for (const authorization of ["", "Bearer x", "Basic ignored"]) {
+    const response = await handler(
+      new Request("http://localhost/activate", {
+        method: "POST",
+        headers: authorization ? { authorization } : {},
+      }),
+    );
+    expect(response.status).toBe(401);
+  }
+});
+
+test("operator release activator token config fails closed on invalid duplicate or weak entries", () => {
+  const valid = {
+    kind: "takosumi.operator.release-activator-tokens@v1",
+    tokens: [
+      {
+        label: "production",
+        principal: "takosumi-cloud/production",
+        token: PRODUCTION_ACTIVATOR_TOKEN,
+      },
+    ],
+  };
+  expect(parseReleaseActivatorTokenConfig(valid)).toHaveLength(1);
+  expect(() =>
+    parseReleaseActivatorTokenConfig({ ...valid, unexpected: true }),
+  ).toThrow("release activator token file fields are invalid");
+  expect(() =>
+    parseReleaseActivatorTokenConfig({
+      ...valid,
+      tokens: [{ ...valid.tokens[0], token: "short-token" }],
+    }),
+  ).toThrow("tokens[0].token is weak or invalid");
+  expect(() =>
+    parseReleaseActivatorTokenConfig({
+      ...valid,
+      tokens: [valid.tokens[0], { ...valid.tokens[0] }],
+    }),
+  ).toThrow("release activator token labels must be unique");
+  expect(() =>
+    parseReleaseActivatorTokenConfig({
+      ...valid,
+      tokens: [
+        valid.tokens[0],
+        {
+          label: "staging",
+          principal: "takosumi-cloud/production",
+          token: STAGING_ACTIVATOR_TOKEN,
+        },
+      ],
+    }),
+  ).toThrow("release activator token principals must be unique");
+  expect(() =>
+    parseReleaseActivatorTokenConfig({
+      ...valid,
+      tokens: [
+        valid.tokens[0],
+        {
+          label: "staging",
+          principal: "takosumi-cloud/staging",
+          token: PRODUCTION_ACTIVATOR_TOKEN,
+        },
+      ],
+    }),
+  ).toThrow("release activator token secrets must be unique");
+  expect(() =>
+    createReleaseActivatorFetchHandler({
+      token: LEGACY_ACTIVATOR_TOKEN,
+      tokens: valid.tokens,
+      host: "127.0.0.1",
+      port: 8797,
+    }),
+  ).toThrow(
+    "release activator legacy token and token map are mutually exclusive",
+  );
+});
+
+test("operator release activator reads only a repo-external 0600 token file and CLI redacts secrets", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "takosumi-activator-tokens-"));
+  try {
+    const tokenFile = join(tempDir, "tokens.json");
+    await writeFile(
+      tokenFile,
+      JSON.stringify({
+        kind: "takosumi.operator.release-activator-tokens@v1",
+        tokens: [
+          {
+            label: "production",
+            principal: "takosumi-cloud/production",
+            token: PRODUCTION_ACTIVATOR_TOKEN,
+          },
+          {
+            label: "staging",
+            principal: "takosumi-cloud/staging",
+            token: STAGING_ACTIVATOR_TOKEN,
+          },
+        ],
+      }),
+      { mode: 0o600 },
+    );
+    await chmod(tokenFile, 0o600);
+    await expect(
+      loadReleaseActivatorTokenFile(tokenFile),
+    ).resolves.toHaveLength(2);
+
+    const childEnv = { ...process.env };
+    delete childEnv.TAKOSUMI_RELEASE_ACTIVATOR_TOKEN;
+    delete childEnv.TAKOSUMI_RELEASE_ACTIVATOR_TOKEN_FILE;
+    const check = spawnSync(
+      "bun",
+      [
+        "scripts/operator-release-activator.ts",
+        "tokens-check",
+        "--token-file",
+        tokenFile,
+      ],
+      {
+        cwd: new URL("../..", import.meta.url),
+        encoding: "utf8",
+        env: childEnv,
+      },
+    );
+    expect(check.status).toBe(0);
+    expect(check.stderr).toBe("");
+    expect(check.stdout).toContain('"tokenCount": 2');
+    expect(check.stdout).toContain('"label": "production"');
+    expect(check.stdout).toContain('"principal": "takosumi-cloud/staging"');
+    expect(check.stdout).not.toContain(PRODUCTION_ACTIVATOR_TOKEN);
+    expect(check.stdout).not.toContain(STAGING_ACTIVATOR_TOKEN);
+
+    await chmod(tokenFile, 0o640);
+    await expect(loadReleaseActivatorTokenFile(tokenFile)).rejects.toThrow(
+      "release activator token file must have mode 0600",
+    );
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("operator release activator strips authentication config from child env", () => {
+  expect(
+    releaseActivatorChildEnv({
+      PATH: "/usr/bin",
+      TAKOSUMI_RELEASE_ACTIVATOR_TOKEN: LEGACY_ACTIVATOR_TOKEN,
+      TAKOSUMI_RELEASE_ACTIVATOR_TOKEN_FILE: "/run/secrets/tokens.json",
+    }),
+  ).toEqual({ PATH: "/usr/bin" });
 });
 
 test("operator release activator rejects reserved operator env allowlist entries", async () => {
