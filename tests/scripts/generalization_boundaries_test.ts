@@ -1,7 +1,43 @@
 import { describe, expect, test } from "bun:test";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import {
+  collectGeneralizationBoundarySources,
+  GENERALIZATION_SCAN_ROOTS,
+} from "../../scripts/check-generalization-boundaries";
 import { findGeneralizationBoundaryViolations } from "../../scripts/lib/generalization-boundaries";
 
 describe("generalization boundary scanner", () => {
+  test("collects scripts, shared libraries, and OpenTofu module sources", async () => {
+    expect(GENERALIZATION_SCAN_ROOTS).toEqual(
+      expect.arrayContaining(["scripts", "lib", "opentofu-modules"]),
+    );
+    const root = await mkdtemp(join(tmpdir(), "takosumi-generalization-"));
+    const expectedPaths = [
+      "lib/rootgen/src/example.ts",
+      "opentofu-modules/example/main.tf",
+      "scripts/example.mjs",
+    ];
+    try {
+      for (const path of expectedPaths) {
+        const absolutePath = join(root, path);
+        await mkdir(dirname(absolutePath), { recursive: true });
+        await writeFile(absolutePath, "// coverage fixture\n", "utf8");
+      }
+      const ignoredPath = join(root, "scripts/node_modules/ignored.ts");
+      await mkdir(dirname(ignoredPath), { recursive: true });
+      await writeFile(ignoredPath, "// ignored fixture\n", "utf8");
+
+      const sources = await collectGeneralizationBoundarySources(root);
+      expect(sources.map((source) => source.path).sort()).toEqual(
+        expectedPaths,
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("rejects aliases to removed contract modules", () => {
     const violations = findGeneralizationBoundaryViolations([
       {
@@ -214,6 +250,45 @@ describe("generalization boundary scanner", () => {
       "implicit-provider-smoke-default",
       "implicit-provider-smoke-default",
       "implicit-provider-smoke-default",
+    ]);
+  });
+
+  test("allows explicit provider-mode parser branches", () => {
+    const violations = findGeneralizationBoundaryViolations([
+      {
+        path: "scripts/smoke-platform-control-plane.ts",
+        content: [
+          'if (value === "guided") return "guided";',
+          'if (value === "cloudflare-worker") return "cloudflare-worker";',
+        ].join("\n"),
+      },
+    ]);
+
+    expect(violations).toEqual([]);
+  });
+
+  test("limits compatibility sourceKind to the external usage evidence schema", () => {
+    const allowed = findGeneralizationBoundaryViolations([
+      {
+        path: "scripts/lib/service-form-compatibility-removal.mjs",
+        content: [
+          "function validateUsageObservation(value) {",
+          '  return value.sourceKind === "operator-route-and-provider-telemetry";',
+          "}",
+          "function exactKeys() {}",
+        ].join("\n"),
+      },
+    ]);
+    expect(allowed).toEqual([]);
+
+    const rejected = findGeneralizationBoundaryViolations([
+      {
+        path: "scripts/lib/service-form-compatibility-removal.mjs",
+        content: "const sourceKind = install.sourceKind;",
+      },
+    ]);
+    expect(rejected.map((violation) => violation.ruleId)).toEqual([
+      "retired-authority-key",
     ]);
   });
 
@@ -596,6 +671,28 @@ describe("generalization boundary scanner", () => {
         },
       ]),
     ).toEqual([]);
+
+    expect(
+      findGeneralizationBoundaryViolations([
+        {
+          path: "scripts/smoke-platform-control-plane.ts",
+          content: [
+            'if (typeof errorRecord.message === "string") return errorRecord.message;',
+            'if (typeof record.message === "string") return record.message;',
+            'const message = typeof first.message === "string" ? first.message : undefined;',
+          ].join("\n"),
+        },
+      ]),
+    ).toEqual([]);
+
+    expect(
+      findGeneralizationBoundaryViolations([
+        {
+          path: "scripts/smoke-platform-control-plane.ts",
+          content: 'if (error.message === "string") return retry;',
+        },
+      ]).map((violation) => violation.ruleId),
+    ).toEqual(["control-error-message-inference"]);
   });
 
   test("rejects direct managed-provider marker checks in authority consumers", () => {

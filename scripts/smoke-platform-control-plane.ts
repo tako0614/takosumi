@@ -1245,19 +1245,15 @@ export async function runPlatformControlPlaneSmoke(
     runTimings.push(smokeRunTiming("apply", completedApply));
     completeStep("apply");
     beginStep("stateVersionLedgerVerified");
-    if (options.verificationMode === "cloudflare-worker") {
-      stateVersionLedger = await assertStateVersionLedger(options, {
-        workspaceId,
-        capsuleId,
-        applyRunId,
-      });
-    } else {
+    if (options.verificationMode === "opentofu") {
       beginStep("opentofuApplyVerified");
-      stateVersionLedger = await assertGenericStateVersionLedger(options, {
-        workspaceId,
-        capsuleId,
-        applyRunId,
-      });
+    }
+    stateVersionLedger = await assertStateVersionLedger(options, {
+      workspaceId,
+      capsuleId,
+      applyRunId,
+    });
+    if (options.verificationMode === "opentofu") {
       completeStep("opentofuApplyVerified");
     }
     completeStep("stateVersionLedgerVerified");
@@ -2865,22 +2861,6 @@ function publicCheckUrl(rawUrl: string, check: PublicUrlCheck): string {
 }
 
 async function assertStateVersionLedger(
-  options: PlatformControlPlaneSmokeOptions,
-  input: {
-    readonly workspaceId: string;
-    readonly capsuleId: string;
-    readonly applyRunId: string;
-  },
-): Promise<StateVersionLedgerVerificationResult> {
-  const result = await readStateVersionAndOutputLedger(options, input);
-  const outputUrl = result.publicOutputs?.url;
-  if (typeof outputUrl !== "string" || !outputUrl.trim()) {
-    throw new Error("Output publicOutputs.url was not a non-empty string");
-  }
-  return result;
-}
-
-async function assertGenericStateVersionLedger(
   options: PlatformControlPlaneSmokeOptions,
   input: {
     readonly workspaceId: string;

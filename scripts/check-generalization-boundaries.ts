@@ -8,7 +8,7 @@ import {
 } from "./lib/generalization-boundaries";
 
 const ROOT = resolve(new URL("..", import.meta.url).pathname);
-const SCAN_ROOTS = [
+export const GENERALIZATION_SCAN_ROOTS = [
   "accounts",
   "cli",
   "contract",
@@ -18,9 +18,12 @@ const SCAN_ROOTS = [
   "docs/en/reference",
   "docs/operations",
   "docs/reference",
+  "lib",
+  "opentofu-modules",
   "provider",
   "providers",
   "runner",
+  "scripts",
   "worker",
 ] as const;
 const SCAN_FILES = [
@@ -28,7 +31,6 @@ const SCAN_FILES = [
   "tsconfig.json",
   "dashboard/package.json",
   "dashboard/tsconfig.json",
-  "scripts/validate-production-hardening-evidence.ts",
 ] as const;
 const SOURCE_EXTENSIONS = new Set([
   ".cjs",
@@ -77,66 +79,76 @@ const RETIRED_PATHS = [
   "core/workers/registry_sync_worker.ts",
 ] as const;
 
-const sources: GeneralizationBoundarySource[] = [];
-for (const root of SCAN_ROOTS) {
-  const absRoot = join(ROOT, root);
-  if (existsSync(absRoot)) await walk(absRoot, sources);
-}
-for (const path of SCAN_FILES) {
-  const absPath = join(ROOT, path);
-  if (!existsSync(absPath)) continue;
-  sources.push({ path, content: await readFile(absPath, "utf8") });
-}
-
-const violations: GeneralizationBoundaryViolation[] = [
-  ...findGeneralizationBoundaryViolations(sources),
-];
-for (const path of RETIRED_PATHS) {
-  if (
-    !sources.some(
-      (source) => source.path === path || source.path.startsWith(`${path}/`),
-    )
-  ) {
-    continue;
+if (import.meta.main) {
+  const sources = await collectGeneralizationBoundarySources(ROOT);
+  const violations: GeneralizationBoundaryViolation[] = [
+    ...findGeneralizationBoundaryViolations(sources),
+  ];
+  for (const path of RETIRED_PATHS) {
+    if (
+      !sources.some(
+        (source) => source.path === path || source.path.startsWith(`${path}/`),
+      )
+    ) {
+      continue;
+    }
+    violations.push({
+      ruleId: "retired-path",
+      path,
+      line: 1,
+      message: "retired implementation path must not exist in the current tree",
+      excerpt: path,
+    });
   }
-  violations.push({
-    ruleId: "retired-path",
-    path,
-    line: 1,
-    message: "retired implementation path must not exist in the current tree",
-    excerpt: path,
-  });
-}
 
-if (violations.length > 0) {
-  console.error("Generalization boundary check failed:");
-  for (const violation of violations) {
-    console.error(
-      `- ${violation.path}:${violation.line} [${violation.ruleId}] ${violation.message}`,
-    );
-    if (violation.excerpt) console.error(`    ${violation.excerpt}`);
+  if (violations.length > 0) {
+    console.error("Generalization boundary check failed:");
+    for (const violation of violations) {
+      console.error(
+        `- ${violation.path}:${violation.line} [${violation.ruleId}] ${violation.message}`,
+      );
+      if (violation.excerpt) console.error(`    ${violation.excerpt}`);
+    }
+    process.exit(1);
   }
-  process.exit(1);
+
+  console.log(
+    `Generalization boundary check passed (${sources.length} current files scanned).`,
+  );
 }
 
-console.log(
-  `Generalization boundary check passed (${sources.length} current files scanned).`,
-);
+export async function collectGeneralizationBoundarySources(
+  root: string,
+): Promise<GeneralizationBoundarySource[]> {
+  const sources: GeneralizationBoundarySource[] = [];
+  for (const scanRoot of GENERALIZATION_SCAN_ROOTS) {
+    const absRoot = join(root, scanRoot);
+    if (existsSync(absRoot)) await walk(root, absRoot, sources);
+  }
+  for (const path of SCAN_FILES) {
+    const absPath = join(root, path);
+    if (!existsSync(absPath)) continue;
+    if (sources.some((source) => source.path === path)) continue;
+    sources.push({ path, content: await readFile(absPath, "utf8") });
+  }
+  return sources;
+}
 
 async function walk(
+  root: string,
   dir: string,
   output: GeneralizationBoundarySource[],
 ): Promise<void> {
   for (const entry of await readdir(dir, { withFileTypes: true })) {
     if (entry.isDirectory()) {
       if (IGNORED_DIRS.has(entry.name)) continue;
-      await walk(join(dir, entry.name), output);
+      await walk(root, join(dir, entry.name), output);
       continue;
     }
     if (!entry.isFile() || !hasSourceExtension(entry.name)) continue;
     const absPath = join(dir, entry.name);
     output.push({
-      path: relative(ROOT, absPath).split(sep).join("/"),
+      path: relative(root, absPath).split(sep).join("/"),
       content: await readFile(absPath, "utf8"),
     });
   }

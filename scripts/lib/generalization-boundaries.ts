@@ -25,12 +25,19 @@ const IMPLEMENTATION_ROOTS = [
   "core/",
   "dashboard/src/",
   "deploy/",
+  "lib/",
+  "opentofu-modules/",
   "provider/",
   "providers/",
   "runner/",
-  "scripts/operator-release-activator.ts",
+  "scripts/",
   "worker/",
 ] as const;
+
+const GENERALIZATION_SCANNER_PATHS = new Set([
+  "scripts/check-generalization-boundaries.ts",
+  "scripts/lib/generalization-boundaries.ts",
+]);
 
 const STACK_FLOW_PREFIXES = [
   "accounts/service/src/control/",
@@ -899,8 +906,8 @@ const RULES: readonly BoundaryRule[] = [
       "the control-plane smoke must default to providerless OpenTofu and select provider contributions explicitly, never from module paths or InstallConfig ids",
     appliesTo: (path) => path === "scripts/smoke-platform-control-plane.ts",
     patterns: [
-      /value\s*===\s*["'`]cloudflare-worker["'`][\s\S]{0,80}return\s+["'`]cloudflare-worker["'`]/,
-      /value\s*===\s*["'`]guided["'`][\s\S]{0,80}return\s+["'`]guided["'`]/,
+      /if\s*\((?=[^)]{0,160}\bvalue\s*===\s*undefined)(?=[^)]{0,160}\bvalue\s*===\s*["'`]cloudflare-worker["'`])[^)]*\)\s*return\s+["'`]cloudflare-worker["'`]/,
+      /if\s*\((?=[^)]{0,160}\bvalue\s*===\s*undefined)(?=[^)]{0,160}\bvalue\s*===\s*["'`]guided["'`])[^)]*\)\s*return\s+["'`]guided["'`]/,
       /defaultSmokeVariableStyle\(/,
       /moduleKey\.includes\(\s*["'`]providers\/cloudflare\//,
       /installConfigId\s*===\s*["'`]cloudflare-(?:hello-worker|worker-service)["'`]/,
@@ -1059,6 +1066,17 @@ export function findGeneralizationBoundaryViolations(
           ) {
             continue;
           }
+          if (
+            isAllowedTypeofMessageCheck(rule.id, source.content, index) ||
+            isAllowedCompatibilityUsageEvidenceField(
+              rule.id,
+              path,
+              source.content,
+              index,
+            )
+          ) {
+            continue;
+          }
           if (isAllowedHistoryLocation(path, source.content, index)) continue;
           const key = `${rule.id}\0${path}\0${line}`;
           if (seen.has(key)) continue;
@@ -1079,6 +1097,43 @@ export function findGeneralizationBoundaryViolations(
       left.path.localeCompare(right.path) ||
       left.line - right.line ||
       left.ruleId.localeCompare(right.ruleId),
+  );
+}
+
+function isAllowedTypeofMessageCheck(
+  ruleId: string,
+  content: string,
+  index: number,
+): boolean {
+  if (ruleId !== "control-error-message-inference") return false;
+  const lineStart = content.lastIndexOf("\n", Math.max(0, index - 1)) + 1;
+  const lineEndCandidate = content.indexOf("\n", index);
+  const lineEnd = lineEndCandidate < 0 ? content.length : lineEndCandidate;
+  const before = content.slice(lineStart, index);
+  const after = content.slice(index, lineEnd);
+  return (
+    /\btypeof\s+(?:[A-Za-z_$][\w$]*(?:\?\.|\.)?)*$/u.test(before) &&
+    /^(?:this\.)?message\s*(?:===|!==|==|!=)\s*["'`](?:string|number|boolean|bigint|symbol|undefined|object|function)["'`]/u.test(
+      after,
+    )
+  );
+}
+
+function isAllowedCompatibilityUsageEvidenceField(
+  ruleId: string,
+  path: string,
+  content: string,
+  index: number,
+): boolean {
+  return (
+    ruleId === "retired-authority-key" &&
+    path === "scripts/lib/service-form-compatibility-removal.mjs" &&
+    isBetweenMarkers(
+      content,
+      index,
+      "function validateUsageObservation(",
+      "function exactKeys(",
+    )
   );
 }
 
@@ -1188,7 +1243,10 @@ function isBetweenMarkers(
 }
 
 function isImplementationPath(path: string): boolean {
-  return startsWithAny(path, IMPLEMENTATION_ROOTS);
+  return (
+    !GENERALIZATION_SCANNER_PATHS.has(path) &&
+    startsWithAny(path, IMPLEMENTATION_ROOTS)
+  );
 }
 
 function isAllowedHistoryLocation(
