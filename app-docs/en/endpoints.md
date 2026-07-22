@@ -297,7 +297,7 @@ Workers Logs and Logpush.
 
 Pricing is owned by Takosumi Cloud, not by endpoint request bodies. Requests and
 client headers must not submit `usdMicros` or `credits`. Public prices and
-free-tier terms are shown in [Takosumi Cloud pricing](./pricing.md) and
+onboarding-credit terms are shown in [Takosumi Cloud pricing](./pricing.md) and
 Dashboard billing views. Every active offering publishes exact SKU, unit, unit
 price, minimum charge, tax policy, and catalog version in the public reference
 and quote. Only synchronization procedures, secrets, and payment-provider
