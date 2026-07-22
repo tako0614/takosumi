@@ -81,6 +81,7 @@ function fullShape(): ResourceShapeRecord {
     phase: "Ready",
     generation: 3,
     observedGeneration: 2,
+    lastOperationRunId: "run_resource_backend_revision_3",
     outputs: { bucket_name: "assets", s3_endpoint: "https://s3.example" },
     execution: {
       runId: "apply_resource_3",
@@ -286,6 +287,20 @@ for (const backend of backends) {
       expect(
         await stores.resources.getByName(SPACE_A, "ObjectBucket", "assets"),
       ).toEqual(record);
+    });
+
+    test("resource shape: pending direct operation round-trips exactly", async () => {
+      const record: ResourceShapeRecord = {
+        ...applyingShape(`pending-${backend.label}`),
+        pendingOperation: {
+          runId: "run_resource_pending_apply",
+          operation: "apply",
+          operationKey: `sha256:${"a".repeat(64)}`,
+        },
+      };
+      expect(await stores.resources.upsert(record)).toEqual(record);
+      expect(await stores.resources.get(record.id)).toEqual(record);
+      await stores.resources.delete(record.id);
     });
 
     test("exact Form identity round-trips with its matching ResolutionLock", async () => {
@@ -1562,6 +1577,54 @@ for (const backend of backends) {
     });
   });
 }
+
+test("durable Resource stores reject malformed pending operation evidence", async () => {
+  const d1 = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(d1);
+  const d1Stores = createD1ResourceShapeStores(d1);
+  const d1Record = applyingShape("malformed-pending-d1");
+  await d1Stores.resources.upsert(d1Record);
+  await d1
+    .prepare(
+      `update resource_shapes set pending_operation_json = ? where id = ?`,
+    )
+    .bind(
+      JSON.stringify({
+        runId: "run_resource_malformed",
+        operation: "preview",
+        operationKey: `sha256:${"a".repeat(64)}`,
+      }),
+      d1Record.id,
+    )
+    .run();
+  await expect(d1Stores.resources.get(d1Record.id)).rejects.toThrow(
+    "durable Resource pending operation is invalid",
+  );
+
+  const postgres = await PGliteSqlClient.create();
+  try {
+    const postgresStores = createSqlResourceShapeStores(postgres);
+    const postgresRecord = applyingShape("malformed-pending-postgres");
+    await postgresStores.resources.upsert(postgresRecord);
+    await postgres.query(
+      `update takosumi_resource_shapes
+       set pending_operation_json = $1::jsonb where id = $2`,
+      [
+        JSON.stringify({
+          runId: "run_resource_malformed",
+          operation: "delete",
+          operationKey: "contains\ncontrol",
+        }),
+        postgresRecord.id,
+      ],
+    );
+    await expect(
+      postgresStores.resources.get(postgresRecord.id),
+    ).rejects.toThrow("durable Resource pending operation is invalid");
+  } finally {
+    await postgres.close();
+  }
+});
 
 test("D1 atomic apply batch rolls back both Resource and ResolutionLock writes", async () => {
   const db = new SqliteFakeD1();

@@ -2411,6 +2411,8 @@ export interface PlatformCanonicalReadyResourceInventoryItem {
   readonly resourceId: string;
   readonly resource: ResourceObject;
   readonly resourceGeneration: number;
+  /** Canonical backend lifecycle revision proven by the Resource store. */
+  readonly resourceRevisionId: string;
   readonly nativeResources: readonly NativeResourceRef[];
 }
 
@@ -2464,6 +2466,8 @@ export interface PlatformCompatibilityReadyResourceEvidence {
   readonly resource: ResourceObject;
   /** Desired generation proven Ready by the canonical Resource store. */
   readonly resourceGeneration: number;
+  /** Canonical backend lifecycle revision proven by the Resource store. */
+  readonly resourceRevisionId: string;
   readonly nativeResources: readonly NativeResourceRef[];
   readonly interface?: Interface;
   readonly interfaceBindings?: readonly import("takosumi-contract/interfaces").InterfaceBinding[];

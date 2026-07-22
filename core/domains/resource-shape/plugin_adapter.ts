@@ -56,11 +56,17 @@ export class PluginResourceShapeAdapter implements ResourceAdapter {
   }
 
   async preview(input: AdapterApplyInput): Promise<AdapterPreviewResult> {
+    assertResourceGeneration(input.resourceGeneration);
     const plugin = this.#pluginFor(input.implementation.plugin);
     if (!plugin) {
       assertExplicitModuleExecution(input);
       return await this.#fallback.preview(input);
     }
+    assertOptionalResourceRevisionId(
+      input.resourceRevisionId,
+      "resourceRevisionId",
+    );
+    assertResolvedConnectionRevisions(input);
     return validatePreviewResult(
       await this.#callPlugin(
         plugin,
@@ -73,11 +79,21 @@ export class PluginResourceShapeAdapter implements ResourceAdapter {
   }
 
   async apply(input: AdapterApplyInput): Promise<AdapterApplyResult> {
+    assertResourceGeneration(input.resourceGeneration);
     const plugin = this.#pluginFor(input.implementation.plugin);
     if (!plugin) {
       assertExplicitModuleExecution(input);
       return await this.#fallback.apply(input);
     }
+    assertRequiredResourceRevisionId(
+      input.resourceRevisionId,
+      "resourceRevisionId",
+    );
+    assertOptionalResourceRevisionId(
+      input.previousResourceRevisionId,
+      "previousResourceRevisionId",
+    );
+    assertResolvedConnectionRevisions(input);
     return validateApplyResult(
       await this.#callPlugin(
         plugin,
@@ -92,11 +108,21 @@ export class PluginResourceShapeAdapter implements ResourceAdapter {
   async importResource(
     input: AdapterImportInput,
   ): Promise<AdapterImportResult> {
+    assertResourceGeneration(input.resourceGeneration);
     const plugin = this.#pluginFor(input.implementation.plugin);
     if (!plugin) {
       assertExplicitModuleExecution(input);
       return await this.#fallback.importResource(input);
     }
+    assertRequiredResourceRevisionId(
+      input.resourceRevisionId,
+      "resourceRevisionId",
+    );
+    assertOptionalResourceRevisionId(
+      input.previousResourceRevisionId,
+      "previousResourceRevisionId",
+    );
+    assertResolvedConnectionRevisions(input);
     return validateImportResult(
       await this.#callPlugin(
         plugin,
@@ -109,11 +135,17 @@ export class PluginResourceShapeAdapter implements ResourceAdapter {
   }
 
   async observe(input: AdapterApplyInput): Promise<AdapterObserveResult> {
+    assertResourceGeneration(input.resourceGeneration);
     const plugin = this.#pluginFor(input.implementation.plugin);
     if (!plugin) {
       assertExplicitModuleExecution(input);
       return await this.#fallback.observe(input);
     }
+    assertRequiredResourceRevisionId(
+      input.resourceRevisionId,
+      "resourceRevisionId",
+    );
+    assertResolvedConnectionRevisions(input);
     return validateObserveResult(
       await this.#callPlugin(
         plugin,
@@ -126,11 +158,17 @@ export class PluginResourceShapeAdapter implements ResourceAdapter {
   }
 
   async refresh(input: AdapterApplyInput): Promise<AdapterRefreshResult> {
+    assertResourceGeneration(input.resourceGeneration);
     const plugin = this.#pluginFor(input.implementation.plugin);
     if (!plugin) {
       assertExplicitModuleExecution(input);
       return await this.#fallback.refresh(input);
     }
+    assertRequiredResourceRevisionId(
+      input.resourceRevisionId,
+      "resourceRevisionId",
+    );
+    assertResolvedConnectionRevisions(input);
     return validateRefreshResult(
       await this.#callPlugin(
         plugin,
@@ -143,11 +181,16 @@ export class PluginResourceShapeAdapter implements ResourceAdapter {
   }
 
   async delete(input: AdapterDeleteInput): Promise<void> {
+    assertResourceGeneration(input.resourceGeneration);
     const plugin = this.#pluginFor(input.implementation.plugin);
     if (!plugin) {
       assertExplicitModuleExecution(input);
       return await this.#fallback.delete(input);
     }
+    assertRequiredResourceRevisionId(
+      input.resourceRevisionId,
+      "resourceRevisionId",
+    );
     await this.#callPlugin(
       plugin,
       input.implementation.plugin!,
@@ -210,6 +253,54 @@ export class PluginResourceShapeAdapter implements ResourceAdapter {
       );
     }
     return body;
+  }
+}
+
+function assertResourceGeneration(resourceGeneration: number): void {
+  if (!Number.isSafeInteger(resourceGeneration) || resourceGeneration < 1) {
+    throw new Error(
+      "Resource Shape adapter input must include a positive safe-integer resourceGeneration",
+    );
+  }
+}
+
+function assertRequiredResourceRevisionId(
+  value: string | undefined,
+  field: string,
+): asserts value is string {
+  if (value === undefined) {
+    throw new Error(
+      `Direct Resource Shape adapter input must include ${field}`,
+    );
+  }
+  assertOptionalResourceRevisionId(value, field);
+}
+
+function assertOptionalResourceRevisionId(
+  value: string | undefined,
+  field: string,
+): void {
+  if (value === undefined) return;
+  if (
+    value.trim() !== value ||
+    value === "" ||
+    value.length > 256 ||
+    /[\u0000-\u001f\u007f]/.test(value)
+  ) {
+    throw new Error(
+      `Direct Resource Shape adapter input ${field} must be a non-empty printable string no longer than 256 characters`,
+    );
+  }
+}
+
+function assertResolvedConnectionRevisions(input: AdapterApplyInput): void {
+  for (const [name, connection] of Object.entries(
+    input.resolvedConnections ?? {},
+  )) {
+    assertOptionalResourceRevisionId(
+      connection.resourceRevisionId,
+      `resolvedConnections.${name}.resourceRevisionId`,
+    );
   }
 }
 

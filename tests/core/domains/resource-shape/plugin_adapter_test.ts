@@ -59,6 +59,8 @@ function applyInput(
 ): AdapterApplyInput {
   return {
     resourceId: "tkrn:space_1:ObjectBucket:assets",
+    resourceGeneration: 3,
+    resourceRevisionId: "run_resource_current_revision",
     environment: "default",
     stateGeneration: 1,
     plan,
@@ -74,6 +76,8 @@ function deleteInput(
 ): AdapterDeleteInput {
   return {
     resourceId: "tkrn:space_1:ObjectBucket:assets",
+    resourceGeneration: 3,
+    resourceRevisionId: "run_resource_current_revision",
     environment: "default",
     stateGeneration: 1,
     plan,
@@ -84,6 +88,82 @@ function deleteInput(
     ...overrides,
   };
 }
+
+test("plugin adapter rejects invalid Resource generation before dispatch", async () => {
+  let called = false;
+  const adapter = new PluginResourceShapeAdapter(
+    new StubResourceShapeAdapter(),
+    {
+      "cloud-managed": {
+        fetch() {
+          called = true;
+          return new Response(null, { status: 204 });
+        },
+      },
+    },
+  );
+
+  await expect(
+    adapter.apply(
+      applyInput({
+        implementation: pluginDescriptor,
+        resourceGeneration: 0,
+      }),
+    ),
+  ).rejects.toThrow("positive safe-integer resourceGeneration");
+  expect(called).toBe(false);
+});
+
+test("plugin adapter rejects missing or malformed Resource revisions before dispatch", async () => {
+  let calls = 0;
+  const adapter = new PluginResourceShapeAdapter(
+    new StubResourceShapeAdapter(),
+    {
+      "cloud-managed": {
+        fetch() {
+          calls += 1;
+          return new Response(null, { status: 204 });
+        },
+      },
+    },
+  );
+
+  await expect(
+    adapter.apply(
+      applyInput({
+        implementation: pluginDescriptor,
+        resourceRevisionId: undefined,
+      }),
+    ),
+  ).rejects.toThrow("must include resourceRevisionId");
+  await expect(
+    adapter.observe(
+      applyInput({
+        implementation: pluginDescriptor,
+        resourceRevisionId: "  ",
+      }),
+    ),
+  ).rejects.toThrow("resourceRevisionId must be a non-empty printable string");
+  await expect(
+    adapter.apply(
+      applyInput({
+        implementation: pluginDescriptor,
+        previousResourceRevisionId: "old\nrevision",
+      }),
+    ),
+  ).rejects.toThrow(
+    "previousResourceRevisionId must be a non-empty printable string",
+  );
+  await expect(
+    adapter.delete(
+      deleteInput({
+        implementation: pluginDescriptor,
+        resourceRevisionId: undefined,
+      }),
+    ),
+  ).rejects.toThrow("must include resourceRevisionId");
+  expect(calls).toBe(0);
+});
 
 test("plugin adapter routes plugin-backed operations to the injected binding", async () => {
   const calls: { readonly url: string; readonly body: unknown }[] = [];
@@ -124,6 +204,8 @@ test("plugin adapter routes plugin-backed operations to the injected binding", a
   const resolvedConnections = {
     ASSETS: {
       resourceId: "tkrn:space_1:ObjectBucket:assets",
+      resourceGeneration: 2,
+      resourceRevisionId: "run_resource_assets_revision",
       kind: "ObjectBucket" as const,
       permissions: ["read" as const],
       projection: "runtime_binding" as const,
@@ -143,6 +225,7 @@ test("plugin adapter routes plugin-backed operations to the injected binding", a
       implementation: pluginDescriptor,
       resolvedConnections,
       operationKey: "sha256:stable-apply-assets",
+      previousResourceRevisionId: "run_resource_previous_revision",
     }),
   );
   const imported = await adapter.importResource({
@@ -222,6 +305,13 @@ test("plugin adapter routes plugin-backed operations to the injected binding", a
   expect(calls[1]?.body).toMatchObject({
     action: "apply",
     input: { operationKey: "sha256:stable-apply-assets" },
+  });
+  expect(calls[1]?.body).toMatchObject({
+    action: "apply",
+    input: {
+      resourceRevisionId: "run_resource_current_revision",
+      previousResourceRevisionId: "run_resource_previous_revision",
+    },
   });
   expect(calls[5]?.body).toMatchObject({
     action: "delete",

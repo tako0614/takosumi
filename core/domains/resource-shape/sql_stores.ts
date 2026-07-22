@@ -32,6 +32,7 @@ import type { IsoTimestamp } from "../../shared/time.ts";
 import type {
   ResolutionLockRecord,
   ResourceShapeExecutionRecord,
+  ResourceShapePendingOperation,
   ResourceShapeRecord,
   ResourceShapeRecordId,
   ResourceShapeStateAdoptionDescriptor,
@@ -91,6 +92,8 @@ type ResourceShapeRow = {
   readonly phase: string;
   readonly generation: number;
   readonly observed_generation: number;
+  readonly last_operation_run_id: string | null;
+  readonly pending_operation_json: unknown;
   readonly outputs_json: unknown;
   readonly execution_json: unknown;
   readonly state_adoption_json: unknown;
@@ -164,6 +167,8 @@ class SqlResourceShapeStore implements ResourceShapeStore {
           phase = excluded.phase,
           generation = excluded.generation,
           observed_generation = excluded.observed_generation,
+          last_operation_run_id = excluded.last_operation_run_id,
+          pending_operation_json = excluded.pending_operation_json,
           outputs_json = excluded.outputs_json,
           execution_json = excluded.execution_json,
           state_adoption_json = excluded.state_adoption_json,
@@ -437,8 +442,9 @@ class SqlResourceShapeStore implements ResourceShapeStore {
         generation = $11, observed_generation = $12,
         outputs_json = $13::jsonb, execution_json = $14::jsonb,
         state_adoption_json = $15::jsonb, conditions_json = $16::jsonb,
-        labels_json = $17::jsonb, created_at = $18, updated_at = $19
-       where id = $20 and generation = $21 and phase = $22 and updated_at = $23`,
+        labels_json = $17::jsonb, created_at = $18, updated_at = $19,
+        last_operation_run_id = $20, pending_operation_json = $21::jsonb
+       where id = $22 and generation = $23 and phase = $24 and updated_at = $25`,
       [
         ...resourceParameters(record).slice(1),
         record.id,
@@ -967,7 +973,7 @@ function updateSqlResource(
   },
   expectedManagedBy?: ResourceManagedBy,
 ) {
-  const managedByPredicate = expectedManagedBy ? " and managed_by = $24" : "";
+  const managedByPredicate = expectedManagedBy ? " and managed_by = $26" : "";
   return client.query(
     `update ${names.resourceShapes} set
       space_id = $1, project = $2, environment = $3, kind = $4,
@@ -976,8 +982,9 @@ function updateSqlResource(
       observed_generation = $12, outputs_json = $13::jsonb,
       execution_json = $14::jsonb, state_adoption_json = $15::jsonb,
       conditions_json = $16::jsonb, labels_json = $17::jsonb,
-      created_at = $18, updated_at = $19
-    where id = $20 and generation = $21 and phase = $22 and updated_at = $23${managedByPredicate}`,
+      created_at = $18, updated_at = $19, last_operation_run_id = $20,
+      pending_operation_json = $21::jsonb
+    where id = $22 and generation = $23 and phase = $24 and updated_at = $25${managedByPredicate}`,
     [
       ...resourceParameters(record).slice(1),
       record.id,
@@ -1023,11 +1030,12 @@ function resourceInsertSql(table: string, conflict: string): string {
     name, managed_by,
     spec_json, phase, generation, observed_generation,
     outputs_json, execution_json, state_adoption_json,
-    conditions_json, labels_json, created_at, updated_at
+    conditions_json, labels_json, created_at, updated_at,
+    last_operation_run_id, pending_operation_json
   ) values (
     $1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10::jsonb,
     $11, $12, $13, $14::jsonb, $15::jsonb, $16::jsonb,
-    $17::jsonb, $18::jsonb, $19, $20
+    $17::jsonb, $18::jsonb, $19, $20, $21, $22::jsonb
   ) ${conflict}`;
 }
 
@@ -1054,6 +1062,8 @@ function resourceParameters(record: ResourceShapeRecord): readonly SqlValue[] {
     jsonOrNull(record.labels),
     record.createdAt,
     record.updatedAt,
+    record.lastOperationRunId ?? null,
+    jsonOrNull(record.pendingOperation),
   ];
 }
 
@@ -1155,6 +1165,7 @@ function resourceShapeFromRow(row: ResourceShapeRow): ResourceShapeRecord {
   );
   const conditions = parseJson<readonly Condition[]>(row.conditions_json);
   const labels = parseJson<Record<string, string>>(row.labels_json);
+  const pendingOperation = pendingOperationFromJson(row.pending_operation_json);
   return {
     id: row.id,
     spaceId: row.space_id as SpaceId,
@@ -1168,6 +1179,10 @@ function resourceShapeFromRow(row: ResourceShapeRow): ResourceShapeRecord {
     phase: row.phase as ResourcePhase,
     generation: Number(row.generation),
     observedGeneration: Number(row.observed_generation),
+    ...(typeof row.last_operation_run_id === "string"
+      ? { lastOperationRunId: row.last_operation_run_id }
+      : {}),
+    ...(pendingOperation === undefined ? {} : { pendingOperation }),
     ...(outputs === undefined ? {} : { outputs }),
     ...(execution === undefined ? {} : { execution }),
     ...(stateAdoption === undefined ? {} : { stateAdoption }),
@@ -1247,6 +1262,47 @@ function jsonOrNull(value: unknown): string | null {
 function parseJson<T>(value: unknown): T | undefined {
   if (value === undefined || value === null || value === "") return undefined;
   return (typeof value === "string" ? JSON.parse(value) : value) as T;
+}
+
+function pendingOperationFromJson(
+  value: unknown,
+): ResourceShapePendingOperation | undefined {
+  const pending = parseJson<unknown>(value);
+  if (pending === undefined) return undefined;
+  if (
+    typeof pending !== "object" ||
+    pending === null ||
+    Array.isArray(pending)
+  ) {
+    throw new Error("durable Resource pending operation is invalid");
+  }
+  const candidate = pending as Record<string, unknown>;
+  const operation = candidate.operation;
+  if (
+    !validPendingOperationToken(candidate.runId) ||
+    !validPendingOperationToken(candidate.operationKey) ||
+    (operation !== "apply" &&
+      operation !== "import" &&
+      operation !== "refresh" &&
+      operation !== "delete")
+  ) {
+    throw new Error("durable Resource pending operation is invalid");
+  }
+  return {
+    runId: candidate.runId,
+    operation,
+    operationKey: candidate.operationKey,
+  };
+}
+
+function validPendingOperationToken(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.trim() === value &&
+    value !== "" &&
+    value.length <= 256 &&
+    !/[\u0000-\u001f\u007f]/.test(value)
+  );
 }
 
 function exactFormIdentity(

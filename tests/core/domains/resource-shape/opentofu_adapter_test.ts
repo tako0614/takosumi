@@ -63,8 +63,7 @@ const cloudflareTarget: TargetPoolEntry = {
   priority: 10,
 };
 
-const customProviderBaseUrl =
-  "https://operator.example.test/compat/example/v1";
+const customProviderBaseUrl = "https://operator.example.test/compat/example/v1";
 
 const edgeDescriptor: TargetImplementationDescriptor = {
   shape: "EdgeWorker",
@@ -115,6 +114,7 @@ function applyInput(
 ): AdapterApplyInput {
   return {
     resourceId: "tkrn:demo:EdgeWorker:api",
+    resourceGeneration: 3,
     environment: "production",
     stateGeneration: 3,
     plan,
@@ -362,6 +362,7 @@ function deleteInput(
 ): AdapterDeleteInput {
   return {
     resourceId: "tkrn:demo:EdgeWorker:api",
+    resourceGeneration: 3,
     environment: "production",
     stateGeneration: 3,
     nativeResources: [{ type: "cloudflare_workers_script", id: "api" }],

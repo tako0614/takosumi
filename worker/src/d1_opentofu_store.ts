@@ -4016,7 +4016,9 @@ export async function ensureD1OpenTofuLedgerSchema(
       updated_at text not null,
       observation_lease_id text,
       observation_claimed_at text,
-      last_observation_attempt_at text
+      last_observation_attempt_at text,
+      last_operation_run_id text,
+      pending_operation_json text
     )`,
     `create unique index if not exists resource_shapes_space_kind_name_unique
       on resource_shapes (space_id, kind, name)`,
@@ -6051,6 +6053,46 @@ reports written before this column stay null and cannot gate a plan
         db,
         "capsule_compatibility_reports",
         "module_path",
+        "text",
+      );
+    },
+  },
+  {
+    version: 53,
+    name: "d1_resource_shape_backend_revision",
+    checksumSource: `
+Resource last_operation_run_id is the canonical direct-plugin backend lifecycle revision
+Resource pending_operation_json durably fences restart recovery to its exact canonical Run
+legacy rows remain null and direct-plugin compatibility reads fail closed until reconciled
+both nullable columns are additive and preserve all existing Resource rows
+`,
+    async atomicStatements(db) {
+      return [
+        ...(await d1EnsureColumnStatements(
+          db,
+          "resource_shapes",
+          "last_operation_run_id",
+          "text",
+        )),
+        ...(await d1EnsureColumnStatements(
+          db,
+          "resource_shapes",
+          "pending_operation_json",
+          "text",
+        )),
+      ];
+    },
+    async apply(db) {
+      await ensureD1Column(
+        db,
+        "resource_shapes",
+        "last_operation_run_id",
+        "text",
+      );
+      await ensureD1Column(
+        db,
+        "resource_shapes",
+        "pending_operation_json",
         "text",
       );
     },

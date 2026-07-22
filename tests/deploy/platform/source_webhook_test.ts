@@ -2328,6 +2328,7 @@ test("canonical Ready Resource inventory is bounded, global, and lock-coherent",
     phase: "Ready",
     generation: 2,
     observedGeneration: 2,
+    lastOperationRunId: `run_resource_${space}_${name}`,
     createdAt: createdAt as ResourceShapeRecord["createdAt"],
     updatedAt: createdAt as ResourceShapeRecord["updatedAt"],
   });
@@ -2372,6 +2373,7 @@ test("canonical Ready Resource inventory is bounded, global, and lock-coherent",
   ).resolves.toMatchObject({
     resourceId: "tkrn:workspace_inventory_a:EdgeWorker:api",
     resourceGeneration: 2,
+    resourceRevisionId: "run_resource_workspace_inventory_a_api",
     resource: {
       kind: "EdgeWorker",
       metadata: { space: "workspace_inventory_a", name: "api" },
@@ -2406,6 +2408,7 @@ test("canonical Ready Resource inventory is bounded, global, and lock-coherent",
       .map((record) => ({
         resourceId: record.id,
         resourceGeneration: 2,
+        resourceRevisionId: record.lastOperationRunId,
         resource: {
           kind: "EdgeWorker",
           metadata: { space: record.spaceId, name: record.name },
@@ -2440,6 +2443,7 @@ test("canonical Ready exact and paged inventory fail closed when ResolutionLock 
     phase: "Ready",
     generation: 1,
     observedGeneration: 1,
+    lastOperationRunId: "run_resource_lock_race_revision",
     createdAt: "2026-07-15T00:00:00.000Z",
     updatedAt: "2026-07-15T00:00:00.000Z",
   };
@@ -2506,6 +2510,113 @@ test("canonical Ready exact and paged inventory fail closed when ResolutionLock 
     }),
   ).rejects.toThrow(
     `canonical Ready Resource inventory conflict for ${record.id}`,
+  );
+  expect(reads).toBe(3);
+});
+
+test("canonical Ready inventory requires and fences the direct-plugin Resource revision", async () => {
+  const base = createInMemoryResourceShapeStores();
+  const record: ResourceShapeRecord = {
+    id: "tkrn:workspace_revision_race:EdgeWorker:api",
+    spaceId: "workspace_revision_race",
+    kind: "EdgeWorker",
+    name: "api",
+    managedBy: "takosumi.resource-api.v1",
+    spec: {},
+    phase: "Ready",
+    generation: 1,
+    observedGeneration: 1,
+    createdAt: "2026-07-15T00:00:00.000Z",
+    updatedAt: "2026-07-15T00:00:00.000Z",
+  };
+  const lock: ResolutionLockRecord = {
+    resourceId: record.id,
+    selectedImplementation: "cloudflare_workers",
+    target: "cloudflare-main",
+    implementationSnapshot: {
+      shape: "EdgeWorker",
+      implementation: "cloudflare_workers",
+      plugin: "cloudflare-workers-plugin",
+      interfaces: { worker_fetch: "native" },
+    },
+    locked: true,
+    reason: ["direct plugin"],
+    nativeResources: [{ type: "cloudflare_workers_script", id: "backend-api" }],
+    lockedAt: record.createdAt,
+    updatedAt: record.updatedAt,
+  };
+  await base.resources.upsert(record);
+  await base.locks.put(lock);
+
+  const missingRevision = await createTakosumiService({
+    role: "takosumi-api",
+    runtimeEnv: { TAKOSUMI_ENVIRONMENT: "test", TAKOSUMI_DEV_MODE: "1" },
+    resourceShapeStores: base,
+    resourceShapeAdapter: new StubResourceShapeAdapter(),
+  });
+  await expect(
+    missingRevision.operations.resourceCompatibility?.resolveReadyResource({
+      space: record.spaceId,
+      kind: record.kind,
+      name: record.name,
+    }),
+  ).rejects.toThrow(
+    `canonical Ready Resource inventory conflict for ${record.id}`,
+  );
+
+  const canonical = {
+    ...record,
+    lastOperationRunId: "run_resource_revision_before",
+  };
+  await base.resources.upsert(canonical);
+  const originalResources = base.resources;
+  let reads = 0;
+  const racingStores: ResourceShapeStores = {
+    ...base,
+    resources: new Proxy(originalResources, {
+      get(target, property, receiver) {
+        if (property === "get") {
+          return async (resourceId: ResourceShapeRecord["id"]) => {
+            const current = await originalResources.get(resourceId);
+            reads += 1;
+            return reads === 3 && current
+              ? {
+                  ...current,
+                  lastOperationRunId: "run_resource_revision_after",
+                }
+              : current;
+          };
+        }
+        const value = Reflect.get(target, property, receiver) as unknown;
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }),
+  };
+  const racing = await createTakosumiService({
+    role: "takosumi-api",
+    runtimeEnv: { TAKOSUMI_ENVIRONMENT: "test", TAKOSUMI_DEV_MODE: "1" },
+    resourceShapeStores: racingStores,
+    resourceShapeAdapter: new StubResourceShapeAdapter(),
+  });
+  await expect(
+    racing.operations.resourceCompatibility?.resolveReadyResource({
+      space: canonical.spaceId,
+      kind: canonical.kind,
+      name: canonical.name,
+    }),
+  ).rejects.toThrow(
+    `canonical Ready Resource inventory conflict for ${canonical.id}`,
+  );
+  expect(reads).toBe(3);
+
+  reads = 0;
+  await expect(
+    racing.operations.resourceCompatibility?.listReadyResourcesPage({
+      kind: canonical.kind,
+      limit: 1,
+    }),
+  ).rejects.toThrow(
+    `canonical Ready Resource inventory conflict for ${canonical.id}`,
   );
   expect(reads).toBe(3);
 });

@@ -569,6 +569,9 @@ export const resourceShapes = sqliteTable(
     // v46 is additive; keep append order aligned with upgraded databases.
     formRefJson: jsonText("form_ref_json"),
     packageDigest: text("package_digest"),
+    // v53 is additive; keep append order aligned with upgraded databases.
+    lastOperationRunId: text("last_operation_run_id"),
+    pendingOperationJson: jsonText("pending_operation_json"),
   },
   (table) => [
     uniqueIndex("resource_shapes_space_kind_name_unique").on(

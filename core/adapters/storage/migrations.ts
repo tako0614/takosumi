@@ -4334,4 +4334,17 @@ create index if not exists takosumi_offering_catalogs_effective_key_idx
       down: `alter table takosumi_capsule_compatibility_reports
   drop column if exists module_path;`,
     },
+    {
+      id: "resources.backend_revision.add",
+      version: 100,
+      domain: "resources",
+      description:
+        "Persist the nullable canonical direct-plugin backend lifecycle revision and exact pending operation fence on Resource rows. Legacy rows remain readable but direct-plugin compatibility reads fail closed until a new apply/import establishes revision authority.",
+      sql: `alter table takosumi_resource_shapes
+  add column if not exists last_operation_run_id text,
+  add column if not exists pending_operation_json jsonb;`,
+      down: `alter table takosumi_resource_shapes
+  drop column if exists pending_operation_json,
+  drop column if exists last_operation_run_id;`,
+    },
   ]);
