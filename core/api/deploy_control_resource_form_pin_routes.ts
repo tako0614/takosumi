@@ -28,7 +28,7 @@ import type { SpaceId } from "../shared/ids.ts";
 // Workspace APIs remain ws_-only; these exact backfill/restore routes must be
 // able to repair either persisted form without broadening product identity.
 const RESOURCE_FORM_PIN_MIGRATION_WORKSPACE_ID_PATTERN =
-  /^(?:ws|space)_[0-9a-zA-Z]{3,64}$/u;
+  /^(?:ws_[0-9a-zA-Z]{3,64}|space_[0-9a-zA-Z]{1,64})$/u;
 
 const WORKSPACE_ID_PARAM = {
   param: "workspaceId",

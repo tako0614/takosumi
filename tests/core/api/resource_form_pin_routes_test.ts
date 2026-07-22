@@ -16,7 +16,7 @@ import type {
 
 const TOKEN = "scoped-token";
 const WORKSPACE = "ws_allowed12";
-const LEGACY_WORKSPACE = "space_legacy12";
+const LEGACY_WORKSPACE = "space_1";
 const SPACE = "space_resources_a";
 const BASE = `/internal/v1/workspaces/${WORKSPACE}/migrations/resource-form-pins`;
 const INVENTORY_PATH = "/internal/v1/migrations/resource-form-pins/inventory";
@@ -255,12 +255,15 @@ test("exact FormRef migration routes alone accept a durable legacy space_ Worksp
   });
 });
 
-test("exact FormRef migration routes reject adjacent legacy-id prefixes", async () => {
+test("exact FormRef migration routes reject undersized current ids and adjacent legacy ids", async () => {
   const operator = await fixture(() => "space_resources_legacy", "*");
   for (const workspaceId of [
-    "spaces_legacy12",
-    "spac_legacy12",
-    "project_legacy12",
+    "ws_1",
+    "ws_12",
+    "space_",
+    "spaces_1",
+    "spac_1",
+    "project_1",
   ]) {
     for (const operation of ["backfill", "restore"]) {
       const response = await operator.app.request(
