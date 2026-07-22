@@ -12,7 +12,7 @@
 
 | Field         | Value                                      |
 | ------------- | ------------------------------------------ |
-| Last reviewed | 2026-07-15                                 |
+| Last reviewed | 2026-07-22                                 |
 | Owner         | Release owner / on-call owner              |
 | Scope         | Takosumi platform and Capsule rollback SOP |
 
@@ -95,6 +95,39 @@ Operator platform readiness は、staging rollback rehearsal を 1 回要求し�
 - rollback 後の smoke 結果
 - 判断から recovery までの経過時間
 - automation / documentation の gap に対する follow-up 項目
+
+### Runner Profile cutover / rollback drill
+
+Runner Profile migration は install config を直接書き換えず、current Run ledger
+だけで rehearsal します。staging または fresh replica に scratch Capsule、既知の
+retained StateVersion、source profile、provider-neutral canary profile を用意し、root
+workspace から次を実行します。
+
+```sh
+bun run capture:takosumi-runner-profile-migration-evidence -- \
+  --base-url <staging-or-replica-base-url> \
+  --environment <staging-or-replica> \
+  --session-token-file <absolute-operator-private-token-file> \
+  --capsule-id <scratch-capsule-id> \
+  --retained-state-version-id <known-good-state-version-id> \
+  --source-runner-profile-id <source-profile-id> \
+  --target-runner-profile-id <canary-profile-id> \
+  --source-commit <40-or-64-hex-commit> \
+  --oidc-client-id <scratch-oidc-client-id> \
+  --domain-name <scratch-domain> \
+  --data-namespace <scratch-data-namespace> \
+  --interface-binding-digest <sha256-digest> \
+  --readiness-endpoint <scratch-https-readiness-url> \
+  --out-file <absolute-operator-private-evidence-file> \
+  --operation-drill-file <absolute-operator-private-operation-drill-file>
+```
+
+collector は target profile で plan/apply し、retained StateVersion から source
+profile へ rollback plan/apply した後、Capsule の current StateVersion と readiness
+を再確認します。production target、同一 profile、Capsule/StateVersion ownership
+不一致、Run の profile 不一致、非成功 Run、readiness failure はすべて evidence を
+書かず fail closed します。token、raw log、provider/account identifier は evidence
+へ転記しません。
 
 ## Extension Readiness
 
