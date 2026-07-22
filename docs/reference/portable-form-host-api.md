@@ -89,3 +89,25 @@ HTTP status/error code も含まれるため、成功した proof を別の fixt
 
 runner が出力する digest-bound report は、standard Form admission evidence の host 側として
 利用できます。provider conformance は別の evidence です。
+
+### OSS reference-host report lane
+
+10 個の Standard Form を一括検証する署名候補は
+`bun run service-form:host-reports -- generate` で作ります。この generator は、別 checkout の
+Takoform `1.0.1` package set を exact FormRef / package digest / fixture name / raw fixture digest まで
+読み戻し、Takosumi の実際の in-process HTTP Resource API を deterministic stateful conformance
+Adapter に明示注入して実行します。出力先は両 repository の外にある新規 directory だけで、既存
+directory、repository 内、symlink、未列挙 file を拒否します。
+
+この lane の subject は固定の `host:https://in-process.takosumi.test` です。これは reserved `.test`
+origin で動く **OSS reference-host/source conformance** の identity であり、`app.takosumi.com`、
+Takosumi Cloud、実 provider backend、managed capacity、production deploy の成功を表しません。
+create/read/update/delete/import/observe/refresh/drift は real Takosumi ledger と HTTP contract に対する
+結果ですが、native 側は process-local state を明示 mutation する conformance Adapter です。
+
+`.github/workflows/standard-form-host-report.yml` は protected `main` の exact Takosumi commit と exact
+Takoform main commit を固定し、generator を二度実行して byte equality を確認します。その後 10 report
+を role 専用の keyless identity で個別署名し、closed manifest と `SHA256SUMS` を持つ Actions artifact
+だけを作ります。release、tag、repository source、Form activation、host/backend には変更を加えません。
+Takoform admission が受け入れるのは、後段で review され role policy に pin された exact report bytes
+だけです。Actions artifact の存在自体は admission authority ではありません。

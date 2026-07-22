@@ -1254,17 +1254,19 @@ test("portable Form host proves the exact ten-Form 1.0.1 successor matrix", asyn
       identity: entry.identity,
       desired: entry.desired,
       updatedDesired: updatedStandardDesired(entry),
-      positiveFixtureName: "desired",
+      positiveFixtureName: "canonical",
       positivePackageFixtureDigest: entry.desiredDigest,
       negativeFixtures: [
         {
-          name: "negative",
+          name: "reject-invalid-semantics",
           stage: "desired",
           input: entry.negative,
           expectedErrorCode: "invalid_argument",
         },
       ],
-      negativePackageFixtureDigests: { negative: entry.negativeDigest },
+      negativePackageFixtureDigests: {
+        "reject-invalid-semantics": entry.negativeDigest,
+      },
       importNativeId: `provider-native-${entry.kind.toLowerCase()}`,
       expectDrift: true,
       beforeDriftObserve: () => {

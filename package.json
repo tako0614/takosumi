@@ -37,6 +37,7 @@
     "service-form:compat-removal:check": "bun scripts/check-service-form-compatibility-removal.mjs repo",
     "service-form:compat-removal:eligible": "bun scripts/check-service-form-compatibility-removal.mjs eligible",
     "service-form:host-conformance": "bun scripts/run-portable-form-host-conformance.ts",
+    "service-form:host-reports": "bun scripts/generate-standard-form-host-reports.ts",
     "service-form:runtime-artifacts:check": "bun scripts/verify-standard-form-runtime-artifacts.ts check",
     "service-form:runtime-artifacts:oci-readback": "bun scripts/verify-standard-form-runtime-artifacts.ts check --verify-oci",
     "service-form:runtime-artifacts:build": "bun scripts/verify-standard-form-runtime-artifacts.ts build-release",
