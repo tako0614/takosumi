@@ -171,7 +171,6 @@ import {
   decodeCursor,
   pageSorted,
 } from "takosumi-contract/pagination";
-import { maybeEnsurePersonalWorkspaceForSession } from "../control-personal-workspace.ts";
 import { base64UrlEncodeBytes } from "../encoding.ts";
 import { ensureTakosumiAccountsOidcForCapsule } from "./capsule-oidc.ts";
 import {
@@ -195,11 +194,6 @@ export async function handleWorkspaces(
   // GET/POST /api/v1/workspaces.
   if (segments.length === 1 && segments[0] === "workspaces") {
     if (method === "GET") {
-      await maybeEnsurePersonalWorkspaceForSession({
-        request: request.clone(),
-        store,
-        operations,
-      });
       return await listWorkspaces(operations, store, ctx.session, url);
     }
     if (method === "POST") {
