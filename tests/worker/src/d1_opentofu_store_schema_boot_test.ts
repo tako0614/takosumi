@@ -121,7 +121,7 @@ test("predeployed maintenance readiness uses one direct indexed read", async () 
   expect(queries[0]).not.toContain("sqlite_master");
 });
 
-test("predeployed account Workspace page batches readiness and data in one round trip", async () => {
+test("predeployed account Workspace page reads readiness, total, and data in one statement", async () => {
   const db = new SqliteFakeD1();
   await ensureD1OpenTofuLedgerSchema(db);
   const fence = await acquireControlD1MaintenanceFence(
@@ -181,9 +181,58 @@ test("predeployed account Workspace page batches readiness and data in one round
       workspace.updatedAt,
     )
     .run();
+  const newerWorkspace = {
+    ...workspace,
+    id: "ws_batched_newer",
+    handle: "batched-newer",
+    displayName: "Batched newer",
+    createdAt: "2026-07-16T00:01:00.000Z",
+    updatedAt: "2026-07-16T00:01:00.000Z",
+  };
+  await db
+    .prepare(
+      `insert into workspaces
+         (id, handle, record_json, created_at, updated_at)
+       values (?, ?, ?, ?, ?)`,
+    )
+    .bind(
+      newerWorkspace.id,
+      newerWorkspace.handle,
+      JSON.stringify(newerWorkspace),
+      newerWorkspace.createdAt,
+      newerWorkspace.updatedAt,
+    )
+    .run();
+  await db
+    .prepare(
+      `insert into workspace_members
+         (id, workspace_id, account_id, status, record_json, created_at, updated_at)
+       values (?, ?, ?, 'active', ?, ?, ?)`,
+    )
+    .bind(
+      "wsm_batched_newer",
+      newerWorkspace.id,
+      newerWorkspace.ownerUserId,
+      JSON.stringify({
+        id: "wsm_batched_newer",
+        workspaceId: newerWorkspace.id,
+        accountId: newerWorkspace.ownerUserId,
+        roles: ["owner"],
+        status: "active",
+        createdAt: newerWorkspace.createdAt,
+        updatedAt: newerWorkspace.updatedAt,
+      }),
+      newerWorkspace.createdAt,
+      newerWorkspace.updatedAt,
+    )
+    .run();
+  let prepareCalls = 0;
   let batchCalls = 0;
   const observed: D1Database = {
-    prepare: db.prepare.bind(db),
+    prepare(query) {
+      prepareCalls += 1;
+      return db.prepare(query);
+    },
     async batch(statements) {
       batchCalls += 1;
       return await db.batch(statements);
@@ -193,18 +242,37 @@ test("predeployed account Workspace page batches readiness and data in one round
     schemaMode: "predeployed",
   });
 
-  const page = await store.listWorkspacesForAccountPage(workspace.ownerUserId, {
-    includeArchived: true,
-    includeTotal: false,
-    order: "updated_desc",
-    limit: 100,
-  });
-  expect(batchCalls).toBe(1);
-  expect(page.items.map((item) => item.id)).toEqual([workspace.id]);
-  expect(page.total).toBeUndefined();
+  const first = await store.listWorkspacesForAccountPage(
+    workspace.ownerUserId,
+    {
+      includeArchived: true,
+      includeTotal: true,
+      order: "updated_desc",
+      limit: 1,
+    },
+  );
+  expect(first.items.map((item) => item.id)).toEqual([newerWorkspace.id]);
+  expect(first.total).toBe(2);
+  expect(first.nextCursor).toBeString();
+  const second = await store.listWorkspacesForAccountPage(
+    workspace.ownerUserId,
+    {
+      includeArchived: true,
+      includeTotal: true,
+      order: "updated_desc",
+      cursor: first.nextCursor,
+      limit: 1,
+    },
+  );
+
+  expect(prepareCalls).toBe(2);
+  expect(batchCalls).toBe(0);
+  expect(second.items.map((item) => item.id)).toEqual([workspace.id]);
+  expect(second.total).toBe(2);
+  expect(second.nextCursor).toBeUndefined();
 });
 
-test("predeployed account Workspace batch fails closed on an active fence", async () => {
+test("predeployed account Workspace statement fails closed on an active fence", async () => {
   const db = new SqliteFakeD1();
   await ensureD1OpenTofuLedgerSchema(db);
   await acquireControlD1MaintenanceFence(
@@ -218,9 +286,13 @@ test("predeployed account Workspace batch fails closed on an active fence", asyn
     },
     "2026-07-16T00:00:00.000Z",
   );
+  let prepareCalls = 0;
   let batchCalls = 0;
   const observed: D1Database = {
-    prepare: db.prepare.bind(db),
+    prepare(query) {
+      prepareCalls += 1;
+      return db.prepare(query);
+    },
     async batch(statements) {
       batchCalls += 1;
       return await db.batch(statements);
@@ -238,7 +310,8 @@ test("predeployed account Workspace batch fails closed on an active fence", asyn
       limit: 100,
     }),
   ).rejects.toThrow("maintenance_fence_active");
-  expect(batchCalls).toBe(1);
+  expect(prepareCalls).toBe(1);
+  expect(batchCalls).toBe(0);
 });
 
 test("predeployed store fails closed without request-time bootstrap", async () => {
