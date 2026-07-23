@@ -108,27 +108,36 @@ export async function assertControlD1MaintenanceInactive(
 export async function readControlD1MaintenanceState(
   db: D1Database,
 ): Promise<ControlD1MaintenanceState> {
-  let table: { readonly name?: string } | null;
-  try {
-    table = await db
-      .prepare(
-        `select name from sqlite_master where type = 'table' and name = ?`,
-      )
-      .bind(CONTROL_D1_MAINTENANCE_TABLE)
-      .first<{ readonly name?: string }>();
-  } catch {
-    throw new ControlD1MaintenanceError("maintenance_fence_check_failed");
-  }
-  if (table?.name !== CONTROL_D1_MAINTENANCE_TABLE) {
-    return { status: "absent" };
-  }
-
   let row: ControlD1MaintenanceRow | null;
   try {
     row = await readMaintenanceRow(db);
   } catch {
+    // Bootstrap mode is allowed to start before the out-of-band fence table
+    // exists. Probe sqlite_master only on that exceptional path. Once the table
+    // exists, ordinary release-managed reads use the singleton primary key in
+    // one statement and any read failure remains fail-closed.
+    let table: { readonly name?: string } | null;
+    try {
+      table = await db
+        .prepare(
+          `select name from sqlite_master where type = 'table' and name = ?`,
+        )
+        .bind(CONTROL_D1_MAINTENANCE_TABLE)
+        .first<{ readonly name?: string }>();
+    } catch {
+      throw new ControlD1MaintenanceError("maintenance_fence_check_failed");
+    }
+    if (table?.name !== CONTROL_D1_MAINTENANCE_TABLE) {
+      return { status: "absent" };
+    }
     throw new ControlD1MaintenanceError("maintenance_fence_invalid");
   }
+  return await controlD1MaintenanceStateFromRow(row);
+}
+
+async function controlD1MaintenanceStateFromRow(
+  row: ControlD1MaintenanceRow | null,
+): Promise<Exclude<ControlD1MaintenanceState, { readonly status: "absent" }>> {
   if (
     !row ||
     !validMaintenanceIdentity(row) ||

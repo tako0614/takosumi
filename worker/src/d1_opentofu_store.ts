@@ -3178,7 +3178,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     // acquire the maintenance fence after an isolate has warmed. Every store
     // operation must therefore re-check the durable fence before it issues a
     // read or write, so no request can race a destructive predeploy rebuild.
-    await assertControlD1MaintenanceInactive(this.db);
+    const assertMaintenanceInactive = assertControlD1MaintenanceInactive;
     // Serialize concurrent callers onto the one in-flight bootstrap, but never
     // cache a REJECTED promise: a transient failure (e.g. a contended DDL) would
     // otherwise poison the isolate so every later method rejects forever. On
@@ -3187,13 +3187,20 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     if (this.#initialized === undefined) {
       const attempt = (
         this.#schemaMode === "predeployed"
-          ? verifyD1OpenTofuLedgerSchemaPredeployed(this.db)
-          : ensureD1OpenTofuLedgerSchema(this.db)
+          ? Promise.all([
+              assertMaintenanceInactive(this.db),
+              verifyD1OpenTofuLedgerSchemaPredeployed(this.db),
+            ]).then(() => undefined)
+          : assertMaintenanceInactive(this.db).then(() =>
+              ensureD1OpenTofuLedgerSchema(this.db),
+            )
       ).catch((error: unknown) => {
         if (this.#initialized === attempt) this.#initialized = undefined;
         throw error;
       });
       this.#initialized = attempt;
+    } else {
+      await assertMaintenanceInactive(this.db);
     }
     await this.#initialized;
   }
@@ -6822,16 +6829,17 @@ export async function verifyD1OpenTofuLedgerSchemaPredeployed(
 ): Promise<void> {
   let rows: readonly D1SchemaMigrationRow[];
   try {
-    assertD1SchemaMigrationLedgerShape(
-      await d1ColumnInfo(db, "schema_migrations"),
-    );
-    const result = await db
-      .prepare(
-        `select version, name, checksum, applied_at
-         from schema_migrations
-         order by version`,
-      )
-      .all<D1SchemaMigrationRow>();
+    const [columns, result] = await Promise.all([
+      d1ColumnInfo(db, "schema_migrations"),
+      db
+        .prepare(
+          `select version, name, checksum, applied_at
+           from schema_migrations
+           order by version`,
+        )
+        .all<D1SchemaMigrationRow>(),
+    ]);
+    assertD1SchemaMigrationLedgerShape(columns);
     rows = result.results ?? [];
   } catch {
     throw new Error("D1 OpenTofu predeployed schema verification failed");

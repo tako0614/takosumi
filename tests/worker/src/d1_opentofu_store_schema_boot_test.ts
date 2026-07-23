@@ -15,7 +15,11 @@ import {
   verifyD1OpenTofuLedgerSchemaPredeployed,
 } from "../../../worker/src/d1_opentofu_store.ts";
 import type { D1Database } from "../../../worker/src/bindings.ts";
-import { acquireControlD1MaintenanceFence } from "../../../worker/src/d1_schema_maintenance.ts";
+import {
+  acquireControlD1MaintenanceFence,
+  assertControlD1MaintenanceInactive,
+  releaseControlD1MaintenanceFence,
+} from "../../../worker/src/d1_schema_maintenance.ts";
 import { SqliteFakeD1 } from "../../helpers/deploy-control/sqlite_fake_d1.ts";
 
 async function tableNames(db: SqliteFakeD1): Promise<Set<string>> {
@@ -85,6 +89,36 @@ test("predeployed verification is strictly read-only", async () => {
   expect(queries.every((query) => /^(?:select|pragma)\b/iu.test(query))).toBe(
     true,
   );
+});
+
+test("predeployed maintenance readiness uses one direct indexed read", async () => {
+  const db = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(db);
+  const fence = await acquireControlD1MaintenanceFence(
+    db,
+    {
+      sourceCommit: "a".repeat(40),
+      manifestDigest: `sha256:${"b".repeat(64)}`,
+      environment: "test",
+      databaseRole: "in_place",
+      releasePolicy: "in_place",
+    },
+    "2026-07-16T00:00:00.000Z",
+  );
+  await releaseControlD1MaintenanceFence(db, fence, "2026-07-16T00:01:00.000Z");
+  const queries: string[] = [];
+  const observed: D1Database = {
+    prepare(query) {
+      queries.push(query.trim());
+      return db.prepare(query);
+    },
+    batch: db.batch.bind(db),
+  };
+
+  await assertControlD1MaintenanceInactive(observed);
+  expect(queries).toHaveLength(1);
+  expect(queries[0]).toContain("where singleton = 1");
+  expect(queries[0]).not.toContain("sqlite_master");
 });
 
 test("predeployed store fails closed without request-time bootstrap", async () => {
