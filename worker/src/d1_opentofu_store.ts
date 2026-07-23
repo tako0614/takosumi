@@ -373,6 +373,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   readonly #orm: DrizzleD1Database<typeof schema>;
   readonly #schemaMode: D1OpenTofuControlSchemaMode;
   #initialized?: Promise<void>;
+  #predeployedSchemaVerified = false;
 
   constructor(
     private readonly db: D1Database,
@@ -1181,6 +1182,35 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     const sortColumn =
       order === "updated_desc" ? "w.updated_at" : "w.created_at";
     const sortDirection = order === "updated_desc" ? "DESC" : "ASC";
+    const includeSchemaEvidence = !this.#predeployedSchemaVerified;
+    const columnsProjection = includeSchemaEvidence
+      ? `(
+           SELECT json_group_array(json_object(
+             'cid', cid,
+             'name', name,
+             'type', type,
+             'notnull', "notnull",
+             'dflt_value', dflt_value,
+             'pk', pk
+           ))
+           FROM pragma_table_info('schema_migrations')
+         )`
+      : "NULL";
+    const migrationsProjection = includeSchemaEvidence
+      ? `(
+           SELECT json_group_array(json_object(
+             'version', version,
+             'name', name,
+             'checksum', checksum,
+             'applied_at', applied_at
+           ))
+           FROM (
+             SELECT version, name, checksum, applied_at
+             FROM schema_migrations
+             ORDER BY version
+           ) AS ordered_migrations
+         )`
+      : "NULL";
     const result = await this.db
       .prepare(
         `WITH base AS (
@@ -1223,30 +1253,8 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
                   FROM _takosumi_control_schema_maintenance
                   WHERE singleton = 1
                 ) AS maintenance_json,
-                (
-                  SELECT json_group_array(json_object(
-                    'cid', cid,
-                    'name', name,
-                    'type', type,
-                    'notnull', "notnull",
-                    'dflt_value', dflt_value,
-                    'pk', pk
-                  ))
-                  FROM pragma_table_info('schema_migrations')
-                ) AS columns_json,
-                (
-                  SELECT json_group_array(json_object(
-                    'version', version,
-                    'name', name,
-                    'checksum', checksum,
-                    'applied_at', applied_at
-                  ))
-                  FROM (
-                    SELECT version, name, checksum, applied_at
-                    FROM schema_migrations
-                    ORDER BY version
-                  ) AS ordered_migrations
-                ) AS migrations_json,
+                ${columnsProjection} AS columns_json,
+                ${migrationsProjection} AS migrations_json,
                 ${
                   includeTotal ? "(SELECT count(*) FROM base)" : "NULL"
                 } AS total,
@@ -1284,20 +1292,23 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       readiness.maintenance_json,
       "maintenance",
     );
-    const columns = parseD1JsonArray<D1TableInfoRow>(
-      readiness.columns_json,
-      "schema columns",
-    );
-    const migrations = parseD1JsonArray<D1SchemaMigrationRow>(
-      readiness.migrations_json,
-      "migration ledger",
-    );
     await assertControlD1MaintenanceResultInactive({
       results: [maintenance],
       success: true,
     });
-    await validateD1OpenTofuLedgerSchemaPredeployed(columns, migrations);
-    this.#initialized ??= Promise.resolve();
+    if (includeSchemaEvidence) {
+      const columns = parseD1JsonArray<D1TableInfoRow>(
+        readiness.columns_json,
+        "schema columns",
+      );
+      const migrations = parseD1JsonArray<D1SchemaMigrationRow>(
+        readiness.migrations_json,
+        "migration ledger",
+      );
+      await validateD1OpenTofuLedgerSchemaPredeployed(columns, migrations);
+      this.#predeployedSchemaVerified = true;
+      this.#initialized = Promise.resolve();
+    }
 
     const workspaces = rows
       .slice(1)
@@ -3376,7 +3387,9 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
           ? Promise.all([
               assertMaintenanceInactive(this.db),
               verifyD1OpenTofuLedgerSchemaPredeployed(this.db),
-            ]).then(() => undefined)
+            ]).then(() => {
+              this.#predeployedSchemaVerified = true;
+            })
           : assertMaintenanceInactive(this.db).then(() =>
               ensureD1OpenTofuLedgerSchema(this.db),
             )
@@ -7043,6 +7056,7 @@ async function validateD1OpenTofuLedgerSchemaPredeployed(
   if (rows.length !== D1_OPEN_TOFU_SCHEMA_MIGRATIONS.length) {
     throw new Error("D1 OpenTofu predeployed schema verification failed");
   }
+  const expectedChecksums = await expectedD1OpenTofuSchemaMigrationChecksums();
   for (
     let index = 0;
     index < D1_OPEN_TOFU_SCHEMA_MIGRATIONS.length;
@@ -7055,11 +7069,24 @@ async function validateD1OpenTofuLedgerSchemaPredeployed(
       !row ||
       row.version !== migration.version ||
       row.name !== migration.name ||
-      row.checksum !== (await d1OpenTofuSchemaMigrationChecksum(migration))
+      row.checksum !== expectedChecksums[index]
     ) {
       throw new Error("D1 OpenTofu predeployed schema verification failed");
     }
   }
+}
+
+let d1OpenTofuSchemaMigrationChecksums: Promise<readonly string[]> | undefined;
+
+function expectedD1OpenTofuSchemaMigrationChecksums(): Promise<
+  readonly string[]
+> {
+  d1OpenTofuSchemaMigrationChecksums ??= Promise.all(
+    D1_OPEN_TOFU_SCHEMA_MIGRATIONS.map((migration) =>
+      d1OpenTofuSchemaMigrationChecksum(migration),
+    ),
+  );
+  return d1OpenTofuSchemaMigrationChecksums;
 }
 
 function parseD1WorkspaceRecord(value: unknown): Workspace {

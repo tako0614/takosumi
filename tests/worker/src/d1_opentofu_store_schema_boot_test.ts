@@ -228,9 +228,11 @@ test("predeployed account Workspace page reads readiness, total, and data in one
     .run();
   let prepareCalls = 0;
   let batchCalls = 0;
+  const queries: string[] = [];
   const observed: D1Database = {
     prepare(query) {
       prepareCalls += 1;
+      queries.push(query);
       return db.prepare(query);
     },
     async batch(statements) {
@@ -267,6 +269,8 @@ test("predeployed account Workspace page reads readiness, total, and data in one
 
   expect(prepareCalls).toBe(2);
   expect(batchCalls).toBe(0);
+  expect(queries[0]).toContain("pragma_table_info('schema_migrations')");
+  expect(queries[1]).not.toContain("pragma_table_info('schema_migrations')");
   expect(second.items.map((item) => item.id)).toEqual([workspace.id]);
   expect(second.total).toBe(2);
   expect(second.nextCursor).toBeUndefined();
