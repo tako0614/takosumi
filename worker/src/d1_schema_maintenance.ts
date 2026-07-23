@@ -80,6 +80,13 @@ const CREATE_MAINTENANCE_TABLE = `create table if not exists ${CONTROL_D1_MAINTE
   predecessor_manifest_digest text
 )`;
 
+const READ_MAINTENANCE_ROW = `select active, migration_bypass, fence_id, source_commit, manifest_digest, environment,
+       activated_at, released_at, database_role, release_policy,
+       database_id, source_export_sha256, predecessor_fence_id,
+       predecessor_source_commit, predecessor_manifest_digest
+from ${CONTROL_D1_MAINTENANCE_TABLE}
+where singleton = 1`;
+
 /**
  * Request-path fail-closed check. The operator fence table is intentionally an
  * out-of-band control object rather than part of the OSS application schema;
@@ -91,6 +98,38 @@ export async function assertControlD1MaintenanceInactive(
 ): Promise<void> {
   try {
     const state = await readControlD1MaintenanceState(db);
+    if (state.status === "active") {
+      throw new ControlD1MaintenanceError("maintenance_fence_active");
+    }
+  } catch (error) {
+    if (error instanceof ControlD1MaintenanceError) throw error;
+    throw new ControlD1MaintenanceError("maintenance_fence_check_failed");
+  }
+}
+
+/**
+ * Prepared singleton read for a larger read-only D1 batch. The caller must pass
+ * the result to {@link assertControlD1MaintenanceResultInactive} before using
+ * any co-batched application rows.
+ */
+export function prepareControlD1MaintenanceStateRead(
+  db: D1Database,
+): D1PreparedStatement {
+  return db.prepare(READ_MAINTENANCE_ROW);
+}
+
+/** Validate one co-batched maintenance singleton without weakening fencing. */
+export async function assertControlD1MaintenanceResultInactive(
+  result: D1Result<unknown>,
+): Promise<void> {
+  try {
+    const rows = result.results;
+    if (!Array.isArray(rows) || rows.length !== 1) {
+      throw new ControlD1MaintenanceError("maintenance_fence_invalid");
+    }
+    const state = await controlD1MaintenanceStateFromRow(
+      rows[0] as ControlD1MaintenanceRow,
+    );
     if (state.status === "active") {
       throw new ControlD1MaintenanceError("maintenance_fence_active");
     }
@@ -638,14 +677,7 @@ async function readMaintenanceRow(
   db: D1Database,
 ): Promise<ControlD1MaintenanceRow | null> {
   return await db
-    .prepare(
-      `select active, migration_bypass, fence_id, source_commit, manifest_digest, environment,
-              activated_at, released_at, database_role, release_policy,
-              database_id, source_export_sha256, predecessor_fence_id,
-              predecessor_source_commit, predecessor_manifest_digest
-       from ${CONTROL_D1_MAINTENANCE_TABLE}
-       where singleton = 1`,
-    )
+    .prepare(READ_MAINTENANCE_ROW)
     .first<ControlD1MaintenanceRow>();
 }
 

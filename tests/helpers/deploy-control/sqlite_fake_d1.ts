@@ -53,7 +53,9 @@ export class SqliteFakeD1 implements D1Database {
   }
 
   /** Accounts D1 bootstrap uses the native multi-statement exec surface. */
-  exec(query: string): Promise<{ readonly count: number; readonly duration: number }> {
+  exec(
+    query: string,
+  ): Promise<{ readonly count: number; readonly duration: number }> {
     this.#db.exec(query);
     return Promise.resolve({
       count: query.split(";").filter((part) => part.trim().length > 0).length,
@@ -74,7 +76,11 @@ export class SqliteFakeD1 implements D1Database {
     try {
       const results: D1Result<T>[] = [];
       for (const statement of statements) {
-        results.push((await statement.run<T>()) as D1Result<T>);
+        results.push(
+          statement instanceof SqliteFakeStatement
+            ? await statement.runInBatch<T>()
+            : ((await statement.run<T>()) as D1Result<T>),
+        );
       }
       this.#db.run("COMMIT");
       return results;
@@ -100,9 +106,7 @@ class SqliteFakeStatement implements D1PreparedStatement {
 
   first<T = unknown>(): Promise<T | null> {
     const row = this.db.query(this.query).get(...this.#params()) as
-      | T
-      | null
-      | undefined;
+      T | null | undefined;
     return Promise.resolve(row ?? null);
   }
 
@@ -112,9 +116,7 @@ class SqliteFakeStatement implements D1PreparedStatement {
   }
 
   raw<T = unknown[]>(): Promise<T[]> {
-    const rows = this.db
-      .query(this.query)
-      .values(...this.#params()) as T[];
+    const rows = this.db.query(this.query).values(...this.#params()) as T[];
     return Promise.resolve(rows);
   }
 
@@ -129,13 +131,25 @@ class SqliteFakeStatement implements D1PreparedStatement {
     });
   }
 
+  /**
+   * D1 `batch()` returns `results` for read statements. Calling `run()` for
+   * every statement (the old fake behavior) silently discarded SELECT rows and
+   * made production-valid read batches impossible to exercise locally.
+   */
+  runInBatch<T = unknown>(): Promise<D1Result<T>> {
+    if (/^(?:select|pragma)\b/iu.test(this.query.trim())) {
+      return this.all<T>();
+    }
+    return this.run<T>();
+  }
+
   // bun:sqlite binds undefined poorly; normalize to null so optional columns
   // round-trip as SQL NULL exactly like the real D1 binder does. The cast is
   // safe: the store only ever binds string | number | null.
   #params(): SQLQueryBindings[] {
     this.#enforceD1Limits();
     return this.#bound.map((value) =>
-      value === undefined ? null : value
+      value === undefined ? null : value,
     ) as SQLQueryBindings[];
   }
 

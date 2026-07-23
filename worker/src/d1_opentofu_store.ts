@@ -150,6 +150,8 @@ import type { D1Database, D1PreparedStatement, D1Result } from "./bindings.ts";
 import {
   activeControlD1MaintenanceFence,
   assertControlD1MaintenanceInactive,
+  assertControlD1MaintenanceResultInactive,
+  prepareControlD1MaintenanceStateRead,
   repairControlD1MaintenanceGuards,
   wrapControlD1MaintenanceMigrationBatch,
 } from "./d1_schema_maintenance.ts";
@@ -1062,6 +1064,12 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     accountId: string,
     params: AccountWorkspaceListParams,
   ): Promise<AccountWorkspacePage> {
+    if (this.#schemaMode === "predeployed") {
+      return await this.#listPredeployedWorkspacesForAccountPage(
+        accountId,
+        params,
+      );
+    }
     await this.#ensureSchema();
     const includeArchived = params.includeArchived === true;
     const order = params.order ?? "created_asc";
@@ -1125,6 +1133,119 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         order === "updated_desc" ? workspace.updatedAt : workspace.createdAt,
       id: workspace.id,
     }));
+    return { ...page, ...(total === undefined ? {} : { total }) };
+  }
+
+  async #listPredeployedWorkspacesForAccountPage(
+    accountId: string,
+    params: AccountWorkspaceListParams,
+  ): Promise<AccountWorkspacePage> {
+    if (!this.db.batch) {
+      throw new Error("predeployed Workspace reads require D1 batch support");
+    }
+    const includeArchived = params.includeArchived === true;
+    const order = params.order ?? "created_asc";
+    const limit = clampPageLimit(params.limit);
+    const cursor = decodeCursor(params.cursor);
+    const baseFilter = ["m.account_id = ?", "m.status = ?"];
+    const baseValues: unknown[] = [accountId, "active"];
+    if (!includeArchived) {
+      baseFilter.push(
+        "COALESCE(json_extract(w.record_json, '$.archivedAt'), '') = ''",
+      );
+    }
+    const pageFilter = [...baseFilter];
+    const pageValues = [...baseValues];
+    if (cursor) {
+      if (order === "updated_desc") {
+        pageFilter.push(
+          "(w.updated_at < ? OR (w.updated_at = ? AND w.id > ?))",
+        );
+      } else {
+        pageFilter.push(
+          "(w.created_at > ? OR (w.created_at = ? AND w.id > ?))",
+        );
+      }
+      pageValues.push(cursor.createdAt, cursor.createdAt, cursor.id);
+    }
+    const from =
+      "workspace_members m INNER JOIN workspaces w ON w.id = m.workspace_id";
+    const statements: D1PreparedStatement[] = [
+      prepareControlD1MaintenanceStateRead(this.db),
+      this.db.prepare("pragma table_info(schema_migrations)"),
+      this.db.prepare(
+        `select version, name, checksum, applied_at
+         from schema_migrations
+         order by version`,
+      ),
+    ];
+    const includeTotal = params.includeTotal !== false;
+    if (includeTotal) {
+      statements.push(
+        this.db
+          .prepare(
+            `select count(*) as total from ${from}
+             where ${baseFilter.join(" AND ")}`,
+          )
+          .bind(...baseValues),
+      );
+    }
+    statements.push(
+      this.db
+        .prepare(
+          `select w.record_json as value from ${from}
+           where ${pageFilter.join(" AND ")}
+           order by ${
+             order === "updated_desc"
+               ? "w.updated_at DESC, w.id ASC"
+               : "w.created_at ASC, w.id ASC"
+           }
+           limit ?`,
+        )
+        .bind(...pageValues, limit + 1),
+    );
+
+    // D1 batch is one read-only transaction and one network round trip. Even
+    // though every statement executes, no application row is returned until
+    // the exact maintenance singleton and migration ledger below are accepted.
+    const results = await this.db.batch(statements);
+    const maintenance = results[0];
+    const columns = results[1];
+    const migrations = results[2];
+    if (!maintenance || !columns || !migrations) {
+      throw new Error("D1 predeployed Workspace read evidence is incomplete");
+    }
+    await assertControlD1MaintenanceResultInactive(maintenance);
+    await validateD1OpenTofuLedgerSchemaPredeployed(
+      (columns.results ?? []) as readonly D1TableInfoRow[],
+      (migrations.results ?? []) as readonly D1SchemaMigrationRow[],
+    );
+    this.#initialized ??= Promise.resolve();
+
+    const totalResult = includeTotal ? results[3] : undefined;
+    const pageResult = results[includeTotal ? 4 : 3];
+    if (!pageResult) {
+      throw new Error("D1 predeployed Workspace page result is missing");
+    }
+    const workspaces = (pageResult.results ?? []).map((row) =>
+      parseD1WorkspaceRecord((row as { readonly value?: unknown }).value),
+    );
+    const page = pageFromProbeBy(workspaces, limit, (workspace) => ({
+      createdAt:
+        order === "updated_desc" ? workspace.updatedAt : workspace.createdAt,
+      id: workspace.id,
+    }));
+    const total = includeTotal
+      ? Number(
+          (
+            totalResult?.results?.[0] as
+              { readonly total?: unknown } | undefined
+          )?.total ?? 0,
+        )
+      : undefined;
+    if (total !== undefined && !Number.isSafeInteger(total)) {
+      throw new Error("D1 predeployed Workspace total is invalid");
+    }
     return { ...page, ...(total === undefined ? {} : { total }) };
   }
 
@@ -6827,9 +6948,10 @@ type D1SchemaMigrationRow = {
 export async function verifyD1OpenTofuLedgerSchemaPredeployed(
   db: D1Database,
 ): Promise<void> {
+  let columns: readonly D1TableInfoRow[];
   let rows: readonly D1SchemaMigrationRow[];
   try {
-    const [columns, result] = await Promise.all([
+    const [columnRows, result] = await Promise.all([
       d1ColumnInfo(db, "schema_migrations"),
       db
         .prepare(
@@ -6839,12 +6961,20 @@ export async function verifyD1OpenTofuLedgerSchemaPredeployed(
         )
         .all<D1SchemaMigrationRow>(),
     ]);
-    assertD1SchemaMigrationLedgerShape(columns);
+    columns = columnRows;
     rows = result.results ?? [];
   } catch {
     throw new Error("D1 OpenTofu predeployed schema verification failed");
   }
 
+  await validateD1OpenTofuLedgerSchemaPredeployed(columns, rows);
+}
+
+async function validateD1OpenTofuLedgerSchemaPredeployed(
+  columns: readonly D1TableInfoRow[],
+  rows: readonly D1SchemaMigrationRow[],
+): Promise<void> {
+  assertD1SchemaMigrationLedgerShape(columns);
   if (rows.length !== D1_OPEN_TOFU_SCHEMA_MIGRATIONS.length) {
     throw new Error("D1 OpenTofu predeployed schema verification failed");
   }
@@ -6865,6 +6995,14 @@ export async function verifyD1OpenTofuLedgerSchemaPredeployed(
       throw new Error("D1 OpenTofu predeployed schema verification failed");
     }
   }
+}
+
+function parseD1WorkspaceRecord(value: unknown): Workspace {
+  const parsed = typeof value === "string" ? JSON.parse(value) : value;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("D1 Workspace record is invalid");
+  }
+  return parsed as Workspace;
 }
 
 async function validateD1SchemaMigrationLedgerRows(
