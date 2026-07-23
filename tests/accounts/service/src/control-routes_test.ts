@@ -350,6 +350,34 @@ test("Workspace list defaults to one bounded created-order page", async () => {
   ]);
 });
 
+test("Workspace list does not rerun the first-login personal Workspace hook", async () => {
+  const fixture = operationsFixture();
+  const store = new InMemoryAccountsStore();
+  let sessionLookups = 0;
+  const findAccountSession = store.findAccountSession.bind(store);
+  store.findAccountSession = async (sessionId) => {
+    sessionLookups += 1;
+    return await findAccountSession(sessionId);
+  };
+  const request = new Request("https://app.example.test/api/v1/workspaces", {
+    headers: { authorization: "Bearer sess_existing" },
+  });
+  const response = await handleWorkspaces(
+    {
+      request,
+      url: new URL(request.url),
+      operations: fixture.operations,
+      store,
+      session: { subject: "tsub_owner" },
+    },
+    ["workspaces"],
+    "GET",
+  );
+
+  expect(response?.status).toBe(200);
+  expect(sessionLookups).toBe(0);
+});
+
 test("Workspace list page is bounded and pins an authorized selected Workspace", async () => {
   const fixture = operationsFixture();
   const selected = {
