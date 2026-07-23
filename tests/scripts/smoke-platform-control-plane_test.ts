@@ -11,6 +11,7 @@ import {
   shouldMarkPendingSmokeCapsuleError,
   smokeSourceCompatibilityCheckBody,
   smokeSourceCapsuleCreateBody,
+  smokeCloudflareProviderConnectionMatch,
   smokeWorkspaceCloudflareConnectionBody,
 } from "../../scripts/smoke-platform-control-plane.ts";
 
@@ -263,10 +264,13 @@ test("platform control-plane smoke reads current Capsule ledger responses", () =
 });
 
 test("platform control-plane smoke matches canonical provider connection sources", () => {
-  const expected = {
-    provider: "registry.opentofu.org/cloudflare/cloudflare",
-    displayName: "Layer-2 smoke canonical",
-  };
+  const expected = smokeCloudflareProviderConnectionMatch(
+    "Layer-2 smoke canonical",
+  );
+
+  expect(expected.provider).toBe(
+    "registry.opentofu.org/cloudflare/cloudflare",
+  );
 
   expect(
     isSmokeProviderConnectionMatch(

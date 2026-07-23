@@ -1946,10 +1946,10 @@ async function lookupPublicProviderConnectionId(
     path: `${API_PREFIX}/provider-connections?workspaceId=${encodeURIComponent(workspaceId)}`,
   });
   const match = (response.providerConnections ?? []).find((connection) =>
-    isSmokeProviderConnectionMatch(connection, {
-      provider: "cloudflare",
-      displayName,
-    }),
+    isSmokeProviderConnectionMatch(
+      connection,
+      smokeCloudflareProviderConnectionMatch(displayName),
+    ),
   );
   if (!match?.id) {
     throw new Error(
@@ -1957,6 +1957,12 @@ async function lookupPublicProviderConnectionId(
     );
   }
   return match.id;
+}
+
+export function smokeCloudflareProviderConnectionMatch(
+  displayName: string,
+): { readonly provider: string; readonly displayName: string } {
+  return { provider: CLOUDFLARE_PROVIDER_SOURCE, displayName };
 }
 
 export function isSmokeProviderConnectionMatch(
