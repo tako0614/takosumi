@@ -1959,9 +1959,10 @@ async function lookupPublicProviderConnectionId(
   return match.id;
 }
 
-export function smokeCloudflareProviderConnectionMatch(
-  displayName: string,
-): { readonly provider: string; readonly displayName: string } {
+export function smokeCloudflareProviderConnectionMatch(displayName: string): {
+  readonly provider: string;
+  readonly displayName: string;
+} {
   return { provider: CLOUDFLARE_PROVIDER_SOURCE, displayName };
 }
 
@@ -2371,7 +2372,10 @@ async function putCapsuleProviderBindings(
     body: {
       bindings: [
         {
-          provider: "cloudflare",
+          // Provider bindings address providers by source, not by the
+          // module-local name; the bare name never matches the connection's
+          // normalized registry source at plan time.
+          provider: "cloudflare/cloudflare",
           alias: "main",
           connectionId: input.providerConnectionId,
         },
