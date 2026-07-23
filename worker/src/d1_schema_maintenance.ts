@@ -107,18 +107,7 @@ export async function assertControlD1MaintenanceInactive(
   }
 }
 
-/**
- * Prepared singleton read for a larger read-only D1 batch. The caller must pass
- * the result to {@link assertControlD1MaintenanceResultInactive} before using
- * any co-batched application rows.
- */
-export function prepareControlD1MaintenanceStateRead(
-  db: D1Database,
-): D1PreparedStatement {
-  return db.prepare(READ_MAINTENANCE_ROW);
-}
-
-/** Validate one co-batched maintenance singleton without weakening fencing. */
+/** Validate one co-read maintenance singleton without weakening fencing. */
 export async function assertControlD1MaintenanceResultInactive(
   result: D1Result<unknown>,
 ): Promise<void> {

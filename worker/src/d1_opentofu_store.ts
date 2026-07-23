@@ -151,7 +151,6 @@ import {
   activeControlD1MaintenanceFence,
   assertControlD1MaintenanceInactive,
   assertControlD1MaintenanceResultInactive,
-  prepareControlD1MaintenanceStateRead,
   repairControlD1MaintenanceGuards,
   wrapControlD1MaintenanceMigrationBatch,
 } from "./d1_schema_maintenance.ts";
@@ -357,6 +356,17 @@ function d1WorkspaceUpdatedDescKeysetWhere(
 }
 
 export type D1OpenTofuControlSchemaMode = "bootstrap" | "predeployed";
+
+type D1PredeployedWorkspacePageRow = {
+  readonly row_kind: number | string;
+  readonly maintenance_json: string | null;
+  readonly columns_json: string | null;
+  readonly migrations_json: string | null;
+  readonly total: number | string | null;
+  readonly workspace_record: unknown;
+  readonly sort_key: string | null;
+  readonly workspace_id: string | null;
+};
 
 export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   readonly persistence = "durable" as const;
@@ -1140,9 +1150,6 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     accountId: string,
     params: AccountWorkspaceListParams,
   ): Promise<AccountWorkspacePage> {
-    if (!this.db.batch) {
-      throw new Error("predeployed Workspace reads require D1 batch support");
-    }
     const includeArchived = params.includeArchived === true;
     const order = params.order ?? "created_asc";
     const limit = clampPageLimit(params.limit);
@@ -1154,96 +1161,154 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         "COALESCE(json_extract(w.record_json, '$.archivedAt'), '') = ''",
       );
     }
-    const pageFilter = [...baseFilter];
-    const pageValues = [...baseValues];
+    const cursorFilter: string[] = [];
+    const cursorValues: unknown[] = [];
     if (cursor) {
       if (order === "updated_desc") {
-        pageFilter.push(
-          "(w.updated_at < ? OR (w.updated_at = ? AND w.id > ?))",
+        cursorFilter.push(
+          "(sort_key < ? OR (sort_key = ? AND workspace_id > ?))",
         );
       } else {
-        pageFilter.push(
-          "(w.created_at > ? OR (w.created_at = ? AND w.id > ?))",
+        cursorFilter.push(
+          "(sort_key > ? OR (sort_key = ? AND workspace_id > ?))",
         );
       }
-      pageValues.push(cursor.createdAt, cursor.createdAt, cursor.id);
+      cursorValues.push(cursor.createdAt, cursor.createdAt, cursor.id);
     }
     const from =
       "workspace_members m INNER JOIN workspaces w ON w.id = m.workspace_id";
-    const statements: D1PreparedStatement[] = [
-      prepareControlD1MaintenanceStateRead(this.db),
-      this.db.prepare("pragma table_info(schema_migrations)"),
-      this.db.prepare(
-        `select version, name, checksum, applied_at
-         from schema_migrations
-         order by version`,
-      ),
-    ];
     const includeTotal = params.includeTotal !== false;
-    if (includeTotal) {
-      statements.push(
-        this.db
-          .prepare(
-            `select count(*) as total from ${from}
-             where ${baseFilter.join(" AND ")}`,
-          )
-          .bind(...baseValues),
-      );
-    }
-    statements.push(
-      this.db
-        .prepare(
-          `select w.record_json as value from ${from}
-           where ${pageFilter.join(" AND ")}
-           order by ${
-             order === "updated_desc"
-               ? "w.updated_at DESC, w.id ASC"
-               : "w.created_at ASC, w.id ASC"
-           }
-           limit ?`,
-        )
-        .bind(...pageValues, limit + 1),
-    );
+    const sortColumn =
+      order === "updated_desc" ? "w.updated_at" : "w.created_at";
+    const sortDirection = order === "updated_desc" ? "DESC" : "ASC";
+    const result = await this.db
+      .prepare(
+        `WITH base AS (
+           SELECT w.record_json AS workspace_record,
+                  ${sortColumn} AS sort_key,
+                  w.id AS workspace_id
+           FROM ${from}
+           WHERE ${baseFilter.join(" AND ")}
+         ),
+         filtered AS (
+           SELECT workspace_record, sort_key, workspace_id
+           FROM base
+           ${cursorFilter.length > 0 ? `WHERE ${cursorFilter.join(" AND ")}` : ""}
+         ),
+         page AS (
+           SELECT workspace_record, sort_key, workspace_id
+           FROM filtered
+           ORDER BY sort_key ${sortDirection}, workspace_id ASC
+           LIMIT ?
+         )
+         SELECT 0 AS row_kind,
+                (
+                  SELECT json_object(
+                    'active', active,
+                    'migration_bypass', migration_bypass,
+                    'fence_id', fence_id,
+                    'source_commit', source_commit,
+                    'manifest_digest', manifest_digest,
+                    'environment', environment,
+                    'activated_at', activated_at,
+                    'released_at', released_at,
+                    'database_role', database_role,
+                    'release_policy', release_policy,
+                    'database_id', database_id,
+                    'source_export_sha256', source_export_sha256,
+                    'predecessor_fence_id', predecessor_fence_id,
+                    'predecessor_source_commit', predecessor_source_commit,
+                    'predecessor_manifest_digest', predecessor_manifest_digest
+                  )
+                  FROM _takosumi_control_schema_maintenance
+                  WHERE singleton = 1
+                ) AS maintenance_json,
+                (
+                  SELECT json_group_array(json_object(
+                    'cid', cid,
+                    'name', name,
+                    'type', type,
+                    'notnull', "notnull",
+                    'dflt_value', dflt_value,
+                    'pk', pk
+                  ))
+                  FROM pragma_table_info('schema_migrations')
+                ) AS columns_json,
+                (
+                  SELECT json_group_array(json_object(
+                    'version', version,
+                    'name', name,
+                    'checksum', checksum,
+                    'applied_at', applied_at
+                  ))
+                  FROM (
+                    SELECT version, name, checksum, applied_at
+                    FROM schema_migrations
+                    ORDER BY version
+                  ) AS ordered_migrations
+                ) AS migrations_json,
+                ${
+                  includeTotal ? "(SELECT count(*) FROM base)" : "NULL"
+                } AS total,
+                NULL AS workspace_record,
+                NULL AS sort_key,
+                NULL AS workspace_id
+         UNION ALL
+         SELECT 1 AS row_kind,
+                NULL AS maintenance_json,
+                NULL AS columns_json,
+                NULL AS migrations_json,
+                NULL AS total,
+                workspace_record,
+                sort_key,
+                workspace_id
+         FROM page
+         ORDER BY row_kind ASC, sort_key ${sortDirection}, workspace_id ASC`,
+      )
+      .bind(...baseValues, ...cursorValues, limit + 1)
+      .all<D1PredeployedWorkspacePageRow>();
 
-    // D1 batch is one read-only transaction and one network round trip. Even
-    // though every statement executes, no application row is returned until
-    // the exact maintenance singleton and migration ledger below are accepted.
-    const results = await this.db.batch(statements);
-    const maintenance = results[0];
-    const columns = results[1];
-    const migrations = results[2];
-    if (!maintenance || !columns || !migrations) {
+    // One SQL statement returns one readiness row followed by the ordered page.
+    // Application rows stay unusable until the exact singleton and migration
+    // evidence from that same read snapshot pass the fail-closed validators.
+    const rows = result.results ?? [];
+    const readiness = rows[0];
+    if (
+      !readiness ||
+      Number(readiness.row_kind) !== 0 ||
+      rows.slice(1).some((row) => Number(row.row_kind) !== 1)
+    ) {
       throw new Error("D1 predeployed Workspace read evidence is incomplete");
     }
-    await assertControlD1MaintenanceResultInactive(maintenance);
-    await validateD1OpenTofuLedgerSchemaPredeployed(
-      (columns.results ?? []) as readonly D1TableInfoRow[],
-      (migrations.results ?? []) as readonly D1SchemaMigrationRow[],
+    const maintenance = parseD1JsonObject(
+      readiness.maintenance_json,
+      "maintenance",
     );
+    const columns = parseD1JsonArray<D1TableInfoRow>(
+      readiness.columns_json,
+      "schema columns",
+    );
+    const migrations = parseD1JsonArray<D1SchemaMigrationRow>(
+      readiness.migrations_json,
+      "migration ledger",
+    );
+    await assertControlD1MaintenanceResultInactive({
+      results: [maintenance],
+      success: true,
+    });
+    await validateD1OpenTofuLedgerSchemaPredeployed(columns, migrations);
     this.#initialized ??= Promise.resolve();
 
-    const totalResult = includeTotal ? results[3] : undefined;
-    const pageResult = results[includeTotal ? 4 : 3];
-    if (!pageResult) {
-      throw new Error("D1 predeployed Workspace page result is missing");
-    }
-    const workspaces = (pageResult.results ?? []).map((row) =>
-      parseD1WorkspaceRecord((row as { readonly value?: unknown }).value),
-    );
+    const workspaces = rows
+      .slice(1)
+      .map((row) => parseD1WorkspaceRecord(row.workspace_record));
     const page = pageFromProbeBy(workspaces, limit, (workspace) => ({
       createdAt:
         order === "updated_desc" ? workspace.updatedAt : workspace.createdAt,
       id: workspace.id,
     }));
-    const total = includeTotal
-      ? Number(
-          (
-            totalResult?.results?.[0] as
-              { readonly total?: unknown } | undefined
-          )?.total ?? 0,
-        )
-      : undefined;
-    if (total !== undefined && !Number.isSafeInteger(total)) {
+    const total = includeTotal ? Number(readiness.total) : undefined;
+    if (total !== undefined && (!Number.isSafeInteger(total) || total < 0)) {
       throw new Error("D1 predeployed Workspace total is invalid");
     }
     return { ...page, ...(total === undefined ? {} : { total }) };
@@ -7003,6 +7068,25 @@ function parseD1WorkspaceRecord(value: unknown): Workspace {
     throw new Error("D1 Workspace record is invalid");
   }
   return parsed as Workspace;
+}
+
+function parseD1JsonObject(
+  value: unknown,
+  label: string,
+): Record<string, unknown> {
+  const parsed = typeof value === "string" ? JSON.parse(value) : value;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`D1 predeployed Workspace ${label} is invalid`);
+  }
+  return parsed as Record<string, unknown>;
+}
+
+function parseD1JsonArray<T>(value: unknown, label: string): readonly T[] {
+  const parsed = typeof value === "string" ? JSON.parse(value) : value;
+  if (!Array.isArray(parsed)) {
+    throw new Error(`D1 predeployed Workspace ${label} is invalid`);
+  }
+  return parsed as readonly T[];
 }
 
 async function validateD1SchemaMigrationLedgerRows(
