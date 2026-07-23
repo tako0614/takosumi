@@ -240,11 +240,11 @@ test("predeployed account Workspace page reads readiness, total, and data in one
       return await db.batch(statements);
     },
   };
-  const store = createCloudflareD1OpenTofuControlStore(observed, {
+  const firstStore = createCloudflareD1OpenTofuControlStore(observed, {
     schemaMode: "predeployed",
   });
 
-  const first = await store.listWorkspacesForAccountPage(
+  const first = await firstStore.listWorkspacesForAccountPage(
     workspace.ownerUserId,
     {
       includeArchived: true,
@@ -256,7 +256,13 @@ test("predeployed account Workspace page reads readiness, total, and data in one
   expect(first.items.map((item) => item.id)).toEqual([newerWorkspace.id]);
   expect(first.total).toBe(2);
   expect(first.nextCursor).toBeString();
-  const second = await store.listWorkspacesForAccountPage(
+  // The platform constructs a new store per request. A warm isolate must reuse
+  // the immutable schema proof through the shared D1 binding while still
+  // executing the per-request maintenance-fence read.
+  const secondStore = createCloudflareD1OpenTofuControlStore(observed, {
+    schemaMode: "predeployed",
+  });
+  const second = await secondStore.listWorkspacesForAccountPage(
     workspace.ownerUserId,
     {
       includeArchived: true,

@@ -368,12 +368,20 @@ type D1PredeployedWorkspacePageRow = {
   readonly workspace_id: string | null;
 };
 
+// `createTakosumiWorkerService` constructs a fresh store for every request, but
+// Cloudflare reuses the bound D1 object for the lifetime of an isolate. Keep the
+// expensive immutable migration-catalog proof on that binding rather than on a
+// request-local store instance. The maintenance singleton is still co-read and
+// validated by every Workspace page statement, so an acquired maintenance fence
+// continues to fail closed immediately.
+const verifiedPredeployedD1Bindings = new WeakSet<object>();
+
 export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   readonly persistence = "durable" as const;
   readonly #orm: DrizzleD1Database<typeof schema>;
   readonly #schemaMode: D1OpenTofuControlSchemaMode;
   #initialized?: Promise<void>;
-  #predeployedSchemaVerified = false;
+  #predeployedSchemaVerified: boolean;
 
   constructor(
     private readonly db: D1Database,
@@ -383,6 +391,9 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   ) {
     this.#orm = drizzle(db, { schema });
     this.#schemaMode = options.schemaMode ?? "bootstrap";
+    this.#predeployedSchemaVerified =
+      this.#schemaMode === "predeployed" &&
+      verifiedPredeployedD1Bindings.has(db);
   }
 
   // -- RunnerProfile ----------------------------------------------------------
@@ -1307,6 +1318,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       );
       await validateD1OpenTofuLedgerSchemaPredeployed(columns, migrations);
       this.#predeployedSchemaVerified = true;
+      verifiedPredeployedD1Bindings.add(this.db);
       this.#initialized = Promise.resolve();
     }
 
@@ -3389,6 +3401,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
               verifyD1OpenTofuLedgerSchemaPredeployed(this.db),
             ]).then(() => {
               this.#predeployedSchemaVerified = true;
+              verifiedPredeployedD1Bindings.add(this.db);
             })
           : assertMaintenanceInactive(this.db).then(() =>
               ensureD1OpenTofuLedgerSchema(this.db),
