@@ -3812,13 +3812,13 @@ function defaultSmokeVars(input: {
       base_url: `https://${input.appName}.example.invalid`,
     };
   }
+  // The control-plane smoke installs the cloudflare-hello-worker module,
+  // whose declared variables are camelCase; the generated root projects only
+  // declared variables, so these defaults must match the module contract.
   return {
-    target: "cloudflare",
-    project_name: input.appName,
-    cloudflare: {
-      account_id: input.accountId,
-      workers_subdomain: input.workersSubdomain,
-    },
+    accountId: input.accountId,
+    appName: input.appName,
+    workersSubdomain: input.workersSubdomain,
   };
 }
 
