@@ -11,6 +11,7 @@ import {
   shouldMarkPendingSmokeCapsuleError,
   smokeSourceCompatibilityCheckBody,
   smokeSourceCapsuleCreateBody,
+  smokeWorkspaceCloudflareConnectionBody,
 } from "../../scripts/smoke-platform-control-plane.ts";
 
 test("platform smoke binds compatibility checks to the current Capsule", () => {
@@ -297,6 +298,56 @@ test("platform control-plane smoke matches canonical provider connection sources
       expected,
     ),
   ).toBe(false);
+});
+
+test("platform control-plane smoke creates Provider Connections through installed Credential Recipes", () => {
+  const genericEnvOptions = {
+    cloudflareConnectionMode: "generic-env" as const,
+    cloudflareApiToken: "cloudflare-token",
+    cloudflareAccountId: "account",
+    cloudflareWorkersSubdomain: "takosumi-smoke",
+  };
+
+  expect(
+    smokeWorkspaceCloudflareConnectionBody(
+      genericEnvOptions,
+      "ws_test",
+      "Layer-2 smoke canonical",
+    ),
+  ).toEqual({
+    workspaceId: "ws_test",
+    provider: "registry.opentofu.org/cloudflare/cloudflare",
+    credentialRecipe: {
+      id: "generic-env",
+      authMode: "env",
+      secretPartition: "provider-credentials",
+    },
+    displayName: "Layer-2 smoke canonical",
+    scopeHints: {
+      accountId: "account",
+      workersSubdomain: "takosumi-smoke",
+    },
+    values: {
+      CLOUDFLARE_API_TOKEN: "cloudflare-token",
+      CLOUDFLARE_ACCOUNT_ID: "account",
+    },
+  });
+
+  expect(
+    smokeWorkspaceCloudflareConnectionBody(
+      { ...genericEnvOptions, cloudflareConnectionMode: "guided" },
+      "ws_test",
+      "Layer-2 smoke canonical",
+    ),
+  ).toMatchObject({
+    provider: "registry.opentofu.org/cloudflare/cloudflare",
+    credentialRecipe: {
+      id: "cloudflare",
+      authMode: "api_token",
+      secretPartition: "provider-credentials",
+    },
+    values: { CLOUDFLARE_API_TOKEN: "cloudflare-token" },
+  });
 });
 
 test("platform control-plane smoke does not infer operator environment from URL", async () => {

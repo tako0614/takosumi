@@ -35,6 +35,8 @@ const DEFAULT_PROVIDERLESS_CAPSULE_DIR = resolve(
 const DEFAULT_PROVIDERLESS_RUNNER_PROFILE_ID = "opentofu-default";
 const DEFAULT_DEPLOY_TIMEOUT_SECONDS = 300;
 const API_PREFIX = "/api/v1";
+const CLOUDFLARE_PROVIDER_SOURCE =
+  "registry.opentofu.org/cloudflare/cloudflare";
 const NODE_HTTP_TRANSPORT_SCRIPT = String.raw`
 const chunks = [];
 function finish(payload) {
@@ -1789,33 +1791,11 @@ async function createWorkspaceCloudflareConnection(
     token: options.accountSessionToken,
     method: "POST",
     path: `${API_PREFIX}/connections`,
-    body:
-      options.cloudflareConnectionMode === "generic-env"
-        ? {
-            workspaceId,
-            provider: "cloudflare",
-            kind: "generic_env_provider",
-            credentialDriver: "generic_env",
-            displayName,
-            scopeHints: {
-              accountId: options.cloudflareAccountId,
-              workersSubdomain: options.cloudflareWorkersSubdomain,
-            },
-            values: {
-              CLOUDFLARE_API_TOKEN: options.cloudflareApiToken,
-              CLOUDFLARE_ACCOUNT_ID: options.cloudflareAccountId,
-            },
-          }
-        : {
-            workspaceId,
-            provider: "cloudflare",
-            displayName,
-            scopeHints: {
-              accountId: options.cloudflareAccountId,
-              workersSubdomain: options.cloudflareWorkersSubdomain,
-            },
-            values: { CLOUDFLARE_API_TOKEN: options.cloudflareApiToken },
-          },
+    body: smokeWorkspaceCloudflareConnectionBody(
+      options,
+      workspaceId,
+      displayName,
+    ),
   });
   const id = response.connection?.id;
   if (!id) {
@@ -1828,6 +1808,46 @@ async function createWorkspaceCloudflareConnection(
     displayName,
   );
   return { rawConnectionId: id, providerConnectionId };
+}
+
+export function smokeWorkspaceCloudflareConnectionBody(
+  options: Pick<
+    PlatformControlPlaneSmokeOptions,
+    | "cloudflareConnectionMode"
+    | "cloudflareApiToken"
+    | "cloudflareAccountId"
+    | "cloudflareWorkersSubdomain"
+  >,
+  workspaceId: string,
+  displayName: string,
+): Readonly<Record<string, unknown>> {
+  const genericEnv = options.cloudflareConnectionMode === "generic-env";
+  return {
+    workspaceId,
+    provider: CLOUDFLARE_PROVIDER_SOURCE,
+    credentialRecipe: genericEnv
+      ? {
+          id: "generic-env",
+          authMode: "env",
+          secretPartition: "provider-credentials",
+        }
+      : {
+          id: "cloudflare",
+          authMode: "api_token",
+          secretPartition: "provider-credentials",
+        },
+    displayName,
+    scopeHints: {
+      accountId: options.cloudflareAccountId,
+      workersSubdomain: options.cloudflareWorkersSubdomain,
+    },
+    values: {
+      CLOUDFLARE_API_TOKEN: options.cloudflareApiToken,
+      ...(genericEnv
+        ? { CLOUDFLARE_ACCOUNT_ID: options.cloudflareAccountId }
+        : {}),
+    },
+  };
 }
 
 async function verifyConnection(
