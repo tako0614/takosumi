@@ -121,6 +121,126 @@ test("predeployed maintenance readiness uses one direct indexed read", async () 
   expect(queries[0]).not.toContain("sqlite_master");
 });
 
+test("predeployed account Workspace page batches readiness and data in one round trip", async () => {
+  const db = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(db);
+  const fence = await acquireControlD1MaintenanceFence(
+    db,
+    {
+      sourceCommit: "a".repeat(40),
+      manifestDigest: `sha256:${"b".repeat(64)}`,
+      environment: "test",
+      databaseRole: "in_place",
+      releasePolicy: "in_place",
+    },
+    "2026-07-16T00:00:00.000Z",
+  );
+  await releaseControlD1MaintenanceFence(db, fence, "2026-07-16T00:01:00.000Z");
+  const workspace = {
+    id: "ws_batched",
+    handle: "batched",
+    displayName: "Batched",
+    ownerUserId: "account_batched",
+    createdAt: "2026-07-16T00:00:00.000Z",
+    updatedAt: "2026-07-16T00:00:00.000Z",
+  };
+  await db
+    .prepare(
+      `insert into workspaces
+         (id, handle, record_json, created_at, updated_at)
+       values (?, ?, ?, ?, ?)`,
+    )
+    .bind(
+      workspace.id,
+      workspace.handle,
+      JSON.stringify(workspace),
+      workspace.createdAt,
+      workspace.updatedAt,
+    )
+    .run();
+  await db
+    .prepare(
+      `insert into workspace_members
+         (id, workspace_id, account_id, status, record_json, created_at, updated_at)
+       values (?, ?, ?, 'active', ?, ?, ?)`,
+    )
+    .bind(
+      "wsm_batched",
+      workspace.id,
+      workspace.ownerUserId,
+      JSON.stringify({
+        id: "wsm_batched",
+        workspaceId: workspace.id,
+        accountId: workspace.ownerUserId,
+        roles: ["owner"],
+        status: "active",
+        createdAt: workspace.createdAt,
+        updatedAt: workspace.updatedAt,
+      }),
+      workspace.createdAt,
+      workspace.updatedAt,
+    )
+    .run();
+  let batchCalls = 0;
+  const observed: D1Database = {
+    prepare: db.prepare.bind(db),
+    async batch(statements) {
+      batchCalls += 1;
+      return await db.batch(statements);
+    },
+  };
+  const store = createCloudflareD1OpenTofuControlStore(observed, {
+    schemaMode: "predeployed",
+  });
+
+  const page = await store.listWorkspacesForAccountPage(workspace.ownerUserId, {
+    includeArchived: true,
+    includeTotal: false,
+    order: "updated_desc",
+    limit: 100,
+  });
+  expect(batchCalls).toBe(1);
+  expect(page.items.map((item) => item.id)).toEqual([workspace.id]);
+  expect(page.total).toBeUndefined();
+});
+
+test("predeployed account Workspace batch fails closed on an active fence", async () => {
+  const db = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(db);
+  await acquireControlD1MaintenanceFence(
+    db,
+    {
+      sourceCommit: "a".repeat(40),
+      manifestDigest: `sha256:${"b".repeat(64)}`,
+      environment: "test",
+      databaseRole: "in_place",
+      releasePolicy: "in_place",
+    },
+    "2026-07-16T00:00:00.000Z",
+  );
+  let batchCalls = 0;
+  const observed: D1Database = {
+    prepare: db.prepare.bind(db),
+    async batch(statements) {
+      batchCalls += 1;
+      return await db.batch(statements);
+    },
+  };
+  const store = createCloudflareD1OpenTofuControlStore(observed, {
+    schemaMode: "predeployed",
+  });
+
+  await expect(
+    store.listWorkspacesForAccountPage("account_batched", {
+      includeArchived: true,
+      includeTotal: false,
+      order: "updated_desc",
+      limit: 100,
+    }),
+  ).rejects.toThrow("maintenance_fence_active");
+  expect(batchCalls).toBe(1);
+});
+
 test("predeployed store fails closed without request-time bootstrap", async () => {
   const db = new SqliteFakeD1();
   const store = createCloudflareD1OpenTofuControlStore(db, {
