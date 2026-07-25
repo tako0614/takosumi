@@ -33,11 +33,6 @@ import {
 import { dashboardProductName } from "../../lib/runtime-capabilities.ts";
 import type { MessageKey } from "../../i18n/index.ts";
 import { rpc } from "../account/lib/api.ts";
-import {
-  autoStartAlreadyAttempted,
-  clearAutoStartAttempt,
-  markAutoStartAttempted,
-} from "../account/lib/oauth-autostart.ts";
 import { refreshSession } from "../account/lib/session.ts";
 import LogoMark from "../account/components/brand/LogoMark.tsx";
 import { setDocumentTitle, t } from "../../i18n/index.ts";
@@ -56,12 +51,11 @@ const THEME_ICON: Record<ThemePreference, () => JSX.Element> = {
   dark: () => <Moon size={16} aria-hidden="true" />,
 };
 
-// Cloud single-provider auto-start is convenient but must not become an
-// inescapable redirect loop when the OAuth round-trip fails or the session
-// cookie doesn't persist, and it must never re-sign-in someone who just signed
-// out. The breaker (one auto-start attempt per browser session, surviving the
-// full-page OAuth redirect via sessionStorage) is owned by `lib/auth.ts` so the
-// sign-out handlers can arm it too.
+// Signing in always starts from an explicit action. Arriving at /sign-in must
+// never begin an upstream OAuth round-trip on its own: the upstream IdP session
+// outlives our cookie, so an automatic start silently re-authenticates whoever
+// that session belongs to - including someone who just signed out, and
+// including a different account than the one the visitor expected.
 export function SignInPanel() {
   const [platformContributions] = createResource(loadPlatformContributions);
   const termsContribution = () =>
@@ -71,7 +65,6 @@ export function SignInPanel() {
   const [params] = useSearchParams<{
     return?: string;
     return_to?: string;
-    manual?: string;
   }>();
   // Start all-disabled and flip on by operator config: failing closed means we
   // never briefly render an enabled button that the backend would 503.
@@ -80,7 +73,6 @@ export function SignInPanel() {
   >([]);
   const [providersLoaded, setProvidersLoaded] = createSignal(false);
   const [providersLoadFailed, setProvidersLoadFailed] = createSignal(false);
-  const [autoStarted, setAutoStarted] = createSignal(false);
 
   const loadProviders = () => {
     setProvidersLoaded(false);
@@ -118,25 +110,6 @@ export function SignInPanel() {
     if (!isEnabled(p)) return;
     rpc.auth.startUpstreamOAuth(p);
   };
-  const shouldAutoStart = (): boolean => {
-    if (params.manual === "1") return false;
-    // A prior auto-start this browser session that never landed us signed in
-    // (OAuth failure, or a session cookie that didn't persist so AuthGuard
-    // bounced us back here) must not silently re-fire — that is an inescapable
-    // redirect loop. Fall back to the manual provider buttons instead.
-    if (autoStartAlreadyAttempted()) return false;
-    if (!providersLoaded() || providersLoadFailed()) return false;
-    return enabledProviders().length === 1;
-  };
-
-  createEffect(() => {
-    if (autoStarted() || !shouldAutoStart()) return;
-    const provider = enabledProviders()[0];
-    if (!provider) return;
-    setAutoStarted(true);
-    markAutoStartAttempted();
-    select(provider.id);
-  });
 
   const returnParam = () => params.return || params.return_to;
   const pendingInstall = () => installReturnContext(returnParam());
@@ -362,9 +335,6 @@ export function SignInCallbackView() {
         // navigating; otherwise the next route's AuthGuard runs before the
         // /me roundtrip resolves and bounces back to /sign-in.
         await refreshSession();
-        // Signed in for real — release the auto-start breaker so a later
-        // sign-out → sign-in in this same tab session auto-starts once again.
-        clearAutoStartAttempt();
         if (requiresDocumentNavigation(returnTo)) {
           location.assign(returnTo);
           return;
@@ -373,13 +343,10 @@ export function SignInCallbackView() {
       })
       .catch((err: Error) => {
         const returnTo = rpc.auth.recallOAuthReturnTo();
-        // manual=1 suppresses auto-start so the retry link lands on the manual
-        // provider buttons instead of instantly bouncing back into the failed
-        // provider (belt-and-suspenders with the sessionStorage breaker).
         setRetryHref(
           returnTo === "/"
-            ? "/sign-in?manual=1"
-            : `/sign-in?return=${encodeURIComponent(returnTo)}&manual=1`,
+            ? "/sign-in"
+            : `/sign-in?return=${encodeURIComponent(returnTo)}`,
         );
         setError(signInErrorMessage(err));
       });

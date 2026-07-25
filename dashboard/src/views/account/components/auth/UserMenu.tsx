@@ -86,7 +86,7 @@ export default function UserMenu() {
     // a browser that refuses sessionStorage must still land on the provider
     // buttons instead of being auto-redirected back into the IdP session it
     // just asked to leave.
-    nav("/sign-in?manual=1", { replace: true });
+    nav("/sign-in", { replace: true });
   };
 
   return (

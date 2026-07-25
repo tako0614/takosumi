@@ -110,28 +110,19 @@ describe("SignInView disabled OAuth guidance", () => {
     expect(signInViewSource).not.toContain('fill="#4285f4"');
   });
 
-  test("auto-starts any sole configured OAuth method with a manual escape hatch", () => {
-    expect(signInViewSource).toContain("createEffect(() =>");
-    expect(signInViewSource).toContain("const shouldAutoStart = ():");
-    expect(signInViewSource).toContain(
-      'if (params.manual === "1") return false',
-    );
-    expect(signInViewSource).toContain(
-      "return enabledProviders().length === 1",
-    );
-    expect(signInViewSource).toContain("select(provider.id)");
-  });
-
-  test("auto-start cannot become an inescapable OAuth-failure loop", () => {
-    // A prior auto-start this session that never signed us in must not re-fire
-    // (session-scoped breaker), and the callback retry link suppresses it too.
-    expect(signInViewSource).toContain("autoStartAlreadyAttempted()");
-    expect(signInViewSource).toContain("markAutoStartAttempted()");
-    expect(signInViewSource).toContain("clearAutoStartAttempt()");
-    expect(signInViewSource).toContain('"/sign-in?manual=1"');
-    expect(signInViewSource).toContain(
-      "`/sign-in?return=${encodeURIComponent(returnTo)}&manual=1`",
-    );
+  test("arriving at the sign-in screen never starts an OAuth round-trip", () => {
+    // The upstream IdP session outlives our cookie, so any automatic start
+    // silently re-authenticates whoever that session belongs to - including
+    // someone who just signed out, and including an account the visitor did
+    // not intend. Signing in begins only from an explicit provider choice.
+    expect(signInViewSource).not.toContain("shouldAutoStart");
+    expect(signInViewSource).not.toContain("autoStartAlreadyAttempted");
+    expect(signInViewSource).not.toContain("markAutoStartAttempted");
+    expect(signInViewSource).not.toContain("oauth-autostart.ts");
+    expect(signInViewSource).not.toContain('"/sign-in?manual=1"');
+    // The only path into the upstream round-trip is the provider button.
+    expect(signInViewSource).toContain("const select = (p: Provider)");
+    expect(signInViewSource).toContain("rpc.auth.startUpstreamOAuth(p)");
   });
 
   test("uses document navigation when returning to the server-owned OIDC authorize route", () => {
