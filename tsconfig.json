@@ -18,6 +18,9 @@
       "takosumi-contract": ["./contract/index.ts"],
       "takosumi-contract/api-surface": ["./contract/api-surface.ts"],
       "takosumi-contract/capabilities": ["./contract/capabilities.ts"],
+      "takosumi-contract/platform-extension-routes": [
+        "./contract/platform-extension-routes.ts"
+      ],
       "takosumi-contract/resource-deployment": [
         "./contract/resource-deployment.ts"
       ],

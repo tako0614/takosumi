@@ -10,6 +10,11 @@ import {
   isTakosumiCompatibilityProfileToken,
   type TakosumiCompatibilityPlane,
 } from "takosumi-contract/capabilities";
+import {
+  PLATFORM_EXTENSION_RESERVED_PREFIXES,
+  pathIsUnderBase,
+  platformExtensionBasePathIsReserved,
+} from "takosumi-contract/platform-extension-routes";
 
 export interface PlatformCompatibilityProfile {
   /** Exact scoped, versioned capability token, for example `compat.s3.v1`. */
@@ -59,45 +64,19 @@ export interface PlatformExtensionContribution {
   readonly order?: number;
 }
 
+// Re-exported so the platform module stays the single import site for route
+// composition; the reserved list itself is contract an extension host can read.
+export {
+  PLATFORM_EXTENSION_RESERVED_PREFIXES,
+  pathIsUnderBase,
+  platformExtensionBasePathIsReserved,
+};
+
 export const PLATFORM_EXTENSIONS_ENV = "TAKOSUMI_PLATFORM_EXTENSIONS";
 export const PLATFORM_EXTENSION_CATALOG_PATH =
   "/__takosumi/platform/extensions" as const;
 export const PLATFORM_EXTENSION_CONTRIBUTIONS_PATH =
   "/__takosumi/platform/contributions" as const;
-
-/**
- * Core route prefixes are never delegable to an extension. Keep this list
- * narrower than all of `/v1`: operator extensions such as `/v1/billing` and
- * `/v1/cloud` are valid, while concrete Takosumi/Accounts authorities are not.
- */
-export const PLATFORM_EXTENSION_RESERVED_PREFIXES = [
-  "/api",
-  "/internal",
-  "/__takosumi",
-  "/.well-known",
-  "/oauth",
-  "/hooks",
-  "/install",
-  "/healthz",
-  "/readyz",
-  "/livez",
-  "/metrics",
-  "/capabilities",
-  "/openapi.json",
-  "/v1/account",
-  "/v1/auth",
-  "/v1/privacy",
-  "/v1/capabilities",
-  "/v1/form-availability",
-  "/v1/offering-catalogs",
-  "/v1/offering-availability",
-  "/v1/offering-selections",
-  "/v1/interfaces",
-  "/v1/resources",
-  "/v1/target-pools",
-  "/v1/space-policies",
-  "/apis/forms.takoform.com/v1alpha1",
-] as const;
 
 export function platformExtensionRoutes(env: {
   readonly [PLATFORM_EXTENSIONS_ENV]?: unknown;
@@ -504,13 +483,6 @@ export function matchPlatformExtensionRoute(
     .sort((left, right) => right.basePath.length - left.basePath.length)[0];
 }
 
-export function platformExtensionBasePathIsReserved(basePath: string): boolean {
-  return PLATFORM_EXTENSION_RESERVED_PREFIXES.some(
-    (prefix) =>
-      pathIsUnderBase(basePath, prefix) || pathIsUnderBase(prefix, basePath),
-  );
-}
-
 export function isPlatformExtensionCatalogPath(pathname: string): boolean {
   return pathname === PLATFORM_EXTENSION_CATALOG_PATH;
 }
@@ -519,8 +491,4 @@ export function isPlatformExtensionContributionsPath(
   pathname: string,
 ): boolean {
   return pathname === PLATFORM_EXTENSION_CONTRIBUTIONS_PATH;
-}
-
-export function pathIsUnderBase(pathname: string, basePath: string): boolean {
-  return pathname === basePath || pathname.startsWith(`${basePath}/`);
 }
