@@ -72,7 +72,7 @@ function Inner(props: { readonly session: SessionRecord }) {
     clearSession();
     // `manual=1`: see UserMenu.signOut — sign-out must never hand the user
     // straight back to the single-provider auto-start.
-    nav("/sign-in?manual=1");
+    nav("/sign-in");
   };
 
   return (

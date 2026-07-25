@@ -23,7 +23,6 @@ import {
   clearWorkspaceListCache,
   primeWorkspaceListCache,
 } from "../../../lib/workspace-list.ts";
-import { markAutoStartAttempted } from "./oauth-autostart.ts";
 import {
   fetchDashboardBootstrap,
   fetchDashboardWorkspaceBootstrap,
@@ -226,7 +225,6 @@ export function clearSession(): void {
   cachedSession = null;
   cachedAt = Date.now();
   initialized = true;
-  markAutoStartAttempted();
   clearWorkspaceListCache();
   notify(null);
   if (typeof fetch !== "undefined") {
