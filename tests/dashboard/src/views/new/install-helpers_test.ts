@@ -184,6 +184,36 @@ describe("store install metadata", () => {
     ).toHaveLength(0);
   });
 
+  test("ignores incomplete legacy Store source rows instead of crashing the install view", () => {
+    const missingUrl = installConfig({
+      id: "cfg-missing-url",
+      store: {
+        source: { path: "deploy/opentofu" },
+      } as InstallConfig["store"],
+    });
+    const missingPath = installConfig({
+      id: "cfg-missing-path",
+      store: {
+        source: { url: "https://example.test/example.git" },
+      } as InstallConfig["store"],
+    });
+
+    expect(() =>
+      storeInstallConfigsForSource(
+        [missingUrl, missingPath],
+        "https://example.test/example.git",
+        "deploy/opentofu",
+      ),
+    ).not.toThrow();
+    expect(
+      storeInstallConfigsForSource(
+        [missingUrl, missingPath],
+        "https://example.test/example.git",
+        "deploy/opentofu",
+      ),
+    ).toEqual([]);
+  });
+
   test("preserves operator-defined kind and surface tokens", () => {
     const listing: TcsListing = {
       id: "publisher/custom",

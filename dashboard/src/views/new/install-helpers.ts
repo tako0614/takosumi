@@ -661,8 +661,13 @@ function storeSourceMatchesCoordinate(
   url: string,
   path: string,
 ): boolean {
-  const sourceUrl = source?.url.trim();
-  const sourcePath = source?.path.trim();
+  // InstallConfig rows can predate the canonical GitAddress shape. Treat an
+  // incomplete legacy source as a non-match instead of crashing the whole
+  // Store install view while filtering candidate configs.
+  const sourceUrl =
+    typeof source?.url === "string" ? source.url.trim() : undefined;
+  const sourcePath =
+    typeof source?.path === "string" ? source.path.trim() : undefined;
   return Boolean(
     sourceUrl &&
     sourcePath &&
