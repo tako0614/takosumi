@@ -469,18 +469,24 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     const stateKeys = stateScope
       ? []
       : await stateArtifactKeys(envelope.request);
-    if (envelope.action === "apply" && stateScope) {
-      if (!rawOutputRef) {
+    if (
+      (envelope.action === "apply" || envelope.action === "destroy") &&
+      stateScope
+    ) {
+      if (envelope.action === "apply" && !rawOutputRef) {
         throw new Error("apply with stateScope requires rawOutputRef");
       }
-      assertRawOutputRefForScope(
-        stateScope,
-        parseApplyRunId(envelope.request) ?? runId,
-        rawOutputRef,
-      );
-      const adopted = await this.#adoptCompletedApplyFromR2State(
+      if (rawOutputRef) {
+        assertRawOutputRefForScope(
+          stateScope,
+          parseApplyRunId(envelope.request) ?? runId,
+          rawOutputRef,
+        );
+      }
+      const adopted = await this.#adoptCompletedStateMutationFromR2(
         runId,
         stateScope,
+        envelope.action,
         rawOutputRef,
       );
       if (adopted) return adopted;
@@ -960,14 +966,21 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     return key;
   }
 
-  async #adoptCompletedApplyFromR2State(
+  async #adoptCompletedStateMutationFromR2(
     runId: string,
     scope: StateScope,
-    rawOutputRef: string,
+    action: "apply" | "destroy",
+    rawOutputRef: string | undefined,
   ): Promise<Response | undefined> {
+    assertStateRefForScope(scope);
     const bucket = this.#r2State();
     const current = await readCurrentStatePointer(bucket, scope);
     if (!current || current.generation !== scope.generation) return undefined;
+    if (current.objectKey !== scope.stateRef) {
+      throw new Error(
+        `completed ${action} stateRef does not match the allocated stateRef`,
+      );
+    }
     const object = await bucket.get(current.objectKey);
     if (!object) return undefined;
     const persistedRunId =
@@ -978,14 +991,17 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       object.customMetadata?.["takosumi-digest"];
     if (metadataDigest && metadataDigest !== current.digest) {
       throw new Error(
-        `completed apply state digest mismatch for ${current.objectKey}`,
+        `completed ${action} state digest mismatch for ${current.objectKey}`,
       );
     }
     await this.#stateCrypto().open(
       new Uint8Array(await object.arrayBuffer()),
       current.digest,
     );
-    const rawOutputs = await this.#readPersistedRawOutputs(runId, rawOutputRef);
+    const rawOutputs =
+      action === "apply" && rawOutputRef
+        ? await this.#readPersistedRawOutputs(runId, rawOutputRef)
+        : undefined;
     const ciphertextLength =
       current.ciphertextLength ??
       Number(object.customMetadata?.["takosumi-ciphertext-length"]);
