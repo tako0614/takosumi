@@ -1249,6 +1249,7 @@ test("platformExtensionRoutes parses opaque descriptors", () => {
           handlerKey: "TEST_AI_EXTENSION",
           capabilities: ["openai.chat_completions", "openai.embeddings"],
           authMode: "platform",
+          workspaceContext: "query-required",
           requiredScopes: ["ai.chat"],
         },
         { basePath: "/extensions/x", handlerKey: "TEST_X_EXTENSION" },
@@ -1261,10 +1262,26 @@ test("platformExtensionRoutes parses opaque descriptors", () => {
       handlerKey: "TEST_AI_EXTENSION",
       capabilities: ["openai.chat_completions", "openai.embeddings"],
       authMode: "platform",
+      workspaceContext: "query-required",
       requiredScopes: ["ai.chat"],
     },
     { basePath: "/extensions/x", handlerKey: "TEST_X_EXTENSION" },
   ]);
+});
+
+test("platformExtensionRoutes rejects Workspace context on handler-auth routes", () => {
+  expect(() =>
+    platformExtensionRoutes({
+      TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
+        {
+          basePath: "/extensions/protocol",
+          handlerKey: "TEST_PROTOCOL_EXTENSION",
+          authMode: "handler",
+          workspaceContext: "query-optional",
+        },
+      ]),
+    }),
+  ).toThrow("workspaceContext requires platform authentication");
 });
 
 test("platformExtensionRoutes validates safe extension-owned contributions", () => {
@@ -2811,6 +2828,94 @@ test("platform extension route replaces spoofed Workspace context", async () => 
 
   expect(response.status).toBe(200);
   expect(forwarded).toBe(true);
+});
+
+test("platform extension route verifies query Workspace context before dispatch", async () => {
+  const forwarded: Array<{
+    readonly workspaceId: string | null;
+    readonly subject: string | null;
+  }> = [];
+  const checked: string[] = [];
+  const response = await handlePlatformExtensionRouteRequest(
+    new Request(
+      "https://app.takosumi.com/extensions/catalog?workspaceId=space_cloud",
+    ),
+    {
+      TEST_CATALOG_EXTENSION: {
+        fetch: async (request: Request) => {
+          forwarded.push({
+            workspaceId: request.headers.get(
+              "x-takosumi-platform-workspace-id",
+            ),
+            subject: request.headers.get("x-takosumi-platform-subject"),
+          });
+          return Response.json({ ok: true });
+        },
+      },
+    } as never,
+    {
+      basePath: "/extensions/catalog",
+      handlerKey: "TEST_CATALOG_EXTENSION",
+      workspaceContext: "query-required",
+    },
+    async () => ({
+      authenticated: true,
+      authKind: "session",
+      subject: "tsub_cloud",
+    }),
+    undefined,
+    async (_request, _env, workspaceId) => {
+      checked.push(workspaceId);
+      return workspaceId === "space_cloud";
+    },
+  );
+
+  expect(response.status).toBe(200);
+  expect(checked).toEqual(["space_cloud"]);
+  expect(forwarded).toEqual([
+    { workspaceId: "space_cloud", subject: "tsub_cloud" },
+  ]);
+});
+
+test("platform extension required query Workspace context fails closed", async () => {
+  let forwarded = false;
+  const route = {
+    basePath: "/extensions/catalog",
+    handlerKey: "TEST_CATALOG_EXTENSION",
+    workspaceContext: "query-required" as const,
+  };
+  const binding = {
+    TEST_CATALOG_EXTENSION: {
+      fetch: async () => {
+        forwarded = true;
+        return Response.json({ ok: true });
+      },
+    },
+  } as never;
+  const session = async () => ({
+    authenticated: true as const,
+    authKind: "session" as const,
+    subject: "tsub_cloud",
+  });
+
+  const missing = await handlePlatformExtensionRouteRequest(
+    new Request("https://app.takosumi.com/extensions/catalog"),
+    binding,
+    route,
+    session,
+  );
+  expect(missing.status).toBe(400);
+
+  const duplicated = await handlePlatformExtensionRouteRequest(
+    new Request(
+      "https://app.takosumi.com/extensions/catalog?workspaceId=space_a&workspaceId=space_b",
+    ),
+    binding,
+    route,
+    session,
+  );
+  expect(duplicated.status).toBe(400);
+  expect(forwarded).toBe(false);
 });
 
 test("platform workspace verification lets personal access tokens select an accessible Workspace", async () => {

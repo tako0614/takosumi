@@ -2178,6 +2178,7 @@ export interface PlatformExtensionCatalogItem {
   readonly compatibilityProfiles?: readonly PlatformCompatibilityProfile[];
   readonly authMode?: "platform" | "handler";
   readonly requiredScopes?: readonly string[];
+  readonly workspaceContext?: "query-required" | "query-optional";
   readonly contributions?: readonly PlatformExtensionContribution[];
 }
 
@@ -2209,6 +2210,9 @@ export function platformExtensionCatalog(
       : {}),
     ...(route.authMode ? { authMode: route.authMode } : {}),
     ...(route.requiredScopes ? { requiredScopes: route.requiredScopes } : {}),
+    ...(route.workspaceContext
+      ? { workspaceContext: route.workspaceContext }
+      : {}),
     ...(route.contributions ? { contributions: route.contributions } : {}),
   }));
   const configured = extensions.filter(
@@ -2541,6 +2545,7 @@ export async function handlePlatformExtensionRouteRequest(
   route: PlatformExtensionRoute,
   sessionVerifier: PlatformExtensionSessionVerifier = verifyPlatformExtensionSession,
   authorityFactory: PlatformCompatibilityAuthorityFactory = createPlatformCompatibilityAuthority,
+  workspaceAccess: PlatformExtensionWorkspaceAccess = platformExtensionSessionCanAccessWorkspace,
 ): Promise<Response> {
   const handler = platformExtensionHandler(env, route.handlerKey);
   if (!handler) return Response.json({ error: "not found" }, { status: 404 });
@@ -2565,6 +2570,7 @@ export async function handlePlatformExtensionRouteRequest(
       env,
       route,
       sessionVerifier,
+      workspaceAccess,
     );
     if (!authContext.ok) return authContext.response;
     const authority = await authorityFactory({
@@ -2586,6 +2592,7 @@ export async function handlePlatformExtensionRouteRequest(
     env,
     route,
     sessionVerifier,
+    workspaceAccess,
   );
   if (!authContext.ok) return authContext.response;
   return await handler.fetch(authContext.request);
@@ -3428,6 +3435,7 @@ async function platformExtensionAuthContext(
   env: CloudflareWorkerEnv,
   route: PlatformExtensionRoute | undefined,
   sessionVerifier: PlatformExtensionSessionVerifier,
+  workspaceAccess: PlatformExtensionWorkspaceAccess,
 ): Promise<
   | {
       readonly ok: true;
@@ -3436,7 +3444,7 @@ async function platformExtensionAuthContext(
     }
   | { readonly ok: false; readonly response: Response }
 > {
-  const session = await sessionVerifier(request, env, route);
+  let session = await sessionVerifier(request, env, route);
   const headers = new Headers(request.headers);
   for (const header of PLATFORM_EXTENSION_RAW_CREDENTIAL_HEADERS) {
     headers.delete(header);
@@ -3471,6 +3479,54 @@ async function platformExtensionAuthContext(
       ok: false,
       response: Response.json({ error: "unauthenticated" }, { status: 401 }),
     };
+  }
+  if (route?.workspaceContext) {
+    const requestedValues = new URL(request.url).searchParams.getAll(
+      "workspaceId",
+    );
+    if (
+      requestedValues.length === 0 &&
+      route.workspaceContext === "query-required"
+    ) {
+      return {
+        ok: false,
+        response: Response.json(
+          {
+            error: "invalid_request",
+            error_description: "workspaceId query is required",
+          },
+          { status: 400 },
+        ),
+      };
+    }
+    if (requestedValues.length > 0) {
+      const requestedWorkspaceId =
+        requestedValues.length === 1
+          ? safePlatformExtensionContextId(requestedValues[0])
+          : undefined;
+      if (!requestedWorkspaceId) {
+        return {
+          ok: false,
+          response: Response.json(
+            {
+              error: "invalid_request",
+              error_description:
+                "workspaceId query must contain one valid Workspace id",
+            },
+            { status: 400 },
+          ),
+        };
+      }
+      const verified = await platformExtensionVerifiedWorkspaceSession(
+        request,
+        env,
+        session,
+        requestedWorkspaceId,
+        workspaceAccess,
+      );
+      if (!verified.ok) return verified;
+      session = verified.session;
+    }
   }
   const sessionContext = session;
   headers.set(PLATFORM_EXTENSION_AUTHENTICATED_HEADER, "1");
