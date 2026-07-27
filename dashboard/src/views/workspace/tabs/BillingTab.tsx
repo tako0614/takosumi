@@ -4,7 +4,15 @@
  * never compiled into the OSS dashboard.
  */
 import "../../../styles/wave-b.css";
-import { createMemo, createResource, createSignal, For, Show } from "solid-js";
+import {
+  createMemo,
+  createResource,
+  createSignal,
+  For,
+  onCleanup,
+  onMount,
+  Show,
+} from "solid-js";
 import { ExternalLink } from "lucide-solid";
 import {
   formatBillingNumber,
@@ -21,6 +29,7 @@ import {
   platformContributionDescription,
   platformContributionLabel,
   platformContributionsForSlot,
+  type PlatformContribution,
 } from "../../../lib/platform-contributions.ts";
 import {
   formatDateTime,
@@ -142,22 +151,36 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
         )}
       >
         {(contribution) => (
-          <Card>
-            <CardHeader
-              title={platformContributionLabel(contribution, intlLocale())}
-              subtitle={platformContributionDescription(
-                contribution,
-                intlLocale(),
-              )}
+          <Show
+            when={contribution.presentation === "inline-frame"}
+            fallback={
+              <Card>
+                <CardHeader
+                  title={platformContributionLabel(contribution, intlLocale())}
+                  subtitle={platformContributionDescription(
+                    contribution,
+                    intlLocale(),
+                  )}
+                />
+                <a
+                  class="btn btn-secondary"
+                  href={platformContributionHref(
+                    contribution,
+                    props.workspaceId,
+                  )}
+                  rel="external"
+                >
+                  {platformContributionLabel(contribution, intlLocale())}
+                  <ExternalLink size={14} aria-hidden="true" />
+                </a>
+              </Card>
+            }
+          >
+            <InlinePlatformContribution
+              contribution={contribution}
+              workspaceId={props.workspaceId}
             />
-            <a
-              class="btn btn-secondary"
-              href={`${contribution.href}?workspaceId=${encodeURIComponent(props.workspaceId)}`}
-            >
-              {platformContributionLabel(contribution, intlLocale())}
-              <ExternalLink size={14} aria-hidden="true" />
-            </a>
-          </Card>
+          </Show>
         )}
       </For>
 
@@ -217,6 +240,82 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
         </Show>
       </Card>
     </div>
+  );
+}
+
+const CONTRIBUTION_RESIZE_KIND =
+  "takosumi.platform-contribution-resize@v1" as const;
+
+function InlinePlatformContribution(props: {
+  readonly contribution: PlatformContribution;
+  readonly workspaceId: string;
+}) {
+  let frame!: HTMLIFrameElement;
+  const [height, setHeight] = createSignal(620);
+  const label = () =>
+    platformContributionLabel(props.contribution, intlLocale());
+  const description = () =>
+    platformContributionDescription(props.contribution, intlLocale());
+
+  onMount(() => {
+    const resize = (event: MessageEvent<unknown>) => {
+      if (
+        event.origin !== window.location.origin ||
+        event.source !== frame.contentWindow ||
+        !isContributionResizeMessage(event.data) ||
+        event.data.id !== props.contribution.id
+      ) {
+        return;
+      }
+      setHeight(Math.max(320, Math.min(1_600, Math.ceil(event.data.height))));
+    };
+    window.addEventListener("message", resize);
+    onCleanup(() => window.removeEventListener("message", resize));
+  });
+
+  return (
+    <section class="platform-contribution-inline" aria-label={label()}>
+      <div class="platform-contribution-heading">
+        <h2>{label()}</h2>
+        <Show when={description()}>{(text) => <p>{text()}</p>}</Show>
+      </div>
+      <iframe
+        ref={frame}
+        class="platform-contribution-frame"
+        src={platformContributionHref(
+          props.contribution,
+          props.workspaceId,
+          true,
+        )}
+        title={label()}
+        style={{ height: `${height()}px` }}
+      />
+    </section>
+  );
+}
+
+function platformContributionHref(
+  contribution: PlatformContribution,
+  workspaceId: string,
+  embedded = false,
+): string {
+  const query = new URLSearchParams({ workspaceId });
+  if (embedded) query.set("embed", "1");
+  return `${contribution.href}?${query.toString()}`;
+}
+
+function isContributionResizeMessage(value: unknown): value is {
+  readonly kind: typeof CONTRIBUTION_RESIZE_KIND;
+  readonly id: string;
+  readonly height: number;
+} {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    record.kind === CONTRIBUTION_RESIZE_KIND &&
+    typeof record.id === "string" &&
+    typeof record.height === "number" &&
+    Number.isFinite(record.height)
   );
 }
 
