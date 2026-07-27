@@ -1622,6 +1622,106 @@ test("capsule destroy-plan pins the active StateVersion source snapshot instead 
     digest: FIXTURE_ARCHIVE_DIGEST,
   });
   expect(runner.planJobs[1]?.sourceArchive?.ref).not.toEqual(newerArchiveKey);
+  expect(runner.planJobs[1]?.generatedRoot?.files["outputs.tf"]).toBe("");
+  expect(runner.planJobs[1]?.outputAllowlist).toEqual({});
+});
+
+test("pre-v1 Resource Shape backing Capsule destroys from state without rebuilding its retired artifact", async () => {
+  const { store, runner, controller } = await seededController({
+    installConfigId: "cfg-internal-resource-shape-backing-capsule",
+  });
+  const create = await controller.createCapsulePlan("cap_fixture1");
+  await controller.createApplyRun({
+    planRunId: create.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(create.planRun),
+  });
+
+  const appliedPlan = await store.getPlanRun(create.planRun.id);
+  const activeCapsule = await store.getCapsule("cap_fixture1");
+  expect(appliedPlan?.appliedApplyRunId).toBeDefined();
+  expect(activeCapsule?.currentStateGeneration).toBe(1);
+  await store.putPlanRun({
+    ...appliedPlan!,
+    source: {
+      kind: "local",
+      path: "/resource-shape/cloudflare-kv-store",
+    } as never,
+    sourceSnapshotId: "snap_legacy_generated_root",
+  });
+  await store.putCapsule({
+    ...activeCapsule!,
+    sourceId: undefined as never,
+  });
+
+  const destroy = await controller.createCapsuleDestroyPlan("cap_fixture1");
+
+  expect(destroy.planRun.operation).toBe("destroy");
+  expect(destroy.planRun.source.kind).toBe("operator_module");
+  expect(destroy.planRun.sourceSnapshotId).toBeUndefined();
+  expect(destroy.planRun.status).toBe("waiting_approval");
+  expect(runner.planJobs).toHaveLength(2);
+  expect(runner.planJobs[1]?.generatedRoot).toBeDefined();
+  expect(runner.planJobs[1]?.operatorModule?.files).toHaveLength(1);
+  expect(runner.planJobs[1]?.sourceArchive).toBeUndefined();
+  expect(runner.planJobs[1]?.stateScope).toMatchObject({
+    workspaceId: "ws_test001",
+    subject: { kind: "capsule", id: "cap_fixture1" },
+    environment: "preview",
+    generation: 1,
+  });
+
+  await controller.approveRun(destroy.planRun.id);
+  const destroyed = await controller.createApplyRun({
+    planRunId: destroy.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(destroy.planRun),
+  });
+
+  expect(destroyed.applyRun.status).toBe("succeeded");
+  expect(runner.destroyJobs).toHaveLength(1);
+  expect(runner.destroyJobs[0]?.generatedRoot).toBeDefined();
+  expect(runner.destroyJobs[0]?.operatorModule?.files).toHaveLength(1);
+  expect(runner.destroyJobs[0]?.sourceArchive).toBeUndefined();
+  expect(runner.destroyJobs[0]?.stateScope).toMatchObject({
+    workspaceId: "ws_test001",
+    subject: { kind: "capsule", id: "cap_fixture1" },
+    environment: "preview",
+    generation: 2,
+  });
+  expect((await store.getCapsule("cap_fixture1"))?.status).toBe("destroyed");
+});
+
+test("pre-v1 upload projection uses the same state-only delete bridge", async () => {
+  const { store, runner, controller } = await seededController();
+  const create = await controller.createCapsulePlan("cap_fixture1");
+  await controller.createApplyRun({
+    planRunId: create.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(create.planRun),
+  });
+  const appliedPlan = await store.getPlanRun(create.planRun.id);
+  const activeCapsule = await store.getCapsule("cap_fixture1");
+  await store.putPlanRun({
+    ...appliedPlan!,
+    source: {
+      kind: "git",
+      url: "https://uploads.takosumi.com/ws_test001",
+      commit:
+        "c9913a5e25d1c58da061f59d72bb0903be1a25e8b42bfbefb244def32349cbc1",
+    },
+    sourceSnapshotId: "snap_legacy_upload",
+  });
+  await store.putCapsule({
+    ...activeCapsule!,
+    sourceId: undefined as never,
+  });
+
+  const destroy = await controller.createCapsuleDestroyPlan("cap_fixture1");
+
+  expect(destroy.planRun.status).toBe("waiting_approval");
+  expect(destroy.planRun.source.kind).toBe("operator_module");
+  expect(destroy.planRun.sourceSnapshotId).toBeUndefined();
+  expect(runner.planJobs[1]?.operatorModule?.files).toHaveLength(1);
+  expect(runner.planJobs[1]?.sourceArchive).toBeUndefined();
+  expect(runner.planJobs[1]?.stateScope?.generation).toBe(1);
 });
 
 test("capsule destroy remains runnable when its applied CompatibilityReport is no longer admissible", async () => {
