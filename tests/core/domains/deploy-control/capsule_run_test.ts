@@ -5768,6 +5768,9 @@ test("capsule destroy-plan stays available when host plan rating is unavailable"
     ],
   });
   await seedRunnableCapsuleModel(store, { environment: "production" });
+  const unexpectedCommercialCall = async (): Promise<never> => {
+    throw new Error("destroy must not use commercial reservation");
+  };
   const controller = controllerWith(store, runner, {
     defaultBillingSettings: { mode: "showback" },
     showbackRater: {
@@ -5777,6 +5780,15 @@ test("capsule destroy-plan stays available when host plan rating is unavailable"
       async rateUsage() {
         return { ratingStatus: "unrated", usdMicros: 0 };
       },
+    },
+    quotaPolicy: {
+      evaluatePlanQuota: unexpectedCommercialCall,
+    },
+    billingEnforcement: {
+      reservePlanBilling: unexpectedCommercialCall,
+      assertReservationSatisfied: unexpectedCommercialCall,
+      captureRunBilling: unexpectedCommercialCall,
+      releaseReservation: unexpectedCommercialCall,
     },
   });
 
@@ -5789,6 +5801,13 @@ test("capsule destroy-plan stays available when host plan rating is unavailable"
     blocked: false,
     reasons: [],
   });
+  await controller.approveRun(planRun.id, { approvedBy: "operator" });
+  const { applyRun, capsule } = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+  expect(applyRun.status).toBe("succeeded");
+  expect(capsule?.status).toBe("destroyed");
 });
 
 test("capsule apply emits generation base+1, records StateVersion + Output, and advances the Capsule", async () => {

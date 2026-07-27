@@ -124,11 +124,7 @@ export class BillingService {
     // change entries in its plan describe external drift, so they must not be
     // rated or commercially reserved as materialization work. Runner-minute
     // usage is recorded independently by the Run engine.
-    if (
-      input.planRun.operation === "destroy" ||
-      input.planRun.refreshOnly === true ||
-      input.planRun.resourceImport === true
-    ) {
+    if (planSkipsBillingReservation(input.planRun)) {
       return {
         reasons: [],
         audit: {
@@ -202,7 +198,9 @@ export class BillingService {
   async assertApplyBillingAllowed(planRun: PlanRun): Promise<void> {
     const workspaceId = planRun.workspaceId;
     const settings = await this.billingSettingsForWorkspace(workspaceId);
-    if (settings.mode === "disabled") return;
+    if (settings.mode === "disabled" || planSkipsBillingReservation(planRun)) {
+      return;
+    }
     const workspace = await this.#requireWorkspace(workspaceId);
     await this.#enforcement.assertReservationSatisfied({
       workspaceId,
@@ -238,6 +236,7 @@ export class BillingService {
       idempotencyKey: `${input.applyRun.id}:opentofu.apply`,
       createdAt: new Date(input.now).toISOString(),
     });
+    if (planSkipsBillingReservation(input.planRun)) return;
     await this.#enforcement.captureRunBilling({
       workspaceId,
       billingSubjectId: workspace.ownerUserId,
@@ -255,7 +254,9 @@ export class BillingService {
   async releaseApplyBilling(planRun: PlanRun): Promise<void> {
     const workspaceId = planRun.workspaceId;
     const settings = await this.billingSettingsForWorkspace(workspaceId);
-    if (settings.mode === "disabled") return;
+    if (settings.mode === "disabled" || planSkipsBillingReservation(planRun)) {
+      return;
+    }
     const workspace = await this.#requireWorkspace(workspaceId);
     await this.#enforcement.releaseReservation({
       workspaceId,
@@ -284,6 +285,14 @@ export class BillingService {
       "usage",
     );
   }
+}
+
+function planSkipsBillingReservation(planRun: PlanRun): boolean {
+  return (
+    planRun.operation === "destroy" ||
+    planRun.refreshOnly === true ||
+    planRun.resourceImport === true
+  );
 }
 
 function normalizeBillingSettings(value: unknown): BillingSettings {
