@@ -615,6 +615,86 @@ test("apply with stateScope adopts same-run completed state without reapplying",
   assert.equal(stateField.digest, sealedState.contentDigest);
 });
 
+test("destroy with stateScope adopts same-run completed state without destroying twice", async () => {
+  const artifacts = new FakeR2Bucket();
+  const state = new FakeR2Bucket();
+  const crypto = StateArtifactCrypto.fromEnv({
+    TAKOSUMI_SECRET_STORE_PASSPHRASE: TEST_PASSPHRASE,
+  });
+  const targetStateKey = `${STATE_PREFIX}/00000001.tfstate.enc`;
+  const targetScope = {
+    ...SCOPE,
+    generation: 1,
+    stateRef: targetStateKey,
+  };
+  const completedState = new TextEncoder().encode(
+    '{"version":4,"serial":2,"resources":[]}',
+  );
+  const sealedState = await crypto.seal(completedState);
+  await state.put(targetStateKey, sealedState.ciphertext, {
+    customMetadata: {
+      "takosumi-run-id": "plan_1",
+      "takosumi-content-digest": sealedState.contentDigest,
+      "takosumi-ciphertext-length": String(sealedState.ciphertextLength),
+    },
+  });
+  await state.put(
+    CURRENT_KEY,
+    JSON.stringify({
+      generation: 1,
+      objectKey: targetStateKey,
+      digest: sealedState.contentDigest,
+      runId: "plan_1",
+      ciphertextLength: sealedState.ciphertextLength,
+    }),
+    {
+      customMetadata: { "takosumi-run-id": "plan_1" },
+    },
+  );
+
+  let containerCalled = false;
+  const runner = runnerWithContainer(artifacts, state, {
+    containerFetch() {
+      containerCalled = true;
+      return Promise.resolve(
+        Response.json({ error: "should not destroy twice" }, { status: 500 }),
+      );
+    },
+  });
+
+  const response = await runner.fetch(
+    new Request("https://runner/runs/plan_1", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        kind: "takosumi.opentofu-run@v1",
+        action: "destroy",
+        runId: "plan_1",
+        request: {
+          stateScope: targetScope,
+          planArtifact: {
+            kind: "object-storage",
+            ref: "r2://takos-artifacts/opentofu-plan-runs/plan_1/tfplan",
+            digest: PLAN_DIGEST,
+          },
+        },
+      }),
+    }),
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(containerCalled, false);
+  const payload = (await response.json()) as Record<string, unknown>;
+  assert.equal(payload.status, "succeeded");
+  assert.equal(payload.exitCode, 0);
+  assert.equal(payload.outputs, undefined);
+  assert.equal(payload.rawOutputRef, undefined);
+  const stateField = payload.state as Record<string, unknown>;
+  assert.equal(stateField.generation, 1);
+  assert.equal(stateField.stateRef, targetStateKey);
+  assert.equal(stateField.digest, sealedState.contentDigest);
+});
+
 test("apply with stateScope does not adopt another run's target generation", async () => {
   const calls: string[] = [];
   const artifacts = new FakeR2Bucket();
