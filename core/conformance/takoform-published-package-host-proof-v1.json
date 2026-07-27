@@ -1,21 +1,21 @@
 {
-  "checkoutCommit": "a03ec6e74daea560abd0e18c3ea410213f3aa1f1",
-  "definitionVersion": "1.0.0",
+  "checkoutCommit": "a426a379e2743b4345e868becf3618357c015447",
+  "definitionVersion": "1.0.1",
   "format": "takosumi.takoform-published-package-host-proof-pins@v1",
   "packageIndexPolicy": {
-    "digest": "sha256:7caea552e607cb386b9e06bb23251754bf588577ed5708577634ec7b5aea3237",
+    "digest": "sha256:3cbb521526a2a9b0ce8947ccd7931d8af49a6acb45e946daa4dbc6f75afdfb8e",
     "path": "admission/v1/trust/package-index-policy.json"
   },
-  "packageVersion": "1.0.0",
+  "packageVersion": "1.0.1",
   "publishedSet": {
-    "digest": "sha256:b3da5ca0f1b6b5a34c20cdae0385382b5d1838a5b937b73e37ce56325d0bbaef",
+    "digest": "sha256:9ca91c5d04b7b814bc8108d241c20240ecf40feb2f47280f46fed39faf318732",
     "path": "admission/v1/published-package-set.json"
   },
   "publishedTrust": {
-    "digest": "sha256:57e6fc1f4d5d2df549212c4a8a819db50d239766e120cb8139d20a6e1e46f14e",
+    "digest": "sha256:74a972297d45f84618113cc8a79e29d9c80259d5db102032cd7fba6cd03f4d2a",
     "path": "admission/v1/trust/published-package-trust.json"
   },
-  "releaseCommit": "36723dcf3146c2bdc7ab9d4d4ea165c01ca4e17c",
+  "releaseCommit": "3f5e4e0dd7ac060dfec926d31c5f2d4c80758789",
   "repository": "tako0614/terraform-provider-takoform",
   "trustedRoot": {
     "digest": "sha256:6494e21ea73fa7ee769f85f57d5a3e6a08725eae1e38c755fc3517c9e6bc0b66",
