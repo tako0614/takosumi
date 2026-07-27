@@ -15,6 +15,10 @@ test("BillingTab is provider-neutral and keeps usage/showback visible", () => {
   expect(source).toContain("listWorkspaceUsagePage");
   expect(source).toContain('"workspace.billing"');
   expect(source).toContain("loadPlatformContributions");
+  expect(source).toContain('"inline-frame"');
+  expect(source).toContain("InlinePlatformContribution");
+  expect(source).toContain('"takosumi.platform-contribution-resize@v1"');
+  expect(source).toContain('rel="external"');
   expect(source).not.toContain("Stripe");
   expect(source).not.toContain("checkout");
   expect(source).not.toContain("portal");

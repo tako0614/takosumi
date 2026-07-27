@@ -17,6 +17,7 @@ test("generic extension descriptors accept localized UI contributions", () => {
             id: "example-settings",
             slot: "navigation.manage",
             href: "/extensions/example/settings",
+            presentation: "inline-frame",
             label: "Example settings",
             labels: { ja: "拡張設定" },
           },
@@ -28,6 +29,7 @@ test("generic extension descriptors accept localized UI contributions", () => {
     id: "example-settings",
     slot: "navigation.manage",
     href: "/extensions/example/settings",
+    presentation: "inline-frame",
   });
   expect(routes[0]?.managedProviderProfile).toBe(
     "operator.example.provider.v1",
@@ -35,6 +37,28 @@ test("generic extension descriptors accept localized UI contributions", () => {
   expect(
     matchPlatformExtensionRoute("/extensions/example/settings", routes),
   ).toBeDefined();
+});
+
+test("extension contributions reject unknown presentation modes", () => {
+  expect(() =>
+    platformExtensionRoutes({
+      TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
+        {
+          basePath: "/extensions/example",
+          handlerKey: "EXAMPLE_EXTENSION",
+          contributions: [
+            {
+              id: "unsafe-presentation",
+              slot: "navigation.manage",
+              href: "/extensions/example/settings",
+              presentation: "script",
+              label: "Example settings",
+            },
+          ],
+        },
+      ]),
+    }),
+  ).toThrow("presentation must be link or inline-frame");
 });
 
 test("extension contributions cannot escape their delegated path", () => {

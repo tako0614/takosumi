@@ -57,6 +57,12 @@ export interface PlatformExtensionContribution {
   readonly slot: string;
   /** Same-origin extension-owned destination under this route's basePath. */
   readonly href: `/${string}`;
+  /**
+   * `link` keeps the extension as a full-document destination. `inline-frame`
+   * lets the dashboard host the extension document inside the owning slot
+   * without compiling operator-specific code into the OSS bundle.
+   */
+  readonly presentation?: "link" | "inline-frame";
   readonly label: string;
   readonly description?: string;
   readonly labels?: Readonly<Record<string, string>>;
@@ -387,10 +393,25 @@ function optionalContributions(
       itemLabel,
       "descriptions",
     );
+    const rawPresentation = record.presentation;
+    if (
+      rawPresentation !== undefined &&
+      rawPresentation !== "link" &&
+      rawPresentation !== "inline-frame"
+    ) {
+      throw new TypeError(
+        `${itemLabel}.presentation must be link or inline-frame`,
+      );
+    }
+    const presentation: PlatformExtensionContribution["presentation"] =
+      rawPresentation === "link" || rawPresentation === "inline-frame"
+        ? rawPresentation
+        : undefined;
     return {
       id,
       slot,
       href: href as `/${string}`,
+      ...(presentation ? { presentation } : {}),
       label: contributionLabel,
       ...(description ? { description } : {}),
       ...(labels ? { labels } : {}),

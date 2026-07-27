@@ -4,6 +4,32 @@
  * views they styled. */
 
 /* ===== billing plans ===== */
+.platform-contribution-inline {
+  display: grid;
+  gap: var(--tg-s-3);
+}
+.platform-contribution-heading {
+  display: grid;
+  gap: var(--tg-s-1);
+}
+.platform-contribution-heading h2,
+.platform-contribution-heading p {
+  margin: 0;
+}
+.platform-contribution-heading h2 {
+  font-size: var(--tg-fs-lg);
+}
+.platform-contribution-heading p {
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-sm);
+}
+.platform-contribution-frame {
+  display: block;
+  width: 100%;
+  min-height: 320px;
+  border: 0;
+  background: transparent;
+}
 .av-plan-list {
   list-style: none;
   margin: 0;
