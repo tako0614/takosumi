@@ -1624,6 +1624,81 @@ test("capsule destroy-plan pins the active StateVersion source snapshot instead 
   expect(runner.planJobs[1]?.sourceArchive?.ref).not.toEqual(newerArchiveKey);
 });
 
+test("capsule destroy remains runnable when its applied CompatibilityReport is no longer admissible", async () => {
+  const { store, runner, controller } = await seededController();
+  const capsule = await store.getCapsule("cap_fixture1");
+  expect(capsule).toBeDefined();
+  await store.putCapsuleCompatibilityReport({
+    id: "caprep_applied_then_stale",
+    sourceId: "src_fixture",
+    sourceSnapshotId: "snap_fixture",
+    capsuleId: "cap_fixture1",
+    modulePath: ".",
+    level: "ready",
+    findings: [],
+    providers: [
+      {
+        source: "cloudflare/cloudflare",
+        aliases: [],
+        allowed: true,
+      },
+    ],
+    resources: [
+      {
+        type: "cloudflare_workers_script",
+        count: 1,
+        allowed: true,
+      },
+    ],
+    dataSources: [],
+    provisioners: [],
+    createdAt: "2026-06-06T00:00:00.000Z",
+  });
+  await store.putCapsule({
+    ...capsule!,
+    compatibilityReportId: "caprep_applied_then_stale",
+    compatibilityStatus: "ready",
+  });
+
+  const create = await controller.createCapsulePlan("cap_fixture1");
+  const created = await controller.createApplyRun({
+    planRunId: create.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(create.planRun),
+  });
+  expect(created.applyRun.status).toEqual("succeeded");
+
+  const reportId = create.planRun.compatibilityReportId;
+  expect(reportId).toBeDefined();
+  const report = await store.getCapsuleCompatibilityReport(reportId!);
+  expect(report).toBeDefined();
+  await store.putCapsuleCompatibilityReport({
+    ...report!,
+    level: "needs_patch",
+    findings: [
+      {
+        severity: "warning",
+        code: "provider_credentials_in_source",
+        message: "the post-apply analyzer now requires a source patch",
+      },
+    ],
+  });
+
+  const destroy = await controller.createCapsuleDestroyPlan("cap_fixture1");
+  expect(destroy.planRun.compatibilityReportId).toEqual(reportId);
+  expect(destroy.planRun.policy.reasons).toEqual([]);
+  expect(destroy.planRun.diagnostics).toBeUndefined();
+  expect(destroy.planRun.status).toEqual("waiting_approval");
+  await controller.approveRun(destroy.planRun.id);
+  const destroyed = await controller.createApplyRun({
+    planRunId: destroy.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(destroy.planRun),
+  });
+
+  expect(destroyed.applyRun.status).toEqual("succeeded");
+  expect(runner.destroyJobs).toHaveLength(1);
+  expect((await store.getCapsule("cap_fixture1"))?.status).toEqual("destroyed");
+});
+
 test("capsule plan uses InstallConfig modulePath inside a repo-root SourceSnapshot", async () => {
   const store = new InMemoryOpenTofuControlStore();
   const runner = recordingRunner();

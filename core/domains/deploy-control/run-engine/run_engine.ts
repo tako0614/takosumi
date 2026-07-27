@@ -1628,27 +1628,38 @@ export class RunEngine {
       : capsule.currentStateVersionId
         ? "update"
         : "create";
-    const compatibilityReportFromHint = Boolean(internal.compatibilityReportId);
-    const compatibilityReport = internal.compatibilityReportId
+    const compatibilityReportFromHint =
+      !destroy && Boolean(internal.compatibilityReportId);
+    const compatibilityReport = destroy
       ? await planCreationStage(
-          "compatibility_report_hint",
-          this.#useCapsuleCompatibilityReportHint(
+          "compatibility_report_destroy",
+          this.#compatibilityReportForCapsuleDestroy(
             capsule,
             source,
             snapshot,
-            internal.compatibilityReportId,
             installConfig.modulePath,
           ),
         )
-      : await planCreationStage(
-          "compatibility_report_ensure",
-          this.#ensureCapsuleCompatibilityReport(
-            capsule,
-            source,
-            snapshot,
-            installConfig.modulePath,
-          ),
-        );
+      : internal.compatibilityReportId
+        ? await planCreationStage(
+            "compatibility_report_hint",
+            this.#useCapsuleCompatibilityReportHint(
+              capsule,
+              source,
+              snapshot,
+              internal.compatibilityReportId,
+              installConfig.modulePath,
+            ),
+          )
+        : await planCreationStage(
+            "compatibility_report_ensure",
+            this.#ensureCapsuleCompatibilityReport(
+              capsule,
+              source,
+              snapshot,
+              installConfig.modulePath,
+            ),
+          );
     const {
       request: planRequest,
       capsulePlan,
@@ -1918,6 +1929,60 @@ export class RunEngine {
     return report;
   }
 
+  /**
+   * A CompatibilityReport is an admission gate for create/update, never a
+   * teardown lock. Destroy still reuses a report scoped to the exact active
+   * StateVersion snapshot when one exists, because its provider inventory helps
+   * reconstruct the generated root. Its old readiness verdict is deliberately
+   * not re-applied: policy or analyzer changes after a successful apply must not
+   * make the deployed resources impossible to remove.
+   */
+  async #compatibilityReportForCapsuleDestroy(
+    capsule: Capsule,
+    source: Source,
+    snapshot: SourceSnapshot,
+    modulePath?: string,
+  ): Promise<CapsuleCompatibilityReport | undefined> {
+    const existing = capsule.compatibilityReportId
+      ? await this.#store.getCapsuleCompatibilityReport(
+          capsule.compatibilityReportId,
+        )
+      : undefined;
+    if (
+      existing &&
+      this.#isCompatibilityReportScopedToCapsulePlan(
+        existing,
+        capsule,
+        source,
+        snapshot,
+        modulePath,
+      )
+    ) {
+      return existing;
+    }
+    const preflight =
+      await this.#store.getLatestCapsuleCompatibilityReportForSourceSnapshot(
+        snapshot.id,
+        {
+          sourceId: source.id,
+          capsuleId: capsule.id,
+        },
+      );
+    if (
+      preflight &&
+      this.#isCompatibilityReportScopedToCapsulePlan(
+        preflight,
+        capsule,
+        source,
+        snapshot,
+        modulePath,
+      )
+    ) {
+      return preflight;
+    }
+    return undefined;
+  }
+
   async #useCapsuleCompatibilityReportHint(
     capsule: Capsule,
     source: Source,
@@ -2117,6 +2182,7 @@ export class RunEngine {
    */
   async #evaluateCapsuleCompatibilityPolicy(input: {
     readonly planRunId: string;
+    readonly operation: PlanRun["operation"];
     readonly compatibilityReportId?: string;
     readonly sourceSnapshotId?: string;
     readonly policy?: PolicyConfig;
@@ -2163,9 +2229,12 @@ export class RunEngine {
         `compatibility_report_snapshot_mismatch: plan run ${input.planRunId} uses SourceSnapshot ${input.sourceSnapshotId} but report ${report.id} was created for ${report.sourceSnapshotId}`,
       );
     }
-    reasons.push(
-      ...evaluateCompatibilityReportAgainstPolicy(report, input.policy).reasons,
-    );
+    if (input.operation !== "destroy") {
+      reasons.push(
+        ...evaluateCompatibilityReportAgainstPolicy(report, input.policy)
+          .reasons,
+      );
+    }
     return { reasons, audit };
   }
 
@@ -3411,6 +3480,7 @@ export class RunEngine {
     planRun: PlanRun,
   ): Promise<PlanRun> {
     if (
+      planRun.operation === "destroy" ||
       planRun.compatibilityReportId ||
       !planRun.capsuleId ||
       !planRun.sourceSnapshotId ||
@@ -5180,6 +5250,7 @@ export class RunEngine {
     const runPolicy = await this.#policyForPlanRun(running);
     const compatibilityPolicy = await this.#evaluateCapsuleCompatibilityPolicy({
       planRunId: running.id,
+      operation: running.operation,
       ...(running.compatibilityReportId
         ? { compatibilityReportId: running.compatibilityReportId }
         : {}),
