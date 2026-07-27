@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import {
+  CLOUDFLARE_PUBLIC_URL_PROPAGATION_TIMEOUT_MS,
   PLATFORM_CONTROL_PLANE_SMOKE_KIND,
   capsuleFromLedgerResponse,
   createdCapsuleFromCreateResponse,
@@ -14,6 +15,10 @@ import {
   smokeCloudflareProviderConnectionMatch,
   smokeWorkspaceCloudflareConnectionBody,
 } from "../../scripts/smoke-platform-control-plane.ts";
+
+test("Cloudflare public URL verification allows bounded edge propagation", () => {
+  expect(CLOUDFLARE_PUBLIC_URL_PROPAGATION_TIMEOUT_MS).toBe(180_000);
+});
 
 test("platform smoke binds compatibility checks to the current Capsule", () => {
   const body = smokeSourceCompatibilityCheckBody({

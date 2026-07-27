@@ -22,6 +22,7 @@ import { canonicalProviderSource } from "../contract/provider-env-rules.ts";
 
 export const PLATFORM_CONTROL_PLANE_SMOKE_KIND =
   "takosumi.platform-control-plane-smoke@v2" as const;
+export const CLOUDFLARE_PUBLIC_URL_PROPAGATION_TIMEOUT_MS = 180_000;
 
 const TAKOSUMI_ROOT = resolve(import.meta.dir, "..");
 const DEFAULT_CAPSULE_DIR = resolve(
@@ -2839,7 +2840,10 @@ async function assertPublicWorkerUrl(
   publicOutputs?: Readonly<Record<string, unknown>>,
 ): Promise<void> {
   const url = publicRuntimeUrl(options, publicOutputs);
-  const deadline = Date.now() + 60_000;
+  // The Cloudflare script API may become readable before the workers.dev edge
+  // hostname has converged. Keep the probe fail-closed, but allow the public
+  // data plane a bounded propagation window observed in real release drills.
+  const deadline = Date.now() + CLOUDFLARE_PUBLIC_URL_PROPAGATION_TIMEOUT_MS;
   let lastStatus = 0;
   let lastBody = "";
   while (Date.now() <= deadline) {
