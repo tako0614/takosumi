@@ -5756,6 +5756,41 @@ test("capsule destroy-plan completes and the unified Run is waiting_approval", a
   expect(runner.planJobs[0]!.sourceArchive?.ref).toEqual(ARCHIVE_KEY);
 });
 
+test("capsule destroy-plan stays available when host plan rating is unavailable", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner({
+    planResourceChanges: [
+      {
+        address: "module.child.example_resource.retired",
+        type: "example_resource",
+        actions: ["delete"],
+      },
+    ],
+  });
+  await seedRunnableCapsuleModel(store, { environment: "production" });
+  const controller = controllerWith(store, runner, {
+    defaultBillingSettings: { mode: "showback" },
+    showbackRater: {
+      async ratePlan() {
+        throw new Error("host price catalog unavailable");
+      },
+      async rateUsage() {
+        return { ratingStatus: "unrated", usdMicros: 0 };
+      },
+    },
+  });
+
+  const { planRun } = await controller.createCapsuleDestroyPlan("cap_fixture1");
+
+  expect(planRun.status).toBe("waiting_approval");
+  expect(await controller.getRunCost(planRun.id)).toMatchObject({
+    billingMode: "showback",
+    estimatedUsdMicros: 0,
+    blocked: false,
+    reasons: [],
+  });
+});
+
 test("capsule apply emits generation base+1, records StateVersion + Output, and advances the Capsule", async () => {
   const { store, runner, controller } = await seededController();
 

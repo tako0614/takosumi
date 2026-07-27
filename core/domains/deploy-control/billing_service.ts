@@ -115,12 +115,17 @@ export class BillingService {
       };
     }
 
+    // Destroy must remain available for safe deprovisioning even when a host
+    // price catalog is missing, expired, or the billing subject has no
+    // spendable balance. Deleting native resources is never precharged.
+    //
     // A refresh-only apply adopts provider observations into state/output but
     // does not create, update, replace, or delete native resources. Resource
     // change entries in its plan describe external drift, so they must not be
     // rated or commercially reserved as materialization work. Runner-minute
     // usage is recorded independently by the Run engine.
     if (
+      input.planRun.operation === "destroy" ||
       input.planRun.refreshOnly === true ||
       input.planRun.resourceImport === true
     ) {
