@@ -434,6 +434,7 @@ const RULES: readonly BoundaryRule[] = [
       path.startsWith("contract/") ||
       (path.startsWith("core/") &&
         !path.startsWith("core/adapters/storage/") &&
+        path !== "core/domains/deploy-control/store_row_mappers.ts" &&
         !path.startsWith("core/scripts/")),
     patterns: [
       /\b(?:archiveObjectKey|rawOutputArtifactKey|rawOutputsKey|stateObjectKey|producerStateObjectKey|planArtifactKey|artifactKey|objectKey)\b/,

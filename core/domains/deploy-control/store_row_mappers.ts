@@ -55,7 +55,22 @@ export function normalizeSourceSnapshotRecord(
       "SourceSnapshot must originate from a registered Git Source",
     );
   }
-  return snapshot;
+  const persisted = snapshot as SourceSnapshot & {
+    readonly archiveObjectKey?: unknown;
+  };
+  const archiveRef =
+    typeof persisted.archiveRef === "string" && persisted.archiveRef.trim()
+      ? persisted.archiveRef
+      : typeof persisted.archiveObjectKey === "string" &&
+          persisted.archiveObjectKey.trim()
+        ? persisted.archiveObjectKey
+        : undefined;
+  if (!archiveRef) {
+    throw new TypeError("SourceSnapshot must carry an immutable archiveRef");
+  }
+  const { archiveObjectKey: retiredArchiveObjectKey, ...canonical } = persisted;
+  void retiredArchiveObjectKey;
+  return { ...canonical, archiveRef };
 }
 
 /**

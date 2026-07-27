@@ -64,8 +64,7 @@ function snapshot(overrides: Partial<SourceSnapshot> = {}): SourceSnapshot {
     ref: "main",
     resolvedCommit: "abc123",
     path: ".",
-    archiveRef:
-      "opaque-source-archive-1",
+    archiveRef: "opaque-source-archive-1",
     archiveDigest: "sha256:" + "a".repeat(64),
     archiveSizeBytes: 1024,
     fetchedByRunId: "ssr_0000000000000001",
@@ -83,8 +82,7 @@ function syncRun(overrides: Partial<SourceSyncRun> = {}): SourceSyncRun {
     url: "https://github.com/acme/repo.git",
     ref: "main",
     path: ".",
-    archiveRef:
-      "opaque-source-archive-sync",
+    archiveRef: "opaque-source-archive-sync",
     status: "queued",
     createdAt: "2026-06-06T00:00:30.000Z",
     updatedAt: "2026-06-06T00:00:30.000Z",
@@ -254,4 +252,30 @@ test("d1: source snapshot lookup chunks large Source sets with stable SQL-IN sem
       (item) => item.id,
     ),
   ).toEqual(seeded.map((item) => item.id));
+});
+
+test("d1: persisted pre-archiveRef snapshots read through the migration bridge", async () => {
+  const d1 = new SqliteFakeD1();
+  const store = new CloudflareD1OpenTofuControlStore(d1);
+  const current = snapshot();
+  await store.putSourceSnapshot(current);
+  const { archiveRef: retiredArchiveObjectKey, ...legacyRecord } = current;
+  await d1
+    .prepare(
+      `update source_snapshots
+       set record_json = ?
+       where id = ?`,
+    )
+    .bind(
+      JSON.stringify({
+        ...legacyRecord,
+        archiveObjectKey: retiredArchiveObjectKey,
+      }),
+      current.id,
+    )
+    .run();
+
+  const restored = await store.getSourceSnapshot(current.id);
+  expect(restored?.archiveRef).toBe(retiredArchiveObjectKey);
+  expect(Object.hasOwn(restored ?? {}, "archiveObjectKey")).toBe(false);
 });
