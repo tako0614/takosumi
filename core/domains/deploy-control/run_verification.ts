@@ -197,8 +197,10 @@ export class RunVerificationService {
       );
     }
     this.#assertCompatibilityReportScopedToRun(report, planRun, snapshot);
-    const policy = await this.#policyForPlanRun(planRun);
-    this.#assertCompatibilityReportRunnable(report, policy);
+    if (planRun.operation !== "destroy") {
+      const policy = await this.#policyForPlanRun(planRun);
+      this.#assertCompatibilityReportRunnable(report, policy);
+    }
     return {
       ref: snapshot.archiveRef,
       digest: snapshot.archiveDigest,
@@ -409,8 +411,9 @@ export class RunVerificationService {
    * Capsule Gate precondition (core-spec §6 / §26): when a PlanRun was created
    * from a Capsule that has a reviewed CompatibilityReport, the queued
    * plan/apply consumer must re-read it before provider credential mint. Only
-   * Only `ready` reports are runnable; `needs_patch` and `unsupported` stop
-   * before credentials are issued.
+   * `ready` reports are runnable for create/update. Destroy verifies the
+   * same immutable report scope but does not reuse its admission verdict:
+   * analyzer or policy drift after apply must never make teardown impossible.
    */
   async assertCapsuleCompatibilityAllowsRun(planRun: PlanRun): Promise<void> {
     if (!planRun.compatibilityReportId) return;
@@ -450,6 +453,7 @@ export class RunVerificationService {
         { reason: "compatibility_report_capsule_mismatch" },
       );
     }
+    if (planRun.operation === "destroy") return;
     const policy = await this.#policyForPlanRun(planRun);
     this.#assertCompatibilityReportRunnable(report, policy);
   }
