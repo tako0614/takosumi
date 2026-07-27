@@ -56,6 +56,7 @@ import {
   decodeActorContext,
   TAKOSUMI_INTERNAL_ACTOR_HEADER,
 } from "takosumi-contract/internal/rpc";
+import { constantTimeEqualsString } from "takosumi-contract/internal/crypto";
 import {
   TAKOSUMI_OPERATOR_CAPABILITY_KEYS,
   type TakosumiAdapterCapabilities,
@@ -324,6 +325,8 @@ export async function createWorkerServiceApp(
     adapterCapabilities: resourceShapeCapabilities.adapters,
     operatorCapabilities,
     resolveResourceShapeActor: resourceShapeActorFromRequest,
+    authorizeResourceShapeForceDelete: (input) =>
+      operatorResourceShapeForceDeleteAuthorized(env, input),
     opentofuRunner,
     ...(options.runnerExecutors
       ? { opentofuRunnerExecutors: options.runnerExecutors }
@@ -639,6 +642,39 @@ function resourceShapeActorFromRequest(request: Request): ActorContext {
     roles: ["owner"],
     requestId: crypto.randomUUID(),
   };
+}
+
+/**
+ * The force-delete route is an operator break-glass operation, not a Workspace
+ * owner capability. The platform ingress rewrites ordinary account/service
+ * sessions into an internal actor header before forwarding the deploy-control
+ * bearer, so require both the raw operator bearer and the absence of that
+ * delegated actor. This leaves normal ownership checks intact for every
+ * customer-facing request.
+ */
+export function operatorResourceShapeForceDeleteAuthorized(
+  env: Pick<CloudflareWorkerEnv, "TAKOSUMI_DEPLOY_CONTROL_TOKEN">,
+  input: {
+    readonly actor: ActorContext;
+    readonly request: Request;
+  },
+): boolean {
+  const expected =
+    typeof env.TAKOSUMI_DEPLOY_CONTROL_TOKEN === "string"
+      ? env.TAKOSUMI_DEPLOY_CONTROL_TOKEN
+      : undefined;
+  const authorization = input.request.headers.get("authorization");
+  const prefix = "Bearer ";
+  const bearer = authorization?.startsWith(prefix)
+    ? authorization.slice(prefix.length)
+    : undefined;
+  return Boolean(
+    expected &&
+      bearer &&
+      input.actor.actorAccountId === "platform-resource-shape" &&
+      input.actor.principalKind === undefined &&
+      constantTimeEqualsString(bearer, expected),
+  );
 }
 
 type MutablePartial<T> = { -readonly [K in keyof T]?: T[K] };
