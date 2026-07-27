@@ -20,6 +20,8 @@ const ARCHIVE_BYTES = new Uint8Array([
 ]);
 const ARCHIVE_KEY =
   "workspaces/spc_1/sources/src_1/snapshots/snap_1/source.tar.zst";
+const LEGACY_ARCHIVE_KEY =
+  "spaces/space_00000001/sources/src_00000001/snapshots/snap_00000001/source.tar.zst";
 
 async function digestOf(bytes: Uint8Array): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", bytes);
@@ -119,6 +121,59 @@ test("sourceArchive restore fails closed when the R2 object digest does not matc
   );
 
   assert.equal(response.status, 500);
+});
+
+test("sourceArchive restore accepts a digest-pinned pre-Workspace persisted key", async () => {
+  const calls: string[] = [];
+  const source = new FakeR2Bucket();
+  const artifacts = new FakeR2Bucket();
+  const digest = await digestOf(ARCHIVE_BYTES);
+  await source.put(LEGACY_ARCHIVE_KEY, ARCHIVE_BYTES);
+  const runner = runnerWithContainer(artifacts, source, {
+    async containerFetch(request) {
+      const path = new URL(request.url).pathname;
+      calls.push(`${request.method} ${path}`);
+      if (request.method === "GET" && path === "/healthz") {
+        return Response.json({ ok: true });
+      }
+      if (
+        request.method === "PUT" &&
+        path === "/runs/plan_legacy/source-archive/restore"
+      ) {
+        return Response.json({ ok: true });
+      }
+      if (request.method === "POST" && path === "/runs/plan_legacy") {
+        return Response.json({ status: "succeeded", exitCode: 0 });
+      }
+      if (
+        request.method === "GET" &&
+        path === "/runs/plan_legacy/artifacts/tfplan-json"
+      ) {
+        return Response.json({ error: "not found" }, { status: 404 });
+      }
+      return Response.json({ error: "unexpected" }, { status: 500 });
+    },
+  });
+
+  const response = await runner.fetch(
+    new Request("https://runner/runs/plan_legacy", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        kind: "takosumi.opentofu-run@v1",
+        action: "plan",
+        runId: "plan_legacy",
+        request: {
+          sourceArchive: { ref: LEGACY_ARCHIVE_KEY, digest },
+        },
+      }),
+    }),
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(calls[0], "GET /healthz");
+  assert.equal(calls[1], "PUT /runs/plan_legacy/source-archive/restore");
+  assert.ok(calls.includes("POST /runs/plan_legacy"));
 });
 
 test("sourceArchive restore rejects an unsafe ref (traversal) and never reads R2", async () => {
