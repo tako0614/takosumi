@@ -35,6 +35,12 @@ export interface PlatformExtensionRoute {
   /** Scopes required from platform token credentials. */
   readonly requiredScopes?: readonly string[];
   /**
+   * Binds a caller-supplied `workspaceId` query parameter to verified platform
+   * access before dispatch. Optional mode preserves operator-wide reads when
+   * the parameter is absent.
+   */
+  readonly workspaceContext?: "query-required" | "query-optional";
+  /**
    * Exact opaque profile accepted for managed-provider run tokens. Omitted
    * routes reject that token class. It is never derived from basePath or host.
    */
@@ -152,6 +158,15 @@ function platformExtensionRouteFromJson(
     throw new TypeError(`${label}.handlerKey must be a non-empty string`);
   }
   const authMode = platformExtensionAuthMode(record.authMode, label);
+  const workspaceContext = platformExtensionWorkspaceContext(
+    record.workspaceContext,
+    label,
+  );
+  if (workspaceContext && authMode === "handler") {
+    throw new TypeError(
+      `${label}.workspaceContext requires platform authentication`,
+    );
+  }
   const requiredScopes = optionalStringArray(
     record.requiredScopes,
     label,
@@ -208,6 +223,7 @@ function platformExtensionRouteFromJson(
     basePath: basePath as `/${string}`,
     handlerKey,
     ...(authMode ? { authMode } : {}),
+    ...(workspaceContext ? { workspaceContext } : {}),
     ...(requiredScopes ? { requiredScopes } : {}),
     ...(managedProviderProfile ? { managedProviderProfile } : {}),
     ...(capabilities.length > 0 ? { capabilities } : {}),
@@ -223,6 +239,17 @@ function platformExtensionAuthMode(
   if (value === undefined) return undefined;
   if (value === "platform" || value === "handler") return value;
   throw new TypeError(`${label}.authMode must be platform or handler`);
+}
+
+function platformExtensionWorkspaceContext(
+  value: unknown,
+  label: string,
+): "query-required" | "query-optional" | undefined {
+  if (value === undefined) return undefined;
+  if (value === "query-required" || value === "query-optional") return value;
+  throw new TypeError(
+    `${label}.workspaceContext must be query-required or query-optional`,
+  );
 }
 
 function mergePlatformExtensionRoutes(
@@ -255,6 +282,7 @@ function mergePlatformExtensionRoutes(
       existing &&
       (existing.handlerKey !== route.handlerKey ||
         (existing.authMode ?? "platform") !== (route.authMode ?? "platform") ||
+        existing.workspaceContext !== route.workspaceContext ||
         !sameStrings(existing.requiredScopes, route.requiredScopes) ||
         existing.managedProviderProfile !== route.managedProviderProfile)
     ) {
