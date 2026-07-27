@@ -4,6 +4,7 @@ import type {
   R2Object,
   R2PutOptions,
 } from "../bindings.ts";
+import { isLegacySourceArchiveRestoreRef } from "../legacy_source_archive_restore.ts";
 import { StateArtifactCrypto } from "../state_crypto.ts";
 import { redactString } from "takosumi-contract/redaction";
 
@@ -705,7 +706,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     sourceArchive: SourceArchiveRestore,
     baseUrl: URL,
   ): Promise<void> {
-    assertSafeSourceArchiveKey(sourceArchive.ref);
+    assertSafeSourceArchiveRestoreKey(sourceArchive.ref);
     const bucket = this.env.R2_SOURCE;
     if (!bucket) {
       throw new Error(
@@ -2058,6 +2059,15 @@ function assertSafeSourceArchiveKey(key: string): void {
     !key.startsWith("workspaces/")
   ) {
     throw new Error(`unsafe source archive object key: ${key}`);
+  }
+}
+
+function assertSafeSourceArchiveRestoreKey(key: string): void {
+  try {
+    assertSafeSourceArchiveKey(key);
+  } catch (error) {
+    if (isLegacySourceArchiveRestoreRef(key)) return;
+    throw error;
   }
 }
 

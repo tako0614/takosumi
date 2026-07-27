@@ -448,9 +448,10 @@ const RULES: readonly BoundaryRule[] = [
     message:
       "current artifact storage must allocate canonical Workspace/Capsule/Resource keys; retired Space/Installation layouts are migration data only",
     appliesTo: (path) =>
-      path.startsWith("core/adapters/storage/") ||
-      path.startsWith("worker/") ||
-      path === "deploy/node-postgres/src/local-opentofu-runner.ts",
+      (path.startsWith("core/adapters/storage/") ||
+        path.startsWith("worker/") ||
+        path === "deploy/node-postgres/src/local-opentofu-runner.ts") &&
+      path !== "worker/src/legacy_source_archive_restore.ts",
     patterns: [/\bspaces\//, /\binstallations\//],
   },
   {
