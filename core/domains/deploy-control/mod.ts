@@ -948,6 +948,15 @@ export interface PlanRunInternalContext {
   readonly capsuleContext?: PlanRunCapsuleContext;
   /** First-class Resource run subject; mutually exclusive with Capsule context. */
   readonly resourceContext?: PlanRunResourceContext;
+  /**
+   * Narrow delete-only bridge for pre-v1 source-less Capsules: retired Resource
+   * Shape generated roots and the former upload projection. The Capsule destroy
+   * path sets this only after proving one of those exact applied-plan identities
+   * and supplies an empty operator module so OpenTofu can destroy the resources
+   * that remain in persisted state. It is not a general source-less Stack
+   * execution mode and cannot create or update resources.
+   */
+  readonly legacySourcelessDestroyRecovery?: true;
   readonly sourceSnapshotId?: string;
   readonly compatibilityReportId?: string;
   readonly lifecycleActions?: InstallConfig["lifecycleActions"];

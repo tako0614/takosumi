@@ -1122,7 +1122,26 @@ export class RunEngine {
     requireNonEmptyString(workspaceId, "workspaceId");
     const requestCapsuleId = request.capsuleId;
     const resourceContext = internal.resourceContext;
-    if (resourceContext) {
+    const operation =
+      request.operation ?? (requestCapsuleId ? "update" : "create");
+    const legacySourcelessDestroyRecovery =
+      internal.legacySourcelessDestroyRecovery === true;
+    if (legacySourcelessDestroyRecovery) {
+      if (
+        resourceContext ||
+        !requestCapsuleId ||
+        operation !== "destroy" ||
+        request.source.kind !== "operator_module" ||
+        !internal.genericRootDispatch?.generatedRoot ||
+        !internal.genericRootDispatch.operatorModule ||
+        internal.sourceSnapshotId !== undefined
+      ) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          "legacy source-less recovery requires an exact Capsule destroy with an operator module",
+        );
+      }
+    } else if (resourceContext) {
       if (requestCapsuleId) {
         throw new OpenTofuControllerError(
           "invalid_argument",
@@ -1146,8 +1165,6 @@ export class RunEngine {
     const profile = await this.#requireRunnerProfile(
       request.runnerProfileId ?? this.#defaultRunnerProfileId,
     );
-    const operation =
-      request.operation ?? (requestCapsuleId ? "update" : "create");
     validateOperation(operation);
     if (
       internal.refreshOnly === true &&
@@ -1185,6 +1202,15 @@ export class RunEngine {
       throw new OpenTofuControllerError(
         "failed_precondition",
         "capsule is not available to this workspace",
+      );
+    }
+    if (
+      legacySourcelessDestroyRecovery &&
+      (!capsule || capsule.sourceId || capsule.currentStateGeneration <= 0)
+    ) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "legacy source-less recovery is limited to stateful pre-v1 Capsules without a Source",
       );
     }
     // SECURITY (operation label must match the target): the route derives the
@@ -1267,10 +1293,11 @@ export class RunEngine {
         );
     }
     const planRunId = this.#newId("plan");
-    const sourceSnapshotId = resourceContext
-      ? undefined
-      : (internal.sourceSnapshotId ??
-        (await this.#resolvePlanSourceSnapshotId(capsule!)));
+    const sourceSnapshotId =
+      resourceContext || legacySourcelessDestroyRecovery
+        ? undefined
+        : (internal.sourceSnapshotId ??
+          (await this.#resolvePlanSourceSnapshotId(capsule!)));
     const baseStateGeneration =
       internal.baseStateGeneration ?? capsule?.currentStateGeneration ?? 0;
     let planRun: PlanRun = {
@@ -1565,12 +1592,21 @@ export class RunEngine {
       );
     }
     const runnerProfileId = internal.runnerProfileId ?? installConfig.runnerId;
+    const runnerProfile = await this.#requireRunnerProfile(
+      runnerProfileId ?? this.#defaultRunnerProfileId,
+    );
     const lifecycleActions = lifecycleActionsForPlan(
       installConfig,
-      await this.#requireRunnerProfile(
-        runnerProfileId ?? this.#defaultRunnerProfileId,
-      ),
+      runnerProfile,
     );
+    if (destroy && !capsule.sourceId) {
+      return await this.#createLegacySourcelessDestroyPlan({
+        capsule,
+        runnerProfile,
+        context,
+        ...(lifecycleActions ? { lifecycleActions } : {}),
+      });
+    }
     const stored = await planCreationStage(
       "source_load",
       this.#store.getSource(capsule.sourceId),
@@ -2531,12 +2567,21 @@ export class RunEngine {
             capsuleId: interfaceCapsuleId,
           })
         : [];
-    const workspaceOutputAllowlist = genericCapsuleWorkspaceOutputAllowlist(
-      context.outputAllowlist,
-      undefined,
-      compatibilityReport?.rootModuleOutputs,
-      interfaceSources,
-    );
+    // A destroy plan consumes the existing state and does not publish new
+    // Outputs. Re-emitting historical output projections can make teardown
+    // impossible when a newer source no longer declares one of those outputs.
+    // Keep the generated destroy root output-free; pre-destroy lifecycle hooks
+    // read the last committed Output ledger row instead.
+    const destroy = request.operation === "destroy";
+    const workspaceOutputAllowlist = destroy
+      ? {}
+      : genericCapsuleWorkspaceOutputAllowlist(
+          context.outputAllowlist,
+          undefined,
+          compatibilityReport?.rootModuleOutputs,
+          interfaceSources,
+        );
+    const outputAllowlist = destroy ? {} : context.outputAllowlist;
     const wrapperProviderBindings = context.providerBindings.filter(
       (binding) =>
         binding.alias !== undefined ||
@@ -2554,7 +2599,7 @@ export class RunEngine {
     return {
       ...(generatedRoot ? { generatedRoot } : {}),
       workspaceOutputAllowlist,
-      outputAllowlist: context.outputAllowlist,
+      outputAllowlist,
       ...(context.sourceBuild ? { sourceBuild: context.sourceBuild } : {}),
       ...(context.lifecycleActions
         ? { lifecycleActions: context.lifecycleActions }
@@ -2654,9 +2699,105 @@ export class RunEngine {
     return await this.#currentStateSourceSnapshotId(capsule);
   }
 
+  async #createLegacySourcelessDestroyPlan(input: {
+    readonly capsule: Capsule;
+    readonly runnerProfile: RunnerProfile;
+    readonly context: DeployControlActorContext;
+    readonly lifecycleActions?: InstallConfig["lifecycleActions"];
+  }): Promise<PlanRunResponse> {
+    const { capsule, runnerProfile } = input;
+    const appliedPlan = await this.#currentStatePlanRunForCapsule(capsule);
+    if (!appliedPlan || !isEligibleLegacySourcelessPlan(appliedPlan)) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `capsule ${capsule.id} has no Git Source and is not an eligible pre-v1 source-less Capsule`,
+        { reason: "legacy_sourceless_destroy_ineligible" },
+      );
+    }
+    const requiredProviders = normalizeProviders(appliedPlan.requiredProviders);
+    if (requiredProviders.length === 0) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `capsule ${capsule.id} legacy source-less plan has no provider identity`,
+        { reason: "legacy_sourceless_destroy_ineligible" },
+      );
+    }
+    const resolvedBindings = await this.#resolveCapsuleProviderBindingsForRun(
+      capsule,
+      providersRequiringProviderBindings(requiredProviders, runnerProfile),
+    );
+    const generatedRoot = generateOpenTofuChildModuleRoot({
+      requiredProviders,
+      inputs: {},
+      outputAllowlist: {},
+      providerBindings: providerBindingsFromResolved(resolvedBindings),
+    });
+    const childVersions =
+      generatedRoot.files["versions.tf"] ?? "terraform {}\n";
+    const sourceDigest = await stableJsonDigest({
+      kind: "legacy_generated_root_destroy_recovery",
+      capsuleId: capsule.id,
+      appliedPlanRunId: appliedPlan.id,
+      sourceSnapshotId: appliedPlan.sourceSnapshotId,
+      requiredProviders,
+    });
+    return await this.createPlanRun(
+      {
+        workspaceId: capsule.workspaceId,
+        capsuleId: capsule.id,
+        source: {
+          kind: "operator_module",
+          digest: sourceDigest,
+        },
+        operation: "destroy",
+        requiredProviders,
+        runnerProfileId: runnerProfile.id,
+      },
+      input.context,
+      {
+        capsuleContext: {
+          workspaceId: capsule.workspaceId,
+          capsuleId: capsule.id,
+          environment: capsule.environment,
+        },
+        baseStateGeneration: capsule.currentStateGeneration,
+        legacySourcelessDestroyRecovery: true,
+        genericRootDispatch: {
+          generatedRoot,
+          operatorModule: {
+            files: [
+              {
+                path: "versions.tf",
+                text: [
+                  "# Delete-only bridge for state created by a retired pre-v1 source-less flow.",
+                  childVersions,
+                ].join("\n"),
+              },
+            ],
+          },
+          workspaceOutputAllowlist: {},
+          outputAllowlist: {},
+          ...(input.lifecycleActions
+            ? { lifecycleActions: input.lifecycleActions }
+            : {}),
+        },
+        ...(input.lifecycleActions
+          ? { lifecycleActions: input.lifecycleActions }
+          : {}),
+      },
+    );
+  }
+
   async #currentStateSourceSnapshotId(
     capsule: Capsule,
   ): Promise<string | undefined> {
+    return (await this.#currentStatePlanRunForCapsule(capsule))
+      ?.sourceSnapshotId;
+  }
+
+  async #currentStatePlanRunForCapsule(
+    capsule: Capsule,
+  ): Promise<PlanRun | undefined> {
     if (capsule.currentStateGeneration <= 0) return undefined;
     const snapshots = await this.#store.listStateVersions(
       capsule.id,
@@ -2666,7 +2807,7 @@ export class RunEngine {
       (snapshot) => snapshot.generation === capsule.currentStateGeneration,
     );
     return current
-      ? await this.#sourceSnapshotIdForStateVersion(current, new Set())
+      ? await this.#planRunForStateVersion(current, new Set())
       : undefined;
   }
 
@@ -2674,13 +2815,20 @@ export class RunEngine {
     snapshot: StateVersion,
     seenStateVersionIds: Set<string>,
   ): Promise<string | undefined> {
+    return (await this.#planRunForStateVersion(snapshot, seenStateVersionIds))
+      ?.sourceSnapshotId;
+  }
+
+  async #planRunForStateVersion(
+    snapshot: StateVersion,
+    seenStateVersionIds: Set<string>,
+  ): Promise<PlanRun | undefined> {
     if (seenStateVersionIds.has(snapshot.id)) return undefined;
     seenStateVersionIds.add(snapshot.id);
 
     const applyRun = await this.#store.getApplyRun(snapshot.createdByRunId);
     if (applyRun) {
-      const planRun = await this.#store.getPlanRun(applyRun.planRunId);
-      return planRun?.sourceSnapshotId;
+      return await this.#store.getPlanRun(applyRun.planRunId);
     }
 
     const restoreRun = await this.#store.getBackupRun(snapshot.createdByRunId);
@@ -2699,10 +2847,7 @@ export class RunEngine {
       (candidate) => candidate.id === restoreRun.restoredFromStateVersionId,
     );
     return restoredSource
-      ? await this.#sourceSnapshotIdForStateVersion(
-          restoredSource,
-          seenStateVersionIds,
-        )
+      ? await this.#planRunForStateVersion(restoredSource, seenStateVersionIds)
       : undefined;
   }
 
@@ -7664,4 +7809,29 @@ export class RunEngine {
     validatePlannedCapsuleCurrent({ planRun, capsule: capsule });
     return capsule;
   }
+}
+
+function isEligibleLegacySourcelessPlan(planRun: PlanRun): boolean {
+  const source = planRun.source as unknown;
+  if (!source || typeof source !== "object" || Array.isArray(source)) {
+    return false;
+  }
+  const record = source as Readonly<Record<string, unknown>>;
+  const retiredGeneratedRoot =
+    record.kind === "local" &&
+    typeof record.path === "string" &&
+    record.path.startsWith("/resource-shape/");
+  const retiredUploadProjection =
+    record.kind === "git" &&
+    typeof record.url === "string" &&
+    record.url.startsWith("https://uploads.takosumi.com/") &&
+    typeof record.commit === "string" &&
+    /^[0-9a-f]{64}$/i.test(record.commit);
+  return (
+    (retiredGeneratedRoot || retiredUploadProjection) &&
+    typeof planRun.sourceSnapshotId === "string" &&
+    planRun.sourceSnapshotId.length > 0 &&
+    typeof planRun.appliedApplyRunId === "string" &&
+    planRun.appliedApplyRunId.length > 0
+  );
 }

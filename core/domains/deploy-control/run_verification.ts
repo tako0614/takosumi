@@ -142,18 +142,7 @@ export class RunVerificationService {
       );
     }
     const ctx = planRun.capsuleContext;
-    if (!ctx || !planRun.sourceSnapshotId) return {};
-    const snapshot = await this.#store.getSourceSnapshot(
-      planRun.sourceSnapshotId,
-    );
-    if (!snapshot) {
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        `source_snapshot_missing: plan run ${planRun.id} references ` +
-          `SourceSnapshot ${planRun.sourceSnapshotId} which is no longer present`,
-        { reason: "source_snapshot_missing" },
-      );
-    }
+    if (!ctx) return {};
     const stateScope = await this.#stateScope({
       workspaceId: ctx.workspaceId,
       subject: {
@@ -167,6 +156,23 @@ export class RunVerificationService {
     // the producer StateVersion pinned by the plan's DependencySnapshot so
     // apply/destroy use the same state bytes the plan reviewed.
     const depStates = await this.#resolveRemoteStateDispatch(planRun);
+    if (!planRun.sourceSnapshotId) {
+      return {
+        stateScope,
+        ...(depStates.length > 0 ? { depStates } : {}),
+      };
+    }
+    const snapshot = await this.#store.getSourceSnapshot(
+      planRun.sourceSnapshotId,
+    );
+    if (!snapshot) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `source_snapshot_missing: plan run ${planRun.id} references ` +
+          `SourceSnapshot ${planRun.sourceSnapshotId} which is no longer present`,
+        { reason: "source_snapshot_missing" },
+      );
+    }
     const sourceArchive = await this.#dispatchSourceArchive(planRun, snapshot);
     return {
       stateScope,
