@@ -1,8 +1,8 @@
 /**
  * Takosumi Capsule Store (TCS) read client — the small open read spec a store
  * node exposes (GET /tcs/v1/listings etc.). The store is a SEPARATE product
- * (`takosumi-store`). The Store-owned runtime parser is consumed from the
- * adjacent source workspace so the two products execute the same wire rules.
+ * (`takosumi-store`). This repository carries its own consumer implementation
+ * of the open wire contract so standalone checkouts remain buildable.
  *
  * Scoped to one server base url; aggregation across many servers lives in
  * tcs-aggregate.ts. Reads are unauthenticated and cross-origin (the store sends
@@ -13,7 +13,7 @@ import type { GitAddress } from "takosumi-contract";
 import {
   parseTcsListingSource,
   tcsListingSourceIdentity,
-} from "../../../../takosumi-store/spec/listing-source.ts";
+} from "./tcs-listing-source";
 
 export interface TcsLocalizedText {
   readonly ja: string;
