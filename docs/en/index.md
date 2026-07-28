@@ -107,12 +107,11 @@ One-off gap:
   use generic-env ProviderConnection and an ordinary OpenTofu module.
 ```
 
-The `takosumi/takosumi` provider is discontinued and must not be used for new
-configuration. Existing providers run unchanged through the Stack flow. Use
-Takoform for portable Service Forms and Form-backed Resource Interface
-descriptors, service-side InstallConfig blueprints for Capsule Interfaces, and
-Takosumi API, CLI, or dashboard for operator administration. Old provider
-source remains only for existing-state migration and rollback custody.
+Takosumi does not ship a first-party Terraform/OpenTofu provider. Existing
+providers run unchanged through the Stack flow. Use Takoform for portable
+Service Forms and Form-backed Resource Interface descriptors, service-side
+InstallConfig blueprints for Capsule Interfaces, and the Takosumi API, CLI, or
+dashboard for operator administration.
 
 ## Compatibility API
 

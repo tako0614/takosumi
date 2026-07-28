@@ -1136,36 +1136,6 @@ test("platform assets are served with immutable cache headers", async () => {
   expect(await response.text()).toBe("console.log('ok')");
 });
 
-test("platform provider mirror assets use mirror-aware cache headers", async () => {
-  const indexResponse = withPlatformAssetCacheHeaders(
-    new Request(
-      "https://app.takosumi.com/opentofu/providers/registry.opentofu.org/hashicorp/random/index.json",
-    ),
-    new URL(
-      "https://app.takosumi.com/opentofu/providers/registry.opentofu.org/hashicorp/random/index.json",
-    ),
-    new Response('{"versions":{}}', {
-      headers: { "cache-control": "public, max-age=0, must-revalidate" },
-    }),
-  );
-  expect(indexResponse.headers.get("cache-control")).toBe("no-cache");
-
-  const archiveResponse = withPlatformAssetCacheHeaders(
-    new Request(
-      "https://app.takosumi.com/opentofu/providers/registry.opentofu.org/hashicorp/random/terraform-provider-random_3.7.2_linux_amd64.zip",
-    ),
-    new URL(
-      "https://app.takosumi.com/opentofu/providers/registry.opentofu.org/hashicorp/random/terraform-provider-random_3.7.2_linux_amd64.zip",
-    ),
-    new Response("zip", {
-      headers: { "cache-control": "public, max-age=0, must-revalidate" },
-    }),
-  );
-  expect(archiveResponse.headers.get("cache-control")).toBe(
-    "public, max-age=31536000, immutable",
-  );
-});
-
 test("platform asset cache helper leaves non-assets untouched", () => {
   const response = new Response("ok", {
     headers: { "cache-control": "no-store" },

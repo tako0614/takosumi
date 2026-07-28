@@ -267,16 +267,15 @@ non-secret speed settings. This is not a cross-run source-sync cache.
 
 The Service Form host flow starts from typed Resource objects with an exact
 FormRef and resolves them to Targets. Since D1 v46 / Postgres v94 the current
-API/provider/state additively persists exact FormRef and package-digest evidence
+API/state additively persists exact FormRef and package-digest evidence
 on Resource and ResolutionLock records. Resource Shape kind remains the current
-wire/provider compatibility identity, not a substitute for the persisted Form
+wire compatibility identity, not a substitute for the persisted Form
 identity. Bounded production-ledger backfill and readback are operator readiness
 evidence separate from repository implementation. Existing Resource IDs, kinds,
 ResolutionLocks, Runs, and state remain stable throughout migration; no second
 ledger is created. Objects can be
 submitted through the `/v1/resources` Deploy API, the portable Takoform typed
-client, Takosumi CLI/dashboard, or Kubernetes CRDs. Discontinued `takosumi_*`
-HCL remains only as existing-state migration/rollback custody:
+client, Takosumi CLI/dashboard, or Kubernetes CRDs:
 
 ```text
 exact FormRef + Resource
@@ -313,16 +312,10 @@ The absence of a standard surface does not justify a catch-all provider.
 One-off gaps and external infrastructure stay in generic-env
 ProviderConnections and normal OpenTofu modules. A repeated provider-neutral
 Service Form requires an exact Takoform Form Package, typed client schema,
-planner/adapter/import/drift/state behavior, and conformance evidence. Current
-`takosumi_*` form resources remain compatibility state; all new typed
-form-client authority belongs to Takoform. Takosumi operator objects are
-authored through API, CLI, or dashboard; the discontinued Takosumi-owned
-provider is not used.
-
-`takosumi/takosumi` is discontinued and retained only for existing-state
-migration and rollback custody. Takoform owns portable authoring; direct API,
-CLI, and dashboard own operator/admin operations and converge on the same
-managed-service lifecycle.
+planner/adapter/import/drift/state behavior, and conformance evidence. All typed
+form-client authority belongs to Takoform. Takosumi ships no first-party
+Terraform/OpenTofu provider; direct API, CLI, and dashboard own operator/admin
+operations and converge on the same managed-service lifecycle.
 
 Takos is a representative consumer of this rule. Takos should be described as
 the composition of generic Service Form-backed Resources it actually needs,
@@ -369,8 +362,7 @@ through resolver/policy, not through a hard-coded provider binary allow-list.
 That extension is for backends of an existing typed shape. Adding a new
 portable HCL-facing Form requires a Takoform schema/Form Package/typed-provider
 release plus host conformance so OpenTofu can keep typed validation, plan
-diffs, import, and state upgrade behavior. It does not revive or republish the
-discontinued Takosumi provider.
+diffs, import, and state upgrade behavior.
 
 Provider capability documents may include operator-defined adapter tokens as
 additional boolean keys under `adapters`. Known adapter keys remain

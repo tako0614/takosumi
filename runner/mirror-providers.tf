@@ -1,7 +1,7 @@
 # Minimal config used ONLY at image-build time to drive `tofu providers mirror`.
 # It pins one reference-image cache baked into the filesystem mirror
 # (/opt/opentofu/provider-mirror). This file controls image contents only; it is
-# not a Takosumi provider catalog or an execution allowlist.
+# not a product catalog or an execution allowlist.
 #
 # Pin exact provider versions here so a matching source lockfile can reuse the
 # cache. Mirror-only execution is an explicit per-run policy and fail-closes via

@@ -7,7 +7,7 @@ Resolver / Planner / Runner / Reconciler,
 Target / Credential / OIDC / Secret / Policy, the shared Interface /
 InterfaceBinding API, the generic noncommercial Offering catalog / resolver /
 selection engine, Compatibility API framework, and Adapter system described
-in `docs/internal/final-plan.md`. The current Resource Shape API/provider/state
+in `docs/internal/final-plan.md`. The current Resource Shape API/state
 is a migration compatibility surface. Portable Service Form / FormRef /
 data-only Form Package / typed form-provider / interoperability/conformance
 authority moves to an independent OSS project after its public identity gates.
@@ -75,7 +75,7 @@ Implementation / Target / TargetPool / Credential /
 Policy / Adapter / ResolutionLock / NativeResource / Condition / Agent /
 AgentPool. The shared layer adds Interface / InterfaceBinding / Principal /
 Role / RoleBinding / ServiceAccount. `ResourceShape` remains the current
-wire/API/provider/state alias. `Space` is
+wire/API/state alias. `Space` is
 valid as a `takosumi.dev/v1alpha1` namespace/policy scope; it is not the old
 pre-v1 Space / Installation ledger model. The old Installation /
 OutputSnapshot / StateSnapshot / Deployment / Provider Catalog / `own_key` /
@@ -139,8 +139,8 @@ Three principles are load-bearing for new work:
 - **Service Form host API**: Service Form authoring is not repository metadata. Takosumi Core has zero implicit Form
   Packages and plain OpenTofu repos remain valid. `/v1/resources` is the current compatibility Deploy API and sole
   lifecycle authority for managed Resources; a future portable route must delegate to the same row/ledger.
-  The mixed `takosumi/takosumi` provider is discontinued historical state custody. Takoform owns portable typed Forms
-  and Form Package Interface descriptors; Takosumi API/CLI/dashboard owns operator administration. None owns host
+  Takosumi ships no first-party Terraform/OpenTofu provider. Takoform owns portable typed Forms and Form Package
+  Interface descriptors; Takosumi API/CLI/dashboard owns operator administration. None owns host
   availability, backend selection, state, or pricing outside the canonical Takosumi lifecycle.
 - **Compatibility profiles by capability**: S3 / OCI / CloudEvents / Kubernetes CRD surfaces are
   capability-versioned protocol surfaces for Takosumi-managed capabilities. Control-plane profiles translate into

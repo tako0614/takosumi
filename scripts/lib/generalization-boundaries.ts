@@ -147,8 +147,7 @@ const RULES: readonly BoundaryRule[] = [
     // module Output names, not runtime inference or a reserved schema.
     appliesTo: (path) =>
       isImplementationPath(path) &&
-      path !== "deploy/reference-app-install-configs.ts" &&
-      !isExplicitInterfaceMappingPath(path),
+      path !== "deploy/reference-app-install-configs.ts",
     patterns: [
       /["'`](?:mcp_url|file_handler_url|service_graph|runtime_service)["'`]/,
       /\.endsWith\(\s*["'`](?:_url|_endpoint|_token)["'`]\s*\)/,
@@ -671,9 +670,7 @@ const RULES: readonly BoundaryRule[] = [
     appliesTo: (path) =>
       path === "contract/resource-shape.ts" ||
       path === "core/domains/resource-shape/planner.ts" ||
-      path === "core/domains/resource-shape/resolver.ts" ||
-      path === "provider/internal/provider/resource_connection.go" ||
-      path === "provider/internal/provider/service_shape_resources.go",
+      path === "core/domains/resource-shape/resolver.ts",
     patterns: [
       /type\s+ResourceManagedBy\s*=\s*["']opentofu["']\s*\|/,
       /\bRESOURCE_(?:CONNECTION_PERMISSIONS|PROJECTION_KINDS)\b/,
@@ -697,8 +694,7 @@ const RULES: readonly BoundaryRule[] = [
     id: "retired-resource-descriptor-alias",
     message:
       "the canonical operator implementation record is TargetImplementationDescriptor; pre-v1 compatibility aliases must not remain active",
-    appliesTo: (path) =>
-      path === "contract/target.ts" || path.startsWith("provider/internal/"),
+    appliesTo: (path) => path === "contract/target.ts",
     patterns: [/\bTargetPoolImplementation\b/, /\bTargetPoolModuleOutput\b/],
   },
   {
@@ -1034,13 +1030,6 @@ const RULES: readonly BoundaryRule[] = [
   },
 ];
 
-function isExplicitInterfaceMappingPath(path: string): boolean {
-  return (
-    path === "provider/internal/client/interface_test.go" ||
-    path === "provider/internal/provider/interface_resource_test.go"
-  );
-}
-
 export function findGeneralizationBoundaryViolations(
   sources: readonly GeneralizationBoundarySource[],
 ): readonly GeneralizationBoundaryViolation[] {
@@ -1069,13 +1058,7 @@ export function findGeneralizationBoundaryViolations(
             continue;
           }
           if (
-            isAllowedTypeofMessageCheck(rule.id, source.content, index) ||
-            isAllowedCompatibilityUsageEvidenceField(
-              rule.id,
-              path,
-              source.content,
-              index,
-            )
+            isAllowedTypeofMessageCheck(rule.id, source.content, index)
           ) {
             continue;
           }
@@ -1117,24 +1100,6 @@ function isAllowedTypeofMessageCheck(
     /\btypeof\s+(?:[A-Za-z_$][\w$]*(?:\?\.|\.)?)*$/u.test(before) &&
     /^(?:this\.)?message\s*(?:===|!==|==|!=)\s*["'`](?:string|number|boolean|bigint|symbol|undefined|object|function)["'`]/u.test(
       after,
-    )
-  );
-}
-
-function isAllowedCompatibilityUsageEvidenceField(
-  ruleId: string,
-  path: string,
-  content: string,
-  index: number,
-): boolean {
-  return (
-    ruleId === "retired-authority-key" &&
-    path === "scripts/lib/service-form-compatibility-removal.mjs" &&
-    isBetweenMarkers(
-      content,
-      index,
-      "function validateUsageObservation(",
-      "function exactKeys(",
     )
   );
 }

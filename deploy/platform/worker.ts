@@ -1765,20 +1765,6 @@ export function withPlatformAssetCacheHeaders(
 ): Response {
   if (request.method !== "GET" && request.method !== "HEAD") return response;
   if (response.status < 200 || response.status >= 400) return response;
-  if (url.pathname.startsWith("/opentofu/providers/")) {
-    const headers = new Headers(response.headers);
-    headers.set(
-      "cache-control",
-      url.pathname.endsWith("/index.json")
-        ? "no-cache"
-        : "public, max-age=31536000, immutable",
-    );
-    return new Response(response.body, {
-      status: response.status,
-      statusText: response.statusText,
-      headers,
-    });
-  }
   if (!url.pathname.startsWith("/assets/")) return response;
   const headers = new Headers(response.headers);
   headers.set("cache-control", "public, max-age=31536000, immutable");

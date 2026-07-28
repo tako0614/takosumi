@@ -92,8 +92,7 @@ project name. The owner has approved `takoform.com`, public source repository
 Public Registry namespace derived from linked GitHub account `tako0614`. The current
 `takosumi.dev/v1alpha1`, `ResourceShape`, `/v1/resources`, Resource IDs, kind
 tokens, import IDs, and database fields remain compatibility surfaces during the
-additive migration. The discontinued provider's `takosumi_*` resources and
-existing state remain historical migration/rollback custody only.
+additive migration. Takosumi ships no first-party Terraform/OpenTofu provider.
 
 Takosumi remains provider-neutral beyond Takoform. Any runner-installable OpenTofu/Terraform
 provider may be used by a plain Stack through ProviderConnection, CredentialRecipe, and
@@ -125,35 +124,12 @@ Current implementation must be described honestly:
 ```text
 current:
   Takosumi owns ResourceShape TypeScript schemas, bundled parser behavior,
-  current Resource API/wire contract, and discontinued mixed-provider custody.
+  and the current Resource API/wire contract.
 
 target:
   the portable project owns definition/provider/interoperability authority;
   Takosumi consumes exact definitions and hosts one canonical lifecycle.
 ```
-
-The 2026-07-16 Phase 0 artifact recheck established the immutable custody
-boundary for the now-discontinued provider. The
-live `app.takosumi.com` mirror index digest matches the local index, but its
-`1.0.0.json` and every served archive differ from a current local `1.0.0`
-rebuild. The live archive SHA-256 prefixes are `9de3e6e5`, `82cf0196`,
-`3433cb34`, and `9eca4738`; the corresponding local prefixes are `54732315`,
-`cb62cafb`, `cf72e6b6`, and `d42c4435`. The current build uses
-`go build -trimpath` without injecting `main.version` and writes the same
-version paths. Therefore the exact served `1.0.0` metadata and archives are
-retained in operator custody, their digests and observations remain pinned in
-this repository, and that public identity is never overwritten. The repository
-does not prove which source tree produced those bytes: exact source provenance
-remains unresolved. No corrected or replacement Takosumi provider version will
-be built or published. The cancelled `1.1.4` source/schema snapshot is retained
-only to inspect and migrate known state identities; it is not provenance for
-the served `1.0.0` artifacts.
-
-The downloaded public `linux_amd64` binary confirms the metadata mismatch:
-`go version -m` reports module `(devel)`, revision `06319f127353...`, and
-`vcs.modified=true`; ELF inspection resolves `main.version` to `dev` although
-the archive and index call it `1.0.0`. This served artifact is not a valid
-reproducible `1.0.0` release and must not be silently replaced at that path.
 
 Takosumi Core has zero implicit Form Packages. Plain Git/OpenTofu Stack
 execution, ProviderConnection, CredentialRecipe, ProviderBinding, Run,
@@ -234,11 +210,10 @@ This is not "Takosumi should create every missing provider." It is:
 ```text
 vendor-neutral provider or standard API already exists:
   prefer it. Takosumi can manage credentials, runs, state, outputs, policy, and
-  usage around that surface without introducing a new Takosumi-owned HCL
-  resource; the discontinued provider receives none.
+  usage around that surface without introducing a Takosumi-owned HCL resource.
 
 standard surface exists:
-  do not recreate its provider-specific resource vocabulary in takosumi_provider.
+  do not recreate its provider-specific resource vocabulary inside Takosumi.
   A Takosumi-managed service may still have its own provider-neutral shape and
   use the standard as a control-plane translation or data-plane protocol.
   Examples: S3-compatible object storage, OCI registry, Kubernetes CRD,
@@ -254,15 +229,14 @@ portable project admits a durable managed service form:
 
 provider schema does not correspond to a provider-neutral Takosumi-managed
 service form or an operator/admin object:
-  do not add it. The discontinued Takosumi provider receives no new resources.
+  do not add it.
 ```
 
-The mixed `takosumi/takosumi` provider is discontinued and retained only for
-supported historical state/migration custody. The portable typed Form provider
-is independently released by Takoform and calls the portable interoperability
-boundary. Form Package Interface descriptors materialize only on Form-backed
-Resources. Operator administration uses Takosumi API/CLI/dashboard. None owns
-host availability, backend selection, price, Resource state, or lifecycle.
+The portable typed Form provider is independently released by Takoform and
+calls the portable interoperability boundary. Form Package Interface
+descriptors materialize only on Form-backed Resources. Operator administration
+uses Takosumi API/CLI/dashboard. None owns host availability, backend selection,
+price, Resource state, or lifecycle.
 
 Before adding any portable Service Form, the design must pass a prior-art gate:
 
@@ -280,8 +254,7 @@ If answer 1 is yes and answers 2-4 are no, do not add a managed Resource. If
 answers 2-4 are yes, admit a Service Form through portable governance even when
 a standard control/data protocol exists. Takosumi's Deploy API remains the
 canonical Resource lifecycle, and Takoform/CLI/dashboard/compatibility routes
-are clients or projections of it. The discontinued Takosumi provider is not an
-active client surface.
+are clients or projections of it.
 
 The client surface is intentionally replaceable. If a better universal provider
 or protocol appears, new clients may use it, but supported control operations
@@ -895,8 +868,7 @@ Store UX may propose a spec, but after acceptance the Takosumi record is
 authoritative and independent of the Store node. A repository manifest,
 well-known Output name, or Output convention is never required. New Capsule
 Interfaces come from service-side InstallConfig blueprints; a plain module
-remains fully supported. The discontinued Takosumi provider is not an authoring
-path. A Takoform Form Package may separately declare an Interface descriptor
+remains fully supported. A Takoform Form Package may separately declare an Interface descriptor
 for a Form-backed Resource; that becomes Resource-owned `form_descriptor`
 provenance and is not a Capsule declaration.
 
@@ -1049,7 +1021,7 @@ the legacy record is never fallback authority. After consumers read only the
 Interface API, remove the Output Sync capability, projection/grant code, old
 schemas/routes, and legacy documentation.
 
-#### Capsule Interface Declaration And Historical Custody
+#### Capsule Interface Declaration
 
 New Capsule-owned Interface specs materialize from one active source:
 
@@ -1058,11 +1030,6 @@ capsule_blueprint:
   service-side InstallConfig.interfaceBlueprints materialized once after the
   first successful apply; works for every plain module
 ```
-
-Historical `capsule_resource` records created through `takosumi_interface`
-remain readable and removable by operators for migration custody. They have no
-Capsule-scoped Run credential or new module-authoring path.
-A same-name blueprint does not adopt or rewrite a retained historical record.
 
 Separately, a Form Package may carry an Interface descriptor. After a Form-backed
 Resource is admitted, Takosumi materializes the descriptor with Resource-owned
@@ -1174,7 +1141,7 @@ They are not an implicit Core default. They remain current wire kind tokens and
 compatibility schemas until Form Package conformance, additive FormRef
 persistence, and client/state migration prove the target representation.
 
-### 2.4 Deploy API And Discontinued Provider Custody
+### 2.4 Deploy API And Client Boundaries
 
 `/v1/resources` is the current Takosumi Deploy API for form-backed Resources.
 It is the only lifecycle authority for a managed Resource. The future portable
@@ -1183,11 +1150,6 @@ preview/apply/observe/refresh/import/delete behavior, and the canonical
 `Resource`, `ResolutionLock`, `NativeResource`, Run, status, Output, and audit
 evidence live behind this API. The retired `Deployment` ledger is not restored.
 
-The mixed `takosumi/takosumi` provider is discontinued. Its unpublished 1.1.4
-release is cancelled; the retained `1.1.4` implementation/schema snapshot
-exists only for legacy state inspection, migration, and rollback under the
-compatibility support policy. It is not proven source provenance for the exact
-served `1.0.0` bytes, whose provenance remains unresolved.
 Portable Service Form authoring and Resource Interface descriptors belong to
 Takoform. Operator administration uses Takosumi API/CLI/dashboard. This does not restrict ordinary
 OpenTofu providers: plain Stack execution and ProviderConnection,
@@ -1200,11 +1162,6 @@ Deploy API:
   status / events / observe / refresh / import / delete
   ResolutionLock and NativeResource evidence
   adapter/backend-manager dispatch after resolution
-
-discontinued takosumi/takosumi provider (historical custody only):
-  known typed HCL schema/state/address identities and a retained migration snapshot
-  no claim that the retained snapshot produced the served 1.0.0 bytes
-  migration/no-op/rollback evidence; no new authoring or publication
 
 target portable form provider:
   statically typed resources generated/verified from standard Form Packages
@@ -1220,8 +1177,7 @@ not:
 
 Portable form-host integration materializes Form Package descriptors only for
 the admitted Form-backed Resource. It does not receive a Capsule authoring
-credential or create Capsule-owned Interfaces. The retained discontinued
-provider is not part of this active path.
+credential or create Capsule-owned Interfaces.
 
 When this document says a Service Form is provider-neutral, it means
 vendor-independent under portable form governance. It does not mean either
@@ -1496,8 +1452,7 @@ separate reviewed lifecycle operation.
 From the user's perspective the service is an `EdgeWorker`, selected through
 the dashboard, CLI, direct Deploy API, a supported compatibility client, or the
 optional portable `takoform_edge_worker` HCL resource. Direct API/CLI/dashboard
-use requires no OpenTofu provider; the discontinued Takosumi provider remains
-historical migration/rollback custody and is not used by this flow.
+use requires no OpenTofu provider.
 Behind the Deploy API, the selected Target/Adapter decides whether the
 implementation is Workers for Platforms, Takosumi native runtime, or an
 operator-provided plugin. Do not hard-code WfP into a client or Service Form.
@@ -2154,10 +2109,8 @@ Native resource state
 ```
 
 Portable Takoform state keeps Takosumi Resource ids and public outputs.
-Historical migration/rollback custody for retained `takosumi_*` state follows
-the same invariant, but that state is never newly authored. Native provider
-identifiers, resolution details, and secret material belong in Takosumi state,
-not in user HCL.
+Native provider identifiers, resolution details, and secret material belong in
+Takosumi state, not in user HCL.
 
 ## 10. Discovery And Capabilities
 
@@ -2668,9 +2621,8 @@ definition / installed / executable / activated discovery states and reason code
 portable Takoform/CLI/dashboard/compat control requests converge on that API
 compat data planes resolve Ready canonical Resources
 no adapter or backend manager calls a compat handler as its implementation
-the portable Takoform provider has an immutable independent release lane while the discontinued Takosumi provider remains custody-only with no replacement release
+Takosumi has no first-party provider source, release, custody, or public mirror lane
 Capsule Interface blueprint ownership, operator cleanup of retained historical rows, shared display parsing, and status self-report are conformant
-supported old provider state has no-op migration and rollback proof
 TargetPool/Policy/Adapter remain usable but live in operator/advanced UX
 FormActivation is generic OSS policy with no price/payment/capacity fields
 generic Offering supports open subject types, exact catalog/id/version selection, explicit audience, installed resolver readiness, and no commercial/private fields
@@ -2731,9 +2683,8 @@ self-test, a descriptor, an unconfigured manager, or one green client.
 
 1. Keep plain OpenTofu Stack execution, arbitrary ProviderConnections, and the
    Interface/InterfaceBinding boundary reliable and independent of forms.
-2. Freeze and inventory every historical mixed-provider schema, state identity,
-   mirror byte, checksum, and live archive. Never overwrite `1.0.0`; keep the
-   Takosumi provider discontinued and publish no replacement version.
+2. Keep first-party provider source, release, custody, and public mirror lanes
+   absent; use Takoform or the owning external provider instead.
 3. Establish `github.com/tako0614/terraform-provider-takoform` without TargetPool, Resource, Run,
    credentials, Interface, or Cloud code; keep provider/package release blocked
    until signing/provenance and real install gates pass.
@@ -2753,9 +2704,8 @@ self-test, a descriptor, an unconfigured manager, or one green client.
 8. Implement neutral interoperability and structured availability as a second
    client route over the same Resource service. Dual-advertise current aliases
    until semantic/state migration evidence permits removal.
-9. Release the portable typed form provider independently. Keep the mixed
-   Takosumi provider as discontinued state/migration custody only; use
-   Takosumi API/CLI/dashboard for operator administration.
+9. Release the portable typed form provider independently; use Takosumi
+   API/CLI/dashboard for operator administration.
 10. Make dashboard/CLI render exact definition, installed, executable,
     activated, generically offered, and commercially available states without
     hard-coded form ownership.

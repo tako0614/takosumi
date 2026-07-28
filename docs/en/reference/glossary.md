@@ -48,9 +48,9 @@ Normal screens do not expose the internal model directly; they use these words i
 
 These only appear when you use the typed service lifecycle. If you only run
 plain OpenTofu modules, you can skip them. `Service Form` is the adopted target
-concept. The current `/v1/resources` API and existing state from the
-discontinued `takosumi_*` provider retain the `Resource Shape` compatibility
-name. Exact FormRef additive persistence is implemented, but the alias remains
+concept. The current `/v1/resources` API and existing Resource records retain
+the `Resource Shape` compatibility name. Exact FormRef additive persistence is
+implemented, but the alias remains
 until live migration/rollback evidence and the compatibility-removal gate are
 complete.
 

@@ -47,8 +47,8 @@ Takosumi のドキュメントで使う言葉を、ひとことずつ説明し�
 ## Service Form host の言葉
 
 typed service lifecycle を使う場合にだけ出てくる言葉です。普通の OpenTofu module を使うだけなら読み飛ばせます。
-`Service Form` は採用済みの target concept です。現在の `/v1/resources` と、廃止済み
-`takosumi_*` provider の既存 state では互換名の `Resource Shape` を使います。exact FormRef
+`Service Form` は採用済みの target concept です。現在の `/v1/resources` と既存の
+Resource record では互換名の `Resource Shape` を使います。exact FormRef
 の additive persistence は実装済みですが、live migration / rollback 証跡と compatibility
 removal gate が揃うまでこの互換名を置き換えません。
 

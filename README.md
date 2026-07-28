@@ -106,7 +106,7 @@ conformance / typed form provider は独立 release の OSS project が所有す
 公式 managed target pool、Takosumi 自社リソースの内部実装、exact Offering selection に manager / capacity / SKU /
 PriceCatalog / payment evidence を固定する closed `CommercialOfferingBinding`、強制課金、support / SLA、公式 resource
 backend は Takosumi for Operator / Takosumi Cloud 側にあります。
-`Resource Shape` は FormRef の additive persistence と互換移行の証跡が揃うまで current API/provider/state 名として残ります。
+`Resource Shape` は FormRef の additive persistence と互換移行の証跡が揃うまで current API/state 名として残ります。
 
 ## エディション
 

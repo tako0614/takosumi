@@ -4,11 +4,13 @@ import { findAuthoritativeDocViolations } from "../../scripts/lib/authoritative-
 const COMPLETE_BASELINE = [
   {
     path: "docs/index.md",
-    content: "`takosumi/takosumi` provider は廃止済みです。",
+    content:
+      "Takosumi は first-party Terraform/OpenTofu provider を同梱しません。",
   },
   {
     path: "docs/en/index.md",
-    content: "The `takosumi/takosumi` provider is discontinued.",
+    content:
+      "Takosumi does not ship a first-party Terraform/OpenTofu provider.",
   },
   {
     path: "docs/reference/api.md",
@@ -23,20 +25,20 @@ const COMPLETE_BASELINE = [
   {
     path: "docs/internal/final-plan.md",
     content:
-      "No corrected or replacement Takosumi provider version will be built or published.",
+      "Takosumi ships no first-party Terraform/OpenTofu provider.",
   },
   {
     path: "docs/internal/core-spec.md",
-    content: "No new Takosumi-provider state is authored.",
+    content: "Takosumi ships no first-party Terraform/OpenTofu provider.",
   },
   {
     path: "docs/internal/core-conformance.md",
     content:
-      "No provider release or default mirror lane exists. Historical custody is retained.",
+      "No first-party provider source, release, custody, or public mirror lane exists.",
   },
 ] as const;
 
-test("authoritative docs accept only retired Takosumi provider custody", () => {
+test("authoritative docs keep first-party provider implementation external", () => {
   expect(findAuthoritativeDocViolations(COMPLETE_BASELINE)).toEqual([]);
 });
 
@@ -58,77 +60,6 @@ test("authoritative docs reject retired Cloudflare compatibility identities and 
   }
 });
 
-test("authoritative docs reject active Takosumi provider wording", () => {
-  for (const content of [
-    "The Takosumi provider will publish the next admin resources.",
-    "Add new `takosumi_*` resources to the current provider.",
-  ]) {
-    const violations = findAuthoritativeDocViolations([
-      ...COMPLETE_BASELINE,
-      { path: "docs/reference/provider.md", content },
-    ]);
-
-    expect(violations).toContainEqual(
-      expect.objectContaining({ ruleId: "active-takosumi-provider-doc" }),
-    );
-  }
-});
-
-test("authoritative docs reject active provider claims masked by generic negative context", () => {
-  for (const content of [
-    "The Takosumi provider will publish new resources. It is not required for plain stacks.",
-    "The Takosumi provider publishes new resources alongside existing state.",
-    "The Takosumi provider will add an admin resource. Takosumi does not depend on it.",
-    "Add new `takosumi_*` resources to the provider. The provider is retired.",
-    "Takosumi provider は今後新規 resource を公開します。他の Stack は依存しません。",
-    "The discontinued Takosumi provider is still used to author new resources.",
-    "The retired terraform-provider-takosumi remains the default provider.",
-    "The discontinued Takosumi provider is used for current deployments.",
-    "The retired Takosumi provider continues as the authoring surface.",
-    "The retired Takosumi provider acts as the default client.",
-  ]) {
-    const violations = findAuthoritativeDocViolations([
-      ...COMPLETE_BASELINE,
-      { path: "docs/reference/provider-mixed-claim.md", content },
-    ]);
-
-    expect(violations).toContainEqual(
-      expect.objectContaining({ ruleId: "active-takosumi-provider-doc" }),
-    );
-  }
-});
-
-test("authoritative docs allow explicit historical-only use and old-state support", () => {
-  for (const content of [
-    "The discontinued Takosumi provider is used only for historical migration/rollback custody.",
-    "The discontinued provider's `takosumi_*` old state remains supported throughout v1 migration custody.",
-  ]) {
-    const violations = findAuthoritativeDocViolations([
-      ...COMPLETE_BASELINE,
-      { path: "docs/reference/provider-custody.md", content },
-    ]);
-
-    expect(violations).toEqual([]);
-  }
-});
-
-test("authoritative docs reject generic negatives without explicit retirement custody", () => {
-  for (const content of [
-    "The Takosumi provider is not required for plain stacks.",
-    "Takosumi does not depend on the Takosumi provider.",
-    "The `takosumi_*` resources have existing state.",
-  ]) {
-    const violations = findAuthoritativeDocViolations([
-      ...COMPLETE_BASELINE,
-      { path: "docs/reference/provider-generic-negative.md", content },
-    ]);
-
-    expect(violations).toContainEqual(
-      expect.objectContaining({ ruleId: "active-takosumi-provider-doc" }),
-    );
-  }
-});
-
 test("authoritative docs require matching Japanese and English retirement claims", () => {
   const violations = findAuthoritativeDocViolations(
     COMPLETE_BASELINE.filter(({ path }) => path !== "docs/en/reference/api.md"),
@@ -144,7 +75,7 @@ test("authoritative docs require matching Japanese and English retirement claims
 
 test("authoritative docs reject a split Cloud GA availability contract", () => {
   const staleFinalPlan = [
-    "No corrected or replacement Takosumi provider version will be built or published.",
+    "Takosumi ships no first-party Terraform/OpenTofu provider.",
     "## 11. Takosumi Cloud Public Offering",
     "Stable:\n  EdgeWorker",
     "Preview:\n  VectorIndex",

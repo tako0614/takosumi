@@ -33,8 +33,8 @@ variables:
 
 module は credential-free な ordinary Output `endpoint` を返します。
 `InstallConfig.interfaceBlueprints` が最初の successful apply 後に
-`materializedFrom: capsule_blueprint` の Interface を作ります。この module は廃止済み
-`takosumi/takosumi` provider に依存しません。Takoform の Interface descriptor は
+`materializedFrom: capsule_blueprint` の Interface を作ります。この module は
+Takosumiのpublic APIだけを使います。Takoform の Interface descriptor は
 Form Package から Form-backed Resource へ `form_descriptor` として materialize する別経路で、
 この Capsule module の authoring path ではありません。
 

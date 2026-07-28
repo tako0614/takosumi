@@ -1260,7 +1260,7 @@ function resourceShapeSchemas(): Record<string, Record<string, unknown>> {
         pattern: "^[A-Za-z][A-Za-z0-9._-]{0,127}$",
         examples: [...RESOURCE_SHAPE_KINDS],
         description:
-          "Installed Form Packages provide portable typed schemas. Additional tokens require an explicitly installed host schema and adapter/plugin; the discontinued Takosumi provider is historical state custody only.",
+          "Installed Form Packages provide portable typed schemas. Additional tokens require an explicitly installed host schema and adapter/plugin; Takosumi does not ship a first-party provider.",
       },
       form: ref("InstalledFormReference"),
       metadata: {

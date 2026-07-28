@@ -246,14 +246,13 @@ run をまたぐ source-sync cache ではありません。
 ## Service Form Host Resolution (`Resource Shape` compatibility)
 
 Service Form host flow は exact FormRef を持つ typed Resource object から始まり、それを Target へ解決します。
-現在の API/provider/state は D1 v46 / Postgres v94 以降で exact FormRef と package digest を Resource / ResolutionLock
-へ additive persistence します。Resource Shape kind は current wire/provider compatibility identity として残りますが、
+現在の API/state は D1 v46 / Postgres v94 以降で exact FormRef と package digest を Resource / ResolutionLock
+へ additive persistence します。Resource Shape kind は current wire compatibility identity として残りますが、
 永続化された Form identity の代用ではありません。production ledger の bounded backfill と readback 証跡は repository
 実装とは別の operator readiness gate です。既存 Resource ID、kind、ResolutionLock、Run、state は移行中も維持され、
 別 ledger は作りません。
 これらの object は `/v1/resources` Deploy API、portable な Takoform typed client、
-Takosumi CLI/dashboard、Kubernetes CRD のいずれからでも送信できます。廃止済み
-`takosumi_*` HCL は既存 state の migration / rollback custody に限ります。
+Takosumi CLI/dashboard、Kubernetes CRD のいずれからでも送信できます。
 
 ```text
 exact FormRef + Resource
@@ -288,13 +287,9 @@ Policy、Adapter、backend manager はこの API の背後にある operator/adv
 ProviderConnection と通常の OpenTofu module に留めるべきです。繰り返し現れる
 provider-neutral な Service Form は、exact Takoform Form Package、typed client schema、
 planner/adapter/import/drift/state の挙動、conformance 証跡を必要とします。現在の
-`takosumi_*` form resource は compatibility state として維持し、新しい typed form client
-authority はすべて Takoform が所有します。Takosumi operator object は API / CLI /
-dashboard から authoring し、廃止済み Takosumi-owned provider は使いません。
-
-`takosumi/takosumi` provider は廃止済みで、既存 compatibility state の migration / rollback
-custody にだけ残ります。portable authoring は Takoform、operator/admin 操作は direct API、
-CLI、dashboard を使い、すべて同じ managed-service lifecycle に収束します。
+typed form client authority はすべて Takoform が所有します。Takosumi は first-party
+Terraform/OpenTofu provider を同梱しません。operator/admin 操作は direct API、CLI、
+dashboard を使い、すべて同じ managed-service lifecycle に収束します。
 
 Takos は、この rule の代表的な利用側です。Takos は、製品固有の catch-all shape
 としてではなく、実際に必要な汎用 Service Form-backed Resource の合成として説明するべきです。
@@ -338,8 +333,7 @@ target は、custom な interface 証跡を持つ operator 定義の implementat
 allow-list ではなく resolver/policy を通して受理・拒否します。この拡張は既存の typed
 shape の backend 向けです。新しい portable HCL Form は、OpenTofu が typed validation、
 plan diff、import、state upgrade を維持できるよう、Takoform schema / Form Package /
-typed-provider release と host conformance が必要です。廃止済み Takosumi provider は更新・
-再公開しません。
+typed-provider release と host conformance が必要です。
 
 Provider capability document は、`adapters` 配下の追加 boolean key として
 operator 定義の adapter token を含められます。既知の adapter key は引き続き `opentofu`、

@@ -34,37 +34,6 @@ const RETIRED_CLOUDFLARE_COMPATIBILITY: readonly {
   },
 ];
 
-const TAKOSUMI_PROVIDER_TOKEN = String.raw`(?:takosumi\/takosumi|takosumi_\*|terraform-provider-takosumi|Takosumi(?:-owned)? provider|Takosumi-provider)`;
-const TAKOSUMI_PROVIDER_REFERENCE = new RegExp(TAKOSUMI_PROVIDER_TOKEN, "u");
-const TAKOSUMI_PROVIDER_CUSTODY_CONTEXT =
-  /(?:\b(?:discontinued|retired)\b|\b(?:historical|migration|rollback|existing-state)[^.]{0,120}\bcustody\b|\bcustody\b[^.]{0,120}\b(?:historical|migration|rollback|existing-state)\b|\bno (?:corrected or replacement|corrected|replacement) Takosumi provider version\b[^.]{0,120}\b(?:built|published)\b|\bno new Takosumi-provider state is authored\b|廃止(?:済み)?|(?:historical|migration|rollback|履歴|既存 state)[^。]{0,120}\bcustody\b|\bcustody\b[^。]{0,120}(?:historical|migration|rollback|履歴|既存 state))/iu;
-const TAKOSUMI_PROVIDER_ACTIVE_CLAIMS: readonly RegExp[] = [
-  new RegExp(
-    `${TAKOSUMI_PROVIDER_TOKEN}[^.!?]{0,160}\\b(?:will|shall|should|must|may|can|plans? to|is going to|continues? to)\\s+(?:publish|release|add|create|author|ship|update|republish|support|maintain)\\b`,
-    "iu",
-  ),
-  new RegExp(
-    `${TAKOSUMI_PROVIDER_TOKEN}[^.!?]{0,120}\\b(?:publishes|releases|adds|creates|authors|ships|updates|republishes|supports|maintains)\\b`,
-    "iu",
-  ),
-  new RegExp(
-    `${TAKOSUMI_PROVIDER_TOKEN}[^.!?]{0,80}\\bis\\s+(?:active|current|maintained|published|supported)\\b`,
-    "iu",
-  ),
-  new RegExp(
-    `${TAKOSUMI_PROVIDER_TOKEN}[^.!?]{0,160}\\b(?:(?:is|remains|stays|continues?\\s+to\\s+be)\\s+(?:still\\s+)?used\\s+(?:to|for|as)|(?:continues?\\s+as|acts?\\s+as|serves?\\s+as|is|remains|stays)\\s+(?:the\\s+|an?\\s+)?(?:default|active|current|authoritative|authoring|provisioning|deployment)\\b)`,
-    "iu",
-  ),
-  new RegExp(
-    `(?:^|\\n)\\s*(?:Add|Create|Publish|Release|Ship|Update|Republish)\\b(?!\\s+(?:no|neither)\\b)[^.!?]{0,160}${TAKOSUMI_PROVIDER_TOKEN}`,
-    "u",
-  ),
-  new RegExp(
-    `${TAKOSUMI_PROVIDER_TOKEN}[^。]{0,120}(?:新規|今後)[^。]{0,60}(?:公開|追加|作成|更新|再公開|リリース|提供|使用|利用)(?:する|します|していく)`,
-    "iu",
-  ),
-];
-
 const REQUIRED_DOC_CLAIMS: Readonly<
   Record<
     string,
@@ -73,16 +42,18 @@ const REQUIRED_DOC_CLAIMS: Readonly<
 > = {
   "docs/index.md": [
     {
-      pattern: /`takosumi\/takosumi` provider は廃止済み/u,
+      pattern:
+        /Takosumi は first-party Terraform\/OpenTofu provider を同梱しません/u,
       message:
-        "Japanese index must state that the Takosumi provider is discontinued",
+        "Japanese index must state that Takosumi ships no first-party provider",
     },
   ],
   "docs/en/index.md": [
     {
-      pattern: /`takosumi\/takosumi` provider is discontinued/u,
+      pattern:
+        /Takosumi does not ship a first-party Terraform\/OpenTofu provider/u,
       message:
-        "English index must state that the Takosumi provider is discontinued",
+        "English index must state that Takosumi ships no first-party provider",
     },
   ],
   "docs/reference/api.md": [
@@ -103,21 +74,23 @@ const REQUIRED_DOC_CLAIMS: Readonly<
   "docs/internal/final-plan.md": [
     {
       pattern:
-        /No corrected or replacement Takosumi provider version will\s+be built or published/u,
-      message: "Final Plan must forbid a replacement Takosumi provider release",
+        /Takosumi ships no first-party Terraform\/OpenTofu provider/u,
+      message: "Final Plan must keep provider implementation external",
     },
   ],
   "docs/internal/core-spec.md": [
     {
-      pattern: /No new Takosumi-provider state is authored/u,
-      message: "Core Spec must keep new Takosumi provider state retired",
+      pattern:
+        /Takosumi ships no first-party Terraform\/OpenTofu provider/u,
+      message: "Core Spec must keep provider implementation external",
     },
   ],
   "docs/internal/core-conformance.md": [
     {
-      pattern: /No provider release or default mirror lane exists/u,
+      pattern:
+        /No first-party provider source, release, custody, or public mirror lane exists/u,
       message:
-        "Core conformance must keep provider release and mirror lanes absent",
+        "Core conformance must prove all first-party provider lanes absent",
     },
   ],
 };
@@ -170,27 +143,6 @@ export function findAuthoritativeDocViolations(
       }
     }
 
-    for (const paragraph of paragraphs(source.content)) {
-      if (!TAKOSUMI_PROVIDER_REFERENCE.test(paragraph.content)) continue;
-      const activeClaim = TAKOSUMI_PROVIDER_ACTIVE_CLAIMS.some((pattern) =>
-        pattern.test(paragraph.content),
-      );
-      if (
-        !activeClaim &&
-        TAKOSUMI_PROVIDER_CUSTODY_CONTEXT.test(paragraph.content)
-      ) {
-        continue;
-      }
-      violations.push({
-        ruleId: "active-takosumi-provider-doc",
-        path: source.path,
-        line: paragraph.line,
-        message: activeClaim
-          ? "active Takosumi provider publication or resource-authoring claims are forbidden even beside retirement wording"
-          : "Takosumi provider references must be explicitly limited to discontinued historical migration/rollback custody",
-        excerpt: paragraph.content.split("\n", 1)[0]?.trim() ?? "",
-      });
-    }
   }
 
   for (const [path, claims] of Object.entries(REQUIRED_DOC_CLAIMS)) {
@@ -306,19 +258,6 @@ function lineExcerpt(content: string, index: number): string {
   const start = content.lastIndexOf("\n", Math.max(0, index - 1)) + 1;
   const end = content.indexOf("\n", index);
   return content.slice(start, end < 0 ? content.length : end).trim();
-}
-
-function paragraphs(
-  content: string,
-): readonly { readonly content: string; readonly line: number }[] {
-  const result: { content: string; line: number }[] = [];
-  let offset = 0;
-  for (const paragraph of content.split(/\n[ \t]*\n/gu)) {
-    const index = content.indexOf(paragraph, offset);
-    result.push({ content: paragraph, line: lineAt(content, index) });
-    offset = index + paragraph.length;
-  }
-  return result;
 }
 
 function section(content: string, start: string, end: string): string {
