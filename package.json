@@ -15,7 +15,7 @@
   ],
   "scripts": {
     "wrangler": "wrangler",
-    "check": "bun run check:package-script-boundaries && bun run credential-recipes:assets && bun run takoform-schema-validators:check && bun run service-form:runtime-artifacts:check && bun run provider:custody:check && bun run service-form:compat-removal:check && bun run check:authoritative-docs && bun run test:provider && bun run test:control-d1-schema && bun run check:test-source-boundary && bun run check:generalization-boundaries && tsc --noEmit && bun run check:dashboard && bun run test:dashboard-new-flow && bun run check:worker-types && bun run check:cloudflare-worker-build",
+    "check": "bun run check:package-script-boundaries && bun run generated-assets:check && bun run service-form:runtime-artifacts:check && bun run provider:custody:check && bun run service-form:compat-removal:check && bun run check:authoritative-docs && bun run test:provider && bun run test:control-d1-schema && bun run check:test-source-boundary && bun run check:generalization-boundaries && tsc --noEmit && bun run check:dashboard && bun run test:dashboard-new-flow && bun run check:worker-types && bun run check:cloudflare-worker-build",
     "check:package-script-boundaries": "bun scripts/check-package-script-boundaries.ts",
     "check:authoritative-docs": "bun scripts/check-authoritative-doc-boundaries.ts",
     "check:generalization-boundaries": "bun scripts/check-generalization-boundaries.ts",
@@ -51,6 +51,9 @@
     "takoform-schema-validators:check": "bun scripts/build-takoform-schema-validators.ts --check",
     "credential-recipes:assets": "bun scripts/build-credential-recipe-assets.ts",
     "credential-recipes:check": "bun scripts/build-credential-recipe-assets.ts --check",
+    "generated-assets:write": "bun run credential-recipes:assets && bun run takoform-schema-validators:assets",
+    "generated-assets:check": "bun run generated-assets:wiring:check && bun run credential-recipes:check && bun run takoform-schema-validators:check",
+    "generated-assets:wiring:check": "bun scripts/check-generated-asset-wiring.ts",
     "operator:release-activator": "bun scripts/operator-release-activator.ts",
     "opentofu:output-proof": "bun tests/proofs/opentofu-output-proof.ts",
     "opentofu:live-local-proof": "bun tests/proofs/live-opentofu-plan-apply.ts",
