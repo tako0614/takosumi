@@ -5,6 +5,8 @@ const jaNav: DefaultTheme.NavItem[] = [
   { text: "Pricing", link: "/pricing" },
   { text: "Resources", link: "/resources" },
   { text: "Endpoints", link: "/endpoints" },
+  { text: "Support", link: "/support" },
+  { text: "SLA", link: "/sla" },
   { text: "Software docs", link: "https://takosumi.com/docs/" },
 ];
 
@@ -13,6 +15,8 @@ const enNav: DefaultTheme.NavItem[] = [
   { text: "Pricing", link: "/en/pricing" },
   { text: "Resources", link: "/en/resources" },
   { text: "Endpoints", link: "/en/endpoints" },
+  { text: "Support", link: "/en/support" },
+  { text: "SLA", link: "/en/sla" },
   { text: "Software docs", link: "https://takosumi.com/docs/en/" },
 ];
 
@@ -25,6 +29,8 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
         { text: "Pricing", link: "/pricing" },
         { text: "Resources", link: "/resources" },
         { text: "Endpoints", link: "/endpoints" },
+        { text: "Support", link: "/support" },
+        { text: "SLA", link: "/sla" },
       ],
     },
   ],
@@ -39,6 +45,8 @@ const enSidebar: DefaultTheme.SidebarMulti = {
         { text: "Pricing", link: "/en/pricing" },
         { text: "Resources", link: "/en/resources" },
         { text: "Endpoints", link: "/en/endpoints" },
+        { text: "Support", link: "/en/support" },
+        { text: "SLA", link: "/en/sla" },
       ],
     },
   ],

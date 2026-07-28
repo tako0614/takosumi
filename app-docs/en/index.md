@@ -190,3 +190,5 @@ Details:
 - [Takosumi Cloud resources](./resources.md)
 - [Takosumi Cloud endpoints](./endpoints.md)
 - [Takosumi Cloud pricing](./pricing.md)
+- [Takosumi Cloud support](./support.md)
+- [Takosumi Cloud SLA](./sla.md)

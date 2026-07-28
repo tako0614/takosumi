@@ -29,6 +29,10 @@ const REQUIRED_PUBLIC_DOCS = [
   "app-docs/en/resources.md",
   "app-docs/en/endpoints.md",
   "app-docs/en/pricing.md",
+  "app-docs/support.md",
+  "app-docs/sla.md",
+  "app-docs/en/support.md",
+  "app-docs/en/sla.md",
 ] as const;
 
 const REQUIRED_INTERNAL_DOCS = [
@@ -497,6 +501,35 @@ test("workspace packages stay private source modules", async () => {
       readonly private?: boolean;
     };
     assert.equal(manifest.private, true, `${path} must be private`);
+  }
+});
+
+test("hosted Cloud publishes the reviewed SLA and support boundary", async () => {
+  const jaSla = await readText(new URL("app-docs/sla.md", ROOT));
+  const enSla = await readText(new URL("app-docs/en/sla.md", ROOT));
+  const jaSupport = await readText(new URL("app-docs/support.md", ROOT));
+  const enSupport = await readText(new URL("app-docs/en/support.md", ROOT));
+  const config = await readText(
+    new URL("app-docs/.vitepress/config.ts", ROOT),
+  );
+
+  for (const sla of [jaSla, enSla]) {
+    assert.match(sla, /99\.9%/);
+    assert.match(sla, /99\.5%/);
+    assert.match(sla, /status\.takosumi\.com/);
+    assert.match(sla, /48/);
+    assert.doesNotMatch(sla, /\b(?:Lite|Plus|Pro)\b/);
+  }
+  assert.match(jaSla, /金銭返金.*提供しません/s);
+  assert.match(enSla, /does not create a monetary refund/);
+  for (const support of [jaSupport, enSupport]) {
+    assert.match(support, /support@takosumi\.com/);
+    assert.match(support, /status\.takosumi\.com/);
+  }
+  assert.match(jaSupport, /API key.*送らない/s);
+  assert.match(enSupport, /Do not send API keys/);
+  for (const route of ["/support", "/sla", "/en/support", "/en/sla"]) {
+    assert.match(config, new RegExp(`link: "${route}"`));
   }
 });
 
