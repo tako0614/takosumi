@@ -135,10 +135,10 @@ bun run test:scripts
 bun run docs:build
 bun run app-docs:build
 bun run website:build
-
-# hosted / operator readiness status (ecosystem checkout)
-bun run ga:status -- --json
 ```
+
+hosted Cloud の GA 判定、Stripe bootstrap、本番 browser/live evidence は operator 環境の責務です。
+standalone OSS clone の package command から外部 ecosystem script へ proxy せず、operator automation 側で実行します。
 
 ## Docs と website
 

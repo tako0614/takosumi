@@ -338,20 +338,21 @@ test("self-hosted Takos keeps Takosumi control-plane services outside the produc
   );
 });
 
-test("Takosumi source module exposes the documented hosted billing proxies", async () => {
+test("Takosumi standalone package does not proxy hosted GA automation", async () => {
   const packageJson = JSON.parse(
     await readText(new URL("package.json", ROOT)),
   ) as { scripts?: Record<string, string> };
-  assert.equal(
-    packageJson.scripts?.["ga:billing-readiness"],
-    "bun ../scripts/check-takosumi-billing-readiness.mjs",
-  );
-  assert.equal(
-    packageJson.scripts?.["ga:billing-bootstrap"],
-    "bun ../scripts/bootstrap-takosumi-stripe-billing.mjs",
+  const scripts = packageJson.scripts ?? {};
+  assert.deepEqual(
+    Object.keys(scripts).filter((name) => name.startsWith("ga:")),
+    [],
   );
   const readme = await readText(new URL("README.md", ROOT));
-  assert.match(readme, /bun run ga:status -- --json/);
+  const englishReadme = await readText(new URL("README.en.md", ROOT));
+  assert.doesNotMatch(readme, /bun run ga:/);
+  assert.doesNotMatch(englishReadme, /bun run ga:/);
+  assert.match(readme, /standalone OSS clone/);
+  assert.match(englishReadme, /standalone OSS clone/);
 });
 
 test("Takosumi internal authority docs stay outside the public docs surface", async () => {
