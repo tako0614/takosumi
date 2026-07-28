@@ -1,4 +1,6 @@
 import { expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { loadTakosumiRuntimeCapabilities } from "../../../../dashboard/src/lib/runtime-capabilities.ts";
 
 const capabilities = {
@@ -98,4 +100,18 @@ test("dashboard rejects capability documents without typed compatibility authori
   await expect(
     loadTakosumiRuntimeCapabilities(fetchImpl, "https://operator.example"),
   ).rejects.toThrow("response is invalid");
+});
+
+test("dashboard resolves composition capabilities before its first render", () => {
+  const source = readFileSync(
+    resolve(import.meta.dir, "../../../../dashboard/src/index.tsx"),
+    "utf8",
+  );
+
+  expect(source).toContain(
+    "void initializeTakosumiRuntimeCapabilities().finally(mountDashboard);",
+  );
+  expect(source).not.toContain(
+    "void initializeTakosumiRuntimeCapabilities();",
+  );
 });
