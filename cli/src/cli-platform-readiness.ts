@@ -434,7 +434,7 @@ export function migratePlatformReadinessDocumentToFinalModel(
         : Array.isArray(migrated.contributions)
           ? migrated.contributions
           : [];
-    composePlatformReadinessDefinition(
+    const selectedDefinition = composePlatformReadinessDefinition(
       selectedContributions as PlatformReadinessContribution[],
     );
     const previousProfile = Array.isArray(migrated.contributions)
@@ -459,6 +459,125 @@ export function migratePlatformReadinessDocumentToFinalModel(
       );
       migrated.contributions = selectedContributions;
     }
+
+    // A contribution version may replace required evidence types while keeping
+    // the same domain / rehearsal id. Merely changing `contributions` leaves
+    // the document internally inconsistent: retired evidence becomes a
+    // validation error and newly required evidence remains absent. Reconcile
+    // the data-only profile in the same offline migration, preserving matching
+    // evidence and replacing only requirements the selected profile no longer
+    // owns.
+    const reconcileContributionEntries = (
+      scope: "domains" | "rehearsal",
+    ): void => {
+      const requiredIds =
+        scope === "domains"
+          ? selectedDefinition.domainIds
+          : selectedDefinition.rehearsalStepIds;
+      const requiredIdSet = new Set(requiredIds);
+      const rawEntries = Array.isArray(migrated[scope]) ? migrated[scope] : [];
+      const entries = rawEntries.filter((entry) => {
+        if (!isRecord(entry) || typeof entry.id !== "string") return true;
+        if (requiredIdSet.has(entry.id)) return true;
+        recordChange("entryId", entry.id, "(removed-by-contribution-profile)");
+        return false;
+      });
+      const byId = new Map(
+        entries.flatMap((entry) =>
+          isRecord(entry) && typeof entry.id === "string"
+            ? [[entry.id, entry] as const]
+            : [],
+        ),
+      );
+
+      for (const id of requiredIds) {
+        const expectedTypes = requiredEvidenceTypesFor(
+          scope,
+          id,
+          selectedDefinition,
+        );
+        let entry = byId.get(id);
+        if (!entry) {
+          entry = {
+            id,
+            status: "blocked",
+            owner: "",
+            environment: "",
+            reviewer: "",
+            completedAt: "",
+            evidence: expectedTypes.map((type) =>
+              buildPlatformReadinessEvidenceTemplateReference(
+                scope,
+                id,
+                type,
+                selectedDefinition,
+              ),
+            ),
+            ...(scope === "rehearsal" ? { runId: "" } : {}),
+            requiredEvidenceTypes: [...expectedTypes],
+          };
+          entries.push(entry);
+          byId.set(id, entry);
+          recordChange(
+            "entryId",
+            "(missing)",
+            `${scope}.${id} (added-by-contribution-profile)`,
+          );
+          continue;
+        }
+
+        const expectedTypeSet = new Set(expectedTypes);
+        const evidence = Array.isArray(entry.evidence)
+          ? entry.evidence.filter((item) => {
+              if (!isRecord(item) || typeof item.type !== "string") return true;
+              if (expectedTypeSet.has(item.type)) return true;
+              recordChange(
+                "evidenceType",
+                item.type,
+                "(removed-by-contribution-profile)",
+              );
+              return false;
+            })
+          : [];
+        const presentTypes = new Set(
+          evidence.flatMap((item) =>
+            isRecord(item) && typeof item.type === "string" ? [item.type] : [],
+          ),
+        );
+        let requirementsChanged =
+          canonicalJson(entry.requiredEvidenceTypes) !==
+          canonicalJson(expectedTypes);
+        for (const type of expectedTypes) {
+          if (presentTypes.has(type)) continue;
+          evidence.push(
+            buildPlatformReadinessEvidenceTemplateReference(
+              scope,
+              id,
+              type,
+              selectedDefinition,
+            ),
+          );
+          recordChange(
+            "evidenceType",
+            "(missing)",
+            `${scope}.${id}.${type} (added-by-contribution-profile)`,
+          );
+          requirementsChanged = true;
+        }
+        if (evidence.length !== (entry.evidence as unknown[])?.length) {
+          requirementsChanged = true;
+        }
+        entry.evidence = evidence;
+        entry.requiredEvidenceTypes = [...expectedTypes];
+        if (requirementsChanged) {
+          entry.status = "blocked";
+          entry.completedAt = "";
+        }
+      }
+      migrated[scope] = entries;
+    };
+    reconcileContributionEntries("domains");
+    reconcileContributionEntries("rehearsal");
   }
 
   const orderedChanges = [...changes.values()].sort((a, b) =>
