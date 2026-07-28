@@ -3,7 +3,8 @@
 Takosumi Cloud は、私たちが運営する Takosumi の公式ホスティングです。
 Git に置いたアプリや API を、ブラウザから `*.app.takos.jp` の URL で公開できます。
 ストレージ、データベース、キュー、AI などの managed resource も、必要な分だけ
-接続して使えます。有料料金は固定月額なしの従量課金です ([料金](./pricing.md))。
+接続して使えます。料金は月額サブスクリプションのないプリペイドクレジット方式です
+([料金](./pricing.md))。
 
 この docs は `app.takosumi.com` で提供する hosted service としての
 Takosumi Cloud の docs です。自分で動かせる software としての Takosumi /
@@ -40,8 +41,8 @@ Takosumi Cloud Resources =
 
 Git から app / service を追加し、必要な resource を binding として接続すると、
 デプロイと更新が記録されます。Edge JS runtime、Object Storage、KV、Database、
-Queue、AI、Container は並列の managed resource で、使用量はプラン、上限、
-支払い状態に基づいて管理されます。
+Queue、AI、Container は並列の managed resource で、使用量はクレジット残高、
+安全上限、支払い状態に基づいて管理されます。
 
 ## Runtime
 
@@ -144,9 +145,9 @@ enforcement、invoice reconciliation、recovery、tenant isolation、Dashboard�
 
 ## Billing and Spend Guard
 
-Takosumi Cloud は Pay as you go の使用量記録で動き、各 owner に一度だけ onboarding
-credit を付与します。課金対象の
-操作は active な PriceCatalog で価格が決まり、プラン / 上限 / 支払い状態で許可されない場合は
+Takosumi Cloud はプリペイドクレジット残高で動き、各 owner に一度だけ onboarding
+credit を付与します。課金対象の操作は active な PriceCatalog で価格が決まり、
+残高 / 上限 / 支払い状態で許可されない場合は
 実行前に止まります。cleanup / destroy は上限に達した後でも実行できるようにし、
 作った resource が消せなくなる状態を避けます。
 

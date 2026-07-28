@@ -73,7 +73,7 @@ test("extension contributions accept a host-native slot renderer", () => {
             slot: "workspace.billing",
             href: "/extensions/billing",
             presentation: "native",
-            label: "Plan and billing",
+            label: "Credits and billing",
           },
         ],
       },

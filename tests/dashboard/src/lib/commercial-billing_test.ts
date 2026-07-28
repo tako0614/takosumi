@@ -3,39 +3,36 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
   commercialBillingDestination,
-  localizedCommercialBillingText,
-  parseCommercialBillingCatalog,
+  parseCommercialBillingConfiguration,
   parseCommercialBillingSummary,
 } from "../../../../dashboard/src/lib/commercial-billing.ts";
 
-test("commercial billing catalog tolerates incomplete extension data", () => {
-  const catalog = parseCommercialBillingCatalog({
-    plans: [
-      undefined,
-      { id: undefined, name: { ja: undefined } },
-      {
-        id: "payg",
-        kind: "subscription",
-        name: { ja: "従量課金", en: "Usage based" },
-        priceDisplay: { ja: "固定費なし" },
-        monthlyPriceUsdMicros: 0,
+test("commercial billing configuration validates bounded credit choices", () => {
+  const configuration = parseCommercialBillingConfiguration({
+    credits: {
+      currency: "USD",
+      purchaseOptionsUsdMicros: [5_000_000, 10_000_000, 5_000_000],
+      autoRecharge: {
+        defaultSettings: {
+          enabled: false,
+          thresholdUsdMicros: 5_000_000,
+          rechargeUsdMicros: 10_000_000,
+          monthlyLimitUsdMicros: 100_000_000,
+        },
+        thresholdOptionsUsdMicros: [1_000_000, 5_000_000],
+        rechargeOptionsUsdMicros: [5_000_000, 10_000_000],
+        monthlyLimitOptionsUsdMicros: [25_000_000, 100_000_000],
       },
-    ],
+    },
     countryMatrix: {
       version: "2026-07",
       supportedCountries: ["jp", "US", undefined, "invalid", "JP"],
     },
   });
-  expect(catalog.plans).toHaveLength(1);
-  expect(catalog.plans[0]?.id).toBe("payg");
-  expect(catalog.countryMatrix?.supportedCountries).toEqual(["JP", "US"]);
-  expect(
-    localizedCommercialBillingText(
-      catalog.plans[0]?.name ?? {},
-      "ja-JP",
-      "payg",
-    ),
-  ).toBe("従量課金");
+  expect(configuration.credits.purchaseOptionsUsdMicros).toEqual([
+    5_000_000, 10_000_000,
+  ]);
+  expect(configuration.countryMatrix?.supportedCountries).toEqual(["JP", "US"]);
 });
 
 test("commercial billing summary filters malformed rows and unsafe links", () => {
@@ -48,65 +45,97 @@ test("commercial billing summary filters malformed rows and unsafe links", () =>
         customerType: "business",
         taxJurisdiction: "JP",
       },
-      subscription: {
-        id: "subscription_1",
-        status: "active",
-        planId: "payg",
-        cancelAtPeriodEnd: false,
+      credits: {
+        currency: "USD",
+        availableUsdMicros: 9_000_000,
+        reservedUsdMicros: 1_000_000,
+        purchasedUsdMicros: 10_000_000,
+        paymentMethodReady: true,
+        autoRecharge: {
+          enabled: true,
+          thresholdUsdMicros: 5_000_000,
+          rechargeUsdMicros: 10_000_000,
+          monthlyLimitUsdMicros: 100_000_000,
+        },
       },
-      invoices: [
+      payments: [
         undefined,
         { id: undefined },
         {
-          id: "invoice_1",
+          id: "charge_1",
           status: "paid",
           currency: "usd",
-          totalMinor: 1250,
+          amountMinor: 1250,
           paid: true,
-          hostedInvoiceUrl: "javascript:alert(1)",
-          invoicePdfUrl: "https://billing.example/invoice.pdf",
+          refunded: false,
+          receiptUrl: "javascript:alert(1)",
         },
       ],
     },
   });
   expect(summary.configured).toBe(true);
   expect(summary.account?.customerType).toBe("business");
-  expect(summary.subscription?.planId).toBe("payg");
-  expect(summary.invoices).toHaveLength(1);
-  expect(summary.invoices[0]?.hostedInvoiceUrl).toBeUndefined();
-  expect(summary.invoices[0]?.invoicePdfUrl).toBe(
-    "https://billing.example/invoice.pdf",
-  );
+  expect(summary.credits.availableUsdMicros).toBe(9_000_000);
+  expect(summary.credits.autoRecharge.enabled).toBe(true);
+  expect(summary.payments).toHaveLength(1);
+  expect(summary.payments[0]?.receiptUrl).toBeUndefined();
 });
 
 test("commercial billing projections are bounded and deduplicate identities", () => {
-  const plans = Array.from({ length: 80 }, (_, index) => ({
-    id: `plan_${index}`,
-    name: { en: `Plan ${index}` },
-  }));
-  plans.splice(1, 0, { id: "plan_0", name: { en: "Substituted" } });
-  const catalog = parseCommercialBillingCatalog({ plans });
-  expect(catalog.plans).toHaveLength(63);
-  expect(catalog.plans[0]?.name.en).toBe("Plan 0");
+  const options = Array.from({ length: 80 }, (_, index) => index + 1);
+  const configuration = parseCommercialBillingConfiguration({
+    credits: {
+      currency: "USD",
+      purchaseOptionsUsdMicros: options,
+      autoRecharge: {
+        defaultSettings: {
+          enabled: false,
+          thresholdUsdMicros: 1,
+          rechargeUsdMicros: 2,
+          monthlyLimitUsdMicros: 3,
+        },
+        thresholdOptionsUsdMicros: options,
+        rechargeOptionsUsdMicros: options,
+        monthlyLimitOptionsUsdMicros: options,
+      },
+    },
+  });
+  expect(configuration.credits.purchaseOptionsUsdMicros).toHaveLength(32);
 
-  const invoices = Array.from({ length: 120 }, (_, index) => ({
-    id: `invoice_${index}`,
+  const payments = Array.from({ length: 120 }, (_, index) => ({
+    id: `charge_${index}`,
     status: "paid",
     currency: "usd",
     createdAt: "not-a-date",
   }));
-  invoices.splice(1, 0, {
-    id: "invoice_0",
-    status: "open",
+  payments.splice(1, 0, {
+    id: "charge_0",
+    status: "failed",
     currency: "usd",
     createdAt: "2026-07-28T00:00:00.000Z",
   });
   const summary = parseCommercialBillingSummary({
-    billing: { configured: true, invoices },
+    billing: {
+      configured: true,
+      credits: {
+        currency: "USD",
+        availableUsdMicros: 0,
+        reservedUsdMicros: 0,
+        purchasedUsdMicros: 0,
+        paymentMethodReady: false,
+        autoRecharge: {
+          enabled: false,
+          thresholdUsdMicros: 1,
+          rechargeUsdMicros: 2,
+          monthlyLimitUsdMicros: 3,
+        },
+      },
+      payments,
+    },
   });
-  expect(summary.invoices).toHaveLength(99);
-  expect(summary.invoices[0]?.status).toBe("paid");
-  expect(summary.invoices[0]?.createdAt).toBeUndefined();
+  expect(summary.payments).toHaveLength(99);
+  expect(summary.payments[0]?.status).toBe("paid");
+  expect(summary.payments[0]?.createdAt).toBeUndefined();
 });
 
 test("commercial billing navigation only accepts credential-free HTTPS", () => {
@@ -144,9 +173,10 @@ test("native commercial billing stays provider-neutral and uses extension APIs",
   expect(component).toContain("DataTable");
   expect(component).not.toContain("Stripe");
   expect(component).not.toContain("cloud-billing");
-  expect(client).toContain('"plans"');
+  expect(client).toContain('"config"');
   expect(client).toContain('"summary"');
   expect(client).toContain('"checkout"');
+  expect(client).toContain('"auto-recharge"');
   expect(client).toContain('"portal"');
   expect(client).toContain('credentials: "include"');
   expect(client).not.toContain("Stripe");

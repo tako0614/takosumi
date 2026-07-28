@@ -6,16 +6,26 @@
 
 export type CommercialBillingCustomerType = "individual" | "business";
 
-export interface CommercialBillingPlan {
-  readonly id: string;
-  readonly kind: string;
-  readonly name: Readonly<Record<string, string>>;
-  readonly priceDisplay: Readonly<Record<string, string>>;
-  readonly monthlyPriceUsdMicros?: number;
+export interface CommercialBillingAutoRechargeSettings {
+  readonly enabled: boolean;
+  readonly thresholdUsdMicros: number;
+  readonly rechargeUsdMicros: number;
+  readonly monthlyLimitUsdMicros: number;
 }
 
-export interface CommercialBillingCatalog {
-  readonly plans: readonly CommercialBillingPlan[];
+export interface CommercialCreditBillingConfiguration {
+  readonly currency: "USD";
+  readonly purchaseOptionsUsdMicros: readonly number[];
+  readonly autoRecharge: {
+    readonly defaultSettings: CommercialBillingAutoRechargeSettings;
+    readonly thresholdOptionsUsdMicros: readonly number[];
+    readonly rechargeOptionsUsdMicros: readonly number[];
+    readonly monthlyLimitOptionsUsdMicros: readonly number[];
+  };
+}
+
+export interface CommercialBillingConfiguration {
+  readonly credits: CommercialCreditBillingConfiguration;
   readonly countryMatrix?: {
     readonly version: string;
     readonly supportedCountries: readonly string[];
@@ -30,46 +40,42 @@ export interface CommercialBillingAccount {
   readonly updatedAt?: string;
 }
 
-export interface CommercialBillingSubscription {
-  readonly id: string;
-  readonly status: string;
-  readonly planId: string;
-  readonly currentPeriodEnd?: string;
-  readonly cancelAtPeriodEnd: boolean;
+export interface CommercialBillingCredits {
+  readonly currency: "USD";
+  readonly availableUsdMicros: number;
+  readonly reservedUsdMicros: number;
+  readonly purchasedUsdMicros: number;
+  readonly paymentMethodReady: boolean;
+  readonly autoRecharge: CommercialBillingAutoRechargeSettings;
 }
 
-export interface CommercialBillingInvoice {
+export interface CommercialBillingPayment {
   readonly id: string;
-  readonly number?: string;
   readonly status: string;
   readonly currency: string;
-  readonly amountPaidMinor?: number;
-  readonly amountDueMinor?: number;
-  readonly totalMinor?: number;
-  readonly amountPaidUsdMicros?: number;
-  readonly amountDueUsdMicros?: number;
-  readonly totalUsdMicros?: number;
-  readonly hostedInvoiceUrl?: string;
-  readonly invoicePdfUrl?: string;
+  readonly amountMinor?: number;
+  readonly amountUsdMicros?: number;
+  readonly amountRefundedMinor?: number;
+  readonly receiptUrl?: string;
   readonly createdAt?: string;
   readonly paid: boolean;
+  readonly refunded: boolean;
 }
 
 export interface CommercialBillingSummary {
   readonly configured: boolean;
   readonly account?: CommercialBillingAccount;
-  readonly subscription?: CommercialBillingSubscription;
-  readonly invoices: readonly CommercialBillingInvoice[];
+  readonly credits: CommercialBillingCredits;
+  readonly payments: readonly CommercialBillingPayment[];
 }
 
 export interface CommercialBillingSnapshot {
-  readonly catalog: CommercialBillingCatalog;
+  readonly configuration: CommercialBillingConfiguration;
   readonly billing: CommercialBillingSummary;
 }
 
-const MAX_CATALOG_PLANS = 64;
-const MAX_INVOICES = 100;
-const MAX_LOCALIZED_STRINGS = 16;
+const MAX_OPTIONS = 32;
+const MAX_PAYMENTS = 100;
 const MAX_TEXT_LENGTH = 1_024;
 
 interface CommercialBillingRequest {
@@ -78,7 +84,7 @@ interface CommercialBillingRequest {
 }
 
 interface CommercialBillingCheckoutRequest extends CommercialBillingRequest {
-  readonly planId: string;
+  readonly amountUsdMicros: number;
   readonly customerType: CommercialBillingCustomerType;
   readonly country: string;
   readonly successUrl: string;
@@ -89,14 +95,14 @@ export async function loadCommercialBilling(
   input: CommercialBillingRequest,
 ): Promise<CommercialBillingSnapshot> {
   const workspaceQuery = workspaceSearch(input.workspaceId);
-  const [catalog, summary] = await Promise.all([
-    requestJson(endpoint(input.basePath, "plans")),
+  const [configuration, summary] = await Promise.all([
+    requestJson(endpoint(input.basePath, "config")),
     requestJson(
       `${endpoint(input.basePath, "summary")}?${workspaceQuery.toString()}`,
     ),
   ]);
   return {
-    catalog: parseCommercialBillingCatalog(catalog),
+    configuration: parseCommercialBillingConfiguration(configuration),
     billing: parseCommercialBillingSummary(summary),
   };
 }
@@ -109,7 +115,7 @@ export async function beginCommercialBillingCheckout(
     {
       method: "POST",
       body: JSON.stringify({
-        planId: input.planId,
+        amountUsdMicros: input.amountUsdMicros,
         customerType: input.customerType,
         country: input.country,
         successUrl: input.successUrl,
@@ -118,6 +124,28 @@ export async function beginCommercialBillingCheckout(
     },
   );
   return commercialBillingDestination(value);
+}
+
+export async function updateCommercialBillingAutoRecharge(
+  input: CommercialBillingRequest & CommercialBillingAutoRechargeSettings,
+): Promise<CommercialBillingAutoRechargeSettings> {
+  const value = await requestJson(
+    `${endpoint(input.basePath, "auto-recharge")}?${workspaceSearch(input.workspaceId).toString()}`,
+    {
+      method: "PUT",
+      body: JSON.stringify({
+        enabled: input.enabled,
+        thresholdUsdMicros: input.thresholdUsdMicros,
+        rechargeUsdMicros: input.rechargeUsdMicros,
+        monthlyLimitUsdMicros: input.monthlyLimitUsdMicros,
+      }),
+    },
+  );
+  const settings = parseAutoRecharge(objectValue(value)?.autoRecharge);
+  if (!settings) {
+    throw new Error("billing service returned invalid auto-recharge settings");
+  }
+  return settings;
 }
 
 export async function openCommercialBillingPortal(
@@ -133,17 +161,12 @@ export async function openCommercialBillingPortal(
   return commercialBillingDestination(value);
 }
 
-export function parseCommercialBillingCatalog(
+export function parseCommercialBillingConfiguration(
   value: unknown,
-): CommercialBillingCatalog {
+): CommercialBillingConfiguration {
   const record = objectValue(value);
-  const rawPlans = Array.isArray(record?.plans) ? record.plans : [];
-  const plans = uniqueById(
-    rawPlans
-      .slice(0, MAX_CATALOG_PLANS)
-      .map(parsePlan)
-      .filter((plan): plan is CommercialBillingPlan => plan !== undefined),
-  );
+  const credits = parseCreditConfiguration(record?.credits);
+  if (!credits) throw new Error("billing credit configuration is unavailable");
   const matrix = objectValue(record?.countryMatrix);
   const version = stringValue(matrix?.version);
   const supportedCountries = Array.isArray(matrix?.supportedCountries)
@@ -156,7 +179,7 @@ export function parseCommercialBillingCatalog(
       )
     : [];
   return {
-    plans,
+    credits,
     ...(version ? { countryMatrix: { version, supportedCountries } } : {}),
   };
 }
@@ -166,38 +189,24 @@ export function parseCommercialBillingSummary(
 ): CommercialBillingSummary {
   const root = objectValue(value);
   const billing = objectValue(root?.billing);
-  const rawInvoices = Array.isArray(billing?.invoices) ? billing.invoices : [];
+  const rawPayments = Array.isArray(billing?.payments) ? billing.payments : [];
   const account = parseAccount(billing?.account);
-  const subscription = parseSubscription(billing?.subscription);
+  const credits = parseCredits(billing?.credits);
+  if (!credits) throw new Error("billing credit balance is unavailable");
   return {
     configured: billing?.configured === true,
     ...(account ? { account } : {}),
-    ...(subscription ? { subscription } : {}),
-    invoices: uniqueById(
-      rawInvoices
-        .slice(0, MAX_INVOICES)
-        .map(parseInvoice)
+    credits,
+    payments: uniqueById(
+      rawPayments
+        .slice(0, MAX_PAYMENTS)
+        .map(parsePayment)
         .filter(
-          (invoice): invoice is CommercialBillingInvoice =>
-            invoice !== undefined,
+          (payment): payment is CommercialBillingPayment =>
+            payment !== undefined,
         ),
     ),
   };
-}
-
-export function localizedCommercialBillingText(
-  values: Readonly<Record<string, string>>,
-  locale: string,
-  fallback: string,
-): string {
-  const language = locale.split("-")[0];
-  return (
-    stringValue(values[locale]) ??
-    (language ? stringValue(values[language]) : undefined) ??
-    stringValue(values.en) ??
-    Object.values(values).map(stringValue).find(Boolean) ??
-    fallback
-  );
 }
 
 export function commercialBillingDestination(value: unknown): string {
@@ -217,22 +226,6 @@ export function commercialBillingDestination(value: unknown): string {
     throw new Error("billing service returned an unsafe destination");
   }
   return parsed.href;
-}
-
-function parsePlan(value: unknown): CommercialBillingPlan | undefined {
-  const record = objectValue(value);
-  const id = tokenValue(record?.id);
-  if (!id) return undefined;
-  const kind = tokenValue(record?.kind) ?? "subscription";
-  return {
-    id,
-    kind,
-    name: localizedStrings(record?.name, id),
-    priceDisplay: localizedStrings(record?.priceDisplay),
-    ...(safeNumber(record?.monthlyPriceUsdMicros) !== undefined
-      ? { monthlyPriceUsdMicros: safeNumber(record?.monthlyPriceUsdMicros) }
-      : {}),
-  };
 }
 
 function parseAccount(value: unknown): CommercialBillingAccount | undefined {
@@ -256,66 +249,126 @@ function parseAccount(value: unknown): CommercialBillingAccount | undefined {
   };
 }
 
-function parseSubscription(
+function parseCreditConfiguration(
   value: unknown,
-): CommercialBillingSubscription | undefined {
+): CommercialCreditBillingConfiguration | undefined {
   const record = objectValue(value);
-  const id = tokenValue(record?.id);
-  const planId = tokenValue(record?.planId);
-  if (!id || !planId) return undefined;
+  const autoRecharge = objectValue(record?.autoRecharge);
+  const defaultSettings = parseAutoRecharge(autoRecharge?.defaultSettings);
+  const purchaseOptionsUsdMicros = numberOptions(
+    record?.purchaseOptionsUsdMicros,
+  );
+  const thresholdOptionsUsdMicros = numberOptions(
+    autoRecharge?.thresholdOptionsUsdMicros,
+  );
+  const rechargeOptionsUsdMicros = numberOptions(
+    autoRecharge?.rechargeOptionsUsdMicros,
+  );
+  const monthlyLimitOptionsUsdMicros = numberOptions(
+    autoRecharge?.monthlyLimitOptionsUsdMicros,
+  );
+  if (
+    record?.currency !== "USD" ||
+    !defaultSettings ||
+    purchaseOptionsUsdMicros.length === 0 ||
+    thresholdOptionsUsdMicros.length === 0 ||
+    rechargeOptionsUsdMicros.length === 0 ||
+    monthlyLimitOptionsUsdMicros.length === 0
+  ) {
+    return undefined;
+  }
   return {
-    id,
-    status: tokenValue(record?.status) ?? "unknown",
-    planId,
-    ...(isoTimestamp(record?.currentPeriodEnd)
-      ? { currentPeriodEnd: isoTimestamp(record?.currentPeriodEnd) }
-      : {}),
-    cancelAtPeriodEnd: record?.cancelAtPeriodEnd === true,
+    currency: "USD",
+    purchaseOptionsUsdMicros,
+    autoRecharge: {
+      defaultSettings,
+      thresholdOptionsUsdMicros,
+      rechargeOptionsUsdMicros,
+      monthlyLimitOptionsUsdMicros,
+    },
   };
 }
 
-function parseInvoice(value: unknown): CommercialBillingInvoice | undefined {
+function parseCredits(value: unknown): CommercialBillingCredits | undefined {
+  const record = objectValue(value);
+  const autoRecharge = parseAutoRecharge(record?.autoRecharge);
+  const availableUsdMicros = nonNegativeNumber(record?.availableUsdMicros);
+  const reservedUsdMicros = nonNegativeNumber(record?.reservedUsdMicros);
+  const purchasedUsdMicros = nonNegativeNumber(record?.purchasedUsdMicros);
+  if (
+    record?.currency !== "USD" ||
+    availableUsdMicros === undefined ||
+    reservedUsdMicros === undefined ||
+    purchasedUsdMicros === undefined ||
+    !autoRecharge
+  ) {
+    return undefined;
+  }
+  return {
+    currency: "USD",
+    availableUsdMicros,
+    reservedUsdMicros,
+    purchasedUsdMicros,
+    paymentMethodReady: record.paymentMethodReady === true,
+    autoRecharge,
+  };
+}
+
+function parseAutoRecharge(
+  value: unknown,
+): CommercialBillingAutoRechargeSettings | undefined {
+  const record = objectValue(value);
+  const thresholdUsdMicros = nonNegativeNumber(record?.thresholdUsdMicros);
+  const rechargeUsdMicros = nonNegativeNumber(record?.rechargeUsdMicros);
+  const monthlyLimitUsdMicros = nonNegativeNumber(
+    record?.monthlyLimitUsdMicros,
+  );
+  if (
+    typeof record?.enabled !== "boolean" ||
+    thresholdUsdMicros === undefined ||
+    rechargeUsdMicros === undefined ||
+    monthlyLimitUsdMicros === undefined ||
+    rechargeUsdMicros === 0 ||
+    monthlyLimitUsdMicros < rechargeUsdMicros
+  ) {
+    return undefined;
+  }
+  return {
+    enabled: record.enabled,
+    thresholdUsdMicros,
+    rechargeUsdMicros,
+    monthlyLimitUsdMicros,
+  };
+}
+
+function parsePayment(value: unknown): CommercialBillingPayment | undefined {
   const record = objectValue(value);
   if (!record) return undefined;
   const id = tokenValue(record?.id);
   if (!id) return undefined;
   return {
     id,
-    ...(stringValue(record?.number)
-      ? { number: stringValue(record?.number) }
-      : {}),
     status: tokenValue(record?.status) ?? "unknown",
     currency: currencyCode(record?.currency) ?? "USD",
-    ...optionalNumber(record, "amountPaidMinor"),
-    ...optionalNumber(record, "amountDueMinor"),
-    ...optionalNumber(record, "totalMinor"),
-    ...optionalNumber(record, "amountPaidUsdMicros"),
-    ...optionalNumber(record, "amountDueUsdMicros"),
-    ...optionalNumber(record, "totalUsdMicros"),
-    ...(safeHttpsUrl(record?.hostedInvoiceUrl)
-      ? { hostedInvoiceUrl: safeHttpsUrl(record?.hostedInvoiceUrl) }
-      : {}),
-    ...(safeHttpsUrl(record?.invoicePdfUrl)
-      ? { invoicePdfUrl: safeHttpsUrl(record?.invoicePdfUrl) }
+    ...optionalNumber(record, "amountMinor"),
+    ...optionalNumber(record, "amountUsdMicros"),
+    ...optionalNumber(record, "amountRefundedMinor"),
+    ...(safeHttpsUrl(record?.receiptUrl)
+      ? { receiptUrl: safeHttpsUrl(record?.receiptUrl) }
       : {}),
     ...(isoTimestamp(record?.createdAt)
       ? { createdAt: isoTimestamp(record?.createdAt) }
       : {}),
     paid: record?.paid === true,
+    refunded: record?.refunded === true,
   };
 }
 
 function optionalNumber(
   record: Readonly<Record<string, unknown>>,
-  key:
-    | "amountPaidMinor"
-    | "amountDueMinor"
-    | "totalMinor"
-    | "amountPaidUsdMicros"
-    | "amountDueUsdMicros"
-    | "totalUsdMicros",
+  key: "amountMinor" | "amountUsdMicros" | "amountRefundedMinor",
 ): Partial<Record<typeof key, number>> {
-  const value = safeNumber(record[key]);
+  const value = nonNegativeNumber(record[key]);
   return value === undefined ? {} : { [key]: value };
 }
 
@@ -349,24 +402,6 @@ function endpoint(basePath: `/${string}`, action: string): string {
 
 function workspaceSearch(workspaceId: string): URLSearchParams {
   return new URLSearchParams({ workspaceId });
-}
-
-function localizedStrings(
-  value: unknown,
-  fallback?: string,
-): Readonly<Record<string, string>> {
-  const record = objectValue(value);
-  const result: Record<string, string> = {};
-  for (const [locale, text] of Object.entries(record ?? {}).slice(
-    0,
-    MAX_LOCALIZED_STRINGS,
-  )) {
-    if (!/^[A-Za-z0-9-]{2,35}$/u.test(locale)) continue;
-    const normalized = stringValue(text);
-    if (normalized) result[locale] = normalized;
-  }
-  if (Object.keys(result).length === 0 && fallback) result.en = fallback;
-  return result;
 }
 
 function objectValue(
@@ -409,10 +444,22 @@ function isoTimestamp(value: unknown): string | undefined {
     : undefined;
 }
 
-function safeNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isSafeInteger(value)
+function nonNegativeNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
     ? value
     : undefined;
+}
+
+function numberOptions(value: unknown): readonly number[] {
+  if (!Array.isArray(value)) return [];
+  return [
+    ...new Set(
+      value
+        .slice(0, MAX_OPTIONS)
+        .map(nonNegativeNumber)
+        .filter((entry): entry is number => entry !== undefined && entry > 0),
+    ),
+  ].sort((left, right) => left - right);
 }
 
 function safeHttpsUrl(value: unknown): string | undefined {
