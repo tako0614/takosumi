@@ -267,31 +267,6 @@ describe("generalization boundary scanner", () => {
     expect(violations).toEqual([]);
   });
 
-  test("limits compatibility sourceKind to the external usage evidence schema", () => {
-    const allowed = findGeneralizationBoundaryViolations([
-      {
-        path: "scripts/lib/service-form-compatibility-removal.mjs",
-        content: [
-          "function validateUsageObservation(value) {",
-          '  return value.sourceKind === "operator-route-and-provider-telemetry";',
-          "}",
-          "function exactKeys() {}",
-        ].join("\n"),
-      },
-    ]);
-    expect(allowed).toEqual([]);
-
-    const rejected = findGeneralizationBoundaryViolations([
-      {
-        path: "scripts/lib/service-form-compatibility-removal.mjs",
-        content: "const sourceKind = install.sourceKind;",
-      },
-    ]);
-    expect(rejected.map((violation) => violation.ruleId)).toEqual([
-      "retired-authority-key",
-    ]);
-  });
-
   test("rejects list-order and id-shape InstallConfig selection in control-plane smoke tooling", () => {
     const violations = findGeneralizationBoundaryViolations([
       {
@@ -352,21 +327,6 @@ describe("generalization boundary scanner", () => {
           'outputAllowlist: { mcp_url: { from: "mcp_url" } },',
           'inputs: { endpoint: { source: "capsule_output", outputName: "mcp_url" } },',
         ].join("\n"),
-      },
-    ]);
-
-    expect(violations).toEqual([]);
-  });
-
-  test("allows ordinary Output names inside retained provider Interface custody tests", () => {
-    const violations = findGeneralizationBoundaryViolations([
-      {
-        path: "provider/internal/provider/interface_resource_test.go",
-        content: '"output_name": types.StringValue("mcp_url")',
-      },
-      {
-        path: "provider/internal/client/interface_test.go",
-        content: '"outputName": "mcp_url"',
       },
     ]);
 

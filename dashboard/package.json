@@ -4,8 +4,8 @@
   "license": "AGPL-3.0-only",
   "type": "module",
   "scripts": {
-    "dev": "bun ../scripts/provider-custody.mjs && vite",
-    "build": "bun ../scripts/provider-custody.mjs && vite build",
+    "dev": "vite",
+    "build": "vite build",
     "preview": "vite preview"
   },
   "dependencies": {

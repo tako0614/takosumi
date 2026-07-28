@@ -58,9 +58,9 @@ organization `takoform` manages the GitHub-account-derived `tako0614` Public Reg
 publication is authorized; provider/package releases still require signing and
 real-install evidence. The current `takosumi.dev/v1alpha1`, `ResourceShape`,
 `/v1/resources`, IDs, kinds, imports, and database columns remain compatibility
-surfaces. The discontinued provider's `takosumi_*` resources and existing state
-remain historical migration/rollback custody only. No current code is conformant
-merely because this target is documented.
+surfaces for the host API and Resource records. Takosumi ships no first-party
+Terraform/OpenTofu provider. No current code is conformant merely because this
+target is documented.
 
 Takosumi Core is provider-neutral beyond Takoform. Plain Stack execution accepts any
 runner-installable OpenTofu/Terraform provider configured through ProviderConnection,
@@ -914,14 +914,13 @@ Resource; they do not become lifecycle state owners.
 If a mature vendor-neutral provider exists for external infrastructure, prefer
 that provider in the Stack flow. For Takosumi-managed capacity, keep the
 provider-neutral Resource lifecycle canonical even when a universal client or
-protocol exists. Takoform's portable typed client is optional; the discontinued
-`takosumi/takosumi` provider is historical custody only. Neither defines whether
-a form is installed, executable, activated, or offered.
+protocol exists. Takoform's portable typed client is optional and does not
+define whether a form is installed, executable, activated, or offered.
 
 This remains true over time. A new universal client may replace the HCL provider
 as the preferred user surface, but its control operations still call the Deploy
 API and its data plane still resolves the canonical Ready Resource. This keeps
-service state portable without reviving the discontinued Takosumi provider.
+service state portable without introducing a first-party provider.
 
 When a durable managed-service definition is justified, the portable project
 admits an exact versioned Service Form even if its public protocol is standard.
@@ -931,9 +930,8 @@ commercial binding to that Offering selection. One-off gaps and external infrast
 declared-env-capable ProviderConnections and ordinary OpenTofu modules. Add a
 standard typed form-provider schema only for a repeated portable form with a
 clear schema, validation, lifecycle, adapter path, state/import/drift story,
-security review, and conformance evidence. No new Takosumi-provider resource is
-admitted; operator objects use API/CLI/dashboard, and the discontinued
-provider's old types remain historical migration/rollback custody.
+security review, and conformance evidence. Operator objects use
+API/CLI/dashboard.
 
 The target extension has two layers. Adding a standard HCL-facing form resource
 requires an immutable Form Package and Takoform typed-provider release so OpenTofu can keep
@@ -943,19 +941,15 @@ can publish implementation tokens, adapter plugin ids, plugin-local non-secret
 options, and interface capability evidence. The Resolver and Adapter decide
 whether those tokens are supported by the endpoint.
 
-## Portable Form Provider, Discontinued Takosumi Provider, And API Contract
+## Portable Form Provider And API Contract
 
-The mixed `takosumi/takosumi` provider is discontinued. It retains frozen form,
-Interface, and TargetPool source only for supported historical state,
-migration, and rollback evidence. It is not published under a corrected version
-and gains no operator/admin types. Portable Form authoring and Form Package
-Interface descriptors belong to Takoform; active operator administration
-belongs to Takosumi API/CLI/dashboard.
+Takosumi ships no first-party Terraform/OpenTofu provider. Portable Form
+authoring and Form Package Interface descriptors belong to Takoform; active
+operator administration belongs to Takosumi API/CLI/dashboard.
 
 Portable host integration materializes a Form Package descriptor only onto the
 admitted Form-backed Resource, with no Capsule-scoped authoring credential and
-no InterfaceBinding authority. The retained discontinued provider implementation
-is compatibility evidence, not the active declaration client.
+no InterfaceBinding authority.
 
 The target portable form provider is independently versioned from exact Form
 Packages, exposes statically typed standard form resources, and calls only the
@@ -1277,9 +1271,9 @@ targets:
 
 The current compatibility API/plugin seam accepts operator-defined shape
 tokens, while target mutation requires a trusted installed exact FormRef. The
-ten current `takosumi_*` state aliases remain frozen historical compatibility
-custody, not an active client, global enum, or target-definition authority.
-Portable typed authoring belongs to Takoform.
+ten current Resource Shape kind tokens remain API compatibility identities,
+not a global enum or target-definition authority. Portable typed authoring
+belongs to Takoform.
 
 `ref` is the target-native reference such as an account id, cluster id, or
 fleet id. `credentialRef` is the ProviderConnection / Credential id used by the
@@ -1429,13 +1423,9 @@ CLI/API/runbook operation, usage showback, and audit evidence. It does not
 advertise an operator admin UI. Operator-only changes are applied through
 database-backed configuration, CLI/API operations, runbooks, and audit logs.
 
-The official hosted platform does not publish or index the discontinued
-`takosumi/takosumi` provider. Its former 1.0.0 public bytes differ from local
-rebuilds and are retained only as immutable quarantine/migration evidence; they
-MUST NOT be overwritten or republished. The dashboard no longer materializes a
-Takosumi-provider default mirror. Generic runner mirror/cache support remains
-available for ordinary providers and independently published Takoform bytes,
-without rebuilding provider artifacts.
+The official hosted platform does not publish, index, build, sign, or retain a
+first-party provider. Generic runner mirror/cache support remains available
+for ordinary external providers and independently published Takoform bytes.
 
 ## OIDC And Workload Identity
 
@@ -1461,10 +1451,6 @@ OpenTofu state
 Takosumi resource state
 Native resource state
 ```
-
-Retained historical OpenTofu state for `takosumi_*` resources holds Takosumi
-resource ids and outputs, not secret material or raw native provider internals.
-No new Takosumi-provider state is authored.
 
 For the Stack flow, a successful apply captures `tofu output -json` as the
 current Capsule Output. An Interface may explicitly resolve a non-sensitive
@@ -1607,9 +1593,8 @@ isolation, quota, network egress policy, admin audit, and usage metering.
 5. Move first-party runtime consumers to Interface reads and invocation-time
    Principal OAuth credentials; remove legacy Output convention and
    Workspace-wide Output reconcile paths.
-6. Characterize and freeze the discontinued Takosumi provider's historical
-   Resource/state custody, retain the immutable `1.0.0` quarantine and
-   migration/rollback fixtures, and publish no replacement version.
+6. Keep first-party provider source, release, custody, and public mirror lanes
+   absent; use Takoform or the owning external provider instead.
 7. After public identity gates, extract FormRef and the data-only ten-package
    legacy compatibility set, then standard definitions, portable
    interoperability, typed provider, and conformance without moving Takosumi

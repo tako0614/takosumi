@@ -837,11 +837,7 @@ function parseUpstreamOAuth(
 }
 
 function isDashboardAssetPath(pathname: string): boolean {
-  return (
-    pathname === "/favicon.ico" ||
-    pathname.startsWith("/assets/") ||
-    pathname.startsWith("/opentofu/providers/")
-  );
+  return pathname === "/favicon.ico" || pathname.startsWith("/assets/");
 }
 
 const DASHBOARD_CSP =

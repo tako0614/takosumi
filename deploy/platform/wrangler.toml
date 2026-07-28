@@ -23,9 +23,8 @@ compatibility_flags = ["nodejs_compat"]
 pattern = "takosumi.example.com"
 custom_domain = true
 
-# Dashboard SPA and static OpenTofu provider mirror assets. The accounts handler
-# serves non-API GET/HEAD from this binding (deep links fall back to index.html,
-# while /opentofu/providers/* stays file-like and missing files 404).
+# Dashboard SPA assets. The accounts handler serves non-API GET/HEAD from this
+# binding and deep links fall back to index.html.
 # run_worker_first lets the worker inspect the request (API namespaces, export
 # downloads) before static assets answer.
 [assets]

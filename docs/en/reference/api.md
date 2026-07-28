@@ -21,8 +21,8 @@ One-off gap:
   use generic-env ProviderConnection and an ordinary OpenTofu module.
 ```
 
-The discontinued `takosumi/takosumi` provider is not a client for new
-configuration. Use Takoform for portable Forms and Form-backed Resource
+Takosumi does not ship a first-party Terraform/OpenTofu provider. Use Takoform
+for portable Forms and Form-backed Resource
 Interface descriptors, service-side InstallConfig blueprints for Capsule
 Interfaces, and this API, CLI, or dashboard for operator operations. External
 providers continue to run through plain Stack execution while Takosumi owns the
@@ -304,8 +304,8 @@ the sole lifecycle authority for preview/apply/observe/refresh/import/delete and
 for canonical Resource, ResolutionLock, NativeResource, Run, status, Output,
 and audit evidence. The portable Takoform typed client, Takosumi CLI/dashboard,
 Kubernetes CRDs, and control-plane compatibility handlers are clients of this
-API. Discontinued `takosumi_*` HCL is existing-state migration/rollback custody,
-not an active authoring path.
+API. Provider-specific HCL does not create a separate lifecycle or authoring
+authority.
 
 On a multi-tenant platform, the session / personal access token / service
 token / OAuth token paths require the request's `space` to match the caller's
@@ -553,8 +553,7 @@ provider-neutral default for newly written objects. Its exact values are
 `infrequent_access` resolves only when the TargetPool advertises
 `storage_class_infrequent_access`; unsupported placement fails before backend
 calls. The selector does not implicitly change objects written earlier. The
-discontinued Takosumi provider retains `storage_class` only as a historical
-state-migration compatibility name.
+selector has no provider-specific compatibility name.
 
 ## Target / Credential / Policy API
 
@@ -570,7 +569,6 @@ additional boolean keys alongside the known keys (`opentofu`, `aws`,
 add implementations for existing typed shapes; they do not create new HCL
 resource types at runtime. New portable Forms require a Takoform exact Form
 Package/schema/typed-provider release and Takosumi host/adapter conformance.
-The discontinued Takosumi provider is neither updated nor republished.
 
 ```http
 PUT    /v1/target-pools/{name}

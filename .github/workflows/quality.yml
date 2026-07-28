@@ -37,21 +37,11 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Setup Go
-        uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # pinned: v6.0.0
-        with:
-          go-version: "1.26.5"
-          cache-dependency-path: provider/go.sum
-
       - name: Setup OpenTofu
         uses: opentofu/setup-opentofu@847eaa4afeb791b06daa46e8eafa8b1b68d7cfb4 # pinned: v2
         with:
           tofu_version: 1.12.1
           tofu_wrapper: false
-
-      - name: Prime hermetic provider module cache
-        working-directory: provider
-        run: go mod download all
 
       - name: Install locked dependencies
         run: bun install --frozen-lockfile
@@ -59,10 +49,6 @@ jobs:
       - name: Install locked dashboard dependencies
         working-directory: dashboard
         run: bun install --frozen-lockfile
-
-      - name: Audit Go provider dependencies
-        working-directory: provider
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
 
       - name: Audit root JavaScript dependencies
         run: bun audit
