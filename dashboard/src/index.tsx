@@ -32,7 +32,6 @@ import "./styles/views.css";
 import "./styles/app-views.css";
 
 installStaleAssetReload();
-void initializeTakosumiRuntimeCapabilities();
 
 // --- auth (public) ----------------------------------------------------------
 const SignInView = lazy(() => import("./views/auth/SignInView.tsx"));
@@ -294,13 +293,20 @@ function App() {
   );
 }
 
-const root = document.getElementById("root");
-if (!root) throw new Error("dashboard mount target #root not found");
-render(
-  () => (
-    <ErrorBoundary>
-      <App />
-    </ErrorBoundary>
-  ),
-  root,
-);
+function mountDashboard(): void {
+  const root = document.getElementById("root");
+  if (!root) throw new Error("dashboard mount target #root not found");
+  render(
+    () => (
+      <ErrorBoundary>
+        <App />
+      </ErrorBoundary>
+    ),
+    root,
+  );
+}
+
+// Server capabilities are composition truth for the first route too. Mounting
+// before discovery completes can permanently select an OSS fallback inside an
+// untracked list item even after the capability signal updates.
+void initializeTakosumiRuntimeCapabilities().finally(mountDashboard);
