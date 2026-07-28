@@ -1,6 +1,6 @@
 # Takosumi Final Plan
 
-Last updated: 2026-07-16
+Last updated: 2026-07-28
 
 This document is the authoritative Takosumi product direction.
 
@@ -48,10 +48,11 @@ separate product core.
 
 ### 0.1 Adopted Service Form separation
 
-The architecture decision in
-[`../../../docs/platform/decisions/0001-service-form-host-offering-separation.md`](../../../docs/platform/decisions/0001-service-form-host-offering-separation.md)
-is part of this Final Plan. The detailed source plan is
-[`../../../docs/platform/service-form-platform-separation-plan.md`](../../../docs/platform/service-form-platform-separation-plan.md).
+The repository-local
+[Service Form host / Offering separation decision](./service-form-host-offering-separation.md)
+is part of this Final Plan. It is self-contained so a standalone public
+Takosumi checkout does not depend on private ecosystem paths for its
+architecture authority.
 
 The target has three independently released authorities:
 

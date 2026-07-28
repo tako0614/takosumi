@@ -1,6 +1,6 @@
 # Takosumi Core Spec
 
-Last updated: 2026-07-16
+Last updated: 2026-07-28
 
 This document describes the OSS core specification. Product direction is fixed
 by [Takosumi Final Plan](./final-plan.md).
@@ -1622,7 +1622,9 @@ isolation, quota, network egress policy, admin audit, and usage metering.
     Resource object/ledger; publish structured availability and reason codes.
 11. Add TargetPool implementation plugin fields and scoped compatibility
     profiles only where provider/standard surfaces are insufficient.
-12. Add the write-only Secret control API and optional VerifiedDomain framework.
+12. Keep secret material write-only inside ProviderConnection creation/update
+    and runner materialization; do not expose a standalone `/secrets` API or
+    Secret Resource shape. Keep the VerifiedDomain framework optional.
 13. Keep Kubernetes / VM / Machine / Job / Function specification-only for this
     GA; add a manager only after separate portability and operation review.
 14. Migrate Cloud from its current ServiceOffering compatibility rows to exact

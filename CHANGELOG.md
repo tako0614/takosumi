@@ -6,18 +6,18 @@ self-hosted Takos distribution worker consumes Takosumi contracts and the
 external self-hoster/operator control plane; there is no npm-published service
 package for the v1 GA line.
 
-## 1.0.0 — Final 17-noun model
+## 1.0.0 — Canonical control-plane model
 
-Breaking: the public control-plane vocabulary is renamed to the final 17-noun
-model. This is a single coherent surface change across the contract, control
-plane, account plane, dashboard, CLI, runner env, and HTTP routes.
+Breaking: the public control-plane vocabulary is aligned across the contract,
+control plane, account plane, dashboard, CLI, runner env, and HTTP routes.
 
-- Public nouns are now `Workspace`, `Project`, `Capsule`, `Source`,
+- Core Stack nouns are now `Workspace`, `Project`, `Capsule`, `Source`,
   `ProviderConnection`, `CredentialRecipe`, `ProviderBinding`, `Secret`, `Run`,
-  `Plan`, `Apply`, `Destroy`, `StateVersion`, `Output`, `Runner`, `AuditEvent`,
-  and `Operator`. The pre-1.0 ledger nouns `Space`, `Installation`,
-  `StateSnapshot`, `OutputSnapshot`, `Deployment`, `Provider Catalog`,
-  `own_key`, and `takos_provided` are no longer product nouns.
+  `StateVersion`, `Output`, `Runner`, `AuditEvent`, and `Operator`.
+  `Plan`, `Apply`, and `Destroy` are Run types, not separate lifecycle
+  entities. The pre-1.0 ledger nouns `Space`, `Installation`, `StateSnapshot`,
+  `OutputSnapshot`, `Deployment`, `Provider Catalog`, `own_key`, and
+  `takos_provided` are no longer product nouns.
 - `Space` → `Workspace`, `Installation` → `Capsule`, `StateSnapshot` →
   `StateVersion`, `OutputSnapshot` → `Output`; a new `Project` layer sits
   between Workspace and Capsule. The `Deployment` ledger record is retired: a
@@ -33,9 +33,20 @@ plane, account plane, dashboard, CLI, runner env, and HTTP routes.
   Catalog ownership axis and the `own_key` / `takos_provided` sentinels are
   removed; a provider binds to an explicit ProviderConnection id when it needs
   injected credentials. Omission does not select an operator connection.
-- The Runtime Projection (ServiceExport / ServiceBinding / ServiceGrant) is removed
-  from OSS; runtime service surfaces are projected from a Capsule's
-  `tofu output -json` by the consuming product profile.
+- The retired Runtime Projection (`ServiceExport`, `ServiceBinding`, and
+  `ServiceGrant`) does not return. Runtime capabilities are declared as
+  non-secret `Interface` documents and authorized through `InterfaceBinding`.
+  Ordinary OpenTofu Outputs remain explicit module return values; they are not
+  a runtime registry or a credential transport.
+- The optional Service Form host resolves exact independently versioned
+  `FormRef` values into the same canonical `Resource` / `Run` / state / audit
+  ledger. `ResourceShape` and related v1 names remain compatibility aliases.
+  Generic `Offering` selection is noncommercial OSS policy; official pricing,
+  capacity, billing, SLA, and support bindings remain a Cloud concern.
+- Takoform independently owns portable Service Form definitions, packages,
+  provider releases, and conformance. Takosumi remains provider-neutral:
+  Takoform is one supported client/definition authority, not the Takosumi
+  lifecycle or Offering type system.
 - Cloudflare remains an ordinary provider-native target through explicit
   ProviderConnection / ProviderBinding configuration. AI Gateway, managed
   resources, and Stripe-enforced billing move to the closed `takosumi-cloud/`
