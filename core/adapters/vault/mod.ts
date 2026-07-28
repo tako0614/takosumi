@@ -24,8 +24,6 @@ import type {
   CreateConnectionRequest,
 } from "@takosumi/internal/deploy-control-api";
 import {
-  GIT_HTTPS_TOKEN_ENV,
-  GIT_SSH_PRIVATE_KEY_ENV,
   type MintPhase,
   type MintedFile,
   type MintResponse,
@@ -45,25 +43,21 @@ import {
   credentialRecipeDriverKey,
   type CredentialRecipeDriverRegistry,
   type CredentialRecipeRuntimeDriver,
-} from "@takosumi/providers";
-import { mintGitSourceCredential } from "@takosumi/providers/git/credentials.ts";
-import {
-  gitHostScope,
-  gitProviderSettings,
-} from "@takosumi/providers/git/settings.ts";
+  type CredentialDriverFetch,
+  type SourceCredentialDriverRegistry,
+} from "./driver_ports.ts";
 import {
   DeclaredEnvRegistrationError,
   validateDeclaredEnvRegistration,
 } from "./declared_env_registration.ts";
-import { verifyDriverForConnection } from "./verify_drivers.ts";
+import {
+  sourceCredentialDriverForConnection,
+  sourceCredentialDriverForKind,
+} from "./verify_drivers.ts";
 import type {
   OpenTofuControlStore,
   StoredSecretBlob,
 } from "../../domains/deploy-control/store.ts";
-import {
-  normalizeProviderConfigBaseUrl,
-  providerConfigUrlError,
-} from "../../shared/provider_config_urls.ts";
 import type { SecretBoundaryCrypto } from "../secret-store/memory.ts";
 import type { SecretPartition } from "../secret-store/types.ts";
 
@@ -208,9 +202,8 @@ export interface MintRequest {
    */
   readonly sourceConnectionId?: string;
   /**
-   * The Source URL the `source` phase is about to clone. The vault requires it
-   * to sit on the host the git connection declares, so a Source pointed at a
-   * foreign host can never be handed another Workspace member's git token.
+   * Exact Source URL receiving the credential. The selected transport driver
+   * must reject a URL outside the connection's declared host scope.
    */
   readonly sourceUrl?: string;
   /**
@@ -355,11 +348,8 @@ interface ProviderSecretMaterial {
   readonly files: readonly MintedFile[];
 }
 
-/** Injected fetch implementation so `test()` is unit-testable without real network. */
-export type VaultFetch = (
-  input: string,
-  init?: RequestInit,
-) => Promise<Response>;
+/** Injected fetch implementation so driver verification is unit-testable. */
+export type VaultFetch = CredentialDriverFetch;
 
 export interface StaticSecretConnectionVaultDependencies {
   readonly store: OpenTofuControlStore;
@@ -377,12 +367,10 @@ export interface StaticSecretConnectionVaultDependencies {
   ) => CredentialRecipe | undefined;
   readonly credentialDrivers?: CredentialRecipeDriverRegistry;
   /**
-   * Operator allowlist of provider/compat API base URLs that may appear in a
-   * Connection's `scopeHints.providerConfig` (same list the Resource Shape
-   * TargetPool surface uses). Omitted means no override host is approved, so
-   * every absolute http(s) URL in provider configuration is rejected.
+   * Complete host-installed Source credential driver registry. Omitted means
+   * private Source credential registration, verification, and mint fail closed.
    */
-  readonly allowedProviderConfigUrls?: readonly string[];
+  readonly sourceCredentialDrivers?: SourceCredentialDriverRegistry;
 }
 
 export class StaticSecretConnectionVault implements ConnectionVault {
@@ -396,7 +384,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     id: string,
   ) => CredentialRecipe | undefined;
   readonly #credentialDrivers: CredentialRecipeDriverRegistry;
-  readonly #allowedProviderConfigUrls: ReadonlySet<string>;
+  readonly #sourceCredentialDrivers: SourceCredentialDriverRegistry;
 
   constructor(deps: StaticSecretConnectionVaultDependencies) {
     this.#store = deps.store;
@@ -411,11 +399,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     this.#credentialRecipeResolver =
       deps.credentialRecipeResolver ?? (() => undefined);
     this.#credentialDrivers = deps.credentialDrivers ?? {};
-    this.#allowedProviderConfigUrls = new Set(
-      (deps.allowedProviderConfigUrls ?? []).map(
-        normalizeProviderConfigBaseUrl,
-      ),
-    );
+    this.#sourceCredentialDrivers = deps.sourceCredentialDrivers ?? {};
   }
 
   async register(input: RegisterConnectionInput): Promise<ProviderConnection> {
@@ -564,13 +548,9 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     // material. In particular, provider configuration and module defaults are
     // public connection metadata and must never become an alternate secret
     // transport around Credential Recipes.
+    const scopeHints = normalizeScope(input.scopeHints);
     const connectionScope =
       input.scope ?? (workspaceId ? "workspace" : "operator");
-    const scopeHints = normalizeScope(
-      input.scopeHints,
-      connectionScope,
-      this.#allowedProviderConfigUrls,
-    );
     assertManagedProviderOperatorOwnership(
       scopeHints,
       workspaceId,
@@ -634,17 +614,9 @@ export class StaticSecretConnectionVault implements ConnectionVault {
   }
 
   /**
-   * Registers a git source credential (`source_git_https_token` /
-   * `source_git_ssh_key`). The value shape and required scope are enforced here:
-   *   - https token: `values.GIT_HTTPS_TOKEN` (string, non-empty). Optional
-   *     `scope.username`.
-   *   - ssh key: `values.GIT_SSH_PRIVATE_KEY` (string, non-empty). REQUIRES
-   *     `scope.knownHostsEntry` so the runner can pin the host key
-   *     (StrictHostKeyChecking=yes always; =no is forbidden).
-   *
-   * Git connections are sealed under the explicit `source:git` partition and
-   * recorded with `kind` so the mint phase rules can exclude
-   * them from the tofu phases.
+   * Registers a Source credential after the explicitly installed transport
+   * driver validates its credential names and opaque settings. Core owns only
+   * sealing, connection state, scope, and phase separation.
    */
   async #registerGitConnection(
     input: RegisterConnectionInput,
@@ -662,60 +634,33 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         "values must be an object of { envName: value }",
       );
     }
-    const expectedEnv =
-      kind === "source_git_https_token"
-        ? GIT_HTTPS_TOKEN_ENV
-        : GIT_SSH_PRIVATE_KEY_ENV;
     const envNames = Object.keys(values);
-    if (envNames.length !== 1 || envNames[0] !== expectedEnv) {
-      throw new ConnectionVaultError(
-        "invalid_argument",
-        `${kind} requires exactly one value: ${expectedEnv}`,
-      );
-    }
-    if (
-      typeof values[expectedEnv] !== "string" ||
-      values[expectedEnv].length === 0
-    ) {
-      throw new ConnectionVaultError(
-        "invalid_argument",
-        `value for ${expectedEnv} must be a non-empty string`,
-      );
-    }
+    const scopeHints = normalizeScope(input.scopeHints);
     const connectionScope =
       input.scope ?? (workspaceId ? "workspace" : "operator");
-    const scopeHints = normalizeScope(
-      input.scopeHints,
-      connectionScope,
-      this.#allowedProviderConfigUrls,
-    );
     assertManagedProviderOperatorOwnership(
       scopeHints,
       workspaceId,
       connectionScope,
     );
-    if (kind === "source_git_ssh_key") {
-      if (!gitProviderSettings(scopeHints).knownHostsEntry) {
-        throw new ConnectionVaultError(
-          "invalid_argument",
-          "source_git_ssh_key requires scopeHints.providerSettings.knownHostsEntry (the known_hosts line for the host)",
-        );
-      }
+    const sourceDriver = sourceCredentialDriverForKind(
+      kind,
+      this.#sourceCredentialDrivers,
+    );
+    if (!sourceDriver) {
+      throw new ConnectionVaultError(
+        "not_implemented",
+        `source credential driver ${kind} is not installed`,
+      );
     }
-    if (kind === "source_git_https_token") {
-      // The SSH kind is host-bound by its pinned known_hosts entry; the HTTPS
-      // kind has no such pin and its askpass script answers every host's
-      // credential prompt, so the repository URL is what binds the token to one
-      // host. Without it a Source pointed at an attacker-controlled host would
-      // exfiltrate the stored PAT (`#mintSourceGit` re-checks the binding).
-      if (!gitHostScope(gitProviderSettings(scopeHints).repositoryUrl)) {
-        throw new ConnectionVaultError(
-          "invalid_argument",
-          "source_git_https_token requires scopeHints.providerSettings.repositoryUrl (an http(s) repository URL that binds the token to one host)",
-        );
-      }
+    const validation = sourceDriver.validateRegistration({
+      kind,
+      ...(scopeHints ? { scopeHints } : {}),
+      values,
+    });
+    if (!validation.ok) {
+      throw new ConnectionVaultError("invalid_argument", validation.detail);
     }
-
     const now = this.#now();
     const expiresAt = normalizeConnectionExpiresAt(input.expiresAt, now);
     const id = this.#newId();
@@ -756,7 +701,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       status: "pending",
       materialization: "secret",
       ...(scopeHints ? { scopeHints } : {}),
-      envNames: [expectedEnv],
+      envNames,
       createdAt: nowIso,
       updatedAt: nowIso,
       ...(expiresAt ? { expiresAt } : {}),
@@ -784,17 +729,22 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     const values = material.env;
     let verified: { readonly ok: boolean; readonly detail?: string };
     if (isSourceGitKind(connection.kind)) {
-      // Git is the v1 Source transport, so its HTTPS/SSH verification stays in
-      // the Source credential path. OpenTofu providers use only the explicitly
-      // installed Credential Recipe driver below.
-      const driver = verifyDriverForConnection(connection);
+      const driver = sourceCredentialDriverForConnection(
+        connection,
+        this.#sourceCredentialDrivers,
+      );
       if (!driver) {
         return {
           status: "pending",
           detail: `no verification driver is configured for connection kind ${connection.kind ?? "(unknown)"} (provider ${connection.provider})`,
         };
       }
-      verified = await driver({ connection, values, fetch: this.#fetch });
+      verified = await driver.verify({
+        connection,
+        values,
+        fetch: this.#fetch,
+        now: this.#now,
+      });
     } else {
       const driver = this.#credentialDriver(connection);
       if (!driver?.verify) {
@@ -1187,43 +1137,27 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       );
     }
     assertConnectionVerified(connection);
-    if (connection.kind === "source_git_https_token") {
-      // The minted askpass script answers ANY host's credential prompt, so the
-      // token may only be minted for the host the connection is bound to.
-      // Otherwise a Workspace member who can register a Source is able to point
-      // it at a host they control and collect another member's git PAT.
-      const boundHost = gitHostScope(
-        gitProviderSettings(connection.scopeHints).repositoryUrl,
-      );
-      if (!boundHost) {
-        throw new ConnectionVaultError(
-          "failed_precondition",
-          `connection ${connectionId} has no scopeHints.providerSettings.repositoryUrl to bind the token to a host`,
-        );
-      }
-      if (gitHostScope(sourceUrl) !== boundHost) {
-        throw new ConnectionVaultError(
-          "failed_precondition",
-          `connection ${connectionId} is bound to ${boundHost} and must not be minted for another host`,
-        );
-      }
-    }
     const values = await this.#openValues(connection);
 
-    // The git source driver (`@takosumi/providers/git`) turns the opened secret
-    // values + the connection context into the runner-facing askpass / ssh key
-    // files. Crypto / connection-state validation stayed in core above; the
-    // driver's typed error is mapped onto the Vault's stable
-    // `failed_precondition` surface.
+    const driver = sourceCredentialDriverForConnection(
+      connection,
+      this.#sourceCredentialDrivers,
+    );
+    if (!driver) {
+      throw new ConnectionVaultError(
+        "not_implemented",
+        `source credential driver ${connection.kind} is not installed`,
+      );
+    }
+    // Crypto and connection-state validation stay in Core. The injected
+    // transport driver turns already-opened values into runner-only material.
     try {
-      const settings = gitProviderSettings(connection.scopeHints);
-      const response = mintGitSourceCredential(values, {
-        connectionId,
-        kind: connection.kind,
-        ...(settings.username ? { username: settings.username } : {}),
-        ...(settings.knownHostsEntry
-          ? { knownHostsEntry: settings.knownHostsEntry }
-          : {}),
+      const response = await driver.mint({
+        connection,
+        values,
+        ...(sourceUrl === undefined ? {} : { sourceUrl }),
+        fetch: this.#fetch,
+        now: this.#now,
       });
       return new PhaseMintBundle(response, []);
     } catch (error) {
@@ -1517,8 +1451,6 @@ function connectionIsExpired(
 
 function normalizeScope(
   scope: ConnectionScopeHints | undefined,
-  connectionScope: ProviderConnection["scope"],
-  allowedProviderConfigUrls: ReadonlySet<string>,
 ): ConnectionScopeHints | undefined {
   if (!scope) return undefined;
   const out: {
@@ -1549,28 +1481,7 @@ function normalizeScope(
     scope.providerConfig,
     "scopeHints.providerConfig",
   );
-  if (providerConfig) {
-    // providerConfig is rendered verbatim into the generated provider block, so
-    // an `endpoint` / `base_url` string in it decides where the minted provider
-    // credential is sent. The Resource Shape TargetPool surface already runs the
-    // operator allowlist over the identical shape; without the same check the
-    // Workspace-scoped connection-create path (a session-authenticated request
-    // body) is the unguarded second entrance to that same generated block, and a
-    // Workspace member could redirect provider traffic — and the credential
-    // riding along with it — to a host they control. Operator-scoped rows are the
-    // operator's own configuration, the same authority that owns the allowlist.
-    if (connectionScope === "workspace") {
-      const urlError = providerConfigUrlError(
-        providerConfig,
-        "scopeHints.providerConfig",
-        allowedProviderConfigUrls,
-      );
-      if (urlError) {
-        throw new ConnectionVaultError("invalid_argument", urlError);
-      }
-    }
-    out.providerConfig = providerConfig;
-  }
+  if (providerConfig) out.providerConfig = providerConfig;
   const moduleInputDefaults = normalizeNonSecretJsonRecord(
     scope.moduleInputDefaults,
     "scopeHints.moduleInputDefaults",

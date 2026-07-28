@@ -2143,6 +2143,25 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     return pageFromProbe(rows, limit);
   }
 
+  async listAllSourcesPage(params: PageParams): Promise<Page<StoredSource>> {
+    const limit = clampPageLimit(params.limit);
+    const rows = await this.#pgManyJson<StoredSource>(
+      pgSchema.sources,
+      pgSchema.sources.sourceJson,
+      {
+        where: pgKeysetWhere(
+          undefined,
+          pgSchema.sources.createdAt,
+          pgSchema.sources.id,
+          decodeCursor(params.cursor),
+        ),
+        orderBy: [asc(pgSchema.sources.createdAt), asc(pgSchema.sources.id)],
+        limit: limit + 1,
+      },
+    );
+    return pageFromProbe(rows, limit);
+  }
+
   async deleteSource(id: string): Promise<boolean> {
     return await this.#pgDelete(pgSchema.sources, eq(pgSchema.sources.id, id));
   }

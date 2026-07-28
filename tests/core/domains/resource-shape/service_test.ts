@@ -971,24 +971,26 @@ const APPLY = {
 const APPLY_ID = "tkrn:space_1:ObjectBucket:assets";
 
 const EXACT_FORM: InstalledFormReference = {
-  formRef: {
-    apiVersion: "forms.takoform.com/v1alpha1",
-    kind: "ObjectBucket",
-    definitionVersion: "1.0.0",
-    schemaDigest: `sha256:${"1".repeat(64)}`,
-  },
+  type: "object_bucket",
+  version: "1.0.0",
+  schemaDigest: `sha256:${"1".repeat(64)}`,
   packageDigest: `sha256:${"2".repeat(64)}`,
 };
 
 const EXACT_CONTAINER_FORM: InstalledFormReference = {
-  formRef: {
-    apiVersion: "forms.takoform.com/v1alpha1",
-    kind: "ContainerService",
-    definitionVersion: "1.0.0",
-    schemaDigest: `sha256:${"4".repeat(64)}`,
-  },
+  type: "container_service",
+  version: "1.0.0",
+  schemaDigest: `sha256:${"4".repeat(64)}`,
   packageDigest: `sha256:${"5".repeat(64)}`,
 };
+
+function formRefOf(identity: InstalledFormReference) {
+  return {
+    type: identity.type,
+    version: identity.version,
+    schemaDigest: identity.schemaDigest,
+  };
+}
 
 function exactFormRegistry(
   identity: InstalledFormReference = EXACT_FORM,
@@ -996,24 +998,24 @@ function exactFormRegistry(
 ): NonNullable<ResourceShapeServiceDeps["formRegistry"]> {
   const definition: FormDefinition = {
     identity,
-    displayName: identity.formRef.kind,
+    displayName: identity.type,
     operations: ["create", "read", "update", "delete", "import", "refresh"],
     ...(interfaceDescriptors ? { interfaceDescriptors } : {}),
     installedAt: NOW,
   };
   const formPackage: FormPackage = {
     packageDigest: identity.packageDigest,
-    artifactRef: `oci://forms.example/${identity.formRef.kind}@sha256:exact`,
+    artifactRef: `oci://forms.example/${identity.type}@sha256:exact`,
     verifierId: "test-verifier",
     status: "installed",
-    definitionRefs: [identity.formRef],
+    definitionRefs: [formRefOf(identity)],
     installedAt: NOW,
     installedBy: "test",
     updatedAt: NOW,
   };
   return {
     getDefinition: async (formRef) =>
-      JSON.stringify(formRef) === JSON.stringify(identity.formRef)
+      JSON.stringify(formRef) === JSON.stringify(formRefOf(identity))
         ? definition
         : undefined,
     getPackage: async (packageDigest) =>

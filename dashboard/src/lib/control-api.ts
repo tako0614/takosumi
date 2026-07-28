@@ -17,6 +17,7 @@
  * types remain assignable to the dashboard view models.
  */
 
+export { shapeKindForPortableType } from "takosumi-contract";
 import type {
   ActivityEvent as ContractActivityEvent,
   BackupRecord as ContractBackupRecord,
@@ -319,12 +320,6 @@ export interface BackupRecord {
   readonly workspaceId: string;
   readonly capsuleId?: string;
   readonly environment?: string;
-  readonly restoreTarget?: {
-    readonly capsuleId: string;
-    readonly environment: string;
-    readonly stateGeneration: number;
-    readonly stateVersionId: string;
-  };
   readonly ref: string;
   readonly digest: string;
   readonly sizeBytes: number;
@@ -413,6 +408,7 @@ export interface InstallConfig {
   readonly id: string;
   readonly workspaceId?: string;
   readonly name: string;
+  readonly sourceSelector?: ContractInstallConfig["sourceSelector"];
   readonly modulePath?: string;
   readonly sourceBuild?: SourceBuildConfig;
   readonly lifecycleActions?: ContractInstallConfig["lifecycleActions"];
@@ -1438,27 +1434,6 @@ export async function listWorkspaceBackups(
     `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/backups`,
     (body) => (body.backups as readonly BackupRecord[]) ?? [],
   );
-}
-
-export async function createBackupRestore(
-  workspaceId: string,
-  backupId: string,
-  input: {
-    readonly capsuleId: string;
-    readonly environment: string;
-    readonly stateGeneration: number;
-    readonly expectedBackupDigest: string;
-    readonly restoreServiceData?: boolean;
-  },
-): Promise<Run> {
-  const body = await controlFetch<{ run: Run }>(
-    `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/backups/${encodeURIComponent(backupId)}/restores`,
-    {
-      method: "POST",
-      body: input,
-    },
-  );
-  return body.run;
 }
 
 // --- Dependencies ----------------------------------------------------------

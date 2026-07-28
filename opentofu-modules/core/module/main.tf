@@ -16,7 +16,7 @@ variable "base_domain" {
 }
 
 locals {
-  base_domain  = trimspace(var.base_domain)
+  base_domain   = trimspace(var.base_domain)
   public_origin = "https://${local.base_domain}"
 }
 

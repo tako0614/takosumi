@@ -96,10 +96,7 @@ async function readRequest(
         "reverify file must contain only an exact formRef and packageDigest",
       );
     }
-    return {
-      formRef: { ...value.formRef },
-      packageDigest: value.packageDigest,
-    };
+    return { ...value };
   }
   if (
     Object.keys(value).length !== 2 ||
@@ -160,10 +157,7 @@ function verificationResponse(
     ) {
       throw new Error("Takosumi returned a mismatched installed Form identity");
     }
-    identity = {
-      formRef: { ...value.identity.formRef },
-      packageDigest: value.identity.packageDigest,
-    };
+    identity = { ...value.identity };
   }
   return {
     verified: true,

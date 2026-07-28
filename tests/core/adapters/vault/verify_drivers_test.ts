@@ -2,11 +2,14 @@ import { expect, test } from "bun:test";
 
 import type { ProviderConnection } from "takosumi-contract/connections";
 import {
-  verifyDriverForKind,
-  verifyGitHttps,
-  verifyGitSsh,
+  sourceCredentialDriverForKind,
   type VerifyFetch,
 } from "../../../../core/adapters/vault/verify_drivers.ts";
+import {
+  REFERENCE_SOURCE_CREDENTIAL_DRIVERS,
+  verifyGitHttps,
+  verifyGitSsh,
+} from "../../../../providers/git/source-credential-driver.ts";
 
 function connection(overrides: Partial<ProviderConnection> = {}): ProviderConnection {
   return {
@@ -150,8 +153,23 @@ test("git_ssh: missing known_hosts ⇒ pending", async () => {
 
 // --- registry routing -----------------------------------------------------
 
-test("verifyDriverForKind routes only the two Git Source credential kinds", () => {
-  expect(verifyDriverForKind("source_git_https_token")).toBe(verifyGitHttps);
-  expect(verifyDriverForKind("source_git_ssh_key")).toBe(verifyGitSsh);
-  expect(verifyDriverForKind(undefined)).toBeUndefined();
+test("source driver registry routes only explicitly installed transports", () => {
+  expect(
+    sourceCredentialDriverForKind(
+      "source_git_https_token",
+      REFERENCE_SOURCE_CREDENTIAL_DRIVERS,
+    )?.verify,
+  ).toBe(verifyGitHttps);
+  expect(
+    sourceCredentialDriverForKind(
+      "source_git_ssh_key",
+      REFERENCE_SOURCE_CREDENTIAL_DRIVERS,
+    )?.verify,
+  ).toBe(verifyGitSsh);
+  expect(
+    sourceCredentialDriverForKind(undefined, REFERENCE_SOURCE_CREDENTIAL_DRIVERS),
+  ).toBeUndefined();
+  expect(
+    sourceCredentialDriverForKind("source_git_https_token", {}),
+  ).toBeUndefined();
 });

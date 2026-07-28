@@ -95,6 +95,7 @@ import {
   runErrorCode,
   sourceSyncRequiredError,
 } from "../errors.ts";
+import { rootgenErrorForController } from "../rootgen_error.ts";
 import {
   DEFAULT_CAPSULE_LEASE_TTL_MS,
   type CapsuleCoordination,
@@ -268,6 +269,7 @@ function isRetryableRunnerInfrastructureError(error: unknown): boolean {
 
 const RUNNER_INFRASTRUCTURE_RETRY_LIMIT = 1;
 const PLAN_CREATION_STAGE_TIMEOUT_MS = 25_000;
+const RUN_EXECUTION_LEASE_LOST_REASON = "run_execution_lease_lost";
 
 async function planCreationStage<T>(
   stage: string,
@@ -321,6 +323,17 @@ class PlanAlreadyAppliedReplay extends Error {
     );
     this.name = "PlanAlreadyAppliedReplay";
     this.existingApplyRunId = existingApplyRunId;
+  }
+}
+
+class RunExecutionLeaseLostError extends OpenTofuControllerError {
+  constructor(kind: "plan" | "apply" | "restore", runId: string) {
+    super(
+      "failed_precondition",
+      `${RUN_EXECUTION_LEASE_LOST_REASON}: ${kind} run ${runId} lost its execution fence`,
+      { reason: RUN_EXECUTION_LEASE_LOST_REASON, kind, runId },
+    );
+    this.name = "RunExecutionLeaseLostError";
   }
 }
 
@@ -2587,15 +2600,19 @@ export class RunEngine {
         binding.alias !== undefined ||
         Object.keys(binding.configuration ?? {}).length > 0,
     );
-    const generatedRoot =
-      wrapperProviderBindings.length > 0
-        ? generateOpenTofuChildModuleRoot({
-            requiredProviders,
-            inputs: normalizeVariables(request.variables),
-            outputAllowlist: workspaceOutputAllowlist,
-            providerBindings: wrapperProviderBindings,
-          })
-        : undefined;
+    let generatedRoot: DispatchGeneratedRoot | undefined;
+    if (wrapperProviderBindings.length > 0) {
+      try {
+        generatedRoot = generateOpenTofuChildModuleRoot({
+          requiredProviders,
+          inputs: normalizeVariables(request.variables),
+          outputAllowlist: workspaceOutputAllowlist,
+          providerBindings: wrapperProviderBindings,
+        });
+      } catch (error) {
+        throw rootgenErrorForController(error);
+      }
+    }
     return {
       ...(generatedRoot ? { generatedRoot } : {}),
       workspaceOutputAllowlist,
@@ -3104,7 +3121,7 @@ export class RunEngine {
         claim.run,
         claim.leaseToken,
         lease,
-        () => this.#completeRestoreRun(claim.run, claim.leaseToken),
+        (_signal) => this.#completeRestoreRun(claim.run, claim.leaseToken),
       );
     } catch (error) {
       await this.#failRestoreRun(claim.run, claim.leaseToken, error);
@@ -3268,6 +3285,14 @@ export class RunEngine {
     const sourceOutput = (await this.#store.listOutputs(capsule.id)).find(
       (snapshot) => snapshot.stateGeneration === source.generation,
     );
+    const restoredOutput: Output | undefined = sourceOutput
+      ? {
+          ...sourceOutput,
+          id: this.#newId("out"),
+          stateGeneration: nextGeneration,
+          createdAt: now,
+        }
+      : undefined;
     const previousOutput = capsule.currentOutputId
       ? await this.#store.getOutput(capsule.currentOutputId)
       : undefined;
@@ -3281,11 +3306,13 @@ export class RunEngine {
     };
     const committed = await this.#store.commitRestoredState({
       stateVersion: restoredState,
+      ...(restoredOutput ? { output: restoredOutput } : {}),
       capsulePatch: {
         id: capsule.id,
         patch: {
+          currentStateVersionId: restoredState.id,
           currentStateGeneration: nextGeneration,
-          ...(sourceOutput ? { currentOutputId: sourceOutput.id } : {}),
+          currentOutputId: restoredOutput?.id,
           status: "stale",
           updatedAt: now,
         },
@@ -3301,11 +3328,11 @@ export class RunEngine {
       return (await this.#store.getBackupRun(run.id)) ?? run;
     }
     await this.#notifyRestore({ phase: "succeeded", run: completed });
-    if (sourceOutput) {
+    if (restoredOutput) {
       await this.#markDownstreamCapsulesStale({
         capsule,
         previousOutput,
-        newOutput: sourceOutput,
+        newOutput: restoredOutput,
         now: nowMs,
       });
     }
@@ -4687,9 +4714,9 @@ export class RunEngine {
     kind: "plan" | "apply" | "restore",
     run: PlanRun | ApplyRun | Run,
     leaseToken: string,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const now = this.#now();
-    await this.#store.transitionRun({
+    const result = await this.#store.transitionRun({
       id: run.id,
       kind,
       expectFrom: ["running"],
@@ -4697,50 +4724,98 @@ export class RunEngine {
       run: { ...run, heartbeatAt: now, updatedAt: now },
       heartbeatAt: now,
     });
+    return result.won;
   }
 
   /**
-   * Runs `work` (a single long blocking runner fetch) under a renewal timer:
+   * Runs `work` (a single long blocking external dispatch) under a renewal
+   * guard:
    * every {@link RUN_RENEWAL_INTERVAL_MS} it re-stamps the run's heartbeat AND
    * renews the held lease so a sibling consumer never treats the run as crashed
-   * mid-apply. The interval is cleared in a `finally` on EVERY exit path
-   * (success, throw, or cancel). Each tick is best-effort: a renewal/heartbeat
-   * error is swallowed so it can never reject `work`'s result or crash the run.
+   * mid-apply. A lost heartbeat CAS, a non-acquired lease renewal, or a renewal
+   * transport failure aborts the signal passed to `work` and rejects immediately.
+   * Continuing after an ambiguous renewal failure would let a fenced-out
+   * executor perform external adapter or release side effects beside its successor.
    */
   async #withRunRenewal<T>(
     kind: "plan" | "apply" | "restore",
     run: PlanRun | ApplyRun | Run,
     leaseToken: string,
     lease: LeaseHandle | undefined,
-    work: () => Promise<T>,
+    work: (signal: AbortSignal) => Promise<T>,
   ): Promise<T> {
+    const abortController = new AbortController();
+    const failClosed = (): void => {
+      if (abortController.signal.aborted) return;
+      const error = new RunExecutionLeaseLostError(kind, run.id);
+      abortController.abort(error);
+    };
+    let activeTick: Promise<void> | undefined;
     const tick = async (): Promise<void> => {
+      if (abortController.signal.aborted) return;
       try {
-        await this.#heartbeatRunningRun(kind, run, leaseToken);
+        const heartbeatWon = await this.#heartbeatRunningRun(
+          kind,
+          run,
+          leaseToken,
+        );
+        if (!heartbeatWon) {
+          failClosed();
+          return;
+        }
         if (lease) {
-          await lease.renew(DEFAULT_CAPSULE_LEASE_TTL_MS);
+          const renewed = await lease.renew(DEFAULT_CAPSULE_LEASE_TTL_MS);
+          if (!renewed.acquired) failClosed();
         }
       } catch {
-        // Best-effort: a transient renewal failure must not kill the apply it is
-        // babysitting. The next tick retries; a permanently-lost lease surfaces
-        // as a stale-takeover by a sibling, not as a thrown apply.
+        failClosed();
       }
     };
+    const runTick = (): Promise<void> => {
+      if (activeTick) return activeTick;
+      const pending = tick().finally(() => {
+        if (activeTick === pending) activeTick = undefined;
+      });
+      activeTick = pending;
+      return pending;
+    };
+    // Validate both fences immediately before the external dispatch. This closes
+    // the claim-to-dispatch window instead of waiting one interval to discover a
+    // takeover that already happened.
+    await runTick();
+    if (abortController.signal.aborted) {
+      throw abortController.signal.reason;
+    }
     const intervalMs = this.#runRenewalIntervalMs;
-    // A non-positive interval disables the renewal timer (used by tests / inline
-    // substrates that never need it). The work still runs unchanged.
-    if (intervalMs <= 0) {
-      return await work();
+    const timer =
+      intervalMs > 0 ? setInterval(() => void runTick(), intervalMs) : undefined;
+    if (timer) {
+      // Some runtimes keep the event loop alive for a pending interval; unref
+      // when available so the renewal timer never blocks process exit on its own.
+      (timer as { unref?: () => void }).unref?.();
     }
-    const timer = setInterval(() => void tick(), intervalMs);
-    // Some runtimes keep the event loop alive for a pending interval; unref when
-    // available so the renewal timer never blocks process exit on its own.
-    (timer as { unref?: () => void }).unref?.();
+    let result: T | undefined;
+    let workError: unknown;
+    let workFailed = false;
     try {
-      return await work();
+      result = await work(abortController.signal);
+    } catch (error) {
+      workFailed = true;
+      workError = error;
     } finally {
-      clearInterval(timer);
+      if (timer) clearInterval(timer);
+      if (activeTick) await activeTick;
     }
+    // Revalidate after the adapter has acknowledged cancellation/completion, but
+    // before callers perform any terminal ledger or follow-up side effects.
+    // Restore currently commits its terminal ledger inside `work`; a post-work
+    // heartbeat would correctly lose against that terminal row and falsely turn
+    // a successful restore into a fence-loss failure. Plan/apply keep their
+    // terminal commit outside `work`, so they receive the final guard check.
+    if (kind !== "restore" && !abortController.signal.aborted) await runTick();
+    if (abortController.signal.aborted) throw abortController.signal.reason;
+    if (workFailed) throw workError;
+    return result as T;
   }
 
   /**
@@ -5210,55 +5285,64 @@ export class RunEngine {
           : undefined;
       const scopeSelectors = planScopeSelectors(planPolicy?.scopeBoundary);
       const runner = this.#runnerForProfile(profile);
-      const dispatchPlan = (environment: ResolvedRunEnvironment) =>
-        runner.plan({
-          planRun: effectiveRunning,
-          runnerProfile: profile,
-          variables,
-          ...(providerInstallationPolicy ? { providerInstallationPolicy } : {}),
-          ...(scopeSelectors.length > 0 ? { scopeSelectors } : {}),
-          // Capsules use a generated root only when explicit provider configuration
-          // requires a child-module wrapper.
-          ...(dispatch.generatedRoot
-            ? { generatedRoot: dispatch.generatedRoot }
-            : {}),
-          ...(dispatch.operatorModule
-            ? { operatorModule: dispatch.operatorModule }
-            : {}),
-          ...(dispatch.sourceBuild
-            ? { sourceBuild: dispatch.sourceBuild }
-            : {}),
-          ...((dispatch.workspaceOutputAllowlist ?? dispatch.outputAllowlist)
-            ? {
-                outputAllowlist:
-                  dispatch.workspaceOutputAllowlist ?? dispatch.outputAllowlist,
-              }
-            : {}),
-          // M2 env dispatch (state scope + source archive). Absent without env ctx.
-          ...(envDispatch.stateScope
-            ? { stateScope: envDispatch.stateScope }
-            : {}),
-          ...(envDispatch.stateAdoption
-            ? { stateAdoption: envDispatch.stateAdoption }
-            : {}),
-          ...(envDispatch.sourceArchive
-            ? { sourceArchive: envDispatch.sourceArchive }
-            : {}),
-          // remote_state dependency states materialized into /work/deps (spec §15).
-          ...(envDispatch.depStates
-            ? { depStates: envDispatch.depStates }
-            : {}),
-          // Dispatch-only: the minted env never lands on the persisted run.
-          ...(environment.credentials
-            ? { credentials: environment.credentials }
-            : {}),
-        });
+      const dispatchPlan = (
+        environment: ResolvedRunEnvironment,
+        signal: AbortSignal,
+      ) =>
+        runner.plan(
+          {
+            planRun: effectiveRunning,
+            runnerProfile: profile,
+            variables,
+            ...(providerInstallationPolicy
+              ? { providerInstallationPolicy }
+              : {}),
+            ...(scopeSelectors.length > 0 ? { scopeSelectors } : {}),
+            // Capsules use a generated root only when explicit provider configuration
+            // requires a child-module wrapper.
+            ...(dispatch.generatedRoot
+              ? { generatedRoot: dispatch.generatedRoot }
+              : {}),
+            ...(dispatch.operatorModule
+              ? { operatorModule: dispatch.operatorModule }
+              : {}),
+            ...(dispatch.sourceBuild
+              ? { sourceBuild: dispatch.sourceBuild }
+              : {}),
+            ...((dispatch.workspaceOutputAllowlist ?? dispatch.outputAllowlist)
+              ? {
+                  outputAllowlist:
+                    dispatch.workspaceOutputAllowlist ??
+                    dispatch.outputAllowlist,
+                }
+              : {}),
+            // M2 env dispatch (state scope + source archive). Absent without env ctx.
+            ...(envDispatch.stateScope
+              ? { stateScope: envDispatch.stateScope }
+              : {}),
+            ...(envDispatch.stateAdoption
+              ? { stateAdoption: envDispatch.stateAdoption }
+              : {}),
+            ...(envDispatch.sourceArchive
+              ? { sourceArchive: envDispatch.sourceArchive }
+              : {}),
+            // remote_state dependency states materialized into /work/deps (spec §15).
+            ...(envDispatch.depStates
+              ? { depStates: envDispatch.depStates }
+              : {}),
+            // Dispatch-only: the minted env never lands on the persisted run.
+            ...(environment.credentials
+              ? { credentials: environment.credentials }
+              : {}),
+          },
+          { signal },
+        );
       const result = await this.#withRunRenewal(
         "plan",
         effectiveRunning,
         leaseToken,
         undefined,
-        () => dispatchPlan(effectiveRunEnvironment),
+        (signal) => dispatchPlan(effectiveRunEnvironment, signal),
       );
       const now = this.#now();
       const verdict = await this.#evaluatePlanCompletion({
@@ -5878,7 +5962,7 @@ export class RunEngine {
         runningWithEnv,
         leaseToken,
         lease,
-        () =>
+        (signal) =>
           this.#dispatchApply({
             running: runningWithEnv,
             planRun,
@@ -5891,6 +5975,7 @@ export class RunEngine {
             onDispatch: () => {
               runnerDispatched = true;
             },
+            signal,
           }),
       );
       const now = this.#now();
@@ -5955,7 +6040,7 @@ export class RunEngine {
         runningWithEnv,
         leaseToken,
         lease,
-        () =>
+        (signal) =>
           this.#activateReleaseAfterApply({
             planRun,
             applyRun: providerApplied,
@@ -5964,6 +6049,7 @@ export class RunEngine {
             output: projected.output,
             result,
             lifecycleActions: dispatch.lifecycleActions,
+            signal,
           }),
       );
       const completed = this.#applyPostApplyLifecycleOutcome({
@@ -6385,6 +6471,7 @@ export class RunEngine {
     readonly profile: RunnerProfile;
     readonly dispatch: RunModuleDispatch;
     readonly credentials: RunCredentials | undefined;
+    readonly signal: AbortSignal;
     /** Fired immediately before the runner is invoked (runner-dispatched flag). */
     readonly onDispatch: () => void;
   }): Promise<{
@@ -6425,33 +6512,36 @@ export class RunEngine {
         : undefined;
     input.onDispatch();
     const runner = this.#runnerForProfile(profile);
-    const result = await runner.apply({
-      applyRun: running,
-      planRun,
-      planArtifact,
-      runnerProfile: profile,
-      ...(providerInstallationPolicy ? { providerInstallationPolicy } : {}),
-      // Generated-root dispatch: apply tofu in the reviewed root.
-      ...(dispatch.generatedRoot
-        ? { generatedRoot: dispatch.generatedRoot }
-        : {}),
-      ...(dispatch.operatorModule
-        ? { operatorModule: dispatch.operatorModule }
-        : {}),
-      ...(dispatch.sourceBuild ? { sourceBuild: dispatch.sourceBuild } : {}),
-      // M2 env dispatch (state scope at base+1 + source archive).
-      ...(envDispatch.stateScope ? { stateScope: envDispatch.stateScope } : {}),
-      rawOutputRef,
-      ...(envDispatch.stateAdoption
-        ? { stateAdoption: envDispatch.stateAdoption }
-        : {}),
-      ...(envDispatch.sourceArchive
-        ? { sourceArchive: envDispatch.sourceArchive }
-        : {}),
-      // remote_state dependency states materialized into /work/deps (spec §15).
-      ...(envDispatch.depStates ? { depStates: envDispatch.depStates } : {}),
-      ...(credentials ? { credentials } : {}),
-    });
+    const result = await runner.apply(
+      {
+        applyRun: running,
+        planRun,
+        planArtifact,
+        runnerProfile: profile,
+        ...(providerInstallationPolicy ? { providerInstallationPolicy } : {}),
+        // Generated-root dispatch: apply tofu in the reviewed root.
+        ...(dispatch.generatedRoot
+          ? { generatedRoot: dispatch.generatedRoot }
+          : {}),
+        ...(dispatch.operatorModule
+          ? { operatorModule: dispatch.operatorModule }
+          : {}),
+        ...(dispatch.sourceBuild ? { sourceBuild: dispatch.sourceBuild } : {}),
+        // M2 env dispatch (state scope at base+1 + source archive).
+        ...(envDispatch.stateScope ? { stateScope: envDispatch.stateScope } : {}),
+        rawOutputRef,
+        ...(envDispatch.stateAdoption
+          ? { stateAdoption: envDispatch.stateAdoption }
+          : {}),
+        ...(envDispatch.sourceArchive
+          ? { sourceArchive: envDispatch.sourceArchive }
+          : {}),
+        // remote_state dependency states materialized into /work/deps (spec §15).
+        ...(envDispatch.depStates ? { depStates: envDispatch.depStates } : {}),
+        ...(credentials ? { credentials } : {}),
+      },
+      { signal: input.signal },
+    );
     if (result.rawOutputRef && result.rawOutputRef !== rawOutputRef) {
       throw new OpenTofuControllerError(
         "failed_precondition",
@@ -6588,6 +6678,7 @@ export class RunEngine {
     readonly output: Output;
     readonly result: OpenTofuApplyResult;
     readonly lifecycleActions: InstallConfig["lifecycleActions"];
+    readonly signal: AbortSignal;
   }): Promise<LifecycleActionOutcome | undefined> {
     const commands = releaseActivationCommands(
       input.lifecycleActions,
@@ -6632,20 +6723,23 @@ export class RunEngine {
       });
       let result: ReleaseActivationResult;
       actionDispatched = true;
-      result = await this.#releaseActivator.activate({
-        planRun: input.planRun,
-        applyRun: input.applyRun,
-        capsule: input.capsule,
-        stateVersion: input.stateVersion,
-        output: input.output,
-        nonSensitiveOutputs,
-        providerConfigurations: releaseEnvironment.providerConfigurations,
-        ...(releaseEnvironment.credentials
-          ? { credentials: releaseEnvironment.credentials }
-          : {}),
-        commands,
-        ...(sourceSnapshot ? { sourceSnapshot } : {}),
-      });
+      result = await this.#releaseActivator.activate(
+        {
+          planRun: input.planRun,
+          applyRun: input.applyRun,
+          capsule: input.capsule,
+          stateVersion: input.stateVersion,
+          output: input.output,
+          nonSensitiveOutputs,
+          providerConfigurations: releaseEnvironment.providerConfigurations,
+          ...(releaseEnvironment.credentials
+            ? { credentials: releaseEnvironment.credentials }
+            : {}),
+          commands,
+          ...(sourceSnapshot ? { sourceSnapshot } : {}),
+        },
+        { signal: input.signal },
+      );
       if (result.status === "skipped" && commands.length > 0) {
         return {
           ...base,
@@ -6756,6 +6850,7 @@ export class RunEngine {
     readonly applyRun: ApplyRun;
     readonly capsule: Capsule;
     readonly lifecycleActions: InstallConfig["lifecycleActions"];
+    readonly signal: AbortSignal;
   }): Promise<LifecycleActionOutcome | undefined> {
     const commands = releaseActivationCommands(
       input.lifecycleActions,
@@ -6858,20 +6953,23 @@ export class RunEngine {
         phase: "destroy",
       });
       actionDispatched = true;
-      result = await this.#releaseActivator.activate({
-        planRun: input.planRun,
-        applyRun: input.applyRun,
-        capsule: input.capsule,
-        stateVersion,
-        output,
-        nonSensitiveOutputs,
-        providerConfigurations: releaseEnvironment.providerConfigurations,
-        ...(releaseEnvironment.credentials
-          ? { credentials: releaseEnvironment.credentials }
-          : {}),
-        commands,
-        ...(sourceSnapshot ? { sourceSnapshot } : {}),
-      });
+      result = await this.#releaseActivator.activate(
+        {
+          planRun: input.planRun,
+          applyRun: input.applyRun,
+          capsule: input.capsule,
+          stateVersion,
+          output,
+          nonSensitiveOutputs,
+          providerConfigurations: releaseEnvironment.providerConfigurations,
+          ...(releaseEnvironment.credentials
+            ? { credentials: releaseEnvironment.credentials }
+            : {}),
+          commands,
+          ...(sourceSnapshot ? { sourceSnapshot } : {}),
+        },
+        { signal: input.signal },
+      );
     } catch (error) {
       const outcome: LifecycleActionOutcome = {
         phase: "pre_destroy",
@@ -7263,12 +7361,13 @@ export class RunEngine {
         running,
         leaseToken,
         lease,
-        () =>
+        (signal) =>
           this.#activateReleaseBeforeDestroy({
             planRun,
             applyRun: running,
             capsule: capsule,
             lifecycleActions: dispatch.lifecycleActions,
+            signal,
           }),
       );
       if (lifecycleOutcome) {
@@ -7325,44 +7424,48 @@ export class RunEngine {
         effectiveRunning,
         leaseToken,
         lease,
-        () =>
-          destroyFn.call(runner, {
-            applyRun: effectiveRunning,
-            planRun,
-            planArtifact: planRun.planArtifact!,
-            capsule,
-            runnerProfile: profile,
-            ...(providerInstallationPolicy
-              ? { providerInstallationPolicy }
-              : {}),
-            // Generated-root dispatch: destroy tofu in the reviewed root.
-            ...(dispatch.generatedRoot
-              ? { generatedRoot: dispatch.generatedRoot }
-              : {}),
-            ...(dispatch.operatorModule
-              ? { operatorModule: dispatch.operatorModule }
-              : {}),
-            ...(dispatch.sourceBuild
-              ? { sourceBuild: dispatch.sourceBuild }
-              : {}),
-            // M2 env dispatch (state scope at base+1 + source archive).
-            ...(envDispatch.stateScope
-              ? { stateScope: envDispatch.stateScope }
-              : {}),
-            ...(envDispatch.stateAdoption
-              ? { stateAdoption: envDispatch.stateAdoption }
-              : {}),
-            ...(envDispatch.sourceArchive
-              ? { sourceArchive: envDispatch.sourceArchive }
-              : {}),
-            // remote_state dependency states materialized into /work/deps (§15):
-            // the teardown config still refreshes its `terraform_remote_state` data
-            // sources, so the producer state files must be present.
-            ...(envDispatch.depStates
-              ? { depStates: envDispatch.depStates }
-              : {}),
-            ...(credentials ? { credentials } : {}),
-          }),
+        (signal) =>
+          destroyFn.call(
+            runner,
+            {
+              applyRun: effectiveRunning,
+              planRun,
+              planArtifact: planRun.planArtifact!,
+              capsule,
+              runnerProfile: profile,
+              ...(providerInstallationPolicy
+                ? { providerInstallationPolicy }
+                : {}),
+              // Generated-root dispatch: destroy tofu in the reviewed root.
+              ...(dispatch.generatedRoot
+                ? { generatedRoot: dispatch.generatedRoot }
+                : {}),
+              ...(dispatch.operatorModule
+                ? { operatorModule: dispatch.operatorModule }
+                : {}),
+              ...(dispatch.sourceBuild
+                ? { sourceBuild: dispatch.sourceBuild }
+                : {}),
+              // M2 env dispatch (state scope at base+1 + source archive).
+              ...(envDispatch.stateScope
+                ? { stateScope: envDispatch.stateScope }
+                : {}),
+              ...(envDispatch.stateAdoption
+                ? { stateAdoption: envDispatch.stateAdoption }
+                : {}),
+              ...(envDispatch.sourceArchive
+                ? { sourceArchive: envDispatch.sourceArchive }
+                : {}),
+              // remote_state dependency states materialized into /work/deps (§15):
+              // the teardown config still refreshes its `terraform_remote_state` data
+              // sources, so the producer state files must be present.
+              ...(envDispatch.depStates
+                ? { depStates: envDispatch.depStates }
+                : {}),
+              ...(credentials ? { credentials } : {}),
+            },
+            { signal },
+          ),
       );
       const now = this.#now();
       // Build the post-teardown StateVersion at the generation persisted by the
@@ -7660,27 +7763,32 @@ export class RunEngine {
       running,
       input.leaseToken,
       input.lease,
-      () =>
-        runner.destroy!({
-          applyRun: running,
-          planRun,
-          planArtifact: planRun.planArtifact!,
-          runnerProfile: profile,
-          ...(providerInstallationPolicy ? { providerInstallationPolicy } : {}),
-          ...(dispatch.generatedRoot
-            ? { generatedRoot: dispatch.generatedRoot }
-            : {}),
-          ...(dispatch.operatorModule
-            ? { operatorModule: dispatch.operatorModule }
-            : {}),
-          ...(envDispatch.stateScope
-            ? { stateScope: envDispatch.stateScope }
-            : {}),
-          ...(envDispatch.stateAdoption
-            ? { stateAdoption: envDispatch.stateAdoption }
-            : {}),
-          ...(input.credentials ? { credentials: input.credentials } : {}),
-        }),
+      (signal) =>
+        runner.destroy!(
+          {
+            applyRun: running,
+            planRun,
+            planArtifact: planRun.planArtifact!,
+            runnerProfile: profile,
+            ...(providerInstallationPolicy
+              ? { providerInstallationPolicy }
+              : {}),
+            ...(dispatch.generatedRoot
+              ? { generatedRoot: dispatch.generatedRoot }
+              : {}),
+            ...(dispatch.operatorModule
+              ? { operatorModule: dispatch.operatorModule }
+              : {}),
+            ...(envDispatch.stateScope
+              ? { stateScope: envDispatch.stateScope }
+              : {}),
+            ...(envDispatch.stateAdoption
+              ? { stateAdoption: envDispatch.stateAdoption }
+              : {}),
+            ...(input.credentials ? { credentials: input.credentials } : {}),
+          },
+          { signal },
+        ),
     );
     const now = this.#now();
     const diagnostics = redactRunDiagnostics(result.diagnostics);

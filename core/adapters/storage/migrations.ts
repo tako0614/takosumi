@@ -4347,4 +4347,188 @@ create index if not exists takosumi_offering_catalogs_effective_key_idx
   drop column if exists pending_operation_json,
   drop column if exists last_operation_run_id;`,
     },
+    {
+      id: "registry.service_forms.takoform_v0_identity",
+      version: 101,
+      domain: "registry",
+      description:
+        "Fail closed on populated legacy Form state, archive the empty v1alpha1 registry, and create the exact takoform v0 type/version/schemaDigest registry.",
+      sql: `do $takoform_v0$
+begin
+  if to_regclass('takosumi_service_form_packages__takoform_v1alpha1') is not null
+     or to_regclass('takosumi_service_form_definitions__takoform_v1alpha1') is not null
+     or to_regclass('takosumi_service_form_activations__takoform_v1alpha1') is not null then
+    raise exception 'TAKOFORM_V0_IDENTITY_SCHEMA_STATE_INVALID: retained archive tables exist without the migration ledger row';
+  end if;
+  if exists (select 1 from takosumi_service_form_packages)
+     or exists (select 1 from takosumi_service_form_definitions)
+     or exists (select 1 from takosumi_service_form_activations)
+     or exists (
+       select 1 from takosumi_resource_shapes
+       where form_ref_json is not null or package_digest is not null
+     )
+     or exists (
+       select 1 from takosumi_resolution_locks
+       where form_ref_json is not null
+          or package_digest is not null
+          or coalesce(native_resources_json, '[]'::jsonb)::text like '%"formRef"%'
+     )
+     or exists (
+       select 1 from takosumi_runs where run_json::text like '%"formRef"%'
+     )
+     or exists (
+       select 1 from takosumi_backups where backup_json::text like '%"formRef"%'
+     ) then
+    raise exception 'TAKOFORM_V0_IDENTITY_MIGRATION_REQUIRED: export and explicitly backfill legacy registry rows and exact Form pins before retrying';
+  end if;
+end
+$takoform_v0$;
+alter table takosumi_resource_shapes
+  drop constraint if exists takosumi_resource_shapes_form_package_fk;
+alter table takosumi_resolution_locks
+  drop constraint if exists takosumi_resolution_locks_form_package_fk;
+alter index takosumi_service_form_packages_pkey
+  rename to takosumi_sf_pkg_v1alpha1_pkey;
+alter index takosumi_service_form_definitions_pkey
+  rename to takosumi_sf_def_v1alpha1_pkey;
+alter index takosumi_service_form_activations_pkey
+  rename to takosumi_sf_act_v1alpha1_pkey;
+alter index takosumi_service_form_packages_status_updated_digest_idx
+  rename to takosumi_sf_pkg_v1alpha1_status_idx;
+alter index takosumi_service_form_definitions_package_idx
+  rename to takosumi_sf_def_v1alpha1_package_idx;
+alter index takosumi_service_form_definitions_ref_package_unique
+  rename to takosumi_sf_def_v1alpha1_ref_package_uidx;
+alter index takosumi_service_form_definitions_kind_installed_ref_idx
+  rename to takosumi_sf_def_v1alpha1_kind_installed_idx;
+alter index takosumi_service_form_activations_scope_status_updated_id_idx
+  rename to takosumi_sf_act_v1alpha1_scope_status_idx;
+alter index takosumi_service_form_activations_identity_idx
+  rename to takosumi_sf_act_v1alpha1_identity_idx;
+alter table takosumi_service_form_activations
+  rename to takosumi_service_form_activations__takoform_v1alpha1;
+alter table takosumi_service_form_definitions
+  rename to takosumi_service_form_definitions__takoform_v1alpha1;
+alter table takosumi_service_form_packages
+  rename to takosumi_service_form_packages__takoform_v1alpha1;
+create table takosumi_service_form_packages (
+  package_digest text primary key,
+  status         text not null check (status in ('installed','deprecated','revoked')),
+  record_json    jsonb not null,
+  installed_at   text not null,
+  updated_at     text not null
+);
+create index takosumi_service_form_packages_status_updated_digest_idx
+  on takosumi_service_form_packages (status, updated_at, package_digest);
+create table takosumi_service_form_definitions (
+  form_ref_key   text primary key,
+  package_digest text not null,
+  type           text not null,
+  version        text not null,
+  schema_digest  text not null,
+  record_json    jsonb not null,
+  installed_at   text not null,
+  foreign key (package_digest) references takosumi_service_form_packages(package_digest)
+);
+create index takosumi_service_form_definitions_package_idx
+  on takosumi_service_form_definitions (package_digest);
+create unique index takosumi_service_form_definitions_ref_package_unique
+  on takosumi_service_form_definitions (form_ref_key, package_digest);
+create index takosumi_service_form_definitions_type_installed_ref_idx
+  on takosumi_service_form_definitions (type, installed_at, form_ref_key);
+create table takosumi_service_form_activations (
+  id             text primary key,
+  form_ref_key   text not null,
+  package_digest text not null,
+  scope_type     text not null check (scope_type in ('operator','workspace','space')),
+  scope_id       text,
+  status         text not null check (status in ('active','inactive')),
+  revision       integer not null check (revision >= 1),
+  record_json    jsonb not null,
+  created_at     text not null,
+  updated_at     text not null,
+  foreign key (form_ref_key, package_digest)
+    references takosumi_service_form_definitions(form_ref_key, package_digest),
+  check (
+    (scope_type = 'operator' and scope_id is null)
+    or (scope_type in ('workspace','space') and nullif(trim(scope_id), '') is not null)
+  )
+);
+create index takosumi_service_form_activations_scope_status_updated_id_idx
+  on takosumi_service_form_activations (scope_type, scope_id, status, updated_at, id);
+create index takosumi_service_form_activations_identity_idx
+  on takosumi_service_form_activations (form_ref_key, package_digest);
+alter table takosumi_resource_shapes
+  add constraint takosumi_resource_shapes_form_package_fk
+  foreign key (package_digest) references takosumi_service_form_packages(package_digest);
+alter table takosumi_resolution_locks
+  add constraint takosumi_resolution_locks_form_package_fk
+  foreign key (package_digest) references takosumi_service_form_packages(package_digest);`,
+      down: `do $takoform_v0_rollback$
+begin
+  if to_regclass('takosumi_service_form_packages__takoform_v1alpha1') is null
+     or to_regclass('takosumi_service_form_definitions__takoform_v1alpha1') is null
+     or to_regclass('takosumi_service_form_activations__takoform_v1alpha1') is null then
+    raise exception 'TAKOFORM_V0_IDENTITY_SCHEMA_STATE_INVALID: retained v1alpha1 archive tables are required for rollback';
+  end if;
+  if exists (select 1 from takosumi_service_form_packages)
+     or exists (select 1 from takosumi_service_form_definitions)
+     or exists (select 1 from takosumi_service_form_activations) then
+    raise exception 'TAKOFORM_V0_IDENTITY_ROLLBACK_REQUIRED: export v0 registry state before rollback';
+  end if;
+end
+$takoform_v0_rollback$;
+alter table takosumi_resource_shapes
+  drop constraint if exists takosumi_resource_shapes_form_package_fk;
+alter table takosumi_resolution_locks
+  drop constraint if exists takosumi_resolution_locks_form_package_fk;
+drop table if exists takosumi_service_form_activations;
+drop table if exists takosumi_service_form_definitions;
+drop table if exists takosumi_service_form_packages;
+alter table takosumi_service_form_packages__takoform_v1alpha1
+  rename to takosumi_service_form_packages;
+alter table takosumi_service_form_definitions__takoform_v1alpha1
+  rename to takosumi_service_form_definitions;
+alter table takosumi_service_form_activations__takoform_v1alpha1
+  rename to takosumi_service_form_activations;
+alter index takosumi_sf_pkg_v1alpha1_pkey
+  rename to takosumi_service_form_packages_pkey;
+alter index takosumi_sf_def_v1alpha1_pkey
+  rename to takosumi_service_form_definitions_pkey;
+alter index takosumi_sf_act_v1alpha1_pkey
+  rename to takosumi_service_form_activations_pkey;
+alter index takosumi_sf_pkg_v1alpha1_status_idx
+  rename to takosumi_service_form_packages_status_updated_digest_idx;
+alter index takosumi_sf_def_v1alpha1_package_idx
+  rename to takosumi_service_form_definitions_package_idx;
+alter index takosumi_sf_def_v1alpha1_ref_package_uidx
+  rename to takosumi_service_form_definitions_ref_package_unique;
+alter index takosumi_sf_def_v1alpha1_kind_installed_idx
+  rename to takosumi_service_form_definitions_kind_installed_ref_idx;
+alter index takosumi_sf_act_v1alpha1_scope_status_idx
+  rename to takosumi_service_form_activations_scope_status_updated_id_idx;
+alter index takosumi_sf_act_v1alpha1_identity_idx
+  rename to takosumi_service_form_activations_identity_idx;
+alter table takosumi_resource_shapes
+  add constraint takosumi_resource_shapes_form_package_fk
+  foreign key (package_digest) references takosumi_service_form_packages(package_digest);
+alter table takosumi_resolution_locks
+  add constraint takosumi_resolution_locks_form_package_fk
+  foreign key (package_digest) references takosumi_service_form_packages(package_digest);`,
+    },
+    {
+      id: "resources.operation_recovery_state.add",
+      version: 102,
+      domain: "resources",
+      description:
+        "Persist the Resource revision fence alongside the existing pending operation and latest finalized Run projections.",
+      sql: `alter table takosumi_resource_shapes
+  add column if not exists revision bigint not null default 0,
+  add column if not exists pending_operation_json jsonb,
+  add column if not exists last_operation_run_id text;`,
+      down: `alter table takosumi_resource_shapes
+  drop column if exists last_operation_run_id,
+  drop column if exists pending_operation_json,
+  drop column if exists revision;`,
+    },
   ]);

@@ -35,10 +35,20 @@ function L(
     name: text(id),
     description: text(id),
     badge: text("b"),
-    inputs: [],
-    outputAllowlist: [],
     createdAt: updatedAt,
     updatedAt,
+  };
+}
+
+function W(
+  id: string,
+  source?: Partial<TcsListing["source"]>,
+  updatedAt = "2026-01-01T00:00:00.000Z",
+): unknown {
+  const local = L(id, source, updatedAt);
+  return {
+    ...local,
+    source: { git: local.source.url, path: local.source.path },
   };
 }
 
@@ -68,8 +78,8 @@ describe("tcs aggregate", () => {
   test("merges + de-dups shared Capsules with seenOn", async () => {
     stub((url) =>
       url.host === "a.test"
-        ? json({ items: [L("x"), L("shared", SHARED)] })
-        : json({ items: [L("y"), L("shared", SHARED)] }),
+        ? json({ items: [W("x"), W("shared", SHARED)] })
+        : json({ items: [W("y"), W("shared", SHARED)] }),
     );
     const s = await loadMoreTcs(
       initTcsState(SERVERS, { sort: "updated", locale: "en" }),
@@ -216,7 +226,7 @@ describe("tcs aggregate", () => {
 
   test("a failing server is isolated; others render", async () => {
     stub((url) => {
-      if (url.host === "a.test") return json({ items: [L("x")] });
+      if (url.host === "a.test") return json({ items: [W("x")] });
       throw new Error("down");
     });
     const s = await loadMoreTcs(
@@ -229,7 +239,7 @@ describe("tcs aggregate", () => {
   test("search-unsupported (501) server is marked, not fatal", async () => {
     stub((url) =>
       url.host === "a.test"
-        ? json({ items: [L("x")] })
+        ? json({ items: [W("x")] })
         : json({ error: { code: "not_implemented" } }, 501),
     );
     const s = await loadMoreTcs(
@@ -246,10 +256,10 @@ describe("tcs aggregate", () => {
       const cursor = url.searchParams.get("cursor");
       if (url.host === "a.test") {
         return cursor
-          ? json({ items: [L("a2")] })
-          : json({ items: [L("a1")], nextCursor: "A2" });
+          ? json({ items: [W("a2")] })
+          : json({ items: [W("a1")], nextCursor: "A2" });
       }
-      return json({ items: [L("b1")] });
+      return json({ items: [W("b1")] });
     });
     let s = await loadMoreTcs(
       initTcsState(SERVERS, { sort: "updated", locale: "en" }),

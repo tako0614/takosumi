@@ -2,6 +2,7 @@ import {
   FORM_ACTIVATION_OFFERING_REQUIREMENT_TYPE,
   FORM_HOST_RESOURCE_NAMESPACE_OFFERING_CONTEXT_TYPE,
   SERVICE_FORM_OFFERING_SUBJECT_TYPE,
+  formRefOfInstalled,
   installedFormReferenceKey,
   parseFormRefKey,
   type ActorContext,
@@ -17,7 +18,7 @@ import { stableJsonDigest } from "../../adapters/source/digest.ts";
 export interface FormOfferingRegistryReader {
   getActivation(id: string): Promise<FormActivation | undefined>;
   getDefinition(
-    ref: InstalledFormReference["formRef"],
+    ref: ReturnType<typeof formRefOfInstalled>,
   ): Promise<FormDefinition | undefined>;
   getPackage(digest: string): Promise<FormPackage | undefined>;
 }
@@ -58,12 +59,12 @@ export class FormOfferingSubjectResolver implements OfferingSubjectResolver {
     if (
       !formRef ||
       input.offering.subject.type !== this.subjectType ||
-      formRef.definitionVersion !== input.offering.subject.version
+      formRef.version !== input.offering.subject.version
     ) {
       return unavailable("subject_identity_mismatch");
     }
     const identity: InstalledFormReference = {
-      formRef,
+      ...formRef,
       packageDigest: input.offering.subject.digest,
     };
     const activationRequirement = exactActivationRequirement(
@@ -130,7 +131,7 @@ export class FormOfferingSubjectResolver implements OfferingSubjectResolver {
     if (
       !availability.availableToPrincipal ||
       availability.deprecated ||
-      installedFormReferenceKey(availability.identity) !==
+      installedFormReferenceKey(availability.form) !==
         installedFormReferenceKey(identity)
     ) {
       return unavailable(

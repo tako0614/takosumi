@@ -333,15 +333,7 @@ function projectResourceRow(
 }
 
 function projectForm(form: InstalledFormReference): InstalledFormReference {
-  return {
-    formRef: {
-      apiVersion: form.formRef.apiVersion,
-      kind: form.formRef.kind,
-      definitionVersion: form.formRef.definitionVersion,
-      schemaDigest: form.formRef.schemaDigest,
-    },
-    packageDigest: form.packageDigest,
-  };
+  return { ...form };
 }
 
 function compareRows(

@@ -43,6 +43,7 @@ test("reference app composition exposes four replaceable Store source identities
   }
 
   for (const config of storeConfigs) {
+    expect(config.sourceSelector).toEqual(config.store!.source);
     expect(config.store!.source).toEqual({
       url: config.store!.source!.url,
       path: ".",
@@ -297,13 +298,29 @@ test("reference configs contain no retired runtime authority schema", () => {
   ]) {
     expect(serialized).not.toContain(retired);
   }
-  const storageAndGit = REFERENCE_APP_INSTALL_CONFIGS.filter((config) =>
-    ["takos-storage-main", "takos-git-main"].includes(config.name),
-  );
-  for (const config of storageAndGit) {
-    expect(config.installContextVariableMapping).toEqual({
-      "env.APP_WORKSPACE_ID": "workspace_id",
-      "env.APP_CAPSULE_ID": "capsule_id",
-    });
-  }
+  const storage = REFERENCE_APP_INSTALL_CONFIGS.find(
+    (config) => config.name === "takos-storage-main",
+  )!;
+  expect(storage.installContextVariableMapping).toEqual({
+    takosumi_workspace_id: "workspace_id",
+    takosumi_capsule_id: "capsule_id",
+  });
+  expect(
+    storage.variablePresentation?.find(
+      (variable) => variable.name === "app_session_secret",
+    ),
+  ).toMatchObject({
+    type: "string",
+    format: "password",
+    required: true,
+    secret: true,
+  });
+
+  const git = REFERENCE_APP_INSTALL_CONFIGS.find(
+    (config) => config.name === "takos-git-main",
+  )!;
+  expect(git.installContextVariableMapping).toEqual({
+    "env.APP_WORKSPACE_ID": "workspace_id",
+    "env.APP_CAPSULE_ID": "capsule_id",
+  });
 });

@@ -76,7 +76,7 @@ async function digestOf(bytes: Uint8Array): Promise<string> {
 test("apply with a Resource stateScope persists under the Resource R2_STATE prefix", async () => {
   const calls: string[] = [];
   const artifacts = new FakeR2Bucket();
-  const state = new FakeR2Bucket();
+  const state = new FakeR2Bucket(1);
   // The plan binary is stored encrypted at `.enc`; plaintext plan objects are
   // not valid restore sources.
   const crypto = StateArtifactCrypto.fromEnv({
@@ -972,6 +972,12 @@ test("plan with stateScope reconciles missing current.json from the latest seale
     objectKey: `${STATE_PREFIX}/00000002.tfstate.enc`,
     digest: sealedTwo.contentDigest,
   });
+  assert.equal(state.listCalls.length, 2);
+  assert.ok(
+    state.listCalls.every((options) =>
+      options.include?.includes("customMetadata"),
+    ),
+  );
 });
 
 test("apply with stateScope reconciles only the previous generation before writing a new state", async () => {
@@ -1478,6 +1484,11 @@ class FakeDoStorage {
 
 class FakeR2Bucket implements R2Bucket {
   readonly #objects = new Map<string, FakeR2ObjectBody>();
+  readonly listCalls: R2ListOptions[] = [];
+
+  constructor(
+    private readonly listPageSize = Number.POSITIVE_INFINITY,
+  ) {}
 
   async put(
     key: string,
@@ -1499,12 +1510,31 @@ class FakeR2Bucket implements R2Bucket {
   }
 
   list(options?: R2ListOptions): Promise<R2Objects> {
+    this.listCalls.push(options ?? {});
     const prefix = options?.prefix ?? "";
+    const all = Array.from(this.#objects.values())
+      .filter((object) => object.key.startsWith(prefix))
+      .sort((left, right) => left.key.localeCompare(right.key));
+    const offset = options?.cursor ? Number(options.cursor) : 0;
+    const requestedLimit = options?.limit ?? Number.POSITIVE_INFINITY;
+    const limit = Math.min(this.listPageSize, requestedLimit);
+    const end = Math.min(all.length, offset + limit);
+    const includeCustomMetadata =
+      options?.include?.includes("customMetadata") === true;
+    const objects = all.slice(offset, end).map((object): R2Object => {
+      if (includeCustomMetadata) return object;
+      return {
+        key: object.key,
+        size: object.size,
+        etag: object.etag,
+        uploaded: object.uploaded,
+      };
+    });
+    const truncated = end < all.length;
     return Promise.resolve({
-      objects: Array.from(this.#objects.values()).filter((object) =>
-        object.key.startsWith(prefix),
-      ),
-      truncated: false,
+      objects,
+      truncated,
+      ...(truncated ? { cursor: String(end) } : {}),
     });
   }
 

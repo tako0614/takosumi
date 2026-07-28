@@ -572,6 +572,8 @@ export const resourceShapes = sqliteTable(
     // v53 is additive; keep append order aligned with upgraded databases.
     lastOperationRunId: text("last_operation_run_id"),
     pendingOperationJson: jsonText("pending_operation_json"),
+    // v55 is additive; keep append order aligned with upgraded databases.
+    revision: integer("revision").notNull().default(0),
   },
   (table) => [
     uniqueIndex("resource_shapes_space_kind_name_unique").on(
@@ -772,9 +774,8 @@ export const serviceFormDefinitions = sqliteTable(
   {
     formRefKey: text("form_ref_key").primaryKey(),
     packageDigest: text("package_digest").notNull(),
-    apiVersion: text("api_version").notNull(),
-    kind: text("kind").notNull(),
-    definitionVersion: text("definition_version").notNull(),
+    type: text("type").notNull(),
+    version: text("version").notNull(),
     schemaDigest: text("schema_digest").notNull(),
     recordJson: jsonText("record_json").notNull(),
     installedAt: text("installed_at").notNull(),
@@ -785,8 +786,8 @@ export const serviceFormDefinitions = sqliteTable(
       table.packageDigest,
     ),
     index("service_form_definitions_package_idx").on(table.packageDigest),
-    index("service_form_definitions_kind_installed_ref_idx").on(
-      table.kind,
+    index("service_form_definitions_type_installed_ref_idx").on(
+      table.type,
       table.installedAt,
       table.formRefKey,
     ),

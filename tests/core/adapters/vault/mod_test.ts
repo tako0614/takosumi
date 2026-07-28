@@ -1,3 +1,4 @@
+// takos-secret-scan: synthetic — vault round-trip fixtures use a literal PRIVATE KEY block whose body is the word "secret".
 import { expect, test } from "bun:test";
 
 import {
@@ -46,6 +47,8 @@ function makeVault(
       ),
     credentialDrivers:
       REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipeDrivers,
+    sourceCredentialDrivers:
+      REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.sourceCredentialDrivers,
   });
   const vault = explicitRecipeFixtureVault(subject);
   return { store, vault };

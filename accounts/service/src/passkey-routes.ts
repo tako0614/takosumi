@@ -20,6 +20,7 @@ import {
 } from "./http-helpers.ts";
 import {
   extractAccountSessionId,
+  requireAccountSession,
   rotateAccountSession,
   serializeAccountSessionCookie,
 } from "./account-session.ts";
@@ -37,9 +38,10 @@ import { consoleErrorRedacted } from "./redacted-log.ts";
 /**
  * Server-minted passkey challenge handling. Browsers must NOT pick their own
  * challenge — that defeats the purpose of WebAuthn replay protection. We mint a
- * 32-byte random challenge, bind it to `subject + sessionId + intent` (register
- * / authenticate), and require the client to echo back the SAME bytes on
- * `complete`.
+ * 32-byte random challenge, bind it to
+ * `subject + sessionId + intent + challenge` (register / authenticate), and
+ * require the client to echo back the SAME bytes on `complete`. Including the
+ * challenge in the key lets independent ceremonies proceed concurrently.
  *
  * The challenge is persisted in the `AccountsStore` (via `savePasskeyChallenge`
  * / `consumePasskeyChallenge`), NOT a module-local Map. The previous Map was
@@ -71,7 +73,7 @@ async function issueChallenge(input: {
   intent: PasskeyChallengeIntent;
 }): Promise<string> {
   const challenge = mintChallenge();
-  const key = passkeyChallengeKey(input);
+  const key = passkeyChallengeKey({ ...input, challenge });
   await input.store.savePasskeyChallenge(
     key,
     challenge,
@@ -91,7 +93,7 @@ async function consumeChallenge(input: {
   intent: PasskeyChallengeIntent;
   presented: string;
 }): Promise<ConsumeResult> {
-  const key = passkeyChallengeKey(input);
+  const key = passkeyChallengeKey({ ...input, challenge: input.presented });
   // Single-shot read+delete in the store with internal expiry handling
   // (mirrors consumeAuthorizationCode). `undefined` covers unknown AND expired;
   // either way we fail closed.
@@ -107,20 +109,19 @@ export async function handlePasskeyRegisterOptions(input: {
   store: AccountsStore;
   passkeys: PasskeyHttpOptions;
 }): Promise<Response> {
+  const session = await requireAccountSession({
+    request: input.request,
+    store: input.store,
+  });
+  if (!session.ok) return session.response;
   const body = await readJsonObject(input.request);
   if (!body) return errorJson("invalid_request", "invalid request", 400);
-  const subject = takosumiSubjectValue(body.subject);
-  if (!subject) return errorJson("invalid_request", "invalid request", 400);
+  const subject = session.subject;
 
   const account = await input.store.findAccount(subject);
-  if (!account) return errorJson("account_not_found", "account not found", 404);
+  if (!account) return errorJson("invalid_session", "invalid session", 401);
 
-  // Agent 6 item 3: bind the issued challenge to subject + session. If
-  // the caller already has an authenticated session (re-registration of
-  // an additional credential), pin it; otherwise we issue an "anon" key
-  // keyed only by subject (first-time enrollment from a sign-in flow
-  // that has not yet minted a session).
-  const sessionId = extractAccountSessionId(input.request);
+  const sessionId = session.sessionId;
   const challenge = await issueChallenge({
     store: input.store,
     subject,
@@ -155,22 +156,16 @@ export async function handlePasskeyRegisterComplete(input: {
   // Agent 6 item 1: passkey enrollment must be done on behalf of an
   // already-authenticated Account session. Without this gate any caller
   // could attach a passkey to any subject they can name.
-  const sessionId = extractAccountSessionId(input.request);
-  if (!sessionId || !sessionId.startsWith("sess_")) {
-    return errorJson("invalid_session", "invalid session", 401, undefined, {
-      "www-authenticate": `Bearer error="invalid_session"`,
-    });
-  }
-  const session = await input.store.findAccountSession(sessionId);
-  if (!session || session.expiresAt < Date.now()) {
-    return errorJson("invalid_session", "invalid session", 401, undefined, {
-      "www-authenticate": `Bearer error="invalid_session"`,
-    });
-  }
+  const session = await requireAccountSession({
+    request: input.request,
+    store: input.store,
+  });
+  if (!session.ok) return session.response;
+  const sessionId = session.sessionId;
 
   const body = await readJsonObject(input.request);
   if (!body) return errorJson("invalid_request", "invalid request", 400);
-  const subject = takosumiSubjectValue(body.subject);
+  const subject = session.subject;
   const credentialId = stringValue(body.credentialId);
   const publicKeyJwk = isRecord(body.publicKeyJwk)
     ? (body.publicKeyJwk as JsonWebKey)
@@ -186,7 +181,6 @@ export async function handlePasskeyRegisterComplete(input: {
   const clientDataJSON = base64UrlBytesValue(body.clientDataJSON);
   const attestationObject = base64UrlBytesValue(body.attestationObject);
   if (
-    !subject ||
     !credentialId ||
     !publicKeyJwk ||
     !presentedChallenge ||
@@ -194,12 +188,6 @@ export async function handlePasskeyRegisterComplete(input: {
     !attestationObject
   ) {
     return errorJson("invalid_request", "invalid request", 400);
-  }
-
-  // Agent 6 item 1: the subject the client wants to attach the passkey to
-  // must be the same subject the session belongs to. Reject otherwise.
-  if (subject !== session.subject) {
-    return errorJson("subject_mismatch", "subject mismatch", 403);
   }
 
   // Agent 6 item 2: the challenge presented on complete must match the
@@ -286,11 +274,6 @@ export async function handlePasskeyAuthenticateOptions(input: {
   if (!body) return errorJson("invalid_request", "invalid request", 400);
   const subject = takosumiSubjectValue(body.subject);
   if (!subject) return errorJson("invalid_request", "invalid request", 400);
-  const account = await input.store.findAccount(subject);
-  if (!account) return errorJson("account_not_found", "account not found", 404);
-
-  const credentials =
-    await input.store.listPasskeyCredentialsForSubject(subject);
 
   // Agent 6 item 2 + 3: server-mint challenge keyed by (subject,
   // sessionId, intent). For authenticate, sessionId is normally null
@@ -307,10 +290,10 @@ export async function handlePasskeyAuthenticateOptions(input: {
     createPasskeyAuthenticationOptions({
       rpId: input.passkeys.rpId,
       challenge,
-      allowCredentials: credentials.map((credential) => ({
-        id: credential.credentialId,
-        type: "public-key" as const,
-      })),
+      // Discoverable credentials keep this response invariant for registered
+      // and unknown subjects. Returning a subject-specific credential list is
+      // an account/passkey enumeration oracle.
+      allowCredentials: [],
     }),
   );
 }
@@ -349,7 +332,7 @@ export async function handlePasskeyAuthenticateComplete(input: {
   if (!existingCredential) {
     return errorJson(
       "passkey_authentication_failed",
-      "passkey credential is not registered",
+      "passkey authentication failed",
       401,
     );
   }

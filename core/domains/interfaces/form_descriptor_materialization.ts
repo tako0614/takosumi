@@ -8,7 +8,11 @@ import type {
   InterfaceSpec,
   JsonObject,
 } from "takosumi-contract";
-import { formRefKey, isPortableInterfaceInputSource } from "takosumi-contract";
+import {
+  formRefKey,
+  formRefOfInstalled,
+  isPortableInterfaceInputSource,
+} from "takosumi-contract";
 import { sha256HexAsync } from "../../shared/runtime/hash.ts";
 import { InterpretedDraft202012Validator } from "../../shared/json-schema/draft_2020.ts";
 import { canonicalInterfaceOAuth2ResourceUri } from "./oauth_resource.ts";
@@ -70,7 +74,8 @@ export interface FormDescriptorMaterializationResult {
 export async function ensureFormDescriptorInterfaces(
   input: FormDescriptorMaterializationInput,
 ): Promise<FormDescriptorMaterializationResult> {
-  const exactFormKey = formRefKey(input.form.formRef);
+  const formRef = formRefOfInstalled(input.form);
+  const exactFormKey = formRefKey(formRef);
   const history = [
     ...(await input.interfaces.list({
       workspaceId: input.workspaceId,
@@ -86,7 +91,7 @@ export async function ensureFormDescriptorInterfaces(
     const required = descriptor.required === true;
     const lineage = {
       formRefKey: exactFormKey,
-      formSchemaDigest: input.form.formRef.schemaDigest,
+      formSchemaDigest: formRef.schemaDigest,
       descriptorName: descriptor.name,
       descriptorVersion: descriptor.version,
     };
@@ -267,7 +272,7 @@ export async function ensureFormDescriptorInterfaces(
     input.descriptors.map((descriptor) =>
       descriptorLineageKey({
         formRefKey: exactFormKey,
-        formSchemaDigest: input.form.formRef.schemaDigest,
+        formSchemaDigest: formRef.schemaDigest,
         descriptorName: descriptor.name,
         descriptorVersion: descriptor.version,
       }),

@@ -287,13 +287,14 @@ function normalizeGitUrl(value: string): string {
     url.hash = "";
     url.search = "";
     url.pathname = url.pathname.replace(/\/+$/u, "").replace(/\.git$/iu, "");
-    return url.toString().replace(/\/+$/u, "").toLowerCase();
+    // URL canonicalization lower-cases the scheme/host. Preserve pathname
+    // case because Git repository paths can be case-sensitive.
+    return url.toString().replace(/\/+$/u, "");
   } catch {
     return value
       .trim()
       .replace(/\/+$/u, "")
-      .replace(/\.git$/iu, "")
-      .toLowerCase();
+      .replace(/\.git$/iu, "");
   }
 }
 
@@ -683,7 +684,7 @@ function storeInstallConfigsForSource(
 ): readonly InstallConfig[] {
   if (!url.trim()) return [];
   return configs.filter((config) =>
-    storeSourceMatchesCoordinate(config.store?.source, url, path),
+    storeSourceMatchesCoordinate(config.sourceSelector, url, path),
   );
 }
 

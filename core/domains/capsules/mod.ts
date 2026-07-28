@@ -330,6 +330,9 @@ export class CapsulesService {
   async putInstallConfig(config: InstallConfig): Promise<InstallConfig> {
     requireNonEmptyString(config.id, "id");
     requireNonEmptyString(config.name, "name");
+    if (config.sourceSelector) {
+      validateInstallConfigSourceSelector(config.sourceSelector);
+    }
     if (config.sourceBuild) validateSourceBuild(config.sourceBuild);
     validateLifecycleActions(config);
     materializeInstallContextVariables(config.installContextVariableMapping, {
@@ -717,6 +720,23 @@ function assertSafeInstallConfigPath(value: string, field: string): void {
       `${field} must be a safe relative path inside the SourceSnapshot`,
     );
   }
+}
+
+function validateInstallConfigSourceSelector(
+  selector: NonNullable<InstallConfig["sourceSelector"]>,
+): void {
+  const url = selector.url.trim();
+  if (
+    url.length === 0 ||
+    url.length > 4096 ||
+    /[\u0000-\u001f\u007f]/u.test(url)
+  ) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      "sourceSelector.url must be a non-empty Git URL without control characters",
+    );
+  }
+  assertSafeInstallConfigPath(selector.path, "sourceSelector.path");
 }
 
 function validateSourceBuild(

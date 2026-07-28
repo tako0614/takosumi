@@ -10,9 +10,8 @@ import {
 const TOKEN = "operator-form-activation-token";
 const PACKAGE_DIGEST = `sha256:${"a".repeat(64)}`;
 const FORM_REF: FormRef = {
-  apiVersion: "takoform.dev/v1alpha1",
-  kind: "ObjectBucket",
-  definitionVersion: "1.0.0",
+  type: "object_bucket",
+  version: "1.0.0",
   schemaDigest: `sha256:${"b".repeat(64)}`,
 };
 
@@ -148,7 +147,7 @@ async function fixture() {
 function createBody(id: string) {
   return {
     id,
-    identity: { formRef: FORM_REF, packageDigest: PACKAGE_DIGEST },
+    identity: { ...FORM_REF, packageDigest: PACKAGE_DIGEST },
     scope: { type: "operator" },
     audience: { public: false, roles: ["member"] },
     policy: { approval: "operator" },

@@ -28,9 +28,46 @@ import type { DispatchGeneratedRoot } from "@takosumi/internal/deploy-control-ap
 import type { JsonValue } from "takosumi-contract";
 import type { OutputAllowlistEntry } from "takosumi-contract/install-configs";
 import { canonicalProviderSource } from "takosumi-contract/provider-env-rules";
-import { OpenTofuControllerError } from "../../../core/domains/deploy-control/errors.ts";
 
 const CHILD_MODULE_SOURCE = "./module";
+
+/** Public validation code translated by Core at the rootgen call boundary. */
+export const ROOTGEN_VALIDATION_ERROR_CODE = "invalid_argument" as const;
+
+export const ROOTGEN_VALIDATION_ERROR_REASONS = [
+  "rootgen_invalid_identifier",
+  "rootgen_provider_configuration_alias_override",
+  "rootgen_conflicting_provider_bindings",
+  "rootgen_invalid_provider_local_name",
+  "rootgen_explicit_provider_source_required",
+  "rootgen_non_finite_number_input",
+  "rootgen_unsupported_json_input",
+] as const;
+
+export type RootgenValidationErrorCode = typeof ROOTGEN_VALIDATION_ERROR_CODE;
+export type RootgenValidationErrorReason =
+  (typeof ROOTGEN_VALIDATION_ERROR_REASONS)[number];
+
+export interface RootgenValidationErrorDetails {
+  readonly reason: RootgenValidationErrorReason;
+}
+
+/**
+ * Layer-neutral root-module validation failure.
+ *
+ * Rootgen is a leaf library, so it must not throw Core controller errors.
+ * Core translates this error exactly once at each runtime call boundary.
+ */
+export class RootgenValidationError extends Error {
+  readonly code: RootgenValidationErrorCode = ROOTGEN_VALIDATION_ERROR_CODE;
+  readonly details: RootgenValidationErrorDetails;
+
+  constructor(reason: RootgenValidationErrorReason, message: string) {
+    super(message);
+    this.name = "RootgenValidationError";
+    this.details = Object.freeze({ reason });
+  }
+}
 
 export interface GeneratedRootModule extends DispatchGeneratedRoot {
   readonly files: Readonly<Record<string, string>>;
@@ -124,8 +161,8 @@ function appendProviderSections(
       ).sort(([left], [right]) => left.localeCompare(right))) {
         assertIdentifier(name, "rootgen: provider configuration argument");
         if (name === "alias") {
-          throw new OpenTofuControllerError(
-            "invalid_argument",
+          throw new RootgenValidationError(
+            "rootgen_provider_configuration_alias_override",
             `rootgen: provider configuration cannot override ${name}`,
           );
         }
@@ -208,8 +245,8 @@ function providerMapEntries(
       const existing = byChildRef.get(childRef);
       if (existing) {
         if (existing.rootRef === rootRef) continue;
-        throw new OpenTofuControllerError(
-          "invalid_argument",
+        throw new RootgenValidationError(
+          "rootgen_conflicting_provider_bindings",
           `rootgen: conflicting provider bindings for ${childRef}`,
         );
       }
@@ -258,8 +295,8 @@ function renderGenericOutputsTf(
 
 function assertIdentifier(value: string, label: string): void {
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(value)) {
-    throw new OpenTofuControllerError(
-      "invalid_argument",
+    throw new RootgenValidationError(
+      "rootgen_invalid_identifier",
       `${label} must be a valid OpenTofu identifier`,
     );
   }
@@ -279,8 +316,8 @@ function providerLocalName(rule: string): string {
   const parts = rule.split("/");
   const type = parts[parts.length - 1] ?? rule;
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(type)) {
-    throw new OpenTofuControllerError(
-      "invalid_argument",
+    throw new RootgenValidationError(
+      "rootgen_invalid_provider_local_name",
       `rootgen: provider rule ${rule} has no valid local name`,
     );
   }
@@ -296,8 +333,8 @@ function providerLocalName(rule: string): string {
 function normalizeProviderSource(rule: string): string {
   const normalized = rule.trim();
   if (!normalized.includes("/")) {
-    throw new OpenTofuControllerError(
-      "invalid_argument",
+    throw new RootgenValidationError(
+      "rootgen_explicit_provider_source_required",
       `rootgen: provider ${normalized} must declare an explicit namespace/type or hostname/namespace/type source`,
     );
   }
@@ -310,8 +347,8 @@ function hclJsonLiteral(value: JsonValue): string {
       return hclString(value);
     case "number":
       if (!Number.isFinite(value)) {
-        throw new OpenTofuControllerError(
-          "invalid_argument",
+        throw new RootgenValidationError(
+          "rootgen_non_finite_number_input",
           "rootgen: number input must be finite",
         );
       }
@@ -322,8 +359,8 @@ function hclJsonLiteral(value: JsonValue): string {
       if (value === null) return "null";
       return `jsondecode(${hclString(JSON.stringify(value))})`;
     default:
-      throw new OpenTofuControllerError(
-        "invalid_argument",
+      throw new RootgenValidationError(
+        "rootgen_unsupported_json_input",
         "rootgen: unsupported JSON input literal",
       );
   }

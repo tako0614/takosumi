@@ -1,3 +1,4 @@
+// takos-secret-scan: synthetic — this test exists to prove key material is redacted, so it must contain some.
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { containsSecretLikeString, redactJsonObject, redactString } from "takosumi-contract/redaction";

@@ -10,13 +10,10 @@ test("FormAvailability CLI is read-only and preserves exact lookup fields", asyn
     return Response.json({
       forms: [
         {
-          identity: {
-            formRef: {
-              apiVersion: "forms.takoform.com/v1alpha1",
-              kind: "ObjectBucket",
-              definitionVersion: "1.0.0",
-              schemaDigest: `sha256:${"a".repeat(64)}`,
-            },
+          form: {
+            type: "object_bucket",
+            version: "1.0.0",
+            schemaDigest: `sha256:${"a".repeat(64)}`,
             packageDigest: `sha256:${"b".repeat(64)}`,
           },
           definitionKnown: true,
@@ -42,11 +39,9 @@ test("FormAvailability CLI is read-only and preserves exact lookup fields", asyn
           "list",
           "--space",
           "space_1",
-          "--kind",
-          "ObjectBucket",
-          "--api-version",
-          "forms.takoform.com/v1alpha1",
-          "--definition-version",
+          "--type",
+          "object_bucket",
+          "--version",
           "1.0.0",
           "--schema-digest",
           `sha256:${"a".repeat(64)}`,
@@ -64,7 +59,7 @@ test("FormAvailability CLI is read-only and preserves exact lookup fields", asyn
       ),
     ).toBe(0);
     expect(stderr).toEqual([]);
-    expect(stdout.join("\n")).toContain("ObjectBucket/1.0.0: available");
+    expect(stdout.join("\n")).toContain("object_bucket@1.0.0: available");
     expect(captured).toHaveLength(1);
     expect(captured[0]!.method).toBe("GET");
     expect(captured[0]!.headers.get("authorization")).toBe(

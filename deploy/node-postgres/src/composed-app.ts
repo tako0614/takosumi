@@ -106,6 +106,8 @@ export interface ComposedAppInput {
   readonly operatorInstallConfigs?: CreateTakosumiServiceArg["operatorInstallConfigs"];
   /** Complete host-installed recipe driver registry. */
   readonly credentialRecipeDrivers?: CreateTakosumiServiceArg["credentialRecipeDrivers"];
+  /** Complete host-installed Source credential driver registry. */
+  readonly sourceCredentialDrivers?: CreateTakosumiServiceArg["sourceCredentialDrivers"];
   /** Host-installed guided connection setup dispatcher. */
   readonly buildConnectionSetupRequest?: CreateTakosumiServiceArg["buildConnectionSetupRequest"];
   /** Complete host-installed OAuth helper registry. */
@@ -184,6 +186,9 @@ export async function buildComposedApp(
     credentialRecipeDrivers:
       input.credentialRecipeDrivers ??
       REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipeDrivers,
+    sourceCredentialDrivers:
+      input.sourceCredentialDrivers ??
+      REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.sourceCredentialDrivers,
     buildConnectionSetupRequest:
       input.buildConnectionSetupRequest ??
       REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.buildConnectionSetupRequest,

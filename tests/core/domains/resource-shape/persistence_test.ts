@@ -35,12 +35,9 @@ const T0 = "2026-06-29T00:00:00.000Z" as IsoTimestamp;
 const T1 = "2026-06-29T01:00:00.000Z" as IsoTimestamp;
 const T2 = "2026-06-29T02:00:00.000Z" as IsoTimestamp;
 const EXACT_FORM: InstalledFormReference = {
-  formRef: {
-    apiVersion: "forms.takoform.com/v1alpha1",
-    kind: "ObjectBucket",
-    definitionVersion: "1.0.0",
-    schemaDigest: `sha256:${"1".repeat(64)}`,
-  },
+  type: "object_bucket",
+  version: "1.0.0",
+  schemaDigest: `sha256:${"1".repeat(64)}`,
   packageDigest: `sha256:${"2".repeat(64)}`,
 };
 
@@ -51,6 +48,7 @@ function readyShape(
 ): ResourceShapeRecord {
   return {
     id: formatResourceShapeId(spaceId, "EdgeWorker", name),
+    revision: 0,
     spaceId,
     kind: "EdgeWorker",
     name,
@@ -67,6 +65,7 @@ function readyShape(
 function fullShape(): ResourceShapeRecord {
   return {
     id: formatResourceShapeId(SPACE_A, "ObjectBucket", "assets"),
+    revision: 0,
     spaceId: SPACE_A,
     project: "web",
     environment: "prod",
@@ -81,7 +80,6 @@ function fullShape(): ResourceShapeRecord {
     phase: "Ready",
     generation: 3,
     observedGeneration: 2,
-    lastOperationRunId: "run_resource_backend_revision_3",
     outputs: { bucket_name: "assets", s3_endpoint: "https://s3.example" },
     execution: {
       runId: "apply_resource_3",
@@ -111,6 +109,7 @@ function fullShape(): ResourceShapeRecord {
 function minimalShape(): ResourceShapeRecord {
   return {
     id: formatResourceShapeId(SPACE_A, "EdgeWorker", "api"),
+    revision: 0,
     spaceId: SPACE_A,
     kind: "EdgeWorker",
     name: "api",
@@ -287,20 +286,6 @@ for (const backend of backends) {
       expect(
         await stores.resources.getByName(SPACE_A, "ObjectBucket", "assets"),
       ).toEqual(record);
-    });
-
-    test("resource shape: pending direct operation round-trips exactly", async () => {
-      const record: ResourceShapeRecord = {
-        ...applyingShape(`pending-${backend.label}`),
-        pendingOperation: {
-          runId: "run_resource_pending_apply",
-          operation: "apply",
-          operationKey: `sha256:${"a".repeat(64)}`,
-        },
-      };
-      expect(await stores.resources.upsert(record)).toEqual(record);
-      expect(await stores.resources.get(record.id)).toEqual(record);
-      await stores.resources.delete(record.id);
     });
 
     test("exact Form identity round-trips with its matching ResolutionLock", async () => {
@@ -484,69 +469,62 @@ for (const backend of backends) {
       expect(read && "environment" in read).toBe(false);
       expect(read && "outputs" in read).toBe(false);
       expect(read && "execution" in read).toBe(false);
+      expect(read && "pendingOperation" in read).toBe(false);
+      expect(read && "lastOperationRunId" in read).toBe(false);
       expect(read && "stateAdoption" in read).toBe(false);
       expect(read && "conditions" in read).toBe(false);
       expect(read && "labels" in read).toBe(false);
     });
 
-    test("resource shape: bundled-kind inventory is globally bounded and cursorable", async () => {
-      const edge = readyShape(SPACE_B, `inventory-edge-${backend.label}`, T1);
-      const queue: ResourceShapeRecord = {
-        ...readyShape(SPACE_A, `inventory-queue-${backend.label}`, T2),
-        id: formatResourceShapeId(
-          SPACE_A,
-          "Queue",
-          `inventory-queue-${backend.label}`,
-        ),
-        kind: "Queue",
-      };
-      const custom: ResourceShapeRecord = {
-        ...readyShape(SPACE_A, `inventory-custom-${backend.label}`, T2),
-        id: formatResourceShapeId(
-          SPACE_A,
-          "OperatorCustom",
-          `inventory-custom-${backend.label}`,
-        ),
-        kind: "OperatorCustom",
-      };
-      await stores.resources.upsert(edge);
-      await stores.resources.upsert(queue);
-      await stores.resources.upsert(custom);
-
-      const ids: string[] = [];
-      let cursor: string | undefined;
-      do {
-        const page = await stores.resources.listByKindsPage(
-          ["EdgeWorker", "Queue"],
-          { limit: 1, ...(cursor ? { cursor } : {}) },
-        );
-        expect(page.items).toHaveLength(1);
-        expect(["EdgeWorker", "Queue"]).toContain(page.items[0]?.kind);
-        ids.push(page.items[0]!.id);
-        cursor = page.nextCursor;
-      } while (cursor);
-
-      expect(ids).toContain(edge.id);
-      expect(ids).toContain(queue.id);
-      expect(ids).not.toContain(custom.id);
-      await stores.resources.delete(edge.id);
-      await stores.resources.delete(queue.id);
-      await stores.resources.delete(custom.id);
+    test("resource shape: crash recovery fields round-trip in every lifecycle phase", async () => {
+      const phases = [
+        "Pending",
+        "Resolving",
+        "Planning",
+        "Applying",
+        "Ready",
+        "Degraded",
+        "Failed",
+        "Deleting",
+        "Deleted",
+      ] as const;
+      for (const [index, phase] of phases.entries()) {
+        const name = `recovery-${backend.label}-${phase.toLowerCase()}`;
+        const record: ResourceShapeRecord = {
+          ...minimalShape(),
+          id: formatResourceShapeId(SPACE_B, "EdgeWorker", name),
+          name,
+          phase,
+          pendingOperation: {
+            runId: `resource_operation_${backend.label}_${index}`,
+            operation: "refresh",
+            operationKey: `refresh:${backend.label}:${index}`,
+          },
+          lastOperationRunId: `resource_operation_previous_${index}`,
+        };
+        expect(await stores.resources.upsert(record)).toEqual(record);
+        expect(await stores.resources.get(record.id)).toEqual(record);
+        await stores.resources.delete(record.id);
+      }
     });
 
     test("resource shape: upsert overwrites on id conflict", async () => {
       const record = fullShape();
-      await stores.resources.upsert(record);
+      const current = await stores.resources.upsert(record);
       const updated: ResourceShapeRecord = {
-        ...record,
+        ...current,
         phase: "Degraded",
         generation: 4,
         observedGeneration: 4,
         outputs: { endpoint: "https://assets-2.example" },
         updatedAt: "2026-06-29T02:00:00.000Z" as IsoTimestamp,
       };
-      await stores.resources.upsert(updated);
-      expect(await stores.resources.get(record.id)).toEqual(updated);
+      const persisted = {
+        ...updated,
+        revision: (current.revision ?? 0) + 1,
+      };
+      expect(await stores.resources.upsert(updated)).toEqual(persisted);
+      expect(await stores.resources.get(record.id)).toEqual(persisted);
       // Still exactly one row for the (space, kind, name) tuple.
       const listed = (await stores.resources.listBySpace(SPACE_A)).filter(
         (r) => r.id === record.id,
@@ -603,7 +581,10 @@ for (const backend of backends) {
           phase: record.phase,
           updatedAt: record.updatedAt,
         }),
-      ).toEqual({ status: "updated", record: observed });
+      ).toEqual({
+        status: "updated",
+        record: { ...observed, revision: 1 },
+      });
 
       const stale = await stores.resources.compareAndSet(
         { ...record, updatedAt: T2 },
@@ -614,8 +595,120 @@ for (const backend of backends) {
         },
       );
       expect(stale.status).toBe("conflict");
-      expect(await stores.resources.get(record.id)).toEqual(observed);
+      expect(await stores.resources.get(record.id)).toEqual({
+        ...observed,
+        revision: 1,
+      });
       await stores.resources.delete(record.id);
+    });
+
+    test("resource shape: revision rejects same-timestamp stale writers", async () => {
+      const base: ResourceShapeRecord = {
+        ...readyShape(SPACE_B, `revision-cas-${backend.label}`, T0),
+        updatedAt: T1,
+      };
+      const current = await stores.resources.upsert(base);
+      const firstWriter: ResourceShapeRecord = {
+        ...current,
+        labels: { writer: "first" },
+      };
+      const first = await stores.resources.compareAndSet(firstWriter, {
+        generation: current.generation,
+        phase: current.phase,
+        updatedAt: current.updatedAt,
+      });
+      expect(first).toEqual({
+        status: "updated",
+        record: { ...firstWriter, revision: 1 },
+      });
+
+      const stale = await stores.resources.compareAndSet(
+        { ...current, labels: { writer: "stale" } },
+        {
+          generation: current.generation,
+          phase: current.phase,
+          updatedAt: current.updatedAt,
+        },
+      );
+      expect(stale).toEqual({
+        status: "conflict",
+        record: { ...firstWriter, revision: 1 },
+      });
+      expect(
+        await stores.removeResource({
+          resourceId: base.id,
+          expected: {
+            generation: current.generation,
+            phase: current.phase,
+            updatedAt: current.updatedAt,
+            revision: current.revision,
+          },
+          expectedLock: null,
+        }),
+      ).toEqual({
+        status: "conflict",
+        record: { ...firstWriter, revision: 1 },
+      });
+      expect(
+        await stores.removeResource({
+          resourceId: base.id,
+          expected: {
+            generation: firstWriter.generation,
+            phase: firstWriter.phase,
+            updatedAt: firstWriter.updatedAt,
+            revision: 1,
+          },
+          expectedLock: null,
+        }),
+      ).toEqual({ status: "removed" });
+    });
+
+    test("resource shape: revision prevents a stale delete claim from overwriting a refresh claim", async () => {
+      const base: ResourceShapeRecord = {
+        ...readyShape(SPACE_B, `revision-delete-${backend.label}`, T0),
+        updatedAt: T1,
+      };
+      const current = await stores.resources.upsert(base);
+      const refreshing: ResourceShapeRecord = {
+        ...current,
+        phase: "Applying",
+        pendingOperation: {
+          runId: `refresh_run_${backend.label}`,
+          operation: "refresh",
+          operationKey: `refresh:${backend.label}`,
+        },
+      };
+      expect(
+        await stores.resources.compareAndSet(refreshing, {
+          generation: current.generation,
+          phase: current.phase,
+          updatedAt: current.updatedAt,
+        }),
+      ).toEqual({
+        status: "updated",
+        record: { ...refreshing, revision: 1 },
+      });
+
+      const staleDelete: ResourceShapeRecord = {
+        ...current,
+        phase: "Deleting",
+        pendingOperation: {
+          runId: `delete_run_${backend.label}`,
+          operation: "delete",
+          operationKey: `delete:${backend.label}`,
+        },
+      };
+      expect(
+        await stores.resources.claimDelete(
+          staleDelete,
+          current.generation,
+          current.managedBy,
+        ),
+      ).toEqual({
+        status: "conflict",
+        record: { ...refreshing, revision: 1 },
+      });
+      await stores.resources.delete(base.id);
     });
 
     test("atomic apply: create, final commit, and stale fence have backend parity", async () => {
@@ -651,14 +744,15 @@ for (const backend of backends) {
         phase: "Applying" as const,
         updatedAt: applying.updatedAt,
       };
+      const committed = { ...ready, revision: 1 };
       expect(
         await stores.commitApply({
           readyRecord: ready,
           finalLock,
           expectedApplying,
         }),
-      ).toEqual({ status: "committed", record: ready, lock: finalLock });
-      expect(await stores.resources.get(applying.id)).toEqual(ready);
+      ).toEqual({ status: "committed", record: committed, lock: finalLock });
+      expect(await stores.resources.get(applying.id)).toEqual(committed);
       expect(await stores.locks.get(applying.id)).toEqual(finalLock);
 
       const staleFinalLock: ResolutionLockRecord = {
@@ -671,8 +765,8 @@ for (const backend of backends) {
           finalLock: staleFinalLock,
           expectedApplying,
         }),
-      ).toEqual({ status: "conflict", record: ready });
-      expect(await stores.resources.get(applying.id)).toEqual(ready);
+      ).toEqual({ status: "conflict", record: committed });
+      expect(await stores.resources.get(applying.id)).toEqual(committed);
       expect(await stores.locks.get(applying.id)).toEqual(finalLock);
 
       await stores.locks.delete(applying.id);
@@ -714,7 +808,11 @@ for (const backend of backends) {
           plannedLock,
           expected,
         }),
-      ).toEqual({ status: "begun", record: applying, lock: plannedLock });
+      ).toEqual({
+        status: "begun",
+        record: { ...applying, revision: 1 },
+        lock: plannedLock,
+      });
 
       const competingLock: ResolutionLockRecord = {
         ...plannedLock,
@@ -726,7 +824,10 @@ for (const backend of backends) {
           plannedLock: competingLock,
           expected,
         }),
-      ).toEqual({ status: "conflict", record: applying });
+      ).toEqual({
+        status: "conflict",
+        record: { ...applying, revision: 1 },
+      });
       expect(await stores.locks.get(current.id)).toEqual(plannedLock);
 
       const missing = applyingShape(`atomic-missing-${backend.label}`);
@@ -862,7 +963,10 @@ for (const backend of backends) {
           replacement: { record: prior, lock: priorLock },
         }),
       ).toEqual({ status: "rolled_back" });
-      expect(await stores.resources.get(prior.id)).toEqual(prior);
+      expect(await stores.resources.get(prior.id)).toEqual({
+        ...prior,
+        revision: 2,
+      });
       expect(await stores.locks.get(prior.id)).toEqual(priorLock);
 
       const created = applyingShape(`atomic-abort-create-${backend.label}`);
@@ -948,7 +1052,10 @@ for (const backend of backends) {
         replacement: { record: failed, lock: null },
       });
       expect(conflict.status).toBe("conflict");
-      expect(await stores.resources.get(applying.id)).toEqual(applying);
+      expect(await stores.resources.get(applying.id)).toEqual({
+        ...applying,
+        revision: 1,
+      });
       expect(await stores.locks.get(applying.id)).toEqual(competingLock);
 
       await stores.locks.put(plannedLock);
@@ -964,7 +1071,10 @@ for (const backend of backends) {
           replacement: { record: failed, lock: null },
         }),
       ).toEqual({ status: "rolled_back" });
-      expect(await stores.resources.get(applying.id)).toEqual(failed);
+      expect(await stores.resources.get(applying.id)).toEqual({
+        ...failed,
+        revision: 2,
+      });
       expect(await stores.locks.get(applying.id)).toBeUndefined();
       await stores.resources.delete(applying.id);
     });
@@ -1091,8 +1201,9 @@ for (const backend of backends) {
         record.generation,
         record.managedBy,
       );
-      expect(claimed).toEqual({ status: "claimed", record: deleting });
-      expect(await stores.resources.get(record.id)).toEqual(deleting);
+      const claimedRecord = { ...deleting, revision: 1 };
+      expect(claimed).toEqual({ status: "claimed", record: claimedRecord });
+      expect(await stores.resources.get(record.id)).toEqual(claimedRecord);
 
       const duplicate = await stores.resources.claimDelete(
         deleting,
@@ -1101,7 +1212,7 @@ for (const backend of backends) {
       );
       expect(duplicate).toEqual({
         status: "already_deleting",
-        record: deleting,
+        record: claimedRecord,
       });
 
       const missing = await stores.resources.claimDelete(
@@ -1577,54 +1688,6 @@ for (const backend of backends) {
     });
   });
 }
-
-test("durable Resource stores reject malformed pending operation evidence", async () => {
-  const d1 = new SqliteFakeD1();
-  await ensureD1OpenTofuLedgerSchema(d1);
-  const d1Stores = createD1ResourceShapeStores(d1);
-  const d1Record = applyingShape("malformed-pending-d1");
-  await d1Stores.resources.upsert(d1Record);
-  await d1
-    .prepare(
-      `update resource_shapes set pending_operation_json = ? where id = ?`,
-    )
-    .bind(
-      JSON.stringify({
-        runId: "run_resource_malformed",
-        operation: "preview",
-        operationKey: `sha256:${"a".repeat(64)}`,
-      }),
-      d1Record.id,
-    )
-    .run();
-  await expect(d1Stores.resources.get(d1Record.id)).rejects.toThrow(
-    "durable Resource pending operation is invalid",
-  );
-
-  const postgres = await PGliteSqlClient.create();
-  try {
-    const postgresStores = createSqlResourceShapeStores(postgres);
-    const postgresRecord = applyingShape("malformed-pending-postgres");
-    await postgresStores.resources.upsert(postgresRecord);
-    await postgres.query(
-      `update takosumi_resource_shapes
-       set pending_operation_json = $1::jsonb where id = $2`,
-      [
-        JSON.stringify({
-          runId: "run_resource_malformed",
-          operation: "delete",
-          operationKey: "contains\ncontrol",
-        }),
-        postgresRecord.id,
-      ],
-    );
-    await expect(
-      postgresStores.resources.get(postgresRecord.id),
-    ).rejects.toThrow("durable Resource pending operation is invalid");
-  } finally {
-    await postgres.close();
-  }
-});
 
 test("D1 atomic apply batch rolls back both Resource and ResolutionLock writes", async () => {
   const db = new SqliteFakeD1();

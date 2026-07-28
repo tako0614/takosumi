@@ -2,9 +2,9 @@
  * Control-backup domain service (Core Specification §33 layer 1 "Control
  * backup" + §26 backup artifact layout).
  *
- * Produces a sealed bundle that captures a Workspace's CONTROL ledger — the
- * information Takosumi manages about a Workspace — so an operator can export /
- * archive / migrate it. The bundle is the JSON of the Workspace's ledger rows,
+ * Produces a sealed, partial control-ledger export for operator inspection and
+ * storage. This format is not a complete Workspace snapshot and has no restore
+ * importer. The bundle is a JSON projection of selected Workspace ledger rows,
  * compressed, then sealed with the same at-rest secret-boundary crypto the
  * state / secret lanes use, and written to a host-allocated opaque reference. A
  * {@link BackupRecord} ledger pointer (`ref` / digest / sizeBytes) is recorded and
@@ -35,7 +35,6 @@
 import {
   type BackupArtifactPointer,
   type BackupRecord,
-  type BackupRestoreTarget,
   CONTROL_BACKUP_CONTENT_TYPE,
   type ListBackupsResponse,
   type ResourceFormPinBackupEntry,
@@ -49,7 +48,10 @@ import type {
 import type { Output as Output } from "takosumi-contract/outputs";
 import type { Run } from "takosumi-contract/runs";
 import type { SourceSnapshot } from "takosumi-contract/sources";
-import { isInstalledFormReference } from "takosumi-contract";
+import {
+  isInstalledFormReference,
+  shapeKindForPortableType,
+} from "takosumi-contract";
 import { OpenTofuControllerError } from "../deploy-control/errors.ts";
 import type {
   OpenTofuControlStore,
@@ -236,10 +238,10 @@ export class BackupsService {
   }
 
   /**
-   * Creates one control backup for a Workspace: gathers the ledger, strips secret
-   * material, zstd-compresses + seals + writes the bundle to backup storage,
-   * records the pointer, and emits a Workspace Activity event. Returns the
-   * {@link BackupRecord}.
+   * Creates one partial control export for a Workspace: gathers the supported
+   * projection, strips secret material, zstd-compresses + seals + writes it to
+   * backup storage, records the pointer, and emits a Workspace Activity event.
+   * The returned {@link BackupRecord} deliberately carries no restore target.
    */
   async createBackup(request: CreateBackupRequest): Promise<BackupRecord> {
     const workspaceId = request.workspaceId.trim();
@@ -310,7 +312,6 @@ export class BackupsService {
         workspaceId,
         ...(request.capsuleId ? { capsuleId: request.capsuleId } : {}),
         ...(request.environment ? { environment: request.environment } : {}),
-        ...restoreTargetFromBundle(bundle.stateVersions, request),
         ref,
         digest,
         sizeBytes,
@@ -607,7 +608,7 @@ export class BackupsService {
         entry.resourceScopeId.trim() === "" ||
         entry.kind.trim() === "" ||
         !isInstalledFormReference(entry.identity) ||
-        entry.identity.formRef.kind !== entry.kind
+        shapeKindForPortableType(entry.identity.type) !== entry.kind
       ) {
         throw new OpenTofuControllerError(
           "failed_precondition",
@@ -1388,29 +1389,6 @@ function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
 
 function defaultId(prefix: string): string {
   return `${prefix}_${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`;
-}
-
-function restoreTargetFromBundle(
-  stateVersions: readonly BundleStateVersion[],
-  request: CreateBackupRequest,
-): { readonly restoreTarget?: BackupRestoreTarget } {
-  if (!request.capsuleId || !request.environment) return {};
-  const latest = stateVersions
-    .filter(
-      (snapshot) =>
-        snapshot.capsuleId === request.capsuleId &&
-        snapshot.environment === request.environment,
-    )
-    .at(-1);
-  if (!latest) return {};
-  return {
-    restoreTarget: {
-      capsuleId: latest.capsuleId,
-      environment: latest.environment,
-      stateGeneration: latest.generation,
-      stateVersionId: latest.id,
-    },
-  };
 }
 
 /**

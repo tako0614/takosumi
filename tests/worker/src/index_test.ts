@@ -531,6 +531,14 @@ class FakeD1Database implements D1Database {
   prepare(_query: string): D1PreparedStatement {
     return new FakeD1PreparedStatement();
   }
+
+  async batch<T = unknown>(
+    statements: readonly D1PreparedStatement[],
+  ): Promise<readonly D1Result<T>[]> {
+    return await Promise.all(
+      statements.map(async (statement) => await statement.run<T>()),
+    );
+  }
 }
 
 class FakeD1PreparedStatement implements D1PreparedStatement {

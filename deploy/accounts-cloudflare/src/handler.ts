@@ -166,7 +166,7 @@ export function createCloudflareWorker<
         if (isDashboardAssetPath(url.pathname)) {
           return dashboardAssetResponse(assetResponse, request.method);
         }
-        return withDashboardDocumentCsp(assetResponse);
+        return await withDashboardDocumentCsp(assetResponse, url.pathname);
       }
       if (url.pathname === TAKOSUMI_ACCOUNTS_AUTH_PROVIDERS_PATH) {
         if (request.method !== "GET") {
@@ -852,14 +852,75 @@ const DASHBOARD_CSP =
   "frame-ancestors 'none'; " +
   "form-action 'self'";
 
+/** The hosted docs are a prerendered VitePress site whose bootstrap runs from
+ * inline <script> elements (appearance, platform class, and the build's page
+ * hash map). The SPA policy has no inline allowance, so those elements were
+ * blocked and the docs app booted without its site data. */
+function isDocsDocumentPath(pathname: string): boolean {
+  return pathname === "/docs" || pathname.startsWith("/docs/");
+}
+
+const INLINE_SCRIPT_PATTERN =
+  /<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/gi;
+
+function base64FromBytes(bytes: ArrayBuffer): string {
+  let binary = "";
+  for (const byte of new Uint8Array(bytes)) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+/** Derives the exact `'sha256-…'` source expressions for a document's inline
+ * scripts. Hashing the served bytes keeps the policy correct for every future
+ * docs build: a hard-coded list would silently rot the next time the page hash
+ * map changes, which is the failure this replaces. */
+async function inlineScriptHashes(html: string): Promise<readonly string[]> {
+  const hashes = new Set<string>();
+  for (const match of html.matchAll(INLINE_SCRIPT_PATTERN)) {
+    const source = match[1] ?? "";
+    if (source.trim() === "") continue;
+    const digest = await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(source),
+    );
+    hashes.add(`'sha256-${base64FromBytes(digest)}'`);
+  }
+  return [...hashes];
+}
+
+function cspWithInlineScriptHashes(hashes: readonly string[]): string {
+  if (hashes.length === 0) return DASHBOARD_CSP;
+  return DASHBOARD_CSP.replace(
+    "script-src 'self'",
+    `script-src 'self' ${hashes.join(" ")}`,
+  );
+}
+
 /** Attach a Content-Security-Policy to the SPA HTML document so a
- * javascript:/data: href or injected inline script fails closed. */
-function withDashboardDocumentCsp(response: Response): Response {
+ * javascript:/data: href or injected inline script fails closed. Prerendered
+ * docs additionally allow exactly the inline scripts they actually ship, by
+ * hash — never `unsafe-inline`, which would reopen the whole origin. */
+async function withDashboardDocumentCsp(
+  response: Response,
+  pathname: string,
+): Promise<Response> {
   const contentType = response.headers.get("content-type") ?? "";
   if (!contentType.toLowerCase().includes("text/html")) return response;
+  if (!isDocsDocumentPath(pathname)) {
+    const headers = new Headers(response.headers);
+    headers.set("content-security-policy", DASHBOARD_CSP);
+    return new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    });
+  }
+  const html = await response.text();
   const headers = new Headers(response.headers);
-  headers.set("content-security-policy", DASHBOARD_CSP);
-  return new Response(response.body, {
+  headers.set(
+    "content-security-policy",
+    cspWithInlineScriptHashes(await inlineScriptHashes(html)),
+  );
+  return new Response(html, {
     status: response.status,
     statusText: response.statusText,
     headers,

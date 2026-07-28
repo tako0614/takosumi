@@ -133,6 +133,10 @@ describe("store install metadata", () => {
   test("finds direct-Git InstallConfigs by service-side URL/path with no ref authority", () => {
     const matching = installConfig({
       id: "cfg-matching",
+      sourceSelector: {
+        url: "https://example.test/example.git",
+        path: "./deploy/opentofu/",
+      },
       store: {
         source: {
           url: "https://example.test/example.git",
@@ -152,6 +156,10 @@ describe("store install metadata", () => {
     const duplicate = installConfig({ ...matching, id: "cfg-duplicate" });
     const unrelated = installConfig({
       id: "cfg-unrelated",
+      sourceSelector: {
+        url: "https://example.test/other.git",
+        path: "deploy/opentofu",
+      },
       store: {
         ...matching.store!,
         source: {
@@ -180,6 +188,25 @@ describe("store install metadata", () => {
         [matching],
         "https://example.test/example.git",
         "other",
+      ),
+    ).toHaveLength(0);
+    expect(
+      storeInstallConfigsForSource(
+        [
+          installConfig({
+            id: "cfg-presentation-only",
+            store: matching.store,
+          }),
+        ],
+        "https://example.test/example.git",
+        "deploy/opentofu",
+      ),
+    ).toHaveLength(0);
+    expect(
+      storeInstallConfigsForSource(
+        [matching],
+        "https://example.test/Example.git",
+        "deploy/opentofu",
       ),
     ).toHaveLength(0);
   });

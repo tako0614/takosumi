@@ -1040,12 +1040,13 @@ export const ja = {
     "この接続を使うサービスのデプロイは失敗します。",
 
   // --- backups -----------------------------------------------------------------
-  "backups.subtitle": "復元に使う保存ポイントを管理します。",
+  "backups.subtitle": "部分的な control export を作成・確認します。",
   "backups.create": "バックアップを作成",
   "backups.creating": "バックアップを作成しています。",
   "backups.col.createdAt": "作成日時",
   "backups.col.contents": "内容",
   "backups.col.actions": "操作",
+  "backups.controlExport": "部分的な control export",
   "backups.restorePoint": "復元ポイント",
   "backups.restoreGeneration": "バックアップ時点 {generation}",
   "backups.restore": "復元を準備",

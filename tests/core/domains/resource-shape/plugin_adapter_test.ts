@@ -6,6 +6,7 @@ import type {
 } from "takosumi-contract";
 import {
   PluginResourceShapeAdapter,
+  adapterApplyMutationOutcome,
   StubResourceShapeAdapter,
   type AdapterApplyInput,
   type AdapterDeleteInput,
@@ -401,6 +402,34 @@ test("plugin adapter rejects malformed apply responses", async () => {
   await expect(
     adapter.apply(applyInput({ implementation: pluginDescriptor })),
   ).rejects.toThrow("apply response must include outputs");
+});
+
+test("plugin adapter preserves an explicit no-mutation apply failure", async () => {
+  const adapter = new PluginResourceShapeAdapter(
+    new StubResourceShapeAdapter(),
+    {
+      "cloud-managed": {
+        fetch() {
+          return Response.json(
+            {
+              error: "managed_resource_adapter_failed",
+              message: "provider credential is unavailable",
+              mutationOutcome: "none",
+            },
+            { status: 503 },
+          );
+        },
+      },
+    },
+  );
+
+  try {
+    await adapter.apply(applyInput({ implementation: pluginDescriptor }));
+    throw new Error("expected plugin apply to fail");
+  } catch (error) {
+    expect(adapterApplyMutationOutcome(error)).toBe("none");
+    expect(String(error)).toContain("provider credential is unavailable");
+  }
 });
 
 test("plugin adapter rejects fake OpenTofu execution authority", async () => {

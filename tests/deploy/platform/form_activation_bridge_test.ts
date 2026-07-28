@@ -9,12 +9,9 @@ import type {
 import { resolvePlatformFormActivation } from "../../../deploy/platform/worker.ts";
 
 const identity: InstalledFormReference = {
-  formRef: {
-    apiVersion: "forms.takoform.com/v1alpha1",
-    kind: "ObjectBucket",
-    definitionVersion: "1.0.0",
-    schemaDigest: `sha256:${"1".repeat(64)}`,
-  },
+  type: "object_bucket",
+  version: "1.0.0",
+  schemaDigest: `sha256:${"1".repeat(64)}`,
   packageDigest: `sha256:${"2".repeat(64)}`,
 };
 
@@ -44,7 +41,13 @@ const formPackage: FormPackage = {
   artifactRef: "oci://registry.example.test/forms/object-bucket@sha256:fixture",
   verifierId: "test-verifier",
   status: "installed",
-  definitionRefs: [identity.formRef],
+  definitionRefs: [
+    {
+      type: identity.type,
+      version: identity.version,
+      schemaDigest: identity.schemaDigest,
+    },
+  ],
   installedAt: "2026-07-17T00:00:00.000Z",
   installedBy: "operator",
   updatedAt: "2026-07-17T00:00:00.000Z",

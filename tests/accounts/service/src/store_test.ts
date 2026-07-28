@@ -43,6 +43,16 @@ test("InMemoryAccountsStore indexes Capsule OIDC registrations without a Capsule
   expect(store.findOidcClientForCapsule("cap_office")?.namespacePath).toBe(
     "identity.oidc",
   );
+  expect(() =>
+    store.saveOidcClient({
+      ...(store.findOidcClient("oidc_capsule")!),
+      capsuleId: "cap_other",
+    }),
+  ).toThrow("already bound to another Capsule");
+
+  store.revokeOidcClient("oidc_capsule");
+  expect(store.findOidcClient("oidc_capsule")).toBeUndefined();
+  expect(store.findOidcClientForCapsule("cap_office")).toBeUndefined();
 });
 
 test("InMemoryAccountsStore persists Workspace-scoped PAT metadata", async () => {

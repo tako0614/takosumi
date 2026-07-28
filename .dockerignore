@@ -1,0 +1,7 @@
+.git
+**/.env
+**/.env.*
+**/node_modules
+dashboard/dist
+dashboard/public/opentofu/providers
+tmp

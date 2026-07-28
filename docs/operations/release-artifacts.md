@@ -9,6 +9,22 @@
 | Owner         | Takosumi release owner / platform operator |
 | Scope         | Takosumi platform worker artifacts         |
 
+## Public release workflow
+
+production surfaceのdeployはこのrepositoryのentrypointを使います。共通ruleは
+`takos-control`の`engineering.policy.json`→`deploy`が正本です。
+
+```bash
+bun run deploy
+```
+
+`prepare`はproductionを変更せず、以下のartifactとgateを一つのimmutable
+candidateへ束ねます。`promote`だけが登録済み固定adapterを呼び、remote readback
+まで完了させます。この文書にあるproduct check、evidence generator、
+materializer helperはcandidate/adapter内部の部品であり、単独ではrelease
+authorityになりません。adapterがないsurfaceはfail closedにし、raw deployへ
+fallbackしません。
+
 ## Artifact Matrix
 
 | Artifact                                | Owning path / port                                                       | Build / publish behavior                                         | Promotion evidence                                                                       |
@@ -40,9 +56,9 @@ keeps the Git SourceSnapshot, provider cache/mirror evidence, plan/apply Run,
 StateVersion, Output, and audit trail; it does not fetch or interpret the
 deployable app artifact on behalf of the module.
 
-## Required Gates
+## Candidate inputs
 
-Before production promotion:
+The deploy entrypoint runs the owning product gate first:
 
 ```bash
 cd takosumi
@@ -52,9 +68,10 @@ bun run check:dashboard
 ```
 
 `bun run check` is the package-level Takosumi software gate and includes the
-supported reference-distribution builds. Production promotion must not use raw
-`tsc --noEmit` as a replacement, and the selected host composition must add its
-own build/deployment verification.
+supported reference-distribution builds. It is candidate evidence, not a
+production-promotion command. The deploy entrypoint must not replace it with raw
+`tsc --noEmit`, and the selected fixed adapter adds its own build/deployment
+verification.
 
 If docs or public contract changed:
 
@@ -109,7 +126,8 @@ approved config/vault workflow before enabling the platform setting. Official
 Cloud operator helpers and their private file layout are not an OSS contract;
 they live in the Cloud operations docs.
 
-Validate release activation evidence before promotion:
+The registered adapter validates release activation evidence during
+`prepare`:
 
 ```bash
 cd takosumi
@@ -130,8 +148,8 @@ enabled. It is intentionally separate from the production hardening manifest:
 hardening proves the platform can open; release activation proves optional
 service-side lifecycle execution is observable and redacted, and that a failed
 action retains the committed provider state without falsely succeeding the Run.
-If `TAKOSUMI_RELEASE_ACTIVATOR_URL` is set,
-platform readiness `open` also requires the validator output's four
+If `TAKOSUMI_RELEASE_ACTIVATOR_URL` is set, that host configuration is
+considered usable only when it also has the validator output's four
 `TAKOSUMI_RELEASE_ACTIVATION_*_EVIDENCE_REF` / `_DIGEST` pairs in realized
 operator config.
 
@@ -228,16 +246,16 @@ database URLs, DSNs, or other credential material. Provider credentials require
 an explicit action opt-in, policy permission, and runner capability; operator
 actions use only their explicitly configured operator environment.
 For a composition that explicitly rolls out Cloudflare Containers, allowlist
-`CLOUDFLARE_CONTAINERS_API_TOKEN` as an operator-held deploy token. The Takos
-release command uses it only for the final `wrangler deploy` step by mapping it
-to Wrangler's standard `CLOUDFLARE_API_TOKEN` / `CF_API_TOKEN` env names; D1
-migrations, output verification, and other provider API checks that require a
-Provider Connection run as runner lifecycle actions. If an operator action
-needs separate authority, it uses a separately configured operator-held env
-allowlist; Provider Connection material is never copied into the operator
-activation payload.
+`CLOUDFLARE_CONTAINERS_API_TOKEN` only inside the registered fixed adapter.
+The adapter may map it to the provider's standard environment names for its
+final deployment call; that internal mapping is not a public raw-deploy
+procedure. D1 migrations, output verification, and other provider API checks
+that require a Provider Connection run as runner lifecycle actions. If an
+operator action needs separate authority, it uses a separately configured
+operator-held env allowlist; Provider Connection material is never copied into
+the operator activation payload.
 
-## Promotion Record
+## Deploy record
 
 Release sign-off record includes:
 
@@ -255,7 +273,7 @@ Release sign-off record includes:
 Do not include provider account ids, secret values, raw R2 object keys, payment
 processor ids, or customer identifiers in public release notes.
 
-## Rollback Artifact Rules
+## Recovery artifact rules
 
 Rollback targets must be immutable:
 
@@ -264,5 +282,6 @@ Rollback targets must be immutable:
 - runner image digest
 - control-plane storage migration id / restore plan when Takosumi schema changed
 
-Do not rely on mutable tags such as `latest`. Platform rollback follows
-[`./rollback-sop.md`](./rollback-sop.md).
+Do not rely on mutable tags such as `latest`. Official recovery is selected
+through the deploy record and the entrypoint; operational handling is
+documented in [`./rollback-sop.md`](./rollback-sop.md).

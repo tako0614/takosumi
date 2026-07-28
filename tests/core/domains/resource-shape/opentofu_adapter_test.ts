@@ -21,6 +21,7 @@ import type {
   PlanRunInternalContext,
 } from "../../../../core/domains/deploy-control/mod.ts";
 import { OpenTofuController } from "../../../../core/domains/deploy-control/mod.ts";
+import { OpenTofuControllerError } from "../../../../core/domains/deploy-control/errors.ts";
 import { resourceImportPolicyReasons } from "../../../../core/domains/deploy-control/run-engine/run_engine.ts";
 import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
@@ -701,6 +702,33 @@ test("ControllerOpentofuRunPort.plan builds a real generated-root dispatch and m
     },
   ]);
   expect(preview.runId).toBe("plan_1");
+});
+
+test("ControllerOpentofuRunPort translates rootgen validation at its runtime boundary", async () => {
+  const capture = new FakeOpentofuRunPort();
+  await new OpentofuResourceShapeAdapter(capture).preview(
+    applyInput(edgeWorkerPlan(), cloudflareTarget),
+  );
+  const validRequest = capture.planRequests[0]!;
+  const driver = new FakeDeployControlDriver();
+  const port = new ControllerOpentofuRunPort({ driver });
+
+  let thrown: unknown;
+  try {
+    await port.plan({
+      ...validRequest,
+      inputs: { "invalid-name": true },
+    });
+  } catch (error) {
+    thrown = error;
+  }
+
+  expect(thrown).toBeInstanceOf(OpenTofuControllerError);
+  expect(thrown).toMatchObject({
+    code: "invalid_argument",
+    details: { reason: "rootgen_invalid_identifier" },
+  });
+  expect(driver.planCalls).toHaveLength(0);
 });
 
 test("ControllerOpentofuRunPort.observe creates a non-applyable Resource drift_check", async () => {

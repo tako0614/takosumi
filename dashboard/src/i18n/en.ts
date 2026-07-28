@@ -1030,12 +1030,13 @@ export const en: Record<keyof typeof ja, string> = {
     "Services that use this connection will fail to deploy.",
 
   // --- backups -----------------------------------------------------------------
-  "backups.subtitle": "Manage restore points for this workspace.",
+  "backups.subtitle": "Create and inspect partial control exports.",
   "backups.create": "Create backup",
   "backups.creating": "Creating a backup.",
   "backups.col.createdAt": "Created",
   "backups.col.contents": "Contents",
   "backups.col.actions": "Actions",
+  "backups.controlExport": "Partial control export",
   "backups.restorePoint": "Restore point",
   "backups.restoreGeneration": "Backup point {generation}",
   "backups.restore": "Prepare restore",

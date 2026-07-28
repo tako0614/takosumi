@@ -103,7 +103,7 @@ import type {
   SourceSyncPhaseTiming,
   SourceSyncRun,
 } from "takosumi-contract/sources";
-import type { PageParams } from "takosumi-contract/pagination";
+import type { Page, PageParams } from "takosumi-contract/pagination";
 import { stableJsonDigest } from "../../adapters/source/digest.ts";
 import { log } from "../../shared/log.ts";
 import {
@@ -377,6 +377,18 @@ export interface RunExecutionDispatch {
   readonly depStates?: readonly DispatchDepState[];
 }
 
+/**
+ * Cooperative cancellation for one externally dispatched Run operation.
+ *
+ * The control plane aborts this signal as soon as either the durable Run fence
+ * or the held Capsule lease can no longer be renewed. Adapters must thread it
+ * into their transport/process boundary so a fenced-out executor cannot keep
+ * performing provider or lifecycle side effects.
+ */
+export interface RunExecutionControl {
+  readonly signal?: AbortSignal;
+}
+
 export interface OpenTofuPlanJob
   extends RunModuleDispatch, RunExecutionDispatch {
   readonly planRun: PlanRun;
@@ -544,7 +556,10 @@ export interface ReleaseActivationResult {
 }
 
 export interface ReleaseActivator {
-  activate(input: ReleaseActivationInput): Promise<ReleaseActivationResult>;
+  activate(
+    input: ReleaseActivationInput,
+    control?: RunExecutionControl,
+  ): Promise<ReleaseActivationResult>;
 }
 
 export interface OpenTofuDestroyResult {
@@ -581,10 +596,22 @@ export interface OpenTofuRestoreResult {
 }
 
 export interface OpenTofuRunner {
-  plan(job: OpenTofuPlanJob): Promise<OpenTofuPlanResult>;
-  apply(job: OpenTofuApplyJob): Promise<OpenTofuApplyResult>;
-  destroy?(job: OpenTofuDestroyJob): Promise<OpenTofuDestroyResult>;
-  release?(job: ReleaseCommandRunJob): Promise<ReleaseCommandRunResult>;
+  plan(
+    job: OpenTofuPlanJob,
+    control?: RunExecutionControl,
+  ): Promise<OpenTofuPlanResult>;
+  apply(
+    job: OpenTofuApplyJob,
+    control?: RunExecutionControl,
+  ): Promise<OpenTofuApplyResult>;
+  destroy?(
+    job: OpenTofuDestroyJob,
+    control?: RunExecutionControl,
+  ): Promise<OpenTofuDestroyResult>;
+  release?(
+    job: ReleaseCommandRunJob,
+    control?: RunExecutionControl,
+  ): Promise<ReleaseCommandRunResult>;
   restore?(job: OpenTofuRestoreJob): Promise<OpenTofuRestoreResult>;
   restoreServiceData?(
     job: OpenTofuServiceDataRestoreJob,
@@ -1967,6 +1994,12 @@ export class OpenTofuController {
 
   async listAutoSyncSources(limit: number): Promise<readonly Source[]> {
     return await this.#sources.listAutoSyncSources(limit);
+  }
+
+  async listAutoSyncSourcesPage(
+    params: PageParams,
+  ): Promise<Page<Source>> {
+    return await this.#sources.listAutoSyncSourcesPage(params);
   }
 
   async verifySourceHookSecret(

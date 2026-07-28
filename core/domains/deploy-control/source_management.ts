@@ -26,7 +26,7 @@ import type {
   CapsuleCompatibilityReportResponse,
   CreateSourceCompatibilityCheckRequest,
 } from "takosumi-contract/capsules";
-import type { PageParams } from "takosumi-contract/pagination";
+import type { Page, PageParams } from "takosumi-contract/pagination";
 import { OpenTofuControllerError } from "./errors.ts";
 
 /**
@@ -105,6 +105,10 @@ export class SourceManagement {
 
   async listAutoSyncSources(limit: number): Promise<readonly Source[]> {
     return await this.#require().listAutoSyncSources(limit);
+  }
+
+  async listAutoSyncSourcesPage(params: PageParams): Promise<Page<Source>> {
+    return await this.#require().listAutoSyncSourcesPage(params);
   }
 
   async verifySourceHookSecret(

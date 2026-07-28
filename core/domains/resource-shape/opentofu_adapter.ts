@@ -51,8 +51,9 @@ import {
   generateOpenTofuChildModuleRoot,
   type RootProviderBinding,
 } from "takosumi-rootgen";
-import { canonicalProviderAddress } from "@takosumi/providers";
+import { canonicalProviderSource } from "takosumi-contract/provider-env-rules";
 import { stableJsonDigest } from "../../adapters/source/digest.ts";
+import { rootgenErrorForController } from "../deploy-control/rootgen_error.ts";
 import type {
   AdapterApplyInput,
   AdapterApplyResult,
@@ -183,7 +184,7 @@ export interface OpentofuRunPort {
 
 /** Derive the OpenTofu local provider name from an explicit registry source. */
 export function providerLocalNameForSource(source: string): string {
-  const canonical = canonicalProviderAddress(source);
+  const canonical = canonicalProviderSource(source);
   const parts = canonical.split("/").filter(Boolean);
   const localName = parts[parts.length - 1];
   if (!localName) throw new Error(`invalid provider source: ${source}`);
@@ -416,7 +417,7 @@ function providerBindingForImplementation(
       `implementation ${implementation.implementation} has no providerSource`,
     );
   }
-  const providerSource = canonicalProviderAddress(source);
+  const providerSource = canonicalProviderSource(source);
   return {
     provider: providerLocalNameForSource(providerSource),
     providerSource,
@@ -773,12 +774,17 @@ export class ControllerOpentofuRunPort implements OpentofuRunPort {
       request.publicOutputs,
     );
     const providerBindings = providerBindingsFor(request.providerBinding);
-    const generatedRoot = generateOpenTofuChildModuleRoot({
-      requiredProviders: [request.providerBinding.providerSource],
-      inputs: request.inputs,
-      outputAllowlist,
-      ...(providerBindings.length > 0 ? { providerBindings } : {}),
-    });
+    let generatedRoot: DispatchGeneratedRoot;
+    try {
+      generatedRoot = generateOpenTofuChildModuleRoot({
+        requiredProviders: [request.providerBinding.providerSource],
+        inputs: request.inputs,
+        outputAllowlist,
+        ...(providerBindings.length > 0 ? { providerBindings } : {}),
+      });
+    } catch (error) {
+      throw rootgenErrorForController(error);
+    }
     const dispatch: DispatchGeneratedRoot = {
       files: importRequest
         ? {

@@ -7,7 +7,6 @@
  */
 import {
   fetchTcsListingsPage,
-  sanitizeTcsListing,
   TcsNotSupportedError,
   tcsListingIdentity,
   type TcsListing,
@@ -103,7 +102,7 @@ export function mergeTcsListingBatches(
   for (const item of existing) map.set(tcsListingIdentity(item.source), item);
   for (const { base, isDefault, items } of incoming) {
     for (const item of items) {
-      const listing = sanitizeTcsListing(item);
+      const listing = item;
       const key = tcsListingIdentity(listing.source);
       const prev = map.get(key);
       if (!prev) {

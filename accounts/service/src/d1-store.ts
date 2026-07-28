@@ -204,7 +204,6 @@ class D1AccountsDocumentIndexStore {
   }
 
   async delete(bucket: string, key: string): Promise<void> {
-    await this.deleteDocumentIndexEntries(bucket, key);
     await this.#db
       .delete(d1AccountsDocuments)
       .where(
@@ -214,6 +213,11 @@ class D1AccountsDocumentIndexStore {
         ),
       )
       .run();
+    // Delete authority-bearing documents before their secondary indexes.
+    // A failed cleanup can leave only a harmless dangling index (index reads
+    // inner-join documents); the reverse order could leave a live document
+    // after a caller believed revocation had started.
+    await this.deleteDocumentIndexEntries(bucket, key);
   }
 
   async deleteIndexEntries(indexName: string, indexKey: string): Promise<void> {
@@ -675,6 +679,23 @@ export class D1AccountsStore implements AccountsStore {
   }
 
   async #saveOidcClient(record: OidcClientRecord): Promise<void> {
+    const existing = await this.findOidcClient(record.clientId);
+    if (existing && existing.capsuleId !== record.capsuleId) {
+      throw new Error(
+        `OIDC client ${record.clientId} is already bound to another Capsule`,
+      );
+    }
+    const existingForCapsule = await this.findOidcClientForCapsule(
+      record.capsuleId,
+    );
+    if (
+      existingForCapsule &&
+      existingForCapsule.clientId !== record.clientId
+    ) {
+      throw new Error(
+        `Capsule ${record.capsuleId} already has another OIDC client`,
+      );
+    }
     await this.#deleteIndexEntries("oidc_clients_by_capsule", record.capsuleId);
     await this.#put("oidc_clients", record.clientId, record, [
       {
@@ -698,6 +719,10 @@ export class D1AccountsStore implements AccountsStore {
         capsuleId,
       )
     )[0];
+  }
+
+  async revokeOidcClient(clientId: string): Promise<void> {
+    await this.#delete("oidc_clients", clientId);
   }
 
   // F30 fix: persistent OIDC refresh-chain state. Mirrors the Postgres

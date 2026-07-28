@@ -5,7 +5,7 @@ import type {
   ResourceObject,
   TakoformDeclaredInterface,
 } from "takosumi-contract";
-import { formRefKey } from "takosumi-contract";
+import { formRefKey, formRefOfInstalled } from "takosumi-contract";
 import type { Page, PageParams } from "takosumi-contract/pagination";
 import { formatResourceShapeId } from "../resource-shape/records.ts";
 import type { InterfaceService } from "./service.ts";
@@ -194,8 +194,8 @@ function projectDeclaration(
   const lineage = iface.metadata.materializedFrom;
   if (lineage?.source !== "form_descriptor" || !resource.form) return undefined;
   if (
-    lineage.formRefKey !== formRefKey(resource.form.formRef) ||
-    lineage.formSchemaDigest !== resource.form.formRef.schemaDigest ||
+    lineage.formRefKey !== formRefKey(formRefOfInstalled(resource.form)) ||
+    lineage.formSchemaDigest !== resource.form.schemaDigest ||
     lineage.descriptorName !== iface.spec.type ||
     lineage.descriptorVersion !== iface.spec.version
   ) {

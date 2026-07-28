@@ -9,6 +9,7 @@ import {
   TAKOSUMI_ACCOUNTS_PASSKEY_REGISTER_COMPLETE_PATH,
   TAKOSUMI_ACCOUNTS_PASSKEY_REGISTER_OPTIONS_PATH,
   TAKOSUMI_ACCOUNTS_PAT_SCOPES,
+  TAKOSUMI_ACCOUNTS_SELF_SERVICE_PAT_SCOPES,
   TAKOSUMI_ACCOUNTS_AUTH_PROVIDERS_PATH,
   TAKOSUMI_ACCOUNTS_UPSTREAM_AUTHORIZE_PATH,
   TAKOSUMI_ACCOUNTS_UPSTREAM_CALLBACK_PATH,
@@ -60,6 +61,7 @@ test("buildOidcDiscoveryDocument returns stable account endpoints", () => {
 
 test("account token contract exposes the Accounts PAT route surface", () => {
   expect(TAKOSUMI_ACCOUNTS_PAT_SCOPES).toEqual(["read", "write", "admin"]);
+  expect(TAKOSUMI_ACCOUNTS_SELF_SERVICE_PAT_SCOPES).toEqual(["read", "write"]);
   expect(TAKOSUMI_ACCOUNTS_ACCOUNT_TOKENS_PATH).toEqual("/v1/account/tokens");
   expect(takosumiAccountsAccountTokenRevokePath("pat_1")).toEqual(
     "/v1/account/tokens/pat_1/revoke",

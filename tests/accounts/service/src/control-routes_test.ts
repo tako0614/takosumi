@@ -1,6 +1,9 @@
 import { expect, test } from "bun:test";
 import type { ControlPlaneOperations } from "../../../../accounts/service/src/control-operations.ts";
-import { isControlRoutePath } from "../../../../accounts/service/src/control-routes.ts";
+import {
+  handleControlRoute,
+  isControlRoutePath,
+} from "../../../../accounts/service/src/control-routes.ts";
 import { handleProjects } from "../../../../accounts/service/src/control/projects.ts";
 import { handleCapsules } from "../../../../accounts/service/src/control/capsules.ts";
 import {
@@ -24,6 +27,322 @@ const workspace = {
   createdAt: "2026-01-01T00:00:00.000Z",
   updatedAt: "2026-01-01T00:00:00.000Z",
 };
+
+const otherWorkspace = {
+  ...workspace,
+  id: "ws_other",
+  handle: "other",
+  displayName: "Other",
+};
+
+function workspaceAuthorizationOperations(input?: {
+  readonly onGetWorkspace?: (workspaceId: string) => void;
+}): ControlPlaneOperations {
+  const workspaces = [workspace, otherWorkspace];
+  return {
+    workspaces: {
+      getWorkspace: async (workspaceId: string) => {
+        input?.onGetWorkspace?.(workspaceId);
+        const found = workspaces.find((candidate) => candidate.id === workspaceId);
+        if (!found) throw new Error("workspace not found");
+        return found;
+      },
+      listWorkspacesForAccount: async () => workspaces,
+      createWorkspace: async () => {
+        throw new Error("scoped credential must not create a Workspace");
+      },
+    },
+    members: {
+      listMembers: async () => [],
+    },
+  } as unknown as ControlPlaneOperations;
+}
+
+async function authenticatedControlRequest(input: {
+  readonly store: InMemoryAccountsStore;
+  readonly operations: ControlPlaneOperations;
+  readonly token: string;
+  readonly path: string;
+  readonly method?: string;
+}): Promise<Response> {
+  const url = new URL(`https://app.example.test${input.path}`);
+  const response = await handleControlRoute({
+    request: new Request(url, {
+      method: input.method ?? "GET",
+      headers: { authorization: `Bearer ${input.token}` },
+    }),
+    url,
+    store: input.store,
+    operations: input.operations,
+  });
+  expect(response).toBeDefined();
+  return response!;
+}
+
+test("Workspace-scoped PAT and OAuth credentials cannot select another Workspace", async () => {
+  for (const credential of ["pat", "oauth"] as const) {
+    const store = new InMemoryAccountsStore();
+    const token = `opaque-${credential}-workspace-scope`;
+    if (credential === "pat") {
+      store.savePersonalAccessToken(token, {
+        tokenId: "pat_workspace_scope",
+        tokenPrefix: "display",
+        subject: "tsub_owner",
+        name: "Workspace automation",
+        scopes: ["read"],
+        workspaceId: workspace.id,
+        createdAt: Date.now(),
+      });
+    } else {
+      store.saveAccessToken(token, {
+        clientId: "client_workspace_scope",
+        scope: "capsules:read",
+        subject: "client-local-subject",
+        takosumiSubject: "tsub_owner",
+        workspaceId: workspace.id,
+        expiresAt: Date.now() + 60_000,
+      });
+    }
+    let workspaceReads = 0;
+    const operations = workspaceAuthorizationOperations({
+      onGetWorkspace: () => {
+        workspaceReads += 1;
+      },
+    });
+
+    const denied = await authenticatedControlRequest({
+      store,
+      operations,
+      token,
+      path: `/api/v1/workspaces/${otherWorkspace.id}`,
+    });
+    expect(denied.status).toBe(403);
+    expect(workspaceReads).toBe(0);
+
+    const allowed = await authenticatedControlRequest({
+      store,
+      operations,
+      token,
+      path: `/api/v1/workspaces/${workspace.id}`,
+    });
+    expect(allowed.status).toBe(200);
+    expect(workspaceReads).toBe(2);
+
+    const invalidDashboardSelection = await authenticatedControlRequest({
+      store,
+      operations,
+      token,
+      path: `/api/v1/dashboard/bootstrap?workspaceId=${otherWorkspace.id}`,
+    });
+    expect(invalidDashboardSelection.status).toBe(403);
+    expect(workspaceReads).toBe(2);
+  }
+});
+
+test("Workspace-scoped PAT lists only its Workspace and cannot create another", async () => {
+  const store = new InMemoryAccountsStore();
+  const token = "opaque-pat-workspace-list";
+  store.savePersonalAccessToken(token, {
+    tokenId: "pat_workspace_list",
+    tokenPrefix: "display",
+    subject: "tsub_owner",
+    name: "Workspace automation",
+    scopes: ["read", "write"],
+    workspaceId: workspace.id,
+    createdAt: Date.now(),
+  });
+  const operations = workspaceAuthorizationOperations();
+
+  const listed = await authenticatedControlRequest({
+    store,
+    operations,
+    token,
+    path: "/api/v1/workspaces",
+  });
+  expect(listed.status).toBe(200);
+  expect(await listed.json()).toEqual({ workspaces: [workspace] });
+
+  const createDenied = await authenticatedControlRequest({
+    store,
+    operations,
+    token,
+    path: "/api/v1/workspaces",
+    method: "POST",
+  });
+  expect(createDenied.status).toBe(403);
+});
+
+test("an account session remains unscoped across owned Workspaces", async () => {
+  const store = new InMemoryAccountsStore();
+  const now = Date.now();
+  const token = "sess_workspace_scope_regression";
+  store.saveAccount({
+    subject: "tsub_owner",
+    createdAt: now,
+    updatedAt: now,
+  });
+  store.saveAccountSession({
+    sessionId: token,
+    subject: "tsub_owner",
+    createdAt: now,
+    expiresAt: now + 60_000,
+  });
+
+  const response = await authenticatedControlRequest({
+    store,
+    operations: workspaceAuthorizationOperations(),
+    token,
+    path: `/api/v1/workspaces/${otherWorkspace.id}`,
+  });
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({ workspace: otherWorkspace });
+});
+
+test("the session API cannot reach the legacy backup restore operation", async () => {
+  const store = new InMemoryAccountsStore();
+  const now = Date.now();
+  const token = "sess_backup_restore_absent";
+  store.saveAccount({
+    subject: "tsub_owner",
+    createdAt: now,
+    updatedAt: now,
+  });
+  store.saveAccountSession({
+    sessionId: token,
+    subject: "tsub_owner",
+    createdAt: now,
+    expiresAt: now + 60_000,
+  });
+  let restoreCalls = 0;
+  const operations = {
+    ...workspaceAuthorizationOperations(),
+    createRestoreRun: async () => {
+      restoreCalls += 1;
+      throw new Error("legacy restore operation must remain unreachable");
+    },
+  } as unknown as ControlPlaneOperations;
+
+  const response = await authenticatedControlRequest({
+    store,
+    operations,
+    token,
+    path: `/api/v1/workspaces/${workspace.id}/backups/bkp_legacy/restores`,
+    method: "POST",
+  });
+
+  expect(response.status).toBe(404);
+  expect(restoreCalls).toBe(0);
+});
+
+function roleAuthorizationOperations(role: "member" | "admin"): {
+  readonly operations: ControlPlaneOperations;
+  readonly mutations: { workspaceUpdates: number; runCancels: number };
+} {
+  const roleWorkspace = { ...workspace, ownerUserId: "tsub_owner_other" };
+  const run = {
+    id: "run_role_guard",
+    workspaceId: roleWorkspace.id,
+    capsuleId: "cap_role_guard",
+    environment: "production",
+    type: "plan" as const,
+    status: "running" as const,
+    createdBy: "tsub_owner_other",
+    createdAt: "2026-01-01T00:00:00.000Z",
+  };
+  const mutations = { workspaceUpdates: 0, runCancels: 0 };
+  const operations = {
+    workspaces: {
+      getWorkspace: async () => roleWorkspace,
+      listWorkspacesForAccount: async () => [roleWorkspace],
+      updateWorkspace: async () => {
+        mutations.workspaceUpdates += 1;
+        return roleWorkspace;
+      },
+    },
+    members: {
+      listMembers: async () => [
+        {
+          id: `wsm_${role}`,
+          workspaceId: roleWorkspace.id,
+          accountId: "tsub_role_actor",
+          roles: [role],
+          status: "active",
+          createdAt: roleWorkspace.createdAt,
+          updatedAt: roleWorkspace.updatedAt,
+        },
+      ],
+    },
+    getRun: async () => run,
+    cancelRun: async () => {
+      mutations.runCancels += 1;
+      return { ...run, status: "cancelled" as const };
+    },
+  } as unknown as ControlPlaneOperations;
+  return { operations, mutations };
+}
+
+function roleSessionStore(): {
+  readonly store: InMemoryAccountsStore;
+  readonly token: string;
+} {
+  const store = new InMemoryAccountsStore();
+  const now = Date.now();
+  const token = "sess_role_guard";
+  store.saveAccount({
+    subject: "tsub_role_actor",
+    createdAt: now,
+    updatedAt: now,
+  });
+  store.saveAccountSession({
+    sessionId: token,
+    subject: "tsub_role_actor",
+    createdAt: now,
+    expiresAt: now + 60_000,
+  });
+  return { store, token };
+}
+
+test("a Workspace member can read but cannot mutate Workspace settings or control Runs", async () => {
+  const auth = roleSessionStore();
+  const fixture = roleAuthorizationOperations("member");
+
+  const read = await authenticatedControlRequest({
+    ...auth,
+    operations: fixture.operations,
+    path: "/api/v1/runs/run_role_guard",
+  });
+  expect(read.status).toBe(200);
+
+  const patch = await authenticatedControlRequest({
+    ...auth,
+    operations: fixture.operations,
+    path: `/api/v1/workspaces/${workspace.id}`,
+    method: "PATCH",
+  });
+  expect(patch.status).toBe(403);
+
+  const cancel = await authenticatedControlRequest({
+    ...auth,
+    operations: fixture.operations,
+    path: "/api/v1/runs/run_role_guard/cancel",
+    method: "POST",
+  });
+  expect(cancel.status).toBe(403);
+  expect(fixture.mutations).toEqual({ workspaceUpdates: 0, runCancels: 0 });
+});
+
+test("a Workspace admin can control a Run", async () => {
+  const auth = roleSessionStore();
+  const fixture = roleAuthorizationOperations("admin");
+  const response = await authenticatedControlRequest({
+    ...auth,
+    operations: fixture.operations,
+    path: "/api/v1/runs/run_role_guard/cancel",
+    method: "POST",
+  });
+  expect(response.status).toBe(200);
+  expect(fixture.mutations.runCancels).toBe(1);
+});
 
 test("account-plane relationship views expose only Workspace and Capsule ids", () => {
   const dependency = publicDependency({

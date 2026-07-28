@@ -19,6 +19,7 @@ import type {
   ProviderInstallationEvidence,
   ReleaseCommandRunJob,
   ReleaseCommandRunResult,
+  RunExecutionControl,
 } from "../../../core/domains/deploy-control/mod.ts";
 import { DEFAULT_OPENTOFU_RUNNER_EXECUTOR_ID } from "../../../core/domains/deploy-control/mod.ts";
 import { OpenTofuRunnerExecutionError } from "../../../core/domains/deploy-control/errors.ts";
@@ -115,10 +116,23 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
     private readonly transport: RunnerTransport,
   ) {}
 
-  async plan(job: OpenTofuPlanJob): Promise<OpenTofuPlanResult> {
+  async plan(
+    job: OpenTofuPlanJob,
+    control?: RunExecutionControl,
+  ): Promise<OpenTofuPlanResult> {
     assertNoObjectStoreStateAdoption(job);
-    await this.restoreSourceArchive(job.planRun.id, job.sourceArchive);
-    const result = await runRunner(this.transport, "plan", job.planRun.id, job);
+    await this.restoreSourceArchive(
+      job.planRun.id,
+      job.sourceArchive,
+      control?.signal,
+    );
+    const result = await runRunner(
+      this.transport,
+      "plan",
+      job.planRun.id,
+      job,
+      control?.signal,
+    );
     const planDigest = requiredString(result, "planDigest");
     return {
       planDigest,
@@ -150,20 +164,29 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
     };
   }
 
-  async apply(job: OpenTofuApplyJob): Promise<OpenTofuApplyResult> {
+  async apply(
+    job: OpenTofuApplyJob,
+    control?: RunExecutionControl,
+  ): Promise<OpenTofuApplyResult> {
     assertNoObjectStoreStateAdoption(job);
-    await this.restoreSourceArchive(job.applyRun.id, job.sourceArchive);
+    await this.restoreSourceArchive(
+      job.applyRun.id,
+      job.sourceArchive,
+      control?.signal,
+    );
     await copyRunnerLocalPlanArtifact(
       this.transport,
       job.applyRun.id,
       job.planRun.id,
       job.planArtifact,
+      control?.signal,
     );
     const result = await runRunner(
       this.transport,
       "apply",
       job.applyRun.id,
       job,
+      control?.signal,
     );
     return {
       ...(recordValue(result, "outputs")
@@ -187,20 +210,29 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
     };
   }
 
-  async destroy(job: OpenTofuDestroyJob): Promise<OpenTofuDestroyResult> {
+  async destroy(
+    job: OpenTofuDestroyJob,
+    control?: RunExecutionControl,
+  ): Promise<OpenTofuDestroyResult> {
     assertNoObjectStoreStateAdoption(job);
-    await this.restoreSourceArchive(job.applyRun.id, job.sourceArchive);
+    await this.restoreSourceArchive(
+      job.applyRun.id,
+      job.sourceArchive,
+      control?.signal,
+    );
     await copyRunnerLocalPlanArtifact(
       this.transport,
       job.applyRun.id,
       job.planRun.id,
       job.planArtifact,
+      control?.signal,
     );
     const result = await runRunner(
       this.transport,
       "destroy",
       job.applyRun.id,
       job,
+      control?.signal,
     );
     return {
       ...(providerInstallation(result)
@@ -210,23 +242,36 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
     };
   }
 
-  async release(job: ReleaseCommandRunJob): Promise<ReleaseCommandRunResult> {
-    await this.restoreSourceArchive(job.runId, {
-      ref: job.sourceSnapshot.archiveRef,
-      digest: job.sourceSnapshot.archiveDigest,
-    });
-    const result = await runRunner(this.transport, "release", job.runId, {
-      release: { commands: job.commands },
-      outputs: job.nonSensitiveOutputs,
-      providerConfigurations: job.providerConfigurations,
-      ...(job.credentials ? { credentials: job.credentials } : {}),
-      activation: {
-        applyRunId: job.applyRunId,
-        ...(job.workspaceId ? { workspaceId: job.workspaceId } : {}),
-        capsuleId: job.capsuleId,
-        stateVersionId: job.stateVersionId,
+  async release(
+    job: ReleaseCommandRunJob,
+    control?: RunExecutionControl,
+  ): Promise<ReleaseCommandRunResult> {
+    await this.restoreSourceArchive(
+      job.runId,
+      {
+        ref: job.sourceSnapshot.archiveRef,
+        digest: job.sourceSnapshot.archiveDigest,
       },
-    });
+      control?.signal,
+    );
+    const result = await runRunner(
+      this.transport,
+      "release",
+      job.runId,
+      {
+        release: { commands: job.commands },
+        outputs: job.nonSensitiveOutputs,
+        providerConfigurations: job.providerConfigurations,
+        ...(job.credentials ? { credentials: job.credentials } : {}),
+        activation: {
+          applyRunId: job.applyRunId,
+          ...(job.workspaceId ? { workspaceId: job.workspaceId } : {}),
+          capsuleId: job.capsuleId,
+          stateVersionId: job.stateVersionId,
+        },
+      },
+      control?.signal,
+    );
     return {
       status: "succeeded",
       runId: stringValue(result, "runId") ?? job.runId,
@@ -365,6 +410,7 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
   private async restoreSourceArchive(
     runId: string,
     sourceArchive: OpenTofuPlanJob["sourceArchive"],
+    signal?: AbortSignal,
   ): Promise<void> {
     if (!sourceArchive) return;
     const bytes = await this.archiveStore.read(sourceArchive.ref);
@@ -375,6 +421,7 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
         method: "PUT",
         headers: { "content-type": "application/zstd" },
         body: arrayBufferFromBytes(bytes),
+        ...(signal ? { signal } : {}),
       },
     );
     if (!response.ok) {
@@ -421,12 +468,14 @@ async function copyRunnerLocalPlanArtifact(
   applyRunId: string,
   planRunId: string,
   artifact: OpenTofuPlanArtifact,
+  signal?: AbortSignal,
 ): Promise<void> {
   const sourceRunId = runnerLocalPlanRunId(artifact) ?? planRunId;
   const bytes = await fetchRunnerArtifact(
     transport,
     sourceRunId,
     `/runs/${encodeURIComponent(sourceRunId)}/artifacts/tfplan`,
+    signal,
   );
   await assertDigest(bytes, artifact.digest, "plan artifact");
   const response = await transport.fetch(
@@ -435,6 +484,7 @@ async function copyRunnerLocalPlanArtifact(
       method: "PUT",
       headers: { "content-type": "application/vnd.opentofu.plan" },
       body: arrayBufferFromBytes(bytes),
+      ...(signal ? { signal } : {}),
     },
   );
   if (!response.ok) {
@@ -463,6 +513,7 @@ async function runRunner(
     | "release",
   runId: string,
   request: unknown,
+  signal?: AbortSignal,
 ): Promise<Record<string, unknown>> {
   const response = await transport.fetch(`/runs/${encodeURIComponent(runId)}`, {
     method: "POST",
@@ -474,6 +525,7 @@ async function runRunner(
       requestedAt: new Date().toISOString(),
       request,
     }),
+    ...(signal ? { signal } : {}),
   });
   const text = await response.text();
   const body = text.trim().length > 0 ? parseObject(text) : {};
@@ -496,8 +548,12 @@ async function fetchRunnerArtifact(
   transport: RunnerTransport,
   runId: string,
   path: string,
+  signal?: AbortSignal,
 ): Promise<Uint8Array> {
-  const response = await transport.fetch(path, { method: "GET" });
+  const response = await transport.fetch(path, {
+    method: "GET",
+    ...(signal ? { signal } : {}),
+  });
   if (!response.ok) {
     throw new Error(
       `OpenTofu runner artifact fetch failed for ${runId}: ${response.status} ${await response.text()}`,

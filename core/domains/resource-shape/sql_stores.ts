@@ -15,8 +15,10 @@ import type {
   TargetPoolEntry,
 } from "takosumi-contract";
 import {
+  formRefOfInstalled,
   isInstalledFormReference,
   parseResourceShapeKind,
+  shapeKindForPortableType,
 } from "takosumi-contract";
 import {
   clampPageLimit,
@@ -75,6 +77,7 @@ import {
   matchesApplyLock,
   matchesExpectedLock,
   matchesVersion,
+  resourceRecordRevision,
   assertResourceFormIdentityPinInput,
 } from "./stores.ts";
 
@@ -92,8 +95,6 @@ type ResourceShapeRow = {
   readonly phase: string;
   readonly generation: number;
   readonly observed_generation: number;
-  readonly last_operation_run_id: string | null;
-  readonly pending_operation_json: unknown;
   readonly outputs_json: unknown;
   readonly execution_json: unknown;
   readonly state_adoption_json: unknown;
@@ -101,6 +102,9 @@ type ResourceShapeRow = {
   readonly labels_json: unknown;
   readonly created_at: string;
   readonly updated_at: string;
+  readonly revision?: number | string | null;
+  readonly pending_operation_json?: unknown;
+  readonly last_operation_run_id?: string | null;
 };
 
 type ResolutionLockRow = {
@@ -142,7 +146,13 @@ class SqlResourceShapeStore implements ResourceShapeStore {
       resourceInsertSql(this.#table, "on conflict do nothing"),
       resourceParameters(record),
     );
-    if (result.rowCount > 0) return { status: "created", record };
+    if (result.rowCount > 0) {
+      const persisted = await this.get(record.id);
+      if (!persisted) {
+        throw new Error(`resource create did not persist ${record.id}`);
+      }
+      return { status: "created", record: persisted };
+    }
     const current = await this.get(record.id);
     if (!current) {
       throw new Error(`resource create conflict did not resolve ${record.id}`);
@@ -167,19 +177,24 @@ class SqlResourceShapeStore implements ResourceShapeStore {
           phase = excluded.phase,
           generation = excluded.generation,
           observed_generation = excluded.observed_generation,
-          last_operation_run_id = excluded.last_operation_run_id,
-          pending_operation_json = excluded.pending_operation_json,
           outputs_json = excluded.outputs_json,
           execution_json = excluded.execution_json,
           state_adoption_json = excluded.state_adoption_json,
           conditions_json = excluded.conditions_json,
           labels_json = excluded.labels_json,
           created_at = excluded.created_at,
-          updated_at = excluded.updated_at`,
+          updated_at = excluded.updated_at,
+          pending_operation_json = excluded.pending_operation_json,
+          last_operation_run_id = excluded.last_operation_run_id,
+          revision = ${this.#table}.revision + 1`,
       ),
       resourceParameters(record),
     );
-    return record;
+    const persisted = await this.get(record.id);
+    if (!persisted) {
+      throw new Error(`resource upsert did not persist ${record.id}`);
+    }
+    return persisted;
   }
 
   async get(
@@ -211,12 +226,21 @@ class SqlResourceShapeStore implements ResourceShapeStore {
       readonly generation: number;
       readonly phase: ResourcePhase;
       readonly updatedAt: string;
+      readonly revision?: number;
     },
   ): Promise<boolean> {
+    const revisionPredicate =
+      expected.revision === undefined ? "" : " and revision = $5";
     const result = await this.client.query(
       `delete from ${this.#table}
-       where id = $1 and generation = $2 and phase = $3 and updated_at = $4`,
-      [id, expected.generation, expected.phase, expected.updatedAt],
+       where id = $1 and generation = $2 and phase = $3 and updated_at = $4${revisionPredicate}`,
+      [
+        id,
+        expected.generation,
+        expected.phase,
+        expected.updatedAt,
+        ...(expected.revision === undefined ? [] : [expected.revision]),
+      ],
     );
     return result.rowCount === 1;
   }
@@ -402,7 +426,8 @@ class SqlResourceShapeStore implements ResourceShapeStore {
   > {
     const result = await this.client.query(
       `update ${this.#table}
-       set state_adoption_json = $1::jsonb, updated_at = $2
+       set state_adoption_json = $1::jsonb, updated_at = $2,
+           revision = revision + 1
        where id = $3 and updated_at = $4
          and execution_json is null and state_adoption_json is null`,
       [
@@ -428,12 +453,15 @@ class SqlResourceShapeStore implements ResourceShapeStore {
       readonly generation: number;
       readonly phase: ResourceShapeRecord["phase"];
       readonly updatedAt: string;
+      readonly revision?: number;
     },
   ): Promise<
     | { readonly status: "updated"; readonly record: ResourceShapeRecord }
     | { readonly status: "not_found" }
     | { readonly status: "conflict"; readonly record: ResourceShapeRecord }
   > {
+    const expectedRevision =
+      expected.revision ?? resourceRecordRevision(record);
     const result = await this.client.query(
       `update ${this.#table} set
         space_id = $1, project = $2, environment = $3, kind = $4,
@@ -443,17 +471,24 @@ class SqlResourceShapeStore implements ResourceShapeStore {
         outputs_json = $13::jsonb, execution_json = $14::jsonb,
         state_adoption_json = $15::jsonb, conditions_json = $16::jsonb,
         labels_json = $17::jsonb, created_at = $18, updated_at = $19,
-        last_operation_run_id = $20, pending_operation_json = $21::jsonb
-       where id = $22 and generation = $23 and phase = $24 and updated_at = $25`,
+        pending_operation_json = $20::jsonb, last_operation_run_id = $21,
+        revision = revision + 1
+       where id = $22 and generation = $23 and phase = $24
+         and updated_at = $25 and revision = $26`,
       [
-        ...resourceParameters(record).slice(1),
+        ...resourceUpdateParameters(record),
         record.id,
         expected.generation,
         expected.phase,
         expected.updatedAt,
+        expectedRevision,
       ],
     );
-    if (result.rowCount > 0) return { status: "updated", record };
+    if (result.rowCount > 0) {
+      const persisted = await this.get(record.id);
+      if (!persisted) return { status: "not_found" };
+      return { status: "updated", record: persisted };
+    }
     const current = await this.get(record.id);
     return current
       ? { status: "conflict", record: current }
@@ -465,20 +500,31 @@ class SqlResourceShapeStore implements ResourceShapeStore {
     expectedGeneration: number,
     expectedManagedBy: ResourceManagedBy,
   ): Promise<ResourceDeleteClaimResult> {
+    const expectedRevision = resourceRecordRevision(record);
     const result = await this.client.query(
       `update ${this.#table}
-       set phase = $1, conditions_json = $2::jsonb, updated_at = $3
-       where id = $4 and generation = $5 and managed_by = $6 and phase != 'Deleting'`,
+       set phase = $1, conditions_json = $2::jsonb, updated_at = $3,
+           pending_operation_json = $4::jsonb, last_operation_run_id = $5,
+           revision = revision + 1
+       where id = $6 and generation = $7 and managed_by = $8
+         and phase != 'Deleting' and revision = $9`,
       [
         record.phase,
         jsonOrNull(record.conditions),
         record.updatedAt,
+        jsonOrNull(record.pendingOperation),
+        record.lastOperationRunId ?? null,
         record.id,
         expectedGeneration,
         expectedManagedBy,
+        expectedRevision,
       ],
     );
-    if (result.rowCount > 0) return { status: "claimed", record };
+    if (result.rowCount > 0) {
+      const persisted = await this.get(record.id);
+      if (!persisted) return { status: "not_found" };
+      return { status: "claimed", record: persisted };
+    }
     const current = await this.get(record.id);
     if (!current) return { status: "not_found" };
     if (current.managedBy !== expectedManagedBy) {
@@ -716,7 +762,7 @@ async function pinSqlExactFormIdentity(
     if (
       current.form !== undefined ||
       currentLock.form !== undefined ||
-      current.kind !== input.form.formRef.kind ||
+      current.kind !== shapeKindForPortableType(input.form.type) ||
       !matchesVersion(current, input.expectedResource) ||
       !matchesApplyLock(currentLock, input.expectedLock)
     ) {
@@ -728,10 +774,11 @@ async function pinSqlExactFormIdentity(
     }
     const resourceUpdate = await transaction.query(
       `update ${names.resourceShapes}
-       set form_ref_json = $1::jsonb, package_digest = $2
+       set form_ref_json = $1::jsonb, package_digest = $2,
+           revision = revision + 1
        where id = $3 and form_ref_json is null and package_digest is null`,
       [
-        JSON.stringify(input.form.formRef),
+        JSON.stringify(formRefOfInstalled(input.form)),
         input.form.packageDigest,
         input.resourceId,
       ],
@@ -745,7 +792,7 @@ async function pinSqlExactFormIdentity(
            native_resources_json = $3::jsonb
        where resource_id = $4 and form_ref_json is null and package_digest is null`,
       [
-        JSON.stringify(input.form.formRef),
+        JSON.stringify(formRefOfInstalled(input.form)),
         input.form.packageDigest,
         JSON.stringify(
           bindNativeResourceFormIdentity(
@@ -759,7 +806,11 @@ async function pinSqlExactFormIdentity(
     if (lockUpdate.rowCount !== 1) {
       throw new Error("exact Form pin lost the locked ResolutionLock row");
     }
-    const record = { ...current, form: input.form };
+    const record = {
+      ...current,
+      form: input.form,
+      revision: resourceRecordRevision(current) + 1,
+    };
     const lock = {
       ...currentLock,
       form: input.form,
@@ -802,7 +853,12 @@ async function beginSqlApply(
       const updated = await updateSqlResource(
         transaction,
         input.applyingRecord,
-        input.expected,
+        {
+          ...input.expected,
+          revision:
+            input.expected.revision ??
+            resourceRecordRevision(input.applyingRecord),
+        },
         input.applyingRecord.managedBy,
       );
       if (updated.rowCount === 0) {
@@ -821,9 +877,14 @@ async function beginSqlApply(
       lockUpsertSql(names.resolutionLocks),
       lockParameters(input.plannedLock),
     );
+    const persisted = await readSqlResource(
+      transaction,
+      input.applyingRecord.id,
+    );
+    if (!persisted) return { status: "not_found" };
     return {
       status: "begun",
-      record: input.applyingRecord,
+      record: persisted,
       lock: input.plannedLock,
     };
   });
@@ -849,9 +910,11 @@ async function commitSqlApply(
       lockUpsertSql(names.resolutionLocks),
       lockParameters(input.finalLock),
     );
+    const persisted = await readSqlResource(transaction, input.readyRecord.id);
+    if (!persisted) return { status: "not_found" };
     return {
       status: "committed",
-      record: input.readyRecord,
+      record: persisted,
       lock: input.finalLock,
     };
   });
@@ -944,14 +1007,19 @@ async function removeSqlResource(
       `delete from ${names.resolutionLocks} where resource_id = $1`,
       [input.resourceId],
     );
+    const revisionPredicate =
+      input.expected.revision === undefined ? "" : " and revision = $5";
     const removed = await transaction.query(
       `delete from ${names.resourceShapes}
-       where id = $1 and generation = $2 and phase = $3 and updated_at = $4`,
+       where id = $1 and generation = $2 and phase = $3 and updated_at = $4${revisionPredicate}`,
       [
         input.resourceId,
         input.expected.generation,
         input.expected.phase,
         input.expected.updatedAt,
+        ...(input.expected.revision === undefined
+          ? []
+          : [input.expected.revision]),
       ],
     );
     if (removed.rowCount !== 1) {
@@ -970,10 +1038,18 @@ function updateSqlResource(
     readonly generation: number;
     readonly phase: ResourcePhase;
     readonly updatedAt: string;
+    readonly revision?: number;
   },
   expectedManagedBy?: ResourceManagedBy,
 ) {
-  const managedByPredicate = expectedManagedBy ? " and managed_by = $26" : "";
+  let nextParameter = 26;
+  const revisionPredicate =
+    expected.revision === undefined
+      ? ""
+      : ` and revision = $${nextParameter++}`;
+  const managedByPredicate = expectedManagedBy
+    ? ` and managed_by = $${nextParameter}`
+    : "";
   return client.query(
     `update ${names.resourceShapes} set
       space_id = $1, project = $2, environment = $3, kind = $4,
@@ -982,15 +1058,18 @@ function updateSqlResource(
       observed_generation = $12, outputs_json = $13::jsonb,
       execution_json = $14::jsonb, state_adoption_json = $15::jsonb,
       conditions_json = $16::jsonb, labels_json = $17::jsonb,
-      created_at = $18, updated_at = $19, last_operation_run_id = $20,
-      pending_operation_json = $21::jsonb
-    where id = $22 and generation = $23 and phase = $24 and updated_at = $25${managedByPredicate}`,
+      created_at = $18, updated_at = $19,
+      pending_operation_json = $20::jsonb, last_operation_run_id = $21,
+      revision = revision + 1
+    where id = $22 and generation = $23 and phase = $24
+      and updated_at = $25${revisionPredicate}${managedByPredicate}`,
     [
-      ...resourceParameters(record).slice(1),
+      ...resourceUpdateParameters(record),
       record.id,
       expected.generation,
       expected.phase,
       expected.updatedAt,
+      ...(expected.revision === undefined ? [] : [expected.revision]),
       ...(expectedManagedBy ? [expectedManagedBy] : []),
     ],
   );
@@ -1031,11 +1110,11 @@ function resourceInsertSql(table: string, conflict: string): string {
     spec_json, phase, generation, observed_generation,
     outputs_json, execution_json, state_adoption_json,
     conditions_json, labels_json, created_at, updated_at,
-    last_operation_run_id, pending_operation_json
+    pending_operation_json, last_operation_run_id, revision
   ) values (
     $1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10::jsonb,
     $11, $12, $13, $14::jsonb, $15::jsonb, $16::jsonb,
-    $17::jsonb, $18::jsonb, $19, $20, $21, $22::jsonb
+    $17::jsonb, $18::jsonb, $19, $20, $21::jsonb, $22, $23
   ) ${conflict}`;
 }
 
@@ -1047,7 +1126,7 @@ function resourceParameters(record: ResourceShapeRecord): readonly SqlValue[] {
     record.project ?? null,
     record.environment ?? null,
     record.kind,
-    jsonOrNull(record.form?.formRef),
+    jsonOrNull(record.form && formRefOfInstalled(record.form)),
     record.form?.packageDigest ?? null,
     record.name,
     record.managedBy,
@@ -1062,19 +1141,27 @@ function resourceParameters(record: ResourceShapeRecord): readonly SqlValue[] {
     jsonOrNull(record.labels),
     record.createdAt,
     record.updatedAt,
-    record.lastOperationRunId ?? null,
     jsonOrNull(record.pendingOperation),
+    record.lastOperationRunId ?? null,
+    resourceRecordRevision(record),
   ];
+}
+
+function resourceUpdateParameters(
+  record: ResourceShapeRecord,
+): readonly SqlValue[] {
+  const parameters = resourceParameters(record);
+  return [...parameters.slice(1, 20), ...parameters.slice(20, 22)];
 }
 
 function lockParameters(lock: ResolutionLockRecord): readonly SqlValue[] {
   const form = exactFormIdentity(
-    jsonOrNull(lock.form?.formRef),
+    jsonOrNull(lock.form && formRefOfInstalled(lock.form)),
     lock.form?.packageDigest ?? null,
   );
   return [
     lock.resourceId,
-    jsonOrNull(form?.formRef),
+    jsonOrNull(form && formRefOfInstalled(form)),
     form?.packageDigest ?? null,
     lock.selectedImplementation,
     lock.targetPool ?? null,
@@ -1165,9 +1252,13 @@ function resourceShapeFromRow(row: ResourceShapeRow): ResourceShapeRecord {
   );
   const conditions = parseJson<readonly Condition[]>(row.conditions_json);
   const labels = parseJson<Record<string, string>>(row.labels_json);
-  const pendingOperation = pendingOperationFromJson(row.pending_operation_json);
+  const pendingOperation = parseJson<ResourceShapePendingOperation>(
+    row.pending_operation_json,
+  );
+  const revision = normalizeStoredRevision(row.revision);
   return {
     id: row.id,
+    revision,
     spaceId: row.space_id as SpaceId,
     ...(row.project === null ? {} : { project: row.project }),
     ...(row.environment === null ? {} : { environment: row.environment }),
@@ -1179,18 +1270,28 @@ function resourceShapeFromRow(row: ResourceShapeRow): ResourceShapeRecord {
     phase: row.phase as ResourcePhase,
     generation: Number(row.generation),
     observedGeneration: Number(row.observed_generation),
-    ...(typeof row.last_operation_run_id === "string"
-      ? { lastOperationRunId: row.last_operation_run_id }
-      : {}),
-    ...(pendingOperation === undefined ? {} : { pendingOperation }),
     ...(outputs === undefined ? {} : { outputs }),
     ...(execution === undefined ? {} : { execution }),
+    ...(pendingOperation === undefined ? {} : { pendingOperation }),
+    ...(row.last_operation_run_id === undefined ||
+    row.last_operation_run_id === null
+      ? {}
+      : { lastOperationRunId: row.last_operation_run_id }),
     ...(stateAdoption === undefined ? {} : { stateAdoption }),
     ...(conditions === undefined ? {} : { conditions }),
     ...(labels === undefined ? {} : { labels }),
     createdAt: row.created_at as IsoTimestamp,
     updatedAt: row.updated_at as IsoTimestamp,
   };
+}
+
+function normalizeStoredRevision(value: unknown): number {
+  if (value === undefined || value === null) return 0;
+  const revision = Number(value);
+  if (!Number.isSafeInteger(revision) || revision < 0) {
+    throw new Error(`invalid durable Resource revision ${String(value)}`);
+  }
+  return revision;
 }
 
 function resolutionLockFromRow(row: ResolutionLockRow): ResolutionLockRecord {
@@ -1264,47 +1365,6 @@ function parseJson<T>(value: unknown): T | undefined {
   return (typeof value === "string" ? JSON.parse(value) : value) as T;
 }
 
-function pendingOperationFromJson(
-  value: unknown,
-): ResourceShapePendingOperation | undefined {
-  const pending = parseJson<unknown>(value);
-  if (pending === undefined) return undefined;
-  if (
-    typeof pending !== "object" ||
-    pending === null ||
-    Array.isArray(pending)
-  ) {
-    throw new Error("durable Resource pending operation is invalid");
-  }
-  const candidate = pending as Record<string, unknown>;
-  const operation = candidate.operation;
-  if (
-    !validPendingOperationToken(candidate.runId) ||
-    !validPendingOperationToken(candidate.operationKey) ||
-    (operation !== "apply" &&
-      operation !== "import" &&
-      operation !== "refresh" &&
-      operation !== "delete")
-  ) {
-    throw new Error("durable Resource pending operation is invalid");
-  }
-  return {
-    runId: candidate.runId,
-    operation,
-    operationKey: candidate.operationKey,
-  };
-}
-
-function validPendingOperationToken(value: unknown): value is string {
-  return (
-    typeof value === "string" &&
-    value.trim() === value &&
-    value !== "" &&
-    value.length <= 256 &&
-    !/[\u0000-\u001f\u007f]/.test(value)
-  );
-}
-
 function exactFormIdentity(
   formRefJson: unknown,
   packageDigest: string | null,
@@ -1316,7 +1376,7 @@ function exactFormIdentity(
     return undefined;
   }
   const identity = {
-    formRef: parseJson<FormRef>(formRefJson),
+    ...(parseJson<FormRef>(formRefJson) ?? {}),
     packageDigest,
   };
   if (!isInstalledFormReference(identity)) {

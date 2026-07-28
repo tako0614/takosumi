@@ -17,6 +17,7 @@ import { OpenTofuControllerError } from "../domains/deploy-control/errors.ts";
 import {
   isInstalledFormReference,
   isResourceShapeKind,
+  shapeKindForPortableType,
   type ResourceShapeKind,
 } from "takosumi-contract";
 import type { ResourceFormPinBackupEntry } from "takosumi-contract/backups";
@@ -259,7 +260,7 @@ function isBackupEntry(value: unknown): value is ResourceFormPinBackupEntry {
     typeof entry.kind === "string" &&
     entry.kind.trim() !== "" &&
     isInstalledFormReference(entry.identity) &&
-    entry.identity.formRef.kind === entry.kind
+    shapeKindForPortableType(entry.identity.type) === entry.kind
   );
 }
 

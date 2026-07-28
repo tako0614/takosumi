@@ -556,9 +556,9 @@ Takosumi's standard path runs the OpenTofu/Terraform module that lives in Git.
 ```text
 Git URL + ref/tag/commit + module path
   -> checkout
-  -> tofu init
-  -> tofu plan
-  -> tofu apply
+  -> OpenTofu initialization
+  -> OpenTofu plan
+  -> OpenTofu apply
 ```
 
 The runner may persist an immutable `SourceSnapshot` archive for reproducible

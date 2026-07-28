@@ -20,7 +20,10 @@ const SOURCE_BUILD_ENV_NAMES = [
 export async function runSourceBuild(
   sourceBuild: SourceBuildConfig | undefined,
   sourceRoot: string,
-  options: { readonly timeoutMs?: number } = {},
+  options: {
+    readonly timeoutMs?: number;
+    readonly signal?: AbortSignal;
+  } = {},
 ): Promise<string | undefined> {
   if (!sourceBuild) return undefined;
   await assertDirectory(sourceRoot, "source build root");
@@ -30,6 +33,7 @@ export async function runSourceBuild(
   const context: CommandContext = {
     env,
     ...(options.timeoutMs ? { timeoutMs: options.timeoutMs } : {}),
+    ...(options.signal ? { signal: options.signal } : {}),
   };
   const logs: string[] = [];
 

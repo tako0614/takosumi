@@ -301,6 +301,50 @@ test("putInstallConfig requires an existing owning Workspace", async () => {
   ).rejects.toMatchObject({ code: "invalid_argument" });
 });
 
+test("putInstallConfig validates the operator-owned Source selector", async () => {
+  const { service } = build();
+  const base: InstallConfig = {
+    id: "cfg_source_selector",
+    name: "source-selector",
+    variableMapping: {},
+    outputAllowlist: {},
+    policy: {},
+    createdAt: NOW,
+    updatedAt: NOW,
+  };
+
+  await expect(
+    service.putInstallConfig({
+      ...base,
+      sourceSelector: {
+        url: "https://example.test/acme/repo.git",
+        path: "../outside",
+      },
+    }),
+  ).rejects.toMatchObject({
+    code: "invalid_argument",
+    message: expect.stringContaining("sourceSelector.path"),
+  });
+  await expect(
+    service.putInstallConfig({
+      ...base,
+      sourceSelector: { url: "bad\u0000url", path: "." },
+    }),
+  ).rejects.toMatchObject({
+    code: "invalid_argument",
+    message: expect.stringContaining("sourceSelector.url"),
+  });
+  await expect(
+    service.putInstallConfig({
+      ...base,
+      sourceSelector: {
+        url: "https://example.test/Acme/Repo.git",
+        path: ".",
+      },
+    }),
+  ).resolves.toMatchObject({ id: base.id });
+});
+
 test("putInstallConfig accepts explicit lifecycle actions and rejects missing policy", async () => {
   const { service } = build();
   const action = {

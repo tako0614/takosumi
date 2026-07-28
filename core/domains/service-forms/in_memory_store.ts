@@ -1,5 +1,6 @@
 import {
   formRefKey,
+  formRefOfInstalled,
   pageSortedBy,
   type FormPackageLifecycleStatus,
   type FormRef,
@@ -46,7 +47,7 @@ export class InMemoryFormRegistryStore implements FormRegistryStore {
 
     for (const definition of definitions) {
       const existingDefinition = this.#definitions.get(
-        formRefKey(definition.identity.formRef),
+        formRefKey(formRefOfInstalled(definition.identity)),
       );
       if (
         existingDefinition !== undefined &&
@@ -60,7 +61,7 @@ export class InMemoryFormRegistryStore implements FormRegistryStore {
     this.#packages.set(packageRecord.packageDigest, clone(packageRecord));
     for (const definition of definitions) {
       this.#definitions.set(
-        formRefKey(definition.identity.formRef),
+        formRefKey(formRefOfInstalled(definition.identity)),
         clone(definition),
       );
     }
@@ -117,14 +118,14 @@ export class InMemoryFormRegistryStore implements FormRegistryStore {
           const byTime = left.installedAt.localeCompare(right.installedAt);
           return byTime !== 0
             ? byTime
-            : formRefKey(left.identity.formRef).localeCompare(
-                formRefKey(right.identity.formRef),
+            : formRefKey(formRefOfInstalled(left.identity)).localeCompare(
+                formRefKey(formRefOfInstalled(right.identity)),
               );
         }),
         params,
         (record) => ({
           createdAt: record.installedAt,
-          id: formRefKey(record.identity.formRef),
+          id: formRefKey(formRefOfInstalled(record.identity)),
         }),
       ),
     );

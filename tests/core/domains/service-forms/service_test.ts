@@ -15,9 +15,8 @@ const schemaDigest = `sha256:${"c".repeat(64)}`;
 const now = "2026-07-16T00:00:00.000Z";
 
 const formRef: FormRef = {
-  apiVersion: "forms.takoform.com/v1alpha1",
-  kind: "EdgeWorker",
-  definitionVersion: "1.0.0",
+  type: "edge_worker",
+  version: "1.0.0",
   schemaDigest,
 };
 
@@ -102,7 +101,7 @@ test("verified packages install exact definitions idempotently", async () => {
   expect(second).toEqual(first);
   expect((await store.listPackages({})).items).toHaveLength(1);
   expect((await store.getDefinition(formRef))?.identity).toEqual({
-    formRef,
+    ...formRef,
     packageDigest: packageA,
   });
 });
@@ -142,7 +141,7 @@ test("activation requires the exact installed identity and uses revision CAS", a
   await expect(
     registry.createActivation({
       id: "activation_wrong_package",
-      identity: { formRef, packageDigest: packageB },
+      identity: { ...formRef, packageDigest: packageB },
       scope: { type: "operator" },
       actorId: "acct_operator",
     }),
@@ -150,7 +149,7 @@ test("activation requires the exact installed identity and uses revision CAS", a
 
   const created = await registry.createActivation({
     id: "activation_edge",
-    identity: { formRef, packageDigest: packageA },
+    identity: { ...formRef, packageDigest: packageA },
     scope: { type: "workspace", id: "ws_1" },
     eligibleTargetPoolClasses: ["edge", "edge"],
     actorId: "acct_operator",
@@ -187,7 +186,7 @@ test("revoked package cannot activate or return to deprecated", async () => {
   await expect(
     registry.createActivation({
       id: "activation_revoked",
-      identity: { formRef, packageDigest: packageA },
+      identity: { ...formRef, packageDigest: packageA },
       scope: { type: "operator" },
       actorId: "acct_operator",
     }),
@@ -202,7 +201,7 @@ test("revoked exact definitions stay retained, verifiable, and undeletable", asy
   const registry = service(store);
   await install(registry);
   await registry.setPackageStatus(packageA, "revoked");
-  const identity = { formRef, packageDigest: packageA };
+  const identity = { ...formRef, packageDigest: packageA };
 
   expect(await registry.getRetainedIdentity(identity)).toMatchObject({
     definition: { identity },
@@ -226,7 +225,7 @@ test("retained replay fails closed when package bytes cannot be re-verified", as
 
   await expect(
     registryWithoutVerifier.verifyRetainedIdentity({
-      formRef,
+      ...formRef,
       packageDigest: packageA,
     }),
   ).rejects.toMatchObject({ code: "verification_unavailable" });
@@ -253,7 +252,7 @@ test("an existing activation cannot be enabled after package revocation", async 
   await install(registry);
   const activation = await registry.createActivation({
     id: "activation_later_revoked",
-    identity: { formRef, packageDigest: packageA },
+    identity: { ...formRef, packageDigest: packageA },
     scope: { type: "operator" },
     actorId: "acct_operator",
   });

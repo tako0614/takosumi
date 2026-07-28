@@ -11,6 +11,16 @@ Container は公開 reference composition であって、すべての Operator �
 substrate ではありません。Takos product worker や installable apps の patch
 gate はそれぞれの product docs が所有します。
 
+production surfaceのdeployはこのrepositoryのentrypointを使います。共通ruleは
+`takos-control`の`engineering.policy.json`→`deploy`が正本です。
+
+```bash
+bun run deploy
+```
+
+以下のcheckはdeploy前のowner gateが集める証拠です。checkの成功やこのrunbook
+自体はdeployのauthorityになりません。
+
 ## Scope
 
 | Area                                     | Owner                                                               | Patch path                                                                  |
@@ -42,7 +52,7 @@ and commands, but never secret values, provider account ids, or raw object keys.
 Default window:
 
 - Tuesday 13:00-15:00 JST: dependency / image update review and staging deploy
-- Wednesday 13:00-15:00 JST: production promotion if staging is green
+- Wednesday 13:00-15:00 JST: owner gate が green の場合に production deploy
 
 Emergency window:
 
@@ -53,9 +63,9 @@ Emergency window:
 
 During emergency patch work, unrelated platform worker deploys are frozen.
 
-## Required Checks
+## Candidate Checks
 
-Before staging promotion:
+Before preparing the release candidate:
 
 ```bash
 cd takosumi
@@ -109,7 +119,9 @@ record a time-boxed exception with owner and expiry.
 - runner smoke is green when runner changed
 - staging platform worker is healthy for one observation window
 - rollback worker version / commit / image digest is known
-- private deploy log records operator, timestamp, command, and smoke result
+- the deploy entrypoint's owner gate is green and its `--contract` guards are intact
+- the operator's private deploy log records the shipped commit, artifact
+  digest, previous deployment, and readback result
 
 ## Evidence
 
@@ -117,7 +129,7 @@ public evidence:
 
 - PR link
 - CI / local gate summary
-- release gate summary
+- shipped commit, artifact digest, and readback result
 
 private evidence:
 

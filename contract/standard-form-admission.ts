@@ -1,23 +1,26 @@
 import type { InstalledFormReference } from "./service-forms.ts";
 import type { JsonObject } from "./types.ts";
 
-export const STANDARD_FORM_ADMISSION_API_VERSION =
-  "forms.takoform.com/standard-admission/v1alpha1" as const;
+/**
+ * Format token of the portable standard-admission evidence document
+ * (takoform standardform vocabulary). One flat format field names the
+ * document; there is no Kubernetes-style apiVersion/kind envelope.
+ */
+export const STANDARD_FORM_ADMISSION_FORMAT =
+  "takoform.standard-admission@v0" as const;
 
-export type StandardFormFixtureStage =
-  | "desired"
-  | "observed"
-  | "output"
-  | "import"
-  | "observe"
-  | "drift"
-  | "interface";
+/** The one portable wire error code negative fixtures must expect. */
+export const STANDARD_FORM_INVALID_ARGUMENT_ERROR_CODE =
+  "invalid_argument" as const;
+
+/** Package-validation stages of the takoform conformance fixture vocabulary. */
+export type StandardFormFixtureStage = "config" | "attributes" | "outputs";
 
 export interface StandardFormPositiveFixture {
   readonly name: string;
-  readonly desired: JsonObject;
-  readonly observed: JsonObject;
-  readonly output: JsonObject;
+  readonly config: JsonObject;
+  readonly attributes: JsonObject;
+  readonly outputs: JsonObject;
 }
 
 export interface StandardFormNegativeFixture {
@@ -44,7 +47,7 @@ export interface StandardFormConformanceProof {
  * authority.
  */
 export interface StandardFormAdmissionEvidence {
-  readonly apiVersion: typeof STANDARD_FORM_ADMISSION_API_VERSION;
+  readonly format: typeof STANDARD_FORM_ADMISSION_FORMAT;
   readonly identity: InstalledFormReference;
   readonly classification: "portable-standard";
   readonly approvedSchemaDigest: string;
@@ -55,8 +58,8 @@ export interface StandardFormAdmissionEvidence {
       readonly update: true;
       readonly delete: true;
       readonly import: true;
-      readonly observe: true;
       readonly refresh: true;
+      readonly sync: true;
       readonly drift: true;
     };
     readonly immutability: {

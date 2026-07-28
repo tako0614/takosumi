@@ -13,16 +13,19 @@ import {
   MapResourceShapeModuleRegistry,
   MapResourceShapeSchemaRegistry,
   type ResourceShapeServiceDeps,
+  ResourceAdapterApplyError,
   ResourceShapeService,
   StubResourceShapeAdapter,
 } from "../../../core/domains/resource-shape/mod.ts";
 import { createInMemoryInterfaceStores } from "../../../core/domains/interfaces/mod.ts";
-import { InMemoryFormRegistryStore } from "../../../core/domains/service-forms/mod.ts";
-import type { AdapterDeleteInput } from "../../../core/domains/resource-shape/mod.ts";
+import type {
+  AdapterApplyInput,
+  AdapterApplyResult,
+  AdapterDeleteInput,
+} from "../../../core/domains/resource-shape/mod.ts";
 import { ActivityService } from "../../../core/domains/activity/mod.ts";
 import {
   portableHostConformanceProof,
-  portableStandardHostRunnerReport,
   runPortableFormHostConformance,
 } from "../../../core/conformance/portable_form_host.ts";
 import { InMemoryOpenTofuControlStore } from "../../../core/domains/deploy-control/store.ts";
@@ -32,8 +35,6 @@ import {
   type FormPackage,
   type FormPackageLifecycleStatus,
   type InstalledFormReference,
-  type JsonObject,
-  type ResourceShapeKind,
   RESOURCE_SHAPE_KINDS,
   type SpacePolicySpec,
   type TargetPoolSpec,
@@ -206,13 +207,16 @@ async function buildApp(
 }
 
 const EXACT_OBJECT_BUCKET_FORM: InstalledFormReference = {
-  formRef: {
-    apiVersion: "forms.takoform.com/v1alpha1",
-    kind: "ObjectBucket",
-    definitionVersion: "1.0.0",
-    schemaDigest: `sha256:${"1".repeat(64)}`,
-  },
+  type: "object_bucket",
+  version: "1.0.0",
+  schemaDigest: `sha256:${"1".repeat(64)}`,
   packageDigest: `sha256:${"2".repeat(64)}`,
+};
+
+const EXACT_OBJECT_BUCKET_FORM_REF = {
+  type: EXACT_OBJECT_BUCKET_FORM.type,
+  version: EXACT_OBJECT_BUCKET_FORM.version,
+  schemaDigest: EXACT_OBJECT_BUCKET_FORM.schemaDigest,
 };
 
 function exactObjectBucketFormRegistry(
@@ -222,7 +226,6 @@ function exactObjectBucketFormRegistry(
     readonly activationStatus?: FormActivation["status"];
     readonly eligibleTargetPoolClasses?: readonly string[];
     readonly operations?: FormDefinition["operations"];
-    readonly interfaceDescriptors?: FormDefinition["interfaceDescriptors"];
   } = {},
 ): NonNullable<ResourceShapeServiceDeps["formRegistry"]> {
   const definition: FormDefinition = {
@@ -236,9 +239,6 @@ function exactObjectBucketFormRegistry(
       "import",
       "refresh",
     ],
-    ...(options.interfaceDescriptors
-      ? { interfaceDescriptors: options.interfaceDescriptors }
-      : {}),
     installedAt: "2026-01-01T00:00:00.000Z",
   };
   const formPackage: FormPackage = {
@@ -249,7 +249,7 @@ function exactObjectBucketFormRegistry(
     definitionRefs:
       options.packageIncludesDefinition === false
         ? []
-        : [EXACT_OBJECT_BUCKET_FORM.formRef],
+        : [EXACT_OBJECT_BUCKET_FORM_REF],
     installedAt: "2026-01-01T00:00:00.000Z",
     installedBy: "test",
     updatedAt: "2026-01-01T00:00:00.000Z",
@@ -272,8 +272,7 @@ function exactObjectBucketFormRegistry(
   };
   return {
     getDefinition: async (formRef) =>
-      JSON.stringify(formRef) ===
-      JSON.stringify(EXACT_OBJECT_BUCKET_FORM.formRef)
+      JSON.stringify(formRef) === JSON.stringify(EXACT_OBJECT_BUCKET_FORM_REF)
         ? definition
         : undefined,
     getPackage: async (packageDigest) =>
@@ -293,10 +292,9 @@ const AUTH_HEADERS = {
 
 function portableFormQuery(identity = EXACT_OBJECT_BUCKET_FORM): string {
   const query = new URLSearchParams({
-    apiVersion: identity.formRef.apiVersion,
-    kind: identity.formRef.kind,
-    definitionVersion: identity.formRef.definitionVersion,
-    schemaDigest: identity.formRef.schemaDigest,
+    type: identity.type,
+    version: identity.version,
+    schemaDigest: identity.schemaDigest,
     packageDigest: identity.packageDigest,
   });
   return query.toString();
@@ -346,271 +344,18 @@ class SlowDeleteAdapter extends StubResourceShapeAdapter {
   }
 }
 
-class CountingPreviewAdapter extends StubResourceShapeAdapter {
-  previewCalls = 0;
+class UnknownOnceApplyAdapter extends StubResourceShapeAdapter {
+  #failed = false;
 
-  override async preview(
-    input: Parameters<StubResourceShapeAdapter["preview"]>[0],
-  ) {
-    this.previewCalls++;
-    return await super.preview(input);
-  }
-}
-
-class DriftableAdapter extends StubResourceShapeAdapter {
-  drifted = false;
-
-  override async apply(
-    input: Parameters<StubResourceShapeAdapter["apply"]>[0],
-  ) {
-    const applied = await super.apply(input);
-    const name = input.plan.validatedSpec.name;
-    if (typeof name !== "string") {
-      throw new Error("standard Form test adapter requires a validated name");
+  override async apply(input: AdapterApplyInput): Promise<AdapterApplyResult> {
+    if (!this.#failed) {
+      this.#failed = true;
+      throw new ResourceAdapterApplyError("simulated lost backend response", {
+        mutationOutcome: "unknown",
+      });
     }
-    return {
-      ...applied,
-      outputs: {
-        ...applied.outputs,
-        id: `${input.plan.shape}/${name}`,
-        kind: input.plan.shape,
-        name,
-        generation: input.stateGeneration + 1,
-        portability: "portable",
-        ...(input.plan.shape === "SQLDatabase"
-          ? { engine: input.plan.validatedSpec.engine ?? "sqlite" }
-          : {}),
-      },
-    };
+    return await super.apply(input);
   }
-
-  override async observe(
-    input: Parameters<StubResourceShapeAdapter["observe"]>[0],
-  ) {
-    const observed = await super.observe(input);
-    return this.drifted
-      ? { ...observed, status: "drifted" as const, summary: "test drift" }
-      : observed;
-  }
-}
-
-interface StandardFormHostMatrixEntry {
-  readonly kind: ResourceShapeKind;
-  readonly identity: InstalledFormReference;
-  readonly interfaceDescriptors?: FormDefinition["interfaceDescriptors"];
-  readonly desired: JsonObject;
-  readonly negative: JsonObject;
-  readonly desiredDigest: string;
-  readonly negativeDigest: string;
-}
-
-interface StandardFormHostMatrix {
-  readonly format: "takosumi.takoform-standard-host-matrix@v1";
-  readonly status: "candidate-only";
-  readonly definitionVersion: "1.0.1";
-  readonly packageVersion: "1.0.1";
-  readonly entries: readonly StandardFormHostMatrixEntry[];
-}
-
-const STANDARD_FORM_HOST_MATRIX = (await Bun.file(
-  new URL(
-    "../../../fixtures/takoform-standard-1.0.1-host-matrix.json",
-    import.meta.url,
-  ),
-).json()) as StandardFormHostMatrix;
-
-const STANDARD_HOST_INTERFACES: Readonly<
-  Record<ResourceShapeKind, Readonly<Record<string, "native">>>
-> = {
-  EdgeWorker: {
-    worker_fetch: "native",
-    workers: "native",
-    resource_connection: "native",
-    "object.binding.v1": "native",
-    grant_read: "native",
-    grant_write: "native",
-  },
-  ObjectBucket: {
-    object_store: "native",
-    s3_api: "native",
-    signed_url: "native",
-  },
-  KVStore: { kv_store: "native", runtime_binding: "native" },
-  SQLDatabase: { sql: "native", sqlite: "native" },
-  Queue: { queue: "native", publish: "native", consume: "native" },
-  VectorIndex: {
-    vector_index: "native",
-    vector_query: "native",
-    runtime_binding: "native",
-    cosine: "native",
-    dot: "native",
-  },
-  DurableWorkflow: {
-    durable_workflow: "native",
-    invoke: "native",
-    signal: "native",
-  },
-  ContainerService: { oci_container: "native", public_http: "native" },
-  StatefulActorNamespace: {
-    stateful_actor_namespace: "native",
-    runtime_binding: "native",
-    durable_sqlite: "native",
-  },
-  Schedule: {
-    schedule: "native",
-    cron: "native",
-    invoke: "native",
-    resource_connection: "native",
-    schedule_trigger: "native",
-    grant_invoke: "native",
-  },
-};
-
-function standardFormHostMatrixRegistry(
-  matrix: StandardFormHostMatrix,
-): NonNullable<ResourceShapeServiceDeps["formRegistry"]> {
-  const definitions: FormDefinition[] = matrix.entries.map((entry) => ({
-    identity: entry.identity,
-    displayName: `${entry.kind} standard Form candidate`,
-    operations: ["create", "read", "update", "delete", "import", "refresh"],
-    ...(entry.interfaceDescriptors
-      ? { interfaceDescriptors: entry.interfaceDescriptors }
-      : {}),
-    installedAt: "2026-07-20T00:00:00.000Z",
-  }));
-  const packages: FormPackage[] = matrix.entries.map((entry) => ({
-    packageDigest: entry.identity.packageDigest,
-    artifactRef: `test://takoform/${entry.kind}/1.0.1`,
-    verifierId: "standard-form-host-matrix",
-    status: "installed",
-    definitionRefs: [entry.identity.formRef],
-    installedAt: "2026-07-20T00:00:00.000Z",
-    installedBy: "test",
-    updatedAt: "2026-07-20T00:00:00.000Z",
-  }));
-  const activations: FormActivation[] = matrix.entries.map((entry) => ({
-    id: `activation_standard_${entry.kind}`,
-    identity: entry.identity,
-    scope: { type: "space", id: "space_1" },
-    audience: { roles: ["owner"] },
-    policy: {},
-    eligibleTargetPoolClasses: ["standard-host-matrix"],
-    status: "active",
-    revision: 1,
-    createdAt: "2026-07-20T00:00:00.000Z",
-    createdBy: "test",
-    updatedAt: "2026-07-20T00:00:00.000Z",
-    updatedBy: "test",
-  }));
-  return {
-    getDefinition: async (formRef) =>
-      definitions.find(
-        (definition) =>
-          JSON.stringify(definition.identity.formRef) ===
-          JSON.stringify(formRef),
-      ),
-    getPackage: async (packageDigest) =>
-      packages.find(
-        (formPackage) => formPackage.packageDigest === packageDigest,
-      ),
-    getActivation: async (id) =>
-      activations.find((activation) => activation.id === id),
-    listDefinitions: async () => ({ items: definitions }),
-    listActivations: async () => ({ items: activations }),
-  };
-}
-
-async function installStandardFormHostMatrix(
-  matrix: StandardFormHostMatrix,
-): Promise<InMemoryFormRegistryStore> {
-  const store = new InMemoryFormRegistryStore();
-  const installedAt = "2026-07-20T00:00:00.000Z";
-  for (const entry of matrix.entries) {
-    await store.installPackage(
-      {
-        packageDigest: entry.identity.packageDigest,
-        artifactRef: `test://takoform/${entry.kind}/1.0.1`,
-        verifierId: "standard-form-host-matrix",
-        status: "installed",
-        definitionRefs: [entry.identity.formRef],
-        installedAt,
-        installedBy: "test",
-        updatedAt: installedAt,
-      },
-      [
-        {
-          identity: entry.identity,
-          displayName: `${entry.kind} standard Form candidate`,
-          operations: [
-            "create",
-            "read",
-            "update",
-            "delete",
-            "import",
-            "refresh",
-          ],
-          ...(entry.interfaceDescriptors
-            ? { interfaceDescriptors: entry.interfaceDescriptors }
-            : {}),
-          installedAt,
-        },
-      ],
-    );
-    await store.createActivation({
-      id: `activation_standard_${entry.kind}`,
-      identity: entry.identity,
-      scope: { type: "space", id: "space_1" },
-      audience: { roles: ["owner"] },
-      policy: {},
-      eligibleTargetPoolClasses: ["standard-host-matrix"],
-      status: "active",
-      revision: 1,
-      createdAt: installedAt,
-      createdBy: "test",
-      updatedAt: installedAt,
-      updatedBy: "test",
-    });
-  }
-  return store;
-}
-
-function updatedStandardDesired(
-  entry: StandardFormHostMatrixEntry,
-): JsonObject {
-  const desired = structuredClone(entry.desired);
-  switch (entry.kind) {
-    case "EdgeWorker":
-      desired.compatibilityDate = "2026-07-21";
-      break;
-    case "ObjectBucket":
-      desired.interfaces = ["s3_api", "signed_url"];
-      break;
-    case "KVStore":
-      desired.consistency = "strong";
-      break;
-    case "SQLDatabase":
-      desired.migrationsPath = "migrations";
-      break;
-    case "Queue":
-      desired.delivery = { maxRetries: 3 };
-      break;
-    case "VectorIndex":
-      desired.metric = "dot";
-      break;
-    case "DurableWorkflow":
-      desired.retry = { initialBackoffSeconds: 5, maxAttempts: 4 };
-      break;
-    case "ContainerService":
-      desired.publicHttp = false;
-      break;
-    case "StatefulActorNamespace":
-      desired.migrationTag = "v2";
-      break;
-    case "Schedule":
-      desired.cron = "5 0 * * *";
-      break;
-  }
-  return desired;
 }
 
 test("PUT /v1/resources/EdgeWorker/:name applies a first-class Worker shape", async () => {
@@ -694,10 +439,7 @@ test("public Resource API rejects malformed or kind-mismatched exact Form identi
     headers: JSON_HEADERS,
     body: JSON.stringify({
       ...base,
-      form: {
-        ...EXACT_OBJECT_BUCKET_FORM,
-        formRef: { ...EXACT_OBJECT_BUCKET_FORM.formRef, kind: "Queue" },
-      },
+      form: { ...EXACT_OBJECT_BUCKET_FORM, type: "queue" },
     }),
   });
   expect(mismatch.status).toBe(400);
@@ -716,25 +458,25 @@ test("portable Form host delegates exact lifecycle to the canonical Resource and
     },
     exactObjectBucketFormRegistry(),
   );
-  const base = "/apis/forms.takoform.com/v1alpha1";
-  const path = `${base}/resources/ObjectBucket/portable-assets`;
+  const base = "/takoform/v0";
+  const path = `${base}/resources/object_bucket/portable-assets`;
   const desired = {
-    apiVersion: "forms.takoform.com/v1alpha1",
-    kind: "ObjectBucket",
+    type: "object_bucket",
     form: EXACT_OBJECT_BUCKET_FORM,
-    metadata: { name: "portable-assets", space: "space_1" },
-    spec: { name: "portable-assets", interfaces: ["s3_api"] },
+    workspace: "space_1",
+    name: "portable-assets",
+    config: { name: "portable-assets", interfaces: ["s3_api"] },
   };
 
   const discovery = await app.request("/.well-known/takoform");
   expect(discovery.status).toBe(200);
-  expect((await discovery.json()).endpoints.api).toEndWith(base);
+  const discoveryBody = await discovery.json();
+  expect(discoveryBody.protocols).toEqual(["v0"]);
+  expect(discoveryBody.endpoints.api).toEndWith(base);
 
-  const forms = await app.request(`${base}/forms?space=space_1`);
+  const forms = await app.request(`${base}/forms?workspace=space_1`);
   expect(forms.status).toBe(200);
-  expect((await forms.json()).forms[0].identity).toEqual(
-    EXACT_OBJECT_BUCKET_FORM,
-  );
+  expect((await forms.json()).forms[0].form).toEqual(EXACT_OBJECT_BUCKET_FORM);
 
   const preview = await app.request(`${base}/resources/preview`, {
     method: "POST",
@@ -764,8 +506,9 @@ test("portable Form host delegates exact lifecycle to the canonical Resource and
   expect(applied.status).toBe(200);
   expect(applied.headers.get("etag")).toBe('"1"');
   const appliedBody = await applied.json();
-  expect(appliedBody.metadata.resourceVersion).toBe("1");
-  expect(appliedBody.status.phase).toBe("Ready");
+  expect(appliedBody.serial).toBe("1");
+  expect(appliedBody.type).toBe("object_bucket");
+  expect(appliedBody.workspace).toBe("space_1");
   expect(JSON.stringify(appliedBody)).not.toContain("managedBy");
   expect(JSON.stringify(appliedBody)).not.toContain("cloudflare-main");
 
@@ -775,10 +518,10 @@ test("portable Form host delegates exact lifecycle to the canonical Resource and
     body: JSON.stringify(applyBody),
   });
   expect(replayed.status).toBe(200);
-  expect((await replayed.json()).metadata.resourceVersion).toBe("1");
+  expect((await replayed.json()).serial).toBe("1");
 
   const exactQuery = portableFormQuery();
-  const read = await app.request(`${path}?space=space_1&${exactQuery}`);
+  const read = await app.request(`${path}?workspace=space_1&${exactQuery}`);
   expect(read.status).toBe(200);
   expect(read.headers.get("etag")).toBe('"1"');
 
@@ -791,15 +534,15 @@ test("portable Form host delegates exact lifecycle to the canonical Resource and
     },
     body: JSON.stringify({
       ...applyBody,
-      spec: { ...desired.spec, standard: "infrequent" },
+      config: { ...desired.config, standard: "infrequent" },
     }),
   });
   expect(stale.status).toBe(412);
-  expect((await stale.json()).error.code).toBe("resource_version_conflict");
+  expect((await stale.json()).error.code).toBe("serial_conflict");
 
-  for (const action of ["observe", "refresh"] as const) {
+  for (const action of ["refresh", "sync"] as const) {
     const missingMatch = await app.request(
-      `${path}/${action}?space=space_1&${exactQuery}`,
+      `${path}/${action}?workspace=space_1&${exactQuery}`,
       {
         method: "POST",
         headers: { "idempotency-key": `portable-${action}-missing-match` },
@@ -809,7 +552,7 @@ test("portable Form host delegates exact lifecycle to the canonical Resource and
     expect((await missingMatch.json()).error.code).toBe("invalid_argument");
 
     const staleMatch = await app.request(
-      `${path}/${action}?space=space_1&${exactQuery}`,
+      `${path}/${action}?workspace=space_1&${exactQuery}`,
       {
         method: "POST",
         headers: {
@@ -819,23 +562,24 @@ test("portable Form host delegates exact lifecycle to the canonical Resource and
       },
     );
     expect(staleMatch.status).toBe(412);
-    expect((await staleMatch.json()).error.code).toBe(
-      "resource_version_conflict",
-    );
+    expect((await staleMatch.json()).error.code).toBe("serial_conflict");
   }
 
-  const observe = await app.request(
-    `${path}/observe?space=space_1&${exactQuery}`,
+  const refresh = await app.request(
+    `${path}/refresh?workspace=space_1&${exactQuery}`,
     {
       method: "POST",
       headers: {
         "if-match": '"1"',
-        "idempotency-key": "portable-observe-1",
+        "idempotency-key": "portable-refresh-drift-1",
       },
     },
   );
-  expect(observe.status).toBe(200);
-  expect((await observe.json()).resource.status.phase).toBe("Ready");
+  expect(refresh.status).toBe(200);
+  const refreshBody = await refresh.json();
+  expect(refreshBody.observation.status).toBe("current");
+  expect(refreshBody.observation.summary).toBe("portable drift check current");
+  expect(refreshBody.resource.serial).toBe("1");
 
   const events = await service.listEvents(
     "space_1",
@@ -851,7 +595,7 @@ test("portable Form host delegates exact lifecycle to the canonical Resource and
   );
 
   const deleteWithoutMatch = await app.request(
-    `${path}?space=space_1&${exactQuery}`,
+    `${path}?workspace=space_1&${exactQuery}`,
     {
       method: "DELETE",
       headers: { "idempotency-key": "portable-delete-missing-match" },
@@ -861,7 +605,7 @@ test("portable Form host delegates exact lifecycle to the canonical Resource and
   expect((await deleteWithoutMatch.json()).error.code).toBe("invalid_argument");
 
   const deleteWithStaleMatch = await app.request(
-    `${path}?space=space_1&${exactQuery}`,
+    `${path}?workspace=space_1&${exactQuery}`,
     {
       method: "DELETE",
       headers: {
@@ -872,10 +616,10 @@ test("portable Form host delegates exact lifecycle to the canonical Resource and
   );
   expect(deleteWithStaleMatch.status).toBe(412);
   expect((await deleteWithStaleMatch.json()).error.code).toBe(
-    "resource_version_conflict",
+    "serial_conflict",
   );
 
-  const deleted = await app.request(`${path}?space=space_1&${exactQuery}`, {
+  const deleted = await app.request(`${path}?workspace=space_1&${exactQuery}`, {
     method: "DELETE",
     headers: {
       "if-match": '"1"',
@@ -887,7 +631,7 @@ test("portable Form host delegates exact lifecycle to the canonical Resource and
     (await service.get("space_1", "ObjectBucket", "portable-assets")).ok,
   ).toBe(false);
   const deleteReplay = await app.request(
-    `${path}?space=space_1&${exactQuery}`,
+    `${path}?workspace=space_1&${exactQuery}`,
     {
       method: "DELETE",
       headers: {
@@ -899,121 +643,65 @@ test("portable Form host delegates exact lifecycle to the canonical Resource and
   expect(deleteReplay.status).toBe(204);
 });
 
-test("portable Form import replay consumes pinned admission after availability changes", async () => {
-  let active = true;
-  const installed = exactObjectBucketFormRegistry();
-  const registry: NonNullable<ResourceShapeServiceDeps["formRegistry"]> = {
-    ...installed,
-    listActivations: async () =>
-      active ? await installed.listActivations() : { items: [] },
-  };
-  const { app } = await buildApp(
-    {
-      resolveActor: () => ({
-        actorAccountId: "acct_import_replay",
-        roles: ["owner"],
-        scopes: ["forms:read", "resources:*"],
-        requestId: "req_import_replay",
-      }),
-    },
-    registry,
-  );
-  const base = "/apis/forms.takoform.com/v1alpha1";
-  const desired = {
-    apiVersion: "forms.takoform.com/v1alpha1",
-    kind: "ObjectBucket",
-    form: EXACT_OBJECT_BUCKET_FORM,
-    metadata: { name: "imported-assets", space: "space_1" },
-    spec: { name: "imported-assets", interfaces: ["s3_api"] },
-    nativeId: "native-imported-assets",
-  };
-  const headers = {
-    ...JSON_HEADERS,
-    "if-none-match": "*",
-    "idempotency-key": "portable-import-replay-1",
-  };
-  const imported = await app.request(
-    `${base}/resources/ObjectBucket/imported-assets/import`,
-    { method: "POST", headers, body: JSON.stringify(desired) },
-  );
-  expect(imported.status).toBe(200);
-
-  active = false;
-  const replayed = await app.request(
-    `${base}/resources/ObjectBucket/imported-assets/import`,
-    { method: "POST", headers, body: JSON.stringify(desired) },
-  );
-  expect(replayed.status).toBe(200);
-  expect((await replayed.json()).resource.metadata.resourceVersion).toBe("1");
-
-  const rejectedNewImport = await app.request(
-    `${base}/resources/ObjectBucket/unavailable-assets/import`,
-    {
-      method: "POST",
-      headers: { ...headers, "idempotency-key": "portable-import-new-2" },
-      body: JSON.stringify({
-        ...desired,
-        metadata: { name: "unavailable-assets", space: "space_1" },
-        spec: { ...desired.spec, name: "unavailable-assets" },
-        nativeId: "native-unavailable-assets",
-      }),
-    },
-  );
-  expect(rejectedNewImport.status).toBe(409);
-  expect((await rejectedNewImport.json()).error.code).toBe("form_unavailable");
-});
-
-test("portable Form host rejects invalid label values instead of dropping them", async () => {
+test("portable Form host rejects legacy envelope fields instead of dropping them", async () => {
   const { app } = await buildApp(undefined, exactObjectBucketFormRegistry());
-  const response = await app.request(
-    "/apis/forms.takoform.com/v1alpha1/resources/preview",
-    {
-      method: "POST",
-      headers: JSON_HEADERS,
-      body: JSON.stringify({
-        apiVersion: "forms.takoform.com/v1alpha1",
-        kind: "ObjectBucket",
-        form: EXACT_OBJECT_BUCKET_FORM,
-        metadata: {
-          name: "invalid-labels",
-          space: "space_1",
-          labels: { valid: "label", invalid: 42 },
-        },
-        spec: { name: "invalid-labels", interfaces: ["s3_api"] },
-      }),
-    },
-  );
+  const response = await app.request("/takoform/v0/resources/preview", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({
+      type: "object_bucket",
+      form: EXACT_OBJECT_BUCKET_FORM,
+      workspace: "space_1",
+      name: "legacy-envelope",
+      config: { name: "legacy-envelope", interfaces: ["s3_api"] },
+      metadata: { labels: { valid: "label" } },
+    }),
+  });
   expect(response.status).toBe(400);
   expect((await response.json()).error).toMatchObject({
     code: "invalid_argument",
-    message: "metadata.labels must be an object whose values are strings",
+    message: "metadata is not a portable v0 resource field",
+  });
+
+  const spec = await app.request("/takoform/v0/resources/preview", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({
+      type: "object_bucket",
+      form: EXACT_OBJECT_BUCKET_FORM,
+      workspace: "space_1",
+      name: "legacy-envelope",
+      spec: { name: "legacy-envelope", interfaces: ["s3_api"] },
+    }),
+  });
+  expect(spec.status).toBe(400);
+  expect((await spec.json()).error).toMatchObject({
+    code: "invalid_argument",
+    message: "spec is not a portable v0 resource field",
   });
 });
 
 test("portable Form host rejects incomplete and substituted exact identities", async () => {
   const { app } = await buildApp(undefined, exactObjectBucketFormRegistry());
-  const base = "/apis/forms.takoform.com/v1alpha1";
+  const base = "/takoform/v0";
   const incomplete = await app.request(
-    `${base}/resources/ObjectBucket/missing?space=space_1&kind=ObjectBucket`,
+    `${base}/resources/object_bucket/missing?workspace=space_1&type=object_bucket`,
   );
   expect(incomplete.status).toBe(400);
 
   const substitutedForm = {
     ...EXACT_OBJECT_BUCKET_FORM,
-    formRef: {
-      ...EXACT_OBJECT_BUCKET_FORM.formRef,
-      schemaDigest: `sha256:${"f".repeat(64)}`,
-    },
+    schemaDigest: `sha256:${"f".repeat(64)}`,
   };
   const substituted = await app.request(`${base}/resources/preview`, {
     method: "POST",
     headers: JSON_HEADERS,
     body: JSON.stringify({
-      apiVersion: "forms.takoform.com/v1alpha1",
-      kind: "ObjectBucket",
+      type: "object_bucket",
       form: substitutedForm,
-      metadata: { name: "substituted", space: "space_1" },
-      spec: { name: "substituted", interfaces: ["s3_api"] },
+      workspace: "space_1",
+      name: "substituted",
+      config: { name: "substituted", interfaces: ["s3_api"] },
     }),
   });
   expect(substituted.status).toBe(404);
@@ -1025,20 +713,17 @@ test("portable Form host enforces the exact definition lifecycle operations", as
     undefined,
     exactObjectBucketFormRegistry({ operations: ["read"] }),
   );
-  const preview = await app.request(
-    "/apis/forms.takoform.com/v1alpha1/resources/preview",
-    {
-      method: "POST",
-      headers: JSON_HEADERS,
-      body: JSON.stringify({
-        apiVersion: "forms.takoform.com/v1alpha1",
-        kind: "ObjectBucket",
-        form: EXACT_OBJECT_BUCKET_FORM,
-        metadata: { name: "read-only", space: "space_1" },
-        spec: { name: "read-only", interfaces: ["s3_api"] },
-      }),
-    },
-  );
+  const preview = await app.request("/takoform/v0/resources/preview", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({
+      type: "object_bucket",
+      form: EXACT_OBJECT_BUCKET_FORM,
+      workspace: "space_1",
+      name: "read-only",
+      config: { name: "read-only", interfaces: ["s3_api"] },
+    }),
+  });
   expect(preview.status).toBe(409);
   expect((await preview.json()).error).toMatchObject({
     code: "form_unavailable",
@@ -1047,26 +732,18 @@ test("portable Form host enforces the exact definition lifecycle operations", as
 });
 
 test("portable Form host black-box runner proves canonical lifecycle parity", async () => {
-  const adapter = new DriftableAdapter();
-  const { app } = await buildApp(undefined, exactObjectBucketFormRegistry(), {
-    adapter,
-  });
+  const { app } = await buildApp(undefined, exactObjectBucketFormRegistry());
   const report = await runPortableFormHostConformance({
     endpoint: "https://host.example.test",
     space: "space_1",
     name: "runner-assets",
     identity: EXACT_OBJECT_BUCKET_FORM,
     desired: { name: "runner-assets", interfaces: ["s3_api"] },
-    updatedDesired: {
-      name: "runner-assets",
-      interfaces: ["s3_api", "signed_url"],
-    },
     positiveFixtureName: "basic",
-    positivePackageFixtureDigest: `sha256:${"a".repeat(64)}`,
     negativeFixtures: [
       {
         name: "invalid-interfaces",
-        stage: "desired",
+        stage: "config",
         input: {
           name: "runner-assets-negative-1",
           interfaces: [7],
@@ -1074,14 +751,7 @@ test("portable Form host black-box runner proves canonical lifecycle parity", as
         expectedErrorCode: "invalid_argument",
       },
     ],
-    negativePackageFixtureDigests: {
-      "invalid-interfaces": `sha256:${"b".repeat(64)}`,
-    },
     importNativeId: "provider-native-runner-assets",
-    expectDrift: true,
-    beforeDriftObserve: () => {
-      adapter.drifted = true;
-    },
     fetch: ((input: RequestInfo | URL, init?: RequestInit) =>
       app.request(input.toString(), init)) as typeof fetch,
   });
@@ -1089,22 +759,18 @@ test("portable Form host black-box runner proves canonical lifecycle parity", as
   expect(report.checks).toContain("canonical-resource-parity");
   expect(report.checks).toContain("canonical-audit-parity");
   expect(report.checks).toContain("import-idempotency");
-  expect(report.checks).toContain("update");
-  expect(report.checks).toContain("drift");
   expect(report.checks).toContain("negative-fixtures");
   expect(report.fixtures.positive).toEqual([
     {
       name: "basic",
       inputDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
-      packageFixtureDigest: `sha256:${"a".repeat(64)}`,
     },
   ]);
   expect(report.fixtures.negative).toEqual([
     {
       name: "invalid-interfaces",
-      stage: "desired",
+      stage: "config",
       inputDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
-      packageFixtureDigest: `sha256:${"b".repeat(64)}`,
       httpStatus: 400,
       errorCode: "invalid_argument",
     },
@@ -1120,347 +786,6 @@ test("portable Form host black-box runner proves canonical lifecycle parity", as
     positiveFixtures: ["basic"],
     negativeFixtures: ["invalid-interfaces"],
   });
-  const standard = await portableStandardHostRunnerReport(report);
-  expect(JSON.parse(standard.canonical)).toEqual(standard.report);
-  expect(standard.report).toMatchObject({
-    format: "takoform.standard-runner-report@v1",
-    role: "host-report",
-    subject: "host:https://host.example.test",
-    identity: EXACT_OBJECT_BUCKET_FORM,
-    status: "passed",
-    executionEvidenceDigest: report.evidenceDigest,
-    lifecycle: {
-      create: true,
-      read: true,
-      update: true,
-      delete: true,
-      import: true,
-      observe: true,
-      refresh: true,
-      drift: true,
-    },
-    positiveFixtures: [
-      {
-        name: "basic",
-        packageFixtureDigest: `sha256:${"a".repeat(64)}`,
-        effectiveInputDigest: report.fixtures.positive[0]?.inputDigest,
-        passed: true,
-      },
-    ],
-  });
-  expect(standard.evidenceDigest).toMatch(/^sha256:[a-f0-9]{64}$/);
-  expect(standard.proof.evidenceDigest).toBe(standard.evidenceDigest);
-  await expect(
-    portableStandardHostRunnerReport({
-      ...report,
-      fixtures: {
-        ...report.fixtures,
-        negative: report.fixtures.negative.map((fixture) => ({
-          ...fixture,
-          errorCode: "policy_denied",
-        })),
-      },
-    }),
-  ).rejects.toThrow(
-    "negative fixture invalid-interfaces returned policy_denied instead of invalid_argument",
-  );
-});
-
-test("portable Form host proves the exact ten-Form 1.0.1 successor matrix", async () => {
-  expect(STANDARD_FORM_HOST_MATRIX).toMatchObject({
-    format: "takosumi.takoform-standard-host-matrix@v1",
-    status: "candidate-only",
-    definitionVersion: "1.0.1",
-    packageVersion: "1.0.1",
-  });
-  expect(STANDARD_FORM_HOST_MATRIX.entries).toHaveLength(10);
-  expect(
-    STANDARD_FORM_HOST_MATRIX.entries.map(({ kind }) => kind).sort(),
-  ).toEqual([...RESOURCE_SHAPE_KINDS].sort());
-
-  const adapter = new DriftableAdapter();
-  const { app, service } = await buildApp(
-    undefined,
-    standardFormHostMatrixRegistry(STANDARD_FORM_HOST_MATRIX),
-    { adapter },
-  );
-  await service.putTargetPool("space_1", "default", {
-    classes: ["standard-host-matrix"],
-    targets: [
-      {
-        name: "standard-host-matrix",
-        type: "test",
-        ref: "standard-host-matrix",
-        priority: 100,
-        implementations: STANDARD_FORM_HOST_MATRIX.entries.map((entry) => ({
-          shape: entry.kind,
-          implementation: `test_${entry.kind.toLowerCase()}`,
-          nativeResourceType: `test.${entry.kind.toLowerCase()}`,
-          providerSource: CLOUDFLARE_PROVIDER,
-          moduleTemplate: "cloudflare-worker-service",
-          moduleImportAddress: "test_resource.this",
-          moduleOutputs: [
-            { name: "id", type: "string" },
-            { name: "name", type: "string" },
-            ...(entry.kind === "SQLDatabase"
-              ? [{ name: "engine" as const, type: "string" as const }]
-              : []),
-          ],
-          interfaces: STANDARD_HOST_INTERFACES[entry.kind],
-        })),
-      },
-    ],
-  });
-
-  const edgeBucket = STANDARD_FORM_HOST_MATRIX.entries.find(
-    ({ kind }) => kind === "ObjectBucket",
-  );
-  if (!edgeBucket) throw new Error("matrix omitted ObjectBucket");
-  const edgeBucketDependency = await reviewedResourceApply(
-    app,
-    "/v1/resources/ObjectBucket/edge-assets",
-    {
-      metadata: { space: "space_1" },
-      form: edgeBucket.identity,
-      spec: { ...edgeBucket.desired, name: "edge-assets" },
-    },
-  );
-  expect(edgeBucketDependency.status).toBe(200);
-
-  const reports = [];
-  for (const entry of STANDARD_FORM_HOST_MATRIX.entries) {
-    adapter.drifted = false;
-    if (entry.kind === "Schedule") {
-      const workflow = STANDARD_FORM_HOST_MATRIX.entries.find(
-        ({ kind }) => kind === "DurableWorkflow",
-      );
-      if (!workflow) throw new Error("matrix omitted DurableWorkflow");
-      const dependency = await reviewedResourceApply(
-        app,
-        `/v1/resources/DurableWorkflow/${workflow.desired.name as string}`,
-        {
-          metadata: { space: "space_1" },
-          form: workflow.identity,
-          spec: workflow.desired,
-        },
-      );
-      expect(dependency.status).toBe(200);
-    }
-
-    const report = await runPortableFormHostConformance({
-      endpoint: "https://host.example.test",
-      space: "space_1",
-      name: entry.desired.name as string,
-      identity: entry.identity,
-      desired: entry.desired,
-      updatedDesired: updatedStandardDesired(entry),
-      positiveFixtureName: "canonical",
-      positivePackageFixtureDigest: entry.desiredDigest,
-      negativeFixtures: [
-        {
-          name: "reject-invalid-semantics",
-          stage: "desired",
-          input: entry.negative,
-          expectedErrorCode: "invalid_argument",
-        },
-      ],
-      negativePackageFixtureDigests: {
-        "reject-invalid-semantics": entry.negativeDigest,
-      },
-      importNativeId: `provider-native-${entry.kind.toLowerCase()}`,
-      expectDrift: true,
-      beforeDriftObserve: () => {
-        adapter.drifted = true;
-      },
-      fetch: ((input: RequestInfo | URL, init?: RequestInit) =>
-        app.request(input.toString(), init)) as typeof fetch,
-    });
-    expect(report.status).toBe("passed");
-    expect(report.identity).toEqual(entry.identity);
-    expect(report.fixtures.positive[0]?.packageFixtureDigest).toBe(
-      entry.desiredDigest,
-    );
-    expect(report.fixtures.negative[0]?.packageFixtureDigest).toBe(
-      entry.negativeDigest,
-    );
-    const standard = await portableStandardHostRunnerReport(report);
-    expect(standard.report.identity).toEqual(entry.identity);
-    expect(standard.report.status).toBe("passed");
-    expect(standard.report.positiveFixtures[0]?.packageFixtureDigest).toBe(
-      entry.desiredDigest,
-    );
-    expect(standard.report.negativeFixtures[0]?.packageFixtureDigest).toBe(
-      entry.negativeDigest,
-    );
-    reports.push(standard.report);
-  }
-
-  expect(reports).toHaveLength(10);
-});
-
-test("exact 1.0.1 runtime descriptors materialize as portable host-owned Interfaces", async () => {
-  const formRegistryStore = await installStandardFormHostMatrix(
-    STANDARD_FORM_HOST_MATRIX,
-  );
-  const { app, operations } = await createTakosumiService({
-    role: "takosumi-api",
-    runtimeEnv: { TAKOSUMI_ENVIRONMENT: "test", TAKOSUMI_DEV_MODE: "1" },
-    formRegistryStore,
-    resourceShapeAdapter: new DriftableAdapter(),
-    resourceShapeSchemaRegistry:
-      LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY,
-    enabledResourceShapeKinds: RESOURCE_SHAPE_KINDS,
-    resourceShapeModuleRegistry: ROUTE_MODULE_REGISTRY,
-    resolveResourceInterfaceWorkspace: async ({ resourceSpaceId }) =>
-      resourceSpaceId === "space_1" ? "workspace_1" : undefined,
-  });
-  const implementations = STANDARD_FORM_HOST_MATRIX.entries.map((entry) => ({
-    shape: entry.kind,
-    implementation: `test_${entry.kind.toLowerCase()}`,
-    nativeResourceType: `test.${entry.kind.toLowerCase()}`,
-    providerSource: CLOUDFLARE_PROVIDER,
-    moduleTemplate: "cloudflare-worker-service",
-    moduleImportAddress: "test_resource.this",
-    moduleOutputs: [
-      { name: "id", type: "string" as const },
-      { name: "name", type: "string" as const },
-      ...(entry.kind === "SQLDatabase"
-        ? [{ name: "engine", type: "string" as const }]
-        : []),
-    ],
-    interfaces: STANDARD_HOST_INTERFACES[entry.kind],
-  }));
-  expect(
-    (
-      await app.request("/v1/target-pools/default", {
-        method: "PUT",
-        headers: JSON_HEADERS,
-        body: JSON.stringify({
-          space: "space_1",
-          spec: {
-            classes: ["standard-host-matrix"],
-            targets: [
-              {
-                name: "standard-host-matrix",
-                type: "test",
-                ref: "standard-host-matrix",
-                priority: 100,
-                implementations,
-              },
-            ],
-          },
-        }),
-      })
-    ).status,
-  ).toBe(200);
-  expect(
-    (
-      await app.request("/v1/space-policies/default", {
-        method: "PUT",
-        headers: JSON_HEADERS,
-        body: JSON.stringify({ space: "space_1", spec: POLICY }),
-      })
-    ).status,
-  ).toBe(200);
-
-  const bucket = STANDARD_FORM_HOST_MATRIX.entries.find(
-    ({ kind }) => kind === "ObjectBucket",
-  );
-  if (!bucket) throw new Error("matrix omitted ObjectBucket");
-  expect(
-    (
-      await reviewedResourceApply(
-        app,
-        "/v1/resources/ObjectBucket/edge-assets",
-        {
-          metadata: { space: "space_1" },
-          form: bucket.identity,
-          spec: { ...bucket.desired, name: "edge-assets" },
-        },
-      )
-    ).status,
-  ).toBe(200);
-
-  let descriptorCount = 0;
-  for (const entry of STANDARD_FORM_HOST_MATRIX.entries) {
-    const name = entry.desired.name as string;
-    const applied = await reviewedResourceApply(
-      app,
-      `/v1/resources/${entry.kind}/${name}`,
-      {
-        metadata: { space: "space_1" },
-        form: entry.identity,
-        spec: entry.desired,
-      },
-    );
-    expect(applied.status).toBe(200);
-    expect((await applied.json()).status.phase).toBe("Ready");
-
-    const resourceId = `tkrn:space_1:${entry.kind}:${name}`;
-    const materialized = await operations.interfaces.list({
-      workspaceId: "workspace_1",
-      ownerKind: "Resource",
-      ownerId: resourceId,
-      includeRetired: false,
-    });
-    const descriptors = entry.interfaceDescriptors ?? [];
-    expect(materialized).toHaveLength(descriptors.length);
-    if (descriptors.length === 0) {
-      expect(entry.kind).toBe("Schedule");
-      continue;
-    }
-    descriptorCount += descriptors.length;
-    expect(JSON.stringify(descriptors)).not.toContain("takosumi.cloud");
-    const descriptor = descriptors[0]!;
-    const iface = materialized[0]!;
-    expect(iface.status.phase).toBe("Resolved");
-    expect(iface.spec).toMatchObject({
-      type: descriptor.name,
-      version: descriptor.version,
-      document: descriptor.document,
-      access: { visibility: "workspace" },
-    });
-    expect(iface.metadata.materializedFrom).toMatchObject({
-      source: "form_descriptor",
-      descriptorName: descriptor.name,
-      descriptorVersion: descriptor.version,
-      formSchemaDigest: entry.identity.formRef.schemaDigest,
-    });
-    expect(iface.status.resolvedInputs).toMatchObject({
-      resource: `${entry.kind}/${name}`,
-      name,
-      ...(entry.kind === "SQLDatabase" ? { engine: "sqlite" } : {}),
-    });
-  }
-  expect(descriptorCount).toBe(9);
-});
-
-test("portable Form host refuses to serialize partial runs as standard admission evidence", async () => {
-  const { app } = await buildApp(undefined, exactObjectBucketFormRegistry());
-  const report = await runPortableFormHostConformance({
-    endpoint: "https://host.example.test",
-    space: "space_1",
-    name: "partial-runner-assets",
-    identity: EXACT_OBJECT_BUCKET_FORM,
-    desired: { name: "partial-runner-assets", interfaces: ["s3_api"] },
-    positiveFixtureName: "basic",
-    negativeFixtures: [
-      {
-        name: "invalid-interfaces",
-        stage: "desired",
-        input: {
-          name: "partial-runner-assets-negative-1",
-          interfaces: [7],
-        },
-        expectedErrorCode: "invalid_argument",
-      },
-    ],
-    fetch: ((input: RequestInfo | URL, init?: RequestInit) =>
-      app.request(input.toString(), init)) as typeof fetch,
-  });
-  await expect(portableStandardHostRunnerReport(report)).rejects.toThrow(
-    "missing update, import-idempotency, drift",
-  );
 });
 
 test("Form availability derives exact principal-safe executable truth", async () => {
@@ -1481,7 +806,7 @@ test("Form availability derives exact principal-safe executable truth", async ()
   const body = (await response.json()) as { forms: Record<string, unknown>[] };
   expect(body.forms).toHaveLength(1);
   expect(body.forms[0]).toMatchObject({
-    identity: EXACT_OBJECT_BUCKET_FORM,
+    form: EXACT_OBJECT_BUCKET_FORM,
     definitionKnown: true,
     installed: true,
     executable: true,
@@ -1511,66 +836,6 @@ test("Form availability derives exact principal-safe executable truth", async ()
   expect(projected.resources.EdgeWorker).toBe(false);
 });
 
-test("required host-namespaced Interface input fails availability and admission before adapter execution", async () => {
-  const adapter = new CountingPreviewAdapter();
-  const registry = exactObjectBucketFormRegistry({
-    interfaceDescriptors: [
-      {
-        name: "storage.object",
-        version: "v1",
-        required: true,
-        inputs: [
-          {
-            name: "session",
-            source: "example.host.session",
-          },
-        ],
-      },
-    ],
-  });
-  const { app } = await buildApp(
-    {
-      resolveActor: () => ({
-        actorAccountId: "acct_owner",
-        workspaceId: "workspace_1",
-        roles: ["owner"],
-        scopes: ["forms:read", "resources:read", "resources:write"],
-        requestId: "req_interface_capability",
-      }),
-    },
-    registry,
-    { adapter },
-  );
-
-  const availability = await app.request("/v1/form-availability?space=space_1");
-  expect(availability.status).toBe(200);
-  expect((await availability.json()).forms[0]).toMatchObject({
-    executable: false,
-    executableReason: "interface_capability_missing",
-    availableToPrincipal: false,
-    availabilityReason: "interface_capability_missing",
-  });
-
-  const preview = await app.request("/v1/resources/preview", {
-    method: "POST",
-    headers: JSON_HEADERS,
-    body: JSON.stringify({
-      kind: "ObjectBucket",
-      metadata: { space: "space_1" },
-      form: EXACT_OBJECT_BUCKET_FORM,
-      spec: { name: "blocked-assets", interfaces: ["s3_api"] },
-    }),
-  });
-  expect(preview.status).toBe(409);
-  expect(await preview.json()).toMatchObject({
-    error: {
-      code: "capability_missing",
-      message: expect.stringContaining("example.host.session"),
-    },
-  });
-  expect(adapter.previewCalls).toBe(0);
-});
-
 test("Form availability fails closed for audience, scope, and unknown exact identity", async () => {
   const { app } = await buildApp(
     {
@@ -1594,23 +859,19 @@ test("Form availability fails closed for audience, scope, and unknown exact iden
 
   const unknown = {
     ...EXACT_OBJECT_BUCKET_FORM,
-    formRef: {
-      ...EXACT_OBJECT_BUCKET_FORM.formRef,
-      schemaDigest: `sha256:${"9".repeat(64)}`,
-    },
+    schemaDigest: `sha256:${"9".repeat(64)}`,
   };
   const query = new URLSearchParams({
     space: "space_1",
-    apiVersion: unknown.formRef.apiVersion,
-    kind: unknown.formRef.kind,
-    definitionVersion: unknown.formRef.definitionVersion,
-    schemaDigest: unknown.formRef.schemaDigest,
+    type: unknown.type,
+    version: unknown.version,
+    schemaDigest: unknown.schemaDigest,
     packageDigest: unknown.packageDigest,
   });
   const missing = await app.request(`/v1/form-availability?${query}`);
   expect(missing.status).toBe(200);
   expect((await missing.json()).forms[0]).toMatchObject({
-    identity: unknown,
+    form: unknown,
     definitionKnown: false,
     installed: false,
     executable: false,
@@ -1657,10 +918,9 @@ test("Form availability fails closed when schema, module, lifecycle, or placemen
   const zeroFormHost = await buildApp(routeOptions);
   const exactQuery = new URLSearchParams({
     space: "space_1",
-    apiVersion: EXACT_OBJECT_BUCKET_FORM.formRef.apiVersion,
-    kind: EXACT_OBJECT_BUCKET_FORM.formRef.kind,
-    definitionVersion: EXACT_OBJECT_BUCKET_FORM.formRef.definitionVersion,
-    schemaDigest: EXACT_OBJECT_BUCKET_FORM.formRef.schemaDigest,
+    type: EXACT_OBJECT_BUCKET_FORM.type,
+    version: EXACT_OBJECT_BUCKET_FORM.version,
+    schemaDigest: EXACT_OBJECT_BUCKET_FORM.schemaDigest,
     packageDigest: EXACT_OBJECT_BUCKET_FORM.packageDigest,
   });
   const zeroFormResponse = await zeroFormHost.app.request(
@@ -1668,7 +928,7 @@ test("Form availability fails closed when schema, module, lifecycle, or placemen
   );
   expect(zeroFormResponse.status).toBe(200);
   expect((await zeroFormResponse.json()).forms[0]).toMatchObject({
-    identity: EXACT_OBJECT_BUCKET_FORM,
+    form: EXACT_OBJECT_BUCKET_FORM,
     definitionKnown: false,
     installed: false,
     executable: false,
@@ -1745,13 +1005,13 @@ test("PUT /v1/resources preserves the caller-declared Resource manager", async (
   const res = await reviewedResourceApply(app, "/v1/resources/KVStore/cache", {
     metadata: {
       space: "space_1",
-      managedBy: "compatibility:example",
+      managedBy: "compatibility:cloudflare-workers",
     },
     spec: { name: "cache", consistency: "eventual" },
   });
   expect(res.status).toBe(200);
   const body = await res.json();
-  expect(body.metadata.managedBy).toBe("compatibility:example");
+  expect(body.metadata.managedBy).toBe("compatibility:cloudflare-workers");
 });
 
 test("Resource API atomically rejects managedBy takeover and wrong-manager delete", async () => {
@@ -1767,7 +1027,7 @@ test("Resource API atomically rejects managedBy takeover and wrong-manager delet
     ...desired,
     metadata: {
       space: "space_1",
-      managedBy: "compat.example.v1",
+      managedBy: "compat.cloudflare.workers.v1",
     },
   });
   expect(takeover.status).toBe(409);
@@ -1776,7 +1036,7 @@ test("Resource API atomically rejects managedBy takeover and wrong-manager delet
   });
 
   const wrongDelete = await app.request(
-    `${path}?space=space_1&managedBy=compat.example.v1`,
+    `${path}?space=space_1&managedBy=compat.cloudflare.workers.v1`,
     { method: "DELETE" },
   );
   expect(wrongDelete.status).toBe(409);
@@ -1805,7 +1065,7 @@ test("trusted Resource authoring surface rejects caller-controlled managedBy spo
     {
       metadata: {
         space: "space_1",
-        managedBy: "compat.example.v1",
+        managedBy: "compat.cloudflare.workers.v1",
       },
       spec: { name: "spoofed-cache", consistency: "eventual" },
     },
@@ -1828,7 +1088,7 @@ test("trusted Resource authoring surface rejects caller-controlled managedBy spo
   );
 
   const spoofedDelete = await app.request(
-    "/v1/resources/KVStore/trusted-cache?space=space_1&managedBy=compat.example.v1",
+    "/v1/resources/KVStore/trusted-cache?space=space_1&managedBy=compat.cloudflare.workers.v1",
     {
       method: "DELETE",
       headers: {
@@ -2821,323 +2081,6 @@ test("bootstrap projects Resource apply and delete lifecycle into Interfaces", a
   ).toBe("Retired");
 });
 
-test("a required portable Interface that cannot resolve leaves the Form-backed Resource Degraded", async () => {
-  const formRegistryStore = new InMemoryFormRegistryStore();
-  const installedAt = "2026-01-01T00:00:00.000Z";
-  await formRegistryStore.installPackage(
-    {
-      packageDigest: EXACT_OBJECT_BUCKET_FORM.packageDigest,
-      artifactRef: "oci://forms.example/object-bucket@sha256:exact",
-      verifierId: "test-verifier",
-      status: "installed",
-      definitionRefs: [EXACT_OBJECT_BUCKET_FORM.formRef],
-      installedAt,
-      installedBy: "test",
-      updatedAt: installedAt,
-    },
-    [
-      {
-        identity: EXACT_OBJECT_BUCKET_FORM,
-        displayName: "Object bucket with required Interface",
-        operations: ["create", "read", "update", "delete", "import", "refresh"],
-        interfaceDescriptors: [
-          {
-            name: "storage.object",
-            version: "1",
-            required: true,
-            document: { title: "Required storage Interface" },
-            inputs: [
-              {
-                name: "missing",
-                source: "output",
-                pointer: "/not_published",
-              },
-            ],
-          },
-        ],
-        installedAt,
-      },
-    ],
-  );
-  await formRegistryStore.createActivation({
-    id: "activation_required_interface",
-    identity: EXACT_OBJECT_BUCKET_FORM,
-    scope: { type: "space", id: "space_1" },
-    audience: { roles: ["owner"] },
-    policy: {},
-    eligibleTargetPoolClasses: ["edge.object-store"],
-    status: "active",
-    revision: 1,
-    createdAt: installedAt,
-    createdBy: "test",
-    updatedAt: installedAt,
-    updatedBy: "test",
-  });
-  const { app, operations } = await createTakosumiService({
-    role: "takosumi-api",
-    runtimeEnv: { TAKOSUMI_ENVIRONMENT: "test", TAKOSUMI_DEV_MODE: "1" },
-    formRegistryStore,
-    resourceShapeAdapter: new StubResourceShapeAdapter(),
-    resourceShapeSchemaRegistry:
-      LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY,
-    enabledResourceShapeKinds: RESOURCE_SHAPE_KINDS,
-    resourceShapeModuleRegistry: ROUTE_MODULE_REGISTRY,
-    resolveResourceInterfaceWorkspace: async ({ resourceSpaceId }) =>
-      resourceSpaceId === "space_1" ? "workspace_1" : undefined,
-  });
-  expect(
-    (
-      await app.request("/v1/target-pools/default", {
-        method: "PUT",
-        headers: JSON_HEADERS,
-        body: JSON.stringify({ space: "space_1", spec: POOL }),
-      })
-    ).status,
-  ).toBe(200);
-  expect(
-    (
-      await app.request("/v1/space-policies/default", {
-        method: "PUT",
-        headers: JSON_HEADERS,
-        body: JSON.stringify({ space: "space_1", spec: POLICY }),
-      })
-    ).status,
-  ).toBe(200);
-
-  const applied = await reviewedResourceApply(
-    app,
-    "/v1/resources/ObjectBucket/required-assets",
-    {
-      metadata: { space: "space_1" },
-      form: EXACT_OBJECT_BUCKET_FORM,
-      spec: { name: "required-assets", interfaces: ["s3_api"] },
-    },
-  );
-  expect(applied.status).toBe(200);
-  const body = await applied.json();
-  expect(body.status.phase).toBe("Degraded");
-  expect(body.status.conditions).toContainEqual(
-    expect.objectContaining({
-      type: "Ready",
-      status: "false",
-      reason: "RequiredInterfaceNotReady",
-    }),
-  );
-
-  const resourceId = "tkrn:space_1:ObjectBucket:required-assets";
-  const materialized = await operations.interfaces.list({
-    workspaceId: "workspace_1",
-    ownerKind: "Resource",
-    ownerId: resourceId,
-    includeRetired: false,
-  });
-  expect(materialized).toHaveLength(1);
-  expect(materialized[0]?.status.phase).toBe("Unknown");
-  expect(materialized[0]?.metadata.materializedFrom).toMatchObject({
-    source: "form_descriptor",
-    descriptorName: "storage.object",
-    descriptorVersion: "1",
-  });
-
-  const portable = await app.request(
-    "/apis/forms.takoform.com/v1alpha1/interfaces?space=space_1",
-  );
-  expect(portable.status).toBe(200);
-  expect((await portable.json()).interfaces).toEqual([]);
-});
-
-test("bootstrap rejects a required portable Interface before backend work when the Resource Workspace bridge is absent", async () => {
-  const formRegistryStore = new InMemoryFormRegistryStore();
-  const installedAt = "2026-01-01T00:00:00.000Z";
-  await formRegistryStore.installPackage(
-    {
-      packageDigest: EXACT_OBJECT_BUCKET_FORM.packageDigest,
-      artifactRef: "oci://forms.example/object-bucket@sha256:exact",
-      verifierId: "test-verifier",
-      status: "installed",
-      definitionRefs: [EXACT_OBJECT_BUCKET_FORM.formRef],
-      installedAt,
-      installedBy: "test",
-      updatedAt: installedAt,
-    },
-    [
-      {
-        identity: EXACT_OBJECT_BUCKET_FORM,
-        displayName: "Object bucket with required Interface",
-        operations: ["create", "read", "update", "delete"],
-        interfaceDescriptors: [
-          {
-            name: "storage.object",
-            version: "v1",
-            required: true,
-            inputs: [{ name: "protocol", source: "literal", value: "https" }],
-          },
-        ],
-        installedAt,
-      },
-    ],
-  );
-  await formRegistryStore.createActivation({
-    id: "activation_required_bridge",
-    identity: EXACT_OBJECT_BUCKET_FORM,
-    scope: { type: "space", id: "space_1" },
-    audience: { roles: ["owner"] },
-    policy: {},
-    eligibleTargetPoolClasses: ["edge.object-store"],
-    status: "active",
-    revision: 1,
-    createdAt: installedAt,
-    createdBy: "test",
-    updatedAt: installedAt,
-    updatedBy: "test",
-  });
-  const adapter = new CountingPreviewAdapter();
-  const { app } = await createTakosumiService({
-    role: "takosumi-api",
-    runtimeEnv: { TAKOSUMI_ENVIRONMENT: "test", TAKOSUMI_DEV_MODE: "1" },
-    formRegistryStore,
-    resourceShapeAdapter: adapter,
-    resourceShapeSchemaRegistry:
-      LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY,
-    enabledResourceShapeKinds: RESOURCE_SHAPE_KINDS,
-    resourceShapeModuleRegistry: ROUTE_MODULE_REGISTRY,
-  });
-  expect(
-    (
-      await app.request("/v1/target-pools/default", {
-        method: "PUT",
-        headers: JSON_HEADERS,
-        body: JSON.stringify({ space: "space_1", spec: POOL }),
-      })
-    ).status,
-  ).toBe(200);
-  expect(
-    (
-      await app.request("/v1/space-policies/default", {
-        method: "PUT",
-        headers: JSON_HEADERS,
-        body: JSON.stringify({ space: "space_1", spec: POLICY }),
-      })
-    ).status,
-  ).toBe(200);
-
-  const preview = await app.request("/v1/resources/preview", {
-    method: "POST",
-    headers: JSON_HEADERS,
-    body: JSON.stringify({
-      kind: "ObjectBucket",
-      metadata: { space: "space_1" },
-      form: EXACT_OBJECT_BUCKET_FORM,
-      spec: { name: "bridge-less", interfaces: ["s3_api"] },
-    }),
-  });
-  expect(preview.status).toBe(409);
-  expect(await preview.json()).toMatchObject({
-    error: {
-      code: "capability_missing",
-      message: expect.stringContaining("Resource-to-Workspace bridge"),
-    },
-  });
-  expect(adapter.previewCalls).toBe(0);
-});
-
-test("bootstrap rejects a required resource_uri descriptor before backend work when its host resolver is absent", async () => {
-  const formRegistryStore = new InMemoryFormRegistryStore();
-  const installedAt = "2026-01-01T00:00:00.000Z";
-  await formRegistryStore.installPackage(
-    {
-      packageDigest: EXACT_OBJECT_BUCKET_FORM.packageDigest,
-      artifactRef: "oci://forms.example/object-bucket@sha256:exact",
-      verifierId: "test-verifier",
-      status: "installed",
-      definitionRefs: [EXACT_OBJECT_BUCKET_FORM.formRef],
-      installedAt,
-      installedBy: "test",
-      updatedAt: installedAt,
-    },
-    [
-      {
-        identity: EXACT_OBJECT_BUCKET_FORM,
-        displayName: "Object bucket with canonical resource URI",
-        operations: ["create", "read", "update", "delete"],
-        interfaceDescriptors: [
-          {
-            name: "data.indexed",
-            version: "1",
-            required: true,
-            resourceUriInput: "resource_uri",
-            inputs: [{ name: "resource_uri", source: "resource_uri" }],
-          },
-        ],
-        installedAt,
-      },
-    ],
-  );
-  await formRegistryStore.createActivation({
-    id: "activation_required_resource_uri",
-    identity: EXACT_OBJECT_BUCKET_FORM,
-    scope: { type: "space", id: "space_1" },
-    audience: { roles: ["owner"] },
-    policy: {},
-    eligibleTargetPoolClasses: ["edge.object-store"],
-    status: "active",
-    revision: 1,
-    createdAt: installedAt,
-    createdBy: "test",
-    updatedAt: installedAt,
-    updatedBy: "test",
-  });
-  const adapter = new CountingPreviewAdapter();
-  const { app } = await createTakosumiService({
-    role: "takosumi-api",
-    runtimeEnv: { TAKOSUMI_ENVIRONMENT: "test", TAKOSUMI_DEV_MODE: "1" },
-    formRegistryStore,
-    resourceShapeAdapter: adapter,
-    resourceShapeSchemaRegistry:
-      LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY,
-    enabledResourceShapeKinds: RESOURCE_SHAPE_KINDS,
-    resourceShapeModuleRegistry: ROUTE_MODULE_REGISTRY,
-    resolveResourceInterfaceWorkspace: async () => "workspace_1",
-  });
-  expect(
-    (
-      await app.request("/v1/target-pools/default", {
-        method: "PUT",
-        headers: JSON_HEADERS,
-        body: JSON.stringify({ space: "space_1", spec: POOL }),
-      })
-    ).status,
-  ).toBe(200);
-  expect(
-    (
-      await app.request("/v1/space-policies/default", {
-        method: "PUT",
-        headers: JSON_HEADERS,
-        body: JSON.stringify({ space: "space_1", spec: POLICY }),
-      })
-    ).status,
-  ).toBe(200);
-
-  const preview = await app.request("/v1/resources/preview", {
-    method: "POST",
-    headers: JSON_HEADERS,
-    body: JSON.stringify({
-      kind: "ObjectBucket",
-      metadata: { space: "space_1" },
-      form: EXACT_OBJECT_BUCKET_FORM,
-      spec: { name: "missing-uri", interfaces: ["s3_api"] },
-    }),
-  });
-  expect(preview.status).toBe(409);
-  expect(await preview.json()).toMatchObject({
-    error: {
-      code: "capability_missing",
-      message: expect.stringContaining("resource URI resolver"),
-    },
-  });
-  expect(adapter.previewCalls).toBe(0);
-});
-
 test("runtime discovery repairs a missed Resource lifecycle observer from the durable ledger", async () => {
   const baseInterfaceStores = createInMemoryInterfaceStores();
   let rejectLifecycleWrites = false;
@@ -3593,6 +2536,100 @@ test("DELETE /v1/resources/:kind/:name allows force delete through explicit brea
   expect(missing.status).toBe(404);
 });
 
+test("POST /v1/resources/:kind/:name/recover-apply requires explicit operator authorization", async () => {
+  const { app } = await buildApp(
+    undefined,
+    undefined,
+    { adapter: new UnknownOnceApplyAdapter() },
+  );
+  const desired = {
+    kind: "Queue",
+    metadata: { space: "space_1", name: "delivery" },
+    spec: { name: "delivery", delivery: { maxRetries: 5 } },
+  };
+  const preview = await app.request("/v1/resources/preview", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(desired),
+  });
+  expect(preview.status).toBe(200);
+  const evidence = (await preview.json()) as { planDigest: string };
+  const body = {
+    ...desired,
+    review: { planDigest: evidence.planDigest },
+  };
+  const pending = await app.request("/v1/resources/Queue/delivery", {
+    method: "PUT",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(body),
+  });
+  expect((await pending.json()).error.code).toBe(
+    "deployment_finalize_pending",
+  );
+
+  const rejected = await app.request(
+    "/v1/resources/Queue/delivery/recover-apply",
+    {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify(body),
+    },
+  );
+  expect(rejected.status).toBe(403);
+  expect((await rejected.json()).error.message).toContain(
+    "apply recovery requires operator break-glass authorization",
+  );
+});
+
+test("POST /v1/resources/:kind/:name/recover-apply continues the exact Applying request", async () => {
+  const { app } = await buildApp(
+    {
+      authorizeResourceShapeApplyRecovery: ({ actor, kind, name, space }) =>
+        actor.actorAccountId === "self-host" &&
+        space === "space_1" &&
+        kind === "Queue" &&
+        name === "delivery",
+    },
+    undefined,
+    { adapter: new UnknownOnceApplyAdapter() },
+  );
+  const desired = {
+    kind: "Queue",
+    metadata: { space: "space_1", name: "delivery" },
+    spec: { name: "delivery", delivery: { maxRetries: 5 } },
+  };
+  const preview = await app.request("/v1/resources/preview", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(desired),
+  });
+  expect(preview.status).toBe(200);
+  const evidence = (await preview.json()) as { planDigest: string };
+  const body = {
+    ...desired,
+    review: { planDigest: evidence.planDigest },
+  };
+  const pending = await app.request("/v1/resources/Queue/delivery", {
+    method: "PUT",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(body),
+  });
+  expect((await pending.json()).error.code).toBe(
+    "deployment_finalize_pending",
+  );
+
+  const recovered = await app.request(
+    "/v1/resources/Queue/delivery/recover-apply",
+    {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify(body),
+    },
+  );
+  expect(recovered.status).toBe(200);
+  expect((await recovered.json()).status.phase).toBe("Ready");
+});
+
 test("POST /v1/resources/preview resolves without persisting", async () => {
   const { app } = await buildApp();
   const res = await app.request("/v1/resources/preview", {
@@ -3747,4 +2784,15 @@ test("GET /v1/capabilities advertises enabled Resource Shapes", async () => {
     "StatefulActorNamespace",
     "VectorIndex",
   ]);
+});
+
+test("takoformHost: false unmounts the portable surface like a disabled compat profile", async () => {
+  const { app } = await buildApp(
+    { takoformHost: false },
+    exactObjectBucketFormRegistry(),
+  );
+  const discovery = await app.request("/.well-known/takoform");
+  expect(discovery.status).toBe(404);
+  const forms = await app.request("/takoform/v0/forms?workspace=space_1");
+  expect(forms.status).toBe(404);
 });

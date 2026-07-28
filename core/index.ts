@@ -220,34 +220,71 @@ function fatalStartupError(runtime: RuntimeAdapter, error: unknown): never {
   throw error;
 }
 
+export type DatabaseBootMigrationMode = "verify" | "apply";
+
+export class DatabaseBootMigrationConfigurationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "DatabaseBootMigrationConfigurationError";
+  }
+}
+
 /**
- * Phase 11A init hook: optionally apply DB migrations at boot.
+ * Resolve the boot policy without touching the database.
  *
- * Default behavior:
- *   - production / staging: auto-apply (TAKOSUMI_DB_AUTO_MIGRATE defaults to true)
- *   - local / development:  skip (TAKOSUMI_DB_AUTO_MIGRATE defaults to false)
+ * Production and staging are verify-only: schema changes belong to the
+ * explicit predeploy migration job. Local/development may opt into convenient
+ * boot-time apply with `TAKOSUMI_DB_AUTO_MIGRATE=true`; otherwise a configured
+ * database is still verified read-only before the service starts.
+ */
+export function resolveDatabaseBootMigrationMode(
+  env: Record<string, string | undefined>,
+): DatabaseBootMigrationMode {
+  const environment = (
+    env.TAKOSUMI_ENVIRONMENT ??
+    env.NODE_ENV ??
+    env.ENVIRONMENT ??
+    "local"
+  ).toLowerCase();
+  const explicit = env.TAKOSUMI_DB_AUTO_MIGRATE?.toLowerCase();
+  if (
+    explicit !== undefined &&
+    explicit !== "true" &&
+    explicit !== "false"
+  ) {
+    throw new DatabaseBootMigrationConfigurationError(
+      "TAKOSUMI_DB_AUTO_MIGRATE must be true or false",
+    );
+  }
+  const productionLike =
+    environment === "production" || environment === "staging";
+  if (productionLike && explicit === "true") {
+    throw new DatabaseBootMigrationConfigurationError(
+      "boot-time database migration is forbidden in production/staging; run the explicit predeploy migration job",
+    );
+  }
+  return explicit === "true" ? "apply" : "verify";
+}
+
+/**
+ * Phase 11A init hook: verify the configured Postgres schema before serving.
  *
- * Opt-out: TAKOSUMI_DB_AUTO_MIGRATE=false (any env)
- * Opt-in:  TAKOSUMI_DB_AUTO_MIGRATE=true  (local)
- *
- * Failures are logged but do not crash boot, so a misconfigured DATABASE_URL
- * does not stop the API from starting up in degraded mode (deploys gated by
- * health check). For deterministic apply, prefer `bun run db:migrate`.
+ * The default and production-safe behavior is read-only verification. Pending,
+ * unknown, or checksum-mismatched migrations fail startup. Only an explicit
+ * local/development opt-in may apply migrations at boot.
  */
 async function maybeApplyDatabaseMigrations(
   env: Record<string, string | undefined>,
 ): Promise<void> {
+  const mode = resolveDatabaseBootMigrationMode(env);
   const environment = (
     env.TAKOSUMI_ENVIRONMENT ??
     env.NODE_ENV ??
+    env.ENVIRONMENT ??
     "local"
   ).toLowerCase();
-  const isManaged = environment === "production" || environment === "staging";
-  const explicit = env.TAKOSUMI_DB_AUTO_MIGRATE?.toLowerCase();
-  const shouldRun =
-    explicit === "true" ? true : explicit === "false" ? false : isManaged;
-  if (!shouldRun) return;
-
+  const productionLike =
+    environment === "production" || environment === "staging";
   const databaseUrl =
     env.TAKOSUMI_DATABASE_URL ??
     env.DATABASE_URL ??
@@ -256,21 +293,27 @@ async function maybeApplyDatabaseMigrations(
       : undefined) ??
     (environment === "staging" ? env.TAKOSUMI_STAGING_DATABASE_URL : undefined);
   if (!databaseUrl) {
-    log.warn("service.boot.db_migrations_skipped_no_url");
+    if (productionLike || mode === "apply") {
+      throw new DatabaseBootMigrationConfigurationError(
+        "database schema verification requires a configured database URL",
+      );
+    }
+    log.info("service.boot.db_schema_verification_skipped_no_url");
     return;
   }
 
   const client = await tryCreatePostgresClient(databaseUrl);
-  if (!client) return;
+  if (!client) {
+    throw new DatabaseBootMigrationConfigurationError(
+      "database schema verification could not create a Postgres client",
+    );
+  }
   try {
     const runner = new StorageMigrationRunner(client.client);
-    const result = await runner.applyPending();
-    if (result.appliedNow.length === 0) {
-      log.info("service.boot.db_migrations_up_to_date", {
+    if (mode === "apply") {
+      const result = await runner.applyPending();
+      log.info("service.boot.db_migrations_applied_for_development", {
         applied: result.applied.length,
-      });
-    } else {
-      log.info("service.boot.db_migrations_applied", {
         appliedNow: result.appliedNow.length,
         migrations: result.appliedNow.map((entry) => ({
           id: entry.migration.id,
@@ -278,14 +321,24 @@ async function maybeApplyDatabaseMigrations(
           domain: entry.migration.domain,
         })),
       });
+    } else {
+      const result = await runner.verifyCurrent();
+      log.info("service.boot.db_schema_verified", {
+        applied: result.applied.length,
+      });
     }
   } catch (error) {
-    log.error("service.boot.db_migrations_failed", {
+    log.error("service.boot.db_schema_verification_failed", {
       message: (error as Error).message,
       stack: (error as Error).stack,
     });
+    throw error;
   } finally {
-    await client.close().catch(() => {});
+    await client.close().catch((error) => {
+      log.warn("service.boot.db_migration_client_close_failed", {
+        message: (error as Error).message,
+      });
+    });
   }
 }
 

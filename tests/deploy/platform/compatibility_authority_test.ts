@@ -36,6 +36,7 @@ test("control-plane compatibility handlers receive only canonical Resource and r
   const response = await handlePlatformExtensionRouteRequest(
     new Request("https://operator.example/compat/example/v1/buckets", {
       method: "POST",
+      headers: { origin: "https://operator.example" },
     }),
     {
       EXAMPLE_COMPAT: {
@@ -81,6 +82,7 @@ test("control-plane compatibility handlers receive only canonical Resource and r
       authKind: "session",
       subject: "account_example",
       workspaceId: "space_example",
+      workspaceRole: "member",
     }),
     async (input) =>
       await createPlatformCompatibilityAuthority(input, {
@@ -113,6 +115,7 @@ test("route Interface compatibility port rejects a different Workspace before op
       authKind: "session",
       subject: "account_example",
       workspaceId: "space_example",
+      workspaceRole: "member",
     },
   });
 
@@ -137,6 +140,7 @@ test("route Interface compatibility mutations reject read-only personal access s
       authKind: "personal-access-token",
       subject: "account_example",
       workspaceId: "space_example",
+      workspaceRole: "viewer",
       scopes: ["read"],
     },
   });
@@ -168,6 +172,7 @@ test("data-plane compatibility resolver rejects non-Ready evidence", async () =>
         authKind: "session",
         subject: "account_example",
         workspaceId: "space_example",
+        workspaceRole: "viewer",
       },
     },
     {

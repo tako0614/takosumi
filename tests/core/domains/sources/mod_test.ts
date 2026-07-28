@@ -392,6 +392,45 @@ test("listAutoSyncSources returns only active autoSync sources, capped", async (
   expect((await service.listAutoSyncSources(0)).length).toBe(0);
 });
 
+test("listAutoSyncSourcesPage stays bounded while advancing across sparse rows", async () => {
+  const { store, service } = makeService();
+  const seed = async (
+    id: string,
+    workspaceId: string,
+    status: StoredSource["status"],
+    autoSync: boolean,
+  ) => {
+    await store.putSource({
+      id,
+      workspaceId,
+      name: id,
+      url: "https://github.com/a/b",
+      defaultRef: "main",
+      defaultPath: ".",
+      status,
+      createdAt: `2026-06-06T00:00:00.00${id.at(-1)}Z`,
+      updatedAt: "2026-06-06T00:00:00.000Z",
+      hookSecretHash: "deadbeef",
+      autoSync,
+    });
+  };
+  await seed("src_a1", "workspace_1", "active", false);
+  await seed("src_a2", "workspace_1", "active", true);
+  await seed("src_b3", "workspace_2", "disabled", true);
+  await seed("src_b4", "workspace_2", "active", true);
+
+  const first = await service.listAutoSyncSourcesPage({ limit: 2 });
+  const second = await service.listAutoSyncSourcesPage({
+    limit: 2,
+    cursor: first.nextCursor,
+  });
+
+  expect(first.items.map((source) => source.id)).toEqual(["src_a2"]);
+  expect(first.nextCursor).toBeDefined();
+  expect(second.items.map((source) => source.id)).toEqual(["src_b4"]);
+  expect(second.nextCursor).toBeUndefined();
+});
+
 test("createCompatibilityCheck preserves the immutable source instead of rewriting HCL", async () => {
   const { store, service } = makeService({
     readCapsuleSourceFiles: async () => [

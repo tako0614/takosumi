@@ -16,6 +16,7 @@ import type {
   OpenTofuRestoreJob,
   OpenTofuRestoreResult,
   OpenTofuRunner,
+  RunExecutionControl,
   OpenTofuSourceSyncJob,
   OpenTofuSourceSyncResult,
   OpenTofuStableSourceTagResolutionJob,
@@ -68,8 +69,13 @@ export class CloudflareContainerOpenTofuRunner
     } = {},
   ) {}
 
-  async plan(job: OpenTofuPlanJob): Promise<OpenTofuPlanResult> {
-    const result = await this.#runContainer("plan", job.planRun.id, job);
+  async plan(
+    job: OpenTofuPlanJob,
+    control?: RunExecutionControl,
+  ): Promise<OpenTofuPlanResult> {
+    const result = await this.#runContainer("plan", job.planRun.id, job, {
+      signal: control?.signal,
+    });
     const planDigest =
       stringFromRecord(result, "planDigest") ??
       (await digestJson({
@@ -124,11 +130,15 @@ export class CloudflareContainerOpenTofuRunner
     };
   }
 
-  async apply(job: OpenTofuApplyJob): Promise<OpenTofuApplyResult> {
+  async apply(
+    job: OpenTofuApplyJob,
+    control?: RunExecutionControl,
+  ): Promise<OpenTofuApplyResult> {
     const result = await this.#runContainer(
       "apply",
       runnerRunIdFromPlanArtifact(job.planArtifact) ?? job.planRun.id,
       job,
+      { signal: control?.signal },
     );
     // The DO echoes the persisted state digest and opaque raw-output ref. Thread
     // both onto the result so the controller
@@ -159,11 +169,15 @@ export class CloudflareContainerOpenTofuRunner
     };
   }
 
-  async destroy(job: OpenTofuDestroyJob): Promise<OpenTofuDestroyResult> {
+  async destroy(
+    job: OpenTofuDestroyJob,
+    control?: RunExecutionControl,
+  ): Promise<OpenTofuDestroyResult> {
     const result = await this.#runContainer(
       "destroy",
       runnerRunIdFromPlanArtifact(job.planArtifact) ?? job.planRun.id,
       job,
+      { signal: control?.signal },
     );
     return {
       ...(providerInstallationFromContainerResult(result)
@@ -196,7 +210,10 @@ export class CloudflareContainerOpenTofuRunner
     };
   }
 
-  async release(job: ReleaseCommandRunJob): Promise<ReleaseCommandRunResult> {
+  async release(
+    job: ReleaseCommandRunJob,
+    control?: RunExecutionControl,
+  ): Promise<ReleaseCommandRunResult> {
     const result = await this.#runContainer("release", job.runId, {
       release: {
         commands: job.commands.map((command) => ({
@@ -225,7 +242,7 @@ export class CloudflareContainerOpenTofuRunner
         capsuleId: job.capsuleId,
         stateVersionId: job.stateVersionId,
       },
-    });
+    }, { signal: control?.signal });
     const status = stringFromRecord(result, "status");
     if (status !== "succeeded") {
       throw new Error(
@@ -439,14 +456,28 @@ export class CloudflareContainerOpenTofuRunner
     action: ContainerRunnerAction,
     runId: string,
     request: unknown,
-    options: { readonly timeoutMs?: number } = {},
+    options: {
+      readonly timeoutMs?: number;
+      readonly signal?: AbortSignal;
+    } = {},
   ): Promise<Record<string, unknown>> {
     if (!this.env.RUNNER) {
       throw new Error("RUNNER binding is not configured");
     }
+    if (options.signal?.aborted) {
+      throw abortReason(
+        options.signal,
+        `OpenTofu runner ${action} run ${runId} was aborted before dispatch`,
+      );
+    }
     const id = this.env.RUNNER.idFromName(runId);
     const timeoutMs = positiveTimeoutMs(options.timeoutMs);
-    const controller = timeoutMs ? new AbortController() : undefined;
+    const controller =
+      timeoutMs || options.signal ? new AbortController() : undefined;
+    const abortFromCaller = (): void => {
+      controller?.abort(options.signal?.reason);
+    };
+    options.signal?.addEventListener("abort", abortFromCaller, { once: true });
     let timeout: ReturnType<typeof setTimeout> | undefined;
     if (controller && timeoutMs) {
       timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -505,6 +536,12 @@ export class CloudflareContainerOpenTofuRunner
           }
           return payload;
         } catch (error) {
+          if (options.signal?.aborted) {
+            throw abortReason(
+              options.signal,
+              `OpenTofu runner ${action} run ${runId} was aborted`,
+            );
+          }
           if (controller?.signal.aborted && timeoutMs) {
             throw new Error(
               `OpenTofu runner ${action} run ${runId} exceeded ${timeoutMs}ms timeout`,
@@ -523,6 +560,7 @@ export class CloudflareContainerOpenTofuRunner
       );
     } finally {
       if (timeout) clearTimeout(timeout);
+      options.signal?.removeEventListener("abort", abortFromCaller);
       await this.#recordActiveRuns(action, -1);
     }
   }
@@ -576,6 +614,12 @@ async function abortableSleep(
     };
     signal?.addEventListener("abort", onAbort, { once: true });
   });
+}
+
+function abortReason(signal: AbortSignal, fallback: string): Error {
+  return signal.reason instanceof Error
+    ? signal.reason
+    : new DOMException(fallback, "AbortError");
 }
 
 function runnerCapacityRetryAttempts(env: CloudflareWorkerEnv): number {

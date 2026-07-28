@@ -164,6 +164,45 @@ test("d1 commitRunState writes the unit atomically and rolls back a guard confli
   );
 });
 
+test("d1 atomic commits reject a batchless binding before database access", async () => {
+  const operations: readonly {
+    readonly name:
+      | "commitRunState"
+      | "commitResourceRun"
+      | "commitRestoredState";
+    readonly invoke: (
+      store: CloudflareD1OpenTofuControlStore,
+    ) => Promise<unknown>;
+  }[] = [
+    {
+      name: "commitRunState",
+      invoke: async (store) => await store.commitRunState(undefined as never),
+    },
+    {
+      name: "commitResourceRun",
+      invoke: async (store) =>
+        await store.commitResourceRun(undefined as never),
+    },
+    {
+      name: "commitRestoredState",
+      invoke: async (store) =>
+        await store.commitRestoredState(undefined as never),
+    },
+  ];
+
+  for (const operation of operations) {
+    const batchless = new BatchlessD1();
+    const store = new CloudflareD1OpenTofuControlStore(
+      batchless as unknown as D1Database,
+    );
+
+    await expect(operation.invoke(store)).rejects.toThrow(
+      `D1 ${operation.name} requires atomic batch support`,
+    );
+    expect(batchless.prepareCalls).toBe(0);
+  }
+});
+
 test("d1 commitRunState rolls back when the apply lease changes after the pre-read", async () => {
   const backing = new SqliteFakeD1();
   const store = new CloudflareD1OpenTofuControlStore(
@@ -354,6 +393,15 @@ class LeaseChangingD1 implements D1Database {
       throw new Error("wrapped D1 binding does not support batch");
     }
     return this.inner.batch<T>(statements);
+  }
+}
+
+class BatchlessD1 {
+  prepareCalls = 0;
+
+  prepare(_query: string): never {
+    this.prepareCalls += 1;
+    throw new Error("batchless D1 binding must not be accessed");
   }
 }
 

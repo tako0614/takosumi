@@ -1,8 +1,8 @@
 /**
  * Takosumi Capsule Store (TCS) read client — the small open read spec a store
  * node exposes (GET /tcs/v1/listings etc.). The store is a SEPARATE product
- * (`takosumi-store`); this dashboard cannot import it, so the wire types are
- * RE-DECLARED here. Structurally compatible with takosumi-store/spec.
+ * (`takosumi-store`). This repository carries its own consumer implementation
+ * of the open wire contract so standalone checkouts remain buildable.
  *
  * Scoped to one server base url; aggregation across many servers lives in
  * tcs-aggregate.ts. Reads are unauthenticated and cross-origin (the store sends
@@ -10,6 +10,10 @@
  */
 
 import type { GitAddress } from "takosumi-contract";
+import {
+  parseTcsListingSource,
+  tcsListingSourceIdentity,
+} from "./tcs-listing-source";
 
 export interface TcsLocalizedText {
   readonly ja: string;
@@ -17,12 +21,10 @@ export interface TcsLocalizedText {
 }
 
 /**
- * Store discovery points at the same canonical Git coordinate vocabulary as a
- * Takosumi Source. A Store may offer `ref` as a display hint, but install/run
- * code must require the user or a reviewed plan to select the effective ref.
+ * Store discovery is adapted to Takosumi's local `url` field only after the
+ * Store-owned `{ git, path }` wire tuple has passed its runtime parser.
  */
-export type TcsListingSource = Pick<GitAddress, "url" | "path"> &
-  Partial<Pick<GitAddress, "ref">>;
+export type TcsListingSource = Pick<GitAddress, "url" | "path">;
 
 /** Operator-defined presentation tokens; neither field grants execution authority. */
 export type TcsListingKind = string;
@@ -171,86 +173,14 @@ export function sanitizeTcsListing(listing: TcsListing): TcsListing {
   } as unknown as TcsListing;
 }
 
-function sanitizeTcsListingSource(value: unknown): TcsListingSource {
-  if (!isRecord(value)) throw new Error("listing source must be an object");
-  // Input-only migration for pre-v1 TCS nodes. `git` is normalized to the
-  // canonical `url` field only when `url` is absent; it is never returned or
-  // allowed to coexist with the canonical field.
-  const allowedKeys = new Set(["url", "git", "ref", "path"]);
-  const unexpected = Object.keys(value).filter((key) => !allowedKeys.has(key));
-  if (unexpected.length > 0) {
+export function sanitizeTcsListingSource(value: unknown): TcsListingSource {
+  const source = parseTcsListingSource(value);
+  if (!source) {
     throw new Error(
-      `listing source has unsupported fields: ${unexpected.join(", ")}`,
+      "listing source must be the canonical TCS { git, path } tuple",
     );
   }
-  const canonicalUrl = text(value.url);
-  const legacyGit = text(value.git);
-  const hasCanonicalUrl = value.url !== undefined;
-  const hasLegacyGit = value.git !== undefined;
-  if (hasCanonicalUrl && hasLegacyGit) {
-    throw new Error("listing source must not declare both url and legacy git");
-  }
-  if (hasCanonicalUrl && !canonicalUrl) {
-    throw new Error("listing source url must be a non-empty string");
-  }
-  if (hasLegacyGit && !legacyGit) {
-    throw new Error("listing source legacy git must be a non-empty string");
-  }
-  const url = safeListingGitUrl(hasCanonicalUrl ? canonicalUrl : legacyGit);
-  const path = safeListingSourcePath(value.path);
-  const ref = value.ref === undefined ? undefined : safeListingRef(value.ref);
-  if (!url || !path) {
-    throw new Error(
-      "listing source requires a credential-free HTTPS url and repo-relative path",
-    );
-  }
-  if (value.ref !== undefined && !ref)
-    throw new Error("listing source ref is unsafe");
-  return { url, ...(ref ? { ref } : {}), path };
-}
-
-function safeListingGitUrl(value: string | undefined): string | undefined {
-  if (!value || /[\0\r\n]/u.test(value)) return undefined;
-  try {
-    const url = new URL(value);
-    if (
-      url.protocol !== "https:" ||
-      !url.hostname ||
-      url.username ||
-      url.password ||
-      url.search ||
-      url.hash
-    ) {
-      return undefined;
-    }
-    return value;
-  } catch {
-    return undefined;
-  }
-}
-
-function safeListingSourcePath(value: unknown): string | undefined {
-  const raw = text(value);
-  if (
-    !raw ||
-    raw.startsWith("/") ||
-    raw.includes("\\") ||
-    /[\0\r\n]/u.test(raw)
-  ) {
-    return undefined;
-  }
-  const segments = raw.replace(/\/+$/u, "").split("/");
-  if (segments.some((segment) => segment === ".." || segment === "")) {
-    return undefined;
-  }
-  return segments.filter((segment) => segment !== ".").join("/") || ".";
-}
-
-function safeListingRef(value: unknown): string | undefined {
-  const ref = text(value);
-  return ref && !ref.startsWith("-") && !/[\0\r\n]/u.test(ref)
-    ? ref
-    : undefined;
+  return { url: source.git, path: source.path };
 }
 
 function sanitizeTcsListingsPage(page: TcsListingsPage): TcsListingsPage {
@@ -328,24 +258,10 @@ export function mergeTcsListingRepoMetadata(
 
 /** Normalized identity tuple used for cross-server de-duplication. */
 export function tcsListingIdentity(source: TcsListingSource): string {
-  let host = "";
-  let rest = "";
-  try {
-    const url = new URL(source.url);
-    host = url.host.toLowerCase();
-    rest = url.pathname.replace(/\/+$/, "").replace(/\.git$/i, "");
-  } catch {
-    host = source.url.trim().toLowerCase();
-    rest = "";
-  }
-  const path = normalizeTcsSourcePath(source.path);
-  return `${host}${rest}#${path}`;
-}
-
-export function normalizeTcsSourcePath(path: string): string {
-  const normalized = path
-    .trim()
-    .replace(/^\.?\/+/, "")
-    .replace(/\/+$/, "");
-  return normalized === "." ? "" : normalized;
+  const identity = tcsListingSourceIdentity({
+    git: source.url,
+    path: source.path,
+  });
+  if (!identity) throw new Error("invalid canonical TCS listing source");
+  return identity;
 }

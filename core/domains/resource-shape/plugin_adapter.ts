@@ -9,6 +9,7 @@ import type {
   AdapterRefreshResult,
   ResourceAdapter,
 } from "./adapter.ts";
+import { ResourceAdapterApplyError } from "./adapter.ts";
 import type {
   JsonObject,
   NativeResourceRef,
@@ -241,9 +242,15 @@ export class PluginResourceShapeAdapter implements ResourceAdapter {
       ),
     );
     if (!response.ok) {
-      throw new Error(
-        `Resource Shape adapter plugin "${pluginId}" ${action} failed with ${response.status}: ${await response.text()}`,
-      );
+      const body = await response.text();
+      const message = `Resource Shape adapter plugin "${pluginId}" ${action} failed with ${response.status}: ${body}`;
+      if (action === "apply") {
+        const mutationOutcome = pluginMutationOutcome(body);
+        if (mutationOutcome) {
+          throw new ResourceAdapterApplyError(message, { mutationOutcome });
+        }
+      }
+      throw new Error(message);
     }
     if (action === "delete" || response.status === 204) return undefined;
     const body = (await response.json()) as unknown;
@@ -253,6 +260,21 @@ export class PluginResourceShapeAdapter implements ResourceAdapter {
       );
     }
     return body;
+  }
+}
+
+function pluginMutationOutcome(
+  body: string,
+): "none" | "unknown" | undefined {
+  try {
+    const parsed = JSON.parse(body) as unknown;
+    if (!isRecord(parsed)) return undefined;
+    return parsed.mutationOutcome === "none" ||
+      parsed.mutationOutcome === "unknown"
+      ? parsed.mutationOutcome
+      : undefined;
+  } catch {
+    return undefined;
   }
 }
 

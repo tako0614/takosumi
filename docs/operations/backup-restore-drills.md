@@ -4,17 +4,54 @@
 > cadence、isolated restore、production simulation、証跡、失敗時の
 > escalation 基準。
 
-Takosumi の production readiness gate はまず **control/state backup** を対象にします。Capsule service-data backup は
-provider snapshot adapter または Capsule 側の export artifact が実装された Capsule だけで有効になる追加 layer です。この
-ページは Takosumi operator がその backup / restore をどの頻度で検証し、どの evidence を残すかを定義します。
-physical database、object store、key layout、region topology は selected persistence
-adapter が所有し、Core の backup contract には入りません。
+## Current OSS status: export only
 
-## Scope
+現在の `GET/POST /api/v1/workspaces/:workspaceId/backups` と Capsule backup
+route は、選択された control-ledger record の **部分的な export** です。
+完全な Workspace snapshot ではなく、OSS にこの形式を読む importer はありません。
+そのため、次の surface は公開・mount しません。
 
-**Backup/Restore layers**:
+- `/api/v1/workspaces/:workspaceId/backups/:backupId/restores`
+- `/internal/v1/workspaces/:workspaceId/backups/:backupId/restores`
+- dashboard の restore action
 
-1. **Control backup** (Takosumi control plane 所有): Workspace、Project、Capsule、Source、
+`--backup-restore-rehearsal` も、dry-run を含め fail-closed で拒否します。
+state archive や artifact manifest が存在するだけで restore evidence を
+`passed` にしてはいけません。
+
+現在の export が含むのは、Workspace、Source / SourceSnapshot、Workspace-owned
+InstallConfig、Capsule、ProviderBindingSet、dependency / OutputShare、
+StateVersion metadata、Output projection、RunGroup、Activity tail、public
+ProviderConnection metadata、security / usage / prior-backup ledger、および
+redacted Resource exact-Form pinです。
+
+現在の export は少なくとも次を完全には含みません。
+
+- Project record と個別 Run ledger
+- Resource desired state / status / output、ResolutionLock の実体
+- Interface / InterfaceBinding
+- Accounts user / session / OIDC ledger
+- Secret envelope、Source credential、raw Output artifact
+- service が所有する messages / files / posts 等の実 bytes
+
+`state.tar.zst.enc` は現在の StateVersion が参照する sealed object bytes の
+copy ですが、restore path はこれを読まず、manifest digest / backup id /
+StateVersion id を一体として検証する importer もありません。
+`service-data.tar.zst.enc` は export/provider pointer の manifest であり、
+generic service-data importer ではありません。`missing` / `unsupported` entry
+を持つ export も作成されます。
+
+したがってこの export を production backup、restore point、DR readiness
+evidence と呼んではいけません。production recovery は selected persistence
+adapter が所有する database / object-store backup と、別途検証済みの
+operator restore procedure を使います。以下はその operator procedure が
+満たすべき gate であり、現在の OSS control export の実装済み機能ではありません。
+
+## Target readiness scope
+
+operator-owned **Backup/Restore layers**:
+
+1. **Control backup** (selected persistence adapter 所有): Workspace、Project、Capsule、Source、
    ProviderConnection metadata、CredentialRecipe selection、ProviderBinding、Secret metadata、
    provider policy、compatibility report、Run、StateVersion、Output、artifacts manifest、
    operator quota/showback ledger、AuditEvent ledger。
@@ -22,9 +59,10 @@ adapter が所有し、Core の backup contract には入りません。
    posts、profiles など Capsule が作成した service 固有データ。現時点では generic restore は未実装で、対応 provider
    adapter または Capsule-defined export がある Capsule だけを対象にする。
 
-control backup は Project / Capsule graph と StateVersion / Output 世代を復元します。
-service-data backup は各 Capsule の backup/export 設定に従い、control restore
-後に必要な Capsule だけ restore / reattach します。
+合格する operator restore は Project / Capsule graph と StateVersion / Output
+世代を復元します。現在の OSS control export はこの要件を満たしません。
+service-data backup は各 Capsule の backup/export 設定に従い、operator
+control restore 後に必要な Capsule だけ restore / reattach します。
 
 対象データ:
 
@@ -34,7 +72,7 @@ service-data backup は各 Capsule の backup/export 設定に従い、control r
 - captured Output metadata and current StateVersion ids
 - Capsule service-data export / provider snapshot / custom command archive
 
-Control backup は metadata、state/artifact manifest、operator quota/showback ledger、
+operator control backup は metadata、state/artifact manifest、operator quota/showback ledger、
 AuditEvent ledger を対象にします。Takosumi Cloud official billing / payment processor records are
 Cloud-private commercial records and are not part of the OSS control backup contract. Raw state bytes と raw
 outputs は host artifact store の opaque ref inventory と digest で復元・照合
@@ -44,7 +82,7 @@ Secret は encrypted envelope と metadata だけを扱い、raw
 secret や payment processor credential は repo 外の operator vault に残します。
 
 Takosumi platform worker は users / sessions / quota/showback / OIDC issuer records も
-所有します。control backup は OIDC discovery/JWKS に必要な public metadata を保持しますが、
+所有します。operator backup は OIDC discovery/JWKS に必要な public metadata を保持しますが、
 raw secret を含めません。
 
 対象外:
@@ -53,8 +91,8 @@ raw secret を含めません。
 - provider-native backup product selection
 - commercial SLA credit calculation
 
-User-facing export は portability surface であり、operator backup の代替では
-ありません。
+User-facing control export は inspection / portability 用の部分的な surface
+であり、operator backup の代替ではありません。
 
 ## Cadence
 
@@ -70,17 +108,23 @@ current evidence を更新し、missed-run threshold も同じ policy に記録�
 | Backup inventory audit        | operator-configured     | configured operated environments                | backup age, chain head, encryption key availability, retention window                    | storage owner                      |
 | Emergency restore tabletop    | operator-configured     | non-live target or tabletop                     | timeline, decision log, role assignment, runbook gaps                                    | incident commander pool            |
 
-configured restore drill を missed-run threshold まで skip した場合は、次の production
-release promotion に platform owner の明示的な承認が必要です。
+configured restore drill を missed-run threshold まで skip した場合は、affected
+restore capabilityを前提にするstate transitionまたはsurface policyだけをblockし、
+platform ownerの明示的な承認とfresh evidenceを要求します。無関係なroutine
+artifact releaseへ一律に適用しません。
 
 ## Control Backup Restore Minimum
 
 目的: Capsule service-data を reattach する前に、Takosumi control ledger を
 単独で restore できることを証明する。
 
+この gate は selected persistence adapter の verified backup/importer に対する
+ものです。現在の OSS `BackupRecord` export を入力にして実施したことにしては
+いけません。
+
 手順:
 
-1. 同じ release train の最新 staging control backup を選ぶ。
+1. 同じ release train の最新 staging operator backup を選ぶ。
 2. non-production issuer URL / hostname を持つ isolated restore target に restore
    する。
 3. 以下を検証する:
@@ -120,7 +164,7 @@ service-data backup を有効にした supported Capsule を public promise に�
    - audit chain head (hash-chain sink を有効化している場合)
    - encrypted secret partition id
 3. isolated restore target を作る。active staging を上書きしてはいけない。
-4. control backup manifest と state/artifact inventory に従って logical restore
+4. operator backup manifest と state/artifact inventory に従って logical restore
    を実行する。
 5. 以下を検証する:
    - critical record の skip 無しで restore が完了する
@@ -213,9 +257,9 @@ material を public docs にコミットしてはいけません。
 ## Follow-up Rules
 
 失敗した drill は必ず owner と due date 付きの action item
-を生成します。critical backup / key availability の問題は、 platform owner と
-incident commander pool が close または明示的に waive するまで production
-release promotion を block します。
+を生成します。critical backup / key availability の問題は、platform owner と
+incident commander pool が close または明示的に waive するまで、その
+capabilityを必要とするstate transitionまたはrelease surfaceをblockします。
 
 失敗が再発する場合は、user/tenant impact が無くても
 [Incident Response](./incident-response.md) に従って postmortem を作成します。

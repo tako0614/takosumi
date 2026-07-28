@@ -15,6 +15,7 @@ import {
   type ResourceShape,
   type FormAvailability,
   type InstalledFormReference,
+  shapeKindForPortableType,
   type ResourceShapeJsonObject,
   type ResourceShapePreview,
   type ResourceShapeResult,
@@ -76,12 +77,15 @@ type ParsedInput =
 
 function formIdentityKey(identity: InstalledFormReference): string {
   return JSON.stringify([
-    identity.formRef.apiVersion,
-    identity.formRef.kind,
-    identity.formRef.definitionVersion,
-    identity.formRef.schemaDigest,
+    identity.type,
+    identity.version,
+    identity.schemaDigest,
     identity.packageDigest,
   ]);
+}
+
+function shapeKindOf(identity: InstalledFormReference): string {
+  return shapeKindForPortableType(identity.type) ?? identity.type;
 }
 
 export default function ResourceEditor(props: Props): JSX.Element {
@@ -150,7 +154,7 @@ export default function ResourceEditor(props: Props): JSX.Element {
         (form) =>
           form.availableToPrincipal && form.operations.includes(operation),
       )
-      .map((form) => form.identity);
+      .map((form) => form.form);
     const current = props.resource?.form;
     const identities = current ? [current, ...discovered] : discovered;
     return [
@@ -183,11 +187,14 @@ export default function ResourceEditor(props: Props): JSX.Element {
       if (!first) {
         setKind("");
         setGuidedMode(false);
-      } else if (isGuidedResourceServiceKind(first.formRef.kind)) {
-        selectService(first.formRef.kind);
       } else {
-        setKind(first.formRef.kind);
-        setGuidedMode(false);
+        const firstKind = shapeKindOf(first);
+        if (isGuidedResourceServiceKind(firstKind)) {
+          selectService(firstKind);
+        } else {
+          setKind(firstKind);
+          setGuidedMode(false);
+        }
       }
     }),
   );
@@ -364,14 +371,14 @@ export default function ResourceEditor(props: Props): JSX.Element {
     if (!props.resource && !exactForm) {
       return { ok: false, message: t("resources.editor.formUnavailable") };
     }
-    if (exactForm && exactForm.formRef.kind !== normalizedKind) {
+    if (exactForm && shapeKindOf(exactForm) !== normalizedKind) {
       return { ok: false, message: t("resources.editor.formUnavailable") };
     }
     if (exactForm) {
       const operation = props.resource ? "update" : "create";
       const evidence = props.formAvailability.find(
         (candidate) =>
-          formIdentityKey(candidate.identity) === formIdentityKey(exactForm),
+          formIdentityKey(candidate.form) === formIdentityKey(exactForm),
       );
       if (
         !evidence?.availableToPrincipal ||
@@ -615,10 +622,11 @@ export default function ResourceEditor(props: Props): JSX.Element {
     );
     if (!identity) return;
     setSelectedForm(identity);
-    if (isGuidedResourceServiceKind(identity.formRef.kind)) {
-      selectService(identity.formRef.kind);
+    const identityKind = shapeKindOf(identity);
+    if (isGuidedResourceServiceKind(identityKind)) {
+      selectService(identityKind);
     } else {
-      setKind(identity.formRef.kind);
+      setKind(identityKind);
       setGuidedMode(false);
     }
   }
@@ -714,7 +722,7 @@ export default function ResourceEditor(props: Props): JSX.Element {
     if (input.value.form) {
       const evidence = props.formAvailability.find(
         (candidate) =>
-          formIdentityKey(candidate.identity) ===
+          formIdentityKey(candidate.form) ===
           formIdentityKey(input.value.form!),
       );
       if (!evidence?.operations.includes("import")) {
@@ -816,11 +824,11 @@ export default function ResourceEditor(props: Props): JSX.Element {
   }
 
   function formLabel(identity: InstalledFormReference): string {
-    const { formRef } = identity;
-    const label = isGuidedResourceServiceKind(formRef.kind)
-      ? serviceLabel(formRef.kind)
-      : formRef.kind;
-    return `${label} · ${formRef.definitionVersion} · schema ${formRef.schemaDigest.slice(7, 15)} · package ${identity.packageDigest.slice(7, 15)}`;
+    const identityKind = shapeKindOf(identity);
+    const label = isGuidedResourceServiceKind(identityKind)
+      ? serviceLabel(identityKind)
+      : identityKind;
+    return `${label} · ${identity.version} · schema ${identity.schemaDigest.slice(7, 15)} · package ${identity.packageDigest.slice(7, 15)}`;
   }
 
   function previewPriceLabel(result: ResourceShapePreview): string {

@@ -1,12 +1,13 @@
 /**
  * Operator first-run aid: list the durable resources the platform worker needs.
  *
- * `wrangler deploy` succeeds even when a binding's underlying resource is
- * missing, so this script prints the required resource set (D1 / R2 / Durable
- * Objects / queue / ASSETS) as a checklist. It is a DRY-RUN reference — it does
- * not create anything (resource creation requires operator credentials and the
- * realized config in the operator-private repo). Pair it with the worker's
- * `/readyz` self-check, which fails loudly at runtime when a binding is absent.
+ * A provider deployment can succeed even when a binding's underlying resource
+ * is missing, so this script prints the required resource set (D1 / R2 /
+ * Durable Objects / queue / ASSETS) as a checklist. It is a DRY-RUN reference
+ * — it does not create anything (resource creation requires operator
+ * credentials and the realized config in the operator-private repo). Pair it
+ * with the worker's `/readyz` self-check, which fails loudly at runtime when a
+ * binding is absent.
  *
  * Run: `bun scripts/check-platform-bindings.ts`
  */

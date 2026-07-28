@@ -1,3 +1,4 @@
+// takos-secret-scan: synthetic — the minted-phase fixture carries a stub OPENSSH key body.
 import { expect, test } from "bun:test";
 
 import {
@@ -37,6 +38,8 @@ function makeVault(
       ),
     credentialDrivers:
       REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipeDrivers,
+    sourceCredentialDrivers:
+      REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.sourceCredentialDrivers,
     ...(overrides.managedProviderCredentialIssuer
       ? {
           managedProviderCredentialIssuer:
@@ -219,6 +222,30 @@ async function registerSsh(
 }
 
 // --- Git connection registration -------------------------------------------
+
+test("Source credential drivers are an explicit host contribution", async () => {
+  const vault = new StaticSecretConnectionVault({
+    store: new InMemoryOpenTofuControlStore(),
+    crypto: new PartitionedSecretBoundaryCrypto({
+      globalPassphrase: "test-passphrase-0123456789-abcdef-0123456789",
+    }),
+  });
+
+  const error = await vault
+    .register({
+      workspaceId: "space_1",
+      provider: "source_git_https_token",
+      kind: "source_git_https_token",
+      values: { GIT_HTTPS_TOKEN: "ghp_secret_token" },
+    })
+    .catch((caught) => caught);
+
+  expect(error).toBeInstanceOf(ConnectionVaultError);
+  expect((error as ConnectionVaultError).code).toBe("not_implemented");
+  expect((error as Error).message).toContain(
+    "source credential driver source_git_https_token is not installed",
+  );
+});
 
 test("registers source_git_https_token with kind and single env", async () => {
   const { store, vault } = makeVault();

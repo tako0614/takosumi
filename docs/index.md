@@ -1,154 +1,87 @@
-# Takosumi software
+# Takosumi とは
 
-Takosumi は、Git に置いた OpenTofu/Terraform module を、計画 → 確認 → 反映の流れで
-安全にデプロイ・管理する基盤ソフトウェアです。普通の OpenTofu/Terraform module を
-そのまま実行でき、必要な場合は現在の Resource Shape API 互換 surface を
-Target / Adapter に解決できます。採用済みの target では、portable な定義を Service Form、
-exact identity を FormRef と呼び、Takosumi は Form Package が 0 個でも動く optional host です
-(用語のひとこと説明は [用語集](./reference/glossary.md) を参照)。
+Takosumi は、Git に置いた OpenTofu / Terraform の module を、**計画 → 確認 → 反映**の
+順に実行し、その履歴を残していく control plane です。
+Takosumi は first-party Terraform/OpenTofu provider を同梱しません。
 
-このページは、software としての Takosumi と Takosumi for Operator の docs です。
-私たちが運営する公式 hosted service、Takosumi Cloud の docs は
-[app.takosumi.com/docs](https://app.takosumi.com/docs/) に分けています。
+インフラそのものは作りません。Cloudflare や AWS を操作するのは、いつもどおりそれぞれの
+provider です。Takosumi が受け持つのは、それを**誰が、いつ、どの認証情報で実行し、
+結果どうなったか**を管理する部分です。
 
-## どちらを読むか
+## 何が変わるか
 
-| 読みたいこと                                                                                     | 読む場所                                                                                                                                                                       |
-| ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Takosumi の model、API、Run、StateVersion、Output                                                | この Software docs                                                                                                                                                             |
-| self-host / operator が使う OpenTofu Stack flow                                                  | [Quickstart](./getting-started/quickstart.md) と [Model reference](./reference/model.md)                                                                                       |
-| Service Form host（現在の Resource Shape 互換 API）、Compatibility API framework、Adapter system | [Takosumi API](./reference/api.md) と [Model reference](./reference/model.md)                                                                                                  |
-| `app.takosumi.com` の managed resources、pricing、API key、usage                                 | [Takosumi Cloud docs](https://app.takosumi.com/docs/)                                                                                                                          |
-| Cloud の endpoint family、compatibility matrix、billing contract                                 | [Cloud resources](https://app.takosumi.com/docs/resources)、[Cloud endpoints](https://app.takosumi.com/docs/endpoints)、[Cloud pricing](https://app.takosumi.com/docs/pricing) |
+`.tf` を書いて `tofu apply` を回している状態から、次のことができるようになります。
 
-## Product split
+**同じ module を、接続先だけ変えて動かせます。** module に認証情報も環境の区別も
+書きません。開発用と本番用で Capsule を 2 つ作り、それぞれに別の Connection を
+割り当てます。`.tf` は 1 つのままです。
 
-```text
-Takosumi OSS:
-  Git-based OpenTofu control plane
-  + plain OpenTofu stack execution
-  + optional zero-form Service Form host
-  + current Resource Shape compatibility API
-  + Resolver / Planner / Reconciler
-  + Target / Credential / OIDC / Secret / Policy
-  + Compatibility API framework
-  + Adapter system
+**適用の前に、必ず内容を確認できます。** 計画を作り、その内容を見て、納得してから
+**同じ計画を**適用します。適用の直前に計画が作り直されることはないので、確認したものと
+違うものが流れる余地がありません。
 
-Takosumi for Operator:
-  Takosumi
-  + customer / tenant operation
-  + billing / metering / quota
-  + DB-backed operator configuration
-  + CLI / API / runbook operations
-  + managed target catalog
+**あとから追跡できます。** どの commit を、誰が、いつ、どの認証情報で流したかが Run と
+して残ります。適用のたびに状態が保存されるので、前の状態にも戻せます。
 
-Takosumi Cloud:
-  official hosted Takosumi for Operator
-  + official managed targets
-  + Cloud-operated managed service backends
-  + official billing / SLA / support
+**認証情報の置き場所が減ります。** 保存した値は読み出せません。渡されるのは実行中の
+sandbox だけで、記録に残るのは変数名だけです。
+
+**サービス同士をつなげます。** ある Capsule が公開した値を、別の Capsule から参照
+できます。接続先を手でコピーして貼る必要がありません。
+
+## 使うとこうなります
+
+```bash
+# 1. リポジトリを登録する
+curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/sources" \
+  -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{ "workspaceId": "ws_example", "name": "my-app",
+        "url": "https://github.com/example/my-app.git",
+        "defaultRef": "v1.0.0", "defaultPath": "deploy/opentofu" }'
+
+# 2. 計画を作る
+curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/capsules/cap_example/plan" \
+  -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
+
+# 3. 内容を読んで、納得したら同じ Run を適用する
+takosumi status run_example
+
+curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/runs/run_example/apply" \
+  -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
 ```
 
-境界は次のとおりです。
+画面から進めることもできます。dashboard の `/new` に Git URL を入れると、module を読んで
+必要な変数と provider を提示するので、そのまま確認して適用できます。
 
-```text
-portable project は Service Form / FormRef / Form Package / typed client conformance を持つ。
-Takosumi OSS は generic host lifecycle と API を持つ。
-Operator / Cloud は商用運用と managed capacity を持つ。
-```
+## module は普通のままで構いません
 
-Cloud は Takosumi の本体ではなく、公式 hosted deployment です。Software docs では
-任意の Takosumi endpoint、self-host、operator 運用でも成立する API と model を説明します。
-Cloud docs では `app.takosumi.com` の managed resources、pricing、spend guard、
-Cloud endpoint を説明します。
+Takosumi 専用のマニフェストはありません。`.tf` に書き足すものもありません。いま動いて
+いる module をそのまま登録できます。
 
-## Takosumi が管理すること
+型の決まったサービス (オブジェクト保管、KV、SQL、キューなど) を、module を書かずに宣言
+だけで作る経路もあります。こちらは任意で、使わなくても Takosumi は動きます。
 
-Takosumi は OpenTofu/Terraform の外側を管理します。
+## 向いている場面
 
-```text
-Git repo / Source を登録する
-ProviderConnection を保存する
-CredentialRecipe に従って Run の実行中だけ env/file を渡す
-OpenTofu/Terraform を runner sandbox で実行する
-plan / apply / destroy を Run として記録する
-StateVersion / Output / log / AuditEvent を保存する
-exact Service Form-backed Resource を TargetPool / Policy / Adapter に解決する
-```
+- 複数人で同じインフラを触っていて、**誰が何をしたか**を残したい
+- 開発用と本番用で、**同じ module を接続先だけ変えて**回したい
+- 適用の前に**必ず人の確認**を挟みたい
+- クラウドの認証情報を、**手元や CI の環境変数に置きたくない**
 
-中心にある価値はこれです。
-
-```text
-Same manifest, different connection.
-Same form, different target.
-```
-
-同じ `.tf` を使い、ProviderBinding だけを変えて dev/prod、別 account、別 provider
-alias に流せます。同じ exact Service Form を使い、TargetPool / Policy / Adapter によって
-operator が有効化した target へ解決できます。現在の wire と廃止済み provider の既存 state
-に残る compatibility alias では、この flow を Resource Shape と呼びます。
-
-## 作り直さないもの
-
-業界標準の API / protocol / OpenTofu provider で足りるものを、
-Takosumi は作り直しません。
-
-```text
-標準 API / protocol / OpenTofu provider がある:
-  その surface を Stack flow または scoped compatibility profile で使う。
-
-標準 surface がなく、繰り返し使う service form がある:
-  portable governance を通した typed Service Form として定義する。
-
-一回限りの不足:
-  generic-env ProviderConnection と通常の OpenTofu module で扱う。
-```
-
-Takosumi は first-party Terraform/OpenTofu provider を同梱しません。既存 provider は
-Stack flow でそのまま使えます。portable Service Form と Form-backed Resource の
-Interface descriptor は Takoform、Capsule Interface は service-side InstallConfig
-blueprint、operator 管理は Takosumi API / CLI / dashboard を使います。
-
-## Compatibility API
-
-Compatibility API は OSS Takosumi の framework と capability surface です。
-`compat.s3.v1`、`compat.oci.v1`、`compat.cloudevents.v1`、
-`compat.kubernetes.crd.v1` のように scope と version を明示します。
-
-これらは provider API 全体の compatibility を意味しません。
-普通の S3/R2/GCS、registry、queue、database 利用で既存 provider や標準 endpoint が
-足りる場合は、それを使います。
-
-## 画面で使う言葉
-
-通常画面では、内部 model をそのまま前面に出しません。
-
-| 画面の言葉    | 意味                                              |
-| ------------- | ------------------------------------------------- |
-| サービス      | ホストするアプリ、worker、API、site、storage など |
-| 接続          | Cloudflare / AWS / GCP などのアカウント連携       |
-| 変更内容      | deploy 前に確認する plan / resource summary       |
-| 履歴          | いつ誰が何を変更したか                            |
-| Restore point | state version を使った復元点                      |
-
-ほかの用語のひとこと説明は [用語集](./reference/glossary.md) に、詳細は
-[Model reference](./reference/model.md) にあります。
-外部の web / desktop / mobile / CLI からサービス作成へつなぐ場合は
-[App Handoff Protocol](./reference/app-handoff.md) を使います。
-
-## Docs の境界
-
-公開 docs は、ユーザー、self-host operator、Takosumi Cloud 利用者が外部 contract として
-依存できる情報だけを扱います。内部メモ、operator runbook、secret rotation、raw readiness
-record、pricing 同期手順、implementation-only wiring は公開 product contract ではありません。
-
-詳しい分類は [Published docs contract](./reference/docs-contract.md) に固定しています。
+逆に、1 人で 1 環境だけを触っていて `tofu apply` で足りているなら、無理に挟む必要は
+ありません。
 
 ## 次に読むもの
 
-- [Quickstart](./getting-started/quickstart.md)
-- [Model reference](./reference/model.md)
-- [Takosumi API](./reference/api.md)
-- [Deploy-Control API](./reference/deploy-control-api.md)
-- [Operator control MCP](./reference/operator-control-mcp.md)
-- [Takosumi Cloud docs](https://app.takosumi.com/docs/)
+はじめてなら[クイックスタート](./getting-started/quickstart.md)から進めてください。
+ローカルで起動して、実際に 1 つ動かすところまでを扱っています。
+
+仕組みを知りたい場合は[全体像](./concepts/)から読むと、Source と Capsule、Run、
+状態と出力、認証情報の順に一通りつながります。
+
+正確な引数や上限が必要になったら、[API](./reference/api.md)、[CLI](./reference/cli.md)、
+[Takoform host API](./reference/takoform-host.md) のリファレンスにまとめてあります。
+
+公式の hosted サービスを使う場合の料金や managed リソースは、
+[Takosumi Cloud のドキュメント](https://app.takosumi.com/docs/)に分けています。

@@ -2,27 +2,21 @@ import type {
   FormAvailability,
   InstalledFormReference,
 } from "./service-forms.ts";
-import type { ResourcePhase, ResourcePortability } from "./resource-shape.ts";
-import type { Condition, JsonObject } from "./types.ts";
+import type { JsonObject } from "./types.ts";
 
-/** Portable identity and route namespace owned by the Takoform protocol. */
-export const TAKOFORM_FORM_HOST_API_VERSION =
-  "forms.takoform.com/v1alpha1" as const;
+/** Portable protocol token and route namespace owned by Takoform. */
+export const TAKOFORM_FORM_HOST_PROTOCOL = "v0" as const;
+export const TAKOFORM_COMPAT_PROFILE = "compat.takoform.v1" as const;
 export const TAKOFORM_FORM_HOST_WELL_KNOWN_PATH =
   "/.well-known/takoform" as const;
-export const TAKOFORM_FORM_HOST_API_PATH =
-  "/apis/forms.takoform.com/v1alpha1" as const;
+export const TAKOFORM_FORM_HOST_API_PATH = "/takoform/v0" as const;
 export const TAKOFORM_FORM_HOST_INTERFACES_PATH =
   `${TAKOFORM_FORM_HOST_API_PATH}/interfaces` as const;
 export const TAKOFORM_INTERFACE_DECLARATIONS_FEATURE =
   "interface_declarations" as const;
 
-/**
- * Neutral discovery document. Takosumi implements this document but does not
- * own the protocol identity or infer availability from a static schema.
- */
 export interface TakoformHostDiscovery {
-  readonly api_versions: readonly [typeof TAKOFORM_FORM_HOST_API_VERSION];
+  readonly protocols: readonly [typeof TAKOFORM_FORM_HOST_PROTOCOL];
   readonly features: {
     readonly service_forms: true;
     readonly exact_form_ref: true;
@@ -33,9 +27,7 @@ export interface TakoformHostDiscovery {
   readonly endpoints: {
     readonly api: string;
     readonly forms: string;
-    /** Compatibility discovery consumed by the current provider candidate. */
     readonly capabilities: string;
-    /** Existing pre-standard Resource facade retained during provider migration. */
     readonly compatibility_api: string;
     readonly interfaces?: string;
   };
@@ -58,41 +50,31 @@ export interface ListTakoformDeclaredInterfacesResponse {
   readonly interfaces: readonly TakoformDeclaredInterface[];
 }
 
-export interface TakoformResourceMetadata {
-  readonly name: string;
-  readonly space: string;
-  readonly project?: string;
-  readonly environment?: string;
-  readonly labels?: Readonly<Record<string, string>>;
-  /** Decimal canonical desired generation returned by the host. */
-  readonly resourceVersion?: string;
-}
-
-export interface TakoformResourceStatus {
-  readonly phase: ResourcePhase;
-  readonly observedGeneration: number;
-  readonly portability?: ResourcePortability;
-  readonly outputs?: JsonObject;
-  readonly conditions?: readonly Condition[];
-}
-
 /**
- * Provider-neutral projection of one host-owned canonical Resource. It carries
- * exact definition identity and sanitized lifecycle state, never Target,
- * manager, credential, capacity, price, SKU, quota, or SLA authority.
+ * Flat takoform v0 projection of one host-owned canonical Resource. Takosumi
+ * translates this protocol onto the canonical Resource service and owns no
+ * second lifecycle ledger.
  */
 export interface TakoformResource {
-  readonly apiVersion: typeof TAKOFORM_FORM_HOST_API_VERSION;
-  readonly kind: string;
+  readonly type: string;
   readonly form: InstalledFormReference;
-  readonly metadata: TakoformResourceMetadata;
-  readonly spec: JsonObject;
-  readonly status?: TakoformResourceStatus;
+  readonly workspace: string;
+  readonly name: string;
+  readonly project?: string;
+  readonly environment?: string;
+  readonly serial?: string;
+  readonly config: JsonObject;
+  readonly attributes?: TakoformResourceAttributes;
   readonly id?: string;
 }
 
+export interface TakoformResourceAttributes {
+  readonly portability?: string;
+  readonly outputs?: JsonObject;
+}
+
 export interface TakoformPreviewResponse {
-  readonly resource: TakoformResource;
+  readonly resource?: TakoformResource;
   readonly review: {
     readonly planDigest: string;
     readonly specDigest: string;
@@ -145,7 +127,6 @@ export interface ListTakoformResourcesResponse {
   readonly nextCursor?: string;
 }
 
-/** Stable provider-facing error taxonomy. */
 export type TakoformHostErrorCode =
   | "invalid_argument"
   | "unauthenticated"
@@ -157,7 +138,7 @@ export type TakoformHostErrorCode =
   | "resource_not_found"
   | "interface_identity_ambiguous"
   | "interface_instance_ambiguous"
-  | "resource_version_conflict"
+  | "serial_conflict"
   | "resource_busy"
   | "import_conflict"
   | "policy_denied"
@@ -181,7 +162,7 @@ export function createTakoformHostDiscovery(
   const normalized = origin.replace(/\/+$/u, "");
   const api = `${normalized}${TAKOFORM_FORM_HOST_API_PATH}`;
   return {
-    api_versions: [TAKOFORM_FORM_HOST_API_VERSION],
+    protocols: [TAKOFORM_FORM_HOST_PROTOCOL],
     features: {
       service_forms: true,
       exact_form_ref: true,
@@ -201,4 +182,33 @@ export function createTakoformHostDiscovery(
         : {}),
     },
   };
+}
+
+export const SHAPE_KIND_BY_PORTABLE_TYPE: Readonly<Record<string, string>> = {
+  edge_worker: "EdgeWorker",
+  object_bucket: "ObjectBucket",
+  kv_store: "KVStore",
+  queue: "Queue",
+  sql_database: "SQLDatabase",
+  container_service: "ContainerService",
+  vector_index: "VectorIndex",
+  durable_workflow: "DurableWorkflow",
+  stateful_actor_namespace: "StatefulActorNamespace",
+  schedule: "Schedule",
+};
+
+export const PORTABLE_TYPE_BY_SHAPE_KIND: Readonly<Record<string, string>> =
+  Object.fromEntries(
+    Object.entries(SHAPE_KIND_BY_PORTABLE_TYPE).map(([type, kind]) => [
+      kind,
+      type,
+    ]),
+  );
+
+export function shapeKindForPortableType(type: string): string | undefined {
+  return SHAPE_KIND_BY_PORTABLE_TYPE[type];
+}
+
+export function portableTypeForShapeKind(kind: string): string | undefined {
+  return PORTABLE_TYPE_BY_SHAPE_KIND[kind];
 }

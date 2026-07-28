@@ -7,7 +7,7 @@ import {
 
 const ROOT = resolve(new URL("..", import.meta.url).pathname);
 const DOC_ROOTS = ["docs", "app-docs"] as const;
-const IGNORED_DIRS = new Set([".vitepress", "dist", "node_modules"]);
+const IGNORED_DIRS = new Set([".vitepress", "dist", "node_modules", "retired"]);
 
 const sources: AuthoritativeDocSource[] = [];
 for (const root of DOC_ROOTS) {

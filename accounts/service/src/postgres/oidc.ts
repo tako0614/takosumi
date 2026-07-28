@@ -42,7 +42,6 @@ export async function saveOidcClient(
     .onConflictDoUpdate({
       target: oidcClients.clientId,
       set: {
-        capsuleId: values.capsuleId,
         serviceId: values.serviceId,
         issuerUrl: values.issuerUrl,
         redirectUris: values.redirectUris,
@@ -52,6 +51,10 @@ export async function saveOidcClient(
         clientSecretHash: values.clientSecretHash,
         updatedAt: values.updatedAt,
       },
+      // A client id is a stable security-principal binding. Never let an
+      // upsert transfer it to another Capsule, including under a concurrent
+      // provisioning race.
+      setWhere: eq(oidcClients.capsuleId, record.capsuleId),
     });
 }
 
@@ -79,6 +82,15 @@ export async function findOidcClientForCapsule(
     .limit(1)
     .then((rows) => rows[0] as OidcClientRow | undefined);
   return row ? oidcClientFromRow(row) : undefined;
+}
+
+export async function revokeOidcClient(
+  client: PostgresQueryClient,
+  clientId: string,
+): Promise<void> {
+  await postgresDrizzle(client, oidcSchema)
+    .delete(oidcClients)
+    .where(eq(oidcClients.clientId, clientId));
 }
 
 const oidcClientColumns = {

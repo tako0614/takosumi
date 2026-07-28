@@ -315,11 +315,11 @@ Users can bring a normal Git repository containing OpenTofu/Terraform.
 ```text
 Git URL + ref/tag/commit + module path
   -> checkout
-  -> tofu init
-  -> tofu plan
+  -> OpenTofu initialization
+  -> OpenTofu plan
   -> policy check
   -> approval
-  -> tofu apply
+  -> OpenTofu apply
   -> state / outputs / logs / audit
 ```
 

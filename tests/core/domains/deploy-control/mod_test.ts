@@ -303,6 +303,39 @@ test("PlanRun stores variable digest without retaining variable values", async (
   );
 });
 
+test("RunEngine translates rootgen validation at its runtime boundary", async () => {
+  const { store, request } = await seedUpdatableCapsule();
+  const [connection] = await store.listConnections(request.workspaceId!);
+  if (!connection) throw new Error("seeded Provider Connection missing");
+  // Persist a historical/bypassed row whose non-secret provider configuration
+  // collides with rootgen's owned alias field. The runtime boundary must retain
+  // the controller's public invalid_argument semantics if such a row survives.
+  await store.putConnection({
+    ...connection,
+    scopeHints: { providerConfig: { alias: "forbidden" } },
+  });
+  const controller = new OpenTofuController({
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    vault: fakeProviderVault() as never,
+    store,
+    now: () => 1,
+    newId: deterministicIds(),
+  });
+
+  let thrown: unknown;
+  try {
+    await controller.createPlanRun(request);
+  } catch (error) {
+    thrown = error;
+  }
+
+  expect(thrown).toBeInstanceOf(OpenTofuControllerError);
+  expect(thrown).toMatchObject({
+    code: "invalid_argument",
+    details: { reason: "rootgen_provider_configuration_alias_override" },
+  });
+});
+
 test("plan/apply records Capsule, StateVersion, and explicitly allowlisted Output", async () => {
   const { store, request, capsuleId } = await seedUpdatableCapsule();
   const controller = new OpenTofuController({
@@ -1707,7 +1740,7 @@ test("destroy apply is rejected until the plan is approved (always two-stage, sp
   expect(destroyed.applyRun.status).toEqual("succeeded");
 });
 
-test("restore marks the Capsule stale because it restores state, not live resources", async () => {
+test("restore rebases StateVersion and Output cursors and marks the Capsule stale", async () => {
   const { store, capsuleId } = await seedUpdatableCapsule();
   const controller = new OpenTofuController({
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
@@ -1744,6 +1777,35 @@ test("restore marks the Capsule stale because it restores state, not live resour
     createdByRunId: "apply_seed",
     createdAt: "2026-06-06T00:00:00.000Z",
   });
+  const sourceOutput = {
+    id: "out_restore_source",
+    workspaceId: capsule!.workspaceId,
+    capsuleId,
+    stateGeneration: 1,
+    rawArtifactRef: "outputs/1.json.enc",
+    publicOutputs: { url: "https://restored.example.test" },
+    workspaceOutputs: {
+      url: "https://restored.example.test",
+      bucket_name: "restored-assets",
+    },
+    outputDigest: "sha256:restore-source-output",
+    createdAt: "2026-06-06T00:00:00.000Z",
+  } as const;
+  const previousOutput = {
+    ...sourceOutput,
+    id: "out_restore_previous",
+    stateGeneration: 2,
+    rawArtifactRef: "outputs/2.json.enc",
+    publicOutputs: { url: "https://previous.example.test" },
+    workspaceOutputs: {
+      url: "https://previous.example.test",
+      bucket_name: "previous-assets",
+    },
+    outputDigest: "sha256:restore-previous-output",
+    createdAt: "2026-06-06T00:00:01.000Z",
+  } as const;
+  await store.putOutput(sourceOutput);
+  await store.putOutput(previousOutput);
   await store.putBackupRecord({
     id: "bkp_restore",
     workspaceId: capsule!.workspaceId,
@@ -1758,6 +1820,7 @@ test("restore marks the Capsule stale because it restores state, not live resour
     ...capsule!,
     status: "destroyed",
     currentStateGeneration: 2,
+    currentOutputId: previousOutput.id,
     updatedAt: "2026-06-06T00:00:01.000Z",
   });
 
@@ -1776,13 +1839,101 @@ test("restore marks the Capsule stale because it restores state, not live resour
 
   const restored = await store.getCapsule(capsuleId);
   const restoreRun = await store.getBackupRun(restore.id);
+  const restoredState = restoreRun?.restoredStateVersionId
+    ? await store.getStateVersion(restoreRun.restoredStateVersionId)
+    : undefined;
+  const restoredOutput = restored?.currentOutputId
+    ? await store.getOutput(restored.currentOutputId)
+    : undefined;
   expect(restoreRun?.status).toBe("succeeded");
+  expect(restored?.currentStateVersionId).toBe(
+    restoreRun?.restoredStateVersionId,
+  );
   expect(restored?.currentStateGeneration).toBe(3);
+  expect(restoredState?.generation).toBe(3);
+  expect(restoredOutput?.id).not.toBe(sourceOutput.id);
+  expect(restoredOutput?.id).not.toBe(previousOutput.id);
+  expect(restoredOutput?.stateGeneration).toBe(3);
+  expect(restoredOutput?.rawArtifactRef).toBe(sourceOutput.rawArtifactRef);
+  expect(restoredOutput?.publicOutputs).toEqual(sourceOutput.publicOutputs);
+  expect(restoredOutput?.workspaceOutputs).toEqual(
+    sourceOutput.workspaceOutputs,
+  );
+  expect(restoredOutput?.outputDigest).toBe(sourceOutput.outputDigest);
   expect(restored?.status).toBe("stale");
   expect(lifecycle).toEqual([
     "started:running:running",
     "succeeded:succeeded:succeeded",
   ]);
+});
+
+test("restore clears the current Output cursor when the source generation has no Output", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const { capsule, backupId } = await seedRestoreFixture(
+    store,
+    "missing_output",
+  );
+  const previousOutput = {
+    id: "out_restore_missing_output_previous",
+    workspaceId: capsule.workspaceId,
+    capsuleId: capsule.id,
+    stateGeneration: 2,
+    rawArtifactRef: "outputs/missing-output-previous.json.enc",
+    publicOutputs: { url: "https://previous.example.test" },
+    workspaceOutputs: { url: "https://previous.example.test" },
+    outputDigest: "sha256:restore-missing-output-previous",
+    createdAt: "2026-06-06T00:00:01.000Z",
+  } as const;
+  await store.putOutput(previousOutput);
+  const current = await store.getCapsule(capsule.id);
+  await store.putCapsule({
+    ...current!,
+    currentOutputId: previousOutput.id,
+  });
+  const controller = new OpenTofuController({
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    vault: fakeProviderVault() as never,
+    store,
+    now: sequenceNow(71),
+    newId: deterministicIds(),
+    runner: {
+      restore: ({ stateScope }) =>
+        Promise.resolve({
+          state: {
+            stateRef: stateScope.stateRef,
+            digest: PLAN_DIGEST,
+          },
+        }),
+    },
+  });
+
+  const restore = await controller.createRestoreRun(
+    capsule.workspaceId,
+    backupId,
+    {
+      capsuleId: capsule.id,
+      environment: capsule.environment,
+      stateGeneration: 1,
+      expectedBackupDigest: PLAN_DIGEST,
+    },
+  );
+  await controller.approveRun(restore.id, { approvedBy: "ops" });
+  await controller.runQueuedRestore(restore.id);
+
+  const restored = await store.getCapsule(capsule.id);
+  const restoreRun = await store.getBackupRun(restore.id);
+  expect(restoreRun?.status).toBe("succeeded");
+  expect(restored?.currentStateVersionId).toBe(
+    restoreRun?.restoredStateVersionId,
+  );
+  expect(restored?.currentStateGeneration).toBe(3);
+  expect(restored?.currentOutputId).toBeUndefined();
+  expect(await store.getOutput(previousOutput.id)).toEqual(previousOutput);
+  expect(
+    (await store.listOutputs(capsule.id)).filter(
+      (output) => output.stateGeneration === 3,
+    ),
+  ).toEqual([]);
 });
 
 test("restore failure is observed after the failed terminal row is durable", async () => {

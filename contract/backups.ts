@@ -1,22 +1,24 @@
 /**
- * Control-backup contract.
+ * Control-backup export contract.
  *
- * A {@link BackupRecord} is the ledger pointer to one sealed control-backup
- * bundle written to the configured backup artifact store. The bundle is a
- * compressed JSON export of a Workspace's control ledger (workspaces / sources / source snapshots /
- * install configs / Capsules / dependencies / StateVersion metadata / Output
- * projections / run groups /
- * activity / connection PUBLIC records), then sealed with the at-rest
- * secret-boundary crypto the state/secret lanes already use. The bundle NEVER
- * contains secret material:
+ * A {@link BackupRecord} is the ledger pointer to one sealed, partial
+ * control-ledger export written to the configured backup artifact store. It is
+ * not a restorable Workspace snapshot: the current format has no importer and
+ * intentionally does not claim to recreate every control-plane entity.
+ *
+ * The bundle contains a compressed JSON projection of selected Workspace
+ * records (Workspace / Source / SourceSnapshot / InstallConfig / Capsule /
+ * dependency / StateVersion metadata / Output projection / run-group /
+ * activity / public ProviderConnection records). The bundle NEVER contains
+ * secret material:
  * no connection blobs, no hook secret hashes, no raw state bytes, no raw output
  * values — only public ledger metadata + the projected `publicOutputs` /
  * `workspaceOutputs`.
  *
- * Service data backup (messages / files / posts / etc.) is represented as a
- * separate sealed `service-data.tar.zst.enc` archive when Capsules opt
- * into a `BackupConfig` mode. The control path records metadata + pointers from
- * an isolated backup runner or the Capsule's projected OpenTofu output.
+ * A state sidecar may copy sealed state objects and a service-data sidecar may
+ * record provider/export pointers. Neither sidecar is currently consumed by an
+ * OSS restore importer. Operators must use their persistence adapter's
+ * independently verified backup and restore procedure for disaster recovery.
  *
  * Every persisted artifact is identified by an opaque `ref` allocated by the
  * host storage adapter. This contract does not expose bucket names or layouts.
@@ -24,7 +26,6 @@
 
 import { INTERNAL_V1_PREFIX } from "./api-surface.ts";
 import type { InstalledFormReference } from "./service-forms.ts";
-import type { Run } from "./runs.ts";
 
 /** Content type of the sealed control-backup object. */
 export const CONTROL_BACKUP_CONTENT_TYPE = "application/octet-stream" as const;
@@ -32,15 +33,6 @@ export const CONTROL_BACKUP_CONTENT_TYPE = "application/octet-stream" as const;
 /** Path of the Workspace-scoped control-backup REST surface. */
 export const WORKSPACE_BACKUPS_PATH = (workspaceId: string): string =>
   `${INTERNAL_V1_PREFIX}/workspaces/${encodeURIComponent(workspaceId)}/backups`;
-
-/** Path of the Workspace-scoped destructive restore trigger REST surface. */
-export const WORKSPACE_BACKUP_RESTORES_PATH = (
-  workspaceId: string,
-  backupId: string,
-): string =>
-  `${WORKSPACE_BACKUPS_PATH(workspaceId)}/${encodeURIComponent(
-    backupId,
-  )}/restores`;
 
 /** Path of the Capsule-scoped backup trigger REST surface. */
 export const CAPSULE_BACKUPS_PATH = (capsuleId: string): string =>
@@ -64,7 +56,6 @@ export interface BackupRecord {
   readonly workspaceId: string;
   readonly capsuleId?: string;
   readonly environment?: string;
-  readonly restoreTarget?: BackupRestoreTarget;
   readonly ref: string;
   readonly digest: string;
   readonly sizeBytes: number;
@@ -89,14 +80,6 @@ export interface ResourceFormPinBackupEntry {
   readonly identity: InstalledFormReference;
 }
 
-/** Public pointer to the state generation this backup can restore. */
-export interface BackupRestoreTarget {
-  readonly capsuleId: string;
-  readonly environment: string;
-  readonly stateGeneration: number;
-  readonly stateVersionId: string;
-}
-
 /** Pointer to a backup object, when present. */
 export interface BackupArtifactPointer {
   readonly ref: string;
@@ -119,7 +102,14 @@ export interface CreateBackupResponse {
   readonly backup: BackupRecord;
 }
 
-/** Body of `POST .../workspaces/:workspaceId/backups/:backupId/restores`. */
+/**
+ * Legacy in-process state-copy request.
+ *
+ * @internal
+ * This is retained only for the non-HTTP RunEngine rollback implementation.
+ * It does not import or verify a BackupRecord's control/state manifest and must
+ * not be exposed as a backup restore API.
+ */
 export interface CreateRestoreRequest {
   /**
    * Target Capsule to restore. Optional only when the BackupRecord was
@@ -141,11 +131,6 @@ export interface CreateRestoreRequest {
    * runner to acknowledge that artifact as restored.
    */
   readonly restoreServiceData?: boolean;
-}
-
-/** Response body for a created restore Run. */
-export interface CreateRestoreResponse {
-  readonly run: Run;
 }
 
 /** Response body for a control-backup listing (`GET .../backups`). */

@@ -11,7 +11,8 @@ import {
   installedFormReferenceKey,
   isInstalledFormReference,
   isSha256Digest,
-  STANDARD_FORM_ADMISSION_API_VERSION,
+  STANDARD_FORM_ADMISSION_FORMAT,
+  STANDARD_FORM_INVALID_ARGUMENT_ERROR_CODE,
 } from "takosumi-contract";
 
 const REQUIRED_OPERATIONS = [
@@ -21,6 +22,8 @@ const REQUIRED_OPERATIONS = [
   "delete",
   "import",
   "refresh",
+  "sync",
+  "drift",
 ] as const;
 
 const FORBIDDEN_EVIDENCE_KEYS = new Set([
@@ -64,8 +67,8 @@ export function evaluateStandardFormAdmission(input: {
   const { definition, package: packageRecord, evidence } = input;
   const exact = installedFormReferenceKey(definition.identity);
 
-  if (evidence.apiVersion !== STANDARD_FORM_ADMISSION_API_VERSION) {
-    errors.push("unsupported standard-admission apiVersion");
+  if (evidence.format !== STANDARD_FORM_ADMISSION_FORMAT) {
+    errors.push("unsupported standard-admission format");
   }
   if (!isInstalledFormReference(evidence.identity)) {
     errors.push("evidence identity is not an exact InstalledFormReference");
@@ -77,7 +80,7 @@ export function evaluateStandardFormAdmission(input: {
   }
   if (
     !isSha256Digest(evidence.approvedSchemaDigest) ||
-    evidence.approvedSchemaDigest !== definition.identity.formRef.schemaDigest
+    evidence.approvedSchemaDigest !== definition.identity.schemaDigest
   ) {
     errors.push("approved schema digest does not match the exact FormRef");
   }
@@ -88,7 +91,7 @@ export function evaluateStandardFormAdmission(input: {
     !packageRecord.definitionRefs.some(
       (ref) =>
         installedFormReferenceKey({
-          formRef: ref,
+          ...ref,
           packageDigest: packageRecord.packageDigest,
         }) === exact,
     )
@@ -104,7 +107,13 @@ export function evaluateStandardFormAdmission(input: {
     }
   }
 
+  // Audit the exact portable lifecycle key set: every required operation
+  // (including sync) must be explicitly attested, and no attested key may be
+  // false. A retired or unknown lifecycle key can never substitute for one.
   if (
+    !REQUIRED_OPERATIONS.every(
+      (operation) => evidence.audit.lifecycle[operation] === true,
+    ) ||
     !Object.values(evidence.audit.lifecycle).every((value) => value === true)
   ) {
     errors.push(
@@ -125,8 +134,8 @@ export function evaluateStandardFormAdmission(input: {
     errors.push("Interface audit must explicitly pass every boundary");
   }
 
-  const immutableFields = takoformImmutableFields(definition);
-  if (!sameStringSet(immutableFields, evidence.audit.immutability.fields)) {
+  const forceNewFields = takoformForceNewFields(definition);
+  if (!sameStringSet(forceNewFields, evidence.audit.immutability.fields)) {
     errors.push("immutability audit does not match the verified definition");
   }
   if (evidence.fixtures.positive.length === 0) {
@@ -152,8 +161,13 @@ export function evaluateStandardFormAdmission(input: {
     errors.push("negative fixture names must be unique");
   }
   for (const fixture of evidence.fixtures.negative) {
-    if (!/^[a-z][a-z0-9._-]{2,127}$/u.test(fixture.expectedErrorCode)) {
-      errors.push(`negative fixture ${fixture.name} lacks a stable error code`);
+    if (
+      !/^[a-z][a-z0-9._-]{2,127}$/u.test(fixture.expectedErrorCode) ||
+      fixture.expectedErrorCode !== STANDARD_FORM_INVALID_ARGUMENT_ERROR_CODE
+    ) {
+      errors.push(
+        `negative fixture ${fixture.name} must use portable wire error code ${STANDARD_FORM_INVALID_ARGUMENT_ERROR_CODE}`,
+      );
     }
   }
   rejectForbiddenEvidenceKeys(evidence as unknown as JsonValue, "$", errors);
@@ -226,13 +240,12 @@ function takoformStatus(definition: FormDefinition): string | undefined {
     : undefined;
 }
 
-function takoformImmutableFields(
+function takoformForceNewFields(
   definition: FormDefinition,
 ): readonly string[] {
   const takoform = definition.metadata?.takoform;
-  if (!isRecord(takoform) || !Array.isArray(takoform.immutableFields))
-    return [];
-  return takoform.immutableFields.filter(
+  if (!isRecord(takoform) || !Array.isArray(takoform.forceNewFields)) return [];
+  return takoform.forceNewFields.filter(
     (value): value is string => typeof value === "string",
   );
 }

@@ -17,6 +17,7 @@ import type { UsageEvent } from "takosumi-contract/billing";
 import type { BackupRecord } from "takosumi-contract/backups";
 import type { OutputShare } from "takosumi-contract/outputs";
 import type { ActivityEvent } from "takosumi-contract/activity";
+import type { Workspace } from "takosumi-contract/workspaces";
 
 const STORES: ReadonlyArray<[string, () => OpenTofuControlStore]> = [
   ["in-memory", () => new InMemoryOpenTofuControlStore()],
@@ -81,7 +82,51 @@ function activityEvent(
   };
 }
 
+function workspace(i: number): Workspace {
+  const seq = String(i).padStart(4, "0");
+  return {
+    id: `ws_${"0".repeat(14)}${seq}`,
+    handle: `workspace-${seq}`,
+    displayName: `Workspace ${seq}`,
+    type: "organization",
+    ownerUserId: "owner_1",
+    createdAt: `2026-06-06T00:00:00.${seq}Z`,
+    updatedAt: `2026-06-06T00:00:00.${seq}Z`,
+  };
+}
+
 for (const [name, make] of STORES) {
+  test(`${name}: scheduler Workspace pages are bounded and gap-free`, async () => {
+    const store = make();
+    for (let i = 0; i < 5; i += 1) {
+      await store.putWorkspace(workspace(i));
+    }
+
+    const first = await store.listWorkspacesPage({ limit: 2 });
+    const second = await store.listWorkspacesPage({
+      limit: 2,
+      cursor: first.nextCursor,
+    });
+    const third = await store.listWorkspacesPage({
+      limit: 2,
+      cursor: second.nextCursor,
+    });
+
+    expect([
+      ...first.items,
+      ...second.items,
+      ...third.items,
+    ].map((row) => row.id)).toEqual(
+      Array.from(
+        { length: 5 },
+        (_, i) => `ws_${"0".repeat(14)}${String(i).padStart(4, "0")}`,
+      ),
+    );
+    expect(first.nextCursor).toBeDefined();
+    expect(second.nextCursor).toBeDefined();
+    expect(third.nextCursor).toBeUndefined();
+  });
+
   test(`${name}: target Activity pages are bounded, isolated, and newest-first`, async () => {
     const store = make();
     const total = 250;

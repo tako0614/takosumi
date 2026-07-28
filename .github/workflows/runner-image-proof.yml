@@ -13,40 +13,11 @@ name: runner proof
 # The proof uses the baked-in provider-free `core` template, so it needs NO cloud
 # credentials or repository secrets.
 #
-# Triggers are scoped to changes that can break the image (runner sources,
-# the first-party modules baked into it, the schema files copied into it, and the
-# proof script itself) plus a weekly schedule so upstream base-image / OpenTofu /
-# provider drift is caught even when nobody touches these paths.
+# Product pull requests and pushes use the portable `bun run check` gate in
+# quality.yml. This Docker proof is a separate native-toolchain cadence, run
+# weekly or explicitly when runner-image evidence needs to be refreshed.
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "runner/**"
-      - "opentofu-modules/**"
-      - "contract/provider-env-rules.ts"
-      - "contract/provider-configurations.ts"
-      - "contract/redaction.ts"
-      - "contract/types.ts"
-      - "contract/reference/ip-classification.ts"
-      - "contract/reference/host-blocklist.ts"
-      - "scripts/prove-runner-docker.sh"
-      - "scripts/prove-runner-docker-payload.ts"
-      - ".github/workflows/runner-image-proof.yml"
-  pull_request:
-    branches: [main]
-    paths:
-      - "runner/**"
-      - "opentofu-modules/**"
-      - "contract/provider-env-rules.ts"
-      - "contract/provider-configurations.ts"
-      - "contract/redaction.ts"
-      - "contract/types.ts"
-      - "contract/reference/ip-classification.ts"
-      - "contract/reference/host-blocklist.ts"
-      - "scripts/prove-runner-docker.sh"
-      - "scripts/prove-runner-docker-payload.ts"
-      - ".github/workflows/runner-image-proof.yml"
   schedule:
     # Weekly (Monday 06:00 UTC) to catch base-image / OpenTofu / provider drift.
     - cron: "0 6 * * 1"

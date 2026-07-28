@@ -122,7 +122,7 @@ export function formAvailabilityHelpText(): string {
       "takosumi form-availability list --space <id>",
       "",
       "principal に対する exact FormRef の known / installed / executable / activated / available 状態を表示します。",
-      "完全一致検索: --api-version --kind --definition-version --schema-digest --package-digest",
+      "完全一致検索: --type --version --schema-digest --package-digest",
       "共通オプション: --url、--token、--json、--limit、--cursor",
     ].join("\n");
   }
@@ -130,7 +130,7 @@ export function formAvailabilityHelpText(): string {
     "takosumi form-availability list --space <id>",
     "",
     "Shows known, installed, executable, activated, and principal availability for exact FormRefs.",
-    "Exact lookup: --api-version --kind --definition-version --schema-digest --package-digest",
+    "Exact lookup: --type --version --schema-digest --package-digest",
     "Common options: --url, --token, --json, --limit, --cursor",
   ].join("\n");
 }

@@ -1,3 +1,4 @@
+// takos-secret-scan: synthetic — connection fixtures carry a stub PRIVATE KEY block.
 import { expect, test } from "bun:test";
 
 import { createApiApp } from "../../../core/api/app.ts";
@@ -35,6 +36,8 @@ function makeApp(
       ),
     credentialDrivers:
       REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipeDrivers,
+    sourceCredentialDrivers:
+      REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.sourceCredentialDrivers,
   });
   const activityService = new ActivityService({
     store,

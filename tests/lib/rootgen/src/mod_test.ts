@@ -1,6 +1,9 @@
 import { expect, test } from "bun:test";
 
-import { generateOpenTofuChildModuleRoot } from "../../../../lib/rootgen/src/mod.ts";
+import {
+  generateOpenTofuChildModuleRoot,
+  RootgenValidationError,
+} from "../../../../lib/rootgen/src/mod.ts";
 
 test("rootgen emits only an optional provider-wiring child wrapper", () => {
   const { files } = generateOpenTofuChildModuleRoot({
@@ -79,13 +82,24 @@ test("rootgen preserves explicit custom registries and rejects bare providers", 
     "registry.opentofu.org/providers.example.test",
   );
 
-  expect(() =>
+  let thrown: unknown;
+  try {
     generateOpenTofuChildModuleRoot({
       requiredProviders: ["cloudflare"],
       inputs: {},
       outputAllowlist: {},
-    }),
-  ).toThrow("must declare an explicit namespace/type");
+    });
+  } catch (error) {
+    thrown = error;
+  }
+  expect(thrown).toBeInstanceOf(RootgenValidationError);
+  expect(thrown).toMatchObject({
+    name: "RootgenValidationError",
+    code: "invalid_argument",
+    message:
+      "rootgen: provider cloudflare must declare an explicit namespace/type or hostname/namespace/type source",
+    details: { reason: "rootgen_explicit_provider_source_required" },
+  });
 });
 
 test("rootgen escapes HCL interpolation in literal inputs", () => {
@@ -100,4 +114,53 @@ test("rootgen escapes HCL interpolation in literal inputs", () => {
   expect(main).toContain(
     'value = "evil\\"}\\n$${file(\\"/etc/passwd\\")}%%{ for x in y }"',
   );
+});
+
+test("rootgen validation reasons are stable and layer-neutral", () => {
+  const cases = [
+    {
+      input: {
+        requiredProviders: [],
+        inputs: { "invalid-name": true },
+        outputAllowlist: {},
+      },
+      reason: "rootgen_invalid_identifier",
+    },
+    {
+      input: {
+        requiredProviders: ["cloudflare/cloudflare"],
+        inputs: {},
+        outputAllowlist: {},
+        providerBindings: [
+          {
+            provider: "cloudflare/cloudflare",
+            configuration: { alias: "forbidden" },
+          },
+        ],
+      },
+      reason: "rootgen_provider_configuration_alias_override",
+    },
+    {
+      input: {
+        requiredProviders: [],
+        inputs: { value: Number.POSITIVE_INFINITY },
+        outputAllowlist: {},
+      },
+      reason: "rootgen_non_finite_number_input",
+    },
+  ] as const;
+
+  for (const fixture of cases) {
+    let thrown: unknown;
+    try {
+      generateOpenTofuChildModuleRoot(fixture.input);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(RootgenValidationError);
+    expect(thrown).toMatchObject({
+      code: "invalid_argument",
+      details: { reason: fixture.reason },
+    });
+  }
 });

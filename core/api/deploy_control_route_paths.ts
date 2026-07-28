@@ -141,8 +141,6 @@ export const TAKOSUMI_WORKSPACE_USAGE_ROUTE =
   `${INTERNAL_V1_PREFIX}/workspaces/:workspaceId/usage` as const;
 export const TAKOSUMI_WORKSPACE_BACKUPS_ROUTE =
   `${INTERNAL_V1_PREFIX}/workspaces/:workspaceId/backups` as const;
-export const TAKOSUMI_WORKSPACE_BACKUP_RESTORES_ROUTE =
-  `${INTERNAL_V1_PREFIX}/workspaces/:workspaceId/backups/:backupId/restores` as const;
 export const TAKOSUMI_CAPSULE_BACKUPS_ROUTE =
   `${INTERNAL_V1_PREFIX}/capsules/:capsuleId/backups` as const;
 /** Operator-only, explicit migration from retired backing-Capsule state. */

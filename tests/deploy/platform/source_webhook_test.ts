@@ -14,6 +14,11 @@ import {
   TAKOSUMI_PRODUCT_CAPABILITIES_PATH,
   TAKOSUMI_WELL_KNOWN_PATH,
 } from "../../../contract/api-surface.ts";
+import {
+  TAKOFORM_COMPAT_PROFILE,
+  TAKOFORM_FORM_HOST_API_PATH,
+  TAKOFORM_FORM_HOST_WELL_KNOWN_PATH,
+} from "../../../contract/form-host-interoperability.ts";
 import { TAKOSUMI_PLATFORM_HARDENING_GATE_EVIDENCE_KIND } from "../../../contract/platform-hardening.ts";
 import { OSS_PLATFORM_HARDENING_CONTRIBUTION } from "../../../deploy/platform/production_hardening.ts";
 import {
@@ -36,6 +41,7 @@ import {
   isPlatformExtensionCatalogPath,
   isPlatformExtensionContributionsPath,
   isPlatformResourceShapeApiPath,
+  matchPlatformPublicCoreRoute,
   matchPlatformExtensionRoute,
   platformExtensionCatalog,
   platformExtensionContributionCatalog,
@@ -1437,6 +1443,40 @@ test("platform worker exposes product discovery before accounts handler", async 
   expect(capabilitiesBody).not.toHaveProperty("commercial");
 });
 
+test("platform discovery advertises the registered Takosumi native public client", async () => {
+  const worker = (await import("../../../deploy/platform/worker.ts")).default;
+  const discovery = await worker.fetch(
+    new Request(`https://operator.example${TAKOSUMI_WELL_KNOWN_PATH}`),
+    {
+      TAKOSUMI_ACCOUNTS_CLIENTS: JSON.stringify([
+        {
+          clientId: "operator-dashboard",
+          redirectUris: ["https://operator.example/sign-in/callback"],
+          tokenEndpointAuthMethod: "none",
+        },
+        {
+          clientId: "takosumi-mobile-operator",
+          redirectUris: ["takosumi://oauth/callback"],
+          tokenEndpointAuthMethod: "none",
+          allowedScopes: [
+            "openid",
+            "profile",
+            "offline_access",
+            "capsules:read",
+            "capsules:write",
+          ],
+        },
+      ]),
+    } as never,
+  );
+
+  expect(discovery.status).toBe(200);
+  expect(await discovery.json()).toMatchObject({
+    product: "takosumi",
+    oidcClientId: "takosumi-mobile-operator",
+  });
+});
+
 test("platform discovery publishes commercial functions only as explicit extension tokens", async () => {
   const worker = (await import("../../../deploy/platform/worker.ts")).default;
   const database = { prepare() {} };
@@ -1648,7 +1688,99 @@ test("platform Resource Shape API discovery is gated by deploy-control token and
     env,
   );
   expect(discovery.status).toBe(200);
-  expect((await discovery.json()).features.resource_shapes).toBe(true);
+  const discoveryBody = await discovery.json();
+  expect(discoveryBody.features.resource_shapes).toBe(true);
+  expect(discoveryBody.features.compatibility_profiles).toContain(
+    TAKOFORM_COMPAT_PROFILE,
+  );
+  expect(discoveryBody.endpoints.extensions[TAKOFORM_COMPAT_PROFILE]).toBe(
+    `https://app.takosumi.com${TAKOFORM_FORM_HOST_API_PATH}`,
+  );
+});
+
+test("platform serves every advertised Takoform Core endpoint ahead of the SPA fallback", async () => {
+  const worker = (await import("../../../deploy/platform/worker.ts")).default;
+  const assetRequests: string[] = [];
+  const env = {
+    TAKOSUMI_CONTROL_DB: new SqliteFakeD1(),
+    TAKOSUMI_DEPLOY_CONTROL_TOKEN: "resource-token",
+    TAKOSUMI_DEV_MODE: "1",
+    TAKOSUMI_RESOURCE_SHAPES: "ObjectBucket",
+    ASSETS: {
+      fetch: async (request: Request) => {
+        assetRequests.push(new URL(request.url).pathname);
+        return new Response("<html>dashboard fallback</html>", {
+          headers: { "content-type": "text/html; charset=utf-8" },
+        });
+      },
+    },
+  } as never;
+
+  const platformDiscoveryResponse = await worker.fetch(
+    new Request(`https://app.takosumi.com${TAKOSUMI_WELL_KNOWN_PATH}`),
+    env,
+  );
+  expect(platformDiscoveryResponse.status).toBe(200);
+  const platformDiscovery = await platformDiscoveryResponse.json();
+  expect(platformDiscovery.endpoints.extensions[TAKOFORM_COMPAT_PROFILE]).toBe(
+    `https://app.takosumi.com${TAKOFORM_FORM_HOST_API_PATH}`,
+  );
+
+  const hostDiscoveryResponse = await worker.fetch(
+    new Request(
+      `https://app.takosumi.com${TAKOFORM_FORM_HOST_WELL_KNOWN_PATH}`,
+    ),
+    env,
+  );
+  expect(hostDiscoveryResponse.status).toBe(200);
+  expect(hostDiscoveryResponse.headers.get("content-type")).toContain(
+    "application/json",
+  );
+  const hostDiscovery = await hostDiscoveryResponse.json();
+  const authenticatedProbe = (url: string) =>
+    worker.fetch(
+      new Request(url, {
+        headers: { authorization: "Bearer resource-token" },
+      }),
+      env,
+    );
+  const endpointProbes = [
+    `${hostDiscovery.endpoints.api}/forms?workspace=space_1`,
+    `${hostDiscovery.endpoints.forms}?workspace=space_1`,
+    hostDiscovery.endpoints.capabilities,
+    `${hostDiscovery.endpoints.compatibility_api}/form-availability?space=space_1`,
+  ];
+  for (const endpoint of endpointProbes) {
+    const response = await authenticatedProbe(endpoint);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("application/json");
+    expect(await response.clone().text()).not.toContain("dashboard fallback");
+  }
+  const formActivations = await authenticatedProbe(
+    "https://app.takosumi.com/v1/form-activations",
+  );
+  expect(formActivations.status).toBe(200);
+  expect(formActivations.headers.get("content-type")).toContain(
+    "application/json",
+  );
+  const unauthorizedFormActivations = await worker.fetch(
+    new Request("https://app.takosumi.com/v1/form-activations"),
+    env,
+  );
+  expect(unauthorizedFormActivations.status).toBe(401);
+  expect(unauthorizedFormActivations.headers.get("content-type")).toContain(
+    "application/json",
+  );
+  expect(assetRequests).toEqual([]);
+
+  const unknown = await worker.fetch(
+    new Request("https://app.takosumi.com/workspaces/not-a-core-route"),
+    env,
+  );
+  expect(unknown.status).toBe(200);
+  expect(unknown.headers.get("content-type")).toContain("text/html");
+  expect(await unknown.text()).toContain("dashboard fallback");
+  expect(assetRequests).toEqual(["/workspaces/not-a-core-route"]);
 });
 
 test("platform Resource Shape API does not advertise shapes without an operator list", async () => {
@@ -1709,7 +1841,17 @@ test("platform Resource Shape API routes are routed before accounts and bearer-g
   expect(isPlatformResourceShapeApiPath("/v1/space-policies/default")).toBe(
     true,
   );
+  expect(isPlatformResourceShapeApiPath("/v1/form-availability")).toBe(true);
+  expect(isPlatformResourceShapeApiPath("/takoform/v0/forms")).toBe(true);
+  expect(isPlatformResourceShapeApiPath("/v1/form-activations")).toBe(false);
   expect(isPlatformResourceShapeApiPath("/api/v1/workspaces")).toBe(false);
+  expect(
+    matchPlatformPublicCoreRoute(TAKOFORM_FORM_HOST_WELL_KNOWN_PATH)?.access,
+  ).toBe("public");
+  expect(
+    matchPlatformPublicCoreRoute("/v1/form-activations/activation_1")?.access,
+  ).toBe("operator");
+  expect(matchPlatformPublicCoreRoute("/workspaces/dashboard")).toBeUndefined();
 
   const disabled = await handlePlatformResourceShapeApiRequest(
     new Request("https://app.takosumi.com/v1/target-pools/default"),
@@ -1944,6 +2086,7 @@ test("platform Resource Shape API accepts user tokens without applying hosted pr
       authKind: "personal-access-token",
       subject: "tsub_cloud",
       workspaceId: "space_cloud",
+      workspaceRole: "admin",
       scopes: ["admin"],
     }),
   );
@@ -1964,6 +2107,7 @@ test("platform Resource Shape session auth rejects a Space outside the verified 
     authKind: "personal-access-token" as const,
     subject: "tsub_member",
     workspaceId: "space_allowed",
+    workspaceRole: "admin" as const,
     scopes: ["admin"],
   });
 
@@ -2047,6 +2191,7 @@ test("platform public Resource ingress cannot spoof a compatibility managedBy id
       authKind: "personal-access-token",
       subject: "account_a",
       workspaceId: "workspace_a",
+      workspaceRole: "member",
       scopes: ["write"],
     }),
   );
@@ -2074,6 +2219,7 @@ test("platform bearer ingress preserves the provider's opentofu authoring surfac
     authKind: "personal-access-token" as const,
     subject: "provider-user",
     workspaceId: "workspace_provider",
+    workspaceRole: "member" as const,
     scopes: ["write"],
   });
   const pool = await handlePlatformResourceShapeApiRequest(
@@ -2755,6 +2901,7 @@ test("platform extension route injects verified session context and strips raw c
       authKind: "session",
       subject: "tsub_cloud",
       workspaceId: "space_cloud",
+      workspaceRole: "member",
     }),
   );
   expect(response.status).toBe(200);
@@ -2777,6 +2924,7 @@ test("platform extension route replaces spoofed Workspace context", async () => 
       method: "POST",
       headers: {
         "x-takosumi-platform-workspace-id": "space_attacker",
+        origin: "https://app.takosumi.com",
       },
     }),
     {
@@ -2793,6 +2941,7 @@ test("platform extension route replaces spoofed Workspace context", async () => 
       authKind: "session",
       subject: "tsub_cloud",
       workspaceId: "space_cloud",
+      workspaceRole: "member",
     }),
   );
 
@@ -2956,6 +3105,64 @@ test("platform workspace verification keeps service tokens bound to token metada
   });
 });
 
+test("platform Workspace verification maps live roles to read/write capability", async () => {
+  const viewerWrite = await platformExtensionVerifiedWorkspaceSession(
+    new Request("https://app.takosumi.com/v1/resources", { method: "POST" }),
+    {} as never,
+    {
+      authenticated: true,
+      authKind: "personal-access-token",
+      subject: "tsub_viewer",
+      workspaceId: "space_cloud",
+      workspaceRole: "viewer",
+      scopes: ["write"],
+    },
+    "space_cloud",
+    undefined,
+    "write",
+  );
+  expect(viewerWrite.ok).toBe(false);
+
+  const memberWrite = await platformExtensionVerifiedWorkspaceSession(
+    new Request("https://app.takosumi.com/v1/resources", { method: "POST" }),
+    {} as never,
+    {
+      authenticated: true,
+      authKind: "personal-access-token",
+      subject: "tsub_member",
+      workspaceId: "space_cloud",
+      workspaceRole: "member",
+      scopes: ["write"],
+    },
+    "space_cloud",
+    undefined,
+    "write",
+  );
+  expect(memberWrite.ok).toBe(true);
+});
+
+test("platform cookie Workspace verification rechecks live membership even for a bound id", async () => {
+  let checks = 0;
+  const verified = await platformExtensionVerifiedWorkspaceSession(
+    new Request("https://app.takosumi.com/v1/resources"),
+    {} as never,
+    {
+      authenticated: true,
+      authKind: "session",
+      subject: "tsub_removed",
+      workspaceId: "space_cloud",
+    },
+    "space_cloud",
+    async () => {
+      checks += 1;
+      return false;
+    },
+    "read",
+  );
+  expect(checks).toBe(1);
+  expect(verified.ok).toBe(false);
+});
+
 test("platform extension authenticates managed provider run tokens with Workspace context", async () => {
   const issued = await createManagedProviderRunToken({
     secret: "managed-secret",
@@ -3095,6 +3302,7 @@ test("platform extension requiredScopes gate token auth", async () => {
   const denied = await handlePlatformExtensionRouteRequest(
     new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions", {
       method: "POST",
+      headers: { origin: "https://app.takosumi.com" },
     }),
     binding,
     route,
@@ -3127,6 +3335,7 @@ test("platform extension requiredScopes gate token auth", async () => {
   const session = await handlePlatformExtensionRouteRequest(
     new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions", {
       method: "POST",
+      headers: { origin: "https://app.takosumi.com" },
     }),
     binding,
     route,
@@ -3137,6 +3346,63 @@ test("platform extension requiredScopes gate token auth", async () => {
     }),
   );
   expect(session.status).toBe(200);
+});
+
+test("platform session mutations require the exact configured issuer Origin", async () => {
+  const binding = {
+    TEST_AI_EXTENSION: { fetch: async () => Response.json({ ok: true }) },
+  } as never;
+  const route = {
+    basePath: "/gateway/ai/v1",
+    handlerKey: "TEST_AI_EXTENSION",
+  };
+  const verifier = async () => ({
+    authenticated: true as const,
+    authKind: "session" as const,
+    subject: "tsub",
+  });
+
+  const denied = await handlePlatformExtensionRouteRequest(
+    new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions", {
+      method: "POST",
+    }),
+    {
+      ...binding,
+      TAKOSUMI_ACCOUNTS_ISSUER: "https://app.takosumi.com",
+    } as never,
+    route,
+    verifier,
+  );
+  expect(denied.status).toBe(403);
+  expect((await denied.json()).error).toBe("csrf_failed");
+
+  const explicitBearer = await handlePlatformExtensionRouteRequest(
+    new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions", {
+      method: "POST",
+      headers: { authorization: "Bearer sess_explicit" },
+    }),
+    {
+      ...binding,
+      TAKOSUMI_ACCOUNTS_ISSUER: "https://app.takosumi.com",
+    } as never,
+    route,
+    verifier,
+  );
+  expect(explicitBearer.status).toBe(200);
+
+  const allowed = await handlePlatformExtensionRouteRequest(
+    new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions", {
+      method: "POST",
+      headers: { origin: "https://app.takosumi.com" },
+    }),
+    {
+      ...binding,
+      TAKOSUMI_ACCOUNTS_ISSUER: "https://app.takosumi.com",
+    } as never,
+    route,
+    verifier,
+  );
+  expect(allowed.status).toBe(200);
 });
 
 test("platform extension derives personal access identity from introspection claims, not token prefixes", async () => {
@@ -3161,7 +3427,7 @@ test("platform extension derives personal access identity from introspection cla
         token_use: "personal_access",
         scope: "ai.chat ai.models.read",
         sub: "tsub_pat_user",
-        takosumi: { workspace_id: "space_pat_default" },
+        takosumi: { workspace_id: "space_pat_default", role: "member" },
       });
     },
   );
@@ -3170,6 +3436,7 @@ test("platform extension derives personal access identity from introspection cla
     authKind: "personal-access-token",
     subject: "tsub_pat_user",
     workspaceId: "space_pat_default",
+    workspaceRole: "member",
     scopes: ["ai.chat", "ai.models.read"],
   });
   expect(introspectionRequests[0]?.url).toBe(
@@ -3203,7 +3470,7 @@ test("platform extension authenticates delegated OAuth access claims without pre
         token_use: "oauth_access",
         scope: "openid capsules:read",
         sub: "tsub_runtime",
-        takosumi: { workspace_id: "space_oauth" },
+        takosumi: { workspace_id: "space_oauth", role: "viewer" },
       }),
   );
 
@@ -3212,6 +3479,7 @@ test("platform extension authenticates delegated OAuth access claims without pre
     authKind: "oauth-access-token",
     subject: "tsub_runtime",
     workspaceId: "space_oauth",
+    workspaceRole: "viewer",
     scopes: ["openid", "capsules:read"],
   });
 });
@@ -3251,6 +3519,7 @@ test("platform Interface API enforces delegated OAuth Capsule scopes", async () 
       authKind: "oauth-access-token",
       subject: "tsub_runtime",
       workspaceId: "space_oauth",
+      workspaceRole: "viewer",
       scopes: ["openid", "capsules:read"],
     }),
   );
@@ -3294,6 +3563,7 @@ test("platform Interface API enforces delegated OAuth Capsule scopes", async () 
         authKind: "oauth-access-token",
         subject: "tsub_runtime",
         workspaceId: "space_oauth",
+        workspaceRole: "viewer",
         scopes: ["openid", "capsules:read"],
       }),
     );
@@ -3316,6 +3586,7 @@ test("platform Interface ingress rejects oversized control bodies before JSON pa
       headers: {
         cookie: "takosumi_session=test",
         "content-type": "application/json",
+        origin: "https://app.takosumi.com",
       },
       body: `{"padding":"${"x".repeat(1_048_576)}"}`,
     }),
@@ -3325,6 +3596,7 @@ test("platform Interface ingress rejects oversized control bodies before JSON pa
       authKind: "session",
       subject: "account_operator",
       workspaceId: "space_oauth",
+      workspaceRole: "member",
     }),
   );
   expect(response.status).toBe(413);
@@ -3409,6 +3681,7 @@ test("platform Interface API binds delegated OAuth requests to their Workspace",
     authKind: "personal-access-token" as const,
     subject: "account_a",
     workspaceId: "workspace_a",
+    workspaceRole: "member" as const,
     scopes: ["read", "write"],
   });
   const runtimeSession = async () => ({
@@ -3416,6 +3689,7 @@ test("platform Interface API binds delegated OAuth requests to their Workspace",
     authKind: "oauth-access-token" as const,
     subject: "principal_a",
     workspaceId: "workspace_a",
+    workspaceRole: "viewer" as const,
     scopes: ["openid", "capsules:read"],
   });
   const bodyFor = (workspaceId: string) => ({
@@ -3504,6 +3778,7 @@ test("platform Interface ingress separates control and runtime credentials", asy
     authKind: "personal-access-token" as const,
     subject: "account_a",
     workspaceId: "workspace_auth",
+    workspaceRole: "viewer" as const,
     scopes: ["read"],
   });
 

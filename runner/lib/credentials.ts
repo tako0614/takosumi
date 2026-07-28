@@ -39,6 +39,7 @@ import {
 export function commandContextFromRequest(
   request: unknown,
   runnerProfile: JsonRecord | undefined,
+  signal?: AbortSignal,
 ): CommandContext {
   const env = baseCommandEnv();
   const credentialManifest = credentialManifestFromRequest(request);
@@ -65,6 +66,7 @@ export function commandContextFromRequest(
   }
   return {
     env,
+    ...(signal ? { signal } : {}),
     ...(credentialManifest ? { credentialManifest } : {}),
     ...(credentialFiles.length > 0 ? { credentialFiles } : {}),
     ...(redactionValues.length > 0 ? { redactionValues } : {}),

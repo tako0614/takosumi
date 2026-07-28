@@ -28,9 +28,8 @@ export async function runFormAvailability(
     if (!space) throw new TypeError("--space is required");
     const query = new URLSearchParams({ space });
     for (const [option, parameter] of [
-      ["apiVersion", "apiVersion"],
-      ["kind", "kind"],
-      ["definitionVersion", "definitionVersion"],
+      ["type", "type"],
+      ["version", "version"],
       ["schemaDigest", "schemaDigest"],
       ["packageDigest", "packageDigest"],
       ["limit", "limit"],
@@ -63,17 +62,10 @@ function formatAvailability(value: unknown): string {
   return [
     "Service Form availability:",
     ...value.forms.map((raw) => {
-      if (!isRecord(raw) || !isRecord(raw.identity)) return "- invalid record";
-      const formRef = isRecord(raw.identity.formRef)
-        ? raw.identity.formRef
-        : {};
-      const exact = [
-        formRef.apiVersion,
-        formRef.kind,
-        formRef.definitionVersion,
-      ]
+      if (!isRecord(raw) || !isRecord(raw.form)) return "- invalid record";
+      const exact = [raw.form.type, raw.form.version]
         .filter((part) => typeof part === "string")
-        .join("/");
+        .join("@");
       const state = raw.availableToPrincipal
         ? "available"
         : typeof raw.availabilityReason === "string"

@@ -496,7 +496,7 @@ async function readV48InterfaceRows(database: D1Database) {
   };
 }
 
-async function seedImmediatePredecessorV52(
+async function seedImmediatePredecessorV54(
   database: D1Database,
 ): Promise<void> {
   await database
@@ -574,13 +574,10 @@ async function seedImmediatePredecessorV52(
     )
     .run();
   await database
-    .prepare(`alter table resource_shapes drop column last_operation_run_id`)
+    .prepare(`alter table resource_shapes drop column revision`)
     .run();
   await database
-    .prepare(`alter table resource_shapes drop column pending_operation_json`)
-    .run();
-  await database
-    .prepare(`delete from schema_migrations where version = 53`)
+    .prepare(`delete from schema_migrations where version = 55`)
     .run();
 }
 
@@ -637,8 +634,8 @@ test("control D1 plan captures the full OSS schema and migration ledger", async 
   expect(plan.manifestDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
   expect(plan.schemaDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
   expect(plan.ledgerDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
-  expect(plan.migrations.at(-1)?.version).toBe(53);
-  expect(plan.migrations).toHaveLength(50);
+  expect(plan.migrations.at(-1)?.version).toBe(55);
+  expect(plan.migrations).toHaveLength(52);
   expect(plan.tables.some((table) => table.name === "target_pools")).toBe(true);
   expect(
     plan.tables.some((table) => table.name === "takosumi_target_pools"),
@@ -711,7 +708,7 @@ test("control D1 verify is read-only and accepts host extension tables", async (
     const verification = await verifyControlD1Schema(database, plan);
     expect(verification.status).toBe("ready");
     expect(verification.issues).toEqual([]);
-    expect(verification.latestMigrationVersion).toBe(53);
+    expect(verification.latestMigrationVersion).toBe(55);
   } finally {
     database.close();
   }
@@ -1052,12 +1049,12 @@ for (const responseLossBatch of [1, 2, 3] as const) {
   });
 }
 
-test("control D1 v53 preserves predecessor rows through the fenced Resource revision migration", async () => {
+test("control D1 v55 preserves predecessor rows through the fenced Resource revision migration", async () => {
   const plan = await buildControlD1SchemaPlan();
   const database = new SqliteControlD1Database();
   try {
     await ensureD1OpenTofuLedgerSchema(database);
-    await seedImmediatePredecessorV52(database);
+    await seedImmediatePredecessorV54(database);
     const before = await readPredecessorInterfaceRows(database);
     const beforeVerification = await verifyControlD1Schema(database, plan);
     expect(beforeVerification.issues).toContain(
@@ -1153,7 +1150,7 @@ test("control D1 v53 preserves predecessor rows through the fenced Resource revi
       });
 
     const retained = await applyWithPredecessor(true);
-    expect(retained.appliedMigrationVersions).toEqual([53]);
+    expect(retained.appliedMigrationVersions).toEqual([55]);
     expect(retained.verification.status).toBe("ready");
     expect(retained.maintenanceStatus).toBe("retained");
     expect(retained.predecessorMaintenanceFence).toEqual(predecessorFence);
@@ -1182,7 +1179,7 @@ test("control D1 v53 preserves predecessor rows through the fenced Resource revi
     expect(await readPredecessorInterfaceRows(database)).toEqual(before);
     expect(await verifyControlD1Schema(database, plan)).toMatchObject({
       status: "ready",
-      latestMigrationVersion: 53,
+      latestMigrationVersion: 55,
       issues: [],
     });
     expect(await readControlD1MaintenanceState(database)).toEqual({
@@ -1202,12 +1199,12 @@ test("control D1 v53 preserves predecessor rows through the fenced Resource revi
 });
 
 for (const responseLossBatch of [1, 2, 3] as const) {
-  test(`control D1 v53 predecessor recovery resumes after committed batch ${responseLossBatch} loses its response`, async () => {
+  test(`control D1 v55 predecessor recovery resumes after committed batch ${responseLossBatch} loses its response`, async () => {
     const plan = await buildControlD1SchemaPlan();
     const database = new SqliteControlD1Database();
     try {
       await ensureD1OpenTofuLedgerSchema(database);
-      await seedImmediatePredecessorV52(database);
+      await seedImmediatePredecessorV54(database);
       const before = await readPredecessorInterfaceRows(database);
       await acquireControlD1MaintenanceFence(
         database,
@@ -1280,11 +1277,11 @@ for (const responseLossBatch of [1, 2, 3] as const) {
       const resumed = await apply();
       expect(resumed.verification).toMatchObject({
         status: "ready",
-        latestMigrationVersion: 53,
+        latestMigrationVersion: 55,
         issues: [],
       });
       expect(resumed.appliedMigrationVersions).toEqual(
-        responseLossBatch === 3 ? [] : [53],
+        responseLossBatch === 3 ? [] : [55],
       );
       expect(resumed.maintenanceStatus).toBe("retained");
       expect(await readPredecessorInterfaceRows(database)).toEqual(before);
@@ -1334,7 +1331,7 @@ test("control D1 predecessor fence recovery rejects identity and non-immediate l
   const database = new SqliteControlD1Database();
   try {
     await ensureD1OpenTofuLedgerSchema(database);
-    await seedImmediatePredecessorV52(database);
+    await seedImmediatePredecessorV54(database);
     const predecessorFence = await acquireControlD1MaintenanceFence(
       database,
       {
@@ -1380,7 +1377,7 @@ test("control D1 predecessor fence recovery rejects identity and non-immediate l
     ).rejects.toThrow("maintenance_fence_predecessor_mismatch");
 
     await database
-      .prepare(`delete from schema_migrations where version = 48`)
+      .prepare(`delete from schema_migrations where version = 54`)
       .run();
     await expect(
       applyControlD1Schema(database, plan, {
@@ -2095,7 +2092,7 @@ test("control D1 CLI verify reports a ready remote ledger", async () => {
       mode: "verify",
       environment: "staging",
       status: "ready",
-      verification: { latestMigrationVersion: 53 },
+      verification: { latestMigrationVersion: 55 },
     });
   } finally {
     database.close();
@@ -2156,7 +2153,7 @@ test("control D1 CLI reports the exact predecessor fence transition on recovery"
   const database = new SqliteControlD1Database();
   try {
     await ensureD1OpenTofuLedgerSchema(database);
-    await seedImmediatePredecessorV52(database);
+    await seedImmediatePredecessorV54(database);
     const predecessorFence = await acquireControlD1MaintenanceFence(
       database,
       {
@@ -2208,7 +2205,7 @@ test("control D1 CLI reports the exact predecessor fence transition on recovery"
     expect(code).toBe(0);
     expect(transcript).toMatchObject({
       status: "ready",
-      appliedMigrationVersions: [53],
+      appliedMigrationVersions: [55],
       maintenanceFenceTransition: {
         predecessorSourceCommit: PREDECESSOR_SOURCE_COMMIT,
         predecessorManifestDigest: PREDECESSOR_MANIFEST_DIGEST,
@@ -2239,7 +2236,7 @@ test("control D1 CLI preserves the fence transition on post-apply schema mismatc
   const database = new SqliteControlD1Database();
   try {
     await ensureD1OpenTofuLedgerSchema(database);
-    await seedImmediatePredecessorV52(database);
+    await seedImmediatePredecessorV54(database);
     await database
       .prepare(
         `create trigger unexpected_workspace_trigger
@@ -2324,7 +2321,7 @@ test("control D1 CLI preserves the fence transition on post-apply schema mismatc
       await database
         .prepare(`select max(version) as version from schema_migrations`)
         .first(),
-    ).toEqual({ version: 53 });
+    ).toEqual({ version: 55 });
     await expect(
       database
         .prepare(
@@ -2603,7 +2600,7 @@ test("control D1 REST import transport converges the live v24 fixture through ca
         .map((entry) => entry.version),
     );
     expect(applied.verification.status).toBe("ready");
-    expect(applied.verification.latestMigrationVersion).toBe(53);
+    expect(applied.verification.latestMigrationVersion).toBe(55);
     expect(stats.importIngests).toBeGreaterThan(0);
     expect(stats.queryTriggerRejections).toBe(0);
     expect(await readLiveV24ConvergenceRows(backing)).toEqual(before);

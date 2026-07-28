@@ -115,7 +115,6 @@ import {
 import { locale, t } from "../../i18n/index.ts";
 import { StoreBrowser } from "../store/StoreBrowser.tsx";
 import { buildNewQuery } from "../store/store-link.ts";
-import { consumeAutoInstallToken } from "../../lib/auto-install-handoff.ts";
 import { fetchTcsListing, type TcsListing } from "../../lib/tcs-client.ts";
 import {
   clearCapsuleListCache,
@@ -326,20 +325,6 @@ function Inner() {
   const initialSearch = typeof location === "undefined" ? "" : location.search;
   const appHandoff = appHandoffFromSearch(initialSearch);
   const initialTcsHandoff = parseInitialTcsHandoff(initialSearch);
-  // ストア[追加]: `?auto=1` asks this flow to start the single install action
-  // itself once prerequisites settle (workspace, install config, store
-  // hydration). Blockers still stop it — auto never bypasses a review.
-  //
-  // The query is NOT the authority for that: `auto`, `tcsBase` and `tcsListing`
-  // are all forgeable, so an EXTERNAL link (`/install?git=…` or a hand-crafted
-  // `/new?git=…&auto=1&tcsBase=…&tcsListing=…`) could otherwise register and
-  // deploy an attacker-chosen repo into the user's workspace with no Add click.
-  // Only a one-shot sessionStorage token minted by our own store CTA in this
-  // tab arms it; everything else stays pre-fill only.
-  const autoInstallRequested =
-    new URLSearchParams(initialSearch).get("auto") === "1" &&
-    initialTcsHandoff !== null &&
-    consumeAutoInstallToken(initialSearch);
   const initialInstallPrefill =
     typeof location === "undefined"
       ? undefined
@@ -2061,39 +2046,6 @@ function Inner() {
     await runFlow();
   };
 
-  // ストア[追加] auto-start: fire the single install action once, as soon as
-  // the workspace / install config / store selection settle. Validation errors
-  // and blockers fall back to the visible form — auto never skips a review.
-  let autoInstallAttempted = false;
-  createEffect(() => {
-    if (!autoInstallRequested || autoInstallAttempted) return;
-    if (!workspaceId()) return;
-    if (!tcsHandoffSettled()) return;
-    if (!sourceGitUrl()) return;
-    if (!selectedInstallConfigId()) return;
-    autoInstallAttempted = true;
-    // Strip `auto=1` from THIS history entry before firing. Otherwise, after
-    // the install navigates to the run, a browser Back to /new remounts a fresh
-    // component whose per-instance flag is reset and re-fires the whole install
-    // (a duplicate Source + sync). A fresh store [追加] pushes a new entry with
-    // auto=1, so legitimate re-installs are unaffected.
-    if (typeof window !== "undefined") {
-      try {
-        const url = new URL(window.location.href);
-        if (url.searchParams.has("auto")) {
-          url.searchParams.delete("auto");
-          window.history.replaceState(
-            window.history.state,
-            "",
-            url.pathname + url.search + url.hash,
-          );
-        }
-      } catch {
-        // history/URL unavailable — the per-instance flag still guards this mount.
-      }
-    }
-    void submitInstall();
-  });
   const findExistingCapsule = async (
     workspace: string,
     capsuleName: string,

@@ -2,6 +2,7 @@ import {
   clampPageLimit,
   decodeCursor,
   formRefKey,
+  formRefOfInstalled,
   pageFromProbeBy,
   type FormPackageLifecycleStatus,
   type FormRef,
@@ -60,9 +61,9 @@ export class D1FormRegistryStore implements FormRegistryStore {
         this.db
           .prepare(
             `insert into ${names.serviceFormDefinitions}
-              (form_ref_key, package_digest, api_version, kind,
-               definition_version, schema_digest, record_json, installed_at)
-             values (?,?,?,?,?,?,?,?)`,
+              (form_ref_key, package_digest, type, version,
+               schema_digest, record_json, installed_at)
+             values (?,?,?,?,?,?,?)`,
           )
           .bind(...definitionParameters(definition)),
       ),
@@ -85,7 +86,8 @@ export class D1FormRegistryStore implements FormRegistryStore {
       }
       for (const definition of definitions) {
         if (
-          (await this.getDefinition(definition.identity.formRef)) !== undefined
+          (await this.getDefinition(formRefOfInstalled(definition.identity))) !==
+          undefined
         ) {
           return { status: "conflict", reason: "form_ref_conflict" };
         }
@@ -221,7 +223,7 @@ export class D1FormRegistryStore implements FormRegistryStore {
       limit,
       (record) => ({
         createdAt: record.installedAt,
-        id: formRefKey(record.identity.formRef),
+        id: formRefKey(formRefOfInstalled(record.identity)),
       }),
     );
   }
@@ -355,13 +357,12 @@ function packageParameters(record: FormPackageRecord): readonly unknown[] {
 function definitionParameters(
   record: FormDefinitionRecord,
 ): readonly unknown[] {
-  const ref = record.identity.formRef;
+  const ref = formRefOfInstalled(record.identity);
   return [
     formRefKey(ref),
     record.identity.packageDigest,
-    ref.apiVersion,
-    ref.kind,
-    ref.definitionVersion,
+    ref.type,
+    ref.version,
     ref.schemaDigest,
     JSON.stringify(record),
     record.installedAt,
@@ -373,7 +374,7 @@ function activationParameters(
 ): readonly unknown[] {
   return [
     record.id,
-    formRefKey(record.identity.formRef),
+    formRefKey(formRefOfInstalled(record.identity)),
     record.identity.packageDigest,
     record.scope.type,
     record.scope.type === "operator" ? null : record.scope.id,

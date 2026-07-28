@@ -286,6 +286,74 @@ test("handleAccountSessionMeDelete is idempotent when no session is presented", 
   ).toEqual(true);
 });
 
+test("handleAccountSessionMeDelete fails closed when durable revocation fails", async () => {
+  class FailingDeleteStore extends InMemoryAccountsStore {
+    override deleteAccountSession(): void {
+      throw new Error("store unavailable");
+    }
+  }
+  const store = new FailingDeleteStore();
+  const now = Date.now();
+  store.saveAccount({
+    subject: "tsub_logout_failure",
+    createdAt: now,
+    updatedAt: now,
+  });
+  store.saveAccountSession({
+    sessionId: "sess_logout_failure",
+    subject: "tsub_logout_failure",
+    createdAt: now,
+    expiresAt: now + 60_000,
+  });
+
+  const response = await handleAccountSessionMeDelete({
+    request: new Request("https://accounts.example.test/v1/account/session/me", {
+      method: "DELETE",
+      headers: { authorization: "Bearer sess_logout_failure" },
+    }),
+    store,
+    secureCookie: true,
+  });
+
+  expect(response.status).toBe(503);
+  expect(response.headers.get("set-cookie")).toBeNull();
+  expect(store.findAccountSession("sess_logout_failure")).toBeDefined();
+});
+
+test("rotateAccountSession refuses a non-atomic replacement store", async () => {
+  const base = new InMemoryAccountsStore();
+  const now = Date.now();
+  base.saveAccount({
+    subject: "tsub_non_atomic",
+    createdAt: now,
+    updatedAt: now,
+  });
+  base.saveAccountSession({
+    sessionId: "sess_non_atomic",
+    subject: "tsub_non_atomic",
+    createdAt: now,
+    expiresAt: now + 60_000,
+  });
+  const store = new Proxy(base, {
+    get(target, property, receiver) {
+      if (property === "replaceAccountSession") return undefined;
+      const value = Reflect.get(target, property, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+
+  await expect(
+    rotateAccountSession({
+      store,
+      oldSessionId: "sess_non_atomic",
+      subject: "tsub_non_atomic",
+      now,
+      ttlMs: 60_000,
+    }),
+  ).rejects.toThrow("requires atomic replaceAccountSession");
+  expect(base.findAccountSession("sess_non_atomic")).toBeDefined();
+});
+
 test("requireAccountsBearer resolves an arbitrary-prefix session by exact record", async () => {
   const store = new InMemoryAccountsStore();
   const now = Date.now();

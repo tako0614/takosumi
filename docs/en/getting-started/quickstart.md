@@ -1,110 +1,149 @@
 # Quickstart
 
-Takosumi has two entry points.
+Bring up one Takosumi on a Linux machine you already have, then take one OpenTofu
+module from Git all the way from plan to apply. The first run builds Docker images,
+so allow about 30 minutes. After that, startup takes a few minutes.
 
-```text
-Takosumi software:
-  verify the OpenTofu control plane on a self-hosted, local, or operator endpoint
+When you are done, you have:
 
-Takosumi Cloud:
-  use the official hosted service and managed resources at app.takosumi.com
-```
+- a Takosumi you can sign in to at `https://app.takosumi.test`, with the sign-in
+  issuer, the control plane, the dashboard, and the runner that executes OpenTofu
+  all on the same origin
+- one [Capsule](../reference/glossary.md) — a deployed unit — created from a Git URL,
+  with the plan and the apply both recorded
+- a path you can repeat against your own repository by swapping the Git URL
 
-Start with OSS / local runner when you want to verify Takosumi as software. Use
-the Takosumi Cloud flow when you want the hosted service.
+## Prerequisites
 
-## OSS / local runner
-
-Takosumi runs plain OpenTofu stacks as-is with existing OpenTofu/Terraform
-providers. The shortest
-useful check is to register `examples/opentofu-basic` as a Git Source and
-verify normal plan/apply/destroy and Output recording without any provider or
-credential. When a selected module uses a provider, register the credentials
-defined by that provider as a ProviderConnection.
-
-### Prerequisites
-
+- Linux. DNS goes through systemd-resolved and containers through the Docker
+  daemon, so macOS, WSL, and Windows do not work
+- Docker and `docker compose`
 - Bun
-- OpenTofu CLI (`tofu`)
 - Git
-- a provider credential only when the selected module requires one
+- `curl` and `python3`, used by the startup checks and by the verification script
+  in step 7
+- sudo, to install the certificate and DNS settings on the host once
 
-### 1. Start the service
+## 1. Get the repository
 
 ```bash
+git clone https://github.com/tako0614/takosumi.git
 cd takosumi
 bun install
-
-export TAKOSUMI_DEV_MODE=1
-export TAKOSUMI_DEPLOY_CONTROL_TOKEN=dev-token
-PORT=8788 bun core/index.ts
 ```
 
-In another terminal:
+Keep the directory named `takosumi`. The compose files used in the next step refer to
+the repository by that name.
+
+## 2. Start the local Takosumi
 
 ```bash
-export BASE=http://127.0.0.1:8788
-export AUTH="Authorization: Bearer dev-token"
+cd deploy/local-substrate
+bash scripts/up.sh --profile postgres
 ```
 
-### 2. Add a Git URL in `/new`
+This brings everything up on a single Docker network: Pebble as the local
+certificate authority, CoreDNS for name resolution, Caddy for TLS termination,
+Postgres, MinIO for object storage, the runner container that executes OpenTofu,
+the control plane, and the dashboard. The first run builds the images and the
+dashboard here. When startup finishes, the commands to run next and the URLs to
+check are printed on screen.
 
-The standard product flow is the dashboard `/new` route. External links such as
-`/install?git=...&ref=...&path=...` only prefill `/new`; they do not perform a
-server-side install.
-
-The user explicitly reviews:
-
-```text
-Git URL
-compatibility check
-ProviderConnection selection
-plan result
-apply approval
-```
-
-### 3. ProviderConnection (when provider authentication is required)
-
-Credentials are stored in ProviderConnections, not in `.env` files or
-manifests.
+On some hosts Docker cannot start containers under its default AppArmor profile.
+There, set an environment variable:
 
 ```bash
-takosumi connections create \
-  --provider registry.opentofu.org/example/example \
-  --recipe generic-env \
-  --auth-mode env \
-  --secret-partition provider-credentials \
-  --values-file <path-to-provider-credential-env-json>
+TAKOSUMI_LOCAL_SUBSTRATE_DISABLE_APPARMOR=1 bash scripts/up.sh --profile postgres
 ```
 
-`example/example` is a placeholder. Use the source and env/file names declared
-by the module's `required_providers` block and the provider's own documentation.
-Takosumi injects those values only into the runner sandbox while the Run is
-active; it does not infer a credential schema or RunnerProfile from the
-provider name.
+## 3. Install the certificate and DNS on the host
 
-### 4. Result
+```bash
+sudo bash scripts/ca-install.sh
+sudo bash scripts/configure-dns.sh
+```
 
-When a Run succeeds, Takosumi stores:
+`ca-install.sh` installs the root certificate Pebble issued into the system trust
+store and into the Chrome and Firefox certificate databases. `configure-dns.sh`
+points `*.takosumi.test` queries at CoreDNS. Both are once per host. Restarting
+Pebble rotates the root certificate, so run `ca-install.sh` again when that
+happens.
+
+## 4. Check that it is up
+
+```bash
+curl https://hello.takosumi.test/
+curl https://app.takosumi.test/healthz
+curl https://app.takosumi.test/.well-known/openid-configuration
+```
+
+When `/healthz` returns `{"ok":true,"database":"ok"}`, the control plane reaches
+Postgres. When `/.well-known/openid-configuration` answers, the issuer that accepts
+sign-in is up.
+
+## 5. Sign in
+
+Open `https://app.takosumi.test/` in a browser. The sign-in screen offers
+"Local OIDC" — choose it. It is the verification identity provider bundled with
+this stack, so no real account is needed.
+
+## 6. Apply one module
+
+While signed in, open this URL:
 
 ```text
-run log
-plan/apply result
-state version
-outputs
-audit event
+https://app.takosumi.test/install?git=https://github.com/tako0614/takosumi.git&ref=main&path=examples/opentofu-basic
 ```
 
-This quickstart focuses on the OpenTofu Stack flow. Compatibility API framework
-is an OSS Takosumi capability surface, while official managed target pools,
-Takosumi-owned native resource internals, enforced billing, and support/SLA
-belong to the Takosumi for Operator / Cloud operation layer.
+`/install` fills the Git URL, the ref, and the module path into the `/new` form and
+stops there. Opening the link creates nothing. The screen shows the source, the
+version, and the folder; read them, then press "Add service".
 
-## Hosted Cloud flow
+After that press, Takosumi carries on. It resolves the ref to a commit and pins it,
+reads the module and checks compatibility, creates the Capsule, and creates a plan.
+When the plan succeeds and nothing requires approval and nothing is scheduled for
+deletion, it goes straight through to apply. When the Capsule is configured to
+require approval, or the plan contains a deletion, the Run screen shows the plan and
+stops so you read it and deploy yourself.
 
-The hosted service at `app.takosumi.com`, including managed resources, pricing,
-API keys, usage, and spend guard behavior, is documented separately in
+`examples/opentofu-basic` declares no provider and creates no external resource.
+It takes you through plan, apply, and state recording without a single cloud
+credential.
+
+## 7. Confirm it worked
+
+Open `https://app.takosumi.test/runs` and you see the plan Run and the apply Run you
+just created. When both finished successfully, the module you keep in Git was
+applied through this Takosumi. On the Capsule detail screen, the state at the end of
+each apply (a StateVersion) accumulates one per apply.
+
+To check the whole stack at once, run the bundled verification script. Tell it which
+profile you brought up; without the variable it runs as the `workers` profile and
+fails looking for containers that are not running.
+
+```bash
+TAKOSUMI_LOCAL_SUBSTRATE_PROFILE=postgres bash scripts/smoke.sh
+```
+
+The last line reading `==> <count> passed, 0 failed` means success: sign-in, plan and
+apply, reads of the Run records, object storage, DNS, and TLS all work. Logs for
+failed checks stay in `/tmp/smoke-logs/`.
+
+## 8. Tear down
+
+```bash
+bash scripts/down.sh
+```
+
+To also drop the Postgres contents and the issued certificates, run
+`bash scripts/down.sh -v`.
+
+## Where to go next
+
+- [Overview](../concepts/index.md) — how Source, Run, state, and outputs connect
+- [Sources and Capsules](../concepts/sources.md) — register your own repository
+- [Credentials](../concepts/credentials.md) — hand provider credentials over
+- [CLI](../reference/cli.md) — automate what you did on screen
+
+For the official hosted service, see the
 [Takosumi Cloud docs](https://app.takosumi.com/docs/en/).
-
-Cloud uses the same underlying software model, but this quickstart covers only
-the portable Takosumi software / operator endpoint behavior.

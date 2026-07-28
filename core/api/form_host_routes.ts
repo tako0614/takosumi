@@ -14,9 +14,9 @@ import {
   createTakoformHostDiscovery,
   installedFormReferenceKey,
   isInstalledFormReference,
-  isResourceShapeKind,
+  portableTypeForShapeKind,
+  shapeKindForPortableType,
   TAKOFORM_FORM_HOST_API_PATH,
-  TAKOFORM_FORM_HOST_API_VERSION,
   TAKOFORM_FORM_HOST_WELL_KNOWN_PATH,
 } from "takosumi-contract";
 import type { Page, PageParams } from "takosumi-contract/pagination";
@@ -251,7 +251,7 @@ export function registerPortableFormHostRoutes(
         403,
       );
     }
-    const space = requiredQuery(c, "space");
+    const space = requiredQuery(c, "workspace");
     if (!space.ok) return space.response;
     const page = pageQuery(c);
     if (!page.ok) return page.response;
@@ -304,7 +304,7 @@ export function registerPortableFormHostRoutes(
     );
   });
 
-  app.put(`${base}/resources/:kind/:name`, async (c) => {
+  app.put(`${base}/resources/:type/:name`, async (c) => {
     const auth = await options.authorize(c);
     if (!auth.ok) return portableAuthError(c, auth.response);
     const key = idempotencyKey(c);
@@ -337,7 +337,7 @@ export function registerPortableFormHostRoutes(
     return portableJson(c, portableResource(result.value), 200, key.value);
   });
 
-  app.post(`${base}/resources/:kind/:name/import`, async (c) => {
+  app.post(`${base}/resources/:type/:name/import`, async (c) => {
     const auth = await options.authorize(c);
     if (!auth.ok) return portableAuthError(c, auth.response);
     const key = idempotencyKey(c);
@@ -390,7 +390,7 @@ export function registerPortableFormHostRoutes(
   app.get(`${base}/resources`, async (c) => {
     const auth = await options.authorize(c);
     if (!auth.ok) return portableAuthError(c, auth.response);
-    const space = requiredQuery(c, "space");
+    const space = requiredQuery(c, "workspace");
     if (!space.ok) return space.response;
     const identity = formIdentityFromQuery(c, true);
     if (!identity.ok) return identity.response;
@@ -411,7 +411,7 @@ export function registerPortableFormHostRoutes(
     );
   });
 
-  app.get(`${base}/resources/:kind/:name`, async (c) => {
+  app.get(`${base}/resources/:type/:name`, async (c) => {
     const auth = await options.authorize(c);
     if (!auth.ok) return portableAuthError(c, auth.response);
     const located = await exactStoredResource(c, options.service, false);
@@ -419,7 +419,8 @@ export function registerPortableFormHostRoutes(
     return portableJson(c, portableResource(located.value), 200);
   });
 
-  app.post(`${base}/resources/:kind/:name/observe`, async (c) => {
+  // Read-only drift check (Terraform refresh semantics).
+  app.post(`${base}/resources/:type/:name/refresh`, async (c) => {
     const auth = await options.authorize(c);
     if (!auth.ok) return portableAuthError(c, auth.response);
     const key = idempotencyKey(c);
@@ -440,7 +441,7 @@ export function registerPortableFormHostRoutes(
         resource: portableResource(result.value.resource),
         observation: {
           status: result.value.observation.status,
-          summary: `portable observation ${result.value.observation.status}`,
+          summary: `portable drift check ${result.value.observation.status}`,
           ...(result.value.observation.runId
             ? { runId: result.value.observation.runId }
             : {}),
@@ -451,7 +452,8 @@ export function registerPortableFormHostRoutes(
     );
   });
 
-  app.post(`${base}/resources/:kind/:name/refresh`, async (c) => {
+  // Host republishes backend state and sanitized outputs.
+  app.post(`${base}/resources/:type/:name/sync`, async (c) => {
     const auth = await options.authorize(c);
     if (!auth.ok) return portableAuthError(c, auth.response);
     const key = idempotencyKey(c);
@@ -470,8 +472,8 @@ export function registerPortableFormHostRoutes(
       c,
       {
         resource: portableResource(result.value.resource),
-        refresh: {
-          summary: "portable refresh completed",
+        sync: {
+          summary: "portable sync completed",
           ...(result.value.refresh.runId
             ? { runId: result.value.refresh.runId }
             : {}),
@@ -482,7 +484,7 @@ export function registerPortableFormHostRoutes(
     );
   });
 
-  app.delete(`${base}/resources/:kind/:name`, async (c) => {
+  app.delete(`${base}/resources/:type/:name`, async (c) => {
     const auth = await options.authorize(c);
     if (!auth.ok) return portableAuthError(c, auth.response);
     const key = idempotencyKey(c);
@@ -519,41 +521,29 @@ async function parseResourceBody(
   | { readonly ok: false; readonly response: Response }
 > {
   const body = await readJsonObject(c.req.raw);
-  if (body.apiVersion !== TAKOFORM_FORM_HOST_API_VERSION) {
-    return failed(
-      c,
-      "apiVersion must name the exact supported portable API version",
-    );
+  for (const key of Object.keys(body)) {
+    if (!PORTABLE_RESOURCE_BODY_KEYS.has(key)) {
+      return failed(c, `${key} is not a portable v0 resource field`);
+    }
   }
-  const kind = stringValue(body.kind);
-  if (!kind || !isResourceShapeKind(kind)) return failed(c, "kind is invalid");
-  const pathKind = c.req.param("kind");
-  if (pathKind && pathKind !== kind)
-    return failed(c, "path kind does not match body kind");
+  const type = stringValue(body.type);
+  const kind = type ? shapeKindForPortableType(type) : undefined;
+  if (!type || !kind) return failed(c, "type is invalid");
+  const pathType = c.req.param("type");
+  if (pathType && pathType !== type)
+    return failed(c, "path type does not match body type");
   if (!isInstalledFormReference(body.form)) {
     return failed(c, "form must be an exact InstalledFormReference");
   }
-  if (body.form.formRef.kind !== kind)
-    return failed(c, "form kind does not match resource kind");
-  if (!isJsonObject(body.metadata)) return failed(c, "metadata is required");
-  const metadata = body.metadata;
-  const name = stringValue(metadata.name);
-  const space = stringValue(metadata.space);
-  if (!name || !space)
-    return failed(c, "metadata.name and metadata.space are required");
+  if (body.form.type !== type)
+    return failed(c, "form type does not match resource type");
+  const name = stringValue(body.name);
+  const space = stringValue(body.workspace);
+  if (!name || !space) return failed(c, "name and workspace are required");
   if (c.req.param("name") && c.req.param("name") !== name) {
-    return failed(c, "path name does not match metadata.name");
+    return failed(c, "path name does not match resource name");
   }
-  if ("managedBy" in metadata)
-    return failed(c, "metadata.managedBy is host-owned");
-  if (!isJsonObject(body.spec)) return failed(c, "spec must be an object");
-  const labels = stringMap(metadata.labels);
-  if ("labels" in metadata && labels === undefined) {
-    return failed(
-      c,
-      "metadata.labels must be an object whose values are strings",
-    );
-  }
+  if (!isJsonObject(body.config)) return failed(c, "config must be an object");
   const generation = generationPrecondition(c, requireWritePrecondition);
   if (!generation.ok) return generation;
   return {
@@ -562,18 +552,37 @@ async function parseResourceBody(
     request: {
       actor,
       space,
-      kind,
+      kind: kind as ResourceShapeKind,
       form: body.form,
       name,
-      spec: body.spec,
+      spec: body.config,
       managedBy: PORTABLE_FORM_MANAGER,
       expectedGeneration: generation.value,
-      project: stringValue(metadata.project),
-      environment: stringValue(metadata.environment),
-      labels,
+      project: stringValue(body.project),
+      environment: stringValue(body.environment),
     },
   };
 }
+
+/**
+ * The portable request envelope is closed: legacy Kubernetes-style fields
+ * (apiVersion/kind/metadata/spec/labels/managedBy) and unknown fields are
+ * rejected instead of being silently dropped.
+ */
+const PORTABLE_RESOURCE_BODY_KEYS = new Set([
+  "type",
+  "form",
+  "workspace",
+  "name",
+  "project",
+  "environment",
+  "serial",
+  "config",
+  "attributes",
+  "id",
+  "review",
+  "nativeId",
+]);
 
 function generationPrecondition(
   c: Context,
@@ -591,8 +600,7 @@ function generationPrecondition(
   }
   if (update !== undefined) {
     const match = /^"([1-9][0-9]*)"$/u.exec(update);
-    if (!match)
-      return failed(c, "If-Match must contain one quoted resourceVersion");
+    if (!match) return failed(c, "If-Match must contain one quoted serial");
     return { ok: true, value: Number(match[1]) };
   }
   return required
@@ -629,17 +637,18 @@ async function exactStoredResource(
 > {
   const expected = ifMatchPrecondition(c, requireMatch);
   if (!expected.ok) return expected;
-  const space = requiredQuery(c, "space");
+  const space = requiredQuery(c, "workspace");
   if (!space.ok) return space;
   const identity = formIdentityFromQuery(c, true);
   if (!identity.ok) return identity;
-  const kind = c.req.param("kind");
-  if (!isResourceShapeKind(kind) || identity.value.formRef.kind !== kind) {
-    return failed(c, "path kind does not match the exact form identity");
+  const type = c.req.param("type");
+  const kind = type === undefined ? undefined : shapeKindForPortableType(type);
+  if (kind === undefined || identity.value.type !== type) {
+    return failed(c, "path type does not match the exact form identity");
   }
   const name = c.req.param("name");
   if (!name) return failed(c, "resource name is required");
-  const result = await service.get(space.value, kind, name);
+  const result = await service.get(space.value, kind as ResourceShapeKind, name);
   if (!result.ok) {
     if (allowAbsent && result.error.code === "not_found")
       return { ok: true, value: undefined };
@@ -668,8 +677,8 @@ async function exactStoredResource(
       ok: false,
       response: portableError(
         c,
-        "resource_version_conflict",
-        "resourceVersion precondition failed",
+        "serial_conflict",
+        "serial precondition failed",
         412,
       ),
     };
@@ -695,7 +704,7 @@ function ifMatchPrecondition(
   const match = /^"([1-9][0-9]*)"$/u.exec(value);
   return match
     ? { ok: true, value: Number(match[1]) }
-    : failed(c, "If-Match must contain one quoted resourceVersion");
+    : failed(c, "If-Match must contain one quoted serial");
 }
 
 function formIdentityFromQuery(
@@ -712,9 +721,8 @@ function formIdentityFromQuery(
   | { readonly ok: false; readonly response: Response };
 function formIdentityFromQuery(c: Context, required: boolean) {
   const values = {
-    apiVersion: c.req.query("apiVersion"),
-    kind: c.req.query("kind"),
-    definitionVersion: c.req.query("definitionVersion"),
+    type: c.req.query("type"),
+    version: c.req.query("version"),
     schemaDigest: c.req.query("schemaDigest"),
     packageDigest: c.req.query("packageDigest"),
   };
@@ -723,12 +731,9 @@ function formIdentityFromQuery(c: Context, required: boolean) {
   if (!Object.values(values).every(Boolean))
     return failed(c, "the complete exact FormRef query is required");
   const identity = {
-    formRef: {
-      apiVersion: values.apiVersion,
-      kind: values.kind,
-      definitionVersion: values.definitionVersion,
-      schemaDigest: values.schemaDigest,
-    },
+    type: values.type,
+    version: values.version,
+    schemaDigest: values.schemaDigest,
     packageDigest: values.packageDigest,
   };
   return isInstalledFormReference(identity)
@@ -753,7 +758,7 @@ async function requireAvailableForm(
   });
   const expected = installedFormReferenceKey(request.form!);
   const found = result.items.find(
-    (item) => installedFormReferenceKey(item.identity) === expected,
+    (item) => installedFormReferenceKey(item.form) === expected,
   );
   if (!found)
     return {
@@ -830,29 +835,33 @@ async function desiredWriteOperation(
 function portableResource(resource: ResourceObject): TakoformResource {
   if (!resource.form)
     throw new TypeError("portable Resource must carry an exact form identity");
+  const type = portableTypeForShapeKind(resource.kind);
+  if (!type)
+    throw new TypeError(
+      `Resource kind ${resource.kind} has no portable v0 type token`,
+    );
   return {
-    apiVersion: TAKOFORM_FORM_HOST_API_VERSION,
-    kind: resource.kind,
+    type,
     form: resource.form,
-    metadata: {
-      name: resource.metadata.name,
-      space: resource.metadata.space,
-      project: resource.metadata.project,
-      environment: resource.metadata.environment,
-      labels: resource.metadata.labels,
-      resourceVersion: String(resource.metadata.generation ?? 0),
-    },
-    spec: resource.spec,
+    workspace: resource.metadata.space,
+    ...(resource.metadata.project !== undefined
+      ? { project: resource.metadata.project }
+      : {}),
+    ...(resource.metadata.environment !== undefined
+      ? { environment: resource.metadata.environment }
+      : {}),
+    name: resource.metadata.name,
+    serial: String(resource.metadata.generation ?? 0),
+    config: resource.spec,
     ...(resource.status
       ? {
-          status: {
-            phase: resource.status.phase,
-            observedGeneration: resource.status.observedGeneration,
-            portability: resource.status.resolution?.portability,
+          attributes: {
             // Canonical Outputs may contain provider/private implementation
             // evidence. Portable public values are exposed through audited
             // Form Interfaces, not copied wholesale from the host ledger.
-            conditions: resource.status.conditions,
+            ...(resource.status.resolution?.portability !== undefined
+              ? { portability: resource.status.resolution.portability }
+              : {}),
           },
         }
       : {}),
@@ -885,8 +894,6 @@ async function completedApplyReplay(
       installedFormReferenceKey(request.form) ||
     current.value.metadata.project !== request.project ||
     current.value.metadata.environment !== request.environment ||
-    canonicalJson(current.value.metadata.labels ?? null) !==
-      canonicalJson(request.labels ?? null) ||
     canonicalJson(current.value.spec) !== canonicalJson(request.spec)
   ) {
     return undefined;
@@ -915,7 +922,7 @@ function serviceError(c: Context, error: ResourceServiceError): Response {
     form_not_installed: ["form_not_installed", 409, false],
     form_identity_conflict: ["form_identity_conflict", 409, false],
     not_found: ["resource_not_found", 404, false],
-    resource_version_conflict: ["resource_version_conflict", 412, false],
+    resource_version_conflict: ["serial_conflict", 412, false],
     ownership_conflict: ["resource_busy", 409, false],
     reconcile_conflict: ["resource_busy", 409, true],
     import_conflict: ["import_conflict", 409, false],
@@ -979,8 +986,7 @@ function portableJson(
     isJsonObject(value) && isJsonObject(value.resource)
       ? (value.resource as unknown as TakoformResource)
       : (value as TakoformResource);
-  if (resource.metadata?.resourceVersion)
-    c.header("etag", `"${resource.metadata.resourceVersion}"`);
+  if (resource.serial) c.header("etag", `"${resource.serial}"`);
   if (key) c.header("idempotency-key", key);
   return c.json(value, status);
 }
@@ -1095,14 +1101,4 @@ function stringValue(value: unknown): string | undefined {
 
 function isJsonObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function stringMap(
-  value: unknown,
-): Readonly<Record<string, string>> | undefined {
-  if (!isJsonObject(value)) return undefined;
-  const entries = Object.entries(value);
-  return entries.every(([, item]) => typeof item === "string")
-    ? (Object.fromEntries(entries) as Readonly<Record<string, string>>)
-    : undefined;
 }

@@ -816,6 +816,8 @@ export interface OpenTofuControlStore {
     workspaceId: string,
     params: PageParams,
   ): Promise<Page<StoredSource>>;
+  /** Bounded keyset page across every Workspace for scheduled polling. */
+  listAllSourcesPage(params: PageParams): Promise<Page<StoredSource>>;
   deleteSource(id: string): Promise<boolean>;
 
   // SourceSnapshot records (immutable archive snapshots).
@@ -2026,6 +2028,10 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     params: PageParams,
   ): Promise<Page<StoredSource>> {
     return pageSorted(await this.listSources(workspaceId), params);
+  }
+
+  async listAllSourcesPage(params: PageParams): Promise<Page<StoredSource>> {
+    return pageSorted(await this.listSources(), params);
   }
 
   deleteSource(id: string): Promise<boolean> {

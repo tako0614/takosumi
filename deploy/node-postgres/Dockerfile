@@ -1,10 +1,12 @@
+# syntax=docker/dockerfile:1.7
+
 # Takosumi Accounts — Bun + Postgres reference distribution.
 #
 # Substrate-neutral counterpart to deploy/accounts-cloudflare/. Runs the same
 # accounts-service handler against PostgresAccountsStore on Bun.
 # Use this to self-host on a VM, container, or Kubernetes pod.
 
-FROM oven/bun:1 AS deps
+FROM oven/bun:1.3.14 AS deps
 WORKDIR /work
 COPY package.json bun.lock tsconfig.json bunfig.toml /work/
 COPY accounts/contract /work/accounts/contract
@@ -19,22 +21,34 @@ RUN bun install --frozen-lockfile
 # Built in an isolated stage; only the static `dist` directory is copied into
 # the runtime image. If this build is removed/fails, the server auto-detects the
 # missing build and disables static serving (it does not crash).
-FROM oven/bun:1 AS dashboard
+FROM oven/bun:1.3.14 AS dashboard
 WORKDIR /work
 COPY package.json bun.lock tsconfig.json bunfig.toml /work/
 COPY dashboard /work/dashboard
-COPY docs /work/docs
+RUN bun install --frozen-lockfile
+RUN cd dashboard && bun install --frozen-lockfile
+RUN cd dashboard && bun run build
+
+# App docs intentionally use their tracked npm lockfile. Keeping them in a
+# separate Node stage prevents a developer's ignored docs/node_modules from
+# becoming an undeclared build input.
+FROM node:26.1.0-bookworm-slim AS app-docs
+WORKDIR /work
+COPY docs/package.json docs/package-lock.json /work/docs/
+RUN cd docs && npm ci --no-fund --no-audit
 COPY app-docs /work/app-docs
 COPY scripts/build-app-docs.sh /work/scripts/build-app-docs.sh
-RUN bun install --frozen-lockfile
-RUN cd dashboard && bun run build && cd /work && bash scripts/build-app-docs.sh
+RUN bash scripts/build-app-docs.sh
 
-FROM oven/bun:1
+FROM oven/bun:1.3.14
 WORKDIR /app
 COPY --from=deps --chown=bun:bun /work /app
 COPY --from=dashboard --chown=bun:bun \
   /work/dashboard/dist \
   /app/dashboard/dist
+COPY --from=app-docs --chown=bun:bun \
+  /work/dashboard/dist/docs \
+  /app/dashboard/dist/docs
 
 # Outbound network destinations the accounts handler is allowed to reach.
 # Defaults cover the Postgres service alias used by docker-compose and Google

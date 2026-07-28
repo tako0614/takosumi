@@ -2,15 +2,28 @@
 
 > このページでわかること: Takosumi の永続 accounts / control ledger を
 > zero-downtime に migration するための expand / backfill / contract 手順、
-> rollback 方針、release gate。D1 と Postgres は同じ論理 model の adapter です。
+> rollback 方針、state-transition evidence。D1 と Postgres は同じ論理 model の adapter です。
 
-この runbook は **Takosumi operated environment** の DB migration 正本です。
+この runbook は **self-host/operator-owned Takosumi environment** のDB migration
+手順と、registered release adapterが満たすべきstate-transition contractを定義します。
 対象は platform worker が所有する accounts plane と control-plane ledger
 (Workspace / Project / Capsule / Source / ProviderConnection / CredentialRecipe / ProviderBinding / Secret / Run /
 StateVersion / Output / Runner / AuditEvent / Operator settings / RunCost / UsageEvent) です。
 既存 ledgers に Space / Installation / StateSnapshot / OutputSnapshot / Deployment などの旧行が残る場合は、Final Plan
 model への migration 対象として扱います。host/distribution product の app-local DB migration は各 product docs の領域であり、
 この runbook では扱いません。
+
+production surfaceのdeployはこのrepositoryのentrypointを使います。共通ruleは
+`takos-control`の`engineering.policy.json`→`deploy`が正本です。
+
+```bash
+bun run deploy
+```
+
+schema/data/topologyを変更するdeployは`state-change` classであり、
+独立review、isolated rehearsal、forward-repair計画を要求します。以下のCLI例は
+self-host operatorまたは固定adapterのimplementation building blockであり、公式
+Takosumi Cloudへのraw migration authorityではありません。
 
 ## Scope
 
@@ -35,6 +48,18 @@ control-plane D1 の通常リリースでは ad hoc `d1 execute` ではなく
 [Control D1 schema predeploy](control-d1-schema-predeploy.md) を使い、current OSS commit
 から生成した manifest digest を明示確認して staging → production の順に apply / verify する。
 下記の Accounts CLI 例は accounts-plane owner の経路であり、control D1 gate の代替ではない。
+
+### Boot policy
+
+production / staging の process boot は migration を実行しません。Postgres
+migration は deploy 前の明示的な `bun run db:migrate` jobだけが適用し、service
+boot は `storage_migrations` ledgerをread-onlyで検証します。pending migration、
+未知のledger row、checksum drift、database接続失敗、またはproduction-like環境で
+database URLが欠けている場合、processはtrafficを受けずに起動失敗します。
+
+`TAKOSUMI_DB_AUTO_MIGRATE=true` はlocal / development専用の明示的な利便機能です。
+production / stagingでの指定は拒否されます。未指定または`false`は「検証を省略」
+ではなく「schemaを書き換えず、predeploy済みであることだけを検証」を意味します。
 
 ## Gate
 
@@ -127,7 +152,7 @@ transaction に含めます。失敗時は全体 rollback し、fence は active
 3. incident 緩和に必要な最小限だけ実行する。
 4. 通常 migration に畳み込む follow-up を起票する。
 
-## Production Checklist
+## Self-host/operator execution checklist
 
 production 前:
 
@@ -138,14 +163,14 @@ production 前:
 - platform worker rollback version / commit が判明している
 - queue consumer / scheduled handler を freeze する必要があるか判断済み
 
-Postgres composition の実行例:
+Self-host/operator-owned Postgres compositionの実行例:
 
 ```bash
 cd takosumi
 bun run cli -- accounts migrate --database-url "$TAKOSUMI_ACCOUNTS_DATABASE_URL"
 ```
 
-Cloudflare D1 reference composition の実行例:
+Self-host/operator-owned Cloudflare D1 reference compositionの実行例:
 
 ```bash
 cd takosumi
@@ -168,7 +193,7 @@ public evidence:
 
 - test / typecheck summary
 - pull request link
-- release gate summary
+- shipped commit, artifact digest, and readback result
 
 private evidence:
 

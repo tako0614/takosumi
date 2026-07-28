@@ -84,6 +84,7 @@ import type {
 } from "takosumi-contract";
 import {
   MCP_SERVER_INVOKE_PERMISSION,
+  formRefOfInstalled,
   installedFormReferenceKey,
   isInstalledFormReference,
   isResourceShapeKind,
@@ -503,7 +504,7 @@ export async function resolvePlatformFormActivation(
     return { status: "unavailable", reason: "identity_mismatch" };
   }
   const [definition, formPackage] = await Promise.all([
-    forms.getDefinition(input.expectedIdentity.formRef),
+    forms.getDefinition(formRefOfInstalled(input.expectedIdentity)),
     forms.getPackage(input.expectedIdentity.packageDigest),
   ]);
   if (

@@ -8,23 +8,29 @@ import type {
 import { evaluateStandardFormAdmission } from "../../../../core/domains/service-forms/standard_admission.ts";
 
 const IDENTITY: InstalledFormReference = {
-  formRef: {
-    apiVersion: "forms.takoform.com/v1alpha1",
-    kind: "ExampleStore",
-    definitionVersion: "1.0.0",
-    schemaDigest: `sha256:${"1".repeat(64)}`,
-  },
+  type: "example_store",
+  version: "1.0.0",
+  schemaDigest: `sha256:${"1".repeat(64)}`,
   packageDigest: `sha256:${"2".repeat(64)}`,
 };
 
 const DEFINITION: FormDefinition = {
   identity: IDENTITY,
   displayName: "Example store",
-  operations: ["create", "read", "update", "delete", "import", "refresh"],
+  operations: [
+    "create",
+    "read",
+    "update",
+    "delete",
+    "import",
+    "refresh",
+    "sync",
+    "drift",
+  ],
   metadata: {
     takoform: {
       status: "standard",
-      immutableFields: ["/name"],
+      forceNewFields: ["/name"],
       interfaces: [],
     },
   },
@@ -34,9 +40,15 @@ const DEFINITION: FormDefinition = {
 const PACKAGE: FormPackage = {
   packageDigest: IDENTITY.packageDigest,
   artifactRef: "r2:forms/example-store.json",
-  verifierId: "takoform.form-package.v1alpha1+sigstore.test.v1",
+  verifierId: "takoform.form-package.v0+sigstore.test.v1",
   status: "installed",
-  definitionRefs: [IDENTITY.formRef],
+  definitionRefs: [
+    {
+      type: IDENTITY.type,
+      version: IDENTITY.version,
+      schemaDigest: IDENTITY.schemaDigest,
+    },
+  ],
   installedAt: "2026-07-17T00:00:00.000Z",
   installedBy: "operator:test",
   updatedAt: "2026-07-17T00:00:00.000Z",
@@ -53,10 +65,10 @@ function evidence(): StandardFormAdmissionEvidence {
     evidenceDigest: `sha256:${"3".repeat(64)}`,
   });
   return {
-    apiVersion: "forms.takoform.com/standard-admission/v1alpha1",
+    format: "takoform.standard-admission@v0",
     identity: IDENTITY,
     classification: "portable-standard",
-    approvedSchemaDigest: IDENTITY.formRef.schemaDigest,
+    approvedSchemaDigest: IDENTITY.schemaDigest,
     audit: {
       lifecycle: {
         create: true,
@@ -64,8 +76,8 @@ function evidence(): StandardFormAdmissionEvidence {
         update: true,
         delete: true,
         import: true,
-        observe: true,
         refresh: true,
+        sync: true,
         drift: true,
       },
       immutability: { reviewed: true, fields: ["/name"] },
@@ -84,17 +96,17 @@ function evidence(): StandardFormAdmissionEvidence {
       positive: [
         {
           name: "basic",
-          desired: { name: "example" },
-          observed: { state: "ready" },
-          output: { endpoint: "https://example.test" },
+          config: { name: "example" },
+          attributes: { state: "ready" },
+          outputs: { endpoint: "https://example.test" },
         },
       ],
       negative: [
         {
           name: "invalid-name",
-          stage: "desired",
+          stage: "config",
           input: { name: "" },
-          expectedErrorCode: "invalid_name",
+          expectedErrorCode: "invalid_argument",
         },
       ],
     },
@@ -114,6 +126,48 @@ test("standard admission accepts exact signed-package evidence with full portabl
       evidence: evidence(),
     }),
   ).toEqual({ admitted: true, errors: [] });
+});
+
+test("retired apiVersion-envelope evidence is rejected in favor of the takoform format", () => {
+  const candidate = evidence() as unknown as Record<string, unknown>;
+  delete candidate.format;
+  const result = evaluateStandardFormAdmission({
+    definition: DEFINITION,
+    package: PACKAGE,
+    trustedPackageVerifierId: PACKAGE.verifierId,
+    evidence: {
+      ...candidate,
+      apiVersion: "forms.takoform.com/standard-admission/v1alpha1",
+    } as unknown as StandardFormAdmissionEvidence,
+  });
+  expect(result.admitted).toBe(false);
+  expect(result.errors).toContain("unsupported standard-admission format");
+});
+
+test("lifecycle audit must attest sync; a retired observe key never substitutes", () => {
+  const candidate = evidence();
+  const lifecycle = {
+    ...candidate.audit.lifecycle,
+  } as unknown as Record<string, boolean>;
+  delete lifecycle.sync;
+  lifecycle.observe = true;
+  const result = evaluateStandardFormAdmission({
+    definition: DEFINITION,
+    package: PACKAGE,
+    trustedPackageVerifierId: PACKAGE.verifierId,
+    evidence: {
+      ...candidate,
+      audit: {
+        ...candidate.audit,
+        lifecycle:
+          lifecycle as unknown as StandardFormAdmissionEvidence["audit"]["lifecycle"],
+      },
+    },
+  });
+  expect(result.admitted).toBe(false);
+  expect(result.errors).toContain(
+    "lifecycle audit must explicitly pass every portable operation",
+  );
 });
 
 test("legacy compatibility status never implicitly becomes a portable standard", () => {
@@ -144,7 +198,7 @@ test("standard admission rejects digest substitution, missing coverage, and priv
         positive: [
           {
             ...candidate.fixtures.positive[0]!,
-            desired: { name: "example", provider: "forbidden" },
+            config: { name: "example", provider: "forbidden" },
           },
         ],
       },
@@ -169,6 +223,31 @@ test("standard admission rejects digest substitution, missing coverage, and priv
       error.includes("forbidden standard-admission field provider"),
     ),
   ).toBe(true);
+});
+
+test("negative fixtures must expect the one portable invalid_argument wire code", () => {
+  const candidate = evidence();
+  const result = evaluateStandardFormAdmission({
+    definition: DEFINITION,
+    package: PACKAGE,
+    trustedPackageVerifierId: PACKAGE.verifierId,
+    evidence: {
+      ...candidate,
+      fixtures: {
+        ...candidate.fixtures,
+        negative: [
+          {
+            ...candidate.fixtures.negative[0]!,
+            expectedErrorCode: "invalid_name",
+          },
+        ],
+      },
+    },
+  });
+  expect(result.admitted).toBe(false);
+  expect(result.errors).toContain(
+    "negative fixture invalid-name must use portable wire error code invalid_argument",
+  );
 });
 
 test("standard admission refuses non-Takoform or revoked package authority", () => {

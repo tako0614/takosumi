@@ -10,6 +10,7 @@ import type {
   ResourceManagedBy,
   ResourceShapeKind,
 } from "takosumi-contract";
+import { shapeKindForPortableType } from "takosumi-contract";
 import {
   pageSorted,
   type Page,
@@ -62,12 +63,16 @@ export interface ResourceRecordVersion {
   readonly generation: number;
   readonly phase: ResourceShapeRecord["phase"];
   readonly updatedAt: string;
+  /** Optional only for callers compiled before durable revision CAS. */
+  readonly revision?: number;
 }
 
 export interface ResourceApplyingVersion {
   readonly generation: number;
   readonly phase: "Applying";
   readonly updatedAt: string;
+  /** Optional only for callers compiled before durable revision CAS. */
+  readonly revision?: number;
 }
 
 export interface ResourceApplyBeginInput {
@@ -383,13 +388,21 @@ export class InMemoryResourceShapeStore implements ResourceShapeStore {
   createSync(record: ResourceShapeRecord): ResourceCreateResult {
     const current = this.#byId.get(record.id);
     if (current) return { status: "conflict", record: current };
-    this.#byId.set(record.id, record);
-    return { status: "created", record };
+    const persisted = withResourceRevision(
+      record,
+      resourceRecordRevision(record),
+    );
+    this.#byId.set(record.id, persisted);
+    return { status: "created", record: persisted };
   }
 
   upsert(record: ResourceShapeRecord): Promise<ResourceShapeRecord> {
-    this.#byId.set(record.id, record);
-    return Promise.resolve(record);
+    const current = this.#byId.get(record.id);
+    const persisted = current
+      ? withNextResourceRevision(record, current)
+      : withResourceRevision(record, resourceRecordRevision(record));
+    this.#byId.set(record.id, persisted);
+    return Promise.resolve(persisted);
   }
 
   get(id: ResourceShapeRecordId): Promise<ResourceShapeRecord | undefined> {
@@ -563,6 +576,7 @@ export class InMemoryResourceShapeStore implements ResourceShapeStore {
       ...current,
       stateAdoption: descriptor,
       updatedAt: descriptor.confirmedAt,
+      revision: nextResourceRevision(current),
     };
     this.#byId.set(id, record);
     return Promise.resolve({ status: "confirmed", record });
@@ -574,15 +588,14 @@ export class InMemoryResourceShapeStore implements ResourceShapeStore {
   ): Promise<ResourceCompareAndSetResult> {
     const current = this.#byId.get(record.id);
     if (!current) return Promise.resolve({ status: "not_found" });
-    if (
-      current.generation !== expected.generation ||
-      current.phase !== expected.phase ||
-      current.updatedAt !== expected.updatedAt
-    ) {
+    const expectedRevision =
+      expected.revision ?? resourceRecordRevision(record);
+    if (!matchesVersion(current, { ...expected, revision: expectedRevision })) {
       return Promise.resolve({ status: "conflict", record: current });
     }
-    this.#byId.set(record.id, record);
-    return Promise.resolve({ status: "updated", record });
+    const persisted = withNextResourceRevision(record, current);
+    this.#byId.set(record.id, persisted);
+    return Promise.resolve({ status: "updated", record: persisted });
   }
 
   deleteIfVersion(
@@ -590,12 +603,7 @@ export class InMemoryResourceShapeStore implements ResourceShapeStore {
     expected: ResourceRecordVersion,
   ): Promise<boolean> {
     const current = this.#byId.get(id);
-    if (
-      !current ||
-      current.generation !== expected.generation ||
-      current.phase !== expected.phase ||
-      current.updatedAt !== expected.updatedAt
-    ) {
+    if (!current || !matchesVersion(current, expected)) {
       return Promise.resolve(false);
     }
     this.#byId.delete(id);
@@ -619,8 +627,12 @@ export class InMemoryResourceShapeStore implements ResourceShapeStore {
     if (current.generation !== expectedGeneration) {
       return Promise.resolve({ status: "conflict", record: current });
     }
-    this.#byId.set(record.id, record);
-    return Promise.resolve({ status: "claimed", record });
+    if (resourceRecordRevision(current) !== resourceRecordRevision(record)) {
+      return Promise.resolve({ status: "conflict", record: current });
+    }
+    const persisted = withNextResourceRevision(record, current);
+    this.#byId.set(record.id, persisted);
+    return Promise.resolve({ status: "claimed", record: persisted });
   }
 
   delete(id: ResourceShapeRecordId): Promise<void> {
@@ -806,17 +818,30 @@ export function createInMemoryResourceShapeStores(): ResourceShapeStores {
             record: current,
           });
         }
-        if (!matchesVersion(current, input.expected)) {
+        if (
+          !matchesVersion(current, {
+            ...input.expected,
+            revision:
+              input.expected.revision ??
+              resourceRecordRevision(input.applyingRecord),
+          })
+        ) {
           return Promise.resolve({ status: "conflict", record: current });
         }
       }
       // Both mutations happen synchronously after every possible failure and
       // conflict has been checked, so no Promise turn can observe torn state.
-      resources.replaceSync(input.applyingRecord);
+      const persisted = current
+        ? withNextResourceRevision(input.applyingRecord, current)
+        : withResourceRevision(
+            input.applyingRecord,
+            resourceRecordRevision(input.applyingRecord),
+          );
+      resources.replaceSync(persisted);
       locks.putSync(input.plannedLock);
       return Promise.resolve({
         status: "begun",
-        record: input.applyingRecord,
+        record: persisted,
         lock: input.plannedLock,
       });
     },
@@ -827,11 +852,12 @@ export function createInMemoryResourceShapeStores(): ResourceShapeStores {
       if (!matchesVersion(current, input.expectedApplying)) {
         return Promise.resolve({ status: "conflict", record: current });
       }
-      resources.replaceSync(input.readyRecord);
+      const persisted = withNextResourceRevision(input.readyRecord, current);
+      resources.replaceSync(persisted);
       locks.putSync(input.finalLock);
       return Promise.resolve({
         status: "committed",
-        record: input.readyRecord,
+        record: persisted,
         lock: input.finalLock,
       });
     },
@@ -857,7 +883,9 @@ export function createInMemoryResourceShapeStores(): ResourceShapeStores {
       // Like begin/commit, every possible failure is checked before these
       // synchronous mutations; there is no interleaving Promise turn.
       if (input.replacement) {
-        resources.replaceSync(input.replacement.record);
+        resources.replaceSync(
+          withNextResourceRevision(input.replacement.record, current),
+        );
         if (input.replacement.lock) {
           locks.putSync(input.replacement.lock);
         } else {
@@ -918,7 +946,7 @@ export function createInMemoryResourceShapeStores(): ResourceShapeStores {
       if (
         current.form !== undefined ||
         currentLock.form !== undefined ||
-        current.kind !== input.form.formRef.kind ||
+        current.kind !== shapeKindForPortableType(input.form.type) ||
         !matchesVersion(current, input.expectedResource) ||
         !matchesApplyLock(currentLock, input.expectedLock)
       ) {
@@ -928,7 +956,11 @@ export function createInMemoryResourceShapeStores(): ResourceShapeStores {
           lock: currentLock,
         });
       }
-      const record = { ...current, form: input.form };
+      const record = {
+        ...current,
+        form: input.form,
+        revision: nextResourceRevision(current),
+      };
       const lock = {
         ...currentLock,
         form: input.form,
@@ -971,7 +1003,7 @@ export function assertResourceFormIdentityPinInput(
 ): void {
   assertResourceFormIdentity(
     input.form,
-    input.form.formRef.kind as ResourceShapeKind,
+    shapeKindForPortableType(input.form.type) as ResourceShapeKind,
   );
   if (input.expectedLock.resourceId !== input.resourceId) {
     throw new Error(
@@ -987,8 +1019,41 @@ export function matchesVersion(
   return (
     record.generation === expected.generation &&
     record.phase === expected.phase &&
-    record.updatedAt === expected.updatedAt
+    record.updatedAt === expected.updatedAt &&
+    (expected.revision === undefined ||
+      resourceRecordRevision(record) === expected.revision)
   );
+}
+
+/** Normalize the compatibility absence used by rows predating revision CAS. */
+export function resourceRecordRevision(record: ResourceShapeRecord): number {
+  const revision = record.revision ?? 0;
+  if (!Number.isSafeInteger(revision) || revision < 0) {
+    throw new Error(`invalid Resource revision ${String(revision)}`);
+  }
+  return revision;
+}
+
+export function nextResourceRevision(record: ResourceShapeRecord): number {
+  const revision = resourceRecordRevision(record);
+  if (revision === Number.MAX_SAFE_INTEGER) {
+    throw new Error(`Resource ${record.id} revision overflow`);
+  }
+  return revision + 1;
+}
+
+function withResourceRevision(
+  record: ResourceShapeRecord,
+  revision: number,
+): ResourceShapeRecord {
+  return { ...record, revision };
+}
+
+function withNextResourceRevision(
+  record: ResourceShapeRecord,
+  current: ResourceShapeRecord,
+): ResourceShapeRecord {
+  return withResourceRevision(record, nextResourceRevision(current));
 }
 
 export function matchesApplyLock(

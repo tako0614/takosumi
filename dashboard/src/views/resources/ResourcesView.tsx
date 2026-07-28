@@ -648,7 +648,7 @@ function Inner(): JSX.Element {
                       >
                         {(form) => (
                           <Badge tone="info">
-                            {resourceKindLabel(form.identity.formRef.kind)}
+                            {resourceKindLabel(form.form.type)}
                           </Badge>
                         )}
                       </For>

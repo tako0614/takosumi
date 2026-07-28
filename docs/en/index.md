@@ -1,161 +1,85 @@
-# Takosumi software
+# What Takosumi is
 
-Takosumi is software that deploys and manages OpenTofu/Terraform modules from
-Git through a plan → review → apply flow. It can run ordinary
-OpenTofu/Terraform modules as-is, and it can resolve Resource Shapes through
-the current compatibility API when a typed service form is
-useful. In the adopted target, the portable definition is a Service Form, its
-exact identity is a FormRef, and Takosumi is an optional host that still works
-with zero Form Packages installed (see the [glossary](./reference/glossary.md)
-for one-line explanations of the terms).
+Takosumi is a control plane that runs the OpenTofu / Terraform modules you keep in
+Git — **plan, review, apply** — and keeps the history.
+Takosumi does not ship a first-party Terraform/OpenTofu provider.
 
-This page is for Takosumi software and Takosumi for Operator docs. The official
-hosted Takosumi Cloud service that we operate is documented separately at
-[app.takosumi.com/docs](https://app.takosumi.com/docs/en/).
+It does not build infrastructure itself. Cloudflare and AWS are still driven by their
+own providers. What Takosumi takes on is the record of **who ran what, when, with which
+credentials, and what came out of it**.
 
-## Which Docs To Read
+## What changes
 
-| Need                                                                                                          | Read                                                                                                                                                                                        |
-| ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Takosumi model, API, Runs, StateVersions, and Outputs                                                         | these software docs                                                                                                                                                                         |
-| self-host or operator OpenTofu Stack flow                                                                     | [Quickstart](./getting-started/quickstart.md) and [Model reference](./reference/model.md)                                                                                                   |
-| Service Form host (current Resource Shape compatibility API), Compatibility API framework, and Adapter system | [Takosumi API](./reference/api.md) and [Model reference](./reference/model.md)                                                                                                              |
-| `app.takosumi.com` managed resources, pricing, API keys, and usage                                            | [Takosumi Cloud docs](https://app.takosumi.com/docs/en/)                                                                                                                                    |
-| Cloud endpoint families, compatibility matrices, and billing contract                                         | [Cloud resources](https://app.takosumi.com/docs/en/resources), [Cloud endpoints](https://app.takosumi.com/docs/en/endpoints), and [Cloud pricing](https://app.takosumi.com/docs/en/pricing) |
+Starting from writing `.tf` and running `tofu apply`, you gain the following.
 
-## Product Split
+**One module, different connections.** Modules carry no credentials and no notion of
+environment. Create two Capsules — one for development, one for production — and give
+each its own Connection. The `.tf` stays single.
 
-```text
-Takosumi OSS:
-  Git-based OpenTofu control plane
-  + plain OpenTofu stack execution
-  + optional zero-form Service Form host
-  + current Resource Shape compatibility API
-  + Resolver / Planner / Reconciler
-  + Target / Credential / OIDC / Secret / Policy
-  + Compatibility API framework
-  + Adapter system
+**A review step before every apply.** You create a plan, read it, and then apply **that
+same plan**. Nothing is re-planned at apply time, so what you reviewed is what runs.
 
-Takosumi for Operator:
-  Takosumi
-  + customer / tenant operation
-  + billing / metering / quota
-  + DB-backed operator configuration
-  + CLI / API / runbook operations
-  + managed target catalog
+**A trail you can follow later.** Every Run records the commit, the actor, the time, and
+the credentials used. Each apply saves the resulting state, so you can go back.
 
-Takosumi Cloud:
-  official hosted Takosumi for Operator
-  + official managed targets
-  + Cloud-operated managed service backends
-  + official billing / SLA / support
+**Fewer places credentials live.** Stored values cannot be read back. They reach only the
+sandbox during a Run, and only the variable names appear in the record.
+
+**Services that can reference each other.** A value one Capsule publishes can be consumed
+by another, so endpoints are never copied by hand.
+
+## What using it looks like
+
+```bash
+# 1. register the repository
+curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/sources" \
+  -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{ "workspaceId": "ws_example", "name": "my-app",
+        "url": "https://github.com/example/my-app.git",
+        "defaultRef": "v1.0.0", "defaultPath": "deploy/opentofu" }'
+
+# 2. create a plan
+curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/capsules/cap_example/plan" \
+  -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
+
+# 3. read it, then apply the same Run
+takosumi status run_example
+
+curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/runs/run_example/apply" \
+  -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
 ```
 
-The boundary is:
+The dashboard covers the same path: paste a Git URL into `/new`, and Takosumi reads the
+module and shows the variables and providers it needs.
 
-```text
-The portable project owns Service Forms, FormRefs, Form Packages, and typed-client conformance.
-Takosumi OSS owns the generic host lifecycle and APIs.
-Operator / Cloud own commercial operation and managed capacity.
-```
+## Your module stays ordinary
 
-Cloud is not the Takosumi core. It is the official hosted deployment. Software
-docs describe APIs and models that work for any Takosumi endpoint, self-hosted
-installation, or operator-run deployment. Cloud docs describe the managed
-resources, pricing, spend guard, and endpoint families at `app.takosumi.com`.
+There is no Takosumi manifest and nothing to add to your `.tf`. Register the module you
+already run.
 
-## What Takosumi Manages
+There is also an optional path for typed services — object storage, KV, SQL, queues —
+declared without writing a module at all. Takosumi works without it.
 
-Takosumi manages the outside of OpenTofu/Terraform:
+## When it fits
 
-```text
-register Git repos / Sources
-store ProviderConnections
-inject env/files only for a Run through CredentialRecipes
-run OpenTofu/Terraform in a runner sandbox
-record plan / apply / destroy as Run ledger entries
-store StateVersions, Outputs, logs, and AuditEvents
-resolve exact Service Form-backed Resources through TargetPool / Policy / Adapter
-```
+- Several people touch the same infrastructure and you need **who did what**
+- Development and production should run the **same module with different connections**
+- Every apply should pass through **a human review**
+- Cloud credentials **should not sit in a shell or a CI variable**
 
-The core value is:
+If you are one person on one environment and `tofu apply` is enough, this adds little.
 
-```text
-Same manifest, different connection.
-Same form, different target.
-```
+## Where to go next
 
-The same `.tf` can move between dev/prod, accounts, and provider aliases by
-changing ProviderBindings. The same exact Service Form can resolve to any
-operator-enabled Target through TargetPool, Policy, and Adapter evidence. The
-current wire and existing-state aliases from the discontinued provider call
-this a Resource Shape.
+Start with the [Quickstart](./getting-started/quickstart.md) and get one thing running
+locally.
 
-## What Takosumi Does Not Rebuild
+To understand how it works, read the [Overview](./concepts/) and carry on through Sources
+and Capsules, the Run model, state and outputs, and credentials.
 
-Takosumi does not recreate an existing industry-standard API, protocol, or
-OpenTofu provider when that surface is already enough.
+When you need exact arguments and limits, they are in the [API](./reference/api.md) and
+[CLI](./reference/cli.md) references.
 
-```text
-Standard API / protocol / OpenTofu provider exists:
-  use that surface through the Stack flow or a scoped compatibility profile.
-
-No standard surface exists, and the service form is repeated:
-  admit a typed Service Form through portable governance.
-
-One-off gap:
-  use generic-env ProviderConnection and an ordinary OpenTofu module.
-```
-
-Takosumi does not ship a first-party Terraform/OpenTofu provider. Existing
-providers run unchanged through the Stack flow. Use Takoform for portable
-Service Forms and Form-backed Resource Interface descriptors, service-side
-InstallConfig blueprints for Capsule Interfaces, and the Takosumi API, CLI, or
-dashboard for operator administration.
-
-## Compatibility API
-
-Compatibility APIs are Takosumi OSS framework and capability surfaces. They are
-scoped and versioned, such as `compat.s3.v1`, `compat.oci.v1`,
-`compat.cloudevents.v1`, and `compat.kubernetes.crd.v1`.
-
-They are not claims of complete provider API compatibility.
-When existing providers or standard endpoints are enough for S3/R2/GCS,
-registries, queues, or databases, use those providers or endpoints.
-
-## Product Words
-
-The normal UI does not lead with internal model nouns.
-
-| UI word       | Meaning                                              |
-| ------------- | ---------------------------------------------------- |
-| Service       | The app, worker, API, site, or storage you host      |
-| Connection    | The Cloudflare / AWS / GCP account Takosumi can use  |
-| Changes       | The plan / resource summary you review before deploy |
-| History       | Who changed what and when                            |
-| Restore point | A state version you can recover from                 |
-
-One-line explanations of the other terms live in the
-[glossary](./reference/glossary.md); technical details are available in the
-[Model reference](./reference/model.md).
-Use the [App Handoff Protocol](./reference/app-handoff.md) when an external web,
-desktop, mobile, or CLI client needs to create a hosted service.
-
-## Docs Boundary
-
-Published docs contain only the external contract that users, self-host
-operators, and Takosumi Cloud customers can rely on. Internal notes, operator
-runbooks, secret rotation, raw readiness records, pricing sync procedures, and
-implementation-only wiring are not public product contracts.
-
-The full classification is fixed in the
-[Published docs contract](./reference/docs-contract.md).
-
-## Next Documents
-
-- [Quickstart](./getting-started/quickstart.md)
-- [Model reference](./reference/model.md)
-- [Takosumi API](./reference/api.md)
-- [Deploy-Control API](./reference/deploy-control-api.md)
-- [Operator control MCP](./reference/operator-control-mcp.md)
-- [Takosumi Cloud docs](https://app.takosumi.com/docs/en/)
+Pricing and managed resources for the official hosted service live in the
+[Takosumi Cloud docs](https://app.takosumi.com/docs/en/).
