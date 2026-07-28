@@ -64,6 +64,7 @@ function Inner(): JSX.Element {
             <a
               href={contributionHref(contribution.href)}
               class="settings-link tg-card tg-card-hover"
+              rel="external"
             >
               <span class="settings-link-icon" aria-hidden="true">
                 <Puzzle size={20} />
