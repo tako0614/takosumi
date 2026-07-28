@@ -1555,7 +1555,6 @@ export const en: Record<keyof typeof ja, string> = {
   "billing.commercial.checkout.cancelled":
     "Payment setup was cancelled. No changes were made.",
   "billing.commercial.manage": "Manage payment method",
-  "billing.commercial.status.none": "Not started",
   "billing.commercial.status.unknown": "Unknown",
   "billing.commercial.customerType.label": "Account type",
   "billing.commercial.customerType.individual": "Individual",

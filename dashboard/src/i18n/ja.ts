@@ -1571,7 +1571,6 @@ export const ja = {
   "billing.commercial.checkout.cancelled":
     "支払い設定をキャンセルしました。変更はありません。",
   "billing.commercial.manage": "支払い方法を管理",
-  "billing.commercial.status.none": "未開始",
   "billing.commercial.status.unknown": "不明",
   "billing.commercial.customerType.label": "利用区分",
   "billing.commercial.customerType.individual": "個人",
