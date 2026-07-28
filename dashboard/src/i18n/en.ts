@@ -1539,26 +1539,22 @@ export const en: Record<keyof typeof ja, string> = {
   "billing.usage.quantity": "Quantity",
   "billing.usage.amount": "Estimated amount",
   "billing.usage.unrated": "Unrated",
-  "billing.commercial.pageTitle": "Plan and billing",
+  "billing.commercial.pageTitle": "Credits and billing",
   "billing.commercial.pageSubtitle":
-    "Manage your usage-based plan, payment method, and invoices.",
+    "Add prepaid credits and control automatic recharge.",
   "billing.commercial.description":
-    "Review the active plan and manage payment details.",
+    "Credits are used only for Takosumi Cloud services and do not expire.",
   "billing.commercial.loadError":
-    "Could not load plan and billing details: {message}",
+    "Could not load credit and billing details: {message}",
   "billing.commercial.actionError":
     "The billing action could not be completed: {message}",
   "billing.commercial.unavailable":
     "Billing setup is temporarily unavailable. Existing usage records are not affected.",
   "billing.commercial.checkout.success":
-    "Payment setup was completed. The latest status is shown below.",
+    "Your payment completed. The purchased credits will appear after the payment provider confirms it.",
   "billing.commercial.checkout.cancelled":
     "Payment setup was cancelled. No changes were made.",
   "billing.commercial.manage": "Manage payment method",
-  "billing.commercial.currentPlan": "Current plan",
-  "billing.commercial.noPlan": "No active plan",
-  "billing.commercial.renewsAt": "Next billing date",
-  "billing.commercial.endsAt": "Ends on",
   "billing.commercial.status.none": "Not started",
   "billing.commercial.status.unknown": "Unknown",
   "billing.commercial.customerType.label": "Account type",
@@ -1569,37 +1565,40 @@ export const en: Record<keyof typeof ja, string> = {
   "billing.commercial.profile.title": "Billing profile",
   "billing.commercial.profile.hint":
     "Account type and country are fixed after payment setup.",
-  "billing.commercial.plans.title": "Plan",
-  "billing.commercial.plans.subtitle":
-    "There is no fixed monthly fee. Charges follow actual usage.",
-  "billing.commercial.plans.empty": "No plan is currently available.",
-  "billing.commercial.plans.current": "Current",
-  "billing.commercial.plans.paygNote":
-    "Pay only for measured usage. The price shown here comes from the active operator catalog.",
-  "billing.commercial.plans.currentDescription":
-    "This plan is already active for the Workspace.",
-  "billing.commercial.plans.start": "Set up payment",
-  "billing.commercial.invoice.title": "Invoices",
-  "billing.commercial.invoice.subtitle":
-    "Recent billing documents for this account.",
-  "billing.commercial.invoice.empty": "No invoices yet.",
-  "billing.commercial.invoice.date": "Date",
-  "billing.commercial.invoice.number": "Invoice",
-  "billing.commercial.invoice.status": "Status",
-  "billing.commercial.invoice.total": "Total",
-  "billing.commercial.invoice.action": "Document",
-  "billing.commercial.invoice.open": "Open",
-  "billing.commercial.subscription.status.active": "Active",
-  "billing.commercial.subscription.status.trialing": "Trial",
-  "billing.commercial.subscription.status.past_due": "Payment overdue",
-  "billing.commercial.subscription.status.unpaid": "Unpaid",
-  "billing.commercial.subscription.status.incomplete": "Setup incomplete",
-  "billing.commercial.subscription.status.incomplete_expired": "Setup expired",
-  "billing.commercial.subscription.status.canceled": "Cancelled",
-  "billing.commercial.subscription.status.paused": "Paused",
-  "billing.commercial.invoice.status.paid": "Paid",
-  "billing.commercial.invoice.status.open": "Open",
-  "billing.commercial.invoice.status.draft": "Draft",
-  "billing.commercial.invoice.status.uncollectible": "Uncollectible",
-  "billing.commercial.invoice.status.void": "Void",
+  "billing.commercial.balance.available": "Available credit",
+  "billing.commercial.balance.reserved": "Reserved for running operations",
+  "billing.commercial.balance.purchased": "Purchased credit remaining",
+  "billing.commercial.balance.noExpiry":
+    "No recurring fee · usage is deducted from credits",
+  "billing.commercial.paymentMethod.ready": "Payment method ready",
+  "billing.commercial.paymentMethod.missing": "No saved payment method",
+  "billing.commercial.credits.title": "Add credits",
+  "billing.commercial.credits.subtitle":
+    "Choose an amount to add. Checkout securely saves the payment method, but automatic recharge stays off until you enable it below.",
+  "billing.commercial.credits.creditAmount": "Takosumi Cloud credit",
+  "billing.commercial.credits.taxNote":
+    "Applicable tax is calculated by the payment provider at checkout.",
+  "billing.commercial.credits.add": "Add credits",
+  "billing.commercial.autoRecharge.title": "Automatic recharge",
+  "billing.commercial.autoRecharge.subtitle":
+    "Recharge when the available balance falls below your threshold. The monthly cap is a hard safety limit.",
+  "billing.commercial.autoRecharge.enable": "Enable automatic recharge",
+  "billing.commercial.autoRecharge.requiresCard":
+    "Add credits once to save a payment method before enabling automatic recharge.",
+  "billing.commercial.autoRecharge.threshold": "Recharge below",
+  "billing.commercial.autoRecharge.amount": "Recharge amount",
+  "billing.commercial.autoRecharge.monthlyLimit": "Monthly maximum",
+  "billing.commercial.autoRecharge.save": "Save automatic recharge",
+  "billing.commercial.payment.title": "Payments",
+  "billing.commercial.payment.subtitle":
+    "Recent manual and automatic credit payments.",
+  "billing.commercial.payment.empty": "No payments yet.",
+  "billing.commercial.payment.date": "Date",
+  "billing.commercial.payment.status": "Status",
+  "billing.commercial.payment.amount": "Amount",
+  "billing.commercial.payment.action": "Receipt",
+  "billing.commercial.payment.open": "Open",
+  "billing.commercial.payment.status.paid": "Paid",
+  "billing.commercial.payment.status.failed": "Failed",
+  "billing.commercial.payment.status.refunded": "Refunded",
 };

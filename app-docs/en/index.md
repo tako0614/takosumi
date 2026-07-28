@@ -3,7 +3,8 @@
 Takosumi Cloud is the official Takosumi hosting we operate. Publish apps and
 APIs from Git at a `*.app.takos.jp` URL, straight from the browser. Attach
 managed resources — storage, databases, queues, AI — as you need them. Paid
-pricing is usage only, with no fixed monthly charge ([pricing](./pricing.md)).
+pricing uses prepaid credits with no monthly subscription
+([pricing](./pricing.md)).
 
 These docs cover the hosted Takosumi Cloud service served from
 `app.takosumi.com`. Portable Takosumi software and Takosumi for Operator docs
@@ -41,7 +42,7 @@ Takosumi Cloud Resources =
 Add an app or service from Git, attach the resources it needs as bindings, and
 deploys and updates are recorded. Edge JS runtime, Object Storage, KV,
 Database, Queue, AI, and Container are peer managed resources. Usage spends
-through the plan, limits, and payment-state spend guard.
+through the credit balance, safety limits, and payment-state guard.
 
 ## Runtime
 
@@ -150,10 +151,10 @@ unconfigured manager, or one green client does not establish GA.
 
 ## Billing and Spend Guard
 
-Takosumi Cloud uses one Pay as you go entitlement with a one-time onboarding
-credit. Billable
+Takosumi Cloud uses a prepaid credit balance with a one-time onboarding credit.
+Billable
 operations are priced by the active Cloud PriceCatalog and stop before execution when
-the plan, limits, or payment state do not allow the operation. Cleanup and
+the balance, limits, or payment state do not allow the operation. Cleanup and
 destroy operations remain available after a spend-guard block so users can
 remove resources instead of leaving them stranded.
 

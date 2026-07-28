@@ -6,13 +6,19 @@ import {
   For,
   Show,
 } from "solid-js";
-import { CreditCard, ExternalLink, ReceiptText } from "lucide-solid";
+import {
+  CreditCard,
+  ExternalLink,
+  ReceiptText,
+  RefreshCw,
+  WalletCards,
+} from "lucide-solid";
 import {
   Badge,
   Button,
   Card,
   CardHeader,
-  CardSection,
+  Checkbox,
   type Column,
   DataTable,
   FormField,
@@ -22,18 +28,16 @@ import {
 } from "../ui/index.ts";
 import {
   beginCommercialBillingCheckout,
+  type CommercialBillingAutoRechargeSettings,
   type CommercialBillingCustomerType,
-  type CommercialBillingInvoice,
-  type CommercialBillingPlan,
-  type CommercialBillingSubscription,
+  type CommercialBillingPayment,
   loadCommercialBilling,
-  localizedCommercialBillingText,
   openCommercialBillingPortal,
+  updateCommercialBillingAutoRecharge,
 } from "../../lib/commercial-billing.ts";
 import { formatUsdMicros } from "../../lib/billing-format.ts";
 import {
   formatDate,
-  formatDateTime,
   intlLocale,
   type MessageKey,
   t,
@@ -47,24 +51,9 @@ interface Props {
   readonly description?: string;
 }
 
-const SUBSCRIPTION_STATUS_KEYS: Readonly<Record<string, MessageKey>> = {
-  active: "billing.commercial.subscription.status.active",
-  trialing: "billing.commercial.subscription.status.trialing",
-  past_due: "billing.commercial.subscription.status.past_due",
-  unpaid: "billing.commercial.subscription.status.unpaid",
-  incomplete: "billing.commercial.subscription.status.incomplete",
-  incomplete_expired:
-    "billing.commercial.subscription.status.incomplete_expired",
-  canceled: "billing.commercial.subscription.status.canceled",
-  paused: "billing.commercial.subscription.status.paused",
-};
-
-const INVOICE_STATUS_KEYS: Readonly<Record<string, MessageKey>> = {
-  paid: "billing.commercial.invoice.status.paid",
-  open: "billing.commercial.invoice.status.open",
-  draft: "billing.commercial.invoice.status.draft",
-  uncollectible: "billing.commercial.invoice.status.uncollectible",
-  void: "billing.commercial.invoice.status.void",
+const PAYMENT_STATUS_KEYS: Readonly<Record<string, MessageKey>> = {
+  paid: "billing.commercial.payment.status.paid",
+  failed: "billing.commercial.payment.status.failed",
 };
 
 export default function CommercialBillingPanel(props: Props) {
@@ -75,24 +64,24 @@ export default function CommercialBillingPanel(props: Props) {
   const [customerType, setCustomerType] =
     createSignal<CommercialBillingCustomerType>("individual");
   const [country, setCountry] = createSignal("");
-  const [checkoutPlanId, setCheckoutPlanId] = createSignal<string>();
+  const [checkoutAmount, setCheckoutAmount] = createSignal<number>();
   const [portalBusy, setPortalBusy] = createSignal(false);
+  const [settingsBusy, setSettingsBusy] = createSignal(false);
   const [actionError, setActionError] = createSignal<string>();
+  const [autoRecharge, setAutoRecharge] =
+    createSignal<CommercialBillingAutoRechargeSettings>();
   const checkoutResult = initialCheckoutResult();
 
   createEffect(() => {
-    const account = snapshot()?.billing.account;
+    const current = snapshot();
+    const account = current?.billing.account;
     if (account?.customerType) setCustomerType(account.customerType);
     if (account?.taxJurisdiction) setCountry(account.taxJurisdiction);
+    if (current?.billing.credits.autoRecharge) {
+      setAutoRecharge(current.billing.credits.autoRecharge);
+    }
   });
 
-  const subscription = createMemo(() => snapshot()?.billing.subscription);
-  const currentPlan = createMemo(() => {
-    const current = subscription();
-    return snapshot()?.catalog.plans.find(
-      (plan) => plan.id === current?.planId,
-    );
-  });
   const hasEstablishedProfile = createMemo(() =>
     Boolean(
       snapshot()?.billing.account?.customerType &&
@@ -100,39 +89,30 @@ export default function CommercialBillingPanel(props: Props) {
     ),
   );
 
-  const invoiceColumns = createMemo<
-    readonly Column<CommercialBillingInvoice>[]
+  const paymentColumns = createMemo<
+    readonly Column<CommercialBillingPayment>[]
   >(() => [
     {
-      header: t("billing.commercial.invoice.date"),
-      cell: (invoice) =>
-        invoice.createdAt ? formatDate(invoice.createdAt) : "—",
+      header: t("billing.commercial.payment.date"),
+      cell: (payment) =>
+        payment.createdAt ? formatDate(payment.createdAt) : "—",
     },
     {
-      header: t("billing.commercial.invoice.number"),
-      cell: (invoice) => invoice.number ?? invoice.id,
-    },
-    {
-      header: t("billing.commercial.invoice.status"),
-      cell: (invoice) => (
-        <Badge tone={invoiceTone(invoice.status)}>
-          {billingStatusLabel("invoice", invoice.status)}
-        </Badge>
+      header: t("billing.commercial.payment.status"),
+      cell: (payment) => (
+        <Badge tone={paymentTone(payment)}>{paymentStatusLabel(payment)}</Badge>
       ),
     },
     {
-      header: t("billing.commercial.invoice.total"),
+      header: t("billing.commercial.payment.amount"),
       align: "right",
-      cell: (invoice) => formatInvoiceTotal(invoice),
+      cell: (payment) => formatPaymentAmount(payment),
     },
     {
-      header: t("billing.commercial.invoice.action"),
+      header: t("billing.commercial.payment.action"),
       align: "right",
-      cell: (invoice) => (
-        <Show
-          when={invoice.hostedInvoiceUrl ?? invoice.invoicePdfUrl}
-          fallback="—"
-        >
+      cell: (payment) => (
+        <Show when={payment.receiptUrl} fallback="—">
           {(href) => (
             <Button
               href={href()}
@@ -142,7 +122,7 @@ export default function CommercialBillingPanel(props: Props) {
               size="sm"
               icon={<ExternalLink size={14} />}
             >
-              {t("billing.commercial.invoice.open")}
+              {t("billing.commercial.payment.open")}
             </Button>
           )}
         </Show>
@@ -150,9 +130,9 @@ export default function CommercialBillingPanel(props: Props) {
     },
   ]);
 
-  const beginCheckout = async (plan: CommercialBillingPlan) => {
-    if (checkoutPlanId()) return;
-    setCheckoutPlanId(plan.id);
+  const beginCheckout = async (amountUsdMicros: number) => {
+    if (checkoutAmount()) return;
+    setCheckoutAmount(amountUsdMicros);
     setActionError(undefined);
     try {
       const returnUrl = billingReturnUrl(props.workspaceId);
@@ -163,7 +143,7 @@ export default function CommercialBillingPanel(props: Props) {
       const destination = await beginCommercialBillingCheckout({
         basePath: props.basePath,
         workspaceId: props.workspaceId,
-        planId: plan.id,
+        amountUsdMicros,
         customerType: customerType(),
         country: country(),
         successUrl: successUrl.href,
@@ -172,7 +152,7 @@ export default function CommercialBillingPanel(props: Props) {
       window.location.assign(destination);
     } catch (error) {
       setActionError(friendlyError(error, t).message);
-      setCheckoutPlanId(undefined);
+      setCheckoutAmount(undefined);
     }
   };
 
@@ -191,6 +171,35 @@ export default function CommercialBillingPanel(props: Props) {
       setActionError(friendlyError(error, t).message);
       setPortalBusy(false);
     }
+  };
+
+  const saveAutoRecharge = async () => {
+    const settings = autoRecharge();
+    if (!settings || settingsBusy()) return;
+    setSettingsBusy(true);
+    setActionError(undefined);
+    try {
+      const saved = await updateCommercialBillingAutoRecharge({
+        basePath: props.basePath,
+        workspaceId: props.workspaceId,
+        ...settings,
+      });
+      setAutoRecharge(saved);
+      await refetch();
+    } catch (error) {
+      setActionError(friendlyError(error, t).message);
+    } finally {
+      setSettingsBusy(false);
+    }
+  };
+
+  const updateAutoRecharge = (
+    patch: Partial<CommercialBillingAutoRechargeSettings>,
+  ) => {
+    const current =
+      autoRecharge() ??
+      snapshot()?.configuration.credits.autoRecharge.defaultSettings;
+    if (current) setAutoRecharge({ ...current, ...patch });
   };
 
   return (
@@ -258,212 +267,271 @@ export default function CommercialBillingPanel(props: Props) {
               <div class="wb-billing-current">
                 <div class="wb-billing-current-copy">
                   <span class="wb-billing-kicker">
-                    {t("billing.commercial.currentPlan")}
+                    {t("billing.commercial.balance.available")}
                   </span>
                   <strong>
-                    {currentPlan()
-                      ? planName(currentPlan()!)
-                      : (subscription()?.planId ??
-                        t("billing.commercial.noPlan"))}
+                    {formatUsdMicros(data().billing.credits.availableUsdMicros)}
                   </strong>
-                  <Show when={currentPlan()}>
-                    {(plan) => (
-                      <span class="wb-billing-price">{planPrice(plan())}</span>
-                    )}
-                  </Show>
+                  <span class="wb-billing-price">
+                    {t("billing.commercial.balance.noExpiry")}
+                  </span>
                 </div>
-                <Show
-                  when={subscription()}
-                  fallback={
-                    <Badge tone="muted">
-                      {t("billing.commercial.status.none")}
-                    </Badge>
+                <Badge
+                  tone={
+                    data().billing.credits.paymentMethodReady ? "ok" : "muted"
                   }
                 >
-                  {(current) => (
-                    <Badge tone={subscriptionTone(current().status)}>
-                      {billingStatusLabel("subscription", current().status)}
-                    </Badge>
+                  {data().billing.credits.paymentMethodReady
+                    ? t("billing.commercial.paymentMethod.ready")
+                    : t("billing.commercial.paymentMethod.missing")}
+                </Badge>
+              </div>
+              <dl class="wb-billing-meta">
+                <div>
+                  <dt>{t("billing.commercial.balance.reserved")}</dt>
+                  <dd>
+                    {formatUsdMicros(data().billing.credits.reservedUsdMicros)}
+                  </dd>
+                </div>
+                <div>
+                  <dt>{t("billing.commercial.balance.purchased")}</dt>
+                  <dd>
+                    {formatUsdMicros(data().billing.credits.purchasedUsdMicros)}
+                  </dd>
+                </div>
+                <Show when={data().billing.account?.taxJurisdiction}>
+                  {(jurisdiction) => (
+                    <div>
+                      <dt>{t("billing.commercial.country.label")}</dt>
+                      <dd>{countryLabel(jurisdiction())}</dd>
+                    </div>
                   )}
                 </Show>
-              </div>
-              <Show when={subscription()}>
-                {(current) => (
-                  <CardSection>
-                    <dl class="wb-billing-meta">
-                      <Show when={current().currentPeriodEnd}>
-                        {(date) => (
-                          <div>
-                            <dt>
-                              {current().cancelAtPeriodEnd
-                                ? t("billing.commercial.endsAt")
-                                : t("billing.commercial.renewsAt")}
-                            </dt>
-                            <dd>{formatDateTime(date())}</dd>
-                          </div>
-                        )}
-                      </Show>
-                      <Show when={data().billing.account?.customerType}>
-                        {(type) => (
-                          <div>
-                            <dt>
-                              {t("billing.commercial.customerType.label")}
-                            </dt>
-                            <dd>{customerTypeLabel(type())}</dd>
-                          </div>
-                        )}
-                      </Show>
-                      <Show when={data().billing.account?.taxJurisdiction}>
-                        {(jurisdiction) => (
-                          <div>
-                            <dt>{t("billing.commercial.country.label")}</dt>
-                            <dd>{countryLabel(jurisdiction())}</dd>
-                          </div>
-                        )}
-                      </Show>
-                    </dl>
-                  </CardSection>
-                )}
-              </Show>
+              </dl>
             </Card>
 
             <Card>
               <CardHeader
-                title={t("billing.commercial.plans.title")}
-                subtitle={t("billing.commercial.plans.subtitle")}
+                title={t("billing.commercial.credits.title")}
+                subtitle={t("billing.commercial.credits.subtitle")}
+                actions={<WalletCards size={20} aria-hidden="true" />}
               />
-              <Show
-                when={data().catalog.plans.length > 0}
-                fallback={
-                  <p class="wb-billing-empty">
-                    {t("billing.commercial.plans.empty")}
-                  </p>
-                }
-              >
-                <Show when={!hasEstablishedProfile()}>
-                  <div class="wb-billing-profile">
-                    <div class="wb-billing-profile-heading">
-                      <strong>{t("billing.commercial.profile.title")}</strong>
-                      <span>{t("billing.commercial.profile.hint")}</span>
-                    </div>
-                    <div class="wb-billing-form-grid">
-                      <FormField
-                        label={t("billing.commercial.customerType.label")}
-                      >
-                        <Select
-                          value={customerType()}
-                          onInput={(event) =>
-                            setCustomerType(
-                              event.currentTarget
-                                .value as CommercialBillingCustomerType,
-                            )
-                          }
-                        >
-                          <option value="individual">
-                            {t("billing.commercial.customerType.individual")}
-                          </option>
-                          <option value="business">
-                            {t("billing.commercial.customerType.business")}
-                          </option>
-                        </Select>
-                      </FormField>
-                      <FormField
-                        label={t("billing.commercial.country.label")}
-                        required
-                      >
-                        <Select
-                          value={country()}
-                          onInput={(event) =>
-                            setCountry(event.currentTarget.value)
-                          }
-                        >
-                          <option value="">
-                            {t("billing.commercial.country.select")}
-                          </option>
-                          <For
-                            each={
-                              data().catalog.countryMatrix
-                                ?.supportedCountries ?? []
-                            }
-                          >
-                            {(code) => (
-                              <option value={code}>{countryLabel(code)}</option>
-                            )}
-                          </For>
-                        </Select>
-                      </FormField>
-                    </div>
+              <Show when={!hasEstablishedProfile()}>
+                <div class="wb-billing-profile">
+                  <div class="wb-billing-profile-heading">
+                    <strong>{t("billing.commercial.profile.title")}</strong>
+                    <span>{t("billing.commercial.profile.hint")}</span>
                   </div>
-                </Show>
-
-                <div class="wb-billing-plan-grid">
-                  <For each={data().catalog.plans}>
-                    {(plan) => {
-                      const current = () =>
-                        Boolean(
-                          subscription()?.planId === plan.id &&
-                          subscriptionIsCurrent(subscription()),
-                        );
-                      return (
-                        <article
-                          class={`wb-billing-plan ${current() ? "is-current" : ""}`}
+                  <div class="wb-billing-form-grid">
+                    <FormField
+                      label={t("billing.commercial.customerType.label")}
+                    >
+                      <Select
+                        value={customerType()}
+                        onInput={(event) =>
+                          setCustomerType(
+                            event.currentTarget
+                              .value as CommercialBillingCustomerType,
+                          )
+                        }
+                      >
+                        <option value="individual">
+                          {t("billing.commercial.customerType.individual")}
+                        </option>
+                        <option value="business">
+                          {t("billing.commercial.customerType.business")}
+                        </option>
+                      </Select>
+                    </FormField>
+                    <FormField
+                      label={t("billing.commercial.country.label")}
+                      required
+                    >
+                      <Select
+                        value={country()}
+                        onInput={(event) =>
+                          setCountry(event.currentTarget.value)
+                        }
+                      >
+                        <option value="">
+                          {t("billing.commercial.country.select")}
+                        </option>
+                        <For
+                          each={
+                            data().configuration.countryMatrix
+                              ?.supportedCountries ?? []
+                          }
                         >
-                          <div class="wb-billing-plan-heading">
-                            <div>
-                              <h3>{planName(plan)}</h3>
-                              <p>{planPrice(plan)}</p>
-                            </div>
-                            <Show when={current()}>
-                              <Badge tone="ok">
-                                {t("billing.commercial.plans.current")}
-                              </Badge>
-                            </Show>
-                          </div>
-                          <p class="wb-billing-plan-note">
-                            {t("billing.commercial.plans.paygNote")}
-                          </p>
-                          <Show
-                            when={!current()}
-                            fallback={
-                              <span class="wb-billing-current-note">
-                                {t(
-                                  "billing.commercial.plans.currentDescription",
-                                )}
-                              </span>
-                            }
-                          >
-                            <Button
-                              variant="primary"
-                              busy={checkoutPlanId() === plan.id}
-                              disabled={
-                                !data().billing.configured ||
-                                country() === "" ||
-                                Boolean(checkoutPlanId())
-                              }
-                              onClick={() => void beginCheckout(plan)}
-                            >
-                              {t("billing.commercial.plans.start")}
-                            </Button>
-                          </Show>
-                        </article>
-                      );
-                    }}
-                  </For>
+                          {(code) => (
+                            <option value={code}>{countryLabel(code)}</option>
+                          )}
+                        </For>
+                      </Select>
+                    </FormField>
+                  </div>
                 </div>
               </Show>
+              <div class="wb-billing-plan-grid">
+                <For
+                  each={data().configuration.credits.purchaseOptionsUsdMicros}
+                >
+                  {(amount) => (
+                    <article class="wb-billing-plan">
+                      <div class="wb-billing-plan-heading">
+                        <div>
+                          <h3>{formatUsdMicros(amount)}</h3>
+                          <p>{t("billing.commercial.credits.creditAmount")}</p>
+                        </div>
+                      </div>
+                      <p class="wb-billing-plan-note">
+                        {t("billing.commercial.credits.taxNote")}
+                      </p>
+                      <Button
+                        variant="primary"
+                        busy={checkoutAmount() === amount}
+                        disabled={
+                          !data().billing.configured ||
+                          country() === "" ||
+                          Boolean(checkoutAmount())
+                        }
+                        onClick={() => void beginCheckout(amount)}
+                      >
+                        {t("billing.commercial.credits.add")}
+                      </Button>
+                    </article>
+                  )}
+                </For>
+              </div>
             </Card>
 
             <Card>
               <CardHeader
-                title={t("billing.commercial.invoice.title")}
-                subtitle={t("billing.commercial.invoice.subtitle")}
+                title={t("billing.commercial.autoRecharge.title")}
+                subtitle={t("billing.commercial.autoRecharge.subtitle")}
+                actions={<RefreshCw size={20} aria-hidden="true" />}
+              />
+              <div class="wb-billing-profile">
+                <Checkbox
+                  label={t("billing.commercial.autoRecharge.enable")}
+                  checked={autoRecharge()?.enabled ?? false}
+                  disabled={!data().billing.credits.paymentMethodReady}
+                  onInput={(event) =>
+                    updateAutoRecharge({
+                      enabled: event.currentTarget.checked,
+                    })
+                  }
+                />
+                <Show when={!data().billing.credits.paymentMethodReady}>
+                  <span>
+                    {t("billing.commercial.autoRecharge.requiresCard")}
+                  </span>
+                </Show>
+                <div class="wb-billing-form-grid">
+                  <FormField
+                    label={t("billing.commercial.autoRecharge.threshold")}
+                  >
+                    <Select
+                      value={autoRecharge()?.thresholdUsdMicros}
+                      onInput={(event) =>
+                        updateAutoRecharge({
+                          thresholdUsdMicros: Number(event.currentTarget.value),
+                        })
+                      }
+                    >
+                      <For
+                        each={
+                          data().configuration.credits.autoRecharge
+                            .thresholdOptionsUsdMicros
+                        }
+                      >
+                        {(amount) => (
+                          <option value={amount}>
+                            {formatUsdMicros(amount)}
+                          </option>
+                        )}
+                      </For>
+                    </Select>
+                  </FormField>
+                  <FormField
+                    label={t("billing.commercial.autoRecharge.amount")}
+                  >
+                    <Select
+                      value={autoRecharge()?.rechargeUsdMicros}
+                      onInput={(event) =>
+                        updateAutoRecharge({
+                          rechargeUsdMicros: Number(event.currentTarget.value),
+                        })
+                      }
+                    >
+                      <For
+                        each={
+                          data().configuration.credits.autoRecharge
+                            .rechargeOptionsUsdMicros
+                        }
+                      >
+                        {(amount) => (
+                          <option value={amount}>
+                            {formatUsdMicros(amount)}
+                          </option>
+                        )}
+                      </For>
+                    </Select>
+                  </FormField>
+                  <FormField
+                    label={t("billing.commercial.autoRecharge.monthlyLimit")}
+                  >
+                    <Select
+                      value={autoRecharge()?.monthlyLimitUsdMicros}
+                      onInput={(event) =>
+                        updateAutoRecharge({
+                          monthlyLimitUsdMicros: Number(
+                            event.currentTarget.value,
+                          ),
+                        })
+                      }
+                    >
+                      <For
+                        each={
+                          data().configuration.credits.autoRecharge
+                            .monthlyLimitOptionsUsdMicros
+                        }
+                      >
+                        {(amount) => (
+                          <option value={amount}>
+                            {formatUsdMicros(amount)}
+                          </option>
+                        )}
+                      </For>
+                    </Select>
+                  </FormField>
+                </div>
+                <Button
+                  variant="primary"
+                  busy={settingsBusy()}
+                  disabled={
+                    !data().billing.account ||
+                    !autoRecharge() ||
+                    (autoRecharge()?.enabled === true &&
+                      !data().billing.credits.paymentMethodReady)
+                  }
+                  onClick={() => void saveAutoRecharge()}
+                >
+                  {t("billing.commercial.autoRecharge.save")}
+                </Button>
+              </div>
+            </Card>
+
+            <Card>
+              <CardHeader
+                title={t("billing.commercial.payment.title")}
+                subtitle={t("billing.commercial.payment.subtitle")}
                 actions={<ReceiptText size={20} aria-hidden="true" />}
               />
               <DataTable
-                columns={invoiceColumns()}
-                rows={data().billing.invoices}
-                rowKey={(invoice) => invoice.id}
-                empty={t("billing.commercial.invoice.empty")}
+                columns={paymentColumns()}
+                rows={data().billing.payments}
+                rowKey={(payment) => payment.id}
+                empty={t("billing.commercial.payment.empty")}
               />
             </Card>
           </>
@@ -473,43 +541,36 @@ export default function CommercialBillingPanel(props: Props) {
   );
 }
 
-function planName(plan: CommercialBillingPlan): string {
-  return localizedCommercialBillingText(plan.name, intlLocale(), plan.id);
-}
-
-function planPrice(plan: CommercialBillingPlan): string {
-  const display = localizedCommercialBillingText(
-    plan.priceDisplay,
-    intlLocale(),
-    "",
-  );
-  if (display) return display;
-  return plan.monthlyPriceUsdMicros !== undefined
-    ? formatUsdMicros(plan.monthlyPriceUsdMicros)
-    : "—";
-}
-
-function formatInvoiceTotal(invoice: CommercialBillingInvoice): string {
-  if (invoice.totalUsdMicros !== undefined) {
-    return formatUsdMicros(invoice.totalUsdMicros);
+function formatPaymentAmount(payment: CommercialBillingPayment): string {
+  if (payment.amountUsdMicros !== undefined) {
+    return formatUsdMicros(payment.amountUsdMicros);
   }
-  if (invoice.totalMinor === undefined) return "—";
+  if (payment.amountMinor === undefined) return "—";
   try {
     const formatter = new Intl.NumberFormat(intlLocale(), {
       style: "currency",
-      currency: invoice.currency,
+      currency: payment.currency,
     });
     const digits = formatter.resolvedOptions().maximumFractionDigits ?? 2;
-    return formatter.format(invoice.totalMinor / 10 ** digits);
+    return formatter.format(payment.amountMinor / 10 ** digits);
   } catch {
-    return `${invoice.currency} ${invoice.totalMinor}`;
+    return `${payment.currency} ${payment.amountMinor}`;
   }
 }
 
-function customerTypeLabel(type: string): string {
-  return type === "business"
-    ? t("billing.commercial.customerType.business")
-    : t("billing.commercial.customerType.individual");
+function paymentStatusLabel(payment: CommercialBillingPayment): string {
+  if (payment.refunded) return t("billing.commercial.payment.status.refunded");
+  const key = PAYMENT_STATUS_KEYS[payment.status];
+  return key ? t(key) : t("billing.commercial.status.unknown");
+}
+
+function paymentTone(
+  payment: CommercialBillingPayment,
+): "ok" | "warn" | "danger" | "muted" {
+  if (payment.refunded) return "warn";
+  if (payment.paid) return "ok";
+  if (payment.status === "failed") return "danger";
+  return "muted";
 }
 
 function countryLabel(country: string): string {
@@ -521,48 +582,6 @@ function countryLabel(country: string): string {
   } catch {
     return country;
   }
-}
-
-function billingStatusLabel(
-  family: "subscription" | "invoice",
-  status: string,
-): string {
-  const key =
-    family === "subscription"
-      ? SUBSCRIPTION_STATUS_KEYS[status]
-      : INVOICE_STATUS_KEYS[status];
-  return key ? t(key) : t("billing.commercial.status.unknown");
-}
-
-function subscriptionTone(
-  status: string,
-): "ok" | "warn" | "danger" | "info" | "muted" {
-  if (status === "active" || status === "trialing") return "ok";
-  if (status === "past_due" || status === "unpaid" || status === "incomplete")
-    return "warn";
-  if (status === "canceled" || status === "incomplete_expired") return "danger";
-  if (status === "paused") return "info";
-  return "muted";
-}
-
-function invoiceTone(
-  status: string,
-): "ok" | "warn" | "danger" | "info" | "muted" {
-  if (status === "paid") return "ok";
-  if (status === "open") return "warn";
-  if (status === "uncollectible") return "danger";
-  if (status === "draft") return "info";
-  return "muted";
-}
-
-function subscriptionIsCurrent(
-  subscription: CommercialBillingSubscription | undefined,
-): boolean {
-  return Boolean(
-    subscription &&
-    subscription.status !== "canceled" &&
-    subscription.status !== "incomplete_expired",
-  );
 }
 
 function billingReturnUrl(workspaceId: string): URL {

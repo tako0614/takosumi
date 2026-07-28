@@ -1,22 +1,26 @@
 # Takosumi Cloud pricing
 
-Takosumi Cloud は固定月額のない税別 USD の従量課金です。すべてのアカウントが
-同じ managed-service catalog を利用し、Resource 数は plan 特典ではなく共通の安全上限です。
+Takosumi Cloud は、税別 USD のプリペイドクレジット方式です。月額サブスクリプションは
+ありません。すべてのアカウントが同じ managed-service catalog を利用し、Resource 数は
+契約ランクではなく共通の安全上限です。
 
-## Billing options
+## Credit billing
 
-| Option        | 固定月額 | 定期 managed usage grant | 課金         |
-| ------------- | -------: | -----------------------: | ------------ |
-| Pay as you go |     `$0` |                     `$0` | 実利用分のみ |
+| 操作             | 仕様                                                                 |
+| ---------------- | -------------------------------------------------------------------- |
+| 手動チャージ     | `$5` / `$10` / `$25` / `$50` / `$100` のクレジットを追加             |
+| 自動チャージ     | 初期状態は無効。残高しきい値、1回の金額、月間上限を owner が明示設定 |
+| managed resource | PriceCatalog の実利用額をクレジット残高から差し引く                  |
 
-owner はカードや国情報を登録せず Pay as you go を開始でき、最初に一度だけ
+owner はカードや国情報を登録せず開始でき、最初に一度だけ
 `$0.25` の onboarding credit を受け取ります。credit は再付与・現金化されず、
-解約後にも復活しません。使い切ると正の料金が発生する操作と runtime 利用を停止し、
+使い切ると正の料金が発生する操作と runtime 利用を停止し、
 Resource は削除しません。Destroy は残高なしでも実行でき、休眠による自動削除はありません。
 
-Pay as you go はカード、利用区分、請求先国を登録し、Takosumi Cloud の versioned
-PriceCatalog に記録された実利用分だけを請求します。固定月額や毎月の内包クレジットは
-ありません。
+クレジットを追加する Checkout でカード、利用区分、請求先国を登録します。支払い方法は
+将来の自動チャージ用に保存されますが、自動チャージは owner が別途有効にするまで
+行われません。自動チャージは設定した1回の金額を超えて請求せず、月間上限を超える場合や
+決済できない場合は対象操作を backend 実行前に停止します。
 
 自分の
 Provider Connection を使う外部 provider は grant の対象外で、その provider から
@@ -27,16 +31,16 @@ Provider Connection を使う外部 provider は grant の対象外で、その 
 一度限りの onboarding credit は、Takosumi Cloud が提供する resource と service の従量料金に先に充当されます。
 利用量と請求は所有アカウントに集約し、Workspace / Resource 別の内訳も確認できます。
 
-Pay as you go の owner-account safety ceiling は total 250 Resources、Edge/Object/KV/Queue/
+owner-account safety ceiling は total 250 Resources、Edge/Object/KV/Queue/
 Schedule 各100、Database/Workflow/Stateful Actor 各50、Vector 25、Container 10、
-active verified domains 25 です。これは plan feature ではなく、共通の
+active verified domains 25 です。これは契約ランクの特典ではなく、共通の
 abuse / safety 上限です。
 
 ## Usage Prices
 
 managed capacity の価格は Takosumi Cloud の versioned PriceCatalog が正本です。
 provider 公開価格は原価比較に使いますが、provider invoice を tenant 使用量の正本には
-しません。provider の共有 free tier と platform 固定費は plan 側で吸収し、tenant ごとの
+しません。provider の共有 free tier と platform 固定費は Takosumi Cloud が吸収し、tenant ごとの
 隠れた割引にはしません。価格変更は version と effective date を持ち、過去の
 usage を再計算しません。
 

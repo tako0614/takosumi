@@ -1,24 +1,28 @@
 # Takosumi Cloud pricing
 
-Takosumi Cloud billing is tax-exclusive USD pay-as-you-go with no fixed monthly
-charge. Every account uses the same managed-service catalog; Resource counts
-are common safety ceilings, not plan features.
+Takosumi Cloud uses tax-exclusive USD prepaid credits. There is no monthly
+subscription. Every account uses the same managed-service catalog; Resource
+counts are common safety ceilings, not tier features.
 
-## Billing options
+## Credit billing
 
-| Option        | Fixed monthly charge | Recurring managed-usage grant | Billing           |
-| ------------- | -------------------: | ----------------------------: | ----------------- |
-| Pay as you go |                 `$0` |                          `$0` | Actual usage only |
+| Action             | Behaviour                                                                   |
+| ------------------ | --------------------------------------------------------------------------- |
+| Manual recharge    | Add `$5`, `$10`, `$25`, `$50`, or `$100` of credit                          |
+| Automatic recharge | Off by default; the owner selects a threshold, amount, and hard monthly cap |
+| Managed resources  | Deduct exact PriceCatalog usage from the credit balance                     |
 
-An owner starts on Pay as you go without a card or declared country and receives
-one `$0.25` onboarding credit. The credit is not renewed, cannot be redeemed for
-cash, and is not reissued after cancellation. Positive-priced operations and
+An owner starts without a card or declared country and receives one `$0.25`
+onboarding credit. The credit is not renewed or redeemable for cash.
+Positive-priced operations and
 runtime usage pause when it is exhausted; Resources are not deleted, destroy
 remains available, and there is no automatic inactivity deletion.
 
-Pay as you go registers a card, customer type, and billing country, then bills
-only actual usage recorded against the versioned Takosumi Cloud PriceCatalog.
-It has no fixed monthly charge and no included monthly credit.
+The first credit Checkout records the card, customer type, and billing country.
+It saves the payment method for future automatic recharge, but automatic
+recharge stays off until the owner enables it separately. A recharge never
+exceeds the configured per-charge amount. If the monthly cap would be exceeded
+or payment fails, the triggering operation stops before backend execution.
 
 External providers connected with your own Provider Connection
 are billed directly by that provider and do not consume the grant.
@@ -29,17 +33,17 @@ The one-time onboarding credit is applied first to metered Takosumi Cloud
 resources and services. Usage and billing are aggregated for the owner account
 while preserving Workspace and Resource attribution for the usage breakdown.
 
-The Pay as you go owner-account safety ceiling is 250 total Resources; 100 each for
+The owner-account safety ceiling is 250 total Resources; 100 each for
 Edge, Object, KV, Queue and Schedule; 50 each for Database, Workflow and
 Stateful Actor; 25 Vector indexes; 10 Containers; and 25 active verified
-domains. These are shared abuse and safety limits, not plan features.
+domains. These are shared abuse and safety limits, not tier features.
 
 ## Usage Prices
 
 Takosumi Cloud's versioned PriceCatalog is the authority for managed-capacity
 prices. Provider public prices remain cost-comparison inputs, but provider
 invoices do not define tenant usage. Provider shared free tiers and fixed
-platform costs are absorbed by plans rather than allocated as hidden
+platform costs are absorbed by Takosumi Cloud rather than allocated as hidden
 per-tenant discounts. Catalog changes are versioned and effective-dated and never re-rate
 old usage.
 
