@@ -122,6 +122,10 @@ bun run app-docs:build
 bun run website:build
 ```
 
+Hosted Cloud GA decisions, Stripe bootstrap, and production browser/live
+evidence belong to the operator environment. A standalone OSS clone does not
+proxy those operations to scripts outside this repository.
+
 ## Docs and website
 
 `docs/` is the VitePress software docs site served from `takosumi.com/docs/`.
