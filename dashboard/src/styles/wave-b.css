@@ -539,3 +539,142 @@
   font-size: var(--tg-fs-sm);
   color: var(--tg-fg-muted);
 }
+
+/* ===== Billing: platform data, Takosumi-native presentation ===== */
+.wb-billing-native {
+  display: grid;
+  gap: var(--tg-s-4);
+}
+.wb-billing-loading {
+  display: grid;
+  gap: var(--tg-s-3);
+}
+.wb-billing-current {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--tg-s-4);
+  padding: var(--tg-s-4);
+  border: 1px solid var(--tg-line);
+  border-radius: var(--tg-r-lg);
+  background: var(--tg-bg-subtle);
+}
+.wb-billing-current-copy {
+  min-width: 0;
+  display: grid;
+  gap: var(--tg-s-1);
+}
+.wb-billing-current-copy strong {
+  font-size: var(--tg-fs-xl);
+  line-height: var(--tg-lh-tight);
+  overflow-wrap: anywhere;
+}
+.wb-billing-kicker,
+.wb-billing-current-note,
+.wb-billing-empty {
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-sm);
+}
+.wb-billing-price {
+  color: var(--tg-fg-muted);
+}
+.wb-billing-meta {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--tg-s-4);
+  margin: 0;
+}
+.wb-billing-meta div {
+  min-width: 0;
+}
+.wb-billing-meta dt {
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-xs);
+  font-weight: 650;
+}
+.wb-billing-meta dd {
+  margin: var(--tg-s-1) 0 0;
+  overflow-wrap: anywhere;
+}
+.wb-billing-profile {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.7fr) minmax(0, 1.3fr);
+  gap: var(--tg-s-5);
+  align-items: end;
+  margin-bottom: var(--tg-s-4);
+  padding: var(--tg-s-4);
+  border: 1px solid var(--tg-line);
+  border-radius: var(--tg-r-lg);
+  background: var(--tg-bg-subtle);
+}
+.wb-billing-profile-heading {
+  display: grid;
+  gap: var(--tg-s-1);
+  align-self: center;
+}
+.wb-billing-profile-heading span {
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-sm);
+}
+.wb-billing-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--tg-s-3);
+}
+.wb-billing-plan-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  gap: var(--tg-s-3);
+}
+.wb-billing-plan {
+  display: grid;
+  align-content: start;
+  gap: var(--tg-s-4);
+  padding: var(--tg-s-4);
+  border: 1px solid var(--tg-line);
+  border-radius: var(--tg-r-lg);
+  background: var(--tg-bg-subtle);
+}
+.wb-billing-plan.is-current {
+  border-color: color-mix(in srgb, var(--tg-success) 38%, var(--tg-line));
+}
+.wb-billing-plan-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: var(--tg-s-3);
+}
+.wb-billing-plan-heading h3 {
+  margin: 0;
+  font-size: var(--tg-fs-lg);
+}
+.wb-billing-plan-heading p {
+  margin: var(--tg-s-1) 0 0;
+  color: var(--tg-fg-muted);
+  font-weight: 650;
+}
+.wb-billing-plan-note {
+  margin: 0;
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-sm);
+}
+.wb-billing-plan > .tg-btn {
+  justify-self: start;
+}
+.wb-billing-empty {
+  margin: 0;
+}
+
+@media (max-width: 720px) {
+  .wb-billing-current {
+    flex-direction: column;
+  }
+  .wb-billing-meta,
+  .wb-billing-profile,
+  .wb-billing-form-grid {
+    grid-template-columns: 1fr;
+  }
+  .wb-billing-plan > .tg-btn {
+    width: 100%;
+  }
+}

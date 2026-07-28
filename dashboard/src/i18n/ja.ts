@@ -1532,8 +1532,6 @@ export const ja = {
     "このブラウザはこの機能に未対応です。ストア側でインスタンス URL を入力してください。",
 
   // --- billing -------------------------------------------------------------------
-  "billing.subtitle":
-    "プロバイダーに依存しない使用量とショーバック記録を確認します。",
   "billing.usageQuotaTitle": "利用状況",
   "billing.usageQuotaSubtitle":
     "この ワークスペース の記録モードとプロバイダー非依存な使用量を確認します。",
@@ -1557,4 +1555,66 @@ export const ja = {
   "billing.usage.quantity": "数量",
   "billing.usage.amount": "見積金額",
   "billing.usage.unrated": "未評価",
+  "billing.commercial.pageTitle": "プランと支払い",
+  "billing.commercial.pageSubtitle":
+    "従量課金プラン、支払い方法、請求書を管理します。",
+  "billing.commercial.description":
+    "現在のプランを確認し、支払い情報を管理します。",
+  "billing.commercial.loadError":
+    "プランと支払い情報を読み込めませんでした: {message}",
+  "billing.commercial.actionError":
+    "支払い操作を完了できませんでした: {message}",
+  "billing.commercial.unavailable":
+    "支払い設定を一時的に利用できません。既存の使用量記録には影響しません。",
+  "billing.commercial.checkout.success":
+    "支払い設定が完了しました。最新の状態を以下に表示しています。",
+  "billing.commercial.checkout.cancelled":
+    "支払い設定をキャンセルしました。変更はありません。",
+  "billing.commercial.manage": "支払い方法を管理",
+  "billing.commercial.currentPlan": "現在のプラン",
+  "billing.commercial.noPlan": "有効なプランはありません",
+  "billing.commercial.renewsAt": "次回請求日",
+  "billing.commercial.endsAt": "終了日",
+  "billing.commercial.status.none": "未開始",
+  "billing.commercial.status.unknown": "不明",
+  "billing.commercial.customerType.label": "利用区分",
+  "billing.commercial.customerType.individual": "個人",
+  "billing.commercial.customerType.business": "法人",
+  "billing.commercial.country.label": "請求先の国",
+  "billing.commercial.country.select": "国を選択",
+  "billing.commercial.profile.title": "請求先情報",
+  "billing.commercial.profile.hint":
+    "支払い設定後は、利用区分と請求先の国を変更できません。",
+  "billing.commercial.plans.title": "プラン",
+  "billing.commercial.plans.subtitle":
+    "月額固定費はなく、実際の使用量に応じて請求されます。",
+  "billing.commercial.plans.empty": "現在利用できるプランはありません。",
+  "billing.commercial.plans.current": "利用中",
+  "billing.commercial.plans.paygNote":
+    "計測された使用量に対してのみ支払います。表示価格は運営者の有効なカタログから取得しています。",
+  "billing.commercial.plans.currentDescription":
+    "このワークスペースでは、このプランを利用中です。",
+  "billing.commercial.plans.start": "支払いを設定",
+  "billing.commercial.invoice.title": "請求書",
+  "billing.commercial.invoice.subtitle": "このアカウントの最近の請求書です。",
+  "billing.commercial.invoice.empty": "請求書はまだありません。",
+  "billing.commercial.invoice.date": "日付",
+  "billing.commercial.invoice.number": "請求書",
+  "billing.commercial.invoice.status": "状態",
+  "billing.commercial.invoice.total": "合計",
+  "billing.commercial.invoice.action": "書類",
+  "billing.commercial.invoice.open": "開く",
+  "billing.commercial.subscription.status.active": "有効",
+  "billing.commercial.subscription.status.trialing": "試用中",
+  "billing.commercial.subscription.status.past_due": "支払い遅延",
+  "billing.commercial.subscription.status.unpaid": "未払い",
+  "billing.commercial.subscription.status.incomplete": "設定未完了",
+  "billing.commercial.subscription.status.incomplete_expired": "設定期限切れ",
+  "billing.commercial.subscription.status.canceled": "解約済み",
+  "billing.commercial.subscription.status.paused": "一時停止",
+  "billing.commercial.invoice.status.paid": "支払い済み",
+  "billing.commercial.invoice.status.open": "未払い",
+  "billing.commercial.invoice.status.draft": "下書き",
+  "billing.commercial.invoice.status.uncollectible": "回収不能",
+  "billing.commercial.invoice.status.void": "無効",
 } as const;
