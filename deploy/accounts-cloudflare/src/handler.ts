@@ -345,6 +345,10 @@ async function observeAccountsHandlerInitialization(
 }
 
 function usesIdentityOnlyAccountsHandler(pathname: string): boolean {
+  // Introspection revalidates workspace-bound ordinary OAuth tokens and
+  // Interface OAuth evidence against canonical Core. Routing it through the
+  // identity-only cache makes every workspace-bound token look inactive.
+  if (pathname === "/oauth/introspect") return false;
   if (
     pathname === "/oauth" ||
     pathname.startsWith("/oauth/") ||
