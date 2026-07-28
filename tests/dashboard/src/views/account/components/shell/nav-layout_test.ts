@@ -140,6 +140,10 @@ describe("dashboard shell navigation layout", () => {
     const manageSource = read("views/settings/ManageView.tsx");
     expect(manageSource).toContain("loadPlatformContributions");
     expect(manageSource).toContain('"navigation.manage"');
+    // Extension-owned documents live outside the SPA route table. Solid's
+    // router must not intercept a same-origin contribution and turn it into
+    // the Takosumi NotFound view.
+    expect(manageSource).toContain('rel="external"');
     expect(navSource).not.toContain('href: "/cloud"');
     expect(indexSource).not.toContain("CloudResourcesView");
   });

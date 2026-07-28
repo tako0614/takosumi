@@ -156,6 +156,15 @@ function RedirectCapsuleDetail() {
   return <Navigate href={`/services/${id}${tab}`} />;
 }
 
+function RedirectLegacyWorkspaceSettingsTab() {
+  const params = useParams<{ tab: string }>();
+  return (
+    <RedirectWithQuery
+      to={`/advanced/workspace/${encodeURIComponent(params.tab)}`}
+    />
+  );
+}
+
 function App() {
   return (
     <Router>
@@ -214,9 +223,7 @@ function App() {
       />
       <Route
         path="/workspace/settings/:tab"
-        component={(props) => (
-          <RedirectWithQuery to={`/advanced/workspace/${props.params.tab}`} />
-        )}
+        component={RedirectLegacyWorkspaceSettingsTab}
       />
       <Route
         path="/account"
