@@ -5,7 +5,7 @@ export interface PlatformContribution {
   readonly id: string;
   readonly slot: string;
   readonly href: `/${string}`;
-  readonly presentation?: "link" | "inline-frame";
+  readonly presentation?: "link" | "inline-frame" | "native";
   readonly label: string;
   readonly description?: string;
   readonly labels?: Readonly<Record<string, string>>;

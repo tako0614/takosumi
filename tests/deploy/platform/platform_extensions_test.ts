@@ -58,7 +58,32 @@ test("extension contributions reject unknown presentation modes", () => {
         },
       ]),
     }),
-  ).toThrow("presentation must be link or inline-frame");
+  ).toThrow("presentation must be link, inline-frame, or native");
+});
+
+test("extension contributions accept a host-native slot renderer", () => {
+  const routes = platformExtensionRoutes({
+    TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
+      {
+        basePath: "/extensions/billing",
+        handlerKey: "BILLING_EXTENSION",
+        contributions: [
+          {
+            id: "billing",
+            slot: "workspace.billing",
+            href: "/extensions/billing",
+            presentation: "native",
+            label: "Plan and billing",
+          },
+        ],
+      },
+    ]),
+  });
+  expect(routes[0]?.contributions?.[0]).toMatchObject({
+    href: "/extensions/billing",
+    presentation: "native",
+    slot: "workspace.billing",
+  });
 });
 
 test("extension contributions cannot escape their delegated path", () => {
@@ -80,6 +105,48 @@ test("extension contributions cannot escape their delegated path", () => {
       ]),
     }),
   ).toThrow("must stay under /extensions/example");
+});
+
+test("extension paths reject dot-segment and encoded traversal", () => {
+  for (const basePath of [
+    "/extensions/../v1/billing",
+    "/extensions/%2e%2e/v1/billing",
+    "/extensions/example/",
+    String.raw`/extensions\\example`,
+  ]) {
+    expect(() =>
+      platformExtensionRoutes({
+        TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
+          { basePath, handlerKey: "UNSAFE_EXTENSION" },
+        ]),
+      }),
+    ).toThrow("must be a canonical absolute path prefix");
+  }
+
+  for (const href of [
+    "/extensions/example/../operator",
+    "/extensions/example/%2e%2e/operator",
+    String.raw`/extensions/example\\operator`,
+  ]) {
+    expect(() =>
+      platformExtensionRoutes({
+        TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
+          {
+            basePath: "/extensions/example",
+            handlerKey: "EXAMPLE_EXTENSION",
+            contributions: [
+              {
+                id: "unsafe",
+                slot: "navigation.manage",
+                href,
+                label: "Unsafe",
+              },
+            ],
+          },
+        ]),
+      }),
+    ).toThrow("must stay under /extensions/example");
+  }
 });
 
 test("one extension base path has one owner", () => {

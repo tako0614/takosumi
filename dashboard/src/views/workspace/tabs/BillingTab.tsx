@@ -1,7 +1,8 @@
 /**
  * Provider-neutral Workspace usage/showback surface. Optional commercial
- * account management is supplied by a platform extension contribution and is
- * never compiled into the OSS dashboard.
+ * account management is activated by a platform extension contribution. The
+ * dashboard owns its native presentation while the extension remains the sole
+ * owner of prices, payment processing, tax policy, and billing records.
  */
 import "../../../styles/wave-b.css";
 import {
@@ -9,9 +10,11 @@ import {
   createResource,
   createSignal,
   For,
+  Match,
   onCleanup,
   onMount,
   Show,
+  Switch,
 } from "solid-js";
 import { ExternalLink } from "lucide-solid";
 import {
@@ -31,6 +34,7 @@ import {
   platformContributionsForSlot,
   type PlatformContribution,
 } from "../../../lib/platform-contributions.ts";
+import { hasPlatformExtensionCapability } from "../../../lib/runtime-capabilities.ts";
 import {
   formatDateTime,
   intlLocale,
@@ -47,6 +51,7 @@ import {
   Toast,
 } from "../../../components/ui/index.ts";
 import { friendlyError } from "../../../lib/error-copy.ts";
+import CommercialBillingPanel from "../../../components/billing/CommercialBillingPanel.tsx";
 
 const MODE_KEY: Record<string, MessageKey> = {
   disabled: "billing.mode.disabled",
@@ -150,38 +155,51 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
           "workspace.billing",
         )}
       >
-        {(contribution) => (
-          <Show
-            when={contribution.presentation === "inline-frame"}
-            fallback={
-              <Card>
-                <CardHeader
-                  title={platformContributionLabel(contribution, intlLocale())}
-                  subtitle={platformContributionDescription(
-                    contribution,
-                    intlLocale(),
-                  )}
+        {(contribution) => {
+          const label = () =>
+            platformContributionLabel(contribution, intlLocale());
+          const description = () =>
+            platformContributionDescription(contribution, intlLocale());
+          return (
+            <Switch>
+              <Match
+                when={
+                  contribution.presentation === "native" &&
+                  hasPlatformExtensionCapability("billing.commercial.v1")
+                }
+              >
+                <CommercialBillingPanel
+                  basePath={contribution.href}
+                  workspaceId={props.workspaceId}
+                  title={label()}
+                  description={description()}
                 />
-                <a
-                  class="btn btn-secondary"
-                  href={platformContributionHref(
-                    contribution,
-                    props.workspaceId,
-                  )}
-                  rel="external"
-                >
-                  {platformContributionLabel(contribution, intlLocale())}
-                  <ExternalLink size={14} aria-hidden="true" />
-                </a>
-              </Card>
-            }
-          >
-            <InlinePlatformContribution
-              contribution={contribution}
-              workspaceId={props.workspaceId}
-            />
-          </Show>
-        )}
+              </Match>
+              <Match when={contribution.presentation === "inline-frame"}>
+                <InlinePlatformContribution
+                  contribution={contribution}
+                  workspaceId={props.workspaceId}
+                />
+              </Match>
+              <Match when>
+                <Card>
+                  <CardHeader title={label()} subtitle={description()} />
+                  <a
+                    class="btn btn-secondary"
+                    href={platformContributionHref(
+                      contribution,
+                      props.workspaceId,
+                    )}
+                    rel="external"
+                  >
+                    {label()}
+                    <ExternalLink size={14} aria-hidden="true" />
+                  </a>
+                </Card>
+              </Match>
+            </Switch>
+          );
+        }}
       </For>
 
       <Card>

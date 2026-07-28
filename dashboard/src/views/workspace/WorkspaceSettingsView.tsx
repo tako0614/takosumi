@@ -146,11 +146,9 @@ function pageTitle(tab: StandaloneTabId | undefined): string {
     case "connections":
       return t("conn.providerConnections.title");
     case "billing":
-      // The settings hub links here as プランと支払い / "Plan & billing" — the
-      // destination must title itself the same, or the click reads as a wrong
-      // turn. The usage/quota wording stays as the section heading inside
-      // (and as the workspace-settings tab label, where it IS usage/quota).
-      return t("settings.billing.title");
+      return hasPlatformExtensionCapability("billing.commercial.v1")
+        ? t("billing.commercial.pageTitle")
+        : t("settings.billing.title");
     default:
       return t("workspaceSettings.title");
   }
@@ -162,7 +160,7 @@ function pageSubtitle(tab: StandaloneTabId | undefined): string {
       return t("conn.subtitle");
     case "billing":
       return hasPlatformExtensionCapability("billing.commercial.v1")
-        ? t("billing.subtitle")
+        ? t("billing.commercial.pageSubtitle")
         : t("billing.usageQuotaSubtitle");
     default:
       return t("workspaceSettings.subtitle");

@@ -65,10 +65,12 @@ export interface PlatformExtensionContribution {
   readonly href: `/${string}`;
   /**
    * `link` keeps the extension as a full-document destination. `inline-frame`
-   * lets the dashboard host the extension document inside the owning slot
-   * without compiling operator-specific code into the OSS bundle.
+   * hosts an extension document inside the slot. `native` activates the
+   * dashboard-owned renderer for that slot while `href` remains the
+   * same-origin extension API base. Native renderers never move pricing,
+   * credentials, or provider behavior into the dashboard.
    */
-  readonly presentation?: "link" | "inline-frame";
+  readonly presentation?: "link" | "inline-frame" | "native";
   readonly label: string;
   readonly description?: string;
   readonly labels?: Readonly<Record<string, string>>;
@@ -139,14 +141,11 @@ function platformExtensionRouteFromJson(
   const basePath = record.basePath;
   if (
     typeof basePath !== "string" ||
-    !basePath.startsWith("/") ||
-    basePath === "/" ||
-    basePath.includes("//") ||
-    basePath.includes("?") ||
-    basePath.includes("#") ||
-    basePath.includes("%")
+    !canonicalPlatformExtensionPath(basePath)
   ) {
-    throw new TypeError(`${label}.basePath must be an absolute path prefix`);
+    throw new TypeError(
+      `${label}.basePath must be a canonical absolute path prefix`,
+    );
   }
   if (platformExtensionBasePathIsReserved(basePath)) {
     throw new TypeError(
@@ -404,7 +403,10 @@ function optionalContributions(
     if (!id || !slot || !href || !contributionLabel) {
       throw new TypeError(`${itemLabel} requires id, slot, href, and label`);
     }
-    if (!href.startsWith("/") || !pathIsUnderBase(href, basePath)) {
+    if (
+      !canonicalPlatformExtensionPath(href) ||
+      !pathIsUnderBase(href, basePath)
+    ) {
       throw new TypeError(`${itemLabel}.href must stay under ${basePath}`);
     }
     const order = record.order;
@@ -425,14 +427,17 @@ function optionalContributions(
     if (
       rawPresentation !== undefined &&
       rawPresentation !== "link" &&
-      rawPresentation !== "inline-frame"
+      rawPresentation !== "inline-frame" &&
+      rawPresentation !== "native"
     ) {
       throw new TypeError(
-        `${itemLabel}.presentation must be link or inline-frame`,
+        `${itemLabel}.presentation must be link, inline-frame, or native`,
       );
     }
     const presentation: PlatformExtensionContribution["presentation"] =
-      rawPresentation === "link" || rawPresentation === "inline-frame"
+      rawPresentation === "link" ||
+      rawPresentation === "inline-frame" ||
+      rawPresentation === "native"
         ? rawPresentation
         : undefined;
     return {
@@ -470,6 +475,31 @@ function optionalLocalizedStrings(
     normalized[locale] = string;
   }
   return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function canonicalPlatformExtensionPath(value: string): boolean {
+  if (
+    !value.startsWith("/") ||
+    value === "/" ||
+    value.startsWith("//") ||
+    value.endsWith("/") ||
+    value.includes("\\") ||
+    value.includes("?") ||
+    value.includes("#") ||
+    value.includes("%") ||
+    /[\u0000-\u001f\u007f]/u.test(value)
+  ) {
+    return false;
+  }
+  const segments = value.slice(1).split("/");
+  if (
+    segments.some(
+      (segment) => segment === "" || segment === "." || segment === "..",
+    )
+  ) {
+    return false;
+  }
+  return true;
 }
 
 function uniqueContributions(
