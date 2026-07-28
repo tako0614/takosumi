@@ -67,12 +67,19 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
   const [contributions] = createResource(loadPlatformContributions);
   const [usageRows, setUsageRows] = createSignal<readonly UsageEvent[]>([]);
   const [usageCursor, setUsageCursor] = createSignal<string | undefined>();
-  const [usageLoaded, setUsageLoaded] = createSignal(false);
   const [usageLoading, setUsageLoading] = createSignal(false);
   const [usageError, setUsageError] = createSignal<string | undefined>();
 
   const current = createMemo(() => (billing.error ? undefined : billing()));
   const mode = createMemo(() => current()?.settings.mode ?? "disabled");
+  const commercialBillingEnabled = createMemo(
+    () =>
+      hasPlatformExtensionCapability("billing.commercial.v1") &&
+      platformContributionsForSlot(
+        contributions(),
+        "workspace.billing",
+      ).some((contribution) => contribution.presentation === "native"),
+  );
 
   const usageColumns = createMemo<readonly Column<UsageEvent>[]>(() => [
     {
@@ -111,13 +118,14 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
         append ? [...rows, ...page.usageEvents] : page.usageEvents,
       );
       setUsageCursor(page.nextCursor);
-      setUsageLoaded(true);
     } catch (error) {
       setUsageError(friendlyError(error, t).message);
     } finally {
       setUsageLoading(false);
     }
   };
+
+  onMount(() => void loadUsage(false));
 
   return (
     <div class="wa-stack">
@@ -132,7 +140,7 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
         </Toast>
       </Show>
 
-      <Show when={current()}>
+      <Show when={current() && !commercialBillingEnabled()}>
         <Card>
           <CardHeader
             title={t("billing.usageQuotaTitle")}
@@ -207,9 +215,6 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
           title={t("billing.usage.title")}
           subtitle={t("billing.usage.subtitle")}
         />
-        {/* The error slot sits OUTSIDE the loaded gate: `usageLoaded` only
-            flips on success, so a first-load failure used to stop the spinner
-            and change nothing at all. */}
         <Show when={usageError()}>
           {(message) => (
             <Toast tone="error">
@@ -226,24 +231,12 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
             </Toast>
           )}
         </Show>
-        <Show
-          when={usageLoaded()}
-          fallback={
-            <Show when={!usageError()}>
-              <Button
-                variant="secondary"
-                busy={usageLoading()}
-                onClick={() => void loadUsage(false)}
-              >
-                {t("billing.usage.load")}
-              </Button>
-            </Show>
-          }
-        >
+        <Show when={!usageError()}>
           <DataTable
             columns={usageColumns()}
             rows={usageRows()}
             rowKey={(event) => event.id}
+            loading={usageLoading() && usageRows().length === 0}
             empty={t("billing.usage.empty")}
           />
           <Show when={usageCursor()}>

@@ -31,6 +31,8 @@ import {
   KVList,
   PageHeader,
 } from "../../components/ui/index.ts";
+import { currentWorkspaceId } from "../../lib/workspace-state.ts";
+import CloudApiKeysCard from "./components/CloudApiKeysCard.tsx";
 
 const THEME_LABEL_KEY: Record<ThemePreference, MessageKey> = {
   system: "theme.system",
@@ -183,6 +185,10 @@ function Inner(props: { readonly session: SessionRecord }) {
             </details>
           </CardSection>
         </Card>
+
+        <CloudApiKeysCard
+          workspaceId={currentWorkspaceId() || undefined}
+        />
 
         <Card>
           <CardHeader

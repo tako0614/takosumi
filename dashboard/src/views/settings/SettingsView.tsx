@@ -8,6 +8,7 @@
 import { A } from "@solidjs/router";
 import {
   Bell,
+  Boxes,
   ChevronRight,
   CreditCard,
   UserCircle2,
@@ -41,6 +42,12 @@ const GENERAL: readonly SettingsLink[] = [
     titleKey: "settings.billing.title",
     descKey: "settings.billing.desc",
     icon: CreditCard,
+  },
+  {
+    href: "/resources",
+    titleKey: "nav.resources",
+    descKey: "settings.manage.resources",
+    icon: Boxes,
   },
   {
     href: "/notifications",

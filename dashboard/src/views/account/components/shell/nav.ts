@@ -11,7 +11,6 @@
  */
 import {
   Archive,
-  Boxes,
   Clock3,
   History,
   LayoutGrid,
@@ -73,12 +72,6 @@ export const MANAGE_DESTINATIONS: readonly ManageDestination[] = [
     labelKey: "nav.graph",
     descriptionKey: "settings.manage.graph",
     icon: Network,
-  },
-  {
-    href: "/resources",
-    labelKey: "nav.resources",
-    descriptionKey: "settings.manage.resources",
-    icon: Boxes,
   },
   {
     href: "/activity",

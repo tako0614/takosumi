@@ -88,6 +88,15 @@ export default function CommercialBillingPanel(props: Props) {
       snapshot()?.billing.account?.taxJurisdiction,
     ),
   );
+  const autoRechargeSummary = createMemo(() => {
+    const settings = autoRecharge();
+    if (!settings?.enabled) return t("billing.commercial.autoRecharge.off");
+    return t("billing.commercial.autoRecharge.onSummary", {
+      threshold: formatUsdMicros(settings.thresholdUsdMicros),
+      amount: formatUsdMicros(settings.rechargeUsdMicros),
+      limit: formatUsdMicros(settings.monthlyLimitUsdMicros),
+    });
+  });
 
   const paymentColumns = createMemo<
     readonly Column<CommercialBillingPayment>[]
@@ -245,7 +254,7 @@ export default function CommercialBillingPanel(props: Props) {
               </Toast>
             </Show>
 
-            <Card class="wb-billing-overview">
+            <Card class="wb-billing-wallet">
               <CardHeader
                 title={props.title}
                 subtitle={
@@ -264,8 +273,8 @@ export default function CommercialBillingPanel(props: Props) {
                   </Show>
                 }
               />
-              <div class="wb-billing-current">
-                <div class="wb-billing-current-copy">
+              <div class="wb-billing-wallet-main">
+                <div class="wb-billing-balance">
                   <span class="wb-billing-kicker">
                     {t("billing.commercial.balance.available")}
                   </span>
@@ -276,17 +285,26 @@ export default function CommercialBillingPanel(props: Props) {
                     {t("billing.commercial.balance.noExpiry")}
                   </span>
                 </div>
-                <Badge
-                  tone={
-                    data().billing.credits.paymentMethodReady ? "ok" : "muted"
-                  }
-                >
-                  {data().billing.credits.paymentMethodReady
-                    ? t("billing.commercial.paymentMethod.ready")
-                    : t("billing.commercial.paymentMethod.missing")}
-                </Badge>
+                <div class="wb-billing-wallet-state">
+                  <Badge
+                    tone={
+                      data().billing.credits.paymentMethodReady ? "ok" : "muted"
+                    }
+                  >
+                    {data().billing.credits.paymentMethodReady
+                      ? t("billing.commercial.paymentMethod.ready")
+                      : t("billing.commercial.paymentMethod.missing")}
+                  </Badge>
+                  <span>{autoRechargeSummary()}</span>
+                </div>
               </div>
-              <dl class="wb-billing-meta">
+              <dl class="wb-billing-stats">
+                <div>
+                  <dt>{t("billing.commercial.balance.purchased")}</dt>
+                  <dd>
+                    {formatUsdMicros(data().billing.credits.purchasedUsdMicros)}
+                  </dd>
+                </div>
                 <div>
                   <dt>{t("billing.commercial.balance.reserved")}</dt>
                   <dd>
@@ -294,23 +312,17 @@ export default function CommercialBillingPanel(props: Props) {
                   </dd>
                 </div>
                 <div>
-                  <dt>{t("billing.commercial.balance.purchased")}</dt>
+                  <dt>{t("billing.commercial.autoRecharge.status")}</dt>
                   <dd>
-                    {formatUsdMicros(data().billing.credits.purchasedUsdMicros)}
+                    {data().billing.credits.autoRecharge.enabled
+                      ? t("billing.commercial.autoRecharge.on")
+                      : t("billing.commercial.autoRecharge.off")}
                   </dd>
                 </div>
-                <Show when={data().billing.account?.taxJurisdiction}>
-                  {(jurisdiction) => (
-                    <div>
-                      <dt>{t("billing.commercial.country.label")}</dt>
-                      <dd>{countryLabel(jurisdiction())}</dd>
-                    </div>
-                  )}
-                </Show>
               </dl>
             </Card>
 
-            <Card>
+            <Card class="wb-billing-add">
               <CardHeader
                 title={t("billing.commercial.credits.title")}
                 subtitle={t("billing.commercial.credits.subtitle")}
@@ -371,46 +383,53 @@ export default function CommercialBillingPanel(props: Props) {
                   </div>
                 </div>
               </Show>
-              <div class="wb-billing-plan-grid">
+              <div
+                class="wb-billing-amount-picker"
+                aria-label={t("billing.commercial.credits.choose")}
+              >
                 <For
                   each={data().configuration.credits.purchaseOptionsUsdMicros}
                 >
                   {(amount) => (
-                    <article class="wb-billing-plan">
-                      <div class="wb-billing-plan-heading">
-                        <div>
-                          <h3>{formatUsdMicros(amount)}</h3>
-                          <p>{t("billing.commercial.credits.creditAmount")}</p>
-                        </div>
-                      </div>
-                      <p class="wb-billing-plan-note">
-                        {t("billing.commercial.credits.taxNote")}
-                      </p>
-                      <Button
-                        variant="primary"
-                        busy={checkoutAmount() === amount}
-                        disabled={
-                          !data().billing.configured ||
-                          country() === "" ||
-                          Boolean(checkoutAmount())
-                        }
-                        onClick={() => void beginCheckout(amount)}
-                      >
-                        {t("billing.commercial.credits.add")}
-                      </Button>
-                    </article>
+                    <Button
+                      class="wb-billing-amount"
+                      variant="secondary"
+                      busy={checkoutAmount() === amount}
+                      disabled={
+                        !data().billing.configured ||
+                        country() === "" ||
+                        Boolean(checkoutAmount())
+                      }
+                      onClick={() => void beginCheckout(amount)}
+                    >
+                      <strong>{formatUsdMicros(amount)}</strong>
+                      <span>{t("billing.commercial.credits.add")}</span>
+                    </Button>
                   )}
                 </For>
               </div>
+              <p class="wb-billing-tax-note">
+                {t("billing.commercial.credits.taxNote")}
+              </p>
             </Card>
 
-            <Card>
+            <Card class="wb-billing-auto">
               <CardHeader
                 title={t("billing.commercial.autoRecharge.title")}
                 subtitle={t("billing.commercial.autoRecharge.subtitle")}
-                actions={<RefreshCw size={20} aria-hidden="true" />}
+                actions={
+                  <Badge
+                    tone={
+                      autoRecharge()?.enabled === true ? "ok" : "muted"
+                    }
+                  >
+                    {autoRecharge()?.enabled === true
+                      ? t("billing.commercial.autoRecharge.on")
+                      : t("billing.commercial.autoRecharge.off")}
+                  </Badge>
+                }
               />
-              <div class="wb-billing-profile">
+              <div class="wb-billing-auto-body">
                 <Checkbox
                   label={t("billing.commercial.autoRecharge.enable")}
                   checked={autoRecharge()?.enabled ?? false}
@@ -426,87 +445,97 @@ export default function CommercialBillingPanel(props: Props) {
                     {t("billing.commercial.autoRecharge.requiresCard")}
                   </span>
                 </Show>
-                <div class="wb-billing-form-grid">
-                  <FormField
-                    label={t("billing.commercial.autoRecharge.threshold")}
-                  >
-                    <Select
-                      value={autoRecharge()?.thresholdUsdMicros}
-                      onInput={(event) =>
-                        updateAutoRecharge({
-                          thresholdUsdMicros: Number(event.currentTarget.value),
-                        })
-                      }
+                <Show when={autoRecharge()?.enabled}>
+                  <div class="wb-billing-auto-summary">
+                    <RefreshCw size={16} aria-hidden="true" />
+                    <span>{autoRechargeSummary()}</span>
+                  </div>
+                  <div class="wb-billing-form-grid">
+                    <FormField
+                      label={t("billing.commercial.autoRecharge.threshold")}
                     >
-                      <For
-                        each={
-                          data().configuration.credits.autoRecharge
-                            .thresholdOptionsUsdMicros
+                      <Select
+                        value={autoRecharge()?.thresholdUsdMicros}
+                        onInput={(event) =>
+                          updateAutoRecharge({
+                            thresholdUsdMicros: Number(
+                              event.currentTarget.value,
+                            ),
+                          })
                         }
                       >
-                        {(amount) => (
-                          <option value={amount}>
-                            {formatUsdMicros(amount)}
-                          </option>
-                        )}
-                      </For>
-                    </Select>
-                  </FormField>
-                  <FormField
-                    label={t("billing.commercial.autoRecharge.amount")}
-                  >
-                    <Select
-                      value={autoRecharge()?.rechargeUsdMicros}
-                      onInput={(event) =>
-                        updateAutoRecharge({
-                          rechargeUsdMicros: Number(event.currentTarget.value),
-                        })
-                      }
+                        <For
+                          each={
+                            data().configuration.credits.autoRecharge
+                              .thresholdOptionsUsdMicros
+                          }
+                        >
+                          {(amount) => (
+                            <option value={amount}>
+                              {formatUsdMicros(amount)}
+                            </option>
+                          )}
+                        </For>
+                      </Select>
+                    </FormField>
+                    <FormField
+                      label={t("billing.commercial.autoRecharge.amount")}
                     >
-                      <For
-                        each={
-                          data().configuration.credits.autoRecharge
-                            .rechargeOptionsUsdMicros
+                      <Select
+                        value={autoRecharge()?.rechargeUsdMicros}
+                        onInput={(event) =>
+                          updateAutoRecharge({
+                            rechargeUsdMicros: Number(event.currentTarget.value),
+                          })
                         }
                       >
-                        {(amount) => (
-                          <option value={amount}>
-                            {formatUsdMicros(amount)}
-                          </option>
-                        )}
-                      </For>
-                    </Select>
-                  </FormField>
-                  <FormField
-                    label={t("billing.commercial.autoRecharge.monthlyLimit")}
-                  >
-                    <Select
-                      value={autoRecharge()?.monthlyLimitUsdMicros}
-                      onInput={(event) =>
-                        updateAutoRecharge({
-                          monthlyLimitUsdMicros: Number(
-                            event.currentTarget.value,
-                          ),
-                        })
-                      }
+                        <For
+                          each={
+                            data().configuration.credits.autoRecharge
+                              .rechargeOptionsUsdMicros
+                          }
+                        >
+                          {(amount) => (
+                            <option value={amount}>
+                              {formatUsdMicros(amount)}
+                            </option>
+                          )}
+                        </For>
+                      </Select>
+                    </FormField>
+                    <FormField
+                      label={t(
+                        "billing.commercial.autoRecharge.monthlyLimit",
+                      )}
                     >
-                      <For
-                        each={
-                          data().configuration.credits.autoRecharge
-                            .monthlyLimitOptionsUsdMicros
+                      <Select
+                        value={autoRecharge()?.monthlyLimitUsdMicros}
+                        onInput={(event) =>
+                          updateAutoRecharge({
+                            monthlyLimitUsdMicros: Number(
+                              event.currentTarget.value,
+                            ),
+                          })
                         }
                       >
-                        {(amount) => (
-                          <option value={amount}>
-                            {formatUsdMicros(amount)}
-                          </option>
-                        )}
-                      </For>
-                    </Select>
-                  </FormField>
-                </div>
+                        <For
+                          each={
+                            data().configuration.credits.autoRecharge
+                              .monthlyLimitOptionsUsdMicros
+                          }
+                        >
+                          {(amount) => (
+                            <option value={amount}>
+                              {formatUsdMicros(amount)}
+                            </option>
+                          )}
+                        </For>
+                      </Select>
+                    </FormField>
+                  </div>
+                </Show>
                 <Button
-                  variant="primary"
+                  variant="secondary"
                   busy={settingsBusy()}
                   disabled={
                     !data().billing.account ||
@@ -521,18 +550,32 @@ export default function CommercialBillingPanel(props: Props) {
               </div>
             </Card>
 
-            <Card>
-              <CardHeader
-                title={t("billing.commercial.payment.title")}
-                subtitle={t("billing.commercial.payment.subtitle")}
-                actions={<ReceiptText size={20} aria-hidden="true" />}
-              />
-              <DataTable
-                columns={paymentColumns()}
-                rows={data().billing.payments}
-                rowKey={(payment) => payment.id}
-                empty={t("billing.commercial.payment.empty")}
-              />
+            <Card class="wb-billing-history">
+              <details>
+                <summary>
+                  <span>
+                    <ReceiptText size={18} aria-hidden="true" />
+                    <span>
+                      <strong>{t("billing.commercial.payment.title")}</strong>
+                      <small>
+                        {t("billing.commercial.payment.count", {
+                          count: data().billing.payments.length,
+                        })}
+                      </small>
+                    </span>
+                  </span>
+                  <span>{t("common.details")}</span>
+                </summary>
+                <div class="wb-billing-history-body">
+                  <p>{t("billing.commercial.payment.subtitle")}</p>
+                  <DataTable
+                    columns={paymentColumns()}
+                    rows={data().billing.payments}
+                    rowKey={(payment) => payment.id}
+                    empty={t("billing.commercial.payment.empty")}
+                  />
+                </div>
+              </details>
             </Card>
           </>
         )}

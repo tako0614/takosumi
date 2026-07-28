@@ -12,6 +12,11 @@ const sourcePath = resolve(
 const source = readFileSync(sourcePath, "utf8");
 
 describe("AccountView", () => {
+  test("includes first-party Cloud API key management", () => {
+    expect(source).toContain("CloudApiKeysCard");
+    expect(source).toContain("workspaceId={currentWorkspaceId() || undefined}");
+  });
+
   test("keeps support details folded and team management out of account settings", () => {
     expect(source).toContain('"account.session.details"');
     expect(source).toContain('class="wb-disclosure wc-advanced-settings"');
