@@ -28,6 +28,7 @@ Deploy / topology:
   platform-worker-deploy.md
   deploy-topology-notes.md
   release-artifacts.md
+  takosumi-v1-release.md
   lan-dev-setup.md
 
 Pricing / cost:

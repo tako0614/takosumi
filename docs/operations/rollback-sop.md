@@ -100,38 +100,38 @@ Operator platform readiness は、staging rollback rehearsal を 1 回要求し�
 
 Runner Profile migration は install config を直接書き換えず、current Run ledger
 だけで rehearsal します。staging または fresh replica に scratch Capsule、既知の
-retained StateVersion、source profile、provider-neutral canary profile を用意し、root
-workspace から次を実行します。
+retained StateVersion、source profile、provider-neutral canary profile を用意します。
+OSS は特定 host の credential、deployment adapter、evidence store を所有しないため、
+この drill 専用 collector は同梱しません。存在しない package script を release
+procedure にしてはいけません。operator は選択した control API / CLI と deployment
+adapter で以下を実行し、手順と readback を host-owned runbook に固定します。
 
-```sh
-bun run capture:takosumi-runner-profile-migration-evidence -- \
-  --base-url <staging-or-replica-base-url> \
-  --environment <staging-or-replica> \
-  --session-token-file <absolute-operator-private-token-file> \
-  --capsule-id <scratch-capsule-id> \
-  --retained-state-version-id <known-good-state-version-id> \
-  --source-runner-profile-id <source-profile-id> \
-  --target-runner-profile-id <canary-profile-id> \
-  --source-commit <40-or-64-hex-commit> \
-  --readiness-endpoint <scratch-https-readiness-url> \
-  --out-file <absolute-operator-private-evidence-file> \
-  [--operation-drill-file <absolute-operator-private-staging-operation-drill-file>]
-```
+1. 対象が production ではないこと、scratch Capsule の owner、source commit、
+   source/target RunnerProfile、known-good StateVersion を readback する。
+2. target profile を指定した通常の plan を作成し、source identity、profile、
+   StateVersion lineage、公開 Output digest を review してから通常の approval/apply
+   flow を実行する。
+3. terminal success と新しい Run / StateVersion / Output / AuditEvent を readback
+   し、scratch readiness endpoint を検証する。
+4. known-good StateVersion と source profile を target に rollback plan を作成し、
+   同じ review / approval / apply flow を実行する。parallel rollback ledger や
+   legacy endpoint は使わない。
+5. rollback 後の ownership、generation、apply Run provenance、公開 Output digest、
+   readiness、開始から recovery までの経過時間を再読する。
+6. command/API revision、immutable ids/digests、reviewer、結果を repository 外の
+   operator evidence store に保存する。
 
-collector は target profile で plan/apply し、retained StateVersion から source
-profile へ rollback plan/apply した後、各 phase の Capsule / StateVersion ownership・
-generation・apply Run provenance、公開 Output digest、readiness を再読します。production
-target、同一 profile、plan の source/profile 不一致、StateVersion/Output の lineage
-不一致、Output drift、非成功 Run、readiness failure はすべて evidence を書かず fail
-closed します。token、raw Output、raw log、provider/account identifier は evidence へ
-転記しません。
+production target、同一 source/target profile、plan の source/profile 不一致、
+StateVersion/Output lineage 不一致、Output drift、非成功 Run、readiness failure、
+または incomplete readback はすべて fail closed とし、成功 evidence を作りません。
+token、raw Output、raw log、provider/account identifier は evidence へ転記しません。
 
-この collector が直接証明するのは Run / StateVersion / Output / readiness の core drill
-だけです。OIDC client、domain 設定、data namespace、InterfaceBinding の continuity は
-caller が渡した文字列を証跡にせず、別の readback / conformance evidence が必要です。
-その 3 種類 (`continuity-evidence` / `domain-preservation` / `preserve-evidence`) が揃うまで
-readiness patch は `blocked` のままです。`--operation-drill-file` への merge は staging
-だけで許可し、fresh replica は immutable standalone evidence として保存します。
+この drill が直接証明するのは Run / StateVersion / Output / readiness の core
+rollback だけです。OIDC client、domain 設定、data namespace、InterfaceBinding の
+continuity は別の readback / conformance evidence が必要です。必要な continuity /
+domain-preservation / preserve evidence が揃うまで該当 host readiness は `blocked`
+のままです。fresh replica の結果は staging evidence へ自動 merge せず、immutable
+standalone evidence として保存します。
 
 ## Extension Readiness
 
