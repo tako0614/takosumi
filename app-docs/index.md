@@ -182,3 +182,5 @@ lifecycle authority は canonical Resource API のままで、S3 endpoint は Re
 - [Takosumi Cloud resources](./resources.md)
 - [Takosumi Cloud endpoints](./endpoints.md)
 - [Takosumi Cloud pricing](./pricing.md)
+- [Takosumi Cloud サポート](./support.md)
+- [Takosumi Cloud SLA](./sla.md)
