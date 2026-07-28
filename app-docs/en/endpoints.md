@@ -72,41 +72,35 @@ the account session cookie. Automation can read it with a service token that has
 the appropriate read scope.
 
 ```http
-GET /__takosumi/cloud/extensions
+GET /__takosumi/platform/extensions
 ```
 
 Example:
 
 ```json
 {
-  "kind": "takosumi.platform-cloud-extensions@v1",
+  "kind": "takosumi.platform-extensions@v1",
   "generatedAt": "2026-06-26T00:00:00.000Z",
   "serviceUrl": "https://app.takosumi.com",
   "extensions": [
     {
-      "id": "ai",
-      "kind": "ai_gateway",
-      "protocol": "openai-compatible",
+      "id": "cloud-ai-gateway",
       "basePath": "/gateway/ai/v1",
       "configured": true,
-      "capabilities": ["openai.chat_completions", "openai.embeddings"],
-      "smokeChecks": ["models", "chat"],
-      "requiredScopes": ["ai.chat", "ai.embeddings"]
+      "requiredScopes": ["ai.models.read", "ai.chat", "ai.embeddings"]
     },
     {
-      "id": "s3",
-      "kind": "data_compat",
-      "provider": "object-storage",
-      "protocol": "s3-compatible",
+      "id": "s3-compatible-object-storage",
       "basePath": "/compat/s3/v1",
       "configured": true,
       "capabilities": ["compat.s3.v1"],
       "authMode": "handler",
-      "smokeChecks": ["status", "put-get-delete"]
+      "compatibilityProfiles": [
+        { "profile": "compat.s3.v1", "planes": ["data"] }
+      ]
     },
     {
-      "id": "usage",
-      "kind": "usage_ingest",
+      "id": "cloud-usage",
       "basePath": "/cloud/usage",
       "configured": true,
       "requiredScopes": ["cloud.usage.write"]
