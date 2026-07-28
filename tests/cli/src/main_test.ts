@@ -2704,11 +2704,135 @@ test("launch-readiness migrate-final-model rewrites legacy evidence names withou
     expect(migratedText).toContain("release-note");
     expect(migratedText).toContain("releaseNoteRef");
     expect(migratedText).toContain("vulnerability-response-policy");
-    expect(migratedText).toContain("account,workspace,capsule,run,output");
-    expect(migratedText).toContain("capsule_id,tenant_id");
+    expect(migratedText).toContain(
+      '"dataClasses":["account","workspace","capsule","run","output"]',
+    );
+    expect(
+      report.changes.some(
+        (change: { kind: string; from: string; to: string }) =>
+          change.kind === "dataClasses" &&
+          change.from === "installation" &&
+          change.to === "capsule",
+      ),
+    ).toEqual(true);
+    expect(
+      report.changes.some(
+        (change: { kind: string; from: string; to: string }) =>
+          change.kind === "labelSet" &&
+          change.from === "installation_id" &&
+          change.to === "capsule_id",
+      ),
+    ).toEqual(true);
   } finally {
     await removePath(file);
     await removePath(out);
+  }
+});
+
+test("launch-readiness migrate-final-model reconciles replacement contribution evidence", async () => {
+  const file = await makeTempFile({ suffix: ".json" });
+  const out = await makeTempFile({ suffix: ".json" });
+  const contributionFile = await makeTempFile({ suffix: ".json" });
+  const oldContribution = {
+    kind: "takosumi.platform-readiness-contribution@v1",
+    id: "example-hosted-readiness",
+    version: "1.0.0",
+    capability: "example.hosted-readiness.v1",
+    domains: [
+      {
+        id: "external-operation",
+        requiredEvidenceTypes: ["legacy-payment"],
+      },
+    ],
+    evidenceSchemas: {
+      "legacy-payment": { fields: ["paymentId"] },
+    },
+  };
+  const newContribution = {
+    ...oldContribution,
+    version: "2.0.0",
+    domains: [
+      {
+        id: "external-operation",
+        requiredEvidenceTypes: ["credit-purchase"],
+      },
+    ],
+    evidenceSchemas: {
+      "credit-purchase": { fields: ["purchaseId"] },
+    },
+  };
+  await writeTextFile(
+    file,
+    JSON.stringify({
+      kind: "takosumi.platform-readiness@v2",
+      contributions: [oldContribution],
+      domains: [
+        {
+          id: "external-operation",
+          status: "passed",
+          owner: "operator:example",
+          environment: "production",
+          reviewer: "reviewer:example",
+          completedAt: "2026-07-01T00:00:00Z",
+          evidence: [
+            {
+              type: "legacy-payment",
+              paymentId: "payment_private",
+            },
+          ],
+          requiredEvidenceTypes: ["legacy-payment"],
+        },
+      ],
+      rehearsal: [],
+    }),
+  );
+  await writeTextFile(contributionFile, JSON.stringify(newContribution));
+
+  try {
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    const code = await main(
+      [
+        "launch-readiness",
+        "migrate-final-model",
+        "--file",
+        file,
+        "--out",
+        out,
+        "--contribution-file",
+        contributionFile,
+        "--json",
+      ],
+      {
+        stdout: (line) => stdout.push(line),
+        stderr: (line) => stderr.push(line),
+      },
+    );
+
+    expect(code).toEqual(0);
+    expect(stderr).toEqual([]);
+    const report = JSON.parse(stdout.join("\n"));
+    expect(report.changed).toEqual(true);
+    const migrated = JSON.parse(await readFile(out, "utf8"));
+    expect(migrated.contributions).toEqual([newContribution]);
+    const entry = migrated.domains.find(
+      (candidate: { id: string }) => candidate.id === "external-operation",
+    );
+    expect(entry.status).toEqual("blocked");
+    expect(entry.completedAt).toEqual("");
+    expect(entry.requiredEvidenceTypes).toEqual(["credit-purchase"]);
+    expect(entry.evidence).toEqual([
+      expect.objectContaining({
+        type: "credit-purchase",
+        purchaseId: "<purchaseId>",
+      }),
+    ]);
+    expect(JSON.stringify(entry)).not.toContain("legacy-payment");
+    expect(JSON.stringify(entry)).not.toContain("payment_private");
+  } finally {
+    await removePath(file);
+    await removePath(out);
+    await removePath(contributionFile);
   }
 });
 
