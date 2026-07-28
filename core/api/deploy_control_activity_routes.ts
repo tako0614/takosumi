@@ -22,7 +22,6 @@ import {
 import {
   TAKOSUMI_CAPSULE_BACKUPS_ROUTE,
   TAKOSUMI_WORKSPACE_ACTIVITY_ROUTE,
-  TAKOSUMI_WORKSPACE_BACKUP_RESTORES_ROUTE,
   TAKOSUMI_WORKSPACE_BACKUPS_ROUTE,
 } from "./deploy_control_route_paths.ts";
 
@@ -48,7 +47,7 @@ export const DEPLOY_CONTROL_ACTIVITY_ENDPOINTS: readonly DeployControlEndpoint[]
       method: "POST",
       path: TAKOSUMI_WORKSPACE_BACKUPS_ROUTE,
       summary:
-    "Creates a sealed zstd control backup of a Workspace ledger in host artifact storage (no secret material).",
+        "Creates a sealed, partial control-ledger export in host artifact storage (no secret material; not restorable).",
       auth: "deploy-control-token",
       operationId: "createWorkspaceBackup",
       openapi: {
@@ -62,7 +61,7 @@ export const DEPLOY_CONTROL_ACTIVITY_ENDPOINTS: readonly DeployControlEndpoint[]
       method: "POST",
       path: TAKOSUMI_CAPSULE_BACKUPS_ROUTE,
       summary:
-        "Creates a sealed control backup for the Capsule's Workspace after resolving the Capsule.",
+        "Creates a sealed, partial control export for the Capsule's Workspace after resolving the Capsule.",
       auth: "deploy-control-token",
       operationId: "createCapsuleBackup",
       openapi: {
@@ -75,26 +74,11 @@ export const DEPLOY_CONTROL_ACTIVITY_ENDPOINTS: readonly DeployControlEndpoint[]
     {
       method: "GET",
       path: TAKOSUMI_WORKSPACE_BACKUPS_ROUTE,
-      summary: "Lists a Workspace's control backups (newest first).",
+      summary: "Lists a Workspace's partial control exports (newest first).",
       auth: "deploy-control-token",
       operationId: "listWorkspaceBackups",
       openapi: { pathParams: ["workspaceId"], okSchema: "ListBackupsResponse" },
       notImplementedMessage: "backups not wired",
-    },
-    {
-      method: "POST",
-      path: TAKOSUMI_WORKSPACE_BACKUP_RESTORES_ROUTE,
-      summary:
-        "Creates a destructive restore Run from a Backup; the Run waits for approval before dispatch.",
-      auth: "deploy-control-token",
-      operationId: "createBackupRestore",
-      openapi: {
-        pathParams: ["workspaceId", "backupId"],
-        requestSchema: "CreateRestoreRequest",
-        okStatus: "201",
-        okSchema: "CreateRestoreResponse",
-      },
-      notImplementedMessage: "deploy control not wired",
     },
   ];
 
@@ -207,60 +191,4 @@ export function mountDeployControlActivityRoutes(
     }),
   );
 
-  app.post(
-    TAKOSUMI_WORKSPACE_BACKUP_RESTORES_ROUTE,
-    defineRoute({
-      ctx,
-      requireService: (deps) =>
-        deps.controller ? undefined : "deploy control not wired",
-      param: WORKSPACE_ID_PARAM,
-      handler: async ({ c, principal, id }) => {
-        ensureWorkspacePermission(principal, id);
-        const backupId = c.req.param("backupId");
-        if (!backupId || backupId.trim().length === 0) {
-          return c.json(
-            errorEnvelope(c, "invalid_argument", "backupId is required"),
-            400,
-          );
-        }
-        const raw = await c.req.json().catch(() => ({}));
-        const body =
-          typeof raw === "object" && raw !== null && !Array.isArray(raw)
-            ? (raw as Record<string, unknown>)
-            : {};
-        const stateGeneration = body.stateGeneration;
-        if (!Number.isInteger(stateGeneration) || Number(stateGeneration) < 0) {
-          return c.json(
-            errorEnvelope(
-              c,
-              "invalid_argument",
-              "stateGeneration must be a non-negative integer",
-            ),
-            400,
-          );
-        }
-        const run = await dependencies.controller!.createRestoreRun(
-          id,
-          backupId,
-          {
-            stateGeneration: Number(stateGeneration),
-            ...(typeof body.capsuleId === "string"
-              ? { capsuleId: body.capsuleId }
-              : {}),
-            ...(typeof body.environment === "string"
-              ? { environment: body.environment }
-              : {}),
-            ...(typeof body.expectedBackupDigest === "string"
-              ? { expectedBackupDigest: body.expectedBackupDigest }
-              : {}),
-            ...(body.restoreServiceData === true
-              ? { restoreServiceData: true }
-              : {}),
-          },
-          { actor: principal.actor },
-        );
-        return c.json({ run }, 201);
-      },
-    }),
-  );
 }

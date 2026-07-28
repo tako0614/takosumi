@@ -1,10 +1,4 @@
-import type {
-  FormInterfaceDescriptor,
-  FormOperation,
-  FormRef,
-  JsonObject,
-  JsonValue,
-} from "takosumi-contract";
+import type { FormOperation, FormRef, JsonObject } from "takosumi-contract";
 import type {
   FormPackageVerifier,
   VerifiedFormDefinition,
@@ -17,6 +11,7 @@ import {
   parseCanonicalJson,
 } from "./canonical_json.ts";
 import type { TakoformPackageSignatureVerifier } from "./signature.ts";
+import forbiddenVocabularyDocument from "./schemas/forbidden-vocabulary.v0.json" with { type: "json" };
 import {
   type StaticSchemaValidator,
   validateTakoformFormDefinition,
@@ -31,18 +26,90 @@ export const TAKOFORM_PACKAGE_ENVELOPE_MEDIA_TYPE =
   "application/vnd.takosumi.takoform-package-install.v1+json";
 
 const FORM_DEFINITION_MEDIA_TYPE =
-  "application/vnd.takoform.form-definition.v1+json";
+  "application/vnd.takoform.form-definition.v0+json";
+// The install envelope is a takosumi-internal in-memory transport bound. The
+// remaining limits mirror the portable takoform contract exactly
+// (formpackage/verify.go), so one signed package gets one verdict everywhere.
 const MAX_ENVELOPE_BYTES = 32 << 20;
 const MAX_INDEX_BYTES = 4 << 20;
 const MAX_DEFINITION_BYTES = 4 << 20;
 const MAX_JSON_BYTES = 16 << 20;
-const MAX_FILE_BYTES = 16 << 20;
-const MAX_PACKAGE_BYTES = 16 << 20;
+const MAX_PAYLOAD_BYTES = 64 << 20;
+const MAX_PACKAGE_BYTES = 256 << 20;
 const MAX_PACKAGE_FILES = 1024;
-const MAX_SCHEMA_NODES = 4096;
-const MAX_SCHEMA_DEPTH = 64;
+const MAX_SCHEMA_PROOF_OPS = 4096;
+const MAX_SCHEMA_PROOF_DEPTH = 64;
 const MAX_SCHEMA_VALIDATION_WORK = 16_384;
+const MAX_CONFORMANCE_FIXTURES = 32;
+const PORTABLE_MAP_KEY_PATTERN = "^[A-Za-z][A-Za-z0-9._-]{0,63}$";
+const PORTABLE_MAP_POLICY_KEY = "x-takoform-fieldPolicy";
+const PORTABLE_MAP_POLICY_VALUE = "portable-data-only-v1";
 const PACKAGE_PATH_RE = /^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/u;
+// Windows reserves these device names in every directory, with or without an
+// extension; a package listing one cannot be extracted on that platform.
+const WINDOWS_RESERVED_DEVICE_NAMES = new Set([
+  "con",
+  "prn",
+  "aux",
+  "nul",
+  ...Array.from({ length: 10 }, (_, digit) => `com${digit}`),
+  ...Array.from({ length: 10 }, (_, digit) => `lpt${digit}`),
+]);
+// Draft 2020-12 treats unknown keywords as ignorable annotations; portable
+// schemas fail closed instead so one definition cannot validate differently
+// across hosts. Keep byte-identical to the takoform verifier allowlist.
+const PORTABLE_SCHEMA_KEYWORDS = new Set([
+  "$schema",
+  "$ref",
+  "$defs",
+  "definitions",
+  "$comment",
+  "properties",
+  "additionalProperties",
+  "propertyNames",
+  "dependentSchemas",
+  "dependentRequired",
+  "items",
+  "prefixItems",
+  "contains",
+  "unevaluatedItems",
+  "unevaluatedProperties",
+  "allOf",
+  "anyOf",
+  "oneOf",
+  "not",
+  "if",
+  "then",
+  "else",
+  "type",
+  "const",
+  "enum",
+  "required",
+  "minimum",
+  "maximum",
+  "exclusiveMinimum",
+  "exclusiveMaximum",
+  "multipleOf",
+  "minLength",
+  "maxLength",
+  "pattern",
+  "minItems",
+  "maxItems",
+  "uniqueItems",
+  "minContains",
+  "maxContains",
+  "minProperties",
+  "maxProperties",
+  "title",
+  "description",
+  "default",
+  "examples",
+  "deprecated",
+  "readOnly",
+  "writeOnly",
+  "format",
+  "x-takoform-fieldPolicy",
+]);
 const BASE64_ALPHABET =
   "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 const EXECUTABLE_EXTENSIONS = new Set([
@@ -104,10 +171,9 @@ const TEXT_MEDIA_TYPES = new Set([
 ]);
 
 interface PackageIndex {
-  readonly apiVersion: string;
-  readonly kind: string;
+  readonly format: string;
   readonly packageVersion: string;
-  readonly formRef: FormRef;
+  readonly form: FormRef;
   readonly definitionPath: string;
   readonly files: readonly PackageFile[];
 }
@@ -132,49 +198,49 @@ interface InstallEnvelope {
   readonly sigstoreBundle: unknown;
 }
 
+interface TakoformInterfaceInput {
+  readonly name: string;
+  readonly source: string;
+  readonly pointer?: string;
+  readonly value?: CanonicalJsonValue;
+}
+
 interface TakoformDefinition {
-  readonly apiVersion: string;
-  readonly kind: string;
-  readonly definitionVersion: string;
+  readonly format: string;
+  readonly type: string;
+  readonly version: string;
   readonly title: string;
   readonly description?: string;
   readonly status: string;
-  readonly desiredSchema: CanonicalJsonValue;
-  readonly observedSchema: CanonicalJsonValue;
-  readonly outputSchema?: CanonicalJsonValue;
-  readonly immutableFields?: readonly string[];
-  readonly lifecycleCapabilities: readonly string[];
+  readonly configSchema: CanonicalJsonValue;
+  readonly attributesSchema: CanonicalJsonValue;
+  readonly outputsSchema?: CanonicalJsonValue;
+  readonly forceNewFields?: readonly string[];
+  readonly operations: readonly string[];
   readonly interfaces?: readonly {
     readonly name: string;
     readonly version: string;
     readonly description?: string;
     readonly required?: boolean;
-    readonly resourceUriInput?: string;
-    readonly document?: CanonicalJsonValue;
     readonly documentSchema?: CanonicalJsonValue;
-    readonly inputs?: readonly {
-      readonly name: string;
-      readonly source: string;
-      readonly pointer?: string;
-      readonly value?: CanonicalJsonValue;
-    }[];
+    readonly inputs?: readonly TakoformInterfaceInput[];
   }[];
   readonly conformanceFixtures?: readonly {
     readonly name: string;
-    readonly desiredPath: string;
-    readonly observedPath?: string;
-    readonly outputPath?: string;
+    readonly configPath: string;
+    readonly attributesPath?: string;
+    readonly outputsPath?: string;
   }[];
   readonly negativeConformanceFixtures?: readonly {
     readonly name: string;
-    readonly stage: "desired" | "observed" | "output";
+    readonly stage: "config" | "attributes" | "outputs";
     readonly inputPath: string;
     readonly expectedFailure: string;
   }[];
 }
 
 /**
- * Takosumi host adapter for the independent Takoform Form Package v1alpha1
+ * Takosumi host adapter for the independent Takoform Form Package v0
  * contract. The internal envelope is transport only; package and FormRef
  * identity remain the signed canonical Takoform index and definition.
  */
@@ -184,7 +250,7 @@ export class TakoformDataOnlyPackageVerifier implements FormPackageVerifier {
   constructor(
     private readonly signatureVerifier: TakoformPackageSignatureVerifier,
   ) {
-    this.id = `takoform.form-package.v1alpha1+${signatureVerifier.id}`;
+    this.id = `takoform.form-package.v0+${signatureVerifier.id}`;
   }
 
   async verify(
@@ -239,10 +305,10 @@ export class TakoformDataOnlyPackageVerifier implements FormPackageVerifier {
     rejectForbiddenDefinitionContent(definitionValue, "$");
     const definition = definitionValue as unknown as TakoformDefinition;
     verifyDefinitionSemantics(definition);
-    verifyPortableSchema(definition.desiredSchema, "desiredSchema");
-    verifyPortableSchema(definition.observedSchema, "observedSchema");
-    if (definition.outputSchema !== undefined) {
-      verifyPortableSchema(definition.outputSchema, "outputSchema");
+    verifyPortableSchema(definition.configSchema, "configSchema");
+    verifyPortableSchema(definition.attributesSchema, "attributesSchema");
+    if (definition.outputsSchema !== undefined) {
+      verifyPortableSchema(definition.outputsSchema, "outputsSchema");
     }
     for (const [position, descriptor] of (
       definition.interfaces ?? []
@@ -258,101 +324,54 @@ export class TakoformDataOnlyPackageVerifier implements FormPackageVerifier {
     verifyConformanceFixtures(index, definition, payloads);
 
     const verifiedDefinition: VerifiedFormDefinition = {
-      formRef: index.formRef,
+      formRef: index.form,
       displayName: definition.title,
       ...(definition.description
         ? { description: definition.description }
         : {}),
-      operations: lifecycleOperations(
-        definition.lifecycleCapabilities,
-        definition.status,
-      ),
+      operations: definitionOperations(definition.operations),
       metadata: definitionMetadata(definition),
-      ...(definition.interfaces?.length
-        ? { interfaceDescriptors: verifiedInterfaceDescriptors(definition) }
-        : {}),
     };
     return { packageDigest, definitions: [verifiedDefinition] };
   }
 }
 
 function verifyDefinitionSemantics(definition: TakoformDefinition): void {
+  if (definition.type === "revocations") {
+    throw new TypeError(
+      'form type "revocations" is reserved for the revocation delivery namespace',
+    );
+  }
+  const conformanceFixtures = definition.conformanceFixtures ?? [];
+  if (conformanceFixtures.length > MAX_CONFORMANCE_FIXTURES) {
+    throw new TypeError(
+      `Form Definition has ${conformanceFixtures.length} conformance fixtures; maximum is ${MAX_CONFORMANCE_FIXTURES}`,
+    );
+  }
+  const negativeFixtures = definition.negativeConformanceFixtures ?? [];
+  if (negativeFixtures.length > MAX_CONFORMANCE_FIXTURES) {
+    throw new TypeError(
+      `Form Definition has ${negativeFixtures.length} negative conformance fixtures; maximum is ${MAX_CONFORMANCE_FIXTURES}`,
+    );
+  }
   const interfaces = new Set<string>();
-  for (const [position, descriptor] of (
-    definition.interfaces ?? []
-  ).entries()) {
+  for (const descriptor of definition.interfaces ?? []) {
     const key = `${descriptor.name}@${descriptor.version}`;
     if (interfaces.has(key)) {
       throw new TypeError(`duplicate Interface ${key}`);
     }
     interfaces.add(key);
-    const inputs = new Set<string>();
-    let resourceUriInputs = 0;
-    let resourceUriMatches = 0;
-    for (const input of descriptor.inputs ?? []) {
-      if (inputs.has(input.name)) {
-        throw new TypeError(`duplicate Interface input ${key}:${input.name}`);
-      }
-      inputs.add(input.name);
-      if (input.source === "literal") {
-        if (input.value === undefined || input.pointer !== undefined) {
-          throw new TypeError(
-            `literal Interface input ${key}:${input.name} requires value and forbids pointer`,
-          );
-        }
-      } else if (input.source === "resource_uri") {
-        resourceUriInputs += 1;
-        if (input.pointer !== undefined || input.value !== undefined) {
-          throw new TypeError(
-            `resource_uri Interface input ${key}:${input.name} forbids pointer and value`,
-          );
-        }
-        if (input.name === descriptor.resourceUriInput) {
-          resourceUriMatches += 1;
-        }
-      } else if (input.value !== undefined) {
-        throw new TypeError(
-          `non-literal Interface input ${key}:${input.name} forbids value`,
-        );
-      }
-    }
-    if (
-      (descriptor.resourceUriInput !== undefined &&
-        (resourceUriInputs !== 1 || resourceUriMatches !== 1)) ||
-      (descriptor.resourceUriInput === undefined && resourceUriInputs !== 0)
-    ) {
-      throw new TypeError(
-        `Interface ${key} resourceUriInput must name exactly one resource_uri input`,
-      );
-    }
-    if (descriptor.documentSchema !== undefined) {
-      let validateDocument: InterpretedDraft202012Validator;
-      try {
-        validateDocument = new InterpretedDraft202012Validator(
-          descriptor.documentSchema,
-        );
-      } catch (error) {
-        throw new TypeError(
-          `interfaces[${position}].documentSchema could not be prepared: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      }
-      const document = descriptor.document ?? {};
-      if (!validateDocument.validate(document)) {
-        throw new TypeError(
-          `interfaces[${position}].document does not satisfy documentSchema: ${validateDocument.errorsText()}`,
-        );
-      }
-    }
+    verifyInterfaceInputs(key, descriptor.inputs ?? []);
   }
 
   const fixtureNames = new Set<string>();
-  for (const fixture of definition.conformanceFixtures ?? []) {
+  for (const fixture of conformanceFixtures) {
     if (fixtureNames.has(fixture.name)) {
       throw new TypeError(`duplicate conformance fixture name ${fixture.name}`);
     }
     fixtureNames.add(fixture.name);
   }
-  for (const fixture of definition.negativeConformanceFixtures ?? []) {
+  for (const fixture of negativeFixtures) {
     if (fixtureNames.has(fixture.name)) {
       throw new TypeError(`duplicate conformance fixture name ${fixture.name}`);
     }
@@ -360,36 +379,43 @@ function verifyDefinitionSemantics(definition: TakoformDefinition): void {
   }
 }
 
-function verifiedInterfaceDescriptors(
-  definition: TakoformDefinition,
-): readonly FormInterfaceDescriptor[] {
-  return (definition.interfaces ?? []).map((descriptor) => ({
-    name: descriptor.name,
-    version: descriptor.version,
-    ...(descriptor.description ? { description: descriptor.description } : {}),
-    ...(descriptor.required === true ? { required: true } : {}),
-    ...(descriptor.resourceUriInput
-      ? { resourceUriInput: descriptor.resourceUriInput }
-      : {}),
-    ...(descriptor.document !== undefined
-      ? { document: descriptor.document as JsonObject }
-      : {}),
-    ...(descriptor.documentSchema !== undefined
-      ? { documentSchema: descriptor.documentSchema as JsonObject }
-      : {}),
-    ...(descriptor.inputs?.length
-      ? {
-          inputs: descriptor.inputs.map((input) => ({
-            name: input.name,
-            source: input.source,
-            ...(input.pointer !== undefined ? { pointer: input.pointer } : {}),
-            ...(input.value !== undefined
-              ? { value: input.value as JsonValue }
-              : {}),
-          })),
-        }
-      : {}),
-  }));
+/**
+ * Enforces the deterministic Interface input mapping grammar exactly like the
+ * takoform verifier (formpackage validateInterfaceInputs): every input name is
+ * unique, a literal carries its own value and never a pointer, and every other
+ * source reads through an optional pointer and never carries a value.
+ */
+function verifyInterfaceInputs(
+  interfaceKey: string,
+  inputs: readonly TakoformInterfaceInput[],
+): void {
+  const names = new Set<string>();
+  for (const input of inputs) {
+    if (names.has(input.name)) {
+      throw new TypeError(
+        `Interface ${interfaceKey} has duplicate input ${input.name}`,
+      );
+    }
+    names.add(input.name);
+    if (input.source === "literal") {
+      if (input.value === undefined || input.value === null) {
+        throw new TypeError(
+          `Interface ${interfaceKey} input ${input.name} is a literal without a value`,
+        );
+      }
+      if (input.pointer !== undefined && input.pointer !== "") {
+        throw new TypeError(
+          `Interface ${interfaceKey} input ${input.name} is a literal and must not carry a pointer`,
+        );
+      }
+      continue;
+    }
+    if (input.value !== undefined && input.value !== null) {
+      throw new TypeError(
+        `Interface ${interfaceKey} input ${input.name} carries a value with source ${input.source}; only a literal may`,
+      );
+    }
+  }
 }
 
 function decodeEnvelope(value: CanonicalJsonValue): InstallEnvelope {
@@ -457,6 +483,9 @@ function assertPackageIndexClosure(index: PackageIndex): void {
   }
   let previous = "";
   let definitionCount = 0;
+  const foldedPaths = new Map<string, string>([
+    ["package-index.json", "package-index.json"],
+  ]);
   for (const file of index.files) {
     if (!validPackagePath(file.path) || file.path === "package-index.json") {
       throw new TypeError(`package file path ${file.path} is not canonical`);
@@ -467,6 +496,14 @@ function assertPackageIndexClosure(index: PackageIndex): void {
       );
     }
     previous = file.path;
+    const folded = file.path.toLowerCase();
+    const collision = foldedPaths.get(folded);
+    if (collision !== undefined) {
+      throw new TypeError(
+        `package paths ${collision} and ${file.path} collide on case-insensitive filesystems`,
+      );
+    }
+    foldedPaths.set(folded, file.path);
     if (!TEXT_MEDIA_TYPES.has(file.mediaType)) {
       throw new TypeError(`unsupported data-only media type ${file.mediaType}`);
     }
@@ -560,73 +597,176 @@ async function verifyDefinitionIdentity(
   definition: TakoformDefinition,
 ): Promise<void> {
   const digest = `sha256:${await sha256HexAsync(canonicalJsonBytes(value))}`;
-  const exact = index.formRef;
+  const exact = index.form;
   if (
-    exact.apiVersion !== definition.apiVersion ||
-    exact.kind !== definition.kind ||
-    exact.definitionVersion !== definition.definitionVersion ||
+    exact.type !== definition.type ||
+    exact.version !== definition.version ||
     exact.schemaDigest !== digest
   ) {
     throw new TypeError("FormRef does not match the canonical Form Definition");
   }
 }
 
+type ObjectAdmission = "open" | "closed" | "excluded";
+
+interface SchemaProofResult {
+  readonly mode: ObjectAdmission;
+  readonly maxDepth: number;
+}
+
+/**
+ * Verifies one inline portable schema exactly like the takoform reference
+ * verifier (formpackage compileInlineSchema): the document-wide fragment-only
+ * reference scan first, then the fail-closed object-closure proof plus the
+ * worst-case validation-work bound, then a Draft 2020-12 compile check.
+ */
 function verifyPortableSchema(value: CanonicalJsonValue, label: string): void {
-  assertDraft202012Schema(value, label);
-  const root = value;
+  verifyFragmentOnlyReferences(value, label);
+  validatePortableSchemaStructure(value, label);
+  try {
+    assertDraft202012Schema(value, label);
+    new InterpretedDraft202012Validator(value, label);
+  } catch (error) {
+    throw new TypeError(`${label} is not a compilable Draft 2020-12 schema`, {
+      cause: error,
+    });
+  }
+}
+
+/**
+ * Walks the ENTIRE schema document — including annotation values such as
+ * default/examples and literal const/enum members — rejecting `$dynamicRef`
+ * everywhere and any `$ref` whose string value is not `#` or `#/...`.
+ */
+function verifyFragmentOnlyReferences(
+  value: CanonicalJsonValue,
+  location: string,
+): void {
+  if (Array.isArray(value)) {
+    value.forEach((child, index) =>
+      verifyFragmentOnlyReferences(child, `${location}[${index}]`),
+    );
+    return;
+  }
+  if (!isRecord(value)) return;
+  for (const [key, child] of Object.entries(value)) {
+    const childLocation = `${location}.${key}`;
+    if (key === "$dynamicRef") {
+      throw new TypeError(
+        `${childLocation} is forbidden because dynamic resolution cannot be proven closed`,
+      );
+    }
+    if (
+      key === "$ref" &&
+      (typeof child !== "string" ||
+        (child !== "#" && !child.startsWith("#/")))
+    ) {
+      throw new TypeError(
+        `${childLocation} must be a document-local fragment using the root or a JSON Pointer; network, package-path, anchor, and dynamic references are forbidden`,
+      );
+    }
+    verifyFragmentOnlyReferences(child, childLocation);
+  }
+}
+
+/**
+ * Proves at every schema node that object values are either impossible or
+ * constrained by an explicit closed object or the exact reviewed typed-map
+ * escape. JSON Schema's permissive empty/implicit schemas otherwise accept
+ * arbitrary objects, so uncertainty fails closed. Exact port of the takoform
+ * portableSchemaValidator including memoized depth accounting and the shared
+ * node/ref operation budget.
+ */
+function validatePortableSchemaStructure(
+  root: CanonicalJsonValue,
+  label: string,
+): void {
+  const memo = new Map<
+    string,
+    { state: "visiting" } | { state: "done"; result: SchemaProofResult }
+  >();
   let operations = 0;
-  const visiting = new Set<string>();
-  const completed = new Map<string, "closed" | "excluded">();
-  const visit = (
+  const consumeOperation = (location: string, operation: string): void => {
+    operations++;
+    if (operations > MAX_SCHEMA_PROOF_OPS) {
+      throw new TypeError(
+        `${location} portable schema closure proof exceeds combined node/ref operation budget ${MAX_SCHEMA_PROOF_OPS} while proving ${operation}`,
+      );
+    }
+  };
+
+  const validate = (
     node: CanonicalJsonValue,
     location: string,
     pointer: string,
     depth: number,
-  ): "closed" | "excluded" => {
-    if (depth > MAX_SCHEMA_DEPTH) {
+  ): SchemaProofResult => {
+    if (depth > MAX_SCHEMA_PROOF_DEPTH) {
       throw new TypeError(
-        `${label} exceeds portable schema depth ${MAX_SCHEMA_DEPTH}`,
+        `${location} portable schema closure proof exceeds depth limit ${MAX_SCHEMA_PROOF_DEPTH}`,
       );
     }
-    operations++;
-    if (operations > MAX_SCHEMA_NODES) {
+    const known = memo.get(pointer);
+    if (known !== undefined) {
+      if (known.state === "visiting") {
+        throw new TypeError(
+          `${location} cyclic schema references are not accepted by the portable closure proof`,
+        );
+      }
+      if (depth + known.result.maxDepth > MAX_SCHEMA_PROOF_DEPTH) {
+        throw new TypeError(
+          `${location} portable schema closure proof exceeds depth limit ${MAX_SCHEMA_PROOF_DEPTH}`,
+        );
+      }
+      return known.result;
+    }
+    consumeOperation(location, "schema node");
+    memo.set(pointer, { state: "visiting" });
+    const result = validateUncached(node, location, pointer, depth);
+    if (depth + result.maxDepth > MAX_SCHEMA_PROOF_DEPTH) {
       throw new TypeError(
-        `${label} exceeds portable schema node/ref budget ${MAX_SCHEMA_NODES}`,
+        `${location} portable schema closure proof exceeds depth limit ${MAX_SCHEMA_PROOF_DEPTH}`,
       );
     }
-    if (visiting.has(pointer))
-      throw new TypeError(`${label} has cyclic local references`);
-    const completedAdmission = completed.get(pointer);
-    if (completedAdmission !== undefined) return completedAdmission;
-    if (node === false) return "excluded";
-    if (node === true || !isRecord(node)) {
-      throw new TypeError(`${location} can admit arbitrary object values`);
+    memo.set(pointer, { state: "done", result });
+    return result;
+  };
+
+  const validateUncached = (
+    node: CanonicalJsonValue,
+    location: string,
+    pointer: string,
+    depth: number,
+  ): SchemaProofResult => {
+    if (node === true) {
+      throw new TypeError(
+        `${location} boolean true schema can admit arbitrary object values`,
+      );
     }
-    visiting.add(pointer);
-    for (const forbidden of [
-      "patternProperties",
-      "dependencies",
+    if (node === false) return { mode: "excluded", maxDepth: 0 };
+    if (!isRecord(node)) {
+      throw new TypeError(
+        `${location} must be a JSON Schema object or boolean`,
+      );
+    }
+    if ("patternProperties" in node) {
+      throw new TypeError(
+        `${location} patternProperties is forbidden; use the reviewed typed-map escape`,
+      );
+    }
+    if ("dependencies" in node) {
+      throw new TypeError(
+        `${location} legacy dependencies is forbidden; use dependentRequired or dependentSchemas`,
+      );
+    }
+    for (const keyword of [
       "contentEncoding",
       "contentMediaType",
       "contentSchema",
-      "$id",
-      "$anchor",
-      "$dynamicAnchor",
-      "$dynamicRef",
-      "$recursiveAnchor",
-      "$recursiveRef",
-      "$vocabulary",
     ]) {
-      if (forbidden in node)
-        throw new TypeError(`${location}.${forbidden} is not portable`);
-    }
-    if (typeof node.pattern === "string") {
-      try {
-        new RegExp(node.pattern, "u");
-      } catch (error) {
+      if (keyword in node) {
         throw new TypeError(
-          `${location}.pattern is not a valid ECMA-262 pattern`,
-          { cause: error },
+          `${location}.${keyword} is forbidden because portable Forms do not decode or transform embedded content`,
         );
       }
     }
@@ -634,186 +774,97 @@ function verifyPortableSchema(value: CanonicalJsonValue, label: string): void {
       node.$schema !== undefined &&
       node.$schema !== "https://json-schema.org/draft/2020-12/schema"
     ) {
-      throw new TypeError(`${location} must remain Draft 2020-12`);
+      throw new TypeError(`${location}.$schema must remain Draft 2020-12`);
+    }
+    for (const keyword of [
+      "$id",
+      "$anchor",
+      "$dynamicAnchor",
+      "$recursiveAnchor",
+      "$recursiveRef",
+      "$vocabulary",
+    ]) {
+      if (keyword in node) {
+        throw new TypeError(
+          `${location}.${keyword} is forbidden because alternate or recursive resolution scopes cannot be proven closed`,
+        );
+      }
+    }
+    for (const keyword of Object.keys(node)) {
+      if (!PORTABLE_SCHEMA_KEYWORDS.has(keyword)) {
+        throw new TypeError(
+          `${location}.${keyword} is not in the closed portable schema keyword vocabulary; portable schemas fail closed on unknown keywords`,
+        );
+      }
+    }
+    if (node.format !== undefined && typeof node.format !== "string") {
+      throw new TypeError(
+        `${location}.format must be a string; portable validation treats format as an annotation only`,
+      );
+    }
+
+    const hasProperties = node.properties !== undefined;
+    if (hasProperties && !isRecord(node.properties)) {
+      throw new TypeError(`${location}.properties must be an object`);
+    }
+    if (isRecord(node.properties)) {
+      for (const name of Object.keys(node.properties)) {
+        if (forbiddenFieldName(name)) {
+          throw new TypeError(
+            `forbidden field ${name} at ${location}.properties`,
+          );
+        }
+      }
     }
     assertSchemaFieldNameArray(node.required, `${location}.required`);
     assertDependentRequiredNames(
       node.dependentRequired,
       `${location}.dependentRequired`,
     );
-    const types = Array.isArray(node.type) ? node.type : [node.type];
-    const objectType = types.includes("object");
-    const arrayType = types.includes("array");
-    if (arrayType && node.items === undefined) {
-      throw new TypeError(`${location} array schema must declare items`);
-    }
-    let admission: "closed" | "excluded" | "open" =
-      node.type === undefined ? "open" : objectType ? "closed" : "excluded";
-    if (objectType && !objectSchemaIsClosed(node)) {
-      throw new TypeError(`${location} object schema is not explicitly closed`);
-    }
-    if (!objectType && hasObjectKeywords(node) && node.type !== undefined) {
-      throw new TypeError(
-        `${location} uses object keywords without type=object`,
-      );
-    }
-    const compoundModes = new Map<string, Array<"closed" | "excluded">>();
-    for (const [keyword, children] of Object.entries(node)) {
-      if (
-        ["$defs", "definitions", "properties", "dependentSchemas"].includes(
-          keyword,
-        )
-      ) {
-        if (!isRecord(children))
-          throw new TypeError(`${location}.${keyword} must be an object`);
-        for (const [name, child] of Object.entries(children)) {
-          visit(
-            child,
-            `${location}.${keyword}.${name}`,
-            `${pointer}/${keyword}/${escapePointer(name)}`,
-            depth + 1,
-          );
-        }
-      } else if (
-        [
-          "additionalProperties",
-          "items",
-          "contains",
-          "unevaluatedItems",
-          "unevaluatedProperties",
-          "propertyNames",
-          "not",
-          "if",
-          "then",
-          "else",
-        ].includes(keyword) &&
-        children !== false
-      ) {
-        visit(
-          children,
-          `${location}.${keyword}`,
-          `${pointer}/${keyword}`,
-          depth + 1,
-        );
-      } else if (["allOf", "anyOf", "oneOf", "prefixItems"].includes(keyword)) {
-        if (!Array.isArray(children) || children.length === 0) {
-          throw new TypeError(
-            `${location}.${keyword} must be a non-empty schema array`,
-          );
-        }
-        const modes = children.map((child, position) =>
-          visit(
-            child,
-            `${location}.${keyword}[${position}]`,
-            `${pointer}/${keyword}/${position}`,
-            depth + 1,
-          ),
-        );
-        if (["allOf", "anyOf", "oneOf"].includes(keyword)) {
-          compoundModes.set(keyword, modes);
-        }
-      }
-    }
-    if (node.const !== undefined) {
-      admission = intersectAdmission(
-        admission,
-        admissionForLiteral(node.const),
-      );
-    }
-    if (node.enum !== undefined) {
-      if (!Array.isArray(node.enum) || node.enum.length === 0) {
-        throw new TypeError(`${location}.enum must be a non-empty array`);
-      }
-      const enumAdmission = node.enum.reduce<"closed" | "excluded" | "open">(
-        (current, candidate) =>
-          unionAdmission(current, admissionForLiteral(candidate)),
-        "excluded",
-      );
-      admission = intersectAdmission(admission, enumAdmission);
-    }
-    if (typeof node.$ref === "string") {
-      if (!node.$ref.startsWith("#"))
-        throw new TypeError(`${location} has a non-local $ref`);
-      const target = resolvePointer(root, node.$ref);
-      admission = intersectAdmission(
-        admission,
-        visit(target, `${location}.$ref`, node.$ref || "#", depth + 1),
-      );
-    } else if (node.$ref !== undefined) {
-      throw new TypeError(`${location}.$ref must be a string`);
-    }
-    const allOf = compoundModes.get("allOf");
-    if (allOf) {
-      admission = intersectAdmission(
-        admission,
-        allOf.reduce<"closed" | "excluded" | "open">(
-          (current, candidate) => intersectAdmission(current, candidate),
-          "open",
-        ),
-      );
-    }
-    for (const keyword of ["anyOf", "oneOf"]) {
-      const modes = compoundModes.get(keyword);
-      if (!modes) continue;
-      admission = intersectAdmission(
-        admission,
-        modes.reduce<"closed" | "excluded" | "open">(
-          (current, candidate) => unionAdmission(current, candidate),
-          "excluded",
-        ),
-      );
-    }
-    visiting.delete(pointer);
-    if (admission === "open") {
-      throw new TypeError(`${location} can admit arbitrary object values`);
-    }
-    completed.set(pointer, admission);
-    return admission;
-  };
-  visit(root, label, "#", 0);
-  const validationWork = estimateSchemaValidationWork(root);
-  if (validationWork > MAX_SCHEMA_VALIDATION_WORK) {
-    throw new TypeError(
-      `${label} worst-case validation work exceeds ${MAX_SCHEMA_VALIDATION_WORK} schema evaluations`,
-    );
-  }
-  try {
-    new InterpretedDraft202012Validator(root);
-  } catch (error) {
-    throw new TypeError(`${label} cannot be prepared for validation`, {
-      cause: error,
-    });
-  }
-}
 
-function estimateSchemaValidationWork(root: CanonicalJsonValue): number {
-  const memo = new Map<string, number | "visiting">();
-  const estimate = (node: CanonicalJsonValue, pointer: string): number => {
-    const known = memo.get(pointer);
-    if (known === "visiting") {
-      throw new TypeError(`cyclic schema reference at ${pointer}`);
+    const hasObjectType = schemaTypeIncludes(node.type, "object");
+    if (schemaTypeIncludes(node.type, "array") && node.items === undefined) {
+      throw new TypeError(
+        `${location} array schema must declare items so nested object admission is proven closed`,
+      );
     }
-    if (known !== undefined) return known;
-    memo.set(pointer, "visiting");
-    if (typeof node === "boolean") {
-      memo.set(pointer, 1);
-      return 1;
+    let mode: ObjectAdmission = "open";
+    if (hasObjectType) {
+      validateExplicitObjectClosure(node, hasProperties, location);
+      mode = "closed";
+    } else if (node.type !== undefined) {
+      mode = "excluded";
+    } else if (hasObjectKeywords(node)) {
+      throw new TypeError(
+        `${location} uses object keywords without explicit type=object and closed additionalProperties`,
+      );
     }
-    if (!isRecord(node)) {
-      throw new TypeError(`schema node ${pointer} is not an object or boolean`);
-    }
-    let work = 1;
-    const add = (child: CanonicalJsonValue, childPointer: string) => {
-      work = boundedWorkAdd(work, estimate(child, childPointer));
+
+    let maxDepth = 0;
+    const recordChild = (result: SchemaProofResult): void => {
+      if (result.maxDepth + 1 > maxDepth) maxDepth = result.maxDepth + 1;
     };
-    for (const keyword of ["properties", "dependentSchemas"] as const) {
+
+    for (const keyword of [
+      "$defs",
+      "definitions",
+      "properties",
+      "dependentSchemas",
+    ]) {
       const children = node[keyword];
       if (children === undefined) continue;
       if (!isRecord(children)) {
-        throw new TypeError(`${pointer}/${keyword} must be an object`);
+        throw new TypeError(`${location}.${keyword} must be an object`);
       }
       for (const [name, child] of Object.entries(children)) {
-        add(child, `${pointer}/${keyword}/${escapePointer(name)}`);
+        recordChild(
+          validate(
+            child,
+            `${location}.${keyword}.${name}`,
+            appendSchemaPointer(pointer, keyword, name),
+            depth + 1,
+          ),
+        );
       }
     }
     for (const keyword of [
@@ -827,34 +878,292 @@ function estimateSchemaValidationWork(root: CanonicalJsonValue): number {
       "if",
       "then",
       "else",
-    ] as const) {
+    ]) {
       const child = node[keyword];
-      if (child !== undefined) add(child, `${pointer}/${keyword}`);
+      if (
+        child === undefined ||
+        (keyword === "additionalProperties" && child === false)
+      ) {
+        continue;
+      }
+      recordChild(
+        validate(
+          child,
+          `${location}.${keyword}`,
+          appendSchemaPointer(pointer, keyword),
+          depth + 1,
+        ),
+      );
     }
-    for (const keyword of ["allOf", "anyOf", "oneOf", "prefixItems"] as const) {
+
+    const compoundModes = new Map<string, readonly ObjectAdmission[]>();
+    for (const keyword of ["allOf", "anyOf", "oneOf", "prefixItems"]) {
+      const children = node[keyword];
+      if (children === undefined) continue;
+      if (!Array.isArray(children) || children.length === 0) {
+        throw new TypeError(
+          `${location}.${keyword} must be a non-empty array of schemas`,
+        );
+      }
+      const modes = children.map((child, position) => {
+        const childResult = validate(
+          child,
+          `${location}.${keyword}[${position}]`,
+          appendSchemaPointer(pointer, keyword, String(position)),
+          depth + 1,
+        );
+        recordChild(childResult);
+        return childResult.mode;
+      });
+      compoundModes.set(keyword, modes);
+    }
+
+    if (node.const !== undefined) {
+      mode = intersectAdmission(mode, admissionForLiteral(node.const));
+    }
+    if (node.enum !== undefined) {
+      if (!Array.isArray(node.enum) || node.enum.length === 0) {
+        throw new TypeError(`${location}.enum must be a non-empty array`);
+      }
+      mode = intersectAdmission(
+        mode,
+        node.enum.reduce<ObjectAdmission>(
+          (current, candidate) =>
+            unionAdmission(current, admissionForLiteral(candidate)),
+          "excluded",
+        ),
+      );
+    }
+    if (node.$ref !== undefined) {
+      if (typeof node.$ref !== "string") {
+        throw new TypeError(`${location}.$ref must be a string`);
+      }
+      consumeOperation(`${location}.$ref`, "local reference");
+      const target = resolveLocalSchemaReference(
+        root,
+        node.$ref,
+        `${location}.$ref`,
+      );
+      const targetResult = validate(
+        target.value,
+        `${location}.$ref(${node.$ref})`,
+        target.pointer,
+        depth + 1,
+      );
+      recordChild(targetResult);
+      mode = intersectAdmission(mode, targetResult.mode);
+    }
+    const allOf = compoundModes.get("allOf");
+    if (allOf) {
+      mode = intersectAdmission(
+        mode,
+        allOf.reduce<ObjectAdmission>(
+          (current, candidate) => intersectAdmission(current, candidate),
+          "open",
+        ),
+      );
+    }
+    for (const keyword of ["anyOf", "oneOf"]) {
+      const modes = compoundModes.get(keyword);
+      if (!modes) continue;
+      mode = intersectAdmission(
+        mode,
+        modes.reduce<ObjectAdmission>(
+          (current, candidate) => unionAdmission(current, candidate),
+          "excluded",
+        ),
+      );
+    }
+    if (mode === "open") {
+      throw new TypeError(
+        `${location} can admit arbitrary object values; declare a non-object type, a closed object, or the reviewed typed-map escape`,
+      );
+    }
+    return { mode, maxDepth };
+  };
+
+  validate(root, label, "#", 0);
+  const validationWork = estimateSchemaValidationWork(root, label);
+  if (validationWork > MAX_SCHEMA_VALIDATION_WORK) {
+    throw new TypeError(
+      `${label} worst-case fixture validation work exceeds ${MAX_SCHEMA_VALIDATION_WORK} schema evaluations`,
+    );
+  }
+}
+
+/**
+ * The exact explicit-closure rule for `type: object` schemas: either
+ * `additionalProperties: false`, or the reviewed typed-map escape whose
+ * `propertyNames` is exactly the three-key portable map policy.
+ */
+function validateExplicitObjectClosure(
+  schema: Readonly<Record<string, CanonicalJsonValue>>,
+  hasProperties: boolean,
+  location: string,
+): void {
+  const additional = schema.additionalProperties;
+  if (typeof additional === "boolean") {
+    if (additional) {
+      throw new TypeError(
+        `${location} object schema must set additionalProperties to false or use the reviewed typed-map escape`,
+      );
+    }
+    return;
+  }
+  if (isRecord(additional)) {
+    if (
+      hasProperties ||
+      schema.required !== undefined ||
+      schema.dependentRequired !== undefined ||
+      schema.dependentSchemas !== undefined ||
+      schema.unevaluatedProperties !== undefined
+    ) {
+      throw new TypeError(
+        `${location} typed map must be a pure map without fixed or dependent properties`,
+      );
+    }
+    validatePortableMapPropertyNames(
+      schema.propertyNames,
+      `${location}.propertyNames`,
+    );
+    return;
+  }
+  throw new TypeError(
+    `${location} object schema must set additionalProperties to false or a typed schema`,
+  );
+}
+
+function validatePortableMapPropertyNames(
+  value: CanonicalJsonValue | undefined,
+  location: string,
+): void {
+  if (!isRecord(value)) {
+    throw new TypeError(
+      `${location} must declare the reviewed portable map-key policy`,
+    );
+  }
+  if (
+    Object.keys(value).length !== 3 ||
+    value.type !== "string" ||
+    value.pattern !== PORTABLE_MAP_KEY_PATTERN ||
+    value[PORTABLE_MAP_POLICY_KEY] !== PORTABLE_MAP_POLICY_VALUE
+  ) {
+    throw new TypeError(
+      `${location} must be exactly type=string, pattern=${PORTABLE_MAP_KEY_PATTERN}, and ${PORTABLE_MAP_POLICY_KEY}=${PORTABLE_MAP_POLICY_VALUE}`,
+    );
+  }
+}
+
+function schemaTypeIncludes(
+  value: CanonicalJsonValue | undefined,
+  wanted: string,
+): boolean {
+  if (typeof value === "string") return value === wanted;
+  return Array.isArray(value) && value.includes(wanted);
+}
+
+/**
+ * Estimates a conservative upper bound for one schema-only validation pass,
+ * saturating at the shared work cap. It intentionally expands the cost of
+ * every local $ref occurrence even though target analysis is memoized: the
+ * JSON Schema evaluator may revisit a shared target for every edge in an
+ * allOf/anyOf/oneOf DAG. Definitions themselves do not execute unless
+ * referenced.
+ */
+function estimateSchemaValidationWork(
+  root: CanonicalJsonValue,
+  label: string,
+): number {
+  const memo = new Map<
+    string,
+    { state: "visiting" } | { state: "done"; work: number }
+  >();
+  const estimate = (node: CanonicalJsonValue, pointer: string): number => {
+    const known = memo.get(pointer);
+    if (known !== undefined) {
+      if (known.state === "visiting") {
+        throw new TypeError(`${label} cyclic schema reference at ${pointer}`);
+      }
+      return known.work;
+    }
+    memo.set(pointer, { state: "visiting" });
+    if (typeof node === "boolean") {
+      memo.set(pointer, { state: "done", work: 1 });
+      return 1;
+    }
+    if (!isRecord(node)) {
+      throw new TypeError(
+        `${label} schema node ${pointer} is not an object or boolean`,
+      );
+    }
+    let work = 1;
+    const addChild = (
+      child: CanonicalJsonValue,
+      childPointer: string,
+    ): void => {
+      work = saturatingSchemaWorkAdd(work, estimate(child, childPointer));
+    };
+    for (const keyword of ["properties", "dependentSchemas"]) {
+      const children = node[keyword];
+      if (children === undefined) continue;
+      if (!isRecord(children)) {
+        throw new TypeError(`${pointer}.${keyword} must be an object`);
+      }
+      for (const [name, child] of Object.entries(children)) {
+        addChild(child, appendSchemaPointer(pointer, keyword, name));
+        if (work > MAX_SCHEMA_VALIDATION_WORK) break;
+      }
+    }
+    for (const keyword of [
+      "additionalProperties",
+      "items",
+      "contains",
+      "unevaluatedItems",
+      "unevaluatedProperties",
+      "propertyNames",
+      "not",
+      "if",
+      "then",
+      "else",
+    ]) {
+      const child = node[keyword];
+      if (child === undefined) continue;
+      addChild(child, appendSchemaPointer(pointer, keyword));
+      if (work > MAX_SCHEMA_VALIDATION_WORK) break;
+    }
+    for (const keyword of ["allOf", "anyOf", "oneOf", "prefixItems"]) {
       const children = node[keyword];
       if (children === undefined) continue;
       if (!Array.isArray(children)) {
-        throw new TypeError(`${pointer}/${keyword} must be an array`);
+        throw new TypeError(
+          `schema node ${pointer}/${keyword} is not an array`,
+        );
       }
-      children.forEach((child, position) =>
-        add(child, `${pointer}/${keyword}/${position}`),
+      for (const [position, child] of children.entries()) {
+        addChild(child, appendSchemaPointer(pointer, keyword, String(position)));
+        if (work > MAX_SCHEMA_VALIDATION_WORK) break;
+      }
+    }
+    if (node.$ref !== undefined) {
+      if (typeof node.$ref !== "string") {
+        throw new TypeError(`schema node ${pointer}/$ref is not a string`);
+      }
+      const target = resolveLocalSchemaReference(
+        root,
+        node.$ref,
+        `${label} ${pointer}/$ref`,
       );
+      addChild(target.value, target.pointer);
     }
-    if (typeof node.$ref === "string") {
-      add(resolvePointer(root, node.$ref), node.$ref || "#");
-    }
-    memo.set(pointer, work);
+    memo.set(pointer, { state: "done", work });
     return work;
   };
   return estimate(root, "#");
 }
 
-function boundedWorkAdd(left: number, right: number): number {
-  const overflow = MAX_SCHEMA_VALIDATION_WORK + 1;
-  if (left >= overflow || right >= overflow || left > overflow - right) {
-    return overflow;
-  }
+function saturatingSchemaWorkAdd(left: number, right: number): number {
+  const limit = MAX_SCHEMA_VALIDATION_WORK + 1;
+  if (left >= limit || right >= limit || left > limit - right) return limit;
   return left + right;
 }
 
@@ -863,48 +1172,273 @@ function assertFixtureValidationBudget(
   instance: CanonicalJsonValue,
   label: string,
 ): void {
-  const schemaWork = estimateSchemaValidationWork(schema);
-  const instanceNodes = countJsonNodes(instance);
-  if (
-    schemaWork > MAX_SCHEMA_VALIDATION_WORK ||
-    instanceNodes > Math.floor(MAX_SCHEMA_VALIDATION_WORK / schemaWork)
-  ) {
+  const work = estimateSchemaInstanceValidationWork(schema, instance);
+  if (work > MAX_SCHEMA_VALIDATION_WORK) {
     throw new TypeError(
-      `fixture ${label} validation work exceeds ${MAX_SCHEMA_VALIDATION_WORK} schema evaluations`,
+      `conformance fixture ${label} worst-case validation work exceeds ${MAX_SCHEMA_VALIDATION_WORK} schema evaluations`,
     );
   }
 }
 
-function countJsonNodes(value: CanonicalJsonValue): number {
-  let count = 1;
-  const add = (child: CanonicalJsonValue) => {
-    count = boundedWorkAdd(count, countJsonNodes(child));
-  };
-  if (Array.isArray(value)) value.forEach(add);
-  else if (isRecord(value)) Object.values(value).forEach(add);
-  return count;
-}
+/**
+ * Charges schema work against the concrete fixture instance. Schema proof and
+ * structural work alone cannot bound repeatable keywords: items, contains,
+ * additionalProperties, and propertyNames can evaluate the same
+ * shared-reference DAG once per array element or object property. Canonical
+ * schema/instance pointers plus the value/property-name role are memoized so
+ * analysis stays linear, while each repeated edge still adds the cached child
+ * work to the saturating total that guards the real validator call.
+ */
+function estimateSchemaInstanceValidationWork(
+  root: CanonicalJsonValue,
+  instance: CanonicalJsonValue,
+): number {
+  const memo = new Map<
+    string,
+    { state: "visiting" } | { state: "done"; work: number }
+  >();
+  const estimate = (
+    schemaValue: CanonicalJsonValue,
+    schemaPointer: string,
+    instanceValue: CanonicalJsonValue,
+    instancePointer: string,
+    instanceRole: string,
+  ): number => {
+    const key = JSON.stringify([schemaPointer, instancePointer, instanceRole]);
+    const known = memo.get(key);
+    if (known !== undefined) {
+      if (known.state === "visiting") {
+        throw new TypeError(
+          `cyclic schema reference at ${schemaPointer} for instance ${instancePointer}`,
+        );
+      }
+      return known.work;
+    }
+    memo.set(key, { state: "visiting" });
+    if (typeof schemaValue === "boolean") {
+      memo.set(key, { state: "done", work: 1 });
+      return 1;
+    }
+    if (!isRecord(schemaValue)) {
+      throw new TypeError(
+        `schema node ${schemaPointer} is not an object or boolean`,
+      );
+    }
 
-function objectSchemaIsClosed(
-  schema: Readonly<Record<string, CanonicalJsonValue>>,
-): boolean {
-  if (schema.additionalProperties === false) return true;
-  if (
-    isRecord(schema.additionalProperties) &&
-    isRecord(schema.propertyNames) &&
-    schema.propertyNames.type === "string" &&
-    schema.propertyNames.pattern === "^[A-Za-z][A-Za-z0-9._-]{0,63}$" &&
-    schema.propertyNames["x-takoform-fieldPolicy"] ===
-      "portable-data-only-v1" &&
-    schema.properties === undefined &&
-    schema.required === undefined &&
-    schema.dependentRequired === undefined &&
-    schema.dependentSchemas === undefined &&
-    schema.unevaluatedProperties === undefined
-  ) {
-    return true;
-  }
-  return false;
+    let work = 1;
+    const addChildWithRole = (
+      childSchema: CanonicalJsonValue,
+      childSchemaPointer: string,
+      childInstance: CanonicalJsonValue,
+      childInstancePointer: string,
+      childInstanceRole: string,
+    ): void => {
+      if (work > MAX_SCHEMA_VALIDATION_WORK) return;
+      work = saturatingSchemaWorkAdd(
+        work,
+        estimate(
+          childSchema,
+          childSchemaPointer,
+          childInstance,
+          childInstancePointer,
+          childInstanceRole,
+        ),
+      );
+    };
+    const addChild = (
+      childSchema: CanonicalJsonValue,
+      childSchemaPointer: string,
+      childInstance: CanonicalJsonValue,
+      childInstancePointer: string,
+    ): void => {
+      addChildWithRole(
+        childSchema,
+        childSchemaPointer,
+        childInstance,
+        childInstancePointer,
+        instanceRole,
+      );
+    };
+
+    if (
+      schemaValue.properties !== undefined &&
+      !isRecord(schemaValue.properties)
+    ) {
+      throw new TypeError(`${schemaPointer}.properties must be an object`);
+    }
+    if (
+      schemaValue.dependentSchemas !== undefined &&
+      !isRecord(schemaValue.dependentSchemas)
+    ) {
+      throw new TypeError(
+        `${schemaPointer}.dependentSchemas must be an object`,
+      );
+    }
+    const properties = isRecord(schemaValue.properties)
+      ? schemaValue.properties
+      : undefined;
+    const objectInstance = isRecord(instanceValue) ? instanceValue : undefined;
+    if (objectInstance && properties) {
+      for (const [name, childSchema] of Object.entries(properties)) {
+        if (!(name in objectInstance)) continue;
+        addChild(
+          childSchema,
+          appendSchemaPointer(schemaPointer, "properties", name),
+          objectInstance[name] as CanonicalJsonValue,
+          appendSchemaPointer(instancePointer, name),
+        );
+      }
+    }
+    const dependentSchemas = isRecord(schemaValue.dependentSchemas)
+      ? schemaValue.dependentSchemas
+      : undefined;
+    if (objectInstance && dependentSchemas) {
+      for (const [name, childSchema] of Object.entries(dependentSchemas)) {
+        if (!(name in objectInstance)) continue;
+        addChild(
+          childSchema,
+          appendSchemaPointer(schemaPointer, "dependentSchemas", name),
+          instanceValue,
+          instancePointer,
+        );
+      }
+    }
+
+    if (objectInstance) {
+      if (schemaValue.additionalProperties !== undefined) {
+        for (const [name, childInstance] of Object.entries(objectInstance)) {
+          if (properties && name in properties) continue;
+          addChild(
+            schemaValue.additionalProperties,
+            appendSchemaPointer(schemaPointer, "additionalProperties"),
+            childInstance,
+            appendSchemaPointer(instancePointer, name),
+          );
+        }
+      }
+      if (schemaValue.propertyNames !== undefined) {
+        for (const name of Object.keys(objectInstance)) {
+          addChildWithRole(
+            schemaValue.propertyNames,
+            appendSchemaPointer(schemaPointer, "propertyNames"),
+            name,
+            appendSchemaPointer(instancePointer, "@propertyName", name),
+            "property-name",
+          );
+        }
+      }
+      // Evaluation annotations are deliberately not reimplemented here.
+      // Applying unevaluatedProperties to every property is a safe upper
+      // bound.
+      if (schemaValue.unevaluatedProperties !== undefined) {
+        for (const [name, childInstance] of Object.entries(objectInstance)) {
+          addChild(
+            schemaValue.unevaluatedProperties,
+            appendSchemaPointer(schemaPointer, "unevaluatedProperties"),
+            childInstance,
+            appendSchemaPointer(instancePointer, name),
+          );
+        }
+      }
+    }
+
+    const arrayInstance = Array.isArray(instanceValue)
+      ? instanceValue
+      : undefined;
+    const prefixItems = Array.isArray(schemaValue.prefixItems)
+      ? schemaValue.prefixItems
+      : [];
+    if (arrayInstance) {
+      for (const [index, childSchema] of prefixItems.entries()) {
+        if (index >= arrayInstance.length) break;
+        addChild(
+          childSchema,
+          appendSchemaPointer(schemaPointer, "prefixItems", String(index)),
+          arrayInstance[index] as CanonicalJsonValue,
+          appendSchemaPointer(instancePointer, String(index)),
+        );
+      }
+      if (schemaValue.items !== undefined) {
+        for (
+          let index = prefixItems.length;
+          index < arrayInstance.length;
+          index++
+        ) {
+          addChild(
+            schemaValue.items,
+            appendSchemaPointer(schemaPointer, "items"),
+            arrayInstance[index] as CanonicalJsonValue,
+            appendSchemaPointer(instancePointer, String(index)),
+          );
+        }
+      }
+      if (schemaValue.contains !== undefined) {
+        for (const [index, childInstance] of arrayInstance.entries()) {
+          addChild(
+            schemaValue.contains,
+            appendSchemaPointer(schemaPointer, "contains"),
+            childInstance,
+            appendSchemaPointer(instancePointer, String(index)),
+          );
+        }
+      }
+      // Applying unevaluatedItems to every item safely overestimates
+      // evaluation without duplicating the validator's annotation machinery.
+      if (schemaValue.unevaluatedItems !== undefined) {
+        for (const [index, childInstance] of arrayInstance.entries()) {
+          addChild(
+            schemaValue.unevaluatedItems,
+            appendSchemaPointer(schemaPointer, "unevaluatedItems"),
+            childInstance,
+            appendSchemaPointer(instancePointer, String(index)),
+          );
+        }
+      }
+    }
+
+    for (const keyword of ["not", "if", "then", "else"]) {
+      const childSchema = schemaValue[keyword];
+      if (childSchema === undefined) continue;
+      addChild(
+        childSchema,
+        appendSchemaPointer(schemaPointer, keyword),
+        instanceValue,
+        instancePointer,
+      );
+    }
+    for (const keyword of ["allOf", "anyOf", "oneOf"]) {
+      const children = schemaValue[keyword];
+      if (children === undefined) continue;
+      if (!Array.isArray(children)) {
+        throw new TypeError(
+          `schema node ${schemaPointer}/${keyword} is not an array`,
+        );
+      }
+      for (const [index, childSchema] of children.entries()) {
+        addChild(
+          childSchema,
+          appendSchemaPointer(schemaPointer, keyword, String(index)),
+          instanceValue,
+          instancePointer,
+        );
+      }
+    }
+    if (schemaValue.$ref !== undefined) {
+      if (typeof schemaValue.$ref !== "string") {
+        throw new TypeError(`schema node ${schemaPointer}/$ref is not a string`);
+      }
+      const target = resolveLocalSchemaReference(
+        root,
+        schemaValue.$ref,
+        `schema node ${schemaPointer}/$ref`,
+      );
+      addChild(target.value, target.pointer, instanceValue, instancePointer);
+    }
+
+    memo.set(key, { state: "done", work });
+    return work;
+  };
+  return estimate(root, "#", instance, "#", "value");
 }
 
 function hasObjectKeywords(
@@ -914,34 +1448,32 @@ function hasObjectKeywords(
     "properties",
     "required",
     "additionalProperties",
+    "unevaluatedProperties",
     "propertyNames",
     "dependentRequired",
     "dependentSchemas",
-    "unevaluatedProperties",
     "minProperties",
     "maxProperties",
   ].some((key) => key in schema);
 }
 
-function admissionForLiteral(
-  value: CanonicalJsonValue,
-): "closed" | "excluded" | "open" {
+function admissionForLiteral(value: CanonicalJsonValue): ObjectAdmission {
   return isRecord(value) ? "open" : "excluded";
 }
 
 function intersectAdmission(
-  left: "closed" | "excluded" | "open",
-  right: "closed" | "excluded" | "open",
-): "closed" | "excluded" | "open" {
+  left: ObjectAdmission,
+  right: ObjectAdmission,
+): ObjectAdmission {
   if (left === "excluded" || right === "excluded") return "excluded";
   if (left === "closed" || right === "closed") return "closed";
   return "open";
 }
 
 function unionAdmission(
-  left: "closed" | "excluded" | "open",
-  right: "closed" | "excluded" | "open",
-): "closed" | "excluded" | "open" {
+  left: ObjectAdmission,
+  right: ObjectAdmission,
+): ObjectAdmission {
   if (left === "open" || right === "open") return "open";
   if (left === "closed" || right === "closed") return "closed";
   return "excluded";
@@ -978,29 +1510,84 @@ function assertDependentRequiredNames(
   }
 }
 
-function resolvePointer(
+/**
+ * Resolves one document-local `$ref`. The JSON Pointer fragment is
+ * percent-decoded before token traversal (URI fragments may URI-encode
+ * pointer characters), each token is strictly `~0`/`~1`-decoded, and the
+ * canonical pointer spelling is returned so equivalent spellings of one
+ * target share memoization and cycle state.
+ */
+function resolveLocalSchemaReference(
   root: CanonicalJsonValue,
   reference: string,
-): CanonicalJsonValue {
-  if (reference === "#") return root;
-  if (!reference.startsWith("#/"))
-    throw new TypeError(`unsupported local reference ${reference}`);
-  let value = root;
-  for (const encoded of reference.slice(2).split("/")) {
-    const token = encoded.replace(/~1/gu, "/").replace(/~0/gu, "~");
-    if (Array.isArray(value)) {
-      if (!/^(?:0|[1-9][0-9]*)$/u.test(token))
-        throw new TypeError(`invalid array pointer ${reference}`);
-      value = value[Number(token)];
-    } else if (isRecord(value) && token in value) {
-      value = value[token];
-    } else {
-      throw new TypeError(`unresolved local reference ${reference}`);
-    }
-    if (value === undefined)
-      throw new TypeError(`unresolved local reference ${reference}`);
+  location: string,
+): { readonly value: CanonicalJsonValue; readonly pointer: string } {
+  if (reference === "#") return { value: root, pointer: "#" };
+  if (!reference.startsWith("#/")) {
+    throw new TypeError(
+      `${location}: only root or JSON Pointer fragments are supported`,
+    );
   }
-  return value;
+  let fragment: string;
+  try {
+    fragment = decodeURIComponent(reference.slice(1));
+  } catch (error) {
+    throw new TypeError(`${location}: decode fragment failed`, {
+      cause: error,
+    });
+  }
+  let current = root;
+  let pointer = "#";
+  for (const rawToken of fragment.replace(/^\//u, "").split("/")) {
+    const token = decodeJsonPointerToken(rawToken, location);
+    pointer = appendSchemaPointer(pointer, token);
+    if (isRecord(current)) {
+      if (!(token in current)) {
+        throw new TypeError(
+          `${location}: fragment token ${token} does not exist`,
+        );
+      }
+      current = current[token] as CanonicalJsonValue;
+    } else if (Array.isArray(current)) {
+      if (token === "-" || (token.length > 1 && token.startsWith("0"))) {
+        throw new TypeError(
+          `${location}: fragment array token ${token} is invalid`,
+        );
+      }
+      const index = Number(token);
+      if (!/^[0-9]+$/u.test(token) || index >= current.length) {
+        throw new TypeError(
+          `${location}: fragment array token ${token} is out of range`,
+        );
+      }
+      current = current[index] as CanonicalJsonValue;
+    } else {
+      throw new TypeError(
+        `${location}: fragment traverses non-container at ${token}`,
+      );
+    }
+  }
+  return { value: current, pointer };
+}
+
+function decodeJsonPointerToken(value: string, location: string): string {
+  let decoded = "";
+  for (let index = 0; index < value.length; index++) {
+    const character = value[index];
+    if (character !== "~") {
+      decoded += character;
+      continue;
+    }
+    const escape = value[index + 1];
+    if (escape !== "0" && escape !== "1") {
+      throw new TypeError(
+        `${location}: fragment contains invalid JSON Pointer escape`,
+      );
+    }
+    decoded += escape === "0" ? "~" : "/";
+    index++;
+  }
+  return decoded;
 }
 
 function verifyConformanceFixtures(
@@ -1008,83 +1595,78 @@ function verifyConformanceFixtures(
   definition: TakoformDefinition,
   payloads: ReadonlyMap<string, Uint8Array>,
 ): void {
-  let desiredValidator: InterpretedDraft202012Validator;
-  let observedValidator: InterpretedDraft202012Validator;
-  let outputValidator: InterpretedDraft202012Validator | undefined;
+  let configValidator: InterpretedDraft202012Validator;
+  let attributesValidator: InterpretedDraft202012Validator;
+  let outputsValidator: InterpretedDraft202012Validator | undefined;
   try {
-    desiredValidator = new InterpretedDraft202012Validator(
-      definition.desiredSchema,
+    configValidator = new InterpretedDraft202012Validator(
+      definition.configSchema,
+      "configSchema",
     );
-    observedValidator = new InterpretedDraft202012Validator(
-      definition.observedSchema,
+    attributesValidator = new InterpretedDraft202012Validator(
+      definition.attributesSchema,
+      "attributesSchema",
     );
-    if (definition.outputSchema !== undefined) {
-      outputValidator = new InterpretedDraft202012Validator(
-        definition.outputSchema,
+    if (definition.outputsSchema !== undefined) {
+      outputsValidator = new InterpretedDraft202012Validator(
+        definition.outputsSchema,
+        "outputsSchema",
       );
     }
   } catch (error) {
-    throw new TypeError("Form Definition schemas cannot be prepared", {
+    throw new TypeError("Form Definition schemas cannot be compiled", {
       cause: error,
     });
   }
   for (const fixture of definition.conformanceFixtures ?? []) {
-    assertJsonFixture(index, fixture.desiredPath, fixture.name, "desired");
-    const desiredBytes = payloads.get(fixture.desiredPath);
-    if (!desiredBytes)
-      throw new TypeError(`fixture ${fixture.name} desiredPath is missing`);
-    const desired = parseCanonicalJson(desiredBytes);
-    assertFixtureValidationBudget(
-      definition.desiredSchema,
-      desired,
-      `${fixture.name} desired`,
+    assertJsonFixture(index, fixture.configPath, fixture.name, "config");
+    const configBytes = payloads.get(fixture.configPath);
+    if (!configBytes)
+      throw new TypeError(`fixture ${fixture.name} configPath is missing`);
+    validateFixtureAgainstSchema(
+      definition.configSchema,
+      configValidator,
+      parseCanonicalJson(configBytes),
+      `${fixture.name} config`,
     );
-    if (!desiredValidator.validate(desired)) {
-      throw new TypeError(
-        `fixture ${fixture.name} does not satisfy desiredSchema`,
+    if (fixture.attributesPath) {
+      assertJsonFixture(
+        index,
+        fixture.attributesPath,
+        fixture.name,
+        "attributes",
       );
-    }
-    if (fixture.observedPath) {
-      assertJsonFixture(index, fixture.observedPath, fixture.name, "observed");
-      const observedBytes = payloads.get(fixture.observedPath);
-      if (!observedBytes)
-        throw new TypeError(`fixture ${fixture.name} observedPath is missing`);
-      const observed = parseCanonicalJson(observedBytes);
-      assertFixtureValidationBudget(
-        definition.observedSchema,
-        observed,
-        `${fixture.name} observed`,
-      );
-      if (!observedValidator.validate(observed)) {
+      const attributesBytes = payloads.get(fixture.attributesPath);
+      if (!attributesBytes)
         throw new TypeError(
-          `fixture ${fixture.name} does not satisfy observedSchema`,
+          `fixture ${fixture.name} attributesPath is missing`,
         );
-      }
+      validateFixtureAgainstSchema(
+        definition.attributesSchema,
+        attributesValidator,
+        parseCanonicalJson(attributesBytes),
+        `${fixture.name} attributes`,
+      );
     }
-    if (fixture.outputPath) {
+    if (fixture.outputsPath) {
       if (
-        definition.outputSchema === undefined ||
-        outputValidator === undefined
+        definition.outputsSchema === undefined ||
+        outputsValidator === undefined
       ) {
         throw new TypeError(
-          `fixture ${fixture.name} declares outputPath without outputSchema`,
+          `fixture ${fixture.name} declares outputsPath without outputsSchema`,
         );
       }
-      assertJsonFixture(index, fixture.outputPath, fixture.name, "output");
-      const outputBytes = payloads.get(fixture.outputPath);
-      if (!outputBytes)
-        throw new TypeError(`fixture ${fixture.name} outputPath is missing`);
-      const output = parseCanonicalJson(outputBytes);
-      assertFixtureValidationBudget(
-        definition.outputSchema,
-        output,
-        `${fixture.name} output`,
+      assertJsonFixture(index, fixture.outputsPath, fixture.name, "outputs");
+      const outputsBytes = payloads.get(fixture.outputsPath);
+      if (!outputsBytes)
+        throw new TypeError(`fixture ${fixture.name} outputsPath is missing`);
+      validateFixtureAgainstSchema(
+        definition.outputsSchema,
+        outputsValidator,
+        parseCanonicalJson(outputsBytes),
+        `${fixture.name} outputs`,
       );
-      if (!outputValidator.validate(output)) {
-        throw new TypeError(
-          `fixture ${fixture.name} does not satisfy outputSchema`,
-        );
-      }
     }
   }
   for (const fixture of definition.negativeConformanceFixtures ?? []) {
@@ -1101,13 +1683,16 @@ function verifyConformanceFixtures(
       );
     }
     const selected =
-      fixture.stage === "desired"
-        ? { schema: definition.desiredSchema, validator: desiredValidator }
-        : fixture.stage === "observed"
-          ? { schema: definition.observedSchema, validator: observedValidator }
-          : definition.outputSchema !== undefined &&
-              outputValidator !== undefined
-            ? { schema: definition.outputSchema, validator: outputValidator }
+      fixture.stage === "config"
+        ? { schema: definition.configSchema, validator: configValidator }
+        : fixture.stage === "attributes"
+          ? {
+              schema: definition.attributesSchema,
+              validator: attributesValidator,
+            }
+          : definition.outputsSchema !== undefined &&
+              outputsValidator !== undefined
+            ? { schema: definition.outputsSchema, validator: outputsValidator }
             : undefined;
     if (selected === undefined) {
       throw new TypeError(
@@ -1115,16 +1700,38 @@ function verifyConformanceFixtures(
       );
     }
     const input = parseCanonicalJson(inputBytes);
-    assertFixtureValidationBudget(
-      selected.schema,
-      input,
-      `${fixture.name} ${fixture.stage}`,
-    );
-    if (selected.validator.validate(input)) {
+    // Exactly like the takoform verifier, any failure — schema validation or
+    // the validation-work budget — satisfies a negative fixture.
+    let failed = false;
+    try {
+      validateFixtureAgainstSchema(
+        selected.schema,
+        selected.validator,
+        input,
+        `${fixture.name} ${fixture.stage}`,
+      );
+    } catch {
+      failed = true;
+    }
+    if (!failed) {
       throw new TypeError(
-        `negative fixture ${fixture.name} unexpectedly passed ${fixture.stage} validation`,
+        `negative conformance fixture ${fixture.name} unexpectedly passed ${fixture.stage} validation`,
       );
     }
+  }
+}
+
+function validateFixtureAgainstSchema(
+  schema: CanonicalJsonValue,
+  validator: InterpretedDraft202012Validator,
+  instance: CanonicalJsonValue,
+  label: string,
+): void {
+  assertFixtureValidationBudget(schema, instance, label);
+  if (!validator.validate(instance)) {
+    throw new TypeError(
+      `conformance fixture ${label} does not satisfy its Form Definition schema: ${validator.errorsText()}`,
+    );
   }
 }
 
@@ -1144,32 +1751,21 @@ function assertJsonFixture(
   }
 }
 
-function lifecycleOperations(
-  capabilities: readonly string[],
-  status: string,
-): FormOperation[] {
+function definitionOperations(operations: readonly string[]): FormOperation[] {
   const result: FormOperation[] = [];
-  for (const capability of capabilities) {
+  for (const operation of operations) {
     if (
-      capability === "create" ||
-      capability === "read" ||
-      capability === "update" ||
-      capability === "delete" ||
-      capability === "import" ||
-      capability === "refresh"
+      operation === "create" ||
+      operation === "read" ||
+      operation === "update" ||
+      operation === "delete" ||
+      operation === "import" ||
+      operation === "refresh" ||
+      operation === "sync" ||
+      operation === "drift"
     ) {
-      result.push(capability);
+      result.push(operation);
     }
-  }
-  // Pre-separation compatibility packages used `observe` as the combined
-  // read/refresh capability. Preserve only that historical candidate meaning;
-  // standard/deprecated definitions must declare read and refresh explicitly.
-  if (
-    status === "compatibility-candidate" &&
-    capabilities.includes("observe")
-  ) {
-    if (!capabilities.includes("read")) result.push("read");
-    if (!capabilities.includes("refresh")) result.push("refresh");
   }
   return [...new Set(result)];
 }
@@ -1178,8 +1774,8 @@ function definitionMetadata(definition: TakoformDefinition): JsonObject {
   return {
     takoform: {
       status: definition.status,
-      ...(definition.immutableFields
-        ? { immutableFields: [...definition.immutableFields] }
+      ...(definition.forceNewFields
+        ? { forceNewFields: [...definition.forceNewFields] }
         : {}),
       ...(definition.interfaces
         ? {
@@ -1209,305 +1805,111 @@ function rejectForbiddenDefinitionContent(
   }
 }
 
-const FORBIDDEN_TOKENS = new Set([
-  "credential",
-  "credentials",
-  "secret",
-  "secrets",
-  "password",
-  "passwords",
-  "passphrase",
-  "passphrases",
-  "token",
-  "tokens",
-  "authorization",
-  "authorizations",
-  "bearer",
-  "bearers",
-  "oauth",
-  "oauths",
-  "cookie",
-  "cookies",
-  "operator",
-  "operators",
-  "account",
-  "accounts",
-  "target",
-  "targets",
-  "capacity",
-  "capacities",
-  "provider",
-  "providers",
-  "backend",
-  "backends",
-  "implementation",
-  "implementations",
-  "region",
-  "regions",
-  "zone",
-  "zones",
-  "placement",
-  "placements",
-  "price",
-  "prices",
-  "pricing",
-  "pricings",
-  "sku",
-  "skus",
-  "billing",
-  "billings",
-  "invoice",
-  "invoices",
-  "payment",
-  "payments",
-  "currency",
-  "currencies",
-  "tax",
-  "taxes",
-  "quota",
-  "quotas",
-  "sla",
-  "slas",
-  "subscription",
-  "subscriptions",
-  "entitlement",
-  "entitlements",
-  "binary",
-  "binaries",
-  "code",
-  "codes",
-  "exec",
-  "execs",
-  "executable",
-  "executables",
-  "command",
-  "commands",
-  "script",
-  "scripts",
-  "bytecode",
-  "bytecodes",
-  "wasm",
-  "wasms",
-  "adapter",
-  "adapters",
-  "plugin",
-  "plugins",
-]);
-const FORBIDDEN_NORMALIZED = new Set([
-  "credential",
-  "credentials",
-  "credentialid",
-  "credentialids",
-  "credentialref",
-  "credentialrefs",
-  "credentialname",
-  "credentialvalue",
-  "secret",
-  "secrets",
-  "secretid",
-  "secretids",
-  "secretref",
-  "secretrefs",
-  "secretname",
-  "secretvalue",
-  "password",
-  "passwords",
-  "passphrase",
-  "apikey",
-  "apikeyid",
-  "apikeyref",
-  "apikeyvalue",
-  "privatekey",
-  "privatekeyid",
-  "privatekeyref",
-  "privatekeypem",
-  "sshkey",
-  "sshprivatekey",
-  "signingkey",
-  "token",
-  "tokens",
-  "tokenid",
-  "tokenref",
-  "accesstoken",
-  "refreshtoken",
-  "idtoken",
-  "bearertoken",
-  "authorization",
-  "authorizationheader",
-  "authheader",
-  "bearer",
-  "oauth",
-  "serviceoffering",
-  "serviceofferings",
-  "serviceofferingid",
-  "backendmanager",
-  "managerid",
-  "manageridentifier",
-  "oauthclient",
-  "oauthclientid",
-  "oauthclientsecret",
-  "oidcclientsecret",
-  "sessioncookie",
-  "sessiontoken",
-  "connectionstring",
-  "cookie",
-  "cookies",
-  "operator",
-  "operators",
-  "operatorid",
-  "operatorpolicy",
-  "account",
-  "accounts",
-  "accountid",
-  "target",
-  "targets",
-  "targetid",
-  "targetpool",
-  "targetpoolid",
-  "poolid",
-  "capacity",
-  "activecapacity",
-  "regioncapacity",
-  "provider",
-  "providerid",
-  "providername",
-  "providerconfig",
-  "backend",
-  "backendid",
-  "implementationid",
-  "selectedimplementation",
-  "region",
-  "regions",
-  "regionid",
-  "zone",
-  "zones",
-  "zoneid",
-  "placement",
-  "price",
-  "prices",
-  "pricing",
-  "priceid",
-  "unitprice",
-  "monthlyprice",
-  "sku",
-  "skus",
-  "billing",
-  "billingplan",
-  "billingaccount",
-  "invoice",
-  "invoices",
-  "invoiceid",
-  "payment",
-  "payments",
-  "paymentid",
-  "paymentmethod",
-  "paymentmethods",
-  "currency",
-  "currencies",
-  "currencycode",
-  "tax",
-  "taxes",
-  "taxcode",
-  "taxrate",
-  "quota",
-  "quotas",
-  "sla",
-  "slapolicy",
-  "servicelevelagreement",
-  "supportpolicy",
-  "subscription",
-  "subscriptions",
-  "entitlement",
-  "entitlements",
-  "binary",
-  "code",
-  "exec",
-  "executable",
-  "command",
-  "commands",
-  "script",
-  "scripts",
-  "sourcecode",
-  "runtimecode",
-  "validationcode",
-  "adapter",
-  "adaptercode",
-  "bytecode",
-  "webassembly",
-  "wasm",
-  "plugin",
-  "plugins",
-]);
+interface ForbiddenVocabulary {
+  readonly normalizedFields: ReadonlySet<string>;
+  readonly tokens: ReadonlySet<string>;
+  readonly pluralTokens: ReadonlySet<string>;
+  readonly tokenSequences: readonly (readonly string[])[];
+  readonly compoundBases: readonly string[];
+  readonly compoundQualifiers: ReadonlySet<string>;
+  readonly sequenceTokenPlurals: Readonly<Record<string, string>>;
+}
 
-const FORBIDDEN_FIELD_SEQUENCES = [
-  ["api", "key"],
-  ["private", "key"],
-  ["ssh", "key"],
-  ["signing", "key"],
-  ["service", "offering"],
-  ["backend", "manager"],
-  ["manager", "id"],
-  ["manager", "identifier"],
-] as const;
-const FORBIDDEN_COMPOUND_BASES = [
-  "apikey",
-  "privatekey",
-  "sshkey",
-  "sshprivatekey",
-  "signingkey",
-  "serviceoffering",
-  "backendmanager",
-  "managerid",
-  "manageridentifier",
-] as const;
-const FORBIDDEN_COMPOUND_QUALIFIERS = new Set([
-  "id",
-  "ids",
-  "identifier",
-  "identifiers",
-  "ref",
-  "refs",
-  "name",
-  "names",
-  "value",
-  "values",
-  "pem",
-  "material",
-  "fingerprint",
-  "header",
-  "path",
-  "file",
-  "config",
-  "configuration",
-  "label",
-  "labels",
-]);
+/**
+ * The normative, machine-readable forbidden-field vocabulary, copied
+ * byte-exact from the independent takoform project and pinned by
+ * schema-provenance.json. The matcher tables are parsed from it, never
+ * hand-edited, so the takosumi and takoform verifiers cannot silently drift.
+ * Matching stays exact and boundary-delimited: substring matching is unsafe
+ * here ("description" contains "script"), plurals are listed rather than
+ * derived, and compound bases pair only with reviewed qualifiers.
+ */
+const FORBIDDEN_VOCABULARY: ForbiddenVocabulary = loadForbiddenVocabulary(
+  forbiddenVocabularyDocument,
+);
+
+function loadForbiddenVocabulary(document: {
+  readonly format: string;
+  readonly normalizedFields: readonly string[];
+  readonly tokens: readonly string[];
+  readonly pluralTokens: readonly string[];
+  readonly tokenSequences: readonly (readonly string[])[];
+  readonly compoundBases: readonly string[];
+  readonly compoundQualifiers: readonly string[];
+  readonly sequenceTokenPlurals: Readonly<Record<string, string>>;
+}): ForbiddenVocabulary {
+  if (document.format !== "takoform.forbidden-vocabulary@v0") {
+    throw new TypeError(
+      `embedded forbidden vocabulary has wrong format ${document.format}`,
+    );
+  }
+  return {
+    normalizedFields: new Set(document.normalizedFields),
+    tokens: new Set(document.tokens),
+    pluralTokens: new Set(document.pluralTokens),
+    tokenSequences: document.tokenSequences,
+    compoundBases: document.compoundBases,
+    compoundQualifiers: new Set(document.compoundQualifiers),
+    sequenceTokenPlurals: document.sequenceTokenPlurals,
+  };
+}
 
 function forbiddenFieldName(value: string): boolean {
-  const normalized = value.replace(/[^\p{L}\p{N}]/gu, "").toLowerCase();
-  if (FORBIDDEN_NORMALIZED.has(normalized)) return true;
-  const tokens = splitFieldTokens(value);
-  if (tokens.some((token) => FORBIDDEN_TOKENS.has(token))) return true;
-  for (const singular of FORBIDDEN_COMPOUND_BASES) {
+  const normalized = normalizeFieldName(value);
+  if (FORBIDDEN_VOCABULARY.normalizedFields.has(normalized)) return true;
+  for (const singular of FORBIDDEN_VOCABULARY.compoundBases) {
     for (const base of [singular, `${singular}s`]) {
       if (normalized === base) return true;
       if (
         normalized.startsWith(base) &&
-        FORBIDDEN_COMPOUND_QUALIFIERS.has(normalized.slice(base.length))
+        FORBIDDEN_VOCABULARY.compoundQualifiers.has(
+          normalized.slice(base.length),
+        )
       ) {
         return true;
       }
     }
   }
-  return FORBIDDEN_FIELD_SEQUENCES.some((sequence) =>
+  const tokens = splitFieldTokens(value);
+  if (
     tokens.some(
-      (_, start) =>
-        start + sequence.length <= tokens.length &&
-        sequence.every((wanted, offset) =>
-          matchesCompoundToken(tokens[start + offset], wanted),
-        ),
-    ),
+      (token) =>
+        FORBIDDEN_VOCABULARY.tokens.has(token) ||
+        FORBIDDEN_VOCABULARY.pluralTokens.has(token),
+    )
+  ) {
+    return true;
+  }
+  return FORBIDDEN_VOCABULARY.tokenSequences.some((sequence) =>
+    containsTokenSequence(tokens, sequence),
   );
+}
+
+function containsTokenSequence(
+  tokens: readonly string[],
+  sequence: readonly string[],
+): boolean {
+  if (sequence.length === 0 || tokens.length < sequence.length) return false;
+  for (let start = 0; start <= tokens.length - sequence.length; start++) {
+    if (
+      sequence.every((wanted, offset) =>
+        matchesCompoundToken(tokens[start + offset] ?? "", wanted),
+      )
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function matchesCompoundToken(actual: string, singular: string): boolean {
+  if (actual === singular) return true;
+  const plural = FORBIDDEN_VOCABULARY.sequenceTokenPlurals[singular];
+  return plural !== undefined && actual === plural;
+}
+
+function normalizeFieldName(value: string): string {
+  return value.replace(/[^\p{L}\p{N}]/gu, "").toLowerCase();
 }
 
 function splitFieldTokens(value: string): string[] {
@@ -1519,16 +1921,6 @@ function splitFieldTokens(value: string): string[] {
     .split(/[^\p{L}\p{N}]+/u)
     .filter(Boolean)
     .map((token) => token.toLowerCase());
-}
-
-function matchesCompoundToken(actual: string, singular: string): boolean {
-  if (actual === singular) return true;
-  if (singular === "id") return actual === "ids";
-  if (singular === "identifier") return actual === "identifiers";
-  if (singular === "key") return actual === "keys";
-  if (singular === "manager") return actual === "managers";
-  if (singular === "offering") return actual === "offerings";
-  return false;
 }
 
 function assertSchema(
@@ -1557,7 +1949,7 @@ function assertTextPayload(bytes: Uint8Array, path: string): void {
 function payloadLimit(mediaType: string): number {
   if (mediaType === FORM_DEFINITION_MEDIA_TYPE) return MAX_DEFINITION_BYTES;
   if (JSON_MEDIA_TYPES.has(mediaType)) return MAX_JSON_BYTES;
-  return MAX_FILE_BYTES;
+  return MAX_PAYLOAD_BYTES;
 }
 
 function validateMediaType(path: string, mediaType: string): void {
@@ -1586,10 +1978,7 @@ function decodeBase64(
 ): Uint8Array {
   if (
     value.length > Math.ceil(maxBytes / 3) * 4 ||
-    value.length % 4 !== 0 ||
-    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(
-      value,
-    )
+    !isCanonicalBase64Shape(value)
   ) {
     throw new TypeError(`${label} is not canonical base64`);
   }
@@ -1616,12 +2005,40 @@ function decodeBase64(
   return bytes;
 }
 
+/**
+ * Structural base64 validation as a linear scan. A grouped-quantifier regex
+ * is deliberately avoided here: regex engines silently give up on
+ * multi-megabyte inputs, which would reject contract-valid large payloads.
+ */
+function isCanonicalBase64Shape(value: string): boolean {
+  if (value.length % 4 !== 0) return false;
+  let dataLength = value.length;
+  while (dataLength > 0 && value[dataLength - 1] === "=") dataLength--;
+  if (value.length - dataLength > 2) return false;
+  for (let index = 0; index < dataLength; index++) {
+    const code = value.charCodeAt(index);
+    const alphanumeric =
+      (code >= 0x41 && code <= 0x5a) ||
+      (code >= 0x61 && code <= 0x7a) ||
+      (code >= 0x30 && code <= 0x39);
+    if (!alphanumeric && code !== 0x2b && code !== 0x2f) return false;
+  }
+  return true;
+}
+
 function validPackagePath(value: string): boolean {
   return (
     value.length > 0 &&
     value.length <= 240 &&
     PACKAGE_PATH_RE.test(value) &&
-    !value.split("/").some((segment) => segment === "." || segment === "..")
+    !value.split("/").some((segment) => {
+      if (segment === "." || segment === ".." || segment.endsWith(".")) {
+        return true;
+      }
+      const dot = segment.indexOf(".");
+      const stem = (dot < 0 ? segment : segment.slice(0, dot)).toLowerCase();
+      return WINDOWS_RESERVED_DEVICE_NAMES.has(stem);
+    })
   );
 }
 
@@ -1644,6 +2061,14 @@ function assertExactKeys(
   ) {
     throw new TypeError(`${label} has unknown or missing fields`);
   }
+}
+
+function appendSchemaPointer(pointer: string, ...tokens: string[]): string {
+  let result = pointer;
+  for (const token of tokens) {
+    result += `/${escapePointer(token)}`;
+  }
+  return result;
 }
 
 function escapePointer(value: string): string {

@@ -115,11 +115,12 @@ export async function runBackup(
 export async function runRelease(
   runId: string,
   request: unknown,
+  signal?: AbortSignal,
 ): Promise<JsonRecord> {
   const release = parseRelease(request);
   const workspace = workspaceForRun(runId);
   await assertDirectory(workspace.sourceRoot, "release source root");
-  const commandContext = commandContextFromRequest(request, undefined);
+  const commandContext = commandContextFromRequest(request, undefined, signal);
   const preparedCredentials = await prepareProviderCredentialFiles(
     commandContext,
     workspace,

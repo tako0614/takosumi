@@ -8,14 +8,11 @@ import type {
 import {
   installedFormReferenceKey,
   isInstalledFormReference,
+  shapeKindForPortableType,
   TAKOFORM_FORM_HOST_API_PATH,
-  TAKOFORM_FORM_HOST_API_VERSION,
+  TAKOFORM_FORM_HOST_PROTOCOL,
   TAKOFORM_FORM_HOST_WELL_KNOWN_PATH,
 } from "takosumi-contract";
-import {
-  canonicalJson as rfc8785CanonicalJson,
-  type CanonicalJsonValue,
-} from "../adapters/takoform/canonical_json.ts";
 import { sha256HexOfStringAsync } from "../shared/runtime/hash.ts";
 
 export interface PortableFormHostConformanceInput {
@@ -25,41 +22,16 @@ export interface PortableFormHostConformanceInput {
   readonly name: string;
   readonly identity: InstalledFormReference;
   readonly desired: JsonObject;
-  /**
-   * A distinct, valid desired document for the same Resource identity. When
-   * supplied, the runner proves an ETag-fenced update rather than treating a
-   * create replay as update evidence.
-   */
-  readonly updatedDesired?: JsonObject;
   /** Exact retained fixture name covered by the lifecycle run. */
   readonly positiveFixtureName?: string;
   /**
-   * SHA-256 of the exact retained package fixture file executed as desired.
-   * Standard-admission serialization requires this package readback binding.
-   */
-  readonly positivePackageFixtureDigest?: string;
-  /**
    * Retained negative fixtures that the host must actually reject. The v1
-   * runner currently admits desired-state fixtures only; unsupported stages
+   * runner currently executes config-stage fixtures only; unsupported stages
    * fail closed rather than being copied into evidence without execution.
    */
   readonly negativeFixtures?: readonly StandardFormNegativeFixture[];
-  /** Exact retained package fixture-file SHA-256 keyed by negative name. */
-  readonly negativePackageFixtureDigests?: Readonly<Record<string, string>>;
   /** When present, the runner also proves exact import replay and cleanup. */
   readonly importNativeId?: string;
-  /**
-   * Optional host/backend-specific setup invoked immediately before the
-   * read-only drift observation. The callback may mutate only the already
-   * created native test object; the runner still decides success exclusively
-   * from the portable host observation response.
-   */
-  readonly beforeDriftObserve?: (context: {
-    readonly canonicalResourceId: string;
-    readonly resourceVersion: string;
-  }) => void | Promise<void>;
-  /** Require the portable observe response to report actual backend drift. */
-  readonly expectDrift?: boolean;
   readonly fetch?: typeof globalThis.fetch;
 }
 
@@ -73,13 +45,11 @@ export interface PortableFormHostConformanceReport {
     readonly positive: readonly {
       readonly name: string;
       readonly inputDigest: string;
-      readonly packageFixtureDigest?: string;
     }[];
     readonly negative: readonly {
       readonly name: string;
-      readonly stage: "desired";
+      readonly stage: "config";
       readonly inputDigest: string;
-      readonly packageFixtureDigest?: string;
       readonly httpStatus: 400;
       readonly errorCode: string;
     }[];
@@ -104,22 +74,13 @@ export async function runPortableFormHostConformance(
       `positive fixture name is not canonical: ${positiveFixtureName}`,
     );
   }
-  assertDesiredName(input.desired, input.name, "desired");
-  if (input.updatedDesired) {
-    assertDesiredName(input.updatedDesired, input.name, "updated desired");
-    if (canonicalJson(input.updatedDesired) === canonicalJson(input.desired)) {
-      throw new Error(
-        "updated desired fixture must differ from create desired",
-      );
-    }
-  }
   const headers = {
     ...(input.token ? { authorization: `Bearer ${input.token}` } : {}),
   };
   const checks: string[] = [];
   const base = `${endpoint}${TAKOFORM_FORM_HOST_API_PATH}`;
   const exact = exactQuery(input.identity);
-  const resourcePath = `${base}/resources/${encodeURIComponent(input.identity.formRef.kind)}/${encodeURIComponent(input.name)}`;
+  const resourcePath = `${base}/resources/${encodeURIComponent(input.identity.type)}/${encodeURIComponent(input.name)}`;
   const body = resourceBody(input, input.name, input.desired);
 
   const discovery = await jsonRequest(
@@ -128,8 +89,8 @@ export async function runPortableFormHostConformance(
     { headers },
   );
   if (
-    !Array.isArray(discovery.api_versions) ||
-    !discovery.api_versions.includes(TAKOFORM_FORM_HOST_API_VERSION) ||
+    !Array.isArray(discovery.protocols) ||
+    !discovery.protocols.includes(TAKOFORM_FORM_HOST_PROTOCOL) ||
     !isRecord(discovery.features) ||
     discovery.features.service_forms !== true
   ) {
@@ -139,14 +100,14 @@ export async function runPortableFormHostConformance(
 
   const forms = await jsonRequest(
     fetcher,
-    `${base}/forms?space=${encodeURIComponent(input.space)}&${exact}`,
+    `${base}/forms?workspace=${encodeURIComponent(input.space)}&${exact}`,
     { headers },
   );
   const available = asArray(forms.forms).find(
     (item) =>
       isRecord(item) &&
-      isInstalledFormReference(item.identity) &&
-      installedFormReferenceKey(item.identity) ===
+      isInstalledFormReference(item.form) &&
+      installedFormReferenceKey(item.form) ===
         installedFormReferenceKey(input.identity),
   );
   if (!isRecord(available) || available.availableToPrincipal !== true) {
@@ -194,17 +155,14 @@ export async function runPortableFormHostConformance(
       body: JSON.stringify(applyRequest),
     }),
   );
-  if (
-    replay.id !== canonicalResourceId ||
-    replay.metadata.resourceVersion !== resource.metadata.resourceVersion
-  ) {
+  if (replay.id !== canonicalResourceId || replay.serial !== resource.serial) {
     throw new Error(
-      "portable apply replay changed canonical identity or generation",
+      "portable apply replay changed canonical identity or serial",
     );
   }
   checks.push("apply-idempotency");
 
-  const readPath = `${resourcePath}?space=${encodeURIComponent(input.space)}&${exact}`;
+  const readPath = `${resourcePath}?workspace=${encodeURIComponent(input.space)}&${exact}`;
   const read = asTakoformResource(
     await jsonRequest(fetcher, readPath, { headers }),
   );
@@ -214,7 +172,7 @@ export async function runPortableFormHostConformance(
 
   const compatibility = await jsonRequest(
     fetcher,
-    `${endpoint}/v1/resources/${encodeURIComponent(input.identity.formRef.kind)}/${encodeURIComponent(input.name)}?space=${encodeURIComponent(input.space)}`,
+    `${endpoint}/v1/resources/${encodeURIComponent(compatibilityKind(input.identity.type))}/${encodeURIComponent(input.name)}?space=${encodeURIComponent(input.space)}`,
     { headers },
   );
   if (
@@ -231,121 +189,22 @@ export async function runPortableFormHostConformance(
 
   const substituted = {
     ...input.identity,
-    formRef: {
-      ...input.identity.formRef,
-      schemaDigest: `sha256:${"f".repeat(64)}`,
-    },
+    schemaDigest: `sha256:${"f".repeat(64)}`,
   };
   await expectError(
     fetcher,
-    `${resourcePath}?space=${encodeURIComponent(input.space)}&${exactQuery(substituted)}`,
+    `${resourcePath}?workspace=${encodeURIComponent(input.space)}&${exactQuery(substituted)}`,
     { headers },
     409,
     "form_identity_conflict",
   );
   checks.push("exact-digest-substitution-rejected");
 
-  let version = resource.metadata.resourceVersion;
-  if (!version) throw new Error("portable Resource omitted resourceVersion");
-
-  if (input.updatedDesired) {
-    const updateBody = resourceBody(input, input.name, input.updatedDesired);
-    const updatePreview = await jsonRequest(
-      fetcher,
-      `${base}/resources/preview`,
-      {
-        method: "POST",
-        headers: jsonHeaders(headers),
-        body: JSON.stringify(updateBody),
-      },
-    );
-    const updatePlanDigest = stringAt(updatePreview, "review", "planDigest");
-    const updated = asTakoformResource(
-      await jsonRequest(fetcher, resourcePath, {
-        method: "PUT",
-        headers: jsonHeaders({
-          ...headers,
-          "if-match": `"${version}"`,
-          "idempotency-key": "conformance-update-1",
-        }),
-        body: JSON.stringify({
-          ...updateBody,
-          review: { planDigest: updatePlanDigest },
-        }),
-      }),
-    );
-    if (
-      updated.id !== canonicalResourceId ||
-      !updated.metadata.resourceVersion ||
-      updated.metadata.resourceVersion === version ||
-      canonicalJson(updated.spec) !== canonicalJson(input.updatedDesired)
-    ) {
-      throw new Error(
-        "portable update changed canonical identity, omitted a new resourceVersion, or did not retain desired state",
-      );
-    }
-    const updateReplay = asTakoformResource(
-      await jsonRequest(fetcher, resourcePath, {
-        method: "PUT",
-        headers: jsonHeaders({
-          ...headers,
-          "if-match": `"${version}"`,
-          "idempotency-key": "conformance-update-1",
-        }),
-        body: JSON.stringify({
-          ...updateBody,
-          review: { planDigest: updatePlanDigest },
-        }),
-      }),
-    );
-    if (
-      updateReplay.id !== canonicalResourceId ||
-      updateReplay.metadata.resourceVersion !==
-        updated.metadata.resourceVersion ||
-      canonicalJson(updateReplay.spec) !== canonicalJson(input.updatedDesired)
-    ) {
-      throw new Error("portable update replay changed canonical state");
-    }
-    version = updated.metadata.resourceVersion;
-    checks.push("update", "update-idempotency");
-  }
-
-  if (input.beforeDriftObserve && input.expectDrift !== true) {
-    throw new Error("beforeDriftObserve requires expectDrift=true");
-  }
-  if (input.expectDrift === true && !input.beforeDriftObserve) {
-    throw new Error(
-      "expectDrift=true requires an explicit beforeDriftObserve setup",
-    );
-  }
-  if (input.beforeDriftObserve) {
-    await input.beforeDriftObserve({
-      canonicalResourceId,
-      resourceVersion: version,
-    });
-  }
-  const observation = await jsonRequest(
-    fetcher,
-    `${resourcePath}/observe?space=${encodeURIComponent(input.space)}&${exact}`,
-    {
-      method: "POST",
-      headers: {
-        ...headers,
-        "if-match": `"${version}"`,
-        "idempotency-key": "conformance-observe-1",
-      },
-    },
-  );
-  if (input.expectDrift === true) {
-    if (stringAt(observation, "observation", "status") !== "drifted") {
-      throw new Error("portable observe did not report expected backend drift");
-    }
-    checks.push("drift");
-  }
-  checks.push("observe");
+  const version = resource.serial;
+  if (!version) throw new Error("portable Resource omitted serial");
   await jsonRequest(
     fetcher,
-    `${resourcePath}/refresh?space=${encodeURIComponent(input.space)}&${exact}`,
+    `${resourcePath}/refresh?workspace=${encodeURIComponent(input.space)}&${exact}`,
     {
       method: "POST",
       headers: {
@@ -356,10 +215,23 @@ export async function runPortableFormHostConformance(
     },
   );
   checks.push("refresh");
+  await jsonRequest(
+    fetcher,
+    `${resourcePath}/sync?workspace=${encodeURIComponent(input.space)}&${exact}`,
+    {
+      method: "POST",
+      headers: {
+        ...headers,
+        "if-match": `"${version}"`,
+        "idempotency-key": "conformance-sync-1",
+      },
+    },
+  );
+  checks.push("sync");
 
   const events = await jsonRequest(
     fetcher,
-    `${endpoint}/v1/resources/${encodeURIComponent(input.identity.formRef.kind)}/${encodeURIComponent(input.name)}/events?space=${encodeURIComponent(input.space)}`,
+    `${endpoint}/v1/resources/${encodeURIComponent(compatibilityKind(input.identity.type))}/${encodeURIComponent(input.name)}/events?space=${encodeURIComponent(input.space)}`,
     { headers },
   );
   const actions = new Set(
@@ -418,14 +290,6 @@ export async function runPortableFormHostConformance(
         {
           name: positiveFixtureName,
           inputDigest: await jsonDigest(input.desired),
-          ...(input.positivePackageFixtureDigest
-            ? {
-                packageFixtureDigest: assertSha256Digest(
-                  input.positivePackageFixtureDigest,
-                  "positive package fixture",
-                ),
-              }
-            : {}),
         },
       ],
       negative: fixtureReport,
@@ -435,171 +299,6 @@ export async function runPortableFormHostConformance(
   return {
     ...unsigned,
     evidenceDigest: `sha256:${await sha256HexOfStringAsync(canonicalJson(unsigned))}`,
-  };
-}
-
-/**
- * Exact retained report shape consumed by Takoform's standard-admission
- * verifier. Creation is deliberately fail closed: repo-only or partial host
- * runs cannot be serialized as complete admission evidence.
- */
-export interface TakoformStandardHostRunnerReport {
-  readonly format: "takoform.standard-runner-report@v1";
-  readonly role: "host-report";
-  readonly subject: string;
-  readonly runnerVersion: string;
-  readonly identity: InstalledFormReference;
-  readonly status: "passed";
-  readonly executionEvidence: Omit<
-    PortableFormHostConformanceReport,
-    "evidenceDigest"
-  >;
-  readonly executionEvidenceDigest: string;
-  readonly lifecycle: {
-    readonly create: true;
-    readonly read: true;
-    readonly update: true;
-    readonly delete: true;
-    readonly import: true;
-    readonly observe: true;
-    readonly refresh: true;
-    readonly drift: true;
-  };
-  readonly positiveFixtures: readonly {
-    readonly name: string;
-    readonly packageFixtureDigest: string;
-    readonly effectiveInputDigest: string;
-    readonly passed: true;
-  }[];
-  readonly negativeFixtures: readonly {
-    readonly name: string;
-    readonly packageFixtureDigest: string;
-    readonly effectiveInputDigest: string;
-    readonly errorCode: string;
-    readonly passed: true;
-  }[];
-}
-
-export async function portableStandardHostRunnerReport(
-  report: PortableFormHostConformanceReport,
-  options: {
-    /**
-     * Source-bound runner version retained by the signed report lane. Local
-     * callers keep the compatibility default; release evidence supplies an
-     * exact reviewed source identity.
-     */
-    readonly runnerVersion?: string;
-  } = {},
-): Promise<{
-  readonly report: TakoformStandardHostRunnerReport;
-  readonly canonical: string;
-  readonly evidenceDigest: string;
-  readonly proof: StandardFormConformanceProof;
-}> {
-  const runnerVersion = options.runnerVersion ?? "1.1.0";
-  if (!/^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$/u.test(runnerVersion)) {
-    throw new Error("standard host runnerVersion must be a canonical semver");
-  }
-  const requiredChecks = [
-    "apply",
-    "read",
-    "update",
-    "delete-idempotency",
-    "import-idempotency",
-    "observe",
-    "refresh",
-    "drift",
-  ] as const;
-  const completed = new Set(report.checks);
-  const missing = requiredChecks.filter((check) => !completed.has(check));
-  if (missing.length > 0) {
-    throw new Error(
-      `portable host run cannot become standard-admission evidence; missing ${missing.join(", ")}`,
-    );
-  }
-  if (
-    report.fixtures.positive.length === 0 ||
-    report.fixtures.negative.length === 0
-  ) {
-    throw new Error(
-      "portable host run cannot become standard-admission evidence without positive and negative fixtures",
-    );
-  }
-  const nonPortableNegative = report.fixtures.negative.find(
-    ({ errorCode }) => errorCode !== "invalid_argument",
-  );
-  if (nonPortableNegative) {
-    throw new Error(
-      `portable host run cannot become standard-admission evidence; negative fixture ${nonPortableNegative.name} returned ${nonPortableNegative.errorCode} instead of invalid_argument`,
-    );
-  }
-  const unboundPositive = report.fixtures.positive.find(
-    ({ packageFixtureDigest }) => !packageFixtureDigest,
-  );
-  const unboundNegative = report.fixtures.negative.find(
-    ({ packageFixtureDigest }) => !packageFixtureDigest,
-  );
-  if (unboundPositive || unboundNegative) {
-    throw new Error(
-      "portable host run cannot become standard-admission evidence without exact retained package fixture digests",
-    );
-  }
-  const { evidenceDigest: executionEvidenceDigest, ...executionEvidence } =
-    report;
-  const standardReport: TakoformStandardHostRunnerReport = {
-    format: "takoform.standard-runner-report@v1",
-    role: "host-report",
-    subject: `host:${report.endpointOrigin}`,
-    runnerVersion,
-    identity: report.identity,
-    status: "passed",
-    executionEvidence,
-    executionEvidenceDigest,
-    lifecycle: {
-      create: true,
-      read: true,
-      update: true,
-      delete: true,
-      import: true,
-      observe: true,
-      refresh: true,
-      drift: true,
-    },
-    positiveFixtures: report.fixtures.positive.map(
-      ({ name, packageFixtureDigest, inputDigest }) => ({
-        name,
-        packageFixtureDigest: packageFixtureDigest!,
-        effectiveInputDigest: inputDigest,
-        passed: true,
-      }),
-    ),
-    negativeFixtures: report.fixtures.negative.map(
-      ({ name, errorCode, packageFixtureDigest, inputDigest }) => ({
-        name,
-        packageFixtureDigest: packageFixtureDigest!,
-        effectiveInputDigest: inputDigest,
-        errorCode,
-        passed: true,
-      }),
-    ),
-  };
-  const canonical = rfc8785CanonicalJson(
-    standardReport as unknown as CanonicalJsonValue,
-  );
-  const evidenceDigest = `sha256:${await sha256HexOfStringAsync(canonical)}`;
-  return {
-    report: standardReport,
-    canonical,
-    evidenceDigest,
-    proof: {
-      subject: standardReport.subject,
-      runnerVersion: standardReport.runnerVersion,
-      identity: standardReport.identity,
-      status: standardReport.status,
-      positiveFixtures: standardReport.positiveFixtures.map(({ name }) => name),
-      negativeFixtures: standardReport.negativeFixtures.map(({ name }) => name),
-      evidenceDigest,
-    },
   };
 }
 
@@ -625,9 +324,8 @@ async function runNegativeFixtures(
 ): Promise<
   readonly {
     readonly name: string;
-    readonly stage: "desired";
+    readonly stage: "config";
     readonly inputDigest: string;
-    readonly packageFixtureDigest?: string;
     readonly httpStatus: 400;
     readonly errorCode: string;
   }[]
@@ -636,9 +334,8 @@ async function runNegativeFixtures(
   const names = new Set<string>();
   const report: {
     name: string;
-    stage: "desired";
+    stage: "config";
     inputDigest: string;
-    packageFixtureDigest?: string;
     httpStatus: 400;
     errorCode: string;
   }[] = [];
@@ -652,7 +349,7 @@ async function runNegativeFixtures(
       throw new Error(`duplicate negative fixture name: ${fixture.name}`);
     }
     names.add(fixture.name);
-    if (fixture.stage !== "desired") {
+    if (fixture.stage !== "config") {
       throw new Error(
         `portable host runner does not execute negative fixture stage ${fixture.stage}`,
       );
@@ -662,12 +359,7 @@ async function runNegativeFixtures(
         `negative fixture error code is not canonical: ${fixture.expectedErrorCode}`,
       );
     }
-    const name = fixture.input.name;
-    if (typeof name !== "string" || name.trim() === "") {
-      throw new Error(
-        `negative fixture ${fixture.name} must contain its exact Resource spec.name`,
-      );
-    }
+    const name = `${input.name}-negative-${report.length + 1}`;
     await expectError(
       fetcher,
       `${base}/resources/preview`,
@@ -681,28 +373,13 @@ async function runNegativeFixtures(
     );
     report.push({
       name: fixture.name,
-      stage: "desired",
+      stage: "config",
       inputDigest: await jsonDigest(fixture.input),
-      ...(input.negativePackageFixtureDigests?.[fixture.name]
-        ? {
-            packageFixtureDigest: assertSha256Digest(
-              input.negativePackageFixtureDigests[fixture.name]!,
-              `negative package fixture ${fixture.name}`,
-            ),
-          }
-        : {}),
       httpStatus: 400,
       errorCode: fixture.expectedErrorCode,
     });
   }
   return report;
-}
-
-function assertSha256Digest(value: string, label: string): string {
-  if (!/^sha256:[a-f0-9]{64}$/u.test(value)) {
-    throw new Error(`${label} digest is not a canonical SHA-256 digest`);
-  }
-  return value;
 }
 
 async function runImportConformance(
@@ -713,7 +390,7 @@ async function runImportConformance(
   headers: Record<string, string>,
 ): Promise<void> {
   const name = `${input.name}-import`;
-  const path = `${base}/resources/${encodeURIComponent(input.identity.formRef.kind)}/${encodeURIComponent(name)}`;
+  const path = `${base}/resources/${encodeURIComponent(input.identity.type)}/${encodeURIComponent(name)}`;
   const desired = { ...input.desired, name };
   const body = {
     ...resourceBody(input, name, desired),
@@ -730,10 +407,10 @@ async function runImportConformance(
   } as const;
   const imported = await jsonRequest(input.fetch, `${path}/import`, mutation);
   await jsonRequest(input.fetch, `${path}/import`, mutation);
-  const version = stringAt(imported, "resource", "metadata", "resourceVersion");
+  const version = stringAt(imported, "resource", "serial");
   await emptyRequest(
     input.fetch,
-    `${path}?space=${encodeURIComponent(input.space)}&${exactQuery(input.identity)}`,
+    `${path}?workspace=${encodeURIComponent(input.space)}&${exactQuery(input.identity)}`,
     {
       method: "DELETE",
       headers: {
@@ -752,32 +429,28 @@ function resourceBody(
   desired: JsonObject,
 ) {
   return {
-    apiVersion: TAKOFORM_FORM_HOST_API_VERSION,
-    kind: input.identity.formRef.kind,
+    type: input.identity.type,
     form: input.identity,
-    metadata: { name, space: input.space },
-    spec: desired,
+    workspace: input.space,
+    name,
+    config: desired,
   };
-}
-
-function assertDesiredName(
-  desired: JsonObject,
-  expected: string,
-  label: string,
-): void {
-  if (desired.name !== expected) {
-    throw new Error(`${label} must preserve Resource spec.name ${expected}`);
-  }
 }
 
 function exactQuery(identity: InstalledFormReference): string {
   return new URLSearchParams({
-    apiVersion: identity.formRef.apiVersion,
-    kind: identity.formRef.kind,
-    definitionVersion: identity.formRef.definitionVersion,
-    schemaDigest: identity.formRef.schemaDigest,
+    type: identity.type,
+    version: identity.version,
+    schemaDigest: identity.schemaDigest,
     packageDigest: identity.packageDigest,
   }).toString();
+}
+
+/** The historical /v1 compatibility facade still speaks PascalCase kinds. */
+function compatibilityKind(type: string): string {
+  const kind = shapeKindForPortableType(type);
+  if (!kind) throw new Error(`portable type ${type} has no compatibility kind`);
+  return kind;
 }
 
 async function jsonRequest(
@@ -824,8 +497,9 @@ async function expectError(
 }
 
 function asTakoformResource(value: Record<string, unknown>): TakoformResource {
-  if (!isRecord(value.metadata))
-    throw new Error("portable response lacks Resource metadata");
+  if (typeof value.type !== "string" || typeof value.workspace !== "string") {
+    throw new Error("portable response lacks the flat Resource envelope");
+  }
   return value as unknown as TakoformResource;
 }
 

@@ -30,7 +30,7 @@ import { normalizeCompatibilityReportModulePath } from "takosumi-contract/capsul
 import type { PolicyConfig } from "takosumi-contract/install-configs";
 import { normalizeScopeBoundaryPolicy } from "takosumi-contract";
 import { timingSafeEqualHex } from "takosumi-contract/internal/crypto";
-import type { PageParams } from "takosumi-contract/pagination";
+import type { Page, PageParams } from "takosumi-contract/pagination";
 import type { SourceSnapshot } from "takosumi-contract/sources";
 import { sha256HexOfStringAsync } from "../../shared/runtime/hash.ts";
 import {
@@ -282,6 +282,22 @@ export class SourcesService {
       }
     }
     return out;
+  }
+
+  /**
+   * Bounded cross-Workspace scheduler page. The cursor advances across every
+   * row so sparse autoSync populations cannot cause an unbounded cron scan.
+   */
+  async listAutoSyncSourcesPage(params: PageParams): Promise<Page<Source>> {
+    const page = await this.#store.listAllSourcesPage(params);
+    return {
+      items: page.items
+        .filter((row) => row.status === "active" && row.autoSync)
+        .map(toPublicSource),
+      ...(page.nextCursor === undefined
+        ? {}
+        : { nextCursor: page.nextCursor }),
+    };
   }
 
   /**

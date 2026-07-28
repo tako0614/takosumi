@@ -9,6 +9,7 @@ import {
   handleRevoke,
   handleUserInfo,
 } from "../../../../accounts/service/src/oidc-routes.ts";
+import type { ControlPlaneOperations } from "../../../../accounts/service/src/control-operations.ts";
 import { InMemoryAccountsStore } from "../../../../accounts/service/src/store.ts";
 
 const audience = "https://office.example.test/mcp";
@@ -21,6 +22,17 @@ const confidentialClients = new Map([
       redirectUris: ["https://resource.example.test/callback"],
       clientSecret: "resource-secret",
       tokenEndpointAuthMethod: "client_secret_post" as const,
+    },
+  ],
+]);
+const mobileClients = new Map([
+  [
+    "takos-mobile",
+    {
+      clientId: "takos-mobile",
+      redirectUris: ["takos://oauth/callback"],
+      allowedScopes: ["openid", "profile", "email", "threads:read"],
+      tokenEndpointAuthMethod: "none" as const,
     },
   ],
 ]);
@@ -180,6 +192,7 @@ test("ordinary OAuth UserInfo returns the subject account profile", async () => 
       headers: { authorization: "Bearer takat_mobile_access" },
     }),
     store,
+    clients: mobileClients,
     expectedAudience: "takos-mobile",
   });
 
@@ -223,6 +236,7 @@ test("ordinary OAuth UserInfo returns the subject account profile", async () => 
         headers: { authorization: `Bearer ${token}` },
       }),
       store,
+      clients: mobileClients,
       expectedAudience: "takos-mobile",
     });
     expect(await scoped.json()).toEqual({
@@ -330,9 +344,24 @@ test("introspection identifies ordinary OAuth and PAT credentials with explicit 
     clientId: "resource-server",
     scope: "openid capsules:read",
     subject: "pairwise_oauth_subject",
+    takosumiSubject: "tsub_owner",
     workspaceId: "ws_owner",
     expiresAt,
   });
+  const operations = {
+    workspaces: {
+      getWorkspace: async () => ({
+        id: "ws_owner",
+        handle: "owner",
+        displayName: "Owner",
+        type: "personal",
+        ownerUserId: "tsub_owner",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      }),
+    },
+    members: { listMembers: async () => [] },
+  } as unknown as ControlPlaneOperations;
   await store.savePersonalAccessToken("opaque-personal-token", {
     tokenId: "pat_1",
     tokenPrefix: "opaque-personal",
@@ -349,12 +378,14 @@ test("introspection identifies ordinary OAuth and PAT credentials with explicit 
     request: introspectionRequest("opaque-oauth-token"),
     store,
     clients: confidentialClients,
+    operations,
   });
   expect(await oauth.json()).toMatchObject({
     active: true,
     token_use: "oauth_access",
     aud: "resource-server",
     sub: "pairwise_oauth_subject",
+    takosumi: { workspace_id: "ws_owner", role: "owner" },
   });
 
   const pat = await handleIntrospect({
@@ -362,13 +393,50 @@ test("introspection identifies ordinary OAuth and PAT credentials with explicit 
     request: introspectionRequest("opaque-personal-token"),
     store,
     clients: confidentialClients,
+    operations,
   });
   expect(await pat.json()).toMatchObject({
     active: true,
     token_use: "personal_access",
     sub: "tsub_owner",
-    takosumi: { workspace_id: "ws_owner" },
+    takosumi: { workspace_id: "ws_owner", role: "owner" },
   });
+});
+
+test("introspection fail-closes a Workspace token after live membership is lost", async () => {
+  const store = new InMemoryAccountsStore();
+  await store.savePersonalAccessToken("opaque-revoked-member-pat", {
+    tokenId: "pat_revoked_member",
+    tokenPrefix: "opaque-revoked",
+    subject: "tsub_former_member",
+    name: "former member",
+    scopes: ["read"],
+    workspaceId: "ws_live_role",
+    createdAt: Date.now(),
+  });
+  const operations = {
+    workspaces: {
+      getWorkspace: async () => ({
+        id: "ws_live_role",
+        handle: "live-role",
+        displayName: "Live Role",
+        type: "team",
+        ownerUserId: "tsub_owner",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      }),
+    },
+    members: { listMembers: async () => [] },
+  } as unknown as ControlPlaneOperations;
+
+  const response = await handleIntrospect({
+    issuer: "https://accounts.example.test",
+    request: introspectionRequest("opaque-revoked-member-pat"),
+    store,
+    clients: confidentialClients,
+    operations,
+  });
+  expect(await response.json()).toEqual({ active: false });
 });
 
 test("OIDC revocation has no anonymous degraded mode", async () => {

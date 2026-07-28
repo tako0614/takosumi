@@ -275,7 +275,6 @@ export interface PlatformControlPlaneSmokeResult {
   readonly applyRunId?: string;
   readonly destroyPlanRunId?: string;
   readonly destroyApplyRunId?: string;
-  readonly backupRestoreRehearsal?: BackupRestoreRehearsalResult;
   readonly stateVersionLedger?: StateVersionLedgerVerificationResult;
   readonly releaseActivation?: ReleaseActivationVerificationResult;
   readonly cloudflareResourcePreflight?: CloudflareResourcePreflightResult;
@@ -494,13 +493,6 @@ interface CapsuleLedgerResponse {
   readonly capsule?: CapsuleLedgerRecord;
 }
 
-interface BackupRecord {
-  readonly id: string;
-  readonly digest: string;
-  readonly createdByRunId?: string;
-  readonly createdAt: string;
-}
-
 interface StateVersionRecord {
   readonly id: string;
   readonly workspaceId: string;
@@ -594,22 +586,6 @@ const CLOUDFLARE_ACCOUNT_RESOURCE_PREFLIGHT_CHECKS = [
   },
 ] as const;
 
-interface BackupRestoreRehearsalResult {
-  readonly backupId: string;
-  readonly backupRunId?: string;
-  readonly backupDigest: string;
-  readonly backupCreatedAt: string;
-  readonly stateGeneration: number;
-  readonly stateVersionId: string;
-  readonly restoreRunId: string;
-  readonly restoredFromStateVersionId?: string;
-  readonly restoredStateVersionId?: string;
-  readonly restoreCreatedAt?: string;
-  readonly restoreStartedAt?: string;
-  readonly restoreFinishedAt?: string;
-  readonly restoreTargetSmoke: "passed";
-}
-
 interface FailureCleanupResult {
   readonly attempted: true;
   readonly cloudflareWorkerGone: boolean;
@@ -666,6 +642,11 @@ export async function resolveOptions(
   args: CliArgs,
   env: NodeJS.ProcessEnv,
 ): Promise<PlatformControlPlaneSmokeOptions> {
+  if (args.backupRestoreRehearsal === true) {
+    throw new Error(
+      "--backup-restore-rehearsal is unavailable: the control export has no manifest-bound restore importer",
+    );
+  }
   const url = args.url ?? env.TAKOSUMI_PLATFORM_URL;
   if (!url) {
     throw new Error("--url or TAKOSUMI_PLATFORM_URL is required");
@@ -949,6 +930,7 @@ export async function resolveOptions(
 export function dryRunResult(
   options: PlatformControlPlaneSmokeOptions,
 ): PlatformControlPlaneSmokeResult {
+  assertBackupRestoreRehearsalUnavailable(options);
   const generatedAt = new Date().toISOString();
   const steps = requiredSteps(options);
   return {
@@ -979,20 +961,6 @@ export function dryRunResult(
     runTimings: dryRunRunTimings(generatedAt),
     appName: options.appName,
     environment: options.environment,
-    ...(options.backupRestoreRehearsal
-      ? {
-          backupRestoreRehearsal: {
-            backupId: "bkp_dry_run",
-            backupRunId: "backup_dry_run",
-            backupDigest: `sha256:${"0".repeat(64)}`,
-            backupCreatedAt: new Date(0).toISOString(),
-            stateGeneration: 1,
-            stateVersionId: "state_dry_run",
-            restoreRunId: "restore_dry_run",
-            restoreTargetSmoke: "passed",
-          },
-        }
-      : {}),
     capsuleGateStatus: "passed",
     policyStatus: "passed",
     workerUrl: shouldVerifyCloudflareWorker(options)
@@ -1130,6 +1098,7 @@ function smokeRunTiming(name: string, run: RunRecord): SmokeRunTiming {
 export async function runPlatformControlPlaneSmoke(
   options: PlatformControlPlaneSmokeOptions,
 ): Promise<PlatformControlPlaneSmokeResult> {
+  assertBackupRestoreRehearsalUnavailable(options);
   const startedAtMs = Date.now();
   const startedAt = new Date(startedAtMs).toISOString();
   const workspaceId = await resolveWorkspaceId(options);
@@ -1171,7 +1140,6 @@ export async function runPlatformControlPlaneSmoke(
   let applyRunId: string | undefined;
   let destroyPlanRunId: string | undefined;
   let destroyApplyRunId: string | undefined;
-  let backupRestoreRehearsal: BackupRestoreRehearsalResult | undefined;
   let stateVersionLedger: StateVersionLedgerVerificationResult | undefined;
   let releaseActivation: ReleaseActivationVerificationResult | undefined;
   let publicUrlChecks: readonly PublicUrlCheckResult[] | undefined;
@@ -1320,15 +1288,6 @@ export async function runPlatformControlPlaneSmoke(
       );
       completeStep("functionalProbe");
     }
-    if (options.backupRestoreRehearsal) {
-      beginStep("backupRestoreRehearsal");
-      backupRestoreRehearsal = await runBackupRestoreRehearsal(options, {
-        workspaceId,
-        capsuleId,
-      });
-      completeStep("backupRestoreRehearsal");
-    }
-
     beginStep("destroy");
     const destroyResult = await destroySmokeCapsule(options, {
       capsuleId,
@@ -1396,7 +1355,6 @@ export async function runPlatformControlPlaneSmoke(
       applyRunId,
       destroyPlanRunId,
       destroyApplyRunId,
-      backupRestoreRehearsal,
       stateVersionLedger,
       releaseActivation,
       cloudflareResourcePreflight,
@@ -1523,7 +1481,6 @@ export async function runPlatformControlPlaneSmoke(
     applyRunId,
     destroyPlanRunId,
     destroyApplyRunId,
-    backupRestoreRehearsal,
     stateVersionLedger,
     releaseActivation,
     cloudflareResourcePreflight,
@@ -1563,7 +1520,6 @@ function failedResult(
     readonly applyRunId?: string;
     readonly destroyPlanRunId?: string;
     readonly destroyApplyRunId?: string;
-    readonly backupRestoreRehearsal?: BackupRestoreRehearsalResult;
     readonly stateVersionLedger?: StateVersionLedgerVerificationResult;
     readonly releaseActivation?: ReleaseActivationVerificationResult;
     readonly cloudflareResourcePreflight?: CloudflareResourcePreflightResult;
@@ -1619,7 +1575,6 @@ function failedResult(
     applyRunId: input.applyRunId,
     destroyPlanRunId: input.destroyPlanRunId,
     destroyApplyRunId: input.destroyApplyRunId,
-    backupRestoreRehearsal: input.backupRestoreRehearsal,
     stateVersionLedger: input.stateVersionLedger,
     releaseActivation: input.releaseActivation,
     cloudflareResourcePreflight: input.cloudflareResourcePreflight,
@@ -2648,110 +2603,6 @@ function assertRunSucceeded(run: RunRecord, phase: string): void {
   }
 }
 
-async function runBackupRestoreRehearsal(
-  options: PlatformControlPlaneSmokeOptions,
-  input: {
-    readonly workspaceId: string;
-    readonly capsuleId: string;
-  },
-): Promise<BackupRestoreRehearsalResult> {
-  const stateVersion = await latestStateVersionForCapsule(
-    options,
-    input.capsuleId,
-  );
-  const backup = (
-    await requestJson<{ readonly backup: BackupRecord }>({
-      baseUrl: options.url,
-      token: options.accountSessionToken,
-      method: "POST",
-      path: `${API_PREFIX}/capsules/${encodeURIComponent(
-        input.capsuleId,
-      )}/backups`,
-    })
-  ).backup;
-  const restore = (
-    await requestJson<{ readonly run: RunRecord }>({
-      baseUrl: options.url,
-      token: options.accountSessionToken,
-      method: "POST",
-      path: `${API_PREFIX}/workspaces/${encodeURIComponent(
-        input.workspaceId,
-      )}/backups/${encodeURIComponent(backup.id)}/restores`,
-      body: {
-        capsuleId: input.capsuleId,
-        environment: stateVersion.environment,
-        stateGeneration: stateVersion.generation,
-        expectedBackupDigest: backup.digest,
-      },
-    })
-  ).run;
-  if (restore.status !== "waiting_approval") {
-    throw new Error(
-      `restore run ${restore.id} ended as ${restore.status}; expected waiting_approval`,
-    );
-  }
-  await requestJson({
-    baseUrl: options.url,
-    token: options.accountSessionToken,
-    method: "POST",
-    path: `${API_PREFIX}/runs/${encodeURIComponent(restore.id)}/approve`,
-    body: {
-      reason: "Layer-2 platform-control-plane backup/restore rehearsal",
-    },
-  });
-  const completedRestore = await pollRun(options, restore.id);
-  assertRunSucceeded(completedRestore, "restore");
-  return {
-    backupId: backup.id,
-    backupRunId: backup.createdByRunId,
-    backupDigest: backup.digest,
-    backupCreatedAt: backup.createdAt,
-    stateGeneration: stateVersion.generation,
-    stateVersionId: stateVersion.id,
-    restoreRunId: completedRestore.id,
-    restoredFromStateVersionId: completedRestore.restoredFromStateVersionId,
-    restoredStateVersionId: completedRestore.restoredStateVersionId,
-    restoreCreatedAt: completedRestore.createdAt ?? restore.createdAt,
-    restoreStartedAt: completedRestore.startedAt,
-    restoreFinishedAt: completedRestore.finishedAt,
-    restoreTargetSmoke: "passed",
-  };
-}
-
-async function latestStateVersionForCapsule(
-  options: PlatformControlPlaneSmokeOptions,
-  capsuleId: string,
-): Promise<StateVersionRecord> {
-  const response = await requestJson<{
-    readonly stateVersions?: readonly StateVersionRecord[];
-  }>({
-    baseUrl: options.url,
-    token: options.accountSessionToken,
-    path: `${API_PREFIX}/capsules/${encodeURIComponent(
-      capsuleId,
-    )}/state-versions`,
-  });
-  const stateVersions = [...(response.stateVersions ?? [])].sort(
-    (a, b) =>
-      b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id),
-  );
-  const stateVersion = stateVersions[0];
-  if (!stateVersion) {
-    throw new Error(
-      `Capsule ${capsuleId} did not return a StateVersion for backup/restore rehearsal`,
-    );
-  }
-  if (
-    !Number.isInteger(stateVersion.generation) ||
-    stateVersion.generation < 0
-  ) {
-    throw new Error(
-      `StateVersion ${stateVersion.id} has invalid generation for backup/restore rehearsal`,
-    );
-  }
-  return stateVersion;
-}
-
 async function assertCloudflareWorkerExists(
   options: PlatformControlPlaneSmokeOptions,
   publicOutputs?: Readonly<Record<string, unknown>>,
@@ -3606,6 +3457,15 @@ function assertNever(value: never): never {
   throw new Error(`unexpected value: ${String(value)}`);
 }
 
+function assertBackupRestoreRehearsalUnavailable(
+  options: Pick<PlatformControlPlaneSmokeOptions, "backupRestoreRehearsal">,
+): void {
+  if (!options.backupRestoreRehearsal) return;
+  throw new Error(
+    "--backup-restore-rehearsal is unavailable: the control export has no manifest-bound restore importer",
+  );
+}
+
 function parseArgs(argv: readonly string[]): CliArgs {
   const args: Record<string, string | boolean> = {};
   for (let index = 0; index < argv.length; index += 1) {
@@ -4416,7 +4276,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function requiredSteps(
   options?: Pick<
     PlatformControlPlaneSmokeOptions,
-    | "backupRestoreRehearsal"
     | "keepConnection"
     | "sourceMode"
     | "cloudflareConnectionMode"
@@ -4467,9 +4326,6 @@ function requiredSteps(
   }
   if (options?.functionalProbeScript) {
     steps.push("functionalProbe");
-  }
-  if (options?.backupRestoreRehearsal) {
-    steps.push("backupRestoreRehearsal");
   }
   steps.push("destroy");
   if (
@@ -4992,28 +4848,6 @@ async function runSelfTest(): Promise<void> {
   ) {
     throw new Error("git self-test leaked source Git URL");
   }
-  const rehearsalOptions = await resolveOptions(
-    {
-      dryRun: true,
-      backupRestoreRehearsal: true,
-      url: "https://app-staging.takosumi.com",
-      workspace: "ws_selftest",
-      cloudflareAccountIdFile: "/private/cloudflare-account-id",
-      cloudflareWorkersSubdomainFile: "/private/cloudflare-workers-subdomain",
-      appName: "takosumi-smoke-selftest",
-      ensureWorkspace: true,
-      sessionTokenFile: "/private/account-session-token",
-      cloudflareApiTokenFile: "/private/cloudflare-token",
-    },
-    {},
-  );
-  const rehearsalResult = dryRunResult(rehearsalOptions);
-  if (
-    !rehearsalResult.steps.includes("backupRestoreRehearsal") ||
-    !rehearsalResult.backupRestoreRehearsal
-  ) {
-    throw new Error("self-test result is missing backup/restore rehearsal");
-  }
   const releaseOptions = await resolveOptions(
     {
       dryRun: true,
@@ -5325,7 +5159,6 @@ Options:
   --deploy-timeout-seconds <n>                    default ${DEFAULT_DEPLOY_TIMEOUT_SECONDS}
   --poll-interval-ms <n>                          default 2000
   --out-file <path>                               write the redacted result JSON to a private evidence file
-  --backup-restore-rehearsal                      create a Capsule state backup, approve a restore Run, and verify it succeeds before cleanup
   --keep-connection                               keep the temporary Workspace ProviderConnection
   --dry-run                                       validate shape and print redacted plan
   --json                                          print JSON only

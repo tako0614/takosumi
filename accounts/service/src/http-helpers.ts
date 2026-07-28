@@ -74,11 +74,88 @@ export function methodNotAllowed(allow: string): Response {
   });
 }
 
+export const ACCOUNTS_JSON_BODY_MAX_BYTES = 1024 * 1024;
+export const ACCOUNTS_FORM_BODY_MAX_BYTES = 32 * 1024;
+
+export class RequestBodyReadError extends Error {
+  readonly status: 400 | 413;
+  readonly code: "invalid_request" | "request_too_large";
+
+  constructor(
+    code: "invalid_request" | "request_too_large",
+    message: string,
+    status: 400 | 413,
+  ) {
+    super(message);
+    this.name = "RequestBodyReadError";
+    this.code = code;
+    this.status = status;
+  }
+}
+
+/**
+ * Read a UTF-8 request body with an enforced streaming cap. Content-Length is
+ * only an early rejection hint: chunked/forged-length requests are counted as
+ * bytes arrive and are cancelled once the route-class limit is crossed.
+ */
+export async function readBoundedRequestText(
+  request: Request,
+  maxBytes: number,
+): Promise<string> {
+  const declaredLength = Number(request.headers.get("content-length"));
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+    throw new RequestBodyReadError(
+      "request_too_large",
+      `request body exceeds ${maxBytes} bytes`,
+      413,
+    );
+  }
+
+  const reader = request.body?.getReader();
+  if (!reader) return "";
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel("request body limit exceeded").catch(() => undefined);
+      throw new RequestBodyReadError(
+        "request_too_large",
+        `request body exceeds ${maxBytes} bytes`,
+        413,
+      );
+    }
+    chunks.push(value);
+  }
+
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    throw new RequestBodyReadError(
+      "invalid_request",
+      "request body must be valid UTF-8",
+      400,
+    );
+  }
+}
+
 export async function readJsonObject(
   request: Request,
 ): Promise<Record<string, unknown> | null> {
+  const text = await readBoundedRequestText(
+    request,
+    ACCOUNTS_JSON_BODY_MAX_BYTES,
+  );
   try {
-    const value = await request.json();
+    const value = JSON.parse(text);
     return isRecord(value) ? value : null;
   } catch {
     return null;
@@ -88,7 +165,10 @@ export async function readJsonObject(
 export async function readOptionalJsonObject(
   request: Request,
 ): Promise<Record<string, unknown> | null> {
-  const text = await request.text();
+  const text = await readBoundedRequestText(
+    request,
+    ACCOUNTS_JSON_BODY_MAX_BYTES,
+  );
   if (text.trim().length === 0) return {};
   try {
     const value = JSON.parse(text);
@@ -96,6 +176,14 @@ export async function readOptionalJsonObject(
   } catch {
     return null;
   }
+}
+
+export async function readFormUrlEncoded(
+  request: Request,
+): Promise<URLSearchParams> {
+  return new URLSearchParams(
+    await readBoundedRequestText(request, ACCOUNTS_FORM_BODY_MAX_BYTES),
+  );
 }
 
 export function takosumiSubjectValue(

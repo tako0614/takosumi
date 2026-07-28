@@ -1314,17 +1314,13 @@ function resourceShapeSchemas(): Record<string, Record<string, unknown>> {
   return {
     FormRef: {
       type: "object",
-      required: ["apiVersion", "kind", "definitionVersion", "schemaDigest"],
+      required: ["type", "version", "schemaDigest"],
       properties: {
-        apiVersion: {
+        type: {
           type: "string",
-          pattern: "^[A-Za-z][A-Za-z0-9._/-]{0,127}$",
+          pattern: "^[a-z][a-z0-9_]{0,63}$",
         },
-        kind: {
-          type: "string",
-          pattern: "^[A-Za-z][A-Za-z0-9._-]{0,127}$",
-        },
-        definitionVersion: {
+        version: {
           type: "string",
           pattern:
             "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$",
@@ -1335,9 +1331,18 @@ function resourceShapeSchemas(): Record<string, Record<string, unknown>> {
     },
     InstalledFormReference: {
       type: "object",
-      required: ["formRef", "packageDigest"],
+      required: ["type", "version", "schemaDigest", "packageDigest"],
       properties: {
-        formRef: ref("FormRef"),
+        type: {
+          type: "string",
+          pattern: "^[a-z][a-z0-9_]{0,63}$",
+        },
+        version: {
+          type: "string",
+          pattern:
+            "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$",
+        },
+        schemaDigest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
         packageDigest: {
           type: "string",
           pattern: "^sha256:[0-9a-f]{64}$",
@@ -1348,7 +1353,7 @@ function resourceShapeSchemas(): Record<string, Record<string, unknown>> {
     FormAvailability: {
       type: "object",
       required: [
-        "identity",
+        "form",
         "definitionKnown",
         "installed",
         "executable",
@@ -1360,7 +1365,7 @@ function resourceShapeSchemas(): Record<string, Record<string, unknown>> {
         "deprecated",
       ],
       properties: {
-        identity: ref("InstalledFormReference"),
+        form: ref("InstalledFormReference"),
         definitionKnown: { type: "boolean" },
         installed: { type: "boolean" },
         executable: { type: "boolean" },
@@ -1372,7 +1377,16 @@ function resourceShapeSchemas(): Record<string, Record<string, unknown>> {
           type: "array",
           uniqueItems: true,
           items: {
-            enum: ["create", "read", "update", "delete", "import", "refresh"],
+            enum: [
+              "create",
+              "read",
+              "update",
+              "delete",
+              "import",
+              "refresh",
+              "sync",
+              "drift",
+            ],
           },
         },
         compatibleAdapterIds: {
@@ -2920,6 +2934,17 @@ function capsuleAndInstallConfigSchemas(): Record<
         id: { type: "string" },
         workspaceId: { type: "string" },
         name: { type: "string" },
+        sourceSelector: {
+          type: "object",
+          required: ["url", "path"],
+          description:
+            "Operator-owned Source coordinate selector. Store/TCS presentation metadata cannot create or override this field.",
+          properties: {
+            url: { type: "string" },
+            path: { type: "string" },
+          },
+          additionalProperties: false,
+        },
         modulePath: { type: "string" },
         lifecycleActions: {
           type: "array",
@@ -5118,22 +5143,6 @@ function backupSchemas(): Record<string, Record<string, unknown>> {
       },
       additionalProperties: false,
     },
-    BackupRestoreTarget: {
-      type: "object",
-      required: [
-        "capsuleId",
-        "environment",
-        "stateGeneration",
-        "stateVersionId",
-      ],
-      properties: {
-        capsuleId: { type: "string" },
-        environment: { type: "string" },
-        stateGeneration: { type: "integer" },
-        stateVersionId: { type: "string" },
-      },
-      additionalProperties: false,
-    },
     BackupRecord: {
       type: "object",
       required: [
@@ -5149,7 +5158,6 @@ function backupSchemas(): Record<string, Record<string, unknown>> {
         workspaceId: { type: "string" },
         capsuleId: { type: "string" },
         environment: { type: "string" },
-        restoreTarget: ref("BackupRestoreTarget"),
         ref: { type: "string" },
         digest: { type: "string" },
         sizeBytes: { type: "integer" },
@@ -5165,24 +5173,6 @@ function backupSchemas(): Record<string, Record<string, unknown>> {
       type: "object",
       required: ["backup"],
       properties: { backup: ref("BackupRecord") },
-      additionalProperties: false,
-    },
-    CreateRestoreRequest: {
-      type: "object",
-      required: ["stateGeneration"],
-      properties: {
-        capsuleId: { type: "string" },
-        environment: { type: "string" },
-        stateGeneration: { type: "integer", minimum: 0 },
-        expectedBackupDigest: { type: "string" },
-        restoreServiceData: { type: "boolean" },
-      },
-      additionalProperties: false,
-    },
-    CreateRestoreResponse: {
-      type: "object",
-      required: ["run"],
-      properties: { run: ref("Run") },
       additionalProperties: false,
     },
     ListBackupsResponse: {

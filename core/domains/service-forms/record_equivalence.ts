@@ -1,4 +1,4 @@
-import { formRefKey } from "takosumi-contract";
+import { formRefKey, formRefOfInstalled } from "takosumi-contract";
 import type { FormDefinitionRecord, FormPackageRecord } from "./records.ts";
 
 export function packageInstallEquivalent(
@@ -44,7 +44,7 @@ export function packageInstallEquivalent(
 function definitionsByKey(definitions: readonly FormDefinitionRecord[]) {
   return new Map(
     definitions.map((definition) => [
-      formRefKey(definition.identity.formRef),
+      formRefKey(formRefOfInstalled(definition.identity)),
       definition,
     ]),
   );

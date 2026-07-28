@@ -107,7 +107,7 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).not.toContain(
       'config.id.startsWith("cfg-built-in-")',
     );
-    expect(newAppViewSource).toContain("config.store?.source");
+    expect(newAppViewSource).toContain("config.sourceSelector");
     expect(newAppViewSource).toContain("installConfigForStoreListing");
     expect(newAppViewSource).not.toContain("const primaryStore = createMemo");
     expect(newAppViewSource).not.toContain(
@@ -207,7 +207,7 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain('createSignal<"store" | "git">(');
   });
 
-  test("the wizard chrome is gone; store [入手] auto-starts the single install action", () => {
+  test("the wizard chrome is gone; store handoffs require the explicit install action", () => {
     // No 選択→設定→確認 step rail — installing feels like an app store, not a
     // deploy console. The flow still stops on real blockers.
     expect(newAppViewSource).toContain("const hasChosenSource = () =>");
@@ -215,16 +215,12 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).not.toContain("addGuideClass");
     expect(newAppViewSource).not.toContain("av-add-guide");
     expect(appViewsCssSource).not.toContain(".av-add-guide");
-    // ?auto=1 (appended by the store's 入手 button) fires submitInstall once
-    // prerequisites settle; validation errors fall back to the visible form.
-    expect(newAppViewSource).toContain(
-      'new URLSearchParams(initialSearch).get("auto") === "1"',
-    );
-    expect(newAppViewSource).toContain("autoInstallAttempted = true;");
-    expect(newAppViewSource).toContain('url.searchParams.delete("auto")');
-    expect(newAppViewSource).toContain("window.history.replaceState(");
-    expect(newAppViewSource).toContain("void submitInstall();");
-    expect(newAppViewSource).toContain("tcsHandoffSettled()");
+    // Catalog metadata may prefill the form, but a URL flag never becomes
+    // installation or apply authority.
+    expect(newAppViewSource).not.toContain("autoInstallRequested");
+    expect(newAppViewSource).not.toContain("autoInstallAttempted");
+    expect(newAppViewSource).not.toContain('url.searchParams.delete("auto")');
+    expect(newAppViewSource).not.toContain("window.history.replaceState(");
   });
 
   test("install-contract inputs (domain / password / initial setup) are never folded away", () => {

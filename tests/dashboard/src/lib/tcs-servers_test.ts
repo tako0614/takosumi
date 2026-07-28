@@ -3,6 +3,7 @@ import {
   addTcsServer,
   getTcsServers,
   removeTcsServer,
+  resolveDefaultStoreUrl,
 } from "../../../../dashboard/src/lib/tcs-servers.ts";
 
 const originalLocalStorage = globalThis.localStorage;
@@ -45,7 +46,17 @@ describe("TCS store server defaults", () => {
   });
 
   test("selects no hosted store without operator configuration", () => {
+    expect(resolveDefaultStoreUrl(undefined)).toBe("");
     expect(getTcsServers()).toEqual([]);
+  });
+
+  test("an operator explicitly configures or clears the default store", () => {
+    expect(resolveDefaultStoreUrl("https://store.example.org/ ")).toBe(
+      "https://store.example.org/",
+    );
+    // Explicitly empty configuration ships with no default store at all.
+    expect(resolveDefaultStoreUrl("")).toBe("");
+    expect(resolveDefaultStoreUrl("   ")).toBe("");
   });
 
   test("still supports opt-in user-added stores", () => {

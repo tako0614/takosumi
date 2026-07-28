@@ -24,14 +24,16 @@ export type PasskeyChallengeIntent = "register" | "authenticate";
 
 /**
  * Compose the opaque challenge key the passkey routes pass to the store. The
- * key binds the challenge to `subject + sessionId + intent` so a register
- * challenge cannot be replayed as an authenticate challenge (or across
- * sessions/subjects).
+ * key binds the challenge to `subject + sessionId + intent + challenge` so a
+ * register challenge cannot be replayed as an authenticate challenge (or
+ * across sessions/subjects), and concurrent ceremonies do not overwrite each
+ * other.
  */
 export function passkeyChallengeKey(input: {
   subject: string;
   sessionId: string | null;
   intent: PasskeyChallengeIntent;
+  challenge: string;
 }): string {
-  return `${input.intent}:${input.subject}:${input.sessionId ?? "anon"}`;
+  return `${input.intent}:${input.subject}:${input.sessionId ?? "anon"}:${input.challenge}`;
 }

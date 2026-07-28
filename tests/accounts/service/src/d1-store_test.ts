@@ -57,6 +57,9 @@ test("D1AccountsStore indexes Capsule OIDC registrations directly", async () => 
   expect((await store.findOidcClientForCapsule("cap_d1"))?.clientId).toBe(
     "oidc_d1",
   );
+  await store.revokeOidcClient("oidc_d1");
+  expect(await store.findOidcClient("oidc_d1")).toBeUndefined();
+  expect(await store.findOidcClientForCapsule("cap_d1")).toBeUndefined();
 });
 
 test("D1AccountsStore resolves a session and its account in one exact bearer query", async () => {

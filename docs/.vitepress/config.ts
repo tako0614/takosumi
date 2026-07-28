@@ -1,65 +1,61 @@
 import { type DefaultTheme, defineConfig } from "vitepress";
 
 const jaNav: DefaultTheme.NavItem[] = [
-  { text: "Software", link: "/" },
-  { text: "Quickstart", link: "/getting-started/quickstart" },
-  { text: "Reference", link: "/reference/model" },
-  { text: "Hosted Cloud", link: "https://app.takosumi.com/docs/" },
-  { text: "Legal", link: "/legal/terms-of-service" },
+  { text: "はじめに", link: "/getting-started/quickstart" },
+  { text: "解説", link: "/concepts/" },
+  { text: "リファレンス", link: "/reference/api" },
+  { text: "Takosumi Cloud", link: "https://app.takosumi.com/docs/" },
 ];
 
 const enNav: DefaultTheme.NavItem[] = [
   { text: "Software", link: "/en/" },
   { text: "Quickstart", link: "/en/getting-started/quickstart" },
-  { text: "Reference", link: "/en/reference/model" },
+  { text: "Concepts", link: "/en/concepts/" },
+  { text: "Reference", link: "/en/reference/api" },
   { text: "Hosted Cloud", link: "https://app.takosumi.com/docs/en/" },
-  // Legal pages are English templates shared with the JA tree (no separate /en/legal).
-  { text: "Legal", link: "/legal/terms-of-service" },
 ];
 
 const jaSidebar: DefaultTheme.SidebarMulti = {
   "/": [
     {
-      text: "Software",
+      text: "はじめに",
       items: [
-        { text: "Takosumi software", link: "/" },
-        {
-          text: "Quickstart",
-          link: "/getting-started/quickstart",
-        },
+        { text: "Takosumi とは", link: "/" },
+        { text: "クイックスタート", link: "/getting-started/quickstart" },
       ],
     },
     {
-      text: "Reference",
+      text: "解説",
       items: [
-        { text: "Model", link: "/reference/model" },
+        { text: "全体像", link: "/concepts/" },
+        { text: "Source と Capsule", link: "/concepts/sources" },
+        { text: "実行モデル", link: "/concepts/run-model" },
+        { text: "状態と出力", link: "/concepts/state-and-outputs" },
+        { text: "認証情報", link: "/concepts/credentials" },
+        { text: "Resource", link: "/concepts/resources" },
+        { text: "Interface", link: "/concepts/interfaces" },
+        { text: "利用量と課金", link: "/concepts/usage-and-billing" },
+        { text: "自分で動かす", link: "/concepts/self-host" },
+        { text: "製品の境界", link: "/concepts/boundaries" },
+      ],
+    },
+    {
+      text: "リファレンス",
+      items: [
         { text: "API", link: "/reference/api" },
-        { text: "Deploy Control API", link: "/reference/deploy-control-api" },
+        { text: "CLI", link: "/reference/cli" },
+        { text: "Service Form host API", link: "/reference/takoform-host" },
+        { text: "設定", link: "/reference/configuration" },
+        {
+          text: "Capsule source options",
+          link: "/reference/capsule-source-options",
+        },
         {
           text: "Operator control MCP",
           link: "/reference/operator-control-mcp",
         },
-        {
-          text: "Execution boundaries",
-          link: "/reference/operator-execution-boundaries",
-        },
-        { text: "Operator", link: "/reference/operator" },
-        { text: "CLI", link: "/reference/cli" },
         { text: "App Handoff", link: "/reference/app-handoff" },
-        {
-          text: "Capsule Source Options",
-          link: "/reference/capsule-source-options",
-        },
-        { text: "Docs contract", link: "/reference/docs-contract" },
         { text: "用語集", link: "/reference/glossary" },
-      ],
-    },
-    {
-      text: "Legal",
-      items: [
-        { text: "Terms", link: "/legal/terms-of-service" },
-        { text: "Privacy", link: "/legal/privacy-policy" },
-        { text: "DPA", link: "/legal/data-processing-agreement" },
       ],
     },
   ],
@@ -78,43 +74,35 @@ const enSidebar: DefaultTheme.SidebarMulti = {
       ],
     },
     {
+      text: "Concepts",
+      items: [
+        { text: "Overview", link: "/en/concepts/" },
+        { text: "Sources and Capsules", link: "/en/concepts/sources" },
+        { text: "Run model", link: "/en/concepts/run-model" },
+        { text: "State and outputs", link: "/en/concepts/state-and-outputs" },
+        { text: "Credentials", link: "/en/concepts/credentials" },
+        { text: "Resources", link: "/en/concepts/resources" },
+        { text: "Interfaces", link: "/en/concepts/interfaces" },
+        { text: "Usage and billing", link: "/en/concepts/usage-and-billing" },
+        { text: "Running it yourself", link: "/en/concepts/self-host" },
+        { text: "Product boundaries", link: "/en/concepts/boundaries" },
+      ],
+    },
+    {
       text: "Reference",
       items: [
-        { text: "Model", link: "/en/reference/model" },
         { text: "API", link: "/en/reference/api" },
+        { text: "CLI", link: "/en/reference/cli" },
         {
-          text: "Deploy Control API",
-          link: "/en/reference/deploy-control-api",
+          text: "Capsule source options",
+          link: "/en/reference/capsule-source-options",
         },
         {
           text: "Operator control MCP",
           link: "/en/reference/operator-control-mcp",
         },
-        {
-          text: "Execution boundaries",
-          link: "/en/reference/operator-execution-boundaries",
-        },
-        {
-          text: "Portable Form host API",
-          link: "/en/reference/portable-form-host-api",
-        },
-        { text: "Operator", link: "/en/reference/operator" },
-        { text: "CLI", link: "/en/reference/cli" },
         { text: "App Handoff", link: "/en/reference/app-handoff" },
-        {
-          text: "Capsule Source Options",
-          link: "/en/reference/capsule-source-options",
-        },
-        { text: "Docs contract", link: "/en/reference/docs-contract" },
         { text: "Glossary", link: "/en/reference/glossary" },
-      ],
-    },
-    {
-      text: "Legal",
-      items: [
-        { text: "Terms", link: "/legal/terms-of-service" },
-        { text: "Privacy", link: "/legal/privacy-policy" },
-        { text: "DPA", link: "/legal/data-processing-agreement" },
       ],
     },
   ],

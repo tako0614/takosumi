@@ -482,11 +482,15 @@ test("openapi request and response components are not generic placeholders", () 
   );
 });
 
-test("restore endpoint descriptor carries a concrete restore request schema", () => {
+test("backup restore is absent from the route inventory and OpenAPI schemas", () => {
   const endpoint = DEPLOY_CONTROL_ACTIVITY_ENDPOINTS.find(
     (item) => item.operationId === "createBackupRestore",
   );
-  assert.equal(endpoint?.openapi.requestSchema, "CreateRestoreRequest");
+  assert.equal(endpoint, undefined);
+  const openapi = createTakosumiOpenApiDocument(ALL_MOUNTED);
+  assert.equal(openapi.components.schemas.BackupRestoreTarget, undefined);
+  assert.equal(openapi.components.schemas.CreateRestoreRequest, undefined);
+  assert.equal(openapi.components.schemas.CreateRestoreResponse, undefined);
 });
 
 test("authoritative Form pin inventory has one token-only concrete descriptor", () => {

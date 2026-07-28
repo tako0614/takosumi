@@ -11,8 +11,11 @@
 
 この DR plan は [Backup and Restore Drills](./backup-restore-drills.md) と
 [Incident Response](./incident-response.md) を実行前提にします。DR では
-Takosumi control/state backup を先に復元し、provider snapshot adapter または Capsule-defined export がある Capsule
-だけ service-data backup をその後に reattach / restore します。generic service-data restore はまだ public promise に含めません。
+selected persistence adapter の verified control/state backup を先に復元し、
+provider snapshot adapter または Capsule-defined export がある Capsule だけ
+service-data backup をその後に reattach / restore します。dashboard/API の
+`BackupRecord` は部分的な control export で importer がないため、DR source
+として扱いません。generic service-data restore も public promise に含めません。
 
 ## Targets
 
@@ -25,7 +28,8 @@ Takosumi control/state backup を先に復元し、provider snapshot adapter ま
 
 RTO / RPO は operator configuration と launch brief が宣言する target です。DR
 simulation で実測し、target を満たせない場合
-は release promotion blocker として扱います。
+は、そのrecovery capabilityを前提にするstate transitionまたはrelease surfaceの
+blockerとして扱います。無関係なroutine artifact releaseは一律に止めません。
 
 ## DR Modes
 
@@ -100,8 +104,10 @@ failover 前:
    - selected persistence/runner adapters が recovery target で利用可能なことを確認する。
    - restore 進行中に live primary storage を変更しない。
 2. control-plane data を restore する。
-   - logical control backup manifest、opaque state/artifact ref inventory、selected ledger
-     adapter の backup に従う。
+   - selected ledger / object-store adapter の verified backup、manifest、
+     state/artifact inventory に従う。
+   - OSS `BackupRecord` export、`state.tar.zst.enc`、または
+     `artifacts.manifest.json` だけを復元可能性の証拠にしない。
    - write を有効化する前に audit chain を verify する。
    - secret 値を露出させずに secret partition の availability を確認する。
 3. Capsule service-data を reattach / restore する。

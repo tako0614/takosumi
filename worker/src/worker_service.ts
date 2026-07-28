@@ -113,6 +113,8 @@ export async function createWorkerServiceApp(
     readonly operatorInstallConfigs?: CreateTakosumiServiceOptions["operatorInstallConfigs"];
     /** Complete host-installed recipe driver registry. */
     readonly credentialRecipeDrivers?: CreateTakosumiServiceOptions["credentialRecipeDrivers"];
+    /** Complete host-installed Source credential driver registry. */
+    readonly sourceCredentialDrivers?: CreateTakosumiServiceOptions["sourceCredentialDrivers"];
     /** Host-installed guided connection setup dispatcher. */
     readonly buildConnectionSetupRequest?: CreateTakosumiServiceOptions["buildConnectionSetupRequest"];
     /** Complete host-installed OAuth helper registry. */
@@ -275,6 +277,9 @@ export async function createWorkerServiceApp(
     credentialRecipeDrivers:
       options.credentialRecipeDrivers ??
       REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipeDrivers,
+    sourceCredentialDrivers:
+      options.sourceCredentialDrivers ??
+      REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.sourceCredentialDrivers,
     buildConnectionSetupRequest:
       options.buildConnectionSetupRequest ??
       REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.buildConnectionSetupRequest,
@@ -326,6 +331,8 @@ export async function createWorkerServiceApp(
     operatorCapabilities,
     resolveResourceShapeActor: resourceShapeActorFromRequest,
     authorizeResourceShapeForceDelete: (input) =>
+      operatorResourceShapeForceDeleteAuthorized(env, input),
+    authorizeResourceShapeApplyRecovery: (input) =>
       operatorResourceShapeForceDeleteAuthorized(env, input),
     opentofuRunner,
     ...(options.runnerExecutors

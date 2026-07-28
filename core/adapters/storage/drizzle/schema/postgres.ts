@@ -599,6 +599,7 @@ export const resourceShapes = pgTable(
     observationLeaseId: text("observation_lease_id"),
     observationClaimedAt: text("observation_claimed_at"),
     lastObservationAttemptAt: text("last_observation_attempt_at"),
+    revision: bigint("revision", { mode: "number" }).notNull().default(0),
   },
   (table) => [
     uniqueIndex("takosumi_resource_shapes_space_kind_name_unique").on(
@@ -801,9 +802,8 @@ export const serviceFormDefinitions = pgTable(
   {
     formRefKey: text("form_ref_key").primaryKey(),
     packageDigest: text("package_digest").notNull(),
-    apiVersion: text("api_version").notNull(),
-    kind: text("kind").notNull(),
-    definitionVersion: text("definition_version").notNull(),
+    type: text("type").notNull(),
+    version: text("version").notNull(),
     schemaDigest: text("schema_digest").notNull(),
     recordJson: json("record_json").notNull(),
     installedAt: text("installed_at").notNull(),
@@ -816,8 +816,8 @@ export const serviceFormDefinitions = pgTable(
     index("takosumi_service_form_definitions_package_idx").on(
       table.packageDigest,
     ),
-    index("takosumi_service_form_definitions_kind_installed_ref_idx").on(
-      table.kind,
+    index("takosumi_service_form_definitions_type_installed_ref_idx").on(
+      table.type,
       table.installedAt,
       table.formRefKey,
     ),

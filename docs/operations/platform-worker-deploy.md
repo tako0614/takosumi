@@ -4,6 +4,19 @@ This runbook covers the OSS Takosumi platform worker. Official Takosumi Cloud
 adds closed handlers and commercial ports in its own wrapper and maintains its
 deployment procedure in `takosumi-cloud/docs/operations/platform-worker.md`.
 
+This page documents the commands the platform worker deploy actually runs.
+A self-hoster applying them against infrastructure they own is exercising their
+own authority; deploying the hosted Takosumi Cloud service is a separate one,
+and its wrapper procedure lives in
+`takosumi-cloud/docs/operations/platform-worker.md`.
+
+The shared deploy rules — clean worktree, owner gate first, build from that
+worktree, prove it on production's own inputs before the irreversible step,
+readback plus one real authenticated request, never blind-retry — are in
+`takos-control/engineering.policy.json` → `deploy`. This surface is
+`state-change` whenever it carries a control-ledger schema change, and
+`reversible` otherwise.
+
 ## Composition
 
 The OSS entry is `deploy/platform/worker.ts`. One operator-managed platform
@@ -20,7 +33,7 @@ An optional signed Takoform Form Registry uses the separate
 [`form-package-installation.md`](form-package-installation.md) procedure; no
 package, trust root, publisher, or activation is implicit in this worker.
 
-## Build and deploy
+## Self-host build and deployment
 
 Build and verify the OSS target from the product root:
 
@@ -28,8 +41,22 @@ Build and verify the OSS target from the product root:
 bun install
 bun run check
 (cd dashboard && bun run build)
+(cd dashboard && bun run assemble:provider-mirror -- \
+  --asset-root "$TAKOSUMI_REVIEWED_PROVIDER_ASSET_ROOT")
 bun run docs:build
 ```
+
+The dashboard build resolves the Store tab's default store from
+`VITE_TAKOSUMI_TCS_STORE_URL`. Unset or empty means no default store for OSS
+and self-hosted builds. An operator may set its own TCS server explicitly; the
+official Takosumi Cloud build is likewise responsible for explicitly injecting
+`https://store.takosumi.com`. Users can still add store servers themselves.
+
+The SPA build is intentionally network-free. A distribution must assemble its
+provider mirror from an operator-supplied directory of already reviewed,
+digest-pinned assets. The materializer fails when any admitted asset is absent
+or mismatched; it never treats the live hosted mirror or a process-global
+temporary cache as a build input.
 
 Before deploying code that requires a newer control-ledger D1 shape, run the
 [Control D1 schema predeploy](control-d1-schema-predeploy.md) gate against the
@@ -37,7 +64,8 @@ same exact source commit. Back up, apply, and read-only verify staging before
 production. A platform Worker deployment must not depend on its first request
 to create or repair the required schema.
 
-Then use the operator-owned Wrangler config:
+For a self-host/operator-owned Cloudflare reference deployment only, the
+operator may use its own Wrangler config:
 
 ```bash
 bun run wrangler -- deploy --dry-run --latest=false \
@@ -45,6 +73,10 @@ bun run wrangler -- deploy --dry-run --latest=false \
 bun run wrangler -- deploy --latest=false \
   --config "$TAKOSUMI_WRANGLER_CONFIG"
 ```
+
+Do not use this block to deploy the official hosted service. Its credentials,
+target binding, lease, idempotency, and authoritative readback belong to whoever runs the deploy, on the machine that
+holds the credential.
 
 Container image reuse, capacity, keepalive, cache, egress, and timeout settings
 are explicit operator policy. A class or binding rename requires a durable
@@ -94,8 +126,35 @@ OpenTofu Outputs.
 
 Downstream OIDC clients are separate from upstream identity providers. Use the
 non-secret `TAKOSUMI_ACCOUNTS_CLIENTS` JSON array when the platform serves more
-than one relying party. A Takos native shell must be a host-specific public
-PKCE client, for example:
+than one relying party.
+
+The Takosumi native shell is a public PKCE client with the exact
+`takosumi://oauth/callback` redirect URI. Register it in that same array:
+
+```json
+[
+  {
+    "clientId": "takosumi-mobile-operator-example",
+    "redirectUris": ["takosumi://oauth/callback"],
+    "tokenEndpointAuthMethod": "none",
+    "allowedScopes": [
+      "openid",
+      "profile",
+      "offline_access",
+      "capsules:read",
+      "capsules:write"
+    ]
+  }
+]
+```
+
+`/.well-known/takosumi` derives and publishes this exact `clientId` from the
+registered public client. There is no separate mobile-client environment
+variable. Zero matching clients leaves `oidcClientId` absent and blocks native
+sign-in; more than one matching client is invalid configuration.
+
+A Takos native shell connecting to this Accounts issuer is a separate,
+host-specific public PKCE client, for example:
 
 ```json
 [

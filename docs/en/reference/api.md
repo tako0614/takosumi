@@ -88,7 +88,7 @@ Resource Shape objects use a Kubernetes-style shape.
     "conditions": [
       {
         "type": "Ready",
-        "status": "True"
+        "status": "true"
       }
     ]
   }
@@ -467,8 +467,8 @@ An authenticated principal can read host state for each exact FormRef:
 GET /v1/form-availability?space={space}&limit={n}&cursor={opaque}
 ```
 
-An exact lookup supplies all of `apiVersion`, `kind`, `definitionVersion`,
-`schemaDigest`, and `packageDigest`. The response reports `definitionKnown`,
+An exact lookup supplies all of `type`, `version`, `schemaDigest`, and
+`packageDigest`. The response reports `definitionKnown`,
 `installed`, `executable`, `executableReason`, `activated`,
 `availableToPrincipal`, `availabilityReason`, `operations`,
 `compatibleAdapterIds`, `eligibleTargetPoolClasses`, and `deprecated`.

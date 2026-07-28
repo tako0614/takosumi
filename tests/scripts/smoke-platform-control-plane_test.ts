@@ -503,40 +503,21 @@ test("platform control-plane smoke labels Git sources as Git OpenTofu Capsules",
   expect(dryRunResult(options).capsuleModule).toBe("git-opentofu-capsule");
 });
 
-test("platform control-plane smoke can include backup restore rehearsal in dry-run", async () => {
-  const options = await resolveOptions(
-    {
-      dryRun: true,
-      backupRestoreRehearsal: true,
-      url: "https://app-staging.takosumi.com",
-      workspace: "ws_test",
-      appName: "takosumi-smoke-test",
-    },
-    {
-      TAKOSUMI_ACCOUNT_SESSION_TOKEN: "session-token",
-    },
-  );
-
-  const result = dryRunResult(options);
-
-  expect(result.steps).toEqual([
-    "providerConnectionNotRequired",
-    "sourceRegistered",
-    "sourceSynced",
-    "scratchInstall",
-    "compatibilityChecked",
-    "plan",
-    "apply",
-    "opentofuApplyVerified",
-    "stateVersionLedgerVerified",
-    "backupRestoreRehearsal",
-    "destroy",
-  ]);
-  expect(result.backupRestoreRehearsal).toMatchObject({
-    backupId: "bkp_dry_run",
-    restoreRunId: "restore_dry_run",
-    restoreTargetSmoke: "passed",
-  });
+test("platform control-plane smoke rejects backup restore rehearsal even in dry-run", async () => {
+  await expect(
+    resolveOptions(
+      {
+        dryRun: true,
+        backupRestoreRehearsal: true,
+        url: "https://app-staging.takosumi.com",
+        workspace: "ws_test",
+        appName: "takosumi-smoke-test",
+      },
+      {
+        TAKOSUMI_ACCOUNT_SESSION_TOKEN: "session-token",
+      },
+    ),
+  ).rejects.toThrow(/no manifest-bound restore importer/);
 });
 
 test("platform control-plane smoke can require release activation evidence", async () => {

@@ -1,11 +1,14 @@
 import {
   formRefKey,
+  formRefOfInstalled,
   installedFormReferenceKey,
   isFormRef,
+  isInstalledFormReference,
   isSha256Digest,
   type FormActivation,
   type FormPackageLifecycleStatus,
   type FormRef,
+  type InstalledFormReference,
   type IsoTimestamp,
   type PageParams,
 } from "takosumi-contract";
@@ -132,6 +135,8 @@ export class FormRegistryService {
               "delete",
               "import",
               "refresh",
+              "sync",
+              "drift",
             ].includes(operation),
         ) ||
         new Set(definition.operations).size !== definition.operations.length
@@ -159,7 +164,7 @@ export class FormRegistryService {
     };
     const definitions = orderedDefinitions.map((definition) => ({
       identity: {
-        formRef: definition.formRef,
+        ...definition.formRef,
         packageDigest: request.expectedPackageDigest,
       },
       displayName: definition.displayName,
@@ -198,21 +203,15 @@ export class FormRegistryService {
    * Reads one retained exact identity without weakening revocation. This is
    * used by observe/delete/backup replay paths, never by new admission.
    */
-  async getRetainedIdentity(identity: {
-    readonly formRef: FormRef;
-    readonly packageDigest: string;
-  }) {
-    if (
-      !isFormRef(identity.formRef) ||
-      !isSha256Digest(identity.packageDigest)
-    ) {
+  async getRetainedIdentity(identity: InstalledFormReference) {
+    if (!isInstalledFormReference(identity)) {
       throw new FormRegistryError(
         "invalid_request",
         "retained identity must be an exact FormRef and package digest",
       );
     }
     const [definition, packageRecord] = await Promise.all([
-      this.#store.getDefinition(identity.formRef),
+      this.#store.getDefinition(formRefOfInstalled(identity)),
       this.#store.getPackage(identity.packageDigest),
     ]);
     if (
@@ -234,10 +233,7 @@ export class FormRegistryService {
    * host without the original reader/verifier fails closed rather than
    * treating a database row as proof that immutable bytes still exist.
    */
-  async verifyRetainedIdentity(identity: {
-    readonly formRef: FormRef;
-    readonly packageDigest: string;
-  }) {
+  async verifyRetainedIdentity(identity: InstalledFormReference) {
     const retained = await this.getRetainedIdentity(identity);
     if (!this.#artifactReader || !this.#verifier) {
       throw new FormRegistryError(
@@ -263,7 +259,8 @@ export class FormRegistryService {
       verified.packageDigest !== identity.packageDigest ||
       !verified.definitions.some(
         (definition) =>
-          formRefKey(definition.formRef) === formRefKey(identity.formRef),
+          formRefKey(definition.formRef) ===
+          formRefKey(formRefOfInstalled(identity)),
       )
     ) {
       throw new FormRegistryError(
@@ -335,7 +332,7 @@ export class FormRegistryService {
   async createActivation(request: CreateFormActivationRequest) {
     validateActivationRequest(request);
     const definition = await this.#store.getDefinition(
-      request.identity.formRef,
+      formRefOfInstalled(request.identity),
     );
     if (
       definition === undefined ||
@@ -458,8 +455,7 @@ function validateActivationRequest(request: CreateFormActivationRequest): void {
   if (
     request.id.trim() === "" ||
     request.actorId.trim() === "" ||
-    !isFormRef(request.identity.formRef) ||
-    !isSha256Digest(request.identity.packageDigest)
+    !isInstalledFormReference(request.identity)
   ) {
     throw new FormRegistryError(
       "invalid_request",

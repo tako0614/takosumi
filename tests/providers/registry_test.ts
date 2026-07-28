@@ -25,7 +25,7 @@ test("every guided provider setup record has a unique id and provider address", 
   }
 });
 
-test("guided setup lookup resolves fully-qualified, short, and local provider forms", () => {
+test("guided setup lookup requires an exact fully-qualified or namespace/type source", () => {
   expect(
     guidedProviderSetupForAddress("registry.opentofu.org/cloudflare/cloudflare")
       ?.id,
@@ -33,7 +33,11 @@ test("guided setup lookup resolves fully-qualified, short, and local provider fo
   expect(guidedProviderSetupForAddress("cloudflare/cloudflare")?.id).toBe(
     "cloudflare",
   );
-  expect(guidedProviderSetupForAddress("cloudflare")?.id).toBe("cloudflare");
+  expect(guidedProviderSetupForAddress("cloudflare")).toBeUndefined();
+  expect(
+    guidedProviderSetupForAddress("registry.example.test/evil/cloudflare"),
+  ).toBeUndefined();
+  expect(guidedProviderSetupForAddress("evil/cloudflare")).toBeUndefined();
   expect(guidedProviderSetupForAddress("hashicorp/aws")?.id).toBe("aws");
   expect(guidedProviderSetupForAddress("hashicorp/google-beta")?.id).toBe(
     "gcp",

@@ -46,7 +46,8 @@ export function createWebhookReleaseActivator(
   const pollIntervalMs = Math.max(1, options.pollIntervalMs ?? 3000);
   const timeoutMs = Math.max(pollIntervalMs, options.timeoutMs ?? 45 * 60_000);
   return {
-    async activate(input) {
+    async activate(input, control) {
+      throwIfAborted(control?.signal);
       const operatorCommands = input.commands.filter(
         (command) => command.executor === "operator",
       );
@@ -81,6 +82,7 @@ export function createWebhookReleaseActivator(
             },
           ),
         ),
+        ...(control?.signal ? { signal: control.signal } : {}),
       });
       if (!response.ok) {
         const detail = await releaseActivatorFailureDetail(response);
@@ -102,6 +104,7 @@ export function createWebhookReleaseActivator(
           job,
           pollIntervalMs,
           timeoutMs,
+          signal: control?.signal,
         });
       }
       return result;
@@ -115,7 +118,8 @@ export function createCompositeReleaseActivator(options: {
 }): ReleaseActivator | undefined {
   if (!options.runner && !options.operator) return undefined;
   return {
-    async activate(input) {
+    async activate(input, control) {
+      throwIfAborted(control?.signal);
       if (input.commands.length === 0) return { status: "skipped" };
       const runnerCommands = input.commands.filter(
         (command) => command.executor !== "operator",
@@ -126,17 +130,22 @@ export function createCompositeReleaseActivator(options: {
       const runnerResult =
         runnerCommands.length > 0
           ? options.runner
-            ? await options.runner.activate({
-                ...input,
-                commands: runnerCommands,
-              })
+            ? await options.runner.activate(
+                {
+                  ...input,
+                  commands: runnerCommands,
+                },
+                control,
+              )
             : missingReleaseActivatorResult("runner", runnerCommands.length)
           : undefined;
+      throwIfAborted(control?.signal);
       const operatorResult =
         operatorCommands.length > 0
           ? options.operator
             ? await options.operator.activate(
                 operatorActivationInput(input, operatorCommands),
+                control,
               )
             : missingReleaseActivatorResult("operator", operatorCommands.length)
           : undefined;
@@ -182,7 +191,8 @@ export function createRunnerReleaseActivator(
 ): ReleaseActivator | undefined {
   if (typeof runner.release !== "function") return undefined;
   return {
-    async activate(input) {
+    async activate(input, control) {
+      throwIfAborted(control?.signal);
       if (input.commands.length === 0) return { status: "skipped" };
       const operatorCommands = input.commands.filter(
         (command) => command.executor === "operator",
@@ -208,18 +218,21 @@ export function createRunnerReleaseActivator(
         };
       }
       const workspaceId = input.applyRun.workspaceId;
-      const result = await runner.release!({
-        runId: releaseCommandRunId(input.applyRun.id),
-        commands: input.commands,
-        sourceSnapshot: input.sourceSnapshot,
-        nonSensitiveOutputs: input.nonSensitiveOutputs,
-        providerConfigurations: input.providerConfigurations,
-        ...(input.credentials ? { credentials: input.credentials } : {}),
-        applyRunId: input.applyRun.id,
-        workspaceId,
-        capsuleId: input.capsule.id,
-        stateVersionId: input.stateVersion.id,
-      });
+      const result = await runner.release!(
+        {
+          runId: releaseCommandRunId(input.applyRun.id),
+          commands: input.commands,
+          sourceSnapshot: input.sourceSnapshot,
+          nonSensitiveOutputs: input.nonSensitiveOutputs,
+          providerConfigurations: input.providerConfigurations,
+          ...(input.credentials ? { credentials: input.credentials } : {}),
+          applyRunId: input.applyRun.id,
+          workspaceId,
+          capsuleId: input.capsule.id,
+          stateVersionId: input.stateVersion.id,
+        },
+        control,
+      );
       const metadata: Readonly<Record<string, JsonValue>> = {
         releaseRunId: result.runId,
         commandCount: result.commandCount,
@@ -423,11 +436,13 @@ async function pollReleaseActivatorJob(input: {
   readonly job: ReleaseActivatorJobReference;
   readonly pollIntervalMs: number;
   readonly timeoutMs: number;
+  readonly signal?: AbortSignal;
 }): Promise<ReleaseActivationResult> {
   const deadline = Date.now() + input.timeoutMs;
   const fetcher = input.fetcher;
   while (Date.now() <= deadline) {
-    await sleep(input.pollIntervalMs);
+    await sleep(input.pollIntervalMs, input.signal);
+    throwIfAborted(input.signal);
     const response = await fetcher(
       input.job.statusUrl ?? statusUrlForJob(input.endpoint, input.job.jobId),
       {
@@ -436,6 +451,7 @@ async function pollReleaseActivatorJob(input: {
           accept: "application/json",
           authorization: `Bearer ${input.token}`,
         },
+        ...(input.signal ? { signal: input.signal } : {}),
       },
     );
     if (!response.ok) {
@@ -499,8 +515,29 @@ function statusUrlForJob(endpoint: string, jobId: string): string {
   return url.toString();
 }
 
-async function sleep(ms: number): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, ms));
+async function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  throwIfAborted(signal);
+  await new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = (): void => {
+      clearTimeout(timeout);
+      reject(abortReason(signal));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw abortReason(signal);
+}
+
+function abortReason(signal?: AbortSignal): Error {
+  return signal?.reason instanceof Error
+    ? signal.reason
+    : new DOMException("Release activation aborted", "AbortError");
 }
 
 function isReleaseActivationStatus(

@@ -105,6 +105,8 @@ export interface ReleaseActivationSpec {
 
 export interface CommandContext {
   readonly env: Record<string, string>;
+  /** Cooperative cancellation propagated from the control-plane run fence. */
+  readonly signal?: AbortSignal;
   readonly credentialManifest?: import("../../contract/credential-recipes.ts").RunCredentialRecipeManifest;
   readonly credentialFiles?: readonly ProviderCredentialFile[];
   readonly redactionValues?: readonly string[];

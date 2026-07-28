@@ -38,6 +38,6 @@ script, binary, or executable content. The structural
 provider selection field.
 
 Repository tests prove the admission evaluator and host runner. A specific Form
-is not GA-approved until release-owned evidence for its exact schema digest is
-available and both host and provider proofs pass. This remaining release
-evidence cannot be synthesized from the legacy ten-kind compatibility set.
+is not admitted as a standard until evidence for its exact schema digest is
+available and both host and provider proofs pass. This evidence cannot be
+synthesized from the legacy ten-kind compatibility set.

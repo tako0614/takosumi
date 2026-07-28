@@ -99,15 +99,16 @@ import { runSourceBuild } from "./source_build.ts";
 export async function runPlan(
   runId: string,
   request: unknown,
+  signal?: AbortSignal,
 ): Promise<JsonRecord> {
   const generatedRoot = parseGeneratedRoot(request);
   if (generatedRoot) {
-    return await runGeneratedRootPlan(runId, request, generatedRoot);
+    return await runGeneratedRootPlan(runId, request, generatedRoot, signal);
   }
   if (parseOperatorModule(request)) {
     throw new Error("operatorModule requires a generated root");
   }
-  return await runDirectRootPlan(runId, request);
+  return await runDirectRootPlan(runId, request, signal);
 }
 
 // Generated-root path: used only when explicit provider alias/configuration
@@ -117,6 +118,7 @@ export async function runGeneratedRootPlan(
   runId: string,
   request: unknown,
   generatedRoot: GeneratedRoot,
+  signal?: AbortSignal,
 ): Promise<JsonRecord> {
   const operation = parseOperation(request);
   const refreshOnly = parseRefreshOnly(request);
@@ -127,7 +129,11 @@ export async function runGeneratedRootPlan(
   const outputAllowlist = parseOutputAllowlist(request);
   const operatorModule = parseOperatorModule(request);
   const scopeSelectors = parsePlanScopeSelectors(request);
-  const commandContext = commandContextFromRequest(request, runnerProfile);
+  const commandContext = commandContextFromRequest(
+    request,
+    runnerProfile,
+    signal,
+  );
 
   const workspace = await prepareGeneratedRootWorkspace(runId);
   let sourceCommit: string | undefined;
@@ -153,6 +159,7 @@ export async function runGeneratedRootPlan(
       ...(commandContext.timeoutMs
         ? { timeoutMs: commandContext.timeoutMs }
         : {}),
+      ...(commandContext.signal ? { signal: commandContext.signal } : {}),
     });
     const moduleDir = resolveModulePath(
       workspace.sourceRoot,
@@ -230,6 +237,7 @@ export async function runGeneratedRootPlan(
 export async function runDirectRootPlan(
   runId: string,
   request: unknown,
+  signal?: AbortSignal,
 ): Promise<JsonRecord> {
   const operation = parseOperation(request);
   const refreshOnly = parseRefreshOnly(request);
@@ -242,7 +250,11 @@ export async function runDirectRootPlan(
   const runnerProfile = parseRunnerProfile(request);
   const outputAllowlist = parseOutputAllowlist(request);
   const scopeSelectors = parsePlanScopeSelectors(request);
-  const commandContext = commandContextFromRequest(request, runnerProfile);
+  const commandContext = commandContextFromRequest(
+    request,
+    runnerProfile,
+    signal,
+  );
   const workspace = workspaceForRun(runId);
   await mkdir(workspace.root, { recursive: true });
   await ensureSourceAvailable(source, workspace.sourceRoot);
@@ -250,6 +262,7 @@ export async function runDirectRootPlan(
     ...(commandContext.timeoutMs
       ? { timeoutMs: commandContext.timeoutMs }
       : {}),
+    ...(commandContext.signal ? { signal: commandContext.signal } : {}),
   });
   const moduleDir = resolveModulePath(workspace.sourceRoot, source.modulePath);
   await assertDirectory(moduleDir, "source module directory");
@@ -472,12 +485,17 @@ export async function runReviewedPlanApply(
   runId: string,
   action: "apply" | "destroy",
   request: unknown,
+  signal?: AbortSignal,
 ): Promise<JsonRecord> {
   const generatedRoot = parseGeneratedRoot(request);
   const operatorModule = parseOperatorModule(request);
   const sourceBuild = parseSourceBuild(request);
   const runnerProfile = parseRunnerProfile(request);
-  const commandContext = commandContextFromRequest(request, runnerProfile);
+  const commandContext = commandContextFromRequest(
+    request,
+    runnerProfile,
+    signal,
+  );
   const workspace = workspaceForRun(runId);
   const planArtifact = parsePlanArtifact(request);
   assertNoLegacyArtifactDispatch(request);
@@ -626,6 +644,7 @@ export async function restoreGeneratedRootApplyWorkspace(
     await ensureSourceAvailable(source, workspace.sourceRoot);
     await runSourceBuild(sourceBuild, workspace.sourceRoot, {
       ...(context.timeoutMs ? { timeoutMs: context.timeoutMs } : {}),
+      ...(context.signal ? { signal: context.signal } : {}),
     });
     const moduleDir = resolveModulePath(
       workspace.sourceRoot,
@@ -661,6 +680,7 @@ export async function restoreDirectRootApplyWorkspace(
   await ensureSourceAvailable(source, workspace.sourceRoot);
   await runSourceBuild(sourceBuild, workspace.sourceRoot, {
     ...(context.timeoutMs ? { timeoutMs: context.timeoutMs } : {}),
+    ...(context.signal ? { signal: context.signal } : {}),
   });
   const moduleDir = resolveModulePath(workspace.sourceRoot, source.modulePath);
   await assertDirectory(moduleDir, "source module directory");

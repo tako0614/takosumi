@@ -60,6 +60,17 @@ export class StorageMigrationCatalogError extends Error {
   }
 }
 
+export class StorageMigrationPendingError extends Error {
+  constructor(readonly migrationIds: readonly string[]) {
+    super(
+      `storage schema is not current; apply pending migrations before startup: ${
+        migrationIds.join(", ")
+      }`,
+    );
+    this.name = "StorageMigrationPendingError";
+  }
+}
+
 export class StorageMigrationDownNotSupportedError extends Error {
   constructor(readonly migrationId: string) {
     super(
@@ -114,17 +125,26 @@ export class StorageMigrationRunner {
 
   async plan(): Promise<StorageMigrationPlan> {
     const applied = await this.listAppliedMigrations();
-    const checksums = await checksumCatalog(this.#migrations);
-    validateAppliedCatalog(applied, this.#migrations);
-    validateAppliedChecksums(applied, checksums);
-    const appliedIds = new Set(applied.map((migration) => migration.id));
-    const pending = this.#migrations
-      .filter((migration) => !appliedIds.has(migration.id))
-      .map((migration) => ({
-        migration,
-        checksum: checksums.get(migration.id) ?? "",
-      }));
-    return { applied, pending };
+    return await this.#planForApplied(applied);
+  }
+
+  /**
+   * Read-only startup verification for an already-migrated database.
+   *
+   * Unlike {@link plan}, this does not create or alter the migration ledger.
+   * A missing ledger therefore fails through the database query instead of
+   * silently turning application startup into a schema mutation. Pending
+   * migrations, catalog drift, and checksum drift all reject startup.
+   */
+  async verifyCurrent(): Promise<StorageMigrationPlan> {
+    const applied = await readAppliedMigrations(this.#client);
+    const plan = await this.#planForApplied(applied);
+    if (plan.pending.length > 0) {
+      throw new StorageMigrationPendingError(
+        plan.pending.map((entry) => entry.migration.id),
+      );
+    }
+    return plan;
   }
 
   async applyPending(
@@ -252,6 +272,22 @@ export class StorageMigrationRunner {
     fn: (transaction: SqlTransaction) => T | Promise<T>,
   ): Promise<T> {
     return await this.#client.transaction(fn);
+  }
+
+  async #planForApplied(
+    applied: readonly AppliedStorageMigration[],
+  ): Promise<StorageMigrationPlan> {
+    const checksums = await checksumCatalog(this.#migrations);
+    validateAppliedCatalog(applied, this.#migrations);
+    validateAppliedChecksums(applied, checksums);
+    const appliedIds = new Set(applied.map((migration) => migration.id));
+    const pending = this.#migrations
+      .filter((migration) => !appliedIds.has(migration.id))
+      .map((migration) => ({
+        migration,
+        checksum: checksums.get(migration.id) ?? "",
+      }));
+    return { applied, pending };
   }
 }
 

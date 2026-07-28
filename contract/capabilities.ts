@@ -1,3 +1,4 @@
+import { portableTypeForShapeKind } from "./form-host-interoperability.ts";
 import type { FormAvailability } from "./service-forms.ts";
 
 export const TAKOSUMI_API_VERSION = "takosumi.dev/v1alpha1" as const;
@@ -362,7 +363,8 @@ function mergeResourceCapabilities(
         kind,
         formAvailability.some(
           (form) =>
-            form.identity.formRef.kind === kind && form.availableToPrincipal,
+            form.form.type === portableTypeForShapeKind(kind) &&
+            form.availableToPrincipal,
         ),
       ]),
   );

@@ -41,6 +41,7 @@ import {
   buildGitHttpsTokenConnection,
   buildGitSshKeyConnection,
 } from "./git/setup.ts";
+import { REFERENCE_SOURCE_CREDENTIAL_DRIVERS } from "./git/source-credential-driver.ts";
 import { buildGenericEnvConnection } from "./generic-env-provider/setup.ts";
 import {
   buildGoogleServiceAccountJsonConnection,
@@ -158,12 +159,11 @@ const BY_ADDRESS = new Map<string, GuidedProviderSetup>();
 for (const provider of GUIDED_PROVIDER_SETUPS) {
   for (const address of provider.providerAddresses) {
     BY_ADDRESS.set(address, provider);
-    // Also index the short `<namespace>/<name>` and bare local-name forms so a
-    // template's `cloudflare/cloudflare` or `cloudflare` resolves the same record.
+    // A short `<namespace>/<name>` remains an exact identity. Bare local names
+    // are intentionally not indexed: `cloudflare` alone cannot distinguish an
+    // official source from an attacker-controlled registry namespace.
     const short = address.replace(`${OPENTOFU}/`, "");
     BY_ADDRESS.set(short, provider);
-    const local = short.split("/").pop();
-    if (local) BY_ADDRESS.set(local, provider);
   }
 }
 
@@ -171,7 +171,7 @@ for (const provider of GUIDED_PROVIDER_SETUPS) {
 export function guidedProviderSetupForAddress(
   address: string,
 ): GuidedProviderSetup | undefined {
-  return BY_ADDRESS.get(address) ?? BY_ADDRESS.get(address.split("/").pop()!);
+  return BY_ADDRESS.get(address);
 }
 
 /**
@@ -388,12 +388,15 @@ export const REFERENCE_INSTALLED_CREDENTIAL_RECIPES =
   );
 
 /**
- * Complete Credential Recipe contribution selected by the shipped reference
- * platform compositions. Spreading this object into `createTakosumiService`
- * is an explicit host decision, not a Core default or provider allowlist.
+ * Complete reference provider contribution selected by the shipped platform
+ * compositions. It includes Provider Credential Recipe drivers, Source
+ * credential drivers, and guided setup. Spreading this object into
+ * `createTakosumiService` is an explicit host decision, not a Core default or
+ * provider allowlist.
  */
 export const REFERENCE_CREDENTIAL_RECIPE_COMPOSITION = Object.freeze({
   credentialRecipes: REFERENCE_INSTALLED_CREDENTIAL_RECIPES,
   credentialRecipeDrivers: REFERENCE_CREDENTIAL_RECIPE_DRIVERS,
+  sourceCredentialDrivers: REFERENCE_SOURCE_CREDENTIAL_DRIVERS,
   buildConnectionSetupRequest: buildGuidedConnectionRequest,
 });

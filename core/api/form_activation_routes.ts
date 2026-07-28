@@ -229,12 +229,9 @@ function installedIdentity(value: unknown): InstalledFormReference {
     throw invalid("identity must be an exact installed FormRef");
   }
   return {
-    formRef: {
-      apiVersion: value.formRef.apiVersion,
-      kind: value.formRef.kind,
-      definitionVersion: value.formRef.definitionVersion,
-      schemaDigest: value.formRef.schemaDigest,
-    },
+    type: value.type,
+    version: value.version,
+    schemaDigest: value.schemaDigest,
     packageDigest: value.packageDigest,
   };
 }

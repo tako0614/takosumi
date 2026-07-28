@@ -79,6 +79,71 @@ test("dashboard documents keep inline scripts blocked while allowing the configu
   expect(csp.match(/script-src[^;]*/u)?.[0]).not.toContain("'unsafe-inline'");
 });
 
+test("hosted docs allow exactly their own inline scripts by hash, never unsafe-inline", async () => {
+  const appearance = `(()=>{const e=localStorage.getItem("vitepress-theme-appearance")})();`;
+  const hashMap = `window.__VP_HASH_MAP__=JSON.parse("{}")`;
+  const html =
+    `<!doctype html><html><head>` +
+    `<script>${appearance}</script>` +
+    `<script>${hashMap}</script>` +
+    `<script src="/docs/assets/app.js"></script>` +
+    `</head><body></body></html>`;
+  const response = await createCloudflareWorker().fetch(
+    new Request("https://app.example.test/docs/"),
+    env({
+      ASSETS: {
+        fetch: () =>
+          Promise.resolve(
+            new Response(html, {
+              headers: { "content-type": "text/html; charset=utf-8" },
+            }),
+          ),
+      },
+    }),
+  );
+
+  expect(response.status).toBe(200);
+  expect(await response.text()).toBe(html);
+  const scriptSrc =
+    response.headers.get("content-security-policy")?.match(/script-src[^;]*/u)?.[0] ??
+    "";
+  // Every inline script the document actually ships is allowed by its exact
+  // digest, so the docs boot; nothing else is.
+  for (const source of [appearance, hashMap]) {
+    const digest = await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(source),
+    );
+    let binary = "";
+    for (const byte of new Uint8Array(digest)) binary += String.fromCharCode(byte);
+    expect(scriptSrc).toContain(`'sha256-${btoa(binary)}'`);
+  }
+  expect(scriptSrc).not.toContain("'unsafe-inline'");
+  expect(scriptSrc).toContain("'self'");
+  expect(scriptSrc).toContain("https://static.cloudflareinsights.com");
+});
+
+test("a docs document with no inline script keeps the unmodified dashboard policy", async () => {
+  const response = await createCloudflareWorker().fetch(
+    new Request("https://app.example.test/docs/endpoints.html"),
+    env({
+      ASSETS: {
+        fetch: () =>
+          Promise.resolve(
+            new Response("<!doctype html><html><body>docs</body></html>", {
+              headers: { "content-type": "text/html; charset=utf-8" },
+            }),
+          ),
+      },
+    }),
+  );
+
+  const scriptSrc =
+    response.headers.get("content-security-policy")?.match(/script-src[^;]*/u)?.[0] ??
+    "";
+  expect(scriptSrc).toBe("script-src 'self' https://static.cloudflareinsights.com");
+});
+
 test("login allowlist and upstream discovery stay provider-neutral", () => {
   expect(
     parseLoginEmailAllowlist(

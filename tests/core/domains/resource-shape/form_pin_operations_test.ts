@@ -20,13 +20,12 @@ import type { SpaceId } from "../../../../core/shared/ids.ts";
 const NOW = "2026-07-16T12:00:00.000Z";
 const SPACE = "ws_form_pin" as SpaceId;
 const FORM_REF: FormRef = {
-  apiVersion: "forms.takoform.com/v1alpha1",
-  kind: "ObjectBucket",
-  definitionVersion: "1.0.0",
+  type: "object_bucket",
+  version: "1.0.0",
   schemaDigest: `sha256:${"a".repeat(64)}`,
 };
 const IDENTITY: InstalledFormReference = {
-  formRef: FORM_REF,
+  ...FORM_REF,
   packageDigest: `sha256:${"b".repeat(64)}`,
 };
 

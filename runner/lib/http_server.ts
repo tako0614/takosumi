@@ -174,10 +174,15 @@ export async function handleRunnerRequest(request: Request): Promise<Response> {
           : action === "backup"
             ? await runBackup(runId, body.request)
             : action === "release"
-              ? await runRelease(runId, body.request)
+              ? await runRelease(runId, body.request, request.signal)
               : action === "plan"
-                ? await runPlan(runId, body.request)
-                : await runReviewedPlanApply(runId, action, body.request);
+                ? await runPlan(runId, body.request, request.signal)
+                : await runReviewedPlanApply(
+                    runId,
+                    action,
+                    body.request,
+                    request.signal,
+                  );
       return Response.json(result, {
         status: result.exitCode === 0 ? 200 : 500,
       });

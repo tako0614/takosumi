@@ -16,17 +16,111 @@ takosumi logs   <run-id>
 
 Takosumi Cloud を使う場合の hosted endpoint は `https://app.takosumi.com` です。
 
-CLI は OpenTofu を直接実行しません。通常の作成フローは dashboard の Git URL install で
-Source / Capsule / Run を作り、Run の source identity として Git commit / ref / path を固定します。実行は runner sandbox で行い、
-credential は ProviderConnection と CredentialRecipe から Run 実行時だけ env/file として注入されます。
+CLI は OpenTofu を直接実行しません。通常の作成フローは dashboard の Git URL install で、
+ここで Source / Capsule / Run を作ります。Run の source identity として Git commit / ref /
+path を固定し、実行は runner sandbox で行います。credential は ProviderConnection と
+CredentialRecipe から、Run の実行中だけ env/file として注入されます。
 `takosumi deploy` / `takosumi plan` のローカルアップロード経路は廃止済みです。
 
-## Platform readiness contributions
+## トークンを発行する
+
+ほかのページが使えと書いている `TAKOSUMI_DEPLOY_CONTROL_TOKEN` は、ここで作ります。
+
+```bash
+takosumi accounts tokens create \
+  --name my-cli \
+  --scope write \
+  --accounts-url "$TAKOSUMI_ACCOUNTS_URL" \
+  --token "$TAKOSUMI_ACCOUNTS_SESSION_BEARER"
+```
+
+| オプション | 意味 |
+| --- | --- |
+| `--name` | 見分けるための名前 |
+| `--scope` | `read` / `write` / `admin` |
+| `--expires-at` | 失効日時 (ISO 8601) |
+| `--accounts-url` | Accounts の URL。環境変数は `TAKOSUMI_ACCOUNTS_URL` |
+| `--token` | **Accounts のセッション bearer** (`sess_...`) |
+| `--json` | JSON で出力する |
+
+`accounts` 系の `--token` に渡すのは Accounts のセッション bearer であって、発行
+された token ではありません。ここだけ他のコマンドと渡すものが違います。
+
+**発行された token 文字列は作成時に 1 度しか返りません。** 一覧に出るのは名前、
+接頭辞、scope、作成日時などのメタ情報だけです。失った場合は取り出せないので、
+新しく作って古いものを失効させます。
+
+```bash
+takosumi accounts tokens list   --accounts-url "$TAKOSUMI_ACCOUNTS_URL" --token "$SESSION"
+takosumi accounts tokens revoke pat_example --accounts-url "$TAKOSUMI_ACCOUNTS_URL" --token "$SESSION"
+```
+
+`admin` は自分では付けられません。operator が発行したものだけが持ちます。
+
+## self-host のセットアップ
+
+自分の環境で Accounts を動かす場合のコマンドです。すでに動いている endpoint を
+使うだけなら不要です。
+
+### スキーマを適用する
+
+PostgreSQL を使う場合。
+
+```bash
+takosumi accounts migrate --database-url "$TAKOSUMI_ACCOUNTS_DATABASE_URL"
+```
+
+`--dry-run` を付けると、適用せずに何が実行されるかだけを表示します。接続先は
+`TAKOSUMI_ACCOUNTS_DATABASE_URL` からも読みます。
+
+Cloudflare D1 を使う場合は別のコマンドです。保留中のマイグレーションごとに
+`bunx wrangler d1 execute` を呼び、適用済みの版を `takosumi_accounts_schema_migrations`
+に記録します。
+
+```bash
+takosumi accounts migrate-d1 --database-id takosumi-accounts --remote
+```
+
+| オプション | 意味 |
+| --- | --- |
+| `--database-id` | D1 のデータベース名または binding 名 |
+| `--wrangler-config` | 別のチェックアウトから実行するときの wrangler 設定 |
+| `--account-id` | Cloudflare のアカウント ID (既定と違う場合に必要) |
+| `--remote` / `--local` | 管理されている D1 か、手元の miniflare か。既定は `--remote` |
+| `--env` | wrangler に渡す `--env` プロファイル |
+
+初回デプロイ前に動作を確かめるときは `--local` を使います。
+
+### 初期データを入れる
+
+```bash
+takosumi accounts seed \
+  --issuer https://accounts.example.com \
+  --subject tsub_example \
+  --client-id example-client \
+  --redirect-uri https://app.example.com/callback
+```
+
+### 起動する
+
+```bash
+takosumi accounts serve \
+  --issuer https://accounts.example.com \
+  --hostname 0.0.0.0 --port 8080 \
+  --database-url "$TAKOSUMI_ACCOUNTS_DATABASE_URL"
+```
+
+上流の ID プロバイダや passkey を使う場合は、`--upstream-providers` (JSON 配列)、
+`--passkey-rp-id`、`--passkey-rp-name`、`--passkey-origin` などを併せて指定します。
+手元の確認用に 1 つだけセッションを用意したい場合は `--dev-session-id sess_...` を
+使います。**本番では使わないでください。**
+
+## Platform readiness の contribution を追加する
 
 `takosumi launch-readiness template` は OSS/Operator に共通する baseline を生成します。
-hosted service や別の edition が追加の運用証跡を要求する場合は、owner 側が versioned
-`PlatformReadinessContribution` JSON を管理し、template 生成時に
-`--contribution-file <path>` で選択します。
+hosted service や別の edition が追加の運用証跡を要求する場合は、owner 側が versioned な
+`PlatformReadinessContribution` JSON を管理します。template を生成するときに
+`--contribution-file <path>` で選びます。
 
 ```bash
 takosumi launch-readiness template \
@@ -36,27 +130,29 @@ takosumi launch-readiness template \
 takosumi launch-readiness validate --file readiness.private.json
 ```
 
-生成される `takosumi.platform-readiness@v2` document は contribution の `id` / `version` /
-`capability` と追加 requirement / evidence schema を埋め込みます。そのため validate と
-public-summary は provider 固有コードや外部 registry lookup を使わず、その document だけで
-安全側に停止する形で検証できます。別 version の contribution は同じ readiness profile として暗黙に
-扱いません。旧 baseline ID は validate 時に二重解釈せず、明示的な
-`launch-readiness migrate-final-model` で一度だけ更新します。
+生成される `takosumi.platform-readiness@v2` document には、contribution の `id` /
+`version` / `capability` が埋め込まれます。追加の requirement / evidence schema も同じ
+document に入ります。そのため validate と public-summary は、その document だけで
+検証でき、根拠が足りなければ安全側に停止します。
+provider 固有のコードや外部 registry の lookup は使いません。contribution の version が
+違えば、別の readiness profile として扱います。旧 baseline ID は validate 時に二重解釈せず、
+明示的な `launch-readiness migrate-final-model` で一度だけ更新します。
 
-任意の collector DSL は持ちません。contribution が collection planning を補助する場合は、
-contribution 自身が定義した evidence type を既存の固定 class
-(`browser-user-e2e` / `external-provider` / `operator-review` /
-`live-probe-sync` / `operation-drill` / `release-provenance`) へ割り当てる
-`collectionClassHints` だけを使えます。hint を省略した extension evidence は validation
-上は有効なまま、collection planning では uncategorized になります。
-validate の `takosumi.platform-readiness-report@v2` は composed definition の
-`requiredDomainIds` / `requiredRehearsalStepIds` も返します。進捗集計側は OSS 固定 ID
-ではなくこの配列を使うため、Operator / Cloud contribution を含む total と complete
-件数を正確に計算できます。
+contribution が collection planning を補助するときに使えるのは `collectionClassHints`
+だけです。これは contribution 自身が定義した evidence type を、既存の固定 class へ
+割り当てる hint です。固定 class は `browser-user-e2e` / `external-provider` /
+`operator-review` / `live-probe-sync` / `operation-drill` / `release-provenance` の
+6 つです。hint を省略した extension evidence は、validation 上は有効なまま
+collection planning では uncategorized になります。
 
-## Connections
+validate が返す `takosumi.platform-readiness-report@v2` には、組み合わせた定義の
+`requiredDomainIds` / `requiredRehearsalStepIds` も含まれます。進捗を集計する側は
+OSS 固定の ID ではなくこの配列を使います。そうすることで、Operator / Cloud の
+contribution を含めた total と complete の件数を正確に数えられます。
 
-Provider credential の値はファイルから読み込み、表示しません。
+## ProviderConnection を登録する
+
+Provider credential の値はファイルから読み込み、画面には表示しません。
 
 ```bash
 takosumi connections create \
@@ -71,15 +167,16 @@ takosumi connections test conn_...
 takosumi connections revoke conn_...
 ```
 
-Compatibility API は operator が extension capability として明示的に構成します。CLI の
-Provider Connection surface は特定 Gateway や provider family を暗黙に選びません。
+Compatibility API は、operator が extension capability として明示的に構成します。CLI から
+作る ProviderConnection でも、対象の provider は `--provider` で明示します。
 
-## Resource Shape
+## Resource Shape を操作する
 
-Resource Shape flow は、別の sync registry を持たず、Takosumi に保存された Resource / TargetPool /
-SpacePolicy 宣言と明示的な reconcile operation をそのまま操作します。write request は non-secret
-JSON object を file から読みます。通常出力は Resource の phase、Target、Run id などの要約だけで、
-request body や Output 値を表示しません。完全な public response が必要な場合だけ `--json` を指定します。
+Resource Shape flow が操作するのは、Takosumi に保存された Resource / TargetPool /
+SpacePolicy の宣言と、明示的な reconcile operation です。write request は non-secret な
+JSON object を file から読みます。通常の出力は Resource の phase、Target、Run id といった
+要約だけで、request body や Output の値は表示しません。完全な public response が必要な
+場合だけ `--json` を指定します。
 
 ```bash
 takosumi resources preview --file resource.json
@@ -113,14 +210,14 @@ takosumi space-policies get default --space space_...
 takosumi space-policies delete default --space space_...
 ```
 
-`target-pool.json` は top-level の `space` と `spec.targets`、`space-policy.json` は top-level の
-`space` と `spec` を持つ API request body です。一覧の `nextCursor` は opaque なので、次ページでは
-内容を解釈せず `--cursor` に渡します。
+`target-pool.json` は top-level に `space` と `spec.targets` を持つ API request body です。
+`space-policy.json` は top-level に `space` と `spec` を持ちます。一覧の `nextCursor` は
+opaque なので、内容を解釈せず、そのまま次ページの `--cursor` に渡します。
 
-## Deployment secrets
+## デプロイ先の secret
 
-deployment runtime の secret 保存・適用は、その runtime adapter と operator vault が所有します。
-Takosumi CLI は Wrangler、特定 Worker、固定 secret 名を正本にせず、Provider credential は
-`connections` から Provider Connection として登録します。platform service の signing key や
-internal bearer は repo 外で生成・保管し、選んだ deployment adapter の native secret command で
-適用してください。
+deployment runtime の secret を保存して適用するのは、その runtime adapter と operator
+vault です。Takosumi CLI が扱うのは provider credential で、`takosumi connections` から
+ProviderConnection として登録します。platform service の signing key や internal bearer
+は、repo の外で生成して保管します。適用は、選んだ deployment adapter の native な
+secret command で行います。

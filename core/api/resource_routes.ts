@@ -49,6 +49,11 @@ export const TAKOSUMI_INTERNAL_RESOURCE_MANAGED_BY_HEADER =
 
 export interface RegisterResourceShapeRoutesOptions {
   readonly service: ResourceShapeService;
+  /**
+   * Mounts the portable Takoform v0 host surface. Defaults to true; hosts that
+   * do not expose this protocol disable both discovery and `/takoform/v0`.
+   */
+  readonly takoformHost?: boolean;
   /** Optional canonical byte ingress backed by a host-installed artifact writer. */
   readonly artifactService?: ResourceArtifactService;
   /**
@@ -97,6 +102,19 @@ export interface RegisterResourceShapeRoutesOptions {
     readonly kind: ResourceShapeKind;
     readonly name: string;
   }) => boolean | Promise<boolean>;
+  /**
+   * Operator-only continuation for an Applying Resource whose prior backend
+   * response was uncertain. Omitted means apply recovery is not exposed over
+   * HTTP. The caller must replay the exact desired request and reviewed quote;
+   * the domain service fences both against the durable Applying record.
+   */
+  readonly authorizeResourceShapeApplyRecovery?: (input: {
+    readonly actor: ActorContext;
+    readonly request: Request;
+    readonly space: string;
+    readonly kind: ResourceShapeKind;
+    readonly name: string;
+  }) => boolean | Promise<boolean>;
 }
 
 /** Single-source route inventory for capabilities and OpenAPI publication. */
@@ -105,9 +123,8 @@ export const RESOURCE_SHAPE_ENDPOINTS: readonly ApiEndpoint[] = [
     okSchema: "ListFormAvailabilityResponse",
     query: [
       "space",
-      "apiVersion",
-      "kind",
-      "definitionVersion",
+      "type",
+      "version",
       "schemaDigest",
       "packageDigest",
       "limit",
@@ -120,6 +137,14 @@ export const RESOURCE_SHAPE_ENDPOINTS: readonly ApiEndpoint[] = [
   endpoint("PUT", "/v1/resources/:kind/:name", "putResource", {
     requestSchema: "ResourceShapeApplyRequest",
   }),
+  endpoint(
+    "POST",
+    "/v1/resources/:kind/:name/recover-apply",
+    "recoverResourceApply",
+    {
+      requestSchema: "ResourceShapeApplyRequest",
+    },
+  ),
   endpoint(
     "POST",
     "/v1/resources/:kind/:name/artifacts",
@@ -211,15 +236,17 @@ export function registerResourceShapeRoutes(
     }
   }
 
-  registerPortableFormHostRoutes(app, {
-    service,
-    availability: service,
-    authorize: (c) => authorizeResourceShapeRequest(c, options),
-    canReadForms: hasFormAvailabilityReadScope,
-    ...(options.interfaceDeclarations
-      ? { interfaceDeclarations: options.interfaceDeclarations }
-      : {}),
-  });
+  if (options.takoformHost !== false) {
+    registerPortableFormHostRoutes(app, {
+      service,
+      availability: service,
+      authorize: (c) => authorizeResourceShapeRequest(c, options),
+      canReadForms: hasFormAvailabilityReadScope,
+      ...(options.interfaceDeclarations
+        ? { interfaceDeclarations: options.interfaceDeclarations }
+        : {}),
+    });
+  }
 
   app.get("/v1/form-availability", async (c) => {
     const auth = await authorizeResourceShape(c, options);
@@ -274,6 +301,47 @@ export function registerResourceShapeRoutes(
     const review = parseDeploymentReview(c, parsed.body);
     if ("response" in review) return review.response;
     const result = await service.apply(parsed.request, review.value);
+    if (!result.ok) return errorResponse(c, result.error);
+    return c.json(withId(parsed.request, result.value), 200);
+  });
+
+  app.post("/v1/resources/:kind/:name/recover-apply", async (c) => {
+    const auth = await authorizeResourceShape(c, options);
+    if (!auth.ok) return auth.response;
+    const kind = parseKind(c, installedKinds);
+    if ("response" in kind) return kind.response;
+    const parsed = await parseResourceBody(c, auth.actor);
+    if ("response" in parsed) return parsed.response;
+    if (
+      parsed.request.kind !== kind.value ||
+      parsed.request.name !== c.req.param("name")
+    ) {
+      return badRequest(
+        c,
+        "recovery path kind and name must match the replayed Resource request",
+      );
+    }
+    const allowed = await options.authorizeResourceShapeApplyRecovery?.({
+      actor: auth.actor,
+      request: c.req.raw,
+      space: parsed.request.space,
+      kind: kind.value,
+      name: parsed.request.name,
+    });
+    if (allowed !== true) {
+      return c.json(
+        apiError(
+          "forbidden",
+          "resource apply recovery requires operator break-glass authorization",
+          undefined,
+          requestIdFromContext(c),
+        ),
+        403,
+      );
+    }
+    const review = parseDeploymentReview(c, parsed.body);
+    if ("response" in review) return review.response;
+    const result = await service.recoverApply(parsed.request, review.value);
     if (!result.ok) return errorResponse(c, result.error);
     return c.json(withId(parsed.request, result.value), 200);
   });
@@ -761,7 +829,7 @@ export function registerResourceShapeRoutes(
       return {
         response: badRequest(
           c,
-          "form must be an exact InstalledFormReference with formRef and packageDigest",
+          "form must be an exact InstalledFormReference with type, version, schemaDigest, and packageDigest",
         ),
       };
     }
@@ -994,9 +1062,8 @@ function parseAvailabilityIdentity(
   | { readonly value: InstalledFormReference | undefined }
   | { readonly response: Response } {
   const fields = {
-    apiVersion: c.req.query("apiVersion"),
-    kind: c.req.query("kind"),
-    definitionVersion: c.req.query("definitionVersion"),
+    type: c.req.query("type"),
+    version: c.req.query("version"),
     schemaDigest: c.req.query("schemaDigest"),
     packageDigest: c.req.query("packageDigest"),
   };
@@ -1008,17 +1075,14 @@ function parseAvailabilityIdentity(
     return {
       response: badRequest(
         c,
-        "exact availability lookup requires apiVersion, kind, definitionVersion, schemaDigest, and packageDigest",
+        "exact availability lookup requires type, version, schemaDigest, and packageDigest",
       ),
     };
   }
   const identity = {
-    formRef: {
-      apiVersion: fields.apiVersion!,
-      kind: fields.kind!,
-      definitionVersion: fields.definitionVersion!,
-      schemaDigest: fields.schemaDigest!,
-    },
+    type: fields.type!,
+    version: fields.version!,
+    schemaDigest: fields.schemaDigest!,
     packageDigest: fields.packageDigest!,
   };
   return isInstalledFormReference(identity)

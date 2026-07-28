@@ -15,11 +15,23 @@ bash website/build.sh
 
 ## Deploy
 
+The site is deployed by this repository's entrypoint, under the shared rules
+in the sibling `takos-control` checkout (`engineering.policy.json` → `deploy`):
+
 ```bash
-bun run website:deploy
+bun run deploy
 ```
 
-Attach `takosumi.com` and optionally `www.takosumi.com` in Cloudflare Pages custom domains. The default Pages host remains available for previews.
+If the surface or fixed adapter is unavailable, publication fails closed. Do
+not fall back to a product-local or raw Pages command.
+
+## One-time provisioning
+
+An authorized operator separately creates the Pages project and attaches
+`takosumi.com` and optionally `www.takosumi.com` in Cloudflare Pages custom
+domains. Pages/DNS provisioning is operator-owned setup, not a release. Its
+credentials and realized target configuration stay outside this repository.
+The default Pages host remains available for previews.
 
 ## Local mirror
 

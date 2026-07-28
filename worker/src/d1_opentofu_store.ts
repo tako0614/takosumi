@@ -2297,6 +2297,25 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     return pageFromProbe(rows, limit);
   }
 
+  async listAllSourcesPage(params: PageParams): Promise<Page<StoredSource>> {
+    const limit = clampPageLimit(params.limit);
+    const rows = await this.#drizzleManyJson<StoredSource>(
+      schema.sources,
+      schema.sources.recordJson,
+      {
+        where: d1KeysetWhere(
+          undefined,
+          schema.sources.createdAt,
+          schema.sources.id,
+          decodeCursor(params.cursor),
+        ),
+        orderBy: [asc(schema.sources.createdAt), asc(schema.sources.id)],
+        limit: limit + 1,
+      },
+    );
+    return pageFromProbe(rows, limit);
+  }
+
   async deleteSource(id: string): Promise<boolean> {
     return await this.#drizzleDelete(schema.sources, eq(schema.sources.id, id));
   }
@@ -3744,6 +3763,129 @@ const D1_SERVICE_FORM_REGISTRY_STATEMENTS = [
     on service_form_activations (form_ref_key, package_digest)`,
 ] as const;
 
+const TAKOFORM_V0_IDENTITY_MIGRATION_REQUIRED =
+  "TAKOFORM_V0_IDENTITY_MIGRATION_REQUIRED: legacy Service Form rows or exact identity evidence exist; export the legacy registry and Resource/Run/backup pins, reinstall verified takoform v0 packages, and run the reviewed exact-pin backfill before retrying";
+
+const D1_TAKOFORM_V0_BLOCKING_EVIDENCE_SQL = `
+  exists (select 1 from service_form_packages limit 1)
+  or exists (select 1 from service_form_definitions limit 1)
+  or exists (select 1 from service_form_activations limit 1)
+  or exists (
+    select 1 from resource_shapes
+    where form_ref_json is not null or package_digest is not null
+    limit 1
+  )
+  or exists (
+    select 1 from resolution_locks
+    where form_ref_json is not null
+       or package_digest is not null
+       or instr(coalesce(native_resources_json, ''), '"formRef"') > 0
+    limit 1
+  )
+  or exists (
+    select 1 from runs
+    where instr(run_json, '"formRef"') > 0
+    limit 1
+  )
+  or exists (
+    select 1 from backups
+    where instr(record_json, '"formRef"') > 0
+    limit 1
+  )`;
+
+/**
+ * Fail-closed takoform v0 schema cutover. Package bytes and their serialized
+ * FormRefs share one digest, so legacy identities cannot be rewritten in
+ * place. The migration accepts only an empty legacy registry, retains it
+ * under explicit archive names, and creates the flat type/version schema.
+ */
+const D1_SERVICE_FORM_TAKOFORM_V0_STATEMENTS = [
+  `create table __takoform_v0_identity_migration_guard (
+    safe integer not null
+      constraint takoform_v0_identity_migration_requires_export
+      check (safe = 1)
+  )`,
+  `insert into __takoform_v0_identity_migration_guard (safe)
+   select case when (${D1_TAKOFORM_V0_BLOCKING_EVIDENCE_SQL}) then 0 else 1 end`,
+  `drop table __takoform_v0_identity_migration_guard`,
+  `alter table service_form_activations
+    rename to service_form_activations__takoform_v1alpha1`,
+  `alter table service_form_definitions
+    rename to service_form_definitions__takoform_v1alpha1`,
+  `alter table service_form_packages
+    rename to service_form_packages__takoform_v1alpha1`,
+  `drop index if exists service_form_packages_status_updated_digest_idx`,
+  `drop index if exists service_form_activations_scope_status_updated_id_idx`,
+  `drop index if exists service_form_activations_identity_idx`,
+  `drop index if exists service_form_definitions_package_idx`,
+  `drop index if exists service_form_definitions_ref_package_unique`,
+  `drop index if exists service_form_definitions_kind_installed_ref_idx`,
+  `create index service_form_packages__takoform_v1alpha1_status_updated_digest_idx
+    on service_form_packages__takoform_v1alpha1
+      (status, updated_at, package_digest)`,
+  `create index service_form_definitions__takoform_v1alpha1_package_idx
+    on service_form_definitions__takoform_v1alpha1 (package_digest)`,
+  `create unique index service_form_definitions__takoform_v1alpha1_ref_package_unique
+    on service_form_definitions__takoform_v1alpha1
+      (form_ref_key, package_digest)`,
+  `create index service_form_definitions__takoform_v1alpha1_kind_installed_ref_idx
+    on service_form_definitions__takoform_v1alpha1
+      (kind, installed_at, form_ref_key)`,
+  `create index service_form_activations__takoform_v1alpha1_scope_status_updated_id_idx
+    on service_form_activations__takoform_v1alpha1
+      (scope_type, scope_id, status, updated_at, id)`,
+  `create index service_form_activations__takoform_v1alpha1_identity_idx
+    on service_form_activations__takoform_v1alpha1
+      (form_ref_key, package_digest)`,
+  `create table service_form_packages (
+    package_digest text primary key,
+    status text not null check (status in ('installed','deprecated','revoked')),
+    record_json text not null,
+    installed_at text not null,
+    updated_at text not null
+  )`,
+  `create index service_form_packages_status_updated_digest_idx
+    on service_form_packages (status, updated_at, package_digest)`,
+  `create table service_form_definitions (
+    form_ref_key text primary key,
+    package_digest text not null,
+    type text not null,
+    version text not null,
+    schema_digest text not null,
+    record_json text not null,
+    installed_at text not null,
+    foreign key (package_digest) references service_form_packages(package_digest)
+  )`,
+  `create index service_form_definitions_package_idx
+    on service_form_definitions (package_digest)`,
+  `create unique index service_form_definitions_ref_package_unique
+    on service_form_definitions (form_ref_key, package_digest)`,
+  `create index service_form_definitions_type_installed_ref_idx
+    on service_form_definitions (type, installed_at, form_ref_key)`,
+  `create table service_form_activations (
+    id text primary key,
+    form_ref_key text not null,
+    package_digest text not null,
+    scope_type text not null check (scope_type in ('operator','workspace','space')),
+    scope_id text,
+    status text not null check (status in ('active','inactive')),
+    revision integer not null check (revision >= 1),
+    record_json text not null,
+    created_at text not null,
+    updated_at text not null,
+    foreign key (form_ref_key, package_digest)
+      references service_form_definitions(form_ref_key, package_digest),
+    check (
+      (scope_type = 'operator' and scope_id is null)
+      or (scope_type in ('workspace','space') and length(trim(scope_id)) > 0)
+    )
+  )`,
+  `create index service_form_activations_scope_status_updated_id_idx
+    on service_form_activations (scope_type, scope_id, status, updated_at, id)`,
+  `create index service_form_activations_identity_idx
+    on service_form_activations (form_ref_key, package_digest)`,
+] as const;
+
 const D1_OFFERING_CATALOG_STATEMENTS = [
   `create table if not exists offering_catalogs (
     catalog_key text primary key,
@@ -4337,7 +4479,9 @@ export async function ensureD1OpenTofuLedgerSchema(
       on interface_bindings (interface_id)`,
     `create index if not exists interface_bindings_workspace_subject_idx
       on interface_bindings (workspace_id, subject_kind, subject_id)`,
-    ...D1_SERVICE_FORM_REGISTRY_STATEMENTS,
+    ...D1_SERVICE_FORM_REGISTRY_STATEMENTS.filter(
+      (sql) => !isD1IndexStatement(sql),
+    ),
     ...(throughMigrationVersion >= 50 ? D1_OFFERING_CATALOG_STATEMENTS : []),
   ];
   const tableStatements = statements.filter((sql) => !isD1IndexStatement(sql));
@@ -4353,7 +4497,10 @@ export async function ensureD1OpenTofuLedgerSchema(
     await db.prepare(sql).run();
   }
   await migrateD1OpenTofuLedgerSchema(db, throughMigrationVersion);
-  for (const sql of indexStatements) {
+  const serviceFormIndexStatements = (
+    await d1ServiceFormRegistryReplayStatements(db)
+  ).filter((sql) => isD1IndexStatement(sql));
+  for (const sql of [...indexStatements, ...serviceFormIndexStatements]) {
     await db.prepare(sql).run();
   }
 }
@@ -6067,11 +6214,11 @@ exact package and FormRef identities persist separately from activations
 no offering price managed-capacity or Cloud commercial state
 ${D1_SERVICE_FORM_REGISTRY_STATEMENTS.join("\n---\n")}
 `,
-    async atomicStatements() {
-      return D1_SERVICE_FORM_REGISTRY_STATEMENTS;
+    async atomicStatements(db) {
+      return await d1ServiceFormRegistryReplayStatements(db);
     },
     async apply(db) {
-      for (const statement of D1_SERVICE_FORM_REGISTRY_STATEMENTS) {
+      for (const statement of await d1ServiceFormRegistryReplayStatements(db)) {
         await db.prepare(statement).run();
       }
     },
@@ -6300,7 +6447,184 @@ both nullable columns are additive and preserve all existing Resource rows
       );
     },
   },
+  {
+    version: 54,
+    name: "d1_service_form_takoform_v0_identity",
+    checksumSource: () => `
+takoform v0 flat FormRef identity replaces the Kubernetes-style apiVersion/kind vocabulary
+the exact legacy registry is retained under __takoform_v1alpha1 archive names
+any populated registry row or durable Resource Run or backup identity evidence fails closed
+only an empty legacy registry is archived before the new flat-identity tables are created
+the new service_form_definitions schema persists the takoform v0 type and version columns
+${D1_SERVICE_FORM_TAKOFORM_V0_STATEMENTS.join("\n---\n")}
+`,
+    async atomicStatements(db) {
+      return await d1ServiceFormTakoformV0Statements(db);
+    },
+    async apply(db) {
+      await runD1AtomicSql(db, await d1ServiceFormTakoformV0Statements(db));
+    },
+  },
+  {
+    version: 55,
+    name: "d1_resource_operation_recovery_state",
+    checksumSource: `
+Resource rows persist a monotonic revision fence for compare-and-swap writes
+pending_operation_json retains the canonical direct-plugin Run claim across restarts
+last_operation_run_id retains the finalized Run pointer used by repair
+`,
+    async atomicStatements(db) {
+      return await d1ResourceOperationRecoveryStateStatements(db);
+    },
+    async apply(db) {
+      await runD1AtomicSql(
+        db,
+        await d1ResourceOperationRecoveryStateStatements(db),
+      );
+    },
+  },
 ] as const satisfies readonly D1OpenTofuSchemaMigration[];
+
+/**
+ * v45 is replayed during destructive convergence. Once v54 has installed the
+ * flat schema, replay must record the old ledger row without recreating the
+ * retired kind-based table shape.
+ */
+async function d1ServiceFormRegistryReplayStatements(
+  db: D1Database,
+): Promise<readonly string[]> {
+  if (await d1TableExists(db, "service_form_definitions")) {
+    const columns = await d1ColumnNames(db, "service_form_definitions");
+    if (!columns.has("kind")) return [];
+  }
+  return D1_SERVICE_FORM_REGISTRY_STATEMENTS;
+}
+
+async function d1ServiceFormTakoformV0Statements(
+  db: D1Database,
+): Promise<readonly string[]> {
+  const archiveTables = [
+    "service_form_packages__takoform_v1alpha1",
+    "service_form_definitions__takoform_v1alpha1",
+    "service_form_activations__takoform_v1alpha1",
+  ] as const;
+  const archivePresence = await Promise.all(
+    archiveTables.map((table) => d1TableExists(db, table)),
+  );
+  const archiveCount = archivePresence.filter(Boolean).length;
+  if (archiveCount !== 0 && archiveCount !== archiveTables.length) {
+    throw new Error(
+      "TAKOFORM_V0_IDENTITY_SCHEMA_STATE_INVALID: only part of the retained v1alpha1 registry archive exists",
+    );
+  }
+  const definitionColumns = await d1ColumnNames(
+    db,
+    "service_form_definitions",
+  );
+  const hasLegacyShape =
+    definitionColumns.has("api_version") &&
+    definitionColumns.has("kind") &&
+    definitionColumns.has("definition_version") &&
+    !definitionColumns.has("type") &&
+    !definitionColumns.has("version");
+  const hasV0Shape =
+    definitionColumns.has("type") &&
+    definitionColumns.has("version") &&
+    !definitionColumns.has("api_version") &&
+    !definitionColumns.has("kind") &&
+    !definitionColumns.has("definition_version");
+  if (
+    (archiveCount === 0 && !hasLegacyShape) ||
+    (archiveCount === archiveTables.length && !hasV0Shape)
+  ) {
+    throw new Error(
+      "TAKOFORM_V0_IDENTITY_SCHEMA_STATE_INVALID: Service Form registry columns do not match the v54 migration phase",
+    );
+  }
+  if (await d1HasTakoformV0BlockingEvidence(db)) {
+    throw new Error(TAKOFORM_V0_IDENTITY_MIGRATION_REQUIRED);
+  }
+  if (archiveCount === archiveTables.length) {
+    const archiveEvidence = await db
+      .prepare(
+        `select case when (
+           exists (
+             select 1 from service_form_packages__takoform_v1alpha1 limit 1
+           )
+           or exists (
+             select 1 from service_form_definitions__takoform_v1alpha1 limit 1
+           )
+           or exists (
+             select 1 from service_form_activations__takoform_v1alpha1 limit 1
+           )
+         ) then 1 else 0 end as blocked`,
+      )
+      .first<{ readonly blocked: number }>();
+    if (archiveEvidence?.blocked === 1) {
+      throw new Error(TAKOFORM_V0_IDENTITY_MIGRATION_REQUIRED);
+    }
+    return [];
+  }
+  return D1_SERVICE_FORM_TAKOFORM_V0_STATEMENTS;
+}
+
+async function d1HasTakoformV0BlockingEvidence(
+  db: D1Database,
+): Promise<boolean> {
+  const probes = [
+    `select 1 as found from service_form_packages limit 1`,
+    `select 1 as found from service_form_definitions limit 1`,
+    `select 1 as found from service_form_activations limit 1`,
+    `select 1 as found from resource_shapes
+     where form_ref_json is not null or package_digest is not null
+     limit 1`,
+    `select 1 as found from resolution_locks
+     where form_ref_json is not null
+        or package_digest is not null
+        or instr(coalesce(native_resources_json, ''), '"formRef"') > 0
+     limit 1`,
+    `select 1 as found from runs
+     where instr(run_json, '"formRef"') > 0
+     limit 1`,
+    `select 1 as found from backups
+     where instr(record_json, '"formRef"') > 0
+     limit 1`,
+  ] as const;
+  for (const sql of probes) {
+    const row = await db
+      .prepare(sql)
+      .first<{ readonly found: number }>();
+    if (row?.found === 1) return true;
+  }
+  return false;
+}
+
+async function d1ResourceOperationRecoveryStateStatements(
+  db: D1Database,
+): Promise<readonly string[]> {
+  if (!(await d1TableExists(db, "resource_shapes"))) return [];
+  const columns = await d1ColumnNames(db, "resource_shapes");
+  return [
+    ...(columns.has("revision")
+      ? []
+      : [
+          `alter table resource_shapes
+             add column revision integer not null default 0`,
+        ]),
+    ...(columns.has("pending_operation_json")
+      ? []
+      : [
+          `alter table resource_shapes
+             add column pending_operation_json text`,
+        ]),
+    ...(columns.has("last_operation_run_id")
+      ? []
+      : [
+          `alter table resource_shapes
+             add column last_operation_run_id text`,
+        ]),
+  ];
+}
 
 /**
  * v47/v48 added nullable Interface projections with ALTER TABLE on already

@@ -139,19 +139,13 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
     {
       method: "GET",
       path: "/api/v1/workspaces/{workspaceId}/backups",
-      summary: "List Workspace Backups",
+      summary: "List Workspace partial control exports",
       auth: "account-session",
     },
     {
       method: "POST",
       path: "/api/v1/workspaces/{workspaceId}/backups",
-      summary: "Create a Workspace Backup",
-      auth: "account-session",
-    },
-    {
-      method: "POST",
-      path: "/api/v1/workspaces/{workspaceId}/backups/{backupId}/restores",
-      summary: "Create a Restore Run",
+      summary: "Create a Workspace partial control export",
       auth: "account-session",
     },
     {

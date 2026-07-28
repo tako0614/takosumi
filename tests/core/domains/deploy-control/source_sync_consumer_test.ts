@@ -13,6 +13,7 @@ import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-co
 import { SourcesService } from "../../../../core/domains/sources/mod.ts";
 import { StaticSecretConnectionVault } from "../../../../core/adapters/vault/mod.ts";
 import { PartitionedSecretBoundaryCrypto } from "../../../../core/adapters/secret-store/memory.ts";
+import { REFERENCE_SOURCE_CREDENTIAL_DRIVERS } from "../../../../providers/git/source-credential-driver.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
 import type { SourceSnapshot, SourceSyncRun } from "takosumi-contract/sources";
 import { seedCapsuleModel } from "../../../helpers/deploy-control/model_fixture.ts";
@@ -65,6 +66,7 @@ function build(
     }),
     now: () => new Date(TEST_TIME),
     newId: () => newId("conn"),
+    sourceCredentialDrivers: REFERENCE_SOURCE_CREDENTIAL_DRIVERS,
   });
   const sourcesService = new SourcesService({
     store,

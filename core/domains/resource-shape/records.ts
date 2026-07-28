@@ -26,6 +26,7 @@ import {
   installedFormReferenceKey,
   isInstalledFormReference,
   isResourceShapeKind,
+  shapeKindForPortableType,
 } from "takosumi-contract";
 import type { ResourceOperation } from "takosumi-contract/runs";
 import type { IsoTimestamp } from "../../shared/time.ts";
@@ -55,6 +56,8 @@ export interface ResourceShapeRecord {
   readonly phase: ResourcePhase;
   /** Bumped on every desired-state change. */
   readonly generation: number;
+  /** Monotonic compare-and-swap fence for every durable Resource write. */
+  readonly revision?: number;
   /** Last generation the controller observed/applied. */
   readonly observedGeneration: number;
   readonly outputs?: JsonObject;
@@ -194,9 +197,9 @@ export function assertResourceFormIdentity(
   if (!isInstalledFormReference(form)) {
     throw new Error("Resource form identity is not an exact installed FormRef");
   }
-  if (form.formRef.kind !== kind) {
+  if (shapeKindForPortableType(form.type) !== kind) {
     throw new Error(
-      `Resource kind ${kind} does not match FormRef kind ${form.formRef.kind}`,
+      `Resource kind ${kind} does not match Form type ${form.type}`,
     );
   }
 }

@@ -85,6 +85,7 @@ export type {
   InstallConfigStoreKind,
   InstallConfigStoreMetadata,
   InstallConfigStoreSource,
+  InstallConfigSourceSelector,
   InstallConfigStoreSurface,
   InstallConfigStoreText,
   OutputAllowlistEntry,

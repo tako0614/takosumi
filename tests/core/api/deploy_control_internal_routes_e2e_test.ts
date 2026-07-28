@@ -195,6 +195,8 @@ test("Credential Recipe discovery and generic-env connection routes round-trip",
       ),
     credentialDrivers:
       REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipeDrivers,
+    sourceCredentialDrivers:
+      REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.sourceCredentialDrivers,
   });
   const { app } = await createTakosumiService({
     role: "takosumi-api",

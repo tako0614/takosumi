@@ -18,6 +18,9 @@ interface D1SourceStoreSlice {
   putSource(source: StoredSource): Promise<StoredSource>;
   getSource(id: string): Promise<StoredSource | undefined>;
   listSources(workspaceId?: string): Promise<readonly StoredSource[]>;
+  listAllSourcesPage(
+    params: PageParams,
+  ): Promise<Page<StoredSource>>;
   deleteSource(id: string): Promise<boolean>;
 
   putSourceSnapshot(snapshot: SourceSnapshot): Promise<SourceSnapshot>;
@@ -124,6 +127,43 @@ for (const [name, make] of STORES) {
     expect(await store.deleteSource(s.id)).toBe(true);
     expect(await store.getSource(s.id)).toBeUndefined();
     expect(await store.deleteSource(s.id)).toBe(false);
+  });
+
+  test(`${name}: all-source scheduler pages cross Workspace boundaries without gaps`, async () => {
+    for (let i = 0; i < 5; i += 1) {
+      const seq = String(i).padStart(4, "0");
+      await store.putSource(
+        source({
+          id: `src_${"0".repeat(12)}${seq}`,
+          workspaceId: i % 2 === 0 ? "workspace_1" : "workspace_2",
+          createdAt: `2026-06-06T00:00:00.${seq}Z`,
+        }),
+      );
+    }
+
+    const first = await store.listAllSourcesPage({ limit: 2 });
+    const second = await store.listAllSourcesPage({
+      limit: 2,
+      cursor: first.nextCursor,
+    });
+    const third = await store.listAllSourcesPage({
+      limit: 2,
+      cursor: second.nextCursor,
+    });
+
+    expect([
+      ...first.items,
+      ...second.items,
+      ...third.items,
+    ].map((row) => row.id)).toEqual(
+      Array.from(
+        { length: 5 },
+        (_, i) => `src_${"0".repeat(12)}${String(i).padStart(4, "0")}`,
+      ),
+    );
+    expect(first.nextCursor).toBeDefined();
+    expect(second.nextCursor).toBeDefined();
+    expect(third.nextCursor).toBeUndefined();
   });
 
   test(`${name}: source snapshot put/get/list by source`, async () => {

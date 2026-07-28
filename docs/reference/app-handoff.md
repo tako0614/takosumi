@@ -4,61 +4,58 @@ Takosumi App Handoff は、任意のクライアントから Takosumi が管理�
 service を作成するための小さな URL プロトコルです。対象は mobile app に限らず、
 web app、desktop app、ブラウザリンク、CLI 出力も含みます。
 
-Host Center は web / dashboard のフローです。このプロトコルは単独の
-Takosumi mobile app を要求せず、示唆もしません。クライアントは自分の product app または
-web callback URL に戻ります。
+Takosumi は plain OpenTofu/Terraform source を受け取って Capsule を作成し、通常の
+Takosumi フローを実行します。connection payload をクライアントへ返すのは、URL が
+それを求めたときだけです。
 
-これは製品レジストリではありません。Takosumi は plain OpenTofu/Terraform
-source を受け取り、Capsule を作成し、通常の Takosumi フローを実行し、必要な場合だけ
-connection payload をクライアントに返します。
+作成の画面は Host Center、つまり web / dashboard のフローです。クライアントは
+完了後に自分の product app または web callback URL へ戻ります。
 
-```text
-client
-  -> /install URL
-  -> Takosumi Host Center
-  -> Source / Capsule / ProviderBinding / Run
-  -> StateVersion / Output
-  -> optional return_uri
-```
+全体の流れは次のとおりです。
 
-## Entry URL
+1. クライアントが `/install` URL を開く
+2. Takosumi Host Center が開く
+3. Source、Capsule、ProviderBinding、Run が順に作られる
+4. StateVersion と Output が残る
+5. `return_uri` があれば、そこへ戻る
 
-外部公開のエントリポイントは operator が公開した Takosumi origin 上のこれです。
+## 入口の URL
+
+外部へのエントリポイントは、operator が公開している Takosumi origin 上の次の URL です。
 
 ```text
 https://<takosumi-origin>/install
 ```
 
-公式 Takosumi Cloud の origin は `app.takosumi.com` ですが、この protocol は
-self-host / Operator の任意の明示 origin でも同じです。
+公式 Takosumi Cloud の origin は `app.takosumi.com` です。self-host や Operator が
+明示した origin でも、protocol は同じように動きます。
 
 dashboard 内では `/new` に正規化されることがありますが、外部クライアントは
 `/install` へリンクします。
 
 対応するクエリパラメータ:
 
-| Parameter    | Required | 意味                                                 |
-| ------------ | -------- | ---------------------------------------------------- |
-| `git`        | no       | plain OpenTofu/Terraform module の HTTPS Git URL     |
-| `source`     | no       | `git::...?...` 形式の packed module address          |
-| `ref`        | no       | Git branch / tag / commit                            |
-| `path`       | no       | リポジトリ内の module path                           |
-| `name`       | no       | サービスの表示名                                     |
-| `var.<name>` | no       | secret ではない可視の module input                   |
-| `product`    | no       | `return_uri` とセットで使うクライアント product key  |
-| `return_uri` | no       | `product` とセットで使う connection payload の返却先 |
+| パラメータ | 意味 |
+| --- | --- |
+| `git` | plain OpenTofu/Terraform module の HTTPS Git URL |
+| `source` | `git::...?...` 形式の packed module address |
+| `ref` | Git branch / tag / commit |
+| `path` | リポジトリ内の module path |
+| `name` | サービスの表示名 |
+| `product` | `return_uri` とセットで使うクライアント product key |
+| `return_uri` | `product` とセットで使う connection payload の返却先 |
 
-`git` または `source` が作成対象を指定します。Store はこの URL を事前入力
-するための探索・表示の入口であり、作成対象や release ref の権限ではありません。
-`product` は作成対象ではありません。`product` と `return_uri` はクライアントへ
-戻すときだけセットで使います。
+何を作るかは `git` または `source` が決めます。どちらか一方を必ず付けます。残りは
+任意です。Store はこの URL を事前入力するための探索・表示の入口で、作成対象や
+release ref を決める権限は持ちません。`product` と `return_uri` は、完了後に
+クライアントへ戻すためだけに使う組です。
 
-`return_uri` がない場合、この URL は通常の hosted-service 作成リンクです。この場合
-`product` も付けません。`return_uri` がある場合、Takosumi は `product` と
-`return_uri` を sign-in、provider connection setup、plan、apply の画面遷移をまたいで
-保持します。
+`return_uri` がなければ、この URL は通常の hosted service 作成リンクとして働きます。
+このときは `product` も付けません。`return_uri` があるときは、Takosumi が `product`
+と `return_uri` を保持します。sign-in、ProviderConnection の設定、plan、apply と
+画面が変わっても引き継ぎます。
 
-存在しない形:
+次の 3 つは App Handoff Protocol の形ではありません。
 
 ```text
 /install?=product
@@ -66,10 +63,9 @@ dashboard 内では `/new` に正規化されることがありますが、外�
 /install?product=notes-app
 ```
 
-これらは OpenTofu source を指定せず、何を作るかが決まらないため App Handoff
-Protocol には該当しません。
+いずれも OpenTofu source を指定していないため、何を作るのかが決まりません。
 
-例:
+実際の URL は次のようになります。
 
 ```text
 https://takosumi.example.com/install
@@ -80,28 +76,28 @@ https://takosumi.example.com/install
   &return_uri=notesapp%3A%2F%2Fconnect
 ```
 
-## OpenTofu-Native Flow
+## OpenTofu をそのまま使う流れ
 
-URL 自体は install を実行しません。明示的な dashboard フローを事前入力するだけです。
+この URL が行うのは、dashboard フローの事前入力までです。作成そのものは、画面上の
+明示的な操作で進みます。
 
-```text
-Git URL / ref / path
-  -> Source
-  -> Capsule
-  -> ProviderBinding review
-  -> Run(plan)
-  -> Run(apply)
-  -> StateVersion / Output
-```
+1. Git URL / ref / path から Source を作る
+2. Source から Capsule を作る
+3. ProviderBinding を確認する
+4. plan の Run を実行する
+5. 内容を確認して apply の Run を実行する
+6. StateVersion と Output が残る
 
-source リポジトリは plain OpenTofu/Terraform module のままです。Takosumi 専用の
-source metadata ファイルや製品固有の metadata ファイルは要求しません。
+source リポジトリは plain OpenTofu/Terraform module のままで足ります。Takosumi 専用の
+source metadata ファイルや製品固有の metadata ファイルを置く必要はありません。
 
-`var.<name>` は secret ではない可視の入力専用です。secret、token、provider
-credential、private key は Provider Connection、Credential Recipe、Provider Binding、
-Secret、または製品側の setup フローから渡します。
+module input は URL では渡しません。`var.<name>` や `varjson.<name>` を付けた
+リンクを開いても、その値は読み捨てられます。入力は Host Center の画面で
+入れます。secret、token、provider credential、private key の渡し先はさらに別で、
+ProviderConnection、Credential Recipe、ProviderBinding、Secret、または製品側の
+setup フローを使います。
 
-## Return Payload
+## 戻り先へ渡す値
 
 apply が成功すると、Takosumi は `return_uri` にクエリパラメータを追加して connect
 URL を作ります。
@@ -117,72 +113,57 @@ URL を作ります。
 製品側の setup フローが一回限りの handoff token を必要とする場合は
 `setup_ticket` を追加できます。
 
-クライアントは返された host を次の endpoint で探索します。
+クライアントは、返された host を次の endpoint で探索します。
 
-```text
+```http
 GET /.well-known/takosumi
 GET /v1/capabilities
 ```
 
-製品固有の metadata が必要なクライアントだけ、追加でこれを読みます。
+製品固有の metadata が必要なクライアントは、さらに次を読みます。
 
-```text
+```http
 GET /.well-known/<product>
 ```
 
-Takosumi はファーストパーティの製品名を自動探索しません。
+この探索を行うのはクライアント側です。Takosumi がファーストパーティの製品名を
+推測して探索することはありません。
 
-## Product Key And Return URI Rules
+## product key と return_uri の規則
 
-`product` は汎用の小文字キーです。
+`product` は汎用の小文字キーで、次の形に一致する値だけを受け付けます。
 
 ```text
 ^[a-z0-9][a-z0-9._:-]{0,63}$
 ```
 
-Takosumi の列挙型ではありません。`takos`、`yurucommu`、将来のアプリはすべて同じ
-field を通常のクライアントとして使います。
+`takos` も `yurucommu` も、これから増えるアプリも、通常のクライアントとして
+この field を同じように使います。
 
-`return_uri` は次の形を使えます。
+`return_uri` には次のような値を書きます。
 
 ```text
 notesapp://connect
 https://app.example/connect
 ```
 
-絶対 URI であること、username/password を含まないこと、既存の query / fragment を
-含まないことが条件です。Takosumi が connect payload を追加します。
-
-`javascript:` / `data:` / `vbscript:` / `blob:` / `file:` / `about:` /
-`filesystem:` / `view-source:` の scheme は authority 形式
-(`javascript://…`) でも拒否します。connect link は dashboard 上の anchor として
-描画されるため、これらは link ではなく dashboard origin での script 実行になります。
+条件は 3 つです。絶対 URI であること、username と password を含まないこと、query と
+fragment を含まないことです。web callback は `https:` を使います。native callback は
+authority 形式 (`<app-scheme>://...`) の app-owned custom scheme に限ります。
+`javascript:` / `data:` / `vbscript:` / `file:` / `blob:` のように browser で
+実行される scheme や、browser-local な scheme は拒否します。connect payload の
+クエリは Takosumi が追加します。
 
 ## 責任境界
 
-Takosumi が持つもの:
+Takosumi 側は、この protocol と Host Center のフローを持ちます。Source / Capsule /
+Run の lifecycle、state と output と audit、ProviderConnection の確認、capability
+discovery も Takosumi 側です。
 
-```text
-protocol
-Host Center flow
-Source / Capsule / Run lifecycle
-state / output / audit
-provider connection review
-capability discovery
-```
+クライアント側は、product UI と、custom scheme や web callback の受け取りを持ちます。
+native plugin、push notification の登録、通話の処理、connect 後に製品 API を呼ぶ
+ところもクライアント側です。
 
-クライアントが持つもの:
-
-```text
-product UI
-custom scheme handling
-web callback handling
-native plugins
-push notification registration
-call handling
-post-connect product API calls
-```
-
-push notification の配信は Takosumi Resource Shape でも provider でもありません。
-クライアントは connect 後に製品側の device token を自分の host API へ送れますが、
-Takosumi は push capability を公開しません。
+push notification の配信は、クライアントと製品側の host が担当します。connect 後に
+製品側の device token を自分の host API へ送れますが、Takosumi は push capability を
+公開しません。

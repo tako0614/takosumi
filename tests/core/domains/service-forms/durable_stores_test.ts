@@ -25,8 +25,8 @@ for (const dialect of dialects) {
   test(`${dialect} Form registry installs atomically and pages exact definitions`, async () => {
     const handle = await createStore(dialect);
     try {
-      const first = fixture("EdgeWorker", "a", "1");
-      const second = fixture("ObjectBucket", "b", "2");
+      const first = fixture("edge_worker", "a", "1");
+      const second = fixture("object_bucket", "b", "2");
       expect(
         (await handle.store.installPackage(first.package, [first.definition]))
           .status,
@@ -48,8 +48,8 @@ for (const dialect of dialects) {
         cursor: page1.nextCursor,
       });
       expect(page2.items).toHaveLength(1);
-      expect(page2.items[0]?.identity.formRef.kind).not.toBe(
-        page1.items[0]?.identity.formRef.kind,
+      expect(page2.items[0]?.identity.type).not.toBe(
+        page1.items[0]?.identity.type,
       );
       expect(page2.nextCursor).toBeUndefined();
 
@@ -61,7 +61,7 @@ for (const dialect of dialects) {
       const conflictingDefinition = {
         ...first.definition,
         identity: {
-          formRef: first.ref,
+          ...first.ref,
           packageDigest: conflictingPackage.packageDigest,
         },
       };
@@ -83,7 +83,7 @@ for (const dialect of dialects) {
   test(`${dialect} Form registry fences package and activation races`, async () => {
     const handle = await createStore(dialect);
     try {
-      const installed = fixture("Queue", "d", "3");
+      const installed = fixture("queue", "d", "3");
       await handle.store.installPackage(installed.package, [
         installed.definition,
       ]);
@@ -146,24 +146,23 @@ async function createStore(
   };
 }
 
-function fixture(kind: string, digestCharacter: string, suffix: string) {
+function fixture(type: string, digestCharacter: string, suffix: string) {
   const ref: FormRef = {
-    apiVersion: "forms.example.test/v1alpha1",
-    kind,
-    definitionVersion: `1.0.${suffix}`,
+    type,
+    version: `1.0.${suffix}`,
     schemaDigest: digest(digestCharacter),
   };
   const packageDigest = digest(
     String.fromCharCode(digestCharacter.charCodeAt(0) + 1),
   );
   const definition: FormDefinitionRecord = {
-    identity: { formRef: ref, packageDigest },
+    identity: { ...ref, packageDigest },
     operations: ["create", "read", "delete"],
     installedAt: `2026-07-16T00:00:0${suffix}.000Z`,
   };
   const packageRecord: FormPackageRecord = {
     packageDigest,
-    artifactRef: `memory:${kind}`,
+    artifactRef: `memory:${type}`,
     verifierId: "test.data-only.v1",
     status: "installed",
     definitionRefs: [ref],
@@ -180,7 +179,7 @@ function activationFixture(
   return {
     id: `activation_${formRefKey(installed.ref).length}`,
     identity: {
-      formRef: installed.ref,
+      ...installed.ref,
       packageDigest: installed.package.packageDigest,
     },
     scope: { type: "operator" },

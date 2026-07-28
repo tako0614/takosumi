@@ -7,6 +7,7 @@ export {
 export * from "./capabilities.ts";
 export * from "./app-handoff.ts";
 export * from "./mobile.ts";
+export * from "./public-session-control.ts";
 export * from "./notification-pushers.ts";
 export * from "./install-experience.ts";
 export * from "./resource-shape.ts";

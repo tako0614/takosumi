@@ -7,11 +7,19 @@
 const LS_KEY = "tcs.stores";
 
 /**
- * Operator-configured canonical store. Empty means no default store.
+ * Resolve the canonical store from operator configuration. Unset falls back to
+ * no store; an explicitly empty value also means no default store.
  */
-export const DEFAULT_STORE_URL = (
-  import.meta.env.VITE_TAKOSUMI_TCS_STORE_URL ?? ""
-).trim();
+export function resolveDefaultStoreUrl(configured: string | undefined): string {
+  return (configured ?? "").trim();
+}
+
+/**
+ * Canonical store this build queries by default. Empty means no default store.
+ */
+export const DEFAULT_STORE_URL = resolveDefaultStoreUrl(
+  import.meta.env.VITE_TAKOSUMI_TCS_STORE_URL,
+);
 
 export interface TcsServer {
   readonly base: string;

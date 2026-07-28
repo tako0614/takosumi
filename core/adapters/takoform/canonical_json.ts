@@ -241,7 +241,9 @@ function assertNoUnpairedSurrogate(value: string): void {
     const code = value.charCodeAt(index);
     if (code >= 0xd800 && code <= 0xdbff) {
       const low = value.charCodeAt(index + 1);
-      if (low < 0xdc00 || low > 0xdfff) {
+      // charCodeAt past the end returns NaN, whose comparisons are always
+      // false — a trailing lone high surrogate must still be rejected.
+      if (Number.isNaN(low) || low < 0xdc00 || low > 0xdfff) {
         throw new TypeError("JSON string contains an unpaired high surrogate");
       }
       index++;

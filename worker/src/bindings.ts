@@ -302,7 +302,7 @@ export interface OpenTofuRunQueueMessage {
 
 export interface D1Database {
   prepare(query: string): D1PreparedStatement;
-  batch?<T = unknown>(
+  batch<T = unknown>(
     statements: readonly D1PreparedStatement[],
   ): Promise<readonly D1Result<T>[]>;
 }
@@ -348,6 +348,9 @@ export interface R2ListOptions {
   readonly prefix?: string;
   readonly cursor?: string;
   readonly limit?: number;
+  readonly delimiter?: string;
+  readonly startAfter?: string;
+  readonly include?: readonly ("httpMetadata" | "customMetadata")[];
 }
 
 export interface R2Objects {

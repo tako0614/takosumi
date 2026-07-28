@@ -44,7 +44,6 @@ Supported query parameters:
 | `ref`        | no       | Git branch, tag, or commit                          |
 | `path`       | no       | Module path inside the repository                   |
 | `name`       | no       | Display name for the service                        |
-| `var.<name>` | no       | Non-secret visible module input                     |
 | `product`    | no       | Client product key, only with `return_uri`          |
 | `return_uri` | no       | Connection payload target, only with `product`      |
 
@@ -99,8 +98,10 @@ The source repository stays a plain OpenTofu/Terraform module. Takosumi does not
 require a Takosumi-specific source metadata file or product-specific metadata
 file.
 
-`var.<name>` is for non-secret visible inputs only. Secrets, tokens, provider
-credentials, and private keys must come from Provider Connections, Credential
+Module inputs do not travel in the URL. A link carrying `var.<name>` or
+`varjson.<name>` is accepted, but those values are discarded; inputs are entered
+in the Host Center screen. Secrets, tokens, provider credentials, and private
+keys are separate again, and must come from Provider Connections, Credential
 Recipes, Provider Bindings, Secrets, or product-owned setup flows.
 
 ## Return Payload
@@ -153,7 +154,10 @@ https://app.example/connect
 ```
 
 It must be absolute, contain no username/password, and contain no existing query
-or fragment. Takosumi appends the connect payload itself.
+or fragment. Web callbacks use `https:`; native callbacks use an app-owned
+custom scheme in authority form (`<app-scheme>://...`). Browser-executable and
+browser-local schemes such as `javascript:`, `data:`, `vbscript:`, `file:`, and
+`blob:` are rejected. Takosumi appends the connect payload itself.
 
 The `javascript:`, `data:`, `vbscript:`, `blob:`, `file:`, `about:`,
 `filesystem:`, and `view-source:` schemes are rejected, including their

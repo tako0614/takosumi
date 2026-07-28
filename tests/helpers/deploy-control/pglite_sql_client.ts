@@ -124,8 +124,22 @@ export class PGliteSqlClient implements SqlClient {
    * here is a product bug, not a test fixture concern.
    */
   static async create(): Promise<PGliteSqlClient> {
+    return await PGliteSqlClient.createThroughMigrationVersion(
+      Number.POSITIVE_INFINITY,
+    );
+  }
+
+  /**
+   * Provisions a historical catalog boundary so upgrade tests can populate the
+   * previous public schema before applying the next migration.
+   */
+  static async createThroughMigrationVersion(
+    maximumVersion: number,
+  ): Promise<PGliteSqlClient> {
     const db = new PGlite();
-    for (const migration of postgresStorageMigrationStatements) {
+    for (const migration of postgresStorageMigrationStatements.filter(
+      (entry) => entry.version <= maximumVersion,
+    )) {
       for (const statement of splitSqlStatements(migration.sql)) {
         try {
           await db.exec(statement);

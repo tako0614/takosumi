@@ -1,3 +1,4 @@
+// takos-secret-scan: synthetic — the runner fixture sets a named placeholder Cloudflare token.
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";

@@ -25,12 +25,9 @@ test("FormActivation CLI maps list/get/create/update to the operator API", async
   const createPath = join(directory, "create.json");
   const updatePath = join(directory, "update.json");
   const identity = {
-    formRef: {
-      apiVersion: "takoform.dev/v1alpha1",
-      kind: "ObjectBucket",
-      definitionVersion: "1.0.0",
-      schemaDigest: `sha256:${"a".repeat(64)}`,
-    },
+    type: "object_bucket",
+    version: "1.0.0",
+    schemaDigest: `sha256:${"a".repeat(64)}`,
     packageDigest: `sha256:${"b".repeat(64)}`,
   };
   await writeFile(

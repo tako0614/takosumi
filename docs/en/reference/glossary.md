@@ -1,73 +1,145 @@
 # Glossary
 
-One-line explanations of the words used across the Takosumi docs.
-See the [Model reference](./model.md) for details.
+Short explanations of the words used across the Takosumi docs, one term at a
+time. How each thing behaves is described in the [API](./api.md) and
+[CLI](./cli.md) references.
 
-## Words used in the UI
+## Words on screen and words inside
 
-Normal screens do not expose the internal model directly; they use these words instead.
+The dashboard does not put internal terms in front of you. When the API or these
+docs use a different name, read it back through this table.
 
-| UI word       | Internal term                        | Meaning                                                |
-| ------------- | ------------------------------------ | ------------------------------------------------------ |
-| Service / App | Capsule                              | An app, worker, API, site, storage, etc. that you host |
-| Connection    | ProviderConnection / ProviderBinding | An account link to Cloudflare / AWS / GCP and others   |
-| Changes       | plan (Run)                           | The list of changes you review before applying         |
-| History       | Run records / AuditEvent             | Who changed what, and when                             |
-| Restore point | StateVersion                         | A saved state you can go back to                       |
+| Word on screen | Internal term | What it refers to |
+| --- | --- | --- |
+| Service / App | Capsule | One deployed unit. |
+| Connected accounts | ProviderConnection / ProviderBinding | Stored credentials, and where they are assigned. |
+| Changes | plan | The list of changes you review before anything is applied. |
+| Change verification ID | planDigest | The value that proves the plan you reviewed is the plan being applied. |
+| Update history | The list of Runs | What ran, and when. |
+| History | Activity / AuditEvent | Who did what, and when. |
+| Restore this state | Restoring from a StateVersion | Choosing an earlier state again. |
 
-## Core words
+## The overall frame
 
-| Term                   | Meaning                                                                                                                                                     |
-| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Takosumi               | Software that deploys and manages OpenTofu/Terraform modules from Git through a plan → review → apply flow.                                                 |
-| OpenTofu               | An open-source tool (Terraform-compatible) for defining infrastructure as code. Takosumi is the side that runs it.                                          |
-| Workspace              | The boundary for a user or team. Projects, connections, secrets, and history are isolated inside it.                                                        |
-| Project                | One product, service, or infrastructure group inside a Workspace.                                                                                           |
-| Capsule                | One OpenTofu/Terraform module execution unit, usually sourced from a Git URL + ref + path.                                                                  |
-| Source                 | Where a Capsule comes from: Git URL / branch / commit / directory.                                                                                          |
-| Run                    | The record of one execution. Operations such as plan / apply / destroy are stored with logs, results, and the actor.                                        |
-| plan / apply / destroy | plan computes and shows what will change, apply makes the change, destroy removes resources. Each is recorded as a Run.                                     |
-| StateVersion           | The state version saved on every apply. Usable as a restore point.                                                                                          |
-| Output                 | An ordinary root-module return value captured via `tofu output -json`. It may feed another Capsule's OpenTofu input or an explicit Interface input mapping. |
-| Interface              | A versioned, non-secret declaration of a deployed runtime. Service-side configuration explicitly maps any required public Output name.                      |
-| InterfaceBinding       | Runtime authorization that gives a Principal, ServiceAccount, Capsule, or Resource permissions and a credential-delivery method.                            |
-| Secret                 | An encrypted stored value. Write-only through the API and redacted from logs.                                                                               |
-| Runner                 | The isolated execution environment (sandbox) that actually runs OpenTofu.                                                                                   |
-| AuditEvent             | The audit record of who did what to which target.                                                                                                           |
-| Operator               | The organization or person running Takosumi for themselves or their own users.                                                                              |
+| Term | Meaning |
+| --- | --- |
+| Takosumi | A control plane that runs OpenTofu / Terraform modules kept in Git through plan, review, and apply, and keeps the history. |
+| OpenTofu | An open-source tool that defines infrastructure as code and applies it. Compatible with Terraform. |
+| Workspace | The boundary that groups people and resources. Members, permissions, connections, and history are separated by it. |
+| Project | A division used to organize the inside of a Workspace. |
+| Source | A registration of which repository, which directory, and which ref to follow. |
+| SourceSnapshot | The commit a Source resolved its ref to. This is always what gets executed. |
+| Capsule | One deployed unit. It runs a single OpenTofu root module. |
+| stale | The state of a Capsule whose tracked Source has a newer commit. |
+| Stack flow | The path that runs a module you wrote yourself from Git. |
+| Compatibility report | The result of analyzing a registered module read-only, showing the variables and providers it needs. |
+| Dependency | A relation that connects Capsules so one can read another's Output. Across Workspaces it goes through an OutputShare. |
+| InstallConfig | The settings Takosumi keeps for how a Capsule runs, such as variable mapping and which Outputs are published. |
+| App Handoff | The URL convention that sends a user from an outside app into the creation screen. |
+| Store | The listing used to find and browse services you can add. |
 
-## Connection and credential words
+## Running and recording
 
-| Term               | Meaning                                                                                                                             |
-| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
-| ProviderConnection | Safely stored credentials for a provider such as Cloudflare or AWS. Passed as env vars or files only while a Run executes.          |
-| CredentialRecipe   | The definition of env vars, files, and pre-run actions needed to run that provider.                                                 |
-| ProviderBinding    | The mapping "this provider in this Capsule uses this connection". Unbound providers are never silently filled in; they stop safely. |
+| Term | Meaning |
+| --- | --- |
+| Run | The record of one execution. plan and apply are separate Runs, and an apply Run is pinned to the plan Run you reviewed. |
+| plan | The operation that computes and shows what will change. Nothing real changes yet. |
+| apply | The operation that applies the plan you reviewed, unchanged. |
+| destroy | The operation that removes the resources a Capsule created. A plan is produced first, then applied. |
+| refresh | The operation that re-reads state and Outputs into Takosumi without touching anything real outside. |
+| drift check | The read-only operation that looks for gaps between saved state and reality. |
+| drift | The gap that has appeared between saved state and reality. |
+| RunGroup | The record grouping several Runs in dependency order. It is created by a Workspace-wide update or drift check, and by adding, updating, or destroying a Capsule. |
+| Runner | The isolated execution environment that actually runs OpenTofu. Credentials are handed over only inside it. |
+| StateVersion | The state at the moment an apply finished. These accumulate rather than overwrite. |
+| Output | A non-secret value a Capsule publishes outward. |
+| OutputShare | The record that passes an Output across Workspaces. The receiving side approves it before it takes effect. |
+| AuditEvent | A record, one per entry, of who acted on what, how, and with what result. |
+| ledger | The store that Run and Resource records accumulate in. The entry point differs, but the destination is the same. |
 
-## Service Form host words
+## Credentials
 
-These only appear when you use the typed service lifecycle. If you only run
-plain OpenTofu modules, you can skip them. `Service Form` is the adopted target
-concept. The current `/v1/resources` API and existing Resource records retain
-the `Resource Shape` compatibility name. Exact FormRef additive persistence is
-implemented, but the alias remains
-until live migration/rollback evidence and the compatibility-removal gate are
-complete.
+| Term | Meaning |
+| --- | --- |
+| Connection | Credentials saved write-only. There is no path to read them back after creation. |
+| ProviderConnection | The name for a Connection that is handed to an OpenTofu provider. |
+| ProviderBinding | The mapping that says this provider in this Capsule uses this connection. |
+| CredentialRecipe | A setup aid that collects the environment-variable names and file names each provider needs. |
+| Secret | A secret value stored encrypted. |
+| secret partition | The token naming the encryption partition a secret is stored in. You give it when creating a Connection. |
+| personal access token | An API token issued by Accounts. It carries `read` / `write` / `admin` scopes. |
 
-| Term                         | Meaning                                                                                                                                                                           |
-| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Service Form                 | A portable, implementation-independent service definition, such as "I want one object store".                                                                                     |
-| FormRef                      | The exact immutable identity: `apiVersion`, `kind`, `definitionVersion`, and `schemaDigest`. Resource and ResolutionLock pin it beside the package digest in additive columns.    |
-| Form Package / Form Registry | A signed data-only definition bundle and the trusted package pins installed on one host. Packages contain no executable code, credentials, price, or capacity.                    |
-| Resource Shape               | The compatibility name used by the current API and existing state from the discontinued provider for a Service Form-backed Resource.                                              |
-| FormActivation               | A generic OSS operator record exposing an exact FormRef to an audience/policy scope. It contains no price, payment, official capacity, or SLA.                                    |
-| Offering                     | A noncommercial OSS catalog record exposing an open subject type by exact ref/version/digest, requirements, and audience, without price or private-manager data.                  |
-| OfferingSelection            | The OSS result pinning catalog/Offering versions, the exact subject and requirements, resolver, and resolution fingerprint.                                                       |
-| CommercialOfferingBinding    | A closed Cloud/operator record binding an exact OfferingSelection to implementation, manager/capacity, SKU, PriceCatalog, and payment evidence without a second selection engine. |
-| Target / TargetPool          | Where a Resource resolves: the operator-enabled candidates and their pools.                                                                                                       |
-| Policy                       | The rules for which Resource may resolve where.                                                                                                                                   |
-| Adapter                      | The trusted host implementation that turns a Resource into a real resource.                                                                                                       |
-| ResolutionLock               | The record that pins an exact form / implementation / Target decision.                                                                                                            |
-| NativeResource               | The record of the real resource created by a resolution.                                                                                                                          |
-| Space / Environment / Stack  | The Resource API namespace, environment (dev/prod, etc.), and grouping units.                                                                                                     |
-| Compatibility API            | A scoped, versioned facade for a standard protocol/API, such as `compat.s3.v1`. It is not a clone of a vendor/provider API.                                                       |
+## Runtime connections
+
+| Term | Meaning |
+| --- | --- |
+| Interface | The declaration of what something you deployed provides. |
+| InterfaceBinding | The authorization for who may use that Interface, and with which permissions. |
+| Principal | The subject on the consuming side that is a person or an account. |
+| ServiceAccount | The subject on the consuming side that is not a person. |
+| permission | A token for an operation a Binding allows. You request this range when taking a token. |
+| Interface token | A short-lived token minted per request in order to call an Interface. Its prefix is `taksrv_`. |
+
+## Typed services
+
+These words appear on the path that creates a service by declaring a type only.
+
+| Term | Meaning |
+| --- | --- |
+| Resource | A typed service you can create by declaration alone, without writing a module. |
+| Resource Shape | The name the current API, provider, and state use for a Resource's type. Also written simply as shape. |
+| Service Form | A service type defined separately from any implementation. Resource Shape is its current name. |
+| FormRef | The identifier that points to exactly one Service Form definition. It is made of the type name, the version, and the digest of the definition. |
+| Form Package | A bundle holding only the definition schema and its accompanying information. |
+| Form Registry | The list of Form Packages an endpoint trusts and has pinned. |
+| FormActivation | The record in which an operator decides which Form is exposed to whom. |
+| Space | The namespace of the Resource API. On requests through the platform it must match the Workspace id. |
+| Target | Where a Resource is actually created. |
+| TargetPool | The set of candidate Targets an operator has enabled. |
+| SpacePolicy | The rules for which Resource may resolve where. |
+| Resolver | The mechanism that picks the implementation and the placement from a declared Resource. |
+| Adapter | The part that turns a chosen implementation into a real resource. It handles preview, apply, import, observe, refresh, and delete. |
+| ResolutionLock | The record that pins an implementation and placement once decided. |
+| NativeResource | The record of the provider-side resource an Adapter actually created. |
+| observe | A read-only drift check against a Resource. |
+| import | The operation that takes an existing real resource into Takosumi's records. |
+| portability | How movable a chosen resolution is. The values are `portable` / `mostly_portable` / `partial` / `locked_in`. |
+| Compatibility API | An entry point that accepts a standard protocol such as S3 or OCI within a decided scope and version. |
+
+## Reading status
+
+| Term | Meaning |
+| --- | --- |
+| phase | The observed stage. A Resource ranges from `Pending` through `Ready` or `Failed`. |
+| Ready | A word for a usable state. It is a phase value on Resource and InterfaceBinding, and one of the Condition types. |
+| Condition | A record that keeps the evidence for a state, one entry at a time. It holds a type, `true` / `false` / `unknown`, and a reason. |
+| generation | The version number of the desired state. It advances each time the declaration changes. |
+| observedGeneration | The number showing which generation the status was written against. |
+
+## Words that cut across
+
+| Term | Meaning |
+| --- | --- |
+| capability | A token for what is enabled on an endpoint. Read this rather than an edition name. |
+| profile | A named bundle of settings with a decided scope. Examples are `compat.s3.v1` on the compatibility API, and the `profiles` an EdgeWorker asks of its runtime. |
+| surface | A group of entry points usable from outside. `/api/v1` and `/v1` are separate surfaces. |
+| digest | A SHA-256 fingerprint computed from content. The same content always gives the same value. |
+| fail closed | Stopping rather than letting something through when the decision is unclear. |
+| lease | A mechanism that reserves ownership with an expiry so the same target is not processed in two places at once. |
+| CAS (compare-and-swap) | Checking just before an update that the version you read is still current, and not writing if it changed. |
+| cursor | An opaque token for reading the next part of a list. Do not interpret it; pass it straight into the next request. |
+
+Which capabilities are enabled on an endpoint is answered by the endpoint itself.
+
+```bash
+curl -s https://takosumi.example.com/.well-known/takosumi
+```
+
+## Who operates it
+
+| Term | Meaning |
+| --- | --- |
+| Operator | The party running Takosumi for themselves or for their own users. |
+| Takosumi Cloud | The hosted service run officially. |
+| showback | The billing mode that goes as far as recording and showing usage. |
+| ServiceOffering | The record defining a service Cloud provides, down to price and capacity. |

@@ -6,21 +6,24 @@ import type {
 } from "./offerings.ts";
 
 /**
- * Exact, immutable identity of one portable Service Form definition.
+ * Exact, immutable identity of one portable Service Form definition: the
+ * snake_case resource type token, the definition SemVer, and SHA-256 over the
+ * definition's RFC 8785 bytes (takoform v0 vocabulary).
  *
  * `packageDigest` is deliberately not part of this tuple. It identifies the
  * containing immutable package envelope and is persisted beside a FormRef.
  */
 export interface FormRef {
-  readonly apiVersion: string;
-  readonly kind: string;
-  readonly definitionVersion: string;
+  readonly type: string;
+  readonly version: string;
   readonly schemaDigest: string;
 }
 
 /** Exact installed identity used by Resources, locks, Runs, and activations. */
 export interface InstalledFormReference {
-  readonly formRef: FormRef;
+  readonly type: string;
+  readonly version: string;
+  readonly schemaDigest: string;
   readonly packageDigest: string;
 }
 
@@ -32,9 +35,10 @@ export function isInstalledFormReference(
   }
   const keys = Object.keys(value);
   if (
-    keys.length !== 2 ||
-    !keys.includes("formRef") ||
-    !keys.includes("packageDigest")
+    keys.length !== 4 ||
+    !["type", "version", "schemaDigest", "packageDigest"].every((key) =>
+      keys.includes(key),
+    )
   ) {
     return false;
   }
@@ -42,12 +46,33 @@ export function isInstalledFormReference(
     Record<keyof InstalledFormReference, unknown>
   >;
   return (
-    isFormRef(candidate.formRef) && isSha256Digest(candidate.packageDigest)
+    typeof candidate.type === "string" &&
+    FORM_TYPE_RE.test(candidate.type) &&
+    typeof candidate.version === "string" &&
+    FORM_VERSION_RE.test(candidate.version) &&
+    isSha256Digest(candidate.schemaDigest) &&
+    isSha256Digest(candidate.packageDigest)
   );
 }
 
+/** Splits an installed reference into its definition identity. */
+export function formRefOfInstalled(identity: InstalledFormReference): FormRef {
+  return {
+    type: identity.type,
+    version: identity.version,
+    schemaDigest: identity.schemaDigest,
+  };
+}
+
 export type FormOperation =
-  "create" | "read" | "update" | "delete" | "import" | "refresh";
+  | "create"
+  | "read"
+  | "update"
+  | "delete"
+  | "import"
+  | "refresh"
+  | "sync"
+  | "drift";
 
 /** Portable, data-only mapping sources every conforming host understands. */
 export const PORTABLE_INTERFACE_INPUT_SOURCES = [
@@ -203,8 +228,8 @@ export function formOfferingSubject(
   }
   return {
     type: SERVICE_FORM_OFFERING_SUBJECT_TYPE,
-    ref: formRefKey(identity.formRef),
-    version: identity.formRef.definitionVersion,
+    ref: formRefKey(formRefOfInstalled(identity)),
+    version: identity.version,
     digest: identity.packageDigest,
   };
 }
@@ -242,9 +267,9 @@ export type FormAvailabilityReason =
   | "principal_not_allowed"
   | "target_pool_class_unavailable";
 
-/** Structured discovery state for one exact FormRef. */
+/** Structured discovery state for one exact form reference. */
 export interface FormAvailability {
-  readonly identity: InstalledFormReference;
+  readonly form: InstalledFormReference;
   readonly definitionKnown: boolean;
   readonly installed: boolean;
   readonly executable: boolean;
@@ -258,8 +283,7 @@ export interface FormAvailability {
   readonly deprecated: boolean;
 }
 
-const FORM_TOKEN_RE = /^[A-Za-z][A-Za-z0-9._/-]{0,127}$/u;
-const FORM_KIND_RE = /^[A-Za-z][A-Za-z0-9._-]{0,127}$/u;
+const FORM_TYPE_RE = /^[a-z][a-z0-9_]{0,63}$/u;
 const FORM_VERSION_RE =
   /^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u;
 const SHA256_DIGEST_RE = /^sha256:[a-f0-9]{64}$/u;
@@ -274,28 +298,24 @@ export function isFormRef(value: unknown): value is FormRef {
   }
   const keys = Object.keys(value);
   if (
-    keys.length !== 4 ||
-    !["apiVersion", "kind", "definitionVersion", "schemaDigest"].every((key) =>
-      keys.includes(key),
-    )
+    keys.length !== 3 ||
+    !["type", "version", "schemaDigest"].every((key) => keys.includes(key))
   ) {
     return false;
   }
   const candidate = value as Partial<Record<keyof FormRef, unknown>>;
   return (
-    typeof candidate.apiVersion === "string" &&
-    FORM_TOKEN_RE.test(candidate.apiVersion) &&
-    typeof candidate.kind === "string" &&
-    FORM_KIND_RE.test(candidate.kind) &&
-    typeof candidate.definitionVersion === "string" &&
-    FORM_VERSION_RE.test(candidate.definitionVersion) &&
+    typeof candidate.type === "string" &&
+    FORM_TYPE_RE.test(candidate.type) &&
+    typeof candidate.version === "string" &&
+    FORM_VERSION_RE.test(candidate.version) &&
     isSha256Digest(candidate.schemaDigest)
   );
 }
 
 export function formRefKey(ref: FormRef): string {
-  if (!isFormRef(ref)) throw new TypeError("invalid exact FormRef");
-  return [ref.apiVersion, ref.kind, ref.definitionVersion, ref.schemaDigest]
+  if (!isFormRef(ref)) throw new TypeError("invalid exact form reference");
+  return [ref.type, ref.version, ref.schemaDigest]
     .map(encodeURIComponent)
     .join("|");
 }
@@ -304,13 +324,12 @@ export function formRefKey(ref: FormRef): string {
 export function parseFormRefKey(value: string): FormRef | undefined {
   if (typeof value !== "string") return undefined;
   const parts = value.split("|");
-  if (parts.length !== 4) return undefined;
+  if (parts.length !== 3) return undefined;
   try {
     const ref: FormRef = {
-      apiVersion: decodeURIComponent(parts[0]!),
-      kind: decodeURIComponent(parts[1]!),
-      definitionVersion: decodeURIComponent(parts[2]!),
-      schemaDigest: decodeURIComponent(parts[3]!),
+      type: decodeURIComponent(parts[0]!),
+      version: decodeURIComponent(parts[1]!),
+      schemaDigest: decodeURIComponent(parts[2]!),
     };
     return isFormRef(ref) && formRefKey(ref) === value ? ref : undefined;
   } catch {
@@ -322,7 +341,7 @@ export function installedFormReferenceKey(
   identity: InstalledFormReference,
 ): string {
   if (!isInstalledFormReference(identity)) {
-    throw new TypeError("invalid exact installed Form reference");
+    throw new TypeError("invalid exact installed form reference");
   }
-  return `${formRefKey(identity.formRef)}|${identity.packageDigest}`;
+  return `${formRefKey(formRefOfInstalled(identity))}|${identity.packageDigest}`;
 }

@@ -16,6 +16,7 @@ import {
   bearerChallenge,
   bearerToken,
   json,
+  readFormUrlEncoded,
   takosumiSubjectValue,
 } from "./http-helpers.ts";
 import {
@@ -30,7 +31,14 @@ import { readEnvVar } from "./read-env.ts";
 import { requireAccountSession } from "./account-session.ts";
 import { findActiveAccessToken } from "./access-token-activity.ts";
 import type { InterfaceOAuthActivityValidator } from "./access-token-activity.ts";
-import type { ControlPlaneOperations } from "./control-operations.ts";
+import type {
+  ControlPlaneOperations,
+  ControlWorkspaceRole,
+} from "./control-operations.ts";
+import {
+  validateOidcLiveGrant,
+  type OidcLiveGrantFailureReason,
+} from "./oidc-live-grant.ts";
 
 // OIDC token / code lifetimes. These have safe production defaults and are
 // operator-configurable via env (mirroring how passkey/session TTLs are
@@ -234,6 +242,7 @@ async function resolveOidcAuthorizationSubject(input: {
   client: ResolvedOidcClient | undefined;
   flow: OidcAuthorizationCodeFlow;
   sessionSubject: TakosumiSubject;
+  scope: string;
   store: AccountsStore;
   operations?: ControlPlaneOperations;
 }): Promise<
@@ -249,7 +258,26 @@ async function resolveOidcAuthorizationSubject(input: {
     }
   | { ok: false; status: number; error: string; errorDescription: string }
 > {
-  if (!input.client?.capsuleId) {
+  if (!input.client) {
+    return {
+      ok: false,
+      status: 400,
+      error: "unauthorized_client",
+      errorDescription: "OIDC client registration was not found",
+    };
+  }
+  const liveGrant = await validateOidcLiveGrant({
+    store: input.store,
+    operations: input.operations,
+    client: input.client,
+    scope: input.scope,
+    takosumiSubject: input.sessionSubject,
+    capsuleId: input.client.capsuleId,
+  });
+  if (!liveGrant.ok) {
+    return oidcAuthorizationGrantFailure(liveGrant.reason);
+  }
+  if (!liveGrant.capsuleId) {
     return {
       ok: true,
       record: {
@@ -274,28 +302,34 @@ async function resolveOidcAuthorizationSubject(input: {
       errorDescription: "OIDC client Capsule authority is not available",
     };
   }
-  let capsule;
-  try {
-    capsule = await input.operations.capsules.getCapsule(
-      input.client.capsuleId,
-    );
-  } catch {
-    return {
-      ok: false,
-      status: 400,
-      error: "unauthorized_client",
-      errorDescription: "OIDC client Capsule was not found",
-    };
-  }
-  const member = input.operations.members.getMember
-    ? await input.operations.members.getMember(
-        capsule.workspaceId,
-        input.sessionSubject,
-      )
-    : (await input.operations.members.listMembers(capsule.workspaceId)).find(
-        (candidate) => candidate.accountId === input.sessionSubject,
-      );
-  if (!member || member.status !== "active") {
+  const pairwiseSubject = await derivePairwiseSubject({
+    secret: input.flow.pairwiseSubjectSecret,
+    takosumiSubject: input.sessionSubject,
+    clientId: `${liveGrant.capsuleName ?? liveGrant.capsuleId}:${
+      liveGrant.capsuleId
+    }:${input.client.clientId}`,
+  });
+  return {
+    ok: true,
+    record: {
+      subject: pairwiseSubject,
+      takosumiSubject: input.sessionSubject,
+      capsuleId: liveGrant.capsuleId,
+      workspaceId: liveGrant.workspaceId,
+      role: liveGrant.role,
+    },
+  };
+}
+
+function oidcAuthorizationGrantFailure(
+  reason: OidcLiveGrantFailureReason,
+): {
+  ok: false;
+  status: number;
+  error: string;
+  errorDescription: string;
+} {
+  if (reason === "workspace_membership_inactive") {
     return {
       ok: false,
       status: 403,
@@ -303,31 +337,23 @@ async function resolveOidcAuthorizationSubject(input: {
       errorDescription: "the account cannot access this Capsule Workspace",
     };
   }
-  const pairwiseSubject = await derivePairwiseSubject({
-    secret: input.flow.pairwiseSubjectSecret,
-    takosumiSubject: input.sessionSubject,
-    clientId: `${capsule.name}:${capsule.id}:${input.client.clientId}`,
-  });
+  if (reason === "scope_not_granted") {
+    return {
+      ok: false,
+      status: 400,
+      error: "invalid_scope",
+      errorDescription: "requested scope is outside the current Capsule grant",
+    };
+  }
   return {
-    ok: true,
-    record: {
-      subject: pairwiseSubject,
-      takosumiSubject: input.sessionSubject,
-      capsuleId: capsule.id,
-      workspaceId: capsule.workspaceId,
-      role: preferredWorkspaceRole(member.roles),
-    },
+    ok: false,
+    status: 400,
+    error: "unauthorized_client",
+    errorDescription: "OIDC client Capsule grant is not active",
   };
 }
 
-function preferredWorkspaceRole(roles: readonly string[]): string {
-  for (const role of ["owner", "admin", "member", "viewer"] as const) {
-    if (roles.includes(role)) return role;
-  }
-  return "member";
-}
-
-export function scopeIsAllowed(
+function scopeIsAllowed(
   requestedScope: string,
   allowedScopes: readonly string[],
 ): boolean {
@@ -344,23 +370,6 @@ export async function handleAuthorize(input: {
   store: AccountsStore;
   operations?: ControlPlaneOperations;
 }): Promise<Response> {
-  // An authorization request is a top-level navigation the user chose to make.
-  // A browser that labels it as a subresource — an <img>, <script>, <iframe>,
-  // or fetch on some other page — is a silent code grab: the session cookie
-  // rides along and the 302 hands the code to the client's registered redirect
-  // host without the account holder ever seeing a prompt. A Capsule-declared
-  // launcher icon is exactly such an <img>. Non-browser callers send no
-  // Sec-Fetch-Dest at all, and the header survives cross-origin redirects.
-  const fetchDest = input.request.headers.get("sec-fetch-dest");
-  if (fetchDest !== null && fetchDest !== "document") {
-    return json(
-      {
-        error: "invalid_request",
-        error_description: "authorize must be a top-level navigation",
-      },
-      400,
-    );
-  }
   const responseType = input.url.searchParams.get("response_type");
   const clientId = input.url.searchParams.get("client_id");
   const redirectUri = input.url.searchParams.get("redirect_uri");
@@ -437,6 +446,7 @@ export async function handleAuthorize(input: {
     client,
     flow: input.flow,
     sessionSubject: session.subject,
+    scope,
     store: input.store,
     operations: input.operations,
   });
@@ -488,8 +498,9 @@ export async function handleToken(input: {
   store: AccountsStore;
   flow: OidcAuthorizationCodeFlow;
   clients: ReadonlyMap<string, OidcClientRegistration>;
+  operations?: ControlPlaneOperations;
 }): Promise<Response> {
-  const params = new URLSearchParams(await input.request.text());
+  const params = await readFormUrlEncoded(input.request);
   const grantType = params.get("grant_type");
   if (grantType === "refresh_token") {
     return await handleRefreshToken({
@@ -499,6 +510,7 @@ export async function handleToken(input: {
       store: input.store,
       flow: input.flow,
       clients: input.clients,
+      operations: input.operations,
     });
   }
   if (grantType !== "authorization_code") {
@@ -531,16 +543,28 @@ export async function handleToken(input: {
     clients: input.clients,
     store: input.store,
   });
-  if (input.clients.size > 0 && !client) {
+  if (!client) {
     return json({ error: "invalid_grant" }, 400);
   }
-  if (client && !(await validateOidcClientSecret(client, credentials.secret))) {
+  if (!(await validateOidcClientSecret(client, credentials.secret))) {
     return json({ error: "invalid_client" }, 401);
   }
   if (params.get("redirect_uri") !== record.redirectUri) {
     return json({ error: "invalid_grant" }, 400);
   }
   if (!(await isPkceVerifierValid(record, params.get("code_verifier")))) {
+    return json({ error: "invalid_grant" }, 400);
+  }
+  const liveGrant = await validateOidcLiveGrant({
+    store: input.store,
+    operations: input.operations,
+    client,
+    scope: record.scope,
+    takosumiSubject: record.takosumiSubject,
+    capsuleId: record.capsuleId,
+    workspaceId: record.workspaceId,
+  });
+  if (!liveGrant.ok) {
     return json({ error: "invalid_grant" }, 400);
   }
 
@@ -557,9 +581,9 @@ export async function handleToken(input: {
       scope: record.scope,
       subject: record.subject,
       takosumiSubject: record.takosumiSubject,
-      capsuleId: record.capsuleId,
-      workspaceId: record.workspaceId,
-      role: record.role,
+      capsuleId: liveGrant.capsuleId,
+      workspaceId: liveGrant.workspaceId,
+      role: liveGrant.role,
       expiresAt: Date.now() + REFRESH_TOKEN_TTL_MS,
     });
     // The refresh token at chain creation is by definition its own
@@ -575,9 +599,9 @@ export async function handleToken(input: {
     scope: record.scope,
     subject: record.subject,
     takosumiSubject: record.takosumiSubject,
-    capsuleId: record.capsuleId,
-    workspaceId: record.workspaceId,
-    role: record.role,
+    capsuleId: liveGrant.capsuleId,
+    workspaceId: liveGrant.workspaceId,
+    role: liveGrant.role,
     nonce: record.nonce,
     refreshToken,
     chainRefreshToken: refreshToken,
@@ -592,6 +616,7 @@ async function handleRefreshToken(input: {
   store: AccountsStore;
   flow: OidcAuthorizationCodeFlow;
   clients: ReadonlyMap<string, OidcClientRegistration>;
+  operations?: ControlPlaneOperations;
 }): Promise<Response> {
   const refreshToken = input.params.get("refresh_token");
   if (!refreshToken) return json({ error: "invalid_grant" }, 400);
@@ -641,16 +666,32 @@ async function handleRefreshToken(input: {
       store: input.store,
     }),
   );
-  if (input.clients.size > 0 && !client) {
+  if (!client) {
     return json({ error: "invalid_grant" }, 400);
   }
   if (
-    client &&
     !(await observeSlowOidcRefreshStage("client_auth", () =>
       validateOidcClientSecret(client, credentials.secret),
     ))
   ) {
     return json({ error: "invalid_client" }, 401);
+  }
+  const liveGrant = await observeSlowOidcRefreshStage(
+    "live_grant",
+    () =>
+      validateOidcLiveGrant({
+        store: input.store,
+        operations: input.operations,
+        client,
+        scope: record.scope,
+        takosumiSubject: record.takosumiSubject,
+        capsuleId: record.capsuleId,
+        workspaceId: record.workspaceId,
+      }),
+  );
+  if (!liveGrant.ok) {
+    await input.store.revokeRefreshChain(refreshToken);
+    return json({ error: "invalid_grant" }, 400);
   }
 
   // Rotate: mint a brand-new refresh token, invalidate the old one, and
@@ -683,9 +724,9 @@ async function handleRefreshToken(input: {
       scope: record.scope,
       subject: record.subject,
       takosumiSubject: record.takosumiSubject,
-      capsuleId: record.capsuleId,
-      workspaceId: record.workspaceId,
-      role: record.role,
+      capsuleId: liveGrant.capsuleId,
+      workspaceId: liveGrant.workspaceId,
+      role: liveGrant.role,
       expiresAt: Date.now() + REFRESH_TOKEN_TTL_MS,
     });
     await input.store.deleteToken(refreshToken);
@@ -700,9 +741,9 @@ async function handleRefreshToken(input: {
       scope: record.scope,
       subject: record.subject,
       takosumiSubject: record.takosumiSubject,
-      capsuleId: record.capsuleId,
-      workspaceId: record.workspaceId,
-      role: record.role,
+      capsuleId: liveGrant.capsuleId,
+      workspaceId: liveGrant.workspaceId,
+      role: liveGrant.role,
       refreshToken: newRefreshToken,
       chainRefreshToken: newRefreshToken,
     }),
@@ -829,6 +870,9 @@ function readAccountEmailVerified(
 export async function handleUserInfo(input: {
   request: Request;
   store: AccountsStore;
+  /** Static OIDC clients supplied by the Accounts composition root. */
+  clients: ReadonlyMap<string, OidcClientRegistration>;
+  operations?: ControlPlaneOperations;
   /**
    * Optional expected audience for the access token. When provided, the
    * access token's recorded audience (or ordinary-token clientId fallback)
@@ -883,18 +927,37 @@ export async function handleUserInfo(input: {
         pragma: "no-cache",
       });
     }
-    if (record.capsuleId) {
+    const client = await resolveOidcClient({
+      clientId: record.clientId,
+      clients: input.clients,
+      store: input.store,
+    });
+    if (!client) return bearerChallenge("invalid_token");
+    const liveGrant = await validateOidcLiveGrant({
+      store: input.store,
+      operations: input.operations,
+      client,
+      scope: record.scope,
+      takosumiSubject: record.takosumiSubject,
+      capsuleId: record.capsuleId,
+      workspaceId: record.workspaceId,
+    });
+    if (!liveGrant.ok) return bearerChallenge("invalid_token");
+
+    if (liveGrant.capsuleId) {
       body.takosumi = {
-        capsule_id: record.capsuleId,
-        ...(record.workspaceId ? { workspace_id: record.workspaceId } : {}),
-        ...(record.role ? { role: record.role } : {}),
+        capsule_id: liveGrant.capsuleId,
+        ...(liveGrant.workspaceId
+          ? { workspace_id: liveGrant.workspaceId }
+          : {}),
+        ...(liveGrant.role ? { role: liveGrant.role } : {}),
       };
       // Emit a flat `workspace_memberships` claim that installable apps, including
       // Installed Capsule surfaces read directly for their
       // membership checks. The token record binds a single accessible
       // Workspace, so the claim is a one-element array derived from it.
-      if (record.workspaceId) {
-        body.workspace_memberships = [record.workspaceId];
+      if (liveGrant.workspaceId) {
+        body.workspace_memberships = [liveGrant.workspaceId];
       }
     }
     const account = record.takosumiSubject
@@ -934,7 +997,7 @@ export async function handleRevoke(input: {
   /** Static OIDC clients are always supplied by the Accounts composition root. */
   clients: ReadonlyMap<string, OidcClientRegistration>;
 }): Promise<Response> {
-  const params = new URLSearchParams(await input.request.text());
+  const params = await readFormUrlEncoded(input.request);
   // RFC 7009 §2.1: the authorization server MUST require client
   // authentication for confidential clients and MUST authenticate clients
   // that issued access/refresh tokens. We honor that universally for the
@@ -998,8 +1061,9 @@ export async function handleIntrospect(input: {
   /** Static OIDC clients are always supplied by the Accounts composition root. */
   clients: ReadonlyMap<string, OidcClientRegistration>;
   interfaceOAuthActivityValidator?: InterfaceOAuthActivityValidator;
+  operations?: ControlPlaneOperations;
 }): Promise<Response> {
-  const params = new URLSearchParams(await input.request.text());
+  const params = await readFormUrlEncoded(input.request);
   // RFC 7662 §2.1: the introspection endpoint MUST require client
   // authentication for any introspection request. Reject unauthenticated
   // calls with 401 invalid_client.
@@ -1050,14 +1114,40 @@ export async function handleIntrospect(input: {
     } else if (accessRecord.clientId !== authenticatedClientId) {
       return json({ active: false });
     }
-    return json(introspectionBody(accessRecord, "oauth_access"));
+    let liveRole: ControlWorkspaceRole | undefined;
+    if (!interfaceOAuth) {
+      const liveGrant = await validateOidcLiveGrant({
+        store: input.store,
+        operations: input.operations,
+        client: auth.client,
+        scope: accessRecord.scope,
+        takosumiSubject: accessRecord.takosumiSubject,
+        capsuleId: accessRecord.capsuleId,
+        workspaceId: accessRecord.workspaceId,
+      });
+      if (!liveGrant.ok) return json({ active: false });
+      liveRole = liveGrant.role;
+    }
+    return json(introspectionBody(accessRecord, "oauth_access", liveRole));
   }
   const refreshRecord = await input.store.findRefreshToken(token);
   if (refreshRecord) {
     if (refreshRecord.clientId !== authenticatedClientId) {
       return json({ active: false });
     }
-    return json(introspectionBody(refreshRecord, "refresh_token"));
+    const liveGrant = await validateOidcLiveGrant({
+      store: input.store,
+      operations: input.operations,
+      client: auth.client,
+      scope: refreshRecord.scope,
+      takosumiSubject: refreshRecord.takosumiSubject,
+      capsuleId: refreshRecord.capsuleId,
+      workspaceId: refreshRecord.workspaceId,
+    });
+    if (!liveGrant.ok) return json({ active: false });
+    return json(
+      introspectionBody(refreshRecord, "refresh_token", liveGrant.role),
+    );
   }
   const patRecord = await input.store.findPersonalAccessToken(token);
   if (patRecord) {
@@ -1068,7 +1158,17 @@ export async function handleIntrospect(input: {
       patRecord.tokenId,
       Date.now(),
     );
-    return json(personalAccessTokenIntrospectionBody(patRecord, input.issuer));
+    const liveRole = await introspectionWorkspaceRole(
+      input.operations,
+      patRecord.workspaceId,
+      patRecord.subject,
+    );
+    if (input.operations && patRecord.workspaceId && !liveRole) {
+      return json({ active: false });
+    }
+    return json(
+      personalAccessTokenIntrospectionBody(patRecord, input.issuer, liveRole),
+    );
   }
   return json({ active: false });
 }
@@ -1100,6 +1200,7 @@ async function isPkceVerifierValid(
 function introspectionBody(
   record: TokenRecord,
   ordinaryTokenUse: "oauth_access" | "refresh_token",
+  workspaceRole?: string,
 ): Record<string, unknown> {
   if (record.expiresAt < Date.now()) {
     return { active: false };
@@ -1122,17 +1223,45 @@ function introspectionBody(
             interface_resolved_revision: record.interfaceResolvedRevision,
           },
         }
-      : record.capsuleId
+      : record.capsuleId || record.workspaceId || workspaceRole
         ? {
             takosumi: {
-              capsule_id: record.capsuleId,
+              ...(record.capsuleId ? { capsule_id: record.capsuleId } : {}),
               ...(record.workspaceId
                 ? { workspace_id: record.workspaceId }
                 : {}),
-              ...(record.role ? { role: record.role } : {}),
+              ...(workspaceRole ?? record.role
+                ? { role: workspaceRole ?? record.role }
+                : {}),
             },
           }
         : {}),
     exp: Math.floor(record.expiresAt / 1000),
   };
+}
+
+async function introspectionWorkspaceRole(
+  operations: ControlPlaneOperations | undefined,
+  workspaceId: string | undefined,
+  subject: string | undefined,
+): Promise<string | undefined> {
+  if (!operations || !workspaceId || !subject) return undefined;
+  try {
+    const workspace = await operations.workspaces.getWorkspace(workspaceId);
+    if (workspace.ownerUserId === subject) return "owner";
+    const member = (await operations.members.listMembers(workspaceId)).find(
+      (candidate) =>
+        candidate.accountId === subject && candidate.status === "active",
+    );
+    if (!member) return undefined;
+    const recognizedRoles = [
+      "owner",
+      "admin",
+      "member",
+      "viewer",
+    ] as const satisfies readonly ControlWorkspaceRole[];
+    return recognizedRoles.find((role) => member.roles.includes(role));
+  } catch {
+    return undefined;
+  }
 }

@@ -135,13 +135,11 @@ function formatActivation(value: unknown, asJson: boolean): string {
 function summary(value: unknown): string {
   if (!isRecord(value)) return "Invalid FormActivation response";
   const identity = isRecord(value.identity) ? value.identity : {};
-  const formRef = isRecord(identity.formRef) ? identity.formRef : {};
-  const apiVersion = stringValue(formRef.apiVersion) ?? "unknown-api";
-  const kind = stringValue(formRef.kind) ?? "unknown-kind";
-  const version = stringValue(formRef.definitionVersion) ?? "unknown-version";
+  const type = stringValue(identity.type) ?? "unknown-type";
+  const version = stringValue(identity.version) ?? "unknown-version";
   const revision =
     typeof value.revision === "number" ? String(value.revision) : "?";
   return `${stringValue(value.id) ?? "unknown"}  ${
     stringValue(value.status) ?? "unknown"
-  }  r${revision}  ${apiVersion}/${kind}@${version}`;
+  }  r${revision}  ${type}@${version}`;
 }

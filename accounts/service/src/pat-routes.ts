@@ -1,5 +1,6 @@
 import {
   TAKOSUMI_ACCOUNTS_PAT_SCOPES,
+  TAKOSUMI_ACCOUNTS_SELF_SERVICE_PAT_SCOPES,
   type TakosumiAccountsPatMetadata,
   type TakosumiAccountsPatScope,
   type TakosumiSubject,
@@ -88,6 +89,20 @@ export async function handleCreatePersonalAccessToken(input: {
       "invalid_request",
       "name, one or more scopes, and optional future expires_at are required",
       400,
+    );
+  }
+  if (
+    scopes.some(
+      (scope) =>
+        !(TAKOSUMI_ACCOUNTS_SELF_SERVICE_PAT_SCOPES as readonly string[]).includes(
+          scope,
+        ),
+    )
+  ) {
+    return errorJson(
+      "insufficient_scope",
+      "admin scope cannot be granted by the self-service token endpoint",
+      403,
     );
   }
   if (workspaceId) {
@@ -212,6 +227,7 @@ export function personalAccessTokenIsActive(
 export function personalAccessTokenIntrospectionBody(
   record: PersonalAccessTokenRecord,
   issuer: string,
+  workspaceRole?: string,
 ): Record<string, unknown> {
   return {
     active: true,
@@ -222,7 +238,12 @@ export function personalAccessTokenIntrospectionBody(
     token_type: "Bearer",
     scope: record.scopes.join(" "),
     ...(record.workspaceId
-      ? { takosumi: { workspace_id: record.workspaceId } }
+      ? {
+          takosumi: {
+            workspace_id: record.workspaceId,
+            ...(workspaceRole ? { role: workspaceRole } : {}),
+          },
+        }
       : {}),
     ...(record.expiresAt === undefined
       ? {}

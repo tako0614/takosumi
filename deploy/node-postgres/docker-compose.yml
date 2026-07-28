@@ -7,7 +7,7 @@
 #
 # Hardening defaults:
 #   - `accounts` and `migrations` run as the non-root `bun` user shipped
-#     by `oven/bun:1` (`USER bun` in the Dockerfile, uid/gid
+#     by `oven/bun:1.3.14` (`USER bun` in the Dockerfile, uid/gid
 #     1000:1000). `user:` is repeated here so an operator who swaps the
 #     base image still gets a non-root runtime.
 #   - `accounts` mounts the root filesystem read-only with a tmpfs at
@@ -18,6 +18,12 @@
 #   - `security_opt: ["no-new-privileges:true"]` prevents setuid/setgid
 #     binaries inside the container from escalating, even on misconfigured
 #     hosts where the seccomp profile is permissive.
+
+x-node-postgres-build: &node-postgres-build
+  context: ../..
+  dockerfile: deploy/node-postgres/Dockerfile
+  additional_contexts:
+    reviewed_provider_assets: "${TAKOSUMI_REVIEWED_PROVIDER_ASSET_ROOT:?set TAKOSUMI_REVIEWED_PROVIDER_ASSET_ROOT to an absolute reviewed provider asset directory}"
 
 services:
   postgres:
@@ -43,9 +49,7 @@ services:
     # point. The container exits 0 on success, after which compose
     # promotes `accounts` from waiting to running.
     #
-    build:
-      context: ../..
-      dockerfile: deploy/node-postgres/Dockerfile
+    build: *node-postgres-build
     restart: "no"
     user: "1000:1000"
     cap_drop: ["ALL"]
@@ -62,9 +66,7 @@ services:
       - "migrate"
 
   accounts:
-    build:
-      context: ../..
-      dockerfile: deploy/node-postgres/Dockerfile
+    build: *node-postgres-build
     restart: unless-stopped
     user: "1000:1000"
     read_only: true

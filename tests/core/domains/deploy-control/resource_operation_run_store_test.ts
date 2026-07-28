@@ -23,12 +23,9 @@ setDefaultTimeout(20_000);
 const clients: PGliteSqlClient[] = [];
 const CREATED_AT = "2026-07-14T00:00:00.000Z";
 const EXACT_FORM: InstalledFormReference = {
-  formRef: {
-    apiVersion: "forms.takoform.com/v1alpha1",
-    kind: "ObjectBucket",
-    definitionVersion: "1.0.0",
-    schemaDigest: `sha256:${"1".repeat(64)}`,
-  },
+  type: "object_bucket",
+  version: "1.0.0",
+  schemaDigest: `sha256:${"1".repeat(64)}`,
   packageDigest: `sha256:${"2".repeat(64)}`,
 };
 

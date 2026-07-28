@@ -228,6 +228,15 @@ export interface AccountsStore {
     | undefined
     | Promise<AccountSessionRecord | undefined>;
   deleteAccountSession(sessionId: string): void | Promise<void>;
+  /**
+   * Atomically persist `next` and revoke `previousSessionId`. Stores that do
+   * not expose this port cannot safely rotate an already-presented session;
+   * callers must fail closed instead of accepting a partial two-write result.
+   */
+  replaceAccountSession?(
+    previousSessionId: string,
+    next: AccountSessionRecord,
+  ): void | Promise<void>;
   savePrivacyRequest(record: PrivacyRequestRecord): void | Promise<void>;
   findPrivacyRequest(
     requestId: string,
@@ -291,6 +300,12 @@ export interface AccountsStore {
   findOidcClientForCapsule(
     capsuleId: string,
   ): OidcClientRecord | undefined | Promise<OidcClientRecord | undefined>;
+  /**
+   * Authoritatively removes one dynamic OIDC client registration. Tokens and
+   * codes may remain for audit/reuse detection, but every authority-bearing
+   * OIDC path must resolve the live registration, so deletion makes them inert.
+   */
+  revokeOidcClient(clientId: string): void | Promise<void>;
   /**
    * F30 fix: persistent refresh-token rotation chain links. The OIDC
    * token endpoint records the parent->child rotation so a subsequent
@@ -559,6 +574,14 @@ export class InMemoryAccountsStore implements AccountsStore {
     this.#accountSessions.delete(sessionId);
   }
 
+  replaceAccountSession(
+    previousSessionId: string,
+    next: AccountSessionRecord,
+  ): void {
+    this.#accountSessions.set(next.sessionId, structuredClone(next));
+    this.#accountSessions.delete(previousSessionId);
+  }
+
   savePrivacyRequest(record: PrivacyRequestRecord): void {
     const existing = this.#privacyRequests.get(record.requestId);
     if (existing && existing.subject !== record.subject) {
@@ -671,8 +694,16 @@ export class InMemoryAccountsStore implements AccountsStore {
 
   saveOidcClient(record: OidcClientRecord): void {
     const existing = this.#oidcClients.get(record.clientId);
-    if (existing) {
-      this.#oidcClientsByCapsule.delete(existing.capsuleId);
+    if (existing && existing.capsuleId !== record.capsuleId) {
+      throw new Error(
+        `OIDC client ${record.clientId} is already bound to another Capsule`,
+      );
+    }
+    const existingClientId = this.#oidcClientsByCapsule.get(record.capsuleId);
+    if (existingClientId && existingClientId !== record.clientId) {
+      throw new Error(
+        `Capsule ${record.capsuleId} already has another OIDC client`,
+      );
     }
     this.#oidcClients.set(record.clientId, record);
     this.#oidcClientsByCapsule.set(record.capsuleId, record.clientId);
@@ -685,6 +716,15 @@ export class InMemoryAccountsStore implements AccountsStore {
   findOidcClientForCapsule(capsuleId: string): OidcClientRecord | undefined {
     const clientId = this.#oidcClientsByCapsule.get(capsuleId);
     return clientId ? this.#oidcClients.get(clientId) : undefined;
+  }
+
+  revokeOidcClient(clientId: string): void {
+    const existing = this.#oidcClients.get(clientId);
+    if (!existing) return;
+    this.#oidcClients.delete(clientId);
+    if (this.#oidcClientsByCapsule.get(existing.capsuleId) === clientId) {
+      this.#oidcClientsByCapsule.delete(existing.capsuleId);
+    }
   }
 
   addRefreshChainLink(parentToken: string, childToken: string): boolean {

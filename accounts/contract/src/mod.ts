@@ -36,6 +36,15 @@ export const TAKOSUMI_ACCOUNTS_PASSKEY_AUTHENTICATE_OPTIONS_PATH =
 export const TAKOSUMI_ACCOUNTS_PASSKEY_AUTHENTICATE_COMPLETE_PATH =
   "/v1/auth/passkeys/authenticate/complete";
 export const TAKOSUMI_ACCOUNTS_PAT_SCOPES = ["read", "write", "admin"] as const;
+/**
+ * Scopes an authenticated account session may grant through the public
+ * self-service PAT endpoint. `admin` remains a valid persisted/operator-issued
+ * PAT scope, but it is never self-grantable.
+ */
+export const TAKOSUMI_ACCOUNTS_SELF_SERVICE_PAT_SCOPES = [
+  "read",
+  "write",
+] as const;
 
 export const TAKOSUMI_ACCOUNTS_CAPSULE_OAUTH_SCOPES = [
   "capsules:read",

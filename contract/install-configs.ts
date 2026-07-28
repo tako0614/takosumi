@@ -311,6 +311,18 @@ export interface InstallConfigStoreSource {
 }
 
 /**
+ * Operator-owned selector for an InstallConfig's executable Source coordinate.
+ *
+ * Unlike `store.source`, this field is service policy rather than presentation
+ * metadata. A TCS listing may be compared with it, but can never create or
+ * override it.
+ */
+export interface InstallConfigSourceSelector {
+  readonly url: string;
+  readonly path: string;
+}
+
+/**
  * Service-side presentation for one ordinary OpenTofu input variable.
  *
  * This is Takosumi DB configuration. It is deliberately not nested under
@@ -357,6 +369,7 @@ export interface InstallConfig {
   readonly id: string;
   readonly workspaceId?: string;
   readonly name: string;
+  readonly sourceSelector?: InstallConfigSourceSelector;
   /** Path inside the SourceSnapshot that contains the OpenTofu Capsule. */
   readonly modulePath?: string;
   readonly sourceBuild?: SourceBuildConfig;

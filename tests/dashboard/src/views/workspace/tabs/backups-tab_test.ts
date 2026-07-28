@@ -9,10 +9,15 @@ const sourcePath = resolve(
   "../../../../../../dashboard/src/views/workspace/tabs/BackupsTab.tsx",
 );
 
-test("BackupsTab keeps storage object details out of the user-facing table", () => {
+test("BackupsTab is export-only and keeps storage object details out of the user-facing table", () => {
   const source = readFileSync(sourcePath, "utf8");
 
   expect(source).toContain('"backups.col.contents"');
+  expect(source).toContain('"backups.controlExport"');
+  expect(source).not.toContain("createBackupRestore");
+  expect(source).not.toContain("restoreTarget");
+  expect(source).not.toContain('"backups.restore"');
+  expect(source).not.toContain("RotateCcw");
   expect(source).not.toContain('t("backups.col.source")');
   expect(source).not.toContain('<summary>{t("common.details")}</summary>');
   expect(source).not.toContain("shortDigest");
@@ -27,4 +32,10 @@ test("BackupsTab keeps storage object details out of the user-facing table", () 
   expect(source).not.toContain('header: t("backups.col.run")');
   expect(en["backups.col.contents"]).toBe("Contents");
   expect(ja["backups.col.contents"]).toBe("内容");
+  expect(en["backups.subtitle"]).toContain(
+    "Import and restore are not supported",
+  );
+  expect(ja["backups.subtitle"]).toContain(
+    "import / restore には対応していません",
+  );
 });

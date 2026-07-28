@@ -113,10 +113,10 @@ export function mintAccountSessionId(): string {
 }
 
 /**
- * Rotate an account session: persist a new session_id mapped to `subject`
- * with the same TTL, then delete the old session_id (single-use). Returns
- * the new session_id. If `oldSessionId` is undefined or unknown, only the
- * new session is created.
+ * Rotate an account session. When a prior id is presented, the store must
+ * atomically persist the new record and revoke the old id; stores without that
+ * aggregate port fail closed. If `oldSessionId` is absent, only the new
+ * session is created. Returns the new session id and expiry.
  *
  * Per Agent 6 item 8, every successful authentication (passkey complete,
  * OAuth callback) must mint a new session_id, even if the caller already
@@ -131,18 +131,21 @@ export async function rotateAccountSession(input: {
 }): Promise<{ sessionId: string; expiresAt: number }> {
   const sessionId = mintAccountSessionId();
   const expiresAt = input.now + input.ttlMs;
-  await input.store.saveAccountSession({
+  const next = {
     sessionId,
     subject: input.subject,
     createdAt: input.now,
     expiresAt,
-  });
+  };
   if (input.oldSessionId && input.oldSessionId !== sessionId) {
-    try {
-      await input.store.deleteAccountSession(input.oldSessionId);
-    } catch {
-      // Best-effort revoke; the new session_id is already persisted.
+    if (!input.store.replaceAccountSession) {
+      throw new Error(
+        "account session rotation requires atomic replaceAccountSession store support",
+      );
     }
+    await input.store.replaceAccountSession(input.oldSessionId, next);
+  } else {
+    await input.store.saveAccountSession(next);
   }
   return { sessionId, expiresAt };
 }
@@ -260,8 +263,13 @@ export async function handleAccountSessionMeDelete(input: {
     try {
       await input.store.deleteAccountSession(sessionId);
     } catch {
-      // Best-effort: clearing the cookie below is the user-visible
-      // contract; a store error must not leave the cookie set.
+      return errorJson(
+        "session_revocation_unavailable",
+        "The session could not be revoked. Try again.",
+        503,
+        input.request,
+        { "cache-control": "no-store" },
+      );
     }
   }
   const cookie = clearAccountSessionCookie(input.secureCookie);

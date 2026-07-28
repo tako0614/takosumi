@@ -38,6 +38,17 @@ test("PostgresAccountsStore hashes OAuth credentials before writing", async () =
   expect(client.calls[0].args[0]).not.toEqual("plain-code");
 });
 
+test("PostgresAccountsStore revokes a dynamic OIDC client by registration id", async () => {
+  const client = new RecordingPostgresClient();
+  const store = new PostgresAccountsStore(client);
+
+  await store.revokeOidcClient("toc_revoked");
+
+  expect(client.calls[0].sql).toContain('"accounts_v1"."oidc_clients"');
+  expect(client.calls[0].sql.toLowerCase()).toContain("delete");
+  expect(client.calls[0].args).toContain("toc_revoked");
+});
+
 test("PostgresAccountsStore persists Interface OAuth evidence without the raw token", async () => {
   const client = new RecordingPostgresClient();
   const store = new PostgresAccountsStore(client);

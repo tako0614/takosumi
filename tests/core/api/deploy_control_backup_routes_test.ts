@@ -228,7 +228,7 @@ test("GET /internal/v1/workspaces/:workspaceId/backups lists backups newest-firs
   }
 });
 
-test("POST /internal/v1/workspaces/:workspaceId/backups/:backupId/restores creates a restore Run waiting approval", async () => {
+test("legacy internal backup restore route is not mounted", async () => {
   const { app, store } = await makeApp();
   await store.putStateVersion({
     id: "state_old",
@@ -271,32 +271,22 @@ test("POST /internal/v1/workspaces/:workspaceId/backups/:backupId/restores creat
       }),
     },
   );
-  expect(response.status).toBe(201);
-  const body = await response.json();
-  expect(body.run.type).toBe("restore");
-  expect(body.run.status).toBe("waiting_approval");
-  expect(body.run.backupId).toBe("bkp_restore");
-
-  const approve = await app.request(
-    `/internal/v1/runs/${body.run.id}/approve`,
-    {
-      method: "POST",
-      headers: HEADERS,
-    },
-  );
-  expect(approve.status).toBe(200);
-  const approved = await approve.json();
-  expect(approved.run.status).toBe("succeeded");
+  expect(response.status).toBe(404);
   const capsule = await store.getCapsule("cap_aaaaaaaa");
-  expect(capsule?.currentStateGeneration).toBe(2);
+  expect(capsule?.currentStateGeneration).toBe(1);
   const latest = await store.getLatestStateVersion(
     "cap_aaaaaaaa",
     "production",
   );
-  expect(latest?.createdByRunId).toBe(body.run.id);
-  expect(latest?.digest).toBe(
-    "sha256:1111111111111111111111111111111111111111111111111111111111111111",
-  );
+  expect(latest?.id).toBe("state_old");
+  expect(
+    (await store.listActivityEvents("ws_aaaaaaaa")).some(
+      (event) => event.action === "restore.created",
+    ),
+  ).toBe(false);
+  expect(
+    (await store.listBackupRecords("ws_aaaaaaaa")).map((backup) => backup.id),
+  ).toEqual(["bkp_restore"]);
 });
 
 test("GET /internal/v1/workspaces/:workspaceId/backups enforces Workspace scope (403)", async () => {

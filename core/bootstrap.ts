@@ -210,7 +210,11 @@ import type {
   ResourceObject,
   ResourceShapeKind,
 } from "takosumi-contract";
-import { type CredentialRecipeDriverRegistry } from "@takosumi/providers";
+import { formRefOfInstalled } from "takosumi-contract";
+import type {
+  CredentialRecipeDriverRegistry,
+  SourceCredentialDriverRegistry,
+} from "./adapters/vault/driver_ports.ts";
 
 interface ResolvedOpenTofuStore {
   readonly store?: OpenTofuControlStore;
@@ -497,6 +501,11 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
    * `recipeId/authMode`. Omitted means no provider recipe drivers are installed.
    */
   readonly credentialRecipeDrivers?: CredentialRecipeDriverRegistry;
+  /**
+   * Complete host-installed Source credential driver registry. Core has no
+   * implicit transport-specific credential implementation.
+   */
+  readonly sourceCredentialDrivers?: SourceCredentialDriverRegistry;
   /** Optional SQL client used by the durable OpenTofu and Resource APIs. */
   readonly sqlClient?: SqlClient;
   /**
@@ -644,6 +653,13 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
     request: Request,
   ) => ActorContext | Promise<ActorContext>;
   readonly authorizeResourceShapeForceDelete?: (input: {
+    readonly actor: ActorContext;
+    readonly request: Request;
+    readonly space: string;
+    readonly kind: ResourceShapeKind;
+    readonly name: string;
+  }) => boolean | Promise<boolean>;
+  readonly authorizeResourceShapeApplyRecovery?: (input: {
     readonly actor: ActorContext;
     readonly request: Request;
     readonly space: string;
@@ -1255,6 +1271,7 @@ export async function createTakosumiService(
           crypto: options.secretCrypto,
           credentialRecipeResolver: (id) => credentialRecipeById.get(id),
           credentialDrivers: credentialRecipeDrivers,
+          sourceCredentialDrivers: options.sourceCredentialDrivers ?? {},
           ...(options.managedProviderCredentialIssuer
             ? {
                 managedProviderCredentialIssuer:
@@ -1904,7 +1921,7 @@ export async function createTakosumiService(
     );
     if (!workspaceId) return;
     const definition = await formRegistryService.getDefinition(
-      resource.form.formRef,
+      formRefOfInstalled(resource.form),
     );
     if (!definition) return;
     await ensureFormDescriptorInterfaces({
@@ -1927,7 +1944,7 @@ export async function createTakosumiService(
       const current = await resourceShapeStores.resources.get(resourceId);
       if (!current?.form) return false;
       const definition = await formRegistryService.getDefinition(
-        current.form.formRef,
+        formRefOfInstalled(current.form),
       );
       const required = definition?.interfaceDescriptors?.some(
         (descriptor) => descriptor.required === true,
@@ -2287,6 +2304,12 @@ export async function createTakosumiService(
             ? {
                 authorizeResourceShapeForceDelete:
                   options.authorizeResourceShapeForceDelete,
+              }
+            : {}),
+          ...(options.authorizeResourceShapeApplyRecovery
+            ? {
+                authorizeResourceShapeApplyRecovery:
+                  options.authorizeResourceShapeApplyRecovery,
               }
             : {}),
         }

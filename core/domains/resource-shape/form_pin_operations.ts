@@ -5,9 +5,11 @@ import type {
   ResourceShapeKind,
 } from "takosumi-contract";
 import {
+  formRefOfInstalled,
   installedFormReferenceKey,
   isInstalledFormReference,
   isResourceShapeKind,
+  shapeKindForPortableType,
 } from "takosumi-contract";
 import type { ResourceFormPinBackupEntry } from "takosumi-contract/backups";
 import {
@@ -222,7 +224,7 @@ export class ResourceFormPinOperations {
     const selected = eligible[0]!;
     const identity = selected.activation!.identity;
     const [definition, formPackage] = await Promise.all([
-      this.#forms.getDefinition(identity.formRef),
+      this.#forms.getDefinition(formRefOfInstalled(identity)),
       this.#forms.getPackage(identity.packageDigest),
     ]);
     if (
@@ -287,7 +289,7 @@ export class ResourceFormPinOperations {
     if (
       !kind ||
       !isInstalledFormReference(entry.identity) ||
-      entry.identity.formRef.kind !== kind
+      shapeKindForPortableType(entry.identity.type) !== kind
     ) {
       return refused(fallback, "backup_entry_invalid");
     }
@@ -377,7 +379,9 @@ function activationEligible(
   request: BackfillResourceFormPinsRequest,
 ): boolean {
   if (!activation || activation.status !== "active") return false;
-  if (activation.identity.formRef.kind !== resource.kind) return false;
+  if (shapeKindForPortableType(activation.identity.type) !== resource.kind) {
+    return false;
+  }
   if (!scopeMatches(activation, request)) return false;
   return audienceMatches(activation, request);
 }
@@ -425,7 +429,8 @@ function activationRefusalReason(
   }
   if (
     existing.every(
-      (activation) => activation.identity.formRef.kind !== resource.kind,
+      (activation) =>
+        shapeKindForPortableType(activation.identity.type) !== resource.kind,
     )
   ) {
     return "activation_kind_mismatch";

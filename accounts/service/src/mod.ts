@@ -74,6 +74,7 @@ import {
   errorJson,
   json,
   methodNotAllowed,
+  RequestBodyReadError,
   readJsonObject,
   stringValue,
 } from "./http-helpers.ts";
@@ -395,6 +396,20 @@ function createRequestScopedAccountsStore(
           sessionCache.delete(sessionId);
         };
       }
+      if (property === "replaceAccountSession") {
+        const replace = baseStore.replaceAccountSession;
+        if (!replace) return undefined;
+        return async (
+          previousSessionId: string,
+          next: AccountSessionRecord,
+        ) => {
+          sessionCache.delete(previousSessionId);
+          sessionCache.delete(next.sessionId);
+          await replace.call(baseStore, previousSessionId, next);
+          sessionCache.delete(previousSessionId);
+          sessionCache.delete(next.sessionId);
+        };
+      }
       if (property === "saveAccount") {
         return async (record: TakosumiAccountRecord) => {
           accountCache.delete(record.subject);
@@ -469,6 +484,13 @@ export function createAccountsHandler(
       return json(jwks);
     }
 
+    const ingressFailure = accountsIngressSecurityFailure(
+      request,
+      url,
+      issuer,
+    );
+    if (ingressFailure) return ingressFailure;
+
     if (!isLoginAllowlistBypassPath(url.pathname)) {
       const rejectedSession = await measureServerTiming(
         timings,
@@ -511,6 +533,9 @@ export function createAccountsHandler(
         store,
         flow: options.oidcFlow,
         clients,
+        ...(options.controlPlaneOperations
+          ? { operations: options.controlPlaneOperations }
+          : {}),
       });
     }
 
@@ -519,6 +544,10 @@ export function createAccountsHandler(
       return await handleUserInfo({
         request,
         store,
+        clients,
+        ...(options.controlPlaneOperations
+          ? { operations: options.controlPlaneOperations }
+          : {}),
         ...(interfaceOAuthActivityValidator
           ? { interfaceOAuthActivityValidator }
           : {}),
@@ -537,6 +566,9 @@ export function createAccountsHandler(
         request,
         store,
         clients,
+        ...(options.controlPlaneOperations
+          ? { operations: options.controlPlaneOperations }
+          : {}),
         ...(interfaceOAuthActivityValidator
           ? { interfaceOAuthActivityValidator }
           : {}),
@@ -761,7 +793,18 @@ export function createAccountsHandler(
   };
 
   return async (request: Request): Promise<Response> => {
-    const response = await inner(request);
+    let response: Response;
+    try {
+      response = await inner(request);
+    } catch (error) {
+      if (!(error instanceof RequestBodyReadError)) throw error;
+      response = errorJson(
+        error.code,
+        error.message,
+        error.status,
+        request,
+      );
+    }
     return withSecurityHeaders(response, isProductionIssuer);
   };
 }
@@ -872,6 +915,71 @@ export function startAccountsServer(
 
 function isGetOrHead(request: Request): boolean {
   return request.method === "GET" || request.method === "HEAD";
+}
+
+function accountsIngressSecurityFailure(
+  request: Request,
+  url: URL,
+  issuer: string,
+): Response | undefined {
+  if (
+    request.method === "GET" ||
+    request.method === "HEAD" ||
+    request.method === "OPTIONS"
+  ) {
+    return undefined;
+  }
+
+  const protocolFormRoute =
+    url.pathname === TAKOSUMI_ACCOUNTS_TOKEN_PATH ||
+    url.pathname === TAKOSUMI_ACCOUNTS_REVOKE_PATH ||
+    url.pathname === TAKOSUMI_ACCOUNTS_INTROSPECT_PATH;
+  if (request.body !== null) {
+    const expected = protocolFormRoute
+      ? "application/x-www-form-urlencoded"
+      : "application/json";
+    const actual = request.headers
+      .get("content-type")
+      ?.split(";", 1)[0]
+      ?.trim()
+      .toLowerCase();
+    if (actual !== expected) {
+      return errorJson(
+        "unsupported_media_type",
+        `Content-Type must be ${expected}.`,
+        415,
+        request,
+      );
+    }
+  }
+
+  // OAuth protocol endpoints authenticate the client and are intentionally
+  // callable server-to-server. Likewise an explicit Authorization header is
+  // not ambient browser authority. Cookie/session-header browser mutations,
+  // including passkey ceremonies and /api/v1, must be exact same-origin.
+  if (protocolFormRoute || request.headers.has("authorization")) {
+    return undefined;
+  }
+  let issuerOrigin: string;
+  try {
+    issuerOrigin = new URL(issuer).origin;
+  } catch {
+    return errorJson(
+      "csrf_check_unavailable",
+      "Request origin could not be verified.",
+      503,
+      request,
+    );
+  }
+  if (request.headers.get("origin") !== issuerOrigin) {
+    return errorJson(
+      "csrf_failed",
+      "Origin must exactly match the Accounts issuer.",
+      403,
+      request,
+    );
+  }
+  return undefined;
 }
 
 function isLoginAllowlistBypassPath(pathname: string): boolean {

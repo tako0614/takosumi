@@ -14,8 +14,7 @@ function listing(extra: Partial<TcsListing> = {}): TcsListing {
   return {
     id: "tako/example",
     source: {
-      url: "https://github.com/tako0614/example.git",
-      ref: "main",
+      url: "https://github.com/tako0614/example",
       path: ".",
     },
     kind: "worker",
@@ -28,6 +27,15 @@ function listing(extra: Partial<TcsListing> = {}): TcsListing {
     badge: text("Installable"),
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
+    ...extra,
+  };
+}
+
+function wireListing(extra: Record<string, unknown> = {}): unknown {
+  const local = listing();
+  return {
+    ...local,
+    source: { git: local.source.url, path: local.source.path },
     ...extra,
   };
 }
@@ -61,7 +69,7 @@ describe("TCS repo metadata", () => {
   });
 
   test("strips deprecated setup fields from listing reads", async () => {
-    const staleListing = listing({
+    const staleListing = wireListing({
       inputs: [
         {
           name: "worker_bundle_url",
@@ -80,7 +88,7 @@ describe("TCS repo metadata", () => {
         ],
       },
       outputAllowlist: [{ key: "url", from: "url", type: "url" }],
-    } as unknown as Partial<TcsListing>);
+    });
     globalThis.fetch = (async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith("/tcs/v1/listings/tako%2Fexample")) {
@@ -115,13 +123,13 @@ describe("TCS repo metadata", () => {
       new Response(
         JSON.stringify({
           items: [
-            listing({
+            wireListing({
               source: {
                 git: "https://github.com/tako0614/example.git",
                 resolvedCommit: "0123456789abcdef0123456789abcdef01234567",
                 path: ".",
               },
-            } as unknown as Partial<TcsListing>),
+            }),
           ],
         }),
         { headers: { "content-type": "application/json" } },
@@ -129,13 +137,13 @@ describe("TCS repo metadata", () => {
 
     await expect(
       fetchTcsListingsPage("https://store.example.test"),
-    ).rejects.toThrow("unsupported fields");
+    ).rejects.toThrow("canonical TCS");
   });
 
-  test("accepts a canonical source without an optional ref hint", async () => {
-    const unpinned = listing({
+  test("accepts and locally adapts the canonical Store-owned source tuple", async () => {
+    const unpinned = wireListing({
       source: {
-        url: "https://github.com/tako0614/example.git",
+        git: "https://github.com/tako0614/example.git",
         path: ".",
       },
     });
@@ -145,17 +153,20 @@ describe("TCS repo metadata", () => {
       })) as typeof fetch;
 
     const page = await fetchTcsListingsPage("https://store.example.test");
-    expect(page.items[0]?.source).toEqual(unpinned.source);
+    expect(page.items[0]?.source).toEqual({
+      url: "https://github.com/tako0614/example",
+      path: ".",
+    });
   });
 
   test("keeps only credential-free HTTPS icons and drops wire aggregation hints", async () => {
-    const unsafePresentation = listing({
+    const unsafePresentation = wireListing({
       iconUrl: "https://user:secret@assets.example.test/icon.svg?token=x",
       primaryServer: "https://attacker.example.test",
       primaryDefault: true,
       seenOn: ["https://attacker.example.test"],
-    } as unknown as Partial<TcsListing>);
-    const safePresentation = listing({
+    });
+    const safePresentation = wireListing({
       id: "tako/safe-icon",
       iconUrl: "https://assets.example.test/icon.svg",
     });
@@ -173,13 +184,13 @@ describe("TCS repo metadata", () => {
     expect(page.items[1]?.iconUrl).toBe("https://assets.example.test/icon.svg");
   });
 
-  test("input-normalizes a legacy git-only source without re-emitting git", async () => {
-    const legacy = listing({
+  test("adapts the TCS git field without re-emitting it locally", async () => {
+    const legacy = wireListing({
       source: {
         git: "https://github.com/tako0614/example.git",
         path: "./deploy/opentofu",
       },
-    } as unknown as Partial<TcsListing>);
+    });
     globalThis.fetch = (async () =>
       new Response(JSON.stringify({ items: [legacy] }), {
         headers: { "content-type": "application/json" },
@@ -187,24 +198,24 @@ describe("TCS repo metadata", () => {
 
     const page = await fetchTcsListingsPage("https://store.example.test");
     expect(page.items[0]?.source).toEqual({
-      url: "https://github.com/tako0614/example.git",
+      url: "https://github.com/tako0614/example",
       path: "deploy/opentofu",
     });
     expect(page.items[0]?.source).not.toHaveProperty("git");
   });
 
-  test("rejects a source that declares canonical url and legacy git together", async () => {
+  test("rejects dashboard-local url aliases on the TCS wire", async () => {
     globalThis.fetch = (async () =>
       new Response(
         JSON.stringify({
           items: [
-            listing({
+            wireListing({
               source: {
                 url: "https://github.com/tako0614/example.git",
                 git: "https://github.com/tako0614/example.git",
                 path: ".",
               },
-            } as unknown as Partial<TcsListing>),
+            }),
           ],
         }),
         { headers: { "content-type": "application/json" } },
@@ -212,48 +223,49 @@ describe("TCS repo metadata", () => {
 
     await expect(
       fetchTcsListingsPage("https://store.example.test"),
-    ).rejects.toThrow("both url and legacy git");
+    ).rejects.toThrow("canonical TCS");
 
     globalThis.fetch = (async () =>
       new Response(
         JSON.stringify({
           items: [
-            listing({
+            wireListing({
               source: {
                 url: "",
                 git: "https://github.com/tako0614/example.git",
                 path: ".",
               },
-            } as unknown as Partial<TcsListing>),
+            }),
           ],
         }),
         { headers: { "content-type": "application/json" } },
       )) as typeof fetch;
     await expect(
       fetchTcsListingsPage("https://store.example.test"),
-    ).rejects.toThrow("both url and legacy git");
+    ).rejects.toThrow("canonical TCS");
   });
 
-  test("rejects unsafe Store source URLs, paths, and ref hints", async () => {
+  test("rejects unsafe Store source URLs, paths, and extra authority", async () => {
     const unsafeSources = [
-      { url: "http://example.test/app.git", path: "." },
-      { url: "https://user:secret@example.test/app.git", path: "." },
-      { url: "https://example.test/app.git?token=secret", path: "." },
-      { url: "https://example.test/app.git", path: "/deploy/opentofu" },
-      { url: "https://example.test/app.git", path: "../opentofu" },
+      { git: "http://example.test/app.git", path: "." },
+      { git: "https://user:secret@example.test/app.git", path: "." },
+      { git: "https://example.test/app.git?token=secret", path: "." },
+      { git: "https://example.test/app.git#main", path: "." },
+      { git: "https://example.test/app.git", path: "/deploy/opentofu" },
+      { git: "https://example.test/app.git", path: "../opentofu" },
+      { git: "https://example.test/app.git", path: "deploy\\opentofu" },
       {
-        url: "https://example.test/app.git",
-        ref: "--upload-pack=bad",
+        git: "https://example.test/app.git",
+        ref: "main",
         path: ".",
       },
-      { url: "https://example.test/app.git", ref: "main\nnext", path: "." },
     ];
 
     for (const source of unsafeSources) {
       globalThis.fetch = (async () =>
         new Response(
           JSON.stringify({
-            items: [listing({ source } as unknown as Partial<TcsListing>)],
+            items: [wireListing({ source })],
           }),
           { headers: { "content-type": "application/json" } },
         )) as typeof fetch;

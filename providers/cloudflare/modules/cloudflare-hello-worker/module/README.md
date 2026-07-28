@@ -1,9 +1,9 @@
 # cloudflare-hello-worker (example Capsule module)
 
 A runnable Cloudflare Worker with **no build step** — the Worker source is
-baked inline, so `tofu apply` creates a real Worker script without a separate
-build. This sample also enables the script's workers.dev subdomain, so a fresh
-install produces a browser-openable URL.
+baked inline, so an OpenTofu apply creates a real Worker script without a
+separate build. This sample also enables the script's workers.dev subdomain, so
+a fresh install produces a browser-openable URL.
 
 - Provider: `cloudflare/cloudflare` (v5). Authentication is via environment
   variables minted by Takosumi at dispatch (`CLOUDFLARE_API_TOKEN`,

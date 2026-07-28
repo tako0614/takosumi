@@ -52,6 +52,7 @@ const ignoredDirectories = new Set([
   "node_modules",
   "vendor",
 ]);
+const historicalRoots = ["docs/internal/retired/"] as const;
 const violations: string[] = [];
 
 for (const path of forbiddenPaths) {
@@ -117,6 +118,7 @@ async function scan(path: string): Promise<void> {
 function inspectText(path: string, text: string): void {
   const display = relative(ROOT, path).split(sep).join("/");
   if (display === "scripts/check-no-first-party-provider.ts") return;
+  if (historicalRoots.some((root) => display.startsWith(root))) return;
   for (const token of forbiddenText) {
     if (text.includes(token)) {
       violations.push(`${display} contains retired provider token ${token}`);

@@ -81,3 +81,13 @@ test("OSS Accounts does not publish a commercial plan catalog", () => {
   ).toBe(false);
   expect(CONTROL_DISPATCH_RESOURCE_KEYS).not.toContain("billing");
 });
+
+test("public session inventory does not publish backup restore", () => {
+  expect(
+    PUBLIC_SESSION_CONTROL_ENDPOINTS.some(
+      (endpoint) =>
+        endpoint.path ===
+        "/api/v1/workspaces/{workspaceId}/backups/{backupId}/restores",
+    ),
+  ).toBe(false);
+});

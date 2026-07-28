@@ -523,6 +523,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
           method: request.method,
           headers: runnerRequestHeaders(request),
           body: bodyText,
+          signal: request.signal,
         }),
       url,
     );
@@ -589,6 +590,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
           method: request.method,
           headers: runnerRequestHeaders(request),
           body: bodyText,
+          signal: request.signal,
         }),
       url,
     );
@@ -822,10 +824,13 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
             restoreMaxGeneration(scope, action),
           )
         : undefined;
-    const pointer = current ?? adopted?.pointer;
-    if (!pointer) return;
-    const object =
-      adopted?.object ?? (await readCurrentStateObject(bucket, scope, pointer));
+    const resolved =
+      adopted ??
+      (current
+        ? await readCurrentStateObject(bucket, scope, current)
+        : undefined);
+    if (!resolved) return;
+    const { pointer, object } = resolved;
     const ciphertext = new Uint8Array(await object.arrayBuffer());
     const plaintext = await this.#stateCrypto().open(
       ciphertext,
@@ -1735,9 +1740,12 @@ async function readCurrentStateObject(
   bucket: NonNullable<CloudflareWorkerEnv["R2_STATE"]>,
   scope: StateScope,
   current: CurrentStatePointer,
-): Promise<NonNullable<Awaited<ReturnType<typeof bucket.get>>>> {
+): Promise<{
+  readonly pointer: CurrentStatePointer;
+  readonly object: NonNullable<Awaited<ReturnType<typeof bucket.get>>>;
+}> {
   const object = await bucket.get(current.objectKey);
-  if (object) return object;
+  if (object) return { pointer: current, object };
   const recovered = await recoverCurrentState(
     bucket,
     scope,
@@ -1750,7 +1758,7 @@ async function readCurrentStateObject(
   if (!recoveredObject) {
     throw new Error(`recovered state object not found: ${recovered.objectKey}`);
   }
-  return recoveredObject;
+  return { pointer: recovered, object: recoveredObject };
 }
 
 async function recoverCurrentState(
@@ -1760,30 +1768,42 @@ async function recoverCurrentState(
 ): Promise<CurrentStatePointer | undefined> {
   if (maxGeneration < 0) return undefined;
   const prefix = `${stateScopePrefix(scope)}/`;
-  const objects = await bucket.list({ prefix });
   let best: CurrentStatePointer | undefined;
-  for (const object of objects.objects) {
-    const generation = generationFromStateObjectKey(prefix, object.key);
-    if (generation === undefined || generation > maxGeneration) continue;
-    const digest =
-      object.customMetadata?.["takosumi-content-digest"] ??
-      object.customMetadata?.["takosumi-digest"];
-    if (!digest) continue;
-    if (!best || generation > best.generation) {
-      const ciphertextLength = Number(
-        object.customMetadata?.["takosumi-ciphertext-length"],
-      );
-      best = {
-        generation,
-        objectKey: object.key,
-        digest,
-        ...(object.customMetadata?.["takosumi-run-id"]
-          ? { runId: object.customMetadata["takosumi-run-id"] }
-          : {}),
-        ...(Number.isFinite(ciphertextLength) ? { ciphertextLength } : {}),
-      };
+  let cursor: string | undefined;
+  do {
+    const page = await bucket.list({
+      prefix,
+      include: ["customMetadata"],
+      ...(cursor ? { cursor } : {}),
+    });
+    for (const object of page.objects) {
+      const generation = generationFromStateObjectKey(prefix, object.key);
+      if (generation === undefined || generation > maxGeneration) continue;
+      const digest =
+        object.customMetadata?.["takosumi-content-digest"] ??
+        object.customMetadata?.["takosumi-digest"];
+      if (!digest) continue;
+      if (!best || generation > best.generation) {
+        const ciphertextLength = Number(
+          object.customMetadata?.["takosumi-ciphertext-length"],
+        );
+        best = {
+          generation,
+          objectKey: object.key,
+          digest,
+          ...(object.customMetadata?.["takosumi-run-id"]
+            ? { runId: object.customMetadata["takosumi-run-id"] }
+            : {}),
+          ...(Number.isFinite(ciphertextLength) ? { ciphertextLength } : {}),
+        };
+      }
     }
-  }
+    if (!page.truncated) break;
+    if (!page.cursor || page.cursor === cursor) {
+      throw new Error("R2 state recovery returned a truncated page without a new cursor");
+    }
+    cursor = page.cursor;
+  } while (true);
   if (!best) return undefined;
   await putR2ObjectWithRetry(
     bucket,

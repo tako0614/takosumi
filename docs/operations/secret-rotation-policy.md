@@ -101,7 +101,7 @@ ProviderConnection / Capsule integration secret の rotation contract:
 | Rotation blocked by remote / local omission mismatch                 | Secondary on-call within 1 business hour    |
 | Suspected secret exposure                                            | Incident commander immediately (SEV-1 path) |
 | ProviderConnection / Capsule integration secret rotation API failure | Takosumi platform owner immediately         |
-| Cadence breach (overdue secret)                                      | Release owner; block next promotion         |
+| Cadence breach (overdue secret)                                      | Release owner; block only affected surfaces |
 
 secret 漏洩疑いの対応は
 [`./oncall.md § SEV Classification`](./oncall.md#sev-classification) が定義する

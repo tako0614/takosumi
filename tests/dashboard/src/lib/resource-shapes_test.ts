@@ -61,19 +61,16 @@ describe("Resource Shape dashboard client", () => {
     globalThis.fetch = (async (input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : String(input);
       calls.push(url);
-      const identity = {
-        formRef: {
-          apiVersion: "forms.takoform.com/v1alpha1",
-          kind: url.includes("cursor=next") ? "Queue" : "ObjectBucket",
-          definitionVersion: "1.0.0",
-          schemaDigest: `sha256:${"1".repeat(64)}`,
-        },
+      const form = {
+        type: url.includes("cursor=next") ? "queue" : "object_bucket",
+        version: "1.0.0",
+        schemaDigest: `sha256:${"1".repeat(64)}`,
         packageDigest: `sha256:${"2".repeat(64)}`,
       };
       return jsonResponse({
         forms: [
           {
-            identity,
+            form,
             definitionKnown: true,
             installed: true,
             executable: true,
@@ -91,9 +88,9 @@ describe("Resource Shape dashboard client", () => {
 
     expect(
       (await listFormAvailability("workspace_1", "space_1")).map(
-        (form) => form.identity.formRef.kind,
+        (availability) => availability.form.type,
       ),
-    ).toEqual(["ObjectBucket", "Queue"]);
+    ).toEqual(["object_bucket", "queue"]);
     expect(calls).toEqual([
       "/v1/form-availability?workspaceId=workspace_1&space=space_1",
       "/v1/form-availability?workspaceId=workspace_1&space=space_1&cursor=next",
@@ -158,12 +155,9 @@ describe("Resource Shape dashboard client", () => {
       space: "workspace_1",
       kind: "ObjectBucket",
       form: {
-        formRef: {
-          apiVersion: "forms.takoform.com/v1alpha1",
-          kind: "ObjectBucket",
-          definitionVersion: "1.0.0",
-          schemaDigest: `sha256:${"1".repeat(64)}`,
-        },
+        type: "object_bucket",
+        version: "1.0.0",
+        schemaDigest: `sha256:${"1".repeat(64)}`,
         packageDigest: `sha256:${"2".repeat(64)}`,
       },
       name: "assets/main",

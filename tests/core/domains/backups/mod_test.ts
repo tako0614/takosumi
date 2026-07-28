@@ -256,12 +256,9 @@ test("Workspace and Capsule backups carry only coherent exact Resource Form pins
   const spaceId = workspaceId as SpaceId;
   const resourceShapeStores = createInMemoryResourceShapeStores();
   const identity: InstalledFormReference = {
-    formRef: {
-      apiVersion: "forms.takoform.com/v1alpha1",
-      kind: "ObjectBucket",
-      definitionVersion: "1.0.0",
-      schemaDigest: `sha256:${"a".repeat(64)}`,
-    },
+    type: "object_bucket",
+    version: "1.0.0",
+    schemaDigest: `sha256:${"a".repeat(64)}`,
     packageDigest: `sha256:${"b".repeat(64)}`,
   };
   const resourceId = formatResourceShapeId(spaceId, "ObjectBucket", "backup");
@@ -336,12 +333,9 @@ test("control backup refuses a torn Resource and ResolutionLock Form identity", 
     spaceId,
     kind: "ObjectBucket",
     form: {
-      formRef: {
-        apiVersion: "forms.takoform.com/v1alpha1",
-        kind: "ObjectBucket",
-        definitionVersion: "1.0.0",
-        schemaDigest: `sha256:${"c".repeat(64)}`,
-      },
+      type: "object_bucket",
+      version: "1.0.0",
+      schemaDigest: `sha256:${"c".repeat(64)}`,
       packageDigest: `sha256:${"d".repeat(64)}`,
     },
     name: "torn",
@@ -740,7 +734,7 @@ test("Capsule-scoped backup records Capsule and environment on the BackupRecord"
   });
 });
 
-test("Capsule-scoped backup records the latest restore target generation", async () => {
+test("Capsule-scoped export does not advertise a restore target", async () => {
   const stateRef1 = "workspaces/ws_backup1/.../states/00000001.tfstate.enc";
   const stateRef2 = "workspaces/ws_backup1/.../states/00000002.tfstate.enc";
   const { service, store } = makeService({
@@ -779,12 +773,8 @@ test("Capsule-scoped backup records the latest restore target generation", async
     environment: seeded.capsule.environment,
   });
 
-  expect(record.restoreTarget).toEqual({
-    capsuleId: seeded.capsule.id,
-    environment: seeded.capsule.environment,
-    stateGeneration: 2,
-    stateVersionId: "st_2",
-  });
+  expect(record.stateArchive).toBeDefined();
+  expect("restoreTarget" in record).toBe(false);
 });
 
 test("service-data refs are opaque and not classified by URI scheme", async () => {

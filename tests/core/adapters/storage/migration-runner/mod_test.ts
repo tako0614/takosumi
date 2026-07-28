@@ -2,6 +2,7 @@ import { test } from "bun:test";
 import {
   StorageMigrationCatalogError,
   StorageMigrationChecksumMismatchError,
+  StorageMigrationPendingError,
   type StorageMigrationLock,
   StorageMigrationRunner,
 } from "../../../../../core/adapters/storage/migration-runner/mod.ts";
@@ -66,6 +67,37 @@ test("StorageMigrationRunner dry-run reports pending without writes", async () =
   assertEquals(result.appliedNow, []);
   assert(!sql.calls.some((call) => call.sql === migrations[0].sql));
   assert(!sql.calls.some((call) => call.sql.startsWith("insert into")));
+});
+
+test("StorageMigrationRunner verifies a current schema without mutating its ledger", async () => {
+  const sql = new FakeSqlClient();
+  const runner = new StorageMigrationRunner(sql, { migrations });
+  await runner.applyPending();
+  const callCountBeforeVerify = sql.calls.length;
+
+  const result = await runner.verifyCurrent();
+
+  assertEquals(result.pending, []);
+  assertEquals(
+    sql.calls.slice(callCountBeforeVerify).map((call) => call.sql),
+    [
+      "select id, version, checksum, applied_at from storage_migrations order by version asc, id asc",
+    ],
+  );
+});
+
+test("StorageMigrationRunner verification fails closed on pending migrations", async () => {
+  const sql = new FakeSqlClient();
+  await new StorageMigrationRunner(sql, {
+    migrations: [migrations[0]],
+  }).applyPending();
+
+  await assertRejects(
+    () => new StorageMigrationRunner(sql, { migrations }).verifyCurrent(),
+    StorageMigrationPendingError,
+    "space.002",
+  );
+  assert(!sql.calls.some((call) => call.sql === migrations[1].sql));
 });
 
 test("StorageMigrationRunner validates applied migration checksums", async () => {

@@ -222,6 +222,10 @@ export class PostgresAccountsStore implements AccountsStore {
     return oidc.findOidcClientForCapsule(this.#client, capsuleId);
   }
 
+  revokeOidcClient(clientId: string): Promise<void> {
+    return oidc.revokeOidcClient(this.#client, clientId);
+  }
+
   addRefreshChainLink(
     parentToken: string,
     childToken: string,

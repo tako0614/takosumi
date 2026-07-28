@@ -42,13 +42,16 @@ import type {
 } from "takosumi-contract";
 import {
   formRefKey,
+  formRefOfInstalled,
   installedFormReferenceKey,
   isInstalledFormReference,
   isPortableInterfaceInputSource,
   isResourceShapeKind,
   NOOP_RESOURCE_DEPLOYMENT_ADMISSION,
+  shapeKindForPortableType,
   TAKOSUMI_API_VERSION,
 } from "takosumi-contract";
+import type { FormRef } from "takosumi-contract";
 import type { Page, PageParams } from "takosumi-contract/pagination";
 import type { IsoTimestamp } from "../../shared/time.ts";
 import type { SpaceId } from "../../shared/ids.ts";
@@ -262,9 +265,7 @@ export interface ResourceShapeServiceDeps {
   readonly schemaRegistry?: ResourceShapeSchemaRegistry;
   /** Read-only exact package authority; mutation remains in FormRegistryService. */
   readonly formRegistry?: {
-    getDefinition(
-      formRef: InstalledFormReference["formRef"],
-    ): Promise<FormDefinition | undefined>;
+    getDefinition(formRef: FormRef): Promise<FormDefinition | undefined>;
     getPackage(packageDigest: string): Promise<FormPackage | undefined>;
     getActivation?(id: string): Promise<FormActivation | undefined>;
     listDefinitions?(params?: PageParams): Promise<Page<FormDefinition>>;
@@ -674,7 +675,9 @@ export class ResourceShapeService {
     const definitions = input.identity
       ? {
           items: [
-            await this.#formRegistry?.getDefinition(input.identity.formRef),
+            await this.#formRegistry?.getDefinition(
+              formRefOfInstalled(input.identity),
+            ),
           ],
           nextCursor: undefined,
         }
@@ -719,7 +722,7 @@ export class ResourceShapeService {
     readonly evidenceFingerprint: string;
   }> {
     const [definition, activation, pools] = await Promise.all([
-      this.#formRegistry?.getDefinition(input.identity.formRef),
+      this.#formRegistry?.getDefinition(formRefOfInstalled(input.identity)),
       this.#formRegistry?.getActivation?.(input.activationId),
       this.#stores.targetPools.listBySpace(input.space),
     ]);
@@ -4876,7 +4879,7 @@ export class ResourceShapeService {
     }
     if (
       !isInstalledFormReference(request.form) ||
-      request.form.formRef.kind !== request.kind
+      shapeKindForPortableType(request.form.type) !== request.kind
     ) {
       return {
         ok: false,
@@ -4906,7 +4909,7 @@ export class ResourceShapeService {
       };
     }
     const [definition, formPackage] = await Promise.all([
-      this.#formRegistry.getDefinition(request.form.formRef),
+      this.#formRegistry.getDefinition(formRefOfInstalled(request.form)),
       this.#formRegistry.getPackage(request.form.packageDigest),
     ]);
     if (
@@ -5006,7 +5009,7 @@ export class ResourceShapeService {
       };
     }
     const [definition, formPackage] = await Promise.all([
-      this.#formRegistry.getDefinition(form.formRef),
+      this.#formRegistry.getDefinition(formRefOfInstalled(form)),
       this.#formRegistry.getPackage(form.packageDigest),
     ]);
     if (
@@ -5369,7 +5372,8 @@ export class ResourceShapeService {
       definitionKnown &&
       packageRecord &&
       packageRecord.definitionRefs.some(
-        (ref) => formRefKey(ref) === formRefKey(input.identity.formRef),
+        (ref) =>
+          formRefKey(ref) === formRefKey(formRefOfInstalled(input.identity)),
       ),
     );
     const installed = Boolean(
@@ -5378,9 +5382,10 @@ export class ResourceShapeService {
     const deprecated =
       packageRecord?.status === "deprecated" ||
       packageRecord?.status === "revoked";
-    const schemaInstalled = this.#schemaRegistry
-      .kinds()
-      .includes(input.identity.formRef.kind);
+    const shapeKind = shapeKindForPortableType(input.identity.type);
+    const schemaInstalled =
+      shapeKind !== undefined &&
+      this.#schemaRegistry.kinds().includes(shapeKind as ResourceShapeKind);
 
     const executablePools: {
       readonly classes: readonly string[];
@@ -5393,7 +5398,7 @@ export class ResourceShapeService {
       const classes = uniqueSortedTokens(spec.classes ?? []);
       for (const target of spec.targets) {
         for (const descriptor of target.implementations ?? []) {
-          if (descriptor.shape !== input.identity.formRef.kind) continue;
+          if (descriptor.shape !== shapeKind) continue;
           sawDescriptor = true;
           const moduleInstalled = descriptor.moduleTemplate
             ? this.#moduleRegistry.get(descriptor.moduleTemplate) !== undefined
@@ -5467,7 +5472,7 @@ export class ResourceShapeService {
     );
 
     return {
-      identity: input.identity,
+      form: input.identity,
       definitionKnown,
       installed,
       executable,
@@ -5530,11 +5535,13 @@ function versionOf(record: ResourceShapeRecord): {
   readonly generation: number;
   readonly phase: ResourceShapeRecord["phase"];
   readonly updatedAt: string;
+  readonly revision?: number;
 } {
   return {
     generation: record.generation,
     phase: record.phase,
     updatedAt: record.updatedAt,
+    revision: record.revision,
   };
 }
 

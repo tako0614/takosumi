@@ -6,7 +6,7 @@
 
 Takosumi OSS は commercial cost-attribution system を提供しません。OSS が所有するのは、
 OpenTofu Run の非 secret な見積もりと、Workspace に記録された provider-neutral な
-showback ledger です。架空の cloud spend metric や固定 Grafana dashboard を GA 条件にせず、
+showback ledger です。架空の cloud spend metric や固定 Grafana dashboard を共通release条件にせず、
 control-plane API と永続化された ledger を運用上の正本にします。
 
 ## Boundary
@@ -112,7 +112,7 @@ Prometheus / OTLP / warehouse export は operator-owned adapter です。exporte
 - `quantity` / `usdMicros` が不正、または集計値が ledger 再計算と一致しない
 
 provider invoice reconciliation、gross margin、unattributed cloud spend、paid-plan enforcement は
-commercial host の private runbook / dashboard で扱います。それらを OSS readiness や
+commercial host の private runbook / dashboard で扱います。それらを OSS の共通release条件や
 `takosumi/deploy/observability` の必須 artifact に戻してはいけません。
 
 ## Validation
