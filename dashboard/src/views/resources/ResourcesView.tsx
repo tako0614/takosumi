@@ -2,22 +2,33 @@ import {
   createMemo,
   createResource,
   createSignal,
+  For,
   Show,
   type JSX,
 } from "solid-js";
-import { Boxes, Plus, RefreshCw, Settings2, Trash2 } from "lucide-solid";
+import {
+  Boxes,
+  Layers3,
+  Plus,
+  RefreshCw,
+  Server,
+  Settings2,
+  Trash2,
+} from "lucide-solid";
 import Page from "../account/components/auth/Page.tsx";
 import { currentWorkspaceId } from "../../lib/workspace-state.ts";
 import {
   ControlApiError,
   deleteResourceSpacePolicy,
   deleteResourceTargetPool,
+  listCapsules,
   listFormAvailability,
   listResourceShapes,
   listResourceSpacePolicies,
   listResourceTargetPools,
   putResourceSpacePolicy,
   putResourceTargetPool,
+  type Capsule,
   type ResourceShape,
   type ResourceSpacePolicy,
   type ResourceSpacePolicySpec,
@@ -46,7 +57,12 @@ import {
   type Column,
 } from "../../components/ui/index.ts";
 import ResourceEditor from "./ResourceEditor.tsx";
-import { resourcePhaseLabel } from "../../lib/labels.ts";
+import {
+  capsuleStatusLabel,
+  capsuleTone,
+  resourcePhaseLabel,
+} from "../../lib/labels.ts";
+import type { MessageKey } from "../../i18n/index.ts";
 
 type Scope = { readonly workspaceId: string; readonly space: string };
 
@@ -95,6 +111,10 @@ function Inner(): JSX.Element {
     scope,
     ({ workspaceId: workspace, space: selectedSpace }) =>
       listResourceShapes(workspace, selectedSpace),
+  );
+  const [capsules, { refetch: refetchCapsules }] = createResource(
+    workspaceId,
+    (workspace) => listCapsules(workspace, { includeDestroyed: false }),
   );
   const [formAvailability] = createResource(
     scope,
@@ -155,6 +175,47 @@ function Inner(): JSX.Element {
       align: "right",
       cell: (resource) => (
         <Button href={resourceShapeHref(resource)} variant="ghost" size="sm">
+          {t("common.details")}
+        </Button>
+      ),
+    },
+  ];
+
+  const serviceColumns: readonly Column<Capsule>[] = [
+    {
+      header: t("resources.services.column.service"),
+      cell: (capsule) => (
+        <div class="rs-resource-name">
+          <strong>{capsule.name}</strong>
+          <code>{capsule.id}</code>
+        </div>
+      ),
+    },
+    {
+      header: t("resources.services.column.status"),
+      cell: (capsule) => (
+        <Badge tone={capsuleTone(capsule.status)}>
+          {capsuleStatusLabel(capsule.status)}
+        </Badge>
+      ),
+    },
+    {
+      header: t("resources.services.column.environment"),
+      cell: (capsule) => capsule.environment,
+    },
+    {
+      header: t("resources.services.column.updated"),
+      cell: (capsule) => formatDateTime(capsule.updatedAt),
+    },
+    {
+      header: "",
+      align: "right",
+      cell: (capsule) => (
+        <Button
+          href={`/services/${encodeURIComponent(capsule.id)}`}
+          variant="ghost"
+          size="sm"
+        >
           {t("common.details")}
         </Button>
       ),
@@ -425,6 +486,7 @@ function Inner(): JSX.Element {
               disabled={!scope()}
               onClick={() => {
                 void refetchResources();
+                void refetchCapsules();
                 void refetchTargetPools();
                 void refetchSpacePolicies();
               }}
@@ -461,20 +523,60 @@ function Inner(): JSX.Element {
       >
         {(workspace) => (
           <div class="rs-view">
-            <Card class="rs-scope-card">
-              <CardHeader
-                title={t("resources.scope.title")}
-                subtitle={t("resources.scope.subtitle")}
+            <section
+              class="rs-inventory-summary"
+              aria-label={t("resources.summary.title")}
+            >
+              <Card class="rs-inventory-stat">
+                <Server size={20} aria-hidden="true" />
+                <span>{t("resources.summary.services")}</span>
+                <strong>{capsules.error ? "—" : (capsules()?.length ?? 0)}</strong>
+              </Card>
+              <Card class="rs-inventory-stat">
+                <Boxes size={20} aria-hidden="true" />
+                <span>{t("resources.summary.managed")}</span>
+                <strong>
+                  {resources.error ? "—" : (resources()?.length ?? 0)}
+                </strong>
+              </Card>
+              <Card class="rs-inventory-stat">
+                <Layers3 size={20} aria-hidden="true" />
+                <span>{t("resources.summary.availableTypes")}</span>
+                <strong>
+                  {formAvailability.error
+                    ? "—"
+                    : (formAvailability()?.filter(
+                        (form) =>
+                          form.executable && form.availableToPrincipal,
+                      ).length ?? 0)}
+                </strong>
+              </Card>
+            </section>
+
+            <section class="rs-section" aria-labelledby="rs-services-title">
+              <div class="rs-section-title-row">
+                <div>
+                  <h2 id="rs-services-title">
+                    {t("resources.services.title")}
+                  </h2>
+                  <p>{t("resources.services.subtitle")}</p>
+                </div>
+              </div>
+              <DataTable
+                columns={serviceColumns}
+                rows={capsules.error ? [] : capsules()}
+                rowKey={(capsule) => capsule.id}
+                loading={capsules.loading}
+                error={
+                  capsules.error
+                    ? t("common.fetchFailed", {
+                        message: friendlyError(capsules.error, t).message,
+                      })
+                    : undefined
+                }
+                empty={t("resources.services.empty")}
               />
-              <CardSection class="rs-scope-row">
-                <dl class="tg-kv">
-                  <dt>{t("workspace.label")}</dt>
-                  <dd>{workspace()}</dd>
-                  <dt>{t("resources.scope.label")}</dt>
-                  <dd>{workspace()}</dd>
-                </dl>
-              </CardSection>
-            </Card>
+            </section>
 
             <Show when={featureUnavailable()}>
               <EmptyState
@@ -515,7 +617,7 @@ function Inner(): JSX.Element {
                 </div>
                 <DataTable
                   columns={resourceColumns}
-                  rows={resources()}
+                  rows={resources.error ? [] : resources()}
                   rowKey={(resource) =>
                     `${resource.metadata.space}:${resource.kind}:${resource.metadata.name}`
                   }
@@ -529,9 +631,54 @@ function Inner(): JSX.Element {
                   }
                   empty={t("resources.empty")}
                 />
+                <Show
+                  when={
+                    !formAvailability.error &&
+                    (formAvailability()?.length ?? 0) > 0
+                  }
+                >
+                  <div class="rs-available-types">
+                    <span>{t("resources.availableTypes.label")}</span>
+                    <div>
+                      <For
+                        each={formAvailability()?.filter(
+                          (form) =>
+                            form.executable && form.availableToPrincipal,
+                        )}
+                      >
+                        {(form) => (
+                          <Badge tone="info">
+                            {resourceKindLabel(form.identity.formRef.kind)}
+                          </Badge>
+                        )}
+                      </For>
+                    </div>
+                  </div>
+                </Show>
               </section>
 
-              <section class="rs-section" aria-labelledby="rs-pools-title">
+              <details class="rs-platform-advanced">
+                <summary>
+                  <span>
+                    <strong>{t("resources.platformAdvanced.title")}</strong>
+                    <small>{t("resources.platformAdvanced.subtitle")}</small>
+                  </span>
+                </summary>
+                <Card class="rs-scope-card">
+                  <CardHeader
+                    title={t("resources.scope.title")}
+                    subtitle={t("resources.scope.subtitle")}
+                  />
+                  <CardSection class="rs-scope-row">
+                    <dl class="tg-kv">
+                      <dt>{t("workspace.label")}</dt>
+                      <dd>{workspace()}</dd>
+                      <dt>{t("resources.scope.label")}</dt>
+                      <dd>{workspace()}</dd>
+                    </dl>
+                  </CardSection>
+                </Card>
+                <section class="rs-section" aria-labelledby="rs-pools-title">
                 <div class="rs-section-title-row">
                   <div>
                     <h2 id="rs-pools-title">
@@ -549,9 +696,9 @@ function Inner(): JSX.Element {
                     {t("resources.targetPools.add")}
                   </Button>
                 </div>
-                <DataTable
-                  columns={poolColumns}
-                  rows={targetPools()}
+                  <DataTable
+                    columns={poolColumns}
+                    rows={targetPools.error ? [] : targetPools()}
                   rowKey={(pool) => pool.id}
                   loading={targetPools.loading}
                   error={
@@ -627,9 +774,9 @@ function Inner(): JSX.Element {
                     </CardSection>
                   </Card>
                 </Show>
-              </section>
+                </section>
 
-              <section class="rs-section" aria-labelledby="rs-policy-title">
+                <section class="rs-section" aria-labelledby="rs-policy-title">
                 <details class="rs-policy-disclosure">
                   <summary>
                     <span>
@@ -651,9 +798,9 @@ function Inner(): JSX.Element {
                       {t("resources.policy.add")}
                     </Button>
                   </div>
-                  <DataTable
-                    columns={policyColumns}
-                    rows={spacePolicies()}
+                    <DataTable
+                      columns={policyColumns}
+                      rows={spacePolicies.error ? [] : spacePolicies()}
                     rowKey={(policy) => policy.id}
                     loading={spacePolicies.loading}
                     error={
@@ -733,11 +880,31 @@ function Inner(): JSX.Element {
                     </Card>
                   </Show>
                 </details>
-              </section>
+                </section>
+              </details>
             </Show>
           </div>
         )}
       </Show>
     </>
   );
+}
+
+const RESOURCE_KIND_KEYS: Readonly<Record<string, MessageKey>> = {
+  EdgeWorker: "resources.editor.service.edgeWorker",
+  ObjectBucket: "resources.editor.service.objectBucket",
+  KVStore: "resources.editor.service.kvStore",
+  SQLDatabase: "resources.editor.service.sqlDatabase",
+  Queue: "resources.editor.service.queue",
+  VectorIndex: "resources.editor.service.vectorIndex",
+  DurableWorkflow: "resources.editor.service.durableWorkflow",
+  ContainerService: "resources.editor.service.containerService",
+  StatefulActorNamespace:
+    "resources.editor.service.statefulActorNamespace",
+  Schedule: "resources.editor.service.schedule",
+};
+
+function resourceKindLabel(kind: string): string {
+  const key = RESOURCE_KIND_KEYS[kind];
+  return key ? t(key) : kind;
 }

@@ -1200,7 +1200,23 @@ export const ja = {
   // --- Resources (service-created cloud resources) -----------------------------
   "resources.title": "リソース",
   "resources.subtitle":
-    "サービスが作った実リソースの望ましい状態、配置先、観測結果を管理します。",
+    "デプロイ済みサービスと、この環境が提供するマネージドリソースをまとめて確認・管理します。",
+  "resources.summary.title": "リソース概要",
+  "resources.summary.services": "デプロイ済みサービス",
+  "resources.summary.managed": "マネージドリソース",
+  "resources.summary.availableTypes": "利用できるリソース種別",
+  "resources.services.title": "サービス",
+  "resources.services.subtitle":
+    "このワークスペースにデプロイされ、クラウド上で稼働するサービスです。",
+  "resources.services.empty": "デプロイ済みサービスはありません。",
+  "resources.services.column.service": "サービス",
+  "resources.services.column.status": "状態",
+  "resources.services.column.environment": "環境",
+  "resources.services.column.updated": "更新日時",
+  "resources.availableTypes.label": "この環境で作成できる種類",
+  "resources.platformAdvanced.title": "配置とポリシー",
+  "resources.platformAdvanced.subtitle":
+    "対象範囲、配置先、詳細ポリシーを管理するOperator向け設定",
   "resources.define.needsTargetPool":
     "配置先が未設定です。下の「配置先」を1つ作ると定義できます。",
   "resources.define": "リソースを定義",
@@ -1218,7 +1234,8 @@ export const ja = {
   "resources.unavailable.message":
     "この環境では、リソース管理の保存先と実行環境がまだ有効になっていません。",
   "resources.inventory.title": "リソース一覧",
-  "resources.inventory.subtitle": "範囲 {space} の望ましい状態と観測状態",
+  "resources.inventory.subtitle":
+    "作成したリソースの状態、配置先、管理元を表示します。",
   "resources.editor.createTitle": "リソースを定義",
   "resources.editor.editTitle": "望ましい状態を変更",
   "resources.editor.subtitle":
@@ -1530,6 +1547,44 @@ export const ja = {
     "登録しました。ブラウザの確認ダイアログに応じてください。",
   "account.installTarget.unsupported":
     "このブラウザはこの機能に未対応です。ストア側でインスタンス URL を入力してください。",
+  "account.apiKeys.title": "Cloud API キー",
+  "account.apiKeys.subtitle":
+    "CLIや外部ツールからTakosumi Cloudを操作するためのキーを発行・失効できます。",
+  "account.apiKeys.secretOnce": "秘密値は作成時のみ表示",
+  "account.apiKeys.name": "キーの名前",
+  "account.apiKeys.namePlaceholder": "例: 開発用 CLI",
+  "account.apiKeys.expiresLabel": "有効期間",
+  "account.apiKeys.expiresDays": "{days}日",
+  "account.apiKeys.scopes": "権限",
+  "account.apiKeys.scope.read": "読み取り",
+  "account.apiKeys.scope.write": "変更",
+  "account.apiKeys.scope.admin": "管理",
+  "account.apiKeys.restrictWorkspace":
+    "現在のワークスペースだけで使用できるようにする",
+  "account.apiKeys.create": "API キーを作成",
+  "account.apiKeys.created": "API キーを作成しました",
+  "account.apiKeys.createdHint":
+    "この値は再表示できません。今すぐ安全な場所へ保存してください。",
+  "account.apiKeys.copy": "コピー",
+  "account.apiKeys.copied": "コピーしました",
+  "account.apiKeys.copyFailed":
+    "コピーできませんでした。表示されている値を手動で保存してください。",
+  "account.apiKeys.error": "API キーの操作を完了できませんでした: {message}",
+  "account.apiKeys.empty": "API キーはまだありません。",
+  "account.apiKeys.key": "キー",
+  "account.apiKeys.access": "アクセス範囲",
+  "account.apiKeys.workspaceBound": "このワークスペースのみ",
+  "account.apiKeys.lastUsed": "最終使用",
+  "account.apiKeys.neverUsed": "未使用",
+  "account.apiKeys.status": "状態",
+  "account.apiKeys.status.active": "有効",
+  "account.apiKeys.status.revoked": "失効済み",
+  "account.apiKeys.status.expired": "期限切れ",
+  "account.apiKeys.expires": "{date} まで",
+  "account.apiKeys.noExpiry": "期限なし",
+  "account.apiKeys.action": "操作",
+  "account.apiKeys.revoke": "失効",
+  "account.apiKeys.revokeConfirm": "失効する",
 
   // --- billing -------------------------------------------------------------------
   "billing.usageQuotaTitle": "利用状況",
@@ -1542,7 +1597,6 @@ export const ja = {
   "billing.usage.title": "使用量",
   "billing.usage.subtitle":
     "この ワークスペース のプロバイダー非依存な使用イベントです。",
-  "billing.usage.load": "使用量を読み込む",
   "billing.usage.more": "さらに読み込む",
   "billing.usage.error": "使用量を読み込めませんでした: {message}",
   "billing.usage.empty": "使用量はまだありません。",
@@ -1590,7 +1644,7 @@ export const ja = {
   "billing.commercial.credits.title": "クレジットを追加",
   "billing.commercial.credits.subtitle":
     "金額を選んで追加します。Checkoutで支払い方法を安全に保存しますが、自動チャージは下で有効にするまで行いません。",
-  "billing.commercial.credits.creditAmount": "Takosumi Cloudクレジット",
+  "billing.commercial.credits.choose": "追加するクレジット額を選択",
   "billing.commercial.credits.taxNote":
     "適用される税金は決済時に決済サービスが計算します。",
   "billing.commercial.credits.add": "クレジットを追加",
@@ -1600,6 +1654,11 @@ export const ja = {
   "billing.commercial.autoRecharge.enable": "自動チャージを有効にする",
   "billing.commercial.autoRecharge.requiresCard":
     "最初に一度クレジットを追加して、支払い方法を保存してください。",
+  "billing.commercial.autoRecharge.status": "自動チャージ",
+  "billing.commercial.autoRecharge.on": "オン",
+  "billing.commercial.autoRecharge.off": "オフ",
+  "billing.commercial.autoRecharge.onSummary":
+    "残高が {threshold} 未満になると {amount} を追加（1か月 {limit} まで）",
   "billing.commercial.autoRecharge.threshold": "この残高を下回ったら",
   "billing.commercial.autoRecharge.amount": "チャージ金額",
   "billing.commercial.autoRecharge.monthlyLimit": "1か月の上限",
@@ -1613,6 +1672,7 @@ export const ja = {
   "billing.commercial.payment.amount": "金額",
   "billing.commercial.payment.action": "領収書",
   "billing.commercial.payment.open": "開く",
+  "billing.commercial.payment.count": "{count}件",
   "billing.commercial.payment.status.paid": "支払い済み",
   "billing.commercial.payment.status.failed": "失敗",
   "billing.commercial.payment.status.refunded": "返金済み",

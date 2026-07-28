@@ -549,51 +549,75 @@
   display: grid;
   gap: var(--tg-s-3);
 }
-.wb-billing-current {
+.wb-billing-wallet {
+  display: grid;
+  gap: var(--tg-s-4);
+  overflow: hidden;
+  background:
+    radial-gradient(
+      circle at 92% 5%,
+      color-mix(in srgb, var(--tg-accent) 14%, transparent),
+      transparent 34%
+    ),
+    var(--tg-bg-elevated);
+}
+.wb-billing-wallet-main {
   display: flex;
-  align-items: flex-start;
+  align-items: end;
   justify-content: space-between;
   gap: var(--tg-s-4);
-  padding: var(--tg-s-4);
-  border: 1px solid var(--tg-line);
-  border-radius: var(--tg-r-lg);
-  background: var(--tg-bg-subtle);
 }
-.wb-billing-current-copy {
+.wb-billing-balance {
   min-width: 0;
   display: grid;
   gap: var(--tg-s-1);
 }
-.wb-billing-current-copy strong {
-  font-size: var(--tg-fs-xl);
+.wb-billing-balance strong {
+  font-size: clamp(2rem, 5vw, 3.4rem);
+  letter-spacing: -0.04em;
   line-height: var(--tg-lh-tight);
   overflow-wrap: anywhere;
 }
+.wb-billing-wallet-state {
+  display: grid;
+  justify-items: end;
+  gap: var(--tg-s-2);
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-sm);
+  text-align: right;
+}
 .wb-billing-kicker,
-.wb-billing-current-note,
 .wb-billing-empty {
   color: var(--tg-fg-muted);
   font-size: var(--tg-fs-sm);
+  font-weight: 650;
 }
 .wb-billing-price {
   color: var(--tg-fg-muted);
 }
-.wb-billing-meta {
+.wb-billing-stats {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: var(--tg-s-4);
+  gap: 1px;
   margin: 0;
+  overflow: hidden;
+  border: 1px solid var(--tg-line);
+  border-radius: var(--tg-r-lg);
+  background: var(--tg-line);
 }
-.wb-billing-meta div {
+.wb-billing-stats div {
   min-width: 0;
+  padding: var(--tg-s-3) var(--tg-s-4);
+  background: var(--tg-bg-subtle);
 }
-.wb-billing-meta dt {
+.wb-billing-stats dt {
   color: var(--tg-fg-muted);
   font-size: var(--tg-fs-xs);
   font-weight: 650;
 }
-.wb-billing-meta dd {
+.wb-billing-stats dd {
   margin: var(--tg-s-1) 0 0;
+  font-weight: 700;
   overflow-wrap: anywhere;
 }
 .wb-billing-profile {
@@ -621,60 +645,123 @@
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--tg-s-3);
 }
-.wb-billing-plan-grid {
+.wb-billing-add {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
-  gap: var(--tg-s-3);
-}
-.wb-billing-plan {
-  display: grid;
-  align-content: start;
   gap: var(--tg-s-4);
-  padding: var(--tg-s-4);
-  border: 1px solid var(--tg-line);
-  border-radius: var(--tg-r-lg);
-  background: var(--tg-bg-subtle);
 }
-.wb-billing-plan.is-current {
-  border-color: color-mix(in srgb, var(--tg-success) 38%, var(--tg-line));
+.wb-billing-amount-picker {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 130px), 1fr));
+  gap: var(--tg-s-2);
 }
-.wb-billing-plan-heading {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: var(--tg-s-3);
+.wb-billing-amount.tg-btn {
+  display: grid;
+  justify-items: start;
+  min-height: 76px;
+  padding: var(--tg-s-3);
+  gap: var(--tg-s-1);
 }
-.wb-billing-plan-heading h3 {
-  margin: 0;
+.wb-billing-amount strong {
   font-size: var(--tg-fs-lg);
 }
-.wb-billing-plan-heading p {
-  margin: var(--tg-s-1) 0 0;
+.wb-billing-amount span {
   color: var(--tg-fg-muted);
-  font-weight: 650;
+  font-size: var(--tg-fs-xs);
 }
-.wb-billing-plan-note {
+.wb-billing-tax-note {
   margin: 0;
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-xs);
+}
+.wb-billing-auto {
+  display: grid;
+  gap: var(--tg-s-4);
+}
+.wb-billing-auto-body {
+  display: grid;
+  gap: var(--tg-s-3);
+}
+.wb-billing-auto-body > span {
   color: var(--tg-fg-muted);
   font-size: var(--tg-fs-sm);
 }
-.wb-billing-plan > .tg-btn {
+.wb-billing-auto-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--tg-s-2);
+  padding: var(--tg-s-3);
+  border-radius: var(--tg-r-md);
+  background: color-mix(in srgb, var(--tg-success) 8%, var(--tg-bg-subtle));
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-sm);
+}
+.wb-billing-auto-body > .tg-btn {
   justify-self: start;
+}
+.wb-billing-history {
+  padding-block: 0;
+}
+.wb-billing-history details {
+  display: grid;
+}
+.wb-billing-history summary {
+  min-height: 76px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--tg-s-4);
+  cursor: pointer;
+  list-style: none;
+}
+.wb-billing-history summary::-webkit-details-marker {
+  display: none;
+}
+.wb-billing-history summary > span:first-child {
+  display: flex;
+  align-items: center;
+  gap: var(--tg-s-3);
+}
+.wb-billing-history summary > span:first-child > span {
+  display: grid;
+  gap: var(--tg-s-1);
+}
+.wb-billing-history summary small,
+.wb-billing-history summary > span:last-child,
+.wb-billing-history-body > p {
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-sm);
+}
+.wb-billing-history-body {
+  display: grid;
+  gap: var(--tg-s-3);
+  padding-bottom: var(--tg-s-4);
+  border-top: 1px solid var(--tg-line);
+}
+.wb-billing-history-body > p {
+  margin: var(--tg-s-4) 0 0;
 }
 .wb-billing-empty {
   margin: 0;
 }
 
 @media (max-width: 720px) {
-  .wb-billing-current {
+  .wb-billing-wallet-main {
     flex-direction: column;
+    align-items: stretch;
   }
-  .wb-billing-meta,
+  .wb-billing-wallet-state {
+    justify-items: start;
+    text-align: left;
+  }
+  .wb-billing-stats,
   .wb-billing-profile,
   .wb-billing-form-grid {
     grid-template-columns: 1fr;
   }
-  .wb-billing-plan > .tg-btn {
-    width: 100%;
+  .wb-billing-stats {
+    gap: 1px;
+  }
+  .wb-billing-auto-body > .tg-btn {
+    justify-self: stretch;
   }
 }

@@ -1187,7 +1187,23 @@ export const en: Record<keyof typeof ja, string> = {
   // --- Resources (service-created cloud resources) -----------------------------
   "resources.title": "Resources",
   "resources.subtitle":
-    "Manage desired state, placement, and observations for the resources your services created.",
+    "View and manage deployed services and the managed resources offered by this environment.",
+  "resources.summary.title": "Resource summary",
+  "resources.summary.services": "Deployed services",
+  "resources.summary.managed": "Managed resources",
+  "resources.summary.availableTypes": "Available resource types",
+  "resources.services.title": "Services",
+  "resources.services.subtitle":
+    "Services deployed in this Workspace and running on the cloud.",
+  "resources.services.empty": "No deployed services.",
+  "resources.services.column.service": "Service",
+  "resources.services.column.status": "Status",
+  "resources.services.column.environment": "Environment",
+  "resources.services.column.updated": "Updated",
+  "resources.availableTypes.label": "Resource types available here",
+  "resources.platformAdvanced.title": "Placement and policy",
+  "resources.platformAdvanced.subtitle":
+    "Operator settings for scope, placement targets, and advanced policy",
   "resources.define.needsTargetPool":
     "No placement target is configured. Create one below to start defining resources.",
   "resources.define": "Define resource",
@@ -1205,7 +1221,8 @@ export const en: Record<keyof typeof ja, string> = {
   "resources.unavailable.message":
     "This deployment has not enabled durable resource storage and its run environment yet.",
   "resources.inventory.title": "Resource inventory",
-  "resources.inventory.subtitle": "Desired and observed state in scope {space}",
+  "resources.inventory.subtitle":
+    "Status, placement, and ownership for resources you created.",
   "resources.editor.createTitle": "Define resource",
   "resources.editor.editTitle": "Change desired state",
   "resources.editor.subtitle":
@@ -1515,6 +1532,44 @@ export const en: Record<keyof typeof ja, string> = {
   "account.installTarget.done": "Registered — approve your browser’s prompt.",
   "account.installTarget.unsupported":
     "This browser doesn’t support this. Enter your instance URL on the store instead.",
+  "account.apiKeys.title": "Cloud API keys",
+  "account.apiKeys.subtitle":
+    "Create and revoke keys for the CLI and external tools that use Takosumi Cloud.",
+  "account.apiKeys.secretOnce": "Secret shown once",
+  "account.apiKeys.name": "Key name",
+  "account.apiKeys.namePlaceholder": "For example: Development CLI",
+  "account.apiKeys.expiresLabel": "Expires in",
+  "account.apiKeys.expiresDays": "{days} days",
+  "account.apiKeys.scopes": "Permissions",
+  "account.apiKeys.scope.read": "Read",
+  "account.apiKeys.scope.write": "Write",
+  "account.apiKeys.scope.admin": "Admin",
+  "account.apiKeys.restrictWorkspace":
+    "Restrict this key to the current Workspace",
+  "account.apiKeys.create": "Create API key",
+  "account.apiKeys.created": "API key created",
+  "account.apiKeys.createdHint":
+    "This value cannot be shown again. Save it somewhere secure now.",
+  "account.apiKeys.copy": "Copy",
+  "account.apiKeys.copied": "Copied",
+  "account.apiKeys.copyFailed":
+    "Could not copy the key. Save the visible value manually.",
+  "account.apiKeys.error": "Could not complete the API key operation: {message}",
+  "account.apiKeys.empty": "No API keys yet.",
+  "account.apiKeys.key": "Key",
+  "account.apiKeys.access": "Access",
+  "account.apiKeys.workspaceBound": "Current Workspace only",
+  "account.apiKeys.lastUsed": "Last used",
+  "account.apiKeys.neverUsed": "Never",
+  "account.apiKeys.status": "Status",
+  "account.apiKeys.status.active": "Active",
+  "account.apiKeys.status.revoked": "Revoked",
+  "account.apiKeys.status.expired": "Expired",
+  "account.apiKeys.expires": "Until {date}",
+  "account.apiKeys.noExpiry": "No expiry",
+  "account.apiKeys.action": "Action",
+  "account.apiKeys.revoke": "Revoke",
+  "account.apiKeys.revokeConfirm": "Revoke key",
 
   // --- billing -------------------------------------------------------------------
   "billing.usageQuotaTitle": "Usage overview",
@@ -1526,7 +1581,6 @@ export const en: Record<keyof typeof ja, string> = {
   "billing.loadError": "Could not load usage settings: {message}",
   "billing.usage.title": "Usage",
   "billing.usage.subtitle": "Provider-neutral usage events for this Workspace.",
-  "billing.usage.load": "Load usage",
   "billing.usage.more": "Load more",
   "billing.usage.error": "Could not load usage: {message}",
   "billing.usage.empty": "No usage yet.",
@@ -1574,7 +1628,7 @@ export const en: Record<keyof typeof ja, string> = {
   "billing.commercial.credits.title": "Add credits",
   "billing.commercial.credits.subtitle":
     "Choose an amount to add. Checkout securely saves the payment method, but automatic recharge stays off until you enable it below.",
-  "billing.commercial.credits.creditAmount": "Takosumi Cloud credit",
+  "billing.commercial.credits.choose": "Choose a credit amount",
   "billing.commercial.credits.taxNote":
     "Applicable tax is calculated by the payment provider at checkout.",
   "billing.commercial.credits.add": "Add credits",
@@ -1584,6 +1638,11 @@ export const en: Record<keyof typeof ja, string> = {
   "billing.commercial.autoRecharge.enable": "Enable automatic recharge",
   "billing.commercial.autoRecharge.requiresCard":
     "Add credits once to save a payment method before enabling automatic recharge.",
+  "billing.commercial.autoRecharge.status": "Automatic recharge",
+  "billing.commercial.autoRecharge.on": "On",
+  "billing.commercial.autoRecharge.off": "Off",
+  "billing.commercial.autoRecharge.onSummary":
+    "Add {amount} below {threshold}, up to {limit} per month",
   "billing.commercial.autoRecharge.threshold": "Recharge below",
   "billing.commercial.autoRecharge.amount": "Recharge amount",
   "billing.commercial.autoRecharge.monthlyLimit": "Monthly maximum",
@@ -1597,6 +1656,7 @@ export const en: Record<keyof typeof ja, string> = {
   "billing.commercial.payment.amount": "Amount",
   "billing.commercial.payment.action": "Receipt",
   "billing.commercial.payment.open": "Open",
+  "billing.commercial.payment.count": "{count} payments",
   "billing.commercial.payment.status.paid": "Paid",
   "billing.commercial.payment.status.failed": "Failed",
   "billing.commercial.payment.status.refunded": "Refunded",

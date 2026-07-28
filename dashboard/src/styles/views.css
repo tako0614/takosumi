@@ -53,6 +53,36 @@
   overflow: hidden;
 }
 
+.rs-inventory-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--tg-s-3);
+}
+
+.rs-inventory-stat {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: var(--tg-s-2) var(--tg-s-3);
+  padding: var(--tg-s-4);
+}
+
+.rs-inventory-stat > svg {
+  grid-row: 1 / span 2;
+  color: var(--tg-accent-strong);
+}
+
+.rs-inventory-stat > span {
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-sm);
+}
+
+.rs-inventory-stat > strong {
+  font-family: var(--tg-font-display);
+  font-size: var(--tg-fs-xl);
+  line-height: 1;
+}
+
 .rs-scope-row {
   display: flex;
   align-items: end;
@@ -101,6 +131,67 @@
 .rs-output-keys code {
   color: var(--tg-fg-muted);
   font-size: var(--tg-fs-xs);
+}
+
+.rs-available-types {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--tg-s-3);
+  padding-top: var(--tg-s-3);
+  border-top: 1px solid var(--tg-line);
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-sm);
+}
+
+.rs-available-types > span {
+  flex: 0 0 auto;
+  padding-top: 2px;
+}
+
+.rs-available-types > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--tg-s-2);
+}
+
+.rs-platform-advanced {
+  overflow: hidden;
+  border: 1px solid var(--tg-line);
+  border-radius: var(--tg-r-lg);
+  background: var(--tg-bg-subtle);
+}
+
+.rs-platform-advanced > summary {
+  cursor: pointer;
+  list-style: none;
+  padding: var(--tg-s-4) var(--tg-s-5);
+}
+
+.rs-platform-advanced > summary::-webkit-details-marker {
+  display: none;
+}
+
+.rs-platform-advanced > summary > span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.rs-platform-advanced > summary strong {
+  font-size: var(--tg-fs-sm);
+}
+
+.rs-platform-advanced > summary small {
+  color: var(--tg-fg-muted);
+}
+
+.rs-platform-advanced[open] > summary {
+  border-bottom: 1px solid var(--tg-line);
+}
+
+.rs-platform-advanced > .tg-card,
+.rs-platform-advanced > .rs-section {
+  margin: var(--tg-s-4);
 }
 
 .rs-form-grid {
@@ -485,6 +576,14 @@
 }
 
 @media (max-width: 720px) {
+  .rs-inventory-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .rs-available-types {
+    flex-direction: column;
+  }
+
   .rs-form-grid,
   .rs-detail-grid,
   .rs-import-row {

@@ -311,3 +311,113 @@
 .wc-disabled-reason-link:hover {
   color: var(--tg-fg);
 }
+
+/* Account-scoped Cloud API keys. The secret reveal is intentionally visually
+   distinct from the durable metadata table because it exists only in memory. */
+.wc-card-title-with-icon {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--tg-s-2);
+}
+.wc-api-keys {
+  display: grid;
+  gap: var(--tg-s-4);
+}
+.wc-api-keys .tg-card-header-actions .tg-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--tg-s-1);
+}
+.wc-api-key-created {
+  display: grid;
+  gap: var(--tg-s-3);
+  padding: var(--tg-s-4);
+  border: 1px solid color-mix(in srgb, var(--tg-success) 42%, var(--tg-line));
+  border-radius: var(--tg-r-lg);
+  background: color-mix(in srgb, var(--tg-success) 8%, var(--tg-bg-subtle));
+}
+.wc-api-key-created > div:first-child {
+  display: grid;
+  gap: var(--tg-s-1);
+}
+.wc-api-key-created > div:first-child span {
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-sm);
+}
+.wc-api-key-created code {
+  display: block;
+  padding: var(--tg-s-3);
+  overflow-x: auto;
+  border: 1px solid var(--tg-line);
+  border-radius: var(--tg-r-md);
+  background: var(--tg-code-bg);
+  color: var(--tg-code-fg);
+  font-family: var(--tg-font-mono);
+  font-size: var(--tg-fs-sm);
+  white-space: nowrap;
+}
+.wc-api-key-create {
+  display: grid;
+  grid-template-columns:
+    minmax(180px, 1.25fr) minmax(120px, 0.55fr)
+    minmax(210px, 1fr) auto;
+  gap: var(--tg-s-3);
+  align-items: end;
+  padding: var(--tg-s-4);
+  border: 1px solid var(--tg-line);
+  border-radius: var(--tg-r-lg);
+  background: var(--tg-bg-subtle);
+}
+.wc-api-key-scope-field {
+  min-width: 0;
+}
+.wc-api-key-scopes {
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  gap: var(--tg-s-3);
+  flex-wrap: wrap;
+}
+.wc-api-key-create-action {
+  display: grid;
+  justify-items: end;
+  gap: var(--tg-s-2);
+}
+.wc-api-key-identity,
+.wc-api-key-access,
+.wc-api-key-status {
+  display: grid;
+  gap: var(--tg-s-1);
+}
+.wc-api-key-identity code,
+.wc-api-key-access span:last-child,
+.wc-api-key-status > span {
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-xs);
+}
+.wc-api-key-identity code {
+  font-family: var(--tg-font-mono);
+}
+.wc-api-key-revoke {
+  display: inline-flex;
+  justify-content: flex-end;
+  gap: var(--tg-s-1);
+}
+
+@media (max-width: 980px) {
+  .wc-api-key-create {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .wc-api-key-create-action {
+    justify-items: start;
+  }
+}
+@media (max-width: 640px) {
+  .wc-api-key-create {
+    grid-template-columns: 1fr;
+  }
+  .wc-api-key-create-action,
+  .wc-api-key-create-action .tg-btn {
+    width: 100%;
+  }
+}

@@ -8,7 +8,7 @@ const src = (path: string) =>
   );
 
 const index = src("index.tsx");
-const nav = src("views/account/components/shell/nav.ts");
+const settings = src("views/settings/SettingsView.tsx");
 const editor = src("views/resources/ResourceEditor.tsx");
 const serviceForm = src("lib/resource-service-form.ts");
 const en = src("i18n/en.ts");
@@ -17,9 +17,9 @@ const detail = src("views/resources/ResourceDetailView.tsx");
 const inventory = src("views/resources/ResourcesView.tsx");
 
 describe("Resource Shape dashboard surface", () => {
-  test("is reachable through Settings > Manage with list and detail routes", () => {
-    expect(nav).toContain('href: "/resources"');
-    expect(nav).toContain('labelKey: "nav.resources"');
+  test("is directly reachable from Settings with list and detail routes", () => {
+    expect(settings).toContain('href: "/resources"');
+    expect(settings).toContain('titleKey: "nav.resources"');
     expect(index).toContain(
       '<Route path="/resources" component={ResourcesView} />',
     );
@@ -135,6 +135,16 @@ describe("Resource Shape dashboard surface", () => {
     expect(inventory).toContain("listResourceSpacePolicies");
     expect(inventory).toContain("editSpacePolicy");
     expect(inventory).toContain("deleteResourceSpacePolicy");
-    expect(inventory).toContain("rows={spacePolicies()}");
+    expect(inventory).toContain(
+      "rows={spacePolicies.error ? [] : spacePolicies()}",
+    );
+  });
+
+  test("unifies deployed services and managed Resources in one inventory", () => {
+    expect(inventory).toContain("listCapsules");
+    expect(inventory).toContain("rows={capsules.error ? [] : capsules()}");
+    expect(inventory).toContain("rows={resources.error ? [] : resources()}");
+    expect(inventory).toContain("formAvailability()?.filter");
+    expect(inventory).toContain('class="rs-platform-advanced"');
   });
 });
