@@ -14,6 +14,7 @@ import type {
   InterfaceSpec,
   IssueInterfaceTokenRequest,
   IssueInterfaceTokenResponse,
+  JsonObject,
   JsonValue,
   UpdateInterfaceRequest,
 } from "takosumi-contract";
@@ -247,6 +248,11 @@ export type InterfaceServiceMaterialization =
   | {
       readonly formRefKey: string;
       readonly formSchemaDigest: string;
+      readonly descriptorName: string;
+      readonly descriptorVersion: string;
+    }
+  | {
+      readonly portableIac: true;
       readonly descriptorName: string;
       readonly descriptorVersion: string;
     };
@@ -989,6 +995,7 @@ export class InterfaceService {
     expectedGeneration: number,
     actor?: ActorContext,
     expectedResolvedRevision?: number,
+    materializationAuthority?: "portable_iac",
   ): Promise<Interface> {
     const rawRequest = requireRecord(request, "update request");
     assertOnlyKeys(rawRequest, ["name", "labels", "spec"], "update request");
@@ -999,13 +1006,18 @@ export class InterfaceService {
       );
     }
     const current = await this.get(id);
+    const declarationSource = current.metadata.materializedFrom?.source;
     if (
       actor !== undefined &&
-      current.metadata.materializedFrom?.source === "form_descriptor"
+      (declarationSource === "form_descriptor" ||
+        (declarationSource === "portable_iac" &&
+          materializationAuthority !== "portable_iac"))
     ) {
       throw new InterfaceServiceError(
         "failed_precondition",
-        "Form descriptor Interface desired state is owned by its exact Form",
+        declarationSource === "form_descriptor"
+          ? "Form descriptor Interface desired state is owned by its exact Form"
+          : "portable IaC Interface desired state is owned by its exact declaration",
       );
     }
     if (current.status.phase === "Retired") {
@@ -1533,15 +1545,21 @@ export class InterfaceService {
     expectedGeneration: number,
     actor?: ActorContext,
     expectedResolvedRevision?: number,
+    materializationAuthority?: "portable_iac",
   ): Promise<Interface> {
     const current = await this.get(id);
+    const declarationSource = current.metadata.materializedFrom?.source;
     if (
       actor !== undefined &&
-      current.metadata.materializedFrom?.source === "form_descriptor"
+      (declarationSource === "form_descriptor" ||
+        (declarationSource === "portable_iac" &&
+          materializationAuthority !== "portable_iac"))
     ) {
       throw new InterfaceServiceError(
         "failed_precondition",
-        "Form descriptor Interface lifecycle is owned by its exact Form",
+        declarationSource === "form_descriptor"
+          ? "Form descriptor Interface lifecycle is owned by its exact Form"
+          : "portable IaC Interface lifecycle is owned by its exact declaration",
       );
     }
     if (current.status.phase === "Retired") return current;
@@ -2662,7 +2680,7 @@ function normalizeSpec(spec: InterfaceSpec): InterfaceSpec {
   const raw = requireRecord(spec, "spec");
   assertOnlyKeys(
     raw,
-    ["type", "version", "document", "inputs", "access"],
+    ["type", "version", "document", "documentSchema", "inputs", "access"],
     "spec",
   );
   const access = requireRecord(raw.access, "spec.access");
@@ -2674,6 +2692,9 @@ function normalizeSpec(spec: InterfaceSpec): InterfaceSpec {
   validateToken(raw.type, "spec.type");
   validateToken(raw.version, "spec.version");
   validateJsonDocument(raw.document, "spec.document");
+  if (raw.documentSchema !== undefined) {
+    validateJsonDocument(raw.documentSchema, "spec.documentSchema");
+  }
   const inputs = normalizeInputs(raw.inputs ?? {});
   if (
     access.resourceUriInput !== undefined &&
@@ -2700,6 +2721,9 @@ function normalizeSpec(spec: InterfaceSpec): InterfaceSpec {
     type: requireText(raw.type, "spec.type"),
     version: requireText(raw.version, "spec.version"),
     document: raw.document as JsonValue,
+    ...(raw.documentSchema !== undefined
+      ? { documentSchema: raw.documentSchema as JsonObject }
+      : {}),
     ...(Object.keys(inputs).length > 0 ? { inputs } : {}),
     access: {
       visibility: access.visibility as InterfaceSpec["access"]["visibility"],
@@ -3000,6 +3024,19 @@ function interfaceMaterialization(
         materialization.formSchemaDigest,
         "formSchemaDigest",
       ),
+      descriptorName: requireText(
+        materialization.descriptorName,
+        "descriptorName",
+      ),
+      descriptorVersion: requireText(
+        materialization.descriptorVersion,
+        "descriptorVersion",
+      ),
+    };
+  }
+  if ("portableIac" in materialization) {
+    return {
+      source: "portable_iac",
       descriptorName: requireText(
         materialization.descriptorName,
         "descriptorName",

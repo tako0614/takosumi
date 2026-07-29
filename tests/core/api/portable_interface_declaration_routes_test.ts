@@ -1,6 +1,9 @@
 import { test, expect } from "bun:test";
 import { Hono } from "hono";
-import type { ActorContext, TakoformDeclaredInterface } from "takosumi-contract";
+import type {
+  ActorContext,
+  TakoformDeclaredInterface,
+} from "takosumi-contract";
 import { registerPortableFormHostRoutes } from "../../../core/api/form_host_routes.ts";
 
 const BASE = "/apis/forms.takoform.com/v1alpha1";
@@ -15,6 +18,7 @@ const ACTOR: ActorContext = {
 const DECLARED: TakoformDeclaredInterface = {
   name: "mcp.server",
   version: "2025-11-25",
+  resource: { kind: "HttpService", name: "api" },
   document: { title: "MCP" },
   values: { endpoint: "https://example.test/mcp" },
 };
@@ -98,8 +102,7 @@ test("space is required and the surface is read-only", async () => {
   expect(noSpace.status).toBe(400);
   expect((await noSpace.json()).error.code).toBe("invalid_argument");
 
-  // There is no portable write: declarations are written through the host's
-  // own fenced identity, never through this protocol.
+  // A read-only host does not advertise or accidentally mount writes.
   for (const method of ["POST", "PUT", "PATCH", "DELETE"]) {
     const response = await app.request(`${BASE}/interfaces?space=space_1`, {
       method,
@@ -113,6 +116,72 @@ test("space is required and the surface is read-only", async () => {
     );
     expect(response.status).toBe(404);
   }
+});
+
+test("a writable host advertises and fences generic declaration CRUD", async () => {
+  const app = new Hono();
+  const calls: string[] = [];
+  registerPortableFormHostRoutes(app, {
+    service: {} as never,
+    availability: {} as never,
+    authorize: async () => ({ ok: true, actor: ACTOR }),
+    canReadForms: () => true,
+    canWriteInterfaces: () => true,
+    interfaceDeclarations: {
+      listDeclaredInterfaces: async () => [],
+      putDeclaredInterface: async (input) => {
+        calls.push(
+          `put:${input.space}:${input.expectedGeneration}:${input.declaration.name}`,
+        );
+        return {
+          ...input.declaration,
+          values: { endpoint: "https://example.test/mcp" },
+          resourceVersion: "1",
+        };
+      },
+      deleteDeclaredInterface: async (input) => {
+        calls.push(
+          `delete:${input.space}:${input.expectedGeneration}:${input.name}`,
+        );
+      },
+    },
+  });
+  const discovery = await app.request("https://host.test/.well-known/takoform");
+  expect((await discovery.json()).features).toMatchObject({
+    interface_declarations: true,
+    interface_declaration_writes: true,
+  });
+
+  const path = `${BASE}/interfaces/mcp.server?space=space_1&version=2025-11-25&resourceKind=HttpService&resourceName=api`;
+  const created = await app.request(path, {
+    method: "PUT",
+    headers: {
+      "content-type": "application/json",
+      "if-none-match": "*",
+      "idempotency-key": "interface-create-1",
+    },
+    body: JSON.stringify({
+      name: DECLARED.name,
+      version: DECLARED.version,
+      resource: DECLARED.resource,
+      document: DECLARED.document,
+    }),
+  });
+  expect(created.status).toBe(200);
+  expect(created.headers.get("etag")).toBe('"1"');
+
+  const deleted = await app.request(path, {
+    method: "DELETE",
+    headers: {
+      "if-match": '"1"',
+      "idempotency-key": "interface-delete-1",
+    },
+  });
+  expect(deleted.status).toBe(204);
+  expect(calls).toEqual([
+    "put:space_1:0:mcp.server",
+    "delete:space_1:1:mcp.server",
+  ]);
 });
 
 test("an unauthenticated caller never reaches the declaration read", async () => {
@@ -135,6 +204,6 @@ test("an unauthenticated caller never reaches the declaration read", async () =>
   });
   const response = await app.request(`${BASE}/interfaces?space=space_1`);
   expect(response.status).toBe(401);
-  expect((await response.json()).error.code).toBe("unauthenticated");
+  expect((await response.json()).error.code).toBe("unauthorized");
   expect(called).toBe(false);
 });

@@ -658,8 +658,7 @@ function verifyFragmentOnlyReferences(
     }
     if (
       key === "$ref" &&
-      (typeof child !== "string" ||
-        (child !== "#" && !child.startsWith("#/")))
+      (typeof child !== "string" || (child !== "#" && !child.startsWith("#/")))
     ) {
       throw new TypeError(
         `${childLocation} must be a document-local fragment using the root or a JSON Pointer; network, package-path, anchor, and dynamic references are forbidden`,
@@ -1140,7 +1139,10 @@ function estimateSchemaValidationWork(
         );
       }
       for (const [position, child] of children.entries()) {
-        addChild(child, appendSchemaPointer(pointer, keyword, String(position)));
+        addChild(
+          child,
+          appendSchemaPointer(pointer, keyword, String(position)),
+        );
         if (work > MAX_SCHEMA_VALIDATION_WORK) break;
       }
     }
@@ -1425,7 +1427,9 @@ function estimateSchemaInstanceValidationWork(
     }
     if (schemaValue.$ref !== undefined) {
       if (typeof schemaValue.$ref !== "string") {
-        throw new TypeError(`schema node ${schemaPointer}/$ref is not a string`);
+        throw new TypeError(
+          `schema node ${schemaPointer}/$ref is not a string`,
+        );
       }
       const target = resolveLocalSchemaReference(
         root,
@@ -1803,6 +1807,18 @@ function rejectForbiddenDefinitionContent(
       throw new TypeError(`forbidden field ${key} at ${path}`);
     rejectForbiddenDefinitionContent(child, `${path}.${key}`);
   }
+}
+
+/**
+ * Applies Takoform's pinned portable-data vocabulary to a standalone document.
+ * The Interface write facade uses the same verifier rule as signed Form
+ * Packages so direct HTTP callers cannot bypass provider-side admission.
+ */
+export function assertTakoformPortableDataOnly(
+  value: CanonicalJsonValue,
+  path = "$",
+): void {
+  rejectForbiddenDefinitionContent(value, path);
 }
 
 interface ForbiddenVocabulary {

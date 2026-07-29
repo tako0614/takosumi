@@ -1,28 +1,37 @@
 import type {
+  FormInterfaceInputDeclaration,
   FormAvailability,
   InstalledFormReference,
 } from "./service-forms.ts";
 import type { JsonObject } from "./types.ts";
 
 /** Portable protocol token and route namespace owned by Takoform. */
-export const TAKOFORM_FORM_HOST_PROTOCOL = "v0" as const;
+export const TAKOFORM_FORM_HOST_PROTOCOL =
+  "takoform.host-api@v1alpha1" as const;
+export const TAKOFORM_FORM_HOST_API_VERSION =
+  "forms.takoform.com/v1alpha1" as const;
 export const TAKOFORM_COMPAT_PROFILE = "compat.takoform.v1" as const;
 export const TAKOFORM_FORM_HOST_WELL_KNOWN_PATH =
   "/.well-known/takoform" as const;
-export const TAKOFORM_FORM_HOST_API_PATH = "/takoform/v0" as const;
+export const TAKOFORM_FORM_HOST_API_PATH =
+  "/apis/forms.takoform.com/v1alpha1" as const;
 export const TAKOFORM_FORM_HOST_INTERFACES_PATH =
   `${TAKOFORM_FORM_HOST_API_PATH}/interfaces` as const;
 export const TAKOFORM_INTERFACE_DECLARATIONS_FEATURE =
   "interface_declarations" as const;
+export const TAKOFORM_INTERFACE_DECLARATION_WRITES_FEATURE =
+  "interface_declaration_writes" as const;
 
 export interface TakoformHostDiscovery {
   readonly protocols: readonly [typeof TAKOFORM_FORM_HOST_PROTOCOL];
+  readonly api_versions: readonly [typeof TAKOFORM_FORM_HOST_API_VERSION];
   readonly features: {
     readonly service_forms: true;
     readonly exact_form_ref: true;
     readonly optimistic_concurrency: true;
     readonly idempotent_lifecycle: true;
     readonly interface_declarations?: true;
+    readonly interface_declaration_writes?: true;
   };
   readonly endpoints: {
     readonly api: string;
@@ -42,7 +51,12 @@ export interface TakoformDeclaredInterface {
     readonly name: string;
   };
   readonly document?: JsonObject;
+  readonly documentSchema?: JsonObject;
+  readonly inputs?: readonly FormInterfaceInputDeclaration[];
+  readonly resourceUriInput?: string;
   readonly values?: JsonObject;
+  readonly resourceUri?: string;
+  readonly resourceVersion?: string;
   readonly form?: InstalledFormReference;
 }
 
@@ -50,27 +64,56 @@ export interface ListTakoformDeclaredInterfacesResponse {
   readonly interfaces: readonly TakoformDeclaredInterface[];
 }
 
+/** Takoform v1alpha1 definition identity carried inside a Resource. */
+export interface TakoformFormReference {
+  readonly formRef: {
+    readonly apiVersion: typeof TAKOFORM_FORM_HOST_API_VERSION;
+    readonly kind: string;
+    readonly definitionVersion: string;
+    readonly schemaDigest: string;
+  };
+  readonly packageDigest: string;
+}
+
 /**
- * Flat takoform v0 projection of one host-owned canonical Resource. Takosumi
- * translates this protocol onto the canonical Resource service and owns no
- * second lifecycle ledger.
+ * Provider-neutral Takoform v1alpha1 projection of one host-owned canonical
+ * Resource. Takosumi translates this protocol onto the canonical Resource
+ * service and owns no second lifecycle ledger.
  */
 export interface TakoformResource {
-  readonly type: string;
-  readonly form: InstalledFormReference;
-  readonly workspace: string;
-  readonly name: string;
-  readonly project?: string;
-  readonly environment?: string;
-  readonly serial?: string;
-  readonly config: JsonObject;
-  readonly attributes?: TakoformResourceAttributes;
+  readonly apiVersion: typeof TAKOFORM_FORM_HOST_API_VERSION;
+  readonly kind: string;
+  readonly form: TakoformFormReference;
+  readonly metadata: {
+    readonly name: string;
+    readonly space: string;
+    readonly project?: string;
+    readonly environment?: string;
+    readonly labels?: Readonly<Record<string, string>>;
+    readonly resourceVersion?: string;
+  };
+  readonly spec: JsonObject;
+  readonly status?: TakoformResourceStatus;
   readonly id?: string;
 }
 
-export interface TakoformResourceAttributes {
+export interface TakoformResourceStatus {
+  readonly phase?: string;
+  readonly observedGeneration?: number;
   readonly portability?: string;
   readonly outputs?: JsonObject;
+  readonly resolution?: {
+    readonly selectedImplementation?: string;
+    readonly target?: string;
+    readonly locked?: boolean;
+    readonly portability?: string;
+  };
+  readonly conditions?: readonly {
+    readonly type: string;
+    readonly status: string;
+    readonly reason?: string;
+    readonly message?: string;
+  }[];
 }
 
 export interface TakoformPreviewResponse {
@@ -128,22 +171,16 @@ export interface ListTakoformResourcesResponse {
 }
 
 export type TakoformHostErrorCode =
-  | "invalid_argument"
-  | "unauthenticated"
-  | "permission_denied"
-  | "form_unknown"
-  | "form_not_installed"
-  | "form_unavailable"
-  | "form_identity_conflict"
-  | "resource_not_found"
+  | "backend_unavailable"
+  | "conflict"
+  | "forbidden"
   | "interface_identity_ambiguous"
   | "interface_instance_ambiguous"
-  | "serial_conflict"
+  | "invalid_argument"
+  | "not_implemented"
+  | "resource_not_found"
   | "resource_busy"
-  | "import_conflict"
-  | "policy_denied"
-  | "backend_unavailable"
-  | "internal_error";
+  | "unauthorized";
 
 export interface TakoformHostErrorEnvelope {
   readonly error: {
@@ -157,12 +194,16 @@ export interface TakoformHostErrorEnvelope {
 
 export function createTakoformHostDiscovery(
   origin: string,
-  options: { readonly interfaceDeclarations?: boolean } = {},
+  options: {
+    readonly interfaceDeclarations?: boolean;
+    readonly interfaceDeclarationWrites?: boolean;
+  } = {},
 ): TakoformHostDiscovery {
   const normalized = origin.replace(/\/+$/u, "");
   const api = `${normalized}${TAKOFORM_FORM_HOST_API_PATH}`;
   return {
     protocols: [TAKOFORM_FORM_HOST_PROTOCOL],
+    api_versions: [TAKOFORM_FORM_HOST_API_VERSION],
     features: {
       service_forms: true,
       exact_form_ref: true,
@@ -170,6 +211,9 @@ export function createTakoformHostDiscovery(
       idempotent_lifecycle: true,
       ...(options.interfaceDeclarations
         ? { interface_declarations: true as const }
+        : {}),
+      ...(options.interfaceDeclarationWrites
+        ? { interface_declaration_writes: true as const }
         : {}),
     },
     endpoints: {
@@ -206,9 +250,23 @@ export const PORTABLE_TYPE_BY_SHAPE_KIND: Readonly<Record<string, string>> =
   );
 
 export function shapeKindForPortableType(type: string): string | undefined {
-  return SHAPE_KIND_BY_PORTABLE_TYPE[type];
+  const retained = SHAPE_KIND_BY_PORTABLE_TYPE[type];
+  if (retained) return retained;
+  if (!/^[a-z][a-z0-9_]{0,63}$/u.test(type)) return undefined;
+  const kind = type
+    .split("_")
+    .map((part) => `${part[0]!.toUpperCase()}${part.slice(1)}`)
+    .join("");
+  return /^[A-Za-z][A-Za-z0-9._-]{0,127}$/u.test(kind) ? kind : undefined;
 }
 
 export function portableTypeForShapeKind(kind: string): string | undefined {
-  return PORTABLE_TYPE_BY_SHAPE_KIND[kind];
+  const retained = PORTABLE_TYPE_BY_SHAPE_KIND[kind];
+  if (retained) return retained;
+  if (!/^[A-Z][A-Za-z0-9]{0,127}$/u.test(kind)) return undefined;
+  const type = kind
+    .replace(/([a-z0-9])([A-Z])/gu, "$1_$2")
+    .replace(/([A-Z]+)([A-Z][a-z])/gu, "$1_$2")
+    .toLowerCase();
+  return /^[a-z][a-z0-9_]{0,63}$/u.test(type) ? type : undefined;
 }

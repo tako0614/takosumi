@@ -1,4 +1,5 @@
 import type { NativeResourceRef } from "./resolution.ts";
+import type { FormInterfaceInputDeclaration } from "./service-forms.ts";
 import type { Condition, JsonObject, JsonValue } from "./types.ts";
 import { TAKOSUMI_API_VERSION } from "./capabilities.ts";
 export { TAKOSUMI_INTERFACES_CAPABILITY } from "./capabilities.ts";
@@ -23,6 +24,12 @@ export type InterfaceMaterializedFrom =
       readonly source: "form_descriptor";
       readonly formRefKey: string;
       readonly formSchemaDigest: string;
+      readonly descriptorName: string;
+      readonly descriptorVersion: string;
+    }
+  | {
+      /** Standalone generic declaration owned by portable IaC. */
+      readonly source: "portable_iac";
       readonly descriptorName: string;
       readonly descriptorVersion: string;
     };
@@ -115,6 +122,8 @@ export interface InterfaceSpec {
   readonly type: string;
   readonly version: string;
   readonly document: JsonValue;
+  /** Optional portable schema for the opaque document. */
+  readonly documentSchema?: JsonObject;
   readonly inputs?: Readonly<Record<string, InterfaceInput>>;
   readonly access: InterfaceAccessSpec;
 }
@@ -267,6 +276,9 @@ export interface CreateInterfaceRequest {
   readonly labels?: Readonly<Record<string, string>>;
   readonly spec: InterfaceSpec;
 }
+
+/** Original portable input vocabulary used only at the host API boundary. */
+export type PortableInterfaceInputDeclaration = FormInterfaceInputDeclaration;
 
 export type CapsuleInterfaceBlueprintInput =
   | InterfaceLiteralInput

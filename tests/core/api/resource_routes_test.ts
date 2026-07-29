@@ -292,12 +292,25 @@ const AUTH_HEADERS = {
 
 function portableFormQuery(identity = EXACT_OBJECT_BUCKET_FORM): string {
   const query = new URLSearchParams({
-    type: identity.type,
-    version: identity.version,
+    apiVersion: "forms.takoform.com/v1alpha1",
+    kind: "ObjectBucket",
+    definitionVersion: identity.version,
     schemaDigest: identity.schemaDigest,
     packageDigest: identity.packageDigest,
   });
   return query.toString();
+}
+
+function portableFormReference(identity = EXACT_OBJECT_BUCKET_FORM) {
+  return {
+    formRef: {
+      apiVersion: "forms.takoform.com/v1alpha1",
+      kind: "ObjectBucket",
+      definitionVersion: identity.version,
+      schemaDigest: identity.schemaDigest,
+    },
+    packageDigest: identity.packageDigest,
+  };
 }
 
 type ResourceRouteApp = Awaited<ReturnType<typeof buildApp>>["app"];
@@ -458,25 +471,27 @@ test("portable Form host delegates exact lifecycle to the canonical Resource and
     },
     exactObjectBucketFormRegistry(),
   );
-  const base = "/takoform/v0";
-  const path = `${base}/resources/object_bucket/portable-assets`;
+  const base = "/apis/forms.takoform.com/v1alpha1";
+  const path = `${base}/resources/ObjectBucket/portable-assets`;
   const desired = {
-    type: "object_bucket",
-    form: EXACT_OBJECT_BUCKET_FORM,
-    workspace: "space_1",
-    name: "portable-assets",
-    config: { name: "portable-assets", interfaces: ["s3_api"] },
+    apiVersion: "forms.takoform.com/v1alpha1",
+    kind: "ObjectBucket",
+    form: portableFormReference(),
+    metadata: { name: "portable-assets", space: "space_1" },
+    spec: { name: "portable-assets", interfaces: ["s3_api"] },
   };
 
   const discovery = await app.request("/.well-known/takoform");
   expect(discovery.status).toBe(200);
   const discoveryBody = await discovery.json();
-  expect(discoveryBody.protocols).toEqual(["v0"]);
+  expect(discoveryBody.protocols).toEqual(["takoform.host-api@v1alpha1"]);
   expect(discoveryBody.endpoints.api).toEndWith(base);
 
-  const forms = await app.request(`${base}/forms?workspace=space_1`);
+  const forms = await app.request(`${base}/forms?space=space_1`);
   expect(forms.status).toBe(200);
-  expect((await forms.json()).forms[0].form).toEqual(EXACT_OBJECT_BUCKET_FORM);
+  expect((await forms.json()).forms[0].identity).toEqual(
+    portableFormReference(),
+  );
 
   const preview = await app.request(`${base}/resources/preview`, {
     method: "POST",
@@ -485,9 +500,9 @@ test("portable Form host delegates exact lifecycle to the canonical Resource and
   });
   expect(preview.status).toBe(200);
   const previewBody = await preview.json();
-  expect(previewBody.resource.form).toEqual(EXACT_OBJECT_BUCKET_FORM);
-  expect(JSON.stringify(previewBody)).not.toContain("cloudflare-main");
-  expect(JSON.stringify(previewBody)).not.toContain("selectedImplementation");
+  expect(previewBody.resource.form).toEqual(portableFormReference());
+  expect(previewBody.selectedTarget).toBe("cloudflare-main");
+  expect(previewBody.selectedImplementation).toBe("cloudflare_r2_bucket");
 
   const applyBody = {
     ...desired,
@@ -506,11 +521,10 @@ test("portable Form host delegates exact lifecycle to the canonical Resource and
   expect(applied.status).toBe(200);
   expect(applied.headers.get("etag")).toBe('"1"');
   const appliedBody = await applied.json();
-  expect(appliedBody.serial).toBe("1");
-  expect(appliedBody.type).toBe("object_bucket");
-  expect(appliedBody.workspace).toBe("space_1");
+  expect(appliedBody.metadata.resourceVersion).toBe("1");
+  expect(appliedBody.kind).toBe("ObjectBucket");
+  expect(appliedBody.metadata.space).toBe("space_1");
   expect(JSON.stringify(appliedBody)).not.toContain("managedBy");
-  expect(JSON.stringify(appliedBody)).not.toContain("cloudflare-main");
 
   const replayed = await app.request(path, {
     method: "PUT",
@@ -518,10 +532,10 @@ test("portable Form host delegates exact lifecycle to the canonical Resource and
     body: JSON.stringify(applyBody),
   });
   expect(replayed.status).toBe(200);
-  expect((await replayed.json()).serial).toBe("1");
+  expect((await replayed.json()).metadata.resourceVersion).toBe("1");
 
   const exactQuery = portableFormQuery();
-  const read = await app.request(`${path}?workspace=space_1&${exactQuery}`);
+  const read = await app.request(`${path}?space=space_1&${exactQuery}`);
   expect(read.status).toBe(200);
   expect(read.headers.get("etag")).toBe('"1"');
 
@@ -534,15 +548,16 @@ test("portable Form host delegates exact lifecycle to the canonical Resource and
     },
     body: JSON.stringify({
       ...applyBody,
-      config: { ...desired.config, standard: "infrequent" },
+      metadata: { ...desired.metadata, resourceVersion: "9" },
+      spec: { ...desired.spec, standard: "infrequent" },
     }),
   });
   expect(stale.status).toBe(412);
-  expect((await stale.json()).error.code).toBe("serial_conflict");
+  expect((await stale.json()).error.code).toBe("conflict");
 
-  for (const action of ["refresh", "sync"] as const) {
+  for (const action of ["observe", "refresh"] as const) {
     const missingMatch = await app.request(
-      `${path}/${action}?workspace=space_1&${exactQuery}`,
+      `${path}/${action}?space=space_1&${exactQuery}`,
       {
         method: "POST",
         headers: { "idempotency-key": `portable-${action}-missing-match` },
@@ -552,7 +567,7 @@ test("portable Form host delegates exact lifecycle to the canonical Resource and
     expect((await missingMatch.json()).error.code).toBe("invalid_argument");
 
     const staleMatch = await app.request(
-      `${path}/${action}?workspace=space_1&${exactQuery}`,
+      `${path}/${action}?space=space_1&${exactQuery}`,
       {
         method: "POST",
         headers: {
@@ -562,24 +577,24 @@ test("portable Form host delegates exact lifecycle to the canonical Resource and
       },
     );
     expect(staleMatch.status).toBe(412);
-    expect((await staleMatch.json()).error.code).toBe("serial_conflict");
+    expect((await staleMatch.json()).error.code).toBe("conflict");
   }
 
-  const refresh = await app.request(
-    `${path}/refresh?workspace=space_1&${exactQuery}`,
+  const observe = await app.request(
+    `${path}/observe?space=space_1&${exactQuery}`,
     {
       method: "POST",
       headers: {
         "if-match": '"1"',
-        "idempotency-key": "portable-refresh-drift-1",
+        "idempotency-key": "portable-observe-drift-1",
       },
     },
   );
-  expect(refresh.status).toBe(200);
-  const refreshBody = await refresh.json();
-  expect(refreshBody.observation.status).toBe("current");
-  expect(refreshBody.observation.summary).toBe("portable drift check current");
-  expect(refreshBody.resource.serial).toBe("1");
+  expect(observe.status).toBe(200);
+  const observeBody = await observe.json();
+  expect(observeBody.observation.status).toBe("current");
+  expect(observeBody.observation.summary).toBe("portable drift check current");
+  expect(observeBody.resource.metadata.resourceVersion).toBe("1");
 
   const events = await service.listEvents(
     "space_1",
@@ -595,7 +610,7 @@ test("portable Form host delegates exact lifecycle to the canonical Resource and
   );
 
   const deleteWithoutMatch = await app.request(
-    `${path}?workspace=space_1&${exactQuery}`,
+    `${path}?space=space_1&${exactQuery}`,
     {
       method: "DELETE",
       headers: { "idempotency-key": "portable-delete-missing-match" },
@@ -605,7 +620,7 @@ test("portable Form host delegates exact lifecycle to the canonical Resource and
   expect((await deleteWithoutMatch.json()).error.code).toBe("invalid_argument");
 
   const deleteWithStaleMatch = await app.request(
-    `${path}?workspace=space_1&${exactQuery}`,
+    `${path}?space=space_1&${exactQuery}`,
     {
       method: "DELETE",
       headers: {
@@ -615,11 +630,9 @@ test("portable Form host delegates exact lifecycle to the canonical Resource and
     },
   );
   expect(deleteWithStaleMatch.status).toBe(412);
-  expect((await deleteWithStaleMatch.json()).error.code).toBe(
-    "serial_conflict",
-  );
+  expect((await deleteWithStaleMatch.json()).error.code).toBe("conflict");
 
-  const deleted = await app.request(`${path}?workspace=space_1&${exactQuery}`, {
+  const deleted = await app.request(`${path}?space=space_1&${exactQuery}`, {
     method: "DELETE",
     headers: {
       "if-match": '"1"',
@@ -631,7 +644,7 @@ test("portable Form host delegates exact lifecycle to the canonical Resource and
     (await service.get("space_1", "ObjectBucket", "portable-assets")).ok,
   ).toBe(false);
   const deleteReplay = await app.request(
-    `${path}?workspace=space_1&${exactQuery}`,
+    `${path}?space=space_1&${exactQuery}`,
     {
       method: "DELETE",
       headers: {
@@ -645,47 +658,57 @@ test("portable Form host delegates exact lifecycle to the canonical Resource and
 
 test("portable Form host rejects legacy envelope fields instead of dropping them", async () => {
   const { app } = await buildApp(undefined, exactObjectBucketFormRegistry());
-  const response = await app.request("/takoform/v0/resources/preview", {
-    method: "POST",
-    headers: JSON_HEADERS,
-    body: JSON.stringify({
-      type: "object_bucket",
-      form: EXACT_OBJECT_BUCKET_FORM,
-      workspace: "space_1",
-      name: "legacy-envelope",
-      config: { name: "legacy-envelope", interfaces: ["s3_api"] },
-      metadata: { labels: { valid: "label" } },
-    }),
-  });
+  const response = await app.request(
+    "/apis/forms.takoform.com/v1alpha1/resources/preview",
+    {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({
+        type: "object_bucket",
+        form: EXACT_OBJECT_BUCKET_FORM,
+        workspace: "space_1",
+        name: "legacy-envelope",
+        config: { name: "legacy-envelope", interfaces: ["s3_api"] },
+        metadata: { labels: { valid: "label" } },
+      }),
+    },
+  );
   expect(response.status).toBe(400);
   expect((await response.json()).error).toMatchObject({
     code: "invalid_argument",
-    message: "metadata is not a portable v0 resource field",
+    message: "type is not a portable Resource field",
   });
 
-  const spec = await app.request("/takoform/v0/resources/preview", {
-    method: "POST",
-    headers: JSON_HEADERS,
-    body: JSON.stringify({
-      type: "object_bucket",
-      form: EXACT_OBJECT_BUCKET_FORM,
-      workspace: "space_1",
-      name: "legacy-envelope",
-      spec: { name: "legacy-envelope", interfaces: ["s3_api"] },
-    }),
-  });
-  expect(spec.status).toBe(400);
-  expect((await spec.json()).error).toMatchObject({
+  const manager = await app.request(
+    "/apis/forms.takoform.com/v1alpha1/resources/preview",
+    {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({
+        apiVersion: "forms.takoform.com/v1alpha1",
+        kind: "ObjectBucket",
+        form: portableFormReference(),
+        metadata: {
+          name: "legacy-envelope",
+          space: "space_1",
+          managedBy: "caller",
+        },
+        spec: { name: "legacy-envelope", interfaces: ["s3_api"] },
+      }),
+    },
+  );
+  expect(manager.status).toBe(400);
+  expect((await manager.json()).error).toMatchObject({
     code: "invalid_argument",
-    message: "spec is not a portable v0 resource field",
+    message: "metadata.managedBy is not a portable Resource field",
   });
 });
 
 test("portable Form host rejects incomplete and substituted exact identities", async () => {
   const { app } = await buildApp(undefined, exactObjectBucketFormRegistry());
-  const base = "/takoform/v0";
+  const base = "/apis/forms.takoform.com/v1alpha1";
   const incomplete = await app.request(
-    `${base}/resources/object_bucket/missing?workspace=space_1&type=object_bucket`,
+    `${base}/resources/ObjectBucket/missing?space=space_1&kind=ObjectBucket`,
   );
   expect(incomplete.status).toBe(400);
 
@@ -697,15 +720,15 @@ test("portable Form host rejects incomplete and substituted exact identities", a
     method: "POST",
     headers: JSON_HEADERS,
     body: JSON.stringify({
-      type: "object_bucket",
-      form: substitutedForm,
-      workspace: "space_1",
-      name: "substituted",
-      config: { name: "substituted", interfaces: ["s3_api"] },
+      apiVersion: "forms.takoform.com/v1alpha1",
+      kind: "ObjectBucket",
+      form: portableFormReference(substitutedForm),
+      metadata: { name: "substituted", space: "space_1" },
+      spec: { name: "substituted", interfaces: ["s3_api"] },
     }),
   });
   expect(substituted.status).toBe(404);
-  expect((await substituted.json()).error.code).toBe("form_unknown");
+  expect((await substituted.json()).error.code).toBe("resource_not_found");
 });
 
 test("portable Form host enforces the exact definition lifecycle operations", async () => {
@@ -713,20 +736,23 @@ test("portable Form host enforces the exact definition lifecycle operations", as
     undefined,
     exactObjectBucketFormRegistry({ operations: ["read"] }),
   );
-  const preview = await app.request("/takoform/v0/resources/preview", {
-    method: "POST",
-    headers: JSON_HEADERS,
-    body: JSON.stringify({
-      type: "object_bucket",
-      form: EXACT_OBJECT_BUCKET_FORM,
-      workspace: "space_1",
-      name: "read-only",
-      config: { name: "read-only", interfaces: ["s3_api"] },
-    }),
-  });
+  const preview = await app.request(
+    "/apis/forms.takoform.com/v1alpha1/resources/preview",
+    {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({
+        apiVersion: "forms.takoform.com/v1alpha1",
+        kind: "ObjectBucket",
+        form: portableFormReference(),
+        metadata: { name: "read-only", space: "space_1" },
+        spec: { name: "read-only", interfaces: ["s3_api"] },
+      }),
+    },
+  );
   expect(preview.status).toBe(409);
   expect((await preview.json()).error).toMatchObject({
-    code: "form_unavailable",
+    code: "conflict",
     message: "exact form does not support create",
   });
 });
@@ -2537,11 +2563,9 @@ test("DELETE /v1/resources/:kind/:name allows force delete through explicit brea
 });
 
 test("POST /v1/resources/:kind/:name/recover-apply requires explicit operator authorization", async () => {
-  const { app } = await buildApp(
-    undefined,
-    undefined,
-    { adapter: new UnknownOnceApplyAdapter() },
-  );
+  const { app } = await buildApp(undefined, undefined, {
+    adapter: new UnknownOnceApplyAdapter(),
+  });
   const desired = {
     kind: "Queue",
     metadata: { space: "space_1", name: "delivery" },
@@ -2563,9 +2587,7 @@ test("POST /v1/resources/:kind/:name/recover-apply requires explicit operator au
     headers: JSON_HEADERS,
     body: JSON.stringify(body),
   });
-  expect((await pending.json()).error.code).toBe(
-    "deployment_finalize_pending",
-  );
+  expect((await pending.json()).error.code).toBe("deployment_finalize_pending");
 
   const rejected = await app.request(
     "/v1/resources/Queue/delivery/recover-apply",
@@ -2614,9 +2636,7 @@ test("POST /v1/resources/:kind/:name/recover-apply continues the exact Applying 
     headers: JSON_HEADERS,
     body: JSON.stringify(body),
   });
-  expect((await pending.json()).error.code).toBe(
-    "deployment_finalize_pending",
-  );
+  expect((await pending.json()).error.code).toBe("deployment_finalize_pending");
 
   const recovered = await app.request(
     "/v1/resources/Queue/delivery/recover-apply",
@@ -2793,6 +2813,8 @@ test("takoformHost: false unmounts the portable surface like a disabled compat p
   );
   const discovery = await app.request("/.well-known/takoform");
   expect(discovery.status).toBe(404);
-  const forms = await app.request("/takoform/v0/forms?workspace=space_1");
+  const forms = await app.request(
+    "/apis/forms.takoform.com/v1alpha1/forms?space=space_1",
+  );
   expect(forms.status).toBe(404);
 });

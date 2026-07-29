@@ -98,6 +98,7 @@ import { createSqlResourceShapeStores } from "./domains/resource-shape/sql_store
 import {
   createInMemoryInterfaceStores,
   createPortableDeclarationReader,
+  createPortableDeclarationWriter,
   ensureFormDescriptorInterfaces,
   InterfaceService,
   LegacyOutputInterfaceMigrationService,
@@ -2267,28 +2268,47 @@ export async function createTakosumiService(
           installedResourceShapeKinds,
           ...(options.resolveResourceInterfaceWorkspace
             ? {
-                interfaceDeclarations: createPortableDeclarationReader({
-                  interfaces: interfaceService,
-                  listResources: (space, page) =>
-                    resourceShapeService.listPage(space, page),
-                  getResource: async (space, kind, name) => {
-                    const result = await resourceShapeService.get(
-                      space,
-                      kind,
-                      name,
-                    );
-                    return result.ok ? result.value : undefined;
-                  },
-                  resolveWorkspace: options.resolveResourceInterfaceWorkspace,
-                  ensureResourceDeclarations: (resource) =>
-                    materializeFormDescriptorInterfaces(
-                      formatResourceShapeId(
-                        resource.metadata.space,
-                        resource.kind,
-                        resource.metadata.name,
+                interfaceDeclarations: {
+                  ...createPortableDeclarationReader({
+                    interfaces: interfaceService,
+                    listResources: (space, page) =>
+                      resourceShapeService.listPage(space, page),
+                    getResource: async (space, kind, name) => {
+                      const result = await resourceShapeService.get(
+                        space,
+                        kind,
+                        name,
+                      );
+                      return result.ok ? result.value : undefined;
+                    },
+                    resolveWorkspace: options.resolveResourceInterfaceWorkspace,
+                    ensureResourceDeclarations: (resource) =>
+                      materializeFormDescriptorInterfaces(
+                        formatResourceShapeId(
+                          resource.metadata.space,
+                          resource.kind,
+                          resource.metadata.name,
+                        ),
                       ),
-                    ),
-                }),
+                  }),
+                  ...createPortableDeclarationWriter({
+                    interfaces: interfaceService,
+                    getResource: async (space, kind, name) => {
+                      const result = await resourceShapeService.get(
+                        space,
+                        kind,
+                        name,
+                      );
+                      return result.ok ? result.value : undefined;
+                    },
+                    resolveWorkspace: options.resolveResourceInterfaceWorkspace,
+                    ...(resolveFormInterfaceResourceUri
+                      ? {
+                          resolveResourceUri: resolveFormInterfaceResourceUri,
+                        }
+                      : {}),
+                  }),
+                },
               }
             : {}),
           ...(deployControlToken

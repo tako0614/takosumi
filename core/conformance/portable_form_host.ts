@@ -9,6 +9,7 @@ import {
   installedFormReferenceKey,
   isInstalledFormReference,
   shapeKindForPortableType,
+  TAKOFORM_FORM_HOST_API_VERSION,
   TAKOFORM_FORM_HOST_API_PATH,
   TAKOFORM_FORM_HOST_PROTOCOL,
   TAKOFORM_FORM_HOST_WELL_KNOWN_PATH,
@@ -80,7 +81,7 @@ export async function runPortableFormHostConformance(
   const checks: string[] = [];
   const base = `${endpoint}${TAKOFORM_FORM_HOST_API_PATH}`;
   const exact = exactQuery(input.identity);
-  const resourcePath = `${base}/resources/${encodeURIComponent(input.identity.type)}/${encodeURIComponent(input.name)}`;
+  const resourcePath = `${base}/resources/${encodeURIComponent(compatibilityKind(input.identity.type))}/${encodeURIComponent(input.name)}`;
   const body = resourceBody(input, input.name, input.desired);
 
   const discovery = await jsonRequest(
@@ -91,6 +92,8 @@ export async function runPortableFormHostConformance(
   if (
     !Array.isArray(discovery.protocols) ||
     !discovery.protocols.includes(TAKOFORM_FORM_HOST_PROTOCOL) ||
+    !Array.isArray(discovery.api_versions) ||
+    !discovery.api_versions.includes(TAKOFORM_FORM_HOST_API_VERSION) ||
     !isRecord(discovery.features) ||
     discovery.features.service_forms !== true
   ) {
@@ -100,16 +103,18 @@ export async function runPortableFormHostConformance(
 
   const forms = await jsonRequest(
     fetcher,
-    `${base}/forms?workspace=${encodeURIComponent(input.space)}&${exact}`,
+    `${base}/forms?space=${encodeURIComponent(input.space)}&${exact}`,
     { headers },
   );
-  const available = asArray(forms.forms).find(
-    (item) =>
-      isRecord(item) &&
-      isInstalledFormReference(item.form) &&
-      installedFormReferenceKey(item.form) ===
-        installedFormReferenceKey(input.identity),
-  );
+  const available = asArray(forms.forms).find((item) => {
+    if (!isRecord(item)) return false;
+    const identity = installedFormReferenceFromPortable(item.identity);
+    return (
+      identity !== undefined &&
+      installedFormReferenceKey(identity) ===
+        installedFormReferenceKey(input.identity)
+    );
+  });
   if (!isRecord(available) || available.availableToPrincipal !== true) {
     throw new Error("exact Form is not available to the conformance principal");
   }
@@ -155,14 +160,17 @@ export async function runPortableFormHostConformance(
       body: JSON.stringify(applyRequest),
     }),
   );
-  if (replay.id !== canonicalResourceId || replay.serial !== resource.serial) {
+  if (
+    replay.id !== canonicalResourceId ||
+    replay.metadata.resourceVersion !== resource.metadata.resourceVersion
+  ) {
     throw new Error(
       "portable apply replay changed canonical identity or serial",
     );
   }
   checks.push("apply-idempotency");
 
-  const readPath = `${resourcePath}?workspace=${encodeURIComponent(input.space)}&${exact}`;
+  const readPath = `${resourcePath}?space=${encodeURIComponent(input.space)}&${exact}`;
   const read = asTakoformResource(
     await jsonRequest(fetcher, readPath, { headers }),
   );
@@ -193,18 +201,31 @@ export async function runPortableFormHostConformance(
   };
   await expectError(
     fetcher,
-    `${resourcePath}?workspace=${encodeURIComponent(input.space)}&${exactQuery(substituted)}`,
+    `${resourcePath}?space=${encodeURIComponent(input.space)}&${exactQuery(substituted)}`,
     { headers },
     409,
-    "form_identity_conflict",
+    "conflict",
   );
   checks.push("exact-digest-substitution-rejected");
 
-  const version = resource.serial;
-  if (!version) throw new Error("portable Resource omitted serial");
+  const version = resource.metadata.resourceVersion;
+  if (!version) throw new Error("portable Resource omitted resourceVersion");
   await jsonRequest(
     fetcher,
-    `${resourcePath}/refresh?workspace=${encodeURIComponent(input.space)}&${exact}`,
+    `${resourcePath}/observe?space=${encodeURIComponent(input.space)}&${exact}`,
+    {
+      method: "POST",
+      headers: {
+        ...headers,
+        "if-match": `"${version}"`,
+        "idempotency-key": "conformance-refresh-1",
+      },
+    },
+  );
+  checks.push("observe");
+  await jsonRequest(
+    fetcher,
+    `${resourcePath}/refresh?space=${encodeURIComponent(input.space)}&${exact}`,
     {
       method: "POST",
       headers: {
@@ -215,19 +236,6 @@ export async function runPortableFormHostConformance(
     },
   );
   checks.push("refresh");
-  await jsonRequest(
-    fetcher,
-    `${resourcePath}/sync?workspace=${encodeURIComponent(input.space)}&${exact}`,
-    {
-      method: "POST",
-      headers: {
-        ...headers,
-        "if-match": `"${version}"`,
-        "idempotency-key": "conformance-sync-1",
-      },
-    },
-  );
-  checks.push("sync");
 
   const events = await jsonRequest(
     fetcher,
@@ -390,7 +398,7 @@ async function runImportConformance(
   headers: Record<string, string>,
 ): Promise<void> {
   const name = `${input.name}-import`;
-  const path = `${base}/resources/${encodeURIComponent(input.identity.type)}/${encodeURIComponent(name)}`;
+  const path = `${base}/resources/${encodeURIComponent(compatibilityKind(input.identity.type))}/${encodeURIComponent(name)}`;
   const desired = { ...input.desired, name };
   const body = {
     ...resourceBody(input, name, desired),
@@ -407,10 +415,10 @@ async function runImportConformance(
   } as const;
   const imported = await jsonRequest(input.fetch, `${path}/import`, mutation);
   await jsonRequest(input.fetch, `${path}/import`, mutation);
-  const version = stringAt(imported, "resource", "serial");
+  const version = stringAt(imported, "resource", "metadata", "resourceVersion");
   await emptyRequest(
     input.fetch,
-    `${path}?workspace=${encodeURIComponent(input.space)}&${exactQuery(input.identity)}`,
+    `${path}?space=${encodeURIComponent(input.space)}&${exactQuery(input.identity)}`,
     {
       method: "DELETE",
       headers: {
@@ -429,21 +437,74 @@ function resourceBody(
   desired: JsonObject,
 ) {
   return {
-    type: input.identity.type,
-    form: input.identity,
-    workspace: input.space,
-    name,
-    config: desired,
+    apiVersion: TAKOFORM_FORM_HOST_API_VERSION,
+    kind: compatibilityKind(input.identity.type),
+    form: portableFormReference(input.identity),
+    metadata: {
+      name,
+      space: input.space,
+    },
+    spec: desired,
   };
 }
 
 function exactQuery(identity: InstalledFormReference): string {
   return new URLSearchParams({
-    type: identity.type,
-    version: identity.version,
+    apiVersion: TAKOFORM_FORM_HOST_API_VERSION,
+    kind: compatibilityKind(identity.type),
+    definitionVersion: identity.version,
     schemaDigest: identity.schemaDigest,
     packageDigest: identity.packageDigest,
   }).toString();
+}
+
+function portableFormReference(identity: InstalledFormReference) {
+  return {
+    formRef: {
+      apiVersion: TAKOFORM_FORM_HOST_API_VERSION,
+      kind: compatibilityKind(identity.type),
+      definitionVersion: identity.version,
+      schemaDigest: identity.schemaDigest,
+    },
+    packageDigest: identity.packageDigest,
+  };
+}
+
+function installedFormReferenceFromPortable(
+  value: unknown,
+): InstalledFormReference | undefined {
+  if (
+    !isRecord(value) ||
+    !isRecord(value.formRef) ||
+    value.formRef.apiVersion !== TAKOFORM_FORM_HOST_API_VERSION ||
+    typeof value.formRef.kind !== "string" ||
+    typeof value.formRef.definitionVersion !== "string" ||
+    typeof value.formRef.schemaDigest !== "string" ||
+    typeof value.packageDigest !== "string"
+  ) {
+    return undefined;
+  }
+  const formRef = value.formRef;
+  const type = [
+    "edge_worker",
+    "object_bucket",
+    "kv_store",
+    "queue",
+    "sql_database",
+    "container_service",
+    "vector_index",
+    "durable_workflow",
+    "stateful_actor_namespace",
+    "schedule",
+  ].find((candidate) => shapeKindForPortableType(candidate) === formRef.kind);
+  if (!type) return undefined;
+  const translated = {
+    type,
+    version: formRef.definitionVersion,
+    schemaDigest: formRef.schemaDigest,
+    packageDigest: value.packageDigest,
+  };
+  return isInstalledFormReference(translated) ? translated : undefined;
 }
 
 /** The historical /v1 compatibility facade still speaks PascalCase kinds. */
@@ -497,8 +558,13 @@ async function expectError(
 }
 
 function asTakoformResource(value: Record<string, unknown>): TakoformResource {
-  if (typeof value.type !== "string" || typeof value.workspace !== "string") {
-    throw new Error("portable response lacks the flat Resource envelope");
+  if (
+    value.apiVersion !== TAKOFORM_FORM_HOST_API_VERSION ||
+    typeof value.kind !== "string" ||
+    !isRecord(value.metadata) ||
+    typeof value.metadata.space !== "string"
+  ) {
+    throw new Error("portable response lacks the versioned Resource envelope");
   }
   return value as unknown as TakoformResource;
 }

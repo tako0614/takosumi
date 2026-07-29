@@ -14,9 +14,12 @@ import {
   createTakoformHostDiscovery,
   installedFormReferenceKey,
   isInstalledFormReference,
+  isResourceShapeKind,
   portableTypeForShapeKind,
   shapeKindForPortableType,
+  TAKOFORM_FORM_HOST_API_VERSION,
   TAKOFORM_FORM_HOST_API_PATH,
+  TAKOFORM_FORM_HOST_INTERFACES_PATH,
   TAKOFORM_FORM_HOST_WELL_KNOWN_PATH,
 } from "takosumi-contract";
 import type { Page, PageParams } from "takosumi-contract/pagination";
@@ -27,6 +30,7 @@ import type {
 } from "../domains/resource-shape/mod.ts";
 import { formatResourceShapeId } from "../domains/resource-shape/mod.ts";
 import { PortableDeclarationReadLimitError } from "../domains/interfaces/portable_declarations.ts";
+import { InterfaceServiceError } from "../domains/interfaces/service.ts";
 import { readJsonObject, requestIdFromContext } from "./errors.ts";
 import type { ApiEndpoint } from "./route_families.ts";
 import { parsePageQuery } from "./page_query.ts";
@@ -54,6 +58,24 @@ export interface PortableInterfaceDeclarationReader {
   }): Promise<readonly TakoformDeclaredInterface[]>;
 }
 
+export interface PortableInterfaceDeclarationWriter {
+  putDeclaredInterface(input: {
+    readonly actor: ActorContext;
+    readonly space: string;
+    readonly declaration: TakoformDeclaredInterface;
+    readonly expectedGeneration: number;
+  }): Promise<TakoformDeclaredInterface>;
+  deleteDeclaredInterface(input: {
+    readonly actor: ActorContext;
+    readonly space: string;
+    readonly name: string;
+    readonly version: string;
+    readonly resourceKind: string;
+    readonly resourceName: string;
+    readonly expectedGeneration: number;
+  }): Promise<void>;
+}
+
 export type PortableFormHostAuthResult =
   | { readonly ok: true; readonly actor: ActorContext }
   | { readonly ok: false; readonly response: Response };
@@ -64,7 +86,9 @@ export interface RegisterPortableFormHostRoutesOptions {
   /** Uses the same trusted principal resolution as the canonical Resource API. */
   readonly authorize: (c: Context) => Promise<PortableFormHostAuthResult>;
   readonly canReadForms: (actor: ActorContext) => boolean;
-  readonly interfaceDeclarations?: PortableInterfaceDeclarationReader;
+  readonly canWriteInterfaces?: (actor: ActorContext) => boolean;
+  readonly interfaceDeclarations?: PortableInterfaceDeclarationReader &
+    Partial<PortableInterfaceDeclarationWriter>;
 }
 
 /**
@@ -79,11 +103,17 @@ export const PORTABLE_FORM_HOST_ENDPOINTS: readonly ApiEndpoint[] = [
     operationId: "getTakoformHostDiscovery",
     auth: "none",
   }),
-  portableEndpoint("GET", `${TAKOFORM_FORM_HOST_API_PATH}/interfaces`, {
+  portableEndpoint("GET", TAKOFORM_FORM_HOST_INTERFACES_PATH, {
     operationId: "listTakoformDeclaredInterfaces",
   }),
-  portableEndpoint("GET", `${TAKOFORM_FORM_HOST_API_PATH}/interfaces/:name`, {
+  portableEndpoint("GET", `${TAKOFORM_FORM_HOST_INTERFACES_PATH}/:name`, {
     operationId: "getTakoformDeclaredInterface",
+  }),
+  portableEndpoint("PUT", `${TAKOFORM_FORM_HOST_INTERFACES_PATH}/:name`, {
+    operationId: "putTakoformDeclaredInterface",
+  }),
+  portableEndpoint("DELETE", `${TAKOFORM_FORM_HOST_INTERFACES_PATH}/:name`, {
+    operationId: "deleteTakoformDeclaredInterface",
   }),
   portableEndpoint("GET", `${TAKOFORM_FORM_HOST_API_PATH}/forms`, {
     operationId: "listTakoformAvailableForms",
@@ -156,25 +186,29 @@ export function registerPortableFormHostRoutes(
   options: RegisterPortableFormHostRoutesOptions,
 ): void {
   const base = TAKOFORM_FORM_HOST_API_PATH;
+  const interfaceBase = TAKOFORM_FORM_HOST_INTERFACES_PATH;
   const declarations = options.interfaceDeclarations;
 
   app.get(TAKOFORM_FORM_HOST_WELL_KNOWN_PATH, (c) =>
     c.json(
       createTakoformHostDiscovery(new URL(c.req.url).origin, {
         interfaceDeclarations: declarations !== undefined,
+        interfaceDeclarationWrites:
+          declarations?.putDeclaredInterface !== undefined &&
+          declarations.deleteDeclaredInterface !== undefined,
       }),
       200,
     ),
   );
 
   if (declarations) {
-    app.get(`${base}/interfaces`, async (c) => {
+    app.get(interfaceBase, async (c) => {
       const auth = await options.authorize(c);
       if (!auth.ok) return portableAuthError(c, auth.response);
       if (!options.canReadForms(auth.actor)) {
         return portableError(
           c,
-          "permission_denied",
+          "forbidden",
           "interface declaration read scope is required",
           403,
         );
@@ -189,13 +223,13 @@ export function registerPortableFormHostRoutes(
       return c.json({ interfaces: listed.value }, 200);
     });
 
-    app.get(`${base}/interfaces/:name`, async (c) => {
+    app.get(`${interfaceBase}/:name`, async (c) => {
       const auth = await options.authorize(c);
       if (!auth.ok) return portableAuthError(c, auth.response);
       if (!options.canReadForms(auth.actor)) {
         return portableError(
           c,
-          "permission_denied",
+          "forbidden",
           "interface declaration read scope is required",
           403,
         );
@@ -238,6 +272,94 @@ export function registerPortableFormHostRoutes(
       }
       return c.json(matches[0]!, 200);
     });
+
+    if (
+      declarations.putDeclaredInterface &&
+      declarations.deleteDeclaredInterface
+    ) {
+      const putDeclaredInterface = declarations.putDeclaredInterface;
+      const deleteDeclaredInterface = declarations.deleteDeclaredInterface;
+      app.put(`${interfaceBase}/:name`, async (c) => {
+        const auth = await options.authorize(c);
+        if (!auth.ok) return portableAuthError(c, auth.response);
+        if (!options.canWriteInterfaces?.(auth.actor)) {
+          return portableError(
+            c,
+            "forbidden",
+            "interface declaration write scope is required",
+            403,
+          );
+        }
+        const key = idempotencyKey(c);
+        if (!key.ok) return key.response;
+        const query = exactDeclarationQuery(c);
+        if (!query.ok) return query.response;
+        const generation = generationPrecondition(c, true);
+        if (!generation.ok) return generation.response;
+        const body = await readJsonObject(c.req.raw);
+        const parsed = parseDeclarationBody(c, body as JsonObject, {
+          name: c.req.param("name"),
+          ...query.value,
+        });
+        if (!parsed.ok) return parsed.response;
+        if (
+          parsed.value.resourceVersion !== undefined &&
+          parsed.value.resourceVersion !== String(generation.value)
+        ) {
+          return failed(
+            c,
+            "body resourceVersion does not match the HTTP precondition",
+          ).response;
+        }
+        try {
+          const declared = await putDeclaredInterface({
+            actor: withIdempotencyRequest(auth.actor, key.value),
+            space: query.value.space,
+            declaration: parsed.value,
+            expectedGeneration: generation.value!,
+          });
+          c.header("etag", `"${declared.resourceVersion}"`);
+          c.header("idempotency-key", key.value);
+          return c.json(declared, 200);
+        } catch (error) {
+          return interfaceWriteError(c, error);
+        }
+      });
+
+      app.delete(`${interfaceBase}/:name`, async (c) => {
+        const auth = await options.authorize(c);
+        if (!auth.ok) return portableAuthError(c, auth.response);
+        if (!options.canWriteInterfaces?.(auth.actor)) {
+          return portableError(
+            c,
+            "forbidden",
+            "interface declaration write scope is required",
+            403,
+          );
+        }
+        const key = idempotencyKey(c);
+        if (!key.ok) return key.response;
+        const query = exactDeclarationQuery(c);
+        if (!query.ok) return query.response;
+        const generation = interfaceIfMatch(c);
+        if (!generation.ok) return generation.response;
+        try {
+          await deleteDeclaredInterface({
+            actor: withIdempotencyRequest(auth.actor, key.value),
+            space: query.value.space,
+            name: c.req.param("name"),
+            version: query.value.version,
+            resourceKind: query.value.resourceKind,
+            resourceName: query.value.resourceName,
+            expectedGeneration: generation.value,
+          });
+          c.header("idempotency-key", key.value);
+          return c.body(null, 204);
+        } catch (error) {
+          return interfaceWriteError(c, error);
+        }
+      });
+    }
   }
 
   app.get(`${base}/forms`, async (c) => {
@@ -246,12 +368,12 @@ export function registerPortableFormHostRoutes(
     if (!options.canReadForms(auth.actor)) {
       return portableError(
         c,
-        "permission_denied",
+        "forbidden",
         "form availability read scope is required",
         403,
       );
     }
-    const space = requiredQuery(c, "workspace");
+    const space = requiredQuery(c, "space");
     if (!space.ok) return space.response;
     const page = pageQuery(c);
     if (!page.ok) return page.response;
@@ -265,7 +387,7 @@ export function registerPortableFormHostRoutes(
     });
     return c.json(
       {
-        forms: result.items,
+        forms: result.items.map(portableFormAvailability),
         ...(result.nextCursor ? { nextCursor: result.nextCursor } : {}),
       },
       200,
@@ -294,17 +416,25 @@ export function registerPortableFormHostRoutes(
     return c.json(
       {
         resource: portableResource(result.value.resource),
+        selectedImplementation: result.value.selectedImplementation,
+        selectedTarget: result.value.selectedTarget,
+        portability: result.value.portability,
+        nativeResourcePlan: result.value.nativeResourcePlan,
+        riskNotes: result.value.riskNotes,
         review: {
           planDigest: result.value.planDigest,
           specDigest: result.value.specDigest,
         },
-        summary: "portable resource preview ready",
+        planDigest: result.value.planDigest,
+        specDigest: result.value.specDigest,
+        resolutionFingerprint: result.value.resolutionFingerprint,
+        summary: result.value.summary,
       },
       200,
     );
   });
 
-  app.put(`${base}/resources/:type/:name`, async (c) => {
+  app.put(`${base}/resources/:kind/:name`, async (c) => {
     const auth = await options.authorize(c);
     if (!auth.ok) return portableAuthError(c, auth.response);
     const key = idempotencyKey(c);
@@ -337,7 +467,7 @@ export function registerPortableFormHostRoutes(
     return portableJson(c, portableResource(result.value), 200, key.value);
   });
 
-  app.post(`${base}/resources/:type/:name/import`, async (c) => {
+  app.post(`${base}/resources/:kind/:name/import`, async (c) => {
     const auth = await options.authorize(c);
     if (!auth.ok) return portableAuthError(c, auth.response);
     const key = idempotencyKey(c);
@@ -390,7 +520,7 @@ export function registerPortableFormHostRoutes(
   app.get(`${base}/resources`, async (c) => {
     const auth = await options.authorize(c);
     if (!auth.ok) return portableAuthError(c, auth.response);
-    const space = requiredQuery(c, "workspace");
+    const space = requiredQuery(c, "space");
     if (!space.ok) return space.response;
     const identity = formIdentityFromQuery(c, true);
     if (!identity.ok) return identity.response;
@@ -411,7 +541,7 @@ export function registerPortableFormHostRoutes(
     );
   });
 
-  app.get(`${base}/resources/:type/:name`, async (c) => {
+  app.get(`${base}/resources/:kind/:name`, async (c) => {
     const auth = await options.authorize(c);
     if (!auth.ok) return portableAuthError(c, auth.response);
     const located = await exactStoredResource(c, options.service, false);
@@ -420,7 +550,7 @@ export function registerPortableFormHostRoutes(
   });
 
   // Read-only drift check (Terraform refresh semantics).
-  app.post(`${base}/resources/:type/:name/refresh`, async (c) => {
+  app.post(`${base}/resources/:kind/:name/observe`, async (c) => {
     const auth = await options.authorize(c);
     if (!auth.ok) return portableAuthError(c, auth.response);
     const key = idempotencyKey(c);
@@ -453,7 +583,7 @@ export function registerPortableFormHostRoutes(
   });
 
   // Host republishes backend state and sanitized outputs.
-  app.post(`${base}/resources/:type/:name/sync`, async (c) => {
+  app.post(`${base}/resources/:kind/:name/refresh`, async (c) => {
     const auth = await options.authorize(c);
     if (!auth.ok) return portableAuthError(c, auth.response);
     const key = idempotencyKey(c);
@@ -472,8 +602,8 @@ export function registerPortableFormHostRoutes(
       c,
       {
         resource: portableResource(result.value.resource),
-        sync: {
-          summary: "portable sync completed",
+        refresh: {
+          summary: "portable refresh completed",
           ...(result.value.refresh.runId
             ? { runId: result.value.refresh.runId }
             : {}),
@@ -484,7 +614,7 @@ export function registerPortableFormHostRoutes(
     );
   });
 
-  app.delete(`${base}/resources/:type/:name`, async (c) => {
+  app.delete(`${base}/resources/:kind/:name`, async (c) => {
     const auth = await options.authorize(c);
     if (!auth.ok) return portableAuthError(c, auth.response);
     const key = idempotencyKey(c);
@@ -523,65 +653,103 @@ async function parseResourceBody(
   const body = await readJsonObject(c.req.raw);
   for (const key of Object.keys(body)) {
     if (!PORTABLE_RESOURCE_BODY_KEYS.has(key)) {
-      return failed(c, `${key} is not a portable v0 resource field`);
+      return failed(c, `${key} is not a portable Resource field`);
     }
   }
-  const type = stringValue(body.type);
-  const kind = type ? shapeKindForPortableType(type) : undefined;
-  if (!type || !kind) return failed(c, "type is invalid");
-  const pathType = c.req.param("type");
-  if (pathType && pathType !== type)
-    return failed(c, "path type does not match body type");
-  if (!isInstalledFormReference(body.form)) {
-    return failed(c, "form must be an exact InstalledFormReference");
+  if (body.apiVersion !== TAKOFORM_FORM_HOST_API_VERSION) {
+    return failed(c, "apiVersion is invalid");
   }
-  if (body.form.type !== type)
-    return failed(c, "form type does not match resource type");
-  const name = stringValue(body.name);
-  const space = stringValue(body.workspace);
-  if (!name || !space) return failed(c, "name and workspace are required");
+  const kind = stringValue(body.kind);
+  if (!kind || !isResourceShapeKind(kind)) return failed(c, "kind is invalid");
+  const pathKind = c.req.param("kind");
+  if (pathKind && pathKind !== kind)
+    return failed(c, "path kind does not match body kind");
+  const form = installedFormFromPortable(body.form, kind);
+  if (!form) return failed(c, "form must be an exact installed FormRef");
+  if (!isJsonObject(body.metadata)) {
+    return failed(c, "metadata must be an object");
+  }
+  for (const key of Object.keys(body.metadata)) {
+    if (!PORTABLE_RESOURCE_METADATA_KEYS.has(key)) {
+      return failed(c, `metadata.${key} is not a portable Resource field`);
+    }
+  }
+  if (body.status !== undefined || body.id !== undefined) {
+    return failed(c, "status and id are host-owned response fields");
+  }
+  const name = stringValue(body.metadata.name);
+  const space = stringValue(body.metadata.space);
+  if (!name || !space)
+    return failed(c, "metadata.name and metadata.space are required");
   if (c.req.param("name") && c.req.param("name") !== name) {
     return failed(c, "path name does not match resource name");
   }
-  if (!isJsonObject(body.config)) return failed(c, "config must be an object");
+  if (!isJsonObject(body.spec)) return failed(c, "spec must be an object");
+  if (
+    body.metadata.managedBy !== undefined ||
+    body.metadata.owner !== undefined
+  ) {
+    return failed(c, "host manager authority is not portable input");
+  }
+  const labels = stringRecord(body.metadata.labels);
+  if (body.metadata.labels !== undefined && labels === undefined) {
+    return failed(c, "metadata.labels must be a string map");
+  }
   const generation = generationPrecondition(c, requireWritePrecondition);
   if (!generation.ok) return generation;
+  const bodyVersion = stringValue(body.metadata.resourceVersion);
+  if (
+    bodyVersion !== undefined &&
+    generation.value !== undefined &&
+    bodyVersion !== String(generation.value)
+  ) {
+    return failed(
+      c,
+      "metadata.resourceVersion does not match the HTTP precondition",
+    );
+  }
   return {
     ok: true,
     body: body as JsonObject,
     request: {
       actor,
       space,
-      kind: kind as ResourceShapeKind,
-      form: body.form,
+      kind,
+      form,
       name,
-      spec: body.config,
+      spec: body.spec,
       managedBy: PORTABLE_FORM_MANAGER,
       expectedGeneration: generation.value,
-      project: stringValue(body.project),
-      environment: stringValue(body.environment),
+      project: stringValue(body.metadata.project),
+      environment: stringValue(body.metadata.environment),
+      ...(labels ? { labels } : {}),
     },
   };
 }
 
 /**
- * The portable request envelope is closed: legacy Kubernetes-style fields
- * (apiVersion/kind/metadata/spec/labels/managedBy) and unknown fields are
- * rejected instead of being silently dropped.
+ * The portable request envelope is closed. Host authority and unknown fields
+ * are rejected instead of being silently dropped.
  */
 const PORTABLE_RESOURCE_BODY_KEYS = new Set([
-  "type",
+  "apiVersion",
+  "kind",
   "form",
-  "workspace",
-  "name",
-  "project",
-  "environment",
-  "serial",
-  "config",
-  "attributes",
+  "metadata",
+  "spec",
+  "status",
   "id",
   "review",
   "nativeId",
+]);
+
+const PORTABLE_RESOURCE_METADATA_KEYS = new Set([
+  "name",
+  "space",
+  "project",
+  "environment",
+  "labels",
+  "resourceVersion",
 ]);
 
 function generationPrecondition(
@@ -637,18 +805,21 @@ async function exactStoredResource(
 > {
   const expected = ifMatchPrecondition(c, requireMatch);
   if (!expected.ok) return expected;
-  const space = requiredQuery(c, "workspace");
+  const space = requiredQuery(c, "space");
   if (!space.ok) return space;
   const identity = formIdentityFromQuery(c, true);
   if (!identity.ok) return identity;
-  const type = c.req.param("type");
-  const kind = type === undefined ? undefined : shapeKindForPortableType(type);
-  if (kind === undefined || identity.value.type !== type) {
-    return failed(c, "path type does not match the exact form identity");
+  const kind = c.req.param("kind");
+  if (
+    kind === undefined ||
+    !isResourceShapeKind(kind) ||
+    shapeKindForPortableType(identity.value.type) !== kind
+  ) {
+    return failed(c, "path kind does not match the exact form identity");
   }
   const name = c.req.param("name");
   if (!name) return failed(c, "resource name is required");
-  const result = await service.get(space.value, kind as ResourceShapeKind, name);
+  const result = await service.get(space.value, kind, name);
   if (!result.ok) {
     if (allowAbsent && result.error.code === "not_found")
       return { ok: true, value: undefined };
@@ -663,9 +834,11 @@ async function exactStoredResource(
       ok: false,
       response: portableError(
         c,
-        "form_identity_conflict",
+        "conflict",
         "resource is pinned to a different exact form identity",
         409,
+        false,
+        "form_identity_conflict",
       ),
     };
   }
@@ -677,9 +850,11 @@ async function exactStoredResource(
       ok: false,
       response: portableError(
         c,
-        "serial_conflict",
+        "conflict",
         "serial precondition failed",
         412,
+        false,
+        "resource_version_conflict",
       ),
     };
   }
@@ -721,8 +896,9 @@ function formIdentityFromQuery(
   | { readonly ok: false; readonly response: Response };
 function formIdentityFromQuery(c: Context, required: boolean) {
   const values = {
-    type: c.req.query("type"),
-    version: c.req.query("version"),
+    apiVersion: c.req.query("apiVersion"),
+    kind: c.req.query("kind"),
+    definitionVersion: c.req.query("definitionVersion"),
     schemaDigest: c.req.query("schemaDigest"),
     packageDigest: c.req.query("packageDigest"),
   };
@@ -730,13 +906,22 @@ function formIdentityFromQuery(c: Context, required: boolean) {
     return { ok: true, value: undefined };
   if (!Object.values(values).every(Boolean))
     return failed(c, "the complete exact FormRef query is required");
-  const identity = {
-    type: values.type,
-    version: values.version,
-    schemaDigest: values.schemaDigest,
-    packageDigest: values.packageDigest,
-  };
-  return isInstalledFormReference(identity)
+  if (values.apiVersion !== TAKOFORM_FORM_HOST_API_VERSION) {
+    return failed(c, "the exact FormRef apiVersion is invalid");
+  }
+  const identity = installedFormFromPortable(
+    {
+      formRef: {
+        apiVersion: values.apiVersion,
+        kind: values.kind,
+        definitionVersion: values.definitionVersion,
+        schemaDigest: values.schemaDigest,
+      },
+      packageDigest: values.packageDigest,
+    },
+    values.kind,
+  );
+  return identity
     ? { ok: true, value: identity }
     : failed(c, "the exact FormRef query is invalid");
 }
@@ -765,9 +950,11 @@ async function requireAvailableForm(
       ok: false,
       response: portableError(
         c,
-        "form_unknown",
+        "resource_not_found",
         "exact form identity is unknown",
         404,
+        false,
+        "form_unknown",
       ),
     };
   if (!found.definitionKnown) {
@@ -775,9 +962,11 @@ async function requireAvailableForm(
       ok: false,
       response: portableError(
         c,
-        "form_unknown",
+        "resource_not_found",
         "exact form identity is unknown",
         404,
+        false,
+        "form_unknown",
       ),
     };
   }
@@ -786,9 +975,11 @@ async function requireAvailableForm(
       ok: false,
       response: portableError(
         c,
-        "form_not_installed",
+        "conflict",
         "exact form package is not installed",
         409,
+        false,
+        "form_not_installed",
       ),
     };
   if (!found.executable || !found.activated)
@@ -796,9 +987,11 @@ async function requireAvailableForm(
       ok: false,
       response: portableError(
         c,
-        "form_unavailable",
+        "conflict",
         "exact form is not executable on this host",
         409,
+        false,
+        "form_unavailable",
       ),
     };
   if (!found.availableToPrincipal)
@@ -806,7 +999,7 @@ async function requireAvailableForm(
       ok: false,
       response: portableError(
         c,
-        "permission_denied",
+        "forbidden",
         "principal is not allowed to use this exact form",
         403,
       ),
@@ -816,9 +1009,11 @@ async function requireAvailableForm(
       ok: false,
       response: portableError(
         c,
-        "form_unavailable",
+        "conflict",
         `exact form does not support ${operation}`,
         409,
+        false,
+        "form_unavailable",
       ),
     };
   return { ok: true };
@@ -835,32 +1030,45 @@ async function desiredWriteOperation(
 function portableResource(resource: ResourceObject): TakoformResource {
   if (!resource.form)
     throw new TypeError("portable Resource must carry an exact form identity");
-  const type = portableTypeForShapeKind(resource.kind);
-  if (!type)
+  const formKind = shapeKindForPortableType(resource.form.type);
+  if (formKind !== resource.kind)
     throw new TypeError(
-      `Resource kind ${resource.kind} has no portable v0 type token`,
+      `Resource kind ${resource.kind} does not match its portable Form identity`,
     );
   return {
-    type,
-    form: resource.form,
-    workspace: resource.metadata.space,
-    ...(resource.metadata.project !== undefined
-      ? { project: resource.metadata.project }
-      : {}),
-    ...(resource.metadata.environment !== undefined
-      ? { environment: resource.metadata.environment }
-      : {}),
-    name: resource.metadata.name,
-    serial: String(resource.metadata.generation ?? 0),
-    config: resource.spec,
+    apiVersion: TAKOFORM_FORM_HOST_API_VERSION,
+    kind: resource.kind,
+    form: portableFormReference(resource.form, resource.kind),
+    metadata: {
+      name: resource.metadata.name,
+      space: resource.metadata.space,
+      ...(resource.metadata.project !== undefined
+        ? { project: resource.metadata.project }
+        : {}),
+      ...(resource.metadata.environment !== undefined
+        ? { environment: resource.metadata.environment }
+        : {}),
+      ...(resource.metadata.labels !== undefined
+        ? { labels: resource.metadata.labels }
+        : {}),
+      resourceVersion: String(resource.metadata.generation ?? 0),
+    },
+    spec: resource.spec,
     ...(resource.status
       ? {
-          attributes: {
-            // Canonical Outputs may contain provider/private implementation
-            // evidence. Portable public values are exposed through audited
-            // Form Interfaces, not copied wholesale from the host ledger.
-            ...(resource.status.resolution?.portability !== undefined
-              ? { portability: resource.status.resolution.portability }
+          status: {
+            phase: resource.status.phase,
+            observedGeneration: resource.status.observedGeneration,
+            ...(resource.status.resolution
+              ? {
+                  portability: resource.status.resolution.portability,
+                }
+              : {}),
+            // Canonical outputs may include host implementation evidence. The
+            // portable provider reads public values through Interfaces instead
+            // of copying the host ledger into IaC state.
+            ...(resource.status.conditions
+              ? { conditions: resource.status.conditions }
               : {}),
           },
         }
@@ -871,6 +1079,92 @@ function portableResource(resource: ResourceObject): TakoformResource {
       resource.metadata.name,
     ),
   };
+}
+
+function installedFormFromPortable(
+  value: unknown,
+  expectedKind: unknown,
+): InstalledFormReference | undefined {
+  if (
+    !isJsonObject(value) ||
+    !isJsonObject(value.formRef) ||
+    value.formRef.apiVersion !== TAKOFORM_FORM_HOST_API_VERSION ||
+    typeof value.formRef.kind !== "string" ||
+    value.formRef.kind !== expectedKind ||
+    typeof value.formRef.definitionVersion !== "string" ||
+    typeof value.formRef.schemaDigest !== "string" ||
+    typeof value.packageDigest !== "string"
+  ) {
+    return undefined;
+  }
+  if (
+    Object.keys(value).length !== 2 ||
+    !Object.keys(value).every((key) =>
+      ["formRef", "packageDigest"].includes(key),
+    ) ||
+    Object.keys(value.formRef).length !== 4 ||
+    !Object.keys(value.formRef).every((key) =>
+      ["apiVersion", "kind", "definitionVersion", "schemaDigest"].includes(key),
+    )
+  ) {
+    return undefined;
+  }
+  const type = portableTypeForShapeKind(value.formRef.kind);
+  if (!type) return undefined;
+  const identity = {
+    type,
+    version: value.formRef.definitionVersion,
+    schemaDigest: value.formRef.schemaDigest,
+    packageDigest: value.packageDigest,
+  };
+  return isInstalledFormReference(identity) ? identity : undefined;
+}
+
+function portableFormReference(
+  identity: InstalledFormReference,
+  kind: string,
+): TakoformResource["form"] {
+  if (shapeKindForPortableType(identity.type) !== kind) {
+    throw new TypeError("portable Resource and Form kinds differ");
+  }
+  return {
+    formRef: {
+      apiVersion: TAKOFORM_FORM_HOST_API_VERSION,
+      kind,
+      definitionVersion: identity.version,
+      schemaDigest: identity.schemaDigest,
+    },
+    packageDigest: identity.packageDigest,
+  };
+}
+
+function portableFormAvailability(availability: FormAvailability) {
+  const kind = shapeKindForPortableType(availability.form.type);
+  if (!kind) {
+    throw new TypeError(
+      `Form type ${availability.form.type} has no portable Resource kind`,
+    );
+  }
+  return {
+    identity: portableFormReference(availability.form, kind),
+    definitionKnown: availability.definitionKnown,
+    installed: availability.installed,
+    executable: availability.executable,
+    activated: availability.activated,
+    availableToPrincipal: availability.availableToPrincipal,
+    operations: availability.operations,
+    deprecated: availability.deprecated,
+  };
+}
+
+function stringRecord(
+  value: unknown,
+): Readonly<Record<string, string>> | undefined {
+  if (value === undefined) return undefined;
+  if (!isJsonObject(value)) return undefined;
+  const entries = Object.entries(value);
+  if (!entries.every(([, item]) => typeof item === "string")) return undefined;
+  return Object.fromEntries(entries) as Readonly<Record<string, string>>;
 }
 
 async function completedApplyReplay(
@@ -919,15 +1213,15 @@ function serviceError(c: Context, error: ResourceServiceError): Response {
   > = {
     invalid_form_ref: ["invalid_argument", 400, false],
     form_registry_unavailable: ["backend_unavailable", 503, true],
-    form_not_installed: ["form_not_installed", 409, false],
-    form_identity_conflict: ["form_identity_conflict", 409, false],
+    form_not_installed: ["conflict", 409, false],
+    form_identity_conflict: ["conflict", 409, false],
     not_found: ["resource_not_found", 404, false],
-    resource_version_conflict: ["serial_conflict", 412, false],
+    resource_version_conflict: ["conflict", 412, false],
     ownership_conflict: ["resource_busy", 409, false],
     reconcile_conflict: ["resource_busy", 409, true],
-    import_conflict: ["import_conflict", 409, false],
-    policy_denied: ["policy_denied", 403, false],
-    deployment_admission_denied: ["policy_denied", 403, false],
+    import_conflict: ["conflict", 409, false],
+    policy_denied: ["forbidden", 403, false],
+    deployment_admission_denied: ["forbidden", 403, false],
     deployment_finalize_pending: ["resource_busy", 409, true],
   };
   const mapped =
@@ -970,7 +1264,7 @@ function portableError(
 function portableAuthError(c: Context, response: Response): Response {
   return portableError(
     c,
-    response.status === 403 ? "permission_denied" : "unauthenticated",
+    response.status === 403 ? "forbidden" : "unauthorized",
     "portable form authentication failed",
     response.status === 403 ? 403 : 401,
   );
@@ -986,7 +1280,9 @@ function portableJson(
     isJsonObject(value) && isJsonObject(value.resource)
       ? (value.resource as unknown as TakoformResource)
       : (value as TakoformResource);
-  if (resource.serial) c.header("etag", `"${resource.serial}"`);
+  if (resource.metadata?.resourceVersion) {
+    c.header("etag", `"${resource.metadata.resourceVersion}"`);
+  }
   if (key) c.header("idempotency-key", key);
   return c.json(value, status);
 }
@@ -1058,6 +1354,138 @@ function declarationQuery(c: Context):
       ...(resourceKind && resourceName ? { resourceKind, resourceName } : {}),
     },
   };
+}
+
+function exactDeclarationQuery(c: Context):
+  | {
+      readonly ok: true;
+      readonly value: {
+        readonly space: string;
+        readonly version: string;
+        readonly resourceKind: string;
+        readonly resourceName: string;
+      };
+    }
+  | { readonly ok: false; readonly response: Response } {
+  const query = declarationQuery(c);
+  if (!query.ok) return query;
+  if (
+    !query.value.version ||
+    !query.value.resourceKind ||
+    !query.value.resourceName
+  ) {
+    return failed(
+      c,
+      "version, resourceKind, and resourceName are required for Interface writes",
+    );
+  }
+  return {
+    ok: true,
+    value: {
+      space: query.value.space,
+      version: query.value.version,
+      resourceKind: query.value.resourceKind,
+      resourceName: query.value.resourceName,
+    },
+  };
+}
+
+const PORTABLE_INTERFACE_BODY_KEYS = new Set([
+  "name",
+  "version",
+  "resource",
+  "document",
+  "documentSchema",
+  "inputs",
+  "resourceUriInput",
+  "resourceVersion",
+]);
+
+function parseDeclarationBody(
+  c: Context,
+  body: JsonObject,
+  identity: {
+    readonly name: string;
+    readonly version: string;
+    readonly resourceKind: string;
+    readonly resourceName: string;
+  },
+):
+  | {
+      readonly ok: true;
+      readonly value: TakoformDeclaredInterface;
+    }
+  | { readonly ok: false; readonly response: Response } {
+  for (const key of Object.keys(body)) {
+    if (!PORTABLE_INTERFACE_BODY_KEYS.has(key)) {
+      return failed(c, `${key} is not a portable Interface declaration field`);
+    }
+  }
+  if (
+    body.name !== identity.name ||
+    body.version !== identity.version ||
+    !isJsonObject(body.resource) ||
+    body.resource.kind !== identity.resourceKind ||
+    body.resource.name !== identity.resourceName ||
+    !isJsonObject(body.document)
+  ) {
+    return failed(
+      c,
+      "body identity, Resource, and document must match the exact write address",
+    );
+  }
+  if (body.documentSchema !== undefined && !isJsonObject(body.documentSchema)) {
+    return failed(c, "documentSchema must be a JSON object");
+  }
+  if (body.inputs !== undefined && !Array.isArray(body.inputs)) {
+    return failed(c, "inputs must be a JSON array");
+  }
+  if (
+    body.resourceUriInput !== undefined &&
+    typeof body.resourceUriInput !== "string"
+  ) {
+    return failed(c, "resourceUriInput must be a string");
+  }
+  if (
+    body.resourceVersion !== undefined &&
+    typeof body.resourceVersion !== "string"
+  ) {
+    return failed(c, "resourceVersion must be a string");
+  }
+  return {
+    ok: true,
+    value: body as unknown as TakoformDeclaredInterface,
+  };
+}
+
+function interfaceIfMatch(
+  c: Context,
+):
+  | { readonly ok: true; readonly value: number }
+  | { readonly ok: false; readonly response: Response } {
+  if (c.req.header("if-none-match") !== undefined) {
+    return failed(c, "If-None-Match is not valid for Interface delete");
+  }
+  const raw = c.req.header("if-match")?.trim();
+  const match = raw ? /^"([1-9][0-9]*)"$/u.exec(raw) : undefined;
+  return match
+    ? { ok: true, value: Number(match[1]) }
+    : failed(c, "If-Match must contain one quoted resourceVersion");
+}
+
+function interfaceWriteError(c: Context, error: unknown): Response {
+  if (!(error instanceof InterfaceServiceError)) throw error;
+  switch (error.code) {
+    case "invalid_argument":
+      return portableError(c, "invalid_argument", error.message, 400);
+    case "not_found":
+      return portableError(c, "resource_not_found", error.message, 404);
+    case "already_exists":
+    case "conflict":
+      return portableError(c, "conflict", error.message, 412);
+    case "failed_precondition":
+      return portableError(c, "resource_busy", error.message, 409);
+  }
 }
 
 async function readPortableDeclarations(

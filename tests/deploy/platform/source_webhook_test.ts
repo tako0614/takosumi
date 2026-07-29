@@ -1842,7 +1842,7 @@ test("platform Resource Shape API routes are routed before accounts and bearer-g
     true,
   );
   expect(isPlatformResourceShapeApiPath("/v1/form-availability")).toBe(true);
-  expect(isPlatformResourceShapeApiPath("/takoform/v0/forms")).toBe(true);
+  expect(isPlatformResourceShapeApiPath("/takoform/v0/forms")).toBe(false);
   expect(isPlatformResourceShapeApiPath("/v1/form-activations")).toBe(false);
   expect(isPlatformResourceShapeApiPath("/api/v1/workspaces")).toBe(false);
   expect(

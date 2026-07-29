@@ -328,17 +328,29 @@ Each service-side Capsule Interface blueprint has an explicit immutable `key`
 for one-shot materialization provenance. The editable Interface `name` is not a
 fallback identity, and an unkeyed blueprint is invalid.
 
-New Capsule declarations come from `InstallConfig.interfaceBlueprints`
+Capsule-owned declarations come from `InstallConfig.interfaceBlueprints`
 (`capsule_blueprint`) only. Historical `capsule_resource` records remain
 readable and removable by operators under migration custody, but are not a new
 module-author or authentication surface. No Capsule-scoped Run credential is
 retained. A same-name blueprint never adopts or rewrites a historical record.
 
-A Takoform Form Package Interface descriptor is separate: after a Form-backed
-Resource is admitted, it materializes as Resource-owned `form_descriptor`
-provenance. Scoped compatibility control may similarly retain
+Resource-owned declarations have two independent sources. A verified Takoform
+Form Package descriptor materializes with `form_descriptor` provenance. An
+application may instead declare the same generic, opaque document and input
+mapping in portable IaC; a compatible host writes it with `portable_iac`
+provenance through its advertised Interface endpoint. The IaC resource has no
+MCP-, HTTP-, UI-, storage-, or vendor-specific blocks and creates no
+InterfaceBinding. Scoped compatibility control may separately retain
 `compatibility_profile` provenance for its canonical Resource-owned
-`http.route`. Neither is a Capsule declaration source.
+`http.route`. None of these are Capsule declaration sources.
+
+The IaC provider endpoint, bearer token, and default Space may come from
+provider configuration or environment variables. They are control-plane
+transport only. An application endpoint is resolved from the Resource outputs
+or the host-supplied `resource_uri`, returned as Interface `values` /
+`resourceUri`, and invoked directly by the consumer after host-governed
+authorization. It is never routed through the provider or duplicated in an
+environment variable as another source of truth.
 
 Portable descriptors map inputs from `literal`, `output`, or `resource_uri`.
 The first two remain data-only declaration values and public Resource output
@@ -983,18 +995,19 @@ lifecycle state ownership
 TargetPool or operator/admin authority
 ```
 
-The current Takosumi discovery/routes/provider resource names remain bounded
-compatibility. `/.well-known/takoform` now dual-advertises the exact
-`/apis/forms.takoform.com/v1alpha1` facade and the retained `/v1` compatibility
-lane. The exact facade requires the complete installed FormRef, principal-safe
+The Takosumi-native `/v1` routes and the independent Takoform protocol remain
+separate authoring surfaces over one canonical Resource authority.
+`/.well-known/takoform` advertises only the exact
+`/apis/forms.takoform.com/v1alpha1` provider-facing API; the old flat
+`/takoform/v0` envelope is not mounted. The exact facade requires the complete
+installed FormRef, principal-safe
 availability, ETag preconditions, mutation idempotency keys, and stable neutral
 errors, but delegates every operation to `ResourceShapeService`; it owns no
 second Resource, Run, audit, or idempotency state. Its response projection omits
 Target/implementation/manager/credential/capacity/commercial evidence and raw
 canonical Outputs. Changing provider address does not rename resource types;
 every supported state migration requires no-op and rollback fixtures. The
-current Takoform provider still uses `/v1` and therefore remains compatibility
-evidence until a release consumes the exact facade.
+current Takoform provider discovers and consumes this exact facade.
 
 Standard status is independently fail-closed. Admission consumes retained rows
 produced by the injected Takoform data-only package verifier plus exact semantic

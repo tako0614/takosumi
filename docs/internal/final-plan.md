@@ -2108,7 +2108,9 @@ Takosumi resource state
 Native resource state
 ```
 
-Portable Takoform state keeps Takosumi Resource ids and public outputs.
+Portable Takoform state keeps Takosumi Resource ids, generation fences, drift
+status, and portability. Public runtime values are resolved through declared
+Interfaces instead of copying the canonical Output document into IaC state.
 Native provider identifiers, resolution details, and secret material belong in
 Takosumi state, not in user HCL.
 

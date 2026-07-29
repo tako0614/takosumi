@@ -50,8 +50,8 @@ export const TAKOSUMI_INTERNAL_RESOURCE_MANAGED_BY_HEADER =
 export interface RegisterResourceShapeRoutesOptions {
   readonly service: ResourceShapeService;
   /**
-   * Mounts the portable Takoform v0 host surface. Defaults to true; hosts that
-   * do not expose this protocol disable both discovery and `/takoform/v0`.
+   * Mounts the versioned portable Takoform host surface. Defaults to true;
+   * hosts that do not expose it disable discovery and the advertised API.
    */
   readonly takoformHost?: boolean;
   /** Optional canonical byte ingress backed by a host-installed artifact writer. */
@@ -242,6 +242,7 @@ export function registerResourceShapeRoutes(
       availability: service,
       authorize: (c) => authorizeResourceShapeRequest(c, options),
       canReadForms: hasFormAvailabilityReadScope,
+      canWriteInterfaces: hasResourceArtifactWriteScope,
       ...(options.interfaceDeclarations
         ? { interfaceDeclarations: options.interfaceDeclarations }
         : {}),

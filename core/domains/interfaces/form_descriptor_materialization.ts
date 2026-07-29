@@ -112,7 +112,7 @@ export async function ensureFormDescriptorInterfaces(
       });
       continue;
     }
-    const inputs = await translateInputs(
+    const inputs = await translatePortableInterfaceInputs(
       input.resourceId,
       descriptor,
       descriptor.inputs?.some(
@@ -148,6 +148,9 @@ export async function ensureFormDescriptorInterfaces(
       type: descriptor.name,
       version: descriptor.version,
       document,
+      ...(descriptor.documentSchema
+        ? { documentSchema: descriptor.documentSchema }
+        : {}),
       ...(Object.keys(inputs.value).length > 0 ? { inputs: inputs.value } : {}),
       access: {
         visibility: "workspace",
@@ -373,7 +376,7 @@ function validDocument(
   }
 }
 
-async function translateInputs(
+export async function translatePortableInterfaceInputs(
   resourceId: string,
   descriptor: FormInterfaceDescriptor,
   resolvedResourceUri: string | undefined,
