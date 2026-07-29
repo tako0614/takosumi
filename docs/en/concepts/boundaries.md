@@ -82,6 +82,6 @@ When you operate Takosumi yourself, you become the operator described above.
 You manage software updates, secrets, databases, runners, backups, and any
 Resource implementations you enable.
 
-Read [Self-hosting](./self-host.md) for topology choices and the
-[operator runbooks](https://github.com/tako0614/takosumi/blob/main/docs/operations/README.md)
-for procedures.
+Read [Self-hosting](./self-host.md) for topology choices and published setup
+procedures. Repository-local operator runbooks are not customer-facing product
+documentation.
