@@ -72,6 +72,5 @@ provider です。ただし、実行後の authority は同じではありませ
 自分で Takosumi を運用する場合は、あなたが上記の運用者になります。software update、
 secret、データベース、runner、バックアップ、Resource の実装を自分で管理します。
 
-構成の選び方は[自分で動かす](./self-host.md)、具体的な作業は
-[リポジトリの運用手順](https://github.com/tako0614/takosumi/blob/main/docs/operations/README.md)に
-あります。
+構成の選び方と公開手順は[自分で動かす](./self-host.md)にあります。repository 内の
+operator runbook は利用者向け仕様ではありません。

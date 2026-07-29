@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test";
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve, sep } from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { ACCOUNT_SESSION_COOKIE_NAME } from "../../../accounts/service/src/account-session.ts";
 import { handleControlRoute } from "../../../accounts/service/src/control-routes.ts";
@@ -30,9 +31,13 @@ import {
 } from "../../../worker/src/d1_opentofu_store.ts";
 import { SqliteFakeD1 } from "../../helpers/deploy-control/sqlite_fake_d1.ts";
 
-const ROOT = new URL("../../../../", import.meta.url);
-const YURUCOMMU_ROOT = new URL("yurucommu/", ROOT);
-const TAKOFORM_ROOT = new URL("takoform/", ROOT);
+const ECOSYSTEM_ROOT = process.env.TAKOSUMI_ECOSYSTEM_ROOT?.trim();
+const YURUCOMMU_ROOT = ECOSYSTEM_ROOT
+  ? pathToFileURL(`${resolve(ECOSYSTEM_ROOT, "yurucommu")}${sep}`)
+  : undefined;
+const TAKOFORM_ROOT = ECOSYSTEM_ROOT
+  ? pathToFileURL(`${resolve(ECOSYSTEM_ROOT, "takoform")}${sep}`)
+  : undefined;
 const EXACT_TOFU = "/root/.local/libexec/opentofu-1.12.1/tofu";
 const PROVIDER_ADDRESS = "registry.terraform.io/tako0614/takoform";
 const WORKSPACE_ID = "workspace_yurucommu_real_lifecycle";
@@ -69,7 +74,18 @@ interface PluginCall {
   };
 }
 
-test("repository install executes exact OpenTofu/Takoform apply and destroy against the production Form host", async () => {
+/**
+ * This is an ecosystem integration proof, not a Takosumi product-check
+ * dependency. An isolated Takosumi checkout skips it; the control repository
+ * runs it with TAKOSUMI_ECOSYSTEM_ROOT pointed at a materialized exact commit
+ * set.
+ */
+const e2e = YURUCOMMU_ROOT && TAKOFORM_ROOT ? test : test.skip;
+
+e2e("repository install executes exact OpenTofu/Takoform apply and destroy against the production Form host", async () => {
+  if (!YURUCOMMU_ROOT || !TAKOFORM_ROOT) {
+    throw new Error("TAKOSUMI_ECOSYSTEM_ROOT is required");
+  }
   const temp = await mkdtemp(join(tmpdir(), "takosumi-yurucommu-e2e-"));
   let server: ReturnType<typeof Bun.serve> | undefined;
   try {

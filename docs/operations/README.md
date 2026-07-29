@@ -1,8 +1,9 @@
-# 運用手順
+# Takosumi Operator Runbooks
 
 このディレクトリは、Takosumi を自分の利用者向けに運用する人のための runbook です。
 利用者向けの機能説明ではなく、deploy、migration、backup、障害対応などの具体的な作業を
-扱います。公開 website には含めません。
+扱います。これらは not published product docs であり、not customer-facing です。
+公開 website には含めません。
 
 公式の Takosumi Cloud だけに関係する Stripe、managed capacity、本番環境の手順は
 Cloud 側のリポジトリで管理します。

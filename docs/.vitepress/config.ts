@@ -51,6 +51,10 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
           link: "/reference/capsule-source-options",
         },
         {
+          text: "Repository manifest",
+          link: "/reference/repository-manifest",
+        },
+        {
           text: "Operator control MCP",
           link: "/reference/operator-control-mcp",
         },
@@ -96,6 +100,10 @@ const enSidebar: DefaultTheme.SidebarMulti = {
         {
           text: "Capsule source options",
           link: "/en/reference/capsule-source-options",
+        },
+        {
+          text: "Repository manifest",
+          link: "/en/reference/repository-manifest",
         },
         {
           text: "Operator control MCP",

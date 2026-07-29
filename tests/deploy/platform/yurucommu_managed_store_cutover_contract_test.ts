@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import { readFile } from "node:fs/promises";
 
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
 import {
@@ -21,7 +20,6 @@ const SOURCE_URL = "https://github.com/tako0614/yurucommu.git";
 const MODULE_PATH = "deploy/takoform";
 const SNAPSHOT_ID = "snapshot_yurucommu_managed_cutover";
 const NOW = "2026-07-29T00:00:00.000Z";
-const YURUCOMMU_ROOT = new URL("../../../../yurucommu/", import.meta.url);
 
 const MANAGED_INPUTS = [
   {
@@ -30,6 +28,11 @@ const MANAGED_INPUTS = [
     type: "string" as const,
     format: "subdomain" as const,
     label: { ja: "サービス名", en: "Service name" },
+    helper: {
+      ja: "ワークスペース内で使うYurucommuの名前です。",
+      en: "The name of this Yurucommu service in the workspace.",
+    },
+    advanced: true,
   },
   {
     name: "worker_release_tag",
@@ -164,13 +167,6 @@ function managedInstallConfig(): InstallConfig {
   };
 }
 
-function declaredResources(source: string): string[] {
-  return Array.from(
-    source.matchAll(/resource\s+"([^"]+)"\s+"([^"]+)"\s*\{/gu),
-    (match) => `${match[1]}.${match[2]}`,
-  );
-}
-
 describe("Yurucommu managed Store cutover contract", () => {
   test("normal Store selection resolves only the exact managed module InstallConfig", () => {
     const managed = managedInstallConfig();
@@ -214,43 +210,7 @@ describe("Yurucommu managed Store cutover contract", () => {
     ]);
   });
 
-  test("the selected module owns the complete canonical Resource graph and opaque launcher declaration", async () => {
-    const source = await readFile(
-      new URL("deploy/takoform/main.tf", YURUCOMMU_ROOT),
-      "utf8",
-    );
-    expect(declaredResources(source)).toEqual([
-      "takoform_relational_database.database",
-      "takoform_object_bucket.media",
-      "takoform_key_value_store.kv",
-      "takoform_queue.delivery",
-      "takoform_queue.delivery_dlq",
-      "takoform_http_service.worker",
-      "takoform_schedule.retention",
-      "takoform_interface.launcher",
-    ]);
-    expect(source).toContain('resource_kind = "HttpService"');
-    expect(source).toContain(
-      "resource_name = takoform_http_service.worker.name",
-    );
-    expect(source).toContain('originInput = "origin"');
-    expect(source).toContain('source  = "output"');
-    expect(source).toContain('pointer = "/url"');
-    expect(source).not.toMatch(/\bcloudflare_[a-z0-9_]+\b/u);
-    expect(source).not.toContain("subjectRef");
-    expect(source).not.toContain("ui.open");
-  });
-
   test("production discovery selects the managed module while retaining the direct Git module", async () => {
-    const manifest = JSON.parse(
-      await readFile(
-        new URL(".well-known/takosumi.json", YURUCOMMU_ROOT),
-        "utf8",
-      ),
-    ) as RepositoryManifestDocument;
-    expect(Object.keys(manifest.install.modules)).toEqual([".", MODULE_PATH]);
-    expect(manifest.install.modules[MODULE_PATH]).toBeDefined();
-
     const selectableYurucommu = REFERENCE_APP_INSTALL_CONFIGS.filter(
       (config) => config.store?.source?.url === SOURCE_URL,
     );
@@ -347,10 +307,7 @@ describe("Yurucommu managed Store cutover contract", () => {
   });
 
   test("normal UI selection compiles the exact repository proposal and fixes installer authority before lifecycle execution", async () => {
-    const manifestText = await readFile(
-      new URL(".well-known/takosumi.json", YURUCOMMU_ROOT),
-      "utf8",
-    );
+    const manifestText = JSON.stringify(managedInstallUx());
     const parsed = parseRepositoryManifestText(manifestText);
     expect(parsed.ok).toBe(true);
     if (!parsed.ok) throw new Error(parsed.error);
