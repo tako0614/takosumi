@@ -4,7 +4,7 @@ Takosumi App Handoff is the small URL protocol for creating a Takosumi-managed
 hosted service from any client: web app, desktop app, mobile app, browser link,
 or CLI output.
 
-Host Center is a web/dashboard flow. This protocol does not require or imply a
+the Takosumi dashboard is a web/dashboard flow. This protocol does not require or imply a
 standalone Takosumi mobile app; clients return to their own product app or web
 callback URL.
 
@@ -15,7 +15,7 @@ Takosumi flow, then optionally returns a connection payload to the client.
 ```text
 client
   -> /install URL
-  -> Takosumi Host Center
+  -> Takosumi dashboard
   -> Source / Capsule / ProviderBinding / Run
   -> StateVersion / Output
   -> optional return_uri
@@ -100,7 +100,7 @@ file.
 
 Module inputs do not travel in the URL. A link carrying `var.<name>` or
 `varjson.<name>` is accepted, but those values are discarded; inputs are entered
-in the Host Center screen. Secrets, tokens, provider credentials, and private
+in the the Takosumi dashboard screen. Secrets, tokens, provider credentials, and private
 keys are separate again, and must come from Provider Connections, Credential
 Recipes, Provider Bindings, Secrets, or product-owned setup flows.
 
@@ -167,7 +167,7 @@ dashboard origin.
 
 ## Boundary
 
-Takosumi owns the protocol, Host Center flow, Source/Capsule/Run lifecycle,
+Takosumi owns the protocol, the Takosumi dashboard flow, Source/Capsule/Run lifecycle,
 state, output, audit, provider connection review, and capability discovery.
 
 The client owns product UI, custom scheme handling, web callback handling,
