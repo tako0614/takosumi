@@ -219,7 +219,11 @@ export class RunCredentialBroker {
       const recipeBundle = await vault!.mintForCapsuleProviderBindings(
         planRun.workspaceId,
         providerEntries,
-        { phase, ...(capsuleId ? { capsuleId } : {}) },
+        {
+          phase,
+          runId: auditRunId,
+          ...(capsuleId ? { capsuleId } : {}),
+        },
       );
       const evidence = [
         ...bundle.providerCredentialEvidence,

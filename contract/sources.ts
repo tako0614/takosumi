@@ -4,8 +4,9 @@
  * A Source is a Workspace-scoped registration of a Git repository that Takosumi can
  * resolve to an immutable archive snapshot. Takosumi core is GitHub-agnostic: it
  * knows only a {@link GitAddress} (`{ url, ref, path, credentialId }`) and never
- * a forge-specific manifest. There is no custom manifest in user repos; every
- * service-side concern is DB config on the Source / Connection / InstallConfig records.
+ * a forge-specific manifest. A repository may carry optional presentation or
+ * install-UX proposals, but every accepted service-side concern is compiled
+ * into DB config on the Source / Connection / InstallConfig records.
  *
  * Resolution never happens from the trusted Worker: registration validates shape
  * + URL policy and stores the Source `active`; the actual `git ls-remote` /
@@ -18,6 +19,10 @@
  */
 
 import { INTERNAL_V1_PREFIX } from "./api-surface.ts";
+import {
+  parseRepositoryInstallUxText,
+  type RepositoryInstallUxDocument,
+} from "./install-ux.ts";
 
 /**
  * GitHub-agnostic Git coordinate. The only repository identity Takosumi core
@@ -75,6 +80,144 @@ export type RepositoryInstallMetadataSnapshot =
       readonly reason: "not_regular_file" | "too_large";
     };
 
+export type RepositoryInstallUxInvalidReason =
+  | "not_regular_file"
+  | "too_large"
+  | "invalid_utf8"
+  | "invalid_document";
+
+/**
+ * Durable observation of `.well-known/takosumi.json` from the same immutable
+ * Git commit as the executable archive.
+ *
+ * The validated document is internal compiler input. HTTP projections must use
+ * {@link publicRepositoryInstallUxObservation} so repository content is not
+ * copied into SourceSnapshot list responses.
+ */
+export type RepositoryInstallUxSnapshot =
+  | { readonly status: "absent" }
+  | {
+      readonly status: "present";
+      readonly digest: string;
+      readonly document: RepositoryInstallUxDocument;
+    }
+  | {
+      readonly status: "invalid";
+      readonly reason: RepositoryInstallUxInvalidReason;
+      readonly digest?: string;
+      /** Bounded parser diagnostic; never included in public projections. */
+      readonly diagnostic?: string;
+    };
+
+/** Public-safe SourceSnapshot observation: status + digest, never document. */
+export type PublicRepositoryInstallUxObservation =
+  | { readonly status: "absent" }
+  | { readonly status: "present"; readonly digest: string }
+  | {
+      readonly status: "invalid";
+      readonly reason: RepositoryInstallUxInvalidReason;
+      readonly digest?: string;
+    };
+
+export function publicRepositoryInstallUxObservation(
+  snapshot: RepositoryInstallUxSnapshot,
+): PublicRepositoryInstallUxObservation {
+  if (snapshot.status === "present") {
+    return { status: "present", digest: snapshot.digest };
+  }
+  if (snapshot.status === "invalid") {
+    return {
+      status: "invalid",
+      reason: snapshot.reason,
+      ...(snapshot.digest ? { digest: snapshot.digest } : {}),
+    };
+  }
+  return { status: "absent" };
+}
+
+/** Strict parser for the untrusted runner-to-host SourceSnapshot seam. */
+export function parseRepositoryInstallUxSnapshot(
+  value: unknown,
+): RepositoryInstallUxSnapshot | undefined {
+  if (!plainRecord(value) || typeof value.status !== "string") {
+    return undefined;
+  }
+  if (value.status === "absent") {
+    return exactRecordKeys(value, ["status"]) ? { status: "absent" } : undefined;
+  }
+  if (value.status === "present") {
+    if (
+      !exactRecordKeys(value, ["status", "digest", "document"]) ||
+      !sha256Digest(value.digest)
+    ) {
+      return undefined;
+    }
+    let text: string;
+    try {
+      text = JSON.stringify(value.document);
+    } catch {
+      return undefined;
+    }
+    const parsed = parseRepositoryInstallUxText(text);
+    return parsed.ok
+      ? { status: "present", digest: value.digest, document: parsed.document }
+      : undefined;
+  }
+  if (value.status !== "invalid") return undefined;
+  if (
+    !exactRecordKeys(value, ["status", "reason", "digest", "diagnostic"]) ||
+    typeof value.reason !== "string" ||
+    ![
+      "not_regular_file",
+      "too_large",
+      "invalid_utf8",
+      "invalid_document",
+    ].includes(value.reason)
+  ) {
+    return undefined;
+  }
+  if (value.digest !== undefined && !sha256Digest(value.digest)) {
+    return undefined;
+  }
+  if (
+    value.diagnostic !== undefined &&
+    (typeof value.diagnostic !== "string" ||
+      value.diagnostic.length < 1 ||
+      value.diagnostic.length > 1_024 ||
+      /[\0\r\n]/u.test(value.diagnostic))
+  ) {
+    return undefined;
+  }
+  return {
+    status: "invalid",
+    reason: value.reason as RepositoryInstallUxInvalidReason,
+    ...(typeof value.digest === "string" ? { digest: value.digest } : {}),
+    ...(typeof value.diagnostic === "string"
+      ? { diagnostic: value.diagnostic }
+      : {}),
+  };
+}
+
+function plainRecord(
+  value: unknown,
+): value is Readonly<Record<string, unknown>> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function exactRecordKeys(
+  value: Readonly<Record<string, unknown>>,
+  allowed: readonly string[],
+): boolean {
+  const allowedSet = new Set(allowed);
+  return Object.keys(value).every((key) => allowedSet.has(key));
+}
+
+function sha256Digest(value: unknown): value is string {
+  return (
+    typeof value === "string" && /^sha256:[0-9a-f]{64}$/u.test(value)
+  );
+}
+
 /**
  * Immutable archive snapshot of a Capsule pinned to a content digest.
  *
@@ -108,8 +251,31 @@ export interface SourceSnapshot {
    * not reused by a new source sync.
    */
   readonly repositoryInstallMetadata?: RepositoryInstallMetadataSnapshot;
+  /**
+   * Optional only for snapshots persisted before repository-owned install UX
+   * observation was introduced. Every new source sync records absent, present,
+   * or invalid; old snapshots are not eligible for archive reuse.
+   */
+  readonly repositoryInstallUx?: RepositoryInstallUxSnapshot;
   readonly fetchedByRunId: string;
   readonly fetchedAt: string;
+}
+
+export type PublicSourceSnapshot = Omit<SourceSnapshot, "repositoryInstallUx"> & {
+  readonly repositoryInstallUx?: PublicRepositoryInstallUxObservation;
+};
+
+/** Remove validated repository content before serializing a snapshot to HTTP. */
+export function toPublicSourceSnapshot(
+  snapshot: SourceSnapshot,
+): PublicSourceSnapshot {
+  if (!snapshot.repositoryInstallUx) return snapshot;
+  return {
+    ...snapshot,
+    repositoryInstallUx: publicRepositoryInstallUxObservation(
+      snapshot.repositoryInstallUx,
+    ),
+  };
 }
 
 /**

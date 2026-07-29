@@ -64,6 +64,27 @@ export interface D1ExecResult {
 
 export type D1Value = string | number | null | ArrayBuffer | Uint8Array;
 
+export type D1AccountsSchemaMode = "bootstrap" | "predeployed";
+
+export interface D1AccountsStoreOptions {
+  /**
+   * `bootstrap` retains the self-host/local first-use schema bootstrap.
+   * `predeployed` is the hosted request path: migrations are an operator
+   * responsibility and this store must never issue DDL.
+   */
+  readonly schemaMode?: D1AccountsSchemaMode;
+}
+
+export function resolveD1AccountsSchemaMode(
+  value: unknown,
+): D1AccountsSchemaMode {
+  if (value === undefined || value === "bootstrap") return "bootstrap";
+  if (value === "predeployed") return value;
+  throw new TypeError(
+    "TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE must be bootstrap or predeployed",
+  );
+}
+
 // D1's `db.exec()` treats each line as a separate statement, so every
 // statement must fit on one line — both for real Cloudflare D1 and for
 // miniflare's emulation. Keep these single-line and terminated with `;`.
@@ -406,18 +427,21 @@ interface PasskeyChallengeDocument {
 export class D1AccountsStore implements AccountsStore {
   readonly #db: D1Database;
   readonly #documents: D1AccountsDocumentIndexStore;
+  readonly #schemaMode: D1AccountsSchemaMode;
   #initialized?: Promise<void>;
 
-  constructor(db: D1Database) {
+  constructor(db: D1Database, options: D1AccountsStoreOptions = {}) {
     this.#db = db;
     this.#documents = new D1AccountsDocumentIndexStore(db);
+    this.#schemaMode = resolveD1AccountsSchemaMode(options.schemaMode);
   }
 
   async initialize(): Promise<void> {
     if (!this.#initialized) {
-      this.#initialized = this.#db
-        .exec(D1_ACCOUNTS_STORE_INIT_SQL)
-        .then(() => {});
+      this.#initialized =
+        this.#schemaMode === "predeployed"
+          ? Promise.resolve()
+          : this.#db.exec(D1_ACCOUNTS_STORE_INIT_SQL).then(() => {});
     }
     await this.#initialized;
   }
@@ -776,10 +800,7 @@ export class D1AccountsStore implements AccountsStore {
     const existingForCapsule = await this.findOidcClientForCapsule(
       record.capsuleId,
     );
-    if (
-      existingForCapsule &&
-      existingForCapsule.clientId !== record.clientId
-    ) {
+    if (existingForCapsule && existingForCapsule.clientId !== record.clientId) {
       throw new Error(
         `Capsule ${record.capsuleId} already has another OIDC client`,
       );
@@ -1293,9 +1314,10 @@ function encodeD1RefreshChainRetentionCursor(at: number, key: string): string {
   return JSON.stringify([at, key]);
 }
 
-function decodeD1RefreshChainRetentionCursor(
-  value: string | undefined,
-): { readonly at: number; readonly key: string } {
+function decodeD1RefreshChainRetentionCursor(value: string | undefined): {
+  readonly at: number;
+  readonly key: string;
+} {
   if (value === undefined) return { at: -1, key: "" };
   let parsed: unknown;
   try {

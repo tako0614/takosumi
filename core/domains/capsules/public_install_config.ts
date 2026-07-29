@@ -19,7 +19,13 @@ import { isSecretKey, REDACTED_VALUE } from "takosumi-contract/redaction";
 export function publicInstallConfigRecord(
   config: InstallConfig,
 ): PublicInstallConfig {
-  const { runnerId: _runnerId, internal: _internal, ...publicRecord } = config;
+  const {
+    runnerId: _runnerId,
+    internal: _internal,
+    resourceInterfaceBindingProposals: _resourceBindings,
+    hostRuntimeMaterialization: _hostRuntimeMaterialization,
+    ...publicRecord
+  } = config;
   const store = config.store;
   return {
     ...publicRecord,

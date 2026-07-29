@@ -24,6 +24,7 @@ import type {
 import { DEFAULT_OPENTOFU_RUNNER_EXECUTOR_ID } from "../../../core/domains/deploy-control/mod.ts";
 import { OpenTofuRunnerExecutionError } from "../../../core/domains/deploy-control/errors.ts";
 import { normalizePlanResourceScope } from "takosumi-contract";
+import { parseRepositoryInstallUxSnapshot } from "takosumi-contract/sources";
 import type {
   OpenTofuPlanArtifact,
   PlanResourceChange,
@@ -305,6 +306,9 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
       (archive ? stringValue(archive, "ref") : undefined);
     const repositoryInstallMetadata =
       repositoryInstallMetadataFromRunnerResult(result);
+    const repositoryInstallUx = parseRepositoryInstallUxSnapshot(
+      result.repositoryInstallUx,
+    );
     const resolvedCommit = requiredString(result, "resolvedCommit");
     if (!archiveDigest || archiveSizeBytes === undefined) {
       throw new Error(`source_sync ${job.runId} returned no archive metadata`);
@@ -331,6 +335,7 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
       archiveDigest,
       archiveSizeBytes,
       ...(repositoryInstallMetadata ? { repositoryInstallMetadata } : {}),
+      ...(repositoryInstallUx ? { repositoryInstallUx } : {}),
       ...(archiveRef ? { archiveRef } : {}),
       ...(phaseTimings ? { phaseTimings } : {}),
     };

@@ -592,14 +592,15 @@ async function seedImmediatePredecessorV55(
     .run();
 }
 
-async function seedImmediatePredecessorV56(
+async function seedImmediatePredecessorV57(
   database: D1Database,
 ): Promise<void> {
-  // v56 deployments may already have these tables from the retired lazy sink.
-  // Removing only the v57 ledger row exercises idempotent lineage adoption
-  // without discarding observability history.
+  await database.prepare(`drop index interfaces_authorized_page_idx`).run();
   await database
-    .prepare(`delete from schema_migrations where version = 57`)
+    .prepare(`drop index interface_bindings_authorized_current_idx`)
+    .run();
+  await database
+    .prepare(`delete from schema_migrations where version = 58`)
     .run();
 }
 
@@ -656,8 +657,8 @@ test("control D1 plan captures the full OSS schema and migration ledger", async 
   expect(plan.manifestDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
   expect(plan.schemaDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
   expect(plan.ledgerDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
-  expect(plan.migrations.at(-1)?.version).toBe(57);
-  expect(plan.migrations).toHaveLength(54);
+  expect(plan.migrations.at(-1)?.version).toBe(58);
+  expect(plan.migrations).toHaveLength(55);
   expect(plan.tables.some((table) => table.name === "target_pools")).toBe(true);
   expect(
     plan.tables.some((table) => table.name === "takosumi_target_pools"),
@@ -686,6 +687,19 @@ test("control D1 plan captures the full OSS schema and migration ledger", async 
   expect(
     interfaces?.indexes.some(
       (index) => index.name === "interfaces_form_descriptor_idx",
+    ),
+  ).toBe(true);
+  expect(
+    interfaces?.indexes.some(
+      (index) => index.name === "interfaces_authorized_page_idx",
+    ),
+  ).toBe(true);
+  const interfaceBindings = plan.tables.find(
+    (table) => table.name === "interface_bindings",
+  );
+  expect(
+    interfaceBindings?.indexes.some(
+      (index) => index.name === "interface_bindings_authorized_current_idx",
     ),
   ).toBe(true);
 });
@@ -730,7 +744,7 @@ test("control D1 verify is read-only and accepts host extension tables", async (
     const verification = await verifyControlD1Schema(database, plan);
     expect(verification.status).toBe("ready");
     expect(verification.issues).toEqual([]);
-    expect(verification.latestMigrationVersion).toBe(57);
+    expect(verification.latestMigrationVersion).toBe(58);
   } finally {
     database.close();
   }
@@ -2126,7 +2140,7 @@ test("control D1 CLI verify reports a ready remote ledger", async () => {
       mode: "verify",
       environment: "staging",
       status: "ready",
-      verification: { latestMigrationVersion: 57 },
+      verification: { latestMigrationVersion: 58 },
     });
   } finally {
     database.close();
@@ -2187,7 +2201,7 @@ test("control D1 CLI reports the exact predecessor fence transition on recovery"
   const database = new SqliteControlD1Database();
   try {
     await ensureD1OpenTofuLedgerSchema(database);
-    await seedImmediatePredecessorV56(database);
+    await seedImmediatePredecessorV57(database);
     const predecessorFence = await acquireControlD1MaintenanceFence(
       database,
       {
@@ -2239,7 +2253,7 @@ test("control D1 CLI reports the exact predecessor fence transition on recovery"
     expect(code).toBe(0);
     expect(transcript).toMatchObject({
       status: "ready",
-      appliedMigrationVersions: [57],
+      appliedMigrationVersions: [58],
       maintenanceFenceTransition: {
         predecessorSourceCommit: PREDECESSOR_SOURCE_COMMIT,
         predecessorManifestDigest: PREDECESSOR_MANIFEST_DIGEST,
@@ -2270,7 +2284,7 @@ test("control D1 CLI preserves the fence transition on post-apply schema mismatc
   const database = new SqliteControlD1Database();
   try {
     await ensureD1OpenTofuLedgerSchema(database);
-    await seedImmediatePredecessorV56(database);
+    await seedImmediatePredecessorV57(database);
     await database
       .prepare(
         `create trigger unexpected_workspace_trigger
@@ -2355,7 +2369,7 @@ test("control D1 CLI preserves the fence transition on post-apply schema mismatc
       await database
         .prepare(`select max(version) as version from schema_migrations`)
         .first(),
-    ).toEqual({ version: 57 });
+    ).toEqual({ version: 58 });
     await expect(
       database
         .prepare(
@@ -2634,7 +2648,7 @@ test("control D1 REST import transport converges the live v24 fixture through ca
         .map((entry) => entry.version),
     );
     expect(applied.verification.status).toBe("ready");
-    expect(applied.verification.latestMigrationVersion).toBe(57);
+    expect(applied.verification.latestMigrationVersion).toBe(58);
     expect(stats.importIngests).toBeGreaterThan(0);
     expect(stats.queryTriggerRejections).toBe(0);
     expect(await readLiveV24ConvergenceRows(backing)).toEqual(before);

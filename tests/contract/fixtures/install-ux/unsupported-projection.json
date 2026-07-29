@@ -1,0 +1,16 @@
+{
+  "schemaVersion": "takosumi.install-ux/v1",
+  "modules": {
+    ".": {
+      "inputs": [],
+      "installExperience": {
+        "projections": [
+          {
+            "kind": "provider_connection",
+            "variable": "cloudflare_api_token"
+          }
+        ]
+      }
+    }
+  }
+}

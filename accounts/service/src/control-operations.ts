@@ -157,9 +157,25 @@ export interface ControlPlaneOperations {
       subjectId: string,
       permission: "ui.open",
     ): Promise<readonly Interface[]>;
+    listAuthorizedUiSurfaceCandidatesForPrincipalPage(
+      filter: {
+        readonly workspaceId: string;
+        readonly phase: "Resolved";
+      },
+      subjectId: string,
+      permission: "ui.open",
+      params: PageParams,
+      capsuleId?: string,
+    ): Promise<Page<Interface>>;
   };
   readonly resourceCapsuleOwners?: {
     get(resourceId: string): Promise<ResourceCapsuleOwner | undefined>;
+    getMany(resourceIds: readonly string[]): Promise<
+      readonly {
+        readonly resourceId: string;
+        readonly owner: ResourceCapsuleOwner;
+      }[]
+    >;
   };
   // --- Workspaces (§4) ---
   readonly workspaces: {
@@ -252,6 +268,7 @@ export interface ControlPlaneOperations {
       readonly environment: string;
       readonly sourceId: string;
       readonly installConfigId: string;
+      readonly installingPrincipalId: string;
       readonly autoUpdate?: boolean;
     }): Promise<Capsule>;
     putInstallConfig(config: InstallConfig): Promise<InstallConfig>;

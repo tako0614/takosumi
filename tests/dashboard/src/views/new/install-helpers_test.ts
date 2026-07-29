@@ -2,13 +2,18 @@ import { describe, expect, test } from "bun:test";
 import {
   compatibilityCheckLooksTransient,
   compatibilityDiagnosticDisplay,
+  compatibilitySummaryDisplay,
   providerNameFromDiagnostic,
   isSafePlainEnvName,
   storeDefaultInputValue,
   storeEntryFromStoreListing,
   storeMetadataFromStoreListing,
   storeInstallConfigsForSource,
+  storeInstallFeatures,
+  storeInitialSecretField,
   storeSourceMatchesListing,
+  storeSupportsOidc,
+  storeUsesRepositoryInstallUx,
   uniqueStoreInstallConfigForSource,
 } from "../../../../../dashboard/src/views/new/install-helpers.ts";
 import type { TcsListing } from "../../../../../dashboard/src/lib/tcs-client.ts";
@@ -57,6 +62,32 @@ describe("compatibility diagnostics", () => {
         diagnostics: [{ severity: "error", message: "operation was aborted" }],
       }),
     ).toBe(false);
+  });
+
+  test("renders invalid repository setup as fixed actionable copy", () => {
+    const diagnostic = {
+      code: "repository_install_ux_invalid",
+      severity: "error" as const,
+      message: "secret-like raw compiler diagnostic",
+      detail: "AUTH_PASSWORD_HASH=must-not-render",
+    };
+    const display = compatibilityDiagnosticDisplay(diagnostic);
+    expect(display.technical).not.toBe(true);
+    expect(display.message).not.toContain("AUTH_PASSWORD_HASH");
+    expect(display.detail).not.toContain("AUTH_PASSWORD_HASH");
+    expect(
+      compatibilitySummaryDisplay({
+        reportId: "report_1",
+        sourceSnapshotId: "snapshot_1",
+        level: "unsupported",
+        summary: "raw",
+        diagnostics: [diagnostic],
+        providers: [],
+        resources: [],
+        rootModuleVariables: [],
+        source: "api",
+      }),
+    ).not.toContain("AUTH_PASSWORD_HASH");
   });
 });
 
@@ -466,6 +497,125 @@ describe("store install metadata", () => {
         "vanity",
       ),
     ).toBe("https://service.app-staging.takos.jp");
+  });
+
+  test("normalizes malformed public rows instead of calling trim on undefined", () => {
+    const malformedListing = {
+      id: "publisher/malformed",
+      source: { url: "https://example.test/malformed.git", path: "." },
+      kind: "app",
+      surface: "service",
+      provider: undefined,
+      category: "example",
+      suggestedName: "malformed",
+      name: { ja: undefined, en: "Malformed" },
+      description: undefined,
+      badge: { ja: undefined, en: undefined },
+      createdAt: "2026-07-10T00:00:00.000Z",
+      updatedAt: "2026-07-10T00:00:00.000Z",
+    } as unknown as TcsListing;
+    const config = installConfig({
+      variablePresentation: [
+        {
+          name: "display_name",
+          label: undefined,
+        } as unknown as NonNullable<
+          InstallConfig["variablePresentation"]
+        >[number],
+        {
+          name: undefined,
+          label: { ja: "壊れた値", en: "Broken" },
+        } as unknown as NonNullable<
+          InstallConfig["variablePresentation"]
+        >[number],
+      ],
+      installExperience: {
+        projections: [
+          {
+            kind: "service_name",
+            variable: undefined,
+          } as unknown as NonNullable<
+            InstallConfig["installExperience"]
+          >["projections"][number],
+        ],
+      },
+    });
+
+    expect(() =>
+      storeEntryFromStoreListing(malformedListing, config),
+    ).not.toThrow();
+    const entry = storeEntryFromStoreListing(malformedListing, config);
+    expect(entry.name).toEqual({ ja: "Malformed", en: "Malformed" });
+    expect(entry.inputs).toHaveLength(1);
+    expect(entry.inputs[0]?.label).toEqual({
+      ja: "display_name",
+      en: "display_name",
+    });
+    expect(entry.setupProjectionInvalid).toBe(true);
+  });
+
+  test("reads authentication and features only from compiled InstallConfig", () => {
+    const config = installConfig({
+      variablePresentation: [
+        {
+          name: "admin_password",
+          type: "string",
+          secret: true,
+          label: { ja: "初期パスワード", en: "Initial password" },
+        },
+        {
+          name: "push_token",
+          type: "string",
+          secret: true,
+          label: { ja: "通知トークン", en: "Notification token" },
+        },
+      ],
+      installExperience: {
+        repositoryInstallUx: { status: "accepted" },
+        projections: [
+          {
+            kind: "initial_secret",
+            variable: "admin_password",
+            secretKind: "password",
+          },
+          {
+            kind: "oidc_client",
+            variables: { issuerUrl: "oidc_issuer" },
+            callbackPath: "/api/auth/callback",
+          },
+        ],
+        features: [
+          {
+            id: "notifications",
+            label: { ja: "通知", en: "Notifications" },
+            optional: true,
+            inputs: ["push_token"],
+          },
+        ],
+      },
+    });
+    const listing = {
+      id: "publisher/example",
+      source: { url: "https://example.test/example.git", path: "." },
+      kind: "app",
+      surface: "service",
+      provider: "example",
+      category: "example",
+      suggestedName: "example",
+      name: { ja: "Example", en: "Example" },
+      description: { ja: "Example", en: "Example" },
+      badge: { ja: "追加", en: "Install" },
+      createdAt: "2026-07-10T00:00:00.000Z",
+      updatedAt: "2026-07-10T00:00:00.000Z",
+    } satisfies TcsListing;
+    const entry = storeEntryFromStoreListing(listing, config);
+
+    expect(storeSupportsOidc(entry)).toBe(true);
+    expect(storeInitialSecretField(entry)?.name).toBe("admin_password");
+    expect(storeInstallFeatures(entry).map((feature) => feature.id)).toEqual([
+      "notifications",
+    ]);
+    expect(storeUsesRepositoryInstallUx(entry)).toBe(true);
   });
 });
 

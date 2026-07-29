@@ -33,6 +33,7 @@ import {
   prettyJson,
   resourceOutputKeys,
   resourcePhaseTone,
+  resourceSafeUrlProjections,
 } from "../../lib/resource-shapes.ts";
 import { useConfirmDialog } from "../../lib/confirm-dialog.ts";
 import { formatDateTime, t } from "../../i18n/index.ts";
@@ -432,6 +433,22 @@ function Inner(): JSX.Element {
                     subtitle={t("resources.detail.outputsHint")}
                   />
                   <CardSection>
+                    <Show when={resourceSafeUrlProjections(item()).length > 0}>
+                      <div class="rs-output-links">
+                        <For each={resourceSafeUrlProjections(item())}>
+                          {(output) => (
+                            <a
+                              href={output.url}
+                              target="_blank"
+                              rel="noreferrer noopener"
+                            >
+                              <code>{output.outputName}</code>
+                              <span>{output.url}</span>
+                            </a>
+                          )}
+                        </For>
+                      </div>
+                    </Show>
                     <Show
                       when={resourceOutputKeys(item()).length > 0}
                       fallback={<p class="rs-muted">{t("common.none")}</p>}

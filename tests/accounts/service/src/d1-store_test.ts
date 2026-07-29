@@ -62,6 +62,52 @@ test("D1AccountsStore indexes Capsule OIDC registrations directly", async () => 
   expect(await store.findOidcClientForCapsule("cap_d1")).toBeUndefined();
 });
 
+test("D1AccountsStore predeployed mode performs zero DDL across document operations", async () => {
+  registerSessionHashSaltConfig({ salt: "d1-predeployed-session-salt" });
+  const db = new CountingD1Database();
+  await new D1AccountsStore(db).initialize();
+  db.resetExecCount();
+
+  const store = new D1AccountsStore(db, { schemaMode: "predeployed" });
+  await store.initialize();
+  await store.saveAccount({
+    subject: "tsub_predeployed",
+    email: "predeployed@example.test",
+    emailVerified: true,
+    createdAt: 1_000,
+    updatedAt: 1_000,
+  });
+  await store.saveAccountSession({
+    sessionId: "sess_predeployed",
+    subject: "tsub_predeployed",
+    createdAt: 1_000,
+    expiresAt: 60_000,
+  });
+
+  expect((await store.findAccount("tsub_predeployed"))?.email).toBe(
+    "predeployed@example.test",
+  );
+  expect(
+    (await store.findAccountByVerifiedEmail("predeployed@example.test"))
+      ?.subject,
+  ).toBe("tsub_predeployed");
+  expect((await store.findAccountSession("sess_predeployed"))?.subject).toBe(
+    "tsub_predeployed",
+  );
+
+  await store.deleteAccountSession("sess_predeployed");
+  expect(await store.findAccountSession("sess_predeployed")).toBeUndefined();
+  expect(db.execCount).toBe(0);
+});
+
+test("D1AccountsStore predeployed mode fails closed on a missing schema without DDL", async () => {
+  const db = new CountingD1Database();
+  const store = new D1AccountsStore(db, { schemaMode: "predeployed" });
+
+  await expect(store.findAccount("tsub_missing_schema")).rejects.toThrow();
+  expect(db.execCount).toBe(0);
+});
+
 test("D1AccountsStore resolves a session and its account in one exact bearer query", async () => {
   registerSessionHashSaltConfig({ salt: "d1-bearer-session-salt" });
   const db = new CountingD1Database();
@@ -171,10 +217,12 @@ test("D1AccountsStore rotates sessions with one durable compare-and-replace batc
   );
   expect(await store.findAccountSession(previous.sessionId)).toBeUndefined();
   expect(await store.findAccountSession(next.sessionId)).toEqual(next);
-  expect(await store.replaceAccountSession(previous.sessionId, {
-    ...next,
-    sessionId: "sess_lost_race",
-  })).toBe(false);
+  expect(
+    await store.replaceAccountSession(previous.sessionId, {
+      ...next,
+      sessionId: "sess_lost_race",
+    }),
+  ).toBe(false);
   expect(await store.findAccountSession("sess_lost_race")).toBeUndefined();
 });
 
@@ -213,6 +261,7 @@ test("D1AccountsStore updates account documents and verified-email indexes atomi
 
 class CountingD1Database implements D1Database {
   readonly #delegate = new SqliteFakeD1();
+  execCount = 0;
   prepareCount = 0;
 
   prepare(query: string): D1PreparedStatement {
@@ -221,6 +270,7 @@ class CountingD1Database implements D1Database {
   }
 
   exec(query: string): Promise<D1ExecResult> {
+    this.execCount += 1;
     return this.#delegate.exec(query);
   }
 
@@ -232,6 +282,10 @@ class CountingD1Database implements D1Database {
 
   resetPrepareCount(): void {
     this.prepareCount = 0;
+  }
+
+  resetExecCount(): void {
+    this.execCount = 0;
   }
 }
 
@@ -322,9 +376,7 @@ class MemoryD1Statement implements D1PreparedStatement {
     ) {
       const [nextKey, nextDocument] = this.#stringValues(2);
       const previousKey = stringBindValue(this.#rawValues()[3]);
-      if (
-        this.db.documents.has(documentKey("account_sessions", previousKey))
-      ) {
+      if (this.db.documents.has(documentKey("account_sessions", previousKey))) {
         this.db.documents.set(
           documentKey("account_sessions", nextKey),
           nextDocument,

@@ -11,6 +11,7 @@ import {
   type ControlPlaneOperations,
   D1AccountsStore,
   type D1Database,
+  type D1AccountsSchemaMode,
   handleAuthProvidersRequest,
   type JsonWebKeySet,
   type OidcClientAuthMethod,
@@ -22,6 +23,7 @@ import {
   upstreamOAuthOptionsFromEnvironment,
   type LoginEmailAllowlist,
   type InterfaceOAuthActivityValidator,
+  resolveD1AccountsSchemaMode,
   resolveTakosumiMobileOidcClientId,
 } from "@takosjp/takosumi-accounts-service";
 import { isAccountsApiPath, isWorkerLocalPath } from "./routes.ts";
@@ -35,7 +37,7 @@ export interface CloudflareWorkerEnv {
    * must run and verify the accounts migration lane before enabling it.
    * Self-host/bootstrap environments retain the idempotent default.
    */
-  readonly TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE?: "bootstrap" | "predeployed";
+  readonly TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE?: D1AccountsSchemaMode;
   // Cloudflare Static Assets binding for the bundled dashboard SPA
   // (dashboard → dist). Present when the wrangler `[assets]` block is
   // configured; absent in API-only deploys/tests.
@@ -381,7 +383,7 @@ async function buildAccountsHandler<TEnv extends CloudflareWorkerEnv>(
   }
   const schemaMode = accountsD1SchemaMode(env);
   configureSessionHashSalt(env);
-  const store = new D1AccountsStore(env.TAKOSUMI_ACCOUNTS_DB);
+  const store = new D1AccountsStore(env.TAKOSUMI_ACCOUNTS_DB, { schemaMode });
   if (schemaMode === "bootstrap") {
     await store.initialize();
   }
@@ -528,12 +530,8 @@ async function ensureD1SchemaVersion(
 
 function accountsD1SchemaMode(
   env: Pick<CloudflareWorkerEnv, "TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE">,
-): "bootstrap" | "predeployed" {
-  const value = env.TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE ?? "bootstrap";
-  if (value === "bootstrap" || value === "predeployed") return value;
-  throw new TypeError(
-    "TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE must be bootstrap or predeployed",
-  );
+): D1AccountsSchemaMode {
+  return resolveD1AccountsSchemaMode(env.TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE);
 }
 
 async function seedLocalSubstrateAccount(

@@ -689,6 +689,30 @@ export const en: Record<keyof typeof ja, string> = {
   "new.identity.label": "Public URL",
   "new.identity.edit": "Change",
   "new.identity.done": "Close",
+  "new.auth.title": "Authentication",
+  "new.auth.subtitle": "Choose how the first administrator signs in.",
+  "new.auth.mode": "Sign-in method",
+  "new.auth.oidc": "Sign in with Takosumi",
+  "new.auth.oidcHint":
+    "Takosumi registers the app and links the account adding this service.",
+  "new.auth.password": "Password",
+  "new.auth.initialPassword": "Initial password",
+  "new.auth.passwordHint":
+    "Set the first administrator password. It is handled as private setup material.",
+  "new.auth.unavailableTitle":
+    "This sign-in method is unavailable on this host",
+  "new.auth.unavailableBody":
+    "This host does not provide a safe password materialization path. The app publisher or operator needs to add support.",
+  "new.features.title": "Optional features",
+  "new.features.subtitle":
+    "Turn on only the integrations you want to configure now.",
+  "new.installUx.invalidTitle": "This app's setup form is unavailable",
+  "new.installUx.invalidBody":
+    "The setup declaration does not match this app version. The app publisher needs to update it before this Store install can continue.",
+  "new.installUx.loadingTitle": "Checking setup for this app version",
+  "new.installUx.loadingBody":
+    "Takosumi is preparing a validated setup form from the same commit as the app.",
+  "new.installUx.repositoryOwned": "Setup provided by app",
   "new.storeInput.title": "Initial setup",
   "new.storeInput.subtitle": "Settings this app asks for.",
   "new.storeInput.errorRequired": "Enter {label}.",
@@ -812,12 +836,18 @@ export const en: Record<keyof typeof ja, string> = {
     "Review the items above. Some issues require changes to the service itself, while others can be resolved by setting up the required connected account.",
   "new.compat.summary.providerCredentials":
     "Remove {provider} private values from the source before adding this.",
+  "new.compat.summary.installUxInvalid":
+    "This app version's setup declaration needs to be fixed by its publisher.",
   "new.compat.summary.reviewRequired":
     "An item needs review before this can be added.",
   "new.compat.issue.providerCredentials.message":
     "{provider} private values are written in the source.",
   "new.compat.issue.providerCredentials.detail":
     "Do not keep API tokens or account IDs in code. Remove those values, then connect {provider} access so Takosumi can pass them only while deploying.",
+  "new.compat.issue.installUxInvalid.message":
+    "The app's setup declaration does not match the selected version.",
+  "new.compat.issue.installUxInvalid.detail":
+    "Choose another version or ask the app publisher to update .well-known/takosumi.json. Takosumi will not replace it with raw module variables.",
   "new.compat.issue.providerPreserved.message":
     "The repository's non-secret {provider} configuration will be preserved.",
   "new.compat.issue.backendIsolated.message":
@@ -858,6 +888,12 @@ export const en: Record<keyof typeof ja, string> = {
     "Use lowercase letters, numbers, and hyphens only for the service name.",
   "new.error.configMissing": "Add configuration is not available yet.",
   "new.error.configLoading": "Loading add configuration.",
+  "new.error.installUxInvalid":
+    "This app's setup form is invalid. Choose another version or wait for the publisher to fix it.",
+  "new.error.installUxPreviewMissing":
+    "The validated setup form is unavailable. Check it again before adding this app.",
+  "new.error.secretSetupUnavailable":
+    "This host cannot safely materialize the private setup required by this app, so it cannot be added here yet.",
   "new.error.configLoadFailed":
     "The add settings could not be loaded. Check your connection and retry.",
   "new.error.syncPending":
@@ -1496,9 +1532,9 @@ export const en: Record<keyof typeof ja, string> = {
   "resources.condition.bad": "Not OK",
   "resources.detail.conditions": "Conditions",
   "resources.detail.conditionsHint": "Public reconcile and drift status",
-  "resources.detail.outputs": "Output keys",
+  "resources.detail.outputs": "Outputs",
   "resources.detail.outputsHint":
-    "Values stay hidden here; only public key names are listed.",
+    "Explicitly safe public URLs can be opened; every other value stays hidden.",
   "resources.detail.events": "Operation history",
   "resources.detail.eventsHint": "Non-secret Activity / Run projections",
   "resources.detail.noEvents": "No operation history yet.",
@@ -1547,6 +1583,8 @@ export const en: Record<keyof typeof ja, string> = {
   "account.apiKeys.scope.read": "Read",
   "account.apiKeys.scope.write": "Write",
   "account.apiKeys.scope.admin": "Admin",
+  "account.apiKeys.scopesHint":
+    "Choose only what this key needs. Administrative access is operator-issued and cannot be created here.",
   "account.apiKeys.restrictWorkspace":
     "Restrict this key to the current Workspace",
   "account.apiKeys.create": "Create API key",
@@ -1615,6 +1653,18 @@ export const en: Record<keyof typeof ja, string> = {
     "Payment setup was cancelled. No changes were made.",
   "billing.commercial.manage": "Manage payment method",
   "billing.commercial.status.unknown": "Unknown",
+  "billing.commercial.account.status.active": "Cloud usage available",
+  "billing.commercial.account.status.trialing": "Cloud usage available",
+  "billing.commercial.account.status.pastDue": "Payment needs attention",
+  "billing.commercial.account.status.disabled": "Cloud usage suspended",
+  "billing.commercial.account.blocked.paymentDisputed":
+    "New Takosumi Cloud usage is blocked while a payment dispute is open. Your visible prepaid credit does not expire. Resolve the dispute in payment settings.",
+  "billing.commercial.account.blocked.paymentPastDue":
+    "New Takosumi Cloud usage is blocked because payment could not be confirmed. Your visible prepaid credit does not expire. Review your payment method.",
+  "billing.commercial.account.blocked.disabled":
+    "New Takosumi Cloud usage is blocked because the billing account is disabled. Your visible prepaid credit does not expire. Review payment settings.",
+  "billing.commercial.account.blocked.suspended":
+    "New Takosumi Cloud usage is blocked while the billing account needs attention. Your visible prepaid credit does not expire. Review payment settings.",
   "billing.commercial.customerType.label": "Account type",
   "billing.commercial.customerType.individual": "Individual",
   "billing.commercial.customerType.business": "Business",
@@ -1663,5 +1713,7 @@ export const en: Record<keyof typeof ja, string> = {
   "billing.commercial.payment.count": "{count} credit payments",
   "billing.commercial.payment.status.paid": "Paid",
   "billing.commercial.payment.status.failed": "Failed",
+  "billing.commercial.payment.status.partiallyRefunded": "Partially refunded",
   "billing.commercial.payment.status.refunded": "Refunded",
+  "billing.commercial.payment.status.disputed": "Disputed",
 };

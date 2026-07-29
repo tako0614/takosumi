@@ -133,6 +133,14 @@ test("container runner returns sanitized source sync phase timings", async () =>
         status: "present",
         text: '{"schemaVersion":"tcs.repo/v1"}',
       },
+      repositoryInstallUx: {
+        status: "present",
+        digest: `sha256:${"c".repeat(64)}`,
+        document: {
+          schemaVersion: "takosumi.install-ux/v1",
+          modules: { ".": { inputs: [] } },
+        },
+      },
       phaseTimings: [
         {
           phase: "source_ref_resolve",
@@ -174,6 +182,14 @@ test("container runner returns sanitized source sync phase timings", async () =>
   expect(result.repositoryInstallMetadata).toEqual({
     status: "present",
     text: '{"schemaVersion":"tcs.repo/v1"}',
+  });
+  expect(result.repositoryInstallUx).toEqual({
+    status: "present",
+    digest: `sha256:${"c".repeat(64)}`,
+    document: {
+      schemaVersion: "takosumi.install-ux/v1",
+      modules: { ".": { inputs: [] } },
+    },
   });
 });
 

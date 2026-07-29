@@ -44,6 +44,7 @@ import type {
 import {
   CAPSULE_LIFECYCLE_ACTION_FAILED_ERROR_CODE,
   type InstallConfigLifecycleAction,
+  type InstallConfigLifecycleCommandAction,
   type InstallConfigLifecyclePhase,
   type ManagedPublicHostnameClaimRequest,
   type ManagedPublicHostnameClaimResult,
@@ -219,6 +220,7 @@ import type {
   PlanCompletionVerdict,
   PlanPolicyLayers,
   PlanRunInternalContext,
+  ReleaseActivationAction,
   ReleaseActivationCommand,
   ReleaseActivationResult,
   ReleaseActivationStatus,
@@ -822,7 +824,7 @@ function lifecycleActionsForPlan(
   for (const action of actions) {
     if (
       action.apiVersion !== "takosumi.dev/v1alpha1" ||
-      action.kind !== "command"
+      (action.kind !== "command" && action.kind !== "resource_migration")
     ) {
       throw new OpenTofuControllerError(
         "failed_precondition",
@@ -851,6 +853,7 @@ function lifecycleActionsForPlan(
       );
     }
     if (
+      action.kind === "command" &&
       action.useProviderCredentials === true &&
       (action.executor !== "runner" || policy.allowProviderCredentials !== true)
     ) {
@@ -901,7 +904,10 @@ function assertRunnerLifecycleCredentialModes(
 ): void {
   for (const phase of ["post_apply", "pre_destroy"] as const) {
     const runnerActions = actions.filter(
-      (action) => action.phase === phase && action.executor === "runner",
+      (action): action is InstallConfigLifecycleCommandAction =>
+        action.kind === "command" &&
+        action.phase === phase &&
+        action.executor === "runner",
     );
     const credentialActions = runnerActions.filter(
       (action) => action.useProviderCredentials === true,
@@ -1687,6 +1693,30 @@ export class RunEngine {
     const destroySnapshotId = destroy
       ? await this.#destroySourceSnapshotIdForCapsule(capsule)
       : undefined;
+    const acceptedRepositoryInstallUx =
+      installConfig.installExperience?.repositoryInstallUx?.status ===
+        "accepted" &&
+      !capsule.currentStateVersionId &&
+      !destroy;
+    const repositoryInstallUxSnapshotId = acceptedRepositoryInstallUx
+      ? installConfig.internal?.sourceSnapshotId
+      : undefined;
+    if (acceptedRepositoryInstallUx && !repositoryInstallUxSnapshotId) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "repository_install_ux_snapshot_missing: the initial Plan has no reviewed SourceSnapshot pin",
+      );
+    }
+    if (
+      repositoryInstallUxSnapshotId &&
+      internal.sourceSnapshotId &&
+      internal.sourceSnapshotId !== repositoryInstallUxSnapshotId
+    ) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "repository_install_ux_snapshot_mismatch: an initial Plan cannot replace the reviewed SourceSnapshot pin",
+      );
+    }
     const resolved = internal.sourceSnapshotId
       ? await planCreationStage(
           "source_snapshot_pin",
@@ -1700,14 +1730,22 @@ export class RunEngine {
             "source_snapshot_destroy_pin",
             this.#requireSourceSnapshotForSource(stored.id, destroySnapshotId),
           )
-        : await planCreationStage(
-            "source_snapshot_latest",
-            this.#resolveLatestSnapshot(
-              stored.id,
-              stored.defaultRef,
-              stored.defaultPath,
-            ),
-          );
+        : repositoryInstallUxSnapshotId
+          ? await planCreationStage(
+              "source_snapshot_install_ux_pin",
+              this.#requireSourceSnapshotForSource(
+                stored.id,
+                repositoryInstallUxSnapshotId,
+              ),
+            )
+          : await planCreationStage(
+              "source_snapshot_latest",
+              this.#resolveLatestSnapshot(
+                stored.id,
+                stored.defaultRef,
+                stored.defaultPath,
+              ),
+            );
     if (!resolved) {
       throw sourceSyncRequiredError(
         `source_sync_required: Capsule ${capsuleId} has no ` +
@@ -1716,6 +1754,18 @@ export class RunEngine {
       );
     }
     const snapshot: SourceSnapshot = resolved;
+    if (
+      repositoryInstallUxSnapshotId &&
+      (snapshot.repositoryInstallUx?.status !== "present" ||
+        !installConfig.internal?.repositoryInstallUxDigest ||
+        snapshot.repositoryInstallUx.digest !==
+          installConfig.internal.repositoryInstallUxDigest)
+    ) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "repository_install_ux_snapshot_mismatch: the initial Plan snapshot does not match the reviewed install configuration",
+      );
+    }
     // The Capsule's current state generation drives the dispatch
     // restore/persist arithmetic. No prior StateVersion -> generation 0.
     const latestState = await planCreationStage(
@@ -1911,6 +1961,46 @@ export class RunEngine {
         "not_found",
         `source ${capsule.sourceId} not found for capsule ${capsule.id}`,
       );
+    }
+    if (!capsule.currentStateVersionId) {
+      const installConfig = await this.#store.getInstallConfig(
+        capsule.installConfigId,
+      );
+      if (!installConfig) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `install_config_not_found: ${capsule.installConfigId}`,
+        );
+      }
+      const acceptedRepositoryInstallUx =
+        installConfig.installExperience?.repositoryInstallUx?.status ===
+        "accepted";
+      const pinnedSnapshotId = installConfig.internal?.sourceSnapshotId;
+      if (acceptedRepositoryInstallUx && !pinnedSnapshotId) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          "repository_install_ux_snapshot_missing: the initial Plan has no reviewed SourceSnapshot pin",
+        );
+      }
+      if (pinnedSnapshotId) {
+        const snapshot = await this.#requireSourceSnapshotForSource(
+          source.id,
+          pinnedSnapshotId,
+        );
+        const expectedDigest =
+          installConfig.internal?.repositoryInstallUxDigest;
+        if (
+          !expectedDigest ||
+          snapshot.repositoryInstallUx?.status !== "present" ||
+          snapshot.repositoryInstallUx.digest !== expectedDigest
+        ) {
+          throw new OpenTofuControllerError(
+            "failed_precondition",
+            "repository_install_ux_snapshot_mismatch: the initial Plan snapshot does not match the reviewed install configuration",
+          );
+        }
+        return snapshot.id;
+      }
     }
     const snapshot = await this.#resolveLatestSnapshot(
       source.id,
@@ -7118,7 +7208,7 @@ export class RunEngine {
   async #releaseEnvironmentForCommands(input: {
     readonly planRun: PlanRun;
     readonly applyRun: ApplyRun;
-    readonly commands: readonly ReleaseActivationCommand[];
+    readonly commands: readonly ReleaseActivationAction[];
     readonly phase: "apply" | "destroy";
   }): Promise<ResolvedRunEnvironment> {
     return await this.#runEnv.resolveRunEnvironment({
@@ -7127,7 +7217,9 @@ export class RunEngine {
       auditRunId: releaseCommandRunId(input.applyRun.id),
       credentialContext: "release_command",
       mintCredentials: input.commands.some(
-        (command) => command.useProviderCredentials === true,
+        (command) =>
+          command.kind !== "resource_migration" &&
+          command.useProviderCredentials === true,
       ),
     });
   }

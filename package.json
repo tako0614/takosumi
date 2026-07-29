@@ -8,6 +8,7 @@
     "takosumi": "cli/src/main.ts"
   },
   "workspaces": [
+    "contract",
     "accounts/contract",
     "accounts/service",
     "cli",

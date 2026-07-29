@@ -196,9 +196,16 @@ does not influence the authorization principal. The response contains only
 authorized Interfaces and never exposes InterfaceBinding records.
 
 ```http
-GET /api/v1/workspaces/{workspaceId}/ui-surfaces
-GET /api/v1/workspaces/{workspaceId}/ui-surfaces?capsuleId={capsuleId}
+GET /api/v1/workspaces/{workspaceId}/ui-surfaces?limit=100
+GET /api/v1/workspaces/{workspaceId}/ui-surfaces?capsuleId={capsuleId}&limit=50
+GET /api/v1/workspaces/{workspaceId}/ui-surfaces?cursor=<opaque>&limit=100
 ```
+
+The response contains `interfaces` and an optional `nextCursor`. The read
+defaults to 100 rows and clamps larger limits to 100. Authorization is resolved
+with a bounded current-Principal Binding query; listing never reconciles or
+writes Interface lifecycle state. Individual invocation and token issuance
+still revalidate the exact Interface and Binding immediately before use.
 
 A Run is one ledger entry with a `plan`, `apply`, `destroy`, `refresh`, or
 `output` operation. Plan / Apply / Destroy are not separate ledgers.

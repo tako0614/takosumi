@@ -33,7 +33,7 @@ function seedSession(store: InMemoryAccountsStore): string {
   return `${ACCOUNT_SESSION_COOKIE_NAME}=${sessionId}`;
 }
 
-test("Workspace UI surface projection uses the exact session Principal and fails closed", async () => {
+test("Workspace UI surface projection is bounded, read-only, and fails closed", async () => {
   const accountStore = new InMemoryAccountsStore();
   const cookie = seedSession(accountStore);
   const deployStore = new InMemoryOpenTofuControlStore();
@@ -152,7 +152,55 @@ test("Workspace UI surface projection uses the exact session Principal and fails
   ]);
   expect(
     (await operations.interfaces.get(stale.metadata.id)).status.phase,
-  ).toBe("NotReady");
+  ).toBe("Resolved");
+
+  const pagedRequest = new Request(
+    `${ORIGIN}/api/v1/workspaces/${primary.workspace.id}/ui-surfaces?limit=1`,
+    { headers: { cookie } },
+  );
+  const pagedResponse = await handleControlRoute({
+    request: pagedRequest,
+    url: new URL(pagedRequest.url),
+    store: accountStore,
+    operations,
+  });
+  const pagedBody = (await pagedResponse?.json()) as {
+    readonly interfaces: readonly unknown[];
+    readonly nextCursor?: string;
+  };
+  expect(pagedResponse?.status).toBe(200);
+  expect(pagedBody.interfaces.length).toBeLessThanOrEqual(1);
+  expect(pagedBody.nextCursor).toBeString();
+
+  const malformedCursorRequest = new Request(
+    `${ORIGIN}/api/v1/workspaces/${primary.workspace.id}/ui-surfaces?cursor=not-a-cursor`,
+    { headers: { cookie } },
+  );
+  expect(
+    (
+      await handleControlRoute({
+        request: malformedCursorRequest,
+        url: new URL(malformedCursorRequest.url),
+        store: accountStore,
+        operations,
+      })
+    )?.status,
+  ).toBe(400);
+
+  const clampedRequest = new Request(
+    `${ORIGIN}/api/v1/workspaces/${primary.workspace.id}/ui-surfaces?limit=1000`,
+    { headers: { cookie } },
+  );
+  expect(
+    (
+      await handleControlRoute({
+        request: clampedRequest,
+        url: new URL(clampedRequest.url),
+        store: accountStore,
+        operations,
+      })
+    )?.status,
+  ).toBe(200);
 
   const projectionInterfaces = new InterfaceService({
     stores: interfaceStores,
@@ -199,16 +247,26 @@ test("Workspace UI surface projection uses the exact session Principal and fails
     permissions: ["ui.open"],
     delivery: { type: "none" },
   });
+  let resourceOwnerBulkReads = 0;
   const projectionOperations = {
     ...operations,
     interfaces: projectionInterfaces,
     resourceCapsuleOwners: {
-      get: async () => ({
-        kind: "Capsule" as const,
-        id: primary.capsule.id,
-        workspaceId: primary.workspace.id,
-        installingPrincipalId: SUBJECT,
-      }),
+      get: async () => {
+        throw new Error("UI surface list must not perform per-Resource reads");
+      },
+      getMany: async (resourceIds: readonly string[]) => {
+        resourceOwnerBulkReads += 1;
+        return resourceIds.map((resourceId) => ({
+          resourceId,
+          owner: {
+            kind: "Capsule" as const,
+            id: primary.capsule.id,
+            workspaceId: primary.workspace.id,
+            installingPrincipalId: SUBJECT,
+          },
+        }));
+      },
     },
   };
 
@@ -232,6 +290,7 @@ test("Workspace UI surface projection uses the exact session Principal and fails
       }
     ).interfaces.map((iface) => iface.metadata.id),
   ).toEqual([allowed.metadata.id, resourceLauncher.metadata.id]);
+  expect(resourceOwnerBulkReads).toBe(1);
 
   const foreignRequest = new Request(
     `${ORIGIN}/api/v1/workspaces/${foreign.workspace.id}/ui-surfaces`,

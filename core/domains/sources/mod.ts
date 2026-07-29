@@ -473,6 +473,7 @@ export class SourcesService {
       dataSources: analysis.dataSources,
       provisioners: analysis.provisioners,
       rootModuleVariables: analysis.rootModuleVariables,
+      rootModuleVariableDeclarations: analysis.rootModuleVariableDeclarations,
       rootModuleOutputs: analysis.rootModuleOutputs,
       createdAt: this.#now().toISOString(),
     };
@@ -837,6 +838,7 @@ function compatibilityCheckFailureAnalysis(
     dataSources: [],
     provisioners: [],
     rootModuleVariables: [],
+    rootModuleVariableDeclarations: [],
     rootModuleOutputs: [],
   };
 }

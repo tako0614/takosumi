@@ -93,16 +93,42 @@ test("shipped Worker projects Resource Interfaces and repairs their lifecycle th
     updatedAt: "2026-07-14T00:01:00.000Z",
   });
 
-  // Runtime discovery is the durable lifecycle repair boundary. It must use
-  // the same host bridge as creation/projection and stop a missed observer
-  // transition before returning the old Ready Binding.
+  // Capability discovery is a bounded, read-only projection. A missed observer
+  // transition may still appear in that snapshot, but listing must not mutate
+  // Interface/Binding lifecycle or publish a projection as a side effect.
   expect(
     await operations.interfaces.listAuthorizedForPrincipal(
       { workspaceId: WORKSPACE_ID },
       "principal_cloud_1",
       "edge.request",
     ),
-  ).toEqual([]);
+  ).toHaveLength(1);
+  expect(
+    (await operations.interfaces.get(iface.metadata.id)).status.phase,
+  ).toBe("Resolved");
+  expect(
+    (
+      await operations.interfaces.getBinding(
+        iface.metadata.id,
+        binding.metadata.id,
+      )
+    ).status.phase,
+  ).toBe("Ready");
+  expect(
+    snapshots.some(
+      (snapshot) => snapshot.interface.status.phase === "Terminating",
+    ),
+  ).toBe(false);
+
+  // Invocation/token issuance still revalidates the exact Interface through
+  // the host bridge and fails closed before returning stale authority.
+  await expect(
+    operations.interfaces.getAuthorizedForPrincipal(
+      iface.metadata.id,
+      "principal_cloud_1",
+      "edge.request",
+    ),
+  ).rejects.toThrow("Interface not found");
   expect(
     (await operations.interfaces.get(iface.metadata.id)).status.phase,
   ).toBe("NotReady");
@@ -114,11 +140,6 @@ test("shipped Worker projects Resource Interfaces and repairs their lifecycle th
       )
     ).status.phase,
   ).toBe("NotReady");
-  expect(
-    snapshots.some(
-      (snapshot) => snapshot.interface.status.phase === "Terminating",
-    ),
-  ).toBe(true);
   expect(snapshots.at(-1)).toMatchObject({
     interface: { status: { phase: "NotReady" } },
   });

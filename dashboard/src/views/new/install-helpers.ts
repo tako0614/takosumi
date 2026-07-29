@@ -9,8 +9,6 @@
  */
 import {
   installConfigSourceCoordinateMatches,
-  installExperiencePublicEndpoint,
-  installExperienceServiceNameVariable,
   normalizeInstallConfigSourcePath,
   normalizeInstallConfigSourceUrl,
   type JsonValue,
@@ -78,12 +76,62 @@ type StoreEntry = NonNullable<InstallConfig["store"]> & {
   readonly inputs: NonNullable<InstallConfig["variablePresentation"]>;
   readonly installExperience?: InstallConfig["installExperience"];
   /**
+   * A legacy or malformed API row must not crash the Store screen or silently
+   * become a raw-variable form. The compatibility endpoint reports repository
+   * compiler failures separately; this flag covers only an invalid public
+   * InstallConfig projection received by the dashboard.
+   */
+  readonly setupProjectionInvalid?: boolean;
+  /**
    * Store-listing presentation only. Publisher identity comes from the Store
    * node, never from the InstallConfig, and never grants install authority.
    */
   readonly publisher?: TcsListing["publisher"];
 };
 type StoreInputField = StoreEntry["inputs"][number];
+type StoreInstallFeature = NonNullable<
+  NonNullable<InstallConfig["installExperience"]>["features"]
+>[number];
+type StoreAuthMode = "oidc" | "password";
+
+function safeText(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function localizedStoreText(
+  value: unknown,
+  fallback: string,
+): { readonly ja: string; readonly en: string } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { ja: fallback, en: fallback };
+  }
+  const record = value as Readonly<Record<string, unknown>>;
+  const ja = safeText(record.ja);
+  const en = safeText(record.en);
+  return {
+    ja: ja || en || fallback,
+    en: en || ja || fallback,
+  };
+}
+
+function storeInputLabel(field: StoreInputField, locale: "ja" | "en"): string {
+  return localizedStoreText(field.label, field.name)[locale];
+}
+
+function storeInputHelper(
+  field: StoreInputField,
+  locale: "ja" | "en",
+): string | undefined {
+  const value = localizedStoreText(field.helper, "")[locale];
+  return value || undefined;
+}
+
+function storeFeatureLabel(
+  feature: StoreInstallFeature,
+  locale: "ja" | "en",
+): string {
+  return localizedStoreText(feature.label, feature.id)[locale];
+}
 
 function compatibilityTone(level: CapsuleCompatibilityLevel): Tone {
   switch (level) {
@@ -126,6 +174,12 @@ function compatibilityDiagnosticDisplay(
 } {
   const provider = providerDisplayName(providerNameFromDiagnostic(diagnostic));
   const code = diagnostic.code;
+  if (isRepositoryInstallUxDiagnostic(diagnostic)) {
+    return {
+      message: t("new.compat.issue.installUxInvalid.message"),
+      detail: t("new.compat.issue.installUxInvalid.detail"),
+    };
+  }
   if (code === "provider_credentials_in_source") {
     return {
       message: t("new.compat.issue.providerCredentials.message", {
@@ -155,6 +209,9 @@ function compatibilityDiagnosticDisplay(
 function compatibilitySummaryDisplay(
   result: CapsuleCompatibilityResult,
 ): string {
+  if (result.diagnostics.some(isRepositoryInstallUxDiagnostic)) {
+    return t("new.compat.summary.installUxInvalid");
+  }
   const credentialDiagnostic = result.diagnostics.find(
     (diagnostic) => diagnostic.code === "provider_credentials_in_source",
   );
@@ -198,7 +255,7 @@ function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
 function sourceFetchErrorMessage(
   apiError: ControlApiError | undefined,
 ): string {
-  const message = apiError?.message.trim() ?? "";
+  const message = safeText(apiError?.message);
   const refMatch = /source ref did not resolve to a commit:\s*([^\s)]+)/iu.exec(
     message,
   );
@@ -216,7 +273,7 @@ function safeControlApiErrorMessage(
   if (apiError?.isAppHostnameUnavailable || apiError?.isDuplicateService) {
     return undefined;
   }
-  const message = apiError?.message.replace(/\s+/gu, " ").trim();
+  const message = safeText(apiError?.message).replace(/\s+/gu, " ");
   if (!message) return undefined;
   // Generic API bucket phrases ("internal error", "invalid request") explain
   // nothing — showing them as 詳細 reads as a raw leak. Fall back to the
@@ -369,7 +426,31 @@ function storeInputKey(entryId: string, fieldName: string): string {
 }
 
 function storePublicEndpoint(entry: StoreEntry) {
-  return installExperiencePublicEndpoint(entry.installExperience);
+  const projections = entry.installExperience?.projections;
+  if (!Array.isArray(projections)) return undefined;
+  const projection = projections.find(
+    (candidate) => candidate?.kind === "public_endpoint",
+  );
+  if (
+    projection?.kind !== "public_endpoint" ||
+    !projection.variables ||
+    typeof projection.variables !== "object"
+  ) {
+    return undefined;
+  }
+  const subdomainVariable = safeText(projection.variables.subdomain);
+  const urlVariable = safeText(projection.variables.url);
+  const routePatternVariable = safeText(projection.variables.routePattern);
+  const baseDomain = safeText(projection.baseDomain);
+  if (!subdomainVariable && !urlVariable && !routePatternVariable) {
+    return undefined;
+  }
+  return {
+    ...(subdomainVariable ? { subdomainVariable } : {}),
+    ...(urlVariable ? { urlVariable } : {}),
+    ...(routePatternVariable ? { routePatternVariable } : {}),
+    ...(baseDomain ? { baseDomain } : {}),
+  };
 }
 
 function storeEndpointField(
@@ -394,7 +475,13 @@ function storePublicEndpointSubdomainField(
 function storeServiceNameVariable(
   store: Pick<StoreEntry, "installExperience">,
 ): string | undefined {
-  return installExperienceServiceNameVariable(store.installExperience);
+  const projections = store.installExperience?.projections;
+  if (!Array.isArray(projections)) return undefined;
+  const projection = projections.find(
+    (candidate) => candidate?.kind === "service_name",
+  );
+  if (projection?.kind !== "service_name") return undefined;
+  return safeText(projection.variable) || undefined;
 }
 
 function storeServiceNameField(entry: StoreEntry): StoreInputField | undefined {
@@ -414,6 +501,94 @@ function isStorePublicEndpointField(
     field.name === endpoint?.urlVariable ||
     field.name === endpoint?.routePatternVariable
   );
+}
+
+function storeInitialSecretField(
+  entry: StoreEntry,
+): StoreInputField | undefined {
+  const projections = entry.installExperience?.projections;
+  if (!Array.isArray(projections)) return undefined;
+  const projection = projections.find(
+    (candidate) => candidate?.kind === "initial_secret",
+  );
+  if (projection?.kind !== "initial_secret") return undefined;
+  const variable = safeText(projection.variable);
+  return variable
+    ? entry.inputs.find((field) => field.name === variable)
+    : undefined;
+}
+
+function storeSupportsOidc(entry: StoreEntry): boolean {
+  const projections = entry.installExperience?.projections;
+  if (!Array.isArray(projections)) return false;
+  return projections.some((projection) => {
+    if (
+      projection?.kind !== "oidc_client" ||
+      !projection.variables ||
+      typeof projection.variables !== "object"
+    ) {
+      return false;
+    }
+    const callbackPath = safeText(projection.callbackPath);
+    return (
+      callbackPath.startsWith("/") &&
+      !callbackPath.startsWith("//") &&
+      !callbackPath.includes("://")
+    );
+  });
+}
+
+function defaultStoreAuthMode(entry: StoreEntry): StoreAuthMode | undefined {
+  if (storeSupportsOidc(entry)) return "oidc";
+  return storeInitialSecretField(entry) ? "password" : undefined;
+}
+
+function storeInstallFeatures(
+  entry: StoreEntry,
+): readonly StoreInstallFeature[] {
+  const features = entry.installExperience?.features;
+  if (!Array.isArray(features)) return [];
+  return features.filter((feature) =>
+    Boolean(
+      feature &&
+      safeText(feature.id) &&
+      Array.isArray(feature.inputs) &&
+      feature.inputs.every((name: unknown) => Boolean(safeText(name))),
+    ),
+  );
+}
+
+function storeFeatureInputNames(entry: StoreEntry): ReadonlySet<string> {
+  return new Set(
+    storeInstallFeatures(entry).flatMap((feature) =>
+      feature.inputs.map((name) => safeText(name)).filter(Boolean),
+    ),
+  );
+}
+
+function storeFeatureInputs(
+  entry: StoreEntry,
+  feature: StoreInstallFeature,
+): readonly StoreInputField[] {
+  const names = new Set(feature.inputs.map(safeText).filter(Boolean));
+  return entry.inputs.filter((field) => names.has(field.name));
+}
+
+function storeInputIsDerived(field: StoreInputField): boolean {
+  return (
+    field.defaultValue?.source === "capsule_name" ||
+    field.defaultValue?.source === "workspace_scoped_capsule_name"
+  );
+}
+
+function storeUsesRepositoryInstallUx(entry: StoreEntry): boolean {
+  return entry.installExperience?.repositoryInstallUx?.status === "accepted";
+}
+
+function isRepositoryInstallUxDiagnostic(
+  diagnostic: CapsuleCompatibilityDiagnostic,
+): boolean {
+  return diagnostic.code === "repository_install_ux_invalid";
 }
 
 const DEFAULT_CAPSULE_INSTALL_CONFIG_ID = "cfg-default-opentofu-capsule";
@@ -625,17 +800,21 @@ function storeSurfaceFromStoreListing(
   return safeStoreToken(surface) ?? "service";
 }
 
-function safeStoreToken(value: string): string | undefined {
-  const trimmed = value.trim();
+function safeStoreToken(value: unknown): string | undefined {
+  const trimmed = safeText(value);
   return trimmed && /^[A-Za-z0-9_.:-]{1,128}$/u.test(trimmed)
     ? trimmed
     : undefined;
 }
 
-function nonEmptyStoreText(
-  value: StoreMetadata["badge"],
-): StoreMetadata["badge"] | undefined {
-  return value.ja.trim() && value.en.trim() ? value : undefined;
+function nonEmptyStoreText(value: unknown): StoreMetadata["badge"] | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Readonly<Record<string, unknown>>;
+  const ja = safeText(record.ja);
+  const en = safeText(record.en);
+  return ja || en ? { ja: ja || en, en: en || ja } : undefined;
 }
 
 function storeSourceMatchesListing(
@@ -672,7 +851,7 @@ function storeInstallConfigsForSource(
   url: string,
   path: string,
 ): readonly InstallConfig[] {
-  if (!url.trim()) return [];
+  if (!safeText(url)) return [];
   return configs.filter((config) =>
     storeSourceMatchesCoordinate(config.sourceSelector, url, path),
   );
@@ -693,9 +872,10 @@ function uniqueStoreInstallConfigForSource(
 }
 
 function storeMetadataFromStoreListing(listing: TcsListing): StoreMetadata {
+  const suggestedName = safeText(listing.suggestedName) || "service";
   const fallbackName = {
-    ja: listing.suggestedName,
-    en: listing.suggestedName,
+    ja: suggestedName,
+    en: suggestedName,
   };
   return {
     source: {
@@ -705,13 +885,59 @@ function storeMetadataFromStoreListing(listing: TcsListing): StoreMetadata {
     order: 1_000,
     surface: storeSurfaceFromStoreListing(listing.surface),
     kind: storeKindFromStoreListing(listing.kind),
-    provider: listing.provider,
-    suggestedName: listing.suggestedName,
+    provider: safeText(listing.provider) || "provider",
+    suggestedName,
     badge: nonEmptyStoreText(listing.badge) ?? DEFAULT_STORE_BADGE,
     name: nonEmptyStoreText(listing.name) ?? fallbackName,
     description: nonEmptyStoreText(listing.description) ?? fallbackName,
     ...(listing.iconUrl ? { iconUrl: listing.iconUrl } : {}),
   };
+}
+
+function normalizedStoreInputs(value: InstallConfig["variablePresentation"]): {
+  readonly inputs: NonNullable<InstallConfig["variablePresentation"]>;
+  readonly invalid: boolean;
+} {
+  if (value === undefined) return { inputs: [], invalid: false };
+  if (!Array.isArray(value)) return { inputs: [], invalid: true };
+  const inputs: StoreInputField[] = [];
+  let invalid = false;
+  for (const candidate of value as readonly unknown[]) {
+    if (
+      !candidate ||
+      typeof candidate !== "object" ||
+      Array.isArray(candidate)
+    ) {
+      invalid = true;
+      continue;
+    }
+    const record = candidate as Readonly<Record<string, unknown>>;
+    const name = safeText(record.name);
+    const type = safeText(record.type);
+    if (
+      !name ||
+      !storeVariablePath(name) ||
+      (type && !["string", "number", "boolean", "json"].includes(type))
+    ) {
+      invalid = true;
+      continue;
+    }
+    const label = nonEmptyStoreText(record.label);
+    if (!label) invalid = true;
+    const helper = nonEmptyStoreText(record.helper);
+    const placeholder = safeText(record.placeholder);
+    const format = safeText(record.format);
+    inputs.push({
+      ...(candidate as StoreInputField),
+      name,
+      ...(type ? { type: type as NonNullable<StoreInputField["type"]> } : {}),
+      ...(format ? { format } : {}),
+      label: label ?? { ja: name, en: name },
+      ...(helper ? { helper } : {}),
+      ...(placeholder ? { placeholder } : {}),
+    });
+  }
+  return { inputs, invalid };
 }
 
 function storeEntryIdFromStoreListing(listing: TcsListing): string {
@@ -723,16 +949,20 @@ function storeEntryFromStoreListing(
   installConfig: InstallConfig,
 ): StoreEntry {
   const store = storeMetadataFromStoreListing(listing);
+  const normalizedInputs = normalizedStoreInputs(
+    installConfig.variablePresentation,
+  );
   return {
     id: storeEntryIdFromStoreListing(listing),
     installConfigId: installConfig.id,
     createdAt: listing.createdAt,
     updatedAt: listing.updatedAt,
     ...store,
-    inputs: installConfig.variablePresentation ?? [],
+    inputs: normalizedInputs.inputs,
     ...(installConfig.installExperience
       ? { installExperience: installConfig.installExperience }
       : {}),
+    ...(normalizedInputs.invalid ? { setupProjectionInvalid: true } : {}),
     ...(listing.publisher ? { publisher: listing.publisher } : {}),
     source: store.source ?? {
       url: listing.source.url,
@@ -824,6 +1054,8 @@ export type {
   StoreMetadata,
   StoreEntry,
   StoreInputField,
+  StoreInstallFeature,
+  StoreAuthMode,
 };
 export {
   DEFAULT_STORE_BADGE,
@@ -836,6 +1068,7 @@ export {
   compatibilityDiagnosticDisplay,
   compatibilitySummaryDisplay,
   compatibilityCheckLooksTransient,
+  isRepositoryInstallUxDiagnostic,
   abortableDelay,
   sourceFetchErrorMessage,
   safeControlApiErrorMessage,
@@ -862,6 +1095,18 @@ export {
   storePublicEndpointSubdomainField,
   storeServiceNameVariable,
   storeServiceNameField,
+  storeInitialSecretField,
+  storeSupportsOidc,
+  defaultStoreAuthMode,
+  storeInstallFeatures,
+  storeFeatureInputNames,
+  storeFeatureInputs,
+  storeInputIsDerived,
+  storeUsesRepositoryInstallUx,
+  storeInputLabel,
+  storeInputHelper,
+  storeFeatureLabel,
+  localizedStoreText,
   isStorePublicEndpointField,
   DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
   storeDefaultInputValue,

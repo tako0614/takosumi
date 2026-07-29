@@ -35,6 +35,7 @@ import { createD1ResourceShapeStores } from "../../core/domains/resource-shape/d
 import { createD1InterfaceStores } from "../../core/domains/interfaces/d1_stores.ts";
 import { createD1FormRegistryStore } from "../../core/domains/service-forms/mod.ts";
 import { createD1OfferingCatalogStore } from "../../core/domains/offerings/mod.ts";
+import { PORTABLE_FORM_MANAGER } from "../../core/api/form_host_routes.ts";
 import {
   ControllerOpentofuRunPort,
   OpentofuResourceShapeAdapter,
@@ -70,6 +71,7 @@ import {
 import {
   D1AccountsStore,
   issueInterfaceOAuthAccessToken,
+  resolveD1AccountsSchemaMode,
 } from "@takosjp/takosumi-accounts-service";
 import {
   connectionOAuthDescriptorsFromEnv,
@@ -141,9 +143,19 @@ export async function createWorkerServiceApp(
     readonly resolveResourceInterfaceWorkspace?: CreateTakosumiServiceOptions["resolveResourceInterfaceWorkspace"];
     /** Host-owned canonical URI projection for Form descriptor inputs. */
     readonly resolveFormInterfaceResourceUri?: CreateTakosumiServiceOptions["resolveFormInterfaceResourceUri"];
+    /**
+     * Host-authenticated Resource -> Capsule ownership bridge. Matching ids or
+     * actor strings alone are never ownership authority.
+     */
+    readonly resolveResourceCapsuleOwner?: CreateTakosumiServiceOptions["resolveResourceCapsuleOwner"];
+    /** Cloud-hosted sealed material activation/retirement lifecycle. */
+    readonly hostRuntimeResourceLifecycle?: CreateTakosumiServiceOptions["hostRuntimeResourceLifecycle"];
   } = {},
 ): Promise<CreatedTakosumiService> {
   const runtimeEnv = cloudflareRuntimeEnv(env, role);
+  const accountsD1SchemaMode = resolveD1AccountsSchemaMode(
+    env.TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE,
+  );
   const controlD1SchemaMode = env.TAKOSUMI_CONTROL_D1_SCHEMA_MODE;
   if (
     controlD1SchemaMode !== undefined &&
@@ -161,8 +173,7 @@ export async function createWorkerServiceApp(
     },
   );
   const adapters = createWorkerAdapters(env);
-  const enqueueRun =
-    options.enqueueRun ?? openTofuRunOwnerEnqueuer(env);
+  const enqueueRun = options.enqueueRun ?? openTofuRunOwnerEnqueuer(env);
   const enqueueSourceSync =
     options.enqueueSourceSync ?? openTofuRunOwnerSourceSyncEnqueuer(env);
   const capsuleCoordination = durableObjectCapsuleCoordination(env);
@@ -224,7 +235,7 @@ export async function createWorkerServiceApp(
   );
   const operatorCapabilities = operatorCapabilitiesFromEnv(env);
   const managedProviderCredentialIssuer =
-    managedProviderCredentialIssuerFromEnv(env);
+    managedProviderCredentialIssuerFromEnv(env, opentofuControlStore);
   const billingExtensionFactory = billingExtensionFactoryFromEnv(env);
   const resourceDeploymentAdmission = resourceDeploymentAdmissionFromEnv(env);
   const resourceArtifactWriter = resourceArtifactWriterFromEnv(env);
@@ -236,7 +247,9 @@ export async function createWorkerServiceApp(
     formInterfaceResourceUriResolverFromEnv(env);
   const interfaceCredentialIssuer = env.TAKOSUMI_ACCOUNTS_DB
     ? interfaceCredentialIssuerFromAccountsStore(
-        new D1AccountsStore(env.TAKOSUMI_ACCOUNTS_DB),
+        new D1AccountsStore(env.TAKOSUMI_ACCOUNTS_DB, {
+          schemaMode: accountsD1SchemaMode,
+        }),
       )
     : undefined;
   const interfaceOAuth2ResourceAuthorizer =
@@ -306,6 +319,12 @@ export async function createWorkerServiceApp(
       : {}),
     ...(resolveFormInterfaceResourceUri
       ? { resolveFormInterfaceResourceUri }
+      : {}),
+    ...(options.resolveResourceCapsuleOwner
+      ? { resolveResourceCapsuleOwner: options.resolveResourceCapsuleOwner }
+      : {}),
+    ...(options.hostRuntimeResourceLifecycle
+      ? { hostRuntimeResourceLifecycle: options.hostRuntimeResourceLifecycle }
       : {}),
     ...(interfaceCredentialIssuer ? { interfaceCredentialIssuer } : {}),
     interfaceOAuth2ResourceAuthorizer,
@@ -607,6 +626,7 @@ function workerInterfaceOAuth2ResourceAuthorizer(
 
 function managedProviderCredentialIssuerFromEnv(
   env: CloudflareWorkerEnv,
+  store: Pick<OpenTofuControlStore, "getCapsule">,
 ): ManagedProviderCredentialIssuer | undefined {
   const secret = managedProviderRunTokenSecret(env);
   if (!secret) return undefined;
@@ -614,20 +634,42 @@ function managedProviderCredentialIssuerFromEnv(
     const { workspaceId, connection, phase } = request;
     if (!isPublicManagedProviderConnection(connection)) return undefined;
     if (!phase || connection.envNames.length === 0) return undefined;
+    const capsuleId = request.capsuleId?.trim();
+    const runId = request.runId?.trim();
+    if (!capsuleId || !runId) return undefined;
+    const capsule = await store.getCapsule(capsuleId);
+    const installingPrincipalId = capsule?.installingPrincipalId?.trim();
+    if (
+      !capsule ||
+      capsule.workspaceId !== workspaceId ||
+      !installingPrincipalId
+    ) {
+      return undefined;
+    }
     const issued = await createManagedProviderRunToken({
       secret,
       audience: request.managedProviderProfile,
       workspaceId,
-      ...(request.capsuleId ? { capsuleId: request.capsuleId } : {}),
+      capsuleId,
+      runId,
+      installingPrincipalId,
       connectionId: connection.id,
       provider: connection.provider,
       phase,
-      scopes: ["write"],
+      scopes:
+        request.managedProviderProfile === PORTABLE_FORM_MANAGER
+          ? ["write", "interfaces:write"]
+          : ["write"],
     });
+    const values =
+      request.managedProviderProfile === PORTABLE_FORM_MANAGER
+        ? portableFormManagedProviderEnv(env, workspaceId, issued.token)
+        : Object.fromEntries(
+            connection.envNames.map((envName) => [envName, issued.token]),
+          );
+    if (!values) return undefined;
     return {
-      values: Object.fromEntries(
-        connection.envNames.map((envName) => [envName, issued.token]),
-      ),
+      values,
       issuer: "takosumi_managed_provider_token",
       temporary: true,
       expiresAt: issued.expiresAt,
@@ -635,6 +677,28 @@ function managedProviderCredentialIssuerFromEnv(
       secretValueStored: false,
     };
   };
+}
+
+function portableFormManagedProviderEnv(
+  env: CloudflareWorkerEnv,
+  workspaceId: string,
+  token: string,
+): Readonly<Record<string, string>> | undefined {
+  const issuer =
+    typeof env.TAKOSUMI_ACCOUNTS_ISSUER === "string"
+      ? env.TAKOSUMI_ACCOUNTS_ISSUER.trim()
+      : "";
+  if (!issuer) return undefined;
+  try {
+    const endpoint = new URL(issuer).origin;
+    return {
+      TAKOFORM_ENDPOINT: endpoint,
+      TAKOFORM_SPACE: workspaceId,
+      TAKOFORM_TOKEN: token,
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 function resourceShapeActorFromRequest(request: Request): ActorContext {
@@ -673,10 +737,10 @@ export function operatorResourceShapeForceDeleteAuthorized(
     : undefined;
   return Boolean(
     expected &&
-      bearer &&
-      input.actor.actorAccountId === "platform-resource-shape" &&
-      input.actor.principalKind === undefined &&
-      constantTimeEqualsString(bearer, expected),
+    bearer &&
+    input.actor.actorAccountId === "platform-resource-shape" &&
+    input.actor.principalKind === undefined &&
+    constantTimeEqualsString(bearer, expected),
   );
 }
 
@@ -969,9 +1033,7 @@ function durableObjectCapsuleCoordination(
  * and performs long dispatch from its alarm, so routing through Queue first only
  * adds delivery latency on the first deploy path.
  */
-function openTofuRunOwnerEnqueuer(
-  env: CloudflareWorkerEnv,
-): EnqueueRun {
+function openTofuRunOwnerEnqueuer(env: CloudflareWorkerEnv): EnqueueRun {
   return async (dispatch) => {
     await scheduleOpenTofuRunOwner(env, {
       action: dispatch.action,

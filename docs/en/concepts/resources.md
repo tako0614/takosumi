@@ -85,6 +85,13 @@ Events come back newest first, and stay readable as audit history after the Reso
 deleted. An event never contains credentials, raw errors, the spec, the state, or Output
 values.
 
+The dashboard does not list arbitrary Output values either. It makes a value clickable
+only when the exact Resource kind and Output name are explicitly allowlisted as a public
+navigation surface, and the value validates as an HTTPS URL without credentials, a query,
+or a fragment. Today this covers the canonical `url` of a Cloud-managed `EdgeWorker`.
+The same Output name on another kind, an arbitrary `public_url`, or a secret-looking
+Output does not become a link.
+
 Listing is keyset-based on `createdAt` and id. Every page but the last returns a
 `nextCursor`; pass it straight to the next `--cursor` without interpreting it. The default
 page size is 100, and so is the maximum.

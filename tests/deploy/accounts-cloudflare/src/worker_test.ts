@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
 import {
   accountsExternalLoginConfigured,
   createCloudflareWorker,
@@ -9,13 +9,23 @@ import {
 import { REQUIRED_PLATFORM_BINDINGS } from "../../../../deploy/accounts-cloudflare/src/bindings-check.ts";
 import {
   D1AccountsStore,
+  type D1Database,
+  type D1ExecResult,
+  type D1PreparedStatement,
+  type D1Result,
   issueInterfaceOAuthAccessToken,
+  registerSessionHashSaltConfig,
 } from "../../../../accounts/service/src/mod.ts";
+import { __resetSessionHashSaltConfigForTesting } from "../../../../accounts/service/src/session-hash-salt.ts";
 import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
 
 function env(values: Record<string, unknown> = {}): CloudflareWorkerEnv {
   return values as CloudflareWorkerEnv;
 }
+
+afterEach(() => {
+  __resetSessionHashSaltConfigForTesting();
+});
 
 test("Cloudflare Accounts worker keeps health local", async () => {
   const response = await createCloudflareWorker().fetch(
@@ -104,8 +114,9 @@ test("hosted docs allow exactly their own inline scripts by hash, never unsafe-i
   expect(response.status).toBe(200);
   expect(await response.text()).toBe(html);
   const scriptSrc =
-    response.headers.get("content-security-policy")?.match(/script-src[^;]*/u)?.[0] ??
-    "";
+    response.headers
+      .get("content-security-policy")
+      ?.match(/script-src[^;]*/u)?.[0] ?? "";
   // Every inline script the document actually ships is allowed by its exact
   // digest, so the docs boot; nothing else is.
   for (const source of [appearance, hashMap]) {
@@ -114,7 +125,8 @@ test("hosted docs allow exactly their own inline scripts by hash, never unsafe-i
       new TextEncoder().encode(source),
     );
     let binary = "";
-    for (const byte of new Uint8Array(digest)) binary += String.fromCharCode(byte);
+    for (const byte of new Uint8Array(digest))
+      binary += String.fromCharCode(byte);
     expect(scriptSrc).toContain(`'sha256-${btoa(binary)}'`);
   }
   expect(scriptSrc).not.toContain("'unsafe-inline'");
@@ -138,9 +150,12 @@ test("a docs document with no inline script keeps the unmodified dashboard polic
   );
 
   const scriptSrc =
-    response.headers.get("content-security-policy")?.match(/script-src[^;]*/u)?.[0] ??
-    "";
-  expect(scriptSrc).toBe("script-src 'self' https://static.cloudflareinsights.com");
+    response.headers
+      .get("content-security-policy")
+      ?.match(/script-src[^;]*/u)?.[0] ?? "";
+  expect(scriptSrc).toBe(
+    "script-src 'self' https://static.cloudflareinsights.com",
+  );
 });
 
 test("login allowlist and upstream discovery stay provider-neutral", () => {
@@ -454,7 +469,7 @@ test("Cloudflare OIDC signing rotation publishes bounded overlap then removes th
   ]);
 });
 
-test("predeployed accounts schema mode performs no request-time DDL", async () => {
+test("predeployed accounts routes perform multiple document operations with zero request-time DDL", async () => {
   const db = new SqliteFakeD1();
   const store = new D1AccountsStore(db);
   await store.initialize();
@@ -469,40 +484,59 @@ test("predeployed accounts schema mode performs no request-time DDL", async () =
     )
     .bind(3, "current", Date.now())
     .run();
+  const sessionSalt = "predeployed-accounts-test-session-salt";
+  const sessionId = "sess_predeployed_route";
+  registerSessionHashSaltConfig({ salt: sessionSalt });
+  await store.saveAccount({
+    subject: "tsub_predeployed_route",
+    createdAt: 1_000,
+    updatedAt: 1_000,
+  });
+  await store.saveAccountSession({
+    sessionId,
+    subject: "tsub_predeployed_route",
+    createdAt: 1_000,
+    expiresAt: Date.now() + 60_000,
+  });
 
-  let requestTimeExecCalls = 0;
-  const predeployedDb: CloudflareWorkerEnv["TAKOSUMI_ACCOUNTS_DB"] = {
-    prepare: (query) => db.prepare(query),
-    exec: () => {
-      requestTimeExecCalls += 1;
-      return Promise.reject(new Error("request-time schema DDL is forbidden"));
-    },
-  };
-  const response = await createCloudflareWorker().fetch(
-    new Request("http://localhost:8787/v1/account/session/me"),
-    env({
-      TAKOSUMI_ACCOUNTS_DB: predeployedDb,
-      TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE: "predeployed",
-      TAKOSUMI_ACCOUNTS_ISSUER: "http://localhost:8787",
-      TAKOSUMI_ACCOUNT_SESSION_HASH_SALT:
-        "predeployed-accounts-test-session-salt",
-    }),
+  const predeployedDb = new NoDdlD1Database(db);
+  const worker = createCloudflareWorker();
+  const workerEnv = env({
+    TAKOSUMI_ACCOUNTS_DB: predeployedDb,
+    TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE: "predeployed",
+    TAKOSUMI_ACCOUNTS_ISSUER: "http://localhost:8787",
+    TAKOSUMI_ACCOUNT_SESSION_HASH_SALT: sessionSalt,
+  });
+  const sessionRequest = (method = "GET") =>
+    new Request("http://localhost:8787/v1/account/session/me", {
+      method,
+      headers: {
+        origin: "http://localhost:8787",
+        "x-takosumi-account-session": sessionId,
+      },
+    });
+
+  const getResponse = await worker.fetch(sessionRequest(), workerEnv);
+  expect(getResponse.status).toBe(200);
+  expect(await getResponse.json()).toMatchObject({
+    subject: "tsub_predeployed_route",
+  });
+
+  const deleteResponse = await worker.fetch(
+    sessionRequest("DELETE"),
+    workerEnv,
   );
+  expect(deleteResponse.status).toBe(204);
 
-  expect(response.status).toBe(200);
-  expect(requestTimeExecCalls).toBe(0);
+  const afterDelete = await worker.fetch(sessionRequest(), workerEnv);
+  expect(afterDelete.status).toBe(200);
+  expect(await afterDelete.json()).toEqual({ session: null });
+  expect(predeployedDb.execCount).toBe(0);
 });
 
 test("predeployed accounts schema mode fails closed when schema is absent", async () => {
   const db = new SqliteFakeD1();
-  let requestTimeExecCalls = 0;
-  const predeployedDb: CloudflareWorkerEnv["TAKOSUMI_ACCOUNTS_DB"] = {
-    prepare: (query) => db.prepare(query),
-    exec: () => {
-      requestTimeExecCalls += 1;
-      return Promise.reject(new Error("request-time schema DDL is forbidden"));
-    },
-  };
+  const predeployedDb = new NoDdlD1Database(db);
   const response = await createCloudflareWorker().fetch(
     new Request("https://app.example.test/v1/account/session/me"),
     env({
@@ -515,5 +549,26 @@ test("predeployed accounts schema mode fails closed when schema is absent", asyn
   );
 
   expect(response.status).toBe(500);
-  expect(requestTimeExecCalls).toBe(0);
+  expect(predeployedDb.execCount).toBe(0);
 });
+
+class NoDdlD1Database implements D1Database {
+  execCount = 0;
+
+  constructor(private readonly delegate: D1Database) {}
+
+  prepare(query: string): D1PreparedStatement {
+    return this.delegate.prepare(query);
+  }
+
+  batch<T = unknown>(
+    statements: readonly D1PreparedStatement[],
+  ): Promise<readonly D1Result<T>[]> {
+    return this.delegate.batch<T>(statements);
+  }
+
+  exec(_query: string): Promise<D1ExecResult> {
+    this.execCount += 1;
+    return Promise.reject(new Error("request-time schema DDL is forbidden"));
+  }
+}

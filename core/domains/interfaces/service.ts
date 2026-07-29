@@ -5,6 +5,7 @@ import type {
   CreateInterfaceRequest,
   CapsuleInterfaceBlueprint,
   CapsuleInterfaceBlueprintInput,
+  CapsuleResourceInterfaceBindingProposal,
   Interface,
   InterfaceBinding,
   InterfaceInput,
@@ -21,6 +22,7 @@ import type {
 import {
   isValidInterfaceName,
   isValidInterfacePermissionToken,
+  isResourceShapeKind,
 } from "takosumi-contract";
 import { TAKOSUMI_API_VERSION } from "takosumi-contract/capabilities";
 import { stableJsonDigest } from "../../adapters/source/digest.ts";
@@ -34,6 +36,7 @@ import type {
   InterfaceStores,
   InterfaceWriteGuard,
 } from "./stores.ts";
+import type { Page, PageParams } from "takosumi-contract/pagination";
 import {
   canonicalInterfaceOAuth2ResourceUri,
   interfaceOAuth2ResourceUri,
@@ -228,8 +231,6 @@ export interface InterfaceServiceOptions {
     readonly policyRef: string;
     readonly iface: Interface;
   }) => Promise<boolean>;
-  /** Workspace-scoped, idempotent declaration repair before runtime discovery. */
-  readonly hydrateWorkspace?: (workspaceId: string) => Promise<void>;
   /**
    * Host-owned, recoverable runtime projection. Canonical Interface/Binding
    * writes complete first; sink failures are logged and repaired by a bounded
@@ -265,6 +266,12 @@ export type InterfaceBindingServiceMaterialization =
   | {
       readonly compatibilityProfile: string;
       readonly compatibilityKey: string;
+    }
+  | {
+      readonly capsuleId: string;
+      readonly resourceInterfaceName: string;
+      readonly resourceInterfaceVersion: string;
+      readonly resourceBindingKey: string;
     };
 
 export class InterfaceService {
@@ -283,7 +290,6 @@ export class InterfaceService {
   readonly #ownerReady?: InterfaceServiceOptions["ownerReady"];
   readonly #lifecycleGuard?: InterfaceServiceOptions["lifecycleGuard"];
   readonly #policyAllows?: InterfaceServiceOptions["policyAllows"];
-  readonly #hydrateWorkspace?: InterfaceServiceOptions["hydrateWorkspace"];
   readonly #projectionSink?: InterfaceProjectionSink;
 
   constructor(options: InterfaceServiceOptions) {
@@ -306,7 +312,6 @@ export class InterfaceService {
     this.#ownerReady = options.ownerReady;
     this.#lifecycleGuard = options.lifecycleGuard;
     this.#policyAllows = options.policyAllows;
-    this.#hydrateWorkspace = options.hydrateWorkspace;
     this.#projectionSink = options.projectionSink;
   }
 
@@ -529,6 +534,109 @@ export class InterfaceService {
     }
   }
 
+  /**
+   * Apply binding-only InstallConfig proposals to an Interface whose body is
+   * owned by portable IaC. The exact installer is durable Capsule provenance;
+   * no current actor or caller-supplied subject is accepted here.
+   */
+  async ensureResourceInterfaceBindings(input: {
+    readonly iface: Interface;
+    readonly capsuleId: string;
+    readonly installingPrincipalId: string;
+    readonly proposals: readonly CapsuleResourceInterfaceBindingProposal[];
+  }): Promise<void> {
+    if (input.iface.metadata.ownerRef.kind !== "Resource") {
+      throw new InterfaceServiceError(
+        "failed_precondition",
+        "Resource Interface binding proposals require a Resource-owned Interface",
+      );
+    }
+    const capsuleId = requireText(input.capsuleId, "capsuleId");
+    const installingPrincipalId = requireText(
+      input.installingPrincipalId,
+      "installingPrincipalId",
+    );
+    const history = [
+      ...(await this.#stores.bindings.listByInterface(input.iface.metadata.id)),
+    ];
+    for (const proposal of input.proposals) {
+      const key = requireText(proposal.key, "Resource Interface binding key");
+      if (
+        !("subjectRef" in proposal) ||
+        proposal.subjectRef?.kind !== "Principal" ||
+        proposal.subjectRef.id !== installingPrincipalId
+      ) {
+        throw new InterfaceServiceError(
+          "failed_precondition",
+          "Resource Interface binding proposal must resolve to the exact installing Principal",
+        );
+      }
+      const interfaceName = requireText(
+        proposal.interface.name,
+        "Resource Interface binding interface.name",
+      );
+      const interfaceVersion = requireText(
+        proposal.interface.version,
+        "Resource Interface binding interface.version",
+      );
+      const subjectRef = proposal.subjectRef;
+      if (
+        history.some(
+          (binding) =>
+            (binding.metadata.materializedFrom?.source ===
+              "capsule_resource_binding" &&
+              binding.metadata.materializedFrom.capsuleId === capsuleId &&
+              binding.metadata.materializedFrom.interfaceName ===
+                interfaceName &&
+              binding.metadata.materializedFrom.interfaceVersion ===
+                interfaceVersion &&
+              binding.metadata.materializedFrom.key === key) ||
+            // Revocation is a durable deny. Never silently recreate a manual
+            // or previously materialized exact-subject grant.
+            (binding.spec.subjectRef.kind === subjectRef.kind &&
+              binding.spec.subjectRef.id === subjectRef.id),
+        )
+      ) {
+        continue;
+      }
+      try {
+        const created = await this.createBinding(
+          input.iface.metadata.id,
+          {
+            subjectRef,
+            permissions: proposal.permissions,
+            delivery: proposal.delivery,
+          },
+          undefined,
+          {
+            capsuleId,
+            resourceInterfaceName: interfaceName,
+            resourceInterfaceVersion: interfaceVersion,
+            resourceBindingKey: key,
+          },
+        );
+        history.push(created);
+      } catch (error) {
+        if (
+          !(error instanceof InterfaceServiceError) ||
+          error.code !== "already_exists"
+        ) {
+          throw error;
+        }
+        const refreshed = await this.#stores.bindings.listByInterface(
+          input.iface.metadata.id,
+        );
+        const accepted = refreshed.find(
+          (binding) =>
+            binding.spec.subjectRef.kind === subjectRef.kind &&
+            binding.spec.subjectRef.id === subjectRef.id,
+        );
+        if (!accepted) throw error;
+        history.push(accepted);
+      }
+    }
+  }
+
   async get(id: string): Promise<Interface> {
     const record = await this.#stores.interfaces.get(requireText(id, "id"));
     if (!record)
@@ -537,6 +645,10 @@ export class InterfaceService {
   }
 
   list(filter: InterfaceListFilter): Promise<readonly Interface[]> {
+    return this.#stores.interfaces.list(this.#normalizeListFilter(filter));
+  }
+
+  #normalizeListFilter(filter: InterfaceListFilter): InterfaceListFilter {
     const workspaceId = requireText(filter.workspaceId, "workspaceId");
     if (filter.type !== undefined) validateToken(filter.type, "type");
     if (filter.ownerId !== undefined && filter.ownerIds !== undefined) {
@@ -565,11 +677,11 @@ export class InterfaceService {
         "limit must be an integer between 1 and 1000",
       );
     }
-    return this.#stores.interfaces.list({
+    return {
       ...filter,
       workspaceId,
       ...(filter.type !== undefined ? { type: filter.type.trim() } : {}),
-    });
+    };
   }
 
   /**
@@ -645,51 +757,80 @@ export class InterfaceService {
     subjectId: string,
     permission: string,
   ): Promise<readonly Interface[]> {
+    return (
+      await this.listAuthorizedForPrincipalPage(filter, subjectId, permission, {
+        ...(filter.limit !== undefined ? { limit: filter.limit } : {}),
+      })
+    ).items;
+  }
+
+  /**
+   * Bounded, read-only capability projection. Listing never repairs lifecycle,
+   * refreshes Bindings, or writes a projection; invocation and token issuance
+   * still revalidate one exact Interface immediately before use.
+   */
+  async listAuthorizedForPrincipalPage(
+    filter: InterfaceListFilter,
+    subjectId: string,
+    permission: string,
+    params: PageParams,
+  ): Promise<Page<Interface>> {
+    return await this.#listAuthorizedPage(
+      filter,
+      subjectId,
+      permission,
+      params,
+      false,
+    );
+  }
+
+  /**
+   * Read model used by the account-plane launcher list. The query performs the
+   * exact current Principal Binding join and only returns broad launcher
+   * candidates; the dashboard remains the type-specific document validator.
+   */
+  async listAuthorizedUiSurfaceCandidatesForPrincipalPage(
+    filter: InterfaceListFilter,
+    subjectId: string,
+    permission: string,
+    params: PageParams,
+    capsuleId?: string,
+  ): Promise<Page<Interface>> {
+    return await this.#listAuthorizedPage(
+      filter,
+      subjectId,
+      permission,
+      params,
+      true,
+      capsuleId,
+    );
+  }
+
+  async #listAuthorizedPage(
+    filter: InterfaceListFilter,
+    subjectId: string,
+    permission: string,
+    params: PageParams,
+    uiSurfaceCandidates: boolean,
+    capsuleId?: string,
+  ): Promise<Page<Interface>> {
+    const normalizedFilter = this.#normalizeListFilter({
+      ...filter,
+      limit: undefined,
+    });
     const normalizedSubject = requireText(subjectId, "subjectId");
     validatePermissionToken(permission, "permission");
     const normalizedPermission = permission.trim();
-    await this.#hydrateWorkspace?.(
-      requireText(filter.workspaceId, "workspaceId"),
-    );
-    const requestedPhase = filter.phase;
-    const candidates = await this.list({
-      ...filter,
-      phase: undefined,
-      includeRetired: false,
+    const normalizedCapsuleId =
+      capsuleId === undefined ? undefined : requireText(capsuleId, "capsuleId");
+    return await this.#stores.authorized.listPage({
+      filter: normalizedFilter,
+      subjectId: normalizedSubject,
+      permission: normalizedPermission,
+      params,
+      ...(uiSurfaceCandidates ? { uiSurfaceCandidates: true } : {}),
+      ...(normalizedCapsuleId ? { capsuleId: normalizedCapsuleId } : {}),
     });
-    // Runtime reads are a fail-closed repair boundary. Re-resolve before
-    // returning a capability so a lost observer or StateVersion restore can
-    // never expose a stale endpoint. Recovery is allowed only because the
-    // lifecycle guard rechecks the durable Run/owner state on this same path.
-    const refreshed = await Promise.all(
-      candidates.map(async (iface) => {
-        try {
-          return await this.reconcile(iface.metadata.id, {
-            allowSafetyRecovery: true,
-          });
-        } catch {
-          return undefined;
-        }
-      }),
-    );
-    const interfaces = refreshed.filter(
-      (iface): iface is Interface =>
-        iface !== undefined &&
-        (requestedPhase === undefined || iface.status.phase === requestedPhase),
-    );
-    const authorized = await Promise.all(
-      interfaces.map(async (iface) => ({
-        iface,
-        allowed: await this.#principalBindings(
-          iface,
-          normalizedSubject,
-          normalizedPermission,
-        ),
-      })),
-    );
-    return authorized
-      .filter((entry) => entry.allowed.length > 0)
-      .map((entry) => entry.iface);
   }
 
   async getAuthorizedForPrincipal(
@@ -1885,6 +2026,17 @@ export class InterfaceService {
     return this.#stores.bindings.listByInterface(interfaceId);
   }
 
+  /**
+   * Bounded host-only canonical inventory. This is used by in-process runtime
+   * composition after Resource Ready and is not mounted as a public listing.
+   */
+  async listForHost(
+    filter: InterfaceListFilter,
+  ): Promise<readonly Interface[]> {
+    const normalized = this.#normalizeListFilter(filter);
+    return await this.#stores.interfaces.list(normalized);
+  }
+
   async getBinding(
     interfaceId: string,
     bindingId: string,
@@ -2536,6 +2688,92 @@ export function validateCapsuleInterfaceBlueprints(
   }
 }
 
+export function validateCapsuleResourceInterfaceBindingProposals(
+  proposals: readonly CapsuleResourceInterfaceBindingProposal[],
+): void {
+  if (!Array.isArray(proposals)) {
+    throw new InterfaceServiceError(
+      "invalid_argument",
+      "resourceInterfaceBindingProposals must be an array",
+    );
+  }
+  if (proposals.length > 64) {
+    throw new InterfaceServiceError(
+      "invalid_argument",
+      "resourceInterfaceBindingProposals exceeds 64 entries",
+    );
+  }
+  const identities = new Set<string>();
+  for (const proposal of proposals) {
+    const raw = requireRecord(proposal, "Resource Interface binding proposal");
+    assertOnlyKeys(
+      raw,
+      ["key", "interface", "subjectRef", "subject", "permissions", "delivery"],
+      "Resource Interface binding proposal",
+    );
+    const selector = requireRecord(
+      raw.interface,
+      "Resource Interface binding proposal interface",
+    );
+    assertOnlyKeys(
+      selector,
+      ["name", "version", "resourceKind", "resourceName"],
+      "Resource Interface binding proposal interface",
+    );
+    const name = validateInterfaceName(
+      selector.name,
+      "Resource Interface binding interface.name",
+    );
+    const version = requireText(
+      selector.version,
+      "Resource Interface binding interface.version",
+    );
+    validateToken(version, "Resource Interface binding interface.version");
+    const resourceKind =
+      selector.resourceKind === undefined
+        ? undefined
+        : requireText(
+            selector.resourceKind,
+            "Resource Interface binding interface.resourceKind",
+          );
+    if (resourceKind !== undefined && !isResourceShapeKind(resourceKind)) {
+      throw new InterfaceServiceError(
+        "invalid_argument",
+        "Resource Interface binding interface.resourceKind is invalid",
+      );
+    }
+    const resourceName =
+      selector.resourceName === undefined
+        ? undefined
+        : requireText(
+            selector.resourceName,
+            "Resource Interface binding interface.resourceName",
+          );
+    if ((resourceKind === undefined) !== (resourceName === undefined)) {
+      throw new InterfaceServiceError(
+        "invalid_argument",
+        "Resource Interface binding resourceKind and resourceName must be provided together",
+      );
+    }
+    const { interface: _interface, ...bindingProposal } = proposal;
+    validateCapsuleInterfaceBindingProposals([bindingProposal]);
+    const identity = [
+      name,
+      version,
+      resourceKind ?? "",
+      resourceName ?? "",
+      proposal.key,
+    ].join("\u0000");
+    if (identities.has(identity)) {
+      throw new InterfaceServiceError(
+        "invalid_argument",
+        "duplicate Resource Interface binding proposal identity",
+      );
+    }
+    identities.add(identity);
+  }
+}
+
 function validateCapsuleInterfaceBindingProposals(
   proposals: CapsuleInterfaceBlueprint["bindings"],
 ): void {
@@ -3070,6 +3308,24 @@ function interfaceBindingMaterialization(
       key: requireText(
         materialization.bindingBlueprintKey,
         "bindingBlueprintKey",
+      ),
+    };
+  }
+  if ("resourceBindingKey" in materialization) {
+    return {
+      source: "capsule_resource_binding",
+      capsuleId: requireText(materialization.capsuleId, "capsuleId"),
+      interfaceName: requireText(
+        materialization.resourceInterfaceName,
+        "resourceInterfaceName",
+      ),
+      interfaceVersion: requireText(
+        materialization.resourceInterfaceVersion,
+        "resourceInterfaceVersion",
+      ),
+      key: requireText(
+        materialization.resourceBindingKey,
+        "resourceBindingKey",
       ),
     };
   }

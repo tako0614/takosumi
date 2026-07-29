@@ -263,6 +263,49 @@ for (const backend of backends) {
           (binding) => binding.status.phase,
         ),
       ).toEqual(["Revoked", "Ready"]);
+      expect(
+        (
+          await service.listAuthorizedForPrincipalPage(
+            { workspaceId: "workspace_parity", phase: "Resolved" },
+            "principal_parity",
+            "runtime.invoke",
+            { limit: 1 },
+          )
+        ).items.map((iface) => iface.metadata.id),
+      ).toEqual([created.metadata.id]);
+
+      const launcher = await service.create({
+        workspaceId: "workspace_parity",
+        name: "launcher-runtime",
+        ownerRef: { kind: "Capsule", id: "capsule_parity" },
+        spec: {
+          type: "interface.ui.surface",
+          version: "1",
+          document: { launcher: true },
+          inputs: {
+            url: {
+              source: "literal",
+              value: "https://launcher.example.test",
+            },
+          },
+          access: { visibility: "workspace" },
+        },
+      });
+      await service.createBinding(launcher.metadata.id, {
+        subjectRef: { kind: "Principal", id: "principal_parity" },
+        permissions: ["ui.open"],
+        delivery: { type: "none" },
+      });
+      expect(
+        (
+          await service.listAuthorizedUiSurfaceCandidatesForPrincipalPage(
+            { workspaceId: "workspace_parity", phase: "Resolved" },
+            "principal_parity",
+            "ui.open",
+            { limit: 1 },
+          )
+        ).items.map((iface) => iface.metadata.id),
+      ).toEqual([launcher.metadata.id]);
 
       // Two writers using the same generation/revision fence must produce one
       // winner and one normalized service conflict on every backend.

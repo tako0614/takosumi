@@ -19,6 +19,14 @@ import type {
 } from "../../core/domains/interfaces/mod.ts";
 import { createWorkerServiceApp } from "./worker_service.ts";
 import { createCloudflareD1OpenTofuControlStore } from "./d1_opentofu_store.ts";
+import {
+  TAKOSUMI_INTERNAL_MANAGED_PROVIDER_PROFILE_HEADER,
+  TAKOSUMI_INTERNAL_MANAGED_PROVIDER_RUN_TOKEN_HEADER,
+} from "./resource_capsule_owner_context.ts";
+import {
+  managedProviderRunTokenSecret,
+  verifyManagedProviderRunToken,
+} from "../../core/shared/managed_provider_tokens.ts";
 
 /**
  * Builds the deploy-control Takosumi service (the `takosumi-api` role) directly,
@@ -44,6 +52,16 @@ export function deployControlServiceOptions(env: CloudflareWorkerEnv): {
   readonly managedVanityHostnameSlotsPerOwner?: number;
   readonly resourceShapeSchemaRegistry: ResourceShapeSchemaRegistry;
   readonly resolveResourceInterfaceWorkspace: ResourceInterfaceWorkspaceResolver;
+  readonly resolveResourceCapsuleOwner: NonNullable<
+    NonNullable<
+      Parameters<typeof createWorkerServiceApp>[2]
+    >["resolveResourceCapsuleOwner"]
+  >;
+  readonly hostRuntimeResourceLifecycle?: NonNullable<
+    NonNullable<
+      Parameters<typeof createWorkerServiceApp>[2]
+    >["hostRuntimeResourceLifecycle"]
+  >;
   readonly interfaceOAuth2ResourceAuthorizer?: InterfaceOAuth2ResourceAuthorizer;
   readonly mountInternalLedgerRoutes?: boolean;
 } {
@@ -61,6 +79,13 @@ export function deployControlServiceOptions(env: CloudflareWorkerEnv): {
       LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY,
     resolveResourceInterfaceWorkspace:
       platformResourceInterfaceWorkspaceResolver(env),
+    resolveResourceCapsuleOwner: platformResourceCapsuleOwnerResolver(env),
+    ...(env.TAKOSUMI_HOST_RUNTIME_RESOURCE_LIFECYCLE
+      ? {
+          hostRuntimeResourceLifecycle:
+            env.TAKOSUMI_HOST_RUNTIME_RESOURCE_LIFECYCLE,
+        }
+      : {}),
     ...(interfaceOAuth2ResourceAuthorizer
       ? { interfaceOAuth2ResourceAuthorizer }
       : {}),
@@ -115,6 +140,71 @@ export function platformResourceInterfaceWorkspaceResolver(
   return async ({ resourceSpaceId }) => {
     const workspace = await workspaces.getWorkspace(resourceSpaceId);
     return workspace?.id === resourceSpaceId ? workspace.id : undefined;
+  };
+}
+
+/**
+ * Resolve only the existing signed managed-provider run authority forwarded by
+ * platform ingress. Core verifies it again and cross-checks the claims against
+ * the internal Capsule ledger; a caller-supplied actor, Capsule id, profile, or
+ * matching Workspace string alone never creates Capsule ownership.
+ */
+export function platformResourceCapsuleOwnerResolver(
+  env: CloudflareWorkerEnv,
+): NonNullable<
+  NonNullable<
+    Parameters<typeof createWorkerServiceApp>[2]
+  >["resolveResourceCapsuleOwner"]
+> {
+  const store = createCloudflareD1OpenTofuControlStore(
+    env.TAKOSUMI_CONTROL_DB,
+    {
+      schemaMode: env.TAKOSUMI_CONTROL_D1_SCHEMA_MODE ?? "bootstrap",
+    },
+  );
+  return async ({ actor, request, space }) => {
+    const token = request.headers.get(
+      TAKOSUMI_INTERNAL_MANAGED_PROVIDER_RUN_TOKEN_HEADER,
+    );
+    const profile = request.headers
+      .get(TAKOSUMI_INTERNAL_MANAGED_PROVIDER_PROFILE_HEADER)
+      ?.trim();
+    const secret = managedProviderRunTokenSecret(env);
+    if (!token || !profile || profile.length > 256 || !secret) {
+      return undefined;
+    }
+    const verified = await verifyManagedProviderRunToken(token, {
+      secret,
+      expectedAudience: profile,
+      expectedWorkspaceId: space,
+      requiredScopes: ["write"],
+    });
+    if (!verified.ok) return undefined;
+    const context = verified.payload;
+    if (
+      !context.capsuleId ||
+      !context.runId ||
+      !context.installingPrincipalId ||
+      (actor.workspaceId !== undefined &&
+        actor.workspaceId !== context.workspaceId)
+    ) {
+      return undefined;
+    }
+    const capsule = await store.getCapsule(context.capsuleId);
+    if (
+      !capsule ||
+      capsule.workspaceId !== context.workspaceId ||
+      capsule.installingPrincipalId !== context.installingPrincipalId ||
+      capsule.status === "destroyed"
+    ) {
+      return undefined;
+    }
+    return {
+      kind: "Capsule",
+      id: capsule.id,
+      workspaceId: capsule.workspaceId,
+      installingPrincipalId: context.installingPrincipalId,
+    };
   };
 }
 

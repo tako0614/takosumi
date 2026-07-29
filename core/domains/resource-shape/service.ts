@@ -808,6 +808,9 @@ export class ResourceShapeService {
     const evidence = await resourceDeploymentEvidence(req, output, plan);
     const adapterInput = {
       resourceId: output.resolutionLock.resourceId,
+      ...(req.owner ?? existing?.owner
+        ? { owner: req.owner ?? existing?.owner }
+        : {}),
       resourceGeneration: (existing?.generation ?? 0) + 1,
       ...(existing?.lastOperationRunId
         ? { resourceRevisionId: existing.lastOperationRunId }
@@ -1372,6 +1375,9 @@ export class ResourceShapeService {
 
       const adapterInput = {
         resourceId: id,
+        ...(applyingRecord.owner === undefined
+          ? {}
+          : { owner: applyingRecord.owner }),
         resourceGeneration: generation,
         ...(operationRun ? { resourceRevisionId: operationRun.id } : {}),
         ...(existing?.lastOperationRunId
@@ -2131,6 +2137,9 @@ export class ResourceShapeService {
       } else {
         result = await this.#adapter.importResource({
           resourceId: id,
+          ...(applyingRecord.owner === undefined
+            ? {}
+            : { owner: applyingRecord.owner }),
           resourceGeneration: 1,
           ...(operationRun ? { resourceRevisionId: operationRun.id } : {}),
           ...(existing?.lastOperationRunId
@@ -2666,6 +2675,7 @@ export class ResourceShapeService {
       } else {
         observation = await this.#adapter.observe({
           resourceId: id,
+          ...(record.owner === undefined ? {} : { owner: record.owner }),
           resourceGeneration: record.generation,
           ...(record.lastOperationRunId
             ? { resourceRevisionId: record.lastOperationRunId }
@@ -3240,6 +3250,7 @@ export class ResourceShapeService {
       } else {
         result = await this.#adapter.refresh({
           resourceId: id,
+          ...(record.owner === undefined ? {} : { owner: record.owner }),
           resourceGeneration: record.generation,
           ...(record.lastOperationRunId
             ? { resourceRevisionId: record.lastOperationRunId }
@@ -3944,6 +3955,7 @@ export class ResourceShapeService {
           // resolve absence through the plugin's read-only observation path.
           const observation = await this.#adapter.observe({
             resourceId: id,
+            ...(record.owner === undefined ? {} : { owner: record.owner }),
             resourceGeneration: claimedRecord.generation,
             ...(record.lastOperationRunId
               ? { resourceRevisionId: record.lastOperationRunId }
@@ -3987,6 +3999,9 @@ export class ResourceShapeService {
             await withTimeout(
               this.#adapter.delete({
                 resourceId: id,
+                ...(claimedRecord.owner === undefined
+                  ? {}
+                  : { owner: claimedRecord.owner }),
                 resourceGeneration: claimedRecord.generation,
                 ...(record.lastOperationRunId
                   ? { resourceRevisionId: record.lastOperationRunId }
@@ -4027,6 +4042,9 @@ export class ResourceShapeService {
           await withTimeout(
             this.#adapter.delete({
               resourceId: id,
+              ...(claimedRecord.owner === undefined
+                ? {}
+                : { owner: claimedRecord.owner }),
               resourceGeneration: claimedRecord.generation,
               ...(record.lastOperationRunId
                 ? { resourceRevisionId: record.lastOperationRunId }

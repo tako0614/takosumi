@@ -210,6 +210,22 @@ class SqlResourceShapeStore implements ResourceShapeStore {
     return result.rows[0] ? resourceShapeFromRow(result.rows[0]) : undefined;
   }
 
+  async getMany(
+    ids: readonly ResourceShapeRecordId[],
+  ): Promise<readonly ResourceShapeRecord[]> {
+    const unique = [...new Set(ids)];
+    if (unique.length === 0) return [];
+    if (unique.length > 100) {
+      throw new RangeError("Resource getMany accepts at most 100 ids");
+    }
+    const result = await this.client.query<ResourceShapeRow>(
+      `select * from ${this.#table}
+       where id in (${unique.map((_, index) => `$${index + 1}`).join(",")})`,
+      unique,
+    );
+    return result.rows.map(resourceShapeFromRow);
+  }
+
   async getByName(
     spaceId: SpaceId,
     kind: ResourceShapeKind,

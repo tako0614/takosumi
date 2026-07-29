@@ -241,12 +241,11 @@ describe("/new flow guidance", () => {
   });
 
   test("install-contract inputs (domain / password / initial setup) are never folded away", () => {
-    // Required inputs and an optional secret projected as `initial_secret`
-    // must render on the visible setup sheet. Unprojected optional secrets
-    // remain available under advanced settings.
-    expect(newAppViewSource).toContain(
-      "installExperienceInitialSecret(entry.installExperience)?.variable",
-    );
+    // A projected initial secret renders as the semantic password alternative;
+    // the UI never asks for the underlying module variable name.
+    expect(newAppViewSource).toContain("storeInitialSecretField(entry)");
+    expect(newAppViewSource).toContain("installAuthenticationFields");
+    expect(newAppViewSource).toContain('t("new.auth.initialPassword")');
     expect(newAppViewSource).toContain(
       "!isInitialSecretStoreInput(entry, field)",
     );
@@ -298,7 +297,7 @@ describe("/new flow guidance", () => {
     );
     expect(newAppViewSource).toContain("url: listing.source.url");
     expect(newAppViewSource).toContain(
-      "uniqueStoreInstallConfigForSource(\n      installConfigList(),\n      listing.source.url,\n      listing.source.path",
+      "uniqueStoreInstallConfigForSource(\n      fetchedInstallConfigList(),\n      listing.source.url,\n      listing.source.path",
     );
     expect(newAppViewSource).not.toContain(
       "listing.source.ref.trim() !== sourceRef().trim()",
@@ -338,9 +337,8 @@ describe("/new flow guidance", () => {
       "name: nonEmptyStoreText(listing.name) ?? fallbackName",
     );
     expect(newAppViewSource).not.toContain("inputs: listing.inputs ?? []");
-    expect(newAppViewSource).toContain(
-      "inputs: installConfig.variablePresentation ?? []",
-    );
+    expect(newAppViewSource).toContain("normalizedStoreInputs(");
+    expect(newAppViewSource).toContain("inputs: normalizedInputs.inputs");
     expect(newAppViewSource).toContain(
       "{ installExperience: installConfig.installExperience }",
     );
@@ -379,9 +377,7 @@ describe("/new flow guidance", () => {
   });
 
   test("explicit installExperience mappings remain authoritative", () => {
-    expect(newAppViewSource).toContain("installExperienceForCurrentSource");
     expect(newAppViewSource).toContain("storeServiceNameVariable");
-    expect(newAppViewSource).toContain("installExperiencePublicEndpoint(");
     expect(newAppViewSource).toContain("storePublicEndpoint(entry)");
     expect(newAppViewSource).toContain("publicEndpoint?.subdomainVariable");
     expect(newAppViewSource).toContain("publicEndpoint?.urlVariable");
@@ -590,7 +586,7 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain("const setupStoreInputs = (");
     expect(newAppViewSource).toContain("const hasSetupStoreInputs = ()");
     expect(newAppViewSource).toContain(
-      "when={hasSetupStoreInputs() ? selectedServiceEntry() : null}",
+      "canRenderStoreSetup() && hasSetupStoreInputs()",
     );
     expect(newAppViewSource).toContain("setupStoreInputs(entry())");
     // The service-name field carries live inline validation (error prop +
@@ -670,8 +666,7 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).not.toContain("standardPublicSubdomainVariable");
     expect(newAppViewSource).not.toContain("standardPublicUrlVariable");
     expect(newAppViewSource).not.toContain("standardRoutePatternVariable");
-    expect(newAppViewSource).toContain("installExperiencePublicEndpoint(");
-    expect(newAppViewSource).toContain("installExperienceForCurrentSource()");
+    expect(newAppViewSource).toContain("storePublicEndpoint(entry)");
     expect(newAppViewSource).toContain("canSuggestPublicHostname");
     expect(newAppViewSource).toContain("storePublicEndpointSubdomainField");
     expect(newAppViewSource).toContain("hostIsManagedBaseDomainSubdomain");
@@ -683,9 +678,7 @@ describe("/new flow guidance", () => {
 
   test("selected store services use only explicit install presentation metadata", () => {
     expect(newAppViewSource).toContain("field.advanced === true");
-    expect(newAppViewSource).toContain(
-      "installExperienceInitialSecret(entry.installExperience)?.variable",
-    );
+    expect(newAppViewSource).toContain("storeInitialSecretField(entry)");
     // Wrap-tolerant: the setup fields sit a level deeper now that the install
     // screen replaces them, so the formatter breaks this attribute.
     expect(newAppViewSource).toMatch(
@@ -704,6 +697,125 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).not.toContain("connection.scopeHints?.zoneId");
     expect(newAppViewSource).not.toContain(
       "connection.scopeHints?.workersSubdomain",
+    );
+  });
+
+  test("repository-owned setup stays semantic and never falls back to raw Store fields", () => {
+    // The dashboard consumes the accepted DB-owned InstallConfig marker and
+    // compiled fields. It never reads the repository document or SourceSnapshot
+    // payload itself.
+    expect(newAppViewSource).toContain("storeUsesRepositoryInstallUx");
+    expect(newAppViewSource).toContain('t("new.installUx.repositoryOwned")');
+    expect(newAppViewSource).not.toContain(".well-known/takosumi.json");
+    expect(newAppViewSource).not.toContain("repositoryInstallUx.document");
+
+    // Authentication is inferred from accepted semantic projections.
+    expect(newAppViewSource).toContain("storeSupportsOidc(entry())");
+    expect(newAppViewSource).toContain("storeInitialSecretField(entry())");
+    expect(newAppViewSource).toContain('<option value="oidc">');
+    expect(newAppViewSource).toContain('<option value="password">');
+
+    // Optional integrations use the compiled feature groups, and disabled
+    // feature inputs are excluded from the reviewed variable patch.
+    expect(newAppViewSource).toContain(
+      "visibleStoreInstallFeatures(entry()).length > 0",
+    );
+    expect(newAppViewSource).toContain("storeFeatureEnabled(entry(), feature)");
+    expect(newAppViewSource).toContain(
+      "if (feature && !storeFeatureEnabled(entry, feature)) return false",
+    );
+
+    // Dynamic OpenTofu/environment editors remain available only on manual Git
+    // import. Store setup renders only named semantic fields.
+    const envEditor = newAppViewSource.indexOf('t("new.env.title")');
+    const manualOnlyGate = newAppViewSource.lastIndexOf(
+      "<Show when={!usingSelectedService()}>",
+      envEditor,
+    );
+    const inputEditor = newAppViewSource.indexOf(
+      't("new.vars.inputsTitle")',
+      envEditor,
+    );
+    expect(manualOnlyGate).toBeGreaterThan(0);
+    expect(envEditor).toBeGreaterThan(manualOnlyGate);
+    expect(inputEditor).toBeGreaterThan(envEditor);
+    expect(newAppViewSource).toContain("storeInputIsDerived(field)");
+    expect(newAppViewSource).toContain("!selectedServiceEntry()");
+  });
+
+  test("Store setup renders from the exact preflight-compiled InstallConfig", () => {
+    // The Store path explicitly requests compilation from the exact synced
+    // snapshot. Direct Git keeps the generic expert flow.
+    expect(newAppViewSource).toContain(
+      "const compileInstallUx = selectedStoreListing() !== null",
+    );
+    expect(controlApiSource).toContain("compileInstallUx: true");
+    expect(controlApiSource).toContain("capsuleName: input.name");
+    expect(newAppViewSource).toContain(
+      "void runCompatibilityCheck({ preflightOnly: true })",
+    );
+    expect(newAppViewSource).toContain(
+      "canRenderStoreSetup() ? selectedServiceEntry() : null",
+    );
+
+    // The response is only an opaque DB config id. The dashboard re-fetches
+    // that exact row and requires the accepted public marker before rendering.
+    expect(newAppViewSource).toContain(
+      "getInstallConfig(\n          repositoryInstallUx.installConfigId",
+    );
+    expect(newAppViewSource).toContain(
+      'exactConfig.installExperience?.repositoryInstallUx?.status !==\n            "accepted"',
+    );
+    expect(newAppViewSource).toContain("setInstallConfigId(exactConfig.id)");
+
+    // Newly compiled questions are validated before create. Capsule creation
+    // uses the exact compatibility-selected id rather than relying on late
+    // adoption at the create endpoint.
+    expect(newAppViewSource).toContain(
+      "const compiledSetupValidationError = validate()",
+    );
+    expect(newAppViewSource).toContain(
+      "compatibility()?.installConfigId ?? selectedInstallConfigId()",
+    );
+    expect(newAppViewSource).not.toContain("repositoryInstallUx.document");
+    expect(newAppViewSource).not.toContain("repositoryInstallUx.message");
+  });
+
+  test("Store secrets never fall back to ordinary Capsule variables", () => {
+    expect(newAppViewSource).toContain(
+      "const storeSecretMaterializationAvailable = () => false",
+    );
+    expect(newAppViewSource).toContain(
+      "if (field.secret && !storeSecretMaterializationAvailable()) return false",
+    );
+    expect(newAppViewSource).toContain("if (field.secret) return false");
+    expect(newAppViewSource).toContain(
+      "visibleStoreInstallFeatures(entry()).length > 0",
+    );
+    expect(newAppViewSource).toContain('t("new.auth.unavailableTitle")');
+    expect(en["new.auth.unavailableBody"].toLowerCase()).toContain(
+      "safe password",
+    );
+    expect(ja["new.auth.unavailableBody"]).toContain("安全");
+  });
+
+  test("invalid repository install UX is actionable and never silently downgraded", () => {
+    expect(newAppViewSource).toContain(
+      'diagnostic.code === "repository_install_ux_invalid"',
+    );
+    expect(newAppViewSource).toContain(
+      't("new.compat.issue.installUxInvalid.message")',
+    );
+    expect(newAppViewSource).toContain(
+      't("new.compat.issue.installUxInvalid.detail")',
+    );
+    expect(newAppViewSource).toContain("setupProjectionInvalid");
+    expect(newAppViewSource).toContain('t("new.installUx.invalidTitle")');
+    expect(en["new.compat.issue.installUxInvalid.detail"]).toContain(
+      ".well-known/takosumi.json",
+    );
+    expect(ja["new.compat.issue.installUxInvalid.detail"]).toContain(
+      ".well-known/takosumi.json",
     );
   });
 
@@ -1001,9 +1113,7 @@ describe("/new flow guidance", () => {
     // The advanced サービスID preview stays (same computation, both places).
     expect(newAppViewSource).toContain("<Show when={managedHostPreview()}>");
     // Advanced name fields carry one-line explanations.
-    expect(newAppViewSource).toContain(
-      "advancedStoreFieldHint(entry(), field)",
-    );
+    expect(newAppViewSource).toContain("advancedStoreFieldHint(");
     expect(newAppViewSource).toContain('t("new.advanced.serviceIdHint")');
     expect(ja["new.advanced.serviceIdHint"]).toContain("内部名");
     expect(en["new.advanced.customUrlHint"].toLowerCase()).toContain("url");

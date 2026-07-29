@@ -96,6 +96,7 @@ import type {
   ListSourceSnapshotsResponse,
   PatchSourceRequest,
   RepositoryInstallMetadataSnapshot,
+  RepositoryInstallUxSnapshot,
   Source,
   SourceResponse,
   SourceSnapshot,
@@ -269,6 +270,7 @@ export function publicCapsule(capsule: Capsule): PublicCapsule {
   const {
     currentOutputId: _currentOutputId,
     autoUpdateAttemptSourceSnapshotId: _autoUpdateAttemptSourceSnapshotId,
+    installingPrincipalId: _installingPrincipalId,
     ...publicRecord
   } = capsule;
   return publicRecord;
@@ -479,6 +481,7 @@ export type ReleaseActivationStatus =
   "skipped" | "pending" | "succeeded" | "failed";
 
 export interface ReleaseActivationCommand {
+  readonly kind?: "command";
   readonly id: string;
   readonly phase: "post_apply" | "pre_destroy";
   readonly command: readonly string[];
@@ -488,6 +491,26 @@ export interface ReleaseActivationCommand {
   readonly timeoutSeconds?: number;
   readonly useProviderCredentials?: boolean;
 }
+
+export interface ReleaseActivationResourceMigration {
+  readonly kind: "resource_migration";
+  readonly id: string;
+  readonly phase: "post_apply";
+  readonly executor: "operator";
+  readonly target: {
+    readonly resourceAddress: string;
+  };
+  readonly bundle: {
+    readonly format: "takosumi.resource-migrations/v1";
+    readonly manifestPath: string;
+    readonly digest: `sha256:${string}`;
+  };
+  readonly timeoutSeconds?: number;
+}
+
+export type ReleaseActivationAction =
+  | ReleaseActivationCommand
+  | ReleaseActivationResourceMigration;
 
 export interface ReleaseCommandRunJob {
   readonly runId: string;
@@ -536,7 +559,7 @@ export interface ReleaseActivationInput {
    */
   readonly credentials?: RunCredentials;
   /** Service-side InstallConfig actions pinned with the reviewed Plan. */
-  readonly commands: readonly ReleaseActivationCommand[];
+  readonly commands: readonly ReleaseActivationAction[];
   readonly sourceSnapshot?: SourceSnapshot;
 }
 
@@ -732,6 +755,8 @@ export interface OpenTofuSourceSyncResult {
   readonly archiveSizeBytes: number;
   /** Repository-root presentation metadata captured from the same Git commit. */
   readonly repositoryInstallMetadata?: RepositoryInstallMetadataSnapshot;
+  /** Optional install UX proposal captured from the same immutable Git commit. */
+  readonly repositoryInstallUx?: RepositoryInstallUxSnapshot;
   /** Existing archive reference when an unchanged ref reused a SourceSnapshot. */
   readonly archiveRef?: string;
   readonly phaseTimings?: readonly SourceSyncPhaseTiming[];
@@ -2463,26 +2488,44 @@ export function jsonRecordFromPublicOutputs(
 export function releaseActivationCommands(
   actions: readonly InstallConfigLifecycleAction[] | undefined,
   phase: ReleaseActivationCommand["phase"],
-): readonly ReleaseActivationCommand[] {
+): readonly ReleaseActivationAction[] {
   return (actions ?? [])
-    .filter((action) => action.kind === "command" && action.phase === phase)
+    .filter((action) => action.phase === phase)
     .slice(0, 20)
-    .map((action) => ({
-      id: action.id,
-      phase: action.phase,
-      command: [...action.command],
-      executor: action.executor,
-      ...(action.workingDirectory
-        ? { workingDirectory: action.workingDirectory }
-        : {}),
-      ...(action.env ? { env: { ...action.env } } : {}),
-      ...(action.timeoutSeconds
-        ? { timeoutSeconds: action.timeoutSeconds }
-        : {}),
-      ...(action.useProviderCredentials === true
-        ? { useProviderCredentials: true }
-        : {}),
-    }));
+    .map((action): ReleaseActivationAction => {
+      if (action.kind === "resource_migration") {
+        return {
+          kind: "resource_migration",
+          id: action.id,
+          phase: action.phase,
+          executor: action.executor,
+          target: {
+            resourceAddress: action.target.resourceAddress,
+          },
+          bundle: { ...action.bundle },
+          ...(action.timeoutSeconds
+            ? { timeoutSeconds: action.timeoutSeconds }
+            : {}),
+        };
+      }
+      return {
+        kind: "command",
+        id: action.id,
+        phase: action.phase,
+        command: [...action.command],
+        executor: action.executor,
+        ...(action.workingDirectory
+          ? { workingDirectory: action.workingDirectory }
+          : {}),
+        ...(action.env ? { env: { ...action.env } } : {}),
+        ...(action.timeoutSeconds
+          ? { timeoutSeconds: action.timeoutSeconds }
+          : {}),
+        ...(action.useProviderCredentials === true
+          ? { useProviderCredentials: true }
+          : {}),
+      };
+    });
 }
 
 function isReleaseActivationOutputSafe(

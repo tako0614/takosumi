@@ -1,15 +1,38 @@
 # Repository-owned install UX report
 
-Status: proposed design and implementation handoff. This document is not the
-current wire contract. Until the proposal is implemented and the owning
-contract is updated, `core-spec.md`, `contract/`, and the current tests describe
-the shipped behavior.
+Status: implemented and selected for Yurucommu's managed Store path.
+`contract/install-ux.ts` is the current wire contract. The repository document
+is captured with the immutable `SourceSnapshot`, compiled against the exact
+compatibility report, and persisted as a DB-owned per-install `InstallConfig`.
+Present invalid declarations fail closed with a diagnostic; they never
+silently fall back to a raw-variable form.
 
 Date: 2026-07-29
 
 Scope: Takosumi OSS Store-to-Capsule install UX, optional Git repository
 metadata, `InstallConfig` compilation, and the Yurucommu install as the concrete
 acceptance case.
+
+## Implementation status
+
+- Yurucommu owns `.well-known/takosumi.json`.
+- The transitional direct module `.` remains declared and installable.
+- The normal Yurucommu Store coordinate selects `deploy/takoform`.
+- Takosumi compiles the exact module declaration into an immutable,
+  Workspace-scoped `InstallConfig` before Capsule creation.
+- App vocabulary and labels come from the repository declaration. Managed
+  hostname policy, database migration authority, installer binding authority,
+  provider selection, credentials, and runtime materialization remain
+  service/host owned.
+- The managed module declares an IaC-owned launcher Interface. Takosumi adds
+  only an explicit `ui.open` Binding for the authenticated installing
+  principal; it does not recreate the Interface from an Output blueprint.
+- Invalid, stale, mismatched, or unsupported declarations are visible as
+  actionable compatibility failures.
+
+The findings below preserve the original audit rationale. Statements labelled
+as current state describe the pre-implementation baseline unless a resolution
+is noted above.
 
 ## Outcome
 

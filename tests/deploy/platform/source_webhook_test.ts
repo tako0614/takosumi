@@ -3151,6 +3151,8 @@ test("platform extension authenticates managed provider run tokens with Workspac
     audience: "compat.example.v1",
     workspaceId: "space_cc8dbfedfc6347d5",
     capsuleId: "capsule_ca4ebb681fb24044",
+    runId: "run_managed_provider_apply",
+    installingPrincipalId: "principal_capsule_installer",
     connectionId: "conn_operator_managed_example",
     provider: "registry.example/operator/provider",
     phase: "apply",
@@ -3187,6 +3189,10 @@ test("platform extension authenticates managed provider run tokens with Workspac
     subject: "provider-connection:conn_operator_managed_example",
     workspaceId: "space_cc8dbfedfc6347d5",
     capsuleId: "capsule_ca4ebb681fb24044",
+    runId: "run_managed_provider_apply",
+    installingPrincipalId: "principal_capsule_installer",
+    managedProviderRunToken: issued.token,
+    managedProviderProfile: "compat.example.v1",
     scopes: ["write"],
   });
 });

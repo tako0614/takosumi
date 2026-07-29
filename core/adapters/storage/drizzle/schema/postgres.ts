@@ -733,6 +733,12 @@ export const interfaces = pgTable(
       table.interfaceType,
       table.phase,
     ),
+    index("takosumi_interfaces_authorized_page_idx").on(
+      table.workspaceId,
+      table.phase,
+      table.createdAt,
+      table.id,
+    ),
     uniqueIndex("takosumi_interfaces_oauth_resource_claim_unique")
       .on(
         table.workspaceId,
@@ -777,6 +783,14 @@ export const interfaceBindings = pgTable(
       table.subjectKind,
       table.subjectId,
     ),
+    index("takosumi_interface_bindings_authorized_current_idx")
+      .on(
+        table.workspaceId,
+        table.subjectKind,
+        table.subjectId,
+        table.interfaceId,
+      )
+      .where(sql`${table.phase} = 'Ready'`),
   ],
 );
 

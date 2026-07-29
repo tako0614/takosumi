@@ -13,6 +13,12 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
    * fail-closed as NotReady.
    */
   readonly TAKOSUMI_ACCOUNTS_DB?: import("@takosjp/takosumi-accounts-service").D1Database;
+  /**
+   * Hosted compositions set `predeployed` after the reviewed Accounts
+   * migration lane. Every Accounts store created by this Worker then assumes
+   * the schema exists and performs no request-time DDL.
+   */
+  readonly TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE?: import("@takosjp/takosumi-accounts-service").D1AccountsSchemaMode;
   /** Bare operator origin used as the exact Interface OAuth resource base. */
   readonly TAKOSUMI_ACCOUNTS_ISSUER?: string;
   readonly R2_ARTIFACTS: R2Bucket;
@@ -85,6 +91,11 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
    * Canonical Interface and Binding rows remain authority.
    */
   readonly TAKOSUMI_INTERFACE_PROJECTION_SINK?: import("takosumi-contract/interfaces").InterfaceProjectionSink;
+  /**
+   * Code-only hosted runtime lifecycle. It is injected by the platform root,
+   * never accepted from Wrangler text configuration.
+   */
+  readonly TAKOSUMI_HOST_RUNTIME_RESOURCE_LIFECYCLE?: import("../../core/domains/resource-shape/host_runtime_materialization.ts").HostRuntimeResourceLifecycle;
   /**
    * Enables the optional, versioned operator-control MCP adapter at the
    * platform worker's `/mcp/operator-control/v1` route. The route is absent

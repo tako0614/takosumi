@@ -96,6 +96,11 @@ import {
 } from "./domains/resource-shape/mod.ts";
 import { createSqlResourceShapeStores } from "./domains/resource-shape/sql_stores.ts";
 import {
+  createDbOwnedHostRuntimeMaterializationResolver,
+  withDbOwnedHostRuntimeMaterialization,
+  type HostRuntimeResourceLifecycle,
+} from "./domains/resource-shape/host_runtime_materialization.ts";
+import {
   createInMemoryInterfaceStores,
   createPortableDeclarationReader,
   createPortableDeclarationWriter,
@@ -577,6 +582,11 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
     | undefined
     | Promise<ResourceCapsuleOwner | undefined>;
   /**
+   * Host-only post-adapter runtime lifecycle. Ready runs after Interface
+   * reconciliation; retire runs from the Terminating fence before delete.
+   */
+  readonly hostRuntimeResourceLifecycle?: HostRuntimeResourceLifecycle;
+  /**
    * Host-owned canonical resource URI projection for portable Form Interface
    * descriptors. Omission leaves `resource_uri` inputs unavailable and a
    * required descriptor fails closed before the Resource is advertised Ready.
@@ -901,6 +911,12 @@ export interface TakosumiOperations {
   /** Exact host-authenticated application owner for a canonical Resource. */
   readonly resourceCapsuleOwners?: {
     get(resourceId: string): Promise<ResourceCapsuleOwner | undefined>;
+    getMany(resourceIds: readonly string[]): Promise<
+      readonly {
+        readonly resourceId: string;
+        readonly owner: ResourceCapsuleOwner;
+      }[]
+    >;
   };
   /**
    * Narrow in-process seam for the bounded scheduled Resource observer. The
@@ -1452,7 +1468,14 @@ export async function createTakosumiService(
           workspaces: workspacesService,
         })
       : undefined);
-  const resourceShapeAdapter = injectedResourceShapeAdapter;
+  const hostRuntimeMaterializationResolver =
+    createDbOwnedHostRuntimeMaterializationResolver(capsulesService);
+  const resourceShapeAdapter = injectedResourceShapeAdapter
+    ? withDbOwnedHostRuntimeMaterialization(
+        injectedResourceShapeAdapter,
+        hostRuntimeMaterializationResolver,
+      )
+    : undefined;
   const resourceShapeStores =
     options.resourceShapeStores ??
     (options.sqlClient
@@ -1792,105 +1815,6 @@ export async function createTakosumiService(
       }
       return undefined;
     },
-    hydrateWorkspace: async (workspaceId) => {
-      // Crash-safe, Workspace-bounded repair for a succeeded apply whose
-      // best-effort terminal observer did not materialize service-side
-      // blueprints. Never scan every tenant during service startup.
-      let cursor: string | undefined;
-      do {
-        const page = await capsulesService.listCapsulesPage(workspaceId, {
-          limit: 100,
-          ...(cursor ? { cursor } : {}),
-        });
-        for (const capsule of page.items) {
-          if (
-            (capsule.status !== "active" && capsule.status !== "stale") ||
-            !capsule.currentOutputId
-          ) {
-            continue;
-          }
-          let config;
-          try {
-            config = await capsulesService.getInstallConfig(
-              capsule.installConfigId,
-            );
-          } catch (error) {
-            if (
-              error instanceof OpenTofuControllerError &&
-              error.code === "not_found"
-            ) {
-              continue;
-            }
-            throw error;
-          }
-          if (config.interfaceBlueprints?.length) {
-            await interfaceService.ensureCapsuleBlueprints({
-              workspaceId,
-              capsuleId: capsule.id,
-              blueprints: config.interfaceBlueprints,
-            });
-          }
-        }
-        cursor = page.nextCursor;
-      } while (cursor);
-
-      if (resolveResourceInterfaceWorkspace) {
-        // Resource lifecycle delivery is also best effort. Rebuild the state
-        // needed by this Workspace from the durable Resource ledger so a lost
-        // observer cannot leave an old binding usable indefinitely.
-        const interfaces = await interfaceService.list({
-          workspaceId,
-          includeRetired: false,
-        });
-        const resourceIds = new Set<string>();
-        for (const iface of interfaces) {
-          if (iface.metadata.ownerRef.kind === "Resource") {
-            resourceIds.add(iface.metadata.ownerRef.id);
-          }
-          for (const input of Object.values(iface.spec.inputs ?? {})) {
-            if (input.source === "resource_output") {
-              resourceIds.add(input.resourceId);
-            }
-          }
-        }
-        const snapshots = await Promise.all(
-          [...resourceIds].map(async (resourceId) => {
-            const resource =
-              await resourceShapeStores.resources.get(resourceId);
-            if (!resource) {
-              return { resourceId, phase: "retired" as const };
-            }
-            const mappedWorkspaceId = await resolveResourceInterfaceWorkspace(
-              resourceInterfaceWorkspaceInput(resource),
-            );
-            if (mappedWorkspaceId !== workspaceId) {
-              return { resourceId, phase: "not_ready" as const };
-            }
-            if (
-              resource.phase === "Ready" &&
-              resource.observedGeneration === resource.generation
-            ) {
-              return { resourceId, phase: "ready" as const };
-            }
-            if (resource.phase === "Failed" || resource.phase === "Degraded") {
-              return {
-                resourceId,
-                phase: "unknown" as const,
-                message: `Resource is ${resource.phase} in the durable ledger`,
-              };
-            }
-            if (resource.phase === "Deleting") {
-              return { resourceId, phase: "terminating" as const };
-            }
-            if (resource.phase === "Deleted") {
-              return { resourceId, phase: "retired" as const };
-            }
-            return { resourceId, phase: "not_ready" as const };
-          }),
-        );
-        await interfaceService.repairResourceLifecycles(workspaceId, snapshots);
-      }
-    },
   });
   const legacyOutputInterfaceMigrationService =
     new LegacyOutputInterfaceMigrationService({
@@ -2013,6 +1937,30 @@ export async function createTakosumiService(
     }
     return false;
   };
+  const exactHostRuntimeLifecycleInput = async (resourceId: string) => {
+    if (!options.hostRuntimeResourceLifecycle) return undefined;
+    const [resource, lock] = await Promise.all([
+      resourceShapeStores.resources.get(resourceId),
+      resourceShapeStores.locks.get(resourceId),
+    ]);
+    if (!resource || !lock) return undefined;
+    const request = await hostRuntimeMaterializationResolver({
+      owner: resource.owner,
+    });
+    if (!request) return undefined;
+    const resourceRevisionId = canonicalReadyResourceRevisionId(resource, lock);
+    if (!resourceRevisionId) {
+      throw new Error(
+        `host runtime lifecycle has no canonical backend revision for ${resourceId}`,
+      );
+    }
+    return {
+      request,
+      resourceId,
+      resourceGeneration: resource.generation,
+      resourceRevisionId,
+    };
+  };
   resourceShapeService?.setLifecycleObserver({
     async observe(event) {
       if (!resolveResourceInterfaceWorkspace) {
@@ -2042,6 +1990,18 @@ export async function createTakosumiService(
       }
       switch (event.type) {
         case "ready":
+          {
+            // Hosted runtime activation must commit its immutable release
+            // decision before the consumer's route Interface is projected.
+            // Managed connection authority comes from already-Ready source
+            // Resources, so this does not depend on the consumer launcher.
+            const runtime = await exactHostRuntimeLifecycleInput(
+              event.resourceId,
+            );
+            if (runtime) {
+              await options.hostRuntimeResourceLifecycle!.activate(runtime);
+            }
+          }
           try {
             await materializeFormDescriptorInterfaces(event.resourceId);
           } catch (error) {
@@ -2068,6 +2028,14 @@ export async function createTakosumiService(
           );
           return;
         case "terminating":
+          {
+            const runtime = await exactHostRuntimeLifecycleInput(
+              event.resourceId,
+            );
+            if (runtime) {
+              await options.hostRuntimeResourceLifecycle!.retire(runtime);
+            }
+          }
           await interfaceService.markResourceTerminating(
             workspaceId,
             event.resourceId,
@@ -2327,6 +2295,55 @@ export async function createTakosumiService(
                           resolveResourceUri: resolveFormInterfaceResourceUri,
                         }
                       : {}),
+                    ensureBindings: async ({
+                      interface: iface,
+                      resource,
+                      workspaceId,
+                    }) => {
+                      const owner = resource.metadata.owner;
+                      if (!isResourceCapsuleOwner(owner)) return;
+                      if (owner.workspaceId !== workspaceId) {
+                        throw new Error(
+                          "Resource Capsule owner Workspace does not match Interface Workspace",
+                        );
+                      }
+                      const capsule = await capsulesService.getCapsule(
+                        owner.id,
+                      );
+                      if (
+                        capsule.workspaceId !== workspaceId ||
+                        capsule.installingPrincipalId !==
+                          owner.installingPrincipalId ||
+                        capsule.status === "destroyed"
+                      ) {
+                        throw new Error(
+                          "Resource Capsule owner no longer matches durable Capsule provenance",
+                        );
+                      }
+                      const config = await capsulesService.getInstallConfig(
+                        capsule.installConfigId,
+                      );
+                      const proposals = (
+                        config.resourceInterfaceBindingProposals ?? []
+                      ).filter(
+                        (proposal) =>
+                          proposal.interface.name === iface.spec.type &&
+                          proposal.interface.version === iface.spec.version &&
+                          (proposal.interface.resourceKind === undefined ||
+                            proposal.interface.resourceKind ===
+                              resource.kind) &&
+                          (proposal.interface.resourceName === undefined ||
+                            proposal.interface.resourceName ===
+                              resource.metadata.name),
+                      );
+                      if (proposals.length === 0) return;
+                      await interfaceService.ensureResourceInterfaceBindings({
+                        iface,
+                        capsuleId: capsule.id,
+                        installingPrincipalId: owner.installingPrincipalId,
+                        proposals,
+                      });
+                    },
                   }),
                 },
               }
@@ -2495,6 +2512,16 @@ export async function createTakosumiService(
               )?.owner;
               return isResourceCapsuleOwner(owner) ? owner : undefined;
             },
+            getMany: async (resourceIds: readonly string[]) =>
+              (
+                await resourceShapeStores.resources.getMany(resourceIds)
+              ).flatMap((resource) =>
+                resource.phase === "Ready" &&
+                resource.observedGeneration === resource.generation &&
+                isResourceCapsuleOwner(resource.owner)
+                  ? [{ resourceId: resource.id, owner: resource.owner }]
+                  : [],
+              ),
           },
         }
       : {}),

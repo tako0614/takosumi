@@ -706,6 +706,12 @@ export const interfaces = sqliteTable(
       table.interfaceType,
       table.phase,
     ),
+    index("interfaces_authorized_page_idx").on(
+      table.workspaceId,
+      table.phase,
+      table.createdAt,
+      table.id,
+    ),
     uniqueIndex("interfaces_oauth_resource_claim_unique")
       .on(
         table.workspaceId,
@@ -750,6 +756,14 @@ export const interfaceBindings = sqliteTable(
       table.subjectKind,
       table.subjectId,
     ),
+    index("interface_bindings_authorized_current_idx")
+      .on(
+        table.workspaceId,
+        table.subjectKind,
+        table.subjectId,
+        table.interfaceId,
+      )
+      .where(sql`${table.phase} = 'Ready'`),
   ],
 );
 

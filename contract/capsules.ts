@@ -67,6 +67,12 @@ export interface Capsule {
    */
   readonly sourceId: string;
   readonly installConfigId: string;
+  /**
+   * Exact Principal that installed this Capsule. Internal authorization
+   * provenance: public Capsule projections must never expose it, and later
+   * Runs must not reinterpret "installer" as their current caller.
+   */
+  readonly installingPrincipalId?: string;
   readonly environment: string;
   readonly currentStateVersionId?: string;
   readonly currentStateGeneration: number;
@@ -96,7 +102,9 @@ export interface Capsule {
 /** Public Capsule projection returned by `/api` and dashboard session routes. */
 export type PublicCapsule = Omit<
   Capsule,
-  "currentOutputId" | "autoUpdateAttemptSourceSnapshotId"
+  | "currentOutputId"
+  | "autoUpdateAttemptSourceSnapshotId"
+  | "installingPrincipalId"
 >;
 
 // ---------------------------------------------------------------------------
@@ -180,6 +188,18 @@ export interface CapsuleRootModuleOutputDeclaration {
   readonly ephemeral: boolean | null;
 }
 
+/**
+ * Bounded, non-secret metadata for one root-module variable discovered by
+ * compatibility analysis. `unknown` means static analysis could not prove a
+ * basic type; consumers may still validate the variable name/default but must
+ * not infer a type from comments or descriptions.
+ */
+export interface CapsuleRootModuleVariableDeclaration {
+  readonly name: string;
+  readonly type: "string" | "number" | "boolean" | "json" | "unknown";
+  readonly hasDefault: boolean;
+}
+
 export interface CapsuleCompatibilityReport {
   readonly id: string;
   readonly sourceId: string;
@@ -208,6 +228,12 @@ export interface CapsuleCompatibilityReport {
    * OpenTofu variables/outputs the generated root may project.
    */
   readonly rootModuleVariables?: readonly string[];
+  /**
+   * Exact basic type/default metadata for repository-owned install UX
+   * validation. Older reports may omit it and cannot authorize enhanced UX
+   * adoption; `rootModuleVariables` remains for wire compatibility.
+   */
+  readonly rootModuleVariableDeclarations?: readonly CapsuleRootModuleVariableDeclaration[];
   readonly rootModuleOutputs?: readonly CapsuleRootModuleOutputDeclaration[];
   readonly providerRequirements?: readonly ProviderRequirement[];
   readonly providerResolutions?: readonly ProviderResolution[];
@@ -257,12 +283,33 @@ export interface CreateSourceCompatibilityCheckRequest {
    * also present (the Capsule's own InstallConfig wins).
    */
   readonly installConfigId?: string;
+  /**
+   * Accounts/dashboard preflight hint. Core compatibility analysis ignores
+   * these fields; the authenticated Accounts route compiles and persists the
+   * validated result after the exact report succeeds.
+   */
+  readonly compileInstallUx?: boolean;
+  readonly capsuleName?: string;
 }
 
 export interface CapsuleCompatibilityReportResponse {
   readonly report: CapsuleCompatibilityReport;
   readonly run?: Run;
+  /** Present only when Accounts install preflight requested compilation. */
+  readonly repositoryInstallUx?: RepositoryInstallUxCompatibilityResult;
 }
+
+export type RepositoryInstallUxCompatibilityResult =
+  | { readonly status: "absent" }
+  | {
+      readonly status: "accepted";
+      readonly installConfigId: string;
+    }
+  | {
+      readonly status: "invalid";
+      readonly diagnosticCode: string;
+      readonly message: string;
+    };
 
 export type PublicCapsuleCompatibilityReport = Omit<
   CapsuleCompatibilityReport,
@@ -274,4 +321,5 @@ export type PublicCapsuleCompatibilityReport = Omit<
 export interface PublicCapsuleCompatibilityReportResponse {
   readonly report: PublicCapsuleCompatibilityReport;
   readonly run?: PublicRun;
+  readonly repositoryInstallUx?: RepositoryInstallUxCompatibilityResult;
 }

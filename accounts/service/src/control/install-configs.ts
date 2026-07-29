@@ -197,6 +197,14 @@ async function patchScopedInstallConfig(
       400,
     );
   }
+  if (config.internal.repositoryInstallUxDigest) {
+    return errorJson(
+      "repository_install_ux_immutable",
+      "A compiled repository install configuration is immutable; change the reviewed setup inputs through a new install preflight.",
+      409,
+      request,
+    );
+  }
   const body = await readJsonObject(request);
   if (!body) return errorJson("invalid_request", "invalid request", 400);
   const variableMappingPatch = body.variableMapping;

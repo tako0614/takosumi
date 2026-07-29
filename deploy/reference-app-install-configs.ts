@@ -37,13 +37,13 @@ const REFERENCE_CONFIG_TIMESTAMP = "2026-07-14T00:00:00.000Z";
 const MANAGED_APP_BASE_DOMAIN = "app.takos.jp";
 type AppSource = {
   readonly url: string;
-  readonly path: ".";
+  readonly path: string;
 };
 
-function source(repo: string): AppSource {
+function source(repo: string, path = "."): AppSource {
   return {
     url: `https://github.com/tako0614/${repo}.git`,
-    path: ".",
+    path,
   };
 }
 
@@ -592,6 +592,148 @@ function yuruConfig(input: {
   };
 }
 
+const { store: _yurucommuDirectStore, ...yurucommuDirectConfig } = yuruConfig({
+  app: "yurucommu",
+  order: 30,
+  title: "Yurucommu",
+  descriptionJa: "ゆるくつながる feed / story 型コミュニケーション。",
+  descriptionEn: "A relaxed feed and story communication app.",
+});
+
+const yurucommuManagedSource = source("yurucommu", "deploy/takoform");
+
+/**
+ * Normal Store install for Yurucommu.
+ *
+ * App vocabulary is compiled from the exact repository snapshot's
+ * `.well-known/takosumi.json`. This service-owned row carries only host
+ * authority which repository metadata cannot grant: managed hostname policy,
+ * the typed database migration, and installer access to the IaC-owned launcher
+ * Interface.
+ */
+const yurucommuManagedConfig = {
+  id: "cfg-reference-yurucommu-managed",
+  name: "yurucommu-managed",
+  sourceSelector: yurucommuManagedSource,
+  modulePath: "deploy/takoform",
+  variableMapping: {},
+  outputAllowlist: {},
+  managedPublicHostname: { mode: "scoped" },
+  hostRuntimeMaterialization: {
+    contract: "takosumi.host-runtime-materialization/v1",
+    requirements: [
+      {
+        kind: "generated_secret",
+        binding: "ENCRYPTION_KEY",
+        secretRef: "secret:yurucommu/encryption-key",
+        bytes: 32,
+        encoding: "base64url",
+      },
+      {
+        kind: "public_oidc",
+        id: "takosumi-accounts",
+        callbackPath: "/api/auth/callback/takos",
+        scopes: ["openid", "profile"],
+        bindings: {
+          issuerUrl: {
+            binding: "TAKOSUMI_ACCOUNTS_ISSUER_URL",
+            capabilityRef: "capability:yurucommu/accounts-issuer",
+          },
+          clientId: {
+            binding: "TAKOSUMI_ACCOUNTS_CLIENT_ID",
+            capabilityRef: "capability:yurucommu/accounts-client-id",
+          },
+          ownerSubject: {
+            binding: "TAKOSUMI_ACCOUNTS_OWNER_SUB",
+            capabilityRef: "capability:yurucommu/accounts-owner-subject",
+          },
+          redirectUri: {
+            binding: "TAKOSUMI_ACCOUNTS_REDIRECT_URI",
+            capabilityRef: "capability:yurucommu/accounts-redirect-uri",
+          },
+        },
+      },
+      ...[
+        ["DB", "capability:yurucommu/database"],
+        ["MEDIA", "capability:yurucommu/media"],
+        ["KV", "capability:yurucommu/key-value"],
+        ["DELIVERY_QUEUE", "capability:yurucommu/delivery-queue"],
+        ["DELIVERY_DLQ", "capability:yurucommu/delivery-dlq"],
+      ].map(([connectionAlias, capabilityRef]) => ({
+        kind: "managed_connection" as const,
+        binding: connectionAlias!,
+        connectionAlias: connectionAlias!,
+        requiredPermission: "takosumi.managed-runtime.invoke",
+        capabilityRef: capabilityRef! as `capability:${string}`,
+      })),
+    ],
+    backgroundActivations: [
+      {
+        id: "delivery",
+        sourceConnectionAlias: "DELIVERY_QUEUE",
+        deadLetterConnectionAlias: "DELIVERY_DLQ",
+        entrypoint: "yurucommu.delivery",
+        retry: {
+          maxAttempts: 3,
+          retryDelaySeconds: 30,
+          onExhausted: "dead_letter",
+        },
+      },
+    ],
+  },
+  lifecycleActions: [
+    {
+      apiVersion: "takosumi.dev/v1alpha1",
+      kind: "resource_migration",
+      id: "yurucommu-schema",
+      phase: "post_apply",
+      executor: "operator",
+      runnerCapability: "resource.migration.sqlite.v1",
+      target: {
+        resourceAddress: "takoform_relational_database.database",
+      },
+      bundle: {
+        format: "takosumi.resource-migrations/v1",
+        manifestPath: "deploy/takoform/migrations/manifest.json",
+        digest:
+          "sha256:3b3f36501936a84ed19b9bef37e5581c3e04948733b947ebaa002f196e66817c",
+      },
+    },
+  ],
+  policy: {
+    lifecycleActions: {
+      allowedExecutors: ["operator"],
+      allowedRunnerCapabilities: ["resource.migration.sqlite.v1"],
+    },
+  },
+  store: store({
+    source: yurucommuManagedSource,
+    order: 30,
+    kind: "app",
+    suggestedName: "yurucommu",
+    badgeJa: "SNS",
+    badgeEn: "Social",
+    nameJa: "Yurucommu",
+    nameEn: "Yurucommu",
+    descriptionJa: "ゆるくつながる feed / story 型コミュニケーション。",
+    descriptionEn: "A relaxed feed and story communication app.",
+  }),
+  resourceInterfaceBindingProposals: [
+    {
+      key: "launcher",
+      interface: {
+        name: "yurucommu.launcher",
+        version: "1",
+      },
+      subject: { source: "installing_principal" },
+      permissions: [UI_SURFACE_OPEN_PERMISSION],
+      delivery: { type: "none" },
+    },
+  ],
+  createdAt: REFERENCE_CONFIG_TIMESTAMP,
+  updatedAt: REFERENCE_CONFIG_TIMESTAMP,
+} satisfies InstallConfig;
+
 const storageConfig = {
   id: "cfg-reference-takos-storage-main",
   name: "takos-storage-main",
@@ -889,13 +1031,8 @@ export const REFERENCE_APP_INSTALL_CONFIGS: readonly InstallConfig[] =
   Object.freeze([
     takosConfig,
     officeConfig,
-    yuruConfig({
-      app: "yurucommu",
-      order: 30,
-      title: "Yurucommu",
-      descriptionJa: "ゆるくつながる feed / story 型コミュニケーション。",
-      descriptionEn: "A relaxed feed and story communication app.",
-    }),
+    yurucommuDirectConfig,
+    yurucommuManagedConfig,
     storageConfig,
     gitConfig,
   ]);

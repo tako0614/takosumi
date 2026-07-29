@@ -46,12 +46,15 @@ native-token registration route. The shared mobile kit does not advertise or
 call that compatibility route, and product-specific token storage and delivery
 stay in the product host.
 
-Repositories are plain OpenTofu modules. Source identity comes from the
-configured Git URL, ref, and module path plus the resolved commit. OpenTofu
-Outputs remain ordinary state results; Takosumi exposes or consumes selected
-values only through explicit service-side Output allowlists and Interface input
-mappings. The contract does not define a Takosumi source DSL or
-Takosumi-specific repository metadata file.
+Repositories remain plain OpenTofu modules. Source identity comes from the
+configured Git URL, ref, and module path plus the resolved commit. A repository
+may publish `.well-known/takosumi.json` as bounded, presentation-only install
+UX for its own exact module paths; Takosumi compiles that same-commit proposal
+into a DB-owned `InstallConfig`. The file cannot select providers, credentials,
+targets, billing, permissions, or host execution authority. OpenTofu Outputs
+remain ordinary state results; Takosumi exposes or consumes selected values
+only through explicit service-side Output allowlists and Interface input
+mappings.
 
 Platform launch evidence has a provider-neutral OSS baseline. Optional host or
 edition requirements use the public, versioned

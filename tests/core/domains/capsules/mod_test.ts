@@ -101,6 +101,7 @@ async function createCapsule(
     environment: "production",
     sourceId: "src_1",
     installConfigId: "cfg_1",
+    installingPrincipalId: "principal_installer",
     ...over,
   });
 }

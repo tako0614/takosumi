@@ -3612,9 +3612,7 @@ function d1InvalidCapsuleGuardRow(capsuleId: string) {
     sourceId: sql<string | null>`null`.as("sourceId"),
     installConfigId: sql<string>`null`.as("installConfigId"),
     environment: sql<string>`null`.as("environment"),
-    currentStateVersionId: sql<string | null>`null`.as(
-      "currentStateVersionId",
-    ),
+    currentStateVersionId: sql<string | null>`null`.as("currentStateVersionId"),
     currentStateGeneration: sql<number>`0`.as("currentStateGeneration"),
     currentOutputId: sql<string | null>`null`.as("currentOutputId"),
     status: sql<string>`null`.as("status"),
@@ -4040,6 +4038,15 @@ const D1_OBSERVABILITY_INDEX_STATEMENTS = [
     on takosumi_observability_traces (space_id, start_time)`,
   `create index if not exists takosumi_observability_traces_started_idx
     on takosumi_observability_traces (start_time, id)`,
+] as const;
+
+const D1_INTERFACE_AUTHORIZATION_INDEX_STATEMENTS = [
+  `create index if not exists interfaces_authorized_page_idx
+    on interfaces (workspace_id, phase, created_at, id)`,
+  `create index if not exists interface_bindings_authorized_current_idx
+    on interface_bindings (
+      workspace_id, subject_kind, subject_id, interface_id
+    ) where phase = 'Ready'`,
 ] as const;
 
 /**
@@ -4591,6 +4598,9 @@ export async function ensureD1OpenTofuLedgerSchema(
       where phase <> 'Retired'`,
     `create index if not exists interfaces_workspace_type_phase_idx
       on interfaces (workspace_id, interface_type, phase)`,
+    ...(throughMigrationVersion >= 58
+      ? [D1_INTERFACE_AUTHORIZATION_INDEX_STATEMENTS[0]]
+      : []),
     `create unique index if not exists interfaces_oauth_resource_claim_unique
       on interfaces (workspace_id, owner_kind, owner_id, oauth_resource_uri)
       where oauth_resource_uri is not null`,
@@ -4618,6 +4628,9 @@ export async function ensureD1OpenTofuLedgerSchema(
       on interface_bindings (interface_id)`,
     `create index if not exists interface_bindings_workspace_subject_idx
       on interface_bindings (workspace_id, subject_kind, subject_id)`,
+    ...(throughMigrationVersion >= 58
+      ? [D1_INTERFACE_AUTHORIZATION_INDEX_STATEMENTS[1]]
+      : []),
     ...D1_SERVICE_FORM_REGISTRY_STATEMENTS.filter(
       (sql) => !isD1IndexStatement(sql),
     ),
@@ -6655,6 +6668,22 @@ ${D1_OBSERVABILITY_INDEX_STATEMENTS.join("\n---\n")}
       await runD1AtomicSql(db, await d1ObservabilitySchemaStatements(db));
     },
   },
+  {
+    version: 58,
+    name: "d1_interface_authorization_indexes",
+    checksumSource: () => `
+bounded Interface authorization pages scan one Workspace in stable cursor order
+current Principal Bindings are exact Workspace subject phase and Interface probes
+request handling never creates or repairs these indexes
+${D1_INTERFACE_AUTHORIZATION_INDEX_STATEMENTS.join("\n---\n")}
+`,
+    async atomicStatements() {
+      return D1_INTERFACE_AUTHORIZATION_INDEX_STATEMENTS;
+    },
+    async apply(db) {
+      await runD1AtomicSql(db, D1_INTERFACE_AUTHORIZATION_INDEX_STATEMENTS);
+    },
+  },
 ] as const satisfies readonly D1OpenTofuSchemaMigration[];
 
 /**
@@ -6689,10 +6718,7 @@ async function d1ServiceFormTakoformV0Statements(
       "TAKOFORM_V0_IDENTITY_SCHEMA_STATE_INVALID: only part of the retained v1alpha1 registry archive exists",
     );
   }
-  const definitionColumns = await d1ColumnNames(
-    db,
-    "service_form_definitions",
-  );
+  const definitionColumns = await d1ColumnNames(db, "service_form_definitions");
   const hasLegacyShape =
     definitionColumns.has("api_version") &&
     definitionColumns.has("kind") &&
@@ -6763,9 +6789,7 @@ async function d1HasTakoformV0BlockingEvidence(
      limit 1`,
   ] as const;
   for (const sql of probes) {
-    const row = await db
-      .prepare(sql)
-      .first<{ readonly found: number }>();
+    const row = await db.prepare(sql).first<{ readonly found: number }>();
     if (row?.found === 1) return true;
   }
   return false;

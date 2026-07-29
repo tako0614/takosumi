@@ -1583,6 +1583,98 @@ test("capsule plan resolves the latest SourceSnapshot for the Source ref and pat
   });
 });
 
+test("repository install UX pins the initial Plan snapshot, then applied lineage permits a newer update snapshot", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner();
+  const installUxDigest =
+    "sha256:1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef";
+  const seeded = await seedRunnableCapsuleModel(store, {
+    environment: "preview",
+    installConfig: {
+      internal: {
+        reason: "per_install_overrides",
+        sourceSnapshotId: "snap_fixture",
+        repositoryInstallUxDigest: installUxDigest,
+      },
+      installExperience: {
+        repositoryInstallUx: { status: "accepted" },
+      },
+    },
+  });
+  await store.putSourceSnapshot({
+    ...seeded.snapshot,
+    repositoryInstallUx: {
+      status: "present",
+      digest: installUxDigest,
+      document: {
+        schemaVersion: "takosumi.install-ux/v1",
+        modules: { ".": { inputs: [] } },
+      },
+    },
+  });
+  await store.putSourceSnapshot({
+    ...seeded.snapshot,
+    id: "snap_newer_before_initial_plan",
+    resolvedCommit: "bbbbbb0123456789abcdef0123456789abcdef01",
+    archiveRef:
+      "workspaces/ws_test001/sources/src_fixture/snapshots/snap_newer_before_initial_plan/source.tar.zst",
+    fetchedByRunId: "run_newer_before_initial_plan_sync",
+    fetchedAt: "2026-06-06T00:00:10.000Z",
+  });
+  const controller = controllerWith(store, runner);
+
+  const initial = await controller.createCapsulePlan(seeded.capsule.id);
+  expect(initial.planRun.sourceSnapshotId).toBe("snap_fixture");
+  const applied = await controller.createApplyRun({
+    planRunId: initial.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(initial.planRun),
+  });
+  expect(applied.capsule?.currentStateVersionId).toBeDefined();
+
+  const update = await controller.createCapsulePlan(seeded.capsule.id);
+  expect(update.planRun.sourceSnapshotId).toBe(
+    "snap_newer_before_initial_plan",
+  );
+});
+
+test("repository install UX initial Plan fails closed when its snapshot pin is missing or mismatched", async () => {
+  const missingStore = new InMemoryOpenTofuControlStore();
+  const missing = await seedRunnableCapsuleModel(missingStore, {
+    environment: "preview",
+    installConfig: {
+      installExperience: {
+        repositoryInstallUx: { status: "accepted" },
+      },
+    },
+  });
+  await expect(
+    controllerWith(missingStore, recordingRunner()).createCapsulePlan(
+      missing.capsule.id,
+    ),
+  ).rejects.toThrow(/repository_install_ux_snapshot_missing/u);
+
+  const mismatchStore = new InMemoryOpenTofuControlStore();
+  const mismatch = await seedRunnableCapsuleModel(mismatchStore, {
+    environment: "preview",
+    installConfig: {
+      internal: {
+        reason: "per_install_overrides",
+        sourceSnapshotId: "snap_fixture",
+        repositoryInstallUxDigest:
+          "sha256:1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+      },
+      installExperience: {
+        repositoryInstallUx: { status: "accepted" },
+      },
+    },
+  });
+  await expect(
+    controllerWith(mismatchStore, recordingRunner()).createCapsulePlan(
+      mismatch.capsule.id,
+    ),
+  ).rejects.toThrow(/repository_install_ux_snapshot_mismatch/u);
+});
+
 test("capsule destroy-plan pins the active StateVersion source snapshot instead of the latest Git snapshot", async () => {
   const { store, runner, controller } = await seededController();
 
@@ -3822,6 +3914,7 @@ test("release activator receives service-side post-apply actions as opaque argv"
   expect(activations[0]?.commands).toEqual([
     {
       id: "activate",
+      kind: "command",
       phase: "post_apply",
       executor: "operator",
       command: ["bun", "run", "app:activate", "--target", "runtime"],
@@ -4257,6 +4350,7 @@ test("runner release commands receive dispatch-only provider credentials", async
   expect(activations[0]?.commands).toEqual([
     {
       id: "publish",
+      kind: "command",
       phase: "post_apply",
       executor: "runner",
       command: ["bun", "run", "app:activate"],
@@ -4340,6 +4434,7 @@ test("operator lifecycle actions do not receive ProviderConnection material", as
   expect(activations[0]?.commands).toEqual([
     {
       id: "publish",
+      kind: "command",
       phase: "post_apply",
       executor: "operator",
       command: ["bun", "run", "app:activate"],
@@ -4444,6 +4539,7 @@ test("output command-shaped data is ignored in favor of the validated InstallCon
   expect(activations[0]?.commands).toEqual([
     {
       id: "app-activation-is-opaque",
+      kind: "command",
       phase: "post_apply",
       command: ["bun", "run", "app:activate"],
       workingDirectory: "backend",
@@ -4671,6 +4767,7 @@ test("pre-destroy release commands run before OpenTofu destroy", async () => {
   expect(activations[0]?.commands).toEqual([
     {
       id: "delete-worker",
+      kind: "command",
       phase: "pre_destroy",
       executor: "operator",
       command: ["bun", "run", "takosumi:release", "--", "--destroy"],

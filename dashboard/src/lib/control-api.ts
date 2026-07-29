@@ -37,6 +37,7 @@ import type {
   ProviderBindingSet as ContractProviderBindingSet,
   ProviderConnection as ContractProviderConnection,
   ProviderResolution as ContractProviderResolution,
+  RepositoryInstallUxCompatibilityResult as ContractRepositoryInstallUxCompatibilityResult,
   PublicStateVersion as ContractPublicStateVersion,
   ResourceEvent as ContractResourceEvent,
   ResourceDeploymentQuote as ContractResourceDeploymentQuote,
@@ -753,6 +754,9 @@ export interface CapsuleCompatibilityResource {
   readonly allowed: boolean;
 }
 
+export type RepositoryInstallUxPreview =
+  ContractRepositoryInstallUxCompatibilityResult;
+
 export interface CapsuleCompatibilityResult {
   readonly reportId?: string;
   readonly sourceSnapshotId?: string;
@@ -763,6 +767,7 @@ export interface CapsuleCompatibilityResult {
   readonly resources: readonly CapsuleCompatibilityResource[];
   readonly rootModuleVariables: readonly string[];
   readonly installConfigId?: string;
+  readonly repositoryInstallUx?: RepositoryInstallUxPreview;
   readonly sourceId?: string;
   readonly source?: "api";
 }
@@ -1280,6 +1285,12 @@ export async function checkCapsuleCompatibility(input: {
   readonly name: string;
   readonly authConnectionId?: string;
   readonly installConfigId?: string;
+  /**
+   * Compile the exact SourceSnapshot's optional repository-owned install
+   * declaration into a DB-owned InstallConfig before the dashboard renders it.
+   * The repository document itself is never returned to this client.
+   */
+  readonly compileInstallUx?: boolean;
   readonly signal?: AbortSignal;
   readonly onSourceCreated?: (sourceId: string) => void;
   readonly onSourceSyncProgress?: (
@@ -1338,6 +1349,7 @@ export async function checkCapsuleCompatibility(input: {
       }[];
       readonly rootModuleVariables?: readonly string[];
     };
+    readonly repositoryInstallUx?: RepositoryInstallUxPreview;
   }>(`${BASE}/sources/${encodeURIComponent(sourceId)}/compatibility-check`, {
     method: "POST",
     body: {
@@ -1348,10 +1360,15 @@ export async function checkCapsuleCompatibility(input: {
       ...(input.installConfigId
         ? { installConfigId: input.installConfigId }
         : {}),
+      ...(input.compileInstallUx
+        ? { compileInstallUx: true, capsuleName: input.name }
+        : {}),
       ...(input.path && input.path !== "." ? { modulePath: input.path } : {}),
     },
   });
-  const diagnostics = (body.report.findings ?? []).map((finding) => ({
+  const diagnostics: CapsuleCompatibilityDiagnostic[] = (
+    body.report.findings ?? []
+  ).map((finding) => ({
     severity: finding.severity ?? "info",
     ...(finding.compatibilityImpact
       ? { compatibilityImpact: finding.compatibilityImpact }
@@ -1362,6 +1379,21 @@ export async function checkCapsuleCompatibility(input: {
     ...(finding.path ? { path: finding.path } : {}),
     ...(finding.context ? { context: finding.context } : {}),
   }));
+  if (
+    body.repositoryInstallUx?.status === "invalid" &&
+    !diagnostics.some(
+      (diagnostic) => diagnostic.code === "repository_install_ux_invalid",
+    )
+  ) {
+    diagnostics.push({
+      code: "repository_install_ux_invalid",
+      severity: "error",
+      compatibilityImpact: "unsupported",
+      // The install view maps this typed code to fixed localized copy and never
+      // renders the repository/compiler message.
+      message: "The repository install setup declaration is invalid.",
+    });
+  }
   const providers = (body.report.providers ?? [])
     .filter((provider) => provider.source !== undefined)
     .map((provider) => ({
@@ -1386,7 +1418,10 @@ export async function checkCapsuleCompatibility(input: {
   return {
     reportId: body.report.id,
     sourceSnapshotId: snapshot.id,
-    level: body.report.level,
+    level:
+      body.repositoryInstallUx?.status === "invalid"
+        ? "unsupported"
+        : body.report.level,
     summary:
       diagnostics[0]?.message ??
       "Compatibility check completed for the synced SourceSnapshot.",
@@ -1394,8 +1429,13 @@ export async function checkCapsuleCompatibility(input: {
     providers,
     resources,
     rootModuleVariables: body.report.rootModuleVariables ?? [],
-    ...(input.installConfigId
-      ? { installConfigId: input.installConfigId }
+    ...(body.repositoryInstallUx?.status === "accepted"
+      ? { installConfigId: body.repositoryInstallUx.installConfigId }
+      : input.installConfigId
+        ? { installConfigId: input.installConfigId }
+        : {}),
+    ...(body.repositoryInstallUx
+      ? { repositoryInstallUx: body.repositoryInstallUx }
       : {}),
     sourceId,
     source: "api",

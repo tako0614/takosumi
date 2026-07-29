@@ -23,7 +23,9 @@ import type {
 import type { CapsuleInterfaceBlueprint } from "takosumi-contract/interfaces";
 import {
   capsuleInterfaceBlueprintsNeedInstallingPrincipal,
+  capsuleResourceInterfaceBindingsNeedInstallingPrincipal,
   resolveCapsuleInterfaceBlueprintInstallingPrincipal,
+  resolveCapsuleResourceInterfaceBindingInstallingPrincipal,
 } from "takosumi-contract/interfaces";
 import {
   normalizeScopeBoundaryPolicy,
@@ -106,6 +108,7 @@ function publicCapsule(capsule: Capsule): PublicCapsule {
   const {
     currentOutputId: _currentOutputId,
     autoUpdateAttemptSourceSnapshotId: _autoUpdateAttemptSourceSnapshotId,
+    installingPrincipalId: _installingPrincipalId,
     ...publicRecord
   } = capsule;
   return publicRecord;
@@ -127,7 +130,13 @@ function capsuleHasAppliedState(capsule: {
 }
 
 function publicInstallConfig(config: InstallConfig): PublicInstallConfig {
-  const { runnerId: _runnerId, internal: _internal, ...publicRecord } = config;
+  const {
+    runnerId: _runnerId,
+    internal: _internal,
+    resourceInterfaceBindingProposals: _resourceBindings,
+    hostRuntimeMaterialization: _hostRuntimeMaterialization,
+    ...publicRecord
+  } = config;
   const store = config.store;
   return {
     ...publicRecord,
@@ -583,6 +592,9 @@ export function mountDeployControlCapsuleRoutes(
         const needsInstallingPrincipalScope =
           capsuleInterfaceBlueprintsNeedInstallingPrincipal(
             selectedInterfaceBlueprints,
+          ) ||
+          capsuleResourceInterfaceBindingsNeedInstallingPrincipal(
+            baseInstallConfig.resourceInterfaceBindingProposals,
           );
         const installConfigId =
           (normalizedVars !== undefined &&
@@ -613,6 +625,7 @@ export function mountDeployControlCapsuleRoutes(
           ...request,
           workspaceId: id,
           installConfigId,
+          installingPrincipalId: principal.actor,
         });
         return c.json(capsuleResponse(capsule), 201);
       },
@@ -1026,6 +1039,15 @@ async function createScopedInstallConfigForCapsule(input: {
           interfaceBlueprints:
             resolveCapsuleInterfaceBlueprintInstallingPrincipal(
               input.interfaceBlueprints,
+              input.installingPrincipalId,
+            ),
+        }
+      : {}),
+    ...(baseConfig.resourceInterfaceBindingProposals
+      ? {
+          resourceInterfaceBindingProposals:
+            resolveCapsuleResourceInterfaceBindingInstallingPrincipal(
+              baseConfig.resourceInterfaceBindingProposals,
               input.installingPrincipalId,
             ),
         }

@@ -289,10 +289,21 @@ export class SourceLifecycleService {
       (reuseSnapshot && archiveRef === reuseSnapshot.archiveRef
         ? reuseSnapshot.repositoryInstallMetadata
         : undefined);
+    const repositoryInstallUx =
+      result.repositoryInstallUx ??
+      (reuseSnapshot && archiveRef === reuseSnapshot.archiveRef
+        ? reuseSnapshot.repositoryInstallUx
+        : undefined);
     if (!repositoryInstallMetadata) {
       throw new OpenTofuControllerError(
         "failed_precondition",
         "source_sync did not observe repository install metadata",
+      );
+    }
+    if (!repositoryInstallUx) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "source_sync did not observe repository install UX",
       );
     }
     const snapshot: SourceSnapshot = {
@@ -308,6 +319,7 @@ export class SourceLifecycleService {
       archiveDigest: result.archiveDigest,
       archiveSizeBytes: result.archiveSizeBytes,
       repositoryInstallMetadata,
+      repositoryInstallUx,
       fetchedByRunId: running.id,
       fetchedAt: finishedAtIso,
     };
@@ -475,7 +487,8 @@ export class SourceLifecycleService {
       const snapshot = snapshots[index]!;
       if (
         sourceSnapshotMatchesRun(snapshot, running) &&
-        snapshot.repositoryInstallMetadata !== undefined
+        snapshot.repositoryInstallMetadata !== undefined &&
+        snapshot.repositoryInstallUx !== undefined
       ) {
         return snapshot;
       }
@@ -499,7 +512,8 @@ export class SourceLifecycleService {
       .filter(
         (snapshot) =>
           sourceSnapshotMatchesRun(snapshot, running) &&
-          snapshot.repositoryInstallMetadata !== undefined,
+          snapshot.repositoryInstallMetadata !== undefined &&
+          snapshot.repositoryInstallUx !== undefined,
       )
       .sort((a, b) => compareIso(a.fetchedAt, b.fetchedAt));
     return reusable.at(-1);

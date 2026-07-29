@@ -17,6 +17,7 @@ import {
   parseStringMapText,
   resourceOutputKeys,
   resourcePhaseTone,
+  resourceSafeUrlProjections,
   resourceShapeHref,
 } from "../../../../dashboard/src/lib/resource-shapes.ts";
 
@@ -309,10 +310,10 @@ describe("Resource Shape dashboard helpers", () => {
     expect(parseStringMapText('{"priority":1}').ok).toBe(false);
   });
 
-  test("encodes detail links, status tones, and hides output values", () => {
+  test("encodes detail links, status tones, and projects only an allowlisted public URL", () => {
     const resource = {
       apiVersion: "takosumi.dev/v1alpha1" as const,
-      kind: "ObjectBucket",
+      kind: "EdgeWorker",
       metadata: {
         name: "assets/main",
         space: "workspace_1",
@@ -324,18 +325,64 @@ describe("Resource Shape dashboard helpers", () => {
         observedGeneration: 1,
         outputs: {
           secretLookingValue: "never-render-this",
-          endpoint: "https://example.test",
+          url: "https://ew-example.edge.takosumi.test",
         },
       },
     };
     expect(resourceShapeHref(resource)).toBe(
-      "/resources/ObjectBucket/assets%2Fmain",
+      "/resources/EdgeWorker/assets%2Fmain",
     );
     expect(resourcePhaseTone("Ready")).toBe("ok");
     expect(resourcePhaseTone("Failed")).toBe("danger");
-    expect(resourceOutputKeys(resource)).toEqual([
-      "endpoint",
-      "secretLookingValue",
+    expect(resourceOutputKeys(resource)).toEqual(["secretLookingValue", "url"]);
+    expect(resourceSafeUrlProjections(resource)).toEqual([
+      {
+        outputName: "url",
+        url: "https://ew-example.edge.takosumi.test/",
+      },
     ]);
+  });
+
+  test("keeps arbitrary and credential-bearing Resource outputs hidden", () => {
+    const base = {
+      apiVersion: "takosumi.dev/v1alpha1" as const,
+      metadata: {
+        name: "unsafe",
+        space: "workspace_1",
+        managedBy: "opentofu",
+      },
+      spec: {},
+      status: {
+        phase: "Ready" as const,
+        observedGeneration: 1,
+      },
+    };
+
+    expect(
+      resourceSafeUrlProjections({
+        ...base,
+        kind: "ObjectBucket",
+        status: {
+          ...base.status,
+          outputs: {
+            url: "https://not-an-edge-worker.example.test",
+            admin_token: "never-render-this",
+          },
+        },
+      }),
+    ).toEqual([]);
+    expect(
+      resourceSafeUrlProjections({
+        ...base,
+        kind: "EdgeWorker",
+        status: {
+          ...base.status,
+          outputs: {
+            url: "https://user:secret@example.test",
+            public_url: "https://not-allowlisted.example.test",
+          },
+        },
+      }),
+    ).toEqual([]);
   });
 });

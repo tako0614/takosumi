@@ -10,7 +10,12 @@
  * User repos carry NO Takosumi manifest or reserved schema.
  */
 
-import type { CapsuleInterfaceBlueprint } from "./interfaces.ts";
+import type {
+  CapsuleInterfaceBlueprint,
+  CapsuleResourceInterfaceBindingProposal,
+} from "./interfaces.ts";
+import type { InstallConfigHostRuntimeMaterialization } from "./host-runtime-materialization.ts";
+export type { InstallConfigHostRuntimeMaterialization } from "./host-runtime-materialization.ts";
 import type { ScopeBoundaryPolicy } from "./plan-scope.ts";
 import type { JsonValue } from "./types.ts";
 
@@ -107,7 +112,40 @@ export interface InstallConfigLifecycleCommandAction {
   readonly useProviderCredentials?: boolean;
 }
 
-export type InstallConfigLifecycleAction = InstallConfigLifecycleCommandAction;
+/**
+ * One immutable application-owned migration bundle selected by an
+ * InstallConfig. `manifestPath` is resolved only inside the reviewed source
+ * snapshot; SQL bytes are never an OpenTofu value or public Run field.
+ */
+export interface InstallConfigResourceMigrationBundle {
+  readonly format: "takosumi.resource-migrations/v1";
+  readonly manifestPath: string;
+  readonly digest: `sha256:${string}`;
+}
+
+/**
+ * A typed post-apply database migration. The declaration pins the OpenTofu
+ * Resource address owned by the Capsule. The action and bundle digest are
+ * Plan-pinned. The operator resolves the exact canonical Resource id,
+ * generation, revision, and structured Capsule owner from server-side records
+ * immediately before execution; OpenTofu Outputs are never target authority.
+ */
+export interface InstallConfigResourceMigrationAction {
+  readonly apiVersion: "takosumi.dev/v1alpha1";
+  readonly kind: "resource_migration";
+  readonly id: string;
+  readonly phase: "post_apply";
+  readonly executor: "operator";
+  readonly runnerCapability: string;
+  readonly target: {
+    readonly resourceAddress: string;
+  };
+  readonly bundle: InstallConfigResourceMigrationBundle;
+  readonly timeoutSeconds?: number;
+}
+
+export type InstallConfigLifecycleAction =
+  InstallConfigLifecycleCommandAction | InstallConfigResourceMigrationAction;
 
 /**
  * Allocation mode for one operator-managed public hostname.
@@ -295,8 +333,27 @@ export type InstallConfigInstallProjection =
       };
     };
 
+/**
+ * DB-owned grouping compiled from an accepted repository install-UX proposal.
+ * Input names may reference only accepted `variablePresentation` entries; the
+ * group carries no provider, secret, lifecycle, or execution authority.
+ */
+export interface InstallConfigInstallFeature {
+  readonly id: string;
+  readonly label: InstallConfigStoreText;
+  readonly optional: boolean;
+  readonly inputs: readonly string[];
+}
+
+export interface InstallConfigRepositoryInstallUxState {
+  readonly status: "accepted";
+}
+
 export interface InstallConfigInstallExperience {
   readonly projections?: readonly InstallConfigInstallProjection[];
+  readonly features?: readonly InstallConfigInstallFeature[];
+  /** Public-safe marker that this DB-owned configuration was compiled. */
+  readonly repositoryInstallUx?: InstallConfigRepositoryInstallUxState;
 }
 
 /**
@@ -391,8 +448,9 @@ function installConfigSourcePathIsComparable(value: string): boolean {
  * Service-side presentation for one ordinary OpenTofu input variable.
  *
  * This is Takosumi DB configuration. It is deliberately not nested under
- * Store metadata and is never adopted from a Store listing or repository
- * metadata file.
+ * Store metadata. A Store listing can never supply it; Takosumi may compile a
+ * strictly validated proposal captured from an immutable repository snapshot
+ * into this DB-owned shape before a reviewed Plan.
  */
 export interface InstallConfigVariablePresentation {
   readonly name: string;
@@ -454,6 +512,9 @@ export interface InstallConfig {
   /** Internal service-side config rows are addressable by id but not selectable. */
   readonly internal?: {
     readonly reason: "per_install_overrides";
+    /** Immutable proposal provenance; never selectable through public APIs. */
+    readonly sourceSnapshotId?: string;
+    readonly repositoryInstallUxDigest?: string;
   };
   readonly variableMapping: Readonly<Record<string, unknown>>;
   /**
@@ -463,14 +524,16 @@ export interface InstallConfig {
   readonly installContextVariableMapping?: InstallContextVariableMapping;
   /**
    * Optional service-side UI declaration for ordinary OpenTofu variables.
-   * Store and repository metadata can never add, replace, or default these
-   * entries.
+   * Store metadata can never add, replace, or default these entries. An
+   * immutable repository install-UX proposal has no direct authority: only the
+   * compatibility/policy compiler's persisted result may contribute entries.
    */
   readonly variablePresentation?: readonly InstallConfigVariablePresentation[];
   /**
    * Optional service-side semantic projections used by Takosumi UX and
-   * automation. This declaration is DB-owned and is not repository discovery
-   * metadata or an OpenTofu Output convention.
+   * automation. This declaration is DB-owned and is not Store discovery
+   * metadata or an OpenTofu Output convention. A repository proposal becomes
+   * effective only after exact-snapshot compilation into this record.
    */
   readonly installExperience?: InstallConfigInstallExperience;
   readonly outputAllowlist: Readonly<Record<string, OutputAllowlistEntry>>;
@@ -483,12 +546,29 @@ export interface InstallConfig {
    * an OpenTofu Output convention.
    */
   readonly interfaceBlueprints?: readonly CapsuleInterfaceBlueprint[];
+  /**
+   * Binding-only service proposals for Resource-owned Interfaces declared by
+   * portable IaC. This field never carries an Interface document or spec.
+   */
+  readonly resourceInterfaceBindingProposals?: readonly CapsuleResourceInterfaceBindingProposal[];
+  /**
+   * DB-owned, provider-neutral runtime materialization requirements. Core
+   * forwards only opaque secret/capability refs to the selected Resource
+   * adapter; resolved values remain inside the host.
+   */
+  readonly hostRuntimeMaterialization?: InstallConfigHostRuntimeMaterialization;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
 
 /** Public InstallConfig projection returned by `/api` and dashboard session routes. */
-export type PublicInstallConfig = Omit<InstallConfig, "runnerId" | "internal">;
+export type PublicInstallConfig = Omit<
+  InstallConfig,
+  | "runnerId"
+  | "internal"
+  | "resourceInterfaceBindingProposals"
+  | "hostRuntimeMaterialization"
+>;
 
 /**
  * Exact artifact kind for a service-side InstallConfig patch.

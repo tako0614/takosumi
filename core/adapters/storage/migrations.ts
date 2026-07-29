@@ -4546,4 +4546,17 @@ alter table takosumi_resolution_locks
       down: `alter table takosumi_resource_shapes
   drop column if exists owner_json;`,
     },
+    {
+      id: "runtime_interfaces.authorization_indexes.add",
+      version: 104,
+      domain: "runtime",
+      description:
+        "Add the stable cursor-order and exact current Principal Binding indexes used by bounded read-only Interface authorization pages.",
+      sql: `create index if not exists takosumi_interfaces_authorized_page_idx
+  on takosumi_interfaces (workspace_id, phase, created_at, id);
+create index if not exists takosumi_interface_bindings_authorized_current_idx
+  on takosumi_interface_bindings (
+    workspace_id, subject_kind, subject_id, interface_id
+  ) where phase = 'Ready';`,
+    },
   ]);

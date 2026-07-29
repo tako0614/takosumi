@@ -13,10 +13,12 @@ import type {
   ResourceConnectionPermission,
   ResourceDeletePolicy,
   ResourceProjectionKind,
+  ResourceOwner,
   ResourceShapeKind,
   TargetImplementationDescriptor,
   TargetPoolEntry,
 } from "takosumi-contract";
+import type { HostRuntimeMaterializationRequest } from "takosumi-contract";
 import type { ResourceShapePlan } from "./planner.ts";
 import type {
   ResourceShapeExecutionRecord,
@@ -52,6 +54,8 @@ export interface ResolvedResourceConnection {
 export interface AdapterApplyInput {
   /** Canonical resource id (`tkrn:{space}:{kind}:{name}`). */
   readonly resourceId: string;
+  /** Immutable Core-authorized owner of this canonical Resource. */
+  readonly owner?: ResourceOwner;
   /**
    * Exact canonical Resource generation whose lifecycle operation authorized
    * this adapter call. Direct adapters must persist it as incarnation
@@ -102,6 +106,11 @@ export interface AdapterApplyInput {
   readonly resolvedConnections?: Readonly<
     Record<string, ResolvedResourceConnection>
   >;
+  /**
+   * DB-owned Capsule runtime requirements. This envelope contains only opaque
+   * host refs; adapters must never replace it with plaintext configuration.
+   */
+  readonly hostRuntimeMaterialization?: HostRuntimeMaterializationRequest;
   readonly actor: ActorContext;
 }
 
@@ -189,6 +198,8 @@ export interface AdapterObserveResult {
 
 export interface AdapterDeleteInput {
   readonly resourceId: string;
+  /** Immutable owner read from the canonical Resource ledger. */
+  readonly owner?: ResourceOwner;
   /** Exact canonical Resource generation being retired. */
   readonly resourceGeneration: number;
   /** Canonical direct-plugin backend revision being retired. */
@@ -213,6 +224,8 @@ export interface AdapterDeleteInput {
   readonly target: TargetPoolEntry;
   readonly implementation: TargetImplementationDescriptor;
   readonly credentialRef?: string;
+  /** Exact runtime authority being retired; still contains refs only. */
+  readonly hostRuntimeMaterialization?: HostRuntimeMaterializationRequest;
   readonly deletePolicy?: ResourceDeletePolicy;
   readonly actor: ActorContext;
 }

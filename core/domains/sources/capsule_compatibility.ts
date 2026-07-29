@@ -6,6 +6,7 @@ import type {
   CapsuleProvisionerSummary,
   CapsuleResourceSummary,
   CapsuleRootModuleOutputDeclaration,
+  CapsuleRootModuleVariableDeclaration,
 } from "takosumi-contract/capsules";
 import type { PolicyConfig } from "takosumi-contract/install-configs";
 import type { SourceSnapshot } from "takosumi-contract/sources";
@@ -30,6 +31,7 @@ export interface CapsuleCompatibilityAnalysis {
   readonly dataSources: readonly CapsuleDataSourceSummary[];
   readonly provisioners: readonly CapsuleProvisionerSummary[];
   readonly rootModuleVariables: readonly string[];
+  readonly rootModuleVariableDeclarations: readonly CapsuleRootModuleVariableDeclaration[];
   readonly rootModuleOutputs: readonly CapsuleRootModuleOutputDeclaration[];
 }
 
@@ -88,6 +90,7 @@ export function analyzeOpenTofuCapsuleFiles(
       dataSources: [],
       provisioners: [],
       rootModuleVariables: [],
+      rootModuleVariableDeclarations: [],
       rootModuleOutputs: [],
     };
   }
@@ -244,6 +247,8 @@ export function analyzeOpenTofuCapsuleFiles(
     dataSources,
     provisioners,
     rootModuleVariables: collectRootModuleVariableNames(hclFiles),
+    rootModuleVariableDeclarations:
+      collectRootModuleVariableDeclarations(hclFiles),
     rootModuleOutputs,
   };
 }
@@ -642,6 +647,52 @@ export function collectRootModuleVariableNames(
   files: readonly CapsuleSourceFile[],
 ): readonly string[] {
   return collectRootModuleNamedBlocks(files, "variable");
+}
+
+export function collectRootModuleVariableDeclarations(
+  files: readonly CapsuleSourceFile[],
+): readonly CapsuleRootModuleVariableDeclaration[] {
+  const byName = new Map<string, CapsuleRootModuleVariableDeclaration>();
+  for (const file of files) {
+    if (!isRootModuleTfFile(file.path)) continue;
+    for (const block of matchNamedBlocks(file.text, "variable")) {
+      byName.set(block.name, {
+        name: block.name,
+        type: rootModuleVariableBasicType(block.body),
+        hasDefault: rootModuleVariableHasDefault(block.body),
+      });
+    }
+  }
+  return Array.from(byName.values()).sort((left, right) =>
+    left.name.localeCompare(right.name),
+  );
+}
+
+function rootModuleVariableBasicType(
+  blockBody: string,
+): CapsuleRootModuleVariableDeclaration["type"] {
+  const masked = maskHclCommentsAndHeredocs(blockBody);
+  const match = /^\s*type\s*=\s*([A-Za-z_][A-Za-z0-9_]*)/mu.exec(masked);
+  if (!match) return "unknown";
+  switch (match[1]) {
+    case "string":
+    case "number":
+    case "bool":
+      return match[1] === "bool" ? "boolean" : match[1];
+    case "any":
+    case "list":
+    case "map":
+    case "object":
+    case "set":
+    case "tuple":
+      return "json";
+    default:
+      return "unknown";
+  }
+}
+
+function rootModuleVariableHasDefault(blockBody: string): boolean {
+  return /^\s*default\s*=/mu.test(maskHclCommentsAndHeredocs(blockBody));
 }
 
 export function collectRootModuleOutputNames(

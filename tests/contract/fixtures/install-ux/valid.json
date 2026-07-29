@@ -1,0 +1,120 @@
+{
+  "schemaVersion": "takosumi.install-ux/v1",
+  "modules": {
+    ".": {
+      "inputs": [
+        {
+          "name": "project_name",
+          "source": {
+            "kind": "capsule_name"
+          },
+          "type": "string",
+          "format": "subdomain",
+          "label": {
+            "ja": "サービス名",
+            "en": "Service name"
+          },
+          "advanced": true
+        },
+        {
+          "name": "app_url",
+          "source": {
+            "kind": "user"
+          },
+          "type": "string",
+          "format": "url",
+          "required": false,
+          "label": {
+            "ja": "公開 URL",
+            "en": "Public URL"
+          },
+          "helper": {
+            "ja": "空欄の場合は Takosumi が URL を割り当てます。",
+            "en": "Takosumi allocates a URL when omitted."
+          }
+        },
+        {
+          "name": "notification_push_gateway_url",
+          "source": {
+            "kind": "user"
+          },
+          "type": "string",
+          "format": "url",
+          "label": {
+            "ja": "通知ゲートウェイ",
+            "en": "Notification gateway"
+          },
+          "advanced": true
+        },
+        {
+          "name": "notification_push_gateway_token",
+          "source": {
+            "kind": "user"
+          },
+          "type": "string",
+          "label": {
+            "ja": "通知トークン",
+            "en": "Notification token"
+          },
+          "advanced": true,
+          "secret": true
+        }
+      ],
+      "installExperience": {
+        "projections": [
+          {
+            "kind": "service_name",
+            "variable": "project_name"
+          },
+          {
+            "kind": "public_endpoint",
+            "variables": {
+              "url": "app_url",
+              "subdomain": "project_name"
+            }
+          },
+          {
+            "kind": "initial_secret",
+            "variable": "auth_password_hash",
+            "secretKind": "password_or_hash",
+            "optional": true
+          },
+          {
+            "kind": "oidc_client",
+            "variables": {
+              "issuerUrl": "takosumi_accounts_issuer_url",
+              "clientId": "takosumi_accounts_client_id"
+            },
+            "callbackPath": "/api/auth/callback/takos",
+            "scopes": [
+              "openid",
+              "profile",
+              "email"
+            ]
+          },
+          {
+            "kind": "artifact",
+            "variables": {
+              "url": "worker_bundle_url",
+              "sha256": "worker_bundle_sha256"
+            }
+          }
+        ]
+      },
+      "features": [
+        {
+          "id": "notification-push",
+          "optional": true,
+          "label": {
+            "ja": "通知を有効にする",
+            "en": "Enable notifications"
+          },
+          "inputs": [
+            "notification_push_gateway_url",
+            "notification_push_gateway_token"
+          ]
+        }
+      ]
+    }
+  }
+}

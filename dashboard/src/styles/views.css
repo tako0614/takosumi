@@ -568,6 +568,31 @@
   gap: var(--tg-s-2);
 }
 
+.rs-output-links {
+  display: grid;
+  gap: var(--tg-s-2);
+  margin-bottom: var(--tg-s-3);
+}
+
+.rs-output-links a {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--tg-s-2);
+  width: fit-content;
+  max-width: 100%;
+  color: var(--tg-accent-text);
+  text-decoration: none;
+}
+
+.rs-output-links a:hover span {
+  text-decoration: underline;
+}
+
+.rs-output-links span {
+  overflow-wrap: anywhere;
+}
+
 .rs-output-keys code {
   padding: var(--tg-s-1) var(--tg-s-2);
   border: 1px solid var(--tg-line);

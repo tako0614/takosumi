@@ -1,4 +1,10 @@
 import type { Interface, InterfaceBinding } from "takosumi-contract/interfaces";
+import type { Page, PageParams } from "takosumi-contract/pagination";
+import {
+  pageSortedBy,
+  UI_SURFACE_INTERFACE_TYPE,
+  UI_SURFACE_INTERFACE_VERSION,
+} from "takosumi-contract";
 import { freezeClone } from "../../shared/freeze.ts";
 import { interfaceOAuth2ResourceUri } from "./oauth_resource.ts";
 
@@ -93,6 +99,32 @@ export interface InterfaceStores {
   readonly persistence: "durable" | "ephemeral";
   readonly interfaces: InterfaceStore;
   readonly bindings: InterfaceBindingStore;
+  /**
+   * Read-only authorization projection. Durable implementations collapse the
+   * Interface + current Principal Binding check into one bounded statement.
+   */
+  readonly authorized: InterfaceAuthorizationQuery;
+}
+
+export interface InterfaceAuthorizationPageInput {
+  readonly filter: InterfaceListFilter;
+  readonly subjectId: string;
+  readonly permission: string;
+  readonly params: PageParams;
+  /**
+   * Narrows the scan to launcher candidates without treating the opaque
+   * document as authorization. The exact Principal Binding remains authority;
+   * the dashboard still validates the complete type-specific document.
+   */
+  readonly uiSurfaceCandidates?: boolean;
+  /** Applies only to Capsule-owned candidates; Resource ownership is joined later. */
+  readonly capsuleId?: string;
+}
+
+export interface InterfaceAuthorizationQuery {
+  listPage(
+    input: InterfaceAuthorizationPageInput,
+  ): Promise<Page<Interface>>;
 }
 
 export class InMemoryInterfaceStore implements InterfaceStore {
@@ -292,11 +324,72 @@ export class InMemoryInterfaceBindingStore implements InterfaceBindingStore {
 }
 
 export function createInMemoryInterfaceStores(): InterfaceStores {
+  const interfaces = new InMemoryInterfaceStore();
+  const bindings = new InMemoryInterfaceBindingStore();
   return {
     persistence: "ephemeral",
-    interfaces: new InMemoryInterfaceStore(),
-    bindings: new InMemoryInterfaceBindingStore(),
+    interfaces,
+    bindings,
+    authorized: new InMemoryInterfaceAuthorizationQuery(
+      interfaces,
+      bindings,
+    ),
   };
+}
+
+class InMemoryInterfaceAuthorizationQuery
+  implements InterfaceAuthorizationQuery
+{
+  constructor(
+    private readonly interfaces: InterfaceStore,
+    private readonly bindings: InterfaceBindingStore,
+  ) {}
+
+  async listPage(
+    input: InterfaceAuthorizationPageInput,
+  ): Promise<Page<Interface>> {
+    const candidates = (
+      await this.interfaces.list({
+        ...input.filter,
+        phase: input.filter.phase ?? "Resolved",
+        includeRetired: false,
+        limit: undefined,
+      })
+    ).filter((iface) => {
+      if (
+        input.uiSurfaceCandidates &&
+        !isUiSurfaceCandidate(iface, input.capsuleId)
+      ) {
+        return false;
+      }
+      return true;
+    });
+    const authorized: Interface[] = [];
+    for (const iface of candidates) {
+      const bindings = await this.bindings.listByInterface(iface.metadata.id);
+      if (
+        bindings.some((binding) =>
+          isCurrentPrincipalGrant(
+            binding,
+            iface,
+            input.subjectId,
+            input.permission,
+          ),
+        )
+      ) {
+        authorized.push(iface);
+      }
+    }
+    authorized.sort(
+      (left, right) =>
+        left.metadata.createdAt.localeCompare(right.metadata.createdAt) ||
+        left.metadata.id.localeCompare(right.metadata.id),
+    );
+    return pageSortedBy(authorized, input.params, (iface) => ({
+      createdAt: iface.metadata.createdAt,
+      id: iface.metadata.id,
+    }));
+  }
 }
 
 function sameName(left: Interface, right: Interface): boolean {
@@ -334,5 +427,43 @@ function matches(record: Interface, filter: InterfaceListFilter): boolean {
     (filter.ownerIds === undefined ||
       filter.ownerIds.includes(record.metadata.ownerRef.id)) &&
     (filter.includeRetired === true || record.status.phase !== "Retired")
+  );
+}
+
+function isUiSurfaceCandidate(
+  iface: Interface,
+  capsuleId: string | undefined,
+): boolean {
+  if (iface.metadata.ownerRef.kind === "Capsule") {
+    return (
+      (capsuleId === undefined || iface.metadata.ownerRef.id === capsuleId) &&
+      iface.spec.type === UI_SURFACE_INTERFACE_TYPE &&
+      iface.spec.version === UI_SURFACE_INTERFACE_VERSION
+    );
+  }
+  return (
+    iface.metadata.ownerRef.kind === "Resource" &&
+    iface.spec.document !== null &&
+    typeof iface.spec.document === "object" &&
+    !Array.isArray(iface.spec.document) &&
+    iface.spec.document.launcher === true
+  );
+}
+
+function isCurrentPrincipalGrant(
+  binding: InterfaceBinding,
+  iface: Interface,
+  subjectId: string,
+  permission: string,
+): boolean {
+  return (
+    iface.status.phase === "Resolved" &&
+    binding.metadata.workspaceId === iface.metadata.workspaceId &&
+    binding.spec.interfaceId === iface.metadata.id &&
+    binding.spec.subjectRef.kind === "Principal" &&
+    binding.spec.subjectRef.id === subjectId &&
+    binding.spec.permissions.includes(permission) &&
+    binding.status.phase === "Ready" &&
+    binding.status.observedInterfaceRevision === iface.status.resolvedRevision
   );
 }

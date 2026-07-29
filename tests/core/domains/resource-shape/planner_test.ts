@@ -122,6 +122,19 @@ test("bundled parsers keep ten typed Resource Shape schemas", () => {
       },
     }).ok,
   ).toBe(true);
+  expect(
+    parseScheduleSpec({
+      name: "hourly",
+      cron: "0 * * * *",
+      connections: {
+        worker: {
+          resource: "HttpService/app",
+          permissions: ["invoke"],
+          projection: "schedule.trigger.v1",
+        },
+      },
+    }).ok,
+  ).toBe(true);
 });
 
 test("Core parser has zero implicit Resource Shape compatibility schemas", () => {

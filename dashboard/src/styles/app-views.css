@@ -1275,6 +1275,40 @@
   gap: var(--tg-s-3);
   min-width: 0;
 }
+.av-semantic-choice {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: var(--tg-s-3);
+  padding: var(--tg-s-3);
+  border-radius: var(--tg-r-md);
+  background: var(--tg-bg-subtle);
+}
+.av-semantic-choice svg {
+  margin-top: 2px;
+  color: var(--tg-accent-text);
+}
+.av-semantic-choice p {
+  margin: 2px 0 0;
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-sm);
+  line-height: 1.5;
+}
+.av-install-feature-list {
+  display: grid;
+  gap: var(--tg-s-3);
+}
+.av-install-feature {
+  display: grid;
+  gap: var(--tg-s-3);
+  padding: var(--tg-s-3);
+  border: 1px solid var(--tg-line);
+  border-radius: var(--tg-r-md);
+  background: var(--tg-bg-subtle);
+}
+.av-install-feature-label {
+  font-size: var(--tg-fs-sm);
+}
 /* tg-tab is styled for <a>; the /new method tabs are <button>s. */
 button.tg-tab {
   background: transparent;

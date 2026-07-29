@@ -271,6 +271,96 @@ test("source register -> sync -> snapshots flow", async () => {
   expect((await snaps.json()).snapshots).toEqual([]);
 });
 
+test("source snapshot API exposes install UX status and digest without repository content", async () => {
+  const fileJobs: unknown[] = [];
+  const { app, store } = await makeAppWithStore({
+    runner: {
+      plan: () => {
+        throw new Error("not used");
+      },
+      apply: () => {
+        throw new Error("not used");
+      },
+      readSourceSnapshotPresentationFile: async (job) => {
+        fileJobs.push(job);
+        throw new Error("repository install UX must not reach the file reader");
+      },
+    },
+  });
+  const created = await app.request("/internal/v1/sources", {
+    method: "POST",
+    headers: HEADERS,
+    body: JSON.stringify({
+      workspaceId: "ws_001",
+      name: "install-ux",
+      url: "https://github.com/acme/repo.git",
+    }),
+  });
+  const { source } = await created.json();
+  const digest = `sha256:${"c".repeat(64)}`;
+  const snapshot: SourceSnapshot = {
+    id: "snap_installux000001",
+    origin: "git",
+    workspaceId: "ws_001",
+    sourceId: source.id,
+    url: source.url,
+    ref: source.defaultRef,
+    resolvedCommit: "abc123",
+    path: ".",
+    archiveRef: "workspaces/ws_001/install-ux/source.tar.zst",
+    archiveDigest: `sha256:${"a".repeat(64)}`,
+    archiveSizeBytes: 42,
+    repositoryInstallUx: {
+      status: "present",
+      digest,
+      document: {
+        schemaVersion: "takosumi.install-ux/v1",
+        modules: { ".": { inputs: [] } },
+      },
+    },
+    fetchedByRunId: "ssr_installux000001",
+    fetchedAt: "2026-07-29T00:00:00.000Z",
+  };
+  await store.putSourceSnapshot(snapshot);
+  await store.putSourceSnapshot({
+    ...snapshot,
+    id: "snap_installux000002",
+    repositoryInstallUx: {
+      status: "invalid",
+      reason: "invalid_document",
+      digest: `sha256:${"d".repeat(64)}`,
+      diagnostic: "contains unsupported field providerCredentials",
+    },
+    fetchedByRunId: "ssr_installux000002",
+    fetchedAt: "2026-07-29T00:01:00.000Z",
+  });
+
+  const listed = await app.request(
+    `/internal/v1/sources/${source.id}/snapshots`,
+    { headers: { authorization: "Bearer scoped-token" } },
+  );
+  expect(listed.status).toBe(200);
+  const body = await listed.json();
+  expect(body.snapshots[0].repositoryInstallUx).toEqual({
+    status: "present",
+    digest,
+  });
+  expect(body.snapshots[1].repositoryInstallUx).toEqual({
+    status: "invalid",
+    reason: "invalid_document",
+    digest: `sha256:${"d".repeat(64)}`,
+  });
+  expect(JSON.stringify(body)).not.toContain('"document"');
+  expect(JSON.stringify(body)).not.toContain('"diagnostic"');
+
+  const raw = await app.request(
+    `/internal/v1/sources/${source.id}/snapshots/${snapshot.id}/file?path=.well-known%2Ftakosumi.json`,
+    { headers: { authorization: "Bearer scoped-token" } },
+  );
+  expect(raw.status).toBe(400);
+  expect(fileJobs).toEqual([]);
+});
+
 test("source compatibility-check creates and reads a Capsule report", async () => {
   const { app, store } = await makeAppWithStore();
   const created = await app.request("/internal/v1/sources", {

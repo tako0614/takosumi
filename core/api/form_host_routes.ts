@@ -37,7 +37,8 @@ import { readJsonObject, requestIdFromContext } from "./errors.ts";
 import type { ApiEndpoint } from "./route_families.ts";
 import { parsePageQuery } from "./page_query.ts";
 
-const PORTABLE_FORM_MANAGER = "takoform.form-host.v1";
+/** Exact first-party audience for short-lived Takoform provider run tokens. */
+export const PORTABLE_FORM_MANAGER = "takoform.form-host.v1";
 const IDEMPOTENCY_KEY_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{7,127}$/u;
 
 export interface PortableFormAvailabilityReader {
@@ -460,10 +461,7 @@ export function registerPortableFormHostRoutes(
     const parsed = await parseResourceBody(c, auth.actor);
     if (!parsed.ok) return parsed.response;
     const request = await withHostResourceOwner(c, options, parsed.request);
-    const operation = await desiredWriteOperation(
-      options.service,
-      request,
-    );
+    const operation = await desiredWriteOperation(options.service, request);
     const available = await requireAvailableForm(
       c,
       options,
@@ -504,10 +502,7 @@ export function registerPortableFormHostRoutes(
     const replay = await completedApplyReplay(options.service, request);
     if (replay)
       return portableJson(c, portableResource(replay), 200, key.value);
-    const operation = await desiredWriteOperation(
-      options.service,
-      request,
-    );
+    const operation = await desiredWriteOperation(options.service, request);
     const available = await requireAvailableForm(
       c,
       options,

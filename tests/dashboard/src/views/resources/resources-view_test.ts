@@ -124,10 +124,14 @@ describe("Resource Shape dashboard surface", () => {
     );
   });
 
-  test("keeps break-glass deletion out of the dashboard and hides Output values", () => {
+  test("keeps break-glass deletion out and exposes only safe URL projections", () => {
     expect(detail).toContain("deleteResourceShape");
     expect(detail).not.toContain("force:");
     expect(detail).toContain("resourceOutputKeys(item())");
+    expect(detail).toContain("resourceSafeUrlProjections(item())");
+    expect(detail).toContain("href={output.url}");
+    expect(detail).toContain('target="_blank"');
+    expect(detail).toContain('rel="noreferrer noopener"');
     expect(detail).not.toContain("Object.entries(item().status?.outputs");
   });
 

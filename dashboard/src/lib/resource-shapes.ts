@@ -85,3 +85,62 @@ export function prettyJson(value: unknown): string {
 export function resourceOutputKeys(resource: ResourceShape): readonly string[] {
   return Object.keys(resource.status?.outputs ?? {}).sort();
 }
+
+export interface ResourceSafeUrlProjection {
+  readonly outputName: string;
+  readonly url: string;
+}
+
+/**
+ * Resource Output values are hidden unless this dashboard contract names the
+ * exact shape/output pair as a public navigation surface.
+ *
+ * `EdgeWorker.url` is declared by the canonical EdgeWorker implementation as a
+ * typed `url` module output. Keeping this allowlist narrower than arbitrary
+ * `status.outputs` prevents a provider, custom shape, or secret-looking output
+ * name from turning an untrusted value into a dashboard link.
+ */
+const SAFE_RESOURCE_URL_OUTPUT_NAMES: Readonly<
+  Record<string, readonly string[]>
+> = {
+  EdgeWorker: ["url"],
+};
+
+/** Return only explicitly allowlisted, credential-free HTTPS Resource URLs. */
+export function resourceSafeUrlProjections(
+  resource: ResourceShape,
+): readonly ResourceSafeUrlProjection[] {
+  const outputNames = SAFE_RESOURCE_URL_OUTPUT_NAMES[resource.kind] ?? [];
+  const outputs = resource.status?.outputs ?? {};
+  const projected: ResourceSafeUrlProjection[] = [];
+
+  for (const outputName of outputNames) {
+    const value = outputs[outputName];
+    if (typeof value !== "string") continue;
+    const url = safeCanonicalHttpsUrl(value);
+    if (url) projected.push({ outputName, url });
+  }
+
+  return projected;
+}
+
+function safeCanonicalHttpsUrl(value: string): string | undefined {
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return undefined;
+
+  try {
+    const url = new URL(trimmed);
+    if (
+      url.protocol !== "https:" ||
+      url.username !== "" ||
+      url.password !== "" ||
+      url.search !== "" ||
+      url.hash !== ""
+    ) {
+      return undefined;
+    }
+    return url.toString();
+  } catch {
+    return undefined;
+  }
+}

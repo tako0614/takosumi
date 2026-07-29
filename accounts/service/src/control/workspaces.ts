@@ -55,7 +55,9 @@ import type {
 } from "takosumi-contract/install-configs";
 import {
   capsuleInterfaceBlueprintsNeedInstallingPrincipal,
+  capsuleResourceInterfaceBindingsNeedInstallingPrincipal,
   resolveCapsuleInterfaceBlueprintInstallingPrincipal,
+  resolveCapsuleResourceInterfaceBindingInstallingPrincipal,
 } from "takosumi-contract/interfaces";
 import {
   parseScopeBoundaryPolicy,
@@ -174,6 +176,7 @@ import {
 import { base64UrlEncodeBytes } from "../encoding.ts";
 import { ensureTakosumiAccountsOidcForCapsule } from "./capsule-oidc.ts";
 import {
+  adoptRepoOwnedInstallConfig,
   hydrateRepoOwnedStoreConfig,
   latestSourceSnapshotForSource,
 } from "./repo-owned-install-config.ts";
@@ -303,76 +306,91 @@ export async function handleWorkspaces(
         );
       }
       const capsuleId = stringValue(rawCapsuleId ?? undefined);
-      const [capsuleInterfaces, resourceInterfaces] = await Promise.all([
-        operations.interfaces.listAuthorizedForPrincipal(
-          {
-            workspaceId,
-            type: UI_SURFACE_INTERFACE_TYPE,
-            phase: "Resolved",
-            ownerKind: "Capsule",
-            ...(capsuleId ? { ownerId: capsuleId } : {}),
-          },
+      const parsedPage = parseControlPageParams(url);
+      if (!parsedPage.ok) return parsedPage.response;
+      const candidatePage =
+        await operations.interfaces.listAuthorizedUiSurfaceCandidatesForPrincipalPage(
+          { workspaceId, phase: "Resolved" },
           ctx.session.subject,
           UI_SURFACE_OPEN_PERMISSION,
+          parsedPage.params,
+          capsuleId,
+        );
+      const resourceIds = [
+        ...new Set(
+          candidatePage.items
+            .filter((iface) => iface.metadata.ownerRef.kind === "Resource")
+            .map((iface) => iface.metadata.ownerRef.id),
         ),
-        operations.resourceCapsuleOwners
-          ? operations.interfaces.listAuthorizedForPrincipal(
-              {
-                workspaceId,
-                phase: "Resolved",
-                ownerKind: "Resource",
-              },
-              ctx.session.subject,
-              UI_SURFACE_OPEN_PERMISSION,
-            )
+      ];
+      const capsuleIds = [
+        ...new Set(
+          candidatePage.items
+            .filter((iface) => iface.metadata.ownerRef.kind === "Capsule")
+            .map((iface) => iface.metadata.ownerRef.id),
+        ),
+      ];
+      const [capsules, ownerEntries] = await Promise.all([
+        capsuleIds.length > 0
+          ? operations.capsules.getCapsulesByIds(capsuleIds)
+          : Promise.resolve([]),
+        resourceIds.length > 0 && operations.resourceCapsuleOwners
+          ? operations.resourceCapsuleOwners.getMany(resourceIds)
           : Promise.resolve([]),
       ]);
-      const resourceLaunchers = await Promise.all(
-        resourceInterfaces.map(async (iface) => {
+      const capsuleById = new Map(
+        capsules.map((candidate) => [candidate.id, candidate]),
+      );
+      const owners = new Map(
+        ownerEntries.map((entry) => [entry.resourceId, entry.owner]),
+      );
+      const interfaces = candidatePage.items.flatMap((iface) => {
+        if (iface.metadata.ownerRef.kind === "Capsule") {
+          const owner = capsuleById.get(iface.metadata.ownerRef.id);
+          return owner?.workspaceId === workspaceId &&
+            (owner.status === "active" || owner.status === "stale") &&
+            iface.metadata.workspaceId === workspaceId &&
+            iface.spec.type === UI_SURFACE_INTERFACE_TYPE &&
+            iface.spec.version === UI_SURFACE_INTERFACE_VERSION &&
+            iface.status.phase === "Resolved"
+            ? [iface]
+            : [];
+        }
+        if (iface.metadata.ownerRef.kind === "Resource") {
           if (
             iface.metadata.workspaceId !== workspaceId ||
-            iface.metadata.ownerRef.kind !== "Resource" ||
             iface.status.phase !== "Resolved" ||
             !isLauncherDocument(iface.spec.document)
           ) {
-            return undefined;
+            return [];
           }
-          const owner = await operations.resourceCapsuleOwners!.get(
-            iface.metadata.ownerRef.id,
-          );
+          const owner = owners.get(iface.metadata.ownerRef.id);
           if (
             !owner ||
             owner.workspaceId !== workspaceId ||
             (capsuleId && owner.id !== capsuleId)
           ) {
-            return undefined;
+            return [];
           }
-          return {
-            ...iface,
-            launcherOwner: { capsuleId: owner.id },
-          };
-        }),
-      );
+          return [
+            {
+              ...iface,
+              launcherOwner: { capsuleId: owner.id },
+            },
+          ];
+        }
+        return [];
+      });
       // InterfaceService owns current Binding and lifecycle authorization. The
       // account-plane projection narrows that authorized result to the exact
       // launcher protocol version; type-specific document/URL safety remains
       // the dashboard consumer's responsibility.
       return json(
         {
-          interfaces: [
-            ...capsuleInterfaces.filter(
-              (iface) =>
-                iface.metadata.workspaceId === workspaceId &&
-                iface.metadata.ownerRef.kind === "Capsule" &&
-                iface.spec.type === UI_SURFACE_INTERFACE_TYPE &&
-                iface.spec.version === UI_SURFACE_INTERFACE_VERSION &&
-                iface.status.phase === "Resolved",
-            ),
-            ...resourceLaunchers.filter(
-              (iface): iface is NonNullable<typeof iface> =>
-                iface !== undefined,
-            ),
-          ],
+          interfaces,
+          ...(candidatePage.nextCursor
+            ? { nextCursor: candidatePage.nextCursor }
+            : {}),
         },
         200,
         { "cache-control": "no-store" },
@@ -1339,6 +1357,20 @@ async function createCapsule(
     operations,
     source,
   );
+  if (
+    baseConfig.internal?.sourceSnapshotId &&
+    (repoMetadataSnapshot?.id !== baseConfig.internal.sourceSnapshotId ||
+      repoMetadataSnapshot.repositoryInstallUx?.status !== "present" ||
+      repoMetadataSnapshot.repositoryInstallUx.digest !==
+        baseConfig.internal.repositoryInstallUxDigest)
+  ) {
+    return errorJson(
+      "repository_install_ux_stale",
+      "The repository changed after install setup was reviewed; sync and review the latest install configuration.",
+      409,
+      request,
+    );
+  }
   const hydratedRepoConfig = await hydrateRepoOwnedStoreConfig({
     operations,
     source,
@@ -1348,8 +1380,30 @@ async function createCapsule(
   });
   const resolvedStoreMetadata = hydratedRepoConfig.storeMetadata;
   const resolvedModulePath = hydratedRepoConfig.modulePath;
+  const repoInstallUx = await adoptRepoOwnedInstallConfig({
+    operations,
+    source,
+    sourceSnapshot: repoMetadataSnapshot,
+    baseConfig,
+    modulePath: resolvedModulePath,
+    capsuleName: name,
+    workspaceId,
+    ...(vars ? { reviewedVariables: vars } : {}),
+  });
+  if (repoInstallUx.status === "invalid") {
+    return errorJson(
+      "repository_install_ux_invalid",
+      repoInstallUx.diagnostic.message,
+      400,
+      request,
+      {},
+      { diagnosticCode: repoInstallUx.diagnostic.code },
+    );
+  }
   const presentationDefaultVars = variablePresentationDefaultMapping(
-    baseConfig.variablePresentation,
+    repoInstallUx.status === "accepted"
+      ? repoInstallUx.variablePresentation
+      : baseConfig.variablePresentation,
     { capsuleName: name, workspaceId },
   );
   const hasPresentationDefaultVars =
@@ -1360,10 +1414,18 @@ async function createCapsule(
   const needsInstallingPrincipalScope =
     capsuleInterfaceBlueprintsNeedInstallingPrincipal(
       selectedInterfaceBlueprints,
+    ) ||
+    capsuleResourceInterfaceBindingsNeedInstallingPrincipal(
+      baseConfig.resourceInterfaceBindingProposals,
     );
   const resolvedInterfaceBlueprints =
     resolveCapsuleInterfaceBlueprintInstallingPrincipal(
       selectedInterfaceBlueprints,
+      session.subject,
+    );
+  const resolvedResourceInterfaceBindingProposals =
+    resolveCapsuleResourceInterfaceBindingInstallingPrincipal(
+      baseConfig.resourceInterfaceBindingProposals,
       session.subject,
     );
   if (
@@ -1376,7 +1438,8 @@ async function createCapsule(
     sourceBuild !== undefined ||
     managedPublicHostname !== undefined ||
     interfaceBlueprints !== undefined ||
-    needsInstallingPrincipalScope
+    needsInstallingPrincipalScope ||
+    repoInstallUx.status === "accepted"
   ) {
     const now = new Date().toISOString();
     const { modulePath: _baseModulePath, ...baseConfigWithoutModulePath } =
@@ -1388,12 +1451,32 @@ async function createCapsule(
       id: `icfg_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`,
       workspaceId,
       name: `${name}-config`,
-      internal: { reason: "per_install_overrides" },
-      variableMapping: mergeVariableMappings(
-        baseConfig.variableMapping,
-        presentationDefaultVars,
-        vars ?? {},
-      ),
+      internal:
+        repoInstallUx.status === "accepted"
+          ? {
+              reason: "per_install_overrides",
+              sourceSnapshotId: repoInstallUx.sourceSnapshotId,
+              repositoryInstallUxDigest: repoInstallUx.digest,
+            }
+          : { reason: "per_install_overrides" },
+      variableMapping:
+        repoInstallUx.status === "accepted"
+          ? mergeVariableMappings(
+              repoInstallUx.variableMapping,
+              presentationDefaultVars,
+              baseConfig.variableMapping,
+            )
+          : mergeVariableMappings(
+              baseConfig.variableMapping,
+              presentationDefaultVars,
+              vars ?? {},
+            ),
+      ...(repoInstallUx.status === "accepted"
+        ? {
+            variablePresentation: repoInstallUx.variablePresentation,
+            installExperience: repoInstallUx.installExperience,
+          }
+        : {}),
       ...(resolvedStoreMetadata ? { store: resolvedStoreMetadata } : {}),
       ...(runnerProfileId ? { runnerId: runnerProfileId } : {}),
       ...(resolvedModulePath ? { modulePath: resolvedModulePath } : {}),
@@ -1401,6 +1484,12 @@ async function createCapsule(
       ...(managedPublicHostname ? { managedPublicHostname } : {}),
       ...(resolvedInterfaceBlueprints
         ? { interfaceBlueprints: resolvedInterfaceBlueprints }
+        : {}),
+      ...(resolvedResourceInterfaceBindingProposals
+        ? {
+            resourceInterfaceBindingProposals:
+              resolvedResourceInterfaceBindingProposals,
+          }
         : {}),
       outputAllowlist:
         outputAllowlist ?? scopedCloneOutputAllowlist(baseConfig),
@@ -1417,6 +1506,7 @@ async function createCapsule(
     environment,
     sourceId,
     installConfigId: resolvedInstallConfigId,
+    installingPrincipalId: session.subject,
     ...(autoUpdate ? { autoUpdate: true } : {}),
   });
   if (resolvedInstallConfig && issuer) {

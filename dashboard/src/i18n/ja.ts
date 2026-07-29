@@ -696,6 +696,28 @@ export const ja = {
   "new.identity.label": "公開URL",
   "new.identity.edit": "変更",
   "new.identity.done": "閉じる",
+  "new.auth.title": "認証",
+  "new.auth.subtitle": "最初の管理者がログインする方法を選びます。",
+  "new.auth.mode": "ログイン方法",
+  "new.auth.oidc": "Takosumi アカウントでログイン",
+  "new.auth.oidcHint":
+    "Takosumi がアプリを登録し、このサービスを追加したアカウントを紐づけます。",
+  "new.auth.password": "パスワード",
+  "new.auth.initialPassword": "初期パスワード",
+  "new.auth.passwordHint":
+    "最初の管理者用パスワードです。非公開の初期設定情報として扱われます。",
+  "new.auth.unavailableTitle": "この認証方法はこの環境で利用できません",
+  "new.auth.unavailableBody":
+    "パスワードを安全に受け渡す機能が提供されていません。配布元または運用者による対応が必要です。",
+  "new.features.title": "追加機能",
+  "new.features.subtitle": "今使う連携だけを有効にして設定します。",
+  "new.installUx.invalidTitle": "このアプリの初期設定を表示できません",
+  "new.installUx.invalidBody":
+    "初期設定の宣言がこのバージョンと一致していません。配布元が修正するまで、このストア導線からは追加できません。",
+  "new.installUx.loadingTitle": "このバージョンの初期設定を確認しています",
+  "new.installUx.loadingBody":
+    "取得したアプリと同じコミットから、安全に検証済みの設定フォームを準備しています。",
+  "new.installUx.repositoryOwned": "アプリ提供の初期設定",
   "new.storeInput.title": "初期設定",
   "new.storeInput.subtitle": "このアプリが求めている設定です。",
   "new.storeInput.errorRequired": "{label} を入力してください。",
@@ -819,12 +841,18 @@ export const ja = {
     "表示された内容を確認してください。サービス側の修正が必要な場合と、接続済みアカウントの設定で進められる場合があります。",
   "new.compat.summary.providerCredentials":
     "{provider} の非公開値を取得元から外す必要があります。",
+  "new.compat.summary.installUxInvalid":
+    "このバージョンの初期設定宣言は配布元による修正が必要です。",
   "new.compat.summary.reviewRequired":
     "追加する前に確認が必要な項目があります。",
   "new.compat.issue.providerCredentials.message":
     "{provider} の非公開値が取得元の中に書かれています。",
   "new.compat.issue.providerCredentials.detail":
     "API トークンやアカウント ID はコードに置かず、{provider} の接続済みアカウントからデプロイ時だけ渡してください。値を外して接続すると続行できます。",
+  "new.compat.issue.installUxInvalid.message":
+    "アプリの初期設定宣言が選択したバージョンと一致していません。",
+  "new.compat.issue.installUxInvalid.detail":
+    "別のバージョンを選ぶか、配布元へ .well-known/takosumi.json の修正を依頼してください。Takosumi が生のモジュール変数へ置き換えることはありません。",
   "new.compat.issue.providerPreserved.message":
     "取得元にある {provider} の非秘密設定はそのまま維持されます。",
   "new.compat.issue.backendIsolated.message":
@@ -864,6 +892,12 @@ export const ja = {
     "サービス名は半角英小文字・数字・ハイフンだけで入力してください。",
   "new.error.configMissing": "追加設定がまだ利用できません。",
   "new.error.configLoading": "追加設定を読み込み中です。",
+  "new.error.installUxInvalid":
+    "このアプリの初期設定フォームは利用できません。別のバージョンを選ぶか、配布元の修正をお待ちください。",
+  "new.error.installUxPreviewMissing":
+    "検証済みの初期設定を取得できませんでした。再確認してから追加してください。",
+  "new.error.secretSetupUnavailable":
+    "このアプリに必要な非公開の初期設定を安全に受け渡せないため、現在の環境では追加できません。",
   "new.error.configLoadFailed":
     "追加設定を読み込めませんでした。通信状態を確認して再試行してください。",
   "new.error.syncPending":
@@ -1510,9 +1544,9 @@ export const ja = {
   "resources.condition.bad": "異常",
   "resources.detail.conditions": "状態条件",
   "resources.detail.conditionsHint": "Reconcile と drift の公開状態",
-  "resources.detail.outputs": "Output keys",
+  "resources.detail.outputs": "Outputs",
   "resources.detail.outputsHint":
-    "値はこの一覧では表示せず、公開されているキー名だけを示します。",
+    "安全と明示された公開 URL だけを開けます。それ以外の値は表示しません。",
   "resources.detail.events": "操作履歴",
   "resources.detail.eventsHint": "非機密な Activity / Run projection",
   "resources.detail.noEvents": "操作履歴はまだありません。",
@@ -1562,6 +1596,8 @@ export const ja = {
   "account.apiKeys.scope.read": "読み取り",
   "account.apiKeys.scope.write": "変更",
   "account.apiKeys.scope.admin": "管理",
+  "account.apiKeys.scopesHint":
+    "このキーに必要な権限だけを選択してください。管理権限は運用者のみが発行でき、この画面からは作成できません。",
   "account.apiKeys.restrictWorkspace":
     "現在のワークスペースだけで使用できるようにする",
   "account.apiKeys.create": "API キーを作成",
@@ -1629,6 +1665,18 @@ export const ja = {
     "支払い設定をキャンセルしました。変更はありません。",
   "billing.commercial.manage": "支払い方法を管理",
   "billing.commercial.status.unknown": "不明",
+  "billing.commercial.account.status.active": "クラウド利用可能",
+  "billing.commercial.account.status.trialing": "クラウド利用可能",
+  "billing.commercial.account.status.pastDue": "支払い確認が必要",
+  "billing.commercial.account.status.disabled": "クラウド利用停止中",
+  "billing.commercial.account.blocked.paymentDisputed":
+    "支払いに異議申し立てがあるため、新しいTakosumi Cloudの利用を停止しています。表示中のプリペイドクレジットは失効しません。支払い設定で異議申し立てを解決してください。",
+  "billing.commercial.account.blocked.paymentPastDue":
+    "支払いを確認できないため、新しいTakosumi Cloudの利用を停止しています。表示中のプリペイドクレジットは失効しません。支払い方法を確認してください。",
+  "billing.commercial.account.blocked.disabled":
+    "課金アカウントが無効なため、新しいTakosumi Cloudの利用を停止しています。表示中のプリペイドクレジットは失効しません。支払い設定を確認してください。",
+  "billing.commercial.account.blocked.suspended":
+    "課金アカウントの確認が必要なため、新しいTakosumi Cloudの利用を停止しています。表示中のプリペイドクレジットは失効しません。支払い設定を確認してください。",
   "billing.commercial.customerType.label": "利用区分",
   "billing.commercial.customerType.individual": "個人",
   "billing.commercial.customerType.business": "法人",
@@ -1678,5 +1726,7 @@ export const ja = {
   "billing.commercial.payment.count": "{count}件",
   "billing.commercial.payment.status.paid": "支払い済み",
   "billing.commercial.payment.status.failed": "失敗",
+  "billing.commercial.payment.status.partiallyRefunded": "一部返金済み",
   "billing.commercial.payment.status.refunded": "返金済み",
+  "billing.commercial.payment.status.disputed": "異議申し立て中",
 } as const;

@@ -3100,6 +3100,27 @@ function capsuleAndInstallConfigSchemas(): Record<
                 additionalProperties: false,
               },
             },
+            features: {
+              type: "array",
+              maxItems: 32,
+              items: {
+                type: "object",
+                required: ["id", "label", "optional", "inputs"],
+                properties: {
+                  id: { type: "string" },
+                  label: ref("LocalizedText"),
+                  optional: { type: "boolean" },
+                  inputs: { type: "array", items: { type: "string" } },
+                },
+                additionalProperties: false,
+              },
+            },
+            repositoryInstallUx: {
+              type: "object",
+              required: ["status"],
+              properties: { status: { const: "accepted" } },
+              additionalProperties: false,
+            },
           },
           additionalProperties: false,
         },
@@ -3316,6 +3337,21 @@ function capsuleSchemas(): Record<string, Record<string, unknown>> {
         rootModuleVariables: {
           type: "array",
           items: { type: "string" },
+        },
+        rootModuleVariableDeclarations: {
+          type: "array",
+          items: {
+            type: "object",
+            required: ["name", "type", "hasDefault"],
+            properties: {
+              name: { type: "string" },
+              type: {
+                enum: ["string", "number", "boolean", "json", "unknown"],
+              },
+              hasDefault: { type: "boolean" },
+            },
+            additionalProperties: false,
+          },
         },
         rootModuleOutputs: {
           type: "array",
@@ -3650,6 +3686,9 @@ function providerConnectionAndRecipeSchemas(): Record<
             "Safe relative OpenTofu/Terraform module path inside the SourceSnapshot archive.",
         },
         capsuleId: { type: "string" },
+        installConfigId: { type: "string" },
+        compileInstallUx: { type: "boolean" },
+        capsuleName: { type: "string" },
       },
       additionalProperties: false,
     },
@@ -3659,6 +3698,35 @@ function providerConnectionAndRecipeSchemas(): Record<
       properties: {
         report: ref("CapsuleCompatibilityReport"),
         run: ref("Run"),
+        repositoryInstallUx: {
+          oneOf: [
+            {
+              type: "object",
+              required: ["status"],
+              properties: { status: { const: "absent" } },
+              additionalProperties: false,
+            },
+            {
+              type: "object",
+              required: ["status", "installConfigId"],
+              properties: {
+                status: { const: "accepted" },
+                installConfigId: { type: "string" },
+              },
+              additionalProperties: false,
+            },
+            {
+              type: "object",
+              required: ["status", "diagnosticCode", "message"],
+              properties: {
+                status: { const: "invalid" },
+                diagnosticCode: { type: "string" },
+                message: { type: "string" },
+              },
+              additionalProperties: false,
+            },
+          ],
+        },
       },
       additionalProperties: false,
     },
@@ -3969,6 +4037,48 @@ function sourceSchemas(): Record<string, Record<string, unknown>> {
         archiveRef: { type: "string" },
         archiveDigest: { type: "string" },
         archiveSizeBytes: { type: "number" },
+        repositoryInstallUx: {
+          oneOf: [
+            {
+              type: "object",
+              required: ["status"],
+              properties: { status: { const: "absent" } },
+              additionalProperties: false,
+            },
+            {
+              type: "object",
+              required: ["status", "digest"],
+              properties: {
+                status: { const: "present" },
+                digest: {
+                  type: "string",
+                  pattern: "^sha256:[0-9a-f]{64}$",
+                },
+              },
+              additionalProperties: false,
+            },
+            {
+              type: "object",
+              required: ["status", "reason"],
+              properties: {
+                status: { const: "invalid" },
+                reason: {
+                  enum: [
+                    "not_regular_file",
+                    "too_large",
+                    "invalid_utf8",
+                    "invalid_document",
+                  ],
+                },
+                digest: {
+                  type: "string",
+                  pattern: "^sha256:[0-9a-f]{64}$",
+                },
+              },
+              additionalProperties: false,
+            },
+          ],
+        },
         fetchedByRunId: { type: "string" },
         fetchedAt: { type: "string", format: "date-time" },
       },
@@ -4674,6 +4784,27 @@ function workspaceProjectAndCapsuleRequestSchemas(): Record<
                   },
                 ],
               },
+            },
+            features: {
+              type: "array",
+              maxItems: 32,
+              items: {
+                type: "object",
+                required: ["id", "label", "optional", "inputs"],
+                properties: {
+                  id: { type: "string" },
+                  label: ref("LocalizedText"),
+                  optional: { type: "boolean" },
+                  inputs: { type: "array", items: { type: "string" } },
+                },
+                additionalProperties: false,
+              },
+            },
+            repositoryInstallUx: {
+              type: "object",
+              required: ["status"],
+              properties: { status: { const: "accepted" } },
+              additionalProperties: false,
             },
           },
           additionalProperties: false,

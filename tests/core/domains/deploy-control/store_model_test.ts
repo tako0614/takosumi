@@ -637,9 +637,33 @@ test("Source snapshots retain canonical Workspace and Source ownership", async (
     expect((await store.getSource("source_a"))?.workspaceId, label).toBe(
       seeded.workspace.id,
     );
-    expect((await store.getSourceSnapshot("snapshot_a"))?.sourceId, label).toBe(
-      seeded.source.id,
-    );
+    const legacySnapshot = await store.getSourceSnapshot("snapshot_a");
+    expect(legacySnapshot?.sourceId, label).toBe(seeded.source.id);
+    // Rows persisted before install UX observation remain readable.
+    expect(legacySnapshot?.repositoryInstallUx, label).toBeUndefined();
+    const installUxDigest = `sha256:${"e".repeat(64)}`;
+    await store.putSourceSnapshot({
+      ...legacySnapshot!,
+      repositoryInstallUx: {
+        status: "present",
+        digest: installUxDigest,
+        document: {
+          schemaVersion: "takosumi.install-ux/v1",
+          modules: { ".": { inputs: [] } },
+        },
+      },
+    });
+    expect(
+      (await store.getSourceSnapshot("snapshot_a"))?.repositoryInstallUx,
+      label,
+    ).toEqual({
+      status: "present",
+      digest: installUxDigest,
+      document: {
+        schemaVersion: "takosumi.install-ux/v1",
+        modules: { ".": { inputs: [] } },
+      },
+    });
     expect(
       (await store.listSourceSnapshots(seeded.source.id)).map(
         (item) => item.id,

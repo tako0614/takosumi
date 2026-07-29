@@ -82,6 +82,12 @@ takosumi resources events ObjectBucket assets --space prod
 イベントは新しい順に返り、Resource を削除したあとも監査履歴として読めます。
 イベントに認証情報、生のエラー、spec、state、Output の値は含まれません。
 
+Dashboard も任意の Output 値を一覧表示しません。例外は、Resource の型と Output 名の
+組み合わせが公開ナビゲーション先として明示的に許可され、値が認証情報・query・fragment
+を含まない HTTPS URL として検証できる場合だけです。現在は Cloud managed
+`EdgeWorker` の canonical `url` をこの方法で開けます。同名の Output が別の型にあっても、
+また任意の `public_url` や secret らしい Output があっても、リンクにはなりません。
+
 一覧は `createdAt` と id による keyset 方式です。最終ページ以外では `nextCursor` が
 返るので、中身を解釈せず次の `--cursor` にそのまま渡します。既定は 100 件、最大も
 100 件です。

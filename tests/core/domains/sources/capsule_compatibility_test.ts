@@ -3,6 +3,7 @@ import { expect, test } from "bun:test";
 import {
   analyzeOpenTofuCapsuleFiles,
   collectRootModuleOutputDeclarations,
+  collectRootModuleVariableDeclarations,
 } from "../../../../core/domains/sources/capsule_compatibility.ts";
 import type { SourceSnapshot } from "takosumi-contract/sources";
 
@@ -20,6 +21,54 @@ const snapshot: SourceSnapshot = {
   fetchedByRunId: "ssr_test",
   fetchedAt: "2026-06-07T00:00:00.000Z",
 };
+
+test("collectRootModuleVariableDeclarations preserves bounded type and default metadata", () => {
+  expect(
+    collectRootModuleVariableDeclarations([
+      {
+        path: "variables.tf",
+        text: `
+variable "service_name" {
+  type = string
+}
+
+variable "replicas" {
+  type    = number
+  default = 1
+}
+
+variable "enabled" {
+  type    = bool
+  default = true
+}
+
+variable "settings" {
+  type = object({
+    region = string
+  })
+  default = {}
+}
+
+variable "untyped" {}
+`,
+      },
+      {
+        path: "modules/child/variables.tf",
+        text: `
+variable "ignored_child_variable" {
+  type = string
+}
+`,
+      },
+    ]),
+  ).toEqual([
+    { name: "enabled", type: "boolean", hasDefault: true },
+    { name: "replicas", type: "number", hasDefault: true },
+    { name: "service_name", type: "string", hasDefault: false },
+    { name: "settings", type: "json", hasDefault: true },
+    { name: "untyped", type: "unknown", hasDefault: false },
+  ]);
+});
 
 test("collectRootModuleOutputDeclarations preserves OpenTofu Output metadata", () => {
   expect(

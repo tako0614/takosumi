@@ -61,9 +61,9 @@ test("ensureD1OpenTofuLedgerSchema converges on a fresh database", async () => {
 test("v57 migrates observability into the canonical D1 lineage", async () => {
   const db = new SqliteFakeD1();
   await ensureD1OpenTofuLedgerSchema(db, { throughMigrationVersion: 56 });
-  expect(
-    (await tableNames(db)).has("takosumi_observability_metrics"),
-  ).toBe(false);
+  expect((await tableNames(db)).has("takosumi_observability_metrics")).toBe(
+    false,
+  );
 
   await db
     .prepare(
@@ -103,21 +103,17 @@ test("v57 migrates observability into the canonical D1 lineage", async () => {
   ]) {
     expect(tables.has(table)).toBe(true);
   }
-  expect(
-    await indexNames(db, "takosumi_observability_audit"),
-  ).toEqual(new Set(["takosumi_observability_audit_occurred_idx"]));
-  expect(
-    await indexNames(db, "takosumi_observability_metrics"),
-  ).toEqual(
+  expect(await indexNames(db, "takosumi_observability_audit")).toEqual(
+    new Set(["takosumi_observability_audit_occurred_idx"]),
+  );
+  expect(await indexNames(db, "takosumi_observability_metrics")).toEqual(
     new Set([
       "takosumi_observability_metrics_name_idx",
       "takosumi_observability_metrics_observed_idx",
       "takosumi_observability_metrics_space_idx",
     ]),
   );
-  expect(
-    await indexNames(db, "takosumi_observability_traces"),
-  ).toEqual(
+  expect(await indexNames(db, "takosumi_observability_traces")).toEqual(
     new Set([
       "takosumi_observability_traces_space_idx",
       "takosumi_observability_traces_started_idx",
@@ -140,11 +136,93 @@ test("v57 migrates observability into the canonical D1 lineage", async () => {
   });
   expect(
     await db
-      .prepare(
-        `select version, name from schema_migrations where version = 57`,
-      )
+      .prepare(`select version, name from schema_migrations where version = 57`)
       .first(),
   ).toEqual({ version: 57, name: "d1_observability_schema" });
+});
+
+test("v58 adds Interface authorization indexes without rewriting rows", async () => {
+  const db = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(db, { throughMigrationVersion: 57 });
+  expect(await indexNames(db, "interfaces")).not.toContain(
+    "interfaces_authorized_page_idx",
+  );
+  expect(await indexNames(db, "interface_bindings")).not.toContain(
+    "interface_bindings_authorized_current_idx",
+  );
+
+  await db
+    .prepare(
+      `insert into interfaces (
+         id, workspace_id, owner_kind, owner_id, name, interface_type, phase,
+         generation, resolved_revision, record_json, created_at, updated_at
+       ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .bind(
+      "if_v58",
+      "workspace_v58",
+      "Capsule",
+      "capsule_v58",
+      "launcher",
+      "interface.ui.surface",
+      "Resolved",
+      1,
+      1,
+      '{"interface":"preserved"}',
+      "2026-07-29T00:00:00.000Z",
+      "2026-07-29T00:00:00.000Z",
+    )
+    .run();
+  await db
+    .prepare(
+      `insert into interface_bindings (
+         id, workspace_id, interface_id, subject_kind, subject_id, phase,
+         generation, record_json, created_at, updated_at
+       ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .bind(
+      "ifbind_v58",
+      "workspace_v58",
+      "if_v58",
+      "Principal",
+      "principal_v58",
+      "Ready",
+      1,
+      '{"binding":"preserved"}',
+      "2026-07-29T00:00:00.000Z",
+      "2026-07-29T00:00:00.000Z",
+    )
+    .run();
+
+  await ensureD1OpenTofuLedgerSchema(db);
+
+  expect(await indexNames(db, "interfaces")).toContain(
+    "interfaces_authorized_page_idx",
+  );
+  expect(await indexNames(db, "interface_bindings")).toContain(
+    "interface_bindings_authorized_current_idx",
+  );
+  expect(
+    await db
+      .prepare(`select record_json from interfaces where id = 'if_v58'`)
+      .first(),
+  ).toEqual({ record_json: '{"interface":"preserved"}' });
+  expect(
+    await db
+      .prepare(
+        `select record_json from interface_bindings
+         where id = 'ifbind_v58'`,
+      )
+      .first(),
+  ).toEqual({ record_json: '{"binding":"preserved"}' });
+  expect(
+    await db
+      .prepare(`select version, name from schema_migrations where version = 58`)
+      .first(),
+  ).toEqual({
+    version: 58,
+    name: "d1_interface_authorization_indexes",
+  });
 });
 
 test("retired provider_envs/provider_catalog tables are renamed aside, not live", async () => {

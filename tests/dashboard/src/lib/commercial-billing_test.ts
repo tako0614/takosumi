@@ -139,6 +139,77 @@ test("commercial billing projections are bounded and deduplicate identities", ()
   expect(summary.payments[0]?.createdAt).toBeUndefined();
 });
 
+test("commercial billing summary fails closed on account blocks and exact payment states", () => {
+  const summary = parseCommercialBillingSummary({
+    billing: {
+      configured: true,
+      account: {
+        billingAccountId: "billing_account_blocked",
+        provider: "payment-provider-private",
+        status: "disabled",
+        usageAllowed: false,
+        suspensionReason: "payment_disputed",
+      },
+      credits: {
+        currency: "USD",
+        availableUsdMicros: 7_500_000,
+        reservedUsdMicros: 500_000,
+        paymentMethodReady: true,
+        autoRecharge: {
+          enabled: false,
+          thresholdUsdMicros: 5_000_000,
+          rechargeUsdMicros: 10_000_000,
+          monthlyLimitUsdMicros: 100_000_000,
+        },
+      },
+      payments: [
+        {
+          id: "charge_disputed",
+          status: "paid",
+          currency: "usd",
+          amountMinor: 1_000,
+          amountRefundedMinor: 0,
+          paid: true,
+          refunded: false,
+          disputed: true,
+        },
+        {
+          id: "charge_partially_refunded",
+          status: "paid",
+          currency: "usd",
+          amountMinor: 1_000,
+          amountRefundedMinor: 250,
+          paid: true,
+          refunded: false,
+        },
+        {
+          id: "charge_refunded",
+          status: "paid",
+          currency: "usd",
+          amountMinor: 1_000,
+          amountRefundedMinor: 1_000,
+          paid: true,
+          refunded: false,
+        },
+      ],
+    },
+  });
+
+  expect(summary.account).toEqual({
+    billingAccountId: "billing_account_blocked",
+    status: "disabled",
+    usageAllowed: false,
+    suspensionReason: "payment_disputed",
+  });
+  expect(summary.account).not.toHaveProperty("provider");
+  expect(summary.credits.availableUsdMicros).toBe(7_500_000);
+  expect(summary.payments.map((payment) => payment.status)).toEqual([
+    "disputed",
+    "partially_refunded",
+    "refunded",
+  ]);
+});
+
 test("commercial billing navigation only accepts credential-free HTTPS", () => {
   expect(
     commercialBillingDestination({
@@ -173,6 +244,8 @@ test("native commercial billing stays provider-neutral and uses extension APIs",
   expect(component).toContain("CommercialBillingPanel");
   expect(component).toContain("DataTable");
   expect(component).toContain("availableUsdMicros");
+  expect(component).toContain("suspensionReason");
+  expect(component).toContain("partially_refunded");
   expect(component).not.toContain("purchasedUsdMicros");
   expect(component).not.toContain("balance.purchased");
   expect(component).not.toContain("Stripe");

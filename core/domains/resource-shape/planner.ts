@@ -1116,7 +1116,8 @@ export function parseScheduleSpec(spec: unknown): ParseScheduleSpecResult {
   }
   const [, target] = connectionEntries[0]!;
   if (
-    target.projection !== "schedule_trigger" ||
+    (target.projection !== "schedule_trigger" &&
+      target.projection !== "schedule.trigger.v1") ||
     !target.permissions.includes("invoke")
   ) {
     return {
@@ -1124,7 +1125,7 @@ export function parseScheduleSpec(spec: unknown): ParseScheduleSpecResult {
       error: {
         code: "invalid_schedule_target",
         message:
-          "the schedule target connection must use schedule_trigger projection and include invoke permission",
+          "the schedule target connection must use schedule_trigger or schedule.trigger.v1 projection and include invoke permission",
       },
     };
   }

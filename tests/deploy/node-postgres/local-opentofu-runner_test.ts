@@ -78,6 +78,14 @@ test("HTTP OpenTofu runner preserves source sync reuse and repository metadata",
             status: "present",
             text: '{"name":"Capsule"}',
           },
+          repositoryInstallUx: {
+            status: "present",
+            digest: `sha256:${"c".repeat(64)}`,
+            document: {
+              schemaVersion: "takosumi.install-ux/v1",
+              modules: { ".": { inputs: [] } },
+            },
+          },
           phaseTimings: [
             {
               phase: "archive",
@@ -141,6 +149,14 @@ test("HTTP OpenTofu runner preserves source sync reuse and repository metadata",
       repositoryInstallMetadata: {
         status: "present",
         text: '{"name":"Capsule"}',
+      },
+      repositoryInstallUx: {
+        status: "present",
+        digest: `sha256:${"c".repeat(64)}`,
+        document: {
+          schemaVersion: "takosumi.install-ux/v1",
+          modules: { ".": { inputs: [] } },
+        },
       },
       phaseTimings: [
         {

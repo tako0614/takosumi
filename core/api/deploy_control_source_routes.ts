@@ -10,6 +10,8 @@ import type {
   StableSourceTagResolutionRequest,
   SourceSnapshotFileResponse,
 } from "takosumi-contract/sources";
+import { toPublicSourceSnapshot } from "takosumi-contract/sources";
+import { TAKOSUMI_INSTALL_UX_REPOSITORY_PATH } from "../../contract/install-ux.ts";
 import type { CreateSourceCompatibilityCheckRequest } from "takosumi-contract/capsules";
 import { isAbsolute, normalize } from "node:path";
 import { OpenTofuControllerError } from "../domains/deploy-control/mod.ts";
@@ -318,8 +320,12 @@ export function mountDeployControlSourceRoutes(
         ensureWorkspacePermission(principal, existing.source.workspaceId);
         const page = parsePageParams(c);
         if (page.kind === "invalid") return page.response;
+        const response = await controller.listSourceSnapshots(id, page.value);
         return c.json(
-          await controller.listSourceSnapshots(id, page.value),
+          {
+            ...response,
+            snapshots: response.snapshots.map(toPublicSourceSnapshot),
+          },
           200,
         );
       },
@@ -351,6 +357,16 @@ export function mountDeployControlSourceRoutes(
           c,
           "invalid_argument",
           "path must be a safe relative JSON file path",
+        ),
+        400,
+      );
+    }
+    if (path === TAKOSUMI_INSTALL_UX_REPOSITORY_PATH) {
+      return c.json(
+        errorEnvelope(
+          c,
+          "invalid_argument",
+          "repository install UX content is available only through the validated install compiler",
         ),
         400,
       );

@@ -28,6 +28,7 @@ import {
 } from "../ui/index.ts";
 import {
   beginCommercialBillingCheckout,
+  type CommercialBillingAccount,
   type CommercialBillingAutoRechargeSettings,
   type CommercialBillingCustomerType,
   type CommercialBillingPayment,
@@ -54,6 +55,9 @@ interface Props {
 const PAYMENT_STATUS_KEYS: Readonly<Record<string, MessageKey>> = {
   paid: "billing.commercial.payment.status.paid",
   failed: "billing.commercial.payment.status.failed",
+  partially_refunded: "billing.commercial.payment.status.partiallyRefunded",
+  refunded: "billing.commercial.payment.status.refunded",
+  disputed: "billing.commercial.payment.status.disputed",
 };
 
 export default function CommercialBillingPanel(props: Props) {
@@ -253,6 +257,15 @@ export default function CommercialBillingPanel(props: Props) {
                 {t("billing.commercial.unavailable")}
               </Toast>
             </Show>
+            <Show when={data().billing.account}>
+              {(account) => (
+                <Show when={!account().usageAllowed}>
+                  <Toast tone="error">
+                    {billingAccountBlockingMessage(account())}
+                  </Toast>
+                </Show>
+              )}
+            </Show>
 
             <Card class="wb-billing-wallet">
               <CardHeader
@@ -286,6 +299,13 @@ export default function CommercialBillingPanel(props: Props) {
                   </span>
                 </div>
                 <div class="wb-billing-wallet-state">
+                  <Show when={data().billing.account}>
+                    {(account) => (
+                      <Badge tone={account().usageAllowed ? "ok" : "danger"}>
+                        {billingAccountStatusLabel(account())}
+                      </Badge>
+                    )}
+                  </Show>
                   <Badge
                     tone={
                       data().billing.credits.paymentMethodReady ? "ok" : "muted"
@@ -596,7 +616,6 @@ function formatPaymentAmount(payment: CommercialBillingPayment): string {
 }
 
 function paymentStatusLabel(payment: CommercialBillingPayment): string {
-  if (payment.refunded) return t("billing.commercial.payment.status.refunded");
   const key = PAYMENT_STATUS_KEYS[payment.status];
   return key ? t(key) : t("billing.commercial.status.unknown");
 }
@@ -604,10 +623,43 @@ function paymentStatusLabel(payment: CommercialBillingPayment): string {
 function paymentTone(
   payment: CommercialBillingPayment,
 ): "ok" | "warn" | "danger" | "muted" {
-  if (payment.refunded) return "warn";
+  if (payment.status === "disputed" || payment.status === "failed")
+    return "danger";
+  if (
+    payment.status === "refunded" ||
+    payment.status === "partially_refunded"
+  )
+    return "warn";
   if (payment.paid) return "ok";
-  if (payment.status === "failed") return "danger";
   return "muted";
+}
+
+function billingAccountStatusLabel(account: CommercialBillingAccount): string {
+  const key: MessageKey =
+    account.status === "active"
+      ? "billing.commercial.account.status.active"
+      : account.status === "trialing"
+        ? "billing.commercial.account.status.trialing"
+        : account.status === "past_due"
+          ? "billing.commercial.account.status.pastDue"
+          : account.status === "disabled"
+            ? "billing.commercial.account.status.disabled"
+            : "billing.commercial.status.unknown";
+  return t(key);
+}
+
+function billingAccountBlockingMessage(
+  account: CommercialBillingAccount,
+): string {
+  const key: MessageKey =
+    account.suspensionReason === "payment_disputed"
+      ? "billing.commercial.account.blocked.paymentDisputed"
+      : account.suspensionReason === "payment_past_due"
+        ? "billing.commercial.account.blocked.paymentPastDue"
+        : account.suspensionReason === "billing_disabled"
+          ? "billing.commercial.account.blocked.disabled"
+          : "billing.commercial.account.blocked.suspended";
+  return t(key);
 }
 
 function countryLabel(country: string): string {

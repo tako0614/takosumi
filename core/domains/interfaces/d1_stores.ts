@@ -1,7 +1,18 @@
 import type { Interface, InterfaceBinding } from "takosumi-contract/interfaces";
+import {
+  clampPageLimit,
+  decodeCursor,
+  pageFromProbeBy,
+} from "takosumi-contract/pagination";
+import {
+  UI_SURFACE_INTERFACE_TYPE,
+  UI_SURFACE_INTERFACE_VERSION,
+} from "takosumi-contract";
 import { deployControlD1TableNames as names } from "../../adapters/storage/drizzle/schema/logical.ts";
 import type { D1Like } from "../resource-shape/d1_stores.ts";
 import type {
+  InterfaceAuthorizationPageInput,
+  InterfaceAuthorizationQuery,
   InterfaceBindingStore,
   InterfaceListFilter,
   InterfaceStore,
@@ -253,6 +264,113 @@ class D1InterfaceBindingStore implements InterfaceBindingStore {
   }
 }
 
+class D1InterfaceAuthorizationQuery implements InterfaceAuthorizationQuery {
+  readonly #interfaces = names.interfaces;
+  readonly #bindings = names.interfaceBindings;
+
+  constructor(readonly db: D1Like) {}
+
+  async listPage(
+    input: InterfaceAuthorizationPageInput,
+  ): ReturnType<InterfaceAuthorizationQuery["listPage"]> {
+    if (input.filter.ownerIds?.length === 0) return { items: [] };
+    if (
+      input.filter.phase !== undefined &&
+      input.filter.phase !== "Resolved"
+    ) {
+      return { items: [] };
+    }
+    const clauses = ["i.workspace_id = ?", "i.phase = 'Resolved'"];
+    const parameters: unknown[] = [input.filter.workspaceId];
+    const add = (sql: string, value: unknown): void => {
+      clauses.push(sql);
+      parameters.push(value);
+    };
+    if (input.uiSurfaceCandidates) {
+      const capsuleOwnerClause = input.capsuleId
+        ? "and i.owner_id = ?"
+        : "";
+      clauses.push(
+        `(
+          (
+            i.owner_kind = 'Capsule' and i.interface_type = ?
+            and json_extract(i.record_json, '$.spec.version') = ?
+            ${capsuleOwnerClause}
+          )
+          or (
+            i.owner_kind = 'Resource'
+            and json_extract(i.record_json, '$.spec.document.launcher') = 1
+          )
+        )`,
+      );
+      parameters.push(
+        UI_SURFACE_INTERFACE_TYPE,
+        UI_SURFACE_INTERFACE_VERSION,
+      );
+      if (input.capsuleId) parameters.push(input.capsuleId);
+    } else {
+      if (input.filter.type !== undefined)
+        add("i.interface_type = ?", input.filter.type);
+      if (input.filter.ownerKind !== undefined)
+        add("i.owner_kind = ?", input.filter.ownerKind);
+      if (input.filter.ownerId !== undefined)
+        add("i.owner_id = ?", input.filter.ownerId);
+      if (input.filter.ownerIds !== undefined) {
+        clauses.push(
+          `i.owner_id in (${input.filter.ownerIds.map(() => "?").join(",")})`,
+        );
+        parameters.push(...input.filter.ownerIds);
+      }
+    }
+    if (input.filter.includeRetired !== true)
+      clauses.push("i.phase <> 'Retired'");
+    clauses.push(
+      `exists (
+        select 1
+        from ${this.#bindings} b,
+             json_each(b.record_json, '$.spec.permissions') permission
+        where b.interface_id = i.id
+          and b.workspace_id = i.workspace_id
+          and b.subject_kind = 'Principal'
+          and b.subject_id = ?
+          and b.phase = 'Ready'
+          and json_extract(
+                b.record_json,
+                '$.status.observedInterfaceRevision'
+              ) = i.resolved_revision
+          and permission.value = ?
+      )`,
+    );
+    parameters.push(input.subjectId, input.permission);
+    const cursor = decodeCursor(input.params.cursor);
+    if (cursor) {
+      clauses.push("(i.created_at > ? or (i.created_at = ? and i.id > ?))");
+      parameters.push(cursor.createdAt, cursor.createdAt, cursor.id);
+    }
+    const limit = clampPageLimit(input.params.limit);
+    parameters.push(limit + 1);
+    const rows = await this.db
+      .prepare(
+        `select i.record_json from ${this.#interfaces} i
+         where ${clauses.join(" and ")}
+         order by i.created_at asc, i.id asc
+         limit ?`,
+      )
+      .bind(...parameters)
+      .all<JsonRow>();
+    return pageFromProbeBy(
+      (rows.results ?? []).map(
+        (row) => JSON.parse(row.record_json) as Interface,
+      ),
+      limit,
+      (iface) => ({
+        createdAt: iface.metadata.createdAt,
+        id: iface.metadata.id,
+      }),
+    );
+  }
+}
+
 function interfaceParameters(
   record: Interface,
   preserveClaim: boolean,
@@ -299,6 +417,7 @@ export function createD1InterfaceStores(db: D1Like): InterfaceStores {
     persistence: "durable",
     interfaces: new D1InterfaceStore(db),
     bindings: new D1InterfaceBindingStore(db),
+    authorized: new D1InterfaceAuthorizationQuery(db),
   };
 }
 

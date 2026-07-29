@@ -341,11 +341,9 @@ test("composed Capsule Interface OAuth uses canonical Capsule authority without 
     environment: "test",
     installConfigId: installConfig.id,
     sourceId: source.id,
+    installingPrincipalId: "principal_interface_oauth_e2e",
   });
-  await created.operations.capsules.patchCapsuleStatus(
-    capsule.id,
-    "active",
-  );
+  await created.operations.capsules.patchCapsuleStatus(capsule.id, "active");
 
   const delegatedToken = "takat_interface_oauth_e2e";
   const principalSubject = "pairwise_takos_interface_e2e";

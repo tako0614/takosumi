@@ -5,6 +5,24 @@
  */
 
 export type CommercialBillingCustomerType = "individual" | "business";
+export type CommercialBillingAccountStatus =
+  | "active"
+  | "trialing"
+  | "past_due"
+  | "disabled"
+  | "unknown";
+export type CommercialBillingSuspensionReason =
+  | "payment_disputed"
+  | "payment_past_due"
+  | "billing_disabled"
+  | "billing_suspended";
+export type CommercialBillingPaymentStatus =
+  | "paid"
+  | "failed"
+  | "partially_refunded"
+  | "refunded"
+  | "disputed"
+  | "unknown";
 
 export interface CommercialBillingAutoRechargeSettings {
   readonly enabled: boolean;
@@ -34,7 +52,10 @@ export interface CommercialBillingConfiguration {
 
 export interface CommercialBillingAccount {
   readonly billingAccountId: string;
-  readonly status: string;
+  readonly status: CommercialBillingAccountStatus;
+  /** Whether the canonical account can authorize new Cloud usage. */
+  readonly usageAllowed: boolean;
+  readonly suspensionReason?: CommercialBillingSuspensionReason;
   readonly customerType?: CommercialBillingCustomerType;
   readonly taxJurisdiction?: string;
   readonly updatedAt?: string;
@@ -52,7 +73,7 @@ export interface CommercialBillingCredits {
 
 export interface CommercialBillingPayment {
   readonly id: string;
-  readonly status: string;
+  readonly status: CommercialBillingPaymentStatus;
   readonly currency: string;
   readonly amountMinor?: number;
   readonly amountUsdMicros?: number;
@@ -61,6 +82,7 @@ export interface CommercialBillingPayment {
   readonly createdAt?: string;
   readonly paid: boolean;
   readonly refunded: boolean;
+  readonly disputed: boolean;
 }
 
 export interface CommercialBillingSummary {
@@ -233,13 +255,23 @@ function parseAccount(value: unknown): CommercialBillingAccount | undefined {
   const record = objectValue(value);
   const billingAccountId = tokenValue(record?.billingAccountId);
   if (!billingAccountId) return undefined;
+  const status = accountStatus(record?.status);
+  const suspensionReason = billingSuspensionReason(record?.suspensionReason);
   const customerType =
     record?.customerType === "individual" || record?.customerType === "business"
       ? record.customerType
       : undefined;
+  const statusAllowsUsage = status === "active" || status === "trialing";
+  const projectedUsageAllowed =
+    typeof record?.usageAllowed === "boolean"
+      ? record.usageAllowed
+      : statusAllowsUsage;
   return {
     billingAccountId,
-    status: tokenValue(record?.status) ?? "unknown",
+    status,
+    usageAllowed:
+      projectedUsageAllowed && statusAllowsUsage && !suspensionReason,
+    ...(suspensionReason ? { suspensionReason } : {}),
     ...(customerType ? { customerType } : {}),
     ...(countryCode(record?.taxJurisdiction)
       ? { taxJurisdiction: countryCode(record?.taxJurisdiction) }
@@ -344,13 +376,37 @@ function parsePayment(value: unknown): CommercialBillingPayment | undefined {
   if (!record) return undefined;
   const id = tokenValue(record?.id);
   if (!id) return undefined;
+  const amountMinor = nonNegativeNumber(record.amountMinor);
+  const amountUsdMicros = nonNegativeNumber(record.amountUsdMicros);
+  const amountRefundedMinor = nonNegativeNumber(record.amountRefundedMinor);
+  const disputed =
+    record.disputed === true || record.status === "disputed";
+  const refunded =
+    record.refunded === true ||
+    record.status === "refunded" ||
+    (amountMinor !== undefined &&
+      amountMinor > 0 &&
+      amountRefundedMinor !== undefined &&
+      amountRefundedMinor >= amountMinor);
+  const status: CommercialBillingPaymentStatus = disputed
+    ? "disputed"
+    : refunded
+      ? "refunded"
+      : record.status === "partially_refunded" ||
+          (amountRefundedMinor !== undefined && amountRefundedMinor > 0)
+        ? "partially_refunded"
+        : record.status === "paid" || record.paid === true
+          ? "paid"
+          : record.status === "failed"
+            ? "failed"
+            : "unknown";
   return {
     id,
-    status: tokenValue(record?.status) ?? "unknown",
+    status,
     currency: currencyCode(record?.currency) ?? "USD",
-    ...optionalNumber(record, "amountMinor"),
-    ...optionalNumber(record, "amountUsdMicros"),
-    ...optionalNumber(record, "amountRefundedMinor"),
+    ...(amountMinor !== undefined ? { amountMinor } : {}),
+    ...(amountUsdMicros !== undefined ? { amountUsdMicros } : {}),
+    ...(amountRefundedMinor !== undefined ? { amountRefundedMinor } : {}),
     ...(safeHttpsUrl(record?.receiptUrl)
       ? { receiptUrl: safeHttpsUrl(record?.receiptUrl) }
       : {}),
@@ -358,16 +414,29 @@ function parsePayment(value: unknown): CommercialBillingPayment | undefined {
       ? { createdAt: isoTimestamp(record?.createdAt) }
       : {}),
     paid: record?.paid === true,
-    refunded: record?.refunded === true,
+    refunded,
+    disputed,
   };
 }
 
-function optionalNumber(
-  record: Readonly<Record<string, unknown>>,
-  key: "amountMinor" | "amountUsdMicros" | "amountRefundedMinor",
-): Partial<Record<typeof key, number>> {
-  const value = nonNegativeNumber(record[key]);
-  return value === undefined ? {} : { [key]: value };
+function accountStatus(value: unknown): CommercialBillingAccountStatus {
+  return value === "active" ||
+    value === "trialing" ||
+    value === "past_due" ||
+    value === "disabled"
+    ? value
+    : "unknown";
+}
+
+function billingSuspensionReason(
+  value: unknown,
+): CommercialBillingSuspensionReason | undefined {
+  return value === "payment_disputed" ||
+    value === "payment_past_due" ||
+    value === "billing_disabled" ||
+    value === "billing_suspended"
+    ? value
+    : undefined;
 }
 
 async function requestJson(

@@ -188,6 +188,13 @@ export interface ResourceShapeStore {
   create(record: ResourceShapeRecord): Promise<ResourceCreateResult>;
   upsert(record: ResourceShapeRecord): Promise<ResourceShapeRecord>;
   get(id: ResourceShapeRecordId): Promise<ResourceShapeRecord | undefined>;
+  /**
+   * Bounded exact-id read used by cross-domain read projections. Callers keep
+   * the batch at or below 100 so D1 never exceeds its variable limit.
+   */
+  getMany(
+    ids: readonly ResourceShapeRecordId[],
+  ): Promise<readonly ResourceShapeRecord[]>;
   getByName(
     spaceId: SpaceId,
     kind: ResourceShapeKind,
@@ -407,6 +414,18 @@ export class InMemoryResourceShapeStore implements ResourceShapeStore {
 
   get(id: ResourceShapeRecordId): Promise<ResourceShapeRecord | undefined> {
     return Promise.resolve(this.#byId.get(id));
+  }
+
+  async getMany(
+    ids: readonly ResourceShapeRecordId[],
+  ): Promise<readonly ResourceShapeRecord[]> {
+    const unique = [...new Set(ids)];
+    if (unique.length > 100) {
+      throw new RangeError("Resource getMany accepts at most 100 ids");
+    }
+    return unique
+      .map((id) => this.#byId.get(id))
+      .filter((record): record is ResourceShapeRecord => record !== undefined);
   }
 
   getSync(id: ResourceShapeRecordId): ResourceShapeRecord | undefined {

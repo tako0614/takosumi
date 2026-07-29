@@ -232,6 +232,24 @@ class D1ResourceShapeStore implements ResourceShapeStore {
     return row ? resourceShapeFromRow(row) : undefined;
   }
 
+  async getMany(
+    ids: readonly ResourceShapeRecordId[],
+  ): Promise<readonly ResourceShapeRecord[]> {
+    const unique = [...new Set(ids)];
+    if (unique.length === 0) return [];
+    if (unique.length > 100) {
+      throw new RangeError("Resource getMany accepts at most 100 ids");
+    }
+    const rows = await this.db
+      .prepare(
+        `select * from ${this.#table}
+         where id in (${unique.map(() => "?").join(",")})`,
+      )
+      .bind(...unique)
+      .all<ResourceShapeRow>();
+    return (rows.results ?? []).map(resourceShapeFromRow);
+  }
+
   async getByName(
     spaceId: SpaceId,
     kind: ResourceShapeKind,

@@ -31,6 +31,8 @@ import type {
   SourceSnapshot,
   SourceSnapshotFileResponse,
 } from "takosumi-contract/sources";
+import { toPublicSourceSnapshot } from "takosumi-contract/sources";
+import { TAKOSUMI_INSTALL_UX_REPOSITORY_PATH } from "../../../../contract/install-ux.ts";
 import type {
   CapsuleCompatibilityReportResponse,
   CreateSourceCompatibilityCheckRequest,
@@ -136,6 +138,10 @@ import {
   stringRecord,
   stringRecordValue,
 } from "./parse.ts";
+import {
+  latestSourceSnapshotForSource,
+  previewRepoOwnedInstallConfig,
+} from "./repo-owned-install-config.ts";
 import {
   DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
   defaultCapsuleOutputAllowlist,
@@ -272,6 +278,13 @@ export async function handleSources(
           400,
         );
       }
+      if (path === TAKOSUMI_INSTALL_UX_REPOSITORY_PATH) {
+        return errorJson(
+          "invalid_request",
+          "repository install UX content is available only through the validated install compiler",
+          400,
+        );
+      }
       const file = await operations.readSourceSnapshotPresentationFile(
         sourceSnapshotId,
         path,
@@ -313,20 +326,102 @@ export async function handleSources(
       // default allowlist is never widened (see
       // CreateSourceCompatibilityCheckRequest.installConfigId).
       const installConfigId = stringValue(body.installConfigId);
+      const compileInstallUx = body.compileInstallUx === true;
+      const capsuleName = stringValue(body.capsuleName);
+      if (
+        body.compileInstallUx !== undefined &&
+        typeof body.compileInstallUx !== "boolean"
+      ) {
+        return errorJson(
+          "invalid_request",
+          "compileInstallUx must be a boolean.",
+          400,
+        );
+      }
+      if (compileInstallUx && (!installConfigId || !capsuleName || capsuleId)) {
+        return errorJson(
+          "invalid_request",
+          "compileInstallUx requires capsuleName and installConfigId before a Capsule exists.",
+          400,
+        );
+      }
       const compatibilityRequest: CreateSourceCompatibilityCheckRequest = {
         ...(sourceSnapshotId ? { sourceSnapshotId } : {}),
         ...(modulePath ? { modulePath } : {}),
         ...(capsuleId ? { capsuleId } : {}),
         ...(installConfigId ? { installConfigId } : {}),
       };
+      const compatibility = await operations.createSourceCompatibilityCheck(
+        sourceId,
+        compatibilityRequest,
+      );
+      if (!compileInstallUx) {
+        return jsonStatus(
+          await publicCompatibilityReportResponse(operations, compatibility),
+          201,
+        );
+      }
+      const latestSnapshot = await latestSourceSnapshotForSource(
+        operations,
+        source,
+      );
+      const reportSnapshotId = compatibility.report.sourceSnapshotId;
+      if (!latestSnapshot || latestSnapshot.id !== reportSnapshotId) {
+        return jsonStatus(
+          await publicCompatibilityReportResponse(operations, {
+            ...compatibility,
+            repositoryInstallUx: {
+              status: "invalid",
+              diagnosticCode:
+                "repository_install_ux_compatibility_report_mismatch",
+              message:
+                "The source changed during install UX preflight; sync and review the latest snapshot.",
+            },
+          }),
+          201,
+        );
+      }
+      const baseConfig = await operations.capsules.getInstallConfig(
+        installConfigId!,
+      );
+      if (
+        baseConfig.workspaceId !== undefined &&
+        baseConfig.workspaceId !== workspaceId
+      ) {
+        return errorJson(
+          "invalid_request",
+          "installConfigId is not available to the target Workspace.",
+          400,
+        );
+      }
+      const preview = await previewRepoOwnedInstallConfig({
+        operations,
+        source,
+        sourceSnapshot: latestSnapshot,
+        baseConfig,
+        modulePath,
+        capsuleName: capsuleName!,
+        workspaceId,
+        compatibilityReport: compatibility.report,
+      });
+      const repositoryInstallUx =
+        preview.status === "accepted"
+          ? {
+              status: "accepted" as const,
+              installConfigId: preview.installConfig.id,
+            }
+          : preview.status === "invalid"
+            ? {
+                status: "invalid" as const,
+                diagnosticCode: preview.diagnostic.code,
+                message: preview.diagnostic.message,
+              }
+            : { status: "absent" as const };
       return jsonStatus(
-        await publicCompatibilityReportResponse(
-          operations,
-          await operations.createSourceCompatibilityCheck(
-            sourceId,
-            compatibilityRequest,
-          ),
-        ),
+        await publicCompatibilityReportResponse(operations, {
+          ...compatibility,
+          repositoryInstallUx,
+        }),
         201,
       );
     }
@@ -509,7 +604,7 @@ function publicSource(source: Source) {
 }
 
 function publicSourceSnapshot(snapshot: SourceSnapshot) {
-  return snapshot;
+  return toPublicSourceSnapshot(snapshot);
 }
 
 function publicSourceSyncRun(run: Record<string, unknown>) {

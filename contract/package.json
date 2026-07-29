@@ -1,0 +1,24 @@
+{
+  "name": "@takosjp/takosumi-contract",
+  "version": "1.0.0",
+  "description": "Public provider-neutral runtime contracts for Takosumi hosts and portable applications.",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "sideEffects": false,
+  "files": [
+    "runtime.ts",
+    "background-events.ts",
+    "managed-runtime-connections.ts",
+    "managed-relational-runtime.ts",
+    "README.md"
+  ],
+  "exports": {
+    ".": "./runtime.ts",
+    "./background-events": "./background-events.ts",
+    "./managed-runtime-connections": "./managed-runtime-connections.ts",
+    "./managed-relational-runtime": "./managed-relational-runtime.ts"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

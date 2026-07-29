@@ -427,7 +427,11 @@ export interface ScheduleSpec {
   readonly cron: string;
   /** Open timezone token; v1alpha1 defaults to `UTC`. */
   readonly timezone?: string;
-  /** Exactly one `schedule_trigger` connection with `invoke` permission. */
+  /**
+   * Exactly one connection with `invoke` permission. Current Forms use the
+   * versioned `schedule.trigger.v1` projection; `schedule_trigger` remains a
+   * legacy accepted spelling for already-pinned Resources.
+   */
   readonly connections: Readonly<Record<string, ResourceConnectionSpec>>;
   readonly lifecyclePolicy?: ResourceLifecyclePolicy;
 }

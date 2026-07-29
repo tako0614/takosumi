@@ -2234,7 +2234,7 @@ test("bootstrap projects Resource apply and delete lifecycle into Interfaces", a
   ).toBe("Retired");
 });
 
-test("runtime discovery repairs a missed Resource lifecycle observer from the durable ledger", async () => {
+test("runtime list stays read-only while exact access repairs a missed lifecycle observer", async () => {
   const baseInterfaceStores = createInMemoryInterfaceStores();
   let rejectLifecycleWrites = false;
   const interfaceStores = {
@@ -2265,6 +2265,7 @@ test("runtime discovery repairs a missed Resource lifecycle observer from the du
       },
     },
     bindings: baseInterfaceStores.bindings,
+    authorized: baseInterfaceStores.authorized,
   };
   const { app, operations } = await createTakosumiService({
     role: "takosumi-api",
@@ -2350,10 +2351,20 @@ test("runtime discovery repairs a missed Resource lifecycle observer from the du
       "principal_1",
       "storage.read",
     ),
-  ).toEqual([]);
+  ).toHaveLength(1);
   expect(
     (await operations.interfaces.get(iface.metadata.id)).status.phase,
-  ).toBe("Retired");
+  ).toBe("Resolved");
+  await expect(
+    operations.interfaces.getAuthorizedForPrincipal(
+      iface.metadata.id,
+      "principal_1",
+      "storage.read",
+    ),
+  ).rejects.toThrow("Interface not found");
+  expect(
+    (await operations.interfaces.get(iface.metadata.id)).status.phase,
+  ).toBe("NotReady");
   expect(
     (
       await operations.interfaces.getBinding(
@@ -2361,7 +2372,7 @@ test("runtime discovery repairs a missed Resource lifecycle observer from the du
         binding.metadata.id,
       )
     ).status.phase,
-  ).toBe("Revoked");
+  ).toBe("NotReady");
 });
 
 test("PUT /v1/resources/ObjectBucket/:name applies a provider-neutral bucket shape", async () => {

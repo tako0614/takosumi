@@ -1,0 +1,29 @@
+{
+  "schemaVersion": "takosumi.install-ux/v1",
+  "modules": {
+    ".": {
+      "inputs": [
+        {
+          "name": "project_name",
+          "source": {
+            "kind": "capsule_name"
+          },
+          "label": {
+            "ja": "名前",
+            "en": "Name"
+          }
+        },
+        {
+          "name": "project_name",
+          "source": {
+            "kind": "user"
+          },
+          "label": {
+            "ja": "別名",
+            "en": "Another name"
+          }
+        }
+      ]
+    }
+  }
+}

@@ -32,6 +32,7 @@ import {
   OpenTofuControllerError,
   requireNonEmptyString,
 } from "../deploy-control/errors.ts";
+import { validateResourceMigrationDeclaration } from "../deploy-control/resource_migrations.ts";
 import type {
   CapsuleListPageParams,
   OpenTofuControlStore,
@@ -40,15 +41,22 @@ import {
   type ActivityRecorder,
   NOOP_ACTIVITY_RECORDER,
 } from "../activity/mod.ts";
-import { validateCapsuleInterfaceBlueprints } from "../interfaces/service.ts";
+import {
+  validateCapsuleInterfaceBlueprints,
+  validateCapsuleResourceInterfaceBindingProposals,
+} from "../interfaces/service.ts";
 import { ProjectsService } from "../projects/mod.ts";
 import {
   containsSecretLikeString,
   isSecretKey,
 } from "takosumi-contract/redaction";
-import { capsuleInterfaceBlueprintsNeedInstallingPrincipal } from "takosumi-contract/interfaces";
+import {
+  capsuleInterfaceBlueprintsNeedInstallingPrincipal,
+  capsuleResourceInterfaceBindingsNeedInstallingPrincipal,
+} from "takosumi-contract/interfaces";
 import { materializeInstallContextVariables } from "../deploy-control/validation.ts";
 import { parseInstallConfigPatchV1 } from "./install_config_patch.ts";
+import { parseInstallConfigHostRuntimeMaterialization } from "takosumi-contract";
 
 /**
  * Capsule name grammar (spec §5): a DNS-style slug. The name doubles as the
@@ -66,6 +74,8 @@ export interface CreateCapsuleRequest {
   /** Registered Git Source. */
   readonly sourceId: string;
   readonly installConfigId: string;
+  /** Authenticated Principal that initiated this installation. */
+  readonly installingPrincipalId: string;
   /** Auto-update opt-in (see {@link Capsule.autoUpdate}). Defaults to off. */
   readonly autoUpdate?: boolean;
 }
@@ -102,6 +112,10 @@ export class CapsulesService {
     requireNonEmptyString(request.name, "name");
     requireNonEmptyString(request.environment, "environment");
     requireNonEmptyString(request.installConfigId, "installConfigId");
+    requireNonEmptyString(
+      request.installingPrincipalId,
+      "installingPrincipalId",
+    );
     if (!CAPSULE_NAME_PATTERN.test(request.name)) {
       throw new OpenTofuControllerError(
         "invalid_argument",
@@ -156,6 +170,16 @@ export class CapsulesService {
       throw new OpenTofuControllerError(
         "invalid_argument",
         "install config contains an unresolved installing Principal binding placeholder",
+      );
+    }
+    if (
+      capsuleResourceInterfaceBindingsNeedInstallingPrincipal(
+        config.resourceInterfaceBindingProposals,
+      )
+    ) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        "install config contains an unresolved Resource Interface installing Principal binding placeholder",
       );
     }
     // A workspace-scoped InstallConfig may only be used by its owning Workspace;
@@ -214,6 +238,7 @@ export class CapsulesService {
       slug: request.name,
       sourceId: request.sourceId,
       installConfigId: request.installConfigId,
+      installingPrincipalId: request.installingPrincipalId,
       environment: request.environment,
       currentStateGeneration: 0,
       status: "pending",
@@ -357,6 +382,11 @@ export class CapsulesService {
       workspaceId: "workspace-validation",
       capsuleId: "capsule-validation",
     });
+    if (config.hostRuntimeMaterialization !== undefined) {
+      parseInstallConfigHostRuntimeMaterialization(
+        config.hostRuntimeMaterialization,
+      );
+    }
     const configWorkspaceId = config.workspaceId;
     if (configWorkspaceId !== undefined) {
       const workspace = await this.#store.getWorkspace(configWorkspaceId);
@@ -381,6 +411,20 @@ export class CapsulesService {
       if (stored) assertLifecycleActionsNotEscalated(stored, config);
     }
     validateCapsuleInterfaceBlueprints(config.interfaceBlueprints ?? []);
+    validateCapsuleResourceInterfaceBindingProposals(
+      config.resourceInterfaceBindingProposals ?? [],
+    );
+    if (
+      config.workspaceId !== undefined &&
+      capsuleResourceInterfaceBindingsNeedInstallingPrincipal(
+        config.resourceInterfaceBindingProposals,
+      )
+    ) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        "installing Principal Resource Interface bindings can be stored only after resolving the exact Principal",
+      );
+    }
     return await this.#store.putInstallConfig(config);
   }
 
@@ -852,7 +896,7 @@ function validateLifecycleActions(config: InstallConfig): void {
         `lifecycleActions[${index}].runnerCapability is not allowed by policy.lifecycleActions`,
       );
     }
-    if (action.useProviderCredentials === true) {
+    if (action.kind === "command" && action.useProviderCredentials === true) {
       if (action.executor !== "runner") {
         throw new OpenTofuControllerError(
           "invalid_argument",
@@ -880,7 +924,7 @@ function validateLifecycleAction(
       `${field}.apiVersion is unsupported`,
     );
   }
-  if (action.kind !== "command") {
+  if (action.kind !== "command" && action.kind !== "resource_migration") {
     throw new OpenTofuControllerError(
       "invalid_argument",
       `${field}.kind is unsupported`,
@@ -891,6 +935,34 @@ function validateLifecycleAction(
       "invalid_argument",
       `${field}.id is invalid`,
     );
+  }
+  if (action.kind === "resource_migration") {
+    try {
+      validateResourceMigrationDeclaration(action, field);
+    } catch (error) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        error instanceof Error ? error.message : `${field} is invalid`,
+      );
+    }
+    if (!/^[a-z0-9][a-z0-9._/-]{0,127}$/u.test(action.runnerCapability)) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        `${field}.runnerCapability is invalid`,
+      );
+    }
+    if (
+      action.timeoutSeconds !== undefined &&
+      (!Number.isInteger(action.timeoutSeconds) ||
+        action.timeoutSeconds < 1 ||
+        action.timeoutSeconds > 6 * 60 * 60)
+    ) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        `${field}.timeoutSeconds must be an integer between 1 and 21600`,
+      );
+    }
+    return;
   }
   if (action.phase !== "post_apply" && action.phase !== "pre_destroy") {
     throw new OpenTofuControllerError(

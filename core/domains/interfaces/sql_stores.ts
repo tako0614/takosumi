@@ -1,7 +1,18 @@
 import type { Interface, InterfaceBinding } from "takosumi-contract/interfaces";
+import {
+  clampPageLimit,
+  decodeCursor,
+  pageFromProbeBy,
+} from "takosumi-contract/pagination";
+import {
+  UI_SURFACE_INTERFACE_TYPE,
+  UI_SURFACE_INTERFACE_VERSION,
+} from "takosumi-contract";
 import type { SqlClient, SqlValue } from "../../adapters/storage/sql.ts";
 import { deployControlPostgresTableNames as names } from "../../adapters/storage/drizzle/schema/logical.ts";
 import type {
+  InterfaceAuthorizationPageInput,
+  InterfaceAuthorizationQuery,
   InterfaceBindingStore,
   InterfaceListFilter,
   InterfaceStore,
@@ -244,6 +255,112 @@ class SqlInterfaceBindingStore implements InterfaceBindingStore {
   }
 }
 
+class SqlInterfaceAuthorizationQuery implements InterfaceAuthorizationQuery {
+  readonly #interfaces = names.interfaces;
+  readonly #bindings = names.interfaceBindings;
+
+  constructor(readonly client: SqlClient) {}
+
+  async listPage(
+    input: InterfaceAuthorizationPageInput,
+  ): ReturnType<InterfaceAuthorizationQuery["listPage"]> {
+    if (input.filter.ownerIds?.length === 0) return { items: [] };
+    if (
+      input.filter.phase !== undefined &&
+      input.filter.phase !== "Resolved"
+    ) {
+      return { items: [] };
+    }
+    const parameters: SqlValue[] = [input.filter.workspaceId];
+    const clauses = ["i.workspace_id = $1", "i.phase = 'Resolved'"];
+    const placeholder = (value: SqlValue): string => {
+      parameters.push(value);
+      return `$${parameters.length}`;
+    };
+    const add = (column: string, value: SqlValue): void => {
+      clauses.push(`${column} = ${placeholder(value)}`);
+    };
+    if (input.uiSurfaceCandidates) {
+      const type = placeholder(UI_SURFACE_INTERFACE_TYPE);
+      const version = placeholder(UI_SURFACE_INTERFACE_VERSION);
+      const capsuleOwnerClause = input.capsuleId
+        ? `and i.owner_id = ${placeholder(input.capsuleId)}`
+        : "";
+      clauses.push(
+        `(
+          (
+            i.owner_kind = 'Capsule' and i.interface_type = ${type}
+            and i.record_json->'spec'->>'version' = ${version}
+            ${capsuleOwnerClause}
+          )
+          or (
+            i.owner_kind = 'Resource'
+            and i.record_json->'spec'->'document'->>'launcher' = 'true'
+          )
+        )`,
+      );
+    } else {
+      if (input.filter.type !== undefined)
+        add("i.interface_type", input.filter.type);
+      if (input.filter.ownerKind !== undefined)
+        add("i.owner_kind", input.filter.ownerKind);
+      if (input.filter.ownerId !== undefined)
+        add("i.owner_id", input.filter.ownerId);
+      if (input.filter.ownerIds !== undefined) {
+        clauses.push(
+          `i.owner_id in (${input.filter.ownerIds
+            .map((ownerId) => placeholder(ownerId))
+            .join(",")})`,
+        );
+      }
+    }
+    if (input.filter.includeRetired !== true)
+      clauses.push("i.phase <> 'Retired'");
+    const subject = placeholder(input.subjectId);
+    const permission = placeholder(JSON.stringify([input.permission]));
+    clauses.push(
+      `exists (
+        select 1 from ${this.#bindings} b
+        where b.interface_id = i.id
+          and b.workspace_id = i.workspace_id
+          and b.subject_kind = 'Principal'
+          and b.subject_id = ${subject}
+          and b.phase = 'Ready'
+          and b.record_json->'status'->>'observedInterfaceRevision'
+              = i.resolved_revision::text
+          and b.record_json->'spec'->'permissions' @> ${permission}::jsonb
+      )`,
+    );
+    const cursor = decodeCursor(input.params.cursor);
+    if (cursor) {
+      const createdAfter = placeholder(cursor.createdAt);
+      const createdEqual = placeholder(cursor.createdAt);
+      const idAfter = placeholder(cursor.id);
+      clauses.push(
+        `(i.created_at > ${createdAfter} or
+          (i.created_at = ${createdEqual} and i.id > ${idAfter}))`,
+      );
+    }
+    const limit = clampPageLimit(input.params.limit);
+    const probe = placeholder(limit + 1);
+    const result = await this.client.query<InterfaceRow>(
+      `select i.record_json from ${this.#interfaces} i
+       where ${clauses.join(" and ")}
+       order by i.created_at asc, i.id asc
+       limit ${probe}`,
+      parameters,
+    );
+    return pageFromProbeBy(
+      result.rows.map((row) => decode<Interface>(row.record_json)),
+      limit,
+      (iface) => ({
+        createdAt: iface.metadata.createdAt,
+        id: iface.metadata.id,
+      }),
+    );
+  }
+}
+
 function interfaceParameters(
   record: Interface,
   preserveClaim: boolean,
@@ -290,6 +407,7 @@ export function createSqlInterfaceStores(client: SqlClient): InterfaceStores {
     persistence: "durable",
     interfaces: new SqlInterfaceStore(client),
     bindings: new SqlInterfaceBindingStore(client),
+    authorized: new SqlInterfaceAuthorizationQuery(client),
   };
 }
 

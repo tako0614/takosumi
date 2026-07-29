@@ -53,9 +53,6 @@ import {
   Trash,
 } from "lucide-solid";
 import {
-  installExperienceInitialSecret,
-  installExperiencePublicEndpoint,
-  installExperienceServiceNameVariable,
   type JsonValue,
   type ManagedPublicHostnameMode,
 } from "takosumi-contract";
@@ -91,6 +88,7 @@ import {
   createSourceHttpsTokenConnection,
   createSource,
   extractRunId,
+  getInstallConfig,
   listCapsules,
   type ProviderBindings,
   type Capsule,
@@ -153,6 +151,8 @@ import {
   type StoreMetadata,
   type StoreEntry,
   type StoreInputField,
+  type StoreInstallFeature,
+  type StoreAuthMode,
   DEFAULT_STORE_BADGE,
   CAPSULE_NAME_PATTERN,
   CAPSULE_DONE,
@@ -189,6 +189,18 @@ import {
   storePublicEndpointSubdomainField,
   storeServiceNameVariable,
   storeServiceNameField,
+  storeInitialSecretField,
+  storeSupportsOidc,
+  defaultStoreAuthMode,
+  storeInstallFeatures,
+  storeFeatureInputNames,
+  storeFeatureInputs,
+  storeInputIsDerived,
+  storeUsesRepositoryInstallUx,
+  storeInputLabel,
+  storeInputHelper,
+  storeFeatureLabel,
+  localizedStoreText,
   isStorePublicEndpointField,
   DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
   storeDefaultInputValue,
@@ -288,7 +300,11 @@ function storeKindGlyph(kind: StoreEntry["kind"]) {
 function StoreIcon(props: { readonly entry: StoreEntry }) {
   return (
     <AppFace
-      name={props.entry.name[locale()]}
+      name={
+        localizedStoreText(props.entry.name, props.entry.suggestedName)[
+          locale()
+        ]
+      }
       iconUrl={props.entry.iconUrl}
       fallback={storeKindGlyph(props.entry.kind)}
     />
@@ -374,6 +390,10 @@ function Inner() {
   const [storeInputTouched, setStoreInputTouched] = createSignal<
     Readonly<Record<string, boolean>>
   >({});
+  const [storeAuthMode, setStoreAuthMode] = createSignal<StoreAuthMode>("oidc");
+  const [storeFeatureSelections, setStoreFeatureSelections] = createSignal<
+    Readonly<Record<string, boolean>>
+  >({});
   const [activeInstallPrefill, setActiveInstallPrefill] =
     createSignal<InstallPrefill | null>(initialInstallPrefill ?? null);
   const initialRef = initialInstallPrefill?.ref ?? "";
@@ -415,6 +435,9 @@ function Inner() {
     readonly EnvVariableRow[]
   >([]);
   const [installConfigId, setInstallConfigId] = createSignal("");
+  const [compiledInstallConfig, setCompiledInstallConfig] =
+    createSignal<InstallConfig | null>(null);
+  let compiledInstallConfigIdentity: string | null = null;
   const [compatibility, setCompatibility] =
     createSignal<CapsuleCompatibilityResult | null>(null);
   const [checkingCompatibility, setCheckingCompatibility] = createSignal(false);
@@ -579,14 +602,12 @@ function Inner() {
     window.dispatchEvent(new Event("takosumi:workspaces-changed"));
     return workspace;
   });
-  const installConfigList = createMemo<readonly InstallConfig[]>(
-    () => installConfigs() ?? [],
-  );
+  const fetchedInstallConfigList = () => installConfigs() ?? [];
   const defaultGitInstallConfig = () =>
-    installConfigList().find(
+    fetchedInstallConfigList().find(
       (config) => config.id === DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
     ) ??
-    installConfigList().find(
+    fetchedInstallConfigList().find(
       (config) => config.name === "opentofu-capsule" && !config.store,
     );
   const sourceCoordinateForInstallConfig = () => {
@@ -599,17 +620,57 @@ function Inner() {
   const installConfigsForCurrentSource = () => {
     const coordinate = sourceCoordinateForInstallConfig();
     return storeInstallConfigsForSource(
-      installConfigList(),
+      fetchedInstallConfigList(),
       coordinate.url,
       coordinate.path,
     );
   };
+  const baseInstallConfigForStoreListing = (
+    listing: TcsListing,
+  ): InstallConfig | null =>
+    uniqueStoreInstallConfigForSource(
+      fetchedInstallConfigList(),
+      listing.source.url,
+      listing.source.path,
+    );
+  const repositoryInstallUxPreviewIdentity = (): string => {
+    const listing = selectedStoreListing();
+    const baseConfig = listing
+      ? baseInstallConfigForStoreListing(listing)
+      : null;
+    return JSON.stringify([
+      workspaceId() ?? "",
+      sourceCoordinateForInstallConfig(),
+      (pinnedFullRef() ?? ref().trim()) || "HEAD",
+      sourceAccessMode(),
+      sourceAuthConnectionId().trim(),
+      name().trim(),
+      baseConfig?.id ?? "",
+      baseConfig?.updatedAt ?? "",
+    ]);
+  };
+  const activeCompiledInstallConfig = (): InstallConfig | null => {
+    const config = compiledInstallConfig();
+    return config &&
+      compiledInstallConfigIdentity === repositoryInstallUxPreviewIdentity()
+      ? config
+      : null;
+  };
+  const installConfigList = createMemo<readonly InstallConfig[]>(() => {
+    const base = fetchedInstallConfigList();
+    const compiled = activeCompiledInstallConfig();
+    return compiled && !base.some((config) => config.id === compiled.id)
+      ? [...base, compiled]
+      : base;
+  });
   const ensureConfigSelected = () => {
     const list = installConfigList();
     if (list.length === 0) return list;
+    const compiled = activeCompiledInstallConfig();
     const sourceMatches = installConfigsForCurrentSource();
-    const desiredId =
-      sourceMatches.length === 1
+    const desiredId = compiled
+      ? compiled.id
+      : sourceMatches.length === 1
         ? sourceMatches[0]!.id
         : sourceMatches.length === 0
           ? (defaultGitInstallConfig()?.id ?? "")
@@ -640,11 +701,9 @@ function Inner() {
     // one service-owned InstallConfig by its exact Source coordinate; silently
     // falling back to the generic direct-Git config drops app-specific Outputs
     // and Interface blueprints, producing an active but unlaunchable Capsule.
-    return uniqueStoreInstallConfigForSource(
-      installConfigList(),
-      listing.source.url,
-      listing.source.path,
-    );
+    const compiled = activeCompiledInstallConfig();
+    if (compiled && selectedStoreListing()?.id === listing.id) return compiled;
+    return baseInstallConfigForStoreListing(listing);
   };
   const storeEntryForListing = (listing: TcsListing): StoreEntry | null => {
     const config = installConfigForStoreListing(listing);
@@ -656,6 +715,76 @@ function Inner() {
     return storeEntryForListing(listing);
   };
   const selectedServiceEntry = () => storeServiceEntry();
+  const baseInstallConfigIdForCompatibility = (): string => {
+    const listing = selectedStoreListing();
+    return listing
+      ? (baseInstallConfigForStoreListing(listing)?.id ?? "")
+      : selectedInstallConfigId();
+  };
+  const storeFeatureKey = (entry: StoreEntry, feature: StoreInstallFeature) =>
+    `${entry.installConfigId}:${feature.id}`;
+  const storeFeatureEnabled = (
+    entry: StoreEntry,
+    feature: StoreInstallFeature,
+  ): boolean =>
+    storeFeatureSelections()[storeFeatureKey(entry, feature)] ??
+    !feature.optional;
+  // The current public install API has no sealed secret-material submission
+  // contract. Do not route passwords/tokens through ordinary Capsule vars.
+  // This becomes a runtime capability check when a host-owned materializer is
+  // published by the control API.
+  const storeSecretMaterializationAvailable = () => false;
+  const storeFeatureRequiresSecretMaterialization = (
+    entry: StoreEntry,
+    feature: StoreInstallFeature,
+  ): boolean =>
+    storeFeatureInputs(entry, feature).some((field) => field.secret);
+  const visibleStoreInstallFeatures = (
+    entry: StoreEntry,
+  ): readonly StoreInstallFeature[] =>
+    storeInstallFeatures(entry).filter(
+      (feature) =>
+        storeSecretMaterializationAvailable() ||
+        !storeFeatureRequiresSecretMaterialization(entry, feature),
+    );
+  const storeRequiresUnavailableSecretMaterialization = (
+    entry: StoreEntry,
+  ): boolean =>
+    (!storeSupportsOidc(entry) && Boolean(storeInitialSecretField(entry))) ||
+    storeInstallFeatures(entry).some(
+      (feature) =>
+        !feature.optional &&
+        storeFeatureRequiresSecretMaterialization(entry, feature),
+    );
+  const updateStoreFeatureEnabled = (
+    entry: StoreEntry,
+    feature: StoreInstallFeature,
+    enabled: boolean,
+  ) => {
+    setStoreFeatureSelections((current) => ({
+      ...current,
+      [storeFeatureKey(entry, feature)]: enabled,
+    }));
+    resetCompatibility();
+  };
+  let activeStoreSetupIdentity = "";
+  createEffect(() => {
+    const entry = selectedServiceEntry();
+    const identity = entry ? `${entry.installConfigId}:${entry.updatedAt}` : "";
+    if (identity === activeStoreSetupIdentity) return;
+    activeStoreSetupIdentity = identity;
+    setStoreAuthMode(entry ? (defaultStoreAuthMode(entry) ?? "oidc") : "oidc");
+    setStoreFeatureSelections(
+      entry
+        ? Object.fromEntries(
+            storeInstallFeatures(entry).map((feature) => [
+              storeFeatureKey(entry, feature),
+              !feature.optional,
+            ]),
+          )
+        : {},
+    );
+  });
   const storeInputValue = (entry: StoreEntry, field: StoreInputField) => {
     const key = storeInputKey(entry.id, field.name);
     return (
@@ -719,11 +848,45 @@ function Inner() {
     }));
     resetCompatibility();
   };
+  const featureForStoreInput = (
+    entry: StoreEntry,
+    field: StoreInputField,
+  ): StoreInstallFeature | undefined =>
+    storeInstallFeatures(entry).find((feature) =>
+      feature.inputs.some((name) => name === field.name),
+    );
+  const storeInputIsActive = (
+    entry: StoreEntry,
+    field: StoreInputField,
+  ): boolean => {
+    if (field.secret && !storeSecretMaterializationAvailable()) return false;
+    const feature = featureForStoreInput(entry, field);
+    if (feature && !storeFeatureEnabled(entry, feature)) return false;
+    if (isInitialSecretStoreInput(entry, field)) {
+      return storeAuthMode() === "password";
+    }
+    return true;
+  };
+  const storeInputShouldSubmit = (
+    entry: StoreEntry,
+    field: StoreInputField,
+  ): boolean => {
+    if (!storeInputIsActive(entry, field)) return false;
+    if (field.secret) return false;
+    if (!storeInputIsDerived(field)) return true;
+    // Derived values stay DB-owned. A public endpoint is the one semantic
+    // exception: an explicit user edit becomes a reviewed override.
+    return (
+      isStorePublicEndpointField(entry, field) &&
+      storeInputTouched()[storeInputKey(entry.id, field.name)] === true
+    );
+  };
   const selectedStoreVariables = () => {
     const entry = selectedServiceEntry();
     if (!entry) return {};
     const variables: Record<string, JsonValue> = {};
     for (const field of entry.inputs) {
+      if (!storeInputShouldSubmit(entry, field)) continue;
       const value = storeInputJsonValue(field, storeInputValue(entry, field));
       if (value !== undefined) {
         setStoreJsonVariable(variables, field.name, value);
@@ -743,22 +906,35 @@ function Inner() {
   const storeInputError = (): string | null => {
     const entry = selectedServiceEntry();
     if (!entry) return null;
+    if (storeRequiresUnavailableSecretMaterialization(entry)) {
+      return t("new.error.secretSetupUnavailable");
+    }
     for (const field of entry.inputs) {
       if (!storeVariablePath(field.name)) {
         return t("new.vars.errorUnsafeName", { name: field.name });
       }
+      if (!storeInputIsActive(entry, field)) continue;
+      if (
+        storeInputIsDerived(field) &&
+        !isStorePublicEndpointField(entry, field)
+      ) {
+        continue;
+      }
       const value = storeInputValue(entry, field).trim();
-      if (field.required && !value) {
+      const passwordIsRequired =
+        isInitialSecretStoreInput(entry, field) &&
+        storeAuthMode() === "password";
+      if ((field.required || passwordIsRequired) && !value) {
         if (isServiceIdentityStoreInput(entry, field)) {
           continue;
         }
         return t("new.storeInput.errorRequired", {
-          label: field.label[locale()],
+          label: storeInputLabel(field, locale()),
         });
       }
       if (value && !isSafeInstallVariableValue(value)) {
         return t("new.storeInput.errorUnsafeValue", {
-          label: field.label[locale()],
+          label: storeInputLabel(field, locale()),
         });
       }
       const publicEndpoint = storePublicEndpoint(entry);
@@ -769,7 +945,7 @@ function Inner() {
         !isManagedSubdomainLabel(value)
       ) {
         return t("new.storeInput.errorSubdomain", {
-          label: field.label[locale()],
+          label: storeInputLabel(field, locale()),
           baseDomain:
             effectiveManagedBaseDomain(publicEndpoint?.baseDomain) ?? "",
         });
@@ -789,14 +965,14 @@ function Inner() {
             !hostIsManagedBaseDomainSubdomain(host, baseDomain))
         ) {
           return t("new.storeInput.errorCustomDomain", {
-            label: field.label[locale()],
+            label: storeInputLabel(field, locale()),
             baseDomain: baseDomain ?? "",
           });
         }
       }
       if (value && field.format === "sha256" && !isSha256Hex(value)) {
         return t("new.storeInput.errorUnsafeValue", {
-          label: field.label[locale()],
+          label: storeInputLabel(field, locale()),
         });
       }
     }
@@ -896,7 +1072,7 @@ function Inner() {
     activeFlowAbort?.abort();
   });
 
-  const validate = (): string | null => {
+  const validateInstallSource = (): string | null => {
     if (!workspaceId()) return t("new.error.workspaceRequired");
     if (!gitUrl().trim()) return t("new.error.urlRequired");
     if (!name().trim()) return t("new.error.nameRequired");
@@ -908,6 +1084,14 @@ function Inner() {
     if (storeMetadataUnavailable()) return t("new.error.configLoadFailed");
     const sourceCredentialError = sourceAccessError();
     if (sourceCredentialError) return sourceCredentialError;
+    return null;
+  };
+  const validate = (): string | null => {
+    const sourceError = validateInstallSource();
+    if (sourceError) return sourceError;
+    if (selectedServiceEntry()?.setupProjectionInvalid) {
+      return t("new.error.installUxInvalid");
+    }
     const storeError = storeInputError();
     if (storeError) return storeError;
     const variableError = inputVariableError();
@@ -967,8 +1151,6 @@ function Inner() {
       normalizeSourcePath(installModulePath())
     );
   };
-  const installExperienceForCurrentSource = () =>
-    selectedServiceEntry()?.installExperience;
   const serviceNameVariableForCurrentSource = () =>
     selectedServiceEntry()
       ? storeServiceNameVariable(selectedServiceEntry()!)
@@ -999,16 +1181,15 @@ function Inner() {
       : managedServiceLabel(workspaceHandle(), requested);
   const supportsManagedPublicHostnameChoice = () =>
     Boolean(
-      installExperiencePublicEndpoint(installExperienceForCurrentSource())
-        ?.subdomainVariable,
+      selectedServiceEntry() &&
+      storePublicEndpoint(selectedServiceEntry()!)?.subdomainVariable,
     );
   // Preview the FINAL managed hostname (workspace-prefixed + base domain) the
   // deploy will use, so the workspace prefix is not a surprise. Empty until
   // the workspace handle and a base domain are known.
   const managedHostPreview = (): string => {
-    const endpoint = installExperiencePublicEndpoint(
-      installExperienceForCurrentSource(),
-    );
+    const entry = selectedServiceEntry();
+    const endpoint = entry ? storePublicEndpoint(entry) : undefined;
     const baseDomain = effectiveManagedBaseDomain(endpoint?.baseDomain);
     const label = managedHostnameLabel(serviceNameInputValue());
     return label && baseDomain ? `${label}.${baseDomain}` : "";
@@ -1064,7 +1245,7 @@ function Inner() {
     entry: StoreEntry,
     field: StoreInputField,
   ): string | undefined => {
-    const helper = field.helper?.[locale()];
+    const helper = storeInputHelper(field, locale());
     if (helper) return helper;
     const endpoint = storePublicEndpoint(entry);
     if (endpoint?.urlVariable && field.name === endpoint.urlVariable) {
@@ -1218,7 +1399,11 @@ function Inner() {
       ...normalizedInputVariables(),
     };
     const serviceNameVariable = serviceNameVariableForCurrentSource();
-    if (serviceNameVariable && supportsServiceNameInput()) {
+    if (
+      serviceNameVariable &&
+      supportsServiceNameInput() &&
+      !selectedServiceEntry()
+    ) {
       variables[serviceNameVariable] = serviceNameInputValue();
     }
     mergeEnvVariables(variables, normalizedEnvVariables());
@@ -1249,9 +1434,7 @@ function Inner() {
   const isInitialSecretStoreInput = (
     entry: StoreEntry,
     field: StoreInputField,
-  ) =>
-    installExperienceInitialSecret(entry.installExperience)?.variable ===
-    field.name;
+  ) => storeInitialSecretField(entry)?.name === field.name;
   const isAdvancedStoreInput = (entry: StoreEntry, field: StoreInputField) =>
     field.advanced === true &&
     // `initial_secret` explicitly projects the field into common setup.
@@ -1260,12 +1443,17 @@ function Inner() {
     entry.inputs.filter(
       (field) =>
         !isServiceIdentityStoreInput(entry, field) &&
+        (!storeInputIsDerived(field) ||
+          isStorePublicEndpointField(entry, field)) &&
         !isAdvancedStoreInput(entry, field),
     );
   const advancedStoreInputs = (entry: StoreEntry) =>
     entry.inputs.filter(
       (field) =>
         !isServiceIdentityStoreInput(entry, field) &&
+        !storeInputIsDerived(field) &&
+        !isInitialSecretStoreInput(entry, field) &&
+        !storeFeatureInputNames(entry).has(field.name) &&
         isAdvancedStoreInput(entry, field),
     );
   // The public-endpoint subdomain IS the service's identity, and Takosumi
@@ -1277,8 +1465,12 @@ function Inner() {
     storePublicEndpointSubdomainField(entry);
   const setupStoreInputs = (entry: StoreEntry) => {
     const identity = identityStoreInput(entry);
+    const featureInputNames = storeFeatureInputNames(entry);
     return visibleStoreInputs(entry).filter(
-      (field) => field.name !== identity?.name,
+      (field) =>
+        field.name !== identity?.name &&
+        !isInitialSecretStoreInput(entry, field) &&
+        !featureInputNames.has(field.name),
     );
   };
   const hasSetupStoreInputs = () => {
@@ -1288,10 +1480,20 @@ function Inner() {
   const storePublisherLabel = (): string => {
     const publisher = selectedServiceEntry()?.publisher;
     if (!publisher) return "";
-    return publisher.displayName?.trim() || `@${publisher.handle}`;
+    const displayName =
+      typeof publisher.displayName === "string"
+        ? publisher.displayName.trim()
+        : "";
+    const handle = safeStoreToken(publisher.handle);
+    return displayName || (handle ? `@${handle}` : "");
   };
   const storeBadgeLabel = (): string =>
-    selectedServiceEntry()?.badge[locale()]?.trim() ?? "";
+    selectedServiceEntry()
+      ? localizedStoreText(
+          selectedServiceEntry()!.badge,
+          selectedServiceEntry()!.suggestedName,
+        )[locale()]
+      : "";
   // The public host this install will land on. Empty while the workspace
   // handle or managed base domain is still unknown.
   const installTargetHost = (): string => {
@@ -1304,7 +1506,10 @@ function Inner() {
     const entry = selectedServiceEntry();
     if (!entry || !compatibility()) return false;
     return advancedStoreInputs(entry).some(
-      (field) => field.required && !storeInputValue(entry, field).trim(),
+      (field) =>
+        storeInputIsActive(entry, field) &&
+        field.required &&
+        !storeInputValue(entry, field).trim(),
     );
   };
   const sourceGitConnections = () =>
@@ -1861,17 +2066,35 @@ function Inner() {
     const level = compatibility()?.level;
     return level === "ready";
   };
+  const repositoryInstallUxReady = (): boolean => {
+    if (!selectedStoreListing()) return true;
+    const preview = compatibility()?.repositoryInstallUx;
+    if (preview?.status === "absent") return true;
+    return (
+      preview?.status === "accepted" &&
+      activeCompiledInstallConfig()?.id === preview.installConfigId
+    );
+  };
+  const canRenderStoreSetup = (): boolean => {
+    if (!selectedStoreListing()) return true;
+    if (activeCompiledInstallConfig()) return true;
+    return compatibility()?.repositoryInstallUx?.status === "absent";
+  };
   // Reached only from inside submit/runFlow, so "press add first" would be a
   // lie: either a listed item blocks the install, or the check never produced
   // a result and the honest instruction is to try again.
   const proceedBlocker = (): string =>
     providerConnectionError() ??
+    (!repositoryInstallUxReady()
+      ? t("new.error.installUxPreviewMissing")
+      : null) ??
     (compatibility() && !compatibilityRunnable()
       ? t("new.error.notRunnable")
       : t("new.error.checkIncomplete"));
   const canContinue = () =>
     compatibility() !== null &&
     compatibilityRunnable() &&
+    repositoryInstallUxReady() &&
     providerConnectionError() === null;
   const usingSelectedService = () =>
     Boolean(selectedServiceEntry()) && Boolean(sourceGitUrl());
@@ -1921,6 +2144,15 @@ function Inner() {
         // The check failed or could not resolve a result; its error is shown.
         if (!compatibility()) return;
       }
+      // Repository-owned setup is compiled from the exact synced snapshot.
+      // Re-run validation after that exact DB-owned InstallConfig is fetched:
+      // the base catalog row cannot know which semantic user questions the
+      // selected app version adds.
+      const compiledSetupValidationError = validate();
+      if (compiledSetupValidationError) {
+        setError(compiledSetupValidationError);
+        return;
+      }
       await loadProviderConnections().catch(() => []);
       await settleProviderConnectionRows();
       // Blockers render inline from compatibility state (compat result panel /
@@ -1952,8 +2184,12 @@ function Inner() {
     );
   };
 
-  const runCompatibilityCheck = async () => {
-    const validationError = validate();
+  const runCompatibilityCheck = async (
+    options: { readonly preflightOnly?: boolean } = {},
+  ) => {
+    const validationError = options.preflightOnly
+      ? validateInstallSource()
+      : validate();
     if (validationError) {
       setError(validationError);
       return;
@@ -1973,6 +2209,9 @@ function Inner() {
     try {
       await loadProviderConnections().catch(() => []);
       throwIfStaleFlow(flow);
+      const compileInstallUx = selectedStoreListing() !== null;
+      const compatibilityInstallConfigId =
+        baseInstallConfigIdForCompatibility();
       let result = await checkCapsuleCompatibility({
         workspaceId: workspaceId()!,
         sourceId: createdSourceId() ?? undefined,
@@ -1981,7 +2220,8 @@ function Inner() {
         path: installModulePath(),
         name: name().trim(),
         authConnectionId: sourceAuthConnectionIdForRun(),
-        installConfigId: selectedInstallConfigId(),
+        installConfigId: compatibilityInstallConfigId,
+        compileInstallUx,
         signal: flow.controller.signal,
         onSourceCreated: (sourceId) => {
           if (isCurrentFlow(flow)) recordCreatedSource(sourceId);
@@ -2008,7 +2248,8 @@ function Inner() {
           path: installModulePath(),
           name: name().trim(),
           authConnectionId: sourceAuthConnectionIdForRun(),
-          installConfigId: selectedInstallConfigId(),
+          installConfigId: compatibilityInstallConfigId,
+          compileInstallUx,
           signal: flow.controller.signal,
           onSourceCreated: (sourceId) => {
             if (isCurrentFlow(flow)) recordCreatedSource(sourceId);
@@ -2024,6 +2265,54 @@ function Inner() {
           },
         });
         throwIfStaleFlow(flow);
+      }
+      const repositoryInstallUx = result.repositoryInstallUx;
+      if (repositoryInstallUx?.status === "accepted") {
+        const exactConfig = await getInstallConfig(
+          repositoryInstallUx.installConfigId,
+        );
+        throwIfStaleFlow(flow);
+        if (
+          exactConfig.id !== repositoryInstallUx.installConfigId ||
+          exactConfig.installExperience?.repositoryInstallUx?.status !==
+            "accepted"
+        ) {
+          result = {
+            ...result,
+            level: "unsupported",
+            diagnostics: [
+              ...result.diagnostics,
+              {
+                code: "repository_install_ux_invalid",
+                severity: "error",
+                compatibilityImpact: "unsupported",
+                message:
+                  "The compiled repository install setup projection is invalid.",
+              },
+            ],
+            repositoryInstallUx: {
+              status: "invalid",
+              diagnosticCode: "repository_install_ux_projection_invalid",
+              message:
+                "The compiled repository install setup projection is invalid.",
+            },
+            installConfigId: compatibilityInstallConfigId,
+          };
+          compiledInstallConfigIdentity = null;
+          setCompiledInstallConfig(null);
+          setInstallConfigId(compatibilityInstallConfigId);
+        } else {
+          compiledInstallConfigIdentity = repositoryInstallUxPreviewIdentity();
+          setCompiledInstallConfig(exactConfig);
+          setInstallConfigId(exactConfig.id);
+          result = { ...result, installConfigId: exactConfig.id };
+        }
+      } else if (repositoryInstallUx) {
+        // Absent keeps the existing service-owned config. Invalid stays a
+        // typed compatibility blocker and never falls back to raw variables.
+        compiledInstallConfigIdentity = null;
+        setCompiledInstallConfig(null);
+        setInstallConfigId(compatibilityInstallConfigId);
       }
       if (result.sourceId) {
         recordCreatedSource(result.sourceId);
@@ -2074,6 +2363,43 @@ function Inner() {
       }
     }
   };
+
+  let storeInstallUxPreflightTimer:
+    ReturnType<typeof globalThis.setTimeout> | undefined;
+  let lastStoreInstallUxPreflightIdentity = "";
+  createEffect(() => {
+    const listing = selectedStoreListing();
+    const baseConfig = listing
+      ? baseInstallConfigForStoreListing(listing)
+      : null;
+    const identity = repositoryInstallUxPreviewIdentity();
+    const needsPreview =
+      Boolean(listing && baseConfig) &&
+      !activeCompiledInstallConfig() &&
+      compatibility() === null &&
+      !checkingCompatibility();
+    if (storeInstallUxPreflightTimer) {
+      globalThis.clearTimeout(storeInstallUxPreflightTimer);
+      storeInstallUxPreflightTimer = undefined;
+    }
+    if (!needsPreview || identity === lastStoreInstallUxPreflightIdentity) {
+      return;
+    }
+    // Source sync is required before the exact DB-owned setup exists. Start it
+    // after a short debounce so choosing a Store card does not first render
+    // stale base-config questions, and editing the service identity does not
+    // issue one sync per keystroke.
+    storeInstallUxPreflightTimer = globalThis.setTimeout(() => {
+      storeInstallUxPreflightTimer = undefined;
+      lastStoreInstallUxPreflightIdentity = identity;
+      void runCompatibilityCheck({ preflightOnly: true });
+    }, 300);
+  });
+  onCleanup(() => {
+    if (storeInstallUxPreflightTimer) {
+      globalThis.clearTimeout(storeInstallUxPreflightTimer);
+    }
+  });
 
   const runFlow = async () => {
     const validationError = validate();
@@ -2366,7 +2692,9 @@ function Inner() {
    * undefined there so it falls back to its generic title. */
   const installProgressName = (): string | undefined => {
     const named = usingSelectedService()
-      ? (selectedServiceEntry()?.name[locale()] ?? sourceSummaryTitle())
+      ? localizedStoreText(selectedServiceEntry()?.name, sourceSummaryTitle())[
+          locale()
+        ]
       : sourceSummaryTitle();
     return named.trim() ? named : undefined;
   };
@@ -2687,8 +3015,8 @@ function Inner() {
             <Show when={identity()}>
               {(field) => (
                 <FormField
-                  label={field().label[locale()]}
-                  hint={field().helper?.[locale()]}
+                  label={storeInputLabel(field(), locale())}
+                  hint={storeInputHelper(field(), locale())}
                   required={field().required}
                 >
                   <Input
@@ -2743,6 +3071,192 @@ function Inner() {
       </section>
     );
   };
+  const installAuthenticationFields = (entry: () => StoreEntry) => {
+    const supportsOidc = () => storeSupportsOidc(entry());
+    const passwordField = () => storeInitialSecretField(entry());
+    const passwordAvailable = () =>
+      storeSecretMaterializationAvailable() && Boolean(passwordField());
+    const hasChoice = () => supportsOidc() && passwordAvailable();
+    return (
+      <Show when={supportsOidc() || passwordField()}>
+        <section class="av-service-setup av-install-auth">
+          <div class="av-service-setup-head">
+            <h3>{t("new.auth.title")}</h3>
+            <p>{t("new.auth.subtitle")}</p>
+          </div>
+          <Show
+            when={hasChoice()}
+            fallback={
+              <>
+                <Show when={supportsOidc()}>
+                  <div class="av-semantic-choice">
+                    <KeyRound size={18} aria-hidden="true" />
+                    <div>
+                      <strong>{t("new.auth.oidc")}</strong>
+                      <p>{t("new.auth.oidcHint")}</p>
+                    </div>
+                  </div>
+                </Show>
+                <Show when={!supportsOidc() && passwordField()}>
+                  <div class="wb-action-callout" role="alert">
+                    <strong>{t("new.auth.unavailableTitle")}</strong>
+                    <p>{t("new.auth.unavailableBody")}</p>
+                  </div>
+                </Show>
+              </>
+            }
+          >
+            <FormField label={t("new.auth.mode")}>
+              <Select
+                id={`store-auth-mode-${entry().id}`}
+                name="storeAuthMode"
+                value={storeAuthMode()}
+                disabled={busy()}
+                onChange={(event) => {
+                  setStoreAuthMode(event.currentTarget.value as StoreAuthMode);
+                  resetCompatibility();
+                }}
+              >
+                <option value="oidc">{t("new.auth.oidc")}</option>
+                <option value="password">{t("new.auth.password")}</option>
+              </Select>
+            </FormField>
+          </Show>
+          <Show
+            when={
+              passwordAvailable() &&
+              (!supportsOidc() || storeAuthMode() === "password")
+                ? passwordField()
+                : undefined
+            }
+          >
+            {(field) => (
+              <FormField
+                label={t("new.auth.initialPassword")}
+                hint={t("new.auth.passwordHint")}
+                required={true}
+              >
+                <Input
+                  id={`store-auth-password-${entry().id}`}
+                  name="storeInitialPassword"
+                  type="password"
+                  disabled={busy()}
+                  value={storeInputValue(entry(), field())}
+                  onInput={(event) =>
+                    updateStoreInputValue(
+                      entry(),
+                      field(),
+                      event.currentTarget.value,
+                    )
+                  }
+                  placeholder={field().placeholder ?? ""}
+                  autocomplete="new-password"
+                  spellcheck={false}
+                />
+              </FormField>
+            )}
+          </Show>
+        </section>
+      </Show>
+    );
+  };
+  const installFeatureFields = (entry: () => StoreEntry) => (
+    <Show when={visibleStoreInstallFeatures(entry()).length > 0}>
+      <section class="av-service-setup av-install-features">
+        <div class="av-service-setup-head">
+          <h3>{t("new.features.title")}</h3>
+          <p>{t("new.features.subtitle")}</p>
+        </div>
+        <div class="av-install-feature-list">
+          <For each={visibleStoreInstallFeatures(entry())}>
+            {(feature) => (
+              <div class="av-install-feature">
+                <Show
+                  when={feature.optional}
+                  fallback={
+                    <strong class="av-install-feature-label">
+                      {storeFeatureLabel(feature, locale())}
+                    </strong>
+                  }
+                >
+                  <Checkbox
+                    id={`store-feature-${entry().id}-${feature.id}`}
+                    name={`storeFeature:${feature.id}`}
+                    label={storeFeatureLabel(feature, locale())}
+                    checked={storeFeatureEnabled(entry(), feature)}
+                    disabled={busy()}
+                    onChange={(event) =>
+                      updateStoreFeatureEnabled(
+                        entry(),
+                        feature,
+                        event.currentTarget.checked,
+                      )
+                    }
+                  />
+                </Show>
+                <Show when={storeFeatureEnabled(entry(), feature)}>
+                  <div class="av-service-setup-grid">
+                    <For each={storeFeatureInputs(entry(), feature)}>
+                      {(field) => (
+                        <FormField
+                          label={storeInputLabel(field, locale())}
+                          hint={storeInputHelper(field, locale())}
+                          required={field.required}
+                          as={field.type === "boolean" ? "group" : "label"}
+                        >
+                          <Show
+                            when={field.type === "boolean"}
+                            fallback={
+                              <Input
+                                id={`store-feature-input-${entry().id}-${feature.id}-${field.name}`}
+                                name={`storeFeatureInput:${feature.id}:${field.name}`}
+                                type={field.secret ? "password" : "text"}
+                                disabled={busy()}
+                                value={storeInputValue(entry(), field)}
+                                onInput={(event) =>
+                                  updateStoreInputValue(
+                                    entry(),
+                                    field,
+                                    event.currentTarget.value,
+                                  )
+                                }
+                                placeholder={field.placeholder ?? ""}
+                                autocomplete={
+                                  field.secret ? "new-password" : "off"
+                                }
+                                spellcheck={false}
+                              />
+                            }
+                          >
+                            <Checkbox
+                              id={`store-feature-input-${entry().id}-${feature.id}-${field.name}`}
+                              name={`storeFeatureInput:${feature.id}:${field.name}`}
+                              label={t("app.config.enabled")}
+                              checked={storeInputBooleanChecked(entry(), field)}
+                              disabled={busy()}
+                              onChange={(event) =>
+                                updateStoreInputValue(
+                                  entry(),
+                                  field,
+                                  event.currentTarget.checked
+                                    ? "true"
+                                    : "false",
+                                )
+                              }
+                            />
+                          </Show>
+                        </FormField>
+                      )}
+                    </For>
+                  </div>
+                </Show>
+              </div>
+            )}
+          </For>
+        </div>
+      </section>
+    </Show>
+  );
   return (
     <>
       <Show
@@ -2926,8 +3440,10 @@ function Inner() {
                   <div class="av-add-flow-copy">
                     <h2>
                       {usingSelectedService()
-                        ? (selectedServiceEntry()?.name[locale()] ??
-                          sourceSummaryTitle())
+                        ? localizedStoreText(
+                            selectedServiceEntry()?.name,
+                            sourceSummaryTitle(),
+                          )[locale()]
                         : t("new.advancedImport.title")}
                     </h2>
                     <p class="av-add-flow-by">
@@ -2943,12 +3459,26 @@ function Inner() {
                             <span class="av-add-flow-badge">{badge()}</span>
                           )}
                         </Show>
+                        <Show
+                          when={
+                            selectedServiceEntry() &&
+                            storeUsesRepositoryInstallUx(
+                              selectedServiceEntry()!,
+                            )
+                          }
+                        >
+                          <span class="av-add-flow-badge">
+                            {t("new.installUx.repositoryOwned")}
+                          </span>
+                        </Show>
                       </Show>
                     </p>
                     <p>
                       {usingSelectedService()
-                        ? (selectedServiceEntry()?.description[locale()] ??
-                          t("new.selection.subtitle"))
+                        ? localizedStoreText(
+                            selectedServiceEntry()?.description,
+                            t("new.selection.subtitle"),
+                          )[locale()]
                         : t("new.advancedImport.subtitle")}
                     </p>
                   </div>
@@ -2968,12 +3498,43 @@ function Inner() {
                       : gitFields()}
                   </Show>
 
-                  <Show when={selectedServiceEntry()}>
-                    {(entry) => installIdentityFields(entry)}
+                  <Show
+                    when={
+                      selectedStoreListing() &&
+                      !canRenderStoreSetup() &&
+                      compatibility() === null
+                    }
+                  >
+                    <div class="wb-action-callout" role="status">
+                      <strong>{t("new.installUx.loadingTitle")}</strong>
+                      <p>{t("new.installUx.loadingBody")}</p>
+                    </div>
                   </Show>
 
                   <Show
-                    when={hasSetupStoreInputs() ? selectedServiceEntry() : null}
+                    when={canRenderStoreSetup() ? selectedServiceEntry() : null}
+                  >
+                    {(entry) => (
+                      <>
+                        {installIdentityFields(entry)}
+                        {installAuthenticationFields(entry)}
+                        {installFeatureFields(entry)}
+                        <Show when={entry().setupProjectionInvalid}>
+                          <div class="wb-action-callout" role="alert">
+                            <strong>{t("new.installUx.invalidTitle")}</strong>
+                            <p>{t("new.installUx.invalidBody")}</p>
+                          </div>
+                        </Show>
+                      </>
+                    )}
+                  </Show>
+
+                  <Show
+                    when={
+                      canRenderStoreSetup() && hasSetupStoreInputs()
+                        ? selectedServiceEntry()
+                        : null
+                    }
                   >
                     {(entry) => (
                       <section class="av-service-setup">
@@ -2985,8 +3546,8 @@ function Inner() {
                           <For each={setupStoreInputs(entry())}>
                             {(field) => (
                               <FormField
-                                label={field.label[locale()]}
-                                hint={field.helper?.[locale()]}
+                                label={storeInputLabel(field, locale())}
+                                hint={storeInputHelper(field, locale())}
                                 required={field.required}
                                 // A boolean field renders a self-labeling Checkbox
                                 // (its own <label>); wrap it in a group, not a
@@ -3097,288 +3658,325 @@ function Inner() {
                     </FormField>
                   </Show>
 
-                  <details
-                    class="wb-disclosure wb-input-vars"
-                    open={
-                      shouldOpenServiceAdvanced() ||
-                      hasMissingAdvancedStoreInputs() ||
-                      sourceAccessMode() !== "public" ||
-                      // A hostname conflict flags the サービスID field invalid
-                      // in here; keep the disclosure open so the chosen 候補名 is
-                      // visible and the queued focus() lands on a shown input.
-                      appHostnameConflict()
+                  <Show
+                    when={
+                      !usingSelectedService() ||
+                      (canRenderStoreSetup() &&
+                        selectedServiceEntry() &&
+                        advancedStoreInputs(selectedServiceEntry()!).length > 0)
                     }
                   >
-                    <summary>{t("new.advanced.title")}</summary>
-                    <Show when={!usingSelectedService()}>
-                      <Show when={activeInstallPrefill()}>{gitFields()}</Show>
-                      {sourceAccessFields()}
-                      {sourceDetailFields()}
-                    </Show>
-                    <Show when={selectedServiceEntry()}>
-                      {(entry) => (
-                        <Show when={advancedStoreInputs(entry()).length > 0}>
-                          <section class="wb-stack">
-                            <For each={advancedStoreInputs(entry())}>
-                              {(field) => (
-                                <FormField
-                                  label={field.label[locale()]}
-                                  hint={advancedStoreFieldHint(entry(), field)}
-                                  required={field.required}
-                                  // A boolean field renders a self-labeling
-                                  // Checkbox (its own <label>); wrap it in a
-                                  // group, not a second <label>.
-                                  as={
-                                    field.type === "boolean" ? "group" : "label"
-                                  }
-                                >
-                                  <Show
-                                    when={field.type === "boolean"}
-                                    fallback={
-                                      <Input
-                                        id={`store-input-advanced-${entry().id}-${field.name}`}
-                                        name={`storeInputAdvanced:${field.name}`}
-                                        type={
-                                          field.secret ? "password" : "text"
-                                        }
-                                        invalid={
-                                          appHostnameConflict() &&
-                                          isStorePublicEndpointField(
+                    <details
+                      class="wb-disclosure wb-input-vars"
+                      open={
+                        shouldOpenServiceAdvanced() ||
+                        hasMissingAdvancedStoreInputs() ||
+                        sourceAccessMode() !== "public" ||
+                        // A hostname conflict flags the サービスID field invalid
+                        // in here; keep the disclosure open so the chosen 候補名 is
+                        // visible and the queued focus() lands on a shown input.
+                        appHostnameConflict()
+                      }
+                    >
+                      <summary>{t("new.advanced.title")}</summary>
+                      <Show when={!usingSelectedService()}>
+                        <Show when={activeInstallPrefill()}>{gitFields()}</Show>
+                        {sourceAccessFields()}
+                        {sourceDetailFields()}
+                      </Show>
+                      <Show
+                        when={
+                          canRenderStoreSetup() ? selectedServiceEntry() : null
+                        }
+                      >
+                        {(entry) => (
+                          <Show when={advancedStoreInputs(entry()).length > 0}>
+                            <section class="wb-stack">
+                              <For each={advancedStoreInputs(entry())}>
+                                {(field) => (
+                                  <FormField
+                                    label={storeInputLabel(field, locale())}
+                                    hint={advancedStoreFieldHint(
+                                      entry(),
+                                      field,
+                                    )}
+                                    required={field.required}
+                                    // A boolean field renders a self-labeling
+                                    // Checkbox (its own <label>); wrap it in a
+                                    // group, not a second <label>.
+                                    as={
+                                      field.type === "boolean"
+                                        ? "group"
+                                        : "label"
+                                    }
+                                  >
+                                    <Show
+                                      when={field.type === "boolean"}
+                                      fallback={
+                                        <Input
+                                          id={`store-input-advanced-${entry().id}-${field.name}`}
+                                          name={`storeInputAdvanced:${field.name}`}
+                                          type={
+                                            field.secret ? "password" : "text"
+                                          }
+                                          invalid={
+                                            appHostnameConflict() &&
+                                            isStorePublicEndpointField(
+                                              entry(),
+                                              field,
+                                            )
+                                          }
+                                          disabled={busy()}
+                                          value={storeInputValue(
                                             entry(),
                                             field,
-                                          )
-                                        }
+                                          )}
+                                          onInput={(e) =>
+                                            updateStoreInputValue(
+                                              entry(),
+                                              field,
+                                              e.currentTarget.value,
+                                            )
+                                          }
+                                          placeholder={field.placeholder ?? ""}
+                                          autocomplete={
+                                            field.secret
+                                              ? "new-password"
+                                              : "off"
+                                          }
+                                          spellcheck={false}
+                                        />
+                                      }
+                                    >
+                                      <Checkbox
+                                        id={`store-input-advanced-${entry().id}-${field.name}`}
+                                        name={`storeInputAdvanced:${field.name}`}
+                                        label={t("app.config.enabled")}
                                         disabled={busy()}
-                                        value={storeInputValue(entry(), field)}
-                                        onInput={(e) =>
+                                        checked={storeInputBooleanChecked(
+                                          entry(),
+                                          field,
+                                        )}
+                                        onChange={(e) =>
                                           updateStoreInputValue(
                                             entry(),
                                             field,
-                                            e.currentTarget.value,
+                                            e.currentTarget.checked
+                                              ? "true"
+                                              : "false",
                                           )
                                         }
-                                        placeholder={field.placeholder ?? ""}
-                                        autocomplete={
-                                          field.secret ? "new-password" : "off"
-                                        }
-                                        spellcheck={false}
                                       />
-                                    }
-                                  >
-                                    <Checkbox
-                                      id={`store-input-advanced-${entry().id}-${field.name}`}
-                                      name={`storeInputAdvanced:${field.name}`}
-                                      label={t("app.config.enabled")}
-                                      disabled={busy()}
-                                      checked={storeInputBooleanChecked(
-                                        entry(),
-                                        field,
-                                      )}
-                                      onChange={(e) =>
-                                        updateStoreInputValue(
-                                          entry(),
-                                          field,
-                                          e.currentTarget.checked
-                                            ? "true"
-                                            : "false",
-                                        )
-                                      }
-                                    />
-                                  </Show>
-                                </FormField>
-                              )}
-                            </For>
-                          </section>
-                        </Show>
-                      )}
-                    </Show>
-                    <Show when={supportsServiceNameInput()}>
-                      <FormField
-                        label={t("new.vars.projectName")}
-                        hint={t("new.advanced.serviceIdHint")}
+                                    </Show>
+                                  </FormField>
+                                )}
+                              </For>
+                            </section>
+                          </Show>
+                        )}
+                      </Show>
+                      <Show
+                        when={
+                          !usingSelectedService() && supportsServiceNameInput()
+                        }
                       >
-                        <Input
-                          ref={serviceNameInput}
-                          id="new-project-name"
-                          name={
-                            serviceNameVariableForCurrentSource() ??
-                            "service_name"
-                          }
-                          type="text"
-                          invalid={appHostnameConflict()}
-                          disabled={busy()}
-                          value={serviceNameInputValue()}
-                          onInput={(e) => {
-                            setResourcePrefixTouched(true);
-                            setResourcePrefix(e.currentTarget.value);
-                            resetCompatibility();
-                          }}
-                          placeholder="photo-blog"
-                          autocomplete="off"
-                          spellcheck={false}
-                        />
-                        <Show when={managedHostPreview()}>
-                          {(host) => (
-                            <p class="wb-note">
-                              {t("new.hostPreview", { host: host() })}
-                            </p>
-                          )}
-                        </Show>
-                      </FormField>
-                    </Show>
-                    <section class="wb-stack">
-                      <h3 class="tg-card-title">{t("new.env.title")}</h3>
-                      <p class="wb-note">{t("new.env.body")}</p>
-                      <div class="wb-variable-list">
-                        {/* <Index>: rows are replaced per keystroke, so <For>
+                        <FormField
+                          label={t("new.vars.projectName")}
+                          hint={t("new.advanced.serviceIdHint")}
+                        >
+                          <Input
+                            ref={serviceNameInput}
+                            id="new-project-name"
+                            name={
+                              serviceNameVariableForCurrentSource() ??
+                              "service_name"
+                            }
+                            type="text"
+                            invalid={appHostnameConflict()}
+                            disabled={busy()}
+                            value={serviceNameInputValue()}
+                            onInput={(e) => {
+                              setResourcePrefixTouched(true);
+                              setResourcePrefix(e.currentTarget.value);
+                              resetCompatibility();
+                            }}
+                            placeholder="photo-blog"
+                            autocomplete="off"
+                            spellcheck={false}
+                          />
+                          <Show when={managedHostPreview()}>
+                            {(host) => (
+                              <p class="wb-note">
+                                {t("new.hostPreview", { host: host() })}
+                              </p>
+                            )}
+                          </Show>
+                        </FormField>
+                      </Show>
+                      <Show when={!usingSelectedService()}>
+                        <section class="wb-stack">
+                          <h3 class="tg-card-title">{t("new.env.title")}</h3>
+                          <p class="wb-note">{t("new.env.body")}</p>
+                          <div class="wb-variable-list">
+                            {/* <Index>: rows are replaced per keystroke, so <For>
                           (reference-keyed) would recreate the focused input on
                           every character. */}
-                        <Index each={envVariables()}>
-                          {(row, index) => (
-                            <div class="wb-variable-row">
-                              <FormField label={t("new.env.name")}>
-                                <Input
-                                  id={`new-env-name-${index}`}
-                                  name={`envName:${index}`}
-                                  type="text"
-                                  disabled={busy()}
-                                  value={row().name}
-                                  onInput={(e) =>
-                                    updateEnvVariable(index, {
-                                      name: e.currentTarget.value,
-                                    })
-                                  }
-                                  placeholder="APP_PUBLIC_URL"
-                                  autocomplete="off"
-                                  autocapitalize="characters"
-                                  spellcheck={false}
-                                />
-                              </FormField>
-                              <FormField label={t("new.env.value")}>
-                                <Input
-                                  id={`new-env-value-${index}`}
-                                  name={`envValue:${index}`}
-                                  type="text"
-                                  disabled={busy()}
-                                  value={row().value}
-                                  onInput={(e) =>
-                                    updateEnvVariable(index, {
-                                      value: e.currentTarget.value,
-                                    })
-                                  }
-                                  placeholder={t("new.env.valuePlaceholder")}
-                                  autocomplete="off"
-                                  spellcheck={false}
-                                />
-                              </FormField>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                icon={<Trash size={16} />}
-                                disabled={busy()}
-                                onClick={() => removeEnvVariable(index)}
-                              >
-                                {t("new.env.remove")}
-                              </Button>
-                            </div>
-                          )}
-                        </Index>
-                      </div>
-                      <div class="wb-form-actions">
-                        <Button
-                          type="button"
-                          variant="secondary"
-                          icon={<Plus size={16} />}
-                          disabled={busy()}
-                          onClick={addEnvVariable}
-                        >
-                          {t("new.env.add")}
-                        </Button>
-                      </div>
-                      <Show when={envVariableError()}>
-                        {(message) => (
-                          <p class="wb-error" role="alert">
-                            {message()}
-                          </p>
-                        )}
-                      </Show>
-                    </section>
-                    <section class="wb-stack">
-                      <h3 class="tg-card-title">{t("new.vars.inputsTitle")}</h3>
-                      <p class="wb-note">{t("new.vars.inputsBody")}</p>
-                      <div class="wb-variable-list">
-                        {/* <Index> for the same per-keystroke focus reason as
+                            <Index each={envVariables()}>
+                              {(row, index) => (
+                                <div class="wb-variable-row">
+                                  <FormField label={t("new.env.name")}>
+                                    <Input
+                                      id={`new-env-name-${index}`}
+                                      name={`envName:${index}`}
+                                      type="text"
+                                      disabled={busy()}
+                                      value={row().name}
+                                      onInput={(e) =>
+                                        updateEnvVariable(index, {
+                                          name: e.currentTarget.value,
+                                        })
+                                      }
+                                      placeholder="APP_PUBLIC_URL"
+                                      autocomplete="off"
+                                      autocapitalize="characters"
+                                      spellcheck={false}
+                                    />
+                                  </FormField>
+                                  <FormField label={t("new.env.value")}>
+                                    <Input
+                                      id={`new-env-value-${index}`}
+                                      name={`envValue:${index}`}
+                                      type="text"
+                                      disabled={busy()}
+                                      value={row().value}
+                                      onInput={(e) =>
+                                        updateEnvVariable(index, {
+                                          value: e.currentTarget.value,
+                                        })
+                                      }
+                                      placeholder={t(
+                                        "new.env.valuePlaceholder",
+                                      )}
+                                      autocomplete="off"
+                                      spellcheck={false}
+                                    />
+                                  </FormField>
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    icon={<Trash size={16} />}
+                                    disabled={busy()}
+                                    onClick={() => removeEnvVariable(index)}
+                                  >
+                                    {t("new.env.remove")}
+                                  </Button>
+                                </div>
+                              )}
+                            </Index>
+                          </div>
+                          <div class="wb-form-actions">
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              icon={<Plus size={16} />}
+                              disabled={busy()}
+                              onClick={addEnvVariable}
+                            >
+                              {t("new.env.add")}
+                            </Button>
+                          </div>
+                          <Show when={envVariableError()}>
+                            {(message) => (
+                              <p class="wb-error" role="alert">
+                                {message()}
+                              </p>
+                            )}
+                          </Show>
+                        </section>
+                        <section class="wb-stack">
+                          <h3 class="tg-card-title">
+                            {t("new.vars.inputsTitle")}
+                          </h3>
+                          <p class="wb-note">{t("new.vars.inputsBody")}</p>
+                          <div class="wb-variable-list">
+                            {/* <Index> for the same per-keystroke focus reason as
                           the env editor above. */}
-                        <Index each={inputVariables()}>
-                          {(row, index) => (
-                            <div class="wb-variable-row">
-                              <FormField label={t("new.vars.inputName")}>
-                                <Input
-                                  id={`new-var-name-${index}`}
-                                  name={`varName:${index}`}
-                                  type="text"
-                                  disabled={busy()}
-                                  value={row().name}
-                                  onInput={(e) =>
-                                    updateInputVariable(index, {
-                                      name: e.currentTarget.value,
-                                    })
-                                  }
-                                  placeholder={t("new.vars.namePlaceholder")}
-                                  autocomplete="off"
-                                  spellcheck={false}
-                                />
-                              </FormField>
-                              <FormField label={t("new.vars.inputValue")}>
-                                <Input
-                                  id={`new-var-value-${index}`}
-                                  name={`varValue:${index}`}
-                                  type="text"
-                                  disabled={busy()}
-                                  value={row().value}
-                                  onInput={(e) =>
-                                    updateInputVariable(index, {
-                                      value: e.currentTarget.value,
-                                    })
-                                  }
-                                  placeholder={t("new.vars.valuePlaceholder")}
-                                  autocomplete="off"
-                                  spellcheck={false}
-                                />
-                              </FormField>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                icon={<Trash size={16} />}
-                                disabled={busy()}
-                                onClick={() => removeInputVariable(index)}
-                              >
-                                {t("new.vars.removeInput")}
-                              </Button>
-                            </div>
-                          )}
-                        </Index>
-                      </div>
-                      <div class="wb-form-actions">
-                        <Button
-                          type="button"
-                          variant="secondary"
-                          icon={<Plus size={16} />}
-                          disabled={busy()}
-                          onClick={addInputVariable}
-                        >
-                          {t("new.vars.addInput")}
-                        </Button>
-                      </div>
-                      <Show when={inputVariableError()}>
-                        {(message) => (
-                          <p class="wb-error" role="alert">
-                            {message()}
-                          </p>
-                        )}
+                            <Index each={inputVariables()}>
+                              {(row, index) => (
+                                <div class="wb-variable-row">
+                                  <FormField label={t("new.vars.inputName")}>
+                                    <Input
+                                      id={`new-var-name-${index}`}
+                                      name={`varName:${index}`}
+                                      type="text"
+                                      disabled={busy()}
+                                      value={row().name}
+                                      onInput={(e) =>
+                                        updateInputVariable(index, {
+                                          name: e.currentTarget.value,
+                                        })
+                                      }
+                                      placeholder={t(
+                                        "new.vars.namePlaceholder",
+                                      )}
+                                      autocomplete="off"
+                                      spellcheck={false}
+                                    />
+                                  </FormField>
+                                  <FormField label={t("new.vars.inputValue")}>
+                                    <Input
+                                      id={`new-var-value-${index}`}
+                                      name={`varValue:${index}`}
+                                      type="text"
+                                      disabled={busy()}
+                                      value={row().value}
+                                      onInput={(e) =>
+                                        updateInputVariable(index, {
+                                          value: e.currentTarget.value,
+                                        })
+                                      }
+                                      placeholder={t(
+                                        "new.vars.valuePlaceholder",
+                                      )}
+                                      autocomplete="off"
+                                      spellcheck={false}
+                                    />
+                                  </FormField>
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    icon={<Trash size={16} />}
+                                    disabled={busy()}
+                                    onClick={() => removeInputVariable(index)}
+                                  >
+                                    {t("new.vars.removeInput")}
+                                  </Button>
+                                </div>
+                              )}
+                            </Index>
+                          </div>
+                          <div class="wb-form-actions">
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              icon={<Plus size={16} />}
+                              disabled={busy()}
+                              onClick={addInputVariable}
+                            >
+                              {t("new.vars.addInput")}
+                            </Button>
+                          </div>
+                          <Show when={inputVariableError()}>
+                            {(message) => (
+                              <p class="wb-error" role="alert">
+                                {message()}
+                              </p>
+                            )}
+                          </Show>
+                        </section>
                       </Show>
-                    </section>
-                  </details>
+                    </details>
+                  </Show>
 
                   <Show when={!staleCheckResult() && compatibility()}>
                     {(result) => (

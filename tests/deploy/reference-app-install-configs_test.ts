@@ -24,7 +24,7 @@ function bindingPermissions(blueprint: CapsuleInterfaceBlueprint): string[] {
 }
 
 test("reference app composition exposes four replaceable Store source identities", () => {
-  expect(REFERENCE_APP_INSTALL_CONFIGS).toHaveLength(5);
+  expect(REFERENCE_APP_INSTALL_CONFIGS).toHaveLength(6);
   const storeConfigs = REFERENCE_APP_INSTALL_CONFIGS.filter(
     (config) => config.store?.source !== undefined,
   );
@@ -33,7 +33,7 @@ test("reference app composition exposes four replaceable Store source identities
   ).toEqual(EXPECTED_STORE_SOURCES);
   expect(
     new Set(REFERENCE_APP_INSTALL_CONFIGS.map((config) => config.id)).size,
-  ).toBe(5);
+  ).toBe(6);
   // Takos is the workspace shell, not an app installed into one: it stays
   // addressable without appearing in shared Store discovery.
   expect(
@@ -45,7 +45,11 @@ test("reference app composition exposes four replaceable Store source identities
     expect(config.workspaceId).toBeUndefined();
     expect(config.internal).toBeUndefined();
     expect(config.modulePath).toBe(
-      config.name === "takos-main" ? "deploy/opentofu" : ".",
+      config.name === "takos-main"
+        ? "deploy/opentofu"
+        : config.name === "yurucommu-managed"
+          ? "deploy/takoform"
+          : ".",
     );
     for (const key of Object.keys(config.variableMapping)) {
       expect(key).not.toMatch(/secret|password|token|api.?key/iu);
@@ -56,7 +60,8 @@ test("reference app composition exposes four replaceable Store source identities
     expect(config.sourceSelector).toEqual(config.store!.source);
     expect(config.store!.source).toEqual({
       url: config.store!.source!.url,
-      path: ".",
+      path:
+        config.name === "yurucommu-managed" ? "deploy/takoform" : ".",
     });
     // Store presentation does not select a ref. The Source sync/Run path owns
     // the reviewed ref and resolves it to an immutable SourceSnapshot commit.
@@ -334,14 +339,20 @@ test("reference configs contain no retired runtime authority schema", () => {
   });
 });
 
-test("Yurucommu Store selection reaches an authorized launcher URL and never the invisible generic config", async () => {
+test("transitional direct Yurucommu remains addressable without competing with managed Store selection", async () => {
   const sourceUrl = "https://github.com/tako0614/yurucommu.git";
-  const yurucommu = uniqueStoreInstallConfigForSource(
-    REFERENCE_APP_INSTALL_CONFIGS,
-    sourceUrl,
-    ".",
+  const yurucommu = REFERENCE_APP_INSTALL_CONFIGS.find(
+    (config) => config.id === "cfg-reference-yurucommu-main",
   );
   expect(yurucommu?.id).toBe("cfg-reference-yurucommu-main");
+  expect(yurucommu?.store).toBeUndefined();
+  expect(
+    uniqueStoreInstallConfigForSource(
+      REFERENCE_APP_INSTALL_CONFIGS,
+      sourceUrl,
+      ".",
+    ),
+  ).toBe(yurucommu);
   expect(yurucommu?.outputAllowlist.launch_url).toEqual({
     from: "launch_url",
     type: "url",

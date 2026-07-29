@@ -126,6 +126,7 @@ export type RegisterConnectionInput = CreateConnectionRequest;
 export interface ManagedProviderCredentialIssueRequest {
   readonly workspaceId: string;
   readonly capsuleId?: string;
+  readonly runId?: string;
   /** Exact service-side profile selected by the Provider Connection. */
   readonly managedProviderProfile: string;
   readonly connection: ProviderConnection;
@@ -233,6 +234,7 @@ export interface CapsuleProviderBindingMintEntry {
 export interface CapsuleProviderBindingMintOptions {
   readonly phase?: MintPhase;
   readonly capsuleId?: string;
+  readonly runId?: string;
 }
 
 export interface ConnectionVault {
@@ -936,6 +938,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         (await this.#mintManagedProviderValues(workspaceId, connection, {
           phase,
           ...(options?.capsuleId ? { capsuleId: options.capsuleId } : {}),
+          ...(options?.runId ? { runId: options.runId } : {}),
         })) ?? (await this.#mintProviderValues(connection));
       evidence.push(minted.evidence);
       mergeCredentialEnv(env, minted.values, entry);
@@ -953,6 +956,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     connection: ProviderConnection,
     options: {
       readonly capsuleId?: string;
+      readonly runId?: string;
       readonly phase?: MintPhase;
     },
   ): Promise<MintedProviderValues | undefined> {
@@ -986,6 +990,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     const issued = await issuer({
       workspaceId,
       ...(options.capsuleId ? { capsuleId: options.capsuleId } : {}),
+      ...(options.runId ? { runId: options.runId } : {}),
       managedProviderProfile: profile,
       connection,
       ...(options.phase ? { phase: options.phase } : {}),

@@ -23,11 +23,16 @@ import {
 } from "../accounts-cloudflare/src/handler.ts";
 import {
   D1AccountsStore,
+  derivePairwiseSubject,
   handleAuthenticatedControlRoute,
+  resolveD1AccountsSchemaMode,
   runRefreshChainRetention,
+  type AccountsStore,
   type ControlPlaneOperations,
+  type OidcClientRecord,
   type RefreshChainRetentionRunResult,
 } from "@takosjp/takosumi-accounts-service";
+import { normalizeIssuer } from "@takosjp/takosumi-accounts-contract";
 import {
   type CloudflareWorkerEnv as DeployControlEnv,
   createInProcessDeployControlSeam,
@@ -38,6 +43,10 @@ import {
 } from "../../worker/src/handler.ts";
 import { cachedDeployControlService } from "../../worker/src/deploy_control_seam.ts";
 import { recordWorkerMetric } from "../../worker/src/metrics.ts";
+import {
+  TAKOSUMI_INTERNAL_MANAGED_PROVIDER_PROFILE_HEADER,
+  TAKOSUMI_INTERNAL_MANAGED_PROVIDER_RUN_TOKEN_HEADER,
+} from "../../worker/src/resource_capsule_owner_context.ts";
 import {
   driftSweep,
   type DriftSweepOperations,
@@ -58,6 +67,7 @@ import {
 } from "../../core/domains/interfaces/compatibility_route_control.ts";
 import { TAKOSUMI_METRICS_PATH } from "../../core/api/metrics_routes.ts";
 import { TAKOSUMI_INTERNAL_RESOURCE_MANAGED_BY_HEADER } from "../../core/api/resource_routes.ts";
+import { PORTABLE_FORM_MANAGER } from "../../core/api/form_host_routes.ts";
 import { DEPLOY_CONTROL_ERROR_HTTP_STATUS_BY_CODE } from "@takosumi/internal/deploy-control-api";
 import {
   createTakosumiProductCapabilities,
@@ -75,6 +85,8 @@ import type {
   FormOperation,
   InstalledFormReference,
   Interface,
+  InterfaceBinding,
+  HostRuntimeMaterializationRequest,
   NativeResourceRef,
   OfferingAvailability,
   OfferingContextReference,
@@ -395,7 +407,11 @@ async function createPlatformOperatorControlMcpAuthority(
   },
 ): Promise<OperatorControlMcpAuthority> {
   const operations = await controlPlaneOperationsFor(env);
-  const store = new D1AccountsStore(env.TAKOSUMI_ACCOUNTS_DB);
+  const store = new D1AccountsStore(env.TAKOSUMI_ACCOUNTS_DB, {
+    schemaMode: resolveD1AccountsSchemaMode(
+      env.TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE,
+    ),
+  });
   return {
     workspaceId: session.workspaceId,
     dispatchPublicControl: async (controlRequest) => {
@@ -589,6 +605,342 @@ export async function claimPlatformManagedPublicHostname(
   return await (
     await takosumiOperationsFor(env as PlatformEnv)
   ).claimManagedPublicHostname(input);
+}
+
+export interface PlatformCapsulePublicOidcIdentity {
+  readonly issuerUrl: string;
+  readonly clientId: string;
+  readonly ownerSubject: string;
+  readonly redirectUri: string;
+}
+
+export interface PlatformCapsulePublicOidcMutation {
+  readonly capsuleId: string;
+  readonly clientId: string;
+  readonly expectedUpdatedAt: number;
+  readonly previous?: OidcClientRecord;
+  readonly identity: PlatformCapsulePublicOidcIdentity;
+  readonly changed: boolean;
+}
+
+interface PlatformCapsulePublicOidcDependencies {
+  readonly operationsForEnv?: (
+    env: PlatformEnv,
+  ) => Promise<Pick<TakosumiOperations, "capsules">>;
+  readonly storeForEnv?: (
+    env: CloudflareWorkerEnv,
+  ) => Promise<
+    Pick<
+      AccountsStore,
+      | "findOidcClient"
+      | "findOidcClientForCapsule"
+      | "saveOidcClient"
+      | "revokeOidcClient"
+    >
+  >;
+  readonly deriveSubject?: typeof derivePairwiseSubject;
+  readonly now?: () => number;
+}
+
+/**
+ * Ensures one public PKCE client for a Capsule-owned application runtime.
+ *
+ * This is a narrow in-process host-composition authority. The caller supplies
+ * an exact Capsule owner and HTTPS application origin; the Accounts database,
+ * Capsule ledger, and pairwise-subject secret remain inside the OSS host. No
+ * private key, session secret, or pairwise-secret material crosses the seam.
+ */
+export async function ensurePlatformCapsulePublicOidcIdentity(
+  input: {
+    readonly capsuleId: string;
+    readonly workspaceId: string;
+    readonly installingPrincipalId: string;
+    readonly appOrigin: string;
+    readonly callbackPath: string;
+    readonly scopes: readonly string[];
+  },
+  env: object,
+  dependencies: PlatformCapsulePublicOidcDependencies = {},
+): Promise<PlatformCapsulePublicOidcMutation> {
+  const platformEnv = env as PlatformEnv;
+  const capsuleId = requiredPlatformIdentity(input.capsuleId, "Capsule id");
+  const workspaceId = requiredPlatformIdentity(
+    input.workspaceId,
+    "Capsule Workspace id",
+  );
+  const installingPrincipalId = requiredPlatformIdentity(
+    input.installingPrincipalId,
+    "Capsule installing Principal id",
+  );
+  if (!installingPrincipalId.startsWith("tsub_")) {
+    throw new TypeError(
+      "Capsule installing Principal id must be a Takosumi subject",
+    );
+  }
+  const capsule = await (
+    await (dependencies.operationsForEnv ?? takosumiOperationsFor)(platformEnv)
+  ).capsules.getCapsule(capsuleId);
+  if (
+    capsule.workspaceId !== workspaceId ||
+    capsule.installingPrincipalId !== installingPrincipalId ||
+    capsule.status === "destroyed"
+  ) {
+    throw new Error(
+      "Capsule public OIDC identity does not match the canonical Capsule owner",
+    );
+  }
+
+  const issuerUrl = normalizeIssuer(
+    requiredPlatformIdentity(
+      platformEnv.TAKOSUMI_ACCOUNTS_ISSUER,
+      "Takosumi Accounts issuer",
+    ),
+  );
+  const pairwiseSubjectSecret = requiredPlatformSecret(
+    platformEnv.TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET,
+    "Takosumi Accounts pairwise subject secret",
+  );
+  const appOrigin = exactHttpsOrigin(input.appOrigin);
+  const callbackPath = exactCallbackPath(input.callbackPath);
+  const redirectUri = `${appOrigin}${callbackPath}`;
+  const allowedScopes = exactOidcScopes(input.scopes);
+  const store = await (
+    dependencies.storeForEnv ?? platformCapsuleOidcStoreForEnv
+  )(platformEnv);
+  const previous = await store.findOidcClientForCapsule(capsuleId);
+  const clientId =
+    previous?.clientId ?? (await deterministicCapsuleClientId(capsuleId));
+  const now = (dependencies.now ?? Date.now)();
+  if (!Number.isSafeInteger(now) || now <= 0) {
+    throw new Error("Capsule public OIDC identity clock is invalid");
+  }
+  const desired: OidcClientRecord = {
+    clientId,
+    capsuleId,
+    namespacePath: "identity.oidc",
+    issuerUrl,
+    redirectUris: [redirectUri],
+    allowedScopes,
+    subjectMode: "pairwise",
+    tokenEndpointAuthMethod: "none",
+    clientSecretHash: undefined,
+    createdAt: previous?.createdAt ?? now,
+    updatedAt:
+      previous &&
+      oidcClientMatches(previous, {
+        issuerUrl,
+        redirectUri,
+        allowedScopes,
+      })
+        ? previous.updatedAt
+        : now,
+  };
+  const changed = !previous || desired.updatedAt !== previous.updatedAt;
+  if (changed) {
+    await store.saveOidcClient(desired);
+    const retained = await store.findOidcClientForCapsule(capsuleId);
+    if (!retained || !sameOidcClient(retained, desired)) {
+      throw new Error(
+        "Capsule public OIDC client did not retain exact Accounts evidence",
+      );
+    }
+  }
+  const ownerSubject = await (
+    dependencies.deriveSubject ?? derivePairwiseSubject
+  )({
+    secret: pairwiseSubjectSecret,
+    takosumiSubject: installingPrincipalId as `tsub_${string}`,
+    clientId: `${capsule.name}:${capsule.id}:${clientId}`,
+  });
+  return {
+    capsuleId,
+    clientId,
+    expectedUpdatedAt: desired.updatedAt,
+    ...(previous ? { previous } : {}),
+    identity: { issuerUrl, clientId, ownerSubject, redirectUri },
+    changed,
+  };
+}
+
+/**
+ * Reverses only the exact OIDC mutation returned by the ensure call. A newer
+ * registration wins and is never overwritten by a stale apply failure.
+ */
+export async function rollbackPlatformCapsulePublicOidcIdentity(
+  mutation: PlatformCapsulePublicOidcMutation,
+  env: object,
+  dependencies: PlatformCapsulePublicOidcDependencies = {},
+): Promise<void> {
+  if (!mutation.changed) return;
+  const store = await (
+    dependencies.storeForEnv ?? platformCapsuleOidcStoreForEnv
+  )(env as PlatformEnv);
+  const current = await store.findOidcClientForCapsule(mutation.capsuleId);
+  if (
+    !current ||
+    current.clientId !== mutation.clientId ||
+    current.updatedAt !== mutation.expectedUpdatedAt
+  ) {
+    throw new Error(
+      "Capsule public OIDC client changed before rollback; refusing stale restoration",
+    );
+  }
+  if (mutation.previous) {
+    await store.saveOidcClient(mutation.previous);
+    return;
+  }
+  await store.revokeOidcClient(mutation.clientId);
+}
+
+/** Revokes only a Capsule's exact public client after its runtime is gone. */
+export async function revokePlatformCapsulePublicOidcIdentity(
+  input: {
+    readonly capsuleId: string;
+    readonly expectedClientId?: string;
+  },
+  env: object,
+  dependencies: PlatformCapsulePublicOidcDependencies = {},
+): Promise<void> {
+  const capsuleId = requiredPlatformIdentity(input.capsuleId, "Capsule id");
+  const store = await (
+    dependencies.storeForEnv ?? platformCapsuleOidcStoreForEnv
+  )(env as PlatformEnv);
+  const current = await store.findOidcClientForCapsule(capsuleId);
+  if (!current) return;
+  if (
+    input.expectedClientId !== undefined &&
+    current.clientId !== input.expectedClientId
+  ) {
+    throw new Error(
+      "Capsule public OIDC client changed before revocation; refusing stale destroy",
+    );
+  }
+  await store.revokeOidcClient(current.clientId);
+}
+
+async function platformCapsuleOidcStoreForEnv(
+  env: CloudflareWorkerEnv,
+): Promise<D1AccountsStore> {
+  const schemaMode = resolveD1AccountsSchemaMode(
+    env.TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE,
+  );
+  const store = new D1AccountsStore(env.TAKOSUMI_ACCOUNTS_DB, { schemaMode });
+  if (schemaMode !== "predeployed") await store.initialize();
+  return store;
+}
+
+function requiredPlatformIdentity(value: unknown, label: string): string {
+  if (
+    typeof value !== "string" ||
+    value.length < 1 ||
+    value.length > 512 ||
+    value !== value.trim() ||
+    /[\u0000-\u001f\u007f]/u.test(value)
+  ) {
+    throw new TypeError(`${label} is invalid`);
+  }
+  return value;
+}
+
+function requiredPlatformSecret(value: unknown, label: string): string {
+  const secret = requiredPlatformIdentity(value, label);
+  if (new TextEncoder().encode(secret).byteLength < 32) {
+    throw new TypeError(`${label} must contain at least 32 bytes`);
+  }
+  return secret;
+}
+
+function exactHttpsOrigin(value: string): string {
+  const url = new URL(value);
+  if (
+    url.protocol !== "https:" ||
+    url.username ||
+    url.password ||
+    url.pathname !== "/" ||
+    url.search ||
+    url.hash
+  ) {
+    throw new TypeError(
+      "Capsule public OIDC appOrigin must be an HTTPS origin",
+    );
+  }
+  return url.origin;
+}
+
+function exactCallbackPath(value: string): string {
+  if (
+    !value.startsWith("/") ||
+    value.startsWith("//") ||
+    value.includes("?") ||
+    value.includes("#") ||
+    /[\u0000-\u001f\u007f]/u.test(value)
+  ) {
+    throw new TypeError("Capsule public OIDC callbackPath is invalid");
+  }
+  return value;
+}
+
+function exactOidcScopes(scopes: readonly string[]): readonly string[] {
+  const normalized = [...new Set(scopes.map((scope) => scope.trim()))].sort();
+  if (
+    normalized.length < 1 ||
+    normalized.some(
+      (scope) =>
+        !scope || scope.length > 128 || /[^A-Za-z0-9:._/-]/u.test(scope),
+    )
+  ) {
+    throw new TypeError("Capsule public OIDC scopes are invalid");
+  }
+  return normalized.includes("openid")
+    ? normalized
+    : ["openid", ...normalized].sort();
+}
+
+async function deterministicCapsuleClientId(
+  capsuleId: string,
+): Promise<string> {
+  const digest = new Uint8Array(
+    await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(
+        `takosumi-capsule-public-oidc-client-v1\0${capsuleId}`,
+      ),
+    ),
+  );
+  return `toc_${[...digest]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("")
+    .slice(0, 32)}`;
+}
+
+function oidcClientMatches(
+  client: OidcClientRecord,
+  desired: {
+    readonly issuerUrl: string;
+    readonly redirectUri: string;
+    readonly allowedScopes: readonly string[];
+  },
+): boolean {
+  return (
+    client.namespacePath === "identity.oidc" &&
+    client.issuerUrl === desired.issuerUrl &&
+    client.redirectUris.length === 1 &&
+    client.redirectUris[0] === desired.redirectUri &&
+    client.allowedScopes.length === desired.allowedScopes.length &&
+    client.allowedScopes.every(
+      (scope, index) => scope === desired.allowedScopes[index],
+    ) &&
+    client.subjectMode === "pairwise" &&
+    client.tokenEndpointAuthMethod === "none" &&
+    client.clientSecretHash === undefined
+  );
+}
+
+function sameOidcClient(
+  left: OidcClientRecord,
+  right: OidcClientRecord,
+): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 export interface PlatformInterfaceProjectionRepairResult {
@@ -790,8 +1142,7 @@ export default {
   },
 };
 
-export interface ScheduledAccountsRefreshChainRetentionResult
-  extends RefreshChainRetentionRunResult {
+export interface ScheduledAccountsRefreshChainRetentionResult extends RefreshChainRetentionRunResult {
   readonly failures: number;
 }
 
@@ -806,9 +1157,12 @@ export async function runScheduledAccountsRefreshChainRetention(
     "TAKOSUMI_ACCOUNTS_DB" | "TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE"
   >,
 ): Promise<ScheduledAccountsRefreshChainRetentionResult> {
-  const store = new D1AccountsStore(env.TAKOSUMI_ACCOUNTS_DB);
+  const schemaMode = resolveD1AccountsSchemaMode(
+    env.TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE,
+  );
+  const store = new D1AccountsStore(env.TAKOSUMI_ACCOUNTS_DB, { schemaMode });
   try {
-    if (env.TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE !== "predeployed") {
+    if (schemaMode !== "predeployed") {
       await store.initialize();
     }
     const result = await runRefreshChainRetention(store, {
@@ -1318,6 +1672,21 @@ async function platformResourceShapeAuthorizedRequest(
         TAKOSUMI_INTERNAL_RESOURCE_MANAGED_BY_HEADER,
         effectiveManagedBy,
       );
+      headers.delete(TAKOSUMI_INTERNAL_MANAGED_PROVIDER_RUN_TOKEN_HEADER);
+      headers.delete(TAKOSUMI_INTERNAL_MANAGED_PROVIDER_PROFILE_HEADER);
+      const capsuleOwnerContext = platformTrustedResourceCapsuleOwnerContext(
+        verified.session,
+      );
+      if (capsuleOwnerContext) {
+        headers.set(
+          TAKOSUMI_INTERNAL_MANAGED_PROVIDER_RUN_TOKEN_HEADER,
+          capsuleOwnerContext.managedProviderRunToken,
+        );
+        headers.set(
+          TAKOSUMI_INTERNAL_MANAGED_PROVIDER_PROFILE_HEADER,
+          capsuleOwnerContext.managedProviderProfile,
+        );
+      }
       for (const header of PLATFORM_EXTENSION_RAW_CREDENTIAL_HEADERS) {
         if (header !== "authorization") headers.delete(header);
       }
@@ -1464,6 +1833,21 @@ async function platformResourceArtifactAuthorizedRequest(
     TAKOSUMI_INTERNAL_RESOURCE_MANAGED_BY_HEADER,
     trustedManagedBy ?? PUBLIC_RESOURCE_API_MANAGED_BY,
   );
+  headers.delete(TAKOSUMI_INTERNAL_MANAGED_PROVIDER_RUN_TOKEN_HEADER);
+  headers.delete(TAKOSUMI_INTERNAL_MANAGED_PROVIDER_PROFILE_HEADER);
+  const capsuleOwnerContext = platformTrustedResourceCapsuleOwnerContext(
+    verified.session,
+  );
+  if (capsuleOwnerContext) {
+    headers.set(
+      TAKOSUMI_INTERNAL_MANAGED_PROVIDER_RUN_TOKEN_HEADER,
+      capsuleOwnerContext.managedProviderRunToken,
+    );
+    headers.set(
+      TAKOSUMI_INTERNAL_MANAGED_PROVIDER_PROFILE_HEADER,
+      capsuleOwnerContext.managedProviderProfile,
+    );
+  }
   for (const header of PLATFORM_EXTENSION_RAW_CREDENTIAL_HEADERS) {
     if (header !== "authorization") headers.delete(header);
   }
@@ -1624,9 +2008,21 @@ function platformInterfaceAccessFailure(
     );
   }
 
-  // Interface OAuth and managed-provider run credentials are invocation-only.
-  // They must never be rewritten into the deploy-control bearer. Token format
-  // prefixes are deliberately not authorization authority here.
+  if (
+    session.authKind === "service-token" &&
+    platformTrustedResourceCapsuleOwnerContext(session)
+  ) {
+    const mayRead =
+      scopes.has("admin") ||
+      scopes.has("interfaces:read") ||
+      scopes.has("interfaces:write");
+    const mayWrite = scopes.has("admin") || scopes.has("interfaces:write");
+    if ((readOnly && mayRead) || (!readOnly && mayWrite)) return undefined;
+  }
+
+  // Interface OAuth credentials remain invocation-only. Managed-provider
+  // tokens may author portable declarations only with the exact signed
+  // Capsule/run/installer context and the independent interfaces:* scope.
   return Response.json(
     {
       error: "access_denied",
@@ -2613,6 +3009,216 @@ export interface PlatformCanonicalReadyResourceInventory {
   }): Promise<PlatformCanonicalReadyResourceInventoryPage>;
 }
 
+export interface PlatformCanonicalHostRuntimeResourceEvidence {
+  readonly workspaceId: string;
+  readonly resourceId: string;
+  readonly resource: ResourceObject;
+  readonly resourceGeneration: number;
+  readonly resourceRevisionId: string;
+  readonly nativeType: string;
+  readonly nativeId: string;
+}
+
+export interface PlatformCanonicalHostRuntimeAuthorityEvidence {
+  readonly iface: Interface;
+  readonly binding: InterfaceBinding;
+  readonly capabilityRef: `capability:${string}`;
+}
+
+export interface PlatformCanonicalHostRuntimeGraphEvidence {
+  readonly consumer: PlatformCanonicalHostRuntimeResourceEvidence;
+  readonly consumerAuthority?: PlatformCanonicalHostRuntimeAuthorityEvidence;
+  readonly connections: Readonly<
+    Record<
+      string,
+      {
+        readonly alias: string;
+        readonly resource: PlatformCanonicalHostRuntimeResourceEvidence;
+        readonly authority?: PlatformCanonicalHostRuntimeAuthorityEvidence;
+      }
+    >
+  >;
+}
+
+/**
+ * In-process canonical graph reader for hosted runtime activation. It joins
+ * coherent Ready Resources with exact current Interface/Binding rows and
+ * never exposes this global authority through HTTP.
+ */
+export function createPlatformCanonicalHostRuntimeGraphReader(
+  env: CloudflareWorkerEnv,
+): {
+  read(input: {
+    readonly request: HostRuntimeMaterializationRequest;
+    readonly resourceId: string;
+    readonly resourceGeneration: number;
+    readonly resourceRevisionId: string;
+  }): Promise<PlatformCanonicalHostRuntimeGraphEvidence | undefined>;
+} {
+  const inventory = createPlatformCanonicalReadyResourceInventory(env);
+  return Object.freeze({
+    async read(input) {
+      const parsed = platformCanonicalResourceId(input.resourceId);
+      if (!parsed || parsed.workspaceId !== input.request.workspaceId) {
+        return undefined;
+      }
+      const consumer = await canonicalHostRuntimeResource(
+        inventory,
+        input.resourceId,
+      );
+      if (
+        !consumer ||
+        consumer.resourceGeneration !== input.resourceGeneration ||
+        consumer.resourceRevisionId !== input.resourceRevisionId
+      ) {
+        return undefined;
+      }
+      const operations = await takosumiOperationsFor(env);
+      const connectionSpec = objectRecord(consumer.resource.spec).connections;
+      const declared = objectRecord(connectionSpec);
+      const requestedAliases = new Set<string>();
+      for (const requirement of input.request.requirements) {
+        if (requirement.kind === "managed_connection") {
+          requestedAliases.add(requirement.connectionAlias);
+        }
+      }
+      for (const activation of input.request.backgroundActivations ?? []) {
+        requestedAliases.add(activation.sourceConnectionAlias);
+        if (activation.deadLetterConnectionAlias) {
+          requestedAliases.add(activation.deadLetterConnectionAlias);
+        }
+      }
+      const connections: Record<
+        string,
+        PlatformCanonicalHostRuntimeGraphEvidence["connections"][string]
+      > = {};
+      for (const alias of [...requestedAliases].sort()) {
+        const declaration = objectRecord(declared[alias]);
+        const resourceId = valueString(declaration.resource)?.trim() ?? "";
+        const resource = await canonicalHostRuntimeResource(
+          inventory,
+          resourceId,
+        );
+        if (!resource) return undefined;
+        const requirement = input.request.requirements.find(
+          (candidate) =>
+            candidate.kind === "managed_connection" &&
+            candidate.connectionAlias === alias,
+        );
+        const authority =
+          requirement?.kind === "managed_connection"
+            ? await uniqueHostRuntimeAuthority({
+                operations,
+                workspaceId: input.request.workspaceId,
+                ownerResourceId: resource.resourceId,
+                subjectResourceId: consumer.resourceId,
+                capabilityRef: requirement.capabilityRef,
+                permission: requirement.requiredPermission,
+              })
+            : undefined;
+        if (requirement && !authority) return undefined;
+        connections[alias] = {
+          alias,
+          resource,
+          ...(authority ? { authority } : {}),
+        };
+      }
+      return structuredClone({
+        consumer,
+        connections,
+      });
+    },
+  });
+}
+
+async function canonicalHostRuntimeResource(
+  inventory: PlatformCanonicalReadyResourceInventory,
+  resourceId: string,
+): Promise<PlatformCanonicalHostRuntimeResourceEvidence | undefined> {
+  const parsed = platformCanonicalResourceId(resourceId);
+  if (!parsed) return undefined;
+  const ready = await inventory.get({
+    space: parsed.workspaceId,
+    kind: parsed.kind,
+    name: parsed.name,
+  });
+  if (
+    !ready ||
+    ready.resourceId !== resourceId ||
+    ready.nativeResources.length !== 1
+  ) {
+    return undefined;
+  }
+  return {
+    workspaceId: parsed.workspaceId,
+    resourceId,
+    resource: ready.resource,
+    resourceGeneration: ready.resourceGeneration,
+    resourceRevisionId: ready.resourceRevisionId,
+    nativeType: ready.nativeResources[0]!.type,
+    nativeId: ready.nativeResources[0]!.id,
+  };
+}
+
+async function uniqueHostRuntimeAuthority(input: {
+  readonly operations: TakosumiOperations;
+  readonly workspaceId: string;
+  readonly ownerResourceId: string;
+  readonly subjectResourceId: string;
+  readonly capabilityRef?: `capability:${string}`;
+  readonly permission?: string;
+}): Promise<PlatformCanonicalHostRuntimeAuthorityEvidence | undefined> {
+  const interfaces = await input.operations.interfaces.listForHost({
+    workspaceId: input.workspaceId,
+    ownerKind: "Resource",
+    ownerId: input.ownerResourceId,
+    phase: "Resolved",
+    limit: 64,
+  });
+  const matches: PlatformCanonicalHostRuntimeAuthorityEvidence[] = [];
+  for (const iface of interfaces) {
+    for (const binding of await input.operations.interfaces.listBindings(
+      iface.metadata.id,
+    )) {
+      const capabilityRef = binding.spec.delivery.credentialRef;
+      if (
+        binding.spec.subjectRef.kind !== "Resource" ||
+        binding.spec.subjectRef.id !== input.subjectResourceId ||
+        binding.status.phase !== "Ready" ||
+        binding.status.observedInterfaceRevision !==
+          iface.status.resolvedRevision ||
+        !capabilityRef?.startsWith("capability:") ||
+        (input.capabilityRef !== undefined &&
+          capabilityRef !== input.capabilityRef) ||
+        (input.permission !== undefined &&
+          !binding.spec.permissions.includes(input.permission))
+      ) {
+        continue;
+      }
+      matches.push({
+        iface,
+        binding,
+        capabilityRef: capabilityRef as `capability:${string}`,
+      });
+    }
+  }
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+function platformCanonicalResourceId(value: string):
+  | {
+      readonly workspaceId: string;
+      readonly kind: ResourceShapeKind;
+      readonly name: string;
+    }
+  | undefined {
+  const match = /^tkrn:([^:]+):([^:]+):(.+)$/u.exec(value);
+  if (!match?.[1] || !match[2] || !match[3] || !isResourceShapeKind(match[2])) {
+    return undefined;
+  }
+  return { workspaceId: match[1], kind: match[2], name: match[3] };
+}
+
 export interface PlatformCompatibilityReadyResourceInput {
   readonly space: string;
   readonly kind: ResourceShapeKind;
@@ -2787,6 +3393,17 @@ export interface PlatformExtensionSessionContext {
     | "session";
   readonly subject?: string;
   readonly capsuleId?: string;
+  /** Present only on a verified, short-lived managed-provider run token. */
+  readonly runId?: string;
+  /** Installer provenance signed into that run token from the Capsule ledger. */
+  readonly installingPrincipalId?: string;
+  /**
+   * Sensitive authority retained only across the in-process platform seam.
+   * Extension handlers never receive this value as public auth context.
+   */
+  readonly managedProviderRunToken?: string;
+  /** Exact audience that was used to verify managedProviderRunToken. */
+  readonly managedProviderProfile?: string;
   readonly workspaceId?: string;
   /** Live Workspace role carried by token introspection or membership lookup. */
   readonly workspaceRole?: WorkspaceRole;
@@ -3599,6 +4216,8 @@ const PLATFORM_EXTENSION_TRUSTED_CONTEXT_HEADERS = [
   PLATFORM_EXTENSION_INTERFACE_BINDING_ID_HEADER,
   PLATFORM_EXTENSION_INTERFACE_REVISION_HEADER,
   TAKOSUMI_INTERNAL_RESOURCE_MANAGED_BY_HEADER,
+  TAKOSUMI_INTERNAL_MANAGED_PROVIDER_RUN_TOKEN_HEADER,
+  TAKOSUMI_INTERNAL_MANAGED_PROVIDER_PROFILE_HEADER,
 ] as const;
 
 async function platformExtensionAuthContext(
@@ -4039,6 +4658,7 @@ export async function verifyPlatformExtensionSession(
   if (managedProviderToken) {
     const managedProviderSession =
       await verifyPlatformExtensionManagedProviderRunToken(
+        request,
         env,
         managedProviderToken,
         route,
@@ -4081,12 +4701,19 @@ export async function verifyPlatformExtensionSession(
 }
 
 async function verifyPlatformExtensionManagedProviderRunToken(
+  request: Request,
   env: CloudflareWorkerEnv,
   token: string,
   route?: PlatformExtensionRoute,
 ): Promise<PlatformExtensionSessionContext> {
   const secret = managedProviderRunTokenSecret(env);
-  const profile = route?.managedProviderProfile;
+  const pathname = new URL(request.url).pathname;
+  const profile =
+    route?.managedProviderProfile ??
+    (pathname === TAKOFORM_FORM_HOST_API_PATH ||
+    pathname.startsWith(`${TAKOFORM_FORM_HOST_API_PATH}/`)
+      ? PORTABLE_FORM_MANAGER
+      : undefined);
   if (!secret || !profile) return { authenticated: false };
   const verified = await verifyManagedProviderRunToken(token, {
     secret,
@@ -4095,6 +4722,12 @@ async function verifyPlatformExtensionManagedProviderRunToken(
   });
   if (!verified.ok) return { authenticated: false };
   const payload = verified.payload;
+  if (
+    profile === PORTABLE_FORM_MANAGER &&
+    (!payload.capsuleId || !payload.runId || !payload.installingPrincipalId)
+  ) {
+    return { authenticated: false };
+  }
   const scopes = [...payload.scopes];
   if (!platformExtensionScopesAllowAccess(scopes, route)) {
     return { authenticated: false };
@@ -4105,8 +4738,43 @@ async function verifyPlatformExtensionManagedProviderRunToken(
     subject: payload.sub,
     workspaceId: payload.workspaceId,
     ...(payload.capsuleId ? { capsuleId: payload.capsuleId } : {}),
+    ...(payload.runId ? { runId: payload.runId } : {}),
+    ...(payload.installingPrincipalId
+      ? { installingPrincipalId: payload.installingPrincipalId }
+      : {}),
+    managedProviderRunToken: token,
+    managedProviderProfile: profile,
     scopes,
   };
+}
+
+function platformTrustedResourceCapsuleOwnerContext(
+  session: PlatformExtensionSessionContext,
+):
+  | {
+      readonly managedProviderRunToken: string;
+      readonly managedProviderProfile: string;
+    }
+  | undefined {
+  if (session.authKind !== "service-token") return undefined;
+  const capsuleId = safePlatformExtensionContextId(session.capsuleId);
+  const workspaceId = safePlatformExtensionContextId(session.workspaceId);
+  const installingPrincipalId = safePlatformExtensionContextId(
+    session.installingPrincipalId,
+  );
+  const runId = safePlatformExtensionContextId(session.runId);
+  const managedProviderRunToken = session.managedProviderRunToken;
+  const managedProviderProfile = safePlatformExtensionContextId(
+    session.managedProviderProfile,
+  );
+  return capsuleId &&
+    workspaceId &&
+    installingPrincipalId &&
+    runId &&
+    managedProviderRunToken &&
+    managedProviderProfile
+    ? { managedProviderRunToken, managedProviderProfile }
+    : undefined;
 }
 
 export type PlatformExtensionIntrospectFetch = (

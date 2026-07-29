@@ -362,6 +362,38 @@ test("account session control routes execute plan and apply through the real Ope
     environment: "preview",
   });
   await seedProviderConnections(deployStore, seeded.capsule);
+  const installUxDigest = `sha256:${"d".repeat(64)}`;
+  await deployStore.putSourceSnapshot({
+    ...seeded.snapshot,
+    repositoryInstallUx: {
+      status: "present",
+      digest: installUxDigest,
+      document: {
+        schemaVersion: "takosumi.install-ux/v1",
+        modules: { ".": { inputs: [] } },
+      },
+    },
+  });
+
+  const sourceSnapshots = await controlJson<{
+    readonly snapshots: readonly {
+      readonly repositoryInstallUx?: unknown;
+    }[];
+  }>(
+    {
+      operations,
+      store: accountStore,
+      cookie,
+      method: "GET",
+      path: `/api/v1/sources/${seeded.source.id}/snapshots`,
+    },
+    200,
+  );
+  expect(sourceSnapshots.snapshots[0]?.repositoryInstallUx).toEqual({
+    status: "present",
+    digest: installUxDigest,
+  });
+  expect(JSON.stringify(sourceSnapshots)).not.toContain('"document"');
 
   const stableTag = await controlJson<{
     readonly tag: string;
@@ -404,6 +436,146 @@ test("account session control routes execute plan and apply through the real Ope
       "sha256:1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
   });
   expect(runner.presentationFileJobs).toHaveLength(1);
+
+  await controlJson(
+    {
+      operations,
+      store: accountStore,
+      cookie,
+      method: "GET",
+      path: `/api/v1/sources/${seeded.source.id}/snapshots/${seeded.snapshot.id}/file?path=.well-known%2Ftakosumi.json`,
+    },
+    400,
+  );
+  expect(runner.presentationFileJobs).toHaveLength(1);
+
+  const installUxPreview = await controlJson<{
+    readonly repositoryInstallUx: {
+      readonly status: "accepted";
+      readonly installConfigId: string;
+    };
+  }>(
+    {
+      operations,
+      store: accountStore,
+      cookie,
+      method: "POST",
+      path: `/api/v1/sources/${seeded.source.id}/compatibility-check`,
+      body: {
+        sourceSnapshotId: seeded.snapshot.id,
+        modulePath: ".",
+        installConfigId: seeded.installConfig.id,
+        capsuleName: "route-preview",
+        compileInstallUx: true,
+      },
+    },
+    201,
+  );
+  expect(installUxPreview.repositoryInstallUx.status).toBe("accepted");
+  const previewConfig = await operations.capsules.getInstallConfig(
+    installUxPreview.repositoryInstallUx.installConfigId,
+  );
+  expect(previewConfig.installExperience?.repositoryInstallUx).toEqual({
+    status: "accepted",
+  });
+  expect(previewConfig.internal).toMatchObject({
+    reason: "per_install_overrides",
+    sourceSnapshotId: seeded.snapshot.id,
+    repositoryInstallUxDigest: installUxDigest,
+  });
+  await controlJson(
+    {
+      operations,
+      store: accountStore,
+      cookie,
+      method: "PATCH",
+      path: `/api/v1/capsule-configs/${previewConfig.id}`,
+      body: {
+        variableMapping: { unreviewed_value: "must-not-be-adopted" },
+      },
+    },
+    409,
+  );
+  expect(
+    (await operations.capsules.getInstallConfig(previewConfig.id))
+      .variableMapping,
+  ).not.toHaveProperty("unreviewed_value");
+
+  const repeatedInstallUxPreview = await controlJson<{
+    readonly repositoryInstallUx: {
+      readonly status: "accepted";
+      readonly installConfigId: string;
+    };
+  }>(
+    {
+      operations,
+      store: accountStore,
+      cookie,
+      method: "POST",
+      path: `/api/v1/sources/${seeded.source.id}/compatibility-check`,
+      body: {
+        sourceSnapshotId: seeded.snapshot.id,
+        modulePath: ".",
+        installConfigId: seeded.installConfig.id,
+        capsuleName: "route-preview",
+        compileInstallUx: true,
+      },
+    },
+    201,
+  );
+  expect(repeatedInstallUxPreview.repositoryInstallUx.installConfigId).toBe(
+    installUxPreview.repositoryInstallUx.installConfigId,
+  );
+
+  await deployStore.putSourceSnapshot({
+    ...seeded.snapshot,
+    repositoryInstallUx: {
+      status: "invalid",
+      reason: "invalid_document",
+      diagnostic: "bounded fixture diagnostic",
+    },
+  });
+  const invalidInstallUxPreview = await controlJson<{
+    readonly repositoryInstallUx: {
+      readonly status: "invalid";
+      readonly diagnosticCode: string;
+      readonly message: string;
+    };
+  }>(
+    {
+      operations,
+      store: accountStore,
+      cookie,
+      method: "POST",
+      path: `/api/v1/sources/${seeded.source.id}/compatibility-check`,
+      body: {
+        sourceSnapshotId: seeded.snapshot.id,
+        modulePath: ".",
+        installConfigId: seeded.installConfig.id,
+        capsuleName: "route-preview",
+        compileInstallUx: true,
+      },
+    },
+    201,
+  );
+  expect(invalidInstallUxPreview.repositoryInstallUx).toMatchObject({
+    status: "invalid",
+    diagnosticCode: "repository_install_ux_document_invalid",
+  });
+  expect(JSON.stringify(invalidInstallUxPreview)).not.toContain(
+    "bounded fixture diagnostic",
+  );
+  await deployStore.putSourceSnapshot({
+    ...seeded.snapshot,
+    repositoryInstallUx: {
+      status: "present",
+      digest: installUxDigest,
+      document: {
+        schemaVersion: "takosumi.install-ux/v1",
+        modules: { ".": { inputs: [] } },
+      },
+    },
+  });
 
   const planBody = await controlJson<{
     readonly run: {

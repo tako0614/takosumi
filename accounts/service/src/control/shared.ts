@@ -149,13 +149,19 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
 
 type PublicCapsuleInput = PublicCapsule &
   Partial<
-    Pick<Capsule, "currentOutputId" | "autoUpdateAttemptSourceSnapshotId">
+    Pick<
+      Capsule,
+      | "currentOutputId"
+      | "autoUpdateAttemptSourceSnapshotId"
+      | "installingPrincipalId"
+    >
   >;
 
 export function publicCapsule(capsule: PublicCapsuleInput): PublicCapsule {
   const {
     currentOutputId: _currentOutputId,
     autoUpdateAttemptSourceSnapshotId: _autoUpdateAttempt,
+    installingPrincipalId: _installingPrincipalId,
     ...publicRecord
   } = capsule;
   const currentStateVersionId = publicRecord.currentStateVersionId;
@@ -310,6 +316,9 @@ export async function publicCompatibilityReportResponse(
       ...(providerResolutions ? { providerResolutions } : {}),
     },
     ...(response.run ? { run: await publicRun(operations, response.run) } : {}),
+    ...(response.repositoryInstallUx
+      ? { repositoryInstallUx: response.repositoryInstallUx }
+      : {}),
   };
 }
 

@@ -13,10 +13,11 @@ import {
   ShieldCheck,
   Trash2,
 } from "lucide-solid";
-import type {
-  TakosumiAccountsCreatePatResponse,
-  TakosumiAccountsPatMetadata,
-  TakosumiAccountsPatScope,
+import {
+  TAKOSUMI_ACCOUNTS_SELF_SERVICE_PAT_SCOPES,
+  type TakosumiAccountsCreatePatResponse,
+  type TakosumiAccountsPatMetadata,
+  type TakosumiAccountsPatScope,
 } from "@takosjp/takosumi-accounts-contract";
 import {
   Badge,
@@ -40,7 +41,12 @@ import {
 } from "../lib/tokens.ts";
 
 const EXPIRATION_DAYS = [30, 90, 365] as const;
-const AVAILABLE_SCOPES = ["read", "write", "admin"] as const;
+/*
+ * Keep the full scope type for rendering operator-issued token metadata, but
+ * only expose the contract's self-service subset in the creation form.
+ */
+type SelfServicePatScope =
+  (typeof TAKOSUMI_ACCOUNTS_SELF_SERVICE_PAT_SCOPES)[number];
 
 export default function CloudApiKeysCard(props: {
   readonly workspaceId?: string;
@@ -49,7 +55,7 @@ export default function CloudApiKeysCard(props: {
   const [name, setName] = createSignal("");
   const [expirationDays, setExpirationDays] = createSignal(90);
   const [scopes, setScopes] =
-    createSignal<readonly TakosumiAccountsPatScope[]>(["read"]);
+    createSignal<readonly SelfServicePatScope[]>(["read"]);
   const [restrictToWorkspace, setRestrictToWorkspace] = createSignal(true);
   const [created, setCreated] =
     createSignal<TakosumiAccountsCreatePatResponse>();
@@ -150,7 +156,7 @@ export default function CloudApiKeysCard(props: {
   ]);
 
   const toggleScope = (
-    scope: TakosumiAccountsPatScope,
+    scope: SelfServicePatScope,
     checked: boolean,
   ) => {
     setScopes((current) =>
@@ -298,10 +304,11 @@ export default function CloudApiKeysCard(props: {
         <FormField
           as="group"
           label={t("account.apiKeys.scopes")}
+          hint={t("account.apiKeys.scopesHint")}
           class="wc-api-key-scope-field"
         >
           <div class="wc-api-key-scopes">
-            <For each={AVAILABLE_SCOPES}>
+            <For each={TAKOSUMI_ACCOUNTS_SELF_SERVICE_PAT_SCOPES}>
               {(scope) => (
                 <Checkbox
                   label={scopeLabel(scope)}

@@ -1,4 +1,11 @@
-import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "bun:test";
@@ -14,6 +21,7 @@ import { RUN_ROOT } from "../../../runner/lib/constants.ts";
 import {
   resolveSourceCommit,
   readRepositoryInstallMetadata,
+  readRepositoryInstallUx,
   runSourceSync,
   shallowCloneAtCommit,
 } from "../../../runner/lib/source_sync.ts";
@@ -490,6 +498,69 @@ test("readRepositoryInstallMetadata records an absent optional document", async 
     await expect(readRepositoryInstallMetadata(root)).resolves.toEqual({
       status: "absent",
     });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("readRepositoryInstallUx captures a validated document and exact digest", async () => {
+  const root = await mkdtemp(join(tmpdir(), "takosumi-repo-install-ux-"));
+  try {
+    await mkdir(join(root, ".well-known"), { recursive: true });
+    const text = JSON.stringify({
+      schemaVersion: "takosumi.install-ux/v1",
+      modules: { ".": { inputs: [] } },
+    });
+    await writeFile(join(root, ".well-known", "takosumi.json"), text);
+
+    const captured = await readRepositoryInstallUx(root);
+    expect(captured).toMatchObject({
+      status: "present",
+      document: {
+        schemaVersion: "takosumi.install-ux/v1",
+        modules: { ".": { inputs: [] } },
+      },
+    });
+    expect(captured.status === "present" ? captured.digest : "").toMatch(
+      /^sha256:[0-9a-f]{64}$/u,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("readRepositoryInstallUx records absent, oversized, symlink, and invalid documents without adopting them", async () => {
+  const root = await mkdtemp(join(tmpdir(), "takosumi-repo-install-ux-"));
+  try {
+    expect(await readRepositoryInstallUx(root)).toEqual({ status: "absent" });
+
+    await mkdir(join(root, ".well-known"), { recursive: true });
+    const path = join(root, ".well-known", "takosumi.json");
+    await writeFile(path, "x".repeat(128 * 1024 + 1));
+    expect(await readRepositoryInstallUx(root)).toEqual({
+      status: "invalid",
+      reason: "too_large",
+    });
+
+    await rm(path);
+    await writeFile(join(root, "outside.json"), "{}");
+    await symlink(join(root, "outside.json"), path);
+    expect(await readRepositoryInstallUx(root)).toEqual({
+      status: "invalid",
+      reason: "not_regular_file",
+    });
+
+    await rm(path);
+    await writeFile(path, '{"schemaVersion":"takosumi.install-ux/v1"}');
+    const invalid = await readRepositoryInstallUx(root);
+    expect(invalid).toMatchObject({
+      status: "invalid",
+      reason: "invalid_document",
+      diagnostic: "modules must be an object",
+    });
+    expect(invalid.status === "invalid" ? invalid.digest : "").toMatch(
+      /^sha256:[0-9a-f]{64}$/u,
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }

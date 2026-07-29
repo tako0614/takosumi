@@ -16,6 +16,10 @@ export interface CreateManagedProviderRunTokenInput {
   readonly subject?: string;
   readonly workspaceId: string;
   readonly capsuleId?: string;
+  /** Exact ledger Run that requested this short-lived credential. */
+  readonly runId?: string;
+  /** Durable installer provenance copied from the verified Capsule ledger. */
+  readonly installingPrincipalId?: string;
   readonly connectionId: string;
   readonly provider: string;
   readonly phase: string;
@@ -37,6 +41,8 @@ export interface ManagedProviderRunTokenPayload {
   readonly sub: string;
   readonly workspaceId: string;
   readonly capsuleId?: string;
+  readonly runId?: string;
+  readonly installingPrincipalId?: string;
   readonly connectionId: string;
   readonly provider: string;
   readonly phase: string;
@@ -56,6 +62,8 @@ export interface VerifyManagedProviderRunTokenInput {
   readonly expectedAudience: string;
   readonly expectedWorkspaceId?: string;
   readonly expectedCapsuleId?: string;
+  readonly expectedRunId?: string;
+  readonly expectedInstallingPrincipalId?: string;
   readonly expectedConnectionId?: string;
   readonly expectedProvider?: string;
   readonly expectedPhase?: string;
@@ -94,6 +102,11 @@ export async function createManagedProviderRunToken(
     "subject",
   );
   const capsuleId = optionalNormalizedClaim(input.capsuleId, "capsuleId");
+  const runId = optionalNormalizedClaim(input.runId, "runId");
+  const installingPrincipalId = optionalNormalizedClaim(
+    input.installingPrincipalId,
+    "installingPrincipalId",
+  );
   const scopes = normalizedScopes(input.scopes);
   const ttlSeconds = validTtlSeconds(input.ttlSeconds);
   const nowSeconds = Math.floor((input.now?.() ?? Date.now()) / 1000);
@@ -106,6 +119,8 @@ export async function createManagedProviderRunToken(
     sub: subject,
     workspaceId,
     ...(capsuleId ? { capsuleId } : {}),
+    ...(runId ? { runId } : {}),
+    ...(installingPrincipalId ? { installingPrincipalId } : {}),
     connectionId,
     provider,
     phase,
@@ -199,6 +214,18 @@ export async function verifyManagedProviderRunToken(
     return { ok: false, reason: "capsule_mismatch" };
   }
   if (
+    input.expectedRunId !== undefined &&
+    payload.runId !== input.expectedRunId
+  ) {
+    return { ok: false, reason: "run_mismatch" };
+  }
+  if (
+    input.expectedInstallingPrincipalId !== undefined &&
+    payload.installingPrincipalId !== input.expectedInstallingPrincipalId
+  ) {
+    return { ok: false, reason: "installing_principal_mismatch" };
+  }
+  if (
     input.expectedConnectionId !== undefined &&
     payload.connectionId !== input.expectedConnectionId
   ) {
@@ -252,7 +279,10 @@ function parsePayload(
     !Array.isArray(raw.scopes) ||
     raw.scopes.length === 0 ||
     raw.scopes.some((scope) => !isNonEmptyString(scope)) ||
-    (raw.capsuleId !== undefined && !isNonEmptyString(raw.capsuleId))
+    (raw.capsuleId !== undefined && !isNonEmptyString(raw.capsuleId)) ||
+    (raw.runId !== undefined && !isNonEmptyString(raw.runId)) ||
+    (raw.installingPrincipalId !== undefined &&
+      !isNonEmptyString(raw.installingPrincipalId))
   ) {
     return undefined;
   }
@@ -263,6 +293,10 @@ function parsePayload(
     sub: raw.sub,
     workspaceId: raw.workspaceId,
     ...(isNonEmptyString(raw.capsuleId) ? { capsuleId: raw.capsuleId } : {}),
+    ...(isNonEmptyString(raw.runId) ? { runId: raw.runId } : {}),
+    ...(isNonEmptyString(raw.installingPrincipalId)
+      ? { installingPrincipalId: raw.installingPrincipalId }
+      : {}),
     connectionId: raw.connectionId,
     provider: raw.provider,
     phase: raw.phase,

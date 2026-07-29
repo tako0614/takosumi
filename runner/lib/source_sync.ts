@@ -64,6 +64,12 @@ import {
   positiveIntegerLimitFromProfile,
 } from "./parsing.ts";
 import type { RepositoryInstallMetadataSnapshot } from "takosumi-contract/sources";
+import type { RepositoryInstallUxSnapshot } from "takosumi-contract/sources";
+import {
+  parseRepositoryInstallUxText,
+  TAKOSUMI_INSTALL_UX_MAX_BYTES,
+  TAKOSUMI_INSTALL_UX_REPOSITORY_PATH,
+} from "../../contract/install-ux.ts";
 
 const REPOSITORY_INSTALL_METADATA_PATH = ".well-known/tcs.json";
 const SOURCE_SNAPSHOT_PRESENTATION_MAX_FILE_BYTES = 128 * 1024;
@@ -456,6 +462,10 @@ export async function runSourceSync(
       "source_repository_metadata",
       () => readRepositoryInstallMetadata(workspace.sourceRoot),
     );
+    const repositoryInstallUx = await timer.measure(
+      "source_repository_install_ux",
+      () => readRepositoryInstallUx(workspace.sourceRoot),
+    );
     const subtree = await timer.measure("source_subtree", () =>
       resolveSourceSubtree(workspace.sourceRoot, source.path),
     );
@@ -488,6 +498,7 @@ export async function runSourceSync(
         archiveDigest,
         archiveSizeBytes: archiveBytes.byteLength,
         repositoryInstallMetadata,
+        repositoryInstallUx,
         sourceArchive: {
           kind: "runner-local",
           ref: archiveRef,
@@ -522,6 +533,57 @@ export async function readRepositoryInstallMetadata(
       return { status: "invalid", reason: "too_large" };
     }
     return { status: "present", text: await readFile(metadataPath, "utf8") };
+  } catch (error) {
+    const code =
+      typeof error === "object" && error !== null && "code" in error
+        ? String((error as { readonly code?: unknown }).code)
+        : "";
+    if (code === "ENOENT") return { status: "absent" };
+    throw error;
+  }
+}
+
+/**
+ * Captures and validates the optional repository-owned install UX proposal.
+ *
+ * The document is observed before selecting the module subtree, from the exact
+ * checked-out commit used for the archive. A bad optional document never turns
+ * a Git Source into an alternate source or blocks source capture: its bounded
+ * invalid status is persisted for the compatibility/compiler layer to report.
+ */
+export async function readRepositoryInstallUx(
+  repositoryRoot: string,
+): Promise<RepositoryInstallUxSnapshot> {
+  const installUxPath = join(
+    repositoryRoot,
+    TAKOSUMI_INSTALL_UX_REPOSITORY_PATH,
+  );
+  try {
+    const info = await lstat(installUxPath);
+    if (!info.isFile()) {
+      return { status: "invalid", reason: "not_regular_file" };
+    }
+    if (info.size > TAKOSUMI_INSTALL_UX_MAX_BYTES) {
+      return { status: "invalid", reason: "too_large" };
+    }
+    const bytes = await readFile(installUxPath);
+    const digest = await digestBytes(bytes);
+    let text: string;
+    try {
+      text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    } catch {
+      return { status: "invalid", reason: "invalid_utf8", digest };
+    }
+    const parsed = parseRepositoryInstallUxText(text);
+    if (!parsed.ok) {
+      return {
+        status: "invalid",
+        reason: "invalid_document",
+        digest,
+        diagnostic: parsed.error,
+      };
+    }
+    return { status: "present", digest, document: parsed.document };
   } catch (error) {
     const code =
       typeof error === "object" && error !== null && "code" in error

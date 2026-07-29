@@ -464,6 +464,22 @@ for (const backend of backends) {
       await stores.resources.upsert(record);
       const read = await stores.resources.get(record.id);
       expect(read).toEqual(record);
+      expect(
+        await stores.resources.getMany([
+          record.id,
+          "tkrn:space_missing:EdgeWorker:missing",
+          record.id,
+        ]),
+      ).toEqual([record]);
+      expect(await stores.resources.getMany([])).toEqual([]);
+      await expect(
+        stores.resources.getMany(
+          Array.from(
+            { length: 101 },
+            (_, index) => `tkrn:space_limit:EdgeWorker:item-${index}`,
+          ),
+        ),
+      ).rejects.toThrow("at most 100 ids");
       // Optional columns must not resurface as keys.
       expect(read && "project" in read).toBe(false);
       expect(read && "environment" in read).toBe(false);

@@ -3,6 +3,9 @@ import worker, * as platformWorker from "../../../deploy/platform/worker.ts";
 import {
   D1_ACCOUNTS_STORE_INIT_SQL,
   type D1Database,
+  type D1ExecResult,
+  type D1PreparedStatement,
+  type D1Result,
 } from "../../../accounts/service/src/d1-store.ts";
 import { listD1AccountsMigrations } from "../../../cli/src/cli-accounts-db.ts";
 import { SqliteFakeD1 } from "../../helpers/deploy-control/sqlite_fake_d1.ts";
@@ -32,17 +35,20 @@ test("platform scheduled Accounts retention runs a bounded predeployed slice", a
     rootHash: "old-parent",
     createdAt: 1,
   });
+  const predeployedDb = new NoDdlD1Database(db);
 
-  const result =
-    await platformWorker.runScheduledAccountsRefreshChainRetention({
-      TAKOSUMI_ACCOUNTS_DB: db,
+  const result = await platformWorker.runScheduledAccountsRefreshChainRetention(
+    {
+      TAKOSUMI_ACCOUNTS_DB: predeployedDb,
       TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE: "predeployed",
-    });
+    },
+  );
 
   expect(result.failures).toBe(0);
   expect(result.scanned).toBe(1);
   expect(result.chainLinks).toBe(1);
   expect(result.done).toBe(true);
+  expect(predeployedDb.execCount).toBe(0);
 });
 
 async function insertDocument(
@@ -57,4 +63,25 @@ async function insertDocument(
     )
     .bind(bucket, key, JSON.stringify(document), 1)
     .run();
+}
+
+class NoDdlD1Database implements D1Database {
+  execCount = 0;
+
+  constructor(private readonly delegate: D1Database) {}
+
+  prepare(query: string): D1PreparedStatement {
+    return this.delegate.prepare(query);
+  }
+
+  batch<T = unknown>(
+    statements: readonly D1PreparedStatement[],
+  ): Promise<readonly D1Result<T>[]> {
+    return this.delegate.batch<T>(statements);
+  }
+
+  exec(_query: string): Promise<D1ExecResult> {
+    this.execCount += 1;
+    return Promise.reject(new Error("request-time schema DDL is forbidden"));
+  }
 }

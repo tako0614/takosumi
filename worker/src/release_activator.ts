@@ -1,5 +1,6 @@
 import type {
   ReleaseActivationInput,
+  ReleaseActivationCommand,
   ReleaseActivationResult,
   ReleaseActivator,
   ReleaseActivationStatus,
@@ -122,7 +123,7 @@ export function createCompositeReleaseActivator(options: {
       throwIfAborted(control?.signal);
       if (input.commands.length === 0) return { status: "skipped" };
       const runnerCommands = input.commands.filter(
-        (command) => command.executor !== "operator",
+        isRunnerExecutableCommand,
       );
       const operatorCommands = input.commands.filter(
         (command) => command.executor === "operator",
@@ -218,10 +219,18 @@ export function createRunnerReleaseActivator(
         };
       }
       const workspaceId = input.applyRun.workspaceId;
+      const runnerCommands = input.commands.filter(isRunnerExecutableCommand);
+      if (runnerCommands.length !== input.commands.length) {
+        return {
+          status: "pending",
+          kind: RELEASE_ACTIVATOR_KIND,
+          message: `${phase} typed operator actions require an operator release activator`,
+        };
+      }
       const result = await runner.release!(
         {
           runId: releaseCommandRunId(input.applyRun.id),
-          commands: input.commands,
+          commands: runnerCommands,
           sourceSnapshot: input.sourceSnapshot,
           nonSensitiveOutputs: input.nonSensitiveOutputs,
           providerConfigurations: input.providerConfigurations,
@@ -245,6 +254,12 @@ export function createRunnerReleaseActivator(
       };
     },
   };
+}
+
+function isRunnerExecutableCommand(
+  action: ReleaseActivationInput["commands"][number],
+): action is ReleaseActivationCommand {
+  return action.kind !== "resource_migration" && action.executor !== "operator";
 }
 
 function releaseCommandPhaseLabel(

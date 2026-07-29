@@ -33,6 +33,7 @@ import type {
 } from "./bindings.ts";
 import { redactString } from "takosumi-contract/redaction";
 import { normalizePlanResourceScope } from "takosumi-contract";
+import { parseRepositoryInstallUxSnapshot } from "takosumi-contract/sources";
 import { recordWorkerMetric, type WorkerMetricSink } from "./metrics.ts";
 
 /**
@@ -298,6 +299,9 @@ export class CloudflareContainerOpenTofuRunner
       (archive ? stringFromRecord(archive, "ref") : undefined);
     const repositoryInstallMetadata =
       repositoryInstallMetadataFromContainerResult(result);
+    const repositoryInstallUx = parseRepositoryInstallUxSnapshot(
+      result.repositoryInstallUx,
+    );
     if (!resolvedCommit || !archiveDigest || archiveSizeBytes === undefined) {
       throw new Error(
         `OpenTofu runner source_sync ${job.runId} returned an incomplete result`,
@@ -309,6 +313,7 @@ export class CloudflareContainerOpenTofuRunner
       archiveDigest,
       archiveSizeBytes,
       ...(repositoryInstallMetadata ? { repositoryInstallMetadata } : {}),
+      ...(repositoryInstallUx ? { repositoryInstallUx } : {}),
       ...(archiveRef ? { archiveRef } : {}),
       ...(phaseTimings ? { phaseTimings } : {}),
     };

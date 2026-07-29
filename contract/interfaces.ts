@@ -230,6 +230,14 @@ export interface InterfaceBinding {
           readonly source: "compatibility_profile";
           readonly profile: string;
           readonly key: string;
+        }
+      | {
+          /** Binding-only InstallConfig proposal for a portable IaC Interface. */
+          readonly source: "capsule_resource_binding";
+          readonly capsuleId: string;
+          readonly interfaceName: string;
+          readonly interfaceVersion: string;
+          readonly key: string;
         };
     readonly createdAt: string;
     readonly updatedAt: string;
@@ -315,6 +323,23 @@ export type CapsuleInterfaceBindingProposal =
     });
 
 /**
+ * Binding-only proposal for an Interface whose document/spec is declared by
+ * portable IaC. InstallConfig may authorize an exact subject after the
+ * Resource-owned Interface exists, but it never supplies or rewrites that
+ * Interface body.
+ */
+export type CapsuleResourceInterfaceBindingProposal =
+  CapsuleInterfaceBindingProposal & {
+    readonly interface: {
+      readonly name: string;
+      readonly version: string;
+      /** Optional exact selector when a Form declares the same Interface twice. */
+      readonly resourceKind?: string;
+      readonly resourceName?: string;
+    };
+  };
+
+/**
  * Service-side proposal attached to an InstallConfig. It is not repository
  * metadata: Takosumi materializes it into an ordinary Interface record only
  * after a successful Capsule apply, substituting the created Capsule id into
@@ -341,6 +366,36 @@ export function capsuleInterfaceBlueprintsNeedInstallingPrincipal(
       (proposal) => proposal.subject?.source === "installing_principal",
     ),
   );
+}
+
+export function capsuleResourceInterfaceBindingsNeedInstallingPrincipal(
+  proposals: readonly CapsuleResourceInterfaceBindingProposal[] | undefined,
+): boolean {
+  return (proposals ?? []).some(
+    (proposal) => proposal.subject?.source === "installing_principal",
+  );
+}
+
+export function resolveCapsuleResourceInterfaceBindingInstallingPrincipal(
+  proposals: readonly CapsuleResourceInterfaceBindingProposal[] | undefined,
+  installingPrincipalId: string,
+): readonly CapsuleResourceInterfaceBindingProposal[] | undefined {
+  if (proposals === undefined) return undefined;
+  const principalId = installingPrincipalId.trim();
+  if (principalId === "") {
+    throw new TypeError("installingPrincipalId must be a non-empty string");
+  }
+  if (!capsuleResourceInterfaceBindingsNeedInstallingPrincipal(proposals)) {
+    return proposals;
+  }
+  return proposals.map((proposal) => {
+    if (proposal.subject?.source !== "installing_principal") return proposal;
+    const { subject: _subject, ...fixedProposal } = proposal;
+    return {
+      ...fixedProposal,
+      subjectRef: { kind: "Principal", id: principalId },
+    } satisfies CapsuleResourceInterfaceBindingProposal;
+  });
 }
 
 /**

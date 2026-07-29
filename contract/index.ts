@@ -9,6 +9,8 @@ export * from "./app-handoff.ts";
 export * from "./mobile.ts";
 export * from "./public-session-control.ts";
 export * from "./notification-pushers.ts";
+export * from "./background-events.ts";
+export * from "./host-runtime-materialization.ts";
 export * from "./install-experience.ts";
 export * from "./resource-shape.ts";
 export * from "./resource-artifacts.ts";
@@ -24,6 +26,7 @@ export * from "./interface-display.ts";
 export * from "./target.ts";
 export * from "./resolution.ts";
 export * from "./sources.ts";
+export * from "./install-ux.ts";
 export * from "./capsule-source-options.ts";
 export * from "./redaction.ts";
 export * from "./provider-configurations.ts";
@@ -36,6 +39,8 @@ export type {
   InstallConfigLifecycleCommandAction,
   InstallConfigLifecycleExecutor,
   InstallConfigLifecyclePhase,
+  InstallConfigResourceMigrationAction,
+  InstallConfigResourceMigrationBundle,
   InstallContextVariableMapping,
   InstallContextVariableValue,
   InstallConfigVariableDefault,
@@ -46,8 +51,11 @@ export type {
   InstallConfigStoreSource,
   InstallConfigStoreSurface,
   InstallConfigStoreText,
+  InstallConfigInstallFeature,
   InstallConfigInstallExperience,
   InstallConfigInstallProjection,
+  InstallConfigRepositoryInstallUxState,
+  InstallConfigHostRuntimeMaterialization,
   ManagedPublicHostnameAllocation,
   ManagedPublicHostnameClaimer,
   ManagedPublicHostnameClaimRequest,
@@ -80,8 +88,10 @@ export type {
   CapsuleGateResult,
   CapsuleProviderRequirement,
   CapsuleProvisionerSummary,
+  CapsuleRootModuleVariableDeclaration,
   PublicCapsuleCompatibilityReport as CapsuleCompatibilityReport,
   PublicCapsuleCompatibilityReportResponse as CapsuleCompatibilityReportResponse,
+  RepositoryInstallUxCompatibilityResult,
   CapsuleResourceSummary,
   CreateSourceCompatibilityCheckRequest,
 } from "./capsules.ts";
@@ -97,6 +107,8 @@ export type {
 } from "./provider-resolution.ts";
 export { PUBLIC_PROVIDER_RESOLUTION_STATUSES as PROVIDER_RESOLUTION_STATUSES } from "./provider-resolution.ts";
 export * from "./connections.ts";
+export * from "./managed-runtime-connections.ts";
+export * from "./managed-relational-runtime.ts";
 export {
   isProviderEnvName,
   isReservedProviderEnvName,

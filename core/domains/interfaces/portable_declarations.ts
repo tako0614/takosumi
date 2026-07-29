@@ -91,6 +91,12 @@ export interface PortableDeclarationWriterOptions {
   ) => Promise<ResourceObject | undefined>;
   readonly resolveWorkspace: ResourceInterfaceWorkspaceResolver;
   readonly resolveResourceUri?: FormInterfaceResourceUriResolver;
+  /** Service-side binding hydration after the IaC-owned body is durable. */
+  readonly ensureBindings?: (input: {
+    readonly interface: Interface;
+    readonly resource: ResourceObject;
+    readonly workspaceId: string;
+  }) => Promise<void>;
 }
 
 /** Read-only projection over the canonical Interface ledger. */
@@ -388,6 +394,11 @@ export function createPortableDeclarationWriter(
           "portable Interface declaration inputs are not Resolved",
         );
       }
+      await options.ensureBindings?.({
+        interface: written,
+        resource: owned.resource,
+        workspaceId: owned.workspaceId,
+      });
       const projected = projectDeclaration(written, owned.resource);
       if (!projected) {
         throw new InterfaceServiceError(
