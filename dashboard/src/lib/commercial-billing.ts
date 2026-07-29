@@ -42,9 +42,10 @@ export interface CommercialBillingAccount {
 
 export interface CommercialBillingCredits {
   readonly currency: "USD";
+  /** Current credit that can be committed to new usage. */
   readonly availableUsdMicros: number;
+  /** Current credit held for operations that have not settled yet. */
   readonly reservedUsdMicros: number;
-  readonly purchasedUsdMicros: number;
   readonly paymentMethodReady: boolean;
   readonly autoRecharge: CommercialBillingAutoRechargeSettings;
 }
@@ -294,12 +295,10 @@ function parseCredits(value: unknown): CommercialBillingCredits | undefined {
   const autoRecharge = parseAutoRecharge(record?.autoRecharge);
   const availableUsdMicros = nonNegativeNumber(record?.availableUsdMicros);
   const reservedUsdMicros = nonNegativeNumber(record?.reservedUsdMicros);
-  const purchasedUsdMicros = nonNegativeNumber(record?.purchasedUsdMicros);
   if (
     record?.currency !== "USD" ||
     availableUsdMicros === undefined ||
     reservedUsdMicros === undefined ||
-    purchasedUsdMicros === undefined ||
     !autoRecharge
   ) {
     return undefined;
@@ -308,7 +307,6 @@ function parseCredits(value: unknown): CommercialBillingCredits | undefined {
     currency: "USD",
     availableUsdMicros,
     reservedUsdMicros,
-    purchasedUsdMicros,
     paymentMethodReady: record.paymentMethodReady === true,
     autoRecharge,
   };

@@ -35,7 +35,7 @@ test("commercial billing configuration validates bounded credit choices", () => 
   expect(configuration.countryMatrix?.supportedCountries).toEqual(["JP", "US"]);
 });
 
-test("commercial billing summary filters malformed rows and unsafe links", () => {
+test("commercial billing summary projects current credit, not lifetime purchases", () => {
   const summary = parseCommercialBillingSummary({
     billing: {
       configured: true,
@@ -49,7 +49,8 @@ test("commercial billing summary filters malformed rows and unsafe links", () =>
         currency: "USD",
         availableUsdMicros: 9_000_000,
         reservedUsdMicros: 1_000_000,
-        purchasedUsdMicros: 10_000_000,
+        // This is lifetime net purchased credit, not a current balance.
+        purchasedUsdMicros: 125_000_000,
         paymentMethodReady: true,
         autoRecharge: {
           enabled: true,
@@ -76,6 +77,7 @@ test("commercial billing summary filters malformed rows and unsafe links", () =>
   expect(summary.configured).toBe(true);
   expect(summary.account?.customerType).toBe("business");
   expect(summary.credits.availableUsdMicros).toBe(9_000_000);
+  expect("purchasedUsdMicros" in summary.credits).toBe(false);
   expect(summary.credits.autoRecharge.enabled).toBe(true);
   expect(summary.payments).toHaveLength(1);
   expect(summary.payments[0]?.receiptUrl).toBeUndefined();
@@ -121,7 +123,6 @@ test("commercial billing projections are bounded and deduplicate identities", ()
         currency: "USD",
         availableUsdMicros: 0,
         reservedUsdMicros: 0,
-        purchasedUsdMicros: 0,
         paymentMethodReady: false,
         autoRecharge: {
           enabled: false,
@@ -171,6 +172,9 @@ test("native commercial billing stays provider-neutral and uses extension APIs",
   );
   expect(component).toContain("CommercialBillingPanel");
   expect(component).toContain("DataTable");
+  expect(component).toContain("availableUsdMicros");
+  expect(component).not.toContain("purchasedUsdMicros");
+  expect(component).not.toContain("balance.purchased");
   expect(component).not.toContain("Stripe");
   expect(component).not.toContain("cloud-billing");
   expect(client).toContain('"config"');

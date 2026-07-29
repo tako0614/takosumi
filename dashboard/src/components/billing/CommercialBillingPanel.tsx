@@ -300,12 +300,6 @@ export default function CommercialBillingPanel(props: Props) {
               </div>
               <dl class="wb-billing-stats">
                 <div>
-                  <dt>{t("billing.commercial.balance.purchased")}</dt>
-                  <dd>
-                    {formatUsdMicros(data().billing.credits.purchasedUsdMicros)}
-                  </dd>
-                </div>
-                <div>
                   <dt>{t("billing.commercial.balance.reserved")}</dt>
                   <dd>
                     {formatUsdMicros(data().billing.credits.reservedUsdMicros)}
@@ -314,7 +308,7 @@ export default function CommercialBillingPanel(props: Props) {
                 <div>
                   <dt>{t("billing.commercial.autoRecharge.status")}</dt>
                   <dd>
-                    {data().billing.credits.autoRecharge.enabled
+                    {autoRecharge()?.enabled === true
                       ? t("billing.commercial.autoRecharge.on")
                       : t("billing.commercial.autoRecharge.off")}
                   </dd>
