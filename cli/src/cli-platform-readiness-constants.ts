@@ -86,7 +86,7 @@ export const platformReadinessRequiredEvidenceTypes = {
       "suspend-recover",
     ],
     "quota-abuse-control": [
-      "quota-plan",
+      "quota-policy",
       "quota-spike-drill",
       "noisy-tenant-throttle",
       "run-kill-switch",
@@ -438,7 +438,7 @@ export const platformReadinessStructuredEvidenceRequirements: Record<
       "briefRef",
       "targetCustomer",
       "launchScope",
-      "quotaPlanRef",
+      "quotaPolicyRef",
       "acceptedUsePolicyRef",
     ],
   },
@@ -491,8 +491,8 @@ export const platformReadinessStructuredEvidenceRequirements: Record<
     fields: ["accountId", "workspaceId", "membershipRole", "membershipEventId"],
     allowedValues: { membershipRole: ["owner", "admin", "member"] },
   },
-  "quota-plan": {
-    fields: ["planId", "quotaPlanRef"],
+  "quota-policy": {
+    fields: ["policyId", "quotaPolicyRef"],
   },
   "quota-spike-drill": {
     fields: [
@@ -866,7 +866,7 @@ export const platformReadinessStructuredEvidenceRules: Readonly<
   "launch-brief": {
     formats: {
       briefRef: "evidence-ref",
-      quotaPlanRef: "evidence-ref",
+      quotaPolicyRef: "evidence-ref",
       acceptedUsePolicyRef: "evidence-ref",
     },
   },
@@ -878,7 +878,7 @@ export const platformReadinessStructuredEvidenceRules: Readonly<
   },
   "rate-limit-test": { formats: { policyRef: "evidence-ref" } },
   "email-assurance": { formats: { verifiedAt: "timestamp" } },
-  "quota-plan": { formats: { quotaPlanRef: "evidence-ref" } },
+  "quota-policy": { formats: { quotaPolicyRef: "evidence-ref" } },
   "quota-spike-drill": { numericBounds: { cap: { minimum: 0 } } },
   "load-test": {
     numericBounds: { tenantCount: { minimum: 2 } },

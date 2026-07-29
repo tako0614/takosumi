@@ -292,15 +292,9 @@ function structuredEvidenceFieldsForTest(
       return {
         briefRef: "doc://launch/brief",
         targetCustomer: "early-self-hostable-team",
-        launchScope: "platform-capsule-lite",
-        sku: "lite",
-        quotaPlanRef: "policy://launch/lite-quotas",
-        billingMeterRef: "meter://agent-compute-minutes",
-        supportTier: "standard",
-        supportSlaRef: "policy://support/standard-sla",
-        freeTrialPolicyRef: "policy://billing/free-trial",
+        launchScope: "platform-capsule-control-plane",
+        quotaPolicyRef: "policy://launch/shared-safety-ceilings",
         acceptedUsePolicyRef: "policy://abuse/accepted-use",
-        betaScopeRef: "doc://launch/beta-scope",
       };
     case "operator-signoff":
       return {
@@ -368,15 +362,15 @@ function structuredEvidenceFieldsForTest(
         membershipRole: "owner",
         membershipEventId: "membership_rehearsal",
       };
-    case "quota-plan":
+    case "quota-policy":
       return {
-        planId: "lite",
-        quotaPlanRef: "policy://quota/lite",
+        policyId: "shared-safety-ceilings",
+        quotaPolicyRef: "policy://quota/shared-safety-ceilings",
       };
     case "spend-cap":
       return {
         workspaceId: "ws_rehearsal",
-        spendCapRef: "policy://spend-cap/lite",
+        spendCapRef: "policy://spend-cap/default",
         cap: 100,
         currency: "USD",
       };
@@ -1885,7 +1879,7 @@ test("launch-readiness template prints all required evidence ids as blocked", as
       "suspend-recover",
     ],
     "quota-abuse-control": [
-      "quota-plan",
+      "quota-policy",
       "quota-spike-drill",
       "noisy-tenant-throttle",
       "run-kill-switch",

@@ -509,6 +509,35 @@ test("hosted Cloud publishes the reviewed SLA and support boundary", async () =>
   }
 });
 
+test("public pricing and OSS readiness use prepaid-credit and quota-policy vocabulary", async () => {
+  const pricing = [
+    await readText(new URL("website/src/content/pricing.ts", ROOT)),
+    await readText(new URL("website/src/components/Pricing.tsx", ROOT)),
+    await readText(new URL("website/src/styles/global.css", ROOT)),
+  ].join("\n");
+  assert.match(pricing, /月額固定費なし/);
+  assert.match(pricing, /プリペイドクレジット/);
+  assert.match(pricing, /自動チャージは初期状態で無効/);
+  assert.doesNotMatch(pricing, /月額 \$1/);
+  assert.doesNotMatch(pricing, /Lite\s*\/\s*Plus\s*\/\s*Pro/);
+  assert.doesNotMatch(pricing, /subscription \+ usage/);
+
+  const readiness = await readText(
+    new URL("cli/src/cli-platform-readiness-constants.ts", ROOT),
+  );
+  assert.match(readiness, /"quota-policy"/);
+  assert.match(readiness, /quotaPolicyRef/);
+  assert.doesNotMatch(readiness, /"quota-plan"/);
+  assert.doesNotMatch(readiness, /\bplanId\b/);
+  assert.doesNotMatch(readiness, /\bquotaPlanRef\b/);
+
+  const readinessFixtures = await readText(
+    new URL("tests/cli/src/main_test.ts", ROOT),
+  );
+  assert.doesNotMatch(readinessFixtures, /platform-capsule-lite/);
+  assert.doesNotMatch(readinessFixtures, /policy:\/\/[^"\s]*lite/);
+});
+
 async function readPublicDocs(): Promise<string> {
   const chunks: string[] = [];
   for (const root of [new URL("docs/", ROOT), new URL("app-docs/", ROOT)]) {

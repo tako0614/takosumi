@@ -1282,7 +1282,7 @@ Takosumi OSS does not include:
 ```text
 commercial billing enforcement
 payment provider integration
-subscription / invoice
+prepaid credit / automatic recharge / usage invoice
 official managed capacity
 official Takosumi native runtime internals
 official support / SLA / abuse operation
@@ -1299,8 +1299,8 @@ It adds:
 ```text
 customer / tenant management
 multi-tenant workspace management
-billing account / subscription / plan
-quota / metering / invoice / payment integration
+billing account / prepaid credit / automatic recharge
+quota / usage pricing / metering / invoice / payment integration
 DB-backed operator configuration
 CLI / API / runbook operations
 managed target offerings
@@ -2443,8 +2443,8 @@ classification remain operator/legal approval gates.
 The versioned Takosumi Cloud PriceCatalog is the authority for official managed
 capacity. Current provider public overage/marginal rates remain reviewed cost
 comparison inputs, but provider invoices do not define tenant usage or public
-retail prices. Shared provider free tiers, account subscriptions, and other
-fixed platform costs are absorbed by Takosumi Cloud and are
+retail prices. Shared provider free tiers, account-level provider commitments,
+and other fixed platform costs are absorbed by Takosumi Cloud and are
 not allocated as hidden per-tenant free tiers. A catalog update is versioned
 and effective-dated; it never re-rates old immutable usage.
 
