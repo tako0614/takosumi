@@ -60,8 +60,17 @@ shapes separately from a provider or cloud. Takosumi can accept Takoform, but
 Takoform is not the only possible Resource entrance.
 
 Cloudflare, AWS, and other Terraform or OpenTofu providers remain ordinary
-providers from the runner's perspective. Takosumi Cloud and a cloud account
-connected by a user both pass through the shared Run and Resource lifecycle.
+providers from the runner's perspective. The authority after provider
+execution is not identical, however.
+
+- A module that uses Cloudflare, AWS, or another provider directly shares the
+  Run, state, output, and audit records. Provider-side objects do not
+  necessarily enter Takosumi's Resource ledger.
+- A client such as Takoform that calls the Takosumi Resource API uses the
+  shared Run plus the Resource, Target, ResolutionLock, and NativeResource
+  lifecycle.
+- Takosumi Cloud is one host and implementation available to the second path.
+  The runner does not silently select a Cloud-specific provider.
 
 Takos is a separate product. Its self-hosted product worker does not embed
 Accounts, deploy-control, the Dashboard, or the runner; it connects to a

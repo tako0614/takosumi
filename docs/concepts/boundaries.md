@@ -57,8 +57,15 @@ Takoform は、Resource の形を provider やクラウドから分離して記�
 Resource の入口ではありません。
 
 同様に、Cloudflare、AWS などの Terraform / OpenTofu provider は runner から見て通常の
-provider です。Takosumi Cloud も、利用者が接続した別のクラウドも、共通の Run と
-Resource lifecycle を通ります。
+provider です。ただし、実行後の authority は同じではありません。
+
+- Cloudflare / AWS などの provider を module から直接使う場合は、共通の
+  Run、state、output、監査記録を使います。provider 側の resource は必ずしも
+  Takosumi の Resource 台帳には入りません。
+- Takoform などから Takosumi Resource API を使う場合は、共通の Run に加えて
+  Resource、Target、ResolutionLock、NativeResource の lifecycle を使います。
+- Takosumi Cloud は後者で選べる host / 実装の一つです。runner が Cloud 専用の
+  provider を暗黙に選ぶ仕組みではありません。
 
 ## self-host する場合
 

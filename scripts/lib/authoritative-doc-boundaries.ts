@@ -56,6 +56,54 @@ const REQUIRED_DOC_CLAIMS: Readonly<
         "English index must state that Takosumi ships no first-party provider",
     },
   ],
+  "docs/concepts/boundaries.md": [
+    {
+      pattern:
+        /provider 側の resource は必ずしも\s+Takosumi の Resource 台帳には入りません/u,
+      message:
+        "Japanese product boundary must distinguish direct providers from the Resource ledger",
+    },
+  ],
+  "docs/en/concepts/boundaries.md": [
+    {
+      pattern:
+        /Provider-side objects do not\s+necessarily enter Takosumi's Resource ledger/u,
+      message:
+        "English product boundary must distinguish direct providers from the Resource ledger",
+    },
+  ],
+  "docs/concepts/interfaces.md": [
+    {
+      pattern:
+        /provider credential、account id、native resource id、bearer token は\s+渡しません/u,
+      message:
+        "Japanese Interface docs must keep managed runtime provider authority private",
+    },
+  ],
+  "docs/en/concepts/interfaces.md": [
+    {
+      pattern:
+        /does not receive provider credentials, account ids, native resource ids, or bearer\s+tokens/u,
+      message:
+        "English Interface docs must keep managed runtime provider authority private",
+    },
+  ],
+  "docs/reference/repository-manifest.md": [
+    {
+      pattern:
+        /将来 metadata\s+section を追加するときは新しい `apiVersion` を定義し、未知 field は\s+fail closed/u,
+      message:
+        "Japanese Repository manifest docs must keep versioned closed extensibility",
+    },
+  ],
+  "docs/en/reference/repository-manifest.md": [
+    {
+      pattern:
+        /A future metadata\s+section requires a new `apiVersion`; unknown fields continue to fail closed/u,
+      message:
+        "English Repository manifest docs must keep versioned closed extensibility",
+    },
+  ],
   "docs/reference/api.md": [
     {
       pattern:
