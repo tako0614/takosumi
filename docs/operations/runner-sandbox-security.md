@@ -18,6 +18,50 @@ The OSS reference image executes module/provider code as the unprivileged
 bounded `/tmp` run/cache directories are writable. Non-root execution reduces
 container breakout impact but is not a substitute for substrate isolation.
 
+## Worker relay memory and artifact limits
+
+The Cloudflare runner relay must stay below the Worker isolate memory ceiling
+even when a container or stored object is malformed. The following hard maxima
+apply to plaintext artifacts:
+
+| Artifact | Hard maximum |
+| --- | ---: |
+| source archive | 50 MiB |
+| OpenTofu state | 16 MiB |
+| reviewed binary plan | 24 MiB |
+| raw output envelope | 4 MiB |
+| container JSON result | 6 MiB |
+| `current.json` state pointer | 64 KiB |
+
+`TAKOSUMI_RUNNER_SOURCE_ARCHIVE_MAX_BYTES`,
+`TAKOSUMI_RUNNER_STATE_ARTIFACT_MAX_BYTES`,
+`TAKOSUMI_RUNNER_PLAN_ARTIFACT_MAX_BYTES`,
+`TAKOSUMI_RUNNER_OUTPUT_ARTIFACT_MAX_BYTES`, and
+`TAKOSUMI_RUNNER_RESPONSE_MAX_BYTES` may lower these values for a deployment;
+they cannot raise the hard maxima. Plan JSON remains separately capped at
+2 MiB.
+
+Container responses are rejected from `Content-Length` before body allocation
+when the declared length exceeds the cap. Missing, invalid, or forged smaller
+lengths do not bypass enforcement: the relay reads the stream with a bounded
+counter and cancels it on the first byte over the limit. R2 reads first check
+the authoritative object size, then apply the same bound to the object body
+stream (narrow test adapters without a stream recheck materialized length).
+
+A limit failure is stable and non-retryable: HTTP `413` with
+`errorCode: "artifact_size_limit_exceeded"` plus `artifact`, `maxBytes`, and
+`observedBytes`. Source and plan objects are not written before validation.
+Apply validates and encrypts state and output completely before it writes the
+new output, state generation, or `current.json`, so a size failure leaves no
+partial new generation.
+
+New state, plan, and raw-output objects use
+`aes-gcm-bytes-v2`: a short version prefix, a 12-byte IV, and byte-native
+AES-GCM ciphertext/tag. This removes the former base64 plaintext copy from new
+encrypt/decrypt operations. The reader still recognizes historical
+base64-wrapped ciphertext and verifies its recorded plaintext digest; any
+subsequent write emits v2 and records `takosumi-encryption-format` metadata.
+
 ## Mandatory review checklist
 
 - immutable image/artifact digest and reviewed source commit are recorded;

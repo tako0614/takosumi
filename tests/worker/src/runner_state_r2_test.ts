@@ -185,6 +185,163 @@ test("apply with a Resource stateScope persists under the Resource R2_STATE pref
   assert.equal(stateField.digest, current.digest);
 });
 
+test("oversized chunked state with a forged Content-Length fails with no partial persistence", async () => {
+  const artifacts = new FakeR2Bucket();
+  const state = new FakeR2Bucket();
+  const crypto = StateArtifactCrypto.fromEnv({
+    TAKOSUMI_SECRET_STORE_PASSPHRASE: TEST_PASSPHRASE,
+  });
+  const sealedPlan = await crypto.seal(PLAN_BYTES);
+  await artifacts.put(
+    "opentofu-plan-runs/plan_1/tfplan.enc",
+    sealedPlan.ciphertext,
+  );
+  const stateLimit = 32;
+  const oversizedState = new Uint8Array(stateLimit + 1).fill(0x61);
+  const runner = runnerWithContainer(
+    artifacts,
+    state,
+    {
+      async containerFetch(request) {
+        const path = new URL(request.url).pathname;
+        if (request.method === "PUT") return Response.json({ ok: true });
+        if (request.method === "POST" && path === "/runs/plan_1") {
+          return Response.json({ status: "succeeded", exitCode: 0 });
+        }
+        if (
+          request.method === "GET" &&
+          path === "/runs/plan_1/artifacts/tfstate"
+        ) {
+          let offset = 0;
+          return new Response(
+            new ReadableStream<Uint8Array>({
+              pull(controller) {
+                if (offset >= oversizedState.byteLength) {
+                  controller.close();
+                  return;
+                }
+                const end = Math.min(offset + 17, oversizedState.byteLength);
+                controller.enqueue(oversizedState.slice(offset, end));
+                offset = end;
+              },
+            }),
+            {
+              // Deliberately forged smaller than the real chunked body. The
+              // streaming count, not this header, must enforce the limit.
+              headers: { "content-length": "1" },
+            },
+          );
+        }
+        return Response.json({ error: "unexpected" }, { status: 500 });
+      },
+    },
+    { TAKOSUMI_RUNNER_STATE_ARTIFACT_MAX_BYTES: String(stateLimit) },
+  );
+
+  const response = await runner.fetch(
+    new Request("https://runner/runs/plan_1", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        kind: "takosumi.opentofu-run@v1",
+        action: "apply",
+        runId: "plan_1",
+        request: {
+          stateScope: RESOURCE_SCOPE,
+          rawOutputRef: RESOURCE_RAW_OUTPUT_REF,
+          planArtifact: {
+            kind: "object-storage",
+            ref: "r2://takos-artifacts/opentofu-plan-runs/plan_1/tfplan",
+            digest: PLAN_DIGEST,
+          },
+        },
+      }),
+    }),
+  );
+
+  assert.equal(response.status, 413);
+  assert.deepEqual(await response.json(), {
+    error: "OpenTofu runner artifact exceeds configured byte limit",
+    errorCode: "artifact_size_limit_exceeded",
+    artifact: "state",
+    maxBytes: stateLimit,
+    observedBytes: stateLimit + 1,
+  });
+  assert.equal(state.body(RESOURCE_NEXT_STATE_KEY), undefined);
+  assert.equal(state.body(RESOURCE_CURRENT_KEY), undefined);
+  assert.equal(artifacts.body(RESOURCE_RAW_OUTPUT_REF), undefined);
+});
+
+test("oversized raw outputs fail before state, pointer, or output persistence", async () => {
+  const artifacts = new FakeR2Bucket();
+  const state = new FakeR2Bucket();
+  const crypto = StateArtifactCrypto.fromEnv({
+    TAKOSUMI_SECRET_STORE_PASSPHRASE: TEST_PASSPHRASE,
+  });
+  const sealedPlan = await crypto.seal(PLAN_BYTES);
+  await artifacts.put(
+    "opentofu-plan-runs/plan_1/tfplan.enc",
+    sealedPlan.ciphertext,
+  );
+  const outputLimit = 32;
+  const runner = runnerWithContainer(
+    artifacts,
+    state,
+    {
+      async containerFetch(request) {
+        const path = new URL(request.url).pathname;
+        if (request.method === "PUT") return Response.json({ ok: true });
+        if (request.method === "POST" && path === "/runs/plan_1") {
+          return Response.json({
+            status: "succeeded",
+            exitCode: 0,
+            outputs: {
+              endpoint: { sensitive: false, value: "x".repeat(64) },
+            },
+          });
+        }
+        if (
+          request.method === "GET" &&
+          path === "/runs/plan_1/artifacts/tfstate"
+        ) {
+          return new Response(NEW_STATE_BYTES);
+        }
+        return Response.json({ error: "unexpected" }, { status: 500 });
+      },
+    },
+    { TAKOSUMI_RUNNER_OUTPUT_ARTIFACT_MAX_BYTES: String(outputLimit) },
+  );
+
+  const response = await runner.fetch(
+    new Request("https://runner/runs/plan_1", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        kind: "takosumi.opentofu-run@v1",
+        action: "apply",
+        runId: "plan_1",
+        request: {
+          stateScope: RESOURCE_SCOPE,
+          rawOutputRef: RESOURCE_RAW_OUTPUT_REF,
+          planArtifact: {
+            kind: "object-storage",
+            ref: "r2://takos-artifacts/opentofu-plan-runs/plan_1/tfplan",
+            digest: PLAN_DIGEST,
+          },
+        },
+      }),
+    }),
+  );
+
+  assert.equal(response.status, 413);
+  const payload = (await response.json()) as Record<string, unknown>;
+  assert.equal(payload.errorCode, "artifact_size_limit_exceeded");
+  assert.equal(payload.artifact, "output");
+  assert.equal(state.body(RESOURCE_NEXT_STATE_KEY), undefined);
+  assert.equal(state.body(RESOURCE_CURRENT_KEY), undefined);
+  assert.equal(artifacts.body(RESOURCE_RAW_OUTPUT_REF), undefined);
+});
+
 test("apply validates rawOutputRef against the Apply Run when the plan container is reused", async () => {
   const artifacts = new FakeR2Bucket();
   const state = new FakeR2Bucket();
@@ -1446,6 +1603,7 @@ function runnerWithContainer(
   artifacts: R2Bucket,
   stateBucket: R2Bucket,
   container: ContainerRequestFetcher,
+  envOverrides: Readonly<Record<string, unknown>> = {},
 ): OpenTofuRunnerObject {
   const runner = new OpenTofuRunnerObject({ storage: new FakeDoStorage() }, {
     TAKOSUMI_CONTROL_DB: {} as CloudflareWorkerEnv["TAKOSUMI_CONTROL_DB"],
@@ -1453,6 +1611,7 @@ function runnerWithContainer(
     R2_STATE: stateBucket,
     COORDINATION: {} as CloudflareWorkerEnv["COORDINATION"],
     TAKOSUMI_SECRET_STORE_PASSPHRASE: TEST_PASSPHRASE,
+    ...envOverrides,
   } as CloudflareWorkerEnv);
   Object.defineProperty(runner, "containerFetch", {
     value(request: Request, _port?: number) {

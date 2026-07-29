@@ -109,6 +109,83 @@ test("source_sync run promotes the runner-local source archive to R2_SOURCE", as
   assert.equal(artifacts.body(ARCHIVE_KEY), undefined);
 });
 
+test("source_sync rejects one-byte-oversized chunked archives without an R2 object", async () => {
+  const archiveDigest = await digestOf(ARCHIVE_BYTES);
+  const source = new FakeR2Bucket();
+  const artifacts = new FakeR2Bucket();
+  const runner = runnerWithContainer(
+    artifacts,
+    source,
+    {
+      async containerFetch(request) {
+        const path = new URL(request.url).pathname;
+        if (request.method === "GET" && path === "/healthz") {
+          return Response.json({ ok: true });
+        }
+        if (request.method === "POST" && path === "/runs/sync_limit") {
+          return Response.json({
+            status: "succeeded",
+            exitCode: 0,
+            resolvedCommit: RESOLVED_COMMIT,
+            sourceArchive: {
+              kind: "runner-local",
+              ref: ARCHIVE_KEY,
+              digest: archiveDigest,
+            },
+          });
+        }
+        if (
+          request.method === "GET" &&
+          path === "/runs/sync_limit/artifacts/source-archive"
+        ) {
+          return new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.enqueue(ARCHIVE_BYTES.slice(0, 3));
+                controller.enqueue(ARCHIVE_BYTES.slice(3));
+                controller.close();
+              },
+            }),
+          );
+        }
+        return Response.json({ error: "unexpected" }, { status: 500 });
+      },
+    },
+    {
+      TAKOSUMI_RUNNER_SOURCE_ARCHIVE_MAX_BYTES: String(
+        ARCHIVE_BYTES.byteLength - 1,
+      ),
+    },
+  );
+
+  const response = await runner.fetch(
+    new Request("https://runner/runs/sync_limit", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        kind: "takosumi.opentofu-run@v1",
+        action: "source_sync",
+        runId: "sync_limit",
+        request: {
+          action: "source_sync",
+          source: {
+            url: "https://github.com/octocat/Hello-World.git",
+            ref: "main",
+          },
+          archiveRef: ARCHIVE_KEY,
+        },
+      }),
+    }),
+  );
+
+  assert.equal(response.status, 413);
+  const payload = (await response.json()) as Record<string, unknown>;
+  assert.equal(payload.errorCode, "artifact_size_limit_exceeded");
+  assert.equal(payload.artifact, "source_archive");
+  assert.equal(source.body(ARCHIVE_KEY), undefined);
+  assert.equal(artifacts.body(ARCHIVE_KEY), undefined);
+});
+
 test("source_sync run reuses an object-storage source archive without re-persisting", async () => {
   const calls: string[] = [];
   const archiveDigest = await digestOf(ARCHIVE_BYTES);
@@ -304,6 +381,7 @@ function runnerWithContainer(
   artifacts: R2Bucket,
   sourceBucket: R2Bucket,
   container: ContainerRequestFetcher,
+  envOverrides: Readonly<Record<string, unknown>> = {},
 ): OpenTofuRunnerObject {
   const runner = new OpenTofuRunnerObject(
     { storage: new FakeDoStorage() },
@@ -312,7 +390,8 @@ function runnerWithContainer(
       R2_ARTIFACTS: artifacts,
       R2_SOURCE: sourceBucket,
       COORDINATION: {} as CloudflareWorkerEnv["COORDINATION"],
-    },
+      ...envOverrides,
+    } as CloudflareWorkerEnv,
   );
   Object.defineProperty(runner, "containerFetch", {
     value(request: Request, _port?: number) {

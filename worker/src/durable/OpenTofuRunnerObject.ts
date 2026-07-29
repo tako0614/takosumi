@@ -2,10 +2,15 @@ import type {
   CloudflareWorkerEnv,
   R2Bucket,
   R2Object,
+  R2ObjectBody,
   R2PutOptions,
 } from "../bindings.ts";
 import { isLegacySourceArchiveRestoreRef } from "../legacy_source_archive_restore.ts";
-import { StateArtifactCrypto } from "../state_crypto.ts";
+import {
+  maxStateArtifactCiphertextBytes,
+  StateArtifactCrypto,
+  type SealedArtifact,
+} from "../state_crypto.ts";
 import { redactString } from "takosumi-contract/redaction";
 
 const DEFAULT_PLAN_ARTIFACT_BUCKET = "takos-artifacts";
@@ -19,6 +24,66 @@ const RUNNER_REQUEST_HEADER_ALLOWLIST = new Set(["content-type"]);
 const R2_PUT_RETRY_ATTEMPTS = 8;
 const R2_PUT_RETRY_BASE_MS = 500;
 const R2_PUT_RETRY_MAX_MS = 10_000;
+const BOUNDED_STREAM_INITIAL_BYTES = 64 * 1024;
+
+export const RUNNER_ARTIFACT_LIMIT_DEFAULTS = Object.freeze({
+  sourceArchive: 50 * 1024 * 1024,
+  state: 16 * 1024 * 1024,
+  plan: 24 * 1024 * 1024,
+  output: 4 * 1024 * 1024,
+  runnerResponse: 6 * 1024 * 1024,
+  statePointer: 64 * 1024,
+  failureDetail: 64 * 1024,
+});
+
+const RUNNER_ARTIFACT_LIMIT_ENV = Object.freeze({
+  sourceArchive: "TAKOSUMI_RUNNER_SOURCE_ARCHIVE_MAX_BYTES",
+  state: "TAKOSUMI_RUNNER_STATE_ARTIFACT_MAX_BYTES",
+  plan: "TAKOSUMI_RUNNER_PLAN_ARTIFACT_MAX_BYTES",
+  output: "TAKOSUMI_RUNNER_OUTPUT_ARTIFACT_MAX_BYTES",
+  runnerResponse: "TAKOSUMI_RUNNER_RESPONSE_MAX_BYTES",
+});
+
+type RunnerArtifactKind =
+  | "source_archive"
+  | "state"
+  | "plan"
+  | "plan_json"
+  | "output"
+  | "runner_response"
+  | "state_pointer"
+  | "failure_detail";
+
+interface RunnerArtifactLimits {
+  readonly sourceArchive: number;
+  readonly state: number;
+  readonly plan: number;
+  readonly output: number;
+  readonly runnerResponse: number;
+  readonly statePointer: number;
+  readonly failureDetail: number;
+}
+
+interface PreparedRawOutputs {
+  readonly key: string;
+  readonly sealed: SealedArtifact;
+}
+
+export class RunnerArtifactSizeLimitError extends Error {
+  readonly code = "artifact_size_limit_exceeded";
+
+  constructor(
+    readonly artifact: RunnerArtifactKind,
+    readonly maxBytes: number,
+    readonly observedBytes: number,
+  ) {
+    super(
+      `${artifact} artifact exceeds ${maxBytes} byte limit ` +
+        `(observed at least ${observedBytes} bytes)`,
+    );
+    this.name = "RunnerArtifactSizeLimitError";
+  }
+}
 
 /**
  * Optional dispatch payload field locating the R2_STATE object for this run.
@@ -193,10 +258,12 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
   #stateCryptoInstance: StateArtifactCrypto | undefined;
   #lastStartupSeconds: number | undefined;
   readonly #localRunnerProxyUrl: URL | undefined;
+  readonly #artifactLimits: RunnerArtifactLimits;
 
   constructor(ctx: ContainerHostContext, env: CloudflareWorkerEnv) {
     super(ctx, env);
     this.#localRunnerProxyUrl = localOpenTofuRunnerProxyUrl(env);
+    this.#artifactLimits = runnerArtifactLimits(env);
     if (env.LOCAL_SUBSTRATE_TEST_BED === "1") {
       console.log("OpenTofu runner local proxy composition", {
         configured: Boolean(this.#localRunnerProxyUrl),
@@ -277,7 +344,12 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       this.#lastStartupSeconds = undefined;
       const response = await this.#fetchWithDurablePlanArtifacts(request);
       runSucceeded = response.ok;
-      const output = runDispatch ? await bufferedResponse(response) : response;
+      const output = runDispatch
+        ? await bufferedResponse(
+            response,
+            this.#artifactLimits.runnerResponse,
+          )
+        : response;
       return withRunnerStartupHeader(output, this.#lastStartupSeconds);
     } catch (error) {
       const url = new URL(request.url);
@@ -290,6 +362,18 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
           ? { stack: error.stack }
           : {}),
       });
+      if (error instanceof RunnerArtifactSizeLimitError) {
+        return Response.json(
+          {
+            error: "OpenTofu runner artifact exceeds configured byte limit",
+            errorCode: error.code,
+            artifact: error.artifact,
+            maxBytes: error.maxBytes,
+            observedBytes: error.observedBytes,
+          },
+          { status: 413 },
+        );
+      }
       return Response.json(
         {
           error: "OpenTofu runner artifact relay failed",
@@ -384,7 +468,10 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
           new Request(containerHealthUrl(baseUrl), { method: "GET" }),
         );
         if (!response.ok) {
-          const failure = await readRunnerFailureDetail(response);
+          const failure = await readRunnerFailureDetail(
+            response,
+            this.#artifactLimits.failureDetail,
+          );
           throw new Error(
             `container health check failed: ${response.status}${failure ? ` (${failure})` : ""}`,
           );
@@ -517,7 +604,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       await this.#restoreStateArtifact(runId, stateKeys, url);
     }
     await this.#ensureContainerReady(url);
-    const runnerResponse = await this.#containerFetchAfterReady(
+    const unboundedRunnerResponse = await this.#containerFetchAfterReady(
       () =>
         new Request(request.url, {
           method: request.method,
@@ -526,6 +613,12 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
           signal: request.signal,
         }),
       url,
+    );
+    // Bound every container result before any state/plan persistence. This also
+    // covers legacy state paths that do not otherwise parse the JSON payload.
+    const runnerResponse = await bufferedResponse(
+      unboundedRunnerResponse,
+      this.#artifactLimits.runnerResponse,
     );
     if (
       (envelope.action === "apply" || envelope.action === "destroy") &&
@@ -595,7 +688,10 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       url,
     );
     if (!runnerResponse.ok) return runnerResponse;
-    const payload = await readJsonObject(runnerResponse);
+    const payload = await readJsonObject(
+      runnerResponse,
+      this.#artifactLimits.runnerResponse,
+    );
     const archive = recordField(payload, "sourceArchive");
     if (archive && stringField(archive, "kind") === "object-storage") {
       await this.#verifyReusedSourceArchive(payload, archive, reuseSnapshot);
@@ -623,7 +719,11 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         `container source archive fetch failed: ${archiveResponse.status}`,
       );
     }
-    const bytes = new Uint8Array(await archiveResponse.arrayBuffer());
+    const bytes = await readBoundedResponseBytes(
+      archiveResponse,
+      "source_archive",
+      this.#artifactLimits.sourceArchive,
+    );
     const digest = await digestBytes(bytes);
     const expectedDigest = stringField(archive, "digest");
     if (expectedDigest && expectedDigest !== digest) {
@@ -670,6 +770,11 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     assertSafeSourceArchiveKey(archiveRef);
     const digest = requiredStringField(archive, "digest");
     const sizeBytes = positiveIntegerField(archive, "sizeBytes");
+    assertArtifactSize(
+      "source_archive",
+      this.#artifactLimits.sourceArchive,
+      sizeBytes,
+    );
     const reusedFromSnapshotId = requiredStringField(
       archive,
       "reusedFromSnapshotId",
@@ -698,7 +803,11 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     if (object.size !== reuseSnapshot.archiveSizeBytes) {
       throw new Error("source archive reuse size mismatch");
     }
-    const bytes = new Uint8Array(await object.arrayBuffer());
+    const bytes = await readBoundedR2ObjectBytes(
+      object,
+      "source_archive",
+      this.#artifactLimits.sourceArchive,
+    );
     const actualDigest = await digestBytes(bytes);
     if (actualDigest !== reuseSnapshot.archiveDigest) {
       throw new Error(`source archive reuse digest mismatch: ${actualDigest}`);
@@ -725,7 +834,11 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     if (!object) {
       throw new Error(`source archive object not found: ${sourceArchive.ref}`);
     }
-    const bytes = new Uint8Array(await object.arrayBuffer());
+    const bytes = await readBoundedR2ObjectBytes(
+      object,
+      "source_archive",
+      this.#artifactLimits.sourceArchive,
+    );
     const digest = await digestBytes(bytes);
     if (digest !== sourceArchive.digest) {
       throw new Error(`source archive digest mismatch on restore: ${digest}`);
@@ -735,11 +848,14 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       new Request(sourceArchiveRestoreUrl(baseUrl, runId), {
         method: "PUT",
         headers: { "content-type": SOURCE_ARCHIVE_CONTENT_TYPE },
-        body: bytes,
+        body: toArrayBuffer(bytes),
       }),
     );
     if (!response.ok) {
-      const failure = await readRunnerFailureDetail(response);
+      const failure = await readRunnerFailureDetail(
+        response,
+        this.#artifactLimits.failureDetail,
+      );
       throw new Error(
         `container source archive restore failed: ${response.status}${failure ? ` (${failure})` : ""}`,
       );
@@ -770,10 +886,19 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
           `dependency state object not found: ${depState.stateRef}`,
         );
       }
-      const ciphertext = new Uint8Array(await object.arrayBuffer());
+      const ciphertext = await readBoundedR2ObjectBytes(
+        object,
+        "state",
+        maxStateArtifactCiphertextBytes(this.#artifactLimits.state),
+      );
       const plaintext = await this.#stateCrypto().open(
         ciphertext,
         depState.digest,
+      );
+      assertArtifactSize(
+        "state",
+        this.#artifactLimits.state,
+        plaintext.byteLength,
       );
       await this.#ensureContainerReady(baseUrl);
       const response = await this.#containerFetch(
@@ -831,10 +956,19 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         : undefined);
     if (!resolved) return;
     const { pointer, object } = resolved;
-    const ciphertext = new Uint8Array(await object.arrayBuffer());
+    const ciphertext = await readBoundedR2ObjectBytes(
+      object,
+      "state",
+      maxStateArtifactCiphertextBytes(this.#artifactLimits.state),
+    );
     const plaintext = await this.#stateCrypto().open(
       ciphertext,
       pointer.digest,
+    );
+    assertArtifactSize(
+      "state",
+      this.#artifactLimits.state,
+      plaintext.byteLength,
     );
     await this.#ensureContainerReady(baseUrl);
     const response = await this.#containerFetch(
@@ -873,11 +1007,28 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         `container state artifact fetch failed: ${stateResponse.status}`,
       );
     }
-    const plaintext = new Uint8Array(await stateResponse.arrayBuffer());
+    const plaintext = await readBoundedResponseBytes(
+      stateResponse,
+      "state",
+      this.#artifactLimits.state,
+    );
     const sealed = await this.#stateCrypto().seal(plaintext);
+    const payload = await readJsonObject(
+      runnerResponse,
+      this.#artifactLimits.runnerResponse,
+    );
+    // Validate and encrypt outputs before the first durable write. A size-limit
+    // failure must not leave a new state generation or current.json behind.
+    const preparedRawOutputs =
+      action === "apply"
+        ? await this.#prepareRawOutputs(rawOutputRef!, payload)
+        : undefined;
     const bucket = this.#r2State();
     assertStateRefForScope(scope);
     const objectKey = scope.stateRef;
+    const persistedRawOutputRef = preparedRawOutputs
+      ? await this.#persistPreparedRawOutputs(runId, preparedRawOutputs)
+      : undefined;
     await putR2ObjectWithRetry(
       bucket,
       objectKey,
@@ -888,6 +1039,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
           "takosumi-run-id": runId,
           "takosumi-content-digest": sealed.contentDigest,
           "takosumi-ciphertext-length": String(sealed.ciphertextLength),
+          "takosumi-encryption-format": sealed.format,
           "takosumi-generation": String(scope.generation),
         },
       },
@@ -914,14 +1066,6 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       },
       "state pointer",
     );
-    const payload = await readJsonObject(runnerResponse);
-    // M7: an apply persists the raw `tofu output -json` envelope encrypted at
-    // rest to R2_ARTIFACTS and echoes `rawOutputRef` so the
-    // controller records it on the Output. A destroy has no outputs.
-    const persistedRawOutputRef =
-      action === "apply"
-        ? await this.#persistRawOutputs(runId, rawOutputRef!, payload)
-        : undefined;
     return jsonResponse(
       {
         ...payload,
@@ -943,32 +1087,46 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
   // which carries the per-output sensitive flags) and write it encrypted at rest
   // to R2_ARTIFACTS at the host-allocated ref. Returns the ref for the controller
   // to record on the Output. No-op when the apply produced no outputs.
-  async #persistRawOutputs(
-    runId: string,
+  async #prepareRawOutputs(
     rawOutputRef: string,
     payload: Record<string, unknown>,
-  ): Promise<string | undefined> {
+  ): Promise<PreparedRawOutputs | undefined> {
     const outputs = payload.outputs;
     if (outputs === undefined || outputs === null) return undefined;
     assertSafeArtifactObjectKey(rawOutputRef, "raw output");
     const key = rawOutputRef;
     const plaintext = new TextEncoder().encode(JSON.stringify(outputs));
+    assertArtifactSize(
+      "output",
+      this.#artifactLimits.output,
+      plaintext.byteLength,
+    );
     const sealed = await this.#stateCrypto().seal(plaintext);
+    return { key, sealed };
+  }
+
+  async #persistPreparedRawOutputs(
+    runId: string,
+    prepared: PreparedRawOutputs,
+  ): Promise<string> {
     await putR2ObjectWithRetry(
       this.env.R2_ARTIFACTS,
-      key,
-      sealed.ciphertext,
+      prepared.key,
+      prepared.sealed.ciphertext,
       {
         httpMetadata: { contentType: ENCRYPTED_ARTIFACT_CONTENT_TYPE },
         customMetadata: {
           "takosumi-run-id": runId,
-          "takosumi-content-digest": sealed.contentDigest,
-          "takosumi-ciphertext-length": String(sealed.ciphertextLength),
+          "takosumi-content-digest": prepared.sealed.contentDigest,
+          "takosumi-ciphertext-length": String(
+            prepared.sealed.ciphertextLength,
+          ),
+          "takosumi-encryption-format": prepared.sealed.format,
         },
       },
       "raw outputs",
     );
-    return key;
+    return prepared.key;
   }
 
   async #adoptCompletedStateMutationFromR2(
@@ -999,9 +1157,18 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         `completed ${action} state digest mismatch for ${current.objectKey}`,
       );
     }
-    await this.#stateCrypto().open(
-      new Uint8Array(await object.arrayBuffer()),
+    const completedState = await this.#stateCrypto().open(
+      await readBoundedR2ObjectBytes(
+        object,
+        "state",
+        maxStateArtifactCiphertextBytes(this.#artifactLimits.state),
+      ),
       current.digest,
+    );
+    assertArtifactSize(
+      "state",
+      this.#artifactLimits.state,
+      completedState.byteLength,
     );
     const rawOutputs =
       action === "apply" && rawOutputRef
@@ -1040,8 +1207,17 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     const object = await this.env.R2_ARTIFACTS.get(key);
     if (!object) return undefined;
     const plaintext = await this.#stateCrypto().open(
-      new Uint8Array(await object.arrayBuffer()),
+      await readBoundedR2ObjectBytes(
+        object,
+        "output",
+        maxStateArtifactCiphertextBytes(this.#artifactLimits.output),
+      ),
       object.customMetadata?.["takosumi-content-digest"],
+    );
+    assertArtifactSize(
+      "output",
+      this.#artifactLimits.output,
+      plaintext.byteLength,
     );
     const parsed = JSON.parse(new TextDecoder().decode(plaintext)) as unknown;
     if (!isRecord(parsed)) {
@@ -1064,8 +1240,17 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       );
     }
     const plaintext = await this.#stateCrypto().open(
-      new Uint8Array(await object.arrayBuffer()),
+      await readBoundedR2ObjectBytes(
+        object,
+        "state",
+        maxStateArtifactCiphertextBytes(this.#artifactLimits.state),
+      ),
       restoreState.digest,
+    );
+    assertArtifactSize(
+      "state",
+      this.#artifactLimits.state,
+      plaintext.byteLength,
     );
     const sealed = await this.#stateCrypto().seal(plaintext);
     assertStateRefForScope(scope);
@@ -1080,6 +1265,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
           "takosumi-run-id": runId,
           "takosumi-content-digest": sealed.contentDigest,
           "takosumi-ciphertext-length": String(sealed.ciphertextLength),
+          "takosumi-encryption-format": sealed.format,
           "takosumi-generation": String(scope.generation),
           "takosumi-restored-from-object": restoreState.stateRef,
         },
@@ -1123,7 +1309,10 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     baseUrl: URL,
     stateScope: StateScope | undefined,
   ): Promise<Response> {
-    const payload = await readJsonObject(runnerResponse);
+    const payload = await readJsonObject(
+      runnerResponse,
+      this.#artifactLimits.runnerResponse,
+    );
     const artifact = recordField(payload, "planArtifact");
     if (!artifact || stringField(artifact, "kind") !== "runner-local") {
       return jsonResponse(payload, runnerResponse.status);
@@ -1136,7 +1325,11 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         `container plan artifact fetch failed: ${artifactResponse.status}`,
       );
     }
-    const bytes = new Uint8Array(await artifactResponse.arrayBuffer());
+    const bytes = await readBoundedResponseBytes(
+      artifactResponse,
+      "plan",
+      this.#artifactLimits.plan,
+    );
     const digest = await digestBytes(bytes);
     const expectedDigest = stringField(artifact, "digest");
     if (expectedDigest && expectedDigest !== digest) {
@@ -1159,6 +1352,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
           "takosumi-plan-run-id": runId,
           "takosumi-content-digest": digest,
           "takosumi-ciphertext-length": String(sealed.ciphertextLength),
+          "takosumi-encryption-format": sealed.format,
         },
       },
       "plan artifact",
@@ -1200,24 +1394,18 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       );
     }
     const maxBytes = planJsonArtifactMaxBytes(this.env);
-    const contentLength = response.headers.get("content-length");
-    const sizeBytes = contentLength ? Number(contentLength) : NaN;
-    if (!Number.isSafeInteger(sizeBytes) || sizeBytes > maxBytes) {
-      if (response.body) {
-        try {
-          await response.body.cancel();
-        } catch {
-          // Best-effort cancellation only; the artifact is optional review data.
-        }
-      }
+    let bytes: Uint8Array;
+    try {
+      bytes = await readBoundedResponseBytes(response, "plan_json", maxBytes);
+    } catch (error) {
+      if (!(error instanceof RunnerArtifactSizeLimitError)) throw error;
       console.warn("skipping oversized OpenTofu plan JSON artifact", {
         runId,
-        sizeBytes: Number.isSafeInteger(sizeBytes) ? sizeBytes : undefined,
+        sizeBytes: error.observedBytes,
         maxBytes,
       });
       return;
     }
-    const bytes = new Uint8Array(await response.arrayBuffer());
     const digest = await digestBytes(bytes);
     const sealed = await this.#stateCrypto().seal(zstdCompressRaw(bytes));
     await putR2ObjectWithRetry(
@@ -1230,6 +1418,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
           "takosumi-plan-run-id": runId,
           "takosumi-content-digest": digest,
           "takosumi-ciphertext-length": String(sealed.ciphertextLength),
+          "takosumi-encryption-format": sealed.format,
         },
       },
       "plan json artifact",
@@ -1273,8 +1462,21 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     if (!encrypted) {
       throw new Error(`plan artifact object not found: ${key}`);
     }
-    const ciphertext = new Uint8Array(await encrypted.arrayBuffer());
-    return await this.#stateCrypto().open(ciphertext, expectedDigest);
+    const ciphertext = await readBoundedR2ObjectBytes(
+      encrypted,
+      "plan",
+      maxStateArtifactCiphertextBytes(this.#artifactLimits.plan),
+    );
+    const plaintext = await this.#stateCrypto().open(
+      ciphertext,
+      expectedDigest,
+    );
+    assertArtifactSize(
+      "plan",
+      this.#artifactLimits.plan,
+      plaintext.byteLength,
+    );
+    return plaintext;
   }
 
   async #restoreStateArtifact(
@@ -1285,10 +1487,19 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     for (const key of keys) {
       const object = await this.env.R2_ARTIFACTS.get(encryptedKey(key));
       if (!object) continue;
-      const ciphertext = new Uint8Array(await object.arrayBuffer());
+      const ciphertext = await readBoundedR2ObjectBytes(
+        object,
+        "state",
+        maxStateArtifactCiphertextBytes(this.#artifactLimits.state),
+      );
       const bytes = await this.#stateCrypto().open(
         ciphertext,
         object.customMetadata?.["takosumi-content-digest"],
+      );
+      assertArtifactSize(
+        "state",
+        this.#artifactLimits.state,
+        bytes.byteLength,
       );
       await this.#ensureContainerReady(baseUrl);
       const response = await this.#containerFetch(
@@ -1321,7 +1532,11 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         `container state artifact fetch failed: ${response.status}`,
       );
     }
-    const bytes = new Uint8Array(await response.arrayBuffer());
+    const bytes = await readBoundedResponseBytes(
+      response,
+      "state",
+      this.#artifactLimits.state,
+    );
     const sealed = await this.#stateCrypto().seal(bytes);
     for (const key of keys) {
       await putR2ObjectWithRetry(
@@ -1334,6 +1549,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
             "takosumi-run-id": runId,
             "takosumi-content-digest": sealed.contentDigest,
             "takosumi-ciphertext-length": String(sealed.ciphertextLength),
+            "takosumi-encryption-format": sealed.format,
           },
         },
         "state artifact",
@@ -1483,9 +1699,198 @@ function runnerShouldShutdownAfterRun(
   return action !== "plan";
 }
 
-async function bufferedResponse(response: Response): Promise<Response> {
-  const body = await response.arrayBuffer();
-  return new Response(body, {
+function runnerArtifactLimits(env: CloudflareWorkerEnv): RunnerArtifactLimits {
+  return {
+    sourceArchive: configuredArtifactLimit(
+      env,
+      RUNNER_ARTIFACT_LIMIT_ENV.sourceArchive,
+      RUNNER_ARTIFACT_LIMIT_DEFAULTS.sourceArchive,
+    ),
+    state: configuredArtifactLimit(
+      env,
+      RUNNER_ARTIFACT_LIMIT_ENV.state,
+      RUNNER_ARTIFACT_LIMIT_DEFAULTS.state,
+    ),
+    plan: configuredArtifactLimit(
+      env,
+      RUNNER_ARTIFACT_LIMIT_ENV.plan,
+      RUNNER_ARTIFACT_LIMIT_DEFAULTS.plan,
+    ),
+    output: configuredArtifactLimit(
+      env,
+      RUNNER_ARTIFACT_LIMIT_ENV.output,
+      RUNNER_ARTIFACT_LIMIT_DEFAULTS.output,
+    ),
+    runnerResponse: configuredArtifactLimit(
+      env,
+      RUNNER_ARTIFACT_LIMIT_ENV.runnerResponse,
+      RUNNER_ARTIFACT_LIMIT_DEFAULTS.runnerResponse,
+    ),
+    statePointer: RUNNER_ARTIFACT_LIMIT_DEFAULTS.statePointer,
+    failureDetail: RUNNER_ARTIFACT_LIMIT_DEFAULTS.failureDetail,
+  };
+}
+
+function configuredArtifactLimit(
+  env: CloudflareWorkerEnv,
+  name: string,
+  hardMaximum: number,
+): number {
+  const raw = (env as unknown as Readonly<Record<string, unknown>>)[name];
+  const parsed =
+    typeof raw === "number" || typeof raw === "string" ? Number(raw) : NaN;
+  return Number.isSafeInteger(parsed) && parsed > 0
+    ? Math.min(parsed, hardMaximum)
+    : hardMaximum;
+}
+
+function assertArtifactSize(
+  artifact: RunnerArtifactKind,
+  maxBytes: number,
+  observedBytes: number,
+): void {
+  if (observedBytes > maxBytes) {
+    throw new RunnerArtifactSizeLimitError(
+      artifact,
+      maxBytes,
+      observedBytes,
+    );
+  }
+}
+
+/**
+ * Reads an HTTP body without ever invoking the runtime's unbounded
+ * `arrayBuffer()`/`text()` helpers. A trustworthy Content-Length can reject
+ * oversized bodies before the first allocation; absent, invalid, or forged
+ * lengths still pass through the byte-counting stream guard.
+ */
+export async function readBoundedResponseBytes(
+  response: Response,
+  artifact: RunnerArtifactKind,
+  maxBytes: number,
+): Promise<Uint8Array> {
+  const declaredLength = parseContentLength(
+    response.headers.get("content-length"),
+  );
+  if (declaredLength !== undefined && declaredLength > maxBytes) {
+    await cancelResponseBody(response);
+    throw new RunnerArtifactSizeLimitError(
+      artifact,
+      maxBytes,
+      declaredLength,
+    );
+  }
+  if (!response.body) return new Uint8Array();
+
+  const initialCapacity =
+    declaredLength !== undefined
+      ? declaredLength
+      : Math.min(BOUNDED_STREAM_INITIAL_BYTES, maxBytes);
+  let buffer = new Uint8Array(initialCapacity);
+  let length = 0;
+  const reader = response.body.getReader();
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = value instanceof Uint8Array ? value : new Uint8Array(value);
+      const nextLength = length + chunk.byteLength;
+      if (!Number.isSafeInteger(nextLength) || nextLength > maxBytes) {
+        try {
+          await reader.cancel();
+        } catch {
+          // The deterministic limit error is authoritative.
+        }
+        throw new RunnerArtifactSizeLimitError(
+          artifact,
+          maxBytes,
+          Number.isSafeInteger(nextLength) ? nextLength : maxBytes + 1,
+        );
+      }
+      if (nextLength > buffer.byteLength) {
+        const doubled =
+          buffer.byteLength === 0
+            ? Math.min(BOUNDED_STREAM_INITIAL_BYTES, maxBytes)
+            : Math.min(buffer.byteLength * 2, maxBytes);
+        const nextCapacity = Math.max(nextLength, doubled);
+        const replacement = new Uint8Array(nextCapacity);
+        replacement.set(buffer.subarray(0, length));
+        buffer = replacement;
+      }
+      buffer.set(chunk, length);
+      length = nextLength;
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return buffer.subarray(0, length);
+}
+
+async function readBoundedR2ObjectBytes(
+  object: R2ObjectBody,
+  artifact: RunnerArtifactKind,
+  maxBytes: number,
+): Promise<Uint8Array> {
+  if (
+    !Number.isSafeInteger(object.size) ||
+    object.size < 0
+  ) {
+    throw new RunnerArtifactSizeLimitError(
+      artifact,
+      maxBytes,
+      maxBytes + 1,
+    );
+  }
+  assertArtifactSize(artifact, maxBytes, object.size);
+  // The current Cloudflare R2ObjectBody exposes `body`, while the repository's
+  // narrow binding/test doubles still model only arrayBuffer(). Prefer the real
+  // stream so a future adapter cannot forge `size` and force an unbounded read.
+  const body = (
+    object as unknown as {
+      readonly body?: ReadableStream<Uint8Array>;
+    }
+  ).body;
+  if (body) {
+    return await readBoundedResponseBytes(
+      new Response(body, {
+        headers: { "content-length": String(object.size) },
+      }),
+      artifact,
+      maxBytes,
+    );
+  }
+  const bytes = new Uint8Array(await object.arrayBuffer());
+  // R2's size is authoritative in production; checking the materialized bytes
+  // as well keeps test doubles and future adapters fail-closed.
+  assertArtifactSize(artifact, maxBytes, bytes.byteLength);
+  return bytes;
+}
+
+function parseContentLength(value: string | null): number | undefined {
+  if (value === null || !/^(?:0|[1-9][0-9]*)$/u.test(value)) return undefined;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) ? parsed : undefined;
+}
+
+async function cancelResponseBody(response: Response): Promise<void> {
+  if (!response.body) return;
+  try {
+    await response.body.cancel();
+  } catch {
+    // Best effort only; the caller still receives the deterministic limit error.
+  }
+}
+
+async function bufferedResponse(
+  response: Response,
+  maxBytes: number,
+): Promise<Response> {
+  const body = await readBoundedResponseBytes(
+    response,
+    "runner_response",
+    maxBytes,
+  );
+  return new Response(toArrayBuffer(body), {
     status: response.status,
     statusText: response.statusText,
     headers: response.headers,
@@ -1555,7 +1960,7 @@ function planJsonArtifactUrl(baseUrl: URL, runId: string): string {
 function planJsonArtifactMaxBytes(env: CloudflareWorkerEnv): number {
   const parsed = Number(env.TAKOSUMI_PLAN_JSON_ARTIFACT_MAX_BYTES);
   return Number.isSafeInteger(parsed) && parsed > 0
-    ? parsed
+    ? Math.min(parsed, DEFAULT_PLAN_JSON_ARTIFACT_MAX_BYTES)
     : DEFAULT_PLAN_JSON_ARTIFACT_MAX_BYTES;
 }
 
@@ -1647,7 +2052,11 @@ async function readCurrentStatePointer(
   const object = await bucket.get(currentStateKey(scope));
   if (!object) return undefined;
   const text = new TextDecoder().decode(
-    new Uint8Array(await object.arrayBuffer()),
+    await readBoundedR2ObjectBytes(
+      object,
+      "state_pointer",
+      RUNNER_ARTIFACT_LIMIT_DEFAULTS.statePointer,
+    ),
   );
   const parsed = JSON.parse(text) as unknown;
   if (!isRecord(parsed)) {
@@ -2323,8 +2732,11 @@ function parseRunEnvelope(bodyText: string): {
 
 async function readJsonObject(
   response: Response,
+  maxBytes: number,
 ): Promise<Record<string, unknown>> {
-  const text = await response.text();
+  const text = new TextDecoder().decode(
+    await readBoundedResponseBytes(response, "runner_response", maxBytes),
+  );
   const value = text.length > 0 ? (JSON.parse(text) as unknown) : {};
   if (isRecord(value)) return value;
   throw new Error("OpenTofu runner response must be a JSON object");
@@ -2332,8 +2744,11 @@ async function readJsonObject(
 
 async function readRunnerFailureDetail(
   response: Response,
+  maxBytes: number,
 ): Promise<string | undefined> {
-  const text = await response.text();
+  const text = new TextDecoder().decode(
+    await readBoundedResponseBytes(response, "failure_detail", maxBytes),
+  );
   if (text.length === 0) return undefined;
   const redactedText = redactString(text, { redactedValue: "[redacted]" });
   try {
@@ -2463,6 +2878,13 @@ async function digestBytes(bytes: Uint8Array): Promise<string> {
 // so it satisfies the DOM `BufferSource` / `BodyInit` typings under TS 5.7+
 // typed-array generics. Mirrors `worker/src/state_crypto.ts#toArrayBuffer`.
 function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  if (
+    bytes.buffer instanceof ArrayBuffer &&
+    bytes.byteOffset === 0 &&
+    bytes.byteLength === bytes.buffer.byteLength
+  ) {
+    return bytes.buffer;
+  }
   return bytes.buffer.slice(
     bytes.byteOffset,
     bytes.byteOffset + bytes.byteLength,

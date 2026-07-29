@@ -149,6 +149,71 @@ test("OpenTofu runner Durable Object promotes runner-local plan artifact to R2",
   assert.notDeepEqual(encrypted, PLAN_BYTES);
 });
 
+test("OpenTofu runner rejects one-byte-oversized plans before R2 persistence", async () => {
+  const r2 = new FakeR2Bucket();
+  const runner = runnerWithContainer(
+    r2,
+    {
+      async containerFetch(request) {
+        const path = new URL(request.url).pathname;
+        if (request.method === "POST" && path === "/runs/plan_limit") {
+          return Response.json({
+            status: "succeeded",
+            exitCode: 0,
+            planDigest: PLAN_DIGEST,
+            planArtifact: {
+              kind: "runner-local",
+              ref: "runner-local://plan_limit/tfplan",
+              digest: PLAN_DIGEST,
+            },
+          });
+        }
+        if (
+          request.method === "GET" &&
+          path === "/runs/plan_limit/artifacts/tfplan"
+        ) {
+          return new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.enqueue(PLAN_BYTES.slice(0, 5));
+                controller.enqueue(PLAN_BYTES.slice(5));
+                controller.close();
+              },
+            }),
+          );
+        }
+        return Response.json({ error: "unexpected" }, { status: 500 });
+      },
+    },
+    {
+      env: {
+        TAKOSUMI_RUNNER_PLAN_ARTIFACT_MAX_BYTES: String(
+          PLAN_BYTES.byteLength - 1,
+        ),
+      } as unknown as Partial<CloudflareWorkerEnv>,
+    },
+  );
+
+  const response = await runner.fetch(
+    new Request("https://runner/runs/plan_limit", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        kind: "takosumi.opentofu-run@v1",
+        action: "plan",
+        runId: "plan_limit",
+        request: {},
+      }),
+    }),
+  );
+
+  assert.equal(response.status, 413);
+  const payload = (await response.json()) as Record<string, unknown>;
+  assert.equal(payload.errorCode, "artifact_size_limit_exceeded");
+  assert.equal(payload.artifact, "plan");
+  assert.equal(r2.body("opentofu-plan-runs/plan_limit/tfplan.enc"), undefined);
+});
+
 test("OpenTofu runner Durable Object retries transient R2 put errors", async () => {
   const r2 = new FlakyR2Bucket({
     failKey: "opentofu-plan-runs/plan_retry/tfplan.enc",
