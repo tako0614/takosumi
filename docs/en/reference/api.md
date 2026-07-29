@@ -563,12 +563,12 @@ placement.
 This is an operator/advanced API. The default deploy UX exposes the service
 form, required inputs, price, preview, and apply without requiring users to
 understand TargetPool, Policy, or Adapter configuration.
-`/v1/capabilities.adapters` may return operator-defined adapter tokens as
-additional boolean keys alongside the known keys (`opentofu`, `aws`,
-`cloudflare`, `kubernetes`, `vm`, and `takosumi_native`). Those extension keys
-add implementations for existing typed shapes; they do not create new HCL
-resource types at runtime. New portable Forms require a Takoform exact Form
-Package/schema/typed-provider release and Takosumi host/adapter conformance.
+Core always advertises only `opentofu` in `/v1/capabilities.adapters`. Every
+other adapter key is an opaque operator-declared token. Clients must not branch
+on vendor or edition names. Those extension keys add implementations for
+existing typed shapes; they do not create new HCL resource types at runtime.
+New portable Forms require a Takoform exact Form Package/schema/typed-provider
+release and Takosumi host/adapter conformance.
 
 ```http
 PUT    /v1/target-pools/{name}

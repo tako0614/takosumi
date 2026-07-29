@@ -961,7 +961,7 @@ export const en: Record<keyof typeof ja, string> = {
 
   // --- connections -------------------------------------------------------------
   "conn.subtitle":
-    "Save your own keys (cloud tokens and access keys). With your key, any provider runs — no restrictions, no approval needed.",
+    "Connect an external provider with your own credentials. Availability follows the operator provider policy, runner capability, and Run approval rules.",
   "conn.providerConnections.title": "Connected accounts",
   "conn.expiresAt": "Expires: {date}",
   "conn.oauth.connected": "Provider connection saved.",
@@ -994,9 +994,9 @@ export const en: Record<keyof typeof ja, string> = {
   "conn.guided.instructions": "Show steps",
   "conn.byok.title": "Connect any provider with your own key",
   "conn.byok.body":
-    "Just enter where the provider comes from (its source) and the environment variables (keys) it uses. No restrictions, no approval — any OpenTofu / Terraform provider runs.",
+    "Enter the provider source and the environment variables it requires. The connection remains subject to provider policy, runner capability, and Run approval.",
   "conn.byok.noBillingNote":
-    "Connections that use your own key are never billed by Takosumi. Only resources Takosumi provides are billed.",
+    "Any Takosumi charge is shown during preview. Charges from the external provider are billed separately by that provider.",
   "conn.byok.usePreset": "Use an installed recipe instead",
   "conn.register": "Save connection",
   "conn.registering": "Saving…",
@@ -1019,7 +1019,7 @@ export const en: Record<keyof typeof ja, string> = {
   "conn.error.fieldRequired": "{field} is required.",
   "conn.empty.title": "Connect any provider with your own key",
   "conn.empty.message":
-    "Enter your own key (a cloud token or key) and any provider runs — no restrictions, no approval, no billing.",
+    "Connect your own credentials to use an external provider within the installed policy, runner, approval, and billing rules.",
   "conn.test": "Check access",
   "conn.testing": "Checking…",
   "conn.test.notReady": "The account is not ready yet (status: {status}).",

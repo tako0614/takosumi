@@ -48,10 +48,6 @@ const controlApiSource = readFileSync(
   resolve(here, "../../../../../dashboard/src/lib/control-api.ts"),
   "utf8",
 );
-const connectionContractSource = readFileSync(
-  resolve(here, "../../../../../contract/connections.ts"),
-  "utf8",
-);
 const appDetailViewSource = readFileSync(
   resolve(here, "../../../../../dashboard/src/views/apps/AppDetailView.tsx"),
   "utf8",
@@ -251,94 +247,31 @@ describe("/new Provider Connections return context", () => {
     expect(newAppViewSource).toContain("providerConnectionsForRow(row)");
   });
 
-  test("/new uses a managed provider connection and its public namespace without hard-coded app behavior", () => {
-    expect(newAppViewSource).toContain("selectedManagedProviderConnection");
-    expect(newAppViewSource).toContain(
-      "return readyProviderConnections().find(",
+  test("/new never turns Store presentation or operator connections into execution authority", () => {
+    expect(newAppViewSource).not.toContain(
+      "managedStoreProviderForCurrentSource",
     );
-    expect(newAppViewSource).toContain("if (!row.connectionId) continue;");
+    expect(newAppViewSource).not.toContain("selectedManagedProviderConnection");
+    expect(newAppViewSource).not.toContain("managedProviderVariableDefaults");
+    expect(newAppViewSource).not.toContain("isPublicManagedProviderConnection");
+    expect(newAppViewSource).not.toContain("rowCanUseManagedProviderFallback");
     expect(newAppViewSource).toContain(
-      "if (!managedStoreProviderForCurrentSource()) return;",
-    );
-    expect(newAppViewSource).toContain(
-      "void loadProviderConnections().catch(() => {});",
-    );
-    expect(newAppViewSource).toContain("managedProviderVariableDefaults");
-    expect(newAppViewSource).toContain("managedStoreProviderForCurrentSource");
-    expect(newAppViewSource).toContain("managedProviderConnectionForRow");
-    expect(newAppViewSource).toContain("rowCanUseManagedProviderFallback");
-    expect(newAppViewSource).toContain("hasManagedProviderFallback");
-    expect(newAppViewSource).toContain("rowHasManagedProviderDefault");
-    expect(newAppViewSource).toContain(
-      "const managed = managedProviderConnectionForRow(row)",
-    );
-    expect(newAppViewSource).toContain("const connectionId = managed?.id");
-    expect(newAppViewSource).toContain(
-      "if (rowCanUseManagedProviderFallback(row)) return false",
+      'connection.scope === "workspace" && connection.status === "verified"',
     );
     expect(newAppViewSource).toContain(
-      "if (rowHasManagedProviderDefault(row)) return false",
-    );
-    expect(newAppViewSource).toContain(
-      "if (rowCanUseManagedProviderFallback(row)) continue",
+      "provider.allowed && provider.credentialRequired === true",
     );
     expect(newAppViewSource).toContain(
       ".filter((row) => row.connectionId.trim())",
     );
-    expect(newAppViewSource).toContain("if (!connection) return {}");
     expect(newAppViewSource).toContain(
-      "const isUsableManagedProviderConnection = (connection: ProviderConnection)",
+      "const effectiveManagedBaseDomain = (declared?: string)",
     );
-    expect(newAppViewSource).toContain('connection.status === "pending" &&');
-    expect(newAppViewSource).toContain(
-      "isPublicManagedProviderConnection(connection)",
-    );
-    expect(connectionContractSource).toContain(
-      'connection.scope === "operator" &&',
-    );
-    expect(connectionContractSource).toContain(
-      "connection.workspaceId === undefined &&",
-    );
-    expect(connectionContractSource).toContain(
-      "connection.scopeHints?.managedProvider === true &&",
-    );
-    expect(connectionContractSource).toContain(
-      "managedProviderProfile(connection.scopeHints) !== undefined",
-    );
+    expect(newAppViewSource).toContain("managedBaseDomain(declared)");
     expect(newAppViewSource).not.toContain(
-      "connection.scopeHints.providerConfig?.base_url",
+      "scopeHints?.managedPublicBaseDomain",
     );
-    expect(newAppViewSource).toContain(
-      "visibleProviderConnections().filter(isReadyProviderConnection)",
-    );
-    expect(newAppViewSource).toContain(
-      "new Set(compatibility()?.rootModuleVariables ?? [])",
-    );
-    expect(newAppViewSource).toContain("installExperienceForCurrentSource");
-    expect(newAppViewSource).toContain(
-      "const publicEndpoint = installExperiencePublicEndpoint(installExperience)",
-    );
-    expect(newAppViewSource).toContain("publicEndpoint?.subdomainVariable");
-    expect(newAppViewSource).toContain("publicEndpoint?.urlVariable");
-    expect(newAppViewSource).not.toContain('variables.has("worker_name")');
-    expect(newAppViewSource).not.toContain('variables.has("app_url")');
-    expect(newAppViewSource).not.toContain('setDefault("worker_name"');
-    expect(newAppViewSource).not.toContain('setDefault("app_url"');
-    expect(newAppViewSource).toContain("managedBaseDomain");
-    expect(newAppViewSource).toContain("effectiveManagedBaseDomain");
-    expect(newAppViewSource).toContain("managedPublicBaseDomain");
-    expect(newAppViewSource).toContain(
-      "const managedAppLabel = currentSubdomain",
-    );
-    expect(newAppViewSource).toContain("managedServiceLabel(workspaceHandle()");
-    expect(newAppViewSource).toContain("routePatternFromAppUrl");
-    expect(newAppViewSource).toContain("const currentSubdomain =");
-    expect(newAppViewSource).toContain("const currentAppUrl =");
-    expect(newAppViewSource).toContain(
-      "connection.scopeHints?.moduleInputDefaults ?? {}",
-    );
-    expect(newAppViewSource).not.toContain('"cloudflare_route_zone_id"');
-    expect(newAppViewSource).not.toContain("connection.scopeHints?.zoneId");
+    expect(newAppViewSource).not.toContain("scopeHints?.moduleInputDefaults");
   });
 
   test("/new only asks for Provider Connections from explicit compatibility data", () => {

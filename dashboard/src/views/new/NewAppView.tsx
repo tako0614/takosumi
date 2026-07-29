@@ -53,7 +53,6 @@ import {
   Trash,
 } from "lucide-solid";
 import {
-  isPublicManagedProviderConnection,
   installExperienceInitialSecret,
   installExperiencePublicEndpoint,
   installExperienceServiceNameVariable,
@@ -202,7 +201,6 @@ import {
   setStoreJsonVariable,
   isJsonRecord,
   installVariableDisplayValue,
-  routePatternFromAppUrl,
   managedBaseDomain,
   isSafePlainEnvName,
   storeKindFromStoreListing,
@@ -1002,8 +1000,7 @@ function Inner() {
   const supportsManagedPublicHostnameChoice = () =>
     Boolean(
       installExperiencePublicEndpoint(installExperienceForCurrentSource())
-        ?.subdomainVariable &&
-      (selectedManagedProviderConnection() || hasManagedProviderFallback()),
+        ?.subdomainVariable,
     );
   // Preview the FINAL managed hostname (workspace-prefixed + base domain) the
   // deploy will use, so the workspace prefix is not a surprise. Empty until
@@ -1225,7 +1222,6 @@ function Inner() {
       variables[serviceNameVariable] = serviceNameInputValue();
     }
     mergeEnvVariables(variables, normalizedEnvVariables());
-    Object.assign(variables, managedProviderVariableDefaults(variables));
     return Object.keys(variables).length > 0 ? variables : undefined;
   };
   const currentInstallReturnPath = () =>
@@ -1242,89 +1238,8 @@ function Inner() {
     providerConnectionsHrefForInstallReturn(currentInstallReturnPath());
 
   const visibleConnections = () => connections() ?? [];
-  const selectedManagedProviderConnection = ():
-    ProviderConnection | undefined => {
-    for (const row of providerRows()) {
-      if (!row.connectionId) continue;
-      const selected = providerConnectionsForProvider(row.provider).find(
-        (candidate) => candidate.id === row.connectionId,
-      );
-      if (selected) {
-        return isPublicManagedProviderConnection(selected)
-          ? selected
-          : undefined;
-      }
-    }
-    const managedProvider = managedStoreProviderForCurrentSource();
-    if (!managedProvider) return undefined;
-    return readyProviderConnections().find(
-      (candidate) =>
-        isPublicManagedProviderConnection(candidate) &&
-        sameProviderSource(managedProvider, candidate.providerSource),
-    );
-  };
   const effectiveManagedBaseDomain = (declared?: string): string | undefined =>
-    managedBaseDomain(
-      selectedManagedProviderConnection()?.scopeHints
-        ?.managedPublicBaseDomain ?? declared,
-    );
-  const managedProviderVariableDefaults = (
-    current: Readonly<Record<string, JsonValue>>,
-  ): Record<string, JsonValue> => {
-    const connection = selectedManagedProviderConnection();
-    if (!connection) return {};
-    const variables = new Set(compatibility()?.rootModuleVariables ?? []);
-    if (variables.size === 0) return {};
-    const defaults: Record<string, JsonValue> = {};
-    const setDefault = (name: string, value: JsonValue | undefined) => {
-      if (!variables.has(name)) return;
-      if (current[name] !== undefined) return;
-      if (value === undefined || value === "") return;
-      defaults[name] = value;
-    };
-    const installExperience = installExperienceForCurrentSource();
-    const publicEndpoint = installExperiencePublicEndpoint(installExperience);
-    for (const [name, value] of Object.entries(
-      connection.scopeHints?.moduleInputDefaults ?? {},
-    )) {
-      setDefault(name, value);
-    }
-    if (publicEndpoint) {
-      const subdomainVariable = publicEndpoint.subdomainVariable?.trim();
-      const urlVariable = publicEndpoint.urlVariable?.trim();
-      const routePatternVariable = publicEndpoint.routePatternVariable?.trim();
-      const publicBaseDomain = effectiveManagedBaseDomain(
-        publicEndpoint.baseDomain,
-      );
-      const currentSubdomain =
-        subdomainVariable && typeof current[subdomainVariable] === "string"
-          ? current[subdomainVariable].trim()
-          : "";
-      const currentAppUrl =
-        urlVariable && typeof current[urlVariable] === "string"
-          ? current[urlVariable].trim()
-          : "";
-      const managedAppLabel = currentSubdomain
-        ? managedHostnameLabel(currentSubdomain)
-        : "";
-      const managedAppHost =
-        managedAppLabel && publicBaseDomain
-          ? `${managedAppLabel}.${publicBaseDomain}`
-          : "";
-      const managedAppUrl =
-        currentAppUrl || (managedAppHost ? `https://${managedAppHost}` : "");
-      if (managedAppUrl && urlVariable) {
-        setDefault(urlVariable, managedAppUrl);
-      }
-      if (managedAppUrl && routePatternVariable) {
-        setDefault(
-          routePatternVariable,
-          routePatternFromAppUrl(managedAppUrl) ?? `${managedAppHost}/*`,
-        );
-      }
-    }
-    return defaults;
-  };
+    managedBaseDomain(declared);
   const isServiceIdentityStoreInput = (
     entry: StoreEntry,
     field: StoreInputField,
@@ -1520,12 +1435,8 @@ function Inner() {
     row.credentialRequired;
 
   const visibleProviderConnections = () => providerConnections() ?? [];
-  const isUsableManagedProviderConnection = (connection: ProviderConnection) =>
-    connection.status === "pending" &&
-    isPublicManagedProviderConnection(connection);
   const isReadyProviderConnection = (connection: ProviderConnection) =>
-    connection.status === "verified" ||
-    isUsableManagedProviderConnection(connection);
+    connection.scope === "workspace" && connection.status === "verified";
   const readyProviderConnections = () =>
     visibleProviderConnections().filter(isReadyProviderConnection);
   const providerConnectionsForProvider = (provider: string) =>
@@ -1534,48 +1445,8 @@ function Inner() {
     );
   const providerConnectionsForRow = (row: ProviderConnectionRow) =>
     providerConnectionsForProvider(row.provider);
-  const managedProviderConnectionForRow = (
-    row: ProviderConnectionRow,
-  ): ProviderConnection | undefined =>
-    providerConnectionsForRow(row).find(isPublicManagedProviderConnection);
-  const managedStoreProviderForCurrentSource = (): string | undefined =>
-    selectedServiceEntry()?.provider ??
-    storeListingForCurrentSource()?.provider;
-
-  createEffect(() => {
-    if (!managedStoreProviderForCurrentSource()) return;
-    void loadProviderConnections().catch(() => {});
-  });
-
-  const rowCanUseManagedProviderFallback = (row: ProviderConnectionRow) => {
-    const managedProvider = managedStoreProviderForCurrentSource();
-    return (
-      managedProvider !== undefined &&
-      sameProviderSource(managedProvider, row.provider) &&
-      // The fallback is real only when an operator-managed connection is
-      // actually listed (Cloud). A self-host without one must show the
-      // friendly connection callout instead of failing server-side.
-      managedProviderConnectionForRow(row) !== undefined
-    );
-  };
-  const hasManagedProviderFallback = () =>
-    providerRows().some(rowCanUseManagedProviderFallback);
-  const rowHasManagedProviderDefault = (row: ProviderConnectionRow) => {
-    const managedProvider = managedStoreProviderForCurrentSource();
-    if (!managedProvider) return false;
-    if (!sameProviderSource(managedProvider, row.provider)) {
-      return false;
-    }
-    const best = providerConnectionsForRow(row)[0];
-    return (
-      best !== undefined &&
-      best.id === row.connectionId &&
-      isPublicManagedProviderConnection(best)
-    );
-  };
   const providerNeedsConnection = (row: ProviderConnectionRow) =>
     providerRequiresConnection(row) &&
-    !rowCanUseManagedProviderFallback(row) &&
     providerConnectionsForProvider(row.provider).length === 0;
   const needsCloudCredential = () =>
     compatibility() !== null && providerRows().some(providerNeedsConnection);
@@ -1583,8 +1454,6 @@ function Inner() {
     providerRows().filter(providerNeedsConnection);
   const providerRowNeedsVisibleChoice = (row: ProviderConnectionRow) => {
     if (!providerRequiresConnection(row)) return false;
-    if (rowCanUseManagedProviderFallback(row)) return false;
-    if (rowHasManagedProviderDefault(row)) return false;
     const candidates = providerConnectionsForRow(row);
     if (candidates.length !== 1) return true;
     return row.connectionId !== candidates[0]?.id;
@@ -1602,13 +1471,6 @@ function Inner() {
   ): ProviderConnectionRow[] => {
     let changed = false;
     const defaultedRows = rows.map((row) => {
-      if (rowCanUseManagedProviderFallback(row)) {
-        const managed = managedProviderConnectionForRow(row);
-        const connectionId = managed?.id ?? "";
-        if (row.connectionId === connectionId) return row;
-        changed = true;
-        return { ...row, connectionId };
-      }
       const candidates = providerConnectionsForProvider(row.provider);
       if (
         row.connectionId &&
@@ -1649,15 +1511,9 @@ function Inner() {
     result: CapsuleCompatibilityResult,
   ): ProviderConnectionRow[] =>
     result.providers
-      .filter((provider) => {
-        if (!provider.allowed) return false;
-        if (provider.credentialRequired === true) return true;
-        const managedProvider = managedStoreProviderForCurrentSource();
-        return (
-          managedProvider !== undefined &&
-          sameProviderSource(managedProvider, provider.source)
-        );
-      })
+      .filter(
+        (provider) => provider.allowed && provider.credentialRequired === true,
+      )
       .flatMap((provider) => {
         const aliases = provider.aliases.length > 0 ? provider.aliases : [""];
         return aliases.map((alias) => ({
@@ -1687,7 +1543,6 @@ function Inner() {
     for (const row of providerRows()) {
       const candidates = providerConnectionsForProvider(row.provider);
       if (!row.connectionId.trim()) {
-        if (rowCanUseManagedProviderFallback(row)) continue;
         return t("new.providers.errorConnection", {
           provider: providerLabel(row.provider),
         });

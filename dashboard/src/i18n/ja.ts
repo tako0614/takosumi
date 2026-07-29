@@ -969,7 +969,7 @@ export const ja = {
 
   // --- connections -------------------------------------------------------------
   "conn.subtitle":
-    "自分のカギ（クラウドのトークンやアクセスキー）を保存します。カギを入れれば、制限や承認なしで任意のプロバイダーを動かせます。",
+    "自分の認証情報で外部プロバイダーを接続します。利用可否は operator の provider policy、runner capability、Run approval に従います。",
   "conn.providerConnections.title": "接続済みアカウント",
   "conn.expiresAt": "期限: {date}",
   "conn.oauth.connected": "プロバイダー接続を保存しました。",
@@ -1002,9 +1002,9 @@ export const ja = {
   "conn.guided.instructions": "手順を表示",
   "conn.byok.title": "自分のカギで任意のプロバイダーを接続",
   "conn.byok.body":
-    "プロバイダーの取得元 (source) と、そのプロバイダーが使う環境変数（カギ）を入れるだけ。制限や承認なしで、どの OpenTofu / Terraform プロバイダーでも動きます。",
+    "プロバイダーの取得元 (source) と必要な環境変数を入力します。この接続にも provider policy、runner capability、Run approval が適用されます。",
   "conn.byok.noBillingNote":
-    "自分のカギを使う接続に Takosumi の課金はありません。課金対象になるのは Takosumi が提供するリソースだけです。",
+    "Takosumi の料金がある場合は preview に表示されます。外部プロバイダーの料金は、そのプロバイダーから別途請求されます。",
   "conn.byok.usePreset": "インストール済み Recipe を使う",
   "conn.register": "接続を保存",
   "conn.registering": "保存中…",
@@ -1028,7 +1028,7 @@ export const ja = {
   "conn.error.fieldRequired": "{field} は必須です。",
   "conn.empty.title": "自分のカギで任意のプロバイダーを接続",
   "conn.empty.message":
-    "自分のカギ（クラウドのトークンやキー）を入れれば、制限や承認、課金なしで、どのプロバイダーでも動かせます。",
+    "自分の認証情報を接続し、インストール済みの policy、runner、approval、billing の範囲で外部プロバイダーを利用します。",
   "conn.test": "アクセス確認",
   "conn.testing": "確認中…",
   "conn.test.notReady":

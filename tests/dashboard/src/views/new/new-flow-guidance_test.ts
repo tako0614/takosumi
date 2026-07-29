@@ -381,16 +381,10 @@ describe("/new flow guidance", () => {
   test("explicit installExperience mappings remain authoritative", () => {
     expect(newAppViewSource).toContain("installExperienceForCurrentSource");
     expect(newAppViewSource).toContain("storeServiceNameVariable");
-    expect(newAppViewSource).toContain(
-      "installExperiencePublicEndpoint(installExperience)",
-    );
-    expect(newAppViewSource).toContain("if (publicEndpoint)");
-    expect(newAppViewSource).toContain(
-      "const subdomainVariable = publicEndpoint.subdomainVariable?.trim()",
-    );
-    expect(newAppViewSource).toContain(
-      "const urlVariable = publicEndpoint.urlVariable?.trim()",
-    );
+    expect(newAppViewSource).toContain("installExperiencePublicEndpoint(");
+    expect(newAppViewSource).toContain("storePublicEndpoint(entry)");
+    expect(newAppViewSource).toContain("publicEndpoint?.subdomainVariable");
+    expect(newAppViewSource).toContain("publicEndpoint?.urlVariable");
     expect(newAppViewSource).toContain(
       "serviceNameHintIsGenerated(storeServiceNameDefault())",
     );
@@ -401,12 +395,14 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain("...storeListingVariableNames()");
   });
 
-  test("uses explicit managed-provider metadata for store fallback", () => {
-    expect(newAppViewSource).toContain(
+  test("never uses Store or managed-provider metadata as execution fallback", () => {
+    expect(newAppViewSource).not.toContain(
       "const managedProviderConnectionForRow =",
     );
-    expect(newAppViewSource).toContain("providerConnectionsForRow(row).find(");
-    expect(newAppViewSource).toContain("isPublicManagedProviderConnection");
+    expect(newAppViewSource).not.toContain(
+      "managedStoreProviderForCurrentSource",
+    );
+    expect(newAppViewSource).not.toContain("isPublicManagedProviderConnection");
     expect(newAppViewSource).not.toContain(
       "scopeHints?.managedProvider === true",
     );
@@ -664,9 +660,7 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain("serviceNameInputValue");
     expect(newAppViewSource).toContain("managedServiceLabel");
     expect(newAppViewSource).toContain("managedPublicHostnameMode");
-    expect(newAppViewSource).toContain(
-      "selectedManagedProviderConnection() ||",
-    );
+    expect(newAppViewSource).not.toContain("selectedManagedProviderConnection");
     expect(newAppViewSource).toContain('t("new.hostname.mode.vanity")');
     expect(newAppViewSource).toContain("managedPublicHostname:");
     // Managed-host derivation lives server-side (9f2912c9); the old client
@@ -676,9 +670,8 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).not.toContain("standardPublicSubdomainVariable");
     expect(newAppViewSource).not.toContain("standardPublicUrlVariable");
     expect(newAppViewSource).not.toContain("standardRoutePatternVariable");
-    expect(newAppViewSource).toContain(
-      "installExperiencePublicEndpoint(installExperience)",
-    );
+    expect(newAppViewSource).toContain("installExperiencePublicEndpoint(");
+    expect(newAppViewSource).toContain("installExperienceForCurrentSource()");
     expect(newAppViewSource).toContain("canSuggestPublicHostname");
     expect(newAppViewSource).toContain("storePublicEndpointSubdomainField");
     expect(newAppViewSource).toContain("hostIsManagedBaseDomainSubdomain");
@@ -699,7 +692,7 @@ describe("/new flow guidance", () => {
       /type=\{\s*field\.secret \? "password" : "text"\s*\}/u,
     );
     expect(newAppViewSource).toContain("hasMissingAdvancedStoreInputs");
-    expect(newAppViewSource).toContain(
+    expect(newAppViewSource).not.toContain(
       "connection.scopeHints?.moduleInputDefaults ?? {}",
     );
     expect(newAppViewSource).not.toContain("storeScopeHintValue");
