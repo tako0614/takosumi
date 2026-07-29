@@ -39,7 +39,7 @@ export default function AppShell(props: Props) {
   // land on the new page instead of staying on the old nav control.
   //
   // Keyed on the page, NOT the raw pathname: detail screens put their tab strip
-  // in the trailing segment (`/services/:id/:tab`), and throwing focus out of
+  // in the trailing segment (`/workloads/:id/:tab`), and throwing focus out of
   // the tab strip on every tab click made those strips unusable by keyboard.
   // It also waits for the routing transition to settle — `location.pathname`
   // flips as soon as the URL commits, which on a slow lazy route meant focusing

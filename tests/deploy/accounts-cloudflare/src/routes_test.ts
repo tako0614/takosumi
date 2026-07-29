@@ -38,7 +38,7 @@ describe("isAccountsApiPath", () => {
       "/apps",
       "/install",
       "/dashboard",
-      "/services/capsule_example",
+      "/workloads/capsule_example",
       "/assets/app.js",
       "/favicon.ico",
     ]) {

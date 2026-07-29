@@ -33,7 +33,7 @@ export const en: Record<keyof typeof ja, string> = {
 
   // --- nav / shell ----------------------------------------------------------
   "nav.home": "Home",
-  "nav.services": "Services",
+  "nav.workloads": "Workloads",
   "nav.store": "Store",
   "nav.settings": "Settings",
   "nav.graph": "Dependencies",
@@ -80,7 +80,7 @@ export const en: Record<keyof typeof ja, string> = {
   "settings.manage.title": "Management tools",
   "settings.manage.subtitle":
     "Screens that work directly with hosting internals. You won't need these for everyday use.",
-  "settings.manage.services": "Every service and its status",
+  "settings.manage.workloads": "Every deployed workload and its status",
   "settings.manage.connections": "Cloud account connections and keys",
   "settings.manage.runs": "Deploy and change execution records",
   "settings.manage.graph": "Dependencies between services",
@@ -276,14 +276,15 @@ export const en: Record<keyof typeof ja, string> = {
   "apps.listIncomplete":
     "Some apps could not be loaded, so this screen may be missing apps.",
 
-  // --- Service list (/services) --------------------------------------------
-  "services.title": "Services",
-  "services.subtitle": "Every service and its status. Open one for details.",
-  "services.empty.title": "No services yet",
-  "services.empty.body": "Services you add will appear here.",
-  "services.deleteAria": "Delete {name}",
-  "services.listIncomplete":
-    "Some services could not be loaded, so this list may be incomplete.",
+  // --- Workload list (/workloads) -------------------------------------------
+  "workloads.title": "Workloads",
+  "workloads.subtitle":
+    "Every deployed workload and its status. Open one for details.",
+  "workloads.empty.title": "No workloads yet",
+  "workloads.empty.body": "Services you add will appear here.",
+  "workloads.deleteAria": "Delete workload {name}",
+  "workloads.listIncomplete":
+    "Some workloads could not be loaded, so this list may be incomplete.",
 
   // --- Service detail ------------------------------------------------------
   "app.capsuleSub": "Service",
@@ -1228,17 +1229,17 @@ export const en: Record<keyof typeof ja, string> = {
   "resources.subtitle":
     "View and manage deployed services and the managed resources offered by this environment.",
   "resources.summary.title": "Resource summary",
-  "resources.summary.services": "Deployed services",
+  "resources.summary.workloads": "Deployed workloads",
   "resources.summary.managed": "Managed resources",
   "resources.summary.availableTypes": "Available resource types",
-  "resources.services.title": "Services",
-  "resources.services.subtitle":
-    "Services deployed in this Workspace and running on the cloud.",
-  "resources.services.empty": "No deployed services.",
-  "resources.services.column.service": "Service",
-  "resources.services.column.status": "Status",
-  "resources.services.column.environment": "Environment",
-  "resources.services.column.updated": "Updated",
+  "resources.workloads.title": "Workloads",
+  "resources.workloads.subtitle":
+    "Workloads deployed in this Workspace and running on the cloud.",
+  "resources.workloads.empty": "No deployed workloads.",
+  "resources.workloads.column.workload": "Workload",
+  "resources.workloads.column.status": "Status",
+  "resources.workloads.column.environment": "Environment",
+  "resources.workloads.column.updated": "Updated",
   "resources.availableTypes.label": "Resource types available here",
   "resources.platformAdvanced.title": "Placement and policy",
   "resources.platformAdvanced.subtitle":

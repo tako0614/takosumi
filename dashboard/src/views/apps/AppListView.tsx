@@ -3,7 +3,7 @@
  * Capsule records, while every visible/openable tile comes from an authorized
  * Capsule-owned `interface.ui.surface` Interface. Store metadata and OpenTofu
  * Outputs are never launcher authorities. The full Capsule list and OpenTofu
- * detail live on the separate `/services` page.
+ * detail live on the separate `/workloads` page.
  */
 import {
   createEffect,
@@ -407,7 +407,7 @@ function AppTileView(props: { readonly tile: AppTile }) {
   );
 
   const detailHref = () =>
-    `/services/${encodeURIComponent(props.tile.inst.id)}`;
+    `/workloads/${encodeURIComponent(props.tile.inst.id)}`;
 
   return (
     <span class="av-tile-wrap">
@@ -482,7 +482,7 @@ function NoLaunchableAppsPanel(props: { readonly count: number }) {
         </h2>
         <p class="av-start-sub">{t("apps.noLaunchable.body")}</p>
       </div>
-      <a href="/services" class="av-start-action">
+      <a href="/workloads" class="av-start-action">
         <Server size={18} aria-hidden="true" />
         <span>{t("apps.noLaunchable.cta")}</span>
       </a>

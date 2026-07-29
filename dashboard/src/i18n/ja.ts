@@ -5,10 +5,9 @@
  * placeholders are interpolated by `t()`.
  *
  * Vocabulary contract (the unified verb set — do not reintroduce 公開/反映):
- *   Noun (surface split): the user-facing noun is サービス on the add-flow
- *   (/new), service detail, store, runs, and workspace surfaces; the home
- *   launcher and the install celebration call the same thing アプリ. Never
- *   mix the two nouns within one panel.
+ *   Noun (surface split): ストアの商品はサービス、デプロイされた Capsule は
+ *   ワークロード、実体はリソース、利用可能な接続口は Interface、ホームで
+ *   起動するものはアプリ。同じパネル内でこれらを混同しない。
  *   追加 (install) → 変更を確認 (plan) → デプロイ (apply) → デプロイ済み (active)
  */
 export const ja = {
@@ -40,7 +39,7 @@ export const ja = {
 
   // --- nav / shell ----------------------------------------------------------
   "nav.home": "ホーム",
-  "nav.services": "サービス",
+  "nav.workloads": "ワークロード",
   "nav.store": "ストア",
   "nav.settings": "設定",
   "nav.graph": "依存関係",
@@ -86,7 +85,7 @@ export const ja = {
   "settings.manage.title": "管理ツール",
   "settings.manage.subtitle":
     "ホスティングの内部を直接あつかう画面です。ふだんの利用では開く必要はありません。",
-  "settings.manage.services": "すべてのサービスと状態の一覧",
+  "settings.manage.workloads": "デプロイ済みワークロードと状態の一覧",
   "settings.manage.connections": "クラウドアカウントの接続とカギの管理",
   "settings.manage.runs": "デプロイと変更の実行記録",
   "settings.manage.graph": "サービス間の依存関係の表示",
@@ -283,14 +282,14 @@ export const ja = {
   "apps.listIncomplete":
     "一部のアプリを読み込めませんでした。表示されていないアプリがあるかもしれません。",
 
-  // --- Service list (/services) --------------------------------------------
-  "services.title": "サービス",
-  "services.subtitle": "すべてのサービスと状態。選ぶと詳細へ。",
-  "services.empty.title": "まだサービスがありません",
-  "services.empty.body": "サービスを追加するとここに表示されます。",
-  "services.deleteAria": "削除: {name}",
-  "services.listIncomplete":
-    "一部のサービスを読み込めませんでした。表示されていないサービスがあるかもしれません。",
+  // --- Workload list (/workloads) -------------------------------------------
+  "workloads.title": "ワークロード",
+  "workloads.subtitle": "デプロイ済みのワークロードと状態。選ぶと詳細へ。",
+  "workloads.empty.title": "まだワークロードがありません",
+  "workloads.empty.body": "サービスを追加するとここに表示されます。",
+  "workloads.deleteAria": "ワークロードを削除: {name}",
+  "workloads.listIncomplete":
+    "一部のワークロードを読み込めませんでした。表示されていないワークロードがあるかもしれません。",
 
   // --- Service detail ------------------------------------------------------
   "app.capsuleSub": "サービス",
@@ -1239,17 +1238,17 @@ export const ja = {
   "resources.subtitle":
     "デプロイ済みサービスと、この環境が提供するマネージドリソースをまとめて確認・管理します。",
   "resources.summary.title": "リソース概要",
-  "resources.summary.services": "デプロイ済みサービス",
+  "resources.summary.workloads": "デプロイ済みワークロード",
   "resources.summary.managed": "マネージドリソース",
   "resources.summary.availableTypes": "利用できるリソース種別",
-  "resources.services.title": "サービス",
-  "resources.services.subtitle":
-    "このワークスペースにデプロイされ、クラウド上で稼働するサービスです。",
-  "resources.services.empty": "デプロイ済みサービスはありません。",
-  "resources.services.column.service": "サービス",
-  "resources.services.column.status": "状態",
-  "resources.services.column.environment": "環境",
-  "resources.services.column.updated": "更新日時",
+  "resources.workloads.title": "ワークロード",
+  "resources.workloads.subtitle":
+    "このワークスペースにデプロイされ、クラウド上で稼働するワークロードです。",
+  "resources.workloads.empty": "デプロイ済みワークロードはありません。",
+  "resources.workloads.column.workload": "ワークロード",
+  "resources.workloads.column.status": "状態",
+  "resources.workloads.column.environment": "環境",
+  "resources.workloads.column.updated": "更新日時",
   "resources.availableTypes.label": "この環境で作成できる種類",
   "resources.platformAdvanced.title": "配置とポリシー",
   "resources.platformAdvanced.subtitle":

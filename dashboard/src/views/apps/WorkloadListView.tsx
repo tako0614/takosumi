@@ -1,7 +1,7 @@
 /**
- * Services (`/services`) — the full list of every Capsule in the Workspace
+ * Workloads (`/workloads`) — the full list of every Capsule in the Workspace
  * (apps and infra alike): the technical / OpenTofu surface. Each row opens the
- * service detail (deploys / state / outputs / settings). The consumer-facing
+ * workload detail (deploys / state / outputs / settings). The consumer-facing
  * app launcher lives on the separate `/` Apps page.
  */
 import { createMemo, createResource, For, Match, Show, Switch } from "solid-js";
@@ -35,8 +35,8 @@ import {
 } from "../../components/ui/index.ts";
 import { fetchFailedMessage } from "../../lib/error-copy.ts";
 
-export default function ServiceListView() {
-  return <Page title={t("services.title")}>{() => <Inner />}</Page>;
+export default function WorkloadListView() {
+  return <Page title={t("workloads.title")}>{() => <Inner />}</Page>;
 }
 
 function serviceKindIcon(kind: string | undefined): JSX.Element {
@@ -61,7 +61,7 @@ function Inner() {
     (id) => getDashboardOverviewCached(id),
   );
   // The overview projection caps the capsule list (nextCapsuleCursor); the
-  // full service list must show every service, so fetch the rest when capped.
+  // full workload list must show every Capsule, so fetch the rest when capped.
   const fullListWorkspaceId = createMemo(() =>
     overview()?.nextCapsuleCursor ? workspaceId() : undefined,
   );
@@ -94,19 +94,19 @@ function Inner() {
     return map;
   });
   const open = (inst: Capsule) =>
-    navigate(`/services/${encodeURIComponent(inst.id)}`);
+    navigate(`/workloads/${encodeURIComponent(inst.id)}`);
   const deleteHref = (inst: Capsule) =>
-    `/services/${encodeURIComponent(inst.id)}/danger`;
+    `/workloads/${encodeURIComponent(inst.id)}/danger`;
 
   return (
     <>
       {/* Title lives in the top bar (outside the page outline), so give the
           document outline a heading root without repeating it visually. */}
-      <h1 class="sr-only">{t("services.title")}</h1>
+      <h1 class="sr-only">{t("workloads.title")}</h1>
       {/* Title lives in the top bar; this slim toolbar carries the page's
           context line + the add action. */}
       <div class="av-list-toolbar">
-        <span class="av-list-toolbar-sub">{t("services.subtitle")}</span>
+        <span class="av-list-toolbar-sub">{t("workloads.subtitle")}</span>
         <Button variant="primary" href="/new" icon={<Plus size={16} />}>
           {t("apps.add")}
         </Button>
@@ -139,7 +139,7 @@ function Inner() {
                 truncate the list to the overview's first page. */}
             <Show when={fullCapsules.error}>
               <Toast tone="error">
-                {t("services.listIncomplete")}
+                {t("workloads.listIncomplete")}
                 <Button
                   variant="secondary"
                   size="sm"
@@ -186,8 +186,8 @@ function Inner() {
                           href={deleteHref(inst)}
                           title={t("app.danger.destroyTitle")}
                           // Every row repeats the same visible "削除"; the
-                          // accessible name says which service it deletes.
-                          aria-label={t("services.deleteAria", {
+                          // accessible name says which workload it deletes.
+                          aria-label={t("workloads.deleteAria", {
                             name: inst.name,
                           })}
                         >
@@ -209,10 +209,10 @@ function Inner() {
 
 function ServicesEmpty() {
   return (
-    <section class="av-start" aria-label={t("services.empty.title")}>
+    <section class="av-start" aria-label={t("workloads.empty.title")}>
       <div class="av-start-copy">
-        <h2 class="av-start-title">{t("services.empty.title")}</h2>
-        <p class="av-start-sub">{t("services.empty.body")}</p>
+        <h2 class="av-start-title">{t("workloads.empty.title")}</h2>
+        <p class="av-start-sub">{t("workloads.empty.body")}</p>
       </div>
       <a href="/new" class="av-start-action">
         <Plus size={18} aria-hidden="true" />

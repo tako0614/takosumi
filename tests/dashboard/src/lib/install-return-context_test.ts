@@ -61,7 +61,7 @@ describe("installReturnContext", () => {
       null,
       "",
       "/",
-      "/services",
+      "/workloads",
       "/new",
       "https://evil.example/new?git=https://github.com/acme/app.git",
       "//evil.example/new?git=https://github.com/acme/app.git",

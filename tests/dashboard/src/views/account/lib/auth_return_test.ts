@@ -38,8 +38,8 @@ afterEach(() => {
 
 test("safeOAuthReturnTo keeps same-origin paths", () => {
   expect(safeOAuthReturnTo("/")).toBe("/");
-  expect(safeOAuthReturnTo("/services?tab=apps#latest")).toBe(
-    "/services?tab=apps#latest",
+  expect(safeOAuthReturnTo("/workloads?tab=apps#latest")).toBe(
+    "/workloads?tab=apps#latest",
   );
   expect(safeOAuthReturnTo("  /advanced/workspace  ")).toBe(
     "/advanced/workspace",

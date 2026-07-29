@@ -52,8 +52,12 @@ const ShellLayout = lazy(
 const AppListView = lazy(() => import("./views/apps/AppListView.tsx"));
 const SettingsView = lazy(() => import("./views/settings/SettingsView.tsx"));
 const ManageView = lazy(() => import("./views/settings/ManageView.tsx"));
-const ServiceListView = lazy(() => import("./views/apps/ServiceListView.tsx"));
-const AppDetailView = lazy(() => import("./views/apps/AppDetailView.tsx"));
+const WorkloadListView = lazy(
+  () => import("./views/apps/WorkloadListView.tsx"),
+);
+const WorkloadDetailView = lazy(
+  () => import("./views/apps/WorkloadDetailView.tsx"),
+);
 const NewAppView = lazy(() => import("./views/new/NewAppView.tsx"));
 const CapsuleSourceOptionsInstallView = lazy(
   () => import("./views/new/CapsuleSourceOptionsInstallView.tsx"),
@@ -139,20 +143,12 @@ function InstallEntryRoute() {
   );
 }
 
-/** `/apps/:id` -> `/services/:id` (legacy dashboard links). */
-function RedirectLegacyAppDetail() {
+/** Legacy Capsule-detail paths -> `/workloads/:id`. */
+function RedirectLegacyWorkloadDetail() {
   const params = useParams();
   const id = encodeURIComponent(params.id ?? "");
   const tab = params.tab ? `/${encodeURIComponent(params.tab)}` : "";
-  return <Navigate href={`/services/${id}${tab}`} />;
-}
-
-/** `/capsules/:id` -> `/services/:id` while final URLs settle. */
-function RedirectCapsuleDetail() {
-  const params = useParams();
-  const id = encodeURIComponent(params.id ?? "");
-  const tab = params.tab ? `/${encodeURIComponent(params.tab)}` : "";
-  return <Navigate href={`/services/${id}${tab}`} />;
+  return <Navigate href={`/workloads/${id}${tab}`} />;
 }
 
 function RedirectLegacyWorkspaceSettingsTab() {
@@ -195,13 +191,13 @@ function App() {
         <Route path="/settings/account" component={AccountView} />
         <Route path="/settings/billing" component={BillingView} />
         <Route path="/settings/manage" component={ManageView} />
-        <Route path="/services" component={ServiceListView} />
+        <Route path="/workloads" component={WorkloadListView} />
         <Route path="/new" component={NewAppView} />
         <Route path="/install" component={InstallEntryRoute} />
         <Route path="/composition/install" component={CompositionInstallView} />
         <Route path="/connections" component={ConnectionsView} />
-        <Route path="/services/:id" component={AppDetailView} />
-        <Route path="/services/:id/:tab" component={AppDetailView} />
+        <Route path="/workloads/:id" component={WorkloadDetailView} />
+        <Route path="/workloads/:id/:tab" component={WorkloadDetailView} />
         <Route path="/runs" component={RunsListView} />
         <Route path="/runs/:id" component={RunView} />
         <Route path="/run-groups/:id" component={RunGroupView} />
@@ -246,14 +242,26 @@ function App() {
           callback's /connections keeps its result query too. */}
       <Route path="/home" component={() => <Navigate href="/" />} />
       <Route path="/apps" component={() => <Navigate href="/" />} />
-      <Route path="/apps/:id" component={RedirectLegacyAppDetail} />
-      <Route path="/apps/:id/:tab" component={RedirectLegacyAppDetail} />
+      <Route path="/apps/:id" component={RedirectLegacyWorkloadDetail} />
+      <Route path="/apps/:id/:tab" component={RedirectLegacyWorkloadDetail} />
+      <Route
+        path="/services"
+        component={() => <RedirectWithQuery to="/workloads" />}
+      />
+      <Route path="/services/:id" component={RedirectLegacyWorkloadDetail} />
+      <Route
+        path="/services/:id/:tab"
+        component={RedirectLegacyWorkloadDetail}
+      />
       <Route
         path="/capsules"
-        component={() => <RedirectWithQuery to="/services" />}
+        component={() => <RedirectWithQuery to="/workloads" />}
       />
-      <Route path="/capsules/:id" component={RedirectCapsuleDetail} />
-      <Route path="/capsules/:id/:tab" component={RedirectCapsuleDetail} />
+      <Route path="/capsules/:id" component={RedirectLegacyWorkloadDetail} />
+      <Route
+        path="/capsules/:id/:tab"
+        component={RedirectLegacyWorkloadDetail}
+      />
       <Route
         path="/members"
         component={() => <Navigate href="/advanced/workspace/members" />}

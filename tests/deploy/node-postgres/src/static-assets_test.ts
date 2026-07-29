@@ -25,7 +25,7 @@ describe("createStaticAssetResponder", () => {
     const dir = await buildFixture();
     try {
       const serve = createStaticAssetResponder(dir);
-      for (const path of ["/", "/apps", "/services/capsule_example"]) {
+      for (const path of ["/", "/apps", "/workloads/capsule_example"]) {
         const res = await serve(get(path));
         expect(res?.status).toBe(200);
         expect(res?.headers.get("content-type")).toContain("text/html");

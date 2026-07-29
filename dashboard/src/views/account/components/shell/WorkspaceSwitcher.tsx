@@ -226,7 +226,7 @@ export default function WorkspaceSwitcher(props: Props = {}) {
    * the PREVIOUS workspace's object while the chrome says otherwise.
    */
   const ENTITY_SCOPED_ROUTES: readonly (readonly [RegExp, string])[] = [
-    [/^\/services\/[^/]+/u, "/services"],
+    [/^\/workloads\/[^/]+/u, "/workloads"],
     [/^\/runs\/[^/]+/u, "/runs"],
     [/^\/run-groups\/[^/]+/u, "/runs"],
     [/^\/resources\/[^/]+\/[^/]+/u, "/resources"],

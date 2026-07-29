@@ -12,7 +12,7 @@ import { ja } from "../../../../../dashboard/src/i18n/ja.ts";
 
 const source = readFileSync(
   new URL(
-    "../../../../../dashboard/src/views/apps/AppDetailView.tsx",
+    "../../../../../dashboard/src/views/apps/WorkloadDetailView.tsx",
     import.meta.url,
   ),
   "utf8",
@@ -49,7 +49,7 @@ describe("Capsule detail StateVersion surface", () => {
     expect(source).toContain("icon={<Trash2 size={16} />}");
     expect(source).toContain('t("common.delete")');
     expect(source).toContain("deleteCapsule(capsuleId())");
-    expect(source).toContain('navigate("/services")');
+    expect(source).toContain('navigate("/workloads")');
     expect(source.indexOf('t("common.delete")')).toBeLessThan(
       source.indexOf("<Tabs items={tabItems()}"),
     );
@@ -96,7 +96,7 @@ describe("Capsule detail StateVersion surface", () => {
   test("delete is confirmed once — at destroy-apply, not with an upfront modal", () => {
     // Header: a link into the plan-first danger flow, not a duplicate modal.
     expect(source).toContain(
-      "href={`/services/${encodeURIComponent(capsuleId())}/danger`}",
+      "href={`/workloads/${encodeURIComponent(capsuleId())}/danger`}",
     );
     expect(source).toContain(
       'inst().status !== "destroyed" && tab() !== "danger"',
@@ -359,7 +359,7 @@ describe("Capsule detail StateVersion surface", () => {
       'inst().status !== "destroyed" && !currentStateVersionId()',
     );
     expect(source).toContain(
-      "href={`/services/${encodeURIComponent(capsuleId())}/deploys`}",
+      "href={`/workloads/${encodeURIComponent(capsuleId())}/deploys`}",
     );
     expect(ja["app.setupIncomplete.body"]).toBeTruthy();
     expect(en["app.setupIncomplete.body"]).toBeTruthy();

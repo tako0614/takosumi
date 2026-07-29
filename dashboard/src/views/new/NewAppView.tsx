@@ -4299,7 +4299,7 @@ function Inner() {
                         <Button
                           variant="secondary"
                           size="sm"
-                          href={`/services/${encodeURIComponent(capsule().id)}`}
+                          href={`/workloads/${encodeURIComponent(capsule().id)}`}
                         >
                           {t("new.existing.open")}
                         </Button>

@@ -79,7 +79,7 @@ describe("dashboard shell navigation layout", () => {
     expect(primary).toContain('href: "/new", labelKey: "nav.store"');
     expect(primary).toContain('href: "/settings", labelKey: "nav.settings"');
     // Deploy-console destinations stay OUT of the primary nav.
-    for (const banned of ['"/runs"', '"/account"', '"/services"']) {
+    for (const banned of ['"/runs"', '"/account"', '"/workloads"']) {
       expect(primary).not.toContain(`href: ${banned}`);
     }
     // Sidebar and mobile tabs render the shared model — no hard-coded hrefs.
@@ -95,7 +95,7 @@ describe("dashboard shell navigation layout", () => {
   test("hosting management is relocated, not removed: /settings/manage catalogs every surface", () => {
     // 機能は消さず移設 — every old console destination stays reachable.
     for (const href of [
-      '"/services"',
+      '"/workloads"',
       '"/connections"',
       '"/runs"',
       '"/graph"',
@@ -106,7 +106,7 @@ describe("dashboard shell navigation layout", () => {
     }
     // …and their routes stay alive in the route table.
     for (const route of [
-      '<Route path="/services" component={ServiceListView} />',
+      '<Route path="/workloads" component={WorkloadListView} />',
       '<Route path="/connections" component={ConnectionsView} />',
       '<Route path="/runs" component={RunsListView} />',
       '<Route path="/graph" component={GraphView} />',
@@ -163,7 +163,7 @@ describe("dashboard shell navigation layout", () => {
     const storeBrowserHosts = [
       "views/new/NewAppView.tsx",
       "views/apps/AppListView.tsx",
-      "views/apps/ServiceListView.tsx",
+      "views/apps/WorkloadListView.tsx",
       "views/settings/SettingsView.tsx",
     ].filter((rel) => read(rel).includes("<StoreBrowser"));
     expect(storeBrowserHosts).toEqual(["views/new/NewAppView.tsx"]);

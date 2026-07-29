@@ -380,7 +380,7 @@ function RunGroupMemberRow(props: {
                and to a screen reader; the aria-label keeps the action verb. */
             <a
               class="wa-run-group-service"
-              href={`/services/${encodeURIComponent(id())}`}
+              href={`/workloads/${encodeURIComponent(id())}`}
               aria-label={
                 name()
                   ? t("runGroup.openServiceAria", { name: name()! })

@@ -183,7 +183,7 @@ function Inner(): JSX.Element {
 
   const serviceColumns: readonly Column<Capsule>[] = [
     {
-      header: t("resources.services.column.service"),
+      header: t("resources.workloads.column.workload"),
       cell: (capsule) => (
         <div class="rs-resource-name">
           <strong>{capsule.name}</strong>
@@ -192,7 +192,7 @@ function Inner(): JSX.Element {
       ),
     },
     {
-      header: t("resources.services.column.status"),
+      header: t("resources.workloads.column.status"),
       cell: (capsule) => (
         <Badge tone={capsuleTone(capsule.status)}>
           {capsuleStatusLabel(capsule.status)}
@@ -200,11 +200,11 @@ function Inner(): JSX.Element {
       ),
     },
     {
-      header: t("resources.services.column.environment"),
+      header: t("resources.workloads.column.environment"),
       cell: (capsule) => capsule.environment,
     },
     {
-      header: t("resources.services.column.updated"),
+      header: t("resources.workloads.column.updated"),
       cell: (capsule) => formatDateTime(capsule.updatedAt),
     },
     {
@@ -212,7 +212,7 @@ function Inner(): JSX.Element {
       align: "right",
       cell: (capsule) => (
         <Button
-          href={`/services/${encodeURIComponent(capsule.id)}`}
+          href={`/workloads/${encodeURIComponent(capsule.id)}`}
           variant="ghost"
           size="sm"
         >
@@ -529,8 +529,10 @@ function Inner(): JSX.Element {
             >
               <Card class="rs-inventory-stat">
                 <Server size={20} aria-hidden="true" />
-                <span>{t("resources.summary.services")}</span>
-                <strong>{capsules.error ? "—" : (capsules()?.length ?? 0)}</strong>
+                <span>{t("resources.summary.workloads")}</span>
+                <strong>
+                  {capsules.error ? "—" : (capsules()?.length ?? 0)}
+                </strong>
               </Card>
               <Card class="rs-inventory-stat">
                 <Boxes size={20} aria-hidden="true" />
@@ -546,8 +548,7 @@ function Inner(): JSX.Element {
                   {formAvailability.error
                     ? "—"
                     : (formAvailability()?.filter(
-                        (form) =>
-                          form.executable && form.availableToPrincipal,
+                        (form) => form.executable && form.availableToPrincipal,
                       ).length ?? 0)}
                 </strong>
               </Card>
@@ -557,9 +558,9 @@ function Inner(): JSX.Element {
               <div class="rs-section-title-row">
                 <div>
                   <h2 id="rs-services-title">
-                    {t("resources.services.title")}
+                    {t("resources.workloads.title")}
                   </h2>
-                  <p>{t("resources.services.subtitle")}</p>
+                  <p>{t("resources.workloads.subtitle")}</p>
                 </div>
               </div>
               <DataTable
@@ -574,7 +575,7 @@ function Inner(): JSX.Element {
                       })
                     : undefined
                 }
-                empty={t("resources.services.empty")}
+                empty={t("resources.workloads.empty")}
               />
             </section>
 
@@ -679,157 +680,53 @@ function Inner(): JSX.Element {
                   </CardSection>
                 </Card>
                 <section class="rs-section" aria-labelledby="rs-pools-title">
-                <div class="rs-section-title-row">
-                  <div>
-                    <h2 id="rs-pools-title">
-                      {t("resources.targetPools.title")}
-                    </h2>
-                    <p>{t("resources.targetPools.subtitle")}</p>
-                  </div>
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    size="sm"
-                    icon={<Plus size={16} />}
-                    onClick={startTargetPool}
-                  >
-                    {t("resources.targetPools.add")}
-                  </Button>
-                </div>
-                  <DataTable
-                    columns={poolColumns}
-                    rows={targetPools.error ? [] : targetPools()}
-                  rowKey={(pool) => pool.id}
-                  loading={targetPools.loading}
-                  error={
-                    targetPools.error
-                      ? t("common.fetchFailed", {
-                          message: friendlyError(targetPools.error, t).message,
-                        })
-                      : undefined
-                  }
-                  empty={t("resources.targetPools.empty")}
-                />
-                <Show when={poolMessage()}>
-                  {(message) => (
-                    <Toast tone={message().tone}>{message().text}</Toast>
-                  )}
-                </Show>
-                <Show when={poolEditorOpen()}>
-                  <Card class="rs-config-editor">
-                    <CardHeader
-                      title={t("resources.targetPools.editorTitle")}
-                      actions={
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => setPoolEditorOpen(false)}
-                        >
-                          {t("common.cancel")}
-                        </Button>
-                      }
-                    />
-                    <CardSection>
-                      <label class="tg-field">
-                        <span class="tg-field-label">
-                          {t("resources.targetPools.name")}
-                        </span>
-                        <input
-                          class="tg-input"
-                          value={poolName()}
-                          onInput={(event) =>
-                            setPoolName(event.currentTarget.value)
-                          }
-                          autocomplete="off"
-                        />
-                      </label>
-                      <label class="tg-field rs-json-field">
-                        <span class="tg-field-label">
-                          {t("resources.targetPools.spec")}
-                        </span>
-                        <textarea
-                          class="tg-textarea rs-code-editor"
-                          value={poolSpecText()}
-                          rows={14}
-                          spellcheck={false}
-                          onInput={(event) =>
-                            setPoolSpecText(event.currentTarget.value)
-                          }
-                        />
-                        <span class="tg-field-hint">
-                          {t("resources.config.noSecrets")}
-                        </span>
-                      </label>
-                      <div class="rs-editor-actions">
-                        <Button
-                          type="button"
-                          variant="primary"
-                          busy={poolBusy()}
-                          onClick={() => void saveTargetPool()}
-                        >
-                          {t("common.save")}
-                        </Button>
-                      </div>
-                    </CardSection>
-                  </Card>
-                </Show>
-                </section>
-
-                <section class="rs-section" aria-labelledby="rs-policy-title">
-                <details class="rs-policy-disclosure">
-                  <summary>
-                    <span>
-                      <strong id="rs-policy-title">
-                        {t("resources.policy.title")}
-                      </strong>
-                      <small>{t("resources.policy.subtitle")}</small>
-                    </span>
-                  </summary>
                   <div class="rs-section-title-row">
-                    <span />
+                    <div>
+                      <h2 id="rs-pools-title">
+                        {t("resources.targetPools.title")}
+                      </h2>
+                      <p>{t("resources.targetPools.subtitle")}</p>
+                    </div>
                     <Button
                       type="button"
                       variant="secondary"
                       size="sm"
                       icon={<Plus size={16} />}
-                      onClick={startSpacePolicy}
+                      onClick={startTargetPool}
                     >
-                      {t("resources.policy.add")}
+                      {t("resources.targetPools.add")}
                     </Button>
                   </div>
-                    <DataTable
-                      columns={policyColumns}
-                      rows={spacePolicies.error ? [] : spacePolicies()}
-                    rowKey={(policy) => policy.id}
-                    loading={spacePolicies.loading}
+                  <DataTable
+                    columns={poolColumns}
+                    rows={targetPools.error ? [] : targetPools()}
+                    rowKey={(pool) => pool.id}
+                    loading={targetPools.loading}
                     error={
-                      spacePolicies.error
+                      targetPools.error
                         ? t("common.fetchFailed", {
-                            message: friendlyError(spacePolicies.error, t)
+                            message: friendlyError(targetPools.error, t)
                               .message,
                           })
                         : undefined
                     }
-                    empty={t("resources.policy.empty")}
+                    empty={t("resources.targetPools.empty")}
                   />
-                  {/* Outside the editor block: a delete can fail while the
-                      editor is closed, and that used to report nothing at all. */}
-                  <Show when={policyMessage()}>
+                  <Show when={poolMessage()}>
                     {(message) => (
                       <Toast tone={message().tone}>{message().text}</Toast>
                     )}
                   </Show>
-                  <Show when={policyEditorOpen()}>
+                  <Show when={poolEditorOpen()}>
                     <Card class="rs-config-editor">
                       <CardHeader
-                        title={t("resources.policy.editorTitle")}
+                        title={t("resources.targetPools.editorTitle")}
                         actions={
                           <Button
                             type="button"
                             variant="ghost"
                             size="sm"
-                            onClick={() => setPolicyEditorOpen(false)}
+                            onClick={() => setPoolEditorOpen(false)}
                           >
                             {t("common.cancel")}
                           </Button>
@@ -838,40 +735,40 @@ function Inner(): JSX.Element {
                       <CardSection>
                         <label class="tg-field">
                           <span class="tg-field-label">
-                            {t("resources.policy.name")}
+                            {t("resources.targetPools.name")}
                           </span>
                           <input
                             class="tg-input"
-                            value={policyName()}
+                            value={poolName()}
                             onInput={(event) =>
-                              setPolicyName(event.currentTarget.value)
+                              setPoolName(event.currentTarget.value)
                             }
                             autocomplete="off"
                           />
                         </label>
                         <label class="tg-field rs-json-field">
                           <span class="tg-field-label">
-                            {t("resources.policy.spec")}
+                            {t("resources.targetPools.spec")}
                           </span>
                           <textarea
                             class="tg-textarea rs-code-editor"
-                            value={policySpecText()}
+                            value={poolSpecText()}
                             rows={14}
                             spellcheck={false}
                             onInput={(event) =>
-                              setPolicySpecText(event.currentTarget.value)
+                              setPoolSpecText(event.currentTarget.value)
                             }
                           />
                           <span class="tg-field-hint">
-                            {t("resources.policy.writeOnlyHint")}
+                            {t("resources.config.noSecrets")}
                           </span>
                         </label>
                         <div class="rs-editor-actions">
                           <Button
                             type="button"
                             variant="primary"
-                            busy={policyBusy()}
-                            onClick={() => void saveSpacePolicy()}
+                            busy={poolBusy()}
+                            onClick={() => void saveTargetPool()}
                           >
                             {t("common.save")}
                           </Button>
@@ -879,7 +776,112 @@ function Inner(): JSX.Element {
                       </CardSection>
                     </Card>
                   </Show>
-                </details>
+                </section>
+
+                <section class="rs-section" aria-labelledby="rs-policy-title">
+                  <details class="rs-policy-disclosure">
+                    <summary>
+                      <span>
+                        <strong id="rs-policy-title">
+                          {t("resources.policy.title")}
+                        </strong>
+                        <small>{t("resources.policy.subtitle")}</small>
+                      </span>
+                    </summary>
+                    <div class="rs-section-title-row">
+                      <span />
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        icon={<Plus size={16} />}
+                        onClick={startSpacePolicy}
+                      >
+                        {t("resources.policy.add")}
+                      </Button>
+                    </div>
+                    <DataTable
+                      columns={policyColumns}
+                      rows={spacePolicies.error ? [] : spacePolicies()}
+                      rowKey={(policy) => policy.id}
+                      loading={spacePolicies.loading}
+                      error={
+                        spacePolicies.error
+                          ? t("common.fetchFailed", {
+                              message: friendlyError(spacePolicies.error, t)
+                                .message,
+                            })
+                          : undefined
+                      }
+                      empty={t("resources.policy.empty")}
+                    />
+                    {/* Outside the editor block: a delete can fail while the
+                      editor is closed, and that used to report nothing at all. */}
+                    <Show when={policyMessage()}>
+                      {(message) => (
+                        <Toast tone={message().tone}>{message().text}</Toast>
+                      )}
+                    </Show>
+                    <Show when={policyEditorOpen()}>
+                      <Card class="rs-config-editor">
+                        <CardHeader
+                          title={t("resources.policy.editorTitle")}
+                          actions={
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => setPolicyEditorOpen(false)}
+                            >
+                              {t("common.cancel")}
+                            </Button>
+                          }
+                        />
+                        <CardSection>
+                          <label class="tg-field">
+                            <span class="tg-field-label">
+                              {t("resources.policy.name")}
+                            </span>
+                            <input
+                              class="tg-input"
+                              value={policyName()}
+                              onInput={(event) =>
+                                setPolicyName(event.currentTarget.value)
+                              }
+                              autocomplete="off"
+                            />
+                          </label>
+                          <label class="tg-field rs-json-field">
+                            <span class="tg-field-label">
+                              {t("resources.policy.spec")}
+                            </span>
+                            <textarea
+                              class="tg-textarea rs-code-editor"
+                              value={policySpecText()}
+                              rows={14}
+                              spellcheck={false}
+                              onInput={(event) =>
+                                setPolicySpecText(event.currentTarget.value)
+                              }
+                            />
+                            <span class="tg-field-hint">
+                              {t("resources.policy.writeOnlyHint")}
+                            </span>
+                          </label>
+                          <div class="rs-editor-actions">
+                            <Button
+                              type="button"
+                              variant="primary"
+                              busy={policyBusy()}
+                              onClick={() => void saveSpacePolicy()}
+                            >
+                              {t("common.save")}
+                            </Button>
+                          </div>
+                        </CardSection>
+                      </Card>
+                    </Show>
+                  </details>
                 </section>
               </details>
             </Show>
@@ -899,8 +901,7 @@ const RESOURCE_KIND_KEYS: Readonly<Record<string, MessageKey>> = {
   VectorIndex: "resources.editor.service.vectorIndex",
   DurableWorkflow: "resources.editor.service.durableWorkflow",
   ContainerService: "resources.editor.service.containerService",
-  StatefulActorNamespace:
-    "resources.editor.service.statefulActorNamespace",
+  StatefulActorNamespace: "resources.editor.service.statefulActorNamespace",
   Schedule: "resources.editor.service.schedule",
 };
 

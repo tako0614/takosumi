@@ -84,7 +84,7 @@ describe("AppListView app launcher", () => {
     // The launcher tile keeps only "manage" — no destructive delete affordance.
     expect(appListSource).not.toContain("av-tile-delete");
     expect(appListSource).toContain("av-tile-name");
-    // No admin-console fields on the launcher (those live on /services).
+    // No admin-console fields on the launcher (those live on /workloads).
     expect(appListSource).not.toContain("StatusBadge");
     expect(appListSource).not.toContain("PageHeader");
     expect(appListSource).not.toContain("relativeTime");
@@ -128,7 +128,7 @@ describe("AppListView app launcher", () => {
     expect(appListSource).not.toContain("yurucommu");
     expect(appListSource).not.toContain("takos-office");
     expect(appListSource).not.toContain("/tako.png");
-    // A Capsule without a UI Interface stays on /services, not in the launcher.
+    // A Capsule without a UI Interface stays on /workloads, not in the launcher.
     expect(appListSource).not.toContain("AppsEmptyPanel");
     expect(appListSource).toContain('href="/new"');
     expect(appListSource).not.toContain('href="/store"');

@@ -7,11 +7,11 @@ const here = dirname(fileURLToPath(import.meta.url));
 const read = (rel: string) =>
   readFileSync(resolve(here, "../../../../../dashboard/src", rel), "utf8");
 
-const serviceListSource = read("views/apps/ServiceListView.tsx");
+const serviceListSource = read("views/apps/WorkloadListView.tsx");
 const routerSource = read("index.tsx");
 const appViewsCssSource = read("styles/app-views.css");
 
-describe("ServiceListView (/services)", () => {
+describe("WorkloadListView (/workloads)", () => {
   test("lists every visible service as a row that opens its detail", () => {
     expect(serviceListSource).toContain("isVisibleServiceCapsule");
     expect(serviceListSource).toContain("getDashboardOverviewCached");
@@ -20,7 +20,7 @@ describe("ServiceListView (/services)", () => {
     expect(serviceListSource).toContain('class="av-service-row"');
     expect(serviceListSource).toContain('class="av-service-row-main"');
     expect(serviceListSource).toContain(
-      "/services/${encodeURIComponent(inst.id)}",
+      "/workloads/${encodeURIComponent(inst.id)}",
     );
     // Technical surface: status + last-updated, unlike the copy-free launcher.
     expect(serviceListSource).toContain("StatusBadge");
@@ -31,36 +31,38 @@ describe("ServiceListView (/services)", () => {
   test("a failed supplemental full-list fetch is surfaced, not silent truncation", () => {
     expect(serviceListSource).toContain("fullCapsules.error");
     expect(serviceListSource).toContain("refetchFullCapsules");
-    expect(serviceListSource).toContain('t("services.listIncomplete")');
+    expect(serviceListSource).toContain('t("workloads.listIncomplete")');
     expect(serviceListSource).toContain('t("common.retry")');
   });
 
   test("offers deletion review directly from the service list", () => {
-    expect(serviceListSource).toContain("function ServiceListView");
+    expect(serviceListSource).toContain("function WorkloadListView");
     expect(serviceListSource).toContain("const deleteHref = (inst: Capsule)");
     expect(serviceListSource).toContain(
-      "`/services/${encodeURIComponent(inst.id)}/danger`",
+      "`/workloads/${encodeURIComponent(inst.id)}/danger`",
     );
     expect(serviceListSource).toContain('class="av-service-row-delete"');
     expect(serviceListSource).toContain('t("common.delete")');
     expect(serviceListSource).toContain('t("app.danger.destroyTitle")');
     // Rows repeat the same visible "削除"; the accessible name carries the
     // service so the links are distinguishable to AT.
-    expect(serviceListSource).toContain('t("services.deleteAria"');
+    expect(serviceListSource).toContain('t("workloads.deleteAria"');
   });
 
-  test("is wired to /services, distinct from the Apps home and the detail", () => {
-    expect(routerSource).toContain("ServiceListView");
+  test("is wired to /workloads, distinct from the Apps home and the detail", () => {
+    expect(routerSource).toContain("WorkloadListView");
     expect(routerSource).toContain(
-      'path="/services" component={ServiceListView}',
+      'path="/workloads" component={WorkloadListView}',
     );
     expect(routerSource).toContain('path="/" component={AppListView}');
     expect(routerSource).toContain(
       'path="/apps" component={() => <Navigate href="/" />}',
     );
     expect(routerSource).toContain(
-      'path="/services/:id" component={AppDetailView}',
+      'path="/workloads/:id" component={WorkloadDetailView}',
     );
+    expect(routerSource).toContain('path="/services"');
+    expect(routerSource).toContain('<RedirectWithQuery to="/workloads" />');
   });
 
   test("has dedicated row styling", () => {

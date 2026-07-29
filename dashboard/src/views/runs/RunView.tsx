@@ -1917,7 +1917,7 @@ function Inner() {
               {(id) => (
                 <Button
                   variant="ghost"
-                  href={`/services/${encodeURIComponent(id())}`}
+                  href={`/workloads/${encodeURIComponent(id())}`}
                 >
                   {t("run.backToApp")}
                 </Button>
@@ -2159,7 +2159,7 @@ function Inner() {
                             variant={
                               completedRunLaunchUrl() ? "secondary" : "primary"
                             }
-                            href={`/services/${encodeURIComponent(id())}`}
+                            href={`/workloads/${encodeURIComponent(id())}`}
                           >
                             {t("run.backToApp")}
                           </Button>
@@ -2190,7 +2190,7 @@ function Inner() {
                           setNeedsConfirm(false);
                           const id = capsuleId();
                           if (id)
-                            navigate(`/services/${encodeURIComponent(id)}`);
+                            navigate(`/workloads/${encodeURIComponent(id)}`);
                         }}
                       >
                         {t("run.stopGoBack")}

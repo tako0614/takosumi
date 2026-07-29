@@ -49,7 +49,10 @@ const controlApiSource = readFileSync(
   "utf8",
 );
 const appDetailViewSource = readFileSync(
-  resolve(here, "../../../../../dashboard/src/views/apps/AppDetailView.tsx"),
+  resolve(
+    here,
+    "../../../../../dashboard/src/views/apps/WorkloadDetailView.tsx",
+  ),
   "utf8",
 );
 const runViewSource = readFileSync(

@@ -50,9 +50,9 @@ export type ManageDestination = ShellNavItem & {
  */
 export const MANAGE_DESTINATIONS: readonly ManageDestination[] = [
   {
-    href: "/services",
-    labelKey: "nav.services",
-    descriptionKey: "settings.manage.services",
+    href: "/workloads",
+    labelKey: "nav.workloads",
+    descriptionKey: "settings.manage.workloads",
     icon: Server,
   },
   {
@@ -111,7 +111,7 @@ export const SECTION_TITLES: ReadonlyArray<readonly [RegExp, MessageKey]> = [
   [/^\/settings\/billing(\/|$)/, "nav.billing"],
   [/^\/settings(\/|$)/, "nav.settings"],
   [/^\/composition(\/|$)/, "nav.store"],
-  [/^\/services(\/|$)/, "nav.services"],
+  [/^\/workloads(\/|$)/, "nav.workloads"],
   [/^\/new(\/|$)/, "nav.store"],
   [/^\/connections(\/|$)/, "nav.connections"],
   [/^\/advanced\/workspace(\/|$)/, "nav.workspaceSettings"],

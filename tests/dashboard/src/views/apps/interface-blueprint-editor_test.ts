@@ -5,7 +5,7 @@ import { ja } from "../../../../../dashboard/src/i18n/ja.ts";
 
 const source = readFileSync(
   new URL(
-    "../../../../../dashboard/src/views/apps/AppDetailView.tsx",
+    "../../../../../dashboard/src/views/apps/WorkloadDetailView.tsx",
     import.meta.url,
   ),
   "utf8",

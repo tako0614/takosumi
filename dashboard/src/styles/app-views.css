@@ -722,7 +722,7 @@
   margin-top: var(--tg-s-4);
 }
 
-/* ===== service list (/services) ===== */
+/* ===== service list (/workloads) ===== */
 .av-list-toolbar {
   display: flex;
   align-items: center;

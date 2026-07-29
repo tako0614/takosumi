@@ -1,5 +1,5 @@
 /**
- * Service detail (`/services/:id` + tab routes) — one service. The primary tabs
+ * Workload detail (`/workloads/:id` + tab routes) — one deployed Capsule. The primary tabs
  * stay focused on using/opening the service and reviewing updates; source,
  * provider mapping, and delete options remain reachable from advanced manage
  * routes instead of occupying the everyday tab strip.
@@ -128,7 +128,7 @@ import {
 
 type TabId = "overview" | "deploys" | "settings" | "danger";
 
-export default function AppDetailView() {
+export default function WorkloadDetailView() {
   return <Page title={t("app.capsuleSub")}>{() => <Inner />}</Page>;
 }
 
@@ -362,7 +362,7 @@ function Inner() {
       navigate(`/runs/${runId}`);
       return;
     }
-    navigate("/services");
+    navigate("/workloads");
   });
   const { confirm } = useConfirmDialog();
   /**
@@ -405,7 +405,7 @@ function Inner() {
   const serviceLabel = () => displayName() ?? capsuleData()?.name ?? "";
 
   const tabItems = () => {
-    const base = `/services/${encodeURIComponent(capsuleId())}`;
+    const base = `/workloads/${encodeURIComponent(capsuleId())}`;
     const items = [
       { href: base, label: t("app.tab.overview"), end: true },
       { href: `${base}/deploys`, label: t("app.tab.deploys") },
@@ -461,7 +461,7 @@ function Inner() {
               action={
                 <Button
                   variant="secondary"
-                  href="/services"
+                  href="/workloads"
                   icon={<ArrowLeft size={16} />}
                 >
                   {t("app.backToList")}
@@ -498,10 +498,10 @@ function Inner() {
                 }
                 actions={
                   <div class="av-actions">
-                    {/* /services is the list this detail belongs to; home only
+                    {/* /workloads is the list this detail belongs to; home only
                         shows services that expose a screen, so returning there
                         can look like the service disappeared. */}
-                    <Button variant="ghost" href="/services">
+                    <Button variant="ghost" href="/workloads">
                       {t("app.backToList")}
                     </Button>
                     <Show when={effectiveCapsuleStatus(inst()) === "stale"}>
@@ -523,7 +523,7 @@ function Inner() {
                     >
                       <Button
                         variant="danger"
-                        href={`/services/${encodeURIComponent(capsuleId())}/danger`}
+                        href={`/workloads/${encodeURIComponent(capsuleId())}/danger`}
                         icon={<Trash2 size={16} />}
                       >
                         {t("common.delete")}
@@ -554,7 +554,7 @@ function Inner() {
                       <Button
                         variant="secondary"
                         size="sm"
-                        href={`/services/${encodeURIComponent(capsuleId())}/deploys`}
+                        href={`/workloads/${encodeURIComponent(capsuleId())}/deploys`}
                       >
                         {t("app.setupIncomplete.review")}
                       </Button>
@@ -562,7 +562,7 @@ function Inner() {
                     <Button
                       variant="danger"
                       size="sm"
-                      href={`/services/${encodeURIComponent(capsuleId())}/danger`}
+                      href={`/workloads/${encodeURIComponent(capsuleId())}/danger`}
                     >
                       {t("app.setupIncomplete.delete")}
                     </Button>
@@ -625,7 +625,7 @@ function Inner() {
                       reviewBusy={plan.busy()}
                       onReview={() => void plan.run()}
                       reviewError={plan.error()}
-                      settingsHref={`/services/${encodeURIComponent(capsuleId())}/settings`}
+                      settingsHref={`/workloads/${encodeURIComponent(capsuleId())}/settings`}
                     />
                   </Match>
                   <Match when={tab() === "settings"}>
@@ -663,7 +663,7 @@ function Inner() {
                       providerBindings={settingsProviderBindings()}
                       availableProviderConnections={settingsProviderConnections()}
                       capsuleId={capsuleId()}
-                      deploysHref={`/services/${encodeURIComponent(capsuleId())}/deploys`}
+                      deploysHref={`/workloads/${encodeURIComponent(capsuleId())}/deploys`}
                       onSaved={(scope) =>
                         // Refetch ONLY the saved form's resource (+capsule for
                         // display). Refetching the sibling's resource would flip

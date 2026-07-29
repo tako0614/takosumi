@@ -16,7 +16,7 @@ export function activityEventHref(event: ActivityEvent): string | undefined {
     return `/run-groups/${encodeURIComponent(event.targetId)}`;
   }
   if (event.targetType === "capsule") {
-    return `/services/${encodeURIComponent(event.targetId)}`;
+    return `/workloads/${encodeURIComponent(event.targetId)}`;
   }
   if (event.targetType === "connection") {
     return "/connections";

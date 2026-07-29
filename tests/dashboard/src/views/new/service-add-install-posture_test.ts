@@ -6,8 +6,8 @@ import { en } from "../../../../../dashboard/src/i18n/en.ts";
 import { ja } from "../../../../../dashboard/src/i18n/ja.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const serviceListViewSource = readFileSync(
-  resolve(here, "../../../../../dashboard/src/views/apps/ServiceListView.tsx"),
+const workloadListViewSource = readFileSync(
+  resolve(here, "../../../../../dashboard/src/views/apps/WorkloadListView.tsx"),
   "utf8",
 );
 const newAppViewSource = readFileSync(
@@ -17,10 +17,10 @@ const newAppViewSource = readFileSync(
 
 describe("service add install posture", () => {
   test("routes service creation through the app-like install flow", () => {
-    expect(serviceListViewSource).toContain('href="/new"');
-    expect(serviceListViewSource).not.toContain('href="/store"');
-    expect(serviceListViewSource).not.toContain('href="/services/new"');
-    expect(serviceListViewSource).not.toContain("createService(");
+    expect(workloadListViewSource).toContain('href="/new"');
+    expect(workloadListViewSource).not.toContain('href="/store"');
+    expect(workloadListViewSource).not.toContain('href="/workloads/new"');
+    expect(workloadListViewSource).not.toContain("createService(");
     expect(newAppViewSource).toContain("StoreBrowser");
     expect(newAppViewSource).toContain("startLinkImport");
     expect(en["new.discovery.title"]).toBe("Choose a service to add");
