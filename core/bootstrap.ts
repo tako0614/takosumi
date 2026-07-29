@@ -97,6 +97,7 @@ import {
 import { createSqlResourceShapeStores } from "./domains/resource-shape/sql_stores.ts";
 import {
   createDbOwnedHostRuntimeMaterializationResolver,
+  scheduleHostRuntimeReconcileTarget,
   withDbOwnedHostRuntimeMaterialization,
   type HostRuntimeResourceLifecycle,
 } from "./domains/resource-shape/host_runtime_materialization.ts";
@@ -974,6 +975,7 @@ export interface TakosumiOperations {
      */
     listReadyResourcesPage(input: {
       readonly kind: ResourceShapeKind;
+      readonly space?: string;
       readonly cursor?: string;
       readonly limit?: number;
     }): Promise<{
@@ -1944,6 +1946,7 @@ export async function createTakosumiService(
       resourceShapeStores.locks.get(resourceId),
     ]);
     if (!resource || !lock) return undefined;
+    if (resource.kind !== "HttpService") return undefined;
     const request = await hostRuntimeMaterializationResolver({
       owner: resource.owner,
     });
@@ -1960,6 +1963,27 @@ export async function createTakosumiService(
       resourceGeneration: resource.generation,
       resourceRevisionId,
     };
+  };
+  const reconcileScheduleHostRuntime = async (resourceId: string) => {
+    if (!options.hostRuntimeResourceLifecycle) return;
+    const source = await resourceShapeStores.resources.get(resourceId);
+    if (!source) return;
+    const request = await hostRuntimeMaterializationResolver({
+      owner: source.owner,
+    });
+    if (!request) return;
+    const targetResourceId = scheduleHostRuntimeReconcileTarget({
+      request,
+      source,
+    });
+    if (!targetResourceId) return;
+    const target = await exactHostRuntimeLifecycleInput(targetResourceId);
+    if (!target) {
+      throw new Error(
+        `host runtime Schedule target is not an exact Ready HttpService: ${targetResourceId}`,
+      );
+    }
+    await options.hostRuntimeResourceLifecycle.reconcile(target);
   };
   resourceShapeService?.setLifecycleObserver({
     async observe(event) {
@@ -2001,6 +2025,7 @@ export async function createTakosumiService(
             if (runtime) {
               await options.hostRuntimeResourceLifecycle!.activate(runtime);
             }
+            await reconcileScheduleHostRuntime(event.resourceId);
           }
           try {
             await materializeFormDescriptorInterfaces(event.resourceId);
@@ -2021,6 +2046,7 @@ export async function createTakosumiService(
           );
           return;
         case "unknown":
+          await reconcileScheduleHostRuntime(event.resourceId);
           await interfaceService.markResourceUnknown(
             workspaceId,
             event.resourceId,
@@ -2029,6 +2055,7 @@ export async function createTakosumiService(
           return;
         case "terminating":
           {
+            await reconcileScheduleHostRuntime(event.resourceId);
             const runtime = await exactHostRuntimeLifecycleInput(
               event.resourceId,
             );
@@ -2609,6 +2636,7 @@ export async function createTakosumiService(
             },
             listReadyResourcesPage: async (input: {
               readonly kind: ResourceShapeKind;
+              readonly space?: string;
               readonly cursor?: string;
               readonly limit?: number;
             }) => {
@@ -2621,6 +2649,7 @@ export async function createTakosumiService(
                       ? { limit: input.limit }
                       : {}),
                   },
+                  input.space,
                 );
               const items = await Promise.all(
                 page.items.map(async (candidate) => {

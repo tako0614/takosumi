@@ -101,6 +101,7 @@ import {
   formRefOfInstalled,
   installedFormReferenceKey,
   isInstalledFormReference,
+  isResourceCapsuleOwner,
   isResourceShapeKind,
   TAKOFORM_FORM_HOST_API_PATH,
   TAKOFORM_FORM_HOST_WELL_KNOWN_PATH,
@@ -3004,6 +3005,8 @@ export interface PlatformCanonicalReadyResourceInventory {
   }): Promise<PlatformCanonicalReadyResourceInventoryItem | undefined>;
   list(input: {
     readonly kind: ResourceShapeKind;
+    /** Optional exact Workspace bound for latency-sensitive graph joins. */
+    readonly space?: string;
     readonly cursor?: string;
     readonly limit?: number;
   }): Promise<PlatformCanonicalReadyResourceInventoryPage>;
@@ -3083,7 +3086,9 @@ export function createPlatformCanonicalHostRuntimeGraphReader(
         }
       }
       for (const activation of input.request.backgroundActivations ?? []) {
-        requestedAliases.add(activation.sourceConnectionAlias);
+        if (activation.sourceResourceKind === "Queue") {
+          requestedAliases.add(activation.sourceConnectionAlias);
+        }
         if (activation.deadLetterConnectionAlias) {
           requestedAliases.add(activation.deadLetterConnectionAlias);
         }
@@ -3100,6 +3105,19 @@ export function createPlatformCanonicalHostRuntimeGraphReader(
           resourceId,
         );
         if (!resource) return undefined;
+        const activation = input.request.backgroundActivations?.find(
+          (candidate) =>
+            candidate.sourceResourceKind === "Queue" &&
+            candidate.sourceConnectionAlias === alias,
+        );
+        if (
+          activation &&
+          (resource.resource.kind !== "Queue" ||
+            valueString(declaration.projection) !== "queue.binding.v1" ||
+            !stringArray(declaration.permissions)?.includes("consume"))
+        ) {
+          return undefined;
+        }
         const requirement = input.request.requirements.find(
           (candidate) =>
             candidate.kind === "managed_connection" &&
@@ -3123,12 +3141,113 @@ export function createPlatformCanonicalHostRuntimeGraphReader(
           ...(authority ? { authority } : {}),
         };
       }
+      const scheduleRequirements =
+        input.request.backgroundActivations?.filter(
+          (activation) => activation.sourceResourceKind === "Schedule",
+        ) ?? [];
+      for (const requirement of scheduleRequirements) {
+        if (connections[requirement.sourceConnectionAlias]) return undefined;
+        const schedule = await resolveUniqueIncomingHostRuntimeSchedule({
+          inventory,
+          workspaceId: input.request.workspaceId,
+          capsuleId: input.request.capsuleId,
+          installingPrincipalId: input.request.installingPrincipalId,
+          targetResourceId: consumer.resourceId,
+          connectionAlias: requirement.sourceConnectionAlias,
+        });
+        // The consumer becomes Ready before its dependent Schedule. Absence is
+        // therefore an expected empty activation set; the Schedule Ready event
+        // reconciles the same host graph after the incoming edge exists.
+        if (!schedule) continue;
+        connections[requirement.sourceConnectionAlias] = {
+          alias: requirement.sourceConnectionAlias,
+          resource: schedule,
+        };
+      }
       return structuredClone({
         consumer,
         connections,
       });
     },
   });
+}
+
+export async function resolveUniqueIncomingHostRuntimeSchedule(input: {
+  readonly inventory: PlatformCanonicalReadyResourceInventory;
+  readonly workspaceId: string;
+  readonly capsuleId: string;
+  readonly installingPrincipalId: string;
+  readonly targetResourceId: string;
+  readonly connectionAlias: string;
+}): Promise<PlatformCanonicalHostRuntimeResourceEvidence | undefined> {
+  const matches: PlatformCanonicalHostRuntimeResourceEvidence[] = [];
+  let cursor: string | undefined;
+  for (let pageNumber = 0; pageNumber < 16; pageNumber += 1) {
+    const page = await input.inventory.list({
+      kind: "Schedule",
+      space: input.workspaceId,
+      ...(cursor ? { cursor } : {}),
+      limit: 100,
+    });
+    for (const item of page.items) {
+      const parsed = platformCanonicalResourceId(item.resourceId);
+      const evidence =
+        parsed?.workspaceId === input.workspaceId &&
+        item.nativeResources.length === 1
+          ? {
+              workspaceId: parsed.workspaceId,
+              resourceId: item.resourceId,
+              resource: item.resource,
+              resourceGeneration: item.resourceGeneration,
+              resourceRevisionId: item.resourceRevisionId,
+              nativeType: item.nativeResources[0]!.type,
+              nativeId: item.nativeResources[0]!.id,
+            }
+          : undefined;
+      const owner = evidence?.resource.metadata.owner;
+      if (
+        !evidence ||
+        evidence.resource.kind !== "Schedule" ||
+        !isResourceCapsuleOwner(owner) ||
+        owner.id !== input.capsuleId ||
+        owner.workspaceId !== input.workspaceId ||
+        owner.installingPrincipalId !== input.installingPrincipalId
+      ) {
+        continue;
+      }
+      const connections = objectRecord(evidence.resource.spec).connections;
+      const declarations = objectRecord(connections);
+      if (Object.keys(declarations).length !== 1) continue;
+      const declaration = objectRecord(declarations[input.connectionAlias]);
+      const permissions = stringArray(declaration.permissions);
+      if (
+        valueString(declaration.resource) !== input.targetResourceId ||
+        valueString(declaration.projection) !== "schedule.trigger.v1" ||
+        permissions?.length !== 1 ||
+        permissions[0] !== "invoke"
+      ) {
+        continue;
+      }
+      matches.push(evidence);
+      if (matches.length > 1) {
+        throw new Error(
+          `host runtime Schedule alias ${input.connectionAlias} is ambiguous`,
+        );
+      }
+    }
+    cursor = page.nextCursor;
+    if (!cursor) return matches[0];
+  }
+  throw new Error(
+    "host runtime Schedule graph exceeds the bounded Workspace inventory",
+  );
+}
+
+function stringArray(value: unknown): readonly string[] | undefined {
+  return Array.isArray(value) &&
+    value.every((entry): entry is string => typeof entry === "string")
+    ? value
+    : undefined;
 }
 
 async function canonicalHostRuntimeResource(
@@ -3837,6 +3956,13 @@ export function createPlatformCanonicalReadyResourceInventory(
       if (!isResourceShapeKind(input.kind)) {
         throw new TypeError("canonical Resource inventory kind is invalid");
       }
+      const space =
+        input.space === undefined
+          ? undefined
+          : safePlatformExtensionContextId(input.space);
+      if (input.space !== undefined && !space) {
+        throw new TypeError("canonical Resource inventory Workspace is invalid");
+      }
       const operations = await takosumiOperationsFor(env);
       const inventory = operations.resourceCompatibility;
       if (!inventory) {
@@ -3844,6 +3970,7 @@ export function createPlatformCanonicalReadyResourceInventory(
       }
       const page = await inventory.listReadyResourcesPage({
         kind: input.kind,
+        ...(space ? { space } : {}),
         ...(input.cursor ? { cursor: input.cursor } : {}),
         ...(input.limit !== undefined ? { limit: input.limit } : {}),
       });

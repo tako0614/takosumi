@@ -223,6 +223,7 @@ export interface ResourceShapeStore {
   listReadyByKindPage(
     kind: ResourceShapeKind,
     params: PageParams,
+    spaceId?: SpaceId,
   ): Promise<Page<ResourceShapeRecord>>;
   /**
    * Internal bounded inventory for the explicit legacy exact-Form backfill.
@@ -483,11 +484,13 @@ export class InMemoryResourceShapeStore implements ResourceShapeStore {
   listReadyByKindPage(
     kind: ResourceShapeKind,
     params: PageParams,
+    spaceId?: SpaceId,
   ): Promise<Page<ResourceShapeRecord>> {
     const records = [...this.#byId.values()]
       .filter(
         (record) =>
           record.kind === kind &&
+          (spaceId === undefined || record.spaceId === spaceId) &&
           record.phase === "Ready" &&
           record.observedGeneration === record.generation,
       )

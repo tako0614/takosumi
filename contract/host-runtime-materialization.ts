@@ -74,7 +74,14 @@ export type HostRuntimeMaterialRequirement =
 
 export interface HostRuntimeBackgroundActivationRequirement {
   readonly id: string;
-  /** Queue or Schedule alias in the consumer Resource connection graph. */
+  /**
+   * Queue sources are outgoing connections declared by the consumer runtime.
+   * Schedule sources are incoming edges: the alias is declared on the Schedule
+   * connection which targets the consumer HttpService. Keeping the direction
+   * explicit prevents a host from inventing a circular HttpService -> Schedule
+   * connection merely to materialize a cron trigger.
+   */
+  readonly sourceResourceKind: "Queue" | "Schedule";
   readonly sourceConnectionAlias: string;
   readonly deadLetterConnectionAlias?: string;
   /** App-defined opaque handler token. The host never interprets it. */
@@ -256,6 +263,7 @@ function backgroundRequirements(
   return value.map((entry) => {
     const row = exactRecord(entry, [
       "id",
+      "sourceResourceKind",
       "sourceConnectionAlias",
       "deadLetterConnectionAlias",
       "entrypoint",
@@ -263,6 +271,9 @@ function backgroundRequirements(
     ]);
     const id = token(row.id);
     unique(ids, id, "background activation id");
+    if (row.sourceResourceKind !== "Queue" && row.sourceResourceKind !== "Schedule") {
+      throw new TypeError("background activation source kind is invalid");
+    }
     const sourceConnectionAlias = alias(row.sourceConnectionAlias);
     const deadLetterConnectionAlias =
       row.deadLetterConnectionAlias === undefined
@@ -271,6 +282,14 @@ function backgroundRequirements(
     if (deadLetterConnectionAlias === sourceConnectionAlias) {
       throw new TypeError(
         "background source connection cannot be its own dead letter queue",
+      );
+    }
+    if (
+      row.sourceResourceKind === "Schedule" &&
+      deadLetterConnectionAlias !== undefined
+    ) {
+      throw new TypeError(
+        "Schedule background activation cannot declare a dead letter queue",
       );
     }
     const retry = exactRecord(row.retry, [
@@ -286,6 +305,7 @@ function backgroundRequirements(
       (retry.retryDelaySeconds as number) < 0 ||
       (retry.retryDelaySeconds as number) > 86_400 ||
       (retry.onExhausted !== "dead_letter" && retry.onExhausted !== "fail") ||
+      (row.sourceResourceKind === "Schedule" && retry.onExhausted !== "fail") ||
       (retry.onExhausted === "dead_letter" &&
         deadLetterConnectionAlias === undefined)
     ) {
@@ -293,6 +313,7 @@ function backgroundRequirements(
     }
     return {
       id,
+      sourceResourceKind: row.sourceResourceKind,
       sourceConnectionAlias,
       ...(deadLetterConnectionAlias ? { deadLetterConnectionAlias } : {}),
       entrypoint: token(row.entrypoint),

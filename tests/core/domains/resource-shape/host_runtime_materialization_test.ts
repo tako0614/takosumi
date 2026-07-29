@@ -12,6 +12,7 @@ import type {
 } from "../../../../core/domains/resource-shape/adapter.ts";
 import {
   createDbOwnedHostRuntimeMaterializationResolver,
+  scheduleHostRuntimeReconcileTarget,
   withDbOwnedHostRuntimeMaterialization,
 } from "../../../../core/domains/resource-shape/host_runtime_materialization.ts";
 
@@ -47,6 +48,19 @@ const config: InstallConfig = {
         secretRef: "secret:app/main",
         bytes: 32,
         encoding: "base64url",
+      },
+    ],
+    backgroundActivations: [
+      {
+        id: "retention",
+        sourceResourceKind: "Schedule",
+        sourceConnectionAlias: "WORKER",
+        entrypoint: "yurucommu.retention",
+        retry: {
+          maxAttempts: 1,
+          retryDelaySeconds: 0,
+          onExhausted: "fail",
+        },
       },
     ],
   },
@@ -139,6 +153,8 @@ test("DB-owned requirements are attached to the adapter with exact Capsule prove
     capsuleId: "capsule_1",
     installingPrincipalId: "principal_1",
     requirements: config.hostRuntimeMaterialization?.requirements,
+    backgroundActivations:
+      config.hostRuntimeMaterialization?.backgroundActivations,
   });
 });
 
@@ -183,4 +199,68 @@ test("owner mismatch fails before the selected adapter", async () => {
     }),
   ).rejects.toThrow("does not match");
   expect(called).toBe(false);
+});
+
+test("Schedule background requirements resolve only the exact provider-neutral HttpService edge", () => {
+  const request = {
+    contract: HOST_RUNTIME_MATERIALIZATION_CONTRACT,
+    installConfigId: config.id,
+    workspaceId: capsule.workspaceId,
+    capsuleId: capsule.id,
+    installingPrincipalId: capsule.installingPrincipalId,
+    requirements: config.hostRuntimeMaterialization!.requirements,
+    backgroundActivations:
+      config.hostRuntimeMaterialization!.backgroundActivations,
+  };
+  const source = {
+    kind: "Schedule",
+    owner: {
+      kind: "Capsule" as const,
+      id: capsule.id,
+      workspaceId: capsule.workspaceId,
+      installingPrincipalId: capsule.installingPrincipalId,
+    },
+    spec: {
+      name: "app-retention",
+      cron: "0 * * * *",
+      timezone: "UTC",
+      connections: {
+        WORKER: {
+          resource: "tkrn:workspace_1:HttpService:app",
+          permissions: ["invoke"],
+          projection: "schedule.trigger.v1",
+        },
+      },
+    },
+  };
+
+  expect(scheduleHostRuntimeReconcileTarget({ request, source })).toBe(
+    "tkrn:workspace_1:HttpService:app",
+  );
+  expect(() =>
+    scheduleHostRuntimeReconcileTarget({
+      request,
+      source: {
+        ...source,
+        spec: {
+          ...source.spec,
+          connections: {
+            WORKER: {
+              ...source.spec.connections.WORKER,
+              projection: "schedule_trigger",
+            },
+          },
+        },
+      },
+    }),
+  ).toThrow("exact schedule.trigger.v1");
+  expect(
+    scheduleHostRuntimeReconcileTarget({
+      request,
+      source: {
+        ...source,
+        owner: { ...source.owner, id: "another_capsule" },
+      },
+    }),
+  ).toBeUndefined();
 });

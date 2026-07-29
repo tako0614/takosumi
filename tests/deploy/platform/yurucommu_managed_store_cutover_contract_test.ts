@@ -61,7 +61,7 @@ function managedCompatibilityReport(): CapsuleCompatibilityReport {
     modulePath: MODULE_PATH,
     level: "ready",
     findings: [],
-    providers: ["registry.opentofu.org/tako0614/takoform"],
+    providers: ["registry.terraform.io/tako0614/takoform"],
     resources: [
       "takoform_http_service.worker",
       "takoform_relational_database.database",
@@ -120,7 +120,7 @@ function managedInstallConfig(): InstallConfig {
   return {
     id: "config_yurucommu_managed_cutover",
     name: "yurucommu-managed",
-    sourceKind: "generic_capsule",
+    sourceResourceKind: "generic_capsule",
     installType: "opentofu_module",
     sourceSelector: { url: SOURCE_URL, path: MODULE_PATH },
     modulePath: MODULE_PATH,
@@ -128,7 +128,7 @@ function managedInstallConfig(): InstallConfig {
     variablePresentation: compiled.compiled.variablePresentation,
     userVariableNames: compiled.compiled.userVariableNames,
     installExperience: compiled.compiled.installExperience,
-    requiredProviders: ["registry.opentofu.org/tako0614/takoform"],
+    requiredProviders: ["registry.terraform.io/tako0614/takoform"],
     outputAllowlist: {},
     policy: {},
     store: {
@@ -305,6 +305,19 @@ describe("Yurucommu managed Store cutover contract", () => {
       sourceConnectionAlias: "DELIVERY_QUEUE",
       deadLetterConnectionAlias: "DELIVERY_DLQ",
       entrypoint: "yurucommu.delivery",
+    });
+    expect(
+      managed.hostRuntimeMaterialization?.backgroundActivations?.[1],
+    ).toEqual({
+      id: "retention",
+      sourceResourceKind: "Schedule",
+      sourceConnectionAlias: "WORKER",
+      entrypoint: "yurucommu.retention",
+      retry: {
+        maxAttempts: 1,
+        retryDelaySeconds: 0,
+        onExhausted: "fail",
+      },
     });
     expect(managed.resourceInterfaceBindingProposals).toEqual([
       {

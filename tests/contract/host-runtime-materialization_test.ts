@@ -51,6 +51,7 @@ function declaration() {
     backgroundActivations: [
       {
         id: "delivery",
+        sourceResourceKind: "Queue",
         sourceConnectionAlias: "queue",
         deadLetterConnectionAlias: "dead_letter",
         entrypoint: "deliver",
@@ -92,4 +93,12 @@ test("host runtime declaration rejects plaintext-shaped refs, duplicate bindings
   expect(() => parseInstallConfigHostRuntimeMaterialization(retry)).toThrow(
     "retry policy",
   );
+
+  const missingSourceKind = structuredClone(declaration()) as {
+    backgroundActivations: Array<Record<string, unknown>>;
+  };
+  delete missingSourceKind.backgroundActivations[0]!.sourceResourceKind;
+  expect(() =>
+    parseInstallConfigHostRuntimeMaterialization(missingSourceKind),
+  ).toThrow("source kind");
 });

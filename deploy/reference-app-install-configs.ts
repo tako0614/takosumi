@@ -670,6 +670,7 @@ const yurucommuManagedConfig = {
     backgroundActivations: [
       {
         id: "delivery",
+        sourceResourceKind: "Queue",
         sourceConnectionAlias: "DELIVERY_QUEUE",
         deadLetterConnectionAlias: "DELIVERY_DLQ",
         entrypoint: "yurucommu.delivery",
@@ -677,6 +678,17 @@ const yurucommuManagedConfig = {
           maxAttempts: 3,
           retryDelaySeconds: 30,
           onExhausted: "dead_letter",
+        },
+      },
+      {
+        id: "retention",
+        sourceResourceKind: "Schedule",
+        sourceConnectionAlias: "WORKER",
+        entrypoint: "yurucommu.retention",
+        retry: {
+          maxAttempts: 1,
+          retryDelaySeconds: 0,
+          onExhausted: "fail",
         },
       },
     ],

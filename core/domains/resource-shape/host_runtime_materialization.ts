@@ -11,6 +11,7 @@ import type {
   AdapterDeleteInput,
   ResourceAdapter,
 } from "./adapter.ts";
+import type { ResourceShapeRecord } from "./records.ts";
 
 export type HostRuntimeMaterializationResolver = (input: {
   readonly owner: ResourceOwner | undefined;
@@ -33,6 +34,86 @@ export interface HostRuntimeResourceLifecycle {
     readonly resourceGeneration: number;
     readonly resourceRevisionId: string;
   }): Promise<void>;
+  /**
+   * Rebuilds background activation authority for one already-prepared
+   * HttpService without replacing its immutable runtime release or secrets.
+   * Hosts must atomically replace the full Capsule activation graph so a
+   * Schedule update/delete cannot leave a stale revision dispatchable.
+   */
+  reconcile(input: {
+    readonly request: HostRuntimeMaterializationRequest;
+    readonly resourceId: string;
+    readonly resourceGeneration: number;
+    readonly resourceRevisionId: string;
+  }): Promise<void>;
+}
+
+/**
+ * Resolves the consumer of one provider-neutral Schedule source edge.
+ *
+ * The activation requirement names the alias on the Schedule itself. The
+ * Resource graph remains acyclic (`Schedule -> HttpService`), and no
+ * repository/provider-specific native cron identity enters the host contract.
+ */
+export function scheduleHostRuntimeReconcileTarget(input: {
+  readonly request: HostRuntimeMaterializationRequest;
+  readonly source: Pick<ResourceShapeRecord, "kind" | "owner" | "spec">;
+}): string | undefined {
+  if (input.source.kind !== "Schedule") return undefined;
+  const owner = input.source.owner;
+  if (
+    !isResourceCapsuleOwner(owner) ||
+    owner.id !== input.request.capsuleId ||
+    owner.workspaceId !== input.request.workspaceId ||
+    owner.installingPrincipalId !== input.request.installingPrincipalId
+  ) {
+    return undefined;
+  }
+  const requirements =
+    input.request.backgroundActivations?.filter(
+      (activation) => activation.sourceResourceKind === "Schedule",
+    ) ?? [];
+  if (requirements.length === 0) return undefined;
+  const connections = record(input.source.spec.connections);
+  const entries = Object.entries(connections);
+  if (entries.length !== 1) {
+    throw new Error(
+      "host runtime Schedule must have exactly one consumer connection",
+    );
+  }
+  const [alias, value] = entries[0]!;
+  const requirement = requirements.find(
+    (candidate) => candidate.sourceConnectionAlias === alias,
+  );
+  if (!requirement) return undefined;
+  const connection = record(value);
+  const permissions = connection.permissions;
+  if (
+    connection.projection !== "schedule.trigger.v1" ||
+    !Array.isArray(permissions) ||
+    permissions.length !== 1 ||
+    permissions[0] !== "invoke"
+  ) {
+    throw new Error(
+      "host runtime Schedule target must be exact schedule.trigger.v1 invoke authority",
+    );
+  }
+  const resourceId =
+    typeof connection.resource === "string" ? connection.resource : "";
+  const match = /^tkrn:([^:]+):HttpService:(.+)$/u.exec(resourceId);
+  if (!match || match[1] !== input.request.workspaceId) {
+    throw new Error(
+      "host runtime Schedule target must be an HttpService in the same Workspace",
+    );
+  }
+  return resourceId;
+}
+
+function record(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("host runtime Schedule connection graph is invalid");
+  }
+  return value as Record<string, unknown>;
 }
 
 /**

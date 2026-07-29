@@ -1574,6 +1574,21 @@ for (const backend of backends) {
           limit: 10,
         }),
       ).toEqual({ items: [] });
+      expect(
+        (
+          await stores.resources.listReadyByKindPage(
+            "EdgeWorker",
+            { limit: 10 },
+            SPACE_B,
+          )
+        ).items
+          .filter(({ name }) => name.startsWith("inventory-"))
+          .map(({ id }) => id),
+      ).toEqual(
+        expected
+          .filter(({ spaceId }) => spaceId === SPACE_B)
+          .map(({ id }) => id),
+      );
 
       for (const resource of records)
         await stores.resources.delete(resource.id);
