@@ -903,6 +903,17 @@ export class StaticSecretConnectionVault implements ConnectionVault {
           "provider_connection_setup_required",
         );
       }
+      if (
+        connection.scope === "operator" &&
+        !isPublicManagedProviderConnection(connection)
+      ) {
+        throw new ConnectionVaultError(
+          "failed_precondition",
+          `connection ${entry.connectionId} is an operator credential and cannot be materialized into a generic runner`,
+          undefined,
+          "provider_connection_setup_required",
+        );
+      }
       if (isSourceGitKind(connection.kind)) {
         // A git connection is never a provider alias credential (invariants 4/5).
         throw new ConnectionVaultError(

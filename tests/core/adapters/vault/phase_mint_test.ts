@@ -1097,7 +1097,7 @@ test("mintForCapsuleProviderBindings re-validates ids: an unknown connection fai
   expect((err as ConnectionVaultError).code).toBe("not_found");
 });
 
-test("mintForCapsuleProviderBindings mints an operator connection from any Workspace", async () => {
+test("mintForCapsuleProviderBindings never opens raw operator credentials for a generic runner", async () => {
   const { store, vault } = makeVault();
   const operatorConn = await markVerified(
     store,
@@ -1107,16 +1107,15 @@ test("mintForCapsuleProviderBindings mints an operator connection from any Works
       values: { CLOUDFLARE_API_TOKEN: "operator-cf-token" },
     }),
   );
-  const bundle = await vault.mintForCapsuleProviderBindings("space_other", [
-    {
-      provider: "registry.opentofu.org/cloudflare/cloudflare",
-      alias: "zone",
-      connectionId: operatorConn.id,
-    },
-  ]);
-  expect(bundle.env).toEqual({
-    CLOUDFLARE_API_TOKEN: "operator-cf-token",
-  });
+  await expect(
+    vault.mintForCapsuleProviderBindings("space_other", [
+      {
+        provider: "registry.opentofu.org/cloudflare/cloudflare",
+        alias: "zone",
+        connectionId: operatorConn.id,
+      },
+    ]),
+  ).rejects.toThrow(/operator credential.*generic runner/);
 });
 
 test("mintForCapsuleProviderBindings uses managed-provider issuer before stored operator material", async () => {
@@ -1279,7 +1278,9 @@ test("mintForCapsuleProviderBindings still rejects a pending non-managed connect
         connectionId: operatorConn.id,
       },
     ]),
-  ).rejects.toThrow(`connection ${operatorConn.id} is pending (not verified)`);
+  ).rejects.toThrow(
+    `connection ${operatorConn.id} is an operator credential and cannot be materialized into a generic runner`,
+  );
 });
 
 test("managed provider registration rejects an unprofiled row even when providerConfig has a base_url", async () => {

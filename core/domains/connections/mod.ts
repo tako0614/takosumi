@@ -255,16 +255,22 @@ export class ConnectionsService {
       }
       return [];
     }
-    return [
-      await this.#resolveBinding(
-        { workspaceId: input.workspaceId },
-        {
-          provider: input.provider,
-          connectionId: input.connectionId,
-          ...(input.alias ? { alias: input.alias } : {}),
-        },
-      ),
-    ];
+    const resolved = await this.#resolveBinding(
+      { workspaceId: input.workspaceId },
+      {
+        provider: input.provider,
+        connectionId: input.connectionId,
+        ...(input.alias ? { alias: input.alias } : {}),
+      },
+    );
+    if (resolved.connection.scope === "operator") {
+      throw new OpenTofuControllerError(
+        "permission_denied",
+        `Provider Connection ${resolved.connection.id} is operator-scoped and cannot back a user-managed Resource Target`,
+        { reason: PROVIDER_CONNECTION_SETUP_REQUIRED_REASON },
+      );
+    }
+    return [resolved];
   }
 
   async #resolveBinding(
@@ -296,15 +302,17 @@ export class ConnectionsService {
         { reason: PROVIDER_CONNECTION_SETUP_REQUIRED_REASON },
       );
     }
-    if (
-      connection.scope === "operator" &&
-      !this.#allowOperatorScopedProviderConnections
-    ) {
-      throw new OpenTofuControllerError(
-        "permission_denied",
-        `Provider Connection ${connection.id} is operator-scoped and cannot back OSS Provider Connections`,
-        { reason: PROVIDER_CONNECTION_SETUP_REQUIRED_REASON },
-      );
+    if (connection.scope === "operator") {
+      if (
+        !this.#allowOperatorScopedProviderConnections ||
+        !isPublicManagedProviderConnection(connection)
+      ) {
+        throw new OpenTofuControllerError(
+          "permission_denied",
+          `Provider Connection ${connection.id} is operator-scoped and cannot back a generic provider binding`,
+          { reason: PROVIDER_CONNECTION_SETUP_REQUIRED_REASON },
+        );
+      }
     }
     if (!sameProviderSource(binding.provider, connection.providerSource)) {
       throw new OpenTofuControllerError(

@@ -78,7 +78,7 @@ test("secret ProviderConnection binding resolves to its credential row", async (
   expect(mintableConnectionIds(resolved)).toEqual(["conn_space_cf"]);
 });
 
-test("operator-scoped ProviderConnection is Cloud-only and resolves only when enabled", async () => {
+test("raw operator-scoped ProviderConnection never resolves into a generic Capsule runner", async () => {
   const { store, model, service } = await setup();
   await store.putConnection(connection({ id: "conn_operator_cf" }));
   await store.putProviderBindingSet({
@@ -101,9 +101,37 @@ test("operator-scoped ProviderConnection is Cloud-only and resolves only when en
     now: () => NOW,
     allowOperatorScopedProviderConnections: true,
   });
-  const resolved = await cloudService.resolveProviderBindings(model.capsule);
-  expect(resolved[0]?.connection.id).toBe("conn_operator_cf");
-  expect(resolved[0]?.connection.scope).toBe("operator");
+  await expect(
+    cloudService.resolveProviderBindings(model.capsule),
+  ).rejects.toThrow(/generic provider binding/);
+});
+
+test("a user-managed Resource Target cannot select an operator-scoped connection", async () => {
+  const { store, model } = await setup();
+  await store.putConnection(
+    connection({
+      id: "conn_operator_managed",
+      status: "pending",
+      scopeHints: {
+        managedProvider: true,
+        managedProviderProfile: "operator.example.v1",
+      },
+    }),
+  );
+  const cloudService = new ConnectionsService({
+    store,
+    newId: (prefix) => `${prefix}_cloud`,
+    now: () => NOW,
+    allowOperatorScopedProviderConnections: true,
+  });
+  await expect(
+    cloudService.resolveResourceProviderBinding({
+      workspaceId: model.workspace.id,
+      provider: CLOUDFLARE,
+      connectionId: "conn_operator_managed",
+      required: true,
+    }),
+  ).rejects.toThrow(/user-managed Resource Target/);
 });
 
 test("Cloud mode resolves a pending public managed operator connection", async () => {
@@ -126,9 +154,7 @@ test("Cloud mode resolves a pending public managed operator connection", async (
     workspaceId: model.workspace.id,
     capsuleId: model.capsule.id,
     environment: model.capsule.environment,
-    bindings: [
-      { provider: CLOUDFLARE, connectionId: "conn_operator_pending" },
-    ],
+    bindings: [{ provider: CLOUDFLARE, connectionId: "conn_operator_pending" }],
     createdAt: NOW,
     updatedAt: NOW,
   });
@@ -175,7 +201,7 @@ test("providerConfig base_url alone never authorizes an operator managed connect
   });
   await expect(
     cloudService.resolveProviderBindings(model.capsule),
-  ).rejects.toThrow(/requires an explicit managedProviderProfile/);
+  ).rejects.toThrow(/generic provider binding/);
 });
 
 test("binding digest ignores verification progress but detects connection replacement", async () => {
@@ -535,7 +561,7 @@ test("Cloud mode still rejects pending non-managed operator connections", async 
   });
   await expect(
     cloudService.resolveProviderBindings(model.capsule),
-  ).rejects.toThrow(/status pending is not verified/);
+  ).rejects.toThrow(/generic provider binding/);
 });
 
 test("ProviderConnection provider family must match the binding provider", async () => {
