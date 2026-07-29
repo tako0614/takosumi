@@ -113,10 +113,12 @@ export function mintAccountSessionId(): string {
 }
 
 /**
- * Rotate an account session. When a prior id is presented, the store must
- * atomically persist the new record and revoke the old id; stores without that
- * aggregate port fail closed. If `oldSessionId` is absent, only the new
- * session is created. Returns the new session id and expiry.
+ * Rotate an account session. When a prior id is presented and still exists,
+ * the store must atomically persist the new record and revoke the old id;
+ * stores without that aggregate port fail closed. A stale cookie whose session
+ * is no longer present (for example after a database restore or blue/green
+ * cutover) is treated like no prior session, so it cannot permanently lock the
+ * browser out of sign-in. Returns the new session id and expiry.
  *
  * Per Agent 6 item 8, every successful authentication (passkey complete,
  * OAuth callback) must mint a new session_id, even if the caller already
@@ -138,12 +140,17 @@ export async function rotateAccountSession(input: {
     expiresAt,
   };
   if (input.oldSessionId && input.oldSessionId !== sessionId) {
-    if (!input.store.replaceAccountSession) {
-      throw new Error(
-        "account session rotation requires atomic replaceAccountSession store support",
-      );
+    const previous = await input.store.findAccountSession(input.oldSessionId);
+    if (previous) {
+      if (!input.store.replaceAccountSession) {
+        throw new Error(
+          "account session rotation requires atomic replaceAccountSession store support",
+        );
+      }
+      await input.store.replaceAccountSession(input.oldSessionId, next);
+    } else {
+      await input.store.saveAccountSession(next);
     }
-    await input.store.replaceAccountSession(input.oldSessionId, next);
   } else {
     await input.store.saveAccountSession(next);
   }

@@ -354,6 +354,38 @@ test("rotateAccountSession refuses a non-atomic replacement store", async () => 
   expect(base.findAccountSession("sess_non_atomic")).toBeDefined();
 });
 
+test("rotateAccountSession replaces a stale cookie without requiring atomic replacement", async () => {
+  const base = new InMemoryAccountsStore();
+  const now = Date.now();
+  base.saveAccount({
+    subject: "tsub_stale_cookie",
+    createdAt: now,
+    updatedAt: now,
+  });
+  const store = new Proxy(base, {
+    get(target, property, receiver) {
+      if (property === "replaceAccountSession") return undefined;
+      const value = Reflect.get(target, property, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+
+  const rotated = await rotateAccountSession({
+    store,
+    oldSessionId: "sess_removed_with_previous_database",
+    subject: "tsub_stale_cookie",
+    now,
+    ttlMs: 60_000,
+  });
+
+  expect(rotated.sessionId).not.toEqual(
+    "sess_removed_with_previous_database",
+  );
+  expect(base.findAccountSession(rotated.sessionId)?.subject).toEqual(
+    "tsub_stale_cookie",
+  );
+});
+
 test("requireAccountsBearer resolves an arbitrary-prefix session by exact record", async () => {
   const store = new InMemoryAccountsStore();
   const now = Date.now();
