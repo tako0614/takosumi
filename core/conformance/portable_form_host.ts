@@ -145,7 +145,7 @@ export async function runPortableFormHostConformance(
 
   const preview = await jsonRequest(fetcher, `${base}/resources/preview`, {
     method: "POST",
-    headers: jsonHeaders(headers),
+    headers: jsonHeaders({ ...headers, "if-none-match": "*" }),
     body: JSON.stringify(body),
   });
   const planDigest = stringAt(preview, "review", "planDigest");
@@ -227,13 +227,20 @@ export async function runPortableFormHostConformance(
   if (!version) throw new Error("portable Resource omitted resourceVersion");
 
   if (input.updatedDesired) {
-    const updateBody = resourceBody(input, input.name, input.updatedDesired);
+    const updateBase = resourceBody(input, input.name, input.updatedDesired);
+    const updateBody = {
+      ...updateBase,
+      metadata: {
+        ...updateBase.metadata,
+        resourceVersion: version,
+      },
+    };
     const updatePreview = await jsonRequest(
       fetcher,
       `${base}/resources/preview`,
       {
         method: "POST",
-        headers: jsonHeaders(headers),
+        headers: jsonHeaders({ ...headers, "if-match": `"${version}"` }),
         body: JSON.stringify(updateBody),
       },
     );
@@ -273,7 +280,7 @@ export async function runPortableFormHostConformance(
       headers: {
         ...headers,
         "if-match": `"${version}"`,
-        "idempotency-key": "conformance-refresh-1",
+        "idempotency-key": "conformance-observe-1",
       },
     },
   );
@@ -437,7 +444,7 @@ async function runNegativeFixtures(
       `${base}/resources/preview`,
       {
         method: "POST",
-        headers: jsonHeaders(headers),
+        headers: jsonHeaders({ ...headers, "if-none-match": "*" }),
         body: JSON.stringify(resourceBody(input, name, fixture.input)),
       },
       400,

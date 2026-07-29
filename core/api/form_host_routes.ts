@@ -31,11 +31,18 @@ import type {
   ResourceShapeService,
 } from "../domains/resource-shape/mod.ts";
 import { formatResourceShapeId } from "../domains/resource-shape/mod.ts";
+import { parseCanonicalJson } from "../adapters/takoform/canonical_json.ts";
 import { PortableDeclarationReadLimitError } from "../domains/interfaces/portable_declarations.ts";
 import { InterfaceServiceError } from "../domains/interfaces/service.ts";
-import { readJsonObject, requestIdFromContext } from "./errors.ts";
+import { requestIdFromContext } from "./errors.ts";
 import type { ApiEndpoint } from "./route_families.ts";
 import { parsePageQuery } from "./page_query.ts";
+import {
+  PortableHostIdempotencyCoordinator,
+  PortableHostIdempotencyError,
+  type PortableHostIdempotencyReservation,
+  type PortableHostSuccessWireResponse,
+} from "./portable_host_idempotency.ts";
 
 /** Exact first-party audience for short-lived Takoform provider run tokens. */
 export const PORTABLE_FORM_MANAGER = "takoform.form-host.v1";
@@ -86,6 +93,12 @@ export type PortableFormHostAuthResult =
 export interface RegisterPortableFormHostRoutesOptions {
   readonly service: ResourceShapeService;
   readonly availability: PortableFormAvailabilityReader;
+  /**
+   * Host-owned durable lifecycle replay authority. Omission fails closed for
+   * every idempotent portable mutation; the route never creates a local
+   * fallback ledger.
+   */
+  readonly idempotency?: PortableHostIdempotencyCoordinator;
   /** Uses the same trusted principal resolution as the canonical Resource API. */
   readonly authorize: (c: Context) => Promise<PortableFormHostAuthResult>;
   readonly canReadForms: (actor: ActorContext) => boolean;
@@ -357,8 +370,9 @@ export function registerPortableFormHostRoutes(
         if (!query.ok) return query.response;
         const generation = generationPrecondition(c, true);
         if (!generation.ok) return generation.response;
-        const body = await readJsonObject(c.req.raw);
-        const parsed = parseDeclarationBody(c, body as JsonObject, {
+        const body = await readPortableJsonObject(c);
+        if (!body.ok) return body.response;
+        const parsed = parseDeclarationBody(c, body.value, {
           name: c.req.param("name"),
           ...query.value,
         });
@@ -374,7 +388,7 @@ export function registerPortableFormHostRoutes(
         }
         try {
           const declared = await putDeclaredInterface({
-            actor: withIdempotencyRequest(auth.actor, key.value),
+            actor: withInterfaceIdempotencyRequest(auth.actor, key.value),
             space: query.value.space,
             declaration: parsed.value,
             expectedGeneration: generation.value!,
@@ -406,7 +420,7 @@ export function registerPortableFormHostRoutes(
         if (!generation.ok) return generation.response;
         try {
           await deleteDeclaredInterface({
-            actor: withIdempotencyRequest(auth.actor, key.value),
+            actor: withInterfaceIdempotencyRequest(auth.actor, key.value),
             space: query.value.space,
             name: c.req.param("name"),
             version: query.value.version,
@@ -458,7 +472,7 @@ export function registerPortableFormHostRoutes(
   app.post(`${base}/resources/preview`, async (c) => {
     const auth = await options.authorize(c);
     if (!auth.ok) return portableAuthError(c, auth.response);
-    const parsed = await parseResourceBody(c, auth.actor);
+    const parsed = await parseResourceBody(c, auth.actor, true);
     if (!parsed.ok) return parsed.response;
     const request = await withHostResourceOwner(c, options, parsed.request);
     const operation = await desiredWriteOperation(options.service, request);
@@ -492,16 +506,13 @@ export function registerPortableFormHostRoutes(
     if (!key.ok) return key.response;
     const parsed = await parseResourceBody(
       c,
-      withIdempotencyRequest(auth.actor, key.value),
+      auth.actor,
       true,
     );
     if (!parsed.ok) return parsed.response;
     const request = await withHostResourceOwner(c, options, parsed.request);
     const review = reviewFromBody(c, parsed.body);
     if (!review.ok) return review.response;
-    const replay = await completedApplyReplay(options.service, request);
-    if (replay)
-      return portableJson(c, portableResource(replay), 200, key.value);
     const operation = await desiredWriteOperation(options.service, request);
     const available = await requireAvailableForm(
       c,
@@ -511,9 +522,25 @@ export function registerPortableFormHostRoutes(
       operation,
     );
     if (!available.ok) return available.response;
-    const result = await options.service.apply(request, review.value);
-    if (!result.ok) return serviceError(c, result.error);
-    return portableJson(c, portableResource(result.value), 200, key.value);
+    return executePortableIdempotentMutation(
+      c,
+      options,
+      {
+        actor: auth.actor,
+        space: request.space,
+        idempotencyKey: key.value,
+      },
+      async () => {
+        const result = await options.service.apply(request, review.value);
+        if (!result.ok) return serviceError(c, result.error);
+        return portableJson(
+          c,
+          portableResource(result.value),
+          200,
+          key.value,
+        );
+      },
+    );
   });
 
   app.post(`${base}/resources/:kind/:name/import`, async (c) => {
@@ -523,7 +550,7 @@ export function registerPortableFormHostRoutes(
     if (!key.ok) return key.response;
     const parsed = await parseResourceBody(
       c,
-      withIdempotencyRequest(auth.actor, key.value),
+      auth.actor,
       true,
     );
     if (!parsed.ok) return parsed.response;
@@ -537,33 +564,42 @@ export function registerPortableFormHostRoutes(
     };
     const replayStatus =
       await options.service.importReplayStatus(importRequest);
-    if (!replayStatus) {
-      const available = await requireAvailableForm(
-        c,
-        options,
-        auth.actor,
-        request,
-        "import",
-      );
-      if (!available.ok) return available.response;
-    }
-    const result = await options.service.importResource(importRequest, {
-      replayOnly: replayStatus !== undefined,
-    });
-    if (!result.ok) return serviceError(c, result.error);
-    return portableJson(
+    const available = await requireAvailableForm(
       c,
+      options,
+      auth.actor,
+      request,
+      "import",
+    );
+    if (!available.ok) return available.response;
+    return executePortableIdempotentMutation(
+      c,
+      options,
       {
-        resource: portableResource(result.value.resource),
-        import: {
-          summary: "portable import completed",
-          ...(result.value.import.runId
-            ? { runId: result.value.import.runId }
-            : {}),
-        },
+        actor: auth.actor,
+        space: request.space,
+        idempotencyKey: key.value,
       },
-      200,
-      key.value,
+      async () => {
+        const result = await options.service.importResource(importRequest, {
+          replayOnly: replayStatus !== undefined,
+        });
+        if (!result.ok) return serviceError(c, result.error);
+        return portableJson(
+          c,
+          {
+            resource: portableResource(result.value.resource),
+            import: {
+              summary: "portable import completed",
+              ...(result.value.import.runId
+                ? { runId: result.value.import.runId }
+                : {}),
+            },
+          },
+          200,
+          key.value,
+        );
+      },
     );
   });
 
@@ -605,30 +641,42 @@ export function registerPortableFormHostRoutes(
     if (!auth.ok) return portableAuthError(c, auth.response);
     const key = idempotencyKey(c);
     if (!key.ok) return key.response;
-    const located = await exactStoredResource(c, options.service, true);
-    if (!located.ok) return located.response;
-    const result = await options.service.observe(
-      located.value.metadata.space,
-      located.value.kind,
-      located.value.metadata.name,
-      withIdempotencyRequest(auth.actor, key.value),
-      { expectedGeneration: located.value.metadata.generation },
-    );
-    if (!result.ok) return serviceError(c, result.error);
-    return portableJson(
+    const space = requiredQuery(c, "space");
+    if (!space.ok) return space.response;
+    const identity = formIdentityFromQuery(c, true);
+    if (!identity.ok) return identity.response;
+    return executePortableIdempotentMutation(
       c,
-      {
-        resource: portableResource(result.value.resource),
-        observation: {
-          status: result.value.observation.status,
-          summary: `portable drift check ${result.value.observation.status}`,
-          ...(result.value.observation.runId
-            ? { runId: result.value.observation.runId }
-            : {}),
-        },
+      options,
+      { actor: auth.actor, space: space.value, idempotencyKey: key.value },
+      async () => {
+        const located = await exactStoredResource(c, options.service, true);
+        if (!located.ok) return located.response;
+        const result = await options.service.observe(
+          located.value.metadata.space,
+          located.value.kind,
+          located.value.metadata.name,
+          auth.actor,
+          { expectedGeneration: located.value.metadata.generation },
+        );
+        if (!result.ok) return serviceError(c, result.error);
+        return portableJson(
+          c,
+          {
+            resource: portableResource(result.value.resource),
+            observation: {
+              status: result.value.observation.status,
+              summary:
+                `portable drift check ${result.value.observation.status}`,
+              ...(result.value.observation.runId
+                ? { runId: result.value.observation.runId }
+                : {}),
+            },
+          },
+          200,
+          key.value,
+        );
       },
-      200,
-      key.value,
     );
   });
 
@@ -638,29 +686,44 @@ export function registerPortableFormHostRoutes(
     if (!auth.ok) return portableAuthError(c, auth.response);
     const key = idempotencyKey(c);
     if (!key.ok) return key.response;
-    const located = await exactStoredResource(c, options.service, true);
-    if (!located.ok) return located.response;
-    const result = await options.service.refresh(
-      located.value.metadata.space,
-      located.value.kind,
-      located.value.metadata.name,
-      withIdempotencyRequest(auth.actor, key.value),
-      { expectedGeneration: located.value.metadata.generation },
-    );
-    if (!result.ok) return serviceError(c, result.error);
-    return portableJson(
+    const space = requiredQuery(c, "space");
+    if (!space.ok) return space.response;
+    const identity = formIdentityFromQuery(c, true);
+    if (!identity.ok) return identity.response;
+    return executePortableIdempotentMutation(
       c,
+      options,
       {
-        resource: portableResource(result.value.resource),
-        refresh: {
-          summary: "portable refresh completed",
-          ...(result.value.refresh.runId
-            ? { runId: result.value.refresh.runId }
-            : {}),
-        },
+        actor: auth.actor,
+        space: space.value,
+        idempotencyKey: key.value,
       },
-      200,
-      key.value,
+      async () => {
+        const located = await exactStoredResource(c, options.service, true);
+        if (!located.ok) return located.response;
+        const result = await options.service.refresh(
+          located.value.metadata.space,
+          located.value.kind,
+          located.value.metadata.name,
+          auth.actor,
+          { expectedGeneration: located.value.metadata.generation },
+        );
+        if (!result.ok) return serviceError(c, result.error);
+        return portableJson(
+          c,
+          {
+            resource: portableResource(result.value.resource),
+            refresh: {
+              summary: "portable refresh completed",
+              ...(result.value.refresh.runId
+                ? { runId: result.value.refresh.runId }
+                : {}),
+            },
+          },
+          200,
+          key.value,
+        );
+      },
     );
   });
 
@@ -669,23 +732,61 @@ export function registerPortableFormHostRoutes(
     if (!auth.ok) return portableAuthError(c, auth.response);
     const key = idempotencyKey(c);
     if (!key.ok) return key.response;
-    const located = await exactStoredResource(c, options.service, true, true);
-    if (!located.ok) return located.response;
-    if (!located.value) return c.body(null, 204);
-    const result = await options.service.delete(
-      located.value.metadata.space,
-      located.value.kind,
-      located.value.metadata.name,
-      withIdempotencyRequest(auth.actor, key.value),
-      {
-        expectedManagedBy: PORTABLE_FORM_MANAGER,
-        expectedGeneration: located.value.metadata.generation,
+    const space = requiredQuery(c, "space");
+    if (!space.ok) return space.response;
+    const identity = formIdentityFromQuery(c, true);
+    if (!identity.ok) return identity.response;
+    return executePortableIdempotentMutation(
+      c,
+      options,
+      { actor: auth.actor, space: space.value, idempotencyKey: key.value },
+      async () => {
+        const located = await exactStoredResource(
+          c,
+          options.service,
+          true,
+          true,
+        );
+        if (!located.ok) return located.response;
+        if (!located.value) return c.body(null, 204);
+        const result = await options.service.delete(
+          located.value.metadata.space,
+          located.value.kind,
+          located.value.metadata.name,
+          auth.actor,
+          {
+            expectedManagedBy: PORTABLE_FORM_MANAGER,
+            expectedGeneration: located.value.metadata.generation,
+          },
+        );
+        if (!result.ok) return serviceError(c, result.error);
+        c.header("idempotency-key", key.value);
+        return c.body(null, 204);
       },
     );
-    if (!result.ok) return serviceError(c, result.error);
-    c.header("idempotency-key", key.value);
-    return c.body(null, 204);
   });
+}
+
+async function readPortableJsonObject(
+  c: Context,
+): Promise<
+  | { readonly ok: true; readonly value: JsonObject }
+  | { readonly ok: false; readonly response: Response }
+> {
+  try {
+    const value = parseCanonicalJson(
+      new Uint8Array(await c.req.raw.clone().arrayBuffer()),
+    );
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return failed(c, "portable request body must be a JSON object");
+    }
+    return { ok: true, value: value as JsonObject };
+  } catch {
+    return failed(
+      c,
+      "portable request body must be complete UTF-8 I-JSON with unique object names",
+    );
+  }
 }
 
 async function parseResourceBody(
@@ -700,7 +801,9 @@ async function parseResourceBody(
     }
   | { readonly ok: false; readonly response: Response }
 > {
-  const body = await readJsonObject(c.req.raw);
+  const decoded = await readPortableJsonObject(c);
+  if (!decoded.ok) return decoded;
+  const body = decoded.value;
   for (const key of Object.keys(body)) {
     if (!PORTABLE_RESOURCE_BODY_KEYS.has(key)) {
       return failed(c, `${key} is not a portable Resource field`);
@@ -749,9 +852,17 @@ async function parseResourceBody(
   if (!generation.ok) return generation;
   const bodyVersion = stringValue(body.metadata.resourceVersion);
   if (
-    bodyVersion !== undefined &&
+    body.metadata.resourceVersion !== undefined &&
+    (bodyVersion === undefined || !isPortableResourceVersion(bodyVersion))
+  ) {
+    return failed(
+      c,
+      "metadata.resourceVersion must be a canonical positive decimal no greater than 9223372036854775807",
+    );
+  }
+  if (
     generation.value !== undefined &&
-    bodyVersion !== String(generation.value)
+    bodyVersion !== generation.resourceVersion
   ) {
     return failed(
       c,
@@ -806,7 +917,11 @@ function generationPrecondition(
   c: Context,
   required: boolean,
 ):
-  | { readonly ok: true; readonly value: number | undefined }
+  | {
+      readonly ok: true;
+      readonly value: number | undefined;
+      readonly resourceVersion?: string;
+    }
   | { readonly ok: false; readonly response: Response } {
   const create = c.req.header("if-none-match")?.trim();
   const update = c.req.header("if-match")?.trim();
@@ -817,13 +932,37 @@ function generationPrecondition(
     return { ok: true, value: 0 };
   }
   if (update !== undefined) {
-    const match = /^"([1-9][0-9]*)"$/u.exec(update);
-    if (!match) return failed(c, "If-Match must contain one quoted serial");
-    return { ok: true, value: Number(match[1]) };
+    const match = /^"([^"]*)"$/u.exec(update);
+    const resourceVersion = match?.[1];
+    if (
+      resourceVersion === undefined ||
+      !isPortableResourceVersion(resourceVersion)
+    ) {
+      return failed(
+        c,
+        "If-Match must contain one quoted canonical resourceVersion no greater than 9223372036854775807",
+      );
+    }
+    return {
+      ok: true,
+      value: Number(resourceVersion),
+      resourceVersion,
+    };
   }
   return required
     ? failed(c, "If-None-Match: * or If-Match is required")
     : { ok: true, value: undefined };
+}
+
+const PORTABLE_RESOURCE_VERSION_MAX = "9223372036854775807";
+
+function isPortableResourceVersion(value: string): boolean {
+  return (
+    /^[1-9][0-9]*$/u.test(value) &&
+    (value.length < PORTABLE_RESOURCE_VERSION_MAX.length ||
+      (value.length === PORTABLE_RESOURCE_VERSION_MAX.length &&
+        value <= PORTABLE_RESOURCE_VERSION_MAX))
+  );
 }
 
 async function exactStoredResource(
@@ -1217,45 +1356,6 @@ function stringRecord(
   return Object.fromEntries(entries) as Readonly<Record<string, string>>;
 }
 
-async function completedApplyReplay(
-  service: ResourceShapeService,
-  request: ApplyResourceRequest,
-): Promise<ResourceObject | undefined> {
-  if (request.expectedGeneration === undefined) return undefined;
-  const current = await service.get(request.space, request.kind, request.name);
-  if (!current.ok) return undefined;
-  if (current.value.metadata.generation === request.expectedGeneration) {
-    return undefined;
-  }
-  if (
-    current.value.status?.phase !== "Ready" ||
-    current.value.status.observedGeneration !==
-      current.value.metadata.generation ||
-    current.value.metadata.managedBy !== PORTABLE_FORM_MANAGER ||
-    !current.value.form ||
-    !request.form ||
-    installedFormReferenceKey(current.value.form) !==
-      installedFormReferenceKey(request.form) ||
-    current.value.metadata.project !== request.project ||
-    current.value.metadata.environment !== request.environment ||
-    canonicalJson(current.value.spec) !== canonicalJson(request.spec)
-  ) {
-    return undefined;
-  }
-  return current.value;
-}
-
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  if (value && typeof value === "object") {
-    return `{${Object.entries(value as Record<string, unknown>)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value);
-}
-
 function serviceError(c: Context, error: ResourceServiceError): Response {
   const mapping: Record<
     string,
@@ -1348,7 +1448,123 @@ function idempotencyKey(
     : failed(c, "Idempotency-Key must be 8-128 portable characters");
 }
 
-function withIdempotencyRequest(
+async function executePortableIdempotentMutation(
+  c: Context,
+  options: RegisterPortableFormHostRoutesOptions,
+  input: {
+    readonly actor: ActorContext;
+    readonly space: string;
+    readonly idempotencyKey: string;
+  },
+  execute: () => Promise<Response>,
+): Promise<Response> {
+  if (!options.idempotency) {
+    return portableError(
+      c,
+      "backend_unavailable",
+      "portable host idempotency authority is unavailable",
+      503,
+      true,
+    );
+  }
+  let reserved;
+  try {
+    const url = new URL(c.req.url);
+    reserved = await options.idempotency.reserve({
+      actor: input.actor,
+      space: input.space,
+      idempotencyKey: input.idempotencyKey,
+      method: c.req.method,
+      requestTarget: `${url.pathname}${url.search}`,
+      ...(c.req.header("if-match") !== undefined
+        ? { ifMatch: c.req.header("if-match") }
+        : {}),
+      ...(c.req.header("if-none-match") !== undefined
+        ? { ifNoneMatch: c.req.header("if-none-match") }
+        : {}),
+      body: new Uint8Array(await c.req.raw.clone().arrayBuffer()),
+    });
+  } catch (error) {
+    if (
+      error instanceof PortableHostIdempotencyError &&
+      error.code === "idempotency_conflict"
+    ) {
+      return failed(c, error.message).response;
+    }
+    return portableError(
+      c,
+      "backend_unavailable",
+      "portable host idempotency authority rejected the request",
+      503,
+      true,
+    );
+  }
+  if (reserved.kind === "replay") {
+    return responseFromPortableWire(reserved.response);
+  }
+  if (reserved.kind === "in_progress") {
+    return portableError(
+      c,
+      "resource_busy",
+      "portable host request with this Idempotency-Key is in progress",
+      409,
+      true,
+    );
+  }
+  let response: Response;
+  try {
+    response = await execute();
+  } catch (error) {
+    // The reservation deliberately remains: an exception may follow an
+    // ambiguous backend outcome and must not permit a second mutation.
+    throw error;
+  }
+  if (!response.ok) {
+    // Domain failures after reservation may be ambiguous. The canonical
+    // recovery path, not a blind retry, owns releasing that reservation.
+    return response;
+  }
+  try {
+    const stored = await options.idempotency.storeSuccess(
+      reserved.reservation,
+      await portableWireFromResponse(response),
+    );
+    return responseFromPortableWire(stored);
+  } catch {
+    return portableError(
+      c,
+      "backend_unavailable",
+      "portable host idempotency success could not be recorded",
+      503,
+      true,
+    );
+  }
+}
+
+async function portableWireFromResponse(
+  response: Response,
+): Promise<PortableHostSuccessWireResponse> {
+  return {
+    status: response.status,
+    statusText: response.statusText,
+    headers: [...response.headers.entries()],
+    body: new Uint8Array(await response.clone().arrayBuffer()),
+  };
+}
+
+function responseFromPortableWire(
+  response: PortableHostSuccessWireResponse,
+): Response {
+  const headers = new Headers();
+  for (const [name, value] of response.headers) headers.append(name, value);
+  return new Response(response.body.slice(), {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
+function withInterfaceIdempotencyRequest(
   actor: ActorContext,
   key: string,
 ): ActorContext {

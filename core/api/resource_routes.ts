@@ -31,6 +31,7 @@ import {
   type PortableInterfaceDeclarationReader,
   registerPortableFormHostRoutes,
 } from "./form_host_routes.ts";
+import type { PortableHostIdempotencyCoordinator } from "./portable_host_idempotency.ts";
 import {
   type ApplyResourceRequest,
   formatResourceShapeId,
@@ -55,6 +56,8 @@ export interface RegisterResourceShapeRoutesOptions {
    * hosts that do not expose it disable discovery and the advertised API.
    */
   readonly takoformHost?: boolean;
+  /** Durable replay authority for the portable Form host lifecycle surface. */
+  readonly portableHostIdempotency?: PortableHostIdempotencyCoordinator;
   /** Optional canonical byte ingress backed by a host-installed artifact writer. */
   readonly artifactService?: ResourceArtifactService;
   /**
@@ -251,13 +254,19 @@ export function registerResourceShapeRoutes(
     }
   }
 
-  if (options.takoformHost !== false) {
+  if (
+    options.takoformHost !== false &&
+    options.portableHostIdempotency !== undefined
+  ) {
     registerPortableFormHostRoutes(app, {
       service,
       availability: service,
       authorize: (c) => authorizeResourceShapeRequest(c, options),
       canReadForms: hasFormAvailabilityReadScope,
       canWriteInterfaces: hasInterfaceDeclarationWriteScope,
+      ...(options.portableHostIdempotency
+        ? { idempotency: options.portableHostIdempotency }
+        : {}),
       ...(options.resolveResourceCapsuleOwner
         ? {
             resolveResourceCapsuleOwner:

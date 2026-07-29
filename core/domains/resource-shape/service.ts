@@ -963,6 +963,56 @@ export class ResourceShapeService {
     };
   }
 
+  /**
+   * Recomputes and validates one deployment review without claiming a
+   * Resource, quoting admission, or calling an adapter.
+   *
+   * This is a narrow read-only seam for disposable conformance hosts that
+   * must prove plan binding without turning an instrumented probe into a real
+   * apply. A successful result is not mutation authority: callers still have
+   * to invoke {@link apply}, which repeats all checks and performs the fenced
+   * lifecycle. Review comparison intentionally precedes the ordinary
+   * generation/Form admission checks here so a substituted reviewed input is
+   * classified by the same `deployment_plan_changed` contract as apply's
+   * canonical deployment evidence, rather than by whichever later admission
+   * check happens to notice it first.
+   */
+  async validateDeploymentReview(
+    req: ApplyResourceRequest,
+    review: ResourceDeploymentReview,
+  ): Promise<ServiceResult<void>> {
+    if (!review) {
+      return {
+        ok: false,
+        error: {
+          code: "deployment_review_required",
+          message: "deployment apply requires preview review evidence",
+        },
+      };
+    }
+    const id = formatResourceShapeId(req.space, req.kind, req.name);
+    const existingLock = await this.#stores.locks.get(id);
+
+    // Keep the binding calculation on the exact Resolver -> Planner ->
+    // resourceDeploymentEvidence path used by preview/apply. In particular,
+    // do not call adapter.preview: it can allocate a provider plan Run.
+    const prepared = await this.#resolveAndPlan(req, existingLock);
+    if (!prepared.ok) return prepared;
+    const evidence = await resourceDeploymentEvidence(
+      req,
+      prepared.value.output,
+      prepared.value.plan,
+    );
+    const reviewError = deploymentReviewError(review, evidence.planDigest);
+    if (reviewError) {
+      return {
+        ok: false,
+        error: { code: "deployment_plan_changed", message: reviewError },
+      };
+    }
+    return { ok: true, value: undefined };
+  }
+
   async apply(
     req: ApplyResourceRequest,
     review: ResourceDeploymentReview,
@@ -1829,7 +1879,11 @@ export class ResourceShapeService {
   /**
    * Adopt one existing provider resource through an explicit Target descriptor.
    * The adapter is required to prove a read-only import before this projection
-   * becomes Ready; failed attempts remain removable ledger-only records.
+   * becomes Ready. A positive expectedGeneration may re-adopt an existing
+   * fully Ready canonical Resource: the same import authority receives the
+   * caller's exact nativeId/spec, and one CAS-fenced desired generation is
+   * published. Failed create attempts remain removable ledger-only records;
+   * a failed fresh update restores the prior Ready Resource and lock.
    */
   async importReplayStatus(
     req: ImportResourceRequest,
@@ -1913,7 +1967,12 @@ export class ResourceShapeService {
       req.expectedGeneration,
     );
     if (versionError && !recoveringImport) return versionError;
-    if (existing && !recoveringImport) {
+    const updatingImport =
+      existing !== undefined &&
+      !recoveringImport &&
+      req.expectedGeneration !== undefined &&
+      req.expectedGeneration > 0;
+    if (existing && !recoveringImport && !updatingImport) {
       return {
         ok: false,
         error: {
@@ -1921,6 +1980,37 @@ export class ResourceShapeService {
           message: `resource ${id} already exists`,
         },
       };
+    }
+    if (updatingImport && existing) {
+      if (existing.managedBy !== importManagedBy) {
+        return resourceOwnershipConflict(
+          id,
+          importManagedBy,
+          existing.managedBy,
+          "import",
+        );
+      }
+      if (
+        existing.phase !== "Ready" ||
+        existing.observedGeneration !== existing.generation
+      ) {
+        return {
+          ok: false,
+          error: {
+            code: "import_conflict",
+            message: `resource ${id} must be fully Ready before an existing-resource import`,
+          },
+        };
+      }
+      if (!existingLock) {
+        return {
+          ok: false,
+          error: {
+            code: "import_conflict",
+            message: `resource ${id} has no ResolutionLock for an existing-resource import`,
+          },
+        };
+      }
     }
     if (!existing && existingLock) {
       return {
@@ -1934,7 +2024,7 @@ export class ResourceShapeService {
 
     const prepared = await this.#resolveAndPlan(
       req,
-      recoveringImport ? existingLock : undefined,
+      recoveringImport || updatingImport ? existingLock : undefined,
     );
     if (!prepared.ok) return prepared;
     const { output, plan, entry, parsed } = prepared.value;
@@ -1999,6 +2089,7 @@ export class ResourceShapeService {
     }
 
     let operationRun: ResourceOperationRun | undefined;
+    let operationRunCreated = false;
     if (output.selectedImplementationDescriptor.plugin) {
       try {
         if (recoveringImport) {
@@ -2025,7 +2116,7 @@ export class ResourceShapeService {
           }
           assertResourceOperationFormEvidence(operationRun, form.value);
         } else {
-          operationRun = await this.#beginPluginOperationRun({
+          const operationRunClaim = await this.#beginPluginOperationRunClaim({
             operation: "import",
             resourceId: id,
             actor: req.actor,
@@ -2034,12 +2125,15 @@ export class ResourceShapeService {
               incarnationNonce: validatedOperationNonce(
                 this.#newOperationNonce(),
               ),
+              generation: (existing?.generation ?? 0) + 1,
               importRequestDigest,
               resolutionFingerprint:
                 output.resolutionLock.implementationFingerprint ??
                 output.selectedImplementation,
             },
           });
+          operationRun = operationRunClaim.run;
+          operationRunCreated = operationRunClaim.created;
         }
         if (
           existing?.pendingOperation &&
@@ -2053,6 +2147,14 @@ export class ResourceShapeService {
           );
         }
       } catch (error) {
+        const terminalized = await this.#failUnclaimedPluginOperationRun({
+          run: operationRun,
+          created: operationRunCreated,
+          error,
+        });
+        if (!terminalized) {
+          return pluginOperationRunFinalizationPending(id, "import");
+        }
         return {
           ok: false,
           error: { code: "import_failed", message: errorMessage(error) },
@@ -2061,11 +2163,14 @@ export class ResourceShapeService {
     }
 
     const now = nextApplyClaimTimestamp(this.#now(), existing?.updatedAt);
+    const generation = recoveringImport
+      ? existing!.generation
+      : (existing?.generation ?? 0) + 1;
     const applyingRecord: ResourceShapeRecord = {
       id,
       spaceId: req.space,
-      project: req.project,
-      environment: req.environment,
+      project: req.project ?? existing?.project,
+      environment: req.environment ?? existing?.environment,
       kind: req.kind,
       ...(form.value === undefined ? {} : { form: form.value }),
       name: req.name,
@@ -2073,9 +2178,17 @@ export class ResourceShapeService {
       owner: req.owner ?? existing?.owner,
       spec: req.spec,
       phase: "Applying",
-      generation: 1,
-      observedGeneration: 0,
-      conditions: [importingCondition(1, now, importRequestDigest)],
+      generation,
+      observedGeneration: existing?.observedGeneration ?? 0,
+      outputs: existing?.outputs,
+      execution: existing?.execution,
+      ...(existing?.stateAdoption
+        ? { stateAdoption: existing.stateAdoption }
+        : {}),
+      ...(existing?.lastOperationRunId
+        ? { lastOperationRunId: existing.lastOperationRunId }
+        : {}),
+      conditions: [importingCondition(generation, now, importRequestDigest)],
       ...(operationRun
         ? {
             pendingOperation: {
@@ -2085,7 +2198,7 @@ export class ResourceShapeService {
             },
           }
         : {}),
-      labels: req.labels,
+      labels: req.labels ?? existing?.labels,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
     };
@@ -2107,22 +2220,73 @@ export class ResourceShapeService {
       updatedAt: now,
     };
 
-    let claim: Awaited<ReturnType<ResourceShapeStores["beginApply"]>>;
+    let claimSucceeded = false;
     try {
-      claim = await this.#stores.beginApply({
+      const claim = await this.#stores.beginApply({
         applyingRecord,
         plannedLock: lockRecord,
-        ...(recoveringImport && existing
-          ? { expected: versionOf(existing) }
-          : {}),
+        ...(existing ? { expected: versionOf(existing) } : {}),
       });
+      if (claim.status === "ownership_conflict") {
+        const terminalized = await this.#failUnclaimedPluginOperationRun({
+          run: operationRun,
+          created: operationRunCreated,
+          error: new Error(
+            `resource ${id} ownership changed before import could be claimed`,
+          ),
+        });
+        if (!terminalized) {
+          return pluginOperationRunFinalizationPending(id, "import");
+        }
+        return resourceOwnershipConflict(
+          id,
+          importManagedBy,
+          claim.record.managedBy,
+          "import",
+        );
+      }
+      claimSucceeded = claim.status === "begun";
     } catch (error) {
+      let current: ResourceShapeRecord | undefined;
+      try {
+        current = await this.#stores.resources.get(id);
+      } catch (observationError) {
+        return importClaimAcknowledgementPending(
+          id,
+          error,
+          observationError,
+        );
+      }
+      if (
+        applyingClaimMatchesRecord(current, applyingRecord) ||
+        resourcePendingOperationMatchesRun(current, operationRun, "import")
+      ) {
+        return importClaimAcknowledgementPending(id, error);
+      }
+      const terminalized = await this.#failUnclaimedPluginOperationRun({
+        run: operationRun,
+        created: operationRunCreated,
+        error,
+      });
+      if (!terminalized) {
+        return pluginOperationRunFinalizationPending(id, "import");
+      }
       return {
         ok: false,
         error: { code: "import_failed", message: errorMessage(error) },
       };
     }
-    if (claim.status !== "begun") {
+    if (!claimSucceeded) {
+      const terminalized = await this.#failUnclaimedPluginOperationRun({
+        run: operationRun,
+        created: operationRunCreated,
+        error: new Error(
+          `resource ${id} changed before import could be claimed`,
+        ),
+      });
+      if (!terminalized) {
+        return pluginOperationRunFinalizationPending(id, "import");
+      }
       return {
         ok: false,
         error: {
@@ -2140,7 +2304,7 @@ export class ResourceShapeService {
         resourceId: id,
         actor: req.actor,
         ...(operationRun ? { runId: operationRun.id } : {}),
-        metadata: { generation: 1, phase: "Applying" },
+        metadata: { generation, phase: "Applying" },
       });
       if (operationRun?.resourceOperationResult) {
         const persisted = operationRun.resourceOperationResult;
@@ -2163,7 +2327,7 @@ export class ResourceShapeService {
           ...(applyingRecord.owner === undefined
             ? {}
             : { owner: applyingRecord.owner }),
-          resourceGeneration: 1,
+          resourceGeneration: generation,
           ...(operationRun ? { resourceRevisionId: operationRun.id } : {}),
           ...(existing?.lastOperationRunId
             ? { previousResourceRevisionId: existing.lastOperationRunId }
@@ -2172,8 +2336,14 @@ export class ResourceShapeService {
           ...(operationRun
             ? { operationKey: operationRun.resourceOperationKey }
             : {}),
-          environment: req.environment ?? "default",
-          stateGeneration: 0,
+          environment: req.environment ?? existing?.environment ?? "default",
+          stateGeneration:
+            existing?.execution?.stateGeneration ??
+            existing?.stateAdoption?.stateGeneration ??
+            0,
+          ...(existing?.stateAdoption
+            ? { stateAdoption: existing.stateAdoption }
+            : {}),
           plan,
           target: targetForImplementation(
             entry,
@@ -2226,8 +2396,8 @@ export class ResourceShapeService {
           operationRun,
           "resource.import.succeeded",
           {
-            generation: 1,
-            observedGeneration: 1,
+            generation,
+            observedGeneration: generation,
             phase: "Ready",
             nativeResourceCount: result.nativeResources.length,
           },
@@ -2248,7 +2418,7 @@ export class ResourceShapeService {
           actor: req.actor,
           runId: operationRun.id,
           metadata: {
-            generation: 1,
+            generation,
             phase: "Applying",
             reason: "backend_outcome_unknown",
           },
@@ -2265,7 +2435,9 @@ export class ResourceShapeService {
       const failedRecord: ResourceShapeRecord = {
         ...applyingRecord,
         phase: "Failed",
-        conditions: [importFailedCondition(1, failedAt, error, req.nativeId)],
+        conditions: [
+          importFailedCondition(generation, failedAt, error, req.nativeId),
+        ],
         updatedAt: failedAt,
       };
       let failurePersisted = false;
@@ -2278,7 +2450,10 @@ export class ResourceShapeService {
             updatedAt: applyingRecord.updatedAt,
           },
           expectedPlannedLock: lockRecord,
-          replacement: { record: failedRecord, lock: lockRecord },
+          replacement:
+            updatingImport && existing && existingLock
+              ? { record: existing, lock: existingLock }
+              : { record: failedRecord, lock: lockRecord },
         });
         failurePersisted = failed.status === "rolled_back";
       } catch (persistenceError) {
@@ -2287,20 +2462,27 @@ export class ResourceShapeService {
           error: persistenceError,
         });
       }
-      await this.#notifyLifecycle({
-        type: "unknown",
-        spaceId: req.space,
-        resourceId: id,
-        operation: "import",
-      });
+      if (!(updatingImport && failurePersisted)) {
+        await this.#notifyLifecycle({
+          type: "unknown",
+          spaceId: req.space,
+          resourceId: id,
+          operation: "import",
+        });
+      }
       await this.#recordResourceEvent({
         action: "resource.import.failed",
         space: req.space,
         resourceId: id,
         actor: req.actor,
         metadata: {
-          generation: 1,
-          phase: failurePersisted ? "Failed" : "Applying",
+          generation,
+          phase:
+            failurePersisted && updatingImport
+              ? existing?.phase ?? "Ready"
+              : failurePersisted
+                ? "Failed"
+                : "Applying",
           ...(failurePersisted ? {} : { reason: "finalize_pending" }),
         },
       });
@@ -2316,16 +2498,21 @@ export class ResourceShapeService {
     }
 
     const importedAt = this.#now();
-    const { pendingOperation: _completedImport, ...importReadyBase } =
-      applyingRecord;
+    const {
+      pendingOperation: _completedImport,
+      stateAdoption: _consumedStateAdoption,
+      ...importReadyBase
+    } = applyingRecord;
     const readyRecord: ResourceShapeRecord = {
       ...importReadyBase,
       managedBy: importManagedBy,
       phase: "Ready",
-      observedGeneration: 1,
+      observedGeneration: generation,
       outputs: result.outputs,
-      execution: result.execution,
-      conditions: [importedCondition(1, importedAt, importRequestDigest)],
+      execution: result.execution ?? existing?.execution,
+      conditions: [
+        importedCondition(generation, importedAt, importRequestDigest),
+      ],
       ...(operationRun ? { lastOperationRunId: operationRun.id } : {}),
       updatedAt: importedAt,
     };
@@ -2362,7 +2549,7 @@ export class ResourceShapeService {
           : result.runId
             ? { runId: result.runId }
             : {}),
-        metadata: { generation: 1, phase: "Applying" },
+        metadata: { generation, phase: "Applying" },
       });
       return {
         ok: false,
@@ -2392,8 +2579,8 @@ export class ResourceShapeService {
         ? lifecycleRecord
         : persisted.record;
     const successMetadata = {
-      generation: 1,
-      observedGeneration: 1,
+      generation,
+      observedGeneration: generation,
       phase: finalizedRecord.phase,
       nativeResourceCount: result.nativeResources.length,
     };
@@ -5695,10 +5882,26 @@ function applyClaimAcknowledgementPending(
   };
 }
 
-function pluginOperationRunFinalizationPending(
+function importClaimAcknowledgementPending(
+  resourceId: string,
+  claimError: unknown,
+  observationError?: unknown,
+): ServiceResult<ImportResourceResult> {
+  return {
+    ok: false,
+    error: {
+      code: "deployment_finalize_pending",
+      message: observationError
+        ? `resource ${resourceId} import claim outcome is unknown and could not be observed; host recovery is required: ${errorMessage(claimError)}; observation failed: ${errorMessage(observationError)}`
+        : `resource ${resourceId} import claim committed but its acknowledgement was lost; host recovery is required: ${errorMessage(claimError)}`,
+    },
+  };
+}
+
+function pluginOperationRunFinalizationPending<T>(
   resourceId: string,
   operation: ResourceOperation,
-): ServiceResult<ResourceObject> {
+): ServiceResult<T> {
   return {
     ok: false,
     error: {
@@ -5736,7 +5939,7 @@ function resourceOwnershipConflict<T>(
   resourceId: string,
   requestedManagedBy: ResourceManagedBy,
   currentManagedBy: ResourceManagedBy,
-  operation: "apply" | "delete",
+  operation: "apply" | "import" | "delete",
 ): ServiceResult<T> {
   return {
     ok: false,
@@ -5890,6 +6093,10 @@ async function resourceImportRequestDigest(
       labels: request.labels ?? null,
       targetPoolName: request.targetPoolName ?? null,
       spacePolicyName: request.spacePolicyName ?? null,
+      // This is the generation being replaced, not the post-import
+      // generation. It prevents an exact nativeId/spec replay from being
+      // adopted against a later Resource incarnation.
+      expectedGeneration: request.expectedGeneration ?? null,
     },
     // The digest is the only recovery marker stored in the Resource condition;
     // the provider-native identity itself never enters status or audit events.
@@ -5903,6 +6110,8 @@ function importRequestMatchesRecord(
   requestDigest: string,
   phase: "Applying" | "Ready",
 ): boolean {
+  const previousGeneration = request.expectedGeneration ?? 0;
+  const importedGeneration = previousGeneration + 1;
   const marker = record.conditions?.find(
     (condition) =>
       condition.type === "Ready" &&
@@ -5911,16 +6120,19 @@ function importRequestMatchesRecord(
   return (
     record.phase === phase &&
     record.managedBy === (request.managedBy ?? "opentofu") &&
-    record.generation === 1 &&
-    record.observedGeneration === (phase === "Applying" ? 0 : 1) &&
+    record.generation === importedGeneration &&
+    record.observedGeneration ===
+      (phase === "Applying" ? previousGeneration : importedGeneration) &&
     request.space === record.spaceId &&
     request.kind === record.kind &&
     resourceFormIdentitiesEqual(request.form, record.form) &&
     request.name === record.name &&
-    (request.project ?? null) === (record.project ?? null) &&
-    (request.environment ?? null) === (record.environment ?? null) &&
+    (request.project ?? record.project ?? null) ===
+      (record.project ?? null) &&
+    (request.environment ?? record.environment ?? null) ===
+      (record.environment ?? null) &&
     canonicalJson(request.spec) === canonicalJson(record.spec) &&
-    canonicalJson(request.labels ?? null) ===
+    canonicalJson(request.labels ?? record.labels ?? null) ===
       canonicalJson(record.labels ?? null) &&
     marker?.message === `import-request:${requestDigest}`
   );
@@ -6086,6 +6298,15 @@ async function resourceDeploymentEvidence(
       kind: request.kind,
       form: request.form ?? null,
       name: request.name,
+      // Portable create omits metadata.resourceVersion while the mutation
+      // precondition is represented internally as generation 0. Normalize
+      // both forms to null so preview/apply agree, while an update's positive
+      // reviewed generation remains cryptographically bound.
+      resourceVersion:
+        request.expectedGeneration !== undefined &&
+        request.expectedGeneration > 0
+          ? request.expectedGeneration
+          : null,
       spec: request.spec,
       labels: request.labels,
     },
