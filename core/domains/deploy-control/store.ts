@@ -885,6 +885,13 @@ export interface OpenTofuControlStore {
   // enters the ledger.
   putStateVersion(snapshot: StateVersion): Promise<StateVersion>;
   getStateVersion(id: string): Promise<StateVersion | undefined>;
+  /**
+   * Resolves StateVersions by id without per-id store round-trips. Results
+   * preserve caller order and duplicates while omitting missing ids.
+   */
+  getStateVersionsByIds(
+    ids: readonly string[],
+  ): Promise<readonly StateVersion[]>;
   getLatestStateVersion(
     capsuleId: string,
     environment: string,
@@ -2183,6 +2190,16 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
 
   getStateVersion(id: string): Promise<StateVersion | undefined> {
     return Promise.resolve(this.#stateVersions.get(id));
+  }
+
+  getStateVersionsByIds(
+    ids: readonly string[],
+  ): Promise<readonly StateVersion[]> {
+    return Promise.resolve(
+      ids
+        .map((id) => this.#stateVersions.get(id))
+        .filter((row): row is StateVersion => row !== undefined),
+    );
   }
 
   listStateVersions(

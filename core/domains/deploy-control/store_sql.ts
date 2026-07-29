@@ -2472,6 +2472,25 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     );
   }
 
+  async getStateVersionsByIds(
+    ids: readonly string[],
+  ): Promise<readonly StateVersion[]> {
+    if (ids.length === 0) return [];
+    const rows = await this.#db
+      .select({ json: pgSchema.stateVersions.snapshotJson })
+      .from(pgSchema.stateVersions)
+      .where(inArray(pgSchema.stateVersions.id, [...new Set(ids)]));
+    const byId = new Map(
+      rows.map((row) => {
+        const value = parseRow(row) as StateVersion;
+        return [value.id, value] as const;
+      }),
+    );
+    return ids
+      .map((id) => byId.get(id))
+      .filter((row): row is StateVersion => row !== undefined);
+  }
+
   async getLatestStateVersion(
     capsuleId: string,
     environment: string,

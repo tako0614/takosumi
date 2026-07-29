@@ -125,15 +125,9 @@ export class CapsuleQuery {
   ): Promise<
     readonly import("takosumi-contract/state-versions").StateVersion[]
   > {
-    const rows = await Promise.all(
-      [...new Set(ids.filter(Boolean))].map((id) =>
-        this.#store.getStateVersion(id),
-      ),
-    );
-    return rows.filter(
-      (row): row is import("takosumi-contract/state-versions").StateVersion =>
-        row !== undefined,
-    );
+    return await this.#store.getStateVersionsByIds([
+      ...new Set(ids.filter(Boolean)),
+    ]);
   }
 
   async getStateVersion(id: string): Promise<GetStateVersionResponse> {

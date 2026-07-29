@@ -2638,6 +2638,25 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     return row ? stateVersionFromDrizzleRow(row) : undefined;
   }
 
+  async getStateVersionsByIds(
+    ids: readonly string[],
+  ): Promise<readonly StateVersion[]> {
+    if (ids.length === 0) return [];
+    await this.#ensureSchema();
+    const rows: StateVersion[] = [];
+    for (const idChunk of chunkD1InQueryValues([...new Set(ids)])) {
+      const chunkRows = await this.#orm
+        .select()
+        .from(schema.stateVersions)
+        .where(inArray(schema.stateVersions.id, [...idChunk]));
+      rows.push(...chunkRows.map(stateVersionFromDrizzleRow));
+    }
+    const byId = new Map(rows.map((row) => [row.id, row] as const));
+    return ids
+      .map((id) => byId.get(id))
+      .filter((row): row is StateVersion => row !== undefined);
+  }
+
   async getLatestStateVersion(
     capsuleId: string,
     environment: string,
