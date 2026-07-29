@@ -837,7 +837,7 @@ export const ja = {
   "new.existing.body":
     "「{name}」は {environment} 環境に追加済みです。新しく作り直さず、既存サービスを開いて確認できます。",
   "new.existing.open": "既存サービスを開く",
-  "new.providers.title": "デプロイに使うアクセス",
+  "new.providers.title": "プロバイダー接続",
   "new.providers.body":
     "ここでは認証情報だけを選びます。デプロイ先と変更内容は plan で解決・確認され、Takosumi の料金がある場合は preview に表示されます。",
   "new.providers.alias": "プロバイダー alias: {alias}",

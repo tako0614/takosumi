@@ -830,7 +830,7 @@ export const en: Record<keyof typeof ja, string> = {
   "new.existing.body":
     "“{name}” already exists in the {environment} environment. Open the existing service instead of creating another one.",
   "new.existing.open": "Open existing service",
-  "new.providers.title": "Deployment access",
+  "new.providers.title": "Provider access",
   "new.providers.body":
     "This only supplies credentials. The deployment target and changes are resolved and reviewed in the plan. If a Takosumi price applies, it appears in preview.",
   "new.providers.alias": "Provider alias: {alias}",

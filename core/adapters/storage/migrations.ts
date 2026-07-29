@@ -1639,7 +1639,7 @@ drop table if exists takosumi_connections;`,
       version: 31,
       domain: "deploy",
       description:
-        "Create the internal plan-run inputs sidecar so the async RunOwner can re-run a queued plan with the submitted OpenTofu variables. Never projected into the public ledger; removed when the run reaches a terminal state.",
+        "Create the internal plan-run inputs sidecar so the async run-queue consumer can re-run a queued plan with the submitted OpenTofu variables. Never projected into the public ledger; removed when the run reaches a terminal state.",
       sql: `create table if not exists takosumi_plan_run_inputs (
   plan_run_id text  primary key,
   inputs_json jsonb not null
