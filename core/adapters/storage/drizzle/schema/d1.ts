@@ -574,6 +574,8 @@ export const resourceShapes = sqliteTable(
     pendingOperationJson: jsonText("pending_operation_json"),
     // v55 is additive; keep append order aligned with upgraded databases.
     revision: integer("revision").notNull().default(0),
+    // Host-authenticated Capsule/installing-Principal relation (v56).
+    ownerJson: jsonText("owner_json"),
   },
   (table) => [
     uniqueIndex("resource_shapes_space_kind_name_unique").on(

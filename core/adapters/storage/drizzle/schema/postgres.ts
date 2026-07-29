@@ -600,6 +600,7 @@ export const resourceShapes = pgTable(
     observationClaimedAt: text("observation_claimed_at"),
     lastObservationAttemptAt: text("last_observation_attempt_at"),
     revision: bigint("revision", { mode: "number" }).notNull().default(0),
+    ownerJson: json("owner_json"),
   },
   (table) => [
     uniqueIndex("takosumi_resource_shapes_space_kind_name_unique").on(

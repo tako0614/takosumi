@@ -16,6 +16,7 @@ import type {
   JsonObject,
   NativeResourceRef,
   ResourceManagedBy,
+  ResourceOwner,
   ResourcePhase,
   ResourcePortability,
   ResourceShapeKind,
@@ -51,6 +52,8 @@ export interface ResourceShapeRecord {
   readonly form?: InstalledFormReference;
   readonly name: string;
   readonly managedBy: ResourceManagedBy;
+  /** Host-owned exact application relationship; never accepted from IaC. */
+  readonly owner?: ResourceOwner;
   /** Desired state (`spec`) as authored. */
   readonly spec: JsonObject;
   readonly phase: ResourcePhase;

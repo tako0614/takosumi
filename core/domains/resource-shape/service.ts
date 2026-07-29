@@ -28,6 +28,7 @@ import type {
   ResourceDeploymentReview,
   ResolverOutput,
   ResourceManagedBy,
+  ResourceOwner,
   ResourceEvent,
   ResourceOperation,
   ResourceObject,
@@ -183,6 +184,8 @@ export interface ApplyResourceRequest {
   readonly expectedGeneration?: number;
   readonly spec: JsonObject;
   readonly managedBy?: ResourceManagedBy;
+  /** Host-authenticated execution owner. Portable bodies cannot set this. */
+  readonly owner?: ResourceOwner;
   readonly labels?: Readonly<Record<string, string>>;
   readonly targetPoolName?: string;
   readonly spacePolicyName?: string;
@@ -774,6 +777,8 @@ export class ResourceShapeService {
   ): Promise<ServiceResult<PreviewResourceResult>> {
     const resourceId = formatResourceShapeId(req.space, req.kind, req.name);
     const existing = await this.#stores.resources.get(resourceId);
+    const ownerError = resourceOwnerConflict(resourceId, existing, req.owner);
+    if (ownerError) return ownerError;
     const versionError = resourceGenerationError(
       resourceId,
       existing,
@@ -998,6 +1003,8 @@ export class ResourceShapeService {
         "apply",
       );
     }
+    const ownerError = resourceOwnerConflict(id, existing, req.owner);
+    if (ownerError) return ownerError;
     if (existing?.phase === "Deleting") {
       return {
         ok: false,
@@ -1172,6 +1179,7 @@ export class ResourceShapeService {
       ...(form.value === undefined ? {} : { form: form.value }),
       name: req.name,
       managedBy: incomingManagedBy,
+      owner: req.owner ?? existing?.owner,
       spec: req.spec,
       phase: "Applying",
       generation,
@@ -1831,6 +1839,8 @@ export class ResourceShapeService {
       this.#stores.resources.get(id),
       this.#stores.locks.get(id),
     ]);
+    const ownerError = resourceOwnerConflict(id, existing, req.owner);
+    if (ownerError) return ownerError;
     const importRequestDigest = await resourceImportRequestDigest(req);
     const replayStatus = classifyImportReplay(
       req,
@@ -2031,6 +2041,7 @@ export class ResourceShapeService {
       ...(form.value === undefined ? {} : { form: form.value }),
       name: req.name,
       managedBy: importManagedBy,
+      owner: req.owner ?? existing?.owner,
       spec: req.spec,
       phase: "Applying",
       generation: 1,
@@ -5234,7 +5245,7 @@ export class ResourceShapeService {
         generation: req.expectedGeneration ?? 0,
         project: req.project,
         environment: req.environment,
-        owner: req.actor.actorAccountId,
+        owner: req.owner ?? req.actor.actorAccountId,
         labels: req.labels,
         managedBy: req.managedBy ?? "opentofu",
       },
@@ -5270,6 +5281,7 @@ export class ResourceShapeService {
         generation: record.generation,
         project: record.project,
         environment: record.environment,
+        owner: record.owner,
         labels: record.labels,
         managedBy: record.managedBy,
       },
@@ -5653,6 +5665,39 @@ function resourceOwnershipConflict<T>(
       message: `resource ${resourceId} is managed by ${currentManagedBy}; ${operation} from ${requestedManagedBy} is not allowed`,
     },
   };
+}
+
+function resourceOwnerConflict(
+  resourceId: string,
+  current: ResourceShapeRecord | undefined,
+  requested: ResourceOwner | undefined,
+): { readonly ok: false; readonly error: ResourceServiceError } | undefined {
+  if (
+    current?.owner === undefined ||
+    requested === undefined ||
+    sameResourceOwner(current.owner, requested)
+  ) {
+    return undefined;
+  }
+  return {
+    ok: false,
+    error: {
+      code: "ownership_conflict",
+      message: `resource ${resourceId} belongs to a different authenticated execution owner`,
+    },
+  };
+}
+
+function sameResourceOwner(left: ResourceOwner, right: ResourceOwner): boolean {
+  if (typeof left === "string" || typeof right === "string") {
+    return left === right;
+  }
+  return (
+    left.kind === right.kind &&
+    left.id === right.id &&
+    left.workspaceId === right.workspaceId &&
+    left.installingPrincipalId === right.installingPrincipalId
+  );
 }
 
 function resourceGenerationError(

@@ -85,6 +85,8 @@ export function parseUiSurfaceInterface(
   const metadata = record && isRecord(record.metadata) ? record.metadata : null;
   const ownerRef =
     metadata && isRecord(metadata.ownerRef) ? metadata.ownerRef : null;
+  const launcherOwner =
+    record && isRecord(record.launcherOwner) ? record.launcherOwner : null;
   const spec = record && isRecord(record.spec) ? record.spec : null;
   const inputs = spec && isRecord(spec.inputs) ? spec.inputs : null;
   const urlInput = inputs && isRecord(inputs.url) ? inputs.url : null;
@@ -99,7 +101,20 @@ export function parseUiSurfaceInterface(
   const resolvedRevision = nonNegativeInteger(status?.resolvedRevision);
   const interfaceId = text(metadata?.id);
   const interfaceName = text(metadata?.name);
-  const capsuleId = text(ownerRef?.id);
+  const capsuleOwned = ownerRef?.kind === "Capsule";
+  const resourceOwned = ownerRef?.kind === "Resource";
+  const capsuleId = capsuleOwned
+    ? text(ownerRef?.id)
+    : resourceOwned
+      ? text(launcherOwner?.capsuleId)
+      : null;
+  const legacyUiSurface =
+    capsuleOwned &&
+    spec?.type === UI_SURFACE_INTERFACE_TYPE &&
+    spec.version === UI_SURFACE_INTERFACE_VERSION &&
+    Boolean(urlInput && isSupportedInputSource(urlInput.source));
+  const portableLauncher =
+    resourceOwned && explicitLauncherInput(document, inputs) !== null;
   if (
     record?.apiVersion !== TAKOSUMI_API_VERSION ||
     record.kind !== "Interface" ||
@@ -107,15 +122,12 @@ export function parseUiSurfaceInterface(
     !interfaceId ||
     !interfaceName ||
     !isValidInterfaceName(interfaceName) ||
-    ownerRef?.kind !== "Capsule" ||
+    (!capsuleOwned && !resourceOwned) ||
     !capsuleId ||
     generation === null ||
     generation < 1 ||
     observedGeneration !== generation ||
-    spec?.type !== UI_SURFACE_INTERFACE_TYPE ||
-    spec.version !== UI_SURFACE_INTERFACE_VERSION ||
-    !urlInput ||
-    !isSupportedInputSource(urlInput.source) ||
+    (!legacyUiSurface && !portableLauncher) ||
     !document ||
     document.launcher !== true ||
     hasEmbeddedCredentialContract(document) ||
@@ -129,7 +141,9 @@ export function parseUiSurfaceInterface(
     return null;
   }
 
-  const url = safeRuntimeUrl(resolvedInputs.url);
+  const url = legacyUiSurface
+    ? safeRuntimeUrl(resolvedInputs.url)
+    : portableLauncherUrl(document, inputs, resolvedInputs);
   if (!url) return null;
   // The dashboard origin is where the tile <img> is fetched from, and that
   // fetch carries the account session cookie. Hand it to the parser so a
@@ -162,6 +176,41 @@ export function parseUiSurfaceInterface(
       : {}),
     url,
   };
+}
+
+function explicitLauncherInput(
+  document: Record<string, unknown> | null,
+  inputs: Record<string, unknown> | null,
+): string | null {
+  const endpoint =
+    document && isRecord(document.endpoint) ? document.endpoint : null;
+  const inputName = text(endpoint?.originInput);
+  const declared = inputName && inputs ? inputs[inputName] : undefined;
+  return inputName &&
+    isRecord(declared) &&
+    isSupportedInputSource(declared.source) &&
+    (endpoint?.path === undefined ||
+      (typeof endpoint.path === "string" && endpoint.path.startsWith("/")))
+    ? inputName
+    : null;
+}
+
+function portableLauncherUrl(
+  document: Record<string, unknown> | null,
+  inputs: Record<string, unknown> | null,
+  resolvedInputs: Record<string, unknown>,
+): string | null {
+  const inputName = explicitLauncherInput(document, inputs);
+  if (!inputName || !document) return null;
+  const endpoint = isRecord(document.endpoint) ? document.endpoint : null;
+  const origin = safeRuntimeUrl(resolvedInputs[inputName]);
+  if (!origin || !endpoint) return null;
+  const path = typeof endpoint.path === "string" ? endpoint.path : "/";
+  try {
+    return safeRuntimeUrl(new URL(path, origin).toString());
+  } catch {
+    return null;
+  }
 }
 
 export function isReadyUiOpenBinding(

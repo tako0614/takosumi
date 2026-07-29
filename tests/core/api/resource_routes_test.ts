@@ -663,6 +663,106 @@ test("portable Form host delegates exact lifecycle to the canonical Resource and
   expect(deleteReplay.status).toBe(204);
 });
 
+test("portable Resource ownership comes only from authenticated host run context", async () => {
+  const owner = {
+    kind: "Capsule" as const,
+    id: "cap_yuru",
+    workspaceId: "workspace_1",
+    installingPrincipalId: "acct_installer",
+  };
+  const { app, service } = await buildApp(
+    {
+      resolveActor: () => ({
+        actorAccountId: "run_yuru",
+        workspaceId: "workspace_1",
+        roles: ["owner"],
+        scopes: ["forms:read", "resources:*"],
+        requestId: "req_yuru",
+      }),
+      resolveResourceCapsuleOwner: () => owner,
+    },
+    exactObjectBucketFormRegistry(),
+  );
+  const base = "/apis/forms.takoform.com/v1alpha1";
+  const desired = {
+    apiVersion: "forms.takoform.com/v1alpha1",
+    kind: "ObjectBucket",
+    form: portableFormReference(),
+    metadata: { name: "yuru-assets", space: "space_1" },
+    spec: { name: "yuru-assets", interfaces: ["s3_api"] },
+  };
+  const preview = await app.request(`${base}/resources/preview`, {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(desired),
+  });
+  expect(preview.status).toBe(200);
+  const previewBody = await preview.json();
+  const applied = await app.request(
+    `${base}/resources/ObjectBucket/yuru-assets`,
+    {
+      method: "PUT",
+      headers: {
+        ...JSON_HEADERS,
+        "if-none-match": "*",
+        "idempotency-key": "portable-yuru-owner-1",
+      },
+      body: JSON.stringify({
+        ...desired,
+        review: { planDigest: previewBody.review.planDigest },
+      }),
+    },
+  );
+  expect(applied.status).toBe(200);
+  // The portable response deliberately does not disclose host authority.
+  expect((await applied.json()).metadata.owner).toBeUndefined();
+  const canonical = await service.get(
+    "space_1",
+    "ObjectBucket",
+    "yuru-assets",
+  );
+  expect(canonical.ok && canonical.value.metadata.owner).toEqual(owner);
+
+  const spoofed = await app.request(`${base}/resources/preview`, {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({
+      ...desired,
+      metadata: { ...desired.metadata, owner },
+    }),
+  });
+  expect(spoofed.status).toBe(400);
+  expect((await spoofed.json()).error.message).toBe(
+    "metadata.owner is not a portable Resource field",
+  );
+
+  const { app: crossWorkspace } = await buildApp(
+    {
+      resolveActor: () => ({
+        actorAccountId: "run_yuru",
+        workspaceId: "workspace_1",
+        roles: ["owner"],
+        scopes: ["forms:read", "resources:*"],
+        requestId: "req_yuru_cross_workspace",
+      }),
+      resolveResourceCapsuleOwner: () => ({
+        ...owner,
+        workspaceId: "workspace_foreign",
+      }),
+    },
+    exactObjectBucketFormRegistry(),
+  );
+  expect(
+    (
+      await crossWorkspace.request(`${base}/resources/preview`, {
+        method: "POST",
+        headers: JSON_HEADERS,
+        body: JSON.stringify(desired),
+      })
+    ).status,
+  ).toBe(500);
+});
+
 test("portable Interface writes require dedicated Interface authority", () => {
   const actor = (scopes: readonly string[]) => ({
     actorAccountId: "acct_interface_writer",

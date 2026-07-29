@@ -104,6 +104,52 @@ describe("dashboard UI-surface Interface consumer", () => {
     expect(parseUiSurfaceInterface(resourceOwned, "ws_1")).toBeNull();
   });
 
+  test("accepts an explicitly related Resource-owned opaque launcher without guessing its type or Output name", () => {
+    const base = uiInterface();
+    const parsed = parseUiSurfaceInterface(
+      {
+        ...base,
+        launcherOwner: { capsuleId: "cap_1" },
+        metadata: {
+          ...(base.metadata as Record<string, unknown>),
+          ownerRef: { kind: "Resource", id: "tkrn:space_1:HttpService:yuru" },
+        },
+        spec: {
+          type: "yuru.application",
+          version: "2026-07-29",
+          document: {
+            launcher: true,
+            display: { title: "Yurucommu" },
+            endpoint: { originInput: "public_origin", path: "/chat" },
+          },
+          inputs: {
+            public_origin: {
+              source: "resource_output",
+              resourceId: "tkrn:space_1:HttpService:yuru",
+              pointer: "/service/endpoint",
+            },
+          },
+          access: { visibility: "workspace" },
+        },
+        status: {
+          phase: "Resolved",
+          observedGeneration: 2,
+          resolvedRevision: 4,
+          resolvedInputs: {
+            public_origin: "https://yuru.example.test/base",
+          },
+        },
+      },
+      "ws_1",
+    );
+    expect(parsed).toMatchObject({
+      interfaceId: "if_ui",
+      capsuleId: "cap_1",
+      name: "Yurucommu",
+      url: "https://yuru.example.test/chat",
+    });
+  });
+
   test("fails closed for stale revisions, undeclared URL inputs, and embedded credentials", () => {
     const base = uiInterface();
     expect(

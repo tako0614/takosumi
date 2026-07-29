@@ -5,6 +5,7 @@ import type {
   InstalledFormReference,
   JsonObject,
   ResourceObject,
+  ResourceCapsuleOwner,
   ResourceShapeKind,
   TakoformDeclaredInterface,
   TakoformResource,
@@ -13,6 +14,7 @@ import type {
 import {
   createTakoformHostDiscovery,
   installedFormReferenceKey,
+  isResourceCapsuleOwner,
   isInstalledFormReference,
   isResourceShapeKind,
   portableTypeForShapeKind,
@@ -87,8 +89,66 @@ export interface RegisterPortableFormHostRoutesOptions {
   readonly authorize: (c: Context) => Promise<PortableFormHostAuthResult>;
   readonly canReadForms: (actor: ActorContext) => boolean;
   readonly canWriteInterfaces?: (actor: ActorContext) => boolean;
+  /**
+   * Optional host-authenticated Capsule execution context. The portable body
+   * cannot supply this authority; hosted compositions resolve their run-scoped
+   * bearer to the exact Capsule and installing Principal here.
+   */
+  readonly resolveResourceCapsuleOwner?: (input: {
+    readonly actor: ActorContext;
+    readonly request: Request;
+    readonly space: string;
+    readonly kind: ResourceShapeKind;
+    readonly name: string;
+  }) =>
+    | ResourceCapsuleOwner
+    | undefined
+    | Promise<ResourceCapsuleOwner | undefined>;
   readonly interfaceDeclarations?: PortableInterfaceDeclarationReader &
     Partial<PortableInterfaceDeclarationWriter>;
+}
+
+async function withHostResourceOwner(
+  c: Context,
+  options: RegisterPortableFormHostRoutesOptions,
+  request: ApplyResourceRequest,
+): Promise<ApplyResourceRequest> {
+  const owner = await options.resolveResourceCapsuleOwner?.({
+    actor: request.actor,
+    request: c.req.raw,
+    space: request.space,
+    kind: request.kind,
+    name: request.name,
+  });
+  if (!owner) return request;
+  if (!isResourceCapsuleOwner(owner)) {
+    throw new TypeError(
+      "portable Resource Capsule owner resolver returned invalid authority",
+    );
+  }
+  const capsuleId = owner.id.trim();
+  const workspaceId = owner.workspaceId.trim();
+  const installingPrincipalId = owner.installingPrincipalId.trim();
+  if (
+    !capsuleId ||
+    !workspaceId ||
+    !installingPrincipalId ||
+    (request.actor.workspaceId !== undefined &&
+      request.actor.workspaceId !== workspaceId)
+  ) {
+    throw new TypeError(
+      "portable Resource Capsule owner resolver returned invalid authority",
+    );
+  }
+  return {
+    ...request,
+    owner: {
+      kind: "Capsule",
+      id: capsuleId,
+      workspaceId,
+      installingPrincipalId,
+    },
+  };
 }
 
 /**
@@ -399,19 +459,20 @@ export function registerPortableFormHostRoutes(
     if (!auth.ok) return portableAuthError(c, auth.response);
     const parsed = await parseResourceBody(c, auth.actor);
     if (!parsed.ok) return parsed.response;
+    const request = await withHostResourceOwner(c, options, parsed.request);
     const operation = await desiredWriteOperation(
       options.service,
-      parsed.request,
+      request,
     );
     const available = await requireAvailableForm(
       c,
       options,
       auth.actor,
-      parsed.request,
+      request,
       operation,
     );
     if (!available.ok) return available.response;
-    const result = await options.service.preview(parsed.request);
+    const result = await options.service.preview(request);
     if (!result.ok) return serviceError(c, result.error);
     return c.json(
       {
@@ -437,24 +498,25 @@ export function registerPortableFormHostRoutes(
       true,
     );
     if (!parsed.ok) return parsed.response;
+    const request = await withHostResourceOwner(c, options, parsed.request);
     const review = reviewFromBody(c, parsed.body);
     if (!review.ok) return review.response;
-    const replay = await completedApplyReplay(options.service, parsed.request);
+    const replay = await completedApplyReplay(options.service, request);
     if (replay)
       return portableJson(c, portableResource(replay), 200, key.value);
     const operation = await desiredWriteOperation(
       options.service,
-      parsed.request,
+      request,
     );
     const available = await requireAvailableForm(
       c,
       options,
       auth.actor,
-      parsed.request,
+      request,
       operation,
     );
     if (!available.ok) return available.response;
-    const result = await options.service.apply(parsed.request, review.value);
+    const result = await options.service.apply(request, review.value);
     if (!result.ok) return serviceError(c, result.error);
     return portableJson(c, portableResource(result.value), 200, key.value);
   });
@@ -470,11 +532,12 @@ export function registerPortableFormHostRoutes(
       true,
     );
     if (!parsed.ok) return parsed.response;
+    const request = await withHostResourceOwner(c, options, parsed.request);
     const nativeId = stringValue(parsed.body.nativeId);
     if (!nativeId)
       return portableError(c, "invalid_argument", "nativeId is required", 400);
     const importRequest = {
-      ...parsed.request,
+      ...request,
       nativeId,
     };
     const replayStatus =
@@ -484,7 +547,7 @@ export function registerPortableFormHostRoutes(
         c,
         options,
         auth.actor,
-        parsed.request,
+        request,
         "import",
       );
       if (!available.ok) return available.response;

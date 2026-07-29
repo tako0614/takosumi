@@ -80,6 +80,40 @@ export function parseResourceShapeKind(value: unknown): ResourceShapeKind {
  */
 export type ResourceManagedBy = string;
 
+/**
+ * Host-authenticated application ownership for a portable Resource.
+ *
+ * Portable clients cannot submit this field. The host derives it from the
+ * authenticated Capsule execution context, then persists the exact installing
+ * Principal so later Interface materialization never has to guess who should
+ * receive a launcher grant.
+ */
+export interface ResourceCapsuleOwner {
+  readonly kind: "Capsule";
+  readonly id: string;
+  readonly workspaceId: string;
+  readonly installingPrincipalId: string;
+}
+
+export function isResourceCapsuleOwner(
+  value: unknown,
+): value is ResourceCapsuleOwner {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const owner = value as Partial<ResourceCapsuleOwner>;
+  return (
+    owner.kind === "Capsule" &&
+    typeof owner.id === "string" &&
+    owner.id.trim().length > 0 &&
+    typeof owner.workspaceId === "string" &&
+    owner.workspaceId.trim().length > 0 &&
+    typeof owner.installingPrincipalId === "string" &&
+    owner.installingPrincipalId.trim().length > 0
+  );
+}
+
+/** Legacy principal text or the current structured application owner. */
+export type ResourceOwner = string | ResourceCapsuleOwner;
+
 /** `metadata` keys are verbatim from `docs/internal/final-plan.md` §4. */
 export interface ResourceMetadata {
   readonly name: string;
@@ -91,7 +125,7 @@ export interface ResourceMetadata {
   readonly generation?: number;
   readonly project?: string;
   readonly environment?: string;
-  readonly owner?: string;
+  readonly owner?: ResourceOwner;
   readonly labels?: Readonly<Record<string, string>>;
   readonly managedBy: ResourceManagedBy;
 }

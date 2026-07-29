@@ -303,16 +303,55 @@ export async function handleWorkspaces(
         );
       }
       const capsuleId = stringValue(rawCapsuleId ?? undefined);
-      const interfaces = await operations.interfaces.listAuthorizedForPrincipal(
-        {
-          workspaceId,
-          type: UI_SURFACE_INTERFACE_TYPE,
-          phase: "Resolved",
-          ownerKind: "Capsule",
-          ...(capsuleId ? { ownerId: capsuleId } : {}),
-        },
-        ctx.session.subject,
-        UI_SURFACE_OPEN_PERMISSION,
+      const [capsuleInterfaces, resourceInterfaces] = await Promise.all([
+        operations.interfaces.listAuthorizedForPrincipal(
+          {
+            workspaceId,
+            type: UI_SURFACE_INTERFACE_TYPE,
+            phase: "Resolved",
+            ownerKind: "Capsule",
+            ...(capsuleId ? { ownerId: capsuleId } : {}),
+          },
+          ctx.session.subject,
+          UI_SURFACE_OPEN_PERMISSION,
+        ),
+        operations.resourceCapsuleOwners
+          ? operations.interfaces.listAuthorizedForPrincipal(
+              {
+                workspaceId,
+                phase: "Resolved",
+                ownerKind: "Resource",
+              },
+              ctx.session.subject,
+              UI_SURFACE_OPEN_PERMISSION,
+            )
+          : Promise.resolve([]),
+      ]);
+      const resourceLaunchers = await Promise.all(
+        resourceInterfaces.map(async (iface) => {
+          if (
+            iface.metadata.workspaceId !== workspaceId ||
+            iface.metadata.ownerRef.kind !== "Resource" ||
+            iface.status.phase !== "Resolved" ||
+            !isLauncherDocument(iface.spec.document)
+          ) {
+            return undefined;
+          }
+          const owner = await operations.resourceCapsuleOwners!.get(
+            iface.metadata.ownerRef.id,
+          );
+          if (
+            !owner ||
+            owner.workspaceId !== workspaceId ||
+            (capsuleId && owner.id !== capsuleId)
+          ) {
+            return undefined;
+          }
+          return {
+            ...iface,
+            launcherOwner: { capsuleId: owner.id },
+          };
+        }),
       );
       // InterfaceService owns current Binding and lifecycle authorization. The
       // account-plane projection narrows that authorized result to the exact
@@ -320,14 +359,20 @@ export async function handleWorkspaces(
       // the dashboard consumer's responsibility.
       return json(
         {
-          interfaces: interfaces.filter(
-            (iface) =>
-              iface.metadata.workspaceId === workspaceId &&
-              iface.metadata.ownerRef.kind === "Capsule" &&
-              iface.spec.type === UI_SURFACE_INTERFACE_TYPE &&
-              iface.spec.version === UI_SURFACE_INTERFACE_VERSION &&
-              iface.status.phase === "Resolved",
-          ),
+          interfaces: [
+            ...capsuleInterfaces.filter(
+              (iface) =>
+                iface.metadata.workspaceId === workspaceId &&
+                iface.metadata.ownerRef.kind === "Capsule" &&
+                iface.spec.type === UI_SURFACE_INTERFACE_TYPE &&
+                iface.spec.version === UI_SURFACE_INTERFACE_VERSION &&
+                iface.status.phase === "Resolved",
+            ),
+            ...resourceLaunchers.filter(
+              (iface): iface is NonNullable<typeof iface> =>
+                iface !== undefined,
+            ),
+          ],
         },
         200,
         { "cache-control": "no-store" },
@@ -457,6 +502,17 @@ export async function handleWorkspaces(
     }
   }
   return undefined;
+}
+
+function isLauncherDocument(
+  value: unknown,
+): value is Readonly<Record<string, unknown>> {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    (value as { readonly launcher?: unknown }).launcher === true
+  );
 }
 
 // --- Workspaces ----------------------------------------------------------------

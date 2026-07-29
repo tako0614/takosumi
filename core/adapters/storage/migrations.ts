@@ -33,14 +33,18 @@ export interface StorageMigrationStatement {
   readonly description: string;
   readonly sql: string;
   /**
-   * Optional reverse SQL applied when rolling a migration back via
-   * `db:migrate:down` / `db:migrate:rollback`. Down migrations must:
+   * Optional reverse SQL retained only for explicit local/development/test
+   * fixture resets. Protected production schemas are forward-only: the
+   * production migration runner exposes no reset/down API or CLI.
+   *
+   * Fixture reset SQL must:
    *   - drop only the schema this migration created (or revert the columns
    *     this migration added);
-   *   - preserve user data wherever feasible (rollback is structural);
+   *   - operate only on disposable fixture data;
    *   - be idempotent (`drop table if exists`, `drop column if exists`).
-   * A migration without a `down` clause is forward-only and the down runner
-   * will refuse to rollback past it.
+   * This field remains part of the immutable migration checksum, so released
+   * entries cannot be rewritten merely because production down authority was
+   * removed.
    */
   readonly down?: string;
 }
@@ -1032,7 +1036,7 @@ export const postgresStorageMigrationStatements: readonly StorageMigrationStatem
       description: "Create storage migration ledger.",
       sql: "create table if not exists storage_migrations (id text primary key, version integer not null, applied_at timestamptz not null default now())",
       // The system ledger itself is intentionally forward-only: dropping it
-      // erases the ability to track which down migrations have been applied.
+      // erases the ability to track which fixture resets have been applied.
       // Operators wanting a true factory-reset must drop the database.
     },
     {
@@ -1635,7 +1639,7 @@ drop table if exists takosumi_connections;`,
       version: 31,
       domain: "deploy",
       description:
-        "Create the internal plan-run inputs sidecar so the async run-queue consumer can re-run a queued plan with the submitted OpenTofu variables. Never projected into the public ledger; removed when the run reaches a terminal state.",
+        "Create the internal plan-run inputs sidecar so the async RunOwner can re-run a queued plan with the submitted OpenTofu variables. Never projected into the public ledger; removed when the run reaches a terminal state.",
       sql: `create table if not exists takosumi_plan_run_inputs (
   plan_run_id text  primary key,
   inputs_json jsonb not null
@@ -4530,5 +4534,16 @@ alter table takosumi_resolution_locks
   drop column if exists last_operation_run_id,
   drop column if exists pending_operation_json,
   drop column if exists revision;`,
+    },
+    {
+      id: "resources.capsule_owner.add",
+      version: 103,
+      domain: "resources",
+      description:
+        "Persist the host-authenticated Capsule and installing-Principal owner for portable Resources.",
+      sql: `alter table takosumi_resource_shapes
+  add column if not exists owner_json jsonb;`,
+      down: `alter table takosumi_resource_shapes
+  drop column if exists owner_json;`,
     },
   ]);

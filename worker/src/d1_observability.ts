@@ -29,7 +29,6 @@ const RETENTION_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
 export class CloudflareD1ObservabilitySink implements ObservabilitySink {
   readonly #db: D1Database;
   readonly #now: () => number;
-  #schemaReady: Promise<void> | undefined;
   #nextRetentionSweepAt = 0;
 
   constructor(input: { readonly db: D1Database; readonly now?: () => number }) {
@@ -38,7 +37,6 @@ export class CloudflareD1ObservabilitySink implements ObservabilitySink {
   }
 
   async appendAudit(event: AuditEvent): Promise<ChainedAuditEvent> {
-    await this.#ensureSchema();
     for (let attempt = 0; attempt < 8; attempt += 1) {
       const previousRow = await this.#db
         .prepare(
@@ -76,7 +74,6 @@ export class CloudflareD1ObservabilitySink implements ObservabilitySink {
   }
 
   async listAudit(): Promise<readonly ChainedAuditEvent[]> {
-    await this.#ensureSchema();
     const rows = await this.#db
       .prepare(
         `select sequence, event_json, previous_hash, hash
@@ -92,7 +89,6 @@ export class CloudflareD1ObservabilitySink implements ObservabilitySink {
   }
 
   async recordMetric(event: MetricEvent): Promise<MetricEvent> {
-    await this.#ensureSchema();
     await this.#db
       .prepare(
         `insert or replace into takosumi_observability_metrics
@@ -123,7 +119,6 @@ export class CloudflareD1ObservabilitySink implements ObservabilitySink {
   async listMetrics(
     query: MetricEventQuery = {},
   ): Promise<readonly MetricEvent[]> {
-    await this.#ensureSchema();
     const where: string[] = [];
     const params: unknown[] = [];
     if (query.name) {
@@ -171,7 +166,6 @@ export class CloudflareD1ObservabilitySink implements ObservabilitySink {
   }
 
   async recordTrace(event: TraceSpanEvent): Promise<TraceSpanEvent> {
-    await this.#ensureSchema();
     await this.#db
       .prepare(
         `insert or replace into takosumi_observability_traces
@@ -200,7 +194,6 @@ export class CloudflareD1ObservabilitySink implements ObservabilitySink {
   async listTraces(
     query: TraceSpanQuery = {},
   ): Promise<readonly TraceSpanEvent[]> {
-    await this.#ensureSchema();
     const where: string[] = [];
     const params: unknown[] = [];
     addWhere(where, params, "trace_id", query.traceId);
@@ -235,11 +228,6 @@ export class CloudflareD1ObservabilitySink implements ObservabilitySink {
     return (rows.results ?? []).map((row) =>
       traceEventFromJson(row.event_json),
     );
-  }
-
-  #ensureSchema(): Promise<void> {
-    this.#schemaReady ??= ensureD1ObservabilitySchema(this.#db);
-    return this.#schemaReady;
   }
 
   async #sweepRetentionIfDue(): Promise<void> {
@@ -291,120 +279,6 @@ interface MetricRow extends Record<string, unknown> {
   readonly observed_at: string;
   readonly request_id: string | null;
   readonly correlation_id: string | null;
-}
-
-async function ensureD1ObservabilitySchema(db: D1Database): Promise<void> {
-  await db
-    .prepare(
-      `create table if not exists takosumi_observability_audit (
-        sequence integer primary key,
-        event_id text not null unique,
-        event_json text not null,
-        previous_hash text not null,
-        hash text not null,
-        occurred_at text not null,
-        created_at text not null default current_timestamp
-      )`,
-    )
-    .run();
-  await db
-    .prepare(
-      `create index if not exists takosumi_observability_audit_occurred_idx
-         on takosumi_observability_audit (occurred_at, sequence)`,
-    )
-    .run();
-  await db
-    .prepare(
-      `create table if not exists takosumi_observability_metrics (
-        id text primary key,
-        name text not null,
-        kind text not null,
-        value real not null,
-        unit text,
-        tags_json text,
-        space_id text,
-        group_id text,
-        actor_json text,
-        payload_json text,
-        observed_at text not null,
-        request_id text,
-        correlation_id text,
-        created_at text not null default current_timestamp
-      )`,
-    )
-    .run();
-  await ensureMetricColumn(db, "unit", "unit text");
-  await db
-    .prepare(
-      `create index if not exists takosumi_observability_metrics_name_idx
-         on takosumi_observability_metrics (name, observed_at)`,
-    )
-    .run();
-  await db
-    .prepare(
-      `create index if not exists takosumi_observability_metrics_space_idx
-         on takosumi_observability_metrics (space_id, observed_at)`,
-    )
-    .run();
-  await db
-    .prepare(
-      `create index if not exists takosumi_observability_metrics_observed_idx
-         on takosumi_observability_metrics (observed_at, id)`,
-    )
-    .run();
-  await db
-    .prepare(
-      `create table if not exists takosumi_observability_traces (
-        id text primary key,
-        trace_id text not null,
-        span_id text not null,
-        name text not null,
-        kind text not null,
-        status text not null,
-        space_id text,
-        group_id text,
-        start_time text not null,
-        end_time text not null,
-        event_json text not null,
-        created_at text not null default current_timestamp
-      )`,
-    )
-    .run();
-  await db
-    .prepare(
-      `create index if not exists takosumi_observability_traces_trace_idx
-         on takosumi_observability_traces (trace_id, start_time)`,
-    )
-    .run();
-  await db
-    .prepare(
-      `create index if not exists takosumi_observability_traces_space_idx
-         on takosumi_observability_traces (space_id, start_time)`,
-    )
-    .run();
-  await db
-    .prepare(
-      `create index if not exists takosumi_observability_traces_started_idx
-         on takosumi_observability_traces (start_time, id)`,
-    )
-    .run();
-}
-
-async function ensureMetricColumn(
-  db: D1Database,
-  column: string,
-  definition: string,
-): Promise<void> {
-  const existing = await db
-    .prepare("pragma table_info(takosumi_observability_metrics)")
-    .all<{ name: string }>();
-  const hasColumn = (existing.results ?? []).some((row) => row.name === column);
-  if (hasColumn) return;
-  await db
-    .prepare(
-      `alter table takosumi_observability_metrics add column ${definition}`,
-    )
-    .run();
 }
 
 function metricEventFromRow(row: MetricRow): MetricEvent {

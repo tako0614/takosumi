@@ -4,7 +4,10 @@ import { ACCOUNT_SESSION_COOKIE_NAME } from "../../../../accounts/service/src/ac
 import { handleControlRoute } from "../../../../accounts/service/src/control-routes.ts";
 import { InMemoryAccountsStore } from "../../../../accounts/service/src/store.ts";
 import { createTakosumiService } from "../../../../core/bootstrap.ts";
-import { createInMemoryInterfaceStores } from "../../../../core/domains/interfaces/mod.ts";
+import {
+  createInMemoryInterfaceStores,
+  InterfaceService,
+} from "../../../../core/domains/interfaces/mod.ts";
 import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 import { seedCapsuleModel } from "../../../helpers/deploy-control/model_fixture.ts";
 
@@ -151,6 +154,64 @@ test("Workspace UI surface projection uses the exact session Principal and fails
     (await operations.interfaces.get(stale.metadata.id)).status.phase,
   ).toBe("NotReady");
 
+  const projectionInterfaces = new InterfaceService({
+    stores: interfaceStores,
+    ownerExists: async () => true,
+  });
+  const resourceLauncher = await projectionInterfaces.create({
+    workspaceId: primary.workspace.id,
+    name: "portable-yuru-launcher",
+    ownerRef: { kind: "Resource", id: "tkrn:space_1:HttpService:yuru" },
+    spec: {
+      type: "yuru.application",
+      version: "1",
+      document: {
+        launcher: true,
+        endpoint: { originInput: "origin", path: "/" },
+      },
+      inputs: {
+        origin: {
+          source: "literal",
+          value: "https://yuru.example.test",
+        },
+      },
+      access: { visibility: "workspace" },
+    },
+  });
+  await projectionInterfaces.createBinding(resourceLauncher.metadata.id, {
+    subjectRef: { kind: "Principal", id: SUBJECT },
+    permissions: ["ui.open"],
+    delivery: { type: "none" },
+  });
+  const nonLauncher = await projectionInterfaces.create({
+    workspaceId: primary.workspace.id,
+    name: "portable-yuru-mcp",
+    ownerRef: { kind: "Resource", id: "tkrn:space_1:HttpService:yuru" },
+    spec: {
+      type: "mcp.server",
+      version: "1",
+      document: { launcher: false },
+      access: { visibility: "workspace" },
+    },
+  });
+  await projectionInterfaces.createBinding(nonLauncher.metadata.id, {
+    subjectRef: { kind: "Principal", id: SUBJECT },
+    permissions: ["ui.open"],
+    delivery: { type: "none" },
+  });
+  const projectionOperations = {
+    ...operations,
+    interfaces: projectionInterfaces,
+    resourceCapsuleOwners: {
+      get: async () => ({
+        kind: "Capsule" as const,
+        id: primary.capsule.id,
+        workspaceId: primary.workspace.id,
+        installingPrincipalId: SUBJECT,
+      }),
+    },
+  };
+
   const capsuleRequest = new Request(
     `${ORIGIN}/api/v1/workspaces/${primary.workspace.id}/ui-surfaces?capsuleId=${primary.capsule.id}`,
     { headers: { cookie } },
@@ -159,7 +220,7 @@ test("Workspace UI surface projection uses the exact session Principal and fails
     request: capsuleRequest,
     url: new URL(capsuleRequest.url),
     store: accountStore,
-    operations,
+    operations: projectionOperations,
   });
   expect(capsuleResponse?.status).toBe(200);
   expect(
@@ -170,7 +231,7 @@ test("Workspace UI surface projection uses the exact session Principal and fails
         }[];
       }
     ).interfaces.map((iface) => iface.metadata.id),
-  ).toEqual([allowed.metadata.id]);
+  ).toEqual([allowed.metadata.id, resourceLauncher.metadata.id]);
 
   const foreignRequest = new Request(
     `${ORIGIN}/api/v1/workspaces/${foreign.workspace.id}/ui-surfaces`,

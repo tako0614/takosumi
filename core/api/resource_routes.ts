@@ -13,6 +13,7 @@ import type {
   JsonObject,
   ResourceArtifactWriteScope,
   ResourceManagedBy,
+  ResourceCapsuleOwner,
   ResourceShapeKind,
   SpacePolicySpec,
   TargetPoolSpec,
@@ -91,6 +92,20 @@ export interface RegisterResourceShapeRoutesOptions {
     readonly token: string;
     readonly request: Request;
   }) => ActorContext | undefined | Promise<ActorContext | undefined>;
+  /**
+   * Resolves an authenticated Capsule Run to its exact durable Resource owner.
+   * Never derive this from portable body fields or provider/resource names.
+   */
+  readonly resolveResourceCapsuleOwner?: (input: {
+    readonly actor: ActorContext;
+    readonly request: Request;
+    readonly space: string;
+    readonly kind: ResourceShapeKind;
+    readonly name: string;
+  }) =>
+    | ResourceCapsuleOwner
+    | undefined
+    | Promise<ResourceCapsuleOwner | undefined>;
   /**
    * Break-glass Resource tombstone authorization. Omitted means force deletes
    * are not exposed over HTTP; operator compositions must explicitly opt in.
@@ -243,6 +258,12 @@ export function registerResourceShapeRoutes(
       authorize: (c) => authorizeResourceShapeRequest(c, options),
       canReadForms: hasFormAvailabilityReadScope,
       canWriteInterfaces: hasInterfaceDeclarationWriteScope,
+      ...(options.resolveResourceCapsuleOwner
+        ? {
+            resolveResourceCapsuleOwner:
+              options.resolveResourceCapsuleOwner,
+          }
+        : {}),
       ...(options.interfaceDeclarations
         ? { interfaceDeclarations: options.interfaceDeclarations }
         : {}),

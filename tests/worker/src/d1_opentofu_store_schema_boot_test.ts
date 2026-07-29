@@ -29,6 +29,20 @@ async function tableNames(db: SqliteFakeD1): Promise<Set<string>> {
   return new Set((result.results ?? []).map((row) => row.name));
 }
 
+async function indexNames(
+  db: SqliteFakeD1,
+  table: string,
+): Promise<Set<string>> {
+  const result = await db
+    .prepare(
+      `select name from sqlite_master
+       where type = 'index' and tbl_name = ? and sql is not null`,
+    )
+    .bind(table)
+    .all<{ name: string }>();
+  return new Set((result.results ?? []).map((row) => row.name));
+}
+
 test("ensureD1OpenTofuLedgerSchema converges on a fresh database", async () => {
   const db = new SqliteFakeD1();
   await ensureD1OpenTofuLedgerSchema(db);
@@ -42,6 +56,95 @@ test("ensureD1OpenTofuLedgerSchema converges on a fresh database", async () => {
   ]) {
     expect(tables.has(expected)).toBe(true);
   }
+});
+
+test("v57 migrates observability into the canonical D1 lineage", async () => {
+  const db = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(db, { throughMigrationVersion: 56 });
+  expect(
+    (await tableNames(db)).has("takosumi_observability_metrics"),
+  ).toBe(false);
+
+  await db
+    .prepare(
+      `create table takosumi_observability_metrics (
+        id text primary key,
+        name text not null,
+        kind text not null,
+        value real not null,
+        tags_json text,
+        space_id text,
+        group_id text,
+        actor_json text,
+        payload_json text,
+        observed_at text not null,
+        request_id text,
+        correlation_id text,
+        created_at text not null default current_timestamp
+      )`,
+    )
+    .run();
+  await db
+    .prepare(
+      `insert into takosumi_observability_metrics
+         (id, name, kind, value, observed_at)
+       values ('metric_legacy', 'legacy', 'counter', 1, ?)`,
+    )
+    .bind("2026-07-29T00:00:00.000Z")
+    .run();
+
+  await ensureD1OpenTofuLedgerSchema(db);
+
+  const tables = await tableNames(db);
+  for (const table of [
+    "takosumi_observability_audit",
+    "takosumi_observability_metrics",
+    "takosumi_observability_traces",
+  ]) {
+    expect(tables.has(table)).toBe(true);
+  }
+  expect(
+    await indexNames(db, "takosumi_observability_audit"),
+  ).toEqual(new Set(["takosumi_observability_audit_occurred_idx"]));
+  expect(
+    await indexNames(db, "takosumi_observability_metrics"),
+  ).toEqual(
+    new Set([
+      "takosumi_observability_metrics_name_idx",
+      "takosumi_observability_metrics_observed_idx",
+      "takosumi_observability_metrics_space_idx",
+    ]),
+  );
+  expect(
+    await indexNames(db, "takosumi_observability_traces"),
+  ).toEqual(
+    new Set([
+      "takosumi_observability_traces_space_idx",
+      "takosumi_observability_traces_started_idx",
+      "takosumi_observability_traces_trace_idx",
+    ]),
+  );
+  expect(
+    await db
+      .prepare(
+        `select id, name, kind, value, unit
+         from takosumi_observability_metrics where id = 'metric_legacy'`,
+      )
+      .first(),
+  ).toEqual({
+    id: "metric_legacy",
+    name: "legacy",
+    kind: "counter",
+    value: 1,
+    unit: null,
+  });
+  expect(
+    await db
+      .prepare(
+        `select version, name from schema_migrations where version = 57`,
+      )
+      .first(),
+  ).toEqual({ version: 57, name: "d1_observability_schema" });
 });
 
 test("retired provider_envs/provider_catalog tables are renamed aside, not live", async () => {

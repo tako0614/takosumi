@@ -3961,6 +3961,68 @@ const D1_OFFERING_CATALOG_STATEMENTS = [
     on offering_catalogs (effective_at, catalog_key)`,
 ] as const;
 
+// Migration-only by design: do not add these to the pre-migration bootstrap
+// statement list. v57 must create/adopt the schema and record its ledger row in
+// one atomic D1 batch, including when a maintenance fence is active.
+const D1_OBSERVABILITY_TABLE_STATEMENTS = [
+  `create table if not exists takosumi_observability_audit (
+    sequence integer primary key,
+    event_id text not null unique,
+    event_json text not null,
+    previous_hash text not null,
+    hash text not null,
+    occurred_at text not null,
+    created_at text not null default current_timestamp
+  )`,
+  `create table if not exists takosumi_observability_metrics (
+    id text primary key,
+    name text not null,
+    kind text not null,
+    value real not null,
+    unit text,
+    tags_json text,
+    space_id text,
+    group_id text,
+    actor_json text,
+    payload_json text,
+    observed_at text not null,
+    request_id text,
+    correlation_id text,
+    created_at text not null default current_timestamp
+  )`,
+  `create table if not exists takosumi_observability_traces (
+    id text primary key,
+    trace_id text not null,
+    span_id text not null,
+    name text not null,
+    kind text not null,
+    status text not null,
+    space_id text,
+    group_id text,
+    start_time text not null,
+    end_time text not null,
+    event_json text not null,
+    created_at text not null default current_timestamp
+  )`,
+] as const;
+
+const D1_OBSERVABILITY_INDEX_STATEMENTS = [
+  `create index if not exists takosumi_observability_audit_occurred_idx
+    on takosumi_observability_audit (occurred_at, sequence)`,
+  `create index if not exists takosumi_observability_metrics_name_idx
+    on takosumi_observability_metrics (name, observed_at)`,
+  `create index if not exists takosumi_observability_metrics_space_idx
+    on takosumi_observability_metrics (space_id, observed_at)`,
+  `create index if not exists takosumi_observability_metrics_observed_idx
+    on takosumi_observability_metrics (observed_at, id)`,
+  `create index if not exists takosumi_observability_traces_trace_idx
+    on takosumi_observability_traces (trace_id, start_time)`,
+  `create index if not exists takosumi_observability_traces_space_idx
+    on takosumi_observability_traces (space_id, start_time)`,
+  `create index if not exists takosumi_observability_traces_started_idx
+    on takosumi_observability_traces (start_time, id)`,
+] as const;
+
 /**
  * Bootstrap the §27 control-plane tables for the default self-host mode.
  * Idempotent (`IF NOT EXISTS`) and called once per store instance via the
@@ -4420,7 +4482,8 @@ export async function ensureD1OpenTofuLedgerSchema(
       observation_claimed_at text,
       last_observation_attempt_at text,
       last_operation_run_id text,
-      pending_operation_json text
+      pending_operation_json text,
+      owner_json text
     )`,
     `create unique index if not exists resource_shapes_space_kind_name_unique
       on resource_shapes (space_id, kind, name)`,
@@ -6540,6 +6603,39 @@ last_operation_run_id retains the finalized Run pointer used by repair
       );
     },
   },
+  {
+    version: 56,
+    name: "d1_resource_capsule_owner",
+    checksumSource: `
+Resource owner_json persists only host-authenticated Capsule execution ownership
+portable request bodies cannot submit owner_json
+the exact installing Principal is retained for launcher Binding materialization
+`,
+    async atomicStatements(db) {
+      return await d1ResourceCapsuleOwnerStatements(db);
+    },
+    async apply(db) {
+      await runD1AtomicSql(db, await d1ResourceCapsuleOwnerStatements(db));
+    },
+  },
+  {
+    version: 57,
+    name: "d1_observability_schema",
+    checksumSource: () => `
+observability tables and indexes are canonical control D1 schema
+runtime metric trace and audit requests execute data statements only
+legacy metric tables gain the nullable unit column without rewriting rows
+retention deletes use observed_at and start_time indexes
+${D1_OBSERVABILITY_TABLE_STATEMENTS.join("\n---\n")}
+${D1_OBSERVABILITY_INDEX_STATEMENTS.join("\n---\n")}
+`,
+    async atomicStatements(db) {
+      return await d1ObservabilitySchemaStatements(db);
+    },
+    async apply(db) {
+      await runD1AtomicSql(db, await d1ObservabilitySchemaStatements(db));
+    },
+  },
 ] as const satisfies readonly D1OpenTofuSchemaMigration[];
 
 /**
@@ -6680,6 +6776,38 @@ async function d1ResourceOperationRecoveryStateStatements(
           `alter table resource_shapes
              add column last_operation_run_id text`,
         ]),
+  ];
+}
+
+async function d1ResourceCapsuleOwnerStatements(
+  db: D1Database,
+): Promise<readonly string[]> {
+  if (!(await d1TableExists(db, "resource_shapes"))) return [];
+  const columns = await d1ColumnNames(db, "resource_shapes");
+  return columns.has("owner_json")
+    ? []
+    : [`alter table resource_shapes add column owner_json text`];
+}
+
+async function d1ObservabilitySchemaStatements(
+  db: D1Database,
+): Promise<readonly string[]> {
+  const metricsExists = await d1TableExists(
+    db,
+    "takosumi_observability_metrics",
+  );
+  const metricColumns = metricsExists
+    ? await d1ColumnNames(db, "takosumi_observability_metrics")
+    : new Set<string>();
+  return [
+    ...D1_OBSERVABILITY_TABLE_STATEMENTS,
+    ...(metricsExists && !metricColumns.has("unit")
+      ? [
+          `alter table takosumi_observability_metrics
+             add column unit text`,
+        ]
+      : []),
+    ...D1_OBSERVABILITY_INDEX_STATEMENTS,
   ];
 }
 

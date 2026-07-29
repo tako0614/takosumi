@@ -108,6 +108,7 @@ import type { JsonValue } from "takosumi-contract";
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
 import type { InterfaceOAuthActivityEvidence } from "./access-token-activity.ts";
 import type { Interface } from "takosumi-contract/interfaces";
+import type { ResourceCapsuleOwner } from "takosumi-contract";
 
 interface CapsuleListPageParams extends PageParams {
   readonly includeDestroyed?: boolean;
@@ -148,14 +149,17 @@ export interface ControlPlaneOperations {
     listAuthorizedForPrincipal(
       filter: {
         readonly workspaceId: string;
-        readonly type: "interface.ui.surface";
+        readonly type?: string;
         readonly phase: "Resolved";
-        readonly ownerKind: "Capsule";
+        readonly ownerKind: "Capsule" | "Resource";
         readonly ownerId?: string;
       },
       subjectId: string,
       permission: "ui.open",
     ): Promise<readonly Interface[]>;
+  };
+  readonly resourceCapsuleOwners?: {
+    get(resourceId: string): Promise<ResourceCapsuleOwner | undefined>;
   };
   // --- Workspaces (§4) ---
   readonly workspaces: {

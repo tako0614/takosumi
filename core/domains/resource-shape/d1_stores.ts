@@ -9,6 +9,7 @@ import type {
   JsonObject,
   NativeResourceRef,
   ResourceManagedBy,
+  ResourceOwner,
   ResourcePhase,
   ResourcePortability,
   ResourceShapeKind,
@@ -125,6 +126,7 @@ interface ResourceShapeRow {
   readonly revision?: number | null;
   readonly pending_operation_json?: string | null;
   readonly last_operation_run_id?: string | null;
+  readonly owner_json?: string | null;
 }
 
 interface ResolutionLockRow {
@@ -207,6 +209,7 @@ class D1ResourceShapeStore implements ResourceShapeStore {
             updated_at = excluded.updated_at,
             pending_operation_json = excluded.pending_operation_json,
             last_operation_run_id = excluded.last_operation_run_id,
+            owner_json = excluded.owner_json,
             revision = ${this.#table}.revision + 1`,
         ),
       )
@@ -537,6 +540,7 @@ class D1ResourceShapeStore implements ResourceShapeStore {
           outputs_json = ?, execution_json = ?, state_adoption_json = ?,
           conditions_json = ?, labels_json = ?, created_at = ?, updated_at = ?,
           pending_operation_json = ?, last_operation_run_id = ?,
+          owner_json = ?,
           revision = revision + 1
          where id = ? and generation = ? and phase = ? and updated_at = ?
            and revision = ?`,
@@ -1407,6 +1411,7 @@ function resourceUpdateStatement(
         outputs_json = ?, execution_json = ?, state_adoption_json = ?,
         conditions_json = ?, labels_json = ?, created_at = ?, updated_at = ?,
         pending_operation_json = ?, last_operation_run_id = ?,
+        owner_json = ?,
         revision = revision + 1
       where id = ?`,
     )
@@ -1453,8 +1458,8 @@ function resourceInsertSql(table: string, conflict: string): string {
     spec_json, phase, generation, observed_generation,
     outputs_json, execution_json, state_adoption_json,
     conditions_json, labels_json, created_at, updated_at,
-    pending_operation_json, last_operation_run_id, revision
-  ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ${conflict}`;
+    pending_operation_json, last_operation_run_id, owner_json, revision
+  ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ${conflict}`;
 }
 
 function resourceParameters(record: ResourceShapeRecord): readonly unknown[] {
@@ -1482,6 +1487,7 @@ function resourceParameters(record: ResourceShapeRecord): readonly unknown[] {
     record.updatedAt,
     jsonOrNull(record.pendingOperation),
     record.lastOperationRunId ?? null,
+    jsonOrNull(record.owner),
     resourceRecordRevision(record),
   ];
 }
@@ -1490,7 +1496,7 @@ function resourceUpdateParameters(
   record: ResourceShapeRecord,
 ): readonly unknown[] {
   const parameters = resourceParameters(record);
-  return [...parameters.slice(1, 20), ...parameters.slice(20, 22)];
+  return [...parameters.slice(1, 20), ...parameters.slice(20, 23)];
 }
 
 function lockParameters(lock: ResolutionLockRecord): readonly unknown[] {
@@ -1590,6 +1596,7 @@ function resourceShapeFromRow(row: ResourceShapeRow): ResourceShapeRecord {
   );
   const conditions = parseJson<readonly Condition[]>(row.conditions_json);
   const labels = parseJson<Record<string, string>>(row.labels_json);
+  const owner = parseJson<ResourceOwner>(row.owner_json);
   const pendingOperation = parseJson<ResourceShapePendingOperation>(
     row.pending_operation_json,
   );
@@ -1618,6 +1625,7 @@ function resourceShapeFromRow(row: ResourceShapeRow): ResourceShapeRecord {
     ...(stateAdoption === undefined ? {} : { stateAdoption }),
     ...(conditions === undefined ? {} : { conditions }),
     ...(labels === undefined ? {} : { labels }),
+    ...(owner === undefined ? {} : { owner }),
     createdAt: row.created_at as IsoTimestamp,
     updatedAt: row.updated_at as IsoTimestamp,
   };

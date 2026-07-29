@@ -8,6 +8,7 @@ import type {
   JsonObject,
   NativeResourceRef,
   ResourceManagedBy,
+  ResourceOwner,
   ResourcePhase,
   ResourcePortability,
   ResourceShapeKind,
@@ -105,6 +106,7 @@ type ResourceShapeRow = {
   readonly revision?: number | string | null;
   readonly pending_operation_json?: unknown;
   readonly last_operation_run_id?: string | null;
+  readonly owner_json?: unknown;
 };
 
 type ResolutionLockRow = {
@@ -186,6 +188,7 @@ class SqlResourceShapeStore implements ResourceShapeStore {
           updated_at = excluded.updated_at,
           pending_operation_json = excluded.pending_operation_json,
           last_operation_run_id = excluded.last_operation_run_id,
+          owner_json = excluded.owner_json,
           revision = ${this.#table}.revision + 1`,
       ),
       resourceParameters(record),
@@ -472,9 +475,10 @@ class SqlResourceShapeStore implements ResourceShapeStore {
         state_adoption_json = $15::jsonb, conditions_json = $16::jsonb,
         labels_json = $17::jsonb, created_at = $18, updated_at = $19,
         pending_operation_json = $20::jsonb, last_operation_run_id = $21,
+        owner_json = $22::jsonb,
         revision = revision + 1
-       where id = $22 and generation = $23 and phase = $24
-         and updated_at = $25 and revision = $26`,
+       where id = $23 and generation = $24 and phase = $25
+         and updated_at = $26 and revision = $27`,
       [
         ...resourceUpdateParameters(record),
         record.id,
@@ -1042,7 +1046,7 @@ function updateSqlResource(
   },
   expectedManagedBy?: ResourceManagedBy,
 ) {
-  let nextParameter = 26;
+  let nextParameter = 27;
   const revisionPredicate =
     expected.revision === undefined
       ? ""
@@ -1060,9 +1064,10 @@ function updateSqlResource(
       conditions_json = $16::jsonb, labels_json = $17::jsonb,
       created_at = $18, updated_at = $19,
       pending_operation_json = $20::jsonb, last_operation_run_id = $21,
+      owner_json = $22::jsonb,
       revision = revision + 1
-    where id = $22 and generation = $23 and phase = $24
-      and updated_at = $25${revisionPredicate}${managedByPredicate}`,
+    where id = $23 and generation = $24 and phase = $25
+      and updated_at = $26${revisionPredicate}${managedByPredicate}`,
     [
       ...resourceUpdateParameters(record),
       record.id,
@@ -1110,11 +1115,11 @@ function resourceInsertSql(table: string, conflict: string): string {
     spec_json, phase, generation, observed_generation,
     outputs_json, execution_json, state_adoption_json,
     conditions_json, labels_json, created_at, updated_at,
-    pending_operation_json, last_operation_run_id, revision
+    pending_operation_json, last_operation_run_id, owner_json, revision
   ) values (
     $1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10::jsonb,
     $11, $12, $13, $14::jsonb, $15::jsonb, $16::jsonb,
-    $17::jsonb, $18::jsonb, $19, $20, $21::jsonb, $22, $23
+    $17::jsonb, $18::jsonb, $19, $20, $21::jsonb, $22, $23::jsonb, $24
   ) ${conflict}`;
 }
 
@@ -1143,6 +1148,7 @@ function resourceParameters(record: ResourceShapeRecord): readonly SqlValue[] {
     record.updatedAt,
     jsonOrNull(record.pendingOperation),
     record.lastOperationRunId ?? null,
+    jsonOrNull(record.owner),
     resourceRecordRevision(record),
   ];
 }
@@ -1151,7 +1157,7 @@ function resourceUpdateParameters(
   record: ResourceShapeRecord,
 ): readonly SqlValue[] {
   const parameters = resourceParameters(record);
-  return [...parameters.slice(1, 20), ...parameters.slice(20, 22)];
+  return [...parameters.slice(1, 20), ...parameters.slice(20, 23)];
 }
 
 function lockParameters(lock: ResolutionLockRecord): readonly SqlValue[] {
@@ -1252,6 +1258,7 @@ function resourceShapeFromRow(row: ResourceShapeRow): ResourceShapeRecord {
   );
   const conditions = parseJson<readonly Condition[]>(row.conditions_json);
   const labels = parseJson<Record<string, string>>(row.labels_json);
+  const owner = parseJson<ResourceOwner>(row.owner_json);
   const pendingOperation = parseJson<ResourceShapePendingOperation>(
     row.pending_operation_json,
   );
@@ -1280,6 +1287,7 @@ function resourceShapeFromRow(row: ResourceShapeRow): ResourceShapeRecord {
     ...(stateAdoption === undefined ? {} : { stateAdoption }),
     ...(conditions === undefined ? {} : { conditions }),
     ...(labels === undefined ? {} : { labels }),
+    ...(owner === undefined ? {} : { owner }),
     createdAt: row.created_at as IsoTimestamp,
     updatedAt: row.updated_at as IsoTimestamp,
   };

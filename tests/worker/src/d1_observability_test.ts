@@ -1,10 +1,94 @@
 import { expect, test } from "bun:test";
 
 import { CloudflareD1ObservabilitySink } from "../../../worker/src/d1_observability.ts";
+import { ensureD1OpenTofuLedgerSchema } from "../../../worker/src/d1_opentofu_store.ts";
+import type { D1Database } from "../../../worker/src/bindings.ts";
 import { SqliteFakeD1 } from "../../helpers/deploy-control/sqlite_fake_d1.ts";
 
-test("Cloudflare D1 observability sink persists metrics across instances", async () => {
+async function canonicalObservabilityDb(): Promise<SqliteFakeD1> {
   const db = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(db);
+  return db;
+}
+
+test("Cloudflare D1 observability requests execute no schema DDL", async () => {
+  const db = await canonicalObservabilityDb();
+  const queries: string[] = [];
+  const observed: D1Database = {
+    prepare(query) {
+      const normalized = query.trim();
+      queries.push(normalized);
+      if (/^(?:create|alter|drop|pragma|reindex|vacuum)\b/iu.test(normalized)) {
+        throw new Error(`request-time schema DDL: ${normalized}`);
+      }
+      return db.prepare(query);
+    },
+    batch: db.batch.bind(db),
+  };
+  const sink = new CloudflareD1ObservabilitySink({ db: observed });
+  expect(queries).toEqual([]);
+
+  const observedAt = new Date().toISOString();
+  await sink.recordMetric({
+    id: "metric_no_ddl",
+    name: "no_ddl",
+    kind: "counter",
+    value: 1,
+    observedAt,
+  });
+  await sink.recordTrace({
+    id: "trace_no_ddl",
+    traceId: "trace_no_ddl",
+    spanId: "span_no_ddl",
+    name: "no_ddl",
+    kind: "internal",
+    status: "ok",
+    startTime: observedAt,
+    endTime: observedAt,
+  });
+  await sink.appendAudit({
+    id: "audit_no_ddl",
+    eventClass: "compliance",
+    type: "observability.recorded",
+    severity: "info",
+    payload: {},
+    occurredAt: observedAt,
+  });
+  expect(await sink.listMetrics({ name: "no_ddl" })).toHaveLength(1);
+  expect(await sink.listTraces({ name: "no_ddl" })).toHaveLength(1);
+  expect(await sink.listAudit()).toHaveLength(1);
+  expect(
+    queries.every(
+      (query) =>
+        !/^(?:create|alter|drop|pragma|reindex|vacuum)\b/iu.test(query),
+    ),
+  ).toBe(true);
+});
+
+test("Cloudflare D1 observability fails closed before canonical boot", async () => {
+  const db = new SqliteFakeD1();
+  const sink = new CloudflareD1ObservabilitySink({ db });
+  await expect(
+    sink.recordMetric({
+      id: "metric_unbooted",
+      name: "unbooted",
+      kind: "counter",
+      value: 1,
+      observedAt: new Date().toISOString(),
+    }),
+  ).rejects.toThrow();
+  expect(
+    await db
+      .prepare(
+        `select name from sqlite_master
+         where type = 'table' and name like 'takosumi_observability_%'`,
+      )
+      .first(),
+  ).toBeNull();
+});
+
+test("Cloudflare D1 observability sink persists metrics across instances", async () => {
+  const db = await canonicalObservabilityDb();
   const observedAt = new Date().toISOString();
   const recorder = new CloudflareD1ObservabilitySink({ db });
   await recorder.recordMetric({
@@ -43,7 +127,7 @@ test("Cloudflare D1 observability sink persists metrics across instances", async
 });
 
 test("Cloudflare D1 observability sink returns the newest bounded metric window", async () => {
-  const db = new SqliteFakeD1();
+  const db = await canonicalObservabilityDb();
   const sink = new CloudflareD1ObservabilitySink({ db });
   await sink.recordMetric({
     id: "metric_schema_seed",
@@ -75,7 +159,7 @@ test("Cloudflare D1 observability sink returns the newest bounded metric window"
 });
 
 test("Cloudflare D1 observability sink retains only recent metric and trace samples", async () => {
-  const db = new SqliteFakeD1();
+  const db = await canonicalObservabilityDb();
   const initializer = new CloudflareD1ObservabilitySink({ db });
   await initializer.recordMetric({
     id: "metric_schema_seed",
@@ -116,7 +200,7 @@ test("Cloudflare D1 observability sink retains only recent metric and trace samp
 });
 
 test("Cloudflare D1 observability sink persists and verifies the audit chain", async () => {
-  const db = new SqliteFakeD1();
+  const db = await canonicalObservabilityDb();
   const firstSink = new CloudflareD1ObservabilitySink({ db });
   const occurredAt = new Date().toISOString();
 
@@ -155,7 +239,7 @@ test("Cloudflare D1 observability sink persists and verifies the audit chain", a
 });
 
 test("Cloudflare D1 observability sink serializes concurrent audit appends", async () => {
-  const db = new SqliteFakeD1();
+  const db = await canonicalObservabilityDb();
   const sinks = Array.from(
     { length: 6 },
     () => new CloudflareD1ObservabilitySink({ db }),
@@ -184,7 +268,7 @@ test("Cloudflare D1 observability sink serializes concurrent audit appends", asy
 });
 
 test("Cloudflare D1 observability sink persists traces and applies queries", async () => {
-  const db = new SqliteFakeD1();
+  const db = await canonicalObservabilityDb();
   const recorder = new CloudflareD1ObservabilitySink({ db });
   const firstStartedAt = new Date();
   const secondStartedAt = new Date(firstStartedAt.getTime() + 60_000);
