@@ -1,13 +1,15 @@
 import { describe, expect, test } from "bun:test";
 
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
-import type { RepositoryInstallUxDocument } from "takosumi-contract/install-ux";
+import type { RepositoryManifestDocument } from "takosumi-contract/repository-manifest";
 import { compileRepositoryInstallUx } from "../../../../core/domains/capsules/repository_install_ux_compiler.ts";
 
-const document: RepositoryInstallUxDocument = {
-  schemaVersion: "takosumi.install-ux/v1",
-  modules: {
-    ".": {
+const document: RepositoryManifestDocument = {
+  apiVersion: "takosumi.com/v1alpha1",
+  kind: "Repository",
+  install: {
+    modules: {
+      ".": {
       inputs: [
         {
           name: "project_name",
@@ -60,9 +62,10 @@ const document: RepositoryInstallUxDocument = {
           inputs: ["push_token"],
         },
       ],
-    },
-    "deploy/takoform": {
-      inputs: [],
+      },
+      "deploy/takoform": {
+        inputs: [],
+      },
     },
   },
 };
@@ -133,7 +136,8 @@ describe("repository install UX compiler", () => {
       source: "capsule_name",
     });
     expect(result.compiled.installExperience).toEqual({
-      projections: document.modules["."]!.installExperience!.projections,
+      projections:
+        document.install.modules["."]!.installExperience!.projections,
       features: [
         {
           id: "notification-push",
@@ -294,18 +298,21 @@ describe("repository install UX compiler", () => {
       );
     }
 
-    const envDocument: RepositoryInstallUxDocument = {
-      schemaVersion: "takosumi.install-ux/v1",
-      modules: {
-        ".": {
-          inputs: [
-            {
-              name: "env",
-              source: { kind: "user" },
-              type: "json",
-              label: { ja: "環境", en: "Environment" },
-            },
-          ],
+    const envDocument: RepositoryManifestDocument = {
+      apiVersion: "takosumi.com/v1alpha1",
+      kind: "Repository",
+      install: {
+        modules: {
+          ".": {
+            inputs: [
+              {
+                name: "env",
+                source: { kind: "user" },
+                type: "json",
+                label: { ja: "環境", en: "Environment" },
+              },
+            ],
+          },
         },
       },
     };

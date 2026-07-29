@@ -78,7 +78,9 @@ dashboard、サインイン、永続データベース、OpenTofu runner を含�
 - [認証情報](./concepts/credentials.md) — provider に接続を渡す方法
 - [Resource](./concepts/resources.md) — module を書かずに型付きサービスを作る方法
 - [自分で動かす](./concepts/self-host.md) — production を運用するための構成
-- [API](./reference/api.md) / [CLI](./reference/cli.md) / [設定](./reference/configuration.md)
+- [Repository manifest](./reference/repository-manifest.md) /
+  [API](./reference/api.md) / [CLI](./reference/cli.md) /
+  [設定](./reference/configuration.md)
 
 公式ホスティングの料金、managed リソース、サポートは
 [Takosumi Cloud のドキュメント](https://app.takosumi.com/docs/)にあります。

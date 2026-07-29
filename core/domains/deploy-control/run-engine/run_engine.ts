@@ -1756,9 +1756,9 @@ export class RunEngine {
     const snapshot: SourceSnapshot = resolved;
     if (
       repositoryInstallUxSnapshotId &&
-      (snapshot.repositoryInstallUx?.status !== "present" ||
+      (snapshot.repositoryManifest?.status !== "present" ||
         !installConfig.internal?.repositoryInstallUxDigest ||
-        snapshot.repositoryInstallUx.digest !==
+        snapshot.repositoryManifest.digest !==
           installConfig.internal.repositoryInstallUxDigest)
     ) {
       throw new OpenTofuControllerError(
@@ -1991,8 +1991,8 @@ export class RunEngine {
           installConfig.internal?.repositoryInstallUxDigest;
         if (
           !expectedDigest ||
-          snapshot.repositoryInstallUx?.status !== "present" ||
-          snapshot.repositoryInstallUx.digest !== expectedDigest
+          snapshot.repositoryManifest?.status !== "present" ||
+          snapshot.repositoryManifest.digest !== expectedDigest
         ) {
           throw new OpenTofuControllerError(
             "failed_precondition",

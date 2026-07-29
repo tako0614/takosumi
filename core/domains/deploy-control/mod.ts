@@ -96,7 +96,7 @@ import type {
   ListSourceSnapshotsResponse,
   PatchSourceRequest,
   RepositoryInstallMetadataSnapshot,
-  RepositoryInstallUxSnapshot,
+  RepositoryManifestSnapshot,
   Source,
   SourceResponse,
   SourceSnapshot,
@@ -755,8 +755,8 @@ export interface OpenTofuSourceSyncResult {
   readonly archiveSizeBytes: number;
   /** Repository-root presentation metadata captured from the same Git commit. */
   readonly repositoryInstallMetadata?: RepositoryInstallMetadataSnapshot;
-  /** Optional install UX proposal captured from the same immutable Git commit. */
-  readonly repositoryInstallUx?: RepositoryInstallUxSnapshot;
+  /** Optional repository manifest captured from the same immutable Git commit. */
+  readonly repositoryManifest?: RepositoryManifestSnapshot;
   /** Existing archive reference when an unchanged ref reused a SourceSnapshot. */
   readonly archiveRef?: string;
   readonly phaseTimings?: readonly SourceSyncPhaseTiming[];

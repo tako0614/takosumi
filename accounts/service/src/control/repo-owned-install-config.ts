@@ -123,7 +123,7 @@ export async function latestSourceSnapshotForSource(
 export async function adoptRepoOwnedInstallConfig(
   input: RepoOwnedInstallConfigAdoptionInput,
 ): Promise<RepoOwnedInstallConfigAdoptionResult> {
-  const observation = input.sourceSnapshot?.repositoryInstallUx;
+  const observation = input.sourceSnapshot?.repositoryManifest;
   if (!observation || observation.status === "absent") {
     return { status: "absent" };
   }

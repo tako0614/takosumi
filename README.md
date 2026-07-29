@@ -63,6 +63,12 @@ Takosumi には 2 つの入口があります。どちらも同じ実行履歴�
 Takosumi では、登録した 1 つの module を **Capsule** と呼びます。この名前を知らなくても
 module 自体を書き換える必要はありません。
 
+repository は任意の `.well-known/takosumi.json` で、同じ commit に固定された
+Takosumi 向け metadata を提案できます。現行contractは一般
+`Repository` envelopeの `install.modules` だけを定義し、実行authorityは
+DB-owned `InstallConfig`、Plan、Runに残ります。詳細は
+[Repository manifest](docs/reference/repository-manifest.md)を参照してください。
+
 ### 型を指定してリソースを作る
 
 運用者が有効にしている場合は、オブジェクトストレージや SQL データベースなどを
@@ -96,6 +102,7 @@ Takos は別の製品です。Accounts / deploy-control / dashboard / runner を
 - [全体像](docs/concepts/index.md) — Git module、Resource、Run、state のつながり
 - [認証情報](docs/concepts/credentials.md) — provider の接続情報を安全に渡す方法
 - [自分で動かす](docs/concepts/self-host.md) — self-host の構成と判断事項
+- [Repository manifest](docs/reference/repository-manifest.md) — repository-owned metadata と `InstallConfig` の境界
 - [API リファレンス](docs/reference/api.md)
 - [CLI リファレンス](docs/reference/cli.md)
 - [設定リファレンス](docs/reference/configuration.md)

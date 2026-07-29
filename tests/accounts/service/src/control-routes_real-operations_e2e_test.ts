@@ -365,19 +365,20 @@ test("account session control routes execute plan and apply through the real Ope
   const installUxDigest = `sha256:${"d".repeat(64)}`;
   await deployStore.putSourceSnapshot({
     ...seeded.snapshot,
-    repositoryInstallUx: {
+    repositoryManifest: {
       status: "present",
       digest: installUxDigest,
       document: {
-        schemaVersion: "takosumi.install-ux/v1",
-        modules: { ".": { inputs: [] } },
+        apiVersion: "takosumi.com/v1alpha1",
+        kind: "Repository",
+        install: { modules: { ".": { inputs: [] } } },
       },
     },
   });
 
   const sourceSnapshots = await controlJson<{
     readonly snapshots: readonly {
-      readonly repositoryInstallUx?: unknown;
+      readonly repositoryManifest?: unknown;
     }[];
   }>(
     {
@@ -389,7 +390,7 @@ test("account session control routes execute plan and apply through the real Ope
     },
     200,
   );
-  expect(sourceSnapshots.snapshots[0]?.repositoryInstallUx).toEqual({
+  expect(sourceSnapshots.snapshots[0]?.repositoryManifest).toEqual({
     status: "present",
     digest: installUxDigest,
   });
@@ -529,7 +530,7 @@ test("account session control routes execute plan and apply through the real Ope
 
   await deployStore.putSourceSnapshot({
     ...seeded.snapshot,
-    repositoryInstallUx: {
+    repositoryManifest: {
       status: "invalid",
       reason: "invalid_document",
       diagnostic: "bounded fixture diagnostic",
@@ -567,12 +568,13 @@ test("account session control routes execute plan and apply through the real Ope
   );
   await deployStore.putSourceSnapshot({
     ...seeded.snapshot,
-    repositoryInstallUx: {
+    repositoryManifest: {
       status: "present",
       digest: installUxDigest,
       document: {
-        schemaVersion: "takosumi.install-ux/v1",
-        modules: { ".": { inputs: [] } },
+        apiVersion: "takosumi.com/v1alpha1",
+        kind: "Repository",
+        install: { modules: { ".": { inputs: [] } } },
       },
     },
   });

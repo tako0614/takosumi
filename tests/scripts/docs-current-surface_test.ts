@@ -538,6 +538,47 @@ test("public pricing and OSS readiness use prepaid-credit and quota-policy vocab
   assert.doesNotMatch(readinessFixtures, /policy:\/\/[^"\s]*lite/);
 });
 
+test("repository manifest uses the general closed envelope and keeps install options separate", async () => {
+  const contract = await readText(
+    new URL("contract/repository-manifest.ts", ROOT),
+  );
+  assert.match(contract, /"takosumi\.com\/v1alpha1"/);
+  assert.match(contract, /"Repository"/);
+  assert.match(contract, /readonly install: RepositoryManifestInstall/);
+  assert.doesNotMatch(contract, /TAKOSUMI_INSTALL_UX_SCHEMA_VERSION/);
+  assert.equal(
+    await Bun.file(new URL("contract/install-ux.ts", ROOT)).exists(),
+    false,
+  );
+  const sourceContract = await readText(new URL("contract/sources.ts", ROOT));
+  assert.match(
+    sourceContract,
+    /readonly repositoryManifest\?: RepositoryManifestSnapshot/,
+  );
+  assert.doesNotMatch(sourceContract, /RepositoryInstallUxSnapshot/);
+  const sourceSync = await readText(new URL("runner/lib/source_sync.ts", ROOT));
+  assert.match(sourceSync, /source_repository_manifest/);
+  assert.doesNotMatch(sourceSync, /source_repository_install_ux/);
+  const openapi = await readText(new URL("core/api/openapi.ts", ROOT));
+  const sourceSnapshotSchema = openapi.slice(
+    openapi.indexOf("    SourceSnapshot: {"),
+    openapi.indexOf("    SourceSyncRun: {"),
+  );
+  assert.match(sourceSnapshotSchema, /repositoryManifest:/);
+  assert.doesNotMatch(sourceSnapshotSchema, /repositoryInstallUx:/);
+
+  for (const path of [
+    "docs/reference/repository-manifest.md",
+    "docs/en/reference/repository-manifest.md",
+  ]) {
+    const doc = await readText(new URL(path, ROOT));
+    assert.match(doc, /takosumi\.com\/v1alpha1/);
+    assert.match(doc, /CapsuleSourceOptions/);
+    assert.match(doc, /InstallConfig/);
+    assert.match(doc, /\$schema/);
+  }
+});
+
 async function readPublicDocs(): Promise<string> {
   const chunks: string[] = [];
   for (const root of [new URL("docs/", ROOT), new URL("app-docs/", ROOT)]) {

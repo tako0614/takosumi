@@ -64,12 +64,12 @@ import {
   positiveIntegerLimitFromProfile,
 } from "./parsing.ts";
 import type { RepositoryInstallMetadataSnapshot } from "takosumi-contract/sources";
-import type { RepositoryInstallUxSnapshot } from "takosumi-contract/sources";
+import type { RepositoryManifestSnapshot } from "takosumi-contract/sources";
 import {
-  parseRepositoryInstallUxText,
-  TAKOSUMI_INSTALL_UX_MAX_BYTES,
-  TAKOSUMI_INSTALL_UX_REPOSITORY_PATH,
-} from "../../contract/install-ux.ts";
+  parseRepositoryManifestText,
+  TAKOSUMI_REPOSITORY_MANIFEST_MAX_BYTES,
+  TAKOSUMI_REPOSITORY_MANIFEST_PATH,
+} from "../../contract/repository-manifest.ts";
 
 const REPOSITORY_INSTALL_METADATA_PATH = ".well-known/tcs.json";
 const SOURCE_SNAPSHOT_PRESENTATION_MAX_FILE_BYTES = 128 * 1024;
@@ -462,9 +462,9 @@ export async function runSourceSync(
       "source_repository_metadata",
       () => readRepositoryInstallMetadata(workspace.sourceRoot),
     );
-    const repositoryInstallUx = await timer.measure(
-      "source_repository_install_ux",
-      () => readRepositoryInstallUx(workspace.sourceRoot),
+    const repositoryManifest = await timer.measure(
+      "source_repository_manifest",
+      () => readRepositoryManifest(workspace.sourceRoot),
     );
     const subtree = await timer.measure("source_subtree", () =>
       resolveSourceSubtree(workspace.sourceRoot, source.path),
@@ -498,7 +498,7 @@ export async function runSourceSync(
         archiveDigest,
         archiveSizeBytes: archiveBytes.byteLength,
         repositoryInstallMetadata,
-        repositoryInstallUx,
+        repositoryManifest,
         sourceArchive: {
           kind: "runner-local",
           ref: archiveRef,
@@ -544,29 +544,30 @@ export async function readRepositoryInstallMetadata(
 }
 
 /**
- * Captures and validates the optional repository-owned install UX proposal.
+ * Captures and validates the optional repository-owned general manifest.
  *
  * The document is observed before selecting the module subtree, from the exact
  * checked-out commit used for the archive. A bad optional document never turns
  * a Git Source into an alternate source or blocks source capture: its bounded
  * invalid status is persisted for the compatibility/compiler layer to report.
+ * The current API version exposes only the install section to that compiler.
  */
-export async function readRepositoryInstallUx(
+export async function readRepositoryManifest(
   repositoryRoot: string,
-): Promise<RepositoryInstallUxSnapshot> {
-  const installUxPath = join(
+): Promise<RepositoryManifestSnapshot> {
+  const manifestPath = join(
     repositoryRoot,
-    TAKOSUMI_INSTALL_UX_REPOSITORY_PATH,
+    TAKOSUMI_REPOSITORY_MANIFEST_PATH,
   );
   try {
-    const info = await lstat(installUxPath);
+    const info = await lstat(manifestPath);
     if (!info.isFile()) {
       return { status: "invalid", reason: "not_regular_file" };
     }
-    if (info.size > TAKOSUMI_INSTALL_UX_MAX_BYTES) {
+    if (info.size > TAKOSUMI_REPOSITORY_MANIFEST_MAX_BYTES) {
       return { status: "invalid", reason: "too_large" };
     }
-    const bytes = await readFile(installUxPath);
+    const bytes = await readFile(manifestPath);
     const digest = await digestBytes(bytes);
     let text: string;
     try {
@@ -574,7 +575,7 @@ export async function readRepositoryInstallUx(
     } catch {
       return { status: "invalid", reason: "invalid_utf8", digest };
     }
-    const parsed = parseRepositoryInstallUxText(text);
+    const parsed = parseRepositoryManifestText(text);
     if (!parsed.ok) {
       return {
         status: "invalid",

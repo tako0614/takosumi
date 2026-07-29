@@ -6,7 +6,10 @@ import {
   TAKOSUMI_MANAGED_RUNTIME_CONNECTION_CONTRACT,
 } from "../../contract/index.ts";
 import { TAKOSUMI_BACKGROUND_EVENT_INVOKE_PATH } from "../../contract/background-events.ts";
-import { TAKOSUMI_MANAGED_RUNTIME_GATEWAY_BINDING } from "../../contract/managed-runtime-connections.ts";
+import {
+  TAKOSUMI_MANAGED_RUNTIME_GATEWAY_BINDING,
+  TAKOSUMI_MANAGED_RUNTIME_MATERIALIZATION_BINDING,
+} from "../../contract/managed-runtime-connections.ts";
 
 const packageJson = JSON.parse(
   await readFile(
@@ -54,5 +57,8 @@ test("root and explicit runtime subpaths expose one contract identity", () => {
   );
   expect(TAKOSUMI_MANAGED_RUNTIME_GATEWAY_BINDING).toBe(
     "TAKOSUMI_MANAGED_RUNTIME",
+  );
+  expect(TAKOSUMI_MANAGED_RUNTIME_MATERIALIZATION_BINDING).toBe(
+    "TAKOSUMI_MANAGED_RUNTIME_MATERIALIZATION",
   );
 });

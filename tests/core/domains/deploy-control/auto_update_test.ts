@@ -48,7 +48,7 @@ class FullStubRunner implements OpenTofuRunner {
     archiveDigest: "sha256:" + "c".repeat(64),
     archiveSizeBytes: 2048,
     repositoryInstallMetadata: { status: "absent" },
-    repositoryInstallUx: { status: "absent" },
+    repositoryManifest: { status: "absent" },
   };
   planCalls = 0;
 

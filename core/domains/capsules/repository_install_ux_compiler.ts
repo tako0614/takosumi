@@ -7,11 +7,11 @@ import type {
   InstallConfigVariablePresentation,
 } from "takosumi-contract/install-configs";
 import type {
-  RepositoryInstallUxDocument,
   RepositoryInstallUxInput,
   RepositoryInstallUxInputSource,
   RepositoryInstallUxProjection,
-} from "takosumi-contract/install-ux";
+  RepositoryManifestDocument,
+} from "takosumi-contract/repository-manifest";
 import type { JsonValue } from "takosumi-contract/types";
 
 const SUPPORTED_SOURCE_KINDS = [
@@ -65,7 +65,7 @@ export interface RepositoryInstallUxCompilerPolicy {
 }
 
 export interface CompileRepositoryInstallUxInput {
-  readonly document: RepositoryInstallUxDocument;
+  readonly document: RepositoryManifestDocument;
   readonly sourceSnapshotId: string;
   readonly modulePath: string;
   readonly compatibilityReport: CapsuleCompatibilityReport;
@@ -110,7 +110,7 @@ export function compileRepositoryInstallUx(
       "The selected module path is not a canonical relative path.",
     );
   }
-  const module = input.document.modules[modulePath];
+  const module = input.document.install.modules[modulePath];
   if (!module) {
     return invalid(
       "repository_install_ux_module_missing",

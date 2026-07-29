@@ -2,8 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
-import type { RepositoryInstallUxDocument } from "takosumi-contract/install-ux";
-import { parseRepositoryInstallUxText } from "takosumi-contract/install-ux";
+import {
+  parseRepositoryManifestText,
+  type RepositoryManifestDocument,
+} from "takosumi-contract/repository-manifest";
 import type { InstallConfig } from "takosumi-contract/install-configs";
 import {
   UI_SURFACE_INTERFACE_TYPE,
@@ -90,14 +92,17 @@ function managedCompatibilityReport(): CapsuleCompatibilityReport {
   };
 }
 
-function managedInstallUx(): RepositoryInstallUxDocument {
+function managedInstallUx(): RepositoryManifestDocument {
   return {
-    schemaVersion: "takosumi.install-ux/v1",
-    modules: {
-      [MODULE_PATH]: {
-        inputs: MANAGED_INPUTS,
-        installExperience: {
-          projections: [{ kind: "service_name", variable: "project_name" }],
+    apiVersion: "takosumi.com/v1alpha1",
+    kind: "Repository",
+    install: {
+      modules: {
+        [MODULE_PATH]: {
+          inputs: MANAGED_INPUTS,
+          installExperience: {
+            projections: [{ kind: "service_name", variable: "project_name" }],
+          },
         },
       },
     },
@@ -242,9 +247,9 @@ describe("Yurucommu managed Store cutover contract", () => {
         new URL(".well-known/takosumi.json", YURUCOMMU_ROOT),
         "utf8",
       ),
-    ) as RepositoryInstallUxDocument;
-    expect(Object.keys(manifest.modules)).toEqual([".", MODULE_PATH]);
-    expect(manifest.modules[MODULE_PATH]).toBeDefined();
+    ) as RepositoryManifestDocument;
+    expect(Object.keys(manifest.install.modules)).toEqual([".", MODULE_PATH]);
+    expect(manifest.install.modules[MODULE_PATH]).toBeDefined();
 
     const selectableYurucommu = REFERENCE_APP_INSTALL_CONFIGS.filter(
       (config) => config.store?.source?.url === SOURCE_URL,
@@ -346,7 +351,7 @@ describe("Yurucommu managed Store cutover contract", () => {
       new URL(".well-known/takosumi.json", YURUCOMMU_ROOT),
       "utf8",
     );
-    const parsed = parseRepositoryInstallUxText(manifestText);
+    const parsed = parseRepositoryManifestText(manifestText);
     expect(parsed.ok).toBe(true);
     if (!parsed.ok) throw new Error(parsed.error);
 

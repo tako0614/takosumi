@@ -1603,12 +1603,13 @@ test("repository install UX pins the initial Plan snapshot, then applied lineage
   });
   await store.putSourceSnapshot({
     ...seeded.snapshot,
-    repositoryInstallUx: {
+    repositoryManifest: {
       status: "present",
       digest: installUxDigest,
       document: {
-        schemaVersion: "takosumi.install-ux/v1",
-        modules: { ".": { inputs: [] } },
+        apiVersion: "takosumi.com/v1alpha1",
+        kind: "Repository",
+        install: { modules: { ".": { inputs: [] } } },
       },
     },
   });

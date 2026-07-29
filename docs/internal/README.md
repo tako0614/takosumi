@@ -76,7 +76,8 @@ repository-owned-install-ux-report.md
 ```
 
 `repository-owned-install-ux-report.md` is the implementation handoff for the
-proposed optional `.well-known/takosumi.json` install-UX contract. It records
+optional `.well-known/takosumi.json` repository-manifest contract and its
+current repository-owned `install` section. It records
 the current Takosumi/TCS Store conformance gap, the Yurucommu acceptance case,
 the authority boundary, and the phased work needed before the proposal can
 become part of `core-spec.md`.

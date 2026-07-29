@@ -1,0 +1,11 @@
+{
+  "apiVersion": "takosumi.com/v1alpha2",
+  "kind": "Repository",
+  "install": {
+    "modules": {
+      ".": {
+        "inputs": []
+      }
+    }
+  }
+}

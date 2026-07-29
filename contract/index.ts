@@ -26,7 +26,7 @@ export * from "./interface-display.ts";
 export * from "./target.ts";
 export * from "./resolution.ts";
 export * from "./sources.ts";
-export * from "./install-ux.ts";
+export * from "./repository-manifest.ts";
 export * from "./capsule-source-options.ts";
 export * from "./redaction.ts";
 export * from "./provider-configurations.ts";
