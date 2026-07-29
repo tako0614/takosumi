@@ -20,6 +20,7 @@ import type {
   InstallConfigLifecycleAction,
   InstallConfigPatchV1,
 } from "takosumi-contract/install-configs";
+import { installConfigSourceCoordinateMatches } from "takosumi-contract/install-configs";
 import {
   clampPageLimit,
   DEFAULT_PAGE_LIMIT,
@@ -167,6 +168,23 @@ export class CapsulesService {
       throw new OpenTofuControllerError(
         "invalid_argument",
         "install config is not available to this workspace",
+      );
+    }
+    if (
+      config.sourceSelector &&
+      !installConfigSourceCoordinateMatches(config.sourceSelector, {
+        url: source.url,
+        path: source.defaultPath,
+      })
+    ) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        "source does not match the install config source selector",
+        {
+          reason: "install_config_source_mismatch",
+          sourceId: source.id,
+          installConfigId: config.id,
+        },
       );
     }
     const existing = await this.#store.getCapsuleByName(

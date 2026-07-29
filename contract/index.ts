@@ -63,6 +63,9 @@ export type {
 export {
   CAPSULE_LIFECYCLE_ACTION_FAILED_ERROR_CODE,
   CAPSULE_LIFECYCLE_COMMAND_CAPABILITY,
+  installConfigSourceCoordinateMatches,
+  normalizeInstallConfigSourcePath,
+  normalizeInstallConfigSourceUrl,
 } from "./install-configs.ts";
 export type {
   PublicCapsule as Capsule,

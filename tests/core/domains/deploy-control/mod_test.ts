@@ -1791,6 +1791,18 @@ test("restore rebases StateVersion and Output cursors and marks the Capsule stal
     outputDigest: "sha256:restore-source-output",
     createdAt: "2026-06-06T00:00:00.000Z",
   } as const;
+  const latestSourceOutput = {
+    ...sourceOutput,
+    id: "out_restore_source_latest",
+    rawArtifactRef: "outputs/1-latest.json.enc",
+    publicOutputs: { url: "https://restored-latest.example.test" },
+    workspaceOutputs: {
+      url: "https://restored-latest.example.test",
+      bucket_name: "restored-latest-assets",
+    },
+    outputDigest: "sha256:restore-source-output-latest",
+    createdAt: "2026-06-06T00:00:00.500Z",
+  } as const;
   const previousOutput = {
     ...sourceOutput,
     id: "out_restore_previous",
@@ -1805,6 +1817,7 @@ test("restore rebases StateVersion and Output cursors and marks the Capsule stal
     createdAt: "2026-06-06T00:00:01.000Z",
   } as const;
   await store.putOutput(sourceOutput);
+  await store.putOutput(latestSourceOutput);
   await store.putOutput(previousOutput);
   await store.putBackupRecord({
     id: "bkp_restore",
@@ -1852,14 +1865,19 @@ test("restore rebases StateVersion and Output cursors and marks the Capsule stal
   expect(restored?.currentStateGeneration).toBe(3);
   expect(restoredState?.generation).toBe(3);
   expect(restoredOutput?.id).not.toBe(sourceOutput.id);
+  expect(restoredOutput?.id).not.toBe(latestSourceOutput.id);
   expect(restoredOutput?.id).not.toBe(previousOutput.id);
   expect(restoredOutput?.stateGeneration).toBe(3);
-  expect(restoredOutput?.rawArtifactRef).toBe(sourceOutput.rawArtifactRef);
-  expect(restoredOutput?.publicOutputs).toEqual(sourceOutput.publicOutputs);
-  expect(restoredOutput?.workspaceOutputs).toEqual(
-    sourceOutput.workspaceOutputs,
+  expect(restoredOutput?.rawArtifactRef).toBe(
+    latestSourceOutput.rawArtifactRef,
   );
-  expect(restoredOutput?.outputDigest).toBe(sourceOutput.outputDigest);
+  expect(restoredOutput?.publicOutputs).toEqual(
+    latestSourceOutput.publicOutputs,
+  );
+  expect(restoredOutput?.workspaceOutputs).toEqual(
+    latestSourceOutput.workspaceOutputs,
+  );
+  expect(restoredOutput?.outputDigest).toBe(latestSourceOutput.outputDigest);
   expect(restored?.status).toBe("stale");
   expect(lifecycle).toEqual([
     "started:running:running",

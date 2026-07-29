@@ -8,8 +8,11 @@
  * store-input defaulting rules the one-tap install path relies on.
  */
 import {
+  installConfigSourceCoordinateMatches,
   installExperiencePublicEndpoint,
   installExperienceServiceNameVariable,
+  normalizeInstallConfigSourcePath,
+  normalizeInstallConfigSourceUrl,
   type JsonValue,
 } from "takosumi-contract";
 import {
@@ -282,20 +285,7 @@ function displayModulePath(value: string): string {
 }
 
 function normalizeGitUrl(value: string): string {
-  try {
-    const url = new URL(value.trim());
-    url.hash = "";
-    url.search = "";
-    url.pathname = url.pathname.replace(/\/+$/u, "").replace(/\.git$/iu, "");
-    // URL canonicalization lower-cases the scheme/host. Preserve pathname
-    // case because Git repository paths can be case-sensitive.
-    return url.toString().replace(/\/+$/u, "");
-  } catch {
-    return value
-      .trim()
-      .replace(/\/+$/u, "")
-      .replace(/\.git$/iu, "");
-  }
+  return normalizeInstallConfigSourceUrl(value);
 }
 
 function sameGitUrl(a: string, b: string): boolean {
@@ -303,7 +293,7 @@ function sameGitUrl(a: string, b: string): boolean {
 }
 
 function normalizeSourcePath(value: string): string {
-  return displayModulePath(value).replace(/^\.\//u, "");
+  return normalizeInstallConfigSourcePath(value);
 }
 
 function slugInputValue(value: string): string {
@@ -669,11 +659,9 @@ function storeSourceMatchesCoordinate(
     typeof source?.url === "string" ? source.url.trim() : undefined;
   const sourcePath =
     typeof source?.path === "string" ? source.path.trim() : undefined;
-  return Boolean(
-    sourceUrl &&
-    sourcePath &&
-    sameGitUrl(sourceUrl, url) &&
-    normalizeSourcePath(sourcePath) === normalizeSourcePath(path),
+  return installConfigSourceCoordinateMatches(
+    sourceUrl && sourcePath ? { url: sourceUrl, path: sourcePath } : undefined,
+    { url, path },
   );
 }
 

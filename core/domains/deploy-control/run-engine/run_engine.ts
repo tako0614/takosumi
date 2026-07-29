@@ -826,6 +826,19 @@ function lifecycleActionsForPlan(
   return actions;
 }
 
+function latestOutputAtGeneration(
+  outputs: readonly Output[],
+  stateGeneration: number,
+): Output | undefined {
+  return outputs
+    .filter((snapshot) => snapshot.stateGeneration === stateGeneration)
+    .sort(
+      (left, right) =>
+        right.createdAt.localeCompare(left.createdAt) ||
+        right.id.localeCompare(left.id),
+    )[0];
+}
+
 function assertPinnedLifecycleRunnerCapabilities(
   actions: InstallConfig["lifecycleActions"],
   runnerProfile: RunnerProfile,
@@ -3282,8 +3295,9 @@ export class RunEngine {
       createdByRunId: run.id,
       createdAt: now,
     };
-    const sourceOutput = (await this.#store.listOutputs(capsule.id)).find(
-      (snapshot) => snapshot.stateGeneration === source.generation,
+    const sourceOutput = latestOutputAtGeneration(
+      await this.#store.listOutputs(capsule.id),
+      source.generation,
     );
     const restoredOutput: Output | undefined = sourceOutput
       ? {
@@ -4788,7 +4802,9 @@ export class RunEngine {
     }
     const intervalMs = this.#runRenewalIntervalMs;
     const timer =
-      intervalMs > 0 ? setInterval(() => void runTick(), intervalMs) : undefined;
+      intervalMs > 0
+        ? setInterval(() => void runTick(), intervalMs)
+        : undefined;
     if (timer) {
       // Some runtimes keep the event loop alive for a pending interval; unref
       // when available so the renewal timer never blocks process exit on its own.
@@ -6528,7 +6544,9 @@ export class RunEngine {
           : {}),
         ...(dispatch.sourceBuild ? { sourceBuild: dispatch.sourceBuild } : {}),
         // M2 env dispatch (state scope at base+1 + source archive).
-        ...(envDispatch.stateScope ? { stateScope: envDispatch.stateScope } : {}),
+        ...(envDispatch.stateScope
+          ? { stateScope: envDispatch.stateScope }
+          : {}),
         rawOutputRef,
         ...(envDispatch.stateAdoption
           ? { stateAdoption: envDispatch.stateAdoption }

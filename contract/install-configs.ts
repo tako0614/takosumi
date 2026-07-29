@@ -323,6 +323,65 @@ export interface InstallConfigSourceSelector {
 }
 
 /**
+ * Canonical comparison shared by the Store UI and the Capsule authority
+ * boundary. Git's optional `.git` suffix and harmless relative-path spelling
+ * do not change a repository coordinate. URL fragments and trailing slashes
+ * are presentation noise; query strings remain part of the executable URL.
+ */
+export function normalizeInstallConfigSourceUrl(value: string): string {
+  try {
+    const url = new URL(value.trim());
+    url.hash = "";
+    url.pathname = url.pathname.replace(/\/+$/u, "").replace(/\.git$/iu, "");
+    return url.toString().replace(/\/+$/u, "");
+  } catch {
+    return value
+      .trim()
+      .replace(/\/+$/u, "")
+      .replace(/\.git$/iu, "");
+  }
+}
+
+export function normalizeInstallConfigSourcePath(value: string): string {
+  return (
+    value
+      .trim()
+      .replace(/^\/+|\/+$/gu, "")
+      .replace(/^\.\//u, "") || "."
+  );
+}
+
+export function installConfigSourceCoordinateMatches(
+  selector: InstallConfigSourceSelector | undefined,
+  coordinate: { readonly url: string; readonly path: string },
+): boolean {
+  const selectorUrl = selector?.url.trim();
+  const selectorPath = selector?.path.trim();
+  const sourceUrl = coordinate.url.trim();
+  const sourcePath = coordinate.path.trim();
+  return Boolean(
+    selectorUrl &&
+    selectorPath &&
+    sourceUrl &&
+    sourcePath &&
+    installConfigSourcePathIsComparable(selectorPath) &&
+    installConfigSourcePathIsComparable(sourcePath) &&
+    normalizeInstallConfigSourceUrl(selectorUrl) ===
+      normalizeInstallConfigSourceUrl(sourceUrl) &&
+    normalizeInstallConfigSourcePath(selectorPath) ===
+      normalizeInstallConfigSourcePath(sourcePath),
+  );
+}
+
+function installConfigSourcePathIsComparable(value: string): boolean {
+  return (
+    !value.startsWith("/") &&
+    !value.includes("\0") &&
+    !value.split(/[\\/]+/u).some((part) => part === "..")
+  );
+}
+
+/**
  * Service-side presentation for one ordinary OpenTofu input variable.
  *
  * This is Takosumi DB configuration. It is deliberately not nested under

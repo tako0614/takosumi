@@ -172,6 +172,75 @@ test("createCapsule enforces Workspace ownership for InstallConfig", async () =>
   expect(capsule.installConfigId).toBe("cfg_workspace");
 });
 
+test("createCapsule enforces the InstallConfig Source coordinate at the authority boundary", async () => {
+  const { store, service } = build();
+  await seedWorkspace(store);
+  await seedSource(store);
+  await seedConfig(store, {
+    sourceSelector: {
+      url: "https://example.com/acme/repo",
+      path: "./infra/",
+    },
+  });
+
+  const capsule = await createCapsule(service);
+  expect(capsule.sourceId).toBe("src_1");
+
+  await seedSource(store, {
+    id: "src_other_repo",
+    url: "https://example.com/acme/other.git",
+  });
+  await expect(
+    createCapsule(service, {
+      name: "other-repo",
+      sourceId: "src_other_repo",
+    }),
+  ).rejects.toMatchObject({
+    code: "invalid_argument",
+    details: { reason: "install_config_source_mismatch" },
+  });
+
+  await seedSource(store, {
+    id: "src_other_path",
+    defaultPath: "other",
+  });
+  await expect(
+    createCapsule(service, {
+      name: "other-path",
+      sourceId: "src_other_path",
+    }),
+  ).rejects.toMatchObject({
+    code: "invalid_argument",
+    details: { reason: "install_config_source_mismatch" },
+  });
+  await seedSource(store, {
+    id: "src_query",
+    url: "https://example.com/acme/repo.git?alternate=1",
+  });
+  await expect(
+    createCapsule(service, {
+      name: "query-source",
+      sourceId: "src_query",
+    }),
+  ).rejects.toMatchObject({
+    code: "invalid_argument",
+    details: { reason: "install_config_source_mismatch" },
+  });
+  expect(
+    await store.getCapsuleByName(capsule.projectId, "other-repo", "production"),
+  ).toBeUndefined();
+  expect(
+    await store.getCapsuleByName(capsule.projectId, "other-path", "production"),
+  ).toBeUndefined();
+  expect(
+    await store.getCapsuleByName(
+      capsule.projectId,
+      "query-source",
+      "production",
+    ),
+  ).toBeUndefined();
+});
+
 test("createCapsule enforces unique Project, name, and environment", async () => {
   const { store, service } = build();
   await seedAll(store);
