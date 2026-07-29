@@ -83,6 +83,7 @@ import type {
   ResourceObject,
   ResourceShapeKind,
 } from "takosumi-contract";
+import type { ExecutionContext as HonoExecutionContext } from "hono";
 import {
   MCP_SERVER_INVOKE_PERMISSION,
   formRefOfInstalled,
@@ -688,19 +689,31 @@ export default {
     }
     const publicCoreRoute = matchPlatformPublicCoreRoute(url.pathname);
     if (publicCoreRoute?.access === "public") {
-      return await handlePlatformTakoformDiscoveryRequest(request, env);
+      return await handlePlatformTakoformDiscoveryRequest(
+        request,
+        env,
+        context,
+      );
     }
     if (publicCoreRoute?.access === "operator") {
       if (!platformResourceShapeApiEnabled(env)) {
         return Response.json({ error: "not found" }, { status: 404 });
       }
-      return await (await cachedDeployControlService(env)).app.fetch(request);
+      return await (
+        await cachedDeployControlService(env)
+      ).app.fetch(request, undefined, honoExecutionContext(context));
     }
     // Core lifecycle and identity prefixes always win over extension routing.
     // Descriptor validation rejects overlaps too; keeping the dispatch order
     // explicit prevents a future parser regression from shadowing authority.
     if (isPlatformResourceShapeApiPath(url.pathname)) {
-      return await handlePlatformResourceShapeApiRequest(request, env);
+      return await handlePlatformResourceShapeApiRequest(
+        request,
+        env,
+        verifyPlatformExtensionSession,
+        platformExtensionSessionCanAccessWorkspace,
+        context,
+      );
     }
     if (url.pathname === OPERATOR_CONTROL_MCP_PATH) {
       return (
@@ -992,6 +1005,7 @@ function isPlatformOfferingOperatorApiPath(pathname: string): boolean {
 export async function handlePlatformTakoformDiscoveryRequest(
   request: Request,
   env: CloudflareWorkerEnv,
+  context?: PlatformExecutionContext,
 ): Promise<Response> {
   if (!platformResourceShapeApiEnabled(env)) {
     return Response.json({ error: "not found" }, { status: 404 });
@@ -1007,6 +1021,8 @@ export async function handlePlatformTakoformDiscoveryRequest(
       method: request.method,
       headers: { accept: request.headers.get("accept") ?? "application/json" },
     }),
+    undefined,
+    honoExecutionContext(context),
   );
 }
 
@@ -1028,6 +1044,7 @@ export async function handlePlatformResourceShapeApiRequest(
   env: CloudflareWorkerEnv,
   sessionVerifier: PlatformExtensionSessionVerifier = verifyPlatformExtensionSession,
   workspaceAccess: PlatformExtensionWorkspaceAccess = platformExtensionSessionCanAccessWorkspace,
+  context?: PlatformExecutionContext,
 ): Promise<Response> {
   if (!platformResourceShapeApiEnabled(env)) {
     return Response.json({ error: "not found" }, { status: 404 });
@@ -1045,7 +1062,11 @@ export async function handlePlatformResourceShapeApiRequest(
     isPlatformOfferingOperatorApiPath(new URL(request.url).pathname)
   ) {
     const service = await cachedDeployControlService(env);
-    return await service.app.fetch(request);
+    return await service.app.fetch(
+      request,
+      undefined,
+      honoExecutionContext(context),
+    );
   }
   if (!hasDeployControlBearer) {
     const authorized = await platformResourceShapeExternalRequest(
@@ -1058,7 +1079,19 @@ export async function handlePlatformResourceShapeApiRequest(
     request = authorized.request;
   }
   const service = await cachedDeployControlService(env);
-  return await service.app.fetch(request);
+  return await service.app.fetch(
+    request,
+    undefined,
+    honoExecutionContext(context),
+  );
+}
+
+function honoExecutionContext(
+  context: PlatformExecutionContext | undefined,
+): HonoExecutionContext | undefined {
+  // Cloudflare supplies the full ExecutionContext at runtime. The narrower
+  // platform type intentionally exposes only waitUntil to application code.
+  return context as HonoExecutionContext | undefined;
 }
 
 function platformResourceShapeHasDeployControlBearer(
@@ -1271,9 +1304,7 @@ function platformExtensionSessionCsrfFailure(
   }
   let issuerOrigin: string;
   try {
-    issuerOrigin = new URL(
-      env.TAKOSUMI_ACCOUNTS_ISSUER ?? request.url,
-    ).origin;
+    issuerOrigin = new URL(env.TAKOSUMI_ACCOUNTS_ISSUER ?? request.url).origin;
   } catch {
     return Response.json({ error: "csrf_check_unavailable" }, { status: 503 });
   }

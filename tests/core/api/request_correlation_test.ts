@@ -142,6 +142,41 @@ test("request correlation records API request duration metrics", async () => {
   });
 });
 
+test("request correlation defers Worker observability writes with waitUntil", async () => {
+  let release!: () => void;
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const scheduled: Promise<unknown>[] = [];
+  const app = new Hono();
+  registerRequestCorrelation(app, {
+    metricSink: {
+      async recordMetric(event) {
+        await blocked;
+        return event;
+      },
+    },
+  });
+  app.get("/fast", (c) => c.text("ok"));
+
+  const response = await app.fetch(
+    new Request("https://takosumi.test/fast"),
+    {},
+    {
+      waitUntil(task) {
+        scheduled.push(task);
+      },
+      passThroughOnException() {},
+      props: {},
+    },
+  );
+
+  expect(response.status).toBe(200);
+  expect(scheduled).toHaveLength(1);
+  release();
+  await Promise.all(scheduled);
+});
+
 test("request correlation generates ids when headers are absent", async () => {
   const logs: ApiRequestLogLine[] = [];
   const app = new Hono();

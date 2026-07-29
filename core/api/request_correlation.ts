@@ -89,11 +89,27 @@ export function registerRequestCorrelation(
     } finally {
       setCorrelationHeaders(c, correlation);
       c.header(TRACEPARENT_HEADER, renderTraceparent(trace));
-      await recordRequestTrace(c, correlation, trace, startedAt, options);
-      await recordRequestMetric(c, correlation, startedAtMs, options);
+      const observability = Promise.all([
+        recordRequestTrace(c, correlation, trace, startedAt, options),
+        recordRequestMetric(c, correlation, startedAtMs, options),
+      ]).then(() => undefined);
+      if (!deferWithExecutionContext(c, observability)) {
+        await observability;
+      }
       emitRequestLog(c, correlation, trace, startedAtMs, options);
     }
   });
+}
+
+function deferWithExecutionContext(c: Context, task: Promise<void>): boolean {
+  try {
+    c.executionCtx.waitUntil(task);
+    return true;
+  } catch {
+    // Node/self-host adapters do not provide a Worker execution context. They
+    // retain the durable behavior by awaiting the same task before returning.
+    return false;
+  }
 }
 
 export function readRequestCorrelation(

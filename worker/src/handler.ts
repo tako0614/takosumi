@@ -1,4 +1,5 @@
 import { INTERNAL_V1_PREFIX } from "takosumi-contract/api-surface";
+import type { ExecutionContext } from "hono";
 import type { CloudflareWorkerEnv, QueueBatch } from "./bindings.ts";
 import {
   createServiceWorkerRequest,
@@ -30,13 +31,21 @@ export { LocalSubstrateOpenTofuRunnerProxyObject } from "./durable/OpenTofuRunne
 export { OpenTofuRunOwnerObject } from "./durable/OpenTofuRunOwnerObject.ts";
 
 export interface CloudflareWorkerHandler {
-  fetch(request: Request, env: CloudflareWorkerEnv): Promise<Response>;
+  fetch(
+    request: Request,
+    env: CloudflareWorkerEnv,
+    context?: ExecutionContext,
+  ): Promise<Response>;
   queue(batch: QueueBatch, env: CloudflareWorkerEnv): Promise<void>;
 }
 
 export interface CreatedCloudflareWorkerApp {
   readonly app: {
-    fetch(request: Request): Promise<Response> | Response;
+    fetch(
+      request: Request,
+      env?: {},
+      context?: ExecutionContext,
+    ): Promise<Response> | Response;
   };
 }
 
@@ -52,7 +61,11 @@ export function createCloudflareWorker(
   let serviceApp: Promise<CreatedCloudflareWorkerApp> | undefined;
 
   return {
-    async fetch(request: Request, env: CloudflareWorkerEnv): Promise<Response> {
+    async fetch(
+      request: Request,
+      env: CloudflareWorkerEnv,
+      context?: ExecutionContext,
+    ): Promise<Response> {
       const url = new URL(request.url);
       if (url.pathname === "/healthz") {
         return Response.json({ ok: true, provider: "cloudflare-worker" });
@@ -73,7 +86,11 @@ export function createCloudflareWorker(
           ? options.createServiceApp(env)
           : createWorkerServiceApp(env, "takosumi-api");
         const created = await serviceApp;
-        return created.app.fetch(createServiceWorkerRequest(request));
+        return created.app.fetch(
+          createServiceWorkerRequest(request),
+          undefined,
+          context,
+        );
       }
       return Response.json({ error: "not found" }, { status: 404 });
     },

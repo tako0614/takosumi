@@ -14,6 +14,9 @@ import type {
 import type { JsonObject } from "takosumi-contract/reference/compat";
 import type { D1Database } from "./bindings.ts";
 
+const OBSERVABILITY_QUERY_LIMIT = 5000;
+const RETENTION_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
+
 /**
  * Durable Cloudflare Worker observability sink.
  *
@@ -25,10 +28,13 @@ import type { D1Database } from "./bindings.ts";
  */
 export class CloudflareD1ObservabilitySink implements ObservabilitySink {
   readonly #db: D1Database;
+  readonly #now: () => number;
   #schemaReady: Promise<void> | undefined;
+  #nextRetentionSweepAt = 0;
 
-  constructor(input: { readonly db: D1Database }) {
+  constructor(input: { readonly db: D1Database; readonly now?: () => number }) {
     this.#db = input.db;
+    this.#now = input.now ?? Date.now;
   }
 
   async appendAudit(event: AuditEvent): Promise<ChainedAuditEvent> {
@@ -110,7 +116,7 @@ export class CloudflareD1ObservabilitySink implements ObservabilitySink {
         event.correlationId ?? null,
       )
       .run();
-    await this.#deleteExpiredMetricSamples();
+    await this.#sweepRetentionIfDue();
     return structuredClone(event);
   }
 
@@ -147,9 +153,16 @@ export class CloudflareD1ObservabilitySink implements ObservabilitySink {
     const sql =
       `select id, name, kind, value, unit, tags_json, space_id, group_id,
               actor_json, payload_json, observed_at, request_id, correlation_id
-         from takosumi_observability_metrics` +
+         from (
+           select id, name, kind, value, unit, tags_json, space_id, group_id,
+                  actor_json, payload_json, observed_at, request_id,
+                  correlation_id
+             from takosumi_observability_metrics` +
       (where.length > 0 ? ` where ${where.join(" and ")}` : "") +
-      " order by observed_at asc limit 5000";
+      ` order by observed_at desc, id desc
+            limit ${OBSERVABILITY_QUERY_LIMIT}
+         )
+        order by observed_at asc, id asc`;
     const rows = await this.#db
       .prepare(sql)
       .bind(...params)
@@ -180,6 +193,7 @@ export class CloudflareD1ObservabilitySink implements ObservabilitySink {
         JSON.stringify(event),
       )
       .run();
+    await this.#sweepRetentionIfDue();
     return structuredClone(event);
   }
 
@@ -205,9 +219,15 @@ export class CloudflareD1ObservabilitySink implements ObservabilitySink {
       params.push(query.until);
     }
     const sql =
-      "select event_json from takosumi_observability_traces" +
+      `select event_json
+         from (
+           select event_json, start_time, id
+             from takosumi_observability_traces` +
       (where.length > 0 ? ` where ${where.join(" and ")}` : "") +
-      " order by start_time asc, id asc limit 5000";
+      ` order by start_time desc, id desc
+            limit ${OBSERVABILITY_QUERY_LIMIT}
+         )
+        order by start_time asc, id asc`;
     const rows = await this.#db
       .prepare(sql)
       .bind(...params)
@@ -222,12 +242,27 @@ export class CloudflareD1ObservabilitySink implements ObservabilitySink {
     return this.#schemaReady;
   }
 
-  async #deleteExpiredMetricSamples(): Promise<void> {
-    await this.#db
-      .prepare(
-        "delete from takosumi_observability_metrics where observed_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-6 hours')",
-      )
-      .run();
+  async #sweepRetentionIfDue(): Promise<void> {
+    const now = this.#now();
+    if (now < this.#nextRetentionSweepAt) return;
+    this.#nextRetentionSweepAt = now + RETENTION_SWEEP_INTERVAL_MS;
+    try {
+      await Promise.all([
+        this.#db
+          .prepare(
+            "delete from takosumi_observability_metrics where observed_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-6 hours')",
+          )
+          .run(),
+        this.#db
+          .prepare(
+            "delete from takosumi_observability_traces where start_time < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-24 hours')",
+          )
+          .run(),
+      ]);
+    } catch (error) {
+      this.#nextRetentionSweepAt = 0;
+      throw error;
+    }
   }
 }
 
@@ -313,6 +348,12 @@ async function ensureD1ObservabilitySchema(db: D1Database): Promise<void> {
     .run();
   await db
     .prepare(
+      `create index if not exists takosumi_observability_metrics_observed_idx
+         on takosumi_observability_metrics (observed_at, id)`,
+    )
+    .run();
+  await db
+    .prepare(
       `create table if not exists takosumi_observability_traces (
         id text primary key,
         trace_id text not null,
@@ -339,6 +380,12 @@ async function ensureD1ObservabilitySchema(db: D1Database): Promise<void> {
     .prepare(
       `create index if not exists takosumi_observability_traces_space_idx
          on takosumi_observability_traces (space_id, start_time)`,
+    )
+    .run();
+  await db
+    .prepare(
+      `create index if not exists takosumi_observability_traces_started_idx
+         on takosumi_observability_traces (start_time, id)`,
     )
     .run();
 }

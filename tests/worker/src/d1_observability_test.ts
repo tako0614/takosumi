@@ -42,6 +42,79 @@ test("Cloudflare D1 observability sink persists metrics across instances", async
   });
 });
 
+test("Cloudflare D1 observability sink returns the newest bounded metric window", async () => {
+  const db = new SqliteFakeD1();
+  const sink = new CloudflareD1ObservabilitySink({ db });
+  await sink.recordMetric({
+    id: "metric_schema_seed",
+    name: "seed",
+    kind: "gauge",
+    value: 0,
+    observedAt: new Date().toISOString(),
+  });
+  await db.prepare("delete from takosumi_observability_metrics").run();
+  await db
+    .prepare(
+      `with recursive samples(value) as (
+         select 0
+         union all
+         select value + 1 from samples where value < 5000
+       )
+       insert into takosumi_observability_metrics
+         (id, name, kind, value, observed_at)
+       select printf('metric_%05d', value), 'bounded', 'gauge', value,
+              printf('%05d', value)
+         from samples`,
+    )
+    .run();
+
+  const metrics = await sink.listMetrics({ name: "bounded" });
+  expect(metrics).toHaveLength(5000);
+  expect(metrics[0]?.id).toBe("metric_00001");
+  expect(metrics.at(-1)?.id).toBe("metric_05000");
+});
+
+test("Cloudflare D1 observability sink retains only recent metric and trace samples", async () => {
+  const db = new SqliteFakeD1();
+  const initializer = new CloudflareD1ObservabilitySink({ db });
+  await initializer.recordMetric({
+    id: "metric_schema_seed",
+    name: "seed",
+    kind: "gauge",
+    value: 0,
+    observedAt: new Date().toISOString(),
+  });
+  await db
+    .prepare(
+      `insert into takosumi_observability_metrics
+         (id, name, kind, value, observed_at)
+       values ('metric_expired', 'expired', 'gauge', 1,
+               '2020-01-01T00:00:00.000Z')`,
+    )
+    .run();
+  await db
+    .prepare(
+      `insert into takosumi_observability_traces
+         (id, trace_id, span_id, name, kind, status, start_time, end_time,
+          event_json)
+       values ('span_expired', 'trace_expired', 'span_expired', 'expired',
+               'internal', 'ok', '2020-01-01T00:00:00.000Z',
+               '2020-01-01T00:00:01.000Z', '{}')`,
+    )
+    .run();
+
+  const sweeper = new CloudflareD1ObservabilitySink({ db });
+  await sweeper.recordMetric({
+    id: "metric_sweep",
+    name: "sweep",
+    kind: "gauge",
+    value: 0,
+    observedAt: new Date().toISOString(),
+  });
+  expect(await sweeper.listTraces({ name: "expired" })).toEqual([]);
+  expect(await sweeper.listMetrics({ name: "expired" })).toEqual([]);
+});
+
 test("Cloudflare D1 observability sink persists and verifies the audit chain", async () => {
   const db = new SqliteFakeD1();
   const firstSink = new CloudflareD1ObservabilitySink({ db });
@@ -113,6 +186,8 @@ test("Cloudflare D1 observability sink serializes concurrent audit appends", asy
 test("Cloudflare D1 observability sink persists traces and applies queries", async () => {
   const db = new SqliteFakeD1();
   const recorder = new CloudflareD1ObservabilitySink({ db });
+  const firstStartedAt = new Date();
+  const secondStartedAt = new Date(firstStartedAt.getTime() + 60_000);
   await recorder.recordTrace({
     id: "span_record_1",
     traceId: "trace_1",
@@ -120,8 +195,8 @@ test("Cloudflare D1 observability sink persists traces and applies queries", asy
     name: "source.sync",
     kind: "internal",
     status: "ok",
-    startTime: "2026-07-13T00:00:00.000Z",
-    endTime: "2026-07-13T00:00:01.000Z",
+    startTime: firstStartedAt.toISOString(),
+    endTime: new Date(firstStartedAt.getTime() + 1_000).toISOString(),
     workspaceId: "ws_1",
     attributes: { attempt: 1 },
   });
@@ -132,8 +207,8 @@ test("Cloudflare D1 observability sink persists traces and applies queries", asy
     name: "run.apply",
     kind: "consumer",
     status: "error",
-    startTime: "2026-07-13T00:01:00.000Z",
-    endTime: "2026-07-13T00:01:01.000Z",
+    startTime: secondStartedAt.toISOString(),
+    endTime: new Date(secondStartedAt.getTime() + 1_000).toISOString(),
     workspaceId: "ws_2",
   });
 
