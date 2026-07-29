@@ -104,6 +104,31 @@ JSON Pointer です。
 値は Interface の `status.resolvedInputs`、その出どころは `status.provenance` で
 読めます。
 
+## デプロイ済みアプリから Resource を使う
+
+Interface は提供側の宣言ですが、host は同じ Interface / InterfaceBinding 台帳を使って、
+デプロイ済みアプリに Resource への接続を渡すこともできます。
+
+この場合、宣言は2種類を混ぜません。
+
+- `InstallConfig.interfaceBlueprints` は、その Capsule が**提供する** Interface の候補です。
+- service-side の `hostRuntimeMaterialization.requirements` は、その hosted runtime が
+  **利用する** Resource の alias と必要権限です。repository manifest、Output、
+  provider 設定ではありません。
+
+host は consumer Resource が Ready になったあと、対象 Resource の generation、
+Interface、Ready な InterfaceBinding、permission、audience を解決します。runtime
+には Fetch-compatible gateway と、alias ごとの exact authority を持つ materialization
+だけを渡します。provider credential、account id、native resource id、bearer token は
+渡しません。
+
+Binding の revoke、Resource generation の変更、permission や audience の変更後に、
+古い materialization へ fallback してはいけません。host は新しい exact runtime
+version を作るか、呼び出しを fail closed にします。
+
+これは host が明示的に提供する機能です。OpenTofu module が Cloudflare / AWS などの
+provider を直接使う経路を置き換えません。
+
 ## 状態と認可を読む
 
 ```bash

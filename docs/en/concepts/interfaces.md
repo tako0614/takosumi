@@ -106,6 +106,31 @@ JSON Pointer of RFC 6901.
 readable from the Interface's `status.resolvedInputs`, and where it came from from
 `status.provenance`.
 
+## Using a Resource from a deployed app
+
+An Interface is an offer-side declaration. A host can also use the same Interface and
+InterfaceBinding ledger to deliver a Resource connection to a deployed app.
+
+The two declarations remain separate.
+
+- `InstallConfig.interfaceBlueprints` proposes Interfaces that the Capsule **offers**.
+- The service-side `hostRuntimeMaterialization.requirements` lists Resource aliases and
+  permissions that a hosted runtime **consumes**. It is not repository metadata, an
+  Output convention, or provider configuration.
+
+After the consumer Resource is Ready, the host resolves the target Resource generation,
+Interface, Ready InterfaceBinding, permissions, and audience. The runtime receives only
+a Fetch-compatible gateway and a materialization with exact authority for each alias. It
+does not receive provider credentials, account ids, native resource ids, or bearer
+tokens.
+
+After a Binding is revoked or a Resource generation, permission, or audience changes, a
+host must not fall back to an old materialization. It creates a new exact runtime version
+or fails the call closed.
+
+This is an explicit host capability. It does not replace the path where an OpenTofu
+module uses Cloudflare, AWS, or another provider directly.
+
 ## Reading state and authorization
 
 ```bash

@@ -13,6 +13,36 @@ const COMPLETE_BASELINE = [
       "Takosumi does not ship a first-party Terraform/OpenTofu provider.",
   },
   {
+    path: "docs/concepts/boundaries.md",
+    content:
+      "provider 側の resource は必ずしも\nTakosumi の Resource 台帳には入りません。",
+  },
+  {
+    path: "docs/en/concepts/boundaries.md",
+    content:
+      "Provider-side objects do not\nnecessarily enter Takosumi's Resource ledger.",
+  },
+  {
+    path: "docs/concepts/interfaces.md",
+    content:
+      "provider credential、account id、native resource id、bearer token は\n渡しません。",
+  },
+  {
+    path: "docs/en/concepts/interfaces.md",
+    content:
+      "The runtime does not receive provider credentials, account ids, native resource ids, or bearer\ntokens.",
+  },
+  {
+    path: "docs/reference/repository-manifest.md",
+    content:
+      "将来 metadata\nsection を追加するときは新しい `apiVersion` を定義し、未知 field は\nfail closed のままです。",
+  },
+  {
+    path: "docs/en/reference/repository-manifest.md",
+    content:
+      "A future metadata\nsection requires a new `apiVersion`; unknown fields continue to fail closed.",
+  },
+  {
     path: "docs/reference/api.md",
     content:
       "Cloudflare 固有の import/deploy compatibility profile は廃止済みです。",
