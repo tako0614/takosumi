@@ -3026,6 +3026,8 @@ export interface PlatformCanonicalHostRuntimeAuthorityEvidence {
   readonly iface: Interface;
   readonly binding: InterfaceBinding;
   readonly capabilityRef: `capability:${string}`;
+  /** Exact resolved OAuth resource URI used by the provider-neutral runtime. */
+  readonly audience: string;
 }
 
 export interface PlatformCanonicalHostRuntimeGraphEvidence {
@@ -3300,6 +3302,7 @@ async function uniqueHostRuntimeAuthority(input: {
       iface.metadata.id,
     )) {
       const capabilityRef = binding.spec.delivery.credentialRef;
+      const audience = canonicalInterfaceResourceAudience(iface);
       if (
         binding.spec.subjectRef.kind !== "Resource" ||
         binding.spec.subjectRef.id !== input.subjectResourceId ||
@@ -3307,6 +3310,7 @@ async function uniqueHostRuntimeAuthority(input: {
         binding.status.observedInterfaceRevision !==
           iface.status.resolvedRevision ||
         !capabilityRef?.startsWith("capability:") ||
+        !audience ||
         (input.capabilityRef !== undefined &&
           capabilityRef !== input.capabilityRef) ||
         (input.permission !== undefined &&
@@ -3318,10 +3322,35 @@ async function uniqueHostRuntimeAuthority(input: {
         iface,
         binding,
         capabilityRef: capabilityRef as `capability:${string}`,
+        audience,
       });
     }
   }
   return matches.length === 1 ? matches[0] : undefined;
+}
+
+function canonicalInterfaceResourceAudience(iface: Interface): string | undefined {
+  const inputName = iface.spec.access.resourceUriInput;
+  const value = inputName ? iface.status.resolvedInputs?.[inputName] : undefined;
+  if (typeof value !== "string" || value.length === 0) return undefined;
+  try {
+    const parsed = new URL(value);
+    if (
+      parsed.protocol !== "https:" ||
+      parsed.username ||
+      parsed.password ||
+      parsed.search ||
+      parsed.hash ||
+      parsed.pathname === "/" ||
+      parsed.pathname.endsWith("/") ||
+      parsed.toString() !== value
+    ) {
+      return undefined;
+    }
+    return value;
+  } catch {
+    return undefined;
+  }
 }
 
 function platformCanonicalResourceId(value: string):
