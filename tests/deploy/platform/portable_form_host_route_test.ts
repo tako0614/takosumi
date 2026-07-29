@@ -17,7 +17,7 @@ function platformEnv() {
   } as never;
 }
 
-test("platform serves the portable Form host through the canonical Core handler", async () => {
+test("platform keeps the portable Form host absent without durable idempotency authority", async () => {
   const assetRequests: string[] = [];
   const env = {
     ...platformEnv(),
@@ -37,8 +37,8 @@ test("platform serves the portable Form host through the canonical Core handler"
     ),
     env,
   );
-  expect(discovery.status).toBe(200);
-  expect(discovery.headers.get("content-type")).toContain("application/json");
+  expect(discovery.status).toBe(404);
+  expect(discovery.headers.get("content-type")).toContain("text/plain");
 
   const forms = await worker.fetch(
     new Request(
@@ -47,8 +47,8 @@ test("platform serves the portable Form host through the canonical Core handler"
     ),
     env,
   );
-  expect(forms.status).toBe(200);
-  expect(forms.headers.get("content-type")).toContain("application/json");
+  expect(forms.status).toBe(404);
+  expect(forms.headers.get("content-type")).toContain("text/plain");
   expect(assetRequests).toEqual([]);
 });
 

@@ -635,12 +635,17 @@ export function parseObjectBucketSpec(
   if (!name.ok) return name;
 
   const storageClass = candidate.storageClass ?? "standard";
-  if (storageClass !== "standard" && storageClass !== "infrequent_access") {
+  if (
+    storageClass !== "standard" &&
+    storageClass !== "infrequent_access" &&
+    storageClass !== "archive"
+  ) {
     return {
       ok: false,
       error: {
         code: "invalid_storage_class",
-        message: "spec.storageClass must be standard or infrequent_access",
+        message:
+          "spec.storageClass must be standard, infrequent_access, or archive",
       },
     };
   }

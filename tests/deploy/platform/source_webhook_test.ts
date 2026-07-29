@@ -1690,7 +1690,7 @@ test("platform Resource Shape API discovery is gated by deploy-control token and
   expect(discoveryBody.endpoints.extensions).toBeUndefined();
 });
 
-test("platform serves every advertised Takoform Core endpoint ahead of the SPA fallback", async () => {
+test("platform keeps unavailable Takoform endpoints ahead of the SPA fallback", async () => {
   const worker = (await import("../../../deploy/platform/worker.ts")).default;
   const assetRequests: string[] = [];
   const env = {
@@ -1722,32 +1722,16 @@ test("platform serves every advertised Takoform Core endpoint ahead of the SPA f
     ),
     env,
   );
-  expect(hostDiscoveryResponse.status).toBe(200);
+  expect(hostDiscoveryResponse.status).toBe(404);
   expect(hostDiscoveryResponse.headers.get("content-type")).toContain(
-    "application/json",
+    "text/plain",
   );
-  const hostDiscovery = await hostDiscoveryResponse.json();
-  const authenticatedProbe = (url: string) =>
-    worker.fetch(
-      new Request(url, {
-        headers: { authorization: "Bearer resource-token" },
-      }),
-      env,
-    );
-  const endpointProbes = [
-    `${hostDiscovery.endpoints.api}/forms?space=space_1`,
-    `${hostDiscovery.endpoints.forms}?space=space_1`,
-    hostDiscovery.endpoints.capabilities,
-    `${hostDiscovery.endpoints.compatibility_api}/form-availability?space=space_1`,
-  ];
-  for (const endpoint of endpointProbes) {
-    const response = await authenticatedProbe(endpoint);
-    expect(response.status).toBe(200);
-    expect(response.headers.get("content-type")).toContain("application/json");
-    expect(await response.clone().text()).not.toContain("dashboard fallback");
-  }
-  const formActivations = await authenticatedProbe(
-    "https://app.takosumi.com/v1/form-activations",
+  expect(await hostDiscoveryResponse.text()).toBe("404 Not Found");
+  const formActivations = await worker.fetch(
+    new Request("https://app.takosumi.com/v1/form-activations", {
+      headers: { authorization: "Bearer resource-token" },
+    }),
+    env,
   );
   expect(formActivations.status).toBe(200);
   expect(formActivations.headers.get("content-type")).toContain(
@@ -1916,7 +1900,7 @@ test("platform Resource Shape API routes are routed before accounts and bearer-g
   expect(await operatorCatalogs.json()).toEqual({ catalogs: [] });
 });
 
-test("platform exposes public Takoform discovery and fences portable reads to an existing Workspace", async () => {
+test("platform keeps Takoform discovery absent without durable idempotency authority", async () => {
   const db = new SqliteFakeD1();
   await ensureD1OpenTofuLedgerSchema(db);
   const workspaceId = "workspace_takoform";
@@ -1958,69 +1942,8 @@ test("platform exposes public Takoform discovery and fences portable reads to an
     ),
     env,
   );
-  expect(discovery.status).toBe(200);
-  expect(await discovery.json()).toMatchObject({
-    features: { interface_declarations: true },
-    endpoints: {
-      api: `https://app.takosumi.com${TAKOFORM_FORM_HOST_API_PATH}`,
-      interfaces: `https://app.takosumi.com${TAKOFORM_FORM_HOST_API_PATH}/interfaces`,
-    },
-  });
-
-  const unauthenticated = await handlePlatformResourceShapeApiRequest(
-    new Request(
-      `https://app.takosumi.com${TAKOFORM_FORM_HOST_API_PATH}/interfaces?space=${workspaceId}`,
-    ),
-    env,
-    async () => ({ authenticated: false }),
-  );
-  expect(unauthenticated.status).toBe(401);
-
-  const verify = async () => ({
-    authenticated: true as const,
-    authKind: "personal-access-token" as const,
-    subject: "user_takoform",
-    scopes: ["read"],
-  });
-  const workspaceAccess = async (
-    _request: Request,
-    _env: unknown,
-    requestedWorkspaceId: string,
-  ) => requestedWorkspaceId === workspaceId;
-  const interfaces = await handlePlatformResourceShapeApiRequest(
-    new Request(
-      `https://app.takosumi.com${TAKOFORM_FORM_HOST_API_PATH}/interfaces?space=${workspaceId}`,
-    ),
-    env,
-    verify,
-    workspaceAccess,
-  );
-  expect(interfaces.status).toBe(200);
-  expect(await interfaces.json()).toEqual({ interfaces: [] });
-
-  const availability = await handlePlatformResourceShapeApiRequest(
-    new Request(
-      `https://app.takosumi.com/v1/form-availability?space=${workspaceId}`,
-    ),
-    env,
-    verify,
-    workspaceAccess,
-  );
-  expect(availability.status).toBe(200);
-  expect(await availability.json()).toEqual({ forms: [] });
-
-  const crossWorkspace = await handlePlatformResourceShapeApiRequest(
-    new Request(
-      `https://app.takosumi.com${TAKOFORM_FORM_HOST_API_PATH}/interfaces?space=workspace_other`,
-    ),
-    env,
-    async () => ({ ...(await verify()), workspaceId }),
-  );
-  expect(crossWorkspace.status).toBe(403);
-  expect(await crossWorkspace.json()).toEqual({
-    error: "access_denied",
-    error_description: "workspace context is not authorized",
-  });
+  expect(discovery.status).toBe(404);
+  expect(await discovery.text()).toBe("404 Not Found");
 
   const disabledDiscovery = await handlePlatformTakoformDiscoveryRequest(
     new Request(

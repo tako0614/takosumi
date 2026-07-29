@@ -9,7 +9,6 @@ import worker from "../../../deploy/platform/worker.ts";
 import { PORTABLE_FORM_MANAGER } from "../../../core/api/form_host_routes.ts";
 import { createManagedProviderRunToken } from "../../../core/shared/managed_provider_tokens.ts";
 import { createD1ResourceShapeStores } from "../../../core/domains/resource-shape/d1_stores.ts";
-import { createD1InterfaceStores } from "../../../core/domains/interfaces/d1_stores.ts";
 import { createD1FormRegistryStore } from "../../../core/domains/service-forms/d1_store.ts";
 import {
   CloudflareD1OpenTofuControlStore,
@@ -28,7 +27,7 @@ const FORM = {
   packageDigest: `sha256:${"2".repeat(64)}`,
 } as const;
 
-test("production platform wiring owns portable Resources by the verified Capsule and joins IaC Interfaces through an explicit binding proposal", async () => {
+test("production platform keeps the portable Form host absent without durable idempotency authority", async () => {
   const db = new SqliteFakeD1();
   await ensureD1OpenTofuLedgerSchema(db);
   const control = new CloudflareD1OpenTofuControlStore(db);
@@ -234,146 +233,31 @@ test("production platform wiring owns portable Resources by the verified Capsule
         headers: {
           authorization,
           "content-type": "application/json",
+          "if-none-match": "*",
         },
         body: JSON.stringify(desired),
       },
     ),
     env,
   );
-  expect({
-    status: preview.status,
-    body: await preview.clone().text(),
-  }).toEqual({ status: 200, body: expect.any(String) });
-  const review = (await preview.json()) as {
-    readonly review: {
-      readonly planDigest: string;
-      readonly specDigest: string;
-    };
-  };
-  const applied = await worker.fetch(
+  expect(preview.status).toBe(404);
+  const discovery = await worker.fetch(
     new Request(
-      `https://app.takosumi.test${TAKOFORM_FORM_HOST_API_PATH}/resources/ObjectBucket/assets`,
-      {
-        method: "PUT",
-        headers: {
-          authorization,
-          "content-type": "application/json",
-          "idempotency-key": "capsule-owner-apply",
-          "if-none-match": "*",
-        },
-        body: JSON.stringify({ ...desired, review: review.review }),
-      },
+      "https://app.takosumi.test/.well-known/takoform",
+      { headers: { authorization } },
     ),
     env,
   );
-  expect(applied.status).toBe(200);
-
-  const resource = await resourceStores.resources.get(
-    `tkrn:${WORKSPACE_ID}:ObjectBucket:assets`,
-  );
-  expect(resource?.owner).toEqual({
-    kind: "Capsule",
-    id: CAPSULE_ID,
-    workspaceId: WORKSPACE_ID,
-    installingPrincipalId: INSTALLER_ID,
-  });
-  expect(pluginInputs).toContainEqual(
-    expect.objectContaining({ owner: resource?.owner }),
-  );
-
-  const declared = await worker.fetch(
-    new Request(
-      `https://app.takosumi.test${TAKOFORM_FORM_HOST_API_PATH}/interfaces/${UI_SURFACE_INTERFACE_TYPE}?space=${WORKSPACE_ID}&version=${UI_SURFACE_INTERFACE_VERSION}&resourceKind=ObjectBucket&resourceName=assets`,
-      {
-        method: "PUT",
-        headers: {
-          authorization,
-          "content-type": "application/json",
-          "idempotency-key": "capsule-owner-interface",
-          "if-none-match": "*",
-        },
-        body: JSON.stringify({
-          name: UI_SURFACE_INTERFACE_TYPE,
-          version: UI_SURFACE_INTERFACE_VERSION,
-          resource: { kind: "ObjectBucket", name: "assets" },
-          document: {
-            title: "Assets",
-            url: "https://assets.example.test",
-          },
-        }),
-      },
-    ),
-    env,
-  );
-  expect(declared.status).toBe(200);
-
-  const interfaceStores = createD1InterfaceStores(db);
-  const interfaces = await interfaceStores.interfaces.list({
-    workspaceId: WORKSPACE_ID,
-    ownerKind: "Resource",
-    ownerId: resource!.id,
-    includeRetired: false,
-  });
-  expect(interfaces).toHaveLength(1);
-  const bindings = await interfaceStores.bindings.listByInterface(
-    interfaces[0]!.metadata.id,
-  );
-  expect(bindings).toMatchObject([
-    {
-      metadata: {
-        materializedFrom: {
-          source: "capsule_resource_binding",
-          capsuleId: CAPSULE_ID,
-          key: "installed-app-launcher",
-        },
-      },
-      spec: {
-        subjectRef: { kind: "Principal", id: INSTALLER_ID },
-        permissions: [UI_SURFACE_OPEN_PERMISSION],
-      },
-    },
-  ]);
-
-  const formQuery = new URLSearchParams({
-    space: WORKSPACE_ID,
-    apiVersion: "forms.takoform.com/v1alpha1",
-    kind: "ObjectBucket",
-    definitionVersion: FORM.version,
-    schemaDigest: FORM.schemaDigest,
-    packageDigest: FORM.packageDigest,
-  });
-  const deleted = await worker.fetch(
-    new Request(
-      `https://app.takosumi.test${TAKOFORM_FORM_HOST_API_PATH}/resources/ObjectBucket/assets?${formQuery}`,
-      {
-        method: "DELETE",
-        headers: {
-          authorization,
-          "idempotency-key": "capsule-owner-delete",
-          "if-match": '"1"',
-        },
-      },
-    ),
-    env,
-  );
-  expect(deleted.status).toBe(204);
-  const retiredInterfaces = await interfaceStores.interfaces.list({
-    workspaceId: WORKSPACE_ID,
-    ownerKind: "Resource",
-    ownerId: resource!.id,
-    includeRetired: true,
-  });
-  expect(retiredInterfaces[0]?.status.phase).toBe("Retired");
+  expect(discovery.status).toBe(404);
   expect(
-    (
-      await interfaceStores.bindings.listByInterface(
-        retiredInterfaces[0]!.metadata.id,
-      )
-    )[0]?.status.phase,
-  ).toBe("Revoked");
+    await resourceStores.resources.get(
+      `tkrn:${WORKSPACE_ID}:ObjectBucket:assets`,
+    ),
+  ).toBeUndefined();
+  expect(pluginInputs).toEqual([]);
 });
 
-test("first-party portable host rejects managed tokens without exact run and installer provenance", async () => {
+test("production platform rejects an incomplete managed token before route resolution", async () => {
   const issued = await createManagedProviderRunToken({
     secret: "managed-provider-secret",
     audience: PORTABLE_FORM_MANAGER,

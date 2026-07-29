@@ -10,6 +10,7 @@ import type {
   ActorContext,
   FormActivation,
   FormDefinition,
+  FormInterfaceDescriptor,
   FormOperation,
   FormPackage,
   InstalledFormReference,
@@ -23,23 +24,36 @@ import {
   formRefKey,
   formRefOfInstalled,
   isInstalledFormReference,
+  isResourceShapeKind,
   portableTypeForShapeKind,
-  RESOURCE_SHAPE_KINDS,
 } from "takosumi-contract";
 
 import { createApiApp } from "../core/api/app.ts";
+import {
+  InMemoryPortableHostIdempotencyLedger,
+  PortableHostIdempotencyCoordinator,
+} from "../core/api/portable_host_idempotency.ts";
 import { ActivityService } from "../core/domains/activity/mod.ts";
 import { InMemoryOpenTofuControlStore } from "../core/domains/deploy-control/store.ts";
 import {
-  composeResourceShapeSchemaRegistries,
   createInMemoryResourceShapeStores,
   LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY,
   MapResourceShapeModuleRegistry,
-  MapResourceShapeSchemaRegistry,
   ResourceShapeService,
   StubResourceShapeAdapter,
+  type ApplyResourceRequest,
+  type AdapterApplyInput,
+  type AdapterApplyResult,
+  formatResourceShapeId,
   type ResourceShapeSchemaParser,
 } from "../core/domains/resource-shape/mod.ts";
+import {
+  createInMemoryInterfaceStores,
+  createPortableDeclarationReader,
+  ensureFormDescriptorInterfaces,
+  InterfaceService,
+  OutputBackedInterfaceInputResolver,
+} from "../core/domains/interfaces/mod.ts";
 import {
   runPortableFormHostConformance,
   type PortableFormHostNegativeFixture,
@@ -51,6 +65,15 @@ import {
 } from "../core/adapters/takoform/canonical_json.ts";
 import { readExactPackageFixtureBindings } from "./lib/takoform-package-fixture-bindings.ts";
 import {
+  createTakoformPortableHostEvidenceAdapter,
+  executeExactTakoformPortableHostRunner,
+  TAKOFORM_RUNNER_ALTERNATE_TENANT_TOKEN,
+  TAKOFORM_RUNNER_ALTERNATE_TOKEN,
+  TAKOFORM_RUNNER_PRIMARY_TOKEN,
+  type TakoformPortableHostAuthority,
+} from "./lib/takoform-portable-host-evidence.ts";
+import {
+  CURRENT_HOST_GENERATION,
   finalizeSignedHostReportCandidate,
   verifySignedHostReportCandidate,
   verifyUnsignedHostReportCandidate,
@@ -61,10 +84,18 @@ import {
 
 const HOST_ORIGIN = "https://in-process.takosumi.test";
 const HOST_SPACE = "space_host_report";
+const RUNNER_SPACE = "conformance-space";
+const RUNNER_ALTERNATE_SPACE = "conformance-space-alternate";
+const HOST_SPACES = [
+  HOST_SPACE,
+  RUNNER_SPACE,
+  RUNNER_ALTERNATE_SPACE,
+] as const;
+const HOST_EVIDENCE_PRIMARY_WORKSPACE =
+  "workspace_host_evidence_primary";
 const HOST_TARGET_POOL = "default";
 const CANDIDATE_PATH = "forms/admission-candidate-set.json";
 const CANDIDATE_FORMAT = "takoform.admission-candidate-set@v1";
-const CURRENT_GENERATION = "ga-core-v1";
 const NOW = "2026-07-29T00:00:00.000Z";
 const SOURCE_COMMIT_PATTERN = /^[a-f0-9]{40}$/u;
 const DIGEST_PATTERN = /^sha256:[a-f0-9]{64}$/u;
@@ -103,6 +134,7 @@ interface PackageDefinition {
   readonly desiredSchema: JsonObject;
   readonly immutableFields?: readonly string[];
   readonly lifecycleCapabilities: readonly string[];
+  readonly interfaces?: readonly FormInterfaceDescriptor[];
   readonly conformanceFixtures: readonly {
     readonly name: string;
     readonly desiredPath: string;
@@ -127,6 +159,7 @@ interface LoadedCandidate {
   readonly negativeFixtures: readonly PortableFormHostNegativeFixture[];
   readonly negativePackageDigests: Readonly<Record<string, string>>;
   readonly schemaParser: ResourceShapeSchemaParser;
+  readonly takoformRoot: string;
 }
 
 if (import.meta.main) {
@@ -145,10 +178,12 @@ export async function main(argv: readonly string[]): Promise<number> {
   const sourceCommit = required(options, "source-commit");
   const takoformSourceCommit = required(options, "takoform-source-commit");
   const outputRoot = required(options, "output-dir");
+  const requestId = required(options, "request-id");
   if (command === "build") {
     const takoformRoot = required(options, "takoform-root");
     assertOnlyOptions(options, [
       "output-dir",
+      "request-id",
       "source-commit",
       "takoform-root",
       "takoform-source-commit",
@@ -160,25 +195,36 @@ export async function main(argv: readonly string[]): Promise<number> {
       "Takoform",
     );
     const candidates = await loadCurrentCandidates(resolve(takoformRoot));
-    const reports = await executeCurrentHostReports(candidates);
+    const host = await createInProcessHost(candidates);
+    const reports = await executeCurrentHostReports(candidates, host);
+    const portableRunnerReport = await executeExactTakoformPortableHostRunner({
+      takoformRoot: resolve(takoformRoot),
+      fetch: host.portableRunnerFetch,
+    });
     await writeUnsignedHostReportCandidate({
       outputRoot,
       sourceCommit,
       takoformSourceCommit,
+      requestId,
       reports,
+      portableRunnerReport,
     });
-    console.log(`host-report candidate: wrote 10 reports to ${outputRoot}`);
+    console.log(
+      `host-report candidate: wrote 10 Form reports and exact portable runner evidence to ${outputRoot}`,
+    );
     return 0;
   }
   if (command === "verify-unsigned") {
     assertOnlyOptions(options, [
       "output-dir",
+      "request-id",
       "source-commit",
       "takoform-source-commit",
     ]);
     await verifyUnsignedHostReportCandidate(outputRoot, {
       sourceCommit,
       takoformSourceCommit,
+      requestId,
     });
     console.log("host-report candidate: unsigned closure verified");
     return 0;
@@ -187,6 +233,7 @@ export async function main(argv: readonly string[]): Promise<number> {
   const workflowRunAttempt = Number(required(options, "workflow-run-attempt"));
   assertOnlyOptions(options, [
     "output-dir",
+    "request-id",
     "source-commit",
     "takoform-source-commit",
     "workflow-run-attempt",
@@ -197,6 +244,7 @@ export async function main(argv: readonly string[]): Promise<number> {
       outputRoot,
       sourceCommit,
       takoformSourceCommit,
+      requestId,
       workflowRunId,
       workflowRunAttempt,
     });
@@ -207,6 +255,7 @@ export async function main(argv: readonly string[]): Promise<number> {
     await verifySignedHostReportCandidate(outputRoot, {
       sourceCommit,
       takoformSourceCommit,
+      requestId,
       workflowRunId,
       workflowRunAttempt,
     });
@@ -224,11 +273,11 @@ export async function loadCurrentCandidates(
   );
   if (
     document.format !== CANDIDATE_FORMAT ||
-    document.generation !== CURRENT_GENERATION ||
+    document.generation !== CURRENT_HOST_GENERATION ||
     document.packages.length !== 10
   ) {
     throw new TypeError(
-      "Takoform current admission candidate must be ga-core-v1 exact10",
+      "Takoform current admission candidate must be ga-core-v2 exact10",
     );
   }
   const seen = new Set<string>();
@@ -267,16 +316,20 @@ export async function loadCurrentCandidates(
     const desired = await readJson<JsonObject>(
       safePath(packageRoot, positive.desiredPath),
     );
-    const negativeFixtures = await Promise.all(
-      definition.negativeConformanceFixtures.map(async (fixture) => {
+    const desiredNegativeFixtures =
+      definition.negativeConformanceFixtures.filter((fixture) => {
         if (
-          fixture.stage !== "desired" ||
+          (fixture.stage !== "desired" && fixture.stage !== "observed") ||
           fixture.expectedFailure !== "schema_validation_failed"
         ) {
           throw new TypeError(
             `${entry.kind} has unsupported negative fixture ${fixture.name}`,
           );
         }
+        return fixture.stage === "desired";
+      });
+    const negativeFixtures = await Promise.all(
+      desiredNegativeFixtures.map(async (fixture) => {
         return {
           name: fixture.name,
           stage: "desired" as const,
@@ -299,7 +352,7 @@ export async function loadCurrentCandidates(
       entry.kind,
       definition.desiredSchema,
     );
-    const updatedDesired = mutableDesired(
+    const updatedDesired = buildCurrentHostReportUpdateFixture(
       entry.kind,
       desired,
       definition.immutableFields ?? [],
@@ -317,6 +370,7 @@ export async function loadCurrentCandidates(
       negativeFixtures,
       negativePackageDigests: bindings.negative,
       schemaParser,
+      takoformRoot,
     });
   }
   return loaded;
@@ -324,8 +378,10 @@ export async function loadCurrentCandidates(
 
 export async function executeCurrentHostReports(
   candidates: readonly LoadedCandidate[],
+  existingHost?: Awaited<ReturnType<typeof createInProcessHost>>,
 ): Promise<readonly ExecutedCurrentFormHostReport[]> {
-  const { app, service } = await createInProcessHost(candidates);
+  const { app, service } =
+    existingHost ?? (await createInProcessHost(candidates));
   await seedConnectionDependency(service, "ObjectBucket", "object-bucket", {
     name: "object-bucket",
     storageClass: "standard",
@@ -347,8 +403,14 @@ export async function executeCurrentHostReports(
         positiveFixtureName: item.positiveName,
         negativeFixtures: item.negativeFixtures,
         importNativeId: `provider-native-${item.package.slug}`,
-        fetch: ((input: RequestInfo | URL, init?: RequestInit) =>
-          app.request(input.toString(), init)) as typeof fetch,
+        fetch: ((input: RequestInfo | URL, init?: RequestInit) => {
+          const headers = new Headers(init?.headers);
+          headers.set(
+            "authorization",
+            `Bearer ${TAKOFORM_RUNNER_PRIMARY_TOKEN}`,
+          );
+          return app.request(input.toString(), { ...init, headers });
+        }) as typeof fetch,
       });
     } catch (error) {
       throw new TypeError(
@@ -374,29 +436,139 @@ export async function executeCurrentHostReports(
   return reports;
 }
 
+async function loadPortableRunnerFormDependencies(
+  candidates: readonly LoadedCandidate[],
+): Promise<readonly LoadedCandidate[]> {
+  if (!candidates[0]?.takoformRoot) return [];
+  const roots = new Set(candidates.map((candidate) => candidate.takoformRoot));
+  if (roots.size !== 1) {
+    throw new TypeError("host evidence candidates must share one Takoform root");
+  }
+  const takoformRoot = [...roots][0]!;
+  const contract = await readJson<{
+    readonly runnerInput: {
+      readonly connectionProbe: {
+        readonly sourceIdentity: {
+          readonly formRef: CandidatePackage["formRef"];
+          readonly packageDigest: string;
+        };
+        readonly desired: JsonObject;
+      };
+    };
+  }>(safePath(takoformRoot, "conformance/portable-host-v1/contract.json"));
+  const sourceIdentity = contract.runnerInput.connectionProbe.sourceIdentity;
+  const existing = candidates.find(
+    (candidate) => candidate.package.kind === sourceIdentity.formRef.kind,
+  );
+  if (existing) {
+    if (
+      canonicalJson(existing.package.formRef as never) !==
+        canonicalJson(sourceIdentity.formRef as never) ||
+      existing.package.packageDigest !== sourceIdentity.packageDigest
+    ) {
+      throw new TypeError(
+        "portable runner dependency conflicts with the admission candidate",
+      );
+    }
+    return [];
+  }
+  const releasePlan = await readJson<{
+    readonly releases: readonly CandidatePackage[];
+  }>(safePath(takoformRoot, "forms/release-plan.json"));
+  const entry = releasePlan.releases.find(
+    (candidate) =>
+      candidate.kind === sourceIdentity.formRef.kind &&
+      canonicalJson(candidate.formRef as never) ===
+        canonicalJson(sourceIdentity.formRef as never) &&
+      candidate.packageDigest === sourceIdentity.packageDigest,
+  );
+  if (!entry) {
+    throw new TypeError(
+      "portable runner dependency is absent from the exact Form release plan",
+    );
+  }
+  const packageRoot = safePath(takoformRoot, entry.sourcePath);
+  const definition = await readJson<PackageDefinition>(
+    safePath(packageRoot, "definition.json"),
+  );
+  const packageIndexBytes = await readRegularFile(
+    safePath(packageRoot, "package-index.json"),
+  );
+  const packageIndex = JSON.parse(
+    new TextDecoder().decode(packageIndexBytes),
+  ) as { readonly formRef?: unknown };
+  if (
+    digest(canonicalJsonBytes(parseCanonicalJson(packageIndexBytes))) !==
+      entry.packageDigest ||
+    canonicalJson(packageIndex.formRef as never) !==
+      canonicalJson(entry.formRef as never) ||
+    definition.apiVersion !== entry.formRef.apiVersion ||
+    definition.kind !== entry.kind ||
+    definition.definitionVersion !== entry.formRef.definitionVersion ||
+    digest(new TextEncoder().encode(canonicalJson(definition as never))) !==
+      entry.formRef.schemaDigest
+  ) {
+    throw new TypeError("portable runner dependency identity drifted");
+  }
+  const schemaParser = compileSchemaParser(
+    entry.kind,
+    definition.desiredSchema,
+  );
+  return [
+    {
+      package: entry,
+      candidate: {
+        kind: entry.kind,
+        slug: entry.slug,
+        identity: internalIdentity(entry),
+      },
+      definition,
+      packageRoot,
+      desired: contract.runnerInput.connectionProbe.desired,
+      updatedDesired: contract.runnerInput.connectionProbe.desired,
+      positiveName: "runner-only",
+      positivePackageDigest: `sha256:${"0".repeat(64)}`,
+      negativeFixtures: [],
+      negativePackageDigests: {},
+      schemaParser,
+      takoformRoot,
+    },
+  ];
+}
+
 export async function createInProcessHost(
   candidates: readonly LoadedCandidate[],
 ) {
+  const runnerDependencies =
+    await loadPortableRunnerFormDependencies(candidates);
+  const hostCandidates = [...candidates, ...runnerDependencies];
   const kinds = [
     ...new Set<ResourceShapeKind>([
-      ...candidates.map(({ package: entry }) => entry.kind),
+      ...hostCandidates.map(({ package: entry }) => entry.kind),
       "Workflow",
       "ObjectBucket",
     ]),
   ];
-  const customSchemas = Object.fromEntries(
-    candidates
-      .filter(
-        ({ package: entry }) =>
-          !(RESOURCE_SHAPE_KINDS as readonly string[]).includes(entry.kind),
-      )
-      .map((entry) => [entry.package.kind, entry.schemaParser]),
+  const currentFormSchemas = new Map<
+    ResourceShapeKind,
+    ResourceShapeSchemaParser
+  >(
+    hostCandidates.map(
+      (entry) => [entry.package.kind, entry.schemaParser] as const,
+    ),
   );
-  customSchemas.Workflow = passthroughSchemaParser;
-  const schemaRegistry = composeResourceShapeSchemaRegistries(
-    LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY,
-    new MapResourceShapeSchemaRegistry(customSchemas),
-  );
+  currentFormSchemas.set("Workflow", passthroughSchemaParser);
+  const schemaRegistry = {
+    get: (kind: ResourceShapeKind) =>
+      currentFormSchemas.get(kind) ??
+      LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY.get(kind),
+    kinds: () => [
+      ...new Set<ResourceShapeKind>([
+        ...LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY.kinds(),
+        ...currentFormSchemas.keys(),
+      ]),
+    ],
+  };
   const modules = new MapResourceShapeModuleRegistry({
     "in-process-host-conformance": {
       files: [{ path: "main.tf", text: "terraform {}\n" }],
@@ -408,16 +580,29 @@ export async function createInProcessHost(
     store: activityStore,
     now: () => new Date(NOW),
   });
-  const formRegistry = currentFormRegistry(candidates);
+  const formRegistry = currentFormRegistry(hostCandidates);
   const formDesiredParsers = new Map(
-    candidates.map((item) => [
+    hostCandidates.map((item) => [
       formRefKey(formRefOfInstalled(item.candidate.identity)),
       item.schemaParser,
     ]),
   );
+  const interfaceStores = createInMemoryInterfaceStores();
+  let interfaceSequence = 0;
+  const interfaces = new InterfaceService({
+    stores: interfaceStores,
+    resolver: new OutputBackedInterfaceInputResolver({
+      opentofu: activityStore,
+      resources: stores.resources,
+      resolveResourceWorkspace: async ({ resourceSpaceId }) =>
+        hostEvidenceWorkspace(resourceSpaceId),
+    }),
+    now: () => NOW,
+    newId: (prefix) => `${prefix}_host_evidence_${++interfaceSequence}`,
+  });
   const service = new ResourceShapeService({
     stores,
-    adapter: new StubResourceShapeAdapter(),
+    adapter: new PortableHostEvidenceResourceAdapter(),
     activity,
     operationRuns: activityStore,
     moduleRegistry: modules,
@@ -434,6 +619,58 @@ export async function createInProcessHost(
     },
     now: () => NOW,
   });
+  const materializeInterfaces = async (resourceId: string): Promise<void> => {
+    const resource = await stores.resources.get(resourceId);
+    if (
+      !resource?.form ||
+      resource.phase !== "Ready" ||
+      resource.observedGeneration !== resource.generation
+    ) {
+      return;
+    }
+    const definition = await formRegistry.getDefinition(
+      formRefOfInstalled(resource.form),
+    );
+    if (!definition) return;
+    await ensureFormDescriptorInterfaces({
+      interfaces,
+      workspaceId: hostEvidenceWorkspace(resource.spaceId),
+      resourceId,
+      form: resource.form,
+      descriptors: definition.interfaceDescriptors ?? [],
+    });
+  };
+  service.setLifecycleObserver({
+    async observe(event) {
+      switch (event.type) {
+        case "ready":
+          await materializeInterfaces(event.resourceId);
+          await interfaces.reconcileResource(
+            hostEvidenceWorkspace(event.spaceId),
+            event.resourceId,
+          );
+          return;
+        case "unknown":
+          await interfaces.markResourceUnknown(
+            hostEvidenceWorkspace(event.spaceId),
+            event.resourceId,
+            `Resource ${event.operation} failed after backend dispatch`,
+          );
+          return;
+        case "terminating":
+          await interfaces.markResourceTerminating(
+            hostEvidenceWorkspace(event.spaceId),
+            event.resourceId,
+          );
+          return;
+        case "retired":
+          await interfaces.retireResource(
+            hostEvidenceWorkspace(event.spaceId),
+            event.resourceId,
+          );
+      }
+    },
+  });
   const pool: TargetPoolSpec = {
     classes: ["host.conformance"],
     targets: [
@@ -446,18 +683,39 @@ export async function createInProcessHost(
       },
     ],
   };
-  const putPool = await service.putTargetPool(
-    HOST_SPACE,
-    HOST_TARGET_POOL,
-    pool,
-  );
-  if (!putPool.ok) {
-    throw new TypeError(
-      `cannot seed host target pool: ${putPool.error.message}`,
+  for (const space of HOST_SPACES) {
+    const putPool = await service.putTargetPool(
+      space,
+      HOST_TARGET_POOL,
+      pool,
     );
+    if (!putPool.ok) {
+      throw new TypeError(
+        `cannot seed host target pool for ${space}: ${putPool.error.message}`,
+      );
+    }
+    await service.putSpacePolicy(space, HOST_TARGET_POOL, {
+      resolution: { lockAfterCreate: true, allowAutoMigration: false },
+    });
   }
-  await service.putSpacePolicy(HOST_SPACE, HOST_TARGET_POOL, {
-    resolution: { lockAfterCreate: true, allowAutoMigration: false },
+  const interfaceDeclarations = createPortableDeclarationReader({
+    interfaces,
+    listResources: (space, page) => service.listPage(space, page),
+    getResource: async (space, kind, name) => {
+      const result = await service.get(space, kind, name);
+      return result.ok ? result.value : undefined;
+    },
+    resolveWorkspace: async ({ resourceSpaceId }) =>
+      hostEvidenceWorkspace(resourceSpaceId),
+    ensureResourceDeclarations: async (resource) => {
+      await materializeInterfaces(
+        formatResourceShapeId(
+          resource.metadata.space,
+          resource.kind,
+          resource.metadata.name,
+        ),
+      );
+    },
   });
   const app = await createApiApp({
     role: "takosumi-api",
@@ -466,11 +724,42 @@ export async function createInProcessHost(
     requestCorrelation: false,
     resourceShapeRouteOptions: {
       service,
+      portableHostIdempotency: new PortableHostIdempotencyCoordinator(
+        new InMemoryPortableHostIdempotencyLedger(),
+      ),
       enabledResourceShapeKinds: kinds,
       installedResourceShapeKinds: kinds,
+      interfaceDeclarations,
+      authorizeResourceShapeBearer: async ({ token }) =>
+        hostEvidenceActor(token),
     },
   });
-  return { app, service };
+  const portableRunnerFetch = createTakoformPortableHostEvidenceAdapter({
+    fetch: (request) => app.request(request),
+    authorizeBearer: async ({ token }) => hostEvidenceAuthority(token),
+    readResource: async (space, kind, name) => {
+      const result = await service.get(space, kind, name);
+      return result.ok ? result.value : undefined;
+    },
+    validatePlanBinding: async ({
+      authorization,
+      resource,
+      planDigest,
+    }) => {
+      const token = authorization?.startsWith("Bearer ")
+        ? authorization.slice("Bearer ".length)
+        : "";
+      const actor = hostEvidenceActor(token);
+      if (!actor) return false;
+      const request = portablePlanBindingRequest(actor, resource);
+      if (!request) return false;
+      const validated = await service.validateDeploymentReview(request, {
+        planDigest,
+      });
+      return validated.ok;
+    },
+  });
+  return { app, service, portableRunnerFetch };
 }
 
 function currentFormRegistry(candidates: readonly LoadedCandidate[]) {
@@ -481,6 +770,9 @@ function currentFormRegistry(candidates: readonly LoadedCandidate[]) {
       ? { description: item.definition.description }
       : {}),
     operations: item.definition.lifecycleCapabilities as FormOperation[],
+    ...(item.definition.interfaces
+      ? { interfaceDescriptors: item.definition.interfaces }
+      : {}),
     installedAt: NOW,
   }));
   const packages = candidates.map<FormPackage>((item) => ({
@@ -493,20 +785,22 @@ function currentFormRegistry(candidates: readonly LoadedCandidate[]) {
     installedBy: "host-report",
     updatedAt: NOW,
   }));
-  const activations = candidates.map<FormActivation>((item, index) => ({
-    id: `activation_host_report_${index + 1}`,
-    identity: item.candidate.identity,
-    scope: { type: "space", id: HOST_SPACE },
-    audience: { roles: ["owner"] },
-    policy: { evidence: "source-conformance-only" },
-    eligibleTargetPoolClasses: ["host.conformance"],
-    status: "active",
-    revision: 1,
-    createdAt: NOW,
-    createdBy: "host-report",
-    updatedAt: NOW,
-    updatedBy: "host-report",
-  }));
+  const activations = HOST_SPACES.flatMap((space, spaceIndex) =>
+    candidates.map<FormActivation>((item, index) => ({
+      id: `activation_host_report_${spaceIndex + 1}_${index + 1}`,
+      identity: item.candidate.identity,
+      scope: { type: "space", id: space },
+      audience: { roles: ["owner"] },
+      policy: { evidence: "source-conformance-only" },
+      eligibleTargetPoolClasses: ["host.conformance"],
+      status: "active",
+      revision: 1,
+      createdAt: NOW,
+      createdBy: "host-report",
+      updatedAt: NOW,
+      updatedBy: "host-report",
+    })),
+  );
   const definitionsByRef = new Map(
     definitions.map((definition) => [
       formRefKey(formRefOfInstalled(definition.identity)),
@@ -524,6 +818,127 @@ function currentFormRegistry(candidates: readonly LoadedCandidate[]) {
     listDefinitions: async () => ({ items: definitions }),
     listActivations: async () => ({ items: activations }),
   };
+}
+
+class PortableHostEvidenceResourceAdapter extends StubResourceShapeAdapter {
+  override apply(input: AdapterApplyInput): Promise<AdapterApplyResult> {
+    const name = input.plan.validatedSpec.name;
+    if (typeof name !== "string" || name.length === 0) {
+      throw new TypeError(
+        `${input.plan.shape} portable host evidence requires spec.name`,
+      );
+    }
+    return Promise.resolve({
+      nativeResources: input.nativeResources ?? [],
+      outputs: {
+        ...(input.plan.shape === "RelationalDatabase" &&
+        typeof input.plan.validatedSpec.engine === "string"
+          ? { engine: input.plan.validatedSpec.engine }
+          : {}),
+        generation: input.resourceGeneration,
+        id: `${input.plan.shape}/${name}`,
+        kind: input.plan.shape,
+        name,
+        portability: "portable",
+      },
+    });
+  }
+}
+
+function hostEvidenceActor(token: string): ActorContext | undefined {
+  const authority = hostEvidenceAuthority(token);
+  if (!authority) return undefined;
+  return {
+    actorAccountId: `acct_host_evidence_${authority.principal}`,
+    workspaceId: `workspace_host_evidence_${authority.tenant}`,
+    roles: ["owner"],
+    scopes: ["admin", "forms:read", "resources:*"],
+    requestId:
+      `req_host_evidence_${authority.tenant}_${authority.principal}`,
+  };
+}
+
+function hostEvidenceAuthority(
+  token: string,
+): TakoformPortableHostAuthority | undefined {
+  if (token === TAKOFORM_RUNNER_PRIMARY_TOKEN) {
+    return { tenant: "primary", principal: "primary" };
+  }
+  if (token === TAKOFORM_RUNNER_ALTERNATE_TOKEN) {
+    return { tenant: "primary", principal: "alternate" };
+  }
+  if (token === TAKOFORM_RUNNER_ALTERNATE_TENANT_TOKEN) {
+    return { tenant: "alternate", principal: "primary" };
+  }
+  return undefined;
+}
+
+function portablePlanBindingRequest(
+  actor: ActorContext,
+  resource: JsonObject,
+): ApplyResourceRequest | undefined {
+  const metadata = jsonRecord(resource.metadata);
+  const form = jsonRecord(resource.form);
+  const formRef = jsonRecord(form?.formRef);
+  const spec = jsonRecord(resource.spec);
+  const kind = resource.kind;
+  if (
+    resource.apiVersion !== "forms.takoform.com/v1alpha1" ||
+    typeof kind !== "string" ||
+    !isResourceShapeKind(kind) ||
+    !metadata ||
+    typeof metadata.name !== "string" ||
+    typeof metadata.space !== "string" ||
+    !form ||
+    !formRef ||
+    formRef.apiVersion !== "forms.takoform.com/v1alpha1" ||
+    formRef.kind !== kind ||
+    typeof formRef.definitionVersion !== "string" ||
+    typeof formRef.schemaDigest !== "string" ||
+    typeof form.packageDigest !== "string" ||
+    !spec
+  ) {
+    return undefined;
+  }
+  const resourceVersion = metadata.resourceVersion;
+  if (
+    resourceVersion !== undefined &&
+    (typeof resourceVersion !== "string" ||
+      !/^[1-9][0-9]*$/u.test(resourceVersion))
+  ) {
+    return undefined;
+  }
+  return {
+    actor,
+    space: metadata.space,
+    kind,
+    name: metadata.name,
+    form: {
+      type: portableTypeForShapeKind(kind),
+      version: formRef.definitionVersion,
+      schemaDigest: formRef.schemaDigest,
+      packageDigest: form.packageDigest,
+    },
+    expectedGeneration:
+      resourceVersion === undefined ? 0 : Number(resourceVersion),
+    managedBy: "takoform.form-host.v1",
+    spec,
+  };
+}
+
+function jsonRecord(
+  value: unknown,
+): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function hostEvidenceWorkspace(space: string): string {
+  if ((HOST_SPACES as readonly string[]).includes(space)) {
+    return HOST_EVIDENCE_PRIMARY_WORKSPACE;
+  }
+  throw new TypeError(`portable host evidence Space is not owned: ${space}`);
 }
 
 async function seedConnectionDependency(
@@ -554,6 +969,7 @@ function genericImplementation(
 ): TargetImplementationDescriptor {
   const interfaces = Object.fromEntries(
     [
+      "worker_fetch",
       "object_store",
       "s3_api",
       "storage_class_infrequent_access",
@@ -648,7 +1064,7 @@ function passthroughSchemaParser(spec: unknown) {
   };
 }
 
-function mutableDesired(
+export function buildCurrentHostReportUpdateFixture(
   kind: string,
   desired: JsonObject,
   immutableFields: readonly string[],
@@ -656,7 +1072,7 @@ function mutableDesired(
 ): JsonObject {
   const result = structuredClone(desired);
   const mutations: Readonly<Record<string, () => void>> = {
-    HttpService: () => {
+    EdgeWorker: () => {
       result.configuration = {
         ...(isRecord(result.configuration) ? result.configuration : {}),
         LOG_LEVEL: "debug",
@@ -687,7 +1103,7 @@ function mutableDesired(
       result.metric = "dot_product";
     },
     ModelEndpoint: () => {
-      result.model = "portable-conformance/v1/embedding-large";
+      result.maxConcurrency = Number(result.maxConcurrency ?? 1) + 1;
     },
   };
   const mutate = mutations[kind];
@@ -804,10 +1220,10 @@ function assertOnlyOptions(
 function usage(): string {
   return [
     "usage:",
-    "  build --takoform-root DIR --output-dir DIR --source-commit SHA --takoform-source-commit SHA",
-    "  verify-unsigned --output-dir DIR --source-commit SHA --takoform-source-commit SHA",
-    "  finalize --output-dir DIR --source-commit SHA --takoform-source-commit SHA --workflow-run-id ID --workflow-run-attempt 1",
-    "  verify-signed --output-dir DIR --source-commit SHA --takoform-source-commit SHA --workflow-run-id ID --workflow-run-attempt 1",
+    "  build --takoform-root DIR --output-dir DIR --source-commit SHA --takoform-source-commit SHA --request-id UUID",
+    "  verify-unsigned --output-dir DIR --source-commit SHA --takoform-source-commit SHA --request-id UUID",
+    "  finalize --output-dir DIR --source-commit SHA --takoform-source-commit SHA --request-id UUID --workflow-run-id ID --workflow-run-attempt 1",
+    "  verify-signed --output-dir DIR --source-commit SHA --takoform-source-commit SHA --request-id UUID --workflow-run-id ID --workflow-run-attempt 1",
   ].join("\n");
 }
 

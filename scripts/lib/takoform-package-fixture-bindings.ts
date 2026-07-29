@@ -95,18 +95,7 @@ export async function readExactPackageFixtureBindings(input: {
   if (!Array.isArray(definition.negativeConformanceFixtures)) {
     throw new TypeError("--package-root negative fixtures are missing");
   }
-  const requested = new Map(
-    input.negativeFixtures.map((fixture) => [fixture.name, fixture] as const),
-  );
-  if (
-    requested.size !== input.negativeFixtures.length ||
-    requested.size !== definition.negativeConformanceFixtures.length
-  ) {
-    throw new TypeError(
-      "--negative-fixtures must equal the exact retained package fixture closure",
-    );
-  }
-  const negative: Record<string, string> = {};
+  const retainedDesiredFixtures: JsonObject[] = [];
   for (const value of definition.negativeConformanceFixtures) {
     if (
       !isObject(value) ||
@@ -118,6 +107,26 @@ export async function readExactPackageFixtureBindings(input: {
         "--package-root contains an invalid negative fixture",
       );
     }
+    if (value.stage !== "desired" && value.stage !== "observed") {
+      throw new TypeError(
+        `negative fixture ${value.name} has unsupported stage ${value.stage}`,
+      );
+    }
+    if (value.stage === "desired") retainedDesiredFixtures.push(value);
+  }
+  const requested = new Map(
+    input.negativeFixtures.map((fixture) => [fixture.name, fixture] as const),
+  );
+  if (
+    requested.size !== input.negativeFixtures.length ||
+    requested.size !== retainedDesiredFixtures.length
+  ) {
+    throw new TypeError(
+      "--negative-fixtures must equal the exact retained desired-stage package fixture closure",
+    );
+  }
+  const negative: Record<string, string> = {};
+  for (const value of retainedDesiredFixtures) {
     const executed = requested.get(value.name);
     if (!executed || executed.stage !== value.stage) {
       throw new TypeError(

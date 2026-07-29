@@ -175,6 +175,13 @@ test("ObjectBucket defaults storageClass and rejects non-portable values", () =>
       "storage_class_infrequent_access",
     );
   }
+
+  const archive = parseObjectBucketSpec({
+    name: "retained-assets",
+    storageClass: "archive",
+  });
+  expect(archive.ok).toBe(true);
+  if (archive.ok) expect(archive.spec.storageClass).toBe("archive");
 });
 
 test("new service shapes enforce shape-specific portable validation", () => {

@@ -18,27 +18,41 @@ import {
   type CanonicalJsonValue,
 } from "../../core/adapters/takoform/canonical_json.ts";
 import type { PortableFormHostConformanceReport } from "../../core/conformance/portable_form_host.ts";
+import {
+  assertPortableHostRunnerReport,
+  TAKOFORM_PORTABLE_HOST_REPORT_FORMAT,
+  TAKOFORM_PORTABLE_HOST_RUNNER_SUBJECT,
+  type TakoformPortableHostRunnerReport,
+} from "./takoform-portable-host-evidence.ts";
 
-export const CURRENT_HOST_GENERATION = "ga-core-v1";
+export const CURRENT_HOST_GENERATION = "ga-core-v2";
 export const CURRENT_HOST_SUBJECT = "host:https://in-process.takosumi.test";
 export const HOST_REPORT_MANIFEST_NAME = "host-report-manifest.json";
 export const SIGNED_HOST_REPORT_CANDIDATE_NAME =
   "signed-host-report-candidate.json";
 export const HOST_REPORT_CHECKSUMS_NAME = "SHA256SUMS";
+export const HOST_REPORT_CHECKSUMS_BUNDLE_NAME =
+  "SHA256SUMS.sigstore.json";
+export const PORTABLE_HOST_RUNNER_REPORT_NAME =
+  "portable-host-runner-report.json";
+export const PORTABLE_HOST_RUNNER_BUNDLE_NAME =
+  "portable-host-runner-report.sigstore.json";
 export const HOST_REPORT_WORKFLOW =
   ".github/workflows/standard-form-host-report.yml";
 export const HOST_REPORT_CERTIFICATE_IDENTITY =
   "https://github.com/tako0614/takosumi/.github/workflows/standard-form-host-report.yml@refs/heads/main";
 
 const HOST_REPORT_FORMAT = "takoform.standard-runner-report@v1";
-const MANIFEST_FORMAT = "takosumi.standard-form-host-report-candidate@v2";
-const SIGNED_FORMAT = "takosumi.standard-form-host-report-signed-candidate@v2";
+const MANIFEST_FORMAT = "takosumi.standard-form-host-report-candidate@v3";
+const SIGNED_FORMAT = "takosumi.standard-form-host-report-signed-candidate@v4";
 const PROOF_TYPE = "oss-reference-host-source-conformance";
 const SOURCE_REPOSITORY = "https://github.com/tako0614/takosumi.git";
 const TAKOFORM_REPOSITORY =
   "https://github.com/tako0614/terraform-provider-takoform.git";
 const COMMIT_PATTERN = /^[a-f0-9]{40}$/u;
 const DIGEST_PATTERN = /^sha256:[a-f0-9]{64}$/u;
+const CANONICAL_UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const REQUIRED_CHECKS = [
   "apply",
   "read",
@@ -109,9 +123,21 @@ export interface HostReportManifest {
   readonly subject: typeof CURRENT_HOST_SUBJECT;
   readonly generation: typeof CURRENT_HOST_GENERATION;
   readonly runnerVersion: string;
+  readonly workflow: typeof HOST_REPORT_WORKFLOW;
+  readonly requestId: string;
   readonly source: HostReportSource;
   readonly takoformSource: HostReportSource;
+  readonly portableRunner: PortableHostRunnerDescriptor;
   readonly reports: readonly HostReportDescriptor[];
+}
+
+export interface PortableHostRunnerDescriptor {
+  readonly path: typeof PORTABLE_HOST_RUNNER_REPORT_NAME;
+  readonly bundlePath: typeof PORTABLE_HOST_RUNNER_BUNDLE_NAME;
+  readonly digest: string;
+  readonly format: typeof TAKOFORM_PORTABLE_HOST_REPORT_FORMAT;
+  readonly runnerSubject: typeof TAKOFORM_PORTABLE_HOST_RUNNER_SUBJECT;
+  readonly runnerInputDigest: string;
 }
 
 export interface SignedHostReportCandidate {
@@ -122,11 +148,25 @@ export interface SignedHostReportCandidate {
   readonly generation: typeof CURRENT_HOST_GENERATION;
   readonly certificateIdentity: typeof HOST_REPORT_CERTIFICATE_IDENTITY;
   readonly workflow: typeof HOST_REPORT_WORKFLOW;
+  readonly requestId: string;
   readonly workflowRunId: string;
   readonly workflowRunAttempt: 1;
   readonly source: HostReportSource;
   readonly takoformSource: HostReportSource;
+  readonly closure: {
+    readonly checksumsPath: typeof HOST_REPORT_CHECKSUMS_NAME;
+    readonly bundlePath: typeof HOST_REPORT_CHECKSUMS_BUNDLE_NAME;
+    readonly certificateIdentity: typeof HOST_REPORT_CERTIFICATE_IDENTITY;
+  };
   readonly manifest: { readonly path: string; readonly digest: string };
+  readonly portableRunner: {
+    readonly reportPath: typeof PORTABLE_HOST_RUNNER_REPORT_NAME;
+    readonly reportDigest: string;
+    readonly bundlePath: typeof PORTABLE_HOST_RUNNER_BUNDLE_NAME;
+    readonly bundleDigest: string;
+    readonly runnerSubject: typeof TAKOFORM_PORTABLE_HOST_RUNNER_SUBJECT;
+    readonly runnerInputDigest: string;
+  };
   readonly entries: readonly {
     readonly kind: string;
     readonly slug: string;
@@ -141,16 +181,36 @@ export async function writeUnsignedHostReportCandidate(input: {
   readonly outputRoot: string;
   readonly sourceCommit: string;
   readonly takoformSourceCommit: string;
+  readonly requestId: string;
   readonly reports: readonly ExecutedCurrentFormHostReport[];
+  readonly portableRunnerReport: TakoformPortableHostRunnerReport;
 }): Promise<HostReportManifest> {
   validateCommit("Takosumi source", input.sourceCommit);
   validateCommit("Takoform source", input.takoformSourceCommit);
+  validateRequestId(input.requestId);
   if (input.reports.length !== 10) {
     throw new TypeError(
       `current host report requires exactly 10 Forms, got ${input.reports.length}`,
     );
   }
   await assertNewEmptyDirectory(input.outputRoot);
+  assertPortableHostRunnerReport(input.portableRunnerReport);
+  const portableRunnerBytes = canonicalBytes(
+    input.portableRunnerReport as CanonicalJsonValue,
+  );
+  await writeExclusiveRelative(
+    input.outputRoot,
+    PORTABLE_HOST_RUNNER_REPORT_NAME,
+    portableRunnerBytes,
+  );
+  const portableRunner: PortableHostRunnerDescriptor = {
+    path: PORTABLE_HOST_RUNNER_REPORT_NAME,
+    bundlePath: PORTABLE_HOST_RUNNER_BUNDLE_NAME,
+    digest: digest(portableRunnerBytes),
+    format: TAKOFORM_PORTABLE_HOST_REPORT_FORMAT,
+    runnerSubject: TAKOFORM_PORTABLE_HOST_RUNNER_SUBJECT,
+    runnerInputDigest: input.portableRunnerReport.runnerInputDigest,
+  };
   const runnerVersion = `1.2.0+git.${input.sourceCommit}`;
   const descriptors: HostReportDescriptor[] = [];
   const seen = new Set<string>();
@@ -182,11 +242,14 @@ export async function writeUnsignedHostReportCandidate(input: {
     subject: CURRENT_HOST_SUBJECT,
     generation: CURRENT_HOST_GENERATION,
     runnerVersion,
+    workflow: HOST_REPORT_WORKFLOW,
+    requestId: input.requestId,
     source: { repository: SOURCE_REPOSITORY, commit: input.sourceCommit },
     takoformSource: {
       repository: TAKOFORM_REPOSITORY,
       commit: input.takoformSourceCommit,
     },
+    portableRunner,
     reports: descriptors,
   };
   await writeExclusiveRelative(
@@ -197,6 +260,7 @@ export async function writeUnsignedHostReportCandidate(input: {
   await verifyUnsignedHostReportCandidate(input.outputRoot, {
     sourceCommit: input.sourceCommit,
     takoformSourceCommit: input.takoformSourceCommit,
+    requestId: input.requestId,
   });
   return manifest;
 }
@@ -206,10 +270,12 @@ export async function verifyUnsignedHostReportCandidate(
   expected: {
     readonly sourceCommit: string;
     readonly takoformSourceCommit: string;
+    readonly requestId: string;
   },
 ): Promise<HostReportManifest> {
   validateCommit("Takosumi source", expected.sourceCommit);
   validateCommit("Takoform source", expected.takoformSourceCommit);
+  validateRequestId(expected.requestId);
   const bytes = await readBoundedRegularFile(
     outputRoot,
     HOST_REPORT_MANIFEST_NAME,
@@ -224,6 +290,8 @@ export async function verifyUnsignedHostReportCandidate(
     manifest.subject !== CURRENT_HOST_SUBJECT ||
     manifest.generation !== CURRENT_HOST_GENERATION ||
     manifest.runnerVersion !== runnerVersion ||
+    manifest.workflow !== HOST_REPORT_WORKFLOW ||
+    manifest.requestId !== expected.requestId ||
     manifest.source.repository !== SOURCE_REPOSITORY ||
     manifest.source.commit !== expected.sourceCommit ||
     manifest.takoformSource.repository !== TAKOFORM_REPOSITORY ||
@@ -232,7 +300,28 @@ export async function verifyUnsignedHostReportCandidate(
   ) {
     throw new TypeError("host-report manifest identity is invalid");
   }
-  const files = new Set<string>([HOST_REPORT_MANIFEST_NAME]);
+  validatePortableRunnerDescriptor(manifest.portableRunner);
+  const portableRunnerBytes = await readBoundedRegularFile(
+    outputRoot,
+    manifest.portableRunner.path,
+  );
+  assertCanonical(portableRunnerBytes, manifest.portableRunner.path);
+  if (digest(portableRunnerBytes) !== manifest.portableRunner.digest) {
+    throw new TypeError("portable host runner report digest mismatch");
+  }
+  const portableRunner = parseJson<unknown>(portableRunnerBytes);
+  assertPortableHostRunnerReport(portableRunner);
+  if (
+    portableRunner.runnerSubject !== manifest.portableRunner.runnerSubject ||
+    portableRunner.runnerInputDigest !==
+      manifest.portableRunner.runnerInputDigest
+  ) {
+    throw new TypeError("portable host runner report binding is invalid");
+  }
+  const files = new Set<string>([
+    HOST_REPORT_MANIFEST_NAME,
+    manifest.portableRunner.path,
+  ]);
   const kinds = new Set<string>();
   for (const descriptor of manifest.reports) {
     validateDescriptor(descriptor, kinds);
@@ -265,6 +354,7 @@ export async function finalizeSignedHostReportCandidate(input: {
   readonly outputRoot: string;
   readonly sourceCommit: string;
   readonly takoformSourceCommit: string;
+  readonly requestId: string;
   readonly workflowRunId: string;
   readonly workflowRunAttempt: number;
 }): Promise<SignedHostReportCandidate> {
@@ -290,13 +380,32 @@ export async function finalizeSignedHostReportCandidate(input: {
     generation: CURRENT_HOST_GENERATION,
     certificateIdentity: HOST_REPORT_CERTIFICATE_IDENTITY,
     workflow: HOST_REPORT_WORKFLOW,
+    requestId: input.requestId,
     workflowRunId: input.workflowRunId,
     workflowRunAttempt: 1,
     source: manifest.source,
     takoformSource: manifest.takoformSource,
+    closure: {
+      checksumsPath: HOST_REPORT_CHECKSUMS_NAME,
+      bundlePath: HOST_REPORT_CHECKSUMS_BUNDLE_NAME,
+      certificateIdentity: HOST_REPORT_CERTIFICATE_IDENTITY,
+    },
     manifest: {
       path: HOST_REPORT_MANIFEST_NAME,
       digest: digest(manifestBytes),
+    },
+    portableRunner: {
+      reportPath: manifest.portableRunner.path,
+      reportDigest: manifest.portableRunner.digest,
+      bundlePath: manifest.portableRunner.bundlePath,
+      bundleDigest: digest(
+        await readBoundedRegularFile(
+          input.outputRoot,
+          manifest.portableRunner.bundlePath,
+        ),
+      ),
+      runnerSubject: manifest.portableRunner.runnerSubject,
+      runnerInputDigest: manifest.portableRunner.runnerInputDigest,
     },
     entries: await Promise.all(
       manifest.reports.map(async (entry) => ({
@@ -319,6 +428,8 @@ export async function finalizeSignedHostReportCandidate(input: {
   const checksumPaths = [
     HOST_REPORT_MANIFEST_NAME,
     SIGNED_HOST_REPORT_CANDIDATE_NAME,
+    manifest.portableRunner.path,
+    manifest.portableRunner.bundlePath,
     ...manifest.reports.flatMap((entry) => [entry.path, entry.bundlePath]),
   ].sort();
   const checksums = (
@@ -334,8 +445,11 @@ export async function finalizeSignedHostReportCandidate(input: {
     HOST_REPORT_CHECKSUMS_NAME,
     new TextEncoder().encode(`${checksums}\n`),
   );
-  await verifySignedHostReportCandidate(input.outputRoot, input);
-  return signed;
+  return await verifySignedHostReportCandidateInternal(
+    input.outputRoot,
+    input,
+    false,
+  );
 }
 
 export async function verifySignedHostReportCandidate(
@@ -343,10 +457,35 @@ export async function verifySignedHostReportCandidate(
   expected: {
     readonly sourceCommit: string;
     readonly takoformSourceCommit: string;
+    readonly requestId: string;
     readonly workflowRunId: string;
     readonly workflowRunAttempt: number;
   },
 ): Promise<SignedHostReportCandidate> {
+  return await verifySignedHostReportCandidateInternal(
+    outputRoot,
+    expected,
+    true,
+  );
+}
+
+async function verifySignedHostReportCandidateInternal(
+  outputRoot: string,
+  expected: {
+    readonly sourceCommit: string;
+    readonly takoformSourceCommit: string;
+    readonly requestId: string;
+    readonly workflowRunId: string;
+    readonly workflowRunAttempt: number;
+  },
+  requireAuthenticatedClosure: boolean,
+): Promise<SignedHostReportCandidate> {
+  if (!/^[1-9][0-9]*$/u.test(expected.workflowRunId)) {
+    throw new TypeError("workflow run id must be a positive decimal");
+  }
+  if (expected.workflowRunAttempt !== 1) {
+    throw new TypeError("host-report signer accepts only workflow attempt 1");
+  }
   const manifest = await verifyUnsignedCandidateWithBundles(
     outputRoot,
     expected,
@@ -369,12 +508,34 @@ export async function verifySignedHostReportCandidate(
     signed.generation !== CURRENT_HOST_GENERATION ||
     signed.certificateIdentity !== HOST_REPORT_CERTIFICATE_IDENTITY ||
     signed.workflow !== HOST_REPORT_WORKFLOW ||
+    signed.requestId !== expected.requestId ||
     signed.workflowRunId !== expected.workflowRunId ||
-    signed.workflowRunAttempt !== 1 ||
+    signed.workflowRunAttempt !== expected.workflowRunAttempt ||
+    signed.source.repository !== manifest.source.repository ||
     signed.source.commit !== expected.sourceCommit ||
+    signed.takoformSource.repository !==
+      manifest.takoformSource.repository ||
     signed.takoformSource.commit !== expected.takoformSourceCommit ||
+    signed.closure?.checksumsPath !== HOST_REPORT_CHECKSUMS_NAME ||
+    signed.closure.bundlePath !== HOST_REPORT_CHECKSUMS_BUNDLE_NAME ||
+    signed.closure.certificateIdentity !==
+      HOST_REPORT_CERTIFICATE_IDENTITY ||
     signed.manifest.path !== HOST_REPORT_MANIFEST_NAME ||
     signed.manifest.digest !== digest(manifestBytes) ||
+    signed.portableRunner.reportPath !== manifest.portableRunner.path ||
+    signed.portableRunner.reportDigest !== manifest.portableRunner.digest ||
+    signed.portableRunner.bundlePath !== manifest.portableRunner.bundlePath ||
+    signed.portableRunner.bundleDigest !==
+      digest(
+        await readBoundedRegularFile(
+          outputRoot,
+          manifest.portableRunner.bundlePath,
+        ),
+      ) ||
+    signed.portableRunner.runnerSubject !==
+      manifest.portableRunner.runnerSubject ||
+    signed.portableRunner.runnerInputDigest !==
+      manifest.portableRunner.runnerInputDigest ||
     signed.entries.length !== manifest.reports.length
   ) {
     throw new TypeError("signed host-report candidate identity is invalid");
@@ -403,6 +564,8 @@ export async function verifySignedHostReportCandidate(
   const expectedPaths = [
     HOST_REPORT_MANIFEST_NAME,
     SIGNED_HOST_REPORT_CANDIDATE_NAME,
+    manifest.portableRunner.path,
+    manifest.portableRunner.bundlePath,
     ...manifest.reports.flatMap((entry) => [entry.path, entry.bundlePath]),
   ].sort();
   const expectedChecksums = (
@@ -418,8 +581,17 @@ export async function verifySignedHostReportCandidate(
       "host-report SHA256SUMS does not bind the exact closure",
     );
   }
+  if (requireAuthenticatedClosure) {
+    await readBoundedRegularFile(outputRoot, HOST_REPORT_CHECKSUMS_BUNDLE_NAME);
+  }
   const actual = await listRegularFiles(outputRoot);
-  const wanted = [...expectedPaths, HOST_REPORT_CHECKSUMS_NAME].sort();
+  const wanted = [
+    ...expectedPaths,
+    HOST_REPORT_CHECKSUMS_NAME,
+    ...(requireAuthenticatedClosure
+      ? [HOST_REPORT_CHECKSUMS_BUNDLE_NAME]
+      : []),
+  ].sort();
   if (JSON.stringify(actual) !== JSON.stringify(wanted)) {
     throw new TypeError(
       `signed host-report file closure differs: got ${actual.join(",")}`,
@@ -632,11 +804,28 @@ function validateDescriptor(
   kinds.add(descriptor.kind);
 }
 
+function validatePortableRunnerDescriptor(
+  descriptor: PortableHostRunnerDescriptor,
+): void {
+  if (
+    !descriptor ||
+    descriptor.path !== PORTABLE_HOST_RUNNER_REPORT_NAME ||
+    descriptor.bundlePath !== PORTABLE_HOST_RUNNER_BUNDLE_NAME ||
+    !DIGEST_PATTERN.test(descriptor.digest) ||
+    descriptor.format !== TAKOFORM_PORTABLE_HOST_REPORT_FORMAT ||
+    descriptor.runnerSubject !== TAKOFORM_PORTABLE_HOST_RUNNER_SUBJECT ||
+    !DIGEST_PATTERN.test(descriptor.runnerInputDigest)
+  ) {
+    throw new TypeError("portable host runner descriptor is invalid");
+  }
+}
+
 async function verifyUnsignedCandidateWithBundles(
   outputRoot: string,
   expected: {
     readonly sourceCommit: string;
     readonly takoformSourceCommit: string;
+    readonly requestId: string;
   },
 ): Promise<HostReportManifest> {
   const manifestBytes = await readBoundedRegularFile(
@@ -651,6 +840,10 @@ async function verifyUnsignedCandidateWithBundles(
   } finally {
     await rm(unsignedRoot, { recursive: true, force: true });
   }
+  await readBoundedRegularFile(
+    outputRoot,
+    manifest.portableRunner.bundlePath,
+  );
   for (const descriptor of manifest.reports) {
     await readBoundedRegularFile(outputRoot, descriptor.bundlePath);
   }
@@ -668,6 +861,11 @@ async function temporaryUnsignedView(
     temporary,
     HOST_REPORT_MANIFEST_NAME,
     await readBoundedRegularFile(outputRoot, HOST_REPORT_MANIFEST_NAME),
+  );
+  await writeExclusiveRelative(
+    temporary,
+    manifest.portableRunner.path,
+    await readBoundedRegularFile(outputRoot, manifest.portableRunner.path),
   );
   for (const descriptor of manifest.reports) {
     await writeExclusiveRelative(
@@ -788,6 +986,12 @@ function digest(bytes: Uint8Array): string {
 function validateCommit(label: string, commit: string): void {
   if (!COMMIT_PATTERN.test(commit)) {
     throw new TypeError(`${label} commit must be lowercase 40-hex`);
+  }
+}
+
+function validateRequestId(requestId: string): void {
+  if (!CANONICAL_UUID_PATTERN.test(requestId)) {
+    throw new TypeError("request id must be a canonical UUID");
   }
 }
 

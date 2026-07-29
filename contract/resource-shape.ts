@@ -302,7 +302,10 @@ export type ObjectBucketInterface = string;
  * omitted v1alpha1 value is interpreted as `standard` for compatibility with
  * ObjectBucket records created before storage-class selection was exposed.
  */
-export type ObjectBucketStorageClass = "standard" | "infrequent_access";
+export type ObjectBucketStorageClass =
+  | "standard"
+  | "infrequent_access"
+  | "archive";
 
 export interface ObjectBucketSpec {
   readonly name: string;

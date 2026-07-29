@@ -90,6 +90,12 @@ async function packageFixture() {
     name: "assets",
     storageClass: "cold",
   };
+  const observedNegative = {
+    id: "tkrn:other-space:ObjectBucket:assets",
+    kind: "ObjectBucket",
+    name: "assets",
+    status: "Ready",
+  };
   const definition = {
     apiVersion: "forms.takoform.com/v1alpha1",
     kind: "ObjectBucket",
@@ -103,14 +109,24 @@ async function packageFixture() {
         stage: "desired",
         inputPath: "fixtures/negative.json",
       },
+      {
+        name: "reject-foreign-observed-identity",
+        stage: "observed",
+        inputPath: "fixtures/negative-observed.json",
+      },
     ],
   };
   const definitionRaw = pretty(definition);
   const desiredRaw = pretty(desired);
   const negativeRaw = pretty(negative);
+  const observedNegativeRaw = pretty(observedNegative);
   await writeFile(join(root, "definition.json"), definitionRaw);
   await writeFile(join(root, "fixtures", "desired.json"), desiredRaw);
   await writeFile(join(root, "fixtures", "negative.json"), negativeRaw);
+  await writeFile(
+    join(root, "fixtures", "negative-observed.json"),
+    observedNegativeRaw,
+  );
   const formRef = {
     apiVersion: definition.apiVersion,
     kind: definition.kind,
@@ -129,6 +145,10 @@ async function packageFixture() {
         { path: "definition.json", digest: digest(definitionRaw) },
         { path: "fixtures/desired.json", digest: digest(desiredRaw) },
         { path: "fixtures/negative.json", digest: digest(negativeRaw) },
+        {
+          path: "fixtures/negative-observed.json",
+          digest: digest(observedNegativeRaw),
+        },
       ],
     }),
   );

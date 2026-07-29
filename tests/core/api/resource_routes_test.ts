@@ -1,6 +1,10 @@
 import { test, expect } from "bun:test";
 import { createApiApp } from "../../../core/api/app.ts";
 import {
+  InMemoryPortableHostIdempotencyLedger,
+  PortableHostIdempotencyCoordinator,
+} from "../../../core/api/portable_host_idempotency.ts";
+import {
   hasInterfaceDeclarationWriteScope,
   type RegisterResourceShapeRoutesOptions,
   TAKOSUMI_INTERNAL_RESOURCE_MANAGED_BY_HEADER,
@@ -199,6 +203,19 @@ async function buildApp(
     resourceShapeRouteOptions: {
       service,
       ...routeOptions,
+      portableHostIdempotency:
+        routeOptions?.portableHostIdempotency ??
+        new PortableHostIdempotencyCoordinator(
+          new InMemoryPortableHostIdempotencyLedger(),
+        ),
+      resolveActor:
+        routeOptions?.resolveActor ??
+        (() => ({
+          actorAccountId: "self-host",
+          workspaceId: "workspace_test",
+          roles: ["owner"],
+          requestId: "request_test",
+        })),
       enabledResourceShapeKinds,
       installedResourceShapeKinds,
     },
@@ -465,6 +482,7 @@ test("portable Form host delegates exact lifecycle to the canonical Resource and
     {
       resolveActor: () => ({
         actorAccountId: "acct_portable",
+        workspaceId: "workspace_1",
         roles: ["owner"],
         scopes: ["forms:read", "resources:*"],
         requestId: "req_portable",
@@ -496,7 +514,7 @@ test("portable Form host delegates exact lifecycle to the canonical Resource and
 
   const preview = await app.request(`${base}/resources/preview`, {
     method: "POST",
-    headers: JSON_HEADERS,
+    headers: { ...JSON_HEADERS, "if-none-match": "*" },
     body: JSON.stringify(desired),
   });
   expect(preview.status).toBe(200);
@@ -693,7 +711,7 @@ test("portable Resource ownership comes only from authenticated host run context
   };
   const preview = await app.request(`${base}/resources/preview`, {
     method: "POST",
-    headers: JSON_HEADERS,
+    headers: { ...JSON_HEADERS, "if-none-match": "*" },
     body: JSON.stringify(desired),
   });
   expect(preview.status).toBe(200);
@@ -752,7 +770,7 @@ test("portable Resource ownership comes only from authenticated host run context
     (
       await crossWorkspace.request(`${base}/resources/preview`, {
         method: "POST",
-        headers: JSON_HEADERS,
+        headers: { ...JSON_HEADERS, "if-none-match": "*" },
         body: JSON.stringify(desired),
       })
     ).status,
@@ -841,7 +859,7 @@ test("portable Form host rejects incomplete and substituted exact identities", a
   };
   const substituted = await app.request(`${base}/resources/preview`, {
     method: "POST",
-    headers: JSON_HEADERS,
+    headers: { ...JSON_HEADERS, "if-none-match": "*" },
     body: JSON.stringify({
       apiVersion: "forms.takoform.com/v1alpha1",
       kind: "ObjectBucket",
@@ -863,7 +881,7 @@ test("portable Form host enforces the exact definition lifecycle operations", as
     "/apis/forms.takoform.com/v1alpha1/resources/preview",
     {
       method: "POST",
-      headers: JSON_HEADERS,
+      headers: { ...JSON_HEADERS, "if-none-match": "*" },
       body: JSON.stringify({
         apiVersion: "forms.takoform.com/v1alpha1",
         kind: "ObjectBucket",
