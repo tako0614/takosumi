@@ -57,6 +57,60 @@ function harness() {
   return { interfaces, writer };
 }
 
+test("portable launcher-shaped documents never grant authorization", async () => {
+  const { interfaces, writer } = harness();
+  const declaration = {
+    name: "yuru.launcher",
+    version: "1",
+    resource: { kind: "HttpService", name: "api" },
+    document: {
+      launcher: true,
+      endpoint: { origin: "https://yuru.example.test", path: "/" },
+    },
+  };
+  await writer.putDeclaredInterface({
+    actor: ACTOR,
+    space: "space_1",
+    expectedGeneration: 0,
+    declaration,
+  });
+  const [iface] = await interfaces.list({
+    workspaceId: "workspace_1",
+    ownerKind: "Resource",
+  });
+  expect(iface?.spec.document).toEqual(declaration.document);
+  expect(await interfaces.listBindings(iface!.metadata.id)).toEqual([]);
+
+  const explicit = await interfaces.createBinding(
+    iface!.metadata.id,
+    {
+      subjectRef: { kind: "Principal", id: "acct_authorized" },
+      permissions: ["ui.open"],
+      delivery: { type: "none" },
+    },
+    ACTOR,
+  );
+  expect(explicit.metadata.materializedFrom).toBeUndefined();
+
+  await writer.putDeclaredInterface({
+    actor: ACTOR,
+    space: "space_1",
+    expectedGeneration: 0,
+    declaration,
+  });
+  expect(await interfaces.listBindings(iface!.metadata.id)).toEqual([
+    {
+      ...explicit,
+      spec: {
+        ...explicit.spec,
+        subjectRef: { kind: "Principal", id: "acct_authorized" },
+        permissions: ["ui.open"],
+        delivery: { type: "none" },
+      },
+    },
+  ]);
+});
+
 test("portable IaC writes opaque document content to the canonical Interface ledger", async () => {
   const { interfaces, writer } = harness();
   const created = await writer.putDeclaredInterface({
