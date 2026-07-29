@@ -134,8 +134,8 @@ export class FormRegistryService {
               "update",
               "delete",
               "import",
+              "observe",
               "refresh",
-              "sync",
               "drift",
             ].includes(operation),
         ) ||

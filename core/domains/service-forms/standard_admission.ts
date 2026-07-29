@@ -21,8 +21,8 @@ const REQUIRED_OPERATIONS = [
   "update",
   "delete",
   "import",
+  "observe",
   "refresh",
-  "sync",
   "drift",
 ] as const;
 
@@ -108,7 +108,7 @@ export function evaluateStandardFormAdmission(input: {
   }
 
   // Audit the exact portable lifecycle key set: every required operation
-  // (including sync) must be explicitly attested, and no attested key may be
+  // (including observe) must be explicitly attested, and no attested key may be
   // false. A retired or unknown lifecycle key can never substitute for one.
   if (
     !REQUIRED_OPERATIONS.every(
@@ -240,9 +240,7 @@ function takoformStatus(definition: FormDefinition): string | undefined {
     : undefined;
 }
 
-function takoformForceNewFields(
-  definition: FormDefinition,
-): readonly string[] {
+function takoformForceNewFields(definition: FormDefinition): readonly string[] {
   const takoform = definition.metadata?.takoform;
   if (!isRecord(takoform) || !Array.isArray(takoform.forceNewFields)) return [];
   return takoform.forceNewFields.filter(

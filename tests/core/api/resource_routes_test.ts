@@ -716,11 +716,7 @@ test("portable Resource ownership comes only from authenticated host run context
   expect(applied.status).toBe(200);
   // The portable response deliberately does not disclose host authority.
   expect((await applied.json()).metadata.owner).toBeUndefined();
-  const canonical = await service.get(
-    "space_1",
-    "ObjectBucket",
-    "yuru-assets",
-  );
+  const canonical = await service.get("space_1", "ObjectBucket", "yuru-assets");
   expect(canonical.ok && canonical.value.metadata.owner).toEqual(owner);
 
   const spoofed = await app.request(`${base}/resources/preview`, {
@@ -892,6 +888,11 @@ test("portable Form host black-box runner proves canonical lifecycle parity", as
     name: "runner-assets",
     identity: EXACT_OBJECT_BUCKET_FORM,
     desired: { name: "runner-assets", interfaces: ["s3_api"] },
+    updatedDesired: {
+      name: "runner-assets",
+      interfaces: ["s3_api"],
+      storageClass: "infrequent_access",
+    },
     positiveFixtureName: "basic",
     negativeFixtures: [
       {
@@ -913,6 +914,8 @@ test("portable Form host black-box runner proves canonical lifecycle parity", as
   expect(report.checks).toContain("canonical-audit-parity");
   expect(report.checks).toContain("import-idempotency");
   expect(report.checks).toContain("negative-fixtures");
+  expect(report.checks).toContain("update");
+  expect(report.checks).toContain("drift");
   expect(report.fixtures.positive).toEqual([
     {
       name: "basic",
@@ -922,7 +925,7 @@ test("portable Form host black-box runner proves canonical lifecycle parity", as
   expect(report.fixtures.negative).toEqual([
     {
       name: "invalid-interfaces",
-      stage: "config",
+      stage: "desired",
       inputDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
       httpStatus: 400,
       errorCode: "invalid_argument",

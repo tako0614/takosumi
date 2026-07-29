@@ -24,7 +24,7 @@ const DEFINITION: FormDefinition = {
     "delete",
     "import",
     "refresh",
-    "sync",
+    "observe",
     "drift",
   ],
   metadata: {
@@ -77,7 +77,7 @@ function evidence(): StandardFormAdmissionEvidence {
         delete: true,
         import: true,
         refresh: true,
-        sync: true,
+        observe: true,
         drift: true,
       },
       immutability: { reviewed: true, fields: ["/name"] },
@@ -144,13 +144,13 @@ test("retired apiVersion-envelope evidence is rejected in favor of the takoform 
   expect(result.errors).toContain("unsupported standard-admission format");
 });
 
-test("lifecycle audit must attest sync; a retired observe key never substitutes", () => {
+test("lifecycle audit must attest observe; a retired sync key never substitutes", () => {
   const candidate = evidence();
   const lifecycle = {
     ...candidate.audit.lifecycle,
   } as unknown as Record<string, boolean>;
-  delete lifecycle.sync;
-  lifecycle.observe = true;
+  delete lifecycle.observe;
+  lifecycle.sync = true;
   const result = evaluateStandardFormAdmission({
     definition: DEFINITION,
     package: PACKAGE,

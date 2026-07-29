@@ -1086,6 +1086,43 @@ test("exact Form path requires installed authority and explicitly backfills lega
   if (!changed.ok) expect(changed.error.code).toBe("form_identity_conflict");
 });
 
+test("exact Form desired-state admission fails closed before adapter preview", async () => {
+  const adapter = new PluginSpyAdapter();
+  const calls: {
+    request: Parameters<
+      NonNullable<ResourceShapeServiceDeps["formDesiredStateAdmission"]>
+    >[0]["request"];
+    definition: FormDefinition;
+  }[] = [];
+  const service = new ResourceShapeService({
+    stores: createInMemoryResourceShapeStores(),
+    adapter,
+    ...directOperationLedger(),
+    now: () => NOW,
+    moduleRegistry: TEST_RESOURCE_SHAPE_MODULE_REGISTRY,
+    formRegistry: exactFormRegistry(),
+    formDesiredStateAdmission: async (input) => {
+      calls.push(input);
+      return "desired state does not satisfy the exact installed Form schema";
+    },
+  });
+  await seed(service);
+
+  const preview = await service.preview({ ...APPLY, form: EXACT_FORM });
+
+  expect(preview).toEqual({
+    ok: false,
+    error: {
+      code: "invalid_spec",
+      message: "desired state does not satisfy the exact installed Form schema",
+    },
+  });
+  expect(calls).toHaveLength(1);
+  expect(calls[0]?.request.form).toEqual(EXACT_FORM);
+  expect(calls[0]?.definition.identity).toEqual(EXACT_FORM);
+  expect(adapter.previewInputs).toHaveLength(0);
+});
+
 test("exact direct-plugin lifecycle propagates one immutable Form through Runs, adapter inputs, and NativeResource evidence", async () => {
   const stores = createInMemoryResourceShapeStores();
   const adapter = new PluginSpyAdapter();

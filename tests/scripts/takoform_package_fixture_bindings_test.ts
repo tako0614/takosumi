@@ -133,7 +133,9 @@ async function packageFixture() {
     }),
   );
   const identity: InstalledFormReference = {
-    formRef,
+    type: "object_bucket",
+    version: formRef.definitionVersion,
+    schemaDigest: formRef.schemaDigest,
     packageDigest: `sha256:${"f".repeat(64)}`,
   };
   return {

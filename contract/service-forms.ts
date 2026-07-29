@@ -70,8 +70,8 @@ export type FormOperation =
   | "update"
   | "delete"
   | "import"
+  | "observe"
   | "refresh"
-  | "sync"
   | "drift";
 
 /** Portable, data-only mapping sources every conforming host understands. */

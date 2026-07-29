@@ -1388,7 +1388,7 @@ function resourceShapeSchemas(): Record<string, Record<string, unknown>> {
               "delete",
               "import",
               "refresh",
-              "sync",
+              "observe",
               "drift",
             ],
           },

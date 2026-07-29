@@ -1,11 +1,10 @@
 #!/usr/bin/env bun
-import type {
-  InstalledFormReference,
-  JsonObject,
-  StandardFormNegativeFixture,
-} from "takosumi-contract";
+import type { InstalledFormReference, JsonObject } from "takosumi-contract";
 import { isInstalledFormReference } from "takosumi-contract";
-import { runPortableFormHostConformance } from "../core/conformance/portable_form_host.ts";
+import {
+  runPortableFormHostConformance,
+  type PortableFormHostNegativeFixture,
+} from "../core/conformance/portable_form_host.ts";
 
 const args = parseArgs(process.argv.slice(2));
 validateArgs(args);
@@ -21,6 +20,12 @@ if (!isInstalledFormReference(identity)) {
 const desired = await readJson(required(args, "desired"));
 if (!isObject(desired))
   throw new TypeError("--desired must contain a JSON object");
+const updatedDesired = args["updated-desired"]
+  ? await readJson(args["updated-desired"])
+  : undefined;
+if (updatedDesired !== undefined && !isObject(updatedDesired)) {
+  throw new TypeError("--updated-desired must contain a JSON object");
+}
 const positiveFixtureName = args["positive-fixture-name"] ?? "canonical";
 const negativeFixtures = args["negative-fixtures"]
   ? await readNegativeFixtures(args["negative-fixtures"])
@@ -46,6 +51,7 @@ const report = await runPortableFormHostConformance({
   name,
   identity,
   desired: desired as JsonObject,
+  ...(updatedDesired ? { updatedDesired: updatedDesired as JsonObject } : {}),
   positiveFixtureName,
   negativeFixtures,
   ...(token ? { token } : {}),
@@ -81,6 +87,7 @@ function validateArgs(values: Readonly<Record<string, string>>): void {
     "positive-fixture-name",
     "space",
     "token-env",
+    "updated-desired",
   ]);
   for (const name of Object.keys(values)) {
     if (!allowed.has(name)) {
@@ -90,7 +97,7 @@ function validateArgs(values: Readonly<Record<string, string>>): void {
 }
 
 function usage(): string {
-  return "usage: --endpoint URL --space ID --name NAME --identity FILE --desired FILE [--positive-fixture-name NAME] [--negative-fixtures FILE] [--token-env ENV] [--import-native-id-env ENV]";
+  return "usage: --endpoint URL --space ID --name NAME --identity FILE --desired FILE [--updated-desired FILE] [--positive-fixture-name NAME] [--negative-fixtures FILE] [--token-env ENV] [--import-native-id-env ENV]";
 }
 
 function required(values: Record<string, string>, key: string): string {
@@ -105,7 +112,7 @@ async function readJson(path: string): Promise<unknown> {
 
 async function readNegativeFixtures(
   path: string,
-): Promise<readonly StandardFormNegativeFixture[]> {
+): Promise<readonly PortableFormHostNegativeFixture[]> {
   const value = await readJson(path);
   if (!Array.isArray(value) || !value.every(isNegativeFixture)) {
     throw new TypeError(
@@ -117,11 +124,11 @@ async function readNegativeFixtures(
 
 function isNegativeFixture(
   value: unknown,
-): value is StandardFormNegativeFixture {
+): value is PortableFormHostNegativeFixture {
   return (
     isObject(value) &&
     typeof value.name === "string" &&
-    value.stage === "config" &&
+    (value.stage === "config" || value.stage === "desired") &&
     isObject(value.input) &&
     typeof value.expectedErrorCode === "string"
   );

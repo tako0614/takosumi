@@ -284,6 +284,15 @@ export interface ResourceShapeServiceDeps {
     readonly request: ApplyResourceRequest;
     readonly definition: FormDefinition;
   }) => Promise<string | undefined>;
+  /**
+   * Host-installed validator for the exact Form Definition desired schema.
+   * Core never interprets a third-party schema implicitly; a composition that
+   * installs executable Form Packages must inject the verifier-derived parser.
+   */
+  readonly formDesiredStateAdmission?: (input: {
+    readonly request: ApplyResourceRequest;
+    readonly definition: FormDefinition;
+  }) => Promise<string | undefined>;
   /** Absolute providerConfig URL values trusted by this operator. */
   readonly allowedProviderConfigUrls?: readonly string[];
   /** @deprecated Use allowedProviderConfigUrls. */
@@ -362,6 +371,7 @@ export class ResourceShapeService {
   readonly #schemaRegistry: ResourceShapeSchemaRegistry;
   readonly #formRegistry: ResourceShapeServiceDeps["formRegistry"];
   readonly #requiredFormInterfaceAdmission: ResourceShapeServiceDeps["requiredFormInterfaceAdmission"];
+  readonly #formDesiredStateAdmission: ResourceShapeServiceDeps["formDesiredStateAdmission"];
   readonly #activity: ActivityLedger | undefined;
   readonly #operationRuns: ResourceShapeServiceDeps["operationRuns"];
   readonly #newOperationNonce: () => string;
@@ -386,6 +396,7 @@ export class ResourceShapeService {
       deps.schemaRegistry ?? EMPTY_RESOURCE_SHAPE_SCHEMA_REGISTRY;
     this.#formRegistry = deps.formRegistry;
     this.#requiredFormInterfaceAdmission = deps.requiredFormInterfaceAdmission;
+    this.#formDesiredStateAdmission = deps.formDesiredStateAdmission;
     this.#allowedProviderConfigUrls = new Set(
       (
         deps.allowedProviderConfigUrls ??
@@ -808,7 +819,7 @@ export class ResourceShapeService {
     const evidence = await resourceDeploymentEvidence(req, output, plan);
     const adapterInput = {
       resourceId: output.resolutionLock.resourceId,
-      ...(req.owner ?? existing?.owner
+      ...((req.owner ?? existing?.owner)
         ? { owner: req.owner ?? existing?.owner }
         : {}),
       resourceGeneration: (existing?.generation ?? 0) + 1,
@@ -4967,6 +4978,30 @@ export class ResourceShapeService {
           message: missingInterfaceCapability,
         },
       };
+    }
+    if (
+      options.skipRequiredInterfaceAdmission !== true &&
+      this.#formDesiredStateAdmission
+    ) {
+      let desiredStateFailure: string | undefined;
+      try {
+        desiredStateFailure = await this.#formDesiredStateAdmission({
+          request,
+          definition,
+        });
+      } catch {
+        desiredStateFailure =
+          "exact Form desired-state admission could not be verified";
+      }
+      if (desiredStateFailure) {
+        return {
+          ok: false,
+          error: {
+            code: "invalid_spec",
+            message: desiredStateFailure,
+          },
+        };
+      }
     }
     if (
       options.skipRequiredInterfaceAdmission !== true &&

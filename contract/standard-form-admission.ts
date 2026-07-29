@@ -58,8 +58,8 @@ export interface StandardFormAdmissionEvidence {
       readonly update: true;
       readonly delete: true;
       readonly import: true;
+      readonly observe: true;
       readonly refresh: true;
-      readonly sync: true;
       readonly drift: true;
     };
     readonly immutability: {

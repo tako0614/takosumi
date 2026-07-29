@@ -1,25 +1,35 @@
 import { createHash } from "node:crypto";
 import { relative, resolve } from "node:path";
-import type {
-  InstalledFormReference,
-  JsonObject,
-  StandardFormNegativeFixture,
-} from "takosumi-contract";
+import type { InstalledFormReference, JsonObject } from "takosumi-contract";
+import { shapeKindForPortableType } from "takosumi-contract";
 import { canonicalJson } from "../../core/adapters/takoform/canonical_json.ts";
+import type { PortableFormHostNegativeFixture } from "../../core/conformance/portable_form_host.ts";
 
 export async function readExactPackageFixtureBindings(input: {
   readonly root: string;
   readonly identity: InstalledFormReference;
   readonly positiveFixtureName: string;
   readonly desired: JsonObject;
-  readonly negativeFixtures: readonly StandardFormNegativeFixture[];
+  readonly negativeFixtures: readonly PortableFormHostNegativeFixture[];
 }): Promise<{
   readonly positive: string;
   readonly negative: Readonly<Record<string, string>>;
 }> {
   const root = resolve(input.root);
   const index = await readPackageObject(root, "package-index.json");
-  if (canonicalJson(index.formRef) !== canonicalJson(input.identity.formRef)) {
+  const kind = shapeKindForPortableType(input.identity.type);
+  if (!kind) {
+    throw new TypeError(
+      "--identity contains an unsupported portable Form type",
+    );
+  }
+  const formRef = {
+    apiVersion: "forms.takoform.com/v1alpha1",
+    kind,
+    definitionVersion: input.identity.version,
+    schemaDigest: input.identity.schemaDigest,
+  };
+  if (canonicalJson(index.formRef) !== canonicalJson(formRef)) {
     throw new TypeError(
       "--package-root FormRef does not equal the installed identity",
     );
@@ -50,7 +60,6 @@ export async function readExactPackageFixtureBindings(input: {
     listed,
   );
   const definition = definitionReadback.value;
-  const formRef = input.identity.formRef;
   if (
     definition.apiVersion !== formRef.apiVersion ||
     definition.kind !== formRef.kind ||

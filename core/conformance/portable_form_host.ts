@@ -8,6 +8,7 @@ import type {
 import {
   installedFormReferenceKey,
   isInstalledFormReference,
+  portableTypeForShapeKind,
   shapeKindForPortableType,
   TAKOFORM_FORM_HOST_API_VERSION,
   TAKOFORM_FORM_HOST_API_PATH,
@@ -23,18 +24,32 @@ export interface PortableFormHostConformanceInput {
   readonly name: string;
   readonly identity: InstalledFormReference;
   readonly desired: JsonObject;
+  /** A second schema-valid desired document used to prove an actual update. */
+  readonly updatedDesired?: JsonObject;
   /** Exact retained fixture name covered by the lifecycle run. */
   readonly positiveFixtureName?: string;
   /**
-   * Retained negative fixtures that the host must actually reject. The v1
-   * runner currently executes config-stage fixtures only; unsupported stages
-   * fail closed rather than being copied into evidence without execution.
+   * Retained negative desired-state fixtures that the host must actually
+   * reject. The legacy `config` spelling remains input-only during migration;
+   * unsupported stages fail closed instead of becoming unexecuted evidence.
    */
-  readonly negativeFixtures?: readonly StandardFormNegativeFixture[];
+  readonly negativeFixtures?: readonly PortableFormHostNegativeFixture[];
   /** When present, the runner also proves exact import replay and cleanup. */
   readonly importNativeId?: string;
   readonly fetch?: typeof globalThis.fetch;
 }
+
+/**
+ * The current Takoform package vocabulary calls the input document `desired`.
+ * `config` remains accepted only so older callers can be migrated without
+ * changing what the host executes; emitted evidence always uses `desired`.
+ */
+export type PortableFormHostNegativeFixture = Omit<
+  StandardFormNegativeFixture,
+  "stage"
+> & {
+  readonly stage: StandardFormNegativeFixture["stage"] | "desired";
+};
 
 export interface PortableFormHostConformanceReport {
   readonly apiVersion: "takosumi.portable-form-host-conformance/v1";
@@ -49,7 +64,7 @@ export interface PortableFormHostConformanceReport {
     }[];
     readonly negative: readonly {
       readonly name: string;
-      readonly stage: "config";
+      readonly stage: "desired";
       readonly inputDigest: string;
       readonly httpStatus: 400;
       readonly errorCode: string;
@@ -208,9 +223,49 @@ export async function runPortableFormHostConformance(
   );
   checks.push("exact-digest-substitution-rejected");
 
-  const version = resource.metadata.resourceVersion;
+  let version = resource.metadata.resourceVersion;
   if (!version) throw new Error("portable Resource omitted resourceVersion");
-  await jsonRequest(
+
+  if (input.updatedDesired) {
+    const updateBody = resourceBody(input, input.name, input.updatedDesired);
+    const updatePreview = await jsonRequest(
+      fetcher,
+      `${base}/resources/preview`,
+      {
+        method: "POST",
+        headers: jsonHeaders(headers),
+        body: JSON.stringify(updateBody),
+      },
+    );
+    const updatePlanDigest = stringAt(updatePreview, "review", "planDigest");
+    const updated = asTakoformResource(
+      await jsonRequest(fetcher, resourcePath, {
+        method: "PUT",
+        headers: jsonHeaders({
+          ...headers,
+          "if-match": `"${version}"`,
+          "idempotency-key": "conformance-update-1",
+        }),
+        body: JSON.stringify({
+          ...updateBody,
+          review: { planDigest: updatePlanDigest },
+        }),
+      }),
+    );
+    if (
+      updated.id !== canonicalResourceId ||
+      !updated.metadata.resourceVersion ||
+      updated.metadata.resourceVersion === version
+    ) {
+      throw new Error(
+        "portable update did not preserve identity and advance resourceVersion",
+      );
+    }
+    version = updated.metadata.resourceVersion;
+    checks.push("update");
+  }
+
+  const observation = await jsonRequest(
     fetcher,
     `${resourcePath}/observe?space=${encodeURIComponent(input.space)}&${exact}`,
     {
@@ -222,7 +277,16 @@ export async function runPortableFormHostConformance(
       },
     },
   );
+  const observationStatus = stringAt(observation, "observation", "status");
+  if (
+    observationStatus !== "current" &&
+    observationStatus !== "drifted" &&
+    observationStatus !== "missing"
+  ) {
+    throw new Error("portable drift check omitted a canonical status");
+  }
   checks.push("observe");
+  checks.push("drift");
   await jsonRequest(
     fetcher,
     `${resourcePath}/refresh?space=${encodeURIComponent(input.space)}&${exact}`,
@@ -332,7 +396,7 @@ async function runNegativeFixtures(
 ): Promise<
   readonly {
     readonly name: string;
-    readonly stage: "config";
+    readonly stage: "desired";
     readonly inputDigest: string;
     readonly httpStatus: 400;
     readonly errorCode: string;
@@ -342,7 +406,7 @@ async function runNegativeFixtures(
   const names = new Set<string>();
   const report: {
     name: string;
-    stage: "config";
+    stage: "desired";
     inputDigest: string;
     httpStatus: 400;
     errorCode: string;
@@ -357,7 +421,7 @@ async function runNegativeFixtures(
       throw new Error(`duplicate negative fixture name: ${fixture.name}`);
     }
     names.add(fixture.name);
-    if (fixture.stage !== "config") {
+    if (fixture.stage !== "config" && fixture.stage !== "desired") {
       throw new Error(
         `portable host runner does not execute negative fixture stage ${fixture.stage}`,
       );
@@ -381,7 +445,7 @@ async function runNegativeFixtures(
     );
     report.push({
       name: fixture.name,
-      stage: "config",
+      stage: "desired",
       inputDigest: await jsonDigest(fixture.input),
       httpStatus: 400,
       errorCode: fixture.expectedErrorCode,
@@ -485,18 +549,7 @@ function installedFormReferenceFromPortable(
     return undefined;
   }
   const formRef = value.formRef;
-  const type = [
-    "edge_worker",
-    "object_bucket",
-    "kv_store",
-    "queue",
-    "sql_database",
-    "container_service",
-    "vector_index",
-    "durable_workflow",
-    "stateful_actor_namespace",
-    "schedule",
-  ].find((candidate) => shapeKindForPortableType(candidate) === formRef.kind);
+  const type = portableTypeForShapeKind(formRef.kind as string);
   if (!type) return undefined;
   const translated = {
     type,
