@@ -75,13 +75,13 @@ Content-Type: application/json
 
 `inputs` は、名前ごとにどこから値を取るかを書きます。`source` は 3 通りです。
 
-| `source` | 値の出どころ | 一緒に書くもの |
-| --- | --- | --- |
-| `literal` | 宣言に直接書いた値 | `value` |
-| `capsule_output` | Capsule の公開 Output | `output_name`、任意で `capsule_id` |
-| `resource_output` | Resource の公開 Output | `resource_id`、`output_name` |
+| `source`          | 値の出どころ           | 一緒に書くもの                   |
+| ----------------- | ---------------------- | -------------------------------- |
+| `literal`         | 宣言に直接書いた値     | `value`                          |
+| `capsule_output`  | Capsule の公開 Output  | `outputName`、任意で `capsuleId` |
+| `resource_output` | Resource の公開 Output | `resourceId`、`outputName`       |
 
-`capsule_output` で `capsule_id` を省くと、宣言している Capsule 自身の Output を
+`capsule_output` で `capsuleId` を省くと、宣言している Capsule 自身の Output を
 読みます。
 
 Output の値が構造を持つときは `pointer` で一部だけを取り出せます。書き方は RFC 6901 の
@@ -100,7 +100,7 @@ JSON Pointer です。
 }
 ```
 
-`resource_uri_input` には、トークンの宛先として使う input の名前を書きます。解決された
+`resourceUriInput` には、トークンの宛先として使う input の名前を書きます。解決された
 値は Interface の `status.resolvedInputs`、その出どころは `status.provenance` で
 読めます。
 
@@ -116,7 +116,7 @@ curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/v1/interfaces/if_example/bindings" \
 
 ## 呼び出し用のトークン
 
-認可済みの Interface に対して、その場限りのトークンを発行します。要求できるのは、
+認可済みの Interface に対して、短時間だけ有効なトークンを発行します。要求できるのは、
 その Interface を呼ぶ実行環境に渡された OAuth アクセストークンだけです。ここまでの例で
 使ってきた control plane のトークンで叩くと `403` が返ります。
 
@@ -131,9 +131,10 @@ curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/v1/interfaces/if_example/token" \
 
 - 応答は `access_token` / `token_type` / `expires_in` / `expires_at` / `scope` /
   `resource` からなる OAuth 形式です
-- 接頭辞は `taksrv_` です
-- **有効期間はごく短く、更新用トークンはありません。** 都度取り直します
+- **有効期間は最大 60 秒で、更新用トークンはありません。** 必要なときに取り直します
 - 使える範囲は要求した権限と、その Interface が示す宛先に限られます
+- token の文字列形式は発行する host が決めます。同梱の Accounts 実装は `taksrv_`
+  から始まる token を返しますが、client は接頭辞で挙動を変えてはいけません
 
 長期間使い回すためのものではないので、実行のたびに取得する前提で組んでください。
 

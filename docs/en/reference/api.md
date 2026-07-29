@@ -43,21 +43,34 @@ Example:
 
 ```json
 {
-  "apiVersions": ["takosumi.dev/v1alpha1"],
+  "product": "takosumi",
+  "name": "Takosumi",
+  "auth": {
+    "oidc": true,
+    "password": false
+  },
+  "apiBaseUrl": "https://takosumi.example.com/api/v1",
+  "api_versions": ["takosumi.dev/v1alpha1"],
   "features": {
     "stacks": true,
-    "resourceShapes": true,
-    "opentofuRunner": true,
+    "resource_shapes": true,
+    "opentofu_runner": true,
     "oidc": true,
-    "compatS3": true,
-    "billing": false
+    "workload_identity": true,
+    "compat_framework": true,
+    "compatibility_profiles": ["compat.takoform.v1"],
+    "interfaces": true
   },
   "endpoints": {
-    "api": "https://takosumi.example.com",
-    "oidcIssuer": "https://takosumi.example.com"
+    "api": "https://takosumi.example.com/api",
+    "capabilities": "https://takosumi.example.com/v1/capabilities",
+    "oidc_issuer": "https://takosumi.example.com"
   }
 }
 ```
+
+Field names are case-sensitive. `endpoints.api` is `<origin>/api`, while
+`apiBaseUrl` is `<origin>/api/v1`.
 
 ## Object Model
 
@@ -95,8 +108,10 @@ Resource Shape objects use a Kubernetes-style shape.
 }
 ```
 
-`spec` is desired state. `status` is observed state. Secret material is never
-stored in `spec`, `status`, OpenTofu state, logs, or audit records.
+`spec` is desired state. `status` is observed state. Secret values do not
+belong in `spec`, `status`, published Outputs, logs, or audit records. Provider
+managed OpenTofu state can contain secrets, so Takosumi encrypts the complete
+state and decrypts it only for authorized execution.
 
 ## Authentication
 
@@ -369,17 +384,12 @@ create or update a Resource, does not select a Target, and does not expose bytes
 or credentials through Run, Output, or Interface records. Host support and the
 maximum body size are kind/purpose-specific; unsupported staging fails closed.
 
-OSS preview does not require pricing. On a Cloud endpoint with the commercial
-billing extension, billable preview returns a `DeploymentQuote` from a
-exact OSS `OfferingSelection`, closed `CommercialOfferingBinding`, and
-versioned `PriceCatalog`; apply requires `quoteId + quoteDigest`. The quote binds
-the Resource spec digest, Offering selection and resolution fingerprint,
-commercial-binding and PriceCatalog versions, SKU line items, currency,
-estimated total micros, and issue/expiry times. Cloud reserves before backend work, captures
-after canonical Resource success, releases on failure/cancellation, and
-reconciles rated UsageEvents with payment-provider invoice lines. The wire field
-is advertised by a versioned commercial extension contract; Cloud-only fields
-are not added to the portable OSS Resource object.
+OSS preview does not require pricing. A host may advertise an extension that
+adds a quote to preview. When it does, apply verifies that neither the Resource
+nor the quote has changed. Extension-specific fields are not added to the OSS
+Resource object. See the
+[Cloud pricing page](https://app.takosumi.com/docs/en/pricing) for Takosumi
+Cloud billing behavior.
 
 Resource listing uses keyset pagination over `createdAt` and Resource id. Every
 non-final page returns `nextCursor`; clients must treat it as opaque and echo it
@@ -455,8 +465,8 @@ operator rather than request JSON. Create pins an exact `FormRef` plus
 the resulting revision. Unknown fields are rejected, so price, SKU, payment,
 billing, managed capacity, region inventory, SLA, and support cannot be smuggled
 into this OSS policy record. A Form-backed Offering resolver rechecks that exact
-identity and activation. Commercial availability remains in a closed
-`CommercialOfferingBinding` keyed to the resulting exact `OfferingSelection`.
+identity and activation. Host-specific pricing and availability rules live in a
+separate extension.
 
 The operator CLI maps directly to this API:
 
@@ -514,21 +524,22 @@ POST /v1/offering-selections/resolve
 
 Each Offering pins an exact `catalog id/version + offering id/version`, an open
 subject `type + ref + version + digest`, exact requirement references, audience,
-profile, region, maturity, and active state. A selection pins the exact subject
-and requirements, resolver id, resolution fingerprint, and resolution time.
+profile, region, maturity, and active state. The API returns that exact choice
+as an `OfferingSelection`. It pins the subject and requirements, resolver id,
+resolution fingerprint, and resolution time.
 There is no `latest` fallback. Unknown subject types, absent resolvers, inactive
 catalogs/Offerings, audience mismatches, and stale requirements fail closed. A
 Form resolver rechecks exact FormRef/package/FormActivation evidence, while a
 non-Form subject can use another resolver in the same engine.
 
 OSS Offering and selection state contains no price, SKU, payment, manager,
-credentials, raw capacity, SLA, or support. Takosumi Cloud attaches a closed
-`CommercialOfferingBinding` only after Core returns an exact
-`OfferingSelection`, pinning implementation, manager, capacity, SKU,
-PriceCatalog, and payment evidence. Cloud owns neither a parallel catalog
-decision nor a second selection engine.
+credentials, raw capacity, SLA, or support. A hosted service can attach those
+details through a separate extension after Core has returned an exact
+selection. It does not replace the OSS catalog or selection engine.
 
-Current v1alpha1 public shapes:
+The Takosumi v1alpha1 compatibility schema defines the shapes below. The shapes
+you can actually create depend on the endpoint; query
+`/v1/form-availability` before using one.
 
 ```text
 EdgeWorker

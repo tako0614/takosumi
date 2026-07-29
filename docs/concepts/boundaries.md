@@ -1,64 +1,70 @@
-# 製品の境界
+# Takosumi と Takosumi Cloud
 
-Takosumi という名前が指すものは 2 つです。修飾が付いていなければ、ソフトウェアの
-ことです。自分の利用者に向けて運用している状態を指すのに、別の名前は使いません。
+同じ名前がソフトウェアと公式サービスを指さないよう、このドキュメントでは次のように
+区別します。
 
-| 名前 | 指すもの |
-| --- | --- |
-| **Takosumi** | AGPL-3.0 で公開しているソフトウェア。誰でも自分の環境で動かせます |
-| **Takosumi Cloud** | 公式に運用している hosted サービス |
+| 名前               | 意味                                                 |
+| ------------------ | ---------------------------------------------------- |
+| **Takosumi**       | このリポジトリで公開している AGPL-3.0 のソフトウェア |
+| **Takosumi Cloud** | `app.takosumi.com` で提供する公式ホスティング        |
 
-## Takosumi が持つもの
+## ソフトウェアが提供するもの
 
-- Git を正とする OpenTofu control plane
-- Capsule と Run の lifecycle、状態と監査の台帳
-- 任意で有効にできる Resource (Service Form host)
-- 互換 API の枠組みと Adapter の仕組み
-- Interface と InterfaceBinding
-- CLI、dashboard、accounts
+Takosumi OSS には次が含まれます。
 
-このドキュメントが説明するのはこの層です。**どの endpoint でも成り立つ挙動**だけを
-書いています。
+- Git module の plan、apply、state、output、監査記録
+- provider の接続情報を保存し、runner に安全に渡す仕組み
+- dashboard、API、CLI、サインイン
+- 型付き Resource を扱うための共通 lifecycle
+- デプロイしたものの接続先と利用許可を記録する仕組み
 
-## 運用主体が持つもの
+どのクラウドを使うかは module、provider、または運用者が導入した Resource の実装が
+決めます。Takosumi OSS は特定のクラウドアカウントや provider を必須にしません。
 
-同じソフトウェアでも、次は運用する主体が決めます。
+## 運用者が決めるもの
 
-- どの Resource の種類を有効にするか
-- 配置先 (TargetPool) と、そこで使える実装
-- 課金を記録するか、請求するか
-- 定期観測の頻度と並列数
-- production への deploy と secret の運用手順
+同じ Takosumi を動かしていても、設置先によって次は異なります。
 
-したがって「Takosumi で X ができるか」の答えは endpoint によって変わります。
-確認する方法は 1 つで、その endpoint に聞きます。
+- 利用できる Resource の種類
+- Resource を実際に作るクラウドと実装
+- 保存容量、利用上限、バックアップ期間
+- 利用量を記録するだけか、請求まで行うか
+- 更新、障害対応、support、SLA
+
+その endpoint が提供する機能は、名前や edition から推測せずに確認します。
 
 ```bash
-curl -s https://takosumi.example.com/.well-known/takosumi
+curl https://takosumi.example.com/.well-known/takosumi
 ```
 
-`features` に何が有効かが入っています。edition の名前ではなく、この capability を
-見てください。
+または、認証済みの API から `/v1/capabilities` を取得します。
 
-## Takosumi Cloud が持つもの
+## Takosumi Cloud が追加するもの
 
-公式の hosted サービスにだけあるものです。
+Takosumi Cloud は、Takosumi OSS を運用した公式サービスです。Cloud が追加するのは、
+managed リソースの実装、公式の容量、料金と支払い、support、SLA、abuse 対策です。
 
-- 公式の managed な配置先と、その内部実装
-- 請求を伴う課金
-- support と SLA
-- 公開価格、無料枠、残高不足時の挙動
+これらは OSS の一般仕様ではありません。料金や利用上限を確認するときは
+[Takosumi Cloud のドキュメント](https://app.takosumi.com/docs/)を参照してください。
 
-**これらはソフトウェアの機能ではありません。** 料金や managed リソースの使い方は
-Cloud 側のドキュメントにあります。
+Cloud 側の実装は OSS の contract を利用しますが、OSS から Cloud の private code や
+Stripe へ依存することはありません。
 
-## self-host との関係
+## Takoform の位置づけ
 
-software を自分で動かす権利と、公式サービスを使う権利は別です。self-host した
-endpoint は、上の「運用主体が持つもの」を自分で決めます。その endpoint の利用者に
-とっては、あなたが operator です。
+Takoform は、Resource の形を provider やクラウドから分離して記述するための独立した
+仕様とツールです。Takosumi は Takoform を受け付けることができますが、Takoform だけが
+Resource の入口ではありません。
 
-## 関連
+同様に、Cloudflare、AWS などの Terraform / OpenTofu provider は runner から見て通常の
+provider です。Takosumi Cloud も、利用者が接続した別のクラウドも、共通の Run と
+Resource lifecycle を通ります。
 
-- [全体像](./index.md)
-- [用語集](../reference/glossary.md)
+## self-host する場合
+
+自分で Takosumi を運用する場合は、あなたが上記の運用者になります。software update、
+secret、データベース、runner、バックアップ、Resource の実装を自分で管理します。
+
+構成の選び方は[自分で動かす](./self-host.md)、具体的な作業は
+[リポジトリの運用手順](https://github.com/tako0614/takosumi/blob/main/docs/operations/README.md)に
+あります。

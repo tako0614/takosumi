@@ -22,12 +22,12 @@ curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/sources" \
   }'
 ```
 
-| フィールド | 省略時 | 意味 |
-| --- | --- | --- |
-| `defaultRef` | Git の `HEAD` | 追跡する branch / tag / commit |
-| `defaultPath` | `.` | リポジトリ内の module ディレクトリ |
-| `authConnectionId` | なし | 非公開リポジトリを読むための Connection |
-| `autoSync` | `false` | operator の scheduler が Git ref を定期的に確認する |
+| フィールド         | 省略時        | 意味                                                |
+| ------------------ | ------------- | --------------------------------------------------- |
+| `defaultRef`       | Git の `HEAD` | 追跡する branch / tag / commit                      |
+| `defaultPath`      | `.`           | リポジトリ内の module ディレクトリ                  |
+| `authConnectionId` | なし          | 非公開リポジトリを読むための Connection             |
+| `autoSync`         | `false`       | operator の scheduler が Git ref を定期的に確認する |
 
 作成の応答には `hookSecret` が含まれます。**これは作成時に 1 度だけ平文で返り、
 以降は取得できません。** Source レコードにはハッシュだけを保存します。Git ホストの
@@ -78,8 +78,13 @@ curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/workspaces/ws_example/capsules" \
 ```
 
 Capsule が追跡している Source に新しい commit が来ると、Capsule は `stale` に
-なります。**stale は状態であって動作ではありません。** 自動では何も起きず、次に
-進むには計画を作って人が確認します。
+なります。**stale は状態であって動作ではありません。** 通常はそこで止まり、次の
+plan と apply は人が始めます。
+
+Capsule で `autoUpdate` を明示的に有効にした場合だけ、新しい snapshot ごとに 1 回、
+更新用の plan を作ります。削除を含まず、承認や policy の gate がない clean plan は
+apply まで続けられます。それ以外は Run 画面で停止します。単なる `stale`、drift の
+検出、古い snapshot の再通知が無条件に apply を起動することはありません。
 
 ## 画面と外部リンク
 

@@ -47,19 +47,22 @@ curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/capsules/cap_db/outputs" \
   -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
 ```
 
-## Where secrets are never stored
+## Secrets and state
 
-None of the following ever hold a secret value.
+Secret values do not belong in these public surfaces.
 
 ```text
 spec
 status
-OpenTofu state
 Output
 Interface
 logs
 audit records
 ```
+
+Provider-managed OpenTofu state can contain secrets such as connection
+strings. Takosumi encrypts the complete state and decrypts it only for an
+authorized Run. Do not treat state like a published Output or a general export.
 
 ## Passing values to another Capsule
 

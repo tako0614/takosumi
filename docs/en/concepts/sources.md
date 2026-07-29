@@ -22,12 +22,12 @@ curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/sources" \
   }'
 ```
 
-| Field | When omitted | Meaning |
-| --- | --- | --- |
-| `defaultRef` | Git `HEAD` | The branch, tag, or commit to track |
-| `defaultPath` | `.` | The module directory inside the repository |
-| `authConnectionId` | none | The Connection used to read a private repository |
-| `autoSync` | `false` | The operator's scheduler checks the Git ref periodically |
+| Field              | When omitted | Meaning                                                  |
+| ------------------ | ------------ | -------------------------------------------------------- |
+| `defaultRef`       | Git `HEAD`   | The branch, tag, or commit to track                      |
+| `defaultPath`      | `.`          | The module directory inside the repository               |
+| `authConnectionId` | none         | The Connection used to read a private repository         |
+| `autoSync`         | `false`      | The operator's scheduler checks the Git ref periodically |
 
 The creation response carries a `hookSecret`. **It is returned in the clear exactly once,
 at creation, and cannot be retrieved afterwards.** The Source record stores only a hash.
@@ -78,8 +78,13 @@ curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/workspaces/ws_example/capsules" \
 ```
 
 When a new commit arrives on the Source a Capsule tracks, the Capsule becomes `stale`.
-**`stale` is a state, not an action.** Nothing happens on its own; to move forward you
-create a plan and a person reads it.
+**`stale` is a state, not an action.** The default is to stop there; a person starts the
+next plan and apply.
+
+Only a Capsule with `autoUpdate` explicitly enabled creates one update plan for each new
+snapshot. A clean plan can continue to apply when it has no deletion, approval, or policy
+gate. Any gated plan stops on the Run page. A `stale` marker, drift detection, or a repeat
+notification for an old snapshot never starts an apply unconditionally.
 
 ## The screen, and links from outside
 

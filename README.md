@@ -2,147 +2,116 @@
 
 English: [README.en.md](README.en.md)
 
-Takosumi は、Git に置いた OpenTofu/Terraform module を、計画 → 確認 → 反映の流れで安全にデプロイ・管理する
-OSS の基盤ソフトウェア (control plane) です。普通の OpenTofu/Terraform module をそのまま実行でき、専用の
-設定ファイルや独自言語は要りません。
+Takosumi は、Git に置いた OpenTofu / Terraform module をチームで安全に実行するための
+オープンソースの管理サーバーです。
 
-できること:
+既存の module と provider をそのまま使い、次の部分を Takosumi が引き受けます。
 
-- Git URL から module を取り込み、アプリやインフラとして登録する (Capsule)
-- クラウドの認証情報を安全に保管し、実行中だけ環境変数やファイルとして渡す (ProviderConnection)
-- 反映する前に変更内容を確認し、承認してから反映する (plan / apply の Run)
-- 変更のたびに状態を保存し、いつ誰が何を変えたかを記録する (StateVersion / AuditEvent)
-- アプリが公開する URL などの値を記録し、別のアプリの入力につなぐ (Output)
+- 変更内容を `plan` で確認してから、同じ計画を `apply` する
+- 実行した commit、実行者、時刻、結果を記録する
+- state、output、ログを実行ごとに保存する
+- クラウドの認証情報を保管し、実行中の runner にだけ渡す
+- Git から取り込んだアプリやインフラを、画面と API から管理する
 
-Software docs: <https://takosumi.com/docs/>
-Hosted Cloud docs: <https://app.takosumi.com/docs/>
+Takosumi 専用の `.tf` 記法や first-party provider はありません。Cloudflare、AWS、
+Kubernetes などは、それぞれの既存 provider が操作します。
 
-## 始め方 (ローカル control plane)
+[ソフトウェアのドキュメント](https://takosumi.com/docs/) ·
+[Takosumi Cloud のドキュメント](https://app.takosumi.com/docs/)
 
-curl やテストから `/api/v1` contract を触りたい場合は、ローカルで control-plane service を直接起動します。
+## 5 分で動作を確認する
+
+この短い手順は、開発用の API をメモリ上で起動します。Bun と Git が必要です。
 
 ```bash
+git clone https://github.com/tako0614/takosumi.git
+cd takosumi
 bun install
 
-export TAKOSUMI_DEV_MODE=1
-export TAKOSUMI_DEPLOY_CONTROL_TOKEN=dev-token
-PORT=8788 bun core/index.ts
+TAKOSUMI_DEV_MODE=1 \
+TAKOSUMI_DEPLOY_CONTROL_TOKEN=dev-token \
+PORT=8788 \
+bun core/index.ts
 ```
 
-標準の使い方は、dashboard で Git URL を指定して install し、Git Source から Capsule を作る流れです。dashboard の
-install / plan / apply は、登録済みの Git Source に対して [`/api`](docs/reference/api.md)
-control plane を通ります。アプリのソース、ビルド成果物、コンテナイメージ、release artifact は Git に置いた
-OpenTofu module とその普通の変数で表現し、Takosumi 側に独自の upload / build 経路は持ちません。CLI は
-[docs/reference/cli.md](docs/reference/cli.md) にまとめています。廃止済みの `takosumi deploy` / `takosumi plan`
-(ローカル upload 経路) は安全側に停止し、公開 Capsule を作りません。
-
-## 仕組み
-
-Takosumi の account-plane と control-plane handler は、`tsconfig` alias を通して operator の
-Takosumi platform worker に **in-process** で組み込まれます。一般の operator / self-hoster は明示した
-自身の origin でこの platform worker を運用し、私たちの公式 hosted deployment だけが
-`app.takosumi.com` を使います。npm で配布する service package はありません。
-
-self-host された Takos distribution worker は別の Takos product worker です。Takosumi contract source を
-参照し、self-hoster / operator の Takosumi control plane を外部 OIDC issuer / resource server として利用します。
-Accounts / deploy-control / dashboard / runner を Takos worker に組み込みません。`takosumi.com` は landing /
-software docs のサイトです。
-
-### In-process entry points
-
-| Handler        | File                                                                  | Mount                                                    |
-| -------------- | --------------------------------------------------------------------- | -------------------------------------------------------- |
-| Account plane  | `deploy/accounts-cloudflare/src/handler.ts` (`createAccountsHandler`) | platform worker の origin root。issuer はその素の origin |
-| Deploy control | `worker/src/handler.ts`                                               | platform worker の `/api` と `/hooks/*`                  |
-
-`/install?git=...&ref=...&path=...` は dashboard SPA の入口であって、deploy-control の handler ではありません。
-SPA は query を保持したまま `/new` に転送して Git form に値を入れるだけで、互換性チェックと明示的な確認は
-`/new` の中で行われます。
-
-`deploy/accounts-cloudflare/` は account-plane の状態を D1 に保存します。Capsule の backup 成果物は
-control-plane の Backup ledger と artifact store に属し、account-plane の持ち物ではありません。Accounts の
-privacy export request は operator 処理の状態と参照だけを記録し、Capsule export bundle や signed download は持ちません。
-Cloudflare Container は account-plane では使わず、deploy-control の runner が OpenTofu `plan` / `apply` に使います。
-
-`deploy/node-postgres/` は、local-substrate の cloud profile で同じ `createAccountsHandler` を支える
-Bun + Postgres の実行基盤です (`deploy/local-substrate/` の cloud wrapper がその server を import します)。
-ひとつの handler の下にある実行基盤であって、別の配布物ではありません。
-
-## 公開モデル
-
-使い方の流れは意図的に小さくしています: **Workspace** と **Project** を選び、Git **Source** を登録して
-**Capsule** を作り、**ProviderConnection** / **CredentialRecipe** / **ProviderBinding** で provider を接続し、
-**Run** を確認して、**StateVersion** / **Output** / **AuditEvent** を見る。公開モデルは
-[全体像](docs/concepts/index.md) と [用語集](docs/reference/glossary.md) を参照してください。
-実装者向けの最終方針は [docs/internal/final-plan.md](docs/internal/final-plan.md) (非公開) にあります。
-
-| 用語                 | 意味                                                                                           |
-| -------------------- | ---------------------------------------------------------------------------------------------- |
-| `Workspace`          | ユーザー / チームの境界。プロジェクト、接続、シークレット、状態、監査がこの中で分離されます    |
-| `Project`            | 1 つの製品・サービス・インフラのまとまり                                                       |
-| `Capsule`            | 1 つの OpenTofu/Terraform module の実行単位。ふつうは Git URL + ref + path から取り込みます    |
-| `Source`             | Git URL / ブランチ / ref / commit / module path。upload 系の取り込みは内部 / operator 互換のみ |
-| `ProviderConnection` | 保管された provider の認証情報。Run の実行中だけ一時的な env / file として解決されます         |
-| `CredentialRecipe`   | その provider を動かすための env / file / 事前処理の定義                                       |
-| `ProviderBinding`    | provider (と alias) にどの接続を使うかの対応付け                                               |
-| `Secret`             | 暗号化された秘密の値。API からは書き込み専用で、ログには出ません                               |
-| `Run`                | init / validate / plan / apply / destroy / refresh / output の 1 回の実行記録                  |
-| `StateVersion`       | 保存された Capsule state の世代                                                                |
-| `Output`             | `tofu output -json` で取り出した値。別の Capsule の入力にもつなげます                          |
-| `Runner`             | checkout、OpenTofu 実行、state 同期、output 取得、後片付けを行う隔離された実行境界             |
-| `AuditEvent`         | 誰が・何を・どうしたかの証跡                                                                   |
-| `Operator`           | Takosumi を自分のユーザーのために運用する人・組織                                              |
-
-旧 Space / Installation / Deployment / OutputSnapshot / `takos_provided` などの言葉は、移行メモや内部実装名に
-残ることはあっても、現在の公開モデルではありません。
-
-Takosumi は OpenTofu / Terraform provider を置き換えません。既存 provider はそのまま動き、Takosumi はその外側で
-確認・記録できる管理層を提供します。OSS は現在の Resource Shape 互換 API と、その唯一の Resource / Run / state /
-audit 台帳、Resolver / Planner / Reconciler、Target / Policy / credential、Compatibility API framework、Adapter system、
-generic FormActivation を持つ optional host です。portable な Service Form / exact FormRef / data-only Form Package /
-conformance / typed form provider は独立 release の OSS project が所有する target であり、Takosumi Core は Form Package が
-0 個でも plain OpenTofu Stack を実行できます。Takosumi OSS はさらに、open な subject type を exact
-`type + ref + version + digest` で選ぶ noncommercial `Offering` catalog / resolver / `OfferingSelection` を所有します。
-公式 managed target pool、Takosumi 自社リソースの内部実装、exact Offering selection に manager / capacity / SKU /
-PriceCatalog / payment evidence を固定する closed `CommercialOfferingBinding`、強制課金、support / SLA、公式 resource
-backend は Takosumi for Operator / Takosumi Cloud 側にあります。
-`Resource Shape` は FormRef の additive persistence と互換移行の証跡が揃うまで current API/state 名として残ります。
-
-## エディション
-
-| Edition                   | 内容                                                                                                                                                                                                                                                                                                             |
-| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Takosumi OSS**          | この repo。Git を起点にした OpenTofu/Terraform control plane、zero-form 対応の optional Service Form host（現在の Resource Shape 互換 API）、generic Offering selection、Compatibility API framework、Adapter system、接続管理、runner、状態 / 出力 / 監査。課金は disabled / showback のみで apply を止めません |
-| **Takosumi for Operator** | Takosumi を顧客向けにホストする operator 向けエディション。マルチテナントの顧客管理、quota / metering / プラン、DB 管理の operator 設定、CLI / API / runbook 運用、managed target catalog、サポート、商用監査                                                                                                    |
-| **Takosumi Cloud**        | `app.takosumi.com` で私たちが運営する公式ホスティング。exact Offering selection への closed CommercialOfferingBinding、公式 managed targets、Takosumi 自社リソース、AI Gateway、Stripe による課金、quota、usage、support、abuse controls、SLA                                                                    |
-
-依存方向は **Cloud -> OSS の一方向**です。hosted Cloud は OSS の contract と組み込み口だけを使い、OSS は
-Cloud のものが何もなくてもそのまま動きます。
-
-## リポジトリ構成
-
-現在の構成は `contract/`、`core/`、`lib/`、`accounts/`、`providers/`、`worker/`、`runner/`、
-`opentofu-modules/`、`dashboard/`、`website/`、`deploy/` です。注釈付きのツリーは
-[AGENTS.md](AGENTS.md) の "Workspace" 節を参照してください (二重管理を避けるため、そちらを正とします)。
-
-## コマンド
+別のターミナルから、起動したサーバーが公開している機能を確認します。
 
 ```bash
-# OSS / source regression
-bun run check
-bun test
-bun run test:scripts
-bun run docs:build
-bun run app-docs:build
-bun run website:build
+curl http://127.0.0.1:8788/v1/capabilities \
+  -H "authorization: Bearer dev-token"
 ```
 
-hosted Cloud の GA 判定、Stripe bootstrap、本番 browser/live evidence は operator 環境の責務です。
-standalone OSS clone の package command から外部 ecosystem script へ proxy せず、operator automation 側で実行します。
+これは API の動作確認用です。再起動するとデータは消え、dashboard と OpenTofu runner
+も含みません。実際に Git module を plan / apply する手順は
+[クイックスタート](docs/getting-started/quickstart.md)にあります。
 
-## Docs と website
+## デプロイ方法
 
-`docs/` は `takosumi.com/docs/` に出す VitePress の software docs です。`app-docs/` は
-`app.takosumi.com/docs/` 用の hosted Cloud docs で、`dashboard/dist/docs/` に埋め込まれます。`website/` は
-landing page です。`bun run website:build` で landing page と software `/docs/` を含むひとつの
-Cloudflare Pages artifact ができます。
+Takosumi には 2 つの入口があります。どちらも同じ実行履歴、state、output、監査記録を
+使います。
+
+### Git の module を実行する
+
+通常はこちらを使います。
+
+1. Git URL、ref、module のパスを登録する
+2. Takosumi が ref を 1 つの commit に固定する
+3. `plan` を作り、変更内容を確認する
+4. 確認した計画を `apply` する
+5. state、output、ログ、監査記録を保存する
+
+Takosumi では、登録した 1 つの module を **Capsule** と呼びます。この名前を知らなくても
+module 自体を書き換える必要はありません。
+
+### 型を指定してリソースを作る
+
+運用者が有効にしている場合は、オブジェクトストレージや SQL データベースなどを
+**Resource** として宣言できます。利用者は欲しい種類と設定を書き、配置先と実装は
+運用者が用意した候補から選ばれます。
+
+Resource は任意の機能です。使える種類は Takosumi の設置先ごとに異なり、
+`/.well-known/takosumi` または `/v1/capabilities` で確認できます。Takoform は
+Resource を記述するために利用できる形式の 1 つであり、Takosumi やクラウドそのもの
+ではありません。
+
+詳しくは[全体像](docs/concepts/index.md)と
+[Resource](docs/concepts/resources.md)を参照してください。
+
+## Takosumi と Takosumi Cloud
+
+- **Takosumi** はこのリポジトリのソフトウェアです。自分の環境で運用できます。
+- **Takosumi Cloud** は `app.takosumi.com` で提供する公式ホスティングです。managed
+  リソース、料金、容量、サポートは Cloud 側が決めます。
+
+OSS は Cloud がなくても動きます。Cloud 固有の価格、Stripe、内部の配置先はこの
+リポジトリの公開仕様ではありません。境界の詳細は
+[製品の境界](docs/concepts/boundaries.md)にあります。
+
+Takos は別の製品です。Accounts / deploy-control / dashboard / runner を Takos worker に
+組み込みません。Takos は外部 client として Takosumi endpoint に接続します。
+
+## ドキュメント
+
+- [クイックスタート](docs/getting-started/quickstart.md) — dashboard と runner を含むローカル環境
+- [全体像](docs/concepts/index.md) — Git module、Resource、Run、state のつながり
+- [認証情報](docs/concepts/credentials.md) — provider の接続情報を安全に渡す方法
+- [自分で動かす](docs/concepts/self-host.md) — self-host の構成と判断事項
+- [API リファレンス](docs/reference/api.md)
+- [CLI リファレンス](docs/reference/cli.md)
+- [設定リファレンス](docs/reference/configuration.md)
+- [運用手順](docs/operations/README.md)
+
+## 開発
+
+```bash
+bun run check
+bun test
+bun run docs:build
+```
+
+主なディレクトリは、公開 contract の `contract/`、control plane の `core/`、画面の
+`dashboard/`、runner の `runner/`、配布構成の `deploy/`、ドキュメントの `docs/` です。
+standalone OSS clone は hosted Cloud の GA や本番課金の操作を代理実行しません。
+
+ライセンスは [AGPL-3.0-only](LICENSE) です。脆弱性の報告方法は
+[SECURITY.md](SECURITY.md)を参照してください。

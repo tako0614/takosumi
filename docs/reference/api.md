@@ -39,6 +39,12 @@ capability を参照します。
 ```json
 {
   "product": "takosumi",
+  "name": "Takosumi",
+  "auth": {
+    "oidc": true,
+    "password": false
+  },
+  "apiBaseUrl": "https://takosumi.example.com/api/v1",
   "api_versions": ["takosumi.dev/v1alpha1"],
   "features": {
     "stacks": true,
@@ -104,7 +110,9 @@ Resource Shape API の object は、Kubernetes 風の形式に揃えています
 ```
 
 `spec` はあるべき状態 (desired state)、`status` は Takosumi が観測した状態です。
-secret の値は `spec`、`status`、OpenTofu state、ログ、監査記録のいずれにも保存しません。
+secret の値は `spec`、`status`、公開 Output、ログ、監査記録に書きません。provider が
+管理する OpenTofu state には secret が含まれることがあるため、Takosumi は state 全体を
+暗号化して保存し、権限のある実行にだけ復号します。
 
 ## 認証
 
@@ -395,17 +403,11 @@ DELETE /v1/resources/{kind}/{name}?space={spaceId}
 GET    /v1/resources?space={spaceId}&limit={1..100}&cursor={opaque}
 ```
 
-OSS の preview は価格を要求しません。commercial billing extension を有効にした Cloud
-endpoint では、billable preview が `DeploymentQuote` を返します。quote の根拠は
-exact OSS `OfferingSelection` に束縛された closed `CommercialOfferingBinding` と
-versioned `PriceCatalog` です。apply では `quoteId + quoteDigest`
-が必須になります。quote が固定するのは、Resource spec digest、resolution fingerprint、
-offering/catalog version です。SKU line items、currency、estimated total micros、
-issued/expiry も同じ quote が固定します。Cloud は backend 作業の前に reserve し、
-Resource が成功したら capture、失敗や cancel なら release します。そのうえで rated
-UsageEvent と payment-provider の invoice line を照合します。これらの wire field は
-versioned commercial extension contract として広告します。OSS の Resource object に
-Cloud 専用の field は現れません。
+OSS の preview は価格を要求しません。host は capability document で広告した拡張を使い、
+preview に見積もりを追加できます。その場合も、適用する Resource と見積もりの内容が
+変わっていないことを apply 前に検証します。拡張固有の field は OSS の Resource object
+には追加しません。Takosumi Cloud の見積もりと請求については
+[Cloud の料金ページ](https://app.takosumi.com/docs/pricing)を参照してください。
 
 Resource 一覧は `createdAt` と Resource id による keyset pagination です。最終ページ
 以外では `nextCursor` を返すため、client は内容を解釈せず次の `cursor` へそのまま
@@ -475,10 +477,8 @@ PATCH /v1/form-activations/{id}
 operator から決まります。create は exact `FormRef` + `packageDigest` を固定します。
 update は `expectedRevision` CAS を使い、結果の revision を `ETag` で返します。未知の
 field は拒否します。そのため price、SKU、payment、billing、managed capacity、region
-inventory、SLA、support を OSS policy record に混ぜることはできません。商用の
-availability は、同じ exact identity と activation から解決した exact
-`OfferingSelection` を参照する closed
-`CommercialOfferingBinding` 側に残ります。
+inventory、SLA、support を OSS policy record に混ぜることはできません。host 固有の
+料金や提供条件は、FormActivation とは別の拡張で扱います。
 
 operator CLI はこの API へ直接対応します。
 
@@ -518,7 +518,8 @@ enablement view です。principal ごとの availability の根拠にはでき�
 takosumi form-availability list --space space_1
 ```
 
-現在の v1alpha1 public shape:
+次は Takosumi v1alpha1 compatibility schema が定義する shape です。実際に作成できる
+shape は endpoint ごとに異なるため、`/v1/form-availability` で確認してください。
 
 ```text
 EdgeWorker
@@ -630,14 +631,15 @@ Compatibility API は標準 protocol / API の scoped facade です。control-pl
 Deploy API の translation client として働きます。data-plane profile は、canonical な
 Ready Resource への認可済み access surface になります。
 
-| profile                                                         | 範囲                                            |
-| --------------------------------------------------------------- | ----------------------------------------------- |
-| `compat.s3.v1`                                                  | S3 互換の Object Storage の data / control path |
-| `compat.oci.v1`                                                 | Artifact / ContainerImage の lifecycle          |
-| `compat.cloudevents.v1`                                         | Queue / EventHandler への event ingress         |
-| `compat.kubernetes.crd.v1`                                      | Kubernetes northbound API                       |
-| これは full vendor API 互換を意味しません。範囲は capability と |
-| compatibility matrix で明示します。                             |
+| profile                    | 範囲                                            |
+| -------------------------- | ----------------------------------------------- |
+| `compat.s3.v1`             | S3 互換の Object Storage の data / control path |
+| `compat.oci.v1`            | Artifact / ContainerImage の lifecycle          |
+| `compat.cloudevents.v1`    | Queue / EventHandler への event ingress         |
+| `compat.kubernetes.crd.v1` | Kubernetes northbound API                       |
+
+これは full vendor API 互換を意味しません。範囲は capability と compatibility
+matrix で明示します。
 
 Takoform host API、明示的に導入した protocol adapter、dashboard、CLI は公開する
 protocol がそれぞれ違っても、同じ Resource desired state と Deploy API lifecycle
@@ -646,11 +648,15 @@ data-plane profile は既存 Resource を暗黙作成せず、Ready な Resource
 表現できない操作は互換のように成功させず、compatibility matrix で範囲を明示して
 安全側に停止します。
 
-managed hostname を作る compatibility route / script-subdomain write は、source Workspace と
-source Capsule のコンテキストを必須とします。hostname の予約管理は Capsule Run と同じ
-OSS の仕組みです。Cloud extension の KV / Durable Object などが持つ routing / activation
-state は、hostname 所有権の正本ではありません。route-level の DELETE はその state だけを
-削除し、Capsule lifetime に属する reservation は解放しません。
+Cloudflare 固有の import/deploy compatibility profile は廃止済みで、v1 API と
+capability surface には含まれません。Cloudflare 上に配置する managed Resource も、
+利用者自身の Cloudflare account に作る Stack も、通常の Resource または
+ProviderConnection として扱います。
+
+compatibility profile は managed hostname を作りません。runtime route は
+`http.route` Interface と InterfaceBinding で公開します。hostname の所有権は OSS の
+reservation authority、または operator / Cloud の VerifiedDomain lifecycle が管理します。
+routing cache や backend state を hostname 所有権の正本にはしません。
 
 Takosumi Cloud 固有の endpoint 例は
 [Cloud endpoints](https://app.takosumi.com/docs/endpoints) を見てください。

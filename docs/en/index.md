@@ -1,85 +1,87 @@
-# What Takosumi is
+# Takosumi
 
-Takosumi is a control plane that runs the OpenTofu / Terraform modules you keep in
-Git — **plan, review, apply** — and keeps the history.
+Takosumi is a server that runs Git-hosted OpenTofu and Terraform modules through
+a **plan → review → apply** workflow. It keeps the commit, proposed changes,
+state, outputs, and actor in a history you can inspect later.
+
+Your modules and providers stay unchanged. There is no Takosumi-specific
+configuration language.
+
 Takosumi does not ship a first-party Terraform/OpenTofu provider.
 
-It does not build infrastructure itself. Cloudflare and AWS are still driven by their
-own providers. What Takosumi takes on is the record of **who ran what, when, with which
-credentials, and what came out of it**.
+## Why use it
 
-## What changes
+### Apply only what you reviewed
 
-Starting from writing `.tf` and running `tofu apply`, you gain the following.
+Takosumi treats the plan and apply as one Run. It does not silently create a
+different plan after review, so the changes you read are the changes it applies.
 
-**One module, different connections.** Modules carry no credentials and no notion of
-environment. Create two Capsules — one for development, one for production — and give
-each its own Connection. The `.tf` stays single.
+### Keep credentials out of modules
 
-**A review step before every apply.** You create a plan, read it, and then apply **that
-same plan**. Nothing is re-planned at apply time, so what you reviewed is what runs.
+Cloud API keys and tokens are stored in Takosumi. Their values cannot be read
+back and are released only to the runner while the relevant Run is active. The
+same module can serve development and production with different connections.
 
-**A trail you can follow later.** Every Run records the commit, the actor, the time, and
-the credentials used. Each apply saves the resulting state, so you can go back.
+### Keep an execution history
 
-**Fewer places credentials live.** Stored values cannot be read back. They reach only the
-sandbox during a Run, and only the variable names appear in the record.
+Takosumi records which Git commit ran, who ran it, and what changed. Each apply
+saves state and outputs for incident investigation and comparison.
 
-**Services that can reference each other.** A value one Capsule publishes can be consumed
-by another, so endpoints are never copied by hand.
+## Two ways to deploy
 
-## What using it looks like
+| Path           | Best for                                         | What you provide                         |
+| -------------- | ------------------------------------------------ | ---------------------------------------- |
+| **Git module** | apps, existing infrastructure, custom topologies | Git URL, ref, module path, and variables |
+| **Resource**   | managed services described by type and settings  | a Resource declaration                   |
 
-```bash
-# 1. register the repository
-curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/sources" \
-  -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN" \
-  -H 'content-type: application/json' \
-  -d '{ "workspaceId": "ws_example", "name": "my-app",
-        "url": "https://github.com/example/my-app.git",
-        "defaultRef": "v1.0.0", "defaultPath": "deploy/opentofu" }'
+Takosumi calls a registered Git module a **Capsule**. For Resources, you choose
+from the types enabled by the operator. Both paths use the same Runs, state,
+outputs, and audit history.
 
-# 2. create a plan
-curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/capsules/cap_example/plan" \
-  -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
-
-# 3. read it, then apply the same Run
-takosumi status run_example
-
-curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/runs/run_example/apply" \
-  -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
+```text
+Git URL or Resource declaration
+  → check inputs and connections
+  → plan
+  → review changes
+  → apply
+  → save state, outputs, and audit records
 ```
 
-The dashboard covers the same path: paste a Git URL into `/new`, and Takosumi reads the
-module and shows the variables and providers it needs.
+## Try the API
 
-## Your module stays ordinary
+You can start the API in about five minutes. This development setup keeps data
+in memory.
 
-There is no Takosumi manifest and nothing to add to your `.tf`. Register the module you
-already run.
+```bash
+git clone https://github.com/tako0614/takosumi.git
+cd takosumi
+bun install
 
-There is also an optional path for typed services — object storage, KV, SQL, queues —
-declared without writing a module at all. Takosumi works without it.
+TAKOSUMI_DEV_MODE=1 \
+TAKOSUMI_DEPLOY_CONTROL_TOKEN=dev-token \
+PORT=8788 \
+bun core/index.ts
+```
 
-## When it fits
+In another terminal:
 
-- Several people touch the same infrastructure and you need **who did what**
-- Development and production should run the **same module with different connections**
-- Every apply should pass through **a human review**
-- Cloud credentials **should not sit in a shell or a CI variable**
+```bash
+curl http://127.0.0.1:8788/v1/capabilities \
+  -H "authorization: Bearer dev-token"
+```
 
-If you are one person on one environment and `tofu apply` is enough, this adds little.
+The [Quickstart](./getting-started/quickstart.md) starts the dashboard, sign-in,
+durable database, and OpenTofu runner.
 
 ## Where to go next
 
-Start with the [Quickstart](./getting-started/quickstart.md) and get one thing running
-locally.
+- [Concepts](./concepts/index.md) — the small set of terms and the deployment lifecycle
+- [Sources and Capsules](./concepts/sources.md) — pinning a Git ref to a commit
+- [Run model](./concepts/run-model.md) — plan, approval, apply, and destroy
+- [Credentials](./concepts/credentials.md) — passing connections to providers
+- [Resources](./concepts/resources.md) — creating typed services without writing a module
+- [Self-hosting](./concepts/self-host.md) — operating a production installation
+- [API](./reference/api.md) and [CLI](./reference/cli.md) references
 
-To understand how it works, read the [Overview](./concepts/) and carry on through Sources
-and Capsules, the Run model, state and outputs, and credentials.
-
-When you need exact arguments and limits, they are in the [API](./reference/api.md) and
-[CLI](./reference/cli.md) references.
-
-Pricing and managed resources for the official hosted service live in the
-[Takosumi Cloud docs](https://app.takosumi.com/docs/en/).
+Pricing, managed resources, and support for the official hosted service are in
+the [Takosumi Cloud documentation](https://app.takosumi.com/docs/en/).

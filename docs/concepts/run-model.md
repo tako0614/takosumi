@@ -56,32 +56,38 @@ Run は runner sandbox の中で実行されます。認証情報が渡るのは
 
 ## 何が保存されるか
 
-| 保存されるもの | 説明 |
-| --- | --- |
-| source snapshot | どの commit を実行したか |
-| OpenTofu version | 実行に使った版 |
-| provider lock digest | provider の固定内容 |
-| ProviderBinding | どの認証情報を使ったか |
-| 注入した環境変数の**名前** | 値は保存しません |
-| plan / apply の結果 | 変更内容 |
-| state version | 実行後の状態 |
-| outputs | 公開された値 |
-| logs | 実行ログ |
-| actor | 誰が実行したか |
-| audit evidence | 監査用の記録 |
+| 保存されるもの             | 説明                     |
+| -------------------------- | ------------------------ |
+| source snapshot            | どの commit を実行したか |
+| OpenTofu version           | 実行に使った版           |
+| provider lock digest       | provider の固定内容      |
+| ProviderBinding            | どの認証情報を使ったか   |
+| 注入した環境変数の**名前** | 値は保存しません         |
+| plan / apply の結果        | 変更内容                 |
+| state version              | 実行後の状態             |
+| outputs                    | 公開された値             |
+| logs                       | 実行ログ                 |
+| actor                      | 誰が実行したか           |
+| audit evidence             | 監査用の記録             |
 
 **値ではなく名前だけを残す**のが原則です。どの環境変数を注入したかは後から分かり
 ますが、中身は残りません。
 
-## 自動では適用しません
+## 自動で進む範囲
 
-Takosumi が自分の判断で適用を始めることはありません。
+Git の変更や drift を見つけただけで、Takosumi が apply を始めることはありません。
 
 - Git に新しい commit が来ても、Capsule が `stale` になるだけです
 - 差分確認で違いが見つかっても、報告するだけです
 - 定期観測は読み取り専用で、配置先を選び直しません
 
-いずれの場合も、次に進むには人が計画を確認して適用します。
+例外は、利用者が dashboard のインストール操作または明示的な自動更新を開始した
+場合です。この操作は「plan が安全に完了したら apply まで続ける」という要求を
+`autoApplyRequested` として Run に記録します。それでも、削除を含む変更、承認ポリシー、
+料金や policy の gate がある plan は自動で apply されず、確認画面で停止します。
+
+つまり、**検出が apply を起動することはなく、開始済みの操作だけが安全な範囲で
+plan から apply へ続きます。**
 
 差分だけを見る操作は Capsule 単位でも Workspace 単位でも行えます。
 

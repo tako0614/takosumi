@@ -281,7 +281,7 @@ test("Final Plan and hosted Cloud docs keep one all-or-nothing GA set Pre-GA bef
   assert.doesNotMatch(endpoints, /Preview service forms|seven service forms/);
 });
 
-test("public docs keep generic OSS Offering selection separate from the closed Cloud binding", async () => {
+test("public docs explain generic OSS Offering selection without Cloud binding internals", async () => {
   const paths = [
     "README.md",
     "README.en.md",
@@ -299,7 +299,7 @@ test("public docs keep generic OSS Offering selection separate from the closed C
 
   const combined = docs.map(({ text }) => text).join("\n");
   assert.match(combined, /OfferingSelection/);
-  assert.match(combined, /CommercialOfferingBinding/);
+  assert.doesNotMatch(combined, /CommercialOfferingBinding/);
   for (const { path, text } of docs) {
     assert.doesNotMatch(
       text,

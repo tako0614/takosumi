@@ -1,121 +1,103 @@
-# Operator control MCP adapter
+# MCP から Takosumi を操作する
 
-Takosumi には、Takos や別の MCP consumer から既存の public control
-service を操作するための optional adapter があります。endpoint は
-`/mcp/operator-control/v1`、Interface は通常の `mcp.server`、認可は通常の
-Principal `InterfaceBinding` です。Takos 固定 tool や broad operator token を
-配る別経路ではありません。
+Operator control MCP adapter を使うと、Takos や別の MCP client から Takosumi の
+Capsule と Run を操作できます。できるのは Capsule の一覧、plan、Run の確認、承認、
+apply です。
 
-## Enable and install
+この adapter は任意機能です。Takos 専用の tool を組み込むのではなく、通常の
+`mcp.server` Interface として `/mcp/operator-control/v1` に公開します。client は
+MCP の `tools/list` から、その endpoint が提供する tool を読み取ります。
 
-stock platform worker では次を明示したときだけ route と service-side
-InstallConfig が有効になります。
+## 前提条件
+
+- Takosumi Accounts と dashboard が動いている
+- 外から到達できる HTTPS の Takosumi origin がある
+- operator が MCP adapter を有効にできる
+- 利用者が対象 Workspace の member である
+
+## 接続する
+
+### 1. adapter を有効にする
+
+stock platform worker に次を設定します。
 
 ```text
 TAKOSUMI_OPERATOR_CONTROL_MCP_ENABLED=1
-TAKOSUMI_ACCOUNTS_ISSUER=https://<bare-operator-origin>
+TAKOSUMI_ACCOUNTS_ISSUER=https://<takosumi-origin>
 ```
 
-flag がない場合 route は `404` で、exact resource ownership proof も false
-なので `oauth2` Binding は Ready になりません。host が
-`TAKOSUMI_INSTALL_CONFIG_COMPOSITION` を独自 runtime object で完全置換する場合は、
-`OPERATOR_CONTROL_MCP_INSTALL_CONFIG` も明示的にその配列へ追加します。これは
-text env や Store metadata ではなく operator host-code composition です。
+flag がない場合、MCP route は `404` を返します。Accounts issuer は scheme と path を
+含む Takosumi origin に合わせてください。
 
-Capsule Source は普通の Git Source です。
+host が `TAKOSUMI_INSTALL_CONFIG_COMPOSITION` を独自の runtime object で置き換えている
+場合は、`OPERATOR_CONTROL_MCP_INSTALL_CONFIG` もその配列へ追加します。
+
+### 2. Git module をデプロイする
+
+dashboard の Add service で次を指定します。
 
 ```text
 Git URL:     https://github.com/tako0614/takosumi.git
 modulePath:  opentofu-modules/operator-control-mcp
 variables:
-  takosumi_origin = https://<bare-operator-origin>
+  takosumi_origin = https://<takosumi-origin>
 ```
 
-module は credential-free な ordinary Output `endpoint` を返します。
-`InstallConfig.interfaceBlueprints` が最初の successful apply 後に
-`materializedFrom: capsule_blueprint` の Interface を作ります。この module は
-Takosumiのpublic APIだけを使います。Takoform の Interface descriptor は
-Form Package から Form-backed Resource へ `form_descriptor` として materialize する別経路で、
-この Capsule module の authoring path ではありません。
+plan を確認して apply すると、module の `endpoint` Output から `mcp.server`
+Interface が作られます。install した本人には `mcp.invoke` permission を持つ
+OAuth Binding が提案されます。
 
-両方が収束する desired spec は次です。
+この module は公開 Takosumi API だけを使います。Takoform provider は不要です。
 
-```json
-{
-  "type": "mcp.server",
-  "version": "2025-11-25",
-  "document": {
-    "transport": "streamable-http",
-    "display": { "title": "Takosumi Operator Control" }
-  },
-  "inputs": {
-    "endpoint": {
-      "source": "capsule_output",
-      "outputName": "endpoint"
-    }
-  },
-  "access": {
-    "visibility": "workspace",
-    "resourceUriInput": "endpoint"
-  }
-}
-```
+### 3. MCP client から接続する
 
-Binding proposal は installing Principal への exact permission です。
-
-```json
-{
-  "subject": { "source": "installing_principal" },
-  "permissions": ["mcp.invoke"],
-  "delivery": { "type": "oauth2" }
-}
-```
-
-module code は Binding を作れません。host ownership authorizer が特別に
-許可するのも、flag が有効で owner が Capsule のときの exact
-`https://<operator-origin>/mcp/operator-control/v1` だけです。
-
-## Invocation authority
-
-全 MCP `POST` は body を処理する前に同じ platform verifier を通ります。
+Interface の接続情報を dashboard で開き、MCP client に渡します。transport は
+Streamable HTTP です。
 
 ```text
-Bearer invocation token
-  -> authenticated Accounts /oauth/introspect
-     (resource = exact /mcp/operator-control/v1 URL)
-  -> Core revalidates current Interface + exact Ready Principal Binding
-     + subject + mcp.invoke + resolvedRevision + Capsule owner lifecycle
-  -> require token_use=interface_oauth, exact aud, one mcp.invoke scope,
-     Workspace/Capsule/Interface/Binding/revision evidence
-  -> strip raw bearer
-  -> adapter authority { subject, introspected Workspace }
-  -> existing public /api/v1 control dispatcher in-process
-  -> existing Workspace owner/member RBAC, policy, saved-plan/apply guard,
-     Run, StateVersion, Output, and AuditEvent authority
+https://<takosumi-origin>/mcp/operator-control/v1
 ```
 
-MCP argumentsに `workspaceId` はありません。Capsule/Run を受ける tool は
-public dispatcher の RBAC に加えて、対象 ledger row の Workspace が introspection
-Workspace と一致することを dispatch 前に確認します。したがって同じ Principal が
-別 Workspace の member でも、その Binding から対象を広げられません。
+認証には Interface Binding から取得した OAuth token を使います。operator token や
+module の provider credential は client へ渡しません。
 
-raw Interface token は public control request、DB、Run、state、Output、audit、log
-へ渡しません。`takosumi_run_apply` は reviewed plan idだけを public handlerへ渡し、
-handler が saved-plan digest/state/provider-binding guard を server-side で再構築して
-controller が再検証します。MCP arguments から apply guard を指定・上書きできません。
+## 提供する tool
 
-## Adapter-owned tools
+| Tool                     | 用途                                  |
+| ------------------------ | ------------------------------------- |
+| `takosumi_capsules_list` | Capsule の一覧を読む                  |
+| `takosumi_capsule_plan`  | Capsule の plan を開始する            |
+| `takosumi_run_get`       | Run の状態と plan の要約を読む        |
+| `takosumi_run_approve`   | 確認済みの Run を承認する             |
+| `takosumi_run_apply`     | 承認済みの保存済み plan を apply する |
 
-tool catalog は versioned adapter route が MCP `tools/list` で返します。Takos の
-static registry ではありません。
+`list` と `get` は読み取り専用です。`plan` は Run を作成します。`approve` と `apply`
+は変更を伴うため、MCP client は実行前に利用者へ確認する必要があります。
 
-| Tool                     | Effect / annotation                              |
-| ------------------------ | ------------------------------------------------ |
-| `takosumi_capsules_list` | read-only                                        |
-| `takosumi_capsule_plan`  | state side effect; not read-only, not idempotent |
-| `takosumi_run_get`       | read-only                                        |
-| `takosumi_run_approve`   | destructive/high-risk confirmation hint          |
-| `takosumi_run_apply`     | destructive/high-risk confirmation hint          |
+tool の一覧と入力 schema は adapter が `tools/list` で返します。client 側に固定の
+Takosumi tool catalog を持たせないでください。
 
-consumer は毎回 live `tools/list` を読みます。tool の追加・schema変更はこの adapter
-version の責任であり、Takos の built-in tool contract ではありません。
+## 認証と安全性
+
+各 MCP request では、Takosumi が OAuth token、Interface、Binding、Workspace、
+`mcp.invoke` permission を確認します。Capsule と Run も同じ Workspace に属している
+必要があります。
+
+adapter は確認済みの Workspace と利用者情報だけを既存の Takosumi API handler に渡します。
+元の bearer token を Run、state、Output、audit、log へ保存しません。通常の Workspace
+role、policy、plan 承認、保存済み plan の digest 検証もそのまま適用されます。
+
+`takosumi_run_apply` は MCP request から apply guard を上書きできません。server が
+保存済み plan、state、provider connection をもう一度検証してから実行します。
+
+## うまく接続できないとき
+
+| 症状                              | 確認すること                                                                |
+| --------------------------------- | --------------------------------------------------------------------------- |
+| route が `404`                    | `TAKOSUMI_OPERATOR_CONTROL_MCP_ENABLED=1` が実行環境に反映されているか      |
+| OAuth Binding が Ready にならない | Accounts issuer、公開 origin、module の `takosumi_origin` が一致しているか  |
+| `401` / `403`                     | token の audience、`mcp.invoke` permission、Workspace membership を確認する |
+| Capsule や Run が見つからない     | Binding と対象が同じ Workspace にあるか                                     |
+| tool が古い                       | client の固定一覧ではなく、接続先で `tools/list` を再取得する               |
+
+運用ログへ bearer token や provider credential を出さないでください。

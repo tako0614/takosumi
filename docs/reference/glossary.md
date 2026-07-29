@@ -70,14 +70,14 @@ dashboard は内部の用語をそのまま出さず、次の言葉を使いま�
 
 ## 実行時の連携
 
-| 用語               | 意味                                                                                                | 詳しい説明                             |
-| ------------------ | --------------------------------------------------------------------------------------------------- | -------------------------------------- |
-| Interface          | デプロイしたものが何を提供しているかの宣言です。                                                    | [Interface](../concepts/interfaces.md) |
-| InterfaceBinding   | その Interface を誰がどの権限で使えるかの認可です。                                                 | [Interface](../concepts/interfaces.md) |
-| Principal          | Interface を使う側のうち、人やアカウントにあたる主体です。                                          | [Interface](../concepts/interfaces.md) |
-| ServiceAccount     | Interface を使う側のうち、人ではない主体です。                                                      | [Interface](../concepts/interfaces.md) |
-| permission         | Binding が許す操作を表す token です。トークンを取るときにこの範囲を要求します。                     | [Interface](../concepts/interfaces.md) |
-| Interface トークン | Interface を呼ぶために要求のたびに発行される、有効期間の短いトークンです。接頭辞は `taksrv_` です。 | [Interface](../concepts/interfaces.md) |
+| 用語               | 意味                                                                                                      | 詳しい説明                             |
+| ------------------ | --------------------------------------------------------------------------------------------------------- | -------------------------------------- |
+| Interface          | デプロイしたものが何を提供しているかの宣言です。                                                          | [Interface](../concepts/interfaces.md) |
+| InterfaceBinding   | その Interface を誰がどの権限で使えるかの認可です。                                                       | [Interface](../concepts/interfaces.md) |
+| Principal          | Interface を使う側のうち、人やアカウントにあたる主体です。                                                | [Interface](../concepts/interfaces.md) |
+| ServiceAccount     | Interface を使う側のうち、人ではない主体です。                                                            | [Interface](../concepts/interfaces.md) |
+| permission         | Binding が許す操作を表す token です。トークンを取るときにこの範囲を要求します。                           | [Interface](../concepts/interfaces.md) |
+| Interface トークン | Interface を呼ぶための、最大 60 秒だけ有効な更新不可の token です。文字列形式は発行する host が決めます。 | [Interface](../concepts/interfaces.md) |
 
 ## 型付きサービス
 
@@ -136,10 +136,8 @@ curl -s https://takosumi.example.com/.well-known/takosumi
 
 ## 運用する主体
 
-| 用語                      | 意味                                                                                                                       | 詳しい説明                                       |
-| ------------------------- | -------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
-| Operator                  | Takosumi を自分や自分のユーザーのために運用する主体です。                                                                  | [製品の境界](../concepts/boundaries.md)          |
-| Takosumi Cloud            | 公式に運用している hosted サービスです。                                                                                   | [製品の境界](../concepts/boundaries.md)          |
-| showback                  | 使った量を記録して見せるところまでを行う課金モードです。                                                                   | [利用量と課金](../concepts/usage-and-billing.md) |
-| OfferingSelection         | OSS catalog が version と digest まで固定して選んだ exact subject です。価格や private capacity は含みません。             | [製品の境界](../concepts/boundaries.md)          |
-| CommercialOfferingBinding | Cloud が exact OfferingSelection に manager、capacity、SKU、PriceCatalog、payment evidence を束縛する closed record です。 | [製品の境界](../concepts/boundaries.md)          |
+| 用語           | 意味                                                      | 詳しい説明                                       |
+| -------------- | --------------------------------------------------------- | ------------------------------------------------ |
+| Operator       | Takosumi を自分や自分のユーザーのために運用する主体です。 | [製品の境界](../concepts/boundaries.md)          |
+| Takosumi Cloud | 公式に運用している hosted サービスです。                  | [製品の境界](../concepts/boundaries.md)          |
+| showback       | 使った量を記録して見せるところまでを行う課金モードです。  | [利用量と課金](../concepts/usage-and-billing.md) |

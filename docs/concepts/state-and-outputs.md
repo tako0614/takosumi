@@ -43,19 +43,22 @@ curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/capsules/cap_db/outputs" \
   -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
 ```
 
-## 秘密が入らない場所
+## 秘密と state
 
-次のいずれにも秘密の値は保存されません。
+次の公開面には秘密の値を保存しません。
 
 ```text
 spec
 status
-OpenTofu の state
 Output
 Interface
 ログ
 監査記録
 ```
+
+一方、provider が管理する OpenTofu state には、接続文字列などの secret が含まれる
+ことがあります。Takosumi は state 全体を暗号化して保存し、権限のある Run にだけ
+復号します。state を公開 Output や一般の export と同じものとして扱わないでください。
 
 ## 値を別の Capsule に渡す
 

@@ -77,13 +77,13 @@ provides every one of them.
 `inputs` says, for each name, where its value comes from. There are three kinds of
 `source`.
 
-| `source` | Where the value comes from | What goes with it |
-| --- | --- | --- |
-| `literal` | A value written straight into the declaration | `value` |
-| `capsule_output` | A published Output of a Capsule | `output_name`, optionally `capsule_id` |
-| `resource_output` | A published Output of a Resource | `resource_id`, `output_name` |
+| `source`          | Where the value comes from                    | What goes with it                    |
+| ----------------- | --------------------------------------------- | ------------------------------------ |
+| `literal`         | A value written straight into the declaration | `value`                              |
+| `capsule_output`  | A published Output of a Capsule               | `outputName`, optionally `capsuleId` |
+| `resource_output` | A published Output of a Resource              | `resourceId`, `outputName`           |
 
-Omitting `capsule_id` under `capsule_output` reads the Output of the declaring Capsule
+Omitting `capsuleId` under `capsule_output` reads the Output of the declaring Capsule
 itself.
 
 When an Output value has structure, `pointer` pulls out one part of it. The syntax is the
@@ -102,7 +102,7 @@ JSON Pointer of RFC 6901.
 }
 ```
 
-`resource_uri_input` names the input used as the token's audience. The resolved value is
+`resourceUriInput` names the input used as the token's audience. The resolved value is
 readable from the Interface's `status.resolvedInputs`, and where it came from from
 `status.provenance`.
 
@@ -118,7 +118,7 @@ curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/v1/interfaces/if_example/bindings" \
 
 ## Tokens for calling
 
-For an authorized Interface, you mint a single-use token. The only credential that may ask
+For an authorized Interface, you mint a short-lived token. The only credential that may ask
 for one is the OAuth access token handed to the runtime that calls the Interface. Using
 the control plane token from the examples above returns `403`.
 
@@ -133,10 +133,11 @@ The token you get back behaves as follows.
 
 - The response is OAuth-shaped, with `access_token`, `token_type`, `expires_in`,
   `expires_at`, `scope`, and `resource`
-- The prefix is `taksrv_`
-- **It lives for a very short time and has no refresh token.** Ask for a new one each time
+- **It expires within 60 seconds and has no refresh token.** Ask for a new one when needed
 - Its reach is limited to the permission you requested and the audience the Interface
   names
+- The issuing host owns the token string format. The bundled Accounts host uses a
+  `taksrv_` prefix, but clients must not branch on that prefix
 
 It is not something to reuse over a long period, so design for fetching one per execution.
 

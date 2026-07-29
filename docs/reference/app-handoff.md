@@ -1,6 +1,6 @@
 # App Handoff Protocol
 
-Takosumi App Handoff は、任意のクライアントから Takosumi が管理する hosted
+Takosumi App Handoff は、任意のクライアントから、その Takosumi installation が管理する
 service を作成するための小さな URL プロトコルです。対象は mobile app に限らず、
 web app、desktop app、ブラウザリンク、CLI 出力も含みます。
 
@@ -8,13 +8,13 @@ Takosumi は plain OpenTofu/Terraform source を受け取って Capsule を作�
 Takosumi フローを実行します。connection payload をクライアントへ返すのは、URL が
 それを求めたときだけです。
 
-作成の画面は Host Center、つまり web / dashboard のフローです。クライアントは
+作成には通常の Takosumi dashboard を使います。クライアントは
 完了後に自分の product app または web callback URL へ戻ります。
 
 全体の流れは次のとおりです。
 
 1. クライアントが `/install` URL を開く
-2. Takosumi Host Center が開く
+2. Takosumi dashboard が開く
 3. Source、Capsule、ProviderBinding、Run が順に作られる
 4. StateVersion と Output が残る
 5. `return_uri` があれば、そこへ戻る
@@ -35,14 +35,14 @@ dashboard 内では `/new` に正規化されることがありますが、外�
 
 対応するクエリパラメータ:
 
-| パラメータ | 意味 |
-| --- | --- |
-| `git` | plain OpenTofu/Terraform module の HTTPS Git URL |
-| `source` | `git::...?...` 形式の packed module address |
-| `ref` | Git branch / tag / commit |
-| `path` | リポジトリ内の module path |
-| `name` | サービスの表示名 |
-| `product` | `return_uri` とセットで使うクライアント product key |
+| パラメータ   | 意味                                                 |
+| ------------ | ---------------------------------------------------- |
+| `git`        | plain OpenTofu/Terraform module の HTTPS Git URL     |
+| `source`     | `git::...?...` 形式の packed module address          |
+| `ref`        | Git branch / tag / commit                            |
+| `path`       | リポジトリ内の module path                           |
+| `name`       | サービスの表示名                                     |
+| `product`    | `return_uri` とセットで使うクライアント product key  |
 | `return_uri` | `product` とセットで使う connection payload の返却先 |
 
 何を作るかは `git` または `source` が決めます。どちらか一方を必ず付けます。残りは
@@ -92,7 +92,7 @@ source リポジトリは plain OpenTofu/Terraform module のままで足りま�
 source metadata ファイルや製品固有の metadata ファイルを置く必要はありません。
 
 module input は URL では渡しません。`var.<name>` や `varjson.<name>` を付けた
-リンクを開いても、その値は読み捨てられます。入力は Host Center の画面で
+リンクを開いても、その値は読み捨てられます。入力は Takosumi dashboard の画面で
 入れます。secret、token、provider credential、private key の渡し先はさらに別で、
 ProviderConnection、Credential Recipe、ProviderBinding、Secret、または製品側の
 setup フローを使います。
@@ -156,7 +156,7 @@ authority 形式 (`<app-scheme>://...`) の app-owned custom scheme に限りま
 
 ## 責任境界
 
-Takosumi 側は、この protocol と Host Center のフローを持ちます。Source / Capsule /
+Takosumi 側は、この protocol と dashboard のフローを持ちます。Source / Capsule /
 Run の lifecycle、state と output と audit、ProviderConnection の確認、capability
 discovery も Takosumi 側です。
 

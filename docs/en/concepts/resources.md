@@ -56,22 +56,21 @@ takosumi resources apply ObjectBucket assets --file bucket.json --yes
 applied are the same thing. Run it without `--yes` and it prints the contents and **stops
 with exit code 2**. The two steps — look, then add the flag — are deliberate.
 
-## Resolution gets pinned
+## Preview selects the target and implementation
 
 ```text
 the Resource declaration
   → is the type usable (introduced, writable)
-  → candidate targets (TargetPool)
-  → candidate implementations (Adapter)
-  → pin the resolution (ResolutionLock)
-  → create the real thing (NativeResource)
+  → select one target and implementation
+  → record that selection
+  → create the real thing
   → publish state and Outputs
 ```
 
-Once resolved, the target and the implementation for that Resource are pinned as a
-ResolutionLock. Later diffs and refreshes **use the pinned target and implementation as
-they are**, so behaviour does not change under you because something was moved to a
-different implementation.
+Once selected, the target and implementation are recorded. Later diffs and refreshes
+**use that same target and implementation**, so behavior does not change under you unless
+you explicitly request a change. The [API reference](../reference/api.md) documents the
+record names used on the wire.
 
 ## Reading state
 
@@ -88,9 +87,8 @@ values.
 The dashboard does not list arbitrary Output values either. It makes a value clickable
 only when the exact Resource kind and Output name are explicitly allowlisted as a public
 navigation surface, and the value validates as an HTTPS URL without credentials, a query,
-or a fragment. Today this covers the canonical `url` of a Cloud-managed `EdgeWorker`.
-The same Output name on another kind, an arbitrary `public_url`, or a secret-looking
-Output does not become a link.
+or a fragment. The same Output name on another kind, an arbitrary `public_url`, or a
+secret-looking Output does not become a link.
 
 Listing is keyset-based on `createdAt` and id. Every page but the last returns a
 `nextCursor`; pass it straight to the next `--cursor` without interpreting it. The default

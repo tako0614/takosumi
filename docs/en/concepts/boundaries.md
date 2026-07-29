@@ -1,60 +1,78 @@
-# Product boundaries
+# Takosumi and Takosumi Cloud
 
-The name Takosumi means two things. Unqualified, it means the software. There is no
-separate name for running it on behalf of other people.
+These docs use two names so the software and the official service are not
+confused.
 
-| Name | What it means |
-| --- | --- |
-| Takosumi | The software published under AGPL-3.0. Anyone can run it in their own environment |
-| Takosumi Cloud | The officially operated hosted service |
+| Name               | Meaning                                            |
+| ------------------ | -------------------------------------------------- |
+| **Takosumi**       | the AGPL-3.0 software published in this repository |
+| **Takosumi Cloud** | the official hosted service at `app.takosumi.com`  |
 
-## What the software carries
+## What the software provides
 
-Takosumi contains the Git-backed OpenTofu control plane, the Capsule and Run
-lifecycle, and the state and audit ledgers. Alongside those come Resources (the Service
-Form host) which can be turned on when needed, the compatibility API framework and its
-Adapters, Interfaces and InterfaceBindings, and the CLI, dashboard, and accounts plane.
+Takosumi OSS includes:
 
-This documentation covers that layer, and describes only behaviour that holds on any
-endpoint.
+- plan, apply, state, outputs, and audit records for Git modules
+- secure storage and runner delivery for provider connections
+- a dashboard, API, CLI, and sign-in
+- a shared lifecycle for typed Resources
+- records for endpoints and permissions between deployments
+
+The module, provider, or an operator-installed Resource implementation decides
+which cloud is used. Takosumi OSS does not require one cloud account or
+provider.
 
 ## What the operator decides
 
-Two endpoints can run the same software and still differ on all of the following, because
-whoever operates the endpoint decides them.
+Two installations of the same software can differ in:
 
-- Which Resource types are available
-- The targets (TargetPool) and the implementations that run there
-- Whether usage is recorded, and whether it goes as far as invoicing
-- The frequency and concurrency of periodic observation
-- Deployment to production, and the procedures around secrets
+- available Resource types
+- the clouds and implementations that create those Resources
+- storage capacity, usage limits, and backup retention
+- whether usage is only recorded or also billed
+- updates, incident response, support, and SLA
 
-So "can Takosumi do X" is answered per endpoint. There is one way to find out, which is to
-ask that endpoint itself.
+Check an endpoint instead of guessing from an edition name.
 
 ```bash
-curl -s https://takosumi.example.com/.well-known/takosumi
+curl https://takosumi.example.com/.well-known/takosumi
 ```
 
-The `features` it returns say what is enabled. Read that capability rather than an edition
-name.
+An authenticated client can also read `/v1/capabilities`.
 
-## What only Takosumi Cloud has
+## What Takosumi Cloud adds
 
-The official hosted service adds managed targets and the implementations on them, billing
-that produces invoices, support and an SLA, published prices and a free tier, and defined
-behaviour when a balance runs out.
+Takosumi Cloud is an official operation of the OSS software. It adds managed
+Resource implementations, official capacity, pricing and payment, support,
+SLA, and abuse controls.
 
-None of that is a feature of the software, so this documentation leaves it aside. Pricing
-and the use of managed resources are covered in the Cloud documentation.
+Those are not general OSS contracts. Use the
+[Takosumi Cloud documentation](https://app.takosumi.com/docs/en/) for prices
+and limits.
 
-## How self-hosting relates
+Cloud code consumes OSS contracts. The OSS software does not depend on private
+Cloud code or Stripe.
 
-The right to run the software yourself and the right to use the official service are
-separate things. On an endpoint you self-host, you make the operator decisions listed
-above yourself. To the people who use that endpoint, you are the operator.
+## Where Takoform fits
 
-## Related
+Takoform is an independent specification and toolset for describing Resource
+shapes separately from a provider or cloud. Takosumi can accept Takoform, but
+Takoform is not the only possible Resource entrance.
 
-- [Overview](./index.md)
-- [Glossary](../reference/glossary.md)
+Cloudflare, AWS, and other Terraform or OpenTofu providers remain ordinary
+providers from the runner's perspective. Takosumi Cloud and a cloud account
+connected by a user both pass through the shared Run and Resource lifecycle.
+
+Takos is a separate product. Its self-hosted product worker does not embed
+Accounts, deploy-control, the Dashboard, or the runner; it connects to a
+Takosumi endpoint as an external client.
+
+## When you self-host
+
+When you operate Takosumi yourself, you become the operator described above.
+You manage software updates, secrets, databases, runners, backups, and any
+Resource implementations you enable.
+
+Read [Self-hosting](./self-host.md) for topology choices and the
+[operator runbooks](https://github.com/tako0614/takosumi/blob/main/docs/operations/README.md)
+for procedures.

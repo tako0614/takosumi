@@ -2,134 +2,124 @@
 
 日本語: [README.md](README.md)
 
-Takosumi is an OSS control plane that safely deploys and manages Git-hosted OpenTofu/Terraform modules
-through a plan → review → apply workflow. It runs existing OpenTofu/Terraform providers as-is — no
-proprietary manifest or DSL is needed.
+Takosumi is an open-source server for safely running Git-hosted OpenTofu and
+Terraform modules as a team.
 
-What you get:
+Your existing modules and providers stay in place. Takosumi adds the workflow
+around them:
 
-- Register modules from any Git URL as apps or infrastructure (Capsule)
-- Store cloud credentials securely and inject them only while a Run executes (ProviderConnection)
-- Review planned changes before applying them, then apply with approval (plan / apply Run)
-- Record state after every apply and track who changed what, when (StateVersion / AuditEvent)
-- Capture module outputs and optionally wire them into another Capsule's inputs (Output)
+- review a `plan`, then apply that exact plan
+- record the commit, actor, time, and result of every run
+- keep state, outputs, and logs for each run
+- store cloud credentials and release them only to the active runner
+- manage Git-hosted apps and infrastructure through a dashboard and API
 
-Software docs: <https://takosumi.com/docs/>
-Hosted Cloud docs: <https://app.takosumi.com/docs/>
+There is no Takosumi-specific `.tf` syntax or first-party provider. Cloudflare,
+AWS, Kubernetes, and other systems are still managed by their existing
+providers.
 
-## Local control-plane quickstart
+[Software documentation](https://takosumi.com/docs/) ·
+[Takosumi Cloud documentation](https://app.takosumi.com/docs/en/)
 
-Run the local control-plane service directly when you want to exercise the `/api/v1` contract from curl or tests.
+## Check it locally in five minutes
+
+This short path starts the development API with in-memory storage. It requires
+Bun and Git.
 
 ```bash
+git clone https://github.com/tako0614/takosumi.git
+cd takosumi
 bun install
 
-export TAKOSUMI_DEV_MODE=1
-export TAKOSUMI_DEPLOY_CONTROL_TOKEN=dev-token
-PORT=8788 bun core/index.ts
+TAKOSUMI_DEV_MODE=1 \
+TAKOSUMI_DEPLOY_CONTROL_TOKEN=dev-token \
+PORT=8788 \
+bun core/index.ts
 ```
 
-The standard product flow is to install via the dashboard using a Git URL, creating a Capsule from a Git Source.
-Dashboard install / plan / apply go through the [`/api`](docs/en/reference/api.md) control plane
-against a registered Git Source. App source, build outputs, container images, and release artifacts are modeled by
-the Git-hosted OpenTofu module and its ordinary variables, not by a Takosumi-owned upload/build path. The CLI is
-documented in [docs/en/reference/cli.md](docs/en/reference/cli.md). The retired `takosumi deploy` /
-`takosumi plan` local-upload helpers fail closed and do not create public Capsules.
+In another terminal, ask the server which features it exposes.
 
-## How it works
+```bash
+curl http://127.0.0.1:8788/v1/capabilities \
+  -H "authorization: Bearer dev-token"
+```
 
-Takosumi's account-plane and control-plane handlers are composed **in-process** through `tsconfig` aliases into an
-operator-run Takosumi platform worker. An operator or self-hoster serves that platform worker at an explicit origin;
-our official hosted deployment uses `app.takosumi.com`. There is no npm-published service package.
+This is an API check, not a production setup. Data disappears on restart, and
+the dashboard and OpenTofu runner are not included. Follow the
+[Quickstart](docs/en/getting-started/quickstart.md) to plan and apply a Git
+module with the complete local stack.
 
-The self-hosted Takos distribution worker is a separate Takos product worker. It references Takosumi contract source
-and uses the self-hoster/operator Takosumi control plane as an external OIDC issuer and resource server. It does not
-embed Accounts, deploy-control, the Dashboard, or the runner. `takosumi.com` is the landing/software-docs site.
+## Two ways to deploy
 
-### In-process entry points
+Both paths use the same run history, state, outputs, and audit trail.
 
-| Handler        | File                                                                  | Mount                                                  |
-| -------------- | --------------------------------------------------------------------- | ------------------------------------------------------ |
-| Account plane  | `deploy/accounts-cloudflare/src/handler.ts` (`createAccountsHandler`) | platform worker origin root; issuer is the bare origin |
-| Deploy control | `worker/src/handler.ts`                                               | platform worker `/api` and `/hooks/*`                  |
+### Run a module from Git
 
-`/install?git=...&ref=...&path=...` is a dashboard SPA entrypoint, not a deploy-control handler. The SPA preserves the
-query, forwards to `/new`, and only pre-fills the Git form; compatibility check and explicit confirmation still happen
-inside `/new`.
+This is the usual path.
 
-`deploy/node-postgres/` is the Bun + Postgres substrate that backs the same `createAccountsHandler` for the
-local-substrate cloud profile (the `deploy/local-substrate/` cloud wrapper imports its server). It is a substrate
-behind the one handler, not an alternate distribution.
+1. Register a Git URL, ref, and module path.
+2. Takosumi resolves the ref to one commit.
+3. Create a plan and review the changes.
+4. Apply the reviewed plan.
+5. Save state, outputs, logs, and audit records.
 
-## Public surface
+Takosumi calls one registered module a **Capsule**. Knowing that term does not
+change how you write the module.
 
-The product flow is deliberately small: choose a **Workspace** and **Project**, register a Git **Source**, create a
-**Capsule**, bind provider aliases through **ProviderConnections**, **CredentialRecipes**, and **ProviderBindings**,
-review a **Run**, then inspect **StateVersions**, **Outputs**, and **AuditEvents**. See the public
-[concepts overview](docs/en/concepts/index.md) and [glossary](docs/en/reference/glossary.md). Implementer-facing final
-direction lives in [docs/internal/final-plan.md](docs/internal/final-plan.md) (not a published product contract).
+### Request a typed resource
 
-| Concept              | Meaning                                                                                                                         |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `Workspace`          | User/team owner boundary for projects, provider connections, secrets, state isolation, and audit.                               |
-| `Project`            | One product, service, application, or infrastructure group.                                                                     |
-| `Capsule`            | One OpenTofu/Terraform module execution unit, usually sourced from Git URL + ref + path.                                        |
-| `Source`             | Git URL / branch / ref / commit / module path. Upload/prepared-source archives are internal/operator compatibility only.        |
-| `ProviderConnection` | Provider credential configuration stored in Takosumi and resolved into temporary env/file material only while a Run executes.   |
-| `CredentialRecipe`   | Provider-specific env/file/pre-run action definition for running an existing OpenTofu/Terraform provider as-is.                 |
-| `ProviderBinding`    | Provider address or alias to ProviderConnection mapping.                                                                        |
-| `Secret`             | Encrypted backing material; secret values are write-only to APIs and redacted from logs.                                        |
-| `Run`                | One init / validate / plan / apply / destroy / refresh / output execution with source snapshot, provider bindings, and logs.    |
-| `StateVersion`       | Persisted Capsule state generation.                                                                                             |
-| `Output`             | Captured `tofu output -json`, optionally wired into another Capsule's inputs.                                                   |
-| `Runner`             | Local/docker/remote/operator/cloud execution boundary for checkout, OpenTofu execution, state sync, output extraction, cleanup. |
-| `AuditEvent`         | Actor/action/target/result evidence.                                                                                            |
-| `Operator`           | The person or organization running Takosumi for their own users.                                                                |
+When the operator enables it, you can request services such as object storage
+or a SQL database as a **Resource**. You describe the type and settings you
+need. Takosumi selects from the targets and implementations the operator has
+made available.
 
-Takosumi does not replace OpenTofu or Terraform providers. Existing providers run as-is; Takosumi records the reviewable
-and auditable control-plane layer around those operations.
+Resources are optional. Available types differ between installations, so check
+`/.well-known/takosumi` or `/v1/capabilities`. Takoform is one format that can
+describe Resources; it is not the identity of Takosumi or of the cloud behind
+it.
 
-Takosumi OSS also owns a noncommercial `Offering` catalog, open subject resolvers, and exact `OfferingSelection` over
-`type + ref + version + digest`. A Service Form is one possible subject type; an Offering does not imply that Takosumi
-Cloud sells it. Cloud can attach a closed `CommercialOfferingBinding` only to that exact selection, binding manager,
-capacity, SKU, PriceCatalog, and payment evidence without creating a second availability or selection engine.
+Read the [concepts overview](docs/en/concepts/index.md) and
+[Resources](docs/en/concepts/resources.md) for details.
 
-## Editions
+## Takosumi and Takosumi Cloud
 
-| Edition                   | What it is                                                                                                                                                                                                                                                                                                                                  |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Takosumi OSS**          | This repository: Git-based OpenTofu/Terraform control plane, optional zero-form-capable Service Form host (current Resource Shape compatibility API), generic Offering selection, Compatibility API framework, Adapter system, ProviderConnections, runner pool, state/output/audit, and disabled/showback billing that never blocks apply. |
-| **Takosumi for Operator** | OSS/commercial operator edition for hosting Takosumi for users or customers: multi-tenant customer management, quota/metering/plans, DB-backed operator configuration, CLI/API/runbook operations, managed target catalog, support tooling, and commercial audit.                                                                           |
-| **Takosumi Cloud**        | The official hosted Takosumi for Operator at `app.takosumi.com`, with a closed CommercialOfferingBinding for each exact Offering selection, official managed targets, Takosumi-owned native resource internals, AI Gateway, Stripe-enforced billing, quota, usage, support, abuse controls, and SLA.                                        |
+- **Takosumi** is the software in this repository. You can operate it in your
+  own environment.
+- **Takosumi Cloud** is the official hosted service at `app.takosumi.com`.
+  Managed resources, prices, capacity, and support are Cloud decisions.
 
-The dependency direction is **one-way Cloud -> OSS**: the hosted Cloud operation consumes OSS contracts and composition
-points. OSS ships and runs with nothing from the hosted Cloud operation present.
+The OSS software runs without the hosted service. Cloud pricing, Stripe, and
+private deployment targets are not public contracts of this repository. See
+[Product boundaries](docs/en/concepts/boundaries.md).
 
-## Repository layout
+Takos is a separate product.
+It does not embed Accounts, deploy-control, the Dashboard, or the runner.
+Its worker connects to a Takosumi endpoint as an external client.
 
-The current layout is `contract/`, `core/`, `lib/`, `accounts/`, `providers/`, `worker/`, `runner/`,
-`opentofu-modules/`, `dashboard/`, `website/`, and `deploy/`. See the [AGENTS.md](AGENTS.md) "Workspace" section for the
-annotated tree (single source of truth to avoid drift).
+## Documentation
 
-## Commands
+- [Quickstart](docs/en/getting-started/quickstart.md) — complete local stack with dashboard and runner
+- [Concepts](docs/en/concepts/index.md) — how Git modules, Resources, Runs, and state fit together
+- [Credentials](docs/en/concepts/credentials.md) — safely passing provider credentials
+- [Self-hosting](docs/en/concepts/self-host.md) — topology and operator decisions
+- [API reference](docs/en/reference/api.md)
+- [CLI reference](docs/en/reference/cli.md)
+- [Operator runbooks](docs/operations/README.md)
+
+## Development
 
 ```bash
 bun run check
 bun test
-bun run test:scripts
 bun run docs:build
-bun run app-docs:build
-bun run website:build
 ```
 
-Hosted Cloud GA decisions, Stripe bootstrap, and production browser/live
-evidence belong to the operator environment. A standalone OSS clone does not
-proxy those operations to scripts outside this repository.
+The main directories are `contract/` for public contracts, `core/` for the
+control plane, `dashboard/` for the UI, `runner/` for execution, `deploy/` for
+deployment compositions, and `docs/` for documentation.
 
-## Docs and website
+This standalone OSS clone does not proxy hosted Cloud GA or production billing
+operations.
 
-`docs/` is the VitePress software docs site served from `takosumi.com/docs/`.
-`app-docs/` is the hosted Cloud docs site embedded into `dashboard/dist/docs/`
-for `app.takosumi.com/docs/`. `website/` is the landing page. `bun run
-website:build` produces one Cloudflare Pages artifact containing the landing
-page and software `/docs/`.
+Takosumi is licensed under [AGPL-3.0-only](LICENSE). See
+[SECURITY.md](SECURITY.md) to report a vulnerability.

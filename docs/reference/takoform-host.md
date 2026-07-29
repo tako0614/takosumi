@@ -1,10 +1,9 @@
-# Takoform host interoperability
+# Takoform integration
 
-Takosumi は Takoform の portable Resource / Interface API を host として実装します。
-Takoform provider は IaC の control-plane client であり、Cloudflare、AWS、その他の
-backend を直接選びません。Takosumi は受け取った portable object を同じ canonical
-Resource / Interface ledger に変換し、operator が有効化した adapter と Target で実行
-します。
+Takoform provider の endpoint、token、space を Takosumi に向けると、portable な
+Resource 宣言を通常の Resource lifecycle で扱えます。Takoform provider は IaC から
+Takosumi API を呼ぶ client であり、Cloudflare、AWS、その他の backend を直接選びません。
+配置先と実装は Takosumi endpoint の設定に従います。
 
 Takosumi に Terraform / OpenTofu provider 実装や第二の state authority はありません。
 provider、標準 Form、provider release は独立した Takoform project が所有します。
@@ -117,8 +116,8 @@ create は `If-None-Match: *`、既存 Resource の mutation は
 delete は deterministic `Idempotency-Key` が必須です。response の ETag と
 `metadata.resourceVersion` は一致します。
 
-Takosumi は wire object を canonical `ResourceShapeService` に翻訳します。portable
-API 専用の Resource、Run、state、audit、idempotency ledger は作りません。
+Takosumi は wire object を通常の Resource lifecycle に渡します。portable API 専用の
+Resource、Run、state、audit、idempotency ledger は作りません。
 
 ## Interface の宣言
 
@@ -216,8 +215,8 @@ operator 管理用の Takosumi API として残りますが、Takoform provider 
 ## Verification
 
 Takosumi の black-box conformance runner は discovery、exact Form availability、
-config fixture rejection、preview/apply、idempotent replay、read、digest
-substitution rejection、refresh、sync、optional import、delete と、canonical
+config fixture rejection、preview、apply、idempotent replay、read、digest
+substitution rejection、refresh、optional import、delete と、canonical
 `/v1` Resource/audit parity を検証します。出力は portable conformance report
 であり、signed admission artifact や release candidate は生成しません。
 Takoform provider 側は同じ wire contract、mutation fence、response identity、

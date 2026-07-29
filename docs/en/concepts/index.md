@@ -1,81 +1,91 @@
-# Overview
+# How Takosumi works
 
-Takosumi adds one layer of record between the repositories you keep in Git and the
-services that actually run. This page walks through that layer from the top.
+Takosumi is not a replacement for cloud APIs. It runs OpenTofu or Terraform
+with existing providers, then adds review, authorization, and records around
+that execution.
 
-## What happens
+## Six terms to start with
 
-When you register a repository as a Source, Takosumi resolves the ref you asked it to
-follow and pins the commit behind it as a SourceSnapshot. Everything downstream works
-from that pinned commit rather than from the ref, so the answer to "what did we run back
-then" stays fixed.
+| Name          | In plain language                                                      |
+| ------------- | ---------------------------------------------------------------------- |
+| **Workspace** | a boundary for a team and its permissions                              |
+| **Project**   | a way to group apps and infrastructure within a Workspace              |
+| **Source**    | a registered Git repository and module location                        |
+| **Capsule**   | one deployable module created from a Source                            |
+| **Run**       | one plan, apply, refresh, destroy, or other execution                  |
+| **Resource**  | a service requested by type and settings instead of a module you write |
 
-From there you create a plan. Takosumi runs OpenTofu inside the runner and records what
-would change as a Run. At this point nothing has changed yet.
+State, outputs, logs, and audit records are results of Runs. Provider API keys
+and similar credentials are stored separately as **Connections** and assigned
+only to the Runs that need them.
 
-Once a person has read the plan and accepts it, you apply **that same Run**. There is no
-path that re-plans before applying, so what you reviewed is what runs.
+The [glossary](../reference/glossary.md) contains exact API names. You do not
+need to learn all of them before starting.
 
-When the apply finishes, the state at that moment is saved as a StateVersion, and the
-values you chose to publish become Outputs. Who ran what, and when, stays in the Run and
-in the activity record.
+## Deploying a Git module
 
 ```text
-register a Source
-  → resolve the ref and pin a SourceSnapshot
-  → create a plan Run
-  → a person reads it
-  → apply the same Run
-  → a StateVersion and Outputs remain
+1. Register a Git URL, ref, and module path as a Source.
+2. Resolve the ref to one commit.
+3. Create a Capsule from the module.
+4. Assign Connections and input variables.
+5. Run a plan.
+6. Review the changes and apply.
+7. Save state, outputs, logs, and audit records.
 ```
 
-Nothing is applied without a plan in front of it. A new commit landing in Git, or a
-difference found against the running thing, moves nothing until a person has looked.
+A new commit in Git is not applied automatically. Takosumi shows that a newer
+revision exists; the next plan and apply remain explicit actions.
 
-## The things involved
+Read [Sources and Capsules](./sources.md) and the
+[Run model](./run-model.md) for details.
 
-| Term | Meaning |
-| --- | --- |
-| Workspace | The unit that groups people and resources. Members and permissions are decided here |
-| Project | A division used to organize the inside of a Workspace |
-| Source | A registered Git repository |
-| SourceSnapshot | The specific commit a Source resolved to |
-| Capsule | One deployed unit |
-| Run | The record of a single execution |
-| StateVersion | The state at the end of an execution |
-| Output | A non-secret value a Capsule publishes |
-| Connection | Credentials stored write-only |
-| Interface | A declaration of what a deployment offers at runtime |
-| InterfaceBinding | The authorization that says who may use it |
+## Creating a Resource
 
-Fuller definitions are collected in the [glossary](../reference/glossary.md).
+A Resource requests a service such as object storage or a SQL database by type
+and settings.
 
-## Two ways to create a service
+```text
+1. Check which Resource types the endpoint supports.
+2. Declare the type and settings you need.
+3. Takosumi selects an available target and implementation.
+4. Review the plan and apply it.
+5. Save the real service state and outputs.
+```
 
-What is described above is the **Stack flow**, where a module you wrote yourself runs
-from Git. The module can contain anything, and no Takosumi-specific manifest is needed.
+The operator decides which Resources are available. Takosumi OSS does not
+require one cloud, and the Git module path still works when no Resource
+implementation is installed. Takoform is one portable format for describing
+these Resource requests.
 
-The other way is a **Resource**, a typed service you get by declaring it. Takosumi
-resolves where and on what implementation to create it, so no module is involved, though
-the set of types you can create is fixed in advance.
+Read [Resources](./resources.md) for details.
 
-The two entrances share everything after them: the same Run ledger, the same state
-management, the same audit record.
+## Connecting deployments
 
-## Providers still do the provisioning
+Modules and Resources can publish non-secret values, such as an endpoint URL or
+identifier, as **Outputs**. When another deployment uses a value, Takosumi keeps
+both its source and the authorization.
 
-Cloudflare, AWS, and Kubernetes are driven by their own providers, exactly as before.
-Takosumi does not rebuild the cloud APIs, and it does not reach inside your module.
+Takosumi calls the description of a connection an **Interface**, and calls the
+permission to use it an **InterfaceBinding**. Creating an Interface alone does
+not grant access.
 
-## Read on
+Read [State and outputs](./state-and-outputs.md) and
+[Interfaces](./interfaces.md).
 
-- [Sources and Capsules](./sources.md) — how Git is handled, and what "deployed" means
-- [Run model](./run-model.md) — what a Run executes, and how
-- [State and outputs](./state-and-outputs.md) — what is stored, what is published, how to
-  go back
-- [Credentials](./credentials.md) — how far values travel, and what lands in the record
-- [Resources](./resources.md) — typed services and how they are resolved
-- [Interfaces](./interfaces.md) — declaring what you offer, and authorizing its use
-- [Usage and billing](./usage-and-billing.md)
-- [Product boundaries](./boundaries.md) — what the software does and what the operator
-  decides
+## Safety rules that do not change
+
+- Secret values cannot be read back and never belong in Outputs or logs.
+- A plan is created before apply, and apply uses the reviewed plan.
+- A Git ref is pinned to a commit before execution.
+- After a Resource target is selected, Takosumi does not silently move it to a
+  different implementation.
+- Read-only observation never applies a detected change automatically.
+
+## Software and hosted operations
+
+These docs describe behavior shared by Takosumi OSS installations. Available
+Resources, storage limits, pricing, and SLAs are operator decisions. Details
+specific to the official hosted service stay in the Takosumi Cloud docs.
+
+See [Product boundaries](./boundaries.md) for the exact split.

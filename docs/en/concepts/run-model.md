@@ -56,32 +56,39 @@ directly; it hands the work to the runner and takes back the result.
 
 ## What is stored
 
-| Stored | Description |
-| --- | --- |
-| source snapshot | Which commit was executed |
-| OpenTofu version | The version used for the execution |
-| provider lock digest | What the provider lock pinned |
-| ProviderBinding | Which credentials were used |
-| The **names** of the injected environment variables | Values are not stored |
-| plan / apply result | What changed |
-| state version | The state after execution |
-| outputs | The published values |
-| logs | Execution logs |
-| actor | Who ran it |
-| audit evidence | The record kept for audit |
+| Stored                                              | Description                        |
+| --------------------------------------------------- | ---------------------------------- |
+| source snapshot                                     | Which commit was executed          |
+| OpenTofu version                                    | The version used for the execution |
+| provider lock digest                                | What the provider lock pinned      |
+| ProviderBinding                                     | Which credentials were used        |
+| The **names** of the injected environment variables | Values are not stored              |
+| plan / apply result                                 | What changed                       |
+| state version                                       | The state after execution          |
+| outputs                                             | The published values               |
+| logs                                                | Execution logs                     |
+| actor                                               | Who ran it                         |
+| audit evidence                                      | The record kept for audit          |
 
 The rule is to **keep names rather than values**. You can find out later which
 environment variables were injected, but not what was in them.
 
-## Nothing is applied automatically
+## What can continue automatically
 
-Takosumi never decides on its own to start an apply.
+Detecting a Git change or drift does not make Takosumi start an apply.
 
 - A new commit in Git only makes the Capsule `stale`
 - A drift check that finds a difference only reports it
 - Periodic observation is read-only and never re-picks a target
 
-In every case, moving forward means a person reads the plan and applies it.
+There is one explicit exception. When a user starts an install from the
+dashboard or enables an automatic update, the Run records
+`autoApplyRequested`: continue from plan to apply if the plan finishes cleanly.
+A plan with deletions, an approval policy, a billing check, or another policy
+gate still stops for review.
+
+In short, **detection never starts an apply; an action already started by a
+user or policy may continue from a safe plan to apply.**
 
 Checking for differences alone works per Capsule or across a whole Workspace.
 

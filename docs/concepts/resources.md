@@ -55,21 +55,21 @@ takosumi resources apply ObjectBucket assets --file bucket.json --yes
 内容は同じものです。`--yes` を付けずに実行すると、内容を表示して**終了コード 2 で
 止まります**。確認してから付け直す、という 2 段階を意図した設計です。
 
-## 解決は固定されます
+## 配置先と実装は preview で決まります
 
 ```text
 Resource の宣言
   → 使える型か (導入済みか、書き込み可か)
-  → 配置先の候補 (TargetPool)
-  → 実装の候補 (Adapter)
-  → 解決を固定する (ResolutionLock)
-  → 実物を作る (NativeResource)
+  → 配置先と実装を 1 つ選ぶ
+  → 選択結果を記録する
+  → 実物を作る
   → 状態と Output を公開する
 ```
 
-一度解決すると、その Resource の配置先と実装は ResolutionLock として固定されます。
-以降の差分確認や refresh は**固定された配置先と実装をそのまま使います**。裏で別の
-実装に移されて挙動が変わることはありません。
+一度選ばれた配置先と実装は記録されます。以降の差分確認や refresh は**同じ配置先と
+実装をそのまま使います**。明示的に変更しない限り、裏で別の実装へ移されて挙動が
+変わることはありません。API 上の記録名は
+[API reference](../reference/api.md)で確認できます。
 
 ## 状態を読む
 
@@ -82,11 +82,10 @@ takosumi resources events ObjectBucket assets --space prod
 イベントは新しい順に返り、Resource を削除したあとも監査履歴として読めます。
 イベントに認証情報、生のエラー、spec、state、Output の値は含まれません。
 
-Dashboard も任意の Output 値を一覧表示しません。例外は、Resource の型と Output 名の
-組み合わせが公開ナビゲーション先として明示的に許可され、値が認証情報・query・fragment
-を含まない HTTPS URL として検証できる場合だけです。現在は Cloud managed
-`EdgeWorker` の canonical `url` をこの方法で開けます。同名の Output が別の型にあっても、
-また任意の `public_url` や secret らしい Output があっても、リンクにはなりません。
+Dashboard も任意の Output 値を一覧表示しません。Resource の型と Output 名の組み合わせが
+公開ナビゲーション先として明示的に許可され、値が認証情報・query・fragment を含まない
+HTTPS URL として検証できる場合だけリンクにします。同名の Output が別の型にあっても、
+任意の `public_url` や secret らしい Output があってもリンクにはなりません。
 
 一覧は `createdAt` と id による keyset 方式です。最終ページ以外では `nextCursor` が
 返るので、中身を解釈せず次の `--cursor` にそのまま渡します。既定は 100 件、最大も

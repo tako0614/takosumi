@@ -71,14 +71,14 @@ docs use a different name, read it back through this table.
 
 ## Runtime connections
 
-| Term             | Meaning                                                                                        |
-| ---------------- | ---------------------------------------------------------------------------------------------- |
-| Interface        | The declaration of what something you deployed provides.                                       |
-| InterfaceBinding | The authorization for who may use that Interface, and with which permissions.                  |
-| Principal        | The subject on the consuming side that is a person or an account.                              |
-| ServiceAccount   | The subject on the consuming side that is not a person.                                        |
-| permission       | A token for an operation a Binding allows. You request this range when taking a token.         |
-| Interface token  | A short-lived token minted per request in order to call an Interface. Its prefix is `taksrv_`. |
+| Term             | Meaning                                                                                                            |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------ |
+| Interface        | The declaration of what something you deployed provides.                                                           |
+| InterfaceBinding | The authorization for who may use that Interface, and with which permissions.                                      |
+| Principal        | The subject on the consuming side that is a person or an account.                                                  |
+| ServiceAccount   | The subject on the consuming side that is not a person.                                                            |
+| permission       | A token for an operation a Binding allows. You request this range when taking a token.                             |
+| Interface token  | A non-refreshable token valid for at most 60 seconds when calling an Interface. Its string format is host-defined. |
 
 ## Typed services
 
@@ -137,10 +137,8 @@ curl -s https://takosumi.example.com/.well-known/takosumi
 
 ## Who operates it
 
-| Term                      | Meaning                                                                                                                    |
-| ------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| Operator                  | The party running Takosumi for themselves or for their own users.                                                          |
-| Takosumi Cloud            | The hosted service run officially.                                                                                         |
-| showback                  | The billing mode that goes as far as recording and showing usage.                                                          |
-| OfferingSelection         | The exact version-and-digest-pinned subject selected from the OSS catalog; it carries no price or private capacity.        |
-| CommercialOfferingBinding | The closed Cloud record binding manager, capacity, SKU, PriceCatalog, and payment evidence to one exact OfferingSelection. |
+| Term           | Meaning                                                           |
+| -------------- | ----------------------------------------------------------------- |
+| Operator       | The party running Takosumi for themselves or for their own users. |
+| Takosumi Cloud | The hosted service run officially.                                |
+| showback       | The billing mode that goes as far as recording and showing usage. |

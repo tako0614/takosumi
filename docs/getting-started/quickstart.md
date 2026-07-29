@@ -1,91 +1,89 @@
 # クイックスタート
 
-手元の Linux マシンに Takosumi を 1 つ立ち上げて、Git に置いた OpenTofu module を
-1 つ取り込み、plan から apply まで通します。初回は Docker イメージのビルドがあるので
-30 分ほど見ておいてください。2 回目からは数分で起動します。
+まず 5 分で API を確認し、そのあと必要なら dashboard、サインイン、データベース、
+OpenTofu runner を含むローカル環境を起動します。
 
-終わったときには、次のものが手元にあります。
+## 5 分: 開発用 API
 
-- `https://app.takosumi.test` でサインインできる Takosumi が動いています。サインインを
-  受け付ける発行元、control plane、dashboard、OpenTofu を実行する runner が同じ origin に
-  そろっています
-- Git URL から作った [Capsule](../reference/glossary.md) (デプロイされたひとまとまり) が
-  1 つできます。plan と apply の記録も残ります
-- Git URL を自分のリポジトリに差し替えれば、そのまま同じ手順を試せます
-
-## 前提
-
-- Linux であること。DNS に systemd-resolved、コンテナに Docker daemon を使います。
-  macOS、WSL、Windows では動きません
-- Docker と `docker compose`
-- Bun
-- Git
-- `curl` と `python3`。起動の確認と、手順 7 の確認スクリプトが使います
-- sudo が使えること。証明書と DNS の設定をホストに 1 度だけ入れます
-
-## 1. リポジトリを取得する
+必要なものは Bun と Git です。
 
 ```bash
 git clone https://github.com/tako0614/takosumi.git
 cd takosumi
 bun install
+
+TAKOSUMI_DEV_MODE=1 \
+TAKOSUMI_DEPLOY_CONTROL_TOKEN=dev-token \
+PORT=8788 \
+bun core/index.ts
 ```
 
-ディレクトリ名は `takosumi` のままにします。次の手順で使う compose ファイルが、この
-名前でリポジトリを参照します。
+別のターミナルで確認します。
 
-## 2. ローカルの Takosumi を起動する
+```bash
+curl http://127.0.0.1:8788/v1/capabilities \
+  -H "authorization: Bearer dev-token"
+```
+
+JSON が返れば API は動いています。この構成はデータをメモリに置き、再起動すると消えます。
+dashboard や runner も起動しないため、開発中の API 確認にだけ使ってください。
+
+## 約 30 分: 完全なローカル環境
+
+ここからは Linux マシン上にローカルの Takosumi を立て、Git module の plan と apply を
+実行します。初回はコンテナと dashboard をビルドするため時間がかかります。
+
+### 必要なもの
+
+- Linux。macOS、WSL、Windows はこの構成の対象外です
+- Docker と `docker compose`
+- Bun、Git、`curl`、`python3`
+- 証明書と DNS を設定するための `sudo`
+
+### 1. 環境を起動する
+
+すでにリポジトリを取得している場合は、ルートから次を実行します。
 
 ```bash
 cd deploy/local-substrate
 bash scripts/up.sh --profile postgres
 ```
 
-このコマンドは、必要なものを 1 つの Docker network にまとめて立ち上げます。ローカル
-認証局の Pebble、DNS を返す CoreDNS、TLS を終端する Caddy、Postgres、オブジェクト
-ストレージの MinIO、OpenTofu を実行する runner コンテナ、control plane と dashboard
-です。初回はここでイメージのビルドと dashboard のビルドが走ります。起動が終わると、
-次に打つコマンドと確認用の URL が画面に出ます。
-
-Docker が既定の AppArmor プロファイルではコンテナを起動できないホストもあります。その
-場合は環境変数を付けて実行します。
+このコマンドは Postgres、オブジェクトストレージ、runner、control plane、dashboard、
+ローカル認証局と DNS をまとめて起動します。既定の AppArmor 設定でコンテナを起動
+できないホストでは、次を使います。
 
 ```bash
-TAKOSUMI_LOCAL_SUBSTRATE_DISABLE_APPARMOR=1 bash scripts/up.sh --profile postgres
+TAKOSUMI_LOCAL_SUBSTRATE_DISABLE_APPARMOR=1 \
+bash scripts/up.sh --profile postgres
 ```
 
-## 3. 証明書と DNS をホストに入れる
+### 2. ローカル証明書と DNS を設定する
 
 ```bash
 sudo bash scripts/ca-install.sh
 sudo bash scripts/configure-dns.sh
 ```
 
-`ca-install.sh` は Pebble が発行したルート証明書を、システムの信頼ストアと
-Chrome / Firefox の証明書データベースに入れます。`configure-dns.sh` は
-`*.takosumi.test` の問い合わせを CoreDNS に向けます。どちらもホストごとに 1 回で
-済みます。Pebble を再起動するとルート証明書が変わるので、そのときは
-`ca-install.sh` をもう一度実行します。
+この 2 つはホストごとに 1 回だけ実行します。ローカル認証局を作り直した場合は
+`ca-install.sh` をもう一度実行してください。
 
-## 4. 起動を確かめる
+### 3. 起動を確認する
 
 ```bash
-curl https://hello.takosumi.test/
 curl https://app.takosumi.test/healthz
 curl https://app.takosumi.test/.well-known/openid-configuration
 ```
 
-`/healthz` が `{"ok":true,"database":"ok"}` を返せば、control plane が Postgres まで
-届いています。`/.well-known/openid-configuration` が返れば、サインインを受け付ける発行元が
-立ち上がっています。
+`/healthz` が `{"ok":true,"database":"ok"}` を返せば、アプリから Postgres まで
+接続できています。
 
-## 5. サインインする
+### 4. サインインする
 
-ブラウザで `https://app.takosumi.test/` を開きます。サインイン画面に「Local OIDC」が
-出るので、これを選びます。このスタックに同梱されている確認用の ID プロバイダなので、
-実在のアカウントは要りません。
+ブラウザで `https://app.takosumi.test/` を開き、**Local OIDC** を選びます。これは
+ローカル確認用の ID provider なので、実在のアカウントは必要ありません。
 
-## 6. module を 1 つ反映する
+### 5. サンプルを追加する
 
 サインインしたまま、次の URL を開きます。
 
@@ -93,51 +91,46 @@ curl https://app.takosumi.test/.well-known/openid-configuration
 https://app.takosumi.test/install?git=https://github.com/tako0614/takosumi.git&ref=main&path=examples/opentofu-basic
 ```
 
-`/install` は Git URL、ref、module のパスを `/new` の入力欄に入れるところまでを行います。
-リンクを開いただけでは何も作られません。画面に取得元、バージョン、フォルダが出るので、
-内容を見てから「サービスを追加」を押します。
+画面には Git URL、ref、module path が入力された状態で表示されます。リンクを開いただけ
+では作成されません。内容を確認して追加すると、Takosumi は ref を commit に固定し、
+module の互換性を調べて plan を作ります。
 
-押したあとは Takosumi が続けます。指定した ref を commit に解決して固定し、module を
-読んで互換性を確認し、Capsule を作り、plan を作ります。plan が成功して、承認の設定も
-削除される予定のリソースもなければ、そのまま apply まで進みます。承認を設定した
-Capsule や、削除を含む plan の場合は、Run の画面が plan の内容を見せて止まるので、
-そこで読んでから自分でデプロイします。
+このサンプルは provider を使わず、外部リソースも作りません。クラウドの認証情報なしで
+runner、plan、apply、state 保存まで確認できます。
 
-`examples/opentofu-basic` は provider を持たず、外部のリソースも作らない module です。
-クラウドの認証情報を 1 つも用意せずに、plan、apply、状態の保存までを通せます。
+インストール操作は、削除を含まず承認も不要な plan だけを apply まで続けるよう明示的に
+要求します。削除、承認ポリシー、料金、その他の gate がある場合は Run 画面で停止します。
+通常の更新、drift の検出、Git の新しい commit は勝手に apply されません。
 
-## 7. 成功したことを確かめる
+### 6. 結果を見る
 
-`https://app.takosumi.test/runs` を開くと、いま作った plan と apply の Run が並びます。
-どちらも成功で終わっていれば、Git に置いた module がこの Takosumi を通って反映された
-ということです。Capsule の詳細画面には、apply を終えた時点の状態 (StateVersion) が
-apply のたびに 1 つずつ積み上がります。
+`https://app.takosumi.test/runs` で plan と apply の記録を確認します。Capsule の詳細には
+適用後の state が版ごとに保存されます。
 
-スタック全体をまとめて確かめる場合は、同梱の確認スクリプトを実行します。どの構成を
-確かめるかは環境変数で伝えます。付け忘れると `workers` 構成として実行され、起動して
-いないコンテナを見に行って失敗します。
+環境全体を検査する場合は、リポジトリ同梱の smoke test を使います。
 
 ```bash
 TAKOSUMI_LOCAL_SUBSTRATE_PROFILE=postgres bash scripts/smoke.sh
 ```
 
-最後の行に `==> <件数> passed, 0 failed` と出れば成功です。サインイン、plan と apply、
-Run の記録の読み出し、オブジェクトストレージ、DNS と TLS まで通っています。失敗した
-チェックのログは `/tmp/smoke-logs/` に残ります。
+最後に `0 failed` と表示されれば、サインイン、Run、保存先、DNS、TLS まで通っています。
+失敗した検査のログは `/tmp/smoke-logs/` に残ります。
 
-## 8. 片付ける
+### 7. 停止する
 
 ```bash
 bash scripts/down.sh
 ```
 
-Postgres の中身や発行済みの証明書も消す場合は `bash scripts/down.sh -v` を実行します。
+Postgres のデータと証明書も消す場合は `bash scripts/down.sh -v` を使います。
 
 ## 次に読むもの
 
-- [全体像](../concepts/index.md) — Source から Run、状態と出力までのつながり
-- [Source と Capsule](../concepts/sources.md) — 自分のリポジトリを登録する
-- [認証情報](../concepts/credentials.md) — provider の認証情報を渡す
-- [CLI](../reference/cli.md) — 画面での操作を自動化する
+- [仕組みの全体像](../concepts/index.md)
+- [Source と Capsule](../concepts/sources.md)
+- [認証情報](../concepts/credentials.md)
+- [自分で動かす](../concepts/self-host.md)
+- [CLI](../reference/cli.md)
 
-公式の hosted サービスを使う場合は、[Takosumi Cloud のドキュメント](https://app.takosumi.com/docs/)を参照してください。
+公式ホスティングを使う場合は
+[Takosumi Cloud のドキュメント](https://app.takosumi.com/docs/)を参照してください。

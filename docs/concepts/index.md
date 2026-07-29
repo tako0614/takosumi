@@ -1,69 +1,87 @@
-# 全体像
+# 仕組みの全体像
 
-Takosumi は、Git にある OpenTofu module を実行し、その結果を台帳として残す
-control plane です。インフラそのものは作り直しません。既存の provider を
-そのまま実行します。
+Takosumi はクラウド API の代わりではありません。OpenTofu / Terraform と既存 provider
+を実行し、その前後に確認、認可、記録を加えます。
 
-## 何を担当し、何を担当しないか
+## 最初に覚える 6 つ
 
-**担当するもの** — どの commit を、どの認証情報で、いつ、誰が実行したかの記録。
-実行後の状態と、公開された値の管理。誰がその値を使ってよいかの認可。
+| 名前          | 普通の言葉でいうと                                      |
+| ------------- | ------------------------------------------------------- |
+| **Workspace** | チームと権限を分ける入れ物                              |
+| **Project**   | Workspace 内でアプリやインフラを整理する単位            |
+| **Source**    | 登録した Git リポジトリと module の場所                 |
+| **Capsule**   | Source から作った、1 つの module のデプロイ単位         |
+| **Run**       | plan、apply、refresh、destroy など 1 回の実行           |
+| **Resource**  | module を自分で書かず、種類と設定を指定して作るサービス |
 
-**担当しないもの** — クラウド API の再実装と module の中身。Cloudflare、AWS、
-Kubernetes などは、その provider と標準 API をそのまま使います。Takosumi は
-その外側にいます。
+state、output、ログ、監査記録は Run の結果です。provider の API key などは
+**Connection** として別に保存し、必要な Run にだけ割り当てます。
 
-## 2 つの作り方
+細かな型名や API 上の名前は[用語集](../reference/glossary.md)にあります。最初から
+すべて覚える必要はありません。
 
-Takosumi には、サービスを作る方法が 2 つあります。
-
-**Stack flow** — 自分で書いた OpenTofu module を Git から実行します。module の
-中身は自由で、Takosumi は実行と記録だけを担当します。専用のマニフェストは要りません。
-
-**Resource** — 型が決まったサービスを宣言だけで作ります。どの実装に載せるかは
-Takosumi が解決します。module を書かずに済みますが、作れる種類は決まっています。
-
-どちらも同じ Run 台帳、同じ状態管理、同じ監査記録を使います。
-
-## 主な登場人物
-
-| 名前 | 役割 |
-| --- | --- |
-| Workspace | 人とリソースの入れ物。メンバーと権限の単位 |
-| Project | Workspace 内の整理単位 |
-| Source | Git リポジトリの登録 |
-| SourceSnapshot | Source が解決した特定の commit |
-| Capsule | デプロイされた 1 つのまとまり |
-| Run | 1 回の実行の記録 |
-| StateVersion | 実行後に保存される状態の 1 地点 |
-| Output | Capsule が公開する非 secret の値 |
-| Connection | 書き込み専用で保存した認証情報 |
-| Interface | 実行時に提供する機能の宣言 |
-| InterfaceBinding | Interface を使ってよい相手の認可 |
-
-用語の詳しい定義は[用語集](../reference/glossary.md)にあります。
-
-## 変更が反映されるまで
+## Git module をデプロイする
 
 ```text
-Source を登録する
-  → commit を SourceSnapshot として固定する
-  → 計画 Run を作る
-  → 内容を人が確認する
-  → 同じ Run を適用する
-  → StateVersion と Output が保存される
+1. Git URL、ref、module path を Source として登録
+2. ref を 1 つの commit に固定
+3. module から Capsule を作成
+4. Connection と入力変数を割り当て
+5. plan を実行
+6. 差分を確認して apply
+7. state、output、ログ、監査記録を保存
 ```
 
-**計画を挟まずに適用されることはありません。** Git に新しい commit が来ても、
-差分が見つかっても、自動では適用されません。
+Git に新しい commit が追加されても、自動では反映しません。Takosumi は新しい差分が
+あることを示し、次の plan と apply は改めて実行します。
 
-## もっと詳しく
+詳しくは [Source と Capsule](./sources.md) と
+[実行モデル](./run-model.md)を参照してください。
 
-- [Source と Capsule](./sources.md) — Git をどう扱い、何が「デプロイされている」のか
-- [実行モデル](./run-model.md) — Run が何をどう実行するか
-- [状態と出力](./state-and-outputs.md) — 何が保存され、何が公開され、どう戻すか
-- [認証情報](./credentials.md) — 値がどこまで行き、何が記録に残るか
-- [Resource](./resources.md) — 型付きサービスと、その解決経路
-- [Interface](./interfaces.md) — 提供する機能の宣言と認可
-- [利用量と課金](./usage-and-billing.md)
-- [製品の境界](./boundaries.md) — ソフトウェアと運用主体の分担
+## Resource を作る
+
+Resource は、オブジェクトストレージや SQL データベースのようなサービスを、型と設定で
+要求する経路です。
+
+```text
+1. endpoint が対応する Resource の種類を確認
+2. 欲しい種類と設定を宣言
+3. Takosumi が利用可能な配置先と実装を選択
+4. plan を確認して apply
+5. 実際のサービスの状態と output を保存
+```
+
+使える Resource は運用者が決めます。Takosumi OSS は特定クラウドを強制せず、対応する
+実装が 0 個でも Git module の経路は使えます。Takoform はこの Resource 宣言を別の
+環境でも扱いやすくする形式の 1 つです。
+
+詳しくは [Resource](./resources.md) を参照してください。
+
+## デプロイしたものをつなぐ
+
+module と Resource は、接続先 URL や識別子などの非 secret 値を **Output** として
+公開できます。別のデプロイから使う場合は、値の出どころと利用許可を Takosumi に
+記録します。
+
+Takosumi では、デプロイしたものが提供する接続方法の説明を **Interface**、利用を
+許可する記録を **InterfaceBinding** と呼びます。Interface を作っただけではアクセス
+権限は増えません。
+
+詳しくは [状態と Output](./state-and-outputs.md) と
+[Interface](./interfaces.md)を参照してください。
+
+## 変わらない安全上のルール
+
+- secret の値は API から読み戻せず、Output やログにも載せません
+- apply の前に plan を作り、確認した計画を使います
+- Git の ref は実行前に commit へ固定します
+- Resource の配置先を決めたあと、別の実装へ黙って切り替えません
+- 読み取り専用の観測で差分が見つかっても、自動適用しません
+
+## ソフトウェアと運用サービス
+
+このドキュメントは Takosumi OSS の共通動作を説明します。利用できる Resource、
+保存容量、料金、SLA は endpoint の運用者が決めます。公式ホスティング固有の内容は
+Takosumi Cloud のドキュメントに分けています。
+
+[製品の境界](./boundaries.md)で、どこまでがソフトウェアの責任かを確認できます。
