@@ -81,7 +81,8 @@ durable database, and OpenTofu runner.
 - [Credentials](./concepts/credentials.md) — passing connections to providers
 - [Resources](./concepts/resources.md) — creating typed services without writing a module
 - [Self-hosting](./concepts/self-host.md) — operating a production installation
-- [API](./reference/api.md) and [CLI](./reference/cli.md) references
+- [Repository manifest](./reference/repository-manifest.md),
+  [API](./reference/api.md), and [CLI](./reference/cli.md) references
 
 Pricing, managed resources, and support for the official hosted service are in
 the [Takosumi Cloud documentation](https://app.takosumi.com/docs/en/).

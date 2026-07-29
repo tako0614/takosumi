@@ -271,7 +271,7 @@ test("source register -> sync -> snapshots flow", async () => {
   expect((await snaps.json()).snapshots).toEqual([]);
 });
 
-test("source snapshot API exposes install UX status and digest without repository content", async () => {
+test("source snapshot API exposes repository manifest status and digest without content", async () => {
   const fileJobs: unknown[] = [];
   const { app, store } = await makeAppWithStore({
     runner: {
@@ -283,7 +283,7 @@ test("source snapshot API exposes install UX status and digest without repositor
       },
       readSourceSnapshotPresentationFile: async (job) => {
         fileJobs.push(job);
-        throw new Error("repository install UX must not reach the file reader");
+        throw new Error("repository manifest must not reach the file reader");
       },
     },
   });
@@ -310,12 +310,13 @@ test("source snapshot API exposes install UX status and digest without repositor
     archiveRef: "workspaces/ws_001/install-ux/source.tar.zst",
     archiveDigest: `sha256:${"a".repeat(64)}`,
     archiveSizeBytes: 42,
-    repositoryInstallUx: {
+    repositoryManifest: {
       status: "present",
       digest,
       document: {
-        schemaVersion: "takosumi.install-ux/v1",
-        modules: { ".": { inputs: [] } },
+        apiVersion: "takosumi.com/v1alpha1",
+        kind: "Repository",
+        install: { modules: { ".": { inputs: [] } } },
       },
     },
     fetchedByRunId: "ssr_installux000001",
@@ -325,7 +326,7 @@ test("source snapshot API exposes install UX status and digest without repositor
   await store.putSourceSnapshot({
     ...snapshot,
     id: "snap_installux000002",
-    repositoryInstallUx: {
+    repositoryManifest: {
       status: "invalid",
       reason: "invalid_document",
       digest: `sha256:${"d".repeat(64)}`,
@@ -341,11 +342,11 @@ test("source snapshot API exposes install UX status and digest without repositor
   );
   expect(listed.status).toBe(200);
   const body = await listed.json();
-  expect(body.snapshots[0].repositoryInstallUx).toEqual({
+  expect(body.snapshots[0].repositoryManifest).toEqual({
     status: "present",
     digest,
   });
-  expect(body.snapshots[1].repositoryInstallUx).toEqual({
+  expect(body.snapshots[1].repositoryManifest).toEqual({
     status: "invalid",
     reason: "invalid_document",
     digest: `sha256:${"d".repeat(64)}`,

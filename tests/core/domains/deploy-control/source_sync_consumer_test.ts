@@ -44,7 +44,7 @@ class StubRunner {
     if (this.fail) throw new Error("runner exploded");
     return {
       repositoryInstallMetadata: { status: "absent" },
-      repositoryInstallUx: { status: "absent" },
+      repositoryManifest: { status: "absent" },
       ...this.result,
     };
   }
@@ -107,7 +107,7 @@ function sourceSnapshot(over: Partial<SourceSnapshot> = {}): SourceSnapshot {
     archiveDigest: "sha256:" + "b".repeat(64),
     archiveSizeBytes: 1024,
     repositoryInstallMetadata: { status: "absent" },
-    repositoryInstallUx: { status: "absent" },
+    repositoryManifest: { status: "absent" },
     fetchedByRunId: "ssr_prev",
     fetchedAt: TEST_TIME,
     ...over,
@@ -399,7 +399,7 @@ test("source_sync consumer reuses an unchanged SourceSnapshot archive", async ()
     archiveDigest: previousDigest,
     archiveSizeBytes: 2048,
     repositoryInstallMetadata: { status: "absent" },
-    repositoryInstallUx: { status: "absent" },
+    repositoryManifest: { status: "absent" },
     fetchedByRunId: "ssr_prev",
     fetchedAt: "1970-01-01T00:00:00.000Z",
   });
@@ -477,13 +477,13 @@ test("source_sync consumer does not reuse a snapshot that predates repository me
   expect(snapshots.at(-1)?.repositoryInstallMetadata).toEqual({
     status: "absent",
   });
-  expect(snapshots.at(-1)?.repositoryInstallUx).toEqual({
+  expect(snapshots.at(-1)?.repositoryManifest).toEqual({
     status: "absent",
   });
   expect(snapshots.at(-1)?.archiveRef).toBe(run.archiveRef);
 });
 
-test("source_sync consumer does not reuse a snapshot that predates repository install UX observation", async () => {
+test("source_sync consumer does not reuse a snapshot that predates repository manifest observation", async () => {
   const { store, sourcesService, runner, controller } = build();
   const { source } = await sourcesService.createSource({
     workspaceId: "workspace_1",
@@ -518,7 +518,7 @@ test("source_sync consumer does not reuse a snapshot that predates repository in
   expect((await store.getSourceSyncRun(run.id))?.status).toBe("succeeded");
   const snapshots = await store.listSourceSnapshots(source.id);
   expect(snapshots).toHaveLength(2);
-  expect(snapshots.at(-1)?.repositoryInstallUx).toEqual({
+  expect(snapshots.at(-1)?.repositoryManifest).toEqual({
     status: "absent",
   });
   expect(snapshots.at(-1)?.archiveRef).toBe(run.archiveRef);
@@ -555,7 +555,7 @@ test("source_sync consumer reuses an unchanged public Git archive from a sibling
     archiveDigest: previousDigest,
     archiveSizeBytes: 2048,
     repositoryInstallMetadata: { status: "absent" },
-    repositoryInstallUx: { status: "absent" },
+    repositoryManifest: { status: "absent" },
     fetchedByRunId: "ssr_prev",
     fetchedAt: "1970-01-01T00:00:00.000Z",
   });
@@ -622,7 +622,7 @@ test("source_sync consumer fast-reuses a pinned commit SourceSnapshot without di
     archiveDigest: previousDigest,
     archiveSizeBytes: 2048,
     repositoryInstallMetadata: { status: "absent" },
-    repositoryInstallUx: { status: "absent" },
+    repositoryManifest: { status: "absent" },
     fetchedByRunId: "ssr_prev",
     fetchedAt: "1970-01-01T00:00:00.000Z",
   });
@@ -768,7 +768,7 @@ test("source_sync consumer rejects a reused archive outside the requested snapsh
     archiveDigest: "sha256:" + "b".repeat(64),
     archiveSizeBytes: 2048,
     repositoryInstallMetadata: { status: "absent" },
-    repositoryInstallUx: { status: "absent" },
+    repositoryManifest: { status: "absent" },
     fetchedByRunId: "ssr_prev",
     fetchedAt: "1970-01-01T00:00:00.000Z",
   });

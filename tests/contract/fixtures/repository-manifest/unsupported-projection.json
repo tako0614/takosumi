@@ -1,6 +1,8 @@
 {
-  "schemaVersion": "takosumi.install-ux/v1",
-  "modules": {
+  "apiVersion": "takosumi.com/v1alpha1",
+  "kind": "Repository",
+  "install": {
+    "modules": {
     ".": {
       "inputs": [],
       "installExperience": {
@@ -12,5 +14,6 @@
         ]
       }
     }
+  }
   }
 }

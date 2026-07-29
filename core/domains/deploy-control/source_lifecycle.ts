@@ -289,10 +289,10 @@ export class SourceLifecycleService {
       (reuseSnapshot && archiveRef === reuseSnapshot.archiveRef
         ? reuseSnapshot.repositoryInstallMetadata
         : undefined);
-    const repositoryInstallUx =
-      result.repositoryInstallUx ??
+    const repositoryManifest =
+      result.repositoryManifest ??
       (reuseSnapshot && archiveRef === reuseSnapshot.archiveRef
-        ? reuseSnapshot.repositoryInstallUx
+        ? reuseSnapshot.repositoryManifest
         : undefined);
     if (!repositoryInstallMetadata) {
       throw new OpenTofuControllerError(
@@ -300,10 +300,10 @@ export class SourceLifecycleService {
         "source_sync did not observe repository install metadata",
       );
     }
-    if (!repositoryInstallUx) {
+    if (!repositoryManifest) {
       throw new OpenTofuControllerError(
         "failed_precondition",
-        "source_sync did not observe repository install UX",
+        "source_sync did not observe the repository manifest",
       );
     }
     const snapshot: SourceSnapshot = {
@@ -319,7 +319,7 @@ export class SourceLifecycleService {
       archiveDigest: result.archiveDigest,
       archiveSizeBytes: result.archiveSizeBytes,
       repositoryInstallMetadata,
-      repositoryInstallUx,
+      repositoryManifest,
       fetchedByRunId: running.id,
       fetchedAt: finishedAtIso,
     };
@@ -488,7 +488,7 @@ export class SourceLifecycleService {
       if (
         sourceSnapshotMatchesRun(snapshot, running) &&
         snapshot.repositoryInstallMetadata !== undefined &&
-        snapshot.repositoryInstallUx !== undefined
+        snapshot.repositoryManifest !== undefined
       ) {
         return snapshot;
       }
@@ -513,7 +513,7 @@ export class SourceLifecycleService {
         (snapshot) =>
           sourceSnapshotMatchesRun(snapshot, running) &&
           snapshot.repositoryInstallMetadata !== undefined &&
-          snapshot.repositoryInstallUx !== undefined,
+          snapshot.repositoryManifest !== undefined,
       )
       .sort((a, b) => compareIso(a.fetchedAt, b.fetchedAt));
     return reusable.at(-1);

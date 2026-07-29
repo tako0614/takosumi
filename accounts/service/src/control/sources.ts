@@ -32,7 +32,7 @@ import type {
   SourceSnapshotFileResponse,
 } from "takosumi-contract/sources";
 import { toPublicSourceSnapshot } from "takosumi-contract/sources";
-import { TAKOSUMI_INSTALL_UX_REPOSITORY_PATH } from "../../../../contract/install-ux.ts";
+import { TAKOSUMI_REPOSITORY_MANIFEST_PATH } from "../../../../contract/repository-manifest.ts";
 import type {
   CapsuleCompatibilityReportResponse,
   CreateSourceCompatibilityCheckRequest,
@@ -278,10 +278,10 @@ export async function handleSources(
           400,
         );
       }
-      if (path === TAKOSUMI_INSTALL_UX_REPOSITORY_PATH) {
+      if (path === TAKOSUMI_REPOSITORY_MANIFEST_PATH) {
         return errorJson(
           "invalid_request",
-          "repository install UX content is available only through the validated install compiler",
+          "repository manifest content is available only through validated section compilers",
           400,
         );
       }

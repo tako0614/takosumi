@@ -1360,8 +1360,8 @@ async function createCapsule(
   if (
     baseConfig.internal?.sourceSnapshotId &&
     (repoMetadataSnapshot?.id !== baseConfig.internal.sourceSnapshotId ||
-      repoMetadataSnapshot.repositoryInstallUx?.status !== "present" ||
-      repoMetadataSnapshot.repositoryInstallUx.digest !==
+      repoMetadataSnapshot.repositoryManifest?.status !== "present" ||
+      repoMetadataSnapshot.repositoryManifest.digest !==
         baseConfig.internal.repositoryInstallUxDigest)
   ) {
     return errorJson(

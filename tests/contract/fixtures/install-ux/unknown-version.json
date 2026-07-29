@@ -1,8 +1,0 @@
-{
-  "schemaVersion": "takosumi.install-ux/v2",
-  "modules": {
-    ".": {
-      "inputs": []
-    }
-  }
-}

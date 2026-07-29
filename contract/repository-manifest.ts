@@ -1,17 +1,20 @@
 /**
- * Optional, repository-owned install presentation proposed by the exact Git
- * commit captured in a SourceSnapshot.
+ * Optional, repository-owned metadata proposed by the exact Git commit captured
+ * in a SourceSnapshot.
  *
- * This document is never execution authority. Takosumi validates and compiles
- * an accepted module declaration into its DB-owned InstallConfig before a
- * reviewed Plan can use it.
+ * The manifest is an extensible envelope, but every API version is a closed
+ * object. The current version carries only install presentation. It is never
+ * execution authority: Takosumi validates and compiles an accepted module
+ * declaration into its DB-owned InstallConfig before a reviewed Plan can use
+ * it.
  */
 
-export const TAKOSUMI_INSTALL_UX_SCHEMA_VERSION =
-  "takosumi.install-ux/v1" as const;
-export const TAKOSUMI_INSTALL_UX_REPOSITORY_PATH =
+export const TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION =
+  "takosumi.com/v1alpha1" as const;
+export const TAKOSUMI_REPOSITORY_MANIFEST_KIND = "Repository" as const;
+export const TAKOSUMI_REPOSITORY_MANIFEST_PATH =
   ".well-known/takosumi.json" as const;
-export const TAKOSUMI_INSTALL_UX_MAX_BYTES = 128 * 1024;
+export const TAKOSUMI_REPOSITORY_MANIFEST_MAX_BYTES = 128 * 1024;
 export const TAKOSUMI_INSTALL_UX_MAX_MODULES = 32;
 export const TAKOSUMI_INSTALL_UX_MAX_INPUTS = 128;
 export const TAKOSUMI_INSTALL_UX_MAX_PROJECTIONS = 16;
@@ -94,27 +97,33 @@ export interface RepositoryInstallUxModule {
   readonly features?: readonly RepositoryInstallUxFeature[];
 }
 
-export interface RepositoryInstallUxDocument {
-  readonly schemaVersion: typeof TAKOSUMI_INSTALL_UX_SCHEMA_VERSION;
+export interface RepositoryManifestInstall {
   readonly modules: Readonly<Record<string, RepositoryInstallUxModule>>;
 }
 
-export type RepositoryInstallUxParseResult =
-  | { readonly ok: true; readonly document: RepositoryInstallUxDocument }
+export interface RepositoryManifestDocument {
+  readonly apiVersion: typeof TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION;
+  readonly kind: typeof TAKOSUMI_REPOSITORY_MANIFEST_KIND;
+  readonly install: RepositoryManifestInstall;
+}
+
+export type RepositoryManifestParseResult =
+  | { readonly ok: true; readonly document: RepositoryManifestDocument }
   | { readonly ok: false; readonly error: string };
 
 /**
  * Parse a complete `.well-known/takosumi.json` document.
  *
  * The parser is deliberately exact: unknown fields and semantic kinds fail,
- * and all collections/strings are bounded. A later schema version, rather than
+ * and all collections/strings are bounded. A later API version, rather than
  * permissive interpretation, is the forward-compatibility mechanism.
  */
-export function parseRepositoryInstallUxText(
+export function parseRepositoryManifestText(
   text: string,
-): RepositoryInstallUxParseResult {
+): RepositoryManifestParseResult {
   if (
-    new TextEncoder().encode(text).byteLength > TAKOSUMI_INSTALL_UX_MAX_BYTES
+    new TextEncoder().encode(text).byteLength >
+      TAKOSUMI_REPOSITORY_MANIFEST_MAX_BYTES
   ) {
     return invalid("document exceeds 128 KiB");
   }
@@ -125,29 +134,37 @@ export function parseRepositoryInstallUxText(
     return invalid("document must be valid JSON");
   }
   if (!isPlainRecord(value)) return invalid("document must be an object");
-  const rootKeys = exactKeys(value, ["schemaVersion", "modules"]);
+  const rootKeys = exactKeys(value, ["apiVersion", "kind", "install"]);
   if (rootKeys) return invalid(rootKeys);
-  if (value.schemaVersion !== TAKOSUMI_INSTALL_UX_SCHEMA_VERSION) {
+  if (value.apiVersion !== TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION) {
     return invalid(
-      `schemaVersion must be ${TAKOSUMI_INSTALL_UX_SCHEMA_VERSION}`,
+      `apiVersion must be ${TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION}`,
     );
   }
-  if (!isPlainRecord(value.modules)) {
-    return invalid("modules must be an object");
+  if (value.kind !== TAKOSUMI_REPOSITORY_MANIFEST_KIND) {
+    return invalid(`kind must be ${TAKOSUMI_REPOSITORY_MANIFEST_KIND}`);
   }
-  const moduleEntries = Object.entries(value.modules);
+  if (!isPlainRecord(value.install)) {
+    return invalid("install must be an object");
+  }
+  const installKeys = exactKeys(value.install, ["modules"]);
+  if (installKeys) return invalid(`install.${installKeys}`);
+  if (!isPlainRecord(value.install.modules)) {
+    return invalid("install.modules must be an object");
+  }
+  const moduleEntries = Object.entries(value.install.modules);
   if (
     moduleEntries.length < 1 ||
     moduleEntries.length > TAKOSUMI_INSTALL_UX_MAX_MODULES
   ) {
-    return invalid("modules must contain between 1 and 32 entries");
+    return invalid("install.modules must contain between 1 and 32 entries");
   }
   const modules: Record<string, RepositoryInstallUxModule> =
     Object.create(null);
   for (const [modulePath, rawModule] of moduleEntries) {
     if (!isCanonicalModulePath(modulePath)) {
       return invalid(
-        `modules.${JSON.stringify(modulePath)} must be a canonical safe relative module path`,
+        `install.modules.${JSON.stringify(modulePath)} must be a canonical safe relative module path`,
       );
     }
     const parsed = parseModule(rawModule, modulePath);
@@ -157,8 +174,9 @@ export function parseRepositoryInstallUxText(
   return {
     ok: true,
     document: {
-      schemaVersion: TAKOSUMI_INSTALL_UX_SCHEMA_VERSION,
-      modules,
+      apiVersion: TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION,
+      kind: TAKOSUMI_REPOSITORY_MANIFEST_KIND,
+      install: { modules },
     },
   };
 }
@@ -167,7 +185,7 @@ function parseModule(
   value: unknown,
   modulePath: string,
 ): RepositoryInstallUxModule | string {
-  const prefix = `modules.${JSON.stringify(modulePath)}`;
+  const prefix = `install.modules.${JSON.stringify(modulePath)}`;
   if (!isPlainRecord(value)) return `${prefix} must be an object`;
   const keys = exactKeys(value, [
     "inputs",
@@ -666,6 +684,6 @@ function isCanonicalModulePath(value: string): boolean {
     .some((segment) => !segment || segment === "." || segment === "..");
 }
 
-function invalid(error: string): RepositoryInstallUxParseResult {
+function invalid(error: string): RepositoryManifestParseResult {
   return { ok: false, error };
 }

@@ -48,13 +48,15 @@ stay in the product host.
 
 Repositories remain plain OpenTofu modules. Source identity comes from the
 configured Git URL, ref, and module path plus the resolved commit. A repository
-may publish `.well-known/takosumi.json` as bounded, presentation-only install
-UX for its own exact module paths; Takosumi compiles that same-commit proposal
-into a DB-owned `InstallConfig`. The file cannot select providers, credentials,
-targets, billing, permissions, or host execution authority. OpenTofu Outputs
-remain ordinary state results; Takosumi exposes or consumes selected values
-only through explicit service-side Output allowlists and Interface input
-mappings.
+may publish the optional general `.well-known/takosumi.json` manifest using the
+closed `apiVersion: takosumi.com/v1alpha1`, `kind: Repository` envelope. The
+current version defines only `install.modules`; it does not accept `$schema`,
+the retired install-only `schemaVersion`, or empty reserved sections. Takosumi
+compiles that same-commit install proposal into a DB-owned `InstallConfig`.
+The file cannot select providers, credentials, targets, billing, permissions,
+or host execution authority. OpenTofu Outputs remain ordinary state results;
+Takosumi exposes or consumes selected values only through explicit
+service-side Output allowlists and Interface input mappings.
 
 Platform launch evidence has a provider-neutral OSS baseline. Optional host or
 edition requirements use the public, versioned

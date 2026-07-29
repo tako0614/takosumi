@@ -66,6 +66,12 @@ This is the usual path.
 Takosumi calls one registered module a **Capsule**. Knowing that term does not
 change how you write the module.
 
+A repository may optionally publish `.well-known/takosumi.json` to propose
+Takosumi metadata pinned to the same commit. The current general `Repository`
+envelope defines only `install.modules`; execution authority remains with the
+DB-owned `InstallConfig`, Plan, and Run. See the
+[Repository manifest reference](docs/en/reference/repository-manifest.md).
+
 ### Request a typed resource
 
 When the operator enables it, you can request services such as object storage
@@ -102,6 +108,7 @@ Its worker connects to a Takosumi endpoint as an external client.
 - [Concepts](docs/en/concepts/index.md) — how Git modules, Resources, Runs, and state fit together
 - [Credentials](docs/en/concepts/credentials.md) — safely passing provider credentials
 - [Self-hosting](docs/en/concepts/self-host.md) — topology and operator decisions
+- [Repository manifest](docs/en/reference/repository-manifest.md) — repository-owned metadata and the `InstallConfig` boundary
 - [API reference](docs/en/reference/api.md)
 - [CLI reference](docs/en/reference/cli.md)
 - [Operator runbooks](docs/operations/README.md)

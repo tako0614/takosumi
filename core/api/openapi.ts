@@ -4037,7 +4037,7 @@ function sourceSchemas(): Record<string, Record<string, unknown>> {
         archiveRef: { type: "string" },
         archiveDigest: { type: "string" },
         archiveSizeBytes: { type: "number" },
-        repositoryInstallUx: {
+        repositoryManifest: {
           oneOf: [
             {
               type: "object",

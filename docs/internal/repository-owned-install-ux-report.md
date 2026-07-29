@@ -1,11 +1,12 @@
-# Repository-owned install UX report
+# Repository manifest and repository-owned install UX report
 
 Status: implemented and selected for Yurucommu's managed Store path.
-`contract/install-ux.ts` is the current wire contract. The repository document
-is captured with the immutable `SourceSnapshot`, compiled against the exact
-compatibility report, and persisted as a DB-owned per-install `InstallConfig`.
-Present invalid declarations fail closed with a diagnostic; they never
-silently fall back to a raw-variable form.
+`contract/repository-manifest.ts` is the current wire contract. The general
+repository envelope is captured with the immutable `SourceSnapshot`; its
+current `install` section is compiled against the exact compatibility report
+and persisted as a DB-owned per-install `InstallConfig`. Present invalid
+declarations fail closed with a diagnostic; they never silently fall back to a
+raw-variable form.
 
 Date: 2026-07-29
 
@@ -36,19 +37,25 @@ is noted above.
 
 ## Outcome
 
-Takosumi should support an optional, repository-owned install UX document at:
+Takosumi supports an optional, repository-owned general manifest at:
 
 ```text
 .well-known/takosumi.json
 ```
 
-The first implementation should use a Takosumi-specific schema:
+The current closed envelope is:
 
 ```text
-takosumi.install-ux/v1
+apiVersion: takosumi.com/v1alpha1
+kind: Repository
 ```
 
-This document is an optional enhancement for a plain Git/OpenTofu repository.
+The current version defines only `install.modules`; it does not add empty
+reserved sections for future application, link, or Interface discovery.
+`$schema` and the retired install-only `schemaVersion` are not wire fields.
+Future sections require a new closed `apiVersion`.
+
+This manifest is an optional enhancement for a plain Git/OpenTofu repository.
 It is not required to install a module and does not replace the Git Source,
 immutable `SourceSnapshot`, selected module path, compatibility report,
 service-side `InstallConfig`, reviewed Plan, provider bindings, or Run
@@ -297,7 +304,7 @@ Required resolution:
 
 ## Architecture decision
 
-### Use a separate Takosumi document
+### Use a general Takosumi repository manifest
 
 Adopt `.well-known/takosumi.json`, not new install fields in
 `.well-known/tcs.json`.
@@ -306,18 +313,19 @@ Reasons:
 
 1. TCS Store owns decentralized discovery and browse presentation. It should
    not acquire install or execution authority.
-2. Takosumi owns the installer, `InstallConfig`, compatibility check, Plan, and
-   Run. A Takosumi-specific schema makes that dependency explicit.
+2. Takosumi owns the repository-manifest parser and installer, while
+   `InstallConfig`, compatibility check, Plan, and Run retain execution
+   authority.
 3. The current `tcs.repo/v1` meaning is already contradictory across sibling
    repositories. Extending it would preserve the ambiguity.
-4. The app repository can still own its Takosumi install experience without
-   pretending that the schema is a generic OpenTofu or Takoform standard.
+4. The app repository can own its Takosumi metadata without pretending that
+   the schema is a generic OpenTofu or Takoform standard.
 5. The document remains optional, so plain Git/OpenTofu installability does not
    depend on a Takosumi manifest.
 
 `.well-known/tcs.json` remains optional Store indexing presentation. It may
-contain display text and a repository-relative icon. The new Takosumi file owns
-installer-facing declarations.
+contain display text and a repository-relative icon. The Takosumi manifest's
+`install` section owns installer-facing declarations.
 
 ### Treat repository declarations as a proposal
 
@@ -341,7 +349,7 @@ cannot silently rewrite an existing Capsule's configuration.
 
 ### Keep lifecycle and authority out of the document
 
-The v1 document may declare:
+The `takosumi.com/v1alpha1` `install` section may declare:
 
 - localized label, helper, placeholder, and grouping information;
 - an exact module variable name;
@@ -376,8 +384,10 @@ second install model.
 
 ```json
 {
-  "schemaVersion": "takosumi.install-ux/v1",
-  "modules": {
+  "apiVersion": "takosumi.com/v1alpha1",
+  "kind": "Repository",
+  "install": {
+    "modules": {
     ".": {
       "inputs": [
         {
@@ -453,6 +463,7 @@ second install model.
         }
       ]
     }
+    }
   }
 }
 ```
@@ -463,9 +474,9 @@ collect or generate material through its secret boundary and keep the value out
 of the repository document, public `InstallConfig` projection, Output, log, and
 audit event.
 
-The v1 implementation should reject unknown top-level keys and unknown
-`source.kind`/projection kinds. Forward compatibility should come from a new
-`schemaVersion`, not silent interpretation.
+The v1alpha1 parser rejects unknown top-level and section keys, `$schema`, and
+unknown `source.kind`/projection kinds. Forward compatibility comes from a new
+`apiVersion`, not silent interpretation.
 
 ## Compilation rules
 
@@ -605,19 +616,21 @@ grant that mutation authority.
 
 Primary repository: `takosumi`.
 
-1. Add strict contract types and parser for `takosumi.install-ux/v1`.
+1. Add strict contract types and parser for
+   `apiVersion=takosumi.com/v1alpha1`, `kind=Repository`.
 2. Add JSON fixtures for valid, absent, oversized, symlink, unknown-key,
    unknown-version, traversal, duplicate, secret-leak, and unsupported
    projection cases.
 3. Add an optional `SourceSnapshot` observation for
-   `.well-known/takosumi.json`, preserving old snapshot readability.
+   `.well-known/takosumi.json`. The retired pre-GA install-only wire is not a
+   supported manifest version.
 4. Record status and digest; do not expose raw text through public APIs.
 5. Keep runtime behavior unchanged.
 
 Likely implementation areas:
 
 - `contract/sources.ts`;
-- a new `contract/install-ux.ts`;
+- `contract/repository-manifest.ts`;
 - `runner/lib/source_sync.ts`;
 - SourceSnapshot D1/Postgres/in-memory persistence;
 - source-sync and archive tests.
@@ -682,8 +695,7 @@ Repositories: `takosumi` and `takosumi-store`.
 
 1. Keep TCS listings free of install setup fields.
 2. Limit `.well-known/tcs.json` to TCS indexing presentation.
-3. Document `.well-known/takosumi.json` in Takosumi public/reference docs after
-   implementation.
+3. Document `.well-known/takosumi.json` in Takosumi public/reference docs.
 4. Update `core-spec.md` and `core-conformance.md` in the same Takosumi change
    that enables adoption.
 5. Remove Store comments/tests that claim installer setup belongs in
@@ -715,7 +727,8 @@ No metadata document can substitute for these lifecycle and operator proofs.
 
 - `.well-known/takosumi.json` is optional and versioned.
 - The selected file is captured from the same commit as `SourceSnapshot`.
-- Unknown schema versions and keys are rejected without executing anything.
+- Unknown API versions, kinds, sections, and keys are rejected without
+  executing anything.
 - Repository metadata cannot select Git source/ref, provider credentials,
   runner, target, lifecycle action, output exposure, or policy bypass.
 - The accepted compilation is persisted as an exact DB-owned `InstallConfig`.

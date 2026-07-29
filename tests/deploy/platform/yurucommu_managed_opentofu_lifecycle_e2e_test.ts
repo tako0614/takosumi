@@ -3,17 +3,22 @@ import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { ACCOUNT_SESSION_COOKIE_NAME } from "../../../accounts/service/src/account-session.ts";
+import { handleControlRoute } from "../../../accounts/service/src/control-routes.ts";
+import { InMemoryAccountsStore } from "../../../accounts/service/src/store.ts";
 import {
   UI_SURFACE_OPEN_PERMISSION,
   isBundledResourceShapeKind,
-  parseRepositoryInstallUxText,
+  parseRepositoryManifestText,
   type CapsuleCompatibilityReport,
 } from "takosumi-contract";
 import { resolveCapsuleResourceInterfaceBindingInstallingPrincipal } from "takosumi-contract/interfaces";
+import { createTakosumiService } from "../../../core/bootstrap.ts";
 import { compileRepositoryInstallUx } from "../../../core/domains/capsules/repository_install_ux_compiler.ts";
 import { createD1FormRegistryStore } from "../../../core/domains/service-forms/d1_store.ts";
 import { createD1InterfaceStores } from "../../../core/domains/interfaces/d1_stores.ts";
 import { createD1ResourceShapeStores } from "../../../core/domains/resource-shape/d1_stores.ts";
+import { StubResourceShapeAdapter } from "../../../core/domains/resource-shape/mod.ts";
 import { MapResourceShapeSchemaRegistry } from "../../../core/domains/resource-shape/planner.ts";
 import { PORTABLE_FORM_MANAGER } from "../../../core/api/form_host_routes.ts";
 import { createManagedProviderRunToken } from "../../../core/shared/managed_provider_tokens.ts";
@@ -126,7 +131,7 @@ test("repository install executes exact OpenTofu/Takoform apply and destroy agai
       new URL(".well-known/takosumi.json", YURUCOMMU_ROOT),
       "utf8",
     );
-    const manifest = parseRepositoryInstallUxText(manifestText);
+    const manifest = parseRepositoryManifestText(manifestText);
     expect(manifest.ok).toBe(true);
     if (!manifest.ok) throw new Error(manifest.error);
     const baseConfig = REFERENCE_APP_INSTALL_CONFIGS.find(
@@ -539,6 +544,24 @@ test("repository install executes exact OpenTofu/Takoform apply and destroy agai
         status: { phase: "Ready" },
       },
     ]);
+    const launcher = await readLauncherSurface({
+      control,
+      resourceStores,
+      interfaceStores,
+    });
+    expect(launcher).toMatchObject({
+      launcherOwner: { capsuleId: CAPSULE_ID },
+      metadata: {
+        id: interfaces[0]!.metadata.id,
+        ownerRef: { kind: "Resource", id: httpResource.id },
+      },
+      status: {
+        phase: "Resolved",
+        resolvedInputs: {
+          origin: `https://${PROJECT_NAME}.apps.e2e.test`,
+        },
+      },
+    });
 
     const destroyToken = await createManagedProviderRunToken({
       secret: HOST_TOKEN_SECRET,
@@ -584,11 +607,69 @@ test("repository install executes exact OpenTofu/Takoform apply and destroy agai
         )
       )[0]?.status.phase,
     ).toBe("Revoked");
+    expect(
+      await readLauncherSurface({
+        control,
+        resourceStores,
+        interfaceStores,
+      }),
+    ).toBeUndefined();
   } finally {
     server?.stop(true);
     await rm(temp, { recursive: true, force: true });
   }
 }, 180_000);
+
+async function readLauncherSurface(input: {
+  readonly control: CloudflareD1OpenTofuControlStore;
+  readonly resourceStores: ReturnType<typeof createD1ResourceShapeStores>;
+  readonly interfaceStores: ReturnType<typeof createD1InterfaceStores>;
+}): Promise<Record<string, unknown> | undefined> {
+  const accountStore = new InMemoryAccountsStore();
+  const now = Date.now();
+  accountStore.saveAccount({
+    subject: INSTALLER_ID,
+    email: "installer@example.test",
+    displayName: "Yurucommu installer",
+    createdAt: now,
+    updatedAt: now,
+  });
+  const sessionId = "session_yurucommu_real_lifecycle";
+  accountStore.saveAccountSession({
+    sessionId,
+    subject: INSTALLER_ID,
+    createdAt: now,
+    expiresAt: now + 60_000,
+  });
+  const { operations } = await createTakosumiService({
+    role: "takosumi-api",
+    runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
+    opentofuControlStore: input.control,
+    resourceShapeStores: input.resourceStores,
+    resourceShapeAdapter: new StubResourceShapeAdapter(),
+    interfaceStores: input.interfaceStores,
+  });
+  const request = new Request(
+    `https://app.takosumi.test/api/v1/workspaces/${WORKSPACE_ID}/ui-surfaces?capsuleId=${CAPSULE_ID}`,
+    {
+      headers: {
+        cookie: `${ACCOUNT_SESSION_COOKIE_NAME}=${sessionId}`,
+      },
+    },
+  );
+  const response = await handleControlRoute({
+    request,
+    url: new URL(request.url),
+    store: accountStore,
+    operations,
+  });
+  expect(response?.status).toBe(200);
+  const body = (await response?.json()) as {
+    readonly interfaces: readonly Record<string, unknown>[];
+  };
+  expect(body.interfaces.length).toBeLessThanOrEqual(1);
+  return body.interfaces[0];
+}
 
 function yurucommuCompatibilityReport(): CapsuleCompatibilityReport {
   const variables = [

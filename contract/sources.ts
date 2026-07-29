@@ -20,9 +20,9 @@
 
 import { INTERNAL_V1_PREFIX } from "./api-surface.ts";
 import {
-  parseRepositoryInstallUxText,
-  type RepositoryInstallUxDocument,
-} from "./install-ux.ts";
+  parseRepositoryManifestText,
+  type RepositoryManifestDocument,
+} from "./repository-manifest.ts";
 
 /**
  * GitHub-agnostic Git coordinate. The only repository identity Takosumi core
@@ -80,7 +80,7 @@ export type RepositoryInstallMetadataSnapshot =
       readonly reason: "not_regular_file" | "too_large";
     };
 
-export type RepositoryInstallUxInvalidReason =
+export type RepositoryManifestInvalidReason =
   | "not_regular_file"
   | "too_large"
   | "invalid_utf8"
@@ -91,37 +91,37 @@ export type RepositoryInstallUxInvalidReason =
  * Git commit as the executable archive.
  *
  * The validated document is internal compiler input. HTTP projections must use
- * {@link publicRepositoryInstallUxObservation} so repository content is not
+ * {@link publicRepositoryManifestObservation} so repository content is not
  * copied into SourceSnapshot list responses.
  */
-export type RepositoryInstallUxSnapshot =
+export type RepositoryManifestSnapshot =
   | { readonly status: "absent" }
   | {
       readonly status: "present";
       readonly digest: string;
-      readonly document: RepositoryInstallUxDocument;
+      readonly document: RepositoryManifestDocument;
     }
   | {
       readonly status: "invalid";
-      readonly reason: RepositoryInstallUxInvalidReason;
+      readonly reason: RepositoryManifestInvalidReason;
       readonly digest?: string;
       /** Bounded parser diagnostic; never included in public projections. */
       readonly diagnostic?: string;
     };
 
 /** Public-safe SourceSnapshot observation: status + digest, never document. */
-export type PublicRepositoryInstallUxObservation =
+export type PublicRepositoryManifestObservation =
   | { readonly status: "absent" }
   | { readonly status: "present"; readonly digest: string }
   | {
       readonly status: "invalid";
-      readonly reason: RepositoryInstallUxInvalidReason;
+      readonly reason: RepositoryManifestInvalidReason;
       readonly digest?: string;
     };
 
-export function publicRepositoryInstallUxObservation(
-  snapshot: RepositoryInstallUxSnapshot,
-): PublicRepositoryInstallUxObservation {
+export function publicRepositoryManifestObservation(
+  snapshot: RepositoryManifestSnapshot,
+): PublicRepositoryManifestObservation {
   if (snapshot.status === "present") {
     return { status: "present", digest: snapshot.digest };
   }
@@ -136,9 +136,9 @@ export function publicRepositoryInstallUxObservation(
 }
 
 /** Strict parser for the untrusted runner-to-host SourceSnapshot seam. */
-export function parseRepositoryInstallUxSnapshot(
+export function parseRepositoryManifestSnapshot(
   value: unknown,
-): RepositoryInstallUxSnapshot | undefined {
+): RepositoryManifestSnapshot | undefined {
   if (!plainRecord(value) || typeof value.status !== "string") {
     return undefined;
   }
@@ -158,7 +158,7 @@ export function parseRepositoryInstallUxSnapshot(
     } catch {
       return undefined;
     }
-    const parsed = parseRepositoryInstallUxText(text);
+    const parsed = parseRepositoryManifestText(text);
     return parsed.ok
       ? { status: "present", digest: value.digest, document: parsed.document }
       : undefined;
@@ -190,7 +190,7 @@ export function parseRepositoryInstallUxSnapshot(
   }
   return {
     status: "invalid",
-    reason: value.reason as RepositoryInstallUxInvalidReason,
+    reason: value.reason as RepositoryManifestInvalidReason,
     ...(typeof value.digest === "string" ? { digest: value.digest } : {}),
     ...(typeof value.diagnostic === "string"
       ? { diagnostic: value.diagnostic }
@@ -252,28 +252,28 @@ export interface SourceSnapshot {
    */
   readonly repositoryInstallMetadata?: RepositoryInstallMetadataSnapshot;
   /**
-   * Optional only for snapshots persisted before repository-owned install UX
+   * Optional only for snapshots persisted before repository-manifest
    * observation was introduced. Every new source sync records absent, present,
    * or invalid; old snapshots are not eligible for archive reuse.
    */
-  readonly repositoryInstallUx?: RepositoryInstallUxSnapshot;
+  readonly repositoryManifest?: RepositoryManifestSnapshot;
   readonly fetchedByRunId: string;
   readonly fetchedAt: string;
 }
 
-export type PublicSourceSnapshot = Omit<SourceSnapshot, "repositoryInstallUx"> & {
-  readonly repositoryInstallUx?: PublicRepositoryInstallUxObservation;
+export type PublicSourceSnapshot = Omit<SourceSnapshot, "repositoryManifest"> & {
+  readonly repositoryManifest?: PublicRepositoryManifestObservation;
 };
 
 /** Remove validated repository content before serializing a snapshot to HTTP. */
 export function toPublicSourceSnapshot(
   snapshot: SourceSnapshot,
 ): PublicSourceSnapshot {
-  if (!snapshot.repositoryInstallUx) return snapshot;
+  if (!snapshot.repositoryManifest) return snapshot;
   return {
     ...snapshot,
-    repositoryInstallUx: publicRepositoryInstallUxObservation(
-      snapshot.repositoryInstallUx,
+    repositoryManifest: publicRepositoryManifestObservation(
+      snapshot.repositoryManifest,
     ),
   };
 }

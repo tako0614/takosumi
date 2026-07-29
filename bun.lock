@@ -49,6 +49,10 @@
         "pg": "^8.11.0",
       },
     },
+    "contract": {
+      "name": "@takosjp/takosumi-contract",
+      "version": "1.0.0",
+    },
     "deploy/node-postgres": {
       "name": "@takosjp/takosumi-accounts-node-postgres",
       "version": "0.0.1",
@@ -243,6 +247,8 @@
     "@takosjp/takosumi-accounts-service": ["@takosjp/takosumi-accounts-service@workspace:accounts/service"],
 
     "@takosjp/takosumi-cli": ["@takosjp/takosumi-cli@workspace:cli"],
+
+    "@takosjp/takosumi-contract": ["@takosjp/takosumi-contract@workspace:contract"],
 
     "@types/bun": ["@types/bun@1.3.14", "", { "dependencies": { "bun-types": "1.3.14" } }, "sha512-h1hFqFVcvAvD9j9K7ZW7vd82aSA+rTdznZa+5bwvCwqSB1jmmfLcbIWhOLx1/+boy/xmjgCs/OMUL8hRJSmnPw=="],
 
