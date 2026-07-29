@@ -50,12 +50,11 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
   readonly R2_STATE?: R2Bucket;
   /** Backup/export bucket (`takosumi-backups`, core-spec.md §26 / §33). */
   readonly R2_BACKUPS?: R2Bucket;
-  readonly RUN_QUEUE?: Queue<OpenTofuRunQueueMessage>;
   readonly COORDINATION: DurableObjectNamespace;
   /**
-   * Per-run Durable Object that owns execution after a queue delivery is
-   * validated. Queue consumers schedule this object and ack quickly; the object
-   * drives controller dispatch, retries, and final DLQ-style failure handling.
+   * Per-run Durable Object that is the sole GA execution authority. The create
+   * path schedules it directly; the object drives controller dispatch, retries,
+   * and terminal failure handling.
    */
   readonly RUN_OWNER?: DurableObjectNamespace;
   readonly RUNNER?: DurableObjectNamespace;
@@ -282,24 +281,6 @@ export type OpenTofuRunAction =
   | "backup"
   | "restore";
 
-/**
- * Run-dispatch message on `RUN_QUEUE`. The producer (the
- * controller's `enqueueRun` seam) publishes only the run identity; the queue
- * consumer loads the full run from the deploy-control store, applies the
- * idempotency guard, mints credentials, and drives the container dispatch. The
- * legacy `requestedAt` / `request` fields are retained as optional so older
- * messages still parse, but the consumer no longer depends on them.
- */
-export interface OpenTofuRunQueueMessage {
-  readonly kind: "takosumi.opentofu-run@v1";
-  readonly action: OpenTofuRunAction;
-  readonly runId: string;
-  readonly workspaceId: string;
-  readonly cause?: "controller_retry";
-  readonly requestedAt?: string;
-  readonly request?: Record<string, unknown>;
-}
-
 export interface D1Database {
   prepare(query: string): D1PreparedStatement;
   batch<T = unknown>(
@@ -372,34 +353,6 @@ export interface R2Object {
 
 export interface R2ObjectBody extends R2Object {
   arrayBuffer(): Promise<ArrayBuffer>;
-}
-
-export interface Queue<T> {
-  send(message: T): Promise<void>;
-}
-
-export interface QueueBatch<T = unknown> {
-  /** The queue this batch was delivered from (used to detect the DLQ). */
-  readonly queue?: string;
-  readonly messages: readonly QueueMessage<T>[];
-}
-
-export interface QueueRetryOptions {
-  /**
-   * Delay before this message is redelivered (Cloudflare Queues
-   * `MessageRetryOptions.delaySeconds`). Used to back off a run that is parked
-   * on a busy Capsule lease instead of burning its retry budget.
-   */
-  readonly delaySeconds?: number;
-}
-
-export interface QueueMessage<T = unknown> {
-  readonly id: string;
-  readonly body: T;
-  /** Delivery attempt count (1-based) when the runtime provides it. */
-  readonly attempts?: number;
-  ack?(): void;
-  retry?(options?: QueueRetryOptions): void;
 }
 
 export interface DurableObjectNamespace {

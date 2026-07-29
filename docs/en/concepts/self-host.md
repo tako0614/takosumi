@@ -12,7 +12,7 @@ things.
 
 | Shape | Where it runs | Where state lives | Template |
 | --- | --- | --- | --- |
-| Cloudflare | Cloudflare Workers | D1 / R2 / Queues / Durable Objects | `deploy/platform/wrangler.toml` |
+| Cloudflare | Cloudflare Workers | D1 / R2 / Durable Objects | `deploy/platform/wrangler.toml` |
 | Bun and PostgreSQL | A VM or a container | PostgreSQL | `deploy/node-postgres/` |
 | Local only | Your own Linux and Docker | Compose volumes | `deploy/local-substrate/` |
 
@@ -43,8 +43,12 @@ Every binding you need is written out in `deploy/platform/wrangler.toml`.
 | `R2_STATE` | The OpenTofu state backend |
 | `R2_BACKUPS` | Holds backup and export bundles |
 | `COORDINATION` / `RUN_OWNER` / `RUNNER` (Durable Object) | Mutual exclusion, Run ownership, and the runner container |
-| `RUN_QUEUE` (Queue) | Delivers Runs. A dead letter queue is needed alongside it |
 | `ASSETS` | Serves the dashboard build |
+
+Runs are scheduled directly onto `RUN_OWNER` when they are created. This GA
+composition has no Cloudflare Queue or dead-letter queue. `RUN_OWNER` owns
+retries and terminal failure handling, and execution fails closed when its
+binding is unavailable.
 
 Create the resources first. The names match the template.
 
@@ -55,8 +59,6 @@ bunx wrangler r2 bucket create takos-artifacts
 bunx wrangler r2 bucket create takosumi-source
 bunx wrangler r2 bucket create takosumi-state
 bunx wrangler r2 bucket create takosumi-backups
-bunx wrangler queues create takosumi-runs
-bunx wrangler queues create takosumi-runs-dlq
 ```
 
 Copy `wrangler.toml` for your own use. What you rewrite is `database_id`, the `pattern`
@@ -168,6 +170,9 @@ DATABASE_URL="postgres://takosumi:<password>@<postgres-host>:5432/takosumi_accou
 Running `bun run db:migrate:dry-run` first prints the SQL without applying it. `--env=local`
 runs in memory without connecting, so it touches no real database. The only `--env` values
 that reach a real database are `production` and `staging`.
+Both are forward-only and expose no down/rollback command. Disposable fixture
+reset is limited to an injected local/development/test client and cannot read
+the database URL or production credentials described here.
 
 To run it by hand instead of through compose, pass the same environment variables and start
 `bun deploy/node-postgres/src/server.ts`. What it listens on is decided by

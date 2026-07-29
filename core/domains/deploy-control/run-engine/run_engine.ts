@@ -69,6 +69,7 @@ import {
 import {
   generateOpenTofuChildModuleRoot,
   type RootProviderBinding,
+  type RootProviderRequirement,
 } from "takosumi-rootgen";
 import { stableJsonDigest } from "../../../adapters/source/digest.ts";
 import { log } from "../../../shared/log.ts";
@@ -458,8 +459,45 @@ function requestedGenericCapsuleVariables(
 function providerBindingResolutionProviders(
   providers: readonly string[],
   runnerProfile?: Pick<RunnerProfile, "requireProviderBindings">,
+  credentialRequiredProviders: readonly string[] = [],
 ): readonly string[] {
-  return providersRequiringProviderBindings(providers, runnerProfile);
+  return runnerProfile?.requireProviderBindings === true
+    ? providersRequiringProviderBindings(providers, runnerProfile)
+    : normalizeProviders(credentialRequiredProviders);
+}
+
+function credentialRequiredProvidersFromCompatibilityReport(
+  report: CapsuleCompatibilityReport | undefined,
+): readonly string[] {
+  return normalizeProviders(
+    (report?.providers ?? [])
+      .filter(
+        (provider) => provider.allowed && provider.credentialRequired === true,
+      )
+      .map((provider) => provider.source),
+  );
+}
+
+function rootProviderRequirementsFromCompatibilityReport(
+  report: CapsuleCompatibilityReport | undefined,
+  requiredProviders: readonly string[],
+): readonly RootProviderRequirement[] | undefined {
+  if (!report) return undefined;
+  const required = new Set(requiredProviders.map(canonicalProviderAddress));
+  const requirements = report.providers
+    .filter(
+      (provider) =>
+        provider.allowed &&
+        required.has(canonicalProviderAddress(provider.source)),
+    )
+    .map((provider) => ({
+      provider: provider.source,
+      localName:
+        provider.localName ??
+        canonicalProviderAddress(provider.source).split("/").at(-1) ??
+        provider.source,
+    }));
+  return requirements.length > 0 ? requirements : undefined;
 }
 
 const MAX_AUTO_CAPTURED_ROOT_OUTPUTS = 128;
@@ -2360,14 +2398,26 @@ export class RunEngine {
     let requiredProviders = compatibilityProviders;
     let capsulePlan = await this.#planResolution.resolveCapsulePlan(
       input.capsule,
-      providerBindingResolutionProviders(requiredProviders, profile),
+      providerBindingResolutionProviders(
+        requiredProviders,
+        profile,
+        credentialRequiredProvidersFromCompatibilityReport(
+          input.compatibilityReport,
+        ),
+      ),
     );
     const bindingProviders = capsulePlan.requiredProvidersFromBindings;
     if (requiredProviders.length === 0 && bindingProviders.length > 0) {
       requiredProviders = bindingProviders;
       capsulePlan = await this.#planResolution.resolveCapsulePlan(
         input.capsule,
-        providerBindingResolutionProviders(requiredProviders, profile),
+        providerBindingResolutionProviders(
+          requiredProviders,
+          profile,
+          credentialRequiredProvidersFromCompatibilityReport(
+            input.compatibilityReport,
+          ),
+        ),
       );
     }
     const sourceFiles = await this.#sourceModuleFilesForGenericCapsule(
@@ -2610,14 +2660,23 @@ export class RunEngine {
     const outputAllowlist = destroy ? {} : context.outputAllowlist;
     const wrapperProviderBindings = context.providerBindings.filter(
       (binding) =>
+        binding.moduleLocalName !== undefined ||
+        binding.childAlias !== undefined ||
+        binding.rootAlias !== undefined ||
         binding.alias !== undefined ||
         Object.keys(binding.configuration ?? {}).length > 0,
     );
+    const providerRequirements =
+      rootProviderRequirementsFromCompatibilityReport(
+        compatibilityReport,
+        requiredProviders,
+      );
     let generatedRoot: DispatchGeneratedRoot | undefined;
     if (wrapperProviderBindings.length > 0) {
       try {
         generatedRoot = generateOpenTofuChildModuleRoot({
           requiredProviders,
+          ...(providerRequirements ? { providerRequirements } : {}),
           inputs: normalizeVariables(request.variables),
           outputAllowlist: workspaceOutputAllowlist,
           providerBindings: wrapperProviderBindings,
@@ -2656,7 +2715,10 @@ export class RunEngine {
       ? await this.#store.getCapsuleCompatibilityReport(compatibilityReportId)
       : undefined;
     const requiredProviders = normalizeProviders(
-      request.requiredProviders ?? installConfig.policy.allowedProviders ?? [],
+      request.requiredProviders ??
+        (compatibilityReport?.providers ?? [])
+          .filter((provider) => provider.allowed)
+          .map((provider) => provider.source),
     );
     const profile = await this.#requireRunnerProfile(
       request.runnerProfileId ?? this.#defaultRunnerProfileId,
@@ -2664,10 +2726,14 @@ export class RunEngine {
     const lifecycleActions = lifecycleActionsForPlan(installConfig, profile);
     const resolved = await this.#resolveCapsuleProviderBindingsForRun(
       capsule,
-      providersRequiringProviderBindings(requiredProviders, profile),
+      providerBindingResolutionProviders(
+        requiredProviders,
+        profile,
+        credentialRequiredProvidersFromCompatibilityReport(compatibilityReport),
+      ),
     );
     return await this.#genericRootDispatchForRequest(
-      request,
+      { ...request, requiredProviders },
       {
         providerBindings: providerBindingsFromResolved(resolved),
         outputAllowlist: installConfig.outputAllowlist,
@@ -3495,7 +3561,7 @@ export class RunEngine {
       return planRun;
     }
     const profile = await this.#requireRunnerProfile(planRun.runnerProfileId);
-    // A queue consumer is execution authority: a missing explicit executor
+    // An asynchronous dispatcher is execution authority: a missing explicit executor
     // binding is a hard configuration failure, never a silent fallback.
     this.#runnerForProfile(profile);
     try {
@@ -3647,7 +3713,7 @@ export class RunEngine {
   }
 
   /**
-   * Idempotency predicate for the queue consumer. Proceed when the run is still
+   * Idempotency predicate for the RunOwner. Proceed when the run is still
    * `queued`, or when it is `running` but its heartbeat is stale (a prior
    * consumer crashed mid-run). A fresh `running` heartbeat means a sibling
    * consumer owns the run; terminal states are never reprocessed.
@@ -4161,12 +4227,21 @@ export class RunEngine {
         { reason: "install_config_not_found" },
       );
     }
-    // Run-scoped: ProviderBindings plus the same Cloud/operator managed
-    // fallback used by rootgen. This keeps minted TF_VAR credentials lined up
-    // with the generated provider blocks.
+    const compatibilityReport = planRun.compatibilityReportId
+      ? await this.#store.getCapsuleCompatibilityReport(
+          planRun.compatibilityReportId,
+        )
+      : undefined;
+    // Run-scoped: exact ProviderBindings required by this plan and its
+    // CompatibilityReport. This keeps minted credentials aligned with the
+    // generated provider blocks without inferring requirements from allowlists.
     return await this.#connectionsService.resolveProviderBindingsForRun(
       capsule,
-      providerBindingResolutionProviders(planRun.requiredProviders, profile),
+      providerBindingResolutionProviders(
+        planRun.requiredProviders,
+        profile,
+        credentialRequiredProvidersFromCompatibilityReport(compatibilityReport),
+      ),
     );
   }
 

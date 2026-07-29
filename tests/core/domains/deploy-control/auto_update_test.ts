@@ -3,7 +3,7 @@
  *
  * A Capsule that opted in (`autoUpdate: true`) and goes `stale` because its
  * Source resolved a new commit gets an update plan created by the control
- * plane itself, flagged `autoApplyRequested`; the queue consumer then applies
+ * plane itself, flagged `autoApplyRequested`; the RunOwner then applies
  * it server-side — but ONLY when the completed plan is CLEAN (`succeeded`).
  * A destructive update (delete/replace → `waiting_approval`) always stops and
  * waits for the user; a Capsule without the opt-in only goes 更新があります.

@@ -156,6 +156,11 @@ export function providerBindingsFromResolved(
     const configuration = entry.connection?.scopeHints?.providerConfig;
     providers.push({
       provider,
+      ...(entry.moduleLocalName
+        ? { moduleLocalName: entry.moduleLocalName }
+        : {}),
+      ...(entry.childAlias ? { childAlias: entry.childAlias } : {}),
+      ...(entry.rootAlias ? { rootAlias: entry.rootAlias } : {}),
       ...(entry.alias ? { alias: entry.alias } : {}),
       ...(configuration && Object.keys(configuration).length > 0
         ? { configuration }

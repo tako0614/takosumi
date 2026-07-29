@@ -49,7 +49,7 @@ incident channel.
 | SEV   | User/tenant impact                                                                                         | Examples                                                                                                                                                                                                           | Ack/update policy                |
 | ----- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------- |
 | SEV-1 | environment-wide outage, data loss risk, security-critical exposure, deploy/auth/source access unavailable | platform service 5xx, OIDC issuer unavailable, cross-Workspace data exposure, known secret leak, state/artifact corruption                                                                                         | operator-configured SEV-1 policy |
-| SEV-2 | major feature degradation, multiple Workspaces affected, workaround exists                                 | plan/apply mostly failing, queue backlog, runner startup failures, quota/showback write failure, ProviderConnection / CredentialRecipe outage, provider credential mint failure, provider egress policy regression | operator-configured SEV-2 policy |
+| SEV-2 | major feature degradation, multiple Workspaces affected, workaround exists                                 | plan/apply mostly failing, stale queued Runs, RunOwner or runner startup failures, quota/showback write failure, ProviderConnection / CredentialRecipe outage, provider credential mint failure, provider egress policy regression | operator-configured SEV-2 policy |
 | SEV-3 | isolated Workspace / non-critical degradation, operational toil                                            | single Capsule Run failure, dashboard drift, slow backup job, docs/runbook issue                                                                                                                                   | operator-configured SEV-3 policy |
 
 When scope is unclear, start at SEV-2 or higher. Suspected tenant data
@@ -58,7 +58,7 @@ exposure is SEV-1 until disproven.
 ## Paging Path
 
 1. Alert fires from Takosumi monitoring: HTTP 5xx / latency, deploy success
-   rate, runner queue age, persistence health, quota/showback ledger drift, secret rotation
+   rate, stale queued Runs, RunOwner/runner health, persistence health, quota/showback ledger drift, secret rotation
    failure.
 2. Paging provider routes to primary on-call.
 3. Primary acknowledges within target and opens incident channel.

@@ -78,6 +78,37 @@ test("secret ProviderConnection binding resolves to its credential row", async (
   expect(mintableConnectionIds(resolved)).toEqual(["conn_space_cf"]);
 });
 
+test("legacy full configuration aliases normalize into explicit child and root identity", async () => {
+  const { store, model, service } = await setup();
+  await store.putConnection(
+    connection({ id: "conn_alias_cf", workspaceId: model.workspace.id }),
+  );
+  await store.putProviderBindingSet({
+    id: "dp_alias",
+    workspaceId: model.workspace.id,
+    capsuleId: model.capsule.id,
+    environment: model.capsule.environment,
+    bindings: [
+      {
+        provider: CLOUDFLARE,
+        alias: "cloudflare.main",
+        connectionId: "conn_alias_cf",
+      },
+    ],
+    createdAt: NOW,
+    updatedAt: NOW,
+  });
+
+  const resolved = await service.resolveProviderBindings(model.capsule);
+  expect(resolved[0]).toMatchObject({
+    provider: CLOUDFLARE,
+    moduleLocalName: "cloudflare",
+    childAlias: "main",
+    rootAlias: "main",
+  });
+  expect(resolved[0]).not.toHaveProperty("alias");
+});
+
 test("raw operator-scoped ProviderConnection never resolves into a generic Capsule runner", async () => {
   const { store, model, service } = await setup();
   await store.putConnection(connection({ id: "conn_operator_cf" }));

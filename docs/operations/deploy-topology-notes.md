@@ -25,7 +25,7 @@ target であり、Takosumi operator が暗黙に production hosting するも�
 - control plane: `/api/v1` と `/hooks/*`
 - dashboard-owned external prefill entrypoint: `/install?git=...`
 - dashboard SPA / static assets
-- queue consumer / scheduled handlers（有効な composition の場合）
+- direct RunOwner / scheduled handlers（有効な composition の場合）
 - durable Run ownership / Capsule lease adapter
 - `RunnerProfile.executorId` で明示選択された runner adapter / pool
 
@@ -57,12 +57,12 @@ Takosumi composition は次の logical capability を明示的に bind します
 
 - durable accounts / control-plane stores
 - opaque source / artifact / state / backup stores
-- Run dispatch queue または inline dispatch adapter
+- durable RunOwner または inline dispatch adapter
 - Capsule lease / Run ownership adapter
 - executor-id ごとの runner adapter
 - dashboard static assets
 
-Cloudflare reference composition では D1 / R2 / Queue / Durable Object /
+Cloudflare reference composition では D1 / R2 / Durable Object /
 Container bindings がこれらを実装します。Bun + Postgres composition では
 Postgres と operator-provided artifact/runner adapters が実装します。実際の
 binding 名、database id、bucket、endpoint、secret は operator config/vault

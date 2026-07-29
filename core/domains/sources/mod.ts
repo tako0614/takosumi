@@ -65,7 +65,7 @@ const SOURCE_SYNC_REQUEUE_STALE_MS = 10 * 60 * 1000;
  * Out-of-process source-sync dispatch seam. Mirrors the deploy-control
  * `EnqueueRun`: the create path persists the run `queued` and hands the run
  * identity to the enqueuer; the actual resolution runs later in the queue
- * consumer. Defaults to a no-op so callers without a queue keep the run queued
+ * dispatcher. Defaults to a no-op so callers without an executor keep the run queued
  * (the inline/local path drives it differently in M2).
  */
 export type EnqueueSourceSync = (dispatch: {
@@ -294,9 +294,7 @@ export class SourcesService {
       items: page.items
         .filter((row) => row.status === "active" && row.autoSync)
         .map(toPublicSource),
-      ...(page.nextCursor === undefined
-        ? {}
-        : { nextCursor: page.nextCursor }),
+      ...(page.nextCursor === undefined ? {} : { nextCursor: page.nextCursor }),
     };
   }
 
@@ -897,10 +895,35 @@ function mergePolicyConfigs(
       installPolicy?.providerLockfile ?? spacePolicy?.providerLockfile,
     providerInstallation:
       installPolicy?.providerInstallation ?? spacePolicy?.providerInstallation,
+    providerCredentials: mergeProviderCredentialPolicy(
+      spacePolicy?.providerCredentials,
+      installPolicy?.providerCredentials,
+    ),
     scopeBoundary: normalizeScopeBoundaryPolicy(
       installPolicy?.scopeBoundary ?? spacePolicy?.scopeBoundary,
     ),
     quota: { ...(spacePolicy?.quota ?? {}), ...(installPolicy?.quota ?? {}) },
+  };
+}
+
+function mergeProviderCredentialPolicy(
+  ceiling: PolicyConfig["providerCredentials"] | undefined,
+  local: PolicyConfig["providerCredentials"] | undefined,
+): PolicyConfig["providerCredentials"] | undefined {
+  if (!ceiling && !local) return undefined;
+  const requiredProviders = Array.from(
+    new Set([
+      ...(ceiling?.requiredProviders ?? []),
+      ...(local?.requiredProviders ?? []),
+    ]),
+  ).sort();
+  return {
+    ...(requiredProviders.length > 0 ? { requiredProviders } : {}),
+    requireTemporary:
+      ceiling?.requireTemporary === true || local?.requireTemporary === true,
+    requireTtlEnforced:
+      ceiling?.requireTtlEnforced === true ||
+      local?.requireTtlEnforced === true,
   };
 }
 

@@ -29,7 +29,7 @@ import type {
 import { OpenTofuRunnerInfrastructureError } from "../../core/domains/deploy-control/mod.ts";
 import type {
   CloudflareWorkerEnv,
-  OpenTofuRunQueueMessage,
+  OpenTofuRunAction,
 } from "./bindings.ts";
 import { redactString } from "takosumi-contract/redaction";
 import { normalizePlanResourceScope } from "takosumi-contract";
@@ -52,7 +52,7 @@ const RUNNER_SUBSTRATE_RESET_PATTERN =
   /durable object reset because its code was updated/i;
 const RUNNER_STARTUP_SECONDS_HEADER = "x-takosumi-runner-startup-seconds";
 type ContainerRunnerAction =
-  | OpenTofuRunQueueMessage["action"]
+  | OpenTofuRunAction
   | "release"
   | "stable_semver_tag"
   | "source_snapshot_file";

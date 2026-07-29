@@ -416,7 +416,7 @@ export interface CommitRestoredStateInput {
 
 /**
  * Status-conditional, lease-fenced compare-and-set transition of a single run
- * row (the most correctness-critical primitive of the queue consumer). Unlike
+ * row (the most correctness-critical primitive of the RunOwner). Unlike
  * {@link OpenTofuControlStore.putPlanRun} / `putApplyRun` (which INSERT/upsert
  * the initial creation), `transitionRun` is the post-insert mutation: it advances
  * a run's `status` (and lease/heartbeat) ONLY when the row still matches the
@@ -616,7 +616,7 @@ export interface OpenTofuControlStore {
   putPlanRun(run: PlanRun): Promise<PlanRun>;
   getPlanRun(id: string): Promise<PlanRun | undefined>;
 
-  // Internal (non-public) plan inputs for the queue consumer. Never projected.
+  // Internal (non-public) plan inputs for the RunOwner. Never projected.
   putPlanRunInputs(inputs: PlanRunInputs): Promise<void>;
   getPlanRunInputs(planRunId: string): Promise<PlanRunInputs | undefined>;
   deletePlanRunInputs(planRunId: string): Promise<void>;

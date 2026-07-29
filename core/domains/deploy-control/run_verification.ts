@@ -7,7 +7,7 @@
  * ledger (PlanRun + SourceSnapshot + DependencySnapshot + StateVersion +
  * CompatibilityReport + Capsule/OutputShare rows) and never mutates run
  * state nor calls back into the plan/apply run-engine mutation core. It owns two
- * cohesive concerns the queue consumers + apply preconditions lean on:
+ * cohesive concerns the asynchronous dispatchers + apply preconditions lean on:
  *
  *   - the {@link RunExecutionDispatch} payload build (`executionDispatch`
  *     + the source-archive / remote-state descriptor resolution it threads), and

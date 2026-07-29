@@ -1209,14 +1209,18 @@ function ActivityEventBadge(props: { readonly action: string }) {
 
 interface ProviderBindingRow {
   readonly provider: string;
-  readonly alias: string;
+  readonly moduleLocalName: string;
+  readonly childAlias: string;
+  readonly rootAlias: string;
   readonly connectionId: string;
 }
 
 function providerBindingToRow(binding: ProviderBinding): ProviderBindingRow {
   return {
     provider: binding.provider,
-    alias: binding.alias ?? "",
+    moduleLocalName: binding.moduleLocalName ?? providerTail(binding.provider),
+    childAlias: binding.childAlias ?? "",
+    rootAlias: binding.rootAlias ?? binding.alias ?? "",
     connectionId: binding.connectionId,
   };
 }
@@ -1267,8 +1271,8 @@ function boundConnectionLabel(
 
 function boundProviderLabel(row: ProviderBindingRow): string {
   if (!row.provider.trim()) return t("app.bindings.providerPlaceholder");
-  return row.alias
-    ? `${providerDisplayName(row.provider)} (${row.alias})`
+  return row.childAlias
+    ? `${providerDisplayName(row.provider)} (${row.childAlias})`
     : providerDisplayName(row.provider);
 }
 
@@ -1286,11 +1290,19 @@ function buildProviderBindings(
     }
     const binding: {
       provider: string;
-      alias?: string;
+      moduleLocalName: string;
+      childAlias?: string;
+      rootAlias?: string;
       connectionId: string;
-    } = { provider, connectionId: row.connectionId.trim() };
-    const alias = row.alias.trim();
-    if (alias) binding.alias = alias;
+    } = {
+      provider,
+      moduleLocalName: row.moduleLocalName.trim() || providerTail(provider),
+      connectionId: row.connectionId.trim(),
+    };
+    const childAlias = row.childAlias.trim();
+    const rootAlias = row.rootAlias.trim();
+    if (childAlias) binding.childAlias = childAlias;
+    if (rootAlias) binding.rootAlias = rootAlias;
     const validConnections = readyProviderConnectionsForProvider(
       provider,
       options.providerConnections,
@@ -1944,14 +1956,42 @@ function SettingsTab(props: {
                               aria-label={t("app.bindings.providerLabel")}
                             />
                             <Input
-                              value={row().alias}
+                              value={row().moduleLocalName}
                               onInput={(e) =>
                                 update(index, {
-                                  alias: e.currentTarget.value,
+                                  moduleLocalName: e.currentTarget.value,
                                 })
                               }
-                              placeholder={t("app.bindings.aliasPlaceholder")}
-                              aria-label={t("app.bindings.aliasLabel")}
+                              placeholder={t(
+                                "app.bindings.moduleLocalNamePlaceholder",
+                              )}
+                              aria-label={t(
+                                "app.bindings.moduleLocalNameLabel",
+                              )}
+                            />
+                            <Input
+                              value={row().childAlias}
+                              onInput={(e) =>
+                                update(index, {
+                                  childAlias: e.currentTarget.value,
+                                })
+                              }
+                              placeholder={t(
+                                "app.bindings.childAliasPlaceholder",
+                              )}
+                              aria-label={t("app.bindings.childAliasLabel")}
+                            />
+                            <Input
+                              value={row().rootAlias}
+                              onInput={(e) =>
+                                update(index, {
+                                  rootAlias: e.currentTarget.value,
+                                })
+                              }
+                              placeholder={t(
+                                "app.bindings.rootAliasPlaceholder",
+                              )}
+                              aria-label={t("app.bindings.rootAliasLabel")}
                             />
                           </div>
                         </details>
@@ -1970,7 +2010,9 @@ function SettingsTab(props: {
                       ...prev,
                       {
                         provider: "",
-                        alias: "",
+                        moduleLocalName: "",
+                        childAlias: "",
+                        rootAlias: "",
                         connectionId: "",
                       },
                     ]);

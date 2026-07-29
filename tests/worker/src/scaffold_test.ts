@@ -26,8 +26,8 @@ test("platform worker wrangler wires D1/R2 and the OpenTofu runner container", a
   assert.match(wrangler, /binding = "R2_BACKUPS"/);
   assert.doesNotMatch(wrangler, /TAKOS_RUNTIME_MODE/);
   assert.match(wrangler, /name = "COORDINATION"/);
-  assert.match(wrangler, /binding = "RUN_QUEUE"/);
-  assert.match(wrangler, /queue = "takosumi-runs"/);
+  assert.doesNotMatch(wrangler, /binding = "RUN_QUEUE"/);
+  assert.doesNotMatch(wrangler, /\[\[queues\.(?:producers|consumers)\]\]/);
   assert.doesNotMatch(wrangler, /binding = "TAKOS_QUEUE"/);
   assert.doesNotMatch(wrangler, /takosumi-control-plane/);
   assert.match(wrangler, /name = "RUN_OWNER"/);
@@ -40,6 +40,9 @@ test("platform worker wrangler wires D1/R2 and the OpenTofu runner container", a
   assert.match(wrangler, /new_sqlite_classes = \[[^\]]*"CoordinationObject"/);
   assert.match(wrangler, /new_sqlite_classes = \[[^\]]*"OpenTofuRunnerObject"/);
   assert.match(wrangler, /new_sqlite_classes = \["OpenTofuRunOwnerObject"\]/);
+  assert.match(workerService, /openTofuRunOwnerEnqueuer/);
+  assert.doesNotMatch(workerService, /openTofuRunEnqueuer/);
+  assert.doesNotMatch(workerService, /RUN_QUEUE/);
 });
 
 test("platform scaffold exposes production hardening evidence gates", async () => {

@@ -89,8 +89,8 @@ State transition は timeline に残します。Takosumi incident tracking が�
 5. 現在の signal を収集する:
    - HTTP 5xx / latency
    - deploy success / rollback metric
-   - selected Runner adapter health / queue backlog
-   - database / queue / object storage の状態
+   - selected Runner adapter health / stale queued Runs / RunOwner state
+   - database / Durable Object / object storage の状態
    - CredentialRecipe seed changes、provider allowlist changes、Provider Connection changes、
      egress policy changes、Connection driver deploy
    - 直近の deploy、config / secret rotation

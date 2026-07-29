@@ -176,7 +176,8 @@ export default function ConnectionsTab(props: {
     : undefined;
   // ----- register form state -----------------------------------------------
   // Service-installed recipes are the guided path. The raw bring-your-own-key
-  // editor stays available for any provider and is never gated by this list.
+  // editor accepts an arbitrary provider source, but the saved connection
+  // remains subject to provider policy, runner capability, and Run approval.
   const [provider, setProvider] = createSignal("");
   const [displayName, setDisplayName] = createSignal("");
   // Secret material lives ONLY for the lifetime of the form; cleared on submit.

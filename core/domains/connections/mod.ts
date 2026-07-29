@@ -32,6 +32,10 @@ import type { OpenTofuControlStore } from "../deploy-control/store.ts";
 /** One Provider Connection binding's resolution outcome. */
 export interface ResolvedCapsuleProviderBinding {
   readonly provider: string;
+  readonly moduleLocalName?: string;
+  readonly childAlias?: string;
+  readonly rootAlias?: string;
+  /** @deprecated Ambiguous pre-v1 alias retained for stored-row compatibility. */
   readonly alias?: string;
   readonly connection: ProviderConnection;
   readonly materialization: ProviderConnectionMaterialization;
@@ -67,10 +71,40 @@ function validateCapsuleProviderBinding(
     value.connectionId,
     `${field}.connectionId`,
   );
-  const alias =
+  let alias =
     value.alias === undefined
       ? undefined
       : nonEmptyField(value.alias, `${field}.alias`);
+  let moduleLocalName =
+    value.moduleLocalName === undefined
+      ? undefined
+      : providerIdentifierField(
+          value.moduleLocalName,
+          `${field}.moduleLocalName`,
+        );
+  let childAlias =
+    value.childAlias === undefined
+      ? undefined
+      : providerIdentifierField(value.childAlias, `${field}.childAlias`);
+  let rootAlias =
+    value.rootAlias === undefined
+      ? undefined
+      : providerIdentifierField(value.rootAlias, `${field}.rootAlias`);
+  if (
+    alias &&
+    moduleLocalName === undefined &&
+    childAlias === undefined &&
+    rootAlias === undefined
+  ) {
+    const configurationAlias =
+      /^([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)$/u.exec(alias);
+    if (configurationAlias) {
+      moduleLocalName = configurationAlias[1]!;
+      childAlias = configurationAlias[2]!;
+      rootAlias = configurationAlias[2]!;
+      alias = undefined;
+    }
+  }
   const region =
     value.region === undefined
       ? undefined
@@ -78,9 +112,23 @@ function validateCapsuleProviderBinding(
   return {
     provider,
     connectionId,
+    ...(moduleLocalName ? { moduleLocalName } : {}),
+    ...(childAlias ? { childAlias } : {}),
+    ...(rootAlias ? { rootAlias } : {}),
     ...(alias ? { alias } : {}),
     ...(region ? { region } : {}),
   };
+}
+
+function providerIdentifierField(value: unknown, field: string): string {
+  const normalized = nonEmptyField(value, field);
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(normalized)) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      `${field} must be a valid OpenTofu identifier`,
+    );
+  }
+  return normalized;
 }
 
 function nonEmptyField(value: unknown, field: string): string {
@@ -110,6 +158,9 @@ export async function resolvedProviderBindingsDigest(
   const entries = (resolved ?? [])
     .map((entry) => ({
       provider: entry.provider,
+      moduleLocalName: entry.moduleLocalName ?? null,
+      childAlias: entry.childAlias ?? null,
+      rootAlias: entry.rootAlias ?? null,
       alias: entry.alias ?? null,
       materialization: entry.connection.materialization,
       credentialRecipe: entry.connection.credentialRecipe ?? null,
@@ -122,10 +173,10 @@ export async function resolvedProviderBindingsDigest(
     .sort((a, b) => {
       const providerOrder = compareText(a.provider, b.provider);
       if (providerOrder !== 0) return providerOrder;
-      if (a.alias === b.alias) return 0;
-      if (a.alias === null) return -1;
-      if (b.alias === null) return 1;
-      return compareText(a.alias, b.alias);
+      return compareText(
+        JSON.stringify([a.moduleLocalName, a.childAlias, a.rootAlias, a.alias]),
+        JSON.stringify([b.moduleLocalName, b.childAlias, b.rootAlias, b.alias]),
+      );
     });
   return await stableJsonDigest(entries);
 }
@@ -340,6 +391,11 @@ export class ConnectionsService {
     }
     return {
       provider: binding.provider,
+      ...(binding.moduleLocalName
+        ? { moduleLocalName: binding.moduleLocalName }
+        : {}),
+      ...(binding.childAlias ? { childAlias: binding.childAlias } : {}),
+      ...(binding.rootAlias ? { rootAlias: binding.rootAlias } : {}),
       ...(binding.alias ? { alias: binding.alias } : {}),
       connection,
       materialization: connection.materialization,

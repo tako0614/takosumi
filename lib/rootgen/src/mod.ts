@@ -6,8 +6,8 @@
  * root. Ordinary Git OpenTofu modules do not pass through rootgen.
  *
  * Generated files:
- *   - versions.tf : `terraform { required_providers { ... } }` from
- *                   policy.allowedProviders, without inferred version pins.
+ *   - versions.tf : `terraform { required_providers { ... } }` from the exact
+ *                   child-module requirements, without inferred version pins.
  *   - main.tf     : `module "child" { source = "./module"; <inputs> }`.
  *   - outputs.tf  : passthrough of the explicit output allowlist only:
  *                   `output "<public>" { value = module.child.<from> }`.
@@ -38,6 +38,7 @@ export const ROOTGEN_VALIDATION_ERROR_REASONS = [
   "rootgen_invalid_identifier",
   "rootgen_provider_configuration_alias_override",
   "rootgen_conflicting_provider_bindings",
+  "rootgen_conflicting_provider_local_names",
   "rootgen_invalid_provider_local_name",
   "rootgen_explicit_provider_source_required",
   "rootgen_non_finite_number_input",
@@ -77,14 +78,35 @@ export interface GeneratedRootModule extends DispatchGeneratedRoot {
 export interface RootProviderBinding {
   /** Explicit provider source (`namespace/type` or `hostname/namespace/type`). */
   readonly provider: string;
-  /** Optional root provider alias selected by this Provider Binding. */
+  /** Exact provider local name expected by the child module. */
+  readonly moduleLocalName?: string;
+  /** Alias expected by the child module; absent means its default provider. */
+  readonly childAlias?: string;
+  /** Alias of the root provider block; absent means its default provider. */
+  readonly rootAlias?: string;
+  /**
+   * @deprecated Ambiguous pre-v1 root alias. New callers must provide the
+   * independent child/root identity fields above.
+   */
   readonly alias?: string;
   /** Non-secret provider-block arguments rendered as escaped HCL literals. */
   readonly configuration?: Readonly<Record<string, JsonValue>>;
 }
 
+export interface RootProviderRequirement {
+  /** Explicit provider source (`namespace/type` or `hostname/namespace/type`). */
+  readonly provider: string;
+  /** Exact local name declared in the child module. */
+  readonly localName: string;
+}
+
 export interface GenerateOpenTofuChildModuleRootInput {
   readonly requiredProviders: readonly string[];
+  /**
+   * Identity-preserving provider requirements discovered from the child
+   * module. Older callers may omit this and use the source-tail fallback.
+   */
+  readonly providerRequirements?: readonly RootProviderRequirement[];
   readonly inputs: Readonly<Record<string, JsonValue>>;
   readonly outputAllowlist: Readonly<Record<string, OutputAllowlistEntry>>;
   readonly providerBindings?: ReadonlyArray<RootProviderBinding>;
@@ -102,27 +124,48 @@ export function generateOpenTofuChildModuleRoot(
   const providerBindings = input.providerBindings ?? [];
   return {
     files: {
-      "versions.tf": renderProviderVersionsTf(input.requiredProviders),
+      "versions.tf": renderProviderVersionsTf(
+        input.providerRequirements ??
+          input.requiredProviders.map((provider) => ({
+            provider,
+            localName: providerLocalName(provider),
+          })),
+      ),
       "main.tf": renderGenericMainTf(input.inputs, providerBindings),
       "outputs.tf": renderGenericOutputsTf(input.outputAllowlist),
     },
   };
 }
 
-function renderProviderVersionsTf(providers: readonly string[]): string {
+function renderProviderVersionsTf(
+  providers: readonly RootProviderRequirement[],
+): string {
   if (providers.length === 0) {
     return ["terraform {}", ""].join("\n");
   }
-  const entries = providers.map((rule) => {
-    const localName = providerLocalName(rule);
-    const source = normalizeProviderSource(rule);
-    const lines = [
-      `    ${localName} = {`,
-      `      source = ${hclString(source)}`,
-      `    }`,
-    ];
-    return lines.join("\n");
-  });
+  const byLocalName = new Map<string, string>();
+  for (const requirement of providers) {
+    assertIdentifier(requirement.localName, "rootgen: provider local name");
+    const source = normalizeProviderSource(requirement.provider);
+    const existing = byLocalName.get(requirement.localName);
+    if (existing && existing !== source) {
+      throw new RootgenValidationError(
+        "rootgen_conflicting_provider_local_names",
+        `rootgen: provider local name ${requirement.localName} maps to both ${existing} and ${source}`,
+      );
+    }
+    byLocalName.set(requirement.localName, source);
+  }
+  const entries = Array.from(byLocalName.entries())
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([localName, source]) => {
+      const lines = [
+        `    ${localName} = {`,
+        `      source = ${hclString(source)}`,
+        `    }`,
+      ];
+      return lines.join("\n");
+    });
   return [
     "terraform {",
     "  required_providers {",
@@ -151,10 +194,12 @@ function appendProviderSections(
   if (providerBindings.length > 0) {
     sections.push(PROVIDER_BINDINGS_COMMENT);
     for (const binding of providerBindings) {
-      const localProvider = providerLocalName(binding.provider);
+      const localProvider = bindingLocalName(binding);
       const aliasLines = [`provider ${hclString(localProvider)} {`];
-      if (binding.alias) {
-        aliasLines.push(`  alias = ${hclString(binding.alias)}`);
+      const rootAlias = bindingRootAlias(binding);
+      if (rootAlias) {
+        assertIdentifier(rootAlias, "rootgen: root provider alias");
+        aliasLines.push(`  alias = ${hclString(rootAlias)}`);
       }
       for (const [name, value] of Object.entries(
         binding.configuration ?? {},
@@ -227,7 +272,7 @@ function providerMapEntries(
 ): ProviderMapEntry[] {
   const byLocalProvider = new Map<string, RootProviderBinding[]>();
   for (const binding of providerBindings) {
-    const localProvider = providerLocalName(binding.provider);
+    const localProvider = bindingLocalName(binding);
     byLocalProvider.set(localProvider, [
       ...(byLocalProvider.get(localProvider) ?? []),
       binding,
@@ -235,13 +280,18 @@ function providerMapEntries(
   }
   const byChildRef = new Map<string, ProviderMapEntry>();
   for (const [localProvider, bindings] of byLocalProvider) {
+    // Compatibility only for pre-v1 bindings whose one `alias` field could not
+    // distinguish a root alias from a child alias. New bindings never take this
+    // path.
     const singleAliasDefault =
-      bindings.length === 1 && bindings[0]?.alias !== undefined;
+      bindings.length === 1 &&
+      bindings[0]?.alias !== undefined &&
+      !hasExplicitProviderIdentity(bindings[0]);
     for (const binding of bindings) {
       const childRef = singleAliasDefault
         ? localProvider
-        : childProviderRef(localProvider, binding.alias);
-      const rootRef = rootProviderRef(localProvider, binding.alias);
+        : childProviderRef(localProvider, bindingChildAlias(binding));
+      const rootRef = rootProviderRef(localProvider, bindingRootAlias(binding));
       const existing = byChildRef.get(childRef);
       if (existing) {
         if (existing.rootRef === rootRef) continue;
@@ -257,6 +307,32 @@ function providerMapEntries(
     }
   }
   return Array.from(byChildRef.values());
+}
+
+function hasExplicitProviderIdentity(binding: RootProviderBinding): boolean {
+  return (
+    binding.moduleLocalName !== undefined ||
+    binding.childAlias !== undefined ||
+    binding.rootAlias !== undefined
+  );
+}
+
+function bindingLocalName(binding: RootProviderBinding): string {
+  const localName =
+    binding.moduleLocalName ?? providerLocalName(binding.provider);
+  assertIdentifier(localName, "rootgen: provider local name");
+  return localName;
+}
+
+function bindingChildAlias(binding: RootProviderBinding): string | undefined {
+  return (
+    binding.childAlias ??
+    (hasExplicitProviderIdentity(binding) ? undefined : binding.alias)
+  );
+}
+
+function bindingRootAlias(binding: RootProviderBinding): string | undefined {
+  return binding.rootAlias ?? binding.alias;
 }
 
 function childProviderRef(

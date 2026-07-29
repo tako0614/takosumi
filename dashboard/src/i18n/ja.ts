@@ -354,8 +354,12 @@ export const ja = {
   "app.bindings.add": "接続済みアカウントを追加",
   "app.bindings.providerPlaceholder": "接続先",
   "app.bindings.providerLabel": "接続先",
-  "app.bindings.aliasPlaceholder": "対象名（任意）",
-  "app.bindings.aliasLabel": "対象名",
+  "app.bindings.moduleLocalNamePlaceholder": "モジュール内の provider 名",
+  "app.bindings.moduleLocalNameLabel": "モジュール内の provider 名",
+  "app.bindings.childAliasPlaceholder": "子モジュール alias（任意）",
+  "app.bindings.childAliasLabel": "子モジュールの provider alias",
+  "app.bindings.rootAliasPlaceholder": "root alias（任意）",
+  "app.bindings.rootAliasLabel": "root の provider alias",
   "app.bindings.selectConnection": "接続済みアカウントを選択",
   "app.bindings.technicalTarget": "接続先の詳細",
   "app.bindings.remove": "削除",
@@ -833,8 +837,11 @@ export const ja = {
   "new.existing.body":
     "「{name}」は {environment} 環境に追加済みです。新しく作り直さず、既存サービスを開いて確認できます。",
   "new.existing.open": "既存サービスを開く",
-  "new.providers.title": "使う接続済みアカウント",
-  "new.providers.alias": "対象: {alias}",
+  "new.providers.title": "デプロイに使うアクセス",
+  "new.providers.body":
+    "ここでは認証情報だけを選びます。デプロイ先と変更内容は plan で解決・確認され、Takosumi の料金がある場合は preview に表示されます。",
+  "new.providers.alias": "プロバイダー alias: {alias}",
+  "new.providers.connection": "接続済みアカウント",
   "new.providers.selectConnection": "接続済みアカウントを選択",
   "new.providers.errorConnection":
     "{provider} の利用可能な接続済みアカウントを選択してください。",
@@ -1000,7 +1007,7 @@ export const ja = {
   "conn.add.displayNamePlaceholder": "任意の名前",
   "conn.guided.openProvider": "{provider} のアクセス設定を開く",
   "conn.guided.instructions": "手順を表示",
-  "conn.byok.title": "自分のカギで任意のプロバイダーを接続",
+  "conn.byok.title": "自分のカギで外部プロバイダーを接続",
   "conn.byok.body":
     "プロバイダーの取得元 (source) と必要な環境変数を入力します。この接続にも provider policy、runner capability、Run approval が適用されます。",
   "conn.byok.noBillingNote":
@@ -1026,7 +1033,7 @@ export const ja = {
   "conn.genericEnv.oneRequired": "環境変数を 1 つ以上入力してください。",
   "conn.error.invalidProvider": "接続先が不正です。",
   "conn.error.fieldRequired": "{field} は必須です。",
-  "conn.empty.title": "自分のカギで任意のプロバイダーを接続",
+  "conn.empty.title": "自分のカギで外部プロバイダーを接続",
   "conn.empty.message":
     "自分の認証情報を接続し、インストール済みの policy、runner、approval、billing の範囲で外部プロバイダーを利用します。",
   "conn.test": "アクセス確認",
@@ -1592,7 +1599,7 @@ export const ja = {
   "billing.loadError": "使用量設定を読み込めませんでした: {message}",
   "billing.usage.title": "使用量",
   "billing.usage.subtitle":
-    "この ワークスペース のプロバイダー非依存な使用イベントです。",
+    "このワークスペースに記録された使用量です。金額確定済みの行には対応する米ドル換算額を表示します。",
   "billing.usage.more": "さらに読み込む",
   "billing.usage.error": "使用量を読み込めませんでした: {message}",
   "billing.usage.empty": "使用量はまだありません。",
@@ -1603,21 +1610,21 @@ export const ja = {
   "billing.usage.kind.compute": "コンピュート",
   "billing.usage.kind.storage": "ストレージ",
   "billing.usage.quantity": "数量",
-  "billing.usage.amount": "見積金額",
+  "billing.usage.amount": "確定金額",
   "billing.usage.unrated": "未評価",
-  "billing.commercial.pageTitle": "クレジットと支払い",
+  "billing.commercial.pageTitle": "プリペイドクレジットと使用量",
   "billing.commercial.pageSubtitle":
-    "プリペイドクレジットの追加と自動チャージを管理します。",
+    "利用可能クレジットの確認、プリペイドクレジットの追加、自動チャージの管理を行います。",
   "billing.commercial.description":
-    "クレジットはTakosumi Cloudのサービスだけに使用でき、有効期限はありません。",
+    "プリペイドクレジットはTakosumi Cloudの使用量に充当され、有効期限はありません。",
   "billing.commercial.loadError":
-    "クレジットと支払い情報を読み込めませんでした: {message}",
+    "プリペイドクレジットと支払い情報を読み込めませんでした: {message}",
   "billing.commercial.actionError":
     "支払い操作を完了できませんでした: {message}",
   "billing.commercial.unavailable":
     "支払い設定を一時的に利用できません。既存の使用量記録には影響しません。",
   "billing.commercial.checkout.success":
-    "支払いが完了しました。決済サービスによる確定後、購入したクレジットが反映されます。",
+    "支払いが完了しました。決済サービスによる確定後、プリペイドクレジットが反映されます。",
   "billing.commercial.checkout.cancelled":
     "支払い設定をキャンセルしました。変更はありません。",
   "billing.commercial.manage": "支払い方法を管理",
@@ -1631,38 +1638,38 @@ export const ja = {
   "billing.commercial.profile.hint":
     "支払い設定後は、利用区分と請求先の国を変更できません。",
   "billing.commercial.balance.available": "利用可能クレジット",
-  "billing.commercial.balance.reserved": "実行中の操作に確保済み",
-  "billing.commercial.balance.purchased": "購入クレジット残高",
+  "billing.commercial.balance.reserved": "確保済みクレジット",
   "billing.commercial.balance.noExpiry":
-    "定期料金なし・使った分だけクレジットから差し引き",
+    "使用量に応じて利用可能クレジットから差し引き・プリペイドクレジットに有効期限なし",
   "billing.commercial.paymentMethod.ready": "支払い方法を保存済み",
   "billing.commercial.paymentMethod.missing": "支払い方法が未登録",
-  "billing.commercial.credits.title": "クレジットを追加",
+  "billing.commercial.credits.title": "プリペイドクレジットを追加",
   "billing.commercial.credits.subtitle":
-    "金額を選んで追加します。Checkoutで支払い方法を安全に保存しますが、自動チャージは下で有効にするまで行いません。",
-  "billing.commercial.credits.choose": "追加するクレジット額を選択",
+    "追加するプリペイドクレジット額を選びます。Checkoutで支払い方法を安全に保存しますが、自動チャージは下で有効にするまで行いません。",
+  "billing.commercial.credits.choose": "追加するプリペイドクレジット額を選択",
   "billing.commercial.credits.taxNote":
     "適用される税金は決済時に決済サービスが計算します。",
-  "billing.commercial.credits.add": "クレジットを追加",
+  "billing.commercial.credits.add": "プリペイドクレジットを追加",
   "billing.commercial.autoRecharge.title": "自動チャージ",
   "billing.commercial.autoRecharge.subtitle":
-    "利用可能残高がしきい値を下回ったときにチャージします。月上限は強制的な安全上限です。",
+    "利用可能クレジットがしきい値を下回ったときにプリペイドクレジットを追加します。月上限は強制的な安全上限です。",
   "billing.commercial.autoRecharge.enable": "自動チャージを有効にする",
   "billing.commercial.autoRecharge.requiresCard":
-    "最初に一度クレジットを追加して、支払い方法を保存してください。",
+    "最初に一度プリペイドクレジットを追加して、支払い方法を保存してください。",
   "billing.commercial.autoRecharge.status": "自動チャージ",
   "billing.commercial.autoRecharge.on": "オン",
   "billing.commercial.autoRecharge.off": "オフ",
   "billing.commercial.autoRecharge.onSummary":
-    "残高が {threshold} 未満になると {amount} を追加（1か月 {limit} まで）",
-  "billing.commercial.autoRecharge.threshold": "この残高を下回ったら",
-  "billing.commercial.autoRecharge.amount": "チャージ金額",
+    "利用可能クレジットが {threshold} 未満になると {amount} 分のプリペイドクレジットを追加（1か月 {limit} まで）",
+  "billing.commercial.autoRecharge.threshold":
+    "利用可能クレジットがこの額を下回ったら",
+  "billing.commercial.autoRecharge.amount": "プリペイドクレジット額",
   "billing.commercial.autoRecharge.monthlyLimit": "1か月の上限",
   "billing.commercial.autoRecharge.save": "自動チャージ設定を保存",
-  "billing.commercial.payment.title": "支払い履歴",
+  "billing.commercial.payment.title": "クレジット支払い履歴",
   "billing.commercial.payment.subtitle":
-    "手動および自動チャージの最近の支払いです。",
-  "billing.commercial.payment.empty": "支払いはまだありません。",
+    "プリペイドクレジットの追加と自動チャージの最近の支払いです。",
+  "billing.commercial.payment.empty": "クレジット支払いはまだありません。",
   "billing.commercial.payment.date": "日付",
   "billing.commercial.payment.status": "状態",
   "billing.commercial.payment.amount": "金額",

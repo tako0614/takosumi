@@ -69,34 +69,6 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "s"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 7,
-        "w": 8,
-        "x": 16,
-        "y": 0
-      },
-      "id": 3,
-      "targets": [
-        {
-          "expr": "max(takosumi_runner_queue_age_seconds{environment=~\"$environment\",runner_profile_id=~\"$runner_profile_id\"})",
-          "legendFormat": "{{runner_profile_id}} queue age",
-          "refId": "A"
-        }
-      ],
-      "title": "Runner Queue Age",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "fieldConfig": {
-        "defaults": {
           "unit": "ops"
         },
         "overrides": []

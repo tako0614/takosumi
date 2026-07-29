@@ -2609,6 +2609,47 @@ test("generic OpenTofu runner profile derives pre-init requiredProviders from Pr
   expect(planRun.policy.status).toEqual("passed");
 });
 
+test("compatibility-declared arbitrary provider credentials require an explicit binding on the default runner", async () => {
+  const provider = "registry.opentofu.org/acme/service";
+  const store = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner({ requiredProviders: [provider] });
+  const seeded = await seedRunnableCapsuleModel(store, {
+    environment: "preview",
+  });
+  await store.putCapsuleCompatibilityReport({
+    id: "caprep_arbitrary_credentials",
+    sourceId: seeded.source.id,
+    sourceSnapshotId: seeded.snapshot.id,
+    modulePath: ".",
+    level: "ready",
+    findings: [],
+    providers: [
+      {
+        source: provider,
+        localName: "service_api",
+        aliases: [],
+        allowed: true,
+        credentialRequired: true,
+      },
+    ],
+    resources: [],
+    dataSources: [],
+    provisioners: [],
+    createdAt: "2026-07-29T00:00:00.000Z",
+  });
+  await store.putCapsule({
+    ...seeded.capsule,
+    compatibilityReportId: "caprep_arbitrary_credentials",
+    compatibilityStatus: "ready",
+  });
+  const controller = controllerWith(store, runner);
+
+  await expect(controller.createCapsulePlan(seeded.capsule.id)).rejects.toThrow(
+    `provider connection is required for providers: ${provider}`,
+  );
+  expect(runner.planJobs).toHaveLength(0);
+});
+
 test("generic OpenTofu runner profile permits direct provider install by default", async () => {
   const provider = "registry.opentofu.org/vercel/vercel";
   const store = new InMemoryOpenTofuControlStore();
@@ -2836,6 +2877,63 @@ test("low-level plan does not infer requiredProviders from ProviderBinding alone
   expect(planRun.policy.status).toEqual("passed");
   expect(runner.planJobs).toHaveLength(1);
   expect(runner.planJobs[0]?.requiredProviders).toBeUndefined();
+});
+
+test("low-level plan never treats allowedProviders as discovered requirements", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner();
+  const seeded = await seedCapsuleModel(store, {
+    environment: "preview",
+  });
+  await store.putInstallConfig({
+    ...seeded.installConfig,
+    policy: {
+      ...seeded.installConfig.policy,
+      allowedProviders: [
+        "registry.opentofu.org/cloudflare/cloudflare",
+        "registry.opentofu.org/hashicorp/aws",
+      ],
+    },
+  });
+  const strictProfile: RunnerProfile = {
+    id: "strict-generic",
+    name: "Strict generic OpenTofu",
+    substrate: "operator-managed",
+    executorId: DEFAULT_OPENTOFU_RUNNER_EXECUTOR_ID,
+    lifecycle: { state: "active" },
+    availability: { state: "available" },
+    allowedProviders: [],
+    requireProviderBindings: true,
+    stateBackend: { kind: "operator-managed", ref: "state://strict" },
+    stateLock: { kind: "native" },
+    networkPolicy: { mode: "operator-managed" },
+    secretExposure: {
+      providerCredentials: "runner-only",
+      tenantWorkerOperatorSecrets: "forbidden",
+      redactLogs: true,
+      blockSensitiveOutputs: true,
+    },
+  };
+  const controller = controllerWith(store, runner, {
+    runnerProfiles: [strictProfile],
+    defaultRunnerProfileId: strictProfile.id,
+  });
+
+  const { planRun } = await controller.createPlanRun({
+    workspaceId: seeded.capsule.workspaceId,
+    capsuleId: seeded.capsule.id,
+    source: {
+      kind: "git",
+      url: seeded.source.url,
+      ref: seeded.source.defaultRef,
+      modulePath: seeded.source.defaultPath,
+    },
+    runnerProfileId: strictProfile.id,
+  });
+
+  expect(planRun.requiredProviders).toEqual([]);
+  expect(runner.planJobs).toHaveLength(1);
+  expect(runner.planJobs[0]?.planRun.requiredProviders).toEqual([]);
 });
 
 test("generic Capsule plan creation blocks stale CompatibilityReport as policy", async () => {

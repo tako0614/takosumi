@@ -134,6 +134,9 @@ export function analyzeOpenTofuCapsuleFiles(
   }
 
   const providerAllowlist = allowedProviderSet(input.policy);
+  const credentialRequiredProviders = explicitProviderSet(
+    input.policy?.providerCredentials?.requiredProviders,
+  );
   const resourceAllowlist = explicitAllowlist(
     input.policy?.allowedResourceTypes,
   );
@@ -145,7 +148,12 @@ export function analyzeOpenTofuCapsuleFiles(
   const provisionerAllowlist = new Set(
     input.policy?.allowedProvisionerTypes ?? [],
   );
-  const providers = collectProviders(hclFiles, findings, providerAllowlist);
+  const providers = collectProviders(
+    hclFiles,
+    findings,
+    providerAllowlist,
+    credentialRequiredProviders,
+  );
   const resources = collectResources(hclFiles, resourceAllowlist);
   const dataSources = collectDataSources(hclFiles, dataSourceAllowlist);
   const provisioners = collectProvisioners(hclFiles, provisionerAllowlist);
@@ -333,8 +341,16 @@ function collectProviders(
   files: readonly CapsuleSourceFile[],
   findings: CapsuleGateFinding[],
   allowedProviders: ExplicitAllowlist,
+  credentialRequiredProviders: ReadonlySet<string>,
 ): CapsuleProviderRequirement[] {
-  const providers = new Map<string, Set<string>>();
+  const providers = new Map<
+    string,
+    {
+      readonly source: string;
+      readonly localName: string;
+      readonly aliases: Set<string>;
+    }
+  >();
   for (const file of files) {
     const terraformBlocks = matchBlocks(file.text, "terraform");
     for (const block of terraformBlocks) {
@@ -349,10 +365,16 @@ function collectProviders(
           const source =
             stringAttribute(providerBlock.body, "source") ??
             `hashicorp/${providerBlock.name}`;
-          const aliases = aliasesAttribute(providerBlock.body);
-          const entry = providers.get(source) ?? new Set<string>();
-          for (const alias of aliases) entry.add(alias);
-          providers.set(source, entry);
+          const localName = providerBlock.name;
+          const aliases = aliasesAttribute(providerBlock.body, localName);
+          const key = `${localName}\u0000${source}`;
+          const entry = providers.get(key) ?? {
+            source,
+            localName,
+            aliases: new Set<string>(),
+          };
+          for (const alias of aliases) entry.aliases.add(alias);
+          providers.set(key, entry);
         }
       }
     }
@@ -406,13 +428,22 @@ function collectProviders(
       }
     }
   }
-  return Array.from(providers.entries())
-    .map(([source, aliases]) => ({
+  return Array.from(providers.values())
+    .map(({ source, localName, aliases }) => ({
       source,
+      localName,
       aliases: Array.from(aliases).sort(),
       allowed: providerAllowed(source, allowedProviders),
+      ...(credentialRequiredProviders.has("*") ||
+      providerInSet(source, credentialRequiredProviders)
+        ? { credentialRequired: true }
+        : {}),
     }))
-    .sort((a, b) => a.source.localeCompare(b.source));
+    .sort(
+      (a, b) =>
+        a.localName.localeCompare(b.localName) ||
+        a.source.localeCompare(b.source),
+    );
 }
 
 function collectResources(
@@ -747,6 +778,21 @@ function allowedProviderSet(
   return providers;
 }
 
+function explicitProviderSet(
+  configured: readonly string[] | undefined,
+): ReadonlySet<string> {
+  const providers = new Set<string>();
+  for (const provider of configured ?? []) {
+    providers.add(provider);
+    providers.add(
+      provider.startsWith("registry.opentofu.org/")
+        ? provider
+        : `registry.opentofu.org/${provider}`,
+    );
+  }
+  return providers;
+}
+
 function containsCredentialAttribute(body: string): boolean {
   for (const attr of CREDENTIAL_PROVIDER_ATTRIBUTES) {
     const pattern = new RegExp(`(^|\\n)\\s*${attr}\\s*=`, "m");
@@ -760,14 +806,19 @@ function stringAttribute(body: string, name: string): string | undefined {
   return pattern.exec(body)?.[2];
 }
 
-function aliasesAttribute(body: string): string[] {
+function aliasesAttribute(body: string, localName: string): string[] {
   const match = /configuration_aliases\s*=\s*\[([\s\S]*?)\]/m.exec(body);
   if (!match) return [];
   return match[1]!
     .split(",")
     .map((entry) => entry.trim())
     .filter((entry) => entry.length > 0)
-    .map((entry) => entry.replace(/^"|"$/g, ""));
+    .map((entry) => entry.replace(/^"|"$/g, ""))
+    .map((entry) =>
+      entry.startsWith(`${localName}.`)
+        ? entry.slice(localName.length + 1)
+        : entry,
+    );
 }
 
 function isUnpinnedRemoteModule(source: string): boolean {

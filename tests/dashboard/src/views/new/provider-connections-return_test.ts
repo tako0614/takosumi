@@ -286,6 +286,23 @@ describe("/new Provider Connections return context", () => {
     expect(newAppViewSource).toContain(
       ".filter((row) => providerRequiresConnection(row))",
     );
+    expect(controlApiSource).toContain("readonly localName?: string;");
+    expect(controlApiSource).toContain(
+      "provider.localName ? { localName: provider.localName } : {}",
+    );
+    expect(controlApiSource).toContain("provider.credentialRequired === true");
+    expect(newAppViewSource).toContain(
+      "moduleLocalName: provider.localName ?? providerTail(provider.source)",
+    );
+    expect(newAppViewSource).toContain(
+      "row.childAlias ? { childAlias: row.childAlias } : {}",
+    );
+    expect(newAppViewSource).toContain(
+      "row.rootAlias ? { rootAlias: row.rootAlias } : {}",
+    );
+    expect(newAppViewSource).not.toContain(
+      "row.alias ? { alias: row.alias } : {}",
+    );
   });
 
   test("guided fields do not create a dashboard-owned provider settings authority", () => {

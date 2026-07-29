@@ -122,29 +122,6 @@ image_build_context = "../.."
 instance_type = { vcpu = 2, memory_mib = 6144, disk_mb = 10240 }
 max_instances = 10
 
-[[queues.producers]]
-binding = "RUN_QUEUE"
-queue = "takosumi-runs"
-
-# Consumer: the platform worker validates an identity-only run message, stores
-# it in the per-run RUN_OWNER Durable Object, and acks quickly. RUN_OWNER then
-# mints credentials through the controller path, drives the container DO, and
-# owns retry/final-failure handling outside the queue delivery lifetime. One run
-# per delivery keeps scheduling failures isolated.
-[[queues.consumers]]
-queue = "takosumi-runs"
-max_batch_size = 1
-max_batch_timeout = 1
-max_retries = 2
-dead_letter_queue = "takosumi-runs-dlq"
-
-# Dead-letter consumer: marks runs that exhausted retries failed
-# ("retries-exhausted") if not already terminal.
-[[queues.consumers]]
-queue = "takosumi-runs-dlq"
-max_batch_size = 10
-max_batch_timeout = 5
-
 # Optional platform extensions are not declared in the OSS template. The
 # provider-neutral seam (`worker.ts` + `platform_extensions.ts`) reads
 # `TAKOSUMI_PLATFORM_EXTENSIONS`; an operator supplies descriptors and matching

@@ -496,7 +496,7 @@ export interface ControllerOpentofuRunPortDeps {
   readonly driver: DeployControlRunDriver;
   /**
    * Drive `runQueuedPlan` / `runQueuedApply` in-process after create (default
-   * `true`). Set `false` when an external queue consumer drives the runner; then
+   * `true`). Set `false` when an external asynchronous dispatcher drives the runner; then
    * the port returns after enqueue and the caller polls.
    */
   readonly driveRunsSynchronously?: boolean;
@@ -778,6 +778,12 @@ export class ControllerOpentofuRunPort implements OpentofuRunPort {
     try {
       generatedRoot = generateOpenTofuChildModuleRoot({
         requiredProviders: [request.providerBinding.providerSource],
+        providerRequirements: [
+          {
+            provider: request.providerBinding.providerSource,
+            localName: request.providerBinding.provider,
+          },
+        ],
         inputs: request.inputs,
         outputAllowlist,
         ...(providerBindings.length > 0 ? { providerBindings } : {}),
@@ -863,7 +869,13 @@ function providerBindingsFor(
   return [
     {
       provider: binding.providerSource,
-      ...(binding.alias ? { alias: binding.alias } : {}),
+      moduleLocalName: binding.provider,
+      ...(binding.alias
+        ? {
+            childAlias: binding.alias,
+            rootAlias: binding.alias,
+          }
+        : {}),
       ...(binding.configuration
         ? { configuration: binding.configuration }
         : {}),

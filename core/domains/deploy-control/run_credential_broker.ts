@@ -321,7 +321,9 @@ function credentialManifest(
     bindings: resolved
       .map((entry) => ({
         providerSource: entry.provider,
-        ...(entry.alias ? { alias: entry.alias } : {}),
+        ...((entry.rootAlias ?? entry.alias)
+          ? { alias: entry.rootAlias ?? entry.alias }
+          : {}),
         connectionId: entry.connection.id,
         recipeId: entry.connection.credentialRecipe?.id ?? "legacy",
         authMode: entry.connection.credentialRecipe?.authMode ?? "legacy",
@@ -362,7 +364,9 @@ function providerMintEntriesFromResolved(
     if (!connection) continue;
     entries.push({
       provider: connection.provider,
-      ...(entry.alias ? { alias: entry.alias } : {}),
+      ...((entry.rootAlias ?? entry.alias)
+        ? { alias: entry.rootAlias ?? entry.alias }
+        : {}),
       connectionId: connection.id,
     });
   }

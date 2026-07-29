@@ -18,16 +18,16 @@ takosumi connections create \
   --values-file ./provider-credentials.json
 ```
 
-| オプション | 意味 |
-| --- | --- |
-| `--provider` | provider の source アドレス |
-| `--recipe` | 使う Credential Recipe の id。汎用の `generic-env` もここに書く |
-| `--auth-mode` | `env` (環境変数として注入) など |
-| `--secret-partition` | 秘密の保存区画 |
-| `--values-file` | 環境変数名と値の JSON |
-| `--files-file` | ファイルとして渡す認証情報の JSON |
-| `--workspace` | 対象 Workspace |
-| `--expires-at` | 失効日時 |
+| オプション           | 意味                                                            |
+| -------------------- | --------------------------------------------------------------- |
+| `--provider`         | provider の source アドレス                                     |
+| `--recipe`           | 使う Credential Recipe の id。汎用の `generic-env` もここに書く |
+| `--auth-mode`        | `env` (環境変数として注入) など                                 |
+| `--secret-partition` | 秘密の保存区画                                                  |
+| `--values-file`      | 環境変数名と値の JSON                                           |
+| `--files-file`       | ファイルとして渡す認証情報の JSON                               |
+| `--workspace`        | 対象 Workspace                                                  |
+| `--expires-at`       | 失効日時                                                        |
 
 `--provider` はホスト名から始まる完全修飾のアドレスです。`example/example` のような
 短い形は受け付けません。module の `required_providers` が `example/example` と書いて
@@ -74,11 +74,13 @@ runner 自身が使う名前は上書きできません。`PATH`、`HOME`、`TMP
 渡す方式で、その置き場所を環境変数でも知らせる場合 (`envName`) にも、同じ規則が
 かかります。
 
-## 割り当てが無いと Run は始まりません
+## 必須と宣言した割り当てが無いと Run は始まりません
 
-module が要求している provider に Connection が割り当てられていないと、その Run は
-OpenTofu を起動する前に失敗します。近い設定の Connection が代わりに選ばれることは
-ありません。
+InstallConfig の `policy.providerCredentials.requiredProviders`、または選択した
+RunnerProfile が Connection 必須とした provider に割り当てが無いと、その Run は
+OpenTofu を起動する前に失敗します。配列には完全な provider source を指定し、
+近い名前や同じ末尾の Connection が代わりに選ばれることはありません。credentialless
+provider はこの一覧に入れず、通常の provider plugin として同じ runner で実行できます。
 
 判断の内訳は Run の `providerResolutions` に、provider ごとに 1 件ずつ入ります。
 
@@ -87,10 +89,10 @@ curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/runs/run_example" \
   -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
 ```
 
-| `status` | 意味 |
-| --- | --- |
-| `resolved_provider_connection` | 使う Connection が決まりました |
-| `blocked_missing_connection` | その provider に割り当てた Connection がありません |
+| `status`                       | 意味                                               |
+| ------------------------------ | -------------------------------------------------- |
+| `resolved_provider_connection` | 使う Connection が決まりました                     |
+| `blocked_missing_connection`   | その provider に割り当てた Connection がありません |
 
 決まった項目の `evidence` には、provider 名、選ばれた Connection の id、注入する予定の
 環境変数名 (`requiredEnvNames`) が入ります。止まった項目には provider 名と、止まった
@@ -120,6 +122,11 @@ endpoint や region のような非 secret の値は、Connection ではなく m
 module は認証情報を持ちません。どの Connection を使うかは Capsule の ProviderBinding が
 決めます。同じ module から開発用と本番用の Capsule を作り、それぞれに別の Connection を
 割り当てられます。これが Takosumi における環境の分け方です。
+
+ProviderBinding は provider source に加えて、子 module の `moduleLocalName` と
+`childAlias`、generated root 側の `rootAlias` を別々に保持します。たとえば子 module の
+`primary.archive` を root の `primary.production` に割り当てられます。source の末尾から
+local name を推測したり、一つの alias を両側へ暗黙に流用したりしません。
 
 ```bash
 curl -X PUT "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/capsules/cap_example/provider-bindings" \

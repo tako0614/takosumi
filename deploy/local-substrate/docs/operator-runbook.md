@@ -12,7 +12,7 @@ bash scripts/up.sh
 bash scripts/up.sh --profile postgres
 
 # Workers profile: Accounts Worker on D1/R2 + Takosumi service Worker on
-# D1/R2/Queue/DO. app.takosumi.test remains the canonical platform host;
+# D1/R2/DO. app.takosumi.test remains the canonical platform host;
 # service*.takosumi.test is local-only worker probe ingress.
 bash scripts/up.sh --profile workers
 

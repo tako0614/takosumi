@@ -1,6 +1,6 @@
 import { INTERNAL_V1_PREFIX } from "takosumi-contract/api-surface";
 import type { ExecutionContext } from "hono";
-import type { CloudflareWorkerEnv, QueueBatch } from "./bindings.ts";
+import type { CloudflareWorkerEnv } from "./bindings.ts";
 import {
   createServiceWorkerRequest,
   isInterfaceApiPath,
@@ -8,9 +8,8 @@ import {
   isServiceControlPlanePath,
 } from "./routes.ts";
 import { createWorkerServiceApp } from "./worker_service.ts";
-import { consumeOpenTofuRunBatch } from "./run_queue_consumer.ts";
 
-export type { CloudflareWorkerEnv, QueueBatch } from "./bindings.ts";
+export type { CloudflareWorkerEnv } from "./bindings.ts";
 
 // Re-export the deploy-control seam + service factory so a host worker (e.g. the
 // unified Takos worker or the operator platform worker) can pull every
@@ -36,7 +35,6 @@ export interface CloudflareWorkerHandler {
     env: CloudflareWorkerEnv,
     context?: ExecutionContext,
   ): Promise<Response>;
-  queue(batch: QueueBatch, env: CloudflareWorkerEnv): Promise<void>;
 }
 
 export interface CreatedCloudflareWorkerApp {
@@ -94,24 +92,7 @@ export function createCloudflareWorker(
       }
       return Response.json({ error: "not found" }, { status: 404 });
     },
-    async queue(batch: QueueBatch, env: CloudflareWorkerEnv): Promise<void> {
-      await consumeOpenTofuRunBatch(batch, env);
-    },
   };
-}
-
-/**
- * The deploy-control queue consumer, factored out so a composing host worker
- * (the operator's Takosumi platform worker) can mount it as its `queue()`
- * handler. The platform worker owns the public fetch surface via the accounts
- * handler but must run the OpenTofu run-queue consumer in-process; this is the
- * single entry point it wires up.
- */
-export function createDeployControlQueueConsumer(): (
-  batch: QueueBatch,
-  env: CloudflareWorkerEnv,
-) => Promise<void> {
-  return (batch, env) => consumeOpenTofuRunBatch(batch, env);
 }
 
 function isCoordinationEdgePath(pathname: string): boolean {

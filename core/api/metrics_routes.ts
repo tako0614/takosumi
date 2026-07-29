@@ -218,14 +218,6 @@ function defaultDashboardMetricSeries(
       tags: deployTags,
     },
     {
-      name: "takosumi_runner_queue_age_seconds",
-      kind: "gauge",
-      tags: {
-        ...runnerTags,
-        workspace_id: "none",
-      },
-    },
-    {
       name: "takosumi_runner_active_runs",
       kind: "gauge",
       tags: runnerTags,

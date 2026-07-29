@@ -104,7 +104,7 @@ bash scripts/up.sh --profile postgres
 TAKOSUMI_LOCAL_SUBSTRATE_DISABLE_APPARMOR=1 bash scripts/up.sh --profile postgres
 
 # Worker-first substrate probe: Accounts Worker on D1/R2 plus Takosumi
-# service Worker on D1/R2/Queue/DO. app.takosumi.test remains the canonical
+# service Worker on D1/R2/DO. app.takosumi.test remains the canonical
 # platform host; service*.takosumi.test is local-only worker probe ingress.
 bash scripts/up.sh --profile workers
 
@@ -174,7 +174,7 @@ takosumi/deploy/local-substrate/
 ├── pebble/pebble-config.json
 ├── wrappers/
 │   ├── cloud.ts                    # composed control-plane service + account-plane
-│   └── takosumi-platform-worker-runner.mjs # local-only Miniflare D1/R2/Queue/DO runner for deploy/platform/worker.ts
+│   └── takosumi-platform-worker-runner.mjs # local-only Miniflare D1/R2/DO runner for deploy/platform/worker.ts
 ├── route-registrar/
 │   ├── package.json
 │   └── mod.ts                   # preserve Caddy dynamic-route partition

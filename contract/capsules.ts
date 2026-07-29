@@ -126,7 +126,19 @@ export interface CapsuleGateFinding {
 
 export interface CapsuleProviderRequirement {
   readonly source: string;
+  /**
+   * Exact local name declared by the child module in `required_providers`.
+   * This is independent from the provider source's type segment: two providers
+   * may share the same type name, and a module may choose a different local
+   * name. Older compatibility reports may omit it.
+   */
+  readonly localName?: string;
   readonly versionConstraint?: string;
+  /**
+   * Child-module configuration alias names, without the local-name prefix.
+   * For example `configuration_aliases = [cloudflare.zone]` is represented as
+   * localName `cloudflare` plus alias `zone`.
+   */
   readonly aliases: readonly string[];
   readonly allowed: boolean;
   /**

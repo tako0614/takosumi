@@ -303,7 +303,7 @@ function providerConfigurationsFromResolved(
   return providerConfigurationsEnvelope(
     resolved.map((entry) => ({
       provider: entry.provider,
-      alias: entry.alias ?? null,
+      alias: entry.rootAlias ?? entry.alias ?? null,
       configuration: entry.connection.scopeHints?.providerConfig ?? {},
     })),
   );

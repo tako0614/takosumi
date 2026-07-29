@@ -740,6 +740,7 @@ export interface CapsuleCompatibilityDiagnostic {
 
 export interface CapsuleCompatibilityProvider {
   readonly source: string;
+  readonly localName?: string;
   readonly versionConstraint?: string;
   readonly aliases: readonly string[];
   readonly allowed: boolean;
@@ -1324,9 +1325,11 @@ export async function checkCapsuleCompatibility(input: {
       }[];
       readonly providers?: readonly {
         readonly source?: string;
+        readonly localName?: string;
         readonly versionConstraint?: string;
         readonly aliases?: readonly string[];
         readonly allowed?: boolean;
+        readonly credentialRequired?: boolean;
       }[];
       readonly resources?: readonly {
         readonly type?: string;
@@ -1363,11 +1366,15 @@ export async function checkCapsuleCompatibility(input: {
     .filter((provider) => provider.source !== undefined)
     .map((provider) => ({
       source: provider.source!,
+      ...(provider.localName ? { localName: provider.localName } : {}),
       ...(provider.versionConstraint
         ? { versionConstraint: provider.versionConstraint }
         : {}),
       aliases: provider.aliases ?? [],
       allowed: provider.allowed ?? true,
+      ...(provider.credentialRequired === true
+        ? { credentialRequired: true }
+        : {}),
     }));
   const resources = (body.report.resources ?? [])
     .filter((resource) => resource.type !== undefined)

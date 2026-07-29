@@ -342,6 +342,16 @@
   font-weight: 600;
   overflow-wrap: anywhere;
 }
+.wb-provider-selection {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--tg-s-1);
+  align-self: center;
+}
+.wb-provider-selection strong {
+  overflow-wrap: anywhere;
+}
 .wb-provider-meta code {
   overflow-wrap: anywhere;
 }
@@ -597,7 +607,7 @@
 }
 .wb-billing-stats {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 1px;
   margin: 0;
   overflow: hidden;

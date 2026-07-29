@@ -287,7 +287,14 @@ function mergeProviderCredentialPolicy(
   local: PolicyConfig["providerCredentials"] | undefined,
 ): PolicyConfig["providerCredentials"] | undefined {
   if (!ceiling && !local) return undefined;
+  const requiredProviders = Array.from(
+    new Set([
+      ...(ceiling?.requiredProviders ?? []),
+      ...(local?.requiredProviders ?? []),
+    ]),
+  ).sort();
   return {
+    ...(requiredProviders.length > 0 ? { requiredProviders } : {}),
     requireTemporary:
       ceiling?.requireTemporary === true || local?.requireTemporary === true,
     requireTtlEnforced:

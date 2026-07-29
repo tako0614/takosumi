@@ -1458,9 +1458,6 @@ function Inner() {
     if (candidates.length !== 1) return true;
     return row.connectionId !== candidates[0]?.id;
   };
-  const providerRowsRequiringChoice = () =>
-    providerRows().filter(providerRowNeedsVisibleChoice);
-
   const defaultConnectionForRow = (row: ProviderConnectionRow): string => {
     const candidates = providerConnectionsForRow(row);
     return candidates[0]?.id ?? "";
@@ -1516,24 +1513,29 @@ function Inner() {
       )
       .flatMap((provider) => {
         const aliases = provider.aliases.length > 0 ? provider.aliases : [""];
-        return aliases.map((alias) => ({
+        return aliases.map((childAlias) => ({
           provider: provider.source,
-          alias,
+          moduleLocalName: provider.localName ?? providerTail(provider.source),
+          childAlias,
+          rootAlias: childAlias,
           connectionId: "",
           credentialRequired: true,
         }));
       });
 
-  // Keyed by row identity (provider + alias), NOT by position: the chooser
-  // renders the FILTERED providerRowsRequiringChoice() list, so a positional
-  // index would write through to a hidden managed/auto-selected row.
+  // Keyed by the exact child-module provider identity, NOT by position. Every
+  // required row remains visible below, while only rows with no unambiguous
+  // ready connection render a chooser.
   const updateProviderRow = (
     target: ProviderConnectionRow,
     patch: Partial<ProviderConnectionRow>,
   ) =>
     setProviderRows((rows) =>
       rows.map((row) =>
-        row.provider === target.provider && row.alias === target.alias
+        row.provider === target.provider &&
+        row.moduleLocalName === target.moduleLocalName &&
+        row.childAlias === target.childAlias &&
+        row.rootAlias === target.rootAlias
           ? { ...row, ...patch }
           : row,
       ),
@@ -1564,7 +1566,9 @@ function Inner() {
       .filter((row) => row.connectionId.trim())
       .map((row) => ({
         provider: row.provider,
-        ...(row.alias ? { alias: row.alias } : {}),
+        moduleLocalName: row.moduleLocalName,
+        ...(row.childAlias ? { childAlias: row.childAlias } : {}),
+        ...(row.rootAlias ? { rootAlias: row.rootAlias } : {}),
         connectionId: row.connectionId,
       }));
 
@@ -3447,18 +3451,14 @@ function Inner() {
                     )}
                   </Show>
 
-                  <Show
-                    when={
-                      compatibility() &&
-                      providerRowsRequiringChoice().length > 0
-                    }
-                  >
+                  <Show when={compatibility() && providerRows().length > 0}>
                     <section class="wb-inline-panel">
                       <div class="wb-compat-head">
                         <h3 class="tg-card-title">
                           {t("new.providers.title")}
                         </h3>
                       </div>
+                      <p class="wb-note">{t("new.providers.body")}</p>
                       <Show when={providerConnectionsLoadError()}>
                         {(loadError) => {
                           // A failed connections fetch must not read as "no
@@ -3487,54 +3487,81 @@ function Inner() {
                       </Show>
                       <Show when={!providerConnectionsLoadError()}>
                         <div class="wb-provider-grid">
-                          <For each={providerRowsRequiringChoice()}>
+                          <For each={providerRows()}>
                             {(row, index) => {
                               const options = () =>
                                 providerConnectionsForRow(row);
+                              const selectedConnection = () =>
+                                options().find(
+                                  (connection) =>
+                                    connection.id === row.connectionId,
+                                );
                               return (
                                 <div class="wb-provider-row">
                                   <div class="wb-provider-meta">
                                     <span class="wb-provider-title">
                                       {providerLabel(row.provider)}
                                     </span>
-                                    <Show when={row.alias}>
+                                    <Show when={row.childAlias}>
                                       <span class="muted">
                                         {t("new.providers.alias", {
-                                          alias: row.alias,
+                                          alias: row.childAlias,
                                         })}
                                       </span>
                                     </Show>
                                   </div>
-                                  <Select
-                                    id={`provider-connection-${index()}`}
-                                    name={`providerConnection:${row.provider}:${row.alias ?? "default"}`}
-                                    aria-label={`${providerLabel(row.provider)} ${row.alias ? t("new.providers.alias", { alias: row.alias }) : ""} ${t("new.providers.selectConnection")}`.trim()}
-                                    value={row.connectionId}
-                                    onChange={(e) =>
-                                      updateProviderRow(row, {
-                                        connectionId: e.currentTarget.value,
-                                      })
+                                  <Show
+                                    when={providerRowNeedsVisibleChoice(row)}
+                                    fallback={
+                                      <div class="wb-provider-selection">
+                                        <span class="muted">
+                                          {t("new.providers.connection")}
+                                        </span>
+                                        <strong>
+                                          {selectedConnection()
+                                            ? providerConnectionLabel(
+                                                selectedConnection()!,
+                                              )
+                                            : t(
+                                                "new.providers.selectConnection",
+                                              )}
+                                        </strong>
+                                      </div>
                                     }
                                   >
-                                    <option
-                                      value=""
-                                      selected={!row.connectionId}
+                                    <Select
+                                      id={`provider-connection-${index()}`}
+                                      name={`providerConnection:${row.provider}:${row.moduleLocalName}:${row.childAlias || "default"}`}
+                                      aria-label={`${providerLabel(row.provider)} ${row.childAlias ? t("new.providers.alias", { alias: row.childAlias }) : ""} ${t("new.providers.selectConnection")}`.trim()}
+                                      value={row.connectionId}
+                                      onChange={(e) =>
+                                        updateProviderRow(row, {
+                                          connectionId: e.currentTarget.value,
+                                        })
+                                      }
                                     >
-                                      {t("new.providers.selectConnection")}
-                                    </option>
-                                    <For each={options()}>
-                                      {(connection) => (
-                                        <option
-                                          value={connection.id}
-                                          selected={
-                                            connection.id === row.connectionId
-                                          }
-                                        >
-                                          {providerConnectionLabel(connection)}
-                                        </option>
-                                      )}
-                                    </For>
-                                  </Select>
+                                      <option
+                                        value=""
+                                        selected={!row.connectionId}
+                                      >
+                                        {t("new.providers.selectConnection")}
+                                      </option>
+                                      <For each={options()}>
+                                        {(connection) => (
+                                          <option
+                                            value={connection.id}
+                                            selected={
+                                              connection.id === row.connectionId
+                                            }
+                                          >
+                                            {providerConnectionLabel(
+                                              connection,
+                                            )}
+                                          </option>
+                                        )}
+                                      </For>
+                                    </Select>
+                                  </Show>
                                 </div>
                               );
                             }}

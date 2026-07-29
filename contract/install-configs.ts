@@ -190,6 +190,12 @@ export interface PolicyConfig {
   };
   readonly providerCredentials?: {
     /**
+     * Exact provider sources that require a ProviderConnection for this
+     * InstallConfig. This is service-side execution configuration, not provider
+     * brand inference or a provider execution allowlist.
+     */
+    readonly requiredProviders?: readonly string[];
+    /**
      * Require provider credential mint evidence to show provider-specific
      * temporary credentials. Static provider secrets are an explicit supported
      * recipe choice unless this policy is enabled.

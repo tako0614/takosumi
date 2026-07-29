@@ -17,7 +17,7 @@
  * `sourceSync` runner capability terminally fails the claimed Run; the ledger
  * never uses an indefinitely queued row as an implicit capability fallback.
  * The controller keeps
- * `runQueuedSourceSync` as a thin delegating wrapper, so the queue consumer and
+ * `runQueuedSourceSync` as a thin delegating wrapper, so the RunOwner and
  * the inline dispatcher keep calling the controller surface unchanged.
  *
  * Behavior is identical to the prior inline controller methods: exact signatures,

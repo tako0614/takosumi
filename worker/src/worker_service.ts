@@ -162,13 +162,9 @@ export async function createWorkerServiceApp(
   );
   const adapters = createWorkerAdapters(env);
   const enqueueRun =
-    options.enqueueRun ??
-    openTofuRunOwnerEnqueuer(env) ??
-    openTofuRunEnqueuer(env);
+    options.enqueueRun ?? openTofuRunOwnerEnqueuer(env);
   const enqueueSourceSync =
-    options.enqueueSourceSync ??
-    openTofuRunOwnerSourceSyncEnqueuer(env) ??
-    openTofuSourceSyncEnqueuer(env);
+    options.enqueueSourceSync ?? openTofuRunOwnerSourceSyncEnqueuer(env);
   const capsuleCoordination = durableObjectCapsuleCoordination(env);
   const opentofuRunner = new CloudflareContainerOpenTofuRunner(env, {
     observability: adapters.observability,
@@ -318,7 +314,7 @@ export async function createWorkerServiceApp(
       const adapter = new OpentofuResourceShapeAdapter(
         new ControllerOpentofuRunPort({
           driver: controller,
-          driveRunsSynchronously: enqueueRun ? false : true,
+          driveRunsSynchronously: false,
           waitTimeoutMs: RESOURCE_SHAPE_RUN_WAIT_TIMEOUT_MS,
         }),
       );
@@ -346,12 +342,12 @@ export async function createWorkerServiceApp(
     ...(billingExtensionFactory ? { billingExtensionFactory } : {}),
     ...(resourceDeploymentAdmission ? { resourceDeploymentAdmission } : {}),
     ...(resourceArtifactWriter ? { resourceArtifactWriter } : {}),
-    // Async run lifecycle: when the run queue is bound, the create path persists
-    // the run `queued` and returns immediately; the `queue()` consumer in this
-    // same worker drives execution. Without the binding, the controller's
-    // default inline dispatcher preserves synchronous create-executes-run.
-    ...(enqueueRun ? { enqueueRun } : {}),
-    ...(enqueueSourceSync ? { enqueueSourceSync } : {}),
+    // GA async run lifecycle: every create path persists the Run `queued` and
+    // schedules its per-run RUN_OWNER directly. The Worker never falls back to
+    // inline execution or an unowned Queue handoff when RUN_OWNER is absent;
+    // scheduling fails closed at the binding boundary instead.
+    enqueueRun,
+    enqueueSourceSync,
     // Environment lease (spec §10.2): front the shared CoordinationObject so the
     // apply consumer serializes write runs per environment across isolates.
     ...(capsuleCoordination ? { capsuleCoordination } : {}),
@@ -975,8 +971,7 @@ function durableObjectCapsuleCoordination(
  */
 function openTofuRunOwnerEnqueuer(
   env: CloudflareWorkerEnv,
-): EnqueueRun | undefined {
-  if (!env.RUN_OWNER) return undefined;
+): EnqueueRun {
   return async (dispatch) => {
     await scheduleOpenTofuRunOwner(env, {
       action: dispatch.action,
@@ -991,8 +986,7 @@ function openTofuRunOwnerEnqueuer(
 
 function openTofuRunOwnerSourceSyncEnqueuer(
   env: CloudflareWorkerEnv,
-): EnqueueSourceSync | undefined {
-  if (!env.RUN_OWNER) return undefined;
+): EnqueueSourceSync {
   return async (dispatch) => {
     await scheduleOpenTofuRunOwner(env, {
       action: "source_sync",
@@ -1043,48 +1037,6 @@ async function scheduleOpenTofuRunOwner(
 
 function directRunOwnerMessageId(runId: string): string {
   return `direct:${runId}:${Date.now().toString(36)}`;
-}
-
-/**
- * Queue fallback for async run lifecycle. Used only when RUN_OWNER is absent
- * but RUN_QUEUE is still bound. The message carries only the run identity
- * (never variables or credentials).
- */
-function openTofuRunEnqueuer(env: CloudflareWorkerEnv): EnqueueRun | undefined {
-  const queue = env.RUN_QUEUE;
-  if (!queue) return undefined;
-  return async (dispatch) => {
-    await queue.send({
-      kind: "takosumi.opentofu-run@v1",
-      action: dispatch.action,
-      runId: dispatch.runId,
-      workspaceId: dispatch.workspaceId,
-      ...(dispatch.cause ? { cause: dispatch.cause } : {}),
-      requestedAt: new Date().toISOString(),
-    });
-  };
-}
-
-/**
- * Source-sync producer (Core Specification §6). Enqueues a `source_sync`
- * dispatch onto the same run queue; the consumer loads the SourceSyncRun, mints
- * source-phase (git-only) credentials, and drives the runner DO. Returns
- * undefined when the queue is not bound so the run stays queued.
- */
-function openTofuSourceSyncEnqueuer(
-  env: CloudflareWorkerEnv,
-): EnqueueSourceSync | undefined {
-  const queue = env.RUN_QUEUE;
-  if (!queue) return undefined;
-  return async (dispatch) => {
-    await queue.send({
-      kind: "takosumi.opentofu-run@v1",
-      action: "source_sync",
-      runId: dispatch.runId,
-      workspaceId: dispatch.workspaceId,
-      requestedAt: new Date().toISOString(),
-    });
-  };
 }
 
 function createWorkerAdapters(env: CloudflareWorkerEnv): AppAdapters {

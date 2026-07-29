@@ -10,7 +10,6 @@ function fullEnv(): Record<string, unknown> {
     ...REQUIRED_PLATFORM_BINDINGS.d1,
     ...REQUIRED_PLATFORM_BINDINGS.r2,
     ...REQUIRED_PLATFORM_BINDINGS.durableObjects,
-    ...REQUIRED_PLATFORM_BINDINGS.queues,
     ...REQUIRED_PLATFORM_BINDINGS.assets,
   ]) {
     env[name] = {}; // presence-only check; any non-null value passes.
@@ -20,6 +19,9 @@ function fullEnv(): Record<string, unknown> {
 
 test("a fully-bound env passes", () => {
   expect(checkPlatformBindings(fullEnv())).toEqual({ ok: true, missing: [] });
+  expect(
+    (REQUIRED_PLATFORM_BINDINGS as Record<string, unknown>).queues,
+  ).toBeUndefined();
 });
 
 test("missing bindings are named in declaration order", () => {

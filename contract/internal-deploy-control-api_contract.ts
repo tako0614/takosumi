@@ -102,7 +102,7 @@ const planRun = {
   providerLockDigest:
     "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
   summary: { add: 2, change: 0, destroy: 0 },
-  // Capsule context the queue consumer reads to build the `stateScope` dispatch
+  // Capsule context the RunOwner reads to build the `stateScope` dispatch
   // field.
   capsuleContext: {
     workspaceId,

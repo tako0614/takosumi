@@ -142,9 +142,6 @@ const mf = new Miniflare({
     },
   },
   durableObjectsPersist: "/data/do",
-  queueProducers: {
-    RUN_QUEUE: { queueName: "takosumi-runs" },
-  },
   bindings,
 });
 

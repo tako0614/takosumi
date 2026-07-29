@@ -254,7 +254,7 @@ export interface PlanRun {
   /**
    * Server-side auto-continue requested at creation (the auto-update
    * pipeline). When the plan completes CLEAN (`succeeded` — approval-parked or
-   * policy-blocked plans never do), the queue consumer creates the apply run
+   * policy-blocked plans never do), the RunOwner creates the apply run
    * itself instead of waiting for a client. Never set on destroy or
    * drift-check runs.
    */
@@ -284,7 +284,7 @@ export interface PlanRun {
   /** Set when the queued run begins executing in the consumer. */
   readonly startedAt?: number;
   /**
-   * Liveness marker refreshed while the run executes. Used by the queue consumer
+   * Liveness marker refreshed while the run executes. Used by the RunOwner
    * idempotency guard to take over a run left `running` by a crashed consumer
    * once the heartbeat is stale (older than the takeover window).
    */
@@ -341,7 +341,7 @@ export interface PlanRun {
    * Capsule context this plan was created against (one Capsule =
    * Capsule + generated root + tfstate + outputs, with `environment` as a
    * column).
-   * Used by the queue consumer to attach the `stateScope` / `sourceArchive`
+   * Used by the RunOwner to attach the `stateScope` / `sourceArchive`
    * dispatch fields and by the unified Run projection. Never carries secret
    * material.
    */
@@ -385,7 +385,7 @@ export interface PlanRun {
 
 /**
  * Capsule context recorded on a PlanRun. Locates the run's Capsule +
- * environment within its Workspace so the queue consumer can build the
+ * environment within its Workspace so the RunOwner can build the
  * `stateScope` dispatch field (`{ workspaceId, capsuleId, environment,
  * generation }`) the runner consumes to persist encrypted state at canonical
  * state-store keys.
@@ -464,7 +464,7 @@ export interface ApplyRun {
   /** Set when the queued run begins executing in the consumer. */
   readonly startedAt?: number;
   /**
-   * Liveness marker refreshed while the run executes. Drives the queue consumer
+   * Liveness marker refreshed while the run executes. Drives the RunOwner
    * idempotency guard's stale-takeover window (see {@link PlanRun.heartbeatAt}).
    */
   readonly heartbeatAt?: number;

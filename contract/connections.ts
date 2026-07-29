@@ -233,7 +233,21 @@ export interface ListProviderConnectionsResponse {
  * no parallel resolver entity or alias identifier exists.
  */
 export interface ProviderBinding {
+  /** Exact provider source address. */
   readonly provider: string;
+  /**
+   * Exact child-module local provider name. Older stored bindings may omit it,
+   * in which case the generated root falls back to the provider type segment.
+   */
+  readonly moduleLocalName?: string;
+  /** Alias expected by the child module; absent means its default provider. */
+  readonly childAlias?: string;
+  /** Alias of the generated-root provider block; absent means its default. */
+  readonly rootAlias?: string;
+  /**
+   * @deprecated Pre-v1 ambiguous alias retained only for stored-row
+   * compatibility. New writers use `childAlias` and `rootAlias`.
+   */
   readonly alias?: string;
   readonly connectionId: string;
   readonly region?: string;

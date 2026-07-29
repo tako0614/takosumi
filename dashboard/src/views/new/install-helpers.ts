@@ -41,7 +41,9 @@ type SourceAccessMode = "public" | "existing" | "token";
 
 interface ProviderConnectionRow {
   readonly provider: string;
-  readonly alias: string;
+  readonly moduleLocalName: string;
+  readonly childAlias: string;
+  readonly rootAlias: string;
   readonly connectionId: string;
   readonly credentialRequired: boolean;
 }

@@ -1192,6 +1192,10 @@ function policySchemas(): Record<string, Record<string, unknown>> {
         providerCredentials: {
           type: "object",
           properties: {
+            requiredProviders: {
+              type: "array",
+              items: { type: "string" },
+            },
             requireTemporary: { type: "boolean" },
             requireTtlEnforced: { type: "boolean" },
           },
@@ -3231,9 +3235,11 @@ function capsuleSchemas(): Record<string, Record<string, unknown>> {
       required: ["source", "aliases", "allowed"],
       properties: {
         source: { type: "string" },
+        localName: { type: "string" },
         versionConstraint: { type: "string" },
         aliases: { type: "array", items: { type: "string" } },
         allowed: { type: "boolean" },
+        credentialRequired: { type: "boolean" },
       },
       additionalProperties: false,
     },

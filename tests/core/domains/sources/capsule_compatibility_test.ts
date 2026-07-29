@@ -153,6 +153,7 @@ output "attachments_bucket" {
   expect(result.providers).toEqual([
     {
       source: "hashicorp/aws",
+      localName: "aws",
       aliases: [],
       allowed: true,
     },
@@ -232,7 +233,8 @@ output "public_url" {
   expect(result.providers).toEqual([
     {
       source: "cloudflare/cloudflare",
-      aliases: ["cloudflare.main", "cloudflare.zone"],
+      localName: "cloudflare",
+      aliases: ["main", "zone"],
       allowed: true,
     },
   ]);
@@ -404,7 +406,12 @@ output "public_url" {
 
   expect(result.level).toBe("ready");
   expect(result.providers).toEqual([
-    { source: "custom/provider", aliases: [], allowed: true },
+    {
+      source: "custom/provider",
+      localName: "custom",
+      aliases: [],
+      allowed: true,
+    },
   ]);
   expect(result.resources).toEqual([
     { type: "custom_resource", count: 1, allowed: true },
@@ -413,6 +420,58 @@ output "public_url" {
   expect(result.dataSources).toEqual([{ type: "external", allowed: true }]);
   expect(result.provisioners).toEqual([{ type: "local-exec", allowed: true }]);
   expect(result.findings).toEqual([]);
+});
+
+test("preserves module-local provider identity and marks arbitrary credential requirements explicitly", () => {
+  const result = analyzeOpenTofuCapsuleFiles({
+    sourceId: "src_provider_identity",
+    sourceSnapshot: snapshot,
+    policy: {
+      allowedProviders: ["*"],
+      providerCredentials: {
+        requiredProviders: ["registry.opentofu.org/acme/service"],
+      },
+    },
+    files: [
+      {
+        path: "main.tf",
+        text: `
+terraform {
+  required_providers {
+    primary = {
+      source = "acme/service"
+      configuration_aliases = [primary.archive]
+    }
+    secondary = {
+      source = "other/service"
+    }
+  }
+}
+
+output "ok" {
+  value = true
+}
+`,
+      },
+    ],
+  });
+
+  expect(result.level).toBe("ready");
+  expect(result.providers).toEqual([
+    {
+      source: "acme/service",
+      localName: "primary",
+      aliases: ["archive"],
+      allowed: true,
+      credentialRequired: true,
+    },
+    {
+      source: "other/service",
+      localName: "secondary",
+      aliases: [],
+      allowed: true,
+    },
+  ]);
 });
 
 test("detects dependency lockfiles without downgrading reusable modules", () => {
@@ -974,7 +1033,12 @@ output "database_name" {
 
   expect(result.level).toBe("ready");
   expect(result.providers).toEqual([
-    { source: "snowflake-labs/snowflake", aliases: [], allowed: true },
+    {
+      source: "snowflake-labs/snowflake",
+      localName: "snowflake",
+      aliases: [],
+      allowed: true,
+    },
   ]);
   expect(result.resources).toEqual([
     { type: "snowflake_database", count: 1, allowed: true },

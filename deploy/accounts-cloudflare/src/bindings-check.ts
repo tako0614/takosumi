@@ -2,7 +2,7 @@
  * Platform-worker binding self-check (operator first-run aid).
  *
  * The platform worker requires ~a dozen durable bindings (D1 ×2, R2 ×4,
- * Durable Objects ×3, the run queue, and the dashboard ASSETS) declared in
+ * Durable Objects ×3 and the dashboard ASSETS) declared in
  * `deploy/platform/wrangler.toml`. A `wrangler deploy` succeeds even when a
  * binding is missing, so a misconfigured operator only discovers it when a real
  * install/apply fails deep in the run pipeline. This check names the missing
@@ -24,7 +24,6 @@ export const REQUIRED_PLATFORM_BINDINGS = {
   d1: ["TAKOSUMI_ACCOUNTS_DB", "TAKOSUMI_CONTROL_DB"],
   r2: ["R2_ARTIFACTS", "R2_SOURCE", "R2_STATE", "R2_BACKUPS"],
   durableObjects: ["COORDINATION", "RUN_OWNER", "RUNNER"],
-  queues: ["RUN_QUEUE"],
   assets: ["ASSETS"],
 } as const;
 
@@ -49,7 +48,6 @@ export function checkPlatformBindings(
     ...REQUIRED_PLATFORM_BINDINGS.d1,
     ...REQUIRED_PLATFORM_BINDINGS.r2,
     ...REQUIRED_PLATFORM_BINDINGS.durableObjects,
-    ...REQUIRED_PLATFORM_BINDINGS.queues,
     ...(requireAssets ? REQUIRED_PLATFORM_BINDINGS.assets : []),
   ];
   const missing = required.filter(

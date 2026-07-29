@@ -209,9 +209,10 @@ import type {
   InterfaceProjectionSnapshot,
   NativeResourceRef,
   ResourceObject,
+  ResourceCapsuleOwner,
   ResourceShapeKind,
 } from "takosumi-contract";
-import { formRefOfInstalled } from "takosumi-contract";
+import { formRefOfInstalled, isResourceCapsuleOwner } from "takosumi-contract";
 import type {
   CredentialRecipeDriverRegistry,
   SourceCredentialDriverRegistry,
@@ -561,6 +562,21 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
    */
   readonly resolveResourceInterfaceWorkspace?: ResourceInterfaceWorkspaceResolver;
   /**
+   * Host-authenticated run-context bridge for portable Resource ownership.
+   * Hosted compositions should resolve an existing run-scoped provider token;
+   * Core deliberately does not mint a second token vocabulary.
+   */
+  readonly resolveResourceCapsuleOwner?: (input: {
+    readonly actor: ActorContext;
+    readonly request: Request;
+    readonly space: string;
+    readonly kind: ResourceShapeKind;
+    readonly name: string;
+  }) =>
+    | ResourceCapsuleOwner
+    | undefined
+    | Promise<ResourceCapsuleOwner | undefined>;
+  /**
    * Host-owned canonical resource URI projection for portable Form Interface
    * descriptors. Omission leaves `resource_uri` inputs unavailable and a
    * required descriptor fails closed before the Resource is advertised Ready.
@@ -710,17 +726,17 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
    */
   readonly managedProviderCredentialIssuer?: ManagedProviderCredentialIssuer;
   /**
-   * Out-of-process run dispatch seam. The Workers adapter injects a producer
-   * that enqueues onto `RUN_QUEUE`; when omitted the controller
-   * defaults to an inline dispatcher that runs the consumer synchronously
-   * (preserving create-executes-run for local / node substrates and tests).
+   * Asynchronous run dispatch seam. The GA Workers adapter schedules the
+   * per-run Durable Object directly; when omitted the controller defaults to an
+   * inline dispatcher (preserving create-executes-run for local / node
+   * substrates and tests).
    */
   readonly enqueueRun?: EnqueueRun;
   /**
    * Out-of-process source-sync dispatch seam (Core Specification §6). The
-   * Workers adapter injects a producer that enqueues onto the run queue with
+   * GA Workers adapter schedules the per-run Durable Object with
    * `action: "source_sync"`; when omitted Core claims and terminally fails the
-   * Run with `runner_capability_missing` instead of leaving an unowned queue row.
+   * Run with `runner_capability_missing` instead of leaving unowned queued work.
    */
   readonly enqueueSourceSync?: EnqueueSourceSync;
   readonly runnerProfiles?: readonly RunnerProfile[];
@@ -882,6 +898,10 @@ export interface TakosumiOperations {
   readonly runGroups: RunGroupsService;
   /** Runtime declarations shared by Capsule and Resource authoring flows. */
   readonly interfaces: InterfaceService;
+  /** Exact host-authenticated application owner for a canonical Resource. */
+  readonly resourceCapsuleOwners?: {
+    get(resourceId: string): Promise<ResourceCapsuleOwner | undefined>;
+  };
   /**
    * Narrow in-process seam for the bounded scheduled Resource observer. The
    * lease is durable scheduler metadata only; lifecycle and condition updates
@@ -1294,7 +1314,7 @@ export async function createTakosumiService(
     });
   // Source domain service (Core Specification §6). The source REST API, webhook,
   // and scheduler all reach it through the controller. The source_sync producer
-  // enqueues onto the run queue with `action: "source_sync"`; node/local
+  // schedules the host dispatcher with `action: "source_sync"`; node/local
   // compositions fall back to the controller's inline dispatcher once the
   // controller is constructed.
   const sourcesService = new SourcesService({
@@ -2320,6 +2340,12 @@ export async function createTakosumiService(
                   options.resolveResourceShapeActor!(c.req.raw),
               }
             : {}),
+          ...(options.resolveResourceCapsuleOwner
+            ? {
+                resolveResourceCapsuleOwner:
+                  options.resolveResourceCapsuleOwner,
+              }
+            : {}),
           ...(options.authorizeResourceShapeForceDelete
             ? {
                 authorizeResourceShapeForceDelete:
@@ -2460,6 +2486,18 @@ export async function createTakosumiService(
     outputShares: outputSharesService,
     runGroups: runGroupsService,
     interfaces: interfaceService,
+    ...(resourceShapeService
+      ? {
+          resourceCapsuleOwners: {
+            get: async (resourceId: string) => {
+              const owner = (
+                await resourceShapeStores.resources.get(resourceId)
+              )?.owner;
+              return isResourceCapsuleOwner(owner) ? owner : undefined;
+            },
+          },
+        }
+      : {}),
     ...(resourceShapeService
       ? {
           resourceCompatibility: {

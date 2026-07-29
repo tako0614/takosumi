@@ -142,6 +142,11 @@ function publicPolicyConfig(
   const providerCredentials = policy.providerCredentials;
   const normalizedProviderCredentials = providerCredentials
     ? {
+        ...(providerCredentials.requiredProviders
+          ? {
+              requiredProviders: [...providerCredentials.requiredProviders],
+            }
+          : {}),
         ...(providerCredentials.requireTemporary === true
           ? { requireTemporary: true }
           : {}),

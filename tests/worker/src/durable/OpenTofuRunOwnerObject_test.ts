@@ -118,7 +118,7 @@ test("OpenTofu run owner debug and drain expose operator-safe state", async () =
   assert.equal(drainBody.record?.attempts, 1);
 });
 
-test("OpenTofu run owner maps destroy queue work to apply dispatch", async () => {
+test("OpenTofu run owner maps asynchronous destroy work to apply dispatch", async () => {
   const storage = new FakeDoStorage();
   const calls: unknown[] = [];
   const owner = new OpenTofuRunOwnerObject(

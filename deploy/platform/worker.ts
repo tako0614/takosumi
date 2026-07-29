@@ -24,13 +24,13 @@ import {
 import {
   D1AccountsStore,
   handleAuthenticatedControlRoute,
+  runRefreshChainRetention,
   type ControlPlaneOperations,
+  type RefreshChainRetentionRunResult,
 } from "@takosjp/takosumi-accounts-service";
 import {
   type CloudflareWorkerEnv as DeployControlEnv,
-  createDeployControlQueueConsumer,
   createInProcessDeployControlSeam,
-  type QueueBatch,
   CoordinationObject,
   LocalSubstrateOpenTofuRunnerProxyObject,
   OpenTofuRunOwnerObject,
@@ -632,12 +632,6 @@ const accountsWorker = createCloudflareWorker<CloudflareWorkerEnv>({
   controlPlaneOperations: (env) => controlPlaneOperationsFor(env),
 });
 
-// The platform worker owns the public fetch surface (accounts handler) AND runs
-// the OpenTofu run-queue consumer in-process. The consumer reaches the same
-// deploy-control operations facade as the accounts surface, so a run dispatched
-// by the create path is executed here against the same store.
-const runQueueConsumer = createDeployControlQueueConsumer();
-
 export default {
   async fetch(
     request: Request,
@@ -762,9 +756,6 @@ export default {
     }
     return accountsResponse;
   },
-  queue(batch: QueueBatch, env: CloudflareWorkerEnv): Promise<void> {
-    return runQueueConsumer(batch, env);
-  },
   // Scheduled cron tick. Always runs source polling (Core Specification §6: scan
   // active autoSync sources and enqueue a deduped source_sync). When the
   // `TAKOSUMI_DRIFT_CHECK_ENABLED=1` flag is set (default OFF), ALSO runs the
@@ -777,6 +768,10 @@ export default {
     env: CloudflareWorkerEnv,
     context?: PlatformExecutionContext,
   ): Promise<void> {
+    await schedulePlatformSideEffect(
+      runScheduledAccountsRefreshChainRetention(env),
+      context,
+    );
     await runScheduledSourcePoll(env);
     await runScheduledOpenTofuRunRepair(env);
     await runScheduledResourceOperationRepair(env);
@@ -794,6 +789,66 @@ export default {
     }
   },
 };
+
+export interface ScheduledAccountsRefreshChainRetentionResult
+  extends RefreshChainRetentionRunResult {
+  readonly failures: number;
+}
+
+/**
+ * One failure-isolated, bounded Accounts retention slice per platform cron.
+ * Production/predeployed mode never performs request-time DDL; bootstrap mode
+ * initializes the local/self-host document tables before the first sweep.
+ */
+export async function runScheduledAccountsRefreshChainRetention(
+  env: Pick<
+    CloudflareWorkerEnv,
+    "TAKOSUMI_ACCOUNTS_DB" | "TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE"
+  >,
+): Promise<ScheduledAccountsRefreshChainRetentionResult> {
+  const store = new D1AccountsStore(env.TAKOSUMI_ACCOUNTS_DB);
+  try {
+    if (env.TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE !== "predeployed") {
+      await store.initialize();
+    }
+    const result = await runRefreshChainRetention(store, {
+      maxRows: 100,
+      pageSize: 25,
+    });
+    console.log(
+      JSON.stringify({
+        event: "accounts_refresh_chain_retention",
+        scanned: result.scanned,
+        deleted:
+          result.chainLinks +
+          result.chainAccessTokens +
+          result.revokedRoots +
+          result.consumedCodes +
+          result.authCodeTokenLinks,
+        done: result.done,
+      }),
+    );
+    return { ...result, failures: 0 };
+  } catch (error) {
+    console.warn(
+      JSON.stringify({
+        event: "accounts_refresh_chain_retention_failed",
+        error: error instanceof Error ? error.message : String(error),
+      }),
+    );
+    return {
+      chainLinks: 0,
+      chainAccessTokens: 0,
+      revokedRoots: 0,
+      consumedCodes: 0,
+      authCodeTokenLinks: 0,
+      scanned: 0,
+      pages: 0,
+      done: false,
+      failures: 1,
+    };
+  }
+}
 
 export async function schedulePlatformSideEffect(
   task: Promise<unknown>,
@@ -1960,7 +2015,6 @@ const PLATFORM_METRICS_DASHBOARD_PATH =
 const REQUIRED_DASHBOARD_METRICS = [
   "takosumi_deploy_operation_count",
   "takosumi_apply_duration_seconds_bucket",
-  "takosumi_runner_queue_age_seconds",
   "takosumi_runner_active_runs",
   "takosumi_runner_container_startup_seconds_bucket",
   "takosumi_api_request_duration_seconds_bucket",

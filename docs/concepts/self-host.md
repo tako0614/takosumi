@@ -11,7 +11,7 @@ OpenTofu runner が同じ origin に同居します。CLI、dashboard、Takoform
 
 | 構成 | 実行環境 | 状態の保存先 | 雛形 |
 | --- | --- | --- | --- |
-| Cloudflare | Cloudflare Workers | D1 / R2 / Queues / Durable Objects | `deploy/platform/wrangler.toml` |
+| Cloudflare | Cloudflare Workers | D1 / R2 / Durable Objects | `deploy/platform/wrangler.toml` |
 | Bun と PostgreSQL | VM やコンテナ | PostgreSQL | `deploy/node-postgres/` |
 | 手元だけ | 手元の Linux と Docker | compose のボリューム | `deploy/local-substrate/` |
 
@@ -40,8 +40,11 @@ Docker が前提です。ACME 用の Pebble、CoreDNS、Caddy を同じ Docker �
 | `R2_STATE` | OpenTofu の state backend です |
 | `R2_BACKUPS` | backup と export の束を置きます |
 | `COORDINATION` / `RUN_OWNER` / `RUNNER` (Durable Object) | 排他制御、Run の所有、runner コンテナを担当します |
-| `RUN_QUEUE` (Queue) | Run の配送に使います。dead letter queue も併せて必要です |
 | `ASSETS` | dashboard の配布物を配ります |
+
+Run は作成時に `RUN_OWNER` へ直接 schedule されます。Cloudflare Queue や
+dead-letter queue はこの GA 構成にはありません。`RUN_OWNER` が再試行と終端失敗を
+所有し、binding がなければ実行は fail closed になります。
 
 まずリソースを作ります。名前は雛形に合わせています。
 
@@ -52,8 +55,6 @@ bunx wrangler r2 bucket create takos-artifacts
 bunx wrangler r2 bucket create takosumi-source
 bunx wrangler r2 bucket create takosumi-state
 bunx wrangler r2 bucket create takosumi-backups
-bunx wrangler queues create takosumi-runs
-bunx wrangler queues create takosumi-runs-dlq
 ```
 
 `wrangler.toml` を自分用に写します。書き換えるのは `database_id`、`routes` の
@@ -162,6 +163,9 @@ DATABASE_URL="postgres://takosumi:<password>@<postgres-host>:5432/takosumi_accou
 `bun run db:migrate:dry-run` を先に実行すると、適用せずに SQL だけ表示します。
 `--env=local` は接続せずメモリ上で走るので、実際のデータベースには何もしません。
 実データベースに当てる `--env` は `production` と `staging` の 2 つだけです。
+どちらもforward-onlyで、down/rollback commandはありません。使い捨てfixtureの
+resetはlocal/development/test用の注入clientだけに限定され、ここで指定する
+database URLやproduction credentialを読みません。
 
 compose を使わず手で動かす場合は、同じ環境変数を渡して
 `bun deploy/node-postgres/src/server.ts` を起動します。待ち受けは

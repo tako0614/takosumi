@@ -150,6 +150,10 @@ test("shipped Worker keeps Resource Interface ownership fail-closed without a ho
     "takosumi-api",
     { operatorInstallConfigs: [] },
   );
+  // The GA Worker always delegates execution to the direct RUN_OWNER
+  // scheduler. A missing binding must fail at scheduling time; it must never
+  // switch the controller back to its inline execution path.
+  expect(operations.controller.usesExternalRunDispatcher()).toBe(true);
   await expect(
     operations.interfaces.create({
       workspaceId: WORKSPACE_ID,

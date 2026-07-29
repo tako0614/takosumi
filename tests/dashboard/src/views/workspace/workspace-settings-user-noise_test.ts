@@ -83,11 +83,17 @@ describe("Workspace settings user-facing noise", () => {
     expect(en["conn.add.open"]).toBe("Connect account");
     expect(ja["conn.add.open"]).toBe("アカウントを接続");
     expect(en["conn.empty.title"]).toBe(
-      "Connect any provider with your own key",
+      "Connect an external provider with your own key",
     );
-    expect(ja["conn.empty.title"]).toBe("自分のカギで任意のプロバイダーを接続");
-    expect(en["conn.empty.message"]).toContain("any provider runs");
-    expect(ja["conn.empty.message"]).toContain("どのプロバイダーでも");
+    expect(ja["conn.empty.title"]).toBe("自分のカギで外部プロバイダーを接続");
+    expect(en["conn.empty.message"]).toContain("policy");
+    expect(en["conn.empty.message"]).toContain("approval");
+    expect(en["conn.empty.message"]).toContain("billing");
+    expect(ja["conn.empty.message"]).toContain("policy");
+    expect(ja["conn.empty.message"]).toContain("approval");
+    expect(ja["conn.empty.message"]).toContain("billing");
+    expect(en["conn.empty.message"]).not.toContain("any provider runs");
+    expect(ja["conn.empty.message"]).not.toContain("どのプロバイダーでも");
   });
 
   test("keeps raw account subjects out of the always-visible user menu", () => {

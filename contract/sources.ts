@@ -141,7 +141,7 @@ export interface SourceSyncRun {
   readonly startedAt?: string;
   /**
    * Liveness marker refreshed while the run executes (epoch millis). Mirrors the
-   * plan/apply Run heartbeat used by the queue-consumer idempotency guard.
+   * plan/apply Run heartbeat used by the RunOwner idempotency guard.
    */
   readonly heartbeatAt?: number;
   readonly finishedAt?: string;

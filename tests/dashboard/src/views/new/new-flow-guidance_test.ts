@@ -209,8 +209,8 @@ describe("/new flow guidance", () => {
     expect(ja).not.toHaveProperty("new.flow.sourceMeta");
     expect(en).not.toHaveProperty("new.selection.sourceDetails");
     expect(ja).not.toHaveProperty("new.selection.sourceDetails");
-    expect(en["new.providers.alias"]).toBe("Target: {alias}");
-    expect(ja["new.providers.alias"]).toBe("対象: {alias}");
+    expect(en["new.providers.alias"]).toBe("Provider alias: {alias}");
+    expect(ja["new.providers.alias"]).toBe("プロバイダー alias: {alias}");
   });
 
   test("opens /new on service discovery while install links prefill the add flow", () => {
@@ -753,23 +753,28 @@ describe("/new flow guidance", () => {
     expect(ja["new.env.errorUnsafeName"]).toContain("大文字の英字");
   });
 
-  test("keeps external connection UI hidden unless there is something to choose", () => {
+  test("shows every required connection without presenting it as the deployment target", () => {
     expect(newAppViewSource).toContain(
-      "providerRowsRequiringChoice().length > 0",
+      "compatibility() && providerRows().length > 0",
     );
     expect(newAppViewSource).toContain("providerRowNeedsVisibleChoice");
+    expect(newAppViewSource).toContain("<For each={providerRows()}>");
+    expect(newAppViewSource).toContain('t("new.providers.body")');
+    expect(en["new.providers.body"]).toContain("only supplies credentials");
+    expect(en["new.providers.body"]).toContain(
+      "deployment target and changes are resolved",
+    );
+    expect(ja["new.providers.body"]).toContain("認証情報だけ");
+    expect(ja["new.providers.body"]).toContain("デプロイ先と変更内容");
     expect(newAppViewSource).not.toContain('t("new.providers.noneRequired")');
     expect(newAppViewSource).not.toContain(
       't("new.providers.manageConnections")',
     );
-    expect(newAppViewSource).not.toContain('t("new.providers.subtitle")');
     expect(newAppViewSource).not.toContain('t("new.providers.advanced")');
     expect(en).not.toHaveProperty("new.providers.noneRequired");
     expect(ja).not.toHaveProperty("new.providers.noneRequired");
     expect(en).not.toHaveProperty("new.providers.manageConnections");
     expect(ja).not.toHaveProperty("new.providers.manageConnections");
-    expect(en).not.toHaveProperty("new.providers.subtitle");
-    expect(ja).not.toHaveProperty("new.providers.subtitle");
   });
 
   test("shows setup progress only while it is actionable", () => {

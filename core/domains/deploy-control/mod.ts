@@ -740,13 +740,12 @@ export interface OpenTofuSourceSyncResult {
 /**
  * Out-of-process run dispatch seam. The controller's create path persists the
  * run as `queued` and hands the run identity to `enqueueRun`; the actual
- * OpenTofu execution happens later in the queue consumer
+ * OpenTofu execution happens later in the host dispatcher
  * (`runQueuedPlan` / `runQueuedApply`).
  *
- * The Workers adapter supplies a producer that publishes onto
- * `RUN_QUEUE`. Tests and non-queue runtimes (local / node
- * substrates) get a default inline dispatcher that runs the consumer logic
- * immediately, preserving the historical create-executes-run behavior.
+ * The GA Workers adapter schedules the per-run Durable Object directly. Tests
+ * and local / node substrates get a default inline dispatcher that runs the
+ * queued-run logic immediately, preserving create-executes-run behavior.
  */
 export interface OpenTofuRunDispatch {
   readonly action: "plan" | "apply" | "source_sync" | "restore";
@@ -839,7 +838,7 @@ export interface OpenTofuControllerDependencies {
    * ProviderConnection lifecycle (`createConnection` / `listConnections` /
    * `testConnection` / `deleteConnection`). When
    * absent, those methods throw `not_implemented`. The Vault is intentionally
-   * Wired into plan/apply dispatch from Phase 1B onward: the queue consumer
+   * Wired into plan/apply dispatch from Phase 1B onward: the RunOwner dispatcher
    * mints a {@link CredentialBundle} just before the container dispatch and
    * attaches it to the dispatch payload only (never stored, never logged).
    */
@@ -863,9 +862,9 @@ export interface OpenTofuControllerDependencies {
   readonly artifactReferenceAllocator?: ArtifactReferenceAllocator;
   /**
    * Out-of-process run dispatch. Defaults to an inline dispatcher that runs the
-   * consumer immediately (preserving synchronous create-executes-run for
-   * tests / local / node substrates). The Workers adapter injects a producer
-   * that enqueues onto `RUN_QUEUE`.
+   * queued-run path immediately (preserving synchronous create-executes-run for
+   * tests / local / node substrates). The GA Workers adapter injects a direct
+   * per-run Durable Object scheduler.
    */
   readonly enqueueRun?: EnqueueRun;
   /**
@@ -1016,7 +1015,7 @@ export interface PlanRunInternalContext {
   readonly resourceImport?: true;
   /**
    * Server-side auto-continue (auto-update pipeline): stamped onto the PlanRun
-   * so the queue consumer creates the apply run itself when the completed plan
+   * so the RunOwner creates the apply run itself when the completed plan
    * is CLEAN (`succeeded`). See {@link PlanRun.autoApplyRequested}.
    */
   readonly autoApplyRequested?: true;
@@ -1073,7 +1072,7 @@ export interface CreateCapsulePlanInternal {
    */
   readonly sourceSnapshotId?: string;
   /**
-   * Server-side auto-continue (auto-update pipeline): the queue consumer
+   * Server-side auto-continue (auto-update pipeline): the RunOwner dispatcher
    * creates the apply run itself when the completed plan is CLEAN
    * (`succeeded`). See {@link PlanRun.autoApplyRequested}.
    */
@@ -1177,7 +1176,7 @@ export class OpenTofuController {
   readonly #dependencies: DependencyResolutionService;
   readonly #verification: RunVerificationService;
   readonly #planResolution: PlanResolutionService;
-  readonly #usesExternalRunQueue: boolean;
+  readonly #usesExternalRunDispatcher: boolean;
   #connectionsService?: ConnectionsService;
   readonly #runEngine: RunEngine;
   readonly #credentialRecipes: readonly CredentialRecipe[];
@@ -1322,7 +1321,7 @@ export class OpenTofuController {
     });
     // Default to an inline dispatcher: run the consumer immediately so local /
     // node substrates and tests keep the historical synchronous semantics.
-    this.#usesExternalRunQueue = dependencies.enqueueRun !== undefined;
+    this.#usesExternalRunDispatcher = dependencies.enqueueRun !== undefined;
     this.#enqueueRun =
       dependencies.enqueueRun ??
       ((dispatch) => this.#runEngine.dispatchQueuedRun(dispatch));
@@ -1416,8 +1415,8 @@ export class OpenTofuController {
     this.#runEngine.setInterfaceOutputSourcesResolver(resolver);
   }
 
-  usesExternalRunQueue(): boolean {
-    return this.#usesExternalRunQueue;
+  usesExternalRunDispatcher(): boolean {
+    return this.#usesExternalRunDispatcher;
   }
 
   async listRunnerProfiles(): Promise<ListRunnerProfilesResponse> {
@@ -1755,10 +1754,10 @@ export class OpenTofuController {
   }
 
   /**
-   * Auto-update pipeline (consumer "app feel"): a Capsule that opted in
+   * Auto-update pipeline (asynchronous "app feel"): a Capsule that opted in
    * (`autoUpdate`) and just went `stale` because its Source resolved a new
    * snapshot gets an update plan run created here, flagged
-   * `autoApplyRequested` so the queue consumer applies it when CLEAN. One
+   * `autoApplyRequested` so the RunOwner applies it when CLEAN. One
    * automatic attempt per snapshot (`autoUpdateAttemptSourceSnapshotId`
    * marker) — a failed attempt is not retry-looped; the Capsule stays 更新が
    * あります and the next new snapshot (or a manual update) retries. Failures

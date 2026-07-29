@@ -132,12 +132,11 @@ export interface OpenTofuRunOwnerObjectDeps {
 }
 
 /**
- * Per-run execution owner for queued OpenTofu work.
+ * Per-run execution owner for asynchronously scheduled OpenTofu work.
  *
- * The queue consumer persists only the run identity here and then acks the
- * queue message. The owner alarm performs the long controller dispatch and owns
- * retry/final-failure bookkeeping, so queue delivery lifetime no longer bounds
- * a plan/apply/restore/source-sync run.
+ * The create path persists only the run identity here. The owner alarm performs
+ * the long controller dispatch and owns retry/final-failure bookkeeping, so an
+ * HTTP request lifetime never bounds a plan/apply/restore/source-sync run.
  */
 export class OpenTofuRunOwnerObject {
   readonly #now: () => number;
