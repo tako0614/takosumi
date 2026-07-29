@@ -242,7 +242,7 @@ export function registerResourceShapeRoutes(
       availability: service,
       authorize: (c) => authorizeResourceShapeRequest(c, options),
       canReadForms: hasFormAvailabilityReadScope,
-      canWriteInterfaces: hasResourceArtifactWriteScope,
+      canWriteInterfaces: hasInterfaceDeclarationWriteScope,
       ...(options.interfaceDeclarations
         ? { interfaceDeclarations: options.interfaceDeclarations }
         : {}),
@@ -984,6 +984,24 @@ export function hasResourceArtifactWriteScope(actor: ActorContext): boolean {
     scopes.has("resources:write") ||
     scopes.has("resources:*") ||
     scopes.has("capsules:write")
+  );
+}
+
+/**
+ * Interface declarations have their own mutation authority. Resource,
+ * Capsule, and generic account write grants cannot silently acquire this
+ * capability merely because the declaration is attached to a Resource.
+ */
+export function hasInterfaceDeclarationWriteScope(
+  actor: ActorContext,
+): boolean {
+  if (actor.scopes === undefined) return true;
+  const scopes = new Set(actor.scopes);
+  return (
+    scopes.has("*") ||
+    scopes.has("admin") ||
+    scopes.has("interfaces:write") ||
+    scopes.has("interfaces:*")
   );
 }
 

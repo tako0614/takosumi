@@ -108,5 +108,5 @@ If you bind-mount additional directories into the `accounts` container, make sur
 
 The architectural claim that the Takosumi account plane is substrate-neutral needs a second working deployment to be more
 than a spec promise. This distribution is that second working substrate for the same composed-origin account-plane
-handler. See `takosumi/docs/reference/operator.md` and the ecosystem-level `ARCHITECTURE.md` for the substitutability
+handler. See `takosumi/docs/concepts/self-host.md` and the ecosystem-level `ARCHITECTURE.md` for the substitutability
 table.

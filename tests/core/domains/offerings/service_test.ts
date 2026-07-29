@@ -282,17 +282,14 @@ test("Core fingerprints the exact catalog row and rejects reader identity substi
 
 test("Takoform is one exact generic Offering subject rather than the catalog type", () => {
   const subject = formOfferingSubject({
-    formRef: {
-      apiVersion: "forms.takoform.com/v1alpha1",
-      kind: "KVStore",
-      definitionVersion: "1.0.1",
-      schemaDigest: `sha256:${"c".repeat(64)}`,
-    },
+    type: "kv_store",
+    version: "1.0.1",
+    schemaDigest: `sha256:${"c".repeat(64)}`,
     packageDigest: `sha256:${"d".repeat(64)}`,
   });
   expect(subject).toEqual({
     type: "forms.takoform.com/v1alpha1/Form",
-    ref: `forms.takoform.com%2Fv1alpha1|KVStore|1.0.1|sha256%3A${"c".repeat(64)}`,
+    ref: `kv_store|1.0.1|sha256%3A${"c".repeat(64)}`,
     version: "1.0.1",
     digest: `sha256:${"d".repeat(64)}`,
   });

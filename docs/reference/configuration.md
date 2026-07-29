@@ -200,7 +200,6 @@ bunx wrangler secret put TAKOSUMI_RELEASE_ACTIVATOR_TOKEN \
 | `TAKOSUMI_ACCOUNTS_PG_SSL_MODE` | 任意 | `disable` | `disable` / `require` / `verify-ca` / `verify-full` |
 | `TAKOSUMI_ACCOUNTS_PG_SSL_ROOT_CERT` | `verify-ca` / `verify-full` で必須 | なし | PEM の CA バンドル |
 | `POSTGRES_PASSWORD` | compose を使う場合は必須・**秘密** | なし | 同梱の compose が PostgreSQL に設定するパスワード |
-| `TAKOSUMI_REVIEWED_PROVIDER_ASSET_ROOT` | イメージをビルドする場合は必須 | なし | レビュー済み provider ミラーの絶対パス。ビルドの入力で、実行時には渡りません |
 
 同梱の compose は `deploy/node-postgres/.env` からこれらを読みます。
 

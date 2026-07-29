@@ -18,7 +18,7 @@
 
 .tcs-controls {
   display: flex;
-  gap: 10px;
+  gap: var(--tg-s-2, 8px);
   margin-bottom: 12px;
   flex-wrap: wrap;
 }
@@ -31,17 +31,17 @@
   width: 100%;
   background: var(--c-panel);
   border: 1px solid var(--c-border);
-  border-radius: 9px;
+  border-radius: var(--tg-r-md, 10px);
   color: var(--c-fg);
-  padding: 9px 12px;
+  padding: var(--tg-s-2, 8px) var(--tg-s-3, 12px);
   font: inherit;
 }
 .tcs-sort {
   background: var(--c-panel);
   border: 1px solid var(--c-border);
-  border-radius: 9px;
+  border-radius: var(--tg-r-md, 10px);
   color: var(--c-fg);
-  padding: 0 10px;
+  padding: 0 var(--tg-s-2, 8px);
   font: inherit;
   /* A long store-source URL option must not stretch the control past the row
      and force horizontal page scroll. */
@@ -51,9 +51,9 @@
 .tcs-select-label {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  gap: var(--tg-s-2, 8px);
   color: var(--c-muted);
-  font-size: 0.86rem;
+  font-size: var(--tg-fs-sm, 0.88rem);
 }
 .tcs-select-label .tcs-sort {
   min-height: 37px;
@@ -63,15 +63,15 @@
   border: 1px solid var(--c-border);
   color: var(--c-fg);
   border-radius: var(--tg-r-md, 10px);
-  padding: 8px 14px;
+  padding: var(--tg-s-2, 8px) var(--tg-s-3, 12px);
   min-height: 36px;
   font: inherit;
   font-weight: 600;
   cursor: pointer;
 }
 .tcs-btn.tcs-sm {
-  padding: 4px 9px;
-  font-size: 0.82rem;
+  padding: var(--tg-s-1, 4px) var(--tg-s-2, 8px);
+  font-size: var(--tg-fs-xs, 0.78rem);
 }
 .tcs-btn.tcs-primary {
   background: var(--c-accent);
@@ -99,22 +99,22 @@
 .tcs-servers {
   background: var(--c-panel);
   border: 1px solid var(--c-border);
-  border-radius: 11px;
-  padding: 12px 14px;
+  border-radius: var(--tg-r-md, 10px);
+  padding: var(--tg-s-3, 12px) var(--tg-s-3, 12px);
   margin-bottom: 12px;
 }
 .tcs-servers ul {
   list-style: none;
-  margin: 0 0 10px;
+  margin: 0 0 var(--tg-s-2, 8px);
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--tg-s-1, 4px);
 }
 .tcs-servers li {
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: var(--tg-s-2, 8px);
 }
 .tcs-servers li .tcs-mono {
   flex: 1;
@@ -134,7 +134,7 @@
 }
 .tcs-add {
   display: flex;
-  gap: 8px;
+  gap: var(--tg-s-2, 8px);
 }
 .tcs-add input {
   flex: 1;
@@ -143,16 +143,16 @@
 .tcs-filters {
   display: flex;
   flex-wrap: wrap;
-  gap: 7px;
+  gap: var(--tg-s-2, 8px);
   margin-bottom: 16px;
 }
 .tcs-chip {
   background: var(--c-panel);
   border: 1px solid var(--c-border);
   color: var(--c-muted);
-  border-radius: 999px;
-  padding: 4px 12px;
-  font-size: 0.83rem;
+  border-radius: var(--tg-r-full, 999px);
+  padding: var(--tg-s-1, 4px) var(--tg-s-3, 12px);
+  font-size: var(--tg-fs-xs, 0.78rem);
   cursor: pointer;
 }
 .tcs-chip.active {
@@ -164,16 +164,16 @@
 .tcs-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
-  gap: 12px;
+  gap: var(--tg-s-3, 12px);
 }
 .tcs-card {
   background: var(--c-panel);
   border: 1px solid var(--c-border);
-  border-radius: 14px;
-  padding: 14px;
+  border-radius: var(--tg-r-lg, 14px);
+  padding: var(--tg-s-3, 12px);
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--tg-s-3, 12px);
   min-height: 204px;
   transition:
     transform 0.14s ease,
@@ -188,13 +188,13 @@
 .tcs-card-top {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
-  gap: 12px;
+  gap: var(--tg-s-3, 12px);
   align-items: start;
   min-width: 0;
 }
 .tcs-card-main {
   display: grid;
-  gap: 7px;
+  gap: var(--tg-s-2, 8px);
   min-width: 0;
 }
 /* App artwork — full-bleed declared icon (app-store style), or a monogram
@@ -219,7 +219,7 @@
 .tcs-app-mono {
   font-family: var(--tg-font-display, inherit);
   font-weight: 700;
-  font-size: 1.4rem;
+  font-size: var(--tg-fs-xl, 1.31rem);
   letter-spacing: -0.02em;
 }
 .tcs-app-icon img {
@@ -230,8 +230,8 @@
 /* Card title is now an <h2> wrapping the open <button> (headings-outline fix);
    the button carries the interaction, the h2 carries the type scale. */
 .tcs-card-title {
-  margin: 0 0 4px;
-  font-size: 1.02rem;
+  margin: 0 0 var(--tg-s-1, 4px);
+  font-size: var(--tg-fs-base, 1rem);
   overflow-wrap: anywhere;
 }
 .tcs-card-open {
@@ -249,7 +249,7 @@
 .tcs-card-desc {
   margin: 0;
   color: var(--c-muted);
-  font-size: 0.86rem;
+  font-size: var(--tg-fs-sm, 0.88rem);
   line-height: 1.5;
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -259,14 +259,14 @@
 .tcs-card-meta {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: var(--tg-s-1, 4px);
   margin-top: auto;
 }
 .tcs-card-actions,
 .tcs-detail-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--tg-s-2, 8px);
 }
 .tcs-card-actions .tcs-btn {
   min-height: 36px;
@@ -286,15 +286,15 @@
 .tcs-card-by {
   margin: -2px 0 0;
   color: var(--c-muted);
-  font-size: 0.8rem;
+  font-size: var(--tg-fs-xs, 0.78rem);
   overflow-wrap: anywhere;
 }
 
 .tcs-tag {
   background: var(--c-panel2);
-  border-radius: 6px;
-  padding: 2px 8px;
-  font-size: 0.73rem;
+  border-radius: var(--tg-r-sm, 6px);
+  padding: 0 var(--tg-s-2, 8px);
+  font-size: var(--tg-fs-xs, 0.78rem);
   color: var(--c-muted);
 }
 .tcs-muted {
@@ -302,36 +302,36 @@
 }
 .tcs-mono {
   font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
-  font-size: 0.84rem;
+  font-size: var(--tg-fs-sm, 0.88rem);
 }
 .tcs-break {
   word-break: break-all;
 }
 .tcs-err {
   color: var(--c-err);
-  font-size: 0.8rem;
+  font-size: var(--tg-fs-xs, 0.78rem);
 }
 .tcs-empty {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 10px;
+  gap: var(--tg-s-2, 8px);
   color: var(--c-muted);
   text-align: center;
-  padding: 40px 0;
+  padding: var(--tg-s-6, 32px) 0;
 }
 .tcs-partial {
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin: 0 0 12px;
-  padding: 8px 12px;
+  gap: var(--tg-s-2, 8px);
+  margin: 0 0 var(--tg-s-3, 12px);
+  padding: var(--tg-s-2, 8px) var(--tg-s-3, 12px);
   border: 1px solid
     color-mix(in srgb, var(--tg-warn, #b26a09) 36%, var(--c-border));
-  border-radius: 9px;
+  border-radius: var(--tg-r-md, 10px);
   background: color-mix(in srgb, var(--tg-warn, #b26a09) 8%, var(--c-panel));
   color: var(--c-fg);
-  font-size: 0.86rem;
+  font-size: var(--tg-fs-sm, 0.88rem);
 }
 .tcs-loadmore {
   display: flex;
@@ -343,7 +343,7 @@
      (below AA); --tg-accent-text clears 4.5:1 in both themes. */
   color: var(--tg-accent-text, var(--c-accent));
   text-decoration: none;
-  font-size: 0.86rem;
+  font-size: var(--tg-fs-sm, 0.88rem);
 }
 .tcs-link:hover {
   text-decoration: underline;
@@ -364,23 +364,23 @@
   overflow-y: auto;
   background: var(--tg-bg, #f6f7f9);
   border-left: 1px solid var(--c-border);
-  padding: 20px 20px 60px;
+  padding: var(--tg-s-4, 16px) var(--tg-s-4, 16px) var(--tg-s-8, 64px);
 }
 .tcs-detail header {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  gap: 12px;
+  gap: var(--tg-s-3, 12px);
 }
 .tcs-detail-title {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
-  gap: 12px;
+  gap: var(--tg-s-3, 12px);
   min-width: 0;
 }
 .tcs-detail header h2 {
-  margin: 6px 0 0;
+  margin: var(--tg-s-1, 4px) 0 0;
   /* Retagged h3 → h2 for heading order; keep the old h3 size. */
   font-size: 1.17em;
   overflow-wrap: anywhere;
@@ -391,9 +391,9 @@
   padding-top: 14px;
 }
 .tcs-detail section h3 {
-  margin: 0 0 8px;
+  margin: 0 0 var(--tg-s-2, 8px);
   color: var(--c-muted);
-  font-size: 0.86rem;
+  font-size: var(--tg-fs-sm, 0.88rem);
 }
 .tcs-compact {
   margin: 0;
@@ -406,22 +406,22 @@
 .tcs-advanced summary {
   color: var(--c-muted);
   cursor: pointer;
-  font-size: 0.86rem;
+  font-size: var(--tg-fs-sm, 0.88rem);
   font-weight: 600;
 }
 .tcs-detail-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  margin: 0 0 10px;
+  gap: var(--tg-s-2, 8px);
+  margin: 0 0 var(--tg-s-2, 8px);
 }
 .tcs-detail-list div {
   display: grid;
-  gap: 2px;
+  gap: 0;
 }
 .tcs-detail-list dt {
   color: var(--c-muted);
-  font-size: 0.78rem;
+  font-size: var(--tg-fs-xs, 0.78rem);
 }
 .tcs-detail-list dd {
   margin: 0;
@@ -432,7 +432,7 @@
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--tg-s-1, 4px);
 }
 
 @media (max-width: 520px) {

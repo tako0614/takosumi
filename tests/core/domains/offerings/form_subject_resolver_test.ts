@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import {
   formActivationOfferingRequirement,
+  formRefOfInstalled,
   formHostResourceNamespaceOfferingContext,
   formOfferingSubject,
   type FormActivation,
@@ -13,12 +14,9 @@ import {
 import { FormOfferingSubjectResolver } from "../../../../core/domains/offerings/form_subject_resolver.ts";
 
 const identity: InstalledFormReference = {
-  formRef: {
-    apiVersion: "forms.takoform.com/v1alpha1",
-    kind: "ObjectBucket",
-    definitionVersion: "1.0.1",
-    schemaDigest: `sha256:${"a".repeat(64)}`,
-  },
+  type: "object_bucket",
+  version: "1.0.1",
+  schemaDigest: `sha256:${"a".repeat(64)}`,
   packageDigest: `sha256:${"b".repeat(64)}`,
 };
 const activation: FormActivation = {
@@ -45,13 +43,13 @@ const formPackage: FormPackage = {
   artifactRef: "oci://registry.example.test/form@sha256:fixture",
   verifierId: "fixture",
   status: "installed",
-  definitionRefs: [identity.formRef],
+  definitionRefs: [formRefOfInstalled(identity)],
   installedAt: "2026-07-20T00:00:00.000Z",
   installedBy: "operator",
   updatedAt: "2026-07-20T00:00:00.000Z",
 };
 const availability: FormAvailability = {
-  identity,
+  form: identity,
   definitionKnown: true,
   installed: true,
   executable: true,

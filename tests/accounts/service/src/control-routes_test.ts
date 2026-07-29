@@ -160,7 +160,7 @@ test("Workspace-scoped PAT lists only its Workspace and cannot create another", 
     path: "/api/v1/workspaces",
   });
   expect(listed.status).toBe(200);
-  expect(await listed.json()).toEqual({ workspaces: [workspace] });
+  expect(await listed.json()).toMatchObject({ workspaces: [workspace] });
 
   const createDenied = await authenticatedControlRequest({
     store,

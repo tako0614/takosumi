@@ -1,6 +1,7 @@
 import { test, expect } from "bun:test";
 import { createApiApp } from "../../../core/api/app.ts";
 import {
+  hasInterfaceDeclarationWriteScope,
   type RegisterResourceShapeRoutesOptions,
   TAKOSUMI_INTERNAL_RESOURCE_MANAGED_BY_HEADER,
 } from "../../../core/api/resource_routes.ts";
@@ -501,8 +502,14 @@ test("portable Form host delegates exact lifecycle to the canonical Resource and
   expect(preview.status).toBe(200);
   const previewBody = await preview.json();
   expect(previewBody.resource.form).toEqual(portableFormReference());
-  expect(previewBody.selectedTarget).toBe("cloudflare-main");
-  expect(previewBody.selectedImplementation).toBe("cloudflare_r2_bucket");
+  expect(previewBody).toEqual({
+    resource: previewBody.resource,
+    review: {
+      planDigest: previewBody.review.planDigest,
+      specDigest: previewBody.review.specDigest,
+    },
+    summary: previewBody.summary,
+  });
 
   const applyBody = {
     ...desired,
@@ -654,6 +661,26 @@ test("portable Form host delegates exact lifecycle to the canonical Resource and
     },
   );
   expect(deleteReplay.status).toBe(204);
+});
+
+test("portable Interface writes require dedicated Interface authority", () => {
+  const actor = (scopes: readonly string[]) => ({
+    actorAccountId: "acct_interface_writer",
+    roles: ["owner"],
+    scopes,
+    requestId: "req_interface_writer",
+  });
+  expect(hasInterfaceDeclarationWriteScope(actor(["capsules:write"]))).toBe(
+    false,
+  );
+  expect(hasInterfaceDeclarationWriteScope(actor(["resources:write"]))).toBe(
+    false,
+  );
+  expect(hasInterfaceDeclarationWriteScope(actor(["write"]))).toBe(false);
+  expect(hasInterfaceDeclarationWriteScope(actor(["interfaces:write"]))).toBe(
+    true,
+  );
+  expect(hasInterfaceDeclarationWriteScope(actor(["admin"]))).toBe(true);
 });
 
 test("portable Form host rejects legacy envelope fields instead of dropping them", async () => {

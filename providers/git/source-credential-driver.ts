@@ -33,9 +33,9 @@ export const verifyGitHttps: SourceCredentialVerifyDriver = async ({
   const repoUrl = gitProbeUrl(connection.scopeHints);
   if (!repoUrl) {
     return {
-      ok: true,
+      ok: false,
       detail:
-        "structural verify (no Git provider repositoryUrl configured for a live smart-HTTP probe)",
+        "git https connection is missing scopeHints.providerSettings.repositoryUrl for a live smart-HTTP probe",
     };
   }
   const username =
@@ -87,11 +87,7 @@ export const verifyGitSsh: SourceCredentialVerifyDriver = async ({
 
 export const gitHttpsSourceCredentialDriver: SourceCredentialRuntimeDriver = {
   validateRegistration({ kind, scopeHints, values }) {
-    const valueResult = validateSingleValue(
-      kind,
-      values,
-      GIT_HTTPS_TOKEN_ENV,
-    );
+    const valueResult = validateSingleValue(kind, values, GIT_HTTPS_TOKEN_ENV);
     if (!valueResult.ok) return valueResult;
     if (!gitHostScope(gitProviderSettings(scopeHints).repositoryUrl)) {
       return {

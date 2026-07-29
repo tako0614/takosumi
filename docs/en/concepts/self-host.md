@@ -124,10 +124,7 @@ cp .env.example .env
 ```
 
 Edit `.env`. What you change here is `POSTGRES_PASSWORD`, `TAKOSUMI_ACCOUNTS_ISSUER`,
-`TAKOSUMI_ACCOUNTS_PUBLIC_HOSTNAME`, the OIDC client registration, and
-`TAKOSUMI_REVIEWED_PROVIDER_ASSET_ROOT`. The last one is the absolute path on the host
-where you placed a reviewed provider mirror, and it is an input to the image build rather
-than a credential used at runtime.
+`TAKOSUMI_ACCOUNTS_PUBLIC_HOSTNAME`, and the OIDC client registration.
 
 Values in `.env` are only used for variable expansion in the compose file; they are not
 passed into the container as they are. The bundled `docker-compose.yml` gives the

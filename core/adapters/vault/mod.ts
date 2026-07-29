@@ -54,6 +54,10 @@ import {
   sourceCredentialDriverForConnection,
   sourceCredentialDriverForKind,
 } from "./verify_drivers.ts";
+import {
+  normalizeProviderConfigBaseUrl,
+  providerConfigUrlError,
+} from "../../shared/provider_config_urls.ts";
 import type {
   OpenTofuControlStore,
   StoredSecretBlob,
@@ -367,6 +371,12 @@ export interface StaticSecretConnectionVaultDependencies {
   ) => CredentialRecipe | undefined;
   readonly credentialDrivers?: CredentialRecipeDriverRegistry;
   /**
+   * Operator allowlist of provider/compat API base URLs that may appear in a
+   * Workspace Connection's `scopeHints.providerConfig`. Omitted means no
+   * override host is approved.
+   */
+  readonly allowedProviderConfigUrls?: readonly string[];
+  /**
    * Complete host-installed Source credential driver registry. Omitted means
    * private Source credential registration, verification, and mint fail closed.
    */
@@ -385,6 +395,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
   ) => CredentialRecipe | undefined;
   readonly #credentialDrivers: CredentialRecipeDriverRegistry;
   readonly #sourceCredentialDrivers: SourceCredentialDriverRegistry;
+  readonly #allowedProviderConfigUrls: ReadonlySet<string>;
 
   constructor(deps: StaticSecretConnectionVaultDependencies) {
     this.#store = deps.store;
@@ -400,6 +411,11 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       deps.credentialRecipeResolver ?? (() => undefined);
     this.#credentialDrivers = deps.credentialDrivers ?? {};
     this.#sourceCredentialDrivers = deps.sourceCredentialDrivers ?? {};
+    this.#allowedProviderConfigUrls = new Set(
+      (deps.allowedProviderConfigUrls ?? []).map(
+        normalizeProviderConfigBaseUrl,
+      ),
+    );
   }
 
   async register(input: RegisterConnectionInput): Promise<ProviderConnection> {
@@ -548,9 +564,13 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     // material. In particular, provider configuration and module defaults are
     // public connection metadata and must never become an alternate secret
     // transport around Credential Recipes.
-    const scopeHints = normalizeScope(input.scopeHints);
     const connectionScope =
       input.scope ?? (workspaceId ? "workspace" : "operator");
+    const scopeHints = normalizeScope(
+      input.scopeHints,
+      connectionScope,
+      this.#allowedProviderConfigUrls,
+    );
     assertManagedProviderOperatorOwnership(
       scopeHints,
       workspaceId,
@@ -635,9 +655,13 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       );
     }
     const envNames = Object.keys(values);
-    const scopeHints = normalizeScope(input.scopeHints);
     const connectionScope =
       input.scope ?? (workspaceId ? "workspace" : "operator");
+    const scopeHints = normalizeScope(
+      input.scopeHints,
+      connectionScope,
+      this.#allowedProviderConfigUrls,
+    );
     assertManagedProviderOperatorOwnership(
       scopeHints,
       workspaceId,
@@ -1451,6 +1475,8 @@ function connectionIsExpired(
 
 function normalizeScope(
   scope: ConnectionScopeHints | undefined,
+  connectionScope: ProviderConnection["scope"],
+  allowedProviderConfigUrls: ReadonlySet<string>,
 ): ConnectionScopeHints | undefined {
   if (!scope) return undefined;
   const out: {
@@ -1481,7 +1507,22 @@ function normalizeScope(
     scope.providerConfig,
     "scopeHints.providerConfig",
   );
-  if (providerConfig) out.providerConfig = providerConfig;
+  if (providerConfig) {
+    // This object is rendered into the provider block. A Workspace caller may
+    // not redirect minted credentials to an arbitrary endpoint; only the
+    // operator-owned allowlist can authorize an absolute provider URL.
+    if (connectionScope === "workspace") {
+      const urlError = providerConfigUrlError(
+        providerConfig,
+        "scopeHints.providerConfig",
+        allowedProviderConfigUrls,
+      );
+      if (urlError) {
+        throw new ConnectionVaultError("invalid_argument", urlError);
+      }
+    }
+    out.providerConfig = providerConfig;
+  }
   const moduleInputDefaults = normalizeNonSecretJsonRecord(
     scope.moduleInputDefaults,
     "scopeHints.moduleInputDefaults",

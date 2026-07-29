@@ -1,5 +1,5 @@
 import type { CreateConnectionRequest } from "@takosumi/internal/deploy-control-api";
-import type { ConnectionOAuthDescriptor } from "@takosumi/providers";
+import type { ConnectionOAuthDescriptor } from "./connection_oauth_ports.ts";
 import { constantTimeEqualsString } from "takosumi-contract/internal/crypto";
 import { OpenTofuControllerError } from "../domains/deploy-control/mod.ts";
 import type {

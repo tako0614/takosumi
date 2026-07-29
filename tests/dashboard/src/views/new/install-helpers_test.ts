@@ -9,6 +9,7 @@ import {
   storeMetadataFromStoreListing,
   storeInstallConfigsForSource,
   storeSourceMatchesListing,
+  uniqueStoreInstallConfigForSource,
 } from "../../../../../dashboard/src/views/new/install-helpers.ts";
 import type { TcsListing } from "../../../../../dashboard/src/lib/tcs-client.ts";
 import type { InstallConfig } from "../../../../../dashboard/src/lib/control-api.ts";
@@ -190,6 +191,38 @@ describe("store install metadata", () => {
         "other",
       ),
     ).toHaveLength(0);
+    expect(
+      uniqueStoreInstallConfigForSource(
+        [matching, unrelated],
+        "https://example.test/example.git",
+        "deploy/opentofu",
+      )?.id,
+    ).toBe("cfg-matching");
+    expect(
+      uniqueStoreInstallConfigForSource(
+        [matching, duplicate],
+        "https://example.test/example.git",
+        "deploy/opentofu",
+      ),
+    ).toBeNull();
+    // A presentation-only Store row must never fall back to the generic
+    // direct-Git config: that creates an active Capsule without app Outputs or
+    // a launcher Interface.
+    expect(
+      uniqueStoreInstallConfigForSource(
+        [
+          installConfig({
+            id: "cfg-default-opentofu-capsule",
+          }),
+          installConfig({
+            id: "cfg-presentation-only",
+            store: matching.store,
+          }),
+        ],
+        "https://example.test/example.git",
+        "deploy/opentofu",
+      ),
+    ).toBeNull();
     expect(
       storeInstallConfigsForSource(
         [

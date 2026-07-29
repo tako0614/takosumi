@@ -59,7 +59,7 @@ Use public docs for external product and API contracts:
 ```text
 ../index.md
 ../reference/api.md
-../reference/model.md
+../concepts/index.md
 ../../app-docs/index.md
 ```
 

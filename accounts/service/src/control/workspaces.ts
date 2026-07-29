@@ -197,6 +197,13 @@ export async function handleWorkspaces(
       return await listWorkspaces(operations, store, ctx.session, url);
     }
     if (method === "POST") {
+      if (ctx.session.workspaceId !== undefined) {
+        return errorJson(
+          "forbidden",
+          "A Workspace-scoped credential cannot create another Workspace.",
+          403,
+        );
+      }
       return await createWorkspace(request, operations, ctx.session.subject);
     }
     return methodNotAllowed("GET, POST");
@@ -205,6 +212,14 @@ export async function handleWorkspaces(
   if (segments[0] === "workspaces" && segments.length >= 2) {
     const workspaceId = decodeURIComponent(segments[1] ?? "");
     const leaf = segments[2];
+    if (
+      method === "POST" &&
+      leaf === "backups" &&
+      segments.length === 5 &&
+      segments[4] === "restores"
+    ) {
+      return errorJson("not_found", "not found", 404);
+    }
     const auth = await requireWorkspaceAccess({
       operations,
       store,
@@ -448,15 +463,16 @@ export async function handleWorkspaces(
 
 async function listWorkspaces(
   operations: ControlPlaneOperations,
-  _store: AccountsStore,
+  store: AccountsStore,
   session: ControlSession,
   url: URL,
 ): Promise<Response> {
-  return await listWorkspacePage(operations, session, url);
+  return await listWorkspacePage(operations, store, session, url);
 }
 
 async function listWorkspacePage(
   operations: ControlPlaneOperations,
+  store: AccountsStore,
   session: ControlSession,
   url: URL,
 ): Promise<Response> {
@@ -486,13 +502,21 @@ async function listWorkspacePage(
   const isFirstPage = parsedPage.params.cursor === undefined;
   if (session.workspaceId !== undefined) {
     const workspace = isFirstPage
-      ? await operations.workspaces.getWorkspaceForAccount(
-          session.subject,
-          session.workspaceId,
-        )
+      ? await operations.workspaces.getWorkspace(session.workspaceId)
       : undefined;
+    const authorized =
+      workspace !== undefined &&
+      (await canAccessWorkspace({
+        operations,
+        store,
+        session,
+        workspaceId: session.workspaceId,
+        workspace,
+      }));
     const workspaces =
-      workspace && (includeArchived || !isArchivedWorkspace(workspace))
+      authorized &&
+      workspace &&
+      (includeArchived || !isArchivedWorkspace(workspace))
         ? [workspace]
         : [];
     return json({

@@ -2,13 +2,13 @@
 // @ts-nocheck -- Ajv standalone emits optimized JavaScript.
 "use strict";
 export const validateFormRef = validate20;
-const schema31 = {"$schema":"https://json-schema.org/draft/2020-12/schema","$id":"https://forms.takoform.com/schemas/v0/form-ref.schema.json","title":"Takoform form reference v0","description":"The exact portable identity of one immutable Form Definition: resource type token, definition SemVer, and SHA-256 over the definition's RFC 8785 canonical bytes.","type":"object","additionalProperties":false,"required":["type","version","schemaDigest"],"properties":{"type":{"type":"string","pattern":"^[a-z][a-z0-9_]{0,63}$","not":{"const":"revocations"}},"version":{"type":"string","pattern":"^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(\\.(0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*))?(\\+([0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*))?$"},"schemaDigest":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$"}}};
-const pattern4 = new RegExp("^[a-z][a-z0-9_]{0,63}$", "u");
+const schema31 = {"$schema":"https://json-schema.org/draft/2020-12/schema","$id":"https://forms.takoform.com/schemas/v1alpha1/form-ref.schema.json","title":"Takoform FormRef v1alpha1","type":"object","additionalProperties":false,"required":["apiVersion","kind","definitionVersion","schemaDigest"],"properties":{"apiVersion":{"const":"forms.takoform.com/v1alpha1"},"kind":{"type":"string","pattern":"^[A-Z][A-Za-z0-9]{0,63}$"},"definitionVersion":{"type":"string","pattern":"^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(\\.(0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*))?(\\+([0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*))?$"},"schemaDigest":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$"}}};
+const pattern4 = new RegExp("^[A-Z][A-Za-z0-9]{0,63}$", "u");
 const pattern5 = new RegExp("^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(\\.(0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*))?(\\+([0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*))?$", "u");
 const pattern6 = new RegExp("^sha256:[0-9a-f]{64}$", "u");
 
 function validate20(data, {instancePath="", parentData, parentDataProperty, rootData=data, dynamicAnchors={}}={}){
-/*# sourceURL="https://forms.takoform.com/schemas/v0/form-ref.schema.json" */;
+/*# sourceURL="https://forms.takoform.com/schemas/v1alpha1/form-ref.schema.json" */;
 let vErrors = null;
 let errors = 0;
 const evaluated0 = validate20.evaluated;
@@ -19,8 +19,8 @@ if(evaluated0.dynamicItems){
 evaluated0.items = undefined;
 }
 if(data && typeof data == "object" && !Array.isArray(data)){
-if(data.type === undefined){
-const err0 = {instancePath,schemaPath:"#/required",keyword:"required",params:{missingProperty: "type"},message:"must have required property '"+"type"+"'"};
+if(data.apiVersion === undefined){
+const err0 = {instancePath,schemaPath:"#/required",keyword:"required",params:{missingProperty: "apiVersion"},message:"must have required property '"+"apiVersion"+"'"};
 if(vErrors === null){
 vErrors = [err0];
 }
@@ -29,8 +29,8 @@ vErrors.push(err0);
 }
 errors++;
 }
-if(data.version === undefined){
-const err1 = {instancePath,schemaPath:"#/required",keyword:"required",params:{missingProperty: "version"},message:"must have required property '"+"version"+"'"};
+if(data.kind === undefined){
+const err1 = {instancePath,schemaPath:"#/required",keyword:"required",params:{missingProperty: "kind"},message:"must have required property '"+"kind"+"'"};
 if(vErrors === null){
 vErrors = [err1];
 }
@@ -39,8 +39,8 @@ vErrors.push(err1);
 }
 errors++;
 }
-if(data.schemaDigest === undefined){
-const err2 = {instancePath,schemaPath:"#/required",keyword:"required",params:{missingProperty: "schemaDigest"},message:"must have required property '"+"schemaDigest"+"'"};
+if(data.definitionVersion === undefined){
+const err2 = {instancePath,schemaPath:"#/required",keyword:"required",params:{missingProperty: "definitionVersion"},message:"must have required property '"+"definitionVersion"+"'"};
 if(vErrors === null){
 vErrors = [err2];
 }
@@ -49,9 +49,8 @@ vErrors.push(err2);
 }
 errors++;
 }
-for(const key0 in data){
-if(!(((key0 === "type") || (key0 === "version")) || (key0 === "schemaDigest"))){
-const err3 = {instancePath,schemaPath:"#/additionalProperties",keyword:"additionalProperties",params:{additionalProperty: key0},message:"must NOT have additional properties"};
+if(data.schemaDigest === undefined){
+const err3 = {instancePath,schemaPath:"#/required",keyword:"required",params:{missingProperty: "schemaDigest"},message:"must have required property '"+"schemaDigest"+"'"};
 if(vErrors === null){
 vErrors = [err3];
 }
@@ -60,13 +59,9 @@ vErrors.push(err3);
 }
 errors++;
 }
-}
-if(data.type !== undefined){
-let data0 = data.type;
-const _errs4 = errors;
-const _errs5 = errors;
-if("revocations" !== data0){
-const err4 = {};
+for(const key0 in data){
+if(!((((key0 === "apiVersion") || (key0 === "kind")) || (key0 === "definitionVersion")) || (key0 === "schemaDigest"))){
+const err4 = {instancePath,schemaPath:"#/additionalProperties",keyword:"additionalProperties",params:{additionalProperty: key0},message:"must NOT have additional properties"};
 if(vErrors === null){
 vErrors = [err4];
 }
@@ -75,9 +70,10 @@ vErrors.push(err4);
 }
 errors++;
 }
-var valid1 = _errs5 === errors;
-if(valid1){
-const err5 = {instancePath:instancePath+"/type",schemaPath:"#/properties/type/not",keyword:"not",params:{},message:"must NOT be valid"};
+}
+if(data.apiVersion !== undefined){
+if("forms.takoform.com/v1alpha1" !== data.apiVersion){
+const err5 = {instancePath:instancePath+"/apiVersion",schemaPath:"#/properties/apiVersion/const",keyword:"const",params:{allowedValue: "forms.takoform.com/v1alpha1"},message:"must be equal to constant"};
 if(vErrors === null){
 vErrors = [err5];
 }
@@ -86,20 +82,12 @@ vErrors.push(err5);
 }
 errors++;
 }
-else {
-errors = _errs4;
-if(vErrors !== null){
-if(_errs4){
-vErrors.length = _errs4;
 }
-else {
-vErrors = null;
-}
-}
-}
-if(typeof data0 === "string"){
-if(!pattern4.test(data0)){
-const err6 = {instancePath:instancePath+"/type",schemaPath:"#/properties/type/pattern",keyword:"pattern",params:{pattern: "^[a-z][a-z0-9_]{0,63}$"},message:"must match pattern \""+"^[a-z][a-z0-9_]{0,63}$"+"\""};
+if(data.kind !== undefined){
+let data1 = data.kind;
+if(typeof data1 === "string"){
+if(!pattern4.test(data1)){
+const err6 = {instancePath:instancePath+"/kind",schemaPath:"#/properties/kind/pattern",keyword:"pattern",params:{pattern: "^[A-Z][A-Za-z0-9]{0,63}$"},message:"must match pattern \""+"^[A-Z][A-Za-z0-9]{0,63}$"+"\""};
 if(vErrors === null){
 vErrors = [err6];
 }
@@ -110,7 +98,7 @@ errors++;
 }
 }
 else {
-const err7 = {instancePath:instancePath+"/type",schemaPath:"#/properties/type/type",keyword:"type",params:{type: "string"},message:"must be string"};
+const err7 = {instancePath:instancePath+"/kind",schemaPath:"#/properties/kind/type",keyword:"type",params:{type: "string"},message:"must be string"};
 if(vErrors === null){
 vErrors = [err7];
 }
@@ -120,11 +108,11 @@ vErrors.push(err7);
 errors++;
 }
 }
-if(data.version !== undefined){
-let data1 = data.version;
-if(typeof data1 === "string"){
-if(!pattern5.test(data1)){
-const err8 = {instancePath:instancePath+"/version",schemaPath:"#/properties/version/pattern",keyword:"pattern",params:{pattern: "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(\\.(0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*))?(\\+([0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*))?$"},message:"must match pattern \""+"^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(\\.(0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*))?(\\+([0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*))?$"+"\""};
+if(data.definitionVersion !== undefined){
+let data2 = data.definitionVersion;
+if(typeof data2 === "string"){
+if(!pattern5.test(data2)){
+const err8 = {instancePath:instancePath+"/definitionVersion",schemaPath:"#/properties/definitionVersion/pattern",keyword:"pattern",params:{pattern: "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(\\.(0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*))?(\\+([0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*))?$"},message:"must match pattern \""+"^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(\\.(0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*))?(\\+([0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*))?$"+"\""};
 if(vErrors === null){
 vErrors = [err8];
 }
@@ -135,7 +123,7 @@ errors++;
 }
 }
 else {
-const err9 = {instancePath:instancePath+"/version",schemaPath:"#/properties/version/type",keyword:"type",params:{type: "string"},message:"must be string"};
+const err9 = {instancePath:instancePath+"/definitionVersion",schemaPath:"#/properties/definitionVersion/type",keyword:"type",params:{type: "string"},message:"must be string"};
 if(vErrors === null){
 vErrors = [err9];
 }
@@ -146,9 +134,9 @@ errors++;
 }
 }
 if(data.schemaDigest !== undefined){
-let data2 = data.schemaDigest;
-if(typeof data2 === "string"){
-if(!pattern6.test(data2)){
+let data3 = data.schemaDigest;
+if(typeof data3 === "string"){
+if(!pattern6.test(data3)){
 const err10 = {instancePath:instancePath+"/schemaDigest",schemaPath:"#/properties/schemaDigest/pattern",keyword:"pattern",params:{pattern: "^sha256:[0-9a-f]{64}$"},message:"must match pattern \""+"^sha256:[0-9a-f]{64}$"+"\""};
 if(vErrors === null){
 vErrors = [err10];
@@ -187,14 +175,14 @@ return errors === 0;
 validate20.evaluated = {"props":true,"dynamicProps":false,"dynamicItems":false};
 
 export const validatePackageIndex = validate21;
-const schema32 = {"$schema":"https://json-schema.org/draft/2020-12/schema","$id":"https://forms.takoform.com/schemas/v0/package-index.schema.json","title":"Takoform Form Package index v0","type":"object","additionalProperties":false,"required":["format","packageVersion","form","definitionPath","files"],"properties":{"format":{"const":"takoform.form-package@v0"},"packageVersion":{"type":"string","pattern":"^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(\\.(0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*))?(\\+([0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*))?$"},"form":{"$ref":"form-ref.schema.json"},"definitionPath":{"$ref":"#/$defs/packagePath"},"files":{"type":"array","minItems":1,"contains":{"type":"object","required":["mediaType"],"properties":{"mediaType":{"const":"application/vnd.takoform.form-definition.v0+json"}}},"minContains":1,"maxContains":1,"items":{"type":"object","additionalProperties":false,"required":["path","mediaType","size","digest"],"properties":{"path":{"$ref":"#/$defs/packagePath"},"mediaType":{"enum":["application/vnd.takoform.form-definition.v0+json","application/schema+json","application/json","text/markdown","text/plain"]},"size":{"type":"integer","minimum":0,"maximum":67108864},"digest":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$"}}}}},"$defs":{"packagePath":{"type":"string","minLength":1,"maxLength":240,"pattern":"^[A-Za-z0-9._-]*[A-Za-z0-9_-](/[A-Za-z0-9._-]*[A-Za-z0-9_-])*$","not":{"pattern":"(^|/)\\.\\.?($|/)"}}}};
-const schema34 = {"type":"string","minLength":1,"maxLength":240,"pattern":"^[A-Za-z0-9._-]*[A-Za-z0-9_-](/[A-Za-z0-9._-]*[A-Za-z0-9_-])*$","not":{"pattern":"(^|/)\\.\\.?($|/)"}};
+const schema32 = {"$schema":"https://json-schema.org/draft/2020-12/schema","$id":"https://forms.takoform.com/schemas/v1alpha1/package-index.schema.json","title":"Takoform Form Package index v1alpha1","type":"object","additionalProperties":false,"required":["apiVersion","kind","packageVersion","formRef","definitionPath","files"],"properties":{"apiVersion":{"const":"packages.forms.takoform.com/v1alpha1"},"kind":{"const":"FormPackage"},"packageVersion":{"type":"string","pattern":"^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(\\.(0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*))?(\\+([0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*))?$"},"formRef":{"$ref":"form-ref.schema.json"},"definitionPath":{"$ref":"#/$defs/packagePath"},"files":{"type":"array","minItems":1,"contains":{"type":"object","required":["mediaType"],"properties":{"mediaType":{"const":"application/vnd.takoform.form-definition.v1+json"}}},"minContains":1,"maxContains":1,"items":{"type":"object","additionalProperties":false,"required":["path","mediaType","size","digest"],"properties":{"path":{"$ref":"#/$defs/packagePath"},"mediaType":{"enum":["application/vnd.takoform.form-definition.v1+json","application/schema+json","application/json","text/markdown","text/plain"]},"size":{"type":"integer","minimum":0,"maximum":67108864},"digest":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$"}}}}},"$defs":{"packagePath":{"type":"string","minLength":1,"maxLength":240,"pattern":"^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$","not":{"pattern":"(^|/)\\.\\.?($|/)"}}}};
+const schema34 = {"type":"string","minLength":1,"maxLength":240,"pattern":"^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$","not":{"pattern":"(^|/)\\.\\.?($|/)"}};
 const pattern11 = new RegExp("(^|/)\\.\\.?($|/)", "u");
-const pattern12 = new RegExp("^[A-Za-z0-9._-]*[A-Za-z0-9_-](/[A-Za-z0-9._-]*[A-Za-z0-9_-])*$", "u");
+const pattern12 = new RegExp("^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$", "u");
 import { ucs2length as func1 } from "@cfworker/json-schema";
 
 function validate21(data, {instancePath="", parentData, parentDataProperty, rootData=data, dynamicAnchors={}}={}){
-/*# sourceURL="https://forms.takoform.com/schemas/v0/package-index.schema.json" */;
+/*# sourceURL="https://forms.takoform.com/schemas/v1alpha1/package-index.schema.json" */;
 let vErrors = null;
 let errors = 0;
 const evaluated0 = validate21.evaluated;
@@ -205,8 +193,8 @@ if(evaluated0.dynamicItems){
 evaluated0.items = undefined;
 }
 if(data && typeof data == "object" && !Array.isArray(data)){
-if(data.format === undefined){
-const err0 = {instancePath,schemaPath:"#/required",keyword:"required",params:{missingProperty: "format"},message:"must have required property '"+"format"+"'"};
+if(data.apiVersion === undefined){
+const err0 = {instancePath,schemaPath:"#/required",keyword:"required",params:{missingProperty: "apiVersion"},message:"must have required property '"+"apiVersion"+"'"};
 if(vErrors === null){
 vErrors = [err0];
 }
@@ -215,8 +203,8 @@ vErrors.push(err0);
 }
 errors++;
 }
-if(data.packageVersion === undefined){
-const err1 = {instancePath,schemaPath:"#/required",keyword:"required",params:{missingProperty: "packageVersion"},message:"must have required property '"+"packageVersion"+"'"};
+if(data.kind === undefined){
+const err1 = {instancePath,schemaPath:"#/required",keyword:"required",params:{missingProperty: "kind"},message:"must have required property '"+"kind"+"'"};
 if(vErrors === null){
 vErrors = [err1];
 }
@@ -225,8 +213,8 @@ vErrors.push(err1);
 }
 errors++;
 }
-if(data.form === undefined){
-const err2 = {instancePath,schemaPath:"#/required",keyword:"required",params:{missingProperty: "form"},message:"must have required property '"+"form"+"'"};
+if(data.packageVersion === undefined){
+const err2 = {instancePath,schemaPath:"#/required",keyword:"required",params:{missingProperty: "packageVersion"},message:"must have required property '"+"packageVersion"+"'"};
 if(vErrors === null){
 vErrors = [err2];
 }
@@ -235,8 +223,8 @@ vErrors.push(err2);
 }
 errors++;
 }
-if(data.definitionPath === undefined){
-const err3 = {instancePath,schemaPath:"#/required",keyword:"required",params:{missingProperty: "definitionPath"},message:"must have required property '"+"definitionPath"+"'"};
+if(data.formRef === undefined){
+const err3 = {instancePath,schemaPath:"#/required",keyword:"required",params:{missingProperty: "formRef"},message:"must have required property '"+"formRef"+"'"};
 if(vErrors === null){
 vErrors = [err3];
 }
@@ -245,8 +233,8 @@ vErrors.push(err3);
 }
 errors++;
 }
-if(data.files === undefined){
-const err4 = {instancePath,schemaPath:"#/required",keyword:"required",params:{missingProperty: "files"},message:"must have required property '"+"files"+"'"};
+if(data.definitionPath === undefined){
+const err4 = {instancePath,schemaPath:"#/required",keyword:"required",params:{missingProperty: "definitionPath"},message:"must have required property '"+"definitionPath"+"'"};
 if(vErrors === null){
 vErrors = [err4];
 }
@@ -255,9 +243,8 @@ vErrors.push(err4);
 }
 errors++;
 }
-for(const key0 in data){
-if(!(((((key0 === "format") || (key0 === "packageVersion")) || (key0 === "form")) || (key0 === "definitionPath")) || (key0 === "files"))){
-const err5 = {instancePath,schemaPath:"#/additionalProperties",keyword:"additionalProperties",params:{additionalProperty: key0},message:"must NOT have additional properties"};
+if(data.files === undefined){
+const err5 = {instancePath,schemaPath:"#/required",keyword:"required",params:{missingProperty: "files"},message:"must have required property '"+"files"+"'"};
 if(vErrors === null){
 vErrors = [err5];
 }
@@ -266,10 +253,9 @@ vErrors.push(err5);
 }
 errors++;
 }
-}
-if(data.format !== undefined){
-if("takoform.form-package@v0" !== data.format){
-const err6 = {instancePath:instancePath+"/format",schemaPath:"#/properties/format/const",keyword:"const",params:{allowedValue: "takoform.form-package@v0"},message:"must be equal to constant"};
+for(const key0 in data){
+if(!((((((key0 === "apiVersion") || (key0 === "kind")) || (key0 === "packageVersion")) || (key0 === "formRef")) || (key0 === "definitionPath")) || (key0 === "files"))){
+const err6 = {instancePath,schemaPath:"#/additionalProperties",keyword:"additionalProperties",params:{additionalProperty: key0},message:"must NOT have additional properties"};
 if(vErrors === null){
 vErrors = [err6];
 }
@@ -279,11 +265,9 @@ vErrors.push(err6);
 errors++;
 }
 }
-if(data.packageVersion !== undefined){
-let data1 = data.packageVersion;
-if(typeof data1 === "string"){
-if(!pattern5.test(data1)){
-const err7 = {instancePath:instancePath+"/packageVersion",schemaPath:"#/properties/packageVersion/pattern",keyword:"pattern",params:{pattern: "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(\\.(0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*))?(\\+([0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*))?$"},message:"must match pattern \""+"^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(\\.(0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*))?(\\+([0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*))?$"+"\""};
+if(data.apiVersion !== undefined){
+if("packages.forms.takoform.com/v1alpha1" !== data.apiVersion){
+const err7 = {instancePath:instancePath+"/apiVersion",schemaPath:"#/properties/apiVersion/const",keyword:"const",params:{allowedValue: "packages.forms.takoform.com/v1alpha1"},message:"must be equal to constant"};
 if(vErrors === null){
 vErrors = [err7];
 }
@@ -293,8 +277,9 @@ vErrors.push(err7);
 errors++;
 }
 }
-else {
-const err8 = {instancePath:instancePath+"/packageVersion",schemaPath:"#/properties/packageVersion/type",keyword:"type",params:{type: "string"},message:"must be string"};
+if(data.kind !== undefined){
+if("FormPackage" !== data.kind){
+const err8 = {instancePath:instancePath+"/kind",schemaPath:"#/properties/kind/const",keyword:"const",params:{allowedValue: "FormPackage"},message:"must be equal to constant"};
 if(vErrors === null){
 vErrors = [err8];
 }
@@ -304,11 +289,11 @@ vErrors.push(err8);
 errors++;
 }
 }
-if(data.form !== undefined){
-let data2 = data.form;
-if(data2 && typeof data2 == "object" && !Array.isArray(data2)){
-if(data2.type === undefined){
-const err9 = {instancePath:instancePath+"/form",schemaPath:"form-ref.schema.json/required",keyword:"required",params:{missingProperty: "type"},message:"must have required property '"+"type"+"'"};
+if(data.packageVersion !== undefined){
+let data2 = data.packageVersion;
+if(typeof data2 === "string"){
+if(!pattern5.test(data2)){
+const err9 = {instancePath:instancePath+"/packageVersion",schemaPath:"#/properties/packageVersion/pattern",keyword:"pattern",params:{pattern: "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(\\.(0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*))?(\\+([0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*))?$"},message:"must match pattern \""+"^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(\\.(0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*))?(\\+([0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*))?$"+"\""};
 if(vErrors === null){
 vErrors = [err9];
 }
@@ -317,8 +302,9 @@ vErrors.push(err9);
 }
 errors++;
 }
-if(data2.version === undefined){
-const err10 = {instancePath:instancePath+"/form",schemaPath:"form-ref.schema.json/required",keyword:"required",params:{missingProperty: "version"},message:"must have required property '"+"version"+"'"};
+}
+else {
+const err10 = {instancePath:instancePath+"/packageVersion",schemaPath:"#/properties/packageVersion/type",keyword:"type",params:{type: "string"},message:"must be string"};
 if(vErrors === null){
 vErrors = [err10];
 }
@@ -327,8 +313,12 @@ vErrors.push(err10);
 }
 errors++;
 }
-if(data2.schemaDigest === undefined){
-const err11 = {instancePath:instancePath+"/form",schemaPath:"form-ref.schema.json/required",keyword:"required",params:{missingProperty: "schemaDigest"},message:"must have required property '"+"schemaDigest"+"'"};
+}
+if(data.formRef !== undefined){
+let data3 = data.formRef;
+if(data3 && typeof data3 == "object" && !Array.isArray(data3)){
+if(data3.apiVersion === undefined){
+const err11 = {instancePath:instancePath+"/formRef",schemaPath:"form-ref.schema.json/required",keyword:"required",params:{missingProperty: "apiVersion"},message:"must have required property '"+"apiVersion"+"'"};
 if(vErrors === null){
 vErrors = [err11];
 }
@@ -337,9 +327,8 @@ vErrors.push(err11);
 }
 errors++;
 }
-for(const key1 in data2){
-if(!(((key1 === "type") || (key1 === "version")) || (key1 === "schemaDigest"))){
-const err12 = {instancePath:instancePath+"/form",schemaPath:"form-ref.schema.json/additionalProperties",keyword:"additionalProperties",params:{additionalProperty: key1},message:"must NOT have additional properties"};
+if(data3.kind === undefined){
+const err12 = {instancePath:instancePath+"/formRef",schemaPath:"form-ref.schema.json/required",keyword:"required",params:{missingProperty: "kind"},message:"must have required property '"+"kind"+"'"};
 if(vErrors === null){
 vErrors = [err12];
 }
@@ -348,13 +337,8 @@ vErrors.push(err12);
 }
 errors++;
 }
-}
-if(data2.type !== undefined){
-let data3 = data2.type;
-const _errs11 = errors;
-const _errs12 = errors;
-if("revocations" !== data3){
-const err13 = {};
+if(data3.definitionVersion === undefined){
+const err13 = {instancePath:instancePath+"/formRef",schemaPath:"form-ref.schema.json/required",keyword:"required",params:{missingProperty: "definitionVersion"},message:"must have required property '"+"definitionVersion"+"'"};
 if(vErrors === null){
 vErrors = [err13];
 }
@@ -363,9 +347,8 @@ vErrors.push(err13);
 }
 errors++;
 }
-var valid3 = _errs12 === errors;
-if(valid3){
-const err14 = {instancePath:instancePath+"/form/type",schemaPath:"form-ref.schema.json/properties/type/not",keyword:"not",params:{},message:"must NOT be valid"};
+if(data3.schemaDigest === undefined){
+const err14 = {instancePath:instancePath+"/formRef",schemaPath:"form-ref.schema.json/required",keyword:"required",params:{missingProperty: "schemaDigest"},message:"must have required property '"+"schemaDigest"+"'"};
 if(vErrors === null){
 vErrors = [err14];
 }
@@ -374,20 +357,9 @@ vErrors.push(err14);
 }
 errors++;
 }
-else {
-errors = _errs11;
-if(vErrors !== null){
-if(_errs11){
-vErrors.length = _errs11;
-}
-else {
-vErrors = null;
-}
-}
-}
-if(typeof data3 === "string"){
-if(!pattern4.test(data3)){
-const err15 = {instancePath:instancePath+"/form/type",schemaPath:"form-ref.schema.json/properties/type/pattern",keyword:"pattern",params:{pattern: "^[a-z][a-z0-9_]{0,63}$"},message:"must match pattern \""+"^[a-z][a-z0-9_]{0,63}$"+"\""};
+for(const key1 in data3){
+if(!((((key1 === "apiVersion") || (key1 === "kind")) || (key1 === "definitionVersion")) || (key1 === "schemaDigest"))){
+const err15 = {instancePath:instancePath+"/formRef",schemaPath:"form-ref.schema.json/additionalProperties",keyword:"additionalProperties",params:{additionalProperty: key1},message:"must NOT have additional properties"};
 if(vErrors === null){
 vErrors = [err15];
 }
@@ -397,8 +369,9 @@ vErrors.push(err15);
 errors++;
 }
 }
-else {
-const err16 = {instancePath:instancePath+"/form/type",schemaPath:"form-ref.schema.json/properties/type/type",keyword:"type",params:{type: "string"},message:"must be string"};
+if(data3.apiVersion !== undefined){
+if("forms.takoform.com/v1alpha1" !== data3.apiVersion){
+const err16 = {instancePath:instancePath+"/formRef/apiVersion",schemaPath:"form-ref.schema.json/properties/apiVersion/const",keyword:"const",params:{allowedValue: "forms.takoform.com/v1alpha1"},message:"must be equal to constant"};
 if(vErrors === null){
 vErrors = [err16];
 }
@@ -408,11 +381,11 @@ vErrors.push(err16);
 errors++;
 }
 }
-if(data2.version !== undefined){
-let data4 = data2.version;
-if(typeof data4 === "string"){
-if(!pattern5.test(data4)){
-const err17 = {instancePath:instancePath+"/form/version",schemaPath:"form-ref.schema.json/properties/version/pattern",keyword:"pattern",params:{pattern: "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(\\.(0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*))?(\\+([0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*))?$"},message:"must match pattern \""+"^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(\\.(0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*))?(\\+([0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*))?$"+"\""};
+if(data3.kind !== undefined){
+let data5 = data3.kind;
+if(typeof data5 === "string"){
+if(!pattern4.test(data5)){
+const err17 = {instancePath:instancePath+"/formRef/kind",schemaPath:"form-ref.schema.json/properties/kind/pattern",keyword:"pattern",params:{pattern: "^[A-Z][A-Za-z0-9]{0,63}$"},message:"must match pattern \""+"^[A-Z][A-Za-z0-9]{0,63}$"+"\""};
 if(vErrors === null){
 vErrors = [err17];
 }
@@ -423,7 +396,7 @@ errors++;
 }
 }
 else {
-const err18 = {instancePath:instancePath+"/form/version",schemaPath:"form-ref.schema.json/properties/version/type",keyword:"type",params:{type: "string"},message:"must be string"};
+const err18 = {instancePath:instancePath+"/formRef/kind",schemaPath:"form-ref.schema.json/properties/kind/type",keyword:"type",params:{type: "string"},message:"must be string"};
 if(vErrors === null){
 vErrors = [err18];
 }
@@ -433,11 +406,11 @@ vErrors.push(err18);
 errors++;
 }
 }
-if(data2.schemaDigest !== undefined){
-let data5 = data2.schemaDigest;
-if(typeof data5 === "string"){
-if(!pattern6.test(data5)){
-const err19 = {instancePath:instancePath+"/form/schemaDigest",schemaPath:"form-ref.schema.json/properties/schemaDigest/pattern",keyword:"pattern",params:{pattern: "^sha256:[0-9a-f]{64}$"},message:"must match pattern \""+"^sha256:[0-9a-f]{64}$"+"\""};
+if(data3.definitionVersion !== undefined){
+let data6 = data3.definitionVersion;
+if(typeof data6 === "string"){
+if(!pattern5.test(data6)){
+const err19 = {instancePath:instancePath+"/formRef/definitionVersion",schemaPath:"form-ref.schema.json/properties/definitionVersion/pattern",keyword:"pattern",params:{pattern: "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(\\.(0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*))?(\\+([0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*))?$"},message:"must match pattern \""+"^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(\\.(0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*))?(\\+([0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*))?$"+"\""};
 if(vErrors === null){
 vErrors = [err19];
 }
@@ -448,7 +421,7 @@ errors++;
 }
 }
 else {
-const err20 = {instancePath:instancePath+"/form/schemaDigest",schemaPath:"form-ref.schema.json/properties/schemaDigest/type",keyword:"type",params:{type: "string"},message:"must be string"};
+const err20 = {instancePath:instancePath+"/formRef/definitionVersion",schemaPath:"form-ref.schema.json/properties/definitionVersion/type",keyword:"type",params:{type: "string"},message:"must be string"};
 if(vErrors === null){
 vErrors = [err20];
 }
@@ -458,9 +431,11 @@ vErrors.push(err20);
 errors++;
 }
 }
-}
-else {
-const err21 = {instancePath:instancePath+"/form",schemaPath:"form-ref.schema.json/type",keyword:"type",params:{type: "object"},message:"must be object"};
+if(data3.schemaDigest !== undefined){
+let data7 = data3.schemaDigest;
+if(typeof data7 === "string"){
+if(!pattern6.test(data7)){
+const err21 = {instancePath:instancePath+"/formRef/schemaDigest",schemaPath:"form-ref.schema.json/properties/schemaDigest/pattern",keyword:"pattern",params:{pattern: "^sha256:[0-9a-f]{64}$"},message:"must match pattern \""+"^sha256:[0-9a-f]{64}$"+"\""};
 if(vErrors === null){
 vErrors = [err21];
 }
@@ -470,13 +445,8 @@ vErrors.push(err21);
 errors++;
 }
 }
-if(data.definitionPath !== undefined){
-let data6 = data.definitionPath;
-const _errs20 = errors;
-const _errs21 = errors;
-if(typeof data6 === "string"){
-if(!pattern11.test(data6)){
-const err22 = {};
+else {
+const err22 = {instancePath:instancePath+"/formRef/schemaDigest",schemaPath:"form-ref.schema.json/properties/schemaDigest/type",keyword:"type",params:{type: "string"},message:"must be string"};
 if(vErrors === null){
 vErrors = [err22];
 }
@@ -486,14 +456,42 @@ vErrors.push(err22);
 errors++;
 }
 }
-var valid5 = _errs21 === errors;
-if(valid5){
-const err23 = {instancePath:instancePath+"/definitionPath",schemaPath:"#/$defs/packagePath/not",keyword:"not",params:{},message:"must NOT be valid"};
+}
+else {
+const err23 = {instancePath:instancePath+"/formRef",schemaPath:"form-ref.schema.json/type",keyword:"type",params:{type: "object"},message:"must be object"};
 if(vErrors === null){
 vErrors = [err23];
 }
 else {
 vErrors.push(err23);
+}
+errors++;
+}
+}
+if(data.definitionPath !== undefined){
+let data8 = data.definitionPath;
+const _errs20 = errors;
+const _errs21 = errors;
+if(typeof data8 === "string"){
+if(!pattern11.test(data8)){
+const err24 = {};
+if(vErrors === null){
+vErrors = [err24];
+}
+else {
+vErrors.push(err24);
+}
+errors++;
+}
+}
+var valid4 = _errs21 === errors;
+if(valid4){
+const err25 = {instancePath:instancePath+"/definitionPath",schemaPath:"#/$defs/packagePath/not",keyword:"not",params:{},message:"must NOT be valid"};
+if(vErrors === null){
+vErrors = [err25];
+}
+else {
+vErrors.push(err25);
 }
 errors++;
 }
@@ -508,29 +506,9 @@ vErrors = null;
 }
 }
 }
-if(typeof data6 === "string"){
-if(func1(data6) > 240){
-const err24 = {instancePath:instancePath+"/definitionPath",schemaPath:"#/$defs/packagePath/maxLength",keyword:"maxLength",params:{limit: 240},message:"must NOT have more than 240 characters"};
-if(vErrors === null){
-vErrors = [err24];
-}
-else {
-vErrors.push(err24);
-}
-errors++;
-}
-if(func1(data6) < 1){
-const err25 = {instancePath:instancePath+"/definitionPath",schemaPath:"#/$defs/packagePath/minLength",keyword:"minLength",params:{limit: 1},message:"must NOT have fewer than 1 characters"};
-if(vErrors === null){
-vErrors = [err25];
-}
-else {
-vErrors.push(err25);
-}
-errors++;
-}
-if(!pattern12.test(data6)){
-const err26 = {instancePath:instancePath+"/definitionPath",schemaPath:"#/$defs/packagePath/pattern",keyword:"pattern",params:{pattern: "^[A-Za-z0-9._-]*[A-Za-z0-9_-](/[A-Za-z0-9._-]*[A-Za-z0-9_-])*$"},message:"must match pattern \""+"^[A-Za-z0-9._-]*[A-Za-z0-9_-](/[A-Za-z0-9._-]*[A-Za-z0-9_-])*$"+"\""};
+if(typeof data8 === "string"){
+if(func1(data8) > 240){
+const err26 = {instancePath:instancePath+"/definitionPath",schemaPath:"#/$defs/packagePath/maxLength",keyword:"maxLength",params:{limit: 240},message:"must NOT have more than 240 characters"};
 if(vErrors === null){
 vErrors = [err26];
 }
@@ -539,9 +517,8 @@ vErrors.push(err26);
 }
 errors++;
 }
-}
-else {
-const err27 = {instancePath:instancePath+"/definitionPath",schemaPath:"#/$defs/packagePath/type",keyword:"type",params:{type: "string"},message:"must be string"};
+if(func1(data8) < 1){
+const err27 = {instancePath:instancePath+"/definitionPath",schemaPath:"#/$defs/packagePath/minLength",keyword:"minLength",params:{limit: 1},message:"must NOT have fewer than 1 characters"};
 if(vErrors === null){
 vErrors = [err27];
 }
@@ -550,12 +527,8 @@ vErrors.push(err27);
 }
 errors++;
 }
-}
-if(data.files !== undefined){
-let data7 = data.files;
-if(Array.isArray(data7)){
-if(data7.length < 1){
-const err28 = {instancePath:instancePath+"/files",schemaPath:"#/properties/files/minItems",keyword:"minItems",params:{limit: 1},message:"must NOT have fewer than 1 items"};
+if(!pattern12.test(data8)){
+const err28 = {instancePath:instancePath+"/definitionPath",schemaPath:"#/$defs/packagePath/pattern",keyword:"pattern",params:{pattern: "^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$"},message:"must match pattern \""+"^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$"+"\""};
 if(vErrors === null){
 vErrors = [err28];
 }
@@ -564,12 +537,9 @@ vErrors.push(err28);
 }
 errors++;
 }
-const len0 = data7.length;
-for(let i0=0; i0<len0; i0++){
-let data8 = data7[i0];
-if(data8 && typeof data8 == "object" && !Array.isArray(data8)){
-if(data8.path === undefined){
-const err29 = {instancePath:instancePath+"/files/" + i0,schemaPath:"#/properties/files/items/required",keyword:"required",params:{missingProperty: "path"},message:"must have required property '"+"path"+"'"};
+}
+else {
+const err29 = {instancePath:instancePath+"/definitionPath",schemaPath:"#/$defs/packagePath/type",keyword:"type",params:{type: "string"},message:"must be string"};
 if(vErrors === null){
 vErrors = [err29];
 }
@@ -578,8 +548,12 @@ vErrors.push(err29);
 }
 errors++;
 }
-if(data8.mediaType === undefined){
-const err30 = {instancePath:instancePath+"/files/" + i0,schemaPath:"#/properties/files/items/required",keyword:"required",params:{missingProperty: "mediaType"},message:"must have required property '"+"mediaType"+"'"};
+}
+if(data.files !== undefined){
+let data9 = data.files;
+if(Array.isArray(data9)){
+if(data9.length < 1){
+const err30 = {instancePath:instancePath+"/files",schemaPath:"#/properties/files/minItems",keyword:"minItems",params:{limit: 1},message:"must NOT have fewer than 1 items"};
 if(vErrors === null){
 vErrors = [err30];
 }
@@ -588,8 +562,12 @@ vErrors.push(err30);
 }
 errors++;
 }
-if(data8.size === undefined){
-const err31 = {instancePath:instancePath+"/files/" + i0,schemaPath:"#/properties/files/items/required",keyword:"required",params:{missingProperty: "size"},message:"must have required property '"+"size"+"'"};
+const len0 = data9.length;
+for(let i0=0; i0<len0; i0++){
+let data10 = data9[i0];
+if(data10 && typeof data10 == "object" && !Array.isArray(data10)){
+if(data10.path === undefined){
+const err31 = {instancePath:instancePath+"/files/" + i0,schemaPath:"#/properties/files/items/required",keyword:"required",params:{missingProperty: "path"},message:"must have required property '"+"path"+"'"};
 if(vErrors === null){
 vErrors = [err31];
 }
@@ -598,8 +576,8 @@ vErrors.push(err31);
 }
 errors++;
 }
-if(data8.digest === undefined){
-const err32 = {instancePath:instancePath+"/files/" + i0,schemaPath:"#/properties/files/items/required",keyword:"required",params:{missingProperty: "digest"},message:"must have required property '"+"digest"+"'"};
+if(data10.mediaType === undefined){
+const err32 = {instancePath:instancePath+"/files/" + i0,schemaPath:"#/properties/files/items/required",keyword:"required",params:{missingProperty: "mediaType"},message:"must have required property '"+"mediaType"+"'"};
 if(vErrors === null){
 vErrors = [err32];
 }
@@ -608,9 +586,8 @@ vErrors.push(err32);
 }
 errors++;
 }
-for(const key2 in data8){
-if(!((((key2 === "path") || (key2 === "mediaType")) || (key2 === "size")) || (key2 === "digest"))){
-const err33 = {instancePath:instancePath+"/files/" + i0,schemaPath:"#/properties/files/items/additionalProperties",keyword:"additionalProperties",params:{additionalProperty: key2},message:"must NOT have additional properties"};
+if(data10.size === undefined){
+const err33 = {instancePath:instancePath+"/files/" + i0,schemaPath:"#/properties/files/items/required",keyword:"required",params:{missingProperty: "size"},message:"must have required property '"+"size"+"'"};
 if(vErrors === null){
 vErrors = [err33];
 }
@@ -619,14 +596,8 @@ vErrors.push(err33);
 }
 errors++;
 }
-}
-if(data8.path !== undefined){
-let data9 = data8.path;
-const _errs30 = errors;
-const _errs31 = errors;
-if(typeof data9 === "string"){
-if(!pattern11.test(data9)){
-const err34 = {};
+if(data10.digest === undefined){
+const err34 = {instancePath:instancePath+"/files/" + i0,schemaPath:"#/properties/files/items/required",keyword:"required",params:{missingProperty: "digest"},message:"must have required property '"+"digest"+"'"};
 if(vErrors === null){
 vErrors = [err34];
 }
@@ -635,15 +606,42 @@ vErrors.push(err34);
 }
 errors++;
 }
-}
-var valid10 = _errs31 === errors;
-if(valid10){
-const err35 = {instancePath:instancePath+"/files/" + i0+"/path",schemaPath:"#/$defs/packagePath/not",keyword:"not",params:{},message:"must NOT be valid"};
+for(const key2 in data10){
+if(!((((key2 === "path") || (key2 === "mediaType")) || (key2 === "size")) || (key2 === "digest"))){
+const err35 = {instancePath:instancePath+"/files/" + i0,schemaPath:"#/properties/files/items/additionalProperties",keyword:"additionalProperties",params:{additionalProperty: key2},message:"must NOT have additional properties"};
 if(vErrors === null){
 vErrors = [err35];
 }
 else {
 vErrors.push(err35);
+}
+errors++;
+}
+}
+if(data10.path !== undefined){
+let data11 = data10.path;
+const _errs30 = errors;
+const _errs31 = errors;
+if(typeof data11 === "string"){
+if(!pattern11.test(data11)){
+const err36 = {};
+if(vErrors === null){
+vErrors = [err36];
+}
+else {
+vErrors.push(err36);
+}
+errors++;
+}
+}
+var valid9 = _errs31 === errors;
+if(valid9){
+const err37 = {instancePath:instancePath+"/files/" + i0+"/path",schemaPath:"#/$defs/packagePath/not",keyword:"not",params:{},message:"must NOT be valid"};
+if(vErrors === null){
+vErrors = [err37];
+}
+else {
+vErrors.push(err37);
 }
 errors++;
 }
@@ -658,29 +656,9 @@ vErrors = null;
 }
 }
 }
-if(typeof data9 === "string"){
-if(func1(data9) > 240){
-const err36 = {instancePath:instancePath+"/files/" + i0+"/path",schemaPath:"#/$defs/packagePath/maxLength",keyword:"maxLength",params:{limit: 240},message:"must NOT have more than 240 characters"};
-if(vErrors === null){
-vErrors = [err36];
-}
-else {
-vErrors.push(err36);
-}
-errors++;
-}
-if(func1(data9) < 1){
-const err37 = {instancePath:instancePath+"/files/" + i0+"/path",schemaPath:"#/$defs/packagePath/minLength",keyword:"minLength",params:{limit: 1},message:"must NOT have fewer than 1 characters"};
-if(vErrors === null){
-vErrors = [err37];
-}
-else {
-vErrors.push(err37);
-}
-errors++;
-}
-if(!pattern12.test(data9)){
-const err38 = {instancePath:instancePath+"/files/" + i0+"/path",schemaPath:"#/$defs/packagePath/pattern",keyword:"pattern",params:{pattern: "^[A-Za-z0-9._-]*[A-Za-z0-9_-](/[A-Za-z0-9._-]*[A-Za-z0-9_-])*$"},message:"must match pattern \""+"^[A-Za-z0-9._-]*[A-Za-z0-9_-](/[A-Za-z0-9._-]*[A-Za-z0-9_-])*$"+"\""};
+if(typeof data11 === "string"){
+if(func1(data11) > 240){
+const err38 = {instancePath:instancePath+"/files/" + i0+"/path",schemaPath:"#/$defs/packagePath/maxLength",keyword:"maxLength",params:{limit: 240},message:"must NOT have more than 240 characters"};
 if(vErrors === null){
 vErrors = [err38];
 }
@@ -689,9 +667,8 @@ vErrors.push(err38);
 }
 errors++;
 }
-}
-else {
-const err39 = {instancePath:instancePath+"/files/" + i0+"/path",schemaPath:"#/$defs/packagePath/type",keyword:"type",params:{type: "string"},message:"must be string"};
+if(func1(data11) < 1){
+const err39 = {instancePath:instancePath+"/files/" + i0+"/path",schemaPath:"#/$defs/packagePath/minLength",keyword:"minLength",params:{limit: 1},message:"must NOT have fewer than 1 characters"};
 if(vErrors === null){
 vErrors = [err39];
 }
@@ -700,11 +677,8 @@ vErrors.push(err39);
 }
 errors++;
 }
-}
-if(data8.mediaType !== undefined){
-let data10 = data8.mediaType;
-if(!(((((data10 === "application/vnd.takoform.form-definition.v0+json") || (data10 === "application/schema+json")) || (data10 === "application/json")) || (data10 === "text/markdown")) || (data10 === "text/plain"))){
-const err40 = {instancePath:instancePath+"/files/" + i0+"/mediaType",schemaPath:"#/properties/files/items/properties/mediaType/enum",keyword:"enum",params:{allowedValues: schema32.properties.files.items.properties.mediaType.enum},message:"must be equal to one of the allowed values"};
+if(!pattern12.test(data11)){
+const err40 = {instancePath:instancePath+"/files/" + i0+"/path",schemaPath:"#/$defs/packagePath/pattern",keyword:"pattern",params:{pattern: "^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$"},message:"must match pattern \""+"^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$"+"\""};
 if(vErrors === null){
 vErrors = [err40];
 }
@@ -714,10 +688,8 @@ vErrors.push(err40);
 errors++;
 }
 }
-if(data8.size !== undefined){
-let data11 = data8.size;
-if(!((typeof data11 == "number") && (!(data11 % 1) && !isNaN(data11)))){
-const err41 = {instancePath:instancePath+"/files/" + i0+"/size",schemaPath:"#/properties/files/items/properties/size/type",keyword:"type",params:{type: "integer"},message:"must be integer"};
+else {
+const err41 = {instancePath:instancePath+"/files/" + i0+"/path",schemaPath:"#/$defs/packagePath/type",keyword:"type",params:{type: "string"},message:"must be string"};
 if(vErrors === null){
 vErrors = [err41];
 }
@@ -726,9 +698,11 @@ vErrors.push(err41);
 }
 errors++;
 }
-if(typeof data11 == "number"){
-if(data11 > 67108864 || isNaN(data11)){
-const err42 = {instancePath:instancePath+"/files/" + i0+"/size",schemaPath:"#/properties/files/items/properties/size/maximum",keyword:"maximum",params:{comparison: "<=", limit: 67108864},message:"must be <= 67108864"};
+}
+if(data10.mediaType !== undefined){
+let data12 = data10.mediaType;
+if(!(((((data12 === "application/vnd.takoform.form-definition.v1+json") || (data12 === "application/schema+json")) || (data12 === "application/json")) || (data12 === "text/markdown")) || (data12 === "text/plain"))){
+const err42 = {instancePath:instancePath+"/files/" + i0+"/mediaType",schemaPath:"#/properties/files/items/properties/mediaType/enum",keyword:"enum",params:{allowedValues: schema32.properties.files.items.properties.mediaType.enum},message:"must be equal to one of the allowed values"};
 if(vErrors === null){
 vErrors = [err42];
 }
@@ -737,8 +711,11 @@ vErrors.push(err42);
 }
 errors++;
 }
-if(data11 < 0 || isNaN(data11)){
-const err43 = {instancePath:instancePath+"/files/" + i0+"/size",schemaPath:"#/properties/files/items/properties/size/minimum",keyword:"minimum",params:{comparison: ">=", limit: 0},message:"must be >= 0"};
+}
+if(data10.size !== undefined){
+let data13 = data10.size;
+if(!((typeof data13 == "number") && (!(data13 % 1) && !isNaN(data13)))){
+const err43 = {instancePath:instancePath+"/files/" + i0+"/size",schemaPath:"#/properties/files/items/properties/size/type",keyword:"type",params:{type: "integer"},message:"must be integer"};
 if(vErrors === null){
 vErrors = [err43];
 }
@@ -747,13 +724,9 @@ vErrors.push(err43);
 }
 errors++;
 }
-}
-}
-if(data8.digest !== undefined){
-let data12 = data8.digest;
-if(typeof data12 === "string"){
-if(!pattern6.test(data12)){
-const err44 = {instancePath:instancePath+"/files/" + i0+"/digest",schemaPath:"#/properties/files/items/properties/digest/pattern",keyword:"pattern",params:{pattern: "^sha256:[0-9a-f]{64}$"},message:"must match pattern \""+"^sha256:[0-9a-f]{64}$"+"\""};
+if(typeof data13 == "number"){
+if(data13 > 67108864 || isNaN(data13)){
+const err44 = {instancePath:instancePath+"/files/" + i0+"/size",schemaPath:"#/properties/files/items/properties/size/maximum",keyword:"maximum",params:{comparison: "<=", limit: 67108864},message:"must be <= 67108864"};
 if(vErrors === null){
 vErrors = [err44];
 }
@@ -762,9 +735,8 @@ vErrors.push(err44);
 }
 errors++;
 }
-}
-else {
-const err45 = {instancePath:instancePath+"/files/" + i0+"/digest",schemaPath:"#/properties/files/items/properties/digest/type",keyword:"type",params:{type: "string"},message:"must be string"};
+if(data13 < 0 || isNaN(data13)){
+const err45 = {instancePath:instancePath+"/files/" + i0+"/size",schemaPath:"#/properties/files/items/properties/size/minimum",keyword:"minimum",params:{comparison: ">=", limit: 0},message:"must be >= 0"};
 if(vErrors === null){
 vErrors = [err45];
 }
@@ -775,8 +747,11 @@ errors++;
 }
 }
 }
-else {
-const err46 = {instancePath:instancePath+"/files/" + i0,schemaPath:"#/properties/files/items/type",keyword:"type",params:{type: "object"},message:"must be object"};
+if(data10.digest !== undefined){
+let data14 = data10.digest;
+if(typeof data14 === "string"){
+if(!pattern6.test(data14)){
+const err46 = {instancePath:instancePath+"/files/" + i0+"/digest",schemaPath:"#/properties/files/items/properties/digest/pattern",keyword:"pattern",params:{pattern: "^sha256:[0-9a-f]{64}$"},message:"must match pattern \""+"^sha256:[0-9a-f]{64}$"+"\""};
 if(vErrors === null){
 vErrors = [err46];
 }
@@ -786,16 +761,8 @@ vErrors.push(err46);
 errors++;
 }
 }
-const _errs37 = errors;
-const len1 = data7.length;
-let valid11 = false;
-let count0 = 0;
-for(let i1=0; i1<len1; i1++){
-let data13 = data7[i1];
-const _errs38 = errors;
-if(data13 && typeof data13 == "object" && !Array.isArray(data13)){
-if(data13.mediaType === undefined){
-const err47 = {instancePath:instancePath+"/files/" + i1,schemaPath:"#/properties/files/contains/required",keyword:"required",params:{missingProperty: "mediaType"},message:"must have required property '"+"mediaType"+"'"};
+else {
+const err47 = {instancePath:instancePath+"/files/" + i0+"/digest",schemaPath:"#/properties/files/items/properties/digest/type",keyword:"type",params:{type: "string"},message:"must be string"};
 if(vErrors === null){
 vErrors = [err47];
 }
@@ -804,9 +771,10 @@ vErrors.push(err47);
 }
 errors++;
 }
-if(data13.mediaType !== undefined){
-if("application/vnd.takoform.form-definition.v0+json" !== data13.mediaType){
-const err48 = {instancePath:instancePath+"/files/" + i1+"/mediaType",schemaPath:"#/properties/files/contains/properties/mediaType/const",keyword:"const",params:{allowedValue: "application/vnd.takoform.form-definition.v0+json"},message:"must be equal to constant"};
+}
+}
+else {
+const err48 = {instancePath:instancePath+"/files/" + i0,schemaPath:"#/properties/files/items/type",keyword:"type",params:{type: "object"},message:"must be object"};
 if(vErrors === null){
 vErrors = [err48];
 }
@@ -816,9 +784,16 @@ vErrors.push(err48);
 errors++;
 }
 }
-}
-else {
-const err49 = {instancePath:instancePath+"/files/" + i1,schemaPath:"#/properties/files/contains/type",keyword:"type",params:{type: "object"},message:"must be object"};
+const _errs37 = errors;
+const len1 = data9.length;
+let valid10 = false;
+let count0 = 0;
+for(let i1=0; i1<len1; i1++){
+let data15 = data9[i1];
+const _errs38 = errors;
+if(data15 && typeof data15 == "object" && !Array.isArray(data15)){
+if(data15.mediaType === undefined){
+const err49 = {instancePath:instancePath+"/files/" + i1,schemaPath:"#/properties/files/contains/required",keyword:"required",params:{missingProperty: "mediaType"},message:"must have required property '"+"mediaType"+"'"};
 if(vErrors === null){
 vErrors = [err49];
 }
@@ -827,23 +802,46 @@ vErrors.push(err49);
 }
 errors++;
 }
-var _valid0 = _errs38 === errors;
-if(_valid0){
-count0++;
-if(count0 > 1){
-valid11 = false;
-break;
-}
-valid11 = true;
-}
-}
-if(!valid11){
-const err50 = {instancePath:instancePath+"/files",schemaPath:"#/properties/files/contains",keyword:"contains",params:{minContains: 1, maxContains: 1},message:"must contain at least 1 and no more than 1 valid item(s)"};
+if(data15.mediaType !== undefined){
+if("application/vnd.takoform.form-definition.v1+json" !== data15.mediaType){
+const err50 = {instancePath:instancePath+"/files/" + i1+"/mediaType",schemaPath:"#/properties/files/contains/properties/mediaType/const",keyword:"const",params:{allowedValue: "application/vnd.takoform.form-definition.v1+json"},message:"must be equal to constant"};
 if(vErrors === null){
 vErrors = [err50];
 }
 else {
 vErrors.push(err50);
+}
+errors++;
+}
+}
+}
+else {
+const err51 = {instancePath:instancePath+"/files/" + i1,schemaPath:"#/properties/files/contains/type",keyword:"type",params:{type: "object"},message:"must be object"};
+if(vErrors === null){
+vErrors = [err51];
+}
+else {
+vErrors.push(err51);
+}
+errors++;
+}
+var _valid0 = _errs38 === errors;
+if(_valid0){
+count0++;
+if(count0 > 1){
+valid10 = false;
+break;
+}
+valid10 = true;
+}
+}
+if(!valid10){
+const err52 = {instancePath:instancePath+"/files",schemaPath:"#/properties/files/contains",keyword:"contains",params:{minContains: 1, maxContains: 1},message:"must contain at least 1 and no more than 1 valid item(s)"};
+if(vErrors === null){
+vErrors = [err52];
+}
+else {
+vErrors.push(err52);
 }
 errors++;
 }
@@ -860,24 +858,24 @@ vErrors = null;
 }
 }
 else {
-const err51 = {instancePath:instancePath+"/files",schemaPath:"#/properties/files/type",keyword:"type",params:{type: "array"},message:"must be array"};
+const err53 = {instancePath:instancePath+"/files",schemaPath:"#/properties/files/type",keyword:"type",params:{type: "array"},message:"must be array"};
 if(vErrors === null){
-vErrors = [err51];
+vErrors = [err53];
 }
 else {
-vErrors.push(err51);
+vErrors.push(err53);
 }
 errors++;
 }
 }
 }
 else {
-const err52 = {instancePath,schemaPath:"#/type",keyword:"type",params:{type: "object"},message:"must be object"};
+const err54 = {instancePath,schemaPath:"#/type",keyword:"type",params:{type: "object"},message:"must be object"};
 if(vErrors === null){
-vErrors = [err52];
+vErrors = [err54];
 }
 else {
-vErrors.push(err52);
+vErrors.push(err54);
 }
 errors++;
 }
@@ -893,7 +891,6 @@ const schema41 = {"type":"string","maxLength":512,"pattern":"^(?:/(?:[^~/]|~[01]
 const schema42 = {"type":"string","minLength":1,"maxLength":240,"pattern":"^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$","not":{"pattern":"(^|/)\\.\\.?($|/)"}};
 const func5 = Object.prototype.hasOwnProperty;
 import { deepCompareStrict as func0 } from "@cfworker/json-schema";
-const pattern16 = new RegExp("^[A-Z][A-Za-z0-9]{0,63}$", "u");
 const pattern18 = new RegExp("^(?:/(?:[^~/]|~0|~1)*)+$", "u");
 const pattern19 = new RegExp("^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$", "u");
 const pattern20 = new RegExp("^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$", "u");
@@ -901,7 +898,6 @@ const pattern21 = new RegExp("^[A-Za-z][A-Za-z0-9._-]{0,63}$", "u");
 const pattern23 = new RegExp("^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)+$", "u");
 const pattern24 = new RegExp("^(?:/(?:[^~/]|~[01])*)*$", "u");
 const pattern25 = new RegExp("^[a-z0-9][a-z0-9._-]{0,127}$", "u");
-const pattern27 = new RegExp("^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$", "u");
 const pattern35 = new RegExp("^[a-z][a-z0-9._-]{2,127}$", "u");
 
 function validate22(data, {instancePath="", parentData, parentDataProperty, rootData=data, dynamicAnchors={}}={}){
@@ -1023,7 +1019,7 @@ errors++;
 if(data.kind !== undefined){
 let data1 = data.kind;
 if(typeof data1 === "string"){
-if(!pattern16.test(data1)){
+if(!pattern4.test(data1)){
 const err10 = {instancePath:instancePath+"/kind",schemaPath:"#/properties/kind/pattern",keyword:"pattern",params:{pattern: "^[A-Z][A-Za-z0-9]{0,63}$"},message:"must match pattern \""+"^[A-Z][A-Za-z0-9]{0,63}$"+"\""};
 if(vErrors === null){
 vErrors = [err10];
@@ -2045,7 +2041,7 @@ vErrors.push(err88);
 }
 errors++;
 }
-if(!pattern27.test(data34)){
+if(!pattern12.test(data34)){
 const err89 = {instancePath:instancePath+"/conformanceFixtures/" + i8+"/desiredPath",schemaPath:"#/$defs/packagePath/pattern",keyword:"pattern",params:{pattern: "^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$"},message:"must match pattern \""+"^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$"+"\""};
 if(vErrors === null){
 vErrors = [err89];
@@ -2126,7 +2122,7 @@ vErrors.push(err94);
 }
 errors++;
 }
-if(!pattern27.test(data35)){
+if(!pattern12.test(data35)){
 const err95 = {instancePath:instancePath+"/conformanceFixtures/" + i8+"/observedPath",schemaPath:"#/$defs/packagePath/pattern",keyword:"pattern",params:{pattern: "^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$"},message:"must match pattern \""+"^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$"+"\""};
 if(vErrors === null){
 vErrors = [err95];
@@ -2207,7 +2203,7 @@ vErrors.push(err100);
 }
 errors++;
 }
-if(!pattern27.test(data36)){
+if(!pattern12.test(data36)){
 const err101 = {instancePath:instancePath+"/conformanceFixtures/" + i8+"/outputPath",schemaPath:"#/$defs/packagePath/pattern",keyword:"pattern",params:{pattern: "^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$"},message:"must match pattern \""+"^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$"+"\""};
 if(vErrors === null){
 vErrors = [err101];
@@ -2439,7 +2435,7 @@ vErrors.push(err118);
 }
 errors++;
 }
-if(!pattern27.test(data41)){
+if(!pattern12.test(data41)){
 const err119 = {instancePath:instancePath+"/negativeConformanceFixtures/" + i10+"/inputPath",schemaPath:"#/$defs/packagePath/pattern",keyword:"pattern",params:{pattern: "^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$"},message:"must match pattern \""+"^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$"+"\""};
 if(vErrors === null){
 vErrors = [err119];

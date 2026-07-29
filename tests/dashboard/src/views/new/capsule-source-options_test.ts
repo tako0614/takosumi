@@ -14,8 +14,18 @@ test("CapsuleSourceOptions chooser only hands one selected source to /new", asyn
   );
   expect(source).toContain("parseCapsuleSourceOptionsText(file.text)");
   expect(source).toContain("file.digest");
-  expect(source).toContain("snapshot.resolvedCommit");
+  // Provenance — pin an absent ref to the newest stable SemVer tag, then prove
+  // the snapshot came back on that exact commit — now lives in the shared
+  // reader both snapshot pickers use. The chooser records the commit it got.
+  expect(source).toContain("readSnapshotDocument({");
+  expect(source).toContain("commit,");
   expect(source).toContain("resolveStableSourceTag(workspaceId");
+  const reader = await readFile(
+    resolve(root, "dashboard/src/lib/snapshot-document.ts"),
+    "utf8",
+  );
+  expect(reader).toContain("resolveStableSourceTag(");
+  expect(reader).toContain("snapshot.resolvedCommit !== resolved.commit");
   expect(source).toContain("navigate(");
   expect(source).toContain("`/new${capsuleSourceOptionInstallSearch");
   expect(source).not.toContain("createCapsule(");

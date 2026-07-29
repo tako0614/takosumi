@@ -120,9 +120,7 @@ cp .env.example .env
 
 `.env` を編集します。ここで書き換えるのは `POSTGRES_PASSWORD`、
 `TAKOSUMI_ACCOUNTS_ISSUER`、`TAKOSUMI_ACCOUNTS_PUBLIC_HOSTNAME`、OIDC client の
-登録、それに `TAKOSUMI_REVIEWED_PROVIDER_ASSET_ROOT` です。最後の 1 つは
-レビュー済みの provider ミラーを置いたホスト側の絶対パスで、イメージのビルド入力です。
-実行時の認証情報ではありません。
+登録です。
 
 `.env` の値は compose ファイルの変数展開に使われるだけで、そのままコンテナへ渡るわけでは
 ありません。同梱の `docker-compose.yml` が `accounts` サービスに渡すのは、上に挙げた

@@ -216,7 +216,9 @@ operator 管理用の Takosumi API として残りますが、Takoform provider 
 ## Verification
 
 Takosumi の black-box conformance runner は discovery、exact Form availability、
-preview/apply、idempotent replay、read、digest substitution rejection、observe、
-refresh、import、delete と、canonical `/v1` Resource/audit parity を検証します。
+config fixture rejection、preview/apply、idempotent replay、read、digest
+substitution rejection、refresh、sync、optional import、delete と、canonical
+`/v1` Resource/audit parity を検証します。出力は portable conformance report
+であり、signed admission artifact や release candidate は生成しません。
 Takoform provider 側は同じ wire contract、mutation fence、response identity、
 same-origin discovery、Interface CRUD を独立して検証します。

@@ -688,6 +688,20 @@ function storeInstallConfigsForSource(
   );
 }
 
+/**
+ * Store navigation must resolve to exactly one service-owned InstallConfig.
+ * Direct Git imports may use the generic config, but a Store listing may not:
+ * doing so would discard its declared Outputs and Interface blueprints.
+ */
+function uniqueStoreInstallConfigForSource(
+  configs: readonly InstallConfig[],
+  url: string,
+  path: string,
+): InstallConfig | null {
+  const matches = storeInstallConfigsForSource(configs, url, path);
+  return matches.length === 1 ? matches[0]! : null;
+}
+
 function storeMetadataFromStoreListing(listing: TcsListing): StoreMetadata {
   const fallbackName = {
     ja: listing.suggestedName,
@@ -880,6 +894,7 @@ export {
   storeSourceMatchesListing,
   storeSourceMatchesCoordinate,
   storeInstallConfigsForSource,
+  uniqueStoreInstallConfigForSource,
   storeMetadataFromStoreListing,
   storeEntryIdFromStoreListing,
   storeEntryFromStoreListing,

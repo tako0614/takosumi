@@ -41,8 +41,6 @@ Build and verify the OSS target from the product root:
 bun install
 bun run check
 (cd dashboard && bun run build)
-(cd dashboard && bun run assemble:provider-mirror -- \
-  --asset-root "$TAKOSUMI_REVIEWED_PROVIDER_ASSET_ROOT")
 bun run docs:build
 ```
 
@@ -51,12 +49,6 @@ The dashboard build resolves the Store tab's default store from
 and self-hosted builds. An operator may set its own TCS server explicitly; the
 official Takosumi Cloud build is likewise responsible for explicitly injecting
 `https://store.takosumi.com`. Users can still add store servers themselves.
-
-The SPA build is intentionally network-free. A distribution must assemble its
-provider mirror from an operator-supplied directory of already reviewed,
-digest-pinned assets. The materializer fails when any admitted asset is absent
-or mismatched; it never treats the live hosted mirror or a process-global
-temporary cache as a build input.
 
 Before deploying code that requires a newer control-ledger D1 shape, run the
 [Control D1 schema predeploy](control-d1-schema-predeploy.md) gate against the
@@ -86,7 +78,7 @@ When Resource Shape kinds are enabled, the platform worker also runs bounded
 read-only observation on the five-minute cron. Set its batch, concurrency,
 cadence, and abandoned-lease window with the
 `TAKOSUMI_RESOURCE_OBSERVATION_*` variables documented in
-[Operator](../reference/operator.md). This scheduler reports drift but never
+[Configuration](../reference/configuration.md). This scheduler reports drift but never
 applies or refreshes a Resource.
 
 ## Authentication configuration
@@ -148,10 +140,11 @@ The Takosumi native shell is a public PKCE client with the exact
 ]
 ```
 
-`/.well-known/takosumi` derives and publishes this exact `clientId` from the
-registered public client. There is no separate mobile-client environment
-variable. Zero matching clients leaves `oidcClientId` absent and blocks native
-sign-in; more than one matching client is invalid configuration.
+`/.well-known/takosumi` publishes the exact registered public client selected
+by `TAKOSUMI_MOBILE_OIDC_CLIENT_ID`. The selector is not a second client
+definition: it must name one entry in `TAKOSUMI_ACCOUNTS_CLIENTS`. An absent
+selector leaves `oidcClientId` absent and blocks native sign-in; an unknown or
+incompatible selected client is invalid configuration.
 
 A Takos native shell connecting to this Accounts issuer is a separate,
 host-specific public PKCE client, for example:

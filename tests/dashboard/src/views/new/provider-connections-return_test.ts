@@ -384,7 +384,13 @@ describe("/new Provider Connections return context", () => {
     expect(newAppViewSource).toContain("sourceIdFromControlError");
     expect(newAppViewSource).toContain("onSourceCreated");
     expect(newAppViewSource).toContain("const retryAfterSyncWait = () =>");
-    expect(newAppViewSource).toContain("else void runCompatibilityCheck()");
+    // No report yet → recheck; report in hand → straight back into the flow.
+    // Either way the retry keeps the install screen up, so it must raise
+    // `installing` on the branch that runFlow's own busy() does not cover.
+    expect(newAppViewSource).toContain(
+      "void runCompatibilityCheck().finally(() => setInstalling(false))",
+    );
+    expect(newAppViewSource).toContain("if (compatibility()) {");
   });
 
   test("/new surfaces source-sync diagnostics instead of hiding ref errors", () => {

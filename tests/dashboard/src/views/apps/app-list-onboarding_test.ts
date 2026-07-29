@@ -111,11 +111,16 @@ describe("AppListView app launcher", () => {
   });
 
   test("tile face is image → declared icon → kind glyph; empty points at the service list", () => {
-    expect(appListSource).toContain("imageSrc()");
-    expect(appListSource).toContain("emojiIcon()");
-    expect(appListSource).toContain('class="av-tile-image"');
-    expect(appListSource).toContain('class="av-tile-emoji"');
-    expect(appListSource).toContain("av-tile-icon-image");
+    // The image → emoji → monogram chain is the shared AppFace's; the tile
+    // supplies only its own class names and the kind tint.
+    expect(appListSource).toContain("<AppFace");
+    expect(appListSource).toContain(
+      "resolveAppIcon(surface().icon, surface().url)",
+    );
+    expect(appListSource).toContain('imageClass="av-tile-image"');
+    expect(appListSource).toContain('emojiClass="av-tile-emoji"');
+    expect(appListSource).toContain('imageFrameClass="av-tile-icon-image"');
+    expect(appListSource).toContain("monogramFrameClass={kindClass(");
     // Product identity comes from the Interface document; a display name must
     // never select a Takosumi-bundled product icon.
     expect(appListSource).not.toContain("CURATED_APP_ICONS");

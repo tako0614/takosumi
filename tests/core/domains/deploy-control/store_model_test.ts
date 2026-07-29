@@ -782,6 +782,91 @@ test("commitRunState writes nothing when the Capsule guard loses", async () => {
   }
 });
 
+test("commitRestoredState persists the rebased Output with terminal restore state across stores", async () => {
+  for (const [label, store] of await stores()) {
+    const seeded = await seedCapsuleModel(store, {
+      workspaceId: "workspace_test",
+      capsuleId: "capsule_restore_commit",
+    });
+    const queued = {
+      id: "restore_commit",
+      workspaceId: seeded.workspace.id,
+      capsuleId: seeded.capsule.id,
+      environment: seeded.capsule.environment,
+      type: "restore" as const,
+      status: "queued" as const,
+      backupId: "backup_restore_commit",
+      restoreStateGeneration: 0,
+      createdBy: "operator",
+      createdAt: TS,
+    };
+    await store.putBackupRun(queued);
+    const running = {
+      ...queued,
+      status: "running" as const,
+      startedAt: TS,
+    };
+    const claim = await store.transitionRun({
+      id: queued.id,
+      kind: "restore",
+      expectFrom: ["queued"],
+      run: running,
+      setLeaseToken: "restore_commit_lease",
+      heartbeatAt: 1,
+    });
+    expect(claim.won, label).toBe(true);
+
+    const restoredState = stateVersion(seeded.capsule.id, {
+      id: "state_restore_commit",
+      createdByRunId: queued.id,
+    });
+    const restoredOutput = output(seeded.capsule.id, {
+      id: "output_restore_commit",
+    });
+    const committed = await store.commitRestoredState({
+      stateVersion: restoredState,
+      output: restoredOutput,
+      capsulePatch: {
+        id: seeded.capsule.id,
+        patch: {
+          currentStateVersionId: restoredState.id,
+          currentStateGeneration: restoredState.generation,
+          currentOutputId: restoredOutput.id,
+          status: "stale",
+          updatedAt: TS,
+        },
+        guard: {
+          currentStateGeneration: seeded.capsule.currentStateGeneration,
+          status: seeded.capsule.status,
+        },
+      },
+      restoreRunTerminal: {
+        ...running,
+        status: "succeeded",
+        restoredStateVersionId: restoredState.id,
+        finishedAt: TS,
+      },
+      restoreRunLeaseToken: "restore_commit_lease",
+    });
+
+    expect(committed.capsule?.currentStateVersionId, label).toBe(
+      restoredState.id,
+    );
+    expect(committed.capsule?.currentOutputId, label).toBe(restoredOutput.id);
+    expect(
+      (await store.getStateVersion(restoredState.id))?.generation,
+      label,
+    ).toBe(restoredState.generation);
+    expect(
+      (await store.getOutput(restoredOutput.id))?.stateGeneration,
+      label,
+    ).toBe(restoredOutput.stateGeneration);
+    expect((await store.getBackupRun(queued.id))?.status, label).toBe(
+      "succeeded",
+    );
+  }
+});
+
 test("runtime safety treats lifecycle-only mutation evidence identically in memory, Postgres, and D1", async () => {
   for (const [label, store] of await stores()) {
     const mutationCapsule = `capsule_lifecycle_mutation_${label}`;

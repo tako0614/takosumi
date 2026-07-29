@@ -9,13 +9,8 @@ import {
   type CapsuleCompositionComponent,
   type CapsuleCompositionManifest,
 } from "../../lib/composition-manifest.ts";
-import {
-  createSource,
-  extractRunId,
-  readSourceSnapshotFile,
-  syncSource,
-  waitForLatestSourceSnapshot,
-} from "../../lib/control-api.ts";
+import { readSourceSnapshotFile } from "../../lib/control-api.ts";
+import { readSnapshotDocument } from "../../lib/snapshot-document.ts";
 import { currentWorkspaceId } from "../../lib/workspace-state.ts";
 
 export default function CompositionInstallView() {
@@ -47,26 +42,17 @@ function Inner() {
     setLoading(true);
     setError(undefined);
     try {
-      const source = await createSource({
+      const { file } = await readSnapshotDocument({
         workspaceId,
-        name: `composition-${selector.path
+        namePrefix: `composition-${selector.path
           .split("/")
           .at(-1)!
           .replace(/\.json$/u, "")}`,
-        url: selector.git,
-        defaultRef: selector.ref,
-        defaultPath: ".",
-        autoSync: false,
+        git: selector.git,
+        ref: selector.ref,
+        path: selector.path,
+        read: readSourceSnapshotFile,
       });
-      const sync = await syncSource(source.source.id);
-      const snapshot = await waitForLatestSourceSnapshot(source.source.id, {
-        runId: extractRunId(sync),
-      });
-      const file = await readSourceSnapshotFile(
-        source.source.id,
-        snapshot.id,
-        selector.path,
-      );
       setComposition(await parseCompositionManifestText(file.text));
     } catch (cause) {
       setError(
@@ -104,7 +90,7 @@ function Inner() {
         }
       >
         <Show when={error()}>
-          <div class="wb-status-panel is-error" role="alert">
+          <div class="wb-action-callout" role="alert">
             {error()}
           </div>
         </Show>

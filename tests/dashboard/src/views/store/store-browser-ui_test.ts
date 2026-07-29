@@ -29,8 +29,13 @@ describe("StoreBrowser install UI", () => {
       storeBrowserSource.indexOf("} as const;"),
     );
     expect(table.length).toBeGreaterThan(0);
+    // Mirrors tests/dashboard/src/i18n's blocked list. `InstallConfig` and
+    // `fail-closed` were missing here, so the only copy the i18n guard cannot
+    // see was also the only copy allowed to leak those two.
     for (const banned of [
       "Capsule",
+      "InstallConfig",
+      "fail-closed",
       "TargetPool",
       "SpacePolicy",
       "Resource Shape",
@@ -41,13 +46,30 @@ describe("StoreBrowser install UI", () => {
     ]) {
       expect(table).not.toContain(banned);
     }
-    // One verb for one action, matching ja.ts's `new.installCta`.
-    expect(table).toContain('ja: "インストール"');
-    expect(table).not.toContain('ja: "追加", en: "Add" },\n  installAria');
-    // Every entry carries both locales.
-    const entries = table.match(/ja: "[^"]*"/g) ?? [];
-    const english = table.match(/en: "[^"]*"/g) ?? [];
+    // One verb for one action, matching ja.ts's `new.installCta`. 「追加」 is
+    // that verb: 42 dictionary entries say 追加 and the progress, done and
+    // error lines all do, so a button reading インストール made pressing one
+    // word produce another.
+    expect(table).toContain('install: { ja: "追加", en: "Add" }');
+    expect(table).not.toContain('ja: "インストール"');
+    // Every entry carries both locales...
+    const entries = table.match(/ja: "([^"]*)"/g) ?? [];
+    const english = table.match(/en: "([^"]*)"/g) ?? [];
     expect(entries.length).toBe(english.length);
+    // ...neither is empty, and both interpolate the same placeholders — the
+    // parity the i18n dictionaries get from their own test.
+    const ja = [...table.matchAll(/ja: "([^"]*)"/g)].map((m) => m[1]!);
+    const en = [...table.matchAll(/en: "([^"]*)"/g)].map((m) => m[1]!);
+    const placeholders = (s: string) =>
+      [...s.matchAll(/\{(\w+)\}/g)].map((m) => m[1]!).sort();
+    for (const [i, jaValue] of ja.entries()) {
+      expect(jaValue.length).toBeGreaterThan(0);
+      expect(en[i]!.length).toBeGreaterThan(0);
+      expect({ i, params: placeholders(jaValue) }).toEqual({
+        i,
+        params: placeholders(en[i]!),
+      });
+    }
   });
 
   test("presents service choices like installable apps", () => {
@@ -74,9 +96,13 @@ describe("StoreBrowser install UI", () => {
     expect(storeBrowserCss).toContain(".tcs-card-title");
     expect(storeBrowserCss).not.toContain(".tcs-card-open h3");
     // Face is the repo's declared icon (full-bleed) with a monogram fallback —
-    // not a per-kind glyph. Kind is not a browse facet anymore.
-    expect(storeBrowserSource).toContain("function monogramInitials");
-    expect(storeBrowserSource).toContain('class="tcs-app-mono"');
+    // not a per-kind glyph. Kind is not a browse facet anymore. The monogram
+    // rule and the broken-icon fallback come from the shared AppFace, so the
+    // same service cannot come out "PH" here and "PB" on the launcher; only
+    // the .tcs-* frame stays local (the component renders standalone).
+    expect(storeBrowserSource).toContain("<AppFace");
+    expect(storeBrowserSource).not.toContain("function monogramInitials");
+    expect(storeBrowserSource).toContain('monogramClass="tcs-app-mono"');
     expect(storeBrowserCss).toContain(".tcs-app-mono");
     expect(storeBrowserSource).not.toContain("data-kind");
     expect(storeBrowserSource).not.toContain("tcsKindLabel");
@@ -85,12 +111,10 @@ describe("StoreBrowser install UI", () => {
     expect(storeBrowserSource).not.toContain("tcs-badge");
     expect(storeBrowserSource).not.toContain("showKindFilters");
     expect(storeBrowserSource).not.toContain("localListings");
-    // App-store vocabulary and posture: the card action reads インストール, and
-    // the grid uses the quiet variant so a page of apps is not a page of
-    // primary buttons. The filled accent is reserved for the detail drawer.
-    expect(storeBrowserSource).toContain(
-      'install: { ja: "インストール", en: "Install" }',
-    );
+    // App-store vocabulary and posture: the card action reads 追加 — the one
+    // verb, pinned above — and the grid uses the quiet variant so a page of
+    // apps is not a page of primary buttons. The filled accent is reserved for
+    // the detail drawer.
     expect(storeBrowserSource).toContain('"tcs-btn tcs-install"');
     expect(storeBrowserSource).toContain("installButton(listing(), true)");
     expect(storeBrowserSource).toContain("installButton(listing)");

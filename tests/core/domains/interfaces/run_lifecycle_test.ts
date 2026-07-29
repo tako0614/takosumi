@@ -532,8 +532,9 @@ output "endpoint" {
   ).toBe("Ready");
 
   // Restore start clears resolved inputs and revokes delivery before the runner
-  // is invoked. A successful restore reconciles against the restored Capsule,
-  // which remains NotReady while the Capsule is intentionally stale.
+  // is invoked. A successful restore atomically re-pins both StateVersion and
+  // its matching Output, so reconciliation may recover that exact revision
+  // even though the Capsule remains stale relative to its desired source.
   const firstRestore = await operations.controller.createRestoreRun(
     capsule.workspaceId,
     "backup_lifecycle_1",
@@ -564,8 +565,18 @@ output "endpoint" {
   completeFirstRestore();
   await firstDispatch;
   const afterRestore = await operations.interfaces.get(iface.metadata.id);
-  expect(afterRestore.status.phase).toBe("NotReady");
-  expect(afterRestore.status.resolvedInputs).toBeUndefined();
+  expect(afterRestore.status.phase).toBe("Resolved");
+  expect(afterRestore.status.resolvedInputs).toEqual({
+    endpoint: "https://runtime.example.test/mcp",
+  });
+  expect(
+    (
+      await operations.interfaces.getBinding(
+        iface.metadata.id,
+        binding.metadata.id,
+      )
+    ).status.phase,
+  ).toBe("Ready");
 
   // Re-activate only for the failure exercise. The second restore starts from a
   // healthy resolved revision, then its runner failure must leave it Unknown.

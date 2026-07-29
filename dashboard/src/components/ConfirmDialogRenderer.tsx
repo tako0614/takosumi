@@ -5,7 +5,7 @@ import {
   useConfirmDialogActions,
   useConfirmDialogState,
 } from "../lib/confirm-dialog.ts";
-import { inertBackground } from "../lib/modal-inert.ts";
+import { openModalDialog } from "../lib/modal-dialog.ts";
 
 /**
  * Self-contained confirm-dialog renderer for the Takosumi dashboard SPA.
@@ -25,44 +25,20 @@ export function ConfirmDialogRenderer() {
   let cardRef: HTMLDivElement | undefined;
   let cancelRef: HTMLButtonElement | undefined;
 
-  // aria-modal contract: while open, the backgrounded app is inert, focus
-  // moves INTO the dialog (so Escape and Tab actually reach it), Tab cycles
-  // inside, Escape cancels, and focus returns to the previously-focused
-  // element on close.
+  // aria-modal contract from lib/modal-dialog.ts — shared with the store's
+  // detail drawer. The local copy this replaces collected only `button` as
+  // focusable, so the first link or input added to this card would have let
+  // Tab walk out onto the inert page behind it.
   createEffect(() => {
     if (!state().isOpen) return;
-    const previous = document.activeElement as HTMLElement | null;
-    const restoreInert = overlayRef ? inertBackground(overlayRef) : undefined;
-    queueMicrotask(() => cancelRef?.focus());
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        handleCancel();
-        return;
-      }
-      if (e.key === "Tab" && cardRef) {
-        const focusables = Array.from(
-          cardRef.querySelectorAll<HTMLElement>("button"),
-        );
-        if (focusables.length === 0) return;
-        const first = focusables[0];
-        const last = focusables[focusables.length - 1];
-        if (e.shiftKey && document.activeElement === first) {
-          e.preventDefault();
-          last.focus();
-        } else if (!e.shiftKey && document.activeElement === last) {
-          e.preventDefault();
-          first.focus();
-        }
-      }
-    };
-    document.addEventListener("keydown", onKeyDown);
-    onCleanup(() => {
-      document.removeEventListener("keydown", onKeyDown);
-      // Restore before refocusing: an inert element refuses focus.
-      restoreInert?.();
-      previous?.focus?.();
-    });
+    onCleanup(
+      openModalDialog({
+        overlay: () => overlayRef,
+        surface: () => cardRef,
+        initialFocus: () => cancelRef,
+        onDismiss: handleCancel,
+      }),
+    );
   });
 
   return (

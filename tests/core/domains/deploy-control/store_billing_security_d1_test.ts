@@ -164,6 +164,269 @@ test("d1 commitRunState writes the unit atomically and rolls back a guard confli
   );
 });
 
+test("d1 commitRunState keeps the Capsule pointer CAS inside the atomic batch", async () => {
+  const backing = new SqliteFakeD1();
+  const interleaving = new BeforeNextBatchD1(backing);
+  const store = new CloudflareD1OpenTofuControlStore(interleaving);
+  const TS = "2026-06-07T00:00:00.000Z";
+  const seeded = await seedCapsuleModel(store, {
+    workspaceId: "workspace_cas",
+    capsuleId: "capsule_cas",
+  });
+
+  interleaving.beforeNextBatch(async () => {
+    const winnerStore = new CloudflareD1OpenTofuControlStore(backing);
+    const current = await winnerStore.getCapsule(seeded.capsule.id);
+    expect(current).toBeDefined();
+    await winnerStore.putCapsule({
+      ...current!,
+      currentStateVersionId: "state_winner",
+      currentStateGeneration: 7,
+      updatedAt: "2026-06-07T00:00:01.000Z",
+    });
+  });
+
+  await expect(
+    store.commitRunState({
+      stateVersion: {
+        id: "state_loser",
+        workspaceId: seeded.workspace.id,
+        capsuleId: seeded.capsule.id,
+        environment: "production",
+        generation: 1,
+        stateRef: "opaque-state-loser",
+        digest: "sha256:state-loser",
+        createdByRunId: "apply_loser",
+        createdAt: TS,
+      },
+      output: {
+        id: "out_loser",
+        workspaceId: seeded.workspace.id,
+        capsuleId: seeded.capsule.id,
+        stateGeneration: 1,
+        rawArtifactRef: "opaque-output-loser",
+        publicOutputs: { launch_url: "https://loser.example" },
+        workspaceOutputs: { launch_url: "https://loser.example" },
+        outputDigest: "sha256:out-loser",
+        createdAt: TS,
+      },
+      capsulePatch: {
+        id: seeded.capsule.id,
+        patch: {
+          currentStateVersionId: "state_loser",
+          currentStateGeneration: 1,
+          currentOutputId: "out_loser",
+          status: "active",
+          updatedAt: TS,
+        },
+        guard: { currentStateVersionId: undefined, status: "pending" },
+      },
+    }),
+  ).rejects.toThrow(/currentStateVersionId guard lost the race/);
+
+  expect(await store.getStateVersion("state_loser")).toBeUndefined();
+  expect(await store.getOutput("out_loser")).toBeUndefined();
+  expect(
+    (await store.getCapsule(seeded.capsule.id))?.currentStateVersionId,
+  ).toBe("state_winner");
+});
+
+test("d1 restore atomically commits the rebased Output with state, Capsule, and terminal Run", async () => {
+  const store = new CloudflareD1OpenTofuControlStore(new SqliteFakeD1());
+  const TS = "2026-06-07T00:00:00.000Z";
+  const seeded = await seedCapsuleModel(store, {
+    workspaceId: "workspace_restore",
+    capsuleId: "capsule_restore",
+  });
+  const queued = {
+    id: "restore_atomic",
+    workspaceId: seeded.workspace.id,
+    capsuleId: seeded.capsule.id,
+    environment: "production",
+    type: "restore" as const,
+    status: "queued" as const,
+    backupId: "backup_atomic",
+    restoreStateGeneration: 0,
+    createdBy: "operator",
+    createdAt: TS,
+  };
+  await store.putBackupRun(queued);
+  const running = {
+    ...queued,
+    status: "running" as const,
+    startedAt: TS,
+  };
+  expect(
+    (
+      await store.transitionRun({
+        id: queued.id,
+        kind: "restore",
+        expectFrom: ["queued"],
+        run: running,
+        setLeaseToken: "restore_lease",
+        heartbeatAt: 1,
+      })
+    ).won,
+  ).toBe(true);
+
+  const committed = await store.commitRestoredState({
+    stateVersion: {
+      id: "state_restored",
+      workspaceId: seeded.workspace.id,
+      capsuleId: seeded.capsule.id,
+      environment: "production",
+      generation: 1,
+      stateRef: "opaque-state-restored",
+      digest: "sha256:state-restored",
+      createdByRunId: queued.id,
+      createdAt: TS,
+    },
+    output: {
+      id: "out_restored",
+      workspaceId: seeded.workspace.id,
+      capsuleId: seeded.capsule.id,
+      stateGeneration: 1,
+      rawArtifactRef: "opaque-output-restored",
+      publicOutputs: { launch_url: "https://restored.example" },
+      workspaceOutputs: { launch_url: "https://restored.example" },
+      outputDigest: "sha256:out-restored",
+      createdAt: TS,
+    },
+    capsulePatch: {
+      id: seeded.capsule.id,
+      patch: {
+        currentStateVersionId: "state_restored",
+        currentStateGeneration: 1,
+        currentOutputId: "out_restored",
+        status: "stale",
+        updatedAt: TS,
+      },
+      guard: {
+        currentStateGeneration: seeded.capsule.currentStateGeneration,
+        status: seeded.capsule.status,
+      },
+    },
+    restoreRunTerminal: {
+      ...running,
+      status: "succeeded",
+      restoredStateVersionId: "state_restored",
+      finishedAt: TS,
+    },
+    restoreRunLeaseToken: "restore_lease",
+  });
+
+  expect(committed.capsule?.currentStateVersionId).toBe("state_restored");
+  expect(committed.capsule?.currentOutputId).toBe("out_restored");
+  expect((await store.getStateVersion("state_restored"))?.generation).toBe(1);
+  expect((await store.getOutput("out_restored"))?.stateGeneration).toBe(1);
+  expect((await store.getBackupRun(queued.id))?.status).toBe("succeeded");
+});
+
+test("d1 restore rolls back state, Output, terminal Run, and lease clear when the Capsule write fails", async () => {
+  const db = new SqliteFakeD1();
+  const store = new CloudflareD1OpenTofuControlStore(db);
+  const TS = "2026-06-07T00:00:00.000Z";
+  const seeded = await seedCapsuleModel(store, {
+    workspaceId: "workspace_restore_rollback",
+    capsuleId: "capsule_restore_rollback",
+  });
+  const queued = {
+    id: "restore_rollback",
+    workspaceId: seeded.workspace.id,
+    capsuleId: seeded.capsule.id,
+    environment: "production",
+    type: "restore" as const,
+    status: "queued" as const,
+    backupId: "backup_rollback",
+    restoreStateGeneration: 0,
+    createdBy: "operator",
+    createdAt: TS,
+  };
+  await store.putBackupRun(queued);
+  const running = {
+    ...queued,
+    status: "running" as const,
+    startedAt: TS,
+  };
+  expect(
+    (
+      await store.transitionRun({
+        id: queued.id,
+        kind: "restore",
+        expectFrom: ["queued"],
+        run: running,
+        setLeaseToken: "restore_rollback_lease",
+        heartbeatAt: 1,
+      })
+    ).won,
+  ).toBe(true);
+  await db
+    .prepare(
+      `create trigger fail_restore_capsule_update
+       before update on capsules
+       when new.current_state_version_id = 'state_restore_rollback'
+       begin
+         select raise(abort, 'forced restore Capsule failure');
+       end`,
+    )
+    .run();
+
+  await expect(
+    store.commitRestoredState({
+      stateVersion: {
+        id: "state_restore_rollback",
+        workspaceId: seeded.workspace.id,
+        capsuleId: seeded.capsule.id,
+        environment: "production",
+        generation: 1,
+        stateRef: "opaque-state-rollback",
+        digest: "sha256:state-rollback",
+        createdByRunId: queued.id,
+        createdAt: TS,
+      },
+      output: {
+        id: "out_restore_rollback",
+        workspaceId: seeded.workspace.id,
+        capsuleId: seeded.capsule.id,
+        stateGeneration: 1,
+        rawArtifactRef: "opaque-output-rollback",
+        publicOutputs: { launch_url: "https://rollback.example" },
+        workspaceOutputs: { launch_url: "https://rollback.example" },
+        outputDigest: "sha256:out-rollback",
+        createdAt: TS,
+      },
+      capsulePatch: {
+        id: seeded.capsule.id,
+        patch: {
+          currentStateVersionId: "state_restore_rollback",
+          currentStateGeneration: 1,
+          currentOutputId: "out_restore_rollback",
+          status: "stale",
+          updatedAt: TS,
+        },
+        guard: {
+          currentStateGeneration: seeded.capsule.currentStateGeneration,
+          status: seeded.capsule.status,
+        },
+      },
+      restoreRunTerminal: {
+        ...running,
+        status: "succeeded",
+        restoredStateVersionId: "state_restore_rollback",
+        finishedAt: TS,
+      },
+      restoreRunLeaseToken: "restore_rollback_lease",
+    }),
+  ).rejects.toThrow("forced restore Capsule failure");
+
+  expect(await store.getStateVersion("state_restore_rollback")).toBeUndefined();
+  expect(await store.getOutput("out_restore_rollback")).toBeUndefined();
+  expect(
+    (await store.getCapsule(seeded.capsule.id))?.currentStateVersionId,
+  ).toBeUndefined();
+  expect((await store.getBackupRun(queued.id))?.status).toBe("running");
+});
+
 test("d1 atomic commits reject a batchless binding before database access", async () => {
   const operations: readonly {
     readonly name:
@@ -393,6 +656,29 @@ class LeaseChangingD1 implements D1Database {
       throw new Error("wrapped D1 binding does not support batch");
     }
     return this.inner.batch<T>(statements);
+  }
+}
+
+class BeforeNextBatchD1 implements D1Database {
+  #beforeNextBatch?: () => Promise<void>;
+
+  constructor(private readonly inner: D1Database) {}
+
+  prepare(query: string): D1PreparedStatement {
+    return this.inner.prepare(query);
+  }
+
+  beforeNextBatch(callback: () => Promise<void>): void {
+    this.#beforeNextBatch = callback;
+  }
+
+  async batch<T = unknown>(
+    statements: readonly D1PreparedStatement[],
+  ): Promise<readonly D1Result<T>[]> {
+    const before = this.#beforeNextBatch;
+    this.#beforeNextBatch = undefined;
+    await before?.();
+    return await this.inner.batch<T>(statements);
   }
 }
 

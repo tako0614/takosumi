@@ -321,9 +321,7 @@ async function resolveOidcAuthorizationSubject(input: {
   };
 }
 
-function oidcAuthorizationGrantFailure(
-  reason: OidcLiveGrantFailureReason,
-): {
+function oidcAuthorizationGrantFailure(reason: OidcLiveGrantFailureReason): {
   ok: false;
   status: number;
   error: string;
@@ -353,7 +351,7 @@ function oidcAuthorizationGrantFailure(
   };
 }
 
-function scopeIsAllowed(
+export function scopeIsAllowed(
   requestedScope: string,
   allowedScopes: readonly string[],
 ): boolean {
@@ -370,6 +368,21 @@ export async function handleAuthorize(input: {
   store: AccountsStore;
   operations?: ControlPlaneOperations;
 }): Promise<Response> {
+  // OAuth authorization is a top-level navigation. A subresource request can
+  // carry the account session cookie without any user interaction and follow
+  // the code redirect to the registered client (for example via <img>).
+  // Non-browser callers omit Sec-Fetch-Dest, so only an explicitly non-document
+  // browser destination is rejected.
+  const fetchDest = input.request.headers.get("sec-fetch-dest");
+  if (fetchDest !== null && fetchDest !== "document") {
+    return json(
+      {
+        error: "invalid_request",
+        error_description: "authorize must be a top-level navigation",
+      },
+      400,
+    );
+  }
   const responseType = input.url.searchParams.get("response_type");
   const clientId = input.url.searchParams.get("client_id");
   const redirectUri = input.url.searchParams.get("redirect_uri");
@@ -676,18 +689,16 @@ async function handleRefreshToken(input: {
   ) {
     return json({ error: "invalid_client" }, 401);
   }
-  const liveGrant = await observeSlowOidcRefreshStage(
-    "live_grant",
-    () =>
-      validateOidcLiveGrant({
-        store: input.store,
-        operations: input.operations,
-        client,
-        scope: record.scope,
-        takosumiSubject: record.takosumiSubject,
-        capsuleId: record.capsuleId,
-        workspaceId: record.workspaceId,
-      }),
+  const liveGrant = await observeSlowOidcRefreshStage("live_grant", () =>
+    validateOidcLiveGrant({
+      store: input.store,
+      operations: input.operations,
+      client,
+      scope: record.scope,
+      takosumiSubject: record.takosumiSubject,
+      capsuleId: record.capsuleId,
+      workspaceId: record.workspaceId,
+    }),
   );
   if (!liveGrant.ok) {
     await input.store.revokeRefreshChain(refreshToken);
@@ -1230,7 +1241,7 @@ function introspectionBody(
               ...(record.workspaceId
                 ? { workspace_id: record.workspaceId }
                 : {}),
-              ...(workspaceRole ?? record.role
+              ...((workspaceRole ?? record.role)
                 ? { role: workspaceRole ?? record.role }
                 : {}),
             },

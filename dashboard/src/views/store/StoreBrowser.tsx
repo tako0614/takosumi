@@ -29,7 +29,8 @@ import {
   removeTcsServer,
 } from "../../lib/tcs-servers.ts";
 import type { TcsListing, TcsSort } from "../../lib/tcs-client.ts";
-import { inertBackground } from "../../lib/modal-inert.ts";
+import { openModalDialog } from "../../lib/modal-dialog.ts";
+import AppFace from "../../components/AppFace.tsx";
 import "./StoreBrowser.css";
 
 const STR = {
@@ -79,8 +80,8 @@ const STR = {
     en: "No store source is configured.",
   },
   noStoreCta: { ja: "取得元を設定", en: "Configure a source" },
-  install: { ja: "インストール", en: "Install" },
-  installAria: { ja: "インストール: {name}", en: "Install {name}" },
+  install: { ja: "追加", en: "Add" },
+  installAria: { ja: "追加: {name}", en: "Add {name}" },
   loadingAnnounce: { ja: "読み込み中…", en: "Loading…" },
   resultsAnnounce: {
     ja: "{n} 件のサービスが見つかりました",
@@ -129,36 +130,17 @@ function listingSearchText(listing: TcsListing, locale: TcsLocale): string {
     .toLowerCase();
 }
 
-/** Monogram fallback (1–2 chars) for a listing whose repo declares no icon. */
-function monogramInitials(name: string): string {
-  const trimmed = name.trim();
-  if (!trimmed) return "?";
-  const compact = trimmed.replace(/[^\p{L}\p{N}]+/gu, "");
-  return (compact.slice(0, 2) || trimmed.slice(0, 1)).toUpperCase();
-}
-
+/** The store's frame around the shared face (icon → monogram). The monogram
+ * rule and the broken-icon fallback live in components/AppFace.tsx so the same
+ * app wears the same face here, on the launcher, and in the add flow. */
 function listingIcon(listing: TcsListing, locale: TcsLocale) {
-  const [failed, setFailed] = createSignal(false);
   return (
-    <span class="tcs-app-icon" aria-hidden="true">
-      <Show
-        when={listing.iconUrl && !failed() ? listing.iconUrl : undefined}
-        fallback={
-          <span class="tcs-app-mono">
-            {monogramInitials(pick(listing.name, locale))}
-          </span>
-        }
-      >
-        {(src) => (
-          <img
-            src={src()}
-            alt=""
-            loading="lazy"
-            onError={() => setFailed(true)}
-          />
-        )}
-      </Show>
-    </span>
+    <AppFace
+      class="tcs-app-icon"
+      monogramClass="tcs-app-mono"
+      name={pick(listing.name, locale)}
+      iconUrl={listing.iconUrl}
+    />
   );
 }
 
@@ -341,8 +323,10 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
       <button
         type="button"
         class={prominent ? "tcs-btn tcs-primary" : "tcs-btn tcs-install"}
-        // Every card repeats the same visible "追加"/"Add"; the accessible
-        // name carries the listing so the buttons are distinguishable.
+        // Every card repeats the same visible verb; the accessible name
+        // carries the listing so the buttons are distinguishable. The verb is
+        // 追加/Add — the same one the add flow's CTA and every progress,
+        // done and error line use.
         aria-label={s("installAria", props.locale).replace(
           "{name}",
           pick(listing.name, props.locale),
@@ -635,62 +619,19 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
 
       <Show when={selected()}>
         {(listing) => {
-          // Dialog semantics for the detail drawer: the backgrounded app is
-          // inert while open, focus moves in on open (so Escape reaches it),
-          // Escape closes, focus restores on close.
+          // Dialog semantics come from lib/modal-dialog.ts — the same contract
+          // the confirm dialog runs, rather than a second copy of it here.
           let overlayRef: HTMLDivElement | undefined;
           let drawerRef: HTMLElement | undefined;
-          let restoreInert: (() => void) | undefined;
-          const previous =
-            typeof document !== "undefined"
-              ? (document.activeElement as HTMLElement | null)
-              : null;
-          onMount(() => {
-            if (overlayRef) restoreInert = inertBackground(overlayRef);
-            queueMicrotask(() => drawerRef?.focus());
-          });
-          const onKeyDown = (e: KeyboardEvent) => {
-            if (e.key === "Escape") {
-              setSelected(null);
-              return;
-            }
-            // Trap Tab inside the modal drawer: an aria-modal dialog must not
-            // let focus escape to the page behind it. Only currently-visible
-            // controls count (collapsed <details> contents stay excluded).
-            if (e.key === "Tab" && drawerRef) {
-              const focusables = Array.from(
-                drawerRef.querySelectorAll<HTMLElement>(
-                  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])',
-                ),
-              ).filter((el) => el.offsetParent !== null);
-              const active = document.activeElement as HTMLElement | null;
-              if (focusables.length === 0) {
-                e.preventDefault();
-                drawerRef.focus();
-                return;
-              }
-              const first = focusables[0];
-              const last = focusables[focusables.length - 1];
-              if (e.shiftKey && (active === first || active === drawerRef)) {
-                e.preventDefault();
-                last.focus();
-              } else if (!e.shiftKey && active === last) {
-                e.preventDefault();
-                first.focus();
-              }
-            }
-          };
-          if (typeof document !== "undefined") {
-            document.addEventListener("keydown", onKeyDown);
-          }
-          onCleanup(() => {
-            if (typeof document !== "undefined") {
-              document.removeEventListener("keydown", onKeyDown);
-            }
-            // Restore before refocusing: an inert element refuses focus.
-            restoreInert?.();
-            previous?.focus?.();
-          });
+          onMount(() =>
+            onCleanup(
+              openModalDialog({
+                overlay: () => overlayRef,
+                surface: () => drawerRef,
+                onDismiss: () => setSelected(null),
+              }),
+            ),
+          );
           return (
             <div
               class="tcs-overlay"

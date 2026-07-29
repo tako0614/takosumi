@@ -416,18 +416,10 @@ export function registerPortableFormHostRoutes(
     return c.json(
       {
         resource: portableResource(result.value.resource),
-        selectedImplementation: result.value.selectedImplementation,
-        selectedTarget: result.value.selectedTarget,
-        portability: result.value.portability,
-        nativeResourcePlan: result.value.nativeResourcePlan,
-        riskNotes: result.value.riskNotes,
         review: {
           planDigest: result.value.planDigest,
           specDigest: result.value.specDigest,
         },
-        planDigest: result.value.planDigest,
-        specDigest: result.value.specDigest,
-        resolutionFingerprint: result.value.resolutionFingerprint,
         summary: result.value.summary,
       },
       200,

@@ -3,7 +3,7 @@ import { expect, test } from "bun:test";
 
 const ROOT = new URL("../../../", import.meta.url);
 
-test("node-postgres image requires an offline reviewed provider context", async () => {
+test("node-postgres image has no retired provider release build input", async () => {
   const [dockerfile, compose, dockerignore, dashboardPackage] =
     await Promise.all([
       readFile(new URL("deploy/node-postgres/Dockerfile", ROOT), "utf8"),
@@ -24,21 +24,13 @@ test("node-postgres image requires an offline reviewed provider context", async 
   expect(dockerfile).toContain(
     "FROM node:26.1.0-bookworm-slim AS app-docs",
   );
-  expect(dockerfile).toContain(
-    "COPY --from=reviewed_provider_assets / /reviewed-provider-assets/",
-  );
-  expect(dockerfile).toMatch(
-    /RUN --network=none cd dashboard &&[\s\S]*bun run assemble:provider-mirror --[\s\S]*--asset-root \/reviewed-provider-assets[\s\S]*--allow-network-fetch false[\s\S]*verify-mirror/u,
-  );
-  expect(compose).toContain(
-    "reviewed_provider_assets: \"${TAKOSUMI_REVIEWED_PROVIDER_ASSET_ROOT:?",
-  );
+  expect(dockerfile).not.toContain("reviewed_provider_assets");
+  expect(dockerfile).not.toContain("assemble:provider-mirror");
+  expect(compose).not.toContain("reviewed_provider_assets");
+  expect(compose).not.toContain("TAKOSUMI_REVIEWED_PROVIDER_ASSET_ROOT");
   expect(compose.match(/build: \*node-postgres-build/gu)).toHaveLength(2);
   expect(dockerignore).toContain("**/node_modules");
   expect(dockerignore).toContain("dashboard/dist");
-  expect(dockerignore).toContain("dashboard/public/opentofu/providers");
   expect(dashboardPackage.scripts.build).toBe("vite build");
-  expect(dashboardPackage.scripts["assemble:provider-mirror"]).toBe(
-    "bun ../scripts/provider-release.mjs materialize --output dist/opentofu/providers",
-  );
+  expect(dashboardPackage.scripts["assemble:provider-mirror"]).toBeUndefined();
 });

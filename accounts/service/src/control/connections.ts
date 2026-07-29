@@ -562,7 +562,7 @@ export async function completeConnectionOAuth(
     operations,
     store,
     workspaceId,
-    session: { subject },
+    session: { subject, requiredAccess: "write" },
   });
   if (!auth.ok) return redirectToConnections(url, { error: "forbidden" });
   let created: ConnectionResponse;

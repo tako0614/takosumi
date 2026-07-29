@@ -113,6 +113,11 @@ import {
   type Workspace,
 } from "../../lib/control-api.ts";
 import { locale, t } from "../../i18n/index.ts";
+import {
+  InstallProgressCard,
+  type InstallStep,
+} from "../../components/install/InstallProgress.tsx";
+import AppFace from "../../components/AppFace.tsx";
 import { StoreBrowser } from "../store/StoreBrowser.tsx";
 import { buildNewQuery } from "../store/store-link.ts";
 import { fetchTcsListing, type TcsListing } from "../../lib/tcs-client.ts";
@@ -205,6 +210,7 @@ import {
   safeStoreToken,
   nonEmptyStoreText,
   storeInstallConfigsForSource,
+  uniqueStoreInstallConfigForSource,
   storeEntryIdFromStoreListing,
   storeEntryFromStoreListing,
   sourceIdFromControlError,
@@ -263,11 +269,8 @@ function AnnouncedStatus(props: {
   );
 }
 
-function StoreIcon(props: { readonly entry: StoreEntry }) {
-  if (props.entry.iconUrl) {
-    return <img src={props.entry.iconUrl} alt="" loading="lazy" />;
-  }
-  switch (props.entry.kind) {
+function storeKindGlyph(kind: StoreEntry["kind"]) {
+  switch (kind) {
     case "worker":
       return <Cloud size={20} />;
     case "site":
@@ -277,6 +280,21 @@ function StoreIcon(props: { readonly entry: StoreEntry }) {
     default:
       return <Package size={20} />;
   }
+}
+
+/** The picked service's face. Goes through the shared AppFace so a listing
+ * whose icon URL 404s falls back to its kind glyph instead of painting a
+ * broken image — the store grid already did that, this screen did not — and so
+ * the icon host never gets the dashboard URL as a Referer. The old plain `if`
+ * also read `iconUrl` non-reactively, freezing the pre-InstallConfig entry. */
+function StoreIcon(props: { readonly entry: StoreEntry }) {
+  return (
+    <AppFace
+      name={props.entry.name[locale()]}
+      iconUrl={props.entry.iconUrl}
+      fallback={storeKindGlyph(props.entry.kind)}
+    />
+  );
 }
 
 export default function NewAppView() {
@@ -402,6 +420,9 @@ function Inner() {
   const [compatibility, setCompatibility] =
     createSignal<CapsuleCompatibilityResult | null>(null);
   const [checkingCompatibility, setCheckingCompatibility] = createSignal(false);
+  // Owned by submitInstall / the sync retry — the only two paths that are
+  // actually installing. See installProgressActive.
+  const [installing, setInstalling] = createSignal(false);
   const [appHostnameConflict, setAppHostnameConflict] = createSignal(false);
   const [providerRows, setProviderRows] = createSignal<ProviderConnectionRow[]>(
     [],
@@ -614,26 +635,18 @@ function Inner() {
     installConfigList();
     ensureConfigSelected();
   });
-  const genericInstallConfigForSource = (): InstallConfig =>
-    defaultGitInstallConfig() ?? {
-      id: DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
-      name: "opentofu-capsule",
-      variableMapping: {},
-      outputAllowlist: {},
-      policy: {},
-      createdAt: "",
-      updatedAt: "",
-    };
   const installConfigForStoreListing = (
     listing: TcsListing,
   ): InstallConfig | null => {
-    const matches = storeInstallConfigsForSource(
+    // A Store listing is presentation, not execution authority. It must select
+    // one service-owned InstallConfig by its exact Source coordinate; silently
+    // falling back to the generic direct-Git config drops app-specific Outputs
+    // and Interface blueprints, producing an active but unlaunchable Capsule.
+    return uniqueStoreInstallConfigForSource(
       installConfigList(),
       listing.source.url,
       listing.source.path,
     );
-    if (matches.length > 1) return null;
-    return matches[0] ?? genericInstallConfigForSource();
   };
   const storeEntryForListing = (listing: TcsListing): StoreEntry | null => {
     const config = installConfigForStoreListing(listing);
@@ -2008,8 +2021,14 @@ function Inner() {
   const sourceSummaryTitle = () =>
     sourceGitUrl() ? name().trim() || capsuleNameFromUrl(sourceGitUrl()) : "";
   const retryAfterSyncWait = () => {
-    if (compatibility()) void runFlow();
-    else void runCompatibilityCheck();
+    // Retrying a sync-blocked install IS installing, so it keeps the install
+    // screen (runFlow raises busy() on its own; the check path does not).
+    if (compatibility()) {
+      void runFlow();
+      return;
+    }
+    setInstalling(true);
+    void runCompatibilityCheck().finally(() => setInstalling(false));
   };
 
   /**
@@ -2019,31 +2038,39 @@ function Inner() {
    * panels can explain it — otherwise continue straight through to create + plan.
    */
   const submitInstall = async () => {
-    // A typed-but-unsaved source token used to fail validation with "save the
-    // token first", pointing at a separate button buried in 詳細設定. Saving it
-    // here is the same explicit action the user already asked for.
-    if (sourceAccessMode() === "token" && sourceToken().trim()) {
-      await saveSourceTokenConnection();
-      if (sourceTokenError()) return;
+    // The install screen goes up here, not at runFlow: the checks below are
+    // already part of the one action the visitor asked for, and a form that
+    // sits inert for a few seconds first reads as a dead button.
+    setInstalling(true);
+    try {
+      // A typed-but-unsaved source token used to fail validation with "save the
+      // token first", pointing at a separate button buried in 詳細設定. Saving
+      // it here is the same explicit action the user already asked for.
+      if (sourceAccessMode() === "token" && sourceToken().trim()) {
+        await saveSourceTokenConnection();
+        if (sourceTokenError()) return;
+      }
+      // Ensure source connections settle before validating source access.
+      await loadConnections().catch(() => []);
+      const validationError = validate();
+      if (validationError) {
+        setError(validationError);
+        return;
+      }
+      if (!compatibility()) {
+        await runCompatibilityCheck();
+        // The check failed or could not resolve a result; its error is shown.
+        if (!compatibility()) return;
+      }
+      await loadProviderConnections().catch(() => []);
+      await settleProviderConnectionRows();
+      // Blockers render inline from compatibility state (compat result panel /
+      // cloud-account callout). Stop here so the user can resolve them first.
+      if (!canContinue()) return;
+      await runFlow();
+    } finally {
+      setInstalling(false);
     }
-    // Ensure source connections settle before validating source access.
-    await loadConnections().catch(() => []);
-    const validationError = validate();
-    if (validationError) {
-      setError(validationError);
-      return;
-    }
-    if (!compatibility()) {
-      await runCompatibilityCheck();
-      // The check failed or could not resolve a result; its own error is shown.
-      if (!compatibility()) return;
-    }
-    await loadProviderConnections().catch(() => []);
-    await settleProviderConnectionRows();
-    // Blockers render inline from compatibility state (compat result panel /
-    // cloud-account callout). Stop here so the user can resolve them first.
-    if (!canContinue()) return;
-    await runFlow();
   };
 
   const findExistingCapsule = async (
@@ -2460,20 +2487,74 @@ function Inner() {
     { state: stepInstall(), label: t("new.step.create") },
     { state: stepPlan(), label: t("new.step.plan") },
   ];
-  const installProgressActive = () => checkingCompatibility() || busy();
-  const installProgressPercent = (): number => {
-    const steps = installSteps();
-    const done = steps.filter((step) => step.state === "done").length;
-    const running = steps.some((step) => step.state === "running") ? 0.5 : 0;
-    // Never render an empty bar: a just-started install still reads as moving.
-    return Math.max(8, Math.round(((done + running) / steps.length) * 100));
+  /** True from pressing インストール until the flow settles. The compatibility
+   * check alone cannot be the trigger: もう一度確認 runs the same check without
+   * installing anything, and it must not take the setup fields off the screen
+   * or claim an install is under way. */
+  const installProgressActive = () => installing() || busy();
+  /** Where this half of the install sits on the SHARED step list
+   * (components/install/InstallProgress.tsx). /new only ever reaches 内容を確認;
+   * /runs picks the same list up there, so the bar never restarts at the
+   * hand-off. The four signals above are the finer-grained twin of these steps
+   * and stay behind 詳しい進行状況. */
+  const installProgressStep = (): InstallStep => {
+    if (stepPlan() !== "idle") return "check";
+    if (stepInstall() !== "idle") return "create";
+    return "source";
   };
-  const installProgressLabel = (): string => {
-    const running = installSteps().find((step) => step.state === "running");
-    if (running) return running.label;
-    const next = installSteps().find((step) => step.state === "idle");
-    return next?.label ?? t("new.step.register");
+  /** The app being installed, named the same way the flow header names it.
+   * `sourceSummaryTitle` is "" before a source is known — the card wants
+   * undefined there so it falls back to its generic title. */
+  const installProgressName = (): string | undefined => {
+    const named = usingSelectedService()
+      ? (selectedServiceEntry()?.name[locale()] ?? sourceSummaryTitle())
+      : sourceSummaryTitle();
+    return named.trim() ? named : undefined;
   };
+  /** The install screen. Byte-for-byte the surface /runs/:id shows after the
+   * hand-off — same card, same step list, same bar — so pressing インストール
+   * never swaps the visitor onto a different-looking "installing" screen. */
+  const installProgressPanel = () => (
+    <InstallProgressCard
+      name={installProgressName()}
+      icon={
+        <Show when={selectedServiceEntry()} fallback={<Download size={22} />}>
+          {(entry) => <StoreIcon entry={entry()} />}
+        </Show>
+      }
+      step={installProgressStep()}
+      note={sourceSyncSlow() ? t("new.progress.slow") : undefined}
+      live
+    >
+      <Show when={sourceSyncRunStatus()}>
+        {(status) => (
+          <p class="av-install-note">
+            {t("new.progress.status", { status: runStatusLabel(status()) })}
+          </p>
+        )}
+      </Show>
+      {/* The four setup signals are the finer-grained twin of the shared
+          steps; they stay folded so the card reads the same on both routes. */}
+      <Show when={showSetupProgress()} fallback={null}>
+        <details class="wb-disclosure av-add-technical">
+          <summary>{t("new.progress.details")}</summary>
+          <ol class="wb-steps">
+            <For each={installSteps()}>
+              {(step) => (
+                <li class={`wb-step ${stepClass(step.state)}`}>
+                  <span class="wb-step-icon" aria-hidden="true">
+                    {stepIcon(step.state)}
+                  </span>
+                  <span class="sr-only">{stepStateLabel(step.state)}</span>
+                  {step.label}
+                </li>
+              )}
+            </For>
+          </ol>
+        </details>
+      </Show>
+    </InstallProgressCard>
+  );
 
   const gitFields = () => (
     <FormField label={t("new.git.url")}>
@@ -2954,227 +3035,103 @@ function Inner() {
             ref={chosenFlowSection}
             tabindex={-1}
           >
-            <div class="av-add-flow-back">
-              <Button
-                variant="ghost"
-                size="sm"
-                type="button"
-                icon={<ArrowLeft size={16} />}
-                disabled={busy()}
-                onClick={returnToDiscovery}
-              >
-                {t("new.flow.back")}
-              </Button>
-            </div>
-            <div class="av-add-flow-header">
-              <div class="av-add-flow-selected">
-                <div class="av-add-flow-icon" aria-hidden="true">
-                  <Show
-                    when={selectedServiceEntry()}
-                    fallback={<Download size={22} />}
-                  >
-                    {(entry) => <StoreIcon entry={entry()} />}
-                  </Show>
-                </div>
-                <div class="av-add-flow-copy">
-                  <h2>
-                    {usingSelectedService()
-                      ? (selectedServiceEntry()?.name[locale()] ??
-                        sourceSummaryTitle())
-                      : t("new.advancedImport.title")}
-                  </h2>
-                  <p class="av-add-flow-by">
+            {/* Installing IS the screen, not a panel bolted under the form: the
+                setup fields step aside so /new shows exactly what /runs/:id
+                will keep showing after the hand-off. */}
+            <Show
+              when={!installProgressActive()}
+              fallback={installProgressPanel()}
+            >
+              <div class="av-add-flow-back">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  type="button"
+                  icon={<ArrowLeft size={16} />}
+                  disabled={busy()}
+                  onClick={returnToDiscovery}
+                >
+                  {t("new.flow.back")}
+                </Button>
+              </div>
+              <div class="av-add-flow-header">
+                <div class="av-add-flow-selected">
+                  <div class="av-add-flow-icon" aria-hidden="true">
                     <Show
-                      when={usingSelectedService()}
-                      fallback={<span>{t("new.flow.manual")}</span>}
+                      when={selectedServiceEntry()}
+                      fallback={<Download size={22} />}
                     >
-                      <Show when={storePublisherLabel()}>
-                        {(publisher) => <span>{publisher()}</span>}
-                      </Show>
-                      <Show when={storeBadgeLabel()}>
-                        {(badge) => (
-                          <span class="av-add-flow-badge">{badge()}</span>
-                        )}
-                      </Show>
+                      {(entry) => <StoreIcon entry={entry()} />}
                     </Show>
-                  </p>
-                  <p>
-                    {usingSelectedService()
-                      ? (selectedServiceEntry()?.description[locale()] ??
-                        t("new.selection.subtitle"))
-                      : t("new.advancedImport.subtitle")}
-                  </p>
+                  </div>
+                  <div class="av-add-flow-copy">
+                    <h2>
+                      {usingSelectedService()
+                        ? (selectedServiceEntry()?.name[locale()] ??
+                          sourceSummaryTitle())
+                        : t("new.advancedImport.title")}
+                    </h2>
+                    <p class="av-add-flow-by">
+                      <Show
+                        when={usingSelectedService()}
+                        fallback={<span>{t("new.flow.manual")}</span>}
+                      >
+                        <Show when={storePublisherLabel()}>
+                          {(publisher) => <span>{publisher()}</span>}
+                        </Show>
+                        <Show when={storeBadgeLabel()}>
+                          {(badge) => (
+                            <span class="av-add-flow-badge">{badge()}</span>
+                          )}
+                        </Show>
+                      </Show>
+                    </p>
+                    <p>
+                      {usingSelectedService()
+                        ? (selectedServiceEntry()?.description[locale()] ??
+                          t("new.selection.subtitle"))
+                        : t("new.advancedImport.subtitle")}
+                    </p>
+                  </div>
                 </div>
               </div>
-            </div>
-            <div class="av-add-flow-body">
-              <form
-                class="wb-install-form wb-install-source-form av-add-form"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  void submitInstall();
-                }}
-              >
-                <Show when={!usingSelectedService()}>
-                  {activeInstallPrefill() ? prefilledLinkReview() : gitFields()}
-                </Show>
-
-                <Show when={selectedServiceEntry()}>
-                  {(entry) => installIdentityFields(entry)}
-                </Show>
-
-                <Show
-                  when={hasSetupStoreInputs() ? selectedServiceEntry() : null}
+              <div class="av-add-flow-body">
+                <form
+                  class="wb-install-form wb-install-source-form av-add-form"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    void submitInstall();
+                  }}
                 >
-                  {(entry) => (
-                    <section class="av-service-setup">
-                      <div class="av-service-setup-head">
-                        <h3>{t("new.storeInput.title")}</h3>
-                        <p>{t("new.storeInput.subtitle")}</p>
-                      </div>
-                      <div class="av-service-setup-grid">
-                        <For each={setupStoreInputs(entry())}>
-                          {(field) => (
-                            <FormField
-                              label={field.label[locale()]}
-                              hint={field.helper?.[locale()]}
-                              required={field.required}
-                              // A boolean field renders a self-labeling Checkbox
-                              // (its own <label>); wrap it in a group, not a
-                              // second <label>.
-                              as={field.type === "boolean" ? "group" : "label"}
-                            >
-                              <Show
-                                when={field.type === "boolean"}
-                                fallback={
-                                  <>
-                                    <Input
-                                      id={`store-input-${entry().id}-${field.name}`}
-                                      name={`storeInput:${field.name}`}
-                                      type={field.secret ? "password" : "text"}
-                                      invalid={
-                                        appHostnameConflict() &&
-                                        isStorePublicEndpointField(
-                                          entry(),
-                                          field,
-                                        )
-                                      }
-                                      disabled={busy()}
-                                      value={storeInputValue(entry(), field)}
-                                      onInput={(e) =>
-                                        updateStoreInputValue(
-                                          entry(),
-                                          field,
-                                          e.currentTarget.value,
-                                        )
-                                      }
-                                      placeholder={field.placeholder ?? ""}
-                                      autocomplete={
-                                        field.secret ? "new-password" : "off"
-                                      }
-                                      spellcheck={false}
-                                    />
-                                    <Show
-                                      when={storeFieldHostPreview(
-                                        entry(),
-                                        field,
-                                      )}
-                                    >
-                                      {(host) => (
-                                        <p class="wb-note">
-                                          {t("new.hostPreview", {
-                                            host: host(),
-                                          })}
-                                        </p>
-                                      )}
-                                    </Show>
-                                  </>
-                                }
-                              >
-                                <Checkbox
-                                  id={`store-input-${entry().id}-${field.name}`}
-                                  name={`storeInput:${field.name}`}
-                                  label={t("app.config.enabled")}
-                                  disabled={busy()}
-                                  checked={storeInputBooleanChecked(
-                                    entry(),
-                                    field,
-                                  )}
-                                  onChange={(e) =>
-                                    updateStoreInputValue(
-                                      entry(),
-                                      field,
-                                      e.currentTarget.checked
-                                        ? "true"
-                                        : "false",
-                                    )
-                                  }
-                                />
-                              </Show>
-                            </FormField>
-                          )}
-                        </For>
-                      </div>
-                    </section>
-                  )}
-                </Show>
-
-                <Show when={!selectedServiceEntry()}>
-                  <FormField
-                    label={t("new.name")}
-                    error={serviceNameFieldError()}
-                  >
-                    <Input
-                      id="new-capsule-name"
-                      name="name"
-                      type="text"
-                      invalid={serviceNameFieldError() !== null}
-                      maxlength={96}
-                      value={name()}
-                      disabled={busy()}
-                      onInput={(e) => {
-                        setName(e.currentTarget.value);
-                        setNameTouched(true);
-                        resetCompatibility();
-                      }}
-                      placeholder="photo-blog"
-                      autocomplete="off"
-                      spellcheck={false}
-                    />
-                  </FormField>
-                </Show>
-
-                <details
-                  class="wb-disclosure wb-input-vars"
-                  open={
-                    shouldOpenServiceAdvanced() ||
-                    hasMissingAdvancedStoreInputs() ||
-                    sourceAccessMode() !== "public" ||
-                    // A hostname conflict flags the サービスID field invalid
-                    // in here; keep the disclosure open so the chosen 候補名 is
-                    // visible and the queued focus() lands on a shown input.
-                    appHostnameConflict()
-                  }
-                >
-                  <summary>{t("new.advanced.title")}</summary>
                   <Show when={!usingSelectedService()}>
-                    <Show when={activeInstallPrefill()}>{gitFields()}</Show>
-                    {sourceAccessFields()}
-                    {sourceDetailFields()}
+                    {activeInstallPrefill()
+                      ? prefilledLinkReview()
+                      : gitFields()}
                   </Show>
+
                   <Show when={selectedServiceEntry()}>
+                    {(entry) => installIdentityFields(entry)}
+                  </Show>
+
+                  <Show
+                    when={hasSetupStoreInputs() ? selectedServiceEntry() : null}
+                  >
                     {(entry) => (
-                      <Show when={advancedStoreInputs(entry()).length > 0}>
-                        <section class="wb-stack">
-                          <For each={advancedStoreInputs(entry())}>
+                      <section class="av-service-setup">
+                        <div class="av-service-setup-head">
+                          <h3>{t("new.storeInput.title")}</h3>
+                          <p>{t("new.storeInput.subtitle")}</p>
+                        </div>
+                        <div class="av-service-setup-grid">
+                          <For each={setupStoreInputs(entry())}>
                             {(field) => (
                               <FormField
                                 label={field.label[locale()]}
-                                hint={advancedStoreFieldHint(entry(), field)}
+                                hint={field.helper?.[locale()]}
                                 required={field.required}
-                                // A boolean field renders a self-labeling
-                                // Checkbox (its own <label>); wrap it in a
-                                // group, not a second <label>.
+                                // A boolean field renders a self-labeling Checkbox
+                                // (its own <label>); wrap it in a group, not a
+                                // second <label>.
                                 as={
                                   field.type === "boolean" ? "group" : "label"
                                 }
@@ -3182,37 +3139,55 @@ function Inner() {
                                 <Show
                                   when={field.type === "boolean"}
                                   fallback={
-                                    <Input
-                                      id={`store-input-advanced-${entry().id}-${field.name}`}
-                                      name={`storeInputAdvanced:${field.name}`}
-                                      type={field.secret ? "password" : "text"}
-                                      invalid={
-                                        appHostnameConflict() &&
-                                        isStorePublicEndpointField(
+                                    <>
+                                      <Input
+                                        id={`store-input-${entry().id}-${field.name}`}
+                                        name={`storeInput:${field.name}`}
+                                        type={
+                                          field.secret ? "password" : "text"
+                                        }
+                                        invalid={
+                                          appHostnameConflict() &&
+                                          isStorePublicEndpointField(
+                                            entry(),
+                                            field,
+                                          )
+                                        }
+                                        disabled={busy()}
+                                        value={storeInputValue(entry(), field)}
+                                        onInput={(e) =>
+                                          updateStoreInputValue(
+                                            entry(),
+                                            field,
+                                            e.currentTarget.value,
+                                          )
+                                        }
+                                        placeholder={field.placeholder ?? ""}
+                                        autocomplete={
+                                          field.secret ? "new-password" : "off"
+                                        }
+                                        spellcheck={false}
+                                      />
+                                      <Show
+                                        when={storeFieldHostPreview(
                                           entry(),
                                           field,
-                                        )
-                                      }
-                                      disabled={busy()}
-                                      value={storeInputValue(entry(), field)}
-                                      onInput={(e) =>
-                                        updateStoreInputValue(
-                                          entry(),
-                                          field,
-                                          e.currentTarget.value,
-                                        )
-                                      }
-                                      placeholder={field.placeholder ?? ""}
-                                      autocomplete={
-                                        field.secret ? "new-password" : "off"
-                                      }
-                                      spellcheck={false}
-                                    />
+                                        )}
+                                      >
+                                        {(host) => (
+                                          <p class="wb-note">
+                                            {t("new.hostPreview", {
+                                              host: host(),
+                                            })}
+                                          </p>
+                                        )}
+                                      </Show>
+                                    </>
                                   }
                                 >
                                   <Checkbox
-                                    id={`store-input-advanced-${entry().id}-${field.name}`}
-                                    name={`storeInputAdvanced:${field.name}`}
+                                    id={`store-input-${entry().id}-${field.name}`}
+                                    name={`storeInput:${field.name}`}
                                     label={t("app.config.enabled")}
                                     disabled={busy()}
                                     checked={storeInputBooleanChecked(
@@ -3233,463 +3208,536 @@ function Inner() {
                               </FormField>
                             )}
                           </For>
-                        </section>
-                      </Show>
+                        </div>
+                      </section>
                     )}
                   </Show>
-                  <Show when={supportsServiceNameInput()}>
+
+                  <Show when={!selectedServiceEntry()}>
                     <FormField
-                      label={t("new.vars.projectName")}
-                      hint={t("new.advanced.serviceIdHint")}
+                      label={t("new.name")}
+                      error={serviceNameFieldError()}
                     >
                       <Input
-                        ref={serviceNameInput}
-                        id="new-project-name"
-                        name={
-                          serviceNameVariableForCurrentSource() ??
-                          "service_name"
-                        }
+                        id="new-capsule-name"
+                        name="name"
                         type="text"
-                        invalid={appHostnameConflict()}
+                        invalid={serviceNameFieldError() !== null}
+                        maxlength={96}
+                        value={name()}
                         disabled={busy()}
-                        value={serviceNameInputValue()}
                         onInput={(e) => {
-                          setResourcePrefixTouched(true);
-                          setResourcePrefix(e.currentTarget.value);
+                          setName(e.currentTarget.value);
+                          setNameTouched(true);
                           resetCompatibility();
                         }}
                         placeholder="photo-blog"
                         autocomplete="off"
                         spellcheck={false}
                       />
-                      <Show when={managedHostPreview()}>
-                        {(host) => (
-                          <p class="wb-note">
-                            {t("new.hostPreview", { host: host() })}
+                    </FormField>
+                  </Show>
+
+                  <details
+                    class="wb-disclosure wb-input-vars"
+                    open={
+                      shouldOpenServiceAdvanced() ||
+                      hasMissingAdvancedStoreInputs() ||
+                      sourceAccessMode() !== "public" ||
+                      // A hostname conflict flags the サービスID field invalid
+                      // in here; keep the disclosure open so the chosen 候補名 is
+                      // visible and the queued focus() lands on a shown input.
+                      appHostnameConflict()
+                    }
+                  >
+                    <summary>{t("new.advanced.title")}</summary>
+                    <Show when={!usingSelectedService()}>
+                      <Show when={activeInstallPrefill()}>{gitFields()}</Show>
+                      {sourceAccessFields()}
+                      {sourceDetailFields()}
+                    </Show>
+                    <Show when={selectedServiceEntry()}>
+                      {(entry) => (
+                        <Show when={advancedStoreInputs(entry()).length > 0}>
+                          <section class="wb-stack">
+                            <For each={advancedStoreInputs(entry())}>
+                              {(field) => (
+                                <FormField
+                                  label={field.label[locale()]}
+                                  hint={advancedStoreFieldHint(entry(), field)}
+                                  required={field.required}
+                                  // A boolean field renders a self-labeling
+                                  // Checkbox (its own <label>); wrap it in a
+                                  // group, not a second <label>.
+                                  as={
+                                    field.type === "boolean" ? "group" : "label"
+                                  }
+                                >
+                                  <Show
+                                    when={field.type === "boolean"}
+                                    fallback={
+                                      <Input
+                                        id={`store-input-advanced-${entry().id}-${field.name}`}
+                                        name={`storeInputAdvanced:${field.name}`}
+                                        type={
+                                          field.secret ? "password" : "text"
+                                        }
+                                        invalid={
+                                          appHostnameConflict() &&
+                                          isStorePublicEndpointField(
+                                            entry(),
+                                            field,
+                                          )
+                                        }
+                                        disabled={busy()}
+                                        value={storeInputValue(entry(), field)}
+                                        onInput={(e) =>
+                                          updateStoreInputValue(
+                                            entry(),
+                                            field,
+                                            e.currentTarget.value,
+                                          )
+                                        }
+                                        placeholder={field.placeholder ?? ""}
+                                        autocomplete={
+                                          field.secret ? "new-password" : "off"
+                                        }
+                                        spellcheck={false}
+                                      />
+                                    }
+                                  >
+                                    <Checkbox
+                                      id={`store-input-advanced-${entry().id}-${field.name}`}
+                                      name={`storeInputAdvanced:${field.name}`}
+                                      label={t("app.config.enabled")}
+                                      disabled={busy()}
+                                      checked={storeInputBooleanChecked(
+                                        entry(),
+                                        field,
+                                      )}
+                                      onChange={(e) =>
+                                        updateStoreInputValue(
+                                          entry(),
+                                          field,
+                                          e.currentTarget.checked
+                                            ? "true"
+                                            : "false",
+                                        )
+                                      }
+                                    />
+                                  </Show>
+                                </FormField>
+                              )}
+                            </For>
+                          </section>
+                        </Show>
+                      )}
+                    </Show>
+                    <Show when={supportsServiceNameInput()}>
+                      <FormField
+                        label={t("new.vars.projectName")}
+                        hint={t("new.advanced.serviceIdHint")}
+                      >
+                        <Input
+                          ref={serviceNameInput}
+                          id="new-project-name"
+                          name={
+                            serviceNameVariableForCurrentSource() ??
+                            "service_name"
+                          }
+                          type="text"
+                          invalid={appHostnameConflict()}
+                          disabled={busy()}
+                          value={serviceNameInputValue()}
+                          onInput={(e) => {
+                            setResourcePrefixTouched(true);
+                            setResourcePrefix(e.currentTarget.value);
+                            resetCompatibility();
+                          }}
+                          placeholder="photo-blog"
+                          autocomplete="off"
+                          spellcheck={false}
+                        />
+                        <Show when={managedHostPreview()}>
+                          {(host) => (
+                            <p class="wb-note">
+                              {t("new.hostPreview", { host: host() })}
+                            </p>
+                          )}
+                        </Show>
+                      </FormField>
+                    </Show>
+                    <section class="wb-stack">
+                      <h3 class="tg-card-title">{t("new.env.title")}</h3>
+                      <p class="wb-note">{t("new.env.body")}</p>
+                      <div class="wb-variable-list">
+                        {/* <Index>: rows are replaced per keystroke, so <For>
+                          (reference-keyed) would recreate the focused input on
+                          every character. */}
+                        <Index each={envVariables()}>
+                          {(row, index) => (
+                            <div class="wb-variable-row">
+                              <FormField label={t("new.env.name")}>
+                                <Input
+                                  id={`new-env-name-${index}`}
+                                  name={`envName:${index}`}
+                                  type="text"
+                                  disabled={busy()}
+                                  value={row().name}
+                                  onInput={(e) =>
+                                    updateEnvVariable(index, {
+                                      name: e.currentTarget.value,
+                                    })
+                                  }
+                                  placeholder="APP_PUBLIC_URL"
+                                  autocomplete="off"
+                                  autocapitalize="characters"
+                                  spellcheck={false}
+                                />
+                              </FormField>
+                              <FormField label={t("new.env.value")}>
+                                <Input
+                                  id={`new-env-value-${index}`}
+                                  name={`envValue:${index}`}
+                                  type="text"
+                                  disabled={busy()}
+                                  value={row().value}
+                                  onInput={(e) =>
+                                    updateEnvVariable(index, {
+                                      value: e.currentTarget.value,
+                                    })
+                                  }
+                                  placeholder={t("new.env.valuePlaceholder")}
+                                  autocomplete="off"
+                                  spellcheck={false}
+                                />
+                              </FormField>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                icon={<Trash size={16} />}
+                                disabled={busy()}
+                                onClick={() => removeEnvVariable(index)}
+                              >
+                                {t("new.env.remove")}
+                              </Button>
+                            </div>
+                          )}
+                        </Index>
+                      </div>
+                      <div class="wb-form-actions">
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          icon={<Plus size={16} />}
+                          disabled={busy()}
+                          onClick={addEnvVariable}
+                        >
+                          {t("new.env.add")}
+                        </Button>
+                      </div>
+                      <Show when={envVariableError()}>
+                        {(message) => (
+                          <p class="wb-error" role="alert">
+                            {message()}
                           </p>
                         )}
                       </Show>
-                    </FormField>
-                  </Show>
-                  <section class="wb-stack">
-                    <h3 class="tg-card-title">{t("new.env.title")}</h3>
-                    <p class="wb-note">{t("new.env.body")}</p>
-                    <div class="wb-variable-list">
-                      {/* <Index>: rows are replaced per keystroke, so <For>
-                          (reference-keyed) would recreate the focused input on
-                          every character. */}
-                      <Index each={envVariables()}>
-                        {(row, index) => (
-                          <div class="wb-variable-row">
-                            <FormField label={t("new.env.name")}>
-                              <Input
-                                id={`new-env-name-${index}`}
-                                name={`envName:${index}`}
-                                type="text"
-                                disabled={busy()}
-                                value={row().name}
-                                onInput={(e) =>
-                                  updateEnvVariable(index, {
-                                    name: e.currentTarget.value,
-                                  })
-                                }
-                                placeholder="APP_PUBLIC_URL"
-                                autocomplete="off"
-                                autocapitalize="characters"
-                                spellcheck={false}
-                              />
-                            </FormField>
-                            <FormField label={t("new.env.value")}>
-                              <Input
-                                id={`new-env-value-${index}`}
-                                name={`envValue:${index}`}
-                                type="text"
-                                disabled={busy()}
-                                value={row().value}
-                                onInput={(e) =>
-                                  updateEnvVariable(index, {
-                                    value: e.currentTarget.value,
-                                  })
-                                }
-                                placeholder={t("new.env.valuePlaceholder")}
-                                autocomplete="off"
-                                spellcheck={false}
-                              />
-                            </FormField>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              icon={<Trash size={16} />}
-                              disabled={busy()}
-                              onClick={() => removeEnvVariable(index)}
-                            >
-                              {t("new.env.remove")}
-                            </Button>
-                          </div>
-                        )}
-                      </Index>
-                    </div>
-                    <div class="wb-form-actions">
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        icon={<Plus size={16} />}
-                        disabled={busy()}
-                        onClick={addEnvVariable}
-                      >
-                        {t("new.env.add")}
-                      </Button>
-                    </div>
-                    <Show when={envVariableError()}>
-                      {(message) => (
-                        <p class="wb-error" role="alert">
-                          {message()}
-                        </p>
-                      )}
-                    </Show>
-                  </section>
-                  <section class="wb-stack">
-                    <h3 class="tg-card-title">{t("new.vars.inputsTitle")}</h3>
-                    <p class="wb-note">{t("new.vars.inputsBody")}</p>
-                    <div class="wb-variable-list">
-                      {/* <Index> for the same per-keystroke focus reason as
+                    </section>
+                    <section class="wb-stack">
+                      <h3 class="tg-card-title">{t("new.vars.inputsTitle")}</h3>
+                      <p class="wb-note">{t("new.vars.inputsBody")}</p>
+                      <div class="wb-variable-list">
+                        {/* <Index> for the same per-keystroke focus reason as
                           the env editor above. */}
-                      <Index each={inputVariables()}>
-                        {(row, index) => (
-                          <div class="wb-variable-row">
-                            <FormField label={t("new.vars.inputName")}>
-                              <Input
-                                id={`new-var-name-${index}`}
-                                name={`varName:${index}`}
-                                type="text"
+                        <Index each={inputVariables()}>
+                          {(row, index) => (
+                            <div class="wb-variable-row">
+                              <FormField label={t("new.vars.inputName")}>
+                                <Input
+                                  id={`new-var-name-${index}`}
+                                  name={`varName:${index}`}
+                                  type="text"
+                                  disabled={busy()}
+                                  value={row().name}
+                                  onInput={(e) =>
+                                    updateInputVariable(index, {
+                                      name: e.currentTarget.value,
+                                    })
+                                  }
+                                  placeholder={t("new.vars.namePlaceholder")}
+                                  autocomplete="off"
+                                  spellcheck={false}
+                                />
+                              </FormField>
+                              <FormField label={t("new.vars.inputValue")}>
+                                <Input
+                                  id={`new-var-value-${index}`}
+                                  name={`varValue:${index}`}
+                                  type="text"
+                                  disabled={busy()}
+                                  value={row().value}
+                                  onInput={(e) =>
+                                    updateInputVariable(index, {
+                                      value: e.currentTarget.value,
+                                    })
+                                  }
+                                  placeholder={t("new.vars.valuePlaceholder")}
+                                  autocomplete="off"
+                                  spellcheck={false}
+                                />
+                              </FormField>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                icon={<Trash size={16} />}
                                 disabled={busy()}
-                                value={row().name}
-                                onInput={(e) =>
-                                  updateInputVariable(index, {
-                                    name: e.currentTarget.value,
-                                  })
-                                }
-                                placeholder={t("new.vars.namePlaceholder")}
-                                autocomplete="off"
-                                spellcheck={false}
-                              />
-                            </FormField>
-                            <FormField label={t("new.vars.inputValue")}>
-                              <Input
-                                id={`new-var-value-${index}`}
-                                name={`varValue:${index}`}
-                                type="text"
-                                disabled={busy()}
-                                value={row().value}
-                                onInput={(e) =>
-                                  updateInputVariable(index, {
-                                    value: e.currentTarget.value,
-                                  })
-                                }
-                                placeholder={t("new.vars.valuePlaceholder")}
-                                autocomplete="off"
-                                spellcheck={false}
-                              />
-                            </FormField>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              icon={<Trash size={16} />}
-                              disabled={busy()}
-                              onClick={() => removeInputVariable(index)}
-                            >
-                              {t("new.vars.removeInput")}
-                            </Button>
-                          </div>
+                                onClick={() => removeInputVariable(index)}
+                              >
+                                {t("new.vars.removeInput")}
+                              </Button>
+                            </div>
+                          )}
+                        </Index>
+                      </div>
+                      <div class="wb-form-actions">
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          icon={<Plus size={16} />}
+                          disabled={busy()}
+                          onClick={addInputVariable}
+                        >
+                          {t("new.vars.addInput")}
+                        </Button>
+                      </div>
+                      <Show when={inputVariableError()}>
+                        {(message) => (
+                          <p class="wb-error" role="alert">
+                            {message()}
+                          </p>
                         )}
-                      </Index>
-                    </div>
-                    <div class="wb-form-actions">
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        icon={<Plus size={16} />}
-                        disabled={busy()}
-                        onClick={addInputVariable}
-                      >
-                        {t("new.vars.addInput")}
-                      </Button>
-                    </div>
-                    <Show when={inputVariableError()}>
-                      {(message) => (
-                        <p class="wb-error" role="alert">
-                          {message()}
-                        </p>
-                      )}
-                    </Show>
-                  </section>
-                </details>
+                      </Show>
+                    </section>
+                  </details>
 
-                <Show when={!staleCheckResult() && compatibility()}>
-                  {(result) => (
-                    <>
-                      {shouldShowCompatibilityPanel(result()) ? (
-                        <section class="wb-inline-panel">
-                          <div class="wb-compat-head">
-                            <h3 class="tg-card-title">
-                              {t("new.compat.title")}
-                            </h3>
-                            <Badge tone={compatibilityTone(result().level)}>
+                  <Show when={!staleCheckResult() && compatibility()}>
+                    {(result) => (
+                      <>
+                        {shouldShowCompatibilityPanel(result()) ? (
+                          <section class="wb-inline-panel">
+                            <div class="wb-compat-head">
+                              <h3 class="tg-card-title">
+                                {t("new.compat.title")}
+                              </h3>
+                              <Badge tone={compatibilityTone(result().level)}>
+                                {compatibilityLabel(result().level)}
+                              </Badge>
+                            </div>
+                            <p class="wb-compat-summary">
+                              {result().level === "ready"
+                                ? t("new.compat.readyBrief")
+                                : compatibilitySummaryDisplay(result())}
+                            </p>
+                            <Show when={result().level === "needs_patch"}>
+                              <p class="wb-note">{t("new.compat.patchHelp")}</p>
+                            </Show>
+                            <Show when={result().diagnostics.length > 0}>
+                              <details class="wb-disclosure">
+                                <summary>{t("new.compat.details")}</summary>
+                                <ul class="wb-diagnostics">
+                                  <For each={result().diagnostics}>
+                                    {(diagnostic) => {
+                                      const display =
+                                        compatibilityDiagnosticDisplay(
+                                          diagnostic,
+                                        );
+                                      return (
+                                        <li
+                                          class={`wb-diagnostic wb-diagnostic-${diagnostic.severity}`}
+                                        >
+                                          <Show when={display.technical}>
+                                            <span class="wb-diagnostic-tech muted">
+                                              {t(
+                                                "new.compat.diagnostic.technicalNote",
+                                              )}{" "}
+                                            </span>
+                                          </Show>
+                                          {display.message}
+                                          <Show when={display.detail}>
+                                            {(detail) => (
+                                              <span class="muted">
+                                                {" "}
+                                                — {detail()}
+                                              </span>
+                                            )}
+                                          </Show>
+                                        </li>
+                                      );
+                                    }}
+                                  </For>
+                                </ul>
+                              </details>
+                            </Show>
+                          </section>
+                        ) : (
+                          <p class="wb-ready-note">
+                            <Badge tone="ok">
                               {compatibilityLabel(result().level)}
                             </Badge>
-                          </div>
-                          <p class="wb-compat-summary">
-                            {result().level === "ready"
-                              ? t("new.compat.readyBrief")
-                              : compatibilitySummaryDisplay(result())}
+                            <span>{t("new.compat.readyBrief")}</span>
                           </p>
-                          <Show when={result().level === "needs_patch"}>
-                            <p class="wb-note">{t("new.compat.patchHelp")}</p>
-                          </Show>
-                          <Show when={result().diagnostics.length > 0}>
-                            <details class="wb-disclosure">
-                              <summary>{t("new.compat.details")}</summary>
-                              <ul class="wb-diagnostics">
-                                <For each={result().diagnostics}>
-                                  {(diagnostic) => {
-                                    const display =
-                                      compatibilityDiagnosticDisplay(
-                                        diagnostic,
-                                      );
-                                    return (
-                                      <li
-                                        class={`wb-diagnostic wb-diagnostic-${diagnostic.severity}`}
-                                      >
-                                        <Show when={display.technical}>
-                                          <span class="wb-diagnostic-tech muted">
-                                            {t(
-                                              "new.compat.diagnostic.technicalNote",
-                                            )}{" "}
-                                          </span>
-                                        </Show>
-                                        {display.message}
-                                        <Show when={display.detail}>
-                                          {(detail) => (
-                                            <span class="muted">
-                                              {" "}
-                                              — {detail()}
-                                            </span>
-                                          )}
-                                        </Show>
-                                      </li>
-                                    );
-                                  }}
-                                </For>
-                              </ul>
-                            </details>
-                          </Show>
-                        </section>
-                      ) : (
-                        <p class="wb-ready-note">
-                          <Badge tone="ok">
-                            {compatibilityLabel(result().level)}
-                          </Badge>
-                          <span>{t("new.compat.readyBrief")}</span>
-                        </p>
-                      )}
-                    </>
-                  )}
-                </Show>
+                        )}
+                      </>
+                    )}
+                  </Show>
 
-                <Show
-                  when={
-                    compatibility() && providerRowsRequiringChoice().length > 0
-                  }
-                >
-                  <section class="wb-inline-panel">
-                    <div class="wb-compat-head">
-                      <h3 class="tg-card-title">{t("new.providers.title")}</h3>
-                    </div>
-                    <Show when={providerConnectionsLoadError()}>
-                      {(loadError) => {
-                        // A failed connections fetch must not read as "no
-                        // connections" — offer a retry, not the false
-                        // missing-account blocker.
-                        const friendly = () => friendlyError(loadError(), t);
-                        return (
-                          <div class="wb-action-callout" role="alert">
-                            <strong>{friendly().message}</strong>
-                            <Show when={friendly().detail}>
-                              {(detail) => <p class="muted">{detail()}</p>}
-                            </Show>
+                  <Show
+                    when={
+                      compatibility() &&
+                      providerRowsRequiringChoice().length > 0
+                    }
+                  >
+                    <section class="wb-inline-panel">
+                      <div class="wb-compat-head">
+                        <h3 class="tg-card-title">
+                          {t("new.providers.title")}
+                        </h3>
+                      </div>
+                      <Show when={providerConnectionsLoadError()}>
+                        {(loadError) => {
+                          // A failed connections fetch must not read as "no
+                          // connections" — offer a retry, not the false
+                          // missing-account blocker.
+                          const friendly = () => friendlyError(loadError(), t);
+                          return (
+                            <div class="wb-action-callout" role="alert">
+                              <strong>{friendly().message}</strong>
+                              <Show when={friendly().detail}>
+                                {(detail) => <p class="muted">{detail()}</p>}
+                              </Show>
+                              <Button
+                                variant="secondary"
+                                size="sm"
+                                type="button"
+                                onClick={() =>
+                                  void loadProviderConnections({ force: true })
+                                }
+                              >
+                                {t("common.retry")}
+                              </Button>
+                            </div>
+                          );
+                        }}
+                      </Show>
+                      <Show when={!providerConnectionsLoadError()}>
+                        <div class="wb-provider-grid">
+                          <For each={providerRowsRequiringChoice()}>
+                            {(row, index) => {
+                              const options = () =>
+                                providerConnectionsForRow(row);
+                              return (
+                                <div class="wb-provider-row">
+                                  <div class="wb-provider-meta">
+                                    <span class="wb-provider-title">
+                                      {providerLabel(row.provider)}
+                                    </span>
+                                    <Show when={row.alias}>
+                                      <span class="muted">
+                                        {t("new.providers.alias", {
+                                          alias: row.alias,
+                                        })}
+                                      </span>
+                                    </Show>
+                                  </div>
+                                  <Select
+                                    id={`provider-connection-${index()}`}
+                                    name={`providerConnection:${row.provider}:${row.alias ?? "default"}`}
+                                    aria-label={`${providerLabel(row.provider)} ${row.alias ? t("new.providers.alias", { alias: row.alias }) : ""} ${t("new.providers.selectConnection")}`.trim()}
+                                    value={row.connectionId}
+                                    onChange={(e) =>
+                                      updateProviderRow(row, {
+                                        connectionId: e.currentTarget.value,
+                                      })
+                                    }
+                                  >
+                                    <option
+                                      value=""
+                                      selected={!row.connectionId}
+                                    >
+                                      {t("new.providers.selectConnection")}
+                                    </option>
+                                    <For each={options()}>
+                                      {(connection) => (
+                                        <option
+                                          value={connection.id}
+                                          selected={
+                                            connection.id === row.connectionId
+                                          }
+                                        >
+                                          {providerConnectionLabel(connection)}
+                                        </option>
+                                      )}
+                                    </For>
+                                  </Select>
+                                </div>
+                              );
+                            }}
+                          </For>
+                        </div>
+                        <Show when={providerConnectionError()}>
+                          {(m) => (
+                            <p class="wb-error" role="alert">
+                              {m()}
+                            </p>
+                          )}
+                        </Show>
+                        <Show when={missingProviderRows().length > 0}>
+                          <div class="wb-action-callout" role="note">
+                            <strong>{t("new.providers.missingTitle")}</strong>
+                            <p>{t("new.providers.missingBody")}</p>
+                            <ul>
+                              <For each={missingProviderRows()}>
+                                {(row) => (
+                                  <li>{providerLabel(row.provider)}</li>
+                                )}
+                              </For>
+                            </ul>
                             <Button
                               variant="secondary"
                               size="sm"
-                              type="button"
-                              onClick={() =>
-                                void loadProviderConnections({ force: true })
-                              }
+                              href={providerConnectionsHref()}
                             >
-                              {t("common.retry")}
+                              {t("new.providers.setupMissing")}
                             </Button>
+                            <p class="muted">{t("new.providers.returnNote")}</p>
                           </div>
-                        );
-                      }}
-                    </Show>
-                    <Show when={!providerConnectionsLoadError()}>
-                      <div class="wb-provider-grid">
-                        <For each={providerRowsRequiringChoice()}>
-                          {(row, index) => {
-                            const options = () =>
-                              providerConnectionsForRow(row);
-                            return (
-                              <div class="wb-provider-row">
-                                <div class="wb-provider-meta">
-                                  <span class="wb-provider-title">
-                                    {providerLabel(row.provider)}
-                                  </span>
-                                  <Show when={row.alias}>
-                                    <span class="muted">
-                                      {t("new.providers.alias", {
-                                        alias: row.alias,
-                                      })}
-                                    </span>
-                                  </Show>
-                                </div>
-                                <Select
-                                  id={`provider-connection-${index()}`}
-                                  name={`providerConnection:${row.provider}:${row.alias ?? "default"}`}
-                                  aria-label={`${providerLabel(row.provider)} ${row.alias ? t("new.providers.alias", { alias: row.alias }) : ""} ${t("new.providers.selectConnection")}`.trim()}
-                                  value={row.connectionId}
-                                  onChange={(e) =>
-                                    updateProviderRow(row, {
-                                      connectionId: e.currentTarget.value,
-                                    })
-                                  }
-                                >
-                                  <option value="" selected={!row.connectionId}>
-                                    {t("new.providers.selectConnection")}
-                                  </option>
-                                  <For each={options()}>
-                                    {(connection) => (
-                                      <option
-                                        value={connection.id}
-                                        selected={
-                                          connection.id === row.connectionId
-                                        }
-                                      >
-                                        {providerConnectionLabel(connection)}
-                                      </option>
-                                    )}
-                                  </For>
-                                </Select>
-                              </div>
-                            );
-                          }}
-                        </For>
-                      </div>
-                      <Show when={providerConnectionError()}>
-                        {(m) => (
-                          <p class="wb-error" role="alert">
-                            {m()}
-                          </p>
-                        )}
+                        </Show>
                       </Show>
-                      <Show when={missingProviderRows().length > 0}>
-                        <div class="wb-action-callout" role="note">
-                          <strong>{t("new.providers.missingTitle")}</strong>
-                          <p>{t("new.providers.missingBody")}</p>
-                          <ul>
-                            <For each={missingProviderRows()}>
-                              {(row) => <li>{providerLabel(row.provider)}</li>}
-                            </For>
-                          </ul>
-                          <Button
-                            variant="secondary"
-                            size="sm"
-                            href={providerConnectionsHref()}
-                          >
-                            {t("new.providers.setupMissing")}
-                          </Button>
-                          <p class="muted">{t("new.providers.returnNote")}</p>
-                        </div>
-                      </Show>
-                    </Show>
-                  </section>
-                </Show>
+                    </section>
+                  </Show>
 
-                <Show when={installConfigs.error}>
-                  <div class="wb-action-callout" role="alert">
-                    <strong>{t("new.error.configLoadFailed")}</strong>
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      type="button"
-                      onClick={() => void refetchInstallConfigs()}
-                    >
-                      {t("common.retry")}
-                    </Button>
-                  </div>
-                </Show>
-
-                <Show
-                  when={!installProgressActive()}
-                  fallback={
-                    <AnnouncedStatus class="av-add-progress">
-                      <div
-                        class="av-add-progress-track"
-                        role="progressbar"
-                        aria-valuemin={0}
-                        aria-valuemax={100}
-                        aria-valuenow={installProgressPercent()}
-                        aria-label={t("new.progress.title")}
+                  <Show when={installConfigs.error}>
+                    <div class="wb-action-callout" role="alert">
+                      <strong>{t("new.error.configLoadFailed")}</strong>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        type="button"
+                        onClick={() => void refetchInstallConfigs()}
                       >
-                        <span
-                          class="av-add-progress-fill"
-                          style={{ width: `${installProgressPercent()}%` }}
-                        />
-                      </div>
-                      <p class="av-add-progress-label">
-                        {t("new.progress.title")}
-                      </p>
-                      <p class="av-add-progress-note">
-                        {sourceSyncSlow()
-                          ? t("new.progress.slow")
-                          : installProgressLabel()}
-                      </p>
-                      <Show when={sourceSyncRunStatus()}>
-                        {(status) => (
-                          <p class="av-add-progress-note">
-                            {t("new.progress.status", {
-                              status: runStatusLabel(status()),
-                            })}
-                          </p>
-                        )}
-                      </Show>
-                      <Show when={showSetupProgress()} fallback={null}>
-                        <details class="wb-disclosure av-add-technical">
-                          <summary>{t("new.progress.details")}</summary>
-                          <ol class="wb-steps">
-                            <For each={installSteps()}>
-                              {(step) => (
-                                <li class={`wb-step ${stepClass(step.state)}`}>
-                                  <span class="wb-step-icon" aria-hidden="true">
-                                    {stepIcon(step.state)}
-                                  </span>
-                                  <span class="sr-only">
-                                    {stepStateLabel(step.state)}
-                                  </span>
-                                  {step.label}
-                                </li>
-                              )}
-                            </For>
-                          </ol>
-                        </details>
-                      </Show>
-                    </AnnouncedStatus>
-                  }
-                >
+                        {t("common.retry")}
+                      </Button>
+                    </div>
+                  </Show>
+
                   <div class="wb-form-actions av-add-actions">
                     <Button
                       variant="primary"
                       type="submit"
                       disabled={
                         installConfigLoading() ||
+                        checkingCompatibility() ||
                         (compatibility() !== null && !canContinue())
                       }
                     >
@@ -3698,12 +3746,18 @@ function Inner() {
                         : t("new.installCta")}
                     </Button>
                     <Show when={compatibility()}>
+                      {/* A standalone re-check is not an install, so it says so
+                          on its own button instead of borrowing the install
+                          screen the way it used to. */}
                       <Button
                         variant="ghost"
                         type="button"
+                        disabled={checkingCompatibility()}
                         onClick={() => void runCompatibilityCheck()}
                       >
-                        {t("new.compat.recheck")}
+                        {checkingCompatibility()
+                          ? t("common.loading")
+                          : t("new.compat.recheck")}
                       </Button>
                     </Show>
                     <Show when={syncRequired()}>
@@ -3717,64 +3771,64 @@ function Inner() {
                     </Show>
                   </div>
                   {/* A disabled install button with no stated reason is a dead
-                      end; say what is holding it. */}
+                    end; say what is holding it. */}
                   <Show when={compatibility() !== null && !canContinue()}>
                     <p class="av-add-blocked">{proceedBlocker()}</p>
                   </Show>
-                </Show>
 
-                <Show when={error()}>
-                  {(m) => (
-                    <p class="wb-error" role="alert">
-                      {m()}
-                      <Show when={errorRequestId()}>
-                        {(id) => (
-                          <span class="wb-error-request">
-                            {t("new.error.requestId", { id: id() })}
-                          </span>
-                        )}
-                      </Show>
-                    </p>
-                  )}
-                </Show>
-                <Show
-                  when={appHostnameConflict() && canSuggestPublicHostname()}
-                >
-                  <div class="wb-action-callout" role="note">
-                    <strong>{t("new.hostnameConflict.title")}</strong>
-                    <p>{t("new.hostnameConflict.body")}</p>
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      type="button"
-                      onClick={useSuggestedServiceName}
-                    >
-                      {t("new.hostnameConflict.suggest")}
-                    </Button>
-                  </div>
-                </Show>
-                <Show when={existingCapsule()}>
-                  {(capsule) => (
-                    <AnnouncedStatus class="wb-action-callout">
-                      <strong>{t("new.existing.title")}</strong>
-                      <p>
-                        {t("new.existing.body", {
-                          name: capsule().name,
-                          environment: capsule().environment,
-                        })}
+                  <Show when={error()}>
+                    {(m) => (
+                      <p class="wb-error" role="alert">
+                        {m()}
+                        <Show when={errorRequestId()}>
+                          {(id) => (
+                            <span class="wb-error-request">
+                              {t("new.error.requestId", { id: id() })}
+                            </span>
+                          )}
+                        </Show>
                       </p>
+                    )}
+                  </Show>
+                  <Show
+                    when={appHostnameConflict() && canSuggestPublicHostname()}
+                  >
+                    <div class="wb-action-callout" role="note">
+                      <strong>{t("new.hostnameConflict.title")}</strong>
+                      <p>{t("new.hostnameConflict.body")}</p>
                       <Button
                         variant="secondary"
                         size="sm"
-                        href={`/services/${encodeURIComponent(capsule().id)}`}
+                        type="button"
+                        onClick={useSuggestedServiceName}
                       >
-                        {t("new.existing.open")}
+                        {t("new.hostnameConflict.suggest")}
                       </Button>
-                    </AnnouncedStatus>
-                  )}
-                </Show>
-              </form>
-            </div>
+                    </div>
+                  </Show>
+                  <Show when={existingCapsule()}>
+                    {(capsule) => (
+                      <AnnouncedStatus class="wb-action-callout">
+                        <strong>{t("new.existing.title")}</strong>
+                        <p>
+                          {t("new.existing.body", {
+                            name: capsule().name,
+                            environment: capsule().environment,
+                          })}
+                        </p>
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          href={`/services/${encodeURIComponent(capsule().id)}`}
+                        >
+                          {t("new.existing.open")}
+                        </Button>
+                      </AnnouncedStatus>
+                    )}
+                  </Show>
+                </form>
+              </div>
+            </Show>
           </section>
         </Show>
       </Show>

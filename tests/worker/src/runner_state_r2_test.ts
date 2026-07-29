@@ -872,7 +872,7 @@ test("apply with stateScope restores the encrypted current state before apply", 
 test("plan with stateScope reconciles missing current.json from the latest sealed generation object", async () => {
   const calls: string[] = [];
   const artifacts = new FakeR2Bucket();
-  const state = new FakeR2Bucket();
+  const state = new FakeR2Bucket(1);
   const crypto = StateArtifactCrypto.fromEnv({
     TAKOSUMI_SECRET_STORE_PASSPHRASE: TEST_PASSPHRASE,
   });

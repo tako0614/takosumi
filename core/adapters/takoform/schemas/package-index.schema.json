@@ -1,19 +1,29 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://forms.takoform.com/schemas/v0/package-index.schema.json",
-  "title": "Takoform Form Package index v0",
+  "$id": "https://forms.takoform.com/schemas/v1alpha1/package-index.schema.json",
+  "title": "Takoform Form Package index v1alpha1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["format", "packageVersion", "form", "definitionPath", "files"],
+  "required": [
+    "apiVersion",
+    "kind",
+    "packageVersion",
+    "formRef",
+    "definitionPath",
+    "files"
+  ],
   "properties": {
-    "format": {
-      "const": "takoform.form-package@v0"
+    "apiVersion": {
+      "const": "packages.forms.takoform.com/v1alpha1"
+    },
+    "kind": {
+      "const": "FormPackage"
     },
     "packageVersion": {
       "type": "string",
       "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(\\.(0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*))?(\\+([0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*))?$"
     },
-    "form": {
+    "formRef": {
       "$ref": "form-ref.schema.json"
     },
     "definitionPath": {
@@ -27,7 +37,7 @@
         "required": ["mediaType"],
         "properties": {
           "mediaType": {
-            "const": "application/vnd.takoform.form-definition.v0+json"
+            "const": "application/vnd.takoform.form-definition.v1+json"
           }
         }
       },
@@ -43,7 +53,7 @@
           },
           "mediaType": {
             "enum": [
-              "application/vnd.takoform.form-definition.v0+json",
+              "application/vnd.takoform.form-definition.v1+json",
               "application/schema+json",
               "application/json",
               "text/markdown",
@@ -68,7 +78,7 @@
       "type": "string",
       "minLength": 1,
       "maxLength": 240,
-      "pattern": "^[A-Za-z0-9._-]*[A-Za-z0-9_-](/[A-Za-z0-9._-]*[A-Za-z0-9_-])*$",
+      "pattern": "^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$",
       "not": {
         "pattern": "(^|/)\\.\\.?($|/)"
       }

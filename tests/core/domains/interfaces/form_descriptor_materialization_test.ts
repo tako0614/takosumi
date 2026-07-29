@@ -4,7 +4,7 @@ import type {
   InstalledFormReference,
   ResourceObject,
 } from "takosumi-contract";
-import { formRefKey } from "takosumi-contract";
+import { formRefKey, formRefOfInstalled } from "takosumi-contract";
 import {
   createInMemoryInterfaceStores,
   createPortableDeclarationReader,
@@ -21,12 +21,9 @@ import {
 
 const NOW = "2026-07-19T00:00:00.000Z";
 const FORM: InstalledFormReference = {
-  formRef: {
-    apiVersion: "forms.takoform.com/v1alpha1",
-    kind: "ExampleInterfaceService",
-    definitionVersion: "1.0.0",
-    schemaDigest: `sha256:${"1".repeat(64)}`,
-  },
+  type: "example_interface_service",
+  version: "1.0.0",
+  schemaDigest: `sha256:${"1".repeat(64)}`,
   packageDigest: `sha256:${"2".repeat(64)}`,
 };
 
@@ -124,8 +121,8 @@ test("portable Form descriptors preserve pair identity, exact document, and RFC 
   });
   expect(required.metadata.materializedFrom).toEqual({
     source: "form_descriptor",
-    formRefKey: formRefKey(FORM.formRef),
-    formSchemaDigest: FORM.formRef.schemaDigest,
+    formRefKey: formRefKey(formRefOfInstalled(FORM)),
+    formSchemaDigest: FORM.schemaDigest,
     descriptorName: "mcp.server",
     descriptorVersion: "2025-11-25",
   });
@@ -214,11 +211,9 @@ test("portable Form descriptors preserve pair identity, exact document, and RFC 
   ).rejects.toBeInstanceOf(RequiredFormInterfaceError);
 
   const upgradedForm: InstalledFormReference = {
-    formRef: {
-      ...FORM.formRef,
-      definitionVersion: "2.0.0",
-      schemaDigest: `sha256:${"3".repeat(64)}`,
-    },
+    ...FORM,
+    version: "2.0.0",
+    schemaDigest: `sha256:${"3".repeat(64)}`,
     packageDigest: `sha256:${"4".repeat(64)}`,
   };
   const upgraded = await ensureFormDescriptorInterfaces({
@@ -452,7 +447,9 @@ test("portable declaration reads are bounded and enforce each Resource Workspace
         name: "service-001",
       },
       document: { title: "last page" },
+      inputs: [{ name: "protocol", source: "literal", value: "http" }],
       values: { protocol: "http" },
+      resourceVersion: "1",
       form: FORM,
     },
   ]);

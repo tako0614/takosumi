@@ -50,7 +50,7 @@ import {
   type CapsuleSourceFile,
 } from "./capsule_compatibility.ts";
 import { evaluateSourceUrl } from "./url-policy.ts";
-import { canonicalProviderAddress } from "@takosumi/providers";
+import { canonicalProviderAddress } from "../deploy-control/provider_policy.ts";
 import type { ArtifactReferenceAllocator } from "../../adapters/storage/artifact-references.ts";
 
 // Git already has a provider-neutral spelling for the remote's configured

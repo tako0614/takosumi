@@ -10,12 +10,11 @@ const TOKEN = "operator-form-package-token";
 const PACKAGE_DIGEST = `sha256:${"a".repeat(64)}`;
 const SCHEMA_DIGEST = `sha256:${"b".repeat(64)}`;
 const FORM_REF = {
-  apiVersion: "forms.takoform.com/v1alpha1",
-  kind: "ObjectBucket",
-  definitionVersion: "1.0.0",
+  type: "object_bucket",
+  version: "1.0.0",
   schemaDigest: SCHEMA_DIGEST,
 } as const;
-const IDENTITY = { formRef: FORM_REF, packageDigest: PACKAGE_DIGEST } as const;
+const IDENTITY = { ...FORM_REF, packageDigest: PACKAGE_DIGEST } as const;
 const HEADERS = {
   authorization: `Bearer ${TOKEN}`,
   "content-type": "application/json",

@@ -30,7 +30,7 @@ PORT=8788 bun core/index.ts
 ```
 
 The standard product flow is to install via the dashboard using a Git URL, creating a Capsule from a Git Source.
-Dashboard install / plan / apply go through the [`/api`](docs/en/reference/deploy-control-api.md) control plane
+Dashboard install / plan / apply go through the [`/api`](docs/en/reference/api.md) control plane
 against a registered Git Source. App source, build outputs, container images, and release artifacts are modeled by
 the Git-hosted OpenTofu module and its ordinary variables, not by a Takosumi-owned upload/build path. The CLI is
 documented in [docs/en/reference/cli.md](docs/en/reference/cli.md). The retired `takosumi deploy` /
@@ -66,7 +66,7 @@ behind the one handler, not an alternate distribution.
 The product flow is deliberately small: choose a **Workspace** and **Project**, register a Git **Source**, create a
 **Capsule**, bind provider aliases through **ProviderConnections**, **CredentialRecipes**, and **ProviderBindings**,
 review a **Run**, then inspect **StateVersions**, **Outputs**, and **AuditEvents**. See the public
-[Model reference](docs/en/reference/model.md) and [glossary](docs/en/reference/glossary.md). Implementer-facing final
+[concepts overview](docs/en/concepts/index.md) and [glossary](docs/en/reference/glossary.md). Implementer-facing final
 direction lives in [docs/internal/final-plan.md](docs/internal/final-plan.md) (not a published product contract).
 
 | Concept              | Meaning                                                                                                                         |

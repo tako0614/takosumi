@@ -15,8 +15,8 @@ Use public docs for stable external contracts:
 ```text
 ../index.md
 ../reference/api.md
-../reference/model.md
-../reference/docs-contract.md
+../concepts/index.md
+../concepts/boundaries.md
 ../../app-docs/index.md
 ../../app-docs/pricing.md
 ```

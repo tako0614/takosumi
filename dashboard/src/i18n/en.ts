@@ -238,8 +238,9 @@ export const en: Record<keyof typeof ja, string> = {
   "install.installingGeneric": "Adding…",
   "install.wait": "This only takes a moment",
   "install.progressAria": "Install progress",
-  "install.step.fetch": "Fetch code",
-  "install.step.check": "Check compatibility",
+  "install.step.source": "Fetch code",
+  "install.step.create": "Create service",
+  "install.step.check": "Review changes",
   "install.step.deploy": "Deploy",
   "install.step.done": "Finish",
   "install.doneTitle": "Added {name}",
@@ -789,9 +790,8 @@ export const en: Record<keyof typeof ja, string> = {
   "new.appHandoff.kicker": "Requested by an app",
   "new.appHandoff.app": "App",
   "new.appHandoff.return": "Return target",
-  "new.installCta": "Install",
+  "new.installCta": "Add",
   "new.compat.recheck": "Check again",
-  "new.progress.title": "Installing",
   "new.progress.slow":
     "This is taking a little longer. You can continue when it finishes.",
   "new.progress.details": "Detailed progress",
@@ -1030,18 +1030,13 @@ export const en: Record<keyof typeof ja, string> = {
     "Services that use this connection will fail to deploy.",
 
   // --- backups -----------------------------------------------------------------
-  "backups.subtitle": "Create and inspect partial control exports.",
+  "backups.subtitle":
+    "Create and inspect partial control exports. Import and restore are not supported.",
   "backups.create": "Create backup",
   "backups.creating": "Creating a backup.",
   "backups.col.createdAt": "Created",
   "backups.col.contents": "Contents",
-  "backups.col.actions": "Actions",
   "backups.controlExport": "Partial control export",
-  "backups.restorePoint": "Restore point",
-  "backups.restoreGeneration": "Backup point {generation}",
-  "backups.restore": "Prepare restore",
-  "backups.restoreUnavailable":
-    "Create a backup from a service before restoring it.",
   "backups.empty.title": "No backups yet",
   "backups.empty.message": "Create this workspace's first backup.",
 
@@ -1555,7 +1550,8 @@ export const en: Record<keyof typeof ja, string> = {
   "account.apiKeys.copied": "Copied",
   "account.apiKeys.copyFailed":
     "Could not copy the key. Save the visible value manually.",
-  "account.apiKeys.error": "Could not complete the API key operation: {message}",
+  "account.apiKeys.error":
+    "Could not complete the API key operation: {message}",
   "account.apiKeys.empty": "No API keys yet.",
   "account.apiKeys.key": "Key",
   "account.apiKeys.access": "Access",

@@ -222,7 +222,7 @@ const RULES: readonly BoundaryRule[] = [
     appliesTo: (path) =>
       path === "worker/src/release_activator.ts" ||
       path === "scripts/operator-release-activator.ts" ||
-      path === "docs/reference/deploy-control-api.md" ||
+      path === "docs/reference/api.md" ||
       path === "docs/operations/release-artifacts.md",
     patterns: [
       /releaseActivationCredentialEnv\(/,
@@ -1057,9 +1057,7 @@ export function findGeneralizationBoundaryViolations(
           ) {
             continue;
           }
-          if (
-            isAllowedTypeofMessageCheck(rule.id, source.content, index)
-          ) {
+          if (isAllowedTypeofMessageCheck(rule.id, source.content, index)) {
             continue;
           }
           if (isAllowedHistoryLocation(path, source.content, index)) continue;

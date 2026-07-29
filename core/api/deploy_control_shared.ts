@@ -272,7 +272,12 @@ export const ALLOWED_KEYS: Record<
   ]),
   resourceFormPinRestore: new Set(["entries", "cursor", "limit"]),
   formPackageInstall: new Set(["artifactRef", "expectedPackageDigest"]),
-  formPackageReverify: new Set(["formRef", "packageDigest"]),
+  formPackageReverify: new Set([
+    "type",
+    "version",
+    "schemaDigest",
+    "packageDigest",
+  ]),
   outputInterfaceMigrationConfirm: new Set(["candidate", "selection"]),
 };
 

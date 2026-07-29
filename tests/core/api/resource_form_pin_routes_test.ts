@@ -21,12 +21,9 @@ const SPACE = "space_resources_a";
 const BASE = `/internal/v1/workspaces/${WORKSPACE}/migrations/resource-form-pins`;
 const INVENTORY_PATH = "/internal/v1/migrations/resource-form-pins/inventory";
 const IDENTITY: InstalledFormReference = {
-  formRef: {
-    apiVersion: "forms.takoform.com/v1alpha1",
-    kind: "ObjectBucket",
-    definitionVersion: "1.0.0",
-    schemaDigest: `sha256:${"a".repeat(64)}`,
-  },
+  type: "object_bucket",
+  version: "1.0.0",
+  schemaDigest: `sha256:${"a".repeat(64)}`,
   packageDigest: `sha256:${"b".repeat(64)}`,
 };
 

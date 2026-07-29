@@ -379,6 +379,7 @@ function store(input: {
 const officeConfig = {
   id: "cfg-reference-takos-office-main",
   name: "takos-office-main",
+  sourceSelector: source("takos-office"),
   modulePath: ".",
   variableMapping: {
     enable_cloudflare_resources: true,
@@ -518,6 +519,7 @@ function yuruConfig(input: {
   return {
     id: `cfg-reference-${input.app}-main`,
     name: `${input.app}-main`,
+    sourceSelector: source(input.app),
     modulePath: ".",
     variableMapping: {
       enable_cloudflare_resources: true,
@@ -593,6 +595,7 @@ function yuruConfig(input: {
 const storageConfig = {
   id: "cfg-reference-takos-storage-main",
   name: "takos-storage-main",
+  sourceSelector: source("takos-storage"),
   modulePath: ".",
   variableMapping: {
     enable_cloudflare_resources: true,
@@ -688,6 +691,7 @@ const storageConfig = {
 const gitConfig = {
   id: "cfg-reference-takos-git-main",
   name: "takos-git-main",
+  sourceSelector: source("takos-git"),
   modulePath: ".",
   variableMapping: {
     enable_cloudflare_resources: true,

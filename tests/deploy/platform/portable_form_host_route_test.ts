@@ -42,7 +42,7 @@ test("platform serves the portable Form host through the canonical Core handler"
 
   const forms = await worker.fetch(
     new Request(
-      `https://app.takosumi.test${TAKOFORM_FORM_HOST_API_PATH}/forms?workspace=workspace_a`,
+      `https://app.takosumi.test${TAKOFORM_FORM_HOST_API_PATH}/forms?space=workspace_a`,
       { headers: { authorization: "Bearer resource-token" } },
     ),
     env,
@@ -64,7 +64,7 @@ test("platform rejects portable Form selectors outside the verified Workspace", 
 
   const crossWorkspaceForms = await handlePlatformResourceShapeApiRequest(
     new Request(
-      `https://app.takosumi.test${TAKOFORM_FORM_HOST_API_PATH}/forms?workspace=workspace_b`,
+      `https://app.takosumi.test${TAKOFORM_FORM_HOST_API_PATH}/forms?space=workspace_b`,
     ),
     env,
     verifyWorkspaceA,
@@ -78,16 +78,19 @@ test("platform rejects portable Form selectors outside the verified Workspace", 
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          type: "object_bucket",
+          apiVersion: "forms.takoform.com/v1alpha1",
+          kind: "ObjectBucket",
           form: {
-            type: "object_bucket",
-            version: "0.0.0-legacy.1",
-            schemaDigest: `sha256:${"1".repeat(64)}`,
+            formRef: {
+              apiVersion: "forms.takoform.com/v1alpha1",
+              kind: "ObjectBucket",
+              definitionVersion: "0.0.0-legacy.1",
+              schemaDigest: `sha256:${"1".repeat(64)}`,
+            },
             packageDigest: `sha256:${"2".repeat(64)}`,
           },
-          workspace: "workspace_b",
-          name: "private-assets",
-          config: { name: "private-assets" },
+          metadata: { space: "workspace_b", name: "private-assets" },
+          spec: { name: "private-assets" },
         }),
       },
     ),

@@ -34,6 +34,7 @@ import type { AccountsStore } from "./store.ts";
 import type { ControlPlaneOperations } from "./control-operations.ts";
 import {
   type ControlDispatchContext,
+  type ControlSession,
   controllerErrorResponse,
   controlPlaneUnavailable,
 } from "./control/shared.ts";
@@ -168,16 +169,27 @@ interface ControlRouteContext {
 export async function handleAuthenticatedControlRoute(
   context: ControlRouteContext & {
     readonly subject: string;
+    readonly workspaceId?: string;
   },
 ): Promise<Response | undefined> {
   const { request, url } = context;
   if (!isApiV1Path(url.pathname)) return undefined;
   const timings = serverTimingBucketForPath(url.pathname);
-  return await dispatchAuthenticatedControlRoute(context, timings);
+  return await dispatchAuthenticatedControlRoute(
+    {
+      ...context,
+      session: {
+        subject: context.subject,
+        ...(context.workspaceId ? { workspaceId: context.workspaceId } : {}),
+        requiredAccess: controlRouteRequiredScope(request),
+      },
+    },
+    timings,
+  );
 }
 
 async function dispatchAuthenticatedControlRoute(
-  context: ControlRouteContext & { readonly subject: string },
+  context: ControlRouteContext & { readonly session: ControlSession },
   timings: ServerTimingBucket,
 ): Promise<Response> {
   const { request, url } = context;
@@ -200,7 +212,7 @@ async function dispatchAuthenticatedControlRoute(
           ...(context.managedPublicBaseDomain
             ? { managedPublicBaseDomain: context.managedPublicBaseDomain }
             : {}),
-          session: { subject: context.subject },
+          session: context.session,
         }),
     );
     return appendServerTiming(response, timings);
@@ -272,7 +284,13 @@ export async function handleControlRoute(
     {
       ...context,
       operations,
-      subject: bearer.auth.subject,
+      session: {
+        subject: bearer.auth.subject,
+        ...(bearer.auth.workspaceId
+          ? { workspaceId: bearer.auth.workspaceId }
+          : {}),
+        requiredAccess: controlRouteRequiredScope(request),
+      },
     },
     timings,
   );
@@ -280,7 +298,7 @@ export async function handleControlRoute(
 
 function controlRouteRequiredScope(
   request: Request,
-): AccountsBearerRequiredScope {
+): Exclude<AccountsBearerRequiredScope, "admin"> {
   switch (request.method.toUpperCase()) {
     case "GET":
     case "HEAD":
@@ -325,7 +343,7 @@ interface DispatchInput {
   readonly store: AccountsStore;
   readonly issuer?: string;
   readonly managedPublicBaseDomain?: string;
-  readonly session: { readonly subject: string };
+  readonly session: ControlSession;
 }
 
 async function dispatch(input: DispatchInput): Promise<Response> {

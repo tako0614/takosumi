@@ -396,6 +396,12 @@ export interface CommitRestoredStateResult {
 
 export interface CommitRestoredStateInput {
   readonly stateVersion: StateVersion;
+  /**
+   * Output snapshot rebased onto the restored StateVersion generation. When
+   * present it must commit in the same atomic unit as the restored state,
+   * Capsule cursors, terminal Run, and lease-fence clear.
+   */
+  readonly output?: Output;
   readonly capsulePatch: {
     readonly id: string;
     readonly patch: CapsulePatch;
@@ -1937,6 +1943,9 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       ...capsulePatch.patch,
     });
     this.#stateVersions.set(input.stateVersion.id, input.stateVersion);
+    if (input.output) {
+      this.#outputs.set(input.output.id, input.output);
+    }
     this.#runs.set(input.restoreRunTerminal.id, input.restoreRunTerminal);
     this.#runLeases.delete(input.restoreRunTerminal.id);
     this.#capsules.set(capsulePatch.id, updated);

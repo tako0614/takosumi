@@ -21,6 +21,21 @@ const appViewsCssSource = readFileSync(
   resolve(here, "../../../../../dashboard/src/styles/app-views.css"),
   "utf8",
 );
+const installProgressSource = readFileSync(
+  resolve(
+    here,
+    "../../../../../dashboard/src/components/install/InstallProgress.tsx",
+  ),
+  "utf8",
+);
+const installStepsSource = readFileSync(
+  resolve(here, "../../../../../dashboard/src/lib/install-steps.ts"),
+  "utf8",
+);
+const runViewSource = readFileSync(
+  resolve(here, "../../../../../dashboard/src/views/runs/RunView.tsx"),
+  "utf8",
+);
 const controlApiSource = readFileSync(
   resolve(here, "../../../../../dashboard/src/lib/control-api.ts"),
   "utf8",
@@ -109,6 +124,8 @@ describe("/new flow guidance", () => {
     );
     expect(newAppViewSource).toContain("config.sourceSelector");
     expect(newAppViewSource).toContain("installConfigForStoreListing");
+    expect(newAppViewSource).toContain("uniqueStoreInstallConfigForSource");
+    expect(newAppViewSource).not.toContain("genericInstallConfigForSource");
     expect(newAppViewSource).not.toContain("const primaryStore = createMemo");
     expect(newAppViewSource).not.toContain(
       "const buildingBlockStore = createMemo",
@@ -281,7 +298,7 @@ describe("/new flow guidance", () => {
     );
     expect(newAppViewSource).toContain("url: listing.source.url");
     expect(newAppViewSource).toContain(
-      "storeInstallConfigsForSource(\n      installConfigList(),\n      listing.source.url,\n      listing.source.path",
+      "uniqueStoreInstallConfigForSource(\n      installConfigList(),\n      listing.source.url,\n      listing.source.path",
     );
     expect(newAppViewSource).not.toContain(
       "listing.source.ref.trim() !== sourceRef().trim()",
@@ -299,7 +316,7 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain("sourceMatches.length === 1");
     expect(newAppViewSource).toContain("sourceMatches.length === 0");
     expect(newAppViewSource).toContain(': "";');
-    expect(newAppViewSource).toContain("if (matches.length > 1) return null");
+    expect(newAppViewSource).toContain("uniqueStoreInstallConfigForSource");
     expect(newAppViewSource).not.toContain("listing.source.ref.trim()");
   });
 
@@ -539,7 +556,8 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain("listInstallConfigsCached(id)");
     expect(newAppViewSource).toContain("const installConfigList");
     expect(newAppViewSource).toContain("installConfigList().find");
-    expect(newAppViewSource).toContain("defaultGitInstallConfig() ?? {");
+    expect(newAppViewSource).not.toContain("genericInstallConfigForSource");
+    expect(newAppViewSource).toContain("uniqueStoreInstallConfigForSource");
     expect(newAppViewSource).not.toContain("listing.installConfigId");
     expect(newAppViewSource).not.toContain("templateConfigList().length === 0");
     expect(newAppViewSource).not.toContain("parseInitialInstallConfigId");
@@ -560,7 +578,8 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain("storeVariablePath");
     expect(newAppViewSource).toContain("storeInputError");
     expect(newAppViewSource).toContain("installConfigForStoreListing(listing)");
-    expect(newAppViewSource).toContain("defaultGitInstallConfig() ?? {");
+    expect(newAppViewSource).not.toContain("genericInstallConfigForSource");
+    expect(newAppViewSource).toContain("uniqueStoreInstallConfigForSource");
     expect(newAppViewSource).not.toContain("listing.installConfigId");
     expect(newAppViewSource).not.toContain("storeListing.installConfigId");
     expect(newAppViewSource).toContain('class="av-service-setup"');
@@ -608,9 +627,13 @@ describe("/new flow guidance", () => {
     expect(appViewsCssSource).toContain(".av-add-identity-host");
     expect(ja["new.identity.label"]).toBe("公開URL");
     expect(en["new.identity.label"]).toBe("Public URL");
-    // App-store vocabulary for the single action.
-    expect(ja["new.installCta"]).toBe("インストール");
-    expect(en["new.installCta"]).toBe("Install");
+    // ONE verb for the single action. The dictionary says 追加 in 42 entries
+    // — every progress, done and error line — so a CTA reading インストール
+    // meant pressing one word and being told another had happened. The noun
+    // 「インストールリンク」 stays: that is the link format's name, not a verb.
+    expect(ja["new.installCta"]).toBe("追加");
+    expect(en["new.installCta"]).toBe("Add");
+    expect(ja["new.git.url"]).toBe("インストールリンク");
   });
 
   test("a disabled install button always states what is blocking it", () => {
@@ -670,8 +693,10 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain(
       "installExperienceInitialSecret(entry.installExperience)?.variable",
     );
-    expect(newAppViewSource).toContain(
-      'type={field.secret ? "password" : "text"}',
+    // Wrap-tolerant: the setup fields sit a level deeper now that the install
+    // screen replaces them, so the formatter breaks this attribute.
+    expect(newAppViewSource).toMatch(
+      /type=\{\s*field\.secret \? "password" : "text"\s*\}/u,
     );
     expect(newAppViewSource).toContain("hasMissingAdvancedStoreInputs");
     expect(newAppViewSource).toContain(
@@ -767,29 +792,62 @@ describe("/new flow guidance", () => {
   });
 
   test("waiting renders as progress, not as an error-toned alert", () => {
-    // Installing REPLACES the action row with one neutral progress panel;
+    // Installing REPLACES the setup fields with one neutral progress card;
     // step-by-step detail stays collapsed inside it. The old red-bordered
     // wb-status-panel made a normal wait read as a failure.
     expect(newAppViewSource).toContain("const installProgressActive = ()");
-    expect(newAppViewSource).toContain("const installProgressPercent = ()");
-    expect(newAppViewSource).toContain('class="av-add-progress"');
-    expect(newAppViewSource).toContain('role="progressbar"');
+    expect(newAppViewSource).toContain("const installProgressPanel = ()");
     expect(newAppViewSource).toContain("when={!installProgressActive()}");
+    expect(newAppViewSource).toContain("fallback={installProgressPanel()}");
     expect(newAppViewSource).not.toContain(
       'AnnouncedStatus class="wb-status-panel">',
     );
-    expect(appViewsCssSource).toContain(".av-add-progress-track");
-    expect(appViewsCssSource).toContain(".av-add-progress-fill");
-    // The add flow must not reuse RunView's install-card class names — both
-    // render an "install progress" surface and same-name rules collide.
-    expect(newAppViewSource).not.toContain('class="av-install-progress"');
-    expect(newAppViewSource).not.toContain("av-install-actions");
-    // Neutral surface, never the danger tint.
+    expect(installProgressSource).toContain('role="progressbar"');
+    expect(appViewsCssSource).toContain(".av-install-bar");
+    // Neutral elevated surface, never the danger tint.
     expect(appViewsCssSource).not.toMatch(
-      /\.av-add-progress \{[^}]*--tg-danger/u,
+      /\.av-install-card \{[^}]*--tg-danger/u,
     );
-    expect(ja["new.progress.title"]).toBe("インストールしています");
-    expect(en["new.progress.title"]).toBe("Installing");
+  });
+
+  test("/new and /runs render ONE install surface, not one each", () => {
+    // An install crosses two routes. Each used to draw its own "installing"
+    // screen off its own step list, and the bar restarted near zero at the
+    // hand-off — one install read as two or three separate installs. Both
+    // halves now render the shared card off the shared step list.
+    for (const source of [newAppViewSource, runViewSource]) {
+      expect(source).toContain("InstallProgressCard");
+      expect(source).toContain("components/install/InstallProgress.tsx");
+      // Neither half may hand-roll the bar or the phase line again.
+      expect(source).not.toContain('class="av-install-bar"');
+      expect(source).not.toContain('class="av-install-phase"');
+      expect(source).not.toContain('class="av-add-progress"');
+    }
+    // The list /new walks into and /runs continues out of. /new stops at
+    // "check"; /runs starts there, so the percentage only moves forward.
+    // (tests/dashboard/src/lib/install-steps_test.ts proves the property.)
+    expect(installStepsSource).toMatch(
+      /INSTALL_STEPS: readonly InstallStep\[\] = \[\s*"source",\s*"create",\s*"check",\s*"deploy",\s*"done",\s*\]/u,
+    );
+    expect(newAppViewSource).toContain('return "check";');
+    expect(newAppViewSource).not.toContain('step={"deploy"}');
+    expect(runViewSource).toContain('{ phase: "progress", step: "check" }');
+    // A 1-tap update never runs 取得/作成, so it walks the shorter list rather
+    // than opening its bar half-full.
+    expect(runViewSource).toContain("autoUpdateMode() ? UPDATE_STEPS");
+    // One vocabulary for the shared steps — the two dictionaries of
+    // near-synonyms ("コードを取得" vs "内容を取得") are what made the
+    // hand-off read as a different operation.
+    expect(ja["install.step.source"]).toBe("コードを取得");
+    expect(ja["install.step.create"]).toBe("サービスを作成");
+    expect(ja["install.step.check"]).toBe("内容を確認");
+    expect(en["install.step.source"]).toBe("Fetch code");
+    expect(en["install.step.check"]).toBe("Review changes");
+    expect(en).not.toHaveProperty("install.step.fetch");
+    expect(ja).not.toHaveProperty("install.step.fetch");
+    // The add flow's private "Installing" title is gone with its private card.
+    expect(en).not.toHaveProperty("new.progress.title");
+    expect(ja).not.toHaveProperty("new.progress.title");
   });
 
   test("keeps install progress copy app-oriented instead of OpenTofu-oriented", () => {

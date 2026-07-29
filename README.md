@@ -30,7 +30,7 @@ PORT=8788 bun core/index.ts
 ```
 
 標準の使い方は、dashboard で Git URL を指定して install し、Git Source から Capsule を作る流れです。dashboard の
-install / plan / apply は、登録済みの Git Source に対して [`/api`](docs/reference/deploy-control-api.md)
+install / plan / apply は、登録済みの Git Source に対して [`/api`](docs/reference/api.md)
 control plane を通ります。アプリのソース、ビルド成果物、コンテナイメージ、release artifact は Git に置いた
 OpenTofu module とその普通の変数で表現し、Takosumi 側に独自の upload / build 経路は持ちません。CLI は
 [docs/reference/cli.md](docs/reference/cli.md) にまとめています。廃止済みの `takosumi deploy` / `takosumi plan`
@@ -73,7 +73,7 @@ Bun + Postgres の実行基盤です (`deploy/local-substrate/` の cloud wrappe
 使い方の流れは意図的に小さくしています: **Workspace** と **Project** を選び、Git **Source** を登録して
 **Capsule** を作り、**ProviderConnection** / **CredentialRecipe** / **ProviderBinding** で provider を接続し、
 **Run** を確認して、**StateVersion** / **Output** / **AuditEvent** を見る。公開モデルは
-[Model reference](docs/reference/model.md) と [用語集](docs/reference/glossary.md) を参照してください。
+[全体像](docs/concepts/index.md) と [用語集](docs/reference/glossary.md) を参照してください。
 実装者向けの最終方針は [docs/internal/final-plan.md](docs/internal/final-plan.md) (非公開) にあります。
 
 | 用語                 | 意味                                                                                           |

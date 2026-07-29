@@ -9,7 +9,6 @@ import {
   createEffect,
   createMemo,
   createResource,
-  createSignal,
   For,
   Match,
   onMount,
@@ -19,6 +18,8 @@ import {
 import { useNavigate } from "@solidjs/router";
 import { Plus, Server, Settings2, Sparkles } from "lucide-solid";
 import Page from "../account/components/auth/Page.tsx";
+import AppFace from "../../components/AppFace.tsx";
+import { resolveAppIcon } from "../../lib/app-face.ts";
 import {
   currentWorkspaceId,
   selectAvailableWorkspaceId,
@@ -40,7 +41,6 @@ import {
 } from "../../lib/control-api.ts";
 import {
   type AppSurface,
-  isUrlString,
   isVisibleServiceCapsule,
   needsAttention,
 } from "../../lib/capsules-ui.ts";
@@ -73,16 +73,9 @@ function kindClass(kind: string | undefined): string {
   }
 }
 
-/**
- * Fallback face when Takosumi has no icon metadata: initials on a kind-tinted
- * tile. Distinct-by-name + distinct-by-kind keeps unknown services from reading
- * as identical boxes (configured image / emoji icons are preferred).
- */
-function monogramInitials(name: string): string {
-  const segments = name.split(/[-_\s./]+/).filter(Boolean);
-  const chars = (segments[0]?.[0] ?? name[0] ?? "?") + (segments[1]?.[0] ?? "");
-  return chars.toUpperCase().slice(0, 2);
-}
+// The monogram fallback (initials on a kind-tinted tile) and the icon
+// resolution both live in lib/app-face.ts + components/AppFace.tsx, so the same
+// service wears the same face here, in the store grid, and in the add flow.
 
 function Inner() {
   const navigate = useNavigate();
@@ -385,71 +378,27 @@ function AppTileView(props: { readonly tile: AppTile }) {
   const attention = () => needsAttention(props.tile.inst);
   const name = () => surface().name ?? props.tile.inst.name;
   const openUrl = () => surface().url;
-  const [imageFailed, setImageFailed] = createSignal(false);
-  const imageSrc = () => {
-    if (imageFailed()) return undefined;
-    const icon = surface().icon;
-    if (!icon) return undefined;
-    if (isUrlString(icon)) return icon;
-    // A path-style icon (e.g. "/icons/app.svg") resolves against the app's
-    // own origin when the surface has a URL.
-    if (/[./]/.test(icon) && surface().url) {
-      try {
-        return new URL(icon, surface().url).href;
-      } catch {
-        return undefined;
-      }
-    }
-    return undefined;
-  };
-  const emojiIcon = () => {
-    const icon = surface().icon;
-    // Only a short glyph is an emoji — a path-ish value must never render as
-    // tile text (it would paint "/icons/app.svg" across the face).
-    if (!icon || isUrlString(icon) || /[./]/.test(icon)) return undefined;
-    return icon;
-  };
   // Product-specific marks come only from the Interface document. A Capsule
   // name is fallback presentation text, never an implicit product identity.
-  const isMonogram = () => !imageSrc() && !emojiIcon();
+  const icon = () => resolveAppIcon(surface().icon, surface().url);
 
   const body = () => (
     <>
-      <span
+      <AppFace
         class="av-tile-icon"
-        classList={{
-          "av-tile-icon-image": Boolean(imageSrc()),
-          [kindClass(surface().category)]: isMonogram(),
-        }}
-        aria-hidden="true"
+        imageFrameClass="av-tile-icon-image"
+        monogramFrameClass={kindClass(surface().category)}
+        imageClass="av-tile-image"
+        emojiClass="av-tile-emoji"
+        monogramClass="av-tile-mono"
+        name={name()}
+        iconUrl={icon().imageSrc}
+        emoji={icon().emoji}
       >
-        <Switch
-          fallback={
-            <span class="av-tile-mono">{monogramInitials(name())}</span>
-          }
-        >
-          <Match when={imageSrc()}>
-            {(src) => (
-              <img
-                class="av-tile-image"
-                src={src()}
-                alt=""
-                loading="lazy"
-                // The icon is a Capsule-supplied URL: never hand it the
-                // dashboard URL (it carries workspace/run ids) as a Referer.
-                referrerpolicy="no-referrer"
-                onError={() => setImageFailed(true)}
-              />
-            )}
-          </Match>
-          <Match when={emojiIcon()}>
-            {(emo) => <span class="av-tile-emoji">{emo()}</span>}
-          </Match>
-        </Switch>
         <Show when={attention()}>
           <span class="av-tile-dot" />
         </Show>
-      </span>
+      </AppFace>
       <span class="av-tile-name">{name()}</span>
       <Show when={attention()}>
         <span class="sr-only">{t("apps.needsAttention")}</span>

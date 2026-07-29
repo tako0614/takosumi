@@ -5,9 +5,10 @@ Form Package contract. It is not a second definition authority.
 
 The three JSON Schemas are canonical-JSON-equivalent copies of
 `github.com/tako0614/terraform-provider-takoform/formpackage/schemas` at commit
-`99c63161e5a321105a489f3ec19b47827dfe53b0`. Exact source and RFC 8785 digests
-are recorded in `schema-provenance.json`. Update them only after the independent
-project changes its contract and the host conformance tests are updated.
+`8a52edc5688e4bb844dc6e0da28bb13d369a2ff8` (`v0.2.0`). Exact source and RFC
+8785 digests are recorded in `schema-provenance.json`. Update them only after
+the independent project changes its contract and the host conformance tests are
+updated.
 
 The `application/vnd.takosumi.takoform-package-install.v1+json` object is an
 internal transport envelope for immutable package-index bytes, payload bytes,

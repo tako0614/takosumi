@@ -30,6 +30,7 @@ import {
   type ControlSession,
   publicCapsule,
   publicStateVersion,
+  canAccessWorkspace,
   requireWorkspaceAccess,
 } from "./shared.ts";
 import {
@@ -96,6 +97,17 @@ async function dashboardBootstrap(
   const selectedWorkspaceId = stringValue(
     url.searchParams.get("workspaceId") ?? undefined,
   );
+  if (
+    selectedWorkspaceId !== undefined &&
+    session.workspaceId !== undefined &&
+    selectedWorkspaceId !== session.workspaceId
+  ) {
+    return errorJson(
+      "forbidden",
+      "The authenticated credential cannot select this Workspace.",
+      403,
+    );
+  }
   const workspaceLimit = parseLimitOrDefault(
     url.searchParams.get("workspaceLimit"),
     DEFAULT_WORKSPACE_BOOTSTRAP_LIMIT,
@@ -153,6 +165,17 @@ async function dashboardOverview(
   const requestedWorkspaceId = stringValue(
     url.searchParams.get("workspaceId") ?? undefined,
   );
+  if (
+    requestedWorkspaceId !== undefined &&
+    session.workspaceId !== undefined &&
+    requestedWorkspaceId !== session.workspaceId
+  ) {
+    return errorJson(
+      "forbidden",
+      "The authenticated credential cannot select this Workspace.",
+      403,
+    );
+  }
   const includeWorkspaces =
     url.searchParams.get("includeWorkspaces") !== "false" ||
     requestedWorkspaceId === undefined;
@@ -506,7 +529,7 @@ interface DashboardWorkspaceListMeta {
 
 async function listActiveWorkspaceProjectionForSession(
   operations: ControlPlaneOperations,
-  _store: AccountsStore,
+  store: AccountsStore,
   session: ControlSession,
   options: {
     readonly limit: number;
@@ -517,10 +540,18 @@ async function listActiveWorkspaceProjectionForSession(
   readonly meta: DashboardWorkspaceListMeta;
 }> {
   if (session.workspaceId !== undefined) {
-    const workspace = await operations.workspaces.getWorkspaceForAccount(
-      session.subject,
+    const candidate = await operations.workspaces.getWorkspace(
       session.workspaceId,
     );
+    const workspace = await canAccessWorkspace({
+      operations,
+      store,
+      session,
+      workspaceId: session.workspaceId,
+      workspace: candidate,
+    })
+      ? candidate
+      : undefined;
     const workspaces =
       workspace && !isArchivedWorkspace(workspace) ? [workspace] : [];
     return {

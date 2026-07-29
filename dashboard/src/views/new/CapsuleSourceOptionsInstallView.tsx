@@ -11,13 +11,10 @@ import Page from "../account/components/auth/Page.tsx";
 import PageHeader from "../../components/ui/PageHeader.tsx";
 import { Button, Card, Spinner } from "../../components/ui/index.ts";
 import {
-  createSource,
-  extractRunId,
   readSourceSnapshotPresentationFile,
   resolveStableSourceTag,
-  syncSource,
-  waitForLatestSourceSnapshot,
 } from "../../lib/control-api.ts";
+import { readSnapshotDocument } from "../../lib/snapshot-document.ts";
 import { currentWorkspaceId } from "../../lib/workspace-state.ts";
 
 interface LoadedOptions {
@@ -60,32 +57,14 @@ function Inner() {
     setLoading(true);
     setError(undefined);
     try {
-      const resolved = selected.ref
-        ? undefined
-        : await resolveStableSourceTag(workspaceId, selected.git);
-      const exactRef = selected.ref ?? resolved!.commit;
-      const created = await createSource({
+      const { file, commit, resolvedTag } = await readSnapshotDocument({
         workspaceId,
-        name: `options-${crypto.randomUUID().slice(0, 8)}`,
-        url: selected.git,
-        defaultRef: exactRef,
-        defaultPath: ".",
-        autoSync: false,
+        namePrefix: "options",
+        git: selected.git,
+        ref: selected.ref,
+        path: selected.path,
+        read: readSourceSnapshotPresentationFile,
       });
-      const sync = await syncSource(created.source.id);
-      const snapshot = await waitForLatestSourceSnapshot(created.source.id, {
-        runId: extractRunId(sync),
-      });
-      if (resolved && snapshot.resolvedCommit !== resolved.commit) {
-        throw new Error(
-          "stable tag の commit と SourceSnapshot が一致しません",
-        );
-      }
-      const file = await readSourceSnapshotPresentationFile(
-        created.source.id,
-        snapshot.id,
-        selected.path,
-      );
       const parsed = parseCapsuleSourceOptionsText(file.text);
       if (!parsed.ok) throw new Error(parsed.error);
       setLoaded({
@@ -93,8 +72,8 @@ function Inner() {
         source: {
           url: selected.git,
           ...(selected.ref ? { requestedRef: selected.ref } : {}),
-          ...(resolved ? { resolvedTag: resolved.tag } : {}),
-          commit: snapshot.resolvedCommit,
+          ...(resolvedTag ? { resolvedTag } : {}),
+          commit,
           path: selected.path,
         },
         digest: file.digest,
@@ -148,7 +127,7 @@ function Inner() {
         }
       >
         <Show when={error()}>
-          <div class="wb-status-panel is-error" role="alert">
+          <div class="wb-action-callout" role="alert">
             {error()}
           </div>
         </Show>

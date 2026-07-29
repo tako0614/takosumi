@@ -18,6 +18,7 @@
 import {
   type CloudflareWorkerEnv as AccountsCloudflareWorkerEnv,
   accountsExternalLoginConfigured,
+  configuredTakosumiMobileOidcClientId,
   createCloudflareWorker,
 } from "../accounts-cloudflare/src/handler.ts";
 import {
@@ -95,7 +96,10 @@ import type {
   ManagedPublicHostnameClaimRequest,
   ManagedPublicHostnameClaimResult,
 } from "takosumi-contract/install-configs";
-import type { WorkspaceMember } from "takosumi-contract/workspaces";
+import type {
+  WorkspaceMember,
+  WorkspaceRole,
+} from "takosumi-contract/workspaces";
 import {
   encodeActorContext,
   TAKOSUMI_INTERNAL_ACTOR_HEADER,
@@ -412,6 +416,7 @@ async function createPlatformOperatorControlMcpAuthority(
         store,
         operations,
         subject: session.subject,
+        workspaceId: session.workspaceId,
         ...(env.TAKOSUMI_ACCOUNTS_ISSUER
           ? { issuer: env.TAKOSUMI_ACCOUNTS_ISSUER }
           : {}),
@@ -681,8 +686,15 @@ export default {
     if (isPlatformExtensionContributionsPath(url.pathname)) {
       return handlePlatformExtensionContributionsRequest(request, url, env);
     }
-    if (url.pathname === TAKOFORM_FORM_HOST_WELL_KNOWN_PATH) {
+    const publicCoreRoute = matchPlatformPublicCoreRoute(url.pathname);
+    if (publicCoreRoute?.access === "public") {
       return await handlePlatformTakoformDiscoveryRequest(request, env);
+    }
+    if (publicCoreRoute?.access === "operator") {
+      if (!platformResourceShapeApiEnabled(env)) {
+        return Response.json({ error: "not found" }, { status: 404 });
+      }
+      return await (await cachedDeployControlService(env)).app.fetch(request);
     }
     // Core lifecycle and identity prefixes always win over extension routing.
     // Descriptor validation rejects overlaps too; keeping the dispatch order
@@ -793,8 +805,10 @@ function platformDiscoveryOptions(
     resourceShapeApi && resourceCapabilitiesEnabled(resources);
   const adapters = platformAdapterCapabilities(env, resourceShapes);
   const operator = platformOperatorCapabilities(env, resourceShapes);
+  const mobileOidcClientId = configuredTakosumiMobileOidcClientId(env);
   return {
     origin,
+    ...(mobileOidcClientId ? { mobileOidcClientId } : {}),
     resources,
     adapters,
     identity: {
@@ -941,6 +955,30 @@ export function isPlatformResourceShapeApiPath(pathname: string): boolean {
   );
 }
 
+export interface PlatformPublicCoreRoute {
+  readonly access: "public" | "operator";
+}
+
+/**
+ * Non-SPA Core routes that do not belong to the Workspace-scoped Resource
+ * ingress. Keep this list exact so an unknown `/v1/*` path cannot escape into
+ * either the operator bearer or the dashboard fallback by prefix accident.
+ */
+export function matchPlatformPublicCoreRoute(
+  pathname: string,
+): PlatformPublicCoreRoute | undefined {
+  if (pathname === TAKOFORM_FORM_HOST_WELL_KNOWN_PATH) {
+    return { access: "public" };
+  }
+  if (
+    pathname === "/v1/form-activations" ||
+    pathname.startsWith("/v1/form-activations/")
+  ) {
+    return { access: "operator" };
+  }
+  return undefined;
+}
+
 function isPlatformOfferingOperatorApiPath(pathname: string): boolean {
   return (
     pathname === "/v1/offering-catalogs" ||
@@ -1053,6 +1091,14 @@ async function platformResourceShapeExternalRequest(
       response: Response.json({ error: "unauthenticated" }, { status: 401 }),
     };
   }
+  const sessionCsrfFailure = platformExtensionSessionCsrfFailure(
+    request,
+    env,
+    session,
+  );
+  if (sessionCsrfFailure) {
+    return { ok: false, response: sessionCsrfFailure };
+  }
   return await platformResourceShapeAuthorizedRequest(
     request,
     request,
@@ -1139,6 +1185,7 @@ async function platformResourceShapeAuthorizedRequest(
     session,
     workspaceId,
     workspaceAccess,
+    platformResourceWorkspaceAccessMode(request, url),
   );
   if (!verified.ok) return verified;
 
@@ -1188,6 +1235,51 @@ async function platformResourceShapeAuthorizedRequest(
       }
     }),
   };
+}
+
+function platformResourceWorkspaceAccessMode(
+  request: Request,
+  url: URL,
+): "read" | "write" {
+  if (request.method === "GET" || request.method === "HEAD") return "read";
+  // Token issue invokes an already Ready binding. It does not mutate the
+  // Interface or its owner, so delegated read authority remains sufficient.
+  if (
+    request.method === "POST" &&
+    /^\/v1\/interfaces\/[^/]+\/token$/u.test(url.pathname)
+  ) {
+    return "read";
+  }
+  return "write";
+}
+
+function platformExtensionSessionCsrfFailure(
+  request: Request,
+  env: CloudflareWorkerEnv,
+  session: PlatformExtensionSessionContext,
+): Response | undefined {
+  const readOnly =
+    request.method === "GET" ||
+    request.method === "HEAD" ||
+    request.method === "OPTIONS";
+  if (
+    readOnly ||
+    session.authKind !== "session" ||
+    request.headers.has("authorization")
+  ) {
+    return undefined;
+  }
+  let issuerOrigin: string;
+  try {
+    issuerOrigin = new URL(
+      env.TAKOSUMI_ACCOUNTS_ISSUER ?? request.url,
+    ).origin;
+  } catch {
+    return Response.json({ error: "csrf_check_unavailable" }, { status: 503 });
+  }
+  return request.headers.get("origin") === issuerOrigin
+    ? undefined
+    : Response.json({ error: "csrf_failed" }, { status: 403 });
 }
 
 function isPlatformResourceArtifactRequest(
@@ -1254,6 +1346,7 @@ async function platformResourceArtifactAuthorizedRequest(
     session,
     workspaceId,
     workspaceAccess,
+    "write",
   );
   if (!verified.ok) return verified;
   if (requestedSpace !== workspaceId) {
@@ -2610,6 +2703,8 @@ export interface PlatformExtensionSessionContext {
   readonly subject?: string;
   readonly capsuleId?: string;
   readonly workspaceId?: string;
+  /** Live Workspace role carried by token introspection or membership lookup. */
+  readonly workspaceRole?: WorkspaceRole;
   readonly audience?: string;
   readonly interfaceId?: string;
   readonly interfaceBindingId?: string;
@@ -2831,6 +2926,8 @@ async function platformCompatibilityRouteInterfaceScope(
     context.env,
     session,
     workspaceId,
+    undefined,
+    access,
   );
   if (!verified.ok) {
     const error = new Error("compatibility route Workspace is not authorized");
@@ -3238,6 +3335,8 @@ async function resolvePlatformCompatibilityReadyResource(
     context.env,
     session,
     space,
+    undefined,
+    "read",
   );
   if (!verified.ok) return undefined;
 
@@ -3467,6 +3566,14 @@ async function platformExtensionAuthContext(
       response: Response.json({ error: "unauthenticated" }, { status: 401 }),
     };
   }
+  const csrfFailure = platformExtensionSessionCsrfFailure(
+    request,
+    env,
+    session,
+  );
+  if (csrfFailure) {
+    return { ok: false, response: csrfFailure };
+  }
   if (route?.workspaceContext) {
     const requestedValues = new URL(request.url).searchParams.getAll(
       "workspaceId",
@@ -3510,6 +3617,9 @@ async function platformExtensionAuthContext(
         session,
         requestedWorkspaceId,
         workspaceAccess,
+        request.method === "GET" || request.method === "HEAD"
+          ? "read"
+          : "write",
       );
       if (!verified.ok) return verified;
       session = verified.session;
@@ -3582,7 +3692,8 @@ type PlatformExtensionWorkspaceAccess = (
   request: Request,
   env: CloudflareWorkerEnv,
   workspaceId: string,
-) => Promise<boolean>;
+  session?: PlatformExtensionSessionContext,
+) => Promise<boolean | WorkspaceRole>;
 
 export async function platformExtensionVerifiedWorkspaceSession(
   request: Request,
@@ -3590,6 +3701,7 @@ export async function platformExtensionVerifiedWorkspaceSession(
   session: PlatformExtensionSessionContext,
   requestedWorkspaceId: string,
   workspaceAccess: PlatformExtensionWorkspaceAccess = platformExtensionSessionCanAccessWorkspace,
+  access: "read" | "write" = "read",
 ): Promise<
   | {
       readonly ok: true;
@@ -3601,17 +3713,35 @@ export async function platformExtensionVerifiedWorkspaceSession(
   if (verifiedWorkspaceId && requestedWorkspaceId !== verifiedWorkspaceId) {
     return platformExtensionWorkspaceAccessFailure();
   }
-  if (!verifiedWorkspaceId) {
+  let liveAccess: boolean | WorkspaceRole | undefined;
+  if (!verifiedWorkspaceId || session.authKind === "session") {
     const canRequestWorkspace =
       session.authKind === "session" ||
       session.authKind === "personal-access-token";
-    if (
-      !canRequestWorkspace ||
-      !(await workspaceAccess(request, env, requestedWorkspaceId))
-    ) {
+    if (!canRequestWorkspace) {
       return platformExtensionWorkspaceAccessFailure();
     }
+    liveAccess = await workspaceAccess(
+      request,
+      env,
+      requestedWorkspaceId,
+      session,
+    );
+    if (!liveAccess) return platformExtensionWorkspaceAccessFailure();
     verifiedWorkspaceId = requestedWorkspaceId;
+  }
+  const workspaceRole =
+    session.workspaceRole ??
+    (typeof liveAccess === "string" ? liveAccess : undefined);
+  if (
+    access === "write" &&
+    (workspaceRole === "viewer" ||
+      ((session.authKind === "session" ||
+        session.authKind === "personal-access-token" ||
+        session.authKind === "oauth-access-token") &&
+        workspaceRole === undefined))
+  ) {
+    return platformExtensionWorkspaceAccessFailure();
   }
 
   return {
@@ -3619,6 +3749,7 @@ export async function platformExtensionVerifiedWorkspaceSession(
     session: {
       ...session,
       workspaceId: verifiedWorkspaceId,
+      ...(workspaceRole ? { workspaceRole } : {}),
     },
   };
 }
@@ -3643,7 +3774,8 @@ async function platformExtensionSessionCanAccessWorkspace(
   request: Request,
   env: CloudflareWorkerEnv,
   workspaceId: string,
-): Promise<boolean> {
+  session?: PlatformExtensionSessionContext,
+): Promise<boolean | WorkspaceRole> {
   const headers = sessionMirrorHeaders(request);
   if (!headers) return false;
   try {
@@ -3657,10 +3789,58 @@ async function platformExtensionSessionCanAccessWorkspace(
       ),
       env,
     );
-    return response.ok;
+    if (!response.ok) return false;
+    const workspaceEnvelope = objectRecord(
+      await response.json().catch(() => undefined),
+    );
+    const workspace = objectRecord(workspaceEnvelope.workspace);
+    const subject = safePlatformExtensionSubject(session?.subject);
+    if (!subject) return true;
+    if (valueString(workspace.ownerUserId) === subject) return "owner";
+
+    const membersResponse = await accountsWorker.fetch(
+      new Request(
+        new URL(
+          `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/members`,
+          request.url,
+        ),
+        { method: "GET", headers },
+      ),
+      env,
+    );
+    if (!membersResponse.ok) return false;
+    const membersEnvelope = objectRecord(
+      await membersResponse.json().catch(() => undefined),
+    );
+    const members = Array.isArray(membersEnvelope.members)
+      ? membersEnvelope.members
+      : [];
+    const member = members
+      .map(objectRecord)
+      .find(
+        (candidate) =>
+          valueString(candidate.accountId) === subject &&
+          valueString(candidate.status) === "active",
+      );
+    const roles = member && Array.isArray(member.roles) ? member.roles : [];
+    return preferredPlatformWorkspaceRole(roles);
   } catch {
     return false;
   }
+}
+
+function preferredPlatformWorkspaceRole(
+  roles: readonly unknown[],
+): WorkspaceRole | false {
+  for (const role of [
+    "owner",
+    "admin",
+    "member",
+    "viewer",
+  ] as const satisfies readonly WorkspaceRole[]) {
+    if (roles.includes(role)) return role;
+  }
+  return false;
 }
 
 type PlatformExtensionAccountsFetch = (
@@ -4023,6 +4203,7 @@ function platformExtensionScopes(scope: string): string[] {
 function platformExtensionTakosumiMetadata(record: Record<string, unknown>): {
   readonly capsuleId?: string;
   readonly workspaceId?: string;
+  readonly workspaceRole?: WorkspaceRole;
 } {
   const takosumi = record.takosumi;
   if (!takosumi || typeof takosumi !== "object" || Array.isArray(takosumi)) {
@@ -4037,10 +4218,21 @@ function platformExtensionTakosumiMetadata(record: Record<string, unknown>): {
     typeof metadata.workspace_id === "string" && metadata.workspace_id.trim()
       ? metadata.workspace_id.trim()
       : undefined;
+  const workspaceRole = safePlatformWorkspaceRole(metadata.role);
   return {
     ...(capsuleId ? { capsuleId } : {}),
     ...(workspaceId ? { workspaceId } : {}),
+    ...(workspaceRole ? { workspaceRole } : {}),
   };
+}
+
+function safePlatformWorkspaceRole(value: unknown): WorkspaceRole | undefined {
+  return value === "owner" ||
+    value === "admin" ||
+    value === "member" ||
+    value === "viewer"
+    ? value
+    : undefined;
 }
 
 async function defaultPlatformExtensionIntrospectFetch(

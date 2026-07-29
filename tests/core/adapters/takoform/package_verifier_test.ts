@@ -118,7 +118,7 @@ test("schema identity, data-only fields, executable modes, and payload closure r
   }));
   await expect(
     verifier.verify(openSchema.envelope, openSchema.packageDigest),
-  ).rejects.toThrow("not explicitly closed");
+  ).rejects.toThrow("must set additionalProperties to false");
 
   const credential = await buildArtifact((definition) => ({
     ...definition,
@@ -241,7 +241,9 @@ test("output and negative fixtures are verified against their declared schemas",
   });
   await expect(
     verifier.verify(invalidOutput.envelope, invalidOutput.packageDigest),
-  ).rejects.toThrow("does not satisfy outputSchema");
+  ).rejects.toThrow(
+    "conformance fixture positive output does not satisfy its Form Definition schema",
+  );
 
   const passingNegative = await buildArtifact(undefined, {
     negativeFixture: { name: "valid" },
@@ -439,7 +441,9 @@ test("portable schema admission rejects dynamic references and preserves literal
   }));
   await expect(
     verifier.verify(dynamicReference.envelope, dynamicReference.packageDigest),
-  ).rejects.toThrow("desiredSchema.$dynamicRef is not portable");
+  ).rejects.toThrow(
+    "desiredSchema.$dynamicRef is forbidden because dynamic resolution cannot be proven closed",
+  );
 
   const literalPattern = await buildArtifact((definition) => ({
     ...asRecord(definition),
@@ -575,10 +579,15 @@ async function buildArtifact(
   const schemaDigest =
     options.schemaDigestOverride ??
     `sha256:${await sha256HexAsync(definitionBytes)}`;
-  const formRef = {
+  const portableFormRef = {
     apiVersion: "forms.takoform.com/v1alpha1",
     kind: "ExampleStore",
     definitionVersion: "1.0.0",
+    schemaDigest,
+  };
+  const formRef = {
+    type: "example_store",
+    version: "1.0.0",
     schemaDigest,
   };
   const definitionPath = options.definitionPath ?? "definition.json";
@@ -608,7 +617,7 @@ async function buildArtifact(
     apiVersion: "packages.forms.takoform.com/v1alpha1",
     kind: "FormPackage",
     packageVersion: "1.0.0",
-    formRef,
+    formRef: portableFormRef,
     definitionPath,
     files: [
       {

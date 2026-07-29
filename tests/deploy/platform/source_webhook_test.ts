@@ -14,11 +14,6 @@ import {
   TAKOSUMI_PRODUCT_CAPABILITIES_PATH,
   TAKOSUMI_WELL_KNOWN_PATH,
 } from "../../../contract/api-surface.ts";
-import {
-  TAKOFORM_COMPAT_PROFILE,
-  TAKOFORM_FORM_HOST_API_PATH,
-  TAKOFORM_FORM_HOST_WELL_KNOWN_PATH,
-} from "../../../contract/form-host-interoperability.ts";
 import { TAKOSUMI_PLATFORM_HARDENING_GATE_EVIDENCE_KIND } from "../../../contract/platform-hardening.ts";
 import { OSS_PLATFORM_HARDENING_CONTRIBUTION } from "../../../deploy/platform/production_hardening.ts";
 import {
@@ -41,7 +36,6 @@ import {
   isPlatformExtensionCatalogPath,
   isPlatformExtensionContributionsPath,
   isPlatformResourceShapeApiPath,
-  matchPlatformPublicCoreRoute,
   matchPlatformExtensionRoute,
   platformExtensionCatalog,
   platformExtensionContributionCatalog,
@@ -1467,6 +1461,7 @@ test("platform discovery advertises the registered Takosumi native public client
           ],
         },
       ]),
+      TAKOSUMI_MOBILE_OIDC_CLIENT_ID: "takosumi-mobile-operator",
     } as never,
   );
 
@@ -1690,12 +1685,9 @@ test("platform Resource Shape API discovery is gated by deploy-control token and
   expect(discovery.status).toBe(200);
   const discoveryBody = await discovery.json();
   expect(discoveryBody.features.resource_shapes).toBe(true);
-  expect(discoveryBody.features.compatibility_profiles).toContain(
-    TAKOFORM_COMPAT_PROFILE,
-  );
-  expect(discoveryBody.endpoints.extensions[TAKOFORM_COMPAT_PROFILE]).toBe(
-    `https://app.takosumi.com${TAKOFORM_FORM_HOST_API_PATH}`,
-  );
+  // Takoform is a canonical Form host, not a compatibility profile.
+  expect(discoveryBody.features.compatibility_profiles).toEqual([]);
+  expect(discoveryBody.endpoints.extensions).toBeUndefined();
 });
 
 test("platform serves every advertised Takoform Core endpoint ahead of the SPA fallback", async () => {
@@ -1722,9 +1714,7 @@ test("platform serves every advertised Takoform Core endpoint ahead of the SPA f
   );
   expect(platformDiscoveryResponse.status).toBe(200);
   const platformDiscovery = await platformDiscoveryResponse.json();
-  expect(platformDiscovery.endpoints.extensions[TAKOFORM_COMPAT_PROFILE]).toBe(
-    `https://app.takosumi.com${TAKOFORM_FORM_HOST_API_PATH}`,
-  );
+  expect(platformDiscovery.features.compatibility_profiles).toEqual([]);
 
   const hostDiscoveryResponse = await worker.fetch(
     new Request(
@@ -1745,8 +1735,8 @@ test("platform serves every advertised Takoform Core endpoint ahead of the SPA f
       env,
     );
   const endpointProbes = [
-    `${hostDiscovery.endpoints.api}/forms?workspace=space_1`,
-    `${hostDiscovery.endpoints.forms}?workspace=space_1`,
+    `${hostDiscovery.endpoints.api}/forms?space=space_1`,
+    `${hostDiscovery.endpoints.forms}?space=space_1`,
     hostDiscovery.endpoints.capabilities,
     `${hostDiscovery.endpoints.compatibility_api}/form-availability?space=space_1`,
   ];
@@ -1845,14 +1835,6 @@ test("platform Resource Shape API routes are routed before accounts and bearer-g
   expect(isPlatformResourceShapeApiPath("/takoform/v0/forms")).toBe(false);
   expect(isPlatformResourceShapeApiPath("/v1/form-activations")).toBe(false);
   expect(isPlatformResourceShapeApiPath("/api/v1/workspaces")).toBe(false);
-  expect(
-    matchPlatformPublicCoreRoute(TAKOFORM_FORM_HOST_WELL_KNOWN_PATH)?.access,
-  ).toBe("public");
-  expect(
-    matchPlatformPublicCoreRoute("/v1/form-activations/activation_1")?.access,
-  ).toBe("operator");
-  expect(matchPlatformPublicCoreRoute("/workspaces/dashboard")).toBeUndefined();
-
   const disabled = await handlePlatformResourceShapeApiRequest(
     new Request("https://app.takosumi.com/v1/target-pools/default"),
     {} as never,
@@ -3652,6 +3634,7 @@ test("platform Resource artifact ingress preserves authenticated binary bodies a
       authKind: "personal-access-token",
       subject: "account_artifact",
       workspaceId: "workspace_artifact",
+      workspaceRole: "member",
       scopes: ["write"],
     }),
   );

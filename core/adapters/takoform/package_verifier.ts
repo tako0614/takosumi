@@ -1,4 +1,11 @@
-import type { FormOperation, FormRef, JsonObject } from "takosumi-contract";
+import {
+  portableTypeForShapeKind,
+  type FormInterfaceDescriptor,
+  type FormOperation,
+  type FormRef,
+  type JsonObject,
+  type JsonValue,
+} from "takosumi-contract";
 import type {
   FormPackageVerifier,
   VerifiedFormDefinition,
@@ -26,7 +33,7 @@ export const TAKOFORM_PACKAGE_ENVELOPE_MEDIA_TYPE =
   "application/vnd.takosumi.takoform-package-install.v1+json";
 
 const FORM_DEFINITION_MEDIA_TYPE =
-  "application/vnd.takoform.form-definition.v0+json";
+  "application/vnd.takoform.form-definition.v1+json";
 // The install envelope is a takosumi-internal in-memory transport bound. The
 // remaining limits mirror the portable takoform contract exactly
 // (formpackage/verify.go), so one signed package gets one verdict everywhere.
@@ -171,11 +178,19 @@ const TEXT_MEDIA_TYPES = new Set([
 ]);
 
 interface PackageIndex {
-  readonly format: string;
+  readonly apiVersion: string;
+  readonly kind: string;
   readonly packageVersion: string;
-  readonly form: FormRef;
+  readonly formRef: TakoformFormRef;
   readonly definitionPath: string;
   readonly files: readonly PackageFile[];
+}
+
+interface TakoformFormRef {
+  readonly apiVersion: string;
+  readonly kind: string;
+  readonly definitionVersion: string;
+  readonly schemaDigest: string;
 }
 
 interface PackageFile {
@@ -206,41 +221,43 @@ interface TakoformInterfaceInput {
 }
 
 interface TakoformDefinition {
-  readonly format: string;
-  readonly type: string;
-  readonly version: string;
+  readonly apiVersion: string;
+  readonly kind: string;
+  readonly definitionVersion: string;
   readonly title: string;
   readonly description?: string;
   readonly status: string;
-  readonly configSchema: CanonicalJsonValue;
-  readonly attributesSchema: CanonicalJsonValue;
-  readonly outputsSchema?: CanonicalJsonValue;
-  readonly forceNewFields?: readonly string[];
-  readonly operations: readonly string[];
+  readonly desiredSchema: CanonicalJsonValue;
+  readonly observedSchema: CanonicalJsonValue;
+  readonly outputSchema?: CanonicalJsonValue;
+  readonly immutableFields?: readonly string[];
+  readonly lifecycleCapabilities: readonly string[];
   readonly interfaces?: readonly {
     readonly name: string;
     readonly version: string;
     readonly description?: string;
     readonly required?: boolean;
+    readonly resourceUriInput?: string;
+    readonly document?: CanonicalJsonValue;
     readonly documentSchema?: CanonicalJsonValue;
     readonly inputs?: readonly TakoformInterfaceInput[];
   }[];
   readonly conformanceFixtures?: readonly {
     readonly name: string;
-    readonly configPath: string;
-    readonly attributesPath?: string;
-    readonly outputsPath?: string;
+    readonly desiredPath: string;
+    readonly observedPath?: string;
+    readonly outputPath?: string;
   }[];
   readonly negativeConformanceFixtures?: readonly {
     readonly name: string;
-    readonly stage: "config" | "attributes" | "outputs";
+    readonly stage: "desired" | "observed" | "output";
     readonly inputPath: string;
     readonly expectedFailure: string;
   }[];
 }
 
 /**
- * Takosumi host adapter for the independent Takoform Form Package v0
+ * Takosumi host adapter for the independent Takoform Form Package v1alpha1
  * contract. The internal envelope is transport only; package and FormRef
  * identity remain the signed canonical Takoform index and definition.
  */
@@ -250,7 +267,7 @@ export class TakoformDataOnlyPackageVerifier implements FormPackageVerifier {
   constructor(
     private readonly signatureVerifier: TakoformPackageSignatureVerifier,
   ) {
-    this.id = `takoform.form-package.v0+${signatureVerifier.id}`;
+    this.id = `takoform.form-package.v1alpha1+${signatureVerifier.id}`;
   }
 
   async verify(
@@ -305,10 +322,10 @@ export class TakoformDataOnlyPackageVerifier implements FormPackageVerifier {
     rejectForbiddenDefinitionContent(definitionValue, "$");
     const definition = definitionValue as unknown as TakoformDefinition;
     verifyDefinitionSemantics(definition);
-    verifyPortableSchema(definition.configSchema, "configSchema");
-    verifyPortableSchema(definition.attributesSchema, "attributesSchema");
-    if (definition.outputsSchema !== undefined) {
-      verifyPortableSchema(definition.outputsSchema, "outputsSchema");
+    verifyPortableSchema(definition.desiredSchema, "desiredSchema");
+    verifyPortableSchema(definition.observedSchema, "observedSchema");
+    if (definition.outputSchema !== undefined) {
+      verifyPortableSchema(definition.outputSchema, "outputSchema");
     }
     for (const [position, descriptor] of (
       definition.interfaces ?? []
@@ -324,24 +341,25 @@ export class TakoformDataOnlyPackageVerifier implements FormPackageVerifier {
     verifyConformanceFixtures(index, definition, payloads);
 
     const verifiedDefinition: VerifiedFormDefinition = {
-      formRef: index.form,
+      formRef: internalFormRef(index.formRef),
       displayName: definition.title,
       ...(definition.description
         ? { description: definition.description }
         : {}),
-      operations: definitionOperations(definition.operations),
+      operations: lifecycleOperations(
+        definition.lifecycleCapabilities,
+        definition.status,
+      ),
       metadata: definitionMetadata(definition),
+      ...(definition.interfaces?.length
+        ? { interfaceDescriptors: verifiedInterfaceDescriptors(definition) }
+        : {}),
     };
     return { packageDigest, definitions: [verifiedDefinition] };
   }
 }
 
 function verifyDefinitionSemantics(definition: TakoformDefinition): void {
-  if (definition.type === "revocations") {
-    throw new TypeError(
-      'form type "revocations" is reserved for the revocation delivery namespace',
-    );
-  }
   const conformanceFixtures = definition.conformanceFixtures ?? [];
   if (conformanceFixtures.length > MAX_CONFORMANCE_FIXTURES) {
     throw new TypeError(
@@ -355,13 +373,38 @@ function verifyDefinitionSemantics(definition: TakoformDefinition): void {
     );
   }
   const interfaces = new Set<string>();
-  for (const descriptor of definition.interfaces ?? []) {
+  for (const [position, descriptor] of (
+    definition.interfaces ?? []
+  ).entries()) {
     const key = `${descriptor.name}@${descriptor.version}`;
     if (interfaces.has(key)) {
       throw new TypeError(`duplicate Interface ${key}`);
     }
     interfaces.add(key);
-    verifyInterfaceInputs(key, descriptor.inputs ?? []);
+    verifyInterfaceInputs(
+      key,
+      descriptor.resourceUriInput,
+      descriptor.inputs ?? [],
+    );
+    if (descriptor.documentSchema !== undefined) {
+      let validateDocument: InterpretedDraft202012Validator;
+      try {
+        validateDocument = new InterpretedDraft202012Validator(
+          descriptor.documentSchema,
+          `interfaces[${position}].documentSchema`,
+        );
+      } catch (error) {
+        throw new TypeError(
+          `interfaces[${position}].documentSchema could not be prepared: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+      const document = descriptor.document ?? {};
+      if (!validateDocument.validate(document)) {
+        throw new TypeError(
+          `interfaces[${position}].document does not satisfy documentSchema: ${validateDocument.errorsText()}`,
+        );
+      }
+    }
   }
 
   const fixtureNames = new Set<string>();
@@ -387,9 +430,12 @@ function verifyDefinitionSemantics(definition: TakoformDefinition): void {
  */
 function verifyInterfaceInputs(
   interfaceKey: string,
+  resourceUriInput: string | undefined,
   inputs: readonly TakoformInterfaceInput[],
 ): void {
   const names = new Set<string>();
+  let resourceUriMatches = 0;
+  let resourceUriInputs = 0;
   for (const input of inputs) {
     if (names.has(input.name)) {
       throw new TypeError(
@@ -398,7 +444,7 @@ function verifyInterfaceInputs(
     }
     names.add(input.name);
     if (input.source === "literal") {
-      if (input.value === undefined || input.value === null) {
+      if (input.value === undefined) {
         throw new TypeError(
           `Interface ${interfaceKey} input ${input.name} is a literal without a value`,
         );
@@ -410,12 +456,68 @@ function verifyInterfaceInputs(
       }
       continue;
     }
-    if (input.value !== undefined && input.value !== null) {
+    if (input.source === "resource_uri") {
+      resourceUriInputs++;
+      if (input.pointer !== undefined || input.value !== undefined) {
+        throw new TypeError(
+          `Interface ${interfaceKey} input ${input.name} uses resource_uri and must not carry a pointer or value`,
+        );
+      }
+      if (input.name === resourceUriInput) {
+        resourceUriMatches++;
+      }
+    }
+    if (input.value !== undefined) {
       throw new TypeError(
         `Interface ${interfaceKey} input ${input.name} carries a value with source ${input.source}; only a literal may`,
       );
     }
   }
+  if (
+    resourceUriInput !== undefined &&
+    (resourceUriMatches !== 1 || resourceUriInputs !== 1)
+  ) {
+    throw new TypeError(
+      `Interface ${interfaceKey} resourceUriInput ${resourceUriInput} must name exactly one resource_uri input`,
+    );
+  }
+  if (resourceUriInput === undefined && resourceUriInputs !== 0) {
+    throw new TypeError(
+      `Interface ${interfaceKey} has a resource_uri input without resourceUriInput`,
+    );
+  }
+}
+
+function verifiedInterfaceDescriptors(
+  definition: TakoformDefinition,
+): readonly FormInterfaceDescriptor[] {
+  return (definition.interfaces ?? []).map((descriptor) => ({
+    name: descriptor.name,
+    version: descriptor.version,
+    ...(descriptor.description ? { description: descriptor.description } : {}),
+    ...(descriptor.required === true ? { required: true } : {}),
+    ...(descriptor.resourceUriInput
+      ? { resourceUriInput: descriptor.resourceUriInput }
+      : {}),
+    ...(descriptor.document !== undefined
+      ? { document: descriptor.document as JsonObject }
+      : {}),
+    ...(descriptor.documentSchema !== undefined
+      ? { documentSchema: descriptor.documentSchema as JsonObject }
+      : {}),
+    ...(descriptor.inputs?.length
+      ? {
+          inputs: descriptor.inputs.map((input) => ({
+            name: input.name,
+            source: input.source,
+            ...(input.pointer !== undefined ? { pointer: input.pointer } : {}),
+            ...(input.value !== undefined
+              ? { value: input.value as JsonValue }
+              : {}),
+          })),
+        }
+      : {}),
+  }));
 }
 
 function decodeEnvelope(value: CanonicalJsonValue): InstallEnvelope {
@@ -597,14 +699,29 @@ async function verifyDefinitionIdentity(
   definition: TakoformDefinition,
 ): Promise<void> {
   const digest = `sha256:${await sha256HexAsync(canonicalJsonBytes(value))}`;
-  const exact = index.form;
+  const exact = index.formRef;
   if (
-    exact.type !== definition.type ||
-    exact.version !== definition.version ||
+    exact.apiVersion !== definition.apiVersion ||
+    exact.kind !== definition.kind ||
+    exact.definitionVersion !== definition.definitionVersion ||
     exact.schemaDigest !== digest
   ) {
     throw new TypeError("FormRef does not match the canonical Form Definition");
   }
+}
+
+function internalFormRef(ref: TakoformFormRef): FormRef {
+  const type = portableTypeForShapeKind(ref.kind);
+  if (type === undefined) {
+    throw new TypeError(
+      `FormRef kind ${ref.kind} cannot be projected to a portable type`,
+    );
+  }
+  return {
+    type,
+    version: ref.definitionVersion,
+    schemaDigest: ref.schemaDigest,
+  };
 }
 
 type ObjectAdmission = "open" | "closed" | "excluded";
@@ -1599,22 +1716,22 @@ function verifyConformanceFixtures(
   definition: TakoformDefinition,
   payloads: ReadonlyMap<string, Uint8Array>,
 ): void {
-  let configValidator: InterpretedDraft202012Validator;
-  let attributesValidator: InterpretedDraft202012Validator;
-  let outputsValidator: InterpretedDraft202012Validator | undefined;
+  let desiredValidator: InterpretedDraft202012Validator;
+  let observedValidator: InterpretedDraft202012Validator;
+  let outputValidator: InterpretedDraft202012Validator | undefined;
   try {
-    configValidator = new InterpretedDraft202012Validator(
-      definition.configSchema,
-      "configSchema",
+    desiredValidator = new InterpretedDraft202012Validator(
+      definition.desiredSchema,
+      "desiredSchema",
     );
-    attributesValidator = new InterpretedDraft202012Validator(
-      definition.attributesSchema,
-      "attributesSchema",
+    observedValidator = new InterpretedDraft202012Validator(
+      definition.observedSchema,
+      "observedSchema",
     );
-    if (definition.outputsSchema !== undefined) {
-      outputsValidator = new InterpretedDraft202012Validator(
-        definition.outputsSchema,
-        "outputsSchema",
+    if (definition.outputSchema !== undefined) {
+      outputValidator = new InterpretedDraft202012Validator(
+        definition.outputSchema,
+        "outputSchema",
       );
     }
   } catch (error) {
@@ -1623,53 +1740,46 @@ function verifyConformanceFixtures(
     });
   }
   for (const fixture of definition.conformanceFixtures ?? []) {
-    assertJsonFixture(index, fixture.configPath, fixture.name, "config");
-    const configBytes = payloads.get(fixture.configPath);
-    if (!configBytes)
-      throw new TypeError(`fixture ${fixture.name} configPath is missing`);
+    assertJsonFixture(index, fixture.desiredPath, fixture.name, "desired");
+    const desiredBytes = payloads.get(fixture.desiredPath);
+    if (!desiredBytes)
+      throw new TypeError(`fixture ${fixture.name} desiredPath is missing`);
     validateFixtureAgainstSchema(
-      definition.configSchema,
-      configValidator,
-      parseCanonicalJson(configBytes),
-      `${fixture.name} config`,
+      definition.desiredSchema,
+      desiredValidator,
+      parseCanonicalJson(desiredBytes),
+      `${fixture.name} desired`,
     );
-    if (fixture.attributesPath) {
-      assertJsonFixture(
-        index,
-        fixture.attributesPath,
-        fixture.name,
-        "attributes",
-      );
-      const attributesBytes = payloads.get(fixture.attributesPath);
-      if (!attributesBytes)
-        throw new TypeError(
-          `fixture ${fixture.name} attributesPath is missing`,
-        );
+    if (fixture.observedPath) {
+      assertJsonFixture(index, fixture.observedPath, fixture.name, "observed");
+      const observedBytes = payloads.get(fixture.observedPath);
+      if (!observedBytes)
+        throw new TypeError(`fixture ${fixture.name} observedPath is missing`);
       validateFixtureAgainstSchema(
-        definition.attributesSchema,
-        attributesValidator,
-        parseCanonicalJson(attributesBytes),
-        `${fixture.name} attributes`,
+        definition.observedSchema,
+        observedValidator,
+        parseCanonicalJson(observedBytes),
+        `${fixture.name} observed`,
       );
     }
-    if (fixture.outputsPath) {
+    if (fixture.outputPath) {
       if (
-        definition.outputsSchema === undefined ||
-        outputsValidator === undefined
+        definition.outputSchema === undefined ||
+        outputValidator === undefined
       ) {
         throw new TypeError(
-          `fixture ${fixture.name} declares outputsPath without outputsSchema`,
+          `fixture ${fixture.name} declares outputPath without outputSchema`,
         );
       }
-      assertJsonFixture(index, fixture.outputsPath, fixture.name, "outputs");
-      const outputsBytes = payloads.get(fixture.outputsPath);
-      if (!outputsBytes)
-        throw new TypeError(`fixture ${fixture.name} outputsPath is missing`);
+      assertJsonFixture(index, fixture.outputPath, fixture.name, "output");
+      const outputBytes = payloads.get(fixture.outputPath);
+      if (!outputBytes)
+        throw new TypeError(`fixture ${fixture.name} outputPath is missing`);
       validateFixtureAgainstSchema(
-        definition.outputsSchema,
-        outputsValidator,
-        parseCanonicalJson(outputsBytes),
-        `${fixture.name} outputs`,
+        definition.outputSchema,
+        outputValidator,
+        parseCanonicalJson(outputBytes),
+        `${fixture.name} output`,
       );
     }
   }
@@ -1687,16 +1797,16 @@ function verifyConformanceFixtures(
       );
     }
     const selected =
-      fixture.stage === "config"
-        ? { schema: definition.configSchema, validator: configValidator }
-        : fixture.stage === "attributes"
+      fixture.stage === "desired"
+        ? { schema: definition.desiredSchema, validator: desiredValidator }
+        : fixture.stage === "observed"
           ? {
-              schema: definition.attributesSchema,
-              validator: attributesValidator,
+              schema: definition.observedSchema,
+              validator: observedValidator,
             }
-          : definition.outputsSchema !== undefined &&
-              outputsValidator !== undefined
-            ? { schema: definition.outputsSchema, validator: outputsValidator }
+          : definition.outputSchema !== undefined &&
+              outputValidator !== undefined
+            ? { schema: definition.outputSchema, validator: outputValidator }
             : undefined;
     if (selected === undefined) {
       throw new TypeError(
@@ -1755,21 +1865,29 @@ function assertJsonFixture(
   }
 }
 
-function definitionOperations(operations: readonly string[]): FormOperation[] {
+function lifecycleOperations(
+  capabilities: readonly string[],
+  status: string,
+): FormOperation[] {
   const result: FormOperation[] = [];
-  for (const operation of operations) {
+  for (const capability of capabilities) {
     if (
-      operation === "create" ||
-      operation === "read" ||
-      operation === "update" ||
-      operation === "delete" ||
-      operation === "import" ||
-      operation === "refresh" ||
-      operation === "sync" ||
-      operation === "drift"
+      capability === "create" ||
+      capability === "read" ||
+      capability === "update" ||
+      capability === "delete" ||
+      capability === "import" ||
+      capability === "refresh"
     ) {
-      result.push(operation);
+      result.push(capability);
     }
+  }
+  if (
+    status === "compatibility-candidate" &&
+    capabilities.includes("observe")
+  ) {
+    if (!capabilities.includes("read")) result.push("read");
+    if (!capabilities.includes("refresh")) result.push("refresh");
   }
   return [...new Set(result)];
 }
@@ -1778,8 +1896,8 @@ function definitionMetadata(definition: TakoformDefinition): JsonObject {
   return {
     takoform: {
       status: definition.status,
-      ...(definition.forceNewFields
-        ? { forceNewFields: [...definition.forceNewFields] }
+      ...(definition.immutableFields
+        ? { immutableFields: [...definition.immutableFields] }
         : {}),
       ...(definition.interfaces
         ? {

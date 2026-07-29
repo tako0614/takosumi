@@ -11,6 +11,7 @@ import {
   type CanonicalJsonValue,
 } from "../../../../core/adapters/takoform/canonical_json.ts";
 import { sha256HexAsync } from "../../../../core/shared/runtime/hash.ts";
+import { portableTypeForShapeKind } from "takosumi-contract";
 
 /**
  * Cross-implementation parity trip-wire (spec/GOVERNANCE.md in takoform):
@@ -72,7 +73,8 @@ async function envelopeFromDirectory(directory: string) {
   return envelopeFromIndex(indexBytes, files);
 }
 
-const DEFINITION_MEDIA_TYPE = "application/vnd.takoform.form-definition.v0+json";
+const DEFINITION_MEDIA_TYPE =
+  "application/vnd.takoform.form-definition.v1+json";
 
 async function fileEntry(path: string, mediaType: string, bytes: Uint8Array) {
   return {
@@ -90,7 +92,11 @@ async function fileEntry(path: string, mediaType: string, bytes: Uint8Array) {
  */
 async function syntheticPackage(
   definition: CanonicalJsonValue,
-  extraFiles: readonly { path: string; mediaType: string; bytes: Uint8Array }[] = [],
+  extraFiles: readonly {
+    path: string;
+    mediaType: string;
+    bytes: Uint8Array;
+  }[] = [],
 ) {
   const definitionBytes = canonicalJsonBytes(definition);
   const record = definition as Readonly<Record<string, CanonicalJsonValue>>;
@@ -101,18 +107,24 @@ async function syntheticPackage(
     entries.push(await fileEntry(extra.path, extra.mediaType, extra.bytes));
   }
   const index = {
-    format: "takoform.form-package@v0",
-    packageVersion: String(record.version ?? "1.0.0"),
-    form: {
-      type: String(record.type ?? "parity_probe"),
-      version: String(record.version ?? "1.0.0"),
+    apiVersion: "packages.forms.takoform.com/v1alpha1",
+    kind: "FormPackage",
+    packageVersion: String(record.definitionVersion ?? "1.0.0"),
+    formRef: {
+      apiVersion: "forms.takoform.com/v1alpha1",
+      kind: String(record.kind ?? "ParityProbe"),
+      definitionVersion: String(record.definitionVersion ?? "1.0.0"),
       schemaDigest: `sha256:${await sha256HexAsync(definitionBytes)}`,
     },
     definitionPath: "definition.json",
     files: entries.sort((left, right) => left.path.localeCompare(right.path)),
   };
   const files: EnvelopeFile[] = [
-    { path: "definition.json", mode: 0o644, contentBase64: encodeBase64(definitionBytes) },
+    {
+      path: "definition.json",
+      mode: 0o644,
+      contentBase64: encodeBase64(definitionBytes),
+    },
     ...extraFiles.map((extra) => ({
       path: extra.path,
       mode: 0o644,
@@ -126,24 +138,24 @@ function minimalDefinition(
   overrides: Readonly<Record<string, CanonicalJsonValue>> = {},
 ): CanonicalJsonValue {
   return {
-    format: "takoform.form-definition@v0",
-    type: "parity_probe",
-    version: "1.0.0",
+    apiVersion: "forms.takoform.com/v1alpha1",
+    kind: "ParityProbe",
+    definitionVersion: "1.0.0",
     title: "Parity probe",
     status: "standard",
-    configSchema: {
+    desiredSchema: {
       $schema: "https://json-schema.org/draft/2020-12/schema",
       type: "object",
       additionalProperties: false,
       properties: { name: { type: "string" } },
     },
-    attributesSchema: {
+    observedSchema: {
       $schema: "https://json-schema.org/draft/2020-12/schema",
       type: "object",
       additionalProperties: false,
       properties: { ready: { type: "boolean" } },
     },
-    operations: ["create", "read"],
+    lifecycleCapabilities: ["create", "read"],
     ...overrides,
   };
 }
@@ -152,7 +164,7 @@ interface CorpusManifest {
   readonly positive: readonly {
     readonly name: string;
     readonly path: string;
-    readonly type: string;
+    readonly kind: string;
   }[];
   readonly negative: readonly {
     readonly name: string;
@@ -177,7 +189,7 @@ describe.skipIf(!corpusPresent)("takoform corpus parity", () => {
         ),
       ) as {
         readonly packages: readonly {
-          readonly type: string;
+          readonly kind: string;
           readonly packageDigest: string;
         }[];
       })
@@ -185,18 +197,28 @@ describe.skipIf(!corpusPresent)("takoform corpus parity", () => {
 
   test("harness control: a minimal synthetic package verifies", async () => {
     const control = await syntheticPackage(minimalDefinition());
-    const verified = await verifier.verify(control.envelope, control.packageDigest);
+    const verified = await verifier.verify(
+      control.envelope,
+      control.packageDigest,
+    );
     expect(verified.definitions[0]?.formRef.type).toBe("parity_probe");
   });
 
   for (const positive of manifest.positive) {
     test(`positive verdict parity: ${positive.name}`, async () => {
-      const built = await envelopeFromDirectory(join(CORPUS_ROOT, positive.path));
-      const verified = await verifier.verify(built.envelope, built.packageDigest);
+      const built = await envelopeFromDirectory(
+        join(CORPUS_ROOT, positive.path),
+      );
+      const verified = await verifier.verify(
+        built.envelope,
+        built.packageDigest,
+      );
       expect(verified.packageDigest).toBe(built.packageDigest);
-      expect(verified.definitions[0]?.formRef.type).toBe(positive.type);
+      expect(verified.definitions[0]?.formRef.type).toBe(
+        portableTypeForShapeKind(positive.kind),
+      );
       const pinned = standardPins.packages.find(
-        (entry) => entry.type === positive.type,
+        (entry) => entry.kind === positive.kind,
       );
       if (pinned && positive.name.startsWith("standard-")) {
         // Digest parity with the Go-computed release pin, not just self-consistency.
@@ -218,7 +240,7 @@ describe.skipIf(!corpusPresent)("takoform corpus parity", () => {
           const raw = readFileSync(join(CORPUS_ROOT, negative.path!), "utf8");
           build = syntheticPackage(
             minimalDefinition({
-              configSchema: {
+              desiredSchema: {
                 $schema: "https://json-schema.org/draft/2020-12/schema",
                 type: "object",
                 additionalProperties: false,
@@ -249,7 +271,11 @@ describe.skipIf(!corpusPresent)("takoform corpus parity", () => {
         case "package-path": {
           const probe = new TextEncoder().encode("{}\n");
           build = syntheticPackage(minimalDefinition(), [
-            { path: negative.value!, mediaType: "application/json", bytes: probe },
+            {
+              path: negative.value!,
+              mediaType: "application/json",
+              bytes: probe,
+            },
           ]);
           break;
         }

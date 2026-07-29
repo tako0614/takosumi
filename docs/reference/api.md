@@ -10,11 +10,11 @@ lifecycle は `/v1/resources` の Deploy API が一元管理します。
 
 ## 基本方針
 
-| 状況 | 扱い方 |
-| --- | --- |
-| 外部 resource に標準 API / OpenTofu provider がある | plain Stack flow でその surface を使う |
-| Takosumi/operator が managed service を提供する | provider-neutral な Takosumi Resource Shape として定義し、Deploy API で管理する |
-| 一回限りの不足 | generic-env ProviderConnection と通常の OpenTofu module で扱う |
+| 状況                                                | 扱い方                                                                          |
+| --------------------------------------------------- | ------------------------------------------------------------------------------- |
+| 外部 resource に標準 API / OpenTofu provider がある | plain Stack flow でその surface を使う                                          |
+| Takosumi/operator が managed service を提供する     | provider-neutral な Takosumi Resource Shape として定義し、Deploy API で管理する |
+| 一回限りの不足                                      | generic-env ProviderConnection と通常の OpenTofu module で扱う                  |
 
 Takosumi は自前の Terraform / OpenTofu provider を配布しません。portable Form は
 Takoform、operator 操作はこの API・CLI・dashboard を使います。外部 provider は
@@ -147,118 +147,118 @@ Stack flow のエンドポイントはすべて `/api/v1` の下にあります�
 
 **Workspace**
 
-| メソッド | パス | 説明 |
-| --- | --- | --- |
-| GET | `/api/v1/workspaces` | 自分が参加している Workspace を一覧する |
-| POST | `/api/v1/workspaces` | Workspace を作る |
-| GET | `/api/v1/workspaces/{workspaceId}` | Workspace を読む |
-| PATCH | `/api/v1/workspaces/{workspaceId}` | Workspace を更新する |
-| GET | `/api/v1/workspaces/{workspaceId}/members` | メンバーを一覧する |
-| POST | `/api/v1/workspaces/{workspaceId}/members` | メンバーを追加する |
-| PATCH | `/api/v1/workspaces/{workspaceId}/members/{subject}` | メンバーの役割を変える |
-| DELETE | `/api/v1/workspaces/{workspaceId}/members/{subject}` | メンバーを外す |
-| GET | `/api/v1/workspaces/{workspaceId}/graph` | Capsule の依存グラフを読む |
-| GET | `/api/v1/workspaces/{workspaceId}/activity` | 操作履歴を一覧する |
-| GET | `/api/v1/workspaces/{workspaceId}/usage` | 利用量を一覧する |
-| GET | `/api/v1/workspaces/{workspaceId}/billing` | 課金状態を読む |
-| GET | `/api/v1/workspaces/{workspaceId}/backups` | 制御情報の書き出しを一覧する |
-| POST | `/api/v1/workspaces/{workspaceId}/backups` | 制御情報を書き出す |
-| POST | `/api/v1/workspaces/{workspaceId}/plan-update` | Workspace 全体の更新 Run を作る |
-| POST | `/api/v1/workspaces/{workspaceId}/drift-check` | Workspace 全体の差分確認 Run を作る |
+| メソッド | パス                                                 | 説明                                    |
+| -------- | ---------------------------------------------------- | --------------------------------------- |
+| GET      | `/api/v1/workspaces`                                 | 自分が参加している Workspace を一覧する |
+| POST     | `/api/v1/workspaces`                                 | Workspace を作る                        |
+| GET      | `/api/v1/workspaces/{workspaceId}`                   | Workspace を読む                        |
+| PATCH    | `/api/v1/workspaces/{workspaceId}`                   | Workspace を更新する                    |
+| GET      | `/api/v1/workspaces/{workspaceId}/members`           | メンバーを一覧する                      |
+| POST     | `/api/v1/workspaces/{workspaceId}/members`           | メンバーを追加する                      |
+| PATCH    | `/api/v1/workspaces/{workspaceId}/members/{subject}` | メンバーの役割を変える                  |
+| DELETE   | `/api/v1/workspaces/{workspaceId}/members/{subject}` | メンバーを外す                          |
+| GET      | `/api/v1/workspaces/{workspaceId}/graph`             | Capsule の依存グラフを読む              |
+| GET      | `/api/v1/workspaces/{workspaceId}/activity`          | 操作履歴を一覧する                      |
+| GET      | `/api/v1/workspaces/{workspaceId}/usage`             | 利用量を一覧する                        |
+| GET      | `/api/v1/workspaces/{workspaceId}/billing`           | 課金状態を読む                          |
+| GET      | `/api/v1/workspaces/{workspaceId}/backups`           | 制御情報の書き出しを一覧する            |
+| POST     | `/api/v1/workspaces/{workspaceId}/backups`           | 制御情報を書き出す                      |
+| POST     | `/api/v1/workspaces/{workspaceId}/plan-update`       | Workspace 全体の更新 Run を作る         |
+| POST     | `/api/v1/workspaces/{workspaceId}/drift-check`       | Workspace 全体の差分確認 Run を作る     |
 
 操作履歴は `/api/v1/workspaces/{workspaceId}/activity` から読みます。
 
 **Project と Capsule**
 
-| メソッド | パス | 説明 |
-| --- | --- | --- |
-| GET | `/api/v1/workspaces/{workspaceId}/projects` | Project を一覧する |
-| POST | `/api/v1/workspaces/{workspaceId}/projects` | Project を作る |
-| GET | `/api/v1/projects/{projectId}` | Project を読む |
-| GET | `/api/v1/workspaces/{workspaceId}/capsules` | Capsule を一覧する |
-| POST | `/api/v1/workspaces/{workspaceId}/capsules` | Capsule を作る |
-| GET | `/api/v1/capsules/{capsuleId}` | Capsule を読む |
-| PATCH | `/api/v1/capsules/{capsuleId}` | Capsule を更新する |
-| DELETE | `/api/v1/capsules/{capsuleId}` | 破棄計画を作る |
-| GET | `/api/v1/capsules/{capsuleId}/outputs` | 公開 Output を読む |
-| GET | `/api/v1/capsules/{capsuleId}/usage-summary` | 利用量の集計を読む |
-| GET | `/api/v1/capsules/{capsuleId}/state-versions` | StateVersion を一覧する |
-| GET | `/api/v1/capsules/{capsuleId}/dependencies` | 依存を一覧する |
-| POST | `/api/v1/capsules/{capsuleId}/dependencies` | 依存を作る |
-| DELETE | `/api/v1/dependencies/{dependencyId}` | 依存を削除する |
-| GET | `/api/v1/capsules/{capsuleId}/provider-bindings` | ProviderBinding の選択を読む |
-| PUT | `/api/v1/capsules/{capsuleId}/provider-bindings` | ProviderBinding の選択を置き換える |
-| GET | `/api/v1/workspaces/{workspaceId}/current-state-versions` | 現在の StateVersion をまとめて読む |
-| GET | `/api/v1/capsule-configs` | Capsule 作成設定を一覧する |
-| GET | `/api/v1/capsule-configs/{capsuleConfigId}` | Capsule 作成設定を読む |
-| PATCH | `/api/v1/capsule-configs/{capsuleConfigId}` | Capsule 作成設定を更新する |
+| メソッド | パス                                                      | 説明                               |
+| -------- | --------------------------------------------------------- | ---------------------------------- |
+| GET      | `/api/v1/workspaces/{workspaceId}/projects`               | Project を一覧する                 |
+| POST     | `/api/v1/workspaces/{workspaceId}/projects`               | Project を作る                     |
+| GET      | `/api/v1/projects/{projectId}`                            | Project を読む                     |
+| GET      | `/api/v1/workspaces/{workspaceId}/capsules`               | Capsule を一覧する                 |
+| POST     | `/api/v1/workspaces/{workspaceId}/capsules`               | Capsule を作る                     |
+| GET      | `/api/v1/capsules/{capsuleId}`                            | Capsule を読む                     |
+| PATCH    | `/api/v1/capsules/{capsuleId}`                            | Capsule を更新する                 |
+| DELETE   | `/api/v1/capsules/{capsuleId}`                            | 破棄計画を作る                     |
+| GET      | `/api/v1/capsules/{capsuleId}/outputs`                    | 公開 Output を読む                 |
+| GET      | `/api/v1/capsules/{capsuleId}/usage-summary`              | 利用量の集計を読む                 |
+| GET      | `/api/v1/capsules/{capsuleId}/state-versions`             | StateVersion を一覧する            |
+| GET      | `/api/v1/capsules/{capsuleId}/dependencies`               | 依存を一覧する                     |
+| POST     | `/api/v1/capsules/{capsuleId}/dependencies`               | 依存を作る                         |
+| DELETE   | `/api/v1/dependencies/{dependencyId}`                     | 依存を削除する                     |
+| GET      | `/api/v1/capsules/{capsuleId}/provider-bindings`          | ProviderBinding の選択を読む       |
+| PUT      | `/api/v1/capsules/{capsuleId}/provider-bindings`          | ProviderBinding の選択を置き換える |
+| GET      | `/api/v1/workspaces/{workspaceId}/current-state-versions` | 現在の StateVersion をまとめて読む |
+| GET      | `/api/v1/capsule-configs`                                 | Capsule 作成設定を一覧する         |
+| GET      | `/api/v1/capsule-configs/{capsuleConfigId}`               | Capsule 作成設定を読む             |
+| PATCH    | `/api/v1/capsule-configs/{capsuleConfigId}`               | Capsule 作成設定を更新する         |
 
 Capsule を作ってから実行するには、まず計画を作り、内容を確認してから適用します。
 Run は必ず計画の作成から始まります。
 
-| メソッド | パス | 説明 |
-| --- | --- | --- |
-| POST | `/api/v1/capsules/{capsuleId}/plan` | 計画 Run を作る |
-| POST | `/api/v1/capsules/{capsuleId}/destroy-plan` | 破棄計画 Run を作る |
-| POST | `/api/v1/capsules/{capsuleId}/drift-check` | 差分確認 Run を作る |
-| POST | `/api/v1/capsules/{capsuleId}/backups` | Capsule のバックアップを作る |
+| メソッド | パス                                        | 説明                         |
+| -------- | ------------------------------------------- | ---------------------------- |
+| POST     | `/api/v1/capsules/{capsuleId}/plan`         | 計画 Run を作る              |
+| POST     | `/api/v1/capsules/{capsuleId}/destroy-plan` | 破棄計画 Run を作る          |
+| POST     | `/api/v1/capsules/{capsuleId}/drift-check`  | 差分確認 Run を作る          |
+| POST     | `/api/v1/capsules/{capsuleId}/backups`      | Capsule のバックアップを作る |
 
 **Source**
 
-| メソッド | パス | 説明 |
-| --- | --- | --- |
-| GET | `/api/v1/sources` | Source を一覧する |
-| POST | `/api/v1/sources` | Source を作る |
-| GET | `/api/v1/sources/{sourceId}` | Source を読む |
-| PATCH | `/api/v1/sources/{sourceId}` | Source のメタ情報を更新する |
-| POST | `/api/v1/sources/{sourceId}/sync` | 同期 Run を作る |
-| GET | `/api/v1/sources/{sourceId}/snapshots` | SourceSnapshot を一覧する |
-| POST | `/api/v1/sources/{sourceId}/compatibility-check` | 互換性レポートを作る |
-| GET | `/api/v1/compatibility-reports/{reportId}` | 互換性レポートを読む |
+| メソッド | パス                                             | 説明                        |
+| -------- | ------------------------------------------------ | --------------------------- |
+| GET      | `/api/v1/sources`                                | Source を一覧する           |
+| POST     | `/api/v1/sources`                                | Source を作る               |
+| GET      | `/api/v1/sources/{sourceId}`                     | Source を読む               |
+| PATCH    | `/api/v1/sources/{sourceId}`                     | Source のメタ情報を更新する |
+| POST     | `/api/v1/sources/{sourceId}/sync`                | 同期 Run を作る             |
+| GET      | `/api/v1/sources/{sourceId}/snapshots`           | SourceSnapshot を一覧する   |
+| POST     | `/api/v1/sources/{sourceId}/compatibility-check` | 互換性レポートを作る        |
+| GET      | `/api/v1/compatibility-reports/{reportId}`       | 互換性レポートを読む        |
 
 **Run と StateVersion**
 
-| メソッド | パス | 説明 |
-| --- | --- | --- |
-| GET | `/api/v1/workspaces/{workspaceId}/runs` | Run を一覧する |
-| GET | `/api/v1/runs/{runId}` | Run を読む |
-| POST | `/api/v1/runs/{runId}/approve` | Run を承認する |
-| POST | `/api/v1/runs/{runId}/apply` | 確認済みの Run を適用する |
-| POST | `/api/v1/runs/{runId}/cancel` | Run を取り消す |
-| GET | `/api/v1/runs/{runId}/logs` | Run のログを読む |
-| GET | `/api/v1/runs/{runId}/events` | Run のイベントを読む |
-| GET | `/api/v1/runs/{runId}/cost` | Run の費用見込みを読む |
-| GET | `/api/v1/run-groups/{runGroupId}` | まとめて実行した Run を読む |
-| POST | `/api/v1/run-groups/{runGroupId}/approve` | まとめて実行した Run を承認する |
-| GET | `/api/v1/state-versions/{stateVersionId}` | StateVersion を読む |
-| POST | `/api/v1/state-versions/{stateVersionId}/rollback-plan` | 以前の状態に戻す計画を作る |
+| メソッド | パス                                                    | 説明                            |
+| -------- | ------------------------------------------------------- | ------------------------------- |
+| GET      | `/api/v1/workspaces/{workspaceId}/runs`                 | Run を一覧する                  |
+| GET      | `/api/v1/runs/{runId}`                                  | Run を読む                      |
+| POST     | `/api/v1/runs/{runId}/approve`                          | Run を承認する                  |
+| POST     | `/api/v1/runs/{runId}/apply`                            | 確認済みの Run を適用する       |
+| POST     | `/api/v1/runs/{runId}/cancel`                           | Run を取り消す                  |
+| GET      | `/api/v1/runs/{runId}/logs`                             | Run のログを読む                |
+| GET      | `/api/v1/runs/{runId}/events`                           | Run のイベントを読む            |
+| GET      | `/api/v1/runs/{runId}/cost`                             | Run の費用見込みを読む          |
+| GET      | `/api/v1/run-groups/{runGroupId}`                       | まとめて実行した Run を読む     |
+| POST     | `/api/v1/run-groups/{runGroupId}/approve`               | まとめて実行した Run を承認する |
+| GET      | `/api/v1/state-versions/{stateVersionId}`               | StateVersion を読む             |
+| POST     | `/api/v1/state-versions/{stateVersionId}/rollback-plan` | 以前の状態に戻す計画を作る      |
 
 **認証情報と Output の共有**
 
-| メソッド | パス | 説明 |
-| --- | --- | --- |
-| GET | `/api/v1/connections` | Connection を一覧する |
-| POST | `/api/v1/connections` | 書き込み専用の Connection を作る |
-| POST | `/api/v1/connections/{connectionId}/test` | Connection を検証する |
-| POST | `/api/v1/connections/{connectionId}/revoke` | Connection を失効させる |
-| POST | `/api/v1/connections/oauth/{helperId}/start` | OAuth 補助を開始する |
-| GET | `/api/v1/connections/oauth/{helperId}/callback` | OAuth 補助を完了する |
-| GET | `/api/v1/provider-connections` | Workspace から見える ProviderConnection を一覧する |
-| GET | `/api/v1/credential-recipes` | Credential Recipe を一覧する |
-| GET | `/api/v1/output-shares` | OutputShare を一覧する |
-| POST | `/api/v1/output-shares` | OutputShare を作る |
-| POST | `/api/v1/output-shares/{shareId}/approve` | OutputShare を承認する |
-| POST | `/api/v1/output-shares/{shareId}/revoke` | OutputShare を失効させる |
+| メソッド | パス                                            | 説明                                               |
+| -------- | ----------------------------------------------- | -------------------------------------------------- |
+| GET      | `/api/v1/connections`                           | Connection を一覧する                              |
+| POST     | `/api/v1/connections`                           | 書き込み専用の Connection を作る                   |
+| POST     | `/api/v1/connections/{connectionId}/test`       | Connection を検証する                              |
+| POST     | `/api/v1/connections/{connectionId}/revoke`     | Connection を失効させる                            |
+| POST     | `/api/v1/connections/oauth/{helperId}/start`    | OAuth 補助を開始する                               |
+| GET      | `/api/v1/connections/oauth/{helperId}/callback` | OAuth 補助を完了する                               |
+| GET      | `/api/v1/provider-connections`                  | Workspace から見える ProviderConnection を一覧する |
+| GET      | `/api/v1/credential-recipes`                    | Credential Recipe を一覧する                       |
+| GET      | `/api/v1/output-shares`                         | OutputShare を一覧する                             |
+| POST     | `/api/v1/output-shares`                         | OutputShare を作る                                 |
+| POST     | `/api/v1/output-shares/{shareId}/approve`       | OutputShare を承認する                             |
+| POST     | `/api/v1/output-shares/{shareId}/revoke`        | OutputShare を失効させる                           |
 
 Connection の作成は `POST /api/v1/connections` です。`/api/v1/provider-connections`
 は読み取り専用で、失効は `POST /api/v1/connections/{connectionId}/revoke` です。
 
 **dashboard 用の投影**
 
-| メソッド | パス | 説明 |
-| --- | --- | --- |
-| GET | `/api/v1/dashboard/bootstrap` | 画面の初期表示に必要な情報をまとめて読む |
-| GET | `/api/v1/dashboard/overview` | Workspace の概況を読む |
+| メソッド | パス                          | 説明                                     |
+| -------- | ----------------------------- | ---------------------------------------- |
+| GET      | `/api/v1/dashboard/bootstrap` | 画面の初期表示に必要な情報をまとめて読む |
+| GET      | `/api/v1/dashboard/overview`  | Workspace の概況を読む                   |
 
 Operator が用意した組み込みの設定補助 (credential recipe) は、次の session API から
 確認できます。
@@ -397,7 +397,8 @@ GET    /v1/resources?space={spaceId}&limit={1..100}&cursor={opaque}
 
 OSS の preview は価格を要求しません。commercial billing extension を有効にした Cloud
 endpoint では、billable preview が `DeploymentQuote` を返します。quote の根拠は
-versioned な `ServiceOffering` / `PriceCatalog` です。apply では `quoteId + quoteDigest`
+exact OSS `OfferingSelection` に束縛された closed `CommercialOfferingBinding` と
+versioned `PriceCatalog` です。apply では `quoteId + quoteDigest`
 が必須になります。quote が固定するのは、Resource spec digest、resolution fingerprint、
 offering/catalog version です。SKU line items、currency、estimated total micros、
 issued/expiry も同じ quote が固定します。Cloud は backend 作業の前に reserve し、
@@ -475,8 +476,9 @@ operator から決まります。create は exact `FormRef` + `packageDigest` �
 update は `expectedRevision` CAS を使い、結果の revision を `ETag` で返します。未知の
 field は拒否します。そのため price、SKU、payment、billing、managed capacity、region
 inventory、SLA、support を OSS policy record に混ぜることはできません。商用の
-availability は、同じ exact identity と activation を参照する closed ServiceOffering
-側に残ります。
+availability は、同じ exact identity と activation から解決した exact
+`OfferingSelection` を参照する closed
+`CommercialOfferingBinding` 側に残ります。
 
 operator CLI はこの API へ直接対応します。
 
@@ -628,14 +630,14 @@ Compatibility API は標準 protocol / API の scoped facade です。control-pl
 Deploy API の translation client として働きます。data-plane profile は、canonical な
 Ready Resource への認可済み access surface になります。
 
-| profile | 範囲 |
-| --- | --- |
-| `compat.s3.v1` | S3 互換の Object Storage の data / control path |
-| `compat.oci.v1` | Artifact / ContainerImage の lifecycle |
-| `compat.cloudevents.v1` | Queue / EventHandler への event ingress |
-| `compat.kubernetes.crd.v1` | Kubernetes northbound API |
-これは full vendor API 互換を意味しません。範囲は capability と
-compatibility matrix で明示します。
+| profile                                                         | 範囲                                            |
+| --------------------------------------------------------------- | ----------------------------------------------- |
+| `compat.s3.v1`                                                  | S3 互換の Object Storage の data / control path |
+| `compat.oci.v1`                                                 | Artifact / ContainerImage の lifecycle          |
+| `compat.cloudevents.v1`                                         | Queue / EventHandler への event ingress         |
+| `compat.kubernetes.crd.v1`                                      | Kubernetes northbound API                       |
+| これは full vendor API 互換を意味しません。範囲は capability と |
+| compatibility matrix で明示します。                             |
 
 Takoform host API、明示的に導入した protocol adapter、dashboard、CLI は公開する
 protocol がそれぞれ違っても、同じ Resource desired state と Deploy API lifecycle
@@ -673,10 +675,10 @@ secret の値、一時的な credential、内部 adapter の credential は erro
 
 現在の API version は `takosumi.dev/v1alpha1` です。
 
-| version | 位置づけ |
-| --- | --- |
-| `v1alpha1` | 破壊的変更あり。docs と conformance を同時に更新する |
-| `v1beta1` | 大枠は固定。upgrade / conversion guidance を必須とする |
-| `v1` | 後方互換を維持。field は削除しない |
+| version    | 位置づけ                                               |
+| ---------- | ------------------------------------------------------ |
+| `v1alpha1` | 破壊的変更あり。docs と conformance を同時に更新する   |
+| `v1beta1`  | 大枠は固定。upgrade / conversion guidance を必須とする |
+| `v1`       | 後方互換を維持。field は削除しない                     |
 
 OSS / Operator / Cloud の違いは API version ではなく capabilities で表します。

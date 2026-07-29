@@ -1730,6 +1730,9 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         );
         if (!restoreRunCommitted) return { restoreRunLeaseLost: true };
         await pgUpsertStateVersion(db, input.stateVersion);
+        if (input.output) {
+          await pgUpsertOutput(db, input.output);
+        }
 
         const { capsulePatch } = input;
         const current = await this.#getCapsuleOn(db, capsulePatch.id);

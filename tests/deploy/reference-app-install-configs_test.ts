@@ -1,6 +1,16 @@
 import { expect, test } from "bun:test";
 import type { CapsuleInterfaceBlueprint } from "takosumi-contract/interfaces";
+import { resolveCapsuleInterfaceBlueprintInstallingPrincipal } from "takosumi-contract/interfaces";
+import {
+  createInMemoryInterfaceStores,
+  InterfaceService,
+  OutputBackedInterfaceInputResolver,
+} from "../../core/domains/interfaces/mod.ts";
+import { InMemoryOpenTofuControlStore } from "../../core/domains/deploy-control/store.ts";
+import { uniqueStoreInstallConfigForSource } from "../../dashboard/src/views/new/install-helpers.ts";
+import { parseUiSurfaceInterface } from "../../dashboard/src/lib/ui-surface-interfaces.ts";
 import { REFERENCE_APP_INSTALL_CONFIGS } from "../../deploy/reference-app-install-configs.ts";
+import { seedCapsuleModel } from "../helpers/deploy-control/model_fixture.ts";
 
 const EXPECTED_STORE_SOURCES = [
   "takos-git",
@@ -302,11 +312,14 @@ test("reference configs contain no retired runtime authority schema", () => {
     (config) => config.name === "takos-storage-main",
   )!;
   expect(storage.installContextVariableMapping).toEqual({
-    takosumi_workspace_id: "workspace_id",
-    takosumi_capsule_id: "capsule_id",
+    "env.APP_WORKSPACE_ID": "workspace_id",
+    "env.APP_CAPSULE_ID": "capsule_id",
   });
+  const git = REFERENCE_APP_INSTALL_CONFIGS.find(
+    (config) => config.name === "takos-git-main",
+  )!;
   expect(
-    storage.variablePresentation?.find(
+    git.variablePresentation?.find(
       (variable) => variable.name === "app_session_secret",
     ),
   ).toMatchObject({
@@ -315,12 +328,119 @@ test("reference configs contain no retired runtime authority schema", () => {
     required: true,
     secret: true,
   });
-
-  const git = REFERENCE_APP_INSTALL_CONFIGS.find(
-    (config) => config.name === "takos-git-main",
-  )!;
   expect(git.installContextVariableMapping).toEqual({
     "env.APP_WORKSPACE_ID": "workspace_id",
     "env.APP_CAPSULE_ID": "capsule_id",
+  });
+});
+
+test("Yurucommu Store selection reaches an authorized launcher URL and never the invisible generic config", async () => {
+  const sourceUrl = "https://github.com/tako0614/yurucommu.git";
+  const yurucommu = uniqueStoreInstallConfigForSource(
+    REFERENCE_APP_INSTALL_CONFIGS,
+    sourceUrl,
+    ".",
+  );
+  expect(yurucommu?.id).toBe("cfg-reference-yurucommu-main");
+  expect(yurucommu?.outputAllowlist.launch_url).toEqual({
+    from: "launch_url",
+    type: "url",
+    required: true,
+  });
+
+  const generic = {
+    id: "cfg-default-opentofu-capsule",
+    name: "opentofu-capsule",
+    variableMapping: {},
+    outputAllowlist: {},
+    policy: {},
+    createdAt: "2026-07-14T00:00:00.000Z",
+    updatedAt: "2026-07-14T00:00:00.000Z",
+  };
+  expect(
+    uniqueStoreInstallConfigForSource(
+      [generic, { ...yurucommu!, sourceSelector: undefined }],
+      sourceUrl,
+      ".",
+    ),
+  ).toBeNull();
+
+  const principal = "user_yurucommu";
+  const blueprints = resolveCapsuleInterfaceBlueprintInstallingPrincipal(
+    yurucommu!.interfaceBlueprints!,
+    principal,
+  )!;
+  const opentofu = new InMemoryOpenTofuControlStore();
+  const seeded = await seedCapsuleModel(opentofu, {
+    workspaceId: "workspace_yurucommu",
+    capsuleId: "capsule_yurucommu",
+    installConfigId: yurucommu!.id,
+    name: "yurucommu",
+    sourceUrl,
+    installConfig: {
+      ...yurucommu!,
+      interfaceBlueprints: blueprints,
+    },
+  });
+  const launchUrl = "https://yurucommu.example.test/";
+  await opentofu.putOutput({
+    id: "output_yurucommu",
+    workspaceId: seeded.workspace.id,
+    capsuleId: seeded.capsule.id,
+    stateGeneration: 1,
+    rawArtifactRef: "sealed/output_yurucommu",
+    publicOutputs: { launch_url: launchUrl },
+    workspaceOutputs: { launch_url: launchUrl },
+    outputDigest: `sha256:${"a".repeat(64)}`,
+    createdAt: "2026-07-14T00:00:00.000Z",
+  });
+  await opentofu.putStateVersion({
+    id: "state_yurucommu",
+    workspaceId: seeded.workspace.id,
+    capsuleId: seeded.capsule.id,
+    environment: seeded.capsule.environment,
+    generation: 1,
+    stateRef: "sealed/state_yurucommu",
+    digest: `sha256:${"b".repeat(64)}`,
+    createdByRunId: "apply_yurucommu",
+    createdAt: "2026-07-14T00:00:00.000Z",
+  });
+  await opentofu.patchCapsule(seeded.capsule.id, {
+    status: "active",
+    currentOutputId: "output_yurucommu",
+    currentStateGeneration: 1,
+    currentStateVersionId: "state_yurucommu",
+  });
+
+  const interfaces = new InterfaceService({
+    stores: createInMemoryInterfaceStores(),
+    resolver: new OutputBackedInterfaceInputResolver({ opentofu }),
+  });
+  const [launcher] = await interfaces.ensureCapsuleBlueprints({
+    workspaceId: seeded.workspace.id,
+    capsuleId: seeded.capsule.id,
+    blueprints,
+  });
+  expect(launcher?.status).toMatchObject({
+    phase: "Resolved",
+    resolvedInputs: { url: launchUrl },
+  });
+  await expect(
+    interfaces.listAuthorizedForPrincipal(
+      {
+        workspaceId: seeded.workspace.id,
+        ownerKind: "Capsule",
+        ownerId: seeded.capsule.id,
+        type: "interface.ui.surface",
+        phase: "Resolved",
+      },
+      principal,
+      "ui.open",
+    ),
+  ).resolves.toEqual([launcher!]);
+  expect(parseUiSurfaceInterface(launcher, seeded.workspace.id)).toMatchObject({
+    capsuleId: seeded.capsule.id,
+    name: "Yurucommu",
+    url: launchUrl,
   });
 });

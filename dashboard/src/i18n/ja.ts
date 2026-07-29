@@ -245,8 +245,9 @@ export const ja = {
   "install.installingGeneric": "追加中…",
   "install.wait": "そのままお待ちください",
   "install.progressAria": "追加の進行状況",
-  "install.step.fetch": "コードを取得",
-  "install.step.check": "互換性を確認",
+  "install.step.source": "コードを取得",
+  "install.step.create": "サービスを作成",
+  "install.step.check": "内容を確認",
   "install.step.deploy": "デプロイ",
   "install.step.done": "仕上げ",
   "install.doneTitle": "{name} を追加しました",
@@ -797,9 +798,8 @@ export const ja = {
   "new.appHandoff.kicker": "アプリからのリクエスト",
   "new.appHandoff.app": "アプリ",
   "new.appHandoff.return": "戻り先",
-  "new.installCta": "インストール",
+  "new.installCta": "追加",
   "new.compat.recheck": "もう一度確認",
-  "new.progress.title": "インストールしています",
   "new.progress.slow": "少し時間がかかっています。このままお待ちください。",
   "new.progress.details": "詳しい進行状況",
   "new.progress.status": "状態: {status}",
@@ -1040,18 +1040,13 @@ export const ja = {
     "この接続を使うサービスのデプロイは失敗します。",
 
   // --- backups -----------------------------------------------------------------
-  "backups.subtitle": "部分的な control export を作成・確認します。",
+  "backups.subtitle":
+    "部分的な control export を作成・確認します。import / restore には対応していません。",
   "backups.create": "バックアップを作成",
   "backups.creating": "バックアップを作成しています。",
   "backups.col.createdAt": "作成日時",
   "backups.col.contents": "内容",
-  "backups.col.actions": "操作",
   "backups.controlExport": "部分的な control export",
-  "backups.restorePoint": "復元ポイント",
-  "backups.restoreGeneration": "バックアップ時点 {generation}",
-  "backups.restore": "復元を準備",
-  "backups.restoreUnavailable":
-    "復元するには、サービスからバックアップを作成してください。",
   "backups.empty.title": "まだバックアップがありません",
   "backups.empty.message":
     "このワークスペースの最初のバックアップを作成できます。",

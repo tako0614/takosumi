@@ -39,7 +39,10 @@ import type {
 } from "takosumi-contract/capsules";
 import type { ListCredentialRecipesResponse } from "takosumi-contract/credential-recipes";
 import { consoleErrorRedacted } from "../redacted-log.ts";
-import { bearerWorkspaceAllows } from "../account-session.ts";
+import {
+  bearerWorkspaceAllows,
+  type AccountsBearerRequiredScope,
+} from "../account-session.ts";
 import type { Workspace, WorkspaceType } from "takosumi-contract/workspaces";
 import type {
   InstallConfig,
@@ -122,6 +125,12 @@ import { DEPLOY_CONTROL_ERROR_HTTP_STATUS_BY_CODE } from "@takosumi/internal/dep
 export interface ControlSession {
   readonly subject: string;
   readonly workspaceId?: string;
+  /**
+   * Authorization intent derived from the HTTP method at the authenticated
+   * dispatch boundary. Workspace members may read; only owner/admin members
+   * may mutate.
+   */
+  readonly requiredAccess?: Exclude<AccountsBearerRequiredScope, "admin">;
 }
 
 export interface ControlDispatchContext {
@@ -542,19 +551,24 @@ export async function canAccessWorkspace(input: {
   const workspace =
     input.workspace ??
     (await input.operations.workspaces.getWorkspace(input.workspaceId));
+  if (workspace.id !== input.workspaceId) return false;
   if (workspace.ownerUserId === input.session.subject) return true;
 
+  const mayUseMember = (member: PublicWorkspaceMember | undefined): boolean =>
+    member?.status === "active" &&
+    (input.session.requiredAccess !== "write" ||
+      member.roles.includes("owner") ||
+      member.roles.includes("admin"));
   if (input.operations.members.getMember) {
     const member = await input.operations.members.getMember(
       input.workspaceId,
       input.session.subject,
     );
-    return member?.status === "active";
+    return mayUseMember(member);
   }
   const members = await input.operations.members.listMembers(input.workspaceId);
-  return members.some(
-    (member) =>
-      member.accountId === input.session.subject && member.status === "active",
+  return mayUseMember(
+    members.find((member) => member.accountId === input.session.subject),
   );
 }
 

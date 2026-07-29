@@ -104,3 +104,34 @@ test("SqliteFakeD1 rejects transaction control and disabling foreign keys", () =
     "PRAGMA foreign_keys = OFF is not supported",
   );
 });
+
+test("SqliteFakeD1 distinguishes trigger bodies from top-level transaction control", async () => {
+  const db = new SqliteFakeD1();
+  await db.exec(`
+    CREATE TABLE source_rows (id TEXT PRIMARY KEY, enabled INTEGER NOT NULL);
+    CREATE TABLE audit_rows (id TEXT PRIMARY KEY, status TEXT NOT NULL);
+    CREATE TRIGGER audit_source_insert
+    AFTER INSERT ON source_rows
+    BEGIN
+      INSERT INTO audit_rows (id, status)
+      VALUES (
+        new.id,
+        CASE WHEN new.enabled = 1 THEN 'enabled' ELSE 'disabled' END
+      );
+    END;
+  `);
+
+  await db
+    .prepare("INSERT INTO source_rows (id, enabled) VALUES (?, ?)")
+    .bind("source_1", 1)
+    .run();
+  expect(
+    await db.prepare("SELECT status FROM audit_rows WHERE id = ?")
+      .bind("source_1")
+      .first(),
+  ).toEqual({ status: "enabled" });
+
+  expect(() => db.exec("CREATE TABLE extra (id TEXT); BEGIN")).toThrow(
+    "explicit transaction control is not supported",
+  );
+});

@@ -1,24 +1,19 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://forms.takoform.com/schemas/v0/form-ref.schema.json",
-  "title": "Takoform form reference v0",
-  "description": "The exact portable identity of one immutable Form Definition: resource type token, definition SemVer, and SHA-256 over the definition's RFC 8785 canonical bytes.",
+  "$id": "https://forms.takoform.com/schemas/v1alpha1/form-ref.schema.json",
+  "title": "Takoform FormRef v1alpha1",
   "type": "object",
   "additionalProperties": false,
-  "required": [
-    "type",
-    "version",
-    "schemaDigest"
-  ],
+  "required": ["apiVersion", "kind", "definitionVersion", "schemaDigest"],
   "properties": {
-    "type": {
-      "type": "string",
-      "pattern": "^[a-z][a-z0-9_]{0,63}$",
-      "not": {
-        "const": "revocations"
-      }
+    "apiVersion": {
+      "const": "forms.takoform.com/v1alpha1"
     },
-    "version": {
+    "kind": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Za-z0-9]{0,63}$"
+    },
+    "definitionVersion": {
       "type": "string",
       "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(\\.(0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*))?(\\+([0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*))?$"
     },

@@ -1829,22 +1829,23 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
    * advance — is committed in ONE `this.#orm.batch(...)` call; a crash between
    * statements can no longer leave torn state.
    *
-   * The guarded Capsule advance is still evaluated before the batch because
-   * D1 cannot branch a batch on an UPDATE row count. Apply ownership is stricter:
-   * when an apply terminal row carries a lease token, the batch starts with a
-   * guard statement that raises a deliberate SQL error unless the current run
-   * row is still `running` with that token. That error rolls the whole batch
-   * back, so a stale owner cannot write StateVersion/Output rows after
-   * another worker has taken the run over.
+   * The pre-read only supplies the candidate updated record and an early,
+   * descriptive conflict. The authoritative Capsule pointer/status CAS is a
+   * guard statement inside the batch. It deliberately raises a SQL constraint
+   * error when the expected pointer/status no longer matches, rolling the
+   * entire batch back. Apply ownership is fenced the same way: when an apply
+   * terminal row carries a lease token, the batch starts with a guard statement
+   * that requires the current run row to still be `running` with that token.
    *
    * The Capsule guard mirrors {@link patchCapsule}:
    *   - row gone -> `{ capsule: undefined }` (no writes), same as today;
    *   - guard mismatch -> throw {@link CapsuleStateVersionGuardConflict} (no writes);
-   *   - guard match -> batch all writes + the (now-safe) unconditional UPDATE.
+   *   - guard match -> batch the CAS, all ledger writes, and Capsule UPDATE.
    */
   async commitRunState(
     input: CommitRunStateInput,
   ): Promise<CommitRunStateResult> {
+    assertD1AtomicCommitBatch(this.db, "commitRunState");
     await this.#ensureSchema();
     const { capsulePatch } = input;
     if (input.applyRunTerminal && input.applyRunLeaseToken !== undefined) {
@@ -1889,6 +1890,12 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
             ),
           ]
         : []),
+      d1CapsuleStateVersionGuardStmt(
+        this.#orm,
+        capsulePatch.id,
+        guard.currentStateVersionId,
+        guard.status,
+      ),
       d1UpsertStateVersionStmt(this.#orm, input.stateVersion),
       ...(input.output ? [d1UpsertOutputStmt(this.#orm, input.output)] : []),
       // Commit-tail fold (S2): the terminal ApplyRun + the applied PlanRun join
@@ -1926,29 +1933,26 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         })
         .where(eq(schema.capsules.id, updated.id)),
     ];
-    // D1's atomic batch. The binding always exposes batch in production; when a
-    // (test) binding omits it, fall back to the prior non-atomic sequence — the
-    // same behavior as before this fix, never worse.
-    if (typeof this.db.batch === "function") {
-      try {
-        await this.#orm.batch(
-          statements as [(typeof statements)[number], ...typeof statements],
-        );
-      } catch (error) {
-        if (isD1RunLeaseLostError(error)) {
-          return { applyRunLeaseLost: true };
-        }
-        throw error;
+    try {
+      await this.#orm.batch(
+        statements as [(typeof statements)[number], ...typeof statements],
+      );
+    } catch (error) {
+      if (isD1RunLeaseLostError(error)) {
+        return { applyRunLeaseLost: true };
       }
-    } else {
-      try {
-        for (const statement of statements) await statement;
-      } catch (error) {
-        if (isD1RunLeaseLostError(error)) {
-          return { applyRunLeaseLost: true };
-        }
-        throw error;
+      if (isD1CapsuleStateGuardError(error)) {
+        const actual = await this.getCapsule(capsulePatch.id);
+        if (!actual) return { capsule: undefined };
+        throw new CapsuleStateVersionGuardConflict({
+          id: capsulePatch.id,
+          expectedCurrentStateVersionId: guard.currentStateVersionId,
+          actualCurrentStateVersionId: actual.currentStateVersionId,
+          expectedStatus: guard.status,
+          actualStatus: actual.status,
+        });
       }
+      throw error;
     }
     return { capsule: updated };
   }
@@ -1956,6 +1960,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   async commitResourceRun(
     input: CommitResourceRunInput,
   ): Promise<CommitResourceRunResult> {
+    assertD1AtomicCommitBatch(this.db, "commitResourceRun");
     await this.#ensureSchema();
     const row = await this.#orm
       .select({ leaseToken: schema.runs.leaseToken })
@@ -1989,13 +1994,9 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       ),
     ];
     try {
-      if (typeof this.db.batch === "function") {
-        await this.#orm.batch(
-          statements as [(typeof statements)[number], ...typeof statements],
-        );
-      } else {
-        for (const statement of statements) await statement;
-      }
+      await this.#orm.batch(
+        statements as [(typeof statements)[number], ...typeof statements],
+      );
     } catch (error) {
       if (isD1RunLeaseLostError(error)) {
         return { applyRunLeaseLost: true };
@@ -2008,6 +2009,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   async commitRestoredState(
     input: CommitRestoredStateInput,
   ): Promise<CommitRestoredStateResult> {
+    assertD1AtomicCommitBatch(this.db, "commitRestoredState");
     await this.#ensureSchema();
     const { capsulePatch } = input;
     const row = await this.#orm
@@ -2053,6 +2055,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         guard.status,
       ),
       d1UpsertStateVersionStmt(this.#orm, input.stateVersion),
+      ...(input.output ? [d1UpsertOutputStmt(this.#orm, input.output)] : []),
       d1UpsertRunStmt(this.#orm, RUN_KIND_RESTORE, input.restoreRunTerminal),
       this.#orm
         .update(schema.capsules)
@@ -2066,17 +2069,10 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         })
         .where(eq(schema.capsules.id, updated.id)),
     ];
-    const runBatch = async (): Promise<void> => {
-      if (typeof this.db.batch === "function") {
-        await this.#orm.batch(
-          statements as [(typeof statements)[number], ...typeof statements],
-        );
-        return;
-      }
-      for (const statement of statements) await statement;
-    };
     try {
-      await runBatch();
+      await this.#orm.batch(
+        statements as [(typeof statements)[number], ...typeof statements],
+      );
     } catch (error) {
       if (isD1RunLeaseLostError(error)) {
         return { restoreRunLeaseLost: true };
@@ -3509,21 +3505,25 @@ function d1RunLeaseGuardStmt(
   return orm.insert(schema.runs).select(
     orm
       .select({
-        id: schema.runs.id,
-        runGroupId: schema.runs.runGroupId,
-        workspaceId: schema.runs.workspaceId,
-        sourceId: schema.runs.sourceId,
-        capsuleId: schema.runs.capsuleId,
-        environment: schema.runs.environment,
-        type: schema.runs.type,
-        status: schema.runs.status,
-        leaseToken: schema.runs.leaseToken,
-        heartbeatAt: schema.runs.heartbeatAt,
-        runJson: schema.runs.runJson,
-        createdAt: schema.runs.createdAt,
+        id: sql<string>`${runId}`.as("id"),
+        runGroupId: sql<string | null>`null`.as("runGroupId"),
+        // A failed predicate must abort even when the Run was concurrently
+        // deleted. The deliberately invalid NULL in a NOT NULL column makes
+        // the guard statement fail instead of selecting zero source rows and
+        // allowing the later terminal upsert to resurrect a lease-less Run.
+        workspaceId: sql<string>`null`.as("workspaceId"),
+        sourceId: sql<string | null>`null`.as("sourceId"),
+        capsuleId: sql<string | null>`null`.as("capsuleId"),
+        environment: sql<string | null>`null`.as("environment"),
+        type: sql<string>`null`.as("type"),
+        status: sql<string>`null`.as("status"),
+        leaseToken: sql<string | null>`null`.as("leaseToken"),
+        heartbeatAt: sql<number | null>`null`.as("heartbeatAt"),
+        runJson: sql<Run>`null`.as("runJson"),
+        createdAt: sql<string>`null`.as("createdAt"),
       })
-      .from(schema.runs)
-      .where(and(eq(schema.runs.id, runId), notExists(expectedLease))),
+      .from(sql`(select 1) as guard_source`)
+      .where(notExists(expectedLease)),
   );
 }
 
@@ -3545,42 +3545,99 @@ function d1CapsuleStateGuardStmt(
     );
   return orm.insert(schema.capsules).select(
     orm
-      .select({
-        id: schema.capsules.id,
-        workspaceId: schema.capsules.workspaceId,
-        projectId: schema.capsules.projectId,
-        name: schema.capsules.name,
-        slug: schema.capsules.slug,
-        sourceId: schema.capsules.sourceId,
-        installConfigId: schema.capsules.installConfigId,
-        environment: schema.capsules.environment,
-        currentStateVersionId: schema.capsules.currentStateVersionId,
-        currentStateGeneration: schema.capsules.currentStateGeneration,
-        currentOutputId: schema.capsules.currentOutputId,
-        status: schema.capsules.status,
-        recordJson: schema.capsules.recordJson,
-        createdAt: schema.capsules.createdAt,
-        updatedAt: schema.capsules.updatedAt,
-      })
-      .from(schema.capsules)
-      .where(and(eq(schema.capsules.id, capsuleId), notExists(expected))),
+      .select(d1InvalidCapsuleGuardRow(capsuleId))
+      .from(sql`(select 1) as guard_source`)
+      .where(notExists(expected)),
   );
+}
+
+function d1CapsuleStateVersionGuardStmt(
+  orm: DrizzleD1Database<typeof schema>,
+  capsuleId: string,
+  currentStateVersionId: string | undefined,
+  status: Capsule["status"] | undefined,
+) {
+  const expected = orm
+    .select({ one: sql`1` })
+    .from(schema.capsules)
+    .where(
+      and(
+        eq(schema.capsules.id, capsuleId),
+        currentStateVersionId === undefined
+          ? isNull(schema.capsules.currentStateVersionId)
+          : eq(schema.capsules.currentStateVersionId, currentStateVersionId),
+        status === undefined ? undefined : eq(schema.capsules.status, status),
+      ),
+    );
+  return orm.insert(schema.capsules).select(
+    orm
+      .select(d1InvalidCapsuleGuardRow(capsuleId))
+      .from(sql`(select 1) as guard_source`)
+      .where(notExists(expected)),
+  );
+}
+
+/**
+ * Deliberately invalid Capsule row selected only when a batch guard loses.
+ * Using a constant one-row source makes concurrent deletion fail closed too:
+ * the NOT NULL violation aborts the batch instead of silently selecting zero
+ * rows and allowing StateVersion / Output writes to commit without a Capsule.
+ */
+function d1InvalidCapsuleGuardRow(capsuleId: string) {
+  return {
+    id: sql<string>`${capsuleId}`.as("id"),
+    workspaceId: sql<string>`null`.as("workspaceId"),
+    projectId: sql<string>`null`.as("projectId"),
+    name: sql<string>`null`.as("name"),
+    slug: sql<string>`null`.as("slug"),
+    sourceId: sql<string | null>`null`.as("sourceId"),
+    installConfigId: sql<string>`null`.as("installConfigId"),
+    environment: sql<string>`null`.as("environment"),
+    currentStateVersionId: sql<string | null>`null`.as(
+      "currentStateVersionId",
+    ),
+    currentStateGeneration: sql<number>`0`.as("currentStateGeneration"),
+    currentOutputId: sql<string | null>`null`.as("currentOutputId"),
+    status: sql<string>`null`.as("status"),
+    recordJson: sql<Capsule>`null`.as("recordJson"),
+    createdAt: sql<string>`null`.as("createdAt"),
+    updatedAt: sql<string>`null`.as("updatedAt"),
+  };
+}
+
+function assertD1AtomicCommitBatch(
+  db: D1Database,
+  operation: "commitRunState" | "commitResourceRun" | "commitRestoredState",
+): void {
+  if (typeof db.batch !== "function") {
+    throw new Error(`D1 ${operation} requires atomic batch support`);
+  }
 }
 
 function isD1RunLeaseLostError(error: unknown): boolean {
   return error instanceof Error
     ? error.message.includes("UNIQUE constraint failed: runs.id") ||
-        error.message.includes("constraint failed: runs.id")
+        error.message.includes("constraint failed: runs.id") ||
+        error.message.includes("NOT NULL constraint failed: runs.space_id") ||
+        error.message.includes("constraint failed: runs.space_id")
     : false;
 }
 
 function isD1CapsuleStateGuardError(error: unknown): boolean {
-  // The conflicting-insert guard (see d1CapsuleStateGuardStmt) trips the
-  // canonical `capsules.id` primary-key constraint. Schema migrations run
-  // before this path, so an unrenamed pre-v1 table is never runtime authority.
+  // The deliberately invalid insert guard trips either the canonical primary /
+  // active-name uniqueness constraint (row still exists) or a NOT NULL
+  // constraint (row was concurrently deleted). Schema migrations run before
+  // this path, so an unrenamed pre-v1 table is never runtime authority.
   return error instanceof Error
     ? error.message.includes("UNIQUE constraint failed: capsules.id") ||
-        error.message.includes("constraint failed: capsules.id")
+        error.message.includes("constraint failed: capsules.id") ||
+        error.message.includes(
+          "UNIQUE constraint failed: capsules.project_id, capsules.name, capsules.environment",
+        ) ||
+        error.message.includes(
+          "NOT NULL constraint failed: capsules.space_id",
+        ) ||
+        error.message.includes("constraint failed: capsules.space_id")
     : false;
 }
 

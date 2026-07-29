@@ -22,8 +22,6 @@
 x-node-postgres-build: &node-postgres-build
   context: ../..
   dockerfile: deploy/node-postgres/Dockerfile
-  additional_contexts:
-    reviewed_provider_assets: "${TAKOSUMI_REVIEWED_PROVIDER_ASSET_ROOT:?set TAKOSUMI_REVIEWED_PROVIDER_ASSET_ROOT to an absolute reviewed provider asset directory}"
 
 services:
   postgres:

@@ -579,7 +579,11 @@
   line-height: 1;
 }
 
-/* ===== App-Store-style install screen (RunView, ?auto=install) ===== */
+/* ===== App-Store-style install screen =====
+   ONE surface, rendered by components/install/InstallProgress.tsx for both
+   halves of an install: /new (register the source, create the service) and
+   /runs/:id?auto=install (deploy). Each half used to draw its own card and its
+   own bar, so a single install looked like two or three different installs. */
 .av-install {
   display: flex;
   justify-content: center;
@@ -670,46 +674,13 @@
   font-size: 1.15rem;
   color: var(--tg-fg-muted);
 }
-.av-install-steps {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.av-install-steps li {
-  display: flex;
-  align-items: center;
-  gap: var(--tg-s-3);
-  padding: var(--tg-s-2) 0;
-  color: var(--tg-fg-subtle);
-  transition: color var(--tg-dur) var(--tg-ease);
-}
-.av-install-steps li.is-current {
-  color: var(--tg-fg);
-}
-.av-install-steps li.is-done {
-  color: var(--tg-fg-muted);
-}
-.av-install-mk {
-  flex: none;
-  display: grid;
-  place-items: center;
-  width: 22px;
-  height: 22px;
-  border-radius: var(--tg-r-full);
-  border: 2px solid var(--tg-line-strong);
-  font-size: 0.72rem;
-  color: var(--tg-fg-muted);
-}
-.av-install-steps li.is-current .av-install-mk {
-  border-color: var(--tg-accent);
-}
-.av-install-steps li.is-done .av-install-mk {
-  border-color: var(--tg-success);
-  background: var(--tg-success);
-  color: #06210d;
+/* A store listing brings a real icon; the initials fallback keeps the tile. */
+.av-install-icon img,
+.av-install-icon svg {
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
+  border-radius: var(--tg-r-sm);
 }
 .av-install-head-text {
   min-width: 0;
@@ -738,6 +709,17 @@
   color: var(--tg-fg-muted);
   font-size: var(--tg-fs-sm);
   font-weight: 600;
+}
+/* Secondary line under the phase (backend run status on /new). */
+.av-install-note {
+  margin: var(--tg-s-2) 0 0;
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-sm);
+}
+/* Installing is a normal state: the card keeps the neutral elevated surface
+   and never borrows the danger tint a status panel would bring. */
+.av-install-card .wb-disclosure {
+  margin-top: var(--tg-s-4);
 }
 
 /* ===== service list (/services) ===== */
@@ -1175,43 +1157,9 @@
   border-top: 1px solid var(--tg-line);
 }
 
-/* Installing is a normal state, so it uses the neutral surface — never the
-   danger tint the old wb-status-panel borrowed. */
-.av-add-progress {
-  display: grid;
-  gap: var(--tg-s-2);
-  padding: var(--tg-s-4);
-  border: 1px solid var(--tg-line);
-  border-radius: var(--tg-r-lg);
-  background: var(--tg-bg-elev);
-}
-.av-add-progress-track {
-  height: 6px;
-  border-radius: 999px;
-  background: var(--tg-bg-hi);
-  overflow: hidden;
-}
-.av-add-progress-fill {
-  display: block;
-  height: 100%;
-  border-radius: inherit;
-  background: var(--tg-accent);
-  transition: width 320ms ease;
-}
-@media (prefers-reduced-motion: reduce) {
-  .av-add-progress-fill {
-    transition: none;
-  }
-}
-.av-add-progress-label {
-  margin: 0;
-  font-weight: 650;
-}
-.av-add-progress-note {
-  margin: 0;
-  color: var(--tg-fg-muted);
-  font-size: var(--tg-fs-sm);
-}
+/* The add flow's own progress panel is gone: /new renders the shared
+   .av-install card (see the App-Store-style install screen above) so the bar a
+   visitor watches on /new is the same bar that continues on /runs/:id. */
 .av-add-actions {
   display: flex;
   flex-wrap: wrap;

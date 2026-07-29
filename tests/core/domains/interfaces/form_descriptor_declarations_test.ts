@@ -3,7 +3,7 @@ import type {
   FormInterfaceDescriptor,
   InstalledFormReference,
 } from "takosumi-contract";
-import { formRefKey } from "takosumi-contract";
+import { formRefKey, formRefOfInstalled } from "takosumi-contract";
 import {
   createInMemoryInterfaceStores,
   createPortableDeclarationReader,
@@ -12,12 +12,9 @@ import {
 } from "../../../../core/domains/interfaces/mod.ts";
 
 const FORM: InstalledFormReference = {
-  formRef: {
-    apiVersion: "forms.takoform.com/v1alpha1",
-    kind: "ObjectBucket",
-    definitionVersion: "1.0.0",
-    schemaDigest: "sha256:" + "a".repeat(64),
-  },
+  type: "object_bucket",
+  version: "1.0.0",
+  schemaDigest: "sha256:" + "a".repeat(64),
   packageDigest: "sha256:" + "b".repeat(64),
 };
 
@@ -78,8 +75,8 @@ test("a declared descriptor becomes a Resource-owned Interface with form provena
   });
   expect(record.metadata.materializedFrom).toEqual({
     source: "form_descriptor",
-    formRefKey: formRefKey(FORM.formRef),
-    formSchemaDigest: FORM.formRef.schemaDigest,
+    formRefKey: formRefKey(formRefOfInstalled(FORM)),
+    formSchemaDigest: FORM.schemaDigest,
     descriptorName: "mcp.server",
     descriptorVersion: "2025-11-25",
   });
@@ -195,11 +192,13 @@ test("the portable read reports the declared identity, never the host record", a
       resource: { kind: "ObjectBucket", name: "assets" },
       document: {},
       values: {},
+      resourceVersion: "1",
       form: FORM,
     },
   ]);
-  // No id, generation, revision, owner, provenance, condition, or binding: the
-  // read says what exists, never who may use it or how the host tracks it.
+  // The portable concurrency token is exposed, but no host id, generation,
+  // owner, provenance, condition, or binding: the read says what exists, never
+  // who may use it or how the host tracks it.
   const projected = declared[0] as Record<string, unknown>;
   for (const leaked of [
     "id",

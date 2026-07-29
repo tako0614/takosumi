@@ -98,6 +98,13 @@ import { runFailureHint } from "../../lib/run-errors.ts";
 import { clearCurrentStateVersionCache } from "../../lib/current-state-versions.ts";
 import { clearDashboardOverviewCache } from "../../lib/dashboard-overview.ts";
 import { clearInstallConfigListCache } from "../../lib/install-config-list.ts";
+import {
+  INSTALL_STEPS,
+  InstallProgressCard,
+  installStepLabel,
+  UPDATE_STEPS,
+  type InstallStep,
+} from "../../components/install/InstallProgress.tsx";
 import { listAuthorizedUiSurfaces } from "../../lib/ui-surface-interfaces.ts";
 import {
   formatDateTime,
@@ -1317,15 +1324,11 @@ function Inner() {
     createAppHandoffConnectHref(appHandoff, completedRunLaunchUrl());
 
   // --- install progress layer (App-Store-style, shown when ?auto=install) -----
-  type InstallStepKey = "fetch" | "check" | "deploy" | "done";
-  const INSTALL_STEPS: readonly InstallStepKey[] = [
-    "fetch",
-    "check",
-    "deploy",
-    "done",
-  ];
+  // The steps come from components/install/InstallProgress.tsx, which /new also
+  // renders: an install is ONE bar that /new fills up to 内容を確認 and this
+  // screen carries the rest of the way. Nothing here restarts the list.
   type InstallState =
-    | { readonly phase: "progress"; readonly step: InstallStepKey }
+    | { readonly phase: "progress"; readonly step: InstallStep }
     | { readonly phase: "gate" }
     | { readonly phase: "error" }
     | { readonly phase: "done" };
@@ -1338,7 +1341,9 @@ function Inner() {
       return { phase: "error" };
     }
     const r = run.latest;
-    if (!r) return { phase: "progress", step: "fetch" };
+    // The source was fetched and the service created back on /new — a run that
+    // has not loaded yet is still the 内容を確認 step, not a second 取得.
+    if (!r) return { phase: "progress", step: "check" };
     // Terminal non-success states (failed / cancelled / expired) must not spin
     // forever — polling has stopped, nothing will advance the screen.
     if (
@@ -1380,13 +1385,13 @@ function Inner() {
     }
     return { phase: "progress", step: "check" };
   });
-  const installStepIndex = (step: InstallStepKey): number =>
-    INSTALL_STEPS.indexOf(step);
-  const installActiveIndex = createMemo(() => {
+  /** A 1-tap update never runs 取得/作成, so it walks the shorter list rather
+   * than opening its bar half-full. */
+  const installSteps = () => (autoUpdateMode() ? UPDATE_STEPS : INSTALL_STEPS);
+  const installCurrentStep = createMemo((): InstallStep => {
     const s = installState();
-    if (s.phase === "done") return INSTALL_STEPS.length;
-    if (s.phase === "progress") return installStepIndex(s.step);
-    return installStepIndex("check");
+    if (s.phase === "progress") return s.step;
+    return s.phase === "done" ? "done" : "check";
   });
 
   // --- summary layer ---------------------------------------------------------
@@ -1697,15 +1702,6 @@ function Inner() {
     return t("run.title.other");
   };
 
-  const installStepLabel = (step: InstallStepKey): string =>
-    step === "fetch"
-      ? t("install.step.fetch")
-      : step === "check"
-        ? t("install.step.check")
-        : step === "deploy"
-          ? t("install.step.deploy")
-          : t("install.step.done");
-
   // One-line mirror of the install phase for the scoped live region below.
   const installLiveText = () => {
     const st = installState();
@@ -1720,16 +1716,8 @@ function Inner() {
         : t("install.errorTitle");
     }
     if (st.phase === "gate") return t("install.gateTitle");
-    return installStepLabel(
-      INSTALL_STEPS[Math.min(installActiveIndex(), INSTALL_STEPS.length - 1)],
-    );
+    return installStepLabel(installCurrentStep());
   };
-
-  const installPercent = () =>
-    Math.min(
-      100,
-      Math.round(((installActiveIndex() + 0.5) / INSTALL_STEPS.length) * 100),
-    );
 
   /** Clean App-Store-style install screen (progress → done → open/return),
    * shown instead of the technical run console while ?auto=install is set. */
@@ -1737,7 +1725,7 @@ function Inner() {
     const st = installState();
     const name = appName();
     return (
-      <div class="av-install">
+      <>
         {/* Live region scoped to the one-line status only — putting it on
             the whole screen re-announces every heading and button. */}
         <p class="sr-only" role="status" aria-live="polite">
@@ -1745,151 +1733,135 @@ function Inner() {
         </p>
         <Switch>
           <Match when={st.phase === "done"}>
-            <div class="av-install-card av-install-done">
-              <span class="av-install-check" aria-hidden="true">
-                ✓
-              </span>
-              <h2>
-                {autoUpdateMode()
-                  ? name
-                    ? t("update.doneTitle", { name })
-                    : t("update.doneTitleGeneric")
-                  : name
-                    ? t("install.doneTitle", { name })
-                    : t("install.doneTitleGeneric")}
-              </h2>
-              <p>
-                {autoUpdateMode() ? t("update.doneSub") : t("install.doneSub")}
-              </p>
-              <div class="av-install-actions">
-                <Show when={completedRunLaunchUrl()}>
-                  {(url) => (
-                    <a
-                      class="tg-btn tg-btn-primary tg-btn-lg tg-btn-block"
-                      href={url()}
-                      target="_blank"
-                      rel="noreferrer noopener"
-                    >
-                      {t("install.open")}
-                    </a>
-                  )}
-                </Show>
-                <Show when={appConnectHref()}>
-                  {(href) => (
-                    <a
-                      class="tg-btn tg-btn-secondary tg-btn-block"
-                      href={href()}
-                    >
-                      {t("run.appHandoff.open", {
-                        app: appHandoffProductLabel(appHandoff!.product),
-                      })}
-                    </a>
-                  )}
-                </Show>
-                <a class="tg-btn tg-btn-ghost tg-btn-block" href="/">
-                  {t("install.toApps")}
-                </a>
+            <div class="av-install">
+              <div class="av-install-card av-install-done">
+                <span class="av-install-check" aria-hidden="true">
+                  ✓
+                </span>
+                <h2>
+                  {autoUpdateMode()
+                    ? name
+                      ? t("update.doneTitle", { name })
+                      : t("update.doneTitleGeneric")
+                    : name
+                      ? t("install.doneTitle", { name })
+                      : t("install.doneTitleGeneric")}
+                </h2>
+                <p>
+                  {autoUpdateMode()
+                    ? t("update.doneSub")
+                    : t("install.doneSub")}
+                </p>
+                <div class="av-install-actions">
+                  <Show when={completedRunLaunchUrl()}>
+                    {(url) => (
+                      <a
+                        class="tg-btn tg-btn-primary tg-btn-lg tg-btn-block"
+                        href={url()}
+                        target="_blank"
+                        rel="noreferrer noopener"
+                      >
+                        {t("install.open")}
+                      </a>
+                    )}
+                  </Show>
+                  <Show when={appConnectHref()}>
+                    {(href) => (
+                      <a
+                        class="tg-btn tg-btn-secondary tg-btn-block"
+                        href={href()}
+                      >
+                        {t("run.appHandoff.open", {
+                          app: appHandoffProductLabel(appHandoff!.product),
+                        })}
+                      </a>
+                    )}
+                  </Show>
+                  <a class="tg-btn tg-btn-ghost tg-btn-block" href="/">
+                    {t("install.toApps")}
+                  </a>
+                </div>
               </div>
             </div>
           </Match>
           <Match when={st.phase === "error"}>
-            <div class="av-install-card">
-              <span
-                class="av-install-badge av-install-badge-error"
-                aria-hidden="true"
-              >
-                !
-              </span>
-              <h2>
-                {autoUpdateMode()
-                  ? t("update.errorTitle")
-                  : t("install.errorTitle")}
-              </h2>
-              {/* One plain sentence with the next action — the summary layer
+            <div class="av-install">
+              <div class="av-install-card">
+                <span
+                  class="av-install-badge av-install-badge-error"
+                  aria-hidden="true"
+                >
+                  !
+                </span>
+                <h2>
+                  {autoUpdateMode()
+                    ? t("update.errorTitle")
+                    : t("install.errorTitle")}
+                </h2>
+                {/* One plain sentence with the next action — the summary layer
                   already classifies billing / account-access / known failure
                   codes. The console stays behind 詳細を見る. */}
-              <p>{installErrorText()}</p>
-              <div class="av-install-actions">
-                <button
-                  type="button"
-                  class="tg-btn tg-btn-secondary tg-btn-block"
-                  onClick={() => setForceConsole(true)}
-                >
-                  {t("install.errorCta")}
-                </button>
-                <a class="tg-btn tg-btn-ghost tg-btn-block" href="/">
-                  {t("install.toApps")}
-                </a>
+                <p>{installErrorText()}</p>
+                <div class="av-install-actions">
+                  <button
+                    type="button"
+                    class="tg-btn tg-btn-secondary tg-btn-block"
+                    onClick={() => setForceConsole(true)}
+                  >
+                    {t("install.errorCta")}
+                  </button>
+                  <a class="tg-btn tg-btn-ghost tg-btn-block" href="/">
+                    {t("install.toApps")}
+                  </a>
+                </div>
               </div>
             </div>
           </Match>
           <Match when={st.phase === "gate"}>
-            <div class="av-install-card">
-              <span
-                class="av-install-badge av-install-badge-gate"
-                aria-hidden="true"
-              >
-                ?
-              </span>
-              <h2>{t("install.gateTitle")}</h2>
-              <p>{t("install.gateSub")}</p>
-              <div class="av-install-actions">
-                <button
-                  type="button"
-                  class="tg-btn tg-btn-primary tg-btn-block"
-                  onClick={() => setForceConsole(true)}
+            <div class="av-install">
+              <div class="av-install-card">
+                <span
+                  class="av-install-badge av-install-badge-gate"
+                  aria-hidden="true"
                 >
-                  {t("install.gateCta")}
-                </button>
-                <a class="tg-btn tg-btn-ghost tg-btn-block" href="/">
-                  {t("install.toApps")}
-                </a>
+                  ?
+                </span>
+                <h2>{t("install.gateTitle")}</h2>
+                <p>{t("install.gateSub")}</p>
+                <div class="av-install-actions">
+                  <button
+                    type="button"
+                    class="tg-btn tg-btn-primary tg-btn-block"
+                    onClick={() => setForceConsole(true)}
+                  >
+                    {t("install.gateCta")}
+                  </button>
+                  <a class="tg-btn tg-btn-ghost tg-btn-block" href="/">
+                    {t("install.toApps")}
+                  </a>
+                </div>
               </div>
             </div>
           </Match>
           <Match when={st.phase === "progress"}>
-            <div class="av-install-card av-install-progress">
-              <div class="av-install-head">
-                <span class="av-install-icon" aria-hidden="true">
-                  {name ? name.slice(0, 2).toUpperCase() : "··"}
-                </span>
-                <div class="av-install-head-text">
-                  <h2>
-                    {name ??
-                      (autoUpdateMode()
-                        ? t("update.installingGeneric")
-                        : t("install.installingGeneric"))}
-                  </h2>
-                  <p class="muted">
-                    {completedRunReadiness() === "activation_pending"
-                      ? t("install.activationPending")
-                      : t("install.wait")}
-                  </p>
-                </div>
-              </div>
-              <div
-                class="av-install-bar"
-                role="progressbar"
-                aria-label={t("install.progressAria")}
-                aria-valuemin={0}
-                aria-valuemax={100}
-                aria-valuenow={installPercent()}
-              >
-                <i
-                  style={{ width: `${installPercent()}%` }}
-                  aria-hidden="true"
-                />
-              </div>
-              {/* The bar already carries "this is moving". A second spinning
-                  indicator next to it reads as two overlapping waits, so the
-                  phase line is plain text — same language as the add flow. */}
-              <p class="av-install-phase">
-                {installStepLabel(
-                  INSTALL_STEPS[
-                    Math.min(installActiveIndex(), INSTALL_STEPS.length - 1)
-                  ],
-                )}
-              </p>
+            {/* Same card, same step list, same bar as /new — this screen is the
+                second half of one install, not a new one. `live` stays off: the
+                region above already announces every phase. */}
+            <InstallProgressCard
+              name={name}
+              genericTitle={
+                autoUpdateMode()
+                  ? t("update.installingGeneric")
+                  : t("install.installingGeneric")
+              }
+              step={installCurrentStep()}
+              steps={installSteps()}
+              note={
+                completedRunReadiness() === "activation_pending"
+                  ? t("install.activationPending")
+                  : t("install.wait")
+              }
+            >
               {/* Escape hatch: a long or wedged deploy must never be a dead
                   end — drop to the full run console on demand. */}
               <button
@@ -1899,10 +1871,10 @@ function Inner() {
               >
                 {t("install.errorCta")}
               </button>
-            </div>
+            </InstallProgressCard>
           </Match>
         </Switch>
-      </div>
+      </>
     );
   };
 

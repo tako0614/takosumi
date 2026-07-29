@@ -130,6 +130,7 @@ for (const [name, make] of STORES) {
   });
 
   test(`${name}: all-source scheduler pages cross Workspace boundaries without gaps`, async () => {
+    const store = make();
     for (let i = 0; i < 5; i += 1) {
       const seq = String(i).padStart(4, "0");
       await store.putSource(
