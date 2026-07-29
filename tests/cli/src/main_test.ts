@@ -15,6 +15,7 @@ import { runAccountsMigrateD1 } from "../../../cli/src/cli-accounts-commands.ts"
 import {
   applyD1AccountsMigrations,
   type D1ExecuteCommand,
+  parseWranglerD1QueryRows,
 } from "../../../cli/src/cli-accounts-db.ts";
 import { integerOption, parseOptions } from "../../../cli/src/cli-options.ts";
 
@@ -6042,51 +6043,180 @@ test("migrate-d1 skips already-applied versions (idempotent re-run)", async () =
   expect(inserts.length).toEqual(0);
 });
 
-test("migrate-d1 parses the wrangler --json array-of-envelopes shape", async () => {
-  // The default command returns wrangler's structured envelope. Verify the
-  // version-skip logic reads versions out of the nested results array, both
-  // for the array-wrapped and bare-object envelope shapes wrangler emits.
-  const captured: string[] = [];
-  const wranglerJson = JSON.stringify([
-    {
-      results: [
-        {
-          results: [
-            { version: 0 },
-            { version: 1 },
-            { version: 2 },
-            { version: 3 },
-          ],
+test("migrate-d1 parses Wrangler 4.111.0 top-level statement results", () => {
+  const parsed = JSON.parse(
+    JSON.stringify([
+      {
+        results: [
+          { version: 0 },
+          { version: 1 },
+          { version: 2 },
+          { version: 3 },
+        ],
+        success: true,
+        meta: {
+          duration: 0.123,
+          rows_read: 4,
+          rows_written: 0,
         },
-      ],
-    },
+      },
+    ]),
+  );
+  expect(parseWranglerD1QueryRows(parsed)).toEqual([
+    { version: 0 },
+    { version: 1 },
+    { version: 2 },
+    { version: 3 },
   ]);
+});
+
+test("migrate-d1 skips every applied version from Wrangler 4.111.0 JSON", async () => {
+  const executed: string[] = [];
   const command: D1ExecuteCommand = {
     execute(input) {
-      captured.push(input.sql);
+      executed.push(input.sql);
       return Promise.resolve({ stdout: "" });
     },
     query<T>(): Promise<readonly T[]> {
-      const parsed = JSON.parse(wranglerJson) as Array<{
-        results?: Array<{ results?: Array<{ version: number }> }>;
-      }>;
-      const rows: { version: number }[] = [];
-      for (const envelope of parsed) {
-        for (const result of envelope.results ?? []) {
-          for (const row of result.results ?? []) rows.push(row);
-        }
-      }
-      return Promise.resolve(rows as unknown as T[]);
+      return Promise.resolve(
+        parseWranglerD1QueryRows<T>([
+          {
+            results: [
+              { version: 0 },
+              { version: 1 },
+              { version: 2 },
+              { version: 3 },
+            ],
+            success: true,
+            meta: { duration: 0.123, rows_read: 4, rows_written: 0 },
+          },
+        ]),
+      );
     },
   };
+
   const report = await applyD1AccountsMigrations({
     databaseId: "db-uuid",
     dryRun: false,
     command,
   });
-  // Both versions came back from the parsed envelope, so both are skipped.
   expect(report.skipped).toEqual([0, 1, 2, 3]);
   expect(report.applied).toEqual([]);
+  expect(executed).toEqual([
+    expect.stringContaining(
+      "CREATE TABLE IF NOT EXISTS takosumi_accounts_schema_migrations",
+    ),
+  ]);
+});
+
+test("migrate-d1 parses an empty DB result without inventing rows", () => {
+  expect(
+    parseWranglerD1QueryRows([
+      {
+        results: [],
+        success: true,
+        meta: { duration: 0.04, rows_read: 0, rows_written: 0 },
+      },
+    ]),
+  ).toEqual([]);
+});
+
+test("migrate-d1 explicitly supports the legacy unwrapped statement result", () => {
+  expect(
+    parseWranglerD1QueryRows({
+      results: [{ version: "0" }, { version: "1" }],
+      success: true,
+      meta: { duration: 0.08 },
+    }),
+  ).toEqual([{ version: "0" }, { version: "1" }]);
+});
+
+test("migrate-d1 rejects ambiguous, failed, and malformed Wrangler JSON", () => {
+  const malformed: readonly unknown[] = [
+    null,
+    [],
+    [
+      { results: [], success: true },
+      { results: [], success: true },
+    ],
+    [{ results: [], success: false }],
+    [{ results: [] }],
+    [{ success: true }],
+    [{ results: {}, success: true }],
+    [{ results: [null], success: true }],
+    [{ results: [["not", "a", "row"]], success: true }],
+    // This was the old, incorrect array-of-envelopes assumption. Accepting it
+    // would flatten no rows and make every applied migration look pending.
+    [
+      {
+        results: [{ results: [{ version: 0 }] }],
+        success: true,
+      },
+    ],
+    { error: { text: "D1 query failed" } },
+  ];
+
+  for (const value of malformed) {
+    expect(() => parseWranglerD1QueryRows(value)).toThrow();
+  }
+});
+
+test("migrate-d1 applies exactly the suffix after each existing v0-v3 prefix", async () => {
+  for (let existingCount = 0; existingCount <= 4; existingCount += 1) {
+    const seedVersions = [0, 1, 2, 3].slice(0, existingCount);
+    const fake = createFakeD1Command({ seedVersions });
+    const report = await applyD1AccountsMigrations({
+      databaseId: "db-uuid",
+      dryRun: false,
+      command: fake.command,
+    });
+
+    expect(report.skipped).toEqual(seedVersions);
+    expect(report.applied).toEqual([0, 1, 2, 3].slice(existingCount));
+    expect(fake.versions()).toEqual([0, 1, 2, 3]);
+  }
+});
+
+test("migrate-d1 fails closed on malformed applied-version rows", async () => {
+  const malformedRows: readonly ReadonlyArray<Record<string, unknown>>[] = [
+    [{ version: "not-an-integer" }],
+    [{ version: -1 }],
+    [{ version: 0 }, { version: 0 }],
+    [{ version: 0 }, { version: 2 }],
+    [
+      { version: 0 },
+      { version: 1 },
+      { version: 2 },
+      { version: 3 },
+      { version: 4 },
+    ],
+  ];
+
+  for (const rows of malformedRows) {
+    const executed: string[] = [];
+    const command: D1ExecuteCommand = {
+      execute(input) {
+        executed.push(input.sql);
+        return Promise.resolve({ stdout: "" });
+      },
+      query<T>(): Promise<readonly T[]> {
+        return Promise.resolve(rows as unknown as readonly T[]);
+      },
+    };
+
+    await expect(
+      applyD1AccountsMigrations({
+        databaseId: "db-uuid",
+        dryRun: false,
+        command,
+      }),
+    ).rejects.toThrow();
+    expect(executed).toEqual([
+      expect.stringContaining(
+        "CREATE TABLE IF NOT EXISTS takosumi_accounts_schema_migrations",
+      ),
+    ]);
+  }
 });
 
 test("migrate-d1 leaves the ledger untouched when a migration body fails", async () => {

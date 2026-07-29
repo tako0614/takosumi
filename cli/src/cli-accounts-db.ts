@@ -360,12 +360,78 @@ export interface D1ExecuteCommand {
   }): Promise<readonly T[]>;
 }
 
-interface WranglerD1JsonResult {
-  readonly results?: ReadonlyArray<Record<string, unknown>>;
+interface WranglerD1StatementResult {
+  readonly results?: unknown;
+  readonly success?: unknown;
 }
 
-interface WranglerD1JsonEnvelope {
-  readonly results?: ReadonlyArray<WranglerD1JsonResult>;
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Parse the JSON emitted by `wrangler d1 execute --json` for one SELECT.
+ *
+ * Wrangler 4.111.0 emits an array of statement results:
+ *
+ *     [{ "results": [{ "version": 0 }], "success": true, "meta": {} }]
+ *
+ * Older Wrangler/API combinations could return the single statement result
+ * without the outer array. These are the only two shapes accepted. The
+ * migration query contains exactly one statement, so accepting zero or
+ * multiple statement results could silently turn an unreadable migration
+ * ledger into an empty ledger and reapply migrations.
+ */
+export function parseWranglerD1QueryRows<T>(parsed: unknown): readonly T[] {
+  let statement: WranglerD1StatementResult;
+  if (Array.isArray(parsed)) {
+    if (parsed.length !== 1) {
+      throw new TypeError(
+        `wrangler D1 JSON must contain exactly one statement result; received ${parsed.length}`,
+      );
+    }
+    if (!isJsonObject(parsed[0])) {
+      throw new TypeError(
+        "wrangler D1 JSON statement result must be an object",
+      );
+    }
+    statement = parsed[0];
+  } else if (isJsonObject(parsed)) {
+    // Explicit legacy support: a single unwrapped statement result.
+    statement = parsed;
+  } else {
+    throw new TypeError(
+      "wrangler D1 JSON must be a statement result object or a one-item array",
+    );
+  }
+
+  if (statement.success !== true) {
+    throw new TypeError(
+      "wrangler D1 JSON statement result must declare success: true",
+    );
+  }
+  if (!Array.isArray(statement.results)) {
+    throw new TypeError(
+      "wrangler D1 JSON statement result must contain a results array",
+    );
+  }
+
+  return statement.results.map((row, index) => {
+    if (!isJsonObject(row)) {
+      throw new TypeError(
+        `wrangler D1 JSON result row ${index} must be an object`,
+      );
+    }
+    if (
+      Array.isArray(row.results) &&
+      ("success" in row || Object.keys(row).length === 1)
+    ) {
+      throw new TypeError(
+        `wrangler D1 JSON result row ${index} is an ambiguous nested statement result`,
+      );
+    }
+    return row as T;
+  });
 }
 
 /**
@@ -463,20 +529,7 @@ export function defaultD1ExecuteCommand(
       ];
       const { stdout } = await runWrangler(args, accountIdEnv(accountId));
       const parsed: unknown = JSON.parse(stdout);
-      const envelopes: ReadonlyArray<WranglerD1JsonEnvelope> = Array.isArray(
-        parsed,
-      )
-        ? (parsed as ReadonlyArray<WranglerD1JsonEnvelope>)
-        : [parsed as WranglerD1JsonEnvelope];
-      const rows: T[] = [];
-      for (const envelope of envelopes) {
-        for (const result of envelope.results ?? []) {
-          for (const row of result.results ?? []) {
-            rows.push(row as T);
-          }
-        }
-      }
-      return rows;
+      return parseWranglerD1QueryRows<T>(parsed);
     },
   };
 }
@@ -576,12 +629,33 @@ export async function applyD1AccountsMigrations(input: {
     ...targetArgs,
     sql: "SELECT version FROM takosumi_accounts_schema_migrations ORDER BY version",
   });
-  const existingVersions = new Set<number>();
-  for (const row of existingRows) {
+  const appliedVersions: number[] = [];
+  for (const [index, row] of existingRows.entries()) {
+    const rawVersion = row.version;
     const value =
-      typeof row.version === "number" ? row.version : Number(row.version);
-    if (Number.isInteger(value)) existingVersions.add(value);
+      typeof rawVersion === "number"
+        ? rawVersion
+        : typeof rawVersion === "string" && /^(0|[1-9]\d*)$/.test(rawVersion)
+          ? Number(rawVersion)
+          : Number.NaN;
+    if (!Number.isSafeInteger(value) || value < 0) {
+      throw new TypeError(
+        `invalid applied Accounts D1 migration version at row ${index}`,
+      );
+    }
+    if (value !== index) {
+      throw new Error(
+        `Accounts D1 migration ledger must be the contiguous prefix 0..n; expected version ${index}, received ${value}`,
+      );
+    }
+    if (!D1_ACCOUNTS_MIGRATIONS.some((migration) => migration.version === value)) {
+      throw new Error(
+        `Accounts D1 migration ledger contains unknown version ${value}`,
+      );
+    }
+    appliedVersions.push(value);
   }
+  const existingVersions = new Set(appliedVersions);
   const applied: number[] = [];
   const skipped: number[] = [];
   for (const migration of migrations) {
