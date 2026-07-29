@@ -26,7 +26,7 @@ curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/workspaces/ws_example/billing" \
   -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
 ```
 
-Takosumi software has two modes and no others.
+Takosumi has two modes and no others.
 
 | Mode | Meaning |
 | --- | --- |

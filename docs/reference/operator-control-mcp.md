@@ -1,6 +1,6 @@
 # Operator control MCP adapter
 
-Takosumi OSS には、Takos や別の MCP consumer から既存の public control
+Takosumi には、Takos や別の MCP consumer から既存の public control
 service を操作するための optional adapter があります。endpoint は
 `/mcp/operator-control/v1`、Interface は通常の `mcp.server`、認可は通常の
 Principal `InterfaceBinding` です。Takos 固定 tool や broad operator token を

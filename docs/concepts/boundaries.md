@@ -1,15 +1,14 @@
 # 製品の境界
 
-Takosumi という名前は 3 つの層で使われます。このページが境界を説明する唯一の
-ページです。ほかのページでは繰り返しません。
+Takosumi という名前が指すものは 2 つです。修飾が付いていなければ、ソフトウェアの
+ことです。自分の利用者に向けて運用している状態を指すのに、別の名前は使いません。
 
-| 層 | 何か |
+| 名前 | 指すもの |
 | --- | --- |
-| Takosumi software | AGPL-3.0 のソフトウェア。誰でも自分の環境で動かせる |
-| Takosumi for Operator | それを他人向けに運用するための枠組み |
-| Takosumi Cloud | 私たちが運用している公式の hosted サービス |
+| **Takosumi** | AGPL-3.0 で公開しているソフトウェア。誰でも自分の環境で動かせます |
+| **Takosumi Cloud** | 公式に運用している hosted サービス |
 
-## Takosumi software が持つもの
+## Takosumi が持つもの
 
 - Git を正とする OpenTofu control plane
 - Capsule と Run の lifecycle、状態と監査の台帳

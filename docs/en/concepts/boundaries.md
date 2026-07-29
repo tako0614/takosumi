@@ -1,16 +1,16 @@
 # Product boundaries
 
-The name Takosumi is used at three layers.
+The name Takosumi means two things. Unqualified, it means the software. There is no
+separate name for running it on behalf of other people.
 
-| Layer | What it is |
+| Name | What it means |
 | --- | --- |
-| Takosumi software | The software published under AGPL-3.0. Anyone can run it in their own environment |
-| Takosumi for Operator | The framework for running it on behalf of other people |
+| Takosumi | The software published under AGPL-3.0. Anyone can run it in their own environment |
 | Takosumi Cloud | The officially operated hosted service |
 
 ## What the software carries
 
-Takosumi software contains the Git-backed OpenTofu control plane, the Capsule and Run
+Takosumi contains the Git-backed OpenTofu control plane, the Capsule and Run
 lifecycle, and the state and audit ledgers. Alongside those come Resources (the Service
 Form host) which can be turned on when needed, the compatibility API framework and its
 Adapters, Interfaces and InterfaceBindings, and the CLI, dashboard, and accounts plane.

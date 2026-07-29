@@ -1,6 +1,6 @@
 # 利用量と課金
 
-Takosumi は、何にどれだけ使ったかを記録します。**Takosumi software 自体は請求を
+Takosumi は、何にどれだけ使ったかを記録します。**Takosumi 自体は請求を
 行いません。**
 
 ## 3 つの粒度で読めます
@@ -27,7 +27,7 @@ curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/workspaces/ws_example/billing" \
   -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
 ```
 
-Takosumi software が持つモードは 2 つだけです。
+Takosumi が持つモードは 2 つだけです。
 
 | モード | 意味 |
 | --- | --- |

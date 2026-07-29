@@ -1,6 +1,6 @@
 # Operator control MCP adapter
 
-Takosumi OSS provides an optional `/mcp/operator-control/v1` adapter that
+Takosumi provides an optional `/mcp/operator-control/v1` adapter that
 publishes the existing public control service as an ordinary `mcp.server`
 Interface. Enable it explicitly with
 `TAKOSUMI_OPERATOR_CONTROL_MCP_ENABLED=1`, install the plain Git/OpenTofu module
