@@ -898,6 +898,7 @@ const POOL: TargetPoolSpec = {
       name: "cloudflare-main",
       type: "cloudflare",
       ref: "cf-acct",
+      credentialRef: "conn_cf_main",
       priority: 80,
       implementations: CLOUDFLARE_IMPLEMENTATIONS,
     },
@@ -3604,6 +3605,8 @@ test("an explicit plugin descriptor is dispatched to an injected test adapter", 
   expect(adapter.applyInputs[0]?.implementation.plugin).toBe(
     "cloudflare-container-plugin",
   );
+  expect(adapter.applyInputs[0]?.credentialRef).toBeUndefined();
+  expect(adapter.applyInputs[0]?.target.credentialRef).toBeUndefined();
 });
 
 test("scheduled repair terminalizes a direct-plugin Run after Resource commit wins", async () => {
@@ -4739,6 +4742,35 @@ test("putTargetPool rejects malformed capability evidence and secret-like option
   if (!secretOptions.ok)
     expect(secretOptions.error.message).toContain("secret-looking");
 
+  const unusedPluginCredential = await service.putTargetPool(
+    "space_1",
+    "unused-plugin-credential",
+    {
+      targets: [
+        {
+          name: "plugin-main",
+          type: "operator.example/runtime",
+          credentialRef: "conn_must_not_reach_plugin",
+          priority: 90,
+          implementations: [
+            {
+              shape: "ObjectBucket",
+              implementation: "operator.bucket.plugin",
+              plugin: "operator-bucket-plugin",
+              interfaces: { object_store: "native" },
+            },
+          ],
+        },
+      ],
+    },
+  );
+  expect(unusedPluginCredential.ok).toBe(false);
+  if (!unusedPluginCredential.ok) {
+    expect(unusedPluginCredential.error.message).toContain(
+      "credentialRef is used only by OpenTofu implementations",
+    );
+  }
+
   const invalidImportAddress = await service.putTargetPool(
     "space_1",
     "invalid-import-address",
@@ -4747,6 +4779,7 @@ test("putTargetPool rejects malformed capability evidence and secret-like option
         {
           name: "cloudflare-main",
           type: "cloudflare",
+          credentialRef: "conn_cf_main",
           priority: 90,
           implementations: [
             {
@@ -4800,6 +4833,7 @@ test("putTargetPool rejects malformed capability evidence and secret-like option
         {
           name: "plugin-main",
           type: "cloudflare",
+          credentialRef: "conn_cf_main",
           priority: 90,
           implementations: [
             {
@@ -4824,6 +4858,7 @@ test("putTargetPool rejects malformed capability evidence and secret-like option
         {
           name: "plugin-main",
           type: "cloudflare",
+          credentialRef: "conn_cf_main",
           priority: 90,
           implementations: [
             {
@@ -4854,6 +4889,7 @@ test("putTargetPool rejects malformed capability evidence and secret-like option
         {
           name: "plugin-main",
           type: "cloudflare",
+          credentialRef: "conn_cf_main",
           priority: 90,
           implementations: [
             {
@@ -4883,7 +4919,6 @@ test("delete resolves native target from the non-default TargetPool that created
         name: "native-main",
         type: "takosumi_native",
         ref: "native-prod",
-        credentialRef: "conn_native",
         priority: 90,
         implementations: [
           {
@@ -4924,7 +4959,7 @@ test("delete resolves native target from the non-default TargetPool that created
   expect(deleted.ok).toBe(true);
   expect(adapter.deleteInputs).toHaveLength(1);
   expect(adapter.deleteInputs[0]?.target.name).toBe("native-main");
-  expect(adapter.deleteInputs[0]?.credentialRef).toBe("conn_native");
+  expect(adapter.deleteInputs[0]?.credentialRef).toBeUndefined();
   expect(adapter.deleteInputs[0]?.plan?.executionId).toBe(
     "adapter-plugin:native-object-store-plugin",
   );

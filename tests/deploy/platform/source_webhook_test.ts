@@ -207,7 +207,7 @@ test("platform Operator capabilities require both explicit config and live bindi
     workspace_members: true,
     runner_pools: true,
     operator_connections: true,
-    managed_target_catalog: true,
+    target_catalog: true,
     db_backed_configuration: true,
     cli_api_operations: true,
     usage_showback: true,

@@ -13,13 +13,6 @@ import type { ResourceShapeKind } from "./resource-shape.ts";
 /** Opaque operator-owned Target type token. Core has no vendor type enum. */
 export type TargetType = string;
 
-/**
- * Who owns the Target's credential lifecycle. `user_managed` reuses a
- * caller-owned ProviderConnection (the opentofu-adapter credential path);
- * `managed` uses operator/Cloud-managed credentials.
- */
-export type TargetManagementMode = "user_managed" | "managed";
-
 export interface TargetSpec {
   readonly type: TargetType;
   /**
@@ -28,7 +21,6 @@ export interface TargetSpec {
    */
   readonly credentialRef?: string;
   readonly region?: string;
-  readonly mode: TargetManagementMode;
 }
 
 export interface Target {
@@ -51,9 +43,10 @@ export interface TargetPoolEntry {
   readonly type: TargetType;
   readonly ref?: string;
   /**
-   * ProviderConnection / Credential id used by the opentofu-adapter. Kept
-   * separate from `ref`: `ref` is the target-native reference such as a
-   * Cloudflare account id or Kubernetes cluster ref.
+   * Workspace-owned ProviderConnection id used only by an OpenTofu
+   * implementation. Plugin implementations receive no credential reference;
+   * host-owned authority stays behind the plugin composition boundary. Kept
+   * separate from `ref`: `ref` is a non-secret target-native reference.
    */
   readonly credentialRef?: string;
   readonly region?: string;

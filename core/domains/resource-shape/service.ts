@@ -836,9 +836,15 @@ export class ResourceShapeService {
         ? { stateAdoption: existing.stateAdoption }
         : {}),
       plan,
-      target: entry,
+      target: targetForImplementation(
+        entry,
+        output.selectedImplementationDescriptor,
+      ),
       implementation: output.selectedImplementationDescriptor,
-      credentialRef: entry.credentialRef,
+      credentialRef: credentialRefForImplementation(
+        entry,
+        output.selectedImplementationDescriptor,
+      ),
       nativeResources: nativeResourcePlan,
       ...(Object.keys(resolvedConnections.value).length > 0
         ? { resolvedConnections: resolvedConnections.value }
@@ -1407,9 +1413,15 @@ export class ResourceShapeService {
           ? { stateAdoption: existing.stateAdoption }
           : {}),
         plan,
-        target: entry,
+        target: targetForImplementation(
+          entry,
+          output.selectedImplementationDescriptor,
+        ),
         implementation: output.selectedImplementationDescriptor,
-        credentialRef: entry.credentialRef,
+        credentialRef: credentialRefForImplementation(
+          entry,
+          output.selectedImplementationDescriptor,
+        ),
         nativeResources: nativeResourcePlan,
         ...(Object.keys(resolvedConnections.value).length > 0
           ? { resolvedConnections: resolvedConnections.value }
@@ -2163,9 +2175,15 @@ export class ResourceShapeService {
           environment: req.environment ?? "default",
           stateGeneration: 0,
           plan,
-          target: entry,
+          target: targetForImplementation(
+            entry,
+            output.selectedImplementationDescriptor,
+          ),
           implementation: output.selectedImplementationDescriptor,
-          credentialRef: entry.credentialRef,
+          credentialRef: credentialRefForImplementation(
+            entry,
+            output.selectedImplementationDescriptor,
+          ),
           nativeResources: nativeResourcePlan,
           ...(Object.keys(resolvedConnections.value).length > 0
             ? { resolvedConnections: resolvedConnections.value }
@@ -2704,9 +2722,9 @@ export class ResourceShapeService {
             ? { stateAdoption: record.stateAdoption }
             : {}),
           plan,
-          target: entry,
+          target: targetForImplementation(entry, implementation),
           implementation,
-          credentialRef: entry.credentialRef,
+          credentialRef: credentialRefForImplementation(entry, implementation),
           nativeResources: lock.nativeResources ?? [],
           ...(Object.keys(resolvedConnections.value).length > 0
             ? { resolvedConnections: resolvedConnections.value }
@@ -3279,9 +3297,9 @@ export class ResourceShapeService {
             ? { stateAdoption: record.stateAdoption }
             : {}),
           plan,
-          target: entry,
+          target: targetForImplementation(entry, implementation),
           implementation,
-          credentialRef: entry.credentialRef,
+          credentialRef: credentialRefForImplementation(entry, implementation),
           nativeResources: lock.nativeResources ?? [],
           ...(Object.keys(resolvedConnections.value).length > 0
             ? { resolvedConnections: resolvedConnections.value }
@@ -3982,9 +4000,12 @@ export class ResourceShapeService {
               ? { stateAdoption: claimedRecord.stateAdoption }
               : {}),
             plan: deletePlan,
-            target: entry,
+            target: targetForImplementation(entry, implementation),
             implementation,
-            credentialRef: entry.credentialRef,
+            credentialRef: credentialRefForImplementation(
+              entry,
+              implementation,
+            ),
             nativeResources: lock.nativeResources ?? [],
             ...(Object.keys(resolvedConnections.value).length > 0
               ? { resolvedConnections: resolvedConnections.value }
@@ -4029,9 +4050,12 @@ export class ResourceShapeService {
                   : {}),
                 plan: deletePlan,
                 nativeResources: lock.nativeResources ?? [],
-                target: entry,
+                target: targetForImplementation(entry, implementation),
                 implementation,
-                credentialRef: entry.credentialRef,
+                credentialRef: credentialRefForImplementation(
+                  entry,
+                  implementation,
+                ),
                 deletePolicy,
                 actor: actorForResourceOperationRun(actor, operationRun),
               }),
@@ -4074,9 +4098,12 @@ export class ResourceShapeService {
                 : {}),
               plan: deletePlan,
               nativeResources: lock.nativeResources ?? [],
-              target: entry,
+              target: targetForImplementation(entry, implementation),
               implementation,
-              credentialRef: entry.credentialRef,
+              credentialRef: credentialRefForImplementation(
+                entry,
+                implementation,
+              ),
               deletePolicy,
               actor: actorForResourceOperationRun(actor, operationRun),
             }),
@@ -5983,6 +6010,30 @@ function cloneTargetPoolEntry(entry: TargetPoolEntry): TargetPoolEntry {
   return JSON.parse(JSON.stringify(entry)) as TargetPoolEntry;
 }
 
+/**
+ * Target is placement data, not a managed/unmanaged discriminator. The exact
+ * implementation decides the execution seam. Only OpenTofu receives a
+ * Workspace ProviderConnection reference; plugins keep host authority behind
+ * their own composition boundary.
+ */
+function targetForImplementation(
+  entry: TargetPoolEntry,
+  implementation: TargetImplementationDescriptor,
+): TargetPoolEntry {
+  if (!implementation.plugin || entry.credentialRef === undefined) {
+    return entry;
+  }
+  const { credentialRef: _credentialRef, ...target } = entry;
+  return target;
+}
+
+function credentialRefForImplementation(
+  entry: TargetPoolEntry,
+  implementation: TargetImplementationDescriptor,
+): string | undefined {
+  return implementation.plugin ? undefined : entry.credentialRef;
+}
+
 function cloneImplementationDescriptor(
   descriptor: TargetImplementationDescriptor,
 ): TargetImplementationDescriptor {
@@ -6384,7 +6435,14 @@ function validateTargetPoolSpec(
       );
     }
 
-    if (raw.implementations === undefined) continue;
+    if (raw.implementations === undefined) {
+      if (raw.credentialRef !== undefined) {
+        return invalidTargetPool(
+          `TargetPool target[${index}].credentialRef is used only by OpenTofu implementations`,
+        );
+      }
+      continue;
+    }
     if (!Array.isArray(raw.implementations)) {
       return invalidTargetPool(
         `TargetPool target[${index}].implementations must be an array`,
@@ -6576,6 +6634,20 @@ function validateTargetPoolSpec(
         );
         if (secret) return invalidTargetPool(secret);
       }
+    }
+    if (
+      raw.credentialRef !== undefined &&
+      !raw.implementations.some(
+        (implementation) =>
+          isObject(implementation) &&
+          implementation.plugin === undefined &&
+          typeof implementation.providerSource === "string" &&
+          typeof implementation.moduleTemplate === "string",
+      )
+    ) {
+      return invalidTargetPool(
+        `TargetPool target[${index}].credentialRef is used only by OpenTofu implementations`,
+      );
     }
   }
   return undefined;

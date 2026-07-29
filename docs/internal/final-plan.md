@@ -1415,12 +1415,13 @@ are peer Cloud-provided services in Takosumi Cloud. AI Gateway remains a service
 endpoint rather than a Service Form, but billable AI requests still enter the
 same Cloud managed-operation boundary before upstream model execution.
 
-Module-backed managed Targets use the same TargetPool / Adapter decision as
-form-backed Resources. A managed Target can either declare a complete
-descriptor (`providerSource`, `providerConfig`, `moduleTemplate`, explicit
-input/output mappings), or select an operator-installed adapter plugin for
-direct materialization. Core never derives these fields from Target or shape
-names. For example, the provider configuration may explicitly contain:
+TargetPool entries are deployment destinations, not Cloud/managed
+classifications. The selected descriptor explicitly chooses either a complete
+OpenTofu module path (`providerSource`, `providerConfig`, `moduleTemplate`,
+explicit input/output mappings) or an operator-installed adapter plugin for
+direct materialization. Core never derives that execution path from Target,
+provider, or shape names. For example, the provider configuration may
+explicitly contain:
 
 ```json
 {
@@ -1429,11 +1430,14 @@ names. For example, the provider configuration may explicitly contain:
 ```
 
 The OpenTofu adapter renders the explicit provider arguments without renaming or
-augmenting them. URL values require the operator allowlist. For managed targets,
-credentials are delivered as provider-native runner env rather than
-generated-root secret variables. Provider-native Cloudflare targets use the
-user's Cloudflare ProviderConnection and normal provider credential contract;
-they do not redirect the provider to a Takosumi-hosted import API.
+augmenting them. URL values require the operator allowlist. Only that OpenTofu
+path may consume a Target's Workspace-owned `credentialRef`; the shared runner
+materializes it through the normal provider credential contract. Plugin
+dispatch removes both the separate credential reference and the copy inside
+the Target projection, so host-owned authority stays behind the plugin
+composition boundary. A provider-native Cloudflare target therefore behaves
+like any other user-connected provider and does not redirect to a
+Takosumi-hosted import API.
 
 Managed hostname ownership has exactly one authority: the OSS control-plane
 hostname reservation store. An EdgeWorker route does not claim a hostname: it

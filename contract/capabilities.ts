@@ -138,7 +138,7 @@ export type KnownTakosumiOperatorCapability =
   | "workspace_members"
   | "runner_pools"
   | "operator_connections"
-  | "managed_target_catalog"
+  | "target_catalog"
   | "db_backed_configuration"
   | "cli_api_operations"
   | "usage_showback"
@@ -150,7 +150,7 @@ export const TAKOSUMI_OPERATOR_CAPABILITY_KEYS: readonly KnownTakosumiOperatorCa
     "workspace_members",
     "runner_pools",
     "operator_connections",
-    "managed_target_catalog",
+    "target_catalog",
     "db_backed_configuration",
     "cli_api_operations",
     "usage_showback",
@@ -165,7 +165,7 @@ export interface TakosumiOperatorCapabilities extends Readonly<
   readonly workspace_members: boolean;
   readonly runner_pools: boolean;
   readonly operator_connections: boolean;
-  readonly managed_target_catalog: boolean;
+  readonly target_catalog: boolean;
   readonly db_backed_configuration: boolean;
   readonly cli_api_operations: boolean;
   readonly usage_showback: boolean;
@@ -262,7 +262,7 @@ export function createTakosumiProductCapabilities(
     workspace_members: false,
     runner_pools: false,
     operator_connections: false,
-    managed_target_catalog: false,
+    target_catalog: false,
     db_backed_configuration: false,
     cli_api_operations: false,
     // OSS showback is an operator capability, not evidence that commercial

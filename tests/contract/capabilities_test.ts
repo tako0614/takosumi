@@ -65,7 +65,7 @@ test("Takosumi product capabilities separate framework from enabled profiles", (
     planes: ["control", "data"],
   });
   assert.equal(capabilities.operator.runner_pools, false);
-  assert.equal(capabilities.operator.managed_target_catalog, false);
+  assert.equal(capabilities.operator.target_catalog, false);
   assert.equal(capabilities.identity.external_oidc_login, false);
   assert.deepEqual(capabilities.formAvailability, {
     structured: true,
@@ -189,7 +189,7 @@ test("Takosumi product capabilities expose Operator operations without requiring
       workspace_members: true,
       runner_pools: true,
       operator_connections: true,
-      managed_target_catalog: true,
+      target_catalog: true,
       db_backed_configuration: true,
       cli_api_operations: true,
       usage_showback: true,
@@ -202,7 +202,7 @@ test("Takosumi product capabilities expose Operator operations without requiring
   assert.equal(capabilities.operator.workspace_members, true);
   assert.equal(capabilities.operator.runner_pools, true);
   assert.equal(capabilities.operator.operator_connections, true);
-  assert.equal(capabilities.operator.managed_target_catalog, true);
+  assert.equal(capabilities.operator.target_catalog, true);
   assert.equal(capabilities.operator.db_backed_configuration, true);
   assert.equal(capabilities.operator.cli_api_operations, true);
   assert.equal(capabilities.operator.usage_showback, true);

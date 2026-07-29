@@ -2239,8 +2239,8 @@ export function platformOperatorCapabilities(
     workspace_members: enabled("workspace_members") && accountsDb,
     runner_pools: enabled("runner_pools") && runner,
     operator_connections: enabled("operator_connections") && controlDb,
-    managed_target_catalog:
-      enabled("managed_target_catalog") && controlDb && resourceShapesEnabled,
+    target_catalog:
+      enabled("target_catalog") && controlDb && resourceShapesEnabled,
     db_backed_configuration:
       enabled("db_backed_configuration") && accountsDb && controlDb,
     cli_api_operations: enabled("cli_api_operations") && deployControlApi,

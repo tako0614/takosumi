@@ -19,7 +19,7 @@ const capabilities = {
     workspace_members: false,
     runner_pools: false,
     operator_connections: false,
-    managed_target_catalog: false,
+    target_catalog: false,
     db_backed_configuration: false,
     cli_api_operations: false,
     usage_showback: true,

@@ -1431,7 +1431,7 @@ not infer support from edition or host identity.
 
 `/v1/capabilities.operator` describes operator operations that are available on
 the current host, such as multi-tenant Workspace management, runner pools,
-operator-scoped Connections, managed target catalog, DB-backed configuration,
+operator-scoped Connections, Target catalog, DB-backed configuration,
 CLI/API/runbook operation, usage showback, and audit evidence. It does not
 advertise an operator admin UI. Operator-only changes are applied through
 database-backed configuration, CLI/API operations, runbooks, and audit logs.
