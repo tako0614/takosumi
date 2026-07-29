@@ -25,8 +25,10 @@ Takosumi does not ship a first-party Terraform/OpenTofu provider. Use Takoform
 for portable Forms and Form-backed Resource
 Interface descriptors, service-side InstallConfig blueprints for Capsule
 Interfaces, and this API, CLI, or dashboard for operator operations. External
-providers continue to run through plain Stack execution while Takosumi owns the
-canonical lifecycle.
+providers continue to run through plain Stack execution. Takosumi owns that
+Stack's Run, state, Output, and audit records; the provider and its state still
+own the provider-side objects. A canonical Takosumi Resource exists only when a
+client uses the Deploy API described below.
 
 ## Discovery
 
@@ -147,40 +149,47 @@ documentation. Non-secret `providerConfig` and `moduleInputDefaults` may carry
 endpoint, region, or ordinary module defaults; credential-shaped fields are
 rejected and secret values must use ProviderConnection values/files.
 
-Representative operations:
+Every Stack route is under `/api/v1`. The `/v1` routes are the separate
+Resource, Interface, Form, and capability control surface. Mixing the two
+prefixes produces a 404 even when authentication is valid.
+
+The authoritative session-route inventory is
+`accounts/service/src/control-route-inventory.ts`. Representative operations
+from that inventory are:
 
 ```http
-POST   /v1/workspaces
-GET    /v1/workspaces/{workspaceId}
+POST  /api/v1/workspaces
+GET   /api/v1/workspaces/{workspaceId}
 
-POST   /v1/projects
-GET    /v1/projects/{projectId}
+POST  /api/v1/workspaces/{workspaceId}/projects
+GET   /api/v1/projects/{projectId}
 
-POST   /v1/sources
-GET    /v1/sources
-GET    /v1/sources/{sourceId}
-PATCH  /v1/sources/{sourceId}
-POST   /v1/sources/{sourceId}/sync
-GET    /v1/sources/{sourceId}/snapshots
+POST  /api/v1/sources
+GET   /api/v1/sources
+GET   /api/v1/sources/{sourceId}
+PATCH /api/v1/sources/{sourceId}
+POST  /api/v1/sources/{sourceId}/sync
+GET   /api/v1/sources/{sourceId}/snapshots
 
-POST   /v1/capsules
-GET    /v1/capsules/{capsuleId}
-PATCH  /v1/capsules/{capsuleId}
+POST  /api/v1/workspaces/{workspaceId}/capsules
+GET   /api/v1/capsules/{capsuleId}
+PATCH /api/v1/capsules/{capsuleId}
+POST  /api/v1/capsules/{capsuleId}/plan
 
-POST   /v1/provider-connections
-GET    /v1/provider-connections
-GET    /v1/provider-connections/{connectionId}
-DELETE /v1/provider-connections/{connectionId}
+GET  /api/v1/connections
+POST /api/v1/connections
+POST /api/v1/connections/{connectionId}/test
+POST /api/v1/connections/{connectionId}/revoke
 
-POST   /v1/runs
-GET    /v1/runs/{runId}
-GET    /v1/runs/{runId}/logs
-POST   /v1/runs/{runId}/approve
-POST   /v1/runs/{runId}/cancel
+GET  /api/v1/runs/{runId}
+GET  /api/v1/runs/{runId}/logs
+POST /api/v1/runs/{runId}/approve
+POST /api/v1/runs/{runId}/apply
+POST /api/v1/runs/{runId}/cancel
 
-GET    /v1/capsules/{capsuleId}/state-versions
-GET    /v1/capsules/{capsuleId}/outputs
-GET    /v1/audit-events
+GET /api/v1/capsules/{capsuleId}/state-versions
+GET /api/v1/capsules/{capsuleId}/outputs
+GET /api/v1/workspaces/{workspaceId}/activity
 ```
 
 Interactive clients such as the Dashboard read Workspaces through bounded
