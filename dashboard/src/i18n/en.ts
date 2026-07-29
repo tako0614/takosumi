@@ -1522,7 +1522,7 @@ export const en: Record<keyof typeof ja, string> = {
   "account.preferences.body": "Change language and appearance.",
   "account.installTarget.title": "Where store installs land",
   "account.installTarget.body":
-    "Register this browser so a store’s “Install” button opens here, in this Takosumi. Once registered, install buttons on other stores also land here.",
+    "Register this browser so a store’s “Add” button opens here, in this Takosumi. Once registered, add buttons on other stores also land here.",
   "account.installTarget.register": "Register this device",
   "account.installTarget.registered": "Registered on this device",
   "account.installTarget.done": "Registered — approve your browser’s prompt.",

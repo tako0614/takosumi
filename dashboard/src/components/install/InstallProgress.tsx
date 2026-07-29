@@ -15,6 +15,7 @@
  */
 import { createSignal, onMount, Show, type JSX } from "solid-js";
 import { t } from "../../i18n/index.ts";
+import { appMonogram } from "../../lib/app-face.ts";
 import {
   INSTALL_STEPS,
   installStepLabel,
@@ -31,9 +32,12 @@ export {
   type InstallStep,
 } from "../../lib/install-steps.ts";
 
+/** Same monogram rule as the launcher and the store grid — an install must not
+ * show a different face than the card the visitor just tapped. A nameless
+ * install has no monogram at all, so it gets a neutral placeholder. */
 function initials(name: string | undefined): string {
   const trimmed = name?.trim();
-  return trimmed ? trimmed.slice(0, 2).toUpperCase() : "··";
+  return trimmed ? appMonogram(trimmed) : "··";
 }
 
 /** A polite live region that mounts EMPTY and fills a microtask later — a

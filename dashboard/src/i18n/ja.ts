@@ -1536,7 +1536,7 @@ export const ja = {
   "account.preferences.body": "言語と見た目を変更できます。",
   "account.installTarget.title": "ストアからのインストール先",
   "account.installTarget.body":
-    "ストアの「インストール」ボタンを、この端末ではこの Takosumi で開くようブラウザに登録します。登録後は、別のストアからでもここに着地します。",
+    "ストアの「追加」ボタンを、この端末ではこの Takosumi で開くようブラウザに登録します。登録後は、別のストアからでもここに着地します。",
   "account.installTarget.register": "この端末を登録",
   "account.installTarget.registered": "この端末で登録済み",
   "account.installTarget.done":
