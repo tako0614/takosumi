@@ -484,11 +484,7 @@ export function createAccountsHandler(
       return json(jwks);
     }
 
-    const ingressFailure = accountsIngressSecurityFailure(
-      request,
-      url,
-      issuer,
-    );
+    const ingressFailure = accountsIngressSecurityFailure(request, url, issuer);
     if (ingressFailure) return ingressFailure;
 
     if (!isLoginAllowlistBypassPath(url.pathname)) {
@@ -798,12 +794,7 @@ export function createAccountsHandler(
       response = await inner(request);
     } catch (error) {
       if (!(error instanceof RequestBodyReadError)) throw error;
-      response = errorJson(
-        error.code,
-        error.message,
-        error.status,
-        request,
-      );
+      response = errorJson(error.code, error.message, error.status, request);
     }
     return withSecurityHeaders(response, isProductionIssuer);
   };
@@ -934,23 +925,28 @@ function accountsIngressSecurityFailure(
     url.pathname === TAKOSUMI_ACCOUNTS_TOKEN_PATH ||
     url.pathname === TAKOSUMI_ACCOUNTS_REVOKE_PATH ||
     url.pathname === TAKOSUMI_ACCOUNTS_INTROSPECT_PATH;
-  if (request.body !== null) {
-    const expected = protocolFormRoute
-      ? "application/x-www-form-urlencoded"
-      : "application/json";
-    const actual = request.headers
-      .get("content-type")
-      ?.split(";", 1)[0]
-      ?.trim()
-      .toLowerCase();
-    if (actual !== expected) {
-      return errorJson(
-        "unsupported_media_type",
-        `Content-Type must be ${expected}.`,
-        415,
-        request,
-      );
-    }
+  const expected = protocolFormRoute
+    ? "application/x-www-form-urlencoded"
+    : "application/json";
+  const actual = request.headers
+    .get("content-type")
+    ?.split(";", 1)[0]
+    ?.trim()
+    .toLowerCase();
+  // Cloudflare may expose an otherwise bodyless DELETE/POST as an empty
+  // ReadableStream, so Request.body is not a portable presence check. A
+  // missing Content-Type is safe to leave to the route's bounded body parser:
+  // browser form submissions always declare their non-JSON media type and the
+  // exact-Origin check below still rejects ambient cross-site authority.
+  // OAuth protocol form routes do require a body and keep their strict media
+  // contract here.
+  if (actual !== expected && (protocolFormRoute || actual !== undefined)) {
+    return errorJson(
+      "unsupported_media_type",
+      `Content-Type must be ${expected}.`,
+      415,
+      request,
+    );
   }
 
   // OAuth protocol endpoints authenticate the client and are intentionally

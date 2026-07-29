@@ -4,15 +4,9 @@ import {
   createAccountsHandler,
   type PasskeyHttpOptions,
 } from "../../../../accounts/service/src/mod.ts";
-import {
-  ACCOUNT_SESSION_COOKIE_NAME,
-} from "../../../../accounts/service/src/account-session.ts";
-import {
-  ACCOUNTS_JSON_BODY_MAX_BYTES,
-} from "../../../../accounts/service/src/http-helpers.ts";
-import {
-  passkeyChallengeKey,
-} from "../../../../accounts/service/src/passkey-challenge-store.ts";
+import { ACCOUNT_SESSION_COOKIE_NAME } from "../../../../accounts/service/src/account-session.ts";
+import { ACCOUNTS_JSON_BODY_MAX_BYTES } from "../../../../accounts/service/src/http-helpers.ts";
+import { passkeyChallengeKey } from "../../../../accounts/service/src/passkey-challenge-store.ts";
 import { InMemoryAccountsStore } from "../../../../accounts/service/src/store.ts";
 
 const issuer = "https://accounts.example.test";
@@ -189,6 +183,24 @@ test("cookie mutations require exact issuer Origin and route Content-Type", asyn
     }),
   );
   expect(exactOrigin.status).toBe(204);
+  expect(store.findAccountSession("sess_member")).toBeUndefined();
+});
+
+test("bodyless cookie mutations tolerate Cloudflare empty body streams", async () => {
+  const { handler, store } = seededHandler();
+  const response = await handler(
+    new Request(`${issuer}/v1/account/session/me`, {
+      method: "DELETE",
+      headers: {
+        cookie: `${ACCOUNT_SESSION_COOKIE_NAME}=sess_member`,
+        origin: issuer,
+      },
+      // Cloudflare can reconstruct a bodyless mutation as a zero-byte stream.
+      // Its absence of Content-Type must not turn a valid DELETE into 415.
+      body: "",
+    }),
+  );
+  expect(response.status).toBe(204);
   expect(store.findAccountSession("sess_member")).toBeUndefined();
 });
 
