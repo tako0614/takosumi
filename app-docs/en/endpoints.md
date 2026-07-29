@@ -47,7 +47,7 @@ Only the Takosumi for Operator / Cloud operation layer has:
 - AI Gateway
 - Takosumi Cloud resources
 - official S3-compatible Object Storage endpoint backend
-- official managed target / native resource backends
+- operator-provided deployment target / native resource backends
 - official usage, quota, billing, and support controls
 
 Official `app.takosumi.com` serves Cloud endpoint families on the same hosted

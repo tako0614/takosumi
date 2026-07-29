@@ -38,7 +38,7 @@ Takosumi for Operator:
   Takosumi + customer/tenant/billing/quota/operator operation.
 
 Takosumi Cloud:
-  the official hosted Takosumi for Operator, with official managed targets,
+  the official hosted Takosumi for Operator, with operator-provided deployment targets,
   Cloud-operated managed service backends, versioned pricing, billing,
   support, and SLA.
 ```
@@ -297,7 +297,7 @@ Push notification delivery:
   define a product-neutral notification pusher contract, where a client registers
   an HTTP pusher (`app_id`, `pushkey`, `data.url`, format) and the host sends a
   minimal gateway envelope. Takosumi still does not advertise a
-  PushNotification capability, resolver shape, managed target, or provider
+  PushNotification capability, resolver shape, deployment target, or provider
   resource.
 ```
 
@@ -618,7 +618,7 @@ enforcement are grandfathered as `scoped`; only an explicit post-migration
 custom-domain reservation rows from consuming vanity slots. If it maps a `url` or
 route-pattern variable that points outside the managed base domain, it is a
 custom/user-owned hostname and must go through domain ownership verification
-before runtime activation in managed target implementations. Generic
+before runtime activation in deployment target implementations. Generic
 ProviderConnection / non-managed providers may still receive these values as
 ordinary OpenTofu variables; Takosumi should not reject the module merely
 because it chooses to use its own provider-side routing.
@@ -1303,7 +1303,7 @@ billing account / prepaid credit / automatic recharge
 quota / usage pricing / metering / invoice / payment integration
 DB-backed operator configuration
 CLI / API / runbook operations
-managed target offerings
+deployment target offerings
 realized Offering catalogs and subject resolvers
 support and abuse tooling
 commercial audit export
@@ -1461,7 +1461,7 @@ Behind the Deploy API, the selected Target/Adapter decides whether the
 implementation is Workers for Platforms, Takosumi native runtime, or an
 operator-provided plugin. Do not hard-code WfP into a client or Service Form.
 
-For Takosumi Cloud official managed targets, typed Resources use an installed
+For Takosumi Cloud operator-provided deployment targets, typed Resources use an installed
 adapter/backend manager behind the Deploy API instead of nesting an OpenTofu
 destroy/apply per resource. A manager consumes only the resolved operation; it
 does not parse an OpenTofu provider request or invoke a compatibility handler.
@@ -1560,7 +1560,7 @@ GCS / MinIO / other S3-compatible storage:
 
 Takosumi enables `compat.s3.v1` only when the operator intentionally exposes an
 object-storage import/data path, binding projection, policy, metering, or
-managed target control. This lets Takosumi-provided storage be received and used
+deployment target control. This lets Takosumi-provided storage be received and used
 through the same S3-compatible provider/SDK surface. The portable
 `takoform_object_bucket` client can author the control-plane Form; S3-compatible
 APIs remain the data-plane surface. Historical `takosumi_object_bucket` state is
@@ -2023,7 +2023,7 @@ The key rule still applies:
 ```text
 If the existing standard/provider is enough, use it.
 If Takosumi needs an import path, binding projection, policy, metering, or
-managed target control, expose a scoped compatibility profile around the
+deployment target control, expose a scoped compatibility profile around the
 canonical Resource lifecycle.
 ```
 
@@ -2166,7 +2166,7 @@ create implicit Form Package, implementation, activation, or offering mappings.
 Object storage remains a standard
 endpoint/provider concern unless `compat.s3.v1` is explicitly enabled by an
 operator for an import/data path, binding projection, policy, metering, or
-managed target control.
+deployment target control.
 
 Example:
 
@@ -2279,7 +2279,7 @@ does not release OSS hostname ownership.
 
 Implementation can use Cloudflare primitives such as Workers for Platforms,
 Dynamic Workers, R2, D1, KV, Queues, Workflows, Containers, and AI Gateway.
-Those are implementation details behind official managed targets.
+Those are implementation details behind operator-provided deployment targets.
 
 Docs must publish one service-availability matrix. The Cloud GA contract is one
 all-or-nothing set: all ten Service Forms from section 14 plus the AI Gateway

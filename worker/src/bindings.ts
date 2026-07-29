@@ -266,7 +266,7 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
    * off unless the operator deliberately sets this.
    */
   readonly TAKOSUMI_ALLOW_OPERATOR_BACKED_PROVIDER_ENVS?: string;
-  /** Public hostname namespace owned by the operator-managed target. */
+  /** Public hostname namespace owned by the operator-provided deployment target. */
   readonly TAKOSUMI_MANAGED_PUBLIC_BASE_DOMAIN?: string;
   /** Owner-account allowance for short names under the managed base domain. */
   readonly TAKOSUMI_MANAGED_VANITY_HOST_SLOTS_PER_OWNER?: string;

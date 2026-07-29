@@ -28,7 +28,7 @@ Takosumi Cloud は、software としての Takosumi (Git を起点に、変更�
 ```text
 Takosumi Cloud =
   official hosted Takosumi for Operator
-  + official managed target pools
+  + operator-provided deployment targets
   + Cloud-operated managed service backends
   + billing / usage metering / spend guard
   + support / operations

@@ -27,7 +27,7 @@ The authorities are separated as follows:
 | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------- |
 | Portable Service Form schemas, exact `FormRef`, data-only Form Packages, typed provider, SDK, fixtures, and portable conformance                                                                                                   | Independent Takoform project |
 | Optional zero-form host, canonical `Resource` lifecycle, `Run` / `StateVersion` / `Output` / audit ledger, Form Registry and activation, targets, adapters, credentials, Interface, and generic noncommercial `Offering` selection | Takosumi OSS                 |
-| Official implementations, managed targets, capacity, price catalog, quote, billing, quota, abuse controls, SLA, and support                                                                                                        | Takosumi Cloud               |
+| Official implementations, deployment targets, capacity, price catalog, quote, billing, quota, abuse controls, SLA, and support                                                                                                     | Takosumi Cloud               |
 
 The dependency direction is one way: Takosumi may consume exact independently
 released portable contracts, and Takosumi Cloud may compose the Takosumi OSS

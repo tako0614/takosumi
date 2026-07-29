@@ -150,7 +150,7 @@ Takosumi Core does not own:
 commercial customer management
 invoice / payment integration
 rated billing and payment enforcement
-official managed target capacity
+operator-provided deployment target capacity
 official Takosumi native resource internals
 official SLA / support / abuse tooling
 ```

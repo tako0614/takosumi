@@ -416,7 +416,7 @@ test("source docs keep current source-module and modulePath vocabulary", async (
   assert.match(docs, /module path/);
 });
 
-test("core spec names the final OSS model and excludes official managed capacity", async () => {
+test("core spec names the final OSS model and excludes operator-provided capacity", async () => {
   const coreSpec = await readText(new URL("docs/internal/core-spec.md", ROOT));
 
   for (const concept of FINAL_PUBLIC_CONCEPTS) {
@@ -433,7 +433,7 @@ test("core spec names the final OSS model and excludes official managed capacity
   assert.match(coreSpec, /Compatibility API framework is core/);
   assert.match(coreSpec, /invoice \/ payment integration/);
   assert.match(coreSpec, /rated billing and payment enforcement/);
-  assert.match(coreSpec, /official managed target capacity/);
+  assert.match(coreSpec, /operator-provided deployment target capacity/);
   assert.match(coreSpec, /official Takosumi native resource internals/);
   assert.match(coreSpec, /official SLA \/ support \/ abuse tooling/);
 });

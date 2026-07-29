@@ -1,7 +1,7 @@
 # Takosumi Cloud Resources
 
 Takosumi Cloud is the official hosted Takosumi for Operator, providing apps,
-services, and data resources on official managed targets. `EdgeWorker` is one of
+services, and data resources on operator-provided deployment targets. `EdgeWorker` is one of
 several service forms (runtime shapes for managed resources).
 
 ```text

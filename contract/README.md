@@ -39,7 +39,7 @@ re-exported from the public deploy-control contract facade.
 
 Mobile delivery remains product-owned. `notification-pushers.ts` is the
 portable client-to-host registration contract for new mobile shells; Takosumi
-does not define a generic push service, managed target, or Resource Shape.
+does not define a generic push service, deployment target, or Resource Shape.
 `mobile.ts` also retains typed `MobilePushHostRegistration*` DTOs and a strict
 parser as a wire-compatibility surface for product hosts that still expose a
 native-token registration route. The shared mobile kit does not advertise or
@@ -74,7 +74,7 @@ CredentialRecipe, ProviderBinding, and per-run env/file injection. It must not
 define complete provider-compatible cloud APIs or official managed capacity as
 OSS product concepts. Compatibility API profiles are scoped capabilities such as
 `compat.s3.v1`, `compat.oci.v1`, `compat.cloudevents.v1`, and
-`compat.kubernetes.crd.v1`; official managed target pools, billing
+`compat.kubernetes.crd.v1`; operator-provided deployment targets, billing
 enforcement, quota, usage rating, support, and resource backends belong to
 Takosumi for Operator / Takosumi Cloud composition.
 

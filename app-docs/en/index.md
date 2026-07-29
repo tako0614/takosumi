@@ -22,13 +22,13 @@ live separately at [takosumi.com/docs](https://takosumi.com/docs/en/).
 ## What It Is Made Of
 
 Takosumi Cloud is Takosumi the software (a Git-based deploy control plane that
-records plan → review → apply) with official managed targets, billing, and
+records plan → review → apply) with operator-provided deployment targets, billing, and
 support on top.
 
 ```text
 Takosumi Cloud =
   official hosted Takosumi for Operator
-  + official managed target pools
+  + operator-provided deployment targets
   + Cloud-operated managed service backends
   + billing / usage metering / spend guard
   + support / operations
@@ -41,7 +41,7 @@ Takosumi Cloud Resources =
 
 Add an app or service from Git, attach the resources it needs as bindings, and
 deploys and updates are recorded. Edge JS runtime, Object Storage, KV,
-Database, Queue, AI, and Container are peer managed resources. Usage spends
+Database, Queue, AI, and Container are peer Cloud resources. Usage spends
 through the credit balance, safety limits, and payment-state guard.
 
 ## Runtime

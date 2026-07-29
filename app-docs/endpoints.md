@@ -44,7 +44,7 @@ Takosumi for Operator / Cloud の運用層だけが次を持ちます。
 - AI Gateway
 - Takosumi Cloud resources
 - official S3-compatible Object Storage endpoint backend
-- official managed target / native resource backend
+- operator-provided deployment target / native resource backend
 - official usage / quota / billing / support controls
 
 公式の `app.takosumi.com` は、Cloud エンドポイントファミリを同じホスト型プラットフォームオリジンで

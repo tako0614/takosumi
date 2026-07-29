@@ -50,7 +50,7 @@ export interface CapsulePlanContext {
    * invent module input schema for arbitrary OpenTofu Capsules.
    */
   readonly providerInputDefaults: Readonly<Record<string, JsonValue>>;
-  /** Public namespace advertised by the selected managed target, if any. */
+  /** Public namespace advertised by the selected deployment target, if any. */
   readonly managedPublicBaseDomain?: string;
 }
 

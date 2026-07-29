@@ -211,7 +211,7 @@ expired 状態を利用可能な custom domain として保存・表示しませ
 `public_endpoint` プロジェクションから普通の OpenTofu 変数へ渡します。例えば
 `subdomain` は managed URL の label、`url` は managed URL または通常の OpenTofu
 変数です。ユーザー所有 URL を
-BYOC provider に渡すことはできますが、Cloud managed target の custom domain として
+BYOC provider に渡すことはできますが、Takosumi Cloud deployment target の custom domain として
 自動有効化せず、`VerifiedDomain` の確認を要求します。
 Takosumi は `worker_name` や `app_url` という変数名だけを見て意味を推論しません。
 store が明示したプロジェクションと input `format` だけが Dashboard の入力 UX と
