@@ -2,6 +2,11 @@ import type {
   TakosumiAccountsPatScope,
   TakosumiSubject,
 } from "@takosjp/takosumi-accounts-contract";
+import type {
+  RefreshChainRetentionPageInput,
+  RefreshChainRetentionPageResult,
+  RefreshChainRetentionPhase,
+} from "./refresh-chain-retention.ts";
 
 export interface AuthorizationCodeRecord {
   clientId: string;
@@ -115,7 +120,7 @@ export interface AccountsBearerCredentialCandidates {
 }
 
 /**
- * Result of {@link AccountsStore.pruneRefreshChain}. Counts the rows deleted
+ * Result of {@link AccountsStore.pruneRefreshChainPage}. Counts the rows deleted
  * from each retention-managed refresh-chain / authorization-code table so the
  * operator cleanup task can report progress.
  */
@@ -236,7 +241,7 @@ export interface AccountsStore {
   replaceAccountSession?(
     previousSessionId: string,
     next: AccountSessionRecord,
-  ): void | Promise<void>;
+  ): boolean | Promise<boolean>;
   savePrivacyRequest(record: PrivacyRequestRecord): void | Promise<void>;
   findPrivacyRequest(
     requestId: string,
@@ -406,25 +411,13 @@ export interface AccountsStore {
       }
     | Promise<{ access: readonly string[]; refresh: readonly string[] }>;
   /**
-   * Retention cleanup for the refresh-chain / authorization-code tracking
-   * tables (migrations 019 / 021). These tables append a row on every
-   * auth-code exchange and every refresh-token rotation and are never deleted
-   * by the lifecycle paths (the only chain deletes are the security-driven
-   * cascade-revoke on reuse detection), so without this they grow forever.
-   *
-   * Operators MUST run this on a schedule; see the operator cleanup task
-   * documented in migrations/019_refresh_chain.sql. `chainBefore` should be the
-   * refresh-token lifetime cutoff (default 30 days ago) and
-   * `consumedCodeBefore` the authorization-code lifetime cutoff (default 5
-   * minutes ago); rows with `created_at <= cutoff` are removed.
-   *
-   * This is retention only: it must never remove a row whose token/code is
-   * still within its lifetime, so the reuse-detection guards are unaffected.
+   * Bounded retention page for refresh-chain / authorization-code tracking
+   * state. The timestamp+primary-key cursor and limit are mandatory so no
+   * operator tick can materialize or delete an unbounded set.
    */
-  pruneRefreshChain(input: {
-    chainBefore: number;
-    consumedCodeBefore: number;
-  }): RefreshChainPruneResult | Promise<RefreshChainPruneResult>;
+  pruneRefreshChainPage(
+    input: RefreshChainRetentionPageInput,
+  ): RefreshChainRetentionPageResult | Promise<RefreshChainRetentionPageResult>;
   /**
    * Returns true if the refresh-chain root resolved from `token` (the root of
    * whichever chain `token` belongs to) has been recorded as revoked by
@@ -483,7 +476,7 @@ export class InMemoryAccountsStore implements AccountsStore {
   readonly #refreshChainChildren = new Map<string, string>();
   readonly #refreshChainRoots = new Map<string, string>();
   // revoked-root -> revokedAt ms. Read by isRefreshRootRevoked (defense in
-  // depth on the refresh path) and pruned by pruneRefreshChain.
+  // depth on the refresh path) and pruned by pruneRefreshChainPage.
   readonly #revokedRefreshChainRoots = new Map<string, number>();
   // code -> consumedAt ms, for time-based retention.
   readonly #consumedAuthorizationCodes = new Map<string, number>();
@@ -492,8 +485,22 @@ export class InMemoryAccountsStore implements AccountsStore {
     { access: Set<string>; refresh: Set<string>; createdAt: number }
   >();
   readonly #refreshChainAccessTokens = new Map<string, Set<string>>();
+  // `${root}\n${access}` -> createdAt ms. This mirrors the durable
+  // refresh_chain_access_tokens row timestamp so the in-memory reference
+  // adapter can exercise the same bounded retention cursor contract.
+  readonly #refreshChainAccessTokenCreatedAt = new Map<string, number>();
   // parent-token -> createdAt ms for refresh_chain_links retention.
   readonly #refreshChainLinkCreatedAt = new Map<string, number>();
+  readonly #refreshChainRetentionIndexes = new Map<
+    RefreshChainRetentionPhase,
+    Array<{ readonly at: number; readonly key: string }>
+  >([
+    ["chain_links", []],
+    ["chain_access_tokens", []],
+    ["revoked_roots", []],
+    ["consumed_codes", []],
+    ["auth_code_token_links", []],
+  ]);
   // WebAuthn challenge store: key -> { challenge, expiresAt }. Single-shot
   // delete-on-read via consumePasskeyChallenge.
   readonly #passkeyChallenges = new Map<
@@ -577,9 +584,16 @@ export class InMemoryAccountsStore implements AccountsStore {
   replaceAccountSession(
     previousSessionId: string,
     next: AccountSessionRecord,
-  ): void {
+  ): boolean {
+    if (
+      !this.#accountSessions.has(previousSessionId) ||
+      this.#accountSessions.has(next.sessionId)
+    ) {
+      return false;
+    }
     this.#accountSessions.set(next.sessionId, structuredClone(next));
     this.#accountSessions.delete(previousSessionId);
+    return true;
   }
 
   savePrivacyRequest(record: PrivacyRequestRecord): void {
@@ -734,7 +748,13 @@ export class InMemoryAccountsStore implements AccountsStore {
     // minting a second child family.
     if (this.#refreshChainChildren.has(parentToken)) return false;
     this.#refreshChainChildren.set(parentToken, childToken);
-    this.#refreshChainLinkCreatedAt.set(parentToken, Date.now());
+    const createdAt = Date.now();
+    this.#refreshChainLinkCreatedAt.set(parentToken, createdAt);
+    this.#upsertRefreshChainRetentionCandidate(
+      "chain_links",
+      parentToken,
+      createdAt,
+    );
     const root = this.#refreshChainRoots.get(parentToken) ?? parentToken;
     this.#refreshChainRoots.set(parentToken, root);
     this.#refreshChainRoots.set(childToken, root);
@@ -747,7 +767,13 @@ export class InMemoryAccountsStore implements AccountsStore {
 
   revokeRefreshChain(rootToken: string): readonly string[] {
     const root = this.#refreshChainRoots.get(rootToken) ?? rootToken;
-    this.#revokedRefreshChainRoots.set(root, Date.now());
+    const revokedAt = Date.now();
+    this.#revokedRefreshChainRoots.set(root, revokedAt);
+    this.#upsertRefreshChainRetentionCandidate(
+      "revoked_roots",
+      root,
+      revokedAt,
+    );
     const tokens = new Set<string>();
     let cursor: string | undefined = root;
     while (cursor) {
@@ -768,19 +794,29 @@ export class InMemoryAccountsStore implements AccountsStore {
       for (const accessToken of linkedAccessTokens) {
         this.#accessTokens.delete(accessToken);
       }
-      linkedAccessTokens.clear();
     }
     return [...tokens];
   }
 
   markAuthorizationCodeConsumed(code: string): void {
-    this.#consumedAuthorizationCodes.set(code, Date.now());
+    const consumedAt = Date.now();
+    this.#consumedAuthorizationCodes.set(code, consumedAt);
+    this.#upsertRefreshChainRetentionCandidate(
+      "consumed_codes",
+      code,
+      consumedAt,
+    );
     if (!this.#authorizationCodeTokens.has(code)) {
       this.#authorizationCodeTokens.set(code, {
         access: new Set(),
         refresh: new Set(),
-        createdAt: Date.now(),
+        createdAt: consumedAt,
       });
+      this.#upsertRefreshChainRetentionCandidate(
+        "auth_code_token_links",
+        code,
+        consumedAt,
+      );
     }
   }
 
@@ -797,6 +833,11 @@ export class InMemoryAccountsStore implements AccountsStore {
     if (!entry) {
       entry = { access: new Set(), refresh: new Set(), createdAt: Date.now() };
       this.#authorizationCodeTokens.set(code, entry);
+      this.#upsertRefreshChainRetentionCandidate(
+        "auth_code_token_links",
+        code,
+        entry.createdAt,
+      );
     }
     entry.access.add(accessToken);
     if (refreshTokenRoot) entry.refresh.add(refreshTokenRoot);
@@ -814,6 +855,16 @@ export class InMemoryAccountsStore implements AccountsStore {
       this.#refreshChainAccessTokens.set(root, set);
     }
     set.add(accessToken);
+    const key = `${root}\n${accessToken}`;
+    if (!this.#refreshChainAccessTokenCreatedAt.has(key)) {
+      const createdAt = Date.now();
+      this.#refreshChainAccessTokenCreatedAt.set(key, createdAt);
+      this.#upsertRefreshChainRetentionCandidate(
+        "chain_access_tokens",
+        key,
+        createdAt,
+      );
+    }
   }
 
   revokeTokensIssuedFromCode(code: string): {
@@ -840,63 +891,160 @@ export class InMemoryAccountsStore implements AccountsStore {
     return this.#revokedRefreshChainRoots.has(root);
   }
 
-  pruneRefreshChain(input: {
-    chainBefore: number;
-    consumedCodeBefore: number;
-  }): RefreshChainPruneResult {
-    let chainLinks = 0;
-    let chainAccessTokens = 0;
-    let revokedRoots = 0;
-    let consumedCodes = 0;
-    let authCodeTokenLinks = 0;
-    // refresh_chain_links + their root mappings (refresh-token lifetime).
-    for (const [parent, createdAt] of [...this.#refreshChainLinkCreatedAt]) {
-      if (createdAt > input.chainBefore) continue;
-      const child = this.#refreshChainChildren.get(parent);
-      this.#refreshChainChildren.delete(parent);
-      this.#refreshChainLinkCreatedAt.delete(parent);
-      this.#refreshChainRoots.delete(parent);
-      if (child !== undefined) this.#refreshChainRoots.delete(child);
-      chainLinks += 1;
-    }
-    // revoked_refresh_roots + refresh_chain_access_tokens have no independent
-    // timestamp on a per-access-token basis in memory; the revoked-root and
-    // the access-token set are tied to a root, so prune them once the root's
-    // chain links are gone (best-effort, bounded by the chain cutoff).
-    for (const [root, revokedAt] of [...this.#revokedRefreshChainRoots]) {
-      if (revokedAt > input.chainBefore) continue;
-      this.#revokedRefreshChainRoots.delete(root);
-      revokedRoots += 1;
-    }
-    for (const [root, set] of [...this.#refreshChainAccessTokens]) {
-      // The access-token link set is created at rotation time; drop empty or
-      // fully-revoked sets and any whose root is no longer referenced.
-      if (set.size === 0 || !this.#refreshChainRoots.has(root)) {
-        const removed = set.size;
-        this.#refreshChainAccessTokens.delete(root);
-        chainAccessTokens += removed;
+  pruneRefreshChainPage(
+    input: RefreshChainRetentionPageInput,
+  ): RefreshChainRetentionPageResult {
+    assertInMemoryRetentionInput(input);
+    const phase = input.cursor?.phase ?? "chain_links";
+    const cursor = decodeInMemoryRetentionCursor(input.cursor?.after);
+    const cutoff =
+      phase === "consumed_codes" || phase === "auth_code_token_links"
+        ? input.consumedCodeBefore
+        : input.chainBefore;
+    const candidates = this.#refreshChainRetentionCandidatesAfter(
+      phase,
+      cursor,
+      cutoff,
+      input.limit,
+    );
+    const counts: RefreshChainPruneResult = {
+      chainLinks: 0,
+      chainAccessTokens: 0,
+      revokedRoots: 0,
+      consumedCodes: 0,
+      authCodeTokenLinks: 0,
+    };
+    for (const candidate of candidates) {
+      if (phase === "chain_links") {
+        const child = this.#refreshChainChildren.get(candidate.key);
+        this.#refreshChainChildren.delete(candidate.key);
+        this.#refreshChainLinkCreatedAt.delete(candidate.key);
+        this.#removeRefreshChainRetentionCandidate(
+          "chain_links",
+          candidate.key,
+        );
+        this.#refreshChainRoots.delete(candidate.key);
+        if (child !== undefined) this.#refreshChainRoots.delete(child);
+        counts.chainLinks += 1;
+      } else if (phase === "chain_access_tokens") {
+        const [root, accessToken] = splitRefreshChainAccessKey(candidate.key);
+        this.#refreshChainAccessTokenCreatedAt.delete(candidate.key);
+        this.#removeRefreshChainRetentionCandidate(
+          "chain_access_tokens",
+          candidate.key,
+        );
+        const set = this.#refreshChainAccessTokens.get(root);
+        set?.delete(accessToken);
+        if (set?.size === 0) this.#refreshChainAccessTokens.delete(root);
+        counts.chainAccessTokens += 1;
+      } else if (phase === "revoked_roots") {
+        this.#revokedRefreshChainRoots.delete(candidate.key);
+        this.#removeRefreshChainRetentionCandidate(
+          "revoked_roots",
+          candidate.key,
+        );
+        counts.revokedRoots += 1;
+      } else if (phase === "consumed_codes") {
+        this.#consumedAuthorizationCodes.delete(candidate.key);
+        this.#removeRefreshChainRetentionCandidate(
+          "consumed_codes",
+          candidate.key,
+        );
+        counts.consumedCodes += 1;
+      } else {
+        this.#authorizationCodeTokens.delete(candidate.key);
+        this.#removeRefreshChainRetentionCandidate(
+          "auth_code_token_links",
+          candidate.key,
+        );
+        counts.authCodeTokenLinks += 1;
       }
     }
-    // consumed_authorization_codes + auth_code_token_links (auth-code
-    // lifetime). The link entry carries createdAt; the consumed marker carries
-    // consumedAt.
-    for (const [code, consumedAt] of [...this.#consumedAuthorizationCodes]) {
-      if (consumedAt > input.consumedCodeBefore) continue;
-      this.#consumedAuthorizationCodes.delete(code);
-      consumedCodes += 1;
+    const last = candidates.at(-1);
+    if (candidates.length === input.limit && last) {
+      return {
+        ...counts,
+        scanned: candidates.length,
+        done: false,
+        cursor: {
+          phase,
+          after: JSON.stringify([last.at, last.key]),
+        },
+      };
     }
-    for (const [code, entry] of [...this.#authorizationCodeTokens]) {
-      if (entry.createdAt > input.consumedCodeBefore) continue;
-      this.#authorizationCodeTokens.delete(code);
-      authCodeTokenLinks += 1;
-    }
+    const nextPhase = nextInMemoryRetentionPhase(phase);
     return {
-      chainLinks,
-      chainAccessTokens,
-      revokedRoots,
-      consumedCodes,
-      authCodeTokenLinks,
+      ...counts,
+      scanned: candidates.length,
+      done: nextPhase === undefined,
+      ...(nextPhase ? { cursor: { phase: nextPhase } } : {}),
     };
+  }
+
+  #refreshChainRetentionCandidatesAfter(
+    phase: RefreshChainRetentionPhase,
+    cursor: { readonly at: number; readonly key: string },
+    cutoff: number,
+    limit: number,
+  ): Array<{ readonly at: number; readonly key: string }> {
+    const index = this.#refreshChainRetentionIndexes.get(phase);
+    if (!index) return [];
+    let low = 0;
+    let high = index.length;
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2);
+      const candidate = index[middle]!;
+      if (
+        candidate.at < cursor.at ||
+        (candidate.at === cursor.at && candidate.key <= cursor.key)
+      ) {
+        low = middle + 1;
+      } else {
+        high = middle;
+      }
+    }
+    const candidates: Array<{ readonly at: number; readonly key: string }> = [];
+    for (
+      let position = low;
+      position < index.length && candidates.length < limit;
+      position += 1
+    ) {
+      const candidate = index[position]!;
+      if (candidate.at > cutoff) break;
+      candidates.push(candidate);
+    }
+    return candidates;
+  }
+
+  #upsertRefreshChainRetentionCandidate(
+    phase: RefreshChainRetentionPhase,
+    key: string,
+    at: number,
+  ): void {
+    this.#removeRefreshChainRetentionCandidate(phase, key);
+    const index = this.#refreshChainRetentionIndexes.get(phase)!;
+    let low = 0;
+    let high = index.length;
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2);
+      const candidate = index[middle]!;
+      if (candidate.at < at || (candidate.at === at && candidate.key < key)) {
+        low = middle + 1;
+      } else {
+        high = middle;
+      }
+    }
+    index.splice(low, 0, { at, key });
+  }
+
+  #removeRefreshChainRetentionCandidate(
+    phase: RefreshChainRetentionPhase,
+    key: string,
+  ): void {
+    const index = this.#refreshChainRetentionIndexes.get(phase);
+    if (!index) return;
+    const position = index.findIndex((candidate) => candidate.key === key);
+    if (position >= 0) index.splice(position, 1);
   }
 
   savePasskeyChallenge(
@@ -916,6 +1064,75 @@ export class InMemoryAccountsStore implements AccountsStore {
     if (entry.expiresAt <= now) return undefined;
     return entry.challenge;
   }
+}
+
+const IN_MEMORY_RETENTION_PHASES: readonly RefreshChainRetentionPhase[] = [
+  "chain_links",
+  "chain_access_tokens",
+  "revoked_roots",
+  "consumed_codes",
+  "auth_code_token_links",
+];
+
+function nextInMemoryRetentionPhase(
+  phase: RefreshChainRetentionPhase,
+): RefreshChainRetentionPhase | undefined {
+  const index = IN_MEMORY_RETENTION_PHASES.indexOf(phase);
+  return IN_MEMORY_RETENTION_PHASES[index + 1];
+}
+
+function decodeInMemoryRetentionCursor(
+  value: string | undefined,
+): { readonly at: number; readonly key: string } {
+  if (value === undefined) return { at: -1, key: "" };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new TypeError("invalid in-memory refresh-chain retention cursor");
+  }
+  if (
+    !Array.isArray(parsed) ||
+    parsed.length !== 2 ||
+    !Number.isFinite(parsed[0]) ||
+    typeof parsed[1] !== "string"
+  ) {
+    throw new TypeError("invalid in-memory refresh-chain retention cursor");
+  }
+  return { at: Number(parsed[0]), key: parsed[1] };
+}
+
+function assertInMemoryRetentionInput(
+  input: RefreshChainRetentionPageInput,
+): void {
+  if (
+    !Number.isSafeInteger(input.limit) ||
+    input.limit <= 0 ||
+    input.limit > 1_000
+  ) {
+    throw new TypeError(
+      "refresh-chain retention limit must be between 1 and 1000",
+    );
+  }
+  if (
+    !Number.isFinite(input.chainBefore) ||
+    !Number.isFinite(input.consumedCodeBefore)
+  ) {
+    throw new TypeError("refresh-chain retention cutoffs must be finite");
+  }
+  if (!IN_MEMORY_RETENTION_PHASES.includes(input.cursor?.phase ?? "chain_links")) {
+    throw new TypeError("invalid in-memory refresh-chain retention phase");
+  }
+}
+
+function splitRefreshChainAccessKey(
+  key: string,
+): readonly [root: string, accessToken: string] {
+  const separator = key.indexOf("\n");
+  if (separator < 0) {
+    throw new TypeError("invalid in-memory refresh-chain access key");
+  }
+  return [key.slice(0, separator), key.slice(separator + 1)];
 }
 
 function upstreamIdentityKey(input: {

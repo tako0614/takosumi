@@ -5600,7 +5600,7 @@ test("accounts migrate dry-run prints ordered migration plan", async () => {
     driver: "postgres",
     source: "--database-url",
   });
-  expect(plan.migrations.length).toEqual(35);
+  expect(plan.migrations.length).toEqual(36);
   expect(plan.migrations[0].name).toEqual("001_app_installation_ledger.sql");
   expect(plan.migrations[16].name).toEqual(
     "017_drop_binding_grant_runtime_binding.sql",
@@ -5626,6 +5626,9 @@ test("accounts migrate dry-run prints ordered migration plan", async () => {
     "034_remove_commercial_billing_persistence.sql",
   );
   expect(plan.migrations[34].name).toEqual("035_account_picture.sql");
+  expect(plan.migrations[35].name).toEqual(
+    "036_refresh_chain_retention_indexes.sql",
+  );
   expect(plan.migrations[0].checksum.startsWith("sha256:")).toEqual(true);
   expect(stdout.join("\n").includes("accounts:secret")).toEqual(false);
   expect(stdout.join("\n").includes("db.internal")).toEqual(false);
@@ -5966,6 +5969,10 @@ test("migrate-d1 dry-run makes zero wrangler calls", async () => {
     version: 2,
     name: "remove_commercial_billing_persistence",
   });
+  expect(report.migrations[3]).toEqual({
+    version: 3,
+    name: "refresh_chain_retention_indexes",
+  });
 });
 
 test("migrate-d1 applies the bootstrap and retires commercial billing persistence on a clean DB", async () => {
@@ -5976,11 +5983,11 @@ test("migrate-d1 applies the bootstrap and retires commercial billing persistenc
     dryRun: false,
     command: fake.command,
   });
-  expect(report.applied).toEqual([0, 1, 2]);
+  expect(report.applied).toEqual([0, 1, 2, 3]);
   expect(report.skipped).toEqual([]);
   // Records the version the Worker's ensureD1SchemaVersion later reads
-  // (EXPECTED_D1_SCHEMA_VERSION = 2) into the same table name.
-  expect(fake.versions()).toEqual([0, 1, 2]);
+  // (EXPECTED_D1_SCHEMA_VERSION = 3) into the same table name.
+  expect(fake.versions()).toEqual([0, 1, 2, 3]);
   // First write ensures the tracking table exists, with the exact name the
   // Worker reads.
   expect(
@@ -6007,17 +6014,26 @@ test("migrate-d1 applies the bootstrap and retires commercial billing persistenc
   expect(removalMigration?.sql).toContain("'billing_accounts'");
   expect(removalMigration?.sql).toContain("'billing_webhook_events'");
   expect(removalMigration?.sql).toContain("'billing_usage_records'");
+  const retentionMigration = fake.calls.find((call) =>
+    call.sql.includes("refresh_chain_links_retention"),
+  );
+  expect(retentionMigration?.sql).toContain(
+    "CAST(json_extract(document, '$.createdAt') AS INTEGER), key",
+  );
+  expect(retentionMigration?.sql).toContain(
+    "takosumi_accounts_consumed_authorization_codes_retention",
+  );
 });
 
 test("migrate-d1 skips already-applied versions (idempotent re-run)", async () => {
-  const fake = createFakeD1Command({ seedVersions: [0, 1, 2] });
+  const fake = createFakeD1Command({ seedVersions: [0, 1, 2, 3] });
   const report = await applyD1AccountsMigrations({
     databaseId: "db-uuid",
     dryRun: false,
     command: fake.command,
   });
   expect(report.applied).toEqual([]);
-  expect(report.skipped).toEqual([0, 1, 2]);
+  expect(report.skipped).toEqual([0, 1, 2, 3]);
   // No tracking INSERT and no migration body execute on the skip path; the
   // only writes are the idempotent CREATE TABLE + the SELECT.
   const inserts = fake.calls.filter((call) =>
@@ -6033,7 +6049,16 @@ test("migrate-d1 parses the wrangler --json array-of-envelopes shape", async () 
   const captured: string[] = [];
   const wranglerJson = JSON.stringify([
     {
-      results: [{ results: [{ version: 0 }, { version: 1 }, { version: 2 }] }],
+      results: [
+        {
+          results: [
+            { version: 0 },
+            { version: 1 },
+            { version: 2 },
+            { version: 3 },
+          ],
+        },
+      ],
     },
   ]);
   const command: D1ExecuteCommand = {
@@ -6060,7 +6085,7 @@ test("migrate-d1 parses the wrangler --json array-of-envelopes shape", async () 
     command,
   });
   // Both versions came back from the parsed envelope, so both are skipped.
-  expect(report.skipped).toEqual([0, 1, 2]);
+  expect(report.skipped).toEqual([0, 1, 2, 3]);
   expect(report.applied).toEqual([]);
 });
 
@@ -6122,8 +6147,8 @@ test("accounts migrate-d1 CLI applies via the injected command and exits 0", asy
   expect(code).toEqual(0);
   expect(stderr).toEqual([]);
   const report = JSON.parse(stdout.join("\n"));
-  expect(report.applied).toEqual([0, 1, 2]);
-  expect(fake.versions()).toEqual([0, 1, 2]);
+  expect(report.applied).toEqual([0, 1, 2, 3]);
+  expect(fake.versions()).toEqual([0, 1, 2, 3]);
 });
 
 test("accounts migrate-d1 CLI surfaces a wrangler failure as exit 1", async () => {

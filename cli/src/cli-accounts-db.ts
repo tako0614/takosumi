@@ -300,6 +300,17 @@ const D1_ACCOUNTS_MIGRATIONS: readonly D1AccountsMigration[] = [
       "DELETE FROM takosumi_accounts_documents WHERE bucket IN ('billing_accounts', 'billing_webhook_events', 'billing_usage_records');",
     ].join("\n"),
   },
+  {
+    version: 3,
+    name: "refresh_chain_retention_indexes",
+    sql: [
+      "CREATE INDEX IF NOT EXISTS takosumi_accounts_refresh_chain_links_retention ON takosumi_accounts_documents(CAST(json_extract(document, '$.createdAt') AS INTEGER), key) WHERE bucket = 'refresh_chain_links';",
+      "CREATE INDEX IF NOT EXISTS takosumi_accounts_refresh_chain_access_tokens_retention ON takosumi_accounts_documents(CAST(json_extract(document, '$.createdAt') AS INTEGER), key) WHERE bucket = 'refresh_chain_access_tokens';",
+      "CREATE INDEX IF NOT EXISTS takosumi_accounts_revoked_refresh_roots_retention ON takosumi_accounts_documents(CAST(json_extract(document, '$.revokedAt') AS INTEGER), key) WHERE bucket = 'revoked_refresh_roots';",
+      "CREATE INDEX IF NOT EXISTS takosumi_accounts_consumed_authorization_codes_retention ON takosumi_accounts_documents(CAST(json_extract(document, '$.consumedAt') AS INTEGER), key) WHERE bucket = 'consumed_authorization_codes';",
+      "CREATE INDEX IF NOT EXISTS takosumi_accounts_auth_code_token_links_retention ON takosumi_accounts_documents(CAST(json_extract(document, '$.createdAt') AS INTEGER), key) WHERE bucket = 'auth_code_token_links';",
+    ].join("\n"),
+  },
 ];
 // Immutable account-plane schema migration catalog ends.
 

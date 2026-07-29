@@ -13,7 +13,7 @@
 // The returned arrays carry token-hash identifiers and are intended
 // for diagnostics / test assertions only.
 
-import { eq, lte, or } from "drizzle-orm";
+import { eq, or } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { pgSchema, text, timestamp } from "drizzle-orm/pg-core";
 import {
@@ -23,6 +23,15 @@ import {
   toDate,
 } from "./internal.ts";
 import type { RefreshChainPruneResult } from "../store.ts";
+import {
+  emptyRefreshChainPruneResult,
+  isRefreshChainRetentionPhase,
+  MAX_REFRESH_CHAIN_RETENTION_ROWS,
+  nextRefreshChainRetentionPhase,
+  type RefreshChainRetentionPageInput,
+  type RefreshChainRetentionPageResult,
+  type RefreshChainRetentionPhase,
+} from "../refresh-chain-retention.ts";
 
 type DrizzleQuery = {
   toSQL(): { readonly sql: string; readonly params: readonly unknown[] };
@@ -439,65 +448,293 @@ async function deleteRefreshTokenHash(
   );
 }
 
-async function deleteCountBefore(
-  client: PostgresQueryClient,
-  query: DrizzleQuery,
-): Promise<number> {
-  return (await runDrizzleRows<{ one: number }>(client, query)).length;
+interface RetentionKeyRow {
+  readonly retention_at: Date | string | number;
+  readonly key_a: string;
+  readonly key_b?: string;
+  readonly key_c?: string;
 }
 
 /**
- * Retention cleanup for the refresh-chain / authorization-code tracking
- * tables. Deletes rows older than the supplied cutoffs. This is retention
- * only: token/code reuse detection is unaffected because rows are removed
- * only after their token/code lifetime has elapsed.
+ * Bounded Postgres retention page. Candidate selection and every delete use
+ * primary-key order; no DELETE RETURNING statement can materialize more than
+ * input.limit rows.
  */
-export async function pruneRefreshChain(
+export async function pruneRefreshChainPage(
   client: PostgresQueryClient,
-  input: { chainBefore: number; consumedCodeBefore: number },
-): Promise<RefreshChainPruneResult> {
-  const chainBefore = toDate(input.chainBefore);
-  const consumedCodeBefore = toDate(input.consumedCodeBefore);
-  const chainLinks = await deleteCountBefore(
+  input: RefreshChainRetentionPageInput,
+): Promise<RefreshChainRetentionPageResult> {
+  assertRefreshChainRetentionPageInput(input);
+  const phase = input.cursor?.phase ?? "chain_links";
+  if (!isRefreshChainRetentionPhase(phase)) {
+    throw new TypeError("invalid refresh-chain retention cursor phase");
+  }
+  const after = decodePostgresRetentionCursor(input.cursor?.after);
+  const cutoff =
+    phase === "consumed_codes" || phase === "auth_code_token_links"
+      ? toDate(input.consumedCodeBefore)
+      : toDate(input.chainBefore);
+  const rows = await selectRetentionCandidates(
     client,
-    db
-      .delete(refreshChainLinks)
-      .where(lte(refreshChainLinks.createdAt, chainBefore))
-      .returning({ one: refreshChainLinks.parentTokenHash }),
+    phase,
+    cutoff,
+    after,
+    input.limit,
   );
-  const chainAccessTokens = await deleteCountBefore(
-    client,
-    db
-      .delete(refreshChainAccessTokens)
-      .where(lte(refreshChainAccessTokens.createdAt, chainBefore))
-      .returning({ one: refreshChainAccessTokens.rootTokenHash }),
-  );
-  const revokedRoots = await deleteCountBefore(
-    client,
-    db
-      .delete(revokedRefreshRoots)
-      .where(lte(revokedRefreshRoots.revokedAt, chainBefore))
-      .returning({ one: revokedRefreshRoots.rootTokenHash }),
-  );
-  const consumedCodes = await deleteCountBefore(
-    client,
-    db
-      .delete(consumedAuthorizationCodes)
-      .where(lte(consumedAuthorizationCodes.consumedAt, consumedCodeBefore))
-      .returning({ one: consumedAuthorizationCodes.codeHash }),
-  );
-  const authCodeTokenLinksDeleted = await deleteCountBefore(
-    client,
-    db
-      .delete(authCodeTokenLinks)
-      .where(lte(authCodeTokenLinks.createdAt, consumedCodeBefore))
-      .returning({ one: authCodeTokenLinks.codeHash }),
-  );
+  const counts = emptyRefreshChainPruneResult();
+  for (const row of rows) {
+    const deleted = await deleteRetentionCandidate(client, phase, row);
+    if (deleted) incrementRetentionCount(counts, phase);
+  }
+  const last = rows.at(-1);
+  if (rows.length === input.limit && last) {
+    return {
+      ...counts,
+      scanned: rows.length,
+      done: false,
+      cursor: {
+        phase,
+        after: encodePostgresRetentionCursor(last),
+      },
+    };
+  }
+  const nextPhase = nextRefreshChainRetentionPhase(phase);
   return {
-    chainLinks,
-    chainAccessTokens,
-    revokedRoots,
-    consumedCodes,
-    authCodeTokenLinks: authCodeTokenLinksDeleted,
+    ...counts,
+    scanned: rows.length,
+    done: nextPhase === undefined,
+    ...(nextPhase ? { cursor: { phase: nextPhase } } : {}),
   };
+}
+
+async function selectRetentionCandidates(
+  client: PostgresQueryClient,
+  phase: RefreshChainRetentionPhase,
+  cutoff: Date,
+  after: { readonly at: Date; readonly keys: readonly string[] },
+  limit: number,
+): Promise<RetentionKeyRow[]> {
+  if (phase === "chain_links") {
+    return (
+      await runQuery<RetentionKeyRow>(
+        client,
+        `SELECT created_at AS retention_at, parent_token_hash AS key_a
+           FROM accounts_v1.refresh_chain_links
+          WHERE created_at <= $1
+            AND (created_at, parent_token_hash) > ($2, $3)
+          ORDER BY created_at, parent_token_hash
+          LIMIT $4`,
+        [cutoff, after.at, after.keys[0] ?? "", limit],
+      )
+    ).rows;
+  }
+  if (phase === "chain_access_tokens") {
+    return (
+      await runQuery<RetentionKeyRow>(
+        client,
+        `SELECT created_at AS retention_at, root_token_hash AS key_a,
+                access_token_hash AS key_b
+           FROM accounts_v1.refresh_chain_access_tokens
+          WHERE created_at <= $1
+            AND (created_at, root_token_hash, access_token_hash) >
+                ($2, $3, $4)
+          ORDER BY created_at, root_token_hash, access_token_hash
+          LIMIT $5`,
+        [
+          cutoff,
+          after.at,
+          after.keys[0] ?? "",
+          after.keys[1] ?? "",
+          limit,
+        ],
+      )
+    ).rows;
+  }
+  if (phase === "revoked_roots") {
+    return (
+      await runQuery<RetentionKeyRow>(
+        client,
+        `SELECT revoked_at AS retention_at, root_token_hash AS key_a
+           FROM accounts_v1.revoked_refresh_roots
+          WHERE revoked_at <= $1
+            AND (revoked_at, root_token_hash) > ($2, $3)
+          ORDER BY revoked_at, root_token_hash
+          LIMIT $4`,
+        [cutoff, after.at, after.keys[0] ?? "", limit],
+      )
+    ).rows;
+  }
+  if (phase === "consumed_codes") {
+    return (
+      await runQuery<RetentionKeyRow>(
+        client,
+        `SELECT consumed_at AS retention_at, code_hash AS key_a
+           FROM accounts_v1.consumed_authorization_codes
+          WHERE consumed_at <= $1
+            AND (consumed_at, code_hash) > ($2, $3)
+          ORDER BY consumed_at, code_hash
+          LIMIT $4`,
+        [cutoff, after.at, after.keys[0] ?? "", limit],
+      )
+    ).rows;
+  }
+  return (
+    await runQuery<RetentionKeyRow>(
+      client,
+      `SELECT created_at AS retention_at, code_hash AS key_a,
+              access_token_hash AS key_b, refresh_root_hash AS key_c
+         FROM accounts_v1.auth_code_token_links
+        WHERE created_at <= $1
+          AND (created_at, code_hash, access_token_hash, refresh_root_hash) >
+              ($2, $3, $4, $5)
+        ORDER BY created_at, code_hash, access_token_hash, refresh_root_hash
+        LIMIT $6`,
+      [
+        cutoff,
+        after.at,
+        after.keys[0] ?? "",
+        after.keys[1] ?? "",
+        after.keys[2] ?? "",
+        limit,
+      ],
+    )
+  ).rows;
+}
+
+async function deleteRetentionCandidate(
+  client: PostgresQueryClient,
+  phase: RefreshChainRetentionPhase,
+  row: RetentionKeyRow,
+): Promise<boolean> {
+  let result;
+  if (phase === "chain_links") {
+    result = await runQuery(
+      client,
+      `DELETE FROM accounts_v1.refresh_chain_links
+        WHERE parent_token_hash = $1 RETURNING parent_token_hash`,
+      [row.key_a],
+    );
+  } else if (phase === "chain_access_tokens") {
+    result = await runQuery(
+      client,
+      `DELETE FROM accounts_v1.refresh_chain_access_tokens
+        WHERE root_token_hash = $1 AND access_token_hash = $2
+        RETURNING root_token_hash`,
+      [row.key_a, requiredRetentionKey(row.key_b)],
+    );
+  } else if (phase === "revoked_roots") {
+    result = await runQuery(
+      client,
+      `DELETE FROM accounts_v1.revoked_refresh_roots
+        WHERE root_token_hash = $1 RETURNING root_token_hash`,
+      [row.key_a],
+    );
+  } else if (phase === "consumed_codes") {
+    result = await runQuery(
+      client,
+      `DELETE FROM accounts_v1.consumed_authorization_codes
+        WHERE code_hash = $1 RETURNING code_hash`,
+      [row.key_a],
+    );
+  } else {
+    result = await runQuery(
+      client,
+      `DELETE FROM accounts_v1.auth_code_token_links
+        WHERE code_hash = $1 AND access_token_hash = $2
+          AND refresh_root_hash = $3
+        RETURNING code_hash`,
+      [
+        row.key_a,
+        requiredRetentionKey(row.key_b),
+        requiredRetentionKey(row.key_c),
+      ],
+    );
+  }
+  return result.rows.length > 0;
+}
+
+function incrementRetentionCount(
+  counts: RefreshChainPruneResult,
+  phase: RefreshChainRetentionPhase,
+): void {
+  if (phase === "chain_links") counts.chainLinks += 1;
+  else if (phase === "chain_access_tokens") counts.chainAccessTokens += 1;
+  else if (phase === "revoked_roots") counts.revokedRoots += 1;
+  else if (phase === "consumed_codes") counts.consumedCodes += 1;
+  else counts.authCodeTokenLinks += 1;
+}
+
+function encodePostgresRetentionCursor(row: RetentionKeyRow): string {
+  const values: Array<number | string> = [
+    retentionTimestamp(row.retention_at),
+    row.key_a,
+  ];
+  if (row.key_b !== undefined) values.push(row.key_b);
+  if (row.key_c !== undefined) values.push(row.key_c);
+  return JSON.stringify(values);
+}
+
+function decodePostgresRetentionCursor(
+  value: string | undefined,
+): { readonly at: Date; readonly keys: readonly string[] } {
+  if (value === undefined) return { at: new Date(0), keys: [] };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new TypeError("invalid Postgres refresh-chain retention cursor");
+  }
+  if (
+    !Array.isArray(parsed) ||
+    parsed.length < 2 ||
+    parsed.length > 4 ||
+    !Number.isFinite(parsed[0]) ||
+    parsed.slice(1).some((entry) => typeof entry !== "string")
+  ) {
+    throw new TypeError("invalid Postgres refresh-chain retention cursor");
+  }
+  return {
+    at: new Date(Number(parsed[0])),
+    keys: parsed.slice(1) as string[],
+  };
+}
+
+function retentionTimestamp(value: Date | string | number): number {
+  const at =
+    value instanceof Date
+      ? value.getTime()
+      : typeof value === "number"
+        ? value
+        : Date.parse(value);
+  if (!Number.isFinite(at)) {
+    throw new TypeError("invalid Postgres refresh-chain retention timestamp");
+  }
+  return at;
+}
+
+function requiredRetentionKey(value: string | undefined): string {
+  if (value === undefined) {
+    throw new TypeError("incomplete Postgres refresh-chain retention key");
+  }
+  return value;
+}
+
+function assertRefreshChainRetentionPageInput(
+  input: RefreshChainRetentionPageInput,
+): void {
+  if (
+    !Number.isSafeInteger(input.limit) ||
+    input.limit <= 0 ||
+    input.limit > MAX_REFRESH_CHAIN_RETENTION_ROWS
+  ) {
+    throw new TypeError(
+      `refresh-chain retention limit must be between 1 and ${MAX_REFRESH_CHAIN_RETENTION_ROWS}`,
+    );
+  }
+  if (
+    !Number.isFinite(input.chainBefore) ||
+    !Number.isFinite(input.consumedCodeBefore)
+  ) {
+    throw new TypeError("refresh-chain retention cutoffs must be finite");
+  }
 }

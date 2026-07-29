@@ -147,7 +147,15 @@ export async function rotateAccountSession(input: {
           "account session rotation requires atomic replaceAccountSession store support",
         );
       }
-      await input.store.replaceAccountSession(input.oldSessionId, next);
+      const replaced = await input.store.replaceAccountSession(
+        input.oldSessionId,
+        next,
+      );
+      if (!replaced) {
+        throw new Error(
+          "account session rotation lost the durable replacement race",
+        );
+      }
     } else {
       await input.store.saveAccountSession(next);
     }

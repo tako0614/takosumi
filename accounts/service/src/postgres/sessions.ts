@@ -141,3 +141,40 @@ export async function deleteAccountSession(
       .where(eq(accountSessions.sessionId, sessionHash)),
   );
 }
+
+/**
+ * Atomically claim `previousSessionId`, persist `next`, and revoke the old
+ * session in one Postgres statement. The INSERT is fed only by DELETE
+ * RETURNING, so concurrent rotations cannot both mint a durable successor.
+ */
+export async function replaceAccountSession(
+  client: PostgresQueryClient,
+  previousSessionId: string,
+  next: AccountSessionRecord,
+): Promise<boolean> {
+  const [previousHash, nextHash] = await Promise.all([
+    hashSessionId(previousSessionId),
+    hashSessionId(next.sessionId),
+  ]);
+  const result = await runQuery<{ readonly session_id: string }>(
+    client,
+    `with removed as (
+      delete from accounts_v1.account_sessions
+      where session_id = $1
+      returning session_id
+    )
+    insert into accounts_v1.account_sessions
+      (session_id, subject, created_at, expires_at)
+    select $2, $3, $4, $5
+    from removed
+    returning session_id`,
+    [
+      previousHash,
+      nextHash,
+      next.subject,
+      toDate(next.createdAt),
+      toDate(next.expiresAt),
+    ],
+  );
+  return result.rows.length === 1;
+}

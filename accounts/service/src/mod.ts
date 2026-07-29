@@ -128,6 +128,7 @@ export type { LoginEmailAllowlist } from "./login-email-allowlist.ts";
 
 export * from "./subject.ts";
 export * from "./store.ts";
+export * from "./refresh-chain-retention.ts";
 export * from "./interface-oauth-token.ts";
 export type {
   InterfaceOAuthActivityEvidence,
@@ -405,9 +406,14 @@ function createRequestScopedAccountsStore(
         ) => {
           sessionCache.delete(previousSessionId);
           sessionCache.delete(next.sessionId);
-          await replace.call(baseStore, previousSessionId, next);
+          const replaced = await replace.call(
+            baseStore,
+            previousSessionId,
+            next,
+          );
           sessionCache.delete(previousSessionId);
           sessionCache.delete(next.sessionId);
+          return replaced;
         };
       }
       if (property === "saveAccount") {

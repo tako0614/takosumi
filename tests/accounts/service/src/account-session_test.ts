@@ -354,6 +354,35 @@ test("rotateAccountSession refuses a non-atomic replacement store", async () => 
   expect(base.findAccountSession("sess_non_atomic")).toBeDefined();
 });
 
+test("rotateAccountSession fails closed after losing the durable replacement race", async () => {
+  const base = new InMemoryAccountsStore();
+  const now = Date.now();
+  base.saveAccountSession({
+    sessionId: "sess_race_previous",
+    subject: "tsub_race",
+    createdAt: now,
+    expiresAt: now + 60_000,
+  });
+  const store = new Proxy(base, {
+    get(target, property, receiver) {
+      if (property === "replaceAccountSession") return () => false;
+      const value = Reflect.get(target, property, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+
+  await expect(
+    rotateAccountSession({
+      store,
+      oldSessionId: "sess_race_previous",
+      subject: "tsub_race",
+      now,
+      ttlMs: 60_000,
+    }),
+  ).rejects.toThrow("lost the durable replacement race");
+  expect(base.findAccountSession("sess_race_previous")).toBeDefined();
+});
+
 test("rotateAccountSession replaces a stale cookie without requiring atomic replacement", async () => {
   const base = new InMemoryAccountsStore();
   const now = Date.now();

@@ -44,7 +44,6 @@ test("Cloudflare readiness checks canonical platform bindings only", async () =>
     ...REQUIRED_PLATFORM_BINDINGS.d1,
     ...REQUIRED_PLATFORM_BINDINGS.r2,
     ...REQUIRED_PLATFORM_BINDINGS.durableObjects,
-    ...REQUIRED_PLATFORM_BINDINGS.queues,
     ...REQUIRED_PLATFORM_BINDINGS.assets,
   ]) {
     complete[name] = {};
@@ -301,7 +300,7 @@ test("Cloudflare identity handler lazily revalidates Interface OAuth against Cor
     .prepare(
       "INSERT INTO takosumi_accounts_schema_migrations (version, name, applied_at) VALUES (?, ?, ?)",
     )
-    .bind(2, "current", Date.now())
+    .bind(3, "current", Date.now())
     .run();
   const issued = await issueInterfaceOAuthAccessToken({
     store,
@@ -374,7 +373,7 @@ test("Cloudflare OIDC signing rotation publishes bounded overlap then removes th
     .prepare(
       "INSERT INTO takosumi_accounts_schema_migrations (version, name, applied_at) VALUES (?, ?, ?)",
     )
-    .bind(2, "current", Date.now())
+    .bind(3, "current", Date.now())
     .run();
   const oldKeyPair = await crypto.subtle.generateKey(
     { name: "ECDSA", namedCurve: "P-256" },
@@ -468,7 +467,7 @@ test("predeployed accounts schema mode performs no request-time DDL", async () =
     .prepare(
       "INSERT INTO takosumi_accounts_schema_migrations (version, name, applied_at) VALUES (?, ?, ?)",
     )
-    .bind(2, "current", Date.now())
+    .bind(3, "current", Date.now())
     .run();
 
   let requestTimeExecCalls = 0;

@@ -7,16 +7,20 @@ import type {
   PasskeyCredentialRecord,
   PersonalAccessTokenRecord,
   PrivacyRequestRecord,
-  RefreshChainPruneResult,
   TakosumiAccountRecord,
   TokenRecord,
   UpstreamIdentityRecord,
 } from "./store.ts";
 import type {
+  RefreshChainRetentionPageInput,
+  RefreshChainRetentionPageResult,
+} from "./refresh-chain-retention.ts";
+import type {
   PostgresQueryClient,
   PostgresQueryResult,
 } from "./postgres/internal.ts";
 import * as accounts from "./postgres/accounts.ts";
+import * as bearer from "./postgres/bearer.ts";
 import * as oidc from "./postgres/oidc.ts";
 import * as passkeys from "./postgres/passkeys.ts";
 import * as privacy from "./postgres/privacy.ts";
@@ -31,6 +35,12 @@ export class PostgresAccountsStore implements AccountsStore {
 
   constructor(client: PostgresQueryClient) {
     this.#client = client;
+  }
+
+  resolveAccountsBearerCandidates(
+    token: string,
+  ): Promise<import("./store.ts").AccountsBearerCredentialCandidates> {
+    return bearer.resolveAccountsBearerCandidates(this.#client, token);
   }
 
   saveAccount(record: TakosumiAccountRecord): Promise<void> {
@@ -109,6 +119,17 @@ export class PostgresAccountsStore implements AccountsStore {
 
   deleteAccountSession(sessionId: string): Promise<void> {
     return sessions.deleteAccountSession(this.#client, sessionId);
+  }
+
+  replaceAccountSession(
+    previousSessionId: string,
+    next: AccountSessionRecord,
+  ): Promise<boolean> {
+    return sessions.replaceAccountSession(
+      this.#client,
+      previousSessionId,
+      next,
+    );
   }
 
   savePrivacyRequest(record: PrivacyRequestRecord): Promise<void> {
@@ -283,11 +304,10 @@ export class PostgresAccountsStore implements AccountsStore {
     return refreshChain.revokeTokensIssuedFromCode(this.#client, code);
   }
 
-  pruneRefreshChain(input: {
-    chainBefore: number;
-    consumedCodeBefore: number;
-  }): Promise<RefreshChainPruneResult> {
-    return refreshChain.pruneRefreshChain(this.#client, input);
+  pruneRefreshChainPage(
+    input: RefreshChainRetentionPageInput,
+  ): Promise<RefreshChainRetentionPageResult> {
+    return refreshChain.pruneRefreshChainPage(this.#client, input);
   }
 
   isRefreshRootRevoked(token: string): Promise<boolean> {

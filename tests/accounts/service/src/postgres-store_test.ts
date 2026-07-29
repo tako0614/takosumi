@@ -4,6 +4,7 @@ import {
   type PostgresQueryClient,
   type PostgresQueryResult,
 } from "../../../../accounts/service/src/postgres-store.ts";
+import { requireAccountsBearer } from "../../../../accounts/service/src/account-session.ts";
 
 class RecordingPostgresClient implements PostgresQueryClient {
   calls: Array<{ sql: string; args: readonly unknown[] }> = [];
@@ -371,6 +372,147 @@ test("PostgresAccountsStore maps hashed sessions through Drizzle", async () => {
   expect(client.calls[2].sql).toContain("delete from");
   expect(client.calls[2].sql).toContain('"accounts_v1"."account_sessions"');
   expect(client.calls[2].args[0]).toEqual(client.calls[0].args[0]);
+});
+
+test("PostgresAccountsStore rotates sessions with one durable compare-and-replace statement", async () => {
+  const client = new RecordingPostgresClient();
+  const store = new PostgresAccountsStore(client);
+  client.queuedRows.push([{ session_id: "stored-next-hash" }]);
+
+  expect(
+    await store.replaceAccountSession("plain-previous", {
+      sessionId: "plain-next",
+      subject: "tsub_rotation",
+      createdAt: 1_000,
+      expiresAt: 3_000,
+    }),
+  ).toBe(true);
+
+  expect(client.calls).toHaveLength(1);
+  expect(client.calls[0].sql.toLowerCase()).toContain("with removed as");
+  expect(client.calls[0].sql.toLowerCase()).toContain(
+    "delete from accounts_v1.account_sessions",
+  );
+  expect(client.calls[0].sql.toLowerCase()).toContain(
+    "insert into accounts_v1.account_sessions",
+  );
+  expect(String(client.calls[0].args[0])).toStartWith("sha256:");
+  expect(String(client.calls[0].args[1])).toStartWith("sha256:");
+  expect(client.calls[0].args).not.toContain("plain-previous");
+  expect(client.calls[0].args).not.toContain("plain-next");
+
+  client.queuedRows.push([]);
+  expect(
+    await store.replaceAccountSession("plain-lost-race", {
+      sessionId: "plain-unused",
+      subject: "tsub_rotation",
+      createdAt: 2_000,
+      expiresAt: 4_000,
+    }),
+  ).toBe(false);
+});
+
+test("PostgresAccountsStore resolves all bearer candidates in one exact statement", async () => {
+  const client = new RecordingPostgresClient();
+  const store = new PostgresAccountsStore(client);
+  const now = Date.now();
+  client.queuedRows.push([
+    {
+      kind: "session",
+      document: {
+        session_id: "stored-session-hash",
+        subject: "tsub_pg_bearer",
+        created_at: new Date(now - 1_000),
+        expires_at: new Date(now + 60_000),
+      },
+    },
+    {
+      kind: "session_account",
+      document: {
+        subject: "tsub_pg_bearer",
+        email: null,
+        email_verified: null,
+        display_name: null,
+        picture: null,
+        terms_version: null,
+        terms_accepted_at: null,
+        terms_accepted_source: null,
+        created_at: new Date(now - 1_000),
+        updated_at: new Date(now - 1_000),
+      },
+    },
+  ]);
+
+  const result = await requireAccountsBearer({
+    request: new Request("https://accounts.example.test/v1/control", {
+      headers: { authorization: "Bearer opaque.pg.session" },
+    }),
+    store,
+    scope: "read",
+  });
+
+  expect(result).toEqual({
+    ok: true,
+    auth: { subject: "tsub_pg_bearer", credential: "session" },
+  });
+  expect(client.calls).toHaveLength(1);
+  expect(client.calls[0].sql).toContain("presented_session");
+  expect(client.calls[0].sql).toContain("presented_access_token");
+  expect(client.calls[0].sql).toContain("presented_pat");
+  expect(client.calls[0].args).toHaveLength(2);
+  expect(client.calls[0].args).not.toContain("opaque.pg.session");
+});
+
+test("PostgresAccountsStore rejects a bearer collision from the same bounded resolver", async () => {
+  const client = new RecordingPostgresClient();
+  const store = new PostgresAccountsStore(client);
+  const now = Date.now();
+  client.queuedRows.push([
+    {
+      kind: "access_token",
+      document: {
+        client_id: "client_pg_collision",
+        audience: null,
+        scope: "capsules:read",
+        subject: "principal_pg_collision",
+        takosumi_subject: "tsub_pg_oauth",
+        capsule_id: null,
+        workspace_id: null,
+        role: null,
+        interface_id: null,
+        interface_binding_id: null,
+        interface_resolved_revision: null,
+        expires_at: new Date(now + 60_000),
+      },
+    },
+    {
+      kind: "pat",
+      document: {
+        token_id: "pat_pg_collision",
+        token_prefix: "display-only",
+        subject: "tsub_pg_pat",
+        name: "collision PAT",
+        scopes: ["read"],
+        workspace_id: null,
+        created_at: new Date(now - 1_000),
+        expires_at: null,
+        revoked_at: null,
+        last_used_at: null,
+      },
+    },
+  ]);
+
+  const result = await requireAccountsBearer({
+    request: new Request("https://accounts.example.test/v1/control", {
+      headers: { authorization: "Bearer opaque.pg.collision" },
+    }),
+    store,
+    scope: "read",
+  });
+
+  expect(result.ok).toBe(false);
+  if (!result.ok) expect(result.response.status).toBe(401);
+  expect(client.calls).toHaveLength(1);
 });
 
 test("PostgresAccountsStore maps personal access token records", async () => {

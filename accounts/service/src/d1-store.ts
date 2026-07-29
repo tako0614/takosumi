@@ -20,14 +20,25 @@ import type {
   PasskeyCredentialRecord,
   PersonalAccessTokenRecord,
   PrivacyRequestRecord,
-  RefreshChainPruneResult,
   TakosumiAccountRecord,
   TokenRecord,
   UpstreamIdentityRecord,
 } from "./store.ts";
+import {
+  emptyRefreshChainPruneResult,
+  isRefreshChainRetentionPhase,
+  MAX_REFRESH_CHAIN_RETENTION_ROWS,
+  nextRefreshChainRetentionPhase,
+  type RefreshChainRetentionPageInput,
+  type RefreshChainRetentionPageResult,
+  type RefreshChainRetentionPhase,
+} from "./refresh-chain-retention.ts";
 
 export interface D1Database {
   prepare(query: string): D1PreparedStatement;
+  batch<T = unknown>(
+    statements: readonly D1PreparedStatement[],
+  ): Promise<readonly D1Result<T>[]>;
   exec(query: string): Promise<D1ExecResult>;
 }
 
@@ -154,9 +165,11 @@ function duplicateBearerCandidate(
 }
 
 class D1AccountsDocumentIndexStore {
+  readonly #binding: D1Database;
   readonly #db: D1AccountsDrizzleDatabase;
 
   constructor(binding: D1Database) {
+    this.#binding = binding;
     this.#db = drizzle(binding as never, { schema: d1AccountsSchema });
   }
 
@@ -168,16 +181,17 @@ class D1AccountsDocumentIndexStore {
   ): Promise<void> {
     const document = JSON.stringify(record);
     const now = Date.now();
-    await this.#db
-      .insert(d1AccountsDocuments)
-      .values({ bucket, key, document, updatedAt: now })
-      .onConflictDoUpdate({
-        target: [d1AccountsDocuments.bucket, d1AccountsDocuments.key],
-        set: { document, updatedAt: now },
-      })
-      .run();
-    await this.deleteDocumentIndexEntries(bucket, key);
-    await this.insertIndexEntries(bucket, key, indexes);
+    await this.#runAtomic([
+      this.#binding
+        .prepare(
+          "INSERT OR REPLACE INTO takosumi_accounts_documents (bucket, key, document, updated_at) VALUES (?, ?, ?, ?)",
+        )
+        .bind(bucket, key, document, now),
+      this.#deleteDocumentIndexEntriesStatement(bucket, key),
+      ...indexes.map((index) =>
+        this.#insertIndexEntryStatement(bucket, key, index),
+      ),
+    ]);
   }
 
   async refreshIndexEntries(
@@ -185,8 +199,12 @@ class D1AccountsDocumentIndexStore {
     key: string,
     indexes: readonly D1IndexEntry[],
   ): Promise<void> {
-    await this.deleteDocumentIndexEntries(bucket, key);
-    await this.insertIndexEntries(bucket, key, indexes);
+    await this.#runAtomic([
+      this.#deleteDocumentIndexEntriesStatement(bucket, key),
+      ...indexes.map((index) =>
+        this.#insertIndexEntryStatement(bucket, key, index),
+      ),
+    ]);
   }
 
   async get<T>(bucket: string, key: string): Promise<T | undefined> {
@@ -204,20 +222,14 @@ class D1AccountsDocumentIndexStore {
   }
 
   async delete(bucket: string, key: string): Promise<void> {
-    await this.#db
-      .delete(d1AccountsDocuments)
-      .where(
-        and(
-          eq(d1AccountsDocuments.bucket, bucket),
-          eq(d1AccountsDocuments.key, key),
-        ),
-      )
-      .run();
-    // Delete authority-bearing documents before their secondary indexes.
-    // A failed cleanup can leave only a harmless dangling index (index reads
-    // inner-join documents); the reverse order could leave a live document
-    // after a caller believed revocation had started.
-    await this.deleteDocumentIndexEntries(bucket, key);
+    await this.#runAtomic([
+      this.#binding
+        .prepare(
+          "DELETE FROM takosumi_accounts_documents WHERE bucket = ? AND key = ?",
+        )
+        .bind(bucket, key),
+      this.#deleteDocumentIndexEntriesStatement(bucket, key),
+    ]);
   }
 
   async deleteIndexEntries(indexName: string, indexKey: string): Promise<void> {
@@ -265,46 +277,36 @@ class D1AccountsDocumentIndexStore {
     return rows.map((row) => JSON.parse(row.document) as T);
   }
 
-  private async deleteDocumentIndexEntries(
+  #deleteDocumentIndexEntriesStatement(
     bucket: string,
     key: string,
-  ): Promise<void> {
-    await this.#db
-      .delete(d1AccountsIndexes)
-      .where(
-        and(
-          eq(d1AccountsIndexes.bucket, bucket),
-          eq(d1AccountsIndexes.documentKey, key),
-        ),
+  ): D1PreparedStatement {
+    return this.#binding
+      .prepare(
+        "DELETE FROM takosumi_accounts_indexes WHERE bucket = ? AND document_key = ?",
       )
-      .run();
+      .bind(bucket, key);
   }
 
-  private async insertIndexEntries(
+  #insertIndexEntryStatement(
     bucket: string,
     key: string,
-    indexes: readonly D1IndexEntry[],
-  ): Promise<void> {
-    for (const index of indexes) {
-      await this.#db
-        .insert(d1AccountsIndexes)
-        .values({
-          indexName: index.name,
-          indexKey: index.key,
-          bucket,
-          documentKey: key,
-          sortKey: index.sortKey ?? 0,
-        })
-        .onConflictDoUpdate({
-          target: [
-            d1AccountsIndexes.indexName,
-            d1AccountsIndexes.indexKey,
-            d1AccountsIndexes.bucket,
-            d1AccountsIndexes.documentKey,
-          ],
-          set: { sortKey: index.sortKey ?? 0 },
-        })
-        .run();
+    index: D1IndexEntry,
+  ): D1PreparedStatement {
+    return this.#binding
+      .prepare(
+        "INSERT OR REPLACE INTO takosumi_accounts_indexes (index_name, index_key, bucket, document_key, sort_key) VALUES (?, ?, ?, ?, ?)",
+      )
+      .bind(index.name, index.key, bucket, key, index.sortKey ?? 0);
+  }
+
+  async #runAtomic(statements: readonly D1PreparedStatement[]): Promise<void> {
+    const results = await this.#binding.batch(statements);
+    if (
+      results.length !== statements.length ||
+      results.some((result) => result.success === false)
+    ) {
+      throw new Error("D1 Accounts aggregate document/index write failed");
     }
   }
 }
@@ -344,6 +346,57 @@ interface RefreshChainAccessTokenDocument {
   readonly accessTokenHash: string;
   readonly createdAt: number;
 }
+
+interface RefreshChainRetentionCandidateRow {
+  readonly key: string;
+  readonly retention_at: number;
+}
+
+const D1_REFRESH_CHAIN_RETENTION_PHASES: Record<
+  RefreshChainRetentionPhase,
+  {
+    readonly bucket: string;
+    readonly indexName: string;
+    readonly timestampField: "createdAt" | "revokedAt" | "consumedAt";
+    readonly count:
+      | "chainLinks"
+      | "chainAccessTokens"
+      | "revokedRoots"
+      | "consumedCodes"
+      | "authCodeTokenLinks";
+  }
+> = {
+  chain_links: {
+    bucket: "refresh_chain_links",
+    indexName: "takosumi_accounts_refresh_chain_links_retention",
+    timestampField: "createdAt",
+    count: "chainLinks",
+  },
+  chain_access_tokens: {
+    bucket: "refresh_chain_access_tokens",
+    indexName: "takosumi_accounts_refresh_chain_access_tokens_retention",
+    timestampField: "createdAt",
+    count: "chainAccessTokens",
+  },
+  revoked_roots: {
+    bucket: "revoked_refresh_roots",
+    indexName: "takosumi_accounts_revoked_refresh_roots_retention",
+    timestampField: "revokedAt",
+    count: "revokedRoots",
+  },
+  consumed_codes: {
+    bucket: "consumed_authorization_codes",
+    indexName: "takosumi_accounts_consumed_authorization_codes_retention",
+    timestampField: "consumedAt",
+    count: "consumedCodes",
+  },
+  auth_code_token_links: {
+    bucket: "auth_code_token_links",
+    indexName: "takosumi_accounts_auth_code_token_links_retention",
+    timestampField: "createdAt",
+    count: "authCodeTokenLinks",
+  },
+};
 
 interface PasskeyChallengeDocument {
   readonly challenge: string;
@@ -521,6 +574,41 @@ export class D1AccountsStore implements AccountsStore {
   async deleteAccountSession(sessionId: string): Promise<void> {
     const sessionHash = await hashSessionId(sessionId);
     await this.#delete("account_sessions", sessionHash);
+  }
+
+  async replaceAccountSession(
+    previousSessionId: string,
+    next: AccountSessionRecord,
+  ): Promise<boolean> {
+    await this.initialize();
+    const [previousHash, nextHash] = await Promise.all([
+      hashSessionId(previousSessionId),
+      hashSessionId(next.sessionId),
+    ]);
+    if (previousHash === nextHash) return false;
+    const nextDocument = JSON.stringify({ ...next, sessionId: nextHash });
+    const results = await this.#db.batch([
+      this.#db
+        .prepare(
+          `INSERT INTO takosumi_accounts_documents
+            (bucket, key, document, updated_at)
+          SELECT 'account_sessions', ?, ?, ?
+          WHERE EXISTS (
+            SELECT 1 FROM takosumi_accounts_documents
+            WHERE bucket = 'account_sessions' AND key = ?
+          )`,
+        )
+        .bind(nextHash, nextDocument, Date.now(), previousHash),
+      this.#db
+        .prepare(
+          "DELETE FROM takosumi_accounts_documents WHERE bucket = 'account_sessions' AND key = ?",
+        )
+        .bind(previousHash),
+    ]);
+    if (results.length !== 2 || results.some((result) => !result.success)) {
+      throw new Error("D1 Accounts session replacement batch failed");
+    }
+    return (d1ChangeCount(results[0]!) ?? 0) > 0;
   }
 
   async savePrivacyRequest(record: PrivacyRequestRecord): Promise<void> {
@@ -971,72 +1059,71 @@ export class D1AccountsStore implements AccountsStore {
     return revoked !== undefined;
   }
 
-  async pruneRefreshChain(input: {
-    chainBefore: number;
-    consumedCodeBefore: number;
-  }): Promise<RefreshChainPruneResult> {
-    // refresh_chain_links are keyed by parentHash; #delete removes the
-    // document AND its by_root / by_child index entries.
-    const chainLinks = await this.#pruneBucketBefore<RefreshChainLinkDocument>(
-      "refresh_chain_links",
-      (doc) => doc.parentHash,
-      (doc) => doc.createdAt,
-      input.chainBefore,
-    );
-    // refresh_chain_access_tokens are keyed by `${rootHash}\n${accessHash}`.
-    const chainAccessTokens =
-      await this.#pruneBucketBefore<RefreshChainAccessTokenDocument>(
-        "refresh_chain_access_tokens",
-        (doc) => `${doc.rootHash}\n${doc.accessTokenHash}`,
-        (doc) => doc.createdAt,
-        input.chainBefore,
-      );
-    const revokedRoots =
-      await this.#pruneBucketBefore<RevokedRefreshRootDocument>(
-        "revoked_refresh_roots",
-        (doc) => doc.rootHash,
-        (doc) => doc.revokedAt,
-        input.chainBefore,
-      );
-    const consumedCodes =
-      await this.#pruneBucketBefore<ConsumedAuthCodeDocument>(
-        "consumed_authorization_codes",
-        (doc) => doc.codeHash,
-        (doc) => doc.consumedAt,
-        input.consumedCodeBefore,
-      );
-    // auth_code_token_links are keyed by `${code}\n${access}\n${refreshRoot}`.
-    const authCodeTokenLinks =
-      await this.#pruneBucketBefore<AuthCodeTokenLinkDocument>(
-        "auth_code_token_links",
-        (doc) =>
-          `${doc.codeHash}\n${doc.accessTokenHash}\n${doc.refreshRootHash}`,
-        (doc) => doc.createdAt,
-        input.consumedCodeBefore,
-      );
-    return {
-      chainLinks,
-      chainAccessTokens,
-      revokedRoots,
-      consumedCodes,
-      authCodeTokenLinks,
-    };
-  }
-
-  async #pruneBucketBefore<T>(
-    bucket: string,
-    keyOf: (doc: T) => string,
-    createdAtOf: (doc: T) => number,
-    before: number,
-  ): Promise<number> {
-    const docs = await this.#listBucket<T>(bucket);
-    let deleted = 0;
-    for (const doc of docs) {
-      if (createdAtOf(doc) > before) continue;
-      await this.#delete(bucket, keyOf(doc));
-      deleted += 1;
+  /**
+   * Bounded retention page for the production scheduler. This never
+   * materializes an entire bucket and never deletes more than input.limit
+   * documents in one invocation.
+   */
+  async pruneRefreshChainPage(
+    input: RefreshChainRetentionPageInput,
+  ): Promise<RefreshChainRetentionPageResult> {
+    assertRefreshChainRetentionPageInput(input);
+    const phase = input.cursor?.phase ?? "chain_links";
+    if (!isRefreshChainRetentionPhase(phase)) {
+      throw new TypeError("invalid refresh-chain retention cursor phase");
     }
-    return deleted;
+    const config = D1_REFRESH_CHAIN_RETENTION_PHASES[phase];
+    const cutoff =
+      phase === "consumed_codes" || phase === "auth_code_token_links"
+        ? input.consumedCodeBefore
+        : input.chainBefore;
+    const after = decodeD1RefreshChainRetentionCursor(input.cursor?.after);
+    const timestampExpression = `CAST(json_extract(document, '$.${config.timestampField}') AS INTEGER)`;
+    const result = await this.#db
+      .prepare(
+        `SELECT key, ${timestampExpression} AS retention_at
+           FROM takosumi_accounts_documents INDEXED BY ${config.indexName}
+          WHERE bucket = '${config.bucket}'
+            AND ${timestampExpression} <= ?
+            AND (${timestampExpression}, key) > (?, ?)
+          ORDER BY ${timestampExpression}, key
+          LIMIT ?`,
+      )
+      .bind(cutoff, after.at, after.key, input.limit)
+      .all<RefreshChainRetentionCandidateRow>();
+    if (!result.success || !result.results) {
+      throw new Error(
+        `D1 refresh-chain retention candidate query failed for ${phase}`,
+      );
+    }
+
+    for (const row of result.results) {
+      await this.#delete(config.bucket, row.key);
+    }
+    const counts = emptyRefreshChainPruneResult();
+    counts[config.count] = result.results.length;
+    const last = result.results.at(-1);
+    if (result.results.length === input.limit && last) {
+      return {
+        ...counts,
+        scanned: result.results.length,
+        done: false,
+        cursor: {
+          phase,
+          after: encodeD1RefreshChainRetentionCursor(
+            Number(last.retention_at),
+            last.key,
+          ),
+        },
+      };
+    }
+    const nextPhase = nextRefreshChainRetentionPhase(phase);
+    return {
+      ...counts,
+      scanned: result.results.length,
+      done: nextPhase === undefined,
+      ...(nextPhase ? { cursor: { phase: nextPhase } } : {}),
+    };
   }
 
   async savePasskeyChallenge(
@@ -1180,6 +1267,51 @@ export class D1AccountsStore implements AccountsStore {
       .first<{ changes: number }>();
     return Number(row?.changes ?? 0);
   }
+}
+
+function assertRefreshChainRetentionPageInput(
+  input: RefreshChainRetentionPageInput,
+): void {
+  if (
+    !Number.isSafeInteger(input.limit) ||
+    input.limit <= 0 ||
+    input.limit > MAX_REFRESH_CHAIN_RETENTION_ROWS
+  ) {
+    throw new TypeError(
+      `refresh-chain retention limit must be between 1 and ${MAX_REFRESH_CHAIN_RETENTION_ROWS}`,
+    );
+  }
+  if (
+    !Number.isFinite(input.chainBefore) ||
+    !Number.isFinite(input.consumedCodeBefore)
+  ) {
+    throw new TypeError("refresh-chain retention cutoffs must be finite");
+  }
+}
+
+function encodeD1RefreshChainRetentionCursor(at: number, key: string): string {
+  return JSON.stringify([at, key]);
+}
+
+function decodeD1RefreshChainRetentionCursor(
+  value: string | undefined,
+): { readonly at: number; readonly key: string } {
+  if (value === undefined) return { at: -1, key: "" };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new TypeError("invalid D1 refresh-chain retention cursor");
+  }
+  if (
+    !Array.isArray(parsed) ||
+    parsed.length !== 2 ||
+    !Number.isFinite(parsed[0]) ||
+    typeof parsed[1] !== "string"
+  ) {
+    throw new TypeError("invalid D1 refresh-chain retention cursor");
+  }
+  return { at: Number(parsed[0]), key: parsed[1] };
 }
 
 function upstreamIdentityKey(input: {

@@ -124,6 +124,27 @@ test("current Accounts schema persists the optional UserInfo picture", async () 
   expect(migration).toContain("ADD COLUMN IF NOT EXISTS picture text");
 });
 
+test("refresh-chain retention has timestamp and primary-key covering indexes", async () => {
+  const migration = await readMigration(
+    "036_refresh_chain_retention_indexes.sql",
+  );
+  expect(migration).toContain(
+    "refresh_chain_links(created_at, parent_token_hash)",
+  );
+  expect(migration).toContain(
+    "refresh_chain_access_tokens(\n    created_at,\n    root_token_hash,\n    access_token_hash",
+  );
+  expect(migration).toContain(
+    "revoked_refresh_roots(revoked_at, root_token_hash)",
+  );
+  expect(migration).toContain(
+    "consumed_authorization_codes(consumed_at, code_hash)",
+  );
+  expect(migration).toContain(
+    "auth_code_token_links(\n    created_at,\n    code_hash,\n    access_token_hash,\n    refresh_root_hash",
+  );
+});
+
 interface AppliedCatalogFixture {
   readonly schemaVersion: number;
   readonly migrations: readonly {

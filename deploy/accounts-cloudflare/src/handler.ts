@@ -369,7 +369,7 @@ function usesIdentityOnlyAccountsHandler(pathname: string): boolean {
 // is behind the schema) or an older version (database is behind the Worker)
 // so operators don't silently run a schema that does not match the service.
 // See `README.md` → "D1 schema migration" for the runner workflow.
-const EXPECTED_D1_SCHEMA_VERSION = 2;
+const EXPECTED_D1_SCHEMA_VERSION = 3;
 
 async function buildAccountsHandler<TEnv extends CloudflareWorkerEnv>(
   env: TEnv,

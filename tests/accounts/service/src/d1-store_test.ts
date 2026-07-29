@@ -141,6 +141,76 @@ test("D1AccountsStore rejects a cross-store collision after one bounded query", 
   expect(db.prepareCount).toBe(1);
 });
 
+test("D1AccountsStore rotates sessions with one durable compare-and-replace batch", async () => {
+  registerSessionHashSaltConfig({ salt: "d1-session-rotation-salt" });
+  const db = new MemoryD1Database();
+  const store = new D1AccountsStore(db);
+  const previous = {
+    sessionId: "sess_previous",
+    subject: "tsub_rotation" as const,
+    createdAt: 1_000,
+    expiresAt: 60_000,
+  };
+  const next = {
+    sessionId: "sess_next",
+    subject: "tsub_rotation" as const,
+    createdAt: 2_000,
+    expiresAt: 120_000,
+  };
+  await store.saveAccountSession(previous);
+
+  db.failNextBatchAt(1);
+  await expect(
+    store.replaceAccountSession(previous.sessionId, next),
+  ).rejects.toThrow("injected D1 batch failure");
+  expect(await store.findAccountSession(previous.sessionId)).toEqual(previous);
+  expect(await store.findAccountSession(next.sessionId)).toBeUndefined();
+
+  expect(await store.replaceAccountSession(previous.sessionId, next)).toBe(
+    true,
+  );
+  expect(await store.findAccountSession(previous.sessionId)).toBeUndefined();
+  expect(await store.findAccountSession(next.sessionId)).toEqual(next);
+  expect(await store.replaceAccountSession(previous.sessionId, {
+    ...next,
+    sessionId: "sess_lost_race",
+  })).toBe(false);
+  expect(await store.findAccountSession("sess_lost_race")).toBeUndefined();
+});
+
+test("D1AccountsStore updates account documents and verified-email indexes atomically", async () => {
+  const db = new MemoryD1Database();
+  const store = new D1AccountsStore(db);
+  await store.saveAccount({
+    subject: "tsub_atomic_index",
+    email: "before@example.test",
+    emailVerified: true,
+    createdAt: 1_000,
+    updatedAt: 1_000,
+  });
+
+  db.failNextBatchAt(2);
+  await expect(
+    store.saveAccount({
+      subject: "tsub_atomic_index",
+      email: "after@example.test",
+      emailVerified: true,
+      createdAt: 1_000,
+      updatedAt: 2_000,
+    }),
+  ).rejects.toThrow("injected D1 batch failure");
+
+  expect((await store.findAccount("tsub_atomic_index"))?.email).toBe(
+    "before@example.test",
+  );
+  expect(
+    (await store.findAccountByVerifiedEmail("before@example.test"))?.subject,
+  ).toBe("tsub_atomic_index");
+  expect(
+    await store.findAccountByVerifiedEmail("after@example.test"),
+  ).toBeUndefined();
+});
+
 class CountingD1Database implements D1Database {
   readonly #delegate = new SqliteFakeD1();
   prepareCount = 0;
@@ -152,6 +222,12 @@ class CountingD1Database implements D1Database {
 
   exec(query: string): Promise<D1ExecResult> {
     return this.#delegate.exec(query);
+  }
+
+  batch<T = unknown>(
+    statements: readonly D1PreparedStatement[],
+  ): Promise<readonly D1Result<T>[]> {
+    return this.#delegate.batch(statements) as Promise<readonly D1Result<T>[]>;
   }
 
   resetPrepareCount(): void {
@@ -182,6 +258,7 @@ class MemoryD1Database implements D1Database {
   readonly indexes = new Map<string, IndexRow>();
   execCount = 0;
   lastChanges = 0;
+  #failBatchAt?: number;
 
   prepare(query: string): D1PreparedStatement {
     return new MemoryD1Statement(this, query);
@@ -190,6 +267,35 @@ class MemoryD1Database implements D1Database {
   exec(_query: string): Promise<D1ExecResult> {
     this.execCount += 1;
     return Promise.resolve({ count: 1, duration: 0 });
+  }
+
+  async batch<T = unknown>(
+    statements: readonly D1PreparedStatement[],
+  ): Promise<readonly D1Result<T>[]> {
+    const documents = new Map(this.documents);
+    const indexes = new Map(this.indexes);
+    const previousChanges = this.lastChanges;
+    const failAt = this.#failBatchAt;
+    this.#failBatchAt = undefined;
+    try {
+      const results: D1Result<T>[] = [];
+      for (let index = 0; index < statements.length; index += 1) {
+        if (index === failAt) throw new Error("injected D1 batch failure");
+        results.push((await statements[index]!.run()) as D1Result<T>);
+      }
+      return results;
+    } catch (error) {
+      this.documents.clear();
+      for (const [key, value] of documents) this.documents.set(key, value);
+      this.indexes.clear();
+      for (const [key, value] of indexes) this.indexes.set(key, value);
+      this.lastChanges = previousChanges;
+      throw error;
+    }
+  }
+
+  failNextBatchAt(statementIndex: number): void {
+    this.#failBatchAt = statementIndex;
   }
 }
 
@@ -209,6 +315,29 @@ class MemoryD1Statement implements D1PreparedStatement {
   run(): Promise<D1Result> {
     const query = normalizedQuery(this.query);
     const canonical = canonicalQuery(this.query);
+    if (
+      canonical.startsWith(
+        "insert into takosumi_accounts_documents (bucket, key, document, updated_at) select 'account_sessions', ?, ?, ? where exists",
+      )
+    ) {
+      const [nextKey, nextDocument] = this.#stringValues(2);
+      const previousKey = stringBindValue(this.#rawValues()[3]);
+      if (
+        this.db.documents.has(documentKey("account_sessions", previousKey))
+      ) {
+        this.db.documents.set(
+          documentKey("account_sessions", nextKey),
+          nextDocument,
+        );
+        this.db.lastChanges = 1;
+      } else {
+        this.db.lastChanges = 0;
+      }
+      return Promise.resolve({
+        success: true,
+        meta: { changes: this.db.lastChanges },
+      });
+    }
     if (
       canonical.startsWith(
         "insert into takosumi_accounts_documents (bucket, key, document, updated_at) values (?, ?, ?, ?) on conflict",
@@ -346,6 +475,22 @@ class MemoryD1Statement implements D1PreparedStatement {
     ) {
       const [bucket, key] = this.#stringValues(2);
       this.db.lastChanges = this.db.documents.delete(documentKey(bucket, key))
+        ? 1
+        : 0;
+      return Promise.resolve({
+        success: true,
+        meta: { changes: this.db.lastChanges },
+      });
+    }
+    if (
+      query.startsWith(
+        "DELETE FROM takosumi_accounts_documents WHERE bucket = 'account_sessions' AND key = ?",
+      )
+    ) {
+      const [key] = this.#stringValues(1);
+      this.db.lastChanges = this.db.documents.delete(
+        documentKey("account_sessions", key),
+      )
         ? 1
         : 0;
       return Promise.resolve({
