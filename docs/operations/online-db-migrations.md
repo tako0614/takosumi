@@ -57,6 +57,12 @@ boot は `storage_migrations` ledgerをread-onlyで検証します。pending mig
 未知のledger row、checksum drift、database接続失敗、またはproduction-like環境で
 database URLが欠けている場合、processはtrafficを受けずに起動失敗します。
 
+protected production schema は forward-only です。確認句やoverride flagを付けた
+down-migration runnerも公開せず、失敗後は互換な直前artifact、forward repair、
+またはmigrationとは別authorityのrecovery手順を選びます。migration catalogの
+reverse SQLはchecksum互換性と明示的なlocal / development / test fixture reset
+だけに残し、fixture reset moduleはdatabase URLやproduction credentialを解決しません。
+
 `TAKOSUMI_DB_AUTO_MIGRATE=true` はlocal / development専用の明示的な利便機能です。
 production / stagingでの指定は拒否されます。未指定または`false`は「検証を省略」
 ではなく「schemaを書き換えず、predeploy済みであることだけを検証」を意味します。
@@ -68,7 +74,7 @@ production / stagingでの指定は拒否されます。未指定または`false
 ```bash
 cd takosumi
 bun run check
-bun test tests/core/adapters/storage/migration-runner/mod_test.ts tests/core/adapters/storage/migration-runner/rollback_test.ts
+bun test tests/core/adapters/storage/migration-runner/mod_test.ts tests/core/adapters/storage/migration-runner/fixture_reset_test.ts
 bun test tests/core/adapters/storage/drizzle/schema/schema_mirror_test.ts
 ```
 
@@ -129,7 +135,7 @@ copy / drop / rename / index 再作成と migration-ledger insert を同じ D1 b
 transaction に含めます。失敗時は全体 rollback し、fence は active のまま残す
 ため、request write と部分 schema が混在する状態を許しません。
 
-## Rollback Procedure
+## Failure and reversal procedure
 
 `expand` / `backfill`:
 

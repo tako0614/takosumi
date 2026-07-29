@@ -218,6 +218,11 @@ Schema migration is forward-only. A Worker rollback must remain compatible
 with the migrated schema; use a reviewed forward repair or an approved D1
 restore rather than ad hoc down-migration SQL.
 
+No flag, confirmation phrase, or operator CLI grants protected production
+down-migration authority. Disposable local/development/test fixture reset is a
+separate injected-client test utility and cannot resolve this runbook's D1
+target or credentials.
+
 ## Hosted compositions
 
 A host that keeps private schema in the same D1 database must preserve two

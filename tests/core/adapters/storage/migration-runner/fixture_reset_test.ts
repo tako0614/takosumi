@@ -1,18 +1,24 @@
 import { test } from "bun:test";
-// Phase 18.2 (H13): tests for the down-migration / rollback path.
+// Disposable fixture-reset coverage. Production migration code is forward-only
+// and exposes no down/rollback surface.
 //
-// These tests focus on the runner's rollback semantics. They use a fake
+// These tests use a fake
 // SqlClient that records every SQL statement so we can assert that:
-//   - `down` clauses run in the correct (reverse) order
-//   - the storage_migrations ledger row is removed exactly once per rollback
-//   - forward-only migrations refuse to rollback with a typed error
-//   - --target / --steps / dry-run all behave per spec
+//   - fixture reset SQL runs in the correct reverse order
+//   - the storage_migrations ledger row is removed exactly once per reset
+//   - migrations without fixture reset SQL refuse with a typed error
+//   - production scope is rejected before a client call
+//   - target / steps / dry-run all behave per spec
 
 import {
-  StorageMigrationDownNotSupportedError,
   type StorageMigrationLock,
   StorageMigrationRunner,
 } from "../../../../../core/adapters/storage/migration-runner/mod.ts";
+import {
+  StorageMigrationFixtureResetter,
+  StorageMigrationFixtureResetUnsupportedError,
+  StorageMigrationFixtureScopeError,
+} from "../../../../../core/adapters/storage/migration-runner/fixture-reset.ts";
 import type { StorageMigrationStatement } from "../../../../../core/adapters/storage/migrations.ts";
 import type { SqlClient, SqlParameters, SqlQueryResult } from "../../../../../core/adapters/storage/sql.ts";
 
@@ -43,16 +49,16 @@ const reversibleMigrations: readonly StorageMigrationStatement[] = [
   },
 ];
 
-test("rollback default rolls back the single most recent migration", async () => {
+test("fixture reset defaults to the single most recent migration", async () => {
   const sql = new FakeSqlClient();
   const runner = new StorageMigrationRunner(sql, {
     migrations: reversibleMigrations,
   });
   await runner.applyPending();
 
-  const result = await runner.rollback();
+  const result = await fixtureResetter(sql).reset();
 
-  assertEquals(result.rolledBackNow.map((entry) => entry.migration.id), [
+  assertEquals(result.resetNow.map((entry) => entry.migration.id), [
     "deploy.003",
   ]);
   // Ledger should now retain the first two but not the third.
@@ -75,16 +81,16 @@ test("rollback default rolls back the single most recent migration", async () =>
   );
 });
 
-test("rollback with --steps=2 rolls back two migrations in reverse order", async () => {
+test("fixture reset with steps=2 resets two migrations in reverse order", async () => {
   const sql = new FakeSqlClient();
   const runner = new StorageMigrationRunner(sql, {
     migrations: reversibleMigrations,
   });
   await runner.applyPending();
 
-  const result = await runner.rollback({ steps: 2 });
+  const result = await fixtureResetter(sql).reset({ steps: 2 });
 
-  assertEquals(result.rolledBackNow.map((entry) => entry.migration.id), [
+  assertEquals(result.resetNow.map((entry) => entry.migration.id), [
     "deploy.003",
     "space.002",
   ]);
@@ -92,16 +98,16 @@ test("rollback with --steps=2 rolls back two migrations in reverse order", async
   assertEquals(remaining.map((row) => row.id), ["system.001"]);
 });
 
-test("rollback with --target=1 rolls back every migration whose version > 1", async () => {
+test("fixture reset with target=1 resets every migration above version 1", async () => {
   const sql = new FakeSqlClient();
   const runner = new StorageMigrationRunner(sql, {
     migrations: reversibleMigrations,
   });
   await runner.applyPending();
 
-  const result = await runner.rollback({ targetVersion: 1 });
+  const result = await fixtureResetter(sql).reset({ targetVersion: 1 });
 
-  assertEquals(result.rolledBackNow.map((entry) => entry.migration.version), [
+  assertEquals(result.resetNow.map((entry) => entry.migration.version), [
     3,
     2,
   ]);
@@ -109,7 +115,7 @@ test("rollback with --target=1 rolls back every migration whose version > 1", as
   assertEquals(remaining.map((row) => row.id), ["system.001"]);
 });
 
-test("rollback dry-run reports plan but does not execute", async () => {
+test("fixture reset dry-run reports a plan but does not execute", async () => {
   const sql = new FakeSqlClient();
   const runner = new StorageMigrationRunner(sql, {
     migrations: reversibleMigrations,
@@ -117,10 +123,13 @@ test("rollback dry-run reports plan but does not execute", async () => {
   await runner.applyPending();
   const baselineCallCount = sql.calls.length;
 
-  const result = await runner.rollback({ steps: 2, dryRun: true });
+  const result = await fixtureResetter(sql).reset({
+    steps: 2,
+    dryRun: true,
+  });
 
   assertEquals(result.dryRun, true);
-  assertEquals(result.rolledBackNow.length, 0);
+  assertEquals(result.resetNow.length, 0);
   assertEquals(result.planned.map((entry) => entry.migration.id), [
     "deploy.003",
     "space.002",
@@ -137,7 +146,7 @@ test("rollback dry-run reports plan but does not execute", async () => {
   );
 });
 
-test("rollback refuses to undo a forward-only migration", async () => {
+test("fixture reset refuses a migration without reset SQL", async () => {
   const forwardOnly: readonly StorageMigrationStatement[] = [
     reversibleMigrations[0],
     reversibleMigrations[1],
@@ -155,8 +164,12 @@ test("rollback refuses to undo a forward-only migration", async () => {
   await runner.applyPending();
 
   await assertRejects(
-    () => runner.rollback({ steps: 1 }),
-    StorageMigrationDownNotSupportedError,
+    () =>
+      new StorageMigrationFixtureResetter(sql, {
+        scope: "test",
+        migrations: forwardOnly,
+      }).reset({ steps: 1 }),
+    StorageMigrationFixtureResetUnsupportedError,
     "deploy.003-forward-only",
   );
   // Ledger must remain untouched after the refusal.
@@ -164,19 +177,19 @@ test("rollback refuses to undo a forward-only migration", async () => {
   assertEquals(remaining.length, 3);
 });
 
-test("rollback against an empty ledger returns an empty plan", async () => {
+test("fixture reset against an empty ledger returns an empty plan", async () => {
   const sql = new FakeSqlClient();
   const runner = new StorageMigrationRunner(sql, {
     migrations: reversibleMigrations,
   });
 
-  const result = await runner.rollback({ steps: 5 });
+  const result = await fixtureResetter(sql).reset({ steps: 5 });
 
-  assertEquals(result.rolledBackNow.length, 0);
+  assertEquals(result.resetNow.length, 0);
   assertEquals(result.planned.length, 0);
 });
 
-test("rollback uses one runner-wide lock while executing", async () => {
+test("fixture reset uses one runner-wide lock while executing", async () => {
   const sql = new FakeSqlClient();
   const lock = new RecordingLock();
   const runner = new StorageMigrationRunner(sql, {
@@ -186,14 +199,43 @@ test("rollback uses one runner-wide lock while executing", async () => {
   await runner.applyPending();
   lock.events.length = 0;
 
-  await runner.rollback({ steps: 2 });
+  await fixtureResetter(sql, lock).reset({ steps: 2 });
 
   assertEquals(lock.events, ["enter", "exit"]);
+});
+
+test("fixture reset refuses protected production scope before database access", () => {
+  const sql = new FakeSqlClient();
+  let error: unknown;
+  try {
+    new StorageMigrationFixtureResetter(sql, {
+      scope: "production",
+      migrations: reversibleMigrations,
+    });
+  } catch (caught) {
+    error = caught;
+  }
+  assert(
+    error instanceof StorageMigrationFixtureScopeError,
+    `expected StorageMigrationFixtureScopeError, got ${String(error)}`,
+  );
+  assertEquals(sql.calls, []);
 });
 
 // ---------------------------------------------------------------------------
 // Test fakes
 // ---------------------------------------------------------------------------
+
+function fixtureResetter(
+  sql: SqlClient,
+  lock?: StorageMigrationLock,
+): StorageMigrationFixtureResetter {
+  return new StorageMigrationFixtureResetter(sql, {
+    scope: "test",
+    migrations: reversibleMigrations,
+    lock,
+  });
+}
 
 interface SqlCall {
   readonly sql: string;

@@ -71,40 +71,6 @@ export class StorageMigrationPendingError extends Error {
   }
 }
 
-export class StorageMigrationDownNotSupportedError extends Error {
-  constructor(readonly migrationId: string) {
-    super(
-      `storage migration ${migrationId} is forward-only (no down clause); cannot rollback past it`,
-    );
-    this.name = "StorageMigrationDownNotSupportedError";
-  }
-}
-
-export interface RollbackStorageMigrationsOptions {
-  /**
-   * If set, rollback every applied migration whose `version` is strictly
-   * greater than this value. The migration with version === target is kept.
-   */
-  readonly targetVersion?: number;
-  /**
-   * If set (and targetVersion is not), rollback the N most-recently applied
-   * migrations.
-   */
-  readonly steps?: number;
-  readonly dryRun?: boolean;
-}
-
-export interface PlannedStorageRollback {
-  readonly migration: StorageMigrationStatement;
-  readonly applied: AppliedStorageMigration;
-}
-
-export interface RollbackStorageMigrationsResult {
-  readonly dryRun: boolean;
-  readonly planned: readonly PlannedStorageRollback[];
-  readonly rolledBackNow: readonly PlannedStorageRollback[];
-}
-
 export class StorageMigrationRunner {
   readonly #client: SqlClient;
   readonly #migrations: readonly StorageMigrationStatement[];
@@ -174,97 +140,6 @@ export class StorageMigrationRunner {
       }
 
       return { ...plan, dryRun, appliedNow };
-    });
-  }
-
-  /**
-   * Plan a rollback. Determines which applied migrations would be reversed
-   * given the target version or step count, but does not execute anything.
-   * Throws if any selected migration lacks a `down` clause (forward-only).
-   */
-  async planRollback(
-    options: RollbackStorageMigrationsOptions = {},
-  ): Promise<readonly PlannedStorageRollback[]> {
-    return await this.#planRollbackUnlocked(options);
-  }
-
-  async #planRollbackUnlocked(
-    options: RollbackStorageMigrationsOptions = {},
-  ): Promise<readonly PlannedStorageRollback[]> {
-    const applied = await this.listAppliedMigrations();
-    if (applied.length === 0) return [];
-
-    const byId = new Map(this.#migrations.map((m) => [m.id, m] as const));
-    validateAppliedCatalog(applied, this.#migrations);
-
-    // Sort applied DESC so we rollback most recent first.
-    const appliedDesc = [...applied].sort((left, right) =>
-      left.version === right.version
-        ? right.id.localeCompare(left.id)
-        : right.version - left.version
-    );
-
-    const target = options.targetVersion;
-    const steps = options.steps;
-
-    let selected: AppliedStorageMigration[];
-    if (typeof target === "number") {
-      selected = appliedDesc.filter((row) => row.version > target);
-    } else if (typeof steps === "number" && steps > 0) {
-      selected = appliedDesc.slice(0, steps);
-    } else if (typeof steps === "number" && steps <= 0) {
-      selected = [];
-    } else {
-      // Default: rollback the single most recent applied migration.
-      selected = appliedDesc.slice(0, 1);
-    }
-
-    const planned: PlannedStorageRollback[] = [];
-    for (const row of selected) {
-      const migration = byId.get(row.id);
-      if (!migration) {
-        throw new StorageMigrationCatalogError(
-          `applied migration ${row.id} is not present in the current catalog; refusing to rollback`,
-        );
-      }
-      if (!migration.down || migration.down.trim().length === 0) {
-        throw new StorageMigrationDownNotSupportedError(migration.id);
-      }
-      planned.push({ migration, applied: row });
-    }
-    return planned;
-  }
-
-  /**
-   * Execute a rollback. Each migration's `down` SQL is run inside a
-   * transaction, then the corresponding `storage_migrations` row is removed.
-   * If `dryRun` is true the SQL is not run and the ledger is untouched.
-   */
-  async rollback(
-    options: RollbackStorageMigrationsOptions = {},
-  ): Promise<RollbackStorageMigrationsResult> {
-    const dryRun = options.dryRun === true;
-    if (dryRun) {
-      const planned = await this.planRollback(options);
-      return { dryRun, planned, rolledBackNow: [] };
-    }
-
-    return await this.#lock.runExclusive(this.#client, async () => {
-      const planned = await this.#planRollbackUnlocked(options);
-      if (planned.length === 0) return { dryRun, planned, rolledBackNow: [] };
-
-      const rolledBackNow: PlannedStorageRollback[] = [];
-      for (const entry of planned) {
-        await this.#runInTransaction(async (sql) => {
-          await sql.query(entry.migration.down!);
-          await sql.query(
-            "delete from storage_migrations where id = :id",
-            { id: entry.migration.id },
-          );
-        });
-        rolledBackNow.push(entry);
-      }
-      return { dryRun, planned, rolledBackNow };
     });
   }
 
