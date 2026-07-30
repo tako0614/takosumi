@@ -950,11 +950,28 @@ function generationPrecondition(
     };
   }
   return required
-    ? failed(c, "If-None-Match: * or If-Match is required")
+    ? generationConflict(c, "If-None-Match: * or If-Match is required")
     : { ok: true, value: undefined };
 }
 
 const PORTABLE_RESOURCE_VERSION_MAX = "9223372036854775807";
+
+function generationConflict(
+  c: Context,
+  message: string,
+): { readonly ok: false; readonly response: Response } {
+  return {
+    ok: false,
+    response: portableError(
+      c,
+      "conflict",
+      message,
+      412,
+      false,
+      "resource_version_conflict",
+    ),
+  };
+}
 
 function isPortableResourceVersion(value: string): boolean {
   return (
@@ -1062,7 +1079,7 @@ function ifMatchPrecondition(
   const value = c.req.header("if-match")?.trim();
   if (value === undefined) {
     return required
-      ? failed(c, "If-Match is required")
+      ? generationConflict(c, "If-Match is required")
       : { ok: true, value: undefined };
   }
   const match = /^"([1-9][0-9]*)"$/u.exec(value);

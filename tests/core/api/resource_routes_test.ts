@@ -588,8 +588,8 @@ test("portable Form host delegates exact lifecycle to the canonical Resource and
         headers: { "idempotency-key": `portable-${action}-missing-match` },
       },
     );
-    expect(missingMatch.status).toBe(400);
-    expect((await missingMatch.json()).error.code).toBe("invalid_argument");
+    expect(missingMatch.status).toBe(412);
+    expect((await missingMatch.json()).error.code).toBe("conflict");
 
     const staleMatch = await app.request(
       `${path}/${action}?space=space_1&${exactQuery}`,
@@ -641,8 +641,8 @@ test("portable Form host delegates exact lifecycle to the canonical Resource and
       headers: { "idempotency-key": "portable-delete-missing-match" },
     },
   );
-  expect(deleteWithoutMatch.status).toBe(400);
-  expect((await deleteWithoutMatch.json()).error.code).toBe("invalid_argument");
+  expect(deleteWithoutMatch.status).toBe(412);
+  expect((await deleteWithoutMatch.json()).error.code).toBe("conflict");
 
   const deleteWithStaleMatch = await app.request(
     `${path}?space=space_1&${exactQuery}`,
