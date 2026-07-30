@@ -350,6 +350,7 @@ export interface ResourceOperationPrecondition {
 
 export interface ResourceOperationRunRepairResult {
   readonly scanned: number;
+  readonly recovered: number;
   readonly completed: number;
   readonly auditsRepaired: number;
   readonly pending: number;
@@ -426,10 +427,17 @@ export class ResourceShapeService {
     } = {},
   ): Promise<ResourceOperationRunRepairResult> {
     if (!this.#operationRuns) {
-      return { scanned: 0, completed: 0, auditsRepaired: 0, pending: 0 };
+      return {
+        scanned: 0,
+        recovered: 0,
+        completed: 0,
+        auditsRepaired: 0,
+        pending: 0,
+      };
     }
     const runs =
       await this.#operationRuns.listRecoverableResourceOperationRuns(options);
+    let recovered = 0;
     let completed = 0;
     let auditsRepaired = 0;
     let pending = 0;
@@ -466,6 +474,31 @@ export class ResourceShapeService {
           throw new Error(
             `resource ${candidate.subject.id} is missing during ${candidate.resourceOperation} Run recovery`,
           );
+        }
+        if (
+          candidate.status === "running" &&
+          candidate.resourceOperation === "apply" &&
+          resource?.phase === "Applying" &&
+          resourcePendingOperationMatchesRun(resource, candidate, "apply") &&
+          resource.pendingOperation?.deploymentReview
+        ) {
+          const result = await this.recoverApply(
+            applyRecoveryRequestFromRecord(resource, candidate),
+            resource.pendingOperation.deploymentReview,
+          );
+          if (!result.ok) {
+            pending += 1;
+            log.warn("service.resource_shape.apply_recovery_pending", {
+              runId: candidate.id,
+              resourceId: candidate.subject.id,
+              errorCode: result.error.code,
+            });
+            continue;
+          }
+          recovered += 1;
+          completed += 1;
+          auditsRepaired += 1;
+          continue;
         }
         if (candidate.status === "succeeded") {
           if (candidate.resourceOperation === "artifact") {
@@ -536,6 +569,7 @@ export class ResourceShapeService {
     }
     return {
       scanned: runs.length,
+      recovered,
       completed,
       auditsRepaired,
       pending,
@@ -1021,6 +1055,30 @@ export class ResourceShapeService {
   }
 
   /**
+   * Classifies an exact apply request for HTTP idempotency replay without
+   * mutating it. `recovering` means the original generation is still Applying;
+   * `completed` means that exact optimistic write already reached Ready.
+   */
+  async applyReplayStatus(
+    req: ApplyResourceRequest,
+  ): Promise<"recovering" | "completed" | undefined> {
+    const id = formatResourceShapeId(req.space, req.kind, req.name);
+    const existing = await this.#stores.resources.get(id);
+    if (!existing || !applyingRequestMatchesRecord(req, existing)) {
+      return undefined;
+    }
+    if (
+      existing.phase === "Applying" &&
+      applyRecoveryGenerationMatches(req, existing)
+    ) {
+      return "recovering";
+    }
+    return completedApplyRequestMatchesRecord(req, existing)
+      ? "completed"
+      : undefined;
+  }
+
+  /**
    * Host recovery entrypoint for a Resource left Applying after an uncertain
    * backend outcome. It only performs adapter refresh; it never redispatches
    * provider mutation. Hosts should call it from their durable reservation/run
@@ -1053,11 +1111,20 @@ export class ResourceShapeService {
       this.#stores.locks.get(id),
     ]);
     const recoveringApplying = existing?.phase === "Applying";
-    const versionError = resourceGenerationError(
-      id,
-      existing,
-      req.expectedGeneration,
-    );
+    if (
+      recoveryRequested &&
+      existing &&
+      completedApplyRequestMatchesRecord(req, existing)
+    ) {
+      return {
+        ok: true,
+        value: this.#assemble(existing, existingLock),
+      };
+    }
+    const versionError =
+      recoveryRequested && recoveringApplying
+        ? applyRecoveryGenerationError(id, existing, req.expectedGeneration)
+        : resourceGenerationError(id, existing, req.expectedGeneration);
     if (versionError) return versionError;
     const form = await this.#resolveExactForm(req, existing, existingLock, {
       allowRetainedPackage: recoveryRequested,
@@ -1262,6 +1329,7 @@ export class ResourceShapeService {
               runId: operationRun.id,
               operation: "apply" as const,
               operationKey: operationRun.resourceOperationKey,
+              deploymentReview: review,
             },
           }
         : {}),
@@ -6000,6 +6068,37 @@ function resourceGenerationError(
   };
 }
 
+function applyRecoveryGenerationMatches(
+  request: ApplyResourceRequest,
+  current: ResourceShapeRecord,
+): boolean {
+  return (
+    request.expectedGeneration === undefined ||
+    current.generation === request.expectedGeneration + 1
+  );
+}
+
+function applyRecoveryGenerationError(
+  resourceId: string,
+  current: ResourceShapeRecord | undefined,
+  expectedGeneration: number | undefined,
+): { readonly ok: false; readonly error: ResourceServiceError } | undefined {
+  if (
+    current &&
+    (expectedGeneration === undefined ||
+      current.generation === expectedGeneration + 1)
+  ) {
+    return undefined;
+  }
+  return {
+    ok: false,
+    error: {
+      code: "resource_version_conflict",
+      message: `resource ${resourceId} is not the Applying successor of generation ${expectedGeneration ?? "unknown"}`,
+    },
+  };
+}
+
 function formIdentityConflict<T>(message: string): ServiceResult<T> {
   return {
     ok: false,
@@ -6074,6 +6173,46 @@ function applyingRequestMatchesRecord(
     canonicalJson(request.labels ?? record.labels ?? null) ===
       canonicalJson(record.labels ?? null)
   );
+}
+
+function completedApplyRequestMatchesRecord(
+  request: ApplyResourceRequest,
+  record: ResourceShapeRecord,
+): boolean {
+  return (
+    record.phase === "Ready" &&
+    record.observedGeneration === record.generation &&
+    applyRecoveryGenerationMatches(request, record) &&
+    applyingRequestMatchesRecord(request, record)
+  );
+}
+
+function applyRecoveryRequestFromRecord(
+  record: ResourceShapeRecord,
+  run: ResourceOperationRun,
+): ApplyResourceRequest {
+  return {
+    actor: {
+      actorAccountId: run.createdBy,
+      workspaceId: run.workspaceId,
+      roles: ["system"],
+      principalKind: "system",
+      requestId: `resource-operation-recovery:${run.id}`,
+    },
+    space: record.spaceId,
+    kind: record.kind,
+    name: record.name,
+    spec: record.spec,
+    managedBy: record.managedBy,
+    expectedGeneration: Math.max(0, record.generation - 1),
+    ...(record.form === undefined ? {} : { form: record.form }),
+    ...(record.owner === undefined ? {} : { owner: record.owner }),
+    ...(record.project === undefined ? {} : { project: record.project }),
+    ...(record.environment === undefined
+      ? {}
+      : { environment: record.environment }),
+    ...(record.labels === undefined ? {} : { labels: record.labels }),
+  };
 }
 
 async function resourceImportRequestDigest(

@@ -404,6 +404,7 @@ test("terminal artifact repair reconstructs the pointer row before acknowledging
     });
     expect(await service.repairResourceOperationRuns({ limit: 1 })).toEqual({
       scanned: 1,
+      recovered: 0,
       completed: 0,
       auditsRepaired: 1,
       pending: 0,
@@ -432,6 +433,7 @@ test("terminal artifact repair reconstructs the pointer row before acknowledging
     ]);
     expect(await service.repairResourceOperationRuns({ limit: 1 })).toEqual({
       scanned: 0,
+      recovered: 0,
       completed: 0,
       auditsRepaired: 0,
       pending: 0,

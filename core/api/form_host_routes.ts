@@ -556,6 +556,23 @@ export function registerPortableFormHostRoutes(
           key.value,
         );
       },
+      {
+        resume: async () => {
+          const result = await options.service.recoverApply(
+            request,
+            review.value,
+          );
+          if (!result.ok) return serviceError(c, result.error);
+          return portableJson(
+            c,
+            portableResource(result.value),
+            200,
+            key.value,
+          );
+        },
+        retainReservationOnFailure: async () =>
+          (await options.service.applyReplayStatus(request)) !== undefined,
+      },
     );
   });
 
@@ -1507,6 +1524,12 @@ async function executePortableIdempotentMutation(
     readonly idempotencyKey: string;
   },
   execute: () => Promise<Response>,
+  recovery: {
+    readonly resume?: () => Promise<Response>;
+    readonly retainReservationOnFailure?: (
+      response: Response,
+    ) => Promise<boolean>;
+  } = {},
 ): Promise<Response> {
   if (!options.idempotency) {
     return portableError(
@@ -1553,12 +1576,21 @@ async function executePortableIdempotentMutation(
     return responseFromPortableWire(reserved.response);
   }
   if (reserved.kind === "in_progress") {
-    return portableError(
+    if (!recovery.resume) {
+      return portableError(
+        c,
+        "resource_busy",
+        "portable host request with this Idempotency-Key is in progress",
+        409,
+        true,
+      );
+    }
+    return await finishPortableIdempotentMutation(
       c,
-      "resource_busy",
-      "portable host request with this Idempotency-Key is in progress",
-      409,
-      true,
+      options.idempotency,
+      reserved.reservation,
+      await recovery.resume(),
+      recovery.retainReservationOnFailure,
     );
   }
   let response: Response;
@@ -1570,9 +1602,13 @@ async function executePortableIdempotentMutation(
     throw error;
   }
   if (!response.ok) {
-    // Domain failures after reservation may be ambiguous. The canonical
-    // recovery path, not a blind retry, owns releasing that reservation.
-    return response;
+    return await finishPortableIdempotentMutation(
+      c,
+      options.idempotency,
+      reserved.reservation,
+      response,
+      recovery.retainReservationOnFailure,
+    );
   }
   try {
     const stored = await options.idempotency.storeSuccess(
@@ -1589,6 +1625,54 @@ async function executePortableIdempotentMutation(
       true,
     );
   }
+}
+
+async function finishPortableIdempotentMutation(
+  c: Context,
+  idempotency: PortableHostIdempotencyCoordinator,
+  reservation: PortableHostIdempotencyReservation,
+  response: Response,
+  retainReservationOnFailure:
+    | ((response: Response) => Promise<boolean>)
+    | undefined,
+): Promise<Response> {
+  if (response.ok) {
+    try {
+      const stored = await idempotency.storeSuccess(
+        reservation,
+        await portableWireFromResponse(response),
+      );
+      return responseFromPortableWire(stored);
+    } catch {
+      return portableError(
+        c,
+        "backend_unavailable",
+        "portable host idempotency success could not be recorded",
+        503,
+        true,
+      );
+    }
+  }
+  // Route-specific canonical state decides whether this failed response still
+  // owns an Applying/Ready mutation. Pre-claim and rolled-back failures release
+  // the key so the exact request can retry normally.
+  if (
+    retainReservationOnFailure &&
+    !(await retainReservationOnFailure(response))
+  ) {
+    try {
+      await idempotency.release(reservation);
+    } catch {
+      return portableError(
+        c,
+        "backend_unavailable",
+        "portable host idempotency failure could not be finalized",
+        503,
+        true,
+      );
+    }
+  }
+  return response;
 }
 
 async function portableWireFromResponse(

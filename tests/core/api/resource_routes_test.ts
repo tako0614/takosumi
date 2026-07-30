@@ -796,6 +796,62 @@ test("portable Resource ownership comes only from authenticated host run context
   ).toBe(500);
 });
 
+test("portable apply retry resumes the exact Applying generation and records replay success", async () => {
+  const { app, service } = await buildApp(
+    {
+      resolveActor: () => ({
+        actorAccountId: "run_resume",
+        workspaceId: "workspace_1",
+        roles: ["owner"],
+        scopes: ["forms:read", "resources:*"],
+        requestId: "req_resume",
+      }),
+    },
+    exactObjectBucketFormRegistry(),
+    { adapter: new UnknownOnceApplyAdapter() },
+  );
+  const base = "/apis/forms.takoform.com/v1alpha1";
+  const path = `${base}/resources/ObjectBucket/resumable-assets`;
+  const desired = {
+    apiVersion: "forms.takoform.com/v1alpha1",
+    kind: "ObjectBucket",
+    form: portableFormReference(),
+    metadata: { name: "resumable-assets", space: "space_1" },
+    spec: { name: "resumable-assets", interfaces: ["s3_api"] },
+  };
+  const preview = await app.request(`${base}/resources/preview`, {
+    method: "POST",
+    headers: { ...JSON_HEADERS, "if-none-match": "*" },
+    body: JSON.stringify(desired),
+  });
+  expect(preview.status).toBe(200);
+  const review = (await preview.json()).review as { planDigest: string };
+  const request = {
+    method: "PUT",
+    headers: {
+      ...JSON_HEADERS,
+      "if-none-match": "*",
+      "idempotency-key": "portable-resume-apply-1",
+    },
+    body: JSON.stringify({ ...desired, review }),
+  };
+
+  const pending = await app.request(path, request);
+  expect(pending.status).toBe(409);
+  expect((await pending.json()).error.code).toBe("resource_busy");
+  expect(
+    (await service.get("space_1", "ObjectBucket", "resumable-assets")).ok,
+  ).toBe(true);
+
+  const resumed = await app.request(path, request);
+  expect(resumed.status).toBe(200);
+  expect((await resumed.json()).metadata.resourceVersion).toBe("1");
+
+  const replayed = await app.request(path, request);
+  expect(replayed.status).toBe(200);
+  expect((await replayed.json()).metadata.resourceVersion).toBe("1");
+});
+
 test("portable Interface writes require dedicated Interface authority", () => {
   const actor = (scopes: readonly string[]) => ({
     actorAccountId: "acct_interface_writer",

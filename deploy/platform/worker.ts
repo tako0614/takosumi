@@ -5996,6 +5996,7 @@ async function runScheduledResourceOperationRepair(
 
 export interface ScheduledResourceOperationRepairResult {
   readonly scanned: number;
+  readonly recovered: number;
   readonly completed: number;
   readonly auditsRepaired: number;
   readonly pending: number;
@@ -6010,6 +6011,7 @@ export async function repairDirectResourceRuns(
       readonly limit?: number;
     }): Promise<{
       readonly scanned: number;
+      readonly recovered: number;
       readonly completed: number;
       readonly auditsRepaired: number;
       readonly pending: number;
@@ -6025,6 +6027,7 @@ export async function repairDirectResourceRuns(
     // stale-plan handling, or Resource observation in the same cron tick.
     return {
       scanned: 0,
+      recovered: 0,
       completed: 0,
       auditsRepaired: 0,
       pending: 0,

@@ -652,6 +652,7 @@ test("scheduled direct Resource Run repair is bounded and failure-isolated", asy
         calls.push(options);
         return Promise.resolve({
           scanned: 4,
+          recovered: 1,
           completed: 2,
           auditsRepaired: 3,
           pending: 1,
@@ -663,6 +664,7 @@ test("scheduled direct Resource Run repair is bounded and failure-isolated", asy
   expect(calls).toEqual([{ limit: 17 }]);
   expect(repaired).toEqual({
     scanned: 4,
+    recovered: 1,
     completed: 2,
     auditsRepaired: 3,
     pending: 1,
@@ -675,6 +677,7 @@ test("scheduled direct Resource Run repair is bounded and failure-isolated", asy
     }),
   ).toEqual({
     scanned: 0,
+    recovered: 0,
     completed: 0,
     auditsRepaired: 0,
     pending: 0,

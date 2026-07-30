@@ -1435,6 +1435,7 @@ test("exact direct-plugin recovery fails closed when persisted Run result omits 
   });
   expect(await service.repairResourceOperationRuns()).toEqual({
     scanned: 1,
+    recovered: 0,
     completed: 0,
     auditsRepaired: 0,
     pending: 1,
@@ -3672,6 +3673,7 @@ test("scheduled repair terminalizes a direct-plugin Run after Resource commit wi
   const repaired = await restarted.repairResourceOperationRuns({ limit: 10 });
   expect(repaired).toEqual({
     scanned: 1,
+    recovered: 0,
     completed: 1,
     auditsRepaired: 1,
     pending: 0,
@@ -3696,6 +3698,7 @@ test("scheduled repair terminalizes a direct-plugin Run after Resource commit wi
   expect(successEvents[0]?.runId).toBe(run?.id);
   expect(await restarted.repairResourceOperationRuns({ limit: 10 })).toEqual({
     scanned: 0,
+    recovered: 0,
     completed: 0,
     auditsRepaired: 0,
     pending: 0,
@@ -3785,6 +3788,7 @@ test("scheduled repair completes a staged artifact audit without a Resource whil
   });
   expect(await service.repairResourceOperationRuns({ limit: 1 })).toEqual({
     scanned: 1,
+    recovered: 0,
     completed: 0,
     auditsRepaired: 1,
     pending: 0,
@@ -4074,6 +4078,79 @@ test("direct-plugin apply response loss observes current and never creates a dup
     ready?.lastOperationRunId ?? "missing",
   );
   expect(run?.status).toBe("succeeded");
+});
+
+test("scheduled repair resumes an exact direct-plugin apply from its retained review", async () => {
+  const stores = createInMemoryResourceShapeStores();
+  const ledger = new InMemoryOpenTofuControlStore();
+  const backend: StableApplyBackend = {
+    exists: false,
+    creations: 0,
+    operationKeys: [],
+  };
+  const first = new ResourceShapeService({
+    stores,
+    adapter: new LostApplyResponseAdapter(backend, true),
+    operationRuns: ledger,
+    activity: new ActivityService({
+      store: ledger,
+      now: () => new Date(NOW),
+    }),
+    now: () => NOW,
+  });
+  await seed(first);
+  const request = {
+    actor: ACTOR,
+    space: "space_1",
+    kind: "ContainerService" as const,
+    name: "agent-scheduled-recovery",
+    expectedGeneration: 0,
+    spec: {
+      name: "agent-scheduled-recovery",
+      image: "ghcr.io/example/agent:1.0.0",
+    },
+  };
+
+  const pending = await reviewedApply(first, request);
+  expect(pending.ok).toBe(false);
+  const applying = await stores.resources.get(
+    "tkrn:space_1:ContainerService:agent-scheduled-recovery",
+  );
+  expect(applying?.pendingOperation?.deploymentReview?.planDigest).toMatch(
+    /^sha256:[0-9a-f]{64}$/u,
+  );
+
+  const recoveryAdapter = new StableNameApplyRecoveryAdapter(backend);
+  const restarted = new ResourceShapeService({
+    stores,
+    adapter: recoveryAdapter,
+    operationRuns: ledger,
+    activity: new ActivityService({
+      store: ledger,
+      now: () => new Date(NOW),
+    }),
+    now: () => NOW,
+  });
+  expect(await restarted.repairResourceOperationRuns()).toEqual({
+    scanned: 1,
+    recovered: 1,
+    completed: 1,
+    auditsRepaired: 1,
+    pending: 0,
+  });
+  expect(recoveryAdapter.applyInputs).toHaveLength(0);
+  expect(recoveryAdapter.observeInputs).toHaveLength(1);
+  expect(recoveryAdapter.refreshInputs).toHaveLength(1);
+  expect(backend.creations).toBe(1);
+  expect(
+    (
+      await restarted.get(
+        "space_1",
+        "ContainerService",
+        "agent-scheduled-recovery",
+      )
+    ).ok,
+  ).toBe(true);
 });
 
 test("direct-plugin apply recovery retains its exact pending Run across a D1-backed restart", async () => {

@@ -144,6 +144,7 @@ export type PortableHostIdempotencyReserveResult =
     }
   | {
       readonly kind: "in_progress";
+      readonly reservation: PortableHostIdempotencyReservation;
     }
   | {
       readonly kind: "replay";
@@ -212,7 +213,10 @@ export class PortableHostIdempotencyCoordinator {
     if (result.kind === "existing") {
       return result.record.state === "succeeded"
         ? { kind: "replay", response: cloneResponse(result.record.response) }
-        : { kind: "in_progress" };
+        : {
+            kind: "in_progress",
+            reservation: cloneReservation(result.record),
+          };
     }
     if (result.record.reservationId !== candidate.reservationId) {
       throw new PortableHostIdempotencyError(

@@ -15,6 +15,7 @@ import type {
   InstalledFormReference,
   JsonObject,
   NativeResourceRef,
+  ResourceDeploymentReview,
   ResourceManagedBy,
   ResourceOwner,
   ResourcePhase,
@@ -90,6 +91,12 @@ export interface ResourceShapePendingOperation {
   readonly runId: string;
   readonly operation: ResourceOperation;
   readonly operationKey: string;
+  /**
+   * Exact reviewed deployment authority retained for an Applying Resource.
+   * The bounded host recovery loop reuses this evidence and the immutable Run
+   * operation key; it never invents a fresh quote or redispatch identity.
+   */
+  readonly deploymentReview?: ResourceDeploymentReview;
 }
 
 export interface ResourceShapeExecutionRecord {

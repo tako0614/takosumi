@@ -951,6 +951,7 @@ export interface TakosumiOperations {
       readonly limit?: number;
     }): Promise<{
       readonly scanned: number;
+      readonly recovered: number;
       readonly completed: number;
       readonly auditsRepaired: number;
       readonly pending: number;
