@@ -124,15 +124,25 @@ describe("Resource Shape dashboard surface", () => {
     );
   });
 
-  test("keeps break-glass deletion out and exposes only safe URL projections", () => {
+  test("keeps break-glass deletion out and launches through generic Resolved Interfaces", () => {
     expect(detail).toContain("deleteResourceShape");
     expect(detail).not.toContain("force:");
+    expect(detail).toContain("listResolvedResourceInterfaces");
+    expect(detail).toContain("resourceLaunchUrlProjections");
+    expect(detail).toContain("resolvedInterfaces.error");
+    expect(detail).toContain(
+      "Promise.allSettled([refetchResolvedInterfaces()])",
+    );
     expect(detail).toContain("resourceOutputKeys(item())");
-    expect(detail).toContain("resourceSafeUrlProjections(item())");
-    expect(detail).toContain("href={output.url}");
+    expect(detail).toContain("href={launch.url}");
+    expect(detail).toContain(
+      "`${launch.interfaceType}@${launch.interfaceVersion}`",
+    );
     expect(detail).toContain('target="_blank"');
     expect(detail).toContain('rel="noreferrer noopener"');
     expect(detail).not.toContain("Object.entries(item().status?.outputs");
+    expect(detail).not.toContain("resourceSafeUrlProjections");
+    expect(detail).not.toContain("EdgeWorker");
   });
 
   test("makes SpacePolicy records discoverable, editable, and deletable", () => {

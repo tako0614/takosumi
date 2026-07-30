@@ -1,4 +1,5 @@
 import type {
+  ResolvedResourceInterface,
   ResourceShape,
   ResourceShapeJsonObject,
   ResourceShapeWriteInput,
@@ -86,41 +87,48 @@ export function resourceOutputKeys(resource: ResourceShape): readonly string[] {
   return Object.keys(resource.status?.outputs ?? {}).sort();
 }
 
-export interface ResourceSafeUrlProjection {
-  readonly outputName: string;
+export interface ResourceLaunchUrlProjection {
+  readonly interfaceType: "http.request";
+  readonly interfaceVersion: "1";
   readonly url: string;
 }
 
 /**
- * Resource Output values are hidden unless this dashboard contract names the
- * exact shape/output pair as a public navigation surface.
- *
- * `EdgeWorker.url` is declared by the canonical EdgeWorker implementation as a
- * typed `url` module output. Keeping this allowlist narrower than arbitrary
- * `status.outputs` prevents a provider, custom shape, or secret-looking output
- * name from turning an untrusted value into a dashboard link.
+ * Project launch URLs only from the canonical HTTP Interface profile.
+ * Resource kinds and provider output names are deliberately irrelevant: the
+ * host-owned Resolved Interface is the navigation contract.
  */
-const SAFE_RESOURCE_URL_OUTPUT_NAMES: Readonly<
-  Record<string, readonly string[]>
-> = {
-  EdgeWorker: ["url"],
-};
-
-/** Return only explicitly allowlisted, credential-free HTTPS Resource URLs. */
-export function resourceSafeUrlProjections(
+export function resourceLaunchUrlProjections(
   resource: ResourceShape,
-): readonly ResourceSafeUrlProjection[] {
-  const outputNames = SAFE_RESOURCE_URL_OUTPUT_NAMES[resource.kind] ?? [];
-  const outputs = resource.status?.outputs ?? {};
-  const projected: ResourceSafeUrlProjection[] = [];
-
-  for (const outputName of outputNames) {
-    const value = outputs[outputName];
-    if (typeof value !== "string") continue;
-    const url = safeCanonicalHttpsUrl(value);
-    if (url) projected.push({ outputName, url });
+  interfaces: readonly ResolvedResourceInterface[],
+): readonly ResourceLaunchUrlProjection[] {
+  if (
+    resource.status?.phase !== "Ready" ||
+    resource.status.observedGeneration !== resource.metadata.generation
+  ) {
+    return [];
   }
-
+  const projected: ResourceLaunchUrlProjection[] = [];
+  const seen = new Set<string>();
+  for (const iface of interfaces) {
+    if (
+      iface.type !== "http.request" ||
+      iface.version !== "1" ||
+      iface.resource.kind !== resource.kind ||
+      iface.resource.name !== resource.metadata.name ||
+      typeof iface.resourceUri !== "string"
+    ) {
+      continue;
+    }
+    const url = safeCanonicalHttpsUrl(iface.resourceUri);
+    if (!url || seen.has(url)) continue;
+    seen.add(url);
+    projected.push({
+      interfaceType: "http.request",
+      interfaceVersion: "1",
+      url,
+    });
+  }
   return projected;
 }
 

@@ -5,6 +5,7 @@ import {
   deleteResourceShape,
   getResourceSpacePolicy,
   listFormAvailability,
+  listResolvedResourceInterfaces,
   listResourceSpacePolicies,
   listResourceShapes,
   previewResourceShape,
@@ -15,9 +16,9 @@ import {
 import {
   parseJsonObjectText,
   parseStringMapText,
+  resourceLaunchUrlProjections,
   resourceOutputKeys,
   resourcePhaseTone,
-  resourceSafeUrlProjections,
   resourceShapeHref,
 } from "../../../../dashboard/src/lib/resource-shapes.ts";
 
@@ -98,6 +99,74 @@ describe("Resource Shape dashboard client", () => {
     ]);
   });
 
+  test("reads exact Resource-owned resolved Interface declarations and rejects a mismatched response", async () => {
+    const calls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : String(input);
+      calls.push(url);
+      return jsonResponse({
+        interfaces: [
+          {
+            name: "http.request",
+            version: "1",
+            resource: { kind: "EdgeWorker", name: "api" },
+            resourceUri: "https://api.example.test/",
+          },
+        ],
+      });
+    }) as typeof fetch;
+
+    await expect(
+      listResolvedResourceInterfaces(
+        "workspace_1",
+        "EdgeWorker",
+        "api",
+      ),
+    ).resolves.toEqual([
+      {
+        type: "http.request",
+        version: "1",
+        resource: { kind: "EdgeWorker", name: "api" },
+        resourceUri: "https://api.example.test/",
+      },
+    ]);
+    expect(calls).toEqual([
+      "/apis/forms.takoform.com/v1alpha1/interfaces?space=workspace_1&resourceKind=EdgeWorker&resourceName=api",
+    ]);
+
+    for (const invalid of [
+      {
+        name: "http.request",
+        version: "1",
+        resource: { kind: "ContainerService", name: "api" },
+        resourceUri: "https://wrong-resource.example.test/",
+      },
+      {
+        name: "not a valid Interface type",
+        version: "1",
+        resource: { kind: "EdgeWorker", name: "api" },
+      },
+      {
+        name: "http.request",
+        version: "",
+        resource: { kind: "EdgeWorker", name: "api" },
+      },
+    ]) {
+      globalThis.fetch = (async () =>
+        jsonResponse({ interfaces: [invalid] })) as typeof fetch;
+      await expect(
+        listResolvedResourceInterfaces(
+          "workspace_1",
+          "EdgeWorker",
+          "api",
+        ),
+      ).rejects.toMatchObject({
+        code: "invalid_response",
+        status: 502,
+      });
+    }
+  });
+
   test("previews and applies the exact same typed manifest body", async () => {
     const calls: Array<{ readonly url: string; readonly init?: RequestInit }> =
       [];
@@ -108,6 +177,7 @@ describe("Resource Shape dashboard client", () => {
         name: "assets/main",
         space: "workspace_1",
         managedBy: "opentofu",
+        generation: 1,
       },
       spec: { name: "assets/main", interfaces: ["s3_api"] },
       status: { phase: "Ready", observedGeneration: 1 },
@@ -310,7 +380,7 @@ describe("Resource Shape dashboard helpers", () => {
     expect(parseStringMapText('{"priority":1}').ok).toBe(false);
   });
 
-  test("encodes detail links, status tones, and projects only an allowlisted public URL", () => {
+  test("encodes detail links, status tones, and projects exact http.request@1 resource URIs", () => {
     const resource = {
       apiVersion: "takosumi.dev/v1alpha1" as const,
       kind: "EdgeWorker",
@@ -318,6 +388,7 @@ describe("Resource Shape dashboard helpers", () => {
         name: "assets/main",
         space: "workspace_1",
         managedBy: "opentofu",
+        generation: 1,
       },
       spec: { name: "assets/main" },
       status: {
@@ -335,54 +406,87 @@ describe("Resource Shape dashboard helpers", () => {
     expect(resourcePhaseTone("Ready")).toBe("ok");
     expect(resourcePhaseTone("Failed")).toBe("danger");
     expect(resourceOutputKeys(resource)).toEqual(["secretLookingValue", "url"]);
-    expect(resourceSafeUrlProjections(resource)).toEqual([
+    expect(
+      resourceLaunchUrlProjections(resource, [
+        {
+          type: "http.request",
+          version: "1",
+          resource: { kind: "EdgeWorker", name: "assets/main" },
+          resourceUri: "https://ew-example.edge.takosumi.test",
+        },
+      ]),
+    ).toEqual([
       {
-        outputName: "url",
+        interfaceType: "http.request",
+        interfaceVersion: "1",
         url: "https://ew-example.edge.takosumi.test/",
       },
     ]);
   });
 
-  test("keeps arbitrary and credential-bearing Resource outputs hidden", () => {
+  test("never guesses launch URLs from outputs and hides absent or unsafe Interface URIs", () => {
     const base = {
       apiVersion: "takosumi.dev/v1alpha1" as const,
+      kind: "ContainerService",
       metadata: {
         name: "unsafe",
         space: "workspace_1",
         managedBy: "opentofu",
+        generation: 1,
       },
       spec: {},
       status: {
         phase: "Ready" as const,
         observedGeneration: 1,
+        outputs: {
+          url: "https://must-not-be-guessed.example.test/",
+          admin_token: "never-render-this",
+        },
       },
     };
 
     expect(
-      resourceSafeUrlProjections({
-        ...base,
-        kind: "ObjectBucket",
-        status: {
-          ...base.status,
-          outputs: {
-            url: "https://not-an-edge-worker.example.test",
-            admin_token: "never-render-this",
-          },
+      resourceLaunchUrlProjections(base, [
+        {
+          type: "http.request",
+          version: "1",
+          resource: { kind: "ContainerService", name: "unsafe" },
         },
-      }),
+      ]),
     ).toEqual([]);
     expect(
-      resourceSafeUrlProjections({
-        ...base,
-        kind: "EdgeWorker",
-        status: {
-          ...base.status,
-          outputs: {
-            url: "https://user:secret@example.test",
-            public_url: "https://not-allowlisted.example.test",
-          },
+      resourceLaunchUrlProjections(base, [
+        {
+          type: "http.request",
+          version: "1",
+          resource: { kind: "ContainerService", name: "unsafe" },
+          resourceUri: "https://user:secret@example.test",
         },
-      }),
+        {
+          type: "http.request",
+          version: "1",
+          resource: { kind: "ContainerService", name: "unsafe" },
+          resourceUri: "http://plaintext.example.test/",
+        },
+        {
+          type: "http.request",
+          version: "1",
+          resource: { kind: "ContainerService", name: "unsafe" },
+          resourceUri: "https://credential.example.test/?token=secret",
+        },
+        {
+          type: "http.request",
+          version: "2",
+          resource: { kind: "ContainerService", name: "unsafe" },
+          resourceUri: "https://wrong-version.example.test/",
+        },
+        {
+          type: "mcp.server",
+          version: "1",
+          resource: { kind: "ContainerService", name: "unsafe" },
+          resourceUri: "https://wrong-type.example.test/",
+        },
+      ]),
     ).toEqual([]);
   });
 });

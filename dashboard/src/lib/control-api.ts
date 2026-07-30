@@ -18,6 +18,10 @@
  */
 
 export { shapeKindForPortableType } from "takosumi-contract";
+import {
+  isValidInterfaceName,
+  TAKOFORM_FORM_HOST_INTERFACES_PATH,
+} from "takosumi-contract";
 import type {
   ActivityEvent as ContractActivityEvent,
   BackupRecord as ContractBackupRecord,
@@ -2295,6 +2299,21 @@ export type InstalledFormReference = ContractInstalledFormReference;
 export type ResourceTargetPoolSpec = ContractTargetPoolSpec;
 export type ResourceSpacePolicySpec = ContractSpacePolicySpec;
 
+/**
+ * Narrow dashboard projection of one exact Resource-owned, Resolved Interface.
+ * It deliberately excludes opaque `values` so navigation can never guess a
+ * URL from arbitrary Resource or Interface output fields.
+ */
+export interface ResolvedResourceInterface {
+  readonly type: string;
+  readonly version: string;
+  readonly resource: {
+    readonly kind: ResourceShapeKind;
+    readonly name: string;
+  };
+  readonly resourceUri?: string;
+}
+
 export interface ResourceShapeWriteInput {
   readonly workspaceId: string;
   readonly space: string;
@@ -2420,6 +2439,33 @@ export async function getResourceShape(
   );
 }
 
+/**
+ * Read the portable projection of canonical Resource-owned Interfaces for one
+ * exact Resource. The client revalidates the response identity instead of
+ * trusting a selector-shaped request to imply a selector-shaped response.
+ */
+export async function listResolvedResourceInterfaces(
+  space: string,
+  kind: ResourceShapeKind,
+  name: string,
+): Promise<readonly ResolvedResourceInterface[]> {
+  const body = await controlFetch<unknown>(
+    `${TAKOFORM_FORM_HOST_INTERFACES_PATH}${query({
+      space,
+      resourceKind: kind,
+      resourceName: name,
+    })}`,
+  );
+  if (!isRecord(body) || !Array.isArray(body.interfaces)) {
+    throw invalidResourceInterfaceResponse(
+      "Resource Interface list response is invalid",
+    );
+  }
+  return body.interfaces.map((value) =>
+    parseResolvedResourceInterface(value, kind, name),
+  );
+}
+
 export async function listResourceShapeEvents(
   workspaceId: string,
   space: string,
@@ -2430,6 +2476,46 @@ export async function listResourceShapeEvents(
     `${resourceShapePath(kind, name)}/events${query({ workspaceId, space })}`,
     (body) => (body.events as readonly ResourceShapeEvent[]) ?? [],
   );
+}
+
+function parseResolvedResourceInterface(
+  value: unknown,
+  expectedKind: ResourceShapeKind,
+  expectedName: string,
+): ResolvedResourceInterface {
+  if (!isRecord(value)) {
+    throw invalidResourceInterfaceResponse(
+      "Resource Interface entry is invalid",
+    );
+  }
+  const type = value.name;
+  const version = value.version;
+  const resource = value.resource;
+  const resourceUri = value.resourceUri;
+  if (
+    typeof type !== "string" ||
+    !isValidInterfaceName(type) ||
+    typeof version !== "string" ||
+    !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u.test(version) ||
+    !isRecord(resource) ||
+    resource.kind !== expectedKind ||
+    resource.name !== expectedName ||
+    (resourceUri !== undefined && typeof resourceUri !== "string")
+  ) {
+    throw invalidResourceInterfaceResponse(
+      "Resource Interface entry does not match the requested identity",
+    );
+  }
+  return {
+    type,
+    version,
+    resource: { kind: expectedKind, name: expectedName },
+    ...(resourceUri !== undefined ? { resourceUri } : {}),
+  };
+}
+
+function invalidResourceInterfaceResponse(message: string): ControlApiError {
+  return new ControlApiError(502, "invalid_response", message);
 }
 
 export async function previewResourceShape(

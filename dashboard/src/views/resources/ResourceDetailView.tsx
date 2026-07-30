@@ -23,6 +23,7 @@ import {
   deleteResourceShape,
   getResourceShape,
   listFormAvailability,
+  listResolvedResourceInterfaces,
   listResourceShapeEvents,
   observeResourceShape,
   refreshResourceShape,
@@ -31,9 +32,9 @@ import {
 import { friendlyError } from "../../lib/error-copy.ts";
 import {
   prettyJson,
+  resourceLaunchUrlProjections,
   resourceOutputKeys,
   resourcePhaseTone,
-  resourceSafeUrlProjections,
 } from "../../lib/resource-shapes.ts";
 import { useConfirmDialog } from "../../lib/confirm-dialog.ts";
 import { formatDateTime, t } from "../../i18n/index.ts";
@@ -104,6 +105,14 @@ function Inner(): JSX.Element {
   const [formAvailability] = createResource(identity, (item) =>
     listFormAvailability(item.workspaceId, item.space),
   );
+  const [resolvedInterfaces, { refetch: refetchResolvedInterfaces }] =
+    createResource(identity, (item) =>
+      listResolvedResourceInterfaces(
+        item.space,
+        item.kind,
+        item.name,
+      ),
+    );
   const [events, { refetch: refetchEvents }] = createResource(
     identity,
     (item) =>
@@ -116,6 +125,19 @@ function Inner(): JSX.Element {
   );
 
   const backHref = () => "/resources";
+  const launchUrls = createMemo(() => {
+    if (resource.error || resolvedInterfaces.error) return [];
+    const current = resource();
+    return current
+      ? resourceLaunchUrlProjections(current, resolvedInterfaces() ?? [])
+      : [];
+  });
+  const refetchResolvedInterfacesBestEffort = async (): Promise<void> => {
+    // Interface discovery is additive UI metadata. A missing host capability
+    // or transient read failure must not turn a successful Resource action
+    // into a failure.
+    await Promise.allSettled([refetchResolvedInterfaces()]);
+  };
 
   async function runAction(action: "observe" | "refresh"): Promise<void> {
     const item = identity();
@@ -144,7 +166,11 @@ function Inner(): JSX.Element {
           result.refresh?.summary ??
           t("resources.detail.actionComplete"),
       });
-      await Promise.all([refetchResource(), refetchEvents()]);
+      await Promise.all([
+        refetchResource(),
+        refetchResolvedInterfacesBestEffort(),
+        refetchEvents(),
+      ]);
     } catch (cause) {
       setMessage({ tone: "error", text: friendlyError(cause, t).message });
     } finally {
@@ -187,7 +213,11 @@ function Inner(): JSX.Element {
       tone: "success",
       text: t("resources.editor.applied"),
     });
-    await Promise.all([refetchResource(), refetchEvents()]);
+    await Promise.all([
+      refetchResource(),
+      refetchResolvedInterfacesBestEffort(),
+      refetchEvents(),
+    ]);
   }
 
   return (
@@ -433,17 +463,19 @@ function Inner(): JSX.Element {
                     subtitle={t("resources.detail.outputsHint")}
                   />
                   <CardSection>
-                    <Show when={resourceSafeUrlProjections(item()).length > 0}>
+                    <Show when={launchUrls().length > 0}>
                       <div class="rs-output-links">
-                        <For each={resourceSafeUrlProjections(item())}>
-                          {(output) => (
+                        <For each={launchUrls()}>
+                          {(launch) => (
                             <a
-                              href={output.url}
+                              href={launch.url}
                               target="_blank"
                               rel="noreferrer noopener"
                             >
-                              <code>{output.outputName}</code>
-                              <span>{output.url}</span>
+                              <code>
+                                {`${launch.interfaceType}@${launch.interfaceVersion}`}
+                              </code>
+                              <span>{launch.url}</span>
                             </a>
                           )}
                         </For>
@@ -451,13 +483,20 @@ function Inner(): JSX.Element {
                     </Show>
                     <Show
                       when={resourceOutputKeys(item()).length > 0}
-                      fallback={<p class="rs-muted">{t("common.none")}</p>}
                     >
                       <div class="rs-output-keys">
                         <For each={resourceOutputKeys(item())}>
                           {(key) => <code>{key}</code>}
                         </For>
                       </div>
+                    </Show>
+                    <Show
+                      when={
+                        launchUrls().length === 0 &&
+                        resourceOutputKeys(item()).length === 0
+                      }
+                    >
+                      <p class="rs-muted">{t("common.none")}</p>
                     </Show>
                   </CardSection>
                 </Card>
