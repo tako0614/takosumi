@@ -963,11 +963,11 @@ const gitConfig = {
 } satisfies InstallConfig;
 
 /**
- * The Takos distribution worker. It has no Store entry because Takos is the
- * workspace shell itself rather than an app installed into one, but it still
- * needs an addressable InstallConfig: the OIDC client Takos signs in with is
- * only created by the Capsule install experience, and only a Capsule-bound
- * client receives the `takosumi` workspace claims Takos requires.
+ * The Takos distribution worker. Its ordinary Cloudflare OpenTofu module is a
+ * Store-selectable BYOC service, using the same source/config matching and
+ * Output-backed launcher flow as every other Capsule. The OIDC client Takos
+ * signs in with is created by the Capsule install experience, and only a
+ * Capsule-bound client receives the `takosumi` workspace claims Takos requires.
  *
  * Unlike the identity-only apps, Takos keeps calling the control plane for the
  * signed-in account after the browser flow, so its client must be capped at the
@@ -977,6 +977,7 @@ const gitConfig = {
 const takosConfig = {
   id: "cfg-reference-takos-main",
   name: "takos-main",
+  sourceSelector: source("takos", "deploy/opentofu"),
   modulePath: "deploy/opentofu",
   variableMapping: {},
   variablePresentation: [
@@ -1033,6 +1034,27 @@ const takosConfig = {
     launch_url: urlOutput("launch_url"),
   },
   policy: {},
+  store: store({
+    source: source("takos", "deploy/opentofu"),
+    order: 5,
+    kind: "app",
+    suggestedName: "takos",
+    badgeJa: "AIワークスペース",
+    badgeEn: "AI workspace",
+    nameJa: "Takos",
+    nameEn: "Takos",
+    descriptionJa: "自分のCloudflareアカウントにAIワークスペースを配置します。",
+    descriptionEn:
+      "Deploy the Takos AI workspace to your own Cloudflare account.",
+  }),
+  interfaceBlueprints: [
+    uiBlueprint({
+      app: "takos",
+      title: "Takos",
+      outputName: "launch_url",
+      icon: "/logo.png",
+    }),
+  ],
   createdAt: REFERENCE_CONFIG_TIMESTAMP,
   updatedAt: REFERENCE_CONFIG_TIMESTAMP,
 } satisfies InstallConfig;

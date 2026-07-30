@@ -16,6 +16,7 @@ const EXPECTED_STORE_SOURCES = [
   "takos-git",
   "takos-office",
   "takos-storage",
+  "takos",
   "yurucommu",
 ].map((repo) => `https://github.com/tako0614/${repo}.git`);
 
@@ -23,7 +24,7 @@ function bindingPermissions(blueprint: CapsuleInterfaceBlueprint): string[] {
   return [...(blueprint.bindings?.[0]?.permissions ?? [])];
 }
 
-test("reference app composition exposes four replaceable Store source identities", () => {
+test("reference app composition exposes five replaceable Store source identities", () => {
   expect(REFERENCE_APP_INSTALL_CONFIGS).toHaveLength(6);
   const storeConfigs = REFERENCE_APP_INSTALL_CONFIGS.filter(
     (config) => config.store?.source !== undefined,
@@ -34,13 +35,6 @@ test("reference app composition exposes four replaceable Store source identities
   expect(
     new Set(REFERENCE_APP_INSTALL_CONFIGS.map((config) => config.id)).size,
   ).toBe(6);
-  // Takos is the workspace shell, not an app installed into one: it stays
-  // addressable without appearing in shared Store discovery.
-  expect(
-    REFERENCE_APP_INSTALL_CONFIGS.find((config) => config.name === "takos-main")
-      ?.store,
-  ).toBeUndefined();
-
   for (const config of REFERENCE_APP_INSTALL_CONFIGS) {
     expect(config.workspaceId).toBeUndefined();
     expect(config.internal).toBeUndefined();
@@ -61,7 +55,11 @@ test("reference app composition exposes four replaceable Store source identities
     expect(config.store!.source).toEqual({
       url: config.store!.source!.url,
       path:
-        config.name === "yurucommu-managed" ? "deploy/takoform" : ".",
+        config.name === "yurucommu-managed"
+          ? "deploy/takoform"
+          : config.name === "takos-main"
+            ? "deploy/opentofu"
+            : ".",
     });
     // Store presentation does not select a ref. The Source sync/Run path owns
     // the reviewed ref and resolves it to an immutable SourceSnapshot commit.
@@ -454,4 +452,32 @@ test("transitional direct Yurucommu remains addressable without competing with m
     name: "Yurucommu",
     url: launchUrl,
   });
+});
+
+test("Takos Store selection resolves the BYOC module and Output-backed launcher", () => {
+  const config = uniqueStoreInstallConfigForSource(
+    REFERENCE_APP_INSTALL_CONFIGS,
+    "https://github.com/tako0614/takos.git",
+    "deploy/opentofu",
+  );
+
+  expect(config?.name).toBe("takos-main");
+  expect(config?.sourceSelector).toEqual({
+    url: "https://github.com/tako0614/takos.git",
+    path: "deploy/opentofu",
+  });
+  expect(config?.outputAllowlist).toEqual({
+    launch_url: { from: "launch_url", type: "url", required: true },
+  });
+  expect(config?.interfaceBlueprints).toEqual([
+    expect.objectContaining({
+      name: "takos.launcher",
+      spec: expect.objectContaining({
+        type: "interface.ui.surface",
+        inputs: {
+          url: { source: "capsule_output", outputName: "launch_url" },
+        },
+      }),
+    }),
+  ]);
 });

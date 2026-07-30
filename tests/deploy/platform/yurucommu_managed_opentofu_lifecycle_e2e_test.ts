@@ -93,8 +93,21 @@ e2e("repository install executes exact OpenTofu/Takoform apply and destroy again
         await readFile(new URL("release/version.json", TAKOFORM_ROOT), "utf8"),
       ) as { readonly version: string }
     ).version;
-    expect(publishedProviderVersion).toBe("1.0.1");
-    const providerVersion = "1.0.2";
+    const yurucommuModule = await readFile(
+      new URL("deploy/takoform/main.tf", YURUCOMMU_ROOT),
+      "utf8",
+    );
+    const providerConstraint =
+      /\bsource\s*=\s*"registry\.terraform\.io\/tako0614\/takoform"\s*\n\s*version\s*=\s*"([^"]+)"/u.exec(
+        yurucommuModule,
+      )?.[1];
+    const providerVersion = /^=\s*(\d+\.\d+\.\d+)$/u.exec(
+      providerConstraint ?? "",
+    )?.[1];
+    expect(providerVersion).toBe(publishedProviderVersion);
+    if (!providerVersion) {
+      throw new Error("Yurucommu does not pin the published Takoform provider");
+    }
     const providerBinDir = join(temp, "provider-bin");
     await mkdir(providerBinDir, { recursive: true });
     const providerBinary = join(providerBinDir, "terraform-provider-takoform");
