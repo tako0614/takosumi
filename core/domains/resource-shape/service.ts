@@ -1345,6 +1345,81 @@ export class ResourceShapeService {
       }
     }
 
+    // A public preview has no apply Run yet, so a direct plugin may return a
+    // provisional native identity there. Before the first backend mutation,
+    // re-plan once with the canonical apply Run revision and persist that
+    // exact result in the ResolutionLock. Recovery reuses the already-pinned
+    // lock and never re-derives an identity under a newer adapter version.
+    if (
+      operationRun &&
+      !recoveringApplying &&
+      nativeResourcePlan.some((native) => native.ownership === "planned")
+    ) {
+      try {
+        const applyPreview = await this.#adapter.preview({
+          resourceId: id,
+          ...(req.owner ?? existing?.owner
+            ? { owner: req.owner ?? existing?.owner }
+            : {}),
+          resourceGeneration: generation,
+          resourceRevisionId: operationRun.id,
+          ...(existing?.lastOperationRunId
+            ? { previousResourceRevisionId: existing.lastOperationRunId }
+            : {}),
+          ...(form.value === undefined ? {} : { form: form.value }),
+          operationKey: operationRun.resourceOperationKey,
+          environment: req.environment ?? existing?.environment ?? "default",
+          stateGeneration:
+            existing?.execution?.stateGeneration ??
+            existing?.stateAdoption?.stateGeneration ??
+            0,
+          ...(existing?.stateAdoption
+            ? { stateAdoption: existing.stateAdoption }
+            : {}),
+          plan,
+          target: targetForImplementation(
+            entry,
+            output.selectedImplementationDescriptor,
+          ),
+          implementation: output.selectedImplementationDescriptor,
+          credentialRef: credentialRefForImplementation(
+            entry,
+            output.selectedImplementationDescriptor,
+          ),
+          nativeResources: nativeResourcePlan,
+          ...(Object.keys(resolvedConnections.value).length > 0
+            ? { resolvedConnections: resolvedConnections.value }
+            : {}),
+          actor: actorForResourceOperationRun(req.actor, operationRun),
+        });
+        nativeResourcePlan =
+          bindNativeResourceFormIdentity(
+            applyPreview.nativeResources.map((native) => ({
+              ...native,
+              ownership: "planned" as const,
+            })),
+            form.value,
+          ) ?? [];
+        if (nativeResourcePlan.length === 0) {
+          throw new Error(
+            `canonical Resource apply Run ${operationRun.id} planned no native resources`,
+          );
+        }
+      } catch (error) {
+        const terminalized = await this.#failUnclaimedPluginOperationRun({
+          run: operationRun,
+          created: operationRunCreated,
+          error,
+        });
+        return terminalized
+          ? {
+              ok: false,
+              error: { code: "apply_failed", message: errorMessage(error) },
+            }
+          : pluginOperationRunFinalizationPending(id, "apply");
+      }
+    }
+
     // Persist desired state in the Applying phase before touching the adapter.
     const applyingRecord: ResourceShapeRecord = {
       id,
