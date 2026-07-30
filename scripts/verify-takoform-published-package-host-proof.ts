@@ -11,6 +11,7 @@ import {
   parseCanonicalJson,
   type CanonicalJsonValue,
 } from "../core/adapters/takoform/canonical_json.ts";
+import { portableTypeForShapeKind } from "takosumi-contract";
 import {
   TAKOFORM_PACKAGE_ENVELOPE_MEDIA_TYPE,
   TakoformDataOnlyPackageVerifier,
@@ -26,10 +27,14 @@ import {
 
 const HOST_PROOF_PINS_PATH = fileURLToPath(
   new URL(
-    "../core/conformance/takoform-published-package-host-proof-v1.json",
+    "../core/conformance/takoform-published-package-host-proof-v2.json",
     import.meta.url,
   ),
 );
+const CURRENT_TAKOFORM_REPOSITORY =
+  "tako0614/terraform-provider-takoform";
+const HISTORICAL_PUBLICATION_REPOSITORY =
+  "tako0614/terraform-provider-takoform";
 const MAX_METADATA_BYTES = 4 << 20;
 const MAX_ARCHIVE_BYTES = 32 << 20;
 const MAX_PAYLOAD_BYTES = 16 << 20;
@@ -39,37 +44,74 @@ const PROCESS_TIMEOUT_MS = 15_000;
 const MAX_STDERR_BYTES = 64 << 10;
 export const REVIEWED_TAKOFORM_PACKAGE_KINDS = [
   "ContainerService",
-  "DurableWorkflow",
   "EdgeWorker",
-  "KVStore",
+  "KeyValueStore",
   "ObjectBucket",
   "Queue",
-  "SQLDatabase",
+  "RelationalDatabase",
   "Schedule",
-  "StatefulActorNamespace",
+  "StatefulEntity",
   "VectorIndex",
 ] as const;
 
-interface PublishedPackageSet {
-  readonly format: "takoform.published-package-set@v1";
+const STANDARD_ADMISSION_PACKAGE_KINDS = [
+  ...REVIEWED_TAKOFORM_PACKAGE_KINDS,
+  "ModelEndpoint",
+] as const;
+
+interface FormPackagePublicationSet {
+  readonly format: "takoform.form-package-publication-set@v1";
+  readonly generation: "portable-v1";
   readonly repository: string;
-  readonly packageVersion: string;
-  readonly definitionVersion: string;
+  readonly protectedMainCommit: string;
   readonly publicationStatus: "published-immutable";
   readonly admissionStatus: "external-required";
   readonly revocationCheckpointStatus: "external-required" | "published";
-  readonly trust: { readonly path: string; readonly digest: string };
-  readonly entries: readonly PublishedPackageEntry[];
+  readonly verificationPolicy: {
+    readonly bundleMediaType: string;
+    readonly certificateIdentity: string;
+    readonly oidcIssuer: string;
+    readonly trustedRoot: {
+      readonly path: string;
+      readonly sha256: string;
+      readonly sourcePath: string;
+    };
+  };
+  readonly entries: readonly PublicationEntry[];
+}
+
+interface StandardAdmissionSet {
+  readonly format: "takoform.standard-admission-set@v3";
+  readonly generation: "ga-core-v2";
+  readonly admissionReleaseTag: string;
+  readonly entries: readonly StandardAdmissionEntry[];
+}
+
+interface AdmissionVersion {
+  readonly format: "takoform.standard-admission-checkpoint@v1";
+  readonly version: string;
+  readonly tag: string;
+  readonly generation: "ga-core-v2";
+  readonly retainedRoot: "admission/v4";
 }
 
 interface HostProofPins {
-  readonly format: "takosumi.takoform-published-package-host-proof-pins@v1";
+  readonly format: "takosumi.takoform-published-package-host-proof-pins@v2";
+  readonly checkoutRepository: typeof CURRENT_TAKOFORM_REPOSITORY;
   readonly checkoutCommit: string;
-  readonly repository: string;
-  readonly packageVersion: string;
-  readonly definitionVersion: string;
-  readonly releaseCommit: string;
-  readonly publishedSet: PinnedArtifact;
+  readonly checkoutVersion: string;
+  readonly checkoutTag: string;
+  readonly admissionRoot: "admission/v4";
+  readonly admissionCheckpoint: {
+    readonly version: string;
+    readonly tag: string;
+    readonly commit: string;
+    readonly tree: string;
+  };
+  readonly historicalPublicationRepository: typeof HISTORICAL_PUBLICATION_REPOSITORY;
+  readonly standardAdmissionSet: PinnedArtifact;
+  readonly publicationSet: PinnedArtifact;
+  readonly admissionVersion: PinnedArtifact;
   readonly publishedTrust: PinnedArtifact;
   readonly trustedRoot: PinnedArtifact;
   readonly packageIndexPolicy: PinnedArtifact;
@@ -80,19 +122,29 @@ interface PinnedArtifact {
   readonly digest: string;
 }
 
-interface PublishedPackageEntry {
+interface StandardAdmissionEntry {
   readonly kind: string;
-  readonly immutable: true;
+  readonly admissionStatus: "portable-standard";
   readonly packageDigest: string;
   readonly formRef: FormRef;
-  readonly checksumsPath: string;
-  readonly checksumsDigest: string;
   readonly packageReleaseManifestPath: string;
   readonly packageReleaseManifestDigest: string;
   readonly packageIndexPath: string;
   readonly packageIndexSigstoreBundle: string;
   readonly releaseCommit: string;
   readonly releaseTag: string;
+}
+
+interface PublicationEntry {
+  readonly kind: string;
+  readonly immutable: true;
+  readonly packageDigest: string;
+  readonly formRef: FormRef;
+  readonly sourceCommit: string;
+  readonly toolingCommit: string;
+  readonly tag: string;
+  readonly sourcePath: string;
+  readonly assets: readonly ReleaseAsset[];
 }
 
 interface FormRef {
@@ -104,20 +156,38 @@ interface FormRef {
 
 export interface ReviewedPublishedPackageInstallArtifact {
   readonly kind: string;
+  readonly releaseCommit: string;
   readonly releaseTag: string;
   readonly packageDigest: string;
   readonly formRef: FormRef;
+  readonly hostFormRef: HostFormRef;
   readonly envelopeBytes: Uint8Array;
 }
 
+interface HostFormRef {
+  readonly type: string;
+  readonly version: string;
+  readonly schemaDigest: string;
+}
+
 export interface ReviewedPublishedPackageInstallSet {
-  readonly format: "takosumi.reviewed-takoform-package-install-set@v1";
-  readonly repository: string;
+  readonly format: "takosumi.reviewed-takoform-package-install-set@v2";
+  readonly repository: typeof CURRENT_TAKOFORM_REPOSITORY;
   readonly checkoutCommit: string;
-  readonly releaseCommit: string;
-  readonly packageVersion: string;
-  readonly definitionVersion: string;
-  readonly publishedSet: PinnedArtifact;
+  readonly checkoutVersion: string;
+  readonly admission: {
+    readonly root: "admission/v4";
+    readonly version: string;
+    readonly tag: string;
+    readonly commit: string;
+    readonly tree: string;
+  };
+  readonly historicalPublication: {
+    readonly repository: typeof HISTORICAL_PUBLICATION_REPOSITORY;
+    readonly publicationSet: PinnedArtifact;
+  };
+  readonly standardAdmissionSet: PinnedArtifact;
+  readonly admissionVersion: PinnedArtifact;
   readonly publishedTrust: PinnedArtifact;
   readonly packageIndexPolicy: PinnedArtifact;
   readonly trustedRoot: PinnedArtifact & { readonly bytes: Uint8Array };
@@ -127,7 +197,7 @@ export interface ReviewedPublishedPackageInstallSet {
 }
 
 interface PublishedPackageTrust {
-  readonly format: "takoform.published-package-trust@v1";
+  readonly format: "takoform.published-package-trust@v2";
   readonly trustedRoot: { readonly path: string; readonly digest: string };
   readonly packageIndexPolicy: {
     readonly path: string;
@@ -147,18 +217,24 @@ interface PackageReleaseManifest {
   readonly releaseType: "form-package";
   readonly tag: string;
   readonly sourceCommit: string;
+  readonly toolingCommit: string;
+  readonly sourceRepository: string;
+  readonly packageVersion: string;
   readonly packageDigest: string;
   readonly formRef: FormRef;
   readonly signedSubject: string;
   readonly signatureBundle: string;
   readonly publicationReady: true;
   readonly publicationBlockers: readonly unknown[];
-  readonly assets: readonly {
-    readonly name: string;
-    readonly mediaType: string;
-    readonly size: number;
-    readonly digest: string;
-  }[];
+  readonly assets: readonly ReleaseAsset[];
+}
+
+interface ReleaseAsset {
+  readonly name: string;
+  readonly mediaType?: string;
+  readonly size: number;
+  readonly digest?: string;
+  readonly sha256?: string;
 }
 
 interface PackageIndex {
@@ -171,20 +247,25 @@ interface PackageIndex {
 }
 
 export interface PublishedPackageHostProofResult {
-  readonly kind: "takosumi.takoform-published-package-host-proof@v1";
+  readonly kind: "takosumi.takoform-published-package-host-proof@v2";
   readonly status: "passed";
   readonly evidenceLevel: "repo_regression";
   readonly packageCount: number;
   readonly kinds: readonly string[];
   readonly releaseCommits: readonly string[];
-  readonly packageVersion: string;
-  readonly definitionVersion: string;
-  readonly publishedSetDigest: string;
+  readonly definitionVersions: readonly string[];
+  readonly checkoutRepository: typeof CURRENT_TAKOFORM_REPOSITORY;
+  readonly checkoutCommit: string;
+  readonly checkoutVersion: string;
+  readonly admissionCheckpointVersion: string;
+  readonly admissionReleaseTag: string;
+  readonly standardAdmissionSetDigest: string;
+  readonly publicationSetDigest: string;
   readonly verifierId: string;
   readonly transparencyTamperRejection: "passed";
   readonly installReplay: "passed";
   readonly serviceReconstructionReverification: "passed";
-  readonly admissionStatus: "external-required";
+  readonly admissionStatus: "portable-standard";
   readonly unsettledPublisherRoles: readonly string[];
   readonly revocationCheckpointStatus: "external-required" | "published";
 }
@@ -216,8 +297,9 @@ export async function verifyPublishedPackageHostProof(
   const {
     pins,
     retained,
-    publishedSetBytes,
-    publishedSet,
+    standardAdmissionSetBytes,
+    publicationSetBytes,
+    publicationSet,
     trust,
     trustedRootPath,
     trustedRootBytes,
@@ -252,7 +334,7 @@ export async function verifyPublishedPackageHostProof(
     if (position === 0) {
       await assertTransparencyTamperRejected(signatureVerifier, envelope);
     }
-    const artifactRef = `retained:takoform/${entry.kind}/${prepared.packageVersion}`;
+    const artifactRef = retainedArtifactRef(entry);
     artifacts.set(artifactRef, envelope);
     const installed = await registry.installPackage({
       artifactRef,
@@ -261,7 +343,7 @@ export async function verifyPublishedPackageHostProof(
     });
     if (
       installed.packageDigest !== entry.packageDigest ||
-      !sameJson(installed.definitionRefs, [entry.formRef])
+      !sameJson(installed.definitionRefs, [entry.hostFormRef])
     ) {
       throw new Error(`${entry.kind} installed identity drifted`);
     }
@@ -292,47 +374,64 @@ export async function verifyPublishedPackageHostProof(
   });
   for (const entry of prepared.packages) {
     const identity = {
-      formRef: entry.formRef,
+      ...entry.hostFormRef,
       packageDigest: entry.packageDigest,
     };
     await reconstructed.getRetainedIdentity(identity);
     await reconstructed.verifyRetainedIdentity(identity);
     await reconstructed.installPackage({
-      artifactRef: `retained:takoform/${entry.kind}/${prepared.packageVersion}`,
+      artifactRef: retainedArtifactRef(entry),
       expectedPackageDigest: entry.packageDigest,
       actorId: "operator:published-package-host-proof",
     });
   }
 
   return {
-    kind: "takosumi.takoform-published-package-host-proof@v1",
+    kind: "takosumi.takoform-published-package-host-proof@v2",
     status: "passed",
     evidenceLevel: "repo_regression",
-    packageCount: publishedSet.entries.length,
-    kinds: publishedSet.entries.map(({ kind }) => kind).sort(),
+    packageCount: prepared.packages.length,
+    kinds: prepared.packages.map(({ kind }) => kind).sort(),
     releaseCommits: [
       ...new Set(
-        publishedSet.entries.map(({ releaseCommit }) => releaseCommit),
+        prepared.packages.map(({ releaseCommit }) => releaseCommit),
       ),
     ].sort(),
-    packageVersion: publishedSet.packageVersion,
-    definitionVersion: publishedSet.definitionVersion,
-    publishedSetDigest: sha256(publishedSetBytes),
+    definitionVersions: [
+      ...new Set(
+        prepared.packages.map(({ formRef }) => formRef.definitionVersion),
+      ),
+    ].sort(),
+    checkoutRepository: pins.checkoutRepository,
+    checkoutCommit: pins.checkoutCommit,
+    checkoutVersion: pins.checkoutVersion,
+    admissionCheckpointVersion: pins.admissionCheckpoint.version,
+    admissionReleaseTag: pins.admissionCheckpoint.tag,
+    standardAdmissionSetDigest: sha256(standardAdmissionSetBytes),
+    publicationSetDigest: sha256(publicationSetBytes),
     verifierId: verifier.id,
     transparencyTamperRejection: "passed",
     installReplay: "passed",
     serviceReconstructionReverification: "passed",
-    admissionStatus: publishedSet.admissionStatus,
+    admissionStatus: "portable-standard",
     unsettledPublisherRoles: [...trust.unsettledPublisherRoles].sort(),
-    revocationCheckpointStatus: publishedSet.revocationCheckpointStatus,
+    revocationCheckpointStatus: publicationSet.revocationCheckpointStatus,
   };
+}
+
+function retainedArtifactRef(
+  entry: ReviewedPublishedPackageInstallArtifact,
+): string {
+  return `retained:takoform/${entry.kind}/${entry.formRef.definitionVersion}/${entry.packageDigest}`;
 }
 
 interface ReviewedPublishedPackageContext {
   readonly pins: HostProofPins;
   readonly retained: RetainedRoot;
-  readonly publishedSetBytes: Uint8Array;
-  readonly publishedSet: PublishedPackageSet;
+  readonly standardAdmissionSetBytes: Uint8Array;
+  readonly standardAdmissionSet: StandardAdmissionSet;
+  readonly publicationSetBytes: Uint8Array;
+  readonly publicationSet: FormPackagePublicationSet;
   readonly trust: PublishedPackageTrust;
   readonly trustedRootPath: string;
   readonly trustedRootBytes: Uint8Array;
@@ -352,31 +451,76 @@ async function loadReviewedPublishedPackageContext(
 ): Promise<ReviewedPublishedPackageContext> {
   const pins = await loadHostProofPins();
   const retained = await RetainedRoot.open(takoformRoot);
+  await retained.assertOriginRepository(pins.checkoutRepository);
   await retained.assertCleanCheckout(pins.checkoutCommit);
-  const publishedSetBytes = await retained.read(pins.publishedSet.path);
-  assertDigest(
-    publishedSetBytes,
-    pins.publishedSet.digest,
-    "pinned published set",
+  await retained.assertRefCommit(pins.checkoutTag, pins.checkoutCommit);
+  await retained.assertRefCommit(
+    pins.admissionCheckpoint.tag,
+    pins.admissionCheckpoint.commit,
   );
-  const publishedSet = parseJson<PublishedPackageSet>(publishedSetBytes);
-  assertPublishedSet(publishedSet, pins);
+  await retained.assertTree(
+    pins.checkoutCommit,
+    pins.admissionRoot,
+    pins.admissionCheckpoint.tree,
+  );
+  await retained.assertTree(
+    pins.admissionCheckpoint.commit,
+    pins.admissionRoot,
+    pins.admissionCheckpoint.tree,
+  );
 
-  const publishedTrustPath = `admission/v1/${publishedSet.trust.path}`;
-  if (
-    publishedTrustPath !== pins.publishedTrust.path ||
-    publishedSet.trust.digest !== pins.publishedTrust.digest
-  ) {
-    throw new Error("published trust differs from Takosumi's reviewed pin");
+  const admissionVersionBytes = await retained.read(pins.admissionVersion.path);
+  assertDigest(
+    admissionVersionBytes,
+    pins.admissionVersion.digest,
+    "pinned admission version",
+  );
+  assertAdmissionVersion(
+    parseJson<AdmissionVersion>(admissionVersionBytes),
+    pins,
+  );
+
+  const standardAdmissionSetBytes = await retained.read(
+    pins.standardAdmissionSet.path,
+  );
+  assertDigest(
+    standardAdmissionSetBytes,
+    pins.standardAdmissionSet.digest,
+    "pinned Standard admission set",
+  );
+  const standardAdmissionSet = parseJson<StandardAdmissionSet>(
+    standardAdmissionSetBytes,
+  );
+  assertStandardAdmissionSet(standardAdmissionSet, pins);
+  for (const entry of standardAdmissionSet.entries) {
+    if (
+      (REVIEWED_TAKOFORM_PACKAGE_KINDS as readonly string[]).includes(
+        entry.kind,
+      )
+    ) {
+      await retained.assertRefCommit(entry.releaseTag, entry.releaseCommit);
+    }
   }
-  const trustBytes = await retained.read(publishedTrustPath);
-  assertDigest(trustBytes, publishedSet.trust.digest, "published trust");
+
+  const publicationSetBytes = await retained.read(pins.publicationSet.path);
+  assertDigest(
+    publicationSetBytes,
+    pins.publicationSet.digest,
+    "pinned Form Package publication set",
+  );
+  const publicationSet = parseJson<FormPackagePublicationSet>(
+    publicationSetBytes,
+  );
+  assertPublicationSet(publicationSet, standardAdmissionSet, pins);
+
+  const trustBytes = await retained.read(pins.publishedTrust.path);
+  assertDigest(trustBytes, pins.publishedTrust.digest, "published trust");
   const trust = parseJson<PublishedPackageTrust>(trustBytes);
-  if (trust.format !== "takoform.published-package-trust@v1") {
+  if (trust.format !== "takoform.published-package-trust@v2") {
     throw new Error("unsupported published package trust format");
   }
 
-  const trustedRootPath = `admission/v1/${trust.trustedRoot.path}`;
+  const trustedRootPath = admissionPath(pins, trust.trustedRoot.path);
   if (
     trustedRootPath !== pins.trustedRoot.path ||
     trust.trustedRoot.digest !== pins.trustedRoot.digest
@@ -385,7 +529,20 @@ async function loadReviewedPublishedPackageContext(
   }
   const trustedRootBytes = await retained.read(trustedRootPath);
   assertDigest(trustedRootBytes, trust.trustedRoot.digest, "TrustedRoot");
-  const packageIndexPolicyPath = `admission/v1/${trust.packageIndexPolicy.path}`;
+  if (
+    publicationSet.verificationPolicy.trustedRoot.path !==
+      trust.trustedRoot.path ||
+    publicationSet.verificationPolicy.trustedRoot.sha256 !==
+      trust.trustedRoot.digest
+  ) {
+    throw new Error(
+      "publication set TrustedRoot differs from Takosumi's reviewed pin",
+    );
+  }
+  const packageIndexPolicyPath = admissionPath(
+    pins,
+    trust.packageIndexPolicy.path,
+  );
   if (
     packageIndexPolicyPath !== pins.packageIndexPolicy.path ||
     trust.packageIndexPolicy.digest !== pins.packageIndexPolicy.digest
@@ -401,23 +558,47 @@ async function loadReviewedPublishedPackageContext(
     "package index policy",
   );
   const packagePolicy = parseJson<PackageIndexPolicy>(policyBytes);
+  if (
+    packagePolicy.oidcIssuer !==
+      publicationSet.verificationPolicy.oidcIssuer ||
+    packagePolicy.certificateIdentity !==
+      publicationSet.verificationPolicy.certificateIdentity ||
+    packagePolicy.bundleMediaType !==
+      publicationSet.verificationPolicy.bundleMediaType
+  ) {
+    throw new Error(
+      "package index policy differs from the immutable publication set",
+    );
+  }
   return {
     pins,
     retained,
-    publishedSetBytes,
-    publishedSet,
+    standardAdmissionSetBytes,
+    standardAdmissionSet,
+    publicationSetBytes,
+    publicationSet,
     trust,
     trustedRootPath,
     trustedRootBytes,
-    publisher: parsePublisherIdentity(packagePolicy, publishedSet.repository),
+    publisher: parsePublisherIdentity(
+      packagePolicy,
+      pins.historicalPublicationRepository,
+    ),
   };
 }
 
 async function buildReviewedPublishedPackageInstallSet(
   context: ReviewedPublishedPackageContext,
 ): Promise<ReviewedPublishedPackageInstallSet> {
-  const { pins, retained, publishedSet, trust, trustedRootBytes, publisher } =
-    context;
+  const {
+    pins,
+    retained,
+    standardAdmissionSet,
+    publicationSet,
+    trust,
+    trustedRootBytes,
+    publisher,
+  } = context;
   const verifier = new TakoformDataOnlyPackageVerifier(
     new SigstoreTakoformPackageSignatureVerifier({
       trustedRootDigest: trust.trustedRoot.digest as `sha256:${string}`,
@@ -426,36 +607,62 @@ async function buildReviewedPublishedPackageInstallSet(
     }),
   );
   const packages: ReviewedPublishedPackageInstallArtifact[] = [];
-  for (const entry of [...publishedSet.entries].sort((left, right) =>
-    left.kind.localeCompare(right.kind),
-  )) {
-    const envelopeBytes = await buildInstallEnvelope(retained, entry);
+  const admissionEntries = standardAdmissionSet.entries
+    .filter(({ kind }) =>
+      (REVIEWED_TAKOFORM_PACKAGE_KINDS as readonly string[]).includes(kind),
+    )
+    .sort((left, right) => left.kind.localeCompare(right.kind));
+  for (const entry of admissionEntries) {
+    const publicationEntry = publicationSet.entries.find(
+      ({ kind }) => kind === entry.kind,
+    );
+    if (!publicationEntry) {
+      throw new Error(`${entry.kind} publication entry is missing`);
+    }
+    const envelopeBytes = await buildInstallEnvelope(
+      retained,
+      pins,
+      entry,
+      publicationEntry,
+    );
     const verified = await verifier.verify(envelopeBytes, entry.packageDigest);
     if (
       verified.packageDigest !== entry.packageDigest ||
       !sameJson(
         verified.definitions.map(({ formRef }) => formRef),
-        [entry.formRef],
+        [projectTakoformFormRef(entry.formRef)],
       )
     ) {
       throw new Error(`${entry.kind} verified identity drifted`);
     }
     packages.push({
       kind: entry.kind,
+      releaseCommit: entry.releaseCommit,
       releaseTag: entry.releaseTag,
       packageDigest: entry.packageDigest,
       formRef: entry.formRef,
+      hostFormRef: projectTakoformFormRef(entry.formRef),
       envelopeBytes,
     });
   }
   return {
-    format: "takosumi.reviewed-takoform-package-install-set@v1",
-    repository: pins.repository,
+    format: "takosumi.reviewed-takoform-package-install-set@v2",
+    repository: pins.checkoutRepository,
     checkoutCommit: pins.checkoutCommit,
-    releaseCommit: pins.releaseCommit,
-    packageVersion: pins.packageVersion,
-    definitionVersion: pins.definitionVersion,
-    publishedSet: pins.publishedSet,
+    checkoutVersion: pins.checkoutVersion,
+    admission: {
+      root: pins.admissionRoot,
+      version: pins.admissionCheckpoint.version,
+      tag: pins.admissionCheckpoint.tag,
+      commit: pins.admissionCheckpoint.commit,
+      tree: pins.admissionCheckpoint.tree,
+    },
+    historicalPublication: {
+      repository: pins.historicalPublicationRepository,
+      publicationSet: pins.publicationSet,
+    },
+    standardAdmissionSet: pins.standardAdmissionSet,
+    admissionVersion: pins.admissionVersion,
     publishedTrust: pins.publishedTrust,
     packageIndexPolicy: pins.packageIndexPolicy,
     trustedRoot: { ...pins.trustedRoot, bytes: trustedRootBytes },
@@ -541,10 +748,25 @@ function getNested(
 
 async function buildInstallEnvelope(
   retained: RetainedRoot,
-  entry: PublishedPackageEntry,
+  pins: HostProofPins,
+  entry: StandardAdmissionEntry,
+  publicationEntry: PublicationEntry,
 ): Promise<Uint8Array> {
+  const releaseDirectory = dirname(entry.packageReleaseManifestPath);
+  if (
+    publicationEntry.immutable !== true ||
+    publicationEntry.kind !== entry.kind ||
+    publicationEntry.packageDigest !== entry.packageDigest ||
+    publicationEntry.sourceCommit !== entry.releaseCommit ||
+    publicationEntry.tag !== entry.releaseTag ||
+    !sameJson(publicationEntry.formRef, entry.formRef) ||
+    dirname(entry.packageIndexPath) !== releaseDirectory ||
+    dirname(entry.packageIndexSigstoreBundle) !== releaseDirectory
+  ) {
+    throw new Error(`${entry.kind} publication identity drifted`);
+  }
   const manifestBytes = await retained.read(
-    `admission/v1/${entry.packageReleaseManifestPath}`,
+    admissionPath(pins, entry.packageReleaseManifestPath),
   );
   assertDigest(
     manifestBytes,
@@ -558,22 +780,57 @@ async function buildInstallEnvelope(
     manifest.publicationBlockers.length !== 0 ||
     manifest.tag !== entry.releaseTag ||
     manifest.sourceCommit !== entry.releaseCommit ||
+    manifest.toolingCommit !== publicationEntry.toolingCommit ||
+    manifest.sourceRepository !==
+      `github.com/${pins.historicalPublicationRepository}` ||
+    manifest.packageVersion !== entry.formRef.definitionVersion ||
     manifest.packageDigest !== entry.packageDigest ||
-    !sameJson(manifest.formRef, entry.formRef)
+    !sameJson(manifest.formRef, entry.formRef) ||
+    manifest.signedSubject !==
+      entry.packageIndexPath.slice(
+        `${dirname(entry.packageIndexPath)}/`.length,
+      ) ||
+    manifest.signatureBundle !==
+      entry.packageIndexSigstoreBundle.slice(
+        `${dirname(entry.packageIndexSigstoreBundle)}/`.length,
+      )
   ) {
     throw new Error(`${entry.kind} release manifest does not match its root`);
   }
 
+  const publicationAssets = new Map(
+    publicationEntry.assets.map((asset) => [asset.name, asset]),
+  );
+  if (
+    publicationAssets.size !== publicationEntry.assets.length ||
+    publicationEntry.assets.length !== manifest.assets.length + 2
+  ) {
+    throw new Error(`${entry.kind} publication asset closure drifted`);
+  }
+  const manifestAsset = publicationAssets.get("release-manifest.json");
+  if (
+    !manifestAsset ||
+    manifestAsset.size !== manifestBytes.byteLength ||
+    releaseAssetDigest(manifestAsset) !== sha256(manifestBytes)
+  ) {
+    throw new Error(`${entry.kind} publication manifest binding drifted`);
+  }
+
+  const checksumsPath = `${releaseDirectory}/SHA256SUMS`;
+  const checksumsAsset = publicationAssets.get("SHA256SUMS");
+  if (!checksumsAsset) {
+    throw new Error(`${entry.kind} published checksums are missing`);
+  }
   const checksumsBytes = await retained.read(
-    `admission/v1/${entry.checksumsPath}`,
+    admissionPath(pins, checksumsPath),
   );
-  assertDigest(
-    checksumsBytes,
-    entry.checksumsDigest,
-    `${entry.kind} checksums`,
-  );
+  if (
+    checksumsBytes.byteLength !== checksumsAsset.size ||
+    sha256(checksumsBytes) !== releaseAssetDigest(checksumsAsset)
+  ) {
+    throw new Error(`${entry.kind} published checksums drifted`);
+  }
   const checksums = parseChecksums(new TextDecoder().decode(checksumsBytes));
-  const releaseDirectory = dirname(entry.packageReleaseManifestPath);
   if (checksums.get("release-manifest.json") !== sha256Hex(manifestBytes)) {
     throw new Error(
       `${entry.kind} checksums do not bind release-manifest.json`,
@@ -581,15 +838,25 @@ async function buildInstallEnvelope(
   }
 
   for (const asset of manifest.assets) {
+    const publicationAsset = publicationAssets.get(asset.name);
+    if (
+      !publicationAsset ||
+      publicationAsset.size !== asset.size ||
+      releaseAssetDigest(publicationAsset) !== releaseAssetDigest(asset)
+    ) {
+      throw new Error(
+        `${entry.kind} release asset ${asset.name} publication binding drifted`,
+      );
+    }
     const bytes = await retained.read(
-      `admission/v1/${releaseDirectory}/${asset.name}`,
+      admissionPath(pins, `${releaseDirectory}/${asset.name}`),
       asset.mediaType === "application/gzip"
         ? MAX_ARCHIVE_BYTES
         : MAX_METADATA_BYTES,
     );
     if (
       bytes.byteLength !== asset.size ||
-      sha256(bytes) !== asset.digest ||
+      sha256(bytes) !== releaseAssetDigest(asset) ||
       checksums.get(asset.name) !== sha256Hex(bytes)
     ) {
       throw new Error(`${entry.kind} release asset ${asset.name} drifted`);
@@ -600,7 +867,7 @@ async function buildInstallEnvelope(
   }
 
   const indexBytes = await retained.read(
-    `admission/v1/${entry.packageIndexPath}`,
+    admissionPath(pins, entry.packageIndexPath),
   );
   assertDigest(indexBytes, entry.packageDigest, `${entry.kind} package index`);
   const index = parseJson<PackageIndex>(indexBytes);
@@ -608,7 +875,7 @@ async function buildInstallEnvelope(
     throw new Error(`${entry.kind} package index FormRef drifted`);
   }
   const bundleBytes = await retained.read(
-    `admission/v1/${entry.packageIndexSigstoreBundle}`,
+    admissionPath(pins, entry.packageIndexSigstoreBundle),
   );
   const bundle = parseCanonicalJson(bundleBytes);
 
@@ -618,7 +885,7 @@ async function buildInstallEnvelope(
   if (!archiveAsset)
     throw new Error(`${entry.kind} package archive is missing`);
   const archivePath = await retained.path(
-    `admission/v1/${releaseDirectory}/${archiveAsset.name}`,
+    admissionPath(pins, `${releaseDirectory}/${archiveAsset.name}`),
   );
   const archiveEntries = await listTarEntries(archivePath);
   const archiveEntriesByPath = new Map(
@@ -664,6 +931,14 @@ async function buildInstallEnvelope(
     files,
     sigstoreBundle: bundle,
   } as CanonicalJsonValue);
+}
+
+function releaseAssetDigest(asset: ReleaseAsset): string {
+  const digest = asset.digest ?? asset.sha256;
+  if (!digest || !/^sha256:[a-f0-9]{64}$/u.test(digest)) {
+    throw new Error(`release asset ${asset.name} digest is invalid`);
+  }
+  return digest;
 }
 
 export function parsePublisherIdentity(
@@ -725,6 +1000,24 @@ export class RetainedRoot {
     return new RetainedRoot(root);
   }
 
+  async assertOriginRepository(expectedRepository: string): Promise<void> {
+    const remote = new TextDecoder()
+      .decode(
+        await runProcess(
+          ["git", "-C", this.root, "remote", "get-url", "origin"],
+          MAX_METADATA_BYTES,
+          "git origin readback",
+        ),
+      )
+      .trim();
+    const observedRepository = githubRepositoryFromRemote(remote);
+    if (observedRepository !== expectedRepository) {
+      throw new Error(
+        `Takoform checkout origin mismatch: expected ${expectedRepository}, got ${observedRepository ?? "unsupported remote"}`,
+      );
+    }
+  }
+
   async assertCleanCheckout(expectedCommit: string): Promise<void> {
     const head = new TextDecoder()
       .decode(
@@ -749,6 +1042,66 @@ export class RetainedRoot {
     );
     if (status.length !== 0) {
       throw new Error("Takoform retained checkout must be clean");
+    }
+  }
+
+  async assertRefCommit(ref: string, expectedCommit: string): Promise<void> {
+    const observed = new TextDecoder()
+      .decode(
+        await runProcess(
+          [
+            "git",
+            "-C",
+            this.root,
+            "rev-parse",
+            "--verify",
+            `${ref}^{commit}`,
+          ],
+          MAX_METADATA_BYTES,
+          "git ref readback",
+        ),
+      )
+      .trim();
+    if (observed !== expectedCommit) {
+      throw new Error(
+        `Takoform ref ${ref} commit mismatch: expected ${expectedCommit}, got ${observed}`,
+      );
+    }
+  }
+
+  async assertTree(
+    commit: string,
+    path: string,
+    expectedTree: string,
+  ): Promise<void> {
+    if (
+      !/^[a-f0-9]{40}$/u.test(commit) ||
+      !/^[A-Za-z0-9._/-]+$/u.test(path) ||
+      path.startsWith("/") ||
+      path.includes("..")
+    ) {
+      throw new Error("Takoform retained tree pin is invalid");
+    }
+    const observed = new TextDecoder()
+      .decode(
+        await runProcess(
+          [
+            "git",
+            "-C",
+            this.root,
+            "rev-parse",
+            "--verify",
+            `${commit}:${path}`,
+          ],
+          MAX_METADATA_BYTES,
+          "git tree readback",
+        ),
+      )
+      .trim();
+    if (observed !== expectedTree) {
+      throw new Error(
+        `Takoform ${path} tree mismatch: expected ${expectedTree}, got ${observed}`,
+      );
     }
   }
 
@@ -813,6 +1166,23 @@ export class RetainedRoot {
     }
     return resolved;
   }
+}
+
+function githubRepositoryFromRemote(remote: string): string | undefined {
+  const prefixes = [
+    "https://github.com/",
+    "git@github.com:",
+    "ssh://git@github.com/",
+  ] as const;
+  const prefix = prefixes.find((candidate) => remote.startsWith(candidate));
+  if (!prefix) return undefined;
+  const remainder = remote.slice(prefix.length);
+  const repository = remainder.endsWith(".git")
+    ? remainder.slice(0, -".git".length)
+    : remainder;
+  return /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(repository)
+    ? repository
+    : undefined;
 }
 
 interface TarEntry {
@@ -1005,32 +1375,87 @@ async function readBoundedStream(
   return output;
 }
 
-function assertPublishedSet(
-  value: PublishedPackageSet,
+function assertAdmissionVersion(
+  value: AdmissionVersion,
   pins: HostProofPins,
 ): void {
   if (
-    value.format !== "takoform.published-package-set@v1" ||
-    value.publicationStatus !== "published-immutable" ||
-    value.admissionStatus !== "external-required" ||
-    value.repository !== pins.repository ||
-    value.packageVersion !== pins.packageVersion ||
-    value.definitionVersion !== pins.definitionVersion ||
-    value.entries.length !== REVIEWED_TAKOFORM_PACKAGE_KINDS.length ||
+    value.format !== "takoform.standard-admission-checkpoint@v1" ||
+    value.generation !== "ga-core-v2" ||
+    value.retainedRoot !== pins.admissionRoot ||
+    value.version !== pins.admissionCheckpoint.version ||
+    value.tag !== pins.admissionCheckpoint.tag
+  ) {
+    throw new Error("Standard admission checkpoint differs from its pin");
+  }
+}
+
+function assertStandardAdmissionSet(
+  value: StandardAdmissionSet,
+  pins: HostProofPins,
+): void {
+  if (
+    value.format !== "takoform.standard-admission-set@v3" ||
+    value.generation !== "ga-core-v2" ||
+    value.admissionReleaseTag !== pins.admissionCheckpoint.tag ||
+    value.entries.length !== STANDARD_ADMISSION_PACKAGE_KINDS.length ||
     !sameJson(
       value.entries.map(({ kind }) => kind).sort(),
-      [...REVIEWED_TAKOFORM_PACKAGE_KINDS].sort(),
+      [...STANDARD_ADMISSION_PACKAGE_KINDS].sort(),
     ) ||
     value.entries.some(
       (entry) =>
-        entry.immutable !== true ||
+        entry.admissionStatus !== "portable-standard" ||
         entry.formRef.kind !== entry.kind ||
-        entry.formRef.definitionVersion !== pins.definitionVersion ||
-        entry.releaseCommit !== pins.releaseCommit ||
-        !/^sha256:[a-f0-9]{64}$/u.test(entry.packageDigest),
+        !isFormRef(entry.formRef) ||
+        !/^sha256:[a-f0-9]{64}$/u.test(entry.packageDigest) ||
+        !/^sha256:[a-f0-9]{64}$/u.test(
+          entry.packageReleaseManifestDigest,
+        ) ||
+        !/^[a-f0-9]{40}$/u.test(entry.releaseCommit) ||
+        !/^forms\/k-[a-z0-9]+\/v\d+\.\d+\.\d+$/u.test(entry.releaseTag) ||
+        !isAdmissionRelativePath(entry.packageReleaseManifestPath) ||
+        !isAdmissionRelativePath(entry.packageIndexPath) ||
+        !isAdmissionRelativePath(entry.packageIndexSigstoreBundle),
     )
   ) {
-    throw new Error("published package set is incomplete or not immutable");
+    throw new Error("Standard admission set is incomplete or invalid");
+  }
+}
+
+function assertPublicationSet(
+  value: FormPackagePublicationSet,
+  standard: StandardAdmissionSet,
+  pins: HostProofPins,
+): void {
+  const publicationByKind = new Map(
+    value.entries.map((entry) => [entry.kind, entry]),
+  );
+  if (
+    value.format !== "takoform.form-package-publication-set@v1" ||
+    value.generation !== "portable-v1" ||
+    value.publicationStatus !== "published-immutable" ||
+    value.admissionStatus !== "external-required" ||
+    value.repository !== pins.historicalPublicationRepository ||
+    value.repository !== HISTORICAL_PUBLICATION_REPOSITORY ||
+    !/^[a-f0-9]{40}$/u.test(value.protectedMainCommit) ||
+    publicationByKind.size !== value.entries.length ||
+    standard.entries.some((entry) => {
+      const published = publicationByKind.get(entry.kind);
+      return (
+        !published ||
+        published.immutable !== true ||
+        published.packageDigest !== entry.packageDigest ||
+        published.sourceCommit !== entry.releaseCommit ||
+        published.tag !== entry.releaseTag ||
+        !sameJson(published.formRef, entry.formRef) ||
+        published.assets.length === 0
+      );
+    })
+  ) {
+    throw new Error(
+      "Form Package publication set is incomplete or not immutable",
+    );
   }
 }
 
@@ -1040,21 +1465,32 @@ async function loadHostProofPins(): Promise<HostProofPins> {
   assertClosedObject(
     pins,
     [
+      "admissionCheckpoint",
+      "admissionRoot",
+      "admissionVersion",
       "checkoutCommit",
-      "definitionVersion",
+      "checkoutRepository",
+      "checkoutTag",
+      "checkoutVersion",
       "format",
+      "historicalPublicationRepository",
       "packageIndexPolicy",
-      "packageVersion",
-      "publishedSet",
+      "publicationSet",
       "publishedTrust",
-      "releaseCommit",
-      "repository",
+      "standardAdmissionSet",
       "trustedRoot",
     ],
     "host proof pins",
   );
+  assertClosedObject(
+    pins.admissionCheckpoint,
+    ["commit", "tag", "tree", "version"],
+    "admission checkpoint pin",
+  );
   for (const [name, artifact] of Object.entries({
-    publishedSet: pins.publishedSet,
+    admissionVersion: pins.admissionVersion,
+    standardAdmissionSet: pins.standardAdmissionSet,
+    publicationSet: pins.publicationSet,
     publishedTrust: pins.publishedTrust,
     trustedRoot: pins.trustedRoot,
     packageIndexPolicy: pins.packageIndexPolicy,
@@ -1062,27 +1498,76 @@ async function loadHostProofPins(): Promise<HostProofPins> {
     assertClosedObject(artifact, ["digest", "path"], `${name} pin`);
   }
   if (
-    pins.format !== "takosumi.takoform-published-package-host-proof-pins@v1" ||
+    pins.format !== "takosumi.takoform-published-package-host-proof-pins@v2" ||
+    pins.checkoutRepository !== CURRENT_TAKOFORM_REPOSITORY ||
+    pins.historicalPublicationRepository !==
+      HISTORICAL_PUBLICATION_REPOSITORY ||
     !/^[a-f0-9]{40}$/u.test(pins.checkoutCommit) ||
-    !/^[a-f0-9]{40}$/u.test(pins.releaseCommit) ||
-    !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(pins.repository) ||
-    !/^\d+\.\d+\.\d+$/u.test(pins.packageVersion) ||
-    !/^\d+\.\d+\.\d+$/u.test(pins.definitionVersion) ||
+    !/^\d+\.\d+\.\d+$/u.test(pins.checkoutVersion) ||
+    pins.checkoutTag !== `v${pins.checkoutVersion}` ||
+    pins.admissionRoot !== "admission/v4" ||
+    !/^\d+\.\d+\.\d+$/u.test(pins.admissionCheckpoint.version) ||
+    pins.admissionCheckpoint.tag !==
+      `forms/admissions/v${pins.admissionCheckpoint.version}` ||
+    !/^[a-f0-9]{40}$/u.test(pins.admissionCheckpoint.commit) ||
+    !/^[a-f0-9]{40}$/u.test(pins.admissionCheckpoint.tree) ||
     [
-      pins.publishedSet,
+      pins.admissionVersion,
+      pins.standardAdmissionSet,
+      pins.publicationSet,
       pins.publishedTrust,
       pins.trustedRoot,
       pins.packageIndexPolicy,
     ].some(
       (artifact) =>
         !artifact ||
-        !artifact.path.startsWith("admission/v1/") ||
+        !artifact.path.startsWith(`${pins.admissionRoot}/`) ||
         !/^sha256:[a-f0-9]{64}$/u.test(artifact.digest),
     )
   ) {
     throw new Error("Takosumi published-package host proof pins are invalid");
   }
   return pins;
+}
+
+function admissionPath(pins: HostProofPins, path: string): string {
+  if (!isAdmissionRelativePath(path)) {
+    throw new Error(`admission-relative path is invalid: ${path}`);
+  }
+  return `${pins.admissionRoot}/${path}`;
+}
+
+function isAdmissionRelativePath(path: string): boolean {
+  return (
+    typeof path === "string" &&
+    !path.startsWith("/") &&
+    !path.startsWith("admission/") &&
+    !path.includes("\\") &&
+    path
+      .split("/")
+      .every((part) => part !== "" && part !== "." && part !== "..")
+  );
+}
+
+function isFormRef(value: FormRef): boolean {
+  return (
+    value.apiVersion === "forms.takoform.com/v1alpha1" &&
+    typeof value.kind === "string" &&
+    /^\d+\.\d+\.\d+$/u.test(value.definitionVersion) &&
+    /^sha256:[a-f0-9]{64}$/u.test(value.schemaDigest)
+  );
+}
+
+export function projectTakoformFormRef(value: FormRef): HostFormRef {
+  const type = portableTypeForShapeKind(value.kind);
+  if (type === undefined || !isFormRef(value)) {
+    throw new Error(`Takoform FormRef ${value.kind} cannot be hosted`);
+  }
+  return {
+    type,
+    version: value.definitionVersion,
+    schemaDigest: value.schemaDigest,
+  };
 }
 
 function assertClosedObject(

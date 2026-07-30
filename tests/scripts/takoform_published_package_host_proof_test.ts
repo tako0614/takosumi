@@ -8,6 +8,7 @@ import {
   parseDataOnlyTarMode,
   parseChecksums,
   parsePublisherIdentity,
+  projectTakoformFormRef,
   RetainedRoot,
 } from "../../scripts/verify-takoform-published-package-host-proof.ts";
 
@@ -31,6 +32,22 @@ test("published package policy projects one exact protected workflow ref", () =>
   });
 });
 
+test("published package policy keeps the canonical publication repository exact", () => {
+  const publisher = parsePublisherIdentity(
+    {
+      format: "takoform.sigstore-publisher-policy@v1",
+      oidcIssuer: "https://token.actions.githubusercontent.com",
+      certificateIdentity:
+        "https://github.com/tako0614/terraform-provider-takoform/.github/workflows/form-package-release.yml@refs/heads/main",
+      bundleMediaType: "application/vnd.dev.sigstore.bundle.v0.3+json",
+    },
+    "tako0614/terraform-provider-takoform",
+  );
+  expect(publisher.sourceRepository).toBe(
+    "tako0614/terraform-provider-takoform",
+  );
+});
+
 test("published package policy rejects repository substitution", () => {
   expect(() =>
     parsePublisherIdentity(
@@ -44,6 +61,21 @@ test("published package policy rejects repository substitution", () => {
       "tako0614/terraform-provider-takoform",
     ),
   ).toThrow("repository drifted");
+});
+
+test("Takoform package identity projects to the exact host FormRef", () => {
+  expect(
+    projectTakoformFormRef({
+      apiVersion: "forms.takoform.com/v1alpha1",
+      kind: "KeyValueStore",
+      definitionVersion: "2.0.0",
+      schemaDigest: `sha256:${"a".repeat(64)}`,
+    }),
+  ).toEqual({
+    type: "key_value_store",
+    version: "2.0.0",
+    schemaDigest: `sha256:${"a".repeat(64)}`,
+  });
 });
 
 test("SHA256SUMS parser is closed and duplicate-safe", () => {
@@ -79,7 +111,24 @@ test("retained checkout boundary rejects commit, dirt, symlink, mode, path, and 
     await git(root, ["add", "artifact.json"]);
     await git(root, ["-c", "commit.gpgsign=false", "commit", "-qm", "fixture"]);
     const commit = await git(root, ["rev-parse", "HEAD"]);
+    await git(root, [
+      "remote",
+      "add",
+      "origin",
+      "git@github.com:tako0614/terraform-provider-takoform.git",
+    ]);
+    await git(root, ["tag", "forms/k-test/v1.0.0"]);
     const retained = await RetainedRoot.open(root);
+    await retained.assertOriginRepository(
+      "tako0614/terraform-provider-takoform",
+    );
+    await expect(
+      retained.assertOriginRepository("tako0614/not-the-repository"),
+    ).rejects.toThrow("origin mismatch");
+    await retained.assertRefCommit("forms/k-test/v1.0.0", commit);
+    await expect(
+      retained.assertRefCommit("forms/k-test/v1.0.0", "0".repeat(40)),
+    ).rejects.toThrow("commit mismatch");
     await retained.assertCleanCheckout(commit);
     expect(new TextDecoder().decode(await retained.read("artifact.json"))).toBe(
       '{"ok":true}',

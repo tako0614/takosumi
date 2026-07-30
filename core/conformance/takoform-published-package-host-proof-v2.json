@@ -1,0 +1,39 @@
+{
+  "admissionCheckpoint": {
+    "commit": "1e438d61ed77f1ccfd3e000250f7dcf0c578c1af",
+    "tag": "forms/admissions/v1.0.6",
+    "tree": "2d7fd930e86738619388f91c0083a983c38628cb",
+    "version": "1.0.6"
+  },
+  "admissionRoot": "admission/v4",
+  "admissionVersion": {
+    "digest": "sha256:c6a842cc85b391c41362d36727f6e2520beee908d7e242dc1be442f2245eb013",
+    "path": "admission/v4/version.json"
+  },
+  "checkoutCommit": "28649255756f670f1ead1d044e38fe86ca794df9",
+  "checkoutRepository": "tako0614/terraform-provider-takoform",
+  "checkoutTag": "v1.0.2",
+  "checkoutVersion": "1.0.2",
+  "format": "takosumi.takoform-published-package-host-proof-pins@v2",
+  "historicalPublicationRepository": "tako0614/terraform-provider-takoform",
+  "packageIndexPolicy": {
+    "digest": "sha256:7caea552e607cb386b9e06bb23251754bf588577ed5708577634ec7b5aea3237",
+    "path": "admission/v4/trust/package-index-policy.json"
+  },
+  "publicationSet": {
+    "digest": "sha256:d5d00ecfe66be1129efcb4371b79a93977f87b7e1a4c82475c12e8cb73a361aa",
+    "path": "admission/v4/form-package-publication-set.json"
+  },
+  "publishedTrust": {
+    "digest": "sha256:01d418b547dcf6d99b85bbe7bfa845c39d5de6f8ac805fdfcc48f77c2ccbe0e1",
+    "path": "admission/v4/trust/published-package-trust.json"
+  },
+  "standardAdmissionSet": {
+    "digest": "sha256:ab73d976ed8f8e727a835101e80e3bd519931aa730e87d14de9bbb539bf72951",
+    "path": "admission/v4/standard-admission-set.json"
+  },
+  "trustedRoot": {
+    "digest": "sha256:6494e21ea73fa7ee769f85f57d5a3e6a08725eae1e38c755fc3517c9e6bc0b66",
+    "path": "admission/v4/trust/trusted-root.json"
+  }
+}

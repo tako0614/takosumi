@@ -135,7 +135,7 @@ async function main(): Promise<void> {
     artifact,
   );
   const identity: InstalledFormReference = {
-    formRef: artifact.formRef,
+    ...artifact.hostFormRef,
     packageDigest: artifact.packageDigest,
   };
 
@@ -335,9 +335,10 @@ async function main(): Promise<void> {
     },
     package: {
       takoformCheckoutCommit: reviewed.checkoutCommit,
-      releaseCommit: reviewed.releaseCommit,
+      releaseCommit: artifact.releaseCommit,
       releaseTag: artifact.releaseTag,
       formRef: artifact.formRef,
+      hostFormRef: artifact.hostFormRef,
       packageDigest: artifact.packageDigest,
       verifierId: reviewed.verifierId,
       activationId: ACTIVATION_ID,
@@ -533,7 +534,7 @@ async function createReplicaContext(
   await forms.createActivation({
     id: ACTIVATION_ID,
     identity: {
-      formRef: artifact.formRef,
+      ...artifact.hostFormRef,
       packageDigest: artifact.packageDigest,
     },
     scope: { type: "workspace", id: WORKSPACE_ID },

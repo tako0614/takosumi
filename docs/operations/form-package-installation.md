@@ -56,10 +56,11 @@ store may inject the code-only `TAKOSUMI_FORM_PACKAGE_HOST_COMPOSITION` reader /
 verifier object instead; a serialized object is rejected.
 
 `refPattern` is matched against the Fulcio certificate identity, not against
-release metadata. Branch refs must be exact (the published `1.0.0` package set
-uses the protected release workflow at `refs/heads/main`); tag refs may use
-single-segment `*` globs. The immutable release tag and asset closure are
-reviewed separately before the operator builds the internal install envelope.
+release metadata. The repository value above is both the current canonical
+Takoform source repository and the publisher identity embedded in the immutable
+signed packages. Branch refs must be exact; tag refs may use single-segment `*`
+globs. The immutable release tag and asset closure are reviewed separately
+before the operator builds the internal install envelope.
 Existing schema-v1 documents using `tagPattern` remain accepted and are
 normalized to `refPattern`; specifying both is rejected. `tagPattern` is a
 deprecated compatibility field retained until a schema-v2 transition.
@@ -142,16 +143,14 @@ an executable implementation, and any Cloud ServiceOffering remain separate
 operations.
 
 After restart, write the exact installed identity returned by the reviewed
-package release to `installed-form-reference.json`:
+package release to `installed-form-reference.json`. The operator API uses
+Takosumi's portable host FormRef, not Takoform's package-index FormRef:
 
 ```json
 {
-  "formRef": {
-    "apiVersion": "forms.takoform.com/v1alpha1",
-    "kind": "ObjectBucket",
-    "definitionVersion": "1.0.0",
-    "schemaDigest": "sha256:<exact-schema-digest>"
-  },
+  "type": "object_bucket",
+  "version": "3.0.0",
+  "schemaDigest": "sha256:<exact-schema-digest>",
   "packageDigest": "sha256:<exact-package-digest>"
 }
 ```
@@ -175,20 +174,25 @@ Takosumi host verifier and registry with:
 
 ```console
 bun run service-form:published-package-host-proof \
-  --takoform-root /absolute/path/to/terraform-provider-takoform \
+  --takoform-root /absolute/path/to/takoform \
   --json
 ```
 
-The command first requires the exact clean Takoform checkout and independently
-reviewed Takosumi-owned commit, published-set, trust, policy, version, and
-release-commit pins. It then verifies the immutable 10-package set, exact
-retained trust and asset closure, SET and checkpoint/Merkle transparency
-evidence, protected workflow identity, install, service reconstruction with a
-fresh verifier and reloaded trust bytes, replay, and deliberate transparency
+The command requires the exact clean canonical checkout
+`tako0614/terraform-provider-takoform@v1.0.2` and Takosumi-owned pins for
+`admission/v4`, checkpoint `forms/admissions/v1.0.6`, the Standard admission
+set, full immutable publication set, trust policy, and TrustedRoot. It selects
+exactly the nine Forms currently offered by Takosumi Cloud:
+`EdgeWorker`, `RelationalDatabase`, `ObjectBucket`, `KeyValueStore`, `Queue`,
+`Schedule`, `ContainerService`, `StatefulEntity`, and `VectorIndex`.
+`ModelEndpoint` remains in Takoform's broader Standard set but is not silently
+added to the Cloud package set. The proof verifies every retained asset,
+certificate/transparency evidence, install, service reconstruction with a fresh
+verifier and reloaded trust bytes, replay, and deliberate transparency
 tampering rejection. This is repository-regression evidence, not a durable
-substrate restart. It proves package publication and host compatibility only.
-It preserves Takoform's `external-required` admission and revocation status and
-never creates a FormActivation.
+substrate restart. It proves package publication and host compatibility only,
+preserves Takoform's `external-required` revocation status, and never creates a
+FormActivation.
 
 ### Prepare the reviewed internal install inputs
 
@@ -206,8 +210,10 @@ Both paths must be absolute and canonical. The Takoform checkout must be the
 exact clean commit pinned by Takosumi. The output parent must not traverse a
 symlink and must be owned by the invoking user with mode `0700`. The dedicated
 output directory must not already exist, and it must be outside both source
-repositories. The command reads only the independently reviewed 10-package
-published set and its pinned trust documents. It constructs RFC 8785 install
+repositories. The command reads only the independently reviewed ten-entry
+Standard admission set, full publication record, and pinned trust documents,
+then selects the exact nine-package Cloud intersection described above. It
+constructs RFC 8785 install
 envelopes, then runs every envelope through the actual Sigstore and data-only
 host verifier before making any output visible.
 
@@ -218,9 +224,15 @@ The completed directory is published with an atomic no-overwrite move, mode
   for each exact FormRef and package digest;
 - the pinned public Sigstore TrustedRoot; and
 - `install-envelope-manifest.json`, which binds the reviewed checkout and
-  release commits, trust/policy/published-set digests, publisher identity,
+  admission checkpoint, per-package release commit and definition version,
+  trust/policy/publication-set digests, the exact repository/publisher identity,
   package kind and digest, raw envelope digest, proposed immutable R2 key, and
   both request bodies.
+
+The v2 manifest stores each envelope at
+`packages/takoform/<definition-version>/<kind-slug>/<envelope-sha256>.json`.
+Definition versions are intentionally per package (`2.0.0` and `3.0.0` in the
+current set); there is no fabricated set-wide version.
 
 Do not commit this operator output. Recompute each raw envelope SHA-256 before
 upload, place the envelope and TrustedRoot bytes at the manifest's exact R2

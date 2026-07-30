@@ -24,14 +24,13 @@ import type { ReviewedPublishedPackageInstallSet } from "../../scripts/verify-ta
 const sandboxes: string[] = [];
 const KINDS = [
   "ContainerService",
-  "DurableWorkflow",
   "EdgeWorker",
-  "KVStore",
+  "KeyValueStore",
   "ObjectBucket",
   "Queue",
-  "SQLDatabase",
+  "RelationalDatabase",
   "Schedule",
-  "StatefulActorNamespace",
+  "StatefulEntity",
   "VectorIndex",
 ] as const;
 
@@ -59,12 +58,12 @@ test("writes one deterministic canonical reviewed set with private modes", async
     dependency,
   );
 
-  expect(result.packageCount).toBe(10);
+  expect(result.packageCount).toBe(9);
   expect((await lstat(first)).mode & 0o777).toBe(0o700);
   const firstFiles = (await readdir(first)).sort();
   const secondFiles = (await readdir(second)).sort();
   expect(firstFiles).toEqual(secondFiles);
-  expect(firstFiles).toHaveLength(32);
+  expect(firstFiles).toHaveLength(29);
   for (const name of firstFiles) {
     expect((await lstat(join(first, name))).mode & 0o777).toBe(0o600);
     expect(await readFile(join(first, name))).toEqual(
@@ -77,18 +76,39 @@ test("writes one deterministic canonical reviewed set with private modes", async
   );
   const manifest = JSON.parse(new TextDecoder().decode(manifestBytes)) as {
     format: string;
+    repository: string;
+    admission: { root: string; version: string };
+    historicalPublication: { repository: string };
     trustedRoot: { digest: string; file: string; r2Key: string };
     packages: Array<{
       kind: string;
+      definitionVersion: string;
       packageDigest: string;
       envelopeDigest: string;
       envelopeFile: string;
       r2Key: string;
       installRequest: { body: { artifactRef: string } };
-      reverifyRequest: { body: { packageDigest: string } };
+      reverifyRequest: {
+        body: {
+          type: string;
+          version: string;
+          schemaDigest: string;
+          packageDigest: string;
+        };
+      };
     }>;
   };
-  expect(manifest.format).toBe("takosumi.takoform-install-envelope-set@v1");
+  expect(manifest.format).toBe("takosumi.takoform-install-envelope-set@v2");
+  expect(manifest.repository).toBe(
+    "tako0614/terraform-provider-takoform",
+  );
+  expect(manifest.admission).toMatchObject({
+    root: "admission/v4",
+    version: "1.0.6",
+  });
+  expect(manifest.historicalPublication.repository).toBe(
+    "tako0614/terraform-provider-takoform",
+  );
   expect(manifest.trustedRoot).toEqual({
     digest: reviewed.trustedRoot.digest,
     file: "trusted-root.json",
@@ -105,8 +125,13 @@ test("writes one deterministic canonical reviewed set with private modes", async
     expect(entry.r2Key).toEndWith(
       `/${entry.envelopeDigest.slice("sha256:".length)}.json`,
     );
+    expect(entry.r2Key).toStartWith(
+      `packages/takoform/${entry.definitionVersion}/`,
+    );
     expect(entry.installRequest.body.artifactRef).toBe(`r2:${entry.r2Key}`);
     expect(entry.reverifyRequest.body.packageDigest).toBe(entry.packageDigest);
+    expect(entry.reverifyRequest.body.version).toBe(entry.definitionVersion);
+    expect(entry.reverifyRequest.body.type).toMatch(/^[a-z][a-z0-9_]+$/);
   }
   expect(manifestBytes).toEqual(canonicalJsonBytes(manifest as never));
 });
@@ -119,7 +144,7 @@ test("verifies the full set before publishing any output", async () => {
       { takoformRoot, outputDir },
       {
         loadReviewedSet: async () => {
-          throw new Error("real verifier rejected package 10");
+          throw new Error("real verifier rejected package 9");
         },
       },
     ),
@@ -291,26 +316,42 @@ async function sandbox(): Promise<{ root: string; takoformRoot: string }> {
 function fakeReviewedSet(): ReviewedPublishedPackageInstallSet {
   const trustedRootBytes = canonicalJsonBytes({ root: "test-public-root" });
   return {
-    format: "takosumi.reviewed-takoform-package-install-set@v1",
+    format: "takosumi.reviewed-takoform-package-install-set@v2",
     repository: "tako0614/terraform-provider-takoform",
     checkoutCommit: "a".repeat(40),
-    releaseCommit: "b".repeat(40),
-    packageVersion: "1.0.0",
-    definitionVersion: "1.0.0",
-    publishedSet: {
-      path: "admission/v1/published-package-set.json",
-      digest: `sha256:${"1".repeat(64)}`,
+    checkoutVersion: "1.0.2",
+    admission: {
+      root: "admission/v4",
+      version: "1.0.6",
+      tag: "forms/admissions/v1.0.6",
+      commit: "b".repeat(40),
+      tree: "c".repeat(40),
     },
-    publishedTrust: {
-      path: "admission/v1/trust/published-package-trust.json",
+    historicalPublication: {
+      repository: "tako0614/terraform-provider-takoform",
+      publicationSet: {
+        path: "admission/v4/form-package-publication-set.json",
+        digest: `sha256:${"1".repeat(64)}`,
+      },
+    },
+    standardAdmissionSet: {
+      path: "admission/v4/standard-admission-set.json",
       digest: `sha256:${"2".repeat(64)}`,
     },
-    packageIndexPolicy: {
-      path: "admission/v1/trust/package-index-policy.json",
+    admissionVersion: {
+      path: "admission/v4/version.json",
       digest: `sha256:${"3".repeat(64)}`,
     },
+    publishedTrust: {
+      path: "admission/v4/trust/published-package-trust.json",
+      digest: `sha256:${"4".repeat(64)}`,
+    },
+    packageIndexPolicy: {
+      path: "admission/v4/trust/package-index-policy.json",
+      digest: `sha256:${"5".repeat(64)}`,
+    },
     trustedRoot: {
-      path: "admission/v1/trust/trusted-root.json",
+      path: "admission/v4/trust/trusted-root.json",
       digest: digest(trustedRootBytes),
       bytes: trustedRootBytes,
     },
@@ -323,12 +364,22 @@ function fakeReviewedSet(): ReviewedPublishedPackageInstallSet {
     verifierId: "takoform.form-package.v1alpha1+takoform.sigstore-keyless.v1",
     packages: KINDS.map((kind, index) => ({
       kind,
-      releaseTag: `forms/${kind}/v1.0.0`,
+      releaseCommit: String(index + 1).padStart(40, "d"),
+      releaseTag: `forms/k-${kind.toLowerCase()}/v${
+        index % 2 === 0 ? "3.0.0" : "2.0.0"
+      }`,
       packageDigest: `sha256:${String(index + 1).padStart(64, "0")}`,
       formRef: {
         apiVersion: "forms.takoform.com/v1alpha1",
         kind,
-        definitionVersion: "1.0.0",
+        definitionVersion: index % 2 === 0 ? "3.0.0" : "2.0.0",
+        schemaDigest: `sha256:${String(index + 11).padStart(64, "0")}`,
+      },
+      hostFormRef: {
+        type: kind
+          .replace(/([a-z0-9])([A-Z])/gu, "$1_$2")
+          .toLowerCase(),
+        version: index % 2 === 0 ? "3.0.0" : "2.0.0",
         schemaDigest: `sha256:${String(index + 11).padStart(64, "0")}`,
       },
       envelopeBytes: canonicalJsonBytes({ kind, index }),
