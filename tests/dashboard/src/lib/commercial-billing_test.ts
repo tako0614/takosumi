@@ -246,6 +246,8 @@ test("native commercial billing stays provider-neutral and uses extension APIs",
   expect(component).toContain("availableUsdMicros");
   expect(component).toContain("suspensionReason");
   expect(component).toContain("partially_refunded");
+  expect(component).toContain('name="billingCustomerType"');
+  expect(component).toContain('name="billingCountry"');
   expect(component).not.toContain("purchasedUsdMicros");
   expect(component).not.toContain("balance.purchased");
   expect(component).not.toContain("Stripe");

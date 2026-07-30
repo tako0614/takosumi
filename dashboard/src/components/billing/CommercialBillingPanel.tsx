@@ -353,6 +353,7 @@ export default function CommercialBillingPanel(props: Props) {
                       label={t("billing.commercial.customerType.label")}
                     >
                       <Select
+                        name="billingCustomerType"
                         value={customerType()}
                         onInput={(event) =>
                           setCustomerType(
@@ -374,6 +375,7 @@ export default function CommercialBillingPanel(props: Props) {
                       required
                     >
                       <Select
+                        name="billingCountry"
                         value={country()}
                         onInput={(event) =>
                           setCountry(event.currentTarget.value)
