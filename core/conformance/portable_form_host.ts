@@ -98,6 +98,13 @@ export async function runPortableFormHostConformance(
   const exact = exactQuery(input.identity);
   const resourcePath = `${base}/resources/${encodeURIComponent(compatibilityKind(input.identity.type))}/${encodeURIComponent(input.name)}`;
   const body = resourceBody(input, input.name, input.desired);
+  const idempotencyScope = (
+    await sha256HexOfStringAsync(
+      `${installedFormReferenceKey(input.identity)}\n${input.name}`,
+    )
+  ).slice(0, 32);
+  const idempotencyKey = (operation: string) =>
+    `conformance-${operation}-${idempotencyScope}`;
 
   const discovery = await jsonRequest(
     fetcher,
@@ -155,7 +162,7 @@ export async function runPortableFormHostConformance(
   const mutationHeaders = jsonHeaders({
     ...headers,
     "if-none-match": "*",
-    "idempotency-key": "conformance-create-1",
+    "idempotency-key": idempotencyKey("create"),
   });
   const applied = await jsonRequest(fetcher, resourcePath, {
     method: "PUT",
@@ -251,7 +258,7 @@ export async function runPortableFormHostConformance(
         headers: jsonHeaders({
           ...headers,
           "if-match": `"${version}"`,
-          "idempotency-key": "conformance-update-1",
+          "idempotency-key": idempotencyKey("update"),
         }),
         body: JSON.stringify({
           ...updateBody,
@@ -280,7 +287,7 @@ export async function runPortableFormHostConformance(
       headers: {
         ...headers,
         "if-match": `"${version}"`,
-        "idempotency-key": "conformance-observe-1",
+        "idempotency-key": idempotencyKey("observe"),
       },
     },
   );
@@ -302,7 +309,7 @@ export async function runPortableFormHostConformance(
       headers: {
         ...headers,
         "if-match": `"${version}"`,
-        "idempotency-key": "conformance-refresh-1",
+        "idempotency-key": idempotencyKey("refresh"),
       },
     },
   );
@@ -330,7 +337,12 @@ export async function runPortableFormHostConformance(
   checks.push("canonical-audit-parity");
 
   if (input.importNativeId) {
-    await runImportConformance({ ...input, fetch: fetcher }, base, headers);
+    await runImportConformance(
+      { ...input, fetch: fetcher },
+      base,
+      headers,
+      idempotencyKey,
+    );
     checks.push("import-idempotency");
   }
 
@@ -339,7 +351,7 @@ export async function runPortableFormHostConformance(
     headers: {
       ...headers,
       "if-match": `"${version}"`,
-      "idempotency-key": "conformance-delete-1",
+      "idempotency-key": idempotencyKey("delete"),
     },
   } as const;
   await emptyRequest(fetcher, readPath, deleteOptions, 204);
@@ -351,7 +363,7 @@ export async function runPortableFormHostConformance(
       headers: {
         ...headers,
         "if-match": `"${version}"`,
-        "idempotency-key": "conformance-delete-1",
+        "idempotency-key": idempotencyKey("delete"),
       },
     },
     204,
@@ -467,6 +479,7 @@ async function runImportConformance(
   },
   base: string,
   headers: Record<string, string>,
+  idempotencyKey: (operation: string) => string,
 ): Promise<void> {
   const name = `${input.name}-import`;
   const path = `${base}/resources/${encodeURIComponent(compatibilityKind(input.identity.type))}/${encodeURIComponent(name)}`;
@@ -480,7 +493,7 @@ async function runImportConformance(
     headers: jsonHeaders({
       ...headers,
       "if-none-match": "*",
-      "idempotency-key": "conformance-import-1",
+      "idempotency-key": idempotencyKey("import"),
     }),
     body: JSON.stringify(body),
   } as const;
@@ -495,7 +508,7 @@ async function runImportConformance(
       headers: {
         ...headers,
         "if-match": `"${version}"`,
-        "idempotency-key": "conformance-import-delete-1",
+        "idempotency-key": idempotencyKey("import-delete"),
       },
     },
     204,

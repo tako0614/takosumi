@@ -162,16 +162,6 @@ interface LoadedCandidate {
   readonly takoformRoot: string;
 }
 
-if (import.meta.main) {
-  const exitCode = await main(process.argv.slice(2)).catch((error) => {
-    console.error(
-      `standard-form-host-report: ${error instanceof Error ? error.message : String(error)}`,
-    );
-    return 1;
-  });
-  process.exit(exitCode);
-}
-
 export async function main(argv: readonly string[]): Promise<number> {
   const [command, ...rest] = argv;
   const options = parseOptions(rest);
@@ -1273,4 +1263,14 @@ function digest(bytes: Uint8Array): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+if (import.meta.main) {
+  const exitCode = await main(process.argv.slice(2)).catch((error) => {
+    console.error(
+      `standard-form-host-report: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return 1;
+  });
+  process.exit(exitCode);
 }
