@@ -1687,7 +1687,10 @@ export class ResourceShapeService {
           metadata: successMetadata,
         });
       }
-      if (review.quoteId) {
+      // Settlement follows the host reservation, not the shape of the
+      // portable client review. A host may resolve its private commercial
+      // evidence from the reviewed plan without extending the provider wire.
+      if (reservationId) {
         try {
           await this.#deploymentAdmission.capture({
             ...context,
@@ -1769,7 +1772,7 @@ export class ResourceShapeService {
         // Backend work may exist. Do not restore the old lock, publish a false
         // Failed state, or release payment. Keep Applying for deterministic
         // recovery and durably mark the reservation as capture-pending.
-        if (review.quoteId) {
+        if (reservationId) {
           try {
             await this.#deploymentAdmission.markSettlementPending({
               ...context,
@@ -1826,7 +1829,7 @@ export class ResourceShapeService {
         // cannot prove that the provider made no change. Keep the reservation
         // and Applying record recoverable; releasing here could create a live
         // but unbilled resource.
-        if (review.quoteId) {
+        if (reservationId) {
           try {
             await this.#deploymentAdmission.markSettlementPending({
               ...context,

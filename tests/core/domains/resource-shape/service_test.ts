@@ -773,6 +773,7 @@ class RecordingDeploymentAdmission implements ResourceDeploymentAdmission {
   failCapture = false;
   failSettlementPending = false;
   failRetire = false;
+  acceptPortablePlanReview = false;
   failRetireReason: ResourceDeploymentRetireContext["reason"] | undefined;
   reserveReasons: readonly string[] = [];
   importReasons: readonly string[] = [];
@@ -798,8 +799,10 @@ class RecordingDeploymentAdmission implements ResourceDeploymentAdmission {
     }
     if (
       !this.lastQuote ||
-      context.review.quoteId !== this.lastQuote.quoteId ||
-      context.review.quoteDigest !== this.lastQuote.quoteDigest
+      context.review.planDigest !== this.lastQuote.planDigest ||
+      (!this.acceptPortablePlanReview &&
+        (context.review.quoteId !== this.lastQuote.quoteId ||
+          context.review.quoteDigest !== this.lastQuote.quoteDigest))
     ) {
       return { reasons: ["quote review mismatch"] };
     }
@@ -1926,6 +1929,35 @@ test("rated preview binds offering and catalog versions and captures only after 
   expect(admission.releaseContexts).toHaveLength(0);
   expect(admission.settlementPendingContexts).toHaveLength(0);
   expect((await stores.resources.get(APPLY_ID))?.phase).toBe("Ready");
+});
+
+test("a host reservation settles after a portable plan-only review", async () => {
+  const stores = createInMemoryResourceShapeStores();
+  const admission = new RecordingDeploymentAdmission();
+  admission.acceptPortablePlanReview = true;
+  const service = new ResourceShapeService({
+    stores,
+    adapter: new StubResourceShapeAdapter(),
+    deploymentAdmission: admission,
+    now: () => NOW,
+    moduleRegistry: TEST_RESOURCE_SHAPE_MODULE_REGISTRY,
+  });
+  await seed(service);
+
+  const preview = await service.preview(APPLY);
+  expect(preview.ok).toBe(true);
+  if (!preview.ok) return;
+
+  const applied = await service.apply(APPLY, {
+    planDigest: preview.value.planDigest,
+  });
+  expect(applied.ok).toBe(true);
+  expect(admission.reserveContexts).toHaveLength(1);
+  expect(admission.captureContexts).toHaveLength(1);
+  expect(admission.captureContexts[0]?.review).toEqual({
+    planDigest: preview.value.planDigest,
+  });
+  expect(admission.captureContexts[0]?.reservationId).toBe("reservation_1");
 });
 
 test("deployment admission keeps create/update intent stable across preview and apply", async () => {
