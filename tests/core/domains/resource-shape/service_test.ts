@@ -3953,6 +3953,8 @@ test("Form-backed apply recovery consumes pinned admission after the backend was
     },
   };
   const ledger = new InMemoryOpenTofuControlStore();
+  const admission = new RecordingDeploymentAdmission();
+  admission.acceptPortablePlanReview = true;
   const formRegistry = exactFormRegistry(EXACT_CONTAINER_FORM, [
     {
       name: "runtime.service",
@@ -3964,6 +3966,7 @@ test("Form-backed apply recovery consumes pinned admission after the backend was
   const first = new ResourceShapeService({
     stores,
     adapter: new PluginSpyAdapter(),
+    deploymentAdmission: admission,
     operationRuns: ledger,
     activity: new ActivityService({ store: ledger, now: () => new Date(NOW) }),
     formRegistry,
@@ -3992,12 +3995,19 @@ test("Form-backed apply recovery consumes pinned admission after the backend was
   if (!pending.ok) {
     expect(pending.error.code).toBe("deployment_finalize_pending");
   }
+  const pinnedReview = (
+    await stores.resources.get(
+      "tkrn:space_1:ContainerService:form-recovery",
+    )
+  )?.pendingOperation?.deploymentReview;
+  expect(pinnedReview).toEqual({ planDigest: preview.value.planDigest });
 
   failReadyCommit = false;
   let currentAdmissionCalls = 0;
   const restarted = new ResourceShapeService({
     stores,
     adapter: new DirectReadOnlyRecoveryAdapter(),
+    deploymentAdmission: admission,
     operationRuns: ledger,
     activity: new ActivityService({ store: ledger, now: () => new Date(NOW) }),
     formRegistry,
@@ -4018,9 +4028,10 @@ test("Form-backed apply recovery consumes pinned admission after the backend was
     },
   });
   const recovered = await restarted.recoverApply(request, {
-    planDigest: preview.value.planDigest,
+    planDigest: `sha256:${"0".repeat(64)}`,
   });
   expect(recovered.ok).toBe(true);
+  expect(admission.reserveContexts[1]?.review).toEqual(pinnedReview);
   expect(currentAdmissionCalls).toBe(0);
   expect(
     (await stores.resources.get("tkrn:space_1:ContainerService:form-recovery"))

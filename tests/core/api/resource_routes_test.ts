@@ -564,6 +564,7 @@ test("portable Form host delegates exact lifecycle to the canonical Resource and
     body: JSON.stringify(applyBody),
   });
   expect(applied.status).toBe(200);
+  expect(applied.headers.get("content-encoding")).toBe("identity");
   expect(applied.headers.get("etag")).toBe('"1"');
   const appliedBody = await applied.json();
   expect(appliedBody.metadata.resourceVersion).toBe("1");
@@ -577,11 +578,14 @@ test("portable Form host delegates exact lifecycle to the canonical Resource and
     body: JSON.stringify(applyBody),
   });
   expect(replayed.status).toBe(200);
+  expect(replayed.headers.get("content-encoding")).toBe("identity");
+  expect(replayed.headers.get("etag")).toBe('"1"');
   expect((await replayed.json()).metadata.resourceVersion).toBe("1");
 
   const exactQuery = portableFormQuery();
   const read = await app.request(`${path}?space=space_1&${exactQuery}`);
   expect(read.status).toBe(200);
+  expect(read.headers.get("content-encoding")).toBe("identity");
   expect(read.headers.get("etag")).toBe('"1"');
 
   const stale = await app.request(path, {

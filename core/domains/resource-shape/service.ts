@@ -1200,8 +1200,13 @@ export class ResourceShapeService {
     // Recovery is an internal continuation of the already claimed Resource,
     // pinned ResolutionLock, and canonical operation Run. Requiring a fresh
     // preview digest after backend dispatch can strand Applying state when
-    // host composition changes. Keep the review envelope well-formed, but use
-    // the durable claim as recovery authority.
+    // host composition changes. The pending operation's original review is
+    // the durable admission authority; a caller-supplied recovery review is
+    // validated only as an API precondition and cannot replace that authority.
+    const pinnedRecoveryReview =
+      recoveryRequested && recoveringApplying
+        ? existing?.pendingOperation?.deploymentReview
+        : undefined;
     const reviewError =
       recoveryRequested && recoveringApplying
         ? deploymentReviewSyntaxError(review)
@@ -1212,10 +1217,15 @@ export class ResourceShapeService {
         error: { code: "deployment_plan_changed", message: reviewError },
       };
     }
+    const deploymentReview = pinnedRecoveryReview ?? review;
+    const admissionEvidence =
+      recoveryRequested && recoveringApplying
+        ? { ...evidence, planDigest: deploymentReview.planDigest }
+        : evidence;
     const context = resourceDeploymentQuoteContext(
       req,
       output,
-      evidence,
+      admissionEvidence,
       resourceDeploymentOperation(existing),
       this.#now(),
     );
@@ -1329,7 +1339,7 @@ export class ResourceShapeService {
               runId: operationRun.id,
               operation: "apply" as const,
               operationKey: operationRun.resourceOperationKey,
-              deploymentReview: review,
+              deploymentReview,
             },
           }
         : {}),
@@ -1442,7 +1452,7 @@ export class ResourceShapeService {
     try {
       const decision = await this.#deploymentAdmission.reserve({
         ...context,
-        review,
+        review: deploymentReview,
       });
       if (decision.reasons.length > 0) {
         const rolledBack = await rollbackUnstartedApplyClaim(
@@ -1694,7 +1704,7 @@ export class ResourceShapeService {
         try {
           await this.#deploymentAdmission.capture({
             ...context,
-            review,
+            review: deploymentReview,
             ...(reservationId ? { reservationId } : {}),
             resourceGeneration: generation,
             nativeResources: result.nativeResources,
@@ -1717,7 +1727,7 @@ export class ResourceShapeService {
           try {
             await this.#deploymentAdmission.markSettlementPending({
               ...context,
-              review,
+              review: deploymentReview,
               ...(reservationId ? { reservationId } : {}),
               backendOutcome: "succeeded",
               nativeResources: result.nativeResources,
@@ -1776,7 +1786,7 @@ export class ResourceShapeService {
           try {
             await this.#deploymentAdmission.markSettlementPending({
               ...context,
-              review,
+              review: deploymentReview,
               ...(reservationId ? { reservationId } : {}),
               backendOutcome: "succeeded",
               nativeResources: adapterResult?.nativeResources ?? [],
@@ -1833,7 +1843,7 @@ export class ResourceShapeService {
           try {
             await this.#deploymentAdmission.markSettlementPending({
               ...context,
-              review,
+              review: deploymentReview,
               ...(reservationId ? { reservationId } : {}),
               backendOutcome: "unknown",
               nativeResources: [],
@@ -1881,7 +1891,7 @@ export class ResourceShapeService {
       try {
         await this.#deploymentAdmission.release({
           ...context,
-          review,
+          review: deploymentReview,
           ...(reservationId ? { reservationId } : {}),
           reason: "resource_apply_failed_before_backend_success",
         });

@@ -1498,6 +1498,10 @@ function portableJson(
       ? (value.resource as unknown as TakoformResource)
       : (value as TakoformResource);
   if (resource.metadata?.resourceVersion) {
+    // Takoform's concurrency fence is an exact strong ETag. Cloudflare turns
+    // strong ETags into weak validators when it automatically compresses a
+    // response, so keep version-fenced lifecycle responses untransformed.
+    c.header("content-encoding", "identity");
     c.header("etag", `"${resource.metadata.resourceVersion}"`);
   }
   if (key) c.header("idempotency-key", key);
