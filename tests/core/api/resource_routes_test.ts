@@ -161,6 +161,24 @@ function testOperatorModule() {
   };
 }
 
+class PortableFormStubResourceShapeAdapter extends StubResourceShapeAdapter {
+  override async apply(input: AdapterApplyInput): Promise<AdapterApplyResult> {
+    const applied = await super.apply(input);
+    const name = input.resourceId.split(":").at(-1);
+    if (!name) throw new Error("portable test Resource id omitted its name");
+    return {
+      ...applied,
+      outputs: {
+        generation: input.resourceGeneration,
+        id: `${input.plan.shape}/${name}`,
+        kind: input.plan.shape,
+        name,
+        portability: "portable",
+      },
+    };
+  }
+}
+
 async function buildApp(
   routeOptions?: Partial<RegisterResourceShapeRoutesOptions>,
   formRegistry?: ResourceShapeServiceDeps["formRegistry"],
@@ -489,6 +507,7 @@ test("portable Form host delegates exact lifecycle to the canonical Resource and
       }),
     },
     exactObjectBucketFormRegistry(),
+    { adapter: new PortableFormStubResourceShapeAdapter() },
   );
   const base = "/apis/forms.takoform.com/v1alpha1";
   const path = `${base}/resources/ObjectBucket/portable-assets`;
@@ -503,7 +522,9 @@ test("portable Form host delegates exact lifecycle to the canonical Resource and
   const discovery = await app.request("/.well-known/takoform");
   expect(discovery.status).toBe(200);
   const discoveryBody = await discovery.json();
-  expect(discoveryBody.protocols).toEqual(["takoform.host-api@v1alpha1"]);
+  expect(discoveryBody.api_versions).toEqual([
+    "forms.takoform.com/v1alpha1",
+  ]);
   expect(discoveryBody.endpoints.api).toEndWith(base);
 
   const forms = await app.request(`${base}/forms?space=space_1`);
@@ -526,7 +547,6 @@ test("portable Form host delegates exact lifecycle to the canonical Resource and
       planDigest: previewBody.review.planDigest,
       specDigest: previewBody.review.specDigest,
     },
-    summary: previewBody.summary,
   });
 
   const applyBody = {
@@ -617,8 +637,7 @@ test("portable Form host delegates exact lifecycle to the canonical Resource and
   );
   expect(observe.status).toBe(200);
   const observeBody = await observe.json();
-  expect(observeBody.observation.status).toBe("current");
-  expect(observeBody.observation.summary).toBe("portable drift check current");
+  expect(observeBody.resource.status.observed.driftedFields).toEqual([]);
   expect(observeBody.resource.metadata.resourceVersion).toBe("1");
 
   const events = await service.listEvents(
@@ -899,7 +918,11 @@ test("portable Form host enforces the exact definition lifecycle operations", as
 });
 
 test("portable Form host black-box runner proves canonical lifecycle parity", async () => {
-  const { app } = await buildApp(undefined, exactObjectBucketFormRegistry());
+  const { app } = await buildApp(
+    undefined,
+    exactObjectBucketFormRegistry(),
+    { adapter: new PortableFormStubResourceShapeAdapter() },
+  );
   const report = await runPortableFormHostConformance({
     endpoint: "https://host.example.test",
     space: "space_1",

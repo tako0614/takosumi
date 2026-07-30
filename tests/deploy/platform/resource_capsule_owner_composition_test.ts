@@ -27,7 +27,7 @@ const FORM = {
   packageDigest: `sha256:${"2".repeat(64)}`,
 } as const;
 
-test("production platform keeps the portable Form host absent without durable idempotency authority", async () => {
+test("production platform durably replays a Capsule-owned portable Resource apply", async () => {
   const db = new SqliteFakeD1();
   await ensureD1OpenTofuLedgerSchema(db);
   const control = new CloudflareD1OpenTofuControlStore(db);
@@ -159,7 +159,10 @@ test("production platform keeps the portable Form host absent without durable id
     updatedAt: NOW,
   });
 
-  const pluginInputs: unknown[] = [];
+  const pluginInputs: {
+    readonly action: string;
+    readonly input: unknown;
+  }[] = [];
   const env = {
     TAKOSUMI_CONTROL_DB: db,
     TAKOSUMI_ACCOUNTS_ISSUER: "https://app.takosumi.test",
@@ -180,7 +183,7 @@ test("production platform keeps the portable Form host absent without durable id
           readonly action: string;
           readonly input: unknown;
         };
-        pluginInputs.push(body.input);
+        pluginInputs.push({ action: body.action, input: body.input });
         return body.action === "preview"
           ? Response.json({
               summary: "create managed bucket",
@@ -240,7 +243,30 @@ test("production platform keeps the portable Form host absent without durable id
     ),
     env,
   );
-  expect(preview.status).toBe(404);
+  expect(preview.status).toBe(200);
+  const previewBody = await preview.json();
+  const applyRequest = new Request(
+    `https://app.takosumi.test${TAKOFORM_FORM_HOST_API_PATH}/resources/ObjectBucket/assets`,
+    {
+      method: "PUT",
+      headers: {
+        authorization,
+        "content-type": "application/json",
+        "if-none-match": "*",
+        "idempotency-key": "capsule-owner-assets-create",
+      },
+      body: JSON.stringify({
+        ...desired,
+        review: { planDigest: previewBody.review.planDigest },
+      }),
+    },
+  );
+  const applied = await worker.fetch(applyRequest.clone(), env);
+  expect(applied.status).toBe(200);
+  const appliedBody = await applied.json();
+  const replayed = await worker.fetch(applyRequest.clone(), env);
+  expect(replayed.status).toBe(200);
+  expect(await replayed.json()).toEqual(appliedBody);
   const discovery = await worker.fetch(
     new Request(
       "https://app.takosumi.test/.well-known/takoform",
@@ -248,13 +274,23 @@ test("production platform keeps the portable Form host absent without durable id
     ),
     env,
   );
-  expect(discovery.status).toBe(404);
+  expect(discovery.status).toBe(200);
   expect(
     await resourceStores.resources.get(
       `tkrn:${WORKSPACE_ID}:ObjectBucket:assets`,
     ),
-  ).toBeUndefined();
-  expect(pluginInputs).toEqual([]);
+  ).toMatchObject({
+    owner: {
+      kind: "Capsule",
+      id: CAPSULE_ID,
+      workspaceId: WORKSPACE_ID,
+      installingPrincipalId: INSTALLER_ID,
+    },
+  });
+  expect(pluginInputs.map((entry) => entry.action)).toEqual([
+    "preview",
+    "apply",
+  ]);
 });
 
 test("production platform rejects an incomplete managed token before route resolution", async () => {

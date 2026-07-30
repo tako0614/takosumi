@@ -30,8 +30,12 @@ import type {
   ResourceServiceError,
   ResourceShapeService,
 } from "../domains/resource-shape/mod.ts";
-import { formatResourceShapeId } from "../domains/resource-shape/mod.ts";
-import { parseCanonicalJson } from "../adapters/takoform/canonical_json.ts";
+import {
+  canonicalJsonBytes,
+  parseCanonicalJson,
+  type CanonicalJsonValue,
+} from "../adapters/takoform/canonical_json.ts";
+import { sha256HexAsync } from "../shared/runtime/hash.ts";
 import { PortableDeclarationReadLimitError } from "../domains/interfaces/portable_declarations.ts";
 import { InterfaceServiceError } from "../domains/interfaces/service.ts";
 import { requestIdFromContext } from "./errors.ts";
@@ -294,7 +298,12 @@ export function registerPortableFormHostRoutes(
         ...query.value,
       });
       if (!listed.ok) return listed.response;
-      return c.json({ interfaces: listed.value }, 200);
+      return c.json(
+        {
+          interfaces: listed.value.map(portableInterfaceDeclaration),
+        },
+        200,
+      );
     });
 
     app.get(`${interfaceBase}/:name`, async (c) => {
@@ -344,7 +353,7 @@ export function registerPortableFormHostRoutes(
           409,
         );
       }
-      return c.json(matches[0]!, 200);
+      return c.json(portableInterfaceDeclaration(matches[0]!), 200);
     });
 
     if (
@@ -488,12 +497,19 @@ export function registerPortableFormHostRoutes(
     if (!result.ok) return serviceError(c, result.error);
     return c.json(
       {
-        resource: portableResource(result.value.resource),
+        resource: portableResource(result.value.resource, {
+          resourceVersion:
+            request.expectedGeneration === 0
+              ? ""
+              : String(request.expectedGeneration ?? ""),
+          omitStatus: true,
+        }),
         review: {
           planDigest: result.value.planDigest,
-          specDigest: result.value.specDigest,
+          specDigest: `sha256:${await sha256HexAsync(
+            canonicalJsonBytes(request.spec as CanonicalJsonValue),
+          )}`,
         },
-        summary: result.value.summary,
       },
       200,
     );
@@ -589,12 +605,6 @@ export function registerPortableFormHostRoutes(
           c,
           {
             resource: portableResource(result.value.resource),
-            import: {
-              summary: "portable import completed",
-              ...(result.value.import.runId
-                ? { runId: result.value.import.runId }
-                : {}),
-            },
           },
           200,
           key.value,
@@ -620,7 +630,7 @@ export function registerPortableFormHostRoutes(
           .filter(
             (item) => item.form && installedFormReferenceKey(item.form) === key,
           )
-          .map(portableResource),
+          .map((resource) => portableResource(resource)),
         ...(result.nextCursor ? { nextCursor: result.nextCursor } : {}),
       },
       200,
@@ -664,14 +674,6 @@ export function registerPortableFormHostRoutes(
           c,
           {
             resource: portableResource(result.value.resource),
-            observation: {
-              status: result.value.observation.status,
-              summary:
-                `portable drift check ${result.value.observation.status}`,
-              ...(result.value.observation.runId
-                ? { runId: result.value.observation.runId }
-                : {}),
-            },
           },
           200,
           key.value,
@@ -713,12 +715,6 @@ export function registerPortableFormHostRoutes(
           c,
           {
             resource: portableResource(result.value.resource),
-            refresh: {
-              summary: "portable refresh completed",
-              ...(result.value.refresh.runId
-                ? { runId: result.value.refresh.runId }
-                : {}),
-            },
           },
           200,
           key.value,
@@ -1233,7 +1229,13 @@ async function desiredWriteOperation(
   return current.ok ? "update" : "create";
 }
 
-function portableResource(resource: ResourceObject): TakoformResource {
+function portableResource(
+  resource: ResourceObject,
+  options: {
+    readonly resourceVersion?: string;
+    readonly omitStatus?: boolean;
+  } = {},
+): TakoformResource {
   if (!resource.form)
     throw new TypeError("portable Resource must carry an exact form identity");
   const formKind = shapeKindForPortableType(resource.form.type);
@@ -1241,6 +1243,29 @@ function portableResource(resource: ResourceObject): TakoformResource {
     throw new TypeError(
       `Resource kind ${resource.kind} does not match its portable Form identity`,
     );
+  const generation = resource.metadata.generation ?? 0;
+  const outputs =
+    resource.status?.phase === "Ready" &&
+    resource.status.observedGeneration === generation
+      ? resource.status.outputs
+      : undefined;
+  const portability = resource.status?.resolution?.portability;
+  const outputPortability =
+    outputs && typeof outputs.portability === "string"
+      ? outputs.portability
+      : undefined;
+  const imported =
+    resource.status?.conditions?.some(
+      (condition) =>
+        condition.type === "Ready" &&
+        condition.status === "true" &&
+        condition.reason === "Imported",
+    ) ?? false;
+  const drifted =
+    resource.status?.conditions?.some(
+      (condition) =>
+        condition.type === "Drifted" && condition.status === "true",
+    ) ?? false;
   return {
     apiVersion: TAKOFORM_FORM_HOST_API_VERSION,
     kind: resource.kind,
@@ -1248,42 +1273,50 @@ function portableResource(resource: ResourceObject): TakoformResource {
     metadata: {
       name: resource.metadata.name,
       space: resource.metadata.space,
-      ...(resource.metadata.project !== undefined
-        ? { project: resource.metadata.project }
-        : {}),
-      ...(resource.metadata.environment !== undefined
-        ? { environment: resource.metadata.environment }
-        : {}),
-      ...(resource.metadata.labels !== undefined
-        ? { labels: resource.metadata.labels }
-        : {}),
-      resourceVersion: String(resource.metadata.generation ?? 0),
+      resourceVersion: options.resourceVersion ?? String(generation),
     },
     spec: resource.spec,
-    ...(resource.status
+    ...(options.omitStatus !== true &&
+    outputs &&
+    portability &&
+    outputPortability === portability
       ? {
           status: {
-            phase: resource.status.phase,
-            observedGeneration: resource.status.observedGeneration,
-            ...(resource.status.resolution
-              ? {
-                  portability: resource.status.resolution.portability,
-                }
-              : {}),
-            // Canonical outputs may include host implementation evidence. The
-            // portable provider reads public values through Interfaces instead
-            // of copying the host ledger into IaC state.
-            ...(resource.status.conditions
-              ? { conditions: resource.status.conditions }
-              : {}),
+            observed: {
+              id: `${resource.kind}/${resource.metadata.name}`,
+              ready: true,
+              generation,
+              imported,
+              portability,
+              driftedFields: drifted ? ["/"] : [],
+            },
+            output: outputs,
           },
         }
       : {}),
-    id: formatResourceShapeId(
-      resource.metadata.space,
-      resource.kind,
-      resource.metadata.name,
-    ),
+  };
+}
+
+function portableInterfaceDeclaration(
+  declaration: TakoformDeclaredInterface,
+) {
+  return {
+    name: declaration.name,
+    version: declaration.version,
+    resource: declaration.resource,
+    document: declaration.document ?? {},
+    values: declaration.values ?? {},
+    ...(declaration.resourceUri
+      ? { resourceUri: declaration.resourceUri }
+      : {}),
+    ...(declaration.form
+      ? {
+          form: portableFormReference(
+            declaration.form,
+            declaration.resource.kind,
+          ),
+        }
+      : {}),
   };
 }
 

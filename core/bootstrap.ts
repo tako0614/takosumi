@@ -9,6 +9,7 @@ import {
   createConsoleApiRequestLogger,
   parseApiLogLevel,
 } from "./api/request_correlation.ts";
+import type { PortableHostIdempotencyCoordinator } from "./api/portable_host_idempotency.ts";
 import {
   type AppContext,
   type AppContextOptions,
@@ -593,6 +594,11 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
    * required descriptor fails closed before the Resource is advertised Ready.
    */
   readonly resolveFormInterfaceResourceUri?: FormInterfaceResourceUriResolver;
+  /**
+   * Host-owned durable replay authority for portable Form lifecycle mutations.
+   * Omission keeps portable host discovery and mutation routes fail-closed.
+   */
+  readonly portableHostIdempotency?: PortableHostIdempotencyCoordinator;
   /**
    * Explicit host-owned Workspace -> Resource authorization-scope mapping used
    * for the redacted exact-Form backup sidecar and exact FormRef migration.
@@ -2297,6 +2303,12 @@ export async function createTakosumiService(
                       return result.ok ? result.value : undefined;
                     },
                     resolveWorkspace: options.resolveResourceInterfaceWorkspace,
+                    ...(resolveFormInterfaceResourceUri
+                      ? {
+                          resolveResourceUri:
+                            resolveFormInterfaceResourceUri,
+                        }
+                      : {}),
                     ensureResourceDeclarations: (resource) =>
                       materializeFormDescriptorInterfaces(
                         formatResourceShapeId(
@@ -2382,6 +2394,12 @@ export async function createTakosumiService(
             ? {
                 resolveActor: (c) =>
                   options.resolveResourceShapeActor!(c.req.raw),
+              }
+            : {}),
+          ...(options.portableHostIdempotency
+            ? {
+                portableHostIdempotency:
+                  options.portableHostIdempotency,
               }
             : {}),
           ...(options.resolveResourceCapsuleOwner

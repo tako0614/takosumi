@@ -23,7 +23,6 @@ export const TAKOFORM_INTERFACE_DECLARATION_WRITES_FEATURE =
   "interface_declaration_writes" as const;
 
 export interface TakoformHostDiscovery {
-  readonly protocols: readonly [typeof TAKOFORM_FORM_HOST_PROTOCOL];
   readonly api_versions: readonly [typeof TAKOFORM_FORM_HOST_API_VERSION];
   readonly features: {
     readonly service_forms: true;
@@ -36,9 +35,8 @@ export interface TakoformHostDiscovery {
   readonly endpoints: {
     readonly api: string;
     readonly forms: string;
-    readonly capabilities: string;
-    readonly compatibility_api: string;
     readonly interfaces?: string;
+    readonly oidc_issuer?: string;
   };
 }
 
@@ -87,33 +85,15 @@ export interface TakoformResource {
   readonly metadata: {
     readonly name: string;
     readonly space: string;
-    readonly project?: string;
-    readonly environment?: string;
-    readonly labels?: Readonly<Record<string, string>>;
     readonly resourceVersion?: string;
   };
   readonly spec: JsonObject;
   readonly status?: TakoformResourceStatus;
-  readonly id?: string;
 }
 
 export interface TakoformResourceStatus {
-  readonly phase?: string;
-  readonly observedGeneration?: number;
-  readonly portability?: string;
-  readonly outputs?: JsonObject;
-  readonly resolution?: {
-    readonly selectedImplementation?: string;
-    readonly target?: string;
-    readonly locked?: boolean;
-    readonly portability?: string;
-  };
-  readonly conditions?: readonly {
-    readonly type: string;
-    readonly status: string;
-    readonly reason?: string;
-    readonly message?: string;
-  }[];
+  readonly observed: JsonObject;
+  readonly output: JsonObject;
 }
 
 export interface TakoformPreviewResponse {
@@ -122,7 +102,6 @@ export interface TakoformPreviewResponse {
     readonly planDigest: string;
     readonly specDigest: string;
   };
-  readonly summary: string;
 }
 
 export interface TakoformApplyRequest extends TakoformResource {
@@ -137,27 +116,14 @@ export interface TakoformImportRequest extends TakoformResource {
 
 export interface TakoformObserveResponse {
   readonly resource: TakoformResource;
-  readonly observation: {
-    readonly status: "current" | "drifted" | "missing";
-    readonly summary: string;
-    readonly runId?: string;
-  };
 }
 
 export interface TakoformRefreshResponse {
   readonly resource: TakoformResource;
-  readonly refresh: {
-    readonly summary: string;
-    readonly runId?: string;
-  };
 }
 
 export interface TakoformImportResponse {
   readonly resource: TakoformResource;
-  readonly import: {
-    readonly summary: string;
-    readonly runId?: string;
-  };
 }
 
 export interface ListTakoformAvailabilityResponse {
@@ -202,7 +168,6 @@ export function createTakoformHostDiscovery(
   const normalized = origin.replace(/\/+$/u, "");
   const api = `${normalized}${TAKOFORM_FORM_HOST_API_PATH}`;
   return {
-    protocols: [TAKOFORM_FORM_HOST_PROTOCOL],
     api_versions: [TAKOFORM_FORM_HOST_API_VERSION],
     features: {
       service_forms: true,
@@ -219,8 +184,6 @@ export function createTakoformHostDiscovery(
     endpoints: {
       api,
       forms: `${api}/forms`,
-      capabilities: `${normalized}/v1/capabilities`,
-      compatibility_api: `${normalized}/v1`,
       ...(options.interfaceDeclarations
         ? { interfaces: `${normalized}${TAKOFORM_FORM_HOST_INTERFACES_PATH}` }
         : {}),

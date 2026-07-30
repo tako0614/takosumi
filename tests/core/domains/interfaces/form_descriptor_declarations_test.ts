@@ -156,7 +156,10 @@ test("a descriptor never adopts or rewrites a declaration made another way", asy
   expect(after.metadata.materializedFrom?.source).toBe("compatibility_profile");
 });
 
-function readerFor(interfaces: InterfaceService) {
+function readerFor(
+  interfaces: InterfaceService,
+  resolveResourceUri?: () => string | undefined,
+) {
   return createPortableDeclarationReader({
     interfaces,
     listResources: async () => ({
@@ -173,6 +176,7 @@ function readerFor(interfaces: InterfaceService) {
       nextCursor: undefined,
     }),
     resolveWorkspace: async () => "workspace_1",
+    ...(resolveResourceUri ? { resolveResourceUri } : {}),
   });
 }
 
@@ -212,6 +216,31 @@ test("the portable read reports the declared identity, never the host record", a
   ]) {
     expect(projected[leaked]).toBeUndefined();
   }
+});
+
+test("the portable read exposes host runtime location outside closed Form outputs", async () => {
+  const interfaces = service();
+  await materialize(interfaces, [
+    descriptor({
+      name: "http.request",
+      version: "1",
+    }),
+  ]);
+  const declared = await readerFor(
+    interfaces,
+    () => "https://assets.example.test/",
+  ).listDeclaredInterfaces({
+    actor: ACTOR,
+    space: "space_1",
+  });
+  expect(declared).toHaveLength(1);
+  expect(declared[0]).toMatchObject({
+    name: "http.request",
+    values: {},
+    resourceUri: "https://assets.example.test/",
+  });
+  expect(declared[0]?.values).not.toHaveProperty("resourceUri");
+  expect(declared[0]?.values).not.toHaveProperty("url");
 });
 
 test("a private declaration stays out of the portable answer", async () => {

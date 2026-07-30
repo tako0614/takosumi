@@ -23,6 +23,7 @@ import { translatePortableInterfaceInputs } from "./form_descriptor_materializat
 import { InterpretedDraft202012Validator } from "../../shared/json-schema/draft_2020.ts";
 import { sha256HexAsync } from "../../shared/runtime/hash.ts";
 import { assertTakoformPortableDataOnly } from "../../adapters/takoform/package_verifier.ts";
+import { canonicalInterfaceOAuth2ResourceUri } from "./oauth_resource.ts";
 
 const RESOURCE_PAGE_LIMIT = 51;
 const RESOURCE_READ_LIMIT = 50;
@@ -53,6 +54,11 @@ export interface PortableDeclarationReaderOptions {
   readonly ensureResourceDeclarations?: (
     resource: ResourceObject,
   ) => Promise<void>;
+  /**
+   * Optional host runtime location projected as the portable Interface
+   * `resourceUri`. It never enters the Form's closed Resource output document.
+   */
+  readonly resolveResourceUri?: FormInterfaceResourceUriResolver;
 }
 
 export interface PortableDeclarationFilter {
@@ -203,7 +209,12 @@ export function createPortableDeclarationReader(
         for (const iface of owned) {
           const resource = resources.get(iface.metadata.ownerRef.id);
           if (!resource) continue;
-          const projected = projectDeclaration(iface, resource);
+          const projected = await projectDeclaration(
+            iface,
+            resource,
+            workspaceId,
+            options.resolveResourceUri,
+          );
           if (!projected) continue;
           if (input.name !== undefined && projected.name !== input.name)
             continue;
@@ -399,7 +410,12 @@ export function createPortableDeclarationWriter(
         resource: owned.resource,
         workspaceId: owned.workspaceId,
       });
-      const projected = projectDeclaration(written, owned.resource);
+      const projected = await projectDeclaration(
+        written,
+        owned.resource,
+        owned.workspaceId,
+        options.resolveResourceUri,
+      );
       if (!projected) {
         throw new InterfaceServiceError(
           "failed_precondition",
@@ -445,10 +461,12 @@ export function createPortableDeclarationWriter(
   };
 }
 
-function projectDeclaration(
+async function projectDeclaration(
   iface: Interface,
   resource: ResourceObject,
-): TakoformDeclaredInterface | undefined {
+  workspaceId: string,
+  resolveResourceUri: FormInterfaceResourceUriResolver | undefined,
+): Promise<TakoformDeclaredInterface | undefined> {
   if (
     resource.status?.phase !== "Ready" ||
     resource.status.observedGeneration !== resource.metadata.generation
@@ -484,10 +502,26 @@ function projectDeclaration(
     : undefined;
   const inputs = portableInputsOf(iface);
   const resourceUriInput = iface.spec.access.resourceUriInput;
-  const resourceUri =
+  let resourceUri =
     resourceUriInput && typeof values?.[resourceUriInput] === "string"
       ? (values[resourceUriInput] as string)
       : undefined;
+  if (
+    resourceUri === undefined &&
+    lineage.source === "form_descriptor" &&
+    resource.form &&
+    resolveResourceUri
+  ) {
+    resourceUri = canonicalInterfaceOAuth2ResourceUri(
+      await resolveResourceUri({
+        workspaceId,
+        resourceId: iface.metadata.ownerRef.id,
+        form: resource.form,
+        descriptorName: lineage.descriptorName,
+        descriptorVersion: lineage.descriptorVersion,
+      }),
+    );
+  }
   return {
     name: lineage.descriptorName,
     version: lineage.descriptorVersion,

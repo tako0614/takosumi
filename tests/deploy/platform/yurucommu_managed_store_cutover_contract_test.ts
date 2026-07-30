@@ -11,7 +11,7 @@ import {
   UI_SURFACE_INTERFACE_VERSION,
   UI_SURFACE_OPEN_PERMISSION,
 } from "takosumi-contract";
-import { resolveCapsuleResourceInterfaceBindingInstallingPrincipal } from "takosumi-contract/interfaces";
+import { resolveCapsuleInterfaceBlueprintInstallingPrincipal } from "takosumi-contract/interfaces";
 import { compileRepositoryInstallUx } from "../../../core/domains/capsules/repository_install_ux_compiler.ts";
 import { uniqueStoreInstallConfigForSource } from "../../../dashboard/src/views/new/install-helpers.ts";
 import { REFERENCE_APP_INSTALL_CONFIGS } from "../../../deploy/reference-app-install-configs.ts";
@@ -68,16 +68,15 @@ function managedCompatibilityReport(): CapsuleCompatibilityReport {
     findings: [],
     providers: ["registry.terraform.io/tako0614/takoform"],
     resources: [
-      "takoform_http_service.worker",
+      "takoform_edge_worker.worker",
       "takoform_relational_database.database",
       "takoform_object_bucket.media",
       "takoform_key_value_store.kv",
       "takoform_queue.delivery",
       "takoform_queue.delivery_dlq",
       "takoform_schedule.retention",
-      "takoform_interface.launcher",
     ],
-    dataSources: [],
+    dataSources: ["takoform_interface.worker_http"],
     provisioners: [],
     rootModuleVariables: MANAGED_INPUTS.map((input) => input.name),
     rootModuleVariableDeclarations: MANAGED_INPUTS.map((input) => ({
@@ -137,7 +136,9 @@ function managedInstallConfig(): InstallConfig {
     userVariableNames: compiled.compiled.userVariableNames,
     installExperience: compiled.compiled.installExperience,
     requiredProviders: ["registry.terraform.io/tako0614/takoform"],
-    outputAllowlist: {},
+    outputAllowlist: {
+      launch_url: { from: "launch_url", type: "url", required: true },
+    },
     policy: {},
     store: {
       surface: "app",
@@ -150,16 +151,34 @@ function managedInstallConfig(): InstallConfig {
       },
       source: { url: SOURCE_URL, path: MODULE_PATH },
     },
-    resourceInterfaceBindingProposals: [
+    interfaceBlueprints: [
       {
         key: "launcher",
-        interface: {
-          name: "yurucommu.launcher",
-          version: "1",
+        name: "yurucommu.launcher",
+        labels: { app: "yurucommu" },
+        spec: {
+          type: UI_SURFACE_INTERFACE_TYPE,
+          version: UI_SURFACE_INTERFACE_VERSION,
+          document: {
+            launcher: true,
+            display: {
+              title: "Yurucommu",
+              icon: "/icons/yurucommu.svg",
+            },
+          },
+          inputs: {
+            url: { source: "capsule_output", outputName: "launch_url" },
+          },
+          access: { visibility: "workspace" },
         },
-        subject: { source: "installing_principal" },
-        permissions: [UI_SURFACE_OPEN_PERMISSION],
-        delivery: { type: "none" },
+        bindings: [
+          {
+            key: "launcher.installer",
+            subject: { source: "installing_principal" },
+            permissions: [UI_SURFACE_OPEN_PERMISSION],
+            delivery: { type: "none" },
+          },
+        ],
       },
     ],
     createdAt: NOW,
@@ -194,18 +213,38 @@ describe("Yurucommu managed Store cutover contract", () => {
     ).toBe(direct.id);
     expect(managed.modulePath).toBe(MODULE_PATH);
     expect(managed.variableMapping).toEqual({ project_name: "yurucommu" });
-    expect(managed.interfaceBlueprints).toBeUndefined();
-    expect(managed.outputAllowlist).toEqual({});
-    expect(managed.resourceInterfaceBindingProposals).toEqual([
+    expect(managed.outputAllowlist).toEqual({
+      launch_url: { from: "launch_url", type: "url", required: true },
+    });
+    expect(managed.resourceInterfaceBindingProposals).toBeUndefined();
+    expect(managed.interfaceBlueprints).toEqual([
       {
         key: "launcher",
-        interface: {
-          name: "yurucommu.launcher",
-          version: "1",
+        name: "yurucommu.launcher",
+        labels: { app: "yurucommu" },
+        spec: {
+          type: UI_SURFACE_INTERFACE_TYPE,
+          version: UI_SURFACE_INTERFACE_VERSION,
+          document: {
+            launcher: true,
+            display: {
+              title: "Yurucommu",
+              icon: "/icons/yurucommu.svg",
+            },
+          },
+          inputs: {
+            url: { source: "capsule_output", outputName: "launch_url" },
+          },
+          access: { visibility: "workspace" },
         },
-        subject: { source: "installing_principal" },
-        permissions: [UI_SURFACE_OPEN_PERMISSION],
-        delivery: { type: "none" },
+        bindings: [
+          {
+            key: "launcher.installer",
+            subject: { source: "installing_principal" },
+            permissions: [UI_SURFACE_OPEN_PERMISSION],
+            delivery: { type: "none" },
+          },
+        ],
       },
     ]);
   });
@@ -221,8 +260,10 @@ describe("Yurucommu managed Store cutover contract", () => {
       url: SOURCE_URL,
       path: MODULE_PATH,
     });
-    expect(managed.interfaceBlueprints).toBeUndefined();
-    expect(managed.outputAllowlist).toEqual({});
+    expect(managed.interfaceBlueprints).toHaveLength(1);
+    expect(managed.outputAllowlist).toEqual({
+      launch_url: { from: "launch_url", type: "url", required: true },
+    });
     expect(managed.lifecycleActions).toEqual([
       {
         apiVersion: "takosumi.dev/v1alpha1",
@@ -284,18 +325,7 @@ describe("Yurucommu managed Store cutover contract", () => {
         onExhausted: "fail",
       },
     });
-    expect(managed.resourceInterfaceBindingProposals).toEqual([
-      {
-        key: "launcher",
-        interface: {
-          name: "yurucommu.launcher",
-          version: "1",
-        },
-        subject: { source: "installing_principal" },
-        permissions: [UI_SURFACE_OPEN_PERMISSION],
-        delivery: { type: "none" },
-      },
-    ]);
+    expect(managed.resourceInterfaceBindingProposals).toBeUndefined();
     expect(
       REFERENCE_APP_INSTALL_CONFIGS.find(
         (config) =>
@@ -351,22 +381,26 @@ describe("Yurucommu managed Store cutover contract", () => {
       repositoryInstallUx: { status: "accepted" },
     });
 
-    const resolvedBindings =
-      resolveCapsuleResourceInterfaceBindingInstallingPrincipal(
-        baseConfig.resourceInterfaceBindingProposals,
+    const resolvedBlueprints =
+      resolveCapsuleInterfaceBlueprintInstallingPrincipal(
+        baseConfig.interfaceBlueprints,
         "principal_normal_ui_installer",
       );
-    expect(resolvedBindings).toMatchObject([
+    expect(resolvedBlueprints).toMatchObject([
       {
         key: "launcher",
-        subjectRef: {
-          kind: "Principal",
-          id: "principal_normal_ui_installer",
-        },
-        permissions: [UI_SURFACE_OPEN_PERMISSION],
+        bindings: [
+          {
+            subjectRef: {
+              kind: "Principal",
+              id: "principal_normal_ui_installer",
+            },
+            permissions: [UI_SURFACE_OPEN_PERMISSION],
+          },
+        ],
       },
     ]);
-    expect(JSON.stringify(resolvedBindings)).not.toContain(
+    expect(JSON.stringify(resolvedBlueprints)).not.toContain(
       "installing_principal",
     );
     expect(baseConfig.lifecycleActions?.[0]).toMatchObject({
@@ -376,6 +410,6 @@ describe("Yurucommu managed Store cutover contract", () => {
         resourceAddress: "takoform_relational_database.database",
       },
     });
-    expect(baseConfig.interfaceBlueprints).toBeUndefined();
+    expect(baseConfig.resourceInterfaceBindingProposals).toBeUndefined();
   });
 });

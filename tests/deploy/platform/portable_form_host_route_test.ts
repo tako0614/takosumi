@@ -17,7 +17,7 @@ function platformEnv() {
   } as never;
 }
 
-test("platform keeps the portable Form host absent without durable idempotency authority", async () => {
+test("platform mounts the portable Form host with its D1 replay authority", async () => {
   const assetRequests: string[] = [];
   const env = {
     ...platformEnv(),
@@ -37,8 +37,8 @@ test("platform keeps the portable Form host absent without durable idempotency a
     ),
     env,
   );
-  expect(discovery.status).toBe(404);
-  expect(discovery.headers.get("content-type")).toContain("text/plain");
+  expect(discovery.status).toBe(200);
+  expect(discovery.headers.get("content-type")).toContain("application/json");
 
   const forms = await worker.fetch(
     new Request(
@@ -47,8 +47,8 @@ test("platform keeps the portable Form host absent without durable idempotency a
     ),
     env,
   );
-  expect(forms.status).toBe(404);
-  expect(forms.headers.get("content-type")).toContain("text/plain");
+  expect(forms.status).toBe(200);
+  expect(forms.headers.get("content-type")).toContain("application/json");
   expect(assetRequests).toEqual([]);
 });
 

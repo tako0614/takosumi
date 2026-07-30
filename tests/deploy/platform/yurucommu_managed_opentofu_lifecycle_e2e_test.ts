@@ -8,12 +8,11 @@ import { ACCOUNT_SESSION_COOKIE_NAME } from "../../../accounts/service/src/accou
 import { handleControlRoute } from "../../../accounts/service/src/control-routes.ts";
 import { InMemoryAccountsStore } from "../../../accounts/service/src/store.ts";
 import {
-  UI_SURFACE_OPEN_PERMISSION,
   isBundledResourceShapeKind,
   parseRepositoryManifestText,
   type CapsuleCompatibilityReport,
 } from "takosumi-contract";
-import { resolveCapsuleResourceInterfaceBindingInstallingPrincipal } from "takosumi-contract/interfaces";
+import { resolveCapsuleInterfaceBlueprintInstallingPrincipal } from "takosumi-contract/interfaces";
 import { createTakosumiService } from "../../../core/bootstrap.ts";
 import { compileRepositoryInstallUx } from "../../../core/domains/capsules/repository_install_ux_compiler.ts";
 import { createD1FormRegistryStore } from "../../../core/domains/service-forms/d1_store.ts";
@@ -89,12 +88,13 @@ e2e("repository install executes exact OpenTofu/Takoform apply and destroy again
   const temp = await mkdtemp(join(tmpdir(), "takosumi-yurucommu-e2e-"));
   let server: ReturnType<typeof Bun.serve> | undefined;
   try {
-    const providerVersion = (
+    const publishedProviderVersion = (
       JSON.parse(
         await readFile(new URL("release/version.json", TAKOFORM_ROOT), "utf8"),
       ) as { readonly version: string }
     ).version;
-    expect(providerVersion).toBe("0.2.1");
+    expect(publishedProviderVersion).toBe("1.0.1");
+    const providerVersion = "1.0.2";
     const providerBinDir = join(temp, "provider-bin");
     await mkdir(providerBinDir, { recursive: true });
     const providerBinary = join(providerBinDir, "terraform-provider-takoform");
@@ -117,6 +117,14 @@ e2e("repository install executes exact OpenTofu/Takoform apply and destroy again
     await cp(new URL("deploy/takoform/", YURUCOMMU_ROOT), moduleDir, {
       recursive: true,
     });
+    await writeFile(
+      join(moduleDir, ".terraform.lock.hcl"),
+      `provider "${PROVIDER_ADDRESS}" {
+  version     = "${providerVersion}"
+  constraints = "${providerVersion}"
+}
+`,
+    );
     const cliConfig = join(temp, "tofurc");
     await writeFile(
       cliConfig,
@@ -187,9 +195,9 @@ e2e("repository install executes exact OpenTofu/Takoform apply and destroy again
       variablePresentation: compiled.compiled.variablePresentation,
       userVariableNames: compiled.compiled.userVariableNames,
       installExperience: compiled.compiled.installExperience,
-      resourceInterfaceBindingProposals:
-        resolveCapsuleResourceInterfaceBindingInstallingPrincipal(
-          baseConfig.resourceInterfaceBindingProposals,
+      interfaceBlueprints:
+        resolveCapsuleInterfaceBlueprintInstallingPrincipal(
+          baseConfig.interfaceBlueprints,
           INSTALLER_ID,
         ),
       updatedAt: NOW,
@@ -226,7 +234,7 @@ e2e("repository install executes exact OpenTofu/Takoform apply and destroy again
       "ObjectBucket",
       "KeyValueStore",
       "Queue",
-      "HttpService",
+      "EdgeWorker",
       "Schedule",
     ]);
     const packages = packageSet.packages.filter((item) =>
@@ -237,6 +245,38 @@ e2e("repository install executes exact OpenTofu/Takoform apply and destroy again
     );
     const registry = createD1FormRegistryStore(db);
     for (const item of packages) {
+      const definition = JSON.parse(
+        await readFile(
+          new URL(`${item.path}/definition.json`, TAKOFORM_ROOT),
+          "utf8",
+        ),
+      ) as {
+        readonly lifecycleCapabilities: readonly (
+          | "create"
+          | "read"
+          | "update"
+          | "delete"
+          | "import"
+          | "observe"
+          | "refresh"
+          | "drift"
+        )[];
+        readonly interfaces?: readonly {
+          readonly name: string;
+          readonly version: string;
+          readonly description?: string;
+          readonly required?: boolean;
+          readonly resourceUriInput?: string;
+          readonly document?: Record<string, unknown>;
+          readonly documentSchema?: Record<string, unknown>;
+          readonly inputs?: readonly {
+            readonly name: string;
+            readonly source: string;
+            readonly pointer?: string;
+            readonly value?: unknown;
+          }[];
+        }[];
+      };
       await registry.installPackage(
         {
           packageDigest: item.packageDigest,
@@ -263,7 +303,10 @@ e2e("repository install executes exact OpenTofu/Takoform apply and destroy again
               packageDigest: item.packageDigest,
             },
             displayName: item.formRef.kind,
-            operations: ["create", "read", "update", "delete"],
+            operations: definition.lifecycleCapabilities,
+            ...(definition.interfaces?.length
+              ? { interfaceDescriptors: definition.interfaces }
+              : {}),
             installedAt: NOW,
           },
         ],
@@ -405,6 +448,7 @@ e2e("repository install executes exact OpenTofu/Takoform apply and destroy again
         );
       },
     };
+    const uriResolutionInputs: unknown[] = [];
     const env = {
       TAKOSUMI_CONTROL_DB: db,
       TAKOSUMI_ACCOUNTS_ISSUER: "https://accounts.e2e.test",
@@ -421,6 +465,21 @@ e2e("repository install executes exact OpenTofu/Takoform apply and destroy again
         },
       ]),
       LOCAL_YURUCOMMU_MANAGED: plugin,
+      TAKOSUMI_FORM_INTERFACE_RESOURCE_URI_RESOLVER: async (input: {
+        readonly resourceId: string;
+        readonly descriptorName: string;
+        readonly descriptorVersion: string;
+      }) => {
+        uriResolutionInputs.push(structuredClone(input));
+        if (
+          input.descriptorName !== "http.request" ||
+          input.descriptorVersion !== "1"
+        ) {
+          return undefined;
+        }
+        const name = input.resourceId.split(":").at(-1);
+        return name ? `https://${name}.apps.e2e.test/` : undefined;
+      },
     } as never;
 
     server = Bun.serve({
@@ -463,25 +522,37 @@ e2e("repository install executes exact OpenTofu/Takoform apply and destroy again
       ],
       { env: tofuEnv },
     );
-    expect(plan).toContain("Plan: 8 to add, 0 to change, 0 to destroy.");
-    await run(
-      [
-        EXACT_TOFU,
-        `-chdir=${moduleDir}`,
-        "apply",
-        "-input=false",
-        "-no-color",
-        "-auto-approve",
-        "tfplan",
-      ],
-      { env: tofuEnv },
-    );
+    expect(plan).toContain("Plan: 7 to add, 0 to change, 0 to destroy.");
+    try {
+      await run(
+        [
+          EXACT_TOFU,
+          `-chdir=${moduleDir}`,
+          "apply",
+          "-input=false",
+          "-no-color",
+          "-auto-approve",
+          "tfplan",
+        ],
+        { env: tofuEnv },
+      );
+    } catch (error) {
+      const failedResources =
+        await resourceStores.resources.listBySpace(WORKSPACE_ID);
+      throw new Error(
+        [
+          error instanceof Error ? error.message : String(error),
+          `persisted Resources: ${JSON.stringify(failedResources)}`,
+          `URI resolver inputs: ${JSON.stringify(uriResolutionInputs)}`,
+        ].join("\n"),
+      );
+    }
 
     const resources = await resourceStores.resources.listBySpace(WORKSPACE_ID);
     expect(resources).toHaveLength(7);
     expect(resources.map((resource) => resource.kind).sort()).toEqual(
       [
-        "HttpService",
+        "EdgeWorker",
         "KeyValueStore",
         "ObjectBucket",
         "Queue",
@@ -499,11 +570,11 @@ e2e("repository install executes exact OpenTofu/Takoform apply and destroy again
       });
       expect(resource.phase).toBe("Ready");
     }
-    const httpApply = pluginCalls.find(
+    const edgeWorkerApply = pluginCalls.find(
       (call) =>
-        call.action === "apply" && call.resource?.kind === "HttpService",
+        call.action === "apply" && call.resource?.kind === "EdgeWorker",
     );
-    expect(httpApply?.input.hostRuntimeMaterialization).toMatchObject({
+    expect(edgeWorkerApply?.input.hostRuntimeMaterialization).toMatchObject({
       contract: "takosumi.host-runtime-materialization/v1",
       installConfigId: INSTALL_CONFIG_ID,
       workspaceId: WORKSPACE_ID,
@@ -515,69 +586,67 @@ e2e("repository install executes exact OpenTofu/Takoform apply and destroy again
     });
 
     const interfaceStores = createD1InterfaceStores(db);
-    const httpResource = resources.find(
-      (resource) => resource.kind === "HttpService",
+    const edgeWorkerResource = resources.find(
+      (resource) => resource.kind === "EdgeWorker",
     )!;
-    const interfaces = await interfaceStores.interfaces.list({
+    const resourceInterfaces = await interfaceStores.interfaces.list({
       workspaceId: WORKSPACE_ID,
       ownerKind: "Resource",
-      ownerId: httpResource.id,
+      ownerId: edgeWorkerResource.id,
       includeRetired: false,
     });
-    expect(interfaces).toHaveLength(1);
-    expect(interfaces[0]).toMatchObject({
+    expect(resourceInterfaces).toHaveLength(1);
+    expect(resourceInterfaces[0]).toMatchObject({
       metadata: {
         materializedFrom: {
-          source: "portable_iac",
-          descriptorName: "yurucommu.launcher",
+          source: "form_descriptor",
+          descriptorName: "http.request",
           descriptorVersion: "1",
         },
       },
       spec: {
-        type: "yurucommu.launcher",
+        type: "http.request",
         version: "1",
-        document: {
-          launcher: true,
-          endpoint: { originInput: "origin", path: "/" },
-        },
+        document: { operations: ["request"] },
       },
       status: {
         phase: "Resolved",
         resolvedInputs: {
-          origin: `https://${PROJECT_NAME}.apps.e2e.test`,
+          resource: `EdgeWorker/${PROJECT_NAME}`,
+          name: PROJECT_NAME,
         },
       },
     });
-    const bindings = await interfaceStores.bindings.listByInterface(
-      interfaces[0]!.metadata.id,
-    );
-    expect(bindings).toMatchObject([
-      {
-        spec: {
-          subjectRef: { kind: "Principal", id: INSTALLER_ID },
-          permissions: [UI_SURFACE_OPEN_PERMISSION],
-        },
-        status: { phase: "Ready" },
-      },
-    ]);
-    const launcher = await readLauncherSurface({
-      control,
-      resourceStores,
-      interfaceStores,
+    expect(
+      await interfaceStores.bindings.listByInterface(
+        resourceInterfaces[0]!.metadata.id,
+      ),
+    ).toEqual([]);
+    expect(
+      (
+        await run(
+          [
+            EXACT_TOFU,
+            `-chdir=${moduleDir}`,
+            "output",
+            "-raw",
+            "launch_url",
+          ],
+          { env: tofuEnv },
+        )
+      ).trim(),
+    ).toBe(`https://${PROJECT_NAME}.apps.e2e.test/`);
+    expect(uriResolutionInputs).toHaveLength(1);
+    const capsuleInterfaces = await interfaceStores.interfaces.list({
+      workspaceId: WORKSPACE_ID,
+      ownerKind: "Capsule",
+      ownerId: CAPSULE_ID,
+      includeRetired: false,
     });
-    expect(launcher).toMatchObject({
-      launcherOwner: { capsuleId: CAPSULE_ID },
-      metadata: {
-        id: interfaces[0]!.metadata.id,
-        ownerRef: { kind: "Resource", id: httpResource.id },
-      },
-      status: {
-        phase: "Resolved",
-        resolvedInputs: {
-          origin: `https://${PROJECT_NAME}.apps.e2e.test`,
-        },
-      },
-    });
+    // This test exercises the external OpenTofu/provider host lifecycle. The
+    // Takosumi Run controller consumes launch_url and materializes the Capsule
+    // UI blueprint in its separate output-capture lifecycle.
+    expect(capsuleInterfaces).toEqual([]);
 
     const destroyToken = await createManagedProviderRunToken({
       secret: HOST_TOKEN_SECRET,
@@ -611,18 +680,16 @@ e2e("repository install executes exact OpenTofu/Takoform apply and destroy again
     const retiredInterfaces = await interfaceStores.interfaces.list({
       workspaceId: WORKSPACE_ID,
       ownerKind: "Resource",
-      ownerId: httpResource.id,
+      ownerId: edgeWorkerResource.id,
       includeRetired: true,
     });
     expect(retiredInterfaces).toHaveLength(1);
     expect(retiredInterfaces[0]?.status.phase).toBe("Retired");
     expect(
-      (
-        await interfaceStores.bindings.listByInterface(
-          retiredInterfaces[0]!.metadata.id,
-        )
-      )[0]?.status.phase,
-    ).toBe("Revoked");
+      await interfaceStores.bindings.listByInterface(
+        retiredInterfaces[0]!.metadata.id,
+      ),
+    ).toEqual([]);
     expect(
       await readLauncherSurface({
         control,
@@ -703,16 +770,15 @@ function yurucommuCompatibilityReport(): CapsuleCompatibilityReport {
     findings: [],
     providers: [PROVIDER_ADDRESS],
     resources: [
-      "takoform_http_service.worker",
+      "takoform_edge_worker.worker",
       "takoform_relational_database.database",
       "takoform_object_bucket.media",
       "takoform_key_value_store.kv",
       "takoform_queue.delivery",
       "takoform_queue.delivery_dlq",
       "takoform_schedule.retention",
-      "takoform_interface.launcher",
     ],
-    dataSources: [],
+    dataSources: ["takoform_interface.worker_http"],
     provisioners: [],
     rootModuleVariables: variables,
     rootModuleVariableDeclarations: variables.map((name) => ({
@@ -747,14 +813,14 @@ function resourceIdentity(
 }
 
 function resourceOutputs(kind: string, name: string): Record<string, unknown> {
-  if (kind === "HttpService") {
-    return {
-      name,
-      url: `https://${name}.apps.e2e.test`,
-      nativeId: `worker-${name}`,
-    };
-  }
-  return { name, nativeId: `${kind.toLowerCase()}-${name}` };
+  return {
+    generation: 1,
+    id: `${kind}/${name}`,
+    kind,
+    name,
+    portability: "portable",
+    ...(kind === "RelationalDatabase" ? { engine: "sqlite" } : {}),
+  };
 }
 
 function internalFormType(kind: string): string {
@@ -765,6 +831,21 @@ function implementationInterfaces(
   kind: string,
 ): Readonly<Record<string, "native">> {
   switch (kind) {
+    case "EdgeWorker":
+      return {
+        worker_fetch: "native",
+        resource_connection: "native",
+        "sql.binding.v1": "native",
+        "object.binding.v1": "native",
+        "keyvalue.binding.v1": "native",
+        "queue.binding.v1": "native",
+        grant_connect: "native",
+        grant_read: "native",
+        grant_write: "native",
+        grant_consume: "native",
+        grant_publish: "native",
+        "http.request": "native",
+      };
     case "ObjectBucket":
       return { object_store: "native", s3_api: "native" };
     case "Queue":

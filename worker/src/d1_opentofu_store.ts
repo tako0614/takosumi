@@ -155,6 +155,7 @@ import {
   wrapControlD1MaintenanceMigrationBatch,
 } from "./d1_schema_maintenance.ts";
 import { chunkD1InQueryValues } from "./d1_query_limits.ts";
+import { D1_PORTABLE_HOST_IDEMPOTENCY_SCHEMA_STATEMENTS } from "./d1_portable_host_idempotency_schema.ts";
 
 /**
  * Discriminator stored in the single §27 `runs.type` column. PlanRun rows use
@@ -6682,6 +6683,25 @@ ${D1_INTERFACE_AUTHORIZATION_INDEX_STATEMENTS.join("\n---\n")}
     },
     async apply(db) {
       await runD1AtomicSql(db, D1_INTERFACE_AUTHORIZATION_INDEX_STATEMENTS);
+    },
+  },
+  {
+    version: 59,
+    name: "d1_portable_host_idempotency",
+    checksumSource: () => `
+portable Form host mutations use an exact Workspace Actor Space and Idempotency-Key scope
+reservation insert is atomic and success or release requires the exact reservation and fingerprint
+successful wire responses remain replayable with ordered headers and exact body bytes
+${D1_PORTABLE_HOST_IDEMPOTENCY_SCHEMA_STATEMENTS.join("\n---\n")}
+`,
+    async atomicStatements() {
+      return D1_PORTABLE_HOST_IDEMPOTENCY_SCHEMA_STATEMENTS;
+    },
+    async apply(db) {
+      await runD1AtomicSql(
+        db,
+        D1_PORTABLE_HOST_IDEMPOTENCY_SCHEMA_STATEMENTS,
+      );
     },
   },
 ] as const satisfies readonly D1OpenTofuSchemaMigration[];

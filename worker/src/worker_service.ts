@@ -18,6 +18,8 @@ import type { CapsuleCoordination } from "../../core/domains/deploy-control/caps
 import type { RunnerProfile } from "@takosumi/internal/deploy-control-api";
 import type { CloudflareWorkerEnv, OpenTofuRunAction } from "./bindings.ts";
 import { createCloudflareD1OpenTofuControlStore } from "./d1_opentofu_store.ts";
+import { PortableHostIdempotencyCoordinator } from "../../core/api/portable_host_idempotency.ts";
+import { D1PortableHostIdempotencyLedger } from "./d1_portable_host_idempotency.ts";
 import {
   backupArtifactStoreFromEnv,
   backupObjectReaderFromR2,
@@ -172,6 +174,11 @@ export async function createWorkerServiceApp(
       schemaMode: controlD1SchemaMode ?? "bootstrap",
     },
   );
+  const portableHostIdempotency = new PortableHostIdempotencyCoordinator(
+    new D1PortableHostIdempotencyLedger(env.TAKOSUMI_CONTROL_DB, {
+      schemaMode: controlD1SchemaMode ?? "bootstrap",
+    }),
+  );
   const adapters = createWorkerAdapters(env);
   const enqueueRun = options.enqueueRun ?? openTofuRunOwnerEnqueuer(env);
   const enqueueSourceSync =
@@ -298,6 +305,7 @@ export async function createWorkerServiceApp(
     resourceShapeStores: createD1ResourceShapeStores(env.TAKOSUMI_CONTROL_DB),
     formRegistryStore: createD1FormRegistryStore(env.TAKOSUMI_CONTROL_DB),
     offeringCatalogStore: createD1OfferingCatalogStore(env.TAKOSUMI_CONTROL_DB),
+    portableHostIdempotency,
     // Stock multi-tenant routes use the verified Workspace id as the Resource
     // authorization scope. Keep that host mapping explicit for backup.
     resolveResourceBackupScope: (workspaceId) => workspaceId,

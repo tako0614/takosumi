@@ -90,7 +90,10 @@ test("portable Interface exact Resource selector returns one declaration", async
     "/apis/forms.takoform.com/v1alpha1/interfaces/storage.object?space=space_1&version=v1&resourceKind=ObjectBucket&resourceName=assets",
   );
   expect(response.status).toBe(200);
-  expect(await response.json()).toEqual(DECLARATIONS[0]);
+  expect(await response.json()).toEqual({
+    ...DECLARATIONS[0],
+    values: {},
+  });
 });
 
 test("portable Interface selectors and read scope fail closed", async () => {

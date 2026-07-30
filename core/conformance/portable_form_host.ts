@@ -12,7 +12,6 @@ import {
   shapeKindForPortableType,
   TAKOFORM_FORM_HOST_API_VERSION,
   TAKOFORM_FORM_HOST_API_PATH,
-  TAKOFORM_FORM_HOST_PROTOCOL,
   TAKOFORM_FORM_HOST_WELL_KNOWN_PATH,
 } from "takosumi-contract";
 import { sha256HexOfStringAsync } from "../shared/runtime/hash.ts";
@@ -112,8 +111,6 @@ export async function runPortableFormHostConformance(
     { headers },
   );
   if (
-    !Array.isArray(discovery.protocols) ||
-    !discovery.protocols.includes(TAKOFORM_FORM_HOST_PROTOCOL) ||
     !Array.isArray(discovery.api_versions) ||
     !discovery.api_versions.includes(TAKOFORM_FORM_HOST_API_VERSION) ||
     !isRecord(discovery.features) ||
@@ -170,7 +167,7 @@ export async function runPortableFormHostConformance(
     body: JSON.stringify(applyRequest),
   });
   const resource = asTakoformResource(applied);
-  const canonicalResourceId = resource.id;
+  const canonicalResourceId = portableResourceId(resource);
   if (!canonicalResourceId)
     throw new Error("portable apply omitted canonical Resource id");
   checks.push("apply");
@@ -183,7 +180,7 @@ export async function runPortableFormHostConformance(
     }),
   );
   if (
-    replay.id !== canonicalResourceId ||
+    portableResourceId(replay) !== canonicalResourceId ||
     replay.metadata.resourceVersion !== resource.metadata.resourceVersion
   ) {
     throw new Error(
@@ -196,7 +193,7 @@ export async function runPortableFormHostConformance(
   const read = asTakoformResource(
     await jsonRequest(fetcher, readPath, { headers }),
   );
-  if (read.id !== canonicalResourceId)
+  if (portableResourceId(read) !== canonicalResourceId)
     throw new Error("portable read identity changed");
   checks.push("read");
 
@@ -206,7 +203,11 @@ export async function runPortableFormHostConformance(
     { headers },
   );
   if (
-    compatibility.id !== canonicalResourceId ||
+    compatibility.id !==
+      `tkrn:${input.space}:${compatibilityKind(input.identity.type)}:${input.name}` ||
+    compatibility.kind !== compatibilityKind(input.identity.type) ||
+    !isRecord(compatibility.metadata) ||
+    compatibility.metadata.name !== input.name ||
     installedFormReferenceKey(
       compatibility.form as unknown as InstalledFormReference,
     ) !== installedFormReferenceKey(input.identity)
@@ -267,7 +268,7 @@ export async function runPortableFormHostConformance(
       }),
     );
     if (
-      updated.id !== canonicalResourceId ||
+      portableResourceId(updated) !== canonicalResourceId ||
       !updated.metadata.resourceVersion ||
       updated.metadata.resourceVersion === version
     ) {
@@ -291,14 +292,15 @@ export async function runPortableFormHostConformance(
       },
     },
   );
-  const observationStatus = stringAt(observation, "observation", "status");
+  if (!isRecord(observation.resource))
+    throw new Error("portable drift check omitted its Resource");
+  const observedResource = asTakoformResource(observation.resource);
+  const driftedFields = observedResource.status?.observed.driftedFields;
   if (
-    observationStatus !== "current" &&
-    observationStatus !== "drifted" &&
-    observationStatus !== "missing"
-  ) {
-    throw new Error("portable drift check omitted a canonical status");
-  }
+    !Array.isArray(driftedFields) ||
+    !driftedFields.every((field) => typeof field === "string")
+  )
+    throw new Error("portable drift check omitted drift evidence");
   checks.push("observe");
   checks.push("drift");
   await jsonRequest(
@@ -640,6 +642,11 @@ function asTakoformResource(value: Record<string, unknown>): TakoformResource {
     throw new Error("portable response lacks the versioned Resource envelope");
   }
   return value as unknown as TakoformResource;
+}
+
+function portableResourceId(resource: TakoformResource): string | undefined {
+  const id = resource.status?.output.id;
+  return typeof id === "string" ? id : undefined;
 }
 
 function stringAt(value: unknown, ...path: string[]): string {

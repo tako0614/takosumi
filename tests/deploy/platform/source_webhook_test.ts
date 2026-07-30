@@ -1690,7 +1690,7 @@ test("platform Resource Shape API discovery is gated by deploy-control token and
   expect(discoveryBody.endpoints.extensions).toBeUndefined();
 });
 
-test("platform keeps unavailable Takoform endpoints ahead of the SPA fallback", async () => {
+test("platform keeps the Takoform host ahead of the SPA fallback", async () => {
   const worker = (await import("../../../deploy/platform/worker.ts")).default;
   const assetRequests: string[] = [];
   const env = {
@@ -1722,11 +1722,17 @@ test("platform keeps unavailable Takoform endpoints ahead of the SPA fallback", 
     ),
     env,
   );
-  expect(hostDiscoveryResponse.status).toBe(404);
+  expect(hostDiscoveryResponse.status).toBe(200);
   expect(hostDiscoveryResponse.headers.get("content-type")).toContain(
-    "text/plain",
+    "application/json",
   );
-  expect(await hostDiscoveryResponse.text()).toBe("404 Not Found");
+  expect(await hostDiscoveryResponse.json()).toMatchObject({
+    api_versions: ["forms.takoform.com/v1alpha1"],
+    features: {
+      service_forms: true,
+      idempotent_lifecycle: true,
+    },
+  });
   const formActivations = await worker.fetch(
     new Request("https://app.takosumi.com/v1/form-activations", {
       headers: { authorization: "Bearer resource-token" },
@@ -1900,7 +1906,7 @@ test("platform Resource Shape API routes are routed before accounts and bearer-g
   expect(await operatorCatalogs.json()).toEqual({ catalogs: [] });
 });
 
-test("platform keeps Takoform discovery absent without durable idempotency authority", async () => {
+test("platform derives durable Takoform replay authority from control D1", async () => {
   const db = new SqliteFakeD1();
   await ensureD1OpenTofuLedgerSchema(db);
   const workspaceId = "workspace_takoform";
@@ -1942,8 +1948,11 @@ test("platform keeps Takoform discovery absent without durable idempotency autho
     ),
     env,
   );
-  expect(discovery.status).toBe(404);
-  expect(await discovery.text()).toBe("404 Not Found");
+  expect(discovery.status).toBe(200);
+  expect(await discovery.json()).toMatchObject({
+    api_versions: ["forms.takoform.com/v1alpha1"],
+    features: { idempotent_lifecycle: true },
+  });
 
   const disabledDiscovery = await handlePlatformTakoformDiscoveryRequest(
     new Request(

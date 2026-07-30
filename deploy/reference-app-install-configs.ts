@@ -608,8 +608,8 @@ const yurucommuManagedSource = source("yurucommu", "deploy/takoform");
  * App vocabulary is compiled from the exact repository snapshot's
  * `.well-known/takosumi.json`. This service-owned row carries only host
  * authority which repository metadata cannot grant: managed hostname policy,
- * the typed database migration, and installer access to the IaC-owned launcher
- * Interface.
+ * the typed database migration, and installer access to the UI surface
+ * resolved from the module's Interface-backed `launch_url` output.
  */
 const yurucommuManagedConfig = {
   id: "cfg-reference-yurucommu-managed",
@@ -617,7 +617,9 @@ const yurucommuManagedConfig = {
   sourceSelector: yurucommuManagedSource,
   modulePath: "deploy/takoform",
   variableMapping: {},
-  outputAllowlist: {},
+  outputAllowlist: {
+    launch_url: urlOutput("launch_url"),
+  },
   managedPublicHostname: { mode: "scoped" },
   hostRuntimeMaterialization: {
     contract: "takosumi.host-runtime-materialization/v1",
@@ -730,17 +732,13 @@ const yurucommuManagedConfig = {
     descriptionJa: "ゆるくつながる feed / story 型コミュニケーション。",
     descriptionEn: "A relaxed feed and story communication app.",
   }),
-  resourceInterfaceBindingProposals: [
-    {
-      key: "launcher",
-      interface: {
-        name: "yurucommu.launcher",
-        version: "1",
-      },
-      subject: { source: "installing_principal" },
-      permissions: [UI_SURFACE_OPEN_PERMISSION],
-      delivery: { type: "none" },
-    },
+  interfaceBlueprints: [
+    uiBlueprint({
+      app: "yurucommu",
+      title: "Yurucommu",
+      outputName: "launch_url",
+      icon: "/icons/yurucommu.svg",
+    }),
   ],
   createdAt: REFERENCE_CONFIG_TIMESTAMP,
   updatedAt: REFERENCE_CONFIG_TIMESTAMP,
