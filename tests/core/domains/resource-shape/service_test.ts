@@ -4123,6 +4123,172 @@ test("direct-plugin apply response loss observes current and never creates a dup
   expect(run?.status).toBe("succeeded");
 });
 
+test("direct-plugin recovery replaces a terminalized Applying Run without duplicating the backend", async () => {
+  const stores = createInMemoryResourceShapeStores();
+  const ledger = new InMemoryOpenTofuControlStore();
+  const backend: StableApplyBackend = {
+    exists: false,
+    creations: 0,
+    operationKeys: [],
+  };
+  const firstAdapter = new LostApplyResponseAdapter(backend, true);
+  const first = new ResourceShapeService({
+    stores,
+    adapter: firstAdapter,
+    operationRuns: ledger,
+    activity: new ActivityService({
+      store: ledger,
+      now: () => new Date(NOW),
+    }),
+    now: () => NOW,
+  });
+  await seed(first);
+  const request = {
+    actor: ACTOR,
+    space: "space_1",
+    kind: "ContainerService" as const,
+    name: "agent-terminalized-recovery",
+    spec: {
+      name: "agent-terminalized-recovery",
+      image: "ghcr.io/example/agent:1.0.0",
+    },
+  };
+
+  const pending = await reviewedApply(first, request);
+  expect(pending.ok).toBe(false);
+  expect(backend.exists).toBe(true);
+  expect(backend.creations).toBe(1);
+  const id = "tkrn:space_1:ContainerService:agent-terminalized-recovery";
+  const applying = await stores.resources.get(id);
+  const originalRunId = applying?.pendingOperation?.runId;
+  const originalRun = await ledger.getResourceOperationRun(
+    originalRunId ?? "missing",
+  );
+  if (!originalRun) throw new Error("missing original apply Run");
+  const failedRun: ResourceOperationRun = {
+    ...originalRun,
+    status: "failed",
+    errorCode: "apply_failed",
+    finishedAt: NOW,
+    resourceOperationVersion: originalRun.resourceOperationVersion + 1,
+  };
+  expect(
+    (
+      await ledger.transitionResourceOperationRun({
+        id: originalRun.id,
+        operationKey: originalRun.resourceOperationKey,
+        expectedVersion: originalRun.resourceOperationVersion,
+        expectFrom: ["running"],
+        run: failedRun,
+      })
+    ).won,
+  ).toBe(true);
+
+  const recoveryAdapter = new StableNameApplyRecoveryAdapter(backend);
+  const restarted = new ResourceShapeService({
+    stores,
+    adapter: recoveryAdapter,
+    operationRuns: ledger,
+    activity: new ActivityService({
+      store: ledger,
+      now: () => new Date(NOW),
+    }),
+    newOperationNonce: () => "terminalized-recovery-incarnation",
+    now: () => NOW,
+  });
+  const preview = await restarted.preview(request);
+  expect(preview.ok).toBe(true);
+  if (!preview.ok) return;
+  const recovered = await restarted.recoverApply(request, {
+    planDigest: preview.value.planDigest,
+  });
+  expect(recovered.ok).toBe(true);
+  expect(recoveryAdapter.observeInputs).toHaveLength(1);
+  expect(recoveryAdapter.refreshInputs).toHaveLength(1);
+  expect(recoveryAdapter.applyInputs).toHaveLength(0);
+  expect(backend.creations).toBe(1);
+  const ready = await stores.resources.get(id);
+  expect(ready?.phase).toBe("Ready");
+  expect(ready?.lastOperationRunId).not.toBe(originalRunId);
+  expect(
+    (await ledger.getResourceOperationRun(originalRunId ?? "missing"))?.status,
+  ).toBe("failed");
+  expect(
+    (
+      await ledger.getResourceOperationRun(
+        ready?.lastOperationRunId ?? "missing",
+      )
+    )?.status,
+  ).toBe("succeeded");
+});
+
+test("recovery admission denial does not terminalize the shared Applying Run", async () => {
+  const stores = createInMemoryResourceShapeStores();
+  const ledger = new InMemoryOpenTofuControlStore();
+  const backend: StableApplyBackend = {
+    exists: false,
+    creations: 0,
+    operationKeys: [],
+  };
+  const first = new ResourceShapeService({
+    stores,
+    adapter: new LostApplyResponseAdapter(backend, false),
+    operationRuns: ledger,
+    activity: new ActivityService({
+      store: ledger,
+      now: () => new Date(NOW),
+    }),
+    now: () => NOW,
+  });
+  await seed(first);
+  const request = {
+    actor: ACTOR,
+    space: "space_1",
+    kind: "ContainerService" as const,
+    name: "agent-recovery-admission-denial",
+    spec: {
+      name: "agent-recovery-admission-denial",
+      image: "ghcr.io/example/agent:1.0.0",
+    },
+  };
+  expect((await reviewedApply(first, request)).ok).toBe(false);
+  const id = "tkrn:space_1:ContainerService:agent-recovery-admission-denial";
+  const applying = await stores.resources.get(id);
+  const originalRunId = applying?.pendingOperation?.runId;
+
+  const admission = new RecordingDeploymentAdmission();
+  admission.acceptPortablePlanReview = true;
+  admission.reserveReasons = ["temporarily denied"];
+  const restarted = new ResourceShapeService({
+    stores,
+    adapter: new StableNameApplyRecoveryAdapter(backend),
+    deploymentAdmission: admission,
+    operationRuns: ledger,
+    activity: new ActivityService({
+      store: ledger,
+      now: () => new Date(NOW),
+    }),
+    now: () => NOW,
+  });
+  const preview = await restarted.preview(request);
+  expect(preview.ok).toBe(true);
+  if (!preview.ok) return;
+  const denied = await restarted.recoverApply(request, {
+    planDigest: preview.value.planDigest,
+  });
+  expect(denied).toEqual({
+    ok: false,
+    error: {
+      code: "deployment_admission_denied",
+      message: "temporarily denied",
+    },
+  });
+  expect((await stores.resources.get(id))?.phase).toBe("Applying");
+  expect(
+    (await ledger.getResourceOperationRun(originalRunId ?? "missing"))?.status,
+  ).toBe("running");
+});
+
 test("scheduled repair resumes an exact direct-plugin apply from its retained review", async () => {
   const stores = createInMemoryResourceShapeStores();
   const ledger = new InMemoryOpenTofuControlStore();

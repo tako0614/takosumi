@@ -1270,6 +1270,35 @@ export class ResourceShapeService {
             );
           }
           assertResourceOperationFormEvidence(operationRun, form.value);
+          if (operationRun.status === "failed") {
+            // Older recovery paths could terminalize the shared Run after a
+            // conclusive admission failure while restoring the Resource to
+            // its prior Applying claim. A failed Run is immutable, so resume
+            // through a fresh revision. Recovery still observes the stable
+            // backend identity before replaying any provider mutation.
+            const replacement = await this.#beginPluginOperationRunClaim({
+              operation: "apply",
+              resourceId: id,
+              actor: req.actor,
+              ...(form.value === undefined ? {} : { form: form.value }),
+              identity: {
+                incarnationNonce: validatedOperationNonce(
+                  this.#newOperationNonce(),
+                ),
+                generation,
+                managedBy: incomingManagedBy,
+                planDigest: deploymentReview.planDigest,
+                resolutionFingerprint: evidence.resolutionFingerprint,
+              },
+            });
+            operationRun = replacement.run;
+            operationRunCreated = replacement.created;
+            if (!operationRunCreated || operationRun.status !== "running") {
+              throw new Error(
+                `resource ${id} recovery could not claim a fresh canonical apply Run`,
+              );
+            }
+          }
         } else {
           const operationRunClaim = await this.#beginPluginOperationRunClaim({
             operation: "apply",
@@ -1462,7 +1491,7 @@ export class ResourceShapeService {
           existing,
           existingLock,
         );
-        if (operationRun && rolledBack) {
+        if (operationRun && operationRunCreated && rolledBack) {
           operationRun = await this.#failPluginOperationRun(
             operationRun,
             new Error(decision.reasons.join("; ")),
@@ -1487,7 +1516,7 @@ export class ResourceShapeService {
         existing,
         existingLock,
       );
-      if (operationRun && rolledBack) {
+      if (operationRun && operationRunCreated && rolledBack) {
         operationRun = await this.#failPluginOperationRun(operationRun, error);
       }
       return rolledBack
