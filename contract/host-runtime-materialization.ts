@@ -77,8 +77,8 @@ export interface HostRuntimeBackgroundActivationRequirement {
   /**
    * Queue sources are outgoing connections declared by the consumer runtime.
    * Schedule sources are incoming edges: the alias is declared on the Schedule
-   * connection which targets the consumer HttpService. Keeping the direction
-   * explicit prevents a host from inventing a circular HttpService -> Schedule
+   * connection which targets the consumer EdgeWorker. Keeping the direction
+   * explicit prevents a host from inventing a circular EdgeWorker -> Schedule
    * connection merely to materialize a cron trigger.
    */
   readonly sourceResourceKind: "Queue" | "Schedule";

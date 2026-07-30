@@ -28,7 +28,7 @@ const packageJson = JSON.parse(
 test("the OSS contract directory is an explicit public package", () => {
   expect(packageJson).toMatchObject({
     name: "@takosjp/takosumi-contract",
-    version: "1.0.0",
+    version: "2.0.0",
     publishConfig: { access: "public" },
   });
   expect(packageJson.private).not.toBe(true);
@@ -48,9 +48,9 @@ test("the OSS contract directory is an explicit public package", () => {
 });
 
 test("root and explicit runtime subpaths expose one contract identity", () => {
-  expect(TAKOSUMI_BACKGROUND_EVENT_ABI).toBe("takosumi.background-event/v1");
+  expect(TAKOSUMI_BACKGROUND_EVENT_ABI).toBe("takosumi.background-event/v2");
   expect(TAKOSUMI_BACKGROUND_EVENT_INVOKE_PATH).toBe(
-    "/.well-known/takosumi/background-events/v1/invoke",
+    "/.well-known/takosumi/background-events/v2/invoke",
   );
   expect(TAKOSUMI_MANAGED_RUNTIME_CONNECTION_CONTRACT).toBe(
     "takosumi.managed-runtime-connection/v1",

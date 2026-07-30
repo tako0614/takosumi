@@ -36,7 +36,7 @@ export interface HostRuntimeResourceLifecycle {
   }): Promise<void>;
   /**
    * Rebuilds background activation authority for one already-prepared
-   * HttpService without replacing its immutable runtime release or secrets.
+   * EdgeWorker without replacing its immutable runtime release or secrets.
    * Hosts must atomically replace the full Capsule activation graph so a
    * Schedule update/delete cannot leave a stale revision dispatchable.
    */
@@ -52,7 +52,7 @@ export interface HostRuntimeResourceLifecycle {
  * Resolves the consumer of one provider-neutral Schedule source edge.
  *
  * The activation requirement names the alias on the Schedule itself. The
- * Resource graph remains acyclic (`Schedule -> HttpService`), and no
+ * Resource graph remains acyclic (`Schedule -> EdgeWorker`), and no
  * repository/provider-specific native cron identity enters the host contract.
  */
 export function scheduleHostRuntimeReconcileTarget(input: {
@@ -100,10 +100,10 @@ export function scheduleHostRuntimeReconcileTarget(input: {
   }
   const resourceId =
     typeof connection.resource === "string" ? connection.resource : "";
-  const match = /^tkrn:([^:]+):HttpService:(.+)$/u.exec(resourceId);
+  const match = /^tkrn:([^:]+):EdgeWorker:(.+)$/u.exec(resourceId);
   if (!match || match[1] !== input.request.workspaceId) {
     throw new Error(
-      "host runtime Schedule target must be an HttpService in the same Workspace",
+      "host runtime Schedule target must be an EdgeWorker in the same Workspace",
     );
   }
   return resourceId;

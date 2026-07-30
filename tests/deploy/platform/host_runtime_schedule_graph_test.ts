@@ -17,7 +17,7 @@ const owner = {
 function schedule(
   name: string,
   revision: string,
-  target = "tkrn:workspace_1:HttpService:app",
+  target = "tkrn:workspace_1:EdgeWorker:app",
 ): PlatformCanonicalReadyResourceInventoryItem {
   const resourceId = `tkrn:workspace_1:Schedule:${name}`;
   return {
@@ -74,7 +74,7 @@ const input = {
   workspaceId: "workspace_1",
   capsuleId: "capsule_1",
   installingPrincipalId: "principal_1",
-  targetResourceId: "tkrn:workspace_1:HttpService:app",
+  targetResourceId: "tkrn:workspace_1:EdgeWorker:app",
   connectionAlias: "WORKER",
 };
 
@@ -108,7 +108,7 @@ test("an absent or replaced Schedule fails closed and an ambiguous edge is rejec
         schedule(
           "app-retention",
           "run_schedule_3",
-          "tkrn:workspace_1:HttpService:another",
+          "tkrn:workspace_1:EdgeWorker:another",
         ),
       ]),
     }),

@@ -1946,7 +1946,7 @@ export async function createTakosumiService(
       resourceShapeStores.locks.get(resourceId),
     ]);
     if (!resource || !lock) return undefined;
-    if (resource.kind !== "HttpService") return undefined;
+    if (resource.kind !== "EdgeWorker") return undefined;
     const request = await hostRuntimeMaterializationResolver({
       owner: resource.owner,
     });
@@ -1980,7 +1980,7 @@ export async function createTakosumiService(
     const target = await exactHostRuntimeLifecycleInput(targetResourceId);
     if (!target) {
       throw new Error(
-        `host runtime Schedule target is not an exact Ready HttpService: ${targetResourceId}`,
+        `host runtime Schedule target is not an exact Ready EdgeWorker: ${targetResourceId}`,
       );
     }
     await options.hostRuntimeResourceLifecycle.reconcile(target);

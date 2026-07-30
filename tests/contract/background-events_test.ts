@@ -37,9 +37,9 @@ function queueEnvelope(): TakosumiBackgroundEventEnvelope {
     },
     source,
     target: {
-      kind: "HttpService",
+      kind: "EdgeWorker",
       workspaceId: "ws1",
-      resourceId: "tkrn:ws1:HttpService:yurucommu",
+      resourceId: "tkrn:ws1:EdgeWorker:yurucommu",
       resourceGeneration: 5,
       resourceRevisionId: "service_revision_5",
       entrypoint: "push_notification",

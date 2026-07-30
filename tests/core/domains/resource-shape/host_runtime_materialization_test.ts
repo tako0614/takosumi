@@ -75,7 +75,7 @@ const capsules: Pick<CapsulesService, "getCapsule" | "getInstallConfig"> = {
 
 function adapterInput(): AdapterApplyInput {
   return {
-    resourceId: "tkrn:workspace_1:HttpService:app",
+    resourceId: "tkrn:workspace_1:EdgeWorker:app",
     owner: {
       kind: "Capsule",
       id: "capsule_1",
@@ -87,7 +87,7 @@ function adapterInput(): AdapterApplyInput {
     environment: "production",
     stateGeneration: 0,
     plan: {
-      shape: "HttpService",
+      shape: "EdgeWorker",
       validatedSpec: {},
       executionId: "plugin:test",
       inputs: {},
@@ -101,7 +101,7 @@ function adapterInput(): AdapterApplyInput {
       implementations: [],
     },
     implementation: {
-      shape: "HttpService",
+      shape: "EdgeWorker",
       implementation: "managed-http",
       plugin: "managed-http",
       interfaces: {},
@@ -201,7 +201,7 @@ test("owner mismatch fails before the selected adapter", async () => {
   expect(called).toBe(false);
 });
 
-test("Schedule background requirements resolve only the exact provider-neutral HttpService edge", () => {
+test("Schedule background requirements resolve only the exact provider-neutral EdgeWorker edge", () => {
   const request = {
     contract: HOST_RUNTIME_MATERIALIZATION_CONTRACT,
     installConfigId: config.id,
@@ -226,7 +226,7 @@ test("Schedule background requirements resolve only the exact provider-neutral H
       timezone: "UTC",
       connections: {
         WORKER: {
-          resource: "tkrn:workspace_1:HttpService:app",
+          resource: "tkrn:workspace_1:EdgeWorker:app",
           permissions: ["invoke"],
           projection: "schedule.trigger.v1",
         },
@@ -235,7 +235,7 @@ test("Schedule background requirements resolve only the exact provider-neutral H
   };
 
   expect(scheduleHostRuntimeReconcileTarget({ request, source })).toBe(
-    "tkrn:workspace_1:HttpService:app",
+    "tkrn:workspace_1:EdgeWorker:app",
   );
   expect(() =>
     scheduleHostRuntimeReconcileTarget({

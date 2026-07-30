@@ -1,13 +1,13 @@
 export const TAKOSUMI_BACKGROUND_EVENT_ABI =
-  "takosumi.background-event/v1" as const;
+  "takosumi.background-event/v2" as const;
 export const TAKOSUMI_BACKGROUND_EVENT_AUTHORITY_VERSION =
-  "takosumi.background-event-authority/v1" as const;
+  "takosumi.background-event-authority/v2" as const;
 export const TAKOSUMI_BACKGROUND_EVENT_RESULT_VERSION =
-  "takosumi.background-event-result/v1" as const;
+  "takosumi.background-event-result/v2" as const;
 export const TAKOSUMI_BACKGROUND_EVENT_AUTHORITY_PROP =
   "takosumiBackgroundEvent" as const;
 export const TAKOSUMI_BACKGROUND_EVENT_INVOKE_PATH =
-  "/.well-known/takosumi/background-events/v1/invoke" as const;
+  "/.well-known/takosumi/background-events/v2/invoke" as const;
 
 export interface BackgroundEventResourceRef {
   readonly workspaceId: string;
@@ -33,7 +33,7 @@ export type TakosumiBackgroundEventSource =
     } & BackgroundEventResourceRef);
 
 export interface TakosumiBackgroundEventTarget extends BackgroundEventResourceRef {
-  readonly kind: "HttpService";
+  readonly kind: "EdgeWorker";
   /** App-defined opaque handler token. The host never interprets it. */
   readonly entrypoint: string;
 }
@@ -293,12 +293,12 @@ function backgroundTarget(value: unknown): TakosumiBackgroundEventTarget {
     "resourceRevisionId",
     "entrypoint",
   ]);
-  if (target.kind !== "HttpService") {
+  if (target.kind !== "EdgeWorker") {
     throw new TypeError("background target kind is invalid");
   }
   return {
-    ...backgroundResource(target, "HttpService"),
-    kind: "HttpService",
+    ...backgroundResource(target, "EdgeWorker"),
+    kind: "EdgeWorker",
     entrypoint: token(target.entrypoint),
   };
 }

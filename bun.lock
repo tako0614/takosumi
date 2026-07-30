@@ -51,7 +51,7 @@
     },
     "contract": {
       "name": "@takosjp/takosumi-contract",
-      "version": "1.0.0",
+      "version": "2.0.0",
     },
     "deploy/node-postgres": {
       "name": "@takosjp/takosumi-accounts-node-postgres",
