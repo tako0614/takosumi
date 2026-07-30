@@ -258,6 +258,14 @@ export type InterfaceServiceMaterialization =
       readonly descriptorVersion: string;
     };
 
+export interface FormDescriptorResourceUriObservation {
+  readonly formRefKey: string;
+  readonly formSchemaDigest: string;
+  readonly descriptorName: string;
+  readonly descriptorVersion: string;
+  readonly resourceUri?: string;
+}
+
 export type InterfaceBindingServiceMaterialization =
   | {
       readonly capsuleBlueprintKey: string;
@@ -1255,9 +1263,36 @@ export class InterfaceService {
     id: string,
     options: { readonly allowSafetyRecovery?: boolean } = {},
   ): Promise<Interface> {
+    return await this.#reconcile(id, options);
+  }
+
+  /**
+   * Publishes the host-observed portable resource URI only for the exact
+   * immutable Form descriptor lineage that owns this Interface.
+   */
+  async reconcileFormDescriptorResourceUri(
+    id: string,
+    observation: FormDescriptorResourceUriObservation,
+  ): Promise<Interface> {
+    return await this.#reconcile(id, {
+      formDescriptorResourceUri: observation,
+    });
+  }
+
+  async #reconcile(
+    id: string,
+    options: {
+      readonly allowSafetyRecovery?: boolean;
+      readonly formDescriptorResourceUri?: FormDescriptorResourceUriObservation;
+    } = {},
+  ): Promise<Interface> {
     for (let attempt = 0; attempt < 4; attempt += 1) {
       const current = await this.get(id);
       if (current.status.phase === "Retired") return current;
+      const observedResourceUri = formDescriptorResourceUriForReconcile(
+        current,
+        options.formDescriptorResourceUri,
+      );
       if (
         !options.allowSafetyRecovery &&
         (current.status.phase === "Unknown" ||
@@ -1362,7 +1397,12 @@ export class InterfaceService {
       }
       const now = this.#now();
       const nextStatus = resolution.ok
-        ? await resolvedStatus(current, resolution, now)
+        ? await resolvedStatus(
+            current,
+            resolution,
+            now,
+            observedResourceUri,
+          )
         : unresolvedStatus(current, resolution, now);
       if (await statusSemanticallyEqual(current.status, nextStatus)) {
         await this.#refreshBindings(current.metadata.id);
@@ -2428,17 +2468,20 @@ async function resolvedStatus(
   current: Interface,
   resolution: Extract<InterfaceResolutionResult, { readonly ok: true }>,
   now: string,
+  resourceUri: string | undefined,
 ): Promise<Interface["status"]> {
   const before = await stableJsonDigest({
     phase: current.status.phase,
     observedGeneration: current.status.observedGeneration,
     resolvedInputs: current.status.resolvedInputs ?? {},
+    resourceUri: current.status.resourceUri ?? null,
     provenance: current.status.provenance ?? {},
   });
   const after = await stableJsonDigest({
     phase: "Resolved",
     observedGeneration: current.metadata.generation,
     resolvedInputs: resolution.resolvedInputs,
+    resourceUri: resourceUri ?? null,
     provenance: resolution.provenance,
   });
   return {
@@ -2447,6 +2490,7 @@ async function resolvedStatus(
     resolvedRevision:
       current.status.resolvedRevision + (before === after ? 0 : 1),
     resolvedInputs: resolution.resolvedInputs,
+    ...(resourceUri ? { resourceUri } : {}),
     provenance: resolution.provenance,
     conditions: [
       condition("Ready", "true", "Resolved", now, current.metadata.generation),
@@ -2482,7 +2526,8 @@ function unresolvedStatus(
   const changed =
     current.status.phase !== resolution.phase ||
     current.status.observedGeneration !== current.metadata.generation ||
-    current.status.resolvedInputs !== undefined;
+    current.status.resolvedInputs !== undefined ||
+    current.status.resourceUri !== undefined;
   return {
     phase: resolution.phase,
     observedGeneration: current.metadata.generation,
@@ -2498,6 +2543,50 @@ function unresolvedStatus(
       ),
     ],
   };
+}
+
+function formDescriptorResourceUriForReconcile(
+  current: Interface,
+  observation: FormDescriptorResourceUriObservation | undefined,
+): string | undefined {
+  const source = current.metadata.materializedFrom;
+  if (observation !== undefined) {
+    if (
+      current.metadata.ownerRef.kind !== "Resource" ||
+      source?.source !== "form_descriptor" ||
+      source.formRefKey !== observation.formRefKey ||
+      source.formSchemaDigest !== observation.formSchemaDigest ||
+      source.descriptorName !== observation.descriptorName ||
+      source.descriptorVersion !== observation.descriptorVersion ||
+      current.spec.type !== observation.descriptorName ||
+      current.spec.version !== observation.descriptorVersion
+    ) {
+      throw new InterfaceServiceError(
+        "failed_precondition",
+        "resource URI observation does not match the exact Form descriptor Interface",
+      );
+    }
+    if (observation.resourceUri === undefined) return undefined;
+    const canonical = canonicalInterfaceOAuth2ResourceUri(
+      observation.resourceUri,
+    );
+    if (!canonical) {
+      throw new InterfaceServiceError(
+        "invalid_argument",
+        "Form descriptor resource URI must be a credential-free absolute HTTPS URI",
+      );
+    }
+    return canonical;
+  }
+  if (
+    current.status.phase !== "Resolved" ||
+    current.status.observedGeneration !== current.metadata.generation ||
+    current.metadata.ownerRef.kind !== "Resource" ||
+    source?.source !== "form_descriptor"
+  ) {
+    return undefined;
+  }
+  return canonicalInterfaceOAuth2ResourceUri(current.status.resourceUri);
 }
 
 function guard(record: Interface): InterfaceWriteGuard {

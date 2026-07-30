@@ -358,6 +358,158 @@ test("portable resource_uri is host-supplied, canonical, and never creates a bin
   ).rejects.toMatchObject({ reason: "input_not_ready" });
 });
 
+test("Form top-level resourceUri is durable OAuth authority for the exact Resolved Interface", async () => {
+  const issued: Array<Record<string, unknown>> = [];
+  let sequence = 0;
+  const interfaces = new InterfaceService({
+    stores: createInMemoryInterfaceStores(),
+    now: () => NOW,
+    newId: (prefix) => `${prefix}_${++sequence}`,
+    oauth2ResourceAuthorizer: () => true,
+    credentialIssuer: {
+      issuePrincipalOAuth2Token: (input) => {
+        issued.push(input as unknown as Record<string, unknown>);
+        return Promise.resolve({
+          accessToken: "taksrv_yurucommu_resource_operation",
+          expiresAt: "2026-07-19T00:01:00.000Z",
+        });
+      },
+    },
+  });
+  const result = await ensureFormDescriptorInterfaces({
+    interfaces,
+    workspaceId: "workspace_yurucommu",
+    resourceId: "tkrn:workspace_yurucommu:EdgeWorker:yurucommu",
+    form: FORM,
+    descriptors: [
+      {
+        name: "http.request",
+        version: "1",
+        required: true,
+        document: { operations: ["request"] },
+        inputs: [
+          { name: "resource", source: "literal", value: "EdgeWorker/yurucommu" },
+        ],
+      },
+    ],
+    resolveResourceUri: () =>
+      "https://yurucommu.apps.example.test/api?view=current#ignored",
+  });
+  const iface = result.materialized[0]!;
+  expect(iface.spec.access).toEqual({ visibility: "workspace" });
+  expect(iface.status.resourceUri).toBe(
+    "https://yurucommu.apps.example.test/api",
+  );
+
+  const binding = await interfaces.createBinding(iface.metadata.id, {
+    subjectRef: { kind: "Principal", id: "principal_installer" },
+    permissions: ["http.request"],
+    delivery: { type: "oauth2" },
+  });
+  expect(binding.status.phase).toBe("Ready");
+
+  const token = await interfaces.issueToken(
+    iface.metadata.id,
+    { permission: "http.request" },
+    {
+      workspaceId: "workspace_yurucommu",
+      subjectId: "principal_installer",
+    },
+  );
+  expect(token).toMatchObject({
+    access_token: "taksrv_yurucommu_resource_operation",
+    resource: "https://yurucommu.apps.example.test/api",
+    scope: "http.request",
+  });
+  expect(issued).toEqual([
+    expect.objectContaining({
+      interfaceId: iface.metadata.id,
+      interfaceOwnerRef: {
+        kind: "Resource",
+        id: "tkrn:workspace_yurucommu:EdgeWorker:yurucommu",
+      },
+      resource: "https://yurucommu.apps.example.test/api",
+    }),
+  ]);
+
+  const reconciled = await interfaces.reconcile(iface.metadata.id);
+  expect(reconciled.status.resourceUri).toBe(
+    "https://yurucommu.apps.example.test/api",
+  );
+  expect(reconciled.status.resolvedRevision).toBe(iface.status.resolvedRevision);
+});
+
+test("Form resourceUri authority rejects lineage and legacy audience mismatches", async () => {
+  let sequence = 0;
+  const interfaces = new InterfaceService({
+    stores: createInMemoryInterfaceStores(),
+    now: () => NOW,
+    newId: (prefix) => `${prefix}_${++sequence}`,
+    oauth2ResourceAuthorizer: () => true,
+    credentialIssuer: {
+      issuePrincipalOAuth2Token: () =>
+        Promise.resolve({
+          accessToken: "taksrv_must_not_issue",
+          expiresAt: "2026-07-19T00:01:00.000Z",
+        }),
+    },
+  });
+  const result = await ensureFormDescriptorInterfaces({
+    interfaces,
+    workspaceId: "workspace_1",
+    resourceId: "tkrn:workspace_1:EdgeWorker:api",
+    form: FORM,
+    descriptors: [
+      {
+        name: "http.request",
+        version: "1",
+        resourceUriInput: "resource_uri",
+        inputs: [{ name: "resource_uri", source: "resource_uri" }],
+      },
+    ],
+    resolveResourceUri: () => "https://api.example.test/",
+  });
+  const iface = result.materialized[0]!;
+
+  await expect(
+    interfaces.reconcileFormDescriptorResourceUri(iface.metadata.id, {
+      formRefKey: formRefKey(formRefOfInstalled(FORM)),
+      formSchemaDigest: `sha256:${"f".repeat(64)}`,
+      descriptorName: "http.request",
+      descriptorVersion: "1",
+      resourceUri: "https://attacker.example.test/",
+    }),
+  ).rejects.toThrow("exact Form descriptor");
+
+  const mismatched = await interfaces.reconcileFormDescriptorResourceUri(
+    iface.metadata.id,
+    {
+      formRefKey: formRefKey(formRefOfInstalled(FORM)),
+      formSchemaDigest: FORM.schemaDigest,
+      descriptorName: "http.request",
+      descriptorVersion: "1",
+      resourceUri: "https://different.example.test/",
+    },
+  );
+  expect(mismatched.status.phase).toBe("Resolved");
+  expect(mismatched.status.resourceUri).toBe(
+    "https://different.example.test/",
+  );
+  const binding = await interfaces.createBinding(iface.metadata.id, {
+    subjectRef: { kind: "Principal", id: "principal_1" },
+    permissions: ["http.request"],
+    delivery: { type: "oauth2" },
+  });
+  expect(binding.status.phase).toBe("NotReady");
+  await expect(
+    interfaces.issueToken(
+      iface.metadata.id,
+      { permission: "http.request" },
+      { workspaceId: "workspace_1", subjectId: "principal_1" },
+    ),
+  ).rejects.toThrow("Interface token grant not found");
+});
+
 test("portable declaration reads are bounded and enforce each Resource Workspace bridge", async () => {
   const stores = createInMemoryInterfaceStores();
   const interfaces = new InterfaceService({

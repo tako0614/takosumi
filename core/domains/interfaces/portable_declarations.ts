@@ -209,12 +209,7 @@ export function createPortableDeclarationReader(
         for (const iface of owned) {
           const resource = resources.get(iface.metadata.ownerRef.id);
           if (!resource) continue;
-          const projected = await projectDeclaration(
-            iface,
-            resource,
-            workspaceId,
-            options.resolveResourceUri,
-          );
+          const projected = await projectDeclaration(iface, resource);
           if (!projected) continue;
           if (input.name !== undefined && projected.name !== input.name)
             continue;
@@ -410,12 +405,7 @@ export function createPortableDeclarationWriter(
         resource: owned.resource,
         workspaceId: owned.workspaceId,
       });
-      const projected = await projectDeclaration(
-        written,
-        owned.resource,
-        owned.workspaceId,
-        options.resolveResourceUri,
-      );
+      const projected = await projectDeclaration(written, owned.resource);
       if (!projected) {
         throw new InterfaceServiceError(
           "failed_precondition",
@@ -464,8 +454,6 @@ export function createPortableDeclarationWriter(
 async function projectDeclaration(
   iface: Interface,
   resource: ResourceObject,
-  workspaceId: string,
-  resolveResourceUri: FormInterfaceResourceUriResolver | undefined,
 ): Promise<TakoformDeclaredInterface | undefined> {
   if (
     resource.status?.phase !== "Ready" ||
@@ -502,26 +490,11 @@ async function projectDeclaration(
     : undefined;
   const inputs = portableInputsOf(iface);
   const resourceUriInput = iface.spec.access.resourceUriInput;
-  let resourceUri =
-    resourceUriInput && typeof values?.[resourceUriInput] === "string"
-      ? (values[resourceUriInput] as string)
+  const resourceUri = resourceUriInput
+    ? canonicalInterfaceOAuth2ResourceUri(values?.[resourceUriInput])
+    : lineage.source === "form_descriptor"
+      ? canonicalInterfaceOAuth2ResourceUri(iface.status.resourceUri)
       : undefined;
-  if (
-    resourceUri === undefined &&
-    lineage.source === "form_descriptor" &&
-    resource.form &&
-    resolveResourceUri
-  ) {
-    resourceUri = canonicalInterfaceOAuth2ResourceUri(
-      await resolveResourceUri({
-        workspaceId,
-        resourceId: iface.metadata.ownerRef.id,
-        form: resource.form,
-        descriptorName: lineage.descriptorName,
-        descriptorVersion: lineage.descriptorVersion,
-      }),
-    );
-  }
   return {
     name: lineage.descriptorName,
     version: lineage.descriptorVersion,

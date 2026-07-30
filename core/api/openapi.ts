@@ -2066,6 +2066,7 @@ function interfaceSchemas(): Record<string, Record<string, unknown>> {
         observedGeneration: { type: "integer", minimum: 0 },
         resolvedRevision: { type: "integer", minimum: 0 },
         resolvedInputs: { type: "object", additionalProperties: true },
+        resourceUri: { type: "string", format: "uri" },
         provenance: { type: "object", additionalProperties: true },
         conditions: { type: "array", items: interfaceCondition },
       },

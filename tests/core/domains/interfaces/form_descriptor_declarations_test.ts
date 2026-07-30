@@ -42,6 +42,7 @@ function descriptor(
 async function materialize(
   interfaces: InterfaceService,
   descriptors: readonly FormInterfaceDescriptor[],
+  resolveResourceUri?: () => string | undefined,
 ) {
   return await ensureFormDescriptorInterfaces({
     interfaces,
@@ -50,6 +51,7 @@ async function materialize(
     resourceName: "assets",
     form: FORM,
     descriptors,
+    ...(resolveResourceUri ? { resolveResourceUri } : {}),
   });
 }
 
@@ -220,16 +222,17 @@ test("the portable read reports the declared identity, never the host record", a
 
 test("the portable read exposes host runtime location outside closed Form outputs", async () => {
   const interfaces = service();
-  await materialize(interfaces, [
-    descriptor({
-      name: "http.request",
-      version: "1",
-    }),
-  ]);
-  const declared = await readerFor(
+  await materialize(
     interfaces,
+    [
+      descriptor({
+        name: "http.request",
+        version: "1",
+      }),
+    ],
     () => "https://assets.example.test/",
-  ).listDeclaredInterfaces({
+  );
+  const declared = await readerFor(interfaces).listDeclaredInterfaces({
     actor: ACTOR,
     space: "space_1",
   });

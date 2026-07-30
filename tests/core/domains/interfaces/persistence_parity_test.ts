@@ -150,6 +150,26 @@ for (const backend of backends) {
         descriptorName: "storage.object",
         descriptorVersion: "v1",
       });
+      const formWithResourceUri =
+        await service.reconcileFormDescriptorResourceUri(
+          formMaterialized.metadata.id,
+          {
+            formRefKey:
+              "forms.takoform.com/v1alpha1/ObjectBucket/1.0.0/sha256:" +
+              "1".repeat(64),
+            formSchemaDigest: `sha256:${"1".repeat(64)}`,
+            descriptorName: "storage.object",
+            descriptorVersion: "v1",
+            resourceUri:
+              "https://objects.example.test/assets?view=current#ignored",
+          },
+        );
+      expect(formWithResourceUri.status.resourceUri).toBe(
+        "https://objects.example.test/assets",
+      );
+      expect(await service.get(formMaterialized.metadata.id)).toEqual(
+        formWithResourceUri,
+      );
       expect(
         await service.list({
           workspaceId: "workspace_parity",
@@ -160,7 +180,7 @@ for (const backend of backends) {
           ],
           limit: 1,
         }),
-      ).toEqual([formMaterialized]);
+      ).toEqual([formWithResourceUri]);
       expect(
         await service.list({
           workspaceId: "workspace_parity",

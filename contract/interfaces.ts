@@ -164,6 +164,11 @@ export interface InterfaceStatus {
   readonly observedGeneration: number;
   readonly resolvedRevision: number;
   readonly resolvedInputs?: Readonly<Record<string, JsonValue>>;
+  /**
+   * Canonical credential-free HTTPS audience resolved by the host for an exact
+   * Form-materialized Interface. It is discovery metadata, not a grant.
+   */
+  readonly resourceUri?: string;
   readonly provenance?: Readonly<Record<string, InterfaceInputProvenance>>;
   readonly conditions?: readonly Condition[];
 }

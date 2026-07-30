@@ -45,10 +45,22 @@ export function interfaceOAuth2ResourceUri(
 ): string | undefined {
   if (iface.status.phase !== "Resolved") return undefined;
   const inputName = iface.spec.access.resourceUriInput;
-  if (!inputName) return undefined;
-  return canonicalInterfaceOAuth2ResourceUri(
-    iface.status.resolvedInputs?.[inputName],
-  );
+  const inputResource = inputName
+    ? canonicalInterfaceOAuth2ResourceUri(
+        iface.status.resolvedInputs?.[inputName],
+      )
+    : undefined;
+  const materialized = iface.metadata.materializedFrom;
+  const formResource =
+    iface.metadata.ownerRef.kind === "Resource" &&
+    materialized?.source === "form_descriptor"
+      ? canonicalInterfaceOAuth2ResourceUri(iface.status.resourceUri)
+      : undefined;
+  if (inputName && !inputResource) return undefined;
+  if (inputResource && formResource && inputResource !== formResource) {
+    return undefined;
+  }
+  return inputResource ?? formResource;
 }
 
 const SECRET_URL_PARAMETER_NAMES = new Set([

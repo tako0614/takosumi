@@ -112,20 +112,39 @@ export async function ensureFormDescriptorInterfaces(
       });
       continue;
     }
+    const resolvedResourceUri = input.resolveResourceUri
+      ? await input.resolveResourceUri({
+          workspaceId: input.workspaceId,
+          resourceId: input.resourceId,
+          form: input.form,
+          descriptorName: descriptor.name,
+          descriptorVersion: descriptor.version,
+        })
+      : undefined;
+    const resourceUri =
+      resolvedResourceUri === undefined
+        ? undefined
+        : canonicalInterfaceOAuth2ResourceUri(resolvedResourceUri);
+    if (resolvedResourceUri !== undefined && resourceUri === undefined) {
+      if (required) {
+        throw new RequiredFormInterfaceError(
+          descriptor.name,
+          descriptor.version,
+          "input_not_ready",
+        );
+      }
+      skipped.push({
+        name: descriptor.name,
+        version: descriptor.version,
+        required,
+        reason: "input_not_ready",
+      });
+      continue;
+    }
     const inputs = await translatePortableInterfaceInputs(
       input.resourceId,
       descriptor,
-      descriptor.inputs?.some(
-        (declaration) => declaration.source === "resource_uri",
-      ) && input.resolveResourceUri
-        ? await input.resolveResourceUri({
-            workspaceId: input.workspaceId,
-            resourceId: input.resourceId,
-            form: input.form,
-            descriptorName: descriptor.name,
-            descriptorVersion: descriptor.version,
-          })
-        : undefined,
+      resourceUri,
     );
     if (!inputs.ok) {
       if (required) {
@@ -177,10 +196,15 @@ export async function ensureFormDescriptorInterfaces(
       existing.metadata.name === name &&
       interfaceSpecsEqual(existing.spec, desiredSpec)
     ) {
-      const reconciled =
+      const resolved =
         existing.status.phase === "Resolved"
           ? existing
           : await input.interfaces.reconcile(existing.metadata.id);
+      const reconciled =
+        await input.interfaces.reconcileFormDescriptorResourceUri(
+          resolved.metadata.id,
+          { ...lineage, ...(resourceUri ? { resourceUri } : {}) },
+        );
       if (required && reconciled.status.phase !== "Resolved") {
         throw new RequiredFormInterfaceError(
           descriptor.name,
@@ -260,6 +284,10 @@ export async function ensureFormDescriptorInterfaces(
           ? winner
           : await input.interfaces.reconcile(winner.metadata.id);
     }
+    created = await input.interfaces.reconcileFormDescriptorResourceUri(
+      created.metadata.id,
+      { ...lineage, ...(resourceUri ? { resourceUri } : {}) },
+    );
     if (required && created.status.phase !== "Resolved") {
       throw new RequiredFormInterfaceError(
         descriptor.name,
