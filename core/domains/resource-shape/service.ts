@@ -1561,6 +1561,14 @@ export class ResourceShapeService {
         ...(operationRun
           ? { operationKey: operationRun.resourceOperationKey }
           : {}),
+        ...(recoveringApplying
+          ? {
+              recovery: {
+                operation: "apply" as const,
+                backendOutcome: "unknown" as const,
+              },
+            }
+          : {}),
         environment: req.environment ?? existing?.environment ?? "default",
         stateGeneration:
           existing?.execution?.stateGeneration ??

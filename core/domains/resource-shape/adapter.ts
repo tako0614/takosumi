@@ -82,6 +82,16 @@ export interface AdapterApplyInput {
    * remain read-only and may use the key only for correlation.
    */
   readonly operationKey?: string;
+  /**
+   * Explicit Core-owned continuation context after an apply response was
+   * lost. Adapters may use the pinned planned native identity for read-only
+   * observe/refresh in this lane, but must not treat planned evidence as
+   * canonical during ordinary lifecycle calls or delete.
+   */
+  readonly recovery?: {
+    readonly operation: "apply";
+    readonly backendOutcome: "unknown";
+  };
   readonly environment: string;
   readonly stateGeneration: number;
   readonly stateAdoption?: ResourceShapeStateAdoptionDescriptor;

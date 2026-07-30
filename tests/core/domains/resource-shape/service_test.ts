@@ -3898,6 +3898,7 @@ test("direct-plugin apply recovers a persisted backend result after restart with
     expect(pending.error.code).toBe("deployment_finalize_pending");
   }
   expect(firstAdapter.applyInputs).toHaveLength(1);
+  expect(firstAdapter.applyInputs[0]?.recovery).toBeUndefined();
   const applying = await stores.resources.get(
     "tkrn:space_1:ContainerService:agent-recovery",
   );
@@ -4109,6 +4110,14 @@ test("direct-plugin apply response loss observes current and never creates a dup
   expect(recoveryAdapter.applyInputs).toHaveLength(0);
   expect(recoveryAdapter.observeInputs).toHaveLength(1);
   expect(recoveryAdapter.refreshInputs).toHaveLength(1);
+  expect(recoveryAdapter.observeInputs[0]?.recovery).toEqual({
+    operation: "apply",
+    backendOutcome: "unknown",
+  });
+  expect(recoveryAdapter.refreshInputs[0]?.recovery).toEqual({
+    operation: "apply",
+    backendOutcome: "unknown",
+  });
   expect(backend.creations).toBe(1);
   expect(recoveryAdapter.refreshInputs[0]?.operationKey).toBe(
     firstAdapter.applyInputs[0]?.operationKey,
@@ -4206,6 +4215,14 @@ test("direct-plugin recovery replaces a terminalized Applying Run without duplic
   expect(recoveryAdapter.observeInputs).toHaveLength(1);
   expect(recoveryAdapter.refreshInputs).toHaveLength(1);
   expect(recoveryAdapter.applyInputs).toHaveLength(0);
+  expect(recoveryAdapter.observeInputs[0]?.recovery).toEqual({
+    operation: "apply",
+    backendOutcome: "unknown",
+  });
+  expect(recoveryAdapter.refreshInputs[0]?.recovery).toEqual({
+    operation: "apply",
+    backendOutcome: "unknown",
+  });
   expect(backend.creations).toBe(1);
   const ready = await stores.resources.get(id);
   expect(ready?.phase).toBe("Ready");
@@ -4423,6 +4440,14 @@ test("direct-plugin apply recovery retains its exact pending Run across a D1-bac
   expect(recovered.ok).toBe(true);
   expect(recoveryAdapter.observeInputs).toHaveLength(1);
   expect(recoveryAdapter.applyInputs).toHaveLength(1);
+  expect(recoveryAdapter.observeInputs[0]?.recovery).toEqual({
+    operation: "apply",
+    backendOutcome: "unknown",
+  });
+  expect(recoveryAdapter.applyInputs[0]?.recovery).toEqual({
+    operation: "apply",
+    backendOutcome: "unknown",
+  });
   expect(recoveryAdapter.applyInputs[0]?.resourceRevisionId).toBe(
     applying?.pendingOperation?.runId,
   );
