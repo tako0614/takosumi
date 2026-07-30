@@ -1282,8 +1282,37 @@ test("exact direct-plugin lifecycle propagates one immutable Form through Runs, 
 });
 
 test("direct-plugin delete and recreate mints a fresh backend revision even when generation resets", async () => {
+  class RevisionScopedPlanAdapter extends PluginSpyAdapter {
+    override async preview(
+      input: AdapterApplyInput,
+    ): Promise<AdapterPreviewResult> {
+      const result = await super.preview(input);
+      return {
+        ...result,
+        nativeResources: result.nativeResources.map((native) => ({
+          ...native,
+          id: `${native.id}@${input.resourceRevisionId ?? "public-preview"}`,
+          ownership: "planned",
+        })),
+      };
+    }
+
+    override async apply(
+      input: AdapterApplyInput,
+    ): Promise<AdapterApplyResult> {
+      const result = await super.apply(input);
+      return {
+        ...result,
+        nativeResources: result.nativeResources.map((native) => ({
+          ...native,
+          ownership: "resource",
+        })),
+      };
+    }
+  }
+
   const stores = createInMemoryResourceShapeStores();
-  const adapter = new PluginSpyAdapter();
+  const adapter = new RevisionScopedPlanAdapter();
   const ledger = new InMemoryOpenTofuControlStore();
   const nonces = ["first-incarnation", "second-incarnation"];
   const service = new ResourceShapeService({
@@ -1315,6 +1344,10 @@ test("direct-plugin delete and recreate mints a fresh backend revision even when
     first?.lastOperationRunId,
   );
   expect(adapter.applyInputs[0]?.previousResourceRevisionId).toBeUndefined();
+  const firstNativeId = adapter.applyInputs[0]?.nativeResources?.[0]?.id;
+  expect(firstNativeId).toBe(
+    `agent-recreated@${first?.lastOperationRunId}`,
+  );
 
   expect(
     (
@@ -1340,6 +1373,12 @@ test("direct-plugin delete and recreate mints a fresh backend revision even when
     recreated?.lastOperationRunId,
   );
   expect(adapter.applyInputs[1]?.previousResourceRevisionId).toBeUndefined();
+  const recreatedNativeId =
+    adapter.applyInputs[1]?.nativeResources?.[0]?.id;
+  expect(recreatedNativeId).toBe(
+    `agent-recreated@${recreated?.lastOperationRunId}`,
+  );
+  expect(recreatedNativeId).not.toBe(firstNativeId);
 });
 
 test("exact direct-plugin preview rejects adapter NativeResource Form substitution", async () => {
