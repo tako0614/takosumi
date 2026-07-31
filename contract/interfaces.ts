@@ -243,6 +243,18 @@ export interface InterfaceBinding {
           readonly interfaceName: string;
           readonly interfaceVersion: string;
           readonly key: string;
+        }
+      | {
+          /**
+           * Host-materialized self-grant for a form-host-managed Resource
+           * whose Form descriptor declares a public runtime surface. The
+           * applying IaC principal authorized it by applying the exact Form;
+           * the subject is the owning Resource itself.
+           */
+          readonly source: "form_host_descriptor";
+          readonly formRefKey: string;
+          readonly descriptorName: string;
+          readonly descriptorVersion: string;
         };
     readonly createdAt: string;
     readonly updatedAt: string;

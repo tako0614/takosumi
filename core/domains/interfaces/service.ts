@@ -280,6 +280,11 @@ export type InterfaceBindingServiceMaterialization =
       readonly resourceInterfaceName: string;
       readonly resourceInterfaceVersion: string;
       readonly resourceBindingKey: string;
+    }
+  | {
+      readonly formHostFormRefKey: string;
+      readonly formHostDescriptorName: string;
+      readonly formHostDescriptorVersion: string;
     };
 
 export class InterfaceService {
@@ -642,6 +647,80 @@ export class InterfaceService {
         if (!accepted) throw error;
         history.push(accepted);
       }
+    }
+  }
+
+  /**
+   * Materializes the self-grant that lets a form-host-managed Resource serve
+   * its Form-declared public runtime surface. Applying the exact Form is the
+   * authorization act; the grant subject is the owning Resource itself, so no
+   * caller identity is invented after the fact. A revoked or manual grant for
+   * the same subject is a durable answer and is never silently recreated.
+   */
+  async ensureFormHostDescriptorBinding(input: {
+    readonly iface: Interface;
+    readonly resourceId: string;
+    readonly formRefKey: string;
+    readonly descriptorName: string;
+    readonly descriptorVersion: string;
+    readonly permission: string;
+  }): Promise<void> {
+    if (
+      input.iface.metadata.ownerRef.kind !== "Resource" ||
+      input.iface.metadata.ownerRef.id !== input.resourceId
+    ) {
+      throw new InterfaceServiceError(
+        "failed_precondition",
+        "form-host descriptor binding requires the descriptor Interface of the exact Resource",
+      );
+    }
+    const subjectRef = {
+      kind: "Resource" as const,
+      id: requireText(input.resourceId, "resourceId"),
+    };
+    const history = await this.#stores.bindings.listByInterface(
+      input.iface.metadata.id,
+    );
+    if (
+      history.some(
+        (binding) =>
+          binding.spec.subjectRef.kind === subjectRef.kind &&
+          binding.spec.subjectRef.id === subjectRef.id,
+      )
+    ) {
+      return;
+    }
+    try {
+      await this.createBinding(
+        input.iface.metadata.id,
+        {
+          subjectRef,
+          permissions: [requireText(input.permission, "permission")],
+          delivery: { type: "none" },
+        },
+        undefined,
+        {
+          formHostFormRefKey: input.formRefKey,
+          formHostDescriptorName: input.descriptorName,
+          formHostDescriptorVersion: input.descriptorVersion,
+        },
+      );
+    } catch (error) {
+      if (
+        !(error instanceof InterfaceServiceError) ||
+        error.code !== "already_exists"
+      ) {
+        throw error;
+      }
+      const refreshed = await this.#stores.bindings.listByInterface(
+        input.iface.metadata.id,
+      );
+      const accepted = refreshed.some(
+        (binding) =>
+          binding.spec.subjectRef.kind === subjectRef.kind &&
+          binding.spec.subjectRef.id === subjectRef.id,
+      );
+      if (!accepted) throw error;
     }
   }
 
@@ -3415,6 +3494,23 @@ function interfaceBindingMaterialization(
       key: requireText(
         materialization.resourceBindingKey,
         "resourceBindingKey",
+      ),
+    };
+  }
+  if ("formHostFormRefKey" in materialization) {
+    return {
+      source: "form_host_descriptor",
+      formRefKey: requireText(
+        materialization.formHostFormRefKey,
+        "formHostFormRefKey",
+      ),
+      descriptorName: requireText(
+        materialization.formHostDescriptorName,
+        "formHostDescriptorName",
+      ),
+      descriptorVersion: requireText(
+        materialization.formHostDescriptorVersion,
+        "formHostDescriptorVersion",
       ),
     };
   }

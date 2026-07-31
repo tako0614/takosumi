@@ -219,7 +219,11 @@ import type {
   ResourceCapsuleOwner,
   ResourceShapeKind,
 } from "takosumi-contract";
-import { formRefOfInstalled, isResourceCapsuleOwner } from "takosumi-contract";
+import {
+  formRefKey,
+  formRefOfInstalled,
+  isResourceCapsuleOwner,
+} from "takosumi-contract";
 import type {
   CredentialRecipeDriverRegistry,
   SourceCredentialDriverRegistry,
@@ -1899,6 +1903,32 @@ export async function createTakosumiService(
         ? { resolveResourceUri: resolveFormInterfaceResourceUri }
         : {}),
     });
+    // A bare form-host EdgeWorker has no Capsule InstallConfig to blueprint
+    // its public-route grant, so the exact Form application itself authorizes
+    // the Resource-subject `edge.request` self-grant on `http.request`.
+    if (resource.owner === undefined && resource.kind === "EdgeWorker") {
+      const routeInterfaces = (
+        await interfaceService.list({
+          workspaceId,
+          ownerKind: "Resource",
+          ownerId: resourceId,
+        })
+      ).filter(
+        (iface) =>
+          iface.spec.type === "http.request" &&
+          iface.status.phase !== "Retired",
+      );
+      if (routeInterfaces.length === 1) {
+        await interfaceService.ensureFormHostDescriptorBinding({
+          iface: routeInterfaces[0]!,
+          resourceId,
+          formRefKey: formRefKey(formRefOfInstalled(resource.form)),
+          descriptorName: "http.request",
+          descriptorVersion: "1",
+          permission: "edge.request",
+        });
+      }
+    }
   };
   const degradeRequiredFormInterface = async (
     resourceId: string,
