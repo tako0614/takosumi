@@ -102,8 +102,14 @@ export function scheduleHostRuntimeReconcileTarget(input: {
       "host runtime Schedule target must be exact schedule.trigger.v1 invoke authority",
     );
   }
-  const resourceId =
+  const declared =
     typeof connection.resource === "string" ? connection.resource : "";
+  // A portable Form may name the target by canonical id or by the exact
+  // same-Workspace `EdgeWorker/name` shorthand; both spell one identity.
+  const shorthand = /^EdgeWorker\/(.+)$/u.exec(declared);
+  const resourceId = shorthand
+    ? `tkrn:${input.request.workspaceId}:EdgeWorker:${shorthand[1]}`
+    : declared;
   const match = /^tkrn:([^:]+):EdgeWorker:(.+)$/u.exec(resourceId);
   if (!match || match[1] !== input.request.workspaceId) {
     throw new Error(

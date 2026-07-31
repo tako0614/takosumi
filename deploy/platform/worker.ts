@@ -3101,11 +3101,13 @@ export function createPlatformCanonicalHostRuntimeGraphReader(
       > = {};
       for (const alias of [...requestedAliases].sort()) {
         const declaration = objectRecord(declared[alias]);
-        const resourceId = valueString(declaration.resource)?.trim() ?? "";
-        const resource = await canonicalHostRuntimeResource(
-          inventory,
-          resourceId,
+        const resourceId = canonicalHostRuntimeConnectionResourceId(
+          valueString(declaration.resource)?.trim() ?? "",
+          input.request.workspaceId,
         );
+        const resource = resourceId
+          ? await canonicalHostRuntimeResource(inventory, resourceId)
+          : undefined;
         if (!resource) return undefined;
         const activation = input.request.backgroundActivations?.find(
           (candidate) =>
@@ -3249,6 +3251,23 @@ function stringArray(value: unknown): readonly string[] | undefined {
   return Array.isArray(value) &&
     value.every((entry): entry is string => typeof entry === "string")
     ? value
+    : undefined;
+}
+
+/**
+ * A portable Form may reference a connected Resource by canonical id or by the
+ * exact same-Workspace `Kind/name` shorthand. Both spell one identity; nothing
+ * else — including a cross-Workspace reference — resolves here.
+ */
+function canonicalHostRuntimeConnectionResourceId(
+  value: string,
+  workspaceId: string,
+): string | undefined {
+  if (!value) return undefined;
+  if (value.startsWith(`tkrn:${workspaceId}:`)) return value;
+  const shorthand = /^([A-Za-z][A-Za-z0-9]{0,63})\/([^/]+)$/u.exec(value);
+  return shorthand
+    ? `tkrn:${workspaceId}:${shorthand[1]}:${shorthand[2]}`
     : undefined;
 }
 
