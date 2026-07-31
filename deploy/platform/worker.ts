@@ -3020,6 +3020,13 @@ export interface PlatformCanonicalHostRuntimeResourceEvidence {
   readonly resourceRevisionId: string;
   readonly nativeType: string;
   readonly nativeId: string;
+  /**
+   * Exact canonical NativeResource evidence, including its Form provenance.
+   * A consumer that must reproduce the admission's native digest needs these
+   * refs verbatim; the flattened type/id pair is a convenience view of the
+   * single-resource case, not a substitute identity.
+   */
+  readonly nativeResources: readonly NativeResourceRef[];
 }
 
 export interface PlatformCanonicalHostRuntimeAuthorityEvidence {
@@ -3206,6 +3213,7 @@ export async function resolveUniqueIncomingHostRuntimeSchedule(input: {
               resourceRevisionId: item.resourceRevisionId,
               nativeType: item.nativeResources[0]!.type,
               nativeId: item.nativeResources[0]!.id,
+              nativeResources: item.nativeResources,
             }
           : undefined;
       const owner = evidence?.resource.metadata.owner;
@@ -3297,6 +3305,7 @@ async function canonicalHostRuntimeResource(
     resourceRevisionId: ready.resourceRevisionId,
     nativeType: ready.nativeResources[0]!.type,
     nativeId: ready.nativeResources[0]!.id,
+    nativeResources: ready.nativeResources,
   };
 }
 
