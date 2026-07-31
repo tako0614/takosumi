@@ -1410,6 +1410,32 @@ export const REFERENCE_CREDENTIAL_RECIPES: readonly CredentialRecipe[] = [
     }
   },
   {
+    "id": "takoform",
+    "displayName": "Takoform portable form host",
+    "secretPartition": "provider-credentials",
+    "terraformSource": [
+      "tako0614/takoform",
+      "registry.opentofu.org/tako0614/takoform"
+    ],
+    "envNames": [
+      "TAKOFORM_ENDPOINT",
+      "TAKOFORM_SPACE",
+      "TAKOFORM_TOKEN"
+    ],
+    "authModes": {
+      "managed_form_host": {
+        "env": {},
+        "presentation": {
+          "showInConnectionSetup": false,
+          "displayName": {
+            "en": "Managed form host",
+            "ja": "マネージド Form ホスト"
+          }
+        }
+      }
+    }
+  },
+  {
     "id": "vercel",
     "displayName": "Vercel",
     "secretPartition": "provider-credentials",
