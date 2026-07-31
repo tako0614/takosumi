@@ -666,7 +666,10 @@ function managedProviderCredentialIssuerFromEnv(
       phase,
       scopes:
         request.managedProviderProfile === PORTABLE_FORM_MANAGER
-          ? ["write", "interfaces:write"]
+          ? // The takoform provider reads form availability and Resource
+            // documents before and after every mutation, so the run token
+            // carries the read grant alongside the write grants.
+            ["read", "write", "interfaces:write"]
           : ["write"],
     });
     const values =
