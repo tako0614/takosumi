@@ -664,6 +664,14 @@ export class InterfaceService {
     readonly descriptorName: string;
     readonly descriptorVersion: string;
     readonly permission: string;
+    /**
+     * Consumer Resource receiving the grant. It defaults to the Interface's
+     * own Resource (a self-grant); a managed connection instead grants the
+     * exact consumer declared by the applying Form.
+     */
+    readonly subjectResourceId?: string;
+    /** Opaque host capability delivered to that consumer, if any. */
+    readonly credentialRef?: `capability:${string}`;
   }): Promise<void> {
     if (
       input.iface.metadata.ownerRef.kind !== "Resource" ||
@@ -676,7 +684,10 @@ export class InterfaceService {
     }
     const subjectRef = {
       kind: "Resource" as const,
-      id: requireText(input.resourceId, "resourceId"),
+      id: requireText(
+        input.subjectResourceId ?? input.resourceId,
+        "subjectResourceId",
+      ),
     };
     const history = await this.#stores.bindings.listByInterface(
       input.iface.metadata.id,
@@ -696,7 +707,9 @@ export class InterfaceService {
         {
           subjectRef,
           permissions: [requireText(input.permission, "permission")],
-          delivery: { type: "none" },
+          delivery: input.credentialRef
+            ? { type: "none", credentialRef: input.credentialRef }
+            : { type: "none" },
         },
         undefined,
         {

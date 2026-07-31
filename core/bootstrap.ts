@@ -98,6 +98,7 @@ import {
 import { createSqlResourceShapeStores } from "./domains/resource-shape/sql_stores.ts";
 import {
   createDbOwnedHostRuntimeMaterializationResolver,
+  formHostRuntimeMaterializationRequest,
   scheduleHostRuntimeReconcileTarget,
   withDbOwnedHostRuntimeMaterialization,
   type HostRuntimeResourceLifecycle,
@@ -1928,6 +1929,49 @@ export async function createTakosumiService(
           permission: "edge.request",
         });
       }
+      // Each managed connection the Form declared becomes one grant on the
+      // provider Resource's own descriptor Interface, with the consumer
+      // EdgeWorker as the subject. Applying the Form is the authorization act.
+      const runtime = formHostRuntimeMaterializationRequest({
+        resourceId,
+        validatedSpec: resource.spec,
+      });
+      for (const requirement of runtime?.requirements ?? []) {
+        if (requirement.kind !== "managed_connection") continue;
+        const declared = record(resource.spec.connections)[
+          requirement.connectionAlias
+        ];
+        const providerResourceId = canonicalConnectionResourceId(
+          record(declared).resource,
+          workspaceId,
+        );
+        if (!providerResourceId) continue;
+        const providerInterfaces = (
+          await interfaceService.list({
+            workspaceId,
+            ownerKind: "Resource",
+            ownerId: providerResourceId,
+          })
+        ).filter(
+          (iface) =>
+            iface.metadata.materializedFrom?.source === "form_descriptor" &&
+            iface.status.phase !== "Retired",
+        );
+        if (providerInterfaces.length !== 1) continue;
+        const providerInterface = providerInterfaces[0]!;
+        const providerFrom = providerInterface.metadata.materializedFrom;
+        if (providerFrom?.source !== "form_descriptor") continue;
+        await interfaceService.ensureFormHostDescriptorBinding({
+          iface: providerInterface,
+          resourceId: providerResourceId,
+          subjectResourceId: resourceId,
+          formRefKey: providerFrom.formRefKey,
+          descriptorName: providerInterface.spec.type,
+          descriptorVersion: providerInterface.spec.version,
+          permission: requirement.requiredPermission,
+          credentialRef: requirement.capabilityRef,
+        });
+      }
     }
   };
   const degradeRequiredFormInterface = async (
@@ -1997,6 +2041,8 @@ export async function createTakosumiService(
     if (resource.kind !== "EdgeWorker") return undefined;
     const request = await hostRuntimeMaterializationResolver({
       owner: resource.owner,
+      resourceId,
+      validatedSpec: resource.spec,
     });
     if (!request) return undefined;
     const resourceRevisionId = canonicalReadyResourceRevisionId(resource, lock);
@@ -2018,6 +2064,8 @@ export async function createTakosumiService(
     if (!source) return;
     const request = await hostRuntimeMaterializationResolver({
       owner: source.owner,
+      resourceId,
+      validatedSpec: source.spec,
     });
     if (!request) return;
     const targetResourceId = scheduleHostRuntimeReconcileTarget({
@@ -3067,4 +3115,30 @@ function processRoleFromRuntimeConfig(
 ): TakosumiProcessRole {
   const role = runtimeConfig.processRole;
   return role && isTakosumiProcessRole(role) ? role : "takosumi-api";
+}
+
+
+function record(value: unknown): Readonly<Record<string, unknown>> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Readonly<Record<string, unknown>>)
+    : {};
+}
+
+/**
+ * Accepts the canonical Resource id or the same-Workspace `Kind/name`
+ * shorthand a portable Form may use; anything else is not a reference this
+ * host will grant against.
+ */
+function canonicalConnectionResourceId(
+  value: unknown,
+  workspaceId: string,
+): string | undefined {
+  if (typeof value !== "string" || !value) return undefined;
+  if (value.startsWith(`tkrn:${workspaceId}:`)) return value;
+  const shorthand = /^([A-Z][A-Za-z0-9]{0,63})\/([a-z][a-z0-9-]{0,62})$/u.exec(
+    value,
+  );
+  return shorthand
+    ? `tkrn:${workspaceId}:${shorthand[1]}:${shorthand[2]}`
+    : undefined;
 }

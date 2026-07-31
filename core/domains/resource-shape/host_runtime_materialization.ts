@@ -15,6 +15,10 @@ import type { ResourceShapeRecord } from "./records.ts";
 
 export type HostRuntimeMaterializationResolver = (input: {
   readonly owner: ResourceOwner | undefined;
+  /** Canonical Resource this operation belongs to. */
+  readonly resourceId?: string;
+  /** Canonical validated spec of that Resource, when the operation has one. */
+  readonly validatedSpec?: Readonly<Record<string, unknown>>;
 }) => Promise<HostRuntimeMaterializationRequest | undefined>;
 
 export interface HostRuntimeResourceLifecycle {
@@ -124,10 +128,15 @@ function record(value: unknown): Record<string, unknown> {
 export function createDbOwnedHostRuntimeMaterializationResolver(
   capsules: Pick<CapsulesService, "getCapsule" | "getInstallConfig">,
 ): HostRuntimeMaterializationResolver {
-  return async ({ owner }) => {
-    if (owner === undefined || !isResourceCapsuleOwner(owner)) {
-      return undefined;
+  return async ({ owner, resourceId, validatedSpec }) => {
+    if (owner === undefined) {
+      // A form-host Resource has no Capsule owner; its own portable Form
+      // application is the authorization act for its declared connections.
+      return resourceId && validatedSpec
+        ? formHostRuntimeMaterializationRequest({ resourceId, validatedSpec })
+        : undefined;
     }
+    if (!isResourceCapsuleOwner(owner)) return undefined;
     const capsule = await capsules.getCapsule(owner.id);
     if (
       capsule.workspaceId !== owner.workspaceId ||
@@ -163,6 +172,68 @@ export function createDbOwnedHostRuntimeMaterializationResolver(
 }
 
 /**
+ * Managed connection projections a portable Form may declare on an EdgeWorker.
+ * Each one becomes exactly one host-materialized runtime connection; the host
+ * never invents a binding an author did not declare.
+ */
+const FORM_HOST_MANAGED_PROJECTIONS = new Set([
+  "sql.binding.v1",
+  "keyvalue.binding.v1",
+  "object.binding.v1",
+  "queue.binding.v1",
+]);
+const FORM_HOST_MANAGED_PERMISSION = "takosumi.managed-runtime.invoke";
+
+/**
+ * Derives runtime requirements for a form-host EdgeWorker that has no Capsule.
+ *
+ * A portable Form application is the whole authorization act here: the exact
+ * `spec.connections` the author declared, and nothing else, become managed
+ * connection requirements. There is no InstallConfig to add secrets, OIDC, or
+ * background activations, so those remain unavailable to this path.
+ */
+export function formHostRuntimeMaterializationRequest(input: {
+  readonly resourceId: string;
+  readonly validatedSpec: Readonly<Record<string, unknown>>;
+}): HostRuntimeMaterializationRequest | undefined {
+  const identity = /^tkrn:([^:]+):EdgeWorker:(.+)$/u.exec(input.resourceId);
+  if (!identity?.[1] || !identity[2]) return undefined;
+  const workspaceId = identity[1];
+  const connections = input.validatedSpec.connections;
+  if (!connections || typeof connections !== "object") return undefined;
+  const requirements = Object.entries(
+    connections as Record<string, unknown>,
+  )
+    .filter(([, value]) => {
+      const projection = record(value).projection;
+      return (
+        typeof projection === "string" &&
+        FORM_HOST_MANAGED_PROJECTIONS.has(projection)
+      );
+    })
+    .map(([alias]) => ({
+      kind: "managed_connection" as const,
+      binding: alias,
+      connectionAlias: alias,
+      requiredPermission: FORM_HOST_MANAGED_PERMISSION,
+      capabilityRef:
+        `capability:form-host/${identity[2]}/${alias}` as `capability:${string}`,
+    }))
+    .sort((left, right) => left.binding.localeCompare(right.binding));
+  if (requirements.length === 0) return undefined;
+  return {
+    contract: HOST_RUNTIME_MATERIALIZATION_CONTRACT,
+    // A form-host Resource is its own installation authority: the applying
+    // portable identity is the Resource itself, not a Capsule installer.
+    installConfigId: input.resourceId,
+    workspaceId,
+    capsuleId: input.resourceId,
+    installingPrincipalId: input.resourceId,
+    requirements,
+  };
+}
+
+/**
  * Decorates one selected adapter without giving it access to Capsule or
  * InstallConfig stores. Every operation gets a fresh exact resolution, so a
  * stale config or owner change fails before the provider adapter is called.
@@ -174,7 +245,13 @@ export function withDbOwnedHostRuntimeMaterialization(
   const applyInput = async (
     input: AdapterApplyInput,
   ): Promise<AdapterApplyInput> => {
-    const materialization = await resolve({ owner: input.owner });
+    const materialization = await resolve({
+      owner: input.owner,
+      resourceId: input.resourceId,
+      ...(input.plan?.validatedSpec
+        ? { validatedSpec: input.plan.validatedSpec }
+        : {}),
+    });
     const {
       hostRuntimeMaterialization: _untrustedMaterialization,
       ...canonicalInput
@@ -189,7 +266,13 @@ export function withDbOwnedHostRuntimeMaterialization(
   const deleteInput = async (
     input: AdapterDeleteInput,
   ): Promise<AdapterDeleteInput> => {
-    const materialization = await resolve({ owner: input.owner });
+    const materialization = await resolve({
+      owner: input.owner,
+      resourceId: input.resourceId,
+      ...(input.plan?.validatedSpec
+        ? { validatedSpec: input.plan.validatedSpec }
+        : {}),
+    });
     const {
       hostRuntimeMaterialization: _untrustedMaterialization,
       ...canonicalInput
@@ -216,7 +299,13 @@ export function withDbOwnedHostRuntimeMaterialization(
       return await adapter.apply(await applyInput(input));
     },
     async importResource(input) {
-      const materialization = await resolve({ owner: input.owner });
+      const materialization = await resolve({
+        owner: input.owner,
+        resourceId: input.resourceId,
+        ...(input.plan?.validatedSpec
+          ? { validatedSpec: input.plan.validatedSpec }
+          : {}),
+      });
       const {
         hostRuntimeMaterialization: _untrustedMaterialization,
         ...canonicalInput
