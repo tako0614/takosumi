@@ -4,6 +4,8 @@ import type {
   AdapterDeleteInput,
   AdapterImportInput,
   AdapterImportResult,
+  AdapterMigrateInput,
+  AdapterMigrateResult,
   AdapterObserveResult,
   AdapterPreviewResult,
   AdapterRefreshResult,
@@ -25,7 +27,13 @@ export type ResourceShapePluginBindings = Readonly<
 >;
 
 type PluginAction =
-  "preview" | "apply" | "import" | "observe" | "refresh" | "delete";
+  | "preview"
+  | "apply"
+  | "import"
+  | "observe"
+  | "refresh"
+  | "delete"
+  | "migrate";
 
 /**
  * Adapter multiplexer for operator-installed Resource Shape plugins.
@@ -200,6 +208,32 @@ export class PluginResourceShapeAdapter implements ResourceAdapter {
     );
   }
 
+  async migrate(input: AdapterMigrateInput): Promise<AdapterMigrateResult> {
+    assertResourceGeneration(input.resourceGeneration);
+    const plugin = this.#pluginFor(input.implementation.plugin);
+    if (!plugin) {
+      // The fallback adapter reaches a backend through OpenTofu, which has no
+      // channel for out-of-band DDL. Refusing beats reporting a migration that
+      // never touched the database.
+      throw new Error(
+        "Resource Shape adapter has no plugin able to migrate this Resource",
+      );
+    }
+    assertRequiredResourceRevisionId(
+      input.resourceRevisionId,
+      "resourceRevisionId",
+    );
+    return validateMigrateResult(
+      await this.#callPlugin(
+        plugin,
+        input.implementation.plugin!,
+        "migrate",
+        input,
+      ),
+      input.implementation.plugin!,
+    );
+  }
+
   #pluginFor(
     pluginId: string | undefined,
   ): ResourceShapePluginBinding | undefined {
@@ -217,7 +251,11 @@ export class PluginResourceShapeAdapter implements ResourceAdapter {
     plugin: ResourceShapePluginBinding,
     pluginId: string,
     action: PluginAction,
-    input: AdapterApplyInput | AdapterImportInput | AdapterDeleteInput,
+    input:
+      | AdapterApplyInput
+      | AdapterImportInput
+      | AdapterDeleteInput
+      | AdapterMigrateInput,
   ): Promise<Record<string, unknown> | undefined> {
     const resource = input.plan
       ? {
@@ -431,6 +469,45 @@ function validateImportResult(
   };
 }
 
+function validateMigrateResult(
+  body: Record<string, unknown> | undefined,
+  pluginId: string,
+): AdapterMigrateResult {
+  if (!body) {
+    throw new Error(
+      `Resource Shape adapter plugin "${pluginId}" migrate returned an empty response`,
+    );
+  }
+  rejectPluginExecutionPointer(body, pluginId, "migrate");
+  const summary = body.summary;
+  if (typeof summary !== "string" || summary.trim() === "") {
+    throw new Error(
+      `Resource Shape adapter plugin "${pluginId}" migrate response must include summary`,
+    );
+  }
+  return {
+    summary,
+    applied: migratedNames(body.applied, pluginId, "applied"),
+    skipped: migratedNames(body.skipped, pluginId, "skipped"),
+  };
+}
+
+function migratedNames(
+  value: unknown,
+  pluginId: string,
+  field: string,
+): readonly string[] {
+  if (
+    !Array.isArray(value) ||
+    value.some((name) => typeof name !== "string" || !name.trim())
+  ) {
+    throw new Error(
+      `Resource Shape adapter plugin "${pluginId}" migrate response ${field} must be a string array`,
+    );
+  }
+  return value as readonly string[];
+}
+
 function validateRefreshResult(
   body: Record<string, unknown> | undefined,
   pluginId: string,
@@ -545,7 +622,7 @@ function nativeResourcesFromPluginResponse(
 function rejectPluginExecutionPointer(
   body: Readonly<Record<string, unknown>>,
   pluginId: string,
-  action: "apply" | "import" | "refresh",
+  action: "apply" | "import" | "refresh" | "migrate",
 ): void {
   if (body.execution !== undefined) {
     throw new Error(

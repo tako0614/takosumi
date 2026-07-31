@@ -710,7 +710,7 @@ const yurucommuManagedConfig = {
         format: "takosumi.resource-migrations/v1",
         manifestPath: "deploy/takoform/migrations/manifest.json",
         digest:
-          "sha256:3b3f36501936a84ed19b9bef37e5581c3e04948733b947ebaa002f196e66817c",
+          "sha256:1d2181e213a086ae9e025d235ff5e267c43ec60cf4fc2f966977a21f2a95ef7b",
       },
     },
   ],

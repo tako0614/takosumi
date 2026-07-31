@@ -161,6 +161,9 @@ export const TAKOSUMI_FORM_PACKAGE_INSTALL_ROUTE =
 /** Operator-only re-verification of one retained exact FormRef/package pair. */
 export const TAKOSUMI_FORM_PACKAGE_REVERIFY_ROUTE =
   `${INTERNAL_V1_PREFIX}/form-packages/reverify` as const;
+/** Operator execution of one Plan-pinned Capsule resource_migration. */
+export const TAKOSUMI_CAPSULE_RESOURCE_MIGRATION_ROUTE =
+  `${INTERNAL_V1_PREFIX}/capsules/:capsuleId/resource-migrations` as const;
 /** Operator-only migration from retired runtime Output conventions. */
 export const TAKOSUMI_WORKSPACE_OUTPUT_INTERFACE_MIGRATION_ROUTE =
   `${INTERNAL_V1_PREFIX}/workspaces/:workspaceId/migrations/output-interfaces` as const;

@@ -240,6 +240,37 @@ export interface AdapterDeleteInput {
   readonly actor: ActorContext;
 }
 
+/**
+ * One pinned migration entry. `sha256` is the digest the Capsule's install
+ * config already committed to; `sql` must hash to it.
+ */
+export interface AdapterMigrationEntry {
+  readonly name: string;
+  readonly sha256: string;
+  readonly sql: string;
+}
+
+/**
+ * A verified schema migration for one canonical Resource. The caller has
+ * already proven the entries against the Plan-pinned bundle, so the adapter
+ * owns only ordered execution against the exact backing store.
+ */
+export interface AdapterMigrateInput extends AdapterApplyInput {
+  readonly migration: {
+    readonly entries: readonly AdapterMigrationEntry[];
+  };
+}
+
+/**
+ * Names that ran now versus names the target already recorded. The split is
+ * what makes a repeated apply observably a no-op rather than a silent one.
+ */
+export interface AdapterMigrateResult {
+  readonly summary: string;
+  readonly applied: readonly string[];
+  readonly skipped: readonly string[];
+}
+
 /** Stable adapter contract for plan, reconcile, observation, and teardown. */
 export interface ResourceAdapter {
   /** Stable adapter id, e.g. `opentofu` or `stub`. */
@@ -261,6 +292,12 @@ export interface ResourceAdapter {
   refresh(input: AdapterApplyInput): Promise<AdapterRefreshResult>;
   /** Idempotent teardown when `operationKey` is present. */
   delete(input: AdapterDeleteInput): Promise<void>;
+  /**
+   * Applies pinned schema migrations. Optional: an adapter that cannot reach a
+   * relational backend declares so by omitting it, and Core fails the
+   * declaration closed rather than reporting a migration that never ran.
+   */
+  migrate?(input: AdapterMigrateInput): Promise<AdapterMigrateResult>;
 }
 
 /**
