@@ -10,15 +10,19 @@
  */
 
 export const TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION =
-  "takosumi.com/v1alpha1" as const;
+  "takosumi.com/v1" as const;
 export const TAKOSUMI_REPOSITORY_MANIFEST_KIND = "Repository" as const;
 export const TAKOSUMI_REPOSITORY_MANIFEST_PATH =
   ".well-known/takosumi.json" as const;
 export const TAKOSUMI_REPOSITORY_MANIFEST_MAX_BYTES = 128 * 1024;
 export const TAKOSUMI_INSTALL_UX_MAX_MODULES = 32;
 export const TAKOSUMI_INSTALL_UX_MAX_INPUTS = 128;
-export const TAKOSUMI_INSTALL_UX_MAX_PROJECTIONS = 16;
+export const TAKOSUMI_INSTALL_UX_MAX_REQUIREMENTS = 16;
 export const TAKOSUMI_INSTALL_UX_MAX_FEATURES = 32;
+/** Bounds on a repository-requested generated secret. */
+export const TAKOSUMI_GENERATED_SECRET_MIN_BYTES = 16;
+export const TAKOSUMI_GENERATED_SECRET_MAX_BYTES = 64;
+export const TAKOSUMI_MAX_GENERATED_SECRETS_PER_MODULE = 8;
 
 export interface RepositoryInstallUxText {
   readonly ja: string;
@@ -31,9 +35,16 @@ export type RepositoryInstallUxInputSource =
   | { readonly kind: "workspace_scoped_capsule_name" }
   | { readonly kind: "module_default" };
 
+/**
+ * Semantic role of one declared input. The role names what a field *is* so the
+ * installer can present it; it never changes how the value is sourced.
+ */
+export type RepositoryInstallUxInputRole = "service_name" | "initial_secret";
+
 export interface RepositoryInstallUxInput {
   readonly name: string;
   readonly source: RepositoryInstallUxInputSource;
+  readonly role?: RepositoryInstallUxInputRole;
   readonly type?: "string" | "number" | "boolean" | "json";
   readonly format?: string;
   readonly required?: boolean;
@@ -44,42 +55,51 @@ export interface RepositoryInstallUxInput {
   readonly secret?: boolean;
 }
 
-export type RepositoryInstallUxProjection =
+/**
+ * Where a satisfied requirement is delivered.
+ *
+ * Exactly one target is chosen. `variables` suits a module system whose surface
+ * is input variables; `bindings` suits a portable runtime whose surface is
+ * named bindings and which therefore has no variable to receive the value.
+ * The requirement itself is identical either way — only delivery differs.
+ */
+export type RepositoryRuntimeDelivery<K extends string> =
+  | { readonly variables: Readonly<Partial<Record<K, string>>> }
+  | { readonly bindings: Readonly<Partial<Record<K, string>>> };
+
+export type RepositoryOidcSlot =
+  | "issuerUrl"
+  | "accountsUrl"
+  | "clientId"
+  | "redirectUri"
+  | "ownerSubject";
+export type RepositoryEndpointSlot = "url" | "subdomain" | "routePattern";
+export type RepositorySecretSlot = "value";
+
+/**
+ * What the repository needs the host to provide before the app can run.
+ *
+ * A requirement is a request, never a value: the manifest is a public
+ * repository file, so a resolved secret or credential must never appear in it.
+ * Takosumi validates each requirement against operator policy and compiles it
+ * into its own DB-owned InstallConfig before any Plan can use it.
+ */
+export type RepositoryRuntimeRequirement =
   | {
-      readonly kind: "service_name";
-      readonly variable: string;
-    }
-  | {
-      readonly kind: "public_endpoint";
-      readonly variables: {
-        readonly subdomain?: string;
-        readonly url?: string;
-        readonly routePattern?: string;
-      };
-    }
-  | {
-      readonly kind: "initial_secret";
-      readonly variable: string;
-      readonly secretKind?: "password" | "password_or_hash" | "token";
-      readonly optional?: boolean;
-    }
-  | {
-      readonly kind: "oidc_client";
-      readonly variables: {
-        readonly issuerUrl?: string;
-        readonly accountsUrl?: string;
-        readonly clientId?: string;
-        readonly redirectUri?: string;
-      };
+      readonly kind: "identity.oidc";
       readonly callbackPath: string;
       readonly scopes?: readonly string[];
+      readonly deliver: RepositoryRuntimeDelivery<RepositoryOidcSlot>;
     }
   | {
-      readonly kind: "artifact";
-      readonly variables: {
-        readonly url?: string;
-        readonly sha256?: string;
-      };
+      readonly kind: "secret.generated";
+      readonly bytes?: number;
+      readonly encoding?: "hex" | "base64url";
+      readonly deliver: RepositoryRuntimeDelivery<RepositorySecretSlot>;
+    }
+  | {
+      readonly kind: "http.endpoint";
+      readonly deliver: RepositoryRuntimeDelivery<RepositoryEndpointSlot>;
     };
 
 export interface RepositoryInstallUxFeature {
@@ -91,9 +111,7 @@ export interface RepositoryInstallUxFeature {
 
 export interface RepositoryInstallUxModule {
   readonly inputs: readonly RepositoryInstallUxInput[];
-  readonly installExperience?: {
-    readonly projections: readonly RepositoryInstallUxProjection[];
-  };
+  readonly requires?: readonly RepositoryRuntimeRequirement[];
   readonly features?: readonly RepositoryInstallUxFeature[];
 }
 
@@ -187,11 +205,7 @@ function parseModule(
 ): RepositoryInstallUxModule | string {
   const prefix = `install.modules.${JSON.stringify(modulePath)}`;
   if (!isPlainRecord(value)) return `${prefix} must be an object`;
-  const keys = exactKeys(value, [
-    "inputs",
-    "installExperience",
-    "features",
-  ]);
+  const keys = exactKeys(value, ["inputs", "requires", "features"]);
   if (keys) return `${prefix}.${keys}`;
   if (!Array.isArray(value.inputs)) return `${prefix}.inputs must be an array`;
   if (value.inputs.length > TAKOSUMI_INSTALL_UX_MAX_INPUTS) {
@@ -209,17 +223,23 @@ function parseModule(
     inputs.push(parsed);
   }
 
-  const installExperience = parseInstallExperience(
-    value.installExperience,
-    prefix,
-  );
-  if (typeof installExperience === "string") return installExperience;
+  const requires = parseRequirements(value.requires, prefix);
+  if (typeof requires === "string") return requires;
   const features = parseFeatures(value.features, prefix, inputNames);
   if (typeof features === "string") return features;
 
+  const roles = new Set<string>();
+  for (const input of inputs) {
+    if (!input.role) continue;
+    if (roles.has(input.role)) {
+      return `${prefix}.inputs declares role ${input.role} more than once`;
+    }
+    roles.add(input.role);
+  }
+
   return {
     inputs,
-    ...(installExperience ? { installExperience } : {}),
+    ...(requires ? { requires } : {}),
     ...(features ? { features } : {}),
   };
 }
@@ -232,6 +252,7 @@ function parseInput(
   const keys = exactKeys(value, [
     "name",
     "source",
+    "role",
     "type",
     "format",
     "required",
@@ -244,6 +265,16 @@ function parseInput(
   if (keys) return `${prefix}.${keys}`;
   const name = variableName(value.name);
   if (!name) return `${prefix}.name must be a valid OpenTofu variable name`;
+  const role =
+    value.role === undefined
+      ? undefined
+      : oneOf(value.role, ["service_name", "initial_secret"] as const);
+  if (value.role !== undefined && !role) {
+    return `${prefix}.role is unsupported`;
+  }
+  if (role === "initial_secret" && name === "env") {
+    return `${prefix}.role initial_secret requires a secret-specific variable`;
+  }
   if (name === "env" && value.secret === true) {
     return `${prefix}.secret must not target the plain env variable`;
   }
@@ -292,6 +323,7 @@ function parseInput(
   return {
     name,
     source,
+    ...(role ? { role } : {}),
     ...(type ? { type } : {}),
     ...(format ? { format } : {}),
     ...(required !== undefined ? { required } : {}),
@@ -319,118 +351,68 @@ function parseInputSource(
   return kind ? { kind } : `${prefix}.source.kind is unsupported`;
 }
 
-function parseInstallExperience(
+function parseRequirements(
   value: unknown,
   prefix: string,
-):
-  | RepositoryInstallUxModule["installExperience"]
-  | string
-  | undefined {
+): readonly RepositoryRuntimeRequirement[] | string | undefined {
   if (value === undefined) return undefined;
-  if (!isPlainRecord(value)) {
-    return `${prefix}.installExperience must be an object`;
+  if (!Array.isArray(value)) return `${prefix}.requires must be an array`;
+  if (value.length > TAKOSUMI_INSTALL_UX_MAX_REQUIREMENTS) {
+    return `${prefix}.requires must contain no more than 16 entries`;
   }
-  const keys = exactKeys(value, ["projections"]);
-  if (keys) return `${prefix}.installExperience.${keys}`;
-  if (!Array.isArray(value.projections)) {
-    return `${prefix}.installExperience.projections must be an array`;
-  }
-  if (value.projections.length > TAKOSUMI_INSTALL_UX_MAX_PROJECTIONS) {
-    return `${prefix}.installExperience.projections must contain no more than 16 entries`;
-  }
-  const projections: RepositoryInstallUxProjection[] = [];
-  const kinds = new Set<RepositoryInstallUxProjection["kind"]>();
-  for (let index = 0; index < value.projections.length; index += 1) {
-    const projectionPrefix =
-      `${prefix}.installExperience.projections[${index}]`;
-    const parsed = parseProjection(
-      value.projections[index],
-      projectionPrefix,
-    );
+  const requirements: RepositoryRuntimeRequirement[] = [];
+  const singletons = new Set<string>();
+  const deliveredNames = new Set<string>();
+  let generatedSecrets = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const entryPrefix = `${prefix}.requires[${index}]`;
+    const parsed = parseRequirement(value[index], entryPrefix);
     if (typeof parsed === "string") return parsed;
-    if (kinds.has(parsed.kind)) {
-      return `${projectionPrefix}.kind must be unique`;
+    // Only a generated secret is plural: an app may need several, but one
+    // identity and one endpoint are the whole of what a module can hold.
+    if (parsed.kind === "secret.generated") {
+      generatedSecrets += 1;
+      if (generatedSecrets > TAKOSUMI_MAX_GENERATED_SECRETS_PER_MODULE) {
+        return `${prefix}.requires declares more than 8 generated secrets`;
+      }
+    } else if (singletons.has(parsed.kind)) {
+      return `${entryPrefix}.kind must be unique`;
+    } else {
+      singletons.add(parsed.kind);
     }
-    kinds.add(parsed.kind);
-    projections.push(parsed);
+    for (const name of Object.values(deliveryTargets(parsed.deliver))) {
+      if (deliveredNames.has(name)) {
+        return `${entryPrefix} delivers to ${name}, which another requirement already claims`;
+      }
+      deliveredNames.add(name);
+    }
+    requirements.push(parsed);
   }
-  return { projections };
+  return requirements;
 }
 
-function parseProjection(
+function parseRequirement(
   value: unknown,
   prefix: string,
-): RepositoryInstallUxProjection | string {
+): RepositoryRuntimeRequirement | string {
   if (!isPlainRecord(value)) return `${prefix} must be an object`;
   switch (value.kind) {
-    case "service_name": {
-      const keys = exactKeys(value, ["kind", "variable"]);
-      if (keys) return `${prefix}.${keys}`;
-      const variable = variableName(value.variable);
-      return variable
-        ? { kind: "service_name", variable }
-        : `${prefix}.variable must be a valid OpenTofu variable name`;
-    }
-    case "public_endpoint": {
-      const keys = exactKeys(value, ["kind", "variables"]);
-      if (keys) return `${prefix}.${keys}`;
-      const variables = parseVariables(
-        value.variables,
-        `${prefix}.variables`,
-        ["subdomain", "url", "routePattern"] as const,
-      );
-      return typeof variables === "string"
-        ? variables
-        : { kind: "public_endpoint", variables };
-    }
-    case "initial_secret": {
+    case "identity.oidc": {
       const keys = exactKeys(value, [
         "kind",
-        "variable",
-        "secretKind",
-        "optional",
-      ]);
-      if (keys) return `${prefix}.${keys}`;
-      const variable = variableName(value.variable);
-      if (!variable || variable === "env") {
-        return `${prefix}.variable must be a secret-specific OpenTofu variable`;
-      }
-      const secretKind =
-        value.secretKind === undefined
-          ? undefined
-          : oneOf(value.secretKind, [
-              "password",
-              "password_or_hash",
-              "token",
-            ] as const);
-      if (value.secretKind !== undefined && !secretKind) {
-        return `${prefix}.secretKind is unsupported`;
-      }
-      const optional = optionalBoolean(value.optional);
-      if (value.optional !== undefined && optional === undefined) {
-        return `${prefix}.optional must be a boolean`;
-      }
-      return {
-        kind: "initial_secret",
-        variable,
-        ...(secretKind ? { secretKind } : {}),
-        ...(optional !== undefined ? { optional } : {}),
-      };
-    }
-    case "oidc_client": {
-      const keys = exactKeys(value, [
-        "kind",
-        "variables",
         "callbackPath",
         "scopes",
+        "deliver",
       ]);
       if (keys) return `${prefix}.${keys}`;
-      const variables = parseVariables(
-        value.variables,
-        `${prefix}.variables`,
-        ["issuerUrl", "accountsUrl", "clientId", "redirectUri"] as const,
-      );
-      if (typeof variables === "string") return variables;
+      const deliver = parseDelivery(value.deliver, `${prefix}.deliver`, [
+        "issuerUrl",
+        "accountsUrl",
+        "clientId",
+        "redirectUri",
+        "ownerSubject",
+      ] as const);
+      if (typeof deliver === "string") return deliver;
       const callbackPath = rootRelativePath(value.callbackPath);
       if (!callbackPath) {
         return `${prefix}.callbackPath must be a bounded root-relative path without an origin, query, or fragment`;
@@ -438,50 +420,135 @@ function parseProjection(
       const scopes = parseScopes(value.scopes, prefix);
       if (typeof scopes === "string") return scopes;
       return {
-        kind: "oidc_client",
-        variables,
+        kind: "identity.oidc",
         callbackPath,
         ...(scopes ? { scopes } : {}),
+        deliver,
       };
     }
-    case "artifact": {
-      const keys = exactKeys(value, ["kind", "variables"]);
+    case "secret.generated": {
+      const keys = exactKeys(value, ["kind", "bytes", "encoding", "deliver"]);
       if (keys) return `${prefix}.${keys}`;
-      const variables = parseVariables(
-        value.variables,
-        `${prefix}.variables`,
-        ["url", "sha256"] as const,
-      );
-      return typeof variables === "string"
-        ? variables
-        : { kind: "artifact", variables };
+      const deliver = parseDelivery(value.deliver, `${prefix}.deliver`, [
+        "value",
+      ] as const);
+      if (typeof deliver === "string") return deliver;
+      let bytes: number | undefined;
+      if (value.bytes !== undefined) {
+        if (
+          typeof value.bytes !== "number" ||
+          !Number.isSafeInteger(value.bytes) ||
+          value.bytes < TAKOSUMI_GENERATED_SECRET_MIN_BYTES ||
+          value.bytes > TAKOSUMI_GENERATED_SECRET_MAX_BYTES
+        ) {
+          return `${prefix}.bytes must be an integer between 16 and 64`;
+        }
+        bytes = value.bytes;
+      }
+      const encoding =
+        value.encoding === undefined
+          ? undefined
+          : oneOf(value.encoding, ["hex", "base64url"] as const);
+      if (value.encoding !== undefined && !encoding) {
+        return `${prefix}.encoding is unsupported`;
+      }
+      return {
+        kind: "secret.generated",
+        ...(bytes !== undefined ? { bytes } : {}),
+        ...(encoding ? { encoding } : {}),
+        deliver,
+      };
+    }
+    case "http.endpoint": {
+      const keys = exactKeys(value, ["kind", "deliver"]);
+      if (keys) return `${prefix}.${keys}`;
+      const deliver = parseDelivery(value.deliver, `${prefix}.deliver`, [
+        "url",
+        "subdomain",
+        "routePattern",
+      ] as const);
+      return typeof deliver === "string"
+        ? deliver
+        : { kind: "http.endpoint", deliver };
     }
     default:
       return `${prefix}.kind is unsupported`;
   }
 }
 
-function parseVariables<const K extends string>(
+/**
+ * A delivery names exactly one target surface. Accepting both at once would
+ * let one requirement be satisfied twice through different authorities.
+ */
+function parseDelivery<const K extends string>(
   value: unknown,
   prefix: string,
   allowed: readonly K[],
+): RepositoryRuntimeDelivery<K> | string {
+  if (!isPlainRecord(value)) return `${prefix} must be an object`;
+  const keys = exactKeys(value, ["variables", "bindings"]);
+  if (keys) return `${prefix}.${keys}`;
+  const hasVariables = value.variables !== undefined;
+  const hasBindings = value.bindings !== undefined;
+  if (hasVariables === hasBindings) {
+    return `${prefix} must declare exactly one of variables or bindings`;
+  }
+  if (hasVariables) {
+    const variables = parseTargets(
+      value.variables,
+      `${prefix}.variables`,
+      allowed,
+      variableName,
+      "a valid OpenTofu variable name",
+    );
+    return typeof variables === "string" ? variables : { variables };
+  }
+  const bindings = parseTargets(
+    value.bindings,
+    `${prefix}.bindings`,
+    allowed,
+    bindingName,
+    "a valid runtime binding name",
+  );
+  return typeof bindings === "string" ? bindings : { bindings };
+}
+
+function parseTargets<const K extends string>(
+  value: unknown,
+  prefix: string,
+  allowed: readonly K[],
+  parse: (value: unknown) => string | undefined,
+  expectation: string,
 ): Readonly<Partial<Record<K, string>>> | string {
   if (!isPlainRecord(value)) return `${prefix} must be an object`;
   const keys = exactKeys(value, allowed);
   if (keys) return `${prefix}.${keys}`;
-  const variables: Partial<Record<K, string>> = {};
+  const targets: Partial<Record<K, string>> = {};
   for (const key of allowed) {
     if (value[key] === undefined) continue;
-    const variable = variableName(value[key]);
-    if (!variable) {
-      return `${prefix}.${key} must be a valid OpenTofu variable name`;
-    }
-    variables[key] = variable;
+    const parsed = parse(value[key]);
+    if (!parsed) return `${prefix}.${key} must be ${expectation}`;
+    targets[key] = parsed;
   }
-  if (Object.keys(variables).length === 0) {
-    return `${prefix} must contain at least one variable`;
+  if (Object.keys(targets).length === 0) {
+    return `${prefix} must name at least one target`;
   }
-  return variables;
+  return targets;
+}
+
+/** The names one requirement writes, whichever surface it delivers to. */
+export function deliveryTargets(
+  deliver: RepositoryRuntimeRequirement["deliver"],
+): Readonly<Record<string, string>> {
+  return ("variables" in deliver ? deliver.variables : deliver.bindings) as
+    Readonly<Record<string, string>>;
+}
+
+/** True when a requirement is satisfied by writing module input variables. */
+export function deliversToVariables(
+  deliver: RepositoryRuntimeRequirement["deliver"],
+): boolean {
+  return "variables" in deliver;
 }
 
 function parseScopes(
@@ -622,6 +689,17 @@ function optionalToken(value: unknown, max: number): string | undefined {
 }
 
 function variableName(value: unknown): string | undefined {
+  const parsed = text(value, 128);
+  return parsed && /^[A-Za-z_][A-Za-z0-9_]*$/u.test(parsed)
+    ? parsed
+    : undefined;
+}
+
+/**
+ * Runtime binding names land in the application's own environment, so the
+ * grammar is the conventional binding/env shape rather than a Tofu variable.
+ */
+function bindingName(value: unknown): string | undefined {
   const parsed = text(value, 128);
   return parsed && /^[A-Za-z_][A-Za-z0-9_]*$/u.test(parsed)
     ? parsed

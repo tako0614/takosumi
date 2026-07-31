@@ -542,7 +542,7 @@ test("repository manifest uses the general closed envelope and keeps install opt
   const contract = await readText(
     new URL("contract/repository-manifest.ts", ROOT),
   );
-  assert.match(contract, /"takosumi\.com\/v1alpha1"/);
+  assert.match(contract, /"takosumi\.com\/v1"/);
   assert.match(contract, /"Repository"/);
   assert.match(contract, /readonly install: RepositoryManifestInstall/);
   assert.doesNotMatch(contract, /TAKOSUMI_INSTALL_UX_SCHEMA_VERSION/);

@@ -5,7 +5,7 @@ import type { RepositoryManifestDocument } from "takosumi-contract/repository-ma
 import { compileRepositoryInstallUx } from "../../../../core/domains/capsules/repository_install_ux_compiler.ts";
 
 const document: RepositoryManifestDocument = {
-  apiVersion: "takosumi.com/v1alpha1",
+  apiVersion: "takosumi.com/v1",
   kind: "Repository",
   install: {
     modules: {
@@ -13,6 +13,7 @@ const document: RepositoryManifestDocument = {
       inputs: [
         {
           name: "project_name",
+          role: "service_name" as const,
           source: { kind: "capsule_name" },
           type: "string",
           label: { ja: "サービス名", en: "Service name" },
@@ -39,21 +40,18 @@ const document: RepositoryManifestDocument = {
           label: { ja: "通知トークン", en: "Push token" },
         },
       ],
-      installExperience: {
-        projections: [
-          { kind: "service_name", variable: "project_name" },
-          {
-            kind: "public_endpoint",
-            variables: { url: "app_url", subdomain: "project_name" },
-          },
-          {
-            kind: "oidc_client",
-            variables: { issuerUrl: "oidc_issuer" },
-            callbackPath: "/api/auth/callback/takos",
-            scopes: ["openid", "profile", "email"],
-          },
-        ],
-      },
+      requires: [
+        {
+          kind: "http.endpoint" as const,
+          deliver: { variables: { url: "app_url", subdomain: "project_name" } },
+        },
+        {
+          kind: "identity.oidc" as const,
+          callbackPath: "/api/auth/callback/takos",
+          scopes: ["openid", "profile", "email"],
+          deliver: { variables: { issuerUrl: "oidc_issuer" } },
+        },
+      ],
       features: [
         {
           id: "notification-push",
@@ -136,8 +134,19 @@ describe("repository install UX compiler", () => {
       source: "capsule_name",
     });
     expect(result.compiled.installExperience).toEqual({
-      projections:
-        document.install.modules["."]!.installExperience!.projections,
+      projections: [
+        { kind: "service_name", variable: "project_name" },
+        {
+          kind: "public_endpoint",
+          variables: { url: "app_url", subdomain: "project_name" },
+        },
+        {
+          kind: "oidc_client",
+          variables: { issuerUrl: "oidc_issuer" },
+          callbackPath: "/api/auth/callback/takos",
+          scopes: ["openid", "profile", "email"],
+        },
+      ],
       features: [
         {
           id: "notification-push",
@@ -241,7 +250,7 @@ describe("repository install UX compiler", () => {
     expect(JSON.stringify(result)).not.toContain(secret);
   });
 
-  test("enforces OIDC scope and projection variable policy", () => {
+  test("enforces OIDC scope and requirement target policy", () => {
     const scope = compile({
       policy: { allowedOidcScopes: ["openid", "profile"] },
     });
@@ -271,7 +280,7 @@ describe("repository install UX compiler", () => {
     }
   });
 
-  test("enforces operator source/projection policy and never exposes the plain env map", () => {
+  test("enforces operator source/requirement policy and never exposes the plain env map", () => {
     const source = compile({
       policy: {
         allowedSourceKinds: ["user", "module_default"],
@@ -285,21 +294,21 @@ describe("repository install UX compiler", () => {
       );
     }
 
-    const projection = compile({
+    const requirement = compile({
       policy: {
-        allowedProjectionKinds: ["service_name"],
+        allowedRequirementKinds: ["http.endpoint"],
         allowedOidcScopes: ["openid", "profile", "email"],
       },
     });
-    expect(projection.ok).toBe(false);
-    if (!projection.ok) {
-      expect(projection.diagnostic.code).toBe(
-        "repository_install_ux_projection_disallowed",
+    expect(requirement.ok).toBe(false);
+    if (!requirement.ok) {
+      expect(requirement.diagnostic.code).toBe(
+        "repository_install_ux_requirement_disallowed",
       );
     }
 
     const envDocument: RepositoryManifestDocument = {
-      apiVersion: "takosumi.com/v1alpha1",
+      apiVersion: "takosumi.com/v1",
       kind: "Repository",
       install: {
         modules: {

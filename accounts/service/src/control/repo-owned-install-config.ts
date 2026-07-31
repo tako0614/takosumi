@@ -54,6 +54,11 @@ export type RepoOwnedInstallConfigAdoptionResult =
       readonly variablePresentation: InstallConfig["variablePresentation"];
       readonly installExperience: InstallConfig["installExperience"];
       readonly variableMapping: InstallConfig["variableMapping"];
+      /**
+       * Compiled from the repository's own runtime requirements. A service or
+       * operator declaration on the base config keeps final authority.
+       */
+      readonly hostRuntimeMaterialization?: InstallConfig["hostRuntimeMaterialization"];
       readonly sourceSnapshotId: string;
       readonly digest: string;
     };
@@ -197,6 +202,14 @@ export async function adoptRepoOwnedInstallConfig(
       compiled.compiled.variableMapping,
       input.baseConfig.variableMapping,
     ),
+    ...(input.baseConfig.hostRuntimeMaterialization ??
+    compiled.compiled.hostRuntimeMaterialization
+      ? {
+          hostRuntimeMaterialization:
+            input.baseConfig.hostRuntimeMaterialization ??
+            compiled.compiled.hostRuntimeMaterialization,
+        }
+      : {}),
     sourceSnapshotId: input.sourceSnapshot!.id,
     digest: observation.digest,
   };
@@ -238,6 +251,7 @@ export async function previewRepoOwnedInstallConfig(
     capsuleName: input.capsuleName,
     variablePresentation: adoption.variablePresentation ?? [],
     installExperience: adoption.installExperience ?? {},
+    hostRuntimeMaterialization: adoption.hostRuntimeMaterialization ?? null,
     variableMapping: adoption.variableMapping,
     policy: input.baseConfig.policy,
   });
@@ -286,6 +300,9 @@ export async function previewRepoOwnedInstallConfig(
     variablePresentation: adoption.variablePresentation,
     installExperience: adoption.installExperience,
     variableMapping: adoption.variableMapping,
+    ...(adoption.hostRuntimeMaterialization
+      ? { hostRuntimeMaterialization: adoption.hostRuntimeMaterialization }
+      : {}),
     ...(selectedPath !== "." ? { modulePath: selectedPath } : {}),
     createdAt: now,
     updatedAt: now,

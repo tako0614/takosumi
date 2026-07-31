@@ -1,0 +1,21 @@
+{
+  "apiVersion": "takosumi.com/v1",
+  "kind": "Repository",
+  "install": {
+    "modules": {
+      ".": {
+        "inputs": [],
+        "requires": [
+          {
+            "kind": "secret.embedded",
+            "deliver": {
+              "bindings": {
+                "value": "X"
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

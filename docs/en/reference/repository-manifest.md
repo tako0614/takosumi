@@ -10,12 +10,13 @@ ordinary compatibility, Plan, and Apply flow.
 
 ```json
 {
-  "apiVersion": "takosumi.com/v1alpha1",
+  "apiVersion": "takosumi.com/v1",
   "kind": "Repository",
   "install": {
     "modules": {
       ".": {
-        "inputs": []
+        "inputs": [],
+        "requires": []
       }
     }
   }
@@ -28,10 +29,50 @@ retired install-only `schemaVersion: takosumi.install-ux/v1`. A future metadata
 section requires a new `apiVersion`; unknown fields continue to fail closed.
 Do not publish empty placeholder sections.
 
-Each module may propose only its own input names, display copy, supported
-semantic projections, and optional feature grouping. It cannot declare a Git
-source/ref, provider credentials, target, billing, lifecycle commands,
+A module proposes three things. `inputs` are the input names and display copy
+the module owns, `requires` is what the application needs the host to provide
+before it can run, and `features` groups optional inputs. It cannot declare a
+Git source/ref, provider credentials, target, billing, lifecycle commands,
 Interface grants, or arbitrary environment injection.
+
+## requires is a request, never a value
+
+The manifest is a public repository file, so a resolved secret or credential
+must never appear in it. A requirement states only what is needed and the name
+it wants to receive it under; producing and delivering the value is the host's
+job. Takosumi validates each requirement against operator policy and compiles
+it into its own DB-owned `InstallConfig` before any Plan can use it.
+
+```json
+{
+  "kind": "secret.generated",
+  "bytes": 32,
+  "encoding": "base64url",
+  "deliver": { "bindings": { "value": "ENCRYPTION_KEY" } }
+}
+```
+
+The kinds are `identity.oidc`, `secret.generated`, and `http.endpoint`.
+
+`deliver` names exactly one target surface. `variables` suits a module system
+whose surface is input variables; `bindings` suits a portable runtime that has
+no variable to receive the value. The requirement is identical either way —
+only delivery differs.
+
+`secret.generated` has no `variables` form, because the host never writes a
+secret into portable module state. `http.endpoint` has no `bindings` form,
+because an allocated hostname is the runtime location itself rather than a
+value the host injects.
+
+The line is whether host authority is needed. An ordinary non-secret string
+belongs in the module's own configuration.
+
+## Input roles
+
+A `role` tells the installer what a field is. It never changes where the value
+comes from (`source`). `service_name` marks the service-name field and
+`initial_secret` marks the initial password field; each appears at most once
+per module.
 
 ## Ownership
 

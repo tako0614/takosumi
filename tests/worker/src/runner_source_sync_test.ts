@@ -508,7 +508,7 @@ test("readRepositoryManifest captures a validated document and exact digest", as
   try {
     await mkdir(join(root, ".well-known"), { recursive: true });
     const text = JSON.stringify({
-      apiVersion: "takosumi.com/v1alpha1",
+      apiVersion: "takosumi.com/v1",
       kind: "Repository",
       install: { modules: { ".": { inputs: [] } } },
     });
@@ -518,7 +518,7 @@ test("readRepositoryManifest captures a validated document and exact digest", as
     expect(captured).toMatchObject({
       status: "present",
       document: {
-        apiVersion: "takosumi.com/v1alpha1",
+        apiVersion: "takosumi.com/v1",
         kind: "Repository",
         install: { modules: { ".": { inputs: [] } } },
       },
@@ -555,7 +555,7 @@ test("readRepositoryManifest records absent, oversized, symlink, and invalid doc
     await rm(path);
     await writeFile(
       path,
-      '{"apiVersion":"takosumi.com/v1alpha1","kind":"Repository","install":{}}',
+      '{"apiVersion":"takosumi.com/v1","kind":"Repository","install":{}}',
     );
     const invalid = await readRepositoryManifest(root);
     expect(invalid).toMatchObject({

@@ -369,7 +369,7 @@ test("account session control routes execute plan and apply through the real Ope
       status: "present",
       digest: installUxDigest,
       document: {
-        apiVersion: "takosumi.com/v1alpha1",
+        apiVersion: "takosumi.com/v1",
         kind: "Repository",
         install: { modules: { ".": { inputs: [] } } },
       },
@@ -572,7 +572,7 @@ test("account session control routes execute plan and apply through the real Ope
       status: "present",
       digest: installUxDigest,
       document: {
-        apiVersion: "takosumi.com/v1alpha1",
+        apiVersion: "takosumi.com/v1",
         kind: "Repository",
         install: { modules: { ".": { inputs: [] } } },
       },

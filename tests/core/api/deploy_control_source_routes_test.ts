@@ -314,7 +314,7 @@ test("source snapshot API exposes repository manifest status and digest without 
       status: "present",
       digest,
       document: {
-        apiVersion: "takosumi.com/v1alpha1",
+        apiVersion: "takosumi.com/v1",
         kind: "Repository",
         install: { modules: { ".": { inputs: [] } } },
       },

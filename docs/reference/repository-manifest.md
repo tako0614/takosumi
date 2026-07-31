@@ -10,12 +10,13 @@ Plan、Apply を行います。
 
 ```json
 {
-  "apiVersion": "takosumi.com/v1alpha1",
+  "apiVersion": "takosumi.com/v1",
   "kind": "Repository",
   "install": {
     "modules": {
       ".": {
-        "inputs": []
+        "inputs": [],
+        "requires": []
       }
     }
   }
@@ -29,10 +30,48 @@ root は closed object です。現行 version が受け付けるのは
 section を追加するときは新しい `apiVersion` を定義し、未知 field は
 fail closed のままにします。予約用の空 section は置きません。
 
-各 module は、その module が所有する入力名、表示文言、対応済みの semantic
-projection、任意機能の grouping だけを提案できます。Git source/ref、
-provider credential、target、billing、lifecycle command、Interface grant、
-任意の環境変数注入は宣言できません。
+各 module が提案できるのは3つです。`inputs` は module が所有する入力名と
+表示文言、`requires` はその application が動くために host に用意してほしい
+もの、`features` は任意機能の grouping です。Git source/ref、provider
+credential、target、billing、lifecycle command、Interface grant、任意の
+環境変数注入は宣言できません。
+
+## requires — 要求であって値ではない
+
+manifest は公開 repository file なので、解決済みの secret や credential が
+現れてはいけません。`requires` が宣言するのは「何が要るか」と「どの名前で
+受け取りたいか」だけで、値を作って配るのは host です。Takosumi は各要求を
+operator policy に照らして検証し、自分の DB-owned `InstallConfig` に compile
+してから Plan に渡します。
+
+```json
+{
+  "kind": "secret.generated",
+  "bytes": 32,
+  "encoding": "base64url",
+  "deliver": { "bindings": { "value": "ENCRYPTION_KEY" } }
+}
+```
+
+`kind` は `identity.oidc` / `secret.generated` / `http.endpoint` です。
+
+`deliver` は配り先をちょうど1つ選びます。`variables` は入力変数を面に持つ
+module system 向け、`bindings` は変数を持たない portable runtime 向けです。
+要求そのものはどちらでも同じ形で、違うのは配り先だけです。
+
+`secret.generated` に `variables` はありません。host が secret を portable な
+module state に書くことはないからです。逆に `http.endpoint` に `bindings` は
+ありません。割り当てられた hostname は注入される値ではなく runtime の場所
+そのものだからです。
+
+境界は「host の権能が要るか」です。ただの非機密文字列は module 自身の設定に
+書いてください。
+
+## inputs の role
+
+`role` は、その入力が何であるかを installer に伝えます。値の出どころ
+(`source`) は変えません。`service_name` はサービス名の欄、`initial_secret`
+は初期パスワードの欄で、どちらも module ごとに1つまでです。
 
 ## 所有境界
 

@@ -3,15 +3,22 @@ import type {
   CapsuleRootModuleVariableDeclaration,
 } from "takosumi-contract/capsules";
 import type {
+  InstallConfigHostRuntimeMaterialization,
   InstallConfigInstallExperience,
+  InstallConfigInstallProjection,
   InstallConfigVariablePresentation,
 } from "takosumi-contract/install-configs";
 import type {
   RepositoryInstallUxInput,
   RepositoryInstallUxInputSource,
-  RepositoryInstallUxProjection,
+  RepositoryRuntimeRequirement,
   RepositoryManifestDocument,
 } from "takosumi-contract/repository-manifest";
+import {
+  deliversToVariables,
+  deliveryTargets,
+} from "takosumi-contract/repository-manifest";
+import { HOST_RUNTIME_MATERIALIZATION_CONTRACT } from "takosumi-contract";
 import type { JsonValue } from "takosumi-contract/types";
 
 const SUPPORTED_SOURCE_KINDS = [
@@ -21,13 +28,28 @@ const SUPPORTED_SOURCE_KINDS = [
   "module_default",
 ] as const;
 
-const SUPPORTED_PROJECTION_KINDS = [
-  "service_name",
-  "public_endpoint",
-  "initial_secret",
-  "oidc_client",
-  "artifact",
+const SUPPORTED_REQUIREMENT_KINDS = [
+  "identity.oidc",
+  "secret.generated",
+  "http.endpoint",
 ] as const;
+
+/**
+ * Runtime binding names the host itself owns. A repository requirement may
+ * never deliver into one, because the app would then receive a repository-
+ * chosen value where it expects host authority.
+ */
+const RESERVED_RUNTIME_BINDINGS: ReadonlySet<string> = new Set([
+  "TAKOFORM_ENDPOINT",
+  "TAKOFORM_SPACE",
+  "TAKOFORM_TOKEN",
+  "TAKOSUMI_CAPSULE_ID",
+  "TAKOSUMI_WORKSPACE_ID",
+  "TAKOSUMI_RUN_ID",
+]);
+
+const DEFAULT_GENERATED_SECRET_BYTES = 32;
+const DEFAULT_GENERATED_SECRET_ENCODING = "base64url" as const;
 
 const MAX_DIAGNOSTIC_MESSAGE_LENGTH = 240;
 const PLAIN_ENV_VARIABLE = "env";
@@ -47,8 +69,8 @@ export type RepositoryInstallUxDiagnosticCode =
   | "repository_install_ux_variable_value_unsupported"
   | "repository_install_ux_plain_env_unsupported"
   | "repository_install_ux_source_disallowed"
-  | "repository_install_ux_projection_disallowed"
-  | "repository_install_ux_projection_variable_invalid"
+  | "repository_install_ux_requirement_disallowed"
+  | "repository_install_ux_requirement_target_invalid"
   | "repository_install_ux_oidc_scope_disallowed"
   | "repository_install_ux_feature_input_invalid"
   | "repository_install_ux_secret_materialization_required";
@@ -60,7 +82,7 @@ export interface RepositoryInstallUxDiagnostic {
 
 export interface RepositoryInstallUxCompilerPolicy {
   readonly allowedSourceKinds?: readonly RepositoryInstallUxInputSource["kind"][];
-  readonly allowedProjectionKinds?: readonly RepositoryInstallUxProjection["kind"][];
+  readonly allowedRequirementKinds?: readonly RepositoryRuntimeRequirement["kind"][];
   readonly allowedOidcScopes?: readonly string[];
 }
 
@@ -83,6 +105,12 @@ export interface CompiledRepositoryInstallUx {
   readonly variableMapping: Readonly<Record<string, JsonValue>>;
   /** User-owned names accepted from the reviewed request. */
   readonly userVariableNames: readonly string[];
+  /**
+   * Requirements the repository asked the host to satisfy directly in the
+   * application runtime. Absent when every requirement is delivered through
+   * module variables instead.
+   */
+  readonly hostRuntimeMaterialization?: InstallConfigHostRuntimeMaterialization;
 }
 
 export type CompileRepositoryInstallUxResult =
@@ -154,8 +182,8 @@ export function compileRepositoryInstallUx(
   const sourceKinds = new Set(
     input.policy?.allowedSourceKinds ?? SUPPORTED_SOURCE_KINDS,
   );
-  const projectionKinds = new Set(
-    input.policy?.allowedProjectionKinds ?? SUPPORTED_PROJECTION_KINDS,
+  const requirementKinds = new Set(
+    input.policy?.allowedRequirementKinds ?? SUPPORTED_REQUIREMENT_KINDS,
   );
 
   for (const declaration of module.inputs) {
@@ -167,16 +195,18 @@ export function compileRepositoryInstallUx(
     if (validation) return validation;
   }
 
-  const projections = module.installExperience?.projections ?? [];
-  for (const projection of projections) {
-    const validation = validateProjection(
-      projection,
+  const requirements = module.requires ?? [];
+  for (const requirement of requirements) {
+    const validation = validateRequirement(
+      requirement,
       declarationByName,
-      projectionKinds,
+      requirementKinds,
       input.policy?.allowedOidcScopes,
     );
     if (validation) return validation;
   }
+  const roleValidation = validateRoles(module.inputs, declarationByName);
+  if (roleValidation) return roleValidation;
 
   const featureValidation = validateFeatures(module.inputs, module.features);
   if (featureValidation) return featureValidation;
@@ -259,14 +289,18 @@ export function compileRepositoryInstallUx(
     variableMapping[name] = value;
   }
 
+  const projections = compileVariableProjections(requirements, module.inputs);
+  const hostRuntimeMaterialization = compileHostRuntimeMaterialization(
+    requirements,
+  );
+
   return {
     ok: true,
     compiled: {
+      ...(hostRuntimeMaterialization ? { hostRuntimeMaterialization } : {}),
       variablePresentation,
       installExperience: {
-        ...(projections.length > 0
-          ? { projections: projections.map(copyProjection) }
-          : {}),
+        ...(projections.length > 0 ? { projections } : {}),
         ...(module.features && module.features.length > 0
           ? {
               features: module.features.map((feature) => ({
@@ -350,52 +384,80 @@ function validateInputDeclaration(
   return undefined;
 }
 
-function validateProjection(
-  projection: RepositoryInstallUxProjection,
+function validateRequirement(
+  requirement: RepositoryRuntimeRequirement,
   declarations: ReadonlyMap<string, CapsuleRootModuleVariableDeclaration>,
-  allowedProjectionKinds: ReadonlySet<RepositoryInstallUxProjection["kind"]>,
+  allowedKinds: ReadonlySet<RepositoryRuntimeRequirement["kind"]>,
   allowedOidcScopes: readonly string[] | undefined,
 ): CompileRepositoryInstallUxResult | undefined {
-  if (!allowedProjectionKinds.has(projection.kind)) {
+  if (!allowedKinds.has(requirement.kind)) {
     return invalid(
-      "repository_install_ux_projection_disallowed",
-      `The ${projection.kind} projection is not allowed by operator policy.`,
+      "repository_install_ux_requirement_disallowed",
+      `The ${requirement.kind} requirement is not allowed by operator policy.`,
     );
   }
-  const variables = projectionVariables(projection);
-  for (const variable of variables) {
-    const declaration = declarations.get(variable);
-    if (
-      !declaration ||
-      (declaration.type !== "unknown" && declaration.type !== "string")
-    ) {
-      return invalid(
-        "repository_install_ux_projection_variable_invalid",
-        `The ${projection.kind} projection references an absent or non-string module variable.`,
-      );
+  const targets = deliveryTargets(requirement.deliver);
+  if (deliversToVariables(requirement.deliver)) {
+    // Variable delivery writes the module's own inputs, so each named variable
+    // must exist and be able to hold a string.
+    for (const variable of Object.values(targets)) {
+      const declaration = declarations.get(variable);
+      if (
+        !declaration ||
+        (declaration.type !== "unknown" && declaration.type !== "string")
+      ) {
+        return invalid(
+          "repository_install_ux_requirement_target_invalid",
+          `The ${requirement.kind} requirement references an absent or non-string module variable.`,
+        );
+      }
+    }
+  } else {
+    // Binding delivery writes the application's runtime environment, where a
+    // repository must not be able to occupy a host-reserved name.
+    for (const binding of Object.values(targets)) {
+      if (RESERVED_RUNTIME_BINDINGS.has(binding)) {
+        return invalid(
+          "repository_install_ux_requirement_target_invalid",
+          `The runtime binding ${boundedIdentifier(binding)} is reserved by the host.`,
+        );
+      }
     }
   }
   if (
-    projection.kind === "public_endpoint" &&
-    !projection.variables.url &&
-    !projection.variables.subdomain
+    requirement.kind === "http.endpoint" &&
+    !targets.url &&
+    !targets.subdomain
   ) {
     return invalid(
-      "repository_install_ux_projection_variable_invalid",
-      "A public_endpoint projection must declare a URL or subdomain variable.",
+      "repository_install_ux_requirement_target_invalid",
+      "An http.endpoint requirement must name a url or subdomain target.",
     );
   }
-  if (projection.kind === "oidc_client") {
+  if (requirement.kind === "identity.oidc") {
     const allowed = new Set(allowedOidcScopes ?? []);
-    const scopes = projection.scopes ?? ["openid", "profile", "email"];
+    const scopes = requirement.scopes ?? ["openid", "profile", "email"];
     if (
       !scopes.includes("openid") ||
-      scopes.some((scope) => !allowed.has(scope))
+      scopes.some((scope: string) => !allowed.has(scope))
     ) {
       return invalid(
         "repository_install_ux_oidc_scope_disallowed",
-        "The OIDC projection requests a scope outside the Accounts operator allowlist.",
+        "The OIDC requirement requests a scope outside the Accounts operator allowlist.",
       );
+    }
+    if (!deliversToVariables(requirement.deliver)) {
+      // A runtime receives sealed OIDC material as a whole or not at all: a
+      // partial set would leave the app with an unusable half-configuration.
+      const missing = (
+        ["issuerUrl", "clientId", "ownerSubject", "redirectUri"] as const
+      ).filter((slot) => !targets[slot]);
+      if (missing.length > 0) {
+        return invalid(
+          "repository_install_ux_requirement_target_invalid",
+          `An identity.oidc requirement delivered to bindings must name every binding; missing ${missing.join(", ")}.`,
+        );
+      }
     }
   }
   return undefined;
@@ -486,53 +548,130 @@ function compileDerivedVariableMapping(
   return mapping;
 }
 
-function copyProjection(
-  projection: RepositoryInstallUxProjection,
-): RepositoryInstallUxProjection {
-  switch (projection.kind) {
-    case "service_name":
-      return { kind: "service_name", variable: projection.variable };
-    case "public_endpoint":
-      return {
-        kind: "public_endpoint",
-        variables: { ...projection.variables },
-      };
-    case "initial_secret":
-      return {
-        kind: "initial_secret",
-        variable: projection.variable,
-        ...(projection.secretKind ? { secretKind: projection.secretKind } : {}),
-        ...(projection.optional !== undefined
-          ? { optional: projection.optional }
-          : {}),
-      };
-    case "oidc_client":
-      return {
-        kind: "oidc_client",
-        variables: { ...projection.variables },
-        callbackPath: projection.callbackPath,
-        ...(projection.scopes ? { scopes: [...projection.scopes] } : {}),
-      };
-    case "artifact":
-      return { kind: "artifact", variables: { ...projection.variables } };
+/**
+ * A declared role must name a real string variable, exactly like a requirement
+ * that delivers to variables. The role only says what the field means.
+ */
+function validateRoles(
+  inputs: readonly RepositoryInstallUxInput[],
+  declarations: ReadonlyMap<string, CapsuleRootModuleVariableDeclaration>,
+): CompileRepositoryInstallUxResult | undefined {
+  for (const input of inputs) {
+    if (!input.role) continue;
+    const declaration = declarations.get(input.name);
+    if (
+      !declaration ||
+      (declaration.type !== "unknown" && declaration.type !== "string")
+    ) {
+      return invalid(
+        "repository_install_ux_requirement_target_invalid",
+        `The ${input.role} role references an absent or non-string module variable.`,
+      );
+    }
   }
+  return undefined;
 }
 
-function projectionVariables(
-  projection: RepositoryInstallUxProjection,
-): readonly string[] {
-  switch (projection.kind) {
-    case "service_name":
-      return [projection.variable];
-    case "initial_secret":
-      return [projection.variable];
-    case "public_endpoint":
-    case "oidc_client":
-    case "artifact":
-      return Object.values(projection.variables).filter(
-        (value): value is string => typeof value === "string",
-      );
+/**
+ * Variable-delivered requirements and input roles become the DB-owned
+ * presentation projections the installer and Accounts already consume.
+ */
+function compileVariableProjections(
+  requirements: readonly RepositoryRuntimeRequirement[],
+  inputs: readonly RepositoryInstallUxInput[],
+): readonly InstallConfigInstallProjection[] {
+  const projections: InstallConfigInstallProjection[] = [];
+  for (const input of inputs) {
+    if (input.role === "service_name") {
+      projections.push({ kind: "service_name", variable: input.name });
+    } else if (input.role === "initial_secret") {
+      projections.push({
+        kind: "initial_secret",
+        variable: input.name,
+        ...(input.required === false ? { optional: true } : {}),
+      });
+    }
   }
+  for (const requirement of requirements) {
+    if (!deliversToVariables(requirement.deliver)) continue;
+    const variables = deliveryTargets(requirement.deliver);
+    if (requirement.kind === "http.endpoint") {
+      projections.push({ kind: "public_endpoint", variables: { ...variables } });
+      continue;
+    }
+    if (requirement.kind === "identity.oidc") {
+      projections.push({
+        kind: "oidc_client",
+        variables: { ...variables },
+        callbackPath: requirement.callbackPath,
+        ...(requirement.scopes ? { scopes: [...requirement.scopes] } : {}),
+      });
+    }
+    // A generated secret has no variable form: the host never writes a secret
+    // into portable module state.
+  }
+  return projections;
+}
+
+function oidcBinding(binding: string): {
+  readonly binding: string;
+  readonly capabilityRef: `capability:${string}`;
+} {
+  return {
+    binding,
+    capabilityRef: `capability:repository/${binding}`,
+  };
+}
+
+/**
+ * Binding-delivered requirements become the provider-neutral host runtime
+ * declaration. Values never appear here — only the opaque refs the host
+ * resolves inside its own boundary.
+ */
+function compileHostRuntimeMaterialization(
+  requirements: readonly RepositoryRuntimeRequirement[],
+): InstallConfigHostRuntimeMaterialization | undefined {
+  const materialized = requirements.filter(
+    (requirement) => !deliversToVariables(requirement.deliver),
+  );
+  if (materialized.length === 0) return undefined;
+  const compiled: InstallConfigHostRuntimeMaterialization["requirements"][number][] =
+    [];
+  for (const requirement of materialized) {
+    const targets = deliveryTargets(requirement.deliver);
+    if (requirement.kind === "secret.generated") {
+      const binding = targets.value!;
+      compiled.push({
+        kind: "generated_secret",
+        binding,
+        secretRef: `secret:repository/${binding}`,
+        bytes: requirement.bytes ?? DEFAULT_GENERATED_SECRET_BYTES,
+        encoding: requirement.encoding ?? DEFAULT_GENERATED_SECRET_ENCODING,
+      });
+      continue;
+    }
+    if (requirement.kind === "identity.oidc") {
+      compiled.push({
+        kind: "public_oidc",
+        id: "repository-oidc",
+        callbackPath: requirement.callbackPath,
+        scopes: [...(requirement.scopes ?? ["openid", "profile"])],
+        bindings: {
+          issuerUrl: oidcBinding(targets.issuerUrl!),
+          clientId: oidcBinding(targets.clientId!),
+          ownerSubject: oidcBinding(targets.ownerSubject!),
+          redirectUri: oidcBinding(targets.redirectUri!),
+        },
+      });
+    }
+    // http.endpoint has no binding form: the managed hostname is the runtime
+    // location itself, not a value the host injects.
+  }
+  if (compiled.length === 0) return undefined;
+  return {
+    contract: HOST_RUNTIME_MATERIALIZATION_CONTRACT,
+    requirements: compiled,
+  };
 }
 
 function jsonValueMatchesType(

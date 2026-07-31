@@ -1607,7 +1607,7 @@ test("repository install UX pins the initial Plan snapshot, then applied lineage
       status: "present",
       digest: installUxDigest,
       document: {
-        apiVersion: "takosumi.com/v1alpha1",
+        apiVersion: "takosumi.com/v1",
         kind: "Repository",
         install: { modules: { ".": { inputs: [] } } },
       },
