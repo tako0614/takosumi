@@ -605,6 +605,23 @@ export function registerPortableFormHostRoutes(
       "import",
     );
     if (!available.ok) return available.response;
+    // Import already classifies its own replay, so re-running the exact
+    // request is the correct resume for a reservation whose first attempt
+    // never reported a backend outcome.
+    const runImport = async (): Promise<Response> => {
+      const result = await options.service.importResource(importRequest, {
+        replayOnly: replayStatus !== undefined,
+      });
+      if (!result.ok) return serviceError(c, result.error);
+      return portableJson(
+        c,
+        {
+          resource: portableResource(result.value.resource),
+        },
+        200,
+        key.value,
+      );
+    };
     return executePortableIdempotentMutation(
       c,
       options,
@@ -613,20 +630,8 @@ export function registerPortableFormHostRoutes(
         space: request.space,
         idempotencyKey: key.value,
       },
-      async () => {
-        const result = await options.service.importResource(importRequest, {
-          replayOnly: replayStatus !== undefined,
-        });
-        if (!result.ok) return serviceError(c, result.error);
-        return portableJson(
-          c,
-          {
-            resource: portableResource(result.value.resource),
-          },
-          200,
-          key.value,
-        );
-      },
+      runImport,
+      { resume: runImport },
     );
   });
 
@@ -672,30 +677,34 @@ export function registerPortableFormHostRoutes(
     if (!space.ok) return space.response;
     const identity = formIdentityFromQuery(c, true);
     if (!identity.ok) return identity.response;
+    // Observation is a read-side reconcile, so replaying the exact request is
+    // the correct resume for an interrupted reservation.
+    const runObserve = async (): Promise<Response> => {
+      const located = await exactStoredResource(c, options.service, true);
+      if (!located.ok) return located.response;
+      const result = await options.service.observe(
+        located.value.metadata.space,
+        located.value.kind,
+        located.value.metadata.name,
+        auth.actor,
+        { expectedGeneration: located.value.metadata.generation },
+      );
+      if (!result.ok) return serviceError(c, result.error);
+      return portableJson(
+        c,
+        {
+          resource: portableResource(result.value.resource),
+        },
+        200,
+        key.value,
+      );
+    };
     return executePortableIdempotentMutation(
       c,
       options,
       { actor: auth.actor, space: space.value, idempotencyKey: key.value },
-      async () => {
-        const located = await exactStoredResource(c, options.service, true);
-        if (!located.ok) return located.response;
-        const result = await options.service.observe(
-          located.value.metadata.space,
-          located.value.kind,
-          located.value.metadata.name,
-          auth.actor,
-          { expectedGeneration: located.value.metadata.generation },
-        );
-        if (!result.ok) return serviceError(c, result.error);
-        return portableJson(
-          c,
-          {
-            resource: portableResource(result.value.resource),
-          },
-          200,
-          key.value,
-        );
-      },
+      runObserve,
+      { resume: runObserve },
     );
   });
 
@@ -709,6 +718,28 @@ export function registerPortableFormHostRoutes(
     if (!space.ok) return space.response;
     const identity = formIdentityFromQuery(c, true);
     if (!identity.ok) return identity.response;
+    // Refresh republishes observed backend state without redispatching a
+    // desired-state mutation, so the exact request is its own resume.
+    const runRefresh = async (): Promise<Response> => {
+      const located = await exactStoredResource(c, options.service, true);
+      if (!located.ok) return located.response;
+      const result = await options.service.refresh(
+        located.value.metadata.space,
+        located.value.kind,
+        located.value.metadata.name,
+        auth.actor,
+        { expectedGeneration: located.value.metadata.generation },
+      );
+      if (!result.ok) return serviceError(c, result.error);
+      return portableJson(
+        c,
+        {
+          resource: portableResource(result.value.resource),
+        },
+        200,
+        key.value,
+      );
+    };
     return executePortableIdempotentMutation(
       c,
       options,
@@ -717,26 +748,8 @@ export function registerPortableFormHostRoutes(
         space: space.value,
         idempotencyKey: key.value,
       },
-      async () => {
-        const located = await exactStoredResource(c, options.service, true);
-        if (!located.ok) return located.response;
-        const result = await options.service.refresh(
-          located.value.metadata.space,
-          located.value.kind,
-          located.value.metadata.name,
-          auth.actor,
-          { expectedGeneration: located.value.metadata.generation },
-        );
-        if (!result.ok) return serviceError(c, result.error);
-        return portableJson(
-          c,
-          {
-            resource: portableResource(result.value.resource),
-          },
-          200,
-          key.value,
-        );
-      },
+      runRefresh,
+      { resume: runRefresh },
     );
   });
 
@@ -749,33 +762,35 @@ export function registerPortableFormHostRoutes(
     if (!space.ok) return space.response;
     const identity = formIdentityFromQuery(c, true);
     if (!identity.ok) return identity.response;
+    // Deletion of one exact generation is idempotent: a resumed attempt either
+    // finds the row already gone and answers 204, or continues retiring a
+    // record left in Deleting. Without this, an interrupted delete strands its
+    // reservation and the operator cannot retry, because a provider derives
+    // the Idempotency-Key from the operation identity rather than the attempt.
+    const runDelete = async (): Promise<Response> => {
+      const located = await exactStoredResource(c, options.service, true, true);
+      if (!located.ok) return located.response;
+      if (!located.value) return c.body(null, 204);
+      const result = await options.service.delete(
+        located.value.metadata.space,
+        located.value.kind,
+        located.value.metadata.name,
+        auth.actor,
+        {
+          expectedManagedBy: PORTABLE_FORM_MANAGER,
+          expectedGeneration: located.value.metadata.generation,
+        },
+      );
+      if (!result.ok) return serviceError(c, result.error);
+      c.header("idempotency-key", key.value);
+      return c.body(null, 204);
+    };
     return executePortableIdempotentMutation(
       c,
       options,
       { actor: auth.actor, space: space.value, idempotencyKey: key.value },
-      async () => {
-        const located = await exactStoredResource(
-          c,
-          options.service,
-          true,
-          true,
-        );
-        if (!located.ok) return located.response;
-        if (!located.value) return c.body(null, 204);
-        const result = await options.service.delete(
-          located.value.metadata.space,
-          located.value.kind,
-          located.value.metadata.name,
-          auth.actor,
-          {
-            expectedManagedBy: PORTABLE_FORM_MANAGER,
-            expectedGeneration: located.value.metadata.generation,
-          },
-        );
-        if (!result.ok) return serviceError(c, result.error);
-        c.header("idempotency-key", key.value);
-        return c.body(null, 204);
-      },
+      runDelete,
+      { resume: runDelete },
     );
   });
 }
