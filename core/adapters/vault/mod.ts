@@ -505,7 +505,16 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       );
     }
     const valueEnvNames = Object.keys(values);
-    const envNames = declaredEnvRegistration?.envNames ?? valueEnvNames;
+    // A managed provider connection delivers minted per-run material, so its
+    // runner-visible env surface is the recipe's declared set, not whichever
+    // subset the operator happened to store at registration. Recording only
+    // the stored names made the run manifest reject the minted remainder
+    // ("provider credential env name is not declared by the run recipe").
+    const envNames =
+      declaredEnvRegistration?.envNames ??
+      (input.scopeHints?.managedProvider === true
+        ? (recipeDefinition.envNames ?? valueEnvNames)
+        : valueEnvNames);
     if (envNames.length === 0) {
       throw new ConnectionVaultError(
         "invalid_argument",
@@ -533,6 +542,10 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     }
     if (
       !declaredEnvRegistration &&
+      // A managed provider connection stores nothing: every value is minted
+      // per run by the credential issuer, so registration cannot be required
+      // to supply material it will never use.
+      input.scopeHints?.managedProvider !== true &&
       !requiredRecipeGroupsSatisfied(
         recipeDefinition.requiredEnvGroups ?? [],
         valueEnvNames,
