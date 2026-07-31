@@ -30,6 +30,7 @@ import { type PageParams } from "takosumi-contract/pagination";
 import type { WorkspacesService } from "../domains/workspaces/mod.ts";
 import type { ProjectsService } from "../domains/projects/mod.ts";
 import type { CapsulesService } from "../domains/capsules/mod.ts";
+import type { ResourceShapeService } from "../domains/resource-shape/service.ts";
 import type { ConnectionsService } from "../domains/connections/mod.ts";
 import type { DependenciesService } from "../domains/dependencies/mod.ts";
 import type { OutputSharesService } from "../domains/output-shares/mod.ts";
@@ -279,9 +280,11 @@ export const ALLOWED_KEYS: Record<
     "packageDigest",
   ]),
   outputInterfaceMigrationConfirm: new Set(["candidate", "selection"]),
+  capsuleResourceMigration: new Set(["actionId", "manifest", "entries"]),
 };
 
 export type DeployControlRouteName =
+  | "capsuleResourceMigration"
   | "planRunCreate"
   | "applyRunCreate"
   | "connectionCreate"
@@ -371,6 +374,12 @@ export interface DeployControlInternalRouteDependencies {
    * Capsule / InstallConfig routes return 501 after successful auth.
    */
   readonly capsulesService?: CapsulesService;
+  /**
+   * Resource Shape domain service. Needed only by the Capsule
+   * `resource_migration` route, which must reach the canonical Resource a
+   * pinned declaration names. When unset that route returns 501 after auth.
+   */
+  readonly resourceShapeService?: ResourceShapeService;
   /** Internal provider resolver creation plus provider connection resolution. */
   readonly connectionsService?: ConnectionsService;
   /**

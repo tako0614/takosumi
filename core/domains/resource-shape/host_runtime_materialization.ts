@@ -332,5 +332,16 @@ export function withDbOwnedHostRuntimeMaterialization(
     async delete(input) {
       await adapter.delete(await deleteInput(input));
     },
+    ...(adapter.migrate
+      ? {
+          migrate: async (input) => {
+            const canonical = await applyInput(input);
+            return await adapter.migrate!({
+              ...canonical,
+              migration: input.migration,
+            });
+          },
+        }
+      : {}),
   };
 }

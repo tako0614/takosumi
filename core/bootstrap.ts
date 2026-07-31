@@ -2565,6 +2565,7 @@ export async function createTakosumiService(
       workspacesService,
       projectsService,
       capsulesService,
+      ...(resourceShapeService ? { resourceShapeService } : {}),
       connectionsService,
       dependenciesService,
       outputSharesService,

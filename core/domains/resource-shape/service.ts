@@ -74,6 +74,8 @@ import type {
   AdapterImportResult,
   AdapterObserveResult,
   AdapterPreviewResult,
+  AdapterMigrateResult,
+  AdapterMigrationEntry,
   AdapterRefreshResult,
   ResolvedResourceConnection,
   ResourceAdapter,
@@ -161,7 +163,9 @@ export type ResourceServiceErrorCode =
   | "observe_failed"
   | "refresh_failed"
   | "import_failed"
-  | "delete_failed";
+  | "delete_failed"
+  | "migrate_blocked"
+  | "migrate_failed";
 
 export interface ResourceServiceError {
   readonly code: ResourceServiceErrorCode;
@@ -3329,6 +3333,167 @@ export class ResourceShapeService {
    * is claimed with CAS before dispatch, and both success and failure are
    * fenced so a force tombstone or concurrent reconcile cannot be resurrected.
    */
+  /**
+   * Applies pinned schema migrations to an applied Resource.
+   *
+   * A migration changes what is inside a Resource, never the Resource itself,
+   * so this deliberately shares the read-only resolution of `refresh` and then
+   * takes no generation, no operation Run, and no state version. A repeated
+   * call is a no-op decided by the target's own ledger rather than by a
+   * control-plane lock.
+   */
+  async migrate(
+    space: SpaceId,
+    kind: ResourceShapeKind,
+    name: string,
+    actor: ActorContext,
+    entries: readonly AdapterMigrationEntry[],
+  ): Promise<ServiceResult<AdapterMigrateResult>> {
+    const id = formatResourceShapeId(space, kind, name);
+    const record = await this.#stores.resources.get(id);
+    if (!record) {
+      return {
+        ok: false,
+        error: { code: "not_found", message: `resource ${id} not found` },
+      };
+    }
+    if (record.phase !== "Ready" || record.observedGeneration !== record.generation) {
+      return {
+        ok: false,
+        error: {
+          code: "migrate_blocked",
+          message: `resource ${id} is ${record.phase} at generation ${record.generation}; migration requires a Ready applied generation`,
+        },
+      };
+    }
+    const lock = await this.#stores.locks.get(id);
+    if (!lock) {
+      return {
+        ok: false,
+        error: {
+          code: "resolution_descriptor_missing",
+          message: `resource ${id} has no durable ResolutionLock`,
+        },
+      };
+    }
+    const form = await this.#validatePinnedResourceFormEvidence(record, lock);
+    if (!form.ok) return form;
+    const entry = await this.#targetPoolEntryForLock(space, lock);
+    if (!entry) {
+      return {
+        ok: false,
+        error: {
+          code: "resolution_descriptor_missing",
+          message: `resource ${id} no longer has a recoverable pinned Target`,
+        },
+      };
+    }
+    const implementation = this.#implementationDescriptorForLock(
+      lock,
+      entry,
+      record.kind,
+    );
+    if (!implementation) {
+      return {
+        ok: false,
+        error: {
+          code: "resolution_descriptor_missing",
+          message: `resource ${id} has no recoverable pinned implementation descriptor`,
+        },
+      };
+    }
+    const parsed = this.#parseStoredResourceSpec(record);
+    if (!parsed.ok) {
+      return {
+        ok: false,
+        error: {
+          code: parsed.error.code as ResourceServiceErrorCode,
+          message: parsed.error.message,
+        },
+      };
+    }
+    let plan: ResourceShapePlan;
+    try {
+      plan = planResourceShape(
+        implementation,
+        parsed.parsed,
+        entry,
+        this.#moduleRegistry,
+      );
+    } catch (error) {
+      return {
+        ok: false,
+        error: { code: "capability_missing", message: errorMessage(error) },
+      };
+    }
+    if (!this.#adapter.migrate) {
+      return {
+        ok: false,
+        error: {
+          code: "capability_missing",
+          message: `resource ${id} has no installed adapter able to apply schema migrations`,
+        },
+      };
+    }
+    if (!record.lastOperationRunId) {
+      return {
+        ok: false,
+        error: {
+          code: "migrate_blocked",
+          message: `resource ${id} has no canonical backend revision to migrate`,
+        },
+      };
+    }
+    try {
+      const result = await this.#adapter.migrate({
+        resourceId: id,
+        ...(record.owner === undefined ? {} : { owner: record.owner }),
+        resourceGeneration: record.generation,
+        resourceRevisionId: record.lastOperationRunId,
+        ...(record.form === undefined ? {} : { form: record.form }),
+        environment: record.environment ?? "default",
+        stateGeneration:
+          record.execution?.stateGeneration ??
+          record.stateAdoption?.stateGeneration ??
+          0,
+        ...(record.stateAdoption
+          ? { stateAdoption: record.stateAdoption }
+          : {}),
+        plan,
+        target: targetForImplementation(entry, implementation),
+        implementation,
+        credentialRef: credentialRefForImplementation(entry, implementation),
+        nativeResources: lock.nativeResources ?? [],
+        actor,
+        migration: { entries },
+      });
+      await this.#recordResourceEvent({
+        action: "resource.migrate.succeeded",
+        space,
+        resourceId: id,
+        actor,
+        metadata: {
+          generation: record.generation,
+          appliedCount: result.applied.length,
+          skippedCount: result.skipped.length,
+        },
+      });
+      return { ok: true, value: result };
+    } catch (error) {
+      await this.#recordResourceEvent({
+        action: "resource.migrate.failed",
+        space,
+        resourceId: id,
+        actor,
+        metadata: { generation: record.generation },
+      });
+      return {
+        ok: false,
+        error: { code: "migrate_failed", message: errorMessage(error) },
+      };
+    }
+  }
+
   async refresh(
     space: SpaceId,
     kind: ResourceShapeKind,

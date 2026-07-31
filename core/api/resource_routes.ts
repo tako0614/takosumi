@@ -1363,6 +1363,7 @@ function httpStatusForServiceError(
     case "delete_blocked":
     case "observe_blocked":
     case "refresh_blocked":
+    case "migrate_blocked":
     case "import_conflict":
     case "ownership_conflict":
     case "reconcile_conflict":
@@ -1377,6 +1378,7 @@ function httpStatusForServiceError(
     case "deployment_billing_finalize_failed":
     case "observe_failed":
     case "refresh_failed":
+    case "migrate_failed":
     case "import_failed":
     case "delete_failed":
       return 502;
