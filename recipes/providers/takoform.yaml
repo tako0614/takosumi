@@ -1,0 +1,16 @@
+id: takoform
+display_name: Takoform portable form host
+secret_partition: provider-credentials
+terraform_source:
+  - tako0614/takoform
+  - registry.opentofu.org/tako0614/takoform
+env_names:
+  - TAKOFORM_ENDPOINT
+  - TAKOFORM_SPACE
+  - TAKOFORM_TOKEN
+auth_modes:
+  managed_form_host:
+    presentation:
+      show_in_connection_setup: false
+      display_name: { en: Managed form host, ja: マネージド Form ホスト }
+    env: {}
