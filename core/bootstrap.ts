@@ -98,7 +98,6 @@ import {
 import { createSqlResourceShapeStores } from "./domains/resource-shape/sql_stores.ts";
 import {
   createDbOwnedHostRuntimeMaterializationResolver,
-  formHostRuntimeMaterializationRequest,
   scheduleHostRuntimeReconcileTarget,
   withDbOwnedHostRuntimeMaterialization,
   type HostRuntimeResourceLifecycle,
@@ -1904,10 +1903,14 @@ export async function createTakosumiService(
         ? { resolveResourceUri: resolveFormInterfaceResourceUri }
         : {}),
     });
-    // A bare form-host EdgeWorker has no Capsule InstallConfig to blueprint
-    // its public-route grant, so the exact Form application itself authorizes
-    // the Resource-subject `edge.request` self-grant on `http.request`.
-    if (resource.owner === undefined && resource.kind === "EdgeWorker") {
+    // An EdgeWorker's own grants are derived from the exact Form it applied,
+    // for both ownership models. A bare form-host Resource has no installer to
+    // blueprint them; a Capsule cannot blueprint them either, because an
+    // InstallConfig proposal names a fixed subject and the subject here is the
+    // per-install EdgeWorker Resource. In both cases the authorization act is
+    // the same: the applied Form declared these connections, and the service
+    // already accepted the matching managed_connection requirements.
+    if (resource.kind === "EdgeWorker") {
       const routeInterfaces = (
         await interfaceService.list({
           workspaceId,
@@ -1929,10 +1932,13 @@ export async function createTakosumiService(
           permission: "edge.request",
         });
       }
-      // Each managed connection the Form declared becomes one grant on the
-      // provider Resource's own descriptor Interface, with the consumer
-      // EdgeWorker as the subject. Applying the Form is the authorization act.
-      const runtime = formHostRuntimeMaterializationRequest({
+      // Each managed connection becomes one grant on the provider Resource's
+      // own descriptor Interface, with the consumer EdgeWorker as the subject.
+      // The resolver answers for both models, so the capability refs are the
+      // ones that install actually requires: a Capsule's come from its
+      // InstallConfig, a form-host Resource's from its own Form.
+      const runtime = await hostRuntimeMaterializationResolver({
+        owner: resource.owner,
         resourceId,
         validatedSpec: resource.spec,
       });
@@ -2111,19 +2117,12 @@ export async function createTakosumiService(
       switch (event.type) {
         case "ready":
           {
-            // A Capsule install writes its connection grants up front, so
-            // activation can precede Interface materialization and commit its
-            // immutable release decision before the route is projected. A
-            // form-host Resource has no installer: the exact Form it applied
-            // is the authority, and the grants derived from it must exist
-            // before activation can resolve any connection.
-            const owned = await resourceShapeStores.resources.get(
-              event.resourceId,
-            );
-            const formHostOwned = owned !== undefined && owned.owner === undefined;
-            if (formHostOwned) {
-              await materializeFormDescriptorInterfaces(event.resourceId);
-            }
+            // Activation resolves the canonical connection graph, and that
+            // graph is only complete once each connection's grant exists. The
+            // grants are derived from the applied Form for both ownership
+            // models, so materialize them first; the call is idempotent and
+            // runs again below for the rest of the Interface surface.
+            await materializeFormDescriptorInterfaces(event.resourceId);
             const runtime = await exactHostRuntimeLifecycleInput(
               event.resourceId,
             );
