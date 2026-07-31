@@ -3168,6 +3168,7 @@ export function createPlatformCanonicalHostRuntimeGraphReader(
         const authority =
           requirement?.kind === "managed_connection"
             ? await uniqueHostRuntimeAuthority({
+                env,
                 operations,
                 workspaceId: input.request.workspaceId,
                 ownerResourceId: resource.resourceId,
@@ -3357,6 +3358,7 @@ async function canonicalHostRuntimeResource(
 }
 
 async function uniqueHostRuntimeAuthority(input: {
+  readonly env: CloudflareWorkerEnv;
   readonly operations: TakosumiOperations;
   readonly workspaceId: string;
   readonly ownerResourceId: string;
@@ -3372,36 +3374,57 @@ async function uniqueHostRuntimeAuthority(input: {
     limit: 64,
   });
   const matches: PlatformCanonicalHostRuntimeAuthorityEvidence[] = [];
+  const rejections: string[] = [];
   for (const iface of interfaces) {
     for (const binding of await input.operations.interfaces.listBindings(
       iface.metadata.id,
     )) {
       const capabilityRef = binding.spec.delivery.credentialRef;
       const audience = canonicalInterfaceResourceAudience(iface);
-      if (
-        binding.spec.subjectRef.kind !== "Resource" ||
-        binding.spec.subjectRef.id !== input.subjectResourceId ||
-        binding.status.phase !== "Ready" ||
-        binding.status.observedInterfaceRevision !==
-          iface.status.resolvedRevision ||
-        !capabilityRef?.startsWith("capability:") ||
-        !audience ||
-        (input.capabilityRef !== undefined &&
-          capabilityRef !== input.capabilityRef) ||
-        (input.permission !== undefined &&
-          !binding.spec.permissions.includes(input.permission))
-      ) {
+      // Each condition is named rather than folded into one predicate: the
+      // caller can only report that authority was missing, and every one of
+      // these looks identical from outside.
+      const rejection =
+        binding.spec.subjectRef.kind !== "Resource"
+          ? "subject_not_resource"
+          : binding.spec.subjectRef.id !== input.subjectResourceId
+            ? "subject_mismatch"
+            : binding.status.phase !== "Ready"
+              ? `binding_phase:${binding.status.phase}`
+              : binding.status.observedInterfaceRevision !==
+                  iface.status.resolvedRevision
+                ? `revision:${binding.status.observedInterfaceRevision}!=${iface.status.resolvedRevision}`
+                : !capabilityRef?.startsWith("capability:")
+                  ? "credential_ref_absent"
+                  : !audience
+                    ? "audience_unresolved"
+                    : input.capabilityRef !== undefined &&
+                        capabilityRef !== input.capabilityRef
+                      ? "capability_ref_mismatch"
+                      : input.permission !== undefined &&
+                          !binding.spec.permissions.includes(input.permission)
+                        ? "permission_absent"
+                        : undefined;
+      if (rejection) {
+        rejections.push(`${iface.spec.type}:${rejection}`);
         continue;
       }
       matches.push({
         iface,
         binding,
         capabilityRef: capabilityRef as `capability:${string}`,
-        audience,
+        audience: audience as string,
       });
     }
   }
-  return matches.length === 1 ? matches[0] : undefined;
+  if (matches.length === 1) return matches[0];
+  logCanonicalHostRuntimeGraphGap(input.env, "authority_not_unique", {
+    ownerResourceId: input.ownerResourceId,
+    interfaceCount: interfaces.length,
+    matchCount: matches.length,
+    rejections: rejections.slice(0, 8).join(","),
+  });
+  return undefined;
 }
 
 function canonicalInterfaceResourceAudience(iface: Interface): string | undefined {
