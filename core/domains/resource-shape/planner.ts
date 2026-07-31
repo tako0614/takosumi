@@ -214,6 +214,19 @@ export interface ResourceShapePublicOutput {
 
 export type ParsedResourceSpec =
   | {
+      /**
+       * Exact Form-backed desired state. The installed Form schema is the
+       * validation authority, so Core must preserve the complete document
+       * instead of lowering it through a same-named compatibility parser.
+       */
+      readonly schema: "form";
+      readonly kind: ResourceShapeKind;
+      readonly spec: JsonObject;
+      readonly interfaces: readonly string[];
+      readonly lifecyclePolicy?: { readonly delete: ResourceDeletePolicy };
+      readonly connections?: Readonly<Record<string, ResourceConnectionSpec>>;
+    }
+  | {
       readonly schema: "bundled";
       readonly kind: "EdgeWorker";
       readonly spec: EdgeWorkerSpec;
@@ -552,6 +565,54 @@ export function parseResourceSpec(
     default:
       return parseRegisteredResourceSpec(kind, spec, schemaRegistry);
   }
+}
+
+/**
+ * Builds the planner view for desired state already admitted by one exact
+ * installed Form Definition.
+ *
+ * A portable Form may intentionally reuse a historical Resource kind while
+ * defining a newer desired document. Passing that document through the
+ * bundled compatibility parser would silently discard Form-owned fields.
+ * Keep the document exact, while still extracting Core-owned dependency and
+ * lifecycle semantics.
+ */
+export function parseFormResourceSpec(
+  kind: ResourceShapeKind,
+  spec: unknown,
+  interfaces: readonly string[],
+): ParseResourceSpecResult {
+  const candidate = objectCandidate(spec);
+  if (!candidate.ok) return candidate;
+  const secretPath = secretLikeJsonPath(candidate.value, "spec");
+  if (secretPath) {
+    return {
+      ok: false,
+      error: {
+        code: "invalid_spec",
+        message: `${secretPath} contains secret-looking material; use Credential or ProviderConnection materialization instead`,
+      },
+    };
+  }
+  const name = parseName(candidate.value);
+  if (!name.ok) return name;
+  const connections = parseConnectionsMap(candidate.value.connections);
+  if (!connections.ok) return connections;
+  const lifecyclePolicy = parseLifecyclePolicy(candidate.value.lifecyclePolicy);
+  if (!lifecyclePolicy.ok) return lifecyclePolicy;
+  return {
+    ok: true,
+    parsed: {
+      schema: "form",
+      kind,
+      spec: JSON.parse(JSON.stringify(candidate.value)) as JsonObject,
+      interfaces: [...new Set(interfaces)],
+      ...(lifecyclePolicy.value
+        ? { lifecyclePolicy: lifecyclePolicy.value }
+        : {}),
+      ...(connections.value ? { connections: connections.value } : {}),
+    },
+  };
 }
 
 function parseRegisteredResourceSpec(

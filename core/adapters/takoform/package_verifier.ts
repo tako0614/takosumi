@@ -350,6 +350,9 @@ export class TakoformDataOnlyPackageVerifier implements FormPackageVerifier {
         definition.lifecycleCapabilities,
         definition.status,
       ),
+      desiredSchema: structuredClone(
+        definition.desiredSchema,
+      ) as unknown as JsonObject,
       metadata: definitionMetadata(definition),
       ...(definition.interfaces?.length
         ? { interfaceDescriptors: verifiedInterfaceDescriptors(definition) }

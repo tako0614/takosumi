@@ -275,7 +275,9 @@ function makeService(
     ...directOperationLedger(),
     now: () => NOW,
     moduleRegistry: TEST_RESOURCE_SHAPE_MODULE_REGISTRY,
-    ...(formRegistry ? { formRegistry } : {}),
+    ...(formRegistry
+      ? { formRegistry, formDesiredStateAdmission: async () => undefined }
+      : {}),
     ...(deploymentAdmission ? { deploymentAdmission } : {}),
   });
   return { stores, service };
@@ -988,6 +990,13 @@ const EXACT_CONTAINER_FORM: InstalledFormReference = {
   packageDigest: `sha256:${"5".repeat(64)}`,
 };
 
+const EXACT_EDGE_WORKER_FORM: InstalledFormReference = {
+  type: "edge_worker",
+  version: "3.0.0",
+  schemaDigest: `sha256:${"6".repeat(64)}`,
+  packageDigest: `sha256:${"7".repeat(64)}`,
+};
+
 function formRefOf(identity: InstalledFormReference) {
   return {
     type: identity.type,
@@ -1127,6 +1136,67 @@ test("exact Form desired-state admission fails closed before adapter preview", a
   expect(adapter.previewInputs).toHaveLength(0);
 });
 
+test("exact Form refuses a host with no desired-state schema authority", async () => {
+  const adapter = new PluginSpyAdapter();
+  const service = new ResourceShapeService({
+    stores: createInMemoryResourceShapeStores(),
+    adapter,
+    ...directOperationLedger(),
+    now: () => NOW,
+    moduleRegistry: TEST_RESOURCE_SHAPE_MODULE_REGISTRY,
+    formRegistry: exactFormRegistry(),
+  });
+  await seed(service);
+
+  const preview = await service.preview({ ...APPLY, form: EXACT_FORM });
+
+  expect(preview).toEqual({
+    ok: false,
+    error: {
+      code: "capability_missing",
+      message: "this host has no exact Form desired-state schema authority",
+    },
+  });
+  expect(adapter.previewInputs).toHaveLength(0);
+});
+
+test("exact Form EdgeWorker reaches the adapter without compatibility-parser field loss", async () => {
+  const adapter = new PluginSpyAdapter();
+  const service = new ResourceShapeService({
+    stores: createInMemoryResourceShapeStores(),
+    adapter,
+    ...directOperationLedger(),
+    now: () => NOW,
+    moduleRegistry: TEST_RESOURCE_SHAPE_MODULE_REGISTRY,
+    formRegistry: exactFormRegistry(EXACT_EDGE_WORKER_FORM),
+    formDesiredStateAdmission: async () => undefined,
+  });
+  await seed(service);
+  const spec = {
+    name: "yurucommu",
+    source: {
+      artifactUrl: "https://example.test/releases/yurucommu-worker.js",
+      artifactSha256: `sha256:${"a".repeat(64)}`,
+      artifactMediaType: "application/javascript+module",
+    },
+    entrypoint: "yurucommu-worker.js",
+    runtime: "javascript",
+    configuration: {},
+  };
+
+  const preview = await service.preview({
+    actor: ACTOR,
+    space: "space_1",
+    kind: "EdgeWorker",
+    form: EXACT_EDGE_WORKER_FORM,
+    name: "yurucommu",
+    spec,
+  });
+
+  expect(preview.ok).toBe(true);
+  expect(adapter.previewInputs.at(-1)?.plan.validatedSpec).toEqual(spec);
+});
+
 test("exact direct-plugin lifecycle propagates one immutable Form through Runs, adapter inputs, and NativeResource evidence", async () => {
   const stores = createInMemoryResourceShapeStores();
   const adapter = new PluginSpyAdapter();
@@ -1137,6 +1207,7 @@ test("exact direct-plugin lifecycle propagates one immutable Form through Runs, 
     operationRuns: ledger,
     activity: new ActivityService({ store: ledger, now: () => new Date(NOW) }),
     formRegistry: exactFormRegistry(EXACT_CONTAINER_FORM),
+    formDesiredStateAdmission: async () => undefined,
     now: () => NOW,
   });
   await seed(service);
@@ -1406,6 +1477,7 @@ test("exact direct-plugin preview rejects adapter NativeResource Form substituti
     adapter,
     ...directOperationLedger(),
     formRegistry: exactFormRegistry(EXACT_CONTAINER_FORM),
+    formDesiredStateAdmission: async () => undefined,
     now: () => NOW,
   });
   await seed(service);
@@ -1473,6 +1545,7 @@ test("exact direct-plugin recovery fails closed when persisted Run result omits 
     adapter: new PluginSpyAdapter(),
     operationRuns: ledger,
     formRegistry: exactFormRegistry(EXACT_CONTAINER_FORM),
+    formDesiredStateAdmission: async () => undefined,
     now: () => NOW,
   });
   expect(await service.repairResourceOperationRuns()).toEqual({
@@ -1495,6 +1568,7 @@ test("pinned Resource operations reject missing NativeResource Form evidence bef
     adapter,
     ...directOperationLedger(),
     formRegistry: exactFormRegistry(EXACT_CONTAINER_FORM),
+    formDesiredStateAdmission: async () => undefined,
     now: () => NOW,
   });
   await seed(service);
@@ -2630,6 +2704,7 @@ test("Form-backed import recovery and completed replay do not re-run current hos
     stores,
     adapter,
     formRegistry,
+    formDesiredStateAdmission: async () => undefined,
     requiredFormInterfaceAdmission: async () => undefined,
     now: () => NOW,
     moduleRegistry: TEST_RESOURCE_SHAPE_MODULE_REGISTRY,
@@ -2650,6 +2725,7 @@ test("Form-backed import recovery and completed replay do not re-run current hos
     stores,
     adapter,
     formRegistry,
+    formDesiredStateAdmission: async () => undefined,
     requiredFormInterfaceAdmission: async () => {
       currentAdmissionCalls++;
       return "bridge was removed after import dispatch";
@@ -4010,6 +4086,7 @@ test("Form-backed apply recovery consumes pinned admission after the backend was
     operationRuns: ledger,
     activity: new ActivityService({ store: ledger, now: () => new Date(NOW) }),
     formRegistry,
+    formDesiredStateAdmission: async () => undefined,
     requiredFormInterfaceAdmission: async () => undefined,
     now: () => NOW,
   });
@@ -4051,6 +4128,7 @@ test("Form-backed apply recovery consumes pinned admission after the backend was
     operationRuns: ledger,
     activity: new ActivityService({ store: ledger, now: () => new Date(NOW) }),
     formRegistry,
+    formDesiredStateAdmission: async () => undefined,
     requiredFormInterfaceAdmission: async () => {
       currentAdmissionCalls++;
       return "bridge was removed after dispatch";

@@ -82,6 +82,7 @@ import { adapterApplyMutationOutcome } from "./adapter.ts";
 import { resolve } from "./resolver.ts";
 import {
   parseResourceSpec,
+  parseFormResourceSpec,
   planResourceShape,
   type ParsedResourceSpec,
   type ResourceShapePlan,
@@ -2972,11 +2973,7 @@ export class ResourceShapeService {
         },
       };
     }
-    const parsed = parseResourceSpec(
-      record.kind,
-      record.spec,
-      this.#schemaRegistry,
-    );
+    const parsed = this.#parseStoredResourceSpec(record);
     if (!parsed.ok) {
       return {
         ok: false,
@@ -3406,11 +3403,7 @@ export class ResourceShapeService {
         },
       };
     }
-    const parsed = parseResourceSpec(
-      record.kind,
-      record.spec,
-      this.#schemaRegistry,
-    );
+    const parsed = this.#parseStoredResourceSpec(record);
     if (!parsed.ok) {
       return {
         ok: false,
@@ -4147,11 +4140,7 @@ export class ResourceShapeService {
         },
       };
     }
-    const specResult = parseResourceSpec(
-      record.kind,
-      record.spec,
-      this.#schemaRegistry,
-    );
+    const specResult = this.#parseStoredResourceSpec(record);
     const deletePolicy = specResult.ok
       ? specResult.parsed.lifecyclePolicy?.delete
       : undefined;
@@ -5164,11 +5153,7 @@ export class ResourceShapeService {
       readonly parsed: ParsedResourceSpec;
     }>
   > {
-    const specResult = parseResourceSpec(
-      req.kind,
-      req.spec,
-      this.#schemaRegistry,
-    );
+    const specResult = await this.#parseRequestResourceSpec(req);
     if (!specResult.ok) {
       return {
         ok: false,
@@ -5386,10 +5371,17 @@ export class ResourceShapeService {
         },
       };
     }
-    if (
-      options.skipRequiredInterfaceAdmission !== true &&
-      this.#formDesiredStateAdmission
-    ) {
+    if (options.skipRequiredInterfaceAdmission !== true) {
+      if (!this.#formDesiredStateAdmission) {
+        return {
+          ok: false,
+          error: {
+            code: "capability_missing",
+            message:
+              "this host has no exact Form desired-state schema authority",
+          },
+        };
+      }
       let desiredStateFailure: string | undefined;
       try {
         desiredStateFailure = await this.#formDesiredStateAdmission({
@@ -5438,6 +5430,26 @@ export class ResourceShapeService {
       }
     }
     return { ok: true, value: definition.identity };
+  }
+
+  #parseRequestResourceSpec(req: ApplyResourceRequest) {
+    if (req.form === undefined) {
+      return parseResourceSpec(req.kind, req.spec, this.#schemaRegistry);
+    }
+    return parseFormResourceSpec(
+      req.kind,
+      req.spec,
+      // Form Interface descriptors describe Resource-produced endpoints and
+      // bindings. They are not Target capability tokens; Form activation and
+      // the selected implementation descriptor own executable eligibility.
+      [],
+    );
+  }
+
+  #parseStoredResourceSpec(record: ResourceShapeRecord) {
+    return record.form === undefined
+      ? parseResourceSpec(record.kind, record.spec, this.#schemaRegistry)
+      : parseFormResourceSpec(record.kind, record.spec, []);
   }
 
   /**
@@ -5628,11 +5640,7 @@ export class ResourceShapeService {
 
     const current = resourcesById.get(currentId);
     if (!current) return false;
-    const parsed = parseResourceSpec(
-      current.kind,
-      current.spec,
-      this.#schemaRegistry,
-    );
+    const parsed = this.#parseStoredResourceSpec(current);
     if (!parsed.ok) return false;
     const connections = connectionsForParsedResource(parsed.parsed);
     if (!connections) return false;
@@ -5653,11 +5661,7 @@ export class ResourceShapeService {
     const resources = await this.#stores.resources.listBySpace(space);
     for (const candidate of resources) {
       if (candidate.id === resourceId) continue;
-      const parsed = parseResourceSpec(
-        candidate.kind,
-        candidate.spec,
-        this.#schemaRegistry,
-      );
+      const parsed = this.#parseStoredResourceSpec(candidate);
       if (!parsed.ok) continue;
       const connections = connectionsForParsedResource(parsed.parsed);
       if (
@@ -7141,7 +7145,9 @@ function validateTargetPoolSpec(
 function connectionsForParsedResource(
   parsed: ParsedResourceSpec,
 ): Readonly<Record<string, ResourceConnectionSpec>> | undefined {
-  if (parsed.schema === "registered") return parsed.connections;
+  if (parsed.schema === "registered" || parsed.schema === "form") {
+    return parsed.connections;
+  }
   if (
     parsed.kind === "EdgeWorker" ||
     parsed.kind === "ContainerService" ||

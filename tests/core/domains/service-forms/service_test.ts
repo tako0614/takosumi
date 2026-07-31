@@ -20,9 +20,20 @@ const formRef: FormRef = {
   schemaDigest,
 };
 
+const desiredSchema = {
+  $schema: "https://json-schema.org/draft/2020-12/schema",
+  type: "object",
+  additionalProperties: false,
+  required: ["name"],
+  properties: {
+    name: { type: "string", minLength: 1 },
+  },
+} as const;
+
 const definition: VerifiedFormDefinition = {
   formRef,
   operations: ["create", "read", "update", "delete"],
+  desiredSchema,
 };
 
 class Reader implements FormPackageArtifactReader {
@@ -106,12 +117,95 @@ test("verified packages install exact definitions idempotently", async () => {
   });
 });
 
+test("desired state is validated by the verifier-approved exact Form schema", async () => {
+  const registry = service(new InMemoryFormRegistryStore());
+  await install(registry);
+
+  expect(
+    await registry.validateDesiredState(
+      { ...formRef, packageDigest: packageA },
+      { name: "worker" },
+    ),
+  ).toBeUndefined();
+  expect(
+    await registry.validateDesiredState(
+      { ...formRef, packageDigest: packageA },
+      { name: "worker", unexpected: true },
+    ),
+  ).toContain("does not satisfy the exact installed Form schema");
+});
+
+test("retained pre-schema definitions recover desired validation from their pinned package", async () => {
+  const store = new InMemoryFormRegistryStore();
+  await store.installPackage(
+    {
+      packageDigest: packageA,
+      artifactRef: `memory:${packageA}`,
+      verifierId: "test.data-only.v1",
+      status: "installed",
+      definitionRefs: [formRef],
+      installedAt: now,
+      installedBy: "acct_operator",
+      updatedAt: now,
+    },
+    [
+      {
+        identity: { ...formRef, packageDigest: packageA },
+        operations: definition.operations,
+        installedAt: now,
+      },
+    ],
+  );
+  const registry = service(store);
+
+  expect(
+    await registry.validateDesiredState(
+      { ...formRef, packageDigest: packageA },
+      { name: "worker" },
+    ),
+  ).toBeUndefined();
+  expect(
+    await registry.validateDesiredState(
+      { ...formRef, packageDigest: packageA },
+      {},
+    ),
+  ).toContain("does not satisfy the exact installed Form schema");
+  expect((await install(registry)).packageDigest).toBe(packageA);
+});
+
 test("the same package digest cannot change verified definition content", async () => {
   const store = new InMemoryFormRegistryStore();
   await install(service(store));
   await expect(
     install(
       service(store, [{ ...definition, operations: ["create", "read"] }]),
+    ),
+  ).rejects.toMatchObject({ code: "package_conflict" });
+  await expect(
+    install(
+      service(store, [
+        {
+          ...definition,
+          desiredSchema: {
+            ...desiredSchema,
+            required: ["name", "region"],
+            properties: {
+              ...desiredSchema.properties,
+              region: { type: "string" },
+            },
+          },
+        },
+      ]),
+    ),
+  ).rejects.toMatchObject({ code: "package_conflict" });
+  await expect(
+    install(
+      service(store, [
+        {
+          ...definition,
+          interfaceDescriptors: [{ name: "object.storage", version: "1" }],
+        },
+      ]),
     ),
   ).rejects.toMatchObject({ code: "package_conflict" });
 });

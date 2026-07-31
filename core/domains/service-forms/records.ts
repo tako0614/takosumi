@@ -17,6 +17,7 @@ export interface VerifiedFormDefinition {
   readonly displayName?: string;
   readonly description?: string;
   readonly operations: FormDefinition["operations"];
+  readonly desiredSchema: JsonObject;
   readonly metadata?: JsonObject;
   readonly interfaceDescriptors?: FormDefinition["interfaceDescriptors"];
 }

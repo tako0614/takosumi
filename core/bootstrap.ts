@@ -1565,6 +1565,17 @@ export async function createTakosumiService(
         ...(formRegistryService ? { formRegistry: formRegistryService } : {}),
         ...(formRegistryService
           ? {
+              formDesiredStateAdmission: async ({ request }) =>
+                request.form
+                  ? await formRegistryService.validateDesiredState(
+                      request.form,
+                      request.spec,
+                    )
+                  : undefined,
+            }
+          : {}),
+        ...(formRegistryService
+          ? {
               requiredFormInterfaceAdmission: async ({
                 request,
                 definition,

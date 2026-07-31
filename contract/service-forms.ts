@@ -129,6 +129,12 @@ export interface FormDefinition {
   readonly displayName?: string;
   readonly description?: string;
   readonly operations: readonly FormOperation[];
+  /**
+   * Verifier-approved desired-state schema. Older retained records may omit
+   * it; hosts must then re-verify the immutable package before admitting new
+   * desired state.
+   */
+  readonly desiredSchema?: JsonObject;
   readonly metadata?: JsonObject;
   readonly interfaceDescriptors?: readonly FormInterfaceDescriptor[];
   readonly installedAt: IsoTimestamp;

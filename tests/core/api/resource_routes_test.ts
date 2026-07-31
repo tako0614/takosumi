@@ -33,6 +33,7 @@ import {
   portableHostConformanceProof,
   runPortableFormHostConformance,
 } from "../../../core/conformance/portable_form_host.ts";
+import { InterpretedDraft202012Validator } from "../../../core/shared/json-schema/draft_2020.ts";
 import { InMemoryOpenTofuControlStore } from "../../../core/domains/deploy-control/store.ts";
 import {
   type FormDefinition,
@@ -185,7 +186,10 @@ async function buildApp(
   serviceOverrides?: Partial<
     Pick<
       ResourceShapeServiceDeps,
-      "adapter" | "moduleRegistry" | "schemaRegistry"
+      | "adapter"
+      | "moduleRegistry"
+      | "schemaRegistry"
+      | "formDesiredStateAdmission"
     >
   >,
 ) {
@@ -205,6 +209,9 @@ async function buildApp(
       serviceOverrides?.schemaRegistry ??
       LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY,
     formRegistry,
+    formDesiredStateAdmission:
+      serviceOverrides?.formDesiredStateAdmission ??
+      (formRegistry ? async () => undefined : undefined),
     now: () => "2026-01-01T00:00:00.000Z",
   });
   await service.putTargetPool("space_1", "default", POOL);
@@ -255,6 +262,24 @@ const EXACT_OBJECT_BUCKET_FORM_REF = {
   schemaDigest: EXACT_OBJECT_BUCKET_FORM.schemaDigest,
 };
 
+const EXACT_OBJECT_BUCKET_DESIRED_SCHEMA = {
+  $schema: "https://json-schema.org/draft/2020-12/schema",
+  type: "object",
+  additionalProperties: false,
+  required: ["name"],
+  properties: {
+    name: { type: "string", minLength: 1 },
+    interfaces: {
+      type: "array",
+      uniqueItems: true,
+      items: { type: "string" },
+    },
+    storageClass: {
+      enum: ["standard", "infrequent_access"],
+    },
+  },
+} as const;
+
 function exactObjectBucketFormRegistry(
   options: {
     readonly packageStatus?: FormPackageLifecycleStatus;
@@ -275,6 +300,7 @@ function exactObjectBucketFormRegistry(
       "import",
       "refresh",
     ],
+    desiredSchema: EXACT_OBJECT_BUCKET_DESIRED_SCHEMA,
     installedAt: "2026-01-01T00:00:00.000Z",
   };
   const formPackage: FormPackage = {
@@ -978,11 +1004,21 @@ test("portable Form host enforces the exact definition lifecycle operations", as
 });
 
 test("portable Form host black-box runner proves canonical lifecycle parity", async () => {
-  const { app } = await buildApp(
-    undefined,
-    exactObjectBucketFormRegistry(),
-    { adapter: new PortableFormStubResourceShapeAdapter() },
-  );
+  const { app } = await buildApp(undefined, exactObjectBucketFormRegistry(), {
+    adapter: new PortableFormStubResourceShapeAdapter(),
+    formDesiredStateAdmission: async ({ request, definition }) => {
+      if (!definition.desiredSchema) {
+        return "exact Form desired-state schema is unavailable";
+      }
+      const validator = new InterpretedDraft202012Validator(
+        definition.desiredSchema,
+        "portable Form host conformance desired schema",
+      );
+      return validator.validate(request.spec)
+        ? undefined
+        : "desired state does not satisfy the exact installed Form schema";
+    },
+  });
   const report = await runPortableFormHostConformance({
     endpoint: "https://host.example.test",
     space: "space_1",

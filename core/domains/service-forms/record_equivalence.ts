@@ -32,8 +32,13 @@ export function packageInstallEquivalent(
       left.displayName !== right.displayName ||
       left.description !== right.description ||
       canonicalJson(left.operations) !== canonicalJson(right.operations) ||
+      (left.desiredSchema !== undefined &&
+        canonicalJson(left.desiredSchema) !==
+          canonicalJson(right.desiredSchema ?? null)) ||
       canonicalJson(left.metadata ?? null) !==
-        canonicalJson(right.metadata ?? null)
+        canonicalJson(right.metadata ?? null) ||
+      canonicalJson(left.interfaceDescriptors ?? null) !==
+        canonicalJson(right.interfaceDescriptors ?? null)
     ) {
       return false;
     }

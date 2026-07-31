@@ -103,6 +103,15 @@ test("production platform durably replays a Capsule-owned portable Resource appl
         identity: FORM,
         displayName: "Object bucket",
         operations: ["create", "read", "update", "delete"],
+        desiredSchema: {
+          $schema: "https://json-schema.org/draft/2020-12/schema",
+          type: "object",
+          additionalProperties: false,
+          required: ["name"],
+          properties: {
+            name: { type: "string", minLength: 1 },
+          },
+        },
         installedAt: NOW,
       },
     ],

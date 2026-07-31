@@ -4,6 +4,7 @@ import {
   parseContainerServiceSpec,
   parseDurableWorkflowSpec,
   parseEdgeWorkerSpec,
+  parseFormResourceSpec,
   parseKVStoreSpec,
   parseObjectBucketSpec,
   parseQueueSpec,
@@ -455,6 +456,28 @@ test("registered schemas cannot shadow bundled typed shapes", () => {
         }),
       }),
   ).toThrow("must not shadow bundled kind EdgeWorker");
+});
+
+test("exact Form parsing preserves fields owned by a newer same-kind schema", () => {
+  const desired = {
+    name: "yurucommu",
+    source: {
+      artifactUrl: "https://example.test/releases/yurucommu-worker.js",
+      artifactSha256: `sha256:${"a".repeat(64)}`,
+      artifactMediaType: "application/javascript+module",
+    },
+    entrypoint: "yurucommu-worker.js",
+    runtime: "javascript",
+    configuration: {},
+  };
+
+  const parsed = parseFormResourceSpec("EdgeWorker", desired, []);
+
+  expect(parsed.ok).toBe(true);
+  if (!parsed.ok) return;
+  expect(parsed.parsed.schema).toBe("form");
+  expect(parsed.parsed.spec).toEqual(desired);
+  expect(parsed.parsed.spec.entrypoint).toBe("yurucommu-worker.js");
 });
 
 test("planner projects only explicit descriptor mappings", () => {

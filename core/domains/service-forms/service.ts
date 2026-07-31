@@ -10,8 +10,10 @@ import {
   type FormRef,
   type InstalledFormReference,
   type IsoTimestamp,
+  type JsonObject,
   type PageParams,
 } from "takosumi-contract";
+import { InterpretedDraft202012Validator } from "../../shared/json-schema/draft_2020.ts";
 import type {
   CreateFormActivationRequest,
   FormPackageInstallRequest,
@@ -54,6 +56,7 @@ export class FormRegistryService {
   readonly #artifactReader?: FormPackageArtifactReader;
   readonly #verifier?: FormPackageVerifier;
   readonly #now: () => IsoTimestamp;
+  readonly #desiredSchemas = new Map<string, JsonObject>();
 
   constructor(options: FormRegistryServiceOptions) {
     if (Boolean(options.artifactReader) !== Boolean(options.verifier)) {
@@ -170,6 +173,7 @@ export class FormRegistryService {
       displayName: definition.displayName,
       description: definition.description,
       operations: definition.operations,
+      desiredSchema: structuredClone(definition.desiredSchema),
       metadata: definition.metadata,
       ...(definition.interfaceDescriptors
         ? { interfaceDescriptors: definition.interfaceDescriptors }
@@ -180,7 +184,90 @@ export class FormRegistryService {
     if (result.status === "conflict") {
       throw new FormRegistryError("package_conflict", result.reason);
     }
+    for (const definition of orderedDefinitions) {
+      this.#desiredSchemas.set(
+        installedFormReferenceKey({
+          ...definition.formRef,
+          packageDigest: request.expectedPackageDigest,
+        }),
+        structuredClone(definition.desiredSchema),
+      );
+    }
     return result.package;
+  }
+
+  /**
+   * Validates desired state against the exact immutable Form package.
+   *
+   * New records retain the verifier-approved schema. A pre-schema record is
+   * recovered by re-reading and re-verifying its pinned package, then cached
+   * only for this process. No unverified schema is interpreted.
+   */
+  async validateDesiredState(
+    identity: InstalledFormReference,
+    spec: unknown,
+  ): Promise<string | undefined> {
+    if (!isInstalledFormReference(identity)) {
+      return "desired state requires an exact installed Form identity";
+    }
+    const key = installedFormReferenceKey(identity);
+    const [definition, packageRecord] = await Promise.all([
+      this.#store.getDefinition(formRefOfInstalled(identity)),
+      this.#store.getPackage(identity.packageDigest),
+    ]);
+    if (
+      !definition ||
+      installedFormReferenceKey(definition.identity) !== key ||
+      !packageRecord ||
+      packageRecord.packageDigest !== identity.packageDigest
+    ) {
+      return "exact Form desired-state schema is unavailable";
+    }
+
+    let schema = definition.desiredSchema ?? this.#desiredSchemas.get(key);
+    if (!schema) {
+      if (!this.#artifactReader || !this.#verifier) {
+        return "exact Form desired-state schema requires package re-verification";
+      }
+      let verified;
+      try {
+        verified = await this.#verifier.verify(
+          await this.#artifactReader.read(packageRecord.artifactRef),
+          identity.packageDigest,
+        );
+      } catch {
+        return "exact Form desired-state package could not be re-verified";
+      }
+      if (verified.packageDigest !== identity.packageDigest) {
+        return "exact Form desired-state package digest does not match";
+      }
+      const verifiedDefinition = verified.definitions.find(
+        (candidate) =>
+          installedFormReferenceKey({
+            ...candidate.formRef,
+            packageDigest: identity.packageDigest,
+          }) === key,
+      );
+      if (!verifiedDefinition) {
+        return "exact Form desired-state definition is unavailable";
+      }
+      schema = structuredClone(verifiedDefinition.desiredSchema);
+      this.#desiredSchemas.set(key, schema);
+    }
+
+    try {
+      const validator = new InterpretedDraft202012Validator(
+        schema,
+        "exact Form desiredSchema",
+      );
+      if (validator.validate(spec)) return undefined;
+      const details = validator.errorsText();
+      return details
+        ? `desired state does not satisfy the exact installed Form schema: ${details}`
+        : "desired state does not satisfy the exact installed Form schema";
+    } catch {
+      return "exact Form desired-state schema could not be interpreted";
+    }
   }
 
   getPackage(packageDigest: string) {

@@ -194,6 +194,7 @@ async function fixture() {
     moduleRegistry: TEST_RESOURCE_SHAPE_MODULE_REGISTRY,
     schemaRegistry: LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY,
     formRegistry: formRegistry(),
+    formDesiredStateAdmission: async () => undefined,
   });
   for (const space of ["plan-binding-space", "alternate-space"]) {
     expect((await service.putTargetPool(space, "default", POOL)).ok).toBe(true);
@@ -494,6 +495,7 @@ test("direct-plugin import claim failure terminalizes its newly created unattach
     moduleRegistry: TEST_RESOURCE_SHAPE_MODULE_REGISTRY,
     schemaRegistry: LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY,
     formRegistry: formRegistry(),
+    formDesiredStateAdmission: async () => undefined,
   });
   expect(
     (
