@@ -3317,8 +3317,13 @@ function createBindingDeliveryHandlerRegistry(input: {
   readonly additional?: InterfaceBindingDeliveryHandlerRegistry;
 }): ReadonlyMap<string, InterfaceBindingDeliveryHandler> {
   const handlers = new Map<string, InterfaceBindingDeliveryHandler>();
+  // `none` delivers nothing to the subject. A `capability:` reference is
+  // therefore still valid here: the host resolves it internally when it
+  // materializes the subject's runtime, and the subject never receives it.
   handlers.set("none", ({ delivery }) =>
-    delivery.credentialRef === undefined && delivery.options === undefined
+    delivery.options === undefined &&
+    (delivery.credentialRef === undefined ||
+      delivery.credentialRef.startsWith("capability:"))
       ? { ready: true, reason: "Resolved" }
       : { ready: false, reason: "UnsupportedDeliveryConfiguration" },
   );
