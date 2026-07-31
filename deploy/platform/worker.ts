@@ -3350,7 +3350,12 @@ async function uniqueHostRuntimeAuthority(input: {
 
 function canonicalInterfaceResourceAudience(iface: Interface): string | undefined {
   const inputName = iface.spec.access.resourceUriInput;
-  const value = inputName ? iface.status.resolvedInputs?.[inputName] : undefined;
+  // A descriptor that declares a `resource_uri` input carries its audience in
+  // that resolved input. A Form descriptor instead has the host-resolved
+  // `status.resourceUri`; both are the same host-owned audience identifier.
+  const value = inputName
+    ? iface.status.resolvedInputs?.[inputName]
+    : iface.status.resourceUri;
   if (typeof value !== "string" || value.length === 0) return undefined;
   try {
     const parsed = new URL(value);
