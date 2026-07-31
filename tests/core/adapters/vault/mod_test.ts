@@ -1304,3 +1304,37 @@ test("revoke deletes both the connection and the sealed blob", async () => {
   expect(await store.getSecretBlob(connection.id)).toBeUndefined();
   expect(await vault.revoke(connection.id)).toBe(false);
 });
+
+test("a managed provider connection records the recipe's full env surface", async () => {
+  const { vault } = makeVault();
+  const connection = await vault.register({
+    provider: "registry.opentofu.org/tako0614/takoform",
+    scope: "operator",
+    credentialRecipe: {
+      id: "takoform",
+      authMode: "managed_form_host",
+      secretPartition: "provider-credentials",
+    },
+    scopeHints: {
+      managedProvider: true,
+      managedProviderProfile: "takoform.form-host.v1",
+    },
+    // The host mints every value per run; nothing is stored at registration.
+    values: {},
+  });
+
+  // The run manifest allowlists exactly connection.envNames, so recording
+  // only the stored value names would make the runner reject the minted
+  // remainder ("provider credential env name is not declared by the run
+  // recipe: TAKOFORM_SPACE").
+  expect(connection.envNames).toEqual([
+    "TAKOFORM_ENDPOINT",
+    "TAKOFORM_SPACE",
+    "TAKOFORM_TOKEN",
+  ]);
+  expect(connection.credentialRecipe?.envNames).toEqual([
+    "TAKOFORM_ENDPOINT",
+    "TAKOFORM_SPACE",
+    "TAKOFORM_TOKEN",
+  ]);
+});
