@@ -1,5 +1,6 @@
 import type { Context, Hono as HonoApp } from "hono";
 import { DomainError, type DomainErrorCode } from "../shared/errors.ts";
+import { log } from "../shared/log.ts";
 
 export interface ApiErrorEnvelope {
   readonly error: {
@@ -80,6 +81,18 @@ export function apiExceptionResponse(c: Context, error: unknown): Response {
       httpStatusForDomainErrorCode(error.code),
     );
   }
+  // An unclassified failure is the host's own defect. The response stays
+  // opaque; the operator log keeps the cause so a 500 is diagnosable.
+  log.error("api.unhandled_exception", {
+    requestId,
+    method: c.req.method,
+    route: c.req.routePath,
+    errorName: error instanceof Error ? error.name : "UnknownError",
+    errorMessage: error instanceof Error ? error.message : String(error),
+    ...(error instanceof Error && error.stack
+      ? { errorStack: error.stack.split("\n").slice(0, 6).join("\n") }
+      : {}),
+  });
   return c.json(
     apiError("internal_error", "Internal server error", undefined, requestId),
     500,
