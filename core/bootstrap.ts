@@ -2111,10 +2111,19 @@ export async function createTakosumiService(
       switch (event.type) {
         case "ready":
           {
-            // Hosted runtime activation must commit its immutable release
-            // decision before the consumer's route Interface is projected.
-            // Managed connection authority comes from already-Ready source
-            // Resources, so this does not depend on the consumer launcher.
+            // A Capsule install writes its connection grants up front, so
+            // activation can precede Interface materialization and commit its
+            // immutable release decision before the route is projected. A
+            // form-host Resource has no installer: the exact Form it applied
+            // is the authority, and the grants derived from it must exist
+            // before activation can resolve any connection.
+            const owned = await resourceShapeStores.resources.get(
+              event.resourceId,
+            );
+            const formHostOwned = owned !== undefined && owned.owner === undefined;
+            if (formHostOwned) {
+              await materializeFormDescriptorInterfaces(event.resourceId);
+            }
             const runtime = await exactHostRuntimeLifecycleInput(
               event.resourceId,
             );
