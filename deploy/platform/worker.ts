@@ -3057,6 +3057,25 @@ export interface PlatformCanonicalHostRuntimeGraphEvidence {
  * coherent Ready Resources with exact current Interface/Binding rows and
  * never exposes this global authority through HTTP.
  */
+/**
+ * Staging-only reason for a graph the reader must answer with `undefined`.
+ * The caller can only report that the graph was missing; without naming the
+ * exact unmet precondition an operator cannot tell a still-settling install
+ * from a structurally broken one.
+ */
+function logCanonicalHostRuntimeGraphGap(
+  env: CloudflareWorkerEnv,
+  reason: string,
+  detail: Readonly<Record<string, string | number | boolean>> = {},
+): undefined {
+  if (env.TAKOSUMI_ENVIRONMENT !== "staging") return undefined;
+  console.error("takosumi canonical host runtime graph gap", {
+    reason,
+    ...detail,
+  });
+  return undefined;
+}
+
 export function createPlatformCanonicalHostRuntimeGraphReader(
   env: CloudflareWorkerEnv,
 ): {
@@ -3072,7 +3091,7 @@ export function createPlatformCanonicalHostRuntimeGraphReader(
     async read(input) {
       const parsed = platformCanonicalResourceId(input.resourceId);
       if (!parsed || parsed.workspaceId !== input.request.workspaceId) {
-        return undefined;
+        return logCanonicalHostRuntimeGraphGap(env, "consumer_id_invalid");
       }
       const consumer = await canonicalHostRuntimeResource(
         inventory,
@@ -3083,7 +3102,11 @@ export function createPlatformCanonicalHostRuntimeGraphReader(
         consumer.resourceGeneration !== input.resourceGeneration ||
         consumer.resourceRevisionId !== input.resourceRevisionId
       ) {
-        return undefined;
+        return logCanonicalHostRuntimeGraphGap(env, "consumer_not_canonical", {
+          hasConsumer: consumer !== undefined,
+          generationMatches: consumer?.resourceGeneration === input.resourceGeneration,
+          revisionMatches: consumer?.resourceRevisionId === input.resourceRevisionId,
+        });
       }
       const operations = await takosumiOperationsFor(env);
       const connectionSpec = objectRecord(consumer.resource.spec).connections;
@@ -3115,7 +3138,12 @@ export function createPlatformCanonicalHostRuntimeGraphReader(
         const resource = resourceId
           ? await canonicalHostRuntimeResource(inventory, resourceId)
           : undefined;
-        if (!resource) return undefined;
+        if (!resource) {
+          return logCanonicalHostRuntimeGraphGap(env, "connection_not_canonical", {
+            alias,
+            hasResourceId: resourceId !== undefined,
+          });
+        }
         const activation = input.request.backgroundActivations?.find(
           (candidate) =>
             candidate.sourceResourceKind === "Queue" &&
@@ -3127,7 +3155,10 @@ export function createPlatformCanonicalHostRuntimeGraphReader(
             valueString(declaration.projection) !== "queue.binding.v1" ||
             !stringArray(declaration.permissions)?.includes("consume"))
         ) {
-          return undefined;
+          return logCanonicalHostRuntimeGraphGap(env, "queue_source_invalid", {
+            alias,
+            kind: resource.resource.kind,
+          });
         }
         const requirement = input.request.requirements.find(
           (candidate) =>
@@ -3145,7 +3176,19 @@ export function createPlatformCanonicalHostRuntimeGraphReader(
                 permission: requirement.requiredPermission,
               })
             : undefined;
-        if (requirement && !authority) return undefined;
+        if (requirement && !authority) {
+          return logCanonicalHostRuntimeGraphGap(env, "connection_authority_missing", {
+            alias,
+            capabilityRef:
+              requirement.kind === "managed_connection"
+                ? requirement.capabilityRef
+                : requirement.kind,
+            permission:
+              requirement.kind === "managed_connection"
+                ? requirement.requiredPermission
+                : "",
+          });
+        }
         connections[alias] = {
           alias,
           resource,
@@ -3157,7 +3200,11 @@ export function createPlatformCanonicalHostRuntimeGraphReader(
           (activation) => activation.sourceResourceKind === "Schedule",
         ) ?? [];
       for (const requirement of scheduleRequirements) {
-        if (connections[requirement.sourceConnectionAlias]) return undefined;
+        if (connections[requirement.sourceConnectionAlias]) {
+          return logCanonicalHostRuntimeGraphGap(env, "schedule_alias_conflict", {
+            alias: requirement.sourceConnectionAlias,
+          });
+        }
         const schedule = await resolveUniqueIncomingHostRuntimeSchedule({
           inventory,
           workspaceId: input.request.workspaceId,
