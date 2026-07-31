@@ -3277,11 +3277,15 @@ function normalizeCredentialReference(value: unknown): string {
   const reference = requireText(value, "delivery.credentialRef");
   if (
     reference.length > 256 ||
-    !/^(?:secret|credential)[/:][A-Za-z0-9][A-Za-z0-9._:/-]*$/u.test(reference)
+    // `capability:` is the host-runtime materialization vocabulary for the
+    // same thing: an opaque host reference, never credential material.
+    !/^(?:secret|credential|capability)[/:][A-Za-z0-9][A-Za-z0-9._:/-]*$/u.test(
+      reference,
+    )
   ) {
     throw new InterfaceServiceError(
       "invalid_argument",
-      "delivery.credentialRef must be a secret/... or credential/... reference identifier",
+      "delivery.credentialRef must be a secret/..., credential/..., or capability/... reference identifier",
     );
   }
   return reference;

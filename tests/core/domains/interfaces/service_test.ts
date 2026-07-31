@@ -1156,7 +1156,21 @@ test("Interface validation keeps opaque JSON and rejects invalid OAuth resource 
         credentialRef: "Bearer obvious-raw-secret",
       },
     }),
-  ).rejects.toThrow("must be a secret/... or credential/...");
+  ).rejects.toThrow("must be a secret/..., credential/..., or capability/...");
+  // `capability:` is the host-runtime materialization vocabulary for the same
+  // opaque host reference and is accepted alongside the older prefixes.
+  await expect(
+    service.createBinding(created.metadata.id, {
+      subjectRef: { kind: "ServiceAccount", id: "capability-runtime" },
+      permissions: ["invoke"],
+      delivery: {
+        type: "future-workload-token",
+        credentialRef: "capability:app/database",
+      },
+    }),
+  ).resolves.toMatchObject({
+    spec: { delivery: { credentialRef: "capability:app/database" } },
+  });
   expect(() =>
     validateCapsuleInterfaceBlueprints([
       {
