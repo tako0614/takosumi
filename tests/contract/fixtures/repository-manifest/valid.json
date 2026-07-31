@@ -1,123 +1,143 @@
 {
-  "apiVersion": "takosumi.com/v1alpha1",
+  "apiVersion": "takosumi.com/v1",
   "kind": "Repository",
   "install": {
     "modules": {
-    ".": {
-      "inputs": [
-        {
-          "name": "project_name",
-          "source": {
-            "kind": "capsule_name"
-          },
-          "type": "string",
-          "format": "subdomain",
-          "label": {
-            "ja": "サービス名",
-            "en": "Service name"
-          },
-          "advanced": true
-        },
-        {
-          "name": "app_url",
-          "source": {
-            "kind": "user"
-          },
-          "type": "string",
-          "format": "url",
-          "required": false,
-          "label": {
-            "ja": "公開 URL",
-            "en": "Public URL"
-          },
-          "helper": {
-            "ja": "空欄の場合は Takosumi が URL を割り当てます。",
-            "en": "Takosumi allocates a URL when omitted."
-          }
-        },
-        {
-          "name": "notification_push_gateway_url",
-          "source": {
-            "kind": "user"
-          },
-          "type": "string",
-          "format": "url",
-          "label": {
-            "ja": "通知ゲートウェイ",
-            "en": "Notification gateway"
-          },
-          "advanced": true
-        },
-        {
-          "name": "notification_push_gateway_token",
-          "source": {
-            "kind": "user"
-          },
-          "type": "string",
-          "label": {
-            "ja": "通知トークン",
-            "en": "Notification token"
-          },
-          "advanced": true,
-          "secret": true
-        }
-      ],
-      "installExperience": {
-        "projections": [
+      ".": {
+        "inputs": [
           {
-            "kind": "service_name",
-            "variable": "project_name"
+            "name": "project_name",
+            "source": {
+              "kind": "capsule_name"
+            },
+            "role": "service_name",
+            "type": "string",
+            "format": "subdomain",
+            "label": {
+              "ja": "サービス名",
+              "en": "Service name"
+            },
+            "advanced": true
           },
           {
-            "kind": "public_endpoint",
-            "variables": {
-              "url": "app_url",
-              "subdomain": "project_name"
+            "name": "app_url",
+            "source": {
+              "kind": "user"
+            },
+            "type": "string",
+            "format": "url",
+            "required": false,
+            "label": {
+              "ja": "公開 URL",
+              "en": "Public URL"
+            },
+            "helper": {
+              "ja": "空欄の場合は Takosumi が URL を割り当てます。",
+              "en": "Takosumi allocates a URL when omitted."
             }
           },
           {
-            "kind": "initial_secret",
-            "variable": "auth_password_hash",
-            "secretKind": "password_or_hash",
-            "optional": true
+            "name": "notification_push_gateway_url",
+            "source": {
+              "kind": "user"
+            },
+            "type": "string",
+            "format": "url",
+            "label": {
+              "ja": "通知ゲートウェイ",
+              "en": "Notification gateway"
+            },
+            "advanced": true
           },
           {
-            "kind": "oidc_client",
-            "variables": {
-              "issuerUrl": "takosumi_accounts_issuer_url",
-              "clientId": "takosumi_accounts_client_id"
+            "name": "notification_push_gateway_token",
+            "source": {
+              "kind": "user"
             },
+            "type": "string",
+            "label": {
+              "ja": "通知トークン",
+              "en": "Notification token"
+            },
+            "advanced": true,
+            "secret": true
+          },
+          {
+            "name": "accounts_issuer_url",
+            "source": {
+              "kind": "module_default"
+            },
+            "type": "string",
+            "format": "url",
+            "label": {
+              "ja": "Takosumi Accounts 発行者",
+              "en": "Takosumi Accounts issuer"
+            },
+            "advanced": true
+          },
+          {
+            "name": "accounts_client_id",
+            "source": {
+              "kind": "module_default"
+            },
+            "type": "string",
+            "label": {
+              "ja": "Takosumi Accounts クライアント",
+              "en": "Takosumi Accounts client"
+            },
+            "advanced": true
+          }
+        ],
+        "requires": [
+          {
+            "kind": "http.endpoint",
+            "deliver": {
+              "variables": {
+                "url": "app_url",
+                "subdomain": "project_name"
+              }
+            }
+          },
+          {
+            "kind": "identity.oidc",
             "callbackPath": "/api/auth/callback/takos",
             "scopes": [
               "openid",
-              "profile",
-              "email"
-            ]
+              "profile"
+            ],
+            "deliver": {
+              "variables": {
+                "issuerUrl": "accounts_issuer_url",
+                "clientId": "accounts_client_id"
+              }
+            }
           },
           {
-            "kind": "artifact",
-            "variables": {
-              "url": "worker_bundle_url",
-              "sha256": "worker_bundle_sha256"
+            "kind": "secret.generated",
+            "bytes": 32,
+            "encoding": "base64url",
+            "deliver": {
+              "bindings": {
+                "value": "ENCRYPTION_KEY"
+              }
             }
           }
+        ],
+        "features": [
+          {
+            "id": "notification-push",
+            "optional": true,
+            "label": {
+              "ja": "通知を有効にする",
+              "en": "Enable notifications"
+            },
+            "inputs": [
+              "notification_push_gateway_url",
+              "notification_push_gateway_token"
+            ]
+          }
         ]
-      },
-      "features": [
-        {
-          "id": "notification-push",
-          "optional": true,
-          "label": {
-            "ja": "通知を有効にする",
-            "en": "Enable notifications"
-          },
-          "inputs": [
-            "notification_push_gateway_url",
-            "notification_push_gateway_token"
-          ]
-        }
-      ]
+      }
     }
-  }
   }
 }

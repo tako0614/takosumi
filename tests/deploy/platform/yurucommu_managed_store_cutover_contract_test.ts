@@ -25,6 +25,7 @@ const MANAGED_INPUTS = [
   {
     name: "project_name",
     source: { kind: "capsule_name" as const },
+    role: "service_name" as const,
     type: "string" as const,
     format: "subdomain" as const,
     label: { ja: "サービス名", en: "Service name" },
@@ -96,15 +97,12 @@ function managedCompatibilityReport(): CapsuleCompatibilityReport {
 
 function managedInstallUx(): RepositoryManifestDocument {
   return {
-    apiVersion: "takosumi.com/v1alpha1",
+    apiVersion: "takosumi.com/v1",
     kind: "Repository",
     install: {
       modules: {
         [MODULE_PATH]: {
           inputs: MANAGED_INPUTS,
-          installExperience: {
-            projections: [{ kind: "service_name", variable: "project_name" }],
-          },
         },
       },
     },

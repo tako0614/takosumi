@@ -137,7 +137,7 @@ test("container runner returns sanitized source sync phase timings", async () =>
         status: "present",
         digest: `sha256:${"c".repeat(64)}`,
         document: {
-          apiVersion: "takosumi.com/v1alpha1",
+          apiVersion: "takosumi.com/v1",
           kind: "Repository",
           install: { modules: { ".": { inputs: [] } } },
         },
@@ -188,7 +188,7 @@ test("container runner returns sanitized source sync phase timings", async () =>
     status: "present",
     digest: `sha256:${"c".repeat(64)}`,
     document: {
-      apiVersion: "takosumi.com/v1alpha1",
+      apiVersion: "takosumi.com/v1",
       kind: "Repository",
       install: { modules: { ".": { inputs: [] } } },
     },
