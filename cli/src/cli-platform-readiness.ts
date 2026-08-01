@@ -665,6 +665,8 @@ function platformReadinessTemplateFieldValue(
   if (bound) {
     return bound.exclusiveMinimum === true ? bound.minimum + 1 : bound.minimum;
   }
+  const exactItems = schema?.exactItems?.[field];
+  if (exactItems) return [...exactItems];
   const requiredItems = schema?.requiredItems?.[field];
   if (requiredItems) return [...requiredItems];
   return `<${field}>`;

@@ -2012,8 +2012,9 @@ test("launch-readiness composes an extension contribution through template, vali
     ],
     evidenceSchemas: {
       "external-system-proof": {
-        fields: ["proofId"],
+        fields: ["proofId", "classes"],
         patterns: { proofId: "^proof_[a-z0-9]{6,}$" },
+        exactItems: { classes: ["alpha", "beta"] },
       },
     },
     collectionClassHints: {
@@ -2041,6 +2042,12 @@ test("launch-readiness composes an extension contribution through template, vali
           entry.id === "external-system-operation",
       ),
     ).toBe(true);
+    expect(
+      document.domains.find(
+        (entry: Record<string, unknown>) =>
+          entry.id === "external-system-operation",
+      ).evidence[0].classes,
+    ).toEqual(["alpha", "beta"]);
 
     const rehearsalRun = completeRehearsalRun();
     document.rehearsalRun = rehearsalRun;
@@ -2056,6 +2063,7 @@ test("launch-readiness composes an extension contribution through template, vali
         entry.id === "external-system-operation",
     );
     extensionEntry.evidence[0].proofId = "proof_abcdef";
+    extensionEntry.evidence[0].classes = ["alpha", "beta"];
     await writeTextFile(readinessFile, JSON.stringify(document));
 
     const validateStdout: string[] = [];
@@ -2085,6 +2093,22 @@ test("launch-readiness composes an extension contribution through template, vali
     expect(report.requiredRehearsalStepIds).toEqual(
       document.rehearsal.map((entry: Record<string, unknown>) => entry.id),
     );
+
+    extensionEntry.evidence[0].classes.push("gamma");
+    await writeTextFile(readinessFile, JSON.stringify(document));
+    const invalidStdout: string[] = [];
+    const invalidStderr: string[] = [];
+    expect(
+      await main(["launch-readiness", "validate", "--file", readinessFile], {
+        stdout: (line) => invalidStdout.push(line),
+        stderr: (line) => invalidStderr.push(line),
+      }),
+    ).toEqual(1);
+    expect([...invalidStdout, ...invalidStderr].join("\n")).toContain(
+      "evidence fields: external-system-proof(classes)",
+    );
+    extensionEntry.evidence[0].classes.pop();
+    await writeTextFile(readinessFile, JSON.stringify(document));
 
     const summaryStdout: string[] = [];
     const summaryCode = await main(

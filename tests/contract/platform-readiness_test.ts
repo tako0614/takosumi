@@ -55,6 +55,17 @@ test("readiness contributions are versioned and registry selected", () => {
       evidenceSchemas: {
         "external-operation-proof": {
           fields: ["proofId"],
+          exactItems: { undeclaredField: ["one"] },
+        },
+      },
+    }),
+  ).toBe(false);
+  expect(
+    isPlatformReadinessContribution({
+      ...contribution,
+      evidenceSchemas: {
+        "external-operation-proof": {
+          fields: ["proofId"],
           formats: { undeclaredField: "sha256" },
         },
       },
@@ -118,10 +129,18 @@ test("contribution evidence schemas validate without extension code", () => {
 
 test("evidence semantics come from schema data, never field or type names", () => {
   const schema = {
-    fields: ["ordinaryDigest", "amount", "classes", "left", "right"],
+    fields: [
+      "ordinaryDigest",
+      "amount",
+      "classes",
+      "orderedClasses",
+      "left",
+      "right",
+    ],
     formats: { ordinaryDigest: "sha256" },
     numericBounds: { amount: { minimum: 0, exclusiveMinimum: true } },
     requiredItems: { classes: ["alpha", "beta"] },
+    exactItems: { orderedClasses: ["alpha", "beta"] },
     distinctFields: [["left", "right"]],
   } as const;
   expect(
@@ -129,6 +148,7 @@ test("evidence semantics come from schema data, never field or type names", () =
       ordinaryDigest: `sha256:${"a".repeat(64)}`,
       amount: 1,
       classes: ["alpha", "beta"],
+      orderedClasses: ["alpha", "beta"],
       left: "one",
       right: "two",
     }),
@@ -138,6 +158,7 @@ test("evidence semantics come from schema data, never field or type names", () =
       ordinaryDigest: "not-a-digest",
       amount: 0,
       classes: ["alpha"],
+      orderedClasses: ["alpha", "beta", "gamma"],
       left: "same",
       right: "same",
     }),
@@ -145,6 +166,7 @@ test("evidence semantics come from schema data, never field or type names", () =
     "evidence.ordinaryDigest is not a valid sha256",
     "evidence.amount must be greater than 0",
     "evidence.classes must include alpha, beta",
+    "evidence.orderedClasses must exactly equal alpha, beta",
     "evidence.left,right must be pairwise distinct",
   ]);
 
@@ -154,6 +176,23 @@ test("evidence semantics come from schema data, never field or type names", () =
       { ordinaryDigest: "ordinary-value" },
     ),
   ).toEqual([]);
+
+  for (const orderedClasses of [
+    ["beta", "alpha"],
+    ["alpha"],
+    ["alpha", "beta", "gamma"],
+    "alpha,beta",
+  ]) {
+    expect(
+      platformReadinessEvidenceSchemaErrors(
+        {
+          fields: ["orderedClasses"],
+          exactItems: { orderedClasses: ["alpha", "beta"] },
+        },
+        { orderedClasses },
+      ),
+    ).toEqual(["evidence.orderedClasses must exactly equal alpha, beta"]);
+  }
 });
 
 test("UTC timestamp format accepts future expiry values without weakening evidence timestamps", () => {

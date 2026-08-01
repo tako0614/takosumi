@@ -213,9 +213,7 @@ function cloneRequirements(
 }
 
 function cloneConsistencyRules(
-  source: Readonly<
-    Record<string, readonly PlatformReadinessConsistencyRule[]>
-  >,
+  source: Readonly<Record<string, readonly PlatformReadinessConsistencyRule[]>>,
 ): Record<string, PlatformReadinessConsistencyRule[]> {
   return Object.fromEntries(
     Object.entries(source).map(([id, rules]) => [
@@ -311,6 +309,16 @@ function cloneSchema(
           ),
         }
       : {}),
+    ...(schema.exactItems
+      ? {
+          exactItems: Object.fromEntries(
+            Object.entries(schema.exactItems).map(([field, items]) => [
+              field,
+              [...items],
+            ]),
+          ),
+        }
+      : {}),
     ...(schema.distinctFields
       ? { distinctFields: schema.distinctFields.map((group) => [...group]) }
       : {}),
@@ -355,6 +363,11 @@ function mergeSchema(
       ...contributed,
     ]);
   }
+  const exactItems = mergeExactRecord(
+    baseline.exactItems,
+    contribution.exactItems,
+    `${type}.exactItems`,
+  );
   const distinctFields = uniqueGroups([
     ...(baseline.distinctFields ?? []),
     ...(contribution.distinctFields ?? []),
@@ -400,6 +413,7 @@ function mergeSchema(
     ...(Object.keys(formats).length > 0 ? { formats } : {}),
     ...(Object.keys(numericBounds).length > 0 ? { numericBounds } : {}),
     ...(Object.keys(requiredItems).length > 0 ? { requiredItems } : {}),
+    ...(Object.keys(exactItems).length > 0 ? { exactItems } : {}),
     ...(distinctFields.length > 0 ? { distinctFields } : {}),
     ...(Object.keys(after).length > 0 ? { after } : {}),
   };

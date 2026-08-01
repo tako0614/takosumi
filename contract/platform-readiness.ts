@@ -80,6 +80,8 @@ export interface PlatformReadinessEvidenceSchema {
   >;
   /** Items which must be present in an array or delimited string field. */
   readonly requiredItems?: Readonly<Record<string, readonly string[]>>;
+  /** Ordered string arrays which must match exactly, including cardinality. */
+  readonly exactItems?: Readonly<Record<string, readonly string[]>>;
   /** Fields whose present values must be pairwise distinct. */
   readonly distinctFields?: readonly (readonly string[])[];
   /** Maps a later timestamp field to the earlier timestamp field. */
@@ -292,6 +294,19 @@ export function platformReadinessEvidenceSchemaErrors(
       errors.push(`${label}.${field} must include ${required.join(", ")}`);
     }
   }
+  for (const [field, expected] of Object.entries(schema.exactItems ?? {})) {
+    const value = record[field];
+    if (
+      value !== undefined &&
+      (!Array.isArray(value) ||
+        value.length !== expected.length ||
+        value.some((item, index) => item !== expected[index]))
+    ) {
+      errors.push(
+        `${label}.${field} must exactly equal ${expected.join(", ")}`,
+      );
+    }
+  }
   for (const fields of schema.distinctFields ?? []) {
     const values = fields.map((field) => record[field]);
     if (
@@ -372,6 +387,7 @@ function optionalEvidenceSchemas(value: unknown): boolean {
       ) &&
       optionalNumericBounds(record.numericBounds) &&
       optionalStringRecord(record.requiredItems, true) &&
+      optionalStringRecord(record.exactItems, true) &&
       optionalDistinctFieldGroups(record.distinctFields) &&
       optionalStringRecord(record.after, false)
     )) {
@@ -400,6 +416,7 @@ function optionalEvidenceSchemas(value: unknown): boolean {
       ...Object.keys(
         isPlainRecord(record.requiredItems) ? record.requiredItems : {},
       ),
+      ...Object.keys(isPlainRecord(record.exactItems) ? record.exactItems : {}),
       ...(Array.isArray(record.distinctFields)
         ? record.distinctFields.flatMap((group) =>
             Array.isArray(group) ? group.filter(nonEmptyString) : [],
