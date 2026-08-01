@@ -6,5 +6,6 @@
  * publishable application-facing package.
  */
 export * from "./background-events.ts";
+export * from "./cron.ts";
 export * from "./managed-runtime-connections.ts";
 export * from "./managed-relational-runtime.ts";

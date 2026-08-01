@@ -246,6 +246,22 @@ test("new service shapes enforce shape-specific portable validation", () => {
   ).toBe(false);
 });
 
+test("Schedule validation uses the shared portable cron normalizer", () => {
+  const parsed = parseScheduleSpec({
+    name: "sunday",
+    cron: "  0 0 * * 7  ",
+    connections: {
+      workflow: {
+        resource: "DurableWorkflow/ingest",
+        permissions: ["invoke"],
+        projection: "schedule_trigger",
+      },
+    },
+  });
+  expect(parsed.ok).toBe(true);
+  if (parsed.ok) expect(parsed.spec.cron).toBe("0 0 * * 0");
+});
+
 test("StatefulActorNamespace owns namespaces, never actor instances", () => {
   const namespace = parseResourceSpec("StatefulActorNamespace", {
     name: "rooms",

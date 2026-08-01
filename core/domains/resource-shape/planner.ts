@@ -34,6 +34,7 @@ import type {
 import {
   isBundledResourceShapeKind,
   isResourceShapeKind,
+  normalizePortableCron,
   RESOURCE_SHAPE_KINDS,
 } from "takosumi-contract";
 import { secretLikeJsonPath } from "./secret_guard.ts";
@@ -390,13 +391,6 @@ const RESOURCE_DELETE_POLICIES: readonly ResourceDeletePolicy[] = [
 ];
 const RESOURCE_CAPABILITY_TOKEN_RE = /^[A-Za-z][A-Za-z0-9._:-]{0,127}$/u;
 const ARTIFACT_SHA256_RE = /^(?:sha256:)?[A-Fa-f0-9]{64}$/u;
-const CRON_FIELD_RANGES = [
-  [0, 59],
-  [0, 23],
-  [1, 31],
-  [1, 12],
-  [0, 7],
-] as const;
 export function parseResourceSpec(
   kind: ResourceShapeKind,
   spec: unknown,
@@ -1133,15 +1127,15 @@ export function parseScheduleSpec(spec: unknown): ParseScheduleSpecResult {
   const name = parseName(candidate);
   if (!name.ok) return name;
   const cron = candidate.cron;
-  const cronFields = typeof cron === "string" ? cron.trim().split(/\s+/u) : [];
-  if (
-    typeof cron !== "string" ||
-    cronFields.length !== 5 ||
-    cronFields.some((field, index) => {
-      const range = CRON_FIELD_RANGES[index]!;
-      return !isPortableCronField(field, range[0], range[1]);
-    })
-  ) {
+  let normalizedCron: string | undefined;
+  if (typeof cron === "string") {
+    try {
+      normalizedCron = normalizePortableCron(cron);
+    } catch {
+      normalizedCron = undefined;
+    }
+  }
+  if (normalizedCron === undefined) {
     return {
       ok: false,
       error: {
@@ -1201,7 +1195,7 @@ export function parseScheduleSpec(spec: unknown): ParseScheduleSpecResult {
     ok: true,
     spec: {
       name: name.value,
-      cron: cronFields.join(" "),
+      cron: normalizedCron,
       ...(typeof timezone === "string" ? { timezone: timezone.trim() } : {}),
       connections: connections.value!,
       ...(lifecyclePolicy.value
@@ -1209,33 +1203,6 @@ export function parseScheduleSpec(spec: unknown): ParseScheduleSpecResult {
         : {}),
     },
   };
-}
-
-function isPortableCronField(field: string, min: number, max: number): boolean {
-  if (!/^[0-9*,/-]+$/u.test(field)) return false;
-  return field.split(",").every((item) => {
-    const stepParts = item.split("/");
-    if (stepParts.length > 2) return false;
-    const [base, step] = stepParts;
-    if (!base) return false;
-    if (
-      step !== undefined &&
-      (!/^[1-9][0-9]*$/u.test(step) || Number(step) < 1)
-    ) {
-      return false;
-    }
-    if (base === "*") return true;
-    const rangeParts = base.split("-");
-    if (
-      rangeParts.length > 2 ||
-      rangeParts.some((part) => !/^[0-9]+$/u.test(part))
-    ) {
-      return false;
-    }
-    const start = Number(rangeParts[0]);
-    const end = Number(rangeParts[1] ?? rangeParts[0]);
-    return start >= min && end <= max && start <= end;
-  });
 }
 
 export function planResourceShape(

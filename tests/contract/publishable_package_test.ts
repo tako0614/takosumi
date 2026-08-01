@@ -34,6 +34,7 @@ test("the OSS contract directory is an explicit public package", () => {
   expect(packageJson.private).not.toBe(true);
   expect(packageJson.files).toEqual([
     "runtime.ts",
+    "cron.ts",
     "background-events.ts",
     "managed-runtime-connections.ts",
     "managed-relational-runtime.ts",

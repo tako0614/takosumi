@@ -10,6 +10,7 @@ export * from "./mobile.ts";
 export * from "./public-session-control.ts";
 export * from "./notification-pushers.ts";
 export * from "./background-events.ts";
+export * from "./cron.ts";
 export * from "./host-runtime-materialization.ts";
 export * from "./install-experience.ts";
 export * from "./resource-shape.ts";
