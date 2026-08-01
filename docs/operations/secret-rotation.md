@@ -1,7 +1,7 @@
 # Secret rotation runbook
 
 This runbook covers Takosumi OSS and Takosumi for Operator secret classes.
-Closed Takosumi Cloud payment, managed-capacity, and AI-upstream secrets are
+Closed Takosumi Cloud payment, Cloud-capacity, and AI-upstream secrets are
 owned by `takosumi-cloud/docs/operations/secret-rotation.md`.
 
 Cadence, audit requirements, and responsibility follow
@@ -19,7 +19,7 @@ returns raw values from normal GET APIs.
 - Git source credentials do not become provider credentials.
 - OIDC signing keys and upstream client secrets are platform identity secrets.
 - InterfaceBinding credentials are invocation-time material and never Outputs.
-- A hosting extension's commercial or managed-service secrets do not become OSS
+- A hosting extension's commercial or Cloud-service secrets do not become OSS
   environment variables.
 
 ## Preparation

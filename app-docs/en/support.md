@@ -12,7 +12,7 @@ and planned maintenance.
 ## What we support
 
 - Sign-in, Workspace, Dashboard, and Run failures
-- Takosumi Cloud managed resources and managed URLs
+- Takosumi Cloud resources and Cloud URLs
 - Usage, billing, payment methods, and incorrect or duplicate charges
 - Data export, account deletion, and privacy requests
 - Security concerns

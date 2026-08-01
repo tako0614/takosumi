@@ -42,7 +42,7 @@ curl https://takosumi.example.com/.well-known/takosumi
 ## Takosumi Cloud が追加するもの
 
 Takosumi Cloud は、Takosumi OSS を運用した公式サービスです。Cloud が追加するのは、
-managed リソースの実装、公式の容量、料金と支払い、support、SLA、abuse 対策です。
+Cloud が提供する Resource / service の実装、公式の容量、料金と支払い、support、SLA、abuse 対策です。
 
 これらは OSS の一般仕様ではありません。料金や利用上限を確認するときは
 [Takosumi Cloud のドキュメント](https://app.takosumi.com/docs/)を参照してください。

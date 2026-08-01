@@ -11,7 +11,7 @@ record a separate private acceptance reference.
 The model covers one operator-selected Takosumi origin containing Accounts,
 OIDC, dashboard, control plane, and runner dispatch. It also covers the
 operator-selected database/object/queue substrates and runner executors.
-Takosumi Cloud adds a closed commercial/managed-capacity layer through public
+Takosumi Cloud adds a closed commercial/Cloud-capacity layer through public
 OSS seams; OSS does not trust or depend on that layer.
 
 Trust crosses these boundaries:

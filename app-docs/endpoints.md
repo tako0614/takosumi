@@ -26,11 +26,11 @@ API key、接続状態、今月の使用量、残高、作成済みリソース�
 - 今月の使用量、Cloud リソース使用量、利用可能残高
 - 使用履歴 (使用量イベントの記録)
 
-リソースを削除すると、共通の Cloud マネージドリソース操作境界に削除アクションが
+リソースを削除すると、共通の Cloud Resource 操作境界に削除アクションが
 送られます。削除には `write` scope のセッションが必要で、Cloud
-マネージドリソースが作成済みのときだけ反映されます。未対応のエンドポイントファミリは 501
+Resource が作成済みのときだけ反映されます。未対応のエンドポイントファミリは 501
 を返して安全側に停止します。DELETE の後処理は課金対象の fallback 操作ではないため、
-所有アカウントの残高が尽きた source Workspace でも、作成済みのマネージドリソースを
+所有アカウントの残高が尽きた source Workspace でも、作成済みの Cloud Resource を
 destroy・削除できます。画面にはすべての仕様を載せません。OpenTofu provider の設定例、
 使用量イベントの契約、シークレットの扱いはドキュメント側で確認してください。
 
@@ -49,11 +49,11 @@ Takosumi for Operator / Cloud の運用層だけが次を持ちます。
 
 公式の `app.takosumi.com` は、Cloud エンドポイントファミリを同じホスト型プラットフォームオリジンで
 提供します。AI Gateway、S3-compatible Object Storage エンドポイント、Cloud 使用量、Cloud Edge Runtime は
-Takosumi Cloud のマネージドバックエンドで処理されます。マネージドバックエンドの内部実装、
+Takosumi Cloud の Cloud backend で処理されます。Cloud backend の内部実装、
 シークレット、operator 専用レコードは公開契約ではなく、operator runbook 側で
 管理します。
-すべての managed エンドポイントファミリは、backend API を呼び出す前に、同じ Cloud
-マネージドオペレーション境界へ正規化されます。canonical Resource API の呼び出し、
+すべての Cloud エンドポイントファミリは、backend API を呼び出す前に、同じ Cloud
+operation boundary へ正規化されます。canonical Resource API の呼び出し、
 S3-compatible なデータプレーン request、AI
 Gateway の request、runtime dispatch、Dashboard action は、どれも対等な入口です。
 互いの fallback 層にはなりません。platform はまず public なサービス形態、選択された
@@ -248,7 +248,7 @@ GET /api/v1/workspaces/{workspaceId}/usage
 クレデンシャル、API key、ベアラートークン、database URL、DSN、パスワードなどのシークレット
 値を持ってはいけません。
 
-Cloud マネージドエンドポイントは使用量を所有者アカウントの使用量レジャーに記録し、発生元
+Cloud endpoint は使用量を所有者アカウントの使用量レジャーに記録し、発生元
 Workspace を帰属メタデータとして残します。レジャー
 に記録できない成功は返しません。残高不足、Workspace コンテキスト不足、未価格付け、
 scope 不一致では、下流のプロバイダ、AI アップストリーム、ランタイムディスパッチへ進まず安全側に
@@ -270,7 +270,7 @@ operator runbook 側で管理します。
 
 後処理は拡張と分けます。作成、デプロイ、ランタイム、データプレーンの書き込み / クエリ / メッセージ
 / インスタンス操作は課金対象で、クレジットが足りない場合は安全側に停止します。
-一方で DELETE の後処理は、残高切れでユーザーデータやマネージドリソースが取り残されない
+一方で DELETE の後処理は、残高切れでユーザーデータや Cloud Resource が取り残されない
 よう、原則として代替使用量を持たせません。
 
 画面、請求、使用量レジャー、公開 Resource identity は `EdgeWorker` / `ObjectBucket` / `KVStore` /
@@ -357,5 +357,5 @@ Cloud エンドポイントの契約では次を守ります。
 ## Availability
 
 Cloud エンドポイントの利用可否はカタログと互換性マトリクスで公開します。
-エンドポイントファミリが設定されていない場合、route は管理外のアップストリームへ
+エンドポイントファミリが設定されていない場合、route は未設定のアップストリームへ
 暗黙に迂回したり偽の成功を返したりせず、安全側に停止します。

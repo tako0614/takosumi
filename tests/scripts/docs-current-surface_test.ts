@@ -201,7 +201,10 @@ test("Takosumi public docs are rebuilt around the current public surface", async
   assert.match(docs, /plain OpenTofu(?:\s*\/\s*Terraform)? (?:module|source)/);
   assert.match(docs, /Compatibility API framework/);
   assert.match(docs, /compatibility_profiles|compatibilityProfiles/);
-  assert.match(docs, /official\s+managed (?:capacity|target)/i);
+  assert.match(
+    docs,
+    /Cloud が提供する Resource|Cloud-provided Resource|Cloud resources/i,
+  );
   assert.match(docs, /same hosted Cloud origin|同じ hosted Cloud origin/);
   assert.match(docs, /Cloud extension boundary|Cloud extension の境界/);
   assert.match(docs, /sole lifecycle authority|唯一の lifecycle authority/);

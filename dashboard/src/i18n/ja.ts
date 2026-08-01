@@ -1233,13 +1233,13 @@ export const ja = {
   "graph.noEdges.message":
     "サービスが他のサービスの値を使うようになると、ここにつながりが表示されます。",
 
-  // --- Resources (service-created cloud resources) -----------------------------
+  // --- Resources (service-created Cloud resources) -----------------------------
   "resources.title": "リソース",
   "resources.subtitle":
-    "デプロイ済みサービスと、この環境が提供するマネージドリソースをまとめて確認・管理します。",
+    "デプロイ済みサービスと、この環境が提供する Cloud リソースをまとめて確認・管理します。",
   "resources.summary.title": "リソース概要",
   "resources.summary.workloads": "デプロイ済みワークロード",
-  "resources.summary.managed": "マネージドリソース",
+  "resources.summary.managed": "Cloud リソース",
   "resources.summary.availableTypes": "利用できるリソース種別",
   "resources.workloads.title": "ワークロード",
   "resources.workloads.subtitle":
@@ -1260,7 +1260,7 @@ export const ja = {
   "resources.column.resource": "リソース",
   "resources.column.phase": "状態",
   "resources.column.target": "配置先",
-  "resources.column.managedBy": "管理元",
+  "resources.column.managedBy": "Authority",
   "resources.scope.title": "対象範囲",
   "resources.scope.subtitle":
     "ダッシュボードでは、検証済みのワークスペース ID がそのまま対象範囲になります。",
@@ -1271,7 +1271,7 @@ export const ja = {
     "この環境では、リソース管理の保存先と実行環境がまだ有効になっていません。",
   "resources.inventory.title": "リソース一覧",
   "resources.inventory.subtitle":
-    "作成したリソースの状態、配置先、管理元を表示します。",
+    "作成したリソースの状態、配置先、Authority を表示します。",
   "resources.editor.createTitle": "リソースを定義",
   "resources.editor.editTitle": "望ましい状態を変更",
   "resources.editor.subtitle":
@@ -1450,7 +1450,7 @@ export const ja = {
     "{kind}/{name} を Target {target} にデプロイします。確認した価格: {price}。同じ plan と quote だけが実行されます。",
   "resources.confirm.importTitle": "既存リソースを取り込みますか？",
   "resources.confirm.importMessage":
-    "Native ID {nativeId} を {kind}/{name} として検証し、Takosumi の管理対象にします。",
+    "Native ID {nativeId} を {kind}/{name} として検証し、Takosumi の Resource として登録します。",
   "resources.preview.title": "プレビュー結果",
   "resources.preview.current": "現在の入力",
   "resources.preview.changed": "入力が変更されています",
@@ -1528,7 +1528,7 @@ export const ja = {
   "resources.detail.status": "現在の状態",
   "resources.detail.kind": "種別",
   "resources.detail.space": "範囲",
-  "resources.detail.managedBy": "管理元",
+  "resources.detail.managedBy": "Authority",
   "resources.detail.generation": "観測済み generation",
   "resources.detail.resolution": "配置の確定",
   "resources.detail.locked": "固定済み",

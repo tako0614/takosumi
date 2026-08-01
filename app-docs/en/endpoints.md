@@ -29,11 +29,11 @@ on the Cloud screen:
 - usage history (usage event records)
 
 Deleting a resource submits a delete action through the shared Cloud
-managed-resource operation boundary. Deletion requires a `write`-scoped session and only takes
-effect when the Cloud managed resource has been created. Unsupported endpoint
+resource operation boundary. Deletion requires a `write`-scoped session and only takes
+effect when the Cloud Resource has been created. Unsupported endpoint
 families answer 501 and fail closed. DELETE cleanup is not a billable fallback
 operation, so a source Workspace whose owning account has run out of credit can
-still destroy or remove already-created managed resources. The app screen does
+still destroy or remove already-created Cloud Resources. The app screen does
 not carry the full specification — OpenTofu provider examples, usage event
 contracts, and secret-handling rules belong in docs.
 
@@ -53,10 +53,10 @@ Only the Takosumi for Operator / Cloud operation layer has:
 Official `app.takosumi.com` serves Cloud endpoint families on the same hosted
 platform origin. AI Gateway, the S3-compatible Object Storage endpoint, Cloud
 usage, and Cloud Edge Runtime are
-served by Takosumi Cloud managed backends. Managed-backend internals, secrets,
+served by Takosumi Cloud backends. Cloud-backend internals, secrets,
 and operator-only records are not public contracts; they belong in operator
 runbooks.
-All managed endpoint families normalize into the same Cloud managed-operation
+All Cloud endpoint families normalize into the same Cloud operation
 boundary before a backend API is called. Canonical Resource API calls,
 S3-compatible data-plane requests, AI Gateway
 requests, runtime dispatch, and Dashboard actions are peer entrypoints. They
@@ -268,7 +268,7 @@ Usage events carry quantity, usdMicros, source, and timestamp. They must not
 carry provider credentials, API keys, bearer tokens, database URLs, DSNs,
 passwords, or other secret values.
 
-Cloud managed endpoints record usage into the owner account usage ledger and
+Cloud endpoints record usage into the owner account usage ledger and
 preserve source Workspace attribution metadata. A success
 that cannot be recorded must not be returned. If Workspace context is missing,
 credits are insufficient, pricing is unavailable, or scopes do not match, the
@@ -370,7 +370,7 @@ is advertised as Stable. An installed Compatibility API profile owns no
 virtual inventory or separate Resource ledger. Dashboard, portable clients,
 and direct Deploy API all converge on the same Resource. The
 `resource_shapes` capability means typed Resource Shape APIs are available; it
-does not imply a separate managed-resource lifecycle.
+does not imply a separate Resource lifecycle.
 
 ## Security contract
 
@@ -387,5 +387,5 @@ Cloud endpoints follow these rules:
 
 Cloud endpoint availability is advertised through the catalog and compatibility
 matrix. If an endpoint family is not configured, the route must fail closed
-instead of silently falling back to an unmanaged upstream or returning a fake
+instead of silently falling back to an unconfigured upstream or returning a fake
 success.

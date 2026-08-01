@@ -1,7 +1,7 @@
 # Takosumi Cloud pricing
 
 Takosumi Cloud uses tax-exclusive USD prepaid credits. There is no monthly
-subscription. Every account uses the same managed-service catalog; Resource
+subscription. Every account uses the same Cloud Offering catalog; Resource
 counts are common safety ceilings, not tier features.
 
 ## Credit billing
@@ -10,7 +10,7 @@ counts are common safety ceilings, not tier features.
 | ------------------ | --------------------------------------------------------------------------- |
 | Manual recharge    | Add `$5`, `$10`, `$25`, `$50`, or `$100` of credit                          |
 | Automatic recharge | Off by default; the owner selects a threshold, amount, and hard monthly cap |
-| Managed resources  | Deduct exact PriceCatalog usage from the credit balance                     |
+| Cloud resources   | Deduct exact PriceCatalog usage from the credit balance                     |
 
 An owner starts without a card or declared country and receives one `$0.25`
 onboarding credit. The credit is not renewed or redeemable for cash.
@@ -40,7 +40,7 @@ domains. These are shared abuse and safety limits, not tier features.
 
 ## Usage Prices
 
-Takosumi Cloud's versioned PriceCatalog is the authority for managed-capacity
+Takosumi Cloud's versioned PriceCatalog is the authority for Cloud capacity
 prices. Provider public prices remain cost-comparison inputs, but provider
 invoices do not define tenant usage. Provider shared free tiers and fixed
 platform costs are absorbed by Takosumi Cloud rather than allocated as hidden

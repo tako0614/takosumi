@@ -1,7 +1,7 @@
 # Takosumi Cloud pricing
 
 Takosumi Cloud は、税別 USD のプリペイドクレジット方式です。月額サブスクリプションは
-ありません。すべてのアカウントが同じ managed-service catalog を利用し、Resource 数は
+ありません。すべてのアカウントが同じ Cloud Offering catalog を利用し、Resource 数は
 契約ランクではなく共通の安全上限です。
 
 ## Credit billing
@@ -10,7 +10,7 @@ Takosumi Cloud は、税別 USD のプリペイドクレジット方式です。
 | ---------------- | -------------------------------------------------------------------- |
 | 手動チャージ     | `$5` / `$10` / `$25` / `$50` / `$100` のクレジットを追加             |
 | 自動チャージ     | 初期状態は無効。残高しきい値、1回の金額、月間上限を owner が明示設定 |
-| managed resource | PriceCatalog の実利用額をクレジット残高から差し引く                  |
+| Cloud resource | PriceCatalog の実利用額をクレジット残高から差し引く                  |
 
 owner はカードや国情報を登録せず開始でき、最初に一度だけ
 `$0.25` の onboarding credit を受け取ります。credit は再付与・現金化されず、
@@ -38,7 +38,7 @@ abuse / safety 上限です。
 
 ## Usage Prices
 
-managed capacity の価格は Takosumi Cloud の versioned PriceCatalog が正本です。
+Cloud capacity の価格は Takosumi Cloud の versioned PriceCatalog が正本です。
 provider 公開価格は原価比較に使いますが、provider invoice を tenant 使用量の正本には
 しません。provider の共有 free tier と platform 固定費は Takosumi Cloud が吸収し、tenant ごとの
 隠れた割引にはしません。価格変更は version と effective date を持ち、過去の

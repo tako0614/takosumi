@@ -41,6 +41,8 @@ import {
   canonicalInterfaceOAuth2ResourceUri,
   interfaceOAuth2ResourceUri,
 } from "./oauth_resource.ts";
+import { parseResourceShapeId } from "../resource-shape/records.ts";
+import type { RuntimeCapabilityReader } from "./runtime_capability_reader.ts";
 
 const INTERFACE_OAUTH2_MAX_TTL_MS = 60_000;
 
@@ -201,6 +203,8 @@ export interface InterfaceServiceOptions {
    * Without it, an arbitrary literal or Output URL is never token authority.
    */
   readonly oauth2ResourceAuthorizer?: InterfaceOAuth2ResourceAuthorizer;
+  /** Exact Resource-owned OAuth2 capability reader for token evidence checks. */
+  readonly runtimeCapabilityReader?: RuntimeCapabilityReader;
   /**
    * Additional host delivery types. `none` and standards-based `oauth2` are
    * core. The exact v1alpha1 token `workload_token` is reserved by Core as a
@@ -295,6 +299,7 @@ export class InterfaceService {
   readonly #activity: ActivityRecorder;
   readonly #credentialIssuer?: InterfaceCredentialIssuer;
   readonly #oauth2ResourceAuthorizer?: InterfaceOAuth2ResourceAuthorizer;
+  readonly #runtimeCapabilityReader?: RuntimeCapabilityReader;
   readonly #bindingDeliveryHandlers: ReadonlyMap<
     string,
     InterfaceBindingDeliveryHandler
@@ -316,6 +321,7 @@ export class InterfaceService {
     this.#activity = options.activity ?? NOOP_ACTIVITY_RECORDER;
     this.#credentialIssuer = options.credentialIssuer;
     this.#oauth2ResourceAuthorizer = options.oauth2ResourceAuthorizer;
+    this.#runtimeCapabilityReader = options.runtimeCapabilityReader;
     this.#bindingDeliveryHandlers = createBindingDeliveryHandlerRegistry({
       credentialIssuerConfigured: options.credentialIssuer !== undefined,
       oauth2ResourceAuthorizer: options.oauth2ResourceAuthorizer,
@@ -1179,6 +1185,43 @@ export class InterfaceService {
       }
       const resource = canonicalInterfaceOAuth2ResourceUri(input.resource);
       if (!resource || resource !== input.resource) return false;
+
+      // Resource-owned OAuth2 evidence uses the generic exact four-row reader.
+      // The initial Interface read only supplies the Resource Shape kind; the
+      // reader then re-reads the current Interface/Binding and proves the
+      // durable audience claim without a reconcile or write.
+      if (this.#runtimeCapabilityReader) {
+        const current = await this.#stores.interfaces.get(interfaceId);
+        const owner = current?.metadata.ownerRef;
+        if (owner?.kind === "Resource") {
+          const parsedResource = parseResourceShapeId(owner.id);
+          if (!parsedResource || input.capsuleId !== undefined) return false;
+          const capability = await this.#runtimeCapabilityReader.read({
+            workspaceId,
+            resourceId: owner.id,
+            resourceKind: parsedResource.kind,
+            interfaceId,
+            interfaceBindingId: bindingId,
+            bindingSubject: { kind: "Principal", id: subjectId },
+            requiredPermission: input.permission.trim(),
+            interfaceResolvedRevision: input.interfaceResolvedRevision,
+            audience: resource,
+          });
+          if (
+            !capability ||
+            !this.#oauth2ResourceAuthorizer ||
+            !(await oauth2ResourceAuthorized(this.#oauth2ResourceAuthorizer, {
+              workspaceId,
+              interfaceId,
+              ownerRef: capability.iface.metadata.ownerRef,
+              resource,
+            }))
+          ) {
+            return false;
+          }
+          return true;
+        }
+      }
 
       const iface = await this.reconcile(interfaceId, {
         allowSafetyRecovery: true,

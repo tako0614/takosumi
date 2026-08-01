@@ -154,7 +154,7 @@ describe("Resource Shape dashboard surface", () => {
     );
   });
 
-  test("unifies deployed services and managed Resources in one inventory", () => {
+  test("unifies deployed services and Resources in one inventory", () => {
     expect(inventory).toContain("listCapsules");
     expect(inventory).toContain("rows={capsules.error ? [] : capsules()}");
     expect(inventory).toContain("rows={resources.error ? [] : resources()}");

@@ -9,7 +9,7 @@
 | 対象 | 目標 |
 | --- | ---: |
 | Control plane API、サインイン、Dashboard、Run受付・参照 | 99.9% |
-| Stable として提供する公式 managed capacity | 99.9% |
+| Stable として提供する公式 Cloud capacity | 99.9% |
 | AI Gateway（upstream modelを除く） | 99.5% |
 
 可用性は UTC の暦月単位で測定します。Takosumi Cloud が原因の5xxと、
@@ -65,4 +65,3 @@ Workspace、Resource、provider object、secretなどの顧客識別情報を含
 このSLAは公式のTakosumi Cloud hosted serviceだけに適用します。Takosumi OSS、
 self-host環境、顧客自身のProvider Connection、顧客コード、previewまたは
 experimentalと明示した機能には適用しません。
-

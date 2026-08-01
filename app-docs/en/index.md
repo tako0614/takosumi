@@ -2,7 +2,7 @@
 
 Takosumi Cloud is the official Takosumi hosting we operate. Publish apps and
 APIs from Git at a `*.app.takos.jp` URL, straight from the browser. Attach
-managed resources — storage, databases, queues, AI — as you need them. Paid
+Cloud resources — storage, databases, queues, AI — as you need them. Paid
 pricing uses prepaid credits with no monthly subscription
 ([pricing](./pricing.md)).
 
@@ -29,13 +29,13 @@ support on top.
 Takosumi Cloud =
   official hosted Takosumi for Operator
   + operator-provided deployment targets
-  + Cloud-operated managed service backends
+  + Cloud-operated service backends
   + billing / usage metering / spend guard
   + support / operations
 
 Takosumi Cloud Resources =
-  official managed resource offerings
-  + managed bindings
+  Cloud Resource Offerings
+  + Cloud bindings
   + OpenTofu deploy path
 ```
 
@@ -47,16 +47,16 @@ through the credit balance, safety limits, and payment-state guard.
 ## Runtime
 
 Edge JS apps run as `EdgeWorker` resources. Takosumi Cloud can implement them
-with Cloudflare Workers for Platforms and a Takosumi-managed dispatch layer.
+with Cloudflare Workers for Platforms and a Takosumi dispatch layer.
 This is one Cloud resource, separate from ContainerService, Object Storage, KV,
 Database, Queue, and AI.
 The AI Gateway, S3-compatible endpoint, and Cloud usage endpoint are handled through the Cloud extension boundary on the same hosted Cloud origin.
 
-Every Cloud managed resource entrypoint uses the same managed operation
+Every Cloud resource entrypoint uses the same Cloud operation
 pipeline before a backend API is called. Whether the request comes from a
 compatibility endpoint, the direct API, or the Dashboard, it
 passes through authentication, source Workspace context, owner billing context, Resource /
-NativeResource normalization, managed-operation dispatch planning,
+NativeResource normalization, operation dispatch planning,
 selected-manager availability checks, usage / spend guard, and then manager
 dispatch. The selected manager chooses Workers for Platforms, R2, D1, KV,
 Queues, Containers, or another operator backend. A recognized service form whose
@@ -75,7 +75,7 @@ available. Operator/internal jobs use normal Cloudflare Workflows.
 | Durable user workflow  | Dynamic Workers + `@cloudflare/dynamic-workflows` |
 | Operator/internal jobs | Cloudflare Workflows                              |
 
-## Managed Bindings
+## Cloud Bindings
 
 Takosumi Cloud resources are exposed to apps and services as bindings.
 
@@ -97,7 +97,7 @@ Takosumi Cloud resources are exposed to apps and services as bindings.
 
 ## Domains
 
-Public HTTP resources can currently receive a managed URL under an
+Public HTTP resources can currently receive a Cloud URL under an
 operator-owned base domain. The Takosumi Cloud default base domain is
 `app.takos.jp`. There are two allocation modes: `scoped` and `vanity`.
 

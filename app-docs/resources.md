@@ -1,6 +1,6 @@
 # Takosumi Cloud Resources
 
-Takosumi Cloud は、公式のマネージドターゲット上でアプリ、サービス、データリソースを
+Takosumi Cloud は、Cloud が提供する deployment target 上でアプリ、サービス、データリソースを
 提供するホスト型の Takosumi for Operator です。`EdgeWorker` は複数あるサービス形態
 (service form) の一つです。
 
@@ -18,7 +18,7 @@ Takosumi Cloud Resources =
   + Schedule
   + AI Gateway
   + VerifiedDomain
-  + managed routes / URLs / secrets
+  + Cloud routes / URLs / secrets
   + USD-denominated billing / usage metering
   + OpenTofu deploys
 ```
@@ -78,7 +78,7 @@ Operator/internal jobs:
   Cloudflare Workflows
 ```
 
-すべての Cloud マネージドリソースの control-plane 操作は、実際のバックエンド API を
+すべての Cloud Resource の control-plane 操作は、実際のバックエンド API を
 叩く前に canonical `/v1/resources` Deploy API へ収束します。Dashboard、直接 API、
 portable clients はこの lifecycle をそのまま呼びます。インストールされた
 Compatibility API profile がある場合も、protocol request を typed Resource request へ
@@ -113,7 +113,7 @@ API を持ちません。custom domain は owner-account / Workspace に属す�
 `VerifiedDomain` として所有確認・証明書状態を管理し、両方が current の場合だけ
 Interface route を active にします。
 
-この共通層では、Cloud が管理するサービス形態ごとにマネージャ記述子を持ちます。
+この共通層では、Cloud のサービス形態ごとにマネージャ記述子を持ちます。
 記述子は Takosumi Cloud のサービスファミリ、使用量メーターファミリ、
 NativeResource type、現在のマネージャ実装を結びます。サービスファミリは
 `takosumi.edge_worker` のような安定した Cloud リソース契約で、使用量メーター
@@ -142,7 +142,7 @@ TargetPool / adapter / manager descriptor のエビデンスを変えます。
 
 ## Delete And Cleanup
 
-Takosumi Cloud が管理するリソースの削除は、何度実行しても結果が変わりません。
+Takosumi Cloud が提供する Resource の削除は、何度実行しても結果が変わりません。
 すでにバックエンドが消えている場合も成功として扱い、同じ destroy を安全に再試行できます。後処理や destroy はクレジットを使い切った
 後も実行できます。
 
@@ -159,7 +159,7 @@ destroy の成功を偽装せず、Run を失敗として記録して修正後�
 公開 HTTP surface には、所有権と lifecycle が異なる 2 種類の URL があります。
 
 Capsule install の `public_endpoint` projection は、OSS hostname reservation authority
-が所有する managed URL です。Takosumi Cloud の既定ベースドメインは
+が所有する Cloud URL です。Takosumi Cloud の既定ベースドメインは
 `app.takos.jp` で、現在の割り当て方式は `scoped` と `vanity` の 2 種類です。
 
 ```text
@@ -175,10 +175,10 @@ Workspace の変更不可な owner account の有限枠を 1 つ消費します�
 `scoped` は `<workspace-handle>-<label>.<managed-base-domain>`、`vanity` は
 `<label>.<managed-base-domain>` を予約します。
 重複・枠超過エラーは申請元の Workspace / Capsule 名を公開しません。
-マネージドホスト名予約と vanity スロットは Capsule のライフタイムに属し、成功した
+ホスト名予約と vanity スロットは Capsule のライフタイムに属し、成功した
 Capsule destroy が予約を解放します。
 
-Cloud managed `EdgeWorker` は別に、不透明で再現不能な canonical system URL を持ちます。
+Cloud の `EdgeWorker` は別に、不透明で再現不能な canonical system URL を持ちます。
 その URL は Resource の `url` Output から取得します。
 クライアントは `ew-<hash>.<system-base-domain>` のような値を生成・推測してはいけません。
 この system URL は vanity hostname ではなく、Interface route の DELETE でも解放されません。
@@ -200,16 +200,16 @@ wildcard hostname、custom hostname は Interface を変更する前に拒否し
 
 route CRUD は Interface / InterfaceBinding authority を呼びます。backend route API や別の
 hostname ownership ledger はありません。更新は strong ETag の CAS、DELETE
-は Binding を revoke して Interface を retire しますが、system URL や Capsule の managed
+は Binding を revoke して Interface を retire しますが、system URL や Capsule の
 hostname ownership は解放しません。
 
-ユーザー所有 custom domain はマネージド URL とは別の検証済みライフサイクルです。
+ユーザー所有 custom domain は Cloud URL とは別の検証済みライフサイクルです。
 所有 challenge、証明書発行・更新、attach / detach、expiry を別々に記録し、pending / failed /
 expired 状態を利用可能な custom domain として保存・表示しません。
 
 アプリのインストールやストアでは、この値は `installExperience` の
 `public_endpoint` プロジェクションから普通の OpenTofu 変数へ渡します。例えば
-`subdomain` は managed URL の label、`url` は managed URL または通常の OpenTofu
+`subdomain` は Cloud URL の label、`url` は Cloud URL または通常の OpenTofu
 変数です。ユーザー所有 URL を
 BYOC provider に渡すことはできますが、Takosumi Cloud deployment target の custom domain として
 自動有効化せず、`VerifiedDomain` の確認を要求します。

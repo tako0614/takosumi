@@ -65,6 +65,12 @@ import {
   type CompatibilityRouteRecord,
   type CompatibilityRouteRetireResult,
 } from "../../core/domains/interfaces/compatibility_route_control.ts";
+import {
+  D1RuntimeCapabilityReader,
+  type RuntimeCapability,
+  type RuntimeCapabilityReadInput,
+  type RuntimeCapabilityReader,
+} from "../../core/domains/interfaces/runtime_capability_reader.ts";
 import { TAKOSUMI_METRICS_PATH } from "../../core/api/metrics_routes.ts";
 import { TAKOSUMI_INTERNAL_RESOURCE_MANAGED_BY_HEADER } from "../../core/api/resource_routes.ts";
 import { PORTABLE_FORM_MANAGER } from "../../core/api/form_host_routes.ts";
@@ -187,6 +193,32 @@ export {
   OpenTofuRunOwnerObject,
   OpenTofuRunnerObject,
 };
+export type {
+  RuntimeCapability,
+  RuntimeCapabilityReadInput,
+  RuntimeCapabilityReader,
+};
+
+/** Public host-composition reader for exact runtime capability admission. */
+export function createPlatformRuntimeCapabilityReader(
+  env: CloudflareWorkerEnv,
+): RuntimeCapabilityReader {
+  return new D1RuntimeCapabilityReader(env.TAKOSUMI_CONTROL_DB);
+}
+
+/**
+ * Returns the reader wired into the platform service composition. Hosted
+ * callers can use this port without making an internal HTTP request.
+ */
+export async function platformRuntimeCapabilityReader(
+  env: CloudflareWorkerEnv,
+): Promise<RuntimeCapabilityReader> {
+  const reader = (await takosumiOperationsFor(env)).runtimeCapabilityReader;
+  if (!reader) {
+    throw new Error("runtime capability reader is unavailable");
+  }
+  return reader;
+}
 
 // In-process deploy-control seam, one cached service per env, shared with the
 // unified Takos worker. The accounts deploy-control facade calls the typed

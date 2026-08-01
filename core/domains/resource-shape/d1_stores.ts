@@ -96,7 +96,10 @@ export interface D1Like {
 interface D1LikePreparedStatement {
   bind(...values: readonly unknown[]): D1LikePreparedStatement;
   first<T = unknown>(): Promise<T | null>;
-  all<T = unknown>(): Promise<{ readonly results?: readonly T[] }>;
+  all<T = unknown>(): Promise<{
+    readonly results?: readonly T[];
+    readonly meta?: { readonly rows_read?: number };
+  }>;
   run<T = unknown>(): Promise<{
     readonly meta?: { readonly changes?: number };
   }>;

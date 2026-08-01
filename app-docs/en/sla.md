@@ -10,7 +10,7 @@ gate opens.
 | Scope | Target |
 | --- | ---: |
 | Control-plane API, sign-in, Dashboard, and Run submission and reads | 99.9% |
-| Official managed capacity offered as Stable | 99.9% |
+| Official Cloud capacity offered as Stable | 99.9% |
 | AI Gateway, excluding upstream models | 99.5% |
 
 Availability is measured by UTC calendar month. It counts 5xx responses caused
@@ -74,4 +74,3 @@ This SLA applies only to the official hosted Takosumi Cloud service. It does
 not apply to Takosumi OSS, self-hosted environments, customer Provider
 Connections, customer code, or features explicitly marked preview or
 experimental.
-

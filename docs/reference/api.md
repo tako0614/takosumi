@@ -4,17 +4,17 @@ Takosumi API は、OpenTofu control plane と Resource Shape API を公開しま
 plane は Git を正とする情報源 (source of truth) として動きます。Workspace / Capsule /
 Run などの用語は [用語集](./glossary.md) を参照してください。
 
-外部インフラには既存 provider と標準 API を使います。Takosumi が managed capacity
-として提供するサービスは、provider-neutral な Resource Shape で定義します。その
+外部インフラには既存 provider と標準 API を使います。Takosumi Cloud が提供する capacity
+や service は、provider-neutral な Resource Shape で定義します。その
 lifecycle は `/v1/resources` の Deploy API が一元管理します。
 
 ## 基本方針
 
-| 状況                                                | 扱い方                                                                          |
-| --------------------------------------------------- | ------------------------------------------------------------------------------- |
-| 外部 resource に標準 API / OpenTofu provider がある | plain Stack flow でその surface を使う                                          |
-| Takosumi/operator が managed service を提供する     | provider-neutral な Takosumi Resource Shape として定義し、Deploy API で管理する |
-| 一回限りの不足                                      | generic-env ProviderConnection と通常の OpenTofu module で扱う                  |
+| 状況 | 扱い方 |
+| --- | --- |
+| 外部 resource に標準 API / OpenTofu provider がある | plain Stack flow でその surface を使う |
+| Takosumi/operator が Cloud-provided service を提供する | provider-neutral な Takosumi Resource Shape として定義し、Deploy API で管理する |
+| 一回限りの不足 | generic-env ProviderConnection と通常の OpenTofu module で扱う |
 
 Takosumi は自前の Terraform / OpenTofu provider を配布しません。portable Form は
 Takoform、operator 操作はこの API・CLI・dashboard を使います。外部 provider は
@@ -110,6 +110,10 @@ Resource Shape API の object は、Kubernetes 風の形式に揃えています
 ```
 
 `spec` はあるべき状態 (desired state)、`status` は Takosumi が観測した状態です。
+`metadata.managedBy` は Resource を生成・所有する authoring surface の識別子です。これは
+Resource の種類や Target の分類ではなく、複数の lifecycle authority が同じ Resource を
+編集しないための互換フィールドです。portable client は送信できず、trusted host または
+operator が設定します。
 secret の値は `spec`、`status`、公開 Output、ログ、監査記録に書きません。provider が
 管理する OpenTofu state には secret が含まれることがあるため、Takosumi は state 全体を
 暗号化して保存し、権限のある実行にだけ復号します。
@@ -299,7 +303,7 @@ Git checkout 内の相対 path に限り、provider credential は build phase �
 指定しない場合は通常どおり、OpenTofu module が成果物を解決します。参照元は
 release artifact の URL / digest、provider、data source などです。
 
-repository の `public_endpoint` projection が managed hostname を使う場合、Capsule
+repository の `public_endpoint` projection が Cloud hostname を使う場合、Capsule
 作成時に割り当て方を選べます。省略時は `scoped` です。この値は、同じ `subdomain` /
 `url` / `routePattern` 変数を確定するための control-plane policy です。
 
@@ -314,10 +318,10 @@ repository の `public_endpoint` projection が managed hostname を使う場合
 owner account の有限枠を 1 つ消費します。どちらも hostname 単位で
 first-come-first-served に予約します。
 
-managed hostname reservation と vanity slot は Capsule lifetime に属します。成功した
+Hostname reservation と vanity slot は Capsule lifetime に属します。成功した
 Capsule destroy で解放し、個別 route の削除では解放しません。ユーザー所有 custom
 domain は、この mode ではなく別の verified-domain lifecycle を使います。Takosumi Cloud
-では verification / certificate lifecycle が未実装のため Planned です。Cloud managed
+では verification / certificate lifecycle が未実装のため Planned です。Cloud の
 route への要求は安全側に停止します。通常の OpenTofu の URL / route 変数を
 BYOC provider へ渡す経路は、これとは別にそのまま使えます。
 
@@ -362,7 +366,7 @@ Content-Type: application/json
 
 ## Deploy API / Resource Shape API
 
-`/v1/resources` は provider-neutral な managed Resource の Deploy API です。preview /
+`/v1/resources` は provider-neutral な Resource の Deploy API です。preview /
 apply / observe / refresh / import / delete をここで受け取ります。canonical Resource、
 ResolutionLock、NativeResource、Run、status、Output、audit の唯一の lifecycle authority
 も、この API です。CLI、dashboard、Takoform host API と明示的に導入した
@@ -476,7 +480,7 @@ PATCH /v1/form-activations/{id}
 では変更できません。`createdBy` / `updatedBy` は request JSON ではなく認証済み
 operator から決まります。create は exact `FormRef` + `packageDigest` を固定します。
 update は `expectedRevision` CAS を使い、結果の revision を `ETag` で返します。未知の
-field は拒否します。そのため price、SKU、payment、billing、managed capacity、region
+field は拒否します。そのため price、SKU、payment、billing、Cloud capacity、region
 inventory、SLA、support を OSS policy record に混ぜることはできません。host 固有の
 料金や提供条件は、FormActivation とは別の拡張で扱います。
 
@@ -649,11 +653,11 @@ data-plane profile は既存 Resource を暗黙作成せず、Ready な Resource
 安全側に停止します。
 
 Cloudflare 固有の import/deploy compatibility profile は廃止済みで、v1 API と
-capability surface には含まれません。Cloudflare 上に配置する managed Resource も、
+capability surface には含まれません。Cloudflare 上に配置する Resource も、
 利用者自身の Cloudflare account に作る Stack も、通常の Resource または
 ProviderConnection として扱います。
 
-compatibility profile は managed hostname を作りません。runtime route は
+compatibility profile は Cloud hostname を作りません。runtime route は
 `http.route` Interface と InterfaceBinding で公開します。hostname の所有権は OSS の
 reservation authority、または operator / Cloud の VerifiedDomain lifecycle が管理します。
 routing cache や backend state を hostname 所有権の正本にはしません。

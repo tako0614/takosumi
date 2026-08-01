@@ -2,7 +2,7 @@
 
 Takosumi Cloud は、私たちが運営する Takosumi の公式ホスティングです。
 Git に置いたアプリや API を、ブラウザから `*.app.takos.jp` の URL で公開できます。
-ストレージ、データベース、キュー、AI などの managed resource も、必要な分だけ
+ストレージ、データベース、キュー、AI などの Cloud resource も、必要な分だけ
 接続して使えます。料金は月額サブスクリプションのないプリペイドクレジット方式です
 ([料金](./pricing.md))。
 
@@ -29,19 +29,19 @@ Takosumi Cloud は、software としての Takosumi (Git を起点に、変更�
 Takosumi Cloud =
   official hosted Takosumi for Operator
   + operator-provided deployment targets
-  + Cloud-operated managed service backends
+  + Cloud-operated service backends
   + billing / usage metering / spend guard
   + support / operations
 
 Takosumi Cloud Resources =
-  official managed resource offerings
-  + managed bindings
+  Cloud Resource Offerings
+  + Cloud bindings
   + OpenTofu deploy path
 ```
 
 Git から app / service を追加し、必要な resource を binding として接続すると、
 デプロイと更新が記録されます。Edge JS runtime、Object Storage、KV、Database、
-Queue、AI、Container は並列の managed resource で、使用量はクレジット残高、
+Queue、AI、Container は並列の Cloud resource で、使用量はクレジット残高、
 安全上限、支払い状態に基づいて管理されます。
 
 ## Runtime
@@ -73,7 +73,7 @@ Cloudflare Workflows を使います。
 | Durable user workflow  | Dynamic Workers + `@cloudflare/dynamic-workflows` |
 | Operator/internal jobs | Cloudflare Workflows                              |
 
-## Managed Bindings
+## Cloud Bindings
 
 Takosumi Cloud の resource は、app / service から binding として使います。
 
@@ -95,7 +95,7 @@ Takosumi Cloud の resource は、app / service から binding として使い�
 
 ## Domains
 
-現在、公開 HTTP resource には operator 管理 base domain 配下の managed URL を
+現在、公開 HTTP resource には operator 管理 base domain 配下の Cloud URL を
 割り当てられます。Takosumi Cloud の既定 base domain は `app.takos.jp` です。
 割り当て mode は `scoped` と `vanity` の 2 種類です。
 

@@ -86,8 +86,8 @@ Resource を記述するために利用できる形式の 1 つであり、Takos
 ## Takosumi と Takosumi Cloud
 
 - **Takosumi** はこのリポジトリのソフトウェアです。自分の環境で運用できます。
-- **Takosumi Cloud** は `app.takosumi.com` で提供する公式ホスティングです。managed
-  リソース、料金、容量、サポートは Cloud 側が決めます。
+- **Takosumi Cloud** は `app.takosumi.com` で提供する公式ホスティングです。Cloud が提供する
+  Resource、料金、容量、サポートは Cloud 側が決めます。
 
 OSS は Cloud がなくても動きます。Cloud 固有の価格、Stripe、内部の配置先はこの
 リポジトリの公開仕様ではありません。境界の詳細は

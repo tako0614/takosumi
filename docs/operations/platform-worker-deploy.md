@@ -213,7 +213,7 @@ adapter without displaying them, verify remote secret names only, and never
 delete unknown remote secrets automatically. Rotation follows
 [Secret Rotation](secret-rotation.md).
 
-Payment-provider secrets, enforced billing, official PriceCatalogs, managed
+Payment-provider secrets, enforced billing, official PriceCatalogs, Cloud
 capacity credentials, and Cloud-specific smoke commands are not OSS deployment
 inputs. A commercial host supplies them through its extension ports.
 
@@ -251,5 +251,5 @@ For source-and-run coverage use `bun run smoke:platform-control-plane` with
 operator-owned inputs. Its default path is the providerless plain OpenTofu
 fixture; a Cloudflare connection, resource preflight, or Worker verification is
 enabled only through the corresponding explicit options. Cloud extension,
-payment, and managed-capacity evidence belongs to the hosting layer, not this
+payment, and Cloud-capacity evidence belongs to the hosting layer, not this
 OSS runbook.

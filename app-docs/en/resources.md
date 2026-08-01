@@ -2,7 +2,7 @@
 
 Takosumi Cloud is the official hosted Takosumi for Operator, providing apps,
 services, and data resources on operator-provided deployment targets. `EdgeWorker` is one of
-several service forms (runtime shapes for managed resources).
+several service forms (runtime shapes for Cloud resources).
 
 ```text
 Takosumi Cloud Resources =
@@ -18,7 +18,7 @@ Takosumi Cloud Resources =
   + Schedule
   + AI Gateway
   + VerifiedDomain
-  + managed routes / URLs / secrets
+  + Cloud routes / URLs / secrets
   + USD-denominated billing / usage metering
   + OpenTofu deploys
 ```
@@ -54,7 +54,7 @@ Pre-GA until the complete set's evidence is activated.
 
 `EdgeWorker` is the service form for edge JavaScript / TypeScript apps. Takosumi
 Cloud can implement it with Cloudflare Workers for Platforms and a
-Takosumi-managed dispatch layer.
+Takosumi dispatch layer.
 
 That is a Cloud implementation detail. The Cloud resource model is not limited
 to `EdgeWorker`. OCI-image services are `ContainerService`, object storage is
@@ -82,7 +82,7 @@ Operator/internal jobs:
   Cloudflare Workflows
 ```
 
-Every Cloud managed-resource control operation converges on the canonical
+Every Cloud resource control operation converges on the canonical
 `/v1/resources` Deploy API before any backend API is called. The
 Dashboard, direct API, and portable clients call that lifecycle directly. When
 an installed Compatibility API profile is used, it translates
@@ -145,7 +145,7 @@ References:
 
 ## Delete And Cleanup
 
-Deleting a Takosumi Cloud managed resource always produces the same result
+Deleting a Takosumi Cloud Resource always produces the same result
 regardless of how many times it is run. A resource whose backend is already
 absent is treated as deleted, so the same destroy can be retried safely.
 Cleanup and destroy remain available after credits are exhausted.
@@ -166,7 +166,7 @@ fixed.
 
 Public HTTP surfaces use two URL forms with separate ownership and lifecycles.
 
-A Capsule install's `public_endpoint` projection is a managed URL owned by the
+A Capsule install's `public_endpoint` projection is a Cloud URL owned by the
 OSS hostname reservation authority. The Takosumi Cloud default base domain is
 `app.takos.jp`. The current allocation modes are `scoped` and `vanity`.
 
@@ -184,10 +184,10 @@ reservation, reserved labels, and abuse policy.
 `scoped` reserves `<workspace-handle>-<label>.<managed-base-domain>`;
 `vanity` reserves `<label>.<managed-base-domain>`. Conflict and slot-limit
 errors do not reveal the claimant Workspace or Capsule name.
-Managed hostname reservations and vanity slots belong to the Capsule lifetime,
+Hostname reservations and vanity slots belong to the Capsule lifetime,
 and a successful Capsule destroy releases the reservation.
 
-A Cloud-managed `EdgeWorker` separately receives an opaque, non-derivable
+A Cloud `EdgeWorker` separately receives an opaque, non-derivable
 canonical system URL, discovered from the Resource's `url` Output. Clients must
 not construct or infer a value such as `ew-<hash>.<system-base-domain>`. This URL
 is not a vanity hostname, and Interface route DELETE does not release it.
@@ -211,7 +211,7 @@ Current route evidence is:
 Route CRUD calls the Interface and InterfaceBinding authority. There is no
 backend route API or separate hostname-ownership ledger.
 Updates use a strong-ETag CAS. DELETE revokes the Binding and retires the
-Interface, but releases neither the system URL nor Capsule managed-hostname
+Interface, but releases neither the system URL nor Capsule hostname
 ownership.
 
 User-owned custom domains have a separate verified lifecycle. Ownership
@@ -221,7 +221,7 @@ an active custom domain.
 
 In app install and Store flows, this value is passed to ordinary OpenTofu
 variables through the `installExperience` `public_endpoint` projection. For
-example, `subdomain` is the label for a managed URL and `url` is a managed URL or
+example, `subdomain` is the label for a Cloud URL and `url` is a Cloud URL or
 an ordinary OpenTofu variable. A user-owned URL can still be passed to a BYOC provider,
 but Takosumi Cloud requires a VerifiedDomain rather than activating it
 implicitly. Takosumi does not infer meaning from

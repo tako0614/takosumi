@@ -234,7 +234,7 @@ independent authorities:
 Takosumi Cloud implements that ownership ordering during an offline candidate
 transform, not by invoking this CLI's remote `apply` against production. Its
 private manifest does not replace this OSS gate, and this OSS CLI does not know
-about Cloud tables, billing, managed capacity, or closed runtime internals.
+about Cloud tables, billing, Cloud capacity, or closed runtime internals.
 
 See Cloudflare's official documentation for
 [D1 Time Travel](https://developers.cloudflare.com/d1/reference/time-travel/),

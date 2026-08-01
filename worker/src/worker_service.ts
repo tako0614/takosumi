@@ -35,6 +35,10 @@ import {
 import { CloudflareD1ObservabilitySink } from "./d1_observability.ts";
 import { createD1ResourceShapeStores } from "../../core/domains/resource-shape/d1_stores.ts";
 import { createD1InterfaceStores } from "../../core/domains/interfaces/d1_stores.ts";
+import {
+  createD1RuntimeCapabilityReader,
+  type RuntimeCapabilityReader,
+} from "../../core/domains/interfaces/runtime_capability_reader.ts";
 import { createD1FormRegistryStore } from "../../core/domains/service-forms/mod.ts";
 import { createD1OfferingCatalogStore } from "../../core/domains/offerings/mod.ts";
 import { PORTABLE_FORM_MANAGER } from "../../core/api/form_host_routes.ts";
@@ -135,6 +139,8 @@ export async function createWorkerServiceApp(
     readonly formPackageVerifier?: CreateTakosumiServiceOptions["formPackageVerifier"];
     /** Complete generic noncommercial Offering contribution. */
     readonly offeringHostComposition?: CreateTakosumiServiceOptions["offeringHostComposition"];
+    /** Exact read-only runtime capability composition port. */
+    readonly runtimeCapabilityReader?: RuntimeCapabilityReader;
     /** Additional host proof for custom/external Interface OAuth resources. */
     readonly interfaceOAuth2ResourceAuthorizer?: CreateTakosumiServiceOptions["interfaceOAuth2ResourceAuthorizer"];
     /**
@@ -319,6 +325,9 @@ export async function createWorkerServiceApp(
     resourceShapeSchemaRegistry,
     ...(resourceShapeModuleRegistry ? { resourceShapeModuleRegistry } : {}),
     interfaceStores: createD1InterfaceStores(env.TAKOSUMI_CONTROL_DB),
+    runtimeCapabilityReader:
+      options.runtimeCapabilityReader ??
+      createD1RuntimeCapabilityReader(env.TAKOSUMI_CONTROL_DB),
     ...(env.TAKOSUMI_INTERFACE_PROJECTION_SINK
       ? { interfaceProjectionSink: env.TAKOSUMI_INTERFACE_PROJECTION_SINK }
       : {}),

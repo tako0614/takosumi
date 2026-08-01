@@ -84,5 +84,5 @@ durable database, and OpenTofu runner.
 - [Repository manifest](./reference/repository-manifest.md),
   [API](./reference/api.md), and [CLI](./reference/cli.md) references
 
-Pricing, managed resources, and support for the official hosted service are in
+Pricing, Cloud resources, and support for the official hosted service are in
 the [Takosumi Cloud documentation](https://app.takosumi.com/docs/en/).

@@ -12,7 +12,7 @@ SNSのDMは公式受付として扱いません。
 ## 対応できる内容
 
 - サインイン、Workspace、Dashboard、Runの不具合
-- Takosumi Cloudのmanaged resourceとmanaged URL
+- Takosumi Cloud のリソースと Cloud URL
 - 使用量、請求、支払い方法、重複または誤った請求の調査
 - データexport、アカウント削除、privacyに関する依頼
 - セキュリティ上の問題

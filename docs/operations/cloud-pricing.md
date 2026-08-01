@@ -13,7 +13,7 @@ Rating, enforcement, and quota are injected through generic host composition
 ports. OSS itself contains no default price or plan-action weight.
 
 Takosumi Cloud owns its versioned PriceCatalog, payment-provider integration,
-official managed-resource meters, enforced balance gate, and reconciliation in
+official Cloud Resource meters, enforced balance gate, and reconciliation in
 the closed delta. The operator procedure is maintained in
 `takosumi-cloud/docs/operations/cloud-pricing.md`; public prices and free-tier
 behavior are maintained in `app-docs/pricing.md`.

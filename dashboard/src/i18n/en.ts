@@ -1224,13 +1224,13 @@ export const en: Record<keyof typeof ja, string> = {
   "graph.noEdges.message":
     "Connections appear here once a service uses values from another service.",
 
-  // --- Resources (service-created cloud resources) -----------------------------
+  // --- Resources (service-created Cloud resources) -----------------------------
   "resources.title": "Resources",
   "resources.subtitle":
-    "View and manage deployed services and the managed resources offered by this environment.",
+    "View and manage deployed services and the Cloud resources offered by this environment.",
   "resources.summary.title": "Resource summary",
   "resources.summary.workloads": "Deployed workloads",
-  "resources.summary.managed": "Managed resources",
+  "resources.summary.managed": "Cloud resources",
   "resources.summary.availableTypes": "Available resource types",
   "resources.workloads.title": "Workloads",
   "resources.workloads.subtitle":
@@ -1251,7 +1251,7 @@ export const en: Record<keyof typeof ja, string> = {
   "resources.column.resource": "Resource",
   "resources.column.phase": "Phase",
   "resources.column.target": "Target",
-  "resources.column.managedBy": "Managed by",
+  "resources.column.managedBy": "Authority",
   "resources.scope.title": "Scope",
   "resources.scope.subtitle":
     "In the dashboard, your verified workspace ID is the scope.",
@@ -1439,7 +1439,7 @@ export const en: Record<keyof typeof ja, string> = {
     "Deploy {kind}/{name} to Target {target}. Reviewed price: {price}. Only the exact previewed plan and quote will run.",
   "resources.confirm.importTitle": "Import this existing resource?",
   "resources.confirm.importMessage":
-    "Validate native ID {nativeId} and place it under Takosumi management as {kind}/{name}.",
+    "Validate native ID {nativeId} and register it as Takosumi Resource {kind}/{name}.",
   "resources.preview.title": "Preview result",
   "resources.preview.current": "Current inputs",
   "resources.preview.changed": "Inputs have changed",
@@ -1518,7 +1518,7 @@ export const en: Record<keyof typeof ja, string> = {
   "resources.detail.status": "Current status",
   "resources.detail.kind": "Type",
   "resources.detail.space": "Scope",
-  "resources.detail.managedBy": "Managed by",
+  "resources.detail.managedBy": "Authority",
   "resources.detail.generation": "Observed generation",
   "resources.detail.resolution": "Placement lock",
   "resources.detail.locked": "Locked",

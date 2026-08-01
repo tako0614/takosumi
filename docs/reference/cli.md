@@ -86,7 +86,7 @@ takosumi accounts migrate-d1 --database-id takosumi-accounts --remote
 | `--database-id` | D1 のデータベース名または binding 名 |
 | `--wrangler-config` | 別のチェックアウトから実行するときの wrangler 設定 |
 | `--account-id` | Cloudflare のアカウント ID (既定と違う場合に必要) |
-| `--remote` / `--local` | 管理されている D1 か、手元の miniflare か。既定は `--remote` |
+| `--remote` / `--local` | リモートの D1 か、手元の miniflare か。既定は `--remote` |
 | `--env` | wrangler に渡す `--env` プロファイル |
 
 初回デプロイ前に動作を確かめるときは `--local` を使います。

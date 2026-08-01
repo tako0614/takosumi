@@ -5,6 +5,7 @@ import {
   InterfaceService,
   OutputBackedInterfaceInputResolver,
   validateCapsuleInterfaceBlueprints,
+  type RuntimeCapabilityReader,
 } from "../../../../core/domains/interfaces/mod.ts";
 import { createInMemoryResourceShapeStores } from "../../../../core/domains/resource-shape/mod.ts";
 import { seedCapsuleModel } from "../../../helpers/deploy-control/model_fixture.ts";
@@ -363,6 +364,107 @@ test("Principal oauth2 delivery requires the host issuer and mints only from an 
       })
     ).status.phase,
   ).toBe("NotReady");
+});
+
+test("Resource OAuth2 evidence uses the generic reader without a lifecycle write", async () => {
+  const stores = createInMemoryInterfaceStores();
+  const calls: Array<Record<string, unknown>> = [];
+  let reader: RuntimeCapabilityReader;
+  reader = {
+    read: async (input) => {
+      calls.push(input as unknown as Record<string, unknown>);
+      const iface = await stores.interfaces.get(input.interfaceId);
+      const binding = await stores.bindings.get(input.interfaceBindingId);
+      if (!iface || !binding) return undefined;
+      return {
+        resource: {
+          apiVersion: "takosumi.dev/v1alpha1",
+          kind: input.resourceKind,
+          metadata: {
+            name: "app",
+            space: input.workspaceId,
+            generation: 1,
+            managedBy: "opentofu",
+          },
+          spec: {},
+          status: {
+            phase: "Ready",
+            observedGeneration: 1,
+            resolution: {
+              selectedImplementation: "edge_worker",
+              target: "target-a",
+              locked: true,
+              portability: "portable",
+            },
+          },
+        },
+        resourceGeneration: 1,
+        resourceRevisionId: "run_apply_1",
+        nativeResources: [],
+        iface,
+        binding,
+      };
+    },
+  };
+  const service = new InterfaceService({
+    stores,
+    now: () => NOW,
+    newId: (prefix) => (prefix === "if" ? "if_resource" : "ifb_resource"),
+    oauth2ResourceAuthorizer: () => true,
+    runtimeCapabilityReader: reader,
+    credentialIssuer: {
+      issuePrincipalOAuth2Token: () =>
+        Promise.resolve({
+          accessToken: "unused",
+          expiresAt: "2026-07-13T12:01:00.000Z",
+        }),
+    },
+  });
+  const iface = await service.create({
+    workspaceId: "ws_runtime",
+    name: "resource-runtime",
+    ownerRef: {
+      kind: "Resource",
+      id: "tkrn:ws_runtime:EdgeWorker:app",
+    },
+    spec: {
+      type: "app.runtime",
+      version: "1",
+      document: {},
+      inputs: {
+        audience: { source: "literal", value: "https://runtime.example/" },
+      },
+      access: { visibility: "workspace", resourceUriInput: "audience" },
+    },
+  });
+  const binding = await service.createBinding(iface.metadata.id, {
+    subjectRef: { kind: "Principal", id: "principal_runtime" },
+    permissions: ["read"],
+    delivery: { type: "oauth2" },
+  });
+  expect(binding.status.phase).toBe("Ready");
+  expect(
+    await service.validatePrincipalOAuth2TokenEvidence({
+      workspaceId: "ws_runtime",
+      interfaceId: iface.metadata.id,
+      bindingId: binding.metadata.id,
+      interfaceResolvedRevision: iface.status.resolvedRevision,
+      subjectId: "principal_runtime",
+      permission: "read",
+      resource: "https://runtime.example/",
+    }),
+  ).toBe(true);
+  expect(calls).toHaveLength(1);
+  expect(calls[0]).toMatchObject({
+    workspaceId: "ws_runtime",
+    resourceId: "tkrn:ws_runtime:EdgeWorker:app",
+    resourceKind: "EdgeWorker",
+    interfaceId: iface.metadata.id,
+    interfaceBindingId: binding.metadata.id,
+    interfaceResolvedRevision: iface.status.resolvedRevision,
+    requiredPermission: "read",
+    audience: "https://runtime.example/",
+  });
 });
 
 test("oauth2 delivery never treats an arbitrary resolved URL as resource authority", async () => {

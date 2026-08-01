@@ -330,7 +330,7 @@ its `sourceSnapshotId` is present in the Source snapshot list.
 
 ## Deploy API / Resource Shape API
 
-`/v1/resources` is the Deploy API for provider-neutral managed Resources. It is
+`/v1/resources` is the Deploy API for provider-neutral Resources. It is
 the sole lifecycle authority for preview/apply/observe/refresh/import/delete and
 for canonical Resource, ResolutionLock, NativeResource, Run, status, Output,
 and audit evidence. The portable Takoform typed client, Takosumi CLI/dashboard,
@@ -693,10 +693,10 @@ pretending full vendor compatibility.
 
 The Cloudflare-specific import/deploy compatibility profile is retired and is
 not part of the supported v1 API or capability surface. Cloudflare-backed
-Targets remain provider-neutral managed Resources, and customer-owned
+Targets remain provider-neutral Resources, and customer-owned
 Cloudflare resources use a normal ProviderConnection and plain Stack flow.
 
-Compatibility profiles do not create managed hostnames. Runtime routes use a
+Compatibility profiles do not create hostnames implicitly. Runtime routes use a
 canonical `http.route` Interface plus InterfaceBinding, while hostname
 ownership belongs to the OSS reservation authority or the Operator/Cloud
 VerifiedDomain lifecycle. Routing caches and backend state are never hostname

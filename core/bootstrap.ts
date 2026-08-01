@@ -119,6 +119,7 @@ import {
   type InterfaceCredentialIssuer,
   type InterfaceOAuth2ResourceAuthorizer,
   type InterfaceStores,
+  type RuntimeCapabilityReader,
 } from "./domains/interfaces/mod.ts";
 import { createSqlInterfaceStores } from "./domains/interfaces/sql_stores.ts";
 import { canonicalInterfaceOAuth2ResourceUri } from "./domains/interfaces/oauth_resource.ts";
@@ -563,6 +564,8 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
   readonly resourceShapeSchemaRegistry?: ResourceShapeSchemaRegistry;
   /** Durable Takosumi-managed runtime Interface declarations and bindings. */
   readonly interfaceStores?: InterfaceStores;
+  /** Read-only exact Resource/ResolutionLock/Interface/Binding capability port. */
+  readonly runtimeCapabilityReader?: RuntimeCapabilityReader;
   /** Recoverable host materialization of canonical Interface/Binding state. */
   readonly interfaceProjectionSink?: InterfaceProjectionSink;
   /**
@@ -919,6 +922,8 @@ export interface TakosumiOperations {
   readonly runGroups: RunGroupsService;
   /** Runtime declarations shared by Capsule and Resource authoring flows. */
   readonly interfaces: InterfaceService;
+  /** Exact runtime capability evidence over the canonical control-plane rows. */
+  readonly runtimeCapabilityReader?: RuntimeCapabilityReader;
   /** Exact host-authenticated application owner for a canonical Resource. */
   readonly resourceCapsuleOwners?: {
     get(resourceId: string): Promise<ResourceCapsuleOwner | undefined>;
@@ -1727,6 +1732,9 @@ export async function createTakosumiService(
       : {}),
     ...(options.interfaceCredentialIssuer
       ? { credentialIssuer: options.interfaceCredentialIssuer }
+      : {}),
+    ...(options.runtimeCapabilityReader
+      ? { runtimeCapabilityReader: options.runtimeCapabilityReader }
       : {}),
     ...(options.interfaceBindingDeliveryHandlers
       ? { bindingDeliveryHandlers: options.interfaceBindingDeliveryHandlers }
@@ -2658,6 +2666,9 @@ export async function createTakosumiService(
     outputShares: outputSharesService,
     runGroups: runGroupsService,
     interfaces: interfaceService,
+    ...(options.runtimeCapabilityReader
+      ? { runtimeCapabilityReader: options.runtimeCapabilityReader }
+      : {}),
     ...(resourceShapeService
       ? {
           resourceCapsuleOwners: {
