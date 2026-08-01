@@ -85,6 +85,32 @@ export interface CommercialBillingPayment {
   readonly disputed: boolean;
 }
 
+export type CommercialBillingTransactionStatus = "charged" | "reversed";
+
+/** Customer-safe projection of one permanent Cloud wallet statement row. */
+export interface CommercialBillingTransaction {
+  readonly transactionId: string;
+  readonly status: CommercialBillingTransactionStatus;
+  readonly workspaceId: string;
+  readonly resourceId: string;
+  readonly resourceGeneration: number;
+  readonly interfaceRevision: string;
+  readonly pricingActivationId: string;
+  readonly meterId: string;
+  readonly operation: string;
+  readonly quantity: string;
+  readonly unit: string;
+  readonly amountUsdMicros: number;
+  readonly currency: string;
+  readonly acceptedAt: string;
+  readonly rejectedAt?: string;
+}
+
+export interface CommercialBillingTransactionPage {
+  readonly items: readonly CommercialBillingTransaction[];
+  readonly nextCursor?: string;
+}
+
 export interface CommercialBillingSummary {
   readonly configured: boolean;
   readonly account?: CommercialBillingAccount;
@@ -114,6 +140,11 @@ interface CommercialBillingCheckoutRequest extends CommercialBillingRequest {
   readonly cancelUrl: string;
 }
 
+interface CommercialBillingTransactionsRequest extends CommercialBillingRequest {
+  readonly limit?: number;
+  readonly cursor?: string;
+}
+
 export async function loadCommercialBilling(
   input: CommercialBillingRequest,
 ): Promise<CommercialBillingSnapshot> {
@@ -128,6 +159,20 @@ export async function loadCommercialBilling(
     configuration: parseCommercialBillingConfiguration(configuration),
     billing: parseCommercialBillingSummary(summary),
   };
+}
+
+export async function loadCommercialBillingTransactions(
+  input: CommercialBillingTransactionsRequest,
+): Promise<CommercialBillingTransactionPage> {
+  const query = workspaceSearch(input.workspaceId);
+  const limit = boundedTransactionLimit(input.limit);
+  query.set("limit", String(limit));
+  if (input.cursor) query.set("cursor", input.cursor);
+  return parseCommercialBillingTransactionPage(
+    await requestJson(
+      `${endpoint(input.basePath, "transactions")}?${query.toString()}`,
+    ),
+  );
 }
 
 export async function beginCommercialBillingCheckout(
@@ -229,6 +274,29 @@ export function parseCommercialBillingSummary(
             payment !== undefined,
         ),
     ),
+  };
+}
+
+export function parseCommercialBillingTransactionPage(
+  value: unknown,
+): CommercialBillingTransactionPage {
+  const record = objectValue(value);
+  if (!record || !Array.isArray(record.items)) {
+    throw new Error("billing service returned invalid usage transactions");
+  }
+  const items = uniqueTransactions(
+    record.items
+      .slice(0, 100)
+      .map(parseTransaction)
+      .filter(
+        (transaction): transaction is CommercialBillingTransaction =>
+          transaction !== undefined,
+      ),
+  );
+  const nextCursor = cursorValue(record.nextCursor);
+  return {
+    items,
+    ...(nextCursor ? { nextCursor } : {}),
   };
 }
 
@@ -419,6 +487,71 @@ function parsePayment(value: unknown): CommercialBillingPayment | undefined {
   };
 }
 
+function parseTransaction(
+  value: unknown,
+): CommercialBillingTransaction | undefined {
+  const record = objectValue(value);
+  if (!record) return undefined;
+  const transactionId = tokenValue(record.transactionId);
+  const status =
+    record.status === "charged" || record.status === "reversed"
+      ? record.status
+      : undefined;
+  const workspaceId = tokenValue(record.workspaceId);
+  const resourceId = tokenValue(record.resourceId);
+  const resourceGeneration = positiveNumber(record.resourceGeneration);
+  const interfaceRevision = stringValue(record.interfaceRevision);
+  const pricingActivationId = tokenValue(record.pricingActivationId);
+  const meterId = stringValue(record.meterId);
+  const operation = stringValue(record.operation);
+  const quantity =
+    typeof record.quantity === "string" &&
+    /^(?:0|[1-9][0-9]*)$/.test(record.quantity)
+      ? record.quantity
+      : undefined;
+  const unit = stringValue(record.unit);
+  const amountUsdMicros = nonNegativeNumber(record.amountUsdMicros);
+  const currency = currencyCode(record.currency);
+  const acceptedAt = isoTimestamp(record.acceptedAt);
+  const rejectedAt = isoTimestamp(record.rejectedAt);
+  if (
+    !transactionId ||
+    !status ||
+    !workspaceId ||
+    !resourceId ||
+    resourceGeneration === undefined ||
+    !interfaceRevision ||
+    !pricingActivationId ||
+    !meterId ||
+    !operation ||
+    quantity === undefined ||
+    !unit ||
+    amountUsdMicros === undefined ||
+    !currency ||
+    !acceptedAt ||
+    (status === "reversed" && !rejectedAt)
+  ) {
+    return undefined;
+  }
+  return {
+    transactionId,
+    status,
+    workspaceId,
+    resourceId,
+    resourceGeneration,
+    interfaceRevision,
+    pricingActivationId,
+    meterId,
+    operation,
+    quantity,
+    unit,
+    amountUsdMicros,
+    currency,
+    acceptedAt,
+    ...(rejectedAt ? { rejectedAt } : {}),
+  };
+}
+
 function accountStatus(value: unknown): CommercialBillingAccountStatus {
   return value === "active" ||
     value === "trialing" ||
@@ -517,6 +650,21 @@ function nonNegativeNumber(value: unknown): number | undefined {
     : undefined;
 }
 
+function positiveNumber(value: unknown): number | undefined {
+  const parsed = nonNegativeNumber(value);
+  return parsed !== undefined && parsed > 0 ? parsed : undefined;
+}
+
+function boundedTransactionLimit(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value)) return 25;
+  return Math.min(100, Math.max(1, Math.trunc(value)));
+}
+
+function cursorValue(value: unknown): string | undefined {
+  const cursor = stringValue(value);
+  return cursor && cursor.length <= 2_048 ? cursor : undefined;
+}
+
 function numberOptions(value: unknown): readonly number[] {
   if (!Array.isArray(value)) return [];
   return [
@@ -555,6 +703,17 @@ function uniqueById<T extends { readonly id: string }>(
   return values.filter((value) => {
     if (seen.has(value.id)) return false;
     seen.add(value.id);
+    return true;
+  });
+}
+
+function uniqueTransactions(
+  values: readonly CommercialBillingTransaction[],
+): readonly CommercialBillingTransaction[] {
+  const seen = new Set<string>();
+  return values.filter((value) => {
+    if (seen.has(value.transactionId)) return false;
+    seen.add(value.transactionId);
     return true;
   });
 }

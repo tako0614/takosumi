@@ -32,7 +32,9 @@ import {
   type CommercialBillingAutoRechargeSettings,
   type CommercialBillingCustomerType,
   type CommercialBillingPayment,
+  type CommercialBillingTransaction,
   loadCommercialBilling,
+  loadCommercialBillingTransactions,
   openCommercialBillingPortal,
   updateCommercialBillingAutoRecharge,
 } from "../../lib/commercial-billing.ts";
@@ -60,10 +62,25 @@ const PAYMENT_STATUS_KEYS: Readonly<Record<string, MessageKey>> = {
   disputed: "billing.commercial.payment.status.disputed",
 };
 
+const TRANSACTION_STATUS_KEYS: Readonly<Record<string, MessageKey>> = {
+  charged: "billing.commercial.transaction.status.charged",
+  reversed: "billing.commercial.transaction.status.reversed",
+};
+const TRANSACTION_PAGE_LIMIT = 20;
+
 export default function CommercialBillingPanel(props: Props) {
   const [snapshot, { refetch }] = createResource(
     () => ({ basePath: props.basePath, workspaceId: props.workspaceId }),
     loadCommercialBilling,
+  );
+  const [transactionPage, { refetch: refetchTransactions }] = createResource(
+    () => ({ basePath: props.basePath, workspaceId: props.workspaceId }),
+    ({ basePath, workspaceId }) =>
+      loadCommercialBillingTransactions({
+        basePath,
+        workspaceId,
+        limit: TRANSACTION_PAGE_LIMIT,
+      }),
   );
   const [customerType, setCustomerType] =
     createSignal<CommercialBillingCustomerType>("individual");
@@ -74,6 +91,14 @@ export default function CommercialBillingPanel(props: Props) {
   const [actionError, setActionError] = createSignal<string>();
   const [autoRecharge, setAutoRecharge] =
     createSignal<CommercialBillingAutoRechargeSettings>();
+  const [transactionItems, setTransactionItems] = createSignal<
+    readonly CommercialBillingTransaction[]
+  >([]);
+  const [transactionNextCursor, setTransactionNextCursor] =
+    createSignal<string>();
+  const [transactionError, setTransactionError] = createSignal<unknown>();
+  const [transactionLoadMoreBusy, setTransactionLoadMoreBusy] =
+    createSignal(false);
   const checkoutResult = initialCheckoutResult();
 
   createEffect(() => {
@@ -84,6 +109,16 @@ export default function CommercialBillingPanel(props: Props) {
     if (current?.billing.credits.autoRecharge) {
       setAutoRecharge(current.billing.credits.autoRecharge);
     }
+  });
+
+  createEffect(() => {
+    const page = transactionPage();
+    if (page) {
+      setTransactionItems(page.items);
+      setTransactionNextCursor(page.nextCursor);
+      setTransactionError(undefined);
+    }
+    if (transactionPage.error) setTransactionError(transactionPage.error);
   });
 
   const hasEstablishedProfile = createMemo(() =>
@@ -140,6 +175,50 @@ export default function CommercialBillingPanel(props: Props) {
           )}
         </Show>
       ),
+    },
+  ]);
+
+  const transactionColumns = createMemo<
+    readonly Column<CommercialBillingTransaction>[]
+  >(() => [
+    {
+      header: t("billing.commercial.transaction.time"),
+      cell: (transaction) => formatDate(transaction.acceptedAt),
+    },
+    {
+      header: t("billing.commercial.transaction.status"),
+      cell: (transaction) => (
+        <Badge tone={transactionTone(transaction)}>
+          {transactionStatusLabel(transaction)}
+        </Badge>
+      ),
+    },
+    {
+      header: t("billing.commercial.transaction.resource"),
+      cell: (transaction) => (
+        <span>
+          {transaction.resourceId}
+          <small>{transaction.workspaceId}</small>
+        </span>
+      ),
+    },
+    {
+      header: t("billing.commercial.transaction.operation"),
+      cell: (transaction) => (
+        <span>
+          {transaction.operation}
+          <small>{transaction.meterId}</small>
+        </span>
+      ),
+    },
+    {
+      header: t("billing.commercial.transaction.quantity"),
+      cell: (transaction) => `${transaction.quantity} ${transaction.unit}`,
+    },
+    {
+      header: t("billing.commercial.transaction.amount"),
+      align: "right",
+      cell: (transaction) => formatTransactionAmount(transaction),
     },
   ]);
 
@@ -213,6 +292,27 @@ export default function CommercialBillingPanel(props: Props) {
       autoRecharge() ??
       snapshot()?.configuration.credits.autoRecharge.defaultSettings;
     if (current) setAutoRecharge({ ...current, ...patch });
+  };
+
+  const loadMoreTransactions = async () => {
+    const cursor = transactionNextCursor();
+    if (!cursor || transactionLoadMoreBusy()) return;
+    setTransactionLoadMoreBusy(true);
+    setTransactionError(undefined);
+    try {
+      const page = await loadCommercialBillingTransactions({
+        basePath: props.basePath,
+        workspaceId: props.workspaceId,
+        limit: TRANSACTION_PAGE_LIMIT,
+        cursor,
+      });
+      setTransactionItems((current) => [...current, ...page.items]);
+      setTransactionNextCursor(page.nextCursor);
+    } catch (error) {
+      setTransactionError(error);
+    } finally {
+      setTransactionLoadMoreBusy(false);
+    }
   };
 
   return (
@@ -567,6 +667,56 @@ export default function CommercialBillingPanel(props: Props) {
             </Card>
 
             <Card class="wb-billing-history">
+              <CardHeader
+                title={t("billing.commercial.transaction.title")}
+                subtitle={t("billing.commercial.transaction.subtitle")}
+                actions={<ReceiptText size={20} aria-hidden="true" />}
+              />
+              <div class="wb-billing-history-body">
+                <DataTable
+                  columns={transactionColumns()}
+                  rows={transactionItems()}
+                  loading={transactionPage.loading}
+                  error={
+                    transactionError()
+                      ? t("billing.commercial.transaction.error", {
+                          message: friendlyError(transactionError(), t)
+                            .message,
+                        })
+                      : undefined
+                  }
+                  rowKey={(transaction) => transaction.transactionId}
+                  empty={t("billing.commercial.transaction.empty")}
+                />
+                <Show when={transactionError()}>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => void refetchTransactions()}
+                  >
+                    {t("common.retry")}
+                  </Button>
+                </Show>
+                <Show
+                  when={
+                    transactionNextCursor() &&
+                    !transactionPage.loading &&
+                    !transactionError()
+                  }
+                >
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    busy={transactionLoadMoreBusy()}
+                    onClick={() => void loadMoreTransactions()}
+                  >
+                    {t("billing.commercial.transaction.more")}
+                  </Button>
+                </Show>
+              </div>
+            </Card>
+
+            <Card class="wb-billing-history">
               <details>
                 <summary>
                   <span>
@@ -634,6 +784,33 @@ function paymentTone(
     return "warn";
   if (payment.paid) return "ok";
   return "muted";
+}
+
+function formatTransactionAmount(
+  transaction: CommercialBillingTransaction,
+): string {
+  try {
+    return new Intl.NumberFormat(intlLocale(), {
+      style: "currency",
+      currency: transaction.currency,
+      currencyDisplay: "code",
+    }).format(transaction.amountUsdMicros / 1_000_000);
+  } catch {
+    return `${transaction.currency} ${transaction.amountUsdMicros}`;
+  }
+}
+
+function transactionStatusLabel(
+  transaction: CommercialBillingTransaction,
+): string {
+  const key = TRANSACTION_STATUS_KEYS[transaction.status];
+  return key ? t(key) : t("billing.commercial.status.unknown");
+}
+
+function transactionTone(
+  transaction: CommercialBillingTransaction,
+): "ok" | "warn" | "danger" | "muted" {
+  return transaction.status === "reversed" ? "warn" : "ok";
 }
 
 function billingAccountStatusLabel(account: CommercialBillingAccount): string {

@@ -1728,4 +1728,19 @@ export const ja = {
   "billing.commercial.payment.status.partiallyRefunded": "一部返金済み",
   "billing.commercial.payment.status.refunded": "返金済み",
   "billing.commercial.payment.status.disputed": "異議申し立て中",
+  "billing.commercial.transaction.title": "利用明細",
+  "billing.commercial.transaction.subtitle":
+    "このワークスペースの課金済み・取り消し済みの利用明細です。",
+  "billing.commercial.transaction.empty": "利用明細はまだありません。",
+  "billing.commercial.transaction.error":
+    "利用明細を読み込めませんでした: {message}",
+  "billing.commercial.transaction.more": "さらに読み込む",
+  "billing.commercial.transaction.time": "日時",
+  "billing.commercial.transaction.status": "状態",
+  "billing.commercial.transaction.resource": "リソース",
+  "billing.commercial.transaction.operation": "操作 / メーター",
+  "billing.commercial.transaction.quantity": "数量",
+  "billing.commercial.transaction.amount": "金額",
+  "billing.commercial.transaction.status.charged": "課金済み",
+  "billing.commercial.transaction.status.reversed": "取り消し済み",
 } as const;

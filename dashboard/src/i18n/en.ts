@@ -1717,4 +1717,19 @@ export const en: Record<keyof typeof ja, string> = {
   "billing.commercial.payment.status.partiallyRefunded": "Partially refunded",
   "billing.commercial.payment.status.refunded": "Refunded",
   "billing.commercial.payment.status.disputed": "Disputed",
+  "billing.commercial.transaction.title": "Usage transactions",
+  "billing.commercial.transaction.subtitle":
+    "Charged and reversed wallet usage for this Workspace.",
+  "billing.commercial.transaction.empty": "No usage transactions yet.",
+  "billing.commercial.transaction.error":
+    "Could not load usage transactions: {message}",
+  "billing.commercial.transaction.more": "Load more",
+  "billing.commercial.transaction.time": "Time",
+  "billing.commercial.transaction.status": "Status",
+  "billing.commercial.transaction.resource": "Resource",
+  "billing.commercial.transaction.operation": "Operation / meter",
+  "billing.commercial.transaction.quantity": "Quantity",
+  "billing.commercial.transaction.amount": "Amount",
+  "billing.commercial.transaction.status.charged": "Charged",
+  "billing.commercial.transaction.status.reversed": "Reversed",
 };

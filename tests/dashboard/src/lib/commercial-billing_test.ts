@@ -3,8 +3,10 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
   commercialBillingDestination,
+  loadCommercialBillingTransactions,
   parseCommercialBillingConfiguration,
   parseCommercialBillingSummary,
+  parseCommercialBillingTransactionPage,
 } from "../../../../dashboard/src/lib/commercial-billing.ts";
 
 test("commercial billing configuration validates bounded credit choices", () => {
@@ -259,4 +261,89 @@ test("native commercial billing stays provider-neutral and uses extension APIs",
   expect(client).toContain('"portal"');
   expect(client).toContain('credentials: "include"');
   expect(client).not.toContain("Stripe");
+});
+
+test("commercial transaction parser keeps the customer-safe statement shape", () => {
+  const page = parseCommercialBillingTransactionPage({
+    items: [
+      {
+        transactionId: "op_1",
+        status: "reversed",
+        workspaceId: "workspace_1",
+        resourceId: "tkrn:resource_1",
+        resourceGeneration: 2,
+        interfaceRevision: "v1",
+        pricingActivationId: "pricing_1",
+        meterId: "managed.operation",
+        operation: "object.put",
+        quantity: "3",
+        unit: "request",
+        amountUsdMicros: 250,
+        currency: "USD",
+        acceptedAt: "2026-07-29T01:02:03.000Z",
+        rejectedAt: "2026-07-29T02:02:03.000Z",
+        billingSubjectId: "must-not-escape",
+        requestDigest: "sha256:private",
+        proofDigest: "sha256:private",
+      },
+    ],
+    nextCursor: "cursor_2",
+  });
+
+  expect(page).toEqual({
+    items: [
+      {
+        transactionId: "op_1",
+        status: "reversed",
+        workspaceId: "workspace_1",
+        resourceId: "tkrn:resource_1",
+        resourceGeneration: 2,
+        interfaceRevision: "v1",
+        pricingActivationId: "pricing_1",
+        meterId: "managed.operation",
+        operation: "object.put",
+        quantity: "3",
+        unit: "request",
+        amountUsdMicros: 250,
+        currency: "USD",
+        acceptedAt: "2026-07-29T01:02:03.000Z",
+        rejectedAt: "2026-07-29T02:02:03.000Z",
+      },
+    ],
+    nextCursor: "cursor_2",
+  });
+  expect(JSON.stringify(page)).not.toContain("billingSubjectId");
+  expect(JSON.stringify(page)).not.toContain("requestDigest");
+  expect(JSON.stringify(page)).not.toContain("proofDigest");
+});
+
+test("commercial transaction client requests a bounded keyset page", async () => {
+  const originalFetch = globalThis.fetch;
+  let requested: Request | undefined;
+  globalThis.fetch = (async (input, init) => {
+    requested = new Request(
+      new URL(String(input), "https://app.takosumi.com"),
+      init,
+    );
+    return Response.json({ items: [] });
+  }) as typeof fetch;
+  try {
+    const page = await loadCommercialBillingTransactions({
+      basePath: "/v1/billing",
+      workspaceId: "workspace_1",
+      limit: 999,
+      cursor: "cursor_2",
+    });
+    expect(page).toEqual({ items: [] });
+    expect(requested?.url).toContain("/v1/billing/transactions?");
+    expect(new URL(requested!.url).searchParams.get("workspaceId")).toBe(
+      "workspace_1",
+    );
+    expect(new URL(requested!.url).searchParams.get("limit")).toBe("100");
+    expect(new URL(requested!.url).searchParams.get("cursor")).toBe(
+      "cursor_2",
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
