@@ -27,6 +27,11 @@ type UniqueIndexMirror = {
   unique: boolean;
 };
 
+type UniqueConstraintMirror = {
+  name: string;
+  columns: readonly string[];
+};
+
 type TableLike = Parameters<typeof getTableName>[0];
 
 type SqlitePragmaTableInfoRow = {
@@ -115,6 +120,17 @@ function pgUniqueIndexesOf(
   );
 }
 
+function sqliteUniqueConstraintsOf(
+  table: Parameters<typeof getSqliteTableConfig>[0],
+): UniqueConstraintMirror[] {
+  return [...getSqliteTableConfig(table).uniqueConstraints]
+    .map((constraint) => ({
+      name: constraint.getName() ?? "",
+      columns: constraint.columns.map((column) => column.name),
+    }))
+    .sort((left, right) => left.name.localeCompare(right.name));
+}
+
 async function liveD1ColumnsOf(
   db: SqliteFakeD1,
   tableName: string,
@@ -152,6 +168,29 @@ async function liveD1IndexesOf(
     });
   }
   return normalizeIndexes(indexes);
+}
+
+async function liveD1InlineUniqueConstraintsOf(
+  db: SqliteFakeD1,
+  tableName: string,
+): Promise<UniqueConstraintMirror[]> {
+  const indexRows = await db
+    .prepare(`pragma index_list(${quoteSqliteIdentifier(tableName)})`)
+    .all<SqlitePragmaIndexListRow>();
+  const constraints: UniqueConstraintMirror[] = [];
+  for (const row of indexRows.results ?? []) {
+    if (row.origin !== "u") continue;
+    const infoRows = await db
+      .prepare(`pragma index_info(${quoteSqliteIdentifier(row.name)})`)
+      .all<SqlitePragmaIndexInfoRow>();
+    constraints.push({
+      name: row.name,
+      columns: (infoRows.results ?? []).map((info) => info.name),
+    });
+  }
+  return constraints.sort((left, right) =>
+    left.columns.join(",").localeCompare(right.columns.join(",")),
+  );
 }
 
 function quoteSqliteIdentifier(identifier: string): string {
@@ -461,6 +500,49 @@ test("Worker D1 bootstrap mirrors every logical D1 Drizzle index", async () => {
   }
 });
 
+test("D1 Service Form definition parent keys are named inline UNIQUE constraints", async () => {
+  expect(sqliteUniqueConstraintsOf(d1Schema.serviceFormDefinitions)).toEqual([
+    {
+      name: "service_form_definitions_ref_package_unique",
+      columns: ["form_ref_key", "package_digest"],
+    },
+  ]);
+
+  const db = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(db);
+  for (const table of [
+    "service_form_definitions",
+    "service_form_definitions__takoform_v1alpha1",
+  ]) {
+    const inline = await liveD1InlineUniqueConstraintsOf(db, table);
+    expect(inline).toHaveLength(1);
+    expect(inline[0]?.columns).toEqual(["form_ref_key", "package_digest"]);
+    const tableSql = await db
+      .prepare(
+        `select sql from sqlite_master
+         where type = 'table' and name = ?`,
+      )
+      .bind(table)
+      .first<{ readonly sql: string }>();
+    expect(tableSql?.sql).toMatch(
+      /\bconstraint\s+[^\s]+_ref_package_unique\s+unique\s*\(\s*form_ref_key\s*,\s*package_digest\s*\)/iu,
+    );
+    expect(
+      await db
+        .prepare(
+          `select name from sqlite_master
+           where type = 'index' and name = ?`,
+        )
+        .bind(
+          table === "service_form_definitions"
+            ? "service_form_definitions_ref_package_unique"
+            : "service_form_definitions__takoform_v1alpha1_ref_package_unique",
+        )
+        .first(),
+    ).toBeNull();
+  }
+});
+
 test("Worker D1 bootstrap records canonical schema migration ledger", async () => {
   const db = new SqliteFakeD1();
   await ensureD1OpenTofuLedgerSchema(db);
@@ -482,7 +564,7 @@ test("Worker D1 bootstrap records canonical schema migration ledger", async () =
   expect(rows.map((row) => row.version)).toEqual([
     1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 16, 17, 18, 19, 20, 21, 22, 23, 24,
     25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43,
-    44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59,
+    44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60,
   ]);
   expect(rows.map((row) => row.name)).toEqual([
     "d1_opentofu_connections_and_secret_blobs_shape",
@@ -541,6 +623,7 @@ test("Worker D1 bootstrap records canonical schema migration ledger", async () =
     "d1_observability_schema",
     "d1_interface_authorization_indexes",
     "d1_portable_host_idempotency",
+    "d1_service_form_restore_safe_unique_constraints",
   ]);
   for (const row of rows) {
     expect(row.checksum).toMatch(/^sha256:[0-9a-f]{64}$/);

@@ -3961,6 +3961,135 @@ const D1_SERVICE_FORM_TAKOFORM_V0_STATEMENTS = [
     on service_form_activations (form_ref_key, package_digest)`,
 ] as const;
 
+/**
+ * Rebuild both Service Form definition/activation pairs with the composite
+ * parent key declared inline. D1 restore exports replay table rows before
+ * external indexes, so the activation foreign key must be backed by a table
+ * UNIQUE constraint during row import. The old activation tables are dropped
+ * before their parent definition tables, and every copy/drop/rename/index step
+ * is submitted with the migration ledger row as one atomic batch.
+ */
+const D1_SERVICE_FORM_RESTORE_SAFE_STATEMENTS = [
+  `create table service_form_definitions__takosumi_v60 (
+    form_ref_key text primary key,
+    package_digest text not null,
+    type text not null,
+    version text not null,
+    schema_digest text not null,
+    record_json text not null,
+    installed_at text not null,
+    constraint service_form_definitions_ref_package_unique
+      unique (form_ref_key, package_digest),
+    foreign key (package_digest) references service_form_packages(package_digest)
+  )`,
+  `create table service_form_activations__takosumi_v60 (
+    id text primary key,
+    form_ref_key text not null,
+    package_digest text not null,
+    scope_type text not null check (scope_type in ('operator','workspace','space')),
+    scope_id text,
+    status text not null check (status in ('active','inactive')),
+    revision integer not null check (revision >= 1),
+    record_json text not null,
+    created_at text not null,
+    updated_at text not null,
+    foreign key (form_ref_key, package_digest)
+      references service_form_definitions__takosumi_v60(form_ref_key, package_digest),
+    check (
+      (scope_type = 'operator' and scope_id is null)
+      or (scope_type in ('workspace','space') and length(trim(scope_id)) > 0)
+    )
+  )`,
+  `create table service_form_definitions__takoform_v1alpha1__takosumi_v60 (
+    form_ref_key text primary key,
+    package_digest text not null,
+    api_version text not null,
+    kind text not null,
+    definition_version text not null,
+    schema_digest text not null,
+    record_json text not null,
+    installed_at text not null,
+    constraint service_form_definitions__takoform_v1alpha1_ref_package_unique
+      unique (form_ref_key, package_digest),
+    foreign key (package_digest)
+      references service_form_packages__takoform_v1alpha1(package_digest)
+  )`,
+  `create table service_form_activations__takoform_v1alpha1__takosumi_v60 (
+    id text primary key,
+    form_ref_key text not null,
+    package_digest text not null,
+    scope_type text not null check (scope_type in ('operator','workspace','space')),
+    scope_id text,
+    status text not null check (status in ('active','inactive')),
+    revision integer not null check (revision >= 1),
+    record_json text not null,
+    created_at text not null,
+    updated_at text not null,
+    foreign key (form_ref_key, package_digest)
+      references service_form_definitions__takoform_v1alpha1__takosumi_v60(
+        form_ref_key, package_digest
+      ),
+    check (
+      (scope_type = 'operator' and scope_id is null)
+      or (scope_type in ('workspace','space') and length(trim(scope_id)) > 0)
+    )
+  )`,
+  `insert into service_form_definitions__takosumi_v60 (
+     form_ref_key, package_digest, type, version, schema_digest, record_json,
+     installed_at
+   ) select form_ref_key, package_digest, type, version, schema_digest,
+            record_json, installed_at
+       from service_form_definitions`,
+  `insert into service_form_definitions__takoform_v1alpha1__takosumi_v60 (
+     form_ref_key, package_digest, api_version, kind, definition_version,
+     schema_digest, record_json, installed_at
+   ) select form_ref_key, package_digest, api_version, kind, definition_version,
+            schema_digest, record_json, installed_at
+       from service_form_definitions__takoform_v1alpha1`,
+  `insert into service_form_activations__takosumi_v60 (
+     id, form_ref_key, package_digest, scope_type, scope_id, status, revision,
+     record_json, created_at, updated_at
+   ) select id, form_ref_key, package_digest, scope_type, scope_id, status,
+            revision, record_json, created_at, updated_at
+       from service_form_activations`,
+  `insert into service_form_activations__takoform_v1alpha1__takosumi_v60 (
+     id, form_ref_key, package_digest, scope_type, scope_id, status, revision,
+     record_json, created_at, updated_at
+   ) select id, form_ref_key, package_digest, scope_type, scope_id, status,
+            revision, record_json, created_at, updated_at
+       from service_form_activations__takoform_v1alpha1`,
+  `drop table service_form_activations`,
+  `drop table service_form_activations__takoform_v1alpha1`,
+  `drop table service_form_definitions`,
+  `drop table service_form_definitions__takoform_v1alpha1`,
+  `alter table service_form_definitions__takosumi_v60
+    rename to service_form_definitions`,
+  `alter table service_form_activations__takosumi_v60
+    rename to service_form_activations`,
+  `alter table service_form_definitions__takoform_v1alpha1__takosumi_v60
+    rename to service_form_definitions__takoform_v1alpha1`,
+  `alter table service_form_activations__takoform_v1alpha1__takosumi_v60
+    rename to service_form_activations__takoform_v1alpha1`,
+  `create index service_form_definitions_package_idx
+    on service_form_definitions (package_digest)`,
+  `create index service_form_definitions_type_installed_ref_idx
+    on service_form_definitions (type, installed_at, form_ref_key)`,
+  `create index service_form_activations_scope_status_updated_id_idx
+    on service_form_activations (scope_type, scope_id, status, updated_at, id)`,
+  `create index service_form_activations_identity_idx
+    on service_form_activations (form_ref_key, package_digest)`,
+  `create index service_form_definitions__takoform_v1alpha1_package_idx
+    on service_form_definitions__takoform_v1alpha1 (package_digest)`,
+  `create index service_form_definitions__takoform_v1alpha1_kind_installed_ref_idx
+    on service_form_definitions__takoform_v1alpha1
+      (kind, installed_at, form_ref_key)`,
+  `create index service_form_activations__takoform_v1alpha1_scope_status_updated_id_idx
+    on service_form_activations__takoform_v1alpha1
+      (scope_type, scope_id, status, updated_at, id)`,
+  `create index service_form_activations__takoform_v1alpha1_identity_idx
+    on service_form_activations__takoform_v1alpha1 (form_ref_key, package_digest)`,
+] as const;
+
 const D1_OFFERING_CATALOG_STATEMENTS = [
   `create table if not exists offering_catalogs (
     catalog_key text primary key,
@@ -4653,7 +4782,21 @@ export async function ensureD1OpenTofuLedgerSchema(
   const serviceFormIndexStatements = (
     await d1ServiceFormRegistryReplayStatements(db)
   ).filter((sql) => isD1IndexStatement(sql));
-  for (const sql of [...indexStatements, ...serviceFormIndexStatements]) {
+  const hasRestoreSafeServiceFormUnique =
+    await d1ServiceFormDefinitionHasInlineUnique(db);
+  const bootstrapIndexStatements = indexStatements.filter(
+    (sql) =>
+      !(
+        hasRestoreSafeServiceFormUnique &&
+        /^create\s+unique\s+index\s+(?:if\s+not\s+exists\s+)?service_form_definitions_ref_package_unique\b/iu.test(
+          sql.trimStart(),
+        )
+      ),
+  );
+  for (const sql of [
+    ...bootstrapIndexStatements,
+    ...serviceFormIndexStatements,
+  ]) {
     await db.prepare(sql).run();
   }
 }
@@ -6704,6 +6847,22 @@ ${D1_PORTABLE_HOST_IDEMPOTENCY_SCHEMA_STATEMENTS.join("\n---\n")}
       );
     },
   },
+  {
+    version: 60,
+    name: "d1_service_form_restore_safe_unique_constraints",
+    checksumSource: () => `
+Service Form current and retained v1alpha1 definition parent keys are inline named UNIQUE constraints
+external composite unique indexes are removed so D1 restore row order retains valid activation foreign keys
+current and archived definitions and activations preserve all rows columns checks foreign keys and nonunique indexes
+${D1_SERVICE_FORM_RESTORE_SAFE_STATEMENTS.join("\n---\n")}
+`,
+    async atomicStatements() {
+      return D1_SERVICE_FORM_RESTORE_SAFE_STATEMENTS;
+    },
+    async apply(db) {
+      await runD1AtomicSql(db, D1_SERVICE_FORM_RESTORE_SAFE_STATEMENTS);
+    },
+  },
 ] as const satisfies readonly D1OpenTofuSchemaMigration[];
 
 /**
@@ -8316,6 +8475,23 @@ async function d1TableExists(db: D1Database, table: string): Promise<boolean> {
     .bind(table)
     .first<{ name?: string }>();
   return result?.name === table;
+}
+
+async function d1ServiceFormDefinitionHasInlineUnique(
+  db: D1Database,
+): Promise<boolean> {
+  const result = await db
+    .prepare(
+      `select sql from sqlite_master
+       where type = 'table' and name = 'service_form_definitions'`,
+    )
+    .first<{ readonly sql?: string | null }>();
+  return (
+    typeof result?.sql === "string" &&
+    /\bconstraint\s+service_form_definitions_ref_package_unique\s+unique\s*\(\s*form_ref_key\s*,\s*package_digest\s*\)/iu.test(
+      result.sql,
+    )
+  );
 }
 
 async function d1ColumnNames(
