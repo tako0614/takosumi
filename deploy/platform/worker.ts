@@ -3494,7 +3494,6 @@ export interface PlatformCompatibilityReadyResourceEvidence {
   readonly resourceRevisionId: string;
   readonly nativeResources: readonly NativeResourceRef[];
   readonly interface?: Interface;
-  readonly interfaceBindings?: readonly import("takosumi-contract/interfaces").InterfaceBinding[];
 }
 
 /** The only authority given to a data-plane compatibility profile. */
@@ -4344,9 +4343,6 @@ async function resolvePlatformCompatibilityReadyResource(
   }
 
   let resolvedInterface: Interface | undefined;
-  let resolvedInterfaceBindings:
-    | readonly import("takosumi-contract/interfaces").InterfaceBinding[]
-    | undefined;
   if (input.interface) {
     const subject = safePlatformExtensionSubject(verified.session.subject);
     const interfaceId = safePlatformExtensionContextId(input.interface.id);
@@ -4370,7 +4366,7 @@ async function resolvePlatformCompatibilityReadyResource(
             ),
           ]
         : await operations.interfaces.listAuthorizedForPrincipal(
-            { workspaceId: space },
+            { workspaceId: space, limit: 2 },
             subject,
             permission,
           );
@@ -4384,12 +4380,6 @@ async function resolvePlatformCompatibilityReadyResource(
       });
       if (!candidate) return undefined;
       resolvedInterface = candidate;
-      resolvedInterfaceBindings =
-        await operations.interfaces.listAuthorizedBindingsForPrincipal(
-          candidate.metadata.id,
-          subject,
-          permission,
-        );
     } catch {
       return undefined;
     }
@@ -4398,9 +4388,6 @@ async function resolvePlatformCompatibilityReadyResource(
   return structuredClone({
     ...evidence,
     ...(resolvedInterface ? { interface: resolvedInterface } : {}),
-    ...(resolvedInterfaceBindings
-      ? { interfaceBindings: resolvedInterfaceBindings }
-      : {}),
   });
 }
 
