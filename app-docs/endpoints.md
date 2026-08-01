@@ -94,17 +94,11 @@ GET /__takosumi/platform/extensions
       "compatibilityProfiles": [
         { "profile": "compat.s3.v1", "planes": ["data"] }
       ]
-    },
-    {
-      "id": "cloud-usage",
-      "basePath": "/cloud/usage",
-      "configured": true,
-      "requiredScopes": ["cloud.usage.write"]
     }
   ],
   "summary": {
-    "total": 3,
-    "configured": 3,
+    "total": 2,
+    "configured": 2,
     "missing": 0
   }
 }
