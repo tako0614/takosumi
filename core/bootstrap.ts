@@ -981,6 +981,19 @@ export interface TakosumiOperations {
       | undefined
     >;
     /**
+     * Cheap exact Ready revision fence for callers holding pinned evidence.
+     * This deliberately reads only the canonical Resource and ResolutionLock
+     * rows; it never reconstructs a ResourceObject through the service layer.
+     */
+    fenceReadyResource(input: {
+      readonly resourceId: string;
+      readonly space: string;
+      readonly kind: ResourceShapeKind;
+      readonly name: string;
+      readonly resourceGeneration: number;
+      readonly resourceRevisionId: string;
+    }): Promise<boolean>;
+    /**
      * Internal host inventory for bounded reconciliation jobs. This is not
      * mounted as an HTTP route and exposes only coherent Ready evidence.
      */
@@ -2748,6 +2761,70 @@ export async function createTakosumiService(
                 resourceRevisionId,
                 nativeResources: lockBefore.nativeResources ?? [],
               });
+            },
+            fenceReadyResource: async (input: {
+              readonly resourceId: string;
+              readonly space: string;
+              readonly kind: ResourceShapeKind;
+              readonly name: string;
+              readonly resourceGeneration: number;
+              readonly resourceRevisionId: string;
+            }) => {
+              const expectedResourceId = formatResourceShapeId(
+                input.space,
+                input.kind,
+                input.name,
+              );
+              if (
+                expectedResourceId !== input.resourceId ||
+                !Number.isSafeInteger(input.resourceGeneration) ||
+                input.resourceGeneration < 1 ||
+                typeof input.resourceRevisionId !== "string" ||
+                input.resourceRevisionId.trim() !== input.resourceRevisionId ||
+                input.resourceRevisionId.length === 0 ||
+                input.resourceRevisionId.length > 256 ||
+                /[\u0000-\u001f\u007f]/.test(input.resourceRevisionId)
+              ) {
+                return false;
+              }
+              const [record, lock] = await Promise.all([
+                resourceShapeStores.resources.get(input.resourceId),
+                resourceShapeStores.locks.get(input.resourceId),
+              ]);
+              if (
+                !record ||
+                !lock ||
+                record.id !== input.resourceId ||
+                record.spaceId !== input.space ||
+                record.kind !== input.kind ||
+                record.name !== input.name ||
+                record.phase !== "Ready" ||
+                record.generation !== input.resourceGeneration ||
+                record.observedGeneration !== input.resourceGeneration ||
+                lock.resourceId !== input.resourceId ||
+                lock.locked !== true ||
+                typeof lock.selectedImplementation !== "string" ||
+                lock.selectedImplementation.trim().length === 0 ||
+                typeof lock.target !== "string" ||
+                lock.target.trim().length === 0 ||
+                lock.updatedAt !== record.updatedAt ||
+                (lock.nativeResources !== undefined &&
+                  (!Array.isArray(lock.nativeResources) ||
+                    lock.nativeResources.some(
+                      (native) =>
+                        !native ||
+                        typeof native.type !== "string" ||
+                        native.type.trim().length === 0 ||
+                        typeof native.id !== "string" ||
+                        native.id.trim().length === 0,
+                    )))
+              ) {
+                return false;
+              }
+              return (
+                canonicalReadyResourceRevisionId(record, lock) ===
+                input.resourceRevisionId
+              );
             },
             listReadyResourcesPage: async (input: {
               readonly kind: ResourceShapeKind;

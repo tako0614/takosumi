@@ -3003,6 +3003,17 @@ export interface PlatformCanonicalReadyResourceInventory {
     readonly kind: ResourceShapeKind;
     readonly name: string;
   }): Promise<PlatformCanonicalReadyResourceInventoryItem | undefined>;
+  /**
+   * Cheap exact Ready revision fence for previously pinned Resource evidence.
+   * This composition port reads only the canonical Resource and
+   * ResolutionLock rows; it never reconstructs a ResourceObject or opens a
+   * public route.
+   */
+  fence(input: {
+    readonly resourceId: string;
+    readonly resourceGeneration: number;
+    readonly resourceRevisionId: string;
+  }): Promise<boolean>;
   list(input: {
     readonly kind: ResourceShapeKind;
     /** Optional exact Workspace bound for latency-sensitive graph joins. */
@@ -4036,6 +4047,38 @@ export function createPlatformCanonicalReadyResourceInventory(
             ...evidence,
           })
         : undefined;
+    },
+    fence: async (
+      input: Parameters<PlatformCanonicalReadyResourceInventory["fence"]>[0],
+    ): Promise<boolean> => {
+      if (
+        typeof input.resourceId !== "string" ||
+        !Number.isSafeInteger(input.resourceGeneration) ||
+        input.resourceGeneration < 1 ||
+        typeof input.resourceRevisionId !== "string" ||
+        input.resourceRevisionId.trim() !== input.resourceRevisionId ||
+        input.resourceRevisionId.length === 0 ||
+        input.resourceRevisionId.length > 256 ||
+        /[\u0000-\u001f\u007f]/.test(input.resourceRevisionId)
+      ) {
+        return false;
+      }
+      const parsed = platformCanonicalResourceId(input.resourceId);
+      if (!parsed) return false;
+      const space = safePlatformExtensionContextId(parsed.workspaceId);
+      const name = safePlatformCompatibilityResourceName(parsed.name);
+      if (!space || !name || !isResourceShapeKind(parsed.kind)) return false;
+      const operations = await takosumiOperationsFor(env);
+      const fence = operations.resourceCompatibility?.fenceReadyResource;
+      if (!fence) return false;
+      return await fence({
+        resourceId: input.resourceId,
+        space,
+        kind: parsed.kind,
+        name,
+        resourceGeneration: input.resourceGeneration,
+        resourceRevisionId: input.resourceRevisionId,
+      });
     },
     list: async (
       input: Parameters<PlatformCanonicalReadyResourceInventory["list"]>[0],

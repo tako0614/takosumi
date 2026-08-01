@@ -59,6 +59,7 @@ function inventory(
 ): PlatformCanonicalReadyResourceInventory {
   return {
     get: () => Promise.resolve(undefined),
+    fence: () => Promise.resolve(false),
     list: (input) => {
       expect(input).toMatchObject({
         kind: "Schedule",

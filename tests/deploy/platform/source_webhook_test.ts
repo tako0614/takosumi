@@ -2671,6 +2671,126 @@ test("canonical Ready inventory requires and fences the direct-plugin Resource r
   expect(reads).toBe(3);
 });
 
+test("canonical Ready revision fence performs one Resource and one ResolutionLock read", async () => {
+  const base = createInMemoryResourceShapeStores();
+  const record: ResourceShapeRecord = {
+    id: "tkrn:workspace_revision_fence:EdgeWorker:api",
+    spaceId: "workspace_revision_fence",
+    kind: "EdgeWorker",
+    name: "api",
+    managedBy: "takosumi.resource-api.v1",
+    spec: {},
+    phase: "Ready",
+    generation: 2,
+    observedGeneration: 2,
+    lastOperationRunId: "run_resource_revision_fence",
+    createdAt: "2026-07-15T00:00:00.000Z",
+    updatedAt: "2026-07-15T00:00:00.000Z",
+  };
+  const lock: ResolutionLockRecord = {
+    resourceId: record.id,
+    selectedImplementation: "cloudflare_workers",
+    target: "cloudflare-main",
+    locked: true,
+    reason: ["revision fence"],
+    nativeResources: [
+      { type: "cloudflare_workers_script", id: "backend-api" },
+    ],
+    lockedAt: record.createdAt,
+    updatedAt: record.updatedAt,
+  };
+  await base.resources.upsert(record);
+  await base.locks.put(lock);
+
+  const counts = { resources: 0, locks: 0 };
+  const originalResources = base.resources;
+  const originalLocks = base.locks;
+  const countedStores: ResourceShapeStores = {
+    ...base,
+    resources: new Proxy(originalResources, {
+      get(target, property, receiver) {
+        if (property === "get") {
+          return async (resourceId: ResourceShapeRecord["id"]) => {
+            counts.resources += 1;
+            return await originalResources.get(resourceId);
+          };
+        }
+        const value = Reflect.get(target, property, receiver) as unknown;
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }),
+    locks: new Proxy(originalLocks, {
+      get(target, property, receiver) {
+        if (property === "get") {
+          return async (resourceId: ResourceShapeRecord["id"]) => {
+            counts.locks += 1;
+            return await originalLocks.get(resourceId);
+          };
+        }
+        const value = Reflect.get(target, property, receiver) as unknown;
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }),
+  };
+  const { operations } = await createTakosumiService({
+    role: "takosumi-api",
+    runtimeEnv: { TAKOSUMI_ENVIRONMENT: "test", TAKOSUMI_DEV_MODE: "1" },
+    resourceShapeStores: countedStores,
+    resourceShapeAdapter: new StubResourceShapeAdapter(),
+  });
+  const fenceInput = {
+    resourceId: record.id,
+    space: record.spaceId,
+    kind: record.kind,
+    name: record.name,
+    resourceGeneration: record.generation,
+    resourceRevisionId: record.lastOperationRunId!,
+  };
+
+  await expect(
+    operations.resourceCompatibility?.fenceReadyResource(fenceInput),
+  ).resolves.toBe(true);
+  expect(counts).toEqual({ resources: 1, locks: 1 });
+
+  const expectOneReadFence = async (
+    input: typeof fenceInput,
+    expected: boolean,
+  ) => {
+    counts.resources = 0;
+    counts.locks = 0;
+    await expect(
+      operations.resourceCompatibility?.fenceReadyResource(input),
+    ).resolves.toBe(expected);
+    expect(counts).toEqual({ resources: 1, locks: 1 });
+  };
+
+  await expectOneReadFence(
+    { ...fenceInput, resourceGeneration: fenceInput.resourceGeneration + 1 },
+    false,
+  );
+  await expectOneReadFence(
+    { ...fenceInput, resourceRevisionId: "run_resource_revision_drift" },
+    false,
+  );
+
+  await base.resources.upsert({ ...record, observedGeneration: 1 });
+  await expectOneReadFence(fenceInput, false);
+  await base.resources.upsert(record);
+  await base.locks.put({ ...lock, locked: false });
+  await expectOneReadFence(fenceInput, false);
+  await base.locks.put(lock);
+
+  counts.resources = 0;
+  counts.locks = 0;
+  await expect(
+    operations.resourceCompatibility?.fenceReadyResource({
+      ...fenceInput,
+      resourceId: "tkrn:workspace_other:EdgeWorker:api",
+    }),
+  ).resolves.toBe(false);
+  expect(counts).toEqual({ resources: 0, locks: 0 });
+});
+
 test("a configured platform extension rejects an unverified bearer", async () => {
   const worker = (await import("../../../deploy/platform/worker.ts")).default;
   const forwarded: { url: string; authorization: string | null }[] = [];
