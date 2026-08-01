@@ -38,7 +38,7 @@ const TAKOFORM_ROOT = ECOSYSTEM_ROOT
   ? pathToFileURL(`${resolve(ECOSYSTEM_ROOT, "takoform")}${sep}`)
   : undefined;
 const EXACT_TOFU = "/root/.local/libexec/opentofu-1.12.1/tofu";
-const PROVIDER_ADDRESS = "registry.terraform.io/tako0614/takoform";
+const PROVIDER_ADDRESS = "registry.opentofu.org/tako0614/takoform";
 const WORKSPACE_ID = "workspace_yurucommu_real_lifecycle";
 const CAPSULE_ID = "capsule_yurucommu_real_lifecycle";
 const INSTALL_CONFIG_ID = "icfg_yurucommu_real_lifecycle";
@@ -81,640 +81,730 @@ interface PluginCall {
  */
 const e2e = YURUCOMMU_ROOT && TAKOFORM_ROOT ? test : test.skip;
 
-e2e("repository install executes exact OpenTofu/Takoform apply and destroy against the production Form host", async () => {
-  if (!YURUCOMMU_ROOT || !TAKOFORM_ROOT) {
-    throw new Error("TAKOSUMI_ECOSYSTEM_ROOT is required");
-  }
-  const temp = await mkdtemp(join(tmpdir(), "takosumi-yurucommu-e2e-"));
-  let server: ReturnType<typeof Bun.serve> | undefined;
-  try {
-    const publishedProviderVersion = (
-      JSON.parse(
-        await readFile(new URL("release/version.json", TAKOFORM_ROOT), "utf8"),
-      ) as { readonly version: string }
-    ).version;
-    const yurucommuModule = await readFile(
-      new URL("deploy/takoform/main.tf", YURUCOMMU_ROOT),
-      "utf8",
-    );
-    const providerConstraint =
-      /\bsource\s*=\s*"registry\.terraform\.io\/tako0614\/takoform"\s*\n\s*version\s*=\s*"([^"]+)"/u.exec(
-        yurucommuModule,
-      )?.[1];
-    const providerVersion = /^=\s*(\d+\.\d+\.\d+)$/u.exec(
-      providerConstraint ?? "",
-    )?.[1];
-    expect(providerVersion).toBe(publishedProviderVersion);
-    if (!providerVersion) {
-      throw new Error("Yurucommu does not pin the published Takoform provider");
+e2e(
+  "repository install executes exact OpenTofu/Takoform apply and destroy against the production Form host",
+  async () => {
+    if (!YURUCOMMU_ROOT || !TAKOFORM_ROOT) {
+      throw new Error("TAKOSUMI_ECOSYSTEM_ROOT is required");
     }
-    const providerBinDir = join(temp, "provider-bin");
-    await mkdir(providerBinDir, { recursive: true });
-    const providerBinary = join(providerBinDir, "terraform-provider-takoform");
-    await run(
-      [
-        "go",
-        "build",
-        "-trimpath",
-        "-buildvcs=false",
-        "-ldflags",
-        `-buildid= -X main.version=${providerVersion}`,
-        "-o",
-        providerBinary,
-        ".",
-      ],
-      { cwd: TAKOFORM_ROOT.pathname },
-    );
+    const temp = await mkdtemp(join(tmpdir(), "takosumi-yurucommu-e2e-"));
+    let server: ReturnType<typeof Bun.serve> | undefined;
+    try {
+      const publishedProviderVersion = (
+        JSON.parse(
+          await readFile(
+            new URL("release/version.json", TAKOFORM_ROOT),
+            "utf8",
+          ),
+        ) as { readonly version: string }
+      ).version;
+      const yurucommuModule = await readFile(
+        new URL("deploy/takoform/main.tf", YURUCOMMU_ROOT),
+        "utf8",
+      );
+      const providerConstraint =
+        /\bsource\s*=\s*"registry\.opentofu\.org\/tako0614\/takoform"\s*\n\s*version\s*=\s*"([^"]+)"/u.exec(
+          yurucommuModule,
+        )?.[1];
+      const providerVersion = /^=\s*(\d+\.\d+\.\d+)$/u.exec(
+        providerConstraint ?? "",
+      )?.[1];
+      expect(providerVersion).toBe(publishedProviderVersion);
+      if (!providerVersion) {
+        throw new Error(
+          "Yurucommu does not pin the published Takoform provider",
+        );
+      }
+      const providerBinDir = join(temp, "provider-bin");
+      await mkdir(providerBinDir, { recursive: true });
+      const providerBinary = join(
+        providerBinDir,
+        "terraform-provider-takoform",
+      );
+      await run(
+        [
+          "go",
+          "build",
+          "-trimpath",
+          "-buildvcs=false",
+          "-ldflags",
+          `-buildid= -X main.version=${providerVersion}`,
+          "-o",
+          providerBinary,
+          ".",
+        ],
+        { cwd: TAKOFORM_ROOT.pathname },
+      );
 
-    const moduleDir = join(temp, "module");
-    await cp(new URL("deploy/takoform/", YURUCOMMU_ROOT), moduleDir, {
-      recursive: true,
-    });
-    await writeFile(
-      join(moduleDir, ".terraform.lock.hcl"),
-      `provider "${PROVIDER_ADDRESS}" {
+      const moduleDir = join(temp, "module");
+      await cp(new URL("deploy/takoform/", YURUCOMMU_ROOT), moduleDir, {
+        recursive: true,
+      });
+      await writeFile(
+        join(moduleDir, ".terraform.lock.hcl"),
+        `provider "${PROVIDER_ADDRESS}" {
   version     = "${providerVersion}"
   constraints = "${providerVersion}"
 }
 `,
-    );
-    const cliConfig = join(temp, "tofurc");
-    await writeFile(
-      cliConfig,
-      `provider_installation {
+      );
+      const cliConfig = join(temp, "tofurc");
+      await writeFile(
+        cliConfig,
+        `provider_installation {
   dev_overrides {
     "${PROVIDER_ADDRESS}" = "${providerBinDir}"
   }
   direct {}
 }
 `,
-      { mode: 0o600 },
-    );
+        { mode: 0o600 },
+      );
 
-    const db = new SqliteFakeD1();
-    await ensureD1OpenTofuLedgerSchema(db);
-    const control = new CloudflareD1OpenTofuControlStore(db);
-    await control.putWorkspace({
-      id: WORKSPACE_ID,
-      handle: "yurucommu-real-lifecycle",
-      displayName: "Yurucommu real lifecycle",
-      type: "personal",
-      ownerUserId: INSTALLER_ID,
-      createdAt: NOW,
-      updatedAt: NOW,
-    });
+      const db = new SqliteFakeD1();
+      await ensureD1OpenTofuLedgerSchema(db);
+      const control = new CloudflareD1OpenTofuControlStore(db);
+      await control.putWorkspace({
+        id: WORKSPACE_ID,
+        handle: "yurucommu-real-lifecycle",
+        displayName: "Yurucommu real lifecycle",
+        type: "personal",
+        ownerUserId: INSTALLER_ID,
+        createdAt: NOW,
+        updatedAt: NOW,
+      });
 
-    const manifestText = await readFile(
-      new URL(".well-known/takosumi.json", YURUCOMMU_ROOT),
-      "utf8",
-    );
-    const manifest = parseRepositoryManifestText(manifestText);
-    expect(manifest.ok).toBe(true);
-    if (!manifest.ok) throw new Error(manifest.error);
-    const baseConfig = REFERENCE_APP_INSTALL_CONFIGS.find(
-      (config) =>
-        config.sourceSelector?.url ===
-          "https://github.com/tako0614/yurucommu.git" &&
-        config.modulePath === "deploy/takoform",
-    );
-    expect(baseConfig).toBeDefined();
-    if (!baseConfig) throw new Error("managed Yurucommu config missing");
-    const compatibility = yurucommuCompatibilityReport();
-    const compiled = compileRepositoryInstallUx({
-      document: manifest.document,
-      sourceSnapshotId: compatibility.sourceSnapshotId,
-      modulePath: "deploy/takoform",
-      compatibilityReport: compatibility,
-      capsuleName: PROJECT_NAME,
-      workspaceId: WORKSPACE_ID,
-      reviewedVariables: {},
-    });
-    expect(compiled.ok).toBe(true);
-    if (!compiled.ok) throw new Error(compiled.diagnostic.message);
-    expect(compiled.compiled.variableMapping).toEqual({
-      project_name: PROJECT_NAME,
-    });
-
-    await control.putInstallConfig({
-      ...baseConfig,
-      id: INSTALL_CONFIG_ID,
-      workspaceId: WORKSPACE_ID,
-      name: `${PROJECT_NAME}-repository-install`,
-      internal: {
-        reason: "per_install_overrides",
-        sourceSnapshotId: compatibility.sourceSnapshotId,
-      },
-      variableMapping: compiled.compiled.variableMapping,
-      variablePresentation: compiled.compiled.variablePresentation,
-      userVariableNames: compiled.compiled.userVariableNames,
-      installExperience: compiled.compiled.installExperience,
-      interfaceBlueprints:
-        resolveCapsuleInterfaceBlueprintInstallingPrincipal(
-          baseConfig.interfaceBlueprints,
-          INSTALLER_ID,
-        ),
-      updatedAt: NOW,
-    });
-    await control.putCapsule({
-      id: CAPSULE_ID,
-      workspaceId: WORKSPACE_ID,
-      projectId: "project_yurucommu_real_lifecycle",
-      name: PROJECT_NAME,
-      slug: PROJECT_NAME,
-      sourceId: "source_yurucommu_real_lifecycle",
-      installConfigId: INSTALL_CONFIG_ID,
-      installingPrincipalId: INSTALLER_ID,
-      environment: "production",
-      currentStateGeneration: 0,
-      status: "active",
-      createdAt: NOW,
-      updatedAt: NOW,
-    });
-    const scopedInstallConfig =
-      await control.getInstallConfig(INSTALL_CONFIG_ID);
-    expect(scopedInstallConfig?.lifecycleActions).toEqual(
-      baseConfig.lifecycleActions,
-    );
-
-    const packageSet = JSON.parse(
-      await readFile(
-        new URL("forms/standard-package-set.json", TAKOFORM_ROOT),
+      const manifestText = await readFile(
+        new URL(".well-known/takosumi.json", YURUCOMMU_ROOT),
         "utf8",
-      ),
-    ) as StandardPackageSet;
-    const desiredKinds = new Set([
-      "RelationalDatabase",
-      "ObjectBucket",
-      "KeyValueStore",
-      "Queue",
-      "EdgeWorker",
-      "Schedule",
-    ]);
-    const packages = packageSet.packages.filter((item) =>
-      desiredKinds.has(item.kind),
-    );
-    expect(packages.map((item) => item.kind).sort()).toEqual(
-      [...desiredKinds].sort(),
-    );
-    const registry = createD1FormRegistryStore(db);
-    for (const item of packages) {
-      const definition = JSON.parse(
+      );
+      const manifest = parseRepositoryManifestText(manifestText);
+      expect(manifest.ok).toBe(true);
+      if (!manifest.ok) throw new Error(manifest.error);
+      const baseConfig = REFERENCE_APP_INSTALL_CONFIGS.find(
+        (config) =>
+          config.sourceSelector?.url ===
+            "https://github.com/tako0614/yurucommu.git" &&
+          config.modulePath === "deploy/takoform",
+      );
+      expect(baseConfig).toBeDefined();
+      if (!baseConfig) throw new Error("managed Yurucommu config missing");
+      const compatibility = yurucommuCompatibilityReport();
+      const compiled = compileRepositoryInstallUx({
+        document: manifest.document,
+        sourceSnapshotId: compatibility.sourceSnapshotId,
+        modulePath: "deploy/takoform",
+        compatibilityReport: compatibility,
+        capsuleName: PROJECT_NAME,
+        workspaceId: WORKSPACE_ID,
+        reviewedVariables: {},
+        policy: { allowedOidcScopes: ["openid", "profile"] },
+      });
+      if (!compiled.ok) {
+        throw new Error(
+          `${compiled.diagnostic.code}: ${compiled.diagnostic.message}`,
+        );
+      }
+      expect(compiled.ok).toBe(true);
+      expect(compiled.compiled.variableMapping).toEqual({
+        project_name: PROJECT_NAME,
+      });
+
+      await control.putInstallConfig({
+        ...baseConfig,
+        id: INSTALL_CONFIG_ID,
+        workspaceId: WORKSPACE_ID,
+        name: `${PROJECT_NAME}-repository-install`,
+        internal: {
+          reason: "per_install_overrides",
+          sourceSnapshotId: compatibility.sourceSnapshotId,
+        },
+        variableMapping: compiled.compiled.variableMapping,
+        variablePresentation: compiled.compiled.variablePresentation,
+        userVariableNames: compiled.compiled.userVariableNames,
+        installExperience: compiled.compiled.installExperience,
+        interfaceBlueprints:
+          resolveCapsuleInterfaceBlueprintInstallingPrincipal(
+            baseConfig.interfaceBlueprints,
+            INSTALLER_ID,
+          ),
+        updatedAt: NOW,
+      });
+      await control.putCapsule({
+        id: CAPSULE_ID,
+        workspaceId: WORKSPACE_ID,
+        projectId: "project_yurucommu_real_lifecycle",
+        name: PROJECT_NAME,
+        slug: PROJECT_NAME,
+        sourceId: "source_yurucommu_real_lifecycle",
+        installConfigId: INSTALL_CONFIG_ID,
+        installingPrincipalId: INSTALLER_ID,
+        environment: "production",
+        currentStateGeneration: 0,
+        status: "active",
+        createdAt: NOW,
+        updatedAt: NOW,
+      });
+      const scopedInstallConfig =
+        await control.getInstallConfig(INSTALL_CONFIG_ID);
+      expect(scopedInstallConfig?.lifecycleActions).toEqual(
+        baseConfig.lifecycleActions,
+      );
+
+      const packageSet = JSON.parse(
         await readFile(
-          new URL(`${item.path}/definition.json`, TAKOFORM_ROOT),
+          new URL("forms/standard-package-set.json", TAKOFORM_ROOT),
           "utf8",
         ),
-      ) as {
-        readonly lifecycleCapabilities: readonly (
-          | "create"
-          | "read"
-          | "update"
-          | "delete"
-          | "import"
-          | "observe"
-          | "refresh"
-          | "drift"
-        )[];
-        readonly interfaces?: readonly {
-          readonly name: string;
-          readonly version: string;
-          readonly description?: string;
-          readonly required?: boolean;
-          readonly resourceUriInput?: string;
-          readonly document?: Record<string, unknown>;
-          readonly documentSchema?: Record<string, unknown>;
-          readonly inputs?: readonly {
+      ) as StandardPackageSet;
+      const desiredKinds = new Set([
+        "RelationalDatabase",
+        "ObjectBucket",
+        "KeyValueStore",
+        "Queue",
+        "EdgeWorker",
+        "Schedule",
+      ]);
+      const packages = packageSet.packages.filter((item) =>
+        desiredKinds.has(item.kind),
+      );
+      expect(packages.map((item) => item.kind).sort()).toEqual(
+        [...desiredKinds].sort(),
+      );
+      const registry = createD1FormRegistryStore(db);
+      for (const item of packages) {
+        const definition = JSON.parse(
+          await readFile(
+            new URL(`${item.path}/definition.json`, TAKOFORM_ROOT),
+            "utf8",
+          ),
+        ) as {
+          readonly lifecycleCapabilities: readonly (
+            | "create"
+            | "read"
+            | "update"
+            | "delete"
+            | "import"
+            | "observe"
+            | "refresh"
+            | "drift"
+          )[];
+          readonly desiredSchema: Record<string, unknown>;
+          readonly interfaces?: readonly {
             readonly name: string;
-            readonly source: string;
-            readonly pointer?: string;
-            readonly value?: unknown;
+            readonly version: string;
+            readonly description?: string;
+            readonly required?: boolean;
+            readonly resourceUriInput?: string;
+            readonly document?: Record<string, unknown>;
+            readonly documentSchema?: Record<string, unknown>;
+            readonly inputs?: readonly {
+              readonly name: string;
+              readonly source: string;
+              readonly pointer?: string;
+              readonly value?: unknown;
+            }[];
           }[];
-        }[];
-      };
-      await registry.installPackage(
-        {
-          packageDigest: item.packageDigest,
-          artifactRef: `file://${TAKOFORM_ROOT.pathname}${item.path}`,
-          verifierId: "local-reviewed-takoform-package-set",
-          status: "installed",
-          definitionRefs: [
+        };
+        await registry.installPackage(
+          {
+            packageDigest: item.packageDigest,
+            artifactRef: `file://${TAKOFORM_ROOT.pathname}${item.path}`,
+            verifierId: "local-reviewed-takoform-package-set",
+            status: "installed",
+            definitionRefs: [
+              {
+                type: internalFormType(item.formRef.kind),
+                version: item.formRef.definitionVersion,
+                schemaDigest: item.formRef.schemaDigest,
+              },
+            ],
+            installedAt: NOW,
+            installedBy: "local-e2e",
+            updatedAt: NOW,
+          },
+          [
             {
-              type: internalFormType(item.formRef.kind),
-              version: item.formRef.definitionVersion,
-              schemaDigest: item.formRef.schemaDigest,
+              identity: {
+                type: internalFormType(item.formRef.kind),
+                version: item.formRef.definitionVersion,
+                schemaDigest: item.formRef.schemaDigest,
+                packageDigest: item.packageDigest,
+              },
+              displayName: item.formRef.kind,
+              operations: definition.lifecycleCapabilities,
+              desiredSchema: definition.desiredSchema,
+              ...(definition.interfaces?.length
+                ? { interfaceDescriptors: definition.interfaces }
+                : {}),
+              installedAt: NOW,
             },
           ],
-          installedAt: NOW,
-          installedBy: "local-e2e",
+        );
+        await registry.createActivation({
+          id: `activation_yurucommu_${item.kind}`,
+          identity: {
+            type: internalFormType(item.formRef.kind),
+            version: item.formRef.definitionVersion,
+            schemaDigest: item.formRef.schemaDigest,
+            packageDigest: item.packageDigest,
+          },
+          scope: { type: "space", id: WORKSPACE_ID },
+          audience: { public: true },
+          policy: {},
+          eligibleTargetPoolClasses: [TARGET_CLASS],
+          status: "active",
+          revision: 1,
+          createdAt: NOW,
+          createdBy: "local-e2e",
           updatedAt: NOW,
-        },
-        [
-          {
-            identity: {
-              type: internalFormType(item.formRef.kind),
-              version: item.formRef.definitionVersion,
-              schemaDigest: item.formRef.schemaDigest,
-              packageDigest: item.packageDigest,
+          updatedBy: "local-e2e",
+        });
+      }
+
+      const resourceStores = createD1ResourceShapeStores(db);
+      await resourceStores.targetPools.upsert({
+        id: `tkrn:${WORKSPACE_ID}:TargetPool:default`,
+        spaceId: WORKSPACE_ID,
+        name: "default",
+        spec: {
+          classes: [TARGET_CLASS],
+          targets: [
+            {
+              name: "local-managed",
+              type: "managed",
+              priority: 100,
+              implementations: packages.map((item) => ({
+                shape: item.kind,
+                implementation: `local.${item.kind}`,
+                interfaces: implementationInterfaces(item.kind),
+                plugin: "local-yurucommu-managed",
+              })),
             },
-            displayName: item.formRef.kind,
-            operations: definition.lifecycleCapabilities,
-            ...(definition.interfaces?.length
-              ? { interfaceDescriptors: definition.interfaces }
-              : {}),
-            installedAt: NOW,
-          },
-        ],
-      );
-      await registry.createActivation({
-        id: `activation_yurucommu_${item.kind}`,
-        identity: {
-          type: internalFormType(item.formRef.kind),
-          version: item.formRef.definitionVersion,
-          schemaDigest: item.formRef.schemaDigest,
-          packageDigest: item.packageDigest,
+          ],
         },
-        scope: { type: "space", id: WORKSPACE_ID },
-        audience: { public: true },
-        policy: {},
-        eligibleTargetPoolClasses: [TARGET_CLASS],
-        status: "active",
-        revision: 1,
         createdAt: NOW,
-        createdBy: "local-e2e",
         updatedAt: NOW,
-        updatedBy: "local-e2e",
       });
-    }
+      await resourceStores.spacePolicies.upsert({
+        id: `tkrn:${WORKSPACE_ID}:SpacePolicy:default`,
+        spaceId: WORKSPACE_ID,
+        name: "default",
+        spec: {
+          resolution: { lockAfterCreate: true, allowAutoMigration: false },
+        },
+        createdAt: NOW,
+        updatedAt: NOW,
+      });
 
-    const resourceStores = createD1ResourceShapeStores(db);
-    await resourceStores.targetPools.upsert({
-      id: `tkrn:${WORKSPACE_ID}:TargetPool:default`,
-      spaceId: WORKSPACE_ID,
-      name: "default",
-      spec: {
-        classes: [TARGET_CLASS],
-        targets: [
-          {
-            name: "local-managed",
-            type: "managed",
-            priority: 100,
-            implementations: packages.map((item) => ({
-              shape: item.kind,
-              implementation: `local.${item.kind}`,
-              interfaces: implementationInterfaces(item.kind),
-              plugin: "local-yurucommu-managed",
-            })),
-          },
-        ],
-      },
-      createdAt: NOW,
-      updatedAt: NOW,
-    });
-    await resourceStores.spacePolicies.upsert({
-      id: `tkrn:${WORKSPACE_ID}:SpacePolicy:default`,
-      spaceId: WORKSPACE_ID,
-      name: "default",
-      spec: {
-        resolution: { lockAfterCreate: true, allowAutoMigration: false },
-      },
-      createdAt: NOW,
-      updatedAt: NOW,
-    });
-
-    const pluginCalls: PluginCall[] = [];
-    const schemaRegistry = new MapResourceShapeSchemaRegistry(
-      Object.fromEntries(
-        [...desiredKinds]
-          .filter((kind) => !isBundledResourceShapeKind(kind))
-          .map((kind) => [
-            kind,
-            (raw: unknown) => {
-              if (
-                typeof raw !== "object" ||
-                raw === null ||
-                Array.isArray(raw) ||
-                typeof (raw as Record<string, unknown>).name !== "string"
-              ) {
+      const pluginCalls: PluginCall[] = [];
+      const schemaRegistry = new MapResourceShapeSchemaRegistry(
+        Object.fromEntries(
+          [...desiredKinds]
+            .filter((kind) => !isBundledResourceShapeKind(kind))
+            .map((kind) => [
+              kind,
+              (raw: unknown) => {
+                if (
+                  typeof raw !== "object" ||
+                  raw === null ||
+                  Array.isArray(raw) ||
+                  typeof (raw as Record<string, unknown>).name !== "string"
+                ) {
+                  return {
+                    ok: false as const,
+                    error: {
+                      code: "invalid_name",
+                      message: `${kind} name is required`,
+                    },
+                  };
+                }
                 return {
-                  ok: false as const,
-                  error: {
-                    code: "invalid_name",
-                    message: `${kind} name is required`,
+                  ok: true as const,
+                  value: {
+                    spec: structuredClone(raw) as Record<string, never>,
+                    interfaces: [],
                   },
                 };
-              }
-              return {
-                ok: true as const,
-                value: {
-                  spec: structuredClone(raw) as Record<string, never>,
-                  interfaces: [],
-                },
-              };
+              },
+            ]),
+        ),
+      );
+      const plugin = {
+        fetch: async (request: Request) => {
+          const call = (await request.json()) as PluginCall;
+          pluginCalls.push(structuredClone(call));
+          const resourceId =
+            typeof call.input.resourceId === "string"
+              ? call.input.resourceId
+              : "";
+          const identity = resourceIdentity(call.resource, resourceId);
+          const nativeResources = [
+            {
+              type: `local.${identity.kind}`,
+              id: identity.name,
+              ownership: "resource",
             },
-          ]),
-      ),
-    );
-    const plugin = {
-      fetch: async (request: Request) => {
-        const call = (await request.json()) as PluginCall;
-        pluginCalls.push(structuredClone(call));
-        const resourceId =
-          typeof call.input.resourceId === "string"
-            ? call.input.resourceId
-            : "";
-        const identity = resourceIdentity(call.resource, resourceId);
-        const nativeResources = [
-          {
-            type: `local.${identity.kind}`,
-            id: identity.name,
-            ownership: "resource",
-          },
-        ];
-        if (call.action === "preview") {
-          return Response.json({
-            summary: `preview ${identity.kind}/${identity.name}`,
-            nativeResources,
-          });
-        }
-        if (call.action === "apply" || call.action === "refresh") {
-          return Response.json({
-            ...(call.action === "refresh"
-              ? { summary: `refresh ${identity.kind}/${identity.name}` }
-              : {}),
-            outputs: resourceOutputs(identity.kind, identity.name),
-            nativeResources,
-          });
-        }
-        if (call.action === "observe") {
-          return Response.json({
-            status: "current",
-            summary: `current ${identity.kind}/${identity.name}`,
-          });
-        }
-        if (call.action === "delete") {
-          return new Response(null, { status: 204 });
-        }
-        return Response.json(
-          { error: "unexpected_plugin_action" },
-          {
-            status: 400,
-          },
-        );
-      },
-    };
-    const uriResolutionInputs: unknown[] = [];
-    const env = {
-      TAKOSUMI_CONTROL_DB: db,
-      TAKOSUMI_ACCOUNTS_ISSUER: "https://accounts.e2e.test",
-      TAKOSUMI_DEPLOY_CONTROL_TOKEN: "deploy-control-token",
-      TAKOSUMI_MANAGED_PROVIDER_TOKEN_SECRET: HOST_TOKEN_SECRET,
-      TAKOSUMI_ENVIRONMENT: "test",
-      TAKOSUMI_DEV_MODE: "1",
-      TAKOSUMI_RESOURCE_SHAPES: [...desiredKinds].join(","),
-      TAKOSUMI_RESOURCE_SHAPE_SCHEMA_REGISTRY: schemaRegistry,
-      TAKOSUMI_RESOURCE_ADAPTER_PLUGIN_HANDLERS: JSON.stringify([
-        {
-          plugin: "local-yurucommu-managed",
-          handlerKey: "LOCAL_YURUCOMMU_MANAGED",
+          ];
+          if (call.action === "preview") {
+            return Response.json({
+              summary: `preview ${identity.kind}/${identity.name}`,
+              nativeResources,
+            });
+          }
+          if (call.action === "apply" || call.action === "refresh") {
+            return Response.json({
+              ...(call.action === "refresh"
+                ? { summary: `refresh ${identity.kind}/${identity.name}` }
+                : {}),
+              outputs: resourceOutputs(identity.kind, identity.name),
+              nativeResources,
+            });
+          }
+          if (call.action === "observe") {
+            return Response.json({
+              status: "current",
+              summary: `current ${identity.kind}/${identity.name}`,
+            });
+          }
+          if (call.action === "delete") {
+            return new Response(null, { status: 204 });
+          }
+          return Response.json(
+            { error: "unexpected_plugin_action" },
+            {
+              status: 400,
+            },
+          );
         },
-      ]),
-      LOCAL_YURUCOMMU_MANAGED: plugin,
-      TAKOSUMI_FORM_INTERFACE_RESOURCE_URI_RESOLVER: async (input: {
-        readonly resourceId: string;
-        readonly descriptorName: string;
-        readonly descriptorVersion: string;
-      }) => {
-        uriResolutionInputs.push(structuredClone(input));
-        if (
-          input.descriptorName !== "http.request" ||
-          input.descriptorVersion !== "1"
-        ) {
-          return undefined;
-        }
-        const name = input.resourceId.split(":").at(-1);
-        return name ? `https://${name}.apps.e2e.test/` : undefined;
-      },
-    } as never;
+      };
+      const uriResolutionInputs: unknown[] = [];
+      const env = {
+        TAKOSUMI_CONTROL_DB: db,
+        TAKOSUMI_ACCOUNTS_ISSUER: "https://accounts.e2e.test",
+        TAKOSUMI_DEPLOY_CONTROL_TOKEN: "deploy-control-token",
+        TAKOSUMI_MANAGED_PROVIDER_TOKEN_SECRET: HOST_TOKEN_SECRET,
+        TAKOSUMI_ENVIRONMENT: "test",
+        TAKOSUMI_DEV_MODE: "1",
+        TAKOSUMI_RESOURCE_SHAPES: [...desiredKinds].join(","),
+        TAKOSUMI_RESOURCE_SHAPE_SCHEMA_REGISTRY: schemaRegistry,
+        TAKOSUMI_RESOURCE_ADAPTER_PLUGIN_HANDLERS: JSON.stringify([
+          {
+            plugin: "local-yurucommu-managed",
+            handlerKey: "LOCAL_YURUCOMMU_MANAGED",
+          },
+        ]),
+        LOCAL_YURUCOMMU_MANAGED: plugin,
+        TAKOSUMI_FORM_INTERFACE_RESOURCE_URI_RESOLVER: async (input: {
+          readonly resourceId: string;
+          readonly descriptorName: string;
+          readonly descriptorVersion: string;
+        }) => {
+          uriResolutionInputs.push(structuredClone(input));
+          if (
+            input.descriptorName !== "http.request" ||
+            input.descriptorVersion !== "1"
+          ) {
+            return undefined;
+          }
+          const name = input.resourceId.split(":").at(-1);
+          return name ? `https://${name}.apps.e2e.test/` : undefined;
+        },
+      } as never;
 
-    server = Bun.serve({
-      port: 0,
-      fetch: (request) => worker.fetch(request, env),
-    });
-    const endpoint = new URL(server.url);
-    endpoint.hostname = "127.0.0.1";
+      const rejectedHostResponses: unknown[] = [];
+      const rejectedHostRequests: unknown[] = [];
+      server = Bun.serve({
+        port: 0,
+        fetch: async (request) => {
+          const requestEvidence = await request
+            .clone()
+            .json()
+            .catch(() => undefined);
+          const response = await worker.fetch(request, env);
+          if (!response.ok) {
+            rejectedHostRequests.push({
+              method: request.method,
+              pathname: new URL(request.url).pathname,
+              body: requestEvidence,
+            });
+            rejectedHostResponses.push(
+              await response
+                .clone()
+                .json()
+                .catch(() => ({ status: response.status })),
+            );
+          }
+          return response;
+        },
+      });
+      const endpoint = new URL(server.url);
+      endpoint.hostname = "127.0.0.1";
 
-    const applyToken = await createManagedProviderRunToken({
-      secret: HOST_TOKEN_SECRET,
-      audience: PORTABLE_FORM_MANAGER,
-      workspaceId: WORKSPACE_ID,
-      capsuleId: CAPSULE_ID,
-      runId: "run_yurucommu_real_apply",
-      installingPrincipalId: INSTALLER_ID,
-      connectionId: "connection_takoform_local_e2e",
-      provider: PROVIDER_ADDRESS,
-      phase: "apply",
-      scopes: ["read", "write", "interfaces:write"],
-    });
-    const tofuEnv = {
-      ...process.env,
-      TF_CLI_CONFIG_FILE: cliConfig,
-      TF_IN_AUTOMATION: "1",
-      CHECKPOINT_DISABLE: "1",
-      TAKOFORM_ENDPOINT: endpoint.origin,
-      TAKOFORM_SPACE: WORKSPACE_ID,
-      TAKOFORM_TOKEN: applyToken.token,
-    };
-    const plan = await run(
-      [
-        EXACT_TOFU,
-        `-chdir=${moduleDir}`,
-        "plan",
-        "-input=false",
-        "-no-color",
-        "-out=tfplan",
-        `-var=project_name=${PROJECT_NAME}`,
-      ],
-      { env: tofuEnv },
-    );
-    expect(plan).toContain("Plan: 7 to add, 0 to change, 0 to destroy.");
-    try {
-      await run(
+      const applyToken = await createManagedProviderRunToken({
+        secret: HOST_TOKEN_SECRET,
+        audience: PORTABLE_FORM_MANAGER,
+        workspaceId: WORKSPACE_ID,
+        capsuleId: CAPSULE_ID,
+        runId: "run_yurucommu_real_apply",
+        installingPrincipalId: INSTALLER_ID,
+        connectionId: "connection_takoform_local_e2e",
+        provider: PROVIDER_ADDRESS,
+        phase: "apply",
+        scopes: ["read", "write", "interfaces:write"],
+      });
+      const tofuEnv = {
+        ...process.env,
+        TF_CLI_CONFIG_FILE: cliConfig,
+        TF_IN_AUTOMATION: "1",
+        CHECKPOINT_DISABLE: "1",
+        TAKOFORM_ENDPOINT: endpoint.origin,
+        TAKOFORM_SPACE: WORKSPACE_ID,
+        TAKOFORM_TOKEN: applyToken.token,
+      };
+      const plan = await run(
         [
           EXACT_TOFU,
           `-chdir=${moduleDir}`,
-          "apply",
+          "plan",
           "-input=false",
           "-no-color",
-          "-auto-approve",
-          "tfplan",
+          "-out=tfplan",
+          `-var=project_name=${PROJECT_NAME}`,
         ],
         { env: tofuEnv },
       );
-    } catch (error) {
-      const failedResources =
-        await resourceStores.resources.listBySpace(WORKSPACE_ID);
-      throw new Error(
-        [
-          error instanceof Error ? error.message : String(error),
-          `persisted Resources: ${JSON.stringify(failedResources)}`,
-          `URI resolver inputs: ${JSON.stringify(uriResolutionInputs)}`,
-        ].join("\n"),
-      );
-    }
-
-    const resources = await resourceStores.resources.listBySpace(WORKSPACE_ID);
-    expect(resources).toHaveLength(7);
-    expect(resources.map((resource) => resource.kind).sort()).toEqual(
-      [
-        "EdgeWorker",
-        "KeyValueStore",
-        "ObjectBucket",
-        "Queue",
-        "Queue",
-        "RelationalDatabase",
-        "Schedule",
-      ].sort(),
-    );
-    for (const resource of resources) {
-      expect(resource.owner).toEqual({
-        kind: "Capsule",
-        id: CAPSULE_ID,
-        workspaceId: WORKSPACE_ID,
-        installingPrincipalId: INSTALLER_ID,
-      });
-      expect(resource.phase).toBe("Ready");
-    }
-    const edgeWorkerApply = pluginCalls.find(
-      (call) =>
-        call.action === "apply" && call.resource?.kind === "EdgeWorker",
-    );
-    expect(edgeWorkerApply?.input.hostRuntimeMaterialization).toMatchObject({
-      contract: "takosumi.host-runtime-materialization/v1",
-      installConfigId: INSTALL_CONFIG_ID,
-      workspaceId: WORKSPACE_ID,
-      capsuleId: CAPSULE_ID,
-      installingPrincipalId: INSTALLER_ID,
-      requirements: baseConfig.hostRuntimeMaterialization?.requirements,
-      backgroundActivations:
-        baseConfig.hostRuntimeMaterialization?.backgroundActivations,
-    });
-
-    const interfaceStores = createD1InterfaceStores(db);
-    const edgeWorkerResource = resources.find(
-      (resource) => resource.kind === "EdgeWorker",
-    )!;
-    const resourceInterfaces = await interfaceStores.interfaces.list({
-      workspaceId: WORKSPACE_ID,
-      ownerKind: "Resource",
-      ownerId: edgeWorkerResource.id,
-      includeRetired: false,
-    });
-    expect(resourceInterfaces).toHaveLength(1);
-    expect(resourceInterfaces[0]).toMatchObject({
-      metadata: {
-        materializedFrom: {
-          source: "form_descriptor",
-          descriptorName: "http.request",
-          descriptorVersion: "1",
-        },
-      },
-      spec: {
-        type: "http.request",
-        version: "1",
-        document: { operations: ["request"] },
-      },
-      status: {
-        phase: "Resolved",
-        resolvedInputs: {
-          resource: `EdgeWorker/${PROJECT_NAME}`,
-          name: PROJECT_NAME,
-        },
-      },
-    });
-    expect(
-      await interfaceStores.bindings.listByInterface(
-        resourceInterfaces[0]!.metadata.id,
-      ),
-    ).toEqual([]);
-    expect(
-      (
+      expect(plan).toContain("Plan: 7 to add, 0 to change, 0 to destroy.");
+      try {
         await run(
           [
             EXACT_TOFU,
             `-chdir=${moduleDir}`,
-            "output",
-            "-raw",
-            "launch_url",
+            "apply",
+            "-input=false",
+            "-no-color",
+            "-auto-approve",
+            "tfplan",
           ],
           { env: tofuEnv },
-        )
-      ).trim(),
-    ).toBe(`https://${PROJECT_NAME}.apps.e2e.test/`);
-    expect(uriResolutionInputs).toHaveLength(1);
-    const capsuleInterfaces = await interfaceStores.interfaces.list({
-      workspaceId: WORKSPACE_ID,
-      ownerKind: "Capsule",
-      ownerId: CAPSULE_ID,
-      includeRetired: false,
-    });
-    // This test exercises the external OpenTofu/provider host lifecycle. The
-    // Takosumi Run controller consumes launch_url and materializes the Capsule
-    // UI blueprint in its separate output-capture lifecycle.
-    expect(capsuleInterfaces).toEqual([]);
+        );
+      } catch (error) {
+        const failedResources =
+          await resourceStores.resources.listBySpace(WORKSPACE_ID);
+        throw new Error(
+          [
+            error instanceof Error ? error.message : String(error),
+            `persisted Resources: ${JSON.stringify(failedResources)}`,
+            `URI resolver inputs: ${JSON.stringify(uriResolutionInputs)}`,
+            `host rejected requests: ${JSON.stringify(rejectedHostRequests)}`,
+            `host rejections: ${JSON.stringify(rejectedHostResponses)}`,
+          ].join("\n"),
+        );
+      }
 
-    const destroyToken = await createManagedProviderRunToken({
-      secret: HOST_TOKEN_SECRET,
-      audience: PORTABLE_FORM_MANAGER,
-      workspaceId: WORKSPACE_ID,
-      capsuleId: CAPSULE_ID,
-      runId: "run_yurucommu_real_destroy",
-      installingPrincipalId: INSTALLER_ID,
-      connectionId: "connection_takoform_local_e2e",
-      provider: PROVIDER_ADDRESS,
-      phase: "destroy",
-      scopes: ["read", "write", "interfaces:write"],
-    });
-    await run(
-      [
-        EXACT_TOFU,
-        `-chdir=${moduleDir}`,
-        "destroy",
-        "-input=false",
-        "-no-color",
-        "-auto-approve",
-        `-var=project_name=${PROJECT_NAME}`,
-      ],
-      {
-        env: { ...tofuEnv, TAKOFORM_TOKEN: destroyToken.token },
-      },
-    );
-    expect(await resourceStores.resources.listBySpace(WORKSPACE_ID)).toEqual(
-      [],
-    );
-    const retiredInterfaces = await interfaceStores.interfaces.list({
-      workspaceId: WORKSPACE_ID,
-      ownerKind: "Resource",
-      ownerId: edgeWorkerResource.id,
-      includeRetired: true,
-    });
-    expect(retiredInterfaces).toHaveLength(1);
-    expect(retiredInterfaces[0]?.status.phase).toBe("Retired");
-    expect(
-      await interfaceStores.bindings.listByInterface(
+      const resources =
+        await resourceStores.resources.listBySpace(WORKSPACE_ID);
+      expect(resources).toHaveLength(7);
+      expect(resources.map((resource) => resource.kind).sort()).toEqual(
+        [
+          "EdgeWorker",
+          "KeyValueStore",
+          "ObjectBucket",
+          "Queue",
+          "Queue",
+          "RelationalDatabase",
+          "Schedule",
+        ].sort(),
+      );
+      for (const resource of resources) {
+        expect(resource.owner).toEqual({
+          kind: "Capsule",
+          id: CAPSULE_ID,
+          workspaceId: WORKSPACE_ID,
+          installingPrincipalId: INSTALLER_ID,
+        });
+        expect(resource.phase).toBe("Ready");
+      }
+      const edgeWorkerApply = pluginCalls.find(
+        (call) =>
+          call.action === "apply" && call.resource?.kind === "EdgeWorker",
+      );
+      expect(edgeWorkerApply?.input.hostRuntimeMaterialization).toMatchObject({
+        contract: "takosumi.host-runtime-materialization/v1",
+        installConfigId: INSTALL_CONFIG_ID,
+        workspaceId: WORKSPACE_ID,
+        capsuleId: CAPSULE_ID,
+        installingPrincipalId: INSTALLER_ID,
+        requirements: baseConfig.hostRuntimeMaterialization?.requirements,
+        backgroundActivations:
+          baseConfig.hostRuntimeMaterialization?.backgroundActivations,
+      });
+
+      const interfaceStores = createD1InterfaceStores(db);
+      const edgeWorkerResource = resources.find(
+        (resource) => resource.kind === "EdgeWorker",
+      )!;
+      const resourceInterfaces = await interfaceStores.interfaces.list({
+        workspaceId: WORKSPACE_ID,
+        ownerKind: "Resource",
+        ownerId: edgeWorkerResource.id,
+        includeRetired: false,
+      });
+      expect(resourceInterfaces).toHaveLength(1);
+      expect(resourceInterfaces[0]).toMatchObject({
+        metadata: {
+          materializedFrom: {
+            source: "form_descriptor",
+            descriptorName: "http.request",
+            descriptorVersion: "1",
+          },
+        },
+        spec: {
+          type: "http.request",
+          version: "1",
+          document: { operations: ["request"] },
+        },
+        status: {
+          phase: "Resolved",
+          resolvedInputs: {
+            resource: `EdgeWorker/${PROJECT_NAME}`,
+            name: PROJECT_NAME,
+          },
+        },
+      });
+      expect(
+        await interfaceStores.bindings.listByInterface(
+          resourceInterfaces[0]!.metadata.id,
+        ),
+      ).toEqual([
+        expect.objectContaining({
+          metadata: {
+            workspaceId: WORKSPACE_ID,
+            materializedFrom: {
+              source: "form_host_descriptor",
+              descriptorName: "http.request",
+              descriptorVersion: "1",
+              formRefKey: expect.any(String),
+            },
+            id: expect.any(String),
+            generation: 1,
+            createdAt: expect.any(String),
+            updatedAt: expect.any(String),
+          },
+          spec: {
+            interfaceId: resourceInterfaces[0]!.metadata.id,
+            subjectRef: { kind: "Resource", id: edgeWorkerResource.id },
+            permissions: ["edge.request"],
+            delivery: { type: "none" },
+          },
+          status: expect.objectContaining({ phase: "Ready" }),
+        }),
+      ]);
+      expect(
+        (
+          await run(
+            [EXACT_TOFU, `-chdir=${moduleDir}`, "output", "-raw", "launch_url"],
+            { env: tofuEnv },
+          )
+        ).trim(),
+      ).toBe(`https://${PROJECT_NAME}.apps.e2e.test/`);
+      expect(uriResolutionInputs.length).toBeGreaterThan(0);
+      expect(
+        new Set(
+          uriResolutionInputs.map((input) => {
+            const row = input as {
+              readonly resourceId: string;
+              readonly descriptorName: string;
+              readonly descriptorVersion: string;
+            };
+            return `${row.resourceId}|${row.descriptorName}|${row.descriptorVersion}`;
+          }),
+        ),
+      ).toEqual(
+        new Set([
+          `tkrn:${WORKSPACE_ID}:RelationalDatabase:${PROJECT_NAME}-db|sql.query|1`,
+          `tkrn:${WORKSPACE_ID}:ObjectBucket:${PROJECT_NAME}-media|object.storage|1`,
+          `tkrn:${WORKSPACE_ID}:KeyValueStore:${PROJECT_NAME}-kv|keyvalue.store|1`,
+          `tkrn:${WORKSPACE_ID}:Queue:${PROJECT_NAME}-delivery|queue.messages|1`,
+          `tkrn:${WORKSPACE_ID}:Queue:${PROJECT_NAME}-delivery-dlq|queue.messages|1`,
+          `${edgeWorkerResource.id}|http.request|1`,
+        ]),
+      );
+      const capsuleInterfaces = await interfaceStores.interfaces.list({
+        workspaceId: WORKSPACE_ID,
+        ownerKind: "Capsule",
+        ownerId: CAPSULE_ID,
+        includeRetired: false,
+      });
+      // This test exercises the external OpenTofu/provider host lifecycle. The
+      // Takosumi Run controller consumes launch_url and materializes the Capsule
+      // UI blueprint in its separate output-capture lifecycle.
+      expect(capsuleInterfaces).toEqual([]);
+
+      const destroyToken = await createManagedProviderRunToken({
+        secret: HOST_TOKEN_SECRET,
+        audience: PORTABLE_FORM_MANAGER,
+        workspaceId: WORKSPACE_ID,
+        capsuleId: CAPSULE_ID,
+        runId: "run_yurucommu_real_destroy",
+        installingPrincipalId: INSTALLER_ID,
+        connectionId: "connection_takoform_local_e2e",
+        provider: PROVIDER_ADDRESS,
+        phase: "destroy",
+        scopes: ["read", "write", "interfaces:write"],
+      });
+      await run(
+        [
+          EXACT_TOFU,
+          `-chdir=${moduleDir}`,
+          "destroy",
+          "-input=false",
+          "-no-color",
+          "-auto-approve",
+          `-var=project_name=${PROJECT_NAME}`,
+        ],
+        {
+          env: { ...tofuEnv, TAKOFORM_TOKEN: destroyToken.token },
+        },
+      );
+      expect(await resourceStores.resources.listBySpace(WORKSPACE_ID)).toEqual(
+        [],
+      );
+      const retiredInterfaces = await interfaceStores.interfaces.list({
+        workspaceId: WORKSPACE_ID,
+        ownerKind: "Resource",
+        ownerId: edgeWorkerResource.id,
+        includeRetired: true,
+      });
+      expect(retiredInterfaces).toHaveLength(1);
+      expect(retiredInterfaces[0]?.status.phase).toBe("Retired");
+      const retiredBindings = await interfaceStores.bindings.listByInterface(
         retiredInterfaces[0]!.metadata.id,
-      ),
-    ).toEqual([]);
-    expect(
-      await readLauncherSurface({
-        control,
-        resourceStores,
-        interfaceStores,
-      }),
-    ).toBeUndefined();
-  } finally {
-    server?.stop(true);
-    await rm(temp, { recursive: true, force: true });
-  }
-}, 180_000);
+      );
+      expect(retiredBindings).toHaveLength(1);
+      expect(retiredBindings[0]).toMatchObject({
+        spec: {
+          interfaceId: retiredInterfaces[0]!.metadata.id,
+          subjectRef: { kind: "Resource", id: edgeWorkerResource.id },
+          permissions: ["edge.request"],
+          delivery: { type: "none" },
+        },
+        status: { phase: "Revoked" },
+      });
+      expect(
+        await readLauncherSurface({
+          control,
+          resourceStores,
+          interfaceStores,
+        }),
+      ).toBeUndefined();
+    } finally {
+      server?.stop(true);
+      await rm(temp, { recursive: true, force: true });
+    }
+  },
+  180_000,
+);
 
 async function readLauncherSurface(input: {
   readonly control: CloudflareD1OpenTofuControlStore;
