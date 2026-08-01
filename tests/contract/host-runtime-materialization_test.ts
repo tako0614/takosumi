@@ -17,11 +17,10 @@ function declaration() {
         encoding: "base64url",
       },
       {
-        kind: "managed_connection",
+        kind: "resource_binding",
         binding: "RUNTIME_GATEWAY",
         connectionAlias: "queue",
         requiredPermission: "queue.consume",
-        capabilityRef: "capability:queue/consumer",
       },
       {
         kind: "public_oidc",
@@ -101,4 +100,13 @@ test("host runtime declaration rejects plaintext-shaped refs, duplicate bindings
   expect(() =>
     parseInstallConfigHostRuntimeMaterialization(missingSourceKind),
   ).toThrow("source kind");
+
+  const legacy = structuredClone(declaration()) as {
+    requirements: Array<Record<string, unknown>>;
+  };
+  legacy.requirements[1]!.kind = "managed_connection";
+  legacy.requirements[1]!.capabilityRef = "capability:queue/consumer";
+  expect(() => parseInstallConfigHostRuntimeMaterialization(legacy)).toThrow(
+    "kind is invalid",
+  );
 });

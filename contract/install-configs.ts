@@ -553,8 +553,9 @@ export interface InstallConfig {
   readonly resourceInterfaceBindingProposals?: readonly CapsuleResourceInterfaceBindingProposal[];
   /**
    * DB-owned, provider-neutral runtime materialization requirements. Core
-   * forwards only opaque secret/capability refs to the selected Resource
-   * adapter; resolved values remain inside the host.
+   * forwards only opaque secret/capability refs where required; Resource
+   * bindings carry no runtime credential and resolved values remain inside the
+   * host.
    */
   readonly hostRuntimeMaterialization?: InstallConfigHostRuntimeMaterialization;
   readonly createdAt: string;

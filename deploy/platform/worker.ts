@@ -3032,9 +3032,6 @@ export interface PlatformCanonicalHostRuntimeResourceEvidence {
 export interface PlatformCanonicalHostRuntimeAuthorityEvidence {
   readonly iface: Interface;
   readonly binding: InterfaceBinding;
-  readonly capabilityRef: `capability:${string}`;
-  /** Exact resolved OAuth resource URI used by the provider-neutral runtime. */
-  readonly audience: string;
 }
 
 export interface PlatformCanonicalHostRuntimeGraphEvidence {
@@ -3113,7 +3110,7 @@ export function createPlatformCanonicalHostRuntimeGraphReader(
       const declared = objectRecord(connectionSpec);
       const requestedAliases = new Set<string>();
       for (const requirement of input.request.requirements) {
-        if (requirement.kind === "managed_connection") {
+        if (requirement.kind === "resource_binding") {
           requestedAliases.add(requirement.connectionAlias);
         }
       }
@@ -3162,30 +3159,25 @@ export function createPlatformCanonicalHostRuntimeGraphReader(
         }
         const requirement = input.request.requirements.find(
           (candidate) =>
-            candidate.kind === "managed_connection" &&
+            candidate.kind === "resource_binding" &&
             candidate.connectionAlias === alias,
         );
         const authority =
-          requirement?.kind === "managed_connection"
-            ? await uniqueHostRuntimeAuthority({
+          requirement?.kind === "resource_binding"
+            ? await uniqueHostRuntimeResourceBinding({
                 env,
                 operations,
                 workspaceId: input.request.workspaceId,
                 ownerResourceId: resource.resourceId,
                 subjectResourceId: consumer.resourceId,
-                capabilityRef: requirement.capabilityRef,
                 permission: requirement.requiredPermission,
               })
             : undefined;
         if (requirement && !authority) {
           return logCanonicalHostRuntimeGraphGap(env, "connection_authority_missing", {
             alias,
-            capabilityRef:
-              requirement.kind === "managed_connection"
-                ? requirement.capabilityRef
-                : requirement.kind,
             permission:
-              requirement.kind === "managed_connection"
+              requirement.kind === "resource_binding"
                 ? requirement.requiredPermission
                 : "",
           });
@@ -3357,13 +3349,12 @@ async function canonicalHostRuntimeResource(
   };
 }
 
-async function uniqueHostRuntimeAuthority(input: {
+async function uniqueHostRuntimeResourceBinding(input: {
   readonly env: CloudflareWorkerEnv;
   readonly operations: TakosumiOperations;
   readonly workspaceId: string;
   readonly ownerResourceId: string;
   readonly subjectResourceId: string;
-  readonly capabilityRef?: `capability:${string}`;
   readonly permission?: string;
 }): Promise<PlatformCanonicalHostRuntimeAuthorityEvidence | undefined> {
   const interfaces = await input.operations.interfaces.listForHost({
@@ -3379,8 +3370,6 @@ async function uniqueHostRuntimeAuthority(input: {
     for (const binding of await input.operations.interfaces.listBindings(
       iface.metadata.id,
     )) {
-      const capabilityRef = binding.spec.delivery.credentialRef;
-      const audience = canonicalInterfaceResourceAudience(iface);
       // Each condition is named rather than folded into one predicate: the
       // caller can only report that authority was missing, and every one of
       // these looks identical from outside.
@@ -3394,17 +3383,14 @@ async function uniqueHostRuntimeAuthority(input: {
               : binding.status.observedInterfaceRevision !==
                   iface.status.resolvedRevision
                 ? `revision:${binding.status.observedInterfaceRevision}!=${iface.status.resolvedRevision}`
-                : !capabilityRef?.startsWith("capability:")
-                  ? "credential_ref_absent"
-                  : !audience
-                    ? "audience_unresolved"
-                    : input.capabilityRef !== undefined &&
-                        capabilityRef !== input.capabilityRef
-                      ? "capability_ref_mismatch"
-                      : input.permission !== undefined &&
-                          !binding.spec.permissions.includes(input.permission)
-                        ? "permission_absent"
-                        : undefined;
+                : binding.spec.delivery.type !== "none"
+                  ? "delivery_type_not_none"
+                  : binding.spec.delivery.credentialRef !== undefined
+                    ? "credential_ref_present"
+                    : input.permission !== undefined &&
+                        !binding.spec.permissions.includes(input.permission)
+                      ? "permission_absent"
+                      : undefined;
       if (rejection) {
         rejections.push(`${iface.spec.type}:${rejection}`);
         continue;
@@ -3412,8 +3398,6 @@ async function uniqueHostRuntimeAuthority(input: {
       matches.push({
         iface,
         binding,
-        capabilityRef: capabilityRef as `capability:${string}`,
-        audience: audience as string,
       });
     }
   }
@@ -3425,35 +3409,6 @@ async function uniqueHostRuntimeAuthority(input: {
     rejections: rejections.slice(0, 8).join(","),
   });
   return undefined;
-}
-
-function canonicalInterfaceResourceAudience(iface: Interface): string | undefined {
-  const inputName = iface.spec.access.resourceUriInput;
-  // A descriptor that declares a `resource_uri` input carries its audience in
-  // that resolved input. A Form descriptor instead has the host-resolved
-  // `status.resourceUri`; both are the same host-owned audience identifier.
-  const value = inputName
-    ? iface.status.resolvedInputs?.[inputName]
-    : iface.status.resourceUri;
-  if (typeof value !== "string" || value.length === 0) return undefined;
-  try {
-    const parsed = new URL(value);
-    if (
-      parsed.protocol !== "https:" ||
-      parsed.username ||
-      parsed.password ||
-      parsed.search ||
-      parsed.hash ||
-      parsed.pathname === "/" ||
-      parsed.pathname.endsWith("/") ||
-      parsed.toString() !== value
-    ) {
-      return undefined;
-    }
-    return value;
-  } catch {
-    return undefined;
-  }
 }
 
 function platformCanonicalResourceId(value: string):

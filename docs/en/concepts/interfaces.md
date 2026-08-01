@@ -119,14 +119,14 @@ The two declarations remain separate.
   Output convention, or provider configuration.
 
 After the consumer Resource is Ready, the host resolves the target Resource generation,
-Interface, Ready InterfaceBinding, permissions, and audience. The runtime receives only
-a Fetch-compatible gateway and a materialization with exact authority for each alias. It
-does not receive provider credentials, account ids, native resource ids, or bearer
+Interface, Ready InterfaceBinding, and permissions. The runtime receives only a
+provider-native Resource binding and a materialization with exact authority for each
+alias. It does not receive provider credentials, account ids, native resource ids, or bearer
 tokens.
 
-After a Binding is revoked or a Resource generation, permission, or audience changes, a
-host must not fall back to an old materialization. It creates a new exact runtime version
-or fails the call closed.
+After a Binding is revoked or a Resource generation or permission changes, a host must
+not fall back to an old materialization. It creates a new exact runtime version or fails
+the call closed.
 
 This is an explicit host capability. It does not replace the path where an OpenTofu
 module uses Cloudflare, AWS, or another provider directly.

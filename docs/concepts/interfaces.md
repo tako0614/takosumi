@@ -117,12 +117,12 @@ Interface は提供側の宣言ですが、host は同じ Interface / InterfaceB
   provider 設定ではありません。
 
 host は consumer Resource が Ready になったあと、対象 Resource の generation、
-Interface、Ready な InterfaceBinding、permission、audience を解決します。runtime
-には Fetch-compatible gateway と、alias ごとの exact authority を持つ materialization
-だけを渡します。provider credential、account id、native resource id、bearer token は
+Interface、Ready な InterfaceBinding、permission を解決します。runtime には
+provider-native Resource binding と、alias ごとの exact authority を持つ
+materialization だけを渡します。provider credential、account id、native resource id、bearer token は
 渡しません。
 
-Binding の revoke、Resource generation の変更、permission や audience の変更後に、
+Binding の revoke、Resource generation の変更、permission の変更後に、
 古い materialization へ fallback してはいけません。host は新しい exact runtime
 version を作るか、呼び出しを fail closed にします。
 

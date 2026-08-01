@@ -246,7 +246,7 @@ export interface InterfaceBinding {
         }
       | {
           /**
-           * Host-materialized self-grant for a form-host-managed Resource
+           * Host-materialized self-grant for a form-host Resource
            * whose Form descriptor declares a public runtime surface. The
            * applying IaC principal authorized it by applying the exact Form;
            * the subject is the owning Resource itself.

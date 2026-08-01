@@ -1909,7 +1909,7 @@ export async function createTakosumiService(
     // InstallConfig proposal names a fixed subject and the subject here is the
     // per-install EdgeWorker Resource. In both cases the authorization act is
     // the same: the applied Form declared these connections, and the service
-    // already accepted the matching managed_connection requirements.
+    // already accepted the matching resource_binding requirements.
     if (resource.kind === "EdgeWorker") {
       const routeInterfaces = (
         await interfaceService.list({
@@ -1932,18 +1932,17 @@ export async function createTakosumiService(
           permission: "edge.request",
         });
       }
-      // Each managed connection becomes one grant on the provider Resource's
-      // own descriptor Interface, with the consumer EdgeWorker as the subject.
-      // The resolver answers for both models, so the capability refs are the
-      // ones that install actually requires: a Capsule's come from its
-      // InstallConfig, a form-host Resource's from its own Form.
+      // Each resource binding becomes one grant on the provider Resource's own
+      // descriptor Interface, with the consumer EdgeWorker as the subject.
+      // The binding is provider-native and credentialless: the provider host
+      // attaches its native binding from this exact Resource-subject grant.
       const runtime = await hostRuntimeMaterializationResolver({
         owner: resource.owner,
         resourceId,
         validatedSpec: resource.spec,
       });
       for (const requirement of runtime?.requirements ?? []) {
-        if (requirement.kind !== "managed_connection") continue;
+        if (requirement.kind !== "resource_binding") continue;
         const declared = record(resource.spec.connections)[
           requirement.connectionAlias
         ];
@@ -1975,7 +1974,6 @@ export async function createTakosumiService(
           descriptorName: providerInterface.spec.type,
           descriptorVersion: providerInterface.spec.version,
           permission: requirement.requiredPermission,
-          credentialRef: requirement.capabilityRef,
         });
       }
     }

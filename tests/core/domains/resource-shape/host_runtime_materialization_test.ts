@@ -12,6 +12,7 @@ import type {
 } from "../../../../core/domains/resource-shape/adapter.ts";
 import {
   createDbOwnedHostRuntimeMaterializationResolver,
+  formHostRuntimeMaterializationRequest,
   scheduleHostRuntimeReconcileTarget,
   withDbOwnedHostRuntimeMaterialization,
 } from "../../../../core/domains/resource-shape/host_runtime_materialization.ts";
@@ -199,6 +200,47 @@ test("owner mismatch fails before the selected adapter", async () => {
     }),
   ).rejects.toThrow("does not match");
   expect(called).toBe(false);
+});
+
+test("form-host projections derive credentialless Resource binding requirements", () => {
+  const request = formHostRuntimeMaterializationRequest({
+    resourceId: "tkrn:workspace_1:EdgeWorker:worker",
+    validatedSpec: {
+      connections: {
+        DB: {
+          resource: "RelationalDatabase/main",
+          projection: "sql.binding.v1",
+          permissions: ["query"],
+        },
+        MEDIA: {
+          resource: "ObjectBucket/media",
+          projection: "object.binding.v1",
+          permissions: ["read", "write"],
+        },
+        ignored: {
+          resource: "EdgeWorker/other",
+          projection: "schedule.trigger.v1",
+          permissions: ["invoke"],
+        },
+      },
+    },
+  });
+
+  expect(request?.requirements).toEqual([
+    {
+      kind: "resource_binding",
+      binding: "DB",
+      connectionAlias: "DB",
+      requiredPermission: "takosumi.resource.bind",
+    },
+    {
+      kind: "resource_binding",
+      binding: "MEDIA",
+      connectionAlias: "MEDIA",
+      requiredPermission: "takosumi.resource.bind",
+    },
+  ]);
+  expect(JSON.stringify(request)).not.toContain("capabilityRef");
 });
 
 test("Schedule background requirements resolve only the exact provider-neutral EdgeWorker edge", () => {

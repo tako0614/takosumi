@@ -178,24 +178,24 @@ export function createDbOwnedHostRuntimeMaterializationResolver(
 }
 
 /**
- * Managed connection projections a portable Form may declare on an EdgeWorker.
- * Each one becomes exactly one host-materialized runtime connection; the host
+ * Resource binding projections a portable Form may declare on an EdgeWorker.
+ * Each one becomes exactly one host-materialized Resource binding; the host
  * never invents a binding an author did not declare.
  */
-const FORM_HOST_MANAGED_PROJECTIONS = new Set([
+const FORM_HOST_RESOURCE_BINDING_PROJECTIONS = new Set([
   "sql.binding.v1",
   "keyvalue.binding.v1",
   "object.binding.v1",
   "queue.binding.v1",
 ]);
-const FORM_HOST_MANAGED_PERMISSION = "takosumi.managed-runtime.invoke";
+const FORM_HOST_RESOURCE_BINDING_PERMISSION = "takosumi.resource.bind";
 
 /**
  * Derives runtime requirements for a form-host EdgeWorker that has no Capsule.
  *
  * A portable Form application is the whole authorization act here: the exact
- * `spec.connections` the author declared, and nothing else, become managed
- * connection requirements. There is no InstallConfig to add secrets, OIDC, or
+ * `spec.connections` the author declared, and nothing else, become Resource
+ * binding requirements. There is no InstallConfig to add secrets, OIDC, or
  * background activations, so those remain unavailable to this path.
  */
 export function formHostRuntimeMaterializationRequest(input: {
@@ -214,16 +214,14 @@ export function formHostRuntimeMaterializationRequest(input: {
       const projection = record(value).projection;
       return (
         typeof projection === "string" &&
-        FORM_HOST_MANAGED_PROJECTIONS.has(projection)
+        FORM_HOST_RESOURCE_BINDING_PROJECTIONS.has(projection)
       );
     })
     .map(([alias]) => ({
-      kind: "managed_connection" as const,
+      kind: "resource_binding" as const,
       binding: alias,
       connectionAlias: alias,
-      requiredPermission: FORM_HOST_MANAGED_PERMISSION,
-      capabilityRef:
-        `capability:form-host/${identity[2]}/${alias}` as `capability:${string}`,
+      requiredPermission: FORM_HOST_RESOURCE_BINDING_PERMISSION,
     }))
     .sort((left, right) => left.binding.localeCompare(right.binding));
   if (requirements.length === 0) return undefined;

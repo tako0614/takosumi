@@ -656,17 +656,16 @@ const yurucommuManagedConfig = {
         },
       },
       ...[
-        ["DB", "capability:yurucommu/database"],
-        ["MEDIA", "capability:yurucommu/media"],
-        ["KV", "capability:yurucommu/key-value"],
-        ["DELIVERY_QUEUE", "capability:yurucommu/delivery-queue"],
-        ["DELIVERY_DLQ", "capability:yurucommu/delivery-dlq"],
-      ].map(([connectionAlias, capabilityRef]) => ({
-        kind: "managed_connection" as const,
-        binding: connectionAlias!,
-        connectionAlias: connectionAlias!,
-        requiredPermission: "takosumi.managed-runtime.invoke",
-        capabilityRef: capabilityRef! as `capability:${string}`,
+        "DB",
+        "MEDIA",
+        "KV",
+        "DELIVERY_QUEUE",
+        "DELIVERY_DLQ",
+      ].map((connectionAlias) => ({
+        kind: "resource_binding" as const,
+        binding: connectionAlias,
+        connectionAlias,
+        requiredPermission: "takosumi.resource.bind",
       })),
     ],
     backgroundActivations: [

@@ -58,19 +58,18 @@ export interface HostRuntimePublicOidcRequirement {
   };
 }
 
-export interface HostRuntimeManagedConnectionRequirement {
-  readonly kind: "managed_connection";
+export interface HostRuntimeResourceBindingRequirement {
+  readonly kind: "resource_binding";
   readonly binding: string;
   /** Alias in the consumer Resource's canonical `spec.connections` graph. */
   readonly connectionAlias: string;
   readonly requiredPermission: string;
-  readonly capabilityRef: HostRuntimeOpaqueCapabilityRef;
 }
 
 export type HostRuntimeMaterialRequirement =
   | HostRuntimeGeneratedSecretRequirement
   | HostRuntimePublicOidcRequirement
-  | HostRuntimeManagedConnectionRequirement;
+  | HostRuntimeResourceBindingRequirement;
 
 export interface HostRuntimeBackgroundActivationRequirement {
   readonly id: string;
@@ -220,25 +219,21 @@ export function parseInstallConfigHostRuntimeMaterialization(
         },
       } satisfies HostRuntimePublicOidcRequirement;
     }
-    if (row.kind === "managed_connection") {
+    if (row.kind === "resource_binding") {
       const parsed = exactRecord(row, [
         "kind",
         "binding",
         "connectionAlias",
         "requiredPermission",
-        "capabilityRef",
       ]);
       const binding = runtimeBinding(parsed.binding);
-      const capabilityRef = opaqueRef(parsed.capabilityRef, "capability:");
       unique(bindings, binding, "host runtime binding");
-      unique(refs, capabilityRef, "host runtime ref");
       return {
-        kind: "managed_connection",
+        kind: "resource_binding",
         binding,
         connectionAlias: alias(parsed.connectionAlias),
         requiredPermission: permission(parsed.requiredPermission),
-        capabilityRef: capabilityRef as HostRuntimeOpaqueCapabilityRef,
-      } satisfies HostRuntimeManagedConnectionRequirement;
+      } satisfies HostRuntimeResourceBindingRequirement;
     }
     throw new TypeError(`host runtime requirement ${index} kind is invalid`);
   });

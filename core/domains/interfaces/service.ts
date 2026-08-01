@@ -666,12 +666,10 @@ export class InterfaceService {
     readonly permission: string;
     /**
      * Consumer Resource receiving the grant. It defaults to the Interface's
-     * own Resource (a self-grant); a managed connection instead grants the
-     * exact consumer declared by the applying Form.
+     * own Resource (a self-grant); a Resource binding instead grants the exact
+     * consumer declared by the applying Form.
      */
     readonly subjectResourceId?: string;
-    /** Opaque host capability delivered to that consumer, if any. */
-    readonly credentialRef?: `capability:${string}`;
   }): Promise<void> {
     if (
       input.iface.metadata.ownerRef.kind !== "Resource" ||
@@ -707,9 +705,7 @@ export class InterfaceService {
         {
           subjectRef,
           permissions: [requireText(input.permission, "permission")],
-          delivery: input.credentialRef
-            ? { type: "none", credentialRef: input.credentialRef }
-            : { type: "none" },
+          delivery: { type: "none" },
         },
         undefined,
         {
