@@ -43,6 +43,14 @@ async function indexNames(
   return new Set((result.results ?? []).map((row) => row.name));
 }
 
+async function rowsForTable(
+  db: SqliteFakeD1,
+  table: string,
+): Promise<readonly Record<string, unknown>[]> {
+  const result = await db.prepare(`select * from ${table}`).all<Record<string, unknown>>();
+  return result.results ?? [];
+}
+
 test("ensureD1OpenTofuLedgerSchema converges on a fresh database", async () => {
   const db = new SqliteFakeD1();
   await ensureD1OpenTofuLedgerSchema(db);
@@ -56,6 +64,314 @@ test("ensureD1OpenTofuLedgerSchema converges on a fresh database", async () => {
   ]) {
     expect(tables.has(expected)).toBe(true);
   }
+});
+
+test("v60 restores populated current and archived Service Form rows with inline parent keys", async () => {
+  const db = new SqliteFakeD1();
+  const now = "2026-08-01T00:00:00.000Z";
+  await ensureD1OpenTofuLedgerSchema(db, { throughMigrationVersion: 59 });
+
+  await db
+    .prepare(
+      `insert into service_form_packages
+         (package_digest, status, record_json, installed_at, updated_at)
+       values (?, 'installed', ?, ?, ?)`,
+    )
+    .bind("pkg_current", '{"package":"current"}', now, now)
+    .run();
+  await db
+    .prepare(
+      `insert into service_form_packages__takoform_v1alpha1
+         (package_digest, status, record_json, installed_at, updated_at)
+       values (?, 'installed', ?, ?, ?)`,
+    )
+    .bind("pkg_archive", '{"package":"archive"}', now, now)
+    .run();
+  await db
+    .prepare(
+      `insert into service_form_definitions
+         (form_ref_key, package_digest, type, version, schema_digest,
+          record_json, installed_at)
+       values (?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .bind(
+      "form_current",
+      "pkg_current",
+      "ObjectBucket",
+      "1.0.0",
+      "sha256:current",
+      '{"definition":"current"}',
+      now,
+    )
+    .run();
+  await db
+    .prepare(
+      `insert into service_form_activations
+         (id, form_ref_key, package_digest, scope_type, scope_id, status,
+          revision, record_json, created_at, updated_at)
+       values (?, ?, ?, 'operator', null, 'active', 1, ?, ?, ?)`,
+    )
+    .bind(
+      "activation_current",
+      "form_current",
+      "pkg_current",
+      '{"activation":"current"}',
+      now,
+      now,
+    )
+    .run();
+  await db
+    .prepare(
+      `insert into service_form_definitions__takoform_v1alpha1
+         (form_ref_key, package_digest, api_version, kind,
+          definition_version, schema_digest, record_json, installed_at)
+       values (?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .bind(
+      "form_archive",
+      "pkg_archive",
+      "forms.takoform.com/v1alpha1",
+      "ObjectBucket",
+      "1.0.0",
+      "sha256:archive",
+      '{"definition":"archive"}',
+      now,
+    )
+    .run();
+  await db
+    .prepare(
+      `insert into service_form_activations__takoform_v1alpha1
+         (id, form_ref_key, package_digest, scope_type, scope_id, status,
+          revision, record_json, created_at, updated_at)
+       values (?, ?, ?, 'operator', null, 'active', 2, ?, ?, ?)`,
+    )
+    .bind(
+      "activation_archive",
+      "form_archive",
+      "pkg_archive",
+      '{"activation":"archive"}',
+      now,
+      now,
+    )
+    .run();
+
+  await ensureD1OpenTofuLedgerSchema(db);
+
+  expect(await rowsForTable(db, "service_form_definitions")).toEqual([
+    {
+      form_ref_key: "form_current",
+      package_digest: "pkg_current",
+      type: "ObjectBucket",
+      version: "1.0.0",
+      schema_digest: "sha256:current",
+      record_json: '{"definition":"current"}',
+      installed_at: now,
+    },
+  ]);
+  expect(await rowsForTable(db, "service_form_activations")).toEqual([
+    {
+      id: "activation_current",
+      form_ref_key: "form_current",
+      package_digest: "pkg_current",
+      scope_type: "operator",
+      scope_id: null,
+      status: "active",
+      revision: 1,
+      record_json: '{"activation":"current"}',
+      created_at: now,
+      updated_at: now,
+    },
+  ]);
+  expect(
+    await rowsForTable(db, "service_form_definitions__takoform_v1alpha1"),
+  ).toEqual([
+    {
+      form_ref_key: "form_archive",
+      package_digest: "pkg_archive",
+      api_version: "forms.takoform.com/v1alpha1",
+      kind: "ObjectBucket",
+      definition_version: "1.0.0",
+      schema_digest: "sha256:archive",
+      record_json: '{"definition":"archive"}',
+      installed_at: now,
+    },
+  ]);
+  expect(
+    await rowsForTable(db, "service_form_activations__takoform_v1alpha1"),
+  ).toEqual([
+    {
+      id: "activation_archive",
+      form_ref_key: "form_archive",
+      package_digest: "pkg_archive",
+      scope_type: "operator",
+      scope_id: null,
+      status: "active",
+      revision: 2,
+      record_json: '{"activation":"archive"}',
+      created_at: now,
+      updated_at: now,
+    },
+  ]);
+
+  for (const [table, externalIndex] of [
+    [
+      "service_form_definitions",
+      "service_form_definitions_ref_package_unique",
+    ],
+    [
+      "service_form_definitions__takoform_v1alpha1",
+      "service_form_definitions__takoform_v1alpha1_ref_package_unique",
+    ],
+  ] as const) {
+    expect(await indexNames(db, table)).not.toContain(externalIndex);
+  }
+  expect(await indexNames(db, "service_form_definitions")).toEqual(
+    new Set([
+      "service_form_definitions_package_idx",
+      "service_form_definitions_type_installed_ref_idx",
+    ]),
+  );
+  expect(await indexNames(db, "service_form_activations")).toEqual(
+    new Set([
+      "service_form_activations_scope_status_updated_id_idx",
+      "service_form_activations_identity_idx",
+    ]),
+  );
+  expect(
+    await indexNames(db, "service_form_definitions__takoform_v1alpha1"),
+  ).toEqual(
+    new Set([
+      "service_form_definitions__takoform_v1alpha1_package_idx",
+      "service_form_definitions__takoform_v1alpha1_kind_installed_ref_idx",
+    ]),
+  );
+  expect(
+    await indexNames(db, "service_form_activations__takoform_v1alpha1"),
+  ).toEqual(
+    new Set([
+      "service_form_activations__takoform_v1alpha1_scope_status_updated_id_idx",
+      "service_form_activations__takoform_v1alpha1_identity_idx",
+    ]),
+  );
+  expect(
+    (await db.prepare(`pragma foreign_key_check`).all()).results,
+  ).toEqual([]);
+  expect(
+    (await db
+      .prepare(`select version, name from schema_migrations where version = 60`)
+      .first()),
+  ).toEqual({
+    version: 60,
+    name: "d1_service_form_restore_safe_unique_constraints",
+  });
+
+  expect(() =>
+    db
+      .prepare(
+        `insert into service_form_activations
+           (id, form_ref_key, package_digest, scope_type, scope_id, status,
+            revision, record_json, created_at, updated_at)
+         values ('activation_bad_fk', 'form_current', 'pkg_missing',
+                 'operator', null, 'active', 1, '{}', ?, ?)`,
+      )
+      .bind(now, now)
+      .run(),
+  ).toThrow(/foreign key/i);
+
+  await ensureD1OpenTofuLedgerSchema(db);
+  expect(
+    await db
+      .prepare(`select count(*) as count from schema_migrations where version = 60`)
+      .first<{ readonly count: number }>(),
+  ).toEqual({ count: 1 });
+  expect(await rowsForTable(db, "service_form_activations")).toHaveLength(1);
+  expect(
+    await rowsForTable(db, "service_form_activations__takoform_v1alpha1"),
+  ).toHaveLength(1);
+});
+
+test("v60 Service Form rebuild rolls back all shadow tables on a batch failure", async () => {
+  const db = new SqliteFakeD1();
+  const now = "2026-08-01T00:00:00.000Z";
+  await ensureD1OpenTofuLedgerSchema(db, { throughMigrationVersion: 59 });
+  await db
+    .prepare(
+      `insert into service_form_packages
+         (package_digest, status, record_json, installed_at, updated_at)
+       values ('pkg_rollback', 'installed', '{}', ?, ?)`,
+    )
+    .bind(now, now)
+    .run();
+  await db
+    .prepare(
+      `insert into service_form_definitions
+         (form_ref_key, package_digest, type, version, schema_digest,
+          record_json, installed_at)
+       values ('form_rollback', 'pkg_rollback', 'ObjectBucket', '1',
+               'sha256:rollback', '{}', ?)`,
+    )
+    .bind(now)
+    .run();
+  await db
+    .prepare(
+      `drop table service_form_activations`,
+    )
+    .run();
+  await db
+    .prepare(
+      `create table service_form_activations (
+        id text primary key,
+        form_ref_key text not null,
+        package_digest text not null,
+        scope_type text not null,
+        scope_id text,
+        status text not null,
+        revision integer not null,
+        record_json text not null,
+        created_at text not null,
+        updated_at text not null,
+        foreign key (form_ref_key, package_digest)
+          references service_form_definitions(form_ref_key, package_digest)
+      )`,
+    )
+    .run();
+  await db
+    .prepare(
+      `insert into service_form_activations
+         (id, form_ref_key, package_digest, scope_type, scope_id, status,
+          revision, record_json, created_at, updated_at)
+       values ('activation_rollback', 'form_rollback', 'pkg_rollback',
+               'invalid', null, 'active', 1, '{}', ?, ?)`,
+    )
+    .bind(now, now)
+    .run();
+
+  expect(ensureD1OpenTofuLedgerSchema(db)).rejects.toThrow(
+    /check constraint failed/i,
+  );
+  expect(await tableNames(db)).not.toContain("service_form_definitions__takosumi_v60");
+  expect(await tableNames(db)).not.toContain(
+    "service_form_activations__takosumi_v60",
+  );
+  expect(await tableNames(db)).not.toContain(
+    "service_form_definitions__takoform_v1alpha1__takosumi_v60",
+  );
+  expect(await tableNames(db)).not.toContain(
+    "service_form_activations__takoform_v1alpha1__takosumi_v60",
+  );
+  expect(
+    await db
+      .prepare(`select version from schema_migrations where version = 60`)
+      .first(),
+  ).toBeNull();
+  expect(
+    await db
+      .prepare(
+        `select form_ref_key, package_digest
+           from service_form_definitions where form_ref_key = 'form_rollback'`,
+      )
+      .first(),
+  ).toEqual({ form_ref_key: "form_rollback", package_digest: "pkg_rollback" });
 });
 
 test("v57 migrates observability into the canonical D1 lineage", async () => {

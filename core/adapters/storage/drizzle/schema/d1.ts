@@ -4,6 +4,7 @@ import {
   real,
   sqliteTable,
   text,
+  unique,
   uniqueIndex,
 } from "drizzle-orm/sqlite-core";
 import { sql } from "drizzle-orm";
@@ -797,7 +798,7 @@ export const serviceFormDefinitions = sqliteTable(
     installedAt: text("installed_at").notNull(),
   },
   (table) => [
-    uniqueIndex("service_form_definitions_ref_package_unique").on(
+    unique("service_form_definitions_ref_package_unique").on(
       table.formRefKey,
       table.packageDigest,
     ),
