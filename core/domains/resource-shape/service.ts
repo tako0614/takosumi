@@ -21,6 +21,7 @@ import type {
   ResourceConnectionSpec,
   ResourceDeploymentAdmission,
   ResourceDeploymentAdmissionDecision,
+  ResourceDeploymentAdmissionPending,
   ResourceDeploymentImportContext,
   ResourceDeploymentOperation,
   ResourceDeploymentQuote,
@@ -157,6 +158,7 @@ export type ResourceServiceErrorCode =
   | "deployment_plan_changed"
   | "deployment_quote_invalid"
   | "deployment_admission_denied"
+  | "deployment_admission_pending"
   | "deployment_finalize_pending"
   | "deployment_billing_finalize_failed"
   | "apply_failed"
@@ -170,6 +172,11 @@ export type ResourceServiceErrorCode =
 export interface ResourceServiceError {
   readonly code: ResourceServiceErrorCode;
   readonly message: string;
+  /** Retry metadata is present only for a structured pending outcome. */
+  readonly retryable?: boolean;
+  readonly pending?: ResourceDeploymentAdmissionPending;
+  readonly retryAfterSeconds?: number;
+  readonly attemptId?: string;
 }
 
 export type ServiceResult<T> =
@@ -1563,6 +1570,25 @@ export class ResourceShapeService {
         ...context,
         review: deploymentReview,
       });
+      const pending = resourceDeploymentAdmissionPending(decision.pending);
+      if (pending) {
+        const rolledBack = await rollbackUnstartedApplyClaim(
+          this.#stores,
+          applyingRecord,
+          lockRecord,
+          existing,
+          existingLock,
+        );
+        if (operationRun && operationRunCreated && rolledBack) {
+          operationRun = await this.#failPluginOperationRun(
+            operationRun,
+            new Error("deployment admission is pending"),
+          );
+        }
+        return rolledBack
+          ? { ok: false, error: deploymentAdmissionPendingError(pending) }
+          : applyClaimRollbackPending(id);
+      }
       if (decision.reasons.length > 0) {
         const rolledBack = await rollbackUnstartedApplyClaim(
           this.#stores,
@@ -1589,6 +1615,7 @@ export class ResourceShapeService {
       }
       reservationId = decision.reservationId;
     } catch (error) {
+      const pending = resourceDeploymentAdmissionPendingFromUnknown(error);
       const rolledBack = await rollbackUnstartedApplyClaim(
         this.#stores,
         applyingRecord,
@@ -1602,10 +1629,12 @@ export class ResourceShapeService {
       return rolledBack
         ? {
             ok: false,
-            error: {
-              code: "deployment_admission_denied",
-              message: errorMessage(error),
-            },
+            error: pending
+              ? deploymentAdmissionPendingError(pending)
+              : {
+                  code: "deployment_admission_denied",
+                  message: errorMessage(error),
+                },
           }
         : applyClaimRollbackPending(id);
     }
@@ -2268,13 +2297,20 @@ export class ResourceShapeService {
       importDecision =
         await this.#deploymentAdmission.admitImport(importContext);
     } catch (error) {
+      const pending = resourceDeploymentAdmissionPendingFromUnknown(error);
       return {
         ok: false,
-        error: {
-          code: "deployment_admission_denied",
-          message: errorMessage(error),
-        },
+        error: pending
+          ? deploymentAdmissionPendingError(pending)
+          : {
+              code: "deployment_admission_denied",
+              message: errorMessage(error),
+            },
       };
+    }
+    const pending = resourceDeploymentAdmissionPending(importDecision.pending);
+    if (pending) {
+      return { ok: false, error: deploymentAdmissionPendingError(pending) };
     }
     if (importDecision.reasons.length > 0) {
       return {
@@ -7842,6 +7878,68 @@ function refreshFailedConditions(
       lastTransitionAt: at,
     },
   ]);
+}
+
+function resourceDeploymentAdmissionPending(
+  value: unknown,
+): ResourceDeploymentAdmissionPending | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const retryAfterSeconds = record.retryAfterSeconds;
+  if (
+    typeof retryAfterSeconds !== "number" ||
+    !Number.isSafeInteger(retryAfterSeconds) ||
+    retryAfterSeconds < 1
+  ) {
+    return undefined;
+  }
+  const attemptId = record.attemptId;
+  if (
+    attemptId !== undefined &&
+    (typeof attemptId !== "string" || attemptId.trim().length === 0)
+  ) {
+    return undefined;
+  }
+  return {
+    retryAfterSeconds,
+    ...(attemptId === undefined ? {} : { attemptId }),
+  };
+}
+
+/**
+ * Admission implementations may throw their own Error subclass. The core
+ * deliberately recognizes only the provider-neutral retry shape and never
+ * branches on a provider's error code or message.
+ */
+function resourceDeploymentAdmissionPendingFromUnknown(
+  value: unknown,
+): ResourceDeploymentAdmissionPending | undefined {
+  const direct = resourceDeploymentAdmissionPending(value);
+  if (direct) return direct;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  for (const key of ["pending", "admission", "outcome"] as const) {
+    const nested = resourceDeploymentAdmissionPending(record[key]);
+    if (nested) return nested;
+  }
+  return undefined;
+}
+
+function deploymentAdmissionPendingError(
+  pending: ResourceDeploymentAdmissionPending,
+): ResourceServiceError {
+  return {
+    code: "deployment_admission_pending",
+    message: "deployment admission is pending; retry after the indicated delay",
+    retryable: true,
+    pending,
+    retryAfterSeconds: pending.retryAfterSeconds,
+    ...(pending.attemptId === undefined ? {} : { attemptId: pending.attemptId }),
+  };
 }
 
 function mergeConditions(

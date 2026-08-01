@@ -1454,6 +1454,10 @@ function serviceError(c: Context, error: ResourceServiceError): Response {
     import_conflict: ["conflict", 409, false],
     policy_denied: ["forbidden", 403, false],
     deployment_admission_denied: ["forbidden", 403, false],
+    // The published portable taxonomy permits automatic retry only for
+    // resource_busy and backend_unavailable. Preserve admission retry evidence
+    // in hostCode/details without inventing a Takosumi-only wire code.
+    deployment_admission_pending: ["resource_busy", 409, true],
     deployment_finalize_pending: ["resource_busy", 409, true],
   };
   const mapped =
@@ -1461,6 +1465,23 @@ function serviceError(c: Context, error: ResourceServiceError): Response {
     (error.code.startsWith("invalid_")
       ? (["invalid_argument", 400, false] as const)
       : (["backend_unavailable", 503, true] as const));
+  if (error.retryAfterSeconds !== undefined) {
+    c.header("Retry-After", String(error.retryAfterSeconds));
+  }
+  const details =
+    error.retryable === undefined &&
+    error.retryAfterSeconds === undefined &&
+    error.attemptId === undefined
+      ? undefined
+      : {
+          ...(error.retryable === undefined
+            ? {}
+            : { retryable: error.retryable }),
+          ...(error.retryAfterSeconds === undefined
+            ? {}
+            : { retryAfterSeconds: error.retryAfterSeconds }),
+          ...(error.attemptId === undefined ? {} : { attemptId: error.attemptId }),
+        };
   return portableError(
     c,
     mapped[0],
@@ -1468,6 +1489,7 @@ function serviceError(c: Context, error: ResourceServiceError): Response {
     mapped[1],
     mapped[2],
     error.code,
+    details,
   );
 }
 
@@ -1478,6 +1500,7 @@ function portableError(
   status: number,
   retryable = false,
   hostCode?: string,
+  details?: unknown,
 ): Response {
   return c.json(
     {
@@ -1487,6 +1510,7 @@ function portableError(
         requestId: requestIdFromContext(c),
         retryable,
         ...(hostCode ? { hostCode } : {}),
+        ...(details === undefined ? {} : { details }),
       },
     },
     status as 400,

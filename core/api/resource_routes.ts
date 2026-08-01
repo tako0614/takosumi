@@ -37,6 +37,7 @@ import {
   formatResourceShapeId,
   type ResourceArtifactService,
   type ResourceArtifactServiceErrorCode,
+  type ResourceServiceError,
   type ResourceServiceErrorCode,
   type ResourceShapeService,
 } from "../domains/resource-shape/mod.ts";
@@ -1306,12 +1307,35 @@ function badRequest(c: Context, message: string): Response {
 
 function errorResponse(
   c: Context,
-  error: { readonly code: ResourceServiceErrorCode; readonly message: string },
+  error: ResourceServiceError,
 ): Response {
+  const details = resourceServiceErrorDetails(error);
+  if (error.retryAfterSeconds !== undefined) {
+    c.header("Retry-After", String(error.retryAfterSeconds));
+  }
   return c.json(
-    apiError(error.code, error.message, undefined, requestIdFromContext(c)),
+    apiError(error.code, error.message, details, requestIdFromContext(c)),
     httpStatusForServiceError(error.code),
   );
+}
+
+function resourceServiceErrorDetails(
+  error: ResourceServiceError,
+): Readonly<Record<string, unknown>> | undefined {
+  if (
+    error.retryable === undefined &&
+    error.retryAfterSeconds === undefined &&
+    error.attemptId === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    ...(error.retryable === undefined ? {} : { retryable: error.retryable }),
+    ...(error.retryAfterSeconds === undefined
+      ? {}
+      : { retryAfterSeconds: error.retryAfterSeconds }),
+    ...(error.attemptId === undefined ? {} : { attemptId: error.attemptId }),
+  };
 }
 
 function httpStatusForServiceError(
@@ -1372,6 +1396,7 @@ function httpStatusForServiceError(
     case "deployment_plan_changed":
       return 409;
     case "deployment_admission_denied":
+    case "deployment_admission_pending":
       return 402;
     case "apply_failed":
     case "deployment_finalize_pending":

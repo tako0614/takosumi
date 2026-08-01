@@ -6,6 +6,7 @@ import type {
   InstalledFormReference,
   ResourceDeploymentAdmission,
   ResourceDeploymentAdmissionDecision,
+  ResourceDeploymentAdmissionPending,
   ResourceDeploymentCaptureContext,
   ResourceDeploymentImportContext,
   ResourceDeploymentQuote,
@@ -778,6 +779,8 @@ class RecordingDeploymentAdmission implements ResourceDeploymentAdmission {
   acceptPortablePlanReview = false;
   failRetireReason: ResourceDeploymentRetireContext["reason"] | undefined;
   reserveReasons: readonly string[] = [];
+  reservePending: ResourceDeploymentAdmissionPending | undefined = undefined;
+  reserveError: unknown = undefined;
   importReasons: readonly string[] = [];
   quoteFactory:
     | ((context: ResourceDeploymentQuoteContext) => ResourceDeploymentQuote)
@@ -796,6 +799,10 @@ class RecordingDeploymentAdmission implements ResourceDeploymentAdmission {
     context: ResourceDeploymentReserveContext,
   ): Promise<ResourceDeploymentReservationDecision> {
     this.reserveContexts.push(context);
+    if (this.reserveError !== undefined) throw this.reserveError;
+    if (this.reservePending) {
+      return { reasons: [], pending: this.reservePending };
+    }
     if (this.reserveReasons.length > 0) {
       return { reasons: this.reserveReasons };
     }
@@ -2208,6 +2215,67 @@ test("admission denial rolls back the claimed Resource before backend work", asy
   expect(adapter.applyInputs).toHaveLength(0);
   expect(await stores.resources.get(APPLY_ID)).toBeUndefined();
   expect(await stores.locks.get(APPLY_ID)).toBeUndefined();
+});
+
+test("pending deployment admission is provider-neutral and preserves retry evidence", async () => {
+  const stores = createInMemoryResourceShapeStores();
+  const admission = new RecordingDeploymentAdmission();
+  admission.reserveError = Object.assign(
+    new Error("provider-specific pending detail must not cross the boundary"),
+    {
+      code: "auto_recharge_pending",
+      attemptId: "attempt_123",
+      retryAfterSeconds: 300,
+    },
+  );
+  const adapter = new PluginSpyAdapter();
+  const service = new ResourceShapeService({
+    stores,
+    adapter,
+    deploymentAdmission: admission,
+    now: () => NOW,
+    moduleRegistry: TEST_RESOURCE_SHAPE_MODULE_REGISTRY,
+  });
+  await seed(service);
+
+  const pending = await reviewedApply(service, APPLY);
+  expect(pending.ok).toBe(false);
+  if (pending.ok) return;
+  expect(pending.error).toMatchObject({
+    code: "deployment_admission_pending",
+    retryable: true,
+    retryAfterSeconds: 300,
+    attemptId: "attempt_123",
+    pending: { retryAfterSeconds: 300, attemptId: "attempt_123" },
+  });
+  expect(pending.error.message).not.toContain("auto_recharge_pending");
+  expect(adapter.applyInputs).toHaveLength(0);
+  expect(await stores.resources.get(APPLY_ID)).toBeUndefined();
+  expect(await stores.locks.get(APPLY_ID)).toBeUndefined();
+});
+
+test("a structured admission decision can report pending without an attempt identity", async () => {
+  const stores = createInMemoryResourceShapeStores();
+  const admission = new RecordingDeploymentAdmission();
+  admission.reservePending = { retryAfterSeconds: 300 };
+  const service = new ResourceShapeService({
+    stores,
+    adapter: new PluginSpyAdapter(),
+    deploymentAdmission: admission,
+    now: () => NOW,
+    moduleRegistry: TEST_RESOURCE_SHAPE_MODULE_REGISTRY,
+  });
+  await seed(service);
+
+  const pending = await reviewedApply(service, APPLY);
+  expect(pending.ok).toBe(false);
+  if (pending.ok) return;
+  expect(pending.error).toMatchObject({
+    code: "deployment_admission_pending",
+    retryable: true,
+    retryAfterSeconds: 300,
+  });
+  expect(pending.error.attemptId).toBeUndefined();
 });
 
 test("atomic apply claim failure stops before reservation and adapter dispatch", async () => {

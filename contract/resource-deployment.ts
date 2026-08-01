@@ -108,9 +108,21 @@ export interface ResourceDeploymentQuoteContext {
   readonly now: string;
 }
 
+/**
+ * Provider-neutral retry state returned when deployment admission cannot yet
+ * be decided. The attempt identity is opaque to OSS and is only echoed so a
+ * caller can correlate a retry with the host's pending work.
+ */
+export interface ResourceDeploymentAdmissionPending {
+  readonly retryAfterSeconds: number;
+  readonly attemptId?: string;
+}
+
 /** Generic host decision for lifecycle paths that do not use a quote. */
 export interface ResourceDeploymentAdmissionDecision {
   readonly reasons: readonly string[];
+  /** A retryable admission outcome takes precedence over `reasons`. */
+  readonly pending?: ResourceDeploymentAdmissionPending;
   readonly audit?: Readonly<Record<string, JsonValue>>;
 }
 

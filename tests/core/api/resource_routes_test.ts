@@ -41,6 +41,9 @@ import {
   type FormPackage,
   type FormPackageLifecycleStatus,
   type InstalledFormReference,
+  type ResourceDeploymentAdmission,
+  type ResourceDeploymentReserveContext,
+  NOOP_RESOURCE_DEPLOYMENT_ADMISSION,
   RESOURCE_SHAPE_KINDS,
   type SpacePolicySpec,
   type TargetPoolSpec,
@@ -190,6 +193,7 @@ async function buildApp(
       | "moduleRegistry"
       | "schemaRegistry"
       | "formDesiredStateAdmission"
+      | "deploymentAdmission"
     >
   >,
 ) {
@@ -212,6 +216,7 @@ async function buildApp(
     formDesiredStateAdmission:
       serviceOverrides?.formDesiredStateAdmission ??
       (formRegistry ? async () => undefined : undefined),
+    deploymentAdmission: serviceOverrides?.deploymentAdmission,
     now: () => "2026-01-01T00:00:00.000Z",
   });
   await service.putTargetPool("space_1", "default", POOL);
@@ -247,6 +252,22 @@ async function buildApp(
     requestCorrelation: false,
   });
   return { app, service, activityStore };
+}
+
+function pendingDeploymentAdmission(): ResourceDeploymentAdmission {
+  return {
+    ...NOOP_RESOURCE_DEPLOYMENT_ADMISSION,
+    async reserve(_context: ResourceDeploymentReserveContext): Promise<never> {
+      throw Object.assign(
+        new Error("provider-specific pending detail must not cross the boundary"),
+        {
+          code: "auto_recharge_pending",
+          attemptId: "attempt_route_123",
+          retryAfterSeconds: 300,
+        },
+      );
+    },
+  };
 }
 
 const EXACT_OBJECT_BUCKET_FORM: InstalledFormReference = {
@@ -453,6 +474,32 @@ test("PUT /v1/resources/EdgeWorker/:name applies a first-class Worker shape", as
   expect(body.status.phase).toBe("Ready");
 });
 
+test("Resource API preserves structured pending deployment admission", async () => {
+  const { app } = await buildApp(undefined, undefined, {
+    deploymentAdmission: pendingDeploymentAdmission(),
+  });
+  const response = await reviewedResourceApply(
+    app,
+    "/v1/resources/ObjectBucket/pending-admission",
+    {
+      metadata: { space: "space_1" },
+      spec: { name: "pending-admission" },
+    },
+  );
+  expect(response.status).toBe(402);
+  expect(response.headers.get("retry-after")).toBe("300");
+  const body = await response.json();
+  expect(body.error).toMatchObject({
+    code: "deployment_admission_pending",
+    details: {
+      retryable: true,
+      retryAfterSeconds: 300,
+      attemptId: "attempt_route_123",
+    },
+  });
+  expect(body.error.message).not.toContain("auto_recharge_pending");
+});
+
 test("public Resource API validates, applies, and returns one exact installed Form identity", async () => {
   const { app } = await buildApp(undefined, exactObjectBucketFormRegistry());
   const path = "/v1/resources/ObjectBucket/form-assets";
@@ -487,6 +534,67 @@ test("public Resource API validates, applies, and returns one exact installed Fo
   });
   expect(omitted.status).toBe(409);
   expect((await omitted.json()).error.code).toBe("form_identity_conflict");
+});
+
+test("portable Form host preserves pending admission in the stable retry taxonomy", async () => {
+  const { app } = await buildApp(
+    {
+      resolveActor: () => ({
+        actorAccountId: "acct_portable_pending",
+        workspaceId: "workspace_1",
+        roles: ["owner"],
+        scopes: ["forms:read", "resources:*"],
+        requestId: "req_portable_pending",
+      }),
+    },
+    exactObjectBucketFormRegistry(),
+    {
+      adapter: new PortableFormStubResourceShapeAdapter(),
+      deploymentAdmission: pendingDeploymentAdmission(),
+    },
+  );
+  const base = "/apis/forms.takoform.com/v1alpha1";
+  const path = `${base}/resources/ObjectBucket/pending-admission`;
+  const desired = {
+    apiVersion: "forms.takoform.com/v1alpha1",
+    kind: "ObjectBucket",
+    form: portableFormReference(),
+    metadata: { name: "pending-admission", space: "space_1" },
+    spec: { name: "pending-admission", interfaces: ["s3_api"] },
+  };
+
+  const preview = await app.request(`${base}/resources/preview`, {
+    method: "POST",
+    headers: { ...JSON_HEADERS, "if-none-match": "*" },
+    body: JSON.stringify(desired),
+  });
+  expect(preview.status).toBe(200);
+  const previewBody = await preview.json();
+  const response = await app.request(path, {
+    method: "PUT",
+    headers: {
+      ...JSON_HEADERS,
+      "if-none-match": "*",
+      "idempotency-key": "portable-pending-1",
+    },
+    body: JSON.stringify({
+      ...desired,
+      review: { planDigest: previewBody.review.planDigest },
+    }),
+  });
+  expect(response.status).toBe(409);
+  expect(response.headers.get("retry-after")).toBe("300");
+  const body = await response.json();
+  expect(body.error).toMatchObject({
+    code: "resource_busy",
+    retryable: true,
+    hostCode: "deployment_admission_pending",
+    details: {
+      retryable: true,
+      retryAfterSeconds: 300,
+      attemptId: "attempt_route_123",
+    },
+  });
 });
 
 test("public Resource API rejects malformed or kind-mismatched exact Form identity", async () => {

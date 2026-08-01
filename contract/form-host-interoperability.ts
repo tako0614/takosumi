@@ -155,6 +155,7 @@ export interface TakoformHostErrorEnvelope {
     readonly requestId: string;
     readonly retryable: boolean;
     readonly hostCode?: string;
+    readonly details?: unknown;
   };
 }
 
