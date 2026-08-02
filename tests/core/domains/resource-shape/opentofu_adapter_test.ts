@@ -13,6 +13,7 @@ import type {
   PublicPlanRun,
 } from "@takosumi/internal/deploy-control-api";
 import type {
+  ApplyRunInternalContext,
   DeployControlActorContext,
   OpenTofuApplyJob,
   OpenTofuDestroyJob,
@@ -489,6 +490,7 @@ interface RecordedPlanCall {
 class FakeDeployControlDriver implements DeployControlRunDriver {
   readonly planCalls: RecordedPlanCall[] = [];
   readonly applyCalls: CreateApplyRunRequest[] = [];
+  readonly checkpointedApplyRuns: string[] = [];
   readonly runQueuedPlanCalls: string[] = [];
   readonly runQueuedApplyCalls: string[] = [];
   readonly approveCalls: {
@@ -583,16 +585,18 @@ class FakeDeployControlDriver implements DeployControlRunDriver {
     return Promise.resolve({});
   }
 
-  createApplyRun(
+  async createApplyRun(
     request: CreateApplyRunRequest,
     _context?: DeployControlActorContext,
+    internal?: ApplyRunInternalContext,
   ): Promise<ApplyRunResponse> {
     this.applyCalls.push(request);
+    const planRun = this.#plans.get(request.planRunId)!;
     const applyRun = {
       id: `apply_${++this.#seq}`,
       planRunId: request.planRunId,
-      workspaceId: "",
-      operation: "create",
+      workspaceId: planRun.workspaceId,
+      operation: planRun.operation,
       runnerProfileId: "opentofu-default",
       status: "queued",
       expected: request.expected,
@@ -603,7 +607,11 @@ class FakeDeployControlDriver implements DeployControlRunDriver {
       updatedAt: 0,
     } as unknown as ApplyRunResponse["applyRun"];
     this.#applies.set(applyRun.id, applyRun);
-    return Promise.resolve({ applyRun });
+    if (internal?.onCreated) {
+      await internal.onCreated(applyRun);
+      this.checkpointedApplyRuns.push(applyRun.id);
+    }
+    return { applyRun };
   }
 
   runQueuedApply(runId: string): Promise<ApplyRunResponse> {
@@ -743,25 +751,30 @@ test("ControllerOpentofuRunPort.plan builds a real generated-root dispatch and m
   expect(preview.runId).toBe("plan_1");
 });
 
-test("ControllerOpentofuRunPort fails closed for a legacy Resource row without a state digest", async () => {
+test("ControllerOpentofuRunPort carries an explicit exact-ref transition for a legacy Resource digest", async () => {
   const driver = new FakeDeployControlDriver();
   const adapter = new OpentofuResourceShapeAdapter(
     new ControllerOpentofuRunPort({ driver }),
   );
   const plan = edgeWorkerPlan();
-  const { priorState: _omitted, ...legacyInput } = applyInput(
-    plan,
-    cloudflareTarget,
-  );
+  const input = applyInput(plan, cloudflareTarget);
+  const prior = resourcePriorState(3);
+  const { digest: _omittedDigest, ...exactLegacyPrior } = prior;
+  const legacyPrior = {
+    ...exactLegacyPrior,
+    legacyDigestMissing: true as const,
+  };
 
-  await expect(adapter.preview(legacyInput)).rejects.toThrow(
+  await adapter.preview({ ...input, priorState: legacyPrior });
+  expect(
+    driver.planCalls[0]?.internal?.genericRootDispatch?.priorState,
+  ).toEqual(legacyPrior);
+
+  const { priorState: _omitted, ...malformed } = input;
+  await expect(adapter.preview(malformed)).rejects.toThrow(
     "has no exact canonical prior state descriptor",
   );
-  const { priorState: _omittedDelete, ...legacyDelete } = deleteInput({ plan });
-  await expect(adapter.delete(legacyDelete)).rejects.toThrow(
-    "has no exact canonical prior state descriptor",
-  );
-  expect(driver.planCalls).toHaveLength(0);
+  expect(driver.planCalls).toHaveLength(1);
   expect(driver.applyCalls).toHaveLength(0);
 });
 
@@ -1329,6 +1342,90 @@ test("ControllerOpentofuRunPort.apply drives plan->apply and maps outputs+native
   });
 });
 
+test("ControllerOpentofuRunPort resumes the checkpointed apply without creating plan or ApplyRun B", async () => {
+  const driver = new FakeDeployControlDriver();
+  const adapter = new OpentofuResourceShapeAdapter(
+    new ControllerOpentofuRunPort({ driver }),
+  );
+  let checkpointedApplyRunId: string | undefined;
+  const input = applyInput(edgeWorkerPlan(), cloudflareTarget);
+
+  const first = await adapter.apply({
+    ...input,
+    opentofuApplyRun: {
+      checkpointApplyRun: (applyRunId) => {
+        checkpointedApplyRunId = applyRunId;
+        return Promise.resolve();
+      },
+    },
+  });
+  expect(checkpointedApplyRunId).toBe(first.runId);
+  expect(driver.checkpointedApplyRuns).toEqual([first.runId]);
+
+  const recovered = await adapter.apply({
+    ...input,
+    opentofuApplyRun: { applyRunId: checkpointedApplyRunId },
+  });
+  expect(recovered).toEqual(first);
+  expect(driver.planCalls).toHaveLength(1);
+  expect(driver.applyCalls).toHaveLength(1);
+  expect(driver.runQueuedApplyCalls).toEqual([first.runId]);
+});
+
+test("ControllerOpentofuRunPort rejects a checkpoint that belongs to another Resource authority", async () => {
+  const driver = new FakeDeployControlDriver();
+  const adapter = new OpentofuResourceShapeAdapter(
+    new ControllerOpentofuRunPort({ driver }),
+  );
+  const input = applyInput(edgeWorkerPlan(), cloudflareTarget);
+  const first = await adapter.apply(input);
+
+  await expect(
+    adapter.apply({
+      ...input,
+      resourceId: "tkrn:other:EdgeWorker:api",
+      opentofuApplyRun: { applyRunId: first.runId },
+    }),
+  ).rejects.toThrow("is not the canonical update run");
+  expect(driver.planCalls).toHaveLength(1);
+  expect(driver.applyCalls).toHaveLength(1);
+});
+
+test("ControllerOpentofuRunPort rejects a checkpoint with the wrong operation or state generation", async () => {
+  const driver = new FakeDeployControlDriver();
+  const adapter = new OpentofuResourceShapeAdapter(
+    new ControllerOpentofuRunPort({ driver }),
+  );
+  const plan = edgeWorkerPlan();
+  let destroyApplyRunId: string | undefined;
+  await adapter.delete({
+    ...deleteInput({ plan }),
+    opentofuApplyRun: {
+      checkpointApplyRun: (applyRunId) => {
+        destroyApplyRunId = applyRunId;
+        return Promise.resolve();
+      },
+    },
+  });
+
+  await expect(
+    adapter.apply({
+      ...applyInput(plan, cloudflareTarget),
+      opentofuApplyRun: { applyRunId: destroyApplyRunId },
+    }),
+  ).rejects.toThrow("is not the canonical update run");
+
+  const applyResult = await adapter.apply(applyInput(plan, cloudflareTarget));
+  await expect(
+    adapter.apply({
+      ...applyInput(plan, cloudflareTarget, { stateGeneration: 4 }),
+      opentofuApplyRun: { applyRunId: applyResult.runId },
+    }),
+  ).rejects.toThrow("has no exact durable result");
+  expect(driver.planCalls).toHaveLength(2);
+  expect(driver.applyCalls).toHaveLength(2);
+});
+
 test("ControllerOpentofuRunPort apply guard does not encode credential delivery", async () => {
   const driver = new FakeDeployControlDriver();
   const port = new ControllerOpentofuRunPort({
@@ -1422,4 +1519,32 @@ test("ControllerOpentofuRunPort.destroy replays generated root before apply", as
       },
     },
   ]);
+});
+
+test("ControllerOpentofuRunPort resumes the checkpointed destroy without creating plan or ApplyRun B", async () => {
+  const driver = new FakeDeployControlDriver();
+  const adapter = new OpentofuResourceShapeAdapter(
+    new ControllerOpentofuRunPort({ driver }),
+  );
+  let checkpointedApplyRunId: string | undefined;
+  const input = deleteInput({ plan: edgeWorkerPlan() });
+
+  await adapter.delete({
+    ...input,
+    opentofuApplyRun: {
+      checkpointApplyRun: (applyRunId) => {
+        checkpointedApplyRunId = applyRunId;
+        return Promise.resolve();
+      },
+    },
+  });
+  expect(checkpointedApplyRunId).toBe("apply_2");
+
+  await adapter.delete({
+    ...input,
+    opentofuApplyRun: { applyRunId: checkpointedApplyRunId },
+  });
+  expect(driver.planCalls).toHaveLength(1);
+  expect(driver.applyCalls).toHaveLength(1);
+  expect(driver.runQueuedApplyCalls).toEqual(["apply_2"]);
 });

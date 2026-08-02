@@ -245,6 +245,25 @@ The Cloudflare adapter may interpret a ref as an R2 object key; another host may
 map it to a filesystem, database, or remote artifact service without changing
 the ledger contract.
 
+The Bun/Postgres filesystem adapter seals both the state bytes and replay
+result through the configured secret boundary, publishes each `stateRef`
+immutably with an fsync-backed no-replace fence, and permits adoption only by
+the same ApplyRun/action/generation. Production-like hosts therefore require
+the normal secret-store key; the explicit development placeholder remains a
+local-only opt-in.
+
+Pre-digest Resource execution rows use the explicit
+`priorState.legacyDigestMissing=true` transition marker. A runner may restore
+such a row only by an exact read of its recorded `stateRef`; `current.json`,
+prefix listing, a lower generation, and empty-state fallback are forbidden.
+Authenticated ciphertext and any available creator/generation/digest metadata
+must validate, and a missing exact object fails closed. The next successful
+apply, refresh, or destroy records the runner-computed plaintext digest and
+therefore leaves the compatibility lane. Hosts may remove this lane only after
+a bounded inventory proves that no retained Resource execution with
+`stateGeneration > 0` lacks `stateDigest` (or those rows have been explicitly
+migrated or retired); removal must not silently reset or drop live state.
+
 For Resource desired-state artifacts, Core exposes the optional raw-byte route
 `POST /v1/resources/{kind}/{name}/artifacts?space={space}`. It requires
 `resources:write`, `Idempotency-Key`, `X-Takosumi-Artifact-Purpose`,

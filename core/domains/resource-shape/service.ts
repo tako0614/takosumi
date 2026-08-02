@@ -1303,6 +1303,9 @@ export class ResourceShapeService {
     const generation = recoveringApplying
       ? existing.generation
       : (existing?.generation ?? 0) + 1;
+    const usesOpentofuRunAuthority =
+      this.#adapter.id === "opentofu" &&
+      !output.selectedImplementationDescriptor.plugin;
     if (
       output.selectedImplementationDescriptor.plugin &&
       existing?.phase === "Ready" &&
@@ -1415,6 +1418,25 @@ export class ResourceShapeService {
       }
     }
 
+    let recoveringOpenTofuApplyRunId: string | undefined;
+    if (recoveringApplying && usesOpentofuRunAuthority) {
+      const pending = existing?.pendingOperation;
+      if (
+        pending?.authority !== "opentofu_apply_run" ||
+        pending.operation !== "apply" ||
+        pending.operationKey !== pending.runId
+      ) {
+        return {
+          ok: false,
+          error: {
+            code: "deployment_finalize_pending",
+            message: `resource ${id} has no exact OpenTofu ApplyRun checkpoint for recovery`,
+          },
+        };
+      }
+      recoveringOpenTofuApplyRunId = pending.runId;
+    }
+
     // A public preview has no apply Run yet, so a direct plugin may return a
     // provisional native identity there. Before the first backend mutation,
     // re-plan once with the canonical apply Run revision and persist that
@@ -1517,7 +1539,9 @@ export class ResourceShapeService {
               deploymentReview,
             },
           }
-        : {}),
+        : recoveringOpenTofuApplyRunId && existing?.pendingOperation
+          ? { pendingOperation: existing.pendingOperation }
+          : {}),
       ...(existing?.lastOperationRunId
         ? { lastOperationRunId: existing.lastOperationRunId }
         : {}),
@@ -1529,6 +1553,7 @@ export class ResourceShapeService {
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
     };
+    let claimedApplyingRecord = applyingRecord;
     // Pin the resolution. Reuse the prior lockedAt when the lock was preserved.
     const lockRecord: ResolutionLockRecord = {
       resourceId: id,
@@ -1577,6 +1602,9 @@ export class ResourceShapeService {
         );
       }
       claimSucceeded = claim.status === "begun";
+      if (claim.status === "begun") {
+        claimedApplyingRecord = claim.record;
+      }
     } catch (error) {
       let current: ResourceShapeRecord | undefined;
       try {
@@ -1701,6 +1729,22 @@ export class ResourceShapeService {
     let adapterSucceeded = false;
     let adapterStarted = false;
     let adapterResult: AdapterApplyResult | undefined;
+    const opentofuApplyRun = !usesOpentofuRunAuthority
+      ? undefined
+      : recoveringOpenTofuApplyRunId
+        ? { applyRunId: recoveringOpenTofuApplyRunId }
+        : {
+            checkpointApplyRun: async (applyRunId: string) => {
+              claimedApplyingRecord = await checkpointOpentofuApplyRun({
+                stores: this.#stores,
+                record: claimedApplyingRecord,
+                applyRunId,
+                operation: "apply",
+                deploymentReview,
+                now: this.#now(),
+              });
+            },
+          };
     try {
       // Everything after a successful reservation is guarded. A failure before
       // backend success releases the reservation and leaves no billable work.
@@ -1717,9 +1761,9 @@ export class ResourceShapeService {
 
       const adapterInput = {
         resourceId: id,
-        ...(applyingRecord.owner === undefined
+        ...(claimedApplyingRecord.owner === undefined
           ? {}
-          : { owner: applyingRecord.owner }),
+          : { owner: claimedApplyingRecord.owner }),
         resourceGeneration: generation,
         ...(operationRun ? { resourceRevisionId: operationRun.id } : {}),
         ...(existing?.lastOperationRunId
@@ -1746,6 +1790,7 @@ export class ResourceShapeService {
         ...(existing?.stateAdoption
           ? { stateAdoption: existing.stateAdoption }
           : {}),
+        ...(opentofuApplyRun ? { opentofuApplyRun } : {}),
         plan,
         target: targetForImplementation(
           entry,
@@ -1790,9 +1835,11 @@ export class ResourceShapeService {
               ? await this.#adapter.apply(adapterInput)
               : await this.#adapter.refresh(adapterInput);
         } else {
-          result = recoveringApplying
-            ? await this.#adapter.refresh(adapterInput)
-            : await this.#adapter.apply(adapterInput);
+          result =
+            recoveringApplying &&
+            !usesOpentofuRunAuthority
+              ? await this.#adapter.refresh(adapterInput)
+              : await this.#adapter.apply(adapterInput);
         }
       }
       result = {
@@ -1837,7 +1884,7 @@ export class ResourceShapeService {
         );
       }
       const { stateAdoption: _consumedStateAdoption, ...readyRecordBase } =
-        applyingRecord;
+        claimedApplyingRecord;
       const {
         pendingOperation: _completedPendingOperation,
         ...readyRecordWithoutPending
@@ -1864,9 +1911,9 @@ export class ResourceShapeService {
         readyRecord,
         finalLock: readyLock,
         expectedApplying: {
-          generation: applyingRecord.generation,
+          generation: claimedApplyingRecord.generation,
           phase: "Applying",
-          updatedAt: applyingRecord.updatedAt,
+          updatedAt: claimedApplyingRecord.updatedAt,
         },
       });
       if (published.status !== "committed") {
@@ -4441,6 +4488,8 @@ export class ResourceShapeService {
         },
       };
     }
+    const usesOpentofuRunAuthority =
+      this.#adapter.id === "opentofu" && !implementation.plugin;
     let deletePlan: ResourceShapePlan;
     try {
       deletePlan = planResourceShape(
@@ -4532,6 +4581,25 @@ export class ResourceShapeService {
       }
     }
 
+    let recoveringOpenTofuDeleteRunId: string | undefined;
+    if (usesOpentofuRunAuthority && record.phase === "Deleting") {
+      const pending = record.pendingOperation;
+      if (
+        pending?.authority !== "opentofu_apply_run" ||
+        pending.operation !== "delete" ||
+        pending.operationKey !== pending.runId
+      ) {
+        return {
+          ok: false,
+          error: {
+            code: "deployment_finalize_pending",
+            message: `resource ${id} has no exact OpenTofu destroy ApplyRun checkpoint for recovery`,
+          },
+        };
+      }
+      recoveringOpenTofuDeleteRunId = pending.runId;
+    }
+
     let claimedRecord = record;
     if (record.phase !== "Deleting") {
       const deleteClaim = await this.#stores.resources.claimDelete(
@@ -4593,6 +4661,22 @@ export class ResourceShapeService {
         claimedRecord = deleteClaim.record;
       }
     }
+
+    const opentofuApplyRun = !usesOpentofuRunAuthority
+      ? undefined
+      : recoveringOpenTofuDeleteRunId
+        ? { applyRunId: recoveringOpenTofuDeleteRunId }
+        : {
+            checkpointApplyRun: async (applyRunId: string) => {
+              claimedRecord = await checkpointOpentofuApplyRun({
+                stores: this.#stores,
+                record: claimedRecord,
+                applyRunId,
+                operation: "delete",
+                now: this.#now(),
+              });
+            },
+          };
 
     await this.#recordResourceEvent({
       action: "resource.delete.started",
@@ -4733,6 +4817,7 @@ export class ResourceShapeService {
               ...(claimedRecord.stateAdoption
                 ? { stateAdoption: claimedRecord.stateAdoption }
                 : {}),
+              ...(opentofuApplyRun ? { opentofuApplyRun } : {}),
               plan: deletePlan,
               nativeResources: lock.nativeResources ?? [],
               target: targetForImplementation(entry, implementation),
@@ -4770,7 +4855,12 @@ export class ResourceShapeService {
         );
       }
     } catch (error) {
-      if (operationRun) {
+      if (
+        operationRun ||
+        claimedRecord.pendingOperation?.authority === "opentofu_apply_run"
+      ) {
+        const recoveryRunId =
+          operationRun?.id ?? claimedRecord.pendingOperation?.runId;
         await this.#notifyLifecycle({
           type: "unknown",
           spaceId: space,
@@ -4782,7 +4872,7 @@ export class ResourceShapeService {
           space,
           resourceId: id,
           actor,
-          runId: operationRun.id,
+          ...(recoveryRunId ? { runId: recoveryRunId } : {}),
           metadata: {
             generation: claimedRecord.generation,
             phase: "Deleting",
@@ -4794,7 +4884,7 @@ export class ResourceShapeService {
           ok: false,
           error: {
             code: "deployment_finalize_pending",
-            message: `resource ${id} delete outcome is unknown; recovery will use read-only observation: ${errorMessage(error)}`,
+            message: `resource ${id} delete outcome is unknown; recovery will resume its exact lifecycle Run: ${errorMessage(error)}`,
           },
         };
       }
@@ -6248,6 +6338,90 @@ function validatedOperationNonce(value: string): string {
     );
   }
   return value;
+}
+
+async function checkpointOpentofuApplyRun(input: {
+  readonly stores: ResourceShapeStores;
+  readonly record: ResourceShapeRecord;
+  readonly applyRunId: string;
+  readonly operation: "apply" | "delete";
+  readonly deploymentReview?: ResourceDeploymentReview;
+  readonly now: IsoTimestamp;
+}): Promise<ResourceShapeRecord> {
+  const pendingOperation = {
+    runId: input.applyRunId,
+    operation: input.operation,
+    operationKey: input.applyRunId,
+    authority: "opentofu_apply_run" as const,
+    ...(input.deploymentReview
+      ? { deploymentReview: input.deploymentReview }
+      : {}),
+  };
+  if (
+    opentofuApplyRunCheckpointMatches(
+      input.record,
+      input.applyRunId,
+      input.operation,
+    )
+  ) {
+    return input.record;
+  }
+  if (input.record.pendingOperation) {
+    throw new Error(
+      `resource ${input.record.id} is fenced by a different pending operation`,
+    );
+  }
+  const candidate: ResourceShapeRecord = {
+    ...input.record,
+    pendingOperation,
+    updatedAt: nextApplyClaimTimestamp(input.now, input.record.updatedAt),
+  };
+  try {
+    const persisted = await input.stores.resources.compareAndSet(
+      candidate,
+      versionOf(input.record),
+    );
+    if (persisted.status === "updated") return persisted.record;
+    if (
+      persisted.status === "conflict" &&
+      opentofuApplyRunCheckpointMatches(
+        persisted.record,
+        input.applyRunId,
+        input.operation,
+      )
+    ) {
+      return persisted.record;
+    }
+    throw new Error(
+      `resource ${input.record.id} changed before OpenTofu ApplyRun checkpoint`,
+    );
+  } catch (error) {
+    const observed = await input.stores.resources.get(input.record.id);
+    if (
+      observed &&
+      opentofuApplyRunCheckpointMatches(
+        observed,
+        input.applyRunId,
+        input.operation,
+      )
+    ) {
+      return observed;
+    }
+    throw error;
+  }
+}
+
+function opentofuApplyRunCheckpointMatches(
+  record: ResourceShapeRecord,
+  applyRunId: string,
+  operation: "apply" | "delete",
+): boolean {
+  return (
+    record.pendingOperation?.authority === "opentofu_apply_run" &&
+    record.pendingOperation.operation === operation &&
+    record.pendingOperation.runId === applyRunId &&
+    record.pendingOperation.operationKey === applyRunId
+  );
 }
 
 /**
@@ -8030,18 +8204,21 @@ function errorMessage(error: unknown): string {
 
 /**
  * Project the exact Resource ledger tail into the internal runner contract.
- * Legacy rows without a digest deliberately produce no descriptor: the
- * OpenTofu adapter will fail closed instead of guessing from object storage.
+ * Legacy rows without a digest retain their exact stateRef behind an explicit
+ * transition marker. The storage adapter may read only that exact ref; a
+ * successful run replaces the Resource execution with a digest-bearing row.
  */
 function canonicalPriorState(
   execution: ResourceShapeExecutionRecord | undefined,
 ): { readonly priorState?: ResourceShapePriorStateDescriptor } {
-  if (!execution?.stateDigest) return {};
+  if (!execution) return {};
   return {
     priorState: {
       generation: execution.stateGeneration,
       stateRef: execution.stateRef,
-      digest: execution.stateDigest,
+      ...(execution.stateDigest
+        ? { digest: execution.stateDigest }
+        : { legacyDigestMissing: true as const }),
       createdByRunId: execution.runId,
     },
   };

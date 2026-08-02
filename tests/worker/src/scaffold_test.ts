@@ -125,8 +125,10 @@ test("OpenTofu runner DO routes M2 state through R2_STATE with at-rest encryptio
   assert.match(container, /\.tfstate\.enc/);
   assert.match(container, /current\.json/);
   assert.match(container, /padStart\(8, "0"\)/);
-  assert.match(container, /recoverCurrentState/);
-  assert.match(container, /takosumi-reconciled/);
+  assert.match(container, /readCanonicalPriorState/);
+  assert.doesNotMatch(container, /recoverCurrentState/);
+  assert.match(container, /etagDoesNotMatch:\s*"\*"/);
+  assert.match(container, /takosumi-cache-only/);
   // When no stateScope is present the legacy R2_ARTIFACTS path is used.
   assert.match(container, /parseStateScope/);
   assert.match(container, /stateArtifactKeys/);

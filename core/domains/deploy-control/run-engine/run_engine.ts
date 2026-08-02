@@ -206,6 +206,7 @@ import {
 import type { ArtifactReferenceAllocator } from "../../../adapters/storage/artifact-references.ts";
 import type {
   CreateCapsulePlanInternal,
+  ApplyRunInternalContext,
   DependencyValueSealer,
   DeployControlActorContext,
   EnqueueRun,
@@ -3064,6 +3065,7 @@ export class RunEngine {
   async createApplyRun(
     request: CreateApplyRunRequest,
     context: DeployControlActorContext = {},
+    internal: ApplyRunInternalContext = {},
   ): Promise<ApplyRunResponse> {
     requireNonEmptyString(request.planRunId, "planRunId");
     const planRun = await this.#requirePlanRun(request.planRunId);
@@ -3174,6 +3176,7 @@ export class RunEngine {
       updatedAt: now,
     };
     await this.#store.putApplyRun(applyRun);
+    await internal.onCreated?.(applyRun);
     await this.#notifyApplyQueued(applyRun);
     if (!this.#hasRunnerForProfile(profile)) return { applyRun };
     // Hand off to the dispatch seam. The default inline dispatcher runs the

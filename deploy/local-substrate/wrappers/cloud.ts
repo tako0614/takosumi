@@ -21,7 +21,9 @@
  * resolves.
  */
 import { buildComposedServer } from "/workspace/deploy/node-postgres/src/server.ts";
+import { selectSecretBoundaryCrypto } from "/workspace/core/adapters/secret-store/memory.ts";
 import {
+  createFileOpenTofuStateArtifactStore,
   createFileSourceArchiveStore,
   createHttpOpenTofuRunner,
   createLocalOpenTofuRunner,
@@ -53,6 +55,11 @@ const sourceArchiveStore = createFileSourceArchiveStore(
   env.TAKOSUMI_LOCAL_SOURCE_ARCHIVE_DIR ??
     "/local-substrate-runtime/source-archives",
 );
+const stateArtifactStore = createFileOpenTofuStateArtifactStore(
+  env.TAKOSUMI_LOCAL_STATE_ARTIFACT_DIR ??
+    "/local-substrate-runtime/state-artifacts",
+  selectSecretBoundaryCrypto({ env }),
+);
 const externalRunnerUrl = nonEmptyString(
   env.TAKOSUMI_LOCAL_OPENTOFU_RUNNER_URL,
 );
@@ -77,10 +84,12 @@ await buildComposedServer({
   opentofuRunner: externalRunnerUrl
     ? createHttpOpenTofuRunner({
         archiveStore: sourceArchiveStore,
+        stateStore: stateArtifactStore,
         baseUrl: externalRunnerUrl,
       })
     : createLocalOpenTofuRunner({
         archiveStore: sourceArchiveStore,
+        stateStore: stateArtifactStore,
       }),
   runnerProfiles,
   defaultRunnerProfileId,

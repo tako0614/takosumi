@@ -1,4 +1,12 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import {
+  link,
+  mkdir,
+  open,
+  readFile,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
+import { Buffer } from "node:buffer";
 import { dirname, resolve } from "node:path";
 import type {
   OpenTofuApplyJob,
@@ -23,9 +31,12 @@ import type {
 } from "../../../core/domains/deploy-control/mod.ts";
 import { DEFAULT_OPENTOFU_RUNNER_EXECUTOR_ID } from "../../../core/domains/deploy-control/mod.ts";
 import { OpenTofuRunnerExecutionError } from "../../../core/domains/deploy-control/errors.ts";
+import type { SecretBoundaryCrypto } from "../../../core/adapters/secret-store/memory.ts";
 import { normalizePlanResourceScope } from "takosumi-contract";
 import { parseRepositoryManifestSnapshot } from "takosumi-contract/sources";
 import type {
+  DispatchPriorState,
+  DispatchStateAdoption,
   OpenTofuPlanArtifact,
   PlanResourceChange,
   RunnerProfile,
@@ -44,6 +55,28 @@ export interface SourceArchiveStore {
   read(key: string): Promise<Uint8Array>;
 }
 
+export interface LocalOpenTofuStateArtifact {
+  readonly stateRef: string;
+  readonly generation: number;
+  readonly createdByRunId: string;
+  readonly action: "apply" | "destroy";
+  readonly stateDigest: string;
+  readonly stateBytes: Uint8Array;
+  readonly result: OpenTofuApplyResult | OpenTofuDestroyResult;
+}
+
+/**
+ * Durable exact-key authority for local-substrate OpenTofu state. A target ref
+ * is immutable: replay by the same ApplyRun adopts it, while a different run
+ * is fenced before OpenTofu can execute provider side effects.
+ */
+export interface LocalOpenTofuStateArtifactStore {
+  read(stateRef: string): Promise<LocalOpenTofuStateArtifact | undefined>;
+  commit(
+    artifact: LocalOpenTofuStateArtifact,
+  ): Promise<LocalOpenTofuStateArtifact>;
+}
+
 export function createFileSourceArchiveStore(root: string): SourceArchiveStore {
   const normalizedRoot = resolve(root);
   return {
@@ -57,18 +90,108 @@ export function createFileSourceArchiveStore(root: string): SourceArchiveStore {
   };
 }
 
+export function createFileOpenTofuStateArtifactStore(
+  root: string,
+  cryptoBoundary: SecretBoundaryCrypto,
+): LocalOpenTofuStateArtifactStore {
+  const normalizedRoot = resolve(root);
+  const read = async (
+    stateRef: string,
+  ): Promise<LocalOpenTofuStateArtifact | undefined> => {
+    const path = await stateArtifactPath(normalizedRoot, stateRef);
+    let text: string;
+    try {
+      text = await readFile(path, "utf8");
+    } catch (error) {
+      if (isErrno(error, "ENOENT")) return undefined;
+      throw error;
+    }
+    return await parseStateArtifactEnvelope(text, stateRef, cryptoBoundary);
+  };
+  return {
+    read,
+    commit: async (artifact) => {
+      await assertLocalStateArtifact(artifact);
+      const path = await stateArtifactPath(normalizedRoot, artifact.stateRef);
+      const artifactDirectory = dirname(path);
+      await mkdir(normalizedRoot, { recursive: true });
+      await syncDirectory(dirname(normalizedRoot));
+      await mkdir(artifactDirectory, { recursive: true });
+      await syncDirectory(normalizedRoot);
+      const temporaryPath = `${path}.${crypto.randomUUID()}.tmp`;
+      const metadata = {
+        version: 1,
+        stateRef: artifact.stateRef,
+        generation: artifact.generation,
+        createdByRunId: artifact.createdByRunId,
+        action: artifact.action,
+        stateDigest: artifact.stateDigest,
+      } as const;
+      const sealed = await cryptoBoundary.seal(
+        JSON.stringify({
+          stateBase64: Buffer.from(artifact.stateBytes).toString("base64"),
+          result: artifact.result,
+        }),
+        "global",
+        localStateArtifactAad(metadata),
+      );
+      const envelope = `${JSON.stringify({
+        ...metadata,
+        ciphertextBase64: Buffer.from(sealed).toString("base64"),
+      })}\n`;
+      try {
+        const temporary = await open(temporaryPath, "wx", 0o600);
+        try {
+          await temporary.writeFile(envelope);
+          await temporary.sync();
+        } finally {
+          await temporary.close();
+        }
+        try {
+          // link(2) gives us an atomic, no-replace publication fence. rename(2)
+          // would silently overwrite a different ApplyRun's committed state.
+          await link(temporaryPath, path);
+          await syncDirectory(artifactDirectory);
+          return artifact;
+        } catch (error) {
+          if (!isErrno(error, "EEXIST")) throw error;
+          const existing = await read(artifact.stateRef);
+          if (!existing) {
+            throw new Error(
+              `local OpenTofu state ${artifact.stateRef} disappeared during immutable commit`,
+            );
+          }
+          assertSameStateMutation(existing, artifact);
+          return existing;
+        }
+      } finally {
+        await unlink(temporaryPath).catch((error) => {
+          if (!isErrno(error, "ENOENT")) throw error;
+        });
+      }
+    },
+  };
+}
+
 export function createLocalOpenTofuRunner(input: {
   readonly archiveStore: SourceArchiveStore;
+  readonly stateStore: LocalOpenTofuStateArtifactStore;
 }): OpenTofuRunner {
-  return new LocalOpenTofuRunner(input.archiveStore, inProcessRunnerTransport);
+  return new LocalOpenTofuRunner(
+    input.archiveStore,
+    input.stateStore,
+    inProcessRunnerTransport,
+  );
 }
 
 export function createHttpOpenTofuRunner(input: {
   readonly archiveStore: SourceArchiveStore;
+  readonly stateStore: LocalOpenTofuStateArtifactStore;
   readonly baseUrl: string;
 }): OpenTofuRunner {
   return new LocalOpenTofuRunner(
     input.archiveStore,
+    input.stateStore,
     httpRunnerTransport(input.baseUrl),
   );
 }
@@ -114,6 +237,7 @@ export function createLocalOpenTofuRunnerProfile(
 class LocalOpenTofuRunner implements OpenTofuRunner {
   constructor(
     private readonly archiveStore: SourceArchiveStore,
+    private readonly stateStore: LocalOpenTofuStateArtifactStore,
     private readonly transport: RunnerTransport,
   ) {}
 
@@ -121,10 +245,15 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
     job: OpenTofuPlanJob,
     control?: RunExecutionControl,
   ): Promise<OpenTofuPlanResult> {
-    assertNoObjectStoreStateAdoption(job);
     await this.restoreSourceArchive(
       job.planRun.id,
       job.sourceArchive,
+      control?.signal,
+    );
+    await this.restorePriorState(
+      job.planRun.id,
+      "plan",
+      job,
       control?.signal,
     );
     const result = await runRunner(
@@ -169,10 +298,21 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
     job: OpenTofuApplyJob,
     control?: RunExecutionControl,
   ): Promise<OpenTofuApplyResult> {
-    assertNoObjectStoreStateAdoption(job);
+    const replay = await this.adoptCommittedStateMutation(
+      job.applyRun.id,
+      "apply",
+      job.stateScope,
+    );
+    if (replay) return replay.result as OpenTofuApplyResult;
     await this.restoreSourceArchive(
       job.applyRun.id,
       job.sourceArchive,
+      control?.signal,
+    );
+    await this.restorePriorState(
+      job.applyRun.id,
+      "apply",
+      job,
       control?.signal,
     );
     await copyRunnerLocalPlanArtifact(
@@ -189,7 +329,14 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
       job,
       control?.signal,
     );
-    return {
+    const stateBytes = await fetchRunnerArtifact(
+      this.transport,
+      job.applyRun.id,
+      `/runs/${encodeURIComponent(job.applyRun.id)}/artifacts/tfstate`,
+      control?.signal,
+    );
+    const stateDigest = await digestBytes(stateBytes);
+    const normalizedResult: OpenTofuApplyResult = {
       ...(recordValue(result, "outputs")
         ? {
             outputs: recordValue(
@@ -198,9 +345,7 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
             ) as OpenTofuApplyResult["outputs"],
           }
         : {}),
-      ...(stringValue(result, "stateDigest")
-        ? { stateDigest: stringValue(result, "stateDigest") }
-        : {}),
+      stateDigest,
       ...(stringValue(result, "rawOutputRef")
         ? { rawOutputRef: stringValue(result, "rawOutputRef") }
         : {}),
@@ -209,16 +354,35 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
         : {}),
       diagnostics: diagnostics(result),
     };
+    const committed = await this.commitStateMutation(
+      job.applyRun.id,
+      "apply",
+      job.stateScope,
+      stateBytes,
+      normalizedResult,
+    );
+    return committed.result as OpenTofuApplyResult;
   }
 
   async destroy(
     job: OpenTofuDestroyJob,
     control?: RunExecutionControl,
   ): Promise<OpenTofuDestroyResult> {
-    assertNoObjectStoreStateAdoption(job);
+    const replay = await this.adoptCommittedStateMutation(
+      job.applyRun.id,
+      "destroy",
+      job.stateScope,
+    );
+    if (replay) return replay.result as OpenTofuDestroyResult;
     await this.restoreSourceArchive(
       job.applyRun.id,
       job.sourceArchive,
+      control?.signal,
+    );
+    await this.restorePriorState(
+      job.applyRun.id,
+      "destroy",
+      job,
       control?.signal,
     );
     await copyRunnerLocalPlanArtifact(
@@ -235,12 +399,28 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
       job,
       control?.signal,
     );
-    return {
+    const stateBytes = await fetchRunnerArtifact(
+      this.transport,
+      job.applyRun.id,
+      `/runs/${encodeURIComponent(job.applyRun.id)}/artifacts/tfstate`,
+      control?.signal,
+    );
+    const stateDigest = await digestBytes(stateBytes);
+    const normalizedResult: OpenTofuDestroyResult = {
       ...(providerInstallation(result)
         ? { providerInstallation: providerInstallation(result) }
         : {}),
       diagnostics: diagnostics(result),
+      stateDigest,
     };
+    const committed = await this.commitStateMutation(
+      job.applyRun.id,
+      "destroy",
+      job.stateScope,
+      stateBytes,
+      normalizedResult,
+    );
+    return committed.result as OpenTofuDestroyResult;
   }
 
   async release(
@@ -434,6 +614,115 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
         `OpenTofu runner failed to restore source archive for ${runId}: ${await response.text()}`,
       );
     }
+  }
+
+  private async restorePriorState(
+    runId: string,
+    action: "plan" | "apply" | "destroy",
+    job: {
+      readonly stateScope?: OpenTofuPlanJob["stateScope"];
+      readonly priorState?: DispatchPriorState;
+      readonly stateAdoption?: DispatchStateAdoption;
+    },
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const prior = canonicalLocalPriorState(job);
+    const expectedGeneration =
+      action === "plan"
+        ? (job.stateScope?.generation ?? 0)
+        : Math.max(0, (job.stateScope?.generation ?? 0) - 1);
+    if (!prior) {
+      if (expectedGeneration > 0) {
+        throw new Error(
+          `local OpenTofu run ${runId} has generation ${expectedGeneration} without an exact prior state descriptor`,
+        );
+      }
+      return;
+    }
+    if (prior.generation !== expectedGeneration) {
+      throw new Error(
+        `local OpenTofu exact prior state generation mismatch: expected ${expectedGeneration}`,
+      );
+    }
+    const artifact = await this.stateStore.read(prior.stateRef);
+    if (!artifact) {
+      throw new Error(
+        `local OpenTofu exact prior state ${prior.stateRef} was not found`,
+      );
+    }
+    if (
+      artifact.generation !== prior.generation ||
+      (prior.digest !== undefined &&
+        artifact.stateDigest !== prior.digest) ||
+      (prior.createdByRunId !== undefined &&
+        artifact.createdByRunId !== prior.createdByRunId)
+    ) {
+      throw new Error(
+        `local OpenTofu exact prior state ${prior.stateRef} does not match its ledger descriptor`,
+      );
+    }
+    const response = await this.transport.fetch(
+      `/runs/${encodeURIComponent(runId)}/artifacts/tfstate`,
+      {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: arrayBufferFromBytes(artifact.stateBytes),
+        ...(signal ? { signal } : {}),
+      },
+    );
+    if (!response.ok) {
+      throw new Error(
+        `OpenTofu runner failed to restore exact state for ${runId}: ${await response.text()}`,
+      );
+    }
+  }
+
+  private async adoptCommittedStateMutation(
+    runId: string,
+    action: "apply" | "destroy",
+    scope: OpenTofuApplyJob["stateScope"],
+  ): Promise<LocalOpenTofuStateArtifact | undefined> {
+    if (!scope) {
+      throw new Error(
+        `local OpenTofu ${action} ${runId} requires a durable stateScope`,
+      );
+    }
+    const existing = await this.stateStore.read(scope.stateRef);
+    if (!existing) return undefined;
+    if (
+      existing.createdByRunId !== runId ||
+      existing.generation !== scope.generation ||
+      existing.action !== action
+    ) {
+      throw new Error(
+        `local OpenTofu state target ${scope.stateRef} is already owned by ApplyRun ${existing.createdByRunId}`,
+      );
+    }
+    return existing;
+  }
+
+  private async commitStateMutation(
+    runId: string,
+    action: "apply" | "destroy",
+    scope: OpenTofuApplyJob["stateScope"],
+    stateBytes: Uint8Array,
+    result: OpenTofuApplyResult | OpenTofuDestroyResult,
+  ): Promise<LocalOpenTofuStateArtifact> {
+    if (!scope) {
+      throw new Error(
+        `local OpenTofu ${action} ${runId} requires a durable stateScope`,
+      );
+    }
+    const stateDigest = await digestBytes(stateBytes);
+    return await this.stateStore.commit({
+      stateRef: scope.stateRef,
+      generation: scope.generation,
+      createdByRunId: runId,
+      action,
+      stateDigest,
+      stateBytes,
+      result,
+    });
   }
 }
 
@@ -787,13 +1076,212 @@ function archivePath(root: string, key: string): string {
   return path;
 }
 
-function assertNoObjectStoreStateAdoption(job: {
-  readonly stateAdoption?: unknown;
-}): void {
-  if (job.stateAdoption !== undefined) {
+async function stateArtifactPath(
+  root: string,
+  stateRef: string,
+): Promise<string> {
+  if (!stateRef.trim() || stateRef.includes("\0")) {
+    throw new Error("local OpenTofu stateRef must not be empty");
+  }
+  const key = (await digestBytes(new TextEncoder().encode(stateRef))).slice(
+    "sha256:".length,
+  );
+  return resolve(root, key.slice(0, 2), `${key}.json`);
+}
+
+async function parseStateArtifactEnvelope(
+  text: string,
+  expectedStateRef: string,
+  cryptoBoundary: SecretBoundaryCrypto,
+): Promise<LocalOpenTofuStateArtifact> {
+  const envelope = parseObject(text);
+  if (
+    envelope.version !== 1 ||
+    stringValue(envelope, "stateRef") !== expectedStateRef ||
+    !Number.isSafeInteger(envelope.generation) ||
+    (envelope.generation as number) < 0 ||
+    !stringValue(envelope, "createdByRunId") ||
+    (envelope.action !== "apply" && envelope.action !== "destroy") ||
+    !stringValue(envelope, "stateDigest") ||
+    !stringValue(envelope, "ciphertextBase64")
+  ) {
     throw new Error(
-      "confirmed legacy state adoption requires an object-storage runner; the local runner refuses to start from empty state",
+      `local OpenTofu state artifact ${expectedStateRef} is malformed`,
     );
+  }
+  const metadata = {
+    version: 1,
+    stateRef: expectedStateRef,
+    generation: envelope.generation as number,
+    createdByRunId: requiredString(envelope, "createdByRunId"),
+    action: envelope.action,
+    stateDigest: requiredString(envelope, "stateDigest"),
+  } as const;
+  const ciphertext = decodeCanonicalBase64(
+    requiredString(envelope, "ciphertextBase64"),
+    `local OpenTofu state artifact ${expectedStateRef} ciphertext`,
+  );
+  const protectedPayload = parseObject(
+    await cryptoBoundary.open(
+      ciphertext,
+      "global",
+      localStateArtifactAad(metadata),
+    ),
+  );
+  const stateBytes = decodeCanonicalBase64(
+    requiredString(protectedPayload, "stateBase64"),
+    `local OpenTofu state artifact ${expectedStateRef} state`,
+  );
+  const result = recordValue(protectedPayload, "result");
+  if (!result) {
+    throw new Error(
+      `local OpenTofu state artifact ${expectedStateRef} has no protected result`,
+    );
+  }
+  const artifact: LocalOpenTofuStateArtifact = {
+    stateRef: expectedStateRef,
+    generation: metadata.generation,
+    createdByRunId: metadata.createdByRunId,
+    action: metadata.action,
+    stateDigest: metadata.stateDigest,
+    stateBytes,
+    result: result as unknown as
+      | OpenTofuApplyResult
+      | OpenTofuDestroyResult,
+  };
+  await assertLocalStateArtifact(artifact);
+  return artifact;
+}
+
+function localStateArtifactAad(metadata: {
+  readonly version: 1;
+  readonly stateRef: string;
+  readonly generation: number;
+  readonly createdByRunId: string;
+  readonly action: "apply" | "destroy";
+  readonly stateDigest: string;
+}): Uint8Array {
+  return new TextEncoder().encode(JSON.stringify(metadata));
+}
+
+function decodeCanonicalBase64(value: string, label: string): Uint8Array {
+  const bytes = new Uint8Array(Buffer.from(value, "base64"));
+  if (Buffer.from(bytes).toString("base64") !== value) {
+    throw new Error(`${label} has invalid base64`);
+  }
+  return bytes;
+}
+
+async function assertLocalStateArtifact(
+  artifact: LocalOpenTofuStateArtifact,
+): Promise<void> {
+  if (
+    !artifact.stateRef.trim() ||
+    !Number.isSafeInteger(artifact.generation) ||
+    artifact.generation < 0 ||
+    !artifact.createdByRunId.trim() ||
+    !artifact.stateDigest.trim()
+  ) {
+    throw new Error("local OpenTofu state artifact metadata is invalid");
+  }
+  if (artifact.result.stateDigest !== artifact.stateDigest) {
+    throw new Error(
+      `local OpenTofu state artifact ${artifact.stateRef} result digest does not match its state`,
+    );
+  }
+  await assertDigest(
+    artifact.stateBytes,
+    artifact.stateDigest,
+    `local OpenTofu state ${artifact.stateRef}`,
+  );
+}
+
+function assertSameStateMutation(
+  existing: LocalOpenTofuStateArtifact,
+  candidate: LocalOpenTofuStateArtifact,
+): void {
+  if (
+    existing.createdByRunId !== candidate.createdByRunId ||
+    existing.generation !== candidate.generation ||
+    existing.action !== candidate.action ||
+    existing.stateDigest !== candidate.stateDigest
+  ) {
+    throw new Error(
+      `local OpenTofu state target ${candidate.stateRef} is already committed by a different mutation`,
+    );
+  }
+}
+
+function canonicalLocalPriorState(job: {
+  readonly stateScope?: OpenTofuPlanJob["stateScope"];
+  readonly priorState?: DispatchPriorState;
+  readonly stateAdoption?: DispatchStateAdoption;
+}):
+  | {
+      readonly stateRef: string;
+      readonly generation: number;
+      readonly digest?: string;
+      readonly legacyDigestMissing?: true;
+      readonly createdByRunId?: string;
+    }
+  | undefined {
+  const scoped = job.stateScope?.priorState;
+  const direct = job.priorState;
+  if (scoped && direct && !samePriorStateDescriptor(scoped, direct)) {
+    throw new Error("local OpenTofu prior state descriptors disagree");
+  }
+  const prior = scoped ?? direct;
+  if (prior) {
+    if (job.stateAdoption) {
+      throw new Error(
+        "local OpenTofu state adoption cannot replace canonical prior state",
+      );
+    }
+    if (Boolean(prior.digest?.trim()) === (prior.legacyDigestMissing === true)) {
+      throw new Error(
+        "local OpenTofu prior state requires exactly one of digest or legacyDigestMissing",
+      );
+    }
+    return prior;
+  }
+  const adoption = job.stateAdoption;
+  return adoption
+    ? {
+        stateRef: adoption.stateRef,
+        generation: adoption.stateGeneration,
+        digest: adoption.stateDigest,
+      }
+    : undefined;
+}
+
+function samePriorStateDescriptor(
+  left: DispatchPriorState,
+  right: DispatchPriorState,
+): boolean {
+  return (
+    left.generation === right.generation &&
+    left.stateRef === right.stateRef &&
+    left.digest === right.digest &&
+    left.legacyDigestMissing === right.legacyDigestMissing &&
+    left.createdByRunId === right.createdByRunId
+  );
+}
+
+function isErrno(error: unknown, code: string): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { readonly code?: unknown }).code === code
+  );
+}
+
+async function syncDirectory(path: string): Promise<void> {
+  const directory = await open(path, "r");
+  try {
+    await directory.sync();
+  } finally {
+    await directory.close();
   }
 }
 

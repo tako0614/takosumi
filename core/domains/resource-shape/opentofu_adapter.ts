@@ -33,6 +33,7 @@ import type {
 } from "takosumi-contract";
 import type {
   ApplyExpectedGuard,
+  ApplyRun,
   ApplyRunResponse,
   CreateApplyRunRequest,
   CreatePlanRunRequest,
@@ -43,6 +44,7 @@ import type {
   PublicPlanRun,
 } from "@takosumi/internal/deploy-control-api";
 import type {
+  ApplyRunInternalContext,
   DeployControlActorContext,
   GenericRootDispatchContext,
   PlanRunInternalContext,
@@ -102,6 +104,8 @@ export interface OpentofuRunRequest {
   readonly stateGeneration: number;
   readonly priorState?: ResourceShapePriorStateDescriptor;
   readonly stateAdoption?: ResourceShapeStateAdoptionDescriptor;
+  readonly applyRunId?: string;
+  readonly checkpointApplyRun?: (applyRunId: string) => Promise<void>;
   /** Operator-selected registry key from the Target descriptor. */
   readonly moduleTemplate: string;
   /** Operator-injected child module, resolved fail-closed by the service. */
@@ -134,6 +138,8 @@ export interface OpentofuDestroyRequest {
   readonly stateGeneration: number;
   readonly priorState?: ResourceShapePriorStateDescriptor;
   readonly stateAdoption?: ResourceShapeStateAdoptionDescriptor;
+  readonly applyRunId?: string;
+  readonly checkpointApplyRun?: (applyRunId: string) => Promise<void>;
   /** Re-generated implementation plan. Present for OpenTofu-backed shapes. */
   readonly moduleTemplate?: string;
   readonly operatorModule?: {
@@ -339,6 +345,15 @@ export class OpentofuResourceShapeAdapter implements ResourceAdapter {
       stateGeneration: input.stateGeneration,
       ...(input.priorState ? { priorState: input.priorState } : {}),
       ...(input.stateAdoption ? { stateAdoption: input.stateAdoption } : {}),
+      ...(input.opentofuApplyRun?.applyRunId
+        ? { applyRunId: input.opentofuApplyRun.applyRunId }
+        : {}),
+      ...(input.opentofuApplyRun?.checkpointApplyRun
+        ? {
+            checkpointApplyRun:
+              input.opentofuApplyRun.checkpointApplyRun,
+          }
+        : {}),
       ...(input.plan
         ? {
             moduleTemplate: requirePlanModuleTemplate(input.plan),
@@ -364,6 +379,15 @@ export class OpentofuResourceShapeAdapter implements ResourceAdapter {
       stateGeneration: input.stateGeneration,
       ...(input.priorState ? { priorState: input.priorState } : {}),
       ...(input.stateAdoption ? { stateAdoption: input.stateAdoption } : {}),
+      ...(input.opentofuApplyRun?.applyRunId
+        ? { applyRunId: input.opentofuApplyRun.applyRunId }
+        : {}),
+      ...(input.opentofuApplyRun?.checkpointApplyRun
+        ? {
+            checkpointApplyRun:
+              input.opentofuApplyRun.checkpointApplyRun,
+          }
+        : {}),
       moduleTemplate: requirePlanModuleTemplate(input.plan),
       operatorModule: requirePlanOperatorModule(input.plan),
       inputs: normalizeJsonInputs(input.plan.inputs),
@@ -487,6 +511,7 @@ export interface DeployControlRunDriver {
   createApplyRun(
     request: CreateApplyRunRequest,
     context?: DeployControlActorContext,
+    internal?: ApplyRunInternalContext,
   ): Promise<ApplyRunResponse>;
   getApplyRun(id: string): Promise<ApplyRunResponse>;
   approveRun(
@@ -538,6 +563,9 @@ export class ControllerOpentofuRunPort implements OpentofuRunPort {
   }
 
   async apply(request: OpentofuRunRequest): Promise<OpentofuRunResult> {
+    if (request.applyRunId) {
+      return await this.#resumeApplyRun(request, request.applyRunId, "applied");
+    }
     const planRun = await this.#createAndDrivePlan(
       request,
       operationForStateGeneration(request.stateGeneration),
@@ -546,6 +574,13 @@ export class ControllerOpentofuRunPort implements OpentofuRunPort {
   }
 
   async refresh(request: OpentofuRunRequest): Promise<OpentofuRunResult> {
+    if (request.applyRunId) {
+      return await this.#resumeApplyRun(
+        request,
+        request.applyRunId,
+        "refreshed",
+      );
+    }
     const planRun = await this.#createAndDrivePlan(request, "update", {
       refreshOnly: true,
     });
@@ -580,6 +615,13 @@ export class ControllerOpentofuRunPort implements OpentofuRunPort {
     const applyResponse = await this.#driver.createApplyRun(
       { planRunId: planRun.id, expected: applyGuardFromPlanRun(planRun) },
       { actor: request.actor.actorAccountId },
+      request.checkpointApplyRun
+        ? {
+            onCreated: async (applyRun) => {
+              await request.checkpointApplyRun!(applyRun.id);
+            },
+          }
+        : {},
     );
     let applyRun = applyResponse.applyRun;
     if (this.#drive && applyRun.status === "queued") {
@@ -632,6 +674,9 @@ export class ControllerOpentofuRunPort implements OpentofuRunPort {
   }
 
   async destroy(request: OpentofuDestroyRequest): Promise<OpentofuRunResult> {
+    if (request.applyRunId) {
+      return await this.#resumeDestroyRun(request, request.applyRunId);
+    }
     // Destroy replays the same operator module used to create the Resource.
     const generatedRootDispatch =
       request.moduleTemplate &&
@@ -688,6 +733,13 @@ export class ControllerOpentofuRunPort implements OpentofuRunPort {
         expected: applyGuardFromPlanRun(planRun),
       },
       { actor: request.actor.actorAccountId },
+      request.checkpointApplyRun
+        ? {
+            onCreated: async (applyRun) => {
+              await request.checkpointApplyRun!(applyRun.id);
+            },
+          }
+        : {},
     );
     let applyRun = applyResponse.applyRun;
     if (this.#drive && applyRun.status === "queued") {
@@ -699,6 +751,94 @@ export class ControllerOpentofuRunPort implements OpentofuRunPort {
       summary: `destroyed ${request.nativeResources.length} native resource(s) for ${request.resourceId}`,
       nativeResources: [],
       outputs: {},
+    };
+  }
+
+  async #resumeApplyRun(
+    request: OpentofuRunRequest,
+    applyRunId: string,
+    verb: "applied" | "refreshed",
+  ): Promise<OpentofuRunResult> {
+    let applyRun = (await this.#driver.getApplyRun(applyRunId)).applyRun;
+    const planRun = (
+      await this.#driver.getPlanRun(applyRun.planRunId)
+    ).planRun;
+    assertResourceApplyRunAuthority(
+      request,
+      applyRun,
+      planRun,
+      verb === "refreshed"
+        ? "update"
+        : operationForStateGeneration(request.stateGeneration),
+    );
+    if (this.#drive && applyRun.status === "queued") {
+      applyRun = (await this.#driver.runQueuedApply(applyRun.id)).applyRun;
+    }
+    applyRun = await this.#waitForApplyCompletion(applyRun);
+    return this.#completedApplyResult(request, planRun, applyRun, verb);
+  }
+
+  async #resumeDestroyRun(
+    request: OpentofuDestroyRequest,
+    applyRunId: string,
+  ): Promise<OpentofuRunResult> {
+    let applyRun = (await this.#driver.getApplyRun(applyRunId)).applyRun;
+    const planRun = (
+      await this.#driver.getPlanRun(applyRun.planRunId)
+    ).planRun;
+    assertResourceApplyRunAuthority(request, applyRun, planRun, "destroy");
+    if (this.#drive && applyRun.status === "queued") {
+      applyRun = (await this.#driver.runQueuedApply(applyRun.id)).applyRun;
+    }
+    applyRun = await this.#waitForApplyCompletion(applyRun);
+    if (!applyRun.resourceResult) {
+      throw new Error(
+        `destroy ${applyRun.id} succeeded without a Resource result`,
+      );
+    }
+    assertResourceApplyRunResultAuthority(request, applyRun);
+    return {
+      runId: applyRun.id,
+      summary: `destroyed ${request.nativeResources.length} native resource(s) for ${request.resourceId}`,
+      nativeResources: [],
+      outputs: {},
+    };
+  }
+
+  #completedApplyResult(
+    request: OpentofuRunRequest,
+    planRun: PublicPlanRun,
+    applyRun: ApplyRun,
+    verb: "applied" | "imported" | "refreshed",
+  ): OpentofuRunResult {
+    const nativeResources = resultingNativeResources(
+      planRun.planResourceChanges,
+      request.nativeResources,
+    );
+    if (!applyRun.resourceResult) {
+      throw new Error(
+        `apply ${applyRun.id} succeeded without a Resource result`,
+      );
+    }
+    assertResourceApplyRunResultAuthority(request, applyRun);
+    const resourceResult = applyRun.resourceResult;
+    return {
+      runId: applyRun.id,
+      summary: `${verb} ${nativeResources.length} native resource(s) for ${request.resourceId}`,
+      nativeResources,
+      outputs: { ...resourceResult.outputs },
+      execution: {
+        runId: applyRun.id,
+        stateGeneration: resourceResult.stateGeneration,
+        stateRef: resourceResult.stateRef,
+        ...(resourceResult.stateDigest
+          ? { stateDigest: resourceResult.stateDigest }
+          : {}),
+        ...(resourceResult.rawOutputRef
+          ? { rawOutputRef: resourceResult.rawOutputRef }
+          : {}),
+        updatedAt: new Date(applyRun.finishedAt ?? Date.now()).toISOString(),
+      },
     };
   }
 
@@ -894,6 +1034,53 @@ function providerBindingsFor(
   ];
 }
 
+function assertResourceApplyRunAuthority(
+  request: Pick<
+    OpentofuRunRequest | OpentofuDestroyRequest,
+    "resourceId" | "environment"
+  >,
+  applyRun: ApplyRun,
+  planRun: PublicPlanRun,
+  expectedOperation: NonNullable<CreatePlanRunRequest["operation"]>,
+): void {
+  const workspaceId = workspaceIdFromResourceId(request.resourceId);
+  if (
+    applyRun.planRunId !== planRun.id ||
+    applyRun.workspaceId !== workspaceId ||
+    planRun.workspaceId !== workspaceId ||
+    applyRun.operation !== expectedOperation ||
+    planRun.operation !== expectedOperation ||
+    planRun.resourceContext?.resourceId !== request.resourceId ||
+    planRun.resourceContext.workspaceId !== workspaceId ||
+    planRun.resourceContext.environment !== request.environment
+  ) {
+    throw new Error(
+      `ApplyRun ${applyRun.id} is not the canonical ${expectedOperation} run for Resource ${request.resourceId}`,
+    );
+  }
+}
+
+function assertResourceApplyRunResultAuthority(
+  request: Pick<
+    OpentofuRunRequest | OpentofuDestroyRequest,
+    "resourceId" | "stateGeneration"
+  >,
+  applyRun: ApplyRun,
+): void {
+  const result = applyRun.resourceResult;
+  if (
+    !result ||
+    result.resourceId !== request.resourceId ||
+    result.stateGeneration !== request.stateGeneration + 1 ||
+    !result.stateRef.trim() ||
+    !result.stateDigest?.trim()
+  ) {
+    throw new Error(
+      `ApplyRun ${applyRun.id} has no exact durable result for Resource ${request.resourceId} generation ${request.stateGeneration + 1}`,
+    );
+  }
+}
+
 /** Project each typed public output as an allowlist passthrough of the same name. */
 export function outputAllowlistFromPublicOutputs(
   publicOutputs: readonly ResourceShapePublicOutput[],
@@ -1020,11 +1207,13 @@ function assertCanonicalPriorState(
     return;
   }
   const prior = request.priorState;
+  const hasCanonicalDigest = Boolean(prior?.digest?.trim());
+  const hasLegacyMarker = prior?.legacyDigestMissing === true;
   if (
     !prior ||
     prior.generation !== request.stateGeneration ||
     !prior.stateRef.trim() ||
-    !prior.digest.trim() ||
+    hasCanonicalDigest === hasLegacyMarker ||
     !prior.createdByRunId.trim()
   ) {
     throw new Error(

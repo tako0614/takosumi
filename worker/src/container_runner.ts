@@ -51,6 +51,8 @@ const RUNNER_CAPACITY_EXCEEDED_PATTERN =
   /maximum number of running container instances exceeded/i;
 const RUNNER_SUBSTRATE_RESET_PATTERN =
   /durable object reset because its code was updated/i;
+const RUNNER_ARTIFACT_RELAY_AMBIGUOUS_CODE =
+  "runner_artifact_relay_ambiguous";
 const RUNNER_STARTUP_SECONDS_HEADER = "x-takosumi-runner-startup-seconds";
 type ContainerRunnerAction =
   | OpenTofuRunAction
@@ -531,6 +533,11 @@ export class CloudflareContainerOpenTofuRunner
           if (!response.ok) {
             const detail = runnerFailureDetail(payload, redactedText);
             const message = `OpenTofu runner rejected ${action} run ${runId}: ${response.status}${detail ? ` (${detail})` : ""}`;
+            const relayInfrastructureError =
+              runnerInfrastructureErrorFromPayload(payload, message);
+            if (relayInfrastructureError) {
+              throw relayInfrastructureError;
+            }
             if (
               attempt < attempts &&
               isRunnerCapacityExceededMessage(message)
@@ -685,6 +692,22 @@ function runnerInfrastructureErrorFromMessage(
         originalError,
       })
     : undefined;
+}
+
+function runnerInfrastructureErrorFromPayload(
+  payload: Record<string, unknown>,
+  message: string,
+): OpenTofuRunnerInfrastructureError | undefined {
+  const errorCode = stringFromRecord(payload, "errorCode");
+  if (
+    payload.retryable === true &&
+    errorCode === RUNNER_ARTIFACT_RELAY_AMBIGUOUS_CODE
+  ) {
+    return new OpenTofuRunnerInfrastructureError(message, {
+      reason: errorCode,
+    });
+  }
+  return undefined;
 }
 
 function compatibilityCheckTimeoutMs(env: CloudflareWorkerEnv): number {

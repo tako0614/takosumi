@@ -2,13 +2,23 @@
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  createFileOpenTofuStateArtifactStore,
   createLocalOpenTofuRunner,
+  createLocalOpenTofuRunnerProfile,
   type SourceArchiveStore,
 } from "../../../../deploy/node-postgres/src/local-opentofu-runner.ts";
+import { generateOpenTofuChildModuleRoot } from "../../../../lib/rootgen/src/mod.ts";
+import { workspaceForRun } from "../../../../runner/lib/artifacts.ts";
+import { PartitionedSecretBoundaryCrypto } from "../../../../core/adapters/secret-store/memory.ts";
+
+const TEST_STATE_CRYPTO = new PartitionedSecretBoundaryCrypto({
+  globalPassphrase: "local-opentofu-state-test-passphrase-32-bytes-minimum",
+});
 
 test("local OpenTofu runner executes generic release commands in restored source", async () => {
   const tempDir = await mkdtemp(join(tmpdir(), "takosumi-local-runner-"));
@@ -28,7 +38,13 @@ test("local OpenTofu runner executes generic release commands in restored source
       },
       read: async () => archiveBytes,
     };
-    const runner = createLocalOpenTofuRunner({ archiveStore });
+    const runner = createLocalOpenTofuRunner({
+      archiveStore,
+      stateStore: createFileOpenTofuStateArtifactStore(
+        join(tempDir, "state-artifacts"),
+        TEST_STATE_CRYPTO,
+      ),
+    });
 
     const result = await runner.release!({
       runId: "release_apply_1",
@@ -108,6 +124,253 @@ test("local OpenTofu runner executes generic release commands in restored source
     await rm(tempDir, { recursive: true, force: true });
   }
 });
+
+test("local OpenTofu runner durably commits and replays exact apply and destroy state", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "takosumi-local-state-"));
+  const runIds = ["plan_create", "apply_create", "plan_destroy", "apply_destroy"].map(
+    (prefix) => `${prefix}_${crypto.randomUUID()}`,
+  );
+  const [createPlanId, createApplyId, destroyPlanId, destroyApplyId] = runIds as [
+    string,
+    string,
+    string,
+    string,
+  ];
+  try {
+    const stateArtifactDir = join(tempDir, "state-artifacts");
+    const runner = createLocalOpenTofuRunner({
+      archiveStore: {
+        write: async () => {
+          throw new Error("source archive is not used by operator modules");
+        },
+        read: async () => {
+          throw new Error("source archive is not used by operator modules");
+        },
+      },
+      stateStore: createFileOpenTofuStateArtifactStore(
+        stateArtifactDir,
+        TEST_STATE_CRYPTO,
+      ),
+    });
+    const profile = createLocalOpenTofuRunnerProfile();
+    const generatedRoot = generateOpenTofuChildModuleRoot({
+      requiredProviders: [],
+      inputs: {},
+      outputAllowlist: {
+        message: { from: "message", type: "string" },
+      },
+    });
+    const operatorModule = {
+      files: [
+        {
+          path: "main.tf",
+          text: 'output "message" {\n  value = "durable-local-state"\n}\n',
+        },
+      ],
+    };
+    const createPlanRun = localPlanRun(createPlanId, "create");
+    const createPlan = await runner.plan({
+      planRun: createPlanRun,
+      runnerProfile: profile,
+      variables: {},
+      generatedRoot,
+      operatorModule,
+      outputAllowlist: { message: { from: "message" } },
+      stateScope: stateScope(0, "artifact:local-state:0"),
+    });
+    const generationOneRef = "artifact:local-state:1";
+    const createApplyRun = localApplyRun(createApplyId, createPlanId, "create");
+    const applied = await runner.apply({
+      applyRun: createApplyRun,
+      planRun: createPlanRun,
+      planArtifact: createPlan.planArtifact,
+      runnerProfile: profile,
+      generatedRoot,
+      operatorModule,
+      outputAllowlist: { message: { from: "message" } },
+      stateScope: stateScope(1, generationOneRef),
+    });
+    expect(applied.outputs).toEqual({
+      message: {
+        sensitive: false,
+        type: "string",
+        value: "durable-local-state",
+      },
+    });
+    expect(applied.stateDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
+    const stateRefHash = createHash("sha256")
+      .update(generationOneRef)
+      .digest("hex");
+    const stateEnvelope = await readFile(
+      join(stateArtifactDir, stateRefHash.slice(0, 2), `${stateRefHash}.json`),
+      "utf8",
+    );
+    expect(stateEnvelope).not.toContain("durable-local-state");
+    expect(stateEnvelope).not.toContain("stateBase64");
+    expect(JSON.parse(stateEnvelope)).toMatchObject({
+      version: 1,
+      stateRef: generationOneRef,
+      createdByRunId: createApplyId,
+      action: "apply",
+      ciphertextBase64: expect.any(String),
+    });
+
+    // Remove every ephemeral runner file. A same-ApplyRun replay must return
+    // only from the durable exact target, without a second tofu invocation.
+    await removeRunWorkspace(createApplyId);
+    expect(
+      await runner.apply({
+        applyRun: createApplyRun,
+        planRun: createPlanRun,
+        planArtifact: createPlan.planArtifact,
+        runnerProfile: profile,
+        generatedRoot,
+        operatorModule,
+        outputAllowlist: { message: { from: "message" } },
+        stateScope: stateScope(1, generationOneRef),
+      }),
+    ).toEqual(applied);
+
+    const priorState = {
+      generation: 1,
+      stateRef: generationOneRef,
+      legacyDigestMissing: true as const,
+      createdByRunId: createApplyId,
+    };
+    const destroyPlanRun = localPlanRun(destroyPlanId, "destroy");
+    const destroyPlan = await runner.plan({
+      planRun: destroyPlanRun,
+      runnerProfile: profile,
+      variables: {},
+      generatedRoot,
+      operatorModule,
+      outputAllowlist: { message: { from: "message" } },
+      priorState,
+      stateScope: stateScope(1, generationOneRef, priorState),
+    });
+    const generationTwoRef = "artifact:local-state:2";
+    const destroyApplyRun = localApplyRun(
+      destroyApplyId,
+      destroyPlanId,
+      "destroy",
+    );
+    const destroyed = await runner.destroy!({
+      applyRun: destroyApplyRun,
+      planRun: destroyPlanRun,
+      planArtifact: destroyPlan.planArtifact,
+      runnerProfile: profile,
+      generatedRoot,
+      operatorModule,
+      priorState,
+      stateScope: stateScope(2, generationTwoRef, priorState),
+    });
+    expect(destroyed.stateDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
+
+    await removeRunWorkspace(destroyApplyId);
+    expect(
+      await runner.destroy!({
+        applyRun: destroyApplyRun,
+        planRun: destroyPlanRun,
+        planArtifact: destroyPlan.planArtifact,
+        runnerProfile: profile,
+        generatedRoot,
+        operatorModule,
+        priorState,
+        stateScope: stateScope(2, generationTwoRef, priorState),
+      }),
+    ).toEqual(destroyed);
+
+    await expect(
+      runner.destroy!({
+        applyRun: localApplyRun(
+          `${destroyApplyId}_other`,
+          destroyPlanId,
+          "destroy",
+        ),
+        planRun: destroyPlanRun,
+        planArtifact: destroyPlan.planArtifact,
+        runnerProfile: profile,
+        generatedRoot,
+        operatorModule,
+        priorState,
+        stateScope: stateScope(2, generationTwoRef, priorState),
+      }),
+    ).rejects.toThrow(`already owned by ApplyRun ${destroyApplyId}`);
+  } finally {
+    await Promise.all(runIds.map(removeRunWorkspace));
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+function localPlanRun(id: string, operation: "create" | "destroy") {
+  return {
+    id,
+    workspaceId: "workspace_local",
+    source: {
+      kind: "operator_module" as const,
+      digest: `sha256:${"a".repeat(64)}`,
+    },
+    sourceDigest: `sha256:${"a".repeat(64)}`,
+    operation,
+    runnerProfileId: "local-opentofu",
+    variablesDigest: `sha256:${"b".repeat(64)}`,
+    requiredProviders: [],
+    status: "succeeded" as const,
+    policy: { effect: "allow" as const, reasons: [] },
+    policyDecisionDigest: `sha256:${"c".repeat(64)}`,
+    auditEvents: [],
+    createdAt: 1,
+    updatedAt: 1,
+  };
+}
+
+function localApplyRun(
+  id: string,
+  planRunId: string,
+  operation: "create" | "destroy",
+) {
+  return {
+    id,
+    planRunId,
+    workspaceId: "workspace_local",
+    operation,
+    runnerProfileId: "local-opentofu",
+    status: "queued" as const,
+    expected: { planRunId },
+    stateBackend: { kind: "local" as const, ref: "state://local" },
+    stateLock: { status: "pending" as const, backendRef: "state://local" },
+    auditEvents: [],
+    createdAt: 1,
+    updatedAt: 1,
+  };
+}
+
+function stateScope(
+  generation: number,
+  stateRef: string,
+  priorState?: {
+    readonly generation: number;
+    readonly stateRef: string;
+    readonly digest?: string;
+    readonly legacyDigestMissing?: true;
+    readonly createdByRunId: string;
+  },
+) {
+  return {
+    workspaceId: "workspace_local",
+    subject: { kind: "resource" as const, id: "resource_local" },
+    environment: "default",
+    generation,
+    stateRef,
+    ...(priorState ? { priorState } : {}),
+  };
+}
+
+async function removeRunWorkspace(runId: string): Promise<void> {
+  const workspace = workspaceForRun(runId);
+  await rm(workspace.root, { recursive: true, force: true });
+  await rm(workspace.depsDir, { recursive: true, force: true });
+}
 
 function createArchive(sourceDir: string, archivePath: string): void {
   const result = spawnSync(

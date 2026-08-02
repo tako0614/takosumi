@@ -26,6 +26,7 @@ import {
   FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE,
   FIXTURE_CLOUDFLARE_PROVIDER,
   fakeProviderVault,
+  fixtureStateCommit,
   seedProviderConnections,
 } from "../../helpers/deploy-control/model_fixture.ts";
 
@@ -64,7 +65,7 @@ function runner(value: {
         providerInstallation: [FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE],
       }),
     apply: (job) =>
-      Promise.resolve({
+      Promise.resolve(fixtureStateCommit({
         outputs: {
           base_domain: {
             sensitive: false,
@@ -74,8 +75,8 @@ function runner(value: {
                 : "consumer.example.com",
           },
         } as never,
-      }),
-    destroy: () => Promise.resolve({}),
+      })),
+    destroy: () => Promise.resolve(fixtureStateCommit()),
   };
 }
 

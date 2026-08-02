@@ -92,6 +92,11 @@ export interface ResourceShapePendingOperation {
   readonly operation: ResourceOperation;
   readonly operationKey: string;
   /**
+   * OpenTofu lifecycle recovery points at the shared deploy-control ApplyRun;
+   * direct plugins omit this field and keep using ResourceOperationRun.
+   */
+  readonly authority?: "opentofu_apply_run";
+  /**
    * Exact reviewed deployment authority retained for an Applying Resource.
    * The bounded host recovery loop reuses this evidence and the immutable Run
    * operation key; it never invents a fresh quote or redispatch identity.
@@ -112,7 +117,13 @@ export interface ResourceShapeExecutionRecord {
 export interface ResourceShapePriorStateDescriptor {
   readonly generation: number;
   readonly stateRef: string;
-  readonly digest: string;
+  readonly digest?: string;
+  /**
+   * Bounded transition for pre-digest Resource execution rows. The runner may
+   * read only stateRef, verifies any storage metadata present, and the next
+   * successful execution replaces this with a digest-bearing descriptor.
+   */
+  readonly legacyDigestMissing?: true;
   readonly createdByRunId: string;
 }
 

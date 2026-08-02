@@ -578,7 +578,9 @@ export interface DispatchGeneratedRoot {
 export interface DispatchPriorState {
   readonly generation: number;
   readonly stateRef: string;
-  readonly digest: string;
+  readonly digest?: string;
+  /** Explicit compatibility marker for a pre-digest Resource execution row. */
+  readonly legacyDigestMissing?: true;
   readonly createdByRunId: string;
 }
 

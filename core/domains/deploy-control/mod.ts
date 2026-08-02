@@ -1059,6 +1059,15 @@ export interface PlanRunInternalContext {
   readonly resolvedDependencies?: ResolvedDependencies;
 }
 
+/**
+ * Internal creation hook used by a lifecycle owner to durably checkpoint the
+ * exact ApplyRun id after the Run row exists but before observer/queue dispatch.
+ * Throwing leaves the queued ApplyRun undispatched and therefore provider-safe.
+ */
+export interface ApplyRunInternalContext {
+  readonly onCreated?: (applyRun: ApplyRun) => Promise<void>;
+}
+
 // `ResolvedDependencies` (the resolved consumer Dependencies for an
 // Capsule-driven plan) + `ShareCoverage` now live with the resolution logic
 // in {@link DependencyResolutionService}; `ResolvedDependencies` is imported above
@@ -1568,8 +1577,9 @@ export class OpenTofuController {
   createApplyRun(
     request: CreateApplyRunRequest,
     context: DeployControlActorContext = {},
+    internal: ApplyRunInternalContext = {},
   ): Promise<ApplyRunResponse> {
-    return this.#runEngine.createApplyRun(request, context);
+    return this.#runEngine.createApplyRun(request, context, internal);
   }
 
   dispatchQueuedRun(dispatch: OpenTofuRunDispatch): Promise<void> {

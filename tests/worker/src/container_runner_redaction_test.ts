@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import type { CloudflareWorkerEnv } from "../../../worker/src/bindings.ts";
 import { CloudflareContainerOpenTofuRunner } from "../../../worker/src/container_runner.ts";
 import { InMemoryObservabilitySink } from "../../../core/domains/observability/mod.ts";
+import { OpenTofuRunnerInfrastructureError } from "../../../core/domains/deploy-control/mod.ts";
 
 const PLAN_DIGEST =
   "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -441,6 +442,42 @@ test("container runner surfaces non-2xx apply stderr instead of raw JSON envelop
   expect(message).not.toContain("providerInstallation");
   expect(message).not.toContain("apply-secret");
   expect(message).toContain("[redacted]");
+});
+
+test("container runner maps typed artifact relay ambiguity to retryable infrastructure", async () => {
+  const runner = new CloudflareContainerOpenTofuRunner(
+    envReturning(
+      {
+        error:
+          "OpenTofu runner artifact durability acknowledgement is ambiguous",
+        errorCode: "runner_artifact_relay_ambiguous",
+        retryable: true,
+      },
+      undefined,
+      503,
+    ),
+  );
+
+  let error: unknown;
+  try {
+    await runner.apply({
+      applyRun: { id: "apply_ambiguous" },
+      planRun: { id: "plan_ambiguous" },
+      planArtifact: {
+        kind: "runner-local",
+        ref: "runner-local://plan_ambiguous/tfplan",
+        digest: PLAN_DIGEST,
+      },
+    } as Parameters<CloudflareContainerOpenTofuRunner["apply"]>[0]);
+  } catch (caught) {
+    error = caught;
+  }
+
+  expect(error).toBeInstanceOf(OpenTofuRunnerInfrastructureError);
+  expect((error as OpenTofuRunnerInfrastructureError).retryable).toBe(true);
+  expect((error as OpenTofuRunnerInfrastructureError).reason).toBe(
+    "runner_artifact_relay_ambiguous",
+  );
 });
 
 test("container runner reads Capsule compatibility source files", async () => {

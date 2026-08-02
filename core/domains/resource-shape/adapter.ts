@@ -98,6 +98,11 @@ export interface AdapterApplyInput {
   /** Derived only from the canonical Resource execution row. */
   readonly priorState?: ResourceShapePriorStateDescriptor;
   readonly stateAdoption?: ResourceShapeStateAdoptionDescriptor;
+  /** Internal shared-Run recovery authority for the OpenTofu adapter only. */
+  readonly opentofuApplyRun?: {
+    readonly applyRunId?: string;
+    readonly checkpointApplyRun?: (applyRunId: string) => Promise<void>;
+  };
   readonly plan: ResourceShapePlan;
   /** The selected TargetPool entry the plan resolved to. */
   readonly target: TargetPoolEntry;
@@ -229,6 +234,11 @@ export interface AdapterDeleteInput {
   /** Derived only from the canonical Resource execution row. */
   readonly priorState?: ResourceShapePriorStateDescriptor;
   readonly stateAdoption?: ResourceShapeStateAdoptionDescriptor;
+  /** Internal shared-Run recovery authority for the OpenTofu adapter only. */
+  readonly opentofuApplyRun?: {
+    readonly applyRunId?: string;
+    readonly checkpointApplyRun?: (applyRunId: string) => Promise<void>;
+  };
   /**
    * The same implementation plan used to create the Resource. OpenTofu-backed
    * Resources need it again for destroy so the runner can replay the pinned

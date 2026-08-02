@@ -834,7 +834,7 @@ test("apply with stateScope adopts same-run completed state without reapplying",
   assert.equal(stateField.digest, sealedState.contentDigest);
 });
 
-test("apply redelivery adopts the exact ApplyRun target after its R2 response is lost", async () => {
+test("apply redelivery adopts the exact ApplyRun artifacts after R2 responses are lost", async () => {
   const artifacts = new FakeR2Bucket();
   const state = new FakeR2Bucket();
   const crypto = StateArtifactCrypto.fromEnv({
@@ -852,6 +852,10 @@ test("apply redelivery adopts the exact ApplyRun target after its R2 response is
     new Error("injected ambiguous target put response"),
   );
   const rawOutputRef = RAW_OUTPUT_REF.replace("/runs/plan_1/", `/runs/${applyRunId}/`);
+  artifacts.failNextPutResponse(
+    rawOutputRef,
+    new Error("injected ambiguous raw-output put response"),
+  );
   let providerPosts = 0;
   const runner = runnerWithContainer(artifacts, state, {
     async containerFetch(request) {
@@ -896,7 +900,15 @@ test("apply redelivery adopts the exact ApplyRun target after its R2 response is
       body: requestBody,
     }),
   );
-  assert.equal(first.status, 500);
+  assert.equal(first.status, 503);
+  assert.deepEqual(await first.json(), {
+    error:
+      "OpenTofu runner artifact durability acknowledgement is ambiguous",
+    errorCode: "runner_artifact_relay_ambiguous",
+    retryable: true,
+    detail:
+      "redeliver the same ApplyRun; its immutable target will be adopted if the write committed",
+  });
 
   const second = await runner.fetch(
     new Request("https://runner/runs/plan_1", {
@@ -999,7 +1011,7 @@ test("destroy with stateScope adopts same-run completed state without destroying
   assert.equal(stateField.digest, sealedState.contentDigest);
 });
 
-test("destroy redelivery adopts the exact ApplyRun target after pointer persistence fails", async () => {
+test("destroy succeeds when the best-effort current-state cache write fails", async () => {
   const artifacts = new FakeR2Bucket();
   const state = new FakeR2Bucket();
   const crypto = StateArtifactCrypto.fromEnv({
@@ -1050,7 +1062,7 @@ test("destroy redelivery adopts the exact ApplyRun target after pointer persiste
       body: requestBody,
     }),
   );
-  assert.equal(first.status, 500);
+  assert.equal(first.status, 200);
   const second = await runner.fetch(
     new Request("https://runner/runs/plan_1", {
       method: "POST",
@@ -1331,6 +1343,63 @@ test("plan restores only the exact canonical prior descriptor and ignores an orp
   assert.equal(state.listCalls.length, 0);
 });
 
+test("plan restores a legacy digest-missing Resource only from its exact stateRef", async () => {
+  const state = new FakeR2Bucket();
+  const crypto = StateArtifactCrypto.fromEnv({
+    TAKOSUMI_SECRET_STORE_PASSPHRASE: TEST_PASSPHRASE,
+  });
+  const priorBytes = new TextEncoder().encode('{"version":4,"serial":2}');
+  const sealed = await crypto.seal(priorBytes);
+  const exactKey = `${STATE_PREFIX}/00000002.tfstate.enc`;
+  // Pre-transition objects may also predate the current custom metadata. The
+  // exact ledger ref plus authenticated ciphertext is sufficient to restore;
+  // no prefix/current-pointer discovery is allowed.
+  await state.put(exactKey, sealed.ciphertext);
+  let restored: Uint8Array | undefined;
+  const runner = runnerWithContainer(new FakeR2Bucket(), state, {
+    async containerFetch(request) {
+      const path = new URL(request.url).pathname;
+      if (request.method === "PUT" && path.endsWith("/artifacts/tfstate")) {
+        restored = new Uint8Array(await request.arrayBuffer());
+        return Response.json({ ok: true });
+      }
+      if (request.method === "POST" && path === "/runs/plan_legacy") {
+        return Response.json({ status: "succeeded", exitCode: 0 });
+      }
+      return Response.json({ error: "unexpected" }, { status: 500 });
+    },
+  });
+
+  const response = await runner.fetch(
+    new Request("https://runner/runs/plan_legacy", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        kind: "takosumi.opentofu-run@v1",
+        action: "plan",
+        runId: "plan_legacy",
+        request: {
+          stateScope: {
+            ...SCOPE,
+            generation: 2,
+            stateRef: exactKey,
+            priorState: {
+              generation: 2,
+              stateRef: exactKey,
+              legacyDigestMissing: true,
+              createdByRunId: "apply_legacy_2",
+            },
+          },
+        },
+      }),
+    }),
+  );
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(restored, priorBytes);
+  assert.equal(state.listCalls.length, 0);
+});
+
 test("missing exact canonical generation fails even when a lower generation remains", async () => {
   const state = new FakeR2Bucket();
   const crypto = StateArtifactCrypto.fromEnv({
@@ -1370,7 +1439,7 @@ test("missing exact canonical generation fails even when a lower generation rema
             priorState: {
               generation: 2,
               stateRef: exactKey,
-              digest: `sha256:${"f".repeat(64)}`,
+              legacyDigestMissing: true,
               createdByRunId: "apply_2",
             },
           },

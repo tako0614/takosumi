@@ -27,6 +27,7 @@ test("local OpenTofu runner passes modulePath to compatibility_check", async () 
 
   try {
     const runner = createHttpOpenTofuRunner({
+      stateStore: unusedStateStore,
       archiveStore: {
         write: async () => {},
         read: async () => archiveBytes,
@@ -109,6 +110,7 @@ test("HTTP OpenTofu runner preserves source sync reuse and repository metadata",
 
   try {
     const runner = createHttpOpenTofuRunner({
+      stateStore: unusedStateStore,
       archiveStore: {
         write: async (key, bytes) => writes.push({ key, bytes }),
         read: async () => {
@@ -218,6 +220,7 @@ test("HTTP OpenTofu runner keeps an unchanged object-storage source archive with
 
   try {
     const runner = createHttpOpenTofuRunner({
+      stateStore: unusedStateStore,
       archiveStore: {
         write: async (key, bytes) => writes.push({ key, bytes }),
         read: async () => {
@@ -252,6 +255,11 @@ test("HTTP OpenTofu runner keeps an unchanged object-storage source archive with
     server.stop(true);
   }
 });
+
+const unusedStateStore = {
+  read: async () => undefined,
+  commit: async <T>(artifact: T): Promise<T> => artifact,
+};
 
 function sourceSnapshot(archiveDigest: string): SourceSnapshot {
   return {

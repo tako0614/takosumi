@@ -339,6 +339,42 @@ class PluginSpyAdapter extends StubResourceShapeAdapter {
   }
 }
 
+class CheckpointingOpentofuAdapter extends PluginSpyAdapter {
+  override readonly id = "opentofu";
+  readonly applyRunIds: string[] = [];
+  readonly destroyRunIds: string[] = [];
+
+  override async apply(input: AdapterApplyInput): Promise<AdapterApplyResult> {
+    this.applyInputs.push(input);
+    const applyRunId = input.opentofuApplyRun?.applyRunId ?? "apply_exact_A";
+    if (input.opentofuApplyRun?.checkpointApplyRun) {
+      await input.opentofuApplyRun.checkpointApplyRun(applyRunId);
+    }
+    this.applyRunIds.push(applyRunId);
+    const result = await new StubResourceShapeAdapter().apply(input);
+    return {
+      ...result,
+      runId: applyRunId,
+      execution: {
+        runId: applyRunId,
+        stateGeneration: input.stateGeneration + 1,
+        stateRef: `artifact:resource-state:${input.resourceId}:${input.stateGeneration + 1}`,
+        stateDigest: `sha256:${"e".repeat(64)}`,
+        updatedAt: NOW,
+      },
+    };
+  }
+
+  override async delete(input: AdapterDeleteInput): Promise<void> {
+    this.deleteInputs.push(input);
+    const applyRunId = input.opentofuApplyRun?.applyRunId ?? "destroy_exact_A";
+    if (input.opentofuApplyRun?.checkpointApplyRun) {
+      await input.opentofuApplyRun.checkpointApplyRun(applyRunId);
+    }
+    this.destroyRunIds.push(applyRunId);
+  }
+}
+
 class DriftedObserveAdapter extends PluginSpyAdapter {
   override async observe(
     input: AdapterApplyInput,
@@ -2584,6 +2620,90 @@ test("post-backend persistence failure remains Applying and settlement-pending",
   expect(recovered.ok).toBe(true);
   expect((await stores.resources.get(APPLY_ID))?.phase).toBe("Ready");
   expect((await stores.resources.get(APPLY_ID))?.generation).toBe(1);
+});
+
+test("OpenTofu apply finalization recovery reuses the checkpointed successful ApplyRun", async () => {
+  const baseStores = createInMemoryResourceShapeStores();
+  let failReadyWrite = true;
+  const stores: ResourceShapeStores = {
+    ...baseStores,
+    async commitApply(input) {
+      if (failReadyWrite) {
+        throw new Error("simulated crash after OpenTofu artifact commit");
+      }
+      return await baseStores.commitApply(input);
+    },
+  };
+  const adapter = new CheckpointingOpentofuAdapter();
+  const service = new ResourceShapeService({
+    stores,
+    adapter,
+    now: () => NOW,
+    moduleRegistry: TEST_RESOURCE_SHAPE_MODULE_REGISTRY,
+  });
+  await seed(service);
+
+  const pending = await reviewedApply(service, APPLY);
+  expect(pending.ok).toBe(false);
+  if (!pending.ok) {
+    expect(pending.error.code).toBe("deployment_finalize_pending");
+  }
+  expect(await stores.resources.get(APPLY_ID)).toMatchObject({
+    phase: "Applying",
+    pendingOperation: {
+      authority: "opentofu_apply_run",
+      operation: "apply",
+      runId: "apply_exact_A",
+      operationKey: "apply_exact_A",
+    },
+  });
+
+  failReadyWrite = false;
+  const preview = await service.preview(APPLY);
+  expect(preview.ok).toBe(true);
+  if (!preview.ok) return;
+  const recovered = await service.recoverApply(APPLY, {
+    planDigest: preview.value.planDigest,
+  });
+  expect(recovered.ok).toBe(true);
+  expect(adapter.applyRunIds).toEqual(["apply_exact_A", "apply_exact_A"]);
+  expect(adapter.applyInputs[0]?.opentofuApplyRun?.applyRunId).toBeUndefined();
+  expect(adapter.applyInputs[1]?.opentofuApplyRun?.applyRunId).toBe(
+    "apply_exact_A",
+  );
+  expect(await stores.resources.get(APPLY_ID)).toMatchObject({
+    phase: "Ready",
+    execution: { runId: "apply_exact_A" },
+  });
+});
+
+test("OpenTofu re-apply upgrades an exact legacy execution that has no state digest", async () => {
+  const stores = createInMemoryResourceShapeStores();
+  const adapter = new CheckpointingOpentofuAdapter();
+  const service = new ResourceShapeService({
+    stores,
+    adapter,
+    now: () => NOW,
+    moduleRegistry: TEST_RESOURCE_SHAPE_MODULE_REGISTRY,
+  });
+  await seed(service);
+  expect((await reviewedApply(service, APPLY)).ok).toBe(true);
+  const ready = (await stores.resources.get(APPLY_ID))!;
+  const { stateDigest: _removedDigest, ...legacyExecution } = ready.execution!;
+  await stores.resources.upsert({ ...ready, execution: legacyExecution });
+
+  const upgraded = await reviewedApply(service, APPLY);
+  expect(upgraded.ok).toBe(true);
+  expect(adapter.applyInputs[1]?.priorState).toEqual({
+    generation: legacyExecution.stateGeneration,
+    stateRef: legacyExecution.stateRef,
+    legacyDigestMissing: true,
+    createdByRunId: legacyExecution.runId,
+  });
+  expect((await stores.resources.get(APPLY_ID))?.execution).toMatchObject({
+    stateGeneration: legacyExecution.stateGeneration + 1,
+    stateDigest: `sha256:${"e".repeat(64)}`,
+  });
 });
 
 test("capture failure leaves a Ready Resource and durable settlement-pending request", async () => {
@@ -6068,6 +6188,64 @@ test("a Deleting Resource retries backend cleanup after atomic finalization reco
   expect(adapter.deleteInputs).toHaveLength(2);
   expect(await stores.resources.get(APPLY_ID)).toBeUndefined();
   expect(await stores.locks.get(APPLY_ID)).toBeUndefined();
+});
+
+test("OpenTofu delete finalization recovery reuses the checkpointed successful ApplyRun", async () => {
+  const baseStores = createInMemoryResourceShapeStores();
+  let failRemove = true;
+  const stores: ResourceShapeStores = {
+    ...baseStores,
+    async removeResource(input) {
+      if (failRemove) {
+        throw new Error("simulated crash after destroy artifact commit");
+      }
+      return await baseStores.removeResource(input);
+    },
+  };
+  const adapter = new CheckpointingOpentofuAdapter();
+  const service = new ResourceShapeService({
+    stores,
+    adapter,
+    now: () => NOW,
+    moduleRegistry: TEST_RESOURCE_SHAPE_MODULE_REGISTRY,
+  });
+  await seed(service);
+  expect((await reviewedApply(service, APPLY)).ok).toBe(true);
+
+  const pending = await service.delete(
+    "space_1",
+    "ObjectBucket",
+    "assets",
+    ACTOR,
+  );
+  expect(pending.ok).toBe(false);
+  expect(await stores.resources.get(APPLY_ID)).toMatchObject({
+    phase: "Deleting",
+    pendingOperation: {
+      authority: "opentofu_apply_run",
+      operation: "delete",
+      runId: "destroy_exact_A",
+      operationKey: "destroy_exact_A",
+    },
+  });
+
+  failRemove = false;
+  const recovered = await service.delete(
+    "space_1",
+    "ObjectBucket",
+    "assets",
+    ACTOR,
+  );
+  expect(recovered.ok).toBe(true);
+  expect(adapter.destroyRunIds).toEqual([
+    "destroy_exact_A",
+    "destroy_exact_A",
+  ]);
+  expect(adapter.deleteInputs[0]?.opentofuApplyRun?.applyRunId).toBeUndefined();
+  expect(adapter.deleteInputs[1]?.opentofuApplyRun?.applyRunId).toBe(
+    "destroy_exact_A",
+  );
+  expect(await stores.resources.get(APPLY_ID)).toBeUndefined();
 });
 
 test("delete failure CAS cannot overwrite a concurrently changed Resource", async () => {

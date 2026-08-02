@@ -22,7 +22,10 @@ import {
   InMemoryOpenTofuControlStore,
   type ResourceOperationRun,
 } from "../../../core/domains/deploy-control/store.ts";
-import { fakeProviderVault } from "../../helpers/deploy-control/model_fixture.ts";
+import {
+  fakeProviderVault,
+  fixtureStateCommit,
+} from "../../helpers/deploy-control/model_fixture.ts";
 import { StaticSecretConnectionVault } from "../../../core/adapters/vault/mod.ts";
 import { PartitionedSecretBoundaryCrypto } from "../../../core/adapters/secret-store/memory.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../core/adapters/storage/artifact-references.ts";
@@ -1234,13 +1237,14 @@ function fakeRunner(): OpenTofuRunner {
         ],
       }),
     apply: () =>
-      Promise.resolve({
+      Promise.resolve(fixtureStateCommit({
         outputs: {
           launch_url: {
             sensitive: false,
             value: "https://app.example.test",
           },
         },
-      }),
+      })),
+    destroy: () => Promise.resolve(fixtureStateCommit()),
   };
 }

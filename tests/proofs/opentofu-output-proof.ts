@@ -29,6 +29,7 @@ import {
   FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE,
   FIXTURE_CLOUDFLARE_PROVIDER,
   fakeProviderVault,
+  fixtureStateCommit,
   seedCapsuleModel,
   seedProviderConnections,
 } from "../helpers/deploy-control/model_fixture.ts";
@@ -351,9 +352,9 @@ class ProofRunner implements OpenTofuRunner {
   }
 
   apply(_job: OpenTofuApplyJob) {
-    return Promise.resolve({
+    return Promise.resolve(fixtureStateCommit({
       outputs: this.#outputEnvelope,
-    });
+    }));
   }
 }
 

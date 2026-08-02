@@ -162,6 +162,57 @@ test("consumer plan + apply: credentials reach the dispatch payload but never th
   expect(await store.getPlanRunInputs(planRun.id)).toBeUndefined();
 });
 
+test("ApplyRun creation checkpoint runs after durable put and before provider dispatch", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  let providerApplyCalls = 0;
+  let checkpointedApplyRunId: string | undefined;
+  const controller = new OpenTofuController({
+    store,
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    now: monotonicNow(1400),
+    newId: deterministicIds(),
+    runner: {
+      ...stubRunner(),
+      apply: () => {
+        providerApplyCalls += 1;
+        return Promise.resolve(fixtureStateCommit());
+      },
+    },
+    vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
+  });
+  const request = await seedUpdatable(store, {
+    capsuleId: "cap_apply_checkpoint",
+  });
+  const { planRun } = await controller.createPlanRun(request);
+
+  await expect(
+    controller.createApplyRun(
+      {
+        planRunId: planRun.id,
+        expected: applyExpectedGuardFromPlanRun(planRun),
+      },
+      {},
+      {
+        onCreated: async (applyRun) => {
+          checkpointedApplyRunId = applyRun.id;
+          expect(await store.getApplyRun(applyRun.id)).toMatchObject({
+            id: applyRun.id,
+            status: "queued",
+          });
+          throw new Error("checkpoint unavailable");
+        },
+      },
+    ),
+  ).rejects.toThrow("checkpoint unavailable");
+
+  expect(checkpointedApplyRunId).toBeDefined();
+  expect(providerApplyCalls).toBe(0);
+  expect(await store.getApplyRun(checkpointedApplyRunId!)).toMatchObject({
+    id: checkpointedApplyRunId,
+    status: "queued",
+  });
+});
+
 test("successful apply observer sees the atomically committed terminal run and Capsule pointers", async () => {
   const store = new InMemoryOpenTofuControlStore();
   const controller = new OpenTofuController({

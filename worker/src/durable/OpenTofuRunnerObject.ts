@@ -113,7 +113,8 @@ interface StateScope {
 interface StateVersionDescriptor {
   readonly generation: number;
   readonly stateRef: string;
-  readonly digest: string;
+  readonly digest?: string;
+  readonly legacyDigestMissing?: true;
   readonly createdByRunId: string;
 }
 
@@ -381,6 +382,19 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
             observedBytes: error.observedBytes,
           },
           { status: 413 },
+        );
+      }
+      if (error instanceof RunnerArtifactRelayInfrastructureError) {
+        return Response.json(
+          {
+            error:
+              "OpenTofu runner artifact durability acknowledgement is ambiguous",
+            errorCode: error.code,
+            retryable: true,
+            detail:
+              "redeliver the same ApplyRun; its immutable target will be adopted if the write committed",
+          },
+          { status: 503 },
         );
       }
       return Response.json(
@@ -1009,22 +1023,26 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
 
   // M2 state persist: pull the new plaintext tfstate from the container, encrypt
   // it at rest, write the state object at the generation key the controller owns
-  // (8-digit), then atomically write current.json AFTER the state object. The DO
-  // returns the recorded digest in the run payload so the controller can update
-  // its ledger; generation arithmetic stays with the controller.
+  // (8-digit), then best-effort project current.json AFTER the state object. The
+  // DO returns the recorded digest in the run payload so the controller can
+  // update its ledger; generation arithmetic stays with the controller.
   async #persistStateToR2State(
     containerRunId: string,
     applyRunId: string,
     scope: StateScope,
     baseUrl: URL,
     runnerResponse: Response,
-    action: string | undefined,
+    action: "apply" | "destroy",
     rawOutputRef: string | undefined,
   ): Promise<Response> {
     const stateResponse = await this.#containerFetch(
       new Request(stateArtifactUrl(baseUrl, containerRunId), { method: "GET" }),
     );
-    if (stateResponse.status === 404) return runnerResponse;
+    if (stateResponse.status === 404) {
+      throw new Error(
+        `container ${action} completed without a durable state artifact`,
+      );
+    }
     if (!stateResponse.ok) {
       throw new Error(
         `container state artifact fetch failed: ${stateResponse.status}`,
@@ -1052,26 +1070,38 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     const persistedRawOutputRef = preparedRawOutputs
       ? await this.#persistPreparedRawOutputs(applyRunId, preparedRawOutputs)
       : undefined;
-    await putR2ObjectWithRetry(
-      bucket,
-      objectKey,
-      sealed.ciphertext,
-      {
-        httpMetadata: { contentType: ENCRYPTED_ARTIFACT_CONTENT_TYPE },
-        customMetadata: {
-          "takosumi-run-id": applyRunId,
-          "takosumi-content-digest": sealed.contentDigest,
-          "takosumi-ciphertext-length": String(sealed.ciphertextLength),
-          "takosumi-encryption-format": sealed.format,
-          "takosumi-generation": String(scope.generation),
-          ...(preparedRawOutputs
-            ? { "takosumi-raw-output-ref": preparedRawOutputs.key }
-            : { "takosumi-raw-output-status": "none" }),
+    try {
+      await putR2ObjectWithRetry(
+        bucket,
+        objectKey,
+        sealed.ciphertext,
+        {
+          httpMetadata: { contentType: ENCRYPTED_ARTIFACT_CONTENT_TYPE },
+          customMetadata: {
+            "takosumi-run-id": applyRunId,
+            "takosumi-content-digest": sealed.contentDigest,
+            "takosumi-ciphertext-length": String(sealed.ciphertextLength),
+            "takosumi-encryption-format": sealed.format,
+            "takosumi-generation": String(scope.generation),
+            ...(preparedRawOutputs
+              ? { "takosumi-raw-output-ref": preparedRawOutputs.key }
+              : { "takosumi-raw-output-status": "none" }),
+          },
+          onlyIf: { etagDoesNotMatch: "*" },
         },
-        onlyIf: { etagDoesNotMatch: "*" },
-      },
-      "state object",
-    );
+        "state object",
+      );
+    } catch (error) {
+      if (!(error instanceof R2ConditionalPutConflictError)) throw error;
+      const adopted = await this.#adoptCompletedStateMutationFromR2(
+        applyRunId,
+        scope,
+        action,
+        rawOutputRef,
+      );
+      if (!adopted) throw error;
+      return adopted;
+    }
     // current.json is a best-effort cache written AFTER the immutable target.
     // A retry adopts only this ApplyRun's exact target object; neither this
     // pointer nor an R2 prefix scan has ledger authority.
@@ -1082,16 +1112,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       runId: applyRunId,
       ciphertextLength: sealed.ciphertextLength,
     };
-    await putR2ObjectWithRetry(
-      bucket,
-      currentStateKey(scope),
-      JSON.stringify(current),
-      {
-        httpMetadata: { contentType: "application/json" },
-        customMetadata: { "takosumi-run-id": applyRunId },
-      },
-      "state pointer",
-    );
+    await writeCurrentStateCache(bucket, scope, current);
     return jsonResponse(
       {
         ...payload,
@@ -1155,7 +1176,12 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         "raw outputs",
       );
     } catch (error) {
-      if (!(error instanceof R2ConditionalPutConflictError)) throw error;
+      if (
+        !(error instanceof R2ConditionalPutConflictError) &&
+        !(error instanceof RunnerArtifactRelayInfrastructureError)
+      ) {
+        throw error;
+      }
       const existing = await this.env.R2_ARTIFACTS.head(prepared.key);
       if (
         existing?.customMetadata?.["takosumi-run-id"] !== runId ||
@@ -1166,6 +1192,10 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
           "raw output target already belongs to different artifact authority",
         );
       }
+      // A lost conditional-PUT response is safe to resolve only by reading the
+      // same immutable key and matching this ApplyRun plus plaintext digest.
+      // Doing so here lets the state object commit continue without replaying
+      // provider work merely because raw-output acknowledgement was lost.
     }
     return prepared.key;
   }
@@ -1713,6 +1743,11 @@ async function putR2ObjectWithRetry(
     } catch (error) {
       lastError = error;
       if (error instanceof R2ConditionalPutConflictError) throw error;
+      if (options?.onlyIf?.etagDoesNotMatch === "*") {
+        throw new RunnerArtifactRelayInfrastructureError(
+          `${context} immutable R2 put outcome is ambiguous`,
+        );
+      }
       if (attempt >= R2_PUT_RETRY_ATTEMPTS || !isRetryableR2PutError(error)) {
         throw new Error(
           `${context} R2 put failed after ${attempt} attempt${
@@ -1742,6 +1777,18 @@ class R2ConditionalPutConflictError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "R2ConditionalPutConflictError";
+  }
+}
+
+const RUNNER_ARTIFACT_RELAY_AMBIGUOUS_CODE =
+  "runner_artifact_relay_ambiguous";
+
+class RunnerArtifactRelayInfrastructureError extends Error {
+  readonly code = RUNNER_ARTIFACT_RELAY_AMBIGUOUS_CODE;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "RunnerArtifactRelayInfrastructureError";
   }
 }
 
@@ -2105,7 +2152,7 @@ function formatGeneration(generation: number): string {
 interface CurrentStatePointer {
   readonly generation: number;
   readonly objectKey: string;
-  readonly digest: string;
+  readonly digest?: string;
   readonly runId?: string;
   readonly ciphertextLength?: number;
 }
@@ -2115,19 +2162,29 @@ async function writeCurrentStateCache(
   scope: StateScope,
   pointer: CurrentStatePointer,
 ): Promise<void> {
-  await putR2ObjectWithRetry(
-    bucket,
-    currentStateKey(scope),
-    JSON.stringify(pointer),
-    {
-      httpMetadata: { contentType: "application/json" },
-      customMetadata: {
-        ...(pointer.runId ? { "takosumi-run-id": pointer.runId } : {}),
-        "takosumi-cache-only": "true",
+  try {
+    await putR2ObjectWithRetry(
+      bucket,
+      currentStateKey(scope),
+      JSON.stringify(pointer),
+      {
+        httpMetadata: { contentType: "application/json" },
+        customMetadata: {
+          ...(pointer.runId ? { "takosumi-run-id": pointer.runId } : {}),
+          "takosumi-cache-only": "true",
+        },
       },
-    },
-    "state pointer cache",
-  );
+      "state pointer cache",
+    );
+  } catch (error) {
+    // current.json is only an inventory/cache projection. The immutable exact
+    // state target and the control-plane ledger remain authoritative, so cache
+    // repair must never turn a successful mutation into a provider replay.
+    console.warn("OpenTofu runner current-state cache write failed", {
+      generation: pointer.generation,
+      error: redactedErrorMessage(error, "state pointer cache write failed"),
+    });
+  }
 }
 
 async function readConfirmedStateAdoption(
@@ -2203,20 +2260,24 @@ async function readCanonicalPriorState(
     );
   }
   if (
+    descriptor.digest &&
     object.customMetadata?.["takosumi-content-digest"] !== descriptor.digest
   ) {
     throw new Error("canonical priorState digest does not match R2 metadata");
   }
+  const metadataRunId = object.customMetadata?.["takosumi-run-id"];
   if (
-    object.customMetadata?.["takosumi-run-id"] !== descriptor.createdByRunId
+    (descriptor.digest || metadataRunId) &&
+    metadataRunId !== descriptor.createdByRunId
   ) {
     throw new Error(
       "canonical priorState creator does not match R2 metadata",
     );
   }
+  const metadataGeneration = object.customMetadata?.["takosumi-generation"];
   if (
-    Number(object.customMetadata?.["takosumi-generation"]) !==
-    descriptor.generation
+    (descriptor.digest || metadataGeneration !== undefined) &&
+    Number(metadataGeneration) !== descriptor.generation
   ) {
     throw new Error(
       "canonical priorState generation does not match R2 metadata",
@@ -2225,11 +2286,22 @@ async function readCanonicalPriorState(
   const ciphertextLength = Number(
     object.customMetadata?.["takosumi-ciphertext-length"],
   );
+  const metadataDigest = object.customMetadata?.["takosumi-content-digest"];
+  if (
+    descriptor.legacyDigestMissing &&
+    metadataDigest !== undefined &&
+    !/^sha256:[0-9a-f]{64}$/u.test(metadataDigest)
+  ) {
+    throw new Error(
+      "legacy canonical priorState has invalid R2 digest metadata",
+    );
+  }
+  const digest = descriptor.digest ?? metadataDigest;
   return {
     pointer: {
       generation: descriptor.generation,
       objectKey: descriptor.stateRef,
-      digest: descriptor.digest,
+      ...(digest ? { digest } : {}),
       runId: descriptor.createdByRunId,
       ...(Number.isFinite(ciphertextLength) ? { ciphertextLength } : {}),
     },
@@ -2303,22 +2375,23 @@ function parseStateVersionDescriptor(
   const generation = value.generation;
   const stateRef = stringField(value, "stateRef");
   const digest = stringField(value, "digest");
+  const legacyDigestMissing = value.legacyDigestMissing === true;
   const createdByRunId = stringField(value, "createdByRunId");
   if (
     !Number.isInteger(generation) ||
     (generation as number) < 0 ||
     !stateRef ||
-    !digest ||
+    Boolean(digest) === legacyDigestMissing ||
     !createdByRunId
   ) {
     throw new Error(
-      "stateScope.priorState requires generation, stateRef, digest, and createdByRunId",
+      "stateScope.priorState requires generation, stateRef, createdByRunId, and exactly one of digest or legacyDigestMissing",
     );
   }
   return {
     generation: generation as number,
     stateRef,
-    digest,
+    ...(digest ? { digest } : { legacyDigestMissing: true }),
     createdByRunId,
   };
 }
