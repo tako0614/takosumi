@@ -356,7 +356,12 @@ export type CapsulePatch = Partial<
  * lifecycle action did not terminal-succeed; provider state is still retained.
  */
 export interface CommitRunStateInput {
-  readonly stateVersion: StateVersion;
+  /**
+   * Omitted only when provider execution failed after dispatch without leaving
+   * readable state. The terminal Run, consumed Plan, and Capsule error patch
+   * still commit atomically; no synthetic StateVersion is created.
+   */
+  readonly stateVersion?: StateVersion;
   readonly output?: Output;
   readonly capsulePatch: {
     readonly id: string;
@@ -1901,7 +1906,9 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
         }),
       );
     }
-    this.#stateVersions.set(input.stateVersion.id, input.stateVersion);
+    if (input.stateVersion) {
+      this.#stateVersions.set(input.stateVersion.id, input.stateVersion);
+    }
     if (input.output) {
       this.#outputs.set(input.output.id, input.output);
     }

@@ -78,6 +78,178 @@ test("release action runs opaque argv commands inside the source snapshot", asyn
   }
 });
 
+test("release action exposes SourceSnapshot identity only as process-local env", async () => {
+  const runId = `release_source_identity_${crypto.randomUUID().replace(/-/g, "")}`;
+  const root = join(RUN_ROOT, safeRunId(runId));
+  const sourceRoot = join(root, "source");
+  const sourceSnapshotId = "snap_01234567";
+  const sourceCommit = "0123456789abcdef0123456789abcdef01234567";
+  try {
+    await mkdir(sourceRoot, { recursive: true });
+
+    const response = await handleRunnerRequest(
+      runnerRequest(runId, {
+        release: {
+          commands: [
+            {
+              id: "capture-source-identity",
+              command: [
+                process.execPath,
+                "-e",
+                [
+                  `const context = JSON.parse(Bun.env.TAKOSUMI_RELEASE_CONTEXT_JSON)`,
+                  `await Bun.write("source-identity.json", JSON.stringify({ snapshotId: Bun.env.TAKOSUMI_SOURCE_SNAPSHOT_ID, sourceCommit: Bun.env.TAKOSUMI_SOURCE_COMMIT, context }))`,
+                ].join(";"),
+              ],
+            },
+          ],
+        },
+        activation: { sourceSnapshotId, sourceCommit },
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body).toMatchObject({
+      runId,
+      action: "release",
+      status: "succeeded",
+      exitCode: 0,
+      commandCount: 1,
+    });
+    expect(JSON.stringify(body)).not.toContain(sourceSnapshotId);
+    expect(JSON.stringify(body)).not.toContain(sourceCommit);
+    await expect(
+      readFile(join(sourceRoot, "source-identity.json"), "utf8"),
+    ).resolves.toBe(
+      JSON.stringify({
+        snapshotId: sourceSnapshotId,
+        sourceCommit,
+        context: {
+          kind: "takosumi.release-context@v1",
+          releaseRunId: runId,
+          outputs: {},
+        },
+      }),
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("release action runs sourceBuild before provider credentials are prepared", async () => {
+  const runId = `release_source_build_${crypto.randomUUID().replace(/-/g, "")}`;
+  const root = join(RUN_ROOT, safeRunId(runId));
+  const sourceRoot = join(root, "source");
+  const secret = "release-source-build-token-1234567890";
+  try {
+    await mkdir(sourceRoot, { recursive: true });
+
+    const response = await handleRunnerRequest(
+      runnerRequest(runId, {
+        release: {
+          sourceBuild: {
+            commands: [
+              {
+                argv: [
+                  process.execPath,
+                  "-e",
+                  [
+                    `import { mkdirSync } from "node:fs"`,
+                    `if (Bun.env.CLOUDFLARE_API_TOKEN !== undefined) process.exit(7)`,
+                    `mkdirSync("dist", { recursive: true })`,
+                    `await Bun.write("dist/built.txt", "built-without-credentials")`,
+                  ].join(";"),
+                ],
+              },
+            ],
+            outputs: ["dist/built.txt"],
+          },
+          commands: [
+            {
+              id: "publish",
+              command: [
+                process.execPath,
+                "-e",
+                [
+                  `if (Bun.env.CLOUDFLARE_API_TOKEN !== ${JSON.stringify(secret)}) process.exit(8)`,
+                  `const built = await Bun.file("dist/built.txt").text()`,
+                  `await Bun.write("release.txt", built + ":released")`,
+                ].join(";"),
+              ],
+            },
+          ],
+        },
+        credentials: {
+          env: { CLOUDFLARE_API_TOKEN: secret },
+          manifest: {
+            bindings: [
+              {
+                providerSource: "registry.opentofu.org/cloudflare/cloudflare",
+                connectionId: "conn_release_source_build",
+                recipeId: "cloudflare",
+                authMode: "api_token",
+                envNames: ["CLOUDFLARE_API_TOKEN"],
+                fileEnvNames: [],
+                requiredEnvGroups: [["CLOUDFLARE_API_TOKEN"]],
+              },
+            ],
+          },
+        },
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(readFile(join(sourceRoot, "release.txt"), "utf8")).resolves.toBe(
+      "built-without-credentials:released",
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("release action validates optional SourceSnapshot identity fields", async () => {
+  const invalidCases = [
+    {
+      field: "sourceSnapshotId",
+      value: " ",
+      message: "release.activation.sourceSnapshotId must be a non-empty string",
+    },
+    {
+      field: "sourceCommit",
+      value: "0123456789ABCDEF0123456789ABCDEF01234567",
+      message:
+        "release.activation.sourceCommit must be a lowercase 40-character hexadecimal commit",
+    },
+    {
+      field: "sourceCommit",
+      value: "0123456789abcdef",
+      message:
+        "release.activation.sourceCommit must be a lowercase 40-character hexadecimal commit",
+    },
+  ] as const;
+
+  for (const [index, invalid] of invalidCases.entries()) {
+    const runId = `release_source_identity_invalid_${index}_${crypto.randomUUID().replace(/-/g, "")}`;
+    const response = await handleRunnerRequest(
+      runnerRequest(runId, {
+        release: {
+          commands: [
+            {
+              id: "should-not-run",
+              command: [process.execPath, "-e", `console.log("ran")`],
+            },
+          ],
+        },
+        activation: { [invalid.field]: invalid.value },
+      }),
+    );
+    expect(response.status).toBe(500);
+    const body = await response.json();
+    expect(body.stderr).toContain(invalid.message);
+  }
+});
+
 test("release action treats post-apply work as opaque app commands", async () => {
   const runId = `release_task_cmd_${crypto.randomUUID().replace(/-/g, "")}`;
   const root = join(RUN_ROOT, safeRunId(runId));
@@ -385,6 +557,33 @@ test("release action rejects provider credential and reserved env", async () => 
     expect(JSON.stringify(body)).not.toContain("postgres://localhost/example");
   } finally {
     await rm(secretLikeRoot, { recursive: true, force: true });
+  }
+});
+
+test("release action keeps SourceSnapshot identity env names reserved", async () => {
+  for (const envName of [
+    "TAKOSUMI_SOURCE_SNAPSHOT_ID",
+    "TAKOSUMI_SOURCE_COMMIT",
+  ]) {
+    const runId = `release_source_identity_reserved_${crypto.randomUUID().replace(/-/g, "")}`;
+    const response = await handleRunnerRequest(
+      runnerRequest(runId, {
+        release: {
+          commands: [
+            {
+              id: "should-not-run",
+              command: [process.execPath, "-e", `console.log("ran")`],
+              env: { [envName]: "attempted-override" },
+            },
+          ],
+        },
+      }),
+    );
+    expect(response.status).toBe(500);
+    const body = await response.json();
+    expect(body.stderr).toContain(
+      `release command env must not override reserved ${envName}`,
+    );
   }
 });
 

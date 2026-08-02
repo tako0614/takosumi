@@ -1,7 +1,10 @@
 import { expect, test } from "bun:test";
 
 import type { SourceSnapshot } from "../../../contract/sources.ts";
-import { createHttpOpenTofuRunner } from "../../../deploy/node-postgres/src/local-opentofu-runner.ts";
+import {
+  createHttpOpenTofuRunner,
+  type LocalOpenTofuStateArtifact,
+} from "../../../deploy/node-postgres/src/local-opentofu-runner.ts";
 
 test("local OpenTofu runner passes modulePath to compatibility_check", async () => {
   const archiveBytes = new TextEncoder().encode("archive");
@@ -49,6 +52,91 @@ test("local OpenTofu runner passes modulePath to compatibility_check", async () 
       request: {
         source: {
           modulePath: "deploy/opentofu",
+        },
+      },
+    });
+  } finally {
+    server.stop(true);
+  }
+});
+
+test("HTTP OpenTofu runner carries SourceSnapshot identity into release activation", async () => {
+  const archiveBytes = new TextEncoder().encode("release source archive");
+  const archiveDigest = await sha256(archiveBytes);
+  const requests: unknown[] = [];
+  const server = Bun.serve({
+    port: 0,
+    async fetch(request) {
+      const url = new URL(request.url);
+      if (
+        request.method === "PUT" &&
+        url.pathname === "/runs/release_1/source-archive/restore"
+      ) {
+        return new Response(null, { status: 204 });
+      }
+      if (request.method === "POST" && url.pathname === "/runs/release_1") {
+        requests.push(await request.json());
+        return Response.json({
+          runId: "release_1",
+          action: "release",
+          status: "succeeded",
+          exitCode: 0,
+          commandCount: 1,
+          stdout: "release ok",
+        });
+      }
+      return new Response("not found", { status: 404 });
+    },
+  });
+
+  try {
+    const runner = createHttpOpenTofuRunner({
+      stateStore: unusedStateStore,
+      archiveStore: {
+        write: async () => {},
+        read: async () => archiveBytes,
+      },
+      baseUrl: server.url.href,
+    });
+    const snapshot = sourceSnapshot(archiveDigest);
+    const result = await runner.release({
+      runId: "release_1",
+      applyRunId: "apply_1",
+      workspaceId: "workspace_1",
+      capsuleId: "capsule_1",
+      stateVersionId: "state_1",
+      sourceSnapshot: snapshot,
+      nonSensitiveOutputs: { public_url: "https://app.example.test" },
+      providerConfigurations: {
+        format: "takosumi.provider-configurations@v1",
+        providers: [],
+      },
+      commands: [
+        {
+          id: "retire-runtime",
+          phase: "pre_destroy",
+          command: ["bun", "run", "retire"],
+        },
+      ],
+    });
+
+    expect(result).toEqual({
+      status: "succeeded",
+      runId: "release_1",
+      commandCount: 1,
+      stdout: "release ok",
+    });
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({
+      action: "release",
+      request: {
+        activation: {
+          applyRunId: "apply_1",
+          workspaceId: "workspace_1",
+          capsuleId: "capsule_1",
+          stateVersionId: "state_1",
+          sourceSnapshotId: "snap_1",
+          sourceCommit: snapshot.resolvedCommit,
         },
       },
     });
@@ -251,6 +339,127 @@ test("HTTP OpenTofu runner keeps an unchanged object-storage source archive with
     });
     expect(requests).toEqual(["POST /runs/sync_reuse"]);
     expect(writes).toHaveLength(0);
+  } finally {
+    server.stop(true);
+  }
+});
+
+test("HTTP OpenTofu runner durably returns failed apply state without replaying provider execution", async () => {
+  const planBytes = new TextEncoder().encode("reviewed plan");
+  const planDigest = await sha256(planBytes);
+  const partialState = new TextEncoder().encode(
+    '{"version":4,"serial":1,"resources":[]}',
+  );
+  const requests: string[] = [];
+  let providerPosts = 0;
+  const server = Bun.serve({
+    port: 0,
+    async fetch(request) {
+      const url = new URL(request.url);
+      requests.push(`${request.method} ${url.pathname}`);
+      if (
+        request.method === "GET" &&
+        url.pathname === "/runs/plan_partial/artifacts/tfplan"
+      ) {
+        return new Response(planBytes);
+      }
+      if (
+        request.method === "PUT" &&
+        url.pathname === "/runs/apply_partial/artifacts/tfplan"
+      ) {
+        return Response.json({ ok: true });
+      }
+      if (
+        request.method === "POST" &&
+        url.pathname === "/runs/apply_partial"
+      ) {
+        providerPosts += 1;
+        return Response.json(
+          {
+            status: "failed",
+            exitCode: 1,
+            errorCode: "apply_failed",
+            providerExecutionFailure: {
+              kind: "provider_execution_failed",
+            },
+            stderr: "provider rejected a later resource",
+          },
+          { status: 500 },
+        );
+      }
+      if (
+        request.method === "GET" &&
+        url.pathname === "/runs/apply_partial/artifacts/tfstate"
+      ) {
+        return new Response(partialState);
+      }
+      return new Response("not found", { status: 404 });
+    },
+  });
+
+  let stored: LocalOpenTofuStateArtifact | undefined;
+  const stateStore = {
+    read: async (stateRef: string) =>
+      stored?.stateRef === stateRef ? stored : undefined,
+    commit: async (artifact: LocalOpenTofuStateArtifact) => {
+      stored = artifact;
+      return artifact;
+    },
+    readRawOutput: async () => undefined,
+    commitRawOutput: async () => {
+      throw new Error("failed apply must not persist raw output");
+    },
+  };
+
+  try {
+    const runner = createHttpOpenTofuRunner({
+      stateStore,
+      archiveStore: {
+        write: async () => {},
+        read: async () => {
+          throw new Error("not used");
+        },
+      },
+      baseUrl: server.url.href,
+    });
+    const job = {
+      applyRun: { id: "apply_partial" },
+      planRun: { id: "plan_partial" },
+      planArtifact: {
+        kind: "runner-local",
+        ref: "runner-local://plan_partial/tfplan",
+        digest: planDigest,
+      },
+      runnerProfile: {},
+      stateScope: {
+        workspaceId: "workspace_1",
+        subject: { kind: "capsule", id: "capsule_1" },
+        environment: "preview",
+        generation: 1,
+        stateRef:
+          "workspaces/workspace_1/capsules/capsule_1/environments/preview/state-versions/00000001.tfstate.enc",
+      },
+      rawOutputRef:
+        "workspaces/workspace_1/capsules/capsule_1/runs/apply_partial/outputs.raw.json.enc",
+    } as Parameters<typeof runner.apply>[0];
+
+    const first = await runner.apply(job);
+    expect(first.providerExecutionFailure).toEqual({
+      kind: "provider_execution_failed",
+      statePersistence: "persisted",
+      errorCode: "apply_failed",
+    });
+    expect(first.stateDigest).toBe(await sha256(partialState));
+    expect(first.outputs).toBeUndefined();
+    expect(first.rawOutputRef).toBeUndefined();
+    expect(stored?.stateBytes).toEqual(partialState);
+
+    const replay = await runner.apply(job);
+    expect(replay).toEqual(first);
+    expect(providerPosts).toBe(1);
+    expect(
+      requests.filter((entry) => entry === "POST /runs/apply_partial"),
+    ).toHaveLength(1);
   } finally {
     server.stop(true);
   }

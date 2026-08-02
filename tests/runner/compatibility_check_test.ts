@@ -1175,6 +1175,118 @@ esac
   }
 });
 
+test("failed provider apply reports recoverable runner-local state", async () => {
+  const runId = `apply_partial_${crypto.randomUUID().replace(/-/g, "")}`;
+  const root = join(RUN_ROOT, runId);
+  const sourceRoot = join(root, "source");
+  const fakeBin = await mkdtemp(join(tmpdir(), "takosumi-partial-apply-bin-"));
+  const previousPath = Bun.env.PATH;
+  const planBytes = new TextEncoder().encode("fake-reviewed-plan");
+  const planDigest = await digestBytes(planBytes);
+  const partialState =
+    '{"version":4,"serial":1,"lineage":"partial-apply","resources":[]}\n';
+  try {
+    await mkdir(sourceRoot, { recursive: true });
+    await writeFile(join(sourceRoot, "main.tf"), "terraform {}\n");
+    const putPlan = await handleRunnerRequest(
+      new Request(`https://runner/runs/${runId}/artifacts/tfplan`, {
+        method: "PUT",
+        headers: { "content-type": "application/vnd.opentofu.plan" },
+        body: planBytes,
+      }),
+    );
+    expect(putPlan.status).toBe(200);
+
+    const tofuPath = join(fakeBin, "tofu");
+    await writeFile(
+      tofuPath,
+      `#!/usr/bin/env bash
+set -euo pipefail
+case "$1" in
+  init)
+    echo "init"
+    ;;
+  apply)
+    cat > terraform.tfstate <<'JSON'
+${partialState.trimEnd()}
+JSON
+    echo "password=partial-provider-secret provider rejected a later resource" >&2
+    exit 1
+    ;;
+  *)
+    echo "unexpected tofu command: $*" >&2
+    exit 2
+    ;;
+esac
+`,
+    );
+    await chmod(tofuPath, 0o755);
+    Bun.env.PATH = `${fakeBin}:${previousPath ?? ""}`;
+
+    const response = await handleRunnerRequest(
+      new Request(`https://runner/runs/${runId}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          kind: "takosumi.opentofu-run@v1",
+          action: "apply",
+          runId,
+          request: {
+            planRun: {
+              id: runId,
+              source: RESTORED_GIT_SOURCE,
+              requiredProviders: [],
+            },
+            planArtifact: {
+              kind: "runner-local",
+              ref: `runner-local://${runId}/tfplan`,
+              digest: planDigest,
+            },
+            runnerProfile: { allowedProviders: [] },
+            generatedRoot: {
+              files: {
+                "main.tf": [
+                  'module "child" {',
+                  '  source = "./module"',
+                  "}",
+                  "",
+                ].join("\n"),
+              },
+            },
+            variables: {},
+          },
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(500);
+    const body = (await response.json()) as {
+      readonly status?: string;
+      readonly errorCode?: string;
+      readonly stderr?: string;
+      readonly providerExecutionFailure?: { readonly kind?: string };
+    };
+    expect(body.status).toBe("failed");
+    expect(body.errorCode).toBe("apply_failed");
+    expect(body.providerExecutionFailure).toEqual({
+      kind: "provider_execution_failed",
+    });
+    expect(body.stderr).not.toContain("partial-provider-secret");
+    expect(body.stderr).toContain("[redacted]");
+
+    const stateResponse = await handleRunnerRequest(
+      new Request(`https://runner/runs/${runId}/artifacts/tfstate`),
+    );
+    expect(stateResponse.status).toBe(200);
+    expect(await stateResponse.text()).toBe(partialState);
+  } finally {
+    if (previousPath === undefined) delete Bun.env.PATH;
+    else Bun.env.PATH = previousPath;
+    await rm(root, { recursive: true, force: true });
+    await rm(fakeBin, { recursive: true, force: true });
+  }
+});
+
 test("safeRunId neutralizes dot-segment runIds so the workspace stays jailed", () => {
   // The allowed charset permits `.`, so a runId that sanitizes to exactly
   // `.`/`..` would let join(RUN_ROOT, safeRunId(runId)) resolve outside

@@ -91,6 +91,8 @@ export interface ReleaseCommandSpec {
 
 export interface ReleaseSpec {
   readonly commands: readonly ReleaseCommandSpec[];
+  /** Optional InstallConfig source preparation before release credentials. */
+  readonly sourceBuild?: SourceBuildConfig;
   readonly outputs?: JsonRecord;
   readonly activation?: ReleaseActivationSpec;
   readonly providerConfigurations: import("../../contract/provider-configurations.ts").ProviderConfigurationsEnvelope;
@@ -101,6 +103,10 @@ export interface ReleaseActivationSpec {
   readonly workspaceId?: string;
   readonly capsuleId?: string;
   readonly stateVersionId?: string;
+  /** Immutable SourceSnapshot identity used for this release command. */
+  readonly sourceSnapshotId?: string;
+  /** Lowercase immutable Git commit pinned by the SourceSnapshot. */
+  readonly sourceCommit?: string;
 }
 
 export interface CommandContext {

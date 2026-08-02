@@ -1845,7 +1845,9 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       );
       if (!applyRunCommitted) return { applyRunLeaseLost: true };
     }
-    await pgUpsertStateVersion(db, input.stateVersion);
+    if (input.stateVersion) {
+      await pgUpsertStateVersion(db, input.stateVersion);
+    }
     if (input.output) {
       await pgUpsertOutput(db, input.output);
     }

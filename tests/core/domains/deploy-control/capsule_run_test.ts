@@ -6073,6 +6073,143 @@ test("capsule apply emits generation base+1, records StateVersion + Output, and 
   expect(capsule?.currentOutputId).toEqual(applyRun.outputId);
 });
 
+test("failed provider apply atomically retains partial state, consumes the Plan, and destroy uses it", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner();
+  let providerApplyAttempts = 0;
+  runner.apply = (job) => {
+    providerApplyAttempts += 1;
+    runner.applyJobs.push(job);
+    return Promise.resolve({
+      providerExecutionFailure: {
+        kind: "provider_execution_failed",
+        statePersistence: "persisted",
+        errorCode: "apply_failed",
+      },
+      stateDigest: STATE_DIGEST,
+      // A failed result must never publish even if an adapter accidentally
+      // includes stale output fields.
+      outputs: {
+        must_not_publish: { sensitive: false, value: "stale" },
+      },
+      rawOutputRef: job.rawOutputRef,
+      providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+      diagnostics: [
+        {
+          severity: "warning",
+          message: "password=partial-provider-secret apply failed",
+        },
+      ],
+    });
+  };
+  await seedRunnableCapsuleModel(store, { environment: "preview" });
+  const controller = controllerWith(store, runner, {
+    activity: activityRecorderFor(store),
+  });
+
+  const { planRun } = await controller.createCapsulePlan("cap_fixture1");
+  const failed = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+
+  expect(failed.applyRun.status).toBe("failed");
+  expect(failed.applyRun.outputId).toBeUndefined();
+  expect(JSON.stringify(failed.applyRun)).not.toContain(
+    "partial-provider-secret",
+  );
+  const partialState = await store.getStateVersion(
+    failed.applyRun.stateVersionId!,
+  );
+  expect(partialState).toMatchObject({
+    capsuleId: "cap_fixture1",
+    generation: 1,
+    digest: STATE_DIGEST,
+    createdByRunId: failed.applyRun.id,
+  });
+  expect(await store.getPlanRun(planRun.id)).toMatchObject({
+    appliedApplyRunId: failed.applyRun.id,
+  });
+  expect(failed.capsule).toMatchObject({
+    status: "error",
+    currentStateGeneration: 1,
+    currentStateVersionId: partialState!.id,
+  });
+  expect(failed.capsule?.currentOutputId).toBeUndefined();
+
+  const replay = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+  expect(replay.applyRun).toEqual(failed.applyRun);
+  expect(providerApplyAttempts).toBe(1);
+
+  const destroyPlan = await controller.createCapsuleDestroyPlan(
+    "cap_fixture1",
+  );
+  await controller.approveRun(destroyPlan.planRun.id);
+  const destroyed = await controller.createApplyRun({
+    planRunId: destroyPlan.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(destroyPlan.planRun),
+  });
+  expect(destroyed.applyRun.status).toBe("succeeded");
+  expect(runner.destroyJobs).toHaveLength(1);
+  expect(runner.destroyJobs[0]?.stateScope?.priorState).toEqual({
+    generation: partialState!.generation,
+    stateRef: partialState!.stateRef,
+    digest: partialState!.digest,
+    createdByRunId: failed.applyRun.id,
+  });
+});
+
+test("failed provider apply without readable state consumes the Plan without inventing a StateVersion", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner();
+  let providerApplyAttempts = 0;
+  runner.apply = (job) => {
+    providerApplyAttempts += 1;
+    runner.applyJobs.push(job);
+    return Promise.resolve({
+      providerExecutionFailure: {
+        kind: "provider_execution_failed",
+        statePersistence: "unavailable",
+        errorCode: "apply_failed",
+      },
+      diagnostics: [
+        { severity: "warning", message: "provider failed after dispatch" },
+      ],
+    });
+  };
+  await seedRunnableCapsuleModel(store, { environment: "preview" });
+  const controller = controllerWith(store, runner);
+
+  const { planRun } = await controller.createCapsulePlan("cap_fixture1");
+  const failed = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+
+  expect(failed.applyRun.status).toBe("failed");
+  expect(failed.applyRun.stateVersionId).toBeUndefined();
+  expect(failed.applyRun.outputId).toBeUndefined();
+  expect(failed.capsule).toMatchObject({
+    status: "error",
+    currentStateGeneration: 0,
+  });
+  expect(failed.capsule?.currentStateVersionId).toBeUndefined();
+  expect(failed.capsule?.currentOutputId).toBeUndefined();
+  expect(await store.getPlanRun(planRun.id)).toMatchObject({
+    appliedApplyRunId: failed.applyRun.id,
+  });
+
+  const replay = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+  expect(replay.applyRun).toEqual(failed.applyRun);
+  expect(providerApplyAttempts).toBe(1);
+});
+
 test("capsule plan and apply record deploy operation metrics", async () => {
   const store = new InMemoryOpenTofuControlStore();
   const runner = recordingRunner();

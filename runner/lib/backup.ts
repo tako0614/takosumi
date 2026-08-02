@@ -47,6 +47,8 @@ import {
   prepareProviderCredentialFiles,
 } from "./credentials.ts";
 import { workspaceForRun } from "./artifacts.ts";
+import { parseSourceBuild } from "./parsing.ts";
+import { runSourceBuild } from "./source_build.ts";
 
 export async function runBackup(
   runId: string,
@@ -121,11 +123,15 @@ export async function runRelease(
   const workspace = workspaceForRun(runId);
   await assertDirectory(workspace.sourceRoot, "release source root");
   const commandContext = commandContextFromRequest(request, undefined, signal);
+  const buildLog = await runSourceBuild(release.sourceBuild, workspace.sourceRoot, {
+    ...(commandContext.timeoutMs ? { timeoutMs: commandContext.timeoutMs } : {}),
+    ...(signal ? { signal } : {}),
+  });
   const preparedCredentials = await prepareProviderCredentialFiles(
     commandContext,
     workspace,
   );
-  const logs: string[] = [];
+  const logs: string[] = buildLog ? [buildLog] : [];
   try {
     for (const command of release.commands) {
       const cwd = releaseCommandCwd(workspace, command);
@@ -409,6 +415,7 @@ export function parseRelease(request: unknown): ReleaseSpec {
   if (!Array.isArray(rawCommands) || rawCommands.length === 0) {
     throw new Error("release.commands must be a non-empty array");
   }
+  const sourceBuild = parseSourceBuild(release);
   return {
     commands: rawCommands.map((entry, index): ReleaseCommandSpec => {
       if (!isRecord(entry)) {
@@ -439,6 +446,7 @@ export function parseRelease(request: unknown): ReleaseSpec {
         ...(timeoutSeconds ? { timeoutSeconds } : {}),
       };
     }),
+    ...(sourceBuild ? { sourceBuild } : {}),
     ...releaseOutputs(recordField(request, "outputs")),
     ...releaseActivation(recordField(request, "activation")),
     providerConfigurations: releaseProviderConfigurations(
@@ -465,6 +473,13 @@ export function releaseActivation(
   value: unknown,
 ): { readonly activation: ReleaseActivationSpec } | Record<string, never> {
   if (!isRecord(value)) return {};
+  const sourceSnapshotId = releaseActivationNonEmptyString(
+    recordField(value, "sourceSnapshotId"),
+    "release.activation.sourceSnapshotId",
+  );
+  const sourceCommit = releaseActivationSourceCommit(
+    recordField(value, "sourceCommit"),
+  );
   const activation: ReleaseActivationSpec = {
     ...(stringField(value, "applyRunId")
       ? { applyRunId: stringField(value, "applyRunId") }
@@ -478,8 +493,35 @@ export function releaseActivation(
     ...(stringField(value, "stateVersionId")
       ? { stateVersionId: stringField(value, "stateVersionId") }
       : {}),
+    ...(sourceSnapshotId ? { sourceSnapshotId } : {}),
+    ...(sourceCommit ? { sourceCommit } : {}),
   };
   return Object.keys(activation).length > 0 ? { activation } : {};
+}
+
+function releaseActivationNonEmptyString(
+  value: unknown,
+  label: string,
+): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error(`${label} must be a non-empty string`);
+  }
+  return value.trim();
+}
+
+function releaseActivationSourceCommit(value: unknown): string | undefined {
+  const commit = releaseActivationNonEmptyString(
+    value,
+    "release.activation.sourceCommit",
+  );
+  if (commit === undefined) return undefined;
+  if (!/^[0-9a-f]{40}$/u.test(commit)) {
+    throw new Error(
+      "release.activation.sourceCommit must be a lowercase 40-character hexadecimal commit",
+    );
+  }
+  return commit;
 }
 
 export function releaseCommandEnv(
@@ -569,6 +611,14 @@ export function releaseBaseEnv(
       ? {
           TAKOSUMI_STATE_VERSION_ID: release.activation.stateVersionId,
         }
+      : {}),
+    ...(release.activation?.sourceSnapshotId
+      ? {
+          TAKOSUMI_SOURCE_SNAPSHOT_ID: release.activation.sourceSnapshotId,
+        }
+      : {}),
+    ...(release.activation?.sourceCommit
+      ? { TAKOSUMI_SOURCE_COMMIT: release.activation.sourceCommit }
       : {}),
     TAKOSUMI_OUTPUTS_JSON: JSON.stringify(outputs),
     TAKOSUMI_PROVIDER_CONFIGS_JSON: providerConfigurationsJson(

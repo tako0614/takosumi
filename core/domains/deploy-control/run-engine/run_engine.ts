@@ -6372,6 +6372,39 @@ export class RunEngine {
           }),
       );
       const now = this.#now();
+      if (result.providerExecutionFailure) {
+        if (planRun.resourceContext) {
+          throw new OpenTofuControllerError(
+            "failed_precondition",
+            "failed OpenTofu Resource apply state recovery is not supported by the Capsule ledger",
+          );
+        }
+        const committedFailure =
+          await this.#commitFailedProviderApplyWithState({
+            running: runningWithEnv,
+            applyRun,
+            planRun,
+            profile,
+            plannedCapsule,
+            result,
+            envDispatch,
+            persistGeneration,
+            providerInstallationPolicy,
+            leaseToken,
+            startedAt,
+            now,
+          });
+        if (committedFailure === "lease_lost") {
+          return { applyRun: (await this.getApplyRun(applyRun.id)).applyRun };
+        }
+        ledgerCommitted = true;
+        return await this.#completeFailedProviderApply({
+          ...committedFailure,
+          planRun,
+          startedAt,
+          now,
+        });
+      }
       if (planRun.resourceContext) {
         return await this.#commitResourceApply({
           running: runningWithEnv,
@@ -6442,6 +6475,7 @@ export class RunEngine {
             output: projected.output,
             result,
             lifecycleActions: dispatch.lifecycleActions,
+            sourceBuild: dispatch.sourceBuild,
             signal,
           }),
       );
@@ -6974,6 +7008,22 @@ export class RunEngine {
       },
       { signal: input.signal },
     );
+    if (result.providerExecutionFailure) {
+      const stateWasPersisted =
+        result.providerExecutionFailure.statePersistence === "persisted";
+      if (stateWasPersisted !== Boolean(result.stateDigest?.trim())) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `runner returned inconsistent failed-state persistence evidence for apply run ${running.id}`,
+        );
+      }
+      return {
+        result,
+        envDispatch,
+        persistGeneration,
+        providerInstallationPolicy,
+      };
+    }
     if (result.rawOutputRef !== rawOutputRef) {
       throw new OpenTofuControllerError(
         "failed_precondition",
@@ -7113,6 +7163,212 @@ export class RunEngine {
     return committed.capsule;
   }
 
+  async #commitFailedProviderApplyWithState(input: {
+    readonly running: ApplyRun;
+    readonly applyRun: ApplyRun;
+    readonly planRun: PlanRun;
+    readonly profile: RunnerProfile;
+    readonly plannedCapsule: Capsule | undefined;
+    readonly result: OpenTofuApplyResult;
+    readonly envDispatch: RunExecutionDispatch;
+    readonly persistGeneration: number;
+    readonly providerInstallationPolicy:
+      | { readonly requireMirror: boolean }
+      | undefined;
+    readonly leaseToken: string;
+    readonly startedAt: number;
+    readonly now: number;
+  }): Promise<
+    | {
+        readonly failed: ApplyRun;
+        readonly capsule: Capsule;
+        readonly stateVersion: StateVersion | undefined;
+        readonly nextStateGeneration: number;
+      }
+    | "lease_lost"
+  > {
+    const failure = input.result.providerExecutionFailure;
+    if (!failure) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "provider failure commit requires a typed provider execution failure",
+      );
+    }
+    const capsule =
+      input.plannedCapsule ??
+      (await this.#requireCurrentPlannedCapsule(input.planRun));
+    const stateVersion =
+      failure.statePersistence === "persisted"
+        ? this.#buildStateVersion({
+            envDispatch: input.envDispatch,
+            generation: input.persistGeneration,
+            stateDigest: input.result.stateDigest,
+            runId: input.applyRun.id,
+            now: input.now,
+          })
+        : undefined;
+    if (failure.statePersistence === "persisted" && !stateVersion) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "failed provider apply returned state without a durable Capsule state scope",
+      );
+    }
+    const nextStateGeneration = stateVersion
+      ? input.persistGeneration
+      : capsule.currentStateGeneration;
+    const errorCode = failure.errorCode ?? "apply_failed";
+    const diagnostics = redactRunDiagnostics(input.result.diagnostics) ?? [];
+    const failed: ApplyRun = {
+      ...input.running,
+      capsuleId: capsule.id,
+      ...(stateVersion ? { stateVersionId: stateVersion.id } : {}),
+      outputId: undefined,
+      status: "failed",
+      stateLock:
+        input.result.stateLock ??
+        stateLockEvidence(
+          input.profile.stateBackend,
+          input.startedAt,
+          input.now,
+          "recorded",
+        ),
+      diagnostics: [
+        ...diagnostics,
+        {
+          severity: "error",
+          code: errorCode,
+          message: "OpenTofu provider execution failed after dispatch",
+        },
+      ],
+      auditEvents: [
+        ...input.running.auditEvents,
+        ...providerInstallationAuditEvents(
+          input.applyRun.id,
+          "apply",
+          input.now,
+          input.result.providerInstallation,
+          input.providerInstallationPolicy,
+        ),
+        auditEvent(input.applyRun.id, "apply.failed", input.now, {
+          message: "OpenTofu provider execution failed after dispatch",
+          providerDispatched: true,
+          providerApplySucceeded: false,
+          statePersistence: failure.statePersistence,
+          ...(stateVersion ? { stateVersionId: stateVersion.id } : {}),
+        }),
+      ],
+      updatedAt: input.now,
+      finishedAt: input.now,
+    };
+    const appliedPlan: PlanRun = {
+      ...input.planRun,
+      appliedApplyRunId: input.applyRun.id,
+      updatedAt: input.now,
+    };
+    let committed: Awaited<
+      ReturnType<OpenTofuControlStore["commitRunState"]>
+    >;
+    try {
+      committed = await this.#store.commitRunState({
+        ...(stateVersion ? { stateVersion } : {}),
+        capsulePatch: {
+          id: capsule.id,
+          patch: {
+            ...(stateVersion
+              ? {
+                  currentStateVersionId: stateVersion.id,
+                  currentStateGeneration: nextStateGeneration,
+                }
+              : {}),
+            currentOutputId: undefined,
+            status: "error",
+            updatedAt: new Date(input.now).toISOString(),
+          },
+          guard: {
+            currentStateVersionId:
+              input.planRun.capsuleCurrentStateVersionId ?? undefined,
+            status: input.plannedCapsule?.status,
+          },
+        },
+        applyRunTerminal: failed,
+        planRunApplied: appliedPlan,
+        applyRunLeaseToken: input.leaseToken,
+      });
+    } catch (error) {
+      if (error instanceof CapsuleStateVersionGuardConflict) throw error;
+      throw new ArtifactLedgerTailAmbiguousError(input.applyRun.id, error);
+    }
+    if (committed.applyRunLeaseLost) return "lease_lost";
+    await this.#notifyTerminal(failed);
+    return {
+      failed,
+      capsule: committed.capsule ?? capsule,
+      stateVersion,
+      nextStateGeneration,
+    };
+  }
+
+  async #completeFailedProviderApply(input: {
+    readonly failed: ApplyRun;
+    readonly capsule: Capsule;
+    readonly stateVersion: StateVersion | undefined;
+    readonly nextStateGeneration: number;
+    readonly planRun: PlanRun;
+    readonly startedAt: number;
+    readonly now: number;
+  }): Promise<ApplyRunResponse> {
+    try {
+      await this.#billing.releaseApplyBilling(input.planRun);
+      await this.#recordRunnerMinuteUsage({
+        workspaceId: input.failed.workspaceId,
+        runId: input.failed.id,
+        capsuleId: input.failed.capsuleId,
+        startedAt: input.startedAt,
+        finishedAt: input.now,
+      });
+      await this.#recordDeployOperationMetric({
+        run: input.failed,
+        operationKind: "apply",
+        status: "failed",
+        startedAt: input.startedAt,
+        finishedAt: input.now,
+        recordApplyDuration: true,
+      });
+      await this.#store.deletePlanRunInputs(input.planRun.id);
+    } catch (error) {
+      log.warn("deploy_control.failed_apply_post_commit_cleanup_failed", {
+        planRunId: input.planRun.id,
+        applyRunId: input.failed.id,
+        message: errorMessage(error),
+      });
+    }
+    const errorCode =
+      input.failed.diagnostics?.find(
+        (diagnostic) => diagnostic.severity === "error" && diagnostic.code,
+      )?.code ?? "apply_failed";
+    await this.#recordActivity({
+      workspaceId: input.failed.workspaceId,
+      action: "run.failed",
+      targetType: "run",
+      targetId: input.failed.id,
+      runId: input.failed.id,
+      metadata: {
+        phase: "apply",
+        operation: input.failed.operation,
+        errorCode,
+        capsuleId: input.capsule.id,
+        statePersistence: input.stateVersion ? "persisted" : "unavailable",
+        ...(input.stateVersion
+          ? {
+              stateVersionId: input.stateVersion.id,
+              stateGeneration: input.nextStateGeneration,
+            }
+          : {}),
+      },
+    });
+    return { applyRun: input.failed, capsule: input.capsule };
+  }
+
   async #activateReleaseAfterApply(input: {
     readonly planRun: PlanRun;
     readonly applyRun: ApplyRun;
@@ -7121,6 +7377,7 @@ export class RunEngine {
     readonly output: Output;
     readonly result: OpenTofuApplyResult;
     readonly lifecycleActions: InstallConfig["lifecycleActions"];
+    readonly sourceBuild: InstallConfig["sourceBuild"];
     readonly signal: AbortSignal;
   }): Promise<LifecycleActionOutcome | undefined> {
     const commands = releaseActivationCommands(
@@ -7179,6 +7436,7 @@ export class RunEngine {
             ? { credentials: releaseEnvironment.credentials }
             : {}),
           commands,
+          ...(input.sourceBuild ? { sourceBuild: input.sourceBuild } : {}),
           ...(sourceSnapshot ? { sourceSnapshot } : {}),
         },
         { signal: input.signal },
@@ -7293,6 +7551,7 @@ export class RunEngine {
     readonly applyRun: ApplyRun;
     readonly capsule: Capsule;
     readonly lifecycleActions: InstallConfig["lifecycleActions"];
+    readonly sourceBuild: InstallConfig["sourceBuild"];
     readonly signal: AbortSignal;
   }): Promise<LifecycleActionOutcome | undefined> {
     const commands = releaseActivationCommands(
@@ -7409,6 +7668,7 @@ export class RunEngine {
             ? { credentials: releaseEnvironment.credentials }
             : {}),
           commands,
+          ...(input.sourceBuild ? { sourceBuild: input.sourceBuild } : {}),
           ...(sourceSnapshot ? { sourceSnapshot } : {}),
         },
         { signal: input.signal },
@@ -7813,6 +8073,7 @@ export class RunEngine {
             applyRun: running,
             capsule: capsule,
             lifecycleActions: dispatch.lifecycleActions,
+            sourceBuild: dispatch.sourceBuild,
             signal,
           }),
       );

@@ -444,6 +444,91 @@ test("container runner surfaces non-2xx apply stderr instead of raw JSON envelop
   expect(message).toContain("[redacted]");
 });
 
+test("container runner returns a typed failed apply with persisted partial state", async () => {
+  const stateDigest = `sha256:${"e".repeat(64)}`;
+  const runner = new CloudflareContainerOpenTofuRunner(
+    envReturning(
+      {
+        status: "failed",
+        exitCode: 1,
+        errorCode: "apply_failed",
+        providerExecutionFailure: {
+          kind: "provider_execution_failed",
+          statePersistence: "persisted",
+        },
+        state: { digest: stateDigest },
+        outputs: {
+          must_not_publish: { sensitive: false, value: "stale" },
+        },
+        rawOutputRef: "must-not-publish",
+        stderr:
+          "password=partial-apply-secret provider rejected a later resource",
+      },
+      undefined,
+      500,
+    ),
+  );
+
+  const result = await runner.apply({
+    applyRun: { id: "apply_partial" },
+    planRun: { id: "plan_partial" },
+    planArtifact: {
+      kind: "runner-local",
+      ref: "runner-local://plan_partial/tfplan",
+      digest: PLAN_DIGEST,
+    },
+  } as Parameters<CloudflareContainerOpenTofuRunner["apply"]>[0]);
+
+  expect(result.providerExecutionFailure).toEqual({
+    kind: "provider_execution_failed",
+    statePersistence: "persisted",
+    errorCode: "apply_failed",
+  });
+  expect(result.stateDigest).toBe(stateDigest);
+  expect(result.outputs).toBeUndefined();
+  expect(result.rawOutputRef).toBeUndefined();
+  expect(JSON.stringify(result.diagnostics)).not.toContain(
+    "partial-apply-secret",
+  );
+  expect(JSON.stringify(result.diagnostics)).toContain("[redacted]");
+});
+
+test("container runner distinguishes failed provider execution without readable state", async () => {
+  const runner = new CloudflareContainerOpenTofuRunner(
+    envReturning(
+      {
+        status: "failed",
+        exitCode: 1,
+        errorCode: "apply_failed",
+        providerExecutionFailure: {
+          kind: "provider_execution_failed",
+          statePersistence: "unavailable",
+        },
+        stderr: "provider failed after dispatch",
+      },
+      undefined,
+      500,
+    ),
+  );
+
+  const result = await runner.apply({
+    applyRun: { id: "apply_no_state" },
+    planRun: { id: "plan_no_state" },
+    planArtifact: {
+      kind: "runner-local",
+      ref: "runner-local://plan_no_state/tfplan",
+      digest: PLAN_DIGEST,
+    },
+  } as Parameters<CloudflareContainerOpenTofuRunner["apply"]>[0]);
+
+  expect(result.providerExecutionFailure).toEqual({
+    kind: "provider_execution_failed",
+    statePersistence: "unavailable",
+    errorCode: "apply_failed",
+  });
+  expect(result.stateDigest).toBeUndefined();
+});
+
 test("container runner maps typed artifact relay ambiguity to retryable infrastructure", async () => {
   const runner = new CloudflareContainerOpenTofuRunner(
     envReturning(
@@ -651,7 +736,7 @@ test("container runner dispatches post-apply release commands to the release act
       sourceId: "src_1",
       url: "https://github.com/acme/repo.git",
       ref: "main",
-      resolvedCommit: "abc123",
+      resolvedCommit: "0123456789abcdef0123456789abcdef01234567",
       path: ".",
       archiveRef:
         "workspaces/space_1/sources/src_1/snapshots/snap_1/source.tar.zst",
@@ -732,6 +817,8 @@ test("container runner dispatches post-apply release commands to the release act
   expect((captured?.request as Record<string, unknown>).activation).toEqual({
     applyRunId: "run_apply_1",
     stateVersionId: "state_1",
+    sourceSnapshotId: "snap_1",
+    sourceCommit: "0123456789abcdef0123456789abcdef01234567",
   });
 });
 

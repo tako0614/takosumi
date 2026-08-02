@@ -599,6 +599,18 @@ export async function runReviewedPlanApply(
         ...(result.exitCode === 0
           ? {}
           : {
+              // `tofu apply` itself was dispatched. A non-zero exit can still
+              // leave a newer terraform.tfstate after earlier resources were
+              // created or updated. Host adapters use this explicit marker to
+              // recover that state without confusing init/transport failures
+              // with provider execution.
+              ...(action === "apply"
+                ? {
+                    providerExecutionFailure: {
+                      kind: "provider_execution_failed",
+                    },
+                  }
+                : {}),
               errorCode:
                 classifyOpenTofuFailure(
                   [result.stderr, result.stdout].filter(Boolean).join("\n"),

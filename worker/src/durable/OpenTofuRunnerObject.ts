@@ -650,9 +650,18 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       unboundedRunnerResponse,
       this.#artifactLimits.runnerResponse,
     );
+    const providerExecutionFailed =
+      envelope.action === "apply" &&
+      !runnerResponse.ok &&
+      runnerProviderExecutionFailed(
+        await readJsonObject(
+          runnerResponse.clone(),
+          this.#artifactLimits.runnerResponse,
+        ),
+      );
     if (
       (envelope.action === "apply" || envelope.action === "destroy") &&
-      runnerResponse.ok
+      (runnerResponse.ok || providerExecutionFailed)
     ) {
       if (stateScope) {
         return await this.#persistStateToR2State(
@@ -663,9 +672,10 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
           runnerResponse,
           envelope.action,
           rawOutputRef,
+          providerExecutionFailed,
         );
       }
-      if (stateKeys.length > 0) {
+      if (runnerResponse.ok && stateKeys.length > 0) {
         await this.#persistStateArtifact(runId, stateKeys, url);
       }
     }
@@ -1035,11 +1045,22 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     runnerResponse: Response,
     action: "apply" | "destroy",
     rawOutputRef: string | undefined,
+    providerExecutionFailed = false,
   ): Promise<Response> {
     const stateResponse = await this.#containerFetch(
       new Request(stateArtifactUrl(baseUrl, containerRunId), { method: "GET" }),
     );
     if (stateResponse.status === 404) {
+      if (providerExecutionFailed) {
+        const payload = await readJsonObject(
+          runnerResponse,
+          this.#artifactLimits.runnerResponse,
+        );
+        return jsonResponse(
+          failedProviderExecutionPayload(payload, "unavailable"),
+          runnerResponse.status,
+        );
+      }
       throw new Error(
         `container ${action} completed without a durable state artifact`,
       );
@@ -1062,7 +1083,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     // Validate and encrypt outputs before the first durable write. A size-limit
     // failure must not leave a new state generation or current.json behind.
     const preparedRawOutputs =
-      action === "apply"
+      action === "apply" && !providerExecutionFailed
         ? await this.#prepareRawOutputs(rawOutputRef!, payload)
         : undefined;
     const bucket = this.#r2State();
@@ -1088,6 +1109,17 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
             ...(preparedRawOutputs
               ? { "takosumi-raw-output-ref": preparedRawOutputs.key }
               : { "takosumi-raw-output-status": "none" }),
+            ...(providerExecutionFailed
+              ? {
+                  "takosumi-provider-execution": "failed",
+                  ...(providerFailureErrorCode(payload)
+                    ? {
+                        "takosumi-provider-error-code":
+                          providerFailureErrorCode(payload)!,
+                      }
+                    : {}),
+                }
+              : {}),
           },
           onlyIf: { etagDoesNotMatch: "*" },
         },
@@ -1115,20 +1147,23 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       ciphertextLength: sealed.ciphertextLength,
     };
     await writeCurrentStateCache(bucket, scope, current);
+    const persistedState = {
+      generation: scope.generation,
+      stateRef: objectKey,
+      digest: sealed.contentDigest,
+      ciphertextLength: sealed.ciphertextLength,
+    };
     return jsonResponse(
-      {
-        ...payload,
-        ...(action === "apply" ? { outputs: payload.outputs ?? {} } : {}),
-        state: {
-          generation: scope.generation,
-          stateRef: objectKey,
-          digest: sealed.contentDigest,
-          ciphertextLength: sealed.ciphertextLength,
-        },
-        ...(persistedRawOutputRef
-          ? { rawOutputRef: persistedRawOutputRef }
-          : {}),
-      },
+      providerExecutionFailed
+        ? failedProviderExecutionPayload(payload, "persisted", persistedState)
+        : {
+            ...payload,
+            ...(action === "apply" ? { outputs: payload.outputs ?? {} } : {}),
+            state: persistedState,
+            ...(persistedRawOutputRef
+              ? { rawOutputRef: persistedRawOutputRef }
+              : {}),
+          },
       runnerResponse.status,
     );
   }
@@ -1257,6 +1292,13 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     );
     const recordedRawOutputRef =
       object.customMetadata?.["takosumi-raw-output-ref"];
+    const providerExecutionFailed =
+      object.customMetadata?.["takosumi-provider-execution"] === "failed";
+    if (providerExecutionFailed && action !== "apply") {
+      throw new Error(
+        "completed failed provider state belongs to an unsupported action",
+      );
+    }
     if (action === "destroy" && recordedRawOutputRef) {
       throw new Error(
         "completed destroy target unexpectedly records raw output authority",
@@ -1264,6 +1306,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     }
     if (
       action === "apply" &&
+      !providerExecutionFailed &&
       recordedRawOutputRef !== rawOutputRef
     ) {
       throw new Error(
@@ -1280,6 +1323,11 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     if (recordedRawOutputRef && !rawOutputs) {
       throw new Error("completed apply target raw output artifact is missing");
     }
+    if (providerExecutionFailed && recordedRawOutputRef) {
+      throw new Error(
+        "completed failed provider state unexpectedly records raw output authority",
+      );
+    }
     const ciphertextLength =
       Number(object.customMetadata?.["takosumi-ciphertext-length"]);
     await writeCurrentStateCache(bucket, scope, {
@@ -1289,16 +1337,36 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       runId: applyRunId,
       ...(Number.isFinite(ciphertextLength) ? { ciphertextLength } : {}),
     });
+    const state = {
+      generation: scope.generation,
+      stateRef: scope.stateRef,
+      digest: metadataDigest,
+      ...(Number.isFinite(ciphertextLength) ? { ciphertextLength } : {}),
+    };
+    if (providerExecutionFailed) {
+      return jsonResponse(
+        failedProviderExecutionPayload(
+          {
+            status: "failed",
+            exitCode: 1,
+            ...(object.customMetadata?.["takosumi-provider-error-code"]
+              ? {
+                  errorCode:
+                    object.customMetadata["takosumi-provider-error-code"],
+                }
+              : {}),
+          },
+          "persisted",
+          state,
+        ),
+        500,
+      );
+    }
     return jsonResponse(
       {
         status: "succeeded",
         exitCode: 0,
-        state: {
-          generation: scope.generation,
-          stateRef: scope.stateRef,
-          digest: metadataDigest,
-          ...(Number.isFinite(ciphertextLength) ? { ciphertextLength } : {}),
-        },
+        state,
         ...(rawOutputs
           ? { outputs: rawOutputs.outputs, rawOutputRef: rawOutputs.ref }
           : {}),
@@ -2858,6 +2926,47 @@ function parseRunEnvelope(bodyText: string): {
   return {
     action: stringField(body, "action"),
     request: body.request,
+  };
+}
+
+function runnerProviderExecutionFailed(
+  payload: Record<string, unknown>,
+): boolean {
+  const failure = recordField(payload, "providerExecutionFailure");
+  return (
+    isRecord(failure) &&
+    stringField(failure, "kind") === "provider_execution_failed"
+  );
+}
+
+function providerFailureErrorCode(
+  payload: Record<string, unknown>,
+): string | undefined {
+  const value = stringField(payload, "errorCode");
+  return value && /^[A-Za-z][A-Za-z0-9._:-]{0,127}$/u.test(value)
+    ? value
+    : undefined;
+}
+
+function failedProviderExecutionPayload(
+  payload: Record<string, unknown>,
+  statePersistence: "persisted" | "unavailable",
+  state?: Record<string, unknown>,
+): Record<string, unknown> {
+  const {
+    outputs: _outputs,
+    rawOutputRef: _rawOutputRef,
+    state: _state,
+    ...failurePayload
+  } = payload;
+  return {
+    ...failurePayload,
+    status: "failed",
+    providerExecutionFailure: {
+      kind: "provider_execution_failed",
+      statePersistence,
+    },
+    ...(state ? { state } : {}),
   };
 }
 

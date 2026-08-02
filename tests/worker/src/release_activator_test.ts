@@ -224,6 +224,31 @@ test("runner release activator runs opaque post-apply commands", async () => {
   });
 });
 
+test("runner release activator forwards InstallConfig sourceBuild", async () => {
+  let capturedSourceBuild: unknown;
+  const activator = createRunnerReleaseActivator({
+    release: async (job) => {
+      capturedSourceBuild = job.sourceBuild;
+      return {
+        status: "succeeded",
+        runId: job.runId,
+        commandCount: job.commands.length,
+      };
+    },
+  });
+  const sourceBuild = {
+    commands: [{ argv: ["bun", "run", "build"] }],
+    outputs: ["dist/index.js"],
+  } as const;
+
+  await activator!.activate({
+    ...fakeRunnerActivationInput(),
+    sourceBuild,
+  });
+
+  expect(capturedSourceBuild).toEqual(sourceBuild);
+});
+
 test("runner release activator records pre-destroy phase truthfully", async () => {
   const activator = createRunnerReleaseActivator({
     release: async (job) => ({

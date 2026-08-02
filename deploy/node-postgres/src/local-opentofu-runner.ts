@@ -419,7 +419,11 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
       "apply",
       job.stateScope,
     );
-    if (replay) return await this.confirmRawOutput(job, replay);
+    if (replay) {
+      const replayResult = replay.result as OpenTofuApplyResult;
+      if (replayResult.providerExecutionFailure) return replayResult;
+      return await this.confirmRawOutput(job, replay);
+    }
     await this.restoreSourceArchive(
       job.applyRun.id,
       job.sourceArchive,
@@ -445,6 +449,28 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
       job,
       control?.signal,
     );
+    if (runnerProviderExecutionFailed(result)) {
+      const stateBytes = await fetchRunnerArtifactIfPresent(
+        this.transport,
+        job.applyRun.id,
+        `/runs/${encodeURIComponent(job.applyRun.id)}/artifacts/tfstate`,
+        control?.signal,
+      );
+      const normalizedFailure = failedApplyResult(
+        result,
+        stateBytes ? "persisted" : "unavailable",
+        stateBytes ? await digestBytes(stateBytes) : undefined,
+      );
+      if (!stateBytes) return normalizedFailure;
+      const committed = await this.commitStateMutation(
+        job.applyRun.id,
+        "apply",
+        job.stateScope,
+        stateBytes,
+        normalizedFailure,
+      );
+      return committed.result as OpenTofuApplyResult;
+    }
     const stateBytes = await fetchRunnerArtifact(
       this.transport,
       job.applyRun.id,
@@ -553,7 +579,10 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
       "release",
       job.runId,
       {
-        release: { commands: job.commands },
+        release: {
+          commands: job.commands,
+          ...(job.sourceBuild ? { sourceBuild: job.sourceBuild } : {}),
+        },
         outputs: job.nonSensitiveOutputs,
         providerConfigurations: job.providerConfigurations,
         ...(job.credentials ? { credentials: job.credentials } : {}),
@@ -562,6 +591,8 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
           ...(job.workspaceId ? { workspaceId: job.workspaceId } : {}),
           capsuleId: job.capsuleId,
           stateVersionId: job.stateVersionId,
+          sourceSnapshotId: job.sourceSnapshot.id,
+          sourceCommit: job.sourceSnapshot.resolvedCommit,
         },
       },
       control?.signal,
@@ -1003,7 +1034,10 @@ async function runRunner(
   });
   const text = await response.text();
   const body = text.trim().length > 0 ? parseObject(text) : {};
-  if (!response.ok) {
+  if (
+    !response.ok &&
+    !(action === "apply" && runnerProviderExecutionFailed(body))
+  ) {
     const reason = stringValue(body, "errorCode");
     const detail =
       stringValue(body, "detail") ??
@@ -1018,6 +1052,38 @@ async function runRunner(
   return body;
 }
 
+function runnerProviderExecutionFailed(
+  result: Record<string, unknown>,
+): boolean {
+  const failure = recordValue(result, "providerExecutionFailure");
+  return (
+    failure !== undefined &&
+    stringValue(failure, "kind") === "provider_execution_failed"
+  );
+}
+
+function failedApplyResult(
+  result: Record<string, unknown>,
+  statePersistence: "persisted" | "unavailable",
+  stateDigest: string | undefined,
+): OpenTofuApplyResult {
+  const errorCode = stringValue(result, "errorCode");
+  return {
+    providerExecutionFailure: {
+      kind: "provider_execution_failed",
+      statePersistence,
+      ...(errorCode && /^[A-Za-z][A-Za-z0-9._:-]{0,127}$/u.test(errorCode)
+        ? { errorCode }
+        : {}),
+    },
+    ...(stateDigest ? { stateDigest } : {}),
+    ...(providerInstallation(result)
+      ? { providerInstallation: providerInstallation(result) }
+      : {}),
+    diagnostics: diagnostics(result),
+  };
+}
+
 async function fetchRunnerArtifact(
   transport: RunnerTransport,
   runId: string,
@@ -1028,6 +1094,25 @@ async function fetchRunnerArtifact(
     method: "GET",
     ...(signal ? { signal } : {}),
   });
+  if (!response.ok) {
+    throw new Error(
+      `OpenTofu runner artifact fetch failed for ${runId}: ${response.status} ${await response.text()}`,
+    );
+  }
+  return new Uint8Array(await response.arrayBuffer());
+}
+
+async function fetchRunnerArtifactIfPresent(
+  transport: RunnerTransport,
+  runId: string,
+  path: string,
+  signal?: AbortSignal,
+): Promise<Uint8Array | undefined> {
+  const response = await transport.fetch(path, {
+    method: "GET",
+    ...(signal ? { signal } : {}),
+  });
+  if (response.status === 404) return undefined;
   if (!response.ok) {
     throw new Error(
       `OpenTofu runner artifact fetch failed for ${runId}: ${response.status} ${await response.text()}`,

@@ -147,6 +147,30 @@ export class CloudflareContainerOpenTofuRunner
     // both onto the result so the controller
     // records them on the StateVersion / Output.
     const state = recordFromRecord(result, "state");
+    const providerExecutionFailure =
+      providerExecutionFailureFromContainerResult(result);
+    if (providerExecutionFailure) {
+      const stateDigest = state ? stringFromRecord(state, "digest") : undefined;
+      if (
+        (providerExecutionFailure.statePersistence === "persisted") !==
+        Boolean(stateDigest)
+      ) {
+        throw new Error(
+          `OpenTofu runner apply ${job.applyRun.id} returned inconsistent failed-state persistence evidence`,
+        );
+      }
+      return {
+        providerExecutionFailure,
+        ...(stateDigest ? { stateDigest } : {}),
+        ...(providerInstallationFromContainerResult(result)
+          ? {
+              providerInstallation:
+                providerInstallationFromContainerResult(result),
+            }
+          : {}),
+        diagnostics: diagnosticsFromContainerResult(result),
+      };
+    }
     return {
       ...(recordFromRecord(result, "outputs")
         ? {
@@ -234,6 +258,7 @@ export class CloudflareContainerOpenTofuRunner
             ? { timeoutSeconds: command.timeoutSeconds }
             : {}),
         })),
+        ...(job.sourceBuild ? { sourceBuild: job.sourceBuild } : {}),
       },
       sourceArchive: {
         ref: job.sourceSnapshot.archiveRef,
@@ -248,6 +273,8 @@ export class CloudflareContainerOpenTofuRunner
         ...(job.workspaceId ? { workspaceId: job.workspaceId } : {}),
         capsuleId: job.capsuleId,
         stateVersionId: job.stateVersionId,
+        sourceSnapshotId: job.sourceSnapshot.id,
+        sourceCommit: job.sourceSnapshot.resolvedCommit,
       },
     }, { signal: control?.signal });
     const status = stringFromRecord(result, "status");
@@ -531,6 +558,12 @@ export class CloudflareContainerOpenTofuRunner
             });
           }
           if (!response.ok) {
+            if (
+              action === "apply" &&
+              providerExecutionFailureFromContainerResult(payload)
+            ) {
+              return payload;
+            }
             const detail = runnerFailureDetail(payload, redactedText);
             const message = `OpenTofu runner rejected ${action} run ${runId}: ${response.status}${detail ? ` (${detail})` : ""}`;
             const relayInfrastructureError =
@@ -599,6 +632,33 @@ export class CloudflareContainerOpenTofuRunner
       tags: { operation_kind: action, status: "running" },
     });
   }
+}
+
+function providerExecutionFailureFromContainerResult(
+  result: Record<string, unknown>,
+): OpenTofuApplyResult["providerExecutionFailure"] | undefined {
+  const failure = recordFromRecord(result, "providerExecutionFailure");
+  if (
+    !failure ||
+    stringFromRecord(failure, "kind") !== "provider_execution_failed"
+  ) {
+    return undefined;
+  }
+  const statePersistence = stringFromRecord(failure, "statePersistence");
+  if (
+    statePersistence !== "persisted" &&
+    statePersistence !== "unavailable"
+  ) {
+    return undefined;
+  }
+  const errorCode = stringFromRecord(result, "errorCode");
+  return {
+    kind: "provider_execution_failed",
+    statePersistence,
+    ...(errorCode && /^[A-Za-z][A-Za-z0-9._:-]{0,127}$/u.test(errorCode)
+      ? { errorCode }
+      : {}),
+  };
 }
 
 async function sleepBeforeCapacityRetry(

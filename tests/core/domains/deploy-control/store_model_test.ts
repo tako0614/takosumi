@@ -762,6 +762,65 @@ test("commitRunState atomically advances Capsule, StateVersion, and Output", asy
   }
 });
 
+test("commitRunState records a failed provider apply without inventing state", async () => {
+  for (const [label, store] of await stores()) {
+    const seeded = await seedCapsuleModel(store, {
+      workspaceId: "workspace_test",
+      capsuleId: "capsule_failed_apply_no_state",
+    });
+    const currentState = stateVersion(seeded.capsule.id, {
+      id: "state_before_failed_apply",
+    });
+    const currentOutput = output(seeded.capsule.id, {
+      id: "output_before_failed_apply",
+    });
+    await store.commitRunState({
+      stateVersion: currentState,
+      output: currentOutput,
+      capsulePatch: {
+        id: seeded.capsule.id,
+        patch: {
+          currentStateVersionId: currentState.id,
+          currentStateGeneration: currentState.generation,
+          currentOutputId: currentOutput.id,
+          status: "active",
+          updatedAt: "2026-06-07T00:00:00.000Z",
+        },
+        guard: { currentStateVersionId: undefined, status: "pending" },
+      },
+    });
+
+    const committed = await store.commitRunState({
+      capsulePatch: {
+        id: seeded.capsule.id,
+        patch: {
+          currentOutputId: undefined,
+          status: "error",
+          updatedAt: "2026-06-08T00:00:00.000Z",
+        },
+        guard: {
+          currentStateVersionId: currentState.id,
+          status: "active",
+        },
+      },
+    });
+
+    expect(committed.capsule, label).toMatchObject({
+      currentStateVersionId: currentState.id,
+      currentStateGeneration: currentState.generation,
+      status: "error",
+    });
+    expect(committed.capsule?.currentOutputId, label).toBeUndefined();
+    expect(
+      (await store.getLatestStateVersion(
+        seeded.capsule.id,
+        seeded.capsule.environment,
+      ))?.id,
+      label,
+    ).toBe(currentState.id);
+  }
+});
+
 test("commitRunState writes nothing when the Capsule guard loses", async () => {
   for (const [label, store] of await stores()) {
     const seeded = await seedCapsuleModel(store, {

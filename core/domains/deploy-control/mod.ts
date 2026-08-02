@@ -469,6 +469,17 @@ export interface OpenTofuApplyResult {
   readonly diagnostics?: readonly RunDiagnostic[];
   readonly providerInstallation?: readonly ProviderInstallationEvidence[];
   /**
+   * The provider command was dispatched and returned a terminal failure. This
+   * is a durable result rather than a transport exception: `persisted` means
+   * the adapter retained the post-failure state at the job's exact stateRef;
+   * `unavailable` means no readable state existed and Core must not invent one.
+   */
+  readonly providerExecutionFailure?: {
+    readonly kind: "provider_execution_failed";
+    readonly statePersistence: "persisted" | "unavailable";
+    readonly errorCode?: string;
+  };
+  /**
    * Plaintext digest of the persisted OpenTofu state, echoed by the runner
    * storage adapter after durable persistence.
    */
@@ -521,6 +532,8 @@ export type ReleaseActivationAction =
 export interface ReleaseCommandRunJob {
   readonly runId: string;
   readonly commands: readonly ReleaseActivationCommand[];
+  /** Optional InstallConfig source preparation, executed before credentials. */
+  readonly sourceBuild?: InstallConfig["sourceBuild"];
   readonly sourceSnapshot: SourceSnapshot;
   readonly nonSensitiveOutputs: Readonly<Record<string, JsonValue>>;
   readonly providerConfigurations: ProviderConfigurationsEnvelope;
@@ -566,6 +579,8 @@ export interface ReleaseActivationInput {
   readonly credentials?: RunCredentials;
   /** Service-side InstallConfig actions pinned with the reviewed Plan. */
   readonly commands: readonly ReleaseActivationAction[];
+  /** Optional InstallConfig source preparation for runner release commands. */
+  readonly sourceBuild?: InstallConfig["sourceBuild"];
   readonly sourceSnapshot?: SourceSnapshot;
 }
 

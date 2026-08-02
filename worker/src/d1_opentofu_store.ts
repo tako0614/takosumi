@@ -1927,7 +1927,9 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         guard.currentStateVersionId,
         guard.status,
       ),
-      d1UpsertStateVersionStmt(this.#orm, input.stateVersion),
+      ...(input.stateVersion
+        ? [d1UpsertStateVersionStmt(this.#orm, input.stateVersion)]
+        : []),
       ...(input.output ? [d1UpsertOutputStmt(this.#orm, input.output)] : []),
       // Commit-tail fold (S2): the terminal ApplyRun + the applied PlanRun join
       // the SAME atomic batch as the StateVersion so a torn tail can no longer

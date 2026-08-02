@@ -1016,6 +1016,200 @@ test("apply redelivery adopts the exact ApplyRun artifacts after R2 responses ar
   assert.equal(state.listCalls.length, 0);
 });
 
+test("failed provider apply encrypts partial state and same-run replay stays failed without provider re-execution", async () => {
+  const artifacts = new FakeR2Bucket();
+  const state = new FakeR2Bucket();
+  const crypto = StateArtifactCrypto.fromEnv({
+    TAKOSUMI_SECRET_STORE_PASSPHRASE: TEST_PASSPHRASE,
+  });
+  const sealedPlan = await crypto.seal(PLAN_BYTES);
+  await artifacts.put(
+    "opentofu-plan-runs/plan_1/tfplan.enc",
+    sealedPlan.ciphertext,
+  );
+  const applyRunId = "apply_partial_1";
+  const targetStateRef = `${STATE_PREFIX}/00000001.tfstate.enc`;
+  const rawOutputRef = RAW_OUTPUT_REF.replace(
+    "/runs/plan_1/",
+    `/runs/${applyRunId}/`,
+  );
+  let providerPosts = 0;
+  const runner = runnerWithContainer(artifacts, state, {
+    async containerFetch(request) {
+      const path = new URL(request.url).pathname;
+      if (request.method === "PUT") return Response.json({ ok: true });
+      if (request.method === "POST" && path === "/runs/plan_1") {
+        providerPosts += 1;
+        return Response.json(
+          {
+            status: "failed",
+            exitCode: 1,
+            errorCode: "apply_failed",
+            providerExecutionFailure: {
+              kind: "provider_execution_failed",
+            },
+            stderr: "provider rejected a later resource",
+          },
+          { status: 500 },
+        );
+      }
+      if (request.method === "GET" && path.endsWith("/artifacts/tfstate")) {
+        return new Response(NEW_STATE_BYTES);
+      }
+      return Response.json({ error: "unexpected" }, { status: 500 });
+    },
+  });
+  const requestBody = JSON.stringify({
+    kind: "takosumi.opentofu-run@v1",
+    action: "apply",
+    runId: "plan_1",
+    request: {
+      applyRun: { id: applyRunId },
+      stateScope: {
+        ...SCOPE,
+        generation: 1,
+        stateRef: targetStateRef,
+      },
+      rawOutputRef,
+      planArtifact: {
+        kind: "object-storage",
+        ref: "r2://takos-artifacts/opentofu-plan-runs/plan_1/tfplan",
+        digest: PLAN_DIGEST,
+      },
+    },
+  });
+
+  const first = await runner.fetch(
+    new Request("https://runner/runs/plan_1", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: requestBody,
+    }),
+  );
+  assert.equal(first.status, 500);
+  const firstPayload = (await first.json()) as Record<string, unknown>;
+  assert.deepEqual(firstPayload.providerExecutionFailure, {
+    kind: "provider_execution_failed",
+    statePersistence: "persisted",
+  });
+  assert.equal(firstPayload.outputs, undefined);
+  assert.equal(firstPayload.rawOutputRef, undefined);
+  const firstState = firstPayload.state as Record<string, unknown>;
+  assert.equal(firstState.stateRef, targetStateRef);
+  assert.equal(firstState.digest, await digestOf(NEW_STATE_BYTES));
+  assert.equal(
+    state.metadata(targetStateRef)?.["takosumi-provider-execution"],
+    "failed",
+  );
+  assert.equal(artifacts.body(rawOutputRef), undefined);
+  const encrypted = state.body(targetStateRef);
+  assert.ok(encrypted);
+  assert.deepEqual(
+    await crypto.open(encrypted!, await digestOf(NEW_STATE_BYTES)),
+    NEW_STATE_BYTES,
+  );
+
+  const replay = await runner.fetch(
+    new Request("https://runner/runs/plan_1", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: requestBody,
+    }),
+  );
+  assert.equal(replay.status, 500);
+  assert.equal(providerPosts, 1);
+  const replayPayload = (await replay.json()) as Record<string, unknown>;
+  assert.deepEqual(replayPayload.providerExecutionFailure, {
+    kind: "provider_execution_failed",
+    statePersistence: "persisted",
+  });
+  assert.equal(
+    (replayPayload.state as Record<string, unknown>).digest,
+    await digestOf(NEW_STATE_BYTES),
+  );
+});
+
+test("failed provider apply with no readable state returns an unavailable result without inventing state", async () => {
+  const artifacts = new FakeR2Bucket();
+  const state = new FakeR2Bucket();
+  const crypto = StateArtifactCrypto.fromEnv({
+    TAKOSUMI_SECRET_STORE_PASSPHRASE: TEST_PASSPHRASE,
+  });
+  const sealedPlan = await crypto.seal(PLAN_BYTES);
+  await artifacts.put(
+    "opentofu-plan-runs/plan_1/tfplan.enc",
+    sealedPlan.ciphertext,
+  );
+  const applyRunId = "apply_no_state_1";
+  const targetStateRef = `${STATE_PREFIX}/00000001.tfstate.enc`;
+  const rawOutputRef = RAW_OUTPUT_REF.replace(
+    "/runs/plan_1/",
+    `/runs/${applyRunId}/`,
+  );
+  const runner = runnerWithContainer(artifacts, state, {
+    async containerFetch(request) {
+      const path = new URL(request.url).pathname;
+      if (request.method === "PUT") return Response.json({ ok: true });
+      if (request.method === "POST" && path === "/runs/plan_1") {
+        return Response.json(
+          {
+            status: "failed",
+            exitCode: 1,
+            errorCode: "apply_failed",
+            providerExecutionFailure: {
+              kind: "provider_execution_failed",
+            },
+          },
+          { status: 500 },
+        );
+      }
+      if (request.method === "GET" && path.endsWith("/artifacts/tfstate")) {
+        return Response.json({ error: "state artifact not found" }, {
+          status: 404,
+        });
+      }
+      return Response.json({ error: "unexpected" }, { status: 500 });
+    },
+  });
+
+  const response = await runner.fetch(
+    new Request("https://runner/runs/plan_1", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        kind: "takosumi.opentofu-run@v1",
+        action: "apply",
+        runId: "plan_1",
+        request: {
+          applyRun: { id: applyRunId },
+          stateScope: {
+            ...SCOPE,
+            generation: 1,
+            stateRef: targetStateRef,
+          },
+          rawOutputRef,
+          planArtifact: {
+            kind: "object-storage",
+            ref: "r2://takos-artifacts/opentofu-plan-runs/plan_1/tfplan",
+            digest: PLAN_DIGEST,
+          },
+        },
+      }),
+    }),
+  );
+
+  assert.equal(response.status, 500);
+  const payload = (await response.json()) as Record<string, unknown>;
+  assert.deepEqual(payload.providerExecutionFailure, {
+    kind: "provider_execution_failed",
+    statePersistence: "unavailable",
+  });
+  assert.equal(payload.state, undefined);
+  assert.equal(state.body(targetStateRef), undefined);
+  assert.equal(state.body(CURRENT_KEY), undefined);
+  assert.equal(artifacts.body(rawOutputRef), undefined);
+});
+
 test("destroy with stateScope adopts same-run completed state without destroying twice", async () => {
   const artifacts = new FakeR2Bucket();
   const state = new FakeR2Bucket();
