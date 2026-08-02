@@ -18,7 +18,11 @@ test("the default InstallConfig is generic service-side DB configuration", () =>
     name: "opentofu-capsule",
     variableMapping: {},
     outputAllowlist: {},
-    policy: {},
+    policy: {
+      repositoryInstallUx: {
+        allowedInterfacePermissions: ["ui.open"],
+      },
+    },
     createdAt: "2026-06-06T00:00:00.000Z",
     updatedAt: "2026-06-06T00:00:00.000Z",
   });

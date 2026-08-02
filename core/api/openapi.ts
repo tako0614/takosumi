@@ -1217,6 +1217,18 @@ function policySchemas(): Record<string, Record<string, unknown>> {
           },
           additionalProperties: false,
         },
+        repositoryInstallUx: {
+          type: "object",
+          required: ["allowedInterfacePermissions"],
+          properties: {
+            allowedInterfacePermissions: {
+              type: "array",
+              uniqueItems: true,
+              items: { type: "string", minLength: 1, maxLength: 256 },
+            },
+          },
+          additionalProperties: false,
+        },
         scopeBoundary: ref("ScopeBoundaryPolicy"),
         quota: {
           type: "object",

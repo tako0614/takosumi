@@ -30,6 +30,7 @@ import type {
   PatchSourceRequest,
   SourceResponse,
 } from "takosumi-contract/sources";
+import { TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2 } from "takosumi-contract/repository-manifest";
 import type {
   CapsuleCompatibilityReportResponse,
   CreateSourceCompatibilityCheckRequest,
@@ -1388,7 +1389,14 @@ async function createCapsule(
     modulePath: resolvedModulePath,
     capsuleName: name,
     workspaceId,
+    installingPrincipalId: session.subject,
     ...(vars ? { reviewedVariables: vars } : {}),
+    ...(interfaceBlueprints !== undefined
+      ? { reviewedInterfaceBlueprints: interfaceBlueprints }
+      : {}),
+    ...(outputAllowlist !== undefined
+      ? { reviewedOutputAllowlist: outputAllowlist }
+      : {}),
   });
   if (repoInstallUx.status === "invalid") {
     return errorJson(
@@ -1409,8 +1417,13 @@ async function createCapsule(
   const hasPresentationDefaultVars =
     Object.keys(presentationDefaultVars).length > 0;
   const hasVars = vars !== undefined && Object.keys(vars).length > 0;
-  const selectedInterfaceBlueprints =
-    interfaceBlueprints ?? baseConfig.interfaceBlueprints;
+  const repoOwnedInterfaceProposalAccepted =
+    repoInstallUx.status === "accepted" &&
+    repoInstallUx.repositoryManifestApiVersion ===
+      TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2;
+  const selectedInterfaceBlueprints = repoOwnedInterfaceProposalAccepted
+    ? repoInstallUx.interfaceBlueprints
+    : (interfaceBlueprints ?? baseConfig.interfaceBlueprints);
   const needsInstallingPrincipalScope =
     capsuleInterfaceBlueprintsNeedInstallingPrincipal(
       selectedInterfaceBlueprints,
@@ -1491,8 +1504,9 @@ async function createCapsule(
               resolvedResourceInterfaceBindingProposals,
           }
         : {}),
-      outputAllowlist:
-        outputAllowlist ?? scopedCloneOutputAllowlist(baseConfig),
+      outputAllowlist: repoOwnedInterfaceProposalAccepted
+        ? repoInstallUx.outputAllowlist
+        : (outputAllowlist ?? scopedCloneOutputAllowlist(baseConfig)),
       createdAt: now,
       updatedAt: now,
     });

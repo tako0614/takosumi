@@ -7,6 +7,7 @@ import {
 } from "../../../../accounts/service/src/control-routes.ts";
 import { InMemoryAccountsStore } from "../../../../accounts/service/src/store.ts";
 import { createTakosumiService } from "../../../../core/bootstrap.ts";
+import type { RepositoryManifestDocument } from "takosumi-contract/repository-manifest";
 import type {
   OpenTofuApplyJob,
   OpenTofuDestroyJob,
@@ -34,6 +35,64 @@ const LOCK_DIGEST =
   "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
 const STATE_DIGEST =
   "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
+
+const REPOSITORY_INTERFACE_MANIFEST = {
+  apiVersion: "takosumi.com/v2",
+  kind: "Repository",
+  install: {
+    modules: {
+      ".": {
+        inputs: [],
+        interfaces: [
+          {
+            key: "launcher",
+            name: "app.launcher",
+            spec: {
+              type: "interface.ui.surface",
+              version: "1",
+              document: {
+                display: { title: "Open app" },
+                launcher: true,
+              },
+              inputs: {
+                url: {
+                  source: "output",
+                  outputName: "launch_url",
+                  outputType: "url",
+                },
+              },
+              access: {
+                visibility: "workspace",
+                resourceUriInput: "url",
+              },
+            },
+            bindingRequests: [
+              {
+                key: "installer",
+                subject: { source: "installing_principal" },
+                permissions: ["ui.open"],
+                delivery: { type: "none" },
+              },
+            ],
+          },
+          {
+            key: "unbound-status",
+            name: "app.unbound-status",
+            spec: {
+              type: "example.status",
+              version: "1",
+              document: { purpose: "binding-negative-control" },
+              inputs: {
+                state: { source: "literal", value: "available" },
+              },
+              access: { visibility: "workspace" },
+            },
+          },
+        ],
+      },
+    },
+  },
+} satisfies RepositoryManifestDocument;
 
 interface RecordingRunner extends OpenTofuRunner {
   readonly planJobs: OpenTofuPlanJob[];
@@ -151,7 +210,7 @@ function seedSession(
     createdAt: now,
     updatedAt: now,
   });
-  const sessionId = "sess_real_operations_e2e";
+  const sessionId = `sess_real_operations_e2e_${subject}`;
   store.saveAccountSession({
     sessionId,
     subject,
@@ -665,4 +724,351 @@ test("account session control routes execute plan and apply through the real Ope
     capsuleId: seeded.capsule.id,
     status: "succeeded",
   });
+});
+
+test("authenticated repository Interface review persists exact proposals and apply materializes only requested bindings", async () => {
+  const accountStore = new InMemoryAccountsStore();
+  const cookie = seedSession(accountStore);
+  const deployStore = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner();
+  const { operations } = await createTakosumiService({
+    role: "takosumi-api",
+    runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
+    opentofuControlStore: deployStore,
+    opentofuRunner: runner,
+    opentofuConnectionVault: fakeProviderVault() as never,
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+  });
+  const seeded = await seedCapsuleModel(deployStore, {
+    workspaceId: "ws_repo_interface_e2e",
+    capsuleId: "cap_repo_interface_seed",
+    installConfigId: "icfg_repo_interface_base",
+    name: "seed",
+    installConfig: {
+      outputAllowlist: {},
+      policy: {
+        repositoryInstallUx: {
+          allowedInterfacePermissions: ["ui.open"],
+        },
+      },
+    },
+  });
+  const repositoryManifestDigest = `sha256:${"e".repeat(64)}`;
+  await deployStore.putSourceSnapshot({
+    ...seeded.snapshot,
+    repositoryManifest: {
+      status: "present",
+      digest: repositoryManifestDigest,
+      document: REPOSITORY_INTERFACE_MANIFEST,
+    },
+  });
+
+  const unauthenticatedPreviewRequest = request(
+    "POST",
+    `/api/v1/sources/${seeded.source.id}/compatibility-check`,
+    {
+      body: {
+        sourceSnapshotId: seeded.snapshot.id,
+        modulePath: ".",
+        installConfigId: seeded.installConfig.id,
+        capsuleName: "repo-interface",
+        compileInstallUx: true,
+      },
+    },
+  );
+  const unauthenticatedPreview = await handleControlRoute({
+    request: unauthenticatedPreviewRequest.request,
+    url: unauthenticatedPreviewRequest.url,
+    store: accountStore,
+    operations,
+  });
+  expect(unauthenticatedPreview?.status).toBe(401);
+
+  const preview = await controlJson<{
+    readonly repositoryInstallUx: {
+      readonly status: "accepted";
+      readonly installConfigId: string;
+    };
+  }>(
+    {
+      operations,
+      store: accountStore,
+      cookie,
+      method: "POST",
+      path: `/api/v1/sources/${seeded.source.id}/compatibility-check`,
+      body: {
+        sourceSnapshotId: seeded.snapshot.id,
+        modulePath: ".",
+        installConfigId: seeded.installConfig.id,
+        capsuleName: "repo-interface",
+        compileInstallUx: true,
+      },
+    },
+    201,
+  );
+  const previewConfig = await operations.capsules.getInstallConfig(
+    preview.repositoryInstallUx.installConfigId,
+  );
+  expect(previewConfig.workspaceId).toBe(seeded.workspace.id);
+  expect(previewConfig.outputAllowlist).toEqual({
+    launch_url: { from: "launch_url", type: "url", required: true },
+  });
+  expect(previewConfig.interfaceBlueprints).toEqual([
+    {
+      key: "launcher",
+      name: "app.launcher",
+      spec: {
+        type: "interface.ui.surface",
+        version: "1",
+        document: {
+          display: { title: "Open app" },
+          launcher: true,
+        },
+        inputs: {
+          url: { source: "capsule_output", outputName: "launch_url" },
+        },
+        access: {
+          visibility: "workspace",
+          resourceUriInput: "url",
+        },
+      },
+      bindings: [
+        {
+          key: "installer",
+          subjectRef: { kind: "Principal", id: "user_test" },
+          permissions: ["ui.open"],
+          delivery: { type: "none" },
+        },
+      ],
+    },
+    {
+      key: "unbound-status",
+      name: "app.unbound-status",
+      spec: {
+        type: "example.status",
+        version: "1",
+        document: { purpose: "binding-negative-control" },
+        inputs: {
+          state: { source: "literal", value: "available" },
+        },
+        access: { visibility: "workspace" },
+      },
+    },
+  ]);
+
+  const otherCookie = seedSession(accountStore, "user_other");
+  await operations.members.upsertMember({
+    workspaceId: seeded.workspace.id,
+    accountId: "user_other",
+    roles: ["admin"],
+    status: "active",
+    actor: {
+      actorAccountId: "user_test",
+      roles: ["owner"],
+      requestId: "req_repo_interface_other_member",
+    },
+  });
+  const principalConflict = await controlJson<{
+    readonly error: {
+      readonly code: string;
+      readonly details?: { readonly diagnosticCode?: string };
+    };
+  }>(
+    {
+      operations,
+      store: accountStore,
+      cookie: otherCookie,
+      method: "POST",
+      path: `/api/v1/workspaces/${seeded.workspace.id}/capsules`,
+      body: {
+        name: "repo-interface-other-installer",
+        environment: "production",
+        sourceId: seeded.source.id,
+        installConfigId: previewConfig.id,
+      },
+    },
+    400,
+  );
+  expect(principalConflict.error).toMatchObject({
+    code: "repository_install_ux_invalid",
+    details: {
+      diagnosticCode: "repository_install_ux_interface_blueprint_conflict",
+    },
+  });
+  expect(
+    (await operations.capsules.listCapsules(seeded.workspace.id)).some(
+      (entry) => entry.name === "repo-interface-other-installer",
+    ),
+  ).toBe(false);
+
+  const created = await controlJson<{
+    readonly capsule: { readonly id: string; readonly installConfigId: string };
+  }>(
+    {
+      operations,
+      store: accountStore,
+      cookie,
+      method: "POST",
+      path: `/api/v1/workspaces/${seeded.workspace.id}/capsules`,
+      body: {
+        name: "repo-interface",
+        environment: "production",
+        sourceId: seeded.source.id,
+        installConfigId: previewConfig.id,
+      },
+    },
+    201,
+  );
+  expect(created.capsule.installConfigId).not.toBe(previewConfig.id);
+  const scopedConfig = await operations.capsules.getInstallConfig(
+    created.capsule.installConfigId,
+  );
+  expect(scopedConfig.workspaceId).toBe(seeded.workspace.id);
+  expect(scopedConfig.outputAllowlist).toEqual(previewConfig.outputAllowlist);
+  expect(scopedConfig.interfaceBlueprints?.[0]?.bindings).toEqual([
+    {
+      key: "installer",
+      subjectRef: { kind: "Principal", id: "user_test" },
+      permissions: ["ui.open"],
+      delivery: { type: "none" },
+    },
+  ]);
+  expect(JSON.stringify(scopedConfig.interfaceBlueprints)).not.toContain(
+    "credentialRef",
+  );
+  expect(JSON.stringify(scopedConfig.interfaceBlueprints)).not.toContain(
+    '"options"',
+  );
+
+  const capsule = await operations.capsules.getCapsule(created.capsule.id);
+  await seedProviderConnections(deployStore, capsule);
+  const plan = await controlJson<{
+    readonly run: { readonly id: string; readonly status: string };
+  }>(
+    {
+      operations,
+      store: accountStore,
+      cookie,
+      method: "POST",
+      path: `/api/v1/capsules/${capsule.id}/plan`,
+    },
+    201,
+  );
+  expect(plan.run.status).toBe("succeeded");
+  const apply = await controlJson<{
+    readonly run: { readonly id: string; readonly status: string };
+  }>(
+    {
+      operations,
+      store: accountStore,
+      cookie,
+      method: "POST",
+      path: `/api/v1/runs/${plan.run.id}/apply`,
+    },
+    201,
+  );
+  expect(apply.run.status).toBe("succeeded");
+
+  const interfaces = await operations.interfaces.list({
+    workspaceId: seeded.workspace.id,
+    ownerKind: "Capsule",
+    ownerId: capsule.id,
+  });
+  expect(interfaces).toHaveLength(2);
+  const launcher = interfaces.find(
+    (entry) =>
+      entry.metadata.materializedFrom?.source === "capsule_blueprint" &&
+      entry.metadata.materializedFrom.key === "launcher",
+  );
+  expect(launcher).toMatchObject({
+    metadata: {
+      workspaceId: seeded.workspace.id,
+      ownerRef: { kind: "Capsule", id: capsule.id },
+    },
+    spec: {
+      type: "interface.ui.surface",
+      inputs: {
+        url: {
+          source: "capsule_output",
+          capsuleId: capsule.id,
+          outputName: "launch_url",
+        },
+      },
+    },
+    status: {
+      phase: "Resolved",
+      resolvedInputs: { url: "https://hello.takosumi.test" },
+    },
+  });
+  expect(
+    await operations.interfaces.listBindings(launcher!.metadata.id),
+  ).toEqual([
+    expect.objectContaining({
+      spec: {
+        interfaceId: launcher!.metadata.id,
+        subjectRef: { kind: "Principal", id: "user_test" },
+        permissions: ["ui.open"],
+        delivery: { type: "none" },
+      },
+      status: expect.objectContaining({ phase: "Ready" }),
+    }),
+  ]);
+  const unbound = interfaces.find(
+    (entry) =>
+      entry.metadata.materializedFrom?.source === "capsule_blueprint" &&
+      entry.metadata.materializedFrom.key === "unbound-status",
+  );
+  expect(unbound?.status).toMatchObject({
+    phase: "Resolved",
+    resolvedInputs: { state: "available" },
+  });
+  expect(
+    await operations.interfaces.listBindings(unbound!.metadata.id),
+  ).toEqual([]);
+
+  await operations.capsules.putInstallConfig({
+    ...seeded.installConfig,
+    id: "icfg_repo_interface_conflict",
+    interfaceBlueprints: [
+      {
+        ...previewConfig.interfaceBlueprints![0]!,
+        spec: {
+          ...previewConfig.interfaceBlueprints![0]!.spec,
+          document: { launcher: false },
+        },
+      },
+    ],
+  });
+  const conflict = await controlJson<{
+    readonly error: {
+      readonly code: string;
+      readonly details?: { readonly diagnosticCode?: string };
+    };
+  }>(
+    {
+      operations,
+      store: accountStore,
+      cookie,
+      method: "POST",
+      path: `/api/v1/workspaces/${seeded.workspace.id}/capsules`,
+      body: {
+        name: "repo-interface-conflict",
+        environment: "production",
+        sourceId: seeded.source.id,
+        installConfigId: "icfg_repo_interface_conflict",
+      },
+    },
+    400,
+  );
+  expect(conflict.error).toMatchObject({
+    code: "repository_install_ux_invalid",
+    details: {
+      diagnosticCode: "repository_install_ux_interface_blueprint_conflict",
+    },
+  });
+  expect(
+    (await operations.capsules.listCapsules(seeded.workspace.id)).some(
+      (entry) => entry.name === "repo-interface-conflict",
+    ),
+  ).toBe(false);
 });

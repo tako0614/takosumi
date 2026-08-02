@@ -48,6 +48,9 @@ test("reference app composition exposes five replaceable Store source identities
     for (const key of Object.keys(config.variableMapping)) {
       expect(key).not.toMatch(/secret|password|token|api.?key/iu);
     }
+    expect(config.policy?.repositoryInstallUx).toEqual({
+      allowedInterfacePermissions: ["ui.open"],
+    });
   }
 
   for (const config of storeConfigs) {

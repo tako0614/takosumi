@@ -402,6 +402,7 @@ export async function handleSources(
         modulePath,
         capsuleName: capsuleName!,
         workspaceId,
+        installingPrincipalId: ctx.session.subject,
         compatibilityReport: compatibility.report,
       });
       const repositoryInstallUx =

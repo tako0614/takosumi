@@ -35,6 +35,13 @@ import { TAKOSUMI_ACCOUNTS_CAPSULE_DELEGATION_SCOPES } from "@takosjp/takosumi-a
 
 const REFERENCE_CONFIG_TIMESTAMP = "2026-07-14T00:00:00.000Z";
 const MANAGED_APP_BASE_DOMAIN = "app.takos.jp";
+
+function repositoryInstallUxPolicy() {
+  return {
+    allowedInterfacePermissions: [UI_SURFACE_OPEN_PERMISSION],
+  } as const;
+}
+
 type AppSource = {
   readonly url: string;
   readonly path: string;
@@ -441,7 +448,7 @@ const officeConfig = {
     slide_file_open_url: urlOutput("slide_file_open_url"),
     sheet_file_open_url: urlOutput("sheet_file_open_url"),
   },
-  policy: {},
+  policy: { repositoryInstallUx: repositoryInstallUxPolicy() },
   store: store({
     source: source("takos-office"),
     order: 10,
@@ -563,7 +570,7 @@ function yuruConfig(input: {
     outputAllowlist: {
       launch_url: urlOutput("launch_url"),
     },
-    policy: {},
+    policy: { repositoryInstallUx: repositoryInstallUxPolicy() },
     store: store({
       source: source(input.app),
       order: input.order,
@@ -716,6 +723,7 @@ const yurucommuManagedConfig = {
     },
   ],
   policy: {
+    repositoryInstallUx: repositoryInstallUxPolicy(),
     lifecycleActions: {
       allowedExecutors: ["operator"],
       allowedRunnerCapabilities: ["resource.migration.sqlite.v1"],
@@ -795,6 +803,7 @@ const storageConfig = {
     },
   ],
   policy: {
+    repositoryInstallUx: repositoryInstallUxPolicy(),
     lifecycleActions: {
       allowedExecutors: ["runner"],
       allowedRunnerCapabilities: [CAPSULE_LIFECYCLE_COMMAND_CAPABILITY],
@@ -909,6 +918,7 @@ const gitConfig = {
     },
   ],
   policy: {
+    repositoryInstallUx: repositoryInstallUxPolicy(),
     lifecycleActions: {
       allowedExecutors: ["runner"],
       allowedRunnerCapabilities: [CAPSULE_LIFECYCLE_COMMAND_CAPABILITY],
@@ -1034,7 +1044,7 @@ const takosConfig = {
   outputAllowlist: {
     launch_url: urlOutput("launch_url"),
   },
-  policy: {},
+  policy: { repositoryInstallUx: repositoryInstallUxPolicy() },
   store: store({
     source: source("takos", "deploy/opentofu"),
     order: 5,

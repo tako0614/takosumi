@@ -2,14 +2,22 @@ import { TAKOSUMI_ACCOUNTS_CAPSULE_DELEGATION_SCOPES } from "@takosjp/takosumi-a
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
 import type { Source, SourceSnapshot } from "takosumi-contract/sources";
 import type { InstallConfig } from "takosumi-contract/install-configs";
+import {
+  TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2,
+  type RepositoryManifestDocument,
+} from "takosumi-contract/repository-manifest";
 import type { JsonValue } from "takosumi-contract/types";
+import { resolveCapsuleInterfaceBlueprintInstallingPrincipal } from "takosumi-contract/interfaces";
 
 import type { ControlPlaneOperations } from "../control-operations.ts";
 import {
   compileRepositoryInstallUx,
   type RepositoryInstallUxDiagnostic,
 } from "../../../../core/domains/capsules/repository_install_ux_compiler.ts";
-import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
+import {
+  stableJsonDigest,
+  stableStringify,
+} from "../../../../core/adapters/source/digest.ts";
 import { OpenTofuControllerError } from "../../../../core/domains/deploy-control/errors.ts";
 import {
   installConfigStoreValue,
@@ -39,21 +47,42 @@ export interface RepoOwnedInstallConfigAdoptionInput {
   readonly capsuleName: string;
   readonly workspaceId: string;
   readonly reviewedVariables?: Readonly<Record<string, JsonValue>>;
+  /**
+   * Explicit service-side declarations reviewed in the authenticated Capsule
+   * create request. v1 keeps its replacement behavior; v2 merges them with
+   * the repository proposal and rejects stable-key conflicts.
+   */
+  readonly reviewedInterfaceBlueprints?: InstallConfig["interfaceBlueprints"];
+  readonly reviewedOutputAllowlist?: InstallConfig["outputAllowlist"];
+  /** Exact authenticated Principal used only to resolve v2 binding requests. */
+  readonly installingPrincipalId?: string;
   readonly compatibilityReport?: CapsuleCompatibilityReport;
   readonly requireReviewedValues?: boolean;
 }
+
+export type RepoOwnedInstallConfigAdoptionDiagnostic =
+  | RepositoryInstallUxDiagnostic
+  | {
+      readonly code:
+        | "repository_install_ux_interface_blueprint_conflict"
+        | "repository_install_ux_output_allowlist_conflict"
+        | "repository_install_ux_installing_principal_invalid";
+      readonly message: string;
+    };
 
 export type RepoOwnedInstallConfigAdoptionResult =
   | { readonly status: "absent" }
   | {
       readonly status: "invalid";
-      readonly diagnostic: RepositoryInstallUxDiagnostic;
+      readonly diagnostic: RepoOwnedInstallConfigAdoptionDiagnostic;
     }
   | {
       readonly status: "accepted";
       readonly variablePresentation: InstallConfig["variablePresentation"];
       readonly installExperience: InstallConfig["installExperience"];
       readonly variableMapping: InstallConfig["variableMapping"];
+      readonly interfaceBlueprints: InstallConfig["interfaceBlueprints"];
+      readonly outputAllowlist: InstallConfig["outputAllowlist"];
       /**
        * Compiled from the repository's own runtime requirements. A service or
        * operator declaration on the base config keeps final authority.
@@ -61,6 +90,7 @@ export type RepoOwnedInstallConfigAdoptionResult =
       readonly hostRuntimeMaterialization?: InstallConfig["hostRuntimeMaterialization"];
       readonly sourceSnapshotId: string;
       readonly digest: string;
+      readonly repositoryManifestApiVersion: RepositoryManifestDocument["apiVersion"];
     };
 
 /**
@@ -143,6 +173,21 @@ export async function adoptRepoOwnedInstallConfig(
     };
   }
 
+  const installingPrincipalId = input.installingPrincipalId?.trim();
+  if (
+    input.installingPrincipalId !== undefined &&
+    installingPrincipalId === ""
+  ) {
+    return {
+      status: "invalid",
+      diagnostic: {
+        code: "repository_install_ux_installing_principal_invalid",
+        message:
+          "Repository install UX review requires an exact authenticated installing Principal.",
+      },
+    };
+  }
+
   const modulePath = selectedModulePath(input);
   let compatibilityReport = input.compatibilityReport;
   if (!compatibilityReport) {
@@ -180,10 +225,48 @@ export async function adoptRepoOwnedInstallConfig(
       : {}),
     policy: {
       allowedOidcScopes: TAKOSUMI_ACCOUNTS_CAPSULE_DELEGATION_SCOPES,
+      allowedInterfacePermissions:
+        input.baseConfig.policy?.repositoryInstallUx
+          ?.allowedInterfacePermissions ?? [],
     },
   });
   if (!compiled.ok) {
     return { status: "invalid", diagnostic: compiled.diagnostic };
+  }
+
+  const repositoryManifestApiVersion = observation.document.apiVersion;
+  const proposedInterfaceBlueprints =
+    resolveV2InstallingPrincipalBlueprints(
+      repositoryManifestApiVersion,
+      compiled.compiled.interfaceBlueprints,
+      installingPrincipalId,
+    ) ?? [];
+
+  const interfaceBlueprints = mergeReviewedInterfaceBlueprints({
+    repositoryManifestApiVersion,
+    base: resolveV2InstallingPrincipalBlueprints(
+      repositoryManifestApiVersion,
+      input.baseConfig.interfaceBlueprints,
+      installingPrincipalId,
+    ),
+    proposed: proposedInterfaceBlueprints,
+    reviewed: resolveV2InstallingPrincipalBlueprints(
+      repositoryManifestApiVersion,
+      input.reviewedInterfaceBlueprints,
+      installingPrincipalId,
+    ),
+  });
+  if (!interfaceBlueprints.ok) {
+    return { status: "invalid", diagnostic: interfaceBlueprints.diagnostic };
+  }
+  const outputAllowlist = mergeReviewedOutputAllowlist({
+    repositoryManifestApiVersion,
+    base: input.baseConfig.outputAllowlist,
+    proposed: compiled.compiled.outputAllowlist,
+    reviewed: input.reviewedOutputAllowlist,
+  });
+  if (!outputAllowlist.ok) {
+    return { status: "invalid", diagnostic: outputAllowlist.diagnostic };
   }
 
   return {
@@ -202,8 +285,10 @@ export async function adoptRepoOwnedInstallConfig(
       compiled.compiled.variableMapping,
       input.baseConfig.variableMapping,
     ),
-    ...(input.baseConfig.hostRuntimeMaterialization ??
-    compiled.compiled.hostRuntimeMaterialization
+    interfaceBlueprints: interfaceBlueprints.value,
+    outputAllowlist: outputAllowlist.value,
+    ...((input.baseConfig.hostRuntimeMaterialization ??
+    compiled.compiled.hostRuntimeMaterialization)
       ? {
           hostRuntimeMaterialization:
             input.baseConfig.hostRuntimeMaterialization ??
@@ -212,6 +297,7 @@ export async function adoptRepoOwnedInstallConfig(
       : {}),
     sourceSnapshotId: input.sourceSnapshot!.id,
     digest: observation.digest,
+    repositoryManifestApiVersion,
   };
 }
 
@@ -219,7 +305,7 @@ export type RepoOwnedInstallConfigPreviewResult =
   | { readonly status: "absent" }
   | {
       readonly status: "invalid";
-      readonly diagnostic: RepositoryInstallUxDiagnostic;
+      readonly diagnostic: RepoOwnedInstallConfigAdoptionDiagnostic;
     }
   | {
       readonly status: "accepted";
@@ -234,6 +320,7 @@ export type RepoOwnedInstallConfigPreviewResult =
 export async function previewRepoOwnedInstallConfig(
   input: RepoOwnedInstallConfigAdoptionInput & {
     readonly compatibilityReport: CapsuleCompatibilityReport;
+    readonly installingPrincipalId: string;
   },
 ): Promise<RepoOwnedInstallConfigPreviewResult> {
   const adoption = await adoptRepoOwnedInstallConfig({
@@ -241,6 +328,14 @@ export async function previewRepoOwnedInstallConfig(
     requireReviewedValues: false,
   });
   if (adoption.status !== "accepted") return adoption;
+  const repositoryInterfaceDigestFields =
+    adoption.repositoryManifestApiVersion ===
+    TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2
+      ? {
+          interfaceBlueprints: adoption.interfaceBlueprints ?? [],
+          outputAllowlist: adoption.outputAllowlist,
+        }
+      : {};
 
   const digest = await stableJsonDigest({
     sourceSnapshotId: adoption.sourceSnapshotId,
@@ -253,6 +348,7 @@ export async function previewRepoOwnedInstallConfig(
     installExperience: adoption.installExperience ?? {},
     hostRuntimeMaterialization: adoption.hostRuntimeMaterialization ?? null,
     variableMapping: adoption.variableMapping,
+    ...repositoryInterfaceDigestFields,
     policy: input.baseConfig.policy,
   });
   const id = `icfg_${digest.replace(/^sha256:/u, "").slice(0, 16)}`;
@@ -300,6 +396,10 @@ export async function previewRepoOwnedInstallConfig(
     variablePresentation: adoption.variablePresentation,
     installExperience: adoption.installExperience,
     variableMapping: adoption.variableMapping,
+    outputAllowlist: adoption.outputAllowlist,
+    ...(adoption.interfaceBlueprints !== undefined
+      ? { interfaceBlueprints: adoption.interfaceBlueprints }
+      : {}),
     ...(adoption.hostRuntimeMaterialization
       ? { hostRuntimeMaterialization: adoption.hostRuntimeMaterialization }
       : {}),
@@ -308,6 +408,179 @@ export async function previewRepoOwnedInstallConfig(
     updatedAt: now,
   });
   return { status: "accepted", installConfig: config };
+}
+
+type DeclarationMergeResult<T> =
+  | { readonly ok: true; readonly value: T }
+  | {
+      readonly ok: false;
+      readonly diagnostic: RepoOwnedInstallConfigAdoptionDiagnostic;
+    };
+
+function resolveV2InstallingPrincipalBlueprints(
+  repositoryManifestApiVersion: RepositoryManifestDocument["apiVersion"],
+  blueprints: InstallConfig["interfaceBlueprints"],
+  installingPrincipalId: string | undefined,
+): InstallConfig["interfaceBlueprints"] {
+  if (
+    repositoryManifestApiVersion !==
+      TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2 ||
+    !installingPrincipalId
+  ) {
+    return blueprints;
+  }
+  return resolveCapsuleInterfaceBlueprintInstallingPrincipal(
+    blueprints,
+    installingPrincipalId,
+  );
+}
+
+function mergeReviewedInterfaceBlueprints(input: {
+  readonly repositoryManifestApiVersion: RepositoryManifestDocument["apiVersion"];
+  readonly base: InstallConfig["interfaceBlueprints"];
+  readonly proposed: readonly NonNullable<
+    InstallConfig["interfaceBlueprints"]
+  >[number][];
+  readonly reviewed: InstallConfig["interfaceBlueprints"];
+}): DeclarationMergeResult<InstallConfig["interfaceBlueprints"]> {
+  if (
+    input.repositoryManifestApiVersion !==
+    TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2
+  ) {
+    return { ok: true, value: input.reviewed ?? input.base };
+  }
+  const proposedMerge = mergeInterfaceBlueprintsByKey(
+    input.base,
+    input.proposed,
+  );
+  if (!proposedMerge.ok) return proposedMerge;
+  if (input.reviewed === undefined) return proposedMerge;
+  return mergeInterfaceBlueprintsByKey(proposedMerge.value, input.reviewed);
+}
+
+function mergeInterfaceBlueprintsByKey(
+  base: InstallConfig["interfaceBlueprints"],
+  incoming: readonly NonNullable<
+    InstallConfig["interfaceBlueprints"]
+  >[number][],
+): DeclarationMergeResult<InstallConfig["interfaceBlueprints"]> {
+  const merged = [...(base ?? [])];
+  const byKey = new Map(merged.map((blueprint) => [blueprint.key, blueprint]));
+  const keyByName = new Map(
+    merged.map((blueprint) => [blueprint.name, blueprint.key]),
+  );
+  for (const blueprint of incoming) {
+    const existing = byKey.get(blueprint.key);
+    if (existing) {
+      if (normalizedInterfaceBlueprintEqual(existing, blueprint)) continue;
+      return {
+        ok: false,
+        diagnostic: {
+          code: "repository_install_ux_interface_blueprint_conflict",
+          message: `Interface blueprint key ${boundedMergeIdentifier(blueprint.key)} conflicts with the reviewed service declaration.`,
+        },
+      };
+    }
+    const existingKey = keyByName.get(blueprint.name);
+    if (existingKey !== undefined) {
+      return {
+        ok: false,
+        diagnostic: {
+          code: "repository_install_ux_interface_blueprint_conflict",
+          message: `Interface blueprint name ${boundedMergeIdentifier(blueprint.name)} is already owned by key ${boundedMergeIdentifier(existingKey)}.`,
+        },
+      };
+    }
+    merged.push(blueprint);
+    byKey.set(blueprint.key, blueprint);
+    keyByName.set(blueprint.name, blueprint.key);
+  }
+  if (base === undefined && incoming.length === 0) {
+    return { ok: true, value: undefined };
+  }
+  return { ok: true, value: merged };
+}
+
+function mergeReviewedOutputAllowlist(input: {
+  readonly repositoryManifestApiVersion: RepositoryManifestDocument["apiVersion"];
+  readonly base: InstallConfig["outputAllowlist"];
+  readonly proposed: InstallConfig["outputAllowlist"];
+  readonly reviewed: InstallConfig["outputAllowlist"] | undefined;
+}): DeclarationMergeResult<InstallConfig["outputAllowlist"]> {
+  if (
+    input.repositoryManifestApiVersion !==
+    TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2
+  ) {
+    return { ok: true, value: input.reviewed ?? input.base };
+  }
+  const proposedMerge = mergeOutputAllowlistByKey(input.base, input.proposed);
+  if (!proposedMerge.ok) return proposedMerge;
+  if (input.reviewed === undefined) return proposedMerge;
+  return mergeOutputAllowlistByKey(proposedMerge.value, input.reviewed);
+}
+
+function mergeOutputAllowlistByKey(
+  base: InstallConfig["outputAllowlist"],
+  incoming: InstallConfig["outputAllowlist"],
+): DeclarationMergeResult<InstallConfig["outputAllowlist"]> {
+  const merged = { ...base };
+  for (const [key, entry] of Object.entries(incoming)) {
+    const existing = merged[key];
+    if (existing !== undefined) {
+      if (normalizedDeclarationEqual(existing, entry)) continue;
+      return {
+        ok: false,
+        diagnostic: {
+          code: "repository_install_ux_output_allowlist_conflict",
+          message: `Output allowlist key ${boundedMergeIdentifier(key)} conflicts with the reviewed service declaration.`,
+        },
+      };
+    }
+    merged[key] = entry;
+  }
+  return { ok: true, value: merged };
+}
+
+function normalizedDeclarationEqual(left: unknown, right: unknown): boolean {
+  return stableStringify(left) === stableStringify(right);
+}
+
+function normalizedInterfaceBlueprintEqual(
+  left: NonNullable<InstallConfig["interfaceBlueprints"]>[number],
+  right: NonNullable<InstallConfig["interfaceBlueprints"]>[number],
+): boolean {
+  return normalizedDeclarationEqual(
+    normalizedInterfaceBlueprint(left),
+    normalizedInterfaceBlueprint(right),
+  );
+}
+
+function normalizedInterfaceBlueprint(
+  blueprint: NonNullable<InstallConfig["interfaceBlueprints"]>[number],
+): unknown {
+  const { bindings, labels, spec, ...identity } = blueprint;
+  const { inputs, ...specWithoutInputs } = spec;
+  const normalizedBindings = (bindings ?? [])
+    .map((binding) => ({
+      ...binding,
+      permissions: [...binding.permissions].sort((left, right) =>
+        left.localeCompare(right),
+      ),
+    }))
+    .sort((left, right) => left.key.localeCompare(right.key));
+  return {
+    ...identity,
+    ...(labels && Object.keys(labels).length > 0 ? { labels } : {}),
+    spec: {
+      ...specWithoutInputs,
+      ...(inputs && Object.keys(inputs).length > 0 ? { inputs } : {}),
+    },
+    ...(normalizedBindings.length > 0 ? { bindings: normalizedBindings } : {}),
+  };
+}
+
+function boundedMergeIdentifier(value: string): string {
+  return JSON.stringify(value.replace(/[\0-\u001f\u007f]/gu, "").slice(0, 96));
 }
 
 function selectedModulePath(

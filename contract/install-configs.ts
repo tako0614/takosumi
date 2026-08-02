@@ -250,6 +250,14 @@ export interface PolicyConfig {
     readonly allowedRunnerCapabilities: readonly string[];
     readonly allowProviderCredentials?: boolean;
   };
+  /**
+   * Explicit host/operator authority for repository-owned install-UX
+   * declarations. An absent or empty permission allowlist grants no Interface
+   * binding permissions; repository metadata can never widen this policy.
+   */
+  readonly repositoryInstallUx?: {
+    readonly allowedInterfacePermissions: readonly string[];
+  };
   readonly scopeBoundary?: ScopeBoundaryPolicy;
   readonly quota?: Readonly<Record<string, number>>;
 }

@@ -4,6 +4,7 @@ import type {
   OutputAllowlistEntry,
 } from "takosumi-contract/install-configs";
 import type { OpenTofuControlStore } from "../deploy-control/store.ts";
+import { UI_SURFACE_OPEN_PERMISSION } from "takosumi-contract";
 
 export const DEFAULT_CAPSULE_INSTALL_CONFIG_ID = "cfg-default-opentofu-capsule";
 
@@ -27,7 +28,11 @@ export function defaultCapsuleInstallConfig(
     name: "opentofu-capsule",
     variableMapping: {},
     outputAllowlist: defaultCapsuleOutputAllowlist(),
-    policy: {},
+    policy: {
+      repositoryInstallUx: {
+        allowedInterfacePermissions: [UI_SURFACE_OPEN_PERMISSION],
+      },
+    },
     createdAt: timestamp,
     updatedAt: timestamp,
   };
