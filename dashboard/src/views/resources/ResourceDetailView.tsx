@@ -50,6 +50,7 @@ import {
   Toast,
 } from "../../components/ui/index.ts";
 import ResourceEditor from "./ResourceEditor.tsx";
+import S3CustomerAccessKeysCard from "./components/S3CustomerAccessKeysCard.tsx";
 import { resourcePhaseLabel } from "../../lib/labels.ts";
 
 type Identity = {
@@ -395,6 +396,27 @@ function Inner(): JSX.Element {
                   </details>
                 </CardSection>
               </Card>
+
+              <Show when={item().kind === "ObjectBucket"}>
+                <Show when={identity()}>
+                  {(current) => (
+                    <S3CustomerAccessKeysCard
+                      workspaceId={current().workspaceId}
+                      resourceId={`tkrn:${current().workspaceId}:ObjectBucket:${current().name}`}
+                      resourceName={current().name}
+                      interfaceAvailable={Boolean(
+                        resolvedInterfaces()?.some(
+                          (resolved) =>
+                            resolved.type === "storage.object" &&
+                            resolved.version === "v1",
+                        ),
+                      )}
+                      interfaceLoading={resolvedInterfaces.loading}
+                      interfaceError={resolvedInterfaces.error}
+                    />
+                  )}
+                </Show>
+              </Show>
 
               <Show when={editing() && identity()}>
                 {(current) => (

@@ -155,6 +155,7 @@ interface RequestOpts {
   readonly method?: string;
   readonly body?: unknown;
   readonly signal?: AbortSignal;
+  readonly headers?: Readonly<Record<string, string>>;
 }
 
 function throwIfAborted(signal?: AbortSignal): void {
@@ -167,10 +168,15 @@ async function controlFetch<T>(
   path: string,
   opts: RequestOpts = {},
 ): Promise<T> {
-  const headers: Record<string, string> = { accept: "application/json" };
+  const headers: Record<string, string> = {
+    accept: "application/json",
+    ...(opts.headers ?? {}),
+  };
   let body: BodyInit | undefined;
   if (opts.body !== undefined) {
-    headers["content-type"] = "application/json";
+    if (headers["content-type"] === undefined) {
+      headers["content-type"] = "application/json";
+    }
     body = JSON.stringify(opts.body);
   }
   const res = await fetch(path, {
@@ -2381,6 +2387,248 @@ export interface ResourceSpacePolicy {
   readonly spec: ResourceSpacePolicySpec;
   readonly createdAt: string;
   readonly updatedAt: string;
+}
+
+// --- Customer-owned S3 access keys ----------------------------------------
+//
+// This is the public projection of the Cloud customer-key control surface.
+// The dashboard deliberately keeps the one-time credentials nested in the
+// create response and has no type for a secret in list/revoke responses.
+
+export type S3CustomerAccessKeyPermission =
+  | "storage.read"
+  | "storage.list"
+  | "storage.write";
+
+export interface S3CustomerAccessKeyGrant {
+  readonly resourceId: string;
+  readonly resourceName: string;
+  readonly interfaceId: string;
+  readonly permission: S3CustomerAccessKeyPermission;
+}
+
+export interface S3CustomerAccessKeyMetadata {
+  readonly apiVersion: string;
+  readonly id: string;
+  readonly accessKeyId: string;
+  readonly workspaceId: string;
+  readonly principalId: string;
+  readonly label: string;
+  readonly grants: readonly S3CustomerAccessKeyGrant[];
+  readonly status: "active" | "revoked";
+  readonly version: number;
+  readonly createdAt: string;
+  readonly revokedAt?: string;
+}
+
+export interface S3CustomerAccessKeyCredentials {
+  readonly accessKeyId: string;
+  readonly secretAccessKey: string;
+}
+
+export interface S3CustomerAccessKeyCreateResult {
+  readonly accessKey: S3CustomerAccessKeyMetadata & {
+    readonly credentials: S3CustomerAccessKeyCredentials;
+  };
+}
+
+const S3_CUSTOMER_ACCESS_KEYS_BASE = "/v1/cloud/s3-access-keys";
+const S3_CUSTOMER_ACCESS_KEY_PERMISSIONS = new Set<string>([
+  "storage.read",
+  "storage.list",
+  "storage.write",
+]);
+
+function invalidS3AccessKeyResponse(message: string): ControlApiError {
+  return new ControlApiError(502, "invalid_response", message);
+}
+
+function parseS3CustomerAccessKeyGrant(
+  value: unknown,
+): S3CustomerAccessKeyGrant {
+  if (!isRecord(value)) {
+    throw invalidS3AccessKeyResponse("S3 access key grant is invalid");
+  }
+  const { resourceId, resourceName, interfaceId, permission } = value;
+  if (
+    typeof resourceId !== "string" ||
+    typeof resourceName !== "string" ||
+    typeof interfaceId !== "string" ||
+    typeof permission !== "string" ||
+    !S3_CUSTOMER_ACCESS_KEY_PERMISSIONS.has(permission)
+  ) {
+    throw invalidS3AccessKeyResponse(
+      "S3 access key grant does not match the public contract",
+    );
+  }
+  return {
+    resourceId,
+    resourceName,
+    interfaceId,
+    permission: permission as S3CustomerAccessKeyPermission,
+  };
+}
+
+function parseS3CustomerAccessKeyMetadata(
+  value: unknown,
+): S3CustomerAccessKeyMetadata {
+  if (!isRecord(value)) {
+    throw invalidS3AccessKeyResponse("S3 access key metadata is invalid");
+  }
+  const grants = value.grants;
+  if (
+    typeof value.apiVersion !== "string" ||
+    typeof value.id !== "string" ||
+    typeof value.accessKeyId !== "string" ||
+    typeof value.workspaceId !== "string" ||
+    typeof value.principalId !== "string" ||
+    typeof value.label !== "string" ||
+    !Array.isArray(grants) ||
+    (value.status !== "active" && value.status !== "revoked") ||
+    typeof value.version !== "number" ||
+    !Number.isSafeInteger(value.version) ||
+    value.version < 1 ||
+    typeof value.createdAt !== "string" ||
+    (value.revokedAt !== undefined && typeof value.revokedAt !== "string")
+  ) {
+    throw invalidS3AccessKeyResponse(
+      "S3 access key metadata does not match the public contract",
+    );
+  }
+  return {
+    apiVersion: value.apiVersion,
+    id: value.id,
+    accessKeyId: value.accessKeyId,
+    workspaceId: value.workspaceId,
+    principalId: value.principalId,
+    label: value.label,
+    grants: grants.map(parseS3CustomerAccessKeyGrant),
+    status: value.status,
+    version: value.version,
+    createdAt: value.createdAt,
+    ...(value.revokedAt !== undefined
+      ? { revokedAt: value.revokedAt }
+      : {}),
+  };
+}
+
+function parseS3CustomerAccessKeyCreateResult(
+  value: unknown,
+): S3CustomerAccessKeyCreateResult {
+  if (!isRecord(value) || !isRecord(value.accessKey)) {
+    throw invalidS3AccessKeyResponse(
+      "S3 access key create response is invalid",
+    );
+  }
+  const credentials = value.accessKey.credentials;
+  if (!isRecord(credentials)) {
+    throw invalidS3AccessKeyResponse(
+      "S3 access key credentials are missing from the create response",
+    );
+  }
+  if (
+    typeof credentials.accessKeyId !== "string" ||
+    typeof credentials.secretAccessKey !== "string"
+  ) {
+    throw invalidS3AccessKeyResponse(
+      "S3 access key credentials do not match the public contract",
+    );
+  }
+  const { credentials: _credentials, ...metadata } = value.accessKey;
+  return {
+    accessKey: {
+      ...parseS3CustomerAccessKeyMetadata(metadata),
+      credentials: {
+        accessKeyId: credentials.accessKeyId,
+        secretAccessKey: credentials.secretAccessKey,
+      },
+    },
+  };
+}
+
+function expectedObjectBucketResourceId(
+  workspaceId: string,
+  resourceName: string,
+): string {
+  return `tkrn:${workspaceId}:ObjectBucket:${resourceName}`;
+}
+
+/** List workspace-scoped metadata; the service never returns secrets here. */
+export async function listS3CustomerAccessKeys(
+  workspaceId: string,
+  signal?: AbortSignal,
+): Promise<readonly S3CustomerAccessKeyMetadata[]> {
+  return await fetchAllPages<S3CustomerAccessKeyMetadata>(
+    `${S3_CUSTOMER_ACCESS_KEYS_BASE}${query({ workspaceId })}`,
+    (body) => {
+      if (!Array.isArray(body.accessKeys)) {
+        throw invalidS3AccessKeyResponse(
+          "S3 access key list response is invalid",
+        );
+      }
+      return body.accessKeys.map(parseS3CustomerAccessKeyMetadata);
+    },
+    { signal },
+  );
+}
+
+/**
+ * Create one key for the exact ObjectBucket. The canonical resource id is an
+ * input invariant for the UI, but the wire body intentionally contains only
+ * the resource name: the Cloud service resolves Resource and Interface
+ * authority server-side and derives the caller principal from the session.
+ */
+export async function createS3CustomerAccessKey(input: {
+  readonly workspaceId: string;
+  readonly resourceId: string;
+  readonly resourceName: string;
+  readonly label: string;
+  readonly permissions: readonly S3CustomerAccessKeyPermission[];
+  readonly idempotencyKey: string;
+}): Promise<S3CustomerAccessKeyCreateResult> {
+  if (
+    input.resourceId !==
+    expectedObjectBucketResourceId(input.workspaceId, input.resourceName)
+  ) {
+    throw new ControlApiError(
+      400,
+      "invalid_request",
+      "S3 access key resource identity is invalid",
+    );
+  }
+  const body = await controlFetch<unknown>(
+    `${S3_CUSTOMER_ACCESS_KEYS_BASE}${query({ workspaceId: input.workspaceId })}`,
+    {
+      method: "POST",
+      headers: { "idempotency-key": input.idempotencyKey },
+      body: {
+        label: input.label,
+        grants: [
+          {
+            resourceName: input.resourceName,
+            permissions: input.permissions,
+          },
+        ],
+      },
+    },
+  );
+  return parseS3CustomerAccessKeyCreateResult(body);
+}
+
+export async function revokeS3CustomerAccessKey(
+  workspaceId: string,
+  keyId: string,
+): Promise<S3CustomerAccessKeyMetadata> {
+  const body = await controlFetch<unknown>(
+    `${S3_CUSTOMER_ACCESS_KEYS_BASE}/${encodeURIComponent(keyId)}${query({ workspaceId })}`,
+    { method: "DELETE" },
+  );
+  if (!isRecord(body) || !("accessKey" in body)) {
+    throw invalidS3AccessKeyResponse(
+      "S3 access key revoke response is invalid",
+    );
+  }
+  return parseS3CustomerAccessKeyMetadata(body.accessKey);
 }
 
 function resourceShapePath(kind: ResourceShapeKind, name: string): string {

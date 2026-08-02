@@ -1552,6 +1552,43 @@ export const ja = {
   "resources.detail.deleteTitle": "リソースを削除しますか？",
   "resources.detail.deleteMessage":
     "{kind}/{name} と native resource の通常削除を実行します。この画面は force delete を行いません。",
+  "resources.detail.s3Keys.title": "S3互換アクセスキー",
+  "resources.detail.s3Keys.subtitle":
+    "この ObjectBucket だけを対象にした認証情報を作成します。Takosumi Cloud API キーとは別のものです。",
+  "resources.detail.s3Keys.secretOnce": "秘密値は作成時のみ表示",
+  "resources.detail.s3Keys.interfaceLoading":
+    "このバケットのストレージ Interface を確認しています…",
+  "resources.detail.s3Keys.interfaceUnavailable":
+    "この ObjectBucket には有効な storage.object@v1 Interface がないため、S3互換アクセスキーをこのリソースに紐付けられません。",
+  "resources.detail.s3Keys.resource": "対象 Resource",
+  "resources.detail.s3Keys.label": "キーのラベル",
+  "resources.detail.s3Keys.labelPlaceholder": "例: バックアップ処理",
+  "resources.detail.s3Keys.permissions": "権限",
+  "resources.detail.s3Keys.permissionsHint":
+    "発行前にサーバーがメンバーシップと owner 権限を確認します。",
+  "resources.detail.s3Keys.permission.read": "オブジェクトを読む",
+  "resources.detail.s3Keys.permission.list": "オブジェクトを一覧する",
+  "resources.detail.s3Keys.permission.write": "オブジェクトを書き込む",
+  "resources.detail.s3Keys.create": "S3互換キーを作成",
+  "resources.detail.s3Keys.creating": "作成中…",
+  "resources.detail.s3Keys.created": "S3互換アクセスキーを作成しました",
+  "resources.detail.s3Keys.createdHint":
+    "秘密値は再表示できません。今すぐコピーしてから、この表示を閉じてください。",
+  "resources.detail.s3Keys.copy": "認証情報をコピー",
+  "resources.detail.s3Keys.copied": "コピーしました",
+  "resources.detail.s3Keys.copyFailed":
+    "認証情報をコピーできませんでした。表示されている値を手動で保存してください。",
+  "resources.detail.s3Keys.empty": "この Resource の S3互換アクセスキーはありません。",
+  "resources.detail.s3Keys.status.active": "有効",
+  "resources.detail.s3Keys.status.revoked": "失効済み",
+  "resources.detail.s3Keys.revoke": "失効",
+  "resources.detail.s3Keys.revokeConfirm": "キーを失効",
+  "resources.detail.s3Keys.forbidden":
+    "この Workspace の S3互換アクセスキーを管理する権限がありません。",
+  "resources.detail.s3Keys.unavailable":
+    "S3互換アクセスキーを一時的に利用できません。Resource は引き続き表示しています。",
+  "resources.detail.s3Keys.error":
+    "S3互換アクセスキーの操作を完了できませんでした: {message}",
 
   // --- account ---------------------------------------------------------------------
   "account.title": "アカウント",

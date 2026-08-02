@@ -1542,6 +1542,43 @@ export const en: Record<keyof typeof ja, string> = {
   "resources.detail.deleteTitle": "Delete this resource?",
   "resources.detail.deleteMessage":
     "Run normal deletion for {kind}/{name} and its native resources. This screen never uses force delete.",
+  "resources.detail.s3Keys.title": "S3-compatible access keys",
+  "resources.detail.s3Keys.subtitle":
+    "Create a credential scoped to this ObjectBucket. It is separate from a Takosumi Cloud API key.",
+  "resources.detail.s3Keys.secretOnce": "Secret shown once",
+  "resources.detail.s3Keys.interfaceLoading":
+    "Checking this bucket's storage interface…",
+  "resources.detail.s3Keys.interfaceUnavailable":
+    "This ObjectBucket has no active storage.object@v1 interface, so an S3-compatible access key cannot be scoped here.",
+  "resources.detail.s3Keys.resource": "Target Resource",
+  "resources.detail.s3Keys.label": "Key label",
+  "resources.detail.s3Keys.labelPlaceholder": "For example: backup job",
+  "resources.detail.s3Keys.permissions": "Permissions",
+  "resources.detail.s3Keys.permissionsHint":
+    "The server checks your membership and owner authority before issuing the key.",
+  "resources.detail.s3Keys.permission.read": "Read objects",
+  "resources.detail.s3Keys.permission.list": "List objects",
+  "resources.detail.s3Keys.permission.write": "Write objects",
+  "resources.detail.s3Keys.create": "Create S3-compatible key",
+  "resources.detail.s3Keys.creating": "Creating…",
+  "resources.detail.s3Keys.created": "S3-compatible access key created",
+  "resources.detail.s3Keys.createdHint":
+    "The secret cannot be shown again. Copy it now, then dismiss this message.",
+  "resources.detail.s3Keys.copy": "Copy credentials",
+  "resources.detail.s3Keys.copied": "Copied",
+  "resources.detail.s3Keys.copyFailed":
+    "Could not copy the credentials. Save the visible values manually.",
+  "resources.detail.s3Keys.empty": "No S3-compatible access keys for this Resource.",
+  "resources.detail.s3Keys.status.active": "Active",
+  "resources.detail.s3Keys.status.revoked": "Revoked",
+  "resources.detail.s3Keys.revoke": "Revoke",
+  "resources.detail.s3Keys.revokeConfirm": "Revoke key",
+  "resources.detail.s3Keys.forbidden":
+    "You do not have permission to manage S3-compatible access keys in this Workspace.",
+  "resources.detail.s3Keys.unavailable":
+    "S3-compatible access keys are temporarily unavailable. The Resource is still visible.",
+  "resources.detail.s3Keys.error":
+    "Could not complete the S3-compatible access key operation: {message}",
 
   // --- account ---------------------------------------------------------------------
   "account.title": "Account",

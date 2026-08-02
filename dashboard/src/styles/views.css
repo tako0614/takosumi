@@ -489,6 +489,177 @@
   gap: var(--tg-s-4);
 }
 
+/* ObjectBucket customer credentials. Secrets only live in the in-memory
+   reveal panel; durable rows below contain metadata and the scoped grant. */
+.rs-s3-key-card {
+  display: grid;
+  gap: var(--tg-s-4);
+}
+
+.rs-s3-key-title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--tg-s-2);
+}
+
+.rs-s3-key-card .tg-card-section {
+  display: grid;
+  gap: var(--tg-s-3);
+}
+
+.rs-s3-key-scope {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+  align-items: center;
+}
+
+.rs-s3-key-scope > div {
+  display: grid;
+  gap: var(--tg-s-1);
+}
+
+.rs-s3-key-scope-label {
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-xs);
+}
+
+.rs-s3-key-scope code {
+  overflow-wrap: anywhere;
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-xs);
+}
+
+.rs-s3-key-create {
+  grid-template-columns: minmax(180px, 1fr) minmax(240px, 1.4fr) auto;
+  align-items: end;
+}
+
+.rs-s3-key-permissions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--tg-s-3);
+  min-height: 40px;
+  align-items: center;
+}
+
+.rs-s3-key-created {
+  display: grid;
+  gap: var(--tg-s-3);
+  padding: var(--tg-s-4);
+  border: 1px solid color-mix(in srgb, var(--tg-success) 42%, var(--tg-line));
+  border-radius: var(--tg-r-lg);
+  background: color-mix(in srgb, var(--tg-success) 8%, var(--tg-bg-subtle));
+}
+
+.rs-s3-key-created > div:first-child {
+  display: grid;
+  gap: var(--tg-s-1);
+}
+
+.rs-s3-key-created > div:first-child span {
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-sm);
+}
+
+.rs-s3-key-created code {
+  display: block;
+  padding: var(--tg-s-3);
+  overflow-x: auto;
+  border: 1px solid var(--tg-line);
+  border-radius: var(--tg-r-md);
+  background: var(--tg-code-bg);
+  color: var(--tg-code-fg);
+  font-family: var(--tg-font-mono);
+  font-size: var(--tg-fs-sm);
+  white-space: pre;
+}
+
+.rs-s3-key-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--tg-s-1);
+}
+
+.rs-s3-key-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tg-s-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.rs-s3-key-list li {
+  display: grid;
+  gap: var(--tg-s-2);
+  padding-bottom: var(--tg-s-3);
+  border-bottom: 1px solid var(--tg-line);
+}
+
+.rs-s3-key-list li:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.rs-s3-key-row-main,
+.rs-s3-key-row-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--tg-s-3);
+}
+
+.rs-s3-key-row-main > div,
+.rs-s3-key-row-meta > span:first-child {
+  min-width: 0;
+}
+
+.rs-s3-key-row-main > div {
+  display: grid;
+  gap: var(--tg-s-1);
+}
+
+.rs-s3-key-row-main code,
+.rs-s3-key-row-meta {
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-xs);
+}
+
+.rs-s3-key-row-main code {
+  font-family: var(--tg-font-mono);
+}
+
+.rs-s3-key-row-meta > span:first-child {
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 980px) {
+  .rs-s3-key-create {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .rs-s3-key-create > .tg-btn {
+    justify-self: start;
+  }
+}
+
+@media (max-width: 640px) {
+  .rs-s3-key-scope,
+  .rs-s3-key-create {
+    grid-template-columns: 1fr;
+  }
+
+  .rs-s3-key-row-main,
+  .rs-s3-key-row-meta {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .rs-s3-key-actions {
+    justify-content: flex-start;
+  }
+}
+
 .rs-muted {
   margin: 0;
   color: var(--tg-fg-muted);
