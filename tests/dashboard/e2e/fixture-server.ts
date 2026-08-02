@@ -90,6 +90,9 @@ async function apiResponse(request: Request, url: URL): Promise<Response> {
       notifications: [],
     });
   }
+  if (path === "/api/v1/__e2e/unexpected-404") {
+    return json({ error: "intentional_fixture_failure" }, 404);
+  }
   if (path === "/api/v1/workspaces") return json(workspacesResponse());
 
   const workspaceMatch = path.match(/^\/api\/v1\/workspaces\/([^/]+)(?:\/(.*))?$/u);

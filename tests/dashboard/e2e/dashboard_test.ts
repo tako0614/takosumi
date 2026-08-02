@@ -1,5 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { PORTABLE_EXPECTATIONS } from "./fixture-data.ts";
+import { monitorDashboardTraffic } from "./traffic-monitor.ts";
+import type { DashboardE2EMode } from "./traffic-policy.ts";
 
 type Expectations = {
   readonly workspaceName: string;
@@ -9,7 +11,11 @@ type Expectations = {
   readonly objectBucketName: string;
 };
 
-const mode = process.env.TAKOSUMI_E2E_MODE ?? "portable";
+const rawMode = process.env.TAKOSUMI_E2E_MODE ?? "portable";
+if (rawMode !== "portable" && rawMode !== "live") {
+  throw new Error("TAKOSUMI_E2E_MODE must be either portable or live");
+}
+const mode: DashboardE2EMode = rawMode;
 
 function requiredLive(name: string): string {
   const value = process.env[name]?.trim();
@@ -51,6 +57,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     page,
   }) => {
     const errors = pageErrors(page);
+    const traffic = monitorDashboardTraffic(page, mode);
     const bootstrap = page.waitForResponse((response) => {
       const url = new URL(response.url());
       return (
@@ -86,12 +93,14 @@ test.describe("Takosumi dashboard browser surface", () => {
       new RegExp(expectations.switchWorkspaceName.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")),
     );
     await assertNoPageErrors(errors);
+    traffic.assertNoFailures();
   });
 
   test("renders the New App discovery view without a runtime trim crash", async ({
     page,
   }) => {
     const errors = pageErrors(page);
+    const traffic = monitorDashboardTraffic(page, mode);
     await page.goto("/new", { waitUntil: "domcontentloaded" });
     await expect(
       page.getByRole("heading", {
@@ -100,12 +109,14 @@ test.describe("Takosumi dashboard browser surface", () => {
     ).toBeVisible();
     await expect(page.locator("body")).not.toContainText("undefined.trim");
     await assertNoPageErrors(errors);
+    traffic.assertNoFailures();
   });
 
   test("shows the repository-owned installed app and its launch URL", async ({
     page,
   }) => {
     const errors = pageErrors(page);
+    const traffic = monitorDashboardTraffic(page, mode);
     await page.goto("/", { waitUntil: "domcontentloaded" });
     const app = page
       .locator("a.av-tile[target=\"_blank\"]")
@@ -115,12 +126,14 @@ test.describe("Takosumi dashboard browser surface", () => {
     await expect(app).toHaveAttribute("href", expectations.appUrl);
     await expect(app).toHaveAttribute("target", "_blank");
     await assertNoPageErrors(errors);
+    traffic.assertNoFailures();
   });
 
   test("lists an ObjectBucket and renders its customer-key controls in detail", async ({
     page,
   }) => {
     const errors = pageErrors(page);
+    const traffic = monitorDashboardTraffic(page, mode);
     await page.goto("/resources", { waitUntil: "domcontentloaded" });
     await expect(page.getByText("ObjectBucket", { exact: true }).first()).toBeVisible();
 
@@ -141,5 +154,21 @@ test.describe("Takosumi dashboard browser surface", () => {
       }),
     ).toBeVisible();
     await assertNoPageErrors(errors);
+    traffic.assertNoFailures();
+  });
+
+  test("fails closed on an unexpected same-origin API 404", async ({ page }) => {
+    test.skip(mode !== "portable", "the intentional 404 exists only in the fixture server");
+    const traffic = monitorDashboardTraffic(page, mode);
+    await page.goto("/", { waitUntil: "domcontentloaded" });
+    traffic.assertNoFailures();
+
+    const status = await page.evaluate(async () => {
+      const response = await fetch("/api/v1/__e2e/unexpected-404");
+      return response.status;
+    });
+    expect(status).toBe(404);
+    await expect.poll(() => traffic.failures.length).toBe(1);
+    expect(() => traffic.assertNoFailures()).toThrow(/404/u);
   });
 });

@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
+import { resolveExternalStorageState } from "./dashboard-browser-e2e/live-inputs.ts";
 
 const mode = process.argv[2] ?? "";
 if (mode !== "portable" && mode !== "live") {
@@ -37,12 +38,11 @@ if (mode === "portable") {
       `live dashboard browser E2E is fail-closed; missing: ${missing.join(", ")}`,
     );
   }
-  const storageState = process.env.TAKOSUMI_E2E_STORAGE_STATE!.trim();
-  if (!existsSync(storageState)) {
-    throw new Error(
-      `live dashboard browser E2E storage state does not exist: ${storageState}`,
-    );
-  }
+  const storageState = resolveExternalStorageState(
+    repoRoot,
+    process.env.TAKOSUMI_E2E_STORAGE_STATE!.trim(),
+  );
+  process.env.TAKOSUMI_E2E_STORAGE_STATE = storageState;
 }
 
 const child = Bun.spawn(

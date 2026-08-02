@@ -12,6 +12,18 @@ missing auth cookie, unknown API routes, and browser runtime errors; it is not a
 network-skipped test. The root Bun unit-test command excludes this directory so
 the Playwright runner remains the only owner of these browser tests.
 
+Traffic monitoring is fail-closed: portable mode rejects same-origin API,
+capability, and asset 4xx/5xx responses plus HTTP request failures. Live mode
+rejects HTTP 5xx and request failures, and treats bootstrap, Workspace/app,
+Resource, and S3 customer-key route 4xx responses as failures. Optional live
+probes such as capability and form-availability discovery may return 4xx while
+the required surfaces remain healthy.
+
+Live storage state must be an existing regular JSON file outside the repository
+worktree. Repository-local paths and symlinked paths are rejected before
+Playwright starts; keep the file in external operator state and never commit
+it.
+
 Live evidence is a separate, operator-supplied run:
 
 ```bash

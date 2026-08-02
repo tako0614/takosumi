@@ -1,7 +1,7 @@
-import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "@playwright/test";
+import { resolveExternalStorageState } from "../../../scripts/dashboard-browser-e2e/live-inputs.ts";
 
 const configDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(configDir, "../../..");
@@ -36,10 +36,10 @@ function liveConfig(): {
       "TAKOSUMI_E2E_BASE_URL must not contain credentials; use storage state",
     );
   }
-  const storageState = requiredLiveEnv("TAKOSUMI_E2E_STORAGE_STATE");
-  if (!existsSync(storageState)) {
-    throw new Error(`live dashboard E2E storage state does not exist: ${storageState}`);
-  }
+  const storageState = resolveExternalStorageState(
+    repoRoot,
+    requiredLiveEnv("TAKOSUMI_E2E_STORAGE_STATE"),
+  );
   return { baseURL: parsed.toString().replace(/\/$/u, ""), storageState };
 }
 
