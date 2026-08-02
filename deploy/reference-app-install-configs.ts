@@ -637,7 +637,7 @@ const yurucommuManagedConfig = {
         callbackPath: "/api/auth/callback/takos",
         // Yurucommu v2.1.3 (yurucommu-core/api 3.4.3) requests the
         // identity email claim during its Accounts callback.
-        scopes: ["openid", "profile", "email"],
+        scopes: ["email", "openid", "profile"],
         bindings: {
           issuerUrl: {
             binding: "TAKOSUMI_ACCOUNTS_ISSUER_URL",

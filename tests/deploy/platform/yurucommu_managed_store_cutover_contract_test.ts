@@ -291,7 +291,7 @@ describe("Yurucommu managed Store cutover contract", () => {
     ).toMatchObject({
       id: "takosumi-accounts",
       callbackPath: "/api/auth/callback/takos",
-      scopes: ["openid", "profile", "email"],
+      scopes: ["email", "openid", "profile"],
     });
     expect(
       managed.hostRuntimeMaterialization?.requirements.find(
