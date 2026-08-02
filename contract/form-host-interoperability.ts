@@ -37,7 +37,6 @@ export interface TakoformHostDiscovery {
   readonly endpoints: {
     readonly api: string;
     readonly forms: string;
-    readonly form_definitions: string;
     readonly interfaces?: string;
     readonly oidc_issuer?: string;
   };
@@ -196,7 +195,6 @@ export function createTakoformHostDiscovery(
     endpoints: {
       api,
       forms: `${api}/forms`,
-      form_definitions: `${api}/form-definitions`,
       ...(options.interfaceDeclarations
         ? { interfaces: `${normalized}${TAKOFORM_FORM_HOST_INTERFACES_PATH}` }
         : {}),

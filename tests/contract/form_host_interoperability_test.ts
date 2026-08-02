@@ -1,18 +1,21 @@
 import { expect, test } from "bun:test";
 import {
   createTakoformHostDiscovery,
+  TAKOFORM_FORM_HOST_FORM_DEFINITIONS_PATH,
   portableTypeForShapeKind,
   shapeKindForPortableType,
 } from "../../contract/form-host-interoperability.ts";
 
-test("Takoform discovery advertises the exact Form Definition endpoint", () => {
+test("Takoform discovery keeps the closed v1alpha1 endpoint vocabulary", () => {
   const discovery = createTakoformHostDiscovery("https://host.test/");
   expect(discovery.endpoints).toEqual({
     api: "https://host.test/apis/forms.takoform.com/v1alpha1",
     forms: "https://host.test/apis/forms.takoform.com/v1alpha1/forms",
-    form_definitions:
-      "https://host.test/apis/forms.takoform.com/v1alpha1/form-definitions",
   });
+  expect(discovery.endpoints).not.toHaveProperty("form_definitions");
+  expect(TAKOFORM_FORM_HOST_FORM_DEFINITIONS_PATH).toBe(
+    "/apis/forms.takoform.com/v1alpha1/form-definitions",
+  );
 });
 
 test("Takoform kind translation retains legacy aliases and accepts open Form kinds", () => {

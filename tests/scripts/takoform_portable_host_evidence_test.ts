@@ -69,8 +69,6 @@ test("portable host evidence adapter closes discovery to the runner origin", asy
           api: "http://internal.test/apis/forms.takoform.com/v1alpha1",
           forms:
             "http://internal.test/apis/forms.takoform.com/v1alpha1/forms",
-          form_definitions:
-            "http://internal.test/apis/forms.takoform.com/v1alpha1/form-definitions",
           interfaces:
             "http://internal.test/apis/forms.takoform.com/v1alpha1/interfaces",
           capabilities: "http://internal.test/api/v1/capabilities",
@@ -95,14 +93,12 @@ test("portable host evidence adapter closes discovery to the runner origin", asy
     endpoints: {
       api: `http://127.0.0.1:43210${API}`,
       forms: `http://127.0.0.1:43210${API}/forms`,
-      form_definitions:
-        `http://127.0.0.1:43210${API}/form-definitions`,
       interfaces: `http://127.0.0.1:43210${API}/interfaces`,
     },
   });
 });
 
-test("portable host evidence rejects discovery without Form Definition support", async () => {
+test("portable host evidence accepts discovery without Form Definition support", async () => {
   const fetch = createTestAdapter({
     fetch: async () =>
       Response.json({
@@ -112,10 +108,12 @@ test("portable host evidence rejects discovery without Form Definition support",
           exact_form_ref: true,
           optimistic_concurrency: true,
           idempotent_lifecycle: true,
+          interface_declarations: true,
         },
         endpoints: {
           api: `http://internal.test${API}`,
           forms: `http://internal.test${API}/forms`,
+          interfaces: `http://internal.test${API}/interfaces`,
         },
       }),
     readResource: async () => undefined,
@@ -124,9 +122,21 @@ test("portable host evidence rejects discovery without Form Definition support",
   const response = await fetch(
     new Request("http://host.test/.well-known/takoform"),
   );
-  expect(response.status).toBe(500);
-  expect(await response.json()).toMatchObject({
-    error: { code: "internal_error" },
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({
+    api_versions: ["forms.takoform.com/v1alpha1"],
+    features: {
+      service_forms: true,
+      exact_form_ref: true,
+      optimistic_concurrency: true,
+      idempotent_lifecycle: true,
+      interface_declarations: true,
+    },
+    endpoints: {
+      api: `http://host.test${API}`,
+      forms: `http://host.test${API}/forms`,
+      interfaces: `http://host.test${API}/interfaces`,
+    },
   });
 });
 
