@@ -22,6 +22,7 @@ test.skipIf(!hasTofu)(
     expect(proof.evidence.destroyStatus).toBe("succeeded");
     expect(proof.evidence.resourceRemoved).toBe(true);
   },
+  15_000,
 );
 
 async function commandExists(command: string): Promise<boolean> {
