@@ -391,14 +391,14 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain("...storeListingVariableNames()");
   });
 
-  test("never uses Store or managed-provider metadata as execution fallback", () => {
+  test("uses the explicit ProviderConnection candidate predicate", () => {
     expect(newAppViewSource).not.toContain(
       "const managedProviderConnectionForRow =",
     );
     expect(newAppViewSource).not.toContain(
       "managedStoreProviderForCurrentSource",
     );
-    expect(newAppViewSource).not.toContain("isPublicManagedProviderConnection");
+    expect(newAppViewSource).toContain("isProviderConnectionCandidate");
     expect(newAppViewSource).not.toContain(
       "scopeHints?.managedProvider === true",
     );

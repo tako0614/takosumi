@@ -140,6 +140,7 @@ import {
 import { createAction } from "../account/lib/action.tsx";
 import { useConfirmDialog } from "../../lib/confirm-dialog.ts";
 import { friendlyError } from "../../lib/error-copy.ts";
+import { isProviderConnectionCandidate } from "../../lib/provider-connections.ts";
 
 import {
   type StepState,
@@ -1640,10 +1641,8 @@ function Inner() {
     row.credentialRequired;
 
   const visibleProviderConnections = () => providerConnections() ?? [];
-  const isReadyProviderConnection = (connection: ProviderConnection) =>
-    connection.scope === "workspace" && connection.status === "verified";
   const readyProviderConnections = () =>
-    visibleProviderConnections().filter(isReadyProviderConnection);
+    visibleProviderConnections().filter(isProviderConnectionCandidate);
   const providerConnectionsForProvider = (provider: string) =>
     readyProviderConnections().filter((connection) =>
       sameProviderSource(provider, connection.providerSource),

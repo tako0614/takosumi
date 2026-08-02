@@ -348,6 +348,17 @@ test("reference app composition exposes five replaceable Store source identities
   }
 });
 
+test("managed Yurucommu requires short-lived Takoform provider credentials", () => {
+  const managed = REFERENCE_APP_INSTALL_CONFIGS.find(
+    (config) => config.name === "yurucommu-managed",
+  );
+  expect(managed?.policy?.providerCredentials).toEqual({
+    requiredProviders: ["registry.opentofu.org/tako0614/takoform"],
+    requireTemporary: true,
+    requireTtlEnforced: true,
+  });
+});
+
 test("default composition omits apps without an executable public source and release", () => {
   for (const app of ["road-to-me", "takos-computer", "yurumeet"]) {
     expect(

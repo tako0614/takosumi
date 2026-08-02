@@ -125,6 +125,7 @@ import {
   listAuthorizedUiSurfaces,
   type AuthorizedUiSurface,
 } from "../../lib/ui-surface-interfaces.ts";
+import { isProviderConnectionCandidate } from "../../lib/provider-connections.ts";
 
 type TabId = "overview" | "deploys" | "settings" | "danger";
 
@@ -1240,7 +1241,7 @@ function readyProviderConnectionsForProvider(
 ): readonly ProviderConnection[] {
   return providerConnections.filter(
     (connection) =>
-      connection.status === "verified" &&
+      isProviderConnectionCandidate(connection) &&
       sameProviderSource(provider, connection.providerSource),
   );
 }

@@ -734,6 +734,11 @@ const yurucommuManagedConfig = {
     repositoryInstallUx: repositoryInstallUxPolicy(
       TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2,
     ),
+    providerCredentials: {
+      requiredProviders: ["registry.opentofu.org/tako0614/takoform"],
+      requireTemporary: true,
+      requireTtlEnforced: true,
+    },
     lifecycleActions: {
       allowedExecutors: ["operator"],
       allowedRunnerCapabilities: ["resource.migration.sqlite.v1"],

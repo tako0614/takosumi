@@ -250,16 +250,17 @@ describe("/new Provider Connections return context", () => {
     expect(newAppViewSource).toContain("providerConnectionsForRow(row)");
   });
 
-  test("/new never turns Store presentation or operator connections into execution authority", () => {
+  test("/new uses the shared explicit ProviderConnection candidate predicate", () => {
     expect(newAppViewSource).not.toContain(
       "managedStoreProviderForCurrentSource",
     );
     expect(newAppViewSource).not.toContain("selectedManagedProviderConnection");
     expect(newAppViewSource).not.toContain("managedProviderVariableDefaults");
-    expect(newAppViewSource).not.toContain("isPublicManagedProviderConnection");
+    expect(newAppViewSource).toContain("isProviderConnectionCandidate");
     expect(newAppViewSource).not.toContain("rowCanUseManagedProviderFallback");
-    expect(newAppViewSource).toContain(
-      'connection.scope === "workspace" && connection.status === "verified"',
+    expect(appDetailViewSource).toContain("isProviderConnectionCandidate");
+    expect(appDetailViewSource).toContain(
+      "isProviderConnectionCandidate(connection)",
     );
     expect(newAppViewSource).toContain(
       "provider.allowed && provider.credentialRequired === true",
