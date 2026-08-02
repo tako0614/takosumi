@@ -14,7 +14,15 @@ import type {
   InstallConfig,
   PublicInstallConfig,
 } from "takosumi-contract/install-configs";
-import { isSecretKey, REDACTED_VALUE } from "takosumi-contract/redaction";
+import {
+  normalizeScopeBoundaryPolicy,
+  type JsonValue,
+} from "takosumi-contract";
+import {
+  isSecretKey,
+  REDACTED_VALUE,
+  redactJsonValue,
+} from "takosumi-contract/redaction";
 
 export function publicInstallConfigRecord(
   config: InstallConfig,
@@ -29,8 +37,42 @@ export function publicInstallConfigRecord(
   const store = config.store;
   return {
     ...publicRecord,
+    policy: publicPolicyConfig(config.policy),
     variableMapping: redactedInstallConfigVariableMapping(config),
     ...(store ? { store } : {}),
+  };
+}
+
+function publicPolicyConfig(
+  policy: InstallConfig["policy"],
+): InstallConfig["policy"] {
+  const {
+    providerCredentials,
+    scopeBoundary: _scopeBoundary,
+    ...publicPolicy
+  } = policy;
+  const normalizedProviderCredentials = providerCredentials
+    ? {
+        ...(providerCredentials.requiredProviders
+          ? {
+              requiredProviders: [...providerCredentials.requiredProviders],
+            }
+          : {}),
+        ...(providerCredentials.requireTemporary === true
+          ? { requireTemporary: true }
+          : {}),
+        ...(providerCredentials.requireTtlEnforced === true
+          ? { requireTtlEnforced: true }
+          : {}),
+      }
+    : undefined;
+  const scopeBoundary = normalizeScopeBoundaryPolicy(policy.scopeBoundary);
+  return {
+    ...publicPolicy,
+    ...(normalizedProviderCredentials
+      ? { providerCredentials: normalizedProviderCredentials }
+      : {}),
+    ...(scopeBoundary ? { scopeBoundary } : {}),
   };
 }
 
@@ -50,7 +92,9 @@ export function redactedInstallConfigVariableMapping(
   const redacted: Record<string, unknown> = {};
   for (const [name, value] of Object.entries(config.variableMapping)) {
     redacted[name] =
-      declaredSecret.has(name) || isSecretKey(name) ? REDACTED_VALUE : value;
+      declaredSecret.has(name) || isSecretKey(name)
+        ? REDACTED_VALUE
+        : redactJsonValue(value as JsonValue);
   }
   return redacted;
 }
