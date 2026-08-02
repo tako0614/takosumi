@@ -53,6 +53,7 @@ const CURRENT_V2_FIXTURE_CASES = [
     configName: "takos-main",
     app: "takos",
     modulePath: "deploy/opentofu",
+    sourcePath: ".",
     modulePaths: ["deploy/opentofu"],
     sourceUrl: "https://github.com/tako0614/takos.git",
   },
@@ -60,6 +61,7 @@ const CURRENT_V2_FIXTURE_CASES = [
   readonly configName: string;
   readonly app: CurrentV2App;
   readonly modulePath: string;
+  readonly sourcePath?: string;
   readonly modulePaths: readonly string[];
   readonly sourceUrl: string;
 }[];
@@ -122,6 +124,7 @@ function fixtureSource(input: {
   readonly app: CurrentV2App;
   readonly sourceUrl: string;
   readonly modulePath: string;
+  readonly sourcePath?: string;
 }): Source {
   return {
     id: `source_reference_${input.app}_${input.modulePath.replace(/[^a-z0-9]+/giu, "_")}`,
@@ -129,7 +132,7 @@ function fixtureSource(input: {
     name: `${input.app}-source`,
     url: input.sourceUrl,
     defaultRef: "main",
-    defaultPath: input.modulePath,
+    defaultPath: input.sourcePath ?? input.modulePath,
     status: "active",
     autoSync: false,
     createdAt: REPOSITORY_FIXTURE_NOW,
@@ -335,17 +338,76 @@ test("reference app composition exposes five replaceable Store source identities
     expect(config.sourceSelector).toEqual(config.store!.source);
     expect(config.store!.source).toEqual({
       url: config.store!.source!.url,
-      path:
-        config.name === "yurucommu-managed"
-          ? "deploy/takoform"
-          : config.name === "takos-main"
-            ? "deploy/opentofu"
-            : ".",
+      path: config.name === "yurucommu-managed" ? "deploy/takoform" : ".",
     });
     // Store presentation does not select a ref. The Source sync/Run path owns
     // the reviewed ref and resolves it to an immutable SourceSnapshot commit.
     expect(config.store!.source!.ref).toBeUndefined();
   }
+});
+
+test("Takos archives the repository root and pins lifecycle execution policy", () => {
+  const takos = REFERENCE_APP_INSTALL_CONFIGS.find(
+    (config) => config.name === "takos-main",
+  )!;
+  expect(takos.sourceSelector).toEqual({
+    url: "https://github.com/tako0614/takos.git",
+    path: ".",
+  });
+  expect(takos.modulePath).toBe("deploy/opentofu");
+  expect(takos.sourceBuild).toEqual({
+    commands: [{ argv: ["bun", "install", "--frozen-lockfile"] }],
+    outputs: ["node_modules/wrangler/bin/wrangler.js"],
+  });
+  expect(takos.lifecycleActions).toEqual([
+    {
+      apiVersion: "takosumi.dev/v1alpha1",
+      kind: "command",
+      id: "takos-product-activate-v1",
+      phase: "post_apply",
+      executor: "runner",
+      command: ["bun", "run", "product:activate"],
+      workingDirectory: ".",
+      env: {
+        TAKOS_RELEASE_ARTIFACT_DESCRIPTOR_URL:
+          "https://github.com/tako0614/takos/releases/download/v0.11.0/takosumi-artifact.json",
+        TAKOS_RELEASE_ARTIFACT_DESCRIPTOR_SHA256:
+          "sha256:ecc8577f3136cdc883269370cee11b3f00e17de2646ca7cb07e00880b9ecd8bc",
+      },
+      timeoutSeconds: 3600,
+      runnerCapability: "capsule.lifecycle.command.v1",
+      useProviderCredentials: true,
+    },
+    {
+      apiVersion: "takosumi.dev/v1alpha1",
+      kind: "command",
+      id: "takos-product-pre-destroy-v1",
+      phase: "pre_destroy",
+      executor: "runner",
+      command: ["bun", "run", "product:pre-destroy"],
+      workingDirectory: ".",
+      timeoutSeconds: 1800,
+      runnerCapability: "capsule.lifecycle.command.v1",
+      useProviderCredentials: true,
+    },
+  ]);
+  expect(takos.policy).toMatchObject({
+    allowedProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
+    providerCredentials: {
+      requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
+    },
+    lifecycleActions: {
+      allowedExecutors: ["runner"],
+      allowedRunnerCapabilities: ["capsule.lifecycle.command.v1"],
+      allowProviderCredentials: true,
+    },
+  });
+  expect(takos.lifecycleActions?.[0]?.env).toEqual({
+    TAKOS_RELEASE_ARTIFACT_DESCRIPTOR_URL:
+      "https://github.com/tako0614/takos/releases/download/v0.11.0/takosumi-artifact.json",
+    TAKOS_RELEASE_ARTIFACT_DESCRIPTOR_SHA256:
+      "sha256:ecc8577f3136cdc883269370cee11b3f00e17de2646ca7cb07e00880b9ecd8bc",
+  });
 });
 
 test("managed Yurucommu requires short-lived Takoform provider credentials", () => {
@@ -814,7 +876,7 @@ test("Store selection still resolves Takos and direct Yurucommu sources without 
     uniqueStoreInstallConfigForSource(
       REFERENCE_APP_INSTALL_CONFIGS,
       "https://github.com/tako0614/takos.git",
-      "deploy/opentofu",
+      ".",
     )?.name,
   ).toBe("takos-main");
   expect(

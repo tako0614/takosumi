@@ -995,8 +995,15 @@ const gitConfig = {
 const takosConfig = {
   id: "cfg-reference-takos-main",
   name: "takos-main",
-  sourceSelector: source("takos", "deploy/opentofu"),
+  // Source synchronization archives the repository root so the lifecycle
+  // materializer can access package.json, bun.lock, and the Wrangler output;
+  // OpenTofu still evaluates the nested distribution module below.
+  sourceSelector: source("takos"),
   modulePath: "deploy/opentofu",
+  sourceBuild: {
+    commands: [{ argv: ["bun", "install", "--frozen-lockfile"] }],
+    outputs: ["node_modules/wrangler/bin/wrangler.js"],
+  },
   variableMapping: {},
   variablePresentation: [
     {
@@ -1049,13 +1056,54 @@ const takosConfig = {
     },
   }),
   outputAllowlist: {},
+  lifecycleActions: [
+    {
+      apiVersion: "takosumi.dev/v1alpha1",
+      kind: "command",
+      id: "takos-product-activate-v1",
+      phase: "post_apply",
+      executor: "runner",
+      command: ["bun", "run", "product:activate"],
+      workingDirectory: ".",
+      env: {
+        TAKOS_RELEASE_ARTIFACT_DESCRIPTOR_URL:
+          "https://github.com/tako0614/takos/releases/download/v0.11.0/takosumi-artifact.json",
+        TAKOS_RELEASE_ARTIFACT_DESCRIPTOR_SHA256:
+          "sha256:ecc8577f3136cdc883269370cee11b3f00e17de2646ca7cb07e00880b9ecd8bc",
+      },
+      timeoutSeconds: 3600,
+      runnerCapability: CAPSULE_LIFECYCLE_COMMAND_CAPABILITY,
+      useProviderCredentials: true,
+    },
+    {
+      apiVersion: "takosumi.dev/v1alpha1",
+      kind: "command",
+      id: "takos-product-pre-destroy-v1",
+      phase: "pre_destroy",
+      executor: "runner",
+      command: ["bun", "run", "product:pre-destroy"],
+      workingDirectory: ".",
+      timeoutSeconds: 1800,
+      runnerCapability: CAPSULE_LIFECYCLE_COMMAND_CAPABILITY,
+      useProviderCredentials: true,
+    },
+  ],
   policy: {
+    allowedProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
+    providerCredentials: {
+      requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
+    },
     repositoryInstallUx: repositoryInstallUxPolicy(
       TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2,
     ),
+    lifecycleActions: {
+      allowedExecutors: ["runner"],
+      allowedRunnerCapabilities: [CAPSULE_LIFECYCLE_COMMAND_CAPABILITY],
+      allowProviderCredentials: true,
+    },
   },
   store: store({
-    source: source("takos", "deploy/opentofu"),
+    source: source("takos"),
     order: 5,
     kind: "app",
     suggestedName: "takos",
