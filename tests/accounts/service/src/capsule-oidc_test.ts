@@ -64,6 +64,63 @@ test("Capsule OIDC registration never invents module variable names", async () =
   );
 });
 
+test("managed Capsule OIDC provisioning materializes the projected public URL", async () => {
+  const store = new InMemoryAccountsStore();
+  const installConfig = {
+    id: "cfg_managed_staging",
+    variableMapping: { public_subdomain: "dashboard" },
+    installExperience: {
+      projections: [
+        {
+          kind: "public_endpoint",
+          variables: { subdomain: "public_subdomain", url: "public_url" },
+          baseDomain: "apps.example.test",
+        },
+        {
+          kind: "oidc_client",
+          variables: { redirectUri: "redirect_uri" },
+          callbackPath: "/auth/callback",
+        },
+      ],
+    },
+  } as unknown as InstallConfig;
+  let persistedConfig: InstallConfig | undefined;
+  const operations = {
+    workspaces: {
+      getWorkspace: async () => ({ id: "ws_1", handle: "main" }),
+    },
+    capsules: {
+      putInstallConfig: async (config: InstallConfig) => {
+        persistedConfig = config;
+        return config;
+      },
+    },
+  } as unknown as ControlPlaneOperations;
+
+  await ensureTakosumiAccountsOidcForCapsule({
+    operations,
+    store,
+    issuer: "https://accounts.example.test",
+    capsule: {
+      id: "cap_managed_staging",
+      workspaceId: "ws_1",
+      installConfigId: "cfg_managed_staging",
+    } as never,
+    installConfig,
+    managedPublicBaseDomain: "apps-staging.example.test",
+  });
+
+  const client = await store.findOidcClientForCapsule("cap_managed_staging");
+  expect(client?.redirectUris).toEqual([
+    "https://main-dashboard.apps-staging.example.test/auth/callback",
+  ]);
+  expect(persistedConfig?.variableMapping).toMatchObject({
+    public_url: "https://main-dashboard.apps-staging.example.test",
+    redirect_uri:
+      "https://main-dashboard.apps-staging.example.test/auth/callback",
+  });
+});
+
 test("a mapped OIDC client id can never rebind another Capsule's client", async () => {
   const store = new InMemoryAccountsStore();
   // The victim's Capsule already owns this registration.

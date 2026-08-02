@@ -42,9 +42,12 @@ export async function ensureTakosumiAccountsOidcForCapsule(input: {
   const workspace = await input.operations.workspaces.getWorkspace(
     input.capsule.workspaceId,
   );
+  const publicEndpoint = installExperiencePublicEndpoint(
+    input.installConfig.installExperience,
+  );
   const redirectOrigin = appOriginFromInstallVariables(
     input.installConfig.variableMapping,
-    installExperiencePublicEndpoint(input.installConfig.installExperience),
+    publicEndpoint,
     workspace.handle,
     input.managedPublicBaseDomain,
     input.installConfig.managedPublicHostname?.mode ?? "scoped",
@@ -92,6 +95,9 @@ export async function ensureTakosumiAccountsOidcForCapsule(input: {
   await input.store.saveOidcClient(client);
   const variableMapping = {
     ...input.installConfig.variableMapping,
+    ...(publicEndpoint?.urlVariable
+      ? { [publicEndpoint.urlVariable]: redirectOrigin }
+      : {}),
     ...(oidcExperience.issuerUrlVariable
       ? { [oidcExperience.issuerUrlVariable]: client.issuerUrl }
       : {}),
