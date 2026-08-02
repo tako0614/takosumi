@@ -1,7 +1,10 @@
 import { expect, test } from "bun:test";
 import { Hono } from "hono";
 import type { ActorContext } from "takosumi-contract";
-import { registerPortableFormHostRoutes } from "../../../core/api/form_host_routes.ts";
+import {
+  PORTABLE_FORM_MANAGER,
+  registerPortableFormHostRoutes,
+} from "../../../core/api/form_host_routes.ts";
 import {
   InMemoryPortableHostIdempotencyLedger,
   PortableHostIdempotencyCoordinator,
@@ -58,6 +61,42 @@ function serviceFailingOnce(attempts: { count: number }) {
     refresh: async () => {
       succeed();
       return { ok: true as const, value: { resource: resourceObject() } };
+    },
+  } as unknown as ResourceShapeService;
+}
+
+function serviceDeletingCanonicalThenFailingRetire(state: {
+  present: boolean;
+  deleteOptions: unknown[];
+}) {
+  return {
+    get: async () =>
+      state.present
+        ? { ok: true as const, value: resourceObject() }
+        : {
+            ok: false as const,
+            error: { code: "not_found", message: "resource not found" },
+          },
+    delete: async (
+      _space: string,
+      _kind: string,
+      _name: string,
+      _actor: ActorContext,
+      options: unknown,
+    ) => {
+      state.deleteOptions.push(options);
+      if (state.present) {
+        // Model the canonical row being removed before host admission fails.
+        state.present = false;
+        return {
+          ok: false as const,
+          error: {
+            code: "deployment_finalize_pending",
+            message: "resource retirement is pending",
+          },
+        };
+      }
+      return { ok: true as const, value: undefined };
     },
   } as unknown as ResourceShapeService;
 }
@@ -130,6 +169,37 @@ test("an interrupted portable delete is retryable under the same Idempotency-Key
   // Without a resume path this is 409 resource_busy forever.
   expect(second.status).toBe(204);
   expect(attempts.count).toBe(2);
+});
+
+test("an absent portable delete retries canonical host retirement", async () => {
+  const state = { present: true, deleteOptions: [] as unknown[] };
+  const app = appFor(serviceDeletingCanonicalThenFailingRetire(state));
+  const path =
+    `/apis/forms.takoform.com/v1alpha1/resources/ObjectBucket/assets?${FORM_QUERY}`;
+  const init = {
+    method: "DELETE",
+    headers: {
+      "Idempotency-Key": "delete-assets-retirement-1",
+      "If-Match": '"1"',
+    },
+  };
+
+  const first = await app.request(`http://host${path}`, init);
+  expect(first.status).toBe(409);
+
+  const second = await app.request(`http://host${path}`, init);
+  expect(second.status).toBe(204);
+  expect(second.headers.get("idempotency-key")).toBe(
+    "delete-assets-retirement-1",
+  );
+  expect(state.deleteOptions).toHaveLength(2);
+  expect(state.deleteOptions[1]).toEqual({
+    expectedManagedBy: PORTABLE_FORM_MANAGER,
+  });
+
+  const replay = await app.request(`http://host${path}`, init);
+  expect(replay.status).toBe(204);
+  expect(state.deleteOptions).toHaveLength(2);
 });
 
 test("an interrupted portable observe is retryable under the same Idempotency-Key", async () => {

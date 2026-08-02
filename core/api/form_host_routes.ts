@@ -857,14 +857,28 @@ export function registerPortableFormHostRoutes(
     const identity = formIdentityFromQuery(c, true);
     if (!identity.ok) return identity.response;
     // Deletion of one exact generation is idempotent: a resumed attempt either
-    // finds the row already gone and answers 204, or continues retiring a
-    // record left in Deleting. Without this, an interrupted delete strands its
-    // reservation and the operator cannot retry, because a provider derives
-    // the Idempotency-Key from the operation identity rather than the attempt.
+    // finds the row already gone and retries canonical host retirement, or
+    // continues retiring a record left in Deleting. Without this, an
+    // interrupted delete strands its reservation and the operator cannot retry,
+    // because a provider derives the Idempotency-Key from the operation
+    // identity rather than the attempt.
     const runDelete = async (): Promise<Response> => {
       const located = await exactStoredResource(c, options.service, true, true);
       if (!located.ok) return located.response;
-      if (!located.value) return c.body(null, 204);
+      if (!located.value) {
+        const kind = c.req.param("kind") as ResourceShapeKind;
+        const name = c.req.param("name")!;
+        const result = await options.service.delete(
+          space.value,
+          kind,
+          name,
+          auth.actor,
+          { expectedManagedBy: PORTABLE_FORM_MANAGER },
+        );
+        if (!result.ok) return serviceError(c, result.error);
+        c.header("idempotency-key", key.value);
+        return c.body(null, 204);
+      }
       const result = await options.service.delete(
         located.value.metadata.space,
         located.value.kind,
