@@ -22,6 +22,7 @@ import type { HostRuntimeMaterializationRequest } from "takosumi-contract";
 import type { ResourceShapePlan } from "./planner.ts";
 import type {
   ResourceShapeExecutionRecord,
+  ResourceShapePriorStateDescriptor,
   ResourceShapeStateAdoptionDescriptor,
 } from "./records.ts";
 
@@ -94,6 +95,8 @@ export interface AdapterApplyInput {
   };
   readonly environment: string;
   readonly stateGeneration: number;
+  /** Derived only from the canonical Resource execution row. */
+  readonly priorState?: ResourceShapePriorStateDescriptor;
   readonly stateAdoption?: ResourceShapeStateAdoptionDescriptor;
   readonly plan: ResourceShapePlan;
   /** The selected TargetPool entry the plan resolved to. */
@@ -223,6 +226,8 @@ export interface AdapterDeleteInput {
   readonly operationKey?: string;
   readonly environment: string;
   readonly stateGeneration: number;
+  /** Derived only from the canonical Resource execution row. */
+  readonly priorState?: ResourceShapePriorStateDescriptor;
   readonly stateAdoption?: ResourceShapeStateAdoptionDescriptor;
   /**
    * The same implementation plan used to create the Resource. OpenTofu-backed

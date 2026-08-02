@@ -46,6 +46,7 @@ import {
 } from "../../../../core/domains/deploy-control/capsule_lease.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
 import type { OpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
+import { CloudflareD1OpenTofuControlStore } from "../../../../worker/src/d1_opentofu_store.ts";
 import { SourcesService } from "../../../../core/domains/sources/mod.ts";
 import {
   CredentialBundle,
@@ -75,6 +76,7 @@ import {
   seedProviderConnections,
   type SeedCapsuleModelOptions,
 } from "../../../helpers/deploy-control/model_fixture.ts";
+import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
 
 const PLAN_DIGEST =
   "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -160,6 +162,7 @@ function recordingRunner(
     destroy: (job) => {
       destroyJobs.push(job);
       return Promise.resolve({
+        stateDigest: STATE_DIGEST,
         providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
       });
     },
@@ -4094,7 +4097,7 @@ test("operator lifecycle actions use operator authority instead of RunnerProfile
 });
 
 test("post-apply lifecycle Activity does not stay pending when ledger commit conflicts", async () => {
-  const inner = new InMemoryOpenTofuControlStore();
+  const inner = new CloudflareD1OpenTofuControlStore(new SqliteFakeD1());
   const runner = recordingRunner();
   await seedRunnableCapsuleModel(inner, {
     environment: "preview",
@@ -4116,7 +4119,16 @@ test("post-apply lifecycle Activity does not stay pending when ledger commit con
       return typeof value === "function" ? value.bind(target) : value;
     },
   }) as OpenTofuControlStore;
-  const controller = controllerWith(store, runner, {
+  let controller: OpenTofuController;
+  controller = controllerWith(store, runner, {
+    enqueueRun: async (dispatch) => {
+      if (dispatch.cause === "controller_retry") return;
+      if (dispatch.action === "plan") {
+        await controller.runQueuedPlan(dispatch.runId);
+      } else if (dispatch.action === "apply") {
+        await controller.runQueuedApply(dispatch.runId);
+      }
+    },
     activity: activityRecorderFor(store),
     releaseActivator: {
       activate: () => Promise.resolve({ status: "succeeded" }),
@@ -4129,7 +4141,12 @@ test("post-apply lifecycle Activity does not stay pending when ledger commit con
     expected: applyExpectedGuardFromPlanRun(planRun),
   });
 
-  expect(applyRun.status).toBe("failed");
+  expect(applyRun.status).toBe("queued");
+  expect(
+    applyRun.auditEvents.some(
+      (event) => event.type === "apply.artifact_ledger_retry_scheduled",
+    ),
+  ).toBe(true);
   const lifecycleActivities = (
     await inner.listActivityEvents("ws_test001")
   ).filter(
@@ -6147,34 +6164,49 @@ test("capsule apply records an Output and links it from the Run + Capsule", asyn
   expect(latest?.id).toEqual(snapshot?.id);
 });
 
-test("capsule apply: a failing ledger commit leaves NO torn state (all-or-nothing)", async () => {
+test("capsule apply: a D1 ledger-tail failure requeues the same ApplyRun without torn state", async () => {
   // Regression guard for the atomic apply-commit (spec §20 / §21 / §16). Every
   // successful-apply ledger write — StateVersion, Output,
   // and the guarded Capsule advance — is funneled through the single
   // `commitRunState` store method. If that method fails (a crash /
   // error mid-write), the controller must NOT have persisted ANY of those
-  // records: the run fails and the Capsule stays at its pre-apply
-  // generation. (The in-memory store cannot truly roll back without a
-  // transaction, so the controller's guarantee is that the WHOLE atomic unit is
-  // a single call which here throws before writing anything; the SQL/D1 backends
-  // additionally roll back / batch — see store_model_test.ts.)
-  const inner = new InMemoryOpenTofuControlStore();
+  // records: the same run is requeued and the Capsule stays at its pre-apply
+  // generation. The D1 backend performs the whole ledger tail as one atomic
+  // batch; this injected failure happens before that batch commits anything.
+  const inner = new CloudflareD1OpenTofuControlStore(new SqliteFakeD1());
   const runner = recordingRunner();
   await seedRunnableCapsuleModel(inner, { environment: "preview" });
-  // Wrap the store so the atomic commit explodes; everything else delegates.
+  // Fail the first atomic tail only. The runner artifact is already durable,
+  // so retry authority must stay on this exact ApplyRun.
+  let commitAttempts = 0;
   const store = new Proxy(inner, {
     get(target, prop, receiver) {
       if (prop === "commitRunState") {
-        return () =>
-          Promise.reject(
-            new Error("injected: ledger commit crashed mid-write"),
-          );
+        return (input: Parameters<OpenTofuControlStore["commitRunState"]>[0]) => {
+          commitAttempts += 1;
+          if (commitAttempts === 1) {
+            return Promise.reject(
+              new Error("injected: ledger commit crashed mid-write"),
+            );
+          }
+          return target.commitRunState(input);
+        };
       }
       const value = Reflect.get(target, prop, receiver);
       return typeof value === "function" ? value.bind(target) : value;
     },
   }) as OpenTofuControlStore;
-  const controller = controllerWith(store, runner);
+  let controller: OpenTofuController;
+  controller = controllerWith(store, runner, {
+    enqueueRun: async (dispatch) => {
+      if (dispatch.cause === "controller_retry") return;
+      if (dispatch.action === "plan") {
+        await controller.runQueuedPlan(dispatch.runId);
+      } else if (dispatch.action === "apply") {
+        await controller.runQueuedApply(dispatch.runId);
+      }
+    },
+  });
 
   const { planRun } = await controller.createCapsulePlan("cap_fixture1");
   expect(planRun.status).toBe("succeeded");
@@ -6184,8 +6216,12 @@ test("capsule apply: a failing ledger commit leaves NO torn state (all-or-nothin
     expected: applyExpectedGuardFromPlanRun(planRun),
   });
 
-  // The apply surfaces the failure rather than reporting a torn success.
-  expect(applyRun.status).toBe("failed");
+  expect(applyRun.status).toBe("queued");
+  expect(
+    applyRun.auditEvents.some(
+      (event) => event.type === "apply.artifact_ledger_retry_scheduled",
+    ),
+  ).toBe(true);
 
   // The ledger is intact: no new-generation StateVersion, no Output, and the
   // Capsule is NOT advanced (still pending at gen 0 with no current pointers).
@@ -6198,6 +6234,103 @@ test("capsule apply: a failing ledger commit leaves NO torn state (all-or-nothin
   expect(capsule?.currentStateGeneration).toBe(0);
   expect(capsule?.currentStateVersionId).toBeUndefined();
   expect(capsule?.currentOutputId).toBeUndefined();
+
+  const retried = await controller.runQueuedApply(applyRun.id);
+  expect(retried.applyRun.status).toBe("succeeded");
+  expect(retried.applyRun.id).toBe(applyRun.id);
+  expect(commitAttempts).toBe(2);
+  expect(runner.applyJobs).toHaveLength(2);
+  expect(runner.applyJobs.map((job) => job.applyRun.id)).toEqual([
+    applyRun.id,
+    applyRun.id,
+  ]);
+  expect(
+    (await inner.getCapsule("cap_fixture1"))?.currentStateGeneration,
+  ).toBe(1);
+});
+
+test("capsule destroy: a D1 ledger-tail failure requeues the same ApplyRun without destroying twice", async () => {
+  const inner = new CloudflareD1OpenTofuControlStore(new SqliteFakeD1());
+  const runner = recordingRunner();
+  await seedRunnableCapsuleModel(inner, { environment: "preview" });
+  let failNextLedgerTail = false;
+  let injectedFailures = 0;
+  const store = new Proxy(inner, {
+    get(target, prop, receiver) {
+      if (prop === "commitRunState") {
+        return (input: Parameters<OpenTofuControlStore["commitRunState"]>[0]) => {
+          if (failNextLedgerTail) {
+            failNextLedgerTail = false;
+            injectedFailures += 1;
+            return Promise.reject(
+              new Error("injected: destroy ledger commit response was lost"),
+            );
+          }
+          return target.commitRunState(input);
+        };
+      }
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  }) as OpenTofuControlStore;
+  let controller: OpenTofuController;
+  controller = controllerWith(store, runner, {
+    enqueueRun: async (dispatch) => {
+      if (dispatch.cause === "controller_retry") return;
+      if (dispatch.action === "plan") {
+        await controller.runQueuedPlan(dispatch.runId);
+      } else if (dispatch.action === "apply") {
+        await controller.runQueuedApply(dispatch.runId);
+      }
+    },
+  });
+
+  const { planRun: createPlan } =
+    await controller.createCapsulePlan("cap_fixture1");
+  const created = await controller.createApplyRun({
+    planRunId: createPlan.id,
+    expected: applyExpectedGuardFromPlanRun(createPlan),
+  });
+  expect(created.applyRun.status).toBe("succeeded");
+  expect(
+    (await inner.getCapsule("cap_fixture1"))?.currentStateGeneration,
+  ).toBe(1);
+
+  const { planRun: destroyPlan } =
+    await controller.createCapsuleDestroyPlan("cap_fixture1");
+  await controller.approveRun(destroyPlan.id);
+  failNextLedgerTail = true;
+  const { applyRun } = await controller.createApplyRun({
+    planRunId: destroyPlan.id,
+    expected: applyExpectedGuardFromPlanRun(destroyPlan),
+  });
+
+  expect(applyRun.status).toBe("queued");
+  expect(
+    applyRun.auditEvents.some(
+      (event) => event.type === "destroy.artifact_ledger_retry_scheduled",
+    ),
+  ).toBe(true);
+  expect(injectedFailures).toBe(1);
+  expect(
+    (await inner.getLatestStateVersion("cap_fixture1", "preview"))
+      ?.generation,
+  ).toBe(1);
+  expect((await inner.getCapsule("cap_fixture1"))?.status).toBe("active");
+
+  const retried = await controller.runQueuedApply(applyRun.id);
+  expect(retried.applyRun.status).toBe("succeeded");
+  expect(retried.applyRun.id).toBe(applyRun.id);
+  expect(runner.destroyJobs).toHaveLength(2);
+  expect(runner.destroyJobs.map((job) => job.applyRun.id)).toEqual([
+    applyRun.id,
+    applyRun.id,
+  ]);
+  expect(
+    (await inner.getLatestStateVersion("cap_fixture1", "preview"))
+      ?.generation,
+  ).toBe(2);
+  expect((await inner.getCapsule("cap_fixture1"))?.status).toBe("destroyed");
 });
 
 test("generic Capsule apply projects InstallConfig outputAllowlist outputs", async () => {
@@ -6440,21 +6573,32 @@ test("a second capsule plan reads the bumped generation and its apply moves to g
   const { store, runner, controller } = await seededController();
 
   const first = await controller.createCapsulePlan("cap_fixture1");
-  await controller.createApplyRun({
+  const firstApplied = await controller.createApplyRun({
     planRunId: first.planRun.id,
     expected: applyExpectedGuardFromPlanRun(first.planRun),
   });
+  const prior = await store.getStateVersion(
+    firstApplied.applyRun.stateVersionId!,
+  );
+  const priorDescriptor = {
+    generation: prior!.generation,
+    stateRef: prior!.stateRef,
+    digest: prior!.digest,
+    createdByRunId: prior!.createdByRunId,
+  };
 
   // Second plan sees the capsule at generation 1 now.
   const second = await controller.createCapsulePlan("cap_fixture1");
   expect(second.planRun.baseStateGeneration).toEqual(1);
   expect(runner.planJobs[1]!.stateScope?.generation).toEqual(1);
+  expect(runner.planJobs[1]!.stateScope?.priorState).toEqual(priorDescriptor);
 
   await controller.createApplyRun({
     planRunId: second.planRun.id,
     expected: applyExpectedGuardFromPlanRun(second.planRun),
   });
   expect(runner.applyJobs[1]!.stateScope?.generation).toEqual(2);
+  expect(runner.applyJobs[1]!.stateScope?.priorState).toEqual(priorDescriptor);
   const latest = await store.getLatestStateVersion("cap_fixture1", "preview");
   expect(latest?.generation).toEqual(2);
 });
@@ -6514,6 +6658,13 @@ test("capsule destroy-plan apply tears down state at base+1 after approval and m
     expected: applyExpectedGuardFromPlanRun(create.planRun),
   });
   const createdStateVersionId = created.applyRun.stateVersionId;
+  const createdState = await store.getStateVersion(createdStateVersionId!);
+  const priorDescriptor = {
+    generation: createdState!.generation,
+    stateRef: createdState!.stateRef,
+    digest: createdState!.digest,
+    createdByRunId: createdState!.createdByRunId,
+  };
 
   // Destroy-plan lands waiting_approval; approve, then apply.
   const destroy = await controller.createCapsuleDestroyPlan("cap_fixture1");
@@ -6531,6 +6682,9 @@ test("capsule destroy-plan apply tears down state at base+1 after approval and m
   expect(runner.destroyJobs).toHaveLength(1);
   // Teardown persists at base+1 (= 2).
   expect(runner.destroyJobs[0]!.stateScope?.generation).toEqual(2);
+  expect(runner.destroyJobs[0]!.stateScope?.priorState).toEqual(
+    priorDescriptor,
+  );
   const destroyProviderEvent = applyRun.auditEvents.find(
     (event) => event.type === "destroy.provider_installation_evaluated",
   );

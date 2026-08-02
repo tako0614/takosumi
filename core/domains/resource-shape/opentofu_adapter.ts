@@ -68,6 +68,7 @@ import type {
 import type { ResourceShapePublicOutput } from "./planner.ts";
 import type {
   ResourceShapeExecutionRecord,
+  ResourceShapePriorStateDescriptor,
   ResourceShapeStateAdoptionDescriptor,
 } from "./records.ts";
 
@@ -99,6 +100,7 @@ export interface OpentofuRunRequest {
   readonly resourceId: string;
   readonly environment: string;
   readonly stateGeneration: number;
+  readonly priorState?: ResourceShapePriorStateDescriptor;
   readonly stateAdoption?: ResourceShapeStateAdoptionDescriptor;
   /** Operator-selected registry key from the Target descriptor. */
   readonly moduleTemplate: string;
@@ -130,6 +132,7 @@ export interface OpentofuDestroyRequest {
   readonly resourceId: string;
   readonly environment: string;
   readonly stateGeneration: number;
+  readonly priorState?: ResourceShapePriorStateDescriptor;
   readonly stateAdoption?: ResourceShapeStateAdoptionDescriptor;
   /** Re-generated implementation plan. Present for OpenTofu-backed shapes. */
   readonly moduleTemplate?: string;
@@ -334,6 +337,7 @@ export class OpentofuResourceShapeAdapter implements ResourceAdapter {
       resourceId: input.resourceId,
       environment: input.environment,
       stateGeneration: input.stateGeneration,
+      ...(input.priorState ? { priorState: input.priorState } : {}),
       ...(input.stateAdoption ? { stateAdoption: input.stateAdoption } : {}),
       ...(input.plan
         ? {
@@ -358,6 +362,7 @@ export class OpentofuResourceShapeAdapter implements ResourceAdapter {
       resourceId: input.resourceId,
       environment: input.environment,
       stateGeneration: input.stateGeneration,
+      ...(input.priorState ? { priorState: input.priorState } : {}),
       ...(input.stateAdoption ? { stateAdoption: input.stateAdoption } : {}),
       moduleTemplate: requirePlanModuleTemplate(input.plan),
       operatorModule: requirePlanOperatorModule(input.plan),
@@ -637,6 +642,10 @@ export class ControllerOpentofuRunPort implements OpentofuRunPort {
             resourceId: request.resourceId,
             environment: request.environment,
             stateGeneration: request.stateGeneration,
+            ...(request.priorState ? { priorState: request.priorState } : {}),
+            ...(request.stateAdoption
+              ? { stateAdoption: request.stateAdoption }
+              : {}),
             moduleTemplate: request.moduleTemplate,
             operatorModule: request.operatorModule,
             inputs: request.inputs,
@@ -770,6 +779,7 @@ export class ControllerOpentofuRunPort implements OpentofuRunPort {
     request: OpentofuRunRequest,
     importRequest?: OpentofuImportRequest,
   ): GenericRootDispatchContext {
+    assertCanonicalPriorState(request);
     const outputAllowlist = outputAllowlistFromPublicOutputs(
       request.publicOutputs,
     );
@@ -809,6 +819,7 @@ export class ControllerOpentofuRunPort implements OpentofuRunPort {
       ...(request.stateAdoption
         ? { stateAdoption: request.stateAdoption }
         : {}),
+      ...(request.priorState ? { priorState: request.priorState } : {}),
     };
   }
 
@@ -989,6 +1000,37 @@ function operationForStateGeneration(
   stateGeneration: number,
 ): "create" | "update" {
   return stateGeneration === 0 ? "create" : "update";
+}
+
+function assertCanonicalPriorState(
+  request: OpentofuRunRequest | OpentofuDestroyRequest,
+): void {
+  if (request.priorState && request.stateAdoption) {
+    throw new Error(
+      `Resource ${request.resourceId} cannot carry both prior state and state adoption`,
+    );
+  }
+  if (request.stateAdoption) return;
+  if (request.stateGeneration === 0) {
+    if (request.priorState) {
+      throw new Error(
+        `Resource ${request.resourceId} generation zero cannot carry prior state`,
+      );
+    }
+    return;
+  }
+  const prior = request.priorState;
+  if (
+    !prior ||
+    prior.generation !== request.stateGeneration ||
+    !prior.stateRef.trim() ||
+    !prior.digest.trim() ||
+    !prior.createdByRunId.trim()
+  ) {
+    throw new Error(
+      `Resource ${request.resourceId} generation ${request.stateGeneration} has no exact canonical prior state descriptor`,
+    );
+  }
 }
 
 async function operatorModuleSource(

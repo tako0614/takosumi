@@ -322,7 +322,7 @@ export interface R2Bucket {
     key: string,
     value: ReadableStream | ArrayBuffer | ArrayBufferView | string | null,
     options?: R2PutOptions,
-  ): Promise<R2Object>;
+  ): Promise<R2Object | null>;
   get(key: string): Promise<R2ObjectBody | null>;
   head(key: string): Promise<R2Object | null>;
   list(options?: R2ListOptions): Promise<R2Objects>;
@@ -334,6 +334,13 @@ export interface R2PutOptions {
     readonly contentType?: string;
   };
   readonly customMetadata?: Record<string, string>;
+  /** Cloudflare R2 conditional write fence. A failed condition returns null. */
+  readonly onlyIf?: {
+    readonly etagMatches?: string;
+    readonly etagDoesNotMatch?: string;
+    readonly uploadedBefore?: Date;
+    readonly uploadedAfter?: Date;
+  };
 }
 
 export interface R2ListOptions {

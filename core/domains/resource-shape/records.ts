@@ -108,6 +108,14 @@ export interface ResourceShapeExecutionRecord {
   readonly updatedAt: IsoTimestamp;
 }
 
+/** Exact canonical Resource execution row projected into internal runner input. */
+export interface ResourceShapePriorStateDescriptor {
+  readonly generation: number;
+  readonly stateRef: string;
+  readonly digest: string;
+  readonly createdByRunId: string;
+}
+
 export interface ResourceShapeStateAdoptionDescriptor {
   readonly kind: "legacy_backing_capsule_state";
   readonly sourceWorkspaceId: string;

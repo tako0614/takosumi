@@ -30,6 +30,7 @@ import {
   FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE,
   FIXTURE_CLOUDFLARE_PROVIDER,
   fakeProviderVault,
+  fixtureStateCommit,
   seedCapsuleModel,
   seedProviderConnections,
 } from "../../../helpers/deploy-control/model_fixture.ts";
@@ -64,7 +65,7 @@ function succeedingRunner() {
         requiredProviders: [FIXTURE_CLOUDFLARE_PROVIDER],
         providerInstallation: [FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE],
       }),
-    apply: () => Promise.resolve({}),
+    apply: () => Promise.resolve(fixtureStateCommit()),
   };
 }
 

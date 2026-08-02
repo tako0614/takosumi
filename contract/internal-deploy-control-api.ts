@@ -574,6 +574,14 @@ export interface DispatchGeneratedRoot {
   readonly files: Readonly<Record<string, string>>;
 }
 
+/** Exact canonical ledger descriptor for the state restored by a dispatch. */
+export interface DispatchPriorState {
+  readonly generation: number;
+  readonly stateRef: string;
+  readonly digest: string;
+  readonly createdByRunId: string;
+}
+
 /**
  * Subject-scoped state location threaded onto the run dispatch payload.
  * The OpenTofu runner DO consumes `request.stateScope` to persist encrypted
@@ -592,6 +600,12 @@ export interface DispatchStateScope {
   readonly generation: number;
   /** Host-allocated opaque reference used for restore or persistence. */
   readonly stateRef: string;
+  /**
+   * Exact prior StateVersion or Resource execution descriptor. R2 pointers and
+   * prefix listing are caches/inventory only and must never replace this row.
+   * Absent only for generation zero or an explicit one-shot state adoption.
+   */
+  readonly priorState?: DispatchPriorState;
 }
 
 /**

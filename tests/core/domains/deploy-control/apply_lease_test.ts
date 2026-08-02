@@ -9,7 +9,10 @@ import {
 } from "../../../../core/domains/deploy-control/capsule_lease.ts";
 import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
-import { seedCapsuleModel } from "../../../helpers/deploy-control/model_fixture.ts";
+import {
+  fixtureStateCommit,
+  seedCapsuleModel,
+} from "../../../helpers/deploy-control/model_fixture.ts";
 import type { ApplyRun, PlanRun } from "@takosumi/internal/deploy-control-api";
 
 const PLAN_DIGEST =
@@ -203,7 +206,7 @@ test("write runs for DIFFERENT environments are not blocked by each other's leas
   const controller = controllerWith(store, coordination, {
     apply: () => {
       applied = true;
-      return Promise.resolve({});
+      return Promise.resolve(fixtureStateCommit());
     },
   });
 
@@ -221,7 +224,7 @@ test("the lease is released after a successful apply so the next run can acquire
   });
   const coordination = new InMemoryCapsuleCoordination();
   const controller = controllerWith(store, coordination, {
-    apply: () => Promise.resolve({}),
+    apply: () => Promise.resolve(fixtureStateCommit()),
   });
 
   const response = await controller.runQueuedApply("apply_seq");

@@ -16,6 +16,7 @@ import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-co
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
 import {
   fakeProviderVault,
+  fixtureStateCommit,
   seedCapsuleModel,
 } from "../../../helpers/deploy-control/model_fixture.ts";
 
@@ -800,7 +801,7 @@ test("runner diagnostics are redacted before PlanRun and ApplyRun persistence", 
           ],
         }),
       apply: () =>
-        Promise.resolve({
+        Promise.resolve(fixtureStateCommit({
           diagnostics: [
             {
               severity: "warning",
@@ -808,7 +809,7 @@ test("runner diagnostics are redacted before PlanRun and ApplyRun persistence", 
               detail: "client_secret=cf-apply-token",
             },
           ],
-        }),
+        })),
     },
   });
 
@@ -2455,10 +2456,10 @@ function fakeRunner(
         summary: { add: 1, change: 0, destroy: 0 },
       }),
     apply: () =>
-      Promise.resolve({
+      Promise.resolve(fixtureStateCommit({
         outputs,
-      }),
-    destroy: () => Promise.resolve({}),
+      })),
+    destroy: () => Promise.resolve(fixtureStateCommit()),
   };
 }
 

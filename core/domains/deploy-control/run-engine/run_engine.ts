@@ -329,6 +329,23 @@ class PlanAlreadyAppliedReplay extends Error {
   }
 }
 
+/**
+ * The runner has durably persisted the target artifact, but the authoritative
+ * D1/Postgres ledger tail did not return a commit result. The only safe retry
+ * is the same ApplyRun: the runner can adopt its exact target generation.
+ */
+class ArtifactLedgerTailAmbiguousError extends Error {
+  readonly cause: unknown;
+
+  constructor(runId: string, cause: unknown) {
+    super(
+      `artifact_ledger_tail_ambiguous: apply run ${runId} persisted its target artifact before the ledger commit failed`,
+    );
+    this.name = "ArtifactLedgerTailAmbiguousError";
+    this.cause = cause;
+  }
+}
+
 class RunExecutionLeaseLostError extends OpenTofuControllerError {
   constructor(kind: "plan" | "apply" | "restore", runId: string) {
     super(
@@ -935,6 +952,8 @@ export interface RunEngineDependencies {
   readonly newId: (prefix: string) => string;
   readonly now: () => number;
   readonly enqueueRun: EnqueueRun;
+  /** Whether ledger-tail retries can be handed to an external queue owner. */
+  readonly enqueueArtifactLedgerRetry: boolean;
   readonly capsuleCoordination?: CapsuleCoordination;
   readonly runRenewalIntervalMs: number;
   readonly activity: ActivityRecorder;
@@ -967,6 +986,7 @@ export class RunEngine {
   readonly #newId: (prefix: string) => string;
   readonly #now: () => number;
   readonly #enqueueRun: EnqueueRun;
+  readonly #enqueueArtifactLedgerRetry: boolean;
   readonly #capsuleCoordination?: CapsuleCoordination;
   readonly #runRenewalIntervalMs: number;
   readonly #activity: ActivityRecorder;
@@ -1007,6 +1027,7 @@ export class RunEngine {
     this.#newId = deps.newId;
     this.#now = deps.now;
     this.#enqueueRun = deps.enqueueRun;
+    this.#enqueueArtifactLedgerRetry = deps.enqueueArtifactLedgerRetry;
     this.#capsuleCoordination = deps.capsuleCoordination;
     this.#runRenewalIntervalMs = deps.runRenewalIntervalMs;
     this.#activity = deps.activity;
@@ -1480,6 +1501,7 @@ export class RunEngine {
     const outputAllowlist = genericRootDispatch?.outputAllowlist;
     const sourceBuild = genericRootDispatch?.sourceBuild;
     const stateAdoption = genericRootDispatch?.stateAdoption;
+    const priorState = genericRootDispatch?.priorState;
     const lifecycleActions =
       internal.lifecycleActions ?? genericRootDispatch?.lifecycleActions;
     if (
@@ -1490,6 +1512,7 @@ export class RunEngine {
       outputAllowlist !== undefined ||
       sourceBuild !== undefined ||
       stateAdoption !== undefined ||
+      priorState !== undefined ||
       lifecycleActions !== undefined
     ) {
       // A sensitive dependency-injected value flows into `variables` and may
@@ -1509,6 +1532,7 @@ export class RunEngine {
           ...(outputAllowlist ? { outputAllowlist } : {}),
           ...(sourceBuild ? { sourceBuild } : {}),
           ...(stateAdoption ? { stateAdoption } : {}),
+          ...(priorState ? { priorState } : {}),
           ...(lifecycleActions ? { lifecycleActions } : {}),
         },
         sealSidecar,
@@ -3931,6 +3955,9 @@ export class RunEngine {
       ...(inputs.stateAdoption
         ? { stateAdoption: inputs.stateAdoption as unknown as JsonValue }
         : {}),
+      ...(inputs.priorState
+        ? { priorState: inputs.priorState as unknown as JsonValue }
+        : {}),
     };
     const sealed = await this.#dependencyValueSealer.seal(payload);
     // Cleartext sealable fields are dropped; only `planRunId` + `sealed` persist.
@@ -3982,6 +4009,8 @@ export class RunEngine {
       InstallConfig["lifecycleActions"] | undefined;
     const stateAdoption = payload.stateAdoption as unknown as
       PlanRunInputs["stateAdoption"] | undefined;
+    const priorState = payload.priorState as unknown as
+      PlanRunInputs["priorState"] | undefined;
     return {
       planRunId,
       variables,
@@ -3992,6 +4021,7 @@ export class RunEngine {
       ...(sourceBuild ? { sourceBuild } : {}),
       ...(lifecycleActions ? { lifecycleActions } : {}),
       ...(stateAdoption ? { stateAdoption } : {}),
+      ...(priorState ? { priorState } : {}),
     };
   }
 
@@ -4041,6 +4071,12 @@ export class RunEngine {
   }): StateVersion | undefined {
     const scope = input.envDispatch.stateScope;
     if (!scope) return undefined;
+    if (!input.stateDigest?.trim()) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `apply run ${input.runId} completed without a durable state digest`,
+      );
+    }
     const workspaceId = scope.workspaceId;
     const capsuleId = scope.subject?.kind === "capsule" ? scope.subject.id : "";
     return {
@@ -4050,7 +4086,7 @@ export class RunEngine {
       environment: scope.environment,
       generation: input.generation,
       stateRef: scope.stateRef,
-      digest: input.stateDigest ?? "",
+      digest: input.stateDigest,
       createdByRunId: input.runId,
       createdAt: new Date(input.now).toISOString(),
     };
@@ -5421,6 +5457,83 @@ export class RunEngine {
     return result.run as ApplyRun;
   }
 
+  async #requeueApplyRunAfterArtifactLedgerTailError(
+    running: ApplyRun,
+    leaseToken: string | undefined,
+    profile: RunnerProfile,
+    startedAt: number,
+    operationKind: "apply" | "destroy_apply",
+  ): Promise<ApplyRun | undefined> {
+    const now = this.#now();
+    const queued: ApplyRun = {
+      ...running,
+      status: "queued",
+      stateLock: stateLockEvidence(
+        profile.stateBackend,
+        startedAt,
+        now,
+        "recorded",
+      ),
+      heartbeatAt: undefined,
+      diagnostics: undefined,
+      auditEvents: [
+        ...running.auditEvents,
+        auditEvent(
+          running.id,
+          operationKind === "destroy_apply"
+            ? "destroy.artifact_ledger_retry_scheduled"
+            : "apply.artifact_ledger_retry_scheduled",
+          now,
+          { reason: "artifact_ledger_tail_ambiguous" },
+        ),
+      ],
+      updatedAt: now,
+      finishedAt: undefined,
+    };
+    const result = await this.#store.transitionRun({
+      id: running.id,
+      kind: "apply",
+      expectFrom: ["running"],
+      ...(leaseToken ? { expectLeaseToken: leaseToken } : {}),
+      run: queued,
+      clearLeaseToken: true,
+      clearHeartbeat: true,
+    });
+    if (!result.won) {
+      return (result.run as ApplyRun | undefined) ??
+        (await this.#store.getApplyRun(running.id));
+    }
+    const requeued = result.run as ApplyRun;
+    await this.#recordDeployOperationMetric({
+      run: requeued,
+      operationKind,
+      status: "queued",
+      startedAt,
+      finishedAt: now,
+      recordApplyDuration: true,
+    });
+    await this.#recordActivity({
+      workspaceId: requeued.workspaceId,
+      action: "run.artifact_ledger_retry_scheduled",
+      targetType: "run",
+      targetId: requeued.id,
+      runId: requeued.id,
+      metadata: {
+        phase: operationKind,
+        operation: requeued.operation,
+        reason: "artifact_ledger_tail_ambiguous",
+        ...(requeued.capsuleId ? { capsuleId: requeued.capsuleId } : {}),
+      },
+    });
+    // An inline dispatcher would recursively wait on the execution lease still
+    // held by this attempt. External queue owners can accept the retry now;
+    // inline callers observe `queued` and explicitly drive it after return.
+    if (this.#enqueueArtifactLedgerRetry) {
+      await this.#enqueueRequeuedRun("apply", requeued);
+    }
+    return requeued;
+  }
+
   async #enqueueRequeuedRun(
     action: "plan" | "apply",
     run: PlanRun | ApplyRun,
@@ -5458,6 +5571,7 @@ export class RunEngine {
         running,
         running.baseStateGeneration ?? 0,
         dispatch.stateAdoption,
+        dispatch.priorState,
       );
       const planPolicy = await this.#policyForPlanRun(running);
       const providerInstallationPolicy =
@@ -6320,6 +6434,31 @@ export class RunEngine {
           ...(currentCapsule ? { capsule: currentCapsule } : {}),
         };
       }
+      if (error instanceof ArtifactLedgerTailAmbiguousError) {
+        const operationKind =
+          planRun.operation === "destroy" ? "destroy_apply" : "apply";
+        const recovered =
+          await this.#requeueApplyRunAfterArtifactLedgerTailError(
+            runningForFailure,
+            leaseToken,
+            profile,
+            startedAt,
+            operationKind,
+          );
+        if (recovered) {
+          const finalized = isTerminalStatus(recovered.status)
+            ? await this.#tryFinalizeApplyBilling(planRun, recovered)
+            : recovered;
+          const currentCapsule = recovered.capsuleId
+            ? await this.#store.getCapsule(recovered.capsuleId)
+            : undefined;
+          return {
+            applyRun: finalized,
+            ...(currentCapsule ? { capsule: currentCapsule } : {}),
+          };
+        }
+        throw error;
+      }
       if (isRunnerInfrastructureRequeueError(error)) {
         // Destroy owns its retry transition inside #executeDestroyApply. Do not
         // let that structured signal fall through this outer apply catch and
@@ -6448,6 +6587,12 @@ export class RunEngine {
         "Resource apply completed without a durable Resource state scope",
       );
     }
+    if (!input.result.stateDigest?.trim()) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `Resource apply ${input.running.id} completed without a durable state digest`,
+      );
+    }
     const outputs = this.#projectApplyOutputs(
       input.planRun,
       input.result,
@@ -6461,9 +6606,7 @@ export class RunEngine {
           resourceId: resource.resourceId,
           stateGeneration: input.persistGeneration,
           stateRef: scope.stateRef,
-          ...(input.result.stateDigest
-            ? { stateDigest: input.result.stateDigest }
-            : {}),
+          stateDigest: input.result.stateDigest,
           ...(input.envDispatch.rawOutputRef
             ? { rawOutputRef: input.envDispatch.rawOutputRef }
             : {}),
@@ -6513,11 +6656,18 @@ export class RunEngine {
       appliedApplyRunId: input.running.id,
       updatedAt: input.now,
     };
-    const committed = await this.#store.commitResourceRun({
-      applyRunTerminal: completed,
-      planRunApplied: appliedPlan,
-      applyRunLeaseToken: input.leaseToken,
-    });
+    let committed: Awaited<
+      ReturnType<OpenTofuControlStore["commitResourceRun"]>
+    >;
+    try {
+      committed = await this.#store.commitResourceRun({
+        applyRunTerminal: completed,
+        planRunApplied: appliedPlan,
+        applyRunLeaseToken: input.leaseToken,
+      });
+    } catch (error) {
+      throw new ArtifactLedgerTailAmbiguousError(input.running.id, error);
+    }
     if (committed.applyRunLeaseLost) {
       return { applyRun: (await this.getApplyRun(input.running.id)).applyRun };
     }
@@ -6677,6 +6827,7 @@ export class RunEngine {
       planRun,
       persistGeneration,
       dispatch.stateAdoption,
+      dispatch.priorState,
     );
     const rawOutputRef = await this.#allocateRawOutputRef(
       running,
@@ -6822,29 +6973,40 @@ export class RunEngine {
     readonly now: number;
   }): Promise<Capsule | "lease_lost" | undefined> {
     const { planRun, capsule, stateVersion, output, now } = input;
-    const committed = await this.#store.commitRunState({
-      stateVersion,
-      output,
-      capsulePatch: {
-        id: capsule.id,
-        patch: {
-          currentStateVersionId: stateVersion.id,
-          status: input.capsuleStatus,
-          updatedAt: new Date(now).toISOString(),
-          currentStateGeneration: input.nextStateGeneration,
-          currentOutputId: output.id,
+    let committed: Awaited<
+      ReturnType<OpenTofuControlStore["commitRunState"]>
+    >;
+    try {
+      committed = await this.#store.commitRunState({
+        stateVersion,
+        output,
+        capsulePatch: {
+          id: capsule.id,
+          patch: {
+            currentStateVersionId: stateVersion.id,
+            status: input.capsuleStatus,
+            updatedAt: new Date(now).toISOString(),
+            currentStateGeneration: input.nextStateGeneration,
+            currentOutputId: output.id,
+          },
+          guard: {
+            currentStateVersionId:
+              planRun.capsuleCurrentStateVersionId ?? undefined,
+            status: input.plannedCapsule?.status,
+          },
         },
-        guard: {
-          currentStateVersionId:
-            planRun.capsuleCurrentStateVersionId ?? undefined,
-          status: input.plannedCapsule?.status,
-        },
-      },
-      // Commit-tail fold (S2): terminal ApplyRun + applied PlanRun in the unit.
-      applyRunTerminal: input.applyRunTerminal,
-      planRunApplied: input.planRunApplied,
-      applyRunLeaseToken: input.applyRunLeaseToken,
-    });
+        // Commit-tail fold (S2): terminal ApplyRun + applied PlanRun in the unit.
+        applyRunTerminal: input.applyRunTerminal,
+        planRunApplied: input.planRunApplied,
+        applyRunLeaseToken: input.applyRunLeaseToken,
+      });
+    } catch (error) {
+      if (error instanceof CapsuleStateVersionGuardConflict) throw error;
+      throw new ArtifactLedgerTailAmbiguousError(
+        input.applyRunTerminal.id,
+        error,
+      );
+    }
     if (committed.applyRunLeaseLost) return "lease_lost";
     // The atomic commit above is the terminal-state authority. Notify before
     // billing/activity side effects so Interface safety observes the durable
@@ -7521,6 +7683,7 @@ export class RunEngine {
       planRun,
       persistGeneration,
       dispatch.stateAdoption,
+      dispatch.priorState,
     );
     const planPolicy = await this.#policyForPlanRun(planRun);
     const providerInstallationPolicy =
@@ -7658,7 +7821,7 @@ export class RunEngine {
       const stateVersion = this.#buildStateVersion({
         envDispatch,
         generation: persistGeneration,
-        stateDigest: undefined,
+        stateDigest: result?.stateDigest,
         runId: running.id,
         now,
       });
@@ -7728,13 +7891,21 @@ export class RunEngine {
         appliedApplyRunId: running.id,
         updatedAt: now,
       };
-      const committed = await this.#store.commitRunState({
-        stateVersion,
-        capsulePatch: destroyPatch,
-        applyRunTerminal: completed,
-        planRunApplied: appliedPlan,
-        applyRunLeaseToken: leaseToken,
-      });
+      let committed: Awaited<
+        ReturnType<OpenTofuControlStore["commitRunState"]>
+      >;
+      try {
+        committed = await this.#store.commitRunState({
+          stateVersion,
+          capsulePatch: destroyPatch,
+          applyRunTerminal: completed,
+          planRunApplied: appliedPlan,
+          applyRunLeaseToken: leaseToken,
+        });
+      } catch (error) {
+        if (error instanceof CapsuleStateVersionGuardConflict) throw error;
+        throw new ArtifactLedgerTailAmbiguousError(running.id, error);
+      }
       if (committed.applyRunLeaseLost) {
         return { applyRun: (await this.getApplyRun(running.id)).applyRun };
       }
@@ -7800,6 +7971,27 @@ export class RunEngine {
           applyRun: finalized,
           capsule: publicCapsule(currentCapsule ?? capsule),
         };
+      }
+      if (error instanceof ArtifactLedgerTailAmbiguousError) {
+        const recovered =
+          await this.#requeueApplyRunAfterArtifactLedgerTailError(
+            effectiveRunning,
+            leaseToken,
+            profile,
+            startedAt,
+            "destroy_apply",
+          );
+        if (recovered) {
+          const finalized = isTerminalStatus(recovered.status)
+            ? await this.#tryFinalizeApplyBilling(planRun, recovered)
+            : recovered;
+          const currentCapsule = await this.#store.getCapsule(capsule.id);
+          return {
+            applyRun: finalized,
+            capsule: publicCapsule(currentCapsule ?? capsule),
+          };
+        }
+        throw error;
       }
       if (error instanceof CapsuleStateVersionGuardConflict) {
         await this.#billing.releaseApplyBilling(planRun);
@@ -7923,6 +8115,7 @@ export class RunEngine {
       planRun,
       persistGeneration,
       dispatch.stateAdoption,
+      dispatch.priorState,
     );
     const scope = envDispatch.stateScope;
     if (!scope || scope.subject?.kind !== "resource") {
@@ -7976,6 +8169,12 @@ export class RunEngine {
         ),
     );
     const now = this.#now();
+    if (!result.stateDigest?.trim()) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `Resource destroy ${running.id} completed without a durable state digest`,
+      );
+    }
     const diagnostics = redactRunDiagnostics(result.diagnostics);
     const completed = this.#withPendingApplyBillingCapture(
       {
@@ -7984,6 +8183,7 @@ export class RunEngine {
           resourceId: resource.resourceId,
           stateGeneration: persistGeneration,
           stateRef: scope.stateRef,
+          stateDigest: result.stateDigest,
           outputs: {},
         },
         status: "succeeded",
@@ -8018,11 +8218,18 @@ export class RunEngine {
       appliedApplyRunId: running.id,
       updatedAt: now,
     };
-    const committed = await this.#store.commitResourceRun({
-      applyRunTerminal: completed,
-      planRunApplied: appliedPlan,
-      applyRunLeaseToken: input.leaseToken,
-    });
+    let committed: Awaited<
+      ReturnType<OpenTofuControlStore["commitResourceRun"]>
+    >;
+    try {
+      committed = await this.#store.commitResourceRun({
+        applyRunTerminal: completed,
+        planRunApplied: appliedPlan,
+        applyRunLeaseToken: input.leaseToken,
+      });
+    } catch (error) {
+      throw new ArtifactLedgerTailAmbiguousError(running.id, error);
+    }
     if (committed.applyRunLeaseLost) {
       return { applyRun: (await this.getApplyRun(running.id)).applyRun };
     }

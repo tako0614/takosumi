@@ -16,6 +16,7 @@ import type {
   ApplyRun,
   ProviderConnection,
   DispatchStateAdoption,
+  DispatchPriorState,
   DispatchGeneratedRoot,
   InstallConfig,
   Capsule,
@@ -146,6 +147,8 @@ export interface PlanRunInputs {
   };
   /** Confirmed one-shot Resource state adoption; never part of a public Run. */
   readonly stateAdoption?: DispatchStateAdoption;
+  /** Exact canonical Resource state descriptor; never part of a public Run. */
+  readonly priorState?: DispatchPriorState;
   /** Workspace-local, non-secret capture selection; never a public projection. */
   readonly workspaceOutputAllowlist?: Readonly<
     Record<string, OutputAllowlistEntry>

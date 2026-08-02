@@ -32,6 +32,7 @@ import type {
   DeployControlAuditEvent,
   DispatchDepState,
   DispatchGeneratedRoot,
+  DispatchPriorState,
   DispatchSourceArchive,
   DispatchStateAdoption,
   DispatchStateScope,
@@ -351,6 +352,8 @@ export interface RunModuleDispatch {
    * internal runner preparation, never public PlanRun data.
    */
   readonly stateAdoption?: DispatchStateAdoption;
+  /** Canonical Resource execution descriptor, retained in internal run inputs. */
+  readonly priorState?: DispatchPriorState;
 }
 
 /**
@@ -588,6 +591,8 @@ export interface ReleaseActivator {
 export interface OpenTofuDestroyResult {
   readonly diagnostics?: readonly RunDiagnostic[];
   readonly providerInstallation?: readonly ProviderInstallationEvidence[];
+  /** Digest of the persisted post-destroy state, echoed by the runner. */
+  readonly stateDigest?: string;
 }
 
 export interface OpenTofuRestoreJob {
@@ -987,6 +992,7 @@ export interface GenericRootDispatchContext {
   readonly sourceBuild?: InstallConfig["sourceBuild"];
   readonly lifecycleActions?: InstallConfig["lifecycleActions"];
   readonly stateAdoption?: DispatchStateAdoption;
+  readonly priorState?: DispatchPriorState;
 }
 
 /**
@@ -1372,6 +1378,7 @@ export class OpenTofuController {
       newId: this.#newId,
       now: this.#now,
       enqueueRun: this.#enqueueRun,
+      enqueueArtifactLedgerRetry: this.#usesExternalRunDispatcher,
       capsuleCoordination: this.#capsuleCoordination,
       runRenewalIntervalMs: this.#runRenewalIntervalMs,
       activity: this.#activity,
@@ -2396,6 +2403,7 @@ export function moduleDispatchFromInputs(
         readonly sourceBuild?: InstallConfig["sourceBuild"];
         readonly lifecycleActions?: InstallConfig["lifecycleActions"];
         readonly stateAdoption?: DispatchStateAdoption;
+        readonly priorState?: DispatchPriorState;
       }
     | undefined,
 ): RunModuleDispatch {
@@ -2414,6 +2422,7 @@ export function moduleDispatchFromInputs(
       ? { lifecycleActions: inputs.lifecycleActions }
       : {}),
     ...(inputs.stateAdoption ? { stateAdoption: inputs.stateAdoption } : {}),
+    ...(inputs.priorState ? { priorState: inputs.priorState } : {}),
   };
 }
 

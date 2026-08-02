@@ -11,7 +11,10 @@ import {
 } from "../../../../core/domains/deploy-control/mod.ts";
 import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
-import { seedCapsuleModel } from "../../../helpers/deploy-control/model_fixture.ts";
+import {
+  fixtureStateCommit,
+  seedCapsuleModel,
+} from "../../../helpers/deploy-control/model_fixture.ts";
 import {
   type ConnectionVault,
   CredentialBundle,
@@ -679,14 +682,14 @@ test("a retryable runner infrastructure reset requeues apply without failing ter
             ),
           );
         }
-        return Promise.resolve({
+        return Promise.resolve(fixtureStateCommit({
           outputs: {
             launch_url: {
               sensitive: false,
               value: "https://app.example.test",
             },
           },
-        });
+        }));
       },
     },
     vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
@@ -872,7 +875,7 @@ test("a retryable runner infrastructure reset requeues destroy apply without fai
             ),
           );
         }
-        return Promise.resolve({});
+        return Promise.resolve(fixtureStateCommit());
       },
     },
     vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
@@ -1222,15 +1225,15 @@ function capturingRunner(captured: {
     },
     apply: (job) => {
       captured.apply = job;
-      return Promise.resolve({
+      return Promise.resolve(fixtureStateCommit({
         outputs: {
           launch_url: { sensitive: false, value: "https://app.example.test" },
         },
-      });
+      }));
     },
     destroy: (job) => {
       captured.destroy = job;
-      return Promise.resolve({});
+      return Promise.resolve(fixtureStateCommit());
     },
   };
 }
@@ -1262,12 +1265,12 @@ function stubRunner(): OpenTofuRunner {
         providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
       }),
     apply: () =>
-      Promise.resolve({
+      Promise.resolve(fixtureStateCommit({
         outputs: {
           launch_url: { sensitive: false, value: "https://app.example.test" },
         },
-      }),
-    destroy: () => Promise.resolve({}),
+      })),
+    destroy: () => Promise.resolve(fixtureStateCommit()),
   };
 }
 
