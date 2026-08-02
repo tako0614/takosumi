@@ -23,6 +23,7 @@ import type {
 } from "./types.ts";
 import {
   BACKUP_ADAPTERS_ENV,
+  RUNNER_REDACTED_VALUE,
   RUNNER_SECRET_ENV_NAME_PATTERN,
   RUNNER_SECRET_VALUE_PATTERN,
 } from "./constants.ts";
@@ -120,6 +121,7 @@ export async function runRelease(
   signal?: AbortSignal,
 ): Promise<JsonRecord> {
   const release = parseRelease(request);
+  const sourceIdentityRedactionValues = releaseSourceIdentityValues(release);
   const workspace = workspaceForRun(runId);
   await assertDirectory(workspace.sourceRoot, "release source root");
   const commandContext = commandContextFromRequest(request, undefined, signal);
@@ -131,7 +133,15 @@ export async function runRelease(
     commandContext,
     workspace,
   );
-  const logs: string[] = buildLog ? [buildLog] : [];
+  const logs: string[] = buildLog
+    ? [
+        redactReleaseCommandOutput(
+          buildLog,
+          commandContext,
+          sourceIdentityRedactionValues,
+        ),
+      ]
+    : [];
   try {
     for (const command of release.commands) {
       const cwd = releaseCommandCwd(workspace, command);
@@ -146,6 +156,10 @@ export async function runRelease(
       );
       const context: CommandContext = {
         ...preparedCredentials.context,
+        redactionValues: [
+          ...(preparedCredentials.context.redactionValues ?? []),
+          ...sourceIdentityRedactionValues,
+        ],
         env: {
           ...preparedCredentials.context.env,
           ...releaseBaseEnv(runId, release),
@@ -158,11 +172,10 @@ export async function runRelease(
       };
       const result = await runCommand(command.command, { cwd, context });
       logs.push(
-        redactRunnerOutput(
-          redactBuildOutput(
-            `$ ${command.command.join(" ")}\n${result.stdout}\n${result.stderr}`,
-          ),
-          context.redactionValues,
+        redactReleaseCommandOutput(
+          `$ ${command.command.join(" ")}\n${result.stdout}\n${result.stderr}`,
+          context,
+          sourceIdentityRedactionValues,
         ),
       );
       if (result.exitCode !== 0) {
@@ -174,11 +187,10 @@ export async function runRelease(
           phase: "release",
           failedCommandId: command.id,
           stdout: logs.join("\n"),
-          stderr: redactRunnerOutput(
-            redactBuildOutput(
-              `release command failed (${result.exitCode}): ${command.id}\n${result.stderr}`,
-            ),
-            context.redactionValues,
+          stderr: redactReleaseCommandOutput(
+            `release command failed (${result.exitCode}): ${command.id}\n${result.stderr}`,
+            context,
+            sourceIdentityRedactionValues,
           ),
         };
       }
@@ -473,6 +485,14 @@ export function releaseActivation(
   value: unknown,
 ): { readonly activation: ReleaseActivationSpec } | Record<string, never> {
   if (!isRecord(value)) return {};
+  const hasLifecycleActivationField = [
+    "applyRunId",
+    "workspaceId",
+    "capsuleId",
+    "stateVersionId",
+    "sourceSnapshotId",
+    "sourceCommit",
+  ].some((key) => Object.hasOwn(value, key));
   const sourceSnapshotId = releaseActivationNonEmptyString(
     recordField(value, "sourceSnapshotId"),
     "release.activation.sourceSnapshotId",
@@ -480,6 +500,14 @@ export function releaseActivation(
   const sourceCommit = releaseActivationSourceCommit(
     recordField(value, "sourceCommit"),
   );
+  if (
+    hasLifecycleActivationField &&
+    (sourceSnapshotId === undefined || sourceCommit === undefined)
+  ) {
+    throw new Error(
+      "release.activation.sourceSnapshotId and sourceCommit are required for lifecycle releases",
+    );
+  }
   const activation: ReleaseActivationSpec = {
     ...(stringField(value, "applyRunId")
       ? { applyRunId: stringField(value, "applyRunId") }
@@ -499,6 +527,31 @@ export function releaseActivation(
   return Object.keys(activation).length > 0 ? { activation } : {};
 }
 
+function releaseSourceIdentityValues(release: ReleaseSpec): readonly string[] {
+  return [
+    release.activation?.sourceSnapshotId,
+    release.activation?.sourceCommit,
+  ].filter((value): value is string => typeof value === "string");
+}
+
+function redactReleaseCommandOutput(
+  text: string,
+  context: CommandContext,
+  sourceIdentityValues: readonly string[],
+): string {
+  let redacted = redactRunnerOutput(
+    redactBuildOutput(text),
+    context.redactionValues,
+  );
+  // Generic redaction intentionally ignores short values. SourceSnapshot
+  // identity remains host-owned metadata and must not enter release logs at
+  // any length.
+  for (const value of sourceIdentityValues) {
+    redacted = redacted.replaceAll(value, RUNNER_REDACTED_VALUE);
+  }
+  return redacted;
+}
+
 function releaseActivationNonEmptyString(
   value: unknown,
   label: string,
@@ -516,9 +569,9 @@ function releaseActivationSourceCommit(value: unknown): string | undefined {
     "release.activation.sourceCommit",
   );
   if (commit === undefined) return undefined;
-  if (!/^[0-9a-f]{40}$/u.test(commit)) {
+  if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(commit)) {
     throw new Error(
-      "release.activation.sourceCommit must be a lowercase 40-character hexadecimal commit",
+      "release.activation.sourceCommit must be a lowercase 40- or 64-character hexadecimal commit",
     );
   }
   return commit;

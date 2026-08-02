@@ -270,7 +270,6 @@ export class CloudflareContainerOpenTofuRunner
       activation: {
         applyRunId: job.applyRunId,
         ...(job.workspaceId ? { workspaceId: job.workspaceId } : {}),
-        ...(job.workspaceId ? { workspaceId: job.workspaceId } : {}),
         capsuleId: job.capsuleId,
         stateVersionId: job.stateVersionId,
         sourceSnapshotId: job.sourceSnapshot.id,

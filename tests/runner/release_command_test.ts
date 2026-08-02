@@ -54,6 +54,8 @@ test("release action runs opaque argv commands inside the source snapshot", asyn
           workspaceId: "space_1",
           capsuleId: "inst_1",
           stateVersionId: "state_1",
+          sourceSnapshotId: "snap_01234567",
+          sourceCommit: "0123456789abcdef0123456789abcdef01234567",
         },
       }),
     );
@@ -99,6 +101,7 @@ test("release action exposes SourceSnapshot identity only as process-local env",
                 [
                   `const context = JSON.parse(Bun.env.TAKOSUMI_RELEASE_CONTEXT_JSON)`,
                   `await Bun.write("source-identity.json", JSON.stringify({ snapshotId: Bun.env.TAKOSUMI_SOURCE_SNAPSHOT_ID, sourceCommit: Bun.env.TAKOSUMI_SOURCE_COMMIT, context }))`,
+                  `console.log("source=" + Bun.env.TAKOSUMI_SOURCE_SNAPSHOT_ID + ":" + Bun.env.TAKOSUMI_SOURCE_COMMIT)`,
                 ].join(";"),
               ],
             },
@@ -119,6 +122,7 @@ test("release action exposes SourceSnapshot identity only as process-local env",
     });
     expect(JSON.stringify(body)).not.toContain(sourceSnapshotId);
     expect(JSON.stringify(body)).not.toContain(sourceCommit);
+    expect(body.stdout).toContain("source=[redacted]:[redacted]");
     await expect(
       readFile(join(sourceRoot, "source-identity.json"), "utf8"),
     ).resolves.toBe(
@@ -158,6 +162,8 @@ test("release action runs sourceBuild before provider credentials are prepared",
                     `import { mkdirSync } from "node:fs"`,
                     `if (Bun.env.CLOUDFLARE_API_TOKEN !== undefined) process.exit(7)`,
                     `mkdirSync("dist", { recursive: true })`,
+                    `console.log("snap_1")`,
+                    `console.log("0123456789abcdef0123456789abcdef01234567")`,
                     `await Bun.write("dist/built.txt", "built-without-credentials")`,
                   ].join(";"),
                 ],
@@ -180,6 +186,10 @@ test("release action runs sourceBuild before provider credentials are prepared",
             },
           ],
         },
+        activation: {
+          sourceSnapshotId: "snap_1",
+          sourceCommit: "0123456789abcdef0123456789abcdef01234567",
+        },
         credentials: {
           env: { CLOUDFLARE_API_TOKEN: secret },
           manifest: {
@@ -200,6 +210,11 @@ test("release action runs sourceBuild before provider credentials are prepared",
     );
 
     expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(JSON.stringify(body)).not.toContain("snap_1");
+    expect(JSON.stringify(body)).not.toContain(
+      "0123456789abcdef0123456789abcdef01234567",
+    );
     await expect(readFile(join(sourceRoot, "release.txt"), "utf8")).resolves.toBe(
       "built-without-credentials:released",
     );
@@ -219,13 +234,13 @@ test("release action validates optional SourceSnapshot identity fields", async (
       field: "sourceCommit",
       value: "0123456789ABCDEF0123456789ABCDEF01234567",
       message:
-        "release.activation.sourceCommit must be a lowercase 40-character hexadecimal commit",
+        "release.activation.sourceCommit must be a lowercase 40- or 64-character hexadecimal commit",
     },
     {
       field: "sourceCommit",
       value: "0123456789abcdef",
       message:
-        "release.activation.sourceCommit must be a lowercase 40-character hexadecimal commit",
+        "release.activation.sourceCommit must be a lowercase 40- or 64-character hexadecimal commit",
     },
   ] as const;
 
@@ -247,6 +262,56 @@ test("release action validates optional SourceSnapshot identity fields", async (
     expect(response.status).toBe(500);
     const body = await response.json();
     expect(body.stderr).toContain(invalid.message);
+  }
+
+  const lifecycleRunId = `release_source_identity_lifecycle_${crypto.randomUUID().replace(/-/g, "")}`;
+  const lifecycleResponse = await handleRunnerRequest(
+    runnerRequest(lifecycleRunId, {
+      release: {
+        commands: [
+          {
+            id: "should-not-run",
+            command: [process.execPath, "-e", `console.log("ran")`],
+          },
+        ],
+      },
+      activation: { applyRunId: "apply_1" },
+    }),
+  );
+  expect(lifecycleResponse.status).toBe(500);
+  const lifecycleBody = await lifecycleResponse.json();
+  expect(lifecycleBody.stderr).toContain(
+    "release.activation.sourceSnapshotId and sourceCommit are required for lifecycle releases",
+  );
+});
+
+test("release action accepts a 64-character SourceSnapshot commit for lifecycle activation", async () => {
+  const runId = `release_source_identity_sha256_${crypto.randomUUID().replace(/-/g, "")}`;
+  const root = join(RUN_ROOT, safeRunId(runId));
+  const sourceRoot = join(root, "source");
+  const sourceCommit = "a".repeat(64);
+  try {
+    await mkdir(sourceRoot, { recursive: true });
+    const response = await handleRunnerRequest(
+      runnerRequest(runId, {
+        release: {
+          commands: [
+            {
+              id: "accept-sha256-source",
+              command: [
+                process.execPath,
+                "-e",
+                `if (Bun.env.TAKOSUMI_SOURCE_COMMIT !== ${JSON.stringify(sourceCommit)}) process.exit(11)`,
+              ],
+            },
+          ],
+        },
+        activation: { sourceSnapshotId: "snap_sha256", sourceCommit },
+      }),
+    );
+    expect(response.status).toBe(200);
+  } finally {
+    await rm(root, { recursive: true, force: true });
   }
 });
 

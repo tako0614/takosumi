@@ -60,6 +60,7 @@ test("local OpenTofu runner executes generic release commands in restored source
       stateVersionId: "state_1",
       sourceSnapshot: {
         id: "snap_1",
+        resolvedCommit: "0123456789abcdef0123456789abcdef01234567",
         archiveRef: "sources/snap_1/source.tar.zst",
         archiveDigest,
       } as never,
@@ -108,8 +109,11 @@ test("local OpenTofu runner executes generic release commands in restored source
               "const outputs = JSON.parse(Bun.env.TAKOSUMI_OUTPUTS_JSON)",
               "const providerConfigs = JSON.parse(Bun.env.TAKOSUMI_PROVIDER_CONFIGS_JSON)",
               "if (Bun.env.CLOUDFLARE_API_TOKEN !== 'fixture-cloudflare-release-token') process.exit(7)",
+              "if (Bun.env.TAKOSUMI_SOURCE_SNAPSHOT_ID !== 'snap_1') process.exit(8)",
+              "if (Bun.env.TAKOSUMI_SOURCE_COMMIT !== '0123456789abcdef0123456789abcdef01234567') process.exit(9)",
               "console.log(`${Bun.env.TAKOSUMI_APPLY_RUN_ID}:${outputs.public_url}:${providerConfigs.providers[0].configuration.base_url}`)",
               "console.log(`token=${Bun.env.CLOUDFLARE_API_TOKEN}`)",
+              "console.log(`source=${Bun.env.TAKOSUMI_SOURCE_SNAPSHOT_ID}:${Bun.env.TAKOSUMI_SOURCE_COMMIT}`)",
             ].join(";"),
           ],
           workingDirectory: ".",
@@ -124,6 +128,11 @@ test("local OpenTofu runner executes generic release commands in restored source
       "apply_1:https://app.example.test:https://provider.example.test/api",
     );
     expect(result.stdout).toContain("token=[redacted]");
+    expect(result.stdout).toContain("source=[redacted]:[redacted]");
+    expect(result.stdout).not.toContain("snap_1");
+    expect(result.stdout).not.toContain(
+      "0123456789abcdef0123456789abcdef01234567",
+    );
     expect(JSON.stringify(result)).not.toContain(
       "fixture-cloudflare-release-token",
     );
