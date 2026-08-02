@@ -17,3 +17,4 @@ tmp/
 app-docs/.vitepress/dist/
 .claude/worktrees/
 .codex/worktrees/
+/test-results/
