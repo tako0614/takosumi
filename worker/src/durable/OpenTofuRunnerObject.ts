@@ -66,6 +66,7 @@ interface RunnerArtifactLimits {
 
 interface PreparedRawOutputs {
   readonly key: string;
+  readonly action: "apply";
   readonly sealed: SealedArtifact;
 }
 
@@ -1079,6 +1080,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
           httpMetadata: { contentType: ENCRYPTED_ARTIFACT_CONTENT_TYPE },
           customMetadata: {
             "takosumi-run-id": applyRunId,
+            "takosumi-action": action,
             "takosumi-content-digest": sealed.contentDigest,
             "takosumi-ciphertext-length": String(sealed.ciphertextLength),
             "takosumi-encryption-format": sealed.format,
@@ -1149,7 +1151,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       plaintext.byteLength,
     );
     const sealed = await this.#stateCrypto().seal(plaintext);
-    return { key, sealed };
+    return { key, action: "apply", sealed };
   }
 
   async #persistPreparedRawOutputs(
@@ -1165,6 +1167,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
           httpMetadata: { contentType: ENCRYPTED_ARTIFACT_CONTENT_TYPE },
           customMetadata: {
             "takosumi-run-id": runId,
+            "takosumi-action": prepared.action,
             "takosumi-content-digest": prepared.sealed.contentDigest,
             "takosumi-ciphertext-length": String(
               prepared.sealed.ciphertextLength,
@@ -1185,6 +1188,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       const existing = await this.env.R2_ARTIFACTS.head(prepared.key);
       if (
         existing?.customMetadata?.["takosumi-run-id"] !== runId ||
+        existing.customMetadata?.["takosumi-action"] !== prepared.action ||
         existing.customMetadata?.["takosumi-content-digest"] !==
           prepared.sealed.contentDigest
       ) {
@@ -1216,6 +1220,12 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         `completed ${action} target belongs to a different ApplyRun`,
       );
     }
+    const persistedAction = object.customMetadata?.["takosumi-action"];
+    if (persistedAction !== action) {
+      throw new Error(
+        `completed ${action} target belongs to a different action`,
+      );
+    }
     const metadataDigest = object.customMetadata?.["takosumi-content-digest"];
     if (!metadataDigest) {
       throw new Error(`completed ${action} target has no canonical digest`);
@@ -1245,6 +1255,11 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       object.customMetadata?.["takosumi-raw-output-ref"];
     const noRawOutputs =
       object.customMetadata?.["takosumi-raw-output-status"] === "none";
+    if (action === "destroy" && recordedRawOutputRef) {
+      throw new Error(
+        "completed destroy target unexpectedly records raw output authority",
+      );
+    }
     if (
       action === "apply" &&
       recordedRawOutputRef !== rawOutputRef &&
@@ -1255,7 +1270,11 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       );
     }
     const rawOutputs = recordedRawOutputRef
-      ? await this.#readPersistedRawOutputs(applyRunId, recordedRawOutputRef)
+      ? await this.#readPersistedRawOutputs(
+          applyRunId,
+          action,
+          recordedRawOutputRef,
+        )
       : undefined;
     if (recordedRawOutputRef && !rawOutputs) {
       throw new Error("completed apply target raw output artifact is missing");
@@ -1289,6 +1308,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
 
   async #readPersistedRawOutputs(
     applyRunId: string,
+    action: "apply" | "destroy",
     rawOutputRef: string,
   ): Promise<
     | { readonly ref: string; readonly outputs: Record<string, unknown> }
@@ -1300,6 +1320,9 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     if (!object) return undefined;
     if (object.customMetadata?.["takosumi-run-id"] !== applyRunId) {
       throw new Error("raw output artifact belongs to a different ApplyRun");
+    }
+    if (object.customMetadata?.["takosumi-action"] !== action) {
+      throw new Error("raw output artifact belongs to a different action");
     }
     const digest = object.customMetadata?.["takosumi-content-digest"];
     if (!digest) {

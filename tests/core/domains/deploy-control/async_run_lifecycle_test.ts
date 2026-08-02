@@ -162,7 +162,7 @@ test("consumer plan + apply: credentials reach the dispatch payload but never th
   expect(await store.getPlanRunInputs(planRun.id)).toBeUndefined();
 });
 
-test("ApplyRun creation checkpoint runs after durable put and before provider dispatch", async () => {
+test("ApplyRun preparation checkpoint runs before durable put and provider dispatch", async () => {
   const store = new InMemoryOpenTofuControlStore();
   let providerApplyCalls = 0;
   let checkpointedApplyRunId: string | undefined;
@@ -193,12 +193,9 @@ test("ApplyRun creation checkpoint runs after durable put and before provider di
       },
       {},
       {
-        onCreated: async (applyRun) => {
+        onPrepared: async (applyRun) => {
           checkpointedApplyRunId = applyRun.id;
-          expect(await store.getApplyRun(applyRun.id)).toMatchObject({
-            id: applyRun.id,
-            status: "queued",
-          });
+          expect(await store.getApplyRun(applyRun.id)).toBeUndefined();
           throw new Error("checkpoint unavailable");
         },
       },
@@ -207,10 +204,7 @@ test("ApplyRun creation checkpoint runs after durable put and before provider di
 
   expect(checkpointedApplyRunId).toBeDefined();
   expect(providerApplyCalls).toBe(0);
-  expect(await store.getApplyRun(checkpointedApplyRunId!)).toMatchObject({
-    id: checkpointedApplyRunId,
-    status: "queued",
-  });
+  expect(await store.getApplyRun(checkpointedApplyRunId!)).toBeUndefined();
 });
 
 test("successful apply observer sees the atomically committed terminal run and Capsule pointers", async () => {
@@ -297,6 +291,121 @@ test("failed apply observer fires once after provider dispatch and terminal pers
     ),
   ).toBe(true);
   expect(observed).toEqual(["failed:failed"]);
+});
+
+test("raw-output durability ambiguity replays the same ApplyRun before publishing StateVersion or Output", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const retryDispatches: Parameters<EnqueueRun>[0][] = [];
+  const applyJobs: OpenTofuApplyJob[] = [];
+  const enqueueRun: EnqueueRun = (dispatch) => {
+    retryDispatches.push(dispatch);
+    return Promise.resolve();
+  };
+  const controller = new OpenTofuController({
+    store,
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    now: monotonicNow(1800),
+    newId: deterministicIds(),
+    runner: {
+      ...stubRunner(),
+      apply: (job) => {
+        applyJobs.push(job);
+        if (applyJobs.length === 1) {
+          return Promise.reject(
+            new OpenTofuRunnerInfrastructureError(
+              "raw output durability acknowledgement is ambiguous",
+              { reason: "runner_artifact_relay_ambiguous" },
+            ),
+          );
+        }
+        if (!job.rawOutputRef) {
+          throw new Error("consumer omitted the allocated rawOutputRef");
+        }
+        return Promise.resolve(
+          fixtureStateCommit({
+            rawOutputRef: job.rawOutputRef,
+            outputs: {
+              launch_url: {
+                sensitive: false,
+                value: "https://app.example.test",
+              },
+            },
+          }),
+        );
+      },
+    },
+    vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
+    enqueueRun,
+  });
+  const request = await seedUpdatable(store, {
+    capsuleId: "cap_raw_output_durability_failure",
+  });
+  const before = await store.getCapsule(request.capsuleId!);
+  const { planRun: queuedPlan } = await controller.createPlanRun(request);
+  await controller.dispatchQueuedRun({
+    action: "plan",
+    runId: queuedPlan.id,
+    workspaceId: queuedPlan.workspaceId,
+  });
+  const planRun = (await store.getPlanRun(queuedPlan.id))!;
+
+  const { applyRun } = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+  retryDispatches.length = 0;
+
+  await expect(
+    controller.dispatchQueuedRun({
+      action: "apply",
+      runId: applyRun.id,
+      workspaceId: applyRun.workspaceId,
+    }),
+  ).rejects.toThrow(/retryable_runner_infrastructure_error/);
+
+  const requeued = (await store.getApplyRun(applyRun.id))!;
+  expect(requeued.status).toBe("queued");
+  expect(requeued.stateVersionId).toBeUndefined();
+  expect(requeued.outputId).toBeUndefined();
+  expect(
+    await store.listStateVersions(request.capsuleId!, "production"),
+  ).toEqual([]);
+  expect(await store.getLatestOutput(request.capsuleId!)).toBeUndefined();
+  const afterFailure = await store.getCapsule(request.capsuleId!);
+  expect(afterFailure?.currentStateVersionId).toBe(
+    before?.currentStateVersionId,
+  );
+  expect(afterFailure?.currentStateGeneration).toBe(
+    before?.currentStateGeneration,
+  );
+  expect(afterFailure?.currentOutputId).toBe(before?.currentOutputId);
+  expect(retryDispatches).toEqual([
+    {
+      action: "apply",
+      runId: applyRun.id,
+      workspaceId: applyRun.workspaceId,
+      cause: "controller_retry",
+    },
+  ]);
+
+  await controller.dispatchQueuedRun({
+    action: "apply",
+    runId: applyRun.id,
+    workspaceId: applyRun.workspaceId,
+  });
+
+  const completed = (await store.getApplyRun(applyRun.id))!;
+  const output = await store.getLatestOutput(request.capsuleId!);
+  expect(completed.status).toBe("succeeded");
+  expect(applyJobs.map((job) => job.applyRun.id)).toEqual([
+    applyRun.id,
+    applyRun.id,
+  ]);
+  expect(applyJobs[1]?.rawOutputRef).toBe(applyJobs[0]?.rawOutputRef);
+  expect(output?.rawArtifactRef).toBe(applyJobs[1]?.rawOutputRef);
+  expect(
+    await store.listStateVersions(request.capsuleId!, "production"),
+  ).toHaveLength(1);
 });
 
 test("queued destroy cancellation emits one terminal callback after its early lifecycle callback", async () => {

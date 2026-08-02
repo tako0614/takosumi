@@ -1060,12 +1060,14 @@ export interface PlanRunInternalContext {
 }
 
 /**
- * Internal creation hook used by a lifecycle owner to durably checkpoint the
- * exact ApplyRun id after the Run row exists but before observer/queue dispatch.
- * Throwing leaves the queued ApplyRun undispatched and therefore provider-safe.
+ * Internal creation boundary used by a lifecycle owner to checkpoint an exact
+ * predetermined ApplyRun id before the Run row is persisted or dispatched.
+ * A retry may supply the same id to reconcile a durable lifecycle checkpoint
+ * whose Run insert acknowledgement was lost.
  */
 export interface ApplyRunInternalContext {
-  readonly onCreated?: (applyRun: ApplyRun) => Promise<void>;
+  readonly applyRunId?: string;
+  readonly onPrepared?: (applyRun: ApplyRun) => Promise<void>;
 }
 
 // `ResolvedDependencies` (the resolved consumer Dependencies for an

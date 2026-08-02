@@ -348,7 +348,10 @@ class CheckpointingOpentofuAdapter extends PluginSpyAdapter {
     this.applyInputs.push(input);
     const applyRunId = input.opentofuApplyRun?.applyRunId ?? "apply_exact_A";
     if (input.opentofuApplyRun?.checkpointApplyRun) {
-      await input.opentofuApplyRun.checkpointApplyRun(applyRunId);
+      await input.opentofuApplyRun.checkpointApplyRun(
+        applyRunId,
+        input.opentofuApplyRun.applyPlanRunId ?? "plan_apply_exact_A",
+      );
     }
     this.applyRunIds.push(applyRunId);
     const result = await new StubResourceShapeAdapter().apply(input);
@@ -369,7 +372,10 @@ class CheckpointingOpentofuAdapter extends PluginSpyAdapter {
     this.deleteInputs.push(input);
     const applyRunId = input.opentofuApplyRun?.applyRunId ?? "destroy_exact_A";
     if (input.opentofuApplyRun?.checkpointApplyRun) {
-      await input.opentofuApplyRun.checkpointApplyRun(applyRunId);
+      await input.opentofuApplyRun.checkpointApplyRun(
+        applyRunId,
+        input.opentofuApplyRun.applyPlanRunId ?? "plan_destroy_exact_A",
+      );
     }
     this.destroyRunIds.push(applyRunId);
   }
@@ -2654,6 +2660,7 @@ test("OpenTofu apply finalization recovery reuses the checkpointed successful Ap
       authority: "opentofu_apply_run",
       operation: "apply",
       runId: "apply_exact_A",
+      planRunId: "plan_apply_exact_A",
       operationKey: "apply_exact_A",
     },
   });
@@ -2675,6 +2682,43 @@ test("OpenTofu apply finalization recovery reuses the checkpointed successful Ap
     phase: "Ready",
     execution: { runId: "apply_exact_A" },
   });
+});
+
+test("OpenTofu checkpoint write failure dispatches no ApplyRun and leaves Resource retryable", async () => {
+  const stores = createInMemoryResourceShapeStores();
+  const compareAndSet = stores.resources.compareAndSet.bind(stores.resources);
+  let failCheckpointWrite = true;
+  stores.resources.compareAndSet = async (candidate, expected) => {
+    if (
+      failCheckpointWrite &&
+      candidate.pendingOperation?.authority === "opentofu_apply_run"
+    ) {
+      throw new Error("simulated checkpoint write failure");
+    }
+    return await compareAndSet(candidate, expected);
+  };
+  const adapter = new CheckpointingOpentofuAdapter();
+  const service = new ResourceShapeService({
+    stores,
+    adapter,
+    now: () => NOW,
+    moduleRegistry: TEST_RESOURCE_SHAPE_MODULE_REGISTRY,
+  });
+  await seed(service);
+
+  const failed = await reviewedApply(service, APPLY);
+  expect(failed.ok).toBe(false);
+  if (!failed.ok) expect(failed.error.code).toBe("apply_failed");
+  expect(adapter.applyRunIds).toEqual([]);
+  expect(await stores.resources.get(APPLY_ID)).toMatchObject({
+    phase: "Failed",
+  });
+
+  failCheckpointWrite = false;
+  const retried = await reviewedApply(service, APPLY);
+  expect(retried.ok).toBe(true);
+  expect(adapter.applyRunIds).toEqual(["apply_exact_A"]);
+  expect(await stores.resources.get(APPLY_ID)).toMatchObject({ phase: "Ready" });
 });
 
 test("OpenTofu re-apply upgrades an exact legacy execution that has no state digest", async () => {
@@ -6225,6 +6269,7 @@ test("OpenTofu delete finalization recovery reuses the checkpointed successful A
       authority: "opentofu_apply_run",
       operation: "delete",
       runId: "destroy_exact_A",
+      planRunId: "plan_destroy_exact_A",
       operationKey: "destroy_exact_A",
     },
   });
@@ -6245,6 +6290,56 @@ test("OpenTofu delete finalization recovery reuses the checkpointed successful A
   expect(adapter.deleteInputs[1]?.opentofuApplyRun?.applyRunId).toBe(
     "destroy_exact_A",
   );
+  expect(await stores.resources.get(APPLY_ID)).toBeUndefined();
+});
+
+test("OpenTofu delete checkpoint write failure dispatches no ApplyRun and remains retryable", async () => {
+  const stores = createInMemoryResourceShapeStores();
+  const adapter = new CheckpointingOpentofuAdapter();
+  const service = new ResourceShapeService({
+    stores,
+    adapter,
+    now: () => NOW,
+    moduleRegistry: TEST_RESOURCE_SHAPE_MODULE_REGISTRY,
+  });
+  await seed(service);
+  expect((await reviewedApply(service, APPLY)).ok).toBe(true);
+
+  const compareAndSet = stores.resources.compareAndSet.bind(stores.resources);
+  let failCheckpointWrite = true;
+  stores.resources.compareAndSet = async (candidate, expected) => {
+    if (
+      failCheckpointWrite &&
+      candidate.pendingOperation?.authority === "opentofu_apply_run" &&
+      candidate.pendingOperation.operation === "delete"
+    ) {
+      throw new Error("simulated delete checkpoint write failure");
+    }
+    return await compareAndSet(candidate, expected);
+  };
+
+  const failed = await service.delete(
+    "space_1",
+    "ObjectBucket",
+    "assets",
+    ACTOR,
+  );
+  expect(failed.ok).toBe(false);
+  if (!failed.ok) expect(failed.error.code).toBe("delete_failed");
+  expect(adapter.destroyRunIds).toEqual([]);
+  expect(await stores.resources.get(APPLY_ID)).toMatchObject({
+    phase: "Failed",
+  });
+
+  failCheckpointWrite = false;
+  const retried = await service.delete(
+    "space_1",
+    "ObjectBucket",
+    "assets",
+    ACTOR,
+  );
+  expect(retried.ok).toBe(true);
+  expect(adapter.destroyRunIds).toEqual(["destroy_exact_A"]);
   expect(await stores.resources.get(APPLY_ID)).toBeUndefined();
 });
 

@@ -83,7 +83,10 @@ import type {
   ResolvedResourceConnection,
   ResourceAdapter,
 } from "./adapter.ts";
-import { adapterApplyMutationOutcome } from "./adapter.ts";
+import {
+  adapterApplyMutationOutcome,
+  ResourceAdapterApplyError,
+} from "./adapter.ts";
 import { resolve } from "./resolver.ts";
 import {
   parseResourceSpec,
@@ -1418,13 +1421,16 @@ export class ResourceShapeService {
       }
     }
 
-    let recoveringOpenTofuApplyRunId: string | undefined;
+    let recoveringOpenTofuApplyRun:
+      | { readonly applyRunId: string; readonly planRunId: string }
+      | undefined;
     if (recoveringApplying && usesOpentofuRunAuthority) {
       const pending = existing?.pendingOperation;
       if (
         pending?.authority !== "opentofu_apply_run" ||
         pending.operation !== "apply" ||
-        pending.operationKey !== pending.runId
+        pending.operationKey !== pending.runId ||
+        !pending.planRunId?.trim()
       ) {
         return {
           ok: false,
@@ -1434,7 +1440,10 @@ export class ResourceShapeService {
           },
         };
       }
-      recoveringOpenTofuApplyRunId = pending.runId;
+      recoveringOpenTofuApplyRun = {
+        applyRunId: pending.runId,
+        planRunId: pending.planRunId,
+      };
     }
 
     // A public preview has no apply Run yet, so a direct plugin may return a
@@ -1539,7 +1548,7 @@ export class ResourceShapeService {
               deploymentReview,
             },
           }
-        : recoveringOpenTofuApplyRunId && existing?.pendingOperation
+        : recoveringOpenTofuApplyRun && existing?.pendingOperation
           ? { pendingOperation: existing.pendingOperation }
           : {}),
       ...(existing?.lastOperationRunId
@@ -1731,18 +1740,47 @@ export class ResourceShapeService {
     let adapterResult: AdapterApplyResult | undefined;
     const opentofuApplyRun = !usesOpentofuRunAuthority
       ? undefined
-      : recoveringOpenTofuApplyRunId
-        ? { applyRunId: recoveringOpenTofuApplyRunId }
+      : recoveringOpenTofuApplyRun
+        ? {
+            applyRunId: recoveringOpenTofuApplyRun.applyRunId,
+            applyPlanRunId: recoveringOpenTofuApplyRun.planRunId,
+            checkpointApplyRun: async (
+              applyRunId: string,
+              planRunId: string,
+            ) => {
+              try {
+                claimedApplyingRecord = await checkpointOpentofuApplyRun({
+                  stores: this.#stores,
+                  record: claimedApplyingRecord,
+                  applyRunId,
+                  planRunId,
+                  operation: "apply",
+                  deploymentReview,
+                  now: this.#now(),
+                });
+              } catch (error) {
+                throw checkpointBeforeDispatchError(id, error);
+              }
+            },
+          }
         : {
-            checkpointApplyRun: async (applyRunId: string) => {
-              claimedApplyingRecord = await checkpointOpentofuApplyRun({
-                stores: this.#stores,
-                record: claimedApplyingRecord,
-                applyRunId,
-                operation: "apply",
-                deploymentReview,
-                now: this.#now(),
-              });
+            checkpointApplyRun: async (
+              applyRunId: string,
+              planRunId: string,
+            ) => {
+              try {
+                claimedApplyingRecord = await checkpointOpentofuApplyRun({
+                  stores: this.#stores,
+                  record: claimedApplyingRecord,
+                  applyRunId,
+                  planRunId,
+                  operation: "apply",
+                  deploymentReview,
+                  now: this.#now(),
+                });
+              } catch (error) {
+                throw checkpointBeforeDispatchError(id, error);
+              }
             },
           };
     try {
@@ -4581,13 +4619,16 @@ export class ResourceShapeService {
       }
     }
 
-    let recoveringOpenTofuDeleteRunId: string | undefined;
+    let recoveringOpenTofuDeleteRun:
+      | { readonly applyRunId: string; readonly planRunId: string }
+      | undefined;
     if (usesOpentofuRunAuthority && record.phase === "Deleting") {
       const pending = record.pendingOperation;
       if (
         pending?.authority !== "opentofu_apply_run" ||
         pending.operation !== "delete" ||
-        pending.operationKey !== pending.runId
+        pending.operationKey !== pending.runId ||
+        !pending.planRunId?.trim()
       ) {
         return {
           ok: false,
@@ -4597,7 +4638,10 @@ export class ResourceShapeService {
           },
         };
       }
-      recoveringOpenTofuDeleteRunId = pending.runId;
+      recoveringOpenTofuDeleteRun = {
+        applyRunId: pending.runId,
+        planRunId: pending.planRunId,
+      };
     }
 
     let claimedRecord = record;
@@ -4664,17 +4708,45 @@ export class ResourceShapeService {
 
     const opentofuApplyRun = !usesOpentofuRunAuthority
       ? undefined
-      : recoveringOpenTofuDeleteRunId
-        ? { applyRunId: recoveringOpenTofuDeleteRunId }
+      : recoveringOpenTofuDeleteRun
+        ? {
+            applyRunId: recoveringOpenTofuDeleteRun.applyRunId,
+            applyPlanRunId: recoveringOpenTofuDeleteRun.planRunId,
+            checkpointApplyRun: async (
+              applyRunId: string,
+              planRunId: string,
+            ) => {
+              try {
+                claimedRecord = await checkpointOpentofuApplyRun({
+                  stores: this.#stores,
+                  record: claimedRecord,
+                  applyRunId,
+                  planRunId,
+                  operation: "delete",
+                  now: this.#now(),
+                });
+              } catch (error) {
+                throw checkpointBeforeDispatchError(id, error);
+              }
+            },
+          }
         : {
-            checkpointApplyRun: async (applyRunId: string) => {
-              claimedRecord = await checkpointOpentofuApplyRun({
-                stores: this.#stores,
-                record: claimedRecord,
-                applyRunId,
-                operation: "delete",
-                now: this.#now(),
-              });
+            checkpointApplyRun: async (
+              applyRunId: string,
+              planRunId: string,
+            ) => {
+              try {
+                claimedRecord = await checkpointOpentofuApplyRun({
+                  stores: this.#stores,
+                  record: claimedRecord,
+                  applyRunId,
+                  planRunId,
+                  operation: "delete",
+                  now: this.#now(),
+                });
+              } catch (error) {
+                throw checkpointBeforeDispatchError(id, error);
+              }
             },
           };
 
@@ -6344,12 +6416,14 @@ async function checkpointOpentofuApplyRun(input: {
   readonly stores: ResourceShapeStores;
   readonly record: ResourceShapeRecord;
   readonly applyRunId: string;
+  readonly planRunId: string;
   readonly operation: "apply" | "delete";
   readonly deploymentReview?: ResourceDeploymentReview;
   readonly now: IsoTimestamp;
 }): Promise<ResourceShapeRecord> {
   const pendingOperation = {
     runId: input.applyRunId,
+    planRunId: input.planRunId,
     operation: input.operation,
     operationKey: input.applyRunId,
     authority: "opentofu_apply_run" as const,
@@ -6361,6 +6435,7 @@ async function checkpointOpentofuApplyRun(input: {
     opentofuApplyRunCheckpointMatches(
       input.record,
       input.applyRunId,
+      input.planRunId,
       input.operation,
     )
   ) {
@@ -6387,6 +6462,7 @@ async function checkpointOpentofuApplyRun(input: {
       opentofuApplyRunCheckpointMatches(
         persisted.record,
         input.applyRunId,
+        input.planRunId,
         input.operation,
       )
     ) {
@@ -6402,6 +6478,7 @@ async function checkpointOpentofuApplyRun(input: {
       opentofuApplyRunCheckpointMatches(
         observed,
         input.applyRunId,
+        input.planRunId,
         input.operation,
       )
     ) {
@@ -6414,13 +6491,25 @@ async function checkpointOpentofuApplyRun(input: {
 function opentofuApplyRunCheckpointMatches(
   record: ResourceShapeRecord,
   applyRunId: string,
+  planRunId: string,
   operation: "apply" | "delete",
 ): boolean {
   return (
     record.pendingOperation?.authority === "opentofu_apply_run" &&
     record.pendingOperation.operation === operation &&
     record.pendingOperation.runId === applyRunId &&
+    record.pendingOperation.planRunId === planRunId &&
     record.pendingOperation.operationKey === applyRunId
+  );
+}
+
+function checkpointBeforeDispatchError(
+  resourceId: string,
+  cause: unknown,
+): ResourceAdapterApplyError {
+  return new ResourceAdapterApplyError(
+    `resource ${resourceId} OpenTofu ApplyRun checkpoint failed before Run persistence or provider dispatch: ${errorMessage(cause)}`,
+    { mutationOutcome: "none", cause },
   );
 }
 

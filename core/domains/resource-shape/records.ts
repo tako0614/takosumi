@@ -96,6 +96,8 @@ export interface ResourceShapePendingOperation {
    * direct plugins omit this field and keep using ResourceOperationRun.
    */
   readonly authority?: "opentofu_apply_run";
+  /** Exact reviewed PlanRun used to reconstruct a missing checkpointed ApplyRun. */
+  readonly planRunId?: string;
   /**
    * Exact reviewed deployment authority retained for an Applying Resource.
    * The bounded host recovery loop reuses this evidence and the immutable Run

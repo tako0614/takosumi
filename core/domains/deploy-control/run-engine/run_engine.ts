@@ -3148,8 +3148,28 @@ export class RunEngine {
     const now = this.#now();
     const approval = redactRunApproval(request.approval);
     const applyCapsuleId = planRun.capsuleId;
+    if (internal.applyRunId !== undefined) {
+      requireNonEmptyString(internal.applyRunId, "applyRunId");
+      const existing = await this.#store.getApplyRun(internal.applyRunId);
+      if (existing) {
+        if (
+          existing.planRunId !== planRun.id ||
+          existing.workspaceId !== planRun.workspaceId ||
+          existing.operation !== planRun.operation ||
+          (await stableJsonDigest(existing.expected)) !==
+            (await stableJsonDigest(request.expected))
+        ) {
+          throw new OpenTofuControllerError(
+            "failed_precondition",
+            `ApplyRun id ${internal.applyRunId} is already bound to different run authority`,
+          );
+        }
+        await internal.onPrepared?.(existing);
+        return await this.getApplyRun(existing.id);
+      }
+    }
     const applyRun: ApplyRun = {
-      id: this.#newId("apply"),
+      id: internal.applyRunId ?? this.#newId("apply"),
       planRunId: planRun.id,
       workspaceId: planRun.workspaceId,
       ...(applyCapsuleId ? { capsuleId: applyCapsuleId } : {}),
@@ -3175,8 +3195,8 @@ export class RunEngine {
       createdAt: now,
       updatedAt: now,
     };
+    await internal.onPrepared?.(applyRun);
     await this.#store.putApplyRun(applyRun);
-    await internal.onCreated?.(applyRun);
     await this.#notifyApplyQueued(applyRun);
     if (!this.#hasRunnerForProfile(profile)) return { applyRun };
     // Hand off to the dispatch seam. The default inline dispatcher runs the

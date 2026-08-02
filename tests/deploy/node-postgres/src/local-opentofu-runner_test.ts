@@ -2,8 +2,14 @@
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -15,6 +21,7 @@ import {
 import { generateOpenTofuChildModuleRoot } from "../../../../lib/rootgen/src/mod.ts";
 import { workspaceForRun } from "../../../../runner/lib/artifacts.ts";
 import { PartitionedSecretBoundaryCrypto } from "../../../../core/adapters/secret-store/memory.ts";
+import { OpenTofuRunnerInfrastructureError } from "../../../../core/domains/deploy-control/errors.ts";
 
 const TEST_STATE_CRYPTO = new PartitionedSecretBoundaryCrypto({
   globalPassphrase: "local-opentofu-state-test-passphrase-32-bytes-minimum",
@@ -138,6 +145,25 @@ test("local OpenTofu runner durably commits and replays exact apply and destroy 
   ];
   try {
     const stateArtifactDir = join(tempDir, "state-artifacts");
+    const durableStateStore = createFileOpenTofuStateArtifactStore(
+      stateArtifactDir,
+      TEST_STATE_CRYPTO,
+    );
+    let rawOutputCommitAttempts = 0;
+    const stateStore = {
+      read: durableStateStore.read,
+      commit: durableStateStore.commit,
+      readRawOutput: durableStateStore.readRawOutput,
+      async commitRawOutput(
+        artifact: Parameters<typeof durableStateStore.commitRawOutput>[0],
+      ) {
+        rawOutputCommitAttempts += 1;
+        if (rawOutputCommitAttempts === 1) {
+          throw new Error("simulated raw output durable commit outage");
+        }
+        return await durableStateStore.commitRawOutput(artifact);
+      },
+    };
     const runner = createLocalOpenTofuRunner({
       archiveStore: {
         write: async () => {
@@ -147,10 +173,7 @@ test("local OpenTofu runner durably commits and replays exact apply and destroy 
           throw new Error("source archive is not used by operator modules");
         },
       },
-      stateStore: createFileOpenTofuStateArtifactStore(
-        stateArtifactDir,
-        TEST_STATE_CRYPTO,
-      ),
+      stateStore,
     });
     const profile = createLocalOpenTofuRunnerProfile();
     const generatedRoot = generateOpenTofuChildModuleRoot({
@@ -179,8 +202,9 @@ test("local OpenTofu runner durably commits and replays exact apply and destroy 
       stateScope: stateScope(0, "artifact:local-state:0"),
     });
     const generationOneRef = "artifact:local-state:1";
+    const rawOutputRef = `artifact:local-output:${createApplyId}`;
     const createApplyRun = localApplyRun(createApplyId, createPlanId, "create");
-    const applied = await runner.apply({
+    const applyJob = {
       applyRun: createApplyRun,
       planRun: createPlanRun,
       planArtifact: createPlan.planArtifact,
@@ -189,7 +213,30 @@ test("local OpenTofu runner durably commits and replays exact apply and destroy 
       operatorModule,
       outputAllowlist: { message: { from: "message" } },
       stateScope: stateScope(1, generationOneRef),
-    });
+      rawOutputRef,
+    };
+    let firstApplyError: unknown;
+    try {
+      await runner.apply(applyJob);
+    } catch (error) {
+      firstApplyError = error;
+    }
+    expect(firstApplyError).toBeInstanceOf(
+      OpenTofuRunnerInfrastructureError,
+    );
+    expect(
+      (firstApplyError as OpenTofuRunnerInfrastructureError).reason,
+    ).toBe("runner_artifact_relay_ambiguous");
+    const originalError = (
+      firstApplyError as OpenTofuRunnerInfrastructureError
+    ).originalError;
+    expect(originalError).toBeInstanceOf(Error);
+    expect((originalError as Error).message).toBe(
+      "simulated raw output durable commit outage",
+    );
+    expect(await durableStateStore.readRawOutput(rawOutputRef)).toBeUndefined();
+    await removeRunWorkspace(createApplyId);
+    const applied = await runner.apply(applyJob);
     expect(applied.outputs).toEqual({
       message: {
         sensitive: false,
@@ -198,6 +245,10 @@ test("local OpenTofu runner durably commits and replays exact apply and destroy 
       },
     });
     expect(applied.stateDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(applied.rawOutputRef).toBe(rawOutputRef);
+    expect(
+      (await durableStateStore.readRawOutput(rawOutputRef))?.outputs,
+    ).toEqual(applied.outputs);
     const stateRefHash = createHash("sha256")
       .update(generationOneRef)
       .digest("hex");
@@ -208,8 +259,11 @@ test("local OpenTofu runner durably commits and replays exact apply and destroy 
     expect(stateEnvelope).not.toContain("durable-local-state");
     expect(stateEnvelope).not.toContain("stateBase64");
     expect(JSON.parse(stateEnvelope)).toMatchObject({
-      version: 1,
+      version: 2,
       stateRef: generationOneRef,
+      workspaceId: "workspace_local",
+      subject: { kind: "resource", id: "resource_local" },
+      environment: "default",
       createdByRunId: createApplyId,
       action: "apply",
       ciphertextBase64: expect.any(String),
@@ -217,7 +271,19 @@ test("local OpenTofu runner durably commits and replays exact apply and destroy 
 
     // Remove every ephemeral runner file. A same-ApplyRun replay must return
     // only from the durable exact target, without a second tofu invocation.
+    // Removing the independently addressable raw object additionally proves
+    // replay repairs it from the sealed state/replay envelope before the
+    // allocated reference is acknowledged again.
     await removeRunWorkspace(createApplyId);
+    const rawRefHash = createHash("sha256").update(rawOutputRef).digest("hex");
+    await unlink(
+      join(
+        stateArtifactDir,
+        "raw-output",
+        rawRefHash.slice(0, 2),
+        `${rawRefHash}.json`,
+      ),
+    );
     expect(
       await runner.apply({
         applyRun: createApplyRun,
@@ -228,8 +294,12 @@ test("local OpenTofu runner durably commits and replays exact apply and destroy 
         operatorModule,
         outputAllowlist: { message: { from: "message" } },
         stateScope: stateScope(1, generationOneRef),
+        rawOutputRef,
       }),
     ).toEqual(applied);
+    expect(
+      (await durableStateStore.readRawOutput(rawOutputRef))?.outputs,
+    ).toEqual(applied.outputs);
 
     const priorState = {
       generation: 1,

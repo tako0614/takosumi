@@ -30,12 +30,17 @@ import type {
   RunExecutionControl,
 } from "../../../core/domains/deploy-control/mod.ts";
 import { DEFAULT_OPENTOFU_RUNNER_EXECUTOR_ID } from "../../../core/domains/deploy-control/mod.ts";
-import { OpenTofuRunnerExecutionError } from "../../../core/domains/deploy-control/errors.ts";
+import {
+  OpenTofuRunnerExecutionError,
+  OpenTofuRunnerInfrastructureError,
+} from "../../../core/domains/deploy-control/errors.ts";
 import type { SecretBoundaryCrypto } from "../../../core/adapters/secret-store/memory.ts";
 import { normalizePlanResourceScope } from "takosumi-contract";
 import { parseRepositoryManifestSnapshot } from "takosumi-contract/sources";
 import type {
   DispatchPriorState,
+  DispatchStateScope,
+  OpenTofuOutputEnvelope,
   DispatchStateAdoption,
   OpenTofuPlanArtifact,
   PlanResourceChange,
@@ -57,12 +62,29 @@ export interface SourceArchiveStore {
 
 export interface LocalOpenTofuStateArtifact {
   readonly stateRef: string;
+  readonly workspaceId: string;
+  readonly subject: NonNullable<DispatchStateScope["subject"]>;
+  readonly environment: string;
   readonly generation: number;
   readonly createdByRunId: string;
   readonly action: "apply" | "destroy";
   readonly stateDigest: string;
   readonly stateBytes: Uint8Array;
   readonly result: OpenTofuApplyResult | OpenTofuDestroyResult;
+}
+
+export interface LocalOpenTofuRawOutputArtifact {
+  readonly rawOutputRef: string;
+  readonly workspaceId: string;
+  readonly subject: NonNullable<DispatchStateScope["subject"]>;
+  readonly environment: string;
+  readonly generation: number;
+  readonly stateRef: string;
+  readonly stateDigest: string;
+  readonly createdByRunId: string;
+  readonly action: "apply";
+  readonly outputDigest: string;
+  readonly outputs: OpenTofuOutputEnvelope;
 }
 
 /**
@@ -75,6 +97,12 @@ export interface LocalOpenTofuStateArtifactStore {
   commit(
     artifact: LocalOpenTofuStateArtifact,
   ): Promise<LocalOpenTofuStateArtifact>;
+  readRawOutput(
+    rawOutputRef: string,
+  ): Promise<LocalOpenTofuRawOutputArtifact | undefined>;
+  commitRawOutput(
+    artifact: LocalOpenTofuRawOutputArtifact,
+  ): Promise<LocalOpenTofuRawOutputArtifact>;
 }
 
 export function createFileSourceArchiveStore(root: string): SourceArchiveStore {
@@ -108,6 +136,23 @@ export function createFileOpenTofuStateArtifactStore(
     }
     return await parseStateArtifactEnvelope(text, stateRef, cryptoBoundary);
   };
+  const readRawOutput = async (
+    rawOutputRef: string,
+  ): Promise<LocalOpenTofuRawOutputArtifact | undefined> => {
+    const path = await rawOutputArtifactPath(normalizedRoot, rawOutputRef);
+    let text: string;
+    try {
+      text = await readFile(path, "utf8");
+    } catch (error) {
+      if (isErrno(error, "ENOENT")) return undefined;
+      throw error;
+    }
+    return await parseRawOutputArtifactEnvelope(
+      text,
+      rawOutputRef,
+      cryptoBoundary,
+    );
+  };
   return {
     read,
     commit: async (artifact) => {
@@ -120,8 +165,11 @@ export function createFileOpenTofuStateArtifactStore(
       await syncDirectory(normalizedRoot);
       const temporaryPath = `${path}.${crypto.randomUUID()}.tmp`;
       const metadata = {
-        version: 1,
+        version: 2,
         stateRef: artifact.stateRef,
+        workspaceId: artifact.workspaceId,
+        subject: artifact.subject,
+        environment: artifact.environment,
         generation: artifact.generation,
         createdByRunId: artifact.createdByRunId,
         action: artifact.action,
@@ -162,6 +210,74 @@ export function createFileOpenTofuStateArtifactStore(
             );
           }
           assertSameStateMutation(existing, artifact);
+          return existing;
+        }
+      } finally {
+        await unlink(temporaryPath).catch((error) => {
+          if (!isErrno(error, "ENOENT")) throw error;
+        });
+      }
+    },
+    readRawOutput,
+    commitRawOutput: async (artifact) => {
+      await assertLocalRawOutputArtifact(artifact);
+      const path = await rawOutputArtifactPath(
+        normalizedRoot,
+        artifact.rawOutputRef,
+      );
+      const rawOutputRoot = resolve(normalizedRoot, "raw-output");
+      const artifactDirectory = dirname(path);
+      await mkdir(normalizedRoot, { recursive: true });
+      await syncDirectory(dirname(normalizedRoot));
+      await mkdir(rawOutputRoot, { recursive: true });
+      await syncDirectory(normalizedRoot);
+      await mkdir(artifactDirectory, { recursive: true });
+      await syncDirectory(rawOutputRoot);
+      const temporaryPath = `${path}.${crypto.randomUUID()}.tmp`;
+      const metadata = {
+        version: 1,
+        kind: "raw_output" as const,
+        rawOutputRef: artifact.rawOutputRef,
+        workspaceId: artifact.workspaceId,
+        subject: artifact.subject,
+        environment: artifact.environment,
+        generation: artifact.generation,
+        stateRef: artifact.stateRef,
+        stateDigest: artifact.stateDigest,
+        createdByRunId: artifact.createdByRunId,
+        action: artifact.action,
+        outputDigest: artifact.outputDigest,
+      } as const;
+      const sealed = await cryptoBoundary.seal(
+        JSON.stringify({ outputs: artifact.outputs }),
+        "global",
+        localRawOutputArtifactAad(metadata),
+      );
+      const envelope = `${JSON.stringify({
+        ...metadata,
+        ciphertextBase64: Buffer.from(sealed).toString("base64"),
+      })}\n`;
+      try {
+        const temporary = await open(temporaryPath, "wx", 0o600);
+        try {
+          await temporary.writeFile(envelope);
+          await temporary.sync();
+        } finally {
+          await temporary.close();
+        }
+        try {
+          await link(temporaryPath, path);
+          await syncDirectory(artifactDirectory);
+          return artifact;
+        } catch (error) {
+          if (!isErrno(error, "EEXIST")) throw error;
+          const existing = await readRawOutput(artifact.rawOutputRef);
+          if (!existing) {
+            throw new Error(
+              `local OpenTofu raw output ${artifact.rawOutputRef} disappeared during immutable commit`,
+            );
+          }
+          assertSameRawOutputMutation(existing, artifact);
           return existing;
         }
       } finally {
@@ -303,7 +419,7 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
       "apply",
       job.stateScope,
     );
-    if (replay) return replay.result as OpenTofuApplyResult;
+    if (replay) return await this.confirmRawOutput(job, replay);
     await this.restoreSourceArchive(
       job.applyRun.id,
       job.sourceArchive,
@@ -346,9 +462,6 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
           }
         : {}),
       stateDigest,
-      ...(stringValue(result, "rawOutputRef")
-        ? { rawOutputRef: stringValue(result, "rawOutputRef") }
-        : {}),
       ...(providerInstallation(result)
         ? { providerInstallation: providerInstallation(result) }
         : {}),
@@ -361,7 +474,7 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
       stateBytes,
       normalizedResult,
     );
-    return committed.result as OpenTofuApplyResult;
+    return await this.confirmRawOutput(job, committed);
   }
 
   async destroy(
@@ -661,6 +774,18 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
         `local OpenTofu exact prior state ${prior.stateRef} does not match its ledger descriptor`,
       );
     }
+    if (job.stateScope) {
+      assertLocalMutationScope(
+        artifact,
+        {
+          ...job.stateScope,
+          generation: prior.generation,
+          stateRef: prior.stateRef,
+        },
+        artifact.createdByRunId,
+        artifact.action,
+      );
+    }
     const response = await this.transport.fetch(
       `/runs/${encodeURIComponent(runId)}/artifacts/tfstate`,
       {
@@ -698,6 +823,7 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
         `local OpenTofu state target ${scope.stateRef} is already owned by ApplyRun ${existing.createdByRunId}`,
       );
     }
+    assertLocalMutationScope(existing, scope, runId, action);
     return existing;
   }
 
@@ -716,6 +842,9 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
     const stateDigest = await digestBytes(stateBytes);
     return await this.stateStore.commit({
       stateRef: scope.stateRef,
+      workspaceId: scope.workspaceId,
+      subject: requiredStateSubject(scope, runId),
+      environment: scope.environment,
       generation: scope.generation,
       createdByRunId: runId,
       action,
@@ -723,6 +852,57 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
       stateBytes,
       result,
     });
+  }
+
+  private async confirmRawOutput(
+    job: OpenTofuApplyJob,
+    state: LocalOpenTofuStateArtifact,
+  ): Promise<OpenTofuApplyResult> {
+    const scope = job.stateScope;
+    const rawOutputRef = job.rawOutputRef?.trim();
+    if (!scope || !rawOutputRef) {
+      throw new Error(
+        `local OpenTofu apply ${job.applyRun.id} requires a durable rawOutputRef`,
+      );
+    }
+    assertLocalMutationScope(state, scope, job.applyRun.id, "apply");
+    const result = state.result as OpenTofuApplyResult;
+    const outputs = result.outputs ?? {};
+    const outputDigest = await digestBytes(
+      new TextEncoder().encode(JSON.stringify(outputs)),
+    );
+    let confirmed: LocalOpenTofuRawOutputArtifact;
+    try {
+      confirmed = await this.stateStore.commitRawOutput({
+        rawOutputRef,
+        workspaceId: scope.workspaceId,
+        subject: requiredStateSubject(scope, job.applyRun.id),
+        environment: scope.environment,
+        generation: scope.generation,
+        stateRef: state.stateRef,
+        stateDigest: state.stateDigest,
+        createdByRunId: job.applyRun.id,
+        action: "apply",
+        outputDigest,
+        outputs,
+      });
+    } catch (error) {
+      // State and the replay result are already durable. Mark only this tail as
+      // retryable so the consumer redelivers the SAME ApplyRun; replay adopts
+      // state and repairs/adopts the exact raw-output coordinate without
+      // repeating provider work.
+      throw new OpenTofuRunnerInfrastructureError(
+        `local OpenTofu apply ${job.applyRun.id} could not confirm durable raw output`,
+        {
+          reason: "runner_artifact_relay_ambiguous",
+          originalError: error,
+        },
+      );
+    }
+    return {
+      ...result,
+      rawOutputRef: confirmed.rawOutputRef,
+    };
   }
 }
 
@@ -1089,6 +1269,19 @@ async function stateArtifactPath(
   return resolve(root, key.slice(0, 2), `${key}.json`);
 }
 
+async function rawOutputArtifactPath(
+  root: string,
+  rawOutputRef: string,
+): Promise<string> {
+  if (!rawOutputRef.trim() || rawOutputRef.includes("\0")) {
+    throw new Error("local OpenTofu rawOutputRef must not be empty");
+  }
+  const key = (await digestBytes(new TextEncoder().encode(rawOutputRef))).slice(
+    "sha256:".length,
+  );
+  return resolve(root, "raw-output", key.slice(0, 2), `${key}.json`);
+}
+
 async function parseStateArtifactEnvelope(
   text: string,
   expectedStateRef: string,
@@ -1096,8 +1289,11 @@ async function parseStateArtifactEnvelope(
 ): Promise<LocalOpenTofuStateArtifact> {
   const envelope = parseObject(text);
   if (
-    envelope.version !== 1 ||
+    envelope.version !== 2 ||
     stringValue(envelope, "stateRef") !== expectedStateRef ||
+    !stringValue(envelope, "workspaceId") ||
+    !parseStateSubject(envelope.subject) ||
+    !stringValue(envelope, "environment") ||
     !Number.isSafeInteger(envelope.generation) ||
     (envelope.generation as number) < 0 ||
     !stringValue(envelope, "createdByRunId") ||
@@ -1110,8 +1306,11 @@ async function parseStateArtifactEnvelope(
     );
   }
   const metadata = {
-    version: 1,
+    version: 2,
     stateRef: expectedStateRef,
+    workspaceId: requiredString(envelope, "workspaceId"),
+    subject: parseStateSubject(envelope.subject)!,
+    environment: requiredString(envelope, "environment"),
     generation: envelope.generation as number,
     createdByRunId: requiredString(envelope, "createdByRunId"),
     action: envelope.action,
@@ -1140,6 +1339,9 @@ async function parseStateArtifactEnvelope(
   }
   const artifact: LocalOpenTofuStateArtifact = {
     stateRef: expectedStateRef,
+    workspaceId: metadata.workspaceId,
+    subject: metadata.subject,
+    environment: metadata.environment,
     generation: metadata.generation,
     createdByRunId: metadata.createdByRunId,
     action: metadata.action,
@@ -1154,12 +1356,97 @@ async function parseStateArtifactEnvelope(
 }
 
 function localStateArtifactAad(metadata: {
-  readonly version: 1;
+  readonly version: 2;
   readonly stateRef: string;
+  readonly workspaceId: string;
+  readonly subject: NonNullable<DispatchStateScope["subject"]>;
+  readonly environment: string;
   readonly generation: number;
   readonly createdByRunId: string;
   readonly action: "apply" | "destroy";
   readonly stateDigest: string;
+}): Uint8Array {
+  return new TextEncoder().encode(JSON.stringify(metadata));
+}
+
+async function parseRawOutputArtifactEnvelope(
+  text: string,
+  expectedRawOutputRef: string,
+  cryptoBoundary: SecretBoundaryCrypto,
+): Promise<LocalOpenTofuRawOutputArtifact> {
+  const envelope = parseObject(text);
+  const subject = parseStateSubject(envelope.subject);
+  if (
+    envelope.version !== 1 ||
+    envelope.kind !== "raw_output" ||
+    stringValue(envelope, "rawOutputRef") !== expectedRawOutputRef ||
+    !stringValue(envelope, "workspaceId") ||
+    !subject ||
+    !stringValue(envelope, "environment") ||
+    !Number.isSafeInteger(envelope.generation) ||
+    (envelope.generation as number) < 0 ||
+    !stringValue(envelope, "stateRef") ||
+    !stringValue(envelope, "stateDigest") ||
+    !stringValue(envelope, "createdByRunId") ||
+    envelope.action !== "apply" ||
+    !stringValue(envelope, "outputDigest") ||
+    !stringValue(envelope, "ciphertextBase64")
+  ) {
+    throw new Error(
+      `local OpenTofu raw output artifact ${expectedRawOutputRef} is malformed`,
+    );
+  }
+  const metadata = {
+    version: 1,
+    kind: "raw_output" as const,
+    rawOutputRef: expectedRawOutputRef,
+    workspaceId: requiredString(envelope, "workspaceId"),
+    subject,
+    environment: requiredString(envelope, "environment"),
+    generation: envelope.generation as number,
+    stateRef: requiredString(envelope, "stateRef"),
+    stateDigest: requiredString(envelope, "stateDigest"),
+    createdByRunId: requiredString(envelope, "createdByRunId"),
+    action: "apply" as const,
+    outputDigest: requiredString(envelope, "outputDigest"),
+  } as const;
+  const protectedPayload = parseObject(
+    await cryptoBoundary.open(
+      decodeCanonicalBase64(
+        requiredString(envelope, "ciphertextBase64"),
+        `local OpenTofu raw output artifact ${expectedRawOutputRef} ciphertext`,
+      ),
+      "global",
+      localRawOutputArtifactAad(metadata),
+    ),
+  );
+  const outputs = recordValue(protectedPayload, "outputs");
+  if (!outputs) {
+    throw new Error(
+      `local OpenTofu raw output artifact ${expectedRawOutputRef} has no protected outputs`,
+    );
+  }
+  const artifact: LocalOpenTofuRawOutputArtifact = {
+    ...metadata,
+    outputs: outputs as OpenTofuOutputEnvelope,
+  };
+  await assertLocalRawOutputArtifact(artifact);
+  return artifact;
+}
+
+function localRawOutputArtifactAad(metadata: {
+  readonly version: 1;
+  readonly kind: "raw_output";
+  readonly rawOutputRef: string;
+  readonly workspaceId: string;
+  readonly subject: NonNullable<DispatchStateScope["subject"]>;
+  readonly environment: string;
+  readonly generation: number;
+  readonly stateRef: string;
+  readonly stateDigest: string;
+  readonly createdByRunId: string;
+  readonly action: "apply";
+  readonly outputDigest: string;
 }): Uint8Array {
   return new TextEncoder().encode(JSON.stringify(metadata));
 }
@@ -1177,6 +1464,9 @@ async function assertLocalStateArtifact(
 ): Promise<void> {
   if (
     !artifact.stateRef.trim() ||
+    !artifact.workspaceId.trim() ||
+    !artifact.environment.trim() ||
+    !parseStateSubject(artifact.subject) ||
     !Number.isSafeInteger(artifact.generation) ||
     artifact.generation < 0 ||
     !artifact.createdByRunId.trim() ||
@@ -1196,18 +1486,128 @@ async function assertLocalStateArtifact(
   );
 }
 
+async function assertLocalRawOutputArtifact(
+  artifact: LocalOpenTofuRawOutputArtifact,
+): Promise<void> {
+  if (
+    !artifact.rawOutputRef.trim() ||
+    !artifact.workspaceId.trim() ||
+    !artifact.environment.trim() ||
+    !parseStateSubject(artifact.subject) ||
+    !Number.isSafeInteger(artifact.generation) ||
+    artifact.generation < 0 ||
+    !artifact.stateRef.trim() ||
+    !artifact.stateDigest.trim() ||
+    !artifact.createdByRunId.trim() ||
+    !artifact.outputDigest.trim()
+  ) {
+    throw new Error("local OpenTofu raw output artifact metadata is invalid");
+  }
+  const digest = await digestBytes(
+    new TextEncoder().encode(JSON.stringify(artifact.outputs)),
+  );
+  if (digest !== artifact.outputDigest) {
+    throw new Error(
+      `local OpenTofu raw output artifact ${artifact.rawOutputRef} digest mismatch`,
+    );
+  }
+}
+
 function assertSameStateMutation(
   existing: LocalOpenTofuStateArtifact,
   candidate: LocalOpenTofuStateArtifact,
 ): void {
   if (
     existing.createdByRunId !== candidate.createdByRunId ||
+    existing.workspaceId !== candidate.workspaceId ||
+    !sameStateSubject(existing.subject, candidate.subject) ||
+    existing.environment !== candidate.environment ||
     existing.generation !== candidate.generation ||
     existing.action !== candidate.action ||
     existing.stateDigest !== candidate.stateDigest
   ) {
     throw new Error(
       `local OpenTofu state target ${candidate.stateRef} is already committed by a different mutation`,
+    );
+  }
+}
+
+function assertSameRawOutputMutation(
+  existing: LocalOpenTofuRawOutputArtifact,
+  candidate: LocalOpenTofuRawOutputArtifact,
+): void {
+  if (
+    existing.createdByRunId !== candidate.createdByRunId ||
+    existing.workspaceId !== candidate.workspaceId ||
+    !sameStateSubject(existing.subject, candidate.subject) ||
+    existing.environment !== candidate.environment ||
+    existing.generation !== candidate.generation ||
+    existing.stateRef !== candidate.stateRef ||
+    existing.stateDigest !== candidate.stateDigest ||
+    existing.action !== candidate.action ||
+    existing.outputDigest !== candidate.outputDigest
+  ) {
+    throw new Error(
+      `local OpenTofu raw output target ${candidate.rawOutputRef} is already committed by a different mutation`,
+    );
+  }
+}
+
+function requiredStateSubject(
+  scope: DispatchStateScope,
+  runId: string,
+): NonNullable<DispatchStateScope["subject"]> {
+  const subject = parseStateSubject(scope.subject);
+  if (!subject) {
+    throw new Error(
+      `local OpenTofu run ${runId} requires an exact state subject`,
+    );
+  }
+  return subject;
+}
+
+function parseStateSubject(
+  value: unknown,
+): NonNullable<DispatchStateScope["subject"]> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const subject = value as { readonly kind?: unknown; readonly id?: unknown };
+  if (
+    (subject.kind !== "capsule" && subject.kind !== "resource") ||
+    typeof subject.id !== "string" ||
+    subject.id.trim().length === 0
+  ) {
+    return undefined;
+  }
+  return { kind: subject.kind, id: subject.id };
+}
+
+function sameStateSubject(
+  left: NonNullable<DispatchStateScope["subject"]>,
+  right: NonNullable<DispatchStateScope["subject"]>,
+): boolean {
+  return left.kind === right.kind && left.id === right.id;
+}
+
+function assertLocalMutationScope(
+  artifact: LocalOpenTofuStateArtifact,
+  scope: DispatchStateScope,
+  runId: string,
+  action: "apply" | "destroy",
+): void {
+  const subject = requiredStateSubject(scope, runId);
+  if (
+    artifact.stateRef !== scope.stateRef ||
+    artifact.workspaceId !== scope.workspaceId ||
+    !sameStateSubject(artifact.subject, subject) ||
+    artifact.environment !== scope.environment ||
+    artifact.generation !== scope.generation ||
+    artifact.createdByRunId !== runId ||
+    artifact.action !== action
+  ) {
+    throw new Error(
+      `local OpenTofu state ${scope.stateRef} does not match its exact workspace, subject, environment, action, generation, and ApplyRun authority`,
     );
   }
 }

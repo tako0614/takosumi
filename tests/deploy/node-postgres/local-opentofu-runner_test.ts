@@ -259,6 +259,8 @@ test("HTTP OpenTofu runner keeps an unchanged object-storage source archive with
 const unusedStateStore = {
   read: async () => undefined,
   commit: async <T>(artifact: T): Promise<T> => artifact,
+  readRawOutput: async () => undefined,
+  commitRawOutput: async <T>(artifact: T): Promise<T> => artifact,
 };
 
 function sourceSnapshot(archiveDigest: string): SourceSnapshot {

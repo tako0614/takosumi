@@ -101,7 +101,11 @@ export interface AdapterApplyInput {
   /** Internal shared-Run recovery authority for the OpenTofu adapter only. */
   readonly opentofuApplyRun?: {
     readonly applyRunId?: string;
-    readonly checkpointApplyRun?: (applyRunId: string) => Promise<void>;
+    readonly applyPlanRunId?: string;
+    readonly checkpointApplyRun?: (
+      applyRunId: string,
+      planRunId: string,
+    ) => Promise<void>;
   };
   readonly plan: ResourceShapePlan;
   /** The selected TargetPool entry the plan resolved to. */
@@ -237,7 +241,11 @@ export interface AdapterDeleteInput {
   /** Internal shared-Run recovery authority for the OpenTofu adapter only. */
   readonly opentofuApplyRun?: {
     readonly applyRunId?: string;
-    readonly checkpointApplyRun?: (applyRunId: string) => Promise<void>;
+    readonly applyPlanRunId?: string;
+    readonly checkpointApplyRun?: (
+      applyRunId: string,
+      planRunId: string,
+    ) => Promise<void>;
   };
   /**
    * The same implementation plan used to create the Resource. OpenTofu-backed

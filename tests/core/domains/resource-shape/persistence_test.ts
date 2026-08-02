@@ -524,6 +524,27 @@ for (const backend of backends) {
       }
     });
 
+    test("resource shape: OpenTofu recovery authority round-trips exact ApplyRun and PlanRun ids", async () => {
+      const name = `opentofu-recovery-${backend.label}`;
+      const record: ResourceShapeRecord = {
+        ...minimalShape(),
+        id: formatResourceShapeId(SPACE_B, "EdgeWorker", name),
+        name,
+        phase: "Applying",
+        pendingOperation: {
+          authority: "opentofu_apply_run",
+          runId: `apply_${backend.label}`,
+          planRunId: `plan_${backend.label}`,
+          operation: "apply",
+          operationKey: `apply_${backend.label}`,
+        },
+      };
+
+      expect(await stores.resources.upsert(record)).toEqual(record);
+      expect(await stores.resources.get(record.id)).toEqual(record);
+      await stores.resources.delete(record.id);
+    });
+
     test("resource shape: upsert overwrites on id conflict", async () => {
       const record = fullShape();
       const current = await stores.resources.upsert(record);

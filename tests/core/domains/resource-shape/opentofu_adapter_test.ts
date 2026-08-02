@@ -504,6 +504,7 @@ class FakeDeployControlDriver implements DeployControlRunDriver {
     readonly completeApplyOnGet?: boolean;
   };
   #seq = 0;
+  #failApplyPutOnce = false;
 
   constructor(
     options: {
@@ -593,7 +594,7 @@ class FakeDeployControlDriver implements DeployControlRunDriver {
     this.applyCalls.push(request);
     const planRun = this.#plans.get(request.planRunId)!;
     const applyRun = {
-      id: `apply_${++this.#seq}`,
+      id: internal?.applyRunId ?? `apply_${++this.#seq}`,
       planRunId: request.planRunId,
       workspaceId: planRun.workspaceId,
       operation: planRun.operation,
@@ -606,11 +607,15 @@ class FakeDeployControlDriver implements DeployControlRunDriver {
       createdAt: 0,
       updatedAt: 0,
     } as unknown as ApplyRunResponse["applyRun"];
-    this.#applies.set(applyRun.id, applyRun);
-    if (internal?.onCreated) {
-      await internal.onCreated(applyRun);
+    if (internal?.onPrepared) {
+      await internal.onPrepared(applyRun);
       this.checkpointedApplyRuns.push(applyRun.id);
     }
+    if (this.#failApplyPutOnce) {
+      this.#failApplyPutOnce = false;
+      throw new Error("simulated ApplyRun durable put failure");
+    }
+    this.#applies.set(applyRun.id, applyRun);
     return { applyRun };
   }
 
@@ -622,7 +627,10 @@ class FakeDeployControlDriver implements DeployControlRunDriver {
   }
 
   getApplyRun(id: string): Promise<ApplyRunResponse> {
-    let applyRun = this.#applies.get(id)!;
+    let applyRun = this.#applies.get(id);
+    if (!applyRun) {
+      throw new OpenTofuControllerError("not_found", `ApplyRun ${id} not found`);
+    }
     if (
       this.#options.completeApplyOnGet &&
       (applyRun.status === "queued" || applyRun.status === "running")
@@ -631,6 +639,10 @@ class FakeDeployControlDriver implements DeployControlRunDriver {
       this.#applies.set(id, applyRun);
     }
     return Promise.resolve({ applyRun });
+  }
+
+  failNextApplyPut(): void {
+    this.#failApplyPutOnce = true;
   }
 
   #completedPlan(planRun: PublicPlanRun): PublicPlanRun {
@@ -1348,13 +1360,15 @@ test("ControllerOpentofuRunPort resumes the checkpointed apply without creating 
     new ControllerOpentofuRunPort({ driver }),
   );
   let checkpointedApplyRunId: string | undefined;
+  let checkpointedPlanRunId: string | undefined;
   const input = applyInput(edgeWorkerPlan(), cloudflareTarget);
 
   const first = await adapter.apply({
     ...input,
     opentofuApplyRun: {
-      checkpointApplyRun: (applyRunId) => {
+      checkpointApplyRun: (applyRunId, planRunId) => {
         checkpointedApplyRunId = applyRunId;
+        checkpointedPlanRunId = planRunId;
         return Promise.resolve();
       },
     },
@@ -1364,12 +1378,56 @@ test("ControllerOpentofuRunPort resumes the checkpointed apply without creating 
 
   const recovered = await adapter.apply({
     ...input,
-    opentofuApplyRun: { applyRunId: checkpointedApplyRunId },
+    opentofuApplyRun: {
+      applyRunId: checkpointedApplyRunId,
+      applyPlanRunId: checkpointedPlanRunId,
+    },
   });
   expect(recovered).toEqual(first);
   expect(driver.planCalls).toHaveLength(1);
   expect(driver.applyCalls).toHaveLength(1);
   expect(driver.runQueuedApplyCalls).toEqual([first.runId]);
+});
+
+test("ControllerOpentofuRunPort recreates a missing checkpointed ApplyRun with the exact id and PlanRun", async () => {
+  const driver = new FakeDeployControlDriver();
+  const adapter = new OpentofuResourceShapeAdapter(
+    new ControllerOpentofuRunPort({ driver }),
+  );
+  const input = applyInput(edgeWorkerPlan(), cloudflareTarget);
+  let checkpoint:
+    | { readonly applyRunId: string; readonly planRunId: string }
+    | undefined;
+  driver.failNextApplyPut();
+  await expect(
+    adapter.apply({
+      ...input,
+      opentofuApplyRun: {
+        checkpointApplyRun: (applyRunId, planRunId) => {
+          checkpoint = { applyRunId, planRunId };
+          return Promise.resolve();
+        },
+      },
+    }),
+  ).rejects.toThrow("simulated ApplyRun durable put failure");
+  expect(checkpoint).toBeDefined();
+
+  const recovered = await adapter.apply({
+    ...input,
+    opentofuApplyRun: {
+      applyRunId: checkpoint!.applyRunId,
+      applyPlanRunId: checkpoint!.planRunId,
+      checkpointApplyRun: (applyRunId, planRunId) => {
+        expect({ applyRunId, planRunId }).toEqual(checkpoint!);
+        return Promise.resolve();
+      },
+    },
+  });
+
+  expect(recovered.runId).toBe(checkpoint!.applyRunId);
+  expect(driver.planCalls).toHaveLength(1);
+  expect(driver.applyCalls).toHaveLength(2);
+  expect(driver.runQueuedApplyCalls).toEqual([checkpoint!.applyRunId]);
 });
 
 test("ControllerOpentofuRunPort rejects a checkpoint that belongs to another Resource authority", async () => {
@@ -1386,7 +1444,7 @@ test("ControllerOpentofuRunPort rejects a checkpoint that belongs to another Res
       resourceId: "tkrn:other:EdgeWorker:api",
       opentofuApplyRun: { applyRunId: first.runId },
     }),
-  ).rejects.toThrow("is not the canonical update run");
+  ).rejects.toThrow("is not the canonical update plan");
   expect(driver.planCalls).toHaveLength(1);
   expect(driver.applyCalls).toHaveLength(1);
 });
@@ -1413,7 +1471,7 @@ test("ControllerOpentofuRunPort rejects a checkpoint with the wrong operation or
       ...applyInput(plan, cloudflareTarget),
       opentofuApplyRun: { applyRunId: destroyApplyRunId },
     }),
-  ).rejects.toThrow("is not the canonical update run");
+  ).rejects.toThrow("is not the canonical update plan");
 
   const applyResult = await adapter.apply(applyInput(plan, cloudflareTarget));
   await expect(
@@ -1527,13 +1585,15 @@ test("ControllerOpentofuRunPort resumes the checkpointed destroy without creatin
     new ControllerOpentofuRunPort({ driver }),
   );
   let checkpointedApplyRunId: string | undefined;
+  let checkpointedPlanRunId: string | undefined;
   const input = deleteInput({ plan: edgeWorkerPlan() });
 
   await adapter.delete({
     ...input,
     opentofuApplyRun: {
-      checkpointApplyRun: (applyRunId) => {
+      checkpointApplyRun: (applyRunId, planRunId) => {
         checkpointedApplyRunId = applyRunId;
+        checkpointedPlanRunId = planRunId;
         return Promise.resolve();
       },
     },
@@ -1542,7 +1602,10 @@ test("ControllerOpentofuRunPort resumes the checkpointed destroy without creatin
 
   await adapter.delete({
     ...input,
-    opentofuApplyRun: { applyRunId: checkpointedApplyRunId },
+    opentofuApplyRun: {
+      applyRunId: checkpointedApplyRunId,
+      applyPlanRunId: checkpointedPlanRunId,
+    },
   });
   expect(driver.planCalls).toHaveLength(1);
   expect(driver.applyCalls).toHaveLength(1);

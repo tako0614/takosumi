@@ -56,6 +56,7 @@ import {
 import { canonicalProviderSource } from "takosumi-contract/provider-env-rules";
 import { stableJsonDigest } from "../../adapters/source/digest.ts";
 import { rootgenErrorForController } from "../deploy-control/rootgen_error.ts";
+import { OpenTofuControllerError } from "../deploy-control/errors.ts";
 import type {
   AdapterApplyInput,
   AdapterApplyResult,
@@ -105,7 +106,11 @@ export interface OpentofuRunRequest {
   readonly priorState?: ResourceShapePriorStateDescriptor;
   readonly stateAdoption?: ResourceShapeStateAdoptionDescriptor;
   readonly applyRunId?: string;
-  readonly checkpointApplyRun?: (applyRunId: string) => Promise<void>;
+  readonly applyPlanRunId?: string;
+  readonly checkpointApplyRun?: (
+    applyRunId: string,
+    planRunId: string,
+  ) => Promise<void>;
   /** Operator-selected registry key from the Target descriptor. */
   readonly moduleTemplate: string;
   /** Operator-injected child module, resolved fail-closed by the service. */
@@ -139,7 +144,11 @@ export interface OpentofuDestroyRequest {
   readonly priorState?: ResourceShapePriorStateDescriptor;
   readonly stateAdoption?: ResourceShapeStateAdoptionDescriptor;
   readonly applyRunId?: string;
-  readonly checkpointApplyRun?: (applyRunId: string) => Promise<void>;
+  readonly applyPlanRunId?: string;
+  readonly checkpointApplyRun?: (
+    applyRunId: string,
+    planRunId: string,
+  ) => Promise<void>;
   /** Re-generated implementation plan. Present for OpenTofu-backed shapes. */
   readonly moduleTemplate?: string;
   readonly operatorModule?: {
@@ -348,6 +357,9 @@ export class OpentofuResourceShapeAdapter implements ResourceAdapter {
       ...(input.opentofuApplyRun?.applyRunId
         ? { applyRunId: input.opentofuApplyRun.applyRunId }
         : {}),
+      ...(input.opentofuApplyRun?.applyPlanRunId
+        ? { applyPlanRunId: input.opentofuApplyRun.applyPlanRunId }
+        : {}),
       ...(input.opentofuApplyRun?.checkpointApplyRun
         ? {
             checkpointApplyRun:
@@ -381,6 +393,9 @@ export class OpentofuResourceShapeAdapter implements ResourceAdapter {
       ...(input.stateAdoption ? { stateAdoption: input.stateAdoption } : {}),
       ...(input.opentofuApplyRun?.applyRunId
         ? { applyRunId: input.opentofuApplyRun.applyRunId }
+        : {}),
+      ...(input.opentofuApplyRun?.applyPlanRunId
+        ? { applyPlanRunId: input.opentofuApplyRun.applyPlanRunId }
         : {}),
       ...(input.opentofuApplyRun?.checkpointApplyRun
         ? {
@@ -617,8 +632,11 @@ export class ControllerOpentofuRunPort implements OpentofuRunPort {
       { actor: request.actor.actorAccountId },
       request.checkpointApplyRun
         ? {
-            onCreated: async (applyRun) => {
-              await request.checkpointApplyRun!(applyRun.id);
+            onPrepared: async (applyRun) => {
+              await request.checkpointApplyRun!(
+                applyRun.id,
+                applyRun.planRunId,
+              );
             },
           }
         : {},
@@ -735,8 +753,11 @@ export class ControllerOpentofuRunPort implements OpentofuRunPort {
       { actor: request.actor.actorAccountId },
       request.checkpointApplyRun
         ? {
-            onCreated: async (applyRun) => {
-              await request.checkpointApplyRun!(applyRun.id);
+            onPrepared: async (applyRun) => {
+              await request.checkpointApplyRun!(
+                applyRun.id,
+                applyRun.planRunId,
+              );
             },
           }
         : {},
@@ -759,10 +780,16 @@ export class ControllerOpentofuRunPort implements OpentofuRunPort {
     applyRunId: string,
     verb: "applied" | "refreshed",
   ): Promise<OpentofuRunResult> {
-    let applyRun = (await this.#driver.getApplyRun(applyRunId)).applyRun;
-    const planRun = (
-      await this.#driver.getPlanRun(applyRun.planRunId)
-    ).planRun;
+    const recovered = await this.#loadOrRecreateApplyRun(
+      request,
+      applyRunId,
+      request.applyPlanRunId,
+      verb === "refreshed"
+        ? "update"
+        : operationForStateGeneration(request.stateGeneration),
+    );
+    let applyRun = recovered.applyRun;
+    const planRun = recovered.planRun;
     assertResourceApplyRunAuthority(
       request,
       applyRun,
@@ -782,10 +809,14 @@ export class ControllerOpentofuRunPort implements OpentofuRunPort {
     request: OpentofuDestroyRequest,
     applyRunId: string,
   ): Promise<OpentofuRunResult> {
-    let applyRun = (await this.#driver.getApplyRun(applyRunId)).applyRun;
-    const planRun = (
-      await this.#driver.getPlanRun(applyRun.planRunId)
-    ).planRun;
+    const recovered = await this.#loadOrRecreateApplyRun(
+      request,
+      applyRunId,
+      request.applyPlanRunId,
+      "destroy",
+    );
+    let applyRun = recovered.applyRun;
+    const planRun = recovered.planRun;
     assertResourceApplyRunAuthority(request, applyRun, planRun, "destroy");
     if (this.#drive && applyRun.status === "queued") {
       applyRun = (await this.#driver.runQueuedApply(applyRun.id)).applyRun;
@@ -803,6 +834,64 @@ export class ControllerOpentofuRunPort implements OpentofuRunPort {
       nativeResources: [],
       outputs: {},
     };
+  }
+
+  async #loadOrRecreateApplyRun(
+    request: OpentofuRunRequest | OpentofuDestroyRequest,
+    applyRunId: string,
+    planRunId: string | undefined,
+    expectedOperation: NonNullable<CreatePlanRunRequest["operation"]>,
+  ): Promise<{ readonly applyRun: ApplyRun; readonly planRun: PublicPlanRun }> {
+    try {
+      const applyRun = (await this.#driver.getApplyRun(applyRunId)).applyRun;
+      const planRun = (
+        await this.#driver.getPlanRun(applyRun.planRunId)
+      ).planRun;
+      assertResourceApplyRunAuthority(
+        request,
+        applyRun,
+        planRun,
+        expectedOperation,
+      );
+      if (planRunId && planRun.id !== planRunId) {
+        throw new Error(
+          `ApplyRun ${applyRunId} does not match checkpointed PlanRun ${planRunId}`,
+        );
+      }
+      return { applyRun, planRun };
+    } catch (error) {
+      if (!isApplyRunNotFound(error) || !planRunId) throw error;
+    }
+
+    const planRun = (await this.#driver.getPlanRun(planRunId)).planRun;
+    assertResourcePlanRunAuthority(request, planRun, expectedOperation);
+    const response = await this.#driver.createApplyRun(
+      {
+        planRunId,
+        expected: applyGuardFromPlanRun(planRun),
+      },
+      { actor: request.actor.actorAccountId },
+      {
+        applyRunId,
+        ...(request.checkpointApplyRun
+          ? {
+              onPrepared: async (prepared) => {
+                await request.checkpointApplyRun!(
+                  prepared.id,
+                  prepared.planRunId,
+                );
+              },
+            }
+          : {}),
+      },
+    );
+    assertResourceApplyRunAuthority(
+      request,
+      response.applyRun,
+      planRun,
+      expectedOperation,
+    );
+    return { applyRun: response.applyRun, planRun };
   }
 
   #completedApplyResult(
@@ -1043,21 +1132,49 @@ function assertResourceApplyRunAuthority(
   planRun: PublicPlanRun,
   expectedOperation: NonNullable<CreatePlanRunRequest["operation"]>,
 ): void {
+  assertResourcePlanRunAuthority(request, planRun, expectedOperation);
   const workspaceId = workspaceIdFromResourceId(request.resourceId);
   if (
     applyRun.planRunId !== planRun.id ||
     applyRun.workspaceId !== workspaceId ||
+    applyRun.operation !== expectedOperation
+  ) {
+    throw new Error(
+      `ApplyRun ${applyRun.id} is not the canonical ${expectedOperation} run for Resource ${request.resourceId}`,
+    );
+  }
+}
+
+function assertResourcePlanRunAuthority(
+  request: Pick<
+    OpentofuRunRequest | OpentofuDestroyRequest,
+    "resourceId" | "environment"
+  >,
+  planRun: PublicPlanRun,
+  expectedOperation: NonNullable<CreatePlanRunRequest["operation"]>,
+): void {
+  const workspaceId = workspaceIdFromResourceId(request.resourceId);
+  if (
     planRun.workspaceId !== workspaceId ||
-    applyRun.operation !== expectedOperation ||
     planRun.operation !== expectedOperation ||
     planRun.resourceContext?.resourceId !== request.resourceId ||
     planRun.resourceContext.workspaceId !== workspaceId ||
     planRun.resourceContext.environment !== request.environment
   ) {
     throw new Error(
-      `ApplyRun ${applyRun.id} is not the canonical ${expectedOperation} run for Resource ${request.resourceId}`,
+      `PlanRun ${planRun.id} is not the canonical ${expectedOperation} plan for Resource ${request.resourceId}`,
     );
   }
+}
+
+function isApplyRunNotFound(error: unknown): boolean {
+  return (
+    (error instanceof OpenTofuControllerError && error.code === "not_found") ||
+    (error instanceof Error &&
+      error.name === "OpenTofuControllerError" &&
+      "code" in error &&
+      error.code === "not_found")
+  );
 }
 
 function assertResourceApplyRunResultAuthority(
