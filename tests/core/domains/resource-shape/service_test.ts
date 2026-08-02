@@ -47,6 +47,10 @@ import {
 } from "../../../../core/domains/deploy-control/store.ts";
 import { ActivityService } from "../../../../core/domains/activity/mod.ts";
 import { createD1ResourceShapeStores } from "../../../../core/domains/resource-shape/d1_stores.ts";
+import {
+  withDbOwnedHostRuntimeMaterialization,
+  type HostRuntimeResourceLifecycle,
+} from "../../../../core/domains/resource-shape/host_runtime_materialization.ts";
 import { ensureD1OpenTofuLedgerSchema } from "../../../../worker/src/d1_opentofu_store.ts";
 import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
 
@@ -4972,6 +4976,128 @@ test("direct-plugin delete response loss converges from drifted or missing after
       (await ledger.getResourceOperationRun(runId ?? "missing"))?.status,
     ).toBe("succeeded");
   }
+});
+
+test("direct-plugin EdgeWorker delete recovery retires retained runtime when provider is already missing", async () => {
+  const stores = createInMemoryResourceShapeStores();
+  const ledger = new InMemoryOpenTofuControlStore();
+  const backend: StableDeleteBackend = {
+    exists: true,
+    observedStatus: "drifted",
+    deleteMutations: 0,
+    operationKeys: [],
+    loseBeforeMutation: false,
+    loseAfterMutation: true,
+  };
+  const firstAdapter = new StableNameDeleteAdapter(backend);
+  const first = new ResourceShapeService({
+    stores,
+    adapter: firstAdapter,
+    operationRuns: ledger,
+    activity: new ActivityService({
+      store: ledger,
+      now: () => new Date(NOW),
+    }),
+    now: () => NOW,
+  });
+  await first.putTargetPool("space_1", "default", {
+    targets: [
+      {
+        name: "edge-main",
+        type: "custom-edge",
+        priority: 90,
+        implementations: [
+          {
+            shape: "EdgeWorker",
+            implementation: "custom_edge_runtime",
+            plugin: "custom-edge-plugin",
+            interfaces: { worker_fetch: "native" },
+          },
+        ],
+      },
+    ],
+  });
+  const request = {
+    actor: ACTOR,
+    space: "space_1",
+    kind: "EdgeWorker" as const,
+    name: "missing-provider-retained-runtime",
+    spec: {
+      name: "missing-provider-retained-runtime",
+      source: { artifactPath: "/work/dist/worker.js" },
+    },
+  };
+  expect((await reviewedApply(first, request)).ok).toBe(true);
+
+  const pending = await first.delete(
+    "space_1",
+    "EdgeWorker",
+    request.name,
+    ACTOR,
+  );
+  expect(pending.ok).toBe(false);
+  if (!pending.ok) {
+    expect(pending.error.code).toBe("deployment_finalize_pending");
+  }
+  expect(backend.exists).toBe(false);
+  expect(firstAdapter.deleteInputs).toHaveLength(1);
+
+  let retained = true;
+  const retired: Array<{
+    resourceId: string;
+    resourceGeneration: number;
+    resourceRevisionId: string;
+  }> = [];
+  const lifecycle: HostRuntimeResourceLifecycle = {
+    activate: () => Promise.resolve(),
+    reconcile: () => Promise.resolve(),
+    retirementRequired: () => Promise.resolve(retained),
+    async retire(input) {
+      retired.push(input);
+      retained = false;
+    },
+  };
+  const recoveryBackend = new StableNameDeleteAdapter(backend);
+  const recoveryAdapter = withDbOwnedHostRuntimeMaterialization(
+    recoveryBackend,
+    async () => {
+      throw new Error("InstallConfig resolver must not run during recovery");
+    },
+    lifecycle,
+  );
+  const restarted = new ResourceShapeService({
+    stores,
+    adapter: recoveryAdapter,
+    operationRuns: ledger,
+    activity: new ActivityService({
+      store: ledger,
+      now: () => new Date(NOW),
+    }),
+    now: () => NOW,
+  });
+
+  const recovered = await restarted.delete(
+    "space_1",
+    "EdgeWorker",
+    request.name,
+    ACTOR,
+  );
+  expect(recovered.ok).toBe(true);
+  expect(recoveryBackend.observeInputs).toHaveLength(1);
+  expect(recoveryBackend.deleteInputs).toHaveLength(1);
+  expect(recoveryBackend.deleteInputs[0]?.operationKey).toBe(
+    firstAdapter.deleteInputs[0]?.operationKey,
+  );
+  expect(retired).toEqual([
+    {
+      resourceId:
+        "tkrn:space_1:EdgeWorker:missing-provider-retained-runtime",
+      resourceGeneration: 1,
+      resourceRevisionId: firstAdapter.applyInputs[0]?.resourceRevisionId,
+    },
+  ]);
+  expect(retained).toBe(false);
+  expect(backend.deleteMutations).toBe(1);
 });
 
 test("direct-plugin refresh atomically recovers Resource and ResolutionLock after restart", async () => {

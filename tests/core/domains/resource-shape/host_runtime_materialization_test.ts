@@ -283,6 +283,128 @@ test("observe, refresh, and delete ignore invalid stored configs and caller runt
   expect(deleted[0]).not.toHaveProperty("hostRuntimeMaterialization");
 });
 
+test("missing direct-plugin EdgeWorker remains drifted until exact retained runtime is retired", async () => {
+  const checked: Array<{
+    resourceId: string;
+    resourceGeneration: number;
+    resourceRevisionId: string;
+  }> = [];
+  let retirementRequired = true;
+  const lifecycle: HostRuntimeResourceLifecycle = {
+    activate: () => Promise.resolve(),
+    reconcile: () => Promise.resolve(),
+    retire: () => Promise.resolve(),
+    async retirementRequired(input) {
+      checked.push(input);
+      return retirementRequired;
+    },
+  };
+  const observed: AdapterApplyInput[] = [];
+  const adapter: ResourceAdapter = {
+    id: "capture",
+    preview: () => Promise.resolve({ summary: "preview", nativeResources: [] }),
+    apply: () => Promise.resolve({ nativeResources: [], outputs: {} }),
+    importResource: () =>
+      Promise.resolve({ summary: "import", nativeResources: [], outputs: {} }),
+    async observe(input) {
+      observed.push(input);
+      return {
+        status: "missing",
+        summary: "provider resource is missing",
+        backendOperationId: "backend-observe-1",
+      };
+    },
+    refresh: () =>
+      Promise.resolve({
+        summary: "refresh",
+        nativeResources: [],
+        outputs: {},
+      }),
+    delete: () => Promise.resolve(),
+  };
+  const decorated = withDbOwnedHostRuntimeMaterialization(
+    adapter,
+    async () => {
+      throw new Error("InstallConfig resolver must not run during observe");
+    },
+    lifecycle,
+  );
+
+  const retained = await decorated.observe({
+    ...adapterInput(),
+    hostRuntimeMaterialization: deleteAdapterInput().hostRuntimeMaterialization,
+  });
+  expect(retained).toEqual({
+    status: "drifted",
+    summary:
+      "provider resource is missing but retained host runtime requires retirement",
+    backendOperationId: "backend-observe-1",
+  });
+  expect(checked).toEqual([
+    {
+      resourceId: "tkrn:workspace_1:EdgeWorker:app",
+      resourceGeneration: 1,
+      resourceRevisionId: "run_1",
+    },
+  ]);
+  expect(observed[0]).not.toHaveProperty("hostRuntimeMaterialization");
+
+  retirementRequired = false;
+  expect(await decorated.observe(adapterInput())).toEqual({
+    status: "missing",
+    summary: "provider resource is missing",
+    backendOperationId: "backend-observe-1",
+  });
+});
+
+test("module-backed EdgeWorker missing observation does not consult retained runtime", async () => {
+  let checked = false;
+  const lifecycle: HostRuntimeResourceLifecycle = {
+    activate: () => Promise.resolve(),
+    reconcile: () => Promise.resolve(),
+    retire: () => Promise.resolve(),
+    retirementRequired: () => {
+      checked = true;
+      return Promise.resolve(true);
+    },
+  };
+  const adapter: ResourceAdapter = {
+    id: "capture",
+    preview: () => Promise.resolve({ summary: "preview", nativeResources: [] }),
+    apply: () => Promise.resolve({ nativeResources: [], outputs: {} }),
+    importResource: () =>
+      Promise.resolve({ summary: "import", nativeResources: [], outputs: {} }),
+    observe: () =>
+      Promise.resolve({ status: "missing", summary: "provider missing" }),
+    refresh: () =>
+      Promise.resolve({
+        summary: "refresh",
+        nativeResources: [],
+        outputs: {},
+      }),
+    delete: () => Promise.resolve(),
+  };
+  const decorated = withDbOwnedHostRuntimeMaterialization(
+    adapter,
+    async () => undefined,
+    lifecycle,
+  );
+  const direct = adapterInput();
+  const { requiresAdapterPlugin: _plugin, ...modulePlan } = direct.plan;
+
+  expect(
+    await decorated.observe({
+      ...direct,
+      plan: {
+        ...modulePlan,
+        executionId: "cloudflare-worker-service",
+        moduleTemplate: "cloudflare-worker-service",
+      },
+    }),
+  ).toEqual({ status: "missing", summary: "provider missing" });
+  expect(checked).toBe(false);
+});
+
 test("EdgeWorker delete retires exact identity before provider delete without resolving InstallConfig", async () => {
   const events: string[] = [];
   const retired: Array<{
@@ -293,6 +415,7 @@ test("EdgeWorker delete retires exact identity before provider delete without re
   const lifecycle: HostRuntimeResourceLifecycle = {
     activate: () => Promise.resolve(),
     reconcile: () => Promise.resolve(),
+    retirementRequired: () => Promise.resolve(false),
     async retire(input) {
       retired.push(input);
       events.push("retire");
@@ -343,6 +466,7 @@ test("EdgeWorker provider delete is blocked when host retirement fails", async (
   const lifecycle: HostRuntimeResourceLifecycle = {
     activate: () => Promise.resolve(),
     reconcile: () => Promise.resolve(),
+    retirementRequired: () => Promise.resolve(false),
     retire: () => Promise.reject(new Error("retire failed")),
   };
   const adapter: ResourceAdapter = {
@@ -383,6 +507,7 @@ test("module-backed EdgeWorker delete bypasses retained retirement", async () =>
   const lifecycle: HostRuntimeResourceLifecycle = {
     activate: () => Promise.resolve(),
     reconcile: () => Promise.resolve(),
+    retirementRequired: () => Promise.resolve(false),
     retire: () => {
       retireCalled = true;
       return Promise.resolve();
@@ -436,6 +561,7 @@ test("direct-plugin EdgeWorker delete requires its canonical backend revision", 
   const lifecycle: HostRuntimeResourceLifecycle = {
     activate: () => Promise.resolve(),
     reconcile: () => Promise.resolve(),
+    retirementRequired: () => Promise.resolve(false),
     retire: () => Promise.resolve(),
   };
   const adapter: ResourceAdapter = {
@@ -475,6 +601,7 @@ test("EdgeWorker delete cannot skip retirement with a missing plan", async () =>
   const lifecycle: HostRuntimeResourceLifecycle = {
     activate: () => Promise.resolve(),
     reconcile: () => Promise.resolve(),
+    retirementRequired: () => Promise.resolve(false),
     retire: () => Promise.resolve(),
   };
   const adapter: ResourceAdapter = {

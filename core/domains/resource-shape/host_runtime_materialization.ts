@@ -48,6 +48,16 @@ export interface HostRuntimeResourceLifecycle {
     readonly resourceGeneration: number;
     readonly resourceRevisionId: string;
   }): Promise<void>;
+  /**
+   * Reports whether an exact canonical Resource revision still owns retained
+   * host runtime state that must be retired even when the provider object is
+   * already absent. Implementations must fail closed on identity mismatch.
+   */
+  retirementRequired(input: {
+    readonly resourceId: string;
+    readonly resourceGeneration: number;
+    readonly resourceRevisionId: string;
+  }): Promise<boolean>;
 }
 
 /**
@@ -294,7 +304,46 @@ export function withDbOwnedHostRuntimeMaterialization(
       return await adapter.importResource(await materializeInput(input));
     },
     async observe(input) {
-      return await adapter.observe(stripUntrustedMaterialization(input));
+      const canonicalInput = stripUntrustedMaterialization(input);
+      const observation = await adapter.observe(canonicalInput);
+      if (!lifecycle || observation.status !== "missing") return observation;
+      const canonicalKind = parseResourceShapeId(input.resourceId)?.kind;
+      if (
+        canonicalKind !== "EdgeWorker" &&
+        input.plan?.shape !== "EdgeWorker"
+      ) {
+        return observation;
+      }
+      if (
+        canonicalKind !== "EdgeWorker" ||
+        input.plan?.shape !== "EdgeWorker"
+      ) {
+        throw new Error(
+          `host runtime lifecycle observe identity does not match EdgeWorker ${input.resourceId}`,
+        );
+      }
+      // Provider-native/module-backed plans have no retained host runtime.
+      if (input.plan.requiresAdapterPlugin !== true) return observation;
+      if (!input.resourceRevisionId) {
+        throw new Error(
+          `host runtime lifecycle has no canonical backend revision for ${input.resourceId}`,
+        );
+      }
+      if (
+        !(await lifecycle.retirementRequired({
+          resourceId: input.resourceId,
+          resourceGeneration: input.resourceGeneration,
+          resourceRevisionId: input.resourceRevisionId,
+        }))
+      ) {
+        return observation;
+      }
+      return {
+        ...observation,
+        status: "drifted",
+        summary:
+          "provider resource is missing but retained host runtime requires retirement",
+      };
     },
     async refresh(input) {
       return await adapter.refresh(stripUntrustedMaterialization(input));
