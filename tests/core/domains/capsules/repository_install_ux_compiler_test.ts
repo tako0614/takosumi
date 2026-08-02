@@ -341,4 +341,262 @@ describe("repository install UX compiler", () => {
       );
     }
   });
+
+  test("compiles a generic v2 launcher declaration into existing blueprint and Output shapes", () => {
+    const v2Document: RepositoryManifestDocument = {
+      apiVersion: "takosumi.com/v2",
+      kind: "Repository",
+      install: {
+        modules: {
+          ".": {
+            inputs: [],
+            interfaces: [
+              {
+                key: "launcher",
+                name: "example.launcher",
+                spec: {
+                  type: "interface.ui.surface",
+                  version: "1",
+                  document: {
+                    launcher: true,
+                    display: { title: "Example", icon: "/icons/example.svg" },
+                  },
+                  inputs: {
+                    url: {
+                      source: "output",
+                      outputName: "launch_url",
+                      outputType: "url",
+                    },
+                    mode: { source: "literal", value: "web" },
+                  },
+                  access: { visibility: "workspace" },
+                },
+                bindingRequests: [
+                  {
+                    key: "installer",
+                    subject: { source: "installing_principal" },
+                    permissions: ["ui.open"],
+                    delivery: { type: "none" },
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      },
+    };
+    const result = compile({
+      document: v2Document,
+      compatibilityReport: report({
+        rootModuleOutputs: [
+          { name: "launch_url", sensitive: false, ephemeral: false },
+        ],
+      }),
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.compiled.interfaceBlueprints).toEqual([
+      {
+        key: "launcher",
+        name: "example.launcher",
+        spec: {
+          type: "interface.ui.surface",
+          version: "1",
+          document: {
+            launcher: true,
+            display: { title: "Example", icon: "/icons/example.svg" },
+          },
+          inputs: {
+            mode: { source: "literal", value: "web" },
+            url: { source: "capsule_output", outputName: "launch_url" },
+          },
+          access: { visibility: "workspace" },
+        },
+        bindings: [
+          {
+            key: "installer",
+            subject: { source: "installing_principal" },
+            permissions: ["ui.open"],
+            delivery: { type: "none" },
+          },
+        ],
+      },
+    ]);
+    expect(result.compiled.outputAllowlist).toEqual({
+      launch_url: { from: "launch_url", type: "url", required: true },
+    });
+  });
+
+  test("rejects v2 Interface Outputs that are missing or not provably public", () => {
+    const v2: RepositoryManifestDocument = {
+      apiVersion: "takosumi.com/v2",
+      kind: "Repository",
+      install: {
+        modules: {
+          ".": {
+            inputs: [],
+            interfaces: [
+              {
+                key: "launcher",
+                name: "example.launcher",
+                spec: {
+                  type: "interface.ui.surface",
+                  version: "1",
+                  document: { launcher: true },
+                  inputs: {
+                    url: {
+                      source: "output",
+                      outputName: "launch_url",
+                      outputType: "url",
+                    },
+                  },
+                  access: { visibility: "workspace" },
+                },
+              },
+            ],
+          },
+        },
+      },
+    };
+    const missing = compile({
+      document: v2,
+      compatibilityReport: report({ rootModuleOutputs: [] }),
+    });
+    expect(missing.ok).toBe(false);
+    if (!missing.ok) {
+      expect(missing.diagnostic.code).toBe(
+        "repository_install_ux_interface_output_missing",
+      );
+    }
+    for (const [field, expected] of [
+      ["sensitive", "repository_install_ux_interface_output_sensitive"],
+      ["ephemeral", "repository_install_ux_interface_output_ephemeral"],
+      ["unknown", "repository_install_ux_interface_output_secrecy_unknown"],
+    ] as const) {
+      const output =
+        field === "sensitive"
+          ? { name: "launch_url", sensitive: true, ephemeral: false }
+          : field === "ephemeral"
+            ? { name: "launch_url", sensitive: false, ephemeral: true }
+            : { name: "launch_url", sensitive: null, ephemeral: false };
+      const result = compile({
+        document: v2,
+        compatibilityReport: report({ rootModuleOutputs: [output] }),
+      });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.diagnostic.code).toBe(expected);
+    }
+  });
+
+  test("rejects duplicate output types, forbidden subjects, and unapproved delivery", () => {
+    const base: RepositoryManifestDocument = {
+      apiVersion: "takosumi.com/v2",
+      kind: "Repository",
+      install: {
+        modules: {
+          ".": {
+            inputs: [],
+            interfaces: [
+              {
+                key: "a",
+                name: "example.a",
+                spec: {
+                  type: "example",
+                  version: "1",
+                  document: {},
+                  inputs: {
+                    endpoint: {
+                      source: "output",
+                      outputName: "launch_url",
+                      outputType: "url",
+                    },
+                  },
+                  access: { visibility: "workspace" },
+                },
+                bindingRequests: [
+                  {
+                    key: "installer",
+                    subject: { source: "installing_principal" },
+                    permissions: ["ui.open"],
+                    delivery: { type: "none" },
+                  },
+                ],
+              },
+              {
+                key: "b",
+                name: "example.b",
+                spec: {
+                  type: "example",
+                  version: "1",
+                  document: {},
+                  inputs: {
+                    endpoint: {
+                      source: "output",
+                      outputName: "launch_url",
+                      outputType: "string",
+                    },
+                  },
+                  access: { visibility: "workspace" },
+                },
+              },
+            ],
+          },
+        },
+      },
+    };
+    const conflict = compile({
+      document: base,
+      compatibilityReport: report({
+        rootModuleOutputs: [
+          { name: "launch_url", sensitive: false, ephemeral: false },
+        ],
+      }),
+    });
+    expect(conflict.ok).toBe(false);
+    if (!conflict.ok) {
+      expect(conflict.diagnostic.code).toBe(
+        "repository_install_ux_interface_output_type_conflict",
+      );
+    }
+
+    const forbidden = structuredClone(base) as RepositoryManifestDocument;
+    const request = forbidden.install.modules["."]!.interfaces![0]!
+      .bindingRequests![0]!;
+    (request as unknown as { subject: unknown }).subject = {
+      source: "other_subject",
+    };
+    const forbiddenResult = compile({
+      document: forbidden,
+      compatibilityReport: report({
+        rootModuleOutputs: [
+          { name: "launch_url", sensitive: false, ephemeral: false },
+        ],
+      }),
+    });
+    expect(forbiddenResult.ok).toBe(false);
+    if (!forbiddenResult.ok) {
+      expect(forbiddenResult.diagnostic.code).toBe(
+        "repository_install_ux_interface_binding_invalid",
+      );
+    }
+
+    const policyResult = compile({
+      document: base,
+      compatibilityReport: report({
+        rootModuleOutputs: [
+          { name: "launch_url", sensitive: false, ephemeral: false },
+        ],
+      }),
+      policy: {
+        allowedInterfacePermissions: ["ui.open"],
+        allowedInterfaceDeliveryTypes: ["oauth2"],
+      },
+    });
+    expect(policyResult.ok).toBe(false);
+    if (!policyResult.ok) {
+      expect(policyResult.diagnostic.code).toBe(
+        "repository_install_ux_interface_delivery_disallowed",
+      );
+    }
+  });
 });

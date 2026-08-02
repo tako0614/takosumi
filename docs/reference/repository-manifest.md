@@ -30,7 +30,71 @@ root は closed object です。現行 version が受け付けるのは
 section を追加するときは新しい `apiVersion` を定義し、未知 field は
 fail closed のままにします。予約用の空 section は置きません。
 
-各 module が提案できるのは3つです。`inputs` は module が所有する入力名と
+## `takosumi.com/v2` — Capsule Interface proposal
+
+`takosumi.com/v2` は v1 を解釈し直さず、module ごとに generic な
+`interfaces` proposal を追加します。v1 の module に `interfaces` を置くことは
+できません。宣言できるのは Interface の `key` / `name` / `spec` と、任意の
+`bindingRequests` だけです。
+
+```json
+{
+  "apiVersion": "takosumi.com/v2",
+  "kind": "Repository",
+  "install": {
+    "modules": {
+      "deploy/takoform": {
+        "inputs": [],
+        "interfaces": [
+          {
+            "key": "launcher",
+            "name": "example.launcher",
+            "spec": {
+              "type": "interface.ui.surface",
+              "version": "1",
+              "document": { "launcher": true },
+              "inputs": {
+                "url": {
+                  "source": "output",
+                  "outputName": "launch_url",
+                  "outputType": "url"
+                }
+              },
+              "access": { "visibility": "workspace" }
+            },
+            "bindingRequests": [
+              {
+                "key": "installer",
+                "subject": { "source": "installing_principal" },
+                "permissions": ["ui.open"],
+                "delivery": { "type": "none" }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}
+```
+
+`spec.inputs` は公開 JSON の `literal`、または exact compatibility report が
+記録した module Output を名前と型で参照する `output` だけです。Output の
+存在、`sensitive: false`、`ephemeral: false` が report で証明できない場合は
+fail closed になります。`launch_url` のような名前を推測して Output を探す
+fallback はありません。採用された Output だけが既存の DB-owned
+`InstallConfig.outputAllowlist` に `required` projection として追加され、
+Interface input は既存の `capsule_output` blueprint に compile されます。
+
+`bindingRequests` は grant ではありません。repository が指定できる subject は
+`installing_principal` だけで、permission と delivery は bounded な値として
+operator policy の allowlist に照らして審査されます。credential、Principal ID、
+provider、target、secret、任意の delivery options は manifest に置けません。
+審査・review が成功した後にだけ既存の InstallConfig/Interface materializer が
+exact installer Principal を解決し、Apply 後に Interface と Ready Binding を
+作ります。manifest は Interface lifecycle や grant の authority ではありません。
+
+v1 の各 module が提案できるのは3つです。`inputs` は module が所有する入力名と
 表示文言、`requires` はその application が動くために host に用意してほしい
 もの、`features` は任意機能の grouping です。Git source/ref、provider
 credential、target、billing、lifecycle command、Interface grant、任意の

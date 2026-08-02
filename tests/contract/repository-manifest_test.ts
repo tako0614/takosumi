@@ -184,3 +184,97 @@ test("repository manifest treats special module names as data, not object protot
   ).toBe(true);
   expect(parsed.document.install.modules.__proto__).toEqual({ inputs: [] });
 });
+
+test("repository manifest v2 accepts generic Capsule Interface declarations", async () => {
+  const parsed = parseRepositoryManifestText(await fixture("v2-launcher.json"));
+  expect(parsed.ok).toBe(true);
+  if (!parsed.ok) return;
+  expect(parsed.document.apiVersion).toBe("takosumi.com/v2");
+  const declaration = parsed.document.install.modules["deploy/takoform"]
+    ?.interfaces?.[0];
+  expect(declaration).toMatchObject({
+    key: "launcher",
+    name: "yurucommu.launcher",
+    spec: {
+      type: "interface.ui.surface",
+      version: "1",
+      inputs: {
+        url: {
+          source: "output",
+          outputName: "launch_url",
+          outputType: "url",
+        },
+      },
+    },
+    bindingRequests: [
+      {
+        key: "installer",
+        subject: { source: "installing_principal" },
+        permissions: ["ui.open"],
+        delivery: { type: "none" },
+      },
+    ],
+  });
+});
+
+test("repository manifest v1 rejects the v2 interfaces section", async () => {
+  expect(
+    parseRepositoryManifestText(await fixture("v1-interfaces-rejected.json")),
+  ).toEqual({
+    ok: false,
+    error: 'install.modules.".".contains unsupported field interfaces',
+  });
+});
+
+test("repository manifest v2 rejects forbidden subjects and credential fields", async () => {
+  expect(
+    parseRepositoryManifestText(await fixture("v2-forbidden-subject.json")).ok,
+  ).toBe(false);
+  expect(
+    parseRepositoryManifestText(await fixture("v2-secret-delivery.json")),
+  ).toEqual({
+    ok: false,
+    error:
+      'install.modules.".".interfaces[0].bindingRequests[0].delivery.contains unsupported field credentialRef',
+  });
+});
+
+test("repository manifest v2 rejects duplicate output types and malformed inputs", async () => {
+  expect(
+    parseRepositoryManifestText(await fixture("v2-duplicate.json")),
+  ).toEqual({
+    ok: false,
+    error:
+      'install.modules.".".interfaces[1].spec.inputs output "launch_url" has conflicting outputType declarations',
+  });
+  expect(
+    parseRepositoryManifestText(await fixture("v2-malformed.json")).ok,
+  ).toBe(false);
+});
+
+test("repository manifest v2 rejects secret-like document fields", () => {
+  const document = {
+    apiVersion: "takosumi.com/v2",
+    kind: "Repository",
+    install: {
+      modules: {
+        ".": {
+          inputs: [],
+          interfaces: [
+            {
+              key: "launcher",
+              name: "example.launcher",
+              spec: {
+                type: "example",
+                version: "1",
+                document: { display: { title: "Example" }, token: "secret" },
+                access: { visibility: "workspace" },
+              },
+            },
+          ],
+        },
+      },
+    },
+  };
+  expect(parseRepositoryManifestText(JSON.stringify(document)).ok).toBe(false);
+});

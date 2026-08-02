@@ -29,7 +29,73 @@ retired install-only `schemaVersion: takosumi.install-ux/v1`. A future metadata
 section requires a new `apiVersion`; unknown fields continue to fail closed.
 Do not publish empty placeholder sections.
 
-A module proposes three things. `inputs` are the input names and display copy
+## `takosumi.com/v2` — Capsule Interface proposals
+
+`takosumi.com/v2` keeps v1 closed and adds an optional module-scoped
+`interfaces` proposal. A v1 module containing `interfaces` is invalid. Each
+declaration contains only a stable `key`, an Interface `name`, a generic
+`spec`, and optional `bindingRequests`.
+
+```json
+{
+  "apiVersion": "takosumi.com/v2",
+  "kind": "Repository",
+  "install": {
+    "modules": {
+      "deploy/takoform": {
+        "inputs": [],
+        "interfaces": [
+          {
+            "key": "launcher",
+            "name": "example.launcher",
+            "spec": {
+              "type": "interface.ui.surface",
+              "version": "1",
+              "document": { "launcher": true },
+              "inputs": {
+                "url": {
+                  "source": "output",
+                  "outputName": "launch_url",
+                  "outputType": "url"
+                }
+              },
+              "access": { "visibility": "workspace" }
+            },
+            "bindingRequests": [
+              {
+                "key": "installer",
+                "subject": { "source": "installing_principal" },
+                "permissions": ["ui.open"],
+                "delivery": { "type": "none" }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}
+```
+
+`spec.inputs` may contain public JSON `literal` values or an explicit `output`
+reference with an output name and type. The exact compatibility report must
+prove that every referenced Output exists, is `sensitive: false`, and is
+`ephemeral: false`; unknown secrecy fails closed. Takosumi never guesses an
+Output from a convention such as `launch_url`. Accepted references become the
+existing DB-owned `InstallConfig.outputAllowlist` entries and
+`capsule_output` inputs in the existing Interface blueprint shape.
+
+`bindingRequests` are requests, not grants. A repository may name only the
+`installing_principal` subject. Permissions and delivery types are bounded and
+must pass the operator policy allowlists; credential references, Principal IDs,
+providers, targets, secrets, and arbitrary delivery options are not part of the
+manifest vocabulary. Only after review does the existing InstallConfig/
+Interface materializer resolve the exact installer Principal and, after Apply,
+create the Interface and Ready Binding. The repository file never owns
+Interface lifecycle or authorization. A plain Output is never a fallback for a
+missing or rejected Interface.
+
+In v1, a module proposes three things. `inputs` are the input names and display copy
 the module owns, `requires` is what the application needs the host to provide
 before it can run, and `features` groups optional inputs. It cannot declare a
 Git source/ref, provider credentials, target, billing, lifecycle commands,

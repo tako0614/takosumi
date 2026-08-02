@@ -1,16 +1,20 @@
+import type { JsonValue } from "./types.ts";
+
 /**
  * Optional, repository-owned metadata proposed by the exact Git commit captured
  * in a SourceSnapshot.
  *
  * The manifest is an extensible envelope, but every API version is a closed
- * object. The current version carries only install presentation. It is never
- * execution authority: Takosumi validates and compiles an accepted module
- * declaration into its DB-owned InstallConfig before a reviewed Plan can use
- * it.
+ * object. Version 1 carries only install presentation. Version 2 adds generic
+ * Capsule-owned Interface proposals; those are still only proposals until
+ * Takosumi validates and compiles them into its DB-owned InstallConfig before a
+ * reviewed Plan can use them.
  */
 
 export const TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION =
   "takosumi.com/v1" as const;
+export const TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2 =
+  "takosumi.com/v2" as const;
 export const TAKOSUMI_REPOSITORY_MANIFEST_KIND = "Repository" as const;
 export const TAKOSUMI_REPOSITORY_MANIFEST_PATH =
   ".well-known/takosumi.json" as const;
@@ -23,6 +27,10 @@ export const TAKOSUMI_INSTALL_UX_MAX_FEATURES = 32;
 export const TAKOSUMI_GENERATED_SECRET_MIN_BYTES = 16;
 export const TAKOSUMI_GENERATED_SECRET_MAX_BYTES = 64;
 export const TAKOSUMI_MAX_GENERATED_SECRETS_PER_MODULE = 8;
+export const TAKOSUMI_REPOSITORY_INTERFACE_MAX_ENTRIES = 32;
+export const TAKOSUMI_REPOSITORY_INTERFACE_MAX_INPUTS = 64;
+export const TAKOSUMI_REPOSITORY_INTERFACE_MAX_BINDING_REQUESTS = 16;
+export const TAKOSUMI_REPOSITORY_INTERFACE_MAX_PERMISSIONS = 16;
 
 export interface RepositoryInstallUxText {
   readonly ja: string;
@@ -102,6 +110,60 @@ export type RepositoryRuntimeRequirement =
       readonly deliver: RepositoryRuntimeDelivery<RepositoryEndpointSlot>;
     };
 
+/** Public output types that a Capsule Interface may consume. */
+export type RepositoryInterfaceOutputType =
+  | "string"
+  | "url"
+  | "hostname"
+  | "number"
+  | "boolean"
+  | "json";
+
+/** The only two input forms a repository may propose for a Capsule Interface. */
+export type RepositoryInterfaceInput =
+  | {
+      readonly source: "literal";
+      /** Non-secret JSON document material owned by the repository. */
+      readonly value: JsonValue;
+    }
+  | {
+      readonly source: "output";
+      /** Exact root-module Output name; no Output-name convention is inferred. */
+      readonly outputName: string;
+      /** The public projection type requested for that exact Output. */
+      readonly outputType: RepositoryInterfaceOutputType;
+    };
+
+export interface RepositoryInterfaceAccess {
+  readonly visibility: "private" | "workspace" | "public";
+  readonly policyRef?: string;
+  readonly resourceUriInput?: string;
+}
+
+export interface RepositoryInterfaceBindingRequest {
+  readonly key: string;
+  /** The only subject a repository-owned declaration may request. */
+  readonly subject: { readonly source: "installing_principal" };
+  readonly permissions: readonly string[];
+  /** Delivery remains an operator-policy decision; it is never a credential. */
+  readonly delivery: { readonly type: string };
+}
+
+export interface RepositoryInterfaceDeclaration {
+  /** Stable identity used for deterministic InstallConfig merging later. */
+  readonly key: string;
+  readonly name: string;
+  readonly spec: {
+    readonly type: string;
+    readonly version: string;
+    readonly document: JsonValue;
+    readonly inputs?: Readonly<Record<string, RepositoryInterfaceInput>>;
+    readonly access: RepositoryInterfaceAccess;
+  };
+  /** Requests are proposals, not grants; the host resolves the installer later. */
+  readonly bindingRequests?: readonly RepositoryInterfaceBindingRequest[];
+}
+
 export interface RepositoryInstallUxFeature {
   readonly id: string;
   readonly optional: boolean;
@@ -113,17 +175,43 @@ export interface RepositoryInstallUxModule {
   readonly inputs: readonly RepositoryInstallUxInput[];
   readonly requires?: readonly RepositoryRuntimeRequirement[];
   readonly features?: readonly RepositoryInstallUxFeature[];
+  /** Present only in the closed `takosumi.com/v2` module vocabulary. */
+  readonly interfaces?: readonly RepositoryInterfaceDeclaration[];
 }
 
-export interface RepositoryManifestInstall {
+export type RepositoryInstallUxModuleV1 = Omit<
+  RepositoryInstallUxModule,
+  "interfaces"
+> & { readonly interfaces?: never };
+
+export interface RepositoryManifestInstallV1 {
+  readonly modules: Readonly<Record<string, RepositoryInstallUxModuleV1>>;
+}
+
+export interface RepositoryManifestInstallV2 {
   readonly modules: Readonly<Record<string, RepositoryInstallUxModule>>;
 }
 
-export interface RepositoryManifestDocument {
+/** Compatibility alias for callers that only need the install envelope. */
+export type RepositoryManifestInstall =
+  | RepositoryManifestInstallV1
+  | RepositoryManifestInstallV2;
+
+export interface RepositoryManifestDocumentV1 {
   readonly apiVersion: typeof TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION;
   readonly kind: typeof TAKOSUMI_REPOSITORY_MANIFEST_KIND;
-  readonly install: RepositoryManifestInstall;
+  readonly install: RepositoryManifestInstallV1;
 }
+
+export interface RepositoryManifestDocumentV2 {
+  readonly apiVersion: typeof TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2;
+  readonly kind: typeof TAKOSUMI_REPOSITORY_MANIFEST_KIND;
+  readonly install: RepositoryManifestInstallV2;
+}
+
+export type RepositoryManifestDocument =
+  | RepositoryManifestDocumentV1
+  | RepositoryManifestDocumentV2;
 
 export type RepositoryManifestParseResult =
   | { readonly ok: true; readonly document: RepositoryManifestDocument }
@@ -154,7 +242,11 @@ export function parseRepositoryManifestText(
   if (!isPlainRecord(value)) return invalid("document must be an object");
   const rootKeys = exactKeys(value, ["apiVersion", "kind", "install"]);
   if (rootKeys) return invalid(rootKeys);
-  if (value.apiVersion !== TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION) {
+  const apiVersion = oneOf(value.apiVersion, [
+    TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION,
+    TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2,
+  ] as const);
+  if (!apiVersion) {
     return invalid(
       `apiVersion must be ${TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION}`,
     );
@@ -185,27 +277,37 @@ export function parseRepositoryManifestText(
         `install.modules.${JSON.stringify(modulePath)} must be a canonical safe relative module path`,
       );
     }
-    const parsed = parseModule(rawModule, modulePath);
+    const parsed = parseModule(
+      rawModule,
+      modulePath,
+      apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2,
+    );
     if (typeof parsed === "string") return invalid(parsed);
     modules[modulePath] = parsed;
   }
   return {
     ok: true,
     document: {
-      apiVersion: TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION,
+      apiVersion,
       kind: TAKOSUMI_REPOSITORY_MANIFEST_KIND,
       install: { modules },
-    },
+    } as RepositoryManifestDocument,
   };
 }
 
 function parseModule(
   value: unknown,
   modulePath: string,
+  allowInterfaces: boolean,
 ): RepositoryInstallUxModule | string {
   const prefix = `install.modules.${JSON.stringify(modulePath)}`;
   if (!isPlainRecord(value)) return `${prefix} must be an object`;
-  const keys = exactKeys(value, ["inputs", "requires", "features"]);
+  const keys = exactKeys(value, [
+    "inputs",
+    "requires",
+    "features",
+    ...(allowInterfaces ? ["interfaces"] : []),
+  ]);
   if (keys) return `${prefix}.${keys}`;
   if (!Array.isArray(value.inputs)) return `${prefix}.inputs must be an array`;
   if (value.inputs.length > TAKOSUMI_INSTALL_UX_MAX_INPUTS) {
@@ -228,6 +330,11 @@ function parseModule(
   const features = parseFeatures(value.features, prefix, inputNames);
   if (typeof features === "string") return features;
 
+  const interfaces = allowInterfaces
+    ? parseInterfaces(value.interfaces, prefix)
+    : undefined;
+  if (typeof interfaces === "string") return interfaces;
+
   const roles = new Set<string>();
   for (const input of inputs) {
     if (!input.role) continue;
@@ -241,7 +348,276 @@ function parseModule(
     inputs,
     ...(requires ? { requires } : {}),
     ...(features ? { features } : {}),
+    ...(interfaces ? { interfaces } : {}),
   };
+}
+
+function parseInterfaces(
+  value: unknown,
+  prefix: string,
+): readonly RepositoryInterfaceDeclaration[] | string | undefined {
+  if (value === undefined) return undefined;
+  if (
+    !Array.isArray(value) ||
+    value.length > TAKOSUMI_REPOSITORY_INTERFACE_MAX_ENTRIES
+  ) {
+    return `${prefix}.interfaces must be an array of no more than ${TAKOSUMI_REPOSITORY_INTERFACE_MAX_ENTRIES} entries`;
+  }
+  const declarations: RepositoryInterfaceDeclaration[] = [];
+  const keys = new Set<string>();
+  const names = new Set<string>();
+  const outputTypes = new Map<string, RepositoryInterfaceOutputType>();
+  for (let index = 0; index < value.length; index += 1) {
+    const entryPrefix = `${prefix}.interfaces[${index}]`;
+    const parsed = parseInterfaceDeclaration(value[index], entryPrefix);
+    if (typeof parsed === "string") return parsed;
+    if (keys.has(parsed.key)) {
+      return `${entryPrefix}.key must be unique`;
+    }
+    if (names.has(parsed.name)) {
+      return `${entryPrefix}.name must be unique`;
+    }
+    keys.add(parsed.key);
+    names.add(parsed.name);
+    for (const input of Object.values(parsed.spec.inputs ?? {})) {
+      if (input.source !== "output") continue;
+      const prior = outputTypes.get(input.outputName);
+      if (prior !== undefined && prior !== input.outputType) {
+        return `${entryPrefix}.spec.inputs output ${JSON.stringify(input.outputName)} has conflicting outputType declarations`;
+      }
+      outputTypes.set(input.outputName, input.outputType);
+    }
+    declarations.push(parsed);
+  }
+  return declarations;
+}
+
+function parseInterfaceDeclaration(
+  value: unknown,
+  prefix: string,
+): RepositoryInterfaceDeclaration | string {
+  if (!isPlainRecord(value)) return `${prefix} must be an object`;
+  const keys = exactKeys(value, ["key", "name", "spec", "bindingRequests"]);
+  if (keys) return `${prefix}.${keys}`;
+  const key = token(value.key, 128);
+  if (!key) return `${prefix}.key must be a bounded token`;
+  const name = interfaceName(value.name);
+  if (!name) {
+    return `${prefix}.name must start with a letter and contain only letters, digits, dot, underscore, or hyphen`;
+  }
+  if (!isPlainRecord(value.spec)) return `${prefix}.spec must be an object`;
+  const specKeys = exactKeys(value.spec, [
+    "type",
+    "version",
+    "document",
+    "inputs",
+    "access",
+  ]);
+  if (specKeys) return `${prefix}.spec.${specKeys}`;
+  const type = token(value.spec.type, 256);
+  if (!type) return `${prefix}.spec.type must be a bounded token`;
+  const version = token(value.spec.version, 256);
+  if (!version) return `${prefix}.spec.version must be a bounded token`;
+  if (!isJsonValue(value.spec.document)) {
+    return `${prefix}.spec.document must be valid JSON`;
+  }
+  const forbiddenDocumentField = findForbiddenManifestField(
+    value.spec.document,
+  );
+  if (forbiddenDocumentField) {
+    return `${prefix}.spec.document contains forbidden secret or authority field ${JSON.stringify(forbiddenDocumentField)}`;
+  }
+  const inputs = parseInterfaceInputs(value.spec.inputs, `${prefix}.spec`);
+  if (typeof inputs === "string") return inputs;
+  const access = parseInterfaceAccess(value.spec.access, `${prefix}.spec.access`);
+  if (typeof access === "string") return access;
+  if (
+    access.resourceUriInput !== undefined &&
+    (inputs === undefined ||
+      !Object.prototype.hasOwnProperty.call(inputs, access.resourceUriInput))
+  ) {
+    return `${prefix}.spec.access.resourceUriInput must name a declared interface input`;
+  }
+  const bindingRequests = parseInterfaceBindingRequests(
+    value.bindingRequests,
+    prefix,
+  );
+  if (typeof bindingRequests === "string") return bindingRequests;
+  return {
+    key,
+    name,
+    spec: {
+      type,
+      version,
+      document: value.spec.document,
+      ...(inputs ? { inputs } : {}),
+      access,
+    },
+    ...(bindingRequests ? { bindingRequests } : {}),
+  };
+}
+
+function parseInterfaceInputs(
+  value: unknown,
+  prefix: string,
+): Readonly<Record<string, RepositoryInterfaceInput>> | string | undefined {
+  if (value === undefined) return undefined;
+  if (!isPlainRecord(value)) return `${prefix}.inputs must be an object`;
+  const entries = Object.entries(value);
+  if (entries.length > TAKOSUMI_REPOSITORY_INTERFACE_MAX_INPUTS) {
+    return `${prefix}.inputs must contain no more than ${TAKOSUMI_REPOSITORY_INTERFACE_MAX_INPUTS} entries`;
+  }
+  const inputs: Record<string, RepositoryInterfaceInput> = Object.create(null);
+  for (const [name, raw] of entries) {
+    if (!interfaceName(name)) {
+      return `${prefix}.inputs.${JSON.stringify(name)} must be a valid Interface input name`;
+    }
+    const inputPrefix = `${prefix}.inputs.${JSON.stringify(name)}`;
+    if (!isPlainRecord(raw)) return `${inputPrefix} must be an object`;
+    if (raw.source === "literal") {
+      const keys = exactKeys(raw, ["source", "value"]);
+      if (keys) return `${inputPrefix}.${keys}`;
+      if (!isJsonValue(raw.value)) {
+        return `${inputPrefix}.value must be valid JSON`;
+      }
+      const forbiddenLiteralField = findForbiddenManifestField(raw.value);
+      if (forbiddenLiteralField) {
+        return `${inputPrefix}.value contains forbidden secret or authority field ${JSON.stringify(forbiddenLiteralField)}`;
+      }
+      inputs[name] = { source: "literal", value: raw.value };
+      continue;
+    }
+    if (raw.source === "output") {
+      const keys = exactKeys(raw, ["source", "outputName", "outputType"]);
+      if (keys) return `${inputPrefix}.${keys}`;
+      const outputName = variableName(raw.outputName);
+      if (!outputName) {
+        return `${inputPrefix}.outputName must be a valid OpenTofu output name`;
+      }
+      const outputType = oneOf(raw.outputType, [
+        "string",
+        "url",
+        "hostname",
+        "number",
+        "boolean",
+        "json",
+      ] as const);
+      if (!outputType) {
+        return `${inputPrefix}.outputType is unsupported`;
+      }
+      inputs[name] = { source: "output", outputName, outputType };
+      continue;
+    }
+    return `${inputPrefix}.source is unsupported`;
+  }
+  return inputs;
+}
+
+function parseInterfaceAccess(
+  value: unknown,
+  prefix: string,
+): RepositoryInterfaceAccess | string {
+  if (!isPlainRecord(value)) return `${prefix} must be an object`;
+  const keys = exactKeys(value, ["visibility", "policyRef", "resourceUriInput"]);
+  if (keys) return `${prefix}.${keys}`;
+  const visibility = oneOf(value.visibility, [
+    "private",
+    "workspace",
+    "public",
+  ] as const);
+  if (!visibility) return `${prefix}.visibility is unsupported`;
+  const policyRef =
+    value.policyRef === undefined ? undefined : token(value.policyRef, 256);
+  if (value.policyRef !== undefined && !policyRef) {
+    return `${prefix}.policyRef must be a bounded token`;
+  }
+  const resourceUriInput =
+    value.resourceUriInput === undefined
+      ? undefined
+      : interfaceName(value.resourceUriInput);
+  if (value.resourceUriInput !== undefined && !resourceUriInput) {
+    return `${prefix}.resourceUriInput must be a valid Interface input name`;
+  }
+  return {
+    visibility,
+    ...(policyRef ? { policyRef } : {}),
+    ...(resourceUriInput ? { resourceUriInput } : {}),
+  };
+}
+
+function parseInterfaceBindingRequests(
+  value: unknown,
+  prefix: string,
+): readonly RepositoryInterfaceBindingRequest[] | string | undefined {
+  if (value === undefined) return undefined;
+  if (
+    !Array.isArray(value) ||
+    value.length > TAKOSUMI_REPOSITORY_INTERFACE_MAX_BINDING_REQUESTS
+  ) {
+    return `${prefix}.bindingRequests must be an array of no more than ${TAKOSUMI_REPOSITORY_INTERFACE_MAX_BINDING_REQUESTS} entries`;
+  }
+  const requests: RepositoryInterfaceBindingRequest[] = [];
+  const keys = new Set<string>();
+  for (let index = 0; index < value.length; index += 1) {
+    const entryPrefix = `${prefix}.bindingRequests[${index}]`;
+    const raw = value[index];
+    if (!isPlainRecord(raw)) return `${entryPrefix} must be an object`;
+    const allowedKeys = exactKeys(raw, [
+      "key",
+      "subject",
+      "permissions",
+      "delivery",
+    ]);
+    if (allowedKeys) return `${entryPrefix}.${allowedKeys}`;
+    const key = token(raw.key, 128);
+    if (!key) return `${entryPrefix}.key must be a bounded token`;
+    if (keys.has(key)) return `${entryPrefix}.key must be unique`;
+    keys.add(key);
+    if (!isPlainRecord(raw.subject)) {
+      return `${entryPrefix}.subject must be an object`;
+    }
+    const subjectKeys = exactKeys(raw.subject, ["source"]);
+    if (subjectKeys) return `${entryPrefix}.subject.${subjectKeys}`;
+    if (raw.subject.source !== "installing_principal") {
+      return `${entryPrefix}.subject.source must be installing_principal`;
+    }
+    if (
+      !Array.isArray(raw.permissions) ||
+      raw.permissions.length < 1 ||
+      raw.permissions.length > TAKOSUMI_REPOSITORY_INTERFACE_MAX_PERMISSIONS
+    ) {
+      return `${entryPrefix}.permissions must contain between 1 and ${TAKOSUMI_REPOSITORY_INTERFACE_MAX_PERMISSIONS} entries`;
+    }
+    const permissions: string[] = [];
+    const permissionSet = new Set<string>();
+    for (let permissionIndex = 0; permissionIndex < raw.permissions.length; permissionIndex += 1) {
+      const permission = interfacePermissionToken(raw.permissions[permissionIndex]);
+      if (!permission) {
+        return `${entryPrefix}.permissions[${permissionIndex}] must be a bounded permission token`;
+      }
+      if (permissionSet.has(permission)) {
+        return `${entryPrefix}.permissions[${permissionIndex}] must be unique`;
+      }
+      permissionSet.add(permission);
+      permissions.push(permission);
+    }
+    if (!isPlainRecord(raw.delivery)) {
+      return `${entryPrefix}.delivery must be an object`;
+    }
+    const deliveryKeys = exactKeys(raw.delivery, ["type"]);
+    if (deliveryKeys) return `${entryPrefix}.delivery.${deliveryKeys}`;
+    const deliveryType = token(raw.delivery.type, 128);
+    if (!deliveryType) {
+      return `${entryPrefix}.delivery.type must be a bounded token`;
+    }
+    requests.push({
+      key,
+      subject: { source: "installing_principal" },
+      permissions,
+      delivery: { type: deliveryType },
+    });
+  }
+  return requests;
 }
 
 function parseInput(
@@ -704,6 +1080,55 @@ function bindingName(value: unknown): string | undefined {
   return parsed && /^[A-Za-z_][A-Za-z0-9_]*$/u.test(parsed)
     ? parsed
     : undefined;
+}
+
+function interfaceName(value: unknown): string | undefined {
+  const parsed = text(value, 128);
+  return parsed && /^[A-Za-z][A-Za-z0-9_.-]{0,127}$/u.test(parsed)
+    ? parsed
+    : undefined;
+}
+
+function interfacePermissionToken(value: unknown): string | undefined {
+  const parsed = text(value, 256);
+  return parsed && /^[\x21\x23-\x5b\x5d-\x7e]+$/u.test(parsed)
+    ? parsed
+    : undefined;
+}
+
+function isJsonValue(value: unknown, depth = 0): value is JsonValue {
+  if (depth > 32) return false;
+  if (value === null) return true;
+  if (typeof value === "string" || typeof value === "boolean") return true;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (Array.isArray(value)) {
+    return value.every((entry) => isJsonValue(entry, depth + 1));
+  }
+  if (!isPlainRecord(value)) return false;
+  return Object.values(value).every((entry) => isJsonValue(entry, depth + 1));
+}
+
+function findForbiddenManifestField(value: unknown): string | undefined {
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const found = findForbiddenManifestField(entry);
+      if (found) return found;
+    }
+    return undefined;
+  }
+  if (!isPlainRecord(value)) return undefined;
+  for (const [key, child] of Object.entries(value)) {
+    if (
+      /^(?:secret|password|token|credential|credentialref|apikey|privatekey|provider|target|principalid|capsuleid|resourceid|workspaceid)$/iu.test(
+        key,
+      )
+    ) {
+      return key;
+    }
+    const found = findForbiddenManifestField(child);
+    if (found) return found;
+  }
+  return undefined;
 }
 
 function stableId(value: unknown): string | undefined {

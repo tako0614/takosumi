@@ -1,0 +1,29 @@
+{
+  "apiVersion": "takosumi.com/v2",
+  "kind": "Repository",
+  "install": {
+    "modules": {
+      ".": {
+        "inputs": [],
+        "interfaces": [
+          {
+            "key": "launcher",
+            "name": "example.launcher",
+            "spec": {
+              "type": "interface.ui.surface",
+              "version": "1",
+              "document": {"launcher": true},
+              "inputs": {
+                "url": {
+                  "source": "output",
+                  "outputName": "launch_url"
+                }
+              },
+              "access": {"visibility": "workspace"}
+            }
+          }
+        ]
+      }
+    }
+  }
+}

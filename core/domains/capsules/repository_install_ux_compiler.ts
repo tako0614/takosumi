@@ -1,14 +1,25 @@
 import type {
   CapsuleCompatibilityReport,
+  CapsuleRootModuleOutputDeclaration,
   CapsuleRootModuleVariableDeclaration,
 } from "takosumi-contract/capsules";
+import type {
+  CapsuleInterfaceBindingProposal,
+  CapsuleInterfaceBlueprint,
+  CapsuleInterfaceBlueprintInput,
+} from "takosumi-contract/interfaces";
 import type {
   InstallConfigHostRuntimeMaterialization,
   InstallConfigInstallExperience,
   InstallConfigInstallProjection,
+  OutputAllowlistEntry,
   InstallConfigVariablePresentation,
 } from "takosumi-contract/install-configs";
 import type {
+  RepositoryInterfaceBindingRequest,
+  RepositoryInterfaceDeclaration,
+  RepositoryInterfaceInput,
+  RepositoryInterfaceOutputType,
   RepositoryInstallUxInput,
   RepositoryInstallUxInputSource,
   RepositoryRuntimeRequirement,
@@ -53,6 +64,9 @@ const DEFAULT_GENERATED_SECRET_ENCODING = "base64url" as const;
 
 const MAX_DIAGNOSTIC_MESSAGE_LENGTH = 240;
 const PLAIN_ENV_VARIABLE = "env";
+const DEFAULT_INTERFACE_DELIVERY_TYPES = ["none"] as const;
+const MAX_INTERFACE_PERMISSION_LENGTH = 256;
+const MAX_INTERFACE_PERMISSIONS = 16;
 
 export type RepositoryInstallUxDiagnosticCode =
   | "repository_install_ux_document_invalid"
@@ -73,7 +87,20 @@ export type RepositoryInstallUxDiagnosticCode =
   | "repository_install_ux_requirement_target_invalid"
   | "repository_install_ux_oidc_scope_disallowed"
   | "repository_install_ux_feature_input_invalid"
-  | "repository_install_ux_secret_materialization_required";
+  | "repository_install_ux_secret_materialization_required"
+  | "repository_install_ux_interface_version_unsupported"
+  | "repository_install_ux_interface_key_duplicate"
+  | "repository_install_ux_interface_name_duplicate"
+  | "repository_install_ux_interface_input_invalid"
+  | "repository_install_ux_interface_output_metadata_unavailable"
+  | "repository_install_ux_interface_output_missing"
+  | "repository_install_ux_interface_output_sensitive"
+  | "repository_install_ux_interface_output_ephemeral"
+  | "repository_install_ux_interface_output_secrecy_unknown"
+  | "repository_install_ux_interface_output_type_conflict"
+  | "repository_install_ux_interface_binding_invalid"
+  | "repository_install_ux_interface_permission_disallowed"
+  | "repository_install_ux_interface_delivery_disallowed";
 
 export interface RepositoryInstallUxDiagnostic {
   readonly code: RepositoryInstallUxDiagnosticCode;
@@ -84,6 +111,10 @@ export interface RepositoryInstallUxCompilerPolicy {
   readonly allowedSourceKinds?: readonly RepositoryInstallUxInputSource["kind"][];
   readonly allowedRequirementKinds?: readonly RepositoryRuntimeRequirement["kind"][];
   readonly allowedOidcScopes?: readonly string[];
+  /** Permission tokens accepted from repository-owned binding requests. */
+  readonly allowedInterfacePermissions?: readonly string[];
+  /** Delivery tokens accepted from repository-owned binding requests. */
+  readonly allowedInterfaceDeliveryTypes?: readonly string[];
 }
 
 export interface CompileRepositoryInstallUxInput {
@@ -105,6 +136,10 @@ export interface CompiledRepositoryInstallUx {
   readonly variableMapping: Readonly<Record<string, JsonValue>>;
   /** User-owned names accepted from the reviewed request. */
   readonly userVariableNames: readonly string[];
+  /** Normalized Capsule-owned Interface proposals for later InstallConfig merge. */
+  readonly interfaceBlueprints: readonly CapsuleInterfaceBlueprint[];
+  /** Least-privilege Output projections required by those Interfaces. */
+  readonly outputAllowlist: Readonly<Record<string, OutputAllowlistEntry>>;
   /**
    * Requirements the repository asked the host to satisfy directly in the
    * application runtime. Absent when every requirement is delivered through
@@ -210,6 +245,14 @@ export function compileRepositoryInstallUx(
 
   const featureValidation = validateFeatures(module.inputs, module.features);
   if (featureValidation) return featureValidation;
+
+  const interfaceCompilation = compileInterfaceDeclarations({
+    apiVersion: input.document.apiVersion,
+    declarations: module.interfaces,
+    outputDeclarations: input.compatibilityReport.rootModuleOutputs,
+    policy: input.policy,
+  });
+  if (!interfaceCompilation.ok) return interfaceCompilation;
 
   const reviewedVariables = input.reviewedVariables ?? {};
   for (const [name, value] of Object.entries(reviewedVariables)) {
@@ -318,8 +361,365 @@ export function compileRepositoryInstallUx(
         .filter((declaration) => declaration.source.kind === "user")
         .map((declaration) => declaration.name)
         .sort(),
+      interfaceBlueprints: interfaceCompilation.interfaceBlueprints,
+      outputAllowlist: interfaceCompilation.outputAllowlist,
     },
   };
+}
+
+interface CompileInterfaceDeclarationsInput {
+  readonly apiVersion: string;
+  readonly declarations: readonly RepositoryInterfaceDeclaration[] | undefined;
+  readonly outputDeclarations:
+    | readonly CapsuleRootModuleOutputDeclaration[]
+    | undefined;
+  readonly policy: RepositoryInstallUxCompilerPolicy | undefined;
+}
+
+type CompileInterfaceDeclarationsResult =
+  | {
+      readonly ok: true;
+      readonly interfaceBlueprints: readonly CapsuleInterfaceBlueprint[];
+      readonly outputAllowlist: Readonly<Record<string, OutputAllowlistEntry>>;
+    }
+  | {
+      readonly ok: false;
+      readonly diagnostic: RepositoryInstallUxDiagnostic;
+    };
+
+/**
+ * Normalize repository-owned generic Interface proposals into the exact
+ * service-side blueprint and Output projection shapes. This function does not
+ * create a grant or add lifecycle authority; binding requests remain explicit
+ * proposals for the existing InstallConfig materializer.
+ */
+function compileInterfaceDeclarations(
+  input: CompileInterfaceDeclarationsInput,
+): CompileInterfaceDeclarationsResult {
+  const declarations = input.declarations ?? [];
+  if (declarations.length === 0) {
+    return { ok: true, interfaceBlueprints: [], outputAllowlist: {} };
+  }
+  if (input.apiVersion !== "takosumi.com/v2") {
+    return invalid(
+      "repository_install_ux_interface_version_unsupported",
+      "Repository-owned Interface declarations require takosumi.com/v2.",
+    );
+  }
+
+  const names = new Set<string>();
+  const keys = new Set<string>();
+  const outputs = new Map<string, RepositoryInterfaceOutputType>();
+  const outputDeclarations = input.outputDeclarations;
+  const outputByName = new Map(
+    (outputDeclarations ?? []).map((declaration) => [
+      declaration.name,
+      declaration,
+    ]),
+  );
+  const normalized: CapsuleInterfaceBlueprint[] = [];
+
+  for (const declaration of declarations) {
+    if (keys.has(declaration.key)) {
+      return invalid(
+        "repository_install_ux_interface_key_duplicate",
+        `The repository Interface key ${boundedIdentifier(declaration.key)} is declared more than once.`,
+      );
+    }
+    if (names.has(declaration.name)) {
+      return invalid(
+        "repository_install_ux_interface_name_duplicate",
+        `The repository Interface name ${boundedIdentifier(declaration.name)} is declared more than once.`,
+      );
+    }
+    keys.add(declaration.key);
+    names.add(declaration.name);
+
+    const inputs: Record<string, CapsuleInterfaceBlueprintInput> = {};
+    for (const [inputName, source] of Object.entries(
+      declaration.spec.inputs ?? {},
+    ).sort(([left], [right]) => left.localeCompare(right))) {
+      const compiledInput = compileInterfaceInput({
+        inputName,
+        source,
+        outputDeclarations,
+        outputByName,
+        outputs,
+      });
+      if (!compiledInput.ok) return compiledInput;
+      inputs[inputName] = compiledInput.input;
+    }
+
+    const bindings = compileInterfaceBindingRequests(
+      declaration.bindingRequests,
+      input.policy,
+    );
+    if (!bindings.ok) return bindings;
+    if (findForbiddenManifestField(declaration.spec.document)) {
+      return invalid(
+        "repository_install_ux_interface_input_invalid",
+        `The Interface ${boundedIdentifier(declaration.name)} document contains a secret or authority field.`,
+      );
+    }
+    normalized.push({
+      key: declaration.key,
+      name: declaration.name,
+      spec: {
+        type: declaration.spec.type,
+        version: declaration.spec.version,
+        document: declaration.spec.document,
+        ...(Object.keys(inputs).length > 0 ? { inputs } : {}),
+        access: declaration.spec.access,
+      },
+      ...(bindings.bindings.length > 0 ? { bindings: bindings.bindings } : {}),
+    });
+  }
+
+  const outputAllowlist: Record<string, OutputAllowlistEntry> = {};
+  for (const outputName of [...outputs.keys()].sort()) {
+    const outputType = outputs.get(outputName)!;
+    outputAllowlist[outputName] = {
+      from: outputName,
+      type: outputType,
+      required: true,
+    };
+  }
+  normalized.sort((left, right) => left.key.localeCompare(right.key));
+  return {
+    ok: true,
+    interfaceBlueprints: normalized,
+    outputAllowlist,
+  };
+}
+
+type CompiledCapsuleBlueprintInput = CapsuleInterfaceBlueprintInput;
+
+function compileInterfaceInput(input: {
+  readonly inputName: string;
+  readonly source: RepositoryInterfaceInput;
+  readonly outputDeclarations:
+    | readonly CapsuleRootModuleOutputDeclaration[]
+    | undefined;
+  readonly outputByName: ReadonlyMap<
+    string,
+    CapsuleRootModuleOutputDeclaration
+  >;
+  readonly outputs: Map<string, RepositoryInterfaceOutputType>;
+}):
+  | { readonly ok: true; readonly input: CompiledCapsuleBlueprintInput }
+  | { readonly ok: false; readonly diagnostic: RepositoryInstallUxDiagnostic } {
+  if (input.source.source === "literal") {
+    if (findForbiddenManifestField(input.source.value)) {
+      return invalid(
+        "repository_install_ux_interface_input_invalid",
+        `The literal Interface input ${boundedIdentifier(input.inputName)} contains a secret or authority field.`,
+      );
+    }
+    return {
+      ok: true,
+      input: { source: "literal", value: input.source.value },
+    };
+  }
+
+  const outputName = input.source.outputName;
+  const outputType = input.source.outputType;
+  if (
+    typeof outputName !== "string" ||
+    !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(outputName)
+  ) {
+    return invalid(
+      "repository_install_ux_interface_input_invalid",
+      `The Interface input ${boundedIdentifier(input.inputName)} references an invalid OpenTofu Output name.`,
+    );
+  }
+  if (
+    ![
+      "string",
+      "url",
+      "hostname",
+      "number",
+      "boolean",
+      "json",
+    ].includes(outputType)
+  ) {
+    return invalid(
+      "repository_install_ux_interface_input_invalid",
+      `The Interface input ${boundedIdentifier(input.inputName)} requests an unsupported Output type.`,
+    );
+  }
+  const declaration = input.outputByName.get(outputName);
+  if (input.outputDeclarations === undefined) {
+    return invalid(
+      "repository_install_ux_interface_output_metadata_unavailable",
+      `The exact compatibility report has no Output metadata for ${boundedIdentifier(outputName)}.`,
+    );
+  }
+  if (!declaration) {
+    return invalid(
+      "repository_install_ux_interface_output_missing",
+      `The Interface input ${boundedIdentifier(input.inputName)} references missing Output ${boundedIdentifier(outputName)}.`,
+    );
+  }
+  if (declaration.sensitive === true) {
+    return invalid(
+      "repository_install_ux_interface_output_sensitive",
+      `The Interface input ${boundedIdentifier(input.inputName)} references sensitive Output ${boundedIdentifier(outputName)}.`,
+    );
+  }
+  if (declaration.ephemeral === true) {
+    return invalid(
+      "repository_install_ux_interface_output_ephemeral",
+      `The Interface input ${boundedIdentifier(input.inputName)} references ephemeral Output ${boundedIdentifier(outputName)}.`,
+    );
+  }
+  if (declaration.sensitive !== false) {
+    return invalid(
+      "repository_install_ux_interface_output_secrecy_unknown",
+      `The secrecy of Output ${boundedIdentifier(outputName)} is unknown; the Interface declaration is rejected.`,
+    );
+  }
+  if (declaration.ephemeral !== false) {
+    return invalid(
+      "repository_install_ux_interface_output_secrecy_unknown",
+      `The ephemerality of Output ${boundedIdentifier(outputName)} is unknown; the Interface declaration is rejected.`,
+    );
+  }
+  const priorType = input.outputs.get(outputName);
+  if (priorType !== undefined && priorType !== outputType) {
+    return invalid(
+      "repository_install_ux_interface_output_type_conflict",
+      `Output ${boundedIdentifier(outputName)} is requested with conflicting public types.`,
+    );
+  }
+  input.outputs.set(outputName, outputType);
+  return {
+    ok: true,
+    input: { source: "capsule_output", outputName },
+  };
+}
+
+function findForbiddenManifestField(value: unknown): string | undefined {
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const found = findForbiddenManifestField(entry);
+      if (found) return found;
+    }
+    return undefined;
+  }
+  if (!value || typeof value !== "object") return undefined;
+  for (const [key, child] of Object.entries(value)) {
+    if (
+      /^(?:secret|password|token|credential|credentialref|apikey|privatekey|provider|target|principalid|capsuleid|resourceid|workspaceid)$/iu.test(
+        key,
+      )
+    ) {
+      return key;
+    }
+    const found = findForbiddenManifestField(child);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+function compileInterfaceBindingRequests(
+  requests: readonly RepositoryInterfaceBindingRequest[] | undefined,
+  policy: RepositoryInstallUxCompilerPolicy | undefined,
+):
+  | {
+      readonly ok: true;
+      readonly bindings: readonly CapsuleInterfaceBindingProposal[];
+    }
+  | { readonly ok: false; readonly diagnostic: RepositoryInstallUxDiagnostic } {
+  const normalized: CapsuleInterfaceBindingProposal[] = [];
+  const keys = new Set<string>();
+  const allowedPermissions = policy?.allowedInterfacePermissions;
+  const allowedDeliveryTypes = new Set(
+    policy?.allowedInterfaceDeliveryTypes ?? DEFAULT_INTERFACE_DELIVERY_TYPES,
+  );
+  for (const request of requests ?? []) {
+    if (keys.has(request.key)) {
+      return invalid(
+        "repository_install_ux_interface_binding_invalid",
+        `The Interface binding request key ${boundedIdentifier(request.key)} is declared more than once.`,
+      );
+    }
+    keys.add(request.key);
+    if (
+      !request.subject ||
+      request.subject.source !== "installing_principal"
+    ) {
+      return invalid(
+        "repository_install_ux_interface_binding_invalid",
+        "Repository-owned Interface bindings may target only installing_principal.",
+      );
+    }
+    if (
+      !Array.isArray(request.permissions) ||
+      request.permissions.length < 1 ||
+      request.permissions.length > MAX_INTERFACE_PERMISSIONS
+    ) {
+      return invalid(
+        "repository_install_ux_interface_binding_invalid",
+        `Interface binding ${boundedIdentifier(request.key)} must contain between 1 and ${MAX_INTERFACE_PERMISSIONS} permissions.`,
+      );
+    }
+    const permissions = new Set<string>();
+    for (const permission of request.permissions) {
+      if (
+        typeof permission !== "string" ||
+        permission.length < 1 ||
+        permission.length > MAX_INTERFACE_PERMISSION_LENGTH ||
+        !/^[\x21\x23-\x5b\x5d-\x7e]+$/u.test(permission)
+      ) {
+        return invalid(
+          "repository_install_ux_interface_binding_invalid",
+          `Interface binding ${boundedIdentifier(request.key)} contains an invalid permission token.`,
+        );
+      }
+      if (permissions.has(permission)) {
+        return invalid(
+          "repository_install_ux_interface_binding_invalid",
+          `Interface binding ${boundedIdentifier(request.key)} repeats a permission token.`,
+        );
+      }
+      permissions.add(permission);
+      if (allowedPermissions && !allowedPermissions.includes(permission)) {
+        return invalid(
+          "repository_install_ux_interface_permission_disallowed",
+          `Interface permission ${boundedIdentifier(permission)} is not allowed by operator policy.`,
+        );
+      }
+    }
+    const deliveryType = request.delivery?.type;
+    if (
+      typeof deliveryType !== "string" ||
+      deliveryType.length < 1 ||
+      deliveryType.length > 128 ||
+      !/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/u.test(deliveryType) ||
+      !allowedDeliveryTypes.has(deliveryType)
+    ) {
+      return invalid(
+        "repository_install_ux_interface_delivery_disallowed",
+        `Interface binding ${boundedIdentifier(request.key)} requests a delivery type outside operator policy.`,
+      );
+    }
+    // The manifest type intentionally has no credentialRef/options fields. The
+    // runtime check keeps manually constructed documents fail-closed too.
+    if (Object.keys(request.delivery ?? {}).some((key) => key !== "type")) {
+      return invalid(
+        "repository_install_ux_interface_binding_invalid",
+        `Interface binding ${boundedIdentifier(request.key)} cannot carry credential, target, or provider fields.`,
+      );
+    }
+    normalized.push({
+      key: request.key,
+      subject: { source: "installing_principal" },
+      permissions: [...permissions].sort(),
+      delivery: { type: deliveryType },
+    });
+  }
+  normalized.sort((left, right) => left.key.localeCompare(right.key));
+  return { ok: true, bindings: normalized };
 }
 
 function validateInputDeclaration(
@@ -739,7 +1139,10 @@ function boundedIdentifier(value: string): string {
 function invalid(
   code: RepositoryInstallUxDiagnosticCode,
   message: string,
-): CompileRepositoryInstallUxResult {
+): {
+  readonly ok: false;
+  readonly diagnostic: RepositoryInstallUxDiagnostic;
+} {
   return {
     ok: false,
     diagnostic: {
