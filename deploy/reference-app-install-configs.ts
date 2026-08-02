@@ -7,8 +7,9 @@
  * Run pin the commit used for execution. A config without
  * Store metadata remains addressable explicitly without appearing in shared
  * discovery. No artifact value, provider credential, application secret, or
- * runtime declaration is read from a repo manifest, `.well-known/tcs.json`,
- * featured-app profile, or OpenTofu Output.
+ * runtime declaration is read while composing these reference rows. A
+ * current repository manifest may propose its own runtime Interface later;
+ * the adoption compiler validates that proposal against an exact snapshot.
  */
 import type {
   CapsuleInterfaceBindingProposal,
@@ -30,15 +31,19 @@ import type {
   InstallConfigVariablePresentation,
   OutputAllowlistEntry,
 } from "takosumi-contract/install-configs";
+import { TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2 } from "takosumi-contract/repository-manifest";
 import { CAPSULE_LIFECYCLE_COMMAND_CAPABILITY } from "takosumi-contract/install-configs";
 import { TAKOSUMI_ACCOUNTS_CAPSULE_DELEGATION_SCOPES } from "@takosjp/takosumi-accounts-contract";
 
 const REFERENCE_CONFIG_TIMESTAMP = "2026-07-14T00:00:00.000Z";
 const MANAGED_APP_BASE_DOMAIN = "app.takos.jp";
 
-function repositoryInstallUxPolicy() {
+function repositoryInstallUxPolicy(
+  requiredManifestApiVersion?: typeof TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2,
+) {
   return {
     allowedInterfacePermissions: [UI_SURFACE_OPEN_PERMISSION],
+    ...(requiredManifestApiVersion ? { requiredManifestApiVersion } : {}),
   } as const;
 }
 
@@ -567,10 +572,15 @@ function yuruConfig(input: {
         callbackPath: "/api/auth/callback/takos",
       },
     }),
-    outputAllowlist: {
-      launch_url: urlOutput("launch_url"),
+    outputAllowlist:
+      input.app === "yurucommu" ? {} : { launch_url: urlOutput("launch_url") },
+    policy: {
+      repositoryInstallUx: repositoryInstallUxPolicy(
+        input.app === "yurucommu"
+          ? TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2
+          : undefined,
+      ),
     },
-    policy: { repositoryInstallUx: repositoryInstallUxPolicy() },
     store: store({
       source: source(input.app),
       order: input.order,
@@ -583,17 +593,18 @@ function yuruConfig(input: {
       descriptionJa: input.descriptionJa,
       descriptionEn: input.descriptionEn,
     }),
-    interfaceBlueprints: [
-      uiBlueprint({
-        app: input.app,
-        title: input.title,
-        outputName: "launch_url",
-        icon:
-          input.app === "yurucommu"
-            ? "/icons/yurucommu.svg"
-            : "/yurumeet-logo.png",
-      }),
-    ],
+    ...(input.app === "yurucommu"
+      ? {}
+      : {
+          interfaceBlueprints: [
+            uiBlueprint({
+              app: input.app,
+              title: input.title,
+              outputName: "launch_url",
+              icon: "/yurumeet-logo.png",
+            }),
+          ],
+        }),
     createdAt: REFERENCE_CONFIG_TIMESTAMP,
     updatedAt: REFERENCE_CONFIG_TIMESTAMP,
   };
@@ -606,6 +617,8 @@ const { store: _yurucommuDirectStore, ...yurucommuDirectConfig } = yuruConfig({
   descriptionJa: "ゆるくつながる feed / story 型コミュニケーション。",
   descriptionEn: "A relaxed feed and story communication app.",
 });
+const yurucommuDirectInstallConfig =
+  yurucommuDirectConfig satisfies InstallConfig;
 
 const yurucommuManagedSource = source("yurucommu", "deploy/takoform");
 
@@ -615,8 +628,9 @@ const yurucommuManagedSource = source("yurucommu", "deploy/takoform");
  * App vocabulary is compiled from the exact repository snapshot's
  * `.well-known/takosumi.json`. This service-owned row carries only host
  * authority which repository metadata cannot grant: managed hostname policy,
- * the typed database migration, and installer access to the UI surface
- * resolved from the module's Interface-backed `launch_url` output.
+ * the typed database migration, and the host runtime/resource materialization
+ * needed by the managed deployment. The repository's v2 manifest owns its
+ * launcher declaration and `launch_url` projection.
  */
 const yurucommuManagedConfig = {
   id: "cfg-reference-yurucommu-managed",
@@ -624,9 +638,7 @@ const yurucommuManagedConfig = {
   sourceSelector: yurucommuManagedSource,
   modulePath: "deploy/takoform",
   variableMapping: {},
-  outputAllowlist: {
-    launch_url: urlOutput("launch_url"),
-  },
+  outputAllowlist: {},
   managedPublicHostname: { mode: "scoped" },
   hostRuntimeMaterialization: {
     contract: "takosumi.host-runtime-materialization/v1",
@@ -664,18 +676,14 @@ const yurucommuManagedConfig = {
           },
         },
       },
-      ...[
-        "DB",
-        "MEDIA",
-        "KV",
-        "DELIVERY_QUEUE",
-        "DELIVERY_DLQ",
-      ].map((connectionAlias) => ({
-        kind: "resource_binding" as const,
-        binding: connectionAlias,
-        connectionAlias,
-        requiredPermission: "takosumi.resource.bind",
-      })),
+      ...["DB", "MEDIA", "KV", "DELIVERY_QUEUE", "DELIVERY_DLQ"].map(
+        (connectionAlias) => ({
+          kind: "resource_binding" as const,
+          binding: connectionAlias,
+          connectionAlias,
+          requiredPermission: "takosumi.resource.bind",
+        }),
+      ),
     ],
     backgroundActivations: [
       {
@@ -723,7 +731,9 @@ const yurucommuManagedConfig = {
     },
   ],
   policy: {
-    repositoryInstallUx: repositoryInstallUxPolicy(),
+    repositoryInstallUx: repositoryInstallUxPolicy(
+      TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2,
+    ),
     lifecycleActions: {
       allowedExecutors: ["operator"],
       allowedRunnerCapabilities: ["resource.migration.sqlite.v1"],
@@ -741,14 +751,6 @@ const yurucommuManagedConfig = {
     descriptionJa: "ゆるくつながる feed / story 型コミュニケーション。",
     descriptionEn: "A relaxed feed and story communication app.",
   }),
-  interfaceBlueprints: [
-    uiBlueprint({
-      app: "yurucommu",
-      title: "Yurucommu",
-      outputName: "launch_url",
-      icon: "/icons/yurucommu.svg",
-    }),
-  ],
   createdAt: REFERENCE_CONFIG_TIMESTAMP,
   updatedAt: REFERENCE_CONFIG_TIMESTAMP,
 } satisfies InstallConfig;
@@ -1041,10 +1043,12 @@ const takosConfig = {
       scopes: [...TAKOSUMI_ACCOUNTS_CAPSULE_DELEGATION_SCOPES],
     },
   }),
-  outputAllowlist: {
-    launch_url: urlOutput("launch_url"),
+  outputAllowlist: {},
+  policy: {
+    repositoryInstallUx: repositoryInstallUxPolicy(
+      TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2,
+    ),
   },
-  policy: { repositoryInstallUx: repositoryInstallUxPolicy() },
   store: store({
     source: source("takos", "deploy/opentofu"),
     order: 5,
@@ -1058,14 +1062,6 @@ const takosConfig = {
     descriptionEn:
       "Deploy the Takos AI workspace to your own Cloudflare account.",
   }),
-  interfaceBlueprints: [
-    uiBlueprint({
-      app: "takos",
-      title: "Takos",
-      outputName: "launch_url",
-      icon: "/logo.png",
-    }),
-  ],
   createdAt: REFERENCE_CONFIG_TIMESTAMP,
   updatedAt: REFERENCE_CONFIG_TIMESTAMP,
 } satisfies InstallConfig;
@@ -1074,7 +1070,7 @@ export const REFERENCE_APP_INSTALL_CONFIGS: readonly InstallConfig[] =
   Object.freeze([
     takosConfig,
     officeConfig,
-    yurucommuDirectConfig,
+    yurucommuDirectInstallConfig,
     yurucommuManagedConfig,
     storageConfig,
     gitConfig,

@@ -66,7 +66,8 @@ export type RepoOwnedInstallConfigAdoptionDiagnostic =
       readonly code:
         | "repository_install_ux_interface_blueprint_conflict"
         | "repository_install_ux_output_allowlist_conflict"
-        | "repository_install_ux_installing_principal_invalid";
+        | "repository_install_ux_installing_principal_invalid"
+        | "repository_install_ux_manifest_api_version_required";
       readonly message: string;
     };
 
@@ -153,13 +154,25 @@ export async function latestSourceSnapshotForSource(
 /**
  * Validate and compile the immutable repository proposal into DB-owned
  * InstallConfig fields. Present invalid metadata is never silently ignored;
- * absent/legacy observations preserve the ordinary generic install flow.
+ * absent/legacy observations preserve the ordinary generic install flow
+ * unless the operator policy requires an exact manifest API version.
  */
 export async function adoptRepoOwnedInstallConfig(
   input: RepoOwnedInstallConfigAdoptionInput,
 ): Promise<RepoOwnedInstallConfigAdoptionResult> {
   const observation = input.sourceSnapshot?.repositoryManifest;
+  const requiredManifestApiVersion =
+    input.baseConfig.policy.repositoryInstallUx?.requiredManifestApiVersion;
   if (!observation || observation.status === "absent") {
+    if (requiredManifestApiVersion) {
+      return {
+        status: "invalid",
+        diagnostic: {
+          code: "repository_install_ux_manifest_api_version_required",
+          message: `Repository install UX requires manifest API ${requiredManifestApiVersion}; observed absent.`,
+        },
+      };
+    }
     return { status: "absent" };
   }
   if (observation.status === "invalid") {
@@ -169,6 +182,18 @@ export async function adoptRepoOwnedInstallConfig(
         code: "repository_install_ux_document_invalid",
         message:
           "The repository install UX document is invalid; update the pinned repository metadata and sync the Source again.",
+      },
+    };
+  }
+  if (
+    requiredManifestApiVersion &&
+    observation.document.apiVersion !== requiredManifestApiVersion
+  ) {
+    return {
+      status: "invalid",
+      diagnostic: {
+        code: "repository_install_ux_manifest_api_version_required",
+        message: `Repository install UX requires manifest API ${requiredManifestApiVersion}; observed ${observation.document.apiVersion}.`,
       },
     };
   }

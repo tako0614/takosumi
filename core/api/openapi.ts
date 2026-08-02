@@ -1226,6 +1226,7 @@ function policySchemas(): Record<string, Record<string, unknown>> {
               uniqueItems: true,
               items: { type: "string", minLength: 1, maxLength: 256 },
             },
+            requiredManifestApiVersion: { const: "takosumi.com/v2" },
           },
           additionalProperties: false,
         },
