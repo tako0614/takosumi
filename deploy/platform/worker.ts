@@ -4496,6 +4496,8 @@ const PLATFORM_EXTENSION_SCOPES_HEADER = "x-takosumi-platform-scopes";
 const PLATFORM_EXTENSION_CAPSULE_ID_HEADER = "x-takosumi-platform-capsule-id";
 const PLATFORM_EXTENSION_WORKSPACE_ID_HEADER =
   "x-takosumi-platform-workspace-id";
+const PLATFORM_EXTENSION_WORKSPACE_ROLE_HEADER =
+  "x-takosumi-platform-workspace-role";
 const PLATFORM_EXTENSION_AUDIENCE_HEADER = "x-takosumi-platform-audience";
 const PLATFORM_EXTENSION_INTERFACE_ID_HEADER =
   "x-takosumi-platform-interface-id";
@@ -4521,6 +4523,7 @@ const PLATFORM_EXTENSION_TRUSTED_CONTEXT_HEADERS = [
   PLATFORM_EXTENSION_SCOPES_HEADER,
   PLATFORM_EXTENSION_CAPSULE_ID_HEADER,
   PLATFORM_EXTENSION_WORKSPACE_ID_HEADER,
+  PLATFORM_EXTENSION_WORKSPACE_ROLE_HEADER,
   PLATFORM_EXTENSION_AUDIENCE_HEADER,
   PLATFORM_EXTENSION_INTERFACE_ID_HEADER,
   PLATFORM_EXTENSION_INTERFACE_BINDING_ID_HEADER,
@@ -4545,6 +4548,7 @@ async function platformExtensionAuthContext(
   | { readonly ok: false; readonly response: Response }
 > {
   let session = await sessionVerifier(request, env, route);
+  let workspaceRoleVerified = false;
   const headers = new Headers(request.headers);
   for (const header of PLATFORM_EXTENSION_RAW_CREDENTIAL_HEADERS) {
     headers.delete(header);
@@ -4637,6 +4641,7 @@ async function platformExtensionAuthContext(
       );
       if (!verified.ok) return verified;
       session = verified.session;
+      workspaceRoleVerified = true;
     }
   }
   const sessionContext = session;
@@ -4670,6 +4675,14 @@ async function platformExtensionAuthContext(
       PLATFORM_EXTENSION_WORKSPACE_ID_HEADER,
       safePlatformExtensionHeaderValue(sessionContext.workspaceId),
     );
+  }
+  if (workspaceRoleVerified) {
+    const workspaceRole = safePlatformWorkspaceRole(
+      sessionContext.workspaceRole,
+    );
+    if (workspaceRole) {
+      headers.set(PLATFORM_EXTENSION_WORKSPACE_ROLE_HEADER, workspaceRole);
+    }
   }
   if (sessionContext.audience) {
     headers.set(
@@ -4744,9 +4757,13 @@ export async function platformExtensionVerifiedWorkspaceSession(
     if (!liveAccess) return platformExtensionWorkspaceAccessFailure();
     verifiedWorkspaceId = requestedWorkspaceId;
   }
-  const workspaceRole =
+  const workspaceRoleValue =
     session.workspaceRole ??
     (typeof liveAccess === "string" ? liveAccess : undefined);
+  const workspaceRole = safePlatformWorkspaceRole(workspaceRoleValue);
+  if (workspaceRoleValue !== undefined && workspaceRole === undefined) {
+    return platformExtensionWorkspaceAccessFailure();
+  }
   if (
     access === "write" &&
     (workspaceRole === "viewer" ||
