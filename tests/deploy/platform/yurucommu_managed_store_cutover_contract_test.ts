@@ -286,6 +286,15 @@ describe("Yurucommu managed Store cutover contract", () => {
     );
     expect(
       managed.hostRuntimeMaterialization?.requirements.find(
+        (requirement) => requirement.kind === "public_oidc",
+      ),
+    ).toMatchObject({
+      id: "takosumi-accounts",
+      callbackPath: "/api/auth/callback/takos",
+      scopes: ["openid", "profile", "email"],
+    });
+    expect(
+      managed.hostRuntimeMaterialization?.requirements.find(
         (requirement) => requirement.binding === "ENCRYPTION_KEY",
       ),
     ).toMatchObject({
