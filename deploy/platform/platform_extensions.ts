@@ -34,6 +34,8 @@ export interface PlatformExtensionRoute {
   readonly authMode?: "platform" | "handler";
   /** Scopes required from platform token credentials. */
   readonly requiredScopes?: readonly string[];
+  /** Exact method/path scope requirements relative to this basePath. */
+  readonly requestScopeRules?: readonly PlatformExtensionRequestScopeRule[];
   /**
    * Binds a caller-supplied `workspaceId` query parameter to verified platform
    * access before dispatch. Optional mode preserves operator-wide reads when
@@ -55,6 +57,16 @@ export interface PlatformExtensionRoute {
   readonly compatibilityProfiles?: readonly PlatformCompatibilityProfile[];
   /** Safe dashboard links contributed by the extension. */
   readonly contributions?: readonly PlatformExtensionContribution[];
+}
+
+/** Exact HTTP method/path scope requirement for a platform extension request. */
+export interface PlatformExtensionRequestScopeRule {
+  /** Exact relative pathname, such as `/models` or `/chat/completions`. */
+  readonly path: `/${string}`;
+  /** Exact HTTP methods accepted by the rule. */
+  readonly methods: readonly string[];
+  /** Scopes required from platform token credentials for this request. */
+  readonly requiredScopes: readonly string[];
 }
 
 export interface PlatformExtensionContribution {
@@ -171,6 +183,15 @@ function platformExtensionRouteFromJson(
     label,
     "requiredScopes",
   );
+  const requestScopeRules = optionalRequestScopeRules(
+    record.requestScopeRules,
+    label,
+  );
+  if (requiredScopes && requestScopeRules) {
+    throw new TypeError(
+      `${label}.requestScopeRules cannot be combined with requiredScopes`,
+    );
+  }
   const managedProviderProfile = nonEmptyString(record.managedProviderProfile);
   if (record.managedProviderProfile !== undefined && !managedProviderProfile) {
     throw new TypeError(
@@ -224,6 +245,7 @@ function platformExtensionRouteFromJson(
     ...(authMode ? { authMode } : {}),
     ...(workspaceContext ? { workspaceContext } : {}),
     ...(requiredScopes ? { requiredScopes } : {}),
+    ...(requestScopeRules ? { requestScopeRules } : {}),
     ...(managedProviderProfile ? { managedProviderProfile } : {}),
     ...(capabilities.length > 0 ? { capabilities } : {}),
     ...(compatibilityProfiles ? { compatibilityProfiles } : {}),
@@ -283,6 +305,10 @@ function mergePlatformExtensionRoutes(
         (existing.authMode ?? "platform") !== (route.authMode ?? "platform") ||
         existing.workspaceContext !== route.workspaceContext ||
         !sameStrings(existing.requiredScopes, route.requiredScopes) ||
+        !sameRequestScopeRules(
+          existing.requestScopeRules,
+          route.requestScopeRules,
+        ) ||
         existing.managedProviderProfile !== route.managedProviderProfile)
     ) {
       throw new TypeError(
@@ -533,6 +559,94 @@ function optionalStringArray(
   return values.length > 0 ? uniqueStrings(values) : undefined;
 }
 
+function optionalRequestScopeRules(
+  value: unknown,
+  label: string,
+): readonly PlatformExtensionRequestScopeRule[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new TypeError(`${label}.requestScopeRules must be a non-empty array`);
+  }
+  const seen = new Set<string>();
+  const rules = value.map((entry, index) => {
+    const itemLabel = `${label}.requestScopeRules[${index}]`;
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new TypeError(`${itemLabel} must be an object`);
+    }
+    const record = entry as Record<string, unknown>;
+    const path = record.path;
+    if (typeof path !== "string" || !canonicalRelativeExtensionPath(path)) {
+      throw new TypeError(
+        `${itemLabel}.path must be a canonical relative absolute path`,
+      );
+    }
+    if (!Array.isArray(record.methods) || record.methods.length === 0) {
+      throw new TypeError(`${itemLabel}.methods must be a non-empty array`);
+    }
+    const methods = record.methods.map((method) => {
+      if (
+        typeof method !== "string" ||
+        !/^[A-Z]+$/u.test(method) ||
+        method.length > 16
+      ) {
+        throw new TypeError(
+          `${itemLabel}.methods entries must be uppercase HTTP methods`,
+        );
+      }
+      return method;
+    });
+    const uniqueMethods = [...new Set(methods)];
+    const requiredScopes =
+      record.requiredScopes === undefined
+        ? undefined
+        : (optionalStringArray(
+              record.requiredScopes,
+              itemLabel,
+              "requiredScopes",
+            ) ?? []);
+    if (!requiredScopes) {
+      throw new TypeError(
+        `${itemLabel}.requiredScopes must be an array`,
+      );
+    }
+    for (const method of uniqueMethods) {
+      const key = `${path}\0${method}`;
+      if (seen.has(key)) {
+        throw new TypeError(
+          `${label}.requestScopeRules has duplicate path/method ${path} ${method}`,
+        );
+      }
+      seen.add(key);
+    }
+    return {
+      path: path as `/${string}`,
+      methods: uniqueMethods,
+      requiredScopes,
+    } as const;
+  });
+  return rules;
+}
+
+function canonicalRelativeExtensionPath(value: string): boolean {
+  if (
+    !value.startsWith("/") ||
+    value.startsWith("//") ||
+    (value !== "/" && value.endsWith("/")) ||
+    value.includes("\\") ||
+    value.includes("?") ||
+    value.includes("#") ||
+    value.includes("%") ||
+    /[\u0000-\u001f\u007f]/u.test(value)
+  ) {
+    return false;
+  }
+  if (value === "/") return true;
+  const segments = value.slice(1).split("/");
+  return segments.every(
+    (segment) => segment !== "" && segment !== "." && segment !== "..",
+  );
+}
+
 function uniqueStrings(values: readonly string[]): readonly string[] {
   return [...new Set(values)];
 }
@@ -549,6 +663,26 @@ function sameStrings(
   );
 }
 
+function sameRequestScopeRules(
+  left: readonly PlatformExtensionRequestScopeRule[] | undefined,
+  right: readonly PlatformExtensionRequestScopeRule[] | undefined,
+): boolean {
+  if (!left && !right) return true;
+  if (!left || !right || left.length !== right.length) return false;
+  const normalize = (rules: readonly PlatformExtensionRequestScopeRule[]) =>
+    rules
+      .flatMap((rule) =>
+        rule.methods.map(
+          (method) =>
+            `${rule.path}\0${method}\0${[...rule.requiredScopes].sort().join("\0")}`,
+        ),
+      )
+      .sort();
+  const leftValues = normalize(left);
+  const rightValues = normalize(right);
+  return leftValues.every((value, index) => value === rightValues[index]);
+}
+
 function nonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
@@ -560,6 +694,37 @@ export function matchPlatformExtensionRoute(
   return routes
     .filter((route) => pathIsUnderBase(pathname, route.basePath))
     .sort((left, right) => right.basePath.length - left.basePath.length)[0];
+}
+
+/**
+ * Resolve an exact request scope rule while preserving the route basePath used
+ * as the Interface OAuth audience. Routes without rules retain legacy scope
+ * behavior; a configured ruleset fails closed when no rule matches.
+ */
+export function resolvePlatformExtensionRequestScopeRoute(
+  request: Request,
+  route: PlatformExtensionRoute,
+): PlatformExtensionRoute | undefined {
+  const rules = route.requestScopeRules;
+  if (!rules) return route;
+  const pathname = new URL(request.url).pathname;
+  const relativePath =
+    pathname === route.basePath
+      ? "/"
+      : pathname.startsWith(`${route.basePath}/`)
+        ? pathname.slice(route.basePath.length)
+        : undefined;
+  if (!relativePath) return undefined;
+  const rule = rules.find(
+    (candidate) =>
+      candidate.path === relativePath &&
+      candidate.methods.includes(request.method),
+  );
+  if (!rule) return undefined;
+  return {
+    ...route,
+    requiredScopes: rule.requiredScopes,
+  };
 }
 
 export function isPlatformExtensionCatalogPath(pathname: string): boolean {

@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import {
   matchPlatformExtensionRoute,
   platformExtensionRoutes,
+  resolvePlatformExtensionRequestScopeRoute,
 } from "../../../deploy/platform/platform_extensions.ts";
 
 test("generic extension descriptors accept localized UI contributions", () => {
@@ -37,6 +38,143 @@ test("generic extension descriptors accept localized UI contributions", () => {
   expect(
     matchPlatformExtensionRoute("/extensions/example/settings", routes),
   ).toBeDefined();
+});
+
+test("extension descriptors parse exact request scope rules without changing the audience base", () => {
+  const [route] = platformExtensionRoutes({
+    TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
+      {
+        basePath: "/gateway/ai/v1",
+        handlerKey: "AI_GATEWAY",
+        requestScopeRules: [
+          {
+            path: "/models",
+            methods: ["GET", "HEAD"],
+            requiredScopes: ["ai.models.read"],
+          },
+          {
+            path: "/models",
+            methods: ["OPTIONS"],
+            requiredScopes: [],
+          },
+          {
+            path: "/chat/completions",
+            methods: ["POST"],
+            requiredScopes: ["ai.chat"],
+          },
+        ],
+      },
+    ]),
+  });
+
+  expect(route).toMatchObject({
+    basePath: "/gateway/ai/v1",
+    requestScopeRules: [
+      {
+        path: "/models",
+        methods: ["GET", "HEAD"],
+        requiredScopes: ["ai.models.read"],
+      },
+      {
+        path: "/models",
+        methods: ["OPTIONS"],
+        requiredScopes: [],
+      },
+      {
+        path: "/chat/completions",
+        methods: ["POST"],
+        requiredScopes: ["ai.chat"],
+      },
+    ],
+  });
+
+  const models = resolvePlatformExtensionRequestScopeRoute(
+    new Request("https://app.takosumi.com/gateway/ai/v1/models", {
+      method: "GET",
+    }),
+    route!,
+  );
+  expect(models).toMatchObject({
+    basePath: "/gateway/ai/v1",
+    requiredScopes: ["ai.models.read"],
+  });
+  const preflight = resolvePlatformExtensionRequestScopeRoute(
+    new Request("https://app.takosumi.com/gateway/ai/v1/models", {
+      method: "OPTIONS",
+    }),
+    route!,
+  );
+  expect(preflight).toMatchObject({
+    basePath: "/gateway/ai/v1",
+    requiredScopes: [],
+  });
+  expect(
+    resolvePlatformExtensionRequestScopeRoute(
+      new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions", {
+        method: "GET",
+      }),
+      route!,
+    ),
+  ).toBeUndefined();
+  expect(
+    resolvePlatformExtensionRequestScopeRoute(
+      new Request("https://app.takosumi.com/gateway/ai/v1/unknown", {
+        method: "GET",
+      }),
+      route!,
+    ),
+  ).toBeUndefined();
+});
+
+test("request scope rules reject ambiguous or unsafe descriptors", () => {
+  const descriptor = (requestScopeRules: unknown) => ({
+    TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
+      {
+        basePath: "/extensions/example",
+        handlerKey: "EXAMPLE_EXTENSION",
+        requestScopeRules,
+      },
+    ]),
+  });
+
+  expect(() =>
+    platformExtensionRoutes(
+      descriptor([
+        {
+          path: "/models",
+          methods: ["GET"],
+          requiredScopes: ["read"],
+        },
+        {
+          path: "/models",
+          methods: ["GET"],
+          requiredScopes: ["write"],
+        },
+      ]),
+    ),
+  ).toThrow("duplicate path/method");
+  expect(() =>
+    platformExtensionRoutes(
+      descriptor([
+        {
+          path: "/models/../admin",
+          methods: ["GET"],
+          requiredScopes: ["read"],
+        },
+      ]),
+    ),
+  ).toThrow("canonical relative absolute path");
+  expect(() =>
+    platformExtensionRoutes(
+      descriptor([
+        {
+          path: "/models",
+          methods: ["get"],
+          requiredScopes: ["read"],
+        },
+      ]),
+    ),
+  ).toThrow("uppercase HTTP methods");
 });
 
 test("extension contributions reject unknown presentation modes", () => {

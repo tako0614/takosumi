@@ -142,6 +142,7 @@ import {
   pathIsUnderBase,
   platformExtensionBasePathIsReserved,
   platformExtensionRoutes,
+  resolvePlatformExtensionRequestScopeRoute,
   type PlatformCompatibilityProfile,
   type PlatformExtensionRoute,
   type PlatformExtensionContribution,
@@ -178,6 +179,7 @@ export {
   pathIsUnderBase,
   platformExtensionBasePathIsReserved,
   platformExtensionRoutes,
+  resolvePlatformExtensionRequestScopeRoute,
 } from "./platform_extensions.ts";
 export {
   evaluateProductionHardeningGates,
@@ -2772,6 +2774,7 @@ export interface PlatformExtensionCatalogItem {
   readonly compatibilityProfiles?: readonly PlatformCompatibilityProfile[];
   readonly authMode?: "platform" | "handler";
   readonly requiredScopes?: readonly string[];
+  readonly requestScopeRules?: PlatformExtensionRoute["requestScopeRules"];
   readonly workspaceContext?: "query-required" | "query-optional";
   readonly contributions?: readonly PlatformExtensionContribution[];
 }
@@ -2804,6 +2807,9 @@ export function platformExtensionCatalog(
       : {}),
     ...(route.authMode ? { authMode: route.authMode } : {}),
     ...(route.requiredScopes ? { requiredScopes: route.requiredScopes } : {}),
+    ...(route.requestScopeRules
+      ? { requestScopeRules: route.requestScopeRules }
+      : {}),
     ...(route.workspaceContext
       ? { workspaceContext: route.workspaceContext }
       : {}),
@@ -3566,6 +3572,11 @@ export async function handlePlatformExtensionRouteRequest(
   authorityFactory: PlatformCompatibilityAuthorityFactory = createPlatformCompatibilityAuthority,
   workspaceAccess: PlatformExtensionWorkspaceAccess = platformExtensionSessionCanAccessWorkspace,
 ): Promise<Response> {
+  const requestRoute = resolvePlatformExtensionRequestScopeRoute(request, route);
+  if (!requestRoute) {
+    return Response.json({ error: "not found" }, { status: 404 });
+  }
+  route = requestRoute;
   const handler = platformExtensionHandler(env, route.handlerKey);
   if (!handler) return Response.json({ error: "not found" }, { status: 404 });
   if ((route.compatibilityProfiles?.length ?? 0) > 0) {
@@ -3603,6 +3614,17 @@ export async function handlePlatformExtensionRouteRequest(
   if (typeof handler.fetch !== "function") {
     return Response.json({ error: "not found" }, { status: 404 });
   }
+  if (
+    request.method === "OPTIONS" &&
+    route.authMode !== "handler" &&
+    route.requestScopeRules &&
+    route.requiredScopes?.length === 0
+  ) {
+    // CORS preflight is explicitly represented by an empty-scope rule. Keep
+    // it public at the platform seam, while still stripping all credentials
+    // and trusted context before the extension sees the request.
+    return await handler.fetch(platformExtensionPreflightRequest(request));
+  }
   if (route.authMode === "handler") {
     return await handler.fetch(platformExtensionHandlerAuthRequest(request));
   }
@@ -3623,6 +3645,17 @@ function platformExtensionHandlerAuthRequest(request: Request): Request {
     ...PLATFORM_EXTENSION_RAW_CREDENTIAL_HEADERS.filter(
       (name) => name !== "authorization",
     ),
+    ...PLATFORM_EXTENSION_TRUSTED_CONTEXT_HEADERS,
+  ]) {
+    headers.delete(header);
+  }
+  return clonePlatformExtensionRequest(request, headers);
+}
+
+function platformExtensionPreflightRequest(request: Request): Request {
+  const headers = new Headers(request.headers);
+  for (const header of [
+    ...PLATFORM_EXTENSION_RAW_CREDENTIAL_HEADERS,
     ...PLATFORM_EXTENSION_TRUSTED_CONTEXT_HEADERS,
   ]) {
     headers.delete(header);
