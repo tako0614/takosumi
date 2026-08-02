@@ -9,7 +9,10 @@ import {
   type OpenTofuRunner,
   OpenTofuRunnerInfrastructureError,
 } from "../../../../core/domains/deploy-control/mod.ts";
-import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
+import {
+  type BeginApplyRunResult,
+  InMemoryOpenTofuControlStore,
+} from "../../../../core/domains/deploy-control/store.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
 import {
   fixtureStateCommit,
@@ -24,6 +27,7 @@ import {
   type TestConnectionResult,
 } from "../../../../core/adapters/vault/mod.ts";
 import type {
+  ApplyRun,
   ProviderConnection,
   CreatePlanRunRequest,
 } from "@takosumi/internal/deploy-control-api";
@@ -111,6 +115,35 @@ async function seedUpdatable(
     source: SOURCE,
     requiredProviders: [CLOUDFLARE],
   };
+}
+
+class LostFirstBeginApplyRunAcknowledgementStore extends InMemoryOpenTofuControlStore {
+  #loseAcknowledgement = true;
+
+  override async beginApplyRun(run: ApplyRun): Promise<BeginApplyRunResult> {
+    const result = await super.beginApplyRun(run);
+    if (this.#loseAcknowledgement && result.status === "created") {
+      this.#loseAcknowledgement = false;
+      throw new Error("simulated lost beginApplyRun acknowledgement");
+    }
+    return result;
+  }
+}
+
+class HiddenExactApplyRunReadStore extends InMemoryOpenTofuControlStore {
+  #hiddenApplyRunId: string | undefined;
+
+  hideNextApplyRunRead(id: string): void {
+    this.#hiddenApplyRunId = id;
+  }
+
+  override getApplyRun(id: string): Promise<ApplyRun | undefined> {
+    if (this.#hiddenApplyRunId === id) {
+      this.#hiddenApplyRunId = undefined;
+      return Promise.resolve(undefined);
+    }
+    return super.getApplyRun(id);
+  }
 }
 
 // --- happy-path plan + apply: credentials reach the dispatch, never the store ---
@@ -205,6 +238,131 @@ test("ApplyRun preparation checkpoint runs before durable put and provider dispa
   expect(checkpointedApplyRunId).toBeDefined();
   expect(providerApplyCalls).toBe(0);
   expect(await store.getApplyRun(checkpointedApplyRunId!)).toBeUndefined();
+});
+
+test("exact queued ApplyRun recovery repairs a lost insert acknowledgement without duplicate provider execution", async () => {
+  const store = new LostFirstBeginApplyRunAcknowledgementStore();
+  const dispatches: Parameters<EnqueueRun>[0][] = [];
+  let providerApplyCalls = 0;
+  const controller = new OpenTofuController({
+    store,
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    now: monotonicNow(1425),
+    newId: deterministicIds(),
+    runner: {
+      ...stubRunner(),
+      apply: (job) => {
+        providerApplyCalls += 1;
+        return Promise.resolve(
+          fixtureStateCommit({ rawOutputRef: job.rawOutputRef }),
+        );
+      },
+    },
+    vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
+    enqueueRun: (dispatch) => {
+      dispatches.push(dispatch);
+      return Promise.resolve();
+    },
+  });
+  const request = await seedUpdatable(store, {
+    capsuleId: "cap_exact_lost_begin_ack",
+  });
+  const { planRun: queuedPlan } = await controller.createPlanRun(request);
+  await controller.dispatchQueuedRun({
+    action: "plan",
+    runId: queuedPlan.id,
+    workspaceId: queuedPlan.workspaceId,
+  });
+  const planRun = (await store.getPlanRun(queuedPlan.id))!;
+  dispatches.length = 0;
+  const exactId = "apply_exact_lost_begin_ack";
+  const create = () =>
+    controller.createApplyRun(
+      {
+        planRunId: planRun.id,
+        expected: applyExpectedGuardFromPlanRun(planRun),
+      },
+      {},
+      { applyRunId: exactId },
+    );
+
+  await expect(create()).rejects.toThrow(
+    "simulated lost beginApplyRun acknowledgement",
+  );
+  expect((await store.getApplyRun(exactId))?.status).toBe("queued");
+  expect(dispatches.filter((dispatch) => dispatch.action === "apply")).toEqual(
+    [],
+  );
+
+  expect((await create()).applyRun.id).toBe(exactId);
+  expect((await create()).applyRun.id).toBe(exactId);
+  const repairedDispatches = dispatches.filter(
+    (dispatch) => dispatch.action === "apply",
+  );
+  expect(repairedDispatches).toHaveLength(2);
+
+  for (const dispatch of repairedDispatches) {
+    await controller.dispatchQueuedRun(dispatch);
+  }
+  expect(providerApplyCalls).toBe(1);
+  expect((await store.getApplyRun(exactId))?.status).toBe("succeeded");
+});
+
+test("beginApplyRun adoption repairs the exact queued row when the optimistic read loses an insert race", async () => {
+  const store = new HiddenExactApplyRunReadStore();
+  const dispatches: Parameters<EnqueueRun>[0][] = [];
+  const controller = new OpenTofuController({
+    store,
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    now: monotonicNow(1440),
+    newId: deterministicIds(),
+    runner: stubRunner(),
+    vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
+    enqueueRun: (dispatch) => {
+      dispatches.push(dispatch);
+      return Promise.resolve();
+    },
+  });
+  const request = await seedUpdatable(store, {
+    capsuleId: "cap_exact_begin_race",
+  });
+  const { planRun: queuedPlan } = await controller.createPlanRun(request);
+  await controller.dispatchQueuedRun({
+    action: "plan",
+    runId: queuedPlan.id,
+    workspaceId: queuedPlan.workspaceId,
+  });
+  const planRun = (await store.getPlanRun(queuedPlan.id))!;
+  const exactId = "apply_exact_begin_race";
+  await controller.createApplyRun(
+    {
+      planRunId: planRun.id,
+      expected: applyExpectedGuardFromPlanRun(planRun),
+    },
+    {},
+    { applyRunId: exactId },
+  );
+  dispatches.length = 0;
+  store.hideNextApplyRunRead(exactId);
+
+  const recovered = await controller.createApplyRun(
+    {
+      planRunId: planRun.id,
+      expected: applyExpectedGuardFromPlanRun(planRun),
+    },
+    {},
+    { applyRunId: exactId },
+  );
+
+  expect(recovered.applyRun.id).toBe(exactId);
+  expect(recovered.applyRun.status).toBe("queued");
+  expect(dispatches).toEqual([
+    {
+      action: "apply",
+      runId: exactId,
+      workspaceId: planRun.workspaceId,
+    },
+  ]);
 });
 
 test("exact ApplyRun recovery adopts running and succeeded rows without queued reset or redispatch", async () => {

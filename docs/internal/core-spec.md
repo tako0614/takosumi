@@ -275,10 +275,13 @@ replacement id. ApplyRun creation is an atomic insert-or-adopt operation: a
 same-id running or terminal row is returned unchanged, never reset to queued or
 redispatched, and a different PlanRun, subject, operation, runner profile,
 expected guard, state backend, or returned id fails closed. A PlanRun already
-applied by another id cannot substitute for the checkpointed id. A real
-checkpoint write failure happens before provider dispatch and exits the
-Resource from `Applying` or `Deleting`, so a later retry is discoverable and
-unambiguous.
+applied by another id cannot substitute for the checkpointed id. If insertion
+commits but its acknowledgement or the process is lost before enqueue, exact
+recovery re-enqueues only the still-queued row; duplicate queued delivery is
+fenced by the consumer's queued-to-running lease compare-and-set, while running
+and terminal rows are never redispatched. A real checkpoint write failure
+happens before provider dispatch and exits the Resource from `Applying` or
+`Deleting`, so a later retry is discoverable and unambiguous.
 
 Pre-digest Resource execution rows use the explicit
 `priorState.legacyDigestMissing=true` transition marker. A runner may restore

@@ -1007,6 +1007,37 @@ test("ApplyRun begin is insert-or-adopt and never resets an existing running or 
   }
 });
 
+test("ApplyRun begin adopts an existing queued row unchanged on every store backend", async () => {
+  for (const [label, store] of await stores()) {
+    const id = `apply_begin_queued_${label}`;
+    const queued = applyRunForSafety({
+      id,
+      capsuleId: `capsule_${id}`,
+      operation: "update",
+      status: "queued",
+      effectAt: 100,
+      auditEvents: [
+        {
+          id: `audit_${id}`,
+          type: "apply.queued",
+          at: 100,
+        },
+      ],
+    });
+    expect(await store.beginApplyRun(queued), label).toEqual({
+      status: "created",
+      run: queued,
+    });
+
+    const candidate = { ...queued, updatedAt: 200, auditEvents: [] };
+    expect(await store.beginApplyRun(candidate), label).toEqual({
+      status: "existing",
+      run: queued,
+    });
+    expect(await store.getApplyRun(id), label).toEqual(queued);
+  }
+});
+
 test("run transition startedAt fencing rejects a started requeue in memory, Postgres, and D1", async () => {
   for (const [label, store] of await stores()) {
     const seeded = applyRunForSafety({

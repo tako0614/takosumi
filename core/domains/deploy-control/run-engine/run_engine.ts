@@ -3127,6 +3127,12 @@ export class RunEngine {
           request.expected,
         );
         await internal.onPrepared?.(exact);
+        await this.#repairQueuedApplyRunDispatch(
+          exact,
+          planRun,
+          exactProfile,
+          request.expected,
+        );
         const response = await this.getApplyRun(exactApplyRunId);
         assertExactApplyRunResponse(response, exactApplyRunId);
         return response;
@@ -3226,6 +3232,12 @@ export class RunEngine {
       request.expected,
     );
     if (begun.status === "existing") {
+      await this.#repairQueuedApplyRunDispatch(
+        begun.run,
+        planRun,
+        profile,
+        request.expected,
+      );
       const response = await this.getApplyRun(applyRun.id);
       assertExactApplyRunResponse(response, applyRun.id);
       return response;
@@ -3242,6 +3254,33 @@ export class RunEngine {
     });
     const dispatched = await this.getApplyRun(applyRun.id);
     return dispatched;
+  }
+
+  async #repairQueuedApplyRunDispatch(
+    adopted: ApplyRun,
+    planRun: PlanRun,
+    profile: RunnerProfile,
+    expected: ApplyExpectedGuard,
+  ): Promise<void> {
+    const current = await this.#store.getApplyRun(adopted.id);
+    if (!current || current.status !== "queued") return;
+    await assertApplyRunCreationAuthority(
+      current,
+      planRun,
+      profile,
+      expected,
+    );
+    await this.#notifyApplyQueued(current);
+    if (!this.#hasRunnerForProfile(profile)) return;
+    // Insert acknowledgement or process loss can leave the exact row queued
+    // before its first enqueue. Redelivering a queued message is safe: the
+    // queue consumer's queued -> running lease CAS admits at most one provider
+    // execution, while a running or terminal row never reaches this branch.
+    await this.#enqueueRun({
+      action: "apply",
+      runId: current.id,
+      workspaceId: current.workspaceId,
+    });
   }
 
   /**
