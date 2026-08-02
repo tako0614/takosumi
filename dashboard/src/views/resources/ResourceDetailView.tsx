@@ -22,6 +22,7 @@ import { currentWorkspaceId } from "../../lib/workspace-state.ts";
 import {
   deleteResourceShape,
   getResourceShape,
+  hasS3ObjectStorageInterface,
   listFormAvailability,
   listResolvedResourceInterfaces,
   listResourceShapeEvents,
@@ -404,12 +405,8 @@ function Inner(): JSX.Element {
                       workspaceId={current().workspaceId}
                       resourceId={`tkrn:${current().workspaceId}:ObjectBucket:${current().name}`}
                       resourceName={current().name}
-                      interfaceAvailable={Boolean(
-                        resolvedInterfaces()?.some(
-                          (resolved) =>
-                            resolved.type === "storage.object" &&
-                            resolved.version === "v1",
-                        ),
+                      interfaceAvailable={hasS3ObjectStorageInterface(
+                        resolvedInterfaces() ?? [],
                       )}
                       interfaceLoading={resolvedInterfaces.loading}
                       interfaceError={resolvedInterfaces.error}

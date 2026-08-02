@@ -2324,6 +2324,20 @@ export interface ResolvedResourceInterface {
   readonly resourceUri?: string;
 }
 
+/**
+ * Exact public ObjectBucket Interface required by the Cloud S3-compatible
+ * customer-key surface. Older `storage.object@v1` projections are not an
+ * equivalent authority and must leave key issuance unavailable.
+ */
+export function hasS3ObjectStorageInterface(
+  interfaces: readonly ResolvedResourceInterface[],
+): boolean {
+  return interfaces.some(
+    (resolved) =>
+      resolved.type === "object.storage" && resolved.version === "1",
+  );
+}
+
 export interface ResourceShapeWriteInput {
   readonly workspaceId: string;
   readonly space: string;
@@ -2392,13 +2406,14 @@ export interface ResourceSpacePolicy {
 // --- Customer-owned S3 access keys ----------------------------------------
 //
 // This is the public projection of the Cloud customer-key control surface.
-// The dashboard deliberately keeps the one-time credentials nested in the
+// The dashboard deliberately keeps the one-time credentials only on the
 // create response and has no type for a secret in list/revoke responses.
 
 export type S3CustomerAccessKeyPermission =
-  | "storage.read"
-  | "storage.list"
-  | "storage.write";
+  | "get"
+  | "list"
+  | "put"
+  | "delete";
 
 export interface S3CustomerAccessKeyGrant {
   readonly resourceId: string;
@@ -2427,16 +2442,16 @@ export interface S3CustomerAccessKeyCredentials {
 }
 
 export interface S3CustomerAccessKeyCreateResult {
-  readonly accessKey: S3CustomerAccessKeyMetadata & {
-    readonly credentials: S3CustomerAccessKeyCredentials;
-  };
+  readonly accessKey: S3CustomerAccessKeyMetadata;
+  readonly credentials: S3CustomerAccessKeyCredentials;
 }
 
 const S3_CUSTOMER_ACCESS_KEYS_BASE = "/v1/cloud/s3-access-keys";
 const S3_CUSTOMER_ACCESS_KEY_PERMISSIONS = new Set<string>([
-  "storage.read",
-  "storage.list",
-  "storage.write",
+  "get",
+  "list",
+  "put",
+  "delete",
 ]);
 
 function invalidS3AccessKeyResponse(message: string): ControlApiError {
@@ -2515,17 +2530,16 @@ function parseS3CustomerAccessKeyMetadata(
 function parseS3CustomerAccessKeyCreateResult(
   value: unknown,
 ): S3CustomerAccessKeyCreateResult {
-  if (!isRecord(value) || !isRecord(value.accessKey)) {
+  if (
+    !isRecord(value) ||
+    !isRecord(value.accessKey) ||
+    !isRecord(value.credentials)
+  ) {
     throw invalidS3AccessKeyResponse(
       "S3 access key create response is invalid",
     );
   }
-  const credentials = value.accessKey.credentials;
-  if (!isRecord(credentials)) {
-    throw invalidS3AccessKeyResponse(
-      "S3 access key credentials are missing from the create response",
-    );
-  }
+  const credentials = value.credentials;
   if (
     typeof credentials.accessKeyId !== "string" ||
     typeof credentials.secretAccessKey !== "string"
@@ -2534,14 +2548,11 @@ function parseS3CustomerAccessKeyCreateResult(
       "S3 access key credentials do not match the public contract",
     );
   }
-  const { credentials: _credentials, ...metadata } = value.accessKey;
   return {
-    accessKey: {
-      ...parseS3CustomerAccessKeyMetadata(metadata),
-      credentials: {
-        accessKeyId: credentials.accessKeyId,
-        secretAccessKey: credentials.secretAccessKey,
-      },
+    accessKey: parseS3CustomerAccessKeyMetadata(value.accessKey),
+    credentials: {
+      accessKeyId: credentials.accessKeyId,
+      secretAccessKey: credentials.secretAccessKey,
     },
   };
 }
@@ -2623,7 +2634,11 @@ export async function revokeS3CustomerAccessKey(
     `${S3_CUSTOMER_ACCESS_KEYS_BASE}/${encodeURIComponent(keyId)}${query({ workspaceId })}`,
     { method: "DELETE" },
   );
-  if (!isRecord(body) || !("accessKey" in body)) {
+  if (
+    !isRecord(body) ||
+    body.operation !== "revoked" ||
+    !("accessKey" in body)
+  ) {
     throw invalidS3AccessKeyResponse(
       "S3 access key revoke response is invalid",
     );

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import { hasS3ObjectStorageInterface } from "../../../../../dashboard/src/lib/control-api.ts";
 
 const src = (path: string) =>
   readFileSync(
@@ -18,10 +19,23 @@ describe("ObjectBucket S3-compatible customer key UI", () => {
     expect(detail).toContain(
       "tkrn:${current().workspaceId}:ObjectBucket:${current().name}",
     );
-    expect(detail).toContain('resolved.type === "storage.object"');
-    expect(detail).toContain('resolved.version === "v1"');
+    expect(detail).toContain("hasS3ObjectStorageInterface");
     expect(detail).toContain("interfaceError={resolvedInterfaces.error}");
     expect(detail).toContain("interfaceLoading={resolvedInterfaces.loading}");
+  });
+
+  test("rejects the legacy Interface and accepts only the current exact Interface", () => {
+    const resource = { kind: "ObjectBucket", name: "assets" } as const;
+    expect(
+      hasS3ObjectStorageInterface([
+        { type: "storage.object", version: "v1", resource },
+      ]),
+    ).toBe(false);
+    expect(
+      hasS3ObjectStorageInterface([
+        { type: "object.storage", version: "1", resource },
+      ]),
+    ).toBe(true);
   });
 
   test("uses the dashboard client, explicit grants, and a browser-generated idempotency key", () => {
@@ -31,9 +45,13 @@ describe("ObjectBucket S3-compatible customer key UI", () => {
     expect(card).toContain("resourceId: props.resourceId");
     expect(card).toContain("resourceName: props.resourceName");
     expect(card).toContain("idempotencyKey: idempotencyKey()");
-    expect(card).toContain('"storage.read"');
-    expect(card).toContain('"storage.list"');
-    expect(card).toContain('"storage.write"');
+    expect(card).toContain('"get"');
+    expect(card).toContain('"list"');
+    expect(card).toContain('"put"');
+    expect(card).toContain('"delete"');
+    expect(card).not.toContain("storage.read");
+    expect(card).not.toContain("storage.list");
+    expect(card).not.toContain("storage.write");
     expect(card).not.toContain("principalId");
   });
 

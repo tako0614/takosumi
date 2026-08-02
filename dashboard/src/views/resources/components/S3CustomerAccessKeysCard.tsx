@@ -24,9 +24,10 @@ import {
 } from "../../../components/ui/index.ts";
 
 const PERMISSIONS: readonly S3CustomerAccessKeyPermission[] = [
-  "storage.read",
-  "storage.list",
-  "storage.write",
+  "get",
+  "list",
+  "put",
+  "delete",
 ];
 
 interface Props {
@@ -46,12 +47,14 @@ function idempotencyKey(): string {
 
 function permissionLabel(permission: S3CustomerAccessKeyPermission): string {
   switch (permission) {
-    case "storage.read":
-      return t("resources.detail.s3Keys.permission.read");
-    case "storage.list":
+    case "get":
+      return t("resources.detail.s3Keys.permission.get");
+    case "list":
       return t("resources.detail.s3Keys.permission.list");
-    case "storage.write":
-      return t("resources.detail.s3Keys.permission.write");
+    case "put":
+      return t("resources.detail.s3Keys.permission.put");
+    case "delete":
+      return t("resources.detail.s3Keys.permission.delete");
   }
 }
 
@@ -99,7 +102,7 @@ export default function S3CustomerAccessKeysCard(props: Props) {
   const [label, setLabel] = createSignal("");
   const [permissions, setPermissions] = createSignal<
     readonly S3CustomerAccessKeyPermission[]
-  >(["storage.read"]);
+  >(["get"]);
   const [created, setCreated] =
     createSignal<S3CustomerAccessKeyCreateResult>();
   const [copied, setCopied] = createSignal(false);
@@ -174,7 +177,7 @@ export default function S3CustomerAccessKeysCard(props: Props) {
   };
 
   const copyCreatedCredentials = async () => {
-    const credentials = created()?.accessKey.credentials;
+    const credentials = created()?.credentials;
     if (!credentials) return;
     const value = `AWS_ACCESS_KEY_ID=${credentials.accessKeyId}\nAWS_SECRET_ACCESS_KEY=${credentials.secretAccessKey}`;
     try {
@@ -298,7 +301,7 @@ export default function S3CustomerAccessKeysCard(props: Props) {
                   <strong>{t("resources.detail.s3Keys.created")}</strong>
                   <span>{t("resources.detail.s3Keys.createdHint")}</span>
                 </div>
-                <code>{`AWS_ACCESS_KEY_ID=${result().accessKey.credentials.accessKeyId}\nAWS_SECRET_ACCESS_KEY=${result().accessKey.credentials.secretAccessKey}`}</code>
+                <code>{`AWS_ACCESS_KEY_ID=${result().credentials.accessKeyId}\nAWS_SECRET_ACCESS_KEY=${result().credentials.secretAccessKey}`}</code>
                 <div class="rs-s3-key-actions">
                   <Button
                     variant="primary"

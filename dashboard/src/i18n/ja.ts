@@ -1559,16 +1559,17 @@ export const ja = {
   "resources.detail.s3Keys.interfaceLoading":
     "このバケットのストレージ Interface を確認しています…",
   "resources.detail.s3Keys.interfaceUnavailable":
-    "この ObjectBucket には有効な storage.object@v1 Interface がないため、S3互換アクセスキーをこのリソースに紐付けられません。",
+    "この ObjectBucket には有効な object.storage@1 Interface がないため、S3互換アクセスキーをこのリソースに紐付けられません。",
   "resources.detail.s3Keys.resource": "対象 Resource",
   "resources.detail.s3Keys.label": "キーのラベル",
   "resources.detail.s3Keys.labelPlaceholder": "例: バックアップ処理",
   "resources.detail.s3Keys.permissions": "権限",
   "resources.detail.s3Keys.permissionsHint":
     "発行前にサーバーがメンバーシップと owner 権限を確認します。",
-  "resources.detail.s3Keys.permission.read": "オブジェクトを読む",
-  "resources.detail.s3Keys.permission.list": "オブジェクトを一覧する",
-  "resources.detail.s3Keys.permission.write": "オブジェクトを書き込む",
+  "resources.detail.s3Keys.permission.get": "オブジェクトを読む",
+  "resources.detail.s3Keys.permission.list": "バケットを一覧する",
+  "resources.detail.s3Keys.permission.put": "オブジェクトをアップロード・上書きする",
+  "resources.detail.s3Keys.permission.delete": "オブジェクトを削除する",
   "resources.detail.s3Keys.create": "S3互換キーを作成",
   "resources.detail.s3Keys.creating": "作成中…",
   "resources.detail.s3Keys.created": "S3互換アクセスキーを作成しました",

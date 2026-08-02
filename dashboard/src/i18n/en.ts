@@ -1549,16 +1549,17 @@ export const en: Record<keyof typeof ja, string> = {
   "resources.detail.s3Keys.interfaceLoading":
     "Checking this bucket's storage interface…",
   "resources.detail.s3Keys.interfaceUnavailable":
-    "This ObjectBucket has no active storage.object@v1 interface, so an S3-compatible access key cannot be scoped here.",
+    "This ObjectBucket has no active object.storage@1 interface, so an S3-compatible access key cannot be scoped here.",
   "resources.detail.s3Keys.resource": "Target Resource",
   "resources.detail.s3Keys.label": "Key label",
   "resources.detail.s3Keys.labelPlaceholder": "For example: backup job",
   "resources.detail.s3Keys.permissions": "Permissions",
   "resources.detail.s3Keys.permissionsHint":
     "The server checks your membership and owner authority before issuing the key.",
-  "resources.detail.s3Keys.permission.read": "Read objects",
-  "resources.detail.s3Keys.permission.list": "List objects",
-  "resources.detail.s3Keys.permission.write": "Write objects",
+  "resources.detail.s3Keys.permission.get": "Read objects",
+  "resources.detail.s3Keys.permission.list": "List the bucket",
+  "resources.detail.s3Keys.permission.put": "Upload or overwrite objects",
+  "resources.detail.s3Keys.permission.delete": "Delete objects",
   "resources.detail.s3Keys.create": "Create S3-compatible key",
   "resources.detail.s3Keys.creating": "Creating…",
   "resources.detail.s3Keys.created": "S3-compatible access key created",

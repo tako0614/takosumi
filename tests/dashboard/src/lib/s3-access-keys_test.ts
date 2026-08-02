@@ -30,7 +30,7 @@ const metadata = {
       resourceId: "tkrn:ws_1:ObjectBucket:assets",
       resourceName: "assets",
       interfaceId: "iface_1",
-      permission: "storage.read",
+      permission: "get",
     },
   ],
   status: "active",
@@ -71,10 +71,10 @@ describe("S3 customer access key dashboard client", () => {
       return jsonResponse({
         accessKey: {
           ...metadata,
-          credentials: {
-            accessKeyId: "AKIA123",
-            secretAccessKey: "secret-only-once",
-          },
+        },
+        credentials: {
+          accessKeyId: "AKIA123",
+          secretAccessKey: "secret-only-once",
         },
       }, 201);
     }) as typeof fetch;
@@ -84,13 +84,11 @@ describe("S3 customer access key dashboard client", () => {
       resourceId: "tkrn:ws_1:ObjectBucket:assets",
       resourceName: "assets",
       label: "backup",
-      permissions: ["storage.read", "storage.list"],
+      permissions: ["get", "list", "put", "delete"],
       idempotencyKey: "idem-1",
     });
 
-    expect(result.accessKey.credentials.secretAccessKey).toBe(
-      "secret-only-once",
-    );
+    expect(result.credentials.secretAccessKey).toBe("secret-only-once");
     expect(request.url).toBe(
       "/v1/cloud/s3-access-keys?workspaceId=ws_1",
     );
@@ -105,11 +103,17 @@ describe("S3 customer access key dashboard client", () => {
     expect(body).toEqual({
       label: "backup",
       grants: [
-        { resourceName: "assets", permissions: ["storage.read", "storage.list"] },
+        {
+          resourceName: "assets",
+          permissions: ["get", "list", "put", "delete"],
+        },
       ],
     });
     expect(body).not.toHaveProperty("resourceId");
     expect(body).not.toHaveProperty("principalId");
+    expect(JSON.stringify(body)).not.toContain("storage.read");
+    expect(JSON.stringify(body)).not.toContain("storage.list");
+    expect(JSON.stringify(body)).not.toContain("storage.write");
   });
 
   test("rejects a mismatched canonical resource before making a request", async () => {
@@ -125,7 +129,7 @@ describe("S3 customer access key dashboard client", () => {
         resourceId: "tkrn:ws_1:ObjectBucket:other",
         resourceName: "assets",
         label: "backup",
-        permissions: ["storage.read"],
+        permissions: ["get"],
         idempotencyKey: "idem-1",
       }),
     ).rejects.toMatchObject({ status: 400, code: "invalid_request" });
@@ -138,7 +142,10 @@ describe("S3 customer access key dashboard client", () => {
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       url = typeof input === "string" ? input : String(input);
       method = init?.method ?? "";
-      return jsonResponse({ accessKey: { ...metadata, status: "revoked" } });
+      return jsonResponse({
+        accessKey: { ...metadata, status: "revoked" },
+        operation: "revoked",
+      });
     }) as typeof fetch;
 
     await expect(revokeS3CustomerAccessKey("ws_1", "sak_123")).resolves.toMatchObject({
