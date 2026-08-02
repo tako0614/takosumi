@@ -3617,6 +3617,7 @@ export async function handlePlatformExtensionRouteRequest(
   if (
     request.method === "OPTIONS" &&
     route.authMode !== "handler" &&
+    route.workspaceContext === undefined &&
     route.requestScopeRules &&
     route.requiredScopes?.length === 0
   ) {
