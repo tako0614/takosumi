@@ -281,14 +281,36 @@ test("repository manifest v2 rejects secret-like document fields", () => {
 
 test("repository manifest v2 rejects secret-like values and authority IDs recursively", async () => {
   const document = JSON.parse(await fixture("v2-launcher.json"));
-  document.install.modules["deploy/takoform"].interfaces[0].spec.document = {
-    display: { title: "Example" },
-    nested: { providerId: "provider_123" },
-  };
-  expect(parseRepositoryManifestText(JSON.stringify(document)).ok).toBe(false);
+  const declaration = document.install.modules["deploy/takoform"].interfaces[0];
+  for (const key of [
+    "providerId",
+    "credentialId",
+    "accountId",
+    "hostId",
+    "provider_id",
+    "credential_id",
+    "account_id",
+    "host_id",
+  ]) {
+    declaration.spec.document = {
+      display: { title: "Example" },
+      nested: { authority: { [key]: "opaque-id" } },
+    };
+    expect(parseRepositoryManifestText(JSON.stringify(document)).ok).toBe(false);
+  }
 
-  document.install.modules["deploy/takoform"].interfaces[0].spec.document = {
-    display: { title: "Bearer sk-test-12345678" },
+  for (const value of ["sk-example_12345678", "Bearer opaque-token"]) {
+    declaration.spec.document = {
+      display: { title: "Example" },
+      nested: { values: [value] },
+    };
+    expect(parseRepositoryManifestText(JSON.stringify(document)).ok).toBe(false);
+  }
+
+  declaration.spec.document = { display: { title: "Example" } };
+  declaration.spec.inputs.literal = {
+    source: "literal",
+    value: { nested: { credentialId: "credential_123" } },
   };
   expect(parseRepositoryManifestText(JSON.stringify(document)).ok).toBe(false);
 });
