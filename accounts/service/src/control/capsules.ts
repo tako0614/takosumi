@@ -554,6 +554,11 @@ function publicProviderBindingSet(
     environment: profile.environment,
     bindings: profile.bindings.map((binding) => ({
       provider: binding.provider,
+      ...(binding.moduleLocalName
+        ? { moduleLocalName: binding.moduleLocalName }
+        : {}),
+      ...(binding.childAlias ? { childAlias: binding.childAlias } : {}),
+      ...(binding.rootAlias ? { rootAlias: binding.rootAlias } : {}),
       connectionId: binding.connectionId,
       ...(binding.alias ? { alias: binding.alias } : {}),
       ...(binding.region ? { region: binding.region } : {}),

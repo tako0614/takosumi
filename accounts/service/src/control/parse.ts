@@ -746,10 +746,19 @@ export function parseProviderBinding(value: unknown):
   }
   const binding: {
     provider: string;
+    moduleLocalName?: string;
+    childAlias?: string;
+    rootAlias?: string;
     alias?: string;
     connectionId: string;
     region?: string;
   } = { provider, connectionId };
+  const moduleLocalName = stringValue(input.moduleLocalName);
+  if (moduleLocalName) binding.moduleLocalName = moduleLocalName;
+  const childAlias = stringValue(input.childAlias);
+  if (childAlias) binding.childAlias = childAlias;
+  const rootAlias = stringValue(input.rootAlias);
+  if (rootAlias) binding.rootAlias = rootAlias;
   const alias = stringValue(input.alias);
   if (alias) binding.alias = alias;
   const region = stringValue(input.region);

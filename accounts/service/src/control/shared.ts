@@ -488,6 +488,11 @@ export async function resolveProviderBindings(
     }
     resolved.push({
       provider: binding.provider,
+      ...(binding.moduleLocalName
+        ? { moduleLocalName: binding.moduleLocalName }
+        : {}),
+      ...(binding.childAlias ? { childAlias: binding.childAlias } : {}),
+      ...(binding.rootAlias ? { rootAlias: binding.rootAlias } : {}),
       ...(binding.alias ? { alias: binding.alias } : {}),
       connectionId: binding.connectionId,
       ...(binding.region ? { region: binding.region } : {}),

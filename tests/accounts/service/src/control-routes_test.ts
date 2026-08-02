@@ -1320,7 +1320,12 @@ test("Capsule ProviderBindings accept only the canonical route and payload", asy
   const bindings = [
     {
       provider: "registry.opentofu.org/hashicorp/aws",
+      moduleLocalName: "primary",
+      childAlias: "archive",
+      rootAlias: "production",
+      alias: "legacy",
       connectionId: "conn_1",
+      region: "us-east-1",
     },
   ];
   const putRequest = new Request(
@@ -1338,6 +1343,21 @@ test("Capsule ProviderBindings accept only the canonical route and payload", asy
   );
   expect(written?.status).toBe(200);
   expect(await written?.json()).toMatchObject({
+    providerBindingSet: { bindings },
+  });
+
+  const read = await handleCapsules(
+    context(
+      fixture.operations,
+      new Request(
+        "https://app.example.test/api/v1/capsules/cap_1/provider-bindings",
+      ),
+    ),
+    ["capsules", "cap_1", "provider-bindings"],
+    "GET",
+  );
+  expect(read?.status).toBe(200);
+  expect(await read?.json()).toMatchObject({
     providerBindingSet: { bindings },
   });
 
