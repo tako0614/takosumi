@@ -5,6 +5,7 @@ import {
   buildEdgeWorkerServiceSpec,
   buildObjectBucketServiceSpec,
   draftEdgeWorkerServiceSpec,
+  guidedResourceServiceSchemaCovers,
   GUIDED_RESOURCE_SERVICE_KINDS,
   parseResourceServiceTokens,
   readEdgeWorkerServiceForm,
@@ -344,5 +345,32 @@ describe("provider-neutral Resource service forms", () => {
         "settings",
       ),
     ).toBeUndefined();
+  });
+
+  test("switches to exact schema controls when a Form adds fields beyond the guided seam", () => {
+    expect(
+      guidedResourceServiceSchemaCovers("ObjectBucket", {
+        type: "object",
+        properties: {
+          name: { type: "string" },
+          storageClass: { type: "string" },
+        },
+      }),
+    ).toBe(true);
+    expect(
+      guidedResourceServiceSchemaCovers("ObjectBucket", {
+        type: "object",
+        properties: {
+          name: { type: "string" },
+          versioning: { type: "boolean" },
+        },
+      }),
+    ).toBe(false);
+    expect(
+      guidedResourceServiceSchemaCovers("KeyValueStore", {
+        type: "object",
+        properties: { name: { type: "string" } },
+      }),
+    ).toBe(false);
   });
 });

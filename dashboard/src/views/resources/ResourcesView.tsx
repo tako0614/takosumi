@@ -21,6 +21,7 @@ import {
   ControlApiError,
   deleteResourceSpacePolicy,
   deleteResourceTargetPool,
+  getFormDefinition,
   listCapsules,
   listFormAvailability,
   listResourceShapes,
@@ -28,8 +29,10 @@ import {
   listResourceTargetPools,
   putResourceSpacePolicy,
   putResourceTargetPool,
+  shapeKindForPortableType,
   type Capsule,
   type ResourceShape,
+  type FormDefinition,
   type ResourceSpacePolicy,
   type ResourceSpacePolicySpec,
   type ResourceTargetPool,
@@ -120,6 +123,47 @@ function Inner(): JSX.Element {
     scope,
     ({ workspaceId: workspace, space: selectedSpace }) =>
       listFormAvailability(workspace, selectedSpace),
+  );
+  const formDefinitionScope = createMemo(() => {
+    const currentScope = scope();
+    if (!currentScope || formAvailability.error) return undefined;
+    const forms = formAvailability();
+    return forms
+      ? { ...currentScope, forms }
+      : undefined;
+  });
+  const [formDefinitions] = createResource(
+    formDefinitionScope,
+    async ({ workspaceId: workspace, space: selectedSpace, forms }) => {
+      const definitions = await Promise.all(
+        forms
+          .filter(
+            (form) =>
+              form.definitionKnown &&
+              form.installed &&
+              form.availableToPrincipal,
+          )
+          .map(async (form): Promise<FormDefinition | undefined> => {
+            const kind = shapeKindForPortableType(form.form.type);
+            if (!kind) return undefined;
+            try {
+              return await getFormDefinition(
+                workspace,
+                selectedSpace,
+                kind as ResourceShape["kind"],
+                form.form,
+              );
+            } catch {
+              // A missing exact schema must not turn a usable inventory into a
+              // broad catalog or leak an unverified definition into the editor.
+              return undefined;
+            }
+          }),
+      );
+      return definitions.filter(
+        (definition): definition is FormDefinition => definition !== undefined,
+      );
+    },
   );
   const [targetPools, { refetch: refetchTargetPools }] = createResource(
     scope,
@@ -593,6 +637,7 @@ function Inner(): JSX.Element {
                   workspaceId={active().workspaceId}
                   space={active().space}
                   formAvailability={formAvailability() ?? []}
+                  formDefinitions={formDefinitions() ?? []}
                   targetPools={targetPoolNames()}
                   spacePolicies={spacePolicyNames()}
                   onCancel={() => setShowEditor(false)}

@@ -769,6 +769,61 @@ export class ResourceShapeService {
   }
 
   /**
+   * Returns one exact, principal-readable Form Definition for the portable
+   * host's schema editor. Availability is intentionally re-evaluated through
+   * the same intersection as form discovery; a definition, package, or
+   * activation by itself never grants read access to its desired schema.
+   *
+   * The method fails closed for malformed or mismatched identities, missing
+   * registry evidence, unavailable principals, and retained legacy definitions
+   * that do not carry a verifier-approved desiredSchema.
+   */
+  async getReadableFormDefinition(input: {
+    readonly actor: ActorContext;
+    readonly space: SpaceId;
+    readonly identity: InstalledFormReference;
+  }): Promise<FormDefinition | undefined> {
+    if (!isInstalledFormReference(input.identity) || !this.#formRegistry) {
+      return undefined;
+    }
+    try {
+      const availability = await this.listFormAvailability({
+        actor: input.actor,
+        space: input.space,
+        identity: input.identity,
+        page: { limit: 1 },
+      });
+      const key = installedFormReferenceKey(input.identity);
+      const evidence = availability.items.find(
+        (item) => installedFormReferenceKey(item.form) === key,
+      );
+      if (
+        !evidence ||
+        !evidence.definitionKnown ||
+        !evidence.installed ||
+        !evidence.availableToPrincipal
+      ) {
+        return undefined;
+      }
+      const definition = await this.#formRegistry.getDefinition(
+        formRefOfInstalled(input.identity),
+      );
+      if (
+        !definition ||
+        installedFormReferenceKey(definition.identity) !== key ||
+        definition.desiredSchema === undefined
+      ) {
+        return undefined;
+      }
+      return structuredClone(definition);
+    } catch {
+      // Schema discovery is a read convenience. Registry or availability
+      // failures must never turn into an unverified definition response.
+      return undefined;
+    }
+  }
+
+  /**
    * Re-evaluates one exact FormActivation for the generic Offering resolver.
    * Unlike discovery, no other activation can make this result available.
    */

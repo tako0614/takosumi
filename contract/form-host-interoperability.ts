@@ -17,6 +17,8 @@ export const TAKOFORM_FORM_HOST_API_PATH =
   "/apis/forms.takoform.com/v1alpha1" as const;
 export const TAKOFORM_FORM_HOST_INTERFACES_PATH =
   `${TAKOFORM_FORM_HOST_API_PATH}/interfaces` as const;
+export const TAKOFORM_FORM_HOST_FORM_DEFINITIONS_PATH =
+  `${TAKOFORM_FORM_HOST_API_PATH}/form-definitions` as const;
 export const TAKOFORM_INTERFACE_DECLARATIONS_FEATURE =
   "interface_declarations" as const;
 export const TAKOFORM_INTERFACE_DECLARATION_WRITES_FEATURE =
@@ -35,6 +37,7 @@ export interface TakoformHostDiscovery {
   readonly endpoints: {
     readonly api: string;
     readonly forms: string;
+    readonly form_definitions: string;
     readonly interfaces?: string;
     readonly oidc_issuer?: string;
   };
@@ -71,6 +74,14 @@ export interface TakoformFormReference {
     readonly schemaDigest: string;
   };
   readonly packageDigest: string;
+}
+
+/** Principal-readable projection of one verified exact Form Definition. */
+export interface TakoformFormDefinition {
+  readonly identity: TakoformFormReference;
+  readonly displayName?: string;
+  readonly description?: string;
+  readonly desiredSchema: JsonObject;
 }
 
 /**
@@ -185,6 +196,7 @@ export function createTakoformHostDiscovery(
     endpoints: {
       api,
       forms: `${api}/forms`,
+      form_definitions: `${api}/form-definitions`,
       ...(options.interfaceDeclarations
         ? { interfaces: `${normalized}${TAKOFORM_FORM_HOST_INTERFACES_PATH}` }
         : {}),

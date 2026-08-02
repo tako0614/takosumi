@@ -1,4 +1,114 @@
 import type { ResourceShapeJsonObject } from "./control-api.ts";
+import type { JsonValue as ContractJsonValue } from "takosumi-contract";
+
+/** Small, data-only subset of JSON Schema used by the generic Form editor. */
+export interface ResourceFormSchema {
+  readonly $ref?: string;
+  readonly type?: string;
+  readonly title?: string;
+  readonly description?: string;
+  readonly default?: unknown;
+  readonly enum?: readonly unknown[];
+  readonly properties?: Readonly<Record<string, ResourceFormSchema>>;
+  readonly required?: readonly string[];
+}
+
+/** Return the object properties a schema-driven Resource editor can render. */
+export function resourceFormSchemaProperties(
+  schema: ResourceShapeJsonObject | undefined,
+): readonly [string, ResourceFormSchema][] {
+  if (!schema || !isRecord(schema.properties)) return [];
+  const properties: [string, ResourceFormSchema][] = [];
+  for (const [name, value] of Object.entries(schema.properties)) {
+    if (isRecord(value)) properties.push([name, value as ResourceFormSchema]);
+  }
+  return properties;
+}
+
+/**
+ * Seed a schema-driven editor with verifier-provided defaults while retaining
+ * every existing desired-state field. Unknown schema keywords stay server
+ * authority; the dashboard only supplies an ergonomic initial object.
+ */
+export function resourceFormSchemaDefaults(
+  schema: ResourceShapeJsonObject | undefined,
+  existing: ResourceShapeJsonObject = {},
+): ResourceShapeJsonObject {
+  const result: ResourceShapeJsonObject = { ...existing };
+  for (const [name, property] of resourceFormSchemaProperties(schema)) {
+    if (result[name] !== undefined) continue;
+    if (property.default !== undefined && isJsonValue(property.default)) {
+      result[name] = property.default;
+      continue;
+    }
+    if (property.enum?.length && isJsonValue(property.enum[0])) {
+      result[name] = property.enum[0]!;
+      continue;
+    }
+    if (property.type === "object" || property.$ref) result[name] = {};
+    else if (property.type === "array") result[name] = [];
+  }
+  return result;
+}
+
+const GUIDED_SCHEMA_KEYS: Readonly<
+  Record<GuidedResourceServiceKind, readonly string[]>
+> = {
+  EdgeWorker: [
+    "name",
+    "source",
+    "compatibilityDate",
+    "compatibilityFlags",
+    "profiles",
+  ],
+  ObjectBucket: ["name", "storageClass", "interfaces"],
+  KVStore: ["name", "consistency"],
+  SQLDatabase: ["name", "engine", "migrationsPath"],
+  Queue: ["name", "delivery"],
+  VectorIndex: ["name", "dimensions", "metric"],
+  DurableWorkflow: ["name", "source", "entrypoint", "retry"],
+  ContainerService: ["name", "image", "ports", "publicHttp", "environment"],
+  StatefulActorNamespace: [
+    "name",
+    "className",
+    "storageProfile",
+    "migrationTag",
+  ],
+  Schedule: ["name", "cron", "timezone", "connections"],
+};
+
+/**
+ * Detects when a retained hand-built form would silently omit fields from the
+ * exact desiredSchema. In that case ResourceEditor uses the schema-driven
+ * controls instead of degrading the offering to raw JSON.
+ */
+export function guidedResourceServiceSchemaCovers(
+  kind: string,
+  schema: ResourceShapeJsonObject | undefined,
+): boolean {
+  if (!isGuidedResourceServiceKind(kind) || !schema) return false;
+  const allowed = new Set(GUIDED_SCHEMA_KEYS[kind]);
+  return resourceFormSchemaProperties(schema).every(([name]) =>
+    allowed.has(name),
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function isJsonValue(value: unknown): value is ContractJsonValue {
+  if (value === null) return true;
+  if (
+    typeof value === "string" ||
+    typeof value === "boolean" ||
+    typeof value === "number"
+  ) {
+    return typeof value !== "number" || Number.isFinite(value);
+  }
+  if (Array.isArray(value)) return value.every(isJsonValue);
+  return isRecord(value) && Object.values(value).every(isJsonValue);
+}
 
 export const GUIDED_RESOURCE_SERVICE_KINDS = [
   "EdgeWorker",

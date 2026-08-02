@@ -20,12 +20,15 @@
 export { shapeKindForPortableType } from "takosumi-contract";
 import {
   isValidInterfaceName,
+  TAKOFORM_FORM_HOST_API_PATH,
+  TAKOFORM_FORM_HOST_API_VERSION,
   TAKOFORM_FORM_HOST_INTERFACES_PATH,
 } from "takosumi-contract";
 import type {
   ActivityEvent as ContractActivityEvent,
   BackupRecord as ContractBackupRecord,
   FormAvailability as ContractFormAvailability,
+  TakoformFormDefinition as ContractTakoformFormDefinition,
   CredentialRecipe as ContractCredentialRecipe,
   Dependency as ContractDependency,
   InstallConfig as ContractInstallConfig,
@@ -2296,6 +2299,7 @@ export type ResourceDeploymentQuote = ContractResourceDeploymentQuote;
 export type ResourceDeploymentReview = ContractResourceDeploymentReview;
 export type FormAvailability = ContractFormAvailability;
 export type InstalledFormReference = ContractInstalledFormReference;
+export type FormDefinition = ContractTakoformFormDefinition;
 export type ResourceTargetPoolSpec = ContractTargetPoolSpec;
 export type ResourceSpacePolicySpec = ContractSpacePolicySpec;
 
@@ -2426,6 +2430,77 @@ export async function listFormAvailability(
     `${RESOURCE_SHAPE_BASE}/form-availability${query({ workspaceId, space })}`,
     (body) => (body.forms as readonly FormAvailability[]) ?? [],
   );
+}
+
+/**
+ * Reads one principal-visible exact Form Definition. The response is
+ * revalidated against the requested InstalledFormReference before the schema
+ * can reach ResourceEditor; a selector-shaped request never grants identity.
+ */
+export async function getFormDefinition(
+  workspaceId: string,
+  space: string,
+  kind: ResourceShapeKind,
+  identity: InstalledFormReference,
+): Promise<FormDefinition> {
+  const body = await controlFetch<unknown>(
+    `${TAKOFORM_FORM_HOST_API_PATH}/form-definitions/${encodeURIComponent(kind)}${query(
+      {
+        workspaceId,
+        space,
+        apiVersion: TAKOFORM_FORM_HOST_API_VERSION,
+        kind,
+        definitionVersion: identity.version,
+        schemaDigest: identity.schemaDigest,
+        packageDigest: identity.packageDigest,
+      },
+    )}`,
+  );
+  if (!isRecord(body) || !isRecord(body.identity)) {
+    throw invalidFormDefinitionResponse(
+      "Form Definition response is invalid",
+    );
+  }
+  const reference = body.identity;
+  const formRef = reference.formRef;
+  const desiredSchema = body.desiredSchema;
+  if (
+    !isRecord(formRef) ||
+    formRef.apiVersion !== TAKOFORM_FORM_HOST_API_VERSION ||
+    formRef.kind !== kind ||
+    formRef.definitionVersion !== identity.version ||
+    formRef.schemaDigest !== identity.schemaDigest ||
+    reference.packageDigest !== identity.packageDigest ||
+    !isRecord(desiredSchema) ||
+    (body.displayName !== undefined && typeof body.displayName !== "string") ||
+    (body.description !== undefined && typeof body.description !== "string")
+  ) {
+    throw invalidFormDefinitionResponse(
+      "Form Definition response does not match the requested exact identity",
+    );
+  }
+  return {
+    identity: {
+      formRef: {
+        apiVersion: TAKOFORM_FORM_HOST_API_VERSION,
+        kind,
+        definitionVersion: identity.version,
+        schemaDigest: identity.schemaDigest,
+      },
+      packageDigest: identity.packageDigest,
+    },
+    ...(typeof body.displayName === "string"
+      ? { displayName: body.displayName }
+      : {}),
+    ...(typeof body.description === "string"
+      ? { description: body.description }
+      : {}),
+    desiredSchema: desiredSchema as ContractJsonObject,
+  };
+}
+
+function invalidFormDefinitionResponse(message: string): ControlApiError {
+  return new ControlApiError(502, "invalid_response", message);
 }
 
 export async function getResourceShape(

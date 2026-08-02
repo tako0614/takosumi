@@ -10,7 +10,9 @@ import {
 } from "../../../core/api/openapi.ts";
 import { DEPLOY_CONTROL_ACTIVITY_ENDPOINTS } from "../../../core/api/deploy_control_activity_routes.ts";
 import { DEPLOY_CONTROL_RESOURCE_FORM_PIN_ENDPOINTS } from "../../../core/api/deploy_control_resource_form_pin_routes.ts";
+import { PORTABLE_FORM_HOST_ENDPOINTS } from "../../../core/api/form_host_routes.ts";
 import { RESOURCE_SHAPE_KINDS } from "../../../contract/resource-shape.ts";
+import { TAKOFORM_FORM_HOST_FORM_DEFINITIONS_PATH } from "../../../contract/form-host-interoperability.ts";
 import {
   ALWAYS_MOUNTED_ENDPOINTS,
   type ApiEndpoint,
@@ -148,6 +150,32 @@ test("Resource Shape OpenAPI publishes bounded list pagination", () => {
       type: "array",
       items: { $ref: "#/components/schemas/ResourceEvent" },
     },
+  );
+});
+
+test("portable Form Definition keeps its exact selector in the OpenAPI inventory", () => {
+  const endpoint = PORTABLE_FORM_HOST_ENDPOINTS.find(
+    (candidate) =>
+      candidate.path === `${TAKOFORM_FORM_HOST_FORM_DEFINITIONS_PATH}/:kind`,
+  );
+  assert.ok(endpoint);
+  assert.deepEqual(endpoint.openapi.query, [
+    "space",
+    "apiVersion",
+    "kind",
+    "definitionVersion",
+    "schemaDigest",
+    "packageDigest",
+  ]);
+  // Portable host paths remain well-known-contract surfaces rather than
+  // Takosumi-native /openapi.json paths; the descriptor still guards their
+  // exact query contract and edge routing.
+  const openapi = createTakosumiOpenApiDocument(ALL_MOUNTED);
+  assert.equal(
+    openapi.paths[
+      `${TAKOFORM_FORM_HOST_FORM_DEFINITIONS_PATH}/{kind}`
+    ]?.get,
+    undefined,
   );
 });
 

@@ -3,6 +3,7 @@ import {
   applyResourceShape,
   deleteResourceSpacePolicy,
   deleteResourceShape,
+  getFormDefinition,
   getResourceSpacePolicy,
   listFormAvailability,
   listResolvedResourceInterfaces,
@@ -97,6 +98,66 @@ describe("Resource Shape dashboard client", () => {
       "/v1/form-availability?workspaceId=workspace_1&space=space_1",
       "/v1/form-availability?workspaceId=workspace_1&space=space_1&cursor=next",
     ]);
+  });
+
+  test("reads and revalidates one exact principal Form Definition", async () => {
+    const identity = {
+      type: "object_bucket",
+      version: "1.0.0",
+      schemaDigest: `sha256:${"a".repeat(64)}`,
+      packageDigest: `sha256:${"b".repeat(64)}`,
+    } as const;
+    const calls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      calls.push(typeof input === "string" ? input : String(input));
+      return jsonResponse({
+        identity: {
+          formRef: {
+            apiVersion: "forms.takoform.com/v1alpha1",
+            kind: "ObjectBucket",
+            definitionVersion: identity.version,
+            schemaDigest: identity.schemaDigest,
+          },
+          packageDigest: identity.packageDigest,
+        },
+        displayName: "Object storage",
+        desiredSchema: {
+          $schema: "https://json-schema.org/draft/2020-12/schema",
+          type: "object",
+          properties: { name: { type: "string" } },
+        },
+      });
+    }) as typeof fetch;
+
+    await expect(
+      getFormDefinition("workspace_1", "space_1", "ObjectBucket", identity),
+    ).resolves.toMatchObject({
+      identity: {
+        formRef: { kind: "ObjectBucket", definitionVersion: "1.0.0" },
+        packageDigest: identity.packageDigest,
+      },
+      displayName: "Object storage",
+    });
+    expect(calls).toEqual([
+      "/apis/forms.takoform.com/v1alpha1/form-definitions/ObjectBucket?workspaceId=workspace_1&space=space_1&apiVersion=forms.takoform.com%2Fv1alpha1&kind=ObjectBucket&definitionVersion=1.0.0&schemaDigest=sha256%3Aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&packageDigest=sha256%3Abbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    ]);
+
+    globalThis.fetch = (async () =>
+      jsonResponse({
+        identity: {
+          formRef: {
+            apiVersion: "forms.takoform.com/v1alpha1",
+            kind: "KVStore",
+            definitionVersion: identity.version,
+            schemaDigest: identity.schemaDigest,
+          },
+          packageDigest: identity.packageDigest,
+        },
+        desiredSchema: { type: "object" },
+      })) as typeof fetch;
+    await expect(
+      getFormDefinition("workspace_1", "space_1", "ObjectBucket", identity),
+    ).rejects.toMatchObject({ status: 502, code: "invalid_response" });
   });
 
   test("reads exact Resource-owned resolved Interface declarations and rejects a mismatched response", async () => {

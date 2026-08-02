@@ -58,6 +58,7 @@ export const TAKOFORM_PORTABLE_HOST_RUNNER_CLASSIFICATION =
 const API_PATH = "/apis/forms.takoform.com/v1alpha1";
 const DISCOVERY_PATH = "/.well-known/takoform";
 const INTERFACES_PATH = `${API_PATH}/interfaces`;
+const FORM_DEFINITIONS_PATH = `${API_PATH}/form-definitions`;
 const RESOURCE_PATH = `${API_PATH}/resources`;
 const REQUEST_ID = "req_takoform_portable_host_evidence";
 const MAX_RUNNER_OUTPUT_BYTES = 8 << 20;
@@ -1018,6 +1019,10 @@ function projectDiscovery(
   ) {
     throw new TypeError("portable Takoform API version is unavailable");
   }
+  const endpoints = requiredObject(value.endpoints, "discovery.endpoints");
+  for (const endpoint of ["api", "forms", "form_definitions"] as const) {
+    requiredString(endpoints[endpoint], `discovery.endpoints.${endpoint}`);
+  }
   const features = requiredObject(value.features, "discovery.features");
   for (const feature of [
     "service_forms",
@@ -1042,6 +1047,7 @@ function projectDiscovery(
     endpoints: {
       api: `${url.origin}${API_PATH}`,
       forms: `${url.origin}${API_PATH}/forms`,
+      form_definitions: `${url.origin}${FORM_DEFINITIONS_PATH}`,
       interfaces: `${url.origin}${INTERFACES_PATH}`,
     },
   };

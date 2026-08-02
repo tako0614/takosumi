@@ -12,7 +12,10 @@ import {
 import { registerInterfaceRoutes } from "../../../core/api/interface_routes.ts";
 import { registerFormActivationRoutes } from "../../../core/api/form_activation_routes.ts";
 import { ROUTE_FAMILIES } from "../../../core/api/route_families.ts";
-import { TAKOFORM_FORM_HOST_WELL_KNOWN_PATH } from "takosumi-contract";
+import {
+  TAKOFORM_FORM_HOST_FORM_DEFINITIONS_PATH,
+  TAKOFORM_FORM_HOST_WELL_KNOWN_PATH,
+} from "takosumi-contract";
 
 /**
  * The gate the platform worker uses is static, so nothing stops it from
@@ -69,6 +72,10 @@ test("the routes the previous hand-written gate missed are routed", () => {
     "session",
   );
   assert.equal(
+    edgeApiPathExposure(`${TAKOFORM_FORM_HOST_FORM_DEFINITIONS_PATH}/ObjectBucket`),
+    "session",
+  );
+  assert.equal(
     edgeApiPathExposure(
       "/apis/forms.takoform.com/v1alpha1/resources/EdgeWorker/site",
     ),
@@ -95,5 +102,9 @@ test("the portable Form host facade is part of the published route inventory", (
   assert.notEqual(resourceShape, undefined);
   const paths = resourceShape?.endpoints.map((endpoint) => endpoint.path) ?? [];
   assert.equal(paths.includes(TAKOFORM_FORM_HOST_WELL_KNOWN_PATH), true);
+  assert.equal(
+    paths.includes(`${TAKOFORM_FORM_HOST_FORM_DEFINITIONS_PATH}/:kind`),
+    true,
+  );
   assert.equal(paths.includes("/v1/form-availability"), true);
 });

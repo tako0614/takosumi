@@ -1,6 +1,7 @@
 import type { Context, Hono } from "hono";
 import type {
   ActorContext,
+  FormDefinition,
   FormAvailability,
   InstalledFormReference,
   JsonObject,
@@ -21,8 +22,10 @@ import {
   shapeKindForPortableType,
   TAKOFORM_FORM_HOST_API_VERSION,
   TAKOFORM_FORM_HOST_API_PATH,
+  TAKOFORM_FORM_HOST_FORM_DEFINITIONS_PATH,
   TAKOFORM_FORM_HOST_INTERFACES_PATH,
   TAKOFORM_FORM_HOST_WELL_KNOWN_PATH,
+  type TakoformFormDefinition,
 } from "takosumi-contract";
 import type { Page, PageParams } from "takosumi-contract/pagination";
 import type {
@@ -59,6 +62,12 @@ export interface PortableFormAvailabilityReader {
     readonly identity?: InstalledFormReference;
     readonly page?: PageParams;
   }): Promise<Page<FormAvailability>>;
+  /** Principal-filtered exact definition read; omission fails closed. */
+  getReadableFormDefinition?(input: {
+    readonly actor: ActorContext;
+    readonly space: string;
+    readonly identity: InstalledFormReference;
+  }): Promise<FormDefinition | undefined>;
 }
 
 export interface PortableInterfaceDeclarationReader {
@@ -196,6 +205,21 @@ export const PORTABLE_FORM_HOST_ENDPOINTS: readonly ApiEndpoint[] = [
   portableEndpoint("GET", `${TAKOFORM_FORM_HOST_API_PATH}/forms`, {
     operationId: "listTakoformAvailableForms",
   }),
+  portableEndpoint(
+    "GET",
+    `${TAKOFORM_FORM_HOST_FORM_DEFINITIONS_PATH}/:kind`,
+    {
+      operationId: "getTakoformFormDefinition",
+      query: [
+        "space",
+        "apiVersion",
+        "kind",
+        "definitionVersion",
+        "schemaDigest",
+        "packageDigest",
+      ],
+    },
+  ),
   portableEndpoint("POST", `${TAKOFORM_FORM_HOST_API_PATH}/resources/preview`, {
     operationId: "previewTakoformResource",
   }),
@@ -240,6 +264,7 @@ function portableEndpoint(
   options: {
     readonly operationId: string;
     readonly auth?: ApiEndpoint["auth"];
+    readonly query?: readonly string[];
   },
 ): ApiEndpoint {
   return {
@@ -250,7 +275,10 @@ function portableEndpoint(
     operationId: options.operationId,
     discoverable: false,
     tag: "resource-shape",
-    openapi: { okSchema: "ResourceShapeResponse" },
+    openapi: {
+      okSchema: "ResourceShapeResponse",
+      ...(options.query ? { query: options.query } : {}),
+    },
   };
 }
 
@@ -474,6 +502,72 @@ export function registerPortableFormHostRoutes(
         forms: result.items.map(portableFormAvailability),
         ...(result.nextCursor ? { nextCursor: result.nextCursor } : {}),
       },
+      200,
+    );
+  });
+
+  app.get(`${TAKOFORM_FORM_HOST_FORM_DEFINITIONS_PATH}/:kind`, async (c) => {
+    const auth = await options.authorize(c);
+    if (!auth.ok) return portableAuthError(c, auth.response);
+    if (!options.canReadForms(auth.actor)) {
+      return portableError(
+        c,
+        "forbidden",
+        "form definition read scope is required",
+        403,
+      );
+    }
+    const space = requiredQuery(c, "space");
+    if (!space.ok) return space.response;
+    const identity = formIdentityFromQuery(c, true);
+    if (!identity.ok) return identity.response;
+    const pathKind = c.req.param("kind");
+    if (
+      !pathKind ||
+      shapeKindForPortableType(identity.value.type) !== pathKind
+    ) {
+      return portableError(
+        c,
+        "resource_not_found",
+        "exact form definition is unknown",
+        404,
+      );
+    }
+    const reader = options.availability.getReadableFormDefinition;
+    if (!reader) {
+      return portableError(
+        c,
+        "resource_not_found",
+        "exact form definition is unknown",
+        404,
+      );
+    }
+    let definition: FormDefinition | undefined;
+    try {
+      definition = await reader({
+        actor: auth.actor,
+        space: space.value,
+        identity: identity.value,
+      });
+    } catch {
+      definition = undefined;
+    }
+    if (
+      !definition ||
+      installedFormReferenceKey(definition.identity) !==
+        installedFormReferenceKey(identity.value) ||
+      definition.desiredSchema === undefined ||
+      !isJsonObject(definition.desiredSchema)
+    ) {
+      return portableError(
+        c,
+        "resource_not_found",
+        "exact form definition is unknown",
+        404,
+      );
+    }
+    return c.json(
+      portableFormDefinition(definition, pathKind),
       200,
     );
   });
@@ -1425,6 +1519,22 @@ function portableFormAvailability(availability: FormAvailability) {
     availableToPrincipal: availability.availableToPrincipal,
     operations: availability.operations,
     deprecated: availability.deprecated,
+  };
+}
+
+function portableFormDefinition(
+  definition: FormDefinition,
+  kind: string,
+): TakoformFormDefinition {
+  return {
+    identity: portableFormReference(definition.identity, kind),
+    ...(definition.displayName !== undefined
+      ? { displayName: definition.displayName }
+      : {}),
+    ...(definition.description !== undefined
+      ? { description: definition.description }
+      : {}),
+    desiredSchema: structuredClone(definition.desiredSchema!),
   };
 }
 

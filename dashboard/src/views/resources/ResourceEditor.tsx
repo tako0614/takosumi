@@ -12,6 +12,7 @@ import {
   applyResourceShape,
   importResourceShape,
   previewResourceShape,
+  type FormDefinition,
   type ResourceShape,
   type FormAvailability,
   type InstalledFormReference,
@@ -21,14 +22,18 @@ import {
   type ResourceShapeResult,
   type ResourceShapeWriteInput,
 } from "../../lib/control-api.ts";
+import type { JsonValue } from "takosumi-contract";
 import { formatUsdMicros } from "../../lib/billing-format.ts";
 import { friendlyError } from "../../lib/error-copy.ts";
 import {
   buildGuidedResourceServiceSpec,
   draftGuidedResourceServiceSpec,
+  guidedResourceServiceSchemaCovers,
   GUIDED_RESOURCE_SERVICE_KINDS,
   isGuidedResourceServiceKind,
   readGuidedResourceServiceForm,
+  resourceFormSchemaDefaults,
+  resourceFormSchemaProperties,
   type EdgeWorkerArtifactSource,
   type GuidedResourceServiceForm,
   type GuidedResourceServiceKind,
@@ -59,6 +64,7 @@ type Props = {
   readonly workspaceId: string;
   readonly space: string;
   readonly formAvailability: readonly FormAvailability[];
+  readonly formDefinitions?: readonly FormDefinition[];
   /**
    * Placement targets that actually exist in this Space. Free text here meant
    * the default `"default"` silently failed at preview time with a raw English
@@ -88,9 +94,22 @@ function shapeKindOf(identity: InstalledFormReference): string {
   return shapeKindForPortableType(identity.type) ?? identity.type;
 }
 
+function formDefinitionMatches(
+  definition: FormDefinition,
+  identity: InstalledFormReference,
+): boolean {
+  return (
+    definition.identity.formRef.kind === shapeKindOf(identity) &&
+    definition.identity.formRef.definitionVersion === identity.version &&
+    definition.identity.formRef.schemaDigest === identity.schemaDigest &&
+    definition.identity.packageDigest === identity.packageDigest
+  );
+}
+
 export default function ResourceEditor(props: Props): JSX.Element {
   const { confirm } = useConfirmDialog();
   const [guidedMode, setGuidedMode] = createSignal(true);
+  const [rawMode, setRawMode] = createSignal(false);
   const [kind, setKind] = createSignal("EdgeWorker");
   const [name, setName] = createSignal("");
   const [project, setProject] = createSignal("");
@@ -146,6 +165,39 @@ export default function ResourceEditor(props: Props): JSX.Element {
   const [success, setSuccess] = createSignal<string>();
   const [selectedForm, setSelectedForm] =
     createSignal<InstalledFormReference>();
+  const [schemaDraft, setSchemaDraft] =
+    createSignal<ResourceShapeJsonObject>({});
+
+  const selectedDefinition = createMemo(() => {
+    const identity = props.resource?.form ?? selectedForm();
+    return identity
+      ? props.formDefinitions?.find((definition) =>
+          formDefinitionMatches(definition, identity),
+        )
+      : undefined;
+  });
+
+  /** An exact schema-backed fallback for Form kinds without a hand-built form. */
+  const schemaDrivenMode = createMemo(
+    () =>
+      !rawMode() &&
+      selectedDefinition()?.desiredSchema !== undefined &&
+      !guidedResourceServiceSchemaCovers(
+        kind(),
+        selectedDefinition()?.desiredSchema,
+      ),
+  );
+
+  createEffect(() => {
+    const definition = selectedDefinition();
+    if (!definition) return;
+    setSchemaDraft(
+      resourceFormSchemaDefaults(
+        definition.desiredSchema,
+        props.resource?.spec ?? {},
+      ),
+    );
+  });
 
   const availableForms = createMemo(() => {
     const operation = props.resource ? "update" : "create";
@@ -313,7 +365,7 @@ export default function ResourceEditor(props: Props): JSX.Element {
   });
 
   const guidedSpec = createMemo<GuidedSpecResult | undefined>(() => {
-    if (!guidedMode()) return undefined;
+    if (!guidedMode() || schemaDrivenMode()) return undefined;
     const form = guidedForm();
     return form ? buildGuidedResourceServiceSpec(form) : undefined;
   });
@@ -341,10 +393,12 @@ export default function ResourceEditor(props: Props): JSX.Element {
         if (guided) {
           loadGuidedForm(guided);
           setGuidedMode(true);
+          setRawMode(false);
         } else {
           // Extra/unknown fields stay lossless: operator-defined and advanced
           // resources are edited through their complete raw spec.
           setGuidedMode(false);
+          setRawMode(false);
         }
         setPreview(undefined);
         setPreviewFingerprint(undefined);
@@ -389,7 +443,9 @@ export default function ResourceEditor(props: Props): JSX.Element {
     }
 
     let spec: ResourceShapeJsonObject;
-    if (guidedMode()) {
+    if (schemaDrivenMode()) {
+      spec = schemaDraft();
+    } else if (guidedMode()) {
       const result = guidedSpec();
       if (!result) {
         return { ok: false, message: t("resources.editor.kindInvalid") };
@@ -588,8 +644,41 @@ export default function ResourceEditor(props: Props): JSX.Element {
 
   function switchToRawAuthoring(): void {
     const form = guidedForm();
-    if (form) setSpecText(prettyJson(draftGuidedResourceServiceSpec(form)));
+    if (schemaDrivenMode()) setSpecText(prettyJson(schemaDraft()));
+    else if (form) setSpecText(prettyJson(draftGuidedResourceServiceSpec(form)));
+    setRawMode(true);
     setGuidedMode(false);
+  }
+
+  function schemaFieldText(name: string): string {
+    const value = schemaDraft()[name];
+    return value !== undefined && typeof value === "object"
+      ? prettyJson(value)
+      : value === undefined
+        ? ""
+        : String(value);
+  }
+
+  function setSchemaField(
+    name: string,
+    schema: { readonly type?: string },
+    raw: string,
+  ): void {
+    let value: JsonValue = raw;
+    if (schema.type === "number" || schema.type === "integer") {
+      const parsed = Number(raw);
+      if (!Number.isFinite(parsed)) return;
+      value = parsed;
+    } else if (schema.type === "boolean") {
+      value = raw === "true";
+    } else if (schema.type === "object" || schema.type === "array" || "$ref" in schema) {
+      try {
+        value = JSON.parse(raw) as JsonValue;
+      } catch {
+        return;
+      }
+    }
+    setSchemaDraft({ ...schemaDraft(), [name]: value });
   }
 
   function selectService(next: GuidedResourceServiceKind): void {
@@ -604,6 +693,7 @@ export default function ResourceEditor(props: Props): JSX.Element {
         );
         if (existing) {
           loadGuidedForm(existing);
+          setRawMode(false);
           setGuidedMode(true);
           return;
         }
@@ -613,6 +703,7 @@ export default function ResourceEditor(props: Props): JSX.Element {
     }
     setKind(next);
     if (previousKind !== next) resetGuidedForm(next);
+    setRawMode(false);
     setGuidedMode(true);
   }
 
@@ -627,6 +718,7 @@ export default function ResourceEditor(props: Props): JSX.Element {
       selectService(identityKind);
     } else {
       setKind(identityKind);
+      setRawMode(false);
       setGuidedMode(false);
     }
   }
@@ -935,7 +1027,7 @@ export default function ResourceEditor(props: Props): JSX.Element {
             />
           </label>
 
-          <Show when={guidedMode() && kind() === "EdgeWorker"}>
+          <Show when={guidedMode() && !schemaDrivenMode() && kind() === "EdgeWorker"}>
             <div class="rs-form-grid rs-guided-fields">
               <label class="tg-field">
                 <span class="tg-field-label">
@@ -1062,7 +1154,7 @@ export default function ResourceEditor(props: Props): JSX.Element {
             </div>
           </Show>
 
-          <Show when={guidedMode() && kind() === "ObjectBucket"}>
+          <Show when={guidedMode() && !schemaDrivenMode() && kind() === "ObjectBucket"}>
             <div class="rs-form-grid rs-guided-fields">
               <label class="tg-field">
                 <span class="tg-field-label">
@@ -1108,7 +1200,7 @@ export default function ResourceEditor(props: Props): JSX.Element {
             </div>
           </Show>
 
-          <Show when={guidedMode() && kind() === "KVStore"}>
+          <Show when={guidedMode() && !schemaDrivenMode() && kind() === "KVStore"}>
             <label class="tg-field rs-guided-fields">
               <span class="tg-field-label">
                 {t("resources.editor.kvConsistency")}
@@ -1135,7 +1227,7 @@ export default function ResourceEditor(props: Props): JSX.Element {
             </label>
           </Show>
 
-          <Show when={guidedMode() && kind() === "SQLDatabase"}>
+          <Show when={guidedMode() && !schemaDrivenMode() && kind() === "SQLDatabase"}>
             <div class="rs-form-grid rs-guided-fields">
               <label class="tg-field">
                 <span class="tg-field-label">
@@ -1169,7 +1261,7 @@ export default function ResourceEditor(props: Props): JSX.Element {
             </div>
           </Show>
 
-          <Show when={guidedMode() && kind() === "Queue"}>
+          <Show when={guidedMode() && !schemaDrivenMode() && kind() === "Queue"}>
             <div class="rs-form-grid rs-guided-fields">
               <label class="tg-field">
                 <span class="tg-field-label">
@@ -1204,7 +1296,7 @@ export default function ResourceEditor(props: Props): JSX.Element {
             </div>
           </Show>
 
-          <Show when={guidedMode() && kind() === "VectorIndex"}>
+          <Show when={guidedMode() && !schemaDrivenMode() && kind() === "VectorIndex"}>
             <div class="rs-form-grid rs-guided-fields">
               <label class="tg-field">
                 <span class="tg-field-label">
@@ -1241,7 +1333,7 @@ export default function ResourceEditor(props: Props): JSX.Element {
             </div>
           </Show>
 
-          <Show when={guidedMode() && kind() === "DurableWorkflow"}>
+          <Show when={guidedMode() && !schemaDrivenMode() && kind() === "DurableWorkflow"}>
             <div class="rs-form-grid rs-guided-fields">
               <label class="tg-field">
                 <span class="tg-field-label">
@@ -1368,7 +1460,7 @@ export default function ResourceEditor(props: Props): JSX.Element {
             </div>
           </Show>
 
-          <Show when={guidedMode() && kind() === "ContainerService"}>
+          <Show when={guidedMode() && !schemaDrivenMode() && kind() === "ContainerService"}>
             <div class="rs-form-grid rs-guided-fields">
               <label class="tg-field rs-field-wide">
                 <span class="tg-field-label">
@@ -1445,7 +1537,7 @@ export default function ResourceEditor(props: Props): JSX.Element {
             </div>
           </Show>
 
-          <Show when={guidedMode() && kind() === "StatefulActorNamespace"}>
+          <Show when={guidedMode() && !schemaDrivenMode() && kind() === "StatefulActorNamespace"}>
             <div class="rs-form-grid rs-guided-fields">
               <label class="tg-field">
                 <span class="tg-field-label">
@@ -1494,7 +1586,7 @@ export default function ResourceEditor(props: Props): JSX.Element {
             </div>
           </Show>
 
-          <Show when={guidedMode() && kind() === "Schedule"}>
+          <Show when={guidedMode() && !schemaDrivenMode() && kind() === "Schedule"}>
             <div class="rs-form-grid rs-guided-fields">
               <label class="tg-field">
                 <span class="tg-field-label">
@@ -1557,6 +1649,135 @@ export default function ResourceEditor(props: Props): JSX.Element {
                   {t("resources.editor.scheduleTargetHint")}
                 </span>
               </label>
+            </div>
+          </Show>
+
+          <Show when={schemaDrivenMode()}>
+            <div class="rs-form-grid rs-guided-fields rs-schema-fields">
+              <div class="rs-field-wide">
+                <strong>
+                  {selectedDefinition()?.displayName ?? kind()} schema
+                </strong>
+                <span class="tg-field-hint">
+                  {selectedDefinition()?.description ??
+                    "This exact Form Definition supplies the desired-state fields."}
+                </span>
+              </div>
+              <For
+                each={resourceFormSchemaProperties(
+                  selectedDefinition()?.desiredSchema,
+                )}
+              >
+                {(field) => {
+                  const fieldName = field[0];
+                  const schema = field[1];
+                  const label = schema.title ?? fieldName;
+                  const requiredValues = selectedDefinition()?.desiredSchema
+                    ?.required;
+                  const required = Array.isArray(requiredValues)
+                    ? (requiredValues as readonly unknown[]).includes(fieldName)
+                    : false;
+                  return (
+                    <label class="tg-field">
+                      <span class="tg-field-label">
+                        {label}
+                        {required ? " *" : ""}
+                      </span>
+                      <Show
+                        when={!schema.enum && schema.type !== "boolean"}
+                        fallback={
+                          <Show
+                            when={schema.enum}
+                            fallback={
+                              <select
+                                class="tg-select"
+                                value={schemaFieldText(fieldName)}
+                                onChange={(event) =>
+                                  setSchemaField(
+                                    fieldName,
+                                    schema,
+                                    event.currentTarget.value,
+                                  )
+                                }
+                              >
+                                <option value="">—</option>
+                                <option value="true">true</option>
+                                <option value="false">false</option>
+                              </select>
+                            }
+                          >
+                            <select
+                              class="tg-select"
+                              value={schemaFieldText(fieldName)}
+                              onChange={(event) =>
+                                setSchemaField(
+                                  fieldName,
+                                  schema,
+                                  event.currentTarget.value,
+                                )
+                              }
+                            >
+                              <option value="">—</option>
+                              <For each={schema.enum ?? []}>
+                                {(option) => (
+                                  <option value={String(option)}>
+                                    {String(option)}
+                                  </option>
+                                )}
+                              </For>
+                            </select>
+                          </Show>
+                        }
+                      >
+                        <Show
+                          when={
+                            schema.type !== "object" &&
+                            schema.type !== "array" &&
+                            !schema.$ref
+                          }
+                          fallback={
+                            <textarea
+                              class="tg-textarea rs-code-editor"
+                              rows={4}
+                              value={schemaFieldText(fieldName)}
+                              spellcheck={false}
+                              onInput={(event) =>
+                                setSchemaField(
+                                  fieldName,
+                                  schema,
+                                  event.currentTarget.value,
+                                )
+                              }
+                            />
+                          }
+                        >
+                          <input
+                            class="tg-input"
+                            type={
+                              schema.type === "number" ||
+                              schema.type === "integer"
+                                ? "number"
+                                : "text"
+                            }
+                            value={schemaFieldText(fieldName)}
+                            onInput={(event) =>
+                              setSchemaField(
+                                fieldName,
+                                schema,
+                                event.currentTarget.value,
+                              )
+                            }
+                            autocomplete="off"
+                          />
+                        </Show>
+                      </Show>
+                      <Show when={schema.description}>
+                        <span class="tg-field-hint">{schema.description}</span>
+                      </Show>
+                    </label>
+                  );
+                }}
+              </For>
             </div>
           </Show>
         </section>
@@ -1661,7 +1882,7 @@ export default function ResourceEditor(props: Props): JSX.Element {
           </label>
 
           <Show
-            when={!guidedMode()}
+            when={!guidedMode() && !schemaDrivenMode()}
             fallback={
               <div class="rs-raw-opt-in">
                 <p>{t("resources.editor.rawOptInHint")}</p>

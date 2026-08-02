@@ -3,6 +3,7 @@ import type {
   ActorContext,
   FormDefinition,
   FormPackage,
+  FormAvailability,
   InstalledFormReference,
   ResourceDeploymentAdmission,
   ResourceDeploymentAdmissionDecision,
@@ -1042,6 +1043,120 @@ function exactFormRegistry(
       packageDigest === identity.packageDigest ? formPackage : undefined,
   };
 }
+
+function readableFormRegistry(
+  definition: FormDefinition,
+): NonNullable<ResourceShapeServiceDeps["formRegistry"]> {
+  const formPackage: FormPackage = {
+    packageDigest: definition.identity.packageDigest,
+    artifactRef: "oci://forms.example/exact@sha256:test",
+    verifierId: "test-verifier",
+    status: "installed",
+    definitionRefs: [formRefOf(definition.identity)],
+    installedAt: NOW,
+    installedBy: "test",
+    updatedAt: NOW,
+  };
+  return {
+    getDefinition: async (ref) =>
+      JSON.stringify(ref) === JSON.stringify(formRefOf(definition.identity))
+        ? definition
+        : undefined,
+    getPackage: async (digest) =>
+      digest === formPackage.packageDigest ? formPackage : undefined,
+  };
+}
+
+function readableFormService(
+  availability: FormAvailability,
+  definition: FormDefinition,
+): CoreResourceShapeService {
+  const service = new ResourceShapeService({
+    stores: createInMemoryResourceShapeStores(),
+    adapter: new StubResourceShapeAdapter(),
+    ...directOperationLedger(),
+    now: () => NOW,
+    formRegistry: readableFormRegistry(definition),
+  });
+  const list = async () => ({ items: [availability] });
+  service.listFormAvailability = list;
+  return service;
+}
+
+test("principal-readable Form Definition reuses exact availability evidence", async () => {
+  const definition: FormDefinition = {
+    identity: EXACT_FORM,
+    displayName: "Exact Object Bucket",
+    description: "Visible to the selected principal",
+    operations: ["create", "read"],
+    desiredSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: { name: { type: "string" } },
+    },
+    installedAt: NOW,
+  };
+  const evidence: FormAvailability = {
+    form: EXACT_FORM,
+    definitionKnown: true,
+    installed: true,
+    executable: true,
+    activated: true,
+    availableToPrincipal: true,
+    operations: definition.operations,
+    compatibleAdapterIds: ["test"],
+    eligibleTargetPoolClasses: ["test"],
+    deprecated: false,
+  };
+  const readable = await readableFormService(evidence, definition).getReadableFormDefinition({
+    actor: ACTOR,
+    space: "space_1",
+    identity: EXACT_FORM,
+  });
+  expect(readable).toEqual(definition);
+});
+
+test("principal-readable Form Definition fails closed for wrong package, unknown, and unauthorized evidence", async () => {
+  const definition: FormDefinition = {
+    identity: EXACT_FORM,
+    displayName: "Exact Object Bucket",
+    operations: ["create", "read"],
+    desiredSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+    },
+    installedAt: NOW,
+  };
+  const base: FormAvailability = {
+    form: EXACT_FORM,
+    definitionKnown: true,
+    installed: true,
+    executable: true,
+    activated: true,
+    availableToPrincipal: true,
+    operations: definition.operations,
+    compatibleAdapterIds: ["test"],
+    eligibleTargetPoolClasses: ["test"],
+    deprecated: false,
+  };
+  const wrongPackage = {
+    ...EXACT_FORM,
+    packageDigest: `sha256:${"9".repeat(64)}`,
+  };
+  for (const evidence of [
+    { ...base, form: wrongPackage },
+    { ...base, definitionKnown: false },
+    { ...base, availableToPrincipal: false },
+  ]) {
+    const readable = await readableFormService(evidence, definition)
+      .getReadableFormDefinition({
+        actor: ACTOR,
+        space: "space_1",
+        identity: evidence.form,
+      });
+    expect(readable).toBeUndefined();
+  }
+});
 
 test("exact Form path requires installed authority and explicitly backfills legacy rows", async () => {
   const unavailable = makeService();
