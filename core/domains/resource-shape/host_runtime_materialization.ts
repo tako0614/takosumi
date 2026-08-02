@@ -8,10 +8,9 @@ import {
 import type { CapsulesService } from "../capsules/mod.ts";
 import type {
   AdapterApplyInput,
-  AdapterDeleteInput,
   ResourceAdapter,
 } from "./adapter.ts";
-import type { ResourceShapeRecord } from "./records.ts";
+import { parseResourceShapeId, type ResourceShapeRecord } from "./records.ts";
 
 export type HostRuntimeMaterializationResolver = (input: {
   readonly owner: ResourceOwner | undefined;
@@ -33,7 +32,6 @@ export interface HostRuntimeResourceLifecycle {
    * Implementations must fail closed by retiring dispatch authority first.
    */
   retire(input: {
-    readonly request: HostRuntimeMaterializationRequest;
     readonly resourceId: string;
     readonly resourceGeneration: number;
     readonly resourceRevisionId: string;
@@ -239,16 +237,18 @@ export function formHostRuntimeMaterializationRequest(input: {
 
 /**
  * Decorates one selected adapter without giving it access to Capsule or
- * InstallConfig stores. Every operation gets a fresh exact resolution, so a
- * stale config or owner change fails before the provider adapter is called.
+ * InstallConfig stores. Mutating operations that construct runtime state get
+ * a fresh exact resolution; read-only and teardown operations receive no
+ * runtime envelope from callers or the current InstallConfig.
  */
 export function withDbOwnedHostRuntimeMaterialization(
   adapter: ResourceAdapter,
   resolve: HostRuntimeMaterializationResolver,
+  lifecycle?: HostRuntimeResourceLifecycle,
 ): ResourceAdapter {
-  const applyInput = async (
-    input: AdapterApplyInput,
-  ): Promise<AdapterApplyInput> => {
+  const materializeInput = async <T extends AdapterApplyInput>(
+    input: T,
+  ): Promise<T> => {
     const materialization = await resolve({
       owner: input.owner,
       resourceId: input.resourceId,
@@ -265,28 +265,16 @@ export function withDbOwnedHostRuntimeMaterialization(
       ...(materialization
         ? { hostRuntimeMaterialization: materialization }
         : {}),
-    };
+    } as T;
   };
-  const deleteInput = async (
-    input: AdapterDeleteInput,
-  ): Promise<AdapterDeleteInput> => {
-    const materialization = await resolve({
-      owner: input.owner,
-      resourceId: input.resourceId,
-      ...(input.plan?.validatedSpec
-        ? { validatedSpec: input.plan.validatedSpec }
-        : {}),
-    });
+  const stripUntrustedMaterialization = <T extends {
+    readonly hostRuntimeMaterialization?: unknown;
+  }>(input: T): Omit<T, "hostRuntimeMaterialization"> => {
     const {
       hostRuntimeMaterialization: _untrustedMaterialization,
       ...canonicalInput
     } = input;
-    return {
-      ...canonicalInput,
-      ...(materialization
-        ? { hostRuntimeMaterialization: materialization }
-        : {}),
-    };
+    return canonicalInput;
   };
   return {
     id: adapter.id,
@@ -297,45 +285,56 @@ export function withDbOwnedHostRuntimeMaterialization(
         }
       : {}),
     async preview(input) {
-      return await adapter.preview(await applyInput(input));
+      return await adapter.preview(await materializeInput(input));
     },
     async apply(input) {
-      return await adapter.apply(await applyInput(input));
+      return await adapter.apply(await materializeInput(input));
     },
     async importResource(input) {
-      const materialization = await resolve({
-        owner: input.owner,
-        resourceId: input.resourceId,
-        ...(input.plan?.validatedSpec
-          ? { validatedSpec: input.plan.validatedSpec }
-          : {}),
-      });
-      const {
-        hostRuntimeMaterialization: _untrustedMaterialization,
-        ...canonicalInput
-      } = input;
-      return await adapter.importResource({
-        ...canonicalInput,
-        ...(materialization
-          ? { hostRuntimeMaterialization: materialization }
-          : {}),
-      });
+      return await adapter.importResource(await materializeInput(input));
     },
     async observe(input) {
-      return await adapter.observe(await applyInput(input));
+      return await adapter.observe(stripUntrustedMaterialization(input));
     },
     async refresh(input) {
-      return await adapter.refresh(await applyInput(input));
+      return await adapter.refresh(stripUntrustedMaterialization(input));
     },
     async delete(input) {
-      await adapter.delete(await deleteInput(input));
+      const canonicalInput = stripUntrustedMaterialization(input);
+      const canonicalKind = parseResourceShapeId(input.resourceId)?.kind;
+      if (
+        lifecycle &&
+        (canonicalKind === "EdgeWorker" || input.plan?.shape === "EdgeWorker")
+      ) {
+        if (canonicalKind !== "EdgeWorker" || input.plan?.shape !== "EdgeWorker") {
+          throw new Error(
+            `host runtime lifecycle delete identity does not match EdgeWorker ${input.resourceId}`,
+          );
+        }
+        // Provider-native/module-backed plans have no retained host runtime;
+        // their delete may legitimately have no direct-plugin revision.
+        if (input.plan.requiresAdapterPlugin !== true) {
+          await adapter.delete(canonicalInput);
+          return;
+        }
+        if (!input.resourceRevisionId) {
+          throw new Error(
+            `host runtime lifecycle has no canonical backend revision for ${input.resourceId}`,
+          );
+        }
+        await lifecycle.retire({
+          resourceId: input.resourceId,
+          resourceGeneration: input.resourceGeneration,
+          resourceRevisionId: input.resourceRevisionId,
+        });
+      }
+      await adapter.delete(canonicalInput);
     },
     ...(adapter.migrate
       ? {
           migrate: async (input) => {
-            const canonical = await applyInput(input);
             return await adapter.migrate!({
-              ...canonical,
+              ...stripUntrustedMaterialization(input),
               migration: input.migration,
             });
           },
