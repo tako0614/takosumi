@@ -81,6 +81,7 @@ import type {
   CommitRestoredStateInput,
   CommitRestoredStateResult,
   BeginResourceOperationRunResult,
+  BeginApplyRunResult,
   CapsuleRuntimeSafety,
   CapsulePatch,
   CapsuleStateVersionGuard,
@@ -407,6 +408,30 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       },
     );
     return run;
+  }
+
+  async beginApplyRun(run: ApplyRun): Promise<BeginApplyRunResult> {
+    const inserted = await this.#db
+      .insert(pgSchema.runs)
+      .values({
+        id: run.id,
+        kind: run.operation === "destroy" ? "destroy_apply" : "apply",
+        workspaceId: run.workspaceId,
+        sourceId: null,
+        capsuleId: run.capsuleId ?? null,
+        status: run.status,
+        leaseToken: null,
+        heartbeatAt: run.heartbeatAt ?? null,
+        createdAt: String(run.createdAt),
+        runJson: run,
+      })
+      .onConflictDoNothing({ target: pgSchema.runs.id })
+      .returning({ json: pgSchema.runs.runJson });
+    if (inserted[0]) return { status: "created", run };
+    const current = await this.getApplyRun(run.id);
+    return current
+      ? { status: "existing", run: current }
+      : { status: "conflict" };
   }
 
   async getApplyRun(id: string): Promise<ApplyRun | undefined> {

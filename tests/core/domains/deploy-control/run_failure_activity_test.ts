@@ -195,8 +195,10 @@ test("a successful plan + apply records NO run.failed Activity event", async () 
         requiredProviders: [FIXTURE_CLOUDFLARE_PROVIDER],
         providerInstallation: [FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE],
       }),
-    apply: (_job: OpenTofuApplyJob) =>
-      Promise.resolve(fixtureStateCommit()),
+    apply: (job: OpenTofuApplyJob) =>
+      Promise.resolve(
+        fixtureStateCommit({ rawOutputRef: job.rawOutputRef }),
+      ),
   });
 
   const { planRun } = await controller.createCapsulePlan("cap_fixture1");

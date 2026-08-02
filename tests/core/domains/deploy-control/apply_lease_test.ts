@@ -1,6 +1,10 @@
 import { expect, test } from "bun:test";
 
-import { OpenTofuController } from "../../../../core/domains/deploy-control/mod.ts";
+import {
+  OpenTofuController,
+  type OpenTofuApplyJob,
+  type OpenTofuApplyResult,
+} from "../../../../core/domains/deploy-control/mod.ts";
 import {
   CapsuleLeaseBusyError,
   type CapsuleCoordination,
@@ -134,7 +138,7 @@ async function seedApply(
 function controllerWith(
   store: InMemoryOpenTofuControlStore,
   coordination: CapsuleCoordination,
-  runner: { apply: () => Promise<unknown> },
+  runner: { apply: (job: OpenTofuApplyJob) => Promise<OpenTofuApplyResult> },
 ) {
   return new OpenTofuController({
     store,
@@ -147,7 +151,10 @@ function controllerWith(
     })(),
     runner: {
       plan: () => Promise.reject(new Error("not used")),
-      apply: runner.apply,
+      apply: async (job) => ({
+        ...(await runner.apply(job)),
+        rawOutputRef: job.rawOutputRef,
+      }),
     },
   });
 }

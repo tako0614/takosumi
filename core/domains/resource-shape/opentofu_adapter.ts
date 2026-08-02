@@ -885,6 +885,11 @@ export class ControllerOpentofuRunPort implements OpentofuRunPort {
           : {}),
       },
     );
+    if (response.applyRun.id !== applyRunId) {
+      throw new Error(
+        `ApplyRun recovery did not return checkpointed ApplyRun ${applyRunId}`,
+      );
+    }
     assertResourceApplyRunAuthority(
       request,
       response.applyRun,

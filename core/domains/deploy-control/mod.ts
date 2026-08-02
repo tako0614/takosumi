@@ -475,7 +475,10 @@ export interface OpenTofuApplyResult {
   readonly stateDigest?: string;
   /**
    * Opaque reference of the encrypted raw `tofu output -json` envelope,
-   * echoed by the runner storage adapter after durable persistence.
+   * echoed by the runner storage adapter after durable persistence. The field
+   * stays optional at the transport boundary so Core can classify malformed
+   * adapters, but every successful apply must return the exact ref allocated in
+   * its job or the run fails before ledger pointers are published.
    */
   readonly rawOutputRef?: string;
 }

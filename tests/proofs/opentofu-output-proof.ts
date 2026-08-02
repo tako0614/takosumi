@@ -351,9 +351,10 @@ class ProofRunner implements OpenTofuRunner {
     });
   }
 
-  apply(_job: OpenTofuApplyJob) {
+  apply(job: OpenTofuApplyJob) {
     return Promise.resolve(fixtureStateCommit({
       outputs: this.#outputEnvelope,
+      rawOutputRef: job.rawOutputRef,
     }));
   }
 }

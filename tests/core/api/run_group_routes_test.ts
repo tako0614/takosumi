@@ -75,6 +75,7 @@ function runner(value: {
                 : "consumer.example.com",
           },
         } as never,
+        rawOutputRef: job.rawOutputRef,
       })),
     destroy: () => Promise.resolve(fixtureStateCommit()),
   };

@@ -502,6 +502,7 @@ class FakeDeployControlDriver implements DeployControlRunDriver {
   readonly #options: {
     readonly completePlanOnGet?: boolean;
     readonly completeApplyOnGet?: boolean;
+    readonly substitutePreparedApplyRunId?: string;
   };
   #seq = 0;
   #failApplyPutOnce = false;
@@ -510,6 +511,7 @@ class FakeDeployControlDriver implements DeployControlRunDriver {
     options: {
       readonly completePlanOnGet?: boolean;
       readonly completeApplyOnGet?: boolean;
+      readonly substitutePreparedApplyRunId?: string;
     } = {},
   ) {
     this.#options = options;
@@ -594,7 +596,12 @@ class FakeDeployControlDriver implements DeployControlRunDriver {
     this.applyCalls.push(request);
     const planRun = this.#plans.get(request.planRunId)!;
     const applyRun = {
-      id: internal?.applyRunId ?? `apply_${++this.#seq}`,
+      id:
+        (internal?.applyRunId
+          ? this.#options.substitutePreparedApplyRunId
+          : undefined) ??
+        internal?.applyRunId ??
+        `apply_${++this.#seq}`,
       planRunId: request.planRunId,
       workspaceId: planRun.workspaceId,
       operation: planRun.operation,
@@ -1428,6 +1435,45 @@ test("ControllerOpentofuRunPort recreates a missing checkpointed ApplyRun with t
   expect(driver.planCalls).toHaveLength(1);
   expect(driver.applyCalls).toHaveLength(2);
   expect(driver.runQueuedApplyCalls).toEqual([checkpoint!.applyRunId]);
+});
+
+test("ControllerOpentofuRunPort rejects a recreated ApplyRun response that substitutes the checkpoint id", async () => {
+  const driver = new FakeDeployControlDriver({
+    substitutePreparedApplyRunId: "apply_substitute_B",
+  });
+  const adapter = new OpentofuResourceShapeAdapter(
+    new ControllerOpentofuRunPort({ driver }),
+  );
+  const input = applyInput(edgeWorkerPlan(), cloudflareTarget);
+  let checkpoint:
+    | { readonly applyRunId: string; readonly planRunId: string }
+    | undefined;
+  driver.failNextApplyPut();
+  await expect(
+    adapter.apply({
+      ...input,
+      opentofuApplyRun: {
+        checkpointApplyRun: (applyRunId, planRunId) => {
+          checkpoint = { applyRunId, planRunId };
+          return Promise.resolve();
+        },
+      },
+    }),
+  ).rejects.toThrow("simulated ApplyRun durable put failure");
+
+  await expect(
+    adapter.apply({
+      ...input,
+      opentofuApplyRun: {
+        applyRunId: checkpoint!.applyRunId,
+        applyPlanRunId: checkpoint!.planRunId,
+        checkpointApplyRun: () => Promise.resolve(),
+      },
+    }),
+  ).rejects.toThrow(
+    `did not return checkpointed ApplyRun ${checkpoint!.applyRunId}`,
+  );
+  expect(driver.runQueuedApplyCalls).toEqual([]);
 });
 
 test("ControllerOpentofuRunPort rejects a checkpoint that belongs to another Resource authority", async () => {

@@ -420,11 +420,11 @@ export interface CommitRestoredStateInput {
 /**
  * Status-conditional, lease-fenced compare-and-set transition of a single run
  * row (the most correctness-critical primitive of the RunOwner). Unlike
- * {@link OpenTofuControlStore.putPlanRun} / `putApplyRun` (which INSERT/upsert
- * the initial creation), `transitionRun` is the post-insert mutation: it advances
- * a run's `status` (and lease/heartbeat) ONLY when the row still matches the
- * pre-read expectation, so two consumers racing the same `queued → running`
- * claim cannot both win.
+ * {@link OpenTofuControlStore.putPlanRun} or the insert-only
+ * `beginApplyRun` creation primitive, `transitionRun` is the post-insert
+ * mutation: it advances a run's `status` (and lease/heartbeat) ONLY when the
+ * row still matches the pre-read expectation, so two consumers racing the
+ * same `queued → running` claim cannot both win.
  *
  *   - `id` / `kind` — the row to transition; `kind` selects the run family
  *     (`plan` PlanRun rows, `apply` ApplyRun rows, `source_sync`
@@ -533,6 +533,12 @@ export type BeginResourceOperationRunResult =
   | { readonly status: "existing"; readonly run: ResourceOperationRun }
   | { readonly status: "conflict"; readonly run?: ResourceOperationRun };
 
+/** Atomic insert-or-adopt result for an immutable ApplyRun creation row. */
+export type BeginApplyRunResult =
+  | { readonly status: "created"; readonly run: ApplyRun }
+  | { readonly status: "existing"; readonly run: ApplyRun }
+  | { readonly status: "conflict"; readonly run?: ApplyRun };
+
 export interface TransitionResourceOperationRunInput {
   readonly id: string;
   readonly operationKey: string;
@@ -625,6 +631,8 @@ export interface OpenTofuControlStore {
   deletePlanRunInputs(planRunId: string): Promise<void>;
 
   putApplyRun(run: ApplyRun): Promise<ApplyRun>;
+  /** Insert-only creation. A same-id row is returned without mutation. */
+  beginApplyRun(run: ApplyRun): Promise<BeginApplyRunResult>;
   getApplyRun(id: string): Promise<ApplyRun | undefined>;
 
   /**
@@ -1154,6 +1162,19 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
   putApplyRun(run: ApplyRun): Promise<ApplyRun> {
     this.#runs.set(run.id, run);
     return Promise.resolve(run);
+  }
+
+  beginApplyRun(run: ApplyRun): Promise<BeginApplyRunResult> {
+    const current = this.#runs.get(run.id);
+    if (!current) {
+      this.#runs.set(run.id, run);
+      return Promise.resolve({ status: "created", run });
+    }
+    return Promise.resolve(
+      isApplyRunRecord(current)
+        ? { status: "existing", run: coerceRunRowStatus(current)! }
+        : { status: "conflict" },
+    );
   }
 
   getApplyRun(id: string): Promise<ApplyRun | undefined> {

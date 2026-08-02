@@ -70,13 +70,14 @@ class FullStubRunner implements OpenTofuRunner {
         : {}),
     });
   }
-  apply(_job: OpenTofuApplyJob) {
+  apply(job: OpenTofuApplyJob) {
     return Promise.resolve({
       outputs: {
         launch_url: { sensitive: false, value: "https://app.example.com" },
       } as never,
       stateDigest:
         "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+      rawOutputRef: job.rawOutputRef,
     });
   }
   destroy() {

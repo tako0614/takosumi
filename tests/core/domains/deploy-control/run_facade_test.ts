@@ -51,7 +51,10 @@ function succeedingRunner() {
         requiredProviders: [FIXTURE_CLOUDFLARE_PROVIDER],
         providerInstallation: [FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE],
       }),
-    apply: () => Promise.resolve(fixtureStateCommit()),
+    apply: (job) =>
+      Promise.resolve(
+        fixtureStateCommit({ rawOutputRef: job.rawOutputRef }),
+      ),
   };
 }
 

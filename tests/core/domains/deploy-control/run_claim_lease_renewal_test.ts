@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 
 import {
   OpenTofuController,
+  type OpenTofuApplyJob,
   type OpenTofuPlanResult,
   type OpenTofuApplyResult,
 } from "../../../../core/domains/deploy-control/mod.ts";
@@ -145,12 +146,14 @@ function controllerWith(
     coordination?: CapsuleCoordination;
     now?: () => number;
     plan?: () => Promise<OpenTofuPlanResult>;
-    apply?: () => Promise<OpenTofuApplyResult>;
+    apply?: (job: OpenTofuApplyJob) => Promise<OpenTofuApplyResult>;
     runRenewalIntervalMs?: number;
     runnerProfiles?: readonly RunnerProfile[];
     defaultRunnerProfileId?: string;
   } = {},
 ) {
+  const apply =
+    options.apply ?? (() => Promise.resolve(fixtureStateCommit()));
   return new OpenTofuController({
     store,
     ...(options.runnerProfiles
@@ -173,9 +176,10 @@ function controllerWith(
     })(),
     runner: {
       plan: options.plan ?? (() => Promise.reject(new Error("not used"))),
-      apply:
-        options.apply ??
-        (() => Promise.resolve(fixtureStateCommit())),
+      apply: async (job) => ({
+        ...(await apply(job)),
+        rawOutputRef: job.rawOutputRef,
+      }),
     },
   });
 }

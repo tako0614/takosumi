@@ -718,6 +718,84 @@ test("apply with stateScope encrypts the raw outputs envelope to R2_ARTIFACTS an
   );
 });
 
+test("apply with no outputs seals an empty raw envelope and echoes the exact allocated ref", async () => {
+  const artifacts = new FakeR2Bucket();
+  const state = new FakeR2Bucket();
+  const crypto = StateArtifactCrypto.fromEnv({
+    TAKOSUMI_SECRET_STORE_PASSPHRASE: TEST_PASSPHRASE,
+  });
+  const sealedPlan = await crypto.seal(PLAN_BYTES);
+  const priorState = await seedCanonicalPriorState(state, RESOURCE_SCOPE);
+  await artifacts.put(
+    "opentofu-plan-runs/plan_1/tfplan.enc",
+    sealedPlan.ciphertext,
+  );
+
+  const runner = runnerWithContainer(artifacts, state, {
+    async containerFetch(request) {
+      const path = new URL(request.url).pathname;
+      if (
+        request.method === "PUT" &&
+        (path === "/runs/plan_1/artifacts/tfplan" ||
+          path === "/runs/plan_1/artifacts/tfstate")
+      ) {
+        return Response.json({ ok: true });
+      }
+      if (request.method === "POST" && path === "/runs/plan_1") {
+        return Response.json({ status: "succeeded", exitCode: 0 });
+      }
+      if (
+        request.method === "GET" &&
+        path === "/runs/plan_1/artifacts/tfstate"
+      ) {
+        return new Response(NEW_STATE_BYTES);
+      }
+      return Response.json({ error: "unexpected" }, { status: 500 });
+    },
+  });
+
+  const response = await runner.fetch(
+    new Request("https://runner/runs/plan_1", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        kind: "takosumi.opentofu-run@v1",
+        action: "apply",
+        runId: "plan_1",
+        request: {
+          applyRun: { id: "plan_1" },
+          stateScope: { ...RESOURCE_SCOPE, priorState },
+          rawOutputRef: RESOURCE_RAW_OUTPUT_REF,
+          planArtifact: {
+            kind: "object-storage",
+            ref: "r2://takos-artifacts/opentofu-plan-runs/plan_1/tfplan",
+            digest: PLAN_DIGEST,
+          },
+        },
+      }),
+    }),
+  );
+
+  assert.equal(response.status, 200);
+  const payload = (await response.json()) as Record<string, unknown>;
+  assert.equal(payload.rawOutputRef, RESOURCE_RAW_OUTPUT_REF);
+  assert.deepEqual(payload.outputs, {});
+  const stored = artifacts.body(RESOURCE_RAW_OUTPUT_REF);
+  assert.ok(stored && stored.byteLength > 0);
+  assert.deepEqual(
+    JSON.parse(new TextDecoder().decode(await crypto.open(stored!))),
+    {},
+  );
+  assert.equal(
+    state.metadata(RESOURCE_NEXT_STATE_KEY)?.["takosumi-raw-output-ref"],
+    RESOURCE_RAW_OUTPUT_REF,
+  );
+  assert.equal(
+    artifacts.metadata(RESOURCE_RAW_OUTPUT_REF)?.["takosumi-action"],
+    "apply",
+  );
+});
+
 test("apply rejects a rawOutputRef outside the canonical subject and Run path", async () => {
   let containerCalled = false;
   const runner = runnerWithContainer(new FakeR2Bucket(), new FakeR2Bucket(), {

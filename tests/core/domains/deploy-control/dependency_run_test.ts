@@ -110,6 +110,7 @@ function recordingRunner(): RecordingRunner {
         } as never,
         stateDigest:
           "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+        rawOutputRef: job.rawOutputRef,
       });
     },
     destroy: () => Promise.resolve({}),
@@ -128,6 +129,7 @@ function sensitiveOutputRunner(): RecordingRunner {
         } as never,
         stateDigest:
           "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+        rawOutputRef: job.rawOutputRef,
       });
     },
   };

@@ -157,6 +157,7 @@ function recordingRunner(
         },
         stateDigest: STATE_DIGEST,
         providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+        rawOutputRef: job.rawOutputRef,
       });
     },
     destroy: (job) => {

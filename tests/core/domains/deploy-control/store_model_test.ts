@@ -976,6 +976,37 @@ test("runtime safety treats lifecycle-only mutation evidence identically in memo
   }
 });
 
+test("ApplyRun begin is insert-or-adopt and never resets an existing running or terminal row", async () => {
+  for (const [label, store] of await stores()) {
+    for (const status of ["running", "succeeded"] as const) {
+      const id = `apply_begin_${status}_${label}`;
+      const candidate = applyRunForSafety({
+        id,
+        capsuleId: `capsule_${id}`,
+        operation: "update",
+        status: "queued",
+        effectAt: 100,
+      });
+      expect(await store.beginApplyRun(candidate), `${label}:${status}`).toEqual(
+        { status: "created", run: candidate },
+      );
+      const advanced: ApplyRun = {
+        ...candidate,
+        status,
+        startedAt: 110,
+        updatedAt: 120,
+        ...(status === "succeeded" ? { finishedAt: 130 } : {}),
+      };
+      await store.putApplyRun(advanced);
+
+      const adopted = await store.beginApplyRun(candidate);
+      expect(adopted.status, `${label}:${status}`).toBe("existing");
+      expect(adopted.run, `${label}:${status}`).toEqual(advanced);
+      expect(await store.getApplyRun(id), `${label}:${status}`).toEqual(advanced);
+    }
+  }
+});
+
 test("run transition startedAt fencing rejects a started requeue in memory, Postgres, and D1", async () => {
   for (const [label, store] of await stores()) {
     const seeded = applyRunForSafety({

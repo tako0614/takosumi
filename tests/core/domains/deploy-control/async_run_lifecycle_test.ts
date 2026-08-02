@@ -207,6 +207,115 @@ test("ApplyRun preparation checkpoint runs before durable put and provider dispa
   expect(await store.getApplyRun(checkpointedApplyRunId!)).toBeUndefined();
 });
 
+test("exact ApplyRun recovery adopts running and succeeded rows without queued reset or redispatch", async () => {
+  for (const status of ["running", "succeeded"] as const) {
+    const store = new InMemoryOpenTofuControlStore();
+    const dispatches: Parameters<EnqueueRun>[0][] = [];
+    const controller = new OpenTofuController({
+      store,
+      artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+      now: monotonicNow(status === "running" ? 1450 : 1475),
+      newId: deterministicIds(),
+      runner: stubRunner(),
+      vault: fakeVault({
+        [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN },
+      }),
+      enqueueRun: (dispatch) => {
+        dispatches.push(dispatch);
+        return Promise.resolve();
+      },
+    });
+    const request = await seedUpdatable(store, {
+      capsuleId: `cap_exact_${status}`,
+    });
+    const { planRun: queuedPlan } = await controller.createPlanRun(request);
+    await controller.dispatchQueuedRun({
+      action: "plan",
+      runId: queuedPlan.id,
+      workspaceId: queuedPlan.workspaceId,
+    });
+    const planRun = (await store.getPlanRun(queuedPlan.id))!;
+    const exactId = `apply_exact_${status}`;
+    const created = await controller.createApplyRun(
+      {
+        planRunId: planRun.id,
+        expected: applyExpectedGuardFromPlanRun(planRun),
+      },
+      {},
+      { applyRunId: exactId },
+    );
+    const advanced = {
+      ...created.applyRun,
+      status,
+      startedAt: 1500,
+      updatedAt: 1501,
+      ...(status === "succeeded" ? { finishedAt: 1502 } : {}),
+    } as typeof created.applyRun;
+    await store.putApplyRun(advanced);
+    const dispatchCount = dispatches.length;
+
+    const recovered = await controller.createApplyRun(
+      {
+        planRunId: planRun.id,
+        expected: applyExpectedGuardFromPlanRun(planRun),
+      },
+      {},
+      { applyRunId: exactId },
+    );
+
+    expect(recovered.applyRun).toEqual(advanced);
+    expect(dispatches).toHaveLength(dispatchCount);
+    expect(await store.getApplyRun(exactId)).toEqual(advanced);
+  }
+});
+
+test("exact ApplyRun recovery rejects an immutable authority mismatch", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const controller = new OpenTofuController({
+    store,
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    now: monotonicNow(1490),
+    newId: deterministicIds(),
+    runner: stubRunner(),
+    vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
+    enqueueRun: () => Promise.resolve(),
+  });
+  const request = await seedUpdatable(store, {
+    capsuleId: "cap_exact_mismatch",
+  });
+  const { planRun: queuedPlan } = await controller.createPlanRun(request);
+  await controller.dispatchQueuedRun({
+    action: "plan",
+    runId: queuedPlan.id,
+    workspaceId: queuedPlan.workspaceId,
+  });
+  const planRun = (await store.getPlanRun(queuedPlan.id))!;
+  const exactId = "apply_exact_mismatch";
+  const created = await controller.createApplyRun(
+    {
+      planRunId: planRun.id,
+      expected: applyExpectedGuardFromPlanRun(planRun),
+    },
+    {},
+    { applyRunId: exactId },
+  );
+  await store.putApplyRun({
+    ...created.applyRun,
+    runnerProfileId: "different-profile",
+  });
+
+  await expect(
+    controller.createApplyRun(
+      {
+        planRunId: planRun.id,
+        expected: applyExpectedGuardFromPlanRun(planRun),
+      },
+      {},
+      { applyRunId: exactId },
+    ),
+  ).rejects.toThrow("different run authority");
+});
+
 test("successful apply observer sees the atomically committed terminal run and Capsule pointers", async () => {
   const store = new InMemoryOpenTofuControlStore();
   const controller = new OpenTofuController({
@@ -406,6 +515,80 @@ test("raw-output durability ambiguity replays the same ApplyRun before publishin
   expect(
     await store.listStateVersions(request.capsuleId!, "production"),
   ).toHaveLength(1);
+});
+
+test("apply publishes the exact confirmed raw-output ref even when outputs are empty", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  let confirmedRawOutputRef: string | undefined;
+  const controller = new OpenTofuController({
+    store,
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    now: monotonicNow(1850),
+    newId: deterministicIds(),
+    runner: {
+      ...stubRunner(),
+      apply: (job) => {
+        confirmedRawOutputRef = job.rawOutputRef;
+        return Promise.resolve(
+          fixtureStateCommit({ outputs: {}, rawOutputRef: job.rawOutputRef }),
+        );
+      },
+    },
+    vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
+  });
+  const request = await seedUpdatable(store, {
+    capsuleId: "cap_empty_raw_output",
+  });
+  const { planRun } = await controller.createPlanRun(request);
+
+  const applied = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+
+  const output = await store.getLatestOutput(request.capsuleId!);
+  expect(applied.applyRun.status).toBe("succeeded");
+  expect(confirmedRawOutputRef).toBeDefined();
+  expect(output?.rawArtifactRef).toBe(confirmedRawOutputRef);
+  expect(output?.workspaceOutputs).toEqual({});
+  expect(output?.publicOutputs).toEqual({});
+});
+
+test("apply missing its confirmed raw-output ref fails before ledger pointers publish", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const controller = new OpenTofuController({
+    store,
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    now: monotonicNow(1900),
+    newId: deterministicIds(),
+    runner: {
+      ...stubRunner(),
+      apply: () => Promise.resolve(fixtureStateCommit({ outputs: {} })),
+    },
+    vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
+  });
+  const request = await seedUpdatable(store, {
+    capsuleId: "cap_missing_raw_output_ref",
+  });
+  const before = await store.getCapsule(request.capsuleId!);
+  const { planRun } = await controller.createPlanRun(request);
+
+  const failed = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+
+  expect(failed.applyRun.status).toBe("failed");
+  expect(failed.applyRun.stateVersionId).toBeUndefined();
+  expect(failed.applyRun.outputId).toBeUndefined();
+  expect(
+    await store.listStateVersions(request.capsuleId!, "production"),
+  ).toEqual([]);
+  expect(await store.getLatestOutput(request.capsuleId!)).toBeUndefined();
+  const after = await store.getCapsule(request.capsuleId!);
+  expect(after?.currentStateVersionId).toBe(before?.currentStateVersionId);
+  expect(after?.currentStateGeneration).toBe(before?.currentStateGeneration);
+  expect(after?.currentOutputId).toBe(before?.currentOutputId);
 });
 
 test("queued destroy cancellation emits one terminal callback after its early lifecycle callback", async () => {
@@ -832,7 +1015,7 @@ test("a retryable runner infrastructure reset requeues apply without failing ter
           requiredProviders: [CLOUDFLARE],
           providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
         }),
-      apply: () => {
+      apply: (job) => {
         applyCalls++;
         if (applyCalls === 1) {
           return Promise.reject(
@@ -842,14 +1025,17 @@ test("a retryable runner infrastructure reset requeues apply without failing ter
             ),
           );
         }
-        return Promise.resolve(fixtureStateCommit({
-          outputs: {
-            launch_url: {
-              sensitive: false,
-              value: "https://app.example.test",
+        return Promise.resolve(
+          fixtureStateCommit({
+            outputs: {
+              launch_url: {
+                sensitive: false,
+                value: "https://app.example.test",
+              },
             },
-          },
-        }));
+            rawOutputRef: job.rawOutputRef,
+          }),
+        );
       },
     },
     vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
@@ -1389,6 +1575,7 @@ function capturingRunner(captured: {
         outputs: {
           launch_url: { sensitive: false, value: "https://app.example.test" },
         },
+        rawOutputRef: job.rawOutputRef,
       }));
     },
     destroy: (job) => {
@@ -1424,11 +1611,12 @@ function stubRunner(): OpenTofuRunner {
         requiredProviders: [CLOUDFLARE],
         providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
       }),
-    apply: () =>
+    apply: (job) =>
       Promise.resolve(fixtureStateCommit({
         outputs: {
           launch_url: { sensitive: false, value: "https://app.example.test" },
         },
+        rawOutputRef: job.rawOutputRef,
       })),
     destroy: () => Promise.resolve(fixtureStateCommit()),
   };

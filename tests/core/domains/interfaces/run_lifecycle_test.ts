@@ -108,7 +108,7 @@ output "endpoint" {
         requiredProviders: [CLOUDFLARE],
         providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
       }),
-    apply: () =>
+    apply: (job) =>
       Promise.resolve({
         outputs: {
           endpoint: {
@@ -117,6 +117,7 @@ output "endpoint" {
           },
         },
         stateDigest: LOCK_DIGEST,
+        rawOutputRef: job.rawOutputRef,
         providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
       }),
     destroy: () => Promise.resolve({}),

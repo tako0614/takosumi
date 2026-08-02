@@ -17,6 +17,7 @@ import {
 } from "takosumi-contract";
 import type {
   ApplyRun,
+  ApplyExpectedGuard,
   ApplyRunResponse,
   CreateApplyRunRequest,
   CreatePlanRunRequest,
@@ -3096,6 +3097,41 @@ export class RunEngine {
         `plan run ${planRun.id} has no immutable plan artifact`,
       );
     }
+    const exactApplyRunId = internal.applyRunId;
+    if (exactApplyRunId !== undefined) {
+      requireNonEmptyString(exactApplyRunId, "applyRunId");
+      const exact = await this.#store.getApplyRun(exactApplyRunId);
+      if (planRun.appliedApplyRunId) {
+        if (planRun.appliedApplyRunId !== exactApplyRunId) {
+          throw new OpenTofuControllerError(
+            "failed_precondition",
+            `plan run ${planRun.id} was already applied by a different ApplyRun ${planRun.appliedApplyRunId}; exact recovery requires ${exactApplyRunId}`,
+          );
+        }
+        if (!exact) {
+          throw new OpenTofuControllerError(
+            "failed_precondition",
+            `plan run ${planRun.id} points to missing exact ApplyRun ${exactApplyRunId}`,
+          );
+        }
+      }
+      if (exact) {
+        await checkApplyExpected(request.expected, planRun);
+        const exactProfile = await this.#requireRunnerProfile(
+          planRun.runnerProfileId,
+        );
+        await assertApplyRunCreationAuthority(
+          exact,
+          planRun,
+          exactProfile,
+          request.expected,
+        );
+        await internal.onPrepared?.(exact);
+        const response = await this.getApplyRun(exactApplyRunId);
+        assertExactApplyRunResponse(response, exactApplyRunId);
+        return response;
+      }
+    }
     // SECURITY (apply-once / idempotency): a `create` plan never carries an
     // capsuleId, so without this guard each apply allocates a brand-new
     // Capsule + StateVersion (and real cloud resources). Replays of a
@@ -3148,28 +3184,8 @@ export class RunEngine {
     const now = this.#now();
     const approval = redactRunApproval(request.approval);
     const applyCapsuleId = planRun.capsuleId;
-    if (internal.applyRunId !== undefined) {
-      requireNonEmptyString(internal.applyRunId, "applyRunId");
-      const existing = await this.#store.getApplyRun(internal.applyRunId);
-      if (existing) {
-        if (
-          existing.planRunId !== planRun.id ||
-          existing.workspaceId !== planRun.workspaceId ||
-          existing.operation !== planRun.operation ||
-          (await stableJsonDigest(existing.expected)) !==
-            (await stableJsonDigest(request.expected))
-        ) {
-          throw new OpenTofuControllerError(
-            "failed_precondition",
-            `ApplyRun id ${internal.applyRunId} is already bound to different run authority`,
-          );
-        }
-        await internal.onPrepared?.(existing);
-        return await this.getApplyRun(existing.id);
-      }
-    }
     const applyRun: ApplyRun = {
-      id: internal.applyRunId ?? this.#newId("apply"),
+      id: exactApplyRunId ?? this.#newId("apply"),
       planRunId: planRun.id,
       workspaceId: planRun.workspaceId,
       ...(applyCapsuleId ? { capsuleId: applyCapsuleId } : {}),
@@ -3196,7 +3212,24 @@ export class RunEngine {
       updatedAt: now,
     };
     await internal.onPrepared?.(applyRun);
-    await this.#store.putApplyRun(applyRun);
+    const begun = await this.#store.beginApplyRun(applyRun);
+    if (begun.status === "conflict") {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `ApplyRun id ${applyRun.id} is already bound to a different Run kind`,
+      );
+    }
+    await assertApplyRunCreationAuthority(
+      begun.run,
+      planRun,
+      profile,
+      request.expected,
+    );
+    if (begun.status === "existing") {
+      const response = await this.getApplyRun(applyRun.id);
+      assertExactApplyRunResponse(response, applyRun.id);
+      return response;
+    }
     await this.#notifyApplyQueued(applyRun);
     if (!this.#hasRunnerForProfile(profile)) return { applyRun };
     // Hand off to the dispatch seam. The default inline dispatcher runs the
@@ -4144,11 +4177,14 @@ export class RunEngine {
     readonly stateGeneration: number;
     readonly now: number;
   }): Promise<Output> {
-    const rawArtifactRef = input.envDispatch.rawOutputRef;
-    if (!rawArtifactRef) {
+    const rawArtifactRef = input.result.rawOutputRef;
+    if (
+      !rawArtifactRef ||
+      rawArtifactRef !== input.envDispatch.rawOutputRef
+    ) {
       throw new OpenTofuControllerError(
         "failed_precondition",
-        `apply run ${input.applyRun.id} completed without a raw output artifact reference`,
+        `apply run ${input.applyRun.id} completed without its exact confirmed raw output artifact reference`,
       );
     }
     const projectedWorkspaceOutputs =
@@ -6899,10 +6935,10 @@ export class RunEngine {
       },
       { signal: input.signal },
     );
-    if (result.rawOutputRef && result.rawOutputRef !== rawOutputRef) {
+    if (result.rawOutputRef !== rawOutputRef) {
       throw new OpenTofuControllerError(
         "failed_precondition",
-        `runner returned a raw output reference different from the allocated reference for apply run ${running.id}`,
+        `runner did not confirm the exact allocated raw output reference for apply run ${running.id}`,
       );
     }
     return {
@@ -8331,6 +8367,42 @@ export class RunEngine {
     const capsule = await this.#requireCapsule(planRun.capsuleId);
     validatePlannedCapsuleCurrent({ planRun, capsule: capsule });
     return capsule;
+  }
+}
+
+async function assertApplyRunCreationAuthority(
+  run: ApplyRun,
+  planRun: PlanRun,
+  profile: RunnerProfile,
+  expected: ApplyExpectedGuard,
+): Promise<void> {
+  if (
+    run.planRunId !== planRun.id ||
+    run.workspaceId !== planRun.workspaceId ||
+    run.capsuleId !== planRun.capsuleId ||
+    run.operation !== planRun.operation ||
+    run.runnerProfileId !== profile.id ||
+    (await stableJsonDigest(run.expected)) !==
+      (await stableJsonDigest(expected)) ||
+    (await stableJsonDigest(run.stateBackend)) !==
+      (await stableJsonDigest(profile.stateBackend))
+  ) {
+    throw new OpenTofuControllerError(
+      "failed_precondition",
+      `ApplyRun id ${run.id} is already bound to different run authority`,
+    );
+  }
+}
+
+function assertExactApplyRunResponse(
+  response: ApplyRunResponse,
+  expectedApplyRunId: string,
+): void {
+  if (response.applyRun.id !== expectedApplyRunId) {
+    throw new OpenTofuControllerError(
+      "failed_precondition",
+      `ApplyRun recovery did not return exact ApplyRun ${expectedApplyRunId}`,
+    );
   }
 }
 

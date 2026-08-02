@@ -1118,6 +1118,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     return jsonResponse(
       {
         ...payload,
+        ...(action === "apply" ? { outputs: payload.outputs ?? {} } : {}),
         state: {
           generation: scope.generation,
           stateRef: objectKey,
@@ -1134,14 +1135,17 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
 
   // M7: seal the raw `tofu output -json` envelope (the runner's `outputs` field,
   // which carries the per-output sensitive flags) and write it encrypted at rest
-  // to R2_ARTIFACTS at the host-allocated ref. Returns the ref for the controller
-  // to record on the Output. No-op when the apply produced no outputs.
+  // to R2_ARTIFACTS at the host-allocated ref. Even an apply with no declared
+  // outputs persists `{}` so every successful apply returns a confirmed exact
+  // raw-output coordinate to the controller.
   async #prepareRawOutputs(
     rawOutputRef: string,
     payload: Record<string, unknown>,
-  ): Promise<PreparedRawOutputs | undefined> {
-    const outputs = payload.outputs;
-    if (outputs === undefined || outputs === null) return undefined;
+  ): Promise<PreparedRawOutputs> {
+    const outputs = payload.outputs ?? {};
+    if (!isRecord(outputs)) {
+      throw new Error("runner outputs must be a JSON object");
+    }
     assertSafeArtifactObjectKey(rawOutputRef, "raw output");
     const key = rawOutputRef;
     const plaintext = new TextEncoder().encode(JSON.stringify(outputs));
@@ -1253,8 +1257,6 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     );
     const recordedRawOutputRef =
       object.customMetadata?.["takosumi-raw-output-ref"];
-    const noRawOutputs =
-      object.customMetadata?.["takosumi-raw-output-status"] === "none";
     if (action === "destroy" && recordedRawOutputRef) {
       throw new Error(
         "completed destroy target unexpectedly records raw output authority",
@@ -1262,8 +1264,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     }
     if (
       action === "apply" &&
-      recordedRawOutputRef !== rawOutputRef &&
-      !(noRawOutputs && !recordedRawOutputRef)
+      recordedRawOutputRef !== rawOutputRef
     ) {
       throw new Error(
         "completed apply target raw output authority does not match dispatch",

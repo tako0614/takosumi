@@ -95,6 +95,7 @@ import type {
   CommitRestoredStateInput,
   CommitRestoredStateResult,
   BeginResourceOperationRunResult,
+  BeginApplyRunResult,
   CapsuleRuntimeSafety,
   CapsulePatch,
   CapsuleStateVersionGuard,
@@ -461,6 +462,35 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       runJson: JSON.stringify(run),
     });
     return run;
+  }
+
+  async beginApplyRun(run: ApplyRun): Promise<BeginApplyRunResult> {
+    await this.#ensureSchema();
+    const inserted = await this.#orm
+      .insert(schema.runs)
+      .values({
+        id: run.id,
+        runGroupId: null,
+        workspaceId: run.workspaceId,
+        sourceId: null,
+        capsuleId: run.capsuleId ?? null,
+        environment: null,
+        type: applyRunType(run),
+        status: run.status,
+        leaseToken: null,
+        heartbeatAt: run.heartbeatAt ?? null,
+        runJson: run as unknown,
+        createdAt: String(run.createdAt),
+      })
+      .onConflictDoNothing({ target: schema.runs.id })
+      .run();
+    if (changes(inserted as D1Result) > 0) {
+      return { status: "created", run };
+    }
+    const current = await this.getApplyRun(run.id);
+    return current
+      ? { status: "existing", run: current }
+      : { status: "conflict" };
   }
 
   async getApplyRun(id: string): Promise<ApplyRun | undefined> {

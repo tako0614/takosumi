@@ -21,6 +21,7 @@ import { expect, test } from "bun:test";
 
 import {
   applyExpectedGuardFromPlanRun,
+  type OpenTofuApplyJob,
   OpenTofuController,
 } from "../../../../core/domains/deploy-control/mod.ts";
 import { InMemoryCapsuleCoordination } from "../../../../core/domains/deploy-control/capsule_lease.ts";
@@ -65,7 +66,10 @@ function succeedingRunner() {
         requiredProviders: [FIXTURE_CLOUDFLARE_PROVIDER],
         providerInstallation: [FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE],
       }),
-    apply: () => Promise.resolve(fixtureStateCommit()),
+    apply: (job: OpenTofuApplyJob) =>
+      Promise.resolve(
+        fixtureStateCommit({ rawOutputRef: job.rawOutputRef }),
+      ),
   };
 }
 
@@ -188,4 +192,27 @@ test("createApplyRun returns the existing apply response after a plan has alread
 
   const stateVersions = await store.listStateVersions(capsuleId, "production");
   expect(stateVersions.length).toBe(1);
+});
+
+test("exact recovery checkpoint A rejects a Plan already applied by B instead of substituting B", async () => {
+  const { store, controller, planRun } = await seedCreatePlan();
+  const appliedB = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+  expect((await store.getPlanRun(planRun.id))?.appliedApplyRunId).toBe(
+    appliedB.applyRun.id,
+  );
+
+  await expect(
+    controller.createApplyRun(
+      {
+        planRunId: planRun.id,
+        expected: applyExpectedGuardFromPlanRun(planRun),
+      },
+      {},
+      { applyRunId: "apply_checkpoint_A" },
+    ),
+  ).rejects.toThrow("already applied by a different ApplyRun");
+  expect(await store.getApplyRun("apply_checkpoint_A")).toBeUndefined();
 });

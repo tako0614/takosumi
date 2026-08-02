@@ -144,6 +144,7 @@ function recordingRunner(
           admin_token: { sensitive: true, value: "secret-output-token" },
         } as never,
         stateDigest: STATE_DIGEST,
+        rawOutputRef: job.rawOutputRef,
         providerInstallation: [FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE],
       });
     },

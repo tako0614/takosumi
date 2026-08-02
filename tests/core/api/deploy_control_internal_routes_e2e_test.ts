@@ -1236,7 +1236,7 @@ function fakeRunner(): OpenTofuRunner {
           },
         ],
       }),
-    apply: () =>
+    apply: (job) =>
       Promise.resolve(fixtureStateCommit({
         outputs: {
           launch_url: {
@@ -1244,6 +1244,7 @@ function fakeRunner(): OpenTofuRunner {
             value: "https://app.example.test",
           },
         },
+        rawOutputRef: job.rawOutputRef,
       })),
     destroy: () => Promise.resolve(fixtureStateCommit()),
   };

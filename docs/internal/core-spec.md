@@ -247,15 +247,17 @@ the ledger contract.
 
 The Bun/Postgres filesystem adapter seals the state bytes, replay result, and
 raw Output envelope through the configured secret boundary. It publishes each
-`stateRef` and non-empty `rawOutputRef` immutably with an fsync-backed
+`stateRef` and every apply's `rawOutputRef` immutably with an fsync-backed
 no-replace fence and permits adoption only for the exact Workspace, subject,
-environment, ApplyRun, action, generation, and content digest. A successful
-runner response never exposes `rawOutputRef` until the raw object is confirmed
-durable. If state persistence succeeds but raw Output acknowledgement fails,
-same-ApplyRun replay opens the sealed result and repairs or adopts that exact
-raw object without repeating provider work. Production-like hosts therefore
-require the normal secret-store key; the explicit development placeholder
-remains a local-only opt-in.
+environment, ApplyRun, action, generation, and content digest. An apply with no
+declared outputs still seals `{}`. A successful runner response never exposes
+`rawOutputRef` until the raw object is confirmed durable, and Core rejects a
+missing or different returned ref before publishing StateVersion, Output, or
+Capsule pointers. If state persistence succeeds but raw Output acknowledgement
+fails, same-ApplyRun replay opens the sealed result and repairs or adopts that
+exact raw object without repeating provider work. Production-like hosts
+therefore require the normal secret-store key; the explicit development
+placeholder remains a local-only opt-in.
 
 Cloudflare R2 state and raw Output objects carry immutable ApplyRun and action
 metadata. Redelivery adopts an existing target only after the state object's
@@ -269,9 +271,14 @@ Resource apply and delete execution predetermine the ApplyRun id and checkpoint
 that id plus its exact PlanRun id on `pendingOperation` before the ApplyRun row
 is persisted or dispatched. Recovery may adopt that exact ApplyRun or recreate
 it against the checkpointed PlanRun; it must not plan again or allocate a
-replacement id. A real checkpoint write failure happens before provider
-dispatch and exits the Resource from `Applying` or `Deleting`, so a later retry
-is discoverable and unambiguous.
+replacement id. ApplyRun creation is an atomic insert-or-adopt operation: a
+same-id running or terminal row is returned unchanged, never reset to queued or
+redispatched, and a different PlanRun, subject, operation, runner profile,
+expected guard, state backend, or returned id fails closed. A PlanRun already
+applied by another id cannot substitute for the checkpointed id. A real
+checkpoint write failure happens before provider dispatch and exits the
+Resource from `Applying` or `Deleting`, so a later retry is discoverable and
+unambiguous.
 
 Pre-digest Resource execution rows use the explicit
 `priorState.legacyDigestMissing=true` transition marker. A runner may restore

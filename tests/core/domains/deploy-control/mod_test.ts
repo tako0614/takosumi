@@ -800,8 +800,9 @@ test("runner diagnostics are redacted before PlanRun and ApplyRun persistence", 
             },
           ],
         }),
-      apply: () =>
+      apply: (job) =>
         Promise.resolve(fixtureStateCommit({
+          rawOutputRef: job.rawOutputRef,
           diagnostics: [
             {
               severity: "warning",
@@ -2455,9 +2456,10 @@ function fakeRunner(
         providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
         summary: { add: 1, change: 0, destroy: 0 },
       }),
-    apply: () =>
+    apply: (job) =>
       Promise.resolve(fixtureStateCommit({
         outputs,
+        rawOutputRef: job.rawOutputRef,
       })),
     destroy: () => Promise.resolve(fixtureStateCommit()),
   };

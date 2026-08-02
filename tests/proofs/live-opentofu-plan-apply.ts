@@ -207,7 +207,7 @@ class LocalTofuRunner implements OpenTofuRunner {
     };
   }
 
-  async apply(_job: OpenTofuApplyJob) {
+  async apply(job: OpenTofuApplyJob) {
     await runTofu(
       ["apply", "-input=false", "-no-color", "tfplan"],
       this.#workdir,
@@ -218,6 +218,7 @@ class LocalTofuRunner implements OpenTofuRunner {
       stateDigest: digestBytes(
         await readFile(`${this.#workdir}/terraform.tfstate`),
       ),
+      rawOutputRef: job.rawOutputRef,
       providerInstallation: [localProviderInstallationEvidence()],
     };
   }
