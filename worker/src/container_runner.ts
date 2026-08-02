@@ -180,7 +180,11 @@ export class CloudflareContainerOpenTofuRunner
       job,
       { signal: control?.signal },
     );
+    const state = recordFromRecord(result, "state");
     return {
+      ...(state && stringFromRecord(state, "digest")
+        ? { stateDigest: stringFromRecord(state, "digest") }
+        : {}),
       ...(providerInstallationFromContainerResult(result)
         ? {
             providerInstallation:

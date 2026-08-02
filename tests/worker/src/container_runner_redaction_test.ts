@@ -338,7 +338,10 @@ test("container runner returns provider installation attestation from apply and 
     },
   ];
   const runner = new CloudflareContainerOpenTofuRunner(
-    envReturning({ providerInstallation }),
+    envReturning({
+      providerInstallation,
+      state: { digest: `sha256:${"d".repeat(64)}` },
+    }),
   );
 
   const apply = await runner.apply({
@@ -368,6 +371,7 @@ test("container runner returns provider installation attestation from apply and 
     mirrored: true,
     attested: true,
   });
+  expect(destroy.stateDigest).toBe(`sha256:${"d".repeat(64)}`);
 });
 
 test("container runner redacts stderr before apply diagnostics are returned", async () => {

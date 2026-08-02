@@ -64,6 +64,8 @@ import {
   formatResourceShapeId,
   resourceFormIdentitiesEqual,
   type ResolutionLockRecord,
+  type ResourceShapeExecutionRecord,
+  type ResourceShapePriorStateDescriptor,
   type ResourceShapeRecord,
   type SpacePolicyRecord,
   type TargetPoolRecord,
@@ -878,6 +880,7 @@ export class ResourceShapeService {
         existing?.execution?.stateGeneration ??
         existing?.stateAdoption?.stateGeneration ??
         0,
+      ...canonicalPriorState(existing?.execution),
       ...(existing?.stateAdoption
         ? { stateAdoption: existing.stateAdoption }
         : {}),
@@ -1385,6 +1388,7 @@ export class ResourceShapeService {
             existing?.execution?.stateGeneration ??
             existing?.stateAdoption?.stateGeneration ??
             0,
+          ...canonicalPriorState(existing?.execution),
           ...(existing?.stateAdoption
             ? { stateAdoption: existing.stateAdoption }
             : {}),
@@ -1683,6 +1687,7 @@ export class ResourceShapeService {
           existing?.execution?.stateGeneration ??
           existing?.stateAdoption?.stateGeneration ??
           0,
+        ...canonicalPriorState(existing?.execution),
         ...(existing?.stateAdoption
           ? { stateAdoption: existing.stateAdoption }
           : {}),
@@ -2575,6 +2580,7 @@ export class ResourceShapeService {
             existing?.execution?.stateGeneration ??
             existing?.stateAdoption?.stateGeneration ??
             0,
+          ...canonicalPriorState(existing?.execution),
           ...(existing?.stateAdoption
             ? { stateAdoption: existing.stateAdoption }
             : {}),
@@ -3135,6 +3141,7 @@ export class ResourceShapeService {
             record.execution?.stateGeneration ??
             record.stateAdoption?.stateGeneration ??
             0,
+          ...canonicalPriorState(record.execution),
           ...(record.stateAdoption
             ? { stateAdoption: record.stateAdoption }
             : {}),
@@ -3492,6 +3499,7 @@ export class ResourceShapeService {
           record.execution?.stateGeneration ??
           record.stateAdoption?.stateGeneration ??
           0,
+        ...canonicalPriorState(record.execution),
         ...(record.stateAdoption
           ? { stateAdoption: record.stateAdoption }
           : {}),
@@ -3867,6 +3875,7 @@ export class ResourceShapeService {
             record.execution?.stateGeneration ??
             record.stateAdoption?.stateGeneration ??
             0,
+          ...canonicalPriorState(record.execution),
           ...(record.stateAdoption
             ? { stateAdoption: record.stateAdoption }
             : {}),
@@ -4566,6 +4575,7 @@ export class ResourceShapeService {
               claimedRecord.execution?.stateGeneration ??
               claimedRecord.stateAdoption?.stateGeneration ??
               0,
+            ...canonicalPriorState(claimedRecord.execution),
             ...(claimedRecord.stateAdoption
               ? { stateAdoption: claimedRecord.stateAdoption }
               : {}),
@@ -4615,6 +4625,7 @@ export class ResourceShapeService {
                   claimedRecord.execution?.stateGeneration ??
                   claimedRecord.stateAdoption?.stateGeneration ??
                   0,
+                ...canonicalPriorState(claimedRecord.execution),
                 ...(claimedRecord.stateAdoption
                   ? { stateAdoption: claimedRecord.stateAdoption }
                   : {}),
@@ -4663,6 +4674,7 @@ export class ResourceShapeService {
                 claimedRecord.execution?.stateGeneration ??
                 claimedRecord.stateAdoption?.stateGeneration ??
                 0,
+              ...canonicalPriorState(claimedRecord.execution),
               ...(claimedRecord.stateAdoption
                 ? { stateAdoption: claimedRecord.stateAdoption }
                 : {}),
@@ -7959,6 +7971,25 @@ function mergeConditions(
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Project the exact Resource ledger tail into the internal runner contract.
+ * Legacy rows without a digest deliberately produce no descriptor: the
+ * OpenTofu adapter will fail closed instead of guessing from object storage.
+ */
+function canonicalPriorState(
+  execution: ResourceShapeExecutionRecord | undefined,
+): { readonly priorState?: ResourceShapePriorStateDescriptor } {
+  if (!execution?.stateDigest) return {};
+  return {
+    priorState: {
+      generation: execution.stateGeneration,
+      stateRef: execution.stateRef,
+      digest: execution.stateDigest,
+      createdByRunId: execution.runId,
+    },
+  };
 }
 
 async function withTimeout<T>(

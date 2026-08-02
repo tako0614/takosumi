@@ -32,6 +32,7 @@ import {
   FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE,
   FIXTURE_CLOUDFLARE_PROVIDER,
   fakeProviderVault,
+  fixtureStateCommit,
   seedCapsuleModel,
   seedProviderConnections,
   type SeedCapsuleModelOptions,
@@ -194,7 +195,8 @@ test("a successful plan + apply records NO run.failed Activity event", async () 
         requiredProviders: [FIXTURE_CLOUDFLARE_PROVIDER],
         providerInstallation: [FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE],
       }),
-    apply: (_job: OpenTofuApplyJob) => Promise.resolve({}),
+    apply: (_job: OpenTofuApplyJob) =>
+      Promise.resolve(fixtureStateCommit()),
   });
 
   const { planRun } = await controller.createCapsulePlan("cap_fixture1");

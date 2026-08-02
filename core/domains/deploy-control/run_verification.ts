@@ -35,6 +35,7 @@
 
 import type {
   DispatchDepState,
+  DispatchPriorState,
   DispatchSourceArchive,
   DispatchStateAdoption,
   DispatchStateScope,
@@ -119,7 +120,13 @@ export class RunVerificationService {
     planRun: PlanRun,
     generation: number,
     stateAdoption?: DispatchStateAdoption,
+    resourcePriorState?: DispatchPriorState,
   ): Promise<RunExecutionDispatch> {
+    const priorState = await this.#canonicalPriorState(
+      planRun,
+      stateAdoption,
+      resourcePriorState,
+    );
     if (planRun.resourceContext) {
       const subject = {
         kind: "resource" as const,
@@ -131,6 +138,7 @@ export class RunVerificationService {
           subject,
           environment: planRun.resourceContext.environment,
           generation,
+          ...(priorState ? { priorState } : {}),
         }),
         ...(stateAdoption ? { stateAdoption } : {}),
       };
@@ -151,6 +159,7 @@ export class RunVerificationService {
       },
       environment: ctx.environment,
       generation,
+      ...(priorState ? { priorState } : {}),
     });
     // remote_state dependencies (spec §15): for each remote_state edge, dispatch
     // the producer StateVersion pinned by the plan's DependencySnapshot so
@@ -333,6 +342,81 @@ export class RunVerificationService {
       );
     }
     return { ...input, stateRef };
+  }
+
+  async #canonicalPriorState(
+    planRun: PlanRun,
+    stateAdoption: DispatchStateAdoption | undefined,
+    resourcePriorState: DispatchPriorState | undefined,
+  ): Promise<DispatchPriorState | undefined> {
+    const generation = planRun.baseStateGeneration ?? 0;
+    if (stateAdoption) {
+      if (resourcePriorState) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          "state adoption cannot replace a canonical Resource prior state",
+        );
+      }
+      return undefined;
+    }
+    if (generation === 0) {
+      if (resourcePriorState) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          "generation-zero Resource dispatch cannot carry prior state",
+        );
+      }
+      return undefined;
+    }
+    if (planRun.resourceContext) {
+      if (!resourcePriorState || resourcePriorState.generation !== generation) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `resource_prior_state_unavailable: Resource ${planRun.resourceContext.resourceId} generation ${generation} has no exact canonical execution descriptor`,
+          { reason: "resource_prior_state_unavailable" },
+        );
+      }
+      return resourcePriorState;
+    }
+    if (resourcePriorState) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "Capsule dispatch cannot accept a Resource prior state descriptor",
+      );
+    }
+    const ctx = planRun.capsuleContext;
+    if (!ctx || !planRun.capsuleCurrentStateVersionId) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `canonical_prior_state_unavailable: generation ${generation} has no pinned StateVersion`,
+        { reason: "canonical_prior_state_unavailable" },
+      );
+    }
+    const state = await this.#store.getStateVersion(
+      planRun.capsuleCurrentStateVersionId,
+    );
+    if (
+      !state ||
+      state.workspaceId !== ctx.workspaceId ||
+      state.capsuleId !== ctx.capsuleId ||
+      state.environment !== ctx.environment ||
+      state.generation !== generation ||
+      !state.stateRef ||
+      !state.digest ||
+      !state.createdByRunId
+    ) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `canonical_prior_state_unavailable: StateVersion ${planRun.capsuleCurrentStateVersionId} does not match Capsule generation ${generation}`,
+        { reason: "canonical_prior_state_unavailable" },
+      );
+    }
+    return {
+      generation: state.generation,
+      stateRef: state.stateRef,
+      digest: state.digest,
+      createdByRunId: state.createdByRunId,
+    };
   }
 
   async #reverifyRemoteStateVersionPin(

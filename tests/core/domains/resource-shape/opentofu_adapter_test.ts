@@ -23,8 +23,12 @@ import type {
 import { OpenTofuController } from "../../../../core/domains/deploy-control/mod.ts";
 import { OpenTofuControllerError } from "../../../../core/domains/deploy-control/errors.ts";
 import { resourceImportPolicyReasons } from "../../../../core/domains/deploy-control/run-engine/run_engine.ts";
-import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
+import {
+  InMemoryOpenTofuControlStore,
+  type OpenTofuControlStore,
+} from "../../../../core/domains/deploy-control/store.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
+import { CloudflareD1OpenTofuControlStore } from "../../../../worker/src/d1_opentofu_store.ts";
 import {
   LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY,
   parseResourceSpec as parseCoreResourceSpec,
@@ -43,6 +47,7 @@ import {
   providerLocalNameForSource,
 } from "../../../../core/domains/resource-shape/opentofu_adapter.ts";
 import { TEST_RESOURCE_SHAPE_MODULE_REGISTRY } from "../../../helpers/resource-shape/operator-module-registry.ts";
+import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
 
 const parseResourceSpec: typeof parseCoreResourceSpec = (
   kind,
@@ -113,7 +118,7 @@ function applyInput(
   target: TargetPoolEntry,
   overrides: Partial<AdapterApplyInput> = {},
 ): AdapterApplyInput {
-  return {
+  const input: AdapterApplyInput = {
     resourceId: "tkrn:demo:EdgeWorker:api",
     resourceGeneration: 3,
     environment: "production",
@@ -124,6 +129,26 @@ function applyInput(
     credentialRef: "conn_cf_1",
     actor,
     ...overrides,
+  };
+  if (
+    input.stateGeneration === 0 ||
+    input.stateAdoption ||
+    input.priorState
+  ) {
+    return input;
+  }
+  return {
+    ...input,
+    priorState: resourcePriorState(input.stateGeneration),
+  };
+}
+
+function resourcePriorState(generation: number) {
+  return {
+    generation,
+    stateRef: `workspaces/demo/resources/tkrn_demo_EdgeWorker_api/environments/production/state-versions/${String(generation).padStart(8, "0")}.tfstate.enc`,
+    digest: `sha256:state-${generation}`,
+    createdByRunId: `apply_${generation}`,
   };
 }
 
@@ -361,7 +386,7 @@ test("apply without a credentialRef leaves the ProviderBinding connectionId unse
 function deleteInput(
   overrides: Partial<AdapterDeleteInput> = {},
 ): AdapterDeleteInput {
-  return {
+  const input: AdapterDeleteInput = {
     resourceId: "tkrn:demo:EdgeWorker:api",
     resourceGeneration: 3,
     environment: "production",
@@ -373,6 +398,17 @@ function deleteInput(
     deletePolicy: "delete",
     actor,
     ...overrides,
+  };
+  if (
+    input.stateGeneration === 0 ||
+    input.stateAdoption ||
+    input.priorState
+  ) {
+    return input;
+  }
+  return {
+    ...input,
+    priorState: resourcePriorState(input.stateGeneration),
   };
 }
 
@@ -674,6 +710,9 @@ test("ControllerOpentofuRunPort.plan builds a real generated-root dispatch and m
     },
   });
   expect(internal?.baseStateGeneration).toBe(3);
+  expect(internal?.genericRootDispatch?.priorState).toEqual(
+    resourcePriorState(3),
+  );
   expect(request.requiredProviders).toEqual([
     "registry.opentofu.org/cloudflare/cloudflare",
   ]);
@@ -702,6 +741,28 @@ test("ControllerOpentofuRunPort.plan builds a real generated-root dispatch and m
     },
   ]);
   expect(preview.runId).toBe("plan_1");
+});
+
+test("ControllerOpentofuRunPort fails closed for a legacy Resource row without a state digest", async () => {
+  const driver = new FakeDeployControlDriver();
+  const adapter = new OpentofuResourceShapeAdapter(
+    new ControllerOpentofuRunPort({ driver }),
+  );
+  const plan = edgeWorkerPlan();
+  const { priorState: _omitted, ...legacyInput } = applyInput(
+    plan,
+    cloudflareTarget,
+  );
+
+  await expect(adapter.preview(legacyInput)).rejects.toThrow(
+    "has no exact canonical prior state descriptor",
+  );
+  const { priorState: _omittedDelete, ...legacyDelete } = deleteInput({ plan });
+  await expect(adapter.delete(legacyDelete)).rejects.toThrow(
+    "has no exact canonical prior state descriptor",
+  );
+  expect(driver.planCalls).toHaveLength(0);
+  expect(driver.applyCalls).toHaveLength(0);
 });
 
 test("ControllerOpentofuRunPort translates rootgen validation at its runtime boundary", async () => {
@@ -893,6 +954,8 @@ test("real OpenTofuController applies a Resource without creating Capsule ledger
     destroy: (job) => {
       captured.destroy = job;
       return Promise.resolve({
+        stateDigest:
+          "sha256:destroyed0123456789abcdef0123456789abcdef0123456789abcdef01234567",
         providerInstallation: [
           {
             provider: "registry.opentofu.org/cloudflare/cloudflare",
@@ -1039,6 +1102,163 @@ test("real OpenTofuController applies a Resource without creating Capsule ledger
     await store.listStateVersions("tkrn:demo:EdgeWorker:api", "production"),
   ).toEqual([]);
   expect(await store.listOutputs("tkrn:demo:EdgeWorker:api")).toEqual([]);
+});
+
+test("Resource apply and destroy requeue the same ApplyRun after a D1 ledger-tail failure", async () => {
+  const inner = new CloudflareD1OpenTofuControlStore(new SqliteFakeD1());
+  await inner.putWorkspace({
+    id: "demo",
+    handle: "demo",
+    displayName: "Demo",
+    type: "personal",
+    ownerUserId: actor.actorAccountId,
+    createdAt: "2026-07-13T00:00:00.000Z",
+    updatedAt: "2026-07-13T00:00:00.000Z",
+  });
+  let failNextLedgerTail = true;
+  let injectedFailures = 0;
+  const store = new Proxy(inner, {
+    get(target, prop, receiver) {
+      if (prop === "commitResourceRun") {
+        return (
+          input: Parameters<OpenTofuControlStore["commitResourceRun"]>[0],
+        ) => {
+          if (failNextLedgerTail) {
+            failNextLedgerTail = false;
+            injectedFailures += 1;
+            return Promise.reject(
+              new Error("injected: Resource ledger commit response was lost"),
+            );
+          }
+          return target.commitResourceRun(input);
+        };
+      }
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  }) as OpenTofuControlStore;
+  const applyRunIds: string[] = [];
+  const destroyRunIds: string[] = [];
+  const runner: OpenTofuRunner = {
+    plan: (job) => {
+      return Promise.resolve({
+        planDigest:
+          "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        planArtifact: {
+          kind: "runner-local",
+          ref: `runner-local://${job.planRun.id}/tfplan`,
+          digest:
+            "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        },
+        providerLockDigest:
+          "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+        requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
+        providerInstallation: [
+          {
+            provider: "registry.opentofu.org/cloudflare/cloudflare",
+            mirrored: false,
+            installationMethod: "direct",
+          },
+        ],
+        planResourceChanges: [
+          {
+            address: "module.child.cloudflare_workers_script.this",
+            type: "cloudflare_workers_script",
+            actions:
+              job.planRun.operation === "destroy" ? ["delete"] : ["create"],
+          },
+        ],
+      });
+    },
+    apply: (job) => {
+      applyRunIds.push(job.applyRun.id);
+      return Promise.resolve({
+        outputs: {
+          worker_name: { sensitive: false, value: "api" },
+          url: { sensitive: false, value: "https://api.example.test" },
+        },
+        stateDigest:
+          "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+        rawOutputRef: job.rawOutputRef,
+        providerInstallation: [
+          {
+            provider: "registry.opentofu.org/cloudflare/cloudflare",
+            mirrored: false,
+            installationMethod: "direct",
+          },
+        ],
+      });
+    },
+    destroy: (job) => {
+      destroyRunIds.push(job.applyRun.id);
+      return Promise.resolve({
+        stateDigest:
+          "sha256:destroyed0123456789abcdef0123456789abcdef0123456789abcdef01234567",
+        providerInstallation: [
+          {
+            provider: "registry.opentofu.org/cloudflare/cloudflare",
+            mirrored: false,
+            installationMethod: "direct",
+          },
+        ],
+      });
+    },
+  };
+  const controller = new OpenTofuController({
+    store,
+    runner,
+    defaultBillingSettings: { mode: "showback" },
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    now: (() => {
+      let value = 1_000;
+      return () => value++;
+    })(),
+    newId: (() => {
+      let value = 0;
+      return (prefix) => `${prefix}_resource_retry_${++value}`;
+    })(),
+  });
+  const adapter = new OpentofuResourceShapeAdapter(
+    new ControllerOpentofuRunPort({
+      driver: controller,
+      pollIntervalMs: 1,
+      waitTimeoutMs: 200,
+    }),
+  );
+
+  const applied = await adapter.apply(
+    applyInput(edgeWorkerPlan(), cloudflareTarget, {
+      stateGeneration: 0,
+      credentialRef: undefined,
+    }),
+  );
+
+  expect(applyRunIds).toHaveLength(2);
+  expect(new Set(applyRunIds)).toEqual(new Set([applied.runId!]));
+  expect((await inner.getApplyRun(applied.runId!))?.status).toBe("succeeded");
+
+  failNextLedgerTail = true;
+  await adapter.delete(
+    deleteInput({
+      plan: edgeWorkerPlan(),
+      stateGeneration: applied.execution!.stateGeneration,
+      priorState: {
+        generation: applied.execution!.stateGeneration,
+        stateRef: applied.execution!.stateRef,
+        digest: applied.execution!.stateDigest!,
+        createdByRunId: applied.runId!,
+      },
+      nativeResources: applied.nativeResources,
+      credentialRef: undefined,
+    }),
+  );
+
+  expect(destroyRunIds).toHaveLength(2);
+  expect(new Set(destroyRunIds).size).toBe(1);
+  expect(injectedFailures).toBe(2);
+  expect((await inner.getApplyRun(destroyRunIds[0]!))?.status).toBe(
+    "succeeded",
+  );
 });
 
 test("ControllerOpentofuRunPort renders base_url for operator-configured provider endpoints", async () => {
@@ -1188,6 +1408,9 @@ test("ControllerOpentofuRunPort.destroy replays generated root before apply", as
       (file) => file.path,
     ),
   ).toEqual(plan.operatorModule?.files.map((file) => file.path));
+  expect(internal?.genericRootDispatch?.priorState).toEqual(
+    resourcePriorState(3),
+  );
   expect(driver.applyCalls.length).toBe(1);
   expect(driver.applyCalls[0]?.expected.planRunId).toBe("plan_1");
   expect(driver.approveCalls).toEqual([

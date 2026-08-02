@@ -55,6 +55,8 @@ export interface SeedProviderConnectionOptions {
 
 export const FIXTURE_ARCHIVE_DIGEST =
   "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+export const FIXTURE_STATE_DIGEST =
+  "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
 export const FIXTURE_CLOUDFLARE_PROVIDER =
   "registry.opentofu.org/cloudflare/cloudflare";
 export const FIXTURE_AWS_PROVIDER = "registry.opentofu.org/hashicorp/aws";
@@ -76,6 +78,18 @@ export const FIXTURE_AWS_MIRROR_EVIDENCE = {
   mirrorPath:
     "/opt/opentofu/provider-mirror/registry.opentofu.org/hashicorp/aws",
 } as const;
+
+/** A successful runner mutation always returns evidence of its durable state. */
+export function fixtureStateCommit(): { readonly stateDigest: string };
+export function fixtureStateCommit<T extends object>(
+  result: T,
+): T & { readonly stateDigest: string };
+export function fixtureStateCommit<T extends object>(result?: T) {
+  return {
+    ...(result ?? {}),
+    stateDigest: FIXTURE_STATE_DIGEST,
+  };
+}
 
 export function fakeProviderVault(
   options: {

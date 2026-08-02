@@ -106,6 +106,15 @@ interface StateScope {
   readonly generation: number;
   /** Opaque to Core; this R2 adapter interprets it as the physical object key. */
   readonly stateRef: string;
+  /** Exact canonical state ledger row to restore before this operation. */
+  readonly priorState?: StateVersionDescriptor;
+}
+
+interface StateVersionDescriptor {
+  readonly generation: number;
+  readonly stateRef: string;
+  readonly digest: string;
+  readonly createdByRunId: string;
 }
 
 /**
@@ -548,6 +557,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     const stateScope = parseStateScope(envelope.request);
     const rawOutputRef = parseRawOutputRef(envelope.request);
     const stateAdoption = parseStateAdoption(envelope.request);
+    const applyRunId = parseApplyRunId(envelope.request);
     if (stateAdoption && !stateScope) {
       throw new Error("stateAdoption requires a Resource stateScope");
     }
@@ -563,15 +573,20 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       if (envelope.action === "apply" && !rawOutputRef) {
         throw new Error("apply with stateScope requires rawOutputRef");
       }
+      if (!applyRunId) {
+        throw new Error(
+          `${envelope.action} with stateScope requires the canonical applyRun.id`,
+        );
+      }
       if (rawOutputRef) {
         assertRawOutputRefForScope(
           stateScope,
-          parseApplyRunId(envelope.request) ?? runId,
+          applyRunId,
           rawOutputRef,
         );
       }
       const adopted = await this.#adoptCompletedStateMutationFromR2(
-        runId,
+        applyRunId,
         stateScope,
         envelope.action,
         rawOutputRef,
@@ -627,6 +642,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       if (stateScope) {
         return await this.#persistStateToR2State(
           runId,
+          applyRunId!,
           stateScope,
           url,
           runnerResponse,
@@ -917,11 +933,9 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     }
   }
 
-  // M2 state restore: read current.json under the env's R2_STATE prefix, fetch
-  // the current encrypted state object, decrypt + verify the recorded plaintext
-  // digest (tamper check), and stream the plaintext to the container. The
-  // container never sees the passphrase or the ciphertext. First-create plans
-  // have no current.json yet, in which case there is nothing to restore.
+  // M2 state restore: fetch only the exact canonical descriptor supplied by the
+  // control ledger. R2 object history and current.json are never discovery or
+  // downgrade authority. First-create plans have no prior descriptor.
   async #restoreStateFromR2State(
     runId: string,
     scope: StateScope,
@@ -930,30 +944,38 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     adoption: StateAdoption | undefined,
   ): Promise<void> {
     const bucket = this.#r2State();
-    const current = await readCurrentState(
-      bucket,
-      scope,
-      restoreMaxGeneration(scope, action),
-    );
-    if (current && adoption) {
-      throw new Error(
-        "state adoption refused: canonical Resource state already exists",
-      );
+    assertStateRefForScope(scope);
+    const expectedGeneration = priorStateGeneration(scope, action);
+    if (scope.priorState && adoption) {
+      throw new Error("state adoption cannot replace canonical priorState");
+    }
+    if (adoption) {
+      const canonicalRef = stateRefForGeneration(scope, expectedGeneration);
+      if (await bucket.head(canonicalRef)) {
+        throw new Error(
+          "state adoption refused: canonical Resource state already exists",
+        );
+      }
     }
     const adopted =
-      !current && adoption
+      adoption
         ? await readConfirmedStateAdoption(
             bucket,
             scope,
             adoption,
-            restoreMaxGeneration(scope, action),
+            expectedGeneration,
           )
         : undefined;
     const resolved =
       adopted ??
-      (current
-        ? await readCurrentStateObject(bucket, scope, current)
+      (scope.priorState
+        ? await readCanonicalPriorState(bucket, scope, scope.priorState, expectedGeneration)
         : undefined);
+    if (!resolved && expectedGeneration > 0) {
+      throw new Error(
+        `canonical priorState is required for generation ${expectedGeneration}`,
+      );
+    }
     if (!resolved) return;
     const { pointer, object } = resolved;
     const ciphertext = await readBoundedR2ObjectBytes(
@@ -991,7 +1013,8 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
   // returns the recorded digest in the run payload so the controller can update
   // its ledger; generation arithmetic stays with the controller.
   async #persistStateToR2State(
-    runId: string,
+    containerRunId: string,
+    applyRunId: string,
     scope: StateScope,
     baseUrl: URL,
     runnerResponse: Response,
@@ -999,7 +1022,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     rawOutputRef: string | undefined,
   ): Promise<Response> {
     const stateResponse = await this.#containerFetch(
-      new Request(stateArtifactUrl(baseUrl, runId), { method: "GET" }),
+      new Request(stateArtifactUrl(baseUrl, containerRunId), { method: "GET" }),
     );
     if (stateResponse.status === 404) return runnerResponse;
     if (!stateResponse.ok) {
@@ -1027,7 +1050,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     assertStateRefForScope(scope);
     const objectKey = scope.stateRef;
     const persistedRawOutputRef = preparedRawOutputs
-      ? await this.#persistPreparedRawOutputs(runId, preparedRawOutputs)
+      ? await this.#persistPreparedRawOutputs(applyRunId, preparedRawOutputs)
       : undefined;
     await putR2ObjectWithRetry(
       bucket,
@@ -1036,24 +1059,27 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       {
         httpMetadata: { contentType: ENCRYPTED_ARTIFACT_CONTENT_TYPE },
         customMetadata: {
-          "takosumi-run-id": runId,
+          "takosumi-run-id": applyRunId,
           "takosumi-content-digest": sealed.contentDigest,
           "takosumi-ciphertext-length": String(sealed.ciphertextLength),
           "takosumi-encryption-format": sealed.format,
           "takosumi-generation": String(scope.generation),
+          ...(preparedRawOutputs
+            ? { "takosumi-raw-output-ref": preparedRawOutputs.key }
+            : { "takosumi-raw-output-status": "none" }),
         },
+        onlyIf: { etagDoesNotMatch: "*" },
       },
       "state object",
     );
-    // current.json is written AFTER the state object. If this write fails after
-    // the object write, the next restore reconciles by finding the highest
-    // sealed generation object with a digest metadata entry and rewrites
-    // current.json before handing plaintext state to the container.
+    // current.json is a best-effort cache written AFTER the immutable target.
+    // A retry adopts only this ApplyRun's exact target object; neither this
+    // pointer nor an R2 prefix scan has ledger authority.
     const current = {
       generation: scope.generation,
       objectKey,
       digest: sealed.contentDigest,
-      runId,
+      runId: applyRunId,
       ciphertextLength: sealed.ciphertextLength,
     };
     await putR2ObjectWithRetry(
@@ -1062,7 +1088,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       JSON.stringify(current),
       {
         httpMetadata: { contentType: "application/json" },
-        customMetadata: { "takosumi-run-id": runId },
+        customMetadata: { "takosumi-run-id": applyRunId },
       },
       "state pointer",
     );
@@ -1109,52 +1135,67 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     runId: string,
     prepared: PreparedRawOutputs,
   ): Promise<string> {
-    await putR2ObjectWithRetry(
-      this.env.R2_ARTIFACTS,
-      prepared.key,
-      prepared.sealed.ciphertext,
-      {
-        httpMetadata: { contentType: ENCRYPTED_ARTIFACT_CONTENT_TYPE },
-        customMetadata: {
-          "takosumi-run-id": runId,
-          "takosumi-content-digest": prepared.sealed.contentDigest,
-          "takosumi-ciphertext-length": String(
-            prepared.sealed.ciphertextLength,
-          ),
-          "takosumi-encryption-format": prepared.sealed.format,
+    try {
+      await putR2ObjectWithRetry(
+        this.env.R2_ARTIFACTS,
+        prepared.key,
+        prepared.sealed.ciphertext,
+        {
+          httpMetadata: { contentType: ENCRYPTED_ARTIFACT_CONTENT_TYPE },
+          customMetadata: {
+            "takosumi-run-id": runId,
+            "takosumi-content-digest": prepared.sealed.contentDigest,
+            "takosumi-ciphertext-length": String(
+              prepared.sealed.ciphertextLength,
+            ),
+            "takosumi-encryption-format": prepared.sealed.format,
+          },
+          onlyIf: { etagDoesNotMatch: "*" },
         },
-      },
-      "raw outputs",
-    );
+        "raw outputs",
+      );
+    } catch (error) {
+      if (!(error instanceof R2ConditionalPutConflictError)) throw error;
+      const existing = await this.env.R2_ARTIFACTS.head(prepared.key);
+      if (
+        existing?.customMetadata?.["takosumi-run-id"] !== runId ||
+        existing.customMetadata?.["takosumi-content-digest"] !==
+          prepared.sealed.contentDigest
+      ) {
+        throw new Error(
+          "raw output target already belongs to different artifact authority",
+        );
+      }
+    }
     return prepared.key;
   }
 
   async #adoptCompletedStateMutationFromR2(
-    runId: string,
+    applyRunId: string,
     scope: StateScope,
     action: "apply" | "destroy",
     rawOutputRef: string | undefined,
   ): Promise<Response | undefined> {
     assertStateRefForScope(scope);
     const bucket = this.#r2State();
-    const current = await readCurrentStatePointer(bucket, scope);
-    if (!current || current.generation !== scope.generation) return undefined;
-    if (current.objectKey !== scope.stateRef) {
+    const object = await bucket.get(scope.stateRef);
+    if (!object) return undefined;
+    const persistedRunId = object.customMetadata?.["takosumi-run-id"];
+    if (!persistedRunId || persistedRunId !== applyRunId) {
       throw new Error(
-        `completed ${action} stateRef does not match the allocated stateRef`,
+        `completed ${action} target belongs to a different ApplyRun`,
       );
     }
-    const object = await bucket.get(current.objectKey);
-    if (!object) return undefined;
-    const persistedRunId =
-      object.customMetadata?.["takosumi-run-id"] ?? current.runId;
-    if (persistedRunId !== runId) return undefined;
-    const metadataDigest =
-      object.customMetadata?.["takosumi-content-digest"] ??
-      object.customMetadata?.["takosumi-digest"];
-    if (metadataDigest && metadataDigest !== current.digest) {
+    const metadataDigest = object.customMetadata?.["takosumi-content-digest"];
+    if (!metadataDigest) {
+      throw new Error(`completed ${action} target has no canonical digest`);
+    }
+    const metadataGeneration = Number(
+      object.customMetadata?.["takosumi-generation"],
+    );
+    if (metadataGeneration !== scope.generation) {
       throw new Error(
-        `completed ${action} state digest mismatch for ${current.objectKey}`,
+        `completed ${action} target generation does not match stateScope`,
       );
     }
     const completedState = await this.#stateCrypto().open(
@@ -1163,28 +1204,49 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         "state",
         maxStateArtifactCiphertextBytes(this.#artifactLimits.state),
       ),
-      current.digest,
+      metadataDigest,
     );
     assertArtifactSize(
       "state",
       this.#artifactLimits.state,
       completedState.byteLength,
     );
-    const rawOutputs =
-      action === "apply" && rawOutputRef
-        ? await this.#readPersistedRawOutputs(runId, rawOutputRef)
-        : undefined;
+    const recordedRawOutputRef =
+      object.customMetadata?.["takosumi-raw-output-ref"];
+    const noRawOutputs =
+      object.customMetadata?.["takosumi-raw-output-status"] === "none";
+    if (
+      action === "apply" &&
+      recordedRawOutputRef !== rawOutputRef &&
+      !(noRawOutputs && !recordedRawOutputRef)
+    ) {
+      throw new Error(
+        "completed apply target raw output authority does not match dispatch",
+      );
+    }
+    const rawOutputs = recordedRawOutputRef
+      ? await this.#readPersistedRawOutputs(applyRunId, recordedRawOutputRef)
+      : undefined;
+    if (recordedRawOutputRef && !rawOutputs) {
+      throw new Error("completed apply target raw output artifact is missing");
+    }
     const ciphertextLength =
-      current.ciphertextLength ??
       Number(object.customMetadata?.["takosumi-ciphertext-length"]);
+    await writeCurrentStateCache(bucket, scope, {
+      generation: scope.generation,
+      objectKey: scope.stateRef,
+      digest: metadataDigest,
+      runId: applyRunId,
+      ...(Number.isFinite(ciphertextLength) ? { ciphertextLength } : {}),
+    });
     return jsonResponse(
       {
         status: "succeeded",
         exitCode: 0,
         state: {
-          generation: current.generation,
-          stateRef: current.objectKey,
-          digest: current.digest,
+          generation: scope.generation,
+          stateRef: scope.stateRef,
+          digest: metadataDigest,
           ...(Number.isFinite(ciphertextLength) ? { ciphertextLength } : {}),
         },
         ...(rawOutputs
@@ -1196,7 +1258,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
   }
 
   async #readPersistedRawOutputs(
-    runId: string,
+    applyRunId: string,
     rawOutputRef: string,
   ): Promise<
     | { readonly ref: string; readonly outputs: Record<string, unknown> }
@@ -1206,13 +1268,20 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     const key = rawOutputRef;
     const object = await this.env.R2_ARTIFACTS.get(key);
     if (!object) return undefined;
+    if (object.customMetadata?.["takosumi-run-id"] !== applyRunId) {
+      throw new Error("raw output artifact belongs to a different ApplyRun");
+    }
+    const digest = object.customMetadata?.["takosumi-content-digest"];
+    if (!digest) {
+      throw new Error("raw output artifact has no canonical digest");
+    }
     const plaintext = await this.#stateCrypto().open(
       await readBoundedR2ObjectBytes(
         object,
         "output",
         maxStateArtifactCiphertextBytes(this.#artifactLimits.output),
       ),
-      object.customMetadata?.["takosumi-content-digest"],
+      digest,
     );
     assertArtifactSize(
       "output",
@@ -1634,9 +1703,16 @@ async function putR2ObjectWithRetry(
   let lastError: unknown;
   for (let attempt = 1; attempt <= R2_PUT_RETRY_ATTEMPTS; attempt += 1) {
     try {
-      return await bucket.put(key, value, options);
+      const object = await bucket.put(key, value, options);
+      if (!object) {
+        throw new R2ConditionalPutConflictError(
+          `${context} conditional R2 put was refused`,
+        );
+      }
+      return object;
     } catch (error) {
       lastError = error;
+      if (error instanceof R2ConditionalPutConflictError) throw error;
       if (attempt >= R2_PUT_RETRY_ATTEMPTS || !isRetryableR2PutError(error)) {
         throw new Error(
           `${context} R2 put failed after ${attempt} attempt${
@@ -1660,6 +1736,13 @@ async function putR2ObjectWithRetry(
     }
   }
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
+class R2ConditionalPutConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "R2ConditionalPutConflictError";
+  }
 }
 
 function isRetryableR2PutError(error: unknown): boolean {
@@ -2027,74 +2110,24 @@ interface CurrentStatePointer {
   readonly ciphertextLength?: number;
 }
 
-async function readCurrentState(
+async function writeCurrentStateCache(
   bucket: NonNullable<CloudflareWorkerEnv["R2_STATE"]>,
   scope: StateScope,
-  maxGeneration: number,
-): Promise<CurrentStatePointer | undefined> {
-  const current = await readCurrentStatePointer(bucket, scope);
-  if (!current) return await recoverCurrentState(bucket, scope, maxGeneration);
-  if (
-    !Number.isInteger(current.generation) ||
-    current.generation > maxGeneration
-  ) {
-    throw new Error(
-      `current.json generation is outside restore window: ${current.generation}`,
-    );
-  }
-  return current;
-}
-
-async function readCurrentStatePointer(
-  bucket: NonNullable<CloudflareWorkerEnv["R2_STATE"]>,
-  scope: StateScope,
-): Promise<CurrentStatePointer | undefined> {
-  const object = await bucket.get(currentStateKey(scope));
-  if (!object) return undefined;
-  const text = new TextDecoder().decode(
-    await readBoundedR2ObjectBytes(
-      object,
-      "state_pointer",
-      RUNNER_ARTIFACT_LIMIT_DEFAULTS.statePointer,
-    ),
+  pointer: CurrentStatePointer,
+): Promise<void> {
+  await putR2ObjectWithRetry(
+    bucket,
+    currentStateKey(scope),
+    JSON.stringify(pointer),
+    {
+      httpMetadata: { contentType: "application/json" },
+      customMetadata: {
+        ...(pointer.runId ? { "takosumi-run-id": pointer.runId } : {}),
+        "takosumi-cache-only": "true",
+      },
+    },
+    "state pointer cache",
   );
-  const parsed = JSON.parse(text) as unknown;
-  if (!isRecord(parsed)) {
-    throw new Error("current.json is not a JSON object");
-  }
-  const objectKey = stringField(parsed, "objectKey");
-  const digest = stringField(parsed, "digest");
-  const generation = parsed.generation;
-  const ciphertextLength = parsed.ciphertextLength;
-  if (!objectKey || !digest || typeof generation !== "number") {
-    throw new Error("current.json is missing generation/objectKey/digest");
-  }
-  // The pointer must stay inside this env's state prefix (defense in depth
-  // against a crafted current.json pointing at another tenant's object).
-  if (!objectKey.startsWith(`${stateScopePrefix(scope)}/`)) {
-    throw new Error(
-      `current.json objectKey escapes state prefix: ${objectKey}`,
-    );
-  }
-  if (!Number.isInteger(generation) || generation < 0) {
-    throw new Error(
-      `current.json generation is outside restore window: ${generation}`,
-    );
-  }
-  return {
-    generation,
-    objectKey,
-    digest,
-    ...(stringField(parsed, "runId")
-      ? { runId: stringField(parsed, "runId") }
-      : object.customMetadata?.["takosumi-run-id"]
-        ? { runId: object.customMetadata["takosumi-run-id"] }
-        : {}),
-    ...(typeof ciphertextLength === "number" &&
-    Number.isFinite(ciphertextLength)
-      ? { ciphertextLength }
-      : {}),
-  };
 }
 
 async function readConfirmedStateAdoption(
@@ -2145,111 +2178,80 @@ async function readConfirmedStateAdoption(
   };
 }
 
-async function readCurrentStateObject(
+async function readCanonicalPriorState(
   bucket: NonNullable<CloudflareWorkerEnv["R2_STATE"]>,
   scope: StateScope,
-  current: CurrentStatePointer,
+  descriptor: StateVersionDescriptor,
+  expectedGeneration: number,
 ): Promise<{
   readonly pointer: CurrentStatePointer;
   readonly object: NonNullable<Awaited<ReturnType<typeof bucket.get>>>;
 }> {
-  const object = await bucket.get(current.objectKey);
-  if (object) return { pointer: current, object };
-  const recovered = await recoverCurrentState(
-    bucket,
-    scope,
-    current.generation,
+  if (descriptor.generation !== expectedGeneration) {
+    throw new Error(
+      `canonical priorState generation mismatch: expected ${expectedGeneration}`,
+    );
+  }
+  const expectedRef = stateRefForGeneration(scope, expectedGeneration);
+  if (descriptor.stateRef !== expectedRef) {
+    throw new Error("canonical priorState ref does not match stateScope");
+  }
+  const object = await bucket.get(descriptor.stateRef);
+  if (!object) {
+    throw new Error(
+      `canonical priorState object not found: ${descriptor.stateRef}`,
+    );
+  }
+  if (
+    object.customMetadata?.["takosumi-content-digest"] !== descriptor.digest
+  ) {
+    throw new Error("canonical priorState digest does not match R2 metadata");
+  }
+  if (
+    object.customMetadata?.["takosumi-run-id"] !== descriptor.createdByRunId
+  ) {
+    throw new Error(
+      "canonical priorState creator does not match R2 metadata",
+    );
+  }
+  if (
+    Number(object.customMetadata?.["takosumi-generation"]) !==
+    descriptor.generation
+  ) {
+    throw new Error(
+      "canonical priorState generation does not match R2 metadata",
+    );
+  }
+  const ciphertextLength = Number(
+    object.customMetadata?.["takosumi-ciphertext-length"],
   );
-  if (!recovered) {
-    throw new Error(`current state object not found: ${current.objectKey}`);
-  }
-  const recoveredObject = await bucket.get(recovered.objectKey);
-  if (!recoveredObject) {
-    throw new Error(`recovered state object not found: ${recovered.objectKey}`);
-  }
-  return { pointer: recovered, object: recoveredObject };
-}
-
-async function recoverCurrentState(
-  bucket: NonNullable<CloudflareWorkerEnv["R2_STATE"]>,
-  scope: StateScope,
-  maxGeneration: number,
-): Promise<CurrentStatePointer | undefined> {
-  if (maxGeneration < 0) return undefined;
-  const prefix = `${stateScopePrefix(scope)}/`;
-  let best: CurrentStatePointer | undefined;
-  let cursor: string | undefined;
-  do {
-    const page = await bucket.list({
-      prefix,
-      include: ["customMetadata"],
-      ...(cursor ? { cursor } : {}),
-    });
-    for (const object of page.objects) {
-      const generation = generationFromStateObjectKey(prefix, object.key);
-      if (generation === undefined || generation > maxGeneration) continue;
-      const digest =
-        object.customMetadata?.["takosumi-content-digest"] ??
-        object.customMetadata?.["takosumi-digest"];
-      if (!digest) continue;
-      if (!best || generation > best.generation) {
-        const ciphertextLength = Number(
-          object.customMetadata?.["takosumi-ciphertext-length"],
-        );
-        best = {
-          generation,
-          objectKey: object.key,
-          digest,
-          ...(object.customMetadata?.["takosumi-run-id"]
-            ? { runId: object.customMetadata["takosumi-run-id"] }
-            : {}),
-          ...(Number.isFinite(ciphertextLength) ? { ciphertextLength } : {}),
-        };
-      }
-    }
-    if (!page.truncated) break;
-    if (!page.cursor || page.cursor === cursor) {
-      throw new Error("R2 state recovery returned a truncated page without a new cursor");
-    }
-    cursor = page.cursor;
-  } while (true);
-  if (!best) return undefined;
-  await putR2ObjectWithRetry(
-    bucket,
-    currentStateKey(scope),
-    JSON.stringify(best),
-    {
-      httpMetadata: { contentType: "application/json" },
-      customMetadata: {
-        "takosumi-reconciled": "true",
-        "takosumi-recovered-generation": String(best.generation),
-      },
+  return {
+    pointer: {
+      generation: descriptor.generation,
+      objectKey: descriptor.stateRef,
+      digest: descriptor.digest,
+      runId: descriptor.createdByRunId,
+      ...(Number.isFinite(ciphertextLength) ? { ciphertextLength } : {}),
     },
-    "state pointer recovery",
-  );
-  return best;
+    object,
+  };
 }
 
-function generationFromStateObjectKey(
-  prefix: string,
-  key: string,
-): number | undefined {
-  if (!key.startsWith(prefix) || !key.endsWith(".tfstate.enc")) {
-    return undefined;
-  }
-  const segment = key.slice(prefix.length, -".tfstate.enc".length);
-  if (!/^[0-9]{8}$/.test(segment)) return undefined;
-  return Number(segment);
-}
-
-function restoreMaxGeneration(
+function priorStateGeneration(
   scope: StateScope,
   action: string | undefined,
 ): number {
   if (action === "apply" || action === "destroy") {
+    if (scope.generation < 1) {
+      throw new Error(`${action} stateScope generation must be at least one`);
+    }
     return scope.generation - 1;
   }
   return scope.generation;
+}
+
+function stateRefForGeneration(scope: StateScope, generation: number): string {
+  return `${stateScopePrefix(scope)}/${formatGeneration(generation)}.tfstate.enc`;
 }
 
 // The R2 key for the encrypted form of an artifact key (spec keys gain `.enc`).
@@ -2267,6 +2269,7 @@ function parseStateScope(requestPayload: unknown): StateScope | undefined {
   const environment = stringField(scope, "environment");
   const stateRef = stringField(scope, "stateRef");
   const generation = scope.generation;
+  const priorState = parseStateVersionDescriptor(scope.priorState);
   if (
     !workspaceId ||
     !(subjectKind === "resource" || subjectKind === "capsule") ||
@@ -2286,6 +2289,37 @@ function parseStateScope(requestPayload: unknown): StateScope | undefined {
     environment,
     generation,
     stateRef,
+    ...(priorState ? { priorState } : {}),
+  };
+}
+
+function parseStateVersionDescriptor(
+  value: unknown,
+): StateVersionDescriptor | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!isRecord(value)) {
+    throw new Error("stateScope.priorState must be a JSON object");
+  }
+  const generation = value.generation;
+  const stateRef = stringField(value, "stateRef");
+  const digest = stringField(value, "digest");
+  const createdByRunId = stringField(value, "createdByRunId");
+  if (
+    !Number.isInteger(generation) ||
+    (generation as number) < 0 ||
+    !stateRef ||
+    !digest ||
+    !createdByRunId
+  ) {
+    throw new Error(
+      "stateScope.priorState requires generation, stateRef, digest, and createdByRunId",
+    );
+  }
+  return {
+    generation: generation as number,
+    stateRef,
+    digest,
+    createdByRunId,
   };
 }
 

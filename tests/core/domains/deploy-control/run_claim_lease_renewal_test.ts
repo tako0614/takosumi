@@ -19,7 +19,10 @@ import {
   type TransitionRunResult,
 } from "../../../../core/domains/deploy-control/store.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
-import { seedCapsuleModel } from "../../../helpers/deploy-control/model_fixture.ts";
+import {
+  fixtureStateCommit,
+  seedCapsuleModel,
+} from "../../../helpers/deploy-control/model_fixture.ts";
 import type {
   ApplyRun,
   PlanRun,
@@ -170,7 +173,9 @@ function controllerWith(
     })(),
     runner: {
       plan: options.plan ?? (() => Promise.reject(new Error("not used"))),
-      apply: options.apply ?? (() => Promise.resolve({})),
+      apply:
+        options.apply ??
+        (() => Promise.resolve(fixtureStateCommit())),
     },
   });
 }
@@ -219,7 +224,7 @@ test("a consumer claim that wins forces a concurrent cancel to be rejected (neve
   const controller = controllerWith(store, {
     apply: async () => {
       await applyHolds;
-      return {};
+      return fixtureStateCommit();
     },
   });
 
@@ -401,7 +406,7 @@ test("two concurrent queued claims for the same apply: exactly one dispatches", 
   const controller = controllerWith(store, {
     apply: () => {
       applyCalls += 1;
-      return Promise.resolve({});
+      return Promise.resolve(fixtureStateCommit());
     },
   });
 
@@ -475,7 +480,7 @@ test("the run heartbeat is re-stamped AND the lease renewed while a long apply b
         }
         await new Promise((r) => setTimeout(r, 5));
       }
-      return {};
+      return fixtureStateCommit();
     },
   });
 
