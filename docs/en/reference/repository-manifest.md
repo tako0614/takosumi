@@ -87,7 +87,11 @@ existing DB-owned `InstallConfig.outputAllowlist` entries and
 
 `bindingRequests` are requests, not grants. A repository may name only the
 `installing_principal` subject. Permissions and delivery types are bounded and
-must pass the operator policy allowlists; credential references, Principal IDs,
+must pass explicit non-empty operator permission and delivery allowlists; a
+missing or empty permission allowlist rejects the binding request. Each
+Interface may request at most one installer binding. Repository declarations
+are fixed to `workspace` visibility and cannot supply the host-owned `policyRef`.
+Credential references, Principal IDs,
 providers, targets, secrets, and arbitrary delivery options are not part of the
 manifest vocabulary. Only after review does the existing InstallConfig/
 Interface materializer resolve the exact installer Principal and, after Apply,

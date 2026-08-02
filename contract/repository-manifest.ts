@@ -1,4 +1,5 @@
 import type { JsonValue } from "./types.ts";
+import { containsSecretLikeString, isSecretKey } from "./redaction.ts";
 
 /**
  * Optional, repository-owned metadata proposed by the exact Git commit captured
@@ -248,7 +249,7 @@ export function parseRepositoryManifestText(
   ] as const);
   if (!apiVersion) {
     return invalid(
-      `apiVersion must be ${TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION}`,
+      `apiVersion must be ${TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION} or ${TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2}`,
     );
   }
   if (value.kind !== TAKOSUMI_REPOSITORY_MANIFEST_KIND) {
@@ -421,11 +422,11 @@ function parseInterfaceDeclaration(
   if (!isJsonValue(value.spec.document)) {
     return `${prefix}.spec.document must be valid JSON`;
   }
-  const forbiddenDocumentField = findForbiddenManifestField(
+  const forbiddenDocumentField = findForbiddenRepositoryManifestMaterial(
     value.spec.document,
   );
   if (forbiddenDocumentField) {
-    return `${prefix}.spec.document contains forbidden secret or authority field ${JSON.stringify(forbiddenDocumentField)}`;
+    return `${prefix}.spec.document contains forbidden secret or authority material ${JSON.stringify(forbiddenDocumentField)}`;
   }
   const inputs = parseInterfaceInputs(value.spec.inputs, `${prefix}.spec`);
   if (typeof inputs === "string") return inputs;
@@ -480,9 +481,11 @@ function parseInterfaceInputs(
       if (!isJsonValue(raw.value)) {
         return `${inputPrefix}.value must be valid JSON`;
       }
-      const forbiddenLiteralField = findForbiddenManifestField(raw.value);
+      const forbiddenLiteralField = findForbiddenRepositoryManifestMaterial(
+        raw.value,
+      );
       if (forbiddenLiteralField) {
-        return `${inputPrefix}.value contains forbidden secret or authority field ${JSON.stringify(forbiddenLiteralField)}`;
+        return `${inputPrefix}.value contains forbidden secret or authority material ${JSON.stringify(forbiddenLiteralField)}`;
       }
       inputs[name] = { source: "literal", value: raw.value };
       continue;
@@ -526,10 +529,11 @@ function parseInterfaceAccess(
     "public",
   ] as const);
   if (!visibility) return `${prefix}.visibility is unsupported`;
-  const policyRef =
-    value.policyRef === undefined ? undefined : token(value.policyRef, 256);
-  if (value.policyRef !== undefined && !policyRef) {
-    return `${prefix}.policyRef must be a bounded token`;
+  if (visibility !== "workspace") {
+    return `${prefix}.visibility must be workspace for repository-owned Interfaces`;
+  }
+  if (value.policyRef !== undefined) {
+    return `${prefix}.policyRef is host-owned and cannot be supplied by a repository`;
   }
   const resourceUriInput =
     value.resourceUriInput === undefined
@@ -540,7 +544,6 @@ function parseInterfaceAccess(
   }
   return {
     visibility,
-    ...(policyRef ? { policyRef } : {}),
     ...(resourceUriInput ? { resourceUriInput } : {}),
   };
 }
@@ -555,6 +558,9 @@ function parseInterfaceBindingRequests(
     value.length > TAKOSUMI_REPOSITORY_INTERFACE_MAX_BINDING_REQUESTS
   ) {
     return `${prefix}.bindingRequests must be an array of no more than ${TAKOSUMI_REPOSITORY_INTERFACE_MAX_BINDING_REQUESTS} entries`;
+  }
+  if (value.length > 1) {
+    return `${prefix}.bindingRequests must contain at most one installing_principal request`;
   }
   const requests: RepositoryInterfaceBindingRequest[] = [];
   const keys = new Set<string>();
@@ -1108,27 +1114,43 @@ function isJsonValue(value: unknown, depth = 0): value is JsonValue {
   return Object.values(value).every((entry) => isJsonValue(entry, depth + 1));
 }
 
-function findForbiddenManifestField(value: unknown): string | undefined {
+/**
+ * Repository-owned Interface documents are public metadata. Reuse the
+ * canonical redaction vocabulary for both key and value detection, then add
+ * the authority-id names that are unsafe even when they are not secrets.
+ * Return only a bounded field/marker so diagnostics never echo the value.
+ */
+export function findForbiddenRepositoryManifestMaterial(
+  value: unknown,
+  depth = 0,
+): string | undefined {
+  if (depth > 32) return "<nested-value>";
+  if (typeof value === "string") {
+    return containsSecretLikeString(value) ? "<secret-like-string>" : undefined;
+  }
   if (Array.isArray(value)) {
     for (const entry of value) {
-      const found = findForbiddenManifestField(entry);
+      const found = findForbiddenRepositoryManifestMaterial(entry, depth + 1);
       if (found) return found;
     }
     return undefined;
   }
   if (!isPlainRecord(value)) return undefined;
   for (const [key, child] of Object.entries(value)) {
-    if (
-      /^(?:secret|password|token|credential|credentialref|apikey|privatekey|provider|target|principalid|capsuleid|resourceid|workspaceid)$/iu.test(
-        key,
-      )
-    ) {
-      return key;
+    if (isSecretKey(key) || isRepositoryAuthorityKey(key)) {
+      return key.slice(0, 128);
     }
-    const found = findForbiddenManifestField(child);
+    const found = findForbiddenRepositoryManifestMaterial(child, depth + 1);
     if (found) return found;
   }
   return undefined;
+}
+
+function isRepositoryAuthorityKey(value: string): boolean {
+  const normalized = value.toLowerCase().replace(/[_\-\s]/gu, "");
+  return /^(?:provider|credential|account|host|target|capsule|resource|workspace|principal|connection|project|installation|runner)(?:id|ref)?$/u.test(
+    normalized,
+  );
 }
 
 function stableId(value: unknown): string | undefined {

@@ -88,7 +88,11 @@ Interface input は既存の `capsule_output` blueprint に compile されます
 
 `bindingRequests` は grant ではありません。repository が指定できる subject は
 `installing_principal` だけで、permission と delivery は bounded な値として
-operator policy の allowlist に照らして審査されます。credential、Principal ID、
+明示的な operator permission allowlist と delivery allowlist に照らして審査されます。
+allowlist が無い、または空の場合は binding request 自体が拒否されます。
+Interface ごとに installer binding は最大1つです。access visibility は
+`workspace` に固定され、`policyRef` は host 所有なので repository からは指定できません。
+credential、Principal ID、
 provider、target、secret、任意の delivery options は manifest に置けません。
 審査・review が成功した後にだけ既存の InstallConfig/Interface materializer が
 exact installer Principal を解決し、Apply 後に Interface と Ready Binding を

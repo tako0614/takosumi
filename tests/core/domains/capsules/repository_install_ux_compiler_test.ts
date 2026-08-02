@@ -392,6 +392,10 @@ describe("repository install UX compiler", () => {
           { name: "launch_url", sensitive: false, ephemeral: false },
         ],
       }),
+      policy: {
+        allowedOidcScopes: ["openid", "profile", "email"],
+        allowedInterfacePermissions: ["ui.open"],
+      },
     });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -468,17 +472,30 @@ describe("repository install UX compiler", () => {
         "repository_install_ux_interface_output_missing",
       );
     }
+    const metadataUnavailable = compile({
+      document: v2,
+      compatibilityReport: report({ rootModuleOutputs: undefined }),
+    });
+    expect(metadataUnavailable.ok).toBe(false);
+    if (!metadataUnavailable.ok) {
+      expect(metadataUnavailable.diagnostic.code).toBe(
+        "repository_install_ux_interface_output_metadata_unavailable",
+      );
+    }
     for (const [field, expected] of [
       ["sensitive", "repository_install_ux_interface_output_sensitive"],
       ["ephemeral", "repository_install_ux_interface_output_ephemeral"],
       ["unknown", "repository_install_ux_interface_output_secrecy_unknown"],
+      ["unknown-ephemeral", "repository_install_ux_interface_output_secrecy_unknown"],
     ] as const) {
       const output =
         field === "sensitive"
           ? { name: "launch_url", sensitive: true, ephemeral: false }
           : field === "ephemeral"
             ? { name: "launch_url", sensitive: false, ephemeral: true }
-            : { name: "launch_url", sensitive: null, ephemeral: false };
+            : field === "unknown-ephemeral"
+              ? { name: "launch_url", sensitive: false, ephemeral: null }
+              : { name: "launch_url", sensitive: null, ephemeral: false };
       const result = compile({
         document: v2,
         compatibilityReport: report({ rootModuleOutputs: [output] }),
@@ -551,6 +568,9 @@ describe("repository install UX compiler", () => {
           { name: "launch_url", sensitive: false, ephemeral: false },
         ],
       }),
+      policy: {
+        allowedInterfacePermissions: ["ui.open"],
+      },
     });
     expect(conflict.ok).toBe(false);
     if (!conflict.ok) {
@@ -572,6 +592,9 @@ describe("repository install UX compiler", () => {
           { name: "launch_url", sensitive: false, ephemeral: false },
         ],
       }),
+      policy: {
+        allowedInterfacePermissions: ["ui.open"],
+      },
     });
     expect(forbiddenResult.ok).toBe(false);
     if (!forbiddenResult.ok) {
@@ -596,6 +619,148 @@ describe("repository install UX compiler", () => {
     if (!policyResult.ok) {
       expect(policyResult.diagnostic.code).toBe(
         "repository_install_ux_interface_delivery_disallowed",
+      );
+    }
+  });
+
+  test("requires an explicit non-empty permission policy for repository bindings", () => {
+    const v2: RepositoryManifestDocument = {
+      apiVersion: "takosumi.com/v2",
+      kind: "Repository",
+      install: {
+        modules: {
+          ".": {
+            inputs: [],
+            interfaces: [
+              {
+                key: "launcher",
+                name: "example.launcher",
+                spec: {
+                  type: "interface.ui.surface",
+                  version: "1",
+                  document: {},
+                  access: { visibility: "workspace" },
+                },
+                bindingRequests: [
+                  {
+                    key: "installer",
+                    subject: { source: "installing_principal" },
+                    permissions: ["ui.open"],
+                    delivery: { type: "none" },
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      },
+    };
+    const baseInput = {
+      document: v2,
+      compatibilityReport: report(),
+    };
+    for (const policy of [undefined, { allowedInterfacePermissions: [] }]) {
+      const result = compile({ ...baseInput, policy });
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.diagnostic.code).toBe(
+          "repository_install_ux_interface_permission_disallowed",
+        );
+      }
+    }
+    const disallowed = compile({
+      ...baseInput,
+      policy: { allowedInterfacePermissions: ["mcp.invoke"] },
+    });
+    expect(disallowed.ok).toBe(false);
+    if (!disallowed.ok) {
+      expect(disallowed.diagnostic.code).toBe(
+        "repository_install_ux_interface_permission_disallowed",
+      );
+    }
+    const allowed = compile({
+      ...baseInput,
+      policy: { allowedInterfacePermissions: ["ui.open"] },
+    });
+    expect(allowed.ok).toBe(true);
+  });
+
+  test("keeps repository Interface access host-owned and bounds one binding", () => {
+    const base = {
+      apiVersion: "takosumi.com/v2" as const,
+      kind: "Repository" as const,
+      install: {
+        modules: {
+          ".": {
+            inputs: [],
+            interfaces: [
+              {
+                key: "launcher",
+                name: "example.launcher",
+                spec: {
+                  type: "interface.ui.surface",
+                  version: "1",
+                  document: {},
+                  access: { visibility: "workspace" as const },
+                },
+                bindingRequests: [
+                  {
+                    key: "installer",
+                    subject: { source: "installing_principal" as const },
+                    permissions: ["ui.open"],
+                    delivery: { type: "none" },
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      },
+    } as RepositoryManifestDocument;
+    const compileWith = (document: RepositoryManifestDocument) =>
+      compile({
+        document,
+        compatibilityReport: report(),
+        policy: { allowedInterfacePermissions: ["ui.open"] },
+      });
+    const publicAccess = structuredClone(base) as RepositoryManifestDocument;
+    (publicAccess.install.modules["."]!.interfaces![0]!.spec.access as {
+      visibility: string;
+    }).visibility = "public";
+    const publicResult = compileWith(publicAccess);
+    expect(publicResult.ok).toBe(false);
+    if (!publicResult.ok) {
+      expect(publicResult.diagnostic.code).toBe(
+        "repository_install_ux_interface_access_invalid",
+      );
+    }
+
+    const policyRef = structuredClone(base) as RepositoryManifestDocument;
+    (policyRef.install.modules["."]!.interfaces![0]!.spec.access as {
+      policyRef?: string;
+    }).policyRef = "host-policy";
+    const policyRefResult = compileWith(policyRef);
+    expect(policyRefResult.ok).toBe(false);
+    if (!policyRefResult.ok) {
+      expect(policyRefResult.diagnostic.code).toBe(
+        "repository_install_ux_interface_access_invalid",
+      );
+    }
+
+    const duplicate = structuredClone(base) as RepositoryManifestDocument;
+    duplicate.install.modules["."]!.interfaces![0]!.bindingRequests!.push(
+      {
+        key: "second",
+        subject: { source: "installing_principal" },
+        permissions: ["ui.open"],
+        delivery: { type: "none" },
+      },
+    );
+    const duplicateResult = compileWith(duplicate);
+    expect(duplicateResult.ok).toBe(false);
+    if (!duplicateResult.ok) {
+      expect(duplicateResult.diagnostic.code).toBe(
+        "repository_install_ux_interface_binding_invalid",
       );
     }
   });

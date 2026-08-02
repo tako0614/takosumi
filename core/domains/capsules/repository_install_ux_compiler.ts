@@ -28,6 +28,7 @@ import type {
 import {
   deliversToVariables,
   deliveryTargets,
+  findForbiddenRepositoryManifestMaterial,
 } from "takosumi-contract/repository-manifest";
 import { HOST_RUNTIME_MATERIALIZATION_CONTRACT } from "takosumi-contract";
 import type { JsonValue } from "takosumi-contract/types";
@@ -91,6 +92,7 @@ export type RepositoryInstallUxDiagnosticCode =
   | "repository_install_ux_interface_version_unsupported"
   | "repository_install_ux_interface_key_duplicate"
   | "repository_install_ux_interface_name_duplicate"
+  | "repository_install_ux_interface_access_invalid"
   | "repository_install_ux_interface_input_invalid"
   | "repository_install_ux_interface_output_metadata_unavailable"
   | "repository_install_ux_interface_output_missing"
@@ -435,6 +437,34 @@ function compileInterfaceDeclarations(
     keys.add(declaration.key);
     names.add(declaration.name);
 
+    if (declaration.spec.access.visibility !== "workspace") {
+      return invalid(
+        "repository_install_ux_interface_access_invalid",
+        `Repository-owned Interface ${boundedIdentifier(declaration.name)} must use workspace visibility.`,
+      );
+    }
+    if (declaration.spec.access.policyRef !== undefined) {
+      return invalid(
+        "repository_install_ux_interface_access_invalid",
+        `Repository-owned Interface ${boundedIdentifier(declaration.name)} cannot supply host policyRef.`,
+      );
+    }
+    if (
+      declaration.spec.access.resourceUriInput !== undefined &&
+      (!/^[A-Za-z][A-Za-z0-9_.-]{0,127}$/u.test(
+        declaration.spec.access.resourceUriInput,
+      ) ||
+        !Object.prototype.hasOwnProperty.call(
+          declaration.spec.inputs ?? {},
+          declaration.spec.access.resourceUriInput,
+        ))
+    ) {
+      return invalid(
+        "repository_install_ux_interface_access_invalid",
+        `Repository-owned Interface ${boundedIdentifier(declaration.name)} resourceUriInput must name a declared Interface input.`,
+      );
+    }
+
     const inputs: Record<string, CapsuleInterfaceBlueprintInput> = {};
     for (const [inputName, source] of Object.entries(
       declaration.spec.inputs ?? {},
@@ -455,7 +485,7 @@ function compileInterfaceDeclarations(
       input.policy,
     );
     if (!bindings.ok) return bindings;
-    if (findForbiddenManifestField(declaration.spec.document)) {
+    if (findForbiddenRepositoryManifestMaterial(declaration.spec.document)) {
       return invalid(
         "repository_install_ux_interface_input_invalid",
         `The Interface ${boundedIdentifier(declaration.name)} document contains a secret or authority field.`,
@@ -509,7 +539,7 @@ function compileInterfaceInput(input: {
   | { readonly ok: true; readonly input: CompiledCapsuleBlueprintInput }
   | { readonly ok: false; readonly diagnostic: RepositoryInstallUxDiagnostic } {
   if (input.source.source === "literal") {
-    if (findForbiddenManifestField(input.source.value)) {
+    if (findForbiddenRepositoryManifestMaterial(input.source.value)) {
       return invalid(
         "repository_install_ux_interface_input_invalid",
         `The literal Interface input ${boundedIdentifier(input.inputName)} contains a secret or authority field.`,
@@ -598,29 +628,6 @@ function compileInterfaceInput(input: {
   };
 }
 
-function findForbiddenManifestField(value: unknown): string | undefined {
-  if (Array.isArray(value)) {
-    for (const entry of value) {
-      const found = findForbiddenManifestField(entry);
-      if (found) return found;
-    }
-    return undefined;
-  }
-  if (!value || typeof value !== "object") return undefined;
-  for (const [key, child] of Object.entries(value)) {
-    if (
-      /^(?:secret|password|token|credential|credentialref|apikey|privatekey|provider|target|principalid|capsuleid|resourceid|workspaceid)$/iu.test(
-        key,
-      )
-    ) {
-      return key;
-    }
-    const found = findForbiddenManifestField(child);
-    if (found) return found;
-  }
-  return undefined;
-}
-
 function compileInterfaceBindingRequests(
   requests: readonly RepositoryInterfaceBindingRequest[] | undefined,
   policy: RepositoryInstallUxCompilerPolicy | undefined,
@@ -636,6 +643,21 @@ function compileInterfaceBindingRequests(
   const allowedDeliveryTypes = new Set(
     policy?.allowedInterfaceDeliveryTypes ?? DEFAULT_INTERFACE_DELIVERY_TYPES,
   );
+  if (
+    (requests?.length ?? 0) > 0 &&
+    (!allowedPermissions || allowedPermissions.length === 0)
+  ) {
+    return invalid(
+      "repository_install_ux_interface_permission_disallowed",
+      "Repository-owned Interface bindings require an explicit non-empty operator permission allowlist.",
+    );
+  }
+  if ((requests?.length ?? 0) > 1) {
+    return invalid(
+      "repository_install_ux_interface_binding_invalid",
+      "Repository-owned Interfaces may request at most one installing_principal binding.",
+    );
+  }
   for (const request of requests ?? []) {
     if (keys.has(request.key)) {
       return invalid(

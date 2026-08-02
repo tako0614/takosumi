@@ -52,10 +52,10 @@ test("repository manifest rejects unknown authority, fields, and versions", asyn
     error: "contains unsupported field providers",
   });
   expect(
-    parseRepositoryManifestText(await fixture("unknown-version.json")),
+  parseRepositoryManifestText(await fixture("unknown-version.json")),
   ).toEqual({
     ok: false,
-    error: "apiVersion must be takosumi.com/v1",
+    error: "apiVersion must be takosumi.com/v1 or takosumi.com/v2",
   });
   expect(
     parseRepositoryManifestText(
@@ -276,5 +276,39 @@ test("repository manifest v2 rejects secret-like document fields", () => {
       },
     },
   };
+  expect(parseRepositoryManifestText(JSON.stringify(document)).ok).toBe(false);
+});
+
+test("repository manifest v2 rejects secret-like values and authority IDs recursively", async () => {
+  const document = JSON.parse(await fixture("v2-launcher.json"));
+  document.install.modules["deploy/takoform"].interfaces[0].spec.document = {
+    display: { title: "Example" },
+    nested: { providerId: "provider_123" },
+  };
+  expect(parseRepositoryManifestText(JSON.stringify(document)).ok).toBe(false);
+
+  document.install.modules["deploy/takoform"].interfaces[0].spec.document = {
+    display: { title: "Bearer sk-test-12345678" },
+  };
+  expect(parseRepositoryManifestText(JSON.stringify(document)).ok).toBe(false);
+});
+
+test("repository manifest v2 bounds one installer binding and workspace access", async () => {
+  const document = JSON.parse(await fixture("v2-launcher.json"));
+  const declaration = document.install.modules["deploy/takoform"].interfaces[0];
+  declaration.spec.access.visibility = "public";
+  expect(parseRepositoryManifestText(JSON.stringify(document)).ok).toBe(false);
+
+  declaration.spec.access.visibility = "workspace";
+  declaration.spec.access.policyRef = "operator-policy";
+  expect(parseRepositoryManifestText(JSON.stringify(document)).ok).toBe(false);
+
+  delete declaration.spec.access.policyRef;
+  declaration.bindingRequests.push({
+    key: "second",
+    subject: { source: "installing_principal" },
+    permissions: ["ui.open"],
+    delivery: { type: "none" },
+  });
   expect(parseRepositoryManifestText(JSON.stringify(document)).ok).toBe(false);
 });
