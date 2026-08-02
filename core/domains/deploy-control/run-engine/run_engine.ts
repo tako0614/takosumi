@@ -1606,6 +1606,13 @@ export class RunEngine {
       return { ok: false, reason: "invalid_label" };
     }
     const hostname = `${publicLabel}.${baseDomain}`;
+    const expectedHostname =
+      typeof input.expectedHostname === "string"
+        ? input.expectedHostname.trim().toLowerCase()
+        : "";
+    if (expectedHostname !== hostname) {
+      return { ok: false, reason: "invalid_label" };
+    }
     const reserved = await this.#reserveManagedPublicHost({
       hostname,
       capsule,
@@ -2623,12 +2630,29 @@ export class RunEngine {
       normalizeManagedPublicBaseDomain(managedPublicBaseDomain) ??
         managedPublicBaseDomainFromInstallConfig(installConfig),
     ]);
+    const reservations = await Promise.all(
+      requestedHosts.map(async (hostname) => ({
+        hostname,
+        reservation: await this.#store.getPublicHostReservation(hostname),
+      })),
+    );
+    const alreadyReservedForCapsule = new Set(
+      reservations
+        .filter(
+          ({ reservation }) =>
+            reservation?.status === "reserved" &&
+            reservation.workspaceId === capsule.workspaceId &&
+            reservation.capsuleId === capsule.id,
+        )
+        .map(({ hostname }) => hostname),
+    );
     // The Core can claim an operator-owned managed namespace immediately.
     // User-owned custom domains remain ordinary provider inputs until the
     // selected adapter proves ownership; reserving them before proof would let
     // an untrusted Capsule squat on somebody else's hostname.
     const claimableHosts = requestedHosts.filter(
       (host) =>
+        alreadyReservedForCapsule.has(host) ||
         publicHostPolicyKind(host, managedBaseDomains) ===
         "managed_default_hostname",
     );
@@ -2642,6 +2666,7 @@ export class RunEngine {
     if (managedBaseDomains.length > 0) {
       const unverifiedHosts = requestedHosts.filter(
         (host) =>
+          !alreadyReservedForCapsule.has(host) &&
           publicHostPolicyKind(host, managedBaseDomains) === "custom_domain",
       );
       if (unverifiedHosts.length > 0) {
@@ -2699,7 +2724,8 @@ export class RunEngine {
     | { readonly ok: true }
     | {
         readonly ok: false;
-        readonly reason: "unavailable" | "slot_limit_reached";
+        readonly reason:
+          "invalid_context" | "unavailable" | "slot_limit_reached";
         readonly limit?: number;
       }
   > {
@@ -2716,6 +2742,9 @@ export class RunEngine {
       now: new Date(input.now).toISOString(),
     });
     if (result.reserved) return { ok: true };
+    if (result.reason === "capsule_inactive") {
+      return { ok: false, reason: "invalid_context" };
+    }
     return result.reason === "owner_slot_limit_reached"
       ? {
           ok: false,

@@ -1679,15 +1679,21 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
            reserved_at, updated_at, released_at
          )
          select ?, ?, ?, ?, ?, ?, 'reserved', ?, ?, null
-         where ? < 0
-            or (
-              select count(*)
-              from public_host_reservations
-              where owner_user_id = ?
-                and allocation_kind = 'vanity'
-                and status = 'reserved'
-                and hostname != ?
-            ) < ?
+         from capsules
+         where id = ?
+           and space_id = ?
+           and status != 'destroyed'
+           and (
+             ? < 0
+             or (
+               select count(*)
+               from public_host_reservations
+               where owner_user_id = ?
+                 and allocation_kind = 'vanity'
+                 and status = 'reserved'
+                 and hostname != ?
+             ) < ?
+           )
          on conflict(hostname) do update
          set owner_user_id = excluded.owner_user_id,
              workspace_id = excluded.workspace_id,
@@ -1714,6 +1720,8 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
         input.allocationKind,
         input.now,
         input.now,
+        input.capsuleId,
+        input.workspaceId,
         vanitySlotLimit,
         ownerUserId,
         hostname,
@@ -1730,20 +1738,70 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       )
       .bind(hostname)
       .first<Record<string, unknown>>();
-    if (!reservation) {
+    const normalized = reservation
+      ? publicHostReservationFromD1Row(reservation)
+      : undefined;
+    if (
+      normalized?.status === "reserved" &&
+      normalized.capsuleId !== input.capsuleId
+    ) {
       return {
         reserved: false,
-        reason: "owner_slot_limit_reached",
-        vanitySlotLimit: Math.max(0, vanitySlotLimit),
+        reservation: normalized,
+        reason: "already_reserved",
       };
     }
-    const normalized = publicHostReservationFromD1Row(reservation);
-    if (
-      normalized.status === "reserved" &&
-      normalized.capsuleId === input.capsuleId &&
-      normalized.allocationKind === input.allocationKind
-    ) {
-      return { reserved: true, reservation: normalized };
+    const activeCapsule = await this.db
+      .prepare(
+        `select id
+         from capsules
+         where id = ?
+           and space_id = ?
+           and status != 'destroyed'
+         limit 1`,
+      )
+      .bind(input.capsuleId, input.workspaceId)
+      .first<{ readonly id: string }>();
+    if (!activeCapsule) {
+      return { reserved: false, reason: "capsule_inactive" };
+    }
+    if (normalized?.status === "reserved") {
+      if (
+        normalized.capsuleId === input.capsuleId &&
+        normalized.allocationKind === input.allocationKind
+      ) {
+        return { reserved: true, reservation: normalized };
+      }
+      return {
+        reserved: false,
+        reservation: normalized,
+        reason: "already_reserved",
+      };
+    }
+    if (vanitySlotLimit >= 0) {
+      const count = await this.db
+        .prepare(
+          `select count(*) as count
+           from public_host_reservations
+           where owner_user_id = ?
+             and allocation_kind = 'vanity'
+             and status = 'reserved'
+             and hostname != ?`,
+        )
+        .bind(ownerUserId, hostname)
+        .first<{ readonly count: number | string }>();
+      if (Number(count?.count ?? 0) >= vanitySlotLimit) {
+        return {
+          reserved: false,
+          reason: "owner_slot_limit_reached",
+          vanitySlotLimit: vanitySlotLimit,
+        };
+      }
+    }
+    if (!normalized) {
+      throw new Error(
+        "public host reservation mutation did not return a reservation",
+      );
     }
     return {
       reserved: false,

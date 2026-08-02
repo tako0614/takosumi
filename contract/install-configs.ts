@@ -173,6 +173,11 @@ export interface ManagedPublicHostnameClaimRequest {
   readonly capsuleId: string;
   readonly requestedLabel: string;
   readonly managedPublicBaseDomain: string;
+  /**
+   * Exact hostname the caller is about to persist. The controller validates it
+   * against the Capsule-derived allocation before mutating the reservation.
+   */
+  readonly expectedHostname: string;
 }
 
 /** Non-disclosing result returned to compatibility and managed-target adapters. */

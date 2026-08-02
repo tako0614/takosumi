@@ -332,6 +332,10 @@ export type ReservePublicHostResult =
       readonly reserved: false;
       readonly reason: "owner_slot_limit_reached";
       readonly vanitySlotLimit: number;
+    }
+  | {
+      readonly reserved: false;
+      readonly reason: "capsule_inactive";
     };
 
 /** Fields a controller may patch on a Capsule row. */
@@ -1771,6 +1775,14 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
         reason: "already_reserved",
       };
     }
+    const capsule = this.#capsules.get(input.capsuleId);
+    if (
+      !capsule ||
+      capsule.workspaceId !== input.workspaceId ||
+      capsule.status === "destroyed"
+    ) {
+      return { reserved: false, reason: "capsule_inactive" };
+    }
     if (
       input.allocationKind === "vanity" &&
       input.vanitySlotLimit !== undefined
@@ -1793,6 +1805,14 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
           vanitySlotLimit: input.vanitySlotLimit,
         };
       }
+    }
+    const currentCapsule = this.#capsules.get(input.capsuleId);
+    if (
+      !currentCapsule ||
+      currentCapsule.workspaceId !== input.workspaceId ||
+      currentCapsule.status === "destroyed"
+    ) {
+      return { reserved: false, reason: "capsule_inactive" };
     }
     const reservation: PublicHostReservation = {
       hostname,

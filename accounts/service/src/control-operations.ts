@@ -56,6 +56,8 @@ import type { Project } from "takosumi-contract/projects";
 import type {
   InstallConfig,
   Capsule,
+  ManagedPublicHostnameClaimRequest,
+  ManagedPublicHostnameClaimResult,
   OutputAllowlistEntry,
   PolicyConfig,
   PublicInstallConfig,
@@ -137,6 +139,13 @@ export interface MembershipActor {
  * convenience for the same-origin dashboard only.
  */
 export interface ControlPlaneOperations {
+  /**
+   * Exact OSS hostname-reservation authority used when this host assigns one
+   * of its managed public names before the selected deployment target runs.
+   */
+  claimManagedPublicHostname(
+    input: ManagedPublicHostnameClaimRequest,
+  ): Promise<ManagedPublicHostnameClaimResult>;
   /**
    * Optional narrow Core seam for Interface OAuth active checks and the
    * session-authenticated dashboard launcher projection. Core remains the

@@ -1494,16 +1494,38 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       throw new Error("public host reservation workspace was not found");
     }
     const ownerUserId = workspace.ownerUserId;
+    const limit =
+      input.allocationKind === "vanity" && input.vanitySlotLimit !== undefined
+        ? Math.max(0, Math.floor(input.vanitySlotLimit))
+        : -1;
     const reserve = async (
       client: SqlClient,
     ): Promise<ReservePublicHostResult> => {
       const rows = await client.query<Record<string, unknown>>(
-        `insert into takosumi_public_host_reservations (
+        `with active_capsule as (
+           select id
+           from takosumi_capsules
+           where id = $4
+             and space_id = $3
+             and status <> 'destroyed'
+           for update
+         )
+         insert into takosumi_public_host_reservations (
            hostname, owner_user_id, workspace_id, installation_id,
            installation_name, allocation_kind, status,
            reserved_at, updated_at, released_at
          )
-         values ($1, $2, $3, $4, $5, $6, 'reserved', $7, $7, null)
+         select $1, $2, $3, $4, $5, $6, 'reserved', $7, $7, null
+         from active_capsule
+         where $8 < 0
+            or (
+              select count(*)
+              from takosumi_public_host_reservations
+              where owner_user_id = $2
+                and allocation_kind = 'vanity'
+                and status = 'reserved'
+                and hostname <> $1
+            ) < $8
          on conflict (hostname) do update
          set owner_user_id = excluded.owner_user_id,
              workspace_id = excluded.workspace_id,
@@ -1531,6 +1553,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
           input.capsuleName,
           input.allocationKind,
           input.now,
+          limit,
         ],
       );
       const won = rows.rows[0];
@@ -1548,38 +1571,64 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
          where hostname = $1`,
         [hostname],
       );
-      const reservation = publicHostReservationFromRow(existing.rows[0]);
+      const row = existing.rows[0];
+      const reservation = row
+        ? publicHostReservationFromRow(row)
+        : undefined;
+      if (
+        reservation?.status === "reserved" &&
+        reservation.capsuleId !== input.capsuleId
+      ) {
+        return {
+          reserved: false,
+          reservation,
+          reason: "already_reserved",
+        };
+      }
+      const activeCapsule = await client.query<Record<string, unknown>>(
+        `select id
+         from takosumi_capsules
+         where id = $1
+           and space_id = $2
+           and status <> 'destroyed'
+         limit 1`,
+        [input.capsuleId, input.workspaceId],
+      );
+      if (!activeCapsule.rows[0]) {
+        return { reserved: false, reason: "capsule_inactive" };
+      }
+      if (limit >= 0) {
+        const count = await client.query<{ count: string | number }>(
+          `select count(*) as count
+           from takosumi_public_host_reservations
+           where owner_user_id = $1
+             and allocation_kind = 'vanity'
+             and status = 'reserved'
+             and hostname <> $2`,
+          [ownerUserId, hostname],
+        );
+        if (Number(count.rows[0]?.count ?? 0) >= limit) {
+          return {
+            reserved: false,
+            reason: "owner_slot_limit_reached",
+            vanitySlotLimit: limit,
+          };
+        }
+      }
+      if (!reservation) {
+        throw new Error(
+          "public host reservation mutation did not return a reservation",
+        );
+      }
       return { reserved: false, reservation, reason: "already_reserved" };
     };
 
-    if (
-      input.allocationKind !== "vanity" ||
-      input.vanitySlotLimit === undefined
-    ) {
-      return await reserve(this.#client);
-    }
-
-    const limit = Math.max(0, Math.floor(input.vanitySlotLimit));
     return await this.#client.transaction(async (transaction) => {
-      await transaction.query(
-        `select pg_advisory_xact_lock(hashtext($1::text))`,
-        [`takosumi:public-host-vanity:${ownerUserId}`],
-      );
-      const count = await transaction.query<{ count: string | number }>(
-        `select count(*) as count
-         from takosumi_public_host_reservations
-         where owner_user_id = $1
-           and allocation_kind = 'vanity'
-           and status = 'reserved'
-           and hostname <> $2`,
-        [ownerUserId, hostname],
-      );
-      if (Number(count.rows[0]?.count ?? 0) >= limit) {
-        return {
-          reserved: false,
-          reason: "owner_slot_limit_reached",
-          vanitySlotLimit: limit,
-        };
+      if (limit >= 0) {
+        await transaction.query(
+          `select pg_advisory_xact_lock(hashtext($1::text))`,
+          [`takosumi:public-host-vanity:${ownerUserId}`],
+        );
       }
       return await reserve(transaction);
     });

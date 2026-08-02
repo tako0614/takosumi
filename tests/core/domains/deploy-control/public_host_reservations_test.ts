@@ -29,11 +29,36 @@ async function seedWorkspace(
   });
 }
 
+async function seedCapsule(
+  store: OpenTofuControlStore,
+  id: string,
+  workspaceId: string,
+  status: "pending" | "destroyed" = "pending",
+): Promise<void> {
+  await store.putCapsule({
+    id,
+    workspaceId,
+    projectId: `project_${workspaceId}`,
+    name: id,
+    slug: id,
+    sourceId: `source_${id}`,
+    installConfigId: `config_${id}`,
+    environment: "production",
+    currentStateGeneration: 0,
+    status,
+    createdAt: "2026-07-11T00:00:00.000Z",
+    updatedAt: "2026-07-11T00:00:00.000Z",
+  });
+}
+
 test("managed hostname vanity slots are owner-scoped while scoped names remain available", async () => {
   for (const [label, store] of stores()) {
     await seedWorkspace(store, "workspace_one", "user_owner");
     await seedWorkspace(store, "workspace_two", "user_owner");
     await seedWorkspace(store, "workspace_three", "user_other");
+    await seedCapsule(store, "capsule_one", "workspace_one");
+    await seedCapsule(store, "capsule_two", "workspace_two");
+    await seedCapsule(store, "capsule_three", "workspace_three");
     const firstVanity = await store.reservePublicHost({
       hostname: "short-one.app.takos.jp",
       workspaceId: "workspace_one",
@@ -118,6 +143,8 @@ test("concurrent vanity claims cannot exceed the owner slot limit", async () => 
   for (const [label, store] of stores()) {
     await seedWorkspace(store, "workspace_one", "user_race");
     await seedWorkspace(store, "workspace_two", "user_race");
+    await seedCapsule(store, "capsule_one", "workspace_one");
+    await seedCapsule(store, "capsule_two", "workspace_two");
     const results = await Promise.all(
       ["one", "two"].map((suffix) =>
         store.reservePublicHost({
@@ -142,5 +169,81 @@ test("concurrent vanity claims cannot exceed the owner slot limit", async () => 
       ).length,
       label,
     ).toBe(1);
+  }
+});
+
+test("inactive Capsules cannot claim or reactivate public host reservations", async () => {
+  for (const [label, store] of stores()) {
+    await seedWorkspace(store, "workspace_inactive", "user_inactive");
+    await seedCapsule(
+      store,
+      "capsule_destroyed",
+      "workspace_inactive",
+      "destroyed",
+    );
+
+    await expect(
+      store.reservePublicHost({
+        hostname: "destroyed.app.takos.jp",
+        workspaceId: "workspace_inactive",
+        capsuleId: "capsule_destroyed",
+        capsuleName: "destroyed",
+        allocationKind: "scoped",
+        now: "2026-07-11T00:00:00.000Z",
+      }),
+    ).resolves.toEqual({
+      reserved: false,
+      reason: "capsule_inactive",
+    });
+    await expect(
+      store.getPublicHostReservation("destroyed.app.takos.jp"),
+    ).resolves.toBeUndefined();
+
+    await seedCapsule(store, "capsule_released", "workspace_inactive");
+    const initial = await store.reservePublicHost({
+      hostname: "released.app.takos.jp",
+      workspaceId: "workspace_inactive",
+      capsuleId: "capsule_released",
+      capsuleName: "released",
+      allocationKind: "scoped",
+      now: "2026-07-11T00:00:01.000Z",
+    });
+    expect(initial.reserved, label).toBe(true);
+    await store.releasePublicHostsForCapsule(
+      "capsule_released",
+      "2026-07-11T00:00:02.000Z",
+    );
+    await store.patchCapsule("capsule_released", { status: "destroyed" });
+
+    await expect(
+      store.reservePublicHost({
+        hostname: "released.app.takos.jp",
+        workspaceId: "workspace_inactive",
+        capsuleId: "capsule_released",
+        capsuleName: "released",
+        allocationKind: "scoped",
+        now: "2026-07-11T00:00:03.000Z",
+      }),
+    ).resolves.toEqual({
+      reserved: false,
+      reason: "capsule_inactive",
+    });
+    await expect(
+      store.getPublicHostReservation("released.app.takos.jp"),
+    ).resolves.toMatchObject({ status: "released" });
+
+    await expect(
+      store.reservePublicHost({
+        hostname: "missing.app.takos.jp",
+        workspaceId: "workspace_inactive",
+        capsuleId: "capsule_missing",
+        capsuleName: "missing",
+        allocationKind: "scoped",
+        now: "2026-07-11T00:00:04.000Z",
+      }),
+    ).resolves.toEqual({
+      reserved: false,
+      reason: "capsule_inactive",
+    });
   }
 });

@@ -85,7 +85,26 @@ test("managed Capsule OIDC provisioning materializes the projected public URL", 
     },
   } as unknown as InstallConfig;
   let persistedConfig: InstallConfig | undefined;
+  let managedHostnameClaim:
+    | {
+        readonly workspaceId: string;
+        readonly capsuleId: string;
+        readonly requestedLabel: string;
+        readonly managedPublicBaseDomain: string;
+        readonly expectedHostname: string;
+      }
+    | undefined;
   const operations = {
+    claimManagedPublicHostname: async (
+      claim: NonNullable<typeof managedHostnameClaim>,
+    ) => {
+      managedHostnameClaim = claim;
+      return {
+        ok: true,
+        hostname: "main-dashboard.apps-staging.example.test",
+        mode: "scoped",
+      } as const;
+    },
     workspaces: {
       getWorkspace: async () => ({ id: "ws_1", handle: "main" }),
     },
@@ -114,6 +133,13 @@ test("managed Capsule OIDC provisioning materializes the projected public URL", 
   expect(client?.redirectUris).toEqual([
     "https://main-dashboard.apps-staging.example.test/auth/callback",
   ]);
+  expect(managedHostnameClaim).toEqual({
+    workspaceId: "ws_1",
+    capsuleId: "cap_managed_staging",
+    requestedLabel: "main-dashboard",
+    managedPublicBaseDomain: "apps-staging.example.test",
+    expectedHostname: "main-dashboard.apps-staging.example.test",
+  });
   expect(persistedConfig?.variableMapping).toMatchObject({
     public_url: "https://main-dashboard.apps-staging.example.test",
     redirect_uri:

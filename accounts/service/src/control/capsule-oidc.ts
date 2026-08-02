@@ -54,6 +54,13 @@ export async function ensureTakosumiAccountsOidcForCapsule(input: {
   );
   if (!redirectOrigin) return;
 
+  await claimHostAssignedManagedPublicHostname({
+    operations: input.operations,
+    capsule: input.capsule,
+    redirectOrigin,
+    managedPublicBaseDomain: input.managedPublicBaseDomain,
+  });
+
   const issuerUrl = normalizeIssuer(input.issuer);
   const now = Date.now();
   const callbackPath = normalizedCallbackPath(oidcExperience.callbackPath);
@@ -116,6 +123,45 @@ export async function ensureTakosumiAccountsOidcForCapsule(input: {
     variableMapping,
     updatedAt: new Date(now).toISOString(),
   });
+}
+
+async function claimHostAssignedManagedPublicHostname(input: {
+  readonly operations: ControlPlaneOperations;
+  readonly capsule: Capsule;
+  readonly redirectOrigin: string;
+  readonly managedPublicBaseDomain?: string;
+}): Promise<void> {
+  const baseDomain = normalizeManagedPublicBaseDomain(
+    input.managedPublicBaseDomain,
+  );
+  if (!baseDomain) return;
+  const url = new URL(input.redirectOrigin);
+  const hostname = url.hostname.toLowerCase();
+  if (!isManagedPublicHost(hostname, baseDomain)) return;
+  const requestedLabel = hostname.slice(0, -(baseDomain.length + 1));
+  const result = await input.operations.claimManagedPublicHostname({
+    workspaceId: input.capsule.workspaceId,
+    capsuleId: input.capsule.id,
+    requestedLabel,
+    managedPublicBaseDomain: baseDomain,
+    expectedHostname: hostname,
+  });
+  if (result.ok && result.hostname === hostname) return;
+
+  const reason =
+    !result.ok && result.reason === "slot_limit_reached"
+      ? "managed_public_hostname_slot_limit_reached"
+      : "app_hostname_unavailable";
+  throw new OpenTofuControllerError(
+    "failed_precondition",
+    `${reason}: the host-assigned public hostname could not be reserved`,
+    {
+      reason,
+      ...(!result.ok && result.limit !== undefined
+        ? { limit: result.limit }
+        : {}),
+    },
+  );
 }
 
 function oidcAllowedScopes(scopes: readonly string[] | undefined): string[] {

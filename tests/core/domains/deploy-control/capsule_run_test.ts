@@ -1316,6 +1316,148 @@ test("a managed-namespace Capsule cannot claim an unverified custom domain", asy
   ).resolves.toBeUndefined();
 });
 
+test("a host-assigned exact reservation authorizes its Capsule across managed namespace overrides", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner();
+  const assignedHost = "workspace-test-dashboard.apps-staging.example.test";
+  const seeded = await seedCapsuleModel(store, {
+    environment: "staging",
+    installConfig: {
+      variableMapping: {
+        public_subdomain: "dashboard",
+        public_url: `https://${assignedHost}`,
+        cloudflare: { account_id: null, api_base_url: null },
+      },
+      installExperience: {
+        projections: [
+          {
+            kind: "public_endpoint",
+            variables: {
+              subdomain: "public_subdomain",
+              url: "public_url",
+            },
+            baseDomain: "apps.example.test",
+          },
+        ],
+      },
+    },
+  });
+  await putConnectionWithProviderEnv(
+    store,
+    cloudflareConnection(
+      "conn_cloudflare_host_assigned",
+      seeded.capsule.workspaceId,
+    ),
+  );
+  await store.putProviderBindingSet({
+    id: "profile_cloudflare_host_assigned",
+    workspaceId: seeded.capsule.workspaceId,
+    capsuleId: seeded.capsule.id,
+    environment: seeded.capsule.environment,
+    bindings: [
+      {
+        provider: "registry.opentofu.org/cloudflare/cloudflare",
+        alias: "main",
+        connectionId: "conn_cloudflare_host_assigned",
+      },
+    ],
+    createdAt: "2026-08-02T00:00:00.000Z",
+    updatedAt: "2026-08-02T00:00:00.000Z",
+  });
+  const profile = multiProviderRunnerProfile();
+  const controller = controllerWith(store, runner, {
+    runnerProfiles: [profile],
+    defaultRunnerProfileId: profile.id,
+  });
+  const mismatchedClaim = await controller.claimManagedPublicHostname({
+    workspaceId: seeded.capsule.workspaceId,
+    capsuleId: seeded.capsule.id,
+    requestedLabel: "dashboard",
+    managedPublicBaseDomain: "apps-staging.example.test",
+    expectedHostname: "unexpected.apps-staging.example.test",
+  });
+  expect(mismatchedClaim).toEqual({ ok: false, reason: "invalid_label" });
+  await expect(
+    store.getPublicHostReservation(assignedHost),
+  ).resolves.toBeUndefined();
+
+  const claim = await controller.claimManagedPublicHostname({
+    workspaceId: seeded.capsule.workspaceId,
+    capsuleId: seeded.capsule.id,
+    requestedLabel: "dashboard",
+    managedPublicBaseDomain: "apps-staging.example.test",
+    expectedHostname: assignedHost,
+  });
+  expect(claim).toEqual({
+    ok: true,
+    hostname: assignedHost,
+    mode: "scoped",
+  });
+
+  const { planRun } = await controller.createCapsulePlan(seeded.capsule.id);
+
+  expect(planRun.status).toEqual("succeeded");
+  expect(runner.planJobs).toHaveLength(1);
+  await expect(
+    store.getPublicHostReservation(assignedHost),
+  ).resolves.toMatchObject({
+    workspaceId: seeded.capsule.workspaceId,
+    capsuleId: seeded.capsule.id,
+    status: "reserved",
+  });
+});
+
+test("a managed hostname claim cannot reactivate after its Capsule is destroyed", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const seeded = await seedCapsuleModel(store, {
+    environment: "staging",
+    installConfig: {
+      managedPublicHostname: { mode: "scoped" },
+    },
+  });
+  const configReadStarted = Promise.withResolvers<void>();
+  const resumeConfigRead = Promise.withResolvers<void>();
+  const getInstallConfig = store.getInstallConfig.bind(store);
+  let pauseNextRead = true;
+  store.getInstallConfig = async (id) => {
+    if (pauseNextRead) {
+      pauseNextRead = false;
+      configReadStarted.resolve();
+      await resumeConfigRead.promise;
+    }
+    return await getInstallConfig(id);
+  };
+  const controller = controllerWith(store, recordingRunner());
+  const hostname = "workspace-test-dashboard.apps-staging.example.test";
+  const pendingClaim = controller.claimManagedPublicHostname({
+    workspaceId: seeded.capsule.workspaceId,
+    capsuleId: seeded.capsule.id,
+    requestedLabel: "dashboard",
+    managedPublicBaseDomain: "apps-staging.example.test",
+    expectedHostname: hostname,
+  });
+
+  await configReadStarted.promise;
+  await store.putCapsule({
+    ...seeded.capsule,
+    status: "destroyed",
+    updatedAt: "2026-08-02T00:00:01.000Z",
+  });
+  await store.releasePublicHostsForCapsule(
+    seeded.capsule.id,
+    "2026-08-02T00:00:01.000Z",
+  );
+  resumeConfigRead.resolve();
+
+  await expect(pendingClaim).resolves.toEqual({
+    ok: false,
+    reason: "invalid_context",
+  });
+  await expect(
+    store.getPublicHostReservation(hostname),
+  ).resolves.toBeUndefined();
+});
+
 test("generic Capsule setup variables are filtered to the declared OpenTofu module interface", async () => {
   const store = new InMemoryOpenTofuControlStore();
   const runner = recordingRunner();

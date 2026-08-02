@@ -29,6 +29,28 @@ async function seedWorkspace(
   });
 }
 
+async function seedCapsule(
+  store: OpenTofuControlStore,
+  id: string,
+  workspaceId: string,
+  status: "pending" | "destroyed" = "pending",
+): Promise<void> {
+  await store.putCapsule({
+    id,
+    workspaceId,
+    projectId: `project_${workspaceId}`,
+    name: id,
+    slug: id,
+    sourceId: `source_${id}`,
+    installConfigId: `config_${id}`,
+    environment: "production",
+    currentStateGeneration: 0,
+    status,
+    createdAt: "2026-07-11T00:00:00.000Z",
+    updatedAt: "2026-07-11T00:00:00.000Z",
+  });
+}
+
 test("Postgres serializes owner vanity slots without counting scoped reservations", async () => {
   const client = await PGliteSqlClient.create();
   clients.push(client);
@@ -37,6 +59,11 @@ test("Postgres serializes owner vanity slots without counting scoped reservation
   await seedWorkspace(store, "workspace_one", "owner_shared");
   await seedWorkspace(store, "workspace_two", "owner_shared");
   await seedWorkspace(store, "workspace_other", "owner_other");
+  await seedCapsule(store, "capsule_scoped_one", "workspace_one");
+  await seedCapsule(store, "capsule_scoped_two", "workspace_two");
+  await seedCapsule(store, "capsule_vanity_one", "workspace_one");
+  await seedCapsule(store, "capsule_vanity_two", "workspace_two");
+  await seedCapsule(store, "capsule_other", "workspace_other");
 
   const scopedClaims: readonly ReservePublicHostInput[] = [
     {
@@ -165,4 +192,62 @@ test("Postgres serializes owner vanity slots without counting scoped reservation
   expect(
     rows.rows.filter((row) => row.hostname === winningClaim.hostname),
   ).toHaveLength(1);
+});
+
+test("Postgres does not claim or reactivate a host for an inactive Capsule", async () => {
+  const client = await PGliteSqlClient.create();
+  clients.push(client);
+  const store = new SqlOpenTofuControlStore({ client });
+
+  await seedWorkspace(store, "workspace_inactive", "owner_inactive");
+  await seedCapsule(
+    store,
+    "capsule_destroyed",
+    "workspace_inactive",
+    "destroyed",
+  );
+
+  await expect(
+    store.reservePublicHost({
+      hostname: "destroyed.app.takos.jp",
+      workspaceId: "workspace_inactive",
+      capsuleId: "capsule_destroyed",
+      capsuleName: "destroyed",
+      allocationKind: "scoped",
+      now: "2026-07-11T00:00:00.000Z",
+    }),
+  ).resolves.toEqual({ reserved: false, reason: "capsule_inactive" });
+  await expect(
+    store.getPublicHostReservation("destroyed.app.takos.jp"),
+  ).resolves.toBeUndefined();
+
+  await seedCapsule(store, "capsule_released", "workspace_inactive");
+  const initial = await store.reservePublicHost({
+    hostname: "released.app.takos.jp",
+    workspaceId: "workspace_inactive",
+    capsuleId: "capsule_released",
+    capsuleName: "released",
+    allocationKind: "scoped",
+    now: "2026-07-11T00:00:01.000Z",
+  });
+  expect(initial.reserved).toBe(true);
+  await store.releasePublicHostsForCapsule(
+    "capsule_released",
+    "2026-07-11T00:00:02.000Z",
+  );
+  await store.patchCapsule("capsule_released", { status: "destroyed" });
+
+  await expect(
+    store.reservePublicHost({
+      hostname: "released.app.takos.jp",
+      workspaceId: "workspace_inactive",
+      capsuleId: "capsule_released",
+      capsuleName: "released",
+      allocationKind: "scoped",
+      now: "2026-07-11T00:00:03.000Z",
+    }),
+  ).resolves.toEqual({ reserved: false, reason: "capsule_inactive" });
+  await expect(
+    store.getPublicHostReservation("released.app.takos.jp"),
+  ).resolves.toMatchObject({ status: "released" });
 });
