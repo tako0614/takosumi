@@ -1,6 +1,9 @@
 import { expect, test } from "bun:test";
 import { createTakosumiService } from "../../../core/bootstrap.ts";
-import { INSTALL_CONFIG_PATCH_V1_KIND } from "takosumi-contract/install-configs";
+import {
+  INSTALL_CONFIG_PATCH_V1_KIND,
+  type InstallConfig,
+} from "takosumi-contract/install-configs";
 
 const TOKEN = "install-config-operator-token";
 
@@ -10,6 +13,156 @@ function headers(token = TOKEN): Record<string, string> {
     "content-type": "application/json",
   };
 }
+
+function expectRedactedInstallConfig(config: {
+  readonly variableMapping: Readonly<Record<string, unknown>>;
+  readonly policy: Readonly<Record<string, unknown>>;
+}): void {
+  expect(config.variableMapping).toMatchObject({
+    declared_value: "[REDACTED]",
+    undeclared_token: "[REDACTED]",
+    ordinary_value: {
+      api_token: "[REDACTED]",
+      safe: "ok",
+    },
+    array_value: [{ nested_token: "[REDACTED]", safe: "array-ok" }],
+  });
+  expect(config.variableMapping.ordinary_value).toEqual({
+    api_token: "[REDACTED]",
+    safe: "ok",
+  });
+  expect(config.policy).toMatchObject({
+    allowedProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
+    providerCredentials: {
+      requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
+      requireTemporary: true,
+      requireTtlEnforced: true,
+    },
+    scopeBoundary: { mode: "strict", rules: [] },
+  });
+  const serialized = JSON.stringify(config);
+  expect(serialized).not.toContain("declared-secret");
+  expect(serialized).not.toContain("undeclared-secret");
+  expect(serialized).not.toContain("nested-secret");
+  expect(serialized).not.toContain("array-secret");
+  expect(serialized).not.toContain("provider-secret");
+  expect(serialized).not.toContain("scope-secret");
+  expect(serialized).not.toContain("clientSecret");
+  expect(serialized).not.toContain("operatorNote");
+}
+
+function routeRedactionInstallConfig(base: InstallConfig): InstallConfig {
+  return {
+    ...base,
+    id: "cfg-route-redaction",
+    name: "route-redaction",
+    variableMapping: {
+      declared_value: "declared-secret",
+      undeclared_token: "undeclared-secret",
+      ordinary_value: {
+        api_token: "nested-secret",
+        safe: "ok",
+      },
+      array_value: [
+        {
+          nested_token: "array-secret",
+          safe: "array-ok",
+        },
+      ],
+    },
+    policy: {
+      allowedProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
+      providerCredentials: {
+        requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
+        requireTemporary: true,
+        requireTtlEnforced: true,
+        clientSecret: "provider-secret",
+      },
+      scopeBoundary: {
+        mode: "strict",
+        rules: [],
+        operatorNote: "scope-secret",
+      },
+    } as unknown as InstallConfig["policy"],
+    variablePresentation: [
+      {
+        name: "declared_value",
+        secret: true,
+        label: { en: "Declared value" },
+      },
+      {
+        name: "undeclared_token",
+        label: { en: "Undeclared token" },
+      },
+      {
+        name: "ordinary_value",
+        label: { en: "Ordinary value" },
+      },
+    ],
+  };
+}
+
+test("InstallConfig list/get/patch routes redact secret variables", async () => {
+  const { app, operations } = await createTakosumiService({
+    role: "takosumi-api",
+    runtimeEnv: {
+      TAKOSUMI_DEV_MODE: "1",
+      TAKOSUMI_DEPLOY_CONTROL_TOKEN: TOKEN,
+    },
+  });
+  const bootstrapped = await operations.capsules.getInstallConfig(
+    "cfg-default-opentofu-capsule",
+  );
+  const config = routeRedactionInstallConfig(bootstrapped);
+  await operations.capsules.putInstallConfig(config);
+
+  const listResponse = await app.request("/internal/v1/install-configs", {
+    headers: headers(),
+  });
+  expect(listResponse.status).toBe(200);
+  const listed = (await listResponse.json()).installConfigs as Array<{
+    id: string;
+    variableMapping: Readonly<Record<string, unknown>>;
+    policy: Readonly<Record<string, unknown>>;
+  }>;
+  const listedConfig = listed.find((item) => item.id === config.id);
+  expect(listedConfig).toBeDefined();
+  expectRedactedInstallConfig(listedConfig!);
+
+  const getResponse = await app.request(
+    `/internal/v1/install-configs/${config.id}`,
+    { headers: headers() },
+  );
+  expect(getResponse.status).toBe(200);
+  const got = (await getResponse.json()).installConfig as {
+    variableMapping: Readonly<Record<string, unknown>>;
+    policy: Readonly<Record<string, unknown>>;
+  };
+  expectRedactedInstallConfig(got);
+
+  const patchResponse = await app.request(
+    `/internal/v1/install-configs/${config.id}`,
+    {
+      method: "PATCH",
+      headers: headers(),
+      body: JSON.stringify({
+        kind: INSTALL_CONFIG_PATCH_V1_KIND,
+        variableMapping: config.variableMapping,
+      }),
+    },
+  );
+  expect(patchResponse.status).toBe(200);
+  const patched = (await patchResponse.json()).installConfig as {
+    variableMapping: Readonly<Record<string, unknown>>;
+    policy: Readonly<Record<string, unknown>>;
+  };
+  expectRedactedInstallConfig(patched);
+
+  // The operator-facing mutation still stores the raw values internally; only
+  // the public route projection is redacted.
+  const stored = await operations.capsules.getInstallConfig(config.id);
+  expect(stored.variableMapping).toEqual(config.variableMapping);
+});
 
 test("operator API applies one exact versioned patch and preserves row-owned fields", async () => {
   const { app, operations } = await createTakosumiService({

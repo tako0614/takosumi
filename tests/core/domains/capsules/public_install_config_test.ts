@@ -13,6 +13,16 @@ function installConfig(): InstallConfig {
       takos_storage_access_token: "tksa_live_not_a_real_token",
       mcp_auth_token: "mcp_live_not_a_real_token",
       admin_password: "hunter2",
+      ordinary: {
+        api_token: "nested-secret",
+        safe: "ok",
+      },
+      array_value: [
+        {
+          nested_token: "array-secret",
+          safe: "array-ok",
+        },
+      ],
       replicas: 3,
     },
     variablePresentation: [
@@ -52,12 +62,56 @@ test("public InstallConfig projection never returns secret install variables", (
   // Ordinary configuration is untouched.
   expect(projected.variableMapping.app_url).toBe("https://office.example.test");
   expect(projected.variableMapping.replicas).toBe(3);
+  expect(projected.variableMapping.ordinary).toEqual({
+    api_token: "[REDACTED]",
+    safe: "ok",
+  });
+  expect(projected.variableMapping.array_value).toEqual([
+    { nested_token: "[REDACTED]", safe: "array-ok" },
+  ]);
 
   const serialized = JSON.stringify(projected);
   expect(serialized).not.toContain("tksa_live_not_a_real_token");
   expect(serialized).not.toContain("mcp_live_not_a_real_token");
   expect(serialized).not.toContain("hunter2");
+  expect(serialized).not.toContain("nested-secret");
+  expect(serialized).not.toContain("array-secret");
   // The projection still strips the operator-only fields it always did.
   expect(serialized).not.toContain("runner_operator");
   expect(serialized).not.toContain("per_install_overrides");
+});
+
+test("public InstallConfig policy projection keeps only safe policy fields", () => {
+  const projected = publicInstallConfigRecord({
+    ...installConfig(),
+    policy: {
+      allowedProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
+      providerCredentials: {
+        requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
+        requireTemporary: true,
+        requireTtlEnforced: true,
+        clientSecret: "provider-secret",
+      },
+      scopeBoundary: {
+        mode: "strict",
+        rules: [],
+        operatorNote: "scope-secret",
+      },
+    } as unknown as InstallConfig["policy"],
+  });
+
+  expect(projected.policy).toMatchObject({
+    allowedProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
+    providerCredentials: {
+      requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
+      requireTemporary: true,
+      requireTtlEnforced: true,
+    },
+    scopeBoundary: { mode: "strict", rules: [] },
+  });
+  const serialized = JSON.stringify(projected.policy);
+  expect(serialized).not.toContain("clientSecret");
+  expect(serialized).not.toContain("provider-secret");
+  expect(serialized).not.toContain("operatorNote");
+  expect(serialized).not.toContain("scope-secret");
 });

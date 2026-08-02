@@ -18,7 +18,6 @@ import type {
 import type {
   InstallConfig,
   ManagedPublicHostnameAllocation,
-  PublicInstallConfig,
 } from "takosumi-contract/install-configs";
 import type { CapsuleInterfaceBlueprint } from "takosumi-contract/interfaces";
 import {
@@ -27,10 +26,7 @@ import {
   resolveCapsuleInterfaceBlueprintInstallingPrincipal,
   resolveCapsuleResourceInterfaceBindingInstallingPrincipal,
 } from "takosumi-contract/interfaces";
-import {
-  normalizeScopeBoundaryPolicy,
-  type JsonValue,
-} from "takosumi-contract";
+import type { JsonValue } from "takosumi-contract";
 import { isAbsolute, normalize } from "node:path";
 import {
   defineRoute,
@@ -52,6 +48,7 @@ import { OpenTofuControllerError } from "../domains/deploy-control/errors.ts";
 import { validateCapsuleInterfaceBlueprints } from "../domains/interfaces/service.ts";
 import { normalizeVariablePathRecord } from "../domains/deploy-control/validation.ts";
 import { defaultCapsuleOutputAllowlist } from "../domains/capsules/default_install_config.ts";
+import { publicInstallConfigRecord } from "../domains/capsules/public_install_config.ts";
 import {
   TAKOSUMI_API_CAPSULE_STATE_VERSIONS_ROUTE,
   TAKOSUMI_API_CAPSULE_OUTPUTS_ROUTE,
@@ -127,51 +124,6 @@ function capsuleHasAppliedState(capsule: {
   return Boolean(
     capsule.currentStateVersionId || capsule.currentStateGeneration > 0,
   );
-}
-
-function publicInstallConfig(config: InstallConfig): PublicInstallConfig {
-  const {
-    runnerId: _runnerId,
-    internal: _internal,
-    resourceInterfaceBindingProposals: _resourceBindings,
-    hostRuntimeMaterialization: _hostRuntimeMaterialization,
-    ...publicRecord
-  } = config;
-  const store = config.store;
-  return {
-    ...publicRecord,
-    policy: publicPolicyConfig(config.policy),
-    ...(store ? { store } : {}),
-  };
-}
-
-function publicPolicyConfig(
-  policy: InstallConfig["policy"],
-): InstallConfig["policy"] {
-  const providerCredentials = policy.providerCredentials;
-  const normalizedProviderCredentials = providerCredentials
-    ? {
-        ...(providerCredentials.requiredProviders
-          ? {
-              requiredProviders: [...providerCredentials.requiredProviders],
-            }
-          : {}),
-        ...(providerCredentials.requireTemporary === true
-          ? { requireTemporary: true }
-          : {}),
-        ...(providerCredentials.requireTtlEnforced === true
-          ? { requireTtlEnforced: true }
-          : {}),
-      }
-    : undefined;
-  const scopeBoundary = normalizeScopeBoundaryPolicy(policy.scopeBoundary);
-  return {
-    ...policy,
-    ...(normalizedProviderCredentials
-      ? { providerCredentials: normalizedProviderCredentials }
-      : {}),
-    ...(scopeBoundary ? { scopeBoundary } : {}),
-  };
 }
 
 function runnerIdFromBody(body: {
@@ -843,7 +795,7 @@ export function mountDeployControlCapsuleRoutes(
           });
         return c.json(
           {
-            installConfigs: items.map(publicInstallConfig),
+            installConfigs: items.map(publicInstallConfigRecord),
             ...(nextCursor !== undefined ? { nextCursor } : {}),
           },
           200,
@@ -902,7 +854,7 @@ export function mountDeployControlCapsuleRoutes(
         if (config.workspaceId !== undefined) {
           ensureWorkspacePermission(principal, config.workspaceId);
         }
-        return c.json({ installConfig: publicInstallConfig(config) }, 200);
+        return c.json({ installConfig: publicInstallConfigRecord(config) }, 200);
       },
     }),
   );
@@ -927,7 +879,7 @@ export function mountDeployControlCapsuleRoutes(
         }
         const body = await readJsonBody<unknown>(c, "installConfigPatch");
         const config = await capsules!.applyInstallConfigPatch(id, body);
-        return c.json({ installConfig: publicInstallConfig(config) }, 200);
+        return c.json({ installConfig: publicInstallConfigRecord(config) }, 200);
       },
     }),
   );
