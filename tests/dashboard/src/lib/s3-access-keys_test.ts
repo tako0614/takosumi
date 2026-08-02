@@ -39,7 +39,7 @@ const metadata = {
 } as const;
 
 describe("S3 customer access key dashboard client", () => {
-  test("pages workspace metadata and never requires a secret on list", async () => {
+  test("pages exact Resource metadata and never requires a secret on list", async () => {
     const calls: string[] = [];
     globalThis.fetch = (async (input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : String(input);
@@ -51,13 +51,12 @@ describe("S3 customer access key dashboard client", () => {
       );
     }) as typeof fetch;
 
-    await expect(listS3CustomerAccessKeys("ws_1")).resolves.toEqual([
-      metadata,
-      metadata,
-    ]);
+    await expect(
+      listS3CustomerAccessKeys("ws_1", "tkrn:ws_1:ObjectBucket:assets"),
+    ).resolves.toEqual([metadata, metadata]);
     expect(calls).toEqual([
-      "/v1/cloud/s3-access-keys?workspaceId=ws_1",
-      "/v1/cloud/s3-access-keys?workspaceId=ws_1&cursor=next",
+      "/v1/cloud/s3-access-keys?workspaceId=ws_1&resourceId=tkrn%3Aws_1%3AObjectBucket%3Aassets",
+      "/v1/cloud/s3-access-keys?workspaceId=ws_1&resourceId=tkrn%3Aws_1%3AObjectBucket%3Aassets&cursor=next",
     ]);
   });
 

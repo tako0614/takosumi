@@ -40,6 +40,9 @@ describe("ObjectBucket S3-compatible customer key UI", () => {
 
   test("uses the dashboard client, explicit grants, and a browser-generated idempotency key", () => {
     expect(card).toContain("listS3CustomerAccessKeys");
+    expect(card).toContain(
+      "listS3CustomerAccessKeys(props.workspaceId, props.resourceId)",
+    );
     expect(card).toContain("createS3CustomerAccessKey");
     expect(card).toContain("revokeS3CustomerAccessKey");
     expect(card).toContain("resourceId: props.resourceId");

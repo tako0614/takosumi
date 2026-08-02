@@ -2564,13 +2564,14 @@ function expectedObjectBucketResourceId(
   return `tkrn:${workspaceId}:ObjectBucket:${resourceName}`;
 }
 
-/** List workspace-scoped metadata; the service never returns secrets here. */
+/** List metadata for one exact Resource; the service never returns secrets here. */
 export async function listS3CustomerAccessKeys(
   workspaceId: string,
+  resourceId: string,
   signal?: AbortSignal,
 ): Promise<readonly S3CustomerAccessKeyMetadata[]> {
   return await fetchAllPages<S3CustomerAccessKeyMetadata>(
-    `${S3_CUSTOMER_ACCESS_KEYS_BASE}${query({ workspaceId })}`,
+    `${S3_CUSTOMER_ACCESS_KEYS_BASE}${query({ workspaceId, resourceId })}`,
     (body) => {
       if (!Array.isArray(body.accessKeys)) {
         throw invalidS3AccessKeyResponse(

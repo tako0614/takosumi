@@ -97,7 +97,7 @@ export default function S3CustomerAccessKeysCard(props: Props) {
       ? `${props.workspaceId}\u0000${props.resourceId}`
       : undefined;
   const [keys, { refetch }] = createResource(scope, () =>
-    listS3CustomerAccessKeys(props.workspaceId),
+    listS3CustomerAccessKeys(props.workspaceId, props.resourceId),
   );
   const [label, setLabel] = createSignal("");
   const [permissions, setPermissions] = createSignal<
