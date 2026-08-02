@@ -1568,6 +1568,8 @@ async function platformResourceShapeExternalRequest(
       response: Response.json({ error: "unauthenticated" }, { status: 401 }),
     };
   }
+  const sessionRoleFailure = platformExtensionSessionRoleFailure(session);
+  if (sessionRoleFailure) return { ok: false, response: sessionRoleFailure };
   const sessionCsrfFailure = platformExtensionSessionCsrfFailure(
     request,
     env,
@@ -1597,6 +1599,9 @@ async function platformResourceShapeAuthorizedRequest(
   | { readonly ok: true; readonly request: Request }
   | { readonly ok: false; readonly response: Response }
 > {
+  const sessionRoleFailure = platformExtensionSessionRoleFailure(session);
+  if (sessionRoleFailure) return { ok: false, response: sessionRoleFailure };
+
   const url = new URL(request.url);
   const interfaceAccessFailure = isPlatformInterfaceApiPath(url.pathname)
     ? platformInterfaceAccessFailure(request, session)
@@ -1707,6 +1712,7 @@ async function platformResourceShapeAuthorizedRequest(
         TAKOSUMI_INTERNAL_RESOURCE_MANAGED_BY_HEADER,
         effectiveManagedBy,
       );
+      headers.delete(PLATFORM_EXTENSION_WORKSPACE_ROLE_HEADER);
       headers.delete(TAKOSUMI_INTERNAL_MANAGED_PROVIDER_RUN_TOKEN_HEADER);
       headers.delete(TAKOSUMI_INTERNAL_MANAGED_PROVIDER_PROFILE_HEADER);
       const capsuleOwnerContext = platformTrustedResourceCapsuleOwnerContext(
@@ -1868,6 +1874,7 @@ async function platformResourceArtifactAuthorizedRequest(
     TAKOSUMI_INTERNAL_RESOURCE_MANAGED_BY_HEADER,
     trustedManagedBy ?? PUBLIC_RESOURCE_API_MANAGED_BY,
   );
+  headers.delete(PLATFORM_EXTENSION_WORKSPACE_ROLE_HEADER);
   headers.delete(TAKOSUMI_INTERNAL_MANAGED_PROVIDER_RUN_TOKEN_HEADER);
   headers.delete(TAKOSUMI_INTERNAL_MANAGED_PROVIDER_PROFILE_HEADER);
   const capsuleOwnerContext = platformTrustedResourceCapsuleOwnerContext(
@@ -4548,6 +4555,16 @@ async function platformExtensionAuthContext(
   | { readonly ok: false; readonly response: Response }
 > {
   let session = await sessionVerifier(request, env, route);
+  if (!session.authenticated) {
+    return {
+      ok: false,
+      response: Response.json({ error: "unauthenticated" }, { status: 401 }),
+    };
+  }
+  const sessionRoleFailure = platformExtensionSessionRoleFailure(session);
+  if (sessionRoleFailure) {
+    return { ok: false, response: sessionRoleFailure };
+  }
   let workspaceRoleVerified = false;
   const headers = new Headers(request.headers);
   for (const header of PLATFORM_EXTENSION_RAW_CREDENTIAL_HEADERS) {
@@ -4577,12 +4594,6 @@ async function platformExtensionAuthContext(
         response: Response.json({ error: "unauthorized" }, { status: 401 }),
       };
     }
-  }
-  if (!session.authenticated) {
-    return {
-      ok: false,
-      response: Response.json({ error: "unauthenticated" }, { status: 401 }),
-    };
   }
   const csrfFailure = platformExtensionSessionCsrfFailure(
     request,
@@ -4736,11 +4747,15 @@ export async function platformExtensionVerifiedWorkspaceSession(
     }
   | { readonly ok: false; readonly response: Response }
 > {
+  const sessionRoleFailure = platformExtensionSessionRoleFailure(session);
+  if (sessionRoleFailure) return { ok: false, response: sessionRoleFailure };
+
   let verifiedWorkspaceId = safePlatformExtensionContextId(session.workspaceId);
   if (verifiedWorkspaceId && requestedWorkspaceId !== verifiedWorkspaceId) {
     return platformExtensionWorkspaceAccessFailure();
   }
   let liveAccess: boolean | WorkspaceRole | undefined;
+  let workspaceAccessInvoked = false;
   if (!verifiedWorkspaceId || session.authKind === "session") {
     const canRequestWorkspace =
       session.authKind === "session" ||
@@ -4748,6 +4763,7 @@ export async function platformExtensionVerifiedWorkspaceSession(
     if (!canRequestWorkspace) {
       return platformExtensionWorkspaceAccessFailure();
     }
+    workspaceAccessInvoked = true;
     liveAccess = await workspaceAccess(
       request,
       env,
@@ -4757,9 +4773,11 @@ export async function platformExtensionVerifiedWorkspaceSession(
     if (!liveAccess) return platformExtensionWorkspaceAccessFailure();
     verifiedWorkspaceId = requestedWorkspaceId;
   }
-  const workspaceRoleValue =
-    session.workspaceRole ??
-    (typeof liveAccess === "string" ? liveAccess : undefined);
+  const workspaceRoleValue = workspaceAccessInvoked
+    ? typeof liveAccess === "string"
+      ? liveAccess
+      : undefined
+    : session.workspaceRole;
   const workspaceRole = safePlatformWorkspaceRole(workspaceRoleValue);
   if (workspaceRoleValue !== undefined && workspaceRole === undefined) {
     return platformExtensionWorkspaceAccessFailure();
@@ -4775,10 +4793,16 @@ export async function platformExtensionVerifiedWorkspaceSession(
     return platformExtensionWorkspaceAccessFailure();
   }
 
+  const sessionWithoutWorkspaceRole = workspaceAccessInvoked
+    ? (() => {
+        const { workspaceRole: _workspaceRole, ...rest } = session;
+        return rest;
+      })()
+    : session;
   return {
     ok: true,
     session: {
-      ...session,
+      ...sessionWithoutWorkspaceRole,
       workspaceId: verifiedWorkspaceId,
       ...(workspaceRole ? { workspaceRole } : {}),
     },
@@ -5176,6 +5200,13 @@ async function introspectPlatformExtensionToken(
     }
     const subject = safePlatformExtensionSubject(valueString(record.sub));
     if (!subject) return { authenticated: false };
+    const takosumiMetadata = objectRecord(record.takosumi);
+    if (
+      takosumiMetadata.role !== undefined &&
+      safePlatformWorkspaceRole(takosumiMetadata.role) === undefined
+    ) {
+      return { authenticated: false };
+    }
     if (tokenUse === "interface_oauth") {
       return platformExtensionInterfaceOAuthSession(
         request,
@@ -5312,6 +5343,15 @@ function safePlatformWorkspaceRole(value: unknown): WorkspaceRole | undefined {
     value === "member" ||
     value === "viewer"
     ? value
+    : undefined;
+}
+
+function platformExtensionSessionRoleFailure(
+  session: PlatformExtensionSessionContext,
+): Response | undefined {
+  const role = (session as { readonly workspaceRole?: unknown }).workspaceRole;
+  return role !== undefined && safePlatformWorkspaceRole(role) === undefined
+    ? platformExtensionWorkspaceAccessFailure().response
     : undefined;
 }
 
