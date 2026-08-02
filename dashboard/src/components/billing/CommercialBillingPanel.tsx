@@ -46,6 +46,10 @@ import {
   t,
 } from "../../i18n/index.ts";
 import { friendlyError } from "../../lib/error-copy.ts";
+import {
+  billingReturnUrl,
+  checkoutReturnUrl,
+} from "../../lib/billing-return-url.ts";
 
 interface Props {
   readonly basePath: `/${string}`;
@@ -227,19 +231,17 @@ export default function CommercialBillingPanel(props: Props) {
     setCheckoutAmount(amountUsdMicros);
     setActionError(undefined);
     try {
-      const returnUrl = billingReturnUrl(props.workspaceId);
-      const successUrl = new URL(returnUrl);
-      successUrl.searchParams.set("checkout", "success");
-      const cancelUrl = new URL(returnUrl);
-      cancelUrl.searchParams.set("checkout", "cancelled");
+      const origin = window.location.origin;
       const destination = await beginCommercialBillingCheckout({
         basePath: props.basePath,
         workspaceId: props.workspaceId,
         amountUsdMicros,
         customerType: customerType(),
         country: country(),
-        successUrl: successUrl.href,
-        cancelUrl: cancelUrl.href,
+        successUrl: checkoutReturnUrl(props.workspaceId, "success", origin)
+          .href,
+        cancelUrl: checkoutReturnUrl(props.workspaceId, "cancelled", origin)
+          .href,
       });
       window.location.assign(destination);
     } catch (error) {
@@ -256,7 +258,8 @@ export default function CommercialBillingPanel(props: Props) {
       const destination = await openCommercialBillingPortal({
         basePath: props.basePath,
         workspaceId: props.workspaceId,
-        returnUrl: billingReturnUrl(props.workspaceId).href,
+        returnUrl: billingReturnUrl(props.workspaceId, window.location.origin)
+          .href,
       });
       window.location.assign(destination);
     } catch (error) {
@@ -850,12 +853,6 @@ function countryLabel(country: string): string {
   } catch {
     return country;
   }
-}
-
-function billingReturnUrl(workspaceId: string): URL {
-  const url = new URL("/settings/billing", window.location.origin);
-  url.searchParams.set("workspaceId", workspaceId);
-  return url;
 }
 
 function initialCheckoutResult(): "success" | "cancelled" | undefined {

@@ -2,12 +2,55 @@ import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
+  billingReturnUrl,
+  checkoutReturnUrl,
+  WORKSPACE_BILLING_ROUTE,
+} from "../../../../dashboard/src/lib/billing-return-url.ts";
+import {
   commercialBillingDestination,
   loadCommercialBillingTransactions,
   parseCommercialBillingConfiguration,
   parseCommercialBillingSummary,
   parseCommercialBillingTransactionPage,
 } from "../../../../dashboard/src/lib/commercial-billing.ts";
+
+const DASHBOARD_ORIGIN = "https://app.takosumi.example";
+const dashboardIndexSource = readFileSync(
+  resolve(import.meta.dir, "../../../../dashboard/src/index.tsx"),
+  "utf8",
+);
+const commercialBillingPanelSource = readFileSync(
+  resolve(
+    import.meta.dir,
+    "../../../../dashboard/src/components/billing/CommercialBillingPanel.tsx",
+  ),
+  "utf8",
+);
+
+test("billing provider returns use the canonical Workspace billing route", () => {
+  expect(WORKSPACE_BILLING_ROUTE).toBe("/advanced/workspace/billing");
+  expect(dashboardIndexSource).toContain('path="/advanced/workspace/:tab"');
+  expect(commercialBillingPanelSource).toContain("checkoutReturnUrl");
+  expect(commercialBillingPanelSource).toContain("billingReturnUrl");
+  expect(commercialBillingPanelSource).not.toContain(
+    'new URL("/settings/billing"',
+  );
+  expect(
+    billingReturnUrl("workspace_1", DASHBOARD_ORIGIN).href,
+  ).toBe(
+    "https://app.takosumi.example/advanced/workspace/billing?workspaceId=workspace_1",
+  );
+  expect(
+    checkoutReturnUrl("workspace_1", "success", DASHBOARD_ORIGIN).href,
+  ).toBe(
+    "https://app.takosumi.example/advanced/workspace/billing?workspaceId=workspace_1&checkout=success",
+  );
+  expect(
+    checkoutReturnUrl("workspace_1", "cancelled", DASHBOARD_ORIGIN).href,
+  ).toBe(
+    "https://app.takosumi.example/advanced/workspace/billing?workspaceId=workspace_1&checkout=cancelled",
+  );
+});
 
 test("commercial billing configuration validates bounded credit choices", () => {
   const configuration = parseCommercialBillingConfiguration({
