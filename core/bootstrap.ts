@@ -1505,6 +1505,7 @@ export async function createTakosumiService(
     ? withDbOwnedHostRuntimeMaterialization(
         injectedResourceShapeAdapter,
         hostRuntimeMaterializationResolver,
+        options.hostRuntimeResourceLifecycle,
       )
     : undefined;
   const resourceShapeStores =
@@ -2086,7 +2087,10 @@ export async function createTakosumiService(
   const reconcileScheduleHostRuntime = async (resourceId: string) => {
     if (!options.hostRuntimeResourceLifecycle) return;
     const source = await resourceShapeStores.resources.get(resourceId);
-    if (!source) return;
+    // Only a Schedule owns a background activation edge. Avoid resolving the
+    // current Capsule InstallConfig for unrelated Resource lifecycle events,
+    // especially retained EdgeWorker teardown.
+    if (!source || source.kind !== "Schedule") return;
     const request = await hostRuntimeMaterializationResolver({
       owner: source.owner,
       resourceId,
@@ -2179,12 +2183,6 @@ export async function createTakosumiService(
         case "terminating":
           {
             await reconcileScheduleHostRuntime(event.resourceId);
-            const runtime = await exactHostRuntimeLifecycleInput(
-              event.resourceId,
-            );
-            if (runtime) {
-              await options.hostRuntimeResourceLifecycle!.retire(runtime);
-            }
           }
           await interfaceService.markResourceTerminating(
             workspaceId,
