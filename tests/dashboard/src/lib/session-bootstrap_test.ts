@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   clearSession,
+  readSession,
+  readSessionState,
   refreshSession,
+  refreshSessionState,
+  SessionError,
 } from "../../../../dashboard/src/views/account/lib/session.ts";
 import {
   clearWorkspaceListCache,
@@ -156,5 +160,97 @@ describe("dashboard session bootstrap", () => {
     expect(workspaces[0]?.id).toBe("space_1");
     expect(session?.subject).toBe("tsub_1");
     expect(calls).toEqual([workspaceBootstrapPath]);
+  });
+
+  test("keeps a 401 unauthenticated and allows the account-session fallback", async () => {
+    const calls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const path = typeof input === "string" ? input : String(input);
+      calls.push(path);
+      if (path === "/api/v1/dashboard/bootstrap?includeWorkspaces=false") {
+        return new Response(null, { status: 401 });
+      }
+      if (path === "/v1/account/session/me") {
+        return new Response(null, { status: 401 });
+      }
+      throw new Error(`unexpected fetch: ${path}`);
+    }) as typeof fetch;
+
+    expect(await refreshSession()).toBeNull();
+    expect(readSessionState()).toEqual({ kind: "unauthenticated" });
+    expect(calls).toEqual([
+      "/api/v1/dashboard/bootstrap?includeWorkspaces=false",
+      "/v1/account/session/me",
+    ]);
+  });
+
+  test("keeps schema maintenance 503 typed, including headers/body, without a fallback", async () => {
+    const calls: string[] = [];
+    const body = {
+      error: {
+        code: "schema_maintenance",
+        message: "Control schema maintenance is in progress.",
+      },
+    };
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const path = typeof input === "string" ? input : String(input);
+      calls.push(path);
+      if (path === "/api/v1/dashboard/bootstrap?includeWorkspaces=false") {
+        return new Response(JSON.stringify(body), {
+          status: 503,
+          headers: {
+            "content-type": "application/json",
+            "retry-after": "30",
+            "x-takosumi-schema-maintenance": "active",
+          },
+        });
+      }
+      throw new Error(`unexpected fallback fetch: ${path}`);
+    }) as typeof fetch;
+
+    let failure: unknown;
+    try {
+      await refreshSession();
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(SessionError);
+    if (!(failure instanceof SessionError)) return;
+    expect(failure.kind).toBe("maintenance");
+    expect(failure.status).toBe(503);
+    expect(failure.code).toBe("schema_maintenance");
+    expect(failure.headers.get("retry-after")).toBe("30");
+    expect(failure.headers.get("x-takosumi-schema-maintenance")).toBe("active");
+    expect(failure.body).toEqual(body);
+    expect(readSessionState()).toMatchObject({ kind: "maintenance" });
+    expect(calls).toEqual([
+      "/api/v1/dashboard/bootstrap?includeWorkspaces=false",
+    ]);
+  });
+
+  test("keeps non-maintenance failures typed instead of authoritative empty", async () => {
+    const calls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const path = typeof input === "string" ? input : String(input);
+      calls.push(path);
+      if (path === "/api/v1/dashboard/bootstrap?includeWorkspaces=false") {
+        return new Response(JSON.stringify({ error: "internal_error" }), {
+          status: 500,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      throw new Error(`unexpected fallback fetch: ${path}`);
+    }) as typeof fetch;
+
+    const state = await refreshSessionState();
+    expect(state.kind).toBe("error");
+    if (state.kind !== "error") return;
+    expect(state.error).toBeInstanceOf(SessionError);
+    expect(state.error.status).toBe(500);
+    expect(readSession()).toBeNull();
+    expect(readSessionState().kind).toBe("error");
+    expect(calls).toEqual([
+      "/api/v1/dashboard/bootstrap?includeWorkspaces=false",
+    ]);
   });
 });

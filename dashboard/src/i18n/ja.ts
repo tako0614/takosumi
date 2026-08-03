@@ -144,6 +144,9 @@ export const ja = {
   "auth.providersLoadFailedMessageWithInstall":
     "通信状態を確認して再試行してください。追加内容はこの画面に保持されています。",
   "auth.retryProviderCheck": "もう一度確認",
+  "auth.sessionMaintenanceTitle": "ダッシュボードは一時的に利用できません",
+  "auth.sessionMaintenanceBody":
+    "メンテナンス中です。しばらくしてからもう一度お試しください。",
   "auth.installContextAria": "サインイン後に続行するサービス",
   "auth.installContextKicker": "追加を続行",
   "auth.installContextTitle": "サインイン後に続行します",

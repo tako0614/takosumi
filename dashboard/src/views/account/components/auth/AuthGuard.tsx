@@ -5,22 +5,26 @@ import {
   Match,
   onCleanup,
   onMount,
+  Show,
   Switch,
 } from "solid-js";
 import {
-  onSessionChange,
-  readSession,
-  refreshSession,
+  onSessionStateChange,
+  readSessionState,
+  refreshSessionState,
+  type SessionError,
   type SessionRecord,
+  type SessionState,
 } from "../../lib/session.ts";
 import { t } from "../../../../i18n/index.ts";
+import Button from "../../../../components/ui/Button.tsx";
 
 interface Props {
   children: (session: SessionRecord) => JSX.Element;
   loadingFallback?: JSX.Element;
 }
 
-type AuthState = "loading" | "authenticated" | "unauthenticated";
+type AuthState = Exclude<SessionState["kind"], "loading"> | "loading";
 
 /**
  * Wraps an account screen that requires a signed-in account-plane session.
@@ -41,10 +45,17 @@ export default function AuthGuard(props: Props) {
   // The authenticated shell always mounts a Workspace switcher. Prime the
   // session and Workspace list through the same bootstrap request so the
   // first useful screen does not wait on two serial API roundtrips.
-  const cached = readSession({ includeWorkspaces: true });
-  const [session, setSession] = createSignal<SessionRecord | null>(cached);
+  const cached = readSessionState({ includeWorkspaces: true });
+  const [session, setSession] = createSignal<SessionRecord | null>(
+    cached.kind === "authenticated" ? cached.session : null,
+  );
   const [state, setState] = createSignal<AuthState>(
-    cached ? "authenticated" : "loading",
+    cached.kind === "authenticated" ? "authenticated" : cached.kind,
+  );
+  const [failure, setFailure] = createSignal<SessionError | null>(
+    cached.kind === "maintenance" || cached.kind === "error"
+      ? cached.error
+      : null,
   );
   const nav = useNavigate();
   const loc = useLocation();
@@ -56,34 +67,62 @@ export default function AuthGuard(props: Props) {
     nav(target, { replace: true });
   };
 
+  const applyState = (
+    next: SessionState,
+    preserveReturn: boolean,
+  ): void => {
+    setFailure(
+      next.kind === "maintenance" || next.kind === "error"
+        ? next.error
+        : null,
+    );
+    if (next.kind === "loading") {
+      setSession(null);
+      setState("loading");
+      return;
+    }
+    if (next.kind === "authenticated") {
+      setSession(next.session);
+      setState("authenticated");
+      return;
+    }
+    setSession(null);
+    setState(next.kind);
+    if (next.kind === "unauthenticated") {
+      redirectToSignIn(preserveReturn);
+    }
+  };
+
+  const retrySession = (): void => {
+    applyState({ kind: "loading" }, false);
+    void refreshSessionState({ includeWorkspaces: true }).then((next) =>
+      applyState(next, true),
+    );
+  };
+
   onMount(() => {
     // With a cached session we already render the page; readSession() above has
     // already scheduled a quiet background refresh if it was stale, and
     // onSessionChange reacts if it changed. Only block on the probe when there
     // is no session yet (genuine first load / signed out).
-    if (session()) return;
-    void refreshSession({ includeWorkspaces: true }).then((s) => {
-      setSession(s);
-      if (s) {
-        setState("authenticated");
-        return;
-      }
-      setState("unauthenticated");
-      redirectToSignIn(true);
-    });
+    if (cached.kind !== "loading") {
+      if (cached.kind === "unauthenticated") redirectToSignIn(true);
+      return;
+    }
+    void refreshSessionState({ includeWorkspaces: true }).then((next) =>
+      applyState(next, true),
+    );
   });
 
-  const off = onSessionChange((s) => {
-    setSession(s);
-    if (!s && state() !== "loading") {
-      setState("unauthenticated");
-      // Lost-session redirect: do NOT preserve the return path because
-      // this is typically a sign-out, and bouncing the user back to
-      // the gated page after sign-out is surprising.
-      redirectToSignIn(false);
-    } else if (s) {
-      setState("authenticated");
-    }
+  const off = onSessionStateChange((next) => {
+    // Lost-session redirect: do NOT preserve the return path because this is
+    // typically a sign-out, and bouncing the user back after sign-out is
+    // surprising. Maintenance/errors never redirect.
+    // The first probe applies its resolved state in the onMount promise below;
+    // let that path own the initial unauthenticated redirect so it happens
+    // once (and keeps the intended return path).
+    if (next.kind === "unauthenticated" && state() === "loading") return;
+    applyState(next, state() === "loading");
   });
   onCleanup(() => off());
 
@@ -99,6 +138,30 @@ export default function AuthGuard(props: Props) {
             <span class="tg-spinner" aria-hidden="true" />
           </div>
         )}
+      </Match>
+      <Match when={state() === "maintenance" || state() === "error"}>
+        <main class="auth-page">
+          <div class="sign-in-panel notfound-panel">
+            <h1 class="sign-in-title">
+              {state() === "maintenance"
+                ? t("auth.sessionMaintenanceTitle")
+                : t("errorBoundary.title")}
+            </h1>
+            <p class="sign-in-sub">
+              {state() === "maintenance"
+                ? t("auth.sessionMaintenanceBody")
+                : t("errorBoundary.body")}
+            </p>
+            <Button variant="primary" type="button" onClick={retrySession}>
+              {t("common.retry")}
+            </Button>
+            <Show when={failure()?.status && failure()!.status > 0}>
+              <span class="sr-only" aria-live="polite">
+                {failure()!.status}
+              </span>
+            </Show>
+          </div>
+        </main>
       </Match>
       <Match when={state() === "authenticated" && session()}>
         {(s) => props.children(s())}

@@ -139,6 +139,9 @@ export const en: Record<keyof typeof ja, string> = {
   "auth.providersLoadFailedMessageWithInstall":
     "Check your connection and try again. These install details are still preserved on this screen.",
   "auth.retryProviderCheck": "Check again",
+  "auth.sessionMaintenanceTitle": "Dashboard is temporarily unavailable",
+  "auth.sessionMaintenanceBody":
+    "The dashboard is undergoing maintenance. Please try again in a moment.",
   "auth.installContextAria": "Service to continue after sign-in",
   "auth.installContextKicker": "Continue adding",
   "auth.installContextTitle": "Continue after sign-in",

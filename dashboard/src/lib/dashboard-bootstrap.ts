@@ -35,6 +35,34 @@ export interface DashboardBootstrapResponse {
   }[];
 }
 
+export type DashboardBootstrapFailureKind = "maintenance" | "error";
+
+/**
+ * A non-authentication failure from the dashboard bootstrap route.
+ *
+ * The old client collapsed every non-2xx response into `undefined`, which made
+ * a schema-maintenance 503 indistinguishable from an expired cookie. Keep the
+ * response metadata at this transport seam so the session boundary can make a
+ * deliberate auth/maintenance decision without losing the operator's headers
+ * or error envelope.
+ */
+export class DashboardBootstrapError extends Error {
+  readonly kind: DashboardBootstrapFailureKind;
+
+  constructor(
+    readonly status: number,
+    readonly statusText: string,
+    readonly headers: Headers,
+    readonly body: unknown,
+    message: string,
+    readonly code?: string,
+  ) {
+    super(message);
+    this.name = "DashboardBootstrapError";
+    this.kind = status === 503 ? "maintenance" : "error";
+  }
+}
+
 const inflight = new Map<
   string,
   Promise<DashboardBootstrapResponse | undefined>
@@ -77,7 +105,22 @@ export function fetchDashboardBootstrap(
   })
     .then(async (res): Promise<DashboardBootstrapResponse | undefined> => {
       if (res.status === 401 || res.status === 404) return undefined;
-      if (!res.ok) return undefined;
+      if (!res.ok) {
+        const body = await readResponseBody(res);
+        const error = dashboardResponseErrorDetails(
+          body,
+          res.status,
+          res.statusText,
+        );
+        throw new DashboardBootstrapError(
+          res.status,
+          res.statusText,
+          new Headers(res.headers),
+          body,
+          error.message,
+          error.code,
+        );
+      }
       return (await res.json()) as DashboardBootstrapResponse;
     })
     .finally(() => {
@@ -85,6 +128,43 @@ export function fetchDashboardBootstrap(
     });
   inflight.set(path, request);
   return request;
+}
+
+async function readResponseBody(response: Response): Promise<unknown> {
+  const text = await response.text().catch(() => "");
+  if (!text) return undefined;
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return text;
+  }
+}
+
+export function dashboardResponseErrorDetails(
+  body: unknown,
+  status: number,
+  statusText: string,
+): { readonly message: string; readonly code?: string } {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    return { message: `${status} ${statusText}`.trim() };
+  }
+  const record = body as Record<string, unknown>;
+  const envelope =
+    typeof record.error === "object" &&
+    record.error !== null &&
+    !Array.isArray(record.error)
+      ? (record.error as Record<string, unknown>)
+      : record;
+  const message =
+    typeof envelope.message === "string"
+      ? envelope.message
+      : typeof record.error_description === "string"
+        ? record.error_description
+        : typeof record.error === "string"
+          ? record.error
+          : `${status} ${statusText}`.trim();
+  const code = typeof envelope.code === "string" ? envelope.code : undefined;
+  return { message, ...(code ? { code } : {}) };
 }
 
 function dashboardWorkspaceBootstrapPath(

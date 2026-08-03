@@ -26,6 +26,8 @@ import {
 import {
   fetchDashboardBootstrap,
   fetchDashboardWorkspaceBootstrap,
+  DashboardBootstrapError,
+  dashboardResponseErrorDetails,
   type DashboardBootstrapResponse,
 } from "../../../lib/dashboard-bootstrap.ts";
 
@@ -38,17 +40,52 @@ export interface SessionRecord {
   readonly primaryAccountId?: string;
 }
 
+export type SessionFailureKind = "maintenance" | "error";
+
+/** A typed failure at the account/session boundary. */
+export class SessionError extends Error {
+  constructor(
+    readonly kind: SessionFailureKind,
+    readonly status: number,
+    readonly headers: Headers,
+    readonly body: unknown,
+    message: string,
+    readonly code?: string,
+    readonly cause?: unknown,
+  ) {
+    super(message);
+    this.name = "SessionError";
+  }
+
+  get isMaintenance(): boolean {
+    return this.kind === "maintenance";
+  }
+}
+
+export type SessionState =
+  | { readonly kind: "loading" }
+  | { readonly kind: "authenticated"; readonly session: SessionRecord }
+  | { readonly kind: "unauthenticated" }
+  | { readonly kind: "maintenance"; readonly error: SessionError }
+  | { readonly kind: "error"; readonly error: SessionError };
+
 const SESSION_ME_PATH = "/v1/account/session/me";
 const CACHE_TTL_MS = 30_000;
 
 const listeners = new Set<(s: SessionRecord | null) => void>();
+const stateListeners = new Set<(state: SessionState) => void>();
 let cachedSession: SessionRecord | null = null;
+let cachedError: SessionError | null = null;
 let cachedAt = 0;
 let initialized = false;
 let inflight: Promise<SessionRecord | null> | null = null;
 
 function notify(s: SessionRecord | null): void {
   for (const l of listeners) l(s);
+}
+
+function notifyState(state: SessionState): void {
+  for (const l of stateListeners) l(state);
 }
 
 interface SessionMeResponse {
@@ -108,20 +145,55 @@ interface SessionRefreshOptions {
 async function fetchSessionMe(
   options: SessionRefreshOptions = {},
 ): Promise<SessionRecord | null> {
-  if (typeof fetch === "undefined") return null;
+  if (typeof fetch === "undefined") {
+    throw new SessionError(
+      "error",
+      0,
+      new Headers(),
+      undefined,
+      "Session transport is unavailable.",
+    );
+  }
   try {
     const data = options.includeWorkspaces
       ? await fetchDashboardWorkspaceBootstrap()
       : await fetchDashboardBootstrap();
-    if (!data) throw new Error("dashboard bootstrap unavailable");
+    if (!data) return await fetchAccountSessionMe();
     if (Array.isArray(data.workspaces)) {
       primeWorkspaceListCache(data.workspaces);
     }
-    return pickResponseRecord(data);
-  } catch {
-    // Fall back to the account-plane session mirror below. The bootstrap route
-    // is an optimization, not the canonical cookie proof.
+    const session = pickResponseRecord(data);
+    if (!session) {
+      throw new SessionError(
+        "error",
+        200,
+        new Headers(),
+        data,
+        "Dashboard bootstrap response did not contain a session.",
+      );
+    }
+    return session;
+  } catch (error) {
+    if (error instanceof DashboardBootstrapError) {
+      // A non-authentication response is authoritative for this probe. Do not
+      // turn a maintenance/error response into a second probe that can produce
+      // a misleading empty session (or lose the original headers/body).
+      throw new SessionError(
+        error.kind,
+        error.status,
+        error.headers,
+        error.body,
+        error.message,
+        error.code,
+        error,
+      );
+    }
+    if (error instanceof SessionError) throw error;
+    throw sessionErrorFromUnknown(error);
   }
+}
+
+async function fetchAccountSessionMe(): Promise<SessionRecord | null> {
   try {
     const res = await fetch(SESSION_ME_PATH, {
       method: "GET",
@@ -129,12 +201,72 @@ async function fetchSessionMe(
       credentials: "include",
     });
     if (res.status === 401 || res.status === 404) return null;
-    if (!res.ok) return null;
-    const data = (await res.json()) as SessionMeResponse;
-    return pickResponseRecord(data);
-  } catch {
-    return null;
+    const body = await readResponseBody(res);
+    if (!res.ok) throw sessionErrorFromResponse(res, body);
+    const session = pickResponseRecord(body as SessionMeResponse);
+    if (!session) {
+      throw new SessionError(
+        "error",
+        res.status,
+        new Headers(res.headers),
+        body,
+        "Account session response did not contain a session.",
+      );
+    }
+    return session;
+  } catch (error) {
+    if (error instanceof SessionError) throw error;
+    throw sessionErrorFromUnknown(error);
   }
+}
+
+async function readResponseBody(response: Response): Promise<unknown> {
+  const text = await response.text().catch(() => "");
+  if (!text) return undefined;
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return text;
+  }
+}
+
+function sessionErrorFromResponse(
+  response: Response,
+  body: unknown,
+): SessionError {
+  const details = dashboardResponseErrorDetails(
+    body,
+    response.status,
+    response.statusText,
+  );
+  return new SessionError(
+    response.status === 503 ? "maintenance" : "error",
+    response.status,
+    new Headers(response.headers),
+    body,
+    details.message,
+    details.code,
+  );
+}
+
+function sessionErrorFromUnknown(error: unknown): SessionError {
+  return new SessionError(
+    "error",
+    0,
+    new Headers(),
+    undefined,
+    error instanceof Error && error.message
+      ? error.message
+      : "Session transport failed.",
+    undefined,
+    error,
+  );
+}
+
+function sessionStateFromError(error: SessionError): SessionState {
+  return error.kind === "maintenance"
+    ? { kind: "maintenance", error }
+    : { kind: "error", error };
 }
 
 /**
@@ -146,15 +278,49 @@ export function refreshSession(
   options: SessionRefreshOptions = {},
 ): Promise<SessionRecord | null> {
   if (inflight) return inflight;
-  inflight = fetchSessionMe(options).then((s) => {
-    cachedSession = s;
-    cachedAt = Date.now();
-    initialized = true;
-    notify(s);
-    inflight = null;
-    return s;
-  });
-  return inflight;
+  const request = fetchSessionMe(options)
+    .then((s) => {
+      cachedSession = s;
+      cachedError = null;
+      cachedAt = Date.now();
+      initialized = true;
+      notify(s);
+      notifyState(
+        s ? { kind: "authenticated", session: s } : { kind: "unauthenticated" },
+      );
+      return s;
+    })
+    .catch((error) => {
+      const typed =
+        error instanceof SessionError ? error : sessionErrorFromUnknown(error);
+      cachedSession = null;
+      cachedError = typed;
+      cachedAt = Date.now();
+      initialized = true;
+      notifyState(sessionStateFromError(typed));
+      throw typed;
+    })
+    .finally(() => {
+      if (inflight === request) inflight = null;
+    });
+  inflight = request;
+  return request;
+}
+
+/** Resolve the session probe into an explicit auth/maintenance state. */
+export async function refreshSessionState(
+  options: SessionRefreshOptions = {},
+): Promise<SessionState> {
+  try {
+    const session = await refreshSession(options);
+    return session
+      ? { kind: "authenticated", session }
+      : { kind: "unauthenticated" };
+  } catch (error) {
+    const typed =
+      error instanceof SessionError ? error : sessionErrorFromUnknown(error);
+    return sessionStateFromError(typed);
+  }
 }
 
 function cacheIsFresh(): boolean {
@@ -177,11 +343,19 @@ function cacheIsFresh(): boolean {
 export function readSession(
   options: SessionRefreshOptions = {},
 ): SessionRecord | null {
+  const state = readSessionState(options);
+  return state.kind === "authenticated" ? state.session : null;
+}
+
+/** Synchronous session/auth state mirror for guards and shell composition. */
+export function readSessionState(
+  options: SessionRefreshOptions = {},
+): SessionState {
   if (!initialized && !inflight) {
     // Fire-and-forget; listeners will get notified when it resolves.
-    void refreshSession(options);
+    void refreshSession(options).catch(() => undefined);
   } else if (!inflight && !cacheIsFresh()) {
-    void refreshSession(options);
+    void refreshSession(options).catch(() => undefined);
   }
   if (
     cachedSession &&
@@ -190,7 +364,13 @@ export function readSession(
   ) {
     cachedSession = null;
   }
-  return cachedSession;
+  // Preserve the cache-first contract while a stale authenticated session is
+  // refreshed in the background. First-load probes and explicit retries still
+  // expose `loading` because they have no usable session to render.
+  if (cachedSession) return { kind: "authenticated", session: cachedSession };
+  if (inflight || !initialized) return { kind: "loading" };
+  if (cachedError) return sessionStateFromError(cachedError);
+  return { kind: "unauthenticated" };
 }
 
 /**
@@ -201,7 +381,7 @@ export function readSession(
  */
 export function writeSession(_s: SessionRecord): void {
   // Server is the source of truth; sync our cache from the cookie.
-  void refreshSession();
+  void refreshSession().catch(() => undefined);
 }
 
 /**
@@ -223,10 +403,12 @@ export function writeSession(_s: SessionRecord): void {
  */
 export function clearSession(): void {
   cachedSession = null;
+  cachedError = null;
   cachedAt = Date.now();
   initialized = true;
   clearWorkspaceListCache();
   notify(null);
+  notifyState({ kind: "unauthenticated" });
   if (typeof fetch !== "undefined") {
     // keepalive: the caller navigates to /sign-in right after this, which
     // would otherwise abort the revocation and leave the cookie valid
@@ -246,4 +428,11 @@ export function onSessionChange(
 ): () => void {
   listeners.add(fn);
   return () => listeners.delete(fn);
+}
+
+export function onSessionStateChange(
+  fn: (state: SessionState) => void,
+): () => void {
+  stateListeners.add(fn);
+  return () => stateListeners.delete(fn);
 }
