@@ -226,7 +226,13 @@ It fetches the SourceSnapshot archive from R2, verifies the recorded digest,
 extracts it into an operator work directory, and runs the opaque `post_apply` argv.
 The default work root is `/var/tmp/takosumi-release-activator`; set
 `TAKOSUMI_RELEASE_WORK_ROOT` or `--work-root` when the operator host uses a
-different large disk. Each activation injects job-local `TMPDIR`,
+different large disk. The work root must belong to the activator: it is created
+with mode `0700`, and an existing root that is a symlink, owned by another uid,
+or writable by group or other is refused so no other local user can substitute
+the activation workdir. The activator never changes the mode of a root it did
+not create, so a shared directory such as `/tmp` fails the activation instead
+of being tightened; give the activator its own directory.
+Each activation injects job-local `TMPDIR`,
 `BUN_INSTALL_CACHE_DIR`, `BUN_TMPDIR`, `XDG_CACHE_HOME`, and
 `NODE_COMPILE_CACHE`, so `bun install`, `bunx wrangler`, and build steps do not
 depend on a shared tmpfs `/tmp`.

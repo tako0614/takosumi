@@ -224,8 +224,9 @@ export async function runReleaseActivation(
   options: RunReleaseOptions = {},
 ): Promise<ReleaseActivationResponse> {
   const payload = parsePayload(rawPayload);
-  const workRoot = options.workRoot ?? DEFAULT_WORK_ROOT;
-  await mkdir(workRoot, { recursive: true });
+  const workRoot = await prepareReleaseWorkRoot(
+    options.workRoot ?? DEFAULT_WORK_ROOT,
+  );
   const workdir = await mkdtemp(join(workRoot, "release-"));
   const archivePath = join(workdir, "source.tar.zst");
   const sourceRoot = join(workdir, "source");
@@ -332,7 +333,8 @@ async function readNpmPackageFileWithNpmPack(
   const cacheKey = `${source.package}@${source.version}`;
   let root = npmPackCache.get(cacheKey);
   if (!root) {
-    const workdir = await mkdtemp(join(DEFAULT_WORK_ROOT, "migration-npm-"));
+    const workRoot = await prepareReleaseWorkRoot(DEFAULT_WORK_ROOT);
+    const workdir = await mkdtemp(join(workRoot, "migration-npm-"));
     runChecked("npm", ["pack", cacheKey, "--quiet"], workdir);
     const tarballs = spawnSync("sh", ["-c", "ls *.tgz"], {
       cwd: workdir,
@@ -753,6 +755,60 @@ function defaultReleaseWorkRoot(): string {
     );
   }
   return join("/var/tmp", "takosumi-release-activator");
+}
+
+/**
+ * Adopts the work root only when no other local user can substitute what the
+ * activation runs.
+ *
+ * The default root sits under world-writable `/var/tmp`, so a pre-existing name
+ * there is not evidence the activator created it. A missing root is created
+ * `0700`; an existing one is opened `O_NOFOLLOW|O_DIRECTORY` and judged on that
+ * descriptor, so a symlink, another uid's directory, or a directory group or
+ * other can write into is refused rather than adopted. The activator never
+ * repairs a root it did not create: a shared root stays exactly as the operator
+ * left it and the activation stops instead.
+ */
+async function prepareReleaseWorkRoot(workRoot: string): Promise<string> {
+  const resolvedRoot = resolve(workRoot);
+  await mkdir(resolvedRoot, { recursive: true, mode: 0o700 });
+  let handle;
+  try {
+    handle = await open(
+      resolvedRoot,
+      fsConstants.O_RDONLY |
+        (fsConstants.O_DIRECTORY ?? 0) |
+        (fsConstants.O_NOFOLLOW ?? 0),
+    );
+  } catch {
+    throw new Error(
+      `release activator work root ${resolvedRoot} could not be opened safely as a directory`,
+    );
+  }
+  try {
+    const stats = await handle.stat();
+    if (!stats.isDirectory()) {
+      throw new Error(
+        `release activator work root ${resolvedRoot} must be a directory`,
+      );
+    }
+    if (
+      typeof process.getuid === "function" &&
+      stats.uid !== process.getuid()
+    ) {
+      throw new Error(
+        `release activator work root ${resolvedRoot} must be owned by this uid`,
+      );
+    }
+    if ((stats.mode & 0o022) !== 0) {
+      throw new Error(
+        `release activator work root ${resolvedRoot} must not be writable by group or other; point --work-root at a private directory`,
+      );
+    }
+  } finally {
+    await handle.close();
+  }
+  return resolvedRoot;
 }
 
 async function prepareRuntimeRoot(runtimeRoot: string): Promise<void> {
@@ -1526,7 +1582,9 @@ async function runReleaseActivationChild(
   options: RunReleaseOptions,
   jobId: string,
 ): Promise<ReleaseActivationResponse> {
-  const workRoot = options.workRoot ?? DEFAULT_WORK_ROOT;
+  const workRoot = await prepareReleaseWorkRoot(
+    options.workRoot ?? DEFAULT_WORK_ROOT,
+  );
   const jobDir = join(workRoot, "jobs", jobId);
   await mkdir(jobDir, { recursive: true });
   const payloadPath = join(jobDir, "payload.json");
