@@ -202,25 +202,8 @@ describe("Yurucommu managed Store cutover contract", () => {
     });
     expect(managed.interfaceBlueprints).toBeUndefined();
     expect(managed.outputAllowlist).toEqual({});
-    expect(managed.lifecycleActions).toEqual([
-      {
-        apiVersion: "takosumi.dev/v1alpha1",
-        kind: "resource_migration",
-        id: "yurucommu-schema",
-        phase: "post_apply",
-        executor: "operator",
-        runnerCapability: "resource.migration.sqlite.v1",
-        target: {
-          resourceAddress: "takoform_relational_database.database",
-        },
-        bundle: {
-          format: "takosumi.resource-migrations/v1",
-          manifestPath: "deploy/takoform/migrations/manifest.json",
-          digest:
-            "sha256:1d2181e213a086ae9e025d235ff5e267c43ec60cf4fc2f966977a21f2a95ef7b",
-        },
-      },
-    ]);
+    expect(managed.lifecycleActions).toBeUndefined();
+    expect(managed.policy.lifecycleActions).toBeUndefined();
     expect(managed.hostRuntimeMaterialization?.contract).toBe(
       "takosumi.host-runtime-materialization/v1",
     );
@@ -329,13 +312,8 @@ describe("Yurucommu managed Store cutover contract", () => {
     expect(compiled.compiled.interfaceBlueprints).toEqual([]);
     expect(compiled.compiled.outputAllowlist).toEqual({});
     expect(baseConfig.interfaceBlueprints).toBeUndefined();
-    expect(baseConfig.lifecycleActions?.[0]).toMatchObject({
-      kind: "resource_migration",
-      executor: "operator",
-      target: {
-        resourceAddress: "takoform_relational_database.database",
-      },
-    });
+    expect(baseConfig.lifecycleActions).toBeUndefined();
+    expect(baseConfig.policy.lifecycleActions).toBeUndefined();
     expect(baseConfig.resourceInterfaceBindingProposals).toBeUndefined();
   });
 });

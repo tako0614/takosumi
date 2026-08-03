@@ -633,11 +633,10 @@ const yurucommuManagedSource = source("yurucommu");
  *
  * App vocabulary is compiled from the exact repository snapshot's
  * `.well-known/takosumi.json`. This service-owned row carries only host
- * authority which repository metadata cannot grant: managed hostname policy,
- * the typed database migration, and the host runtime/resource materialization
- * needed by the managed deployment. The repository's v2 manifest owns its
- * v2.1 manifest owns its default module, launcher declaration, and
- * `launch_url` projection.
+ * authority which repository metadata cannot grant: managed hostname policy
+ * and the host runtime/resource materialization needed by the managed
+ * deployment. The repository's v2.1 manifest owns its default module, launcher
+ * declaration, and `launch_url` projection.
  */
 const yurucommuManagedConfig = {
   id: "cfg-reference-yurucommu-managed",
@@ -718,25 +717,6 @@ const yurucommuManagedConfig = {
       },
     ],
   },
-  lifecycleActions: [
-    {
-      apiVersion: "takosumi.dev/v1alpha1",
-      kind: "resource_migration",
-      id: "yurucommu-schema",
-      phase: "post_apply",
-      executor: "operator",
-      runnerCapability: "resource.migration.sqlite.v1",
-      target: {
-        resourceAddress: "takoform_relational_database.database",
-      },
-      bundle: {
-        format: "takosumi.resource-migrations/v1",
-        manifestPath: "deploy/takoform/migrations/manifest.json",
-        digest:
-          "sha256:1d2181e213a086ae9e025d235ff5e267c43ec60cf4fc2f966977a21f2a95ef7b",
-      },
-    },
-  ],
   policy: {
     repositoryInstallUx: repositoryInstallUxPolicy(
       TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_1,
@@ -745,10 +725,6 @@ const yurucommuManagedConfig = {
       requiredProviders: ["registry.opentofu.org/tako0614/takoform"],
       requireTemporary: true,
       requireTtlEnforced: true,
-    },
-    lifecycleActions: {
-      allowedExecutors: ["operator"],
-      allowedRunnerCapabilities: ["resource.migration.sqlite.v1"],
     },
   },
   store: store({
@@ -1074,9 +1050,9 @@ const takosConfig = {
       workingDirectory: ".",
       env: {
         TAKOS_RELEASE_ARTIFACT_DESCRIPTOR_URL:
-          "https://github.com/tako0614/takos/releases/download/v0.11.6/takosumi-artifact.json",
+          "https://github.com/tako0614/takos/releases/download/v0.11.7/takosumi-artifact.json",
         TAKOS_RELEASE_ARTIFACT_DESCRIPTOR_SHA256:
-          "sha256:6fd0d166e30d3e5d7a4dde85ac4aed338dc2580f6da674e39fd9c45408089fb8",
+          "sha256:67ce12a57813e2c704bd19cde1b0da3714e947b75496d7dda1fffd46ca829b98",
       },
       timeoutSeconds: 3600,
       runnerCapability: CAPSULE_LIFECYCLE_COMMAND_CAPABILITY,
