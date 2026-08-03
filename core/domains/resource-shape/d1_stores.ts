@@ -678,6 +678,24 @@ class D1ResolutionLockStore implements ResolutionLockStore {
     return row ? resolutionLockFromRow(row) : undefined;
   }
 
+  async getMany(
+    resourceIds: readonly ResourceShapeRecordId[],
+  ): Promise<readonly ResolutionLockRecord[]> {
+    const unique = [...new Set(resourceIds)];
+    if (unique.length === 0) return [];
+    if (unique.length > 100) {
+      throw new RangeError("Resolution lock getMany accepts at most 100 ids");
+    }
+    const rows = await this.db
+      .prepare(
+        `select * from ${this.#table}
+         where resource_id in (${unique.map(() => "?").join(",")})`,
+      )
+      .bind(...unique)
+      .all<ResolutionLockRow>();
+    return (rows.results ?? []).map(resolutionLockFromRow);
+  }
+
   async delete(resourceId: ResourceShapeRecordId): Promise<void> {
     await this.db
       .prepare(`delete from ${this.#table} where resource_id = ?`)

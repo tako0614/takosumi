@@ -296,6 +296,13 @@ export interface ResolutionLockStore {
   get(
     resourceId: ResourceShapeRecordId,
   ): Promise<ResolutionLockRecord | undefined>;
+  /**
+   * Bounded exact-id read used by cross-domain read projections. Callers keep
+   * the batch at or below 100 so D1 never exceeds its variable limit.
+   */
+  getMany(
+    resourceIds: readonly ResourceShapeRecordId[],
+  ): Promise<readonly ResolutionLockRecord[]>;
   delete(resourceId: ResourceShapeRecordId): Promise<void>;
 }
 
@@ -735,6 +742,20 @@ export class InMemoryResolutionLockStore implements ResolutionLockStore {
     resourceId: ResourceShapeRecordId,
   ): Promise<ResolutionLockRecord | undefined> {
     return Promise.resolve(this.#byResource.get(resourceId));
+  }
+
+  async getMany(
+    resourceIds: readonly ResourceShapeRecordId[],
+  ): Promise<readonly ResolutionLockRecord[]> {
+    const unique = [...new Set(resourceIds)];
+    if (unique.length > 100) {
+      throw new RangeError("Resolution lock getMany accepts at most 100 ids");
+    }
+    return unique
+      .map((resourceId) => this.#byResource.get(resourceId))
+      .filter(
+        (lock): lock is ResolutionLockRecord => lock !== undefined,
+      );
   }
 
   getSync(resourceId: ResourceShapeRecordId): ResolutionLockRecord | undefined {

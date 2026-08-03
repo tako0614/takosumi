@@ -290,6 +290,41 @@ for (const backend of backends) {
       ).toEqual(record);
     });
 
+    test("resolution locks: bounded batch reads return canonical records", async () => {
+      const first = minimalLock(`lock-batch-first-${backend.label}`);
+      const second = fullLock(`lock-batch-second-${backend.label}`);
+      await stores.locks.put(first);
+      await stores.locks.put(second);
+
+      const read = await stores.locks.getMany([
+        second.resourceId,
+        "lock-batch-missing",
+        first.resourceId,
+        second.resourceId,
+      ]);
+      expect(
+        [...read].sort((left, right) =>
+          left.resourceId.localeCompare(right.resourceId),
+        ),
+      ).toEqual(
+        [first, second].sort((left, right) =>
+          left.resourceId.localeCompare(right.resourceId),
+        ),
+      );
+      expect(await stores.locks.getMany([])).toEqual([]);
+      await expect(
+        stores.locks.getMany(
+          Array.from(
+            { length: 101 },
+            (_, index) => `lock-batch-limit-${backend.label}-${index}`,
+          ),
+        ),
+      ).rejects.toThrow("at most 100 ids");
+
+      await stores.locks.delete(first.resourceId);
+      await stores.locks.delete(second.resourceId);
+    });
+
     test("exact Form identity round-trips with its matching ResolutionLock", async () => {
       const record: ResourceShapeRecord = {
         ...fullShape(),

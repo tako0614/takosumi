@@ -2535,6 +2535,7 @@ test("canonical Ready exact and paged inventory fail closed when ResolutionLock 
             }
           : lock;
       },
+      getMany: (resourceIds) => originalLocks.getMany(resourceIds),
       delete: (resourceId) => originalLocks.delete(resourceId),
     },
   };
