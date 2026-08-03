@@ -92,6 +92,12 @@ export interface ResourceShapePendingOperation {
   readonly operation: ResourceOperation;
   readonly operationKey: string;
   /**
+   * Digest of the exact canonical adapter plan authorized before backend
+   * dispatch. Apply recovery may recompute the plan only when this digest
+   * still matches; legacy rows without the proof remain fail-closed.
+   */
+  readonly adapterPlanDigest?: `sha256:${string}`;
+  /**
    * OpenTofu lifecycle recovery points at the shared deploy-control ApplyRun;
    * direct plugins omit this field and keep using ResourceOperationRun.
    */

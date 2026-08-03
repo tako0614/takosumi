@@ -79,15 +79,19 @@ export interface AdapterApplyInput {
    * Core-minted stable operation identity for direct adapter plugins. When it
    * is present, `apply` MUST be safe to replay with the same key and
    * `resourceId`: native create/update uses stable names and must reconcile the
-   * same provider object instead of allocating a duplicate. Observe/refresh
+   * complete pinned declaration on the same provider object instead of
+   * allocating a duplicate. A successful recovery replay is authoritative
+   * only after every apply-owned side effect has converged. Observe/refresh
    * remain read-only and may use the key only for correlation.
    */
   readonly operationKey?: string;
   /**
-   * Explicit Core-owned continuation context after an apply response was
-   * lost. Adapters may use the pinned planned native identity for read-only
-   * observe/refresh in this lane, but must not treat planned evidence as
-   * canonical during ordinary lifecycle calls or delete.
+   * Explicit Core-owned continuation context after an apply response was lost
+   * or a later apply-owned step failed. Core replays `apply` with the same
+   * operation key, generation, plan, and pinned planned native identity. The
+   * adapter must idempotently create-or-adopt that exact object and converge
+   * the complete declaration before returning success. Planned evidence is
+   * not canonical authority for ordinary observation, refresh, or delete.
    */
   readonly recovery?: {
     readonly operation: "apply";

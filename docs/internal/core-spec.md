@@ -1125,12 +1125,21 @@ cursor pagination
 
 For a direct adapter plugin, Core supplies the same internal `operationKey`
 when an uncertain apply/delete is retried. `apply` must create or update the
-provider object by the stable canonical Resource identity, and `delete` must
-remove that same object idempotently; replaying one key must never allocate a
-second native object. Recovery first performs read-only `observe`: apply uses
-read-only refresh for `current`/`drifted` and replays apply only for `missing`,
-while delete finalizes read-only for `missing` and replays delete only for
-`current`/`drifted`.
+provider object by the stable canonical Resource identity and converge every
+side effect owned by that pinned declaration; `delete` must remove that same
+object idempotently. Replaying one key must never allocate a second native
+object. Apply recovery replays that exact `apply` contract with the original
+operation key, generation, plan, and planned native identity. It does not use
+read-only `refresh` as proof that partially committed apply work completed.
+Before backend dispatch, Core persists both the original deployment review and
+a digest of the exact canonical adapter plan. Recovery recomputes that plan and
+must match the digest before calling the adapter; a changed planner/operator
+module or a legacy pending row without this proof remains Applying and fails
+closed. A terminal-failed legacy Run is also not replaced, because replacement
+would mint a different adapter operation key and could duplicate secondary
+effects.
+Delete recovery first performs read-only `observe`, finalizes read-only for
+`missing`, and replays delete only for `current`/`drifted`.
 
 Compatibility APIs are clients around the Resource API. Control-plane profiles
 translate supported industry-standard requests into typed preview/apply/delete

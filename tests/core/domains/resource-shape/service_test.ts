@@ -33,6 +33,7 @@ import {
   type ResourceShapeLifecycleEvent,
   type ResourceShapeLifecycleObserver,
   ResourceAdapterApplyError,
+  MapResourceShapeModuleRegistry,
   type ResourceShapeStores,
   LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY,
   ResourceShapeService as CoreResourceShapeService,
@@ -378,6 +379,46 @@ class CheckpointingOpentofuAdapter extends PluginSpyAdapter {
       );
     }
     this.destroyRunIds.push(applyRunId);
+  }
+}
+
+class LostCheckpointedOpentofuApplyAdapter extends PluginSpyAdapter {
+  override readonly id = "opentofu";
+
+  override async apply(input: AdapterApplyInput): Promise<AdapterApplyResult> {
+    this.applyInputs.push(input);
+    await input.opentofuApplyRun?.checkpointApplyRun?.(
+      "apply_plan_drift_A",
+      "plan_apply_plan_drift_A",
+    );
+    throw new Error("simulated lost OpenTofu apply response");
+  }
+}
+
+class SlowCheckpointingOpentofuAdapter extends CheckpointingOpentofuAdapter {
+  readonly started: Promise<void>;
+  #startApply!: () => void;
+  #finishApply!: () => void;
+  #finishApplyPromise: Promise<void>;
+
+  constructor() {
+    super();
+    this.started = new Promise((resolve) => {
+      this.#startApply = resolve;
+    });
+    this.#finishApplyPromise = new Promise((resolve) => {
+      this.#finishApply = resolve;
+    });
+  }
+
+  finishApply(): void {
+    this.#finishApply();
+  }
+
+  override async apply(input: AdapterApplyInput): Promise<AdapterApplyResult> {
+    this.#startApply();
+    await this.#finishApplyPromise;
+    return await super.apply(input);
   }
 }
 
@@ -2164,9 +2205,13 @@ test("direct-plugin apply claim acknowledgement loss preserves its Run for recov
     planDigest: preview.value.planDigest,
   });
   expect(recovered.ok).toBe(true);
-  expect(recoveryAdapter.applyInputs).toHaveLength(0);
-  expect(recoveryAdapter.observeInputs).toHaveLength(1);
-  expect(recoveryAdapter.refreshInputs).toHaveLength(1);
+  expect(recoveryAdapter.applyInputs).toHaveLength(1);
+  expect(recoveryAdapter.observeInputs).toHaveLength(0);
+  expect(recoveryAdapter.refreshInputs).toHaveLength(0);
+  expect(recoveryAdapter.applyInputs[0]?.recovery).toEqual({
+    operation: "apply",
+    backendOutcome: "unknown",
+  });
   const ready = await baseStores.resources.get(
     "tkrn:space_1:ContainerService:agent-claim-ack-loss",
   );
@@ -2496,7 +2541,7 @@ test("an unknown adapter outcome keeps reservation and retries the same generati
   const admission = new RecordingDeploymentAdmission();
   const uncertainService = new ResourceShapeService({
     stores,
-    adapter: new UnknownOutcomeApplyAdapter(),
+    adapter: new LostCheckpointedOpentofuApplyAdapter(),
     deploymentAdmission: admission,
     now: () => NOW,
     moduleRegistry: TEST_RESOURCE_SHAPE_MODULE_REGISTRY,
@@ -2518,7 +2563,7 @@ test("an unknown adapter outcome keeps reservation and retries the same generati
   expect((await stores.resources.get(APPLY_ID))?.phase).toBe("Applying");
   expect((await stores.resources.get(APPLY_ID))?.generation).toBe(1);
 
-  const recoveryAdapter = new RefreshingAdapter();
+  const recoveryAdapter = new CheckpointingOpentofuAdapter();
   const recoveryService = new ResourceShapeService({
     stores,
     adapter: recoveryAdapter,
@@ -2539,8 +2584,8 @@ test("an unknown adapter outcome keeps reservation and retries the same generati
   expect((await stores.resources.get(APPLY_ID))?.generation).toBe(1);
   expect(admission.captureContexts).toHaveLength(1);
   expect(admission.releaseContexts).toHaveLength(0);
-  expect(recoveryAdapter.applyInputs).toHaveLength(0);
-  expect(recoveryAdapter.refreshInputs).toHaveLength(1);
+  expect(recoveryAdapter.applyInputs).toHaveLength(1);
+  expect(recoveryAdapter.refreshInputs).toHaveLength(0);
   expect(admission.quoteContexts.map((context) => context.operation)).toEqual([
     "create",
     "create",
@@ -2548,6 +2593,132 @@ test("an unknown adapter outcome keeps reservation and retries the same generati
   expect(admission.reserveContexts.map((context) => context.operation)).toEqual(
     ["create", "create"],
   );
+});
+
+test("apply recovery fails closed when the pinned operator module plan has drifted", async () => {
+  const stores = createInMemoryResourceShapeStores();
+  const moduleRegistry = (revision: string) =>
+    new MapResourceShapeModuleRegistry({
+      "cloudflare-r2-bucket": {
+        files: [
+          {
+            path: "main.tf",
+            text: `# ${revision}\nterraform {}\n`,
+          },
+        ],
+      },
+    });
+  const firstAdapter = new LostCheckpointedOpentofuApplyAdapter();
+  const first = new ResourceShapeService({
+    stores,
+    adapter: firstAdapter,
+    now: () => NOW,
+    moduleRegistry: moduleRegistry("reviewed module"),
+  });
+  await seed(first);
+  const preview = await first.preview(APPLY);
+  expect(preview.ok).toBe(true);
+  if (!preview.ok) return;
+  const pending = await first.apply(APPLY, {
+    planDigest: preview.value.planDigest,
+  });
+  expect(pending.ok).toBe(false);
+  if (!pending.ok) {
+    expect(pending.error.code).toBe("deployment_finalize_pending");
+  }
+  expect(firstAdapter.applyInputs).toHaveLength(1);
+  expect(
+    firstAdapter.applyInputs[0]?.plan.operatorModule?.files[0]?.text,
+  ).toContain("reviewed module");
+  const pinnedApplying = await stores.resources.get(APPLY_ID);
+  expect(pinnedApplying?.pendingOperation?.adapterPlanDigest).toMatch(
+    /^sha256:[0-9a-f]{64}$/u,
+  );
+  expect(pinnedApplying).toMatchObject({
+    phase: "Applying",
+    pendingOperation: {
+      authority: "opentofu_apply_run",
+      deploymentReview: { planDigest: preview.value.planDigest },
+    },
+  });
+
+  const recoveryAdapter = new CheckpointingOpentofuAdapter();
+  const restarted = new ResourceShapeService({
+    stores,
+    adapter: recoveryAdapter,
+    now: () => NOW,
+    moduleRegistry: moduleRegistry("drifted module"),
+  });
+  const recovered = await restarted.recoverApply(APPLY, {
+    planDigest: preview.value.planDigest,
+  });
+  expect(recovered).toEqual({
+    ok: false,
+    error: {
+      code: "deployment_plan_changed",
+      message:
+        "deployment changed after preview; preview the current service definition again",
+    },
+  });
+  expect(recoveryAdapter.applyInputs).toHaveLength(0);
+  expect((await stores.resources.get(APPLY_ID))?.phase).toBe("Applying");
+});
+
+test("a stale apply recovery cannot publish Ready over a newer Resource generation", async () => {
+  const stores = createInMemoryResourceShapeStores();
+  const first = new ResourceShapeService({
+    stores,
+    adapter: new LostCheckpointedOpentofuApplyAdapter(),
+    now: () => NOW,
+    moduleRegistry: TEST_RESOURCE_SHAPE_MODULE_REGISTRY,
+  });
+  await seed(first);
+  const pending = await reviewedApply(first, APPLY);
+  expect(pending.ok).toBe(false);
+  expect(await stores.resources.get(APPLY_ID)).toMatchObject({
+    phase: "Applying",
+    generation: 1,
+  });
+
+  const recoveryAdapter = new SlowCheckpointingOpentofuAdapter();
+  const restarted = new ResourceShapeService({
+    stores,
+    adapter: recoveryAdapter,
+    now: () => NOW,
+    moduleRegistry: TEST_RESOURCE_SHAPE_MODULE_REGISTRY,
+  });
+  const preview = await restarted.preview(APPLY);
+  expect(preview.ok).toBe(true);
+  if (!preview.ok) return;
+  const recovering = restarted.recoverApply(APPLY, {
+    planDigest: preview.value.planDigest,
+  });
+  await recoveryAdapter.started;
+
+  const applying = await stores.resources.get(APPLY_ID);
+  if (!applying) throw new Error("missing Applying Resource");
+  const { pendingOperation: _staleOperation, ...newerBase } = applying;
+  await stores.resources.upsert({
+    ...newerBase,
+    phase: "Ready",
+    generation: 2,
+    observedGeneration: 2,
+    outputs: { generation_owner: "newer" },
+    conditions: [],
+    updatedAt: "2026-01-01T00:00:00.001Z",
+  });
+
+  recoveryAdapter.finishApply();
+  const stale = await recovering;
+  expect(stale.ok).toBe(false);
+  if (!stale.ok) expect(stale.error.code).toBe("deployment_finalize_pending");
+  expect(recoveryAdapter.applyInputs[0]?.resourceGeneration).toBe(1);
+  expect(await stores.resources.get(APPLY_ID)).toMatchObject({
+    phase: "Ready",
+    generation: 2,
+    observedGeneration: 2,
+    outputs: { generation_owner: "newer" },
+  });
 });
 
 test("reserved state remains the recovery authority when pending annotation fails", async () => {
@@ -2592,7 +2763,7 @@ test("post-backend persistence failure remains Applying and settlement-pending",
   const admission = new RecordingDeploymentAdmission();
   const service = new ResourceShapeService({
     stores,
-    adapter: new StubResourceShapeAdapter(),
+    adapter: new CheckpointingOpentofuAdapter(),
     deploymentAdmission: admission,
     now: () => NOW,
     moduleRegistry: TEST_RESOURCE_SHAPE_MODULE_REGISTRY,
@@ -4508,7 +4679,7 @@ test("Form-backed apply recovery consumes pinned admission after the backend was
   ).toBe("Ready");
 });
 
-test("direct-plugin apply response loss observes current and never creates a duplicate after restart", async () => {
+test("direct-plugin apply response loss replays the exact idempotent apply without creating a duplicate", async () => {
   const stores = createInMemoryResourceShapeStores();
   const ledger = new InMemoryOpenTofuControlStore();
   const backend: StableApplyBackend = {
@@ -4575,20 +4746,19 @@ test("direct-plugin apply response loss observes current and never creates a dup
     planDigest: preview.value.planDigest,
   });
   expect(recovered.ok).toBe(true);
-  expect(recoveryAdapter.applyInputs).toHaveLength(0);
-  expect(recoveryAdapter.observeInputs).toHaveLength(1);
-  expect(recoveryAdapter.refreshInputs).toHaveLength(1);
-  expect(recoveryAdapter.observeInputs[0]?.recovery).toEqual({
-    operation: "apply",
-    backendOutcome: "unknown",
-  });
-  expect(recoveryAdapter.refreshInputs[0]?.recovery).toEqual({
+  expect(recoveryAdapter.applyInputs).toHaveLength(1);
+  expect(recoveryAdapter.observeInputs).toHaveLength(0);
+  expect(recoveryAdapter.refreshInputs).toHaveLength(0);
+  expect(recoveryAdapter.applyInputs[0]?.recovery).toEqual({
     operation: "apply",
     backendOutcome: "unknown",
   });
   expect(backend.creations).toBe(1);
-  expect(recoveryAdapter.refreshInputs[0]?.operationKey).toBe(
+  expect(recoveryAdapter.applyInputs[0]?.operationKey).toBe(
     firstAdapter.applyInputs[0]?.operationKey,
+  );
+  expect(recoveryAdapter.applyInputs[0]?.plan).toEqual(
+    firstAdapter.applyInputs[0]?.plan,
   );
   const ready = await stores.resources.get(
     "tkrn:space_1:ContainerService:agent-response-loss",
@@ -4600,7 +4770,7 @@ test("direct-plugin apply response loss observes current and never creates a dup
   expect(run?.status).toBe("succeeded");
 });
 
-test("direct-plugin recovery replaces a terminalized Applying Run without duplicating the backend", async () => {
+test("direct-plugin recovery refuses a terminalized legacy Run before a second operation key can reach the backend", async () => {
   const stores = createInMemoryResourceShapeStores();
   const ledger = new InMemoryOpenTofuControlStore();
   const backend: StableApplyBackend = {
@@ -4670,7 +4840,6 @@ test("direct-plugin recovery replaces a terminalized Applying Run without duplic
       store: ledger,
       now: () => new Date(NOW),
     }),
-    newOperationNonce: () => "terminalized-recovery-incarnation",
     now: () => NOW,
   });
   const preview = await restarted.preview(request);
@@ -4679,32 +4848,26 @@ test("direct-plugin recovery replaces a terminalized Applying Run without duplic
   const recovered = await restarted.recoverApply(request, {
     planDigest: preview.value.planDigest,
   });
-  expect(recovered.ok).toBe(true);
-  expect(recoveryAdapter.observeInputs).toHaveLength(1);
-  expect(recoveryAdapter.refreshInputs).toHaveLength(1);
+  expect(recovered.ok).toBe(false);
+  if (!recovered.ok) {
+    expect(recovered.error).toEqual({
+      code: "apply_failed",
+      message: `resource ${id} canonical apply Run ${originalRun.id} is terminal failed; exact recovery cannot mint a replacement adapter operation key`,
+    });
+  }
+  expect(recoveryAdapter.observeInputs).toHaveLength(0);
+  expect(recoveryAdapter.refreshInputs).toHaveLength(0);
   expect(recoveryAdapter.applyInputs).toHaveLength(0);
-  expect(recoveryAdapter.observeInputs[0]?.recovery).toEqual({
-    operation: "apply",
-    backendOutcome: "unknown",
-  });
-  expect(recoveryAdapter.refreshInputs[0]?.recovery).toEqual({
-    operation: "apply",
-    backendOutcome: "unknown",
-  });
   expect(backend.creations).toBe(1);
-  const ready = await stores.resources.get(id);
-  expect(ready?.phase).toBe("Ready");
-  expect(ready?.lastOperationRunId).not.toBe(originalRunId);
+  expect(backend.operationKeys).toEqual([
+    firstAdapter.applyInputs[0]?.operationKey,
+  ]);
+  const stillApplying = await stores.resources.get(id);
+  expect(stillApplying?.phase).toBe("Applying");
+  expect(stillApplying?.pendingOperation?.runId).toBe(originalRunId);
   expect(
     (await ledger.getResourceOperationRun(originalRunId ?? "missing"))?.status,
   ).toBe("failed");
-  expect(
-    (
-      await ledger.getResourceOperationRun(
-        ready?.lastOperationRunId ?? "missing",
-      )
-    )?.status,
-  ).toBe("succeeded");
 });
 
 test("recovery admission denial does not terminalize the shared Applying Run", async () => {
@@ -4832,9 +4995,9 @@ test("scheduled repair resumes an exact direct-plugin apply from its retained re
     auditsRepaired: 1,
     pending: 0,
   });
-  expect(recoveryAdapter.applyInputs).toHaveLength(0);
-  expect(recoveryAdapter.observeInputs).toHaveLength(1);
-  expect(recoveryAdapter.refreshInputs).toHaveLength(1);
+  expect(recoveryAdapter.applyInputs).toHaveLength(1);
+  expect(recoveryAdapter.observeInputs).toHaveLength(0);
+  expect(recoveryAdapter.refreshInputs).toHaveLength(0);
   expect(backend.creations).toBe(1);
   expect(
     (
@@ -4906,12 +5069,8 @@ test("direct-plugin apply recovery retains its exact pending Run across a D1-bac
     planDigest: preview.value.planDigest,
   });
   expect(recovered.ok).toBe(true);
-  expect(recoveryAdapter.observeInputs).toHaveLength(1);
+  expect(recoveryAdapter.observeInputs).toHaveLength(0);
   expect(recoveryAdapter.applyInputs).toHaveLength(1);
-  expect(recoveryAdapter.observeInputs[0]?.recovery).toEqual({
-    operation: "apply",
-    backendOutcome: "unknown",
-  });
   expect(recoveryAdapter.applyInputs[0]?.recovery).toEqual({
     operation: "apply",
     backendOutcome: "unknown",
@@ -4986,16 +5145,13 @@ test("direct-plugin apply recovery pins adapter ownership to the original Run ac
     planDigest: preview.value.planDigest,
   });
   expect(recovered.ok).toBe(true);
-  expect(recoveryAdapter.observeInputs).toHaveLength(1);
+  expect(recoveryAdapter.observeInputs).toHaveLength(0);
   expect(recoveryAdapter.refreshInputs).toHaveLength(0);
   expect(recoveryAdapter.applyInputs).toHaveLength(1);
   expect(recoveryAdapter.applyInputs[0]?.operationKey).toBe(
     firstAdapter.applyInputs[0]?.operationKey,
   );
-  for (const adapterInput of [
-    ...recoveryAdapter.observeInputs,
-    ...recoveryAdapter.applyInputs,
-  ]) {
+  for (const adapterInput of recoveryAdapter.applyInputs) {
     expect(adapterInput.actor).toEqual({
       ...RECOVERY_ACTOR,
       actorAccountId: ACTOR.actorAccountId,

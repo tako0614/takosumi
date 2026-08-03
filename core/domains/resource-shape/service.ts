@@ -1180,8 +1180,10 @@ export class ResourceShapeService {
 
   /**
    * Host recovery entrypoint for a Resource left Applying after an uncertain
-   * backend outcome. It only performs adapter refresh; it never redispatches
-   * provider mutation. Hosts should call it from their durable reservation/run
+   * backend outcome. It replays the exact adapter apply with the original
+   * stable operation identity and pinned desired state, so the adapter can
+   * idempotently finish partially committed work without allocating another
+   * native object. Hosts should call it from their durable reservation/run
    * reconciler, not as an ordinary user retry.
    */
   async recoverApply(
@@ -1297,12 +1299,15 @@ export class ResourceShapeService {
     if (!resolvedConnections.ok) return resolvedConnections;
 
     const evidence = await resourceDeploymentEvidence(req, output, plan);
+    const adapterPlanDigest = await resourceAdapterPlanDigest(plan);
     // Recovery is an internal continuation of the already claimed Resource,
-    // pinned ResolutionLock, and canonical operation Run. Requiring a fresh
-    // preview digest after backend dispatch can strand Applying state when
-    // host composition changes. The pending operation's original review is
-    // the durable admission authority; a caller-supplied recovery review is
-    // validated only as an API precondition and cannot replace that authority.
+    // pinned ResolutionLock, and canonical operation Run. The pending
+    // operation's original review and canonical adapter-plan digest are the
+    // durable plan authority. Recomputed planner/module output must still
+    // match that digest exactly; otherwise a newer host composition could send
+    // different instructions through the original adapter operation key. A
+    // caller-supplied recovery review is validated only as an API precondition
+    // and cannot replace either pin.
     const pinnedRecoveryReview =
       recoveryRequested && recoveringApplying
         ? existing?.pendingOperation?.deploymentReview
@@ -1315,6 +1320,57 @@ export class ResourceShapeService {
       return {
         ok: false,
         error: { code: "deployment_plan_changed", message: reviewError },
+      };
+    }
+    if (recoveryRequested && recoveringApplying && !pinnedRecoveryReview) {
+      return {
+        ok: false,
+        error: {
+          code: "deployment_plan_changed",
+          message: `resource ${id} has no pinned deployment review for exact apply recovery`,
+        },
+      };
+    }
+    const pinnedAdapterPlanDigest =
+      recoveryRequested && recoveringApplying
+        ? existing?.pendingOperation?.adapterPlanDigest
+        : undefined;
+    if (
+      recoveryRequested &&
+      recoveringApplying &&
+      !pinnedAdapterPlanDigest
+    ) {
+      return {
+        ok: false,
+        error: {
+          code: "deployment_plan_changed",
+          message: `resource ${id} has no pinned canonical adapter plan for exact apply recovery`,
+        },
+      };
+    }
+    if (
+      pinnedAdapterPlanDigest &&
+      !SHA256_DIGEST_PATTERN.test(pinnedAdapterPlanDigest)
+    ) {
+      return {
+        ok: false,
+        error: {
+          code: "deployment_plan_changed",
+          message: `resource ${id} has an invalid pinned canonical adapter plan for exact apply recovery`,
+        },
+      };
+    }
+    if (
+      pinnedAdapterPlanDigest &&
+      pinnedAdapterPlanDigest !== adapterPlanDigest
+    ) {
+      return {
+        ok: false,
+        error: {
+          code: "deployment_plan_changed",
+          message:
+            "deployment changed after preview; preview the current service definition again",
+        },
       };
     }
     const deploymentReview = pinnedRecoveryReview ?? review;
@@ -1374,33 +1430,15 @@ export class ResourceShapeService {
           }
           assertResourceOperationFormEvidence(operationRun, form.value);
           if (operationRun.status === "failed") {
-            // Older recovery paths could terminalize the shared Run after a
-            // conclusive admission failure while restoring the Resource to
-            // its prior Applying claim. A failed Run is immutable, so resume
-            // through a fresh revision. Recovery still observes the stable
-            // backend identity before replaying any provider mutation.
-            const replacement = await this.#beginPluginOperationRunClaim({
-              operation: "apply",
-              resourceId: id,
-              actor: req.actor,
-              ...(form.value === undefined ? {} : { form: form.value }),
-              identity: {
-                incarnationNonce: validatedOperationNonce(
-                  this.#newOperationNonce(),
-                ),
-                generation,
-                managedBy: incomingManagedBy,
-                planDigest: deploymentReview.planDigest,
-                resolutionFingerprint: evidence.resolutionFingerprint,
-              },
-            });
-            operationRun = replacement.run;
-            operationRunCreated = replacement.created;
-            if (!operationRunCreated || operationRun.status !== "running") {
-              throw new Error(
-                `resource ${id} recovery could not claim a fresh canonical apply Run`,
-              );
-            }
+            // Legacy paths could terminalize a Run while leaving its Resource
+            // Applying. That Run is immutable, but minting a replacement also
+            // mints a different adapter operation key and can duplicate
+            // apply-owned secondary effects. Without explicit evidence that
+            // the original key can be retained, this compatibility lane must
+            // remain fail-closed.
+            throw new Error(
+              `resource ${id} canonical apply Run ${operationRun.id} is terminal failed; exact recovery cannot mint a replacement adapter operation key`,
+            );
           }
         } else {
           const operationRunClaim = await this.#beginPluginOperationRunClaim({
@@ -1572,6 +1610,7 @@ export class ResourceShapeService {
               runId: operationRun.id,
               operation: "apply" as const,
               operationKey: operationRun.resourceOperationKey,
+              adapterPlanDigest,
               deploymentReview,
             },
           }
@@ -1784,6 +1823,7 @@ export class ResourceShapeService {
                   planRunId,
                   operation: "apply",
                   deploymentReview,
+                  adapterPlanDigest,
                   now: this.#now(),
                 });
               } catch (error) {
@@ -1804,6 +1844,7 @@ export class ResourceShapeService {
                   planRunId,
                   operation: "apply",
                   deploymentReview,
+                  adapterPlanDigest,
                   now: this.#now(),
                 });
               } catch (error) {
@@ -1890,23 +1931,13 @@ export class ResourceShapeService {
         };
       } else {
         adapterStarted = true;
-        if (recoveringApplying && operationRun) {
-          // A lost response does not prove whether create/update reached the
-          // provider. Observe by stable Resource identity first. Existing
-          // native state is finalized through read-only refresh; only a proven
-          // missing backend is replayed with the exact same idempotency key.
-          const observation = await this.#adapter.observe(adapterInput);
-          result =
-            observation.status === "missing"
-              ? await this.#adapter.apply(adapterInput)
-              : await this.#adapter.refresh(adapterInput);
-        } else {
-          result =
-            recoveringApplying &&
-            !usesOpentofuRunAuthority
-              ? await this.#adapter.refresh(adapterInput)
-              : await this.#adapter.apply(adapterInput);
-        }
+        // Apply recovery is an exact replay of the original mutating contract:
+        // Core supplies the same operation key, pinned desired plan, Resource
+        // generation, and planned native identity. The adapter must reconcile
+        // that stable provider object idempotently and return only after the
+        // complete declaration has converged. `refresh` remains read-only and
+        // therefore cannot prove completion of a partially committed apply.
+        result = await this.#adapter.apply(adapterInput);
       }
       result = {
         ...result,
@@ -6450,6 +6481,7 @@ async function checkpointOpentofuApplyRun(input: {
   readonly planRunId: string;
   readonly operation: "apply" | "delete";
   readonly deploymentReview?: ResourceDeploymentReview;
+  readonly adapterPlanDigest?: `sha256:${string}`;
   readonly now: IsoTimestamp;
 }): Promise<ResourceShapeRecord> {
   const pendingOperation = {
@@ -6461,6 +6493,9 @@ async function checkpointOpentofuApplyRun(input: {
     ...(input.deploymentReview
       ? { deploymentReview: input.deploymentReview }
       : {}),
+    ...(input.adapterPlanDigest
+      ? { adapterPlanDigest: input.adapterPlanDigest }
+      : {}),
   };
   if (
     opentofuApplyRunCheckpointMatches(
@@ -6468,6 +6503,7 @@ async function checkpointOpentofuApplyRun(input: {
       input.applyRunId,
       input.planRunId,
       input.operation,
+      input.adapterPlanDigest,
     )
   ) {
     return input.record;
@@ -6495,6 +6531,7 @@ async function checkpointOpentofuApplyRun(input: {
         input.applyRunId,
         input.planRunId,
         input.operation,
+        input.adapterPlanDigest,
       )
     ) {
       return persisted.record;
@@ -6511,6 +6548,7 @@ async function checkpointOpentofuApplyRun(input: {
         input.applyRunId,
         input.planRunId,
         input.operation,
+        input.adapterPlanDigest,
       )
     ) {
       return observed;
@@ -6524,13 +6562,15 @@ function opentofuApplyRunCheckpointMatches(
   applyRunId: string,
   planRunId: string,
   operation: "apply" | "delete",
+  adapterPlanDigest?: string,
 ): boolean {
   return (
     record.pendingOperation?.authority === "opentofu_apply_run" &&
     record.pendingOperation.operation === operation &&
     record.pendingOperation.runId === applyRunId &&
     record.pendingOperation.planRunId === planRunId &&
-    record.pendingOperation.operationKey === applyRunId
+    record.pendingOperation.operationKey === applyRunId &&
+    record.pendingOperation.adapterPlanDigest === adapterPlanDigest
   );
 }
 
@@ -7088,6 +7128,15 @@ interface ResourceDeploymentEvidence {
   readonly planDigest: string;
   readonly specDigest: string;
   readonly resolutionFingerprint: string;
+}
+
+async function resourceAdapterPlanDigest(
+  plan: ResourceShapePlan,
+): Promise<`sha256:${string}`> {
+  return (await canonicalSha256({
+    apiVersion: "takosumi.resource-adapter-plan/v1",
+    plan,
+  })) as `sha256:${string}`;
 }
 
 async function resourceDeploymentEvidence(

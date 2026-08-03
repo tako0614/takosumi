@@ -444,11 +444,16 @@ class SlowDeleteAdapter extends StubResourceShapeAdapter {
 }
 
 class UnknownOnceApplyAdapter extends StubResourceShapeAdapter {
+  override readonly id = "opentofu";
   #failed = false;
 
   override async apply(input: AdapterApplyInput): Promise<AdapterApplyResult> {
     if (!this.#failed) {
       this.#failed = true;
+      await input.opentofuApplyRun?.checkpointApplyRun?.(
+        `apply_${input.resourceId}`,
+        `plan_${input.resourceId}`,
+      );
       throw new ResourceAdapterApplyError("simulated lost backend response", {
         mutationOutcome: "unknown",
       });
