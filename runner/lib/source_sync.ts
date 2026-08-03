@@ -427,29 +427,6 @@ export async function runSourceSync(
     const resolvedCommit = await timer.measure("source_ref_resolve", () =>
       resolveSourceCommit(source, gitContext),
     );
-    if (reuseSnapshot?.resolvedCommit === resolvedCommit) {
-      await timer.measure("source_snapshot_reuse", async () => undefined);
-      return withPhaseTimings(
-        {
-          runId,
-          action: "source_sync",
-          status: "succeeded",
-          exitCode: 0,
-          resolvedCommit,
-          archiveDigest: reuseSnapshot.archiveDigest,
-          archiveSizeBytes: reuseSnapshot.archiveSizeBytes,
-          sourceArchive: {
-            kind: "object-storage",
-            ref: reuseSnapshot.archiveRef,
-            digest: reuseSnapshot.archiveDigest,
-            contentType: "application/zstd",
-            sizeBytes: reuseSnapshot.archiveSizeBytes,
-            reusedFromSnapshotId: reuseSnapshot.id,
-          },
-        },
-        timer,
-      );
-    }
     await timer.measure("source_clone", () =>
       shallowCloneAtCommit(
         source,
@@ -466,6 +443,31 @@ export async function runSourceSync(
       "source_repository_manifest",
       () => readRepositoryManifest(workspace.sourceRoot),
     );
+    if (reuseSnapshot?.resolvedCommit === resolvedCommit) {
+      await timer.measure("source_snapshot_reuse", async () => undefined);
+      return withPhaseTimings(
+        {
+          runId,
+          action: "source_sync",
+          status: "succeeded",
+          exitCode: 0,
+          resolvedCommit,
+          archiveDigest: reuseSnapshot.archiveDigest,
+          archiveSizeBytes: reuseSnapshot.archiveSizeBytes,
+          repositoryInstallMetadata,
+          repositoryManifest,
+          sourceArchive: {
+            kind: "object-storage",
+            ref: reuseSnapshot.archiveRef,
+            digest: reuseSnapshot.archiveDigest,
+            contentType: "application/zstd",
+            sizeBytes: reuseSnapshot.archiveSizeBytes,
+            reusedFromSnapshotId: reuseSnapshot.id,
+          },
+        },
+        timer,
+      );
+    }
     const subtree = await timer.measure("source_subtree", () =>
       resolveSourceSubtree(workspace.sourceRoot, source.path),
     );

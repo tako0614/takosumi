@@ -1,4 +1,5 @@
 import {
+  chmod,
   mkdir,
   mkdtemp,
   rm,
@@ -23,6 +24,7 @@ import {
   readRepositoryInstallMetadata,
   readRepositoryManifest,
   runSourceSync,
+  shellQuote,
   shallowCloneAtCommit,
 } from "../../../runner/lib/source_sync.ts";
 
@@ -409,17 +411,64 @@ test("parseSourceCredentials returns empty for an absent credentials field", () 
   });
 });
 
-test("runSourceSync reuses an unchanged snapshot without cloning or archiving", async () => {
+test("runSourceSync reparses metadata and manifest while reusing an unchanged archive", async () => {
   const runId = `source_reuse_${crypto.randomUUID().replace(/-/g, "")}`;
-  const root = join(RUN_ROOT, runId);
-  const previousFetch = globalThis.fetch;
-  const resolvedCommit = "0123456789abcdef0123456789abcdef01234567";
+  const workspaceRoot = join(RUN_ROOT, runId);
+  const fixtureRoot = await mkdtemp(join(tmpdir(), "takosumi-source-reuse-"));
+  const previousPath = Bun.env.PATH;
   try {
-    globalThis.fetch = (async () =>
-      new Response(
-        JSON.stringify({ Answer: [{ type: 1, data: "140.82.112.3" }] }),
-        { headers: { "content-type": "application/dns-json" } },
-      )) as typeof fetch;
+    const repositoryRoot = join(fixtureRoot, "repo");
+    git(fixtureRoot, ["init", "-b", "main", "repo"]);
+    await mkdir(join(repositoryRoot, ".well-known"), { recursive: true });
+    const repositoryInstallMetadata = JSON.stringify({
+      schemaVersion: "tcs.repo/v1",
+      modulePath: "deploy/opentofu",
+    });
+    const repositoryManifest = JSON.stringify({
+      apiVersion: "takosumi.com/v1",
+      kind: "Repository",
+      install: { modules: { ".": { inputs: [] } } },
+    });
+    await writeFile(
+      join(repositoryRoot, ".well-known", "tcs.json"),
+      repositoryInstallMetadata,
+    );
+    await writeFile(
+      join(repositoryRoot, ".well-known", "takosumi.json"),
+      repositoryManifest,
+    );
+    await writeFile(join(repositoryRoot, "main.tf"), "terraform {}\n");
+    git(repositoryRoot, ["add", "."]);
+    git(repositoryRoot, [
+      "-c",
+      "user.email=test@example.com",
+      "-c",
+      "user.name=Takosumi Test",
+      "commit",
+      "-m",
+      "initial",
+    ]);
+    const resolvedCommit = git(repositoryRoot, ["rev-parse", "HEAD"]);
+
+    // Keep the source URL policy and runner clone path under test while
+    // rewriting the public-looking URL to the local fixture for this test.
+    const fakeBin = join(fixtureRoot, "bin");
+    await mkdir(fakeBin, { recursive: true });
+    const gitWrapper = join(fakeBin, "git");
+    await writeFile(
+      gitWrapper,
+      [
+        "#!/bin/sh",
+        "set -eu",
+        'if [ "$1" = "fetch" ]; then',
+        `/usr/bin/git remote set-url origin ${shellQuote(repositoryRoot)}`,
+        "fi",
+        '/usr/bin/git "$@"',
+        "",
+      ].join("\n"),
+    );
+    await chmod(gitWrapper, 0o755);
+    Bun.env.PATH = `${fakeBin}:${previousPath ?? ""}`;
 
     const result = await runSourceSync(runId, {
       action: "source_sync",
@@ -439,6 +488,7 @@ test("runSourceSync reuses an unchanged snapshot without cloning or archiving", 
         archiveSizeBytes: 2048,
       },
     });
+    const sourceRoot = join(workspaceRoot, "source");
 
     expect(result).toMatchObject({
       runId,
@@ -453,7 +503,22 @@ test("runSourceSync reuses an unchanged snapshot without cloning or archiving", 
         ref: "workspaces/space_1/sources/src_prev/snapshots/snap_prev/source.tar.zst",
         reusedFromSnapshotId: "snap_prev",
       },
+      repositoryInstallMetadata: {
+        status: "present",
+        text: repositoryInstallMetadata,
+      },
+      repositoryManifest: {
+        status: "present",
+        document: {
+          apiVersion: "takosumi.com/v1",
+          kind: "Repository",
+          install: { modules: { ".": { inputs: [] } } },
+        },
+      },
     });
+    expect((result.repositoryManifest as { digest?: unknown }).digest).toEqual(
+      expect.stringMatching(/^sha256:[0-9a-f]{64}$/u),
+    );
     expect(
       (result.phaseTimings as Array<{ phase: string }>).map(
         (timing) => timing.phase,
@@ -462,13 +527,18 @@ test("runSourceSync reuses an unchanged snapshot without cloning or archiving", 
       "source_host_policy",
       "source_git_credentials",
       "source_ref_resolve",
+      "source_clone",
+      "source_repository_metadata",
+      "source_repository_manifest",
       "source_snapshot_reuse",
     ]);
-    await expect(stat(join(root, "source.tar.zst"))).rejects.toThrow();
-    await expect(stat(join(root, "source"))).rejects.toThrow();
+    expect(git(sourceRoot, ["rev-parse", "HEAD"])).toBe(resolvedCommit);
+    await expect(stat(join(workspaceRoot, "source.tar.zst"))).rejects.toThrow();
   } finally {
-    globalThis.fetch = previousFetch;
-    await rm(root, { recursive: true, force: true });
+    if (previousPath === undefined) delete Bun.env.PATH;
+    else Bun.env.PATH = previousPath;
+    await rm(workspaceRoot, { recursive: true, force: true });
+    await rm(fixtureRoot, { recursive: true, force: true });
   }
 });
 
