@@ -47,9 +47,8 @@ export type DashboardBootstrapFailureKind = "maintenance" | "error";
  * or error envelope.
  */
 export class DashboardBootstrapError extends Error {
-  readonly kind: DashboardBootstrapFailureKind;
-
   constructor(
+    readonly kind: DashboardBootstrapFailureKind,
     readonly status: number,
     readonly statusText: string,
     readonly headers: Headers,
@@ -59,7 +58,6 @@ export class DashboardBootstrapError extends Error {
   ) {
     super(message);
     this.name = "DashboardBootstrapError";
-    this.kind = status === 503 ? "maintenance" : "error";
   }
 }
 
@@ -113,6 +111,7 @@ export function fetchDashboardBootstrap(
           res.statusText,
         );
         throw new DashboardBootstrapError(
+          dashboardFailureKind(res.status, res.headers, body, error.code),
           res.status,
           res.statusText,
           new Headers(res.headers),
@@ -128,6 +127,31 @@ export function fetchDashboardBootstrap(
     });
   inflight.set(path, request);
   return request;
+}
+
+export function dashboardFailureKind(
+  status: number,
+  headers: Headers,
+  body: unknown,
+  code?: string,
+): DashboardBootstrapFailureKind {
+  if (status !== 503) return "error";
+  const record =
+    typeof body === "object" && body !== null && !Array.isArray(body)
+      ? (body as Record<string, unknown>)
+      : undefined;
+  const nestedError =
+    typeof record?.error === "object" &&
+    record.error !== null &&
+    !Array.isArray(record.error)
+      ? (record.error as Record<string, unknown>)
+      : undefined;
+  return headers.get("x-takosumi-maintenance") === "d1-blue-green" ||
+    code === "schema_maintenance" ||
+    record?.error === "schema_maintenance" ||
+    nestedError?.code === "schema_maintenance"
+    ? "maintenance"
+    : "error";
 }
 
 async function readResponseBody(response: Response): Promise<unknown> {

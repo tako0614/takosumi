@@ -27,6 +27,7 @@ import {
   fetchDashboardBootstrap,
   fetchDashboardWorkspaceBootstrap,
   DashboardBootstrapError,
+  dashboardFailureKind,
   dashboardResponseErrorDetails,
   type DashboardBootstrapResponse,
 } from "../../../lib/dashboard-bootstrap.ts";
@@ -239,10 +240,11 @@ function sessionErrorFromResponse(
     response.status,
     response.statusText,
   );
+  const headers = new Headers(response.headers);
   return new SessionError(
-    response.status === 503 ? "maintenance" : "error",
+    dashboardFailureKind(response.status, headers, body, details.code),
     response.status,
-    new Headers(response.headers),
+    headers,
     body,
     details.message,
     details.code,

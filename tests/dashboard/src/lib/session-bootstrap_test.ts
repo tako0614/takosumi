@@ -201,7 +201,7 @@ describe("dashboard session bootstrap", () => {
           headers: {
             "content-type": "application/json",
             "retry-after": "30",
-            "x-takosumi-schema-maintenance": "active",
+            "x-takosumi-maintenance": "d1-blue-green",
           },
         });
       }
@@ -220,7 +220,7 @@ describe("dashboard session bootstrap", () => {
     expect(failure.status).toBe(503);
     expect(failure.code).toBe("schema_maintenance");
     expect(failure.headers.get("retry-after")).toBe("30");
-    expect(failure.headers.get("x-takosumi-schema-maintenance")).toBe("active");
+    expect(failure.headers.get("x-takosumi-maintenance")).toBe("d1-blue-green");
     expect(failure.body).toEqual(body);
     expect(readSessionState()).toMatchObject({ kind: "maintenance" });
     expect(calls).toEqual([
@@ -234,8 +234,8 @@ describe("dashboard session bootstrap", () => {
       const path = typeof input === "string" ? input : String(input);
       calls.push(path);
       if (path === "/api/v1/dashboard/bootstrap?includeWorkspaces=false") {
-        return new Response(JSON.stringify({ error: "internal_error" }), {
-          status: 500,
+        return new Response(JSON.stringify({ error: "capacity_unavailable" }), {
+          status: 503,
           headers: { "content-type": "application/json" },
         });
       }
@@ -246,7 +246,7 @@ describe("dashboard session bootstrap", () => {
     expect(state.kind).toBe("error");
     if (state.kind !== "error") return;
     expect(state.error).toBeInstanceOf(SessionError);
-    expect(state.error.status).toBe(500);
+    expect(state.error.status).toBe(503);
     expect(readSession()).toBeNull();
     expect(readSessionState().kind).toBe("error");
     expect(calls).toEqual([
