@@ -623,6 +623,62 @@ function lifecycleInstallConfig(
   };
 }
 
+async function failedFirstApplyScenario(
+  actions: readonly Omit<
+    InstallConfigLifecycleAction,
+    "apiVersion" | "kind" | "runnerCapability"
+  >[],
+  controllerOverrides: Partial<OpenTofuControllerDependencies> = {},
+): Promise<{
+  readonly store: OpenTofuControlStore;
+  readonly runner: RecordingRunner;
+  readonly controller: OpenTofuController;
+  readonly activations: ReleaseActivationInput[];
+  readonly failedCreateApplyId: string;
+}> {
+  const store = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner();
+  runner.apply = async (job) => {
+    runner.applyJobs.push(job);
+    return {
+      providerExecutionFailure: {
+        kind: "provider_execution_failed" as const,
+        statePersistence: "persisted" as const,
+      },
+      stateDigest: STATE_DIGEST,
+      providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+      rawOutputRef: job.rawOutputRef,
+    };
+  };
+  await seedRunnableCapsuleModel(store, {
+    environment: "preview",
+    installConfig: lifecycleInstallConfig(actions),
+  });
+  const activations: ReleaseActivationInput[] = [];
+  const controller = controllerWith(store, runner, {
+    releaseActivator: {
+      activate: (input) => {
+        activations.push(input);
+        return Promise.resolve({ status: "succeeded" as const });
+      },
+    },
+    ...controllerOverrides,
+  });
+  const create = await controller.createCapsulePlan("cap_fixture1");
+  const createApply = await controller.createApplyRun({
+    planRunId: create.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(create.planRun),
+  });
+  expect(createApply.applyRun.status).toBe("failed");
+  return {
+    store,
+    runner,
+    controller,
+    activations,
+    failedCreateApplyId: createApply.applyRun.id,
+  };
+}
+
 test("an opaque app_deployment Output does not rebind provider credentials", async () => {
   const store = new InMemoryOpenTofuControlStore();
   const appDeployment = {
@@ -6213,6 +6269,310 @@ test("capsule apply emits generation base+1, records StateVersion + Output, and 
   expect(capsule?.currentStateGeneration).toEqual(1);
   expect(capsule?.currentStateVersionId).toEqual(applyRun.stateVersionId);
   expect(capsule?.currentOutputId).toEqual(applyRun.outputId);
+});
+
+test("paired first-apply cleanup proves missing Output and skips lifecycle dispatch", async () => {
+  const scenario = await failedFirstApplyScenario([
+    {
+      id: "takos-product-activate-v1",
+      phase: "post_apply",
+      executor: "operator",
+      command: ["bun", "run", "activate"],
+    },
+    {
+      id: "takos-product-pre-destroy-v1",
+      phase: "pre_destroy",
+      cleanupFor: "takos-product-activate-v1",
+      executor: "operator",
+      command: ["bun", "run", "cleanup"],
+    },
+  ]);
+  const failedCapsule = (await scenario.store.getCapsule("cap_fixture1"))!;
+  const failedState = (await scenario.store.getStateVersion(
+    failedCapsule.currentStateVersionId!,
+  ))!;
+  const destroy = await scenario.controller.createCapsuleDestroyPlan(
+    "cap_fixture1",
+  );
+  await scenario.controller.approveRun(destroy.planRun.id);
+  const response = await scenario.controller.createApplyRun({
+    planRunId: destroy.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(destroy.planRun),
+  });
+
+  expect(response.applyRun.status).toBe("succeeded");
+  expect(scenario.runner.destroyJobs).toHaveLength(1);
+  expect(scenario.activations).toHaveLength(0);
+  const marker = response.applyRun.auditEvents.find(
+    (event) => event.type === "lifecycle_action.pre_destroy.not_applicable",
+  );
+  expect(marker?.data).toMatchObject({
+    pairedActionId: "takos-product-activate-v1",
+    stateVersionId: failedState.id,
+    creatorRunId: scenario.failedCreateApplyId,
+    reason: "provider_failed_before_post_apply",
+    actionDispatched: false,
+  });
+});
+
+test("first-apply cleanup pairing blocks after a later generation failure", async () => {
+  const scenario = await failedFirstApplyScenario([
+    {
+      id: "takos-product-activate-v1",
+      phase: "post_apply",
+      executor: "operator",
+      command: ["bun", "run", "activate"],
+    },
+    {
+      id: "takos-product-pre-destroy-v1",
+      phase: "pre_destroy",
+      cleanupFor: "takos-product-activate-v1",
+      executor: "operator",
+      command: ["bun", "run", "cleanup"],
+    },
+  ]);
+  const update = await scenario.controller.createCapsulePlan("cap_fixture1");
+  const updateApply = await scenario.controller.createApplyRun({
+    planRunId: update.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(update.planRun),
+  });
+  expect(updateApply.applyRun.status).toBe("failed");
+
+  const destroy = await scenario.controller.createCapsuleDestroyPlan(
+    "cap_fixture1",
+  );
+  await scenario.controller.approveRun(destroy.planRun.id);
+  const response = await scenario.controller.createApplyRun({
+    planRunId: destroy.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(destroy.planRun),
+  });
+
+  expect(response.applyRun.status).toBe("failed");
+  expect(response.applyRun.diagnostics).toContainEqual(
+    expect.objectContaining({ code: "capsule_lifecycle_action_failed" }),
+  );
+  expect(scenario.runner.destroyJobs).toHaveLength(0);
+  expect(scenario.activations).toHaveLength(0);
+});
+
+test("first-apply cleanup pairing blocks when post_apply dispatch evidence exists", async () => {
+  const scenario = await failedFirstApplyScenario([
+    {
+      id: "takos-product-activate-v1",
+      phase: "post_apply",
+      executor: "operator",
+      command: ["bun", "run", "activate"],
+    },
+    {
+      id: "takos-product-pre-destroy-v1",
+      phase: "pre_destroy",
+      cleanupFor: "takos-product-activate-v1",
+      executor: "operator",
+      command: ["bun", "run", "cleanup"],
+    },
+  ]);
+  const creator = (await scenario.store.getApplyRun(
+    scenario.failedCreateApplyId,
+  ))!;
+  await scenario.store.putApplyRun({
+    ...creator,
+    auditEvents: [
+      ...creator.auditEvents,
+      {
+        id: "audit_post_apply_dispatched",
+        type: "lifecycle_action.post_apply.failed",
+        at: 99,
+        data: {
+          phase: "post_apply",
+          status: "failed",
+          actionDispatched: true,
+        },
+      },
+    ],
+  });
+  const destroy = await scenario.controller.createCapsuleDestroyPlan(
+    "cap_fixture1",
+  );
+  await scenario.controller.approveRun(destroy.planRun.id);
+  const response = await scenario.controller.createApplyRun({
+    planRunId: destroy.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(destroy.planRun),
+  });
+
+  expect(response.applyRun.status).toBe("failed");
+  expect(scenario.runner.destroyJobs).toHaveLength(0);
+});
+
+test("first-apply cleanup pairing without cleanupFor remains fail-closed", async () => {
+  const scenario = await failedFirstApplyScenario([
+    {
+      id: "takos-product-activate-v1",
+      phase: "post_apply",
+      executor: "operator",
+      command: ["bun", "run", "activate"],
+    },
+    {
+      id: "takos-product-pre-destroy-v1",
+      phase: "pre_destroy",
+      executor: "operator",
+      command: ["bun", "run", "cleanup"],
+    },
+  ]);
+  const destroy = await scenario.controller.createCapsuleDestroyPlan(
+    "cap_fixture1",
+  );
+  await scenario.controller.approveRun(destroy.planRun.id);
+  const response = await scenario.controller.createApplyRun({
+    planRunId: destroy.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(destroy.planRun),
+  });
+
+  expect(response.applyRun.status).toBe("failed");
+  expect(scenario.runner.destroyJobs).toHaveLength(0);
+});
+
+test("first-apply cleanup pairing rejects a mismatched action id", async () => {
+  const scenario = await failedFirstApplyScenario([
+    {
+      id: "takos-product-activate-v1",
+      phase: "post_apply",
+      executor: "operator",
+      command: ["bun", "run", "activate"],
+    },
+    {
+      id: "takos-product-pre-destroy-v1",
+      phase: "pre_destroy",
+      cleanupFor: "takos-product-activate-v1",
+      executor: "operator",
+      command: ["bun", "run", "cleanup"],
+    },
+  ]);
+
+  const config = (await scenario.store.getInstallConfig("cfg_fixture"))!;
+  await scenario.store.putInstallConfig({
+    ...config,
+    lifecycleActions: config.lifecycleActions?.map((action) =>
+      action.id === "takos-product-pre-destroy-v1" && action.kind === "command"
+        ? { ...action, cleanupFor: "missing-post-apply" }
+        : action,
+    ),
+  });
+
+  await expect(
+    scenario.controller.createCapsuleDestroyPlan("cap_fixture1"),
+  ).rejects.toThrow(/cleanupFor must reference a post_apply action/);
+  expect(scenario.runner.destroyJobs).toHaveLength(0);
+});
+
+test("first-apply cleanup not_applicable marker is idempotent across destroy retry", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner();
+  runner.apply = async (job) => {
+    runner.applyJobs.push(job);
+    return {
+      providerExecutionFailure: {
+        kind: "provider_execution_failed" as const,
+        statePersistence: "persisted" as const,
+      },
+      stateDigest: STATE_DIGEST,
+      providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+      rawOutputRef: job.rawOutputRef,
+    };
+  };
+  let destroyCalls = 0;
+  runner.destroy = async (job) => {
+    runner.destroyJobs.push(job);
+    destroyCalls += 1;
+    if (destroyCalls === 1) {
+      throw new OpenTofuRunnerInfrastructureError(
+        "runner substrate reset after cleanup proof",
+        { reason: "substrate_reset" },
+      );
+    }
+    return {
+      stateDigest: STATE_DIGEST,
+      providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+    };
+  };
+  await seedRunnableCapsuleModel(store, {
+    environment: "preview",
+    installConfig: lifecycleInstallConfig([
+      {
+        id: "takos-product-activate-v1",
+        phase: "post_apply",
+        executor: "operator",
+        command: ["bun", "run", "activate"],
+      },
+      {
+        id: "takos-product-pre-destroy-v1",
+        phase: "pre_destroy",
+        cleanupFor: "takos-product-activate-v1",
+        executor: "operator",
+        command: ["bun", "run", "cleanup"],
+      },
+    ]),
+  });
+  const queued: Array<{
+    readonly action: "plan" | "apply" | "source_sync" | "restore";
+    readonly runId: string;
+    readonly workspaceId: string;
+  }> = [];
+  const activations: ReleaseActivationInput[] = [];
+  const controller = controllerWith(store, runner, {
+    enqueueRun: (dispatch) => {
+      queued.push(dispatch);
+      return Promise.resolve();
+    },
+    releaseActivator: {
+      activate: (input) => {
+        activations.push(input);
+        return Promise.resolve({ status: "succeeded" as const });
+      },
+    },
+  });
+
+  const createQueued = await controller.createCapsulePlan("cap_fixture1");
+  await controller.dispatchQueuedRun(queued.shift()!);
+  const createPlan = (await store.getPlanRun(createQueued.planRun.id))!;
+  const failedCreate = await controller.createApplyRun({
+    planRunId: createPlan.id,
+    expected: applyExpectedGuardFromPlanRun(createPlan),
+  });
+  await controller.dispatchQueuedRun(queued.shift()!);
+  expect((await store.getApplyRun(failedCreate.applyRun.id))?.status).toBe(
+    "failed",
+  );
+
+  const destroyQueued = await controller.createCapsuleDestroyPlan(
+    "cap_fixture1",
+  );
+  await controller.dispatchQueuedRun(queued.shift()!);
+  const destroyPlan = (await store.getPlanRun(destroyQueued.planRun.id))!;
+  await controller.approveRun(destroyPlan.id);
+  const destroyApply = await controller.createApplyRun({
+    planRunId: destroyPlan.id,
+    expected: applyExpectedGuardFromPlanRun(destroyPlan),
+  });
+  await controller.dispatchQueuedRun(queued.shift()!);
+  const requeued = (await store.getApplyRun(destroyApply.applyRun.id))!;
+  expect(requeued.status).toBe("queued");
+  expect(
+    requeued.auditEvents.filter(
+      (event) => event.type === "lifecycle_action.pre_destroy.not_applicable",
+    ),
+  ).toHaveLength(1);
+  expect(activations).toHaveLength(0);
+
+  await controller.dispatchQueuedRun(queued.shift()!);
+  const completed = (await store.getApplyRun(destroyApply.applyRun.id))!;
+  expect(completed.status).toBe("succeeded");
+  expect(destroyCalls).toBe(2);
+  expect(
+    completed.auditEvents.filter(
+      (event) => event.type === "lifecycle_action.pre_destroy.not_applicable",
+    ),
+  ).toHaveLength(1);
+  expect(activations).toHaveLength(0);
 });
 
 test("failed provider apply atomically retains partial state, consumes the Plan, and destroy uses it", async () => {

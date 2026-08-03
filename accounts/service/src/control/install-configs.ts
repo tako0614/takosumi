@@ -416,6 +416,7 @@ function lifecycleActionsValue(
       item.kind !== "command" ||
       typeof item.id !== "string" ||
       (item.phase !== "post_apply" && item.phase !== "pre_destroy") ||
+      (item.cleanupFor !== undefined && typeof item.cleanupFor !== "string") ||
       (item.executor !== "runner" && item.executor !== "operator") ||
       !Array.isArray(item.command) ||
       !item.command.every((part) => typeof part === "string") ||

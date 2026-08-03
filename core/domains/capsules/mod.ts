@@ -875,6 +875,7 @@ function validateLifecycleActions(config: InstallConfig): void {
     );
   }
   const ids = new Set<string>();
+  const actionsById = new Map<string, InstallConfigLifecycleAction>();
   for (const [index, action] of actions.entries()) {
     validateLifecycleAction(action, index);
     if (ids.has(action.id)) {
@@ -884,6 +885,7 @@ function validateLifecycleActions(config: InstallConfig): void {
       );
     }
     ids.add(action.id);
+    actionsById.set(action.id, action);
     if (!policy.allowedExecutors.includes(action.executor)) {
       throw new OpenTofuControllerError(
         "invalid_argument",
@@ -909,6 +911,18 @@ function validateLifecycleActions(config: InstallConfig): void {
           `lifecycleActions[${index}].useProviderCredentials is not allowed by policy.lifecycleActions`,
         );
       }
+    }
+  }
+  for (const [index, action] of actions.entries()) {
+    if (action.kind !== "command" || action.cleanupFor === undefined) {
+      continue;
+    }
+    const paired = actionsById.get(action.cleanupFor);
+    if (!paired || paired.phase !== "post_apply") {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        `lifecycleActions[${index}].cleanupFor must reference a post_apply action`,
+      );
     }
   }
 }
@@ -969,6 +983,25 @@ function validateLifecycleAction(
       "invalid_argument",
       `${field}.phase is unsupported`,
     );
+  }
+  if (action.cleanupFor !== undefined) {
+    if (action.phase !== "pre_destroy") {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        `${field}.cleanupFor is supported only on pre_destroy actions`,
+      );
+    }
+    if (
+      typeof action.cleanupFor !== "string" ||
+      action.cleanupFor.length === 0 ||
+      action.cleanupFor.length > 128 ||
+      /[\0\r\n]/u.test(action.cleanupFor)
+    ) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        `${field}.cleanupFor is invalid`,
+      );
+    }
   }
   if (action.executor !== "runner" && action.executor !== "operator") {
     throw new OpenTofuControllerError(

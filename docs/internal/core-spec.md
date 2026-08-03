@@ -672,9 +672,20 @@ the provider-applied StateVersion/Output while recording the Run as failed,
 the Capsule as `error`, and the Plan as applied. Actual provider apply usage and
 billing capture MUST still be recorded. Recovery MUST use a fresh reviewed
 plan/apply; the failed Plan MUST NOT be replayed. A declared `pre_destroy` action
-MUST terminal-succeed before provider destroy is dispatched. Core MUST use the
-generic Run/Capsule status and audit vocabulary and MUST NOT introduce an
-app-specific receipt/schema for these actions.
+MUST terminal-succeed before provider destroy is dispatched. The sole
+non-dispatch exception is a command action whose reviewed `cleanupFor` names an
+exact `post_apply` action and whose cleanup is durably proven not applicable:
+the Capsule still points at generation 1 and its exact StateVersion, that
+StateVersion was created by the failed create ApplyRun, provider apply was
+dispatched and failed after persisting that state, no Output exists for the
+generation, and no lifecycle action was dispatched. Core MUST persist a
+`lifecycle_action.pre_destroy.not_applicable` marker that identifies the paired
+action, StateVersion, creator Run, and reason
+`provider_failed_before_post_apply` before provider destroy. Missing,
+contradictory, later-generation, or unpaired evidence MUST retain the ordinary
+terminal-success requirement. Core MUST use the generic Run/Capsule status and
+audit vocabulary and MUST NOT introduce an app-specific receipt/schema for
+these actions.
 
 Lifecycle dispatch MUST also resolve the Plan-fenced ProviderBinding set even
 when no command opts into provider credentials. Every resolved binding is

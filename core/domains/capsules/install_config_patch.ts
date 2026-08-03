@@ -351,6 +351,7 @@ function lifecycleActionsValue(
       "kind",
       "id",
       "phase",
+      "cleanupFor",
       "executor",
       "command",
       "workingDirectory",
@@ -367,6 +368,9 @@ function lifecycleActionsValue(
     }
     const workingDirectory = has(record, "workingDirectory")
       ? stringValue(record.workingDirectory, `${field}.workingDirectory`, 1024)
+      : undefined;
+    const cleanupFor = has(record, "cleanupFor")
+      ? stringValue(record.cleanupFor, `${field}.cleanupFor`, 128)
       : undefined;
     const env = has(record, "env")
       ? stringRecord(record.env, `${field}.env`)
@@ -387,6 +391,7 @@ function lifecycleActionsValue(
         "post_apply",
         "pre_destroy",
       ] as const),
+      ...(cleanupFor ? { cleanupFor } : {}),
       executor: enumValue(record.executor, `${field}.executor`, [
         "runner",
         "operator",

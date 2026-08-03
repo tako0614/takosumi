@@ -94,6 +94,13 @@ export interface InstallConfigLifecycleCommandAction {
   readonly kind: "command";
   readonly id: string;
   readonly phase: InstallConfigLifecyclePhase;
+  /**
+   * Optional first-apply cleanup pairing. This is valid only on a
+   * `pre_destroy` action and names the exact `post_apply` action whose
+   * dispatch is being compensated for. A missing or invalid pairing never
+   * widens destroy authority; the runner keeps the normal output requirement.
+   */
+  readonly cleanupFor?: string;
   readonly executor: InstallConfigLifecycleExecutor;
   readonly command: readonly string[];
   readonly workingDirectory?: string;

@@ -366,9 +366,21 @@ type LifecycleActionActivityStatus = Exclude<
 
 interface LifecycleActionOutcome {
   readonly phase: InstallConfigLifecyclePhase;
-  readonly reportedStatus: ReleaseActivationStatus | "unavailable" | "error";
+  readonly reportedStatus:
+    | ReleaseActivationStatus
+    | "unavailable"
+    | "error"
+    | "not_applicable";
   readonly activityStatus: LifecycleActionActivityStatus;
   readonly actionDispatched: boolean;
+  /** True when a first-apply cleanup was proven unnecessary and skipped. */
+  readonly notApplicable?: boolean;
+  /** True when the durable not-applicable marker already existed on retry. */
+  readonly alreadyPersisted?: boolean;
+  readonly pairedActionIds?: readonly string[];
+  readonly stateVersionId?: string;
+  readonly creatorRunId?: string;
+  readonly reason?: string;
   readonly kind?: string;
   readonly message?: string;
   readonly hasHealthUrl?: boolean;
@@ -840,6 +852,7 @@ function lifecycleActionsForPlan(
     );
   }
   const profileCapabilities = new Set(runnerProfile.capabilities ?? []);
+  const actionsById = new Map(actions.map((action) => [action.id, action]));
   for (const action of actions) {
     if (
       action.apiVersion !== "takosumi.dev/v1alpha1" ||
@@ -880,6 +893,21 @@ function lifecycleActionsForPlan(
         "failed_precondition",
         `lifecycle action ${action.id} is not allowed to use provider credentials`,
       );
+    }
+    if (action.kind === "command" && action.cleanupFor !== undefined) {
+      if (action.phase !== "pre_destroy") {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `lifecycle action ${action.id} cleanupFor is supported only on pre_destroy actions`,
+        );
+      }
+      const paired = actionsById.get(action.cleanupFor);
+      if (!paired || paired.phase !== "post_apply") {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `lifecycle action ${action.id} cleanupFor must reference a post_apply action`,
+        );
+      }
     }
   }
   assertRunnerLifecycleCredentialModes(actions);
@@ -7575,6 +7603,178 @@ export class RunEngine {
     });
   }
 
+  /**
+   * Proves that a pre-destroy action is compensating for a failed first apply
+   * rather than tearing down a live Capsule. This is intentionally narrow:
+   * only generation 1, provider-dispatched create failures with durable state
+   * and no Output may use the cleanup pairing. Any missing or contradictory
+   * evidence returns `undefined`, leaving the normal missing-Output guard in
+   * force.
+   */
+  async #failedFirstApplyCleanupEvidence(input: {
+    readonly applyRun: ApplyRun;
+    readonly capsule: Capsule;
+    readonly stateVersion: StateVersion;
+    readonly lifecycleActions: InstallConfig["lifecycleActions"];
+  }): Promise<{
+    readonly creatorRunId: string;
+    readonly pairedActionIds: readonly string[];
+    readonly reason: string;
+    readonly alreadyPersisted: boolean;
+  } | undefined> {
+    const preDestroyActions = (input.lifecycleActions ?? []).filter(
+      (action) => action.phase === "pre_destroy",
+    );
+    if (
+      preDestroyActions.length === 0 ||
+      preDestroyActions.some(
+        (action) => action.kind !== "command" || action.cleanupFor === undefined,
+      )
+    ) {
+      return undefined;
+    }
+    const actionsById = new Map(
+      (input.lifecycleActions ?? []).map((action) => [action.id, action]),
+    );
+    const pairedActionIds = preDestroyActions.map(
+      (action) => (action.kind === "command" ? action.cleanupFor : undefined)!,
+    );
+    if (
+      pairedActionIds.length === 0 ||
+      pairedActionIds.some((id) => {
+        const paired = actionsById.get(id);
+        return !paired || paired.phase !== "post_apply";
+      })
+    ) {
+      return undefined;
+    }
+
+    if (
+      input.capsule.currentStateVersionId !== input.stateVersion.id ||
+      input.capsule.currentStateGeneration !== input.stateVersion.generation ||
+      input.stateVersion.capsuleId !== input.capsule.id ||
+      input.stateVersion.workspaceId !== input.capsule.workspaceId ||
+      input.stateVersion.environment !== input.capsule.environment ||
+      input.stateVersion.generation !== 1 ||
+      input.capsule.currentOutputId !== undefined
+    ) {
+      return undefined;
+    }
+
+    const creatorRunId = input.stateVersion.createdByRunId;
+    const creatorRun = await this.#store.getApplyRun(creatorRunId);
+    if (
+      !creatorRun ||
+      creatorRun.id !== creatorRunId ||
+      creatorRun.capsuleId !== input.capsule.id ||
+      creatorRun.operation !== "create" ||
+      creatorRun.status !== "failed" ||
+      creatorRun.stateVersionId !== input.stateVersion.id ||
+      creatorRun.outputId !== undefined
+    ) {
+      return undefined;
+    }
+
+    // A failed first apply must not have left an Output row behind even if a
+    // stale Capsule pointer was later cleared. The generation-scoped check is
+    // deliberately stronger than the two pointer checks above.
+    const generationOutputs = await this.#store.listOutputs(input.capsule.id);
+    if (
+      generationOutputs.some(
+        (output) => output.stateGeneration === input.stateVersion.generation,
+      )
+    ) {
+      return undefined;
+    }
+
+    const providerFailureEvidence = creatorRun.auditEvents.some((event) => {
+      if (event.type !== "apply.failed") return false;
+      const data = event.data;
+      return (
+        data?.providerDispatched === true &&
+        data.providerApplySucceeded === false &&
+        data.statePersistence === "persisted" &&
+        data.stateVersionId === input.stateVersion.id
+      );
+    });
+    if (!providerFailureEvidence) return undefined;
+
+    // Any lifecycle dispatch on the creator run invalidates the compensation
+    // proof. In particular, a post_apply action may have mutated an external
+    // system even though no Output was persisted.
+    const lifecycleDispatched = [
+      ...creatorRun.auditEvents,
+      ...input.applyRun.auditEvents,
+    ].some((event) => {
+      const data = event.data;
+      return (
+        data?.lifecycleActionDispatched === true ||
+        (event.type.startsWith("lifecycle_action.") &&
+          data?.actionDispatched === true)
+      );
+    });
+    if (lifecycleDispatched) return undefined;
+
+    const reason = "provider_failed_before_post_apply";
+    const marker = input.applyRun.auditEvents.find((event) => {
+      if (event.type !== "lifecycle_action.pre_destroy.not_applicable") {
+        return false;
+      }
+      const data = event.data;
+      if (
+        data?.stateVersionId !== input.stateVersion.id ||
+        data.creatorRunId !== creatorRunId ||
+        data.actionDispatched !== false
+      ) {
+        return false;
+      }
+      const markerIds = Array.isArray(data.pairedActionIds)
+        ? data.pairedActionIds.filter(
+            (id): id is string => typeof id === "string",
+          )
+        : data.pairedActionId !== undefined
+          ? typeof data.pairedActionId === "string"
+            ? [data.pairedActionId]
+            : []
+          : [];
+      return (
+        markerIds.length === pairedActionIds.length &&
+        markerIds.every((id) => pairedActionIds.includes(id))
+      );
+    });
+
+    return {
+      creatorRunId,
+      pairedActionIds,
+      reason,
+      alreadyPersisted: marker !== undefined,
+    };
+  }
+
+  async #recordFailedFirstApplyCleanupActivity(input: {
+    readonly applyRun: ApplyRun;
+    readonly capsule: Capsule;
+    readonly stateVersion: StateVersion;
+    readonly creatorRunId: string;
+    readonly pairedActionIds: readonly string[];
+    readonly reason: string;
+  }): Promise<void> {
+    await this.#recordActivity({
+      workspaceId: input.applyRun.workspaceId,
+      action: "release_activation.not_applicable",
+      targetType: "state_version",
+      targetId: input.stateVersion.id,
+      runId: input.applyRun.id,
+      metadata: {
+        capsuleId: input.capsule.id,
+        stateVersionId: input.stateVersion.id,
+        creatorRunId: input.creatorRunId,
+        pairedActionIds: [...input.pairedActionIds],
+        reason: input.reason,
+      },
+    });
+  }
+
   async #activateReleaseBeforeDestroy(input: {
     readonly planRun: PlanRun;
     readonly applyRun: ApplyRun;
@@ -7612,6 +7812,38 @@ export class RunEngine {
         commandCount: commands.length,
         outputCount: 0,
       });
+    }
+    const cleanupEvidence = await this.#failedFirstApplyCleanupEvidence({
+      applyRun: input.applyRun,
+      capsule: input.capsule,
+      stateVersion,
+      lifecycleActions: input.lifecycleActions,
+    });
+    if (cleanupEvidence) {
+      if (!cleanupEvidence.alreadyPersisted) {
+        await this.#recordFailedFirstApplyCleanupActivity({
+          applyRun: input.applyRun,
+          capsule: input.capsule,
+          stateVersion,
+          creatorRunId: cleanupEvidence.creatorRunId,
+          pairedActionIds: cleanupEvidence.pairedActionIds,
+          reason: cleanupEvidence.reason,
+        });
+      }
+      return {
+        phase: "pre_destroy",
+        reportedStatus: "not_applicable",
+        activityStatus: "succeeded",
+        actionDispatched: false,
+        notApplicable: true,
+        alreadyPersisted: cleanupEvidence.alreadyPersisted,
+        pairedActionIds: cleanupEvidence.pairedActionIds,
+        stateVersionId: stateVersion.id,
+        creatorRunId: cleanupEvidence.creatorRunId,
+        reason: cleanupEvidence.reason,
+        commandCount: commands.length,
+        outputCount: 0,
+      };
     }
     const output = input.capsule.currentOutputId
       ? await this.#store.getOutput(input.capsule.currentOutputId)
@@ -8107,48 +8339,72 @@ export class RunEngine {
           }),
       );
       if (lifecycleOutcome) {
-        const lifecycleCompletedAt = this.#now();
-        const lifecycleAudited: ApplyRun = {
-          ...running,
-          auditEvents: [
-            ...running.auditEvents,
-            auditEvent(
-              running.id,
-              `lifecycle_action.${lifecycleOutcome.phase}.${lifecycleOutcome.activityStatus}`,
-              lifecycleCompletedAt,
-              {
-                phase: lifecycleOutcome.phase,
-                status: lifecycleOutcome.reportedStatus,
-                commandCount: lifecycleOutcome.commandCount,
-                actionDispatched: lifecycleOutcome.actionDispatched,
-              },
-            ),
-          ],
-          updatedAt: lifecycleCompletedAt,
-        };
-        // Persist the successful pre_destroy evidence BEFORE provider destroy.
-        // Otherwise a process crash after the lifecycle action but before the
-        // terminal/requeue write would erase the only structured proof that the
-        // external action ran and a takeover could dispatch it again blindly.
-        const persistedLifecycle = await this.#store.transitionRun({
-          id: running.id,
-          kind: "apply",
-          expectFrom: ["running"],
-          expectLeaseToken: leaseToken,
-          run: lifecycleAudited,
-          heartbeatAt: lifecycleCompletedAt,
-        });
-        if (!persistedLifecycle.won) {
-          // The lifecycle action already happened, but this owner lost its
-          // execution fence. Never continue into provider destroy under a stale
-          // lease; the current owner/terminal row is authoritative.
-          return {
-            applyRun:
-              (persistedLifecycle.run as ApplyRun | undefined) ?? running,
-            capsule: publicCapsule(capsule),
+        if (lifecycleOutcome.alreadyPersisted) {
+          // The durable not_applicable marker was written by an earlier owner
+          // before a destroy retry. Do not append a second marker or redispatch
+          // the paired cleanup action.
+          effectiveRunning = running;
+        } else {
+          const lifecycleCompletedAt = this.#now();
+          const lifecycleAuditStatus = lifecycleOutcome.notApplicable
+            ? "not_applicable"
+            : lifecycleOutcome.activityStatus;
+          const pairedActionIds = lifecycleOutcome.pairedActionIds ?? [];
+          const lifecycleAudited: ApplyRun = {
+            ...running,
+            auditEvents: [
+              ...running.auditEvents,
+              auditEvent(
+                running.id,
+                `lifecycle_action.${lifecycleOutcome.phase}.${lifecycleAuditStatus}`,
+                lifecycleCompletedAt,
+                {
+                  phase: lifecycleOutcome.phase,
+                  status: lifecycleOutcome.reportedStatus,
+                  commandCount: lifecycleOutcome.commandCount,
+                  actionDispatched: lifecycleOutcome.actionDispatched,
+                  ...(lifecycleOutcome.notApplicable
+                    ? {
+                        ...(pairedActionIds.length === 1
+                          ? { pairedActionId: pairedActionIds[0] }
+                          : {}),
+                        pairedActionIds: [...pairedActionIds],
+                        stateVersionId: lifecycleOutcome.stateVersionId,
+                        stateVersionGeneration: 1,
+                        creatorRunId: lifecycleOutcome.creatorRunId,
+                        reason: lifecycleOutcome.reason,
+                      }
+                    : {}),
+                },
+              ),
+            ],
+            updatedAt: lifecycleCompletedAt,
           };
+          // Persist the successful pre_destroy evidence BEFORE provider
+          // destroy. Otherwise a process crash after the lifecycle action but
+          // before the terminal/requeue write would erase the only structured
+          // proof that the external action ran and a takeover could dispatch it
+          // again blindly.
+          const persistedLifecycle = await this.#store.transitionRun({
+            id: running.id,
+            kind: "apply",
+            expectFrom: ["running"],
+            expectLeaseToken: leaseToken,
+            run: lifecycleAudited,
+            heartbeatAt: lifecycleCompletedAt,
+          });
+          if (!persistedLifecycle.won) {
+            // The lifecycle action already happened, but this owner lost its
+            // execution fence. Never continue into provider destroy under a
+            // stale lease; the current owner/terminal row is authoritative.
+            return {
+              applyRun:
+                (persistedLifecycle.run as ApplyRun | undefined) ?? running,
+              capsule: publicCapsule(capsule),
+            };
+          }
+          effectiveRunning = persistedLifecycle.run as ApplyRun;
         }
-        effectiveRunning = persistedLifecycle.run as ApplyRun;
       }
       runnerDispatched = true;
       const destroyFn = runner.destroy;

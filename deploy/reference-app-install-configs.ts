@@ -1067,9 +1067,9 @@ const takosConfig = {
       workingDirectory: ".",
       env: {
         TAKOS_RELEASE_ARTIFACT_DESCRIPTOR_URL:
-          "https://github.com/tako0614/takos/releases/download/v0.11.2/takosumi-artifact.json",
+          "https://github.com/tako0614/takos/releases/download/v0.11.3/takosumi-artifact.json",
         TAKOS_RELEASE_ARTIFACT_DESCRIPTOR_SHA256:
-          "sha256:e0282b6b0fa6a8c508deb069d04ee20ee653b9245b41050438aab01c8d121a74",
+          "sha256:600196d9a4fb9c6cf6ddf234fcc3b88374f5e3422e791fdcdab15e84db05bfed",
       },
       timeoutSeconds: 3600,
       runnerCapability: CAPSULE_LIFECYCLE_COMMAND_CAPABILITY,
@@ -1080,6 +1080,7 @@ const takosConfig = {
       kind: "command",
       id: "takos-product-pre-destroy-v1",
       phase: "pre_destroy",
+      cleanupFor: "takos-product-activate-v1",
       executor: "runner",
       command: ["bun", "run", "product:pre-destroy"],
       workingDirectory: ".",

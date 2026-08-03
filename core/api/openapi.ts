@@ -3027,6 +3027,13 @@ function capsuleAndInstallConfigSchemas(): Record<
               kind: { const: "command" },
               id: { type: "string" },
               phase: { enum: ["post_apply", "pre_destroy"] },
+              cleanupFor: {
+                type: "string",
+                minLength: 1,
+                maxLength: 128,
+                description:
+                  "Exact post_apply action id paired with this pre_destroy cleanup action.",
+              },
               executor: { enum: ["runner", "operator"] },
               command: {
                 type: "array",
@@ -4914,6 +4921,13 @@ function workspaceProjectAndCapsuleRequestSchemas(): Record<
               kind: { const: "command" },
               id: { type: "string" },
               phase: { enum: ["post_apply", "pre_destroy"] },
+              cleanupFor: {
+                type: "string",
+                minLength: 1,
+                maxLength: 128,
+                description:
+                  "Exact post_apply action id paired with this pre_destroy cleanup action.",
+              },
               executor: { enum: ["runner", "operator"] },
               command: { type: "array", items: { type: "string" } },
               workingDirectory: { type: "string" },
