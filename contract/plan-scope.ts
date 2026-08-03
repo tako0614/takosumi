@@ -73,13 +73,69 @@ export function resourceTypeMatchesPattern(
   resourceType: string,
   pattern: string,
 ): boolean {
-  let expression = "^";
-  for (const character of pattern) {
-    if (character === "*") expression += ".*";
-    else if (character === "?") expression += ".";
-    else expression += escapeRegExp(character);
+  // The glob is matched directly instead of being compiled into a regular
+  // expression. A policy-supplied pattern such as `*?` repeated compiles to
+  // `^(.*.){n}$`, which a backtracking engine explores exponentially. This walk
+  // advances every reachable pattern position simultaneously, one input code
+  // point at a time, so the cost is bounded by pattern x resource-type length.
+  const tokens = [...pattern];
+  let reachable = new Array<boolean>(tokens.length + 1).fill(false);
+  let pending = new Array<boolean>(tokens.length + 1).fill(false);
+  reachPosition(tokens, reachable, 0);
+  for (const character of resourceType) {
+    pending.fill(false);
+    let live = false;
+    for (let index = 0; index < tokens.length; index += 1) {
+      if (!reachable[index]) continue;
+      const token = tokens[index];
+      if (token === "*") {
+        // `*` stays on its own position while it keeps consuming input.
+        if (!wildcardMatches(character)) continue;
+        reachPosition(tokens, pending, index);
+        live = true;
+        continue;
+      }
+      if (token === "?" ? !wildcardMatches(character) : token !== character) {
+        continue;
+      }
+      reachPosition(tokens, pending, index + 1);
+      live = true;
+    }
+    if (!live) return false;
+    const spent = reachable;
+    reachable = pending;
+    pending = spent;
   }
-  return new RegExp(`${expression}$`, "u").test(resourceType);
+  return reachable[tokens.length];
+}
+
+/** Mark a pattern position reachable, plus the positions a `*` may skip to. */
+function reachPosition(
+  tokens: readonly string[],
+  states: boolean[],
+  index: number,
+): void {
+  for (
+    let cursor = index;
+    cursor <= tokens.length && !states[cursor];
+    cursor += 1
+  ) {
+    states[cursor] = true;
+    if (tokens[cursor] !== "*") return;
+  }
+}
+
+/**
+ * `*` and `?` consume one code point that is not a line terminator, exactly as
+ * the `.` of the previous `u`-flag regular expression did.
+ */
+function wildcardMatches(character: string): boolean {
+  return (
+    character !== "\n" &&
+    character !== "\r" &&
+    character !== "\u2028" &&
+    character !== "\u2029"
+  );
 }
 
 /**
@@ -212,8 +268,4 @@ function record(value: unknown): Readonly<Record<string, unknown>> | undefined {
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

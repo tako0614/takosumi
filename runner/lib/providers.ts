@@ -39,6 +39,7 @@ import {
 } from "./credentials.ts";
 import { parseSource, parseRequiredProviders } from "./parsing.ts";
 import { canonicalProviderSource } from "../../contract/provider-env-rules.ts";
+import { resourceTypeMatchesPattern } from "../../contract/plan-scope.ts";
 
 const providerCacheInitLocks = new Map<string, Promise<void>>();
 
@@ -782,14 +783,4 @@ function isScopeScalar(value: unknown): value is string | number | boolean {
     typeof value === "boolean" ||
     (typeof value === "number" && Number.isFinite(value))
   );
-}
-
-function resourceTypeMatchesPattern(type: string, pattern: string): boolean {
-  let expression = "^";
-  for (const character of pattern) {
-    if (character === "*") expression += ".*";
-    else if (character === "?") expression += ".";
-    else expression += character.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  }
-  return new RegExp(`${expression}$`, "u").test(type);
 }

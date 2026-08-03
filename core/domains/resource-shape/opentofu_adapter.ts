@@ -51,6 +51,7 @@ import type {
 } from "../deploy-control/mod.ts";
 import {
   generateOpenTofuChildModuleRoot,
+  hclString,
   type RootProviderBinding,
 } from "takosumi-rootgen";
 import { canonicalProviderSource } from "takosumi-contract/provider-env-rules";
@@ -1285,7 +1286,10 @@ function importBlock(request: OpentofuImportRequest): string {
   return [
     "import {",
     `  to = module.child.${request.importAddress}`,
-    `  id = ${JSON.stringify(request.nativeId)}`,
+    // `id` is a pure data slot. Escape with the same HCL string escaper rootgen
+    // uses so a caller-supplied native id can never open an interpolation
+    // (`${`) or template directive (`%{`); JSON.stringify does not escape those.
+    `  id = ${hclString(request.nativeId)}`,
     "}",
     "",
   ].join("\n");

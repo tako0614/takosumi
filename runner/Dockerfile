@@ -75,6 +75,7 @@ WORKDIR /app
 COPY contract/provider-env-rules.ts ./contract/provider-env-rules.ts
 COPY contract/provider-configurations.ts ./contract/provider-configurations.ts
 COPY contract/repository-manifest.ts ./contract/repository-manifest.ts
+COPY contract/plan-scope.ts ./contract/plan-scope.ts
 COPY contract/redaction.ts ./contract/redaction.ts
 COPY contract/types.ts ./contract/types.ts
 COPY contract/reference/ip-classification.ts ./contract/reference/ip-classification.ts

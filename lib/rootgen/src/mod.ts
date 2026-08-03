@@ -447,7 +447,7 @@ function hclJsonLiteral(value: JsonValue): string {
  * Critically escapes `\`, `"`, `${` and `%{` so an input value can never break
  * out of the quotes or open an interpolation / template directive.
  */
-function hclString(value: string): string {
+export function hclString(value: string): string {
   const escaped = value
     .replace(/\\/g, "\\\\")
     .replace(/"/g, '\\"')

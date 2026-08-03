@@ -19,6 +19,19 @@ export type AwsFetch = (
 ) => Promise<Response>;
 
 /**
+ * Character class every AWS region name obeys across all partitions
+ * (`us-east-1`, `eu-west-3`, `us-gov-west-1`, `cn-north-1`, `us-iso-east-1`).
+ *
+ * The region is caller-supplied (connection `scopeHints.providerSettings.region`
+ * or the source `AWS_REGION` / `AWS_DEFAULT_REGION` values) and is interpolated
+ * into the STS hostname, the `host` header, and the SigV4 credential scope, so
+ * it must be constrained here: characters such as `@`, `:`, `?`, `#`, and `/`
+ * would otherwise rewrite the authority of the signed request and point it at
+ * an arbitrary host.
+ */
+const AWS_REGION_PATTERN = /^[a-z0-9-]{1,32}$/;
+
+/**
  * Error raised when the AssumeRole exchange (or its preconditions) fails. The
  * `code` mirrors the deploy-control error codes the vault raises so the caller
  * can translate it identically to the in-vault `ConnectionVaultError`.
@@ -69,6 +82,12 @@ export async function assumeAwsRole(
     deps.fetch ?? ((target, init) => fetch(target, init));
   const nowFn = deps.now ?? (() => new Date());
 
+  if (!AWS_REGION_PATTERN.test(input.region)) {
+    throw new AwsConnectionError(
+      "aws sts AssumeRole requires an aws region of lowercase letters, digits, and hyphens (at most 32 characters)",
+    );
+  }
+
   const payload = formEncode({
     Action: "AssumeRole",
     Version: "2011-06-15",
@@ -78,7 +97,19 @@ export async function assumeAwsRole(
     ...(input.externalId ? { ExternalId: input.externalId } : {}),
   });
   const host = `sts.${input.region}.amazonaws.com`;
-  const url = `https://${host}/`;
+  const endpoint = new URL(`https://${host}/`);
+  // Belt and braces: the region class above already forbids userinfo, port, and
+  // fragment smuggling, so the parsed authority must be exactly the STS host.
+  if (
+    endpoint.host !== host ||
+    endpoint.username !== "" ||
+    endpoint.password !== ""
+  ) {
+    throw new AwsConnectionError(
+      "aws sts AssumeRole endpoint resolved to an unexpected host",
+    );
+  }
+  const url = endpoint.toString();
   const now = nowFn();
   const amzDate = toAmzDate(now);
   const dateStamp = amzDate.slice(0, 8);

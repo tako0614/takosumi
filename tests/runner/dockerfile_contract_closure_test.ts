@@ -49,6 +49,7 @@ test("runner image copies every runtime contract import", async () => {
   }
 
   expect([...runtimeContractPaths].sort()).toEqual([
+    "contract/plan-scope.ts",
     "contract/provider-configurations.ts",
     "contract/provider-env-rules.ts",
     "contract/reference/host-blocklist.ts",
