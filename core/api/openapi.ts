@@ -2426,50 +2426,6 @@ function interfaceSchemas(): Record<string, Record<string, unknown>> {
       },
       additionalProperties: false,
     },
-    ApplyCapsuleResourceMigrationRequest: {
-      type: "object",
-      required: ["actionId", "manifest", "entries"],
-      properties: {
-        actionId: { type: "string", minLength: 1 },
-        manifest: { type: "string", minLength: 1 },
-        entries: {
-          type: "array",
-          minItems: 1,
-          items: {
-            type: "object",
-            required: ["name", "sql"],
-            properties: {
-              name: { type: "string", minLength: 1 },
-              sql: { type: "string", minLength: 1 },
-            },
-            additionalProperties: false,
-          },
-        },
-      },
-      additionalProperties: false,
-    },
-    ApplyCapsuleResourceMigrationResponse: {
-      type: "object",
-      required: [
-        "capsuleId",
-        "actionId",
-        "resourceAddress",
-        "resourceName",
-        "applied",
-        "skipped",
-        "summary",
-      ],
-      properties: {
-        capsuleId: { type: "string", minLength: 1 },
-        actionId: { type: "string", minLength: 1 },
-        resourceAddress: { type: "string", minLength: 1 },
-        resourceName: { type: "string", minLength: 1 },
-        applied: { type: "array", items: { type: "string" } },
-        skipped: { type: "array", items: { type: "string" } },
-        summary: { type: "string", minLength: 1 },
-      },
-      additionalProperties: false,
-    },
     ConfirmLegacyOutputInterfaceMigrationRequest: {
       type: "object",
       required: ["candidate"],

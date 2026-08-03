@@ -17,12 +17,6 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { isReservedProviderEnvName } from "../contract/provider-env-rules.ts";
 import { isSecretKey, redactString } from "../contract/redaction.ts";
-import {
-  buildResourceMigrationRequest,
-  submitResourceMigration,
-  type ResourceMigrationAction,
-  type ResourceMigrationBundleSource,
-} from "./operator-release-activator-migrations.ts";
 
 const RELEASE_ACTIVATION_KIND = "takosumi.operator.release-activation@v2";
 const DEFAULT_WORK_ROOT = defaultReleaseWorkRoot();
@@ -73,7 +67,7 @@ interface ReleaseActivationPayload {
     readonly archiveDigest: string;
   };
   readonly nonSensitiveOutputs?: Readonly<Record<string, unknown>>;
-  readonly commands: readonly ReleaseActivationAction[];
+  readonly commands: readonly ReleaseActivationCommand[];
 }
 
 interface ReleaseActivationCommand {
@@ -83,10 +77,6 @@ interface ReleaseActivationCommand {
   readonly env?: Readonly<Record<string, string>>;
   readonly executor?: "runner" | "operator";
 }
-
-type ReleaseActivationAction =
-  | ReleaseActivationCommand
-  | ResourceMigrationAction;
 
 interface WranglerR2GetInput {
   readonly bucket: string;
@@ -112,17 +102,6 @@ interface RunReleaseOptions {
   readonly commandEnv?: Readonly<Record<string, string | undefined>>;
   readonly commandEnvAllowlist?: readonly string[];
   readonly sourceBucketAllowlist?: readonly string[];
-  /**
-   * Takosumi internal API that typed `resource_migration` actions are submitted
-   * to. Absent, a payload containing one fails rather than reporting a release
-   * activated whose schema never moved.
-   */
-  readonly deployControlApiBase?: string;
-  readonly deployControlToken?: string;
-  readonly readMigrationPackageFile?: (
-    source: ResourceMigrationBundleSource,
-    entryName: string,
-  ) => Promise<string>;
 }
 
 export interface ReleaseActivatorTokenEntry {
@@ -244,121 +223,31 @@ export async function runReleaseActivation(
     );
     await extractSourceArchive(archivePath, sourceRoot);
     const commandIds: string[] = [];
-    const migrated: string[] = [];
-    for (const action of payload.commands) {
-      if (action.kind === "resource_migration") {
-        const result = await runResourceMigration(
-          payload,
-          action,
-          sourceRoot,
-          options,
-        );
-        migrated.push(
-          `${action.id}:applied=${result.applied.length},skipped=${result.skipped.length}`,
-        );
-        commandIds.push(action.id);
-        continue;
-      }
+    for (const command of payload.commands) {
       runReleaseCommand(
         payload,
-        action,
+        command,
         sourceRoot,
         runtimeRoot,
         options.commandEnv,
         options.commandEnvAllowlist,
       );
-      commandIds.push(action.id);
+      commandIds.push(command.id);
     }
     return {
       status: "succeeded",
       kind: "takosumi.operator.release-commands@v1",
-      message: `ran ${commandIds.length} operator release action(s)`,
+      message: `ran ${commandIds.length} operator release command(s)`,
       metadata: {
         applyRunId: payload.applyRunId,
         commandCount: commandIds.length,
         commandIds,
-        ...(migrated.length > 0 ? { resourceMigrations: migrated } : {}),
       },
     };
   } finally {
     if (options.keepWorkdir !== true) {
       await rm(workdir, { recursive: true, force: true });
     }
-  }
-}
-
-/**
- * Carries one declaration's pinned bytes to Takosumi.
- *
- * The SQL comes from the npm package the manifest pins, fetched with `npm
- * pack`. That fetch is not trusted: the server re-derives every entry digest
- * against the manifest and the manifest against the Plan pin, so a substituted
- * or corrupted tarball is rejected there.
- */
-async function runResourceMigration(
-  payload: ReleaseActivationPayload,
-  action: ResourceMigrationAction,
-  sourceRoot: string,
-  options: RunReleaseOptions,
-): Promise<{ readonly applied: readonly string[]; readonly skipped: readonly string[] }> {
-  const apiBase = options.deployControlApiBase?.trim();
-  const token = options.deployControlToken?.trim();
-  if (!apiBase || !token) {
-    throw new Error(
-      `resource_migration ${action.id} requires a configured Takosumi deploy-control API base and token`,
-    );
-  }
-  const request = await buildResourceMigrationRequest({
-    action,
-    sourceRoot,
-    readPackageFile:
-      options.readMigrationPackageFile ?? readNpmPackageFileWithNpmPack,
-  });
-  return await submitResourceMigration({
-    apiBase,
-    token,
-    capsuleId: payload.capsule.id,
-    request,
-  });
-}
-
-/**
- * Extracts one file from a pinned npm version through `npm pack`, which
- * resolves and downloads without running install scripts.
- */
-async function readNpmPackageFileWithNpmPack(
-  source: ResourceMigrationBundleSource,
-  entryName: string,
-): Promise<string> {
-  const cacheKey = `${source.package}@${source.version}`;
-  let root = npmPackCache.get(cacheKey);
-  if (!root) {
-    const workRoot = await prepareReleaseWorkRoot(DEFAULT_WORK_ROOT);
-    const workdir = await mkdtemp(join(workRoot, "migration-npm-"));
-    runChecked("npm", ["pack", cacheKey, "--quiet"], workdir);
-    const tarballs = spawnSync("sh", ["-c", "ls *.tgz"], {
-      cwd: workdir,
-      encoding: "utf8",
-    });
-    const tarball = tarballs.stdout.trim().split("\n")[0];
-    if (!tarball) {
-      throw new Error(`npm pack produced no tarball for ${cacheKey}`);
-    }
-    runChecked("tar", ["-xzf", tarball], workdir);
-    root = join(workdir, "package");
-    npmPackCache.set(cacheKey, root);
-  }
-  return await readFile(join(root, source.path, entryName), "utf8");
-}
-
-const npmPackCache = new Map<string, string>();
-
-function runChecked(command: string, args: readonly string[], cwd: string): void {
-  const result = spawnSync(command, [...args], { cwd, encoding: "utf8" });
-  if (result.status !== 0) {
-    throw new Error(
-      `${command} ${args.join(" ")} failed: ${result.stderr?.trim() || result.status}`,
-    );
   }
 }
 
@@ -415,41 +304,7 @@ export function parsePayload(raw: unknown): ReleaseActivationPayload {
   };
 }
 
-function parseResourceMigration(
-  value: Record<string, unknown>,
-  id: string,
-  index: number,
-): ResourceMigrationAction {
-  const target = asRecord(value.target, `commands[${index}].target`);
-  const bundle = asRecord(value.bundle, `commands[${index}].bundle`);
-  if (value.executor !== "operator") {
-    throw new Error(
-      `commands[${index}].executor must be operator for a resource_migration`,
-    );
-  }
-  const manifestPath = nonEmptyString(
-    bundle.manifestPath,
-    `commands[${index}].bundle.manifestPath`,
-  );
-  assertSafeRelativePath(manifestPath);
-  return {
-    kind: "resource_migration",
-    id,
-    target: {
-      resourceAddress: nonEmptyString(
-        target.resourceAddress,
-        `commands[${index}].target.resourceAddress`,
-      ),
-    },
-    bundle: {
-      format: nonEmptyString(bundle.format, `commands[${index}].bundle.format`),
-      manifestPath,
-      digest: nonEmptyString(bundle.digest, `commands[${index}].bundle.digest`),
-    },
-  };
-}
-
-function parseCommands(raw: unknown): readonly ReleaseActivationAction[] {
+function parseCommands(raw: unknown): readonly ReleaseActivationCommand[] {
   if (!Array.isArray(raw) || raw.length === 0) {
     throw new Error("release activation commands must be a non-empty array");
   }
@@ -461,9 +316,6 @@ function parseCommands(raw: unknown): readonly ReleaseActivationAction[] {
       typeof value.id === "string" && value.id.trim()
         ? value.id.trim()
         : `post_apply_${index + 1}`;
-    if (value.kind === "resource_migration") {
-      return parseResourceMigration(value, id, index);
-    }
     const command = parseArgv(value.command, `commands[${index}].command`);
     const workingDirectory =
       typeof value.workingDirectory === "string" &&
@@ -1049,7 +901,6 @@ function validateCliArgs(
     "work-root",
     "command-env-allowlist",
     "source-bucket-allowlist",
-    "deploy-control-api",
   ];
   const allowedValues =
     mode === "run"
@@ -1095,10 +946,6 @@ function optionsFromCli(values: Map<string, string>, flags: Set<string>) {
       values.get("source-bucket-allowlist") ??
         process.env.TAKOSUMI_RELEASE_SOURCE_BUCKET_ALLOWLIST,
     ),
-    deployControlApiBase:
-      values.get("deploy-control-api") ??
-      process.env.TAKOSUMI_DEPLOY_CONTROL_API_BASE,
-    deployControlToken: process.env.TAKOSUMI_DEPLOY_CONTROL_TOKEN,
   };
 }
 
@@ -1567,12 +1414,6 @@ function releaseActivationRunOptions(options: ServeOptions): RunReleaseOptions {
       : {}),
     ...(options.sourceBucketAllowlist
       ? { sourceBucketAllowlist: options.sourceBucketAllowlist }
-      : {}),
-    ...(options.deployControlApiBase
-      ? { deployControlApiBase: options.deployControlApiBase }
-      : {}),
-    ...(options.deployControlToken
-      ? { deployControlToken: options.deployControlToken }
       : {}),
   };
 }
