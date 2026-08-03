@@ -34,6 +34,10 @@ import {
 } from "@takosjp/takosumi-accounts-service";
 import { normalizeIssuer } from "@takosjp/takosumi-accounts-contract";
 import {
+  measureServerTiming,
+  type ServerTimingBucket,
+} from "../../accounts/service/src/server-timing.ts";
+import {
   type CloudflareWorkerEnv as DeployControlEnv,
   createInProcessDeployControlSeam,
   CoordinationObject,
@@ -1489,8 +1493,14 @@ export async function handlePlatformResourceShapeApiRequest(
   workspaceAccess: PlatformExtensionWorkspaceAccess = platformExtensionSessionCanAccessWorkspace,
   context?: PlatformExecutionContext,
 ): Promise<Response> {
+  const timings = platformResourceShapeServerTimingBucket(
+    new URL(request.url).pathname,
+  );
   if (!platformResourceShapeApiEnabled(env)) {
-    return Response.json({ error: "not found" }, { status: 404 });
+    return appendPlatformResourceServerTiming(
+      Response.json({ error: "not found" }, { status: 404 }),
+      timings,
+    );
   }
   const hasDeployControlBearer = platformResourceShapeHasDeployControlBearer(
     request,
@@ -1505,11 +1515,17 @@ export async function handlePlatformResourceShapeApiRequest(
     isPlatformOfferingOperatorApiPath(new URL(request.url).pathname)
   ) {
     const service = await cachedDeployControlService(env);
-    return await service.app.fetch(
-      request,
-      undefined,
-      honoExecutionContext(context),
+    const response = await measureServerTiming(
+      timings,
+      "resource-dispatch",
+      () =>
+        service.app.fetch(
+          request,
+          undefined,
+          honoExecutionContext(context),
+        ),
     );
+    return appendPlatformResourceServerTiming(response, timings);
   }
   if (!hasDeployControlBearer) {
     const authorized = await platformResourceShapeExternalRequest(
@@ -1517,16 +1533,62 @@ export async function handlePlatformResourceShapeApiRequest(
       env,
       sessionVerifier,
       workspaceAccess,
+      timings,
     );
-    if (!authorized.ok) return authorized.response;
+    if (!authorized.ok) {
+      return appendPlatformResourceServerTiming(authorized.response, timings);
+    }
     request = authorized.request;
   }
   const service = await cachedDeployControlService(env);
-  return await service.app.fetch(
-    request,
-    undefined,
-    honoExecutionContext(context),
+  const response = await measureServerTiming(
+    timings,
+    "resource-dispatch",
+    () =>
+      service.app.fetch(
+        request,
+        undefined,
+        honoExecutionContext(context),
+      ),
   );
+  return appendPlatformResourceServerTiming(response, timings);
+}
+
+function platformResourceShapeServerTimingBucket(
+  pathname: string,
+): ServerTimingBucket {
+  return pathname.startsWith("/v1/") && isPlatformResourceShapeApiPath(pathname)
+    ? []
+    : undefined;
+}
+
+export function appendPlatformResourceServerTiming(
+  response: Response,
+  timings: ServerTimingBucket,
+): Response {
+  if (!timings || timings.length === 0) return response;
+
+  // Resource Shape is an HTTP JSON surface today, but keep this wrapper safe
+  // if a future compatibility handler returns a Cloudflare WebSocket response.
+  // Reconstructing a 101 Response would drop its socket and break the upgrade.
+  const webSocket = (response as unknown as { readonly webSocket?: unknown })
+    .webSocket;
+  if (response.status === 101 || webSocket !== undefined) return response;
+
+  const headers = new Headers(response.headers);
+  const existing = headers.get("Server-Timing");
+  const value = timings
+    .map(
+      ({ name, durationMs }) =>
+        `${name};dur=${Math.max(0, durationMs).toFixed(1)}`,
+    )
+    .join(", ");
+  headers.set("Server-Timing", existing ? `${existing}, ${value}` : value);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
 }
 
 function honoExecutionContext(
@@ -1556,11 +1618,16 @@ async function platformResourceShapeExternalRequest(
   env: CloudflareWorkerEnv,
   sessionVerifier: PlatformExtensionSessionVerifier,
   workspaceAccess: PlatformExtensionWorkspaceAccess,
+  timings?: ServerTimingBucket,
 ): Promise<
   | { readonly ok: true; readonly request: Request }
   | { readonly ok: false; readonly response: Response }
 > {
-  const session = await sessionVerifier(request, env);
+  const session = await measureServerTiming(
+    timings,
+    "session",
+    () => sessionVerifier(request, env),
+  );
   if (!session.authenticated) {
     return {
       ok: false,
@@ -1584,6 +1651,7 @@ async function platformResourceShapeExternalRequest(
     session,
     undefined,
     workspaceAccess,
+    timings,
   );
 }
 
@@ -1594,6 +1662,7 @@ async function platformResourceShapeAuthorizedRequest(
   session: PlatformExtensionSessionContext,
   trustedManagedBy?: string,
   workspaceAccess: PlatformExtensionWorkspaceAccess = platformExtensionSessionCanAccessWorkspace,
+  timings?: ServerTimingBucket,
 ): Promise<
   | { readonly ok: true; readonly request: Request }
   | { readonly ok: false; readonly response: Response }
@@ -1630,6 +1699,7 @@ async function platformResourceShapeAuthorizedRequest(
       session,
       trustedManagedBy,
       workspaceAccess,
+      timings,
     );
   }
 
@@ -1660,13 +1730,18 @@ async function platformResourceShapeAuthorizedRequest(
     };
   }
 
-  const verified = await platformExtensionVerifiedWorkspaceSession(
-    workspaceVerificationRequest,
-    env,
-    session,
-    workspaceId,
-    workspaceAccess,
-    platformResourceWorkspaceAccessMode(request, url),
+  const verified = await measureServerTiming(
+    timings,
+    "workspace-auth",
+    () =>
+      platformExtensionVerifiedWorkspaceSession(
+        workspaceVerificationRequest,
+        env,
+        session,
+        workspaceId,
+        workspaceAccess,
+        platformResourceWorkspaceAccessMode(request, url),
+      ),
   );
   if (!verified.ok) return verified;
 
@@ -1794,6 +1869,7 @@ async function platformResourceArtifactAuthorizedRequest(
   session: PlatformExtensionSessionContext,
   trustedManagedBy: string | undefined,
   workspaceAccess: PlatformExtensionWorkspaceAccess,
+  timings?: ServerTimingBucket,
 ): Promise<
   | { readonly ok: true; readonly request: Request }
   | { readonly ok: false; readonly response: Response }
@@ -1835,13 +1911,18 @@ async function platformResourceArtifactAuthorizedRequest(
       ),
     };
   }
-  const verified = await platformExtensionVerifiedWorkspaceSession(
-    workspaceVerificationRequest,
-    env,
-    session,
-    workspaceId,
-    workspaceAccess,
-    "write",
+  const verified = await measureServerTiming(
+    timings,
+    "workspace-auth",
+    () =>
+      platformExtensionVerifiedWorkspaceSession(
+        workspaceVerificationRequest,
+        env,
+        session,
+        workspaceId,
+        workspaceAccess,
+        "write",
+      ),
   );
   if (!verified.ok) return verified;
   if (requestedSpace !== workspaceId) {
