@@ -275,6 +275,13 @@ function isRetryableRunnerInfrastructureError(error: unknown): boolean {
 const RUNNER_INFRASTRUCTURE_RETRY_LIMIT = 1;
 const PLAN_CREATION_STAGE_TIMEOUT_MS = 25_000;
 const RUN_EXECUTION_LEASE_LOST_REASON = "run_execution_lease_lost";
+const RUN_EXECUTION_RENEWAL_UNAVAILABLE_REASON =
+  "run_execution_renewal_unavailable";
+const RUN_RENEWAL_TRANSPORT_RETRY_LIMIT = 1;
+const RUN_RENEWAL_TRANSPORT_RETRY_MAX_DELAY_MS = 250;
+
+type RunRenewalTarget = "run_heartbeat" | "capsule_lease";
+type RunRenewalFailure = "lost" | "unavailable";
 
 async function planCreationStage<T>(
   stage: string,
@@ -348,14 +355,58 @@ class ArtifactLedgerTailAmbiguousError extends Error {
   }
 }
 
-class RunExecutionLeaseLostError extends OpenTofuControllerError {
-  constructor(kind: "plan" | "apply" | "restore", runId: string) {
+class RunExecutionRenewalError extends OpenTofuControllerError {
+  readonly target: RunRenewalTarget;
+  readonly failure: RunRenewalFailure;
+  readonly diagnosticCode: `${RunRenewalTarget}_${RunRenewalFailure}`;
+  readonly originalError?: unknown;
+  secondaryError?: unknown;
+
+  constructor(input: {
+    readonly kind: "plan" | "apply" | "restore";
+    readonly runId: string;
+    readonly target: RunRenewalTarget;
+    readonly failure: RunRenewalFailure;
+    readonly attempts: number;
+    readonly originalError?: unknown;
+  }) {
+    const reason =
+      input.failure === "lost"
+        ? RUN_EXECUTION_LEASE_LOST_REASON
+        : RUN_EXECUTION_RENEWAL_UNAVAILABLE_REASON;
+    const diagnosticCode = `${input.target}_${input.failure}` as const;
     super(
       "failed_precondition",
-      `${RUN_EXECUTION_LEASE_LOST_REASON}: ${kind} run ${runId} lost its execution fence`,
-      { reason: RUN_EXECUTION_LEASE_LOST_REASON, kind, runId },
+      `${diagnosticCode}: ${input.kind} run ${input.runId} ${
+        input.failure === "lost"
+          ? "lost its execution fence"
+          : "could not confirm its execution fence"
+      }`,
+      {
+        reason,
+        kind: input.kind,
+        runId: input.runId,
+        renewalTarget: input.target,
+        failure: input.failure,
+        attempts: input.attempts,
+      },
     );
-    this.name = "RunExecutionLeaseLostError";
+    this.name = "RunExecutionRenewalError";
+    this.target = input.target;
+    this.failure = input.failure;
+    this.diagnosticCode = diagnosticCode;
+    this.originalError = input.originalError;
+  }
+
+  preserveSecondaryError(error: unknown): void {
+    if (
+      error === undefined ||
+      error === this ||
+      this.secondaryError !== undefined
+    ) {
+      return;
+    }
+    this.secondaryError = error;
   }
 }
 
@@ -414,6 +465,35 @@ class CapsuleLifecycleActionError extends OpenTofuControllerError {
     this.reportedStatus = outcome.reportedStatus;
     this.outcome = outcome;
   }
+}
+
+function runFailureDiagnostics(error: unknown) {
+  const primary = errorDiagnostic(error);
+  if (!(error instanceof RunExecutionRenewalError)) return [primary];
+  return [
+    { ...primary, code: error.diagnosticCode },
+    ...(error.secondaryError === undefined
+      ? []
+      : [errorDiagnostic(error.secondaryError)]),
+  ];
+}
+
+function lifecycleActionErrorEvidence(
+  error: unknown,
+): CapsuleLifecycleActionError | undefined {
+  if (error instanceof CapsuleLifecycleActionError) return error;
+  return error instanceof RunExecutionRenewalError &&
+      error.secondaryError instanceof CapsuleLifecycleActionError
+    ? error.secondaryError
+    : undefined;
+}
+
+function isRetryableCapsuleRenewalTransportError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { readonly retryable?: unknown }).retryable === true
+  );
 }
 
 /**
@@ -5084,7 +5164,7 @@ export class RunEngine {
     kind: "plan" | "apply" | "restore",
     run: PlanRun | ApplyRun | Run,
     leaseToken: string,
-  ): Promise<boolean> {
+  ): Promise<{ readonly won: boolean; readonly heartbeatAt: number }> {
     const now = this.#now();
     const result = await this.#store.transitionRun({
       id: run.id,
@@ -5094,7 +5174,7 @@ export class RunEngine {
       run: { ...run, heartbeatAt: now, updatedAt: now },
       heartbeatAt: now,
     });
-    return result.won;
+    return { won: result.won, heartbeatAt: now };
   }
 
   /**
@@ -5102,9 +5182,10 @@ export class RunEngine {
    * guard:
    * every {@link RUN_RENEWAL_INTERVAL_MS} it re-stamps the run's heartbeat AND
    * renews the held lease so a sibling consumer never treats the run as crashed
-   * mid-apply. A lost heartbeat CAS, a non-acquired lease renewal, or a renewal
-   * transport failure aborts the signal passed to `work` and rejects immediately.
-   * Continuing after an ambiguous renewal failure would let a fenced-out
+   * mid-apply. A lost heartbeat CAS or non-acquired lease renewal aborts
+   * immediately. A transport-unavailable probe gets one short retry only while
+   * both fences retain deadline headroom; exhaustion aborts the signal passed to
+   * `work`. Continuing after an ambiguous renewal failure would let a fenced-out
    * executor perform external adapter or release side effects beside its successor.
    */
   async #withRunRenewal<T>(
@@ -5115,31 +5196,114 @@ export class RunEngine {
     work: (signal: AbortSignal) => Promise<T>,
   ): Promise<T> {
     const abortController = new AbortController();
-    const failClosed = (): void => {
+    const initialFenceAt = run.heartbeatAt ?? this.#now();
+    let lastHeartbeatAt = initialFenceAt;
+    let runHeartbeatDeadline = initialFenceAt + RUN_HEARTBEAT_STALE_MS;
+    let capsuleLeaseDeadline = lease
+      ? initialFenceAt + DEFAULT_CAPSULE_LEASE_TTL_MS
+      : Number.POSITIVE_INFINITY;
+    const retryDelayMs = Math.min(
+      RUN_RENEWAL_TRANSPORT_RETRY_MAX_DELAY_MS,
+      Math.max(1, Math.floor(Math.max(this.#runRenewalIntervalMs, 1) / 20)),
+    );
+    const hasRetryHeadroom = (): boolean =>
+      Math.min(runHeartbeatDeadline, capsuleLeaseDeadline) - this.#now() >
+      retryDelayMs;
+    const failClosed = (
+      target: RunRenewalTarget,
+      failure: RunRenewalFailure,
+      attempts: number,
+      originalError?: unknown,
+    ): void => {
       if (abortController.signal.aborted) return;
-      const error = new RunExecutionLeaseLostError(kind, run.id);
+      const error = new RunExecutionRenewalError({
+        kind,
+        runId: run.id,
+        target,
+        failure,
+        attempts,
+        ...(originalError === undefined ? {} : { originalError }),
+      });
       abortController.abort(error);
     };
     let activeTick: Promise<void> | undefined;
+    const renewRunHeartbeat = async (): Promise<boolean> => {
+      let attempts = 0;
+      while (!abortController.signal.aborted) {
+        attempts += 1;
+        let heartbeat: { readonly won: boolean; readonly heartbeatAt: number };
+        try {
+          heartbeat = await this.#heartbeatRunningRun(
+            kind,
+            run,
+            leaseToken,
+          );
+        } catch (error) {
+          if (
+            attempts <= RUN_RENEWAL_TRANSPORT_RETRY_LIMIT &&
+            hasRetryHeadroom()
+          ) {
+            await new Promise<void>((resolve) =>
+              setTimeout(resolve, retryDelayMs),
+            );
+            continue;
+          }
+          failClosed(
+            "run_heartbeat",
+            "unavailable",
+            attempts,
+            error,
+          );
+          return false;
+        }
+        if (!heartbeat.won) {
+          failClosed("run_heartbeat", "lost", attempts);
+          return false;
+        }
+        lastHeartbeatAt = heartbeat.heartbeatAt;
+        runHeartbeatDeadline = lastHeartbeatAt + RUN_HEARTBEAT_STALE_MS;
+        return true;
+      }
+      return false;
+    };
+    const renewCapsuleLease = async (): Promise<boolean> => {
+      if (!lease) return true;
+      let attempts = 0;
+      while (!abortController.signal.aborted) {
+        attempts += 1;
+        let renewed: Awaited<ReturnType<LeaseHandle["renew"]>>;
+        try {
+          renewed = await lease.renew(DEFAULT_CAPSULE_LEASE_TTL_MS);
+        } catch (error) {
+          if (
+            isRetryableCapsuleRenewalTransportError(error) &&
+            attempts <= RUN_RENEWAL_TRANSPORT_RETRY_LIMIT &&
+            hasRetryHeadroom()
+          ) {
+            await new Promise<void>((resolve) =>
+              setTimeout(resolve, retryDelayMs),
+            );
+            continue;
+          }
+          failClosed("capsule_lease", "unavailable", attempts, error);
+          return false;
+        }
+        if (!renewed.acquired) {
+          failClosed("capsule_lease", "lost", attempts);
+          return false;
+        }
+        const renewedExpiresAt = Date.parse(renewed.expiresAt);
+        capsuleLeaseDeadline = Number.isFinite(renewedExpiresAt)
+          ? renewedExpiresAt
+          : lastHeartbeatAt + DEFAULT_CAPSULE_LEASE_TTL_MS;
+        return true;
+      }
+      return false;
+    };
     const tick = async (): Promise<void> => {
       if (abortController.signal.aborted) return;
-      try {
-        const heartbeatWon = await this.#heartbeatRunningRun(
-          kind,
-          run,
-          leaseToken,
-        );
-        if (!heartbeatWon) {
-          failClosed();
-          return;
-        }
-        if (lease) {
-          const renewed = await lease.renew(DEFAULT_CAPSULE_LEASE_TTL_MS);
-          if (!renewed.acquired) failClosed();
-        }
-      } catch {
-        failClosed();
-      }
+      if (!(await renewRunHeartbeat())) return;
+      await renewCapsuleLease();
     };
     const runTick = (): Promise<void> => {
       if (activeTick) return activeTick;
@@ -5185,7 +5349,13 @@ export class RunEngine {
     // a successful restore into a fence-loss failure. Plan/apply keep their
     // terminal commit outside `work`, so they receive the final guard check.
     if (kind !== "restore" && !abortController.signal.aborted) await runTick();
-    if (abortController.signal.aborted) throw abortController.signal.reason;
+    if (abortController.signal.aborted) {
+      const renewalError = abortController.signal.reason;
+      if (renewalError instanceof RunExecutionRenewalError && workFailed) {
+        renewalError.preserveSecondaryError(workError);
+      }
+      throw renewalError;
+    }
     if (workFailed) throw workError;
     return result as T;
   }
@@ -5259,7 +5429,7 @@ export class RunEngine {
     const failed: PlanRun = {
       ...running,
       status: "failed",
-      diagnostics: [errorDiagnostic(error)],
+      diagnostics: runFailureDiagnostics(error),
       auditEvents: [
         ...running.auditEvents,
         auditEvent(running.id, "plan.failed", now, {
@@ -5382,7 +5552,7 @@ export class RunEngine {
         now,
         "recorded",
       ),
-      diagnostics: [errorDiagnostic(error)],
+      diagnostics: runFailureDiagnostics(error),
       auditEvents: [
         ...running.auditEvents,
         ...(lifecycleOutcome
@@ -8703,12 +8873,9 @@ export class RunEngine {
         }
       }
       await this.#billing.releaseApplyBilling(planRun);
-      const lifecycleActionDispatched =
-        error instanceof CapsuleLifecycleActionError && error.actionDispatched;
-      const lifecycleOutcome =
-        error instanceof CapsuleLifecycleActionError
-          ? error.outcome
-          : undefined;
+      const lifecycleError = lifecycleActionErrorEvidence(error);
+      const lifecycleActionDispatched = lifecycleError?.actionDispatched === true;
+      const lifecycleOutcome = lifecycleError?.outcome;
       const failed = await this.#failApplyRun(
         effectiveRunning,
         leaseToken,

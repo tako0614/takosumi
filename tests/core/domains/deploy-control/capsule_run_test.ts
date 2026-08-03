@@ -35,7 +35,12 @@ import {
   OpenTofuController,
   OpenTofuRunnerInfrastructureError,
 } from "../../../../core/domains/deploy-control/mod.ts";
-import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
+import {
+  InMemoryOpenTofuControlStore,
+  type OpenTofuControlStore,
+  type TransitionRunInput,
+  type TransitionRunResult,
+} from "../../../../core/domains/deploy-control/store.ts";
 import {
   type AcquireCapsuleLeaseInput,
   type CapsuleCoordination,
@@ -45,7 +50,6 @@ import {
   type RenewCapsuleLeaseInput,
 } from "../../../../core/domains/deploy-control/capsule_lease.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
-import type { OpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 import { CloudflareD1OpenTofuControlStore } from "../../../../worker/src/d1_opentofu_store.ts";
 import { SourcesService } from "../../../../core/domains/sources/mod.ts";
 import {
@@ -62,6 +66,7 @@ import type {
   RunnerProfile,
 } from "@takosumi/internal/deploy-control-api";
 import {
+  CAPSULE_LIFECYCLE_ACTION_FAILED_ERROR_CODE,
   CAPSULE_LIFECYCLE_COMMAND_CAPABILITY,
   type InstallConfig,
   type InstallConfigLifecycleAction,
@@ -193,6 +198,30 @@ class HangingRunnerProfileSeedStore extends InMemoryOpenTofuControlStore {
       // Intentionally pending: plan/apply hot paths use the controller's
       // configured runner profile snapshot instead of waiting for seed writes.
     });
+  }
+}
+
+class RejectingApplyHeartbeatStore extends InMemoryOpenTofuControlStore {
+  rejectApplyHeartbeat = false;
+
+  override async transitionRun(
+    input: TransitionRunInput,
+  ): Promise<TransitionRunResult> {
+    if (
+      this.rejectApplyHeartbeat &&
+      input.kind === "apply" &&
+      input.expectFrom.includes("running") &&
+      input.expectLeaseToken !== undefined &&
+      input.run.status === "running" &&
+      input.setLeaseToken === undefined &&
+      input.clearLeaseToken !== true
+    ) {
+      return {
+        won: false,
+        run: await this.getApplyRun(input.id),
+      };
+    }
+    return await super.transitionRun(input);
   }
 }
 
@@ -4837,6 +4866,162 @@ test("post-apply lifecycle execution renews the run heartbeat and Capsule lease"
   expect(runner.applyJobs).toHaveLength(1);
   releaseActivation();
   expect((await applying).applyRun.status).toBe("succeeded");
+});
+
+test("lost run-heartbeat CAS aborts destroy before provider dispatch", async () => {
+  const store = new RejectingApplyHeartbeatStore();
+  const runner = recordingRunner();
+  await seedRunnableCapsuleModel(store, { environment: "preview" });
+  const controller = controllerWith(store, runner, {
+    runRenewalIntervalMs: 0,
+  });
+
+  const create = await controller.createCapsulePlan("cap_fixture1");
+  await controller.createApplyRun({
+    planRunId: create.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(create.planRun),
+  });
+  const destroy = await controller.createCapsuleDestroyPlan("cap_fixture1");
+  await controller.approveRun(destroy.planRun.id);
+  store.rejectApplyHeartbeat = true;
+
+  const { applyRun } = await controller.createApplyRun({
+    planRunId: destroy.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(destroy.planRun),
+  });
+
+  expect(applyRun.status).toBe("failed");
+  expect(applyRun.diagnostics?.map((diagnostic) => diagnostic.code)).toEqual([
+    "run_heartbeat_lost",
+  ]);
+  expect(runner.destroyJobs).toHaveLength(0);
+});
+
+test("non-held Capsule lease aborts destroy before provider dispatch", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner();
+  await seedRunnableCapsuleModel(store, { environment: "preview" });
+  const inner = new InMemoryCapsuleCoordination({ now: sequenceNow(50_000) });
+  let rejectRenewal = false;
+  const coordination: CapsuleCoordination = {
+    acquireLease: (input) => inner.acquireLease(input),
+    releaseLease: (input) => inner.releaseLease(input),
+    renewLease: (input) =>
+      rejectRenewal
+        ? Promise.resolve({
+            scope: input.scope,
+            holderId: input.holderId,
+            token: input.token,
+            acquired: false,
+            expiresAt: "1970-01-01T00:00:00.000Z",
+          })
+        : inner.renewLease(input),
+  };
+  const controller = controllerWith(store, runner, {
+    capsuleCoordination: coordination,
+    runRenewalIntervalMs: 0,
+  });
+
+  const create = await controller.createCapsulePlan("cap_fixture1");
+  await controller.createApplyRun({
+    planRunId: create.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(create.planRun),
+  });
+  const destroy = await controller.createCapsuleDestroyPlan("cap_fixture1");
+  await controller.approveRun(destroy.planRun.id);
+  rejectRenewal = true;
+
+  const { applyRun } = await controller.createApplyRun({
+    planRunId: destroy.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(destroy.planRun),
+  });
+
+  expect(applyRun.status).toBe("failed");
+  expect(applyRun.diagnostics?.map((diagnostic) => diagnostic.code)).toEqual([
+    "capsule_lease_lost",
+  ]);
+  expect(runner.destroyJobs).toHaveLength(0);
+});
+
+test("pre-destroy failure remains secondary evidence when the final Capsule lease probe is unavailable", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner();
+  await seedRunnableCapsuleModel(store, {
+    environment: "preview",
+    installConfig: lifecycleInstallConfig([
+      {
+        id: "retire-runtime",
+        phase: "pre_destroy",
+        executor: "operator",
+        command: ["bun", "run", "release", "--destroy"],
+      },
+    ]),
+  });
+  const inner = new InMemoryCapsuleCoordination({ now: sequenceNow(60_000) });
+  let failDestroyFinalProbe = false;
+  let destroyRenewAttempts = 0;
+  const coordination: CapsuleCoordination = {
+    acquireLease: (input) => inner.acquireLease(input),
+    releaseLease: (input) => inner.releaseLease(input),
+    renewLease: (input) => {
+      if (!failDestroyFinalProbe) return inner.renewLease(input);
+      destroyRenewAttempts += 1;
+      if (destroyRenewAttempts === 1) return inner.renewLease(input);
+      return Promise.reject(
+        Object.assign(new Error("coordination transport reset"), {
+          retryable: true,
+        }),
+      );
+    },
+  };
+  const controller = controllerWith(store, runner, {
+    capsuleCoordination: coordination,
+    runRenewalIntervalMs: 0,
+    releaseActivator: {
+      activate: () =>
+        Promise.resolve({
+          status: "failed",
+          message: "pre-destroy lifecycle failed",
+        }),
+    },
+  });
+
+  const create = await controller.createCapsulePlan("cap_fixture1");
+  await controller.createApplyRun({
+    planRunId: create.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(create.planRun),
+  });
+  const destroy = await controller.createCapsuleDestroyPlan("cap_fixture1");
+  await controller.approveRun(destroy.planRun.id);
+  failDestroyFinalProbe = true;
+
+  const { applyRun } = await controller.createApplyRun({
+    planRunId: destroy.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(destroy.planRun),
+  });
+
+  expect(applyRun.status).toBe("failed");
+  expect(applyRun.diagnostics?.map((diagnostic) => diagnostic.code)).toEqual([
+    "capsule_lease_unavailable",
+    CAPSULE_LIFECYCLE_ACTION_FAILED_ERROR_CODE,
+  ]);
+  expect(applyRun.diagnostics?.[1]?.message).toContain(
+    "pre-destroy lifecycle failed",
+  );
+  expect(
+    applyRun.auditEvents.some(
+      (event) => event.type === "lifecycle_action.pre_destroy.failed",
+    ),
+  ).toBe(true);
+  expect(
+    applyRun.auditEvents.find((event) => event.type === "destroy.failed")?.data,
+  ).toMatchObject({
+    lifecycleActionDispatched: true,
+    lifecycleActionPhase: "pre_destroy",
+    lifecycleActionStatus: "failed",
+  });
+  expect(destroyRenewAttempts).toBe(3);
+  expect(runner.destroyJobs).toHaveLength(0);
 });
 
 test("pre-destroy lifecycle execution renews before provider destroy dispatch", async () => {

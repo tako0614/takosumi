@@ -184,6 +184,46 @@ function controllerWith(
   });
 }
 
+function isApplyHeartbeatRenewal(input: TransitionRunInput): boolean {
+  return (
+    input.kind === "apply" &&
+    input.expectFrom.includes("running") &&
+    input.expectLeaseToken !== undefined &&
+    input.run.status === "running" &&
+    input.setLeaseToken === undefined &&
+    input.clearLeaseToken !== true
+  );
+}
+
+class OneTransientHeartbeatFailureStore extends InMemoryOpenTofuControlStore {
+  heartbeatRenewalAttempts = 0;
+
+  override async transitionRun(
+    input: TransitionRunInput,
+  ): Promise<TransitionRunResult> {
+    if (isApplyHeartbeatRenewal(input)) {
+      this.heartbeatRenewalAttempts += 1;
+      if (this.heartbeatRenewalAttempts === 1) {
+        throw new Error("transient D1 heartbeat transport reset");
+      }
+    }
+    return await super.transitionRun(input);
+  }
+}
+
+class HeartbeatCountingStore extends InMemoryOpenTofuControlStore {
+  heartbeatRenewalAttempts = 0;
+
+  override async transitionRun(
+    input: TransitionRunInput,
+  ): Promise<TransitionRunResult> {
+    if (isApplyHeartbeatRenewal(input)) {
+      this.heartbeatRenewalAttempts += 1;
+    }
+    return await super.transitionRun(input);
+  }
+}
+
 // --- cancel-vs-claim ---
 
 test("cancel that wins forces a later consumer claim to lose (no dispatch, no resurrection)", async () => {
@@ -433,6 +473,149 @@ test("two concurrent queued claims for the same apply: exactly one dispatches", 
 });
 
 // --- heartbeat + lease renewal during a long apply ---
+
+test("one transient run-heartbeat transport failure recovers before apply dispatch", async () => {
+  const store = new OneTransientHeartbeatFailureStore();
+  await seedApply(store, {
+    capsuleId: "cap_hb_retry",
+    planRunId: "plan_hb_retry",
+    applyRunId: "apply_hb_retry",
+  });
+  let applyCalls = 0;
+  const controller = controllerWith(store, {
+    runRenewalIntervalMs: 0,
+    apply: () => {
+      applyCalls += 1;
+      return Promise.resolve(fixtureStateCommit());
+    },
+  });
+
+  const response = await controller.runQueuedApply("apply_hb_retry");
+
+  expect(response.applyRun.status).toBe("succeeded");
+  expect(applyCalls).toBe(1);
+  expect(store.heartbeatRenewalAttempts).toBeGreaterThanOrEqual(3);
+});
+
+test("run-heartbeat transport failure does not retry after heartbeat headroom is exhausted", async () => {
+  const store = new OneTransientHeartbeatFailureStore();
+  await seedApply(store, {
+    capsuleId: "cap_hb_no_headroom",
+    planRunId: "plan_hb_no_headroom",
+    applyRunId: "apply_hb_no_headroom",
+  });
+  let applyCalls = 0;
+  const controller = controllerWith(store, {
+    now: () =>
+      store.heartbeatRenewalAttempts > 0 ? 10 * 60 * 1000 + 100 : 1,
+    runRenewalIntervalMs: 0,
+    apply: () => {
+      applyCalls += 1;
+      return Promise.resolve(fixtureStateCommit());
+    },
+  });
+
+  const response = await controller.runQueuedApply("apply_hb_no_headroom");
+
+  expect(response.applyRun.status).toBe("failed");
+  expect(response.applyRun.diagnostics?.map((item) => item.code)).toEqual([
+    "run_heartbeat_unavailable",
+  ]);
+  expect(store.heartbeatRenewalAttempts).toBe(1);
+  expect(applyCalls).toBe(0);
+});
+
+test("one transient coordination-renew transport failure recovers before apply dispatch", async () => {
+  const store = new HeartbeatCountingStore();
+  await seedApply(store, {
+    capsuleId: "cap_lease_retry",
+    planRunId: "plan_lease_retry",
+    applyRunId: "apply_lease_retry",
+  });
+  const inner = new InMemoryCapsuleCoordination({ now: () => 1 });
+  let renewAttempts = 0;
+  const coordination: CapsuleCoordination = {
+    acquireLease: (input) => inner.acquireLease(input),
+    releaseLease: (input) => inner.releaseLease(input),
+    renewLease: (input) => {
+      renewAttempts += 1;
+      if (renewAttempts === 1) {
+        return Promise.reject(
+          Object.assign(new Error("transient coordination transport reset"), {
+            retryable: true,
+          }),
+        );
+      }
+      return inner.renewLease(input);
+    },
+  };
+  let applyCalls = 0;
+  const controller = controllerWith(store, {
+    coordination,
+    runRenewalIntervalMs: 0,
+    apply: () => {
+      applyCalls += 1;
+      return Promise.resolve(fixtureStateCommit());
+    },
+  });
+
+  const response = await controller.runQueuedApply("apply_lease_retry");
+
+  expect(response.applyRun.status).toBe("succeeded");
+  expect(applyCalls).toBe(1);
+  expect(renewAttempts).toBe(store.heartbeatRenewalAttempts + 1);
+});
+
+test("coordination retry that proves not-held aborts immediately without another heartbeat", async () => {
+  const store = new HeartbeatCountingStore();
+  await seedApply(store, {
+    capsuleId: "cap_lease_retry_lost",
+    planRunId: "plan_lease_retry_lost",
+    applyRunId: "apply_lease_retry_lost",
+  });
+  const inner = new InMemoryCapsuleCoordination({ now: () => 1 });
+  let renewAttempts = 0;
+  const coordination: CapsuleCoordination = {
+    acquireLease: (input) => inner.acquireLease(input),
+    releaseLease: (input) => inner.releaseLease(input),
+    renewLease: (input) => {
+      renewAttempts += 1;
+      if (renewAttempts === 1) {
+        return Promise.reject(
+          Object.assign(new Error("transient coordination transport reset"), {
+            retryable: true,
+          }),
+        );
+      }
+      return Promise.resolve({
+        scope: input.scope,
+        holderId: input.holderId,
+        token: input.token,
+        acquired: false,
+        expiresAt: "1970-01-01T00:00:00.000Z",
+      });
+    },
+  };
+  let applyCalls = 0;
+  const controller = controllerWith(store, {
+    coordination,
+    runRenewalIntervalMs: 0,
+    apply: () => {
+      applyCalls += 1;
+      return Promise.resolve(fixtureStateCommit());
+    },
+  });
+
+  const response = await controller.runQueuedApply("apply_lease_retry_lost");
+
+  expect(response.applyRun.status).toBe("failed");
+  expect(response.applyRun.diagnostics?.map((item) => item.code)).toEqual([
+    "capsule_lease_lost",
+  ]);
+  expect(renewAttempts).toBe(2);
+  expect(store.heartbeatRenewalAttempts).toBe(1);
+  expect(applyCalls).toBe(0);
+});
 
 test("the run heartbeat is re-stamped AND the lease renewed while a long apply blocks in the runner", async () => {
   const store = new InMemoryOpenTofuControlStore();

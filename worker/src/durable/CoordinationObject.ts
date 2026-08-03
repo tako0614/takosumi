@@ -55,10 +55,14 @@ export class CoordinationObject {
           return Response.json({ error: "not found" }, { status: 404 });
       }
     } catch (error) {
-      void error;
+      const invalidRequest = error instanceof InvalidCoordinationRequestError;
       return Response.json(
-        { error: "invalid coordination request" },
-        { status: 400 },
+        {
+          error: invalidRequest
+            ? "invalid coordination request"
+            : "coordination unavailable",
+        },
+        { status: invalidRequest ? 400 : 503 },
       );
     }
   }
@@ -90,7 +94,13 @@ export class CoordinationObject {
       existing.holderId !== input.holderId ||
       existing.token !== input.token
     ) {
-      throw new Error(`coordination lease not held: ${input.scope}`);
+      return {
+        scope: input.scope,
+        holderId: input.holderId,
+        token: input.token,
+        acquired: false,
+        expiresAt: existing?.expiresAt ?? new Date(0).toISOString(),
+      };
     }
     const lease: CoordinationLease = {
       ...existing,
@@ -286,20 +296,32 @@ interface CoordinationAlarmInput {
   readonly payload?: Record<string, unknown>;
 }
 
+class InvalidCoordinationRequestError extends Error {
+  constructor() {
+    super("invalid coordination request");
+    this.name = "InvalidCoordinationRequestError";
+  }
+}
+
 async function readJsonObject(
   request: Request,
 ): Promise<Record<string, unknown>> {
-  const value = await request.json();
+  let value: unknown;
+  try {
+    value = await request.json();
+  } catch {
+    throw new InvalidCoordinationRequestError();
+  }
   if (typeof value === "object" && value !== null && !Array.isArray(value)) {
     return value as Record<string, unknown>;
   }
-  throw new Error("request body must be a JSON object");
+  throw new InvalidCoordinationRequestError();
 }
 
 function requireString(body: Record<string, unknown>, field: string): string {
   const value = body[field];
   if (typeof value !== "string" || !value) {
-    throw new Error(`field ${field} must be a non-empty string`);
+    throw new InvalidCoordinationRequestError();
   }
   return value;
 }
@@ -307,7 +329,7 @@ function requireString(body: Record<string, unknown>, field: string): string {
 function requireNumber(body: Record<string, unknown>, field: string): number {
   const value = body[field];
   if (typeof value !== "number" || !Number.isFinite(value)) {
-    throw new Error(`field ${field} must be a finite number`);
+    throw new InvalidCoordinationRequestError();
   }
   return value;
 }
@@ -319,7 +341,7 @@ function optionalRecord(
   const value = body[field];
   if (value === undefined || value === null) return undefined;
   if (typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`field ${field} must be a JSON object when present`);
+    throw new InvalidCoordinationRequestError();
   }
   return value as Record<string, unknown>;
 }

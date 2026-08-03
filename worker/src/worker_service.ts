@@ -959,15 +959,36 @@ function envFlag(value: unknown): boolean {
   return normalized === "1" || normalized === "true" || normalized === "yes";
 }
 
+class CoordinationTransportUnavailableError extends Error {
+  readonly retryable = true;
+  readonly reason = "coordination_transport_unavailable";
+  readonly originalError?: unknown;
+
+  constructor(path: string, originalError?: unknown) {
+    super(`coordination ${path} transport unavailable`);
+    this.name = "CoordinationTransportUnavailableError";
+    this.originalError = originalError;
+  }
+}
+
+class CoordinationRequestError extends Error {
+  readonly retryable = false;
+
+  constructor(path: string, status: number) {
+    super(`coordination ${path} request failed with status ${status}`);
+    this.name = "CoordinationRequestError";
+  }
+}
+
 /**
  * Builds a {@link CapsuleCoordination} that fronts the shared
- * {@link CoordinationObject} via its `acquire-lease` / `release-lease` POST
- * API. Returns undefined when the DO binding is absent, leaving the controller
- * on its in-process serialization. The same single DO instance
- * (`takosumi-control-plane`) backs the lease keyspace used by the rest of the
- * coordination surface, so environment leases share that storage.
+ * {@link CoordinationObject} via its `acquire-lease` / `renew-lease` /
+ * `release-lease` POST API. Returns undefined when the DO binding is absent,
+ * leaving the controller on its in-process serialization. The same single DO
+ * instance (`takosumi-control-plane`) backs the lease keyspace used by the rest
+ * of the coordination surface, so environment leases share that storage.
  */
-function durableObjectCapsuleCoordination(
+export function durableObjectCapsuleCoordination(
   env: CloudflareWorkerEnv,
 ): CapsuleCoordination | undefined {
   const namespace = env.COORDINATION;
@@ -975,21 +996,36 @@ function durableObjectCapsuleCoordination(
   const stub = () =>
     namespace.get(namespace.idFromName("takosumi-control-plane"));
   const post = async (path: string, body: unknown): Promise<unknown> => {
-    const response = await stub().fetch(
-      new Request(`https://takos-coordination.internal/${path}`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
-      }),
-    );
-    const payload = (await response.json()) as {
-      result?: unknown;
-      error?: string;
-    };
-    if (!response.ok || payload.error) {
-      throw new Error(
-        `coordination ${path} failed: ${payload.error ?? response.status}`,
+    let response: Response;
+    try {
+      response = await stub().fetch(
+        new Request(`https://takos-coordination.internal/${path}`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+        }),
       );
+    } catch (error) {
+      throw new CoordinationTransportUnavailableError(path, error);
+    }
+    let payload: { result?: unknown; error?: string };
+    try {
+      payload = (await response.json()) as {
+        result?: unknown;
+        error?: string;
+      };
+    } catch (error) {
+      throw new CoordinationTransportUnavailableError(path, error);
+    }
+    if (!response.ok || payload.error) {
+      if (
+        response.status >= 500 ||
+        response.status === 408 ||
+        response.status === 429
+      ) {
+        throw new CoordinationTransportUnavailableError(path);
+      }
+      throw new CoordinationRequestError(path, response.status);
     }
     return payload.result;
   };
@@ -1009,33 +1045,18 @@ function durableObjectCapsuleCoordination(
       return result;
     },
     async renewLease(input) {
-      // The DO's `renew-lease` throws (400) when the lease is not held by this
-      // holder+token. Translate that into a fail-closed `acquired=false` lease
-      // so the renewal harness stops renewing instead of surfacing the error and
-      // killing the apply it is babysitting.
-      try {
-        const result = (await post("renew-lease", {
-          scope: input.scope,
-          holderId: input.holderId,
-          token: input.token,
-          ttlMs: input.ttlMs,
-        })) as {
-          scope: string;
-          holderId: string;
-          token: string;
-          acquired: boolean;
-          expiresAt: string;
-        };
-        return result;
-      } catch {
-        return {
-          scope: input.scope,
-          holderId: input.holderId,
-          token: input.token,
-          acquired: false,
-          expiresAt: new Date().toISOString(),
-        };
-      }
+      return (await post("renew-lease", {
+        scope: input.scope,
+        holderId: input.holderId,
+        token: input.token,
+        ttlMs: input.ttlMs,
+      })) as {
+        scope: string;
+        holderId: string;
+        token: string;
+        acquired: boolean;
+        expiresAt: string;
+      };
     },
     async releaseLease(input) {
       return (await post("release-lease", {

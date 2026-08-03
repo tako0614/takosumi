@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "bun:test";
 import { CoordinationObject } from "../../../../worker/src/durable/CoordinationObject.ts";
 import type { CloudflareWorkerEnv } from "../../../../worker/src/bindings.ts";
+import { durableObjectCapsuleCoordination } from "../../../../worker/src/worker_service.ts";
 
 test("CoordinationObject schedules the next real Durable Object alarm", async () => {
   const storage = new FakeDoStorage();
@@ -109,6 +110,130 @@ test("CoordinationObject does not echo invalid request details", async () => {
   assert.equal(text.includes("invalid coordination request"), true);
 });
 
+test("CoordinationObject distinguishes a non-held renewal from storage unavailability", async () => {
+  const coordination = new CoordinationObject(
+    { storage: new FakeDoStorage() },
+    {} as CloudflareWorkerEnv,
+  );
+  const notHeld = await coordination.fetch(
+    new Request("https://coordination/renew-lease", {
+      method: "POST",
+      body: JSON.stringify({
+        scope: "capsule:cap_1:production",
+        holderId: "apply_1",
+        token: "stale-token",
+        ttlMs: 900_000,
+      }),
+    }),
+  );
+
+  assert.equal(notHeld.status, 200);
+  assert.deepEqual(await notHeld.json(), {
+    result: {
+      scope: "capsule:cap_1:production",
+      holderId: "apply_1",
+      token: "stale-token",
+      acquired: false,
+      expiresAt: "1970-01-01T00:00:00.000Z",
+    },
+  });
+
+  const unavailable = new CoordinationObject(
+    { storage: new UnavailableDoStorage() },
+    {} as CloudflareWorkerEnv,
+  );
+  const unavailableResponse = await unavailable.fetch(
+    new Request("https://coordination/renew-lease", {
+      method: "POST",
+      body: JSON.stringify({
+        scope: "capsule:cap_1:production",
+        holderId: "apply_1",
+        token: "held-token",
+        ttlMs: 900_000,
+      }),
+    }),
+  );
+
+  assert.equal(unavailableResponse.status, 503);
+  assert.deepEqual(await unavailableResponse.json(), {
+    error: "coordination unavailable",
+  });
+});
+
+test("Worker coordination adapter returns not-held but throws retryable unavailability", async () => {
+  const notHeld = durableObjectCapsuleCoordination(
+    coordinationEnv(() =>
+      Promise.resolve(
+        Response.json({
+          result: {
+            scope: "capsule:cap_1:production",
+            holderId: "apply_1",
+            token: "stale-token",
+            acquired: false,
+            expiresAt: "1970-01-01T00:00:00.000Z",
+          },
+        }),
+      ),
+    ),
+  );
+  assert.ok(notHeld);
+  assert.equal(
+    (
+      await notHeld.renewLease({
+        scope: "capsule:cap_1:production",
+        holderId: "apply_1",
+        token: "stale-token",
+        ttlMs: 900_000,
+      })
+    ).acquired,
+    false,
+  );
+
+  const unavailable = durableObjectCapsuleCoordination(
+    coordinationEnv(() =>
+      Promise.resolve(
+        Response.json(
+          { error: "coordination unavailable" },
+          { status: 503 },
+        ),
+      ),
+    ),
+  );
+  assert.ok(unavailable);
+  await assert.rejects(
+    () =>
+      unavailable.renewLease({
+        scope: "capsule:cap_1:production",
+        holderId: "apply_1",
+        token: "held-token",
+        ttlMs: 900_000,
+      }),
+    (error: unknown) => {
+      assert.equal(error instanceof Error, true);
+      assert.equal(
+        (error as { readonly retryable?: unknown }).retryable,
+        true,
+      );
+      assert.equal(
+        (error as { readonly reason?: unknown }).reason,
+        "coordination_transport_unavailable",
+      );
+      return true;
+    },
+  );
+});
+
+function coordinationEnv(
+  fetcher: (request: Request) => Promise<Response>,
+): CloudflareWorkerEnv {
+  return {
+    COORDINATION: {
+      idFromName: () => ({}),
+      get: () => ({ fetch: fetcher }),
+    },
+  } as unknown as CloudflareWorkerEnv;
+}
+
 class FakeDoStorage {
   readonly #values = new Map<string, unknown>();
   alarmAt: number | undefined;
@@ -142,5 +267,11 @@ class FakeDoStorage {
   deleteAlarm(): Promise<void> {
     this.alarmAt = undefined;
     return Promise.resolve();
+  }
+}
+
+class UnavailableDoStorage extends FakeDoStorage {
+  override get<T = unknown>(_key: string): Promise<T | undefined> {
+    return Promise.reject(new Error("Durable Object storage reset"));
   }
 }
