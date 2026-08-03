@@ -116,6 +116,7 @@ import {
   Textarea,
   Toast,
 } from "../../components/ui/index.ts";
+import { autoApplyRunPath } from "../../lib/auto-apply-consent.ts";
 import { clearCapsuleListCache } from "../../lib/capsule-list.ts";
 import { clearCurrentStateVersionCache } from "../../lib/current-state-versions.ts";
 import { clearDashboardOverviewCache } from "../../lib/dashboard-overview.ts";
@@ -335,11 +336,13 @@ function Inner() {
     if (runId) navigate(`/runs/${runId}`);
   });
   // 1-tap update: same plan run, but the run screen shows the App-Store-style
-  // progress and auto-continues a clean plan to apply (?auto=update).
+  // progress and auto-continues a clean plan to apply (?auto=update). Pressing
+  // this button is the authority for that apply, so mint the tab-local consent
+  // token with the URL — the flag alone never authorizes it.
   const update = createAction(async () => {
     const envelope = await planCapsuleUpdate(capsuleId());
     const runId = extractRunId(envelope);
-    if (runId) navigate(`/runs/${runId}?auto=update`);
+    if (runId) navigate(autoApplyRunPath(`/runs/${runId}`, runId, "update"));
   });
   const autoUpdateToggle = createAction(async () => {
     await setCapsuleAutoUpdate(capsuleId(), capsuleData()?.autoUpdate !== true);

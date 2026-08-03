@@ -80,6 +80,7 @@ import {
   appHandoffFromSearch,
   appHandoffProductLabel,
 } from "../../lib/app-handoff.ts";
+import { autoApplyRunPath } from "../../lib/auto-apply-consent.ts";
 import {
   checkCapsuleCompatibility,
   ControlApiError,
@@ -2560,10 +2561,13 @@ function Inner() {
       if (runId) {
         // Install is one action: tell the run screen to auto-continue to apply
         // when the plan is clean (no approval / no destructive change), so the
-        // visitor never has to press "deploy" on a plan console.
+        // visitor never has to press "deploy" on a plan console. The flag is
+        // only a hint — autoApplyRunPath also mints the tab-local consent token
+        // the run screen requires, so the auto-apply carries this visitor's own
+        // install action and not just a URL anyone could hand them.
         const base =
           appendAppHandoff(`/runs/${runId}`, appHandoff) ?? `/runs/${runId}`;
-        navigate(base + (base.includes("?") ? "&" : "?") + "auto=install");
+        navigate(autoApplyRunPath(base, runId, "install"));
       } else {
         navigate("/");
       }

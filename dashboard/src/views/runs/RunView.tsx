@@ -85,6 +85,12 @@ import {
   appHandoffProductLabel,
 } from "../../lib/app-handoff.ts";
 import {
+  autoApplyModeFromParam,
+  autoApplyRunPath,
+  hasAutoApplyConsent,
+  type AutoApplyMode,
+} from "../../lib/auto-apply-consent.ts";
+import {
   diagnosticSeverityLabel,
   operationLabel,
   policyStatusLabel,
@@ -697,18 +703,26 @@ function Inner() {
   // in place (plan → apply, retry → fresh plan), so a value captured once from
   // location.search would leave stale install/update chrome on the next run.
   const [searchParams] = useSearchParams();
-  const autoMode = (): string | null => {
-    const value = searchParams.auto;
-    return typeof value === "string" ? value : null;
-  };
+  // A URL parameter is never apply authority. ?auto only counts when THIS tab
+  // started the flow and minted the run-scoped consent token (lib/auto-apply-
+  // consent.ts): otherwise a crafted /runs/:id?auto=install link opened by a
+  // signed-in victim would apply their pending plan with no user action. With
+  // no token this falls through to the ordinary console + deploy button.
+  const autoMode = createMemo((): AutoApplyMode | null => {
+    const requested = autoApplyModeFromParam(searchParams.auto);
+    return requested && hasAutoApplyConsent(runId(), requested)
+      ? requested
+      : null;
+  });
   const autoUpdateMode = () => autoMode() === "update";
-  const autoInstall = () => autoMode() === "install" || autoUpdateMode();
-  const withAuto = (path: string) =>
-    autoInstall()
-      ? path +
-        (path.includes("?") ? "&" : "?") +
-        (autoUpdateMode() ? "auto=update" : "auto=install")
-      : path;
+  const autoInstall = () => autoMode() !== null;
+  // Carry the flag across the plan→apply hop and any re-plan — and mint the
+  // consent for the run being navigated to, since the flag alone no longer
+  // authorizes the next screen's auto-apply.
+  const withAuto = (path: string, targetRunId: string) => {
+    const mode = autoMode();
+    return mode ? autoApplyRunPath(path, targetRunId, mode) : path;
+  };
   const [forceConsole, setForceConsole] = createSignal(false);
 
   const [run, { refetch: refetchRun, mutate: mutateRun }] = createResource(
@@ -1151,6 +1165,7 @@ function Inner() {
         withAuto(
           appendAppHandoff(`/runs/${applyRunId}`, appHandoff) ??
             `/runs/${applyRunId}`,
+          applyRunId,
         ),
       );
       return;
@@ -1250,6 +1265,7 @@ function Inner() {
         withAuto(
           appendAppHandoff(`/runs/${newRunId}`, appHandoff) ??
             `/runs/${newRunId}`,
+          newRunId,
         ),
       );
     }
