@@ -88,15 +88,18 @@ import {
   formatResourceShapeId,
   LegacyResourceStateAdoptionService,
   matchesApplyLock,
+  matchesVersion,
   ResourceFormPinInventoryService,
   ResourceFormPinOperations,
   ResourceArtifactService,
   ResourceShapeService,
   type ResourceAdapter,
   type ResourceObservationClaimInput,
+  resourceRecordRevision,
   type ResourceShapeModuleRegistry,
   type ResourceShapeRecord,
   type ResourceShapeRecordId,
+  type ResourceRecordVersion,
   type ResourceShapeSchemaRegistry,
   type ResourceShapeStores,
 } from "./domains/resource-shape/mod.ts";
@@ -2079,21 +2082,141 @@ export async function createTakosumiService(
     }
     return false;
   };
-  const exactHostRuntimeLifecycleInput = async (resourceId: string) => {
-    if (!options.hostRuntimeResourceLifecycle) return undefined;
+
+  /**
+   * A Ready Resource snapshot used to fence host-runtime side effects. The
+   * numeric Resource revision and the canonical backend revision are both
+   * required to match before a lifecycle failure may rewrite the Resource.
+   * This keeps a slow/stale Ready observer from degrading a newer generation.
+   */
+  type ReadyResourceLifecycleFence = {
+    readonly resourceId: string;
+    readonly resourceGeneration: number;
+    readonly resourceRevisionId?: string;
+    readonly resourceVersion: ResourceRecordVersion;
+  };
+  type ReadyResourceLifecycleSnapshot = ReadyResourceLifecycleFence & {
+    readonly resource: ResourceShapeRecord;
+  };
+
+  const readReadyResourceLifecycleSnapshot = async (
+    resourceId: string,
+    expected?: ResourceRecordVersion,
+  ): Promise<ReadyResourceLifecycleSnapshot | undefined> => {
     const [resource, lock] = await Promise.all([
       resourceShapeStores.resources.get(resourceId),
       resourceShapeStores.locks.get(resourceId),
     ]);
-    if (!resource || !lock) return undefined;
-    if (resource.kind !== "EdgeWorker") return undefined;
+    if (
+      !resource ||
+      !lock ||
+      resource.phase !== "Ready" ||
+      resource.observedGeneration !== resource.generation
+    ) {
+      return undefined;
+    }
+    const resourceVersion: ResourceRecordVersion = {
+      generation: resource.generation,
+      phase: "Ready",
+      updatedAt: resource.updatedAt,
+      revision: resourceRecordRevision(resource),
+    };
+    if (expected && !matchesVersion(resource, expected)) return undefined;
+    return {
+      resource,
+      resourceId,
+      resourceGeneration: resource.generation,
+      resourceRevisionId: canonicalReadyResourceRevisionId(resource, lock),
+      resourceVersion,
+    };
+  };
+
+  /**
+   * Fences a Ready Resource after a host runtime activation/reconciliation
+   * failure. The host operation is deliberately rethrown to the generic
+   * lifecycle observer (which retains its best-effort contract), while this
+   * bounded CAS removes the durable Ready claim when the exact snapshot still
+   * owns the Resource.
+   */
+  const degradeHostRuntimeResource = async (
+    fence: ReadyResourceLifecycleFence | undefined,
+  ): Promise<boolean> => {
+    if (!fence) return false;
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const current = await resourceShapeStores.resources.get(
+        fence.resourceId,
+      );
+      const lock = await resourceShapeStores.locks.get(fence.resourceId);
+      if (
+        !current ||
+        !lock ||
+        current.phase !== "Ready" ||
+        current.observedGeneration !== current.generation ||
+        !matchesVersion(current, fence.resourceVersion) ||
+        (fence.resourceRevisionId !== undefined &&
+          canonicalReadyResourceRevisionId(current, lock) !==
+            fence.resourceRevisionId)
+      ) {
+        return false;
+      }
+      const at = new Date().toISOString();
+      const degraded: ResourceShapeRecord = {
+        ...current,
+        phase: "Degraded",
+        conditions: [
+          ...(current.conditions ?? []).filter(
+            (condition) => condition.type.toLowerCase() !== "ready",
+          ),
+          {
+            type: "Ready",
+            status: "false",
+            reason: "HostRuntimeNotReady",
+            message: "host runtime lifecycle is unavailable; retry required",
+            observedGeneration: current.generation,
+            lastTransitionAt: at,
+          },
+        ],
+        updatedAt: at,
+      };
+      let changed;
+      try {
+        changed = await resourceShapeStores.resources.compareAndSet(
+          degraded,
+          fence.resourceVersion,
+        );
+      } catch (persistenceError) {
+        log.warn("service.resource_shape.host_runtime_fence_failed", {
+          resourceId: fence.resourceId,
+          error: persistenceError,
+        });
+        return false;
+      }
+      if (changed.status === "updated") return true;
+      if (changed.status === "not_found") return false;
+      // A CAS conflict may be a harmless concurrent write. Re-read once more
+      // so an exact same-generation retry can still fence the Ready claim;
+      // newer generations fail the snapshot check above.
+    }
+    return false;
+  };
+
+  const exactHostRuntimeLifecycleInput = async (
+    resourceId: string,
+    expected?: ResourceRecordVersion,
+  ) => {
+    if (!options.hostRuntimeResourceLifecycle) return undefined;
+    const snapshot = await readReadyResourceLifecycleSnapshot(
+      resourceId,
+      expected,
+    );
+    if (!snapshot || snapshot.resource.kind !== "EdgeWorker") return undefined;
+    const { resource, resourceRevisionId } = snapshot;
     const request = await hostRuntimeMaterializationResolver({
       owner: resource.owner,
       resourceId,
       validatedSpec: resource.spec,
     });
     if (!request) return undefined;
-    const resourceRevisionId = canonicalReadyResourceRevisionId(resource, lock);
     if (!resourceRevisionId) {
       throw new Error(
         `host runtime lifecycle has no canonical backend revision for ${resourceId}`,
@@ -2104,11 +2227,19 @@ export async function createTakosumiService(
       resourceId,
       resourceGeneration: resource.generation,
       resourceRevisionId,
+      resourceVersion: snapshot.resourceVersion,
     };
   };
-  const reconcileScheduleHostRuntime = async (resourceId: string) => {
+  const reconcileScheduleHostRuntime = async (
+    resourceId: string,
+    expected?: ResourceRecordVersion,
+  ) => {
     if (!options.hostRuntimeResourceLifecycle) return;
-    const source = await resourceShapeStores.resources.get(resourceId);
+    const sourceSnapshot = await readReadyResourceLifecycleSnapshot(
+      resourceId,
+      expected,
+    );
+    const source = sourceSnapshot?.resource;
     // Only a Schedule owns a background activation edge. Avoid resolving the
     // current Capsule InstallConfig for unrelated Resource lifecycle events,
     // especially retained EdgeWorker teardown.
@@ -2162,6 +2293,12 @@ export async function createTakosumiService(
       switch (event.type) {
         case "ready":
           {
+            // Capture the exact Ready version before any asynchronous host or
+            // Interface work. A later generation must own its own lifecycle
+            // event; this event may only fence the snapshot it observed.
+            const readySnapshot = options.hostRuntimeResourceLifecycle
+              ? await readReadyResourceLifecycleSnapshot(event.resourceId)
+              : undefined;
             try {
               // Activation resolves the canonical connection graph, and that
               // graph is only complete once each connection's grant exists.
@@ -2181,13 +2318,65 @@ export async function createTakosumiService(
               }
               throw error;
             }
-            const runtime = await exactHostRuntimeLifecycleInput(
-              event.resourceId,
-            );
-            if (runtime) {
-              await options.hostRuntimeResourceLifecycle!.activate(runtime);
+            let runtime:
+              | Awaited<
+                  ReturnType<typeof exactHostRuntimeLifecycleInput>
+                >
+              | undefined;
+            try {
+              runtime = readySnapshot
+                ? await exactHostRuntimeLifecycleInput(
+                    event.resourceId,
+                    readySnapshot.resourceVersion,
+                  )
+                : undefined;
+              if (runtime) {
+                await options.hostRuntimeResourceLifecycle!.activate(runtime);
+              }
+              if (readySnapshot) {
+                await reconcileScheduleHostRuntime(
+                  event.resourceId,
+                  readySnapshot.resourceVersion,
+                );
+              }
+            } catch (error) {
+              // ResourceShapeService has already committed Ready and retains a
+              // best-effort observer contract. Fence only the exact Resource
+              // snapshot whose host operation failed, then retain/rethrow the
+              // error so the observer log and bounded repair/sweep can retry.
+              const fenced = await degradeHostRuntimeResource(
+                runtime ?? readySnapshot,
+              );
+              if (fenced) {
+                try {
+                  const degraded = await resourceShapeStores.resources.get(
+                    (runtime ?? readySnapshot)!.resourceId,
+                  );
+                  const degradedWorkspace = degraded
+                    ? await resolveResourceInterfaceWorkspace(
+                        resourceInterfaceWorkspaceInput(degraded),
+                      )
+                    : undefined;
+                  const interfaceWorkspace = degradedWorkspace ?? workspaceId;
+                  if (interfaceWorkspace) {
+                    await interfaceService.markResourceUnknown(
+                      interfaceWorkspace,
+                      (runtime ?? readySnapshot)!.resourceId,
+                      "host runtime lifecycle is unavailable; retry required",
+                    );
+                  }
+                } catch (interfaceError) {
+                  log.warn(
+                    "service.resource_shape.host_runtime_interface_fence_failed",
+                    {
+                      resourceId: (runtime ?? readySnapshot)!.resourceId,
+                      error: interfaceError,
+                    },
+                  );
+                }
+              }
+              throw error;
             }
-            await reconcileScheduleHostRuntime(event.resourceId);
           }
           await interfaceService.reconcileResource(
             workspaceId,

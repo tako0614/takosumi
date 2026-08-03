@@ -21,6 +21,7 @@ import {
   ResourceAdapterApplyError,
   ResourceShapeService,
   StubResourceShapeAdapter,
+  type HostRuntimeResourceLifecycle,
 } from "../../../core/domains/resource-shape/mod.ts";
 import { createInMemoryInterfaceStores } from "../../../core/domains/interfaces/mod.ts";
 import type {
@@ -44,6 +45,7 @@ import {
   type InstalledFormReference,
   type ResourceDeploymentAdmission,
   type ResourceDeploymentReserveContext,
+  type TargetImplementationDescriptor,
   NOOP_RESOURCE_DEPLOYMENT_ADMISSION,
   RESOURCE_SHAPE_KINDS,
   type SpacePolicySpec,
@@ -465,6 +467,17 @@ class FormInterfaceMaterializationAdapter extends StubResourceShapeAdapter {
   }
 }
 
+/** Test-only adapter capability for direct plugin Resource Shapes. */
+class HostRuntimeStubResourceShapeAdapter extends StubResourceShapeAdapter {
+  override availabilityForImplementation(
+    implementation: TargetImplementationDescriptor,
+  ): { readonly adapterId: string } | undefined {
+    return implementation.plugin
+      ? { adapterId: implementation.plugin }
+      : super.availabilityForImplementation(implementation);
+  }
+}
+
 const FORM_INTERFACE_LIFECYCLE_FORM: InstalledFormReference = {
   type: "object_bucket",
   version: "1.0.0",
@@ -621,6 +634,175 @@ test("bootstrap degrades a Ready Resource when its first required Form Interface
       ownerId: harness.resourceId,
     }),
   ).toHaveLength(0);
+});
+
+test("bootstrap fences a Ready EdgeWorker when host runtime activation fails", async () => {
+  const resourceShapeStores = createInMemoryResourceShapeStores();
+  const adapter = new HostRuntimeStubResourceShapeAdapter();
+  let failActivation = false;
+  const lifecycleCalls: string[] = [];
+  const hostRuntimeResourceLifecycle: HostRuntimeResourceLifecycle = {
+    async activate(input) {
+      lifecycleCalls.push(`activate:${input.resourceGeneration}`);
+      if (failActivation) throw new Error("simulated host activation outage");
+    },
+    async reconcile(input) {
+      lifecycleCalls.push(`reconcile:${input.resourceGeneration}`);
+    },
+    async retire() {
+      lifecycleCalls.push("retire");
+    },
+    async retirementRequired() {
+      return false;
+    },
+  };
+  const created = await createTakosumiService({
+    role: "takosumi-api",
+    runtimeEnv: { TAKOSUMI_ENVIRONMENT: "test", TAKOSUMI_DEV_MODE: "1" },
+    resourceShapeAdapter: adapter,
+    resourceShapeStores,
+    resourceShapeSchemaRegistry:
+      LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY,
+    enabledResourceShapeKinds: RESOURCE_SHAPE_KINDS,
+    resourceShapeModuleRegistry: ROUTE_MODULE_REGISTRY,
+    hostRuntimeResourceLifecycle,
+    resolveResourceInterfaceWorkspace: async ({ resourceSpaceId }) =>
+      resourceSpaceId === "space_1" ? "workspace_1" : undefined,
+  });
+  const hostTargetPool: TargetPoolSpec = {
+    classes: ["edge.object-store"],
+    targets: [
+      {
+        name: "host-runtime",
+        type: "test",
+        ref: "test-account",
+        priority: 100,
+        implementations: [
+          {
+            shape: "EdgeWorker",
+            implementation: "host_runtime_edge",
+            plugin: "test.host_runtime",
+            interfaces: {
+              worker_fetch: "native",
+              resource_connection: "native",
+              "object.binding.v1": "native",
+              grant_read: "native",
+            },
+          },
+          {
+            shape: "ObjectBucket",
+            implementation: "cloudflare_r2_bucket",
+            nativeResourceType: "cloudflare.r2_bucket",
+            providerSource: CLOUDFLARE_PROVIDER,
+            moduleTemplate: "cloudflare-r2-bucket",
+            moduleInputMappings: {
+              bucketName: { source: "spec", path: "/name", required: true },
+              accountId: { source: "target", path: "/ref", required: true },
+            },
+            moduleOutputs: [{ name: "bucket_name", type: "string" }],
+            interfaces: {
+              object_store: "native",
+              s3_api: "native",
+              signed_url: "native",
+              object_events: "native",
+            },
+          },
+        ],
+      },
+    ],
+  };
+  expect(
+    (
+      await created.app.request("/v1/target-pools/default", {
+        method: "PUT",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({ space: "space_1", spec: hostTargetPool }),
+      })
+    ).status,
+  ).toBe(200);
+  expect(
+    (
+      await created.app.request("/v1/space-policies/default", {
+        method: "PUT",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({ space: "space_1", spec: POLICY }),
+      })
+    ).status,
+  ).toBe(200);
+
+  const bucket = await reviewedResourceApply(
+    created.app,
+    "/v1/resources/ObjectBucket/assets",
+    { metadata: { space: "space_1" }, spec: { name: "assets" } },
+  );
+  expect(bucket.status).toBe(200);
+  const workerPath = "/v1/resources/EdgeWorker/api";
+  const firstWorker = await reviewedResourceApply(created.app, workerPath, {
+    metadata: { space: "space_1" },
+    spec: {
+      name: "api",
+      source: { artifactPath: "/work/dist/worker.js" },
+      connections: {
+        ASSETS: {
+          resource: "ObjectBucket/assets",
+          permissions: ["read"],
+          projection: "object.binding.v1",
+        },
+      },
+    },
+  });
+  expect(firstWorker.status).toBe(200);
+  expect(lifecycleCalls).toEqual(["activate:1"]);
+  expect(
+    await resourceShapeStores.resources.get("tkrn:space_1:EdgeWorker:api"),
+  ).toMatchObject({ phase: "Ready" });
+
+  const iface = await created.operations.interfaces.create({
+    workspaceId: "workspace_1",
+    name: "api-runtime",
+    ownerRef: { kind: "Resource", id: "tkrn:space_1:EdgeWorker:api" },
+    spec: {
+      type: "worker.fetch",
+      version: "v1",
+      document: { protocol: "https" },
+      inputs: {},
+      access: { visibility: "workspace" },
+    },
+  });
+  expect(iface.status.phase).toBe("Resolved");
+
+  failActivation = true;
+  const failedWorker = await reviewedResourceApply(created.app, workerPath, {
+    metadata: { space: "space_1" },
+    spec: {
+      name: "api",
+      source: { artifactPath: "/work/dist/worker-v2.js" },
+      connections: {
+        ASSETS: {
+          resource: "ObjectBucket/assets",
+          permissions: ["read"],
+          projection: "object.binding.v1",
+        },
+      },
+    },
+  });
+  expect(failedWorker.status).toBe(200);
+  const degraded = await resourceShapeStores.resources.get(
+    "tkrn:space_1:EdgeWorker:api",
+  );
+  expect(degraded).toMatchObject({ phase: "Degraded" });
+  expect(degraded?.conditions).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        type: "Ready",
+        status: "false",
+        reason: "HostRuntimeNotReady",
+      }),
+    ]),
+  );
+  expect((await created.operations.interfaces.get(iface.metadata.id)).status.phase).toBe(
+    "Unknown",
+  );
 });
 
 test("PUT /v1/resources/EdgeWorker/:name applies a first-class Worker shape", async () => {
