@@ -110,7 +110,13 @@ import type { JsonValue } from "takosumi-contract";
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
 import type { InterfaceOAuthActivityEvidence } from "./access-token-activity.ts";
 import type { Interface } from "takosumi-contract/interfaces";
-import type { ResourceCapsuleOwner } from "takosumi-contract";
+import type {
+  ResourceCapsuleOwner,
+  ResourceMetadata,
+  ResourcePhase,
+  ResourceResolutionStatus,
+  ResourceShapeKind,
+} from "takosumi-contract";
 
 interface CapsuleListPageParams extends PageParams {
   readonly includeDestroyed?: boolean;
@@ -128,6 +134,65 @@ export interface MembershipActor {
   readonly actorAccountId: string;
   readonly roles: readonly string[];
   readonly requestId: string;
+}
+
+/**
+ * Non-secret Resource row used by the first-paint Workspace Resources view.
+ * Desired `spec`, status outputs, and other opaque payloads deliberately stay
+ * behind the canonical Resource detail route.
+ */
+export interface WorkspaceResourceSummary {
+  readonly id: string;
+  readonly apiVersion: string;
+  readonly kind: ResourceShapeKind;
+  readonly metadata: Pick<
+    ResourceMetadata,
+    "name" | "space" | "project" | "environment" | "labels" | "managedBy"
+  >;
+  readonly status?: {
+    readonly phase: ResourcePhase;
+    readonly observedGeneration: number;
+    readonly resolution?: ResourceResolutionStatus;
+  };
+}
+
+export interface WorkspaceViewPage<T> {
+  readonly items: readonly T[];
+  readonly nextCursor?: string;
+}
+
+export interface WorkspaceResourcesView {
+  readonly view: "resources.v1";
+  readonly workspaceId: string;
+  readonly space: string;
+  /** Opaque versioned envelope for the independently ordered child pages. */
+  readonly nextCursor?: string;
+  readonly resources: WorkspaceViewPage<WorkspaceResourceSummary>;
+  readonly workloads: WorkspaceViewPage<PublicCapsule>;
+  readonly forms: WorkspaceViewPage<
+    import("takosumi-contract").FormAvailability
+  >;
+  readonly hasTargetPool: boolean;
+}
+
+/**
+ * Optional read-only application port for bounded screen projections. The
+ * account host resolves the presented credential once; this operation owns the
+ * exact credential restriction, Workspace/member authorization, and the
+ * fixed-count Resource, Capsule, Form, and TargetPool reads. It must never
+ * expose secrets or mutate lifecycle state.
+ */
+export interface WorkspaceViews {
+  readResources(input: {
+    readonly workspaceId: string;
+    readonly space: string;
+    readonly subject: string;
+    /** Restriction carried by a Workspace-scoped PAT/OAuth credential. */
+    readonly credentialWorkspaceId?: string;
+    readonly requiredAccess: "read" | "write";
+    readonly page: PageParams;
+    readonly signal?: AbortSignal;
+  }): Promise<WorkspaceResourcesView>;
 }
 
 /**
@@ -186,6 +251,8 @@ export interface ControlPlaneOperations {
       }[]
     >;
   };
+  /** Bounded first-paint Workspace read projections (no lifecycle writes). */
+  readonly workspaceViews?: WorkspaceViews;
   // --- Workspaces (§4) ---
   readonly workspaces: {
     /**

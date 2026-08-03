@@ -43,7 +43,9 @@ function workspaceAuthorizationOperations(input?: {
     workspaces: {
       getWorkspace: async (workspaceId: string) => {
         input?.onGetWorkspace?.(workspaceId);
-        const found = workspaces.find((candidate) => candidate.id === workspaceId);
+        const found = workspaces.find(
+          (candidate) => candidate.id === workspaceId,
+        );
         if (!found) throw new Error("workspace not found");
         return found;
       },
@@ -732,10 +734,7 @@ test("Workspace list awaits the idempotent personal Workspace ensure", async () 
         fixture.workspacePageCalls.push({ accountId, ...params });
         return pageCalls === 1 ? { items: [] } : { items: [workspace] };
       },
-      ensurePersonalWorkspace: async (
-        ownerUserId: string,
-        handle: string,
-      ) => {
+      ensurePersonalWorkspace: async (ownerUserId: string, handle: string) => {
         ensureCalls.push({ ownerUserId, handle });
         signalEnsureStarted();
         await ensureHeld;
@@ -757,9 +756,7 @@ test("Workspace list awaits the idempotent personal Workspace ensure", async () 
   );
 
   await ensureStarted;
-  expect(ensureCalls).toEqual([
-    { ownerUserId: "tsub_owner", handle: "owner" },
-  ]);
+  expect(ensureCalls).toEqual([{ ownerUserId: "tsub_owner", handle: "owner" }]);
   expect(fixture.workspacePageCalls).toHaveLength(1);
   releaseEnsure();
   const response = await responsePromise;
@@ -822,10 +819,7 @@ test("Repeated Workspace lists skip the canonical ensure after the personal Work
         fixture.workspacePageCalls.push({ accountId, ...params });
         return pageCalls === 1 ? { items: [] } : { items: [workspace] };
       },
-      ensurePersonalWorkspace: async (
-        ownerUserId: string,
-        handle: string,
-      ) => {
+      ensurePersonalWorkspace: async (ownerUserId: string, handle: string) => {
         ensureCalls.push({ ownerUserId, handle });
         return workspace;
       },
@@ -837,9 +831,7 @@ test("Repeated Workspace lists skip the canonical ensure after the personal Work
   } as ControlPlaneOperations;
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    const request = new Request(
-      "https://app.example.test/api/v1/workspaces",
-    );
+    const request = new Request("https://app.example.test/api/v1/workspaces");
     const response = await handleWorkspaces(
       {
         request,
@@ -854,9 +846,7 @@ test("Repeated Workspace lists skip the canonical ensure after the personal Work
     expect(response?.status).toBe(200);
   }
 
-  expect(ensureCalls).toEqual([
-    { ownerUserId: "tsub_owner", handle: "owner" },
-  ]);
+  expect(ensureCalls).toEqual([{ ownerUserId: "tsub_owner", handle: "owner" }]);
   expect(createCalls).toBe(0);
   expect(fixture.workspacePageCalls).toHaveLength(3);
 });
@@ -1011,6 +1001,182 @@ test("Dashboard Workspace projection pushes active latest-first limit into the s
       limit: 50,
     },
   ]);
+});
+
+test("Resources Workspace view delegates one authority plus projection operation and caps the page", async () => {
+  const fixture = operationsFixture();
+  const viewCalls: unknown[] = [];
+  const operations = {
+    ...fixture.operations,
+    workspaceViews: {
+      readResources: async (input: unknown) => {
+        viewCalls.push(input);
+        return {
+          view: "resources.v1" as const,
+          workspaceId: workspace.id,
+          space: workspace.id,
+          resources: { items: [] },
+          workloads: { items: [] },
+          forms: { items: [] },
+          hasTargetPool: true,
+        };
+      },
+    },
+  } as unknown as ControlPlaneOperations;
+  const cursor = "workspace_view_cursor_v1";
+  const request = new Request(
+    `https://app.example.test/api/v1/workspaces/${workspace.id}/views/resources.v1?limit=500&cursor=${cursor}`,
+  );
+  const response = await handleWorkspaces(
+    {
+      ...context(operations, request),
+      session: { subject: workspace.ownerUserId },
+    },
+    ["workspaces", workspace.id, "views", "resources.v1"],
+    "GET",
+  );
+
+  expect(response?.status).toBe(200);
+  expect(viewCalls).toEqual([
+    {
+      workspaceId: workspace.id,
+      space: workspace.id,
+      subject: workspace.ownerUserId,
+      requiredAccess: "read",
+      page: { limit: 100, cursor },
+      signal: expect.any(AbortSignal),
+    },
+  ]);
+});
+
+test("Resources Workspace view passes credential restriction to the authority operation", async () => {
+  const fixture = operationsFixture();
+  let viewReads = 0;
+  const operations = {
+    ...fixture.operations,
+    workspaceViews: {
+      readResources: async (input: {
+        readonly credentialWorkspaceId?: string;
+      }) => {
+        viewReads += 1;
+        expect(input.credentialWorkspaceId).toBe("ws_restricted");
+        throw Object.assign(new Error("access denied"), {
+          code: "workspace_view_access_denied",
+        });
+      },
+    },
+  } as unknown as ControlPlaneOperations;
+  const request = new Request(
+    `https://app.example.test/api/v1/workspaces/${workspace.id}/views/resources.v1`,
+  );
+  const response = await handleWorkspaces(
+    {
+      ...context(operations, request),
+      session: { subject: "tsub_other", workspaceId: "ws_restricted" },
+    },
+    ["workspaces", workspace.id, "views", "resources.v1"],
+    "GET",
+  );
+
+  expect(response?.status).toBe(403);
+  expect(viewReads).toBe(1);
+});
+
+test("Resources Workspace view fails closed when composition has no reader port", async () => {
+  const fixture = operationsFixture();
+  const request = new Request(
+    `https://app.example.test/api/v1/workspaces/${workspace.id}/views/resources.v1`,
+  );
+  const response = await handleWorkspaces(
+    context(fixture.operations, request),
+    ["workspaces", workspace.id, "views", "resources.v1"],
+    "GET",
+  );
+
+  expect(response?.status).toBe(503);
+});
+
+test("Resources Workspace view fails required projection errors instead of returning empty data", async () => {
+  const fixture = operationsFixture();
+  const operations = {
+    ...fixture.operations,
+    workspaceViews: {
+      readResources: async () => {
+        throw new Error("form read failed");
+      },
+    },
+  } as unknown as ControlPlaneOperations;
+  const request = new Request(
+    `https://app.example.test/api/v1/workspaces/${workspace.id}/views/resources.v1`,
+  );
+  const response = await handleWorkspaces(
+    context(operations, request),
+    ["workspaces", workspace.id, "views", "resources.v1"],
+    "GET",
+  );
+
+  expect(response?.status).toBe(503);
+  expect(await response?.json()).toMatchObject({
+    error: {
+      code: "feature_unavailable",
+      message: "The control plane is temporarily unavailable.",
+    },
+  });
+});
+
+test("Resources Workspace view reports an invalid opaque cursor as a client error", async () => {
+  const fixture = operationsFixture();
+  const operations = {
+    ...fixture.operations,
+    workspaceViews: {
+      readResources: async () => {
+        throw Object.assign(new Error("invalid cursor"), {
+          code: "workspace_view_cursor_invalid",
+        });
+      },
+    },
+  } as unknown as ControlPlaneOperations;
+  const request = new Request(
+    `https://app.example.test/api/v1/workspaces/${workspace.id}/views/resources.v1?cursor=valid_transport_token`,
+  );
+
+  const response = await handleWorkspaces(
+    context(operations, request),
+    ["workspaces", workspace.id, "views", "resources.v1"],
+    "GET",
+  );
+
+  expect(response?.status).toBe(400);
+  expect(await response?.json()).toMatchObject({
+    error: { code: "invalid_request", message: "cursor is malformed" },
+  });
+});
+
+test("Resources Workspace view applies one route-wide deadline", async () => {
+  const fixture = operationsFixture();
+  let signal: AbortSignal | undefined;
+  const operations = {
+    ...fixture.operations,
+    workspaceViews: {
+      readResources: async (input: { readonly signal?: AbortSignal }) => {
+        signal = input.signal;
+        return await new Promise<never>(() => undefined);
+      },
+    },
+  } as unknown as ControlPlaneOperations;
+  const request = new Request(
+    `https://app.example.test/api/v1/workspaces/${workspace.id}/views/resources.v1`,
+  );
+  const startedAt = Date.now();
+  const response = await handleWorkspaces(
+    context(operations, request),
+    ["workspaces", workspace.id, "views", "resources.v1"],
+    "GET",
+  );
+
+  expect(response?.status).toBe(503);
+  expect(signal?.aborted).toBeTrue();
+  expect(Date.now() - startedAt).toBeLessThan(2_000);
 });
 
 test("Dashboard notification projection batches authorized Workspace activity", async () => {

@@ -51,7 +51,9 @@ export function resourceShapeInputFingerprint(
 }
 
 /** Dashboard session routes derive Resource Space from the verified Workspace. */
-export function resourceShapeHref(resource: ResourceShape): string {
+export function resourceShapeHref(
+  resource: Pick<ResourceShape, "kind" | "metadata">,
+): string {
   const kind = encodeURIComponent(resource.kind);
   const name = encodeURIComponent(resource.metadata.name);
   return `/resources/${kind}/${name}`;

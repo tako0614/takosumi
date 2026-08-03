@@ -2,6 +2,7 @@ import {
   createMemo,
   createResource,
   createSignal,
+  createEffect,
   For,
   Show,
   type JSX,
@@ -22,22 +23,23 @@ import {
   deleteResourceSpacePolicy,
   deleteResourceTargetPool,
   getFormDefinition,
-  listCapsules,
-  listFormAvailability,
-  listResourceShapes,
   listResourceSpacePolicies,
   listResourceTargetPools,
   putResourceSpacePolicy,
   putResourceTargetPool,
   shapeKindForPortableType,
   type Capsule,
-  type ResourceShape,
   type FormDefinition,
+  type ResourceShape,
   type ResourceSpacePolicy,
   type ResourceSpacePolicySpec,
   type ResourceTargetPool,
   type ResourceTargetPoolSpec,
 } from "../../lib/control-api.ts";
+import {
+  readWorkspaceResourcesView,
+  type WorkspaceResourceSummary,
+} from "../../lib/workspace-views.ts";
 import { friendlyError } from "../../lib/error-copy.ts";
 import {
   parseJsonObjectText,
@@ -110,27 +112,25 @@ function Inner(): JSX.Element {
     return workspace ? { workspaceId: workspace, space: workspace } : undefined;
   });
 
-  const [resources, { refetch: refetchResources }] = createResource(
+  const [resourcesView, { refetch: refetchResourcesView }] = createResource(
     scope,
-    ({ workspaceId: workspace, space: selectedSpace }) =>
-      listResourceShapes(workspace, selectedSpace),
+    ({ workspaceId: workspace }) => readWorkspaceResourcesView(workspace),
   );
-  const [capsules, { refetch: refetchCapsules }] = createResource(
-    workspaceId,
-    (workspace) => listCapsules(workspace, { includeDestroyed: false }),
+  const [advancedOpen, setAdvancedOpen] = createSignal(false);
+  const advancedScope = createMemo<Scope | undefined>(() =>
+    advancedOpen() || showEditor() ? scope() : undefined,
   );
-  const [formAvailability] = createResource(
-    scope,
-    ({ workspaceId: workspace, space: selectedSpace }) =>
-      listFormAvailability(workspace, selectedSpace),
-  );
+  const resourceRows = () =>
+    resourcesView.error ? [] : (resourcesView()?.resources.items ?? []);
+  const workloadRows = () =>
+    resourcesView.error ? [] : (resourcesView()?.workloads.items ?? []);
+  const formRows = () =>
+    resourcesView.error ? [] : (resourcesView()?.forms.items ?? []);
   const formDefinitionScope = createMemo(() => {
     const currentScope = scope();
-    if (!currentScope || formAvailability.error) return undefined;
-    const forms = formAvailability();
-    return forms
-      ? { ...currentScope, forms }
-      : undefined;
+    if (!currentScope || !showEditor() || resourcesView.error) return undefined;
+    const forms = resourcesView()?.forms.items;
+    return forms ? { ...currentScope, forms } : undefined;
   });
   const [formDefinitions] = createResource(
     formDefinitionScope,
@@ -166,15 +166,28 @@ function Inner(): JSX.Element {
     },
   );
   const [targetPools, { refetch: refetchTargetPools }] = createResource(
-    scope,
+    advancedScope,
     ({ workspaceId: workspace, space: selectedSpace }) =>
       listResourceTargetPools(workspace, selectedSpace),
   );
   const [spacePolicies, { refetch: refetchSpacePolicies }] = createResource(
-    scope,
+    advancedScope,
     ({ workspaceId: workspace, space: selectedSpace }) =>
       listResourceSpacePolicies(workspace, selectedSpace),
   );
+  const [targetPoolFact, setTargetPoolFact] = createSignal<boolean>();
+  let targetPoolFactWorkspaceId: string | undefined;
+  createEffect(() => {
+    const currentWorkspaceId = scope()?.workspaceId;
+    if (currentWorkspaceId === targetPoolFactWorkspaceId) return;
+    targetPoolFactWorkspaceId = currentWorkspaceId;
+    setTargetPoolFact(undefined);
+  });
+  createEffect(() => {
+    if (targetPools.error) return;
+    const pools = targetPools();
+    if (pools !== undefined) setTargetPoolFact(pools.length > 0);
+  });
 
   // Reading `.error` first: an errored resource re-throws on read.
   const targetPoolNames = () =>
@@ -185,10 +198,18 @@ function Inner(): JSX.Element {
       : (spacePolicies() ?? []).map((policy) => policy.name);
   // A Space with no TargetPool cannot resolve ANY resource, so the editor's
   // primary action would always fail at preview with a raw server error.
-  const placementReady = () =>
-    targetPools.loading || targetPoolNames().length > 0;
+  const placementReady = () => {
+    if (advancedOpen() || showEditor()) {
+      return targetPools.loading || targetPoolNames().length > 0;
+    }
+    return (
+      resourcesView.loading ||
+      resourcesView.error !== undefined ||
+      (targetPoolFact() ?? resourcesView()?.hasTargetPool) === true
+    );
+  };
 
-  const resourceColumns: readonly Column<ResourceShape>[] = [
+  const resourceColumns: readonly Column<WorkspaceResourceSummary>[] = [
     {
       header: t("resources.column.resource"),
       cell: (resource) => (
@@ -347,8 +368,8 @@ function Inner(): JSX.Element {
   ];
 
   const featureUnavailable = () =>
-    resources.error instanceof ControlApiError &&
-    resources.error.status === 404;
+    resourcesView.error instanceof ControlApiError &&
+    resourcesView.error.status === 404;
 
   function startTargetPool(): void {
     setPoolName("default");
@@ -529,10 +550,11 @@ function Inner(): JSX.Element {
               icon={<RefreshCw size={16} />}
               disabled={!scope()}
               onClick={() => {
-                void refetchResources();
-                void refetchCapsules();
-                void refetchTargetPools();
-                void refetchSpacePolicies();
+                void refetchResourcesView();
+                if (advancedOpen()) {
+                  void refetchTargetPools();
+                  void refetchSpacePolicies();
+                }
               }}
             >
               {t("common.refresh")}
@@ -575,25 +597,25 @@ function Inner(): JSX.Element {
                 <Server size={20} aria-hidden="true" />
                 <span>{t("resources.summary.workloads")}</span>
                 <strong>
-                  {capsules.error ? "—" : (capsules()?.length ?? 0)}
+                  {resourcesView.error ? "—" : workloadRows().length}
                 </strong>
               </Card>
               <Card class="rs-inventory-stat">
                 <Boxes size={20} aria-hidden="true" />
                 <span>{t("resources.summary.managed")}</span>
                 <strong>
-                  {resources.error ? "—" : (resources()?.length ?? 0)}
+                  {resourcesView.error ? "—" : resourceRows().length}
                 </strong>
               </Card>
               <Card class="rs-inventory-stat">
                 <Layers3 size={20} aria-hidden="true" />
                 <span>{t("resources.summary.availableTypes")}</span>
                 <strong>
-                  {formAvailability.error
+                  {resourcesView.error
                     ? "—"
-                    : (formAvailability()?.filter(
+                    : formRows().filter(
                         (form) => form.executable && form.availableToPrincipal,
-                      ).length ?? 0)}
+                      ).length}
                 </strong>
               </Card>
             </section>
@@ -609,13 +631,13 @@ function Inner(): JSX.Element {
               </div>
               <DataTable
                 columns={serviceColumns}
-                rows={capsules.error ? [] : capsules()}
+                rows={workloadRows()}
                 rowKey={(capsule) => capsule.id}
-                loading={capsules.loading}
+                loading={resourcesView.loading}
                 error={
-                  capsules.error
+                  resourcesView.error
                     ? t("common.fetchFailed", {
-                        message: friendlyError(capsules.error, t).message,
+                        message: friendlyError(resourcesView.error, t).message,
                       })
                     : undefined
                 }
@@ -636,14 +658,14 @@ function Inner(): JSX.Element {
                 <ResourceEditor
                   workspaceId={active().workspaceId}
                   space={active().space}
-                  formAvailability={formAvailability() ?? []}
+                  formAvailability={formRows()}
                   formDefinitions={formDefinitions() ?? []}
                   targetPools={targetPoolNames()}
                   spacePolicies={spacePolicyNames()}
                   onCancel={() => setShowEditor(false)}
                   onApplied={async () => {
                     setShowEditor(false);
-                    await refetchResources();
+                    await refetchResourcesView();
                   }}
                 />
               )}
@@ -663,31 +685,27 @@ function Inner(): JSX.Element {
                 </div>
                 <DataTable
                   columns={resourceColumns}
-                  rows={resources.error ? [] : resources()}
+                  rows={resourceRows()}
                   rowKey={(resource) =>
                     `${resource.metadata.space}:${resource.kind}:${resource.metadata.name}`
                   }
-                  loading={resources.loading}
+                  loading={resourcesView.loading}
                   error={
-                    resources.error
+                    resourcesView.error
                       ? t("common.fetchFailed", {
-                          message: friendlyError(resources.error, t).message,
+                          message: friendlyError(resourcesView.error, t)
+                            .message,
                         })
                       : undefined
                   }
                   empty={t("resources.empty")}
                 />
-                <Show
-                  when={
-                    !formAvailability.error &&
-                    (formAvailability()?.length ?? 0) > 0
-                  }
-                >
+                <Show when={!resourcesView.error && formRows().length > 0}>
                   <div class="rs-available-types">
                     <span>{t("resources.availableTypes.label")}</span>
                     <div>
                       <For
-                        each={formAvailability()?.filter(
+                        each={formRows().filter(
                           (form) =>
                             form.executable && form.availableToPrincipal,
                         )}
@@ -703,7 +721,10 @@ function Inner(): JSX.Element {
                 </Show>
               </section>
 
-              <details class="rs-platform-advanced">
+              <details
+                class="rs-platform-advanced"
+                onToggle={(event) => setAdvancedOpen(event.currentTarget.open)}
+              >
                 <summary>
                   <span>
                     <strong>{t("resources.platformAdvanced.title")}</strong>

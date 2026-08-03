@@ -64,6 +64,11 @@ import {
 } from "./domains/sources/mod.ts";
 import { CapsulesService } from "./domains/capsules/mod.ts";
 import { WorkspacesService } from "./domains/workspaces/mod.ts";
+import {
+  type WorkspaceViewControlStoreFactory,
+  type WorkspaceViews,
+  WorkspaceViewsService,
+} from "./domains/workspace-views/mod.ts";
 import { ProjectsService } from "./domains/projects/mod.ts";
 import { ConnectionsService } from "./domains/connections/mod.ts";
 import { DependenciesService } from "./domains/dependencies/mod.ts";
@@ -552,6 +557,12 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
    */
   readonly opentofuControlStore?: OpenTofuControlStore;
   /**
+   * Fresh control-store factory for one interactive Workspace view read.
+   * Worker hosts use this to bind D1 maintenance admission to the request;
+   * node/in-memory hosts default to the service's shared control store.
+   */
+  readonly requestScopedOpenTofuControlStoreFactory?: WorkspaceViewControlStoreFactory;
+  /**
    * Host-owned allocator for opaque source/state/output/backup artifact refs.
    * Required by execution and backup paths; Core never derives storage layouts.
    */
@@ -934,6 +945,8 @@ export interface TakosumiOperations {
       }[]
     >;
   };
+  /** Bounded, authorized first-paint Workspace read projections. */
+  readonly workspaceViews?: WorkspaceViews;
   /**
    * Narrow in-process seam for the bounded scheduled Resource observer. The
    * lease is durable scheduler metadata only; lifecycle and condition updates
@@ -1674,6 +1687,15 @@ export async function createTakosumiService(
                 options.resourceShapeAllowedProviderBaseUrls,
             }
           : {}),
+      })
+    : undefined;
+  const workspaceViews = resourceShapeService
+    ? new WorkspaceViewsService({
+        controlStoreFactory:
+          options.requestScopedOpenTofuControlStoreFactory ??
+          (() => sharedOpenTofuStore),
+        resourceStores: resourceShapeStores,
+        resourceShapeService,
       })
     : undefined;
   const resourceArtifactService =
@@ -2664,6 +2686,7 @@ export async function createTakosumiService(
     outputShares: outputSharesService,
     runGroups: runGroupsService,
     interfaces: interfaceService,
+    ...(workspaceViews ? { workspaceViews } : {}),
     ...(options.runtimeCapabilityReader
       ? { runtimeCapabilityReader: options.runtimeCapabilityReader }
       : {}),

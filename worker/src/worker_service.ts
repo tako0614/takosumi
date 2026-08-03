@@ -17,7 +17,10 @@ import type { EnqueueSourceSync } from "../../core/domains/sources/mod.ts";
 import type { CapsuleCoordination } from "../../core/domains/deploy-control/capsule_lease.ts";
 import type { RunnerProfile } from "@takosumi/internal/deploy-control-api";
 import type { CloudflareWorkerEnv, OpenTofuRunAction } from "./bindings.ts";
-import { createCloudflareD1OpenTofuControlStore } from "./d1_opentofu_store.ts";
+import {
+  createCloudflareD1OpenTofuControlStore,
+  createCloudflareD1OpenTofuControlStoreForRequest,
+} from "./d1_opentofu_store.ts";
 import { PortableHostIdempotencyCoordinator } from "../../core/api/portable_host_idempotency.ts";
 import { D1PortableHostIdempotencyLedger } from "./d1_portable_host_idempotency.ts";
 import {
@@ -307,6 +310,14 @@ export async function createWorkerServiceApp(
       REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.buildConnectionSetupRequest,
     ...(connectionOAuthHelpers ? { connectionOAuthHelpers } : {}),
     opentofuControlStore,
+    // The service itself is cached per Worker env. Retain only this factory;
+    // every Workspace view read creates its own request-admission scope and
+    // keeps the returned store local to that operation.
+    requestScopedOpenTofuControlStoreFactory: () =>
+      createCloudflareD1OpenTofuControlStoreForRequest(
+        env.TAKOSUMI_CONTROL_DB,
+        { schemaMode: controlD1SchemaMode ?? "bootstrap" },
+      ),
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     resourceShapeStores: createD1ResourceShapeStores(env.TAKOSUMI_CONTROL_DB),
     formRegistryStore: createD1FormRegistryStore(env.TAKOSUMI_CONTROL_DB),

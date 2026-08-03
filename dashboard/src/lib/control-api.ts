@@ -164,7 +164,7 @@ function throwIfAborted(signal?: AbortSignal): void {
   }
 }
 
-async function controlFetch<T>(
+export async function controlFetch<T>(
   path: string,
   opts: RequestOpts = {},
 ): Promise<T> {
@@ -2418,11 +2418,7 @@ export interface ResourceSpacePolicy {
 // The dashboard deliberately keeps the one-time credentials only on the
 // create response and has no type for a secret in list/revoke responses.
 
-export type S3CustomerAccessKeyPermission =
-  | "get"
-  | "list"
-  | "put"
-  | "delete";
+export type S3CustomerAccessKeyPermission = "get" | "list" | "put" | "delete";
 
 export interface S3CustomerAccessKeyGrant {
   readonly resourceId: string;
@@ -2530,9 +2526,7 @@ function parseS3CustomerAccessKeyMetadata(
     status: value.status,
     version: value.version,
     createdAt: value.createdAt,
-    ...(value.revokedAt !== undefined
-      ? { revokedAt: value.revokedAt }
-      : {}),
+    ...(value.revokedAt !== undefined ? { revokedAt: value.revokedAt } : {}),
   };
 }
 
@@ -2730,9 +2724,7 @@ export async function getFormDefinition(
     )}`,
   );
   if (!isRecord(body) || !isRecord(body.identity)) {
-    throw invalidFormDefinitionResponse(
-      "Form Definition response is invalid",
-    );
+    throw invalidFormDefinitionResponse("Form Definition response is invalid");
   }
   const reference = body.identity;
   const formRef = reference.formRef;

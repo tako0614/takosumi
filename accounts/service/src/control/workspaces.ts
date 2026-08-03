@@ -184,6 +184,7 @@ import {
 } from "./repo-owned-install-config.ts";
 import { handleWorkspaceProjects } from "./projects.ts";
 import { maybeEnsurePersonalWorkspaceForSubject } from "../control-personal-workspace.ts";
+import { handleWorkspaceResourcesView } from "./workspace-views.ts";
 
 function sourceWorkspaceId(
   source: Readonly<{ workspaceId?: string }>,
@@ -225,6 +226,17 @@ export async function handleWorkspaces(
       segments[4] === "restores"
     ) {
       return errorJson("not_found", "not found", 404);
+    }
+    // WorkspaceViews owns one request-bounded authorization + projection
+    // operation. Dispatch it before the generic two-call Workspace/member gate
+    // so a D1 adapter can co-read authority, maintenance, and page data without
+    // duplicating access checks.
+    if (
+      leaf === "views" &&
+      segments.length === 4 &&
+      segments[3] === "resources.v1"
+    ) {
+      return await handleWorkspaceResourcesView(ctx, workspaceId, method);
     }
     const auth = await requireWorkspaceAccess({
       operations,

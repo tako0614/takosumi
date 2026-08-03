@@ -30,6 +30,12 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
     },
     {
       method: "GET",
+      path: "/api/v1/workspaces/{workspaceId}/views/resources.v1",
+      summary: "Read the bounded Resources Workspace view projection",
+      auth: "account-session",
+    },
+    {
+      method: "GET",
       path: "/api/v1/workspaces",
       summary: "List caller Workspaces",
       auth: "account-session",
