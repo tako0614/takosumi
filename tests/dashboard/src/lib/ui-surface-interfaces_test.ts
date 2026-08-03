@@ -291,4 +291,54 @@ describe("dashboard UI-surface Interface consumer", () => {
     ).resolves.toEqual([]);
     expect(calls).toHaveLength(1);
   });
+
+  test("follows every pagination cursor instead of truncating the launcher list", async () => {
+    const interfaces = Array.from({ length: 101 }, (_, index) => {
+      const base = uiInterface();
+      return uiInterface({
+        metadata: {
+          ...(base.metadata as Record<string, unknown>),
+          id: `if_ui_${index}`,
+          name: `app.launcher.${index}`,
+        },
+      });
+    });
+    const calls: string[] = [];
+    const fetcher = async (input: RequestInfo | URL): Promise<Response> => {
+      const path = String(input);
+      calls.push(path);
+      if (path === "/api/v1/workspaces/ws_1/ui-surfaces") {
+        return Response.json({
+          interfaces: interfaces.slice(0, 100),
+          nextCursor: "page_2",
+        });
+      }
+      if (path === "/api/v1/workspaces/ws_1/ui-surfaces?cursor=page_2") {
+        return Response.json({ interfaces: interfaces.slice(100) });
+      }
+      return Response.json({ error: "unexpected request" }, { status: 500 });
+    };
+
+    const surfaces = await listAuthorizedUiSurfaces("ws_1", {
+      fetch: fetcher,
+    });
+
+    expect(surfaces).toHaveLength(101);
+    expect(surfaces.some((surface) => surface.interfaceId === "if_ui_100")).toBe(
+      true,
+    );
+    expect(calls).toEqual([
+      "/api/v1/workspaces/ws_1/ui-surfaces",
+      "/api/v1/workspaces/ws_1/ui-surfaces?cursor=page_2",
+    ]);
+  });
+
+  test("fails closed for an invalid pagination cursor", async () => {
+    const fetcher = async (): Promise<Response> =>
+      Response.json({ interfaces: [uiInterface()], nextCursor: "" });
+
+    await expect(
+      listAuthorizedUiSurfaces("ws_1", { fetch: fetcher }),
+    ).rejects.toThrow("UI surface list pagination cursor is invalid");
+  });
 });

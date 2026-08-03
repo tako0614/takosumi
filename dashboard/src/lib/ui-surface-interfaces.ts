@@ -43,6 +43,8 @@ export interface UiSurfaceReadOptions {
   readonly capsuleId?: string;
 }
 
+const MAX_UI_SURFACE_PAGES = 10_000;
+
 export async function listAuthorizedUiSurfaces(
   workspaceId: string,
   options: UiSurfaceReadOptions = {},
@@ -56,16 +58,38 @@ export async function listAuthorizedUiSurfaces(
   if (normalizedCapsuleId !== undefined) {
     params.set("capsuleId", normalizedCapsuleId);
   }
-  const query = params.size > 0 ? `?${params.toString()}` : "";
-  const body = await fetchJson(
-    `/api/v1/workspaces/${encodeURIComponent(normalizedWorkspaceId)}/ui-surfaces${query}`,
-    options,
-  );
-  if (!isRecord(body) || !Array.isArray(body.interfaces)) {
-    throw new Error("UI surface list response is invalid");
+  const basePath = `/api/v1/workspaces/${encodeURIComponent(normalizedWorkspaceId)}/ui-surfaces`;
+  const interfaces: unknown[] = [];
+  const seenCursors = new Set<string>();
+  let cursor: string | undefined;
+  for (let page = 0; page < MAX_UI_SURFACE_PAGES; page += 1) {
+    const pageParams = new URLSearchParams(params);
+    if (cursor !== undefined) pageParams.set("cursor", cursor);
+    const query = pageParams.size > 0 ? `?${pageParams.toString()}` : "";
+    const body = await fetchJson(`${basePath}${query}`, options);
+    if (!isRecord(body) || !Array.isArray(body.interfaces)) {
+      throw new Error("UI surface list response is invalid");
+    }
+    interfaces.push(...body.interfaces);
+
+    if (body.nextCursor === undefined) {
+      cursor = undefined;
+      break;
+    }
+    if (typeof body.nextCursor !== "string" || body.nextCursor.trim() === "") {
+      throw new Error("UI surface list pagination cursor is invalid");
+    }
+    if (seenCursors.has(body.nextCursor)) {
+      throw new Error("UI surface list pagination cursor repeated");
+    }
+    seenCursors.add(body.nextCursor);
+    cursor = body.nextCursor;
+  }
+  if (cursor !== undefined) {
+    throw new Error("UI surface list pagination exceeded its safety limit");
   }
 
-  const candidates = body.interfaces
+  const candidates = interfaces
     .map((value) => parseUiSurfaceInterface(value, normalizedWorkspaceId))
     .filter(
       (value): value is UiSurfaceCandidate =>

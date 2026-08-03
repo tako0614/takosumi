@@ -1328,8 +1328,17 @@ export async function checkCapsuleCompatibility(input: {
     ).source.id;
   input.onSourceCreated?.(sourceId);
   const syncEnvelope = await syncSource(sourceId, { signal: input.signal });
+  const sourceSyncRunId = extractRunId(syncEnvelope);
+  if (!sourceSyncRunId) {
+    throw new ControlApiError(
+      500,
+      "invalid_source_sync_response",
+      "Source sync did not return a Run id.",
+      syncEnvelope,
+    );
+  }
   const snapshot = await waitForLatestSourceSnapshot(sourceId, {
-    runId: extractRunId(syncEnvelope),
+    runId: sourceSyncRunId,
     signal: input.signal,
     onProgress: input.onSourceSyncProgress,
   });

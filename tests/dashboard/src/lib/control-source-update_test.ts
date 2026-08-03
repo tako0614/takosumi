@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
+  checkCapsuleCompatibility,
+  ControlApiError,
   planCapsuleUpdate,
   waitForLatestSourceSnapshot,
 } from "../../../../dashboard/src/lib/control-api.ts";
@@ -170,5 +172,41 @@ describe("SourceSnapshot update pinning", () => {
         body: { compatibilityReportId: "caprep_new" },
       },
     ]);
+  });
+
+  test("rejects compatibility checks when source sync omits its Run id", async () => {
+    const calls: string[] = [];
+    globalThis.fetch = (async (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ) => {
+      const url = String(input);
+      calls.push(`${init?.method ?? "GET"} ${url}`);
+      if (url === "/api/v1/sources/src_1/sync") {
+        return json({ run: {} }, 201);
+      }
+      throw new Error(`unexpected request: ${url}`);
+    }) as typeof fetch;
+
+    let error: unknown;
+    try {
+      await checkCapsuleCompatibility({
+        workspaceId: "workspace_1",
+        sourceId: "src_1",
+        gitUrl: "https://example.test/app.git",
+        ref: "main",
+        path: ".",
+        name: "app",
+      });
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(ControlApiError);
+    expect((error as ControlApiError).status).toBe(500);
+    expect((error as ControlApiError).code).toBe(
+      "invalid_source_sync_response",
+    );
+    expect(calls).toEqual(["POST /api/v1/sources/src_1/sync"]);
   });
 });
