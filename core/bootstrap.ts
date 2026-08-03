@@ -2140,12 +2140,25 @@ export async function createTakosumiService(
       switch (event.type) {
         case "ready":
           {
-            // Activation resolves the canonical connection graph, and that
-            // graph is only complete once each connection's grant exists. The
-            // grants are derived from the applied Form for both ownership
-            // models, so materialize them first; the call is idempotent and
-            // runs again below for the rest of the Interface surface.
-            await materializeFormDescriptorInterfaces(event.resourceId);
+            try {
+              // Activation resolves the canonical connection graph, and that
+              // graph is only complete once each connection's grant exists.
+              // The grants are derived from the applied Form for both
+              // ownership models. Keep this authoritative materialization
+              // attempt inside the degradation fence so a required descriptor
+              // failure cannot leave a durable Ready Resource behind.
+              await materializeFormDescriptorInterfaces(event.resourceId);
+            } catch (error) {
+              if (await degradeRequiredFormInterface(event.resourceId, error)) {
+                await interfaceService.markResourceUnknown(
+                  workspaceId,
+                  event.resourceId,
+                  "required portable Interface did not become Ready",
+                );
+                return;
+              }
+              throw error;
+            }
             const runtime = await exactHostRuntimeLifecycleInput(
               event.resourceId,
             );
@@ -2153,19 +2166,6 @@ export async function createTakosumiService(
               await options.hostRuntimeResourceLifecycle!.activate(runtime);
             }
             await reconcileScheduleHostRuntime(event.resourceId);
-          }
-          try {
-            await materializeFormDescriptorInterfaces(event.resourceId);
-          } catch (error) {
-            if (await degradeRequiredFormInterface(event.resourceId, error)) {
-              await interfaceService.markResourceUnknown(
-                workspaceId,
-                event.resourceId,
-                "required portable Interface did not become Ready",
-              );
-              return;
-            }
-            throw error;
           }
           await interfaceService.reconcileResource(
             workspaceId,

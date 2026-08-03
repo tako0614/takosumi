@@ -35,6 +35,7 @@ import {
 } from "../../../core/conformance/portable_form_host.ts";
 import { InterpretedDraft202012Validator } from "../../../core/shared/json-schema/draft_2020.ts";
 import { InMemoryOpenTofuControlStore } from "../../../core/domains/deploy-control/store.ts";
+import { InMemoryFormRegistryStore } from "../../../core/domains/service-forms/mod.ts";
 import {
   type FormDefinition,
   type FormActivation,
@@ -453,6 +454,174 @@ class UnknownOnceApplyAdapter extends StubResourceShapeAdapter {
     return await super.apply(input);
   }
 }
+
+class FormInterfaceMaterializationAdapter extends StubResourceShapeAdapter {
+  applied = false;
+
+  override async apply(input: AdapterApplyInput): Promise<AdapterApplyResult> {
+    const result = await super.apply(input);
+    this.applied = true;
+    return result;
+  }
+}
+
+const FORM_INTERFACE_LIFECYCLE_FORM: InstalledFormReference = {
+  type: "object_bucket",
+  version: "1.0.0",
+  schemaDigest: `sha256:${"d".repeat(64)}`,
+  packageDigest: `sha256:${"e".repeat(64)}`,
+};
+
+const FORM_INTERFACE_LIFECYCLE_FORM_REF = {
+  type: FORM_INTERFACE_LIFECYCLE_FORM.type,
+  version: FORM_INTERFACE_LIFECYCLE_FORM.version,
+  schemaDigest: FORM_INTERFACE_LIFECYCLE_FORM.schemaDigest,
+};
+
+const FORM_INTERFACE_LIFECYCLE_DESCRIPTOR = {
+  name: "storage.object",
+  version: "v1",
+  required: true,
+  resourceUriInput: "resource",
+  document: { protocol: "https" },
+  inputs: [{ name: "resource", source: "resource_uri" as const }],
+};
+
+async function formInterfaceLifecycleFixture(
+  failAfterApply: boolean,
+) {
+  const resourceShapeStores = createInMemoryResourceShapeStores();
+  const interfaceStores = createInMemoryInterfaceStores();
+  const formRegistryStore = new InMemoryFormRegistryStore();
+  const formDefinition: FormDefinition = {
+    identity: FORM_INTERFACE_LIFECYCLE_FORM,
+    displayName: "Form Interface lifecycle test",
+    operations: ["create", "read", "update", "delete"],
+    desiredSchema: { type: "object" },
+    interfaceDescriptors: [FORM_INTERFACE_LIFECYCLE_DESCRIPTOR],
+    installedAt: "2026-08-01T00:00:00.000Z",
+  };
+  const formPackage: FormPackage = {
+    packageDigest: FORM_INTERFACE_LIFECYCLE_FORM.packageDigest,
+    artifactRef: "memory:form-interface-lifecycle",
+    verifierId: "test-verifier",
+    status: "installed",
+    definitionRefs: [FORM_INTERFACE_LIFECYCLE_FORM_REF],
+    installedAt: "2026-08-01T00:00:00.000Z",
+    installedBy: "test",
+    updatedAt: "2026-08-01T00:00:00.000Z",
+  };
+  expect(
+    await formRegistryStore.installPackage(formPackage, [formDefinition]),
+  ).toMatchObject({ status: "installed" });
+
+  const adapter = new FormInterfaceMaterializationAdapter();
+  const counts = { postApplyResourceUriResolutions: 0 };
+  const created = await createTakosumiService({
+    role: "takosumi-api",
+    runtimeEnv: { TAKOSUMI_ENVIRONMENT: "test", TAKOSUMI_DEV_MODE: "1" },
+    resourceShapeAdapter: adapter,
+    resourceShapeStores,
+    interfaceStores,
+    formRegistryStore,
+    resourceShapeSchemaRegistry:
+      LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY,
+    enabledResourceShapeKinds: RESOURCE_SHAPE_KINDS,
+    resourceShapeModuleRegistry: ROUTE_MODULE_REGISTRY,
+    resolveResourceInterfaceWorkspace: async ({ resourceSpaceId }) =>
+      resourceSpaceId === "space_1" ? "workspace_1" : undefined,
+    resolveFormInterfaceResourceUri: async () => {
+      if (!adapter.applied) return "https://resource.example.test/assets";
+      counts.postApplyResourceUriResolutions += 1;
+      return failAfterApply
+        ? undefined
+        : "https://resource.example.test/assets";
+    },
+  });
+  const pool = await created.app.request("/v1/target-pools/default", {
+    method: "PUT",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ space: "space_1", spec: POOL }),
+  });
+  expect(pool.status).toBe(200);
+  const policy = await created.app.request("/v1/space-policies/default", {
+    method: "PUT",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ space: "space_1", spec: POLICY }),
+  });
+  expect(policy.status).toBe(200);
+  return {
+    ...created,
+    resourceShapeStores,
+    counts,
+    resourceId: "tkrn:space_1:ObjectBucket:form-assets",
+  };
+}
+
+test("bootstrap materializes a successful required Form Interface exactly once", async () => {
+  const harness = await formInterfaceLifecycleFixture(false);
+  const applied = await reviewedResourceApply(
+    harness.app,
+    "/v1/resources/ObjectBucket/form-assets",
+    {
+      metadata: { space: "space_1" },
+      form: FORM_INTERFACE_LIFECYCLE_FORM,
+      spec: { name: "form-assets" },
+    },
+  );
+  expect(applied.status).toBe(200);
+  expect(harness.counts.postApplyResourceUriResolutions).toBe(1);
+  expect(await harness.resourceShapeStores.resources.get(harness.resourceId)).toMatchObject({
+    phase: "Ready",
+  });
+  const materialized = await harness.operations.interfaces.list({
+    workspaceId: "workspace_1",
+    ownerKind: "Resource",
+    ownerId: harness.resourceId,
+  });
+  expect(materialized).toHaveLength(1);
+  expect(materialized[0]?.metadata.materializedFrom).toMatchObject({
+    source: "form_descriptor",
+    descriptorName: "storage.object",
+    descriptorVersion: "v1",
+  });
+  expect(materialized[0]?.status.phase).toBe("Resolved");
+});
+
+test("bootstrap degrades a Ready Resource when its first required Form Interface materialization fails", async () => {
+  const harness = await formInterfaceLifecycleFixture(true);
+  const applied = await reviewedResourceApply(
+    harness.app,
+    "/v1/resources/ObjectBucket/form-assets",
+    {
+      metadata: { space: "space_1" },
+      form: FORM_INTERFACE_LIFECYCLE_FORM,
+      spec: { name: "form-assets" },
+    },
+  );
+  expect(applied.status).toBe(200);
+  expect(harness.counts.postApplyResourceUriResolutions).toBe(1);
+  const resource = await harness.resourceShapeStores.resources.get(
+    harness.resourceId,
+  );
+  expect(resource?.phase).toBe("Degraded");
+  expect(resource?.conditions).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        type: "Ready",
+        status: "false",
+        reason: "RequiredInterfaceNotReady",
+      }),
+    ]),
+  );
+  expect(
+    await harness.operations.interfaces.list({
+      workspaceId: "workspace_1",
+      ownerKind: "Resource",
+      ownerId: harness.resourceId,
+    }),
+  ).toHaveLength(0);
+});
 
 test("PUT /v1/resources/EdgeWorker/:name applies a first-class Worker shape", async () => {
   const { app } = await buildApp();
