@@ -61,7 +61,7 @@ const GUIDED_SCHEMA_KEYS: Readonly<
     "compatibilityFlags",
     "profiles",
   ],
-  ObjectBucket: ["name", "storageClass", "interfaces"],
+  ObjectBucket: ["name", "storageClass"],
   KVStore: ["name", "consistency"],
   SQLDatabase: ["name", "engine", "migrationsPath"],
   Queue: ["name", "delivery"],
@@ -169,6 +169,7 @@ export interface EdgeWorkerServiceForm {
 export interface ObjectBucketServiceForm {
   readonly name: string;
   readonly storageClass: ObjectBucketStorageClass;
+  /** Legacy compatibility input; ObjectBucket v3 does not emit this field. */
   readonly interfaces: string;
 }
 
@@ -592,6 +593,7 @@ export function readObjectBucketServiceForm(
   spec: ResourceShapeJsonObject,
   resourceName: string,
 ): ObjectBucketServiceForm | undefined {
+  // Keep the legacy field readable, but never carry it into a v3 desired spec.
   if (
     !hasOnlyKeys(spec, ["name", "storageClass", "interfaces"]) ||
     spec.name !== resourceName ||
@@ -947,11 +949,9 @@ function edgeWorkerSpec(
 function objectBucketSpec(
   form: ObjectBucketServiceForm,
 ): ResourceShapeJsonObject {
-  const interfaces = parseResourceServiceTokens(form.interfaces);
   return {
     name: form.name.trim(),
     storageClass: form.storageClass,
-    ...(interfaces.length > 0 ? { interfaces: [...interfaces] } : {}),
   };
 }
 

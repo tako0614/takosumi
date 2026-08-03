@@ -109,7 +109,7 @@ describe("provider-neutral Resource service forms", () => {
     });
   });
 
-  test("normalizes ObjectBucket interface requirements without owning a catalog", () => {
+  test("builds ObjectBucket v3 specs without legacy interface fields", () => {
     expect(parseResourceServiceTokens("s3_api, signed_url\ns3_api")).toEqual([
       "s3_api",
       "signed_url",
@@ -125,7 +125,6 @@ describe("provider-neutral Resource service forms", () => {
       value: {
         name: "assets",
         storageClass: "infrequent_access",
-        interfaces: ["s3_api", "signed_url"],
       },
     });
   });
@@ -150,7 +149,7 @@ describe("provider-neutral Resource service forms", () => {
         form: {
           name: "objects",
           storageClass: "standard",
-          interfaces: "s3_api",
+          interfaces: "",
         },
       },
       {
@@ -363,6 +362,16 @@ describe("provider-neutral Resource service forms", () => {
         properties: {
           name: { type: "string" },
           versioning: { type: "boolean" },
+        },
+      }),
+    ).toBe(false);
+    expect(
+      guidedResourceServiceSchemaCovers("ObjectBucket", {
+        type: "object",
+        properties: {
+          name: { type: "string" },
+          storageClass: { type: "string" },
+          interfaces: { type: "array" },
         },
       }),
     ).toBe(false);
