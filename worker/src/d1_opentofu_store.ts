@@ -359,6 +359,10 @@ function d1WorkspaceUpdatedDescKeysetWhere(
 
 export type D1OpenTofuControlSchemaMode = "bootstrap" | "predeployed";
 
+export interface CloudflareD1OpenTofuControlStoreOptions {
+  readonly schemaMode?: D1OpenTofuControlSchemaMode;
+}
+
 type D1PredeployedWorkspacePageRow = {
   readonly row_kind: number | string;
   readonly maintenance_json: string | null;
@@ -377,6 +381,83 @@ type D1PredeployedWorkspacePageRow = {
 // validated by every Workspace page statement, so an acquired maintenance fence
 // continues to fail closed immediately.
 const verifiedPredeployedD1Bindings = new WeakSet<object>();
+const predeployedD1SchemaReadiness = new WeakMap<object, Promise<void>>();
+const bootstrapD1SchemaReadiness = new WeakMap<object, Promise<void>>();
+
+function ensurePredeployedD1SchemaReady(db: D1Database): Promise<void> {
+  if (verifiedPredeployedD1Bindings.has(db)) return Promise.resolve();
+  let readiness = predeployedD1SchemaReadiness.get(db);
+  if (readiness) return readiness;
+  const attempt = verifyD1OpenTofuLedgerSchemaPredeployed(db)
+    .then(() => {
+      verifiedPredeployedD1Bindings.add(db);
+    })
+    .catch((error: unknown) => {
+      if (predeployedD1SchemaReadiness.get(db) === attempt) {
+        predeployedD1SchemaReadiness.delete(db);
+      }
+      throw error;
+    });
+  readiness = attempt;
+  predeployedD1SchemaReadiness.set(db, readiness);
+  return readiness;
+}
+
+function ensureBootstrapD1SchemaReady(db: D1Database): Promise<void> {
+  let readiness = bootstrapD1SchemaReadiness.get(db);
+  if (readiness) return readiness;
+  const attempt = ensureD1OpenTofuLedgerSchema(db).catch((error: unknown) => {
+    if (bootstrapD1SchemaReadiness.get(db) === attempt) {
+      bootstrapD1SchemaReadiness.delete(db);
+    }
+    throw error;
+  });
+  readiness = attempt;
+  bootstrapD1SchemaReadiness.set(db, readiness);
+  return readiness;
+}
+
+/**
+ * Admission evidence owned by one request-scoped store.
+ *
+ * The scope is deliberately not exported or accepted by the public
+ * constructor. A host obtains one only through
+ * `createCloudflareD1OpenTofuControlStoreForRequest`, which creates a fresh
+ * scope for that request and binds it to the exact D1 object. Keeping the
+ * admission promise here (rather than on the D1 binding or in a module cache)
+ * lets several store operations in one request share the first durable fence
+ * read without allowing evidence to cross request boundaries.
+ */
+class D1RequestMaintenanceScope {
+  #admission?: Promise<void>;
+
+  constructor(private readonly binding: D1Database) {}
+
+  ensure(binding: D1Database): Promise<void> {
+    if (binding !== this.binding) {
+      return Promise.reject(
+        new Error("D1 request maintenance scope binding mismatch"),
+      );
+    }
+    if (this.#admission !== undefined) return this.#admission;
+
+    const attempt = assertControlD1MaintenanceInactive(binding).catch(
+      (error: unknown) => {
+        // Do not poison a request scope after a transient read failure. The
+        // caller may retry the same operation, but every retry still has to
+        // obtain fresh durable evidence before touching application tables.
+        if (this.#admission === attempt) this.#admission = undefined;
+        throw error;
+      },
+    );
+    this.#admission = attempt;
+    return attempt;
+  }
+
+  reset(): void {
+    this.#admission = undefined;
+  }
+}
 
 export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   readonly persistence = "durable" as const;
@@ -384,18 +465,31 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   readonly #schemaMode: D1OpenTofuControlSchemaMode;
   #initialized?: Promise<void>;
   #predeployedSchemaVerified: boolean;
+  #requestMaintenanceScope?: D1RequestMaintenanceScope;
 
   constructor(
     private readonly db: D1Database,
-    options: {
-      readonly schemaMode?: D1OpenTofuControlSchemaMode;
-    } = {},
+    options: CloudflareD1OpenTofuControlStoreOptions = {},
   ) {
     this.#orm = drizzle(db, { schema });
     this.#schemaMode = options.schemaMode ?? "bootstrap";
     this.#predeployedSchemaVerified =
       this.#schemaMode === "predeployed" &&
       verifiedPredeployedD1Bindings.has(db);
+  }
+
+  /**
+   * Create the request-local variant without exposing its opaque scope.
+   * Callers cannot manufacture admission evidence or attach a scope to another
+   * D1 binding because the scope is created and retained entirely here.
+   */
+  static forRequest(
+    db: D1Database,
+    options: CloudflareD1OpenTofuControlStoreOptions = {},
+  ): CloudflareD1OpenTofuControlStore {
+    const store = new CloudflareD1OpenTofuControlStore(db, options);
+    store.#requestMaintenanceScope = new D1RequestMaintenanceScope(db);
+    return store;
   }
 
   // -- RunnerProfile ----------------------------------------------------------
@@ -3508,11 +3602,14 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   }
 
   async #ensureSchema(): Promise<void> {
-    // This is deliberately outside the memoized schema check: an operator can
-    // acquire the maintenance fence after an isolate has warmed. Every store
-    // operation must therefore re-check the durable fence before it issues a
-    // read or write, so no request can race a destructive predeploy rebuild.
-    const assertMaintenanceInactive = assertControlD1MaintenanceInactive;
+    // The default store deliberately keeps this check outside the memoized
+    // schema promise: an operator can acquire the maintenance fence after an
+    // isolate has warmed, so every operation re-checks the durable fence before
+    // it issues a read or write. The explicit request-scoped variant reuses its
+    // binding-bound admission promise only for the lifetime of that request.
+    const assertMaintenanceInactive = () =>
+      this.#requestMaintenanceScope?.ensure(this.db) ??
+      assertControlD1MaintenanceInactive(this.db);
     // Serialize concurrent callers onto the one in-flight bootstrap, but never
     // cache a REJECTED promise: a transient failure (e.g. a contended DDL) would
     // otherwise poison the isolate so every later method rejects forever. On
@@ -3522,22 +3619,24 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       const attempt = (
         this.#schemaMode === "predeployed"
           ? Promise.all([
-              assertMaintenanceInactive(this.db),
-              verifyD1OpenTofuLedgerSchemaPredeployed(this.db),
+              assertMaintenanceInactive(),
+              ensurePredeployedD1SchemaReady(this.db),
             ]).then(() => {
               this.#predeployedSchemaVerified = true;
-              verifiedPredeployedD1Bindings.add(this.db);
             })
-          : assertMaintenanceInactive(this.db).then(() =>
-              ensureD1OpenTofuLedgerSchema(this.db),
+          : assertMaintenanceInactive().then(() =>
+              ensureBootstrapD1SchemaReady(this.db),
             )
       ).catch((error: unknown) => {
-        if (this.#initialized === attempt) this.#initialized = undefined;
+        if (this.#initialized === attempt) {
+          this.#initialized = undefined;
+          this.#requestMaintenanceScope?.reset();
+        }
         throw error;
       });
       this.#initialized = attempt;
     } else {
-      await assertMaintenanceInactive(this.db);
+      await assertMaintenanceInactive();
     }
     await this.#initialized;
   }
@@ -3545,11 +3644,25 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
 
 export function createCloudflareD1OpenTofuControlStore(
   db: D1Database,
-  options: {
-    readonly schemaMode?: D1OpenTofuControlSchemaMode;
-  } = {},
+  options: CloudflareD1OpenTofuControlStoreOptions = {},
 ): OpenTofuControlStore {
   return new CloudflareD1OpenTofuControlStore(db, options);
+}
+
+/**
+ * Build a store whose maintenance admission is scoped to one request.
+ *
+ * Call this exactly at a request boundary and do not retain the returned store
+ * in an isolate/global cache. The default factory intentionally keeps its
+ * per-operation durable fence check for long-lived services and background
+ * work; this opt-in variant is only for a host that can prove the store lifetime
+ * is one HTTP request.
+ */
+export function createCloudflareD1OpenTofuControlStoreForRequest(
+  db: D1Database,
+  options: CloudflareD1OpenTofuControlStoreOptions = {},
+): OpenTofuControlStore {
+  return CloudflareD1OpenTofuControlStore.forRequest(db, options);
 }
 
 // -- atomic-commit statement builders ------------------------------------------
