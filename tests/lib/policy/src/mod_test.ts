@@ -192,6 +192,40 @@ test("action policy de-duplicates destructive reasons by type", () => {
   expect(result.reasons).toHaveLength(1);
 });
 
+test("action policy allows a read without approval", () => {
+  const result = evaluateActionPolicy([
+    { address: "data.x.a", type: "x", actions: ["read"] },
+  ]);
+  expect(result.requiresApproval).toBe(false);
+  expect(result.reasons).toEqual([]);
+});
+
+test("action policy requires approval for a forget (removed block)", () => {
+  // A `removed {}` block drops the resource from state without destroying it.
+  // OpenTofu reports it as "forget", not "delete": dropping a managed resource
+  // out of state is destructive to the platform's control over it, so it must
+  // still gate on approval.
+  const result = evaluateActionPolicy([
+    { address: "a", type: "aws_s3_bucket", actions: ["forget"] },
+  ]);
+  expect(result.requiresApproval).toBe(true);
+  expect(result.reasons.join("\n")).toMatch(/aws_s3_bucket/);
+});
+
+test("action policy requires approval for a create-then-forget replacement", () => {
+  const result = evaluateActionPolicy([
+    { address: "a", type: "x", actions: ["create", "forget"] },
+  ]);
+  expect(result.requiresApproval).toBe(true);
+});
+
+test("action policy fails closed on an unrecognized action", () => {
+  const result = evaluateActionPolicy([
+    { address: "a", type: "x", actions: ["some-future-action"] },
+  ]);
+  expect(result.requiresApproval).toBe(true);
+});
+
 // --- §25 layer 6: scope boundary -------------------------------------------
 
 const ACCOUNT_SCOPE_POLICY = {

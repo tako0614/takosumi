@@ -11,7 +11,8 @@
  *   - {@link evaluateResourceAllowlist} — §25 layer 5 (resource-type allowlist).
  *     The template plan-JSON policy (`deploy-control/template_policy.ts`) uses it.
  *   - {@link evaluateActionPolicy} — §25 layer 7 (action policy): create/update
- *     allowed; any delete/replace requires approval.
+ *     allowed; any other action (delete/replace, state removal, unrecognized)
+ *     requires approval.
  *   - {@link evaluateScopeBoundary} — §25 layer 6 (scope boundary): validates
  *     sanitized provider scope metadata when configured.
  *   - {@link evaluateQuotaPolicy} — §25 layer 10 (quota): mutating resource
@@ -50,6 +51,19 @@ export interface PlanResourceChange {
 }
 
 const NON_MUTATING_ACTIONS = new Set(["no-op", "read"]);
+
+/**
+ * §25 layer 7 allow set: the OpenTofu change actions that may apply without a
+ * recorded approval. Everything else — `"delete"` (also the replace pair
+ * `["delete","create"]`), the `"forget"` a `removed {}` block emits to drop a
+ * resource from state, and any action a future OpenTofu introduces — fails
+ * closed into the approval gate rather than being silently allowed.
+ *
+ * The runner projects `actions` verbatim from `tofu show -json tfplan`
+ * (`resourceChangesFromPlanJson`), so an unrecognized string reaches this
+ * evaluator unmodified; an allow set is what keeps it from passing.
+ */
+const APPROVAL_FREE_ACTIONS = new Set(["create", "update", "no-op", "read"]);
 
 // ---------------------------------------------------------------------------
 // §25 layer 4 — provider allowlist
@@ -164,8 +178,10 @@ export function evaluateResourceAllowlist(
 
 export interface ActionPolicyResult {
   /**
-   * True when any change deletes or replaces a resource (its `actions` contain
-   * `"delete"`). create / update are allowed without approval.
+   * True when any change carries an action outside the approval-free set
+   * ({@link APPROVAL_FREE_ACTIONS}) — a delete/replace, a state removal such as
+   * `"forget"`, or an action this policy does not recognize. create / update /
+   * no-op / read are allowed without approval.
    */
   readonly requiresApproval: boolean;
   /** Reasons describing why approval is required (never includes values). */
@@ -259,17 +275,24 @@ export function evaluateQuotaPolicy(
 }
 
 /**
- * Evaluates the §25 action policy over the plan's changes: create allowed,
- * update allowed, any delete or replace (`actions` containing `"delete"`,
- * which OpenTofu also uses for a replace `["delete","create"]`) requires
- * approval. Pure; no store state.
+ * Evaluates the §25 action policy over the plan's changes: only the
+ * approval-free actions (create, update, no-op, read) apply unreviewed. Any
+ * other action requires approval — `"delete"` (which OpenTofu also uses for a
+ * replace `["delete","create"]`), the `"forget"` a `removed {}` block emits to
+ * drop a resource out of state, and any action string this policy does not
+ * recognize. Testing against an allow set rather than for `"delete"` is what
+ * makes an unknown state-destructive action fail closed into the gate.
+ *
+ * A change with no actions at all is treated as no change, matching
+ * {@link isMutating}; OpenTofu always reports at least one action per line.
+ * Pure; no store state.
  */
 export function evaluateActionPolicy(
   changes: readonly PlanResourceChange[],
 ): ActionPolicyResult {
   const destructiveTypes = new Set<string>();
   for (const change of changes) {
-    if (change.actions.includes("delete")) destructiveTypes.add(change.type);
+    if (needsApproval(change.actions)) destructiveTypes.add(change.type);
   }
   const requiresApproval = destructiveTypes.size > 0;
   const reasons = requiresApproval
@@ -277,7 +300,7 @@ export function evaluateActionPolicy(
         .sort()
         .map(
           (type) =>
-            `resource type ${type} has a delete/replace change requiring approval`,
+            `resource type ${type} has a delete/replace or otherwise unapproved change requiring approval`,
         )
     : [];
   return { requiresApproval, reasons };
@@ -289,6 +312,11 @@ export function evaluateActionPolicy(
 
 function isMutating(actions: readonly string[]): boolean {
   return actions.some((action) => !NON_MUTATING_ACTIONS.has(action));
+}
+
+/** §25 layer 7: any action outside the allow set gates the plan on approval. */
+function needsApproval(actions: readonly string[]): boolean {
+  return actions.some((action) => !APPROVAL_FREE_ACTIONS.has(action));
 }
 
 function evaluateScopedValue(input: {
