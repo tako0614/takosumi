@@ -79,8 +79,9 @@ describe("Resource Shape dashboard surface", () => {
     expect(editor).toContain("props.formAvailability");
     expect(editor).toContain("<For each={availableForms()}>");
     expect(editor).not.toContain("BUNDLED_KINDS");
-    expect(inventory).toContain("listFormAvailability");
-    expect(inventory).toContain("formAvailability={formAvailability() ?? []}");
+    expect(inventory).toContain("readWorkspaceResourcesView");
+    expect(inventory).toContain("formAvailability={formRows()}");
+    expect(inventory).not.toContain("listFormAvailability");
     expect(detail).toContain("listFormAvailability");
     expect(detail).toContain("formAvailability={formAvailability() ?? []}");
     expect(editor).toContain("...(exactForm ? { form: exactForm } : {})");
@@ -155,10 +156,12 @@ describe("Resource Shape dashboard surface", () => {
   });
 
   test("unifies deployed services and Resources in one inventory", () => {
-    expect(inventory).toContain("listCapsules");
-    expect(inventory).toContain("rows={capsules.error ? [] : capsules()}");
-    expect(inventory).toContain("rows={resources.error ? [] : resources()}");
-    expect(inventory).toContain("formAvailability()?.filter");
+    expect(inventory).toContain("readWorkspaceResourcesView");
+    expect(inventory).toContain("rows={workloadRows()}");
+    expect(inventory).toContain("rows={resourceRows()}");
+    expect(inventory).toContain("formRows().filter");
+    expect(inventory).not.toContain("listCapsules");
+    expect(inventory).not.toContain("listResourceShapes");
     expect(inventory).toContain('class="rs-platform-advanced"');
   });
 });
