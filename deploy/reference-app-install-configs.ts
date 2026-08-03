@@ -1067,9 +1067,9 @@ const takosConfig = {
       workingDirectory: ".",
       env: {
         TAKOS_RELEASE_ARTIFACT_DESCRIPTOR_URL:
-          "https://github.com/tako0614/takos/releases/download/v0.11.3/takosumi-artifact.json",
+          "https://github.com/tako0614/takos/releases/download/v0.11.4/takosumi-artifact.json",
         TAKOS_RELEASE_ARTIFACT_DESCRIPTOR_SHA256:
-          "sha256:600196d9a4fb9c6cf6ddf234fcc3b88374f5e3422e791fdcdab15e84db05bfed",
+          "sha256:c9fd4bad7d7ad6cf4c8d5946afa697cb4311f35408aff5f8b0c7444aaa27758c",
       },
       timeoutSeconds: 3600,
       runnerCapability: CAPSULE_LIFECYCLE_COMMAND_CAPABILITY,
