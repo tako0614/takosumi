@@ -53,6 +53,7 @@ import {
 import ResourceEditor from "./ResourceEditor.tsx";
 import S3CustomerAccessKeysCard from "./components/S3CustomerAccessKeysCard.tsx";
 import { resourcePhaseLabel } from "../../lib/labels.ts";
+import { hasPlatformExtensionCapability } from "../../lib/runtime-capabilities.ts";
 
 type Identity = {
   readonly workspaceId: string;
@@ -398,7 +399,12 @@ function Inner(): JSX.Element {
                 </CardSection>
               </Card>
 
-              <Show when={item().kind === "ObjectBucket"}>
+              <Show
+                when={
+                  item().kind === "ObjectBucket" &&
+                  hasPlatformExtensionCapability("s3.access-key.control.v1")
+                }
+              >
                 <Show when={identity()}>
                   {(current) => (
                     <S3CustomerAccessKeysCard

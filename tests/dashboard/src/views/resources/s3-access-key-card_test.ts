@@ -20,8 +20,13 @@ describe("ObjectBucket S3-compatible customer key UI", () => {
       "tkrn:${current().workspaceId}:ObjectBucket:${current().name}",
     );
     expect(detail).toContain("hasS3ObjectStorageInterface");
+    expect(detail).toContain(
+      'hasPlatformExtensionCapability("s3.access-key.control.v1")',
+    );
+    expect(detail).toContain('item().kind === "ObjectBucket" &&');
     expect(detail).toContain("interfaceError={resolvedInterfaces.error}");
     expect(detail).toContain("interfaceLoading={resolvedInterfaces.loading}");
+    expect(detail).not.toContain("CloudResources");
   });
 
   test("rejects the legacy Interface and accepts only the current exact Interface", () => {

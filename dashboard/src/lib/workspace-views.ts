@@ -47,6 +47,7 @@ export interface WorkspaceResourcesView {
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
+const MAX_ACCUMULATED_PAGES = 20;
 
 export async function readWorkspaceResourcesView(
   workspaceId: string,
@@ -61,13 +62,70 @@ export async function readWorkspaceResourcesView(
       ? options.limit
       : DEFAULT_LIMIT;
   const limit = Math.min(Math.max(1, Math.trunc(requestedLimit)), MAX_LIMIT);
-  const params = new URLSearchParams({ limit: String(limit) });
+  let page = await readWorkspaceResourcesViewPage(workspaceId, {
+    limit,
+    ...(options.cursor ? { cursor: options.cursor } : {}),
+    ...(options.signal ? { signal: options.signal } : {}),
+  });
+  const seenCursors = new Set<string>();
+  if (options.cursor) seenCursors.add(options.cursor);
+
+  for (
+    let pageNumber = 1;
+    pageNumber < MAX_ACCUMULATED_PAGES && page.nextCursor;
+    pageNumber += 1
+  ) {
+    const cursor = page.nextCursor;
+    if (seenCursors.has(cursor)) break;
+    seenCursors.add(cursor);
+    const nextPage = await readWorkspaceResourcesViewPage(workspaceId, {
+      limit,
+      cursor,
+      ...(options.signal ? { signal: options.signal } : {}),
+    });
+    page = mergeWorkspaceResourcesViews(page, nextPage);
+  }
+  return page;
+}
+
+async function readWorkspaceResourcesViewPage(
+  workspaceId: string,
+  options: {
+    readonly limit: number;
+    readonly cursor?: string;
+    readonly signal?: AbortSignal;
+  },
+): Promise<WorkspaceResourcesView> {
+  const params = new URLSearchParams({ limit: String(options.limit) });
   if (options.cursor) params.set("cursor", options.cursor);
   const body = await controlFetch<unknown>(
     `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/views/resources.v1?${params.toString()}`,
     { signal: options.signal },
   );
   return parseWorkspaceResourcesView(body, workspaceId);
+}
+
+function mergeWorkspaceResourcesViews(
+  current: WorkspaceResourcesView,
+  next: WorkspaceResourcesView,
+): WorkspaceResourcesView {
+  return {
+    ...next,
+    ...(next.nextCursor ? { nextCursor: next.nextCursor } : {}),
+    resources: mergeWorkspaceViewPage(current.resources, next.resources),
+    workloads: mergeWorkspaceViewPage(current.workloads, next.workloads),
+    forms: mergeWorkspaceViewPage(current.forms, next.forms),
+  };
+}
+
+function mergeWorkspaceViewPage<T>(
+  current: WorkspaceViewPage<T>,
+  next: WorkspaceViewPage<T>,
+): WorkspaceViewPage<T> {
+  return {
+    items: [...current.items, ...next.items],
+    ...(next.nextCursor ? { nextCursor: next.nextCursor } : {}),
+  };
 }
 
 function parseWorkspaceResourcesView(

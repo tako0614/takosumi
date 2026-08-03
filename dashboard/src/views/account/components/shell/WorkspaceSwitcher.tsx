@@ -41,7 +41,9 @@ import {
 } from "../../../../lib/workspace-list.ts";
 import {
   currentWorkspaceId,
-  selectAvailableWorkspaceId,
+  canonicalResourcesSearch,
+  resourcesWorkspaceQueryId,
+  selectWorkspaceFromQuery,
   setCurrentWorkspaceId,
 } from "../../../../lib/workspace-state.ts";
 import { friendlyError } from "../../../../lib/error-copy.ts";
@@ -71,8 +73,16 @@ function newWorkspaceHandle(): string {
 }
 
 export default function WorkspaceSwitcher(props: Props = {}) {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const requestedWorkspaceId = createMemo(() =>
+    resourcesWorkspaceQueryId(location.pathname, location.search),
+  );
   const [workspaces, { mutate, refetch }] = createResource(() =>
-    listWorkspacesCached({ selectedWorkspaceId: currentWorkspaceId() }),
+    listWorkspacesCached({
+      selectedWorkspaceId:
+        requestedWorkspaceId() || currentWorkspaceId() || undefined,
+    }),
   );
   const [switcherOpen, setSwitcherOpen] = createSignal(false);
   const [switcherPage, setSwitcherPage] =
@@ -93,7 +103,11 @@ export default function WorkspaceSwitcher(props: Props = {}) {
     ),
   );
   const selectedWorkspaceId = createMemo(() =>
-    selectAvailableWorkspaceId(currentWorkspaceId(), loadedWorkspaces()),
+    selectWorkspaceFromQuery(
+      requestedWorkspaceId(),
+      currentWorkspaceId(),
+      loadedWorkspaces(),
+    ),
   );
   const selectedWorkspace = createMemo(() =>
     loadedWorkspaces().find(
@@ -120,9 +134,22 @@ export default function WorkspaceSwitcher(props: Props = {}) {
   // to the first Workspace before the refetch could land the new one.
   const onLoaded = (list: readonly Workspace[]) => {
     const current = untrack(currentWorkspaceId);
-    const next = selectAvailableWorkspaceId(current, list);
+    const next = selectWorkspaceFromQuery(
+      requestedWorkspaceId(),
+      current,
+      list,
+    );
     if (next !== current) {
       setCurrentWorkspaceId(next);
+    }
+    const canonicalSearch = canonicalResourcesSearch(
+      location.pathname,
+      location.search,
+    );
+    if (canonicalSearch !== location.search) {
+      navigate(`${location.pathname}${canonicalSearch}${location.hash}`, {
+        replace: true,
+      });
     }
     if (!next) setSwitcherOpen(false);
     return list;
@@ -217,8 +244,6 @@ export default function WorkspaceSwitcher(props: Props = {}) {
     if (cursor) void loadSwitcherPage(cursor);
   };
 
-  const navigate = useNavigate();
-  const location = useLocation();
   /**
    * Routes whose content belongs to a specific entity, not to the selected
    * workspace. They read their scope from the entity id in the URL, so after a

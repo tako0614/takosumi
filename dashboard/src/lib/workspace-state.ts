@@ -35,6 +35,46 @@ export function selectAvailableWorkspaceId(
   return workspaces[0]!.id;
 }
 
+/**
+ * Resolve a route-provided Workspace id only after it is present in the
+ * authenticated Workspace projection. A redirect may carry an id from a
+ * different session or an inaccessible Workspace; it must never become API
+ * scope merely because it appeared in the URL.
+ */
+export function selectWorkspaceFromQuery(
+  requested: string,
+  current: string,
+  workspaces: readonly { id: string }[],
+): string {
+  const candidate = requested.trim();
+  if (candidate && workspaces.some((workspace) => workspace.id === candidate)) {
+    return candidate;
+  }
+  return selectAvailableWorkspaceId(current, workspaces);
+}
+
+/** Read the Cloud compatibility redirect's Workspace query only on Resources. */
+export function resourcesWorkspaceQueryId(
+  pathname: string,
+  search: string,
+): string {
+  if (pathname !== "/resources") return "";
+  return new URLSearchParams(search).get("workspaceId")?.trim() ?? "";
+}
+
+/** Remove the one-shot Resources Workspace query while preserving other args. */
+export function canonicalResourcesSearch(
+  pathname: string,
+  search: string,
+): string {
+  if (pathname !== "/resources") return search;
+  const params = new URLSearchParams(search);
+  if (!params.has("workspaceId")) return search;
+  params.delete("workspaceId");
+  const next = params.toString();
+  return next ? `?${next}` : "";
+}
+
 /** Set (and persist) the current Workspace id. Pass "" to clear. */
 export function setCurrentWorkspaceId(workspaceId: string): void {
   const next = workspaceId.trim();

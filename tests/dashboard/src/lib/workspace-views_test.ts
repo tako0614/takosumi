@@ -77,6 +77,106 @@ describe("Resources Workspace view client", () => {
     expect(view.forms.nextCursor).toBe("f_next");
   });
 
+  test("follows and accumulates the second inventory page", async () => {
+    const calls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const path = typeof input === "string" ? input : String(input);
+      calls.push(path);
+      const second = path.includes("cursor=cursor_next");
+      const resource = {
+        id: second ? "resource_2" : "resource_1",
+        apiVersion: "takosumi.io/v1alpha1",
+        kind: "EdgeWorker",
+        metadata: {
+          name: second ? "second" : "first",
+          space: "workspace_1",
+          managedBy: "opentofu",
+        },
+      };
+      return Response.json({
+        view: "resources.v1",
+        workspaceId: "workspace_1",
+        space: "workspace_1",
+        ...(second ? {} : { nextCursor: "cursor_next" }),
+        resources: { items: [resource] },
+        workloads: {
+          items: [
+            {
+              id: second ? "workload_2" : "workload_1",
+              workspaceId: "workspace_1",
+              name: second ? "second" : "first",
+              slug: second ? "second" : "first",
+              installConfigId: "install_1",
+              environment: "production",
+              currentStateGeneration: 1,
+              status: "active",
+              createdAt: "2026-08-03T00:00:00.000Z",
+              updatedAt: "2026-08-03T00:00:00.000Z",
+            },
+          ],
+        },
+        forms: {
+          items: [
+            {
+              form: {
+                type: second ? "Queue" : "ObjectBucket",
+                version: "1.0.0",
+                schemaDigest: `sha256:${"a".repeat(64)}`,
+                packageDigest: `sha256:${"b".repeat(64)}`,
+              },
+              definitionKnown: true,
+              installed: true,
+              executable: true,
+              activated: true,
+              availableToPrincipal: true,
+              operations: ["apply"],
+              compatibleAdapterIds: ["adapter_1"],
+              eligibleTargetPoolClasses: ["standard"],
+              deprecated: false,
+            },
+          ],
+        },
+        hasTargetPool: true,
+      });
+    }) as typeof fetch;
+
+    const view = await readWorkspaceResourcesView("workspace_1");
+
+    expect(calls).toEqual([
+      "/api/v1/workspaces/workspace_1/views/resources.v1?limit=50",
+      "/api/v1/workspaces/workspace_1/views/resources.v1?limit=50&cursor=cursor_next",
+    ]);
+    expect(view.resources.items.map((item) => item.metadata.name)).toEqual([
+      "first",
+      "second",
+    ]);
+    expect(view.workloads.items).toHaveLength(2);
+    expect(view.forms.items).toHaveLength(2);
+    expect(view.nextCursor).toBeUndefined();
+  });
+
+  test("stops when a projection repeats its cursor", async () => {
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return Response.json({
+        view: "resources.v1",
+        workspaceId: "workspace_1",
+        space: "workspace_1",
+        nextCursor: "same_cursor",
+        resources: { items: [] },
+        workloads: { items: [] },
+        forms: { items: [] },
+        hasTargetPool: false,
+      });
+    }) as typeof fetch;
+
+    const view = await readWorkspaceResourcesView("workspace_1");
+
+    expect(calls).toBe(2);
+    expect(view.nextCursor).toBe("same_cursor");
+  });
+
   test("rejects malformed nested rows before UI rendering", async () => {
     globalThis.fetch = (async () =>
       Response.json({

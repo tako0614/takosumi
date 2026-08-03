@@ -164,4 +164,13 @@ describe("Resource Shape dashboard surface", () => {
     expect(inventory).not.toContain("listResourceShapes");
     expect(inventory).toContain('class="rs-platform-advanced"');
   });
+
+  test("validates a Resources redirect Workspace before scoped inventory reads", () => {
+    expect(inventory).toContain("resourcesWorkspaceQueryId");
+    expect(inventory).toContain("listWorkspacesCached");
+    expect(inventory).toContain("selectWorkspaceFromQuery");
+    expect(inventory).toContain("setCurrentWorkspaceId(selected)");
+    expect(inventory).toContain("canonicalResourcesSearch");
+    expect(inventory).toContain("if (validatedRouteWorkspace.error)");
+  });
 });

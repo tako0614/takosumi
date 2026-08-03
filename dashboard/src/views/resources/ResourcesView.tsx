@@ -7,6 +7,7 @@ import {
   Show,
   type JSX,
 } from "solid-js";
+import { useLocation, useNavigate } from "@solidjs/router";
 import {
   Boxes,
   Layers3,
@@ -17,7 +18,13 @@ import {
   Trash2,
 } from "lucide-solid";
 import Page from "../account/components/auth/Page.tsx";
-import { currentWorkspaceId } from "../../lib/workspace-state.ts";
+import {
+  canonicalResourcesSearch,
+  currentWorkspaceId,
+  resourcesWorkspaceQueryId,
+  selectWorkspaceFromQuery,
+  setCurrentWorkspaceId,
+} from "../../lib/workspace-state.ts";
 import {
   ControlApiError,
   deleteResourceSpacePolicy,
@@ -36,6 +43,7 @@ import {
   type ResourceTargetPool,
   type ResourceTargetPoolSpec,
 } from "../../lib/control-api.ts";
+import { listWorkspacesCached } from "../../lib/workspace-list.ts";
 import {
   readWorkspaceResourcesView,
   type WorkspaceResourceSummary,
@@ -77,7 +85,41 @@ export default function ResourcesView(): JSX.Element {
 
 function Inner(): JSX.Element {
   const { confirm } = useConfirmDialog();
-  const workspaceId = () => currentWorkspaceId() || undefined;
+  const navigate = useNavigate();
+  const location = useLocation();
+  const requestedWorkspaceId = createMemo(() =>
+    resourcesWorkspaceQueryId(location.pathname, location.search),
+  );
+  const [validatedRouteWorkspace] = createResource(
+    requestedWorkspaceId,
+    async (requested) => {
+      if (!requested) return undefined;
+      const available = await listWorkspacesCached({
+        selectedWorkspaceId: requested,
+      });
+      const selected = selectWorkspaceFromQuery(
+        requested,
+        currentWorkspaceId(),
+        available,
+      );
+      setCurrentWorkspaceId(selected);
+      const canonicalSearch = canonicalResourcesSearch(
+        location.pathname,
+        location.search,
+      );
+      if (canonicalSearch !== location.search) {
+        navigate(`${location.pathname}${canonicalSearch}${location.hash}`, {
+          replace: true,
+        });
+      }
+      return selected || undefined;
+    },
+  );
+  const workspaceId = () => {
+    if (!requestedWorkspaceId()) return currentWorkspaceId() || undefined;
+    if (validatedRouteWorkspace.error) return undefined;
+    return validatedRouteWorkspace() || undefined;
+  };
   const [showEditor, setShowEditor] = createSignal(false);
   const [poolEditorOpen, setPoolEditorOpen] = createSignal(false);
   const [poolName, setPoolName] = createSignal("default");
