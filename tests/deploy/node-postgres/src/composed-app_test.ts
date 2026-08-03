@@ -288,6 +288,137 @@ test("composed Interface API scopes sessions and PATs to current Workspace owner
   assert.equal(ownedBinding.status, 201);
 });
 
+test("composed Interface API refuses Interface writes from read-only Workspace members", async () => {
+  const now = Date.now();
+  const store = new InMemoryAccountsStore();
+  for (const subject of [
+    "tsub_ws_owner",
+    "tsub_ws_viewer",
+    "tsub_ws_member",
+  ] as const) {
+    store.saveAccount({ subject, createdAt: now, updatedAt: now });
+    store.saveAccountSession({
+      sessionId: `sess_${subject}`,
+      subject,
+      createdAt: now,
+      expiresAt: now + 60_000,
+    });
+  }
+  const spy = accountsHandlerSpy();
+  const { buildComposedApp } =
+    await import("../../../../deploy/node-postgres/src/composed-app.ts");
+  const created = await buildComposedApp({
+    config: testConfig(),
+    store: store as unknown as PostgresAccountsStore,
+    accountsHandler: spy.handler,
+    runtimeEnv: {
+      TAKOSUMI_DEPLOY_CONTROL_TOKEN: TEST_DEPLOY_CONTROL_TOKEN,
+    },
+    interfaceOAuth2ResourceAuthorizer: () => true,
+  });
+  const app = created.app;
+  const workspace = await created.operations.workspaces.createWorkspace({
+    handle: "role-gate",
+    displayName: "Role Gate",
+    type: "organization",
+    ownerUserId: "tsub_ws_owner",
+  });
+  const ownerActor = {
+    actorAccountId: "tsub_ws_owner",
+    roles: ["owner"],
+    requestId: "req_role_gate",
+  };
+  await created.operations.members.upsertMember({
+    workspaceId: workspace.id,
+    accountId: "tsub_ws_viewer",
+    roles: ["viewer"],
+    status: "active",
+    actor: ownerActor,
+  });
+  await created.operations.members.upsertMember({
+    workspaceId: workspace.id,
+    accountId: "tsub_ws_member",
+    roles: ["member"],
+    status: "active",
+    actor: ownerActor,
+  });
+  const headersFor = (subject: string) => ({
+    authorization: `Bearer sess_${subject}`,
+    "content-type": "application/json",
+  });
+  const interfaceBody = (name: string) =>
+    JSON.stringify({
+      workspaceId: workspace.id,
+      name,
+      ownerRef: { kind: "Workspace", id: workspace.id },
+      spec: {
+        type: "mcp.server",
+        version: "2025-11-25",
+        document: {},
+        access: { visibility: "private" },
+      },
+    });
+  const bindingBody = JSON.stringify({
+    subjectRef: { kind: "Principal", id: "principal_role_gate" },
+    permissions: ["mcp.invoke"],
+    delivery: { type: "none" },
+  });
+
+  // A read-only member keeps read authority over the Workspace.
+  const viewerList = await app.fetch(
+    new Request(`http://localhost/v1/interfaces?workspaceId=${workspace.id}`, {
+      headers: headersFor("tsub_ws_viewer"),
+    }),
+  );
+  assert.equal(viewerList.status, 200);
+
+  const viewerCreate = await app.fetch(
+    new Request("http://localhost/v1/interfaces", {
+      method: "POST",
+      headers: headersFor("tsub_ws_viewer"),
+      body: interfaceBody("viewer-create"),
+    }),
+  );
+  assert.equal(viewerCreate.status, 403);
+
+  // A non-viewer member keeps Interface write authority.
+  const memberCreate = await app.fetch(
+    new Request("http://localhost/v1/interfaces", {
+      method: "POST",
+      headers: headersFor("tsub_ws_member"),
+      body: interfaceBody("member-create"),
+    }),
+  );
+  assert.equal(memberCreate.status, 201);
+  const interfaceId = (await memberCreate.json()).metadata.id as string;
+  const memberBinding = await app.fetch(
+    new Request(`http://localhost/v1/interfaces/${interfaceId}/bindings`, {
+      method: "POST",
+      headers: headersFor("tsub_ws_member"),
+      body: bindingBody,
+    }),
+  );
+  assert.equal(memberBinding.status, 201);
+  const bindingId = (await memberBinding.json()).metadata.id as string;
+
+  // The read-only member can neither mint nor revoke bindings.
+  const viewerBinding = await app.fetch(
+    new Request(`http://localhost/v1/interfaces/${interfaceId}/bindings`, {
+      method: "POST",
+      headers: headersFor("tsub_ws_viewer"),
+      body: bindingBody,
+    }),
+  );
+  assert.equal(viewerBinding.status, 403);
+  const viewerRevoke = await app.fetch(
+    new Request(
+      `http://localhost/v1/interfaces/${interfaceId}/bindings/${bindingId}`,
+      { method: "DELETE", headers: headersFor("tsub_ws_viewer") },
+    ),
+  );
+  assert.equal(viewerRevoke.status, 403);
+});
+
 test("composed Capsule Interface OAuth uses canonical Capsule authority without an Accounts projection", async () => {
   const now = Date.now();
   const nowIso = new Date(now).toISOString();

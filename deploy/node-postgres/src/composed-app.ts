@@ -254,15 +254,7 @@ export async function buildComposedApp(
       },
     },
     authorizeInterfaceBearer: async ({ token, request }) => {
-      const isInterfaceTokenIssue =
-        request.method === "POST" &&
-        /^\/v1\/interfaces\/[^/]+\/token$/u.test(new URL(request.url).pathname);
-      const requiredScope =
-        request.method === "GET" ||
-        request.method === "HEAD" ||
-        isInterfaceTokenIssue
-          ? "read"
-          : "write";
+      const requiredScope = interfaceRequestAccess(request);
       const result = await requireAccountsBearer({
         request,
         store: input.store,
@@ -280,15 +272,18 @@ export async function buildComposedApp(
         ...(result.auth.workspaceId
           ? { workspaceId: result.auth.workspaceId }
           : {}),
-        roles: runtimePrincipal
-          ? ["runtime-principal"]
-          : [requiredScope === "read" ? "viewer" : "editor"],
+        // The account's real Workspace role is unknown here: the authoritative
+        // Workspace is resolved later by the Interface route. A role claimed
+        // from the HTTP method would be a fabricated grant, so account
+        // principals carry no role claim and authority is decided against the
+        // live membership row in `authorizeInterfaceWorkspace`.
+        roles: runtimePrincipal ? ["runtime-principal"] : [],
         requestId: request.headers.get("x-request-id") ?? crypto.randomUUID(),
         principalKind: "account",
         scopes: [requiredScope],
       };
     },
-    authorizeInterfaceWorkspace: async ({ actor, workspaceId }) => {
+    authorizeInterfaceWorkspace: async ({ actor, workspaceId, request }) => {
       // OAuth runtime delivery is already bound to the Workspace recorded on
       // the access token. Its actorAccountId is pairwise and cannot be compared
       // to the account-plane legal owner.
@@ -304,7 +299,14 @@ export async function buildComposedApp(
           workspaceId,
           actor.actorAccountId,
         );
-        return member?.status === "active";
+        if (member?.status !== "active") return false;
+        if (interfaceRequestAccess(request) === "read") return true;
+        // Active membership alone is read authority. Interface and
+        // InterfaceBinding writes mint runtime credentials against the
+        // Workspace's Resources and revoke existing grants, so a read-only
+        // (`viewer`) membership must not reach them. An empty role set proves
+        // no write role, so it is refused too.
+        return member.roles.some((role) => role !== "viewer");
       } catch {
         return false;
       }
@@ -381,6 +383,24 @@ export async function buildComposedApp(
   // while this composer imports Hono from its own node_modules. Runtime Hono
   // objects are compatible; keep the cast at the framework/composer boundary.
   return { ...created, app: app as unknown as CreatedTakosumiService["app"] };
+}
+
+/**
+ * The one Interface API access-mode rule for this host: reads and the
+ * binding-bound token issue route need read authority, every other request
+ * mutates Interface or InterfaceBinding state. Both the bearer check and the
+ * Workspace membership check derive the mode here so the credential scope and
+ * the required Workspace role can never disagree.
+ */
+function interfaceRequestAccess(request: Request): "read" | "write" {
+  const isInterfaceTokenIssue =
+    request.method === "POST" &&
+    /^\/v1\/interfaces\/[^/]+\/token$/u.test(new URL(request.url).pathname);
+  return request.method === "GET" ||
+    request.method === "HEAD" ||
+    isInterfaceTokenIssue
+    ? "read"
+    : "write";
 }
 
 function productDiscoveryOptions(
