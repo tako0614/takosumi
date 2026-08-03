@@ -107,10 +107,26 @@ export interface CreateCloudflareWorkerOptions<
   ) => Promise<ControlPlaneOperations | undefined>;
 }
 
-const handlers = new WeakMap<CloudflareWorkerEnv, Promise<AccountsHandler>>();
+interface AccountsHandlerInitializationTimings {
+  controlPlaneMs?: number;
+}
+
+interface CachedAccountsHandler {
+  readonly promise: Promise<AccountsHandler>;
+  readonly initializationTimings: AccountsHandlerInitializationTimings;
+  settled: boolean;
+}
+
+interface CachedAccountsHandlerResult {
+  readonly handler: AccountsHandler;
+  readonly initializationWaitMs?: number;
+  readonly controlPlaneInitializationMs?: number;
+}
+
+const handlers = new WeakMap<CloudflareWorkerEnv, CachedAccountsHandler>();
 const identityHandlers = new WeakMap<
   CloudflareWorkerEnv,
-  Promise<AccountsHandler>
+  CachedAccountsHandler
 >();
 
 type Es256PrivateJwk = JsonWebKey & {
@@ -189,21 +205,30 @@ export function createCloudflareWorker<
           return authProviderConfigurationInvalidResponse();
         }
       }
+      let initializationTiming: CachedAccountsHandlerResult | undefined;
       try {
-        const handler = await cachedAccountsHandler(
+        const cached = await cachedAccountsHandler(
           env,
           options,
           usesIdentityOnlyAccountsHandler(url.pathname),
         );
-        return await handler(request);
+        initializationTiming = cached;
+        const response = await cached.handler(request);
+        return appendAccountsHandlerInitializationTiming(
+          response,
+          initializationTiming,
+        );
       } catch (error) {
-        return Response.json(
-          {
-            error: "worker_configuration_error",
-            error_description:
-              error instanceof Error ? error.message : String(error),
-          },
-          { status: 500 },
+        return appendAccountsHandlerInitializationTiming(
+          Response.json(
+            {
+              error: "worker_configuration_error",
+              error_description:
+                error instanceof Error ? error.message : String(error),
+            },
+            { status: 500 },
+          ),
+          initializationTiming,
         );
       }
     },
@@ -313,17 +338,72 @@ async function cachedAccountsHandler<TEnv extends CloudflareWorkerEnv>(
   env: TEnv,
   options: CreateCloudflareWorkerOptions<TEnv>,
   identityOnly = false,
-): Promise<AccountsHandler> {
+): Promise<CachedAccountsHandlerResult> {
   const cache = identityOnly ? identityHandlers : handlers;
-  let handler = cache.get(env);
-  if (!handler) {
-    handler = observeAccountsHandlerInitialization(
-      buildAccountsHandler(env, options, identityOnly),
+  let cached = cache.get(env);
+  const waitsForInitialization = cached === undefined || !cached.settled;
+  const waitStartedAt = waitsForInitialization ? nowMs() : undefined;
+  if (!cached) {
+    const initializationTimings: AccountsHandlerInitializationTimings = {};
+    const promise = observeAccountsHandlerInitialization(
+      buildAccountsHandler(env, options, identityOnly, initializationTimings),
       identityOnly ? "identity" : "control",
     );
-    cache.set(env, handler);
+    cached = {
+      promise,
+      initializationTimings,
+      settled: false,
+    };
+    cache.set(env, cached);
+    void promise.then(
+      () => {
+        cached!.settled = true;
+      },
+      () => {
+        cached!.settled = true;
+      },
+    );
   }
-  return await handler;
+  const handler = await cached.promise;
+  if (waitStartedAt === undefined) return { handler };
+  return {
+    handler,
+    initializationWaitMs: nowMs() - waitStartedAt,
+    ...(cached.initializationTimings.controlPlaneMs !== undefined
+      ? {
+          controlPlaneInitializationMs:
+            cached.initializationTimings.controlPlaneMs,
+        }
+      : {}),
+  };
+}
+
+function appendAccountsHandlerInitializationTiming(
+  response: Response,
+  timing: CachedAccountsHandlerResult | undefined,
+): Response {
+  if (timing?.initializationWaitMs === undefined) return response;
+  const metrics = [
+    `tk_accounts_init;dur=${formatTimingDuration(timing.initializationWaitMs)}`,
+  ];
+  if (timing.controlPlaneInitializationMs !== undefined) {
+    metrics.push(
+      `tk_control_init;dur=${formatTimingDuration(timing.controlPlaneInitializationMs)}`,
+    );
+  }
+  const headers = new Headers(response.headers);
+  const existing = headers.get("Server-Timing");
+  const value = metrics.join(", ");
+  headers.set("Server-Timing", existing ? `${existing}, ${value}` : value);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
+function formatTimingDuration(durationMs: number): string {
+  return Math.max(0, durationMs).toFixed(1);
 }
 
 async function observeAccountsHandlerInitialization(
@@ -377,6 +457,7 @@ async function buildAccountsHandler<TEnv extends CloudflareWorkerEnv>(
   env: TEnv,
   options: CreateCloudflareWorkerOptions<TEnv>,
   identityOnly = false,
+  initializationTimings?: AccountsHandlerInitializationTimings,
 ): Promise<AccountsHandler> {
   if (!env.TAKOSUMI_ACCOUNTS_DB) {
     throw new TypeError("TAKOSUMI_ACCOUNTS_DB D1 binding is required");
@@ -403,9 +484,18 @@ async function buildAccountsHandler<TEnv extends CloudflareWorkerEnv>(
   }
   const issuer = issuerEnv;
   const clients = parseConfiguredOidcClients(env);
-  const controlPlaneOperations = identityOnly
-    ? undefined
-    : await options.controlPlaneOperations?.(env);
+  let controlPlaneOperations: ControlPlaneOperations | undefined;
+  if (!identityOnly && options.controlPlaneOperations) {
+    const controlPlaneStartedAt = nowMs();
+    try {
+      controlPlaneOperations = await options.controlPlaneOperations(env);
+    } finally {
+      if (initializationTimings) {
+        initializationTimings.controlPlaneMs =
+          nowMs() - controlPlaneStartedAt;
+      }
+    }
+  }
   // Keep ordinary identity requests on the lightweight handler. Canonical
   // Core is resolved lazily only when an Interface OAuth token is actually
   // presented to UserInfo/introspection.
@@ -454,6 +544,10 @@ async function buildAccountsHandler<TEnv extends CloudflareWorkerEnv>(
     ...commonOptions,
     subject: optionalString(env.TAKOSUMI_ACCOUNTS_SUBJECT),
   });
+}
+
+function nowMs(): number {
+  return typeof performance !== "undefined" ? performance.now() : Date.now();
 }
 
 function configureSessionHashSalt(env: CloudflareWorkerEnv): void {

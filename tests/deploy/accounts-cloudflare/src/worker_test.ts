@@ -23,6 +23,24 @@ function env(values: Record<string, unknown> = {}): CloudflareWorkerEnv {
   return values as CloudflareWorkerEnv;
 }
 
+async function versionedAccountsDb(): Promise<SqliteFakeD1> {
+  const db = new SqliteFakeD1();
+  const store = new D1AccountsStore(db);
+  await store.initialize();
+  await db
+    .prepare(
+      "CREATE TABLE IF NOT EXISTS takosumi_accounts_schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL)",
+    )
+    .run();
+  await db
+    .prepare(
+      "INSERT INTO takosumi_accounts_schema_migrations (version, name, applied_at) VALUES (?, ?, ?)",
+    )
+    .bind(3, "current", Date.now())
+    .run();
+  return db;
+}
+
 afterEach(() => {
   __resetSessionHashSaltConfigForTesting();
 });
@@ -285,6 +303,61 @@ test("Cloudflare auth discovery rejects malformed config without leaking it", as
   expect(text).not.toContain("private-idp");
   expect(text).not.toContain("private-client-id");
   expect(text).not.toContain("must-never-be-returned");
+});
+
+test("Cloudflare Accounts handler reports cold/concurrent initialization waits only", async () => {
+  const db = await versionedAccountsDb();
+  let releaseControlInitialization!: () => void;
+  const controlInitialization = new Promise<void>((resolve) => {
+    releaseControlInitialization = resolve;
+  });
+  let signalControlInitializationStarted!: () => void;
+  const controlInitializationStarted = new Promise<void>((resolve) => {
+    signalControlInitializationStarted = resolve;
+  });
+  let controlInitializationCalls = 0;
+  const worker = createCloudflareWorker({
+    controlPlaneOperations: async () => {
+      controlInitializationCalls += 1;
+      signalControlInitializationStarted();
+      await controlInitialization;
+      return {} as never;
+    },
+  });
+  const workerEnv = env({
+    TAKOSUMI_ACCOUNTS_DB: db,
+    TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE: "predeployed",
+    TAKOSUMI_ACCOUNTS_ISSUER: "http://app.example.test",
+    TAKOSUMI_ACCOUNT_SESSION_HASH_SALT:
+      "cloudflare-handler-timing-test-session-salt",
+  });
+  const request = () =>
+    new Request("https://app.example.test/api/v1/workspaces");
+
+  const coldRequest = worker.fetch(request(), workerEnv);
+  await controlInitializationStarted;
+  const concurrentRequest = worker.fetch(request(), workerEnv);
+  releaseControlInitialization();
+
+  const [coldResponse, concurrentResponse] = await Promise.all([
+    coldRequest,
+    concurrentRequest,
+  ]);
+  for (const response of [coldResponse, concurrentResponse]) {
+    expect(response.status).toBe(401);
+    const timing = response.headers.get("server-timing") ?? "";
+    expect(timing).toContain("tk_control_auth");
+    expect(timing).toMatch(/tk_accounts_init;dur=\d+(?:\.\d+)?/u);
+    expect(timing).toMatch(/tk_control_init;dur=\d+(?:\.\d+)?/u);
+  }
+  expect(controlInitializationCalls).toBe(1);
+
+  const warmResponse = await worker.fetch(request(), workerEnv);
+  expect(warmResponse.status).toBe(401);
+  const warmTiming = warmResponse.headers.get("server-timing") ?? "";
+  expect(warmTiming).toContain("tk_control_auth");
+  expect(warmTiming).not.toContain("tk_accounts_init");
+  expect(warmTiming).not.toContain("tk_control_init");
 });
 
 test("Cloudflare config preserves a host-specific public mobile OIDC client", () => {
