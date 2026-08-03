@@ -669,6 +669,38 @@ test("Workspace list defaults to one bounded created-order page", async () => {
   ]);
 });
 
+test("Workspace list skips personal Workspace ensure when the first page already has one", async () => {
+  const fixture = operationsFixture();
+  let ensureCalls = 0;
+  const operations = {
+    ...fixture.operations,
+    workspaces: {
+      ...fixture.operations.workspaces,
+      ensurePersonalWorkspace: async () => {
+        ensureCalls += 1;
+        return workspace;
+      },
+    },
+  } as ControlPlaneOperations;
+  const request = new Request("https://app.example.test/api/v1/workspaces");
+  const response = await handleWorkspaces(
+    {
+      request,
+      url: new URL(request.url),
+      operations,
+      store: new InMemoryAccountsStore(),
+      session: { subject: "tsub_owner" },
+    },
+    ["workspaces"],
+    "GET",
+  );
+
+  expect(response?.status).toBe(200);
+  expect(await response?.json()).toMatchObject({ workspaces: [workspace] });
+  expect(ensureCalls).toBe(0);
+  expect(fixture.workspacePageCalls).toHaveLength(1);
+});
+
 test("Workspace list awaits the idempotent personal Workspace ensure", async () => {
   const fixture = operationsFixture();
   const store = new InMemoryAccountsStore();
@@ -687,10 +719,19 @@ test("Workspace list awaits the idempotent personal Workspace ensure", async () 
     signalEnsureStarted = resolve;
   });
   const ensureCalls: Array<{ ownerUserId: string; handle: string }> = [];
+  let pageCalls = 0;
   const operations = {
     ...fixture.operations,
     workspaces: {
       ...fixture.operations.workspaces,
+      listWorkspacesForAccountPage: async (
+        accountId: string,
+        params: Record<string, unknown>,
+      ) => {
+        pageCalls += 1;
+        fixture.workspacePageCalls.push({ accountId, ...params });
+        return pageCalls === 1 ? { items: [] } : { items: [workspace] };
+      },
       ensurePersonalWorkspace: async (
         ownerUserId: string,
         handle: string,
@@ -719,11 +760,12 @@ test("Workspace list awaits the idempotent personal Workspace ensure", async () 
   expect(ensureCalls).toEqual([
     { ownerUserId: "tsub_owner", handle: "owner" },
   ]);
-  expect(fixture.workspacePageCalls).toEqual([]);
+  expect(fixture.workspacePageCalls).toHaveLength(1);
   releaseEnsure();
   const response = await responsePromise;
   expect(response?.status).toBe(200);
-  expect(fixture.workspacePageCalls).toHaveLength(1);
+  expect(await response?.json()).toMatchObject({ workspaces: [workspace] });
+  expect(fixture.workspacePageCalls).toHaveLength(2);
 });
 
 test("Workspace-scoped list never bootstraps another personal Workspace", async () => {
@@ -756,7 +798,7 @@ test("Workspace-scoped list never bootstraps another personal Workspace", async 
   expect(workspaceEnsures).toBe(0);
 });
 
-test("Repeated Workspace lists delegate to the canonical idempotent ensure", async () => {
+test("Repeated Workspace lists skip the canonical ensure after the personal Workspace appears", async () => {
   const fixture = operationsFixture();
   const store = new InMemoryAccountsStore();
   store.saveAccount({
@@ -767,10 +809,19 @@ test("Repeated Workspace lists delegate to the canonical idempotent ensure", asy
   });
   const ensureCalls: Array<{ ownerUserId: string; handle: string }> = [];
   let createCalls = 0;
+  let pageCalls = 0;
   const operations = {
     ...fixture.operations,
     workspaces: {
       ...fixture.operations.workspaces,
+      listWorkspacesForAccountPage: async (
+        accountId: string,
+        params: Record<string, unknown>,
+      ) => {
+        pageCalls += 1;
+        fixture.workspacePageCalls.push({ accountId, ...params });
+        return pageCalls === 1 ? { items: [] } : { items: [workspace] };
+      },
       ensurePersonalWorkspace: async (
         ownerUserId: string,
         handle: string,
@@ -805,9 +856,9 @@ test("Repeated Workspace lists delegate to the canonical idempotent ensure", asy
 
   expect(ensureCalls).toEqual([
     { ownerUserId: "tsub_owner", handle: "owner" },
-    { ownerUserId: "tsub_owner", handle: "owner" },
   ]);
   expect(createCalls).toBe(0);
+  expect(fixture.workspacePageCalls).toHaveLength(3);
 });
 
 test("Workspace list page is bounded and pins an authorized selected Workspace", async () => {

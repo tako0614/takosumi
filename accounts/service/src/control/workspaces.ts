@@ -604,36 +604,52 @@ async function listWorkspacePage(
       truncated: false,
     } satisfies PublicWorkspaceListPage);
   }
-  if (isFirstPage) {
-    const subject = takosumiSubjectValue(session.subject);
-    if (subject) {
-      await maybeEnsurePersonalWorkspaceForSubject({
-        subject,
-        store,
-        operations,
-      });
-    }
-  }
-  const [page, selected] = await Promise.all([
+  const listPage = () =>
     operations.workspaces.listWorkspacesForAccountPage(session.subject, {
       ...parsedPage.params,
       includeArchived,
       includeTotal,
       order,
       limit,
-    }),
+    });
+  const lookupSelected = () =>
     selectedWorkspaceId && isFirstPage
       ? operations.workspaces.getWorkspaceForAccount(
           session.subject,
           selectedWorkspaceId,
         )
-      : Promise.resolve(undefined),
+      : Promise.resolve(undefined);
+  const [initialPage, selected] = await Promise.all([
+    listPage(),
+    lookupSelected(),
   ]);
+  let page = initialPage;
+  const subject = isFirstPage
+    ? takosumiSubjectValue(session.subject)
+    : undefined;
+  const hasOwnedPersonalWorkspace =
+    subject !== undefined &&
+    page.items.some(
+      (workspace) =>
+        workspace.type === "personal" &&
+        workspace.ownerUserId === session.subject,
+    );
+  if (subject !== undefined && !hasOwnedPersonalWorkspace) {
+    await maybeEnsurePersonalWorkspaceForSubject({
+      subject,
+      store,
+      operations,
+    });
+    page = await listPage();
+  }
   const pinSelected =
     selected !== undefined &&
     (includeArchived || !isArchivedWorkspace(selected)) &&
     !page.items.some((workspace) => workspace.id === selected.id);
-  const workspaces = pinSelected ? [selected, ...page.items] : page.items;
+  const workspaces =
+    pinSelected && selected !== undefined
+      ? [selected, ...page.items]
+      : page.items;
   return json({
     workspaces,
     ...(page.total === undefined ? {} : { total: page.total }),
@@ -641,7 +657,9 @@ async function listWorkspacePage(
     limit,
     truncated: page.nextCursor !== undefined,
     ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
-    ...(pinSelected ? { pinnedWorkspaceId: selected.id } : {}),
+    ...(pinSelected && selected !== undefined
+      ? { pinnedWorkspaceId: selected.id }
+      : {}),
   } satisfies PublicWorkspaceListPage);
 }
 
