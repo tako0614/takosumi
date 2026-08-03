@@ -119,8 +119,47 @@ export interface CommercialBillingSummary {
 }
 
 export interface CommercialBillingSnapshot {
-  readonly configuration: CommercialBillingConfiguration;
-  readonly billing: CommercialBillingSummary;
+  /** Configuration may remain usable while the account summary is unavailable. */
+  readonly configuration?: CommercialBillingConfiguration;
+  /** A missing summary is represented by `errors.summary`, never by zeroes. */
+  readonly billing?: CommercialBillingSummary;
+  readonly errors?: CommercialBillingLoadErrors;
+}
+
+export interface CommercialBillingLoadErrors {
+  readonly configuration?: CommercialBillingLoadError;
+  readonly summary?: CommercialBillingLoadError;
+}
+
+export type CommercialBillingLoadPhase = "configuration" | "summary";
+
+/** Typed evidence for one independently loaded billing surface. */
+export class CommercialBillingLoadError extends Error {
+  readonly phase: CommercialBillingLoadPhase;
+  readonly cause: unknown;
+  readonly status?: number;
+
+  constructor(phase: CommercialBillingLoadPhase, cause: unknown) {
+    super(`billing ${phase} is unavailable`);
+    this.name = "CommercialBillingLoadError";
+    this.phase = phase;
+    this.cause = cause;
+    this.status =
+      cause instanceof CommercialBillingRequestError ? cause.status : undefined;
+  }
+}
+
+/** Preserves HTTP status and endpoint evidence without retaining response data. */
+export class CommercialBillingRequestError extends Error {
+  readonly url: string;
+  readonly status: number;
+
+  constructor(url: string, status: number, message: string) {
+    super(message);
+    this.name = "CommercialBillingRequestError";
+    this.url = url;
+    this.status = status;
+  }
 }
 
 const MAX_OPTIONS = 32;
@@ -149,15 +188,40 @@ export async function loadCommercialBilling(
   input: CommercialBillingRequest,
 ): Promise<CommercialBillingSnapshot> {
   const workspaceQuery = workspaceSearch(input.workspaceId);
-  const [configuration, summary] = await Promise.all([
-    requestJson(endpoint(input.basePath, "config")),
+  const [configurationResult, summaryResult] = await Promise.allSettled([
+    requestJson(endpoint(input.basePath, "config")).then(
+      parseCommercialBillingConfiguration,
+    ),
     requestJson(
       `${endpoint(input.basePath, "summary")}?${workspaceQuery.toString()}`,
-    ),
+    ).then(parseCommercialBillingSummary),
   ]);
+  const configurationError =
+    configurationResult.status === "rejected"
+      ? new CommercialBillingLoadError(
+          "configuration",
+          configurationResult.reason,
+        )
+      : undefined;
+  const summaryError =
+    summaryResult.status === "rejected"
+      ? new CommercialBillingLoadError("summary", summaryResult.reason)
+      : undefined;
   return {
-    configuration: parseCommercialBillingConfiguration(configuration),
-    billing: parseCommercialBillingSummary(summary),
+    ...(configurationResult.status === "fulfilled"
+      ? { configuration: configurationResult.value }
+      : {}),
+    ...(summaryResult.status === "fulfilled"
+      ? { billing: summaryResult.value }
+      : {}),
+    ...(configurationError || summaryError
+      ? {
+          errors: {
+            ...(configurationError ? { configuration: configurationError } : {}),
+            ...(summaryError ? { summary: summaryError } : {}),
+          },
+        }
+      : {}),
   };
 }
 
@@ -587,7 +651,9 @@ async function requestJson(
   const value = await response.json().catch(() => undefined);
   if (!response.ok) {
     const error = objectValue(objectValue(value)?.error);
-    throw new Error(
+    throw new CommercialBillingRequestError(
+      url,
+      response.status,
       stringValue(error?.message) ??
         `billing request failed (${response.status})`,
     );

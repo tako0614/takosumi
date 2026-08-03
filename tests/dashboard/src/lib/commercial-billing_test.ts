@@ -8,6 +8,9 @@ import {
 } from "../../../../dashboard/src/lib/billing-return-url.ts";
 import {
   commercialBillingDestination,
+  CommercialBillingLoadError,
+  CommercialBillingRequestError,
+  loadCommercialBilling,
   loadCommercialBillingTransactions,
   parseCommercialBillingConfiguration,
   parseCommercialBillingSummary,
@@ -78,6 +81,95 @@ test("commercial billing configuration validates bounded credit choices", () => 
     5_000_000, 10_000_000,
   ]);
   expect(configuration.countryMatrix?.supportedCountries).toEqual(["JP", "US"]);
+});
+
+test("commercial billing keeps configuration when the summary endpoint fails", async () => {
+  const originalFetch = globalThis.fetch;
+  const configuration = {
+    credits: {
+      currency: "USD",
+      purchaseOptionsUsdMicros: [5_000_000, 10_000_000],
+      autoRecharge: {
+        defaultSettings: {
+          enabled: false,
+          thresholdUsdMicros: 5_000_000,
+          rechargeUsdMicros: 10_000_000,
+          monthlyLimitUsdMicros: 100_000_000,
+        },
+        thresholdOptionsUsdMicros: [5_000_000],
+        rechargeOptionsUsdMicros: [10_000_000],
+        monthlyLimitOptionsUsdMicros: [100_000_000],
+      },
+    },
+  };
+  globalThis.fetch = (async (input) => {
+    const path = new URL(String(input), DASHBOARD_ORIGIN).pathname;
+    if (path.endsWith("/config")) return Response.json(configuration);
+    return Response.json(
+      { error: { message: "billing ledger unavailable" } },
+      { status: 503 },
+    );
+  }) as typeof fetch;
+  try {
+    const snapshot = await loadCommercialBilling({
+      basePath: "/v1/billing",
+      workspaceId: "workspace_1",
+    });
+    expect(snapshot.configuration?.credits.purchaseOptionsUsdMicros).toEqual([
+      5_000_000,
+      10_000_000,
+    ]);
+    expect(snapshot.billing).toBeUndefined();
+    const summaryError = snapshot.errors?.summary;
+    expect(summaryError).toBeInstanceOf(CommercialBillingLoadError);
+    expect(summaryError?.phase).toBe("summary");
+    expect(summaryError?.status).toBe(503);
+    expect(summaryError?.cause).toBeInstanceOf(CommercialBillingRequestError);
+    expect(
+      (summaryError?.cause as CommercialBillingRequestError).url,
+    ).toContain("/v1/billing/summary?");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("commercial billing never fabricates a summary for an invalid response", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input) => {
+    const path = new URL(String(input), DASHBOARD_ORIGIN).pathname;
+    if (path.endsWith("/config")) {
+      return Response.json({
+        credits: {
+          currency: "USD",
+          purchaseOptionsUsdMicros: [1_000_000],
+          autoRecharge: {
+            defaultSettings: {
+              enabled: false,
+              thresholdUsdMicros: 1_000_000,
+              rechargeUsdMicros: 1_000_000,
+              monthlyLimitUsdMicros: 1_000_000,
+            },
+            thresholdOptionsUsdMicros: [1_000_000],
+            rechargeOptionsUsdMicros: [1_000_000],
+            monthlyLimitOptionsUsdMicros: [1_000_000],
+          },
+        },
+      });
+    }
+    return Response.json({ billing: { configured: true } });
+  }) as typeof fetch;
+  try {
+    const snapshot = await loadCommercialBilling({
+      basePath: "/v1/billing",
+      workspaceId: "workspace_1",
+    });
+    expect(snapshot.configuration).toBeDefined();
+    expect(snapshot.billing).toBeUndefined();
+    expect(snapshot.errors?.summary?.phase).toBe("summary");
+    expect(snapshot.errors?.summary?.cause).toBeInstanceOf(Error);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("commercial billing summary projects current credit, not lifetime purchases", () => {
@@ -297,8 +389,11 @@ test("native commercial billing stays provider-neutral and uses extension APIs",
   expect(component).not.toContain("balance.purchased");
   expect(component).not.toContain("Stripe");
   expect(component).not.toContain("cloud-billing");
+  expect(component).toContain("snapshotValue()?.errors?.summary");
+  expect(component).toContain("purchaseOptionsUsdMicros");
   expect(client).toContain('"config"');
   expect(client).toContain('"summary"');
+  expect(client).toContain("Promise.allSettled");
   expect(client).toContain('"checkout"');
   expect(client).toContain('"auto-recharge"');
   expect(client).toContain('"portal"');

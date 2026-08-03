@@ -30,8 +30,10 @@ import {
   beginCommercialBillingCheckout,
   type CommercialBillingAccount,
   type CommercialBillingAutoRechargeSettings,
+  type CommercialBillingConfiguration,
   type CommercialBillingCustomerType,
   type CommercialBillingPayment,
+  type CommercialBillingSummary,
   type CommercialBillingTransaction,
   loadCommercialBilling,
   loadCommercialBillingTransactions,
@@ -71,6 +73,11 @@ const TRANSACTION_STATUS_KEYS: Readonly<Record<string, MessageKey>> = {
   reversed: "billing.commercial.transaction.status.reversed",
 };
 const TRANSACTION_PAGE_LIMIT = 20;
+
+type CompleteCommercialBillingSnapshot = {
+  readonly configuration: CommercialBillingConfiguration;
+  readonly billing: CommercialBillingSummary;
+};
 
 export default function CommercialBillingPanel(props: Props) {
   const [snapshot, { refetch }] = createResource(
@@ -112,6 +119,23 @@ export default function CommercialBillingPanel(props: Props) {
     if (snapshot.error) return undefined;
     return snapshot();
   });
+  const completeSnapshot = createMemo<
+    CompleteCommercialBillingSnapshot | undefined
+  >(() => {
+    const current = snapshotValue();
+    return current?.configuration && current.billing
+      ? {
+          configuration: current.configuration,
+          billing: current.billing,
+        }
+      : undefined;
+  });
+  const configurationOnly = createMemo(() => {
+    const current = snapshotValue();
+    return current?.configuration && !current.billing
+      ? current.configuration
+      : undefined;
+  });
   const transactionPageValue = createMemo(() => {
     if (transactionPage.error) return undefined;
     return transactionPage();
@@ -119,10 +143,10 @@ export default function CommercialBillingPanel(props: Props) {
 
   createEffect(() => {
     const current = snapshotValue();
-    const account = current?.billing.account;
+    const account = current?.billing?.account;
     if (account?.customerType) setCustomerType(account.customerType);
     if (account?.taxJurisdiction) setCountry(account.taxJurisdiction);
-    if (current?.billing.credits.autoRecharge) {
+    if (current?.billing?.credits.autoRecharge) {
       setAutoRecharge(current.billing.credits.autoRecharge);
     }
   });
@@ -144,8 +168,8 @@ export default function CommercialBillingPanel(props: Props) {
   const hasEstablishedProfile = createMemo(() => {
     const current = snapshotValue();
     return Boolean(
-      current?.billing.account?.customerType &&
-        current?.billing.account?.taxJurisdiction,
+      current?.billing?.account?.customerType &&
+        current?.billing?.account?.taxJurisdiction,
     );
   });
   const autoRechargeSummary = createMemo(() => {
@@ -310,7 +334,7 @@ export default function CommercialBillingPanel(props: Props) {
   ) => {
     const current =
       autoRecharge() ??
-      snapshotValue()?.configuration.credits.autoRecharge.defaultSettings;
+      snapshotValue()?.configuration?.credits.autoRecharge.defaultSettings;
     if (current) setAutoRecharge({ ...current, ...patch });
   };
 
@@ -362,6 +386,30 @@ export default function CommercialBillingPanel(props: Props) {
           </Button>
         </Toast>
       </Show>
+      <Show when={snapshotValue()?.errors?.configuration}>
+        {(error) => (
+          <Toast tone="error">
+            {t("billing.commercial.loadError", {
+              message: friendlyError(error(), t).message,
+            })}
+            <Button size="sm" variant="secondary" onClick={() => void refetch()}>
+              {t("common.retry")}
+            </Button>
+          </Toast>
+        )}
+      </Show>
+      <Show when={snapshotValue()?.errors?.summary}>
+        {(error) => (
+          <Toast tone="error">
+            {t("billing.commercial.loadError", {
+              message: friendlyError(error(), t).message,
+            })}
+            <Button size="sm" variant="secondary" onClick={() => void refetch()}>
+              {t("common.retry")}
+            </Button>
+          </Toast>
+        )}
+      </Show>
       <Show when={snapshot.loading}>
         <Card class="wb-billing-loading">
           <Skeleton variant="row" count={2} />
@@ -369,7 +417,34 @@ export default function CommercialBillingPanel(props: Props) {
         </Card>
       </Show>
 
-      <Show when={snapshotValue()}>
+      <Show when={configurationOnly()}>
+        {(configuration) => (
+          <Card class="wb-billing-add">
+            <CardHeader
+              title={props.title}
+              subtitle={
+                props.description ?? t("billing.commercial.description")
+              }
+            />
+            <div class="wb-billing-amount-picker" aria-disabled="true">
+              <For each={configuration().credits.purchaseOptionsUsdMicros}>
+                {(amount) => (
+                  <Button
+                    class="wb-billing-amount"
+                    variant="secondary"
+                    disabled
+                  >
+                    <strong>{formatUsdMicros(amount)}</strong>
+                    <span>{t("billing.commercial.credits.add")}</span>
+                  </Button>
+                )}
+              </For>
+            </div>
+          </Card>
+        )}
+      </Show>
+
+      <Show when={completeSnapshot()}>
         {(data) => (
           <>
             <Show when={!data().billing.configured}>
