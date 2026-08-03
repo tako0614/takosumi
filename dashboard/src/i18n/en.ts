@@ -1385,7 +1385,7 @@ export const en: Record<keyof typeof ja, string> = {
   "resources.editor.scheduleConnection": "Connection name",
   "resources.editor.scheduleTarget": "Target resource",
   "resources.editor.scheduleTargetHint":
-    "Resource reference invoked through the schedule_trigger projection.",
+    "Resource reference invoked through the schedule.trigger.v1 connection.",
   "resources.editor.scheduleCronRequired": "Enter a cron expression.",
   "resources.editor.scheduleCronInvalid":
     "Cron must contain exactly five fields.",

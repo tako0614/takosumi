@@ -834,7 +834,7 @@ export function readScheduleServiceForm(
     !isJsonObject(candidate) ||
     !hasOnlyKeys(candidate, ["resource", "permissions", "projection"]) ||
     !stringValue(candidate.resource) ||
-    candidate.projection !== "schedule_trigger" ||
+    candidate.projection !== "schedule.trigger.v1" ||
     !Array.isArray(candidate.permissions) ||
     candidate.permissions.length !== 1 ||
     candidate.permissions[0] !== "invoke"
@@ -1093,7 +1093,7 @@ function scheduleSpec(form: ScheduleServiceForm): ResourceShapeJsonObject {
       [connectionName || "target"]: {
         resource: form.targetResource.trim(),
         permissions: ["invoke"],
-        projection: "schedule_trigger",
+        projection: "schedule.trigger.v1",
       },
     },
   };

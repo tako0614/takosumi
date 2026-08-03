@@ -1394,7 +1394,7 @@ export const ja = {
   "resources.editor.scheduleConnection": "Connection name",
   "resources.editor.scheduleTarget": "Target resource",
   "resources.editor.scheduleTargetHint":
-    "schedule_trigger projection で呼び出す Resource reference です。",
+    "schedule.trigger.v1 connection で呼び出す Resource reference です。",
   "resources.editor.scheduleCronRequired":
     "Cron expression を入力してください。",
   "resources.editor.scheduleCronInvalid":

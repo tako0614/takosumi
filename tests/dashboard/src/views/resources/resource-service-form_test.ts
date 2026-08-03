@@ -235,6 +235,70 @@ describe("provider-neutral Resource service forms", () => {
     }
   });
 
+  test("pins Schedule to the current versioned EdgeWorker trigger connection", () => {
+    const form: GuidedResourceServiceForm = {
+      kind: "Schedule",
+      form: {
+        name: "hourly",
+        cron: "0 * * * *",
+        timezone: "UTC",
+        connectionName: "invocation",
+        targetResource: "EdgeWorker/edge",
+      },
+    };
+    expect(buildGuidedResourceServiceSpec(form)).toEqual({
+      ok: true,
+      value: {
+        name: "hourly",
+        cron: "0 * * * *",
+        timezone: "UTC",
+        connections: {
+          invocation: {
+            resource: "EdgeWorker/edge",
+            permissions: ["invoke"],
+            projection: "schedule.trigger.v1",
+          },
+        },
+      },
+    });
+    expect(
+      readGuidedResourceServiceForm(
+        "Schedule",
+        {
+          name: "hourly",
+          cron: "0 * * * *",
+          timezone: "UTC",
+          connections: {
+            invocation: {
+              resource: "EdgeWorker/edge",
+              permissions: ["invoke"],
+              projection: "schedule.trigger.v1",
+            },
+          },
+        },
+        "hourly",
+      ),
+    ).toEqual(form);
+    expect(
+      readGuidedResourceServiceForm(
+        "Schedule",
+        {
+          name: "hourly",
+          cron: "0 * * * *",
+          timezone: "UTC",
+          connections: {
+            invocation: {
+              resource: "EdgeWorker/edge",
+              permissions: ["invoke"],
+              projection: "schedule_trigger",
+            },
+          },
+        },
+        "hourly",
+      ),
+    ).toBeUndefined();
+  });
+
   test("validates required and integer fields before preview", () => {
     expect(
       buildGuidedResourceServiceSpec({
@@ -381,5 +445,16 @@ describe("provider-neutral Resource service forms", () => {
         properties: { name: { type: "string" } },
       }),
     ).toBe(false);
+    expect(
+      guidedResourceServiceSchemaCovers("Schedule", {
+        type: "object",
+        properties: {
+          name: { type: "string" },
+          cron: { type: "string" },
+          timezone: { type: "string", default: "UTC" },
+          connections: { type: "object" },
+        },
+      }),
+    ).toBe(true);
   });
 });
