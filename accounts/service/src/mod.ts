@@ -7,8 +7,6 @@ import {
   TAKOSUMI_ACCOUNTS_AUTH_PROVIDERS_PATH,
   TAKOSUMI_ACCOUNTS_AUTHORIZE_PATH,
   TAKOSUMI_ACCOUNTS_INTROSPECT_PATH,
-  TAKOSUMI_ACCOUNTS_JWKS_PATH,
-  TAKOSUMI_ACCOUNTS_OIDC_DISCOVERY_PATH,
   TAKOSUMI_ACCOUNTS_PASSKEY_AUTHENTICATE_COMPLETE_PATH,
   TAKOSUMI_ACCOUNTS_PASSKEY_AUTHENTICATE_OPTIONS_PATH,
   TAKOSUMI_ACCOUNTS_PASSKEY_REGISTER_COMPLETE_PATH,
@@ -72,12 +70,12 @@ import {
 } from "./oidc-routes.ts";
 import {
   errorJson,
-  json,
   methodNotAllowed,
   RequestBodyReadError,
   readJsonObject,
   stringValue,
 } from "./http-helpers.ts";
+import { createAccountsHttpApp } from "./http-app.ts";
 import { constantTimeEqual } from "./encoding.ts";
 import {
   extractAccountSessionId,
@@ -474,21 +472,6 @@ export function createAccountsHandler(
     const store = createRequestScopedAccountsStore(baseStore);
     const timings = serverTimingBucketForPath(url.pathname);
 
-    if (url.pathname === "/healthz") {
-      if (!isGetOrHead(request)) return methodNotAllowed("GET, HEAD");
-      return json({ ok: true, service: "takosumi-accounts" });
-    }
-
-    if (url.pathname === TAKOSUMI_ACCOUNTS_OIDC_DISCOVERY_PATH) {
-      if (!isGetOrHead(request)) return methodNotAllowed("GET, HEAD");
-      return json(discovery);
-    }
-
-    if (url.pathname === TAKOSUMI_ACCOUNTS_JWKS_PATH) {
-      if (!isGetOrHead(request)) return methodNotAllowed("GET, HEAD");
-      return json(jwks);
-    }
-
     const ingressFailure = accountsIngressSecurityFailure(request, url, issuer);
     if (ingressFailure) return ingressFailure;
 
@@ -783,10 +766,20 @@ export function createAccountsHandler(
     return errorJson("not_found", "not found", 404, request);
   };
 
+  const app = createAccountsHttpApp({
+    discovery,
+    jwks,
+    legacyFallback: (request) => inner(request),
+  });
+
+  // Keep the public fetch-function contract while making the Hono app the
+  // actual HTTP dispatcher. The fallback above is an in-process handoff for
+  // route families that have not migrated yet; it never performs a nested
+  // external fetch.
   return async (request: Request): Promise<Response> => {
     let response: Response;
     try {
-      response = await inner(request);
+      response = await app.fetch(request);
     } catch (error) {
       if (!(error instanceof RequestBodyReadError)) throw error;
       response = errorJson(error.code, error.message, error.status, request);
@@ -897,10 +890,6 @@ export function startAccountsServer(
     },
     finished,
   };
-}
-
-function isGetOrHead(request: Request): boolean {
-  return request.method === "GET" || request.method === "HEAD";
 }
 
 function accountsIngressSecurityFailure(

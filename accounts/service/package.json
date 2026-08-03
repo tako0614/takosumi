@@ -8,6 +8,7 @@
     ".": "./src/mod.ts"
   },
   "dependencies": {
-    "@takosjp/takosumi-accounts-contract": "workspace:*"
+    "@takosjp/takosumi-accounts-contract": "workspace:*",
+    "hono": "^4.12.27"
   }
 }
