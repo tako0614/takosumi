@@ -500,7 +500,7 @@ export function createAccountsHandler(
           rejectDisallowedPresentedSession({
             request,
             store,
-            sessionId: extractAccountSessionId(request),
+            credential: extractAccountSessionId(request),
             allowlist: loginEmailAllowlist,
             secureCookie: isProductionIssuer,
           }),
@@ -537,6 +537,7 @@ export function createAccountsHandler(
         ...(options.controlPlaneOperations
           ? { operations: options.controlPlaneOperations }
           : {}),
+        ...(loginEmailAllowlist ? { loginEmailAllowlist } : {}),
       });
     }
 

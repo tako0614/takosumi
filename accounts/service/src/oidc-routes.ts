@@ -1,4 +1,7 @@
-import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
+import {
+  TAKOSUMI_ACCOUNTS_CAPSULE_OAUTH_SCOPES,
+  type TakosumiSubject,
+} from "@takosjp/takosumi-accounts-contract";
 import type {
   AccountsStore,
   AuthorizationCodeRecord,
@@ -39,6 +42,10 @@ import {
   validateOidcLiveGrant,
   type OidcLiveGrantFailureReason,
 } from "./oidc-live-grant.ts";
+import {
+  accountMatchesLoginAllowlist,
+  type LoginEmailAllowlist,
+} from "./login-email-allowlist.ts";
 
 // OIDC token / code lifetimes. These have safe production defaults and are
 // operator-configurable via env (mirroring how passkey/session TTLs are
@@ -360,6 +367,27 @@ export function scopeIsAllowed(
   return requested.length > 0 && requested.every((scope) => allowed.has(scope));
 }
 
+/**
+ * Control-plane delegation scopes are never implied by a registration. A client
+ * that does not name them in `allowedScopes` has no declared authority over
+ * Workspaces, Capsules, or Runs, so an SSO-only registration cannot widen
+ * itself into deploy control by editing its own authorize URL. Every other
+ * scope — `profile`, `email`, `offline_access`, product scopes — is untouched
+ * by this check, and a registration that does declare a delegation scope keeps
+ * it.
+ */
+function undeclaredDelegationScopes(
+  requestedScope: string,
+  allowedScopes: readonly string[] | undefined,
+): string[] {
+  const declared = new Set(allowedScopes ?? []);
+  const delegation = new Set<string>(TAKOSUMI_ACCOUNTS_CAPSULE_OAUTH_SCOPES);
+  return requestedScope
+    .trim()
+    .split(/\s+/)
+    .filter((scope) => delegation.has(scope) && !declared.has(scope));
+}
+
 export async function handleAuthorize(input: {
   request: Request;
   url: URL;
@@ -450,6 +478,24 @@ export async function handleAuthorize(input: {
       400,
     );
   }
+  // Minting gate only: a code/token already issued under an undeclared
+  // delegation scope keeps working, so this cannot break an existing refresh
+  // chain. It refuses the scope up front, before any grant is created.
+  const undeclaredDelegation = undeclaredDelegationScopes(
+    scope,
+    client.allowedScopes,
+  );
+  if (undeclaredDelegation.length > 0) {
+    return json(
+      {
+        error: "invalid_scope",
+        error_description:
+          "control-plane delegation scope is not declared by this client registration: " +
+          undeclaredDelegation.join(" "),
+      },
+      400,
+    );
+  }
   const session = await requireAccountSession({
     request: input.request,
     store: input.store,
@@ -512,6 +558,7 @@ export async function handleToken(input: {
   flow: OidcAuthorizationCodeFlow;
   clients: ReadonlyMap<string, OidcClientRegistration>;
   operations?: ControlPlaneOperations;
+  loginEmailAllowlist?: LoginEmailAllowlist;
 }): Promise<Response> {
   const params = await readFormUrlEncoded(input.request);
   const grantType = params.get("grant_type");
@@ -524,6 +571,7 @@ export async function handleToken(input: {
       flow: input.flow,
       clients: input.clients,
       operations: input.operations,
+      loginEmailAllowlist: input.loginEmailAllowlist,
     });
   }
   if (grantType !== "authorization_code") {
@@ -630,6 +678,7 @@ async function handleRefreshToken(input: {
   flow: OidcAuthorizationCodeFlow;
   clients: ReadonlyMap<string, OidcClientRegistration>;
   operations?: ControlPlaneOperations;
+  loginEmailAllowlist?: LoginEmailAllowlist;
 }): Promise<Response> {
   const refreshToken = input.params.get("refresh_token");
   if (!refreshToken) return json({ error: "invalid_grant" }, 400);
@@ -703,6 +752,24 @@ async function handleRefreshToken(input: {
   if (!liveGrant.ok) {
     await input.store.revokeRefreshChain(refreshToken);
     return json({ error: "invalid_grant" }, 400);
+  }
+
+  // The deployment login allowlist governs continued authority, not only the
+  // initial sign-in: a subject that is no longer allowed must not be able to
+  // renew OAuth access indefinitely through refresh-token rotation. The token
+  // row is left in place so restoring the address restores the grant; only the
+  // renewal is refused. Deployments without an allowlist do no lookup here.
+  const refreshSubject = record.takosumiSubject;
+  if (input.loginEmailAllowlist && refreshSubject) {
+    const account = await observeSlowOidcRefreshStage("login_allowlist", () =>
+      input.store.findAccount(refreshSubject),
+    );
+    if (
+      !account ||
+      !accountMatchesLoginAllowlist(account, input.loginEmailAllowlist)
+    ) {
+      return json({ error: "invalid_grant" }, 400);
+    }
   }
 
   // Rotate: mint a brand-new refresh token, invalidate the old one, and
