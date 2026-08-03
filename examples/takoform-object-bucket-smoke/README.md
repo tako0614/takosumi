@@ -14,9 +14,14 @@ Example smoke source settings:
 
 ```text
 source-git-url = https://github.com/tako0614/takosumi.git
-source-path    = examples/takoform-object-bucket-smoke
-module-path    = .
+source-path    = .
+module-path    = examples/takoform-object-bucket-smoke
 ```
+
+`source-path` selects the archived subtree of the Git source, while
+`module-path` is resolved inside that archive. Keeping the repository root in
+the snapshot also keeps the repository-owned `takosumi.json` install metadata
+available during Capsule installation.
 
 Set `--provider-connection-id` (or
 `TAKOSUMI_SMOKE_PROVIDER_CONNECTION_ID`) to an operator-provided Takoform
