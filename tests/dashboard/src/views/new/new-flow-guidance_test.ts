@@ -124,7 +124,8 @@ describe("/new flow guidance", () => {
     );
     expect(newAppViewSource).toContain("config.sourceSelector");
     expect(newAppViewSource).toContain("installConfigForStoreListing");
-    expect(newAppViewSource).toContain("uniqueStoreInstallConfigForSource");
+    expect(newAppViewSource).not.toContain("storeInstallConfigUnavailable");
+    expect(newAppViewSource).not.toContain('t("new.error.storeConfigUnavailable")');
     expect(newAppViewSource).not.toContain("genericInstallConfigForSource");
     expect(newAppViewSource).not.toContain("const primaryStore = createMemo");
     expect(newAppViewSource).not.toContain(
@@ -296,9 +297,8 @@ describe("/new flow guidance", () => {
       "...(listing.source.ref ? { ref: listing.source.ref } : {})",
     );
     expect(newAppViewSource).toContain("url: listing.source.url");
-    expect(newAppViewSource).toContain(
-      "uniqueStoreInstallConfigForSource(\n      fetchedInstallConfigList(),\n      listing.source.url,\n      listing.source.path",
-    );
+    expect(newAppViewSource).not.toContain("listing.source.path");
+    expect(newAppViewSource).toContain("return sameGitUrl(listing.source.url, sourceGitUrl())");
     expect(newAppViewSource).not.toContain(
       "listing.source.ref.trim() !== sourceRef().trim()",
     );
@@ -311,11 +311,10 @@ describe("/new flow guidance", () => {
 
   test("direct Git links select only a unique service-side URL/path InstallConfig", () => {
     expect(newAppViewSource).toContain("sourceCoordinateForInstallConfig");
-    expect(newAppViewSource).toContain("storeInstallConfigsForSource(");
+    expect(newAppViewSource).toContain("installConfigSourceCoordinateMatches");
     expect(newAppViewSource).toContain("sourceMatches.length === 1");
     expect(newAppViewSource).toContain("sourceMatches.length === 0");
     expect(newAppViewSource).toContain(': "";');
-    expect(newAppViewSource).toContain("uniqueStoreInstallConfigForSource");
     expect(newAppViewSource).not.toContain("listing.source.ref.trim()");
   });
 
@@ -749,6 +748,10 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain(
       "const compileInstallUx = selectedStoreListing() !== null",
     );
+    expect(newAppViewSource).toContain(
+      'path: selectedStoreListing() ? "." : installModulePath()',
+    );
+    expect(newAppViewSource).toContain("...(compatibilityInstallConfigId");
     expect(controlApiSource).toContain("compileInstallUx: true");
     expect(controlApiSource).toContain("capsuleName: input.name");
     expect(newAppViewSource).toContain(

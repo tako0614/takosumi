@@ -10,6 +10,7 @@ import { createTakosumiService } from "../../../../core/bootstrap.ts";
 import type { RepositoryManifestDocument } from "takosumi-contract/repository-manifest";
 import type {
   OpenTofuApplyJob,
+  OpenTofuCapsuleSourceFilesJob,
   OpenTofuDestroyJob,
   OpenTofuPlanJob,
   OpenTofuPlanResult,
@@ -37,9 +38,10 @@ const STATE_DIGEST =
   "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
 
 const REPOSITORY_INTERFACE_MANIFEST = {
-  apiVersion: "takosumi.com/v2",
+  apiVersion: "takosumi.com/v2.1",
   kind: "Repository",
   install: {
+    defaultModule: ".",
     modules: {
       ".": {
         inputs: [],
@@ -100,6 +102,7 @@ interface RecordingRunner extends OpenTofuRunner {
   readonly destroyJobs: OpenTofuDestroyJob[];
   readonly stableTagJobs: OpenTofuStableSourceTagResolutionJob[];
   readonly presentationFileJobs: OpenTofuSourceSnapshotPresentationFileJob[];
+  readonly capsuleSourceFileJobs: OpenTofuCapsuleSourceFilesJob[];
 }
 
 function recordingRunner(
@@ -110,12 +113,14 @@ function recordingRunner(
   const destroyJobs: OpenTofuDestroyJob[] = [];
   const stableTagJobs: OpenTofuStableSourceTagResolutionJob[] = [];
   const presentationFileJobs: OpenTofuSourceSnapshotPresentationFileJob[] = [];
+  const capsuleSourceFileJobs: OpenTofuCapsuleSourceFilesJob[] = [];
   return {
     planJobs,
     applyJobs,
     destroyJobs,
     stableTagJobs,
     presentationFileJobs,
+    capsuleSourceFileJobs,
     plan: (job) => {
       planJobs.push(job);
       return Promise.resolve({
@@ -154,8 +159,9 @@ function recordingRunner(
         providerInstallation: [FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE],
       });
     },
-    readCapsuleSourceFiles: () =>
-      Promise.resolve([
+    readCapsuleSourceFiles: (job) => {
+      capsuleSourceFileJobs.push(job);
+      return Promise.resolve([
         {
           path: "main.tf",
           text: `
@@ -178,7 +184,8 @@ output "launch_url" {
 }
 `,
         },
-      ]),
+      ]);
+    },
     resolveStableSourceTag: (job) => {
       stableTagJobs.push(job);
       return Promise.resolve({
@@ -274,6 +281,406 @@ async function controlJson<T>(
   );
   return (await response!.json()) as T;
 }
+
+function storeEligibleInstallConfig(url: string) {
+  return {
+    sourceSelector: { url, path: "legacy/policy-path" },
+    store: {
+      source: { url, path: "legacy/store-path" },
+      order: 1,
+      surface: "service",
+      kind: "application",
+      provider: "portable",
+      suggestedName: "test-app",
+      badge: { ja: "App", en: "App" },
+      name: { ja: "Test app", en: "Test app" },
+      description: { ja: "Fixture", en: "Fixture" },
+    },
+  };
+}
+
+test("Store preflight resolves the repository default before exact compatibility while manual Git keeps explicit modulePath", async () => {
+  const accountStore = new InMemoryAccountsStore();
+  const cookie = seedSession(accountStore);
+  const deployStore = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner();
+  const { operations } = await createTakosumiService({
+    role: "takosumi-api",
+    runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
+    opentofuControlStore: deployStore,
+    opentofuRunner: runner,
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+  });
+  const repositoryUrl =
+    "https://git.example.com/example/repository-default.git";
+  const seeded = await seedCapsuleModel(deployStore, {
+    workspaceId: "ws_repo_default_preflight",
+    capsuleId: "cap_repo_default_seed",
+    installConfigId: "icfg_repo_default_base",
+    sourceUrl: repositoryUrl,
+    installConfig: {
+      modulePath: ".",
+      sourceSelector: {
+        url: "https://git.example.com/example/repository-default/",
+        path: "legacy/policy-path",
+      },
+      store: {
+        source: {
+          url: "https://git.example.com/example/repository-default",
+          path: "legacy/store-path",
+        },
+        order: 1,
+        surface: "service",
+        kind: "application",
+        provider: "portable",
+        suggestedName: "repo-default",
+        badge: { ja: "App", en: "App" },
+        name: { ja: "Repo default", en: "Repo default" },
+        description: { ja: "Fixture", en: "Fixture" },
+      },
+    },
+  });
+  const digest = `sha256:${"c".repeat(64)}`;
+  await deployStore.putSourceSnapshot({
+    ...seeded.snapshot,
+    repositoryManifest: {
+      status: "present",
+      digest,
+      document: {
+        apiVersion: "takosumi.com/v2.1",
+        kind: "Repository",
+        install: {
+          defaultModule: "deploy/takoform",
+          modules: {
+            ".": { inputs: [] },
+            "deploy/takoform": { inputs: [] },
+          },
+        },
+      },
+    },
+  });
+
+  const preview = await controlJson<{
+    readonly repositoryInstallUx: {
+      readonly status: "accepted";
+      readonly installConfigId: string;
+    };
+  }>(
+    {
+      operations,
+      store: accountStore,
+      cookie,
+      method: "POST",
+      path: `/api/v1/sources/${seeded.source.id}/compatibility-check`,
+      body: {
+        sourceSnapshotId: seeded.snapshot.id,
+        capsuleName: "repo-default",
+        compileInstallUx: true,
+      },
+    },
+    201,
+  );
+
+  expect(runner.capsuleSourceFileJobs).toHaveLength(1);
+  expect(runner.capsuleSourceFileJobs[0]?.modulePath).toBe("deploy/takoform");
+  const derivedInstallConfig = await operations.capsules.getInstallConfig(
+    preview.repositoryInstallUx.installConfigId,
+  );
+  expect(derivedInstallConfig.modulePath).toBe("deploy/takoform");
+  expect(derivedInstallConfig.sourceSelector).toEqual({
+    url: seeded.source.url,
+    path: seeded.source.defaultPath,
+  });
+
+  const createdFromDerivedConfig = await controlJson<{
+    readonly capsule: { readonly id: string; readonly installConfigId: string };
+  }>(
+    {
+      operations,
+      store: accountStore,
+      cookie,
+      method: "POST",
+      path: `/api/v1/workspaces/${seeded.workspace.id}/capsules`,
+      body: {
+        name: "repo-default-derived-create",
+        environment: "production",
+        sourceId: seeded.source.id,
+        installConfigId: derivedInstallConfig.id,
+      },
+    },
+    201,
+  );
+  const createdFromDerivedInstallConfig =
+    await operations.capsules.getInstallConfig(
+      createdFromDerivedConfig.capsule.installConfigId,
+    );
+  expect(createdFromDerivedInstallConfig.modulePath).toBe(
+    "deploy/takoform",
+  );
+
+  const whitespaceDerivedConfig = await operations.capsules.putInstallConfig({
+    ...derivedInstallConfig,
+    id: "icfg_repo_default_whitespace",
+    name: "repo-default-whitespace",
+    modulePath: " deploy/takoform ",
+  });
+  const whitespaceModuleOverride = await controlJson<{
+    readonly error: {
+      readonly code: string;
+      readonly details?: { readonly diagnosticCode?: string };
+    };
+  }>(
+    {
+      operations,
+      store: accountStore,
+      cookie,
+      method: "POST",
+      path: `/api/v1/workspaces/${seeded.workspace.id}/capsules`,
+      body: {
+        name: "repo-default-whitespace-override",
+        environment: "production",
+        sourceId: seeded.source.id,
+        installConfigId: whitespaceDerivedConfig.id,
+        modulePath: "deploy/takoform",
+      },
+    },
+    400,
+  );
+  expect(whitespaceModuleOverride.error).toMatchObject({
+    code: "repository_install_ux_invalid",
+    details: {
+      diagnosticCode: "repository_install_ux_module_path_mismatch",
+    },
+  });
+
+  const emptyDerivedConfig = await operations.capsules.putInstallConfig({
+    ...derivedInstallConfig,
+    id: "icfg_repo_default_empty",
+    name: "repo-default-empty",
+    modulePath: "",
+  });
+  const emptyDerivedModule = await controlJson<{
+    readonly error: {
+      readonly code: string;
+      readonly details?: { readonly diagnosticCode?: string };
+    };
+  }>(
+    {
+      operations,
+      store: accountStore,
+      cookie,
+      method: "POST",
+      path: `/api/v1/workspaces/${seeded.workspace.id}/capsules`,
+      body: {
+        name: "repo-default-empty-module",
+        environment: "production",
+        sourceId: seeded.source.id,
+        installConfigId: emptyDerivedConfig.id,
+      },
+    },
+    400,
+  );
+  expect(emptyDerivedModule.error).toMatchObject({
+    code: "repository_install_ux_invalid",
+    details: {
+      diagnosticCode: "repository_install_ux_module_path_missing",
+    },
+  });
+
+  await deployStore.putSourceSnapshot({
+    ...seeded.snapshot,
+    repositoryManifest: {
+      status: "present",
+      digest,
+      document: {
+        apiVersion: "takosumi.com/v2",
+        kind: "Repository",
+        install: {
+          modules: {
+            "deploy/first": { inputs: [] },
+            "deploy/second": { inputs: [] },
+          },
+        },
+      },
+    },
+  });
+  const missingDefault = await controlJson<{
+    readonly error: {
+      readonly code: string;
+      readonly details?: { readonly diagnosticCode?: string };
+    };
+  }>(
+    {
+      operations,
+      store: accountStore,
+      cookie,
+      method: "POST",
+      path: `/api/v1/sources/${seeded.source.id}/compatibility-check`,
+      body: {
+        sourceSnapshotId: seeded.snapshot.id,
+        capsuleName: "repo-default",
+        compileInstallUx: true,
+      },
+    },
+    400,
+  );
+  expect(missingDefault.error).toMatchObject({
+    code: "repository_install_ux_invalid",
+    details: {
+      diagnosticCode: "repository_install_ux_default_module_missing",
+    },
+  });
+  expect(runner.capsuleSourceFileJobs).toHaveLength(1);
+
+  await deployStore.putSourceSnapshot({
+    ...seeded.snapshot,
+    repositoryManifest: {
+      status: "present",
+      digest,
+      document: {
+        apiVersion: "takosumi.com/v2.1",
+        kind: "Repository",
+        install: {
+          defaultModule: "deploy/takoform",
+          modules: {
+            ".": { inputs: [] },
+            "deploy/takoform": { inputs: [] },
+          },
+        },
+      },
+    },
+  });
+  await deployStore.putInstallConfig({
+    ...seeded.installConfig,
+    id: "icfg_repo_default_ambiguous",
+    name: "repo-default-ambiguous",
+  });
+  const ambiguous = await controlJson<{
+    readonly error: {
+      readonly code: string;
+      readonly details?: { readonly diagnosticCode?: string };
+    };
+  }>(
+    {
+      operations,
+      store: accountStore,
+      cookie,
+      method: "POST",
+      path: `/api/v1/sources/${seeded.source.id}/compatibility-check`,
+      body: {
+        sourceSnapshotId: seeded.snapshot.id,
+        capsuleName: "repo-default",
+        compileInstallUx: true,
+      },
+    },
+    400,
+  );
+  expect(ambiguous.error).toMatchObject({
+    code: "repository_install_ux_invalid",
+    details: {
+      diagnosticCode: "repository_install_ux_base_config_ambiguous",
+    },
+  });
+  expect(runner.capsuleSourceFileJobs).toHaveLength(1);
+
+  const missing = await seedCapsuleModel(deployStore, {
+    workspaceId: seeded.workspace.id,
+    sourceId: "src_repo_default_missing",
+    snapshotId: "snap_repo_default_missing",
+    capsuleId: "cap_repo_default_missing",
+    installConfigId: "icfg_repo_default_unlisted",
+    name: "repo-default-missing",
+    sourceUrl: "https://git.example.com/example/unlisted.git",
+  });
+  await deployStore.putSourceSnapshot({
+    ...missing.snapshot,
+    repositoryManifest: {
+      status: "present",
+      digest,
+      document: {
+        apiVersion: "takosumi.com/v1",
+        kind: "Repository",
+        install: { modules: { "deploy/only": { inputs: [] } } },
+      },
+    },
+  });
+  const missingBase = await controlJson<{
+    readonly error: {
+      readonly code: string;
+      readonly details?: { readonly diagnosticCode?: string };
+    };
+  }>(
+    {
+      operations,
+      store: accountStore,
+      cookie,
+      method: "POST",
+      path: `/api/v1/sources/${missing.source.id}/compatibility-check`,
+      body: {
+        sourceSnapshotId: missing.snapshot.id,
+        capsuleName: "repo-default-missing",
+        compileInstallUx: true,
+      },
+    },
+    400,
+  );
+  expect(missingBase.error).toMatchObject({
+    code: "repository_install_ux_invalid",
+    details: {
+      diagnosticCode: "repository_install_ux_base_config_missing",
+    },
+  });
+  expect(runner.capsuleSourceFileJobs).toHaveLength(1);
+
+  await controlJson(
+    {
+      operations,
+      store: accountStore,
+      cookie,
+      method: "POST",
+      path: `/api/v1/sources/${seeded.source.id}/compatibility-check`,
+      body: {
+        sourceSnapshotId: seeded.snapshot.id,
+        modulePath: "deploy/manual",
+        installConfigId: seeded.installConfig.id,
+      },
+    },
+    201,
+  );
+  expect(runner.capsuleSourceFileJobs[1]?.modulePath).toBe("deploy/manual");
+
+  const manual = await seedCapsuleModel(deployStore, {
+    workspaceId: "ws_manual_module_create",
+    sourceId: "src_manual_module_create",
+    capsuleId: "cap_manual_module_seed",
+    installConfigId: "icfg_manual_module_base",
+    sourceUrl: "https://git.example.com/example/manual-module.git",
+    installConfig: { modulePath: "." },
+  });
+  const manualCreated = await controlJson<{
+    readonly capsule: { readonly id: string; readonly installConfigId: string };
+  }>(
+    {
+      operations,
+      store: accountStore,
+      cookie,
+      method: "POST",
+      path: `/api/v1/workspaces/${manual.workspace.id}/capsules`,
+      body: {
+        name: "manual-module-selection",
+        environment: "production",
+        sourceId: manual.source.id,
+        installConfigId: manual.installConfig.id,
+        modulePath: "deploy/manual",
+      },
+    },
+    201,
+  );
+  const manualConfig = await operations.capsules.getInstallConfig(
+    manualCreated.capsule.installConfigId,
+  );
+  expect(manualConfig.modulePath).toBe("deploy/manual");
+});
 
 test("a Workspace session cannot grant itself operator lifecycle actions through the Capsule config patch", async () => {
   const accountStore = new InMemoryAccountsStore();
@@ -420,6 +827,9 @@ test("account session control routes execute plan and apply through the real Ope
     workspaceId: "ws_route_e2e",
     capsuleId: "cap_route_e2e",
     environment: "preview",
+    installConfig: storeEligibleInstallConfig(
+      "https://git.example.com/example/app.git",
+    ),
   });
   await seedProviderConnections(deployStore, seeded.capsule);
   const installUxDigest = `sha256:${"d".repeat(64)}`;
@@ -524,8 +934,6 @@ test("account session control routes execute plan and apply through the real Ope
       path: `/api/v1/sources/${seeded.source.id}/compatibility-check`,
       body: {
         sourceSnapshotId: seeded.snapshot.id,
-        modulePath: ".",
-        installConfigId: seeded.installConfig.id,
         capsuleName: "route-preview",
         compileInstallUx: true,
       },
@@ -576,8 +984,6 @@ test("account session control routes execute plan and apply through the real Ope
       path: `/api/v1/sources/${seeded.source.id}/compatibility-check`,
       body: {
         sourceSnapshotId: seeded.snapshot.id,
-        modulePath: ".",
-        installConfigId: seeded.installConfig.id,
         capsuleName: "route-preview",
         compileInstallUx: true,
       },
@@ -597,10 +1003,10 @@ test("account session control routes execute plan and apply through the real Ope
     },
   });
   const invalidInstallUxPreview = await controlJson<{
-    readonly repositoryInstallUx: {
-      readonly status: "invalid";
-      readonly diagnosticCode: string;
+    readonly error: {
+      readonly code: string;
       readonly message: string;
+      readonly details?: { readonly diagnosticCode?: string };
     };
   }>(
     {
@@ -611,17 +1017,17 @@ test("account session control routes execute plan and apply through the real Ope
       path: `/api/v1/sources/${seeded.source.id}/compatibility-check`,
       body: {
         sourceSnapshotId: seeded.snapshot.id,
-        modulePath: ".",
-        installConfigId: seeded.installConfig.id,
         capsuleName: "route-preview",
         compileInstallUx: true,
       },
     },
-    201,
+    400,
   );
-  expect(invalidInstallUxPreview.repositoryInstallUx).toMatchObject({
-    status: "invalid",
-    diagnosticCode: "repository_install_ux_document_invalid",
+  expect(invalidInstallUxPreview.error).toMatchObject({
+    code: "repository_install_ux_invalid",
+    details: {
+      diagnosticCode: "repository_install_ux_document_invalid",
+    },
   });
   expect(JSON.stringify(invalidInstallUxPreview)).not.toContain(
     "bounded fixture diagnostic",
@@ -746,6 +1152,9 @@ test("authenticated repository Interface review persists exact proposals and app
     installConfigId: "icfg_repo_interface_base",
     name: "seed",
     installConfig: {
+      ...storeEligibleInstallConfig(
+        "https://git.example.com/example/app.git",
+      ),
       outputAllowlist: {},
       policy: {
         repositoryInstallUx: {
@@ -770,8 +1179,6 @@ test("authenticated repository Interface review persists exact proposals and app
     {
       body: {
         sourceSnapshotId: seeded.snapshot.id,
-        modulePath: ".",
-        installConfigId: seeded.installConfig.id,
         capsuleName: "repo-interface",
         compileInstallUx: true,
       },
@@ -799,8 +1206,6 @@ test("authenticated repository Interface review persists exact proposals and app
       path: `/api/v1/sources/${seeded.source.id}/compatibility-check`,
       body: {
         sourceSnapshotId: seeded.snapshot.id,
-        modulePath: ".",
-        installConfigId: seeded.installConfig.id,
         capsuleName: "repo-interface",
         compileInstallUx: true,
       },
@@ -856,6 +1261,64 @@ test("authenticated repository Interface review persists exact proposals and app
       },
     },
   ]);
+
+  const moduleOverride = await controlJson<{
+    readonly error: {
+      readonly code: string;
+      readonly details?: { readonly diagnosticCode?: string };
+    };
+  }>(
+    {
+      operations,
+      store: accountStore,
+      cookie,
+      method: "POST",
+      path: `/api/v1/workspaces/${seeded.workspace.id}/capsules`,
+      body: {
+        name: "repo-interface-module-override",
+        environment: "production",
+        sourceId: seeded.source.id,
+        installConfigId: previewConfig.id,
+        modulePath: "deploy/override",
+      },
+    },
+    400,
+  );
+  expect(moduleOverride.error).toMatchObject({
+    code: "repository_install_ux_invalid",
+    details: {
+      diagnosticCode: "repository_install_ux_module_path_mismatch",
+    },
+  });
+  expect(
+    (await operations.capsules.listCapsules(seeded.workspace.id)).some(
+      (entry) => entry.name === "repo-interface-module-override",
+    ),
+  ).toBe(false);
+
+  const matchingModule = await controlJson<{
+    readonly capsule: { readonly id: string; readonly installConfigId: string };
+  }>(
+    {
+      operations,
+      store: accountStore,
+      cookie,
+      method: "POST",
+      path: `/api/v1/workspaces/${seeded.workspace.id}/capsules`,
+      body: {
+        name: "repo-interface-module-match",
+        environment: "production",
+        sourceId: seeded.source.id,
+        installConfigId: previewConfig.id,
+        modulePath: ".",
+      },
+    },
+    201,
+  );
+  const matchingConfig = await operations.capsules.getInstallConfig(
+    matchingModule.capsule.installConfigId,
+  );
+  expect(matchingConfig.modulePath).toBe(previewConfig.modulePath);
 
   const otherCookie = seedSession(accountStore, "user_other");
   await operations.members.upsertMember({

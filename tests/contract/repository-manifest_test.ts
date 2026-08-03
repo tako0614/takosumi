@@ -1,5 +1,10 @@
 import { expect, test } from "bun:test";
+import Ajv2020 from "ajv/dist/2020.js";
 import { join } from "node:path";
+
+import repositoryManifestV2_1Schema from "../../docs/public/schemas/repository-manifest-v2.1.schema.json" with {
+  type: "json",
+};
 
 import {
   parseRepositoryManifestText,
@@ -55,7 +60,8 @@ test("repository manifest rejects unknown authority, fields, and versions", asyn
   parseRepositoryManifestText(await fixture("unknown-version.json")),
   ).toEqual({
     ok: false,
-    error: "apiVersion must be takosumi.com/v1 or takosumi.com/v2",
+    error:
+      "apiVersion must be takosumi.com/v1, takosumi.com/v2, or takosumi.com/v2.1",
   });
   expect(
     parseRepositoryManifestText(
@@ -165,6 +171,90 @@ test("a generated secret stays inside reviewed size bounds", async () => {
   }
 });
 
+test("a module may declare no more than eight generated secrets", async () => {
+  const document = JSON.parse(await fixture("valid.json"));
+  document.install.modules["."].requires = Array.from(
+    { length: 9 },
+    (_, index) => ({
+      kind: "secret.generated",
+      deliver: { bindings: { value: `GENERATED_SECRET_${index}` } },
+    }),
+  );
+
+  expect(parseRepositoryManifestText(JSON.stringify(document))).toEqual({
+    ok: false,
+    error: 'install.modules.".".requires declares more than 8 generated secrets',
+  });
+});
+
+test("known secret-like presentation values are rejected before compile", async () => {
+  const mutations: readonly [string, (document: any) => void][] = [
+    [
+      "input label",
+      (document) => {
+        document.install.modules["."].inputs[0].label.en =
+          "sk-example_12345678";
+      },
+    ],
+    [
+      "input helper",
+      (document) => {
+        document.install.modules["."].inputs[1].helper.en =
+          "sk-example_12345678";
+      },
+    ],
+    [
+      "input placeholder",
+      (document) => {
+        document.install.modules["."].inputs[1].placeholder =
+          "sk-example_12345678";
+      },
+    ],
+    [
+      "feature label",
+      (document) => {
+        document.install.modules["."].features[0].label.ja =
+          "sk-example_12345678";
+      },
+    ],
+  ];
+
+  for (const [field, mutate] of mutations) {
+    const document = JSON.parse(await fixture("valid.json"));
+    mutate(document);
+    const parsed = parseRepositoryManifestText(JSON.stringify(document));
+    expect(parsed.ok, field).toBe(false);
+    if (parsed.ok) continue;
+    expect(parsed.error, field).toContain("<secret-like-string>");
+  }
+
+  const ordinaryProse = JSON.parse(await fixture("valid.json"));
+  ordinaryProse.install.modules["."].inputs[1].helper.en =
+    "Use a token value supplied by the operator.";
+  expect(parseRepositoryManifestText(JSON.stringify(ordinaryProse)).ok).toBe(
+    true,
+  );
+});
+
+test("identifier whitespace is rejected instead of being trimmed", async () => {
+  const inputName = JSON.parse(await fixture("valid.json"));
+  inputName.install.modules["."].inputs[0].name = " project_name ";
+  expect(parseRepositoryManifestText(JSON.stringify(inputName))).toEqual({
+    ok: false,
+    error:
+      'install.modules.".".inputs[0].name must be a valid OpenTofu variable name',
+  });
+
+  const deliveryName = JSON.parse(await fixture("valid.json"));
+  deliveryName.install.modules["."].requires[0].deliver.variables.url =
+    " app_url ";
+  expect(parseRepositoryManifestText(JSON.stringify(deliveryName))).toEqual({
+    ok: false,
+    error:
+      'install.modules.".".requires[0].deliver.variables.url must be a valid OpenTofu variable name',
+  });
+});
+
 test("two requirements cannot claim the same delivered name", async () => {
   const document = JSON.parse(await fixture("valid.json"));
   document.install.modules["."].requires[1].deliver = {
@@ -215,6 +305,218 @@ test("repository manifest v2 accepts generic Capsule Interface declarations", as
       },
     ],
   });
+});
+
+test("repository manifest v1 and v2 remain closed against defaultModule", async () => {
+  for (const apiVersion of ["takosumi.com/v1", "takosumi.com/v2"]) {
+    const document = JSON.parse(await fixture("v2-launcher.json"));
+    document.apiVersion = apiVersion;
+    document.install.defaultModule = "deploy/takoform";
+    if (apiVersion === "takosumi.com/v1") {
+      delete document.install.modules["deploy/takoform"].interfaces;
+    }
+
+    expect(parseRepositoryManifestText(JSON.stringify(document))).toEqual({
+      ok: false,
+      error: "install.contains unsupported field defaultModule",
+    });
+  }
+});
+
+test("repository manifest v2.1 selects an exact default and preserves v2 Interfaces", async () => {
+  const document = JSON.parse(await fixture("v2-launcher.json"));
+  document.apiVersion = "takosumi.com/v2.1";
+  document.install.defaultModule = "deploy/takoform";
+  document.install.modules["."] = { inputs: [] };
+
+  const parsed = parseRepositoryManifestText(JSON.stringify(document));
+
+  expect(parsed.ok).toBe(true);
+  if (!parsed.ok || parsed.document.apiVersion !== "takosumi.com/v2.1") {
+    return;
+  }
+  expect(parsed.document.install.defaultModule).toBe("deploy/takoform");
+  expect(
+    parsed.document.install.modules["deploy/takoform"]?.interfaces?.[0]?.key,
+  ).toBe("launcher");
+});
+
+test("repository manifest v2.1 rejects a non-canonical or absent default module key", async () => {
+  for (const [defaultModule, error] of [
+    [
+      "./deploy/takoform",
+      "install.defaultModule must be a canonical safe relative module path",
+    ],
+    [
+      " deploy/takoform ",
+      "install.defaultModule must be a canonical safe relative module path",
+    ],
+    [
+      "deploy/missing",
+      "install.defaultModule must name an exact install.modules key",
+    ],
+  ] as const) {
+    const document = JSON.parse(await fixture("v2-launcher.json"));
+    document.apiVersion = "takosumi.com/v2.1";
+    document.install.defaultModule = defaultModule;
+
+    expect(parseRepositoryManifestText(JSON.stringify(document))).toEqual({
+      ok: false,
+      error,
+    });
+  }
+});
+
+test("the published v2.1 schema covers structure while the parser owns semantics", async () => {
+  const validate = new Ajv2020({ allErrors: true, strict: false }).compile(
+    repositoryManifestV2_1Schema,
+  );
+  const full = JSON.parse(await fixture("v2-launcher.json"));
+  full.apiVersion = "takosumi.com/v2.1";
+  full.install.defaultModule = "deploy/takoform";
+  const minimal = {
+    apiVersion: "takosumi.com/v2.1",
+    kind: "Repository",
+    install: { modules: { "deploy/only": { inputs: [] } } },
+  };
+
+  for (const document of [minimal, full]) {
+    expect(validate(document), JSON.stringify(validate.errors)).toBe(true);
+    expect(parseRepositoryManifestText(JSON.stringify(document)).ok).toBe(
+      true,
+    );
+  }
+
+  for (const mutate of [
+    (document: Record<string, any>) => {
+      document.install.unknown = true;
+    },
+    (document: Record<string, any>) => {
+      document.install.defaultModule = "./deploy/takoform";
+    },
+    (document: Record<string, any>) => {
+      document.install.modules["deploy/takoform"].interfaces[0].spec.access.visibility =
+        "public";
+    },
+  ]) {
+    const document = structuredClone(full);
+    mutate(document);
+    expect(validate(document)).toBe(false);
+    expect(parseRepositoryManifestText(JSON.stringify(document)).ok).toBe(
+      false,
+    );
+  }
+
+  expect(
+    repositoryManifestV2_1Schema["x-takosumi-semanticConstraints"],
+  ).toContain(
+    "install.defaultModule, when present, equals an own canonical key of install.modules",
+  );
+  expect(
+    repositoryManifestV2_1Schema["x-takosumi-semanticConstraints"],
+  ).toContain(
+    "each module may declare at most 8 requires entries whose kind is secret.generated",
+  );
+  expect(
+    repositoryManifestV2_1Schema["x-takosumi-semanticConstraints"],
+  ).toContain(
+    "JSON values in Interface documents and literal inputs are limited to recursive depth 32",
+  );
+  const missingKey = structuredClone(full);
+  missingKey.install.defaultModule = "deploy/missing";
+  expect(validate(missingKey)).toBe(true);
+  expect(parseRepositoryManifestText(JSON.stringify(missingKey)).ok).toBe(
+    false,
+  );
+
+  const whitespaceDefault = structuredClone(full);
+  whitespaceDefault.install.defaultModule = " deploy/takoform ";
+  expect(validate(whitespaceDefault)).toBe(false);
+  expect(
+    parseRepositoryManifestText(JSON.stringify(whitespaceDefault)).ok,
+  ).toBe(false);
+
+  const whitespaceModuleKey = structuredClone(full);
+  whitespaceModuleKey.install.modules[" deploy/takoform "] =
+    whitespaceModuleKey.install.modules["deploy/takoform"];
+  delete whitespaceModuleKey.install.modules["deploy/takoform"];
+  whitespaceModuleKey.install.defaultModule = " deploy/takoform ";
+  expect(validate(whitespaceModuleKey)).toBe(false);
+  expect(
+    parseRepositoryManifestText(JSON.stringify(whitespaceModuleKey)).ok,
+  ).toBe(false);
+});
+
+test("parser-owned JSON depth and value scanning stay stricter than schema structure", async () => {
+  const validate = new Ajv2020({ allErrors: true, strict: false }).compile(
+    repositoryManifestV2_1Schema,
+  );
+  const nested = (depth: number): unknown => {
+    let value: unknown = "leaf";
+    for (let index = 0; index < depth; index += 1) value = { value };
+    return value;
+  };
+
+  const deep = JSON.parse(await fixture("v2-launcher.json"));
+  deep.apiVersion = "takosumi.com/v2.1";
+  deep.install.modules["deploy/takoform"].interfaces[0].spec.inputs = {
+    config: { source: "literal", value: nested(33) },
+  };
+  expect(validate(deep)).toBe(true);
+  expect(parseRepositoryManifestText(JSON.stringify(deep)).ok).toBe(false);
+
+  const presentationSecret = JSON.parse(await fixture("v2-launcher.json"));
+  presentationSecret.apiVersion = "takosumi.com/v2.1";
+  presentationSecret.install.modules["deploy/takoform"].inputs = [
+    {
+      name: "project_name",
+      source: { kind: "user" },
+      label: { ja: "表示", en: "sk-example_12345678" },
+    },
+  ];
+  expect(validate(presentationSecret)).toBe(true);
+  expect(parseRepositoryManifestText(JSON.stringify(presentationSecret)).ok).toBe(
+    false,
+  );
+
+  const whitespaceIdentifier = JSON.parse(await fixture("v2-launcher.json"));
+  whitespaceIdentifier.apiVersion = "takosumi.com/v2.1";
+  whitespaceIdentifier.install.modules["deploy/takoform"].interfaces[0].spec.inputs.url.outputName =
+    " launch_url ";
+  expect(validate(whitespaceIdentifier)).toBe(false);
+  expect(
+    parseRepositoryManifestText(JSON.stringify(whitespaceIdentifier)).ok,
+  ).toBe(false);
+
+  const descriptiveIdentifiers = JSON.parse(
+    await fixture("v2-launcher.json"),
+  );
+  descriptiveIdentifiers.apiVersion = "takosumi.com/v2.1";
+  const declaration =
+    descriptiveIdentifiers.install.modules["deploy/takoform"].interfaces[0];
+  declaration.key = "github_pat_repository_permissions";
+  declaration.name = "ghp_configuration_profile";
+  declaration.spec.type = "api_token";
+  declaration.spec.version = "secret.read";
+  declaration.spec.inputs.url.outputName = "api_token";
+  expect(validate(descriptiveIdentifiers)).toBe(true);
+  expect(
+    parseRepositoryManifestText(JSON.stringify(descriptiveIdentifiers)).ok,
+  ).toBe(true);
+
+  const nineSecrets = JSON.parse(await fixture("v2-launcher.json"));
+  nineSecrets.apiVersion = "takosumi.com/v2.1";
+  nineSecrets.install.modules["deploy/takoform"].requires = Array.from(
+    { length: 9 },
+    (_, index) => ({
+      kind: "secret.generated",
+      deliver: { bindings: { value: `GENERATED_SECRET_${index}` } },
+    }),
+  );
+  expect(validate(nineSecrets)).toBe(false);
+  expect(parseRepositoryManifestText(JSON.stringify(nineSecrets)).ok).toBe(
+    false,
+  );
 });
 
 test("repository manifest v1 rejects the v2 interfaces section", async () => {

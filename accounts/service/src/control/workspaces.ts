@@ -30,7 +30,7 @@ import type {
   PatchSourceRequest,
   SourceResponse,
 } from "takosumi-contract/sources";
-import { TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2 } from "takosumi-contract/repository-manifest";
+import { isRepositoryManifestInterfaceCapableApiVersion } from "takosumi-contract/repository-manifest";
 import type {
   CapsuleCompatibilityReportResponse,
   CreateSourceCompatibilityCheckRequest,
@@ -1266,6 +1266,31 @@ async function listCurrentStateVersionsFromSingleReads(
   );
 }
 
+function repositoryDerivedInstallConfigModule(config: InstallConfig): {
+  readonly derived: boolean;
+  readonly modulePath: string | undefined;
+} {
+  const internal = config.internal;
+  const derived =
+    internal?.sourceSnapshotId !== undefined &&
+    internal.repositoryInstallUxDigest !== undefined;
+  return {
+    derived,
+    // This value was selected and persisted by repository install-UX
+    // preflight. Keep it byte-for-byte intact; request parsing below is not a
+    // valid way to reinterpret stored execution authority.
+    modulePath: derived
+      ? typeof config.modulePath === "string"
+        ? config.modulePath
+        : undefined
+      : undefined,
+  };
+}
+
+function canonicalRequestedModulePath(modulePath: string): string {
+  return modulePath === "" ? "." : modulePath;
+}
+
 async function createCapsule(
   request: Request,
   operations: ControlPlaneOperations,
@@ -1396,6 +1421,38 @@ async function createCapsule(
       400,
     );
   }
+  const repositoryDerivedModule = repositoryDerivedInstallConfigModule(
+    baseConfig,
+  );
+  if (repositoryDerivedModule.derived) {
+    if (
+      repositoryDerivedModule.modulePath === undefined ||
+      repositoryDerivedModule.modulePath.length === 0
+    ) {
+      return errorJson(
+        "repository_install_ux_invalid",
+        "The reviewed repository InstallConfig is missing its persisted module path; run install UX preflight again.",
+        400,
+        request,
+        {},
+        { diagnosticCode: "repository_install_ux_module_path_missing" },
+      );
+    }
+    if (
+      modulePath !== undefined &&
+      canonicalRequestedModulePath(modulePath) !==
+        repositoryDerivedModule.modulePath
+    ) {
+      return errorJson(
+        "repository_install_ux_invalid",
+        "modulePath must match the module selected by the reviewed repository InstallConfig.",
+        400,
+        request,
+        {},
+        { diagnosticCode: "repository_install_ux_module_path_mismatch" },
+      );
+    }
+  }
   const repoMetadataSnapshot = await latestSourceSnapshotForSource(
     operations,
     source,
@@ -1419,7 +1476,8 @@ async function createCapsule(
     source,
     sourceSnapshot: repoMetadataSnapshot,
     storeMetadata,
-    modulePath,
+    modulePath:
+      repositoryDerivedModule.modulePath ?? modulePath,
   });
   const resolvedStoreMetadata = hydratedRepoConfig.storeMetadata;
   const resolvedModulePath = hydratedRepoConfig.modulePath;
@@ -1461,8 +1519,9 @@ async function createCapsule(
   const hasVars = vars !== undefined && Object.keys(vars).length > 0;
   const repoOwnedInterfaceProposalAccepted =
     repoInstallUx.status === "accepted" &&
-    repoInstallUx.repositoryManifestApiVersion ===
-      TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2;
+    isRepositoryManifestInterfaceCapableApiVersion(
+      repoInstallUx.repositoryManifestApiVersion,
+    );
   const selectedInterfaceBlueprints = repoOwnedInterfaceProposalAccepted
     ? repoInstallUx.interfaceBlueprints
     : (interfaceBlueprints ?? baseConfig.interfaceBlueprints);

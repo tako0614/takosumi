@@ -1,159 +1,245 @@
 # Repository manifest
 
 `.well-known/takosumi.json` は、Git repository が同じ commit に固定された
-Takosumi 向け metadata を提案するための任意の文書です。repository が所有しますが、
-実行権限ではありません。Takosumi は内容を検証し、現在の `install` 宣言を
-DB-owned `InstallConfig` に compile してから、通常の compatibility check、
-Plan、Apply を行います。
+install metadata を Takosumi に提案するための任意文書です。repository が所有しますが、
+実行権限ではありません。Source sync は repository root の文書を最大 128 KiB の
+UTF-8 JSON として検証し、結果と digest を immutable
+`SourceSnapshot.repositoryManifest` に保存します。raw document は public API に
+返しません。
 
-## 現行 wire
+Takosumi は exact SourceSnapshot の宣言を compatibility report と照合し、operator
+policy の範囲内で DB-owned `InstallConfig` に compile します。Plan/Run が読むのは
+persist 済み InstallConfig であり、manifest を実行時に再読込しません。
+
+## Version と closed object
+
+すべての version で root は次の3 fieldだけを持ちます。
 
 ```json
 {
-  "apiVersion": "takosumi.com/v1",
+  "apiVersion": "takosumi.com/v2.1",
+  "kind": "Repository",
+  "install": {}
+}
+```
+
+| `apiVersion`        | `install` の field           | module の field                                  |
+| ------------------- | ---------------------------- | ------------------------------------------------ |
+| `takosumi.com/v1`   | `modules`                    | `inputs`, `requires`, `features`                 |
+| `takosumi.com/v2`   | `modules`                    | v1 + `interfaces`                                |
+| `takosumi.com/v2.1` | `modules`, `defaultModule`?  | v2 と同一                                        |
+
+各 object は closed です。表や各 section にない field、`$schema`、旧
+`schemaVersion: takosumi.install-ux/v1` は拒否されます。v1/v2 に
+`defaultModule` を追加しても v2.1 として解釈されません。
+
+v2.1 の公開 JSON Schema は
+[`repository-manifest-v2.1.schema.json`](/schemas/repository-manifest-v2.1.schema.json)
+です。これは structural schema であり、JSON Schema と parser の完全な同値性を
+意味しません。cross-field uniqueness、`defaultModule` と動的 key の一致、JSON
+recursive depth（最大32）、下記の secret/authority vocabulary 検査は canonical
+parser が追加で fail closed に検査します。
+
+## Module path と default 選択
+
+`install.modules` は1〜32件です。key は `.` または最大 1,024 文字の canonical な
+repository-relative path です。absolute path、`./` prefix、drive prefix、末尾 `/`、
+backslash、NUL、空 segment、`.` / `..` segment は使えません。
+
+Store install の `compileInstallUx` では client や Store は `modulePath` を送りません。
+Source sync 後、server が exact SourceSnapshot の manifest だけから次の規則で選び、
+その path の compatibility check を実行してから derived InstallConfig に同じ値を
+保存します。
+
+1. `modules` が1件なら、その唯一の key を選ぶ。
+2. 複数なら `takosumi.com/v2.1` の `install.defaultModule` が必須。
+3. `defaultModule` は canonical path かつ `modules` の own key と byte-for-byte で
+   一致しなければならない。
+
+`.`、JSON object の先頭 key、`.well-known/tcs.json` の path、`Source.defaultPath`、
+base `InstallConfig.modulePath` を fallback として推測しません。missing/invalid default
+は typed diagnostic で compatibility 実行前に失敗します。通常の manual Git
+compatibility request は、利用者が明示した `modulePath` を引き続き使用できます。
+
+### 有効な v2.1 multi-module 例
+
+```json
+{
+  "apiVersion": "takosumi.com/v2.1",
   "kind": "Repository",
   "install": {
+    "defaultModule": "deploy/takoform",
     "modules": {
-      ".": {
-        "inputs": [],
-        "requires": []
-      }
+      ".": { "inputs": [] },
+      "deploy/takoform": { "inputs": [] }
     }
   }
 }
 ```
 
-root は closed object です。現行 version が受け付けるのは
-`apiVersion`、`kind`、`install` だけで、`install` が受け付けるのは
-`modules` だけです。`$schema` と旧 install-only
-`schemaVersion: takosumi.install-ux/v1` は受け付けません。将来 metadata
-section を追加するときは新しい `apiVersion` を定義し、未知 field は
-fail closed のままにします。予約用の空 section は置きません。
+## `inputs`
 
-## `takosumi.com/v2` — Capsule Interface proposal
+各 module の `inputs` は必須の配列で、最大128件です。各 entry は次の closed field を
+持ちます。
 
-`takosumi.com/v2` は v1 を解釈し直さず、module ごとに generic な
-`interfaces` proposal を追加します。v1 の module に `interfaces` を置くことは
-できません。宣言できるのは Interface の `key` / `name` / `spec` と、任意の
-`bindingRequests` だけです。
+| field         | 必須 | 内容 |
+| ------------- | ---- | ---- |
+| `name`        | yes  | exact OpenTofu variable name |
+| `source`      | yes  | `{ "kind": ... }` のみ |
+| `label`       | yes  | non-empty な `{ "ja", "en" }` |
+| `role`        | no   | `service_name` / `initial_secret` |
+| `type`        | no   | `string` / `number` / `boolean` / `json` |
+| `format`      | no   | bounded presentation token |
+| `required`    | no   | boolean |
+| `helper`      | no   | `{ "ja", "en" }` |
+| `placeholder` | no   | non-empty bounded text |
+| `advanced`    | no   | boolean |
+| `secret`      | no   | user input を secret materialization に送る印 |
+
+`source.kind` は `user`、`capsule_name`、`workspace_scoped_capsule_name`、
+`module_default` のいずれかです。`secret: true` は `user` だけ、
+`module_default` は `required: true` にできません。`env` のような plain environment
+map を secret や `initial_secret` として公開できません。input name と role は module
+内で一意で、identifier の前後 whitespace は trim せず canonical でなければ拒否します。
+compatibility report が exact variable の存在、型、default の有無を証明できなければ
+採用されません。公開 label/helper/placeholder は既知の credential-like material を検査
+しますが、「Use a token value」のような通常の prose は許可します。
+
+## `requires`
+
+`requires` は任意、最大16件です。値や credential ではなく、host に必要な機能と
+delivery 名だけを提案します。
+
+- `identity.oidc`: `kind`, root-relative `callbackPath`, optional unique
+  `scopes` (1〜16), `deliver`。
+- `secret.generated`: `kind`, optional `bytes` (16〜64), optional
+  `encoding` (`hex` / `base64url`), `deliver`。module ごとに最大8件。
+- `http.endpoint`: `kind`, `deliver`。
+
+`deliver` は `variables` または `bindings` のちょうど一方を持ちます。slot は kind
+ごとに closed で、値は exact OpenTofu variable name または runtime binding name
+です。別 requirement と同じ delivery 名を共有できません。OIDC と endpoint は
+module ごとに各1件までです。host-reserved binding、存在しない/non-string variable、
+operator が許可しない OIDC scope や requirement kind は compiler が拒否します。
+
+## `features`
+
+`features` は任意、最大32件です。entry は `id`, `optional`, bilingual `label`,
+non-empty `inputs` だけを持ちます。`inputs` は同じ module に宣言した user input を
+参照し、feature 間でも重複できません。feature は UI grouping であり、provider、
+resource、lifecycle を有効化する authority ではありません。
+
+## `interfaces` (v2 / v2.1)
+
+v2 と v2.1 は module ごとに最大32件の generic Capsule Interface proposal を
+追加できます。v1 に `interfaces` を置くと invalid です。v2.1 は v2 の Interface
+schema と compiler semantics をそのまま保持します。
+
+各 declaration は `key`, `name`, `spec`, optional `bindingRequests` だけを持ちます。
+`spec` は `type`, `version`, public JSON `document`, optional `inputs`, `access` の
+closed object です。
+
+- `spec.inputs` は最大64件で、public JSON の `literal` または exact module Output の
+  `outputName` と `outputType` を指定する `output` だけです。
+- Output は compatibility report が存在、`sensitive: false`,
+  `ephemeral: false` を証明しなければ採用されません。名前の推測はありません。
+- `access.visibility` は `workspace` 固定です。`resourceUriInput` は同じ spec の
+  input 名でなければなりません。host-owned `policyRef` は指定できません。
+- `bindingRequests` は最大1件です。subject は `installing_principal` のみ、permission
+  は1〜16件、delivery は `{ "type": token }` だけです。operator の明示的な
+  permission/delivery allowlist が無い場合は拒否されます。
+
+採用された proposal は既存の `InstallConfig.interfaceBlueprints` と
+`outputAllowlist` に stable key で merge されます。conflict は上書きせず失敗します。
+exact installing Principal の解決と Interface/Binding materialization は既存 host
+lifecycle が行い、repository は grant を作れません。
+
+## Authority と secret の境界
+
+manifest に置けるのは公開 proposal だけです。次を置くことはできません。
+
+- Git URL、ref/tag/commit、SourceSnapshot、Store listing、provider/target/runner 選択。
+- credential/secret/token/password/key の値、credential reference、Principal ID、
+  account/workspace/capsule/resource/connection など host authority の ID。
+- arbitrary environment injection、plain `env` map、provider binding、Interface grant。
+- lifecycle command、migration、output allowlist、billing、policy、Plan/Run bypass。
+
+`secret: true` や `secret.generated` は値ではなく host materialization の要求です。
+公開 presentation field（`label`、`helper`、`placeholder`、feature label）は
+`sk-…`、bearer/assignment、URI credential など既知の
+credential-like pattern を検査します。Interface `document` と literal は key/value を
+再帰検査し、secret-like material と authority ID を拒否します。普通の prose の
+「token」などはこの方針で過剰拒否しません。diagnostic は値を echo しません。これらの
+public JSON value は parser で recursive depth 32 に制限され、JSON Schema はこの
+parser-owned 制約を semantic constraint として記録します。
+
+base InstallConfig と operator policy は常に ceiling です。repository proposal は
+allowlist や authority を広げず、service/operator 宣言と衝突する proposal は
+上書きせず拒否されます。
+manifest digest、snapshot、selected module、compatibility report が一致しない場合は
+fail closed です。
+
+## 無効な例
+
+v2 に v2.1 field を足しても無効です。
 
 ```json
 {
   "apiVersion": "takosumi.com/v2",
   "kind": "Repository",
   "install": {
-    "modules": {
-      "deploy/takoform": {
-        "inputs": [],
-        "interfaces": [
-          {
-            "key": "launcher",
-            "name": "example.launcher",
-            "spec": {
-              "type": "interface.ui.surface",
-              "version": "1",
-              "document": { "launcher": true },
-              "inputs": {
-                "url": {
-                  "source": "output",
-                  "outputName": "launch_url",
-                  "outputType": "url"
-                }
-              },
-              "access": { "visibility": "workspace" }
-            },
-            "bindingRequests": [
-              {
-                "key": "installer",
-                "subject": { "source": "installing_principal" },
-                "permissions": ["ui.open"],
-                "delivery": { "type": "none" }
-              }
-            ]
-          }
-        ]
-      }
-    }
+    "defaultModule": "deploy/app",
+    "modules": { "deploy/app": { "inputs": [] } }
   }
 }
 ```
 
-`spec.inputs` は公開 JSON の `literal`、または exact compatibility report が
-記録した module Output を名前と型で参照する `output` だけです。Output の
-存在、`sensitive: false`、`ephemeral: false` が report で証明できない場合は
-fail closed になります。`launch_url` のような名前を推測して Output を探す
-fallback はありません。採用された Output だけが既存の DB-owned
-`InstallConfig.outputAllowlist` に `required` projection として追加され、
-Interface input は既存の `capsule_output` blueprint に compile されます。
-
-`bindingRequests` は grant ではありません。repository が指定できる subject は
-`installing_principal` だけで、permission と delivery は bounded な値として
-明示的な operator permission allowlist と delivery allowlist に照らして審査されます。
-allowlist が無い、または空の場合は binding request 自体が拒否されます。
-Interface ごとに installer binding は最大1つです。access visibility は
-`workspace` に固定され、`policyRef` は host 所有なので repository からは指定できません。
-credential、Principal ID、
-provider、target、secret、任意の delivery options は manifest に置けません。
-審査・review が成功した後にだけ既存の InstallConfig/Interface materializer が
-exact installer Principal を解決し、Apply 後に Interface と Ready Binding を
-作ります。manifest は Interface lifecycle や grant の authority ではありません。
-
-v1 の各 module が提案できるのは3つです。`inputs` は module が所有する入力名と
-表示文言、`requires` はその application が動くために host に用意してほしい
-もの、`features` は任意機能の grouping です。Git source/ref、provider
-credential、target、billing、lifecycle command、Interface grant、任意の
-環境変数注入は宣言できません。
-
-## requires — 要求であって値ではない
-
-manifest は公開 repository file なので、解決済みの secret や credential が
-現れてはいけません。`requires` が宣言するのは「何が要るか」と「どの名前で
-受け取りたいか」だけで、値を作って配るのは host です。Takosumi は各要求を
-operator policy に照らして検証し、自分の DB-owned `InstallConfig` に compile
-してから Plan に渡します。
+存在しない key や alias も無効です。
 
 ```json
 {
-  "kind": "secret.generated",
-  "bytes": 32,
-  "encoding": "base64url",
-  "deliver": { "bindings": { "value": "ENCRYPTION_KEY" } }
+  "apiVersion": "takosumi.com/v2.1",
+  "kind": "Repository",
+  "install": {
+    "defaultModule": "./deploy/app",
+    "modules": { "deploy/app": { "inputs": [] } }
+  }
 }
 ```
 
-`kind` は `identity.oidc` / `secret.generated` / `http.endpoint` です。
+公開 document に secret/authority を埋め込めません。
 
-`deliver` は配り先をちょうど1つ選びます。`variables` は入力変数を面に持つ
-module system 向け、`bindings` は変数を持たない portable runtime 向けです。
-要求そのものはどちらでも同じ形で、違うのは配り先だけです。
+```json
+{
+  "key": "launcher",
+  "name": "example.launcher",
+  "spec": {
+    "type": "example",
+    "version": "1",
+    "document": { "credentialId": "credential_123" },
+    "access": { "visibility": "workspace" }
+  }
+}
+```
 
-`secret.generated` に `variables` はありません。host が secret を portable な
-module state に書くことはないからです。逆に `http.endpoint` に `bindings` は
-ありません。割り当てられた hostname は注入される値ではなく runtime の場所
-そのものだからです。
+## Migration と versioning
 
-境界は「host の権能が要るか」です。ただの非機密文字列は module 自身の設定に
-書いてください。
+version identifier は closed schema の識別子です。既存 version の field set や意味を
+後から広げません。v2.1 は v2 の module/Interface semantics を一切変えず、optional
+`install.defaultModule` だけを加える additive schema revision なので major number を
+増やしていません。未知 version/field は fail closed です。incompatible vocabulary や
+authority model の変更には別の schema identifier が必要です。
 
-## inputs の role
+将来 metadata section を追加するときは新しい `apiVersion` を定義し、未知 field は
+fail closed のままにします。
 
-`role` は、その入力が何であるかを installer に伝えます。値の出どころ
-(`source`) は変えません。`service_name` はサービス名の欄、`initial_secret`
-は初期パスワードの欄で、どちらも module ごとに1つまでです。
+- v1/v2 の single-module repository はそのまま利用でき、唯一の key が選ばれます。
+- multi-module repository は v2.1 に上げ、exact `defaultModule` を追加します。
+- v2 の `interfaces` は v2.1 へ変更しても同じ形・意味で保持されます。
+- v1/v2 の文書に field だけ backport してはいけません。
 
-## 所有境界
-
-- app repository は `.well-known/takosumi.json` と、その application 語彙を所有します。
-- Takosumi は schema/parser、policy、同じ `SourceSnapshot` に対する検証と
-  `InstallConfig` compilation を所有します。
-- Source sync は exact file 全体の digest と検証状態を
-  `SourceSnapshot.repositoryManifest` として保存・公開し、raw document は公開しません。
-- DB-owned `InstallConfig` が reviewed Plan/Run の入力です。repository
-  manifest を実行時に再読込しません。
-- TCS Store listing は discovery と browse 表示だけを所有し、この manifest
-  の install 宣言を代行しません。
-
-root の `install-options.json` は別の任意 contract です。
-`apiVersion: install.takosumi.com/v1alpha1`、
-`kind: CapsuleSourceOptions` を使い、通常の Capsule source 候補を1つ選ぶ
-chooserだけを表します。入力や `InstallConfig` を二重宣言してはいけません。
+Store はこの manifest を代理しません。TCS 2.0 との接続と URL-only handoff は
+[Store API](./store-api.md)を参照してください。root の `install-options.json` は
+`apiVersion: install.takosumi.com/v1alpha1`、`kind: CapsuleSourceOptions` を使って
+通常の Capsule source 候補を選ぶ別 contract であり、inputs や InstallConfig を
+二重宣言できません。

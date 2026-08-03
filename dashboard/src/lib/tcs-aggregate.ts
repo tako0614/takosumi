@@ -1,6 +1,6 @@
 /**
  * CLIENT-SIDE aggregation across TCS store servers. Fans the read spec out to
- * every known server, merges, and de-duplicates by normalized (url,path)
+ * every known server, merges, and de-duplicates by normalized repository URL
  * identity (annotating `seenOn`). A slow/failed/non-conforming server is dropped
  * from the render (best-effort) and never blocks the others. No server-to-server
  * traffic — the merge happens here, in the dashboard.
@@ -135,15 +135,10 @@ export function mergeTcsListingBatches(
 export function sortTcsItems(
   items: readonly AggregatedTcsListing[],
   sort: TcsSort,
-  locale: TcsLocale,
+  _locale: TcsLocale,
 ): AggregatedTcsListing[] {
   const copy = [...items];
   copy.sort((a, b) => {
-    if (sort === "name") {
-      const an = (locale === "ja" ? a.name.ja : a.name.en).toLowerCase();
-      const bn = (locale === "ja" ? b.name.ja : b.name.en).toLowerCase();
-      return an < bn ? -1 : an > bn ? 1 : a.id < b.id ? -1 : 1;
-    }
     const af = sort === "created" ? a.createdAt : a.updatedAt;
     const bf = sort === "created" ? b.createdAt : b.updatedAt;
     if (af !== bf) return af < bf ? 1 : -1;

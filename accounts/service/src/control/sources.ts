@@ -48,6 +48,7 @@ import type {
   PublicInstallConfig,
   PublicCapsule,
 } from "takosumi-contract/install-configs";
+import { normalizeInstallConfigSourceUrl } from "takosumi-contract/install-configs";
 import type {
   Dependency,
   DependencyMode,
@@ -141,6 +142,7 @@ import {
 import {
   latestSourceSnapshotForSource,
   previewRepoOwnedInstallConfig,
+  resolveRepoOwnedInstallModulePath,
 } from "./repo-owned-install-config.ts";
 import {
   DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
@@ -321,10 +323,9 @@ export async function handleSources(
         );
       }
       const capsuleId = stringValue(body.capsuleId);
-      // Store deep-link path: when no Capsule exists yet, gate the pre-install
-      // check against the selected DB-owned InstallConfig. The instance-wide
-      // default allowlist is never widened (see
-      // CreateSourceCompatibilityCheckRequest.installConfigId).
+      // Manual Git callers may select an existing DB-owned InstallConfig.
+      // Store compilation below resolves its unique global policy config by
+      // canonical repository URL; the client cannot choose that authority.
       const installConfigId = stringValue(body.installConfigId);
       const compileInstallUx = body.compileInstallUx === true;
       const capsuleName = stringValue(body.capsuleName);
@@ -338,18 +339,96 @@ export async function handleSources(
           400,
         );
       }
-      if (compileInstallUx && (!installConfigId || !capsuleName || capsuleId)) {
+      if (compileInstallUx && (!capsuleName || capsuleId)) {
         return errorJson(
           "invalid_request",
-          "compileInstallUx requires capsuleName and installConfigId before a Capsule exists.",
+          "compileInstallUx requires capsuleName before a Capsule exists.",
           400,
         );
       }
+      if (
+        compileInstallUx &&
+        (body.modulePath !== undefined || body.installConfigId !== undefined)
+      ) {
+        return errorJson(
+          "invalid_request",
+          "compileInstallUx resolves installConfigId and modulePath server-side; Store callers must not select them.",
+          400,
+          request,
+        );
+      }
+      let installUxSnapshot: SourceSnapshot | undefined;
+      let installUxModulePath: string | undefined;
+      let installUxBaseConfig: InstallConfig | undefined;
+      if (compileInstallUx) {
+        installUxSnapshot = await latestSourceSnapshotForSource(
+          operations,
+          source,
+        );
+        if (
+          !installUxSnapshot ||
+          (sourceSnapshotId !== undefined &&
+            installUxSnapshot.id !== sourceSnapshotId)
+        ) {
+          return errorJson(
+            "repository_install_ux_invalid",
+            "The source changed during install UX preflight; sync and review the latest snapshot.",
+            409,
+            request,
+            {},
+            {
+              diagnosticCode:
+                "repository_install_ux_compatibility_report_mismatch",
+            },
+          );
+        }
+        const moduleSelection = resolveRepoOwnedInstallModulePath({
+          sourceSnapshot: installUxSnapshot,
+        });
+        if (!moduleSelection.ok) {
+          return errorJson(
+            "repository_install_ux_invalid",
+            moduleSelection.diagnostic.message,
+            400,
+            request,
+            {},
+            { diagnosticCode: moduleSelection.diagnostic.code },
+          );
+        }
+        installUxModulePath = moduleSelection.modulePath;
+        const baseConfigResolution = await resolveStoreBaseInstallConfig(
+          operations,
+          source,
+        );
+        if (!baseConfigResolution.ok) {
+          return errorJson(
+            "repository_install_ux_invalid",
+            baseConfigResolution.diagnostic.message,
+            400,
+            request,
+            {},
+            { diagnosticCode: baseConfigResolution.diagnostic.code },
+          );
+        }
+        installUxBaseConfig = baseConfigResolution.installConfig;
+      }
       const compatibilityRequest: CreateSourceCompatibilityCheckRequest = {
-        ...(sourceSnapshotId ? { sourceSnapshotId } : {}),
-        ...(modulePath ? { modulePath } : {}),
+        ...(installUxSnapshot
+          ? { sourceSnapshotId: installUxSnapshot.id }
+          : sourceSnapshotId
+            ? { sourceSnapshotId }
+            : {}),
+        ...(installUxModulePath
+          ? { modulePath: installUxModulePath }
+          : modulePath
+            ? { modulePath }
+            : {}),
         ...(capsuleId ? { capsuleId } : {}),
-        ...(installConfigId ? { installConfigId } : {}),
+        ...(installUxBaseConfig
+          ? { installConfigId: installUxBaseConfig.id }
+          : installConfigId
+            ? { installConfigId }
+            : {}),
       };
       const compatibility = await operations.createSourceCompatibilityCheck(
         sourceId,
@@ -361,10 +440,7 @@ export async function handleSources(
           201,
         );
       }
-      const latestSnapshot = await latestSourceSnapshotForSource(
-        operations,
-        source,
-      );
+      const latestSnapshot = installUxSnapshot;
       const reportSnapshotId = compatibility.report.sourceSnapshotId;
       if (!latestSnapshot || latestSnapshot.id !== reportSnapshotId) {
         return jsonStatus(
@@ -381,9 +457,7 @@ export async function handleSources(
           201,
         );
       }
-      const baseConfig = await operations.capsules.getInstallConfig(
-        installConfigId!,
-      );
+      const baseConfig = installUxBaseConfig!;
       if (
         baseConfig.workspaceId !== undefined &&
         baseConfig.workspaceId !== workspaceId
@@ -399,7 +473,7 @@ export async function handleSources(
         source,
         sourceSnapshot: latestSnapshot,
         baseConfig,
-        modulePath,
+        modulePath: installUxModulePath,
         capsuleName: capsuleName!,
         workspaceId,
         installingPrincipalId: ctx.session.subject,
@@ -456,6 +530,136 @@ export async function handleSources(
     }
   }
   return undefined;
+}
+
+const STORE_BASE_CONFIG_PAGE_SIZE = 100;
+const STORE_BASE_CONFIG_SCAN_LIMIT = 1_000;
+
+type StoreBaseInstallConfigResolution =
+  | { readonly ok: true; readonly installConfig: InstallConfig }
+  | {
+      readonly ok: false;
+      readonly diagnostic: {
+        readonly code:
+          | "repository_install_ux_base_config_missing"
+          | "repository_install_ux_base_config_ambiguous";
+        readonly message: string;
+      };
+    };
+
+/**
+ * Resolve the policy ceiling for URL-only Store handoff. Only a selectable,
+ * global service declaration whose presentation URL and source-selector URL
+ * both name the registered repository is eligible. Legacy module paths are
+ * deliberately ignored: repository manifest selection owns that decision.
+ */
+async function resolveStoreBaseInstallConfig(
+  operations: ControlPlaneOperations,
+  source: Source,
+): Promise<StoreBaseInstallConfigResolution> {
+  const matches: InstallConfig[] = [];
+  let scanned = 0;
+  const inspect = (configs: readonly InstallConfig[]): boolean => {
+    scanned += configs.length;
+    for (const config of configs) {
+      if (!storeBaseInstallConfigMatchesSource(config, source)) continue;
+      matches.push(config);
+      if (matches.length > 1) return false;
+    }
+    return true;
+  };
+
+  const listPage = operations.capsules.listSharedInstallConfigsPage;
+  if (!listPage) {
+    return ambiguousStoreBaseConfig(
+      "Takosumi cannot prove a unique Store InstallConfig without bounded global catalog pagination.",
+    );
+  }
+  let cursor: string | undefined;
+  let pagesScanned = 0;
+  const seenCursors = new Set<string>();
+  do {
+    const page = await listPage.call(
+      operations.capsules,
+      {
+        limit: STORE_BASE_CONFIG_PAGE_SIZE,
+        ...(cursor ? { cursor } : {}),
+      },
+      // Count internal rows toward the hard scan bound, then reject them in
+      // storeBaseInstallConfigMatchesSource. Filtering after pagination could
+      // otherwise walk an unbounded catalog while reporting few visible rows.
+      { includeInternal: true },
+    );
+    pagesScanned += 1;
+    if (!inspect(page.items)) return ambiguousStoreBaseConfig();
+    if (scanned > STORE_BASE_CONFIG_SCAN_LIMIT) {
+      return ambiguousStoreBaseConfig(
+        "Takosumi could not prove a unique Store InstallConfig within the bounded global catalog scan.",
+      );
+    }
+    cursor = page.nextCursor;
+    if (!cursor) break;
+    if (
+      seenCursors.has(cursor) ||
+      scanned >= STORE_BASE_CONFIG_SCAN_LIMIT ||
+      pagesScanned >=
+        Math.ceil(
+          STORE_BASE_CONFIG_SCAN_LIMIT / STORE_BASE_CONFIG_PAGE_SIZE,
+        )
+    ) {
+      return ambiguousStoreBaseConfig(
+        "Takosumi could not prove a unique Store InstallConfig within the bounded global catalog scan.",
+      );
+    }
+    seenCursors.add(cursor);
+  } while (true);
+
+  if (matches.length === 0) {
+    return {
+      ok: false,
+      diagnostic: {
+        code: "repository_install_ux_base_config_missing",
+        message:
+          "No global Store InstallConfig is registered for the Source repository URL.",
+      },
+    };
+  }
+  return { ok: true, installConfig: matches[0]! };
+}
+
+function storeBaseInstallConfigMatchesSource(
+  config: InstallConfig,
+  source: Source,
+): boolean {
+  if (
+    config.workspaceId !== undefined ||
+    config.internal !== undefined ||
+    !config.store?.source ||
+    !config.sourceSelector
+  ) {
+    return false;
+  }
+  const sourceUrl = source.url.trim();
+  const storeUrl = config.store.source.url.trim();
+  const selectorUrl = config.sourceSelector.url.trim();
+  if (!sourceUrl || !storeUrl || !selectorUrl) return false;
+  const canonicalSourceUrl = normalizeInstallConfigSourceUrl(sourceUrl);
+  return (
+    normalizeInstallConfigSourceUrl(storeUrl) === canonicalSourceUrl &&
+    normalizeInstallConfigSourceUrl(selectorUrl) === canonicalSourceUrl
+  );
+}
+
+function ambiguousStoreBaseConfig(
+  message = "Multiple global Store InstallConfigs match the Source repository URL.",
+): StoreBaseInstallConfigResolution {
+  return {
+    ok: false,
+    diagnostic: {
+      code: "repository_install_ux_base_config_ambiguous",
+      message,
+    },
+  };
 }
 
 function presentationFilePath(value: string | null): string | undefined {

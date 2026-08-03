@@ -431,6 +431,50 @@ describe("repository install UX compiler", () => {
     });
   });
 
+  test("v2.1 preserves the v2 Interface compiler vocabulary", () => {
+    const v2_1: RepositoryManifestDocument = {
+      apiVersion: "takosumi.com/v2.1",
+      kind: "Repository",
+      install: {
+        defaultModule: ".",
+        modules: {
+          ".": {
+            inputs: [],
+            interfaces: [
+              {
+                key: "status",
+                name: "example.status",
+                spec: {
+                  type: "example.status",
+                  version: "1",
+                  document: { title: "Status" },
+                  access: { visibility: "workspace" },
+                },
+              },
+            ],
+          },
+        },
+      },
+    };
+
+    const result = compile({ document: v2_1 });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.compiled.interfaceBlueprints).toEqual([
+      {
+        key: "status",
+        name: "example.status",
+        spec: {
+          type: "example.status",
+          version: "1",
+          document: { title: "Status" },
+          access: { visibility: "workspace" },
+        },
+      },
+    ]);
+  });
+
   test("rejects v2 Interface Outputs that are missing or not provably public", () => {
     const v2: RepositoryManifestDocument = {
       apiVersion: "takosumi.com/v2",

@@ -56,6 +56,40 @@ function resourcePage() {
   return { resources: [PORTABLE_OBJECT_BUCKET] };
 }
 
+function workspaceResourcesView(workspaceId: string) {
+  return {
+    view: "resources.v1",
+    workspaceId,
+    space: workspaceId,
+    resources: {
+      items: workspaceId === "ws_alpha" ? [portableObjectBucketSummary()] : [],
+    },
+    workloads: {
+      items: PORTABLE_CAPSULES[workspaceId as keyof typeof PORTABLE_CAPSULES] ?? [],
+    },
+    forms: { items: [] },
+    hasTargetPool: false,
+  };
+}
+
+function portableObjectBucketSummary() {
+  return {
+    apiVersion: PORTABLE_OBJECT_BUCKET.apiVersion,
+    kind: PORTABLE_OBJECT_BUCKET.kind,
+    id: PORTABLE_OBJECT_BUCKET.id,
+    metadata: {
+      name: PORTABLE_OBJECT_BUCKET.metadata.name,
+      space: PORTABLE_OBJECT_BUCKET.metadata.space,
+      managedBy: PORTABLE_OBJECT_BUCKET.metadata.managedBy,
+    },
+    status: {
+      phase: PORTABLE_OBJECT_BUCKET.status.phase,
+      observedGeneration: PORTABLE_OBJECT_BUCKET.status.observedGeneration,
+      resolution: PORTABLE_OBJECT_BUCKET.status.resolution,
+    },
+  };
+}
+
 function page(value: unknown, field: string): unknown {
   return { [field]: value };
 }
@@ -100,6 +134,9 @@ async function apiResponse(request: Request, url: URL): Promise<Response> {
     const workspaceId = decodeURIComponent(workspaceMatch[1] ?? "");
     const suffix = workspaceMatch[2] ?? "";
     if (!workspaceFor(workspaceId)) return json({ error: "not_found" }, 404);
+    if (suffix === "views/resources.v1") {
+      return json(workspaceResourcesView(workspaceId));
+    }
     if (suffix === "capsules") {
       return json(page(PORTABLE_CAPSULES[workspaceId as keyof typeof PORTABLE_CAPSULES] ?? [], "capsules"));
     }

@@ -17,7 +17,7 @@ import type {
 import type { InstallConfigHostRuntimeMaterialization } from "./host-runtime-materialization.ts";
 export type { InstallConfigHostRuntimeMaterialization } from "./host-runtime-materialization.ts";
 import type { ScopeBoundaryPolicy } from "./plan-scope.ts";
-import { TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2 } from "./repository-manifest.ts";
+import type { RepositoryManifestInterfaceApiVersion } from "./repository-manifest.ts";
 import type { JsonValue } from "./types.ts";
 
 export type { Capsule, PublicCapsule, CapsuleStatus } from "./capsules.ts";
@@ -275,7 +275,7 @@ export interface PolicyConfig {
      * SourceSnapshot without this exact manifest API version cannot be used
      * for preview or Capsule creation.
      */
-    readonly requiredManifestApiVersion?: typeof TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2;
+    readonly requiredManifestApiVersion?: RepositoryManifestInterfaceApiVersion;
   };
   readonly scopeBoundary?: ScopeBoundaryPolicy;
   readonly quota?: Readonly<Record<string, number>>;

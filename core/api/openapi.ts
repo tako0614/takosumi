@@ -1226,7 +1226,9 @@ function policySchemas(): Record<string, Record<string, unknown>> {
               uniqueItems: true,
               items: { type: "string", minLength: 1, maxLength: 256 },
             },
-            requiredManifestApiVersion: { const: "takosumi.com/v2" },
+            requiredManifestApiVersion: {
+              enum: ["takosumi.com/v2", "takosumi.com/v2.1"],
+            },
           },
           additionalProperties: false,
         },
@@ -3744,16 +3746,32 @@ function providerConnectionAndRecipeSchemas(): Record<
     CreateSourceCompatibilityCheckRequest: {
       type: "object",
       properties: {
-        sourceSnapshotId: { type: "string" },
+        sourceSnapshotId: {
+          type: "string",
+          description:
+            "Exact snapshot for a manual check. During Store compilation, an optional value must equal the latest root-synced SourceSnapshot selected by the server.",
+        },
         modulePath: {
           type: "string",
           description:
-            "Safe relative OpenTofu/Terraform module path inside the SourceSnapshot archive.",
+            "Safe relative OpenTofu/Terraform module path for a manual check. Must be omitted when compileInstallUx is true; the server selects from the repository manifest.",
         },
         capsuleId: { type: "string" },
-        installConfigId: { type: "string" },
-        compileInstallUx: { type: "boolean" },
-        capsuleName: { type: "string" },
+        installConfigId: {
+          type: "string",
+          description:
+            "DB-owned InstallConfig selected by a manual caller. Must be omitted when compileInstallUx is true; the server resolves the unique global Store policy config by repository URL.",
+        },
+        compileInstallUx: {
+          type: "boolean",
+          description:
+            "Compile repository-owned install UX before Capsule creation. Requires capsuleName and rejects capsuleId, modulePath, and installConfigId.",
+        },
+        capsuleName: {
+          type: "string",
+          description:
+            "Prospective Capsule name required for repository install UX compilation.",
+        },
       },
       additionalProperties: false,
     },

@@ -2,9 +2,10 @@
  * Replaceable reference InstallConfig composition for Takos-adjacent apps.
  *
  * These are ordinary Workspace-neutral service-side records. When present,
- * Store metadata associates a canonical Git URL/module path for presentation
- * only; it deliberately omits `ref`. Source synchronization and the reviewed
- * Run pin the commit used for execution. A config without
+ * Store metadata associates a canonical Git repository URL for presentation
+ * only; it deliberately omits module-selection authority and `ref`. Source
+ * synchronization, the repository manifest's default module, and the reviewed
+ * Run pin the bytes used for execution. A config without
  * Store metadata remains addressable explicitly without appearing in shared
  * discovery. No artifact value, provider credential, application secret, or
  * runtime declaration is read while composing these reference rows. A
@@ -31,7 +32,10 @@ import type {
   InstallConfigVariablePresentation,
   OutputAllowlistEntry,
 } from "takosumi-contract/install-configs";
-import { TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2 } from "takosumi-contract/repository-manifest";
+import {
+  TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2,
+  TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_1,
+} from "takosumi-contract/repository-manifest";
 import { CAPSULE_LIFECYCLE_COMMAND_CAPABILITY } from "takosumi-contract/install-configs";
 import { TAKOSUMI_ACCOUNTS_CAPSULE_DELEGATION_SCOPES } from "@takosjp/takosumi-accounts-contract";
 
@@ -39,7 +43,9 @@ const REFERENCE_CONFIG_TIMESTAMP = "2026-07-14T00:00:00.000Z";
 const MANAGED_APP_BASE_DOMAIN = "app.takos.jp";
 
 function repositoryInstallUxPolicy(
-  requiredManifestApiVersion?: typeof TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2,
+  requiredManifestApiVersion?:
+    | typeof TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2
+    | typeof TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_1,
 ) {
   return {
     allowedInterfacePermissions: [UI_SURFACE_OPEN_PERMISSION],
@@ -577,7 +583,7 @@ function yuruConfig(input: {
     policy: {
       repositoryInstallUx: repositoryInstallUxPolicy(
         input.app === "yurucommu"
-          ? TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2
+          ? TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_1
           : undefined,
       ),
     },
@@ -620,7 +626,7 @@ const { store: _yurucommuDirectStore, ...yurucommuDirectConfig } = yuruConfig({
 const yurucommuDirectInstallConfig =
   yurucommuDirectConfig satisfies InstallConfig;
 
-const yurucommuManagedSource = source("yurucommu", "deploy/takoform");
+const yurucommuManagedSource = source("yurucommu");
 
 /**
  * Normal Store install for Yurucommu.
@@ -630,7 +636,8 @@ const yurucommuManagedSource = source("yurucommu", "deploy/takoform");
  * authority which repository metadata cannot grant: managed hostname policy,
  * the typed database migration, and the host runtime/resource materialization
  * needed by the managed deployment. The repository's v2 manifest owns its
- * launcher declaration and `launch_url` projection.
+ * v2.1 manifest owns its default module, launcher declaration, and
+ * `launch_url` projection.
  */
 const yurucommuManagedConfig = {
   id: "cfg-reference-yurucommu-managed",
@@ -732,7 +739,7 @@ const yurucommuManagedConfig = {
   ],
   policy: {
     repositoryInstallUx: repositoryInstallUxPolicy(
-      TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2,
+      TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_1,
     ),
     providerCredentials: {
       requiredProviders: ["registry.opentofu.org/tako0614/takoform"],
@@ -1095,7 +1102,7 @@ const takosConfig = {
       requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
     },
     repositoryInstallUx: repositoryInstallUxPolicy(
-      TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2,
+      TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_1,
     ),
     lifecycleActions: {
       allowedExecutors: ["runner"],

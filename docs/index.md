@@ -79,6 +79,7 @@ dashboard、サインイン、永続データベース、OpenTofu runner を含�
 - [Resource](./concepts/resources.md) — module を書かずに型付きサービスを作る方法
 - [自分で動かす](./concepts/self-host.md) — production を運用するための構成
 - [Repository manifest](./reference/repository-manifest.md) /
+  [Store API](./reference/store-api.md) /
   [API](./reference/api.md) / [CLI](./reference/cli.md) /
   [設定](./reference/configuration.md)
 

@@ -18,7 +18,9 @@ acceptance case.
 
 - Yurucommu owns `.well-known/takosumi.json`.
 - The transitional direct module `.` remains declared and installable.
-- The normal Yurucommu Store coordinate selects `deploy/takoform`.
+- The Store supplies only the Yurucommu repository URL. The synced repository's
+  `takosumi.com/v2.1` manifest selects `deploy/takoform` through
+  `install.defaultModule`; the matching host policy cannot override it.
 - Takosumi compiles the exact module declaration into an immutable,
   Workspace-scoped `InstallConfig` before Capsule creation.
 - App vocabulary and labels come from the repository declaration. Managed
@@ -693,7 +695,8 @@ connection, or unsupported.
 
 Repositories: `takosumi` and `takosumi-store`.
 
-1. Keep TCS listings free of install setup fields.
+1. Keep TCS listings URL-only for install authority; names, descriptions,
+   icons, and generic search metadata remain presentation-only.
 2. Limit `.well-known/tcs.json` to TCS indexing presentation.
 3. Document `.well-known/takosumi.json` in Takosumi public/reference docs.
 4. Update `core-spec.md` and `core-conformance.md` in the same Takosumi change

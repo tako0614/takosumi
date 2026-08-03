@@ -3,7 +3,8 @@ import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
 import type { Source, SourceSnapshot } from "takosumi-contract/sources";
 import type { InstallConfig } from "takosumi-contract/install-configs";
 import {
-  TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2,
+  isRepositoryManifestInterfaceCapableApiVersion,
+  TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_1,
   type RepositoryManifestDocument,
 } from "takosumi-contract/repository-manifest";
 import type { JsonValue } from "takosumi-contract/types";
@@ -64,6 +65,8 @@ export type RepoOwnedInstallConfigAdoptionDiagnostic =
   | RepositoryInstallUxDiagnostic
   | {
       readonly code:
+        | "repository_install_ux_default_module_invalid"
+        | "repository_install_ux_default_module_missing"
         | "repository_install_ux_interface_blueprint_conflict"
         | "repository_install_ux_output_allowlist_conflict"
         | "repository_install_ux_installing_principal_invalid"
@@ -89,6 +92,8 @@ export type RepoOwnedInstallConfigAdoptionResult =
        * operator declaration on the base config keeps final authority.
        */
       readonly hostRuntimeMaterialization?: InstallConfig["hostRuntimeMaterialization"];
+      /** Exact repository module compiled into the derived InstallConfig. */
+      readonly modulePath: string;
       readonly sourceSnapshotId: string;
       readonly digest: string;
       readonly repositoryManifestApiVersion: RepositoryManifestDocument["apiVersion"];
@@ -178,11 +183,7 @@ export async function adoptRepoOwnedInstallConfig(
   if (observation.status === "invalid") {
     return {
       status: "invalid",
-      diagnostic: {
-        code: "repository_install_ux_document_invalid",
-        message:
-          "The repository install UX document is invalid; update the pinned repository metadata and sync the Source again.",
-      },
+      diagnostic: invalidRepositoryManifestDiagnostic(observation.diagnostic),
     };
   }
   if (
@@ -213,7 +214,14 @@ export async function adoptRepoOwnedInstallConfig(
     };
   }
 
-  const modulePath = selectedModulePath(input);
+  const moduleSelection = resolveRepoOwnedInstallModulePath({
+    sourceSnapshot: input.sourceSnapshot,
+    modulePath: input.modulePath,
+  });
+  if (!moduleSelection.ok) {
+    return { status: "invalid", diagnostic: moduleSelection.diagnostic };
+  }
+  const modulePath = moduleSelection.modulePath;
   let compatibilityReport = input.compatibilityReport;
   if (!compatibilityReport) {
     try {
@@ -261,7 +269,7 @@ export async function adoptRepoOwnedInstallConfig(
 
   const repositoryManifestApiVersion = observation.document.apiVersion;
   const proposedInterfaceBlueprints =
-    resolveV2InstallingPrincipalBlueprints(
+    resolveInterfaceInstallingPrincipalBlueprints(
       repositoryManifestApiVersion,
       compiled.compiled.interfaceBlueprints,
       installingPrincipalId,
@@ -269,13 +277,13 @@ export async function adoptRepoOwnedInstallConfig(
 
   const interfaceBlueprints = mergeReviewedInterfaceBlueprints({
     repositoryManifestApiVersion,
-    base: resolveV2InstallingPrincipalBlueprints(
+    base: resolveInterfaceInstallingPrincipalBlueprints(
       repositoryManifestApiVersion,
       input.baseConfig.interfaceBlueprints,
       installingPrincipalId,
     ),
     proposed: proposedInterfaceBlueprints,
-    reviewed: resolveV2InstallingPrincipalBlueprints(
+    reviewed: resolveInterfaceInstallingPrincipalBlueprints(
       repositoryManifestApiVersion,
       input.reviewedInterfaceBlueprints,
       installingPrincipalId,
@@ -323,6 +331,7 @@ export async function adoptRepoOwnedInstallConfig(
     sourceSnapshotId: input.sourceSnapshot!.id,
     digest: observation.digest,
     repositoryManifestApiVersion,
+    modulePath,
   };
 }
 
@@ -354,21 +363,31 @@ export async function previewRepoOwnedInstallConfig(
   });
   if (adoption.status !== "accepted") return adoption;
   const repositoryInterfaceDigestFields =
-    adoption.repositoryManifestApiVersion ===
-    TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2
+    isRepositoryManifestInterfaceCapableApiVersion(
+      adoption.repositoryManifestApiVersion,
+    )
       ? {
           interfaceBlueprints: adoption.interfaceBlueprints ?? [],
           outputAllowlist: adoption.outputAllowlist,
         }
       : {};
+  // The Store base config is only a policy ceiling. Its legacy presentation
+  // paths must not leak into the workspace-scoped config or choose the
+  // executable module. Bind the derived config to the exact synced Source;
+  // `modulePath` below independently records the repository-selected module.
+  const sourceSelector = {
+    url: input.source.url,
+    path: input.source.defaultPath,
+  };
 
   const digest = await stableJsonDigest({
     sourceSnapshotId: adoption.sourceSnapshotId,
     repositoryInstallUxDigest: adoption.digest,
-    modulePath: selectedModulePath(input),
+    modulePath: adoption.modulePath,
     baseInstallConfigId: input.baseConfig.id,
     baseInstallConfigUpdatedAt: input.baseConfig.updatedAt,
     capsuleName: input.capsuleName,
+    sourceSelector,
     variablePresentation: adoption.variablePresentation ?? [],
     installExperience: adoption.installExperience ?? {},
     hostRuntimeMaterialization: adoption.hostRuntimeMaterialization ?? null,
@@ -405,11 +424,11 @@ export async function previewRepoOwnedInstallConfig(
   }
 
   const now = new Date().toISOString();
-  const selectedPath = selectedModulePath(input);
+  const selectedPath = adoption.modulePath;
   const { modulePath: _baseModulePath, ...baseConfigWithoutModulePath } =
     input.baseConfig;
   const config = await input.operations.capsules.putInstallConfig({
-    ...(selectedPath === "." ? baseConfigWithoutModulePath : input.baseConfig),
+    ...baseConfigWithoutModulePath,
     id,
     workspaceId: input.workspaceId,
     name: `${input.capsuleName}-repository-install`,
@@ -428,7 +447,8 @@ export async function previewRepoOwnedInstallConfig(
     ...(adoption.hostRuntimeMaterialization
       ? { hostRuntimeMaterialization: adoption.hostRuntimeMaterialization }
       : {}),
-    ...(selectedPath !== "." ? { modulePath: selectedPath } : {}),
+    sourceSelector,
+    modulePath: selectedPath,
     createdAt: now,
     updatedAt: now,
   });
@@ -442,15 +462,15 @@ type DeclarationMergeResult<T> =
       readonly diagnostic: RepoOwnedInstallConfigAdoptionDiagnostic;
     };
 
-function resolveV2InstallingPrincipalBlueprints(
+function resolveInterfaceInstallingPrincipalBlueprints(
   repositoryManifestApiVersion: RepositoryManifestDocument["apiVersion"],
   blueprints: InstallConfig["interfaceBlueprints"],
   installingPrincipalId: string | undefined,
 ): InstallConfig["interfaceBlueprints"] {
   if (
-    repositoryManifestApiVersion !==
-      TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2 ||
-    !installingPrincipalId
+    !isRepositoryManifestInterfaceCapableApiVersion(
+      repositoryManifestApiVersion,
+    ) || !installingPrincipalId
   ) {
     return blueprints;
   }
@@ -469,8 +489,9 @@ function mergeReviewedInterfaceBlueprints(input: {
   readonly reviewed: InstallConfig["interfaceBlueprints"];
 }): DeclarationMergeResult<InstallConfig["interfaceBlueprints"]> {
   if (
-    input.repositoryManifestApiVersion !==
-    TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2
+    !isRepositoryManifestInterfaceCapableApiVersion(
+      input.repositoryManifestApiVersion,
+    )
   ) {
     return { ok: true, value: input.reviewed ?? input.base };
   }
@@ -533,8 +554,9 @@ function mergeReviewedOutputAllowlist(input: {
   readonly reviewed: InstallConfig["outputAllowlist"] | undefined;
 }): DeclarationMergeResult<InstallConfig["outputAllowlist"]> {
   if (
-    input.repositoryManifestApiVersion !==
-    TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2
+    !isRepositoryManifestInterfaceCapableApiVersion(
+      input.repositoryManifestApiVersion,
+    )
   ) {
     return { ok: true, value: input.reviewed ?? input.base };
   }
@@ -608,12 +630,99 @@ function boundedMergeIdentifier(value: string): string {
   return JSON.stringify(value.replace(/[\0-\u001f\u007f]/gu, "").slice(0, 96));
 }
 
-function selectedModulePath(
-  input: RepoOwnedInstallConfigAdoptionInput,
-): string {
-  const selected =
-    input.modulePath ?? input.baseConfig.modulePath ?? input.source.defaultPath;
-  return !selected || selected === "" ? "." : selected;
+export type RepoOwnedInstallModulePathResolution =
+  | { readonly ok: true; readonly modulePath: string }
+  | {
+      readonly ok: false;
+      readonly diagnostic: RepoOwnedInstallConfigAdoptionDiagnostic;
+    };
+
+/**
+ * Select the repository-owned install module without consulting Store, Source,
+ * or base InstallConfig paths. An explicit path remains available to the
+ * ordinary manual Git flow; Store preflight calls this with no explicit path.
+ */
+export function resolveRepoOwnedInstallModulePath(input: {
+  readonly sourceSnapshot: SourceSnapshot | undefined;
+  readonly modulePath?: string;
+}): RepoOwnedInstallModulePathResolution {
+  const observation = input.sourceSnapshot?.repositoryManifest;
+  if (!observation || observation.status === "absent") {
+    return {
+      ok: false,
+      diagnostic: {
+        code: "repository_install_ux_default_module_missing",
+        message:
+          "Repository install UX cannot select a module because the repository manifest is absent.",
+      },
+    };
+  }
+  if (observation.status === "invalid") {
+    return {
+      ok: false,
+      diagnostic: invalidRepositoryManifestDiagnostic(observation.diagnostic),
+    };
+  }
+
+  if (input.modulePath !== undefined) {
+    return {
+      ok: true,
+      modulePath: input.modulePath === "" ? "." : input.modulePath,
+    };
+  }
+
+  const document = observation.document;
+  const modulePaths = Object.keys(document.install.modules);
+  if (document.apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_1) {
+    const defaultModule = document.install.defaultModule;
+    if (
+      defaultModule !== undefined &&
+      !Object.prototype.hasOwnProperty.call(
+        document.install.modules,
+        defaultModule,
+      )
+    ) {
+      return {
+        ok: false,
+        diagnostic: {
+          code: "repository_install_ux_default_module_invalid",
+          message:
+            "Repository install UX defaultModule must name an exact canonical install.modules key.",
+        },
+      };
+    }
+    if (defaultModule !== undefined) {
+      return { ok: true, modulePath: defaultModule };
+    }
+  }
+  if (modulePaths.length === 1) {
+    return { ok: true, modulePath: modulePaths[0]! };
+  }
+  return {
+    ok: false,
+    diagnostic: {
+      code: "repository_install_ux_default_module_missing",
+      message:
+        "Repository install UX declares multiple modules; takosumi.com/v2.1 install.defaultModule is required.",
+    },
+  };
+}
+
+function invalidRepositoryManifestDiagnostic(
+  parserDiagnostic: string | undefined,
+): RepoOwnedInstallConfigAdoptionDiagnostic {
+  if (parserDiagnostic?.startsWith("install.defaultModule")) {
+    return {
+      code: "repository_install_ux_default_module_invalid",
+      message:
+        "The repository install UX default module declaration is invalid; update the pinned repository metadata and sync the Source again.",
+    };
+  }
+  return {
+    code: "repository_install_ux_document_invalid",
+    message:
+      "The repository install UX document is invalid; update the pinned repository metadata and sync the Source again.",
+  };
 }
 
 function mergeVariablePresentation(

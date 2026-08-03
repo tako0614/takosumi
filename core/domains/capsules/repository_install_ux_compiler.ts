@@ -29,6 +29,7 @@ import {
   deliversToVariables,
   deliveryTargets,
   findForbiddenRepositoryManifestMaterial,
+  isRepositoryManifestInterfaceCapableApiVersion,
 } from "takosumi-contract/repository-manifest";
 import { HOST_RUNTIME_MATERIALIZATION_CONTRACT } from "takosumi-contract";
 import type { JsonValue } from "takosumi-contract/types";
@@ -402,10 +403,10 @@ function compileInterfaceDeclarations(
   if (declarations.length === 0) {
     return { ok: true, interfaceBlueprints: [], outputAllowlist: {} };
   }
-  if (input.apiVersion !== "takosumi.com/v2") {
+  if (!isRepositoryManifestInterfaceCapableApiVersion(input.apiVersion)) {
     return invalid(
       "repository_install_ux_interface_version_unsupported",
-      "Repository-owned Interface declarations require takosumi.com/v2.",
+      "Repository-owned Interface declarations require takosumi.com/v2 or takosumi.com/v2.1.",
     );
   }
 

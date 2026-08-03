@@ -107,9 +107,10 @@ function currentV2Manifest(
 ): RepositoryManifestDocument {
   const launcher = currentV2Launcher(app);
   return {
-    apiVersion: "takosumi.com/v2",
+    apiVersion: "takosumi.com/v2.1",
     kind: "Repository",
     install: {
+      defaultModule: app === "takos" ? "deploy/opentofu" : "deploy/takoform",
       modules: Object.fromEntries(
         modulePaths.map((modulePath) => [
           modulePath,
@@ -329,7 +330,7 @@ test("reference app composition exposes five replaceable Store source identities
       ...(config.name === "takos-main" ||
       config.name === "yurucommu-main" ||
       config.name === "yurucommu-managed"
-        ? { requiredManifestApiVersion: "takosumi.com/v2" }
+        ? { requiredManifestApiVersion: "takosumi.com/v2.1" }
         : {}),
     });
   }
@@ -338,7 +339,7 @@ test("reference app composition exposes five replaceable Store source identities
     expect(config.sourceSelector).toEqual(config.store!.source);
     expect(config.store!.source).toEqual({
       url: config.store!.source!.url,
-      path: config.name === "yurucommu-managed" ? "deploy/takoform" : ".",
+      path: ".",
     });
     // Store presentation does not select a ref. The Source sync/Run path owns
     // the reviewed ref and resolves it to an immutable SourceSnapshot commit.
@@ -687,7 +688,7 @@ test("reference configs contain no retired runtime authority schema", () => {
   });
 });
 
-test("current v2 app manifests are adopted into exact launcher/output/binding materialization", async () => {
+test("current v2.1 app manifests are adopted into exact launcher/output/binding materialization", async () => {
   for (const fixture of CURRENT_V2_FIXTURE_CASES) {
     const config = REFERENCE_APP_INSTALL_CONFIGS.find(
       (candidate) => candidate.name === fixture.configName,
@@ -753,7 +754,7 @@ test("current v2 app manifests are adopted into exact launcher/output/binding ma
   }
 });
 
-test("strict v2 reference configs reject absent and legacy v1 snapshots before Capsule creation", async () => {
+test("strict v2.1 reference configs reject absent and legacy v1 snapshots before Capsule creation", async () => {
   for (const fixture of CURRENT_V2_FIXTURE_CASES) {
     const config = REFERENCE_APP_INSTALL_CONFIGS.find(
       (candidate) => candidate.name === fixture.configName,
@@ -780,7 +781,7 @@ test("strict v2 reference configs reject absent and legacy v1 snapshots before C
       diagnostic: {
         code: "repository_install_ux_manifest_api_version_required",
         message:
-          "Repository install UX requires manifest API takosumi.com/v2; observed absent.",
+          "Repository install UX requires manifest API takosumi.com/v2.1; observed absent.",
       },
     });
 
@@ -812,7 +813,7 @@ test("strict v2 reference configs reject absent and legacy v1 snapshots before C
       diagnostic: {
         code: "repository_install_ux_manifest_api_version_required",
         message:
-          "Repository install UX requires manifest API takosumi.com/v2; observed takosumi.com/v1.",
+          "Repository install UX requires manifest API takosumi.com/v2.1; observed takosumi.com/v1.",
       },
     });
   }
@@ -872,12 +873,12 @@ test("generic configs retain absent and v1 repository install UX compatibility",
   }
 });
 
-test("Store selection still resolves Takos and direct Yurucommu sources without central launcher declarations", () => {
+test("Store discovery resolves URL-only host policies without central launcher declarations", () => {
   expect(
     uniqueStoreInstallConfigForSource(
       REFERENCE_APP_INSTALL_CONFIGS,
       "https://github.com/tako0614/takos.git",
-      ".",
+      "deploy/opentofu",
     )?.name,
   ).toBe("takos-main");
   expect(
@@ -886,5 +887,5 @@ test("Store selection still resolves Takos and direct Yurucommu sources without 
       "https://github.com/tako0614/yurucommu.git",
       ".",
     )?.name,
-  ).toBe("yurucommu-main");
+  ).toBe("yurucommu-managed");
 });

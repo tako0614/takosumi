@@ -121,7 +121,7 @@ function managedInstallConfig(): InstallConfig {
     name: "yurucommu-managed",
     sourceResourceKind: "generic_capsule",
     installType: "opentofu_module",
-    sourceSelector: { url: SOURCE_URL, path: MODULE_PATH },
+    sourceSelector: { url: SOURCE_URL, path: "." },
     modulePath: MODULE_PATH,
     variableMapping: compiled.compiled.variableMapping,
     variablePresentation: compiled.compiled.variablePresentation,
@@ -139,7 +139,7 @@ function managedInstallConfig(): InstallConfig {
         ja: "コミュニティ向けSNS",
         en: "A community social network",
       },
-      source: { url: SOURCE_URL, path: MODULE_PATH },
+      source: { url: SOURCE_URL, path: "." },
     },
     createdAt: NOW,
     updatedAt: NOW,
@@ -147,20 +147,19 @@ function managedInstallConfig(): InstallConfig {
 }
 
 describe("Yurucommu managed Store cutover contract", () => {
-  test("normal Store selection resolves only the exact managed module InstallConfig", () => {
+  test("normal Store selection resolves only the URL-eligible managed module InstallConfig", () => {
     const managed = managedInstallConfig();
-    const direct = {
+    const { store: _directStore, ...direct } = {
       ...managed,
       id: "config_yurucommu_direct",
       name: "yurucommu-direct",
       sourceSelector: { url: SOURCE_URL, path: "." },
       modulePath: ".",
-      store: {
-        ...managed.store!,
-        source: { url: SOURCE_URL, path: "." },
-      },
     };
 
+    expect(
+      uniqueStoreInstallConfigForSource([direct], SOURCE_URL, "."),
+    ).toBeNull();
     expect(
       uniqueStoreInstallConfigForSource(
         [direct, managed],
@@ -170,7 +169,15 @@ describe("Yurucommu managed Store cutover contract", () => {
     ).toBe(managed.id);
     expect(
       uniqueStoreInstallConfigForSource([direct, managed], SOURCE_URL, ".")?.id,
-    ).toBe(direct.id);
+    ).toBe(managed.id);
+    expect(managed.sourceSelector).toEqual({
+      url: SOURCE_URL,
+      path: ".",
+    });
+    expect(managed.store?.source).toEqual({
+      url: SOURCE_URL,
+      path: ".",
+    });
     expect(managed.modulePath).toBe(MODULE_PATH);
     expect(managed.variableMapping).toEqual({ project_name: "yurucommu" });
     expect(managed.outputAllowlist).toEqual({});
@@ -187,7 +194,11 @@ describe("Yurucommu managed Store cutover contract", () => {
     expect(managed.modulePath).toBe(MODULE_PATH);
     expect(managed.sourceSelector).toEqual({
       url: SOURCE_URL,
-      path: MODULE_PATH,
+      path: ".",
+    });
+    expect(managed.store?.source).toEqual({
+      url: SOURCE_URL,
+      path: ".",
     });
     expect(managed.interfaceBlueprints).toBeUndefined();
     expect(managed.outputAllowlist).toEqual({});

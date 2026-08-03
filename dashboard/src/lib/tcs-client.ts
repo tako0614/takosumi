@@ -1,6 +1,6 @@
 /**
  * Takosumi Capsule Store (TCS) read client — the small open read spec a store
- * node exposes (GET /tcs/v1/listings etc.). The store is a SEPARATE product
+ * node exposes (GET /tcs/v2/listings etc.). The store is a SEPARATE product
  * (`takosumi-store`). This repository carries its own consumer implementation
  * of the open wire contract so standalone checkouts remain buildable.
  *
@@ -22,9 +22,11 @@ export interface TcsLocalizedText {
 
 /**
  * Store discovery is adapted to Takosumi's local `url` field only after the
- * Store-owned `{ git, path }` wire tuple has passed its runtime parser.
+ * Store-owned v2 `{ git }` wire source has passed its runtime parser. Legacy
+ * v1 `{ git, path }` rows are accepted for the migration read path, but the
+ * path is discarded before it reaches the dashboard.
  */
-export type TcsListingSource = Pick<GitAddress, "url" | "path">;
+export type TcsListingSource = Pick<GitAddress, "url">;
 
 /** Operator-defined presentation tokens; neither field grants execution authority. */
 export type TcsListingKind = string;
@@ -35,10 +37,11 @@ export interface TcsListing {
   /** Dashboard aggregation hint used to rehydrate `/new` hand-offs. */
   readonly primaryServer?: string;
   readonly source: TcsListingSource;
-  readonly kind: TcsListingKind;
-  readonly surface: TcsListingSurface;
-  readonly provider: string;
-  readonly category: string;
+  /** Optional v2 presentation facets; absence must not affect install policy. */
+  readonly kind?: TcsListingKind;
+  readonly surface?: TcsListingSurface;
+  readonly provider?: string;
+  readonly category?: string;
   readonly suggestedName: string;
   readonly name: TcsLocalizedText;
   readonly description: TcsLocalizedText;
@@ -61,7 +64,8 @@ export interface TcsRepoMetadata {
   readonly iconUrl?: string;
 }
 
-export type TcsSort = "updated" | "created" | "name";
+/** Sort values accepted by the canonical TCS 2.0 listing routes. */
+export type TcsSort = "updated" | "created";
 
 export interface TcsListingsPage {
   readonly items: readonly TcsListing[];
@@ -72,6 +76,7 @@ export interface TcsServerInfo {
   readonly spec: {
     readonly version: string;
     readonly capabilities: readonly string[];
+    readonly compatibleVersions?: readonly string[];
   };
   readonly server: {
     readonly name: string;
@@ -83,8 +88,8 @@ export interface TcsServerInfo {
     readonly key: string;
     readonly count: number;
   }[];
-  readonly kinds: readonly { readonly key: string; readonly count: number }[];
-  readonly providers: readonly {
+  readonly kinds?: readonly { readonly key: string; readonly count: number }[];
+  readonly providers?: readonly {
     readonly key: string;
     readonly count: number;
   }[];
@@ -106,14 +111,34 @@ function joinBase(base: string, path: string): string {
   return `${base.replace(/\/+$/, "")}${path}`;
 }
 
+/**
+ * TCS v2 is the canonical read surface. During the wire migration an older
+ * node may expose only v1, so a missing v2 route gets one read-only fallback.
+ * We intentionally do not fall back for a live v2 response (including 405),
+ * a server error, or a 501 search result:
+ * those statuses describe a live v2 endpoint and must retain their meaning.
+ */
+async function fetchTcsRead(
+  base: string,
+  v2Path: string,
+  options: RequestInit,
+  v1Path = v2Path.replace("/tcs/v2/", "/tcs/v1/"),
+): Promise<Response> {
+  const primary = await fetch(joinBase(base, v2Path), options);
+  if (primary.status !== 404) return primary;
+  return fetch(joinBase(base, v1Path), options);
+}
+
 export async function fetchTcsServerInfo(
   base: string,
   signal?: AbortSignal,
 ): Promise<TcsServerInfo> {
-  const res = await fetch(joinBase(base, "/.well-known/tcs"), {
-    headers: { accept: "application/json" },
-    signal,
-  });
+  const res = await fetchTcsRead(
+    base,
+    "/tcs/v2/server-info",
+    { headers: { accept: "application/json" }, signal },
+    "/.well-known/tcs",
+  );
   if (!res.ok) throw new Error(`server-info ${res.status}`);
   return (await res.json()) as TcsServerInfo;
 }
@@ -123,16 +148,25 @@ export async function fetchTcsListingsPage(
   query: TcsPageQuery = {},
 ): Promise<TcsListingsPage> {
   const params = new URLSearchParams();
-  if (query.sort) params.set("sort", query.sort);
+  // TCS 2.0 deliberately dropped the v1 name sort. Keep the runtime guard in
+  // addition to the narrow type because the browser select is DOM data at the
+  // boundary and stale callers may still pass an old value.
+  if (query.sort === "updated" || query.sort === "created") {
+    params.set("sort", query.sort);
+  }
   if (query.limit) params.set("limit", String(query.limit));
   if (query.cursor) params.set("cursor", query.cursor);
-  const path = query.q
-    ? `/tcs/v1/listings/search?q=${encodeURIComponent(query.q)}&${params}`
-    : `/tcs/v1/listings?${params}`;
-  const res = await fetch(joinBase(base, path), {
-    headers: { accept: "application/json" },
-    signal: query.signal,
-  });
+  const path = query.q ? "/tcs/v2/listings/search" : "/tcs/v2/listings";
+  if (query.q) params.set("q", query.q);
+  const queryString = params.toString();
+  const res = await fetchTcsRead(
+    base,
+    `${path}${queryString ? `?${queryString}` : ""}`,
+    {
+      headers: { accept: "application/json" },
+      signal: query.signal,
+    },
+  );
   if (res.status === 501)
     throw new TcsNotSupportedError("search not supported");
   if (!res.ok) throw new Error(`listings ${res.status}`);
@@ -144,9 +178,17 @@ export async function fetchTcsListing(
   id: string,
   signal?: AbortSignal,
 ): Promise<TcsListing | null> {
-  const res = await fetch(
-    joinBase(base, `/tcs/v1/listings/${encodeURIComponent(id)}`),
+  const segments = id.split("/");
+  const scope = segments[0]?.trim();
+  const slug = segments[1]?.trim();
+  if (segments.length !== 2 || !scope || !slug) {
+    throw new Error("listing id must be a non-empty scope/slug pair");
+  }
+  const res = await fetchTcsRead(
+    base,
+    `/tcs/v2/listings/${encodeURIComponent(scope)}/${encodeURIComponent(slug)}`,
     { headers: { accept: "application/json" }, signal },
+    `/tcs/v1/listings/${encodeURIComponent(id)}`,
   );
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`listing ${res.status}`);
@@ -177,10 +219,10 @@ export function sanitizeTcsListingSource(value: unknown): TcsListingSource {
   const source = parseTcsListingSource(value);
   if (!source) {
     throw new Error(
-      "listing source must be the canonical TCS { git, path } tuple",
+      "listing source must be the canonical TCS v2 { git } source",
     );
   }
-  return { url: source.git, path: source.path };
+  return { url: source.git };
 }
 
 function sanitizeTcsListingsPage(page: TcsListingsPage): TcsListingsPage {
@@ -260,7 +302,6 @@ export function mergeTcsListingRepoMetadata(
 export function tcsListingIdentity(source: TcsListingSource): string {
   const identity = tcsListingSourceIdentity({
     git: source.url,
-    path: source.path,
   });
   if (!identity) throw new Error("invalid canonical TCS listing source");
   return identity;

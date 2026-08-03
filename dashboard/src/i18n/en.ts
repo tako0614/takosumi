@@ -1572,7 +1572,8 @@ export const en: Record<keyof typeof ja, string> = {
   "resources.detail.s3Keys.copied": "Copied",
   "resources.detail.s3Keys.copyFailed":
     "Could not copy the credentials. Save the visible values manually.",
-  "resources.detail.s3Keys.empty": "No S3-compatible access keys for this Resource.",
+  "resources.detail.s3Keys.empty":
+    "No S3-compatible access keys for this Resource.",
   "resources.detail.s3Keys.status.active": "Active",
   "resources.detail.s3Keys.status.revoked": "Revoked",
   "resources.detail.s3Keys.revoke": "Revoke",

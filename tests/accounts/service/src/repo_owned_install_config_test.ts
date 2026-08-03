@@ -178,7 +178,159 @@ async function adopt(
   });
 }
 
+function snapshotWithManifest(
+  repositoryManifest: SourceSnapshot["repositoryManifest"],
+): SourceSnapshot {
+  return { ...sourceSnapshot, repositoryManifest };
+}
+
+function reportForModule(modulePath: string): CapsuleCompatibilityReport {
+  return {
+    ...compatibilityReport,
+    modulePath,
+    rootModuleOutputs: [],
+  };
+}
+
+describe("repository-owned default module selection", () => {
+  test("infers the only declared module without consulting Source or base InstallConfig paths", async () => {
+    const document = {
+      apiVersion: "takosumi.com/v1",
+      kind: "Repository",
+      install: { modules: { "deploy/only": { inputs: [] } } },
+    } satisfies RepositoryManifestDocument;
+
+    const result = await adopt(baseConfig({ modulePath: "host/base" }), {
+      sourceSnapshot: snapshotWithManifest({
+        status: "present",
+        digest: MANIFEST_DIGEST,
+        document,
+      }),
+      modulePath: undefined,
+      compatibilityReport: reportForModule("deploy/only"),
+    });
+
+    expect(result.status).toBe("accepted");
+    if (result.status !== "accepted") return;
+    expect(result.modulePath).toBe("deploy/only");
+  });
+
+  test("uses the v2.1 exact default for multiple modules and ignores the base InstallConfig path", async () => {
+    const document = {
+      apiVersion: "takosumi.com/v2.1",
+      kind: "Repository",
+      install: {
+        defaultModule: "deploy/selected",
+        modules: {
+          ".": { inputs: [] },
+          "deploy/selected": { inputs: [] },
+        },
+      },
+    } satisfies RepositoryManifestDocument;
+
+    const result = await adopt(baseConfig({ modulePath: "." }), {
+      sourceSnapshot: snapshotWithManifest({
+        status: "present",
+        digest: MANIFEST_DIGEST,
+        document,
+      }),
+      modulePath: undefined,
+      compatibilityReport: reportForModule("deploy/selected"),
+    });
+
+    expect(result.status).toBe("accepted");
+    if (result.status !== "accepted") return;
+    expect(result.modulePath).toBe("deploy/selected");
+  });
+
+  test("fails closed when multiple modules have no v2.1 exact default", async () => {
+    const document = {
+      apiVersion: "takosumi.com/v2",
+      kind: "Repository",
+      install: {
+        modules: {
+          "deploy/first": { inputs: [] },
+          "deploy/second": { inputs: [] },
+        },
+      },
+    } satisfies RepositoryManifestDocument;
+
+    const result = await adopt(baseConfig({ modulePath: "deploy/first" }), {
+      sourceSnapshot: snapshotWithManifest({
+        status: "present",
+        digest: MANIFEST_DIGEST,
+        document,
+      }),
+      modulePath: undefined,
+      compatibilityReport: reportForModule("deploy/first"),
+    });
+
+    expect(result).toEqual({
+      status: "invalid",
+      diagnostic: {
+        code: "repository_install_ux_default_module_missing",
+        message:
+          "Repository install UX declares multiple modules; takosumi.com/v2.1 install.defaultModule is required.",
+      },
+    });
+  });
+
+  test("returns the typed default diagnostic for an invalid captured declaration", async () => {
+    const result = await adopt(baseConfig(), {
+      sourceSnapshot: snapshotWithManifest({
+        status: "invalid",
+        reason: "invalid_document",
+        digest: MANIFEST_DIGEST,
+        diagnostic:
+          "install.defaultModule must name an exact install.modules key",
+      }),
+      modulePath: undefined,
+    });
+
+    expect(result).toEqual({
+      status: "invalid",
+      diagnostic: {
+        code: "repository_install_ux_default_module_invalid",
+        message:
+          "The repository install UX default module declaration is invalid; update the pinned repository metadata and sync the Source again.",
+      },
+    });
+  });
+});
+
 describe("repository-owned Interface InstallConfig adoption", () => {
+  test("v2.1 preserves v2 Interface proposal merging and installing Principal resolution", async () => {
+    const v2_1Document = {
+      ...repositoryDocument,
+      apiVersion: "takosumi.com/v2.1",
+      install: { ...repositoryDocument.install, defaultModule: "." },
+    } satisfies RepositoryManifestDocument;
+
+    const result = await adopt(baseConfig(), {
+      sourceSnapshot: snapshotWithManifest({
+        status: "present",
+        digest: MANIFEST_DIGEST,
+        document: v2_1Document,
+      }),
+      modulePath: undefined,
+      installingPrincipalId: "principal_v2_1_installer",
+    });
+
+    expect(result.status).toBe("accepted");
+    if (result.status !== "accepted") return;
+    expect(result.interfaceBlueprints?.[0]?.bindings).toEqual([
+      {
+        key: "installer",
+        subjectRef: { kind: "Principal", id: "principal_v2_1_installer" },
+        permissions: ["ui.inspect", "ui.open"],
+        delivery: { type: "none" },
+      },
+    ]);
+    expect(result.outputAllowlist).toEqual({
+      launch_url: { from: "launch_url", type: "url", required: true },
+    });
+  });
+
   test.each([
     ["an absent", {}],
     ["an empty", { repositoryInstallUx: { allowedInterfacePermissions: [] } }],

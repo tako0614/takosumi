@@ -102,7 +102,7 @@ describe("plain environment variable names", () => {
 });
 
 describe("store install metadata", () => {
-  test("matches app-specific config by canonical URL and module path only", () => {
+  test("matches Store metadata by canonical repository URL only", () => {
     const listing: TcsListing = {
       id: "publisher/example",
       source: {
@@ -155,14 +155,14 @@ describe("store install metadata", () => {
       storeSourceMatchesListing(
         {
           url: "https://example.test/example.git",
-          path: "deploy/other",
+          path: "../not-authority",
         },
         listing,
       ),
-    ).toBe(false);
+    ).toBe(true);
   });
 
-  test("finds direct-Git InstallConfigs by service-side URL/path with no ref authority", () => {
+  test("finds only explicit Store-eligible overlays by URL", () => {
     const matching = installConfig({
       id: "cfg-matching",
       sourceSelector: {
@@ -186,6 +186,10 @@ describe("store install metadata", () => {
       },
     });
     const duplicate = installConfig({ ...matching, id: "cfg-duplicate" });
+    const generic = installConfig({
+      id: "cfg-generic-same-url",
+      sourceSelector: matching.sourceSelector,
+    });
     const unrelated = installConfig({
       id: "cfg-unrelated",
       sourceSelector: {
@@ -205,35 +209,33 @@ describe("store install metadata", () => {
       storeInstallConfigsForSource(
         [matching, unrelated],
         "https://example.test/example",
-        "deploy/opentofu",
       ).map((config) => config.id),
     ).toEqual(["cfg-matching"]);
     expect(
       storeInstallConfigsForSource(
         [matching, duplicate],
         "https://example.test/example.git",
-        "deploy/opentofu",
       ),
     ).toHaveLength(2);
+    expect(
+      storeInstallConfigsForSource([generic], "https://example.test/example.git"),
+    ).toEqual([]);
     expect(
       storeInstallConfigsForSource(
         [matching],
         "https://example.test/example.git",
-        "other",
       ),
-    ).toHaveLength(0);
+    ).toHaveLength(1);
     expect(
       uniqueStoreInstallConfigForSource(
         [matching, unrelated],
         "https://example.test/example.git",
-        "deploy/opentofu",
       )?.id,
     ).toBe("cfg-matching");
     expect(
       uniqueStoreInstallConfigForSource(
         [matching, duplicate],
         "https://example.test/example.git",
-        "deploy/opentofu",
       ),
     ).toBeNull();
     // A presentation-only Store row must never fall back to the generic
@@ -251,7 +253,6 @@ describe("store install metadata", () => {
           }),
         ],
         "https://example.test/example.git",
-        "deploy/opentofu",
       ),
     ).toBeNull();
     expect(
@@ -263,16 +264,53 @@ describe("store install metadata", () => {
           }),
         ],
         "https://example.test/example.git",
-        "deploy/opentofu",
       ),
     ).toHaveLength(0);
     expect(
       storeInstallConfigsForSource(
         [matching],
         "https://example.test/Example.git",
-        "deploy/opentofu",
       ),
     ).toHaveLength(0);
+  });
+
+  test("ignores config module paths until the server resolves the Store module", () => {
+    const nestedModule = installConfig({
+      id: "cfg-nested-module",
+      sourceSelector: {
+        url: "https://example.test/example.git",
+        path: ".",
+      },
+      modulePath: "deploy/opentofu",
+      store: {
+        source: {
+          url: "https://example.test/example.git",
+          path: "legacy/path",
+        },
+        order: 1,
+        surface: "service",
+        kind: "app",
+        provider: "example",
+        suggestedName: "example",
+        badge: { ja: "追加", en: "Install" },
+        name: { ja: "Example", en: "Example" },
+        description: { ja: "Example", en: "Example" },
+      },
+    });
+
+    expect(
+      uniqueStoreInstallConfigForSource(
+        [nestedModule],
+        "https://example.test/example.git",
+      )?.id,
+    ).toBe("cfg-nested-module");
+    expect(
+      uniqueStoreInstallConfigForSource(
+        [nestedModule],
+        "https://example.test/example.git",
+        "another/legacy/path",
+      ),
+    ).toBe(nestedModule);
   });
 
   test("ignores incomplete legacy Store source rows instead of crashing the install view", () => {
@@ -435,7 +473,6 @@ describe("store install metadata", () => {
     expect(metadata).not.toHaveProperty("installExperience");
     expect(metadata.source).toEqual({
       url: "https://example.test/example.git",
-      path: ".",
     });
     expect(metadata.source).not.toHaveProperty("ref");
     expect(entry.inputs).toEqual(inputs);

@@ -7,15 +7,18 @@ import { containsSecretLikeString, isSecretKey } from "./redaction.ts";
  *
  * The manifest is an extensible envelope, but every API version is a closed
  * object. Version 1 carries only install presentation. Version 2 adds generic
- * Capsule-owned Interface proposals; those are still only proposals until
- * Takosumi validates and compiles them into its DB-owned InstallConfig before a
- * reviewed Plan can use them.
+ * Capsule-owned Interface proposals. Version 2.1 retains that exact module
+ * vocabulary and adds only an optional repository-owned default module key.
+ * Every declaration is still only a proposal until Takosumi validates and
+ * compiles it into its DB-owned InstallConfig before a reviewed Plan can use it.
  */
 
 export const TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION =
   "takosumi.com/v1" as const;
 export const TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2 =
   "takosumi.com/v2" as const;
+export const TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_1 =
+  "takosumi.com/v2.1" as const;
 export const TAKOSUMI_REPOSITORY_MANIFEST_KIND = "Repository" as const;
 export const TAKOSUMI_REPOSITORY_MANIFEST_PATH =
   ".well-known/takosumi.json" as const;
@@ -176,7 +179,7 @@ export interface RepositoryInstallUxModule {
   readonly inputs: readonly RepositoryInstallUxInput[];
   readonly requires?: readonly RepositoryRuntimeRequirement[];
   readonly features?: readonly RepositoryInstallUxFeature[];
-  /** Present only in the closed `takosumi.com/v2` module vocabulary. */
+  /** Present only in the closed `takosumi.com/v2` and `v2.1` vocabularies. */
   readonly interfaces?: readonly RepositoryInterfaceDeclaration[];
 }
 
@@ -193,10 +196,17 @@ export interface RepositoryManifestInstallV2 {
   readonly modules: Readonly<Record<string, RepositoryInstallUxModule>>;
 }
 
+export interface RepositoryManifestInstallV2_1 {
+  readonly modules: Readonly<Record<string, RepositoryInstallUxModule>>;
+  /** Exact canonical key of `modules`; optional only for one-module inference. */
+  readonly defaultModule?: string;
+}
+
 /** Compatibility alias for callers that only need the install envelope. */
 export type RepositoryManifestInstall =
   | RepositoryManifestInstallV1
-  | RepositoryManifestInstallV2;
+  | RepositoryManifestInstallV2
+  | RepositoryManifestInstallV2_1;
 
 export interface RepositoryManifestDocumentV1 {
   readonly apiVersion: typeof TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION;
@@ -210,9 +220,30 @@ export interface RepositoryManifestDocumentV2 {
   readonly install: RepositoryManifestInstallV2;
 }
 
+export interface RepositoryManifestDocumentV2_1 {
+  readonly apiVersion: typeof TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_1;
+  readonly kind: typeof TAKOSUMI_REPOSITORY_MANIFEST_KIND;
+  readonly install: RepositoryManifestInstallV2_1;
+}
+
 export type RepositoryManifestDocument =
   | RepositoryManifestDocumentV1
-  | RepositoryManifestDocumentV2;
+  | RepositoryManifestDocumentV2
+  | RepositoryManifestDocumentV2_1;
+
+export type RepositoryManifestInterfaceApiVersion =
+  | typeof TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2
+  | typeof TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_1;
+
+/** v2.1 is an additive schema revision and retains the full v2 Interface wire. */
+export function isRepositoryManifestInterfaceCapableApiVersion(
+  apiVersion: RepositoryManifestDocument["apiVersion"] | string,
+): apiVersion is RepositoryManifestInterfaceApiVersion {
+  return (
+    apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2 ||
+    apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_1
+  );
+}
 
 export type RepositoryManifestParseResult =
   | { readonly ok: true; readonly document: RepositoryManifestDocument }
@@ -246,10 +277,11 @@ export function parseRepositoryManifestText(
   const apiVersion = oneOf(value.apiVersion, [
     TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION,
     TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2,
+    TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_1,
   ] as const);
   if (!apiVersion) {
     return invalid(
-      `apiVersion must be ${TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION} or ${TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2}`,
+      `apiVersion must be ${TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION}, ${TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2}, or ${TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_1}`,
     );
   }
   if (value.kind !== TAKOSUMI_REPOSITORY_MANIFEST_KIND) {
@@ -258,7 +290,12 @@ export function parseRepositoryManifestText(
   if (!isPlainRecord(value.install)) {
     return invalid("install must be an object");
   }
-  const installKeys = exactKeys(value.install, ["modules"]);
+  const installKeys = exactKeys(value.install, [
+    "modules",
+    ...(apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_1
+      ? ["defaultModule"]
+      : []),
+  ]);
   if (installKeys) return invalid(`install.${installKeys}`);
   if (!isPlainRecord(value.install.modules)) {
     return invalid("install.modules must be an object");
@@ -281,17 +318,39 @@ export function parseRepositoryManifestText(
     const parsed = parseModule(
       rawModule,
       modulePath,
-      apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2,
+      isRepositoryManifestInterfaceCapableApiVersion(apiVersion),
     );
     if (typeof parsed === "string") return invalid(parsed);
     modules[modulePath] = parsed;
+  }
+  const defaultModule =
+    apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_1
+      ? value.install.defaultModule
+      : undefined;
+  if (defaultModule !== undefined) {
+    if (
+      typeof defaultModule !== "string" ||
+      !isCanonicalModulePath(defaultModule)
+    ) {
+      return invalid(
+        "install.defaultModule must be a canonical safe relative module path",
+      );
+    }
+    if (!Object.prototype.hasOwnProperty.call(modules, defaultModule)) {
+      return invalid(
+        "install.defaultModule must name an exact install.modules key",
+      );
+    }
   }
   return {
     ok: true,
     document: {
       apiVersion,
       kind: TAKOSUMI_REPOSITORY_MANIFEST_KIND,
-      install: { modules },
+      install: {
+        modules,
+        ...(defaultModule !== undefined ? { defaultModule } : {}),
+      },
     } as RepositoryManifestDocument,
   };
 }
@@ -702,6 +761,12 @@ function parseInput(
   if (value.placeholder !== undefined && !placeholder) {
     return `${prefix}.placeholder must be a non-empty bounded string`;
   }
+  const forbiddenPlaceholder = placeholder
+    ? findForbiddenRepositoryManifestMaterial(placeholder)
+    : undefined;
+  if (forbiddenPlaceholder) {
+    return `${prefix}.placeholder contains forbidden secret or authority material ${JSON.stringify(forbiddenPlaceholder)}`;
+  }
   return {
     name,
     source,
@@ -1015,6 +1080,10 @@ function localizedText(
   if (!isPlainRecord(value)) return `${prefix} must be an object`;
   const keys = exactKeys(value, ["ja", "en"]);
   if (keys) return `${prefix}.${keys}`;
+  const forbidden = findForbiddenRepositoryManifestMaterial(value);
+  if (forbidden) {
+    return `${prefix} contains forbidden secret or authority material ${JSON.stringify(forbidden)}`;
+  }
   const ja = text(value.ja, max);
   const en = text(value.en, max);
   return ja && en
@@ -1060,7 +1129,7 @@ function optionalText(value: unknown, max: number): string | undefined {
 }
 
 function token(value: unknown, max: number): string | undefined {
-  const parsed = text(value, max);
+  const parsed = canonicalText(value, max);
   return parsed && /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/u.test(parsed)
     ? parsed
     : undefined;
@@ -1071,7 +1140,7 @@ function optionalToken(value: unknown, max: number): string | undefined {
 }
 
 function variableName(value: unknown): string | undefined {
-  const parsed = text(value, 128);
+  const parsed = canonicalText(value, 128);
   return parsed && /^[A-Za-z_][A-Za-z0-9_]*$/u.test(parsed)
     ? parsed
     : undefined;
@@ -1082,21 +1151,21 @@ function variableName(value: unknown): string | undefined {
  * grammar is the conventional binding/env shape rather than a Tofu variable.
  */
 function bindingName(value: unknown): string | undefined {
-  const parsed = text(value, 128);
+  const parsed = canonicalText(value, 128);
   return parsed && /^[A-Za-z_][A-Za-z0-9_]*$/u.test(parsed)
     ? parsed
     : undefined;
 }
 
 function interfaceName(value: unknown): string | undefined {
-  const parsed = text(value, 128);
+  const parsed = canonicalText(value, 128);
   return parsed && /^[A-Za-z][A-Za-z0-9_.-]{0,127}$/u.test(parsed)
     ? parsed
     : undefined;
 }
 
 function interfacePermissionToken(value: unknown): string | undefined {
-  const parsed = text(value, 256);
+  const parsed = canonicalText(value, 256);
   return parsed && /^[\x21\x23-\x5b\x5d-\x7e]+$/u.test(parsed)
     ? parsed
     : undefined;
@@ -1115,7 +1184,7 @@ function isJsonValue(value: unknown, depth = 0): value is JsonValue {
 }
 
 /**
- * Repository-owned Interface documents are public metadata. Reuse the
+ * Repository-owned public values are metadata, not secret storage. Reuse the
  * canonical redaction vocabulary for both key and value detection, then add
  * the authority-id names that are unsafe even when they are not secrets.
  * Return only a bounded field/marker so diagnostics never echo the value.
@@ -1154,7 +1223,7 @@ function isRepositoryAuthorityKey(value: string): boolean {
 }
 
 function stableId(value: unknown): string | undefined {
-  const parsed = text(value, 96);
+  const parsed = canonicalText(value, 96);
   return parsed &&
     /^[a-z0-9](?:[a-z0-9._-]{0,94}[a-z0-9])?$/u.test(parsed)
     ? parsed
@@ -1190,9 +1259,24 @@ function rootRelativePath(value: unknown): string | undefined {
     : parsed;
 }
 
+/**
+ * Identifier fields are wire keys, not user prose. Do not trim them before
+ * validation: the published schema rejects leading/trailing whitespace and
+ * the parser must make the same accept/reject decision.
+ */
+function canonicalText(value: unknown, max: number): string | undefined {
+  if (typeof value !== "string" || value.length > max) return undefined;
+  if (value.length === 0 || value.trim() !== value) return undefined;
+  if (/[\0\u0001-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(value)) {
+    return undefined;
+  }
+  return value;
+}
+
 function isCanonicalModulePath(value: string): boolean {
   if (
     !value ||
+    value.trim() !== value ||
     value.length > 1_024 ||
     value.startsWith("/") ||
     value.startsWith("./") ||

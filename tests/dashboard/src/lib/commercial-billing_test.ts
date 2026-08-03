@@ -306,6 +306,34 @@ test("native commercial billing stays provider-neutral and uses extension APIs",
   expect(client).not.toContain("Stripe");
 });
 
+test("native commercial billing keeps errored resources inside the panel", () => {
+  const snapshotGuard = commercialBillingPanelSource.indexOf(
+    "if (snapshot.error) return undefined;",
+  );
+  const snapshotRead = commercialBillingPanelSource.indexOf("return snapshot();");
+  const transactionGuard = commercialBillingPanelSource.indexOf(
+    "if (transactionPage.error) return undefined;",
+  );
+  const transactionRead = commercialBillingPanelSource.indexOf(
+    "return transactionPage();",
+  );
+
+  expect(snapshotGuard).toBeGreaterThanOrEqual(0);
+  expect(snapshotGuard).toBeLessThan(snapshotRead);
+  expect(transactionGuard).toBeGreaterThanOrEqual(0);
+  expect(transactionGuard).toBeLessThan(transactionRead);
+  expect(commercialBillingPanelSource).toContain(
+    "const current = snapshotValue();",
+  );
+  expect(commercialBillingPanelSource).toContain(
+    "const page = transactionPageValue();",
+  );
+  expect(commercialBillingPanelSource).toContain(
+    "friendlyError(snapshot.error, t).message",
+  );
+  expect(commercialBillingPanelSource).toContain("refetchTransactions");
+});
+
 test("commercial transaction parser keeps the customer-safe statement shape", () => {
   const page = parseCommercialBillingTransactionPage({
     items: [

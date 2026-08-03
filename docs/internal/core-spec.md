@@ -645,9 +645,10 @@ variable or provider/data-source logic.
 
 ## Install Store Experience Contract
 
-The install Store is discovery and presentation only. A Store node announces
-that a Git repository/path exists and can present icons and descriptions. It
-does not own setup fields or release selection: branch, tag, commit,
+The install Store is discovery and presentation only. A TCS 2.0 Store node
+announces a Git repository URL and can present icons and descriptions. It does
+not hand off a module path and does not own setup fields or release selection:
+branch, tag, commit,
 SourceSnapshot, update cadence, and auto-sync policy belong to the Git Source /
 Run flow. Dashboard handoff must not pin a Store listing's optional `ref` as the
 installed ref.
@@ -661,6 +662,24 @@ second release/runtime authority.
 actions, output policy, and source-build recipes are top-level DB-owned
 InstallConfig fields. They are administered separately from Store listings.
 Changing `store` cannot mutate any of them.
+
+For Store preflight, `compileInstallUx: true` requires a pre-Capsule
+`capsuleName` and rejects client-supplied `modulePath` and `installConfigId`.
+After root Source sync, the server selects the module from the exact
+SourceSnapshot repository manifest: one module is inferred; multiple modules
+require an exact canonical `install.defaultModule` under
+`takosumi.com/v2.1`. It MUST NOT infer `.`, object order, a TCS/presentation
+path, `Source.defaultPath`, or a base InstallConfig module path.
+
+The server separately resolves exactly one service-owned global Store
+InstallConfig as a policy ceiling. The config MUST be non-internal and
+Workspace-unscoped, and both its Store source URL and Source selector URL MUST
+canonically equal the Source URL. Paths do not participate. Resolution uses a
+bounded paginated catalog scan; zero, multiple, or an unprovably complete scan
+fail closed with typed diagnostics. Exact module selection happens before the
+compatibility check, and the resulting Workspace-scoped derived InstallConfig
+persists that same module path. Manual non-Store compatibility retains explicit
+`modulePath` and `installConfigId`.
 
 Lifecycle actions MUST be pinned into the same reviewed Plan that authorizes the
 provider mutation. They MUST NOT be read from repository metadata, source
@@ -704,7 +723,7 @@ allows it.
 A repository may publish `.well-known/tcs.json` as an optional repo-owned
 presentation document for Store indexers. It is not a Takosumi manifest and is
 not required for direct Git installs. It can contain display text, icon URL,
-and `modulePath`. It must not contain `git`, `source`,
+and generic browse metadata. It must not contain `git`, `source`, `modulePath`,
 refs/commits, `installConfigId`, variable presentation/defaults,
 `installExperience`, output allowlists, release artifacts, domain defaults,
 OIDC wiring, lifecycle actions, or Interface blueprints. Public values come
@@ -723,6 +742,15 @@ from the selected OpenTofu module archive. A snapshot with no such observation
 MAY still be reused by a later source sync. Missing, invalid, or changed
 presentation metadata MUST NOT block Store-backed planning or alter the stored
 InstallConfig.
+
+The separate `.well-known/takosumi.json` is an optional repository-owned public
+proposal pinned into `SourceSnapshot.repositoryManifest`. Each API version is
+closed: v1 defines install inputs/requirements/features; v2 adds generic
+Interface proposals; v2.1 preserves v2 exactly and adds only optional
+`install.defaultModule`. The parser validates bounded public metadata and
+rejects secret/authority material. Takosumi compiles the selected exact module
+against an exact compatibility report and host policy into a DB-owned
+InstallConfig. Plan and Run never re-read repository metadata as authority.
 
 The OpenTofu module still owns its variable names. A top-level DB-owned
 `installExperience` maps standard install concepts to those module variables:

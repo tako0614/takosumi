@@ -162,6 +162,13 @@ describe("StoreBrowser install UI", () => {
     expect(storeHostSource).toContain("showSortControl={true}");
   });
 
+  test("offers only TCS v2 sort choices", () => {
+    expect(storeBrowserSource).toContain('option value="updated"');
+    expect(storeBrowserSource).toContain('option value="created"');
+    expect(storeBrowserSource).not.toContain('option value="name"');
+    expect(storeBrowserSource).not.toContain("sortName");
+  });
+
   test("the invalid-server alert is associated with the URL input", () => {
     expect(storeBrowserSource).toContain(
       "const serverErrorId = createUniqueId()",

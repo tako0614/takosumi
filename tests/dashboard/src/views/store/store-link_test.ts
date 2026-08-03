@@ -42,7 +42,7 @@ describe("store link handoff", () => {
       "https://github.com/tako0614/takosumi-template.git",
     );
     expect(params.has("ref")).toBe(false);
-    expect(params.get("path")).toBe("modules/worker");
+    expect(params.has("path")).toBe(false);
     expect(params.has("var.project_name")).toBe(false);
   });
 
@@ -57,7 +57,7 @@ describe("store link handoff", () => {
       "https://github.com/tako0614/takosumi-template.git",
     );
     expect(params.has("ref")).toBe(false);
-    expect(params.get("path")).toBe("modules/worker");
+    expect(params.has("path")).toBe(false);
     expect(params.has("var.project_name")).toBe(false);
   });
 
@@ -92,5 +92,22 @@ describe("store link handoff", () => {
     expect(params.has("varjson.replicas")).toBe(false);
     expect(params.has("varjson.runtime_options")).toBe(false);
     expect(params.has("var.enable_cloudflare_resources")).toBe(false);
+  });
+
+  test("legacy listing paths never become install-link authority", () => {
+    const params = new URLSearchParams(
+      buildNewQuery(
+        listing({
+          source: {
+            url: "https://github.com/tako0614/takosumi-template.git",
+            path: "../secret",
+          },
+        }),
+      ),
+    );
+    expect(params.get("git")).toBe(
+      "https://github.com/tako0614/takosumi-template.git",
+    );
+    expect(params.has("path")).toBe(false);
   });
 });

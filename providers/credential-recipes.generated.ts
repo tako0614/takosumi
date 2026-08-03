@@ -1411,7 +1411,7 @@ export const REFERENCE_CREDENTIAL_RECIPES: readonly CredentialRecipe[] = [
   },
   {
     "id": "takoform",
-    "displayName": "Takoform portable form host",
+    "displayName": "Takosumi Cloud",
     "secretPartition": "provider-credentials",
     "terraformSource": [
       "tako0614/takoform",
@@ -1428,8 +1428,8 @@ export const REFERENCE_CREDENTIAL_RECIPES: readonly CredentialRecipe[] = [
         "presentation": {
           "showInConnectionSetup": false,
           "displayName": {
-            "en": "Managed form host",
-            "ja": "マネージド Form ホスト"
+            "en": "Takoform resource delivery",
+            "ja": "Takoform リソース配信"
           }
         }
       }

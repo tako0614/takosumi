@@ -144,7 +144,7 @@ describe("tcs aggregate", () => {
     ]);
   });
 
-  test("treats canonical root module path spellings as the same Store source", () => {
+  test("dedupes the same Store repository URL regardless of legacy listing path", () => {
     const merged = mergeTcsListingBatches(
       [],
       [
@@ -154,7 +154,7 @@ describe("tcs aggregate", () => {
           items: [
             L("root-empty", {
               url: "https://github.com/o/root.git",
-              path: ".",
+              path: "modules/one",
             }),
           ],
         },
@@ -164,7 +164,7 @@ describe("tcs aggregate", () => {
           items: [
             L("root-dot", {
               url: "https://github.com/o/root.git",
-              path: "./",
+              path: "modules/two",
             }),
           ],
         },
@@ -270,7 +270,7 @@ describe("tcs aggregate", () => {
     expect(s.items.map((i) => i.id).sort()).toEqual(["a1", "a2", "b1"]);
   });
 
-  test("sortTcsItems orders updated desc and name asc", () => {
+  test("sortTcsItems orders updated and created desc", () => {
     const items: AggregatedTcsListing[] = [
       {
         ...L("old", undefined, "2026-01-01T00:00:00.000Z"),
@@ -289,9 +289,16 @@ describe("tcs aggregate", () => {
       "new",
       "old",
     ]);
-    expect(sortTcsItems(items, "name", "en").map((i) => i.id)).toEqual([
-      "new",
+    const created = items.map((item, index) => ({
+      ...item,
+      createdAt:
+        index === 0
+          ? "2026-03-01T00:00:00.000Z"
+          : "2026-02-01T00:00:00.000Z",
+    }));
+    expect(sortTcsItems(created, "created", "en").map((i) => i.id)).toEqual([
       "old",
+      "new",
     ]);
   });
 });

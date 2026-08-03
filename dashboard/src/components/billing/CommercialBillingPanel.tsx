@@ -105,8 +105,20 @@ export default function CommercialBillingPanel(props: Props) {
     createSignal(false);
   const checkoutResult = initialCheckoutResult();
 
+  // SolidJS throws when an errored resource accessor is read. Keep those
+  // failures local to this panel so the surrounding workspace settings remain
+  // usable and the error toast below can preserve the HTTP evidence.
+  const snapshotValue = createMemo(() => {
+    if (snapshot.error) return undefined;
+    return snapshot();
+  });
+  const transactionPageValue = createMemo(() => {
+    if (transactionPage.error) return undefined;
+    return transactionPage();
+  });
+
   createEffect(() => {
-    const current = snapshot();
+    const current = snapshotValue();
     const account = current?.billing.account;
     if (account?.customerType) setCustomerType(account.customerType);
     if (account?.taxJurisdiction) setCountry(account.taxJurisdiction);
@@ -116,21 +128,26 @@ export default function CommercialBillingPanel(props: Props) {
   });
 
   createEffect(() => {
-    const page = transactionPage();
+    const error = transactionPage.error;
+    const page = transactionPageValue();
+    if (error) {
+      setTransactionError(error);
+      return;
+    }
     if (page) {
       setTransactionItems(page.items);
       setTransactionNextCursor(page.nextCursor);
       setTransactionError(undefined);
     }
-    if (transactionPage.error) setTransactionError(transactionPage.error);
   });
 
-  const hasEstablishedProfile = createMemo(() =>
-    Boolean(
-      snapshot()?.billing.account?.customerType &&
-      snapshot()?.billing.account?.taxJurisdiction,
-    ),
-  );
+  const hasEstablishedProfile = createMemo(() => {
+    const current = snapshotValue();
+    return Boolean(
+      current?.billing.account?.customerType &&
+        current?.billing.account?.taxJurisdiction,
+    );
+  });
   const autoRechargeSummary = createMemo(() => {
     const settings = autoRecharge();
     if (!settings?.enabled) return t("billing.commercial.autoRecharge.off");
@@ -293,7 +310,7 @@ export default function CommercialBillingPanel(props: Props) {
   ) => {
     const current =
       autoRecharge() ??
-      snapshot()?.configuration.credits.autoRecharge.defaultSettings;
+      snapshotValue()?.configuration.credits.autoRecharge.defaultSettings;
     if (current) setAutoRecharge({ ...current, ...patch });
   };
 
@@ -352,7 +369,7 @@ export default function CommercialBillingPanel(props: Props) {
         </Card>
       </Show>
 
-      <Show when={snapshot()}>
+      <Show when={snapshotValue()}>
         {(data) => (
           <>
             <Show when={!data().billing.configured}>

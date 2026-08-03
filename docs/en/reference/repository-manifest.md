@@ -1,164 +1,260 @@
 # Repository manifest
 
-`.well-known/takosumi.json` is an optional document owned by a Git repository.
-It proposes Takosumi metadata pinned to the same commit, but it is never
-execution authority. Takosumi validates the document, compiles the current
-`install` declaration into a DB-owned `InstallConfig`, and then uses the
-ordinary compatibility, Plan, and Apply flow.
+`.well-known/takosumi.json` is an optional install-metadata proposal owned by a
+Git repository and pinned to the same commit as the executable source. It is
+never execution authority. Source sync validates the repository-root file as
+UTF-8 JSON of at most 128 KiB and records its status and digest in the immutable
+`SourceSnapshot.repositoryManifest`. Public APIs never return the raw document.
 
-## Current wire
+Takosumi checks the exact SourceSnapshot declaration against an exact
+compatibility report and compiles it within operator policy into a DB-owned
+`InstallConfig`. Plan and Run consume that persisted InstallConfig; they do not
+re-read the manifest.
+
+## Versions and closed objects
+
+Every version has exactly three root fields:
 
 ```json
 {
-  "apiVersion": "takosumi.com/v1",
+  "apiVersion": "takosumi.com/v2.1",
+  "kind": "Repository",
+  "install": {}
+}
+```
+
+| `apiVersion`        | `install` fields             | module fields                                    |
+| ------------------- | ---------------------------- | ------------------------------------------------ |
+| `takosumi.com/v1`   | `modules`                    | `inputs`, `requires`, `features`                 |
+| `takosumi.com/v2`   | `modules`                    | v1 + `interfaces`                                |
+| `takosumi.com/v2.1` | `modules`, `defaultModule`?  | identical to v2                                  |
+
+Every object is closed. Fields not listed in this document, `$schema`, and the
+retired `schemaVersion: takosumi.install-ux/v1` are rejected. Adding
+`defaultModule` to a v1 or v2 document does not make it v2.1.
+
+The published v2.1 JSON Schema is
+[`repository-manifest-v2.1.schema.json`](/schemas/repository-manifest-v2.1.schema.json).
+It is a structural schema, not a claim of JSON Schema/parser equivalence. The
+canonical parser additionally fails closed on constraints that require
+cross-field or value-aware inspection: uniqueness across related declarations,
+equality between `defaultModule` and a dynamic object key, recursive JSON depth
+(maximum 32), and the secret/authority vocabulary checks described below.
+
+## Module paths and default selection
+
+`install.modules` contains 1–32 entries. A key is `.` or a canonical
+repository-relative path of at most 1,024 characters. Absolute paths, `./`
+prefixes, drive prefixes, a trailing slash, backslashes, NUL, empty segments,
+and `.` or `..` segments are invalid.
+
+For Store `compileInstallUx`, neither the client nor the Store sends a
+`modulePath`. After source sync, the server selects from the exact
+SourceSnapshot manifest, runs compatibility for that exact path, and persists
+the same path in the derived InstallConfig:
+
+1. If `modules` has one entry, select its only key.
+2. Multiple entries require `install.defaultModule` in `takosumi.com/v2.1`.
+3. `defaultModule` must be canonical and byte-for-byte equal to an own
+   `modules` key.
+
+Takosumi never guesses `.`, the first JSON object key, a path from
+`.well-known/tcs.json`, `Source.defaultPath`, or a base
+`InstallConfig.modulePath`. A missing or invalid default returns a typed
+diagnostic before compatibility runs. Ordinary manual Git compatibility
+requests may continue to supply an explicit `modulePath`.
+
+### Valid multi-module v2.1 example
+
+```json
+{
+  "apiVersion": "takosumi.com/v2.1",
   "kind": "Repository",
   "install": {
+    "defaultModule": "deploy/takoform",
     "modules": {
-      ".": {
-        "inputs": [],
-        "requires": []
-      }
+      ".": { "inputs": [] },
+      "deploy/takoform": { "inputs": [] }
     }
   }
 }
 ```
 
-The root is closed. The current version accepts only `apiVersion`, `kind`, and
-`install`; `install` accepts only `modules`. It rejects `$schema` and the
-retired install-only `schemaVersion: takosumi.install-ux/v1`. A future metadata
-section requires a new `apiVersion`; unknown fields continue to fail closed.
-Do not publish empty placeholder sections.
+## `inputs`
 
-## `takosumi.com/v2` — Capsule Interface proposals
+Each module has a required `inputs` array with at most 128 entries. Every entry
+is closed:
 
-`takosumi.com/v2` keeps v1 closed and adds an optional module-scoped
-`interfaces` proposal. A v1 module containing `interfaces` is invalid. Each
-declaration contains only a stable `key`, an Interface `name`, a generic
-`spec`, and optional `bindingRequests`.
+| field         | required | meaning |
+| ------------- | -------- | ------- |
+| `name`        | yes      | exact OpenTofu variable name |
+| `source`      | yes      | an object containing only `kind` |
+| `label`       | yes      | non-empty `{ "ja", "en" }` text |
+| `role`        | no       | `service_name` / `initial_secret` |
+| `type`        | no       | `string` / `number` / `boolean` / `json` |
+| `format`      | no       | bounded presentation token |
+| `required`    | no       | boolean |
+| `helper`      | no       | `{ "ja", "en" }` text |
+| `placeholder` | no       | non-empty bounded text |
+| `advanced`    | no       | boolean |
+| `secret`      | no       | route user input through secret materialization |
+
+`source.kind` is one of `user`, `capsule_name`,
+`workspace_scoped_capsule_name`, or `module_default`. Only `user` may set
+`secret: true`; `module_default` cannot set `required: true`. A plain `env` map
+cannot be exposed as a secret or `initial_secret`. Input names and roles are
+unique within a module and identifier strings are canonical: leading or
+trailing whitespace is rejected rather than silently trimmed. Adoption requires
+the compatibility report to prove the exact variable, type, and default
+presence. Public label/helper/placeholder text is scanned for known
+credential-like material; ordinary prose such as “Use a token value” remains
+valid.
+
+## `requires`
+
+`requires` is optional and has at most 16 entries. It proposes a host need and
+delivery names, never a value or credential.
+
+- `identity.oidc`: `kind`, a root-relative `callbackPath`, optional unique
+  `scopes` (1–16), and `deliver`.
+- `secret.generated`: `kind`, optional `bytes` (16–64), optional `encoding`
+  (`hex` / `base64url`), and `deliver`; at most eight per module.
+- `http.endpoint`: `kind` and `deliver`.
+
+`deliver` contains exactly one of `variables` or `bindings`. Slot names are
+closed per requirement kind, and values are exact OpenTofu variable or runtime
+binding names. Requirements cannot claim the same delivery name. OIDC and
+endpoint are each singletons per module. The compiler rejects host-reserved
+bindings, absent/non-string variables, and requirement kinds or OIDC scopes
+outside operator policy.
+
+## `features`
+
+`features` is optional and has at most 32 entries. An entry contains only `id`,
+`optional`, a bilingual `label`, and non-empty `inputs`. The inputs reference
+user inputs declared by the same module and cannot be claimed by another
+feature. A feature is UI grouping, not provider, resource, or lifecycle
+authority.
+
+## `interfaces` (v2 / v2.1)
+
+v2 and v2.1 may add at most 32 generic Capsule Interface proposals per module.
+An `interfaces` field is invalid in v1. v2.1 retains the exact v2 Interface
+schema and compiler semantics.
+
+Each declaration contains only `key`, `name`, `spec`, and optional
+`bindingRequests`. `spec` is a closed object containing `type`, `version`, a
+public JSON `document`, optional `inputs`, and `access`.
+
+- `spec.inputs` has at most 64 entries. An input is either public JSON
+  `literal` or an `output` with an exact module `outputName` and `outputType`.
+- The compatibility report must prove that every Output exists and is both
+  `sensitive: false` and `ephemeral: false`. There is no name-based fallback.
+- `access.visibility` is fixed to `workspace`. `resourceUriInput` must name an
+  input in the same spec. A repository cannot supply host-owned `policyRef`.
+- `bindingRequests` has at most one entry. Its subject is only
+  `installing_principal`, permissions contain 1–16 tokens, and delivery is only
+  `{ "type": token }`. Missing operator permission/delivery allowlists reject
+  the request.
+
+Accepted proposals merge by stable key into existing
+`InstallConfig.interfaceBlueprints` and `outputAllowlist`; conflicts fail
+instead of overwriting. Existing host lifecycle resolves the exact installing
+Principal and materializes Interfaces/Bindings. A repository cannot mint a
+grant.
+
+## Authority and secret boundaries
+
+The manifest contains public proposals only. It cannot contain:
+
+- a Git URL, ref/tag/commit, SourceSnapshot, Store listing, or
+  provider/target/runner selection;
+- credential/secret/token/password/key values, credential references,
+  Principal IDs, or host-authority account/workspace/capsule/resource/
+  connection IDs;
+- arbitrary environment injection, a plain `env` map, provider bindings, or
+  Interface grants;
+- lifecycle commands, migrations, output allowlists, billing, policy, or a
+  Plan/Run bypass.
+
+`secret: true` and `secret.generated` request host materialization; they are not
+values. Public presentation fields (`label`, `helper`, `placeholder`, and
+feature labels) are scanned for known credential-like
+patterns, including `sk-…`, bearer/assignment forms, and URI credentials.
+Structured Interface documents and literals are scanned recursively for both
+secret-like values and authority-key names. This deliberately rejects concrete
+material, not ordinary words such as “token” in user-facing prose, and
+diagnostics never echo a value. JSON values in those documents/literals are
+bounded to recursive depth 32 by the parser; the structural schema documents
+that parser-owned constraint rather than pretending to encode it.
+
+The base InstallConfig and operator policy are always ceilings. A repository
+proposal cannot widen an allowlist or authority. A proposal that conflicts
+with a service/operator declaration is rejected rather than overwriting it.
+Manifest digest, snapshot, selected module, and compatibility report
+mismatches fail closed.
+
+## Invalid examples
+
+A v2 document cannot use the v2.1 field:
 
 ```json
 {
   "apiVersion": "takosumi.com/v2",
   "kind": "Repository",
   "install": {
-    "modules": {
-      "deploy/takoform": {
-        "inputs": [],
-        "interfaces": [
-          {
-            "key": "launcher",
-            "name": "example.launcher",
-            "spec": {
-              "type": "interface.ui.surface",
-              "version": "1",
-              "document": { "launcher": true },
-              "inputs": {
-                "url": {
-                  "source": "output",
-                  "outputName": "launch_url",
-                  "outputType": "url"
-                }
-              },
-              "access": { "visibility": "workspace" }
-            },
-            "bindingRequests": [
-              {
-                "key": "installer",
-                "subject": { "source": "installing_principal" },
-                "permissions": ["ui.open"],
-                "delivery": { "type": "none" }
-              }
-            ]
-          }
-        ]
-      }
-    }
+    "defaultModule": "deploy/app",
+    "modules": { "deploy/app": { "inputs": [] } }
   }
 }
 ```
 
-`spec.inputs` may contain public JSON `literal` values or an explicit `output`
-reference with an output name and type. The exact compatibility report must
-prove that every referenced Output exists, is `sensitive: false`, and is
-`ephemeral: false`; unknown secrecy fails closed. Takosumi never guesses an
-Output from a convention such as `launch_url`. Accepted references become the
-existing DB-owned `InstallConfig.outputAllowlist` entries and
-`capsule_output` inputs in the existing Interface blueprint shape.
-
-`bindingRequests` are requests, not grants. A repository may name only the
-`installing_principal` subject. Permissions and delivery types are bounded and
-must pass explicit non-empty operator permission and delivery allowlists; a
-missing or empty permission allowlist rejects the binding request. Each
-Interface may request at most one installer binding. Repository declarations
-are fixed to `workspace` visibility and cannot supply the host-owned `policyRef`.
-Credential references, Principal IDs,
-providers, targets, secrets, and arbitrary delivery options are not part of the
-manifest vocabulary. Only after review does the existing InstallConfig/
-Interface materializer resolve the exact installer Principal and, after Apply,
-create the Interface and Ready Binding. The repository file never owns
-Interface lifecycle or authorization. A plain Output is never a fallback for a
-missing or rejected Interface.
-
-In v1, a module proposes three things. `inputs` are the input names and display copy
-the module owns, `requires` is what the application needs the host to provide
-before it can run, and `features` groups optional inputs. It cannot declare a
-Git source/ref, provider credentials, target, billing, lifecycle commands,
-Interface grants, or arbitrary environment injection.
-
-## requires is a request, never a value
-
-The manifest is a public repository file, so a resolved secret or credential
-must never appear in it. A requirement states only what is needed and the name
-it wants to receive it under; producing and delivering the value is the host's
-job. Takosumi validates each requirement against operator policy and compiles
-it into its own DB-owned `InstallConfig` before any Plan can use it.
+An alias or missing key is invalid:
 
 ```json
 {
-  "kind": "secret.generated",
-  "bytes": 32,
-  "encoding": "base64url",
-  "deliver": { "bindings": { "value": "ENCRYPTION_KEY" } }
+  "apiVersion": "takosumi.com/v2.1",
+  "kind": "Repository",
+  "install": {
+    "defaultModule": "./deploy/app",
+    "modules": { "deploy/app": { "inputs": [] } }
+  }
 }
 ```
 
-The kinds are `identity.oidc`, `secret.generated`, and `http.endpoint`.
+Public documents cannot embed secret or authority material:
 
-`deliver` names exactly one target surface. `variables` suits a module system
-whose surface is input variables; `bindings` suits a portable runtime that has
-no variable to receive the value. The requirement is identical either way —
-only delivery differs.
+```json
+{
+  "key": "launcher",
+  "name": "example.launcher",
+  "spec": {
+    "type": "example",
+    "version": "1",
+    "document": { "credentialId": "credential_123" },
+    "access": { "visibility": "workspace" }
+  }
+}
+```
 
-`secret.generated` has no `variables` form, because the host never writes a
-secret into portable module state. `http.endpoint` has no `bindings` form,
-because an allocated hostname is the runtime location itself rather than a
-value the host injects.
+## Migration and versioning
 
-The line is whether host authority is needed. An ordinary non-secret string
-belongs in the module's own configuration.
+An API identifier names a closed schema. Existing versions do not gain fields
+or new meanings later. v2.1 leaves all v2 module and Interface semantics
+unchanged and adds only optional `install.defaultModule`, so it is an additive
+schema revision rather than an inflated new major version. Unknown versions or
+fields fail closed. Incompatible vocabulary or authority changes require a
+separate schema identifier.
 
-## Input roles
+A future metadata section requires a new `apiVersion`; unknown fields continue to fail closed.
 
-A `role` tells the installer what a field is. It never changes where the value
-comes from (`source`). `service_name` marks the service-name field and
-`initial_secret` marks the initial password field; each appears at most once
-per module.
+- A single-module v1/v2 repository needs no migration; its only key is selected.
+- A multi-module repository upgrades to v2.1 and adds an exact `defaultModule`.
+- v2 `interfaces` keep the same shape and meaning after changing to v2.1.
+- Do not backport the new field while retaining a v1/v2 identifier.
 
-## Ownership
-
-- The app repository owns `.well-known/takosumi.json` and its application
-  vocabulary.
-- Takosumi owns the schema/parser, policy, same-`SourceSnapshot` validation,
-  and `InstallConfig` compilation.
-- Source sync stores and exposes the exact whole-file digest and validation
-  status as `SourceSnapshot.repositoryManifest`; it does not expose the raw
-  document.
-- The DB-owned `InstallConfig` is the reviewed Plan/Run input. Takosumi does
-  not re-read the repository manifest at execution time.
-- A TCS Store listing owns discovery and browse presentation only; it cannot
-  supply this manifest's install declarations.
-
-The root `install-options.json` is a separate optional contract. It uses
-`apiVersion: install.takosumi.com/v1alpha1` and
-`kind: CapsuleSourceOptions` to choose one ordinary Capsule source. It must not
-duplicate inputs or an `InstallConfig`.
+The Store does not proxy this manifest. See [Store API](./store-api.md) for the
+TCS 2.0 URL-only handoff and integration boundary. Root `install-options.json`
+is a separate chooser with `apiVersion: install.takosumi.com/v1alpha1` and
+`kind: CapsuleSourceOptions` for ordinary Capsule source candidates. It cannot
+duplicate inputs or InstallConfig declarations.

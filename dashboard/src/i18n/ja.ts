@@ -1571,7 +1571,8 @@ export const ja = {
     "発行前にサーバーがメンバーシップと owner 権限を確認します。",
   "resources.detail.s3Keys.permission.get": "オブジェクトを読む",
   "resources.detail.s3Keys.permission.list": "バケットを一覧する",
-  "resources.detail.s3Keys.permission.put": "オブジェクトをアップロード・上書きする",
+  "resources.detail.s3Keys.permission.put":
+    "オブジェクトをアップロード・上書きする",
   "resources.detail.s3Keys.permission.delete": "オブジェクトを削除する",
   "resources.detail.s3Keys.create": "S3互換キーを作成",
   "resources.detail.s3Keys.creating": "作成中…",
@@ -1582,7 +1583,8 @@ export const ja = {
   "resources.detail.s3Keys.copied": "コピーしました",
   "resources.detail.s3Keys.copyFailed":
     "認証情報をコピーできませんでした。表示されている値を手動で保存してください。",
-  "resources.detail.s3Keys.empty": "この Resource の S3互換アクセスキーはありません。",
+  "resources.detail.s3Keys.empty":
+    "この Resource の S3互換アクセスキーはありません。",
   "resources.detail.s3Keys.status.active": "有効",
   "resources.detail.s3Keys.status.revoked": "失効済み",
   "resources.detail.s3Keys.revoke": "失効",

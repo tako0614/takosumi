@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
+  fetchTcsServerInfo,
   fetchTcsListing,
   fetchTcsListingsPage,
   mergeTcsListingRepoMetadata,
@@ -45,6 +46,193 @@ afterEach(() => {
 });
 
 describe("TCS repo metadata", () => {
+  test("prefers v2 server-info and falls back to the legacy well-known route only on 404", async () => {
+    const requested: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      requested.push(url);
+      if (url.endsWith("/tcs/v2/server-info")) {
+        return new Response(
+          JSON.stringify({
+            spec: { version: "2.0", capabilities: ["search"] },
+            server: {
+              name: "Store",
+              software: { name: "store", version: "1" },
+              baseUrl: "https://store.example.test",
+            },
+            listings: { count: 1 },
+            categories: [],
+          }),
+          { headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response("not found", { status: 404 });
+    }) as typeof fetch;
+
+    const info = await fetchTcsServerInfo("https://store.example.test");
+
+    expect(info.spec.version).toBe("2.0");
+    expect(requested).toEqual([
+      "https://store.example.test/tcs/v2/server-info",
+    ]);
+  });
+
+  test("falls back to the legacy well-known server-info on a missing v2 route", async () => {
+    const requested: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      requested.push(url);
+      if (url.endsWith("/tcs/v2/server-info")) {
+        return new Response("not found", { status: 404 });
+      }
+      return new Response(
+        JSON.stringify({
+          spec: { version: "1.0", capabilities: [] },
+          server: {
+            name: "Legacy Store",
+            software: { name: "store", version: "1" },
+            baseUrl: "https://store.example.test",
+          },
+          listings: { count: 1 },
+          categories: [],
+          kinds: [],
+          providers: [],
+        }),
+        { headers: { "content-type": "application/json" } },
+      );
+    }) as typeof fetch;
+
+    const info = await fetchTcsServerInfo("https://store.example.test");
+
+    expect(info.spec.version).toBe("1.0");
+    expect(requested).toEqual([
+      "https://store.example.test/tcs/v2/server-info",
+      "https://store.example.test/.well-known/tcs",
+    ]);
+  });
+
+  test("prefers v2 and falls back to a legacy v1 read only when v2 is absent", async () => {
+    const requested: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      requested.push(url);
+      if (url.includes("/tcs/v2/")) {
+        return new Response("not found", { status: 404 });
+      }
+      return new Response(JSON.stringify({ items: [wireListing()] }), {
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    const page = await fetchTcsListingsPage("https://store.example.test");
+
+    expect(page.items).toHaveLength(1);
+    expect(requested[0]).toContain("/tcs/v2/listings");
+    expect(requested[1]).toContain("/tcs/v1/listings");
+  });
+
+  test("does not hide a live v2 405 behind the legacy read path", async () => {
+    const requested: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      requested.push(String(input));
+      return new Response("method not allowed", { status: 405 });
+    }) as typeof fetch;
+
+    await expect(
+      fetchTcsListingsPage("https://store.example.test"),
+    ).rejects.toThrow("listings 405");
+    expect(requested).toHaveLength(1);
+    expect(requested[0]).toContain("/tcs/v2/listings");
+  });
+
+  test("emits only the TCS v2 updated/created sort values", async () => {
+    const requested: URL[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      requested.push(new URL(String(input)));
+      return new Response(JSON.stringify({ items: [] }), {
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    await fetchTcsListingsPage("https://store.example.test", {
+      sort: "updated",
+    });
+    await fetchTcsListingsPage("https://store.example.test", {
+      sort: "created",
+    });
+    // Simulate a stale v1 caller at the runtime boundary. The v2 request must
+    // omit the retired value rather than sending `sort=name`.
+    await fetchTcsListingsPage("https://store.example.test", {
+      sort: "name" as never,
+    });
+
+    expect(requested.map((url) => url.searchParams.get("sort"))).toEqual([
+      "updated",
+      "created",
+      null,
+    ]);
+  });
+
+  test("uses the canonical v2 scope/slug detail path before the legacy id path", async () => {
+    const requested: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      requested.push(url);
+      if (url.includes("/tcs/v2/")) return new Response("not found", { status: 404 });
+      return new Response(JSON.stringify(wireListing()), {
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    const result = await fetchTcsListing(
+      "https://store.example.test",
+      "tako/example",
+    );
+
+    expect(result?.source).toEqual({
+      url: "https://github.com/tako0614/example",
+    });
+    expect(requested).toEqual([
+      "https://store.example.test/tcs/v2/listings/tako/example",
+      "https://store.example.test/tcs/v1/listings/tako%2Fexample",
+    ]);
+  });
+
+  test("rejects malformed listing ids before issuing a detail request", async () => {
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return new Response("unexpected", { status: 500 });
+    }) as typeof fetch;
+
+    await expect(
+      fetchTcsListing("https://store.example.test", "tako/example/extra"),
+    ).rejects.toThrow("scope/slug");
+    expect(calls).toBe(0);
+  });
+
+  test("accepts a v2 source without provider facets and keeps it URL-only", async () => {
+    const v2 = wireListing({
+      kind: undefined,
+      surface: undefined,
+      provider: undefined,
+      category: undefined,
+      source: { git: "https://github.com/tako0614/example.git" },
+    });
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ items: [v2] }), {
+        headers: { "content-type": "application/json" },
+      })) as typeof fetch;
+
+    const page = await fetchTcsListingsPage("https://store.example.test");
+    expect(page.items[0]?.source).toEqual({
+      url: "https://github.com/tako0614/example",
+    });
+    expect(page.items[0]?.kind).toBeUndefined();
+    expect(page.items[0]?.surface).toBeUndefined();
+    expect(page.items[0]?.provider).toBeUndefined();
+  });
+
   test("accepts display metadata but ignores repo-owned setup authority", () => {
     const metadata = parseTcsRepoMetadata({
       schemaVersion: "tcs.repo/v1",
@@ -91,7 +279,10 @@ describe("TCS repo metadata", () => {
     });
     globalThis.fetch = (async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.endsWith("/tcs/v1/listings/tako%2Fexample")) {
+      if (
+        url.endsWith("/tcs/v2/listings/tako/example") ||
+        url.endsWith("/tcs/v1/listings/tako%2Fexample")
+      ) {
         return new Response(JSON.stringify(staleListing), {
           headers: { "content-type": "application/json" },
         });
@@ -155,7 +346,6 @@ describe("TCS repo metadata", () => {
     const page = await fetchTcsListingsPage("https://store.example.test");
     expect(page.items[0]?.source).toEqual({
       url: "https://github.com/tako0614/example",
-      path: ".",
     });
   });
 
@@ -199,7 +389,6 @@ describe("TCS repo metadata", () => {
     const page = await fetchTcsListingsPage("https://store.example.test");
     expect(page.items[0]?.source).toEqual({
       url: "https://github.com/tako0614/example",
-      path: "deploy/opentofu",
     });
     expect(page.items[0]?.source).not.toHaveProperty("git");
   });
@@ -251,9 +440,6 @@ describe("TCS repo metadata", () => {
       { git: "https://user:secret@example.test/app.git", path: "." },
       { git: "https://example.test/app.git?token=secret", path: "." },
       { git: "https://example.test/app.git#main", path: "." },
-      { git: "https://example.test/app.git", path: "/deploy/opentofu" },
-      { git: "https://example.test/app.git", path: "../opentofu" },
-      { git: "https://example.test/app.git", path: "deploy\\opentofu" },
       {
         git: "https://example.test/app.git",
         ref: "main",
@@ -272,6 +458,22 @@ describe("TCS repo metadata", () => {
       await expect(
         fetchTcsListingsPage("https://store.example.test"),
       ).rejects.toThrow(/listing source/u);
+    }
+  });
+
+  test("ignores every legacy path spelling instead of treating it as install authority", async () => {
+    for (const path of [".", "deploy/opentofu", "../secret", "/absolute"]) {
+      globalThis.fetch = (async () =>
+        new Response(
+          JSON.stringify({
+            items: [wireListing({ source: { git: "https://example.test/app.git", path } })],
+          }),
+          { headers: { "content-type": "application/json" } },
+        )) as typeof fetch;
+      const page = await fetchTcsListingsPage("https://store.example.test");
+      expect(page.items[0]?.source).toEqual({
+        url: "https://example.test/app",
+      });
     }
   });
 

@@ -1,0 +1,534 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://takosumi.com/docs/schemas/repository-manifest-v2.1.schema.json",
+  "title": "Takosumi repository manifest v2.1",
+  "description": "Closed structural schema for .well-known/takosumi.json at apiVersion takosumi.com/v2.1. The Takosumi parser additionally enforces the semantic constraints listed in x-takosumi-semanticConstraints.",
+  "type": "object",
+  "required": ["apiVersion", "kind", "install"],
+  "properties": {
+    "apiVersion": { "const": "takosumi.com/v2.1" },
+    "kind": { "const": "Repository" },
+    "install": { "$ref": "#/$defs/install" }
+  },
+  "additionalProperties": false,
+  "x-takosumi-semanticConstraints": [
+    "install.defaultModule, when present, equals an own canonical key of install.modules",
+    "each module may declare at most 8 requires entries whose kind is secret.generated",
+    "JSON values in Interface documents and literal inputs are limited to recursive depth 32",
+    "module input names, roles, requirement singleton kinds, delivery targets, feature ids, and feature input claims are unique within their documented scopes",
+    "Interface keys and names are unique and one Output name cannot request conflicting public types",
+    "Interface access.resourceUriInput names a declared Interface input",
+    "repository public presentation text and Interface JSON contain no known secret-like or host-authority material"
+  ],
+  "$defs": {
+    "modulePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^(?!\\s)(?!.*\\s$)(?:\\.|(?!/|\\./|\\.\\.?$|\\.\\.?/|[A-Za-z]:)(?!.*\\\\)(?!.*//)(?!.*/\\.\\.?(?:/|$))(?!.*/$).+)$"
+    },
+    "variableName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+    },
+    "interfaceName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,127}$"
+    },
+    "token128": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+    },
+    "token256": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+    },
+    "localizedText": {
+      "type": "object",
+      "required": ["ja", "en"],
+      "properties": {
+        "ja": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^(?=.*\\S)[^\\u0000-\\u0008\\u000b\\u000c\\u000e-\\u001f\\u007f]*$"
+        },
+        "en": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^(?=.*\\S)[^\\u0000-\\u0008\\u000b\\u000c\\u000e-\\u001f\\u007f]*$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "inputSource": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": {
+          "enum": [
+            "user",
+            "capsule_name",
+            "workspace_scoped_capsule_name",
+            "module_default"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "input": {
+      "type": "object",
+      "required": ["name", "source", "label"],
+      "properties": {
+        "name": { "$ref": "#/$defs/variableName" },
+        "source": { "$ref": "#/$defs/inputSource" },
+        "role": { "enum": ["service_name", "initial_secret"] },
+        "type": { "enum": ["string", "number", "boolean", "json"] },
+        "format": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+        },
+        "required": { "type": "boolean" },
+        "label": { "$ref": "#/$defs/localizedText" },
+        "helper": {
+          "type": "object",
+          "required": ["ja", "en"],
+          "properties": {
+            "ja": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2000,
+              "pattern": "^(?=.*\\S)[^\\u0000-\\u0008\\u000b\\u000c\\u000e-\\u001f\\u007f]*$"
+            },
+            "en": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2000,
+              "pattern": "^(?=.*\\S)[^\\u0000-\\u0008\\u000b\\u000c\\u000e-\\u001f\\u007f]*$"
+            }
+          },
+          "additionalProperties": false
+        },
+        "placeholder": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^(?=.*\\S)[^\\u0000-\\u0008\\u000b\\u000c\\u000e-\\u001f\\u007f]*$"
+        },
+        "advanced": { "type": "boolean" },
+        "secret": { "type": "boolean" }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "required": ["secret"],
+            "properties": { "secret": { "const": true } }
+          },
+          "then": {
+            "properties": {
+              "source": {
+                "required": ["kind"],
+                "properties": { "kind": { "const": "user" } }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "source": {
+                "required": ["kind"],
+                "properties": { "kind": { "const": "module_default" } }
+              }
+            }
+          },
+          "then": {
+            "properties": { "required": { "not": { "const": true } } }
+          }
+        },
+        {
+          "if": {
+            "required": ["name"],
+            "properties": { "name": { "const": "env" } }
+          },
+          "then": {
+            "properties": {
+              "role": { "not": { "const": "initial_secret" } },
+              "secret": { "not": { "const": true } }
+            }
+          }
+        }
+      ]
+    },
+    "variableTargets": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": { "$ref": "#/$defs/variableName" }
+    },
+    "bindingTargets": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": { "$ref": "#/$defs/variableName" }
+    },
+    "oidcDelivery": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["variables"],
+          "properties": {
+            "variables": {
+              "allOf": [
+                { "$ref": "#/$defs/variableTargets" },
+                {
+                  "propertyNames": {
+                    "enum": [
+                      "issuerUrl",
+                      "accountsUrl",
+                      "clientId",
+                      "redirectUri",
+                      "ownerSubject"
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["bindings"],
+          "properties": {
+            "bindings": {
+              "allOf": [
+                { "$ref": "#/$defs/bindingTargets" },
+                {
+                  "propertyNames": {
+                    "enum": [
+                      "issuerUrl",
+                      "accountsUrl",
+                      "clientId",
+                      "redirectUri",
+                      "ownerSubject"
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "secretDelivery": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["variables"],
+          "properties": {
+            "variables": {
+              "allOf": [
+                { "$ref": "#/$defs/variableTargets" },
+                { "propertyNames": { "const": "value" } }
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["bindings"],
+          "properties": {
+            "bindings": {
+              "allOf": [
+                { "$ref": "#/$defs/bindingTargets" },
+                { "propertyNames": { "const": "value" } }
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "endpointDelivery": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["variables"],
+          "properties": {
+            "variables": {
+              "allOf": [
+                { "$ref": "#/$defs/variableTargets" },
+                {
+                  "propertyNames": {
+                    "enum": ["url", "subdomain", "routePattern"]
+                  }
+                }
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["bindings"],
+          "properties": {
+            "bindings": {
+              "allOf": [
+                { "$ref": "#/$defs/bindingTargets" },
+                {
+                  "propertyNames": {
+                    "enum": ["url", "subdomain", "routePattern"]
+                  }
+                }
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "requirement": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "callbackPath", "deliver"],
+          "properties": {
+            "kind": { "const": "identity.oidc" },
+            "callbackPath": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512,
+              "pattern": "^/(?!/)(?!.*[?#\\\\])(?!.*/\\.\\.?(?:/|$)).*$"
+            },
+            "scopes": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 16,
+              "uniqueItems": true,
+              "items": { "$ref": "#/$defs/token128" }
+            },
+            "deliver": { "$ref": "#/$defs/oidcDelivery" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "deliver"],
+          "properties": {
+            "kind": { "const": "secret.generated" },
+            "bytes": {
+              "type": "integer",
+              "minimum": 16,
+              "maximum": 64
+            },
+            "encoding": { "enum": ["hex", "base64url"] },
+            "deliver": { "$ref": "#/$defs/secretDelivery" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "deliver"],
+          "properties": {
+            "kind": { "const": "http.endpoint" },
+            "deliver": { "$ref": "#/$defs/endpointDelivery" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "feature": {
+      "type": "object",
+      "required": ["id", "optional", "label", "inputs"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 96,
+          "pattern": "^[a-z0-9](?:[a-z0-9._-]{0,94}[a-z0-9])?$"
+        },
+        "optional": { "type": "boolean" },
+        "label": { "$ref": "#/$defs/localizedText" },
+        "inputs": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/variableName" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "interfaceInput": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["source", "value"],
+          "properties": {
+            "source": { "const": "literal" },
+            "value": {}
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["source", "outputName", "outputType"],
+          "properties": {
+            "source": { "const": "output" },
+            "outputName": { "$ref": "#/$defs/variableName" },
+            "outputType": {
+              "enum": [
+                "string",
+                "url",
+                "hostname",
+                "number",
+                "boolean",
+                "json"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "interfaceAccess": {
+      "type": "object",
+      "required": ["visibility"],
+      "properties": {
+        "visibility": { "const": "workspace" },
+        "resourceUriInput": { "$ref": "#/$defs/interfaceName" }
+      },
+      "additionalProperties": false
+    },
+    "bindingRequest": {
+      "type": "object",
+      "required": ["key", "subject", "permissions", "delivery"],
+      "properties": {
+        "key": { "$ref": "#/$defs/token128" },
+        "subject": {
+          "type": "object",
+          "required": ["source"],
+          "properties": {
+            "source": { "const": "installing_principal" }
+          },
+          "additionalProperties": false
+        },
+        "permissions": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "pattern": "^[\\u0021\\u0023-\\u005b\\u005d-\\u007e]+$"
+          }
+        },
+        "delivery": {
+          "type": "object",
+          "required": ["type"],
+          "properties": { "type": { "$ref": "#/$defs/token128" } },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "interfaceDeclaration": {
+      "type": "object",
+      "required": ["key", "name", "spec"],
+      "properties": {
+        "key": { "$ref": "#/$defs/token128" },
+        "name": { "$ref": "#/$defs/interfaceName" },
+        "spec": {
+          "type": "object",
+          "required": ["type", "version", "document", "access"],
+          "properties": {
+            "type": { "$ref": "#/$defs/token256" },
+            "version": { "$ref": "#/$defs/token256" },
+            "document": {},
+            "inputs": {
+              "type": "object",
+              "maxProperties": 64,
+              "propertyNames": { "$ref": "#/$defs/interfaceName" },
+              "additionalProperties": { "$ref": "#/$defs/interfaceInput" }
+            },
+            "access": { "$ref": "#/$defs/interfaceAccess" }
+          },
+          "additionalProperties": false
+        },
+        "bindingRequests": {
+          "type": "array",
+          "maxItems": 1,
+          "items": { "$ref": "#/$defs/bindingRequest" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "module": {
+      "type": "object",
+      "required": ["inputs"],
+      "properties": {
+        "inputs": {
+          "type": "array",
+          "maxItems": 128,
+          "items": { "$ref": "#/$defs/input" }
+        },
+        "requires": {
+          "type": "array",
+          "maxItems": 16,
+          "items": { "$ref": "#/$defs/requirement" },
+          "allOf": [
+            {
+              "contains": {
+                "type": "object",
+                "required": ["kind"],
+                "properties": { "kind": { "const": "secret.generated" } }
+              },
+              "minContains": 0,
+              "maxContains": 8
+            }
+          ]
+        },
+        "features": {
+          "type": "array",
+          "maxItems": 32,
+          "items": { "$ref": "#/$defs/feature" }
+        },
+        "interfaces": {
+          "type": "array",
+          "maxItems": 32,
+          "items": { "$ref": "#/$defs/interfaceDeclaration" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "install": {
+      "type": "object",
+      "required": ["modules"],
+      "properties": {
+        "defaultModule": { "$ref": "#/$defs/modulePath" },
+        "modules": {
+          "type": "object",
+          "minProperties": 1,
+          "maxProperties": 32,
+          "propertyNames": { "$ref": "#/$defs/modulePath" },
+          "additionalProperties": { "$ref": "#/$defs/module" }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

@@ -40,7 +40,7 @@ const STR = {
   },
   search: { ja: "サービスを検索…", en: "Search services…" },
   sortUpdated: { ja: "更新順", en: "Recently updated" },
-  sortName: { ja: "名前順", en: "Name" },
+  sortCreated: { ja: "作成順", en: "Recently added" },
   storeFilter: { ja: "表示ストア", en: "Store" },
   allStores: { ja: "すべてのストア", en: "All stores" },
   loadMore: { ja: "さらに読み込む", en: "Load more" },
@@ -95,7 +95,6 @@ const STR = {
     en: "Source",
   },
   sourceLocation: { ja: "取得元", en: "Source" },
-  folder: { ja: "フォルダ", en: "Folder" },
   openRepo: { ja: "取得元を開く", en: "Open source" },
 } as const;
 
@@ -360,7 +359,7 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
             onChange={(e) => onSort(e.currentTarget.value as TcsSort)}
           >
             <option value="updated">{s("sortUpdated", props.locale)}</option>
-            <option value="name">{s("sortName", props.locale)}</option>
+            <option value="created">{s("sortCreated", props.locale)}</option>
           </select>
         </Show>
         <Show when={storeChoices().length > 1}>
@@ -679,14 +678,6 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
                           {listing().source.url}
                         </dd>
                       </div>
-                      <Show when={listing().source.path}>
-                        {(path) => (
-                          <div>
-                            <dt>{s("folder", props.locale)}</dt>
-                            <dd class="tcs-mono tcs-break">{path()}</dd>
-                          </div>
-                        )}
-                      </Show>
                     </dl>
                     <Show
                       when={repoUrl(listing().source.url)}

@@ -53,6 +53,7 @@ import {
   Trash,
 } from "lucide-solid";
 import {
+  installConfigSourceCoordinateMatches,
   type JsonValue,
   type ManagedPublicHostnameMode,
 } from "takosumi-contract";
@@ -177,7 +178,6 @@ import {
   displayModulePath,
   normalizeGitUrl,
   sameGitUrl,
-  normalizeSourcePath,
   slugInputValue,
   uniqueServiceIdCandidate,
   managedServiceLabel,
@@ -221,8 +221,6 @@ import {
   storeSurfaceFromStoreListing,
   safeStoreToken,
   nonEmptyStoreText,
-  storeInstallConfigsForSource,
-  uniqueStoreInstallConfigForSource,
   storeEntryIdFromStoreListing,
   storeEntryFromStoreListing,
   sourceIdFromControlError,
@@ -621,25 +619,11 @@ function Inner() {
   };
   const installConfigsForCurrentSource = () => {
     const coordinate = sourceCoordinateForInstallConfig();
-    return storeInstallConfigsForSource(
-      fetchedInstallConfigList(),
-      coordinate.url,
-      coordinate.path,
+    return fetchedInstallConfigList().filter((config) =>
+      installConfigSourceCoordinateMatches(config.sourceSelector, coordinate),
     );
   };
-  const baseInstallConfigForStoreListing = (
-    listing: TcsListing,
-  ): InstallConfig | null =>
-    uniqueStoreInstallConfigForSource(
-      fetchedInstallConfigList(),
-      listing.source.url,
-      listing.source.path,
-    );
   const repositoryInstallUxPreviewIdentity = (): string => {
-    const listing = selectedStoreListing();
-    const baseConfig = listing
-      ? baseInstallConfigForStoreListing(listing)
-      : null;
     return JSON.stringify([
       workspaceId() ?? "",
       sourceCoordinateForInstallConfig(),
@@ -647,8 +631,6 @@ function Inner() {
       sourceAccessMode(),
       sourceAuthConnectionId().trim(),
       name().trim(),
-      baseConfig?.id ?? "",
-      baseConfig?.updatedAt ?? "",
     ]);
   };
   const activeCompiledInstallConfig = (): InstallConfig | null => {
@@ -669,14 +651,20 @@ function Inner() {
     const list = installConfigList();
     if (list.length === 0) return list;
     const compiled = activeCompiledInstallConfig();
-    const sourceMatches = installConfigsForCurrentSource();
+    const listingSelected = selectedStoreListing() !== null;
+    // Store config selection belongs to the compatibility response. A
+    // pre-sync URL match may identify eligible host policy rows for server
+    // resolution, but it must not become a client-selected InstallConfig.
+    const sourceMatches = listingSelected ? [] : installConfigsForCurrentSource();
     const desiredId = compiled
       ? compiled.id
       : sourceMatches.length === 1
         ? sourceMatches[0]!.id
-        : sourceMatches.length === 0
-          ? (defaultGitInstallConfig()?.id ?? "")
-          : "";
+        : listingSelected
+          ? ""
+          : sourceMatches.length === 0
+            ? (defaultGitInstallConfig()?.id ?? "")
+            : "";
     const current = installConfigId();
     if (current !== desiredId) setInstallConfigId(desiredId);
     return list;
@@ -699,13 +687,13 @@ function Inner() {
   const installConfigForStoreListing = (
     listing: TcsListing,
   ): InstallConfig | null => {
-    // A Store listing is presentation, not execution authority. It must select
-    // one service-owned InstallConfig by its exact Source coordinate; silently
-    // falling back to the generic direct-Git config drops app-specific Outputs
-    // and Interface blueprints, producing an active but unlaunchable Capsule.
+    // A Store listing is presentation, not execution authority. The only
+    // selectable config is the exact row returned by the compatibility
+    // compiler for this listing/source; neither the listing nor a pre-sync
+    // client URL match can contribute a module path or config id.
     const compiled = activeCompiledInstallConfig();
     if (compiled && selectedStoreListing()?.id === listing.id) return compiled;
-    return baseInstallConfigForStoreListing(listing);
+    return null;
   };
   const storeEntryForListing = (listing: TcsListing): StoreEntry | null => {
     const config = installConfigForStoreListing(listing);
@@ -719,9 +707,7 @@ function Inner() {
   const selectedServiceEntry = () => storeServiceEntry();
   const baseInstallConfigIdForCompatibility = (): string => {
     const listing = selectedStoreListing();
-    return listing
-      ? (baseInstallConfigForStoreListing(listing)?.id ?? "")
-      : selectedInstallConfigId();
+    return listing ? "" : selectedInstallConfigId();
   };
   const storeFeatureKey = (entry: StoreEntry, feature: StoreInstallFeature) =>
     `${entry.installConfigId}:${feature.id}`;
@@ -1082,7 +1068,9 @@ function Inner() {
       return t("new.error.nameInvalid");
     }
     if (installConfigLoading()) return t("new.error.configLoading");
-    if (!selectedInstallConfigId()) return t("new.error.configMissing");
+    if (!selectedInstallConfigId() && !selectedStoreListing()) {
+      return t("new.error.configMissing");
+    }
     if (storeMetadataUnavailable()) return t("new.error.configLoadFailed");
     const sourceCredentialError = sourceAccessError();
     if (sourceCredentialError) return sourceCredentialError;
@@ -1119,21 +1107,13 @@ function Inner() {
     currentInstallPrefill()?.path || path().trim() || ".";
   const installModulePath = () =>
     (selectedInstallConfig()?.modulePath ??
-      selectedServiceEntry()?.source.path ??
       currentInstallPrefill()?.path ??
       path().trim()) ||
     ".";
   const activeStoreListing = (): TcsListing | null => {
     const listing = selectedStoreListing();
     if (!listing) return null;
-    if (!sameGitUrl(listing.source.url, sourceGitUrl())) return null;
-    if (
-      normalizeSourcePath(listing.source.path) !==
-      normalizeSourcePath(installModulePath())
-    ) {
-      return null;
-    }
-    return listing;
+    return sameGitUrl(listing.source.url, sourceGitUrl()) ? listing : null;
   };
   const storeListingForCurrentSource = (): TcsListing | null => {
     const active = activeStoreListing();
@@ -1147,11 +1127,7 @@ function Inner() {
     return null;
   };
   const storeListingMatchesCurrentSource = (listing: TcsListing): boolean => {
-    if (!sameGitUrl(listing.source.url, sourceGitUrl())) return false;
-    return (
-      normalizeSourcePath(listing.source.path) ===
-      normalizeSourcePath(installModulePath())
-    );
+    return sameGitUrl(listing.source.url, sourceGitUrl());
   };
   const serviceNameVariableForCurrentSource = () =>
     selectedServiceEntry()
@@ -1835,7 +1811,7 @@ function Inner() {
       setInputVariables([]);
       setEnvVariables([]);
       setInstallConfigId(storeEntry?.installConfigId ?? "");
-      setStoreMetadataUnavailable(storeEntry === null);
+      setStoreMetadataUnavailable(false);
     } else {
       setInputVariables([]);
       setEnvVariables([]);
@@ -1922,11 +1898,13 @@ function Inner() {
       setGitUrl(hydratedListing.source.url);
       setRef("");
       setPinnedFullRef(null);
-      setPath(hydratedListing.source.path || ".");
+      // TCS v2 listings identify a repository only. The executable module path
+      // is resolved by the compatibility compiler, never by Store metadata.
+      setPath(".");
       setName(hydratedListing.suggestedName);
       const config = installConfigForStoreListing(hydratedListing);
       setInstallConfigId(config?.id ?? "");
-      setStoreMetadataUnavailable(config === null);
+      setStoreMetadataUnavailable(false);
       setStoreInputValues({});
       setStoreInputTouched({});
       setInputVariables([]);
@@ -2217,10 +2195,15 @@ function Inner() {
         sourceId: createdSourceId() ?? undefined,
         gitUrl: sourceGitUrl(),
         ref: sourceRef(),
-        path: installModulePath(),
+        // Store v2 carries no executable module path. Passing `.` keeps the
+        // compatibility request rooted at the synced Source; the server then
+        // resolves the compiled InstallConfig/modulePath for the Store flow.
+        path: selectedStoreListing() ? "." : installModulePath(),
         name: name().trim(),
         authConnectionId: sourceAuthConnectionIdForRun(),
-        installConfigId: compatibilityInstallConfigId,
+        ...(compatibilityInstallConfigId
+          ? { installConfigId: compatibilityInstallConfigId }
+          : {}),
         compileInstallUx,
         signal: flow.controller.signal,
         onSourceCreated: (sourceId) => {
@@ -2245,10 +2228,12 @@ function Inner() {
           sourceId: result.sourceId ?? createdSourceId() ?? undefined,
           gitUrl: sourceGitUrl(),
           ref: sourceRef(),
-          path: installModulePath(),
+          path: selectedStoreListing() ? "." : installModulePath(),
           name: name().trim(),
           authConnectionId: sourceAuthConnectionIdForRun(),
-          installConfigId: compatibilityInstallConfigId,
+          ...(compatibilityInstallConfigId
+            ? { installConfigId: compatibilityInstallConfigId }
+            : {}),
           compileInstallUx,
           signal: flow.controller.signal,
           onSourceCreated: (sourceId) => {
@@ -2369,12 +2354,9 @@ function Inner() {
   let lastStoreInstallUxPreflightIdentity = "";
   createEffect(() => {
     const listing = selectedStoreListing();
-    const baseConfig = listing
-      ? baseInstallConfigForStoreListing(listing)
-      : null;
     const identity = repositoryInstallUxPreviewIdentity();
     const needsPreview =
-      Boolean(listing && baseConfig) &&
+      Boolean(listing) &&
       !activeCompiledInstallConfig() &&
       compatibility() === null &&
       !checkingCompatibility();

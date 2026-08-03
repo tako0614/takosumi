@@ -54,6 +54,7 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
           text: "Repository manifest",
           link: "/reference/repository-manifest",
         },
+        { text: "Store API", link: "/reference/store-api" },
         {
           text: "Operator control MCP",
           link: "/reference/operator-control-mcp",
@@ -105,6 +106,7 @@ const enSidebar: DefaultTheme.SidebarMulti = {
           text: "Repository manifest",
           link: "/en/reference/repository-manifest",
         },
+        { text: "Store API", link: "/en/reference/store-api" },
         {
           text: "Operator control MCP",
           link: "/en/reference/operator-control-mcp",

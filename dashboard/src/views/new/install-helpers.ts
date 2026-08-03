@@ -8,7 +8,6 @@
  * store-input defaulting rules the one-tap install path relies on.
  */
 import {
-  installConfigSourceCoordinateMatches,
   normalizeInstallConfigSourcePath,
   normalizeInstallConfigSourceUrl,
   type JsonValue,
@@ -821,53 +820,60 @@ function storeSourceMatchesListing(
   source: StoreMetadata["source"],
   listing: TcsListing,
 ): boolean {
-  return storeSourceMatchesCoordinate(
-    source,
-    listing.source.url,
-    listing.source.path,
-  );
+  return storeSourceMatchesCoordinate(source, listing.source.url);
 }
 
 function storeSourceMatchesCoordinate(
   source: StoreMetadata["source"],
   url: string,
-  path: string,
+  _legacyPath?: string,
 ): boolean {
-  // InstallConfig rows can predate the canonical GitAddress shape. Treat an
-  // incomplete legacy source as a non-match instead of crashing the whole
-  // Store install view while filtering candidate configs.
+  // Store metadata is a presentation/eligibility overlay. Its URL may help
+  // identify the host-owned row, but its legacy path is never an executable
+  // coordinate and is intentionally ignored here.
   const sourceUrl =
     typeof source?.url === "string" ? source.url.trim() : undefined;
-  const sourcePath =
-    typeof source?.path === "string" ? source.path.trim() : undefined;
-  return installConfigSourceCoordinateMatches(
-    sourceUrl && sourcePath ? { url: sourceUrl, path: sourcePath } : undefined,
-    { url, path },
+  const candidateUrl = safeText(url);
+  return Boolean(
+    sourceUrl &&
+      candidateUrl &&
+      normalizeInstallConfigSourceUrl(sourceUrl) ===
+        normalizeInstallConfigSourceUrl(candidateUrl),
   );
 }
 
 function storeInstallConfigsForSource(
   configs: readonly InstallConfig[],
   url: string,
-  path: string,
+  _legacyPath?: string,
 ): readonly InstallConfig[] {
-  if (!safeText(url)) return [];
-  return configs.filter((config) =>
-    storeSourceMatchesCoordinate(config.sourceSelector, url, path),
-  );
+  const candidateUrl = safeText(url);
+  if (!candidateUrl) return [];
+  return configs.filter((config) => {
+    // A generic Git config can share the same Source URL. It is not a Store
+    // overlay and must never be selected just because a listing mentions that
+    // repository. Store eligibility is explicit in the host-owned metadata.
+    if (!config.store) return false;
+    const selectorUrl = safeText(config.sourceSelector?.url);
+    if (!selectorUrl || !storeSourceMatchesCoordinate(config.store.source, selectorUrl)) {
+      return false;
+    }
+    return storeSourceMatchesCoordinate(config.store.source, candidateUrl);
+  });
 }
 
 /**
- * Store navigation must resolve to exactly one service-owned InstallConfig.
- * Direct Git imports may use the generic config, but a Store listing may not:
- * doing so would discard its declared Outputs and Interface blueprints.
+ * Store navigation may resolve exactly one explicitly Store-eligible,
+ * service-owned InstallConfig by repository URL. Direct Git imports keep their
+ * independent URL/path selector; a Store listing may never choose that generic
+ * row or use its own (legacy) path as an executable hint.
  */
 function uniqueStoreInstallConfigForSource(
   configs: readonly InstallConfig[],
   url: string,
-  path: string,
+  _legacyPath?: string,
 ): InstallConfig | null {
-  const matches = storeInstallConfigsForSource(configs, url, path);
+  const matches = storeInstallConfigsForSource(configs, url);
   return matches.length === 1 ? matches[0]! : null;
 }
 
@@ -878,10 +884,11 @@ function storeMetadataFromStoreListing(listing: TcsListing): StoreMetadata {
     en: suggestedName,
   };
   return {
-    source: {
-      url: listing.source.url,
-      path: listing.source.path || ".",
-    },
+    // `InstallConfigStoreSource.path` exists in older control-plane rows. Keep
+    // the runtime projection URL-only so no Store path can leak into an
+    // install handoff; the cast lets this dashboard read those old rows while
+    // the contract migrates.
+    source: { url: listing.source.url } as StoreMetadata["source"],
     order: 1_000,
     surface: storeSurfaceFromStoreListing(listing.surface),
     kind: storeKindFromStoreListing(listing.kind),
@@ -964,10 +971,12 @@ function storeEntryFromStoreListing(
       : {}),
     ...(normalizedInputs.invalid ? { setupProjectionInvalid: true } : {}),
     ...(listing.publisher ? { publisher: listing.publisher } : {}),
-    source: store.source ?? {
-      url: listing.source.url,
-      path: listing.source.path || ".",
-    },
+    source: {
+      url:
+        typeof store.source?.url === "string" && store.source.url.trim()
+          ? store.source.url.trim()
+          : listing.source.url,
+    } as StoreEntry["source"],
   };
 }
 
