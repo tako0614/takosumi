@@ -192,7 +192,9 @@ function targetPool(name: string, spaceId = SPACE_A): TargetPoolRecord {
     id: `tpool_${spaceId}_${name}`,
     spaceId,
     name,
-    spec: { targets: [{ target: "tgt_cf", rank: 1 }] },
+    spec: {
+      targets: [{ name: "tgt_cf", type: "cloudflare", ref: "cf", priority: 1 }],
+    },
     createdAt: T0,
     updatedAt: T1,
   };
@@ -1697,6 +1699,345 @@ for (const backend of backends) {
       });
       expect(await stores.targetPools.get(winner.id)).toEqual(winner);
       await stores.targetPools.delete(winner.id);
+    });
+
+    test("target pool aggregate: update-first rejects a stale apply claim without torn rows", async () => {
+      const pool = targetPool(`update-first-${backend.label}`);
+      await stores.targetPools.create(pool);
+      const changed: TargetPoolRecord = {
+        ...pool,
+        spec: {
+          targets: [
+            {
+              name: "tgt_cf",
+              type: "cloudflare",
+              ref: "cf-new",
+              priority: 2,
+            },
+          ],
+        },
+        updatedAt: T2,
+      };
+      expect(
+        await stores.putTargetPool({ record: changed, expected: pool }),
+      ).toEqual({ status: "put", record: changed });
+
+      const applying = applyingShape(
+        `target-pool-update-first-${backend.label}`,
+      );
+      const plannedLock: ResolutionLockRecord = {
+        ...minimalLock(applying.id),
+        targetPool: pool.name,
+        target: "tgt_cf",
+      };
+      expect(
+        await stores.beginApply({
+          applyingRecord: applying,
+          plannedLock,
+          expectedTargetPool: pool,
+        }),
+      ).toEqual({ status: "target_pool_conflict", record: changed });
+      expect(await stores.resources.get(applying.id)).toBeUndefined();
+      expect(await stores.locks.get(applying.id)).toBeUndefined();
+      expect(await stores.targetPools.get(pool.id)).toEqual(changed);
+      await stores.targetPools.delete(pool.id);
+    });
+
+    test("target pool aggregate: delete-first rejects a stale apply claim without torn rows", async () => {
+      const pool = targetPool(`delete-first-${backend.label}`);
+      await stores.targetPools.create(pool);
+
+      expect(
+        await stores.deleteTargetPool({
+          id: pool.id,
+          spaceId: pool.spaceId,
+          name: pool.name,
+          expected: pool,
+        }),
+      ).toEqual({ status: "deleted" });
+
+      const applying = applyingShape(
+        `target-pool-delete-first-${backend.label}`,
+      );
+      const plannedLock: ResolutionLockRecord = {
+        ...minimalLock(applying.id),
+        targetPool: pool.name,
+        target: "tgt_cf",
+      };
+      expect(
+        await stores.beginApply({
+          applyingRecord: applying,
+          plannedLock,
+          expectedTargetPool: pool,
+        }),
+      ).toEqual({ status: "target_pool_conflict" });
+      expect(await stores.targetPools.get(pool.id)).toBeUndefined();
+      expect(await stores.resources.get(applying.id)).toBeUndefined();
+      expect(await stores.locks.get(applying.id)).toBeUndefined();
+    });
+
+    test("target pool aggregate: apply-first makes a changed pool report in-use", async () => {
+      const pool = targetPool(`apply-first-${backend.label}`);
+      await stores.targetPools.create(pool);
+      const applying = applyingShape(
+        `target-pool-apply-first-${backend.label}`,
+      );
+      const plannedLock: ResolutionLockRecord = {
+        ...minimalLock(applying.id),
+        targetPool: pool.name,
+        target: "tgt_cf",
+      };
+      expect(
+        await stores.beginApply({
+          applyingRecord: applying,
+          plannedLock,
+          expectedTargetPool: pool,
+        }),
+      ).toEqual({ status: "begun", record: applying, lock: plannedLock });
+
+      const changed: TargetPoolRecord = {
+        ...pool,
+        spec: {
+          targets: [
+            {
+              name: "tgt_cf",
+              type: "cloudflare",
+              ref: "cf-new",
+              priority: 2,
+            },
+          ],
+        },
+        updatedAt: T2,
+      };
+      expect(
+        await stores.putTargetPool({ record: changed, expected: pool }),
+      ).toEqual({ status: "in_use", lock: plannedLock });
+      expect(await stores.targetPools.get(pool.id)).toEqual(pool);
+      expect(await stores.resources.get(applying.id)).toEqual(applying);
+      expect(await stores.locks.get(applying.id)).toEqual(plannedLock);
+
+      await stores.locks.delete(applying.id);
+      await stores.resources.delete(applying.id);
+      await stores.targetPools.delete(pool.id);
+    });
+
+    test("target pool aggregate: apply-first makes delete report in-use without torn rows", async () => {
+      const pool = targetPool(`delete-apply-first-${backend.label}`);
+      await stores.targetPools.create(pool);
+      const applying = applyingShape(
+        `target-pool-delete-apply-first-${backend.label}`,
+      );
+      const plannedLock: ResolutionLockRecord = {
+        ...minimalLock(applying.id),
+        targetPool: pool.name,
+        target: "tgt_cf",
+      };
+      expect(
+        await stores.beginApply({
+          applyingRecord: applying,
+          plannedLock,
+          expectedTargetPool: pool,
+        }),
+      ).toEqual({ status: "begun", record: applying, lock: plannedLock });
+
+      expect(
+        await stores.deleteTargetPool({
+          id: pool.id,
+          spaceId: pool.spaceId,
+          name: pool.name,
+          expected: pool,
+        }),
+      ).toEqual({ status: "in_use", lock: plannedLock });
+      expect(await stores.targetPools.get(pool.id)).toEqual(pool);
+      expect(await stores.resources.get(applying.id)).toEqual(applying);
+      expect(await stores.locks.get(applying.id)).toEqual(plannedLock);
+
+      await stores.locks.delete(applying.id);
+      await stores.resources.delete(applying.id);
+      await stores.targetPools.delete(pool.id);
+    });
+
+    test("target pool aggregate: delete fences observed absence against a replacement", async () => {
+      const pool = targetPool(`delete-absent-cas-${backend.label}`);
+      await stores.targetPools.create(pool);
+
+      expect(
+        await stores.deleteTargetPool({
+          id: pool.id,
+          spaceId: pool.spaceId,
+          name: pool.name,
+          expected: null,
+        }),
+      ).toEqual({ status: "conflict", record: pool });
+      expect(await stores.targetPools.get(pool.id)).toEqual(pool);
+
+      await stores.targetPools.delete(pool.id);
+      expect(
+        await stores.deleteTargetPool({
+          id: pool.id,
+          spaceId: pool.spaceId,
+          name: pool.name,
+          expected: pool,
+        }),
+      ).toEqual({ status: "absent" });
+      expect(
+        await stores.deleteTargetPool({
+          id: pool.id,
+          spaceId: pool.spaceId,
+          name: pool.name,
+          expected: null,
+        }),
+      ).toEqual({ status: "absent" });
+    });
+
+    test("target pool aggregate: delete rejects a changed exact token", async () => {
+      const pool = targetPool(`delete-exact-cas-${backend.label}`);
+      await stores.targetPools.create(pool);
+      const changed: TargetPoolRecord = {
+        ...pool,
+        spec: {
+          targets: [
+            {
+              name: "tgt_cf",
+              type: "cloudflare",
+              ref: "cf-new",
+              priority: 2,
+            },
+          ],
+        },
+        updatedAt: T2,
+      };
+      await stores.targetPools.upsert(changed);
+
+      expect(
+        await stores.deleteTargetPool({
+          id: pool.id,
+          spaceId: pool.spaceId,
+          name: pool.name,
+          expected: pool,
+        }),
+      ).toEqual({ status: "conflict", record: changed });
+      expect(await stores.targetPools.get(pool.id)).toEqual(changed);
+
+      await stores.targetPools.delete(pool.id);
+    });
+
+    test("target pool aggregate: legacy locks protect pools by target name", async () => {
+      const pool = targetPool(`legacy-reference-${backend.label}`);
+      await stores.targetPools.create(pool);
+      const resource = applyingShape(
+        `target-pool-legacy-reference-${backend.label}`,
+      );
+      const legacyLock: ResolutionLockRecord = {
+        ...minimalLock(resource.id),
+        target: "tgt_cf",
+      };
+      await stores.resources.upsert(resource);
+      await stores.locks.put(legacyLock);
+
+      const changed: TargetPoolRecord = {
+        ...pool,
+        spec: {
+          targets: [
+            {
+              name: "tgt_cf",
+              type: "cloudflare",
+              ref: "cf-new",
+              priority: 2,
+            },
+          ],
+        },
+        updatedAt: T2,
+      };
+      expect(
+        await stores.putTargetPool({ record: changed, expected: pool }),
+      ).toEqual({ status: "in_use", lock: legacyLock });
+      expect(await stores.targetPools.get(pool.id)).toEqual(pool);
+
+      await stores.locks.delete(resource.id);
+      await stores.resources.delete(resource.id);
+      await stores.targetPools.delete(pool.id);
+    });
+
+    test("target pool aggregate: legacy locks also protect pools from delete", async () => {
+      const pool = targetPool(`legacy-delete-reference-${backend.label}`);
+      await stores.targetPools.create(pool);
+      const resource = applyingShape(
+        `target-pool-legacy-delete-reference-${backend.label}`,
+      );
+      const legacyLock: ResolutionLockRecord = {
+        ...minimalLock(resource.id),
+        target: "tgt_cf",
+      };
+      await stores.resources.upsert(resource);
+      await stores.locks.put(legacyLock);
+
+      expect(
+        await stores.deleteTargetPool({
+          id: pool.id,
+          spaceId: pool.spaceId,
+          name: pool.name,
+          expected: pool,
+        }),
+      ).toEqual({ status: "in_use", lock: legacyLock });
+      expect(await stores.targetPools.get(pool.id)).toEqual(pool);
+      expect(await stores.resources.get(resource.id)).toEqual(resource);
+      expect(await stores.locks.get(resource.id)).toEqual(legacyLock);
+
+      await stores.locks.delete(resource.id);
+      await stores.resources.delete(resource.id);
+      await stores.targetPools.delete(pool.id);
+    });
+
+    test("target pool aggregate: exact tokens normalize JSON object key order", async () => {
+      const pool: TargetPoolRecord = {
+        ...targetPool(`normalized-token-${backend.label}`),
+        spec: {
+          classes: ["edge"],
+          targets: [
+            {
+              name: "tgt_cf",
+              type: "cloudflare",
+              priority: 1,
+              options: { z: 1, a: 2 },
+            },
+          ],
+        },
+      };
+      await stores.targetPools.create(pool);
+      const equivalentToken: TargetPoolRecord = {
+        ...pool,
+        spec: {
+          targets: [
+            {
+              options: { a: 2, z: 1 },
+              priority: 1,
+              type: "cloudflare",
+              name: "tgt_cf",
+            },
+          ],
+          classes: ["edge"],
+        },
+      };
+      const applying = applyingShape(
+        `target-pool-normalized-token-${backend.label}`,
+      );
+      const plannedLock: ResolutionLockRecord = {
+        ...minimalLock(applying.id),
+        targetPool: pool.name,
+        target: "tgt_cf",
+      };
+      expect(
+        await stores.beginApply({
+          applyingRecord: applying,
+          plannedLock,
+          expectedTargetPool: equivalentToken,
+        }),
+      ).toEqual({ status: "begun", record: applying, lock: plannedLock });
+
+      await stores.locks.delete(applying.id);
+      await stores.resources.delete(applying.id);
+      await stores.targetPools.delete(pool.id);
     });
 
     test("space policy: round-trip, getByName, space scope, delete", async () => {

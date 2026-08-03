@@ -640,30 +640,45 @@ export class ResourceShapeService {
     if (validation) return { ok: false, error: validation };
     const now = this.#now();
     const existing = await this.#stores.targetPools.getByName(space, name);
-    if (existing) {
-      if (canonicalJson(existing.spec) === canonicalJson(spec)) {
-        return { ok: true, value: existing };
-      }
-      const reference = await this.#targetPoolReference(existing);
-      if (reference) {
-        return {
-          ok: false,
-          error: {
-            code: "target_pool_in_use",
-            message: `TargetPool ${name} is pinned by ${reference.resourceId}; delete or explicitly migrate that Resource before changing the pool`,
-          },
+    const unchanged =
+      existing && canonicalJson(existing.spec) === canonicalJson(spec);
+    const record: TargetPoolRecord = unchanged
+      ? existing
+      : {
+          id: existing?.id ?? `tkrn:${space}:TargetPool:${name}`,
+          spaceId: space,
+          name,
+          spec: spec as unknown as JsonObject,
+          createdAt: existing?.createdAt ?? now,
+          updatedAt: now,
         };
-      }
+    const result = await this.#stores.putTargetPool({
+      record,
+      expected: existing ?? null,
+    });
+    if (result.status === "put") return { ok: true, value: result.record };
+    if (result.status === "in_use") {
+      return {
+        ok: false,
+        error: {
+          code: "target_pool_in_use",
+          message: `TargetPool ${name} is pinned by ${result.lock.resourceId}; delete or explicitly migrate that Resource before changing the pool`,
+        },
+      };
     }
-    const record: TargetPoolRecord = {
-      id: existing?.id ?? `tkrn:${space}:TargetPool:${name}`,
-      spaceId: space,
-      name,
-      spec: spec as unknown as JsonObject,
-      createdAt: existing?.createdAt ?? now,
-      updatedAt: now,
+    if (
+      result.record &&
+      canonicalJson(result.record.spec) === canonicalJson(spec)
+    ) {
+      return { ok: true, value: result.record };
+    }
+    return {
+      ok: false,
+      error: {
+        code: "reconcile_conflict",
+        message: `TargetPool ${name} changed while its update was being committed`,
+      },
     };
-    return { ok: true, value: await this.#stores.targetPools.upsert(record) };
   }
 
   async putSpacePolicy(
@@ -872,19 +887,31 @@ export class ResourceShapeService {
     name: string,
   ): Promise<ServiceResult<void>> {
     const existing = await this.#stores.targetPools.getByName(space, name);
-    if (!existing) return { ok: true, value: undefined };
-    const reference = await this.#targetPoolReference(existing);
-    if (reference) {
+    const result = await this.#stores.deleteTargetPool({
+      id: existing?.id ?? `tkrn:${space}:TargetPool:${name}`,
+      spaceId: space,
+      name,
+      expected: existing ?? null,
+    });
+    if (result.status === "deleted" || result.status === "absent") {
+      return { ok: true, value: undefined };
+    }
+    if (result.status === "in_use") {
       return {
         ok: false,
         error: {
           code: "target_pool_in_use",
-          message: `TargetPool ${name} is pinned by ${reference.resourceId}; delete or explicitly migrate that Resource before deleting the pool`,
+          message: `TargetPool ${name} is pinned by ${result.lock.resourceId}; delete or explicitly migrate that Resource before deleting the pool`,
         },
       };
     }
-    await this.#stores.targetPools.delete(existing.id);
-    return { ok: true, value: undefined };
+    return {
+      ok: false,
+      error: {
+        code: "reconcile_conflict",
+        message: `TargetPool ${name} changed while its deletion was being committed`,
+      },
+    };
   }
 
   // --- preview / apply / get / list / delete ----------------------------------
@@ -1253,7 +1280,7 @@ export class ResourceShapeService {
     }
     const prepared = await this.#resolveAndPlan(req, existingLock);
     if (!prepared.ok) return prepared;
-    const { output, plan, entry, parsed } = prepared.value;
+    const { output, plan, entry, parsed, targetPoolRecord } = prepared.value;
     let nativeResourcePlan: readonly NativeResourceRef[];
     try {
       nativeResourcePlan =
@@ -1590,6 +1617,7 @@ export class ResourceShapeService {
       const claim = await this.#stores.beginApply({
         applyingRecord,
         plannedLock: lockRecord,
+        expectedTargetPool: targetPoolRecord,
         ...(existing ? { expected: versionOf(existing) } : {}),
       });
       if (claim.status === "ownership_conflict") {
@@ -2399,7 +2427,7 @@ export class ResourceShapeService {
       recoveringImport || updatingImport ? existingLock : undefined,
     );
     if (!prepared.ok) return prepared;
-    const { output, plan, entry, parsed } = prepared.value;
+    const { output, plan, entry, parsed, targetPoolRecord } = prepared.value;
     let nativeResourcePlan: readonly NativeResourceRef[];
     try {
       nativeResourcePlan =
@@ -2604,6 +2632,7 @@ export class ResourceShapeService {
       const claim = await this.#stores.beginApply({
         applyingRecord,
         plannedLock: lockRecord,
+        expectedTargetPool: targetPoolRecord,
         ...(existing ? { expected: versionOf(existing) } : {}),
       });
       if (claim.status === "ownership_conflict") {
@@ -3111,10 +3140,7 @@ export class ResourceShapeService {
         error: { code: "not_found", message: `resource ${id} not found` },
       };
     }
-    if (
-      record.phase !== "Ready" ||
-      record.observedGeneration !== record.generation
-    ) {
+    if (record.phase !== "Ready" || record.observedGeneration !== record.generation) {
       return {
         ok: false,
         error: {
@@ -3540,7 +3566,10 @@ export class ResourceShapeService {
         error: { code: "not_found", message: `resource ${id} not found` },
       };
     }
-    if (record.phase !== "Ready" || record.observedGeneration !== record.generation) {
+    if (
+      record.phase !== "Ready" ||
+      record.observedGeneration !== record.generation
+    ) {
       return {
         ok: false,
         error: {
@@ -3890,6 +3919,15 @@ export class ResourceShapeService {
           error: {
             code: "reconcile_conflict",
             message: `resource ${id} changed while refresh was being claimed`,
+          },
+        };
+      }
+      if (claim.status === "target_pool_conflict") {
+        return {
+          ok: false,
+          error: {
+            code: "reconcile_conflict",
+            message: `resource ${id} TargetPool changed while refresh was being claimed`,
           },
         };
       }
@@ -5581,6 +5619,7 @@ export class ResourceShapeService {
       readonly plan: ResourceShapePlan;
       readonly entry: TargetPoolEntry;
       readonly parsed: ParsedResourceSpec;
+      readonly targetPoolRecord: TargetPoolRecord;
     }>
   > {
     const specResult = await this.#parseRequestResourceSpec(req);
@@ -5696,7 +5735,17 @@ export class ResourceShapeService {
       };
     }
 
-    return { ok: true, value: { resource, output, plan, entry, parsed } };
+    return {
+      ok: true,
+      value: {
+        resource,
+        output,
+        plan,
+        entry,
+        parsed,
+        targetPoolRecord: poolRecord,
+      },
+    };
   }
 
   async #resolveExactForm(
@@ -6106,24 +6155,6 @@ export class ResourceShapeService {
       ) {
         return candidate;
       }
-    }
-    return undefined;
-  }
-
-  async #targetPoolReference(
-    pool: TargetPoolRecord,
-  ): Promise<ResolutionLockRecord | undefined> {
-    const targetNames = new Set(
-      targetPoolSpecOf(pool).targets.map((target) => target.name),
-    );
-    const resources = await this.#stores.resources.listBySpace(pool.spaceId);
-    for (const resource of resources) {
-      const lock = await this.#stores.locks.get(resource.id);
-      if (!lock) continue;
-      if (lock.targetPool === pool.name) return lock;
-      // Legacy locks predate targetPool persistence. Conservatively protect
-      // every pool that could have supplied the recorded target.
-      if (!lock.targetPool && targetNames.has(lock.target)) return lock;
     }
     return undefined;
   }

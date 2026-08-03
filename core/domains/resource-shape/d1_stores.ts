@@ -69,17 +69,27 @@ import type {
   ResourceShapeStores,
   SpacePolicyStore,
   TargetPoolCreateResult,
+  TargetPoolDeleteInput,
+  TargetPoolDeleteResult,
+  TargetPoolPutInput,
+  TargetPoolPutResult,
   TargetPoolStore,
 } from "./stores.ts";
 import {
   assertAbortInput,
   assertAtomicRemoveInput,
   assertApplyPair,
+  assertExpectedTargetPool,
+  assertTargetPoolDeleteInput,
+  assertTargetPoolPutInput,
   matchesApplyLock,
+  matchesExpectedTargetPool,
   matchesExpectedLock,
+  matchesTargetPool,
   matchesVersion,
   resourceRecordRevision,
   assertResourceFormIdentityPinInput,
+  targetPoolSpecsEqual,
 } from "./stores.ts";
 
 export interface D1Like {
@@ -872,6 +882,8 @@ export function createD1ResourceShapeStores(db: D1Like): ResourceShapeStores {
     locks: new D1ResolutionLockStore(db),
     targetPools: new D1TargetPoolStore(db),
     spacePolicies: new D1SpacePolicyStore(db),
+    putTargetPool: (input) => putD1TargetPool(db, input),
+    deleteTargetPool: (input) => deleteD1TargetPool(db, input),
     beginApply: (input) => beginD1Apply(db, input),
     commitApply: (input) => commitD1Apply(db, input),
     abortApply: (input) => abortD1Apply(db, input),
@@ -966,13 +978,89 @@ async function pinD1ExactFormIdentity(
   return { status: "conflict", record, lock };
 }
 
+async function putD1TargetPool(
+  db: D1Like,
+  input: TargetPoolPutInput,
+): Promise<TargetPoolPutResult> {
+  assertTargetPoolPutInput(input);
+  const batch = requireD1Batch(db, "atomic TargetPool put");
+  const checkReferences =
+    input.expected === null ||
+    !targetPoolSpecsEqual(input.expected, input.record);
+  try {
+    await batch([
+      targetPoolPutGuardStatement(db, input, checkReferences),
+      db
+        .prepare(namedSpecUpsertSql(names.targetPools))
+        .bind(...namedSpecParameters(input.record)),
+    ]);
+  } catch (error) {
+    const current = await readD1TargetPoolByIdentity(db, input.record);
+    if (!matchesExpectedTargetPool(current, input.expected)) {
+      return {
+        status: "conflict",
+        ...(current ? { record: current } : {}),
+      };
+    }
+    if (checkReferences) {
+      const reference = await readD1TargetPoolReference(
+        db,
+        input.expected ?? input.record,
+      );
+      if (reference) return { status: "in_use", lock: reference };
+    }
+    throw error;
+  }
+  const persisted = await readD1TargetPool(db, input.record.id);
+  if (!persisted) {
+    throw new Error(`TargetPool put lost durable row ${input.record.id}`);
+  }
+  return { status: "put", record: persisted };
+}
+
+async function deleteD1TargetPool(
+  db: D1Like,
+  input: TargetPoolDeleteInput,
+): Promise<TargetPoolDeleteResult> {
+  assertTargetPoolDeleteInput(input);
+  const batch = requireD1Batch(db, "atomic TargetPool delete");
+  try {
+    await batch([
+      targetPoolDeleteGuardStatement(db, input),
+      db
+        .prepare(`delete from ${names.targetPools} where id = ?`)
+        .bind(input.id),
+    ]);
+  } catch (error) {
+    const current = await readD1TargetPoolByIdentity(db, input);
+    if (!current) return { status: "absent" };
+    if (!matchesExpectedTargetPool(current, input.expected)) {
+      return { status: "conflict", record: current };
+    }
+    const reference = await readD1TargetPoolReference(db, current);
+    if (reference) return { status: "in_use", lock: reference };
+    throw error;
+  }
+  return { status: input.expected ? "deleted" : "absent" };
+}
+
 async function beginD1Apply(
   db: D1Like,
   input: ResourceApplyBeginInput,
 ): Promise<ResourceApplyBeginResult> {
   assertApplyPair(input.applyingRecord, input.plannedLock, "Applying");
+  assertExpectedTargetPool(input);
   const batch = requireD1Batch(db);
   const statements = [
+    ...(input.expectedTargetPool
+      ? [
+          targetPoolExpectationGuardStatement(
+            db,
+            input.expectedTargetPool,
+            input.applyingRecord.id,
+          ),
+        ]
+      : []),
     input.expected === undefined
       ? createOnlyGuardStatement(db, input.applyingRecord.id)
       : versionGuardStatement(
@@ -1018,6 +1106,18 @@ async function beginD1Apply(
         })
       ) {
         return { status: "conflict", record: current };
+      }
+    }
+    if (input.expectedTargetPool) {
+      const currentPool = await readD1TargetPool(
+        db,
+        input.expectedTargetPool.id,
+      );
+      if (!matchesTargetPool(currentPool, input.expectedTargetPool)) {
+        return {
+          status: "target_pool_conflict",
+          ...(currentPool ? { record: currentPool } : {}),
+        };
       }
     }
     throw error;
@@ -1155,13 +1255,165 @@ async function removeD1Resource(
 
 function requireD1Batch(
   db: D1Like,
+  operation = "atomic Resource apply",
 ): (
   statements: readonly D1LikePreparedStatement[],
 ) => Promise<readonly { readonly meta?: { readonly changes?: number } }[]> {
   if (!db.batch) {
-    throw new Error("atomic Resource apply requires D1 batch support");
+    throw new Error(`${operation} requires D1 batch support`);
   }
   return (statements) => db.batch!(statements);
+}
+
+function targetPoolExpectationGuardStatement(
+  db: D1Like,
+  expected: TargetPoolRecord,
+  guardId: string,
+): D1LikePreparedStatement {
+  return db
+    .prepare(
+      `insert into ${names.resourceShapes} (
+        id, space_id, kind, name, managed_by, spec_json, phase,
+        generation, observed_generation, created_at, updated_at
+      )
+      select ?, null, 'guard', 'guard', 'guard', '{}', 'Pending', 0, 0, '', ''
+      where not exists (
+        select 1 from ${names.targetPools} pool
+        where pool.id = ? and pool.space_id = ? and pool.name = ?
+          and not exists (
+            select fullkey, type, atom from json_tree(pool.spec_json)
+            except
+            select fullkey, type, atom from json_tree(?)
+          )
+          and not exists (
+            select fullkey, type, atom from json_tree(?)
+            except
+            select fullkey, type, atom from json_tree(pool.spec_json)
+          )
+          and pool.created_at = ? and pool.updated_at = ?
+      )`,
+    )
+    .bind(
+      guardId,
+      expected.id,
+      expected.spaceId,
+      expected.name,
+      JSON.stringify(expected.spec),
+      JSON.stringify(expected.spec),
+      expected.createdAt,
+      expected.updatedAt,
+    );
+}
+
+function targetPoolPutGuardStatement(
+  db: D1Like,
+  input: TargetPoolPutInput,
+  checkReferences: boolean,
+): D1LikePreparedStatement {
+  return targetPoolMutationGuardStatement(db, {
+    id: input.record.id,
+    spaceId: input.record.spaceId,
+    name: input.record.name,
+    expected: input.expected,
+    referencePool: checkReferences
+      ? (input.expected ?? input.record)
+      : undefined,
+  });
+}
+
+function targetPoolDeleteGuardStatement(
+  db: D1Like,
+  input: TargetPoolDeleteInput,
+): D1LikePreparedStatement {
+  return targetPoolMutationGuardStatement(db, {
+    ...input,
+    referencePool: input.expected ?? undefined,
+  });
+}
+
+function targetPoolMutationGuardStatement(
+  db: D1Like,
+  input: {
+    readonly id: TargetPoolRecordId;
+    readonly spaceId: SpaceId;
+    readonly name: string;
+    readonly expected: TargetPoolRecord | null;
+    readonly referencePool?: TargetPoolRecord;
+  },
+): D1LikePreparedStatement {
+  const expectedPredicate = input.expected
+    ? `exists (
+        select 1 from ${names.targetPools} pool
+        where pool.id = ? and pool.space_id = ? and pool.name = ?
+          and not exists (
+            select fullkey, type, atom from json_tree(pool.spec_json)
+            except
+            select fullkey, type, atom from json_tree(?)
+          )
+          and not exists (
+            select fullkey, type, atom from json_tree(?)
+            except
+            select fullkey, type, atom from json_tree(pool.spec_json)
+          )
+          and pool.created_at = ?
+          and pool.updated_at = ?
+      )`
+    : `not exists (
+        select 1 from ${names.targetPools} pool
+        where pool.id = ? or (pool.space_id = ? and pool.name = ?)
+      )`;
+  const referencePredicate = input.referencePool
+    ? `and not exists (
+        select 1
+        from ${names.resolutionLocks} resolution
+        join ${names.resourceShapes} resource
+          on resource.id = resolution.resource_id
+        where resource.space_id = ?
+          and (
+            resolution.target_pool = ?
+            or (
+              resolution.target_pool is null
+              and exists (
+                select 1 from json_each(?, '$.targets') target
+                where json_extract(target.value, '$.name') = resolution.target
+              )
+            )
+          )
+      )`
+    : "";
+  return db
+    .prepare(
+      `insert into ${names.resourceShapes} (
+        id, space_id, kind, name, managed_by, spec_json, phase,
+        generation, observed_generation, created_at, updated_at
+      )
+      select ?, null, 'guard', 'guard', 'guard', '{}', 'Pending', 0, 0, '', ''
+      where not (
+        ${expectedPredicate}
+        ${referencePredicate}
+      )`,
+    )
+    .bind(
+      input.id,
+      ...(input.expected
+        ? [
+            input.expected.id,
+            input.expected.spaceId,
+            input.expected.name,
+            JSON.stringify(input.expected.spec),
+            JSON.stringify(input.expected.spec),
+            input.expected.createdAt,
+            input.expected.updatedAt,
+          ]
+        : [input.id, input.spaceId, input.name]),
+      ...(input.referencePool
+        ? [
+            input.referencePool.spaceId,
+            input.referencePool.name,
+            JSON.stringify(input.referencePool.spec),
+          ]
+        : []),
+    );
 }
 
 /**
@@ -1476,6 +1728,60 @@ async function readD1Lock(
       `select * from ${names.resolutionLocks} where resource_id = ? limit 1`,
     )
     .bind(resourceId)
+    .first<ResolutionLockRow>();
+  return row ? resolutionLockFromRow(row) : undefined;
+}
+
+async function readD1TargetPool(
+  db: D1Like,
+  id: TargetPoolRecordId,
+): Promise<TargetPoolRecord | undefined> {
+  const row = await db
+    .prepare(`select * from ${names.targetPools} where id = ? limit 1`)
+    .bind(id)
+    .first<NamedSpecRow>();
+  return row ? targetPoolFromRow(row) : undefined;
+}
+
+async function readD1TargetPoolByIdentity(
+  db: D1Like,
+  record: Pick<TargetPoolRecord, "id" | "spaceId" | "name">,
+): Promise<TargetPoolRecord | undefined> {
+  const row = await db
+    .prepare(
+      `select * from ${names.targetPools}
+       where id = ? or (space_id = ? and name = ?)
+       order by case when id = ? then 0 else 1 end limit 1`,
+    )
+    .bind(record.id, record.spaceId, record.name, record.id)
+    .first<NamedSpecRow>();
+  return row ? targetPoolFromRow(row) : undefined;
+}
+
+async function readD1TargetPoolReference(
+  db: D1Like,
+  pool: TargetPoolRecord,
+): Promise<ResolutionLockRecord | undefined> {
+  const row = await db
+    .prepare(
+      `select resolution.*
+       from ${names.resolutionLocks} resolution
+       join ${names.resourceShapes} resource
+         on resource.id = resolution.resource_id
+       where resource.space_id = ?
+         and (
+           resolution.target_pool = ?
+           or (
+             resolution.target_pool is null
+             and exists (
+               select 1 from json_each(?, '$.targets') target
+               where json_extract(target.value, '$.name') = resolution.target
+             )
+           )
+         )
+       order by resolution.resource_id asc limit 1`,
+    )
+    .bind(pool.spaceId, pool.name, JSON.stringify(pool.spec))
     .first<ResolutionLockRow>();
   return row ? resolutionLockFromRow(row) : undefined;
 }

@@ -5906,6 +5906,290 @@ test("referenced TargetPool updates and deletes are rejected until the Resource 
   expect((await service.deleteTargetPool("space_1", "default")).ok).toBe(true);
 });
 
+test("a TargetPool update that commits before apply claim makes apply re-resolve instead of pinning stale targets", async () => {
+  const baseStores = createInMemoryResourceShapeStores();
+  let releaseBeginApply!: () => void;
+  const beginApplyReleased = new Promise<void>((resolve) => {
+    releaseBeginApply = resolve;
+  });
+  let signalBeginApply!: () => void;
+  const beginApplyEntered = new Promise<void>((resolve) => {
+    signalBeginApply = resolve;
+  });
+  const stores: ResourceShapeStores = {
+    ...baseStores,
+    async beginApply(input) {
+      signalBeginApply();
+      await beginApplyReleased;
+      return await baseStores.beginApply(input);
+    },
+  };
+  const service = new ResourceShapeService({
+    stores,
+    adapter: new StubResourceShapeAdapter(),
+    ...directOperationLedger(),
+    now: () => NOW,
+    moduleRegistry: TEST_RESOURCE_SHAPE_MODULE_REGISTRY,
+  });
+  await seed(service);
+
+  const applying = reviewedApply(service, APPLY);
+  await beginApplyEntered;
+
+  const changedPool: TargetPoolSpec = {
+    ...POOL,
+    targets: POOL.targets.map((target) => ({
+      ...target,
+      priority: target.priority + 1,
+    })),
+  };
+  const updated = await service.putTargetPool(
+    "space_1",
+    "default",
+    changedPool,
+  );
+  expect(updated.ok).toBe(true);
+
+  releaseBeginApply();
+  const result = await applying;
+  expect(result.ok).toBe(false);
+  if (!result.ok) expect(result.error.code).toBe("reconcile_conflict");
+  expect(await baseStores.resources.get(APPLY_ID)).toBeUndefined();
+  expect(await baseStores.locks.get(APPLY_ID)).toBeUndefined();
+  expect(await service.getTargetPool("space_1", "default")).toMatchObject({
+    spec: changedPool,
+  });
+});
+
+test("an apply claim that commits first makes a concurrent TargetPool update report in-use", async () => {
+  const baseStores = createInMemoryResourceShapeStores();
+  let releaseBeginApply!: () => void;
+  const beginApplyReleased = new Promise<void>((resolve) => {
+    releaseBeginApply = resolve;
+  });
+  let signalBeginApply!: () => void;
+  const beginApplyCommitted = new Promise<void>((resolve) => {
+    signalBeginApply = resolve;
+  });
+  const stores: ResourceShapeStores = {
+    ...baseStores,
+    async beginApply(input) {
+      const result = await baseStores.beginApply(input);
+      if (result.status === "begun") {
+        signalBeginApply();
+        await beginApplyReleased;
+      }
+      return result;
+    },
+  };
+  const service = new ResourceShapeService({
+    stores,
+    adapter: new StubResourceShapeAdapter(),
+    ...directOperationLedger(),
+    now: () => NOW,
+    moduleRegistry: TEST_RESOURCE_SHAPE_MODULE_REGISTRY,
+  });
+  await seed(service);
+
+  const applying = reviewedApply(service, APPLY);
+  await beginApplyCommitted;
+
+  const changedPool: TargetPoolSpec = {
+    ...POOL,
+    targets: POOL.targets.map((target) => ({
+      ...target,
+      priority: target.priority + 1,
+    })),
+  };
+  const updated = await service.putTargetPool(
+    "space_1",
+    "default",
+    changedPool,
+  );
+  expect(updated.ok).toBe(false);
+  if (!updated.ok) expect(updated.error.code).toBe("target_pool_in_use");
+
+  releaseBeginApply();
+  expect((await applying).ok).toBe(true);
+  expect(await service.getTargetPool("space_1", "default")).toMatchObject({
+    spec: POOL,
+  });
+  expect(await baseStores.locks.get(APPLY_ID)).toMatchObject({
+    targetPool: "default",
+    targetSnapshot: { name: "cloudflare-main", priority: 80 },
+  });
+});
+
+test("an apply claim that commits after delete inspection makes TargetPool delete report in-use", async () => {
+  const baseStores = createInMemoryResourceShapeStores();
+  let releaseDelete!: () => void;
+  const deleteReleased = new Promise<void>((resolve) => {
+    releaseDelete = resolve;
+  });
+  let signalDelete!: () => void;
+  const deleteEntered = new Promise<void>((resolve) => {
+    signalDelete = resolve;
+  });
+  const stores: ResourceShapeStores = {
+    ...baseStores,
+    async deleteTargetPool(input) {
+      signalDelete();
+      await deleteReleased;
+      return await baseStores.deleteTargetPool(input);
+    },
+  };
+  const service = new ResourceShapeService({
+    stores,
+    adapter: new StubResourceShapeAdapter(),
+    ...directOperationLedger(),
+    now: () => NOW,
+    moduleRegistry: TEST_RESOURCE_SHAPE_MODULE_REGISTRY,
+  });
+  await seed(service);
+
+  const deleting = service.deleteTargetPool("space_1", "default");
+  await deleteEntered;
+
+  expect((await reviewedApply(service, APPLY)).ok).toBe(true);
+  releaseDelete();
+
+  const deleted = await deleting;
+  expect(deleted.ok).toBe(false);
+  if (!deleted.ok) expect(deleted.error.code).toBe("target_pool_in_use");
+  expect(await service.getTargetPool("space_1", "default")).toBeDefined();
+  expect(await baseStores.resources.get(APPLY_ID)).toMatchObject({
+    phase: "Ready",
+  });
+  expect(await baseStores.locks.get(APPLY_ID)).toMatchObject({
+    targetPool: "default",
+    target: "cloudflare-main",
+  });
+});
+
+test("a TargetPool delete that commits before apply claim makes apply reject without torn rows", async () => {
+  const baseStores = createInMemoryResourceShapeStores();
+  let releaseBeginApply!: () => void;
+  const beginApplyReleased = new Promise<void>((resolve) => {
+    releaseBeginApply = resolve;
+  });
+  let signalBeginApply!: () => void;
+  const beginApplyEntered = new Promise<void>((resolve) => {
+    signalBeginApply = resolve;
+  });
+  const stores: ResourceShapeStores = {
+    ...baseStores,
+    async beginApply(input) {
+      signalBeginApply();
+      await beginApplyReleased;
+      return await baseStores.beginApply(input);
+    },
+  };
+  const service = new ResourceShapeService({
+    stores,
+    adapter: new StubResourceShapeAdapter(),
+    ...directOperationLedger(),
+    now: () => NOW,
+    moduleRegistry: TEST_RESOURCE_SHAPE_MODULE_REGISTRY,
+  });
+  await seed(service);
+
+  const applying = reviewedApply(service, APPLY);
+  await beginApplyEntered;
+
+  expect((await service.deleteTargetPool("space_1", "default")).ok).toBe(
+    true,
+  );
+  releaseBeginApply();
+
+  const result = await applying;
+  expect(result.ok).toBe(false);
+  if (!result.ok) expect(result.error.code).toBe("reconcile_conflict");
+  expect(await service.getTargetPool("space_1", "default")).toBeUndefined();
+  expect(await baseStores.resources.get(APPLY_ID)).toBeUndefined();
+  expect(await baseStores.locks.get(APPLY_ID)).toBeUndefined();
+});
+
+test("an absent TargetPool delete reports a concurrent replacement instead of hiding it", async () => {
+  const baseStores = createInMemoryResourceShapeStores();
+  let releaseDelete!: () => void;
+  const deleteReleased = new Promise<void>((resolve) => {
+    releaseDelete = resolve;
+  });
+  let signalDelete!: () => void;
+  const deleteEntered = new Promise<void>((resolve) => {
+    signalDelete = resolve;
+  });
+  const stores: ResourceShapeStores = {
+    ...baseStores,
+    async deleteTargetPool(input) {
+      signalDelete();
+      await deleteReleased;
+      return await baseStores.deleteTargetPool(input);
+    },
+  };
+  const service = new ResourceShapeService({
+    stores,
+    adapter: new StubResourceShapeAdapter(),
+    ...directOperationLedger(),
+    now: () => NOW,
+    moduleRegistry: TEST_RESOURCE_SHAPE_MODULE_REGISTRY,
+  });
+
+  const deleting = service.deleteTargetPool("space_1", "late");
+  await deleteEntered;
+
+  expect((await service.putTargetPool("space_1", "late", POOL)).ok).toBe(true);
+  releaseDelete();
+
+  const deleted = await deleting;
+  expect(deleted.ok).toBe(false);
+  if (!deleted.ok) expect(deleted.error.code).toBe("reconcile_conflict");
+  expect(await service.getTargetPool("space_1", "late")).toMatchObject({
+    spec: POOL,
+  });
+});
+
+test("concurrent TargetPool deletes remain idempotent after both inspect the same record", async () => {
+  const baseStores = createInMemoryResourceShapeStores();
+  let releaseFirstDelete!: () => void;
+  const firstDeleteReleased = new Promise<void>((resolve) => {
+    releaseFirstDelete = resolve;
+  });
+  let signalFirstDelete!: () => void;
+  const firstDeleteEntered = new Promise<void>((resolve) => {
+    signalFirstDelete = resolve;
+  });
+  let deleteCalls = 0;
+  const stores: ResourceShapeStores = {
+    ...baseStores,
+    async deleteTargetPool(input) {
+      deleteCalls += 1;
+      if (deleteCalls === 1) {
+        signalFirstDelete();
+        await firstDeleteReleased;
+      }
+      return await baseStores.deleteTargetPool(input);
+    },
+  };
+  const service = new ResourceShapeService({
+    stores,
+    adapter: new StubResourceShapeAdapter(),
+    ...directOperationLedger(),
+    now: () => NOW,
+    moduleRegistry: TEST_RESOURCE_SHAPE_MODULE_REGISTRY,
+  });
+  await service.putTargetPool("space_1", "default", POOL);
+
+  const first = service.deleteTargetPool("space_1", "default");
+  await firstDeleteEntered;
+  const second = await service.deleteTargetPool("space_1", "default");
+  releaseFirstDelete();
+
+  expect(second.ok).toBe(true);
+  expect((await first).ok).toBe(true);
+  expect(await service.getTargetPool("space_1", "default")).toBeUndefined();
+});
+
 test("re-apply dispatches the pinned Target snapshot, plugin, and options even if storage drifts", async () => {
   const stores = createInMemoryResourceShapeStores();
   const adapter = new PluginSpyAdapter();

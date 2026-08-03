@@ -69,17 +69,27 @@ import type {
   ResourceShapeStores,
   SpacePolicyStore,
   TargetPoolCreateResult,
+  TargetPoolDeleteInput,
+  TargetPoolDeleteResult,
+  TargetPoolPutInput,
+  TargetPoolPutResult,
   TargetPoolStore,
 } from "./stores.ts";
 import {
   assertAbortInput,
   assertAtomicRemoveInput,
   assertApplyPair,
+  assertExpectedTargetPool,
+  assertTargetPoolDeleteInput,
+  assertTargetPoolPutInput,
   matchesApplyLock,
+  matchesExpectedTargetPool,
   matchesExpectedLock,
+  matchesTargetPool,
   matchesVersion,
   resourceRecordRevision,
   assertResourceFormIdentityPinInput,
+  targetPoolSpecsEqual,
 } from "./stores.ts";
 
 type ResourceShapeRow = {
@@ -758,12 +768,88 @@ export function createSqlResourceShapeStores(
     locks: new SqlResolutionLockStore(client),
     targetPools: new SqlTargetPoolStore(client),
     spacePolicies: new SqlSpacePolicyStore(client),
+    putTargetPool: (input) => putSqlTargetPool(client, input),
+    deleteTargetPool: (input) => deleteSqlTargetPool(client, input),
     beginApply: (input) => beginSqlApply(client, input),
     commitApply: (input) => commitSqlApply(client, input),
     abortApply: (input) => abortSqlApply(client, input),
     removeResource: (input) => removeSqlResource(client, input),
     pinExactFormIdentity: (input) => pinSqlExactFormIdentity(client, input),
   };
+}
+
+async function putSqlTargetPool(
+  client: SqlClient,
+  input: TargetPoolPutInput,
+): Promise<TargetPoolPutResult> {
+  assertTargetPoolPutInput(input);
+  return await client.transaction(async (transaction) => {
+    const current = await readSqlTargetPoolByIdentity(
+      transaction,
+      input.record,
+      true,
+    );
+    if (!matchesExpectedTargetPool(current, input.expected)) {
+      return {
+        status: "conflict",
+        ...(current ? { record: current } : {}),
+      };
+    }
+    if (input.expected && targetPoolSpecsEqual(input.expected, input.record)) {
+      return { status: "put", record: current! };
+    }
+    const reference = await readSqlTargetPoolReference(
+      transaction,
+      input.expected ?? input.record,
+    );
+    if (reference) return { status: "in_use", lock: reference };
+
+    if (input.expected === null) {
+      const inserted = await transaction.query(
+        namedSpecCreateSql(names.targetPools),
+        namedSpecParameters(input.record),
+      );
+      if (inserted.rowCount === 0) {
+        const winner = await readSqlTargetPoolByIdentity(
+          transaction,
+          input.record,
+          true,
+        );
+        return {
+          status: "conflict",
+          ...(winner ? { record: winner } : {}),
+        };
+      }
+    } else {
+      await transaction.query(
+        namedSpecUpsertSql(names.targetPools),
+        namedSpecParameters(input.record),
+      );
+    }
+    return { status: "put", record: input.record };
+  });
+}
+
+async function deleteSqlTargetPool(
+  client: SqlClient,
+  input: TargetPoolDeleteInput,
+): Promise<TargetPoolDeleteResult> {
+  assertTargetPoolDeleteInput(input);
+  return await client.transaction(async (transaction) => {
+    const current = await readSqlTargetPoolByIdentity(transaction, input, true);
+    if (!current) return { status: "absent" };
+    if (!matchesExpectedTargetPool(current, input.expected)) {
+      return { status: "conflict", record: current };
+    }
+
+    const reference = await readSqlTargetPoolReference(transaction, current);
+    if (reference) return { status: "in_use", lock: reference };
+
+    await transaction.query(`delete from ${names.targetPools} where id = $1`, [
+      current.id,
+    ]);
+    return { status: "deleted" };
+  });
 }
 
 async function pinSqlExactFormIdentity(
@@ -855,7 +941,25 @@ async function beginSqlApply(
   input: ResourceApplyBeginInput,
 ): Promise<ResourceApplyBeginResult> {
   assertApplyPair(input.applyingRecord, input.plannedLock, "Applying");
+  assertExpectedTargetPool(input);
   return await client.transaction(async (transaction) => {
+    if (input.expectedTargetPool) {
+      // TargetPool is always the first aggregate lock. A concurrent pool PUT
+      // takes the same lock before inspecting ResolutionLocks, so either the
+      // new pool wins and this CAS rejects, or this claim wins and PUT sees the
+      // newly committed lock.
+      const currentPool = await readSqlTargetPool(
+        transaction,
+        input.expectedTargetPool.id,
+        true,
+      );
+      if (!matchesTargetPool(currentPool, input.expectedTargetPool)) {
+        return {
+          status: "target_pool_conflict",
+          ...(currentPool ? { record: currentPool } : {}),
+        };
+      }
+    }
     if (input.expected === undefined) {
       const inserted = await transaction.query(
         resourceInsertSql(names.resourceShapes, "on conflict do nothing"),
@@ -1127,6 +1231,65 @@ async function readSqlLock(
       forUpdate ? " for update" : ""
     }`,
     [resourceId],
+  );
+  return result.rows[0] ? resolutionLockFromRow(result.rows[0]) : undefined;
+}
+
+async function readSqlTargetPool(
+  client: SqlClient,
+  id: TargetPoolRecordId,
+  forUpdate = false,
+): Promise<TargetPoolRecord | undefined> {
+  const result = await client.query<NamedSpecRow>(
+    `select * from ${names.targetPools} where id = $1 limit 1${
+      forUpdate ? " for update" : ""
+    }`,
+    [id],
+  );
+  return result.rows[0] ? targetPoolFromRow(result.rows[0]) : undefined;
+}
+
+async function readSqlTargetPoolByIdentity(
+  client: SqlClient,
+  record: Pick<TargetPoolRecord, "id" | "spaceId" | "name">,
+  forUpdate = false,
+): Promise<TargetPoolRecord | undefined> {
+  const result = await client.query<NamedSpecRow>(
+    `select * from ${names.targetPools}
+     where id = $1 or (space_id = $2 and name = $3)
+     order by case when id = $1 then 0 else 1 end limit 1${
+       forUpdate ? " for update" : ""
+     }`,
+    [record.id, record.spaceId, record.name],
+  );
+  return result.rows[0] ? targetPoolFromRow(result.rows[0]) : undefined;
+}
+
+async function readSqlTargetPoolReference(
+  client: SqlClient,
+  pool: TargetPoolRecord,
+): Promise<ResolutionLockRecord | undefined> {
+  const result = await client.query<ResolutionLockRow>(
+    `select resolution.*
+     from ${names.resolutionLocks} resolution
+     join ${names.resourceShapes} resource
+       on resource.id = resolution.resource_id
+     where resource.space_id = $1
+       and (
+         resolution.target_pool = $2
+         or (
+           resolution.target_pool is null
+           and exists (
+             select 1
+             from jsonb_array_elements(
+               coalesce($3::jsonb -> 'targets', '[]'::jsonb)
+             ) as pool_target(value)
+             where pool_target.value ->> 'name' = resolution.target
+           )
+         )
+       )
+     order by resolution.resource_id asc limit 1`,
+    [pool.spaceId, pool.name, JSON.stringify(pool.spec)],
   );
   return result.rows[0] ? resolutionLockFromRow(result.rows[0]) : undefined;
 }

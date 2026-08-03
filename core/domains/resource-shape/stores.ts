@@ -78,6 +78,8 @@ export interface ResourceApplyingVersion {
 export interface ResourceApplyBeginInput {
   readonly applyingRecord: ResourceShapeRecord;
   readonly plannedLock: ResolutionLockRecord;
+  /** Exact TargetPool record used to resolve `plannedLock`. */
+  readonly expectedTargetPool?: TargetPoolRecord;
   /** Omit only for a create-only claim. Present means CAS-only. */
   readonly expected?: ResourceRecordVersion;
 }
@@ -90,6 +92,10 @@ export type ResourceApplyBeginResult =
     }
   | { readonly status: "not_found" }
   | { readonly status: "conflict"; readonly record: ResourceShapeRecord }
+  | {
+      readonly status: "target_pool_conflict";
+      readonly record?: TargetPoolRecord;
+    }
   | {
       readonly status: "ownership_conflict";
       readonly record: ResourceShapeRecord;
@@ -297,6 +303,31 @@ export type TargetPoolCreateResult =
   | { readonly status: "created"; readonly record: TargetPoolRecord }
   | { readonly status: "conflict"; readonly record: TargetPoolRecord };
 
+export interface TargetPoolPutInput {
+  readonly record: TargetPoolRecord;
+  /** Exact record observed by the resolver, or `null` for create-via-PUT. */
+  readonly expected: TargetPoolRecord | null;
+}
+
+export type TargetPoolPutResult =
+  | { readonly status: "put"; readonly record: TargetPoolRecord }
+  | { readonly status: "in_use"; readonly lock: ResolutionLockRecord }
+  | { readonly status: "conflict"; readonly record?: TargetPoolRecord };
+
+export interface TargetPoolDeleteInput {
+  readonly id: TargetPoolRecordId;
+  readonly spaceId: SpaceId;
+  readonly name: string;
+  /** Exact record observed by the caller, or `null` for observed absence. */
+  readonly expected: TargetPoolRecord | null;
+}
+
+export type TargetPoolDeleteResult =
+  | { readonly status: "deleted" }
+  | { readonly status: "absent" }
+  | { readonly status: "in_use"; readonly lock: ResolutionLockRecord }
+  | { readonly status: "conflict"; readonly record: TargetPoolRecord };
+
 export interface TargetPoolStore {
   /** Atomically inserts a TargetPool without replacing any existing id/name. */
   create(record: TargetPoolRecord): Promise<TargetPoolCreateResult>;
@@ -340,9 +371,25 @@ export interface ResourceShapeStores {
   readonly targetPools: TargetPoolStore;
   readonly spacePolicies: SpacePolicyStore;
   /**
+   * Atomically puts one exact TargetPool version only while no ResolutionLock
+   * references the pool. An identical declaration is an allowed no-op even
+   * while in use.
+   */
+  putTargetPool(input: TargetPoolPutInput): Promise<TargetPoolPutResult>;
+  /**
+   * Atomically deletes one exact TargetPool version only while no
+   * ResolutionLock references it. An observed absence is also fenced so it
+   * cannot hide a concurrent replacement.
+   */
+  deleteTargetPool(
+    input: TargetPoolDeleteInput,
+  ): Promise<TargetPoolDeleteResult>;
+  /**
    * Atomically claims an apply by publishing the Applying Resource together
-   * with the planned ResolutionLock. `expected` selects CAS-only behavior;
-   * omitting it selects create-only behavior.
+   * with the planned ResolutionLock. When `expectedTargetPool` is present, the
+   * same transaction also fences the exact pool version used by resolution.
+   * `expected` selects CAS-only behavior; omitting it selects create-only
+   * behavior.
    */
   beginApply(input: ResourceApplyBeginInput): Promise<ResourceApplyBeginResult>;
   /**
@@ -455,8 +502,12 @@ export class InMemoryResourceShapeStore implements ResourceShapeStore {
   }
 
   listBySpace(spaceId: SpaceId): Promise<readonly ResourceShapeRecord[]> {
-    return Promise.resolve(
-      [...this.#byId.values()].filter((record) => record.spaceId === spaceId),
+    return Promise.resolve(this.listBySpaceSync(spaceId));
+  }
+
+  listBySpaceSync(spaceId: SpaceId): readonly ResourceShapeRecord[] {
+    return [...this.#byId.values()].filter(
+      (record) => record.spaceId === spaceId,
     );
   }
 
@@ -721,24 +772,36 @@ export class InMemoryTargetPoolStore implements TargetPoolStore {
   }
 
   upsert(record: TargetPoolRecord): Promise<TargetPoolRecord> {
-    this.#byId.set(record.id, record);
+    this.replaceSync(record);
     return Promise.resolve(record);
   }
 
+  replaceSync(record: TargetPoolRecord): void {
+    this.#byId.set(record.id, record);
+  }
+
   get(id: TargetPoolRecordId): Promise<TargetPoolRecord | undefined> {
-    return Promise.resolve(this.#byId.get(id));
+    return Promise.resolve(this.getSync(id));
+  }
+
+  getSync(id: TargetPoolRecordId): TargetPoolRecord | undefined {
+    return this.#byId.get(id);
   }
 
   getByName(
     spaceId: SpaceId,
     name: string,
   ): Promise<TargetPoolRecord | undefined> {
+    return Promise.resolve(this.getByNameSync(spaceId, name));
+  }
+
+  getByNameSync(spaceId: SpaceId, name: string): TargetPoolRecord | undefined {
     for (const record of this.#byId.values()) {
       if (record.spaceId === spaceId && record.name === name) {
-        return Promise.resolve(record);
+        return record;
       }
     }
-    return Promise.resolve(undefined);
+    return undefined;
   }
 
   listBySpace(spaceId: SpaceId): Promise<readonly TargetPoolRecord[]> {
@@ -758,8 +821,12 @@ export class InMemoryTargetPoolStore implements TargetPoolStore {
   }
 
   delete(id: TargetPoolRecordId): Promise<void> {
-    this.#byId.delete(id);
+    this.deleteSync(id);
     return Promise.resolve();
+  }
+
+  deleteSync(id: TargetPoolRecordId): void {
+    this.#byId.delete(id);
   }
 }
 
@@ -813,14 +880,81 @@ export class InMemorySpacePolicyStore implements SpacePolicyStore {
 export function createInMemoryResourceShapeStores(): ResourceShapeStores {
   const resources = new InMemoryResourceShapeStore();
   const locks = new InMemoryResolutionLockStore();
+  const targetPools = new InMemoryTargetPoolStore();
   return {
     persistence: "ephemeral",
     resources,
     locks,
-    targetPools: new InMemoryTargetPoolStore(),
+    targetPools,
     spacePolicies: new InMemorySpacePolicyStore(),
+    putTargetPool(input) {
+      assertTargetPoolPutInput(input);
+      const currentById = targetPools.getSync(input.record.id);
+      const currentByName = targetPools.getByNameSync(
+        input.record.spaceId,
+        input.record.name,
+      );
+      const current = currentByName ?? currentById;
+      if (!matchesExpectedTargetPool(current, input.expected)) {
+        return Promise.resolve({
+          status: "conflict",
+          ...(current ? { record: current } : {}),
+        });
+      }
+      if (
+        input.expected === null ||
+        !targetPoolSpecsEqual(input.expected, input.record)
+      ) {
+        const reference = findInMemoryTargetPoolReference(
+          resources,
+          locks,
+          input.expected ?? input.record,
+        );
+        if (reference) {
+          return Promise.resolve({ status: "in_use", lock: reference });
+        }
+      }
+      targetPools.replaceSync(input.record);
+      return Promise.resolve({ status: "put", record: input.record });
+    },
+    deleteTargetPool(input) {
+      assertTargetPoolDeleteInput(input);
+      const current =
+        targetPools.getSync(input.id) ??
+        targetPools.getByNameSync(input.spaceId, input.name);
+      if (!current) return Promise.resolve({ status: "absent" });
+      if (!matchesExpectedTargetPool(current, input.expected)) {
+        return Promise.resolve({
+          status: "conflict",
+          record: current,
+        });
+      }
+      const reference = findInMemoryTargetPoolReference(
+        resources,
+        locks,
+        current,
+      );
+      if (reference) {
+        return Promise.resolve({ status: "in_use", lock: reference });
+      }
+      targetPools.deleteSync(current.id);
+      return Promise.resolve({ status: "deleted" });
+    },
     beginApply(input) {
       assertApplyPair(input.applyingRecord, input.plannedLock, "Applying");
+      assertExpectedTargetPool(input);
+      if (input.expectedTargetPool) {
+        const current = targetPools.getByNameSync(
+          input.expectedTargetPool.spaceId,
+          input.expectedTargetPool.name,
+        );
+        if (!matchesTargetPool(current, input.expectedTargetPool)) {
+          return Promise.resolve({
+            status: "target_pool_conflict",
+            ...(current ? { record: current } : {}),
+          });
+        }
+      }
       const current = resources.getSync(input.applyingRecord.id);
       if (input.expected === undefined) {
         if (current) {
@@ -1018,6 +1152,112 @@ export function assertApplyPair(
     );
   }
   assertNativeResourceFormIdentity(lock.nativeResources, record.form);
+}
+
+export function assertExpectedTargetPool(input: ResourceApplyBeginInput): void {
+  const pool = input.expectedTargetPool;
+  if (!pool) return;
+  if (
+    pool.spaceId !== input.applyingRecord.spaceId ||
+    pool.name !== input.plannedLock.targetPool
+  ) {
+    throw new Error(
+      `expected TargetPool ${pool.id} does not match planned ResolutionLock`,
+    );
+  }
+}
+
+export function assertTargetPoolPutInput(input: TargetPoolPutInput): void {
+  if (
+    input.expected &&
+    (input.expected.id !== input.record.id ||
+      input.expected.spaceId !== input.record.spaceId ||
+      input.expected.name !== input.record.name ||
+      input.expected.createdAt !== input.record.createdAt)
+  ) {
+    throw new Error("TargetPool put cannot change durable identity");
+  }
+}
+
+export function assertTargetPoolDeleteInput(
+  input: TargetPoolDeleteInput,
+): void {
+  if (
+    input.expected &&
+    (input.expected.id !== input.id ||
+      input.expected.spaceId !== input.spaceId ||
+      input.expected.name !== input.name)
+  ) {
+    throw new Error("TargetPool delete expected record has another identity");
+  }
+}
+
+export function matchesTargetPool(
+  current: TargetPoolRecord | undefined,
+  expected: TargetPoolRecord,
+): boolean {
+  return (
+    current !== undefined &&
+    current.id === expected.id &&
+    current.spaceId === expected.spaceId &&
+    current.name === expected.name &&
+    current.createdAt === expected.createdAt &&
+    current.updatedAt === expected.updatedAt &&
+    targetPoolSpecsEqual(current, expected)
+  );
+}
+
+export function matchesExpectedTargetPool(
+  current: TargetPoolRecord | undefined,
+  expected: TargetPoolRecord | null,
+): boolean {
+  return expected === null
+    ? current === undefined
+    : matchesTargetPool(current, expected);
+}
+
+export function targetPoolSpecsEqual(
+  left: TargetPoolRecord,
+  right: TargetPoolRecord,
+): boolean {
+  return canonicalJson(left.spec) === canonicalJson(right.spec);
+}
+
+function findInMemoryTargetPoolReference(
+  resources: InMemoryResourceShapeStore,
+  locks: InMemoryResolutionLockStore,
+  pool: TargetPoolRecord,
+): ResolutionLockRecord | undefined {
+  const targetNames = targetPoolTargetNames(pool);
+  for (const resource of resources.listBySpaceSync(pool.spaceId)) {
+    const lock = locks.getSync(resource.id);
+    if (!lock) continue;
+    if (
+      lock.targetPool === pool.name ||
+      (!lock.targetPool && targetNames.has(lock.target))
+    ) {
+      return lock;
+    }
+  }
+  return undefined;
+}
+
+function targetPoolTargetNames(pool: TargetPoolRecord): ReadonlySet<string> {
+  const targets = pool.spec.targets;
+  if (!Array.isArray(targets)) return new Set();
+  return new Set(
+    targets.flatMap((target) => {
+      if (
+        target &&
+        typeof target === "object" &&
+        !Array.isArray(target) &&
+        typeof target.name === "string"
+      ) {
+        return [target.name];
+      }
+      return [];
+    }),
+  );
 }
 
 export function assertResourceFormIdentityPinInput(
