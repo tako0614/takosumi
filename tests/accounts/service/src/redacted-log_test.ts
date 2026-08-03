@@ -14,3 +14,14 @@ test("redactedErrorText masks credential-shaped error details", () => {
   expect(text.startsWith("Error:")).toEqual(true);
   expect(text).not.toContain("redacted-log_test");
 });
+
+test("redactedErrorText escapes control characters so a log record cannot be forged", () => {
+  const error = new TypeError(
+    "passkey attestation format mismatch: expected none, got none\r\n2026-08-02T00:00:00Z INFO privacy_request_completed subject=tsub_victim",
+  );
+  const text = redactedErrorText(error);
+
+  expect(text).not.toContain("\n");
+  expect(text).not.toContain("\r");
+  expect(text).toContain("\\r\\n2026-08-02T00:00:00Z INFO");
+});

@@ -20,8 +20,16 @@ function normalizeSecretKey(key: string): string {
 
 const BEARER_TOKEN_PATTERN =
   /\b(Bearer|Basic|Digest|Token)\s+[-._~+/=a-zA-Z0-9]+/g;
+// SECURITY (ReDoS): the optional scheme carries its own trailing `\s*` instead
+// of sitting between two independent whitespace runs. `\s*(?:scheme)?\s*` left
+// a whitespace run of length M with M+1 ambiguous splits, each one re-testing
+// the mandatory `[^\s,;]+`, so `Authorization:` followed by a long trailing
+// space run cost O(M^2). `\s*(?:scheme\s*)?` accepts exactly the same strings
+// with the same capture split — only one `\s*` is live on any path, and every
+// `\s*` is followed by an atom that cannot match whitespace, so backtracking
+// stays linear.
 const AUTH_HEADER_PATTERN =
-  /\b(Authorization\s*:\s*(?:Bearer|Basic|Digest|Token)?\s*)[^\s,;]+/gi;
+  /\b(Authorization\s*:\s*(?:(?:Bearer|Basic|Digest|Token)\s*)?)[^\s,;]+/gi;
 // scheme://user:password@host — mask only the password segment of a DSN/URI.
 const URL_CREDENTIAL_PATTERN =
   /\b([a-z][a-z0-9+.\-]*:\/\/[^:/?#\s@]+:)([^@/?#\s]+)@/gi;

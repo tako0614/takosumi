@@ -183,7 +183,9 @@ export async function verifyPasskeyAttestationFormat(
   const decoded = decodeAttestationObject(input.attestationObject);
   if (decoded.fmt !== expectedFormat) {
     throw new TypeError(
-      `passkey attestation format mismatch: expected ${expectedFormat}, got ${decoded.fmt}`,
+      `passkey attestation format mismatch: expected ${expectedFormat}, got ${
+        describeAttestationFormat(decoded.fmt)
+      }`,
     );
   }
   // Verify the registration authData binds to this relying party and that
@@ -199,6 +201,17 @@ export async function verifyPasskeyAttestationFormat(
     await assertRpIdHash(decoded.authData, input.rpId);
     assertUserPresent(decoded.authData);
   }
+}
+
+/**
+ * Render a client-supplied attestation `fmt` for an error message. Registered
+ * WebAuthn attestation statement formats are short lowercase tokens, so echo
+ * the value only when it looks like one; any other value is attacker-chosen
+ * text (up to 64 KiB, newlines included) that must not reach a log line, so
+ * report just its length.
+ */
+function describeAttestationFormat(fmt: string): string {
+  return /^[a-z0-9-]{1,32}$/u.test(fmt) ? fmt : `<unprintable, ${fmt.length}>`;
 }
 
 /**
