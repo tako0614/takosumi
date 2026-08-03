@@ -1,0 +1,141 @@
+{
+  "apiVersion": "takosumi.com/v2",
+  "kind": "Repository",
+  "install": {
+    "modules": {
+      "examples/opentofu-basic": {
+        "inputs": [
+          {
+            "name": "name",
+            "source": {
+              "kind": "user"
+            },
+            "type": "string",
+            "required": false,
+            "label": {
+              "ja": "名前",
+              "en": "Name"
+            }
+          },
+          {
+            "name": "base_url",
+            "source": {
+              "kind": "user"
+            },
+            "type": "string",
+            "format": "url",
+            "required": false,
+            "label": {
+              "ja": "公開URLの例",
+              "en": "Example public URL"
+            }
+          }
+        ]
+      },
+      "examples/takoform-object-bucket-smoke": {
+        "inputs": [
+          {
+            "name": "bucket_name",
+            "source": {
+              "kind": "user"
+            },
+            "type": "string",
+            "required": false,
+            "label": {
+              "ja": "バケット名",
+              "en": "Bucket name"
+            },
+            "helper": {
+              "ja": "対象のTakoform環境で一意な名前を指定してください。",
+              "en": "Use a name unique to the target Takoform environment."
+            }
+          }
+        ]
+      },
+      "examples/ga-ai-principal": {
+        "inputs": [
+          {
+            "name": "public_url",
+            "source": {
+              "kind": "user"
+            },
+            "type": "string",
+            "format": "url",
+            "required": false,
+            "label": {
+              "ja": "公開URL",
+              "en": "Public URL"
+            },
+            "helper": {
+              "ja": "空欄の場合はTakosumiが割り当てます。",
+              "en": "Takosumi allocates a URL when omitted."
+            }
+          },
+          {
+            "name": "takosumi_accounts_issuer_url",
+            "source": {
+              "kind": "module_default"
+            },
+            "type": "string",
+            "format": "url",
+            "label": {
+              "ja": "Takosumi Accounts発行者",
+              "en": "Takosumi Accounts issuer"
+            },
+            "advanced": true
+          },
+          {
+            "name": "takosumi_accounts_client_id",
+            "source": {
+              "kind": "module_default"
+            },
+            "type": "string",
+            "label": {
+              "ja": "Takosumi Accountsクライアント",
+              "en": "Takosumi Accounts client"
+            },
+            "advanced": true
+          },
+          {
+            "name": "takosumi_accounts_redirect_uri",
+            "source": {
+              "kind": "module_default"
+            },
+            "type": "string",
+            "format": "url",
+            "label": {
+              "ja": "OIDCリダイレクトURL",
+              "en": "OIDC redirect URL"
+            },
+            "advanced": true
+          }
+        ],
+        "requires": [
+          {
+            "kind": "http.endpoint",
+            "deliver": {
+              "variables": {
+                "url": "public_url"
+              }
+            }
+          },
+          {
+            "kind": "identity.oidc",
+            "callbackPath": "/__takosumi/ga-principal/callback",
+            "scopes": [
+              "openid",
+              "capsules:read"
+            ],
+            "deliver": {
+              "variables": {
+                "issuerUrl": "takosumi_accounts_issuer_url",
+                "clientId": "takosumi_accounts_client_id",
+                "redirectUri": "takosumi_accounts_redirect_uri"
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

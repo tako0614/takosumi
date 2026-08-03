@@ -10,6 +10,7 @@ import {
   resolveOptions,
   selectSmokeInstallConfigId,
   shouldMarkPendingSmokeCapsuleError,
+  smokeCapsuleProviderBindingsBody,
   smokeSourceCompatibilityCheckBody,
   smokeSourceCapsuleCreateBody,
   smokeCloudflareProviderConnectionMatch,
@@ -357,6 +358,110 @@ test("platform control-plane smoke creates Provider Connections through installe
     },
     values: { CLOUDFLARE_API_TOKEN: "cloudflare-token" },
   });
+});
+
+test("platform control-plane smoke accepts an existing ProviderConnection only in none mode", async () => {
+  const base = {
+    dryRun: true,
+    url: "https://app-staging.takosumi.com",
+    workspace: "ws_test",
+    providerConnectionId: "pcn_existing_takoform",
+    verificationMode: "opentofu",
+    sourceGitUrl: "https://github.com/tako0614/takosumi.git",
+    sourcePath: "examples/takoform-object-bucket-smoke",
+    outputAllowlistJson: JSON.stringify({
+      object_bucket_id: {
+        from: "object_bucket_id",
+        type: "string",
+        required: true,
+      },
+    }),
+    varsJson: JSON.stringify({ bucket_name: "unique-existing-provider" }),
+  } as const;
+
+  const options = await resolveOptions(base, {
+    TAKOSUMI_ACCOUNT_SESSION_TOKEN: "session-token",
+  });
+  expect(options.providerConnectionId).toBe("pcn_existing_takoform");
+  expect(options.cloudflareConnectionMode).toBe("none");
+
+  await expect(
+    resolveOptions(
+      { ...base, cloudflareConnectionMode: "guided" },
+      { TAKOSUMI_ACCOUNT_SESSION_TOKEN: "session-token" },
+    ),
+  ).rejects.toThrow(/mutually exclusive|cannot be combined|requires/u);
+  await expect(
+    resolveOptions(
+      { ...base, cloudflareConnectionMode: "generic-env" },
+      { TAKOSUMI_ACCOUNT_SESSION_TOKEN: "session-token" },
+    ),
+  ).rejects.toThrow(/mutually exclusive|cannot be combined|requires/u);
+
+  const envOptions = await resolveOptions(
+    { ...base, providerConnectionId: undefined },
+    {
+      TAKOSUMI_ACCOUNT_SESSION_TOKEN: "session-token",
+      TAKOSUMI_SMOKE_PROVIDER_CONNECTION_ID: "pcn_from_env",
+    },
+  );
+  expect(envOptions.providerConnectionId).toBe("pcn_from_env");
+});
+
+test("platform control-plane smoke binds an existing provider by its source", () => {
+  expect(
+    smokeCapsuleProviderBindingsBody({
+      providerConnectionId: "pcn_existing_takoform",
+      providerSource: "registry.opentofu.org/tako0614/takoform",
+    }),
+  ).toEqual({
+    bindings: [
+      {
+        provider: "registry.opentofu.org/tako0614/takoform",
+        alias: "main",
+        connectionId: "pcn_existing_takoform",
+      },
+    ],
+  });
+});
+
+test("platform control-plane smoke records an existing ProviderConnection without revoking or leaking secrets", async () => {
+  const options = await resolveOptions(
+    {
+      dryRun: true,
+      url: "https://app-staging.takosumi.com",
+      workspace: "ws_test",
+      providerConnectionId: "pcn_existing_takoform",
+      cloudflareConnectionMode: "none",
+      verificationMode: "opentofu",
+      sourceGitUrl: "https://github.com/tako0614/takosumi.git",
+      sourcePath: "examples/takoform-object-bucket-smoke",
+      outputAllowlistJson: JSON.stringify({
+        object_bucket_id: {
+          from: "object_bucket_id",
+          type: "string",
+          required: true,
+        },
+      }),
+      varsJson: JSON.stringify({ bucket_name: "unique-existing-provider" }),
+    },
+    {
+      TAKOSUMI_ACCOUNT_SESSION_TOKEN: "session-token",
+      TAKOFORM_TOKEN: "provider-secret",
+    },
+  );
+
+  const result = dryRunResult(options);
+  const serialized = JSON.stringify(result);
+  expect(result.providerConnectionId).toBe("pcn_existing_takoform");
+  expect(result.credentialPath).toBe("workspace_scoped_provider_connection");
+  expect(result.steps).toContain("existingProviderConnectionSelected");
+  expect(result.steps).not.toContain("providerConnectionNotRequired");
+  expect(result.steps).not.toContain("connectionRevoked");
+  expect(result.connectionRevoked).toBeUndefined();
+  expect(result.inputs.providerConnectionId).toBe("pcn_existing_takoform");
+  expect(serialized).not.toContain("provider-secret");
+  expect(serialized).not.toContain("TAKOFORM_TOKEN");
 });
 
 test("platform control-plane smoke does not infer operator environment from URL", async () => {

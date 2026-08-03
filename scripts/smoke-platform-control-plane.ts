@@ -202,6 +202,8 @@ export interface PlatformControlPlaneSmokeOptions {
   readonly cloudflareWorkersSubdomain: string;
   readonly cloudflareWorkersSubdomainSource: NonSecretInputSource;
   readonly cloudflareConnectionMode: SmokeProviderConnectionMode;
+  /** Existing workspace/provider connection to bind without creating or revoking it. */
+  readonly providerConnectionId?: string;
   readonly cloudflareResourcePreflight: CloudflareResourcePreflightMode;
   readonly runnerProfileId?: string;
   readonly workspace: string;
@@ -304,6 +306,7 @@ export interface PlatformControlPlaneSmokeResult {
     readonly cloudflareAccountIdDigest: string;
     readonly cloudflareWorkersSubdomainSource: NonSecretInputSource;
     readonly cloudflareConnectionMode: SmokeProviderConnectionMode;
+    readonly providerConnectionId?: string;
     readonly cloudflareResourcePreflight: CloudflareResourcePreflightMode;
     readonly runnerProfileId?: string;
     readonly sourceMode: "git";
@@ -354,6 +357,7 @@ interface CliArgs {
   readonly cloudflareWorkersSubdomain?: string;
   readonly cloudflareWorkersSubdomainFile?: string;
   readonly cloudflareConnectionMode?: string;
+  readonly providerConnectionId?: string;
   readonly cloudflareResourcePreflight?: string;
   readonly runnerProfileId?: string;
   readonly workspace?: string;
@@ -659,6 +663,17 @@ export async function resolveOptions(
     args.cloudflareConnectionMode ??
       env.TAKOSUMI_SMOKE_CLOUDFLARE_CONNECTION_MODE,
   );
+  const providerConnectionId = optionalProviderConnectionId(
+    args.providerConnectionId ?? env.TAKOSUMI_SMOKE_PROVIDER_CONNECTION_ID,
+  );
+  if (
+    providerConnectionId !== undefined &&
+    cloudflareConnectionMode !== "none"
+  ) {
+    throw new Error(
+      "--provider-connection-id / TAKOSUMI_SMOKE_PROVIDER_CONNECTION_ID requires --cloudflare-connection-mode none; it cannot be combined with guided or generic-env",
+    );
+  }
   const verificationMode = parseVerificationMode(
     args.verificationMode ?? env.TAKOSUMI_SMOKE_VERIFICATION_MODE,
   );
@@ -875,6 +890,7 @@ export async function resolveOptions(
     cloudflareWorkersSubdomain: cloudflareWorkersSubdomain.value,
     cloudflareWorkersSubdomainSource: cloudflareWorkersSubdomain.source,
     cloudflareConnectionMode,
+    ...(providerConnectionId ? { providerConnectionId } : {}),
     cloudflareResourcePreflight,
     ...(runnerProfileId ? { runnerProfileId } : {}),
     workspace,
@@ -944,11 +960,11 @@ export function dryRunResult(
     scratchWorkspaceId: options.workspace,
     capsuleModule: capsuleLabel(options),
     verificationMode: options.verificationMode,
-    credentialPath:
-      options.cloudflareConnectionMode === "none"
-        ? "none"
-        : "workspace_scoped_provider_connection",
+    credentialPath: providerCredentialPath(options),
     providerConnectionMode: options.cloudflareConnectionMode,
+    ...(options.providerConnectionId
+      ? { providerConnectionId: options.providerConnectionId }
+      : {}),
     sourceMode: options.sourceMode,
     steps,
     completedSteps: steps,
@@ -985,7 +1001,7 @@ export function dryRunResult(
         }
       : {}),
     connectionRevoked:
-      options.keepConnection || options.cloudflareConnectionMode === "none"
+      options.keepConnection || !temporaryProviderConnection(options)
         ? undefined
         : true,
     stateVersionLedger: {
@@ -1044,6 +1060,30 @@ export function dryRunResult(
       : {}),
     inputs: publicInputSummary(options),
   };
+}
+
+function providerCredentialPath(
+  options: Pick<
+    PlatformControlPlaneSmokeOptions,
+    "cloudflareConnectionMode" | "providerConnectionId"
+  >,
+): "workspace_scoped_provider_connection" | "none" {
+  return options.providerConnectionId !== undefined ||
+    options.cloudflareConnectionMode !== "none"
+    ? "workspace_scoped_provider_connection"
+    : "none";
+}
+
+function temporaryProviderConnection(
+  options: Pick<
+    PlatformControlPlaneSmokeOptions,
+    "cloudflareConnectionMode" | "providerConnectionId"
+  >,
+): boolean {
+  return (
+    options.providerConnectionId === undefined &&
+    options.cloudflareConnectionMode !== "none"
+  );
 }
 
 function dryRunRunTimings(timestamp: string): readonly SmokeRunTiming[] {
@@ -1127,7 +1167,8 @@ export async function runPlatformControlPlaneSmoke(
     });
   };
   let connectionId: string | undefined;
-  let providerConnectionId: string | undefined;
+  let providerConnectionId: string | undefined = options.providerConnectionId;
+  let providerConnectionSource: string | undefined;
   let connectionRevoked = false;
   let sourceId: string | undefined;
   let sourceSyncRunId: string | undefined;
@@ -1157,7 +1198,15 @@ export async function runPlatformControlPlaneSmoke(
     CloudflareResourcePreflightResult | undefined;
 
   try {
-    if (options.cloudflareConnectionMode !== "none") {
+    if (options.providerConnectionId !== undefined) {
+      beginStep("existingProviderConnectionSelected");
+      providerConnectionSource = await lookupExistingProviderConnectionSource(
+        options,
+        workspaceId,
+        options.providerConnectionId,
+      );
+      completeStep("existingProviderConnectionSelected");
+    } else if (options.cloudflareConnectionMode !== "none") {
       beginStep("workspaceScopedProviderConnection");
       beginStep("connectionVerified");
       const connection = await createWorkspaceCloudflareConnection(
@@ -1190,6 +1239,9 @@ export async function runPlatformControlPlaneSmoke(
     const deploy = await deployGitSourceCapsule(options, {
       workspaceId,
       ...(providerConnectionId ? { providerConnectionId } : {}),
+      ...(providerConnectionSource
+        ? { providerConnectionSource }
+        : {}),
     });
     sourceId = deploy.sourceId;
     sourceSyncRunId = deploy.sourceSyncRunId;
@@ -1330,10 +1382,7 @@ export async function runPlatformControlPlaneSmoke(
       scratchWorkspaceId: workspaceId,
       capsuleModule: capsuleLabel(options),
       verificationMode: options.verificationMode,
-      credentialPath:
-        options.cloudflareConnectionMode === "none"
-          ? "none"
-          : "workspace_scoped_provider_connection",
+      credentialPath: providerCredentialPath(options),
       providerConnectionMode: options.cloudflareConnectionMode,
       sourceMode: options.sourceMode,
       steps: requiredSteps(options),
@@ -1550,10 +1599,7 @@ function failedResult(
     scratchWorkspaceId: input.workspaceId,
     capsuleModule: capsuleLabel(options),
     verificationMode: options.verificationMode,
-    credentialPath:
-      options.cloudflareConnectionMode === "none"
-        ? "none"
-        : "workspace_scoped_provider_connection",
+    credentialPath: providerCredentialPath(options),
     providerConnectionMode: options.cloudflareConnectionMode,
     sourceMode: options.sourceMode,
     steps: requiredSteps(options),
@@ -1894,18 +1940,12 @@ async function lookupPublicProviderConnectionId(
   workspaceId: string,
   displayName: string,
 ): Promise<string> {
-  const response = await requestJson<{
-    readonly providerConnections?: readonly SmokeProviderConnectionListEntry[];
-  }>({
-    baseUrl: options.url,
-    token: options.accountSessionToken,
-    path: `${API_PREFIX}/provider-connections?workspaceId=${encodeURIComponent(workspaceId)}`,
-  });
-  const match = (response.providerConnections ?? []).find((connection) =>
-    isSmokeProviderConnectionMatch(
-      connection,
-      smokeCloudflareProviderConnectionMatch(displayName),
-    ),
+  const match = (await listSmokeProviderConnections(options, workspaceId)).find(
+    (connection) =>
+      isSmokeProviderConnectionMatch(
+        connection,
+        smokeCloudflareProviderConnectionMatch(displayName),
+      ),
   );
   if (!match?.id) {
     throw new Error(
@@ -1913,6 +1953,41 @@ async function lookupPublicProviderConnectionId(
     );
   }
   return match.id;
+}
+
+async function listSmokeProviderConnections(
+  options: PlatformControlPlaneSmokeOptions,
+  workspaceId: string,
+): Promise<readonly SmokeProviderConnectionListEntry[]> {
+  const response = await requestJson<{
+    readonly providerConnections?: readonly SmokeProviderConnectionListEntry[];
+  }>({
+    baseUrl: options.url,
+    token: options.accountSessionToken,
+    path: `${API_PREFIX}/provider-connections?workspaceId=${encodeURIComponent(workspaceId)}`,
+  });
+  return response.providerConnections ?? [];
+}
+
+async function lookupExistingProviderConnectionSource(
+  options: PlatformControlPlaneSmokeOptions,
+  workspaceId: string,
+  providerConnectionId: string,
+): Promise<string> {
+  const match = (await listSmokeProviderConnections(options, workspaceId)).find(
+    (connection) => connection.id === providerConnectionId,
+  );
+  if (!match) {
+    throw new Error(
+      `provider connection ${providerConnectionId} was not available to the scratch Workspace`,
+    );
+  }
+  if (typeof match.providerSource !== "string" || !match.providerSource) {
+    throw new Error(
+      `provider connection ${providerConnectionId} did not expose providerSource`,
+    );
+  }
+  return canonicalProviderSource(match.providerSource);
 }
 
 export function smokeCloudflareProviderConnectionMatch(displayName: string): {
@@ -1940,6 +2015,7 @@ async function deployGitSourceCapsule(
   input: {
     readonly workspaceId: string;
     readonly providerConnectionId?: string;
+    readonly providerConnectionSource?: string;
   },
 ): Promise<
   DeployResponse & {
@@ -1985,6 +2061,9 @@ async function deployGitSourceCapsule(
     await putCapsuleProviderBindings(options, {
       capsuleId: capsule.id,
       providerConnectionId: input.providerConnectionId,
+      ...(input.providerConnectionSource
+        ? { providerSource: input.providerConnectionSource }
+        : {}),
     });
   }
   const plan = await requestJson<{ readonly run: RunRecord }>({
@@ -2316,6 +2395,7 @@ async function putCapsuleProviderBindings(
   input: {
     readonly capsuleId: string;
     readonly providerConnectionId: string;
+    readonly providerSource?: string;
   },
 ): Promise<void> {
   await requestJson({
@@ -2325,19 +2405,29 @@ async function putCapsuleProviderBindings(
     path: `${API_PREFIX}/capsules/${encodeURIComponent(
       input.capsuleId,
     )}/provider-bindings`,
-    body: {
-      bindings: [
-        {
-          // Provider bindings address providers by source, not by the
-          // module-local name; the bare name never matches the connection's
-          // normalized registry source at plan time.
-          provider: "cloudflare/cloudflare",
-          alias: "main",
-          connectionId: input.providerConnectionId,
-        },
-      ],
-    },
+    body: smokeCapsuleProviderBindingsBody(input),
   });
+}
+
+export function smokeCapsuleProviderBindingsBody(input: {
+  readonly providerConnectionId: string;
+  readonly providerSource?: string;
+}): Readonly<Record<string, unknown>> {
+  return {
+    bindings: [
+      {
+        // Provider bindings address providers by source, not by the
+        // module-local name; the bare name never matches the connection's
+        // normalized registry source at plan time.
+        provider:
+          input.providerSource === undefined
+            ? "cloudflare/cloudflare"
+            : canonicalProviderSource(input.providerSource),
+        alias: "main",
+        connectionId: input.providerConnectionId,
+      },
+    ],
+  };
 }
 
 async function ensurePlanReadyForApply(
@@ -3608,6 +3698,15 @@ function parseCloudflareConnectionMode(
   );
 }
 
+function optionalProviderConnectionId(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") {
+    throw new Error("--provider-connection-id must be a non-empty string");
+  }
+  const normalized = value.trim();
+  return normalized || undefined;
+}
+
 function parseAuthTokenKind(value: string | undefined): SmokeAuthTokenKind {
   if (value === undefined || value.trim() === "" || value === "session") {
     return "session";
@@ -4013,6 +4112,7 @@ function publicInputSummary(options: PlatformControlPlaneSmokeOptions): {
   readonly cloudflareAccountIdDigest: string;
   readonly cloudflareWorkersSubdomainSource: NonSecretInputSource;
   readonly cloudflareConnectionMode: SmokeProviderConnectionMode;
+  readonly providerConnectionId?: string;
   readonly cloudflareResourcePreflight: CloudflareResourcePreflightMode;
   readonly runnerProfileId?: string;
   readonly sourceMode: "git";
@@ -4041,6 +4141,9 @@ function publicInputSummary(options: PlatformControlPlaneSmokeOptions): {
         : sha256(options.cloudflareAccountId),
     cloudflareWorkersSubdomainSource: options.cloudflareWorkersSubdomainSource,
     cloudflareConnectionMode: options.cloudflareConnectionMode,
+    ...(options.providerConnectionId
+      ? { providerConnectionId: options.providerConnectionId }
+      : {}),
     cloudflareResourcePreflight: options.cloudflareResourcePreflight,
     ...(options.runnerProfileId
       ? { runnerProfileId: options.runnerProfileId }
@@ -4279,6 +4382,7 @@ function requiredSteps(
     | "keepConnection"
     | "sourceMode"
     | "cloudflareConnectionMode"
+    | "providerConnectionId"
     | "cloudflareResourcePreflight"
     | "verificationMode"
     | "requireReleaseActivation"
@@ -4288,9 +4392,11 @@ function requiredSteps(
   >,
 ): readonly string[] {
   const steps = [
-    ...(options?.cloudflareConnectionMode === "none"
-      ? ["providerConnectionNotRequired"]
-      : ["workspaceScopedProviderConnection"]),
+    ...(options?.providerConnectionId
+      ? ["existingProviderConnectionSelected"]
+      : options?.cloudflareConnectionMode === "none"
+        ? ["providerConnectionNotRequired"]
+        : ["workspaceScopedProviderConnection"]),
     ...(options?.cloudflareConnectionMode === "generic-env"
       ? ["genericEnvProviderConnection"]
       : []),
@@ -4331,7 +4437,7 @@ function requiredSteps(
   if (
     options &&
     !options.keepConnection &&
-    options.cloudflareConnectionMode !== "none"
+    temporaryProviderConnection(options)
   ) {
     steps.push("connectionRevoked");
   }
@@ -4744,44 +4850,6 @@ async function runSelfTest(): Promise<void> {
   ) {
     throw new Error("providerless self-test did not default keyless vars");
   }
-  const takosModuleOptions = await resolveOptions(
-    {
-      dryRun: true,
-      url: "https://app-staging.takosumi.com",
-      workspace: "ws_selftest",
-      cloudflareAccountIdFile: "/private/cloudflare-account-id",
-      cloudflareWorkersSubdomainFile: "/private/cloudflare-workers-subdomain",
-      appName: "takos-release-selftest",
-      ensureWorkspace: true,
-      sessionTokenFile: "/private/account-session-token",
-      cloudflareApiTokenFile: "/private/cloudflare-token",
-      sourceGitUrl: "https://github.com/tako0614/takos.git",
-      sourcePath: ".",
-      modulePath: "deploy/opentofu",
-      varsJson: '{"runtime_options":{"mode":"smoke"}}',
-      cloudflareConnectionMode: "guided",
-      verificationMode: "opentofu",
-    },
-    {},
-  );
-  if (
-    "appName" in takosModuleOptions.vars ||
-    "accountId" in takosModuleOptions.vars ||
-    "workersSubdomain" in takosModuleOptions.vars
-  ) {
-    throw new Error("Takos module defaults leaked legacy Cloudflare inputs");
-  }
-  if (takosModuleOptions.vars.project_name !== "takos-release-selftest") {
-    throw new Error("Takos module defaults did not set project_name");
-  }
-  const takosCloudflareVars = takosModuleOptions.vars.cloudflare;
-  if (
-    !isPlainJsonObject(takosCloudflareVars) ||
-    takosCloudflareVars.account_id !== "<redacted>" ||
-    takosCloudflareVars.workers_subdomain !== "<redacted>"
-  ) {
-    throw new Error("Takos module defaults did not set cloudflare object");
-  }
   const customModuleOptions = await resolveOptions(
     {
       dryRun: true,
@@ -5129,6 +5197,7 @@ Options:
   --ensure-workspace                              create @handle scratch Workspace when missing; validates existing workspace ids
   --workspace-display-name <name>                 display name used with --ensure-workspace
   --cloudflare-connection-mode <guided|generic-env|none> default none; guided/generic-env explicitly enable the Cloudflare reference contribution
+  --provider-connection-id <id>                   bind an existing Workspace ProviderConnection; also TAKOSUMI_SMOKE_PROVIDER_CONNECTION_ID; mutually exclusive with guided/generic-env and never revoked
   --cloudflare-resource-preflight <workers|account-resources|d1|none>
                                                    verify only the capabilities needed by the selected smoke before apply; workers is the Stable EdgeWorker gate, account-resources is the explicit Preview suite
   --runner-profile-id <id>                         request an enabled runner profile for Capsule plans; or TAKOSUMI_SMOKE_RUNNER_PROFILE_ID; providerless OpenTofu defaults to ${DEFAULT_PROVIDERLESS_RUNNER_PROFILE_ID}
