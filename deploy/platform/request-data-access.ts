@@ -117,6 +117,8 @@ export const DASHBOARD_DOCUMENT_ROUTES = [
  * by the strict hashed-output grammar below.
  */
 export const DASHBOARD_PUBLIC_ASSET_PATHS = [
+  "/docs",
+  "/index.html",
   "/assets/theme-init.js",
   "/brand/computer.svg",
   "/brand/git.svg",
@@ -132,6 +134,13 @@ export const DASHBOARD_PUBLIC_ASSET_PATHS = [
   // asset request even when the public build does not ship a favicon file.
   "/favicon.ico",
 ] as const;
+
+/**
+ * Static namespaces whose complete contents are produced by the dashboard
+ * build. `/docs/` is the VitePress tree copied into `dashboard/dist`; no
+ * account or control handler owns a route below this prefix.
+ */
+export const DASHBOARD_STATIC_ASSET_PREFIXES = ["/docs/"] as const;
 
 /**
  * Vite output names are content-hashed and contain one eight-character URL
@@ -245,6 +254,9 @@ export function classifyPlatformRequestDataAccess(
 export function isDashboardAssetRequestPath(pathname: string): boolean {
   return (
     (DASHBOARD_PUBLIC_ASSET_PATHS as readonly string[]).includes(pathname) ||
+    DASHBOARD_STATIC_ASSET_PREFIXES.some((prefix) =>
+      pathname.startsWith(prefix),
+    ) ||
     DASHBOARD_HASHED_ASSET_REQUEST_PATTERN.test(pathname)
   );
 }

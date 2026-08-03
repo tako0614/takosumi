@@ -5,6 +5,7 @@ import {
   classifyPlatformRequestDataAccess,
   DASHBOARD_DOCUMENT_ROUTES,
   DASHBOARD_PUBLIC_ASSET_PATHS,
+  DASHBOARD_STATIC_ASSET_PREFIXES,
   isDashboardAssetRequestPath,
   isDashboardDocumentPath,
 } from "../../../deploy/platform/request-data-access.ts";
@@ -82,6 +83,26 @@ describe("classifyPlatformRequestDataAccess", () => {
         classifyPlatformRequestDataAccess(request(path), routingEnv()),
       ).toEqual({ kind: "stateful-or-unknown" });
     }
+  });
+
+  test("admits the hosted documentation build as one static namespace", () => {
+    for (const path of [
+      "/docs",
+      "/docs/",
+      "/docs/index.html",
+      "/docs/en/resources.html",
+      "/docs/assets/chunks/framework.evJS25sr.js",
+      "/docs/hashmap.json",
+      "/docs/sitemap.xml",
+    ]) {
+      expect(
+        classifyPlatformRequestDataAccess(request(path), routingEnv()),
+      ).toEqual({
+        kind: "data-free",
+        surface: "dashboard-asset",
+      });
+    }
+    expect(DASHBOARD_STATIC_ASSET_PREFIXES).toEqual(["/docs/"]);
   });
 
   test("admits concrete SPA documents, never its wildcard or server routes", () => {
