@@ -188,6 +188,15 @@ export interface ControlPlaneOperations {
   };
   // --- Workspaces (§4) ---
   readonly workspaces: {
+    /**
+     * Idempotently creates or returns the subject's personal Workspace. Hosts
+     * expose the Workspace domain's canonical ensure operation here so the
+     * account plane never emulates it with repeated create attempts.
+     */
+    ensurePersonalWorkspace?(
+      ownerUserId: string,
+      handle: string,
+    ): Promise<Workspace>;
     listWorkspaces(): Promise<readonly Workspace[]>;
     listWorkspacesByOwner(ownerUserId: string): Promise<readonly Workspace[]>;
     listWorkspacesForAccount(accountId: string): Promise<readonly Workspace[]>;

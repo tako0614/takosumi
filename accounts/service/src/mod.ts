@@ -117,7 +117,6 @@ import {
   handleControlRoute,
   isControlRoutePath,
 } from "./control-routes.ts";
-import { maybeEnsurePersonalWorkspaceForSession } from "./control-personal-workspace.ts";
 import type { InterfaceOAuthActivityValidator } from "./access-token-activity.ts";
 export type {
   ControlPlaneOperations,
@@ -579,17 +578,6 @@ export function createAccountsHandler(
 
     if (url.pathname === TAKOSUMI_ACCOUNTS_SESSION_ME_PATH) {
       if (request.method === "GET") {
-        // First-login personal-Workspace hook (spec §4). The dashboard hits this
-        // route first after sign-in; fire-and-forget the idempotent ensure so
-        // a personal Workspace exists without coupling it to the OAuth seam. Never
-        // awaited on the response path: a failure here must not affect the
-        // session read. `request.clone()` keeps the body/headers intact for the
-        // response handler (this is a GET, so only headers).
-        void maybeEnsurePersonalWorkspaceForSession({
-          request: request.clone(),
-          store,
-          operations: options.controlPlaneOperations,
-        });
         return await handleAccountSessionMeGet({ request, store });
       }
       if (request.method === "DELETE") {

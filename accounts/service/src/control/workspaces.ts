@@ -120,6 +120,7 @@ import {
   readJsonObject,
   readOptionalJsonObject,
   stringValue,
+  takosumiSubjectValue,
 } from "../http-helpers.ts";
 import {
   type ControlDispatchContext,
@@ -182,6 +183,7 @@ import {
   latestSourceSnapshotForSource,
 } from "./repo-owned-install-config.ts";
 import { handleWorkspaceProjects } from "./projects.ts";
+import { maybeEnsurePersonalWorkspaceForSubject } from "../control-personal-workspace.ts";
 
 function sourceWorkspaceId(
   source: Readonly<{ workspaceId?: string }>,
@@ -601,6 +603,16 @@ async function listWorkspacePage(
       limit,
       truncated: false,
     } satisfies PublicWorkspaceListPage);
+  }
+  if (isFirstPage) {
+    const subject = takosumiSubjectValue(session.subject);
+    if (subject) {
+      await maybeEnsurePersonalWorkspaceForSubject({
+        subject,
+        store,
+        operations,
+      });
+    }
   }
   const [page, selected] = await Promise.all([
     operations.workspaces.listWorkspacesForAccountPage(session.subject, {

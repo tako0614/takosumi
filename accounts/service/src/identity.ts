@@ -98,15 +98,10 @@ export async function resolveUpstreamAccount(
     updatedAt: now,
   });
 
-  // The first-login personal Workspace hook now lives on the session-me route, where
-  // the account plane already has the deploy-control operations facade in scope.
-  // Keep the OAuth identity resolver side-effect free: threading deploy-control
-  // through `resolveUpstreamAccount` and `upstream-oauth-routes.ts` would couple
-  // the OAuth seam to Workspace creation even though session-me owns the idempotent
-  // ensure.
-  // the whole OAuth/OIDC route layer is deep accounts surgery deferred past M9.
-  // `DeployControlOperations.ensurePersonalWorkspace` is exposed on the facade so
-  // the wiring is a thread-through (not a new control-plane method) when taken.
+  // Keep the OAuth identity resolver side-effect free. The canonical first page
+  // of GET /api/v1/workspaces owns the awaited, idempotent personal-Workspace
+  // ensure because that route already has the deploy-control facade. Identity
+  // reads such as session/me remain read-only and safe for internal auth probes.
 
   return account;
 }

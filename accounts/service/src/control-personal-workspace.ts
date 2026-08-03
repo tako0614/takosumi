@@ -1,68 +1,41 @@
 /**
- * First-login personal-Workspace hook (spec §4: "初回ログイン時に個人 Workspace を自動
- * 作成する") wired on the account-session bootstrap route the dashboard hits
- * first (`GET /v1/account/session/me`).
+ * Lazy personal-Workspace bootstrap (spec §4: "初回ログイン時に個人 Workspace を自動
+ * 作成する") owned by the canonical Workspace list route.
  *
- * The OAuth/OIDC login seam does not own deploy-control operations; the
- * account-session bootstrap route does because the platform worker passes the
- * `controlPlaneOperations` facade. The idempotent ensure runs here as
- * fire-and-forget: a failed ensure must never fail the session read.
+ * Identity reads such as `GET /v1/account/session/me` must remain read-only.
+ * The Workspace list route already owns the deploy-control facade, so it can
+ * await the domain's idempotent ensure before returning the first page. This
+ * keeps every D1 operation inside the guarded request lifetime and avoids a
+ * repeated create-and-collision write path on every authentication probe.
  */
 
 import type { ControlPlaneOperations } from "./control-routes.ts";
 import type { AccountsStore } from "./store.ts";
-import { extractAccountSessionId } from "./account-session.ts";
+import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
 
 /**
- * Resolves the presented session, derives a stable handle from the account, and
- * fires the idempotent `ensurePersonalWorkspace` against the deploy-control facade.
- *
- * Fire-and-forget by contract: the returned promise never rejects. Callers
- * (the session/me route) MUST NOT await it on the response path.
+ * Derives a stable handle from the authenticated account and awaits the
+ * deploy-control domain's idempotent ensure. The returned promise never rejects
+ * so a best-effort personal bootstrap cannot hide other accessible Workspaces.
  */
-export async function maybeEnsurePersonalWorkspaceForSession(input: {
-  readonly request: Request;
+export async function maybeEnsurePersonalWorkspaceForSubject(input: {
+  readonly subject: TakosumiSubject;
   readonly store: AccountsStore;
   readonly operations?: ControlPlaneOperations;
 }): Promise<void> {
   try {
     const operations = input.operations;
-    if (!operations) return;
-    const sessionId = extractAccountSessionId(input.request);
-    if (!sessionId || !sessionId.startsWith("sess_")) return;
-    const session = await input.store.findAccountSession(sessionId);
-    if (!session || session.expiresAt < Date.now()) return;
-    const account = await input.store.findAccount(session.subject);
+    if (!operations?.workspaces.ensurePersonalWorkspace) return;
+    const account = await input.store.findAccount(input.subject);
     const handle = personalWorkspaceHandle({
-      subject: session.subject,
+      subject: input.subject,
       email: account?.email,
       displayName: account?.displayName,
     });
-    await operations.workspaces
-      .createWorkspace({
-        handle,
-        displayName: handle,
-        type: "personal",
-        ownerUserId: session.subject,
-      })
-      .catch((error) => {
-        // A handle collision (`failed_precondition`) is the idempotent steady
-        // state once the personal Workspace exists — swallow it. The deploy-control
-        // facade has no accounts-side handle->Workspace index to do a pre-check, so
-        // we lean on the unique-handle guard in `createWorkspace`.
-        if (!isAlreadyTakenError(error)) {
-          // Any other failure is best-effort too: log nothing here (no logger in
-          // this package) and never propagate.
-        }
-      });
+    await operations.workspaces.ensurePersonalWorkspace(input.subject, handle);
   } catch {
-    // Never let the personal-Workspace hook fail the session bootstrap response.
+    // Never let personal-Workspace bootstrap hide other accessible Workspaces.
   }
-}
-
-function isAlreadyTakenError(error: unknown): boolean {
-  if (typeof error !== "object" || error === null) return false;
-  return (error as { code?: unknown }).code === "failed_precondition";
 }
 
 /**

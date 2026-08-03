@@ -4,6 +4,7 @@ import {
   createEphemeralAccountsHandler,
 } from "../../../../accounts/service/src/mod.ts";
 import { InMemoryAccountsStore } from "../../../../accounts/service/src/store.ts";
+import { ACCOUNT_SESSION_COOKIE_NAME } from "../../../../accounts/service/src/account-session.ts";
 
 test("Accounts exposes identity discovery without a Capsule projection registry", async () => {
   const handler = await createEphemeralAccountsHandler({
@@ -39,6 +40,46 @@ test("production-capable Accounts handler requires an explicit durable-store cho
   expect(() =>
     createAccountsHandler({ issuer: "https://app.example.test" } as never),
   ).toThrow("requires an explicit AccountsStore");
+});
+
+test("session/me stays read-only even when deploy-control operations are available", async () => {
+  const store = new InMemoryAccountsStore();
+  const now = Date.now();
+  store.saveAccount({
+    subject: "tsub_session_probe",
+    createdAt: now,
+    updatedAt: now,
+  });
+  store.saveAccountSession({
+    sessionId: "sess_session_probe",
+    subject: "tsub_session_probe",
+    createdAt: now,
+    expiresAt: now + 60_000,
+  });
+  let workspaceEnsures = 0;
+  const handler = createAccountsHandler({
+    issuer: "https://app.example.test",
+    store,
+    controlPlaneOperations: {
+      workspaces: {
+        ensurePersonalWorkspace: async () => {
+          workspaceEnsures += 1;
+          throw new Error("identity reads must not mutate Workspaces");
+        },
+      },
+    } as never,
+  });
+
+  const response = await handler(
+    new Request("https://app.example.test/v1/account/session/me", {
+      headers: {
+        cookie: `${ACCOUNT_SESSION_COOKIE_NAME}=sess_session_probe`,
+      },
+    }),
+  );
+
+  expect(response.status).toBe(200);
+  expect(workspaceEnsures).toBe(0);
 });
 
 test("static public OIDC clients enforce exact redirect and allowed scopes", async () => {

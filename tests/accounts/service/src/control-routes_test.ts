@@ -669,23 +669,45 @@ test("Workspace list defaults to one bounded created-order page", async () => {
   ]);
 });
 
-test("Workspace list does not rerun the first-login personal Workspace hook", async () => {
+test("Workspace list awaits the idempotent personal Workspace ensure", async () => {
   const fixture = operationsFixture();
   const store = new InMemoryAccountsStore();
-  let sessionLookups = 0;
-  const findAccountSession = store.findAccountSession.bind(store);
-  store.findAccountSession = async (sessionId) => {
-    sessionLookups += 1;
-    return await findAccountSession(sessionId);
-  };
-  const request = new Request("https://app.example.test/api/v1/workspaces", {
-    headers: { authorization: "Bearer sess_existing" },
+  store.saveAccount({
+    subject: "tsub_owner",
+    displayName: "Owner",
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
   });
-  const response = await handleWorkspaces(
+  let releaseEnsure!: () => void;
+  const ensureHeld = new Promise<void>((resolve) => {
+    releaseEnsure = resolve;
+  });
+  let signalEnsureStarted!: () => void;
+  const ensureStarted = new Promise<void>((resolve) => {
+    signalEnsureStarted = resolve;
+  });
+  const ensureCalls: Array<{ ownerUserId: string; handle: string }> = [];
+  const operations = {
+    ...fixture.operations,
+    workspaces: {
+      ...fixture.operations.workspaces,
+      ensurePersonalWorkspace: async (
+        ownerUserId: string,
+        handle: string,
+      ) => {
+        ensureCalls.push({ ownerUserId, handle });
+        signalEnsureStarted();
+        await ensureHeld;
+        return workspace;
+      },
+    },
+  };
+  const request = new Request("https://app.example.test/api/v1/workspaces");
+  const responsePromise = handleWorkspaces(
     {
       request,
       url: new URL(request.url),
-      operations: fixture.operations,
+      operations: operations as ControlPlaneOperations,
       store,
       session: { subject: "tsub_owner" },
     },
@@ -693,8 +715,99 @@ test("Workspace list does not rerun the first-login personal Workspace hook", as
     "GET",
   );
 
+  await ensureStarted;
+  expect(ensureCalls).toEqual([
+    { ownerUserId: "tsub_owner", handle: "owner" },
+  ]);
+  expect(fixture.workspacePageCalls).toEqual([]);
+  releaseEnsure();
+  const response = await responsePromise;
   expect(response?.status).toBe(200);
-  expect(sessionLookups).toBe(0);
+  expect(fixture.workspacePageCalls).toHaveLength(1);
+});
+
+test("Workspace-scoped list never bootstraps another personal Workspace", async () => {
+  const fixture = operationsFixture();
+  let workspaceEnsures = 0;
+  const operations = {
+    ...fixture.operations,
+    workspaces: {
+      ...fixture.operations.workspaces,
+      ensurePersonalWorkspace: async () => {
+        workspaceEnsures += 1;
+        return workspace;
+      },
+    },
+  } as ControlPlaneOperations;
+  const request = new Request("https://app.example.test/api/v1/workspaces");
+  const response = await handleWorkspaces(
+    {
+      request,
+      url: new URL(request.url),
+      operations,
+      store: new InMemoryAccountsStore(),
+      session: { subject: "tsub_owner", workspaceId: workspace.id },
+    },
+    ["workspaces"],
+    "GET",
+  );
+
+  expect(response?.status).toBe(200);
+  expect(workspaceEnsures).toBe(0);
+});
+
+test("Repeated Workspace lists delegate to the canonical idempotent ensure", async () => {
+  const fixture = operationsFixture();
+  const store = new InMemoryAccountsStore();
+  store.saveAccount({
+    subject: "tsub_owner",
+    displayName: "Owner",
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  });
+  const ensureCalls: Array<{ ownerUserId: string; handle: string }> = [];
+  let createCalls = 0;
+  const operations = {
+    ...fixture.operations,
+    workspaces: {
+      ...fixture.operations.workspaces,
+      ensurePersonalWorkspace: async (
+        ownerUserId: string,
+        handle: string,
+      ) => {
+        ensureCalls.push({ ownerUserId, handle });
+        return workspace;
+      },
+      createWorkspace: async () => {
+        createCalls += 1;
+        throw new Error("Workspace bootstrap must use the canonical ensure");
+      },
+    },
+  } as ControlPlaneOperations;
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const request = new Request(
+      "https://app.example.test/api/v1/workspaces",
+    );
+    const response = await handleWorkspaces(
+      {
+        request,
+        url: new URL(request.url),
+        operations,
+        store,
+        session: { subject: "tsub_owner" },
+      },
+      ["workspaces"],
+      "GET",
+    );
+    expect(response?.status).toBe(200);
+  }
+
+  expect(ensureCalls).toEqual([
+    { ownerUserId: "tsub_owner", handle: "owner" },
+    { ownerUserId: "tsub_owner", handle: "owner" },
+  ]);
+  expect(createCalls).toBe(0);
 });
 
 test("Workspace list page is bounded and pins an authorized selected Workspace", async () => {
