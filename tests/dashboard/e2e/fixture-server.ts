@@ -182,7 +182,11 @@ async function apiResponse(request: Request, url: URL): Promise<Response> {
       compatibilityProfiles: { "compat.e2e.v1": { planes: ["control"] } },
       identity: {},
       operator: {},
-      extensions: [],
+      // This fixture exposes the matching `/v1/cloud/s3-access-keys` API above,
+      // so its public capability document must advertise that extension just
+      // like a composed host does. Portable OSS hosts that omit it keep the
+      // customer-key controls hidden.
+      extensions: ["s3.access-key.control.v1"],
     });
   }
 
