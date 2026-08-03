@@ -189,20 +189,6 @@ export {
   type ProductionHardeningGateResult,
 } from "./production_hardening.ts";
 export {
-  classifyPlatformRequestDataAccess,
-  isDashboardAssetRequestPath,
-  isDashboardDocumentPath,
-  DASHBOARD_DOCUMENT_ROUTES,
-  DASHBOARD_HASHED_ASSET_REQUEST_PATTERN,
-  DASHBOARD_PUBLIC_ASSET_PATHS,
-} from "./request-data-access.ts";
-export type {
-  PlatformDataFreeSurface,
-  PlatformRequestDataAccess,
-  PlatformRoutingEnv,
-} from "./request-data-access.ts";
-
-export {
   CoordinationObject,
   LocalSubstrateOpenTofuRunnerProxyObject,
   OpenTofuRunOwnerObject,
