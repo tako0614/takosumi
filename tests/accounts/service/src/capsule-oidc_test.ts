@@ -147,6 +147,82 @@ test("managed Capsule OIDC provisioning materializes the projected public URL", 
   });
 });
 
+test("managed Capsule OIDC provisioning falls back to the Capsule slug when the optional subdomain is omitted", async () => {
+  const store = new InMemoryAccountsStore();
+  const installConfig = {
+    id: "cfg_managed_slug_fallback",
+    variableMapping: { project_name: "takos-main" },
+    managedPublicHostname: { mode: "scoped" },
+    installExperience: {
+      projections: [
+        {
+          kind: "public_endpoint",
+          variables: { subdomain: "public_subdomain", url: "public_url" },
+        },
+        {
+          kind: "oidc_client",
+          variables: {
+            accountsUrl: "accounts_url",
+            issuerUrl: "issuer_url",
+            clientId: "client_id",
+            redirectUri: "redirect_uri",
+          },
+          callbackPath: "/auth/oidc/callback",
+        },
+      ],
+    },
+  } as unknown as InstallConfig;
+  let persistedConfig: InstallConfig | undefined;
+  const operations = {
+    claimManagedPublicHostname: async (claim: {
+      readonly expectedHostname: string;
+    }) => ({
+      ok: true,
+      hostname: claim.expectedHostname,
+      mode: "scoped",
+    }),
+    workspaces: {
+      getWorkspace: async () => ({ id: "ws_1", handle: "main" }),
+    },
+    capsules: {
+      putInstallConfig: async (config: InstallConfig) => {
+        persistedConfig = config;
+        return config;
+      },
+    },
+  } as unknown as ControlPlaneOperations;
+
+  await ensureTakosumiAccountsOidcForCapsule({
+    operations,
+    store,
+    issuer: "https://accounts.example.test",
+    capsule: {
+      id: "cap_managed_slug_fallback",
+      workspaceId: "ws_1",
+      installConfigId: "cfg_managed_slug_fallback",
+      name: "Takos Main",
+      slug: "takos-main",
+    } as never,
+    installConfig,
+    managedPublicBaseDomain: "apps-staging.example.test",
+  });
+
+  const client = await store.findOidcClientForCapsule(
+    "cap_managed_slug_fallback",
+  );
+  expect(client?.redirectUris).toEqual([
+    "https://main-takos-main.apps-staging.example.test/auth/oidc/callback",
+  ]);
+  expect(persistedConfig?.variableMapping).toMatchObject({
+    public_url: "https://main-takos-main.apps-staging.example.test",
+    accounts_url: "https://accounts.example.test",
+    issuer_url: "https://accounts.example.test",
+    client_id: client?.clientId,
+    redirect_uri:
+      "https://main-takos-main.apps-staging.example.test/auth/oidc/callback",
+  });
+});
+
 test("a mapped OIDC client id can never rebind another Capsule's client", async () => {
   const store = new InMemoryAccountsStore();
   // The victim's Capsule already owns this registration.
