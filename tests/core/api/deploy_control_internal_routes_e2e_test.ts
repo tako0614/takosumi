@@ -1130,6 +1130,87 @@ test("Capsule DELETE creates a destroy-plan run instead of deleting state (§30 
   expect(run.status).toEqual("waiting_approval");
 });
 
+test("unrestricted operator can pin only the latest current SourceSnapshot for destroy recovery", async () => {
+  const { app, capsuleId, store, workspaceId } =
+    await seedCapsuleViaRoutes(fakeRunner());
+  const initialPlanResponse = await app.request(
+    `/internal/v1/capsules/${capsuleId}/plan`,
+    { method: "POST", headers: headers() },
+  );
+  expect(initialPlanResponse.status).toEqual(201);
+  const initialPlanRun = ((await initialPlanResponse.json()) as { run: Run })
+    .run;
+  const initialPlan = await readInternalPlanRun(app, initialPlanRun.id);
+  const approval = await app.request(
+    `/internal/v1/runs/${initialPlanRun.id}/approve`,
+    { method: "POST", headers: headers() },
+  );
+  expect(approval.status).toEqual(200);
+  const initialApply = await app.request("/internal/v1/apply-runs", {
+    method: "POST",
+    headers: headers({ "content-type": "application/json" }),
+    body: JSON.stringify({
+      planRunId: initialPlan.planRun.id,
+      expected: applyExpectedGuardFromPlanRun(initialPlan.planRun),
+    }),
+  });
+  expect(initialApply.status).toEqual(201);
+
+  const capsule = await store.getCapsule(capsuleId);
+  expect(capsule?.currentStateVersionId).toBeDefined();
+  expect(capsule?.sourceId).toBeDefined();
+  const sourceId = capsule!.sourceId!;
+  const recoverySnapshot: SourceSnapshot = {
+    id: "snap_recovery0001",
+    origin: "git",
+    workspaceId,
+    sourceId,
+    url: "https://github.com/acme/repo.git",
+    ref: "main",
+    resolvedCommit: "b".repeat(40),
+    path: ".",
+    archiveRef: `workspaces/${workspaceId}/sources/${sourceId}/snapshots/snap_recovery0001/source.tar.zst`,
+    archiveDigest: ARCHIVE_DIGEST,
+    archiveSizeBytes: 1024,
+    fetchedByRunId: "ssr_recovery0001",
+    fetchedAt: new Date(1).toISOString(),
+  };
+  await store.putSourceSnapshot(recoverySnapshot);
+
+  const staleRecovery = await app.request(
+    `/internal/v1/capsules/${capsuleId}/destroy-plan`,
+    {
+      method: "POST",
+      headers: headers({ "content-type": "application/json" }),
+      body: JSON.stringify({
+        recoverySourceSnapshotId: "snap_e2e000001",
+      }),
+    },
+  );
+  expect(staleRecovery.status).toEqual(409);
+  expect((await staleRecovery.json()).error.message).toContain(
+    "must be the latest snapshot",
+  );
+
+  const recovery = await app.request(
+    `/internal/v1/capsules/${capsuleId}/destroy-plan`,
+    {
+      method: "POST",
+      headers: headers({ "content-type": "application/json" }),
+      body: JSON.stringify({
+        recoverySourceSnapshotId: recoverySnapshot.id,
+      }),
+    },
+  );
+  expect(recovery.status).toEqual(201);
+  const recoveryRun = ((await recovery.json()) as { run: Run }).run;
+  expect(recoveryRun.type).toEqual("destroy_plan");
+  const internalRecovery = await readInternalPlanRun(app, recoveryRun.id);
+  expect(internalRecovery.planRun.sourceSnapshotId).toEqual(
+    recoverySnapshot.id,
+  );
+});
+
 test("deployControl e2e rejects mismatched plan digest guard", async () => {
   const { app, capsuleId } = await seedCapsuleViaRoutes(fakeRunner());
 

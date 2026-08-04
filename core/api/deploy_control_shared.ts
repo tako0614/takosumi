@@ -237,7 +237,7 @@ export const ALLOWED_KEYS: Record<
     "lifecycleActionPolicy",
   ]),
   capsulePlan: new Set(["runnerId", "compatibilityReportId"]),
-  capsuleDestroyPlan: new Set(["runnerId"]),
+  capsuleDestroyPlan: new Set(["runnerId", "recoverySourceSnapshotId"]),
   runApprove: new Set(["reason"]),
   dependencyCreate: new Set([
     "producerCapsuleId",

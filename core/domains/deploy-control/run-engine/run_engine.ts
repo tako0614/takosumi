@@ -1743,7 +1743,10 @@ export class RunEngine {
   async createCapsuleDestroyPlan(
     capsuleId: string,
     context: DeployControlActorContext = {},
-    internal: Pick<CreateCapsulePlanInternal, "runnerProfileId"> = {},
+    internal: Pick<
+      CreateCapsulePlanInternal,
+      "runnerProfileId" | "sourceSnapshotId"
+    > = {},
   ): Promise<PlanRunResponse> {
     return await this.#createCapsulePlanRun(capsuleId, true, context, internal);
   }
@@ -1829,6 +1832,45 @@ export class RunEngine {
       );
     }
     const source: Source = stored;
+    if (destroy && internal.sourceSnapshotId) {
+      if (!capsule.currentStateVersionId) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          "destroy recovery requires an applied Capsule StateVersion",
+        );
+      }
+      if (source.status !== "active") {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          "destroy recovery requires an active Source",
+        );
+      }
+      const recoverySnapshot = await planCreationStage(
+        "source_snapshot_recovery_pin",
+        this.#requireSourceSnapshotForSource(
+          stored.id,
+          internal.sourceSnapshotId,
+        ),
+      );
+      const latest = await planCreationStage(
+        "source_snapshot_recovery_latest",
+        this.#resolveLatestSnapshot(
+          stored.id,
+          stored.defaultRef,
+          stored.defaultPath,
+        ),
+      );
+      if (
+        recoverySnapshot.ref !== stored.defaultRef ||
+        recoverySnapshot.path !== stored.defaultPath ||
+        latest?.id !== recoverySnapshot.id
+      ) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          "destroy recovery SourceSnapshot must be the latest snapshot for the Source current ref and path",
+        );
+      }
+    }
     // The rollback-plan path pins a specific SourceSnapshot from a prior
     // StateVersion; otherwise resolve the registered Source's latest snapshot.
     const destroySnapshotId = destroy

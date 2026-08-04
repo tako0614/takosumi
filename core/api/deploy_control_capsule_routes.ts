@@ -92,6 +92,7 @@ interface CreateCapsuleRouteRequest extends CreateCapsuleRequest {
 
 interface CapsulePlanRouteRequest {
   readonly compatibilityReportId?: unknown;
+  readonly recoverySourceSnapshotId?: unknown;
   readonly runnerId?: string;
 }
 
@@ -150,6 +151,19 @@ function compatibilityReportIdFromBody(body: {
     );
   }
   return body.compatibilityReportId.trim();
+}
+
+function recoverySourceSnapshotIdFromBody(body: {
+  readonly recoverySourceSnapshotId?: unknown;
+}): string | undefined {
+  if (body.recoverySourceSnapshotId === undefined) return undefined;
+  if (!nonEmptyString(body.recoverySourceSnapshotId)) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      "recoverySourceSnapshotId must be a non-empty string",
+    );
+  }
+  return body.recoverySourceSnapshotId.trim();
 }
 
 type InstallConfigListView = "all" | "store";
@@ -393,7 +407,7 @@ export const DEPLOY_CONTROL_CAPSULE_ENDPOINTS: readonly DeployControlEndpoint[] 
       operationId: "createCapsuleDestroyPlan",
       openapi: {
         pathParams: ["capsuleId"],
-        requestSchema: "CapsulePlanRequest",
+        requestSchema: "CapsuleDestroyPlanRequest",
         okStatus: "201",
         okSchema: "RunResponse",
       },
@@ -897,14 +911,27 @@ export function mountDeployControlCapsuleRoutes(
           "capsuleDestroyPlan",
         );
         const runnerProfileId = runnerIdFromBody(body);
+        const recoverySourceSnapshotId =
+          recoverySourceSnapshotIdFromBody(body);
         ensureOperationPermission(principal, "destroy");
         ensureRunnerProfileSelectionPermission(principal, runnerProfileId);
+        if (recoverySourceSnapshotId && principal.workspaceIds !== "*") {
+          throw new OpenTofuControllerError(
+            "permission_denied",
+            "only an unrestricted operator may select a destroy recovery SourceSnapshot",
+          );
+        }
         const response = await controller.createCapsuleDestroyPlan(
           id,
           {
             actor: principal.actor,
           },
-          runnerProfileId ? { runnerProfileId } : {},
+          {
+            ...(runnerProfileId ? { runnerProfileId } : {}),
+            ...(recoverySourceSnapshotId
+              ? { sourceSnapshotId: recoverySourceSnapshotId }
+              : {}),
+          },
         );
         return c.json(
           { run: await controller.getRun(response.planRun.id) },

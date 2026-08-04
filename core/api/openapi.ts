@@ -4657,6 +4657,18 @@ function workspaceProjectAndCapsuleRequestSchemas(): Record<
       },
       additionalProperties: false,
     },
+    CapsuleDestroyPlanRequest: {
+      type: "object",
+      properties: {
+        recoverySourceSnapshotId: {
+          type: "string",
+          description:
+            "Unrestricted-operator-only latest SourceSnapshot override for a reviewed destroy recovery plan.",
+        },
+        runnerId: { type: "string" },
+      },
+      additionalProperties: false,
+    },
     CapsuleResponse: {
       type: "object",
       required: ["capsule"],
