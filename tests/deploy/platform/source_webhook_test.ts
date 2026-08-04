@@ -1095,8 +1095,10 @@ test("platform metrics summary captures required metric and label coverage", () 
   expect(summary.missingRequiredLabels).toEqual([]);
 });
 
-test("platform OIDC metric classifier covers issuer and upstream auth paths", () => {
-  expect(isOidcMetricPath("/.well-known/openid-configuration")).toBe(true);
+test("platform OIDC metrics exclude public metadata and cover auth flows", () => {
+  expect(isOidcMetricPath("/.well-known/openid-configuration")).toBe(false);
+  expect(isOidcMetricPath("/oauth/jwks")).toBe(false);
+  expect(isOidcMetricPath("/v1/auth/providers")).toBe(false);
   expect(isOidcMetricPath("/oauth/authorize")).toBe(true);
   expect(isOidcMetricPath("/oauth/token")).toBe(true);
   expect(isOidcMetricPath("/v1/auth/upstream/google/start")).toBe(true);
