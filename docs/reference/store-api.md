@@ -28,6 +28,9 @@ Store client は `compileInstallUx: true` の request に `modulePath` や
 multi-module manifest では `takosumi.com/v2.1` の exact `defaultModule` を要求します。
 host override が複数件なら fail closed です。override が0件でも repository manifest と
 汎用 host policy だけで install でき、Store への app 固有 InstallConfig 登録は不要です。
+host override は `sourceSelector.url` で一致する実行 policy であり、`store` 表示情報を
+持つ必要はありません。そのため lifecycle や credential policy を許可する operator
+設定が Store の別 listing として表示されることもありません。
 
 ## Authority boundary
 

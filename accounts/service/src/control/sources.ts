@@ -549,8 +549,10 @@ type StoreBaseInstallConfigResolution =
 
 /**
  * Resolve the policy ceiling for URL-only Store handoff. An operator may
- * contribute one exact host policy override for the repository URL. Otherwise
- * the generic host InstallConfig is the ceiling and the pinned repository
+ * contribute one exact host policy override for the repository URL. The
+ * override is execution policy, not Store presentation, so it is selected by
+ * `sourceSelector` alone and does not need a fake `store` entry. Otherwise the
+ * generic host InstallConfig is the ceiling and the pinned repository
  * manifest owns module selection and user-facing inputs. Legacy module paths
  * are deliberately ignored.
  */
@@ -651,18 +653,15 @@ function storeBaseInstallConfigMatchesSource(
   if (
     config.workspaceId !== undefined ||
     config.internal !== undefined ||
-    !config.store?.source ||
     !config.sourceSelector
   ) {
     return false;
   }
   const sourceUrl = source.url.trim();
-  const storeUrl = config.store.source.url.trim();
   const selectorUrl = config.sourceSelector.url.trim();
-  if (!sourceUrl || !storeUrl || !selectorUrl) return false;
+  if (!sourceUrl || !selectorUrl) return false;
   const canonicalSourceUrl = normalizeInstallConfigSourceUrl(sourceUrl);
   return (
-    normalizeInstallConfigSourceUrl(storeUrl) === canonicalSourceUrl &&
     normalizeInstallConfigSourceUrl(selectorUrl) === canonicalSourceUrl
   );
 }
