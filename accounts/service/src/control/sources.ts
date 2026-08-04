@@ -324,8 +324,8 @@ export async function handleSources(
       }
       const capsuleId = stringValue(body.capsuleId);
       // Manual Git callers may select an existing DB-owned InstallConfig.
-      // Store compilation below resolves its unique global policy config by
-      // canonical repository URL; the client cannot choose that authority.
+      // Store compilation resolves an optional host policy override by URL and
+      // otherwise uses the generic host config; the client cannot choose it.
       const installConfigId = stringValue(body.installConfigId);
       const compileInstallUx = body.compileInstallUx === true;
       const capsuleName = stringValue(body.capsuleName);
@@ -548,10 +548,11 @@ type StoreBaseInstallConfigResolution =
     };
 
 /**
- * Resolve the policy ceiling for URL-only Store handoff. Only a selectable,
- * global service declaration whose presentation URL and source-selector URL
- * both name the registered repository is eligible. Legacy module paths are
- * deliberately ignored: repository manifest selection owns that decision.
+ * Resolve the policy ceiling for URL-only Store handoff. An operator may
+ * contribute one exact host policy override for the repository URL. Otherwise
+ * the generic host InstallConfig is the ceiling and the pinned repository
+ * manifest owns module selection and user-facing inputs. Legacy module paths
+ * are deliberately ignored.
  */
 async function resolveStoreBaseInstallConfig(
   operations: ControlPlaneOperations,
@@ -571,9 +572,7 @@ async function resolveStoreBaseInstallConfig(
 
   const listPage = operations.capsules.listSharedInstallConfigsPage;
   if (!listPage) {
-    return ambiguousStoreBaseConfig(
-      "Takosumi cannot prove a unique Store InstallConfig without bounded global catalog pagination.",
-    );
+    return await resolveDefaultStoreBaseInstallConfig(operations);
   }
   let cursor: string | undefined;
   let pagesScanned = 0;
@@ -615,16 +614,34 @@ async function resolveStoreBaseInstallConfig(
   } while (true);
 
   if (matches.length === 0) {
-    return {
-      ok: false,
-      diagnostic: {
-        code: "repository_install_ux_base_config_missing",
-        message:
-          "No global Store InstallConfig is registered for the Source repository URL.",
-      },
-    };
+    return await resolveDefaultStoreBaseInstallConfig(operations);
   }
   return { ok: true, installConfig: matches[0]! };
+}
+
+async function resolveDefaultStoreBaseInstallConfig(
+  operations: ControlPlaneOperations,
+): Promise<StoreBaseInstallConfigResolution> {
+  try {
+    const installConfig = await operations.capsules.getInstallConfig(
+      DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
+    );
+    if (
+      installConfig.workspaceId === undefined &&
+      installConfig.internal === undefined
+    ) {
+      return { ok: true, installConfig };
+    }
+  } catch {
+    // The typed diagnostic below is the public fail-closed result.
+  }
+  return {
+    ok: false,
+    diagnostic: {
+      code: "repository_install_ux_base_config_missing",
+      message: "The generic host InstallConfig is unavailable.",
+    },
+  };
 }
 
 function storeBaseInstallConfigMatchesSource(
@@ -651,7 +668,7 @@ function storeBaseInstallConfigMatchesSource(
 }
 
 function ambiguousStoreBaseConfig(
-  message = "Multiple global Store InstallConfigs match the Source repository URL.",
+  message = "Multiple host InstallConfig overrides match the Source repository URL.",
 ): StoreBaseInstallConfigResolution {
   return {
     ok: false,

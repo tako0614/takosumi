@@ -150,6 +150,9 @@ interface ControlRouteContext {
   readonly url: URL;
   readonly store: AccountsStore;
   readonly operations?: ControlPlaneOperations;
+  readonly resolveOperations?: () => Promise<
+    ControlPlaneOperations | undefined
+  >;
   readonly issuer?: string;
   readonly managedPublicBaseDomain?: string;
 }
@@ -193,7 +196,14 @@ async function dispatchAuthenticatedControlRoute(
   timings: ServerTimingBucket,
 ): Promise<Response> {
   const { request, url } = context;
-  const operations = context.operations;
+  let operations = context.operations;
+  if (!operations && context.resolveOperations) {
+    operations = await measureServerTiming(
+      timings,
+      "tk_control_init",
+      context.resolveOperations,
+    );
+  }
   if (!operations)
     return appendServerTiming(controlPlaneUnavailable(), timings);
   const tail = url.pathname.slice(API_V1_PREFIX.length);
@@ -249,7 +259,15 @@ export async function handleControlRoute(
     prefix,
   );
   if (connectionOAuthHelperId) {
-    const operations = context.operations;
+    const operations =
+      context.operations ??
+      (context.resolveOperations
+        ? await measureServerTiming(
+            timings,
+            "tk_control_init",
+            context.resolveOperations,
+          )
+        : undefined);
     if (!operations) return controlPlaneUnavailable();
     try {
       return await completeConnectionOAuth(
@@ -277,13 +295,9 @@ export async function handleControlRoute(
   );
   if (!bearer.ok) return appendServerTiming(bearer.response, timings);
 
-  const operations = context.operations;
-  if (!operations)
-    return appendServerTiming(controlPlaneUnavailable(), timings);
   return await dispatchAuthenticatedControlRoute(
     {
       ...context,
-      operations,
       session: {
         subject: bearer.auth.subject,
         ...(bearer.auth.workspaceId

@@ -22,7 +22,7 @@ import { StubResourceShapeAdapter } from "../../../core/domains/resource-shape/m
 import { MapResourceShapeSchemaRegistry } from "../../../core/domains/resource-shape/planner.ts";
 import { PORTABLE_FORM_MANAGER } from "../../../core/api/form_host_routes.ts";
 import { createManagedProviderRunToken } from "../../../core/shared/managed_provider_tokens.ts";
-import { REFERENCE_APP_INSTALL_CONFIGS } from "../../../deploy/reference-app-install-configs.ts";
+import { REFERENCE_APP_INSTALL_CONFIGS } from "../../fixtures/reference-app-install-configs.ts";
 import worker from "../../../deploy/platform/worker.ts";
 import {
   CloudflareD1OpenTofuControlStore,

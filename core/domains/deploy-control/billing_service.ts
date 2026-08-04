@@ -87,7 +87,13 @@ export class BillingService {
     workspaceId: string,
   ): Promise<BillingSettings> {
     const workspace = await this.#store.getWorkspace(workspaceId);
-    return workspace?.billingSettings?.mode === "showback"
+    return workspace
+      ? this.billingSettingsForWorkspaceRecord(workspace)
+      : this.#defaultBillingSettings;
+  }
+
+  billingSettingsForWorkspaceRecord(workspace: Workspace): BillingSettings {
+    return workspace.billingSettings?.mode === "showback"
       ? { mode: "showback" }
       : this.#defaultBillingSettings;
   }
@@ -102,7 +108,8 @@ export class BillingService {
     readonly audit?: Readonly<Record<string, JsonValue>>;
   }> {
     const workspaceId = input.planRun.workspaceId;
-    const settings = await this.billingSettingsForWorkspace(workspaceId);
+    const workspace = await this.#requireWorkspace(workspaceId);
+    const settings = this.billingSettingsForWorkspaceRecord(workspace);
     if (settings.mode === "disabled") {
       return {
         reasons: [],
@@ -137,7 +144,6 @@ export class BillingService {
       };
     }
 
-    const workspace = await this.#requireWorkspace(workspaceId);
     const billingSubjectId = workspace.ownerUserId;
     const planResourceChanges = input.result.planResourceChanges ?? [];
     const rating = normalizeShowbackRating(
@@ -197,11 +203,11 @@ export class BillingService {
 
   async assertApplyBillingAllowed(planRun: PlanRun): Promise<void> {
     const workspaceId = planRun.workspaceId;
-    const settings = await this.billingSettingsForWorkspace(workspaceId);
+    const workspace = await this.#requireWorkspace(workspaceId);
+    const settings = this.billingSettingsForWorkspaceRecord(workspace);
     if (settings.mode === "disabled" || planSkipsBillingReservation(planRun)) {
       return;
     }
-    const workspace = await this.#requireWorkspace(workspaceId);
     await this.#enforcement.assertReservationSatisfied({
       workspaceId,
       billingSubjectId: workspace.ownerUserId,
@@ -216,11 +222,11 @@ export class BillingService {
     readonly now: number;
   }): Promise<void> {
     const workspaceId = input.planRun.workspaceId;
-    const settings = await this.billingSettingsForWorkspace(workspaceId);
+    const workspace = await this.#requireWorkspace(workspaceId);
+    const settings = this.billingSettingsForWorkspaceRecord(workspace);
     if (settings.mode === "disabled") return;
     const rating = planShowbackRating(input.planRun);
     const estimatedUsdMicros = rating.usdMicros;
-    const workspace = await this.#requireWorkspace(workspaceId);
     await this.#store.putUsageEvent({
       id: this.#newId("usage"),
       workspaceId,
@@ -253,11 +259,11 @@ export class BillingService {
 
   async releaseApplyBilling(planRun: PlanRun): Promise<void> {
     const workspaceId = planRun.workspaceId;
-    const settings = await this.billingSettingsForWorkspace(workspaceId);
+    const workspace = await this.#requireWorkspace(workspaceId);
+    const settings = this.billingSettingsForWorkspaceRecord(workspace);
     if (settings.mode === "disabled" || planSkipsBillingReservation(planRun)) {
       return;
     }
-    const workspace = await this.#requireWorkspace(workspaceId);
     await this.#enforcement.releaseReservation({
       workspaceId,
       billingSubjectId: workspace.ownerUserId,
@@ -274,9 +280,9 @@ export class BillingService {
   async rateUsageMeasurement(
     input: Omit<UsageShowbackRatingContext, "billingSubjectId">,
   ): Promise<ShowbackRating | undefined> {
-    const settings = await this.billingSettingsForWorkspace(input.workspaceId);
-    if (settings.mode === "disabled") return undefined;
     const workspace = await this.#requireWorkspace(input.workspaceId);
+    const settings = this.billingSettingsForWorkspaceRecord(workspace);
+    if (settings.mode === "disabled") return undefined;
     return normalizeShowbackRating(
       await this.#rater.rateUsage({
         ...input,

@@ -8,7 +8,7 @@ import {
 import type { InstallConfig } from "takosumi-contract/install-configs";
 import { compileRepositoryInstallUx } from "../../../core/domains/capsules/repository_install_ux_compiler.ts";
 import { uniqueStoreInstallConfigForSource } from "../../../dashboard/src/views/new/install-helpers.ts";
-import { REFERENCE_APP_INSTALL_CONFIGS } from "../../../deploy/reference-app-install-configs.ts";
+import { REFERENCE_APP_INSTALL_CONFIGS } from "../../fixtures/reference-app-install-configs.ts";
 
 const SOURCE_URL = "https://github.com/tako0614/yurucommu.git";
 const MODULE_PATH = "deploy/takoform";

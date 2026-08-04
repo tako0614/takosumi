@@ -142,12 +142,7 @@ const RULES: readonly BoundaryRule[] = [
     id: "output-name-magic",
     message:
       "OpenTofu outputs are ordinary return values; runtime behavior must use an explicit Interface input mapping",
-    // This composition file is the service-side declaration that performs the
-    // explicit mapping the rule requires. Its strings are ordinary, audited
-    // module Output names, not runtime inference or a reserved schema.
-    appliesTo: (path) =>
-      isImplementationPath(path) &&
-      path !== "deploy/reference-app-install-configs.ts",
+    appliesTo: isImplementationPath,
     patterns: [
       /["'`](?:mcp_url|file_handler_url|service_graph|runtime_service)["'`]/,
       /\.endsWith\(\s*["'`](?:_url|_endpoint|_token)["'`]\s*\)/,

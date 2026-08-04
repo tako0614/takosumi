@@ -1,5 +1,5 @@
 /**
- * Replaceable reference InstallConfig composition for Takos-adjacent apps.
+ * Test-only reference InstallConfig fixtures for Takos-adjacent apps.
  *
  * These are ordinary Workspace-neutral service-side records. When present,
  * Store metadata associates a canonical Git repository URL for presentation

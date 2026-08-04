@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { createTakosumiService } from "../../../core/bootstrap.ts";
+import { defaultCapsuleInstallConfig } from "../../../core/domains/capsules/default_install_config.ts";
 import {
   INSTALL_CONFIG_PATCH_V1_KIND,
   type InstallConfig,
@@ -102,19 +103,16 @@ function routeRedactionInstallConfig(base: InstallConfig): InstallConfig {
   };
 }
 
-test("InstallConfig list/get/patch routes redact secret variables", async () => {
-  const { app, operations } = await createTakosumiService({
+test("InstallConfig list/get routes redact host config secret variables", async () => {
+  const config = routeRedactionInstallConfig(defaultCapsuleInstallConfig());
+  const { app } = await createTakosumiService({
     role: "takosumi-api",
     runtimeEnv: {
       TAKOSUMI_DEV_MODE: "1",
       TAKOSUMI_DEPLOY_CONTROL_TOKEN: TOKEN,
     },
+    operatorInstallConfigs: [config],
   });
-  const bootstrapped = await operations.capsules.getInstallConfig(
-    "cfg-default-opentofu-capsule",
-  );
-  const config = routeRedactionInstallConfig(bootstrapped);
-  await operations.capsules.putInstallConfig(config);
 
   const listResponse = await app.request("/internal/v1/install-configs", {
     headers: headers(),
@@ -140,31 +138,9 @@ test("InstallConfig list/get/patch routes redact secret variables", async () => 
   };
   expectRedactedInstallConfig(got);
 
-  const patchResponse = await app.request(
-    `/internal/v1/install-configs/${config.id}`,
-    {
-      method: "PATCH",
-      headers: headers(),
-      body: JSON.stringify({
-        kind: INSTALL_CONFIG_PATCH_V1_KIND,
-        variableMapping: config.variableMapping,
-      }),
-    },
-  );
-  expect(patchResponse.status).toBe(200);
-  const patched = (await patchResponse.json()).installConfig as {
-    variableMapping: Readonly<Record<string, unknown>>;
-    policy: Readonly<Record<string, unknown>>;
-  };
-  expectRedactedInstallConfig(patched);
-
-  // The operator-facing mutation still stores the raw values internally; only
-  // the public route projection is redacted.
-  const stored = await operations.capsules.getInstallConfig(config.id);
-  expect(stored.variableMapping).toEqual(config.variableMapping);
 });
 
-test("operator API applies one exact versioned patch and preserves row-owned fields", async () => {
+test("operator API cannot mutate immutable host InstallConfigs", async () => {
   const { app, operations } = await createTakosumiService({
     role: "takosumi-api",
     runtimeEnv: {
@@ -175,12 +151,7 @@ test("operator API applies one exact versioned patch and preserves row-owned fie
   const bootstrapped = await operations.capsules.getInstallConfig(
     "cfg-default-opentofu-capsule",
   );
-  const before = await operations.capsules.putInstallConfig({
-    ...bootstrapped,
-    policy: {
-      allowedProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
-    },
-  });
+  const before = bootstrapped;
   const response = await app.request(
     "/internal/v1/install-configs/cfg-default-opentofu-capsule",
     {
@@ -214,32 +185,9 @@ test("operator API applies one exact versioned patch and preserves row-owned fie
       }),
     },
   );
-  expect(response.status).toBe(200);
-  const body = await response.json();
-  expect(body.installConfig).toMatchObject({
-    id: before.id,
-    name: before.name,
-    createdAt: before.createdAt,
-    variableMapping: { target: "cloudflare" },
-    outputAllowlist: {
-      launch_url: { from: "launch_url", type: "url", required: true },
-    },
-    policy: {
-      allowedProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
-      lifecycleActions: {
-        allowedExecutors: ["operator"],
-        allowedRunnerCapabilities: ["capsule.lifecycle.command.v1"],
-      },
-    },
-  });
-  expect(Date.parse(body.installConfig.updatedAt)).toBeGreaterThanOrEqual(
-    Date.parse(before.updatedAt),
-  );
-
-  const stored = await operations.capsules.getInstallConfig(before.id);
-  expect(stored.modulePath).toBe(before.modulePath);
-  expect(stored.store).toEqual(before.store);
-  expect(stored.runnerId).toBe(before.runnerId);
+  expect(response.status).toBe(403);
+  expect((await response.json()).error.message).toContain("immutable");
+  expect(await operations.capsules.getInstallConfig(before.id)).toEqual(before);
 });
 
 test("Workspace-scoped bearer cannot patch a shared InstallConfig", async () => {

@@ -68,6 +68,7 @@ export async function handleCreatePersonalAccessToken(input: {
   request: Request;
   store: AccountsStore;
   operations?: ControlPlaneOperations;
+  resolveOperations?: () => Promise<ControlPlaneOperations | undefined>;
 }): Promise<Response> {
   const session = await requireAccountSession(input);
   if (!session.ok) return session.response;
@@ -106,8 +107,10 @@ export async function handleCreatePersonalAccessToken(input: {
     );
   }
   if (workspaceId) {
+    const operations =
+      input.operations ?? (await input.resolveOperations?.());
     const ownsWorkspace = await subjectOwnsWorkspace({
-      operations: input.operations,
+      operations,
       subject: session.subject,
       workspaceId,
     });

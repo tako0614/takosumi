@@ -115,7 +115,10 @@ import {
   handleControlRoute,
   isControlRoutePath,
 } from "./control-routes.ts";
-import type { InterfaceOAuthActivityValidator } from "./access-token-activity.ts";
+import type {
+  InterfaceOAuthActivityEvidence,
+  InterfaceOAuthActivityValidator,
+} from "./access-token-activity.ts";
 export type {
   ControlPlaneOperations,
   RunGroupWithRunsLike,
@@ -167,6 +170,15 @@ export interface AccountsHandlerOptions {
    * respond 503 after the session gate.
    */
   controlPlaneOperations?: ControlPlaneOperations;
+  /**
+   * Request-time resolver for compositions whose Control plane is expensive to
+   * construct. Session-control routes call it only after a credential has been
+   * authenticated; the resolver must cache only composition state, never
+   * request-scoped authority or maintenance evidence.
+   */
+  resolveControlPlaneOperations?: () => Promise<
+    ControlPlaneOperations | undefined
+  >;
   /** Canonical current-state check for short-lived Interface OAuth tokens. */
   interfaceOAuthActivityValidator?: InterfaceOAuthActivityValidator;
   /** Operator-owned hostname namespace used for managed Capsule endpoints. */
@@ -192,6 +204,9 @@ export interface EphemeralAccountsHandlerOptions {
   upstreamOAuth?: UpstreamOAuthOptions;
   passkeys?: PasskeyHttpOptions;
   controlPlaneOperations?: ControlPlaneOperations;
+  resolveControlPlaneOperations?: () => Promise<
+    ControlPlaneOperations | undefined
+  >;
   interfaceOAuthActivityValidator?: InterfaceOAuthActivityValidator;
   managedPublicBaseDomain?: string;
   loginEmailAllowlist?: LoginEmailAllowlist;
@@ -310,6 +325,7 @@ export async function createEphemeralAccountsHandler(
     upstreamOAuth: options.upstreamOAuth,
     passkeys: options.passkeys,
     controlPlaneOperations: options.controlPlaneOperations,
+    resolveControlPlaneOperations: options.resolveControlPlaneOperations,
     interfaceOAuthActivityValidator: options.interfaceOAuthActivityValidator,
     ...(options.managedPublicBaseDomain
       ? { managedPublicBaseDomain: options.managedPublicBaseDomain }
@@ -446,13 +462,22 @@ export function createAccountsHandler(
   const privacyRetentionPolicyRef = options.privacyRetentionPolicyRef
     ? normalizePrivacyRetentionPolicyRef(options.privacyRetentionPolicyRef)
     : undefined;
+  const resolveControlPlaneOperations =
+    options.resolveControlPlaneOperations ??
+    (options.controlPlaneOperations
+      ? () => Promise.resolve(options.controlPlaneOperations)
+      : undefined);
   const interfaceOAuthActivityValidator =
     options.interfaceOAuthActivityValidator ??
-    (options.controlPlaneOperations?.interfaces
-      ? (evidence) =>
-          options.controlPlaneOperations!.interfaces!.validatePrincipalOAuth2TokenEvidence(
-            evidence,
-          )
+    (resolveControlPlaneOperations
+      ? async (evidence: InterfaceOAuthActivityEvidence) => {
+          const operations = await resolveControlPlaneOperations();
+          return operations?.interfaces
+            ? await operations.interfaces.validatePrincipalOAuth2TokenEvidence(
+                evidence,
+              )
+            : false;
+        }
       : undefined);
 
   // Per-isolate rate limiters. Each entry maps client IP to a sliding window
@@ -503,6 +528,9 @@ export function createAccountsHandler(
         clients,
         store,
         operations: options.controlPlaneOperations,
+        ...(resolveControlPlaneOperations
+          ? { resolveOperations: resolveControlPlaneOperations }
+          : {}),
       });
     }
 
@@ -520,6 +548,9 @@ export function createAccountsHandler(
         ...(options.controlPlaneOperations
           ? { operations: options.controlPlaneOperations }
           : {}),
+        ...(resolveControlPlaneOperations
+          ? { resolveOperations: resolveControlPlaneOperations }
+          : {}),
         ...(loginEmailAllowlist ? { loginEmailAllowlist } : {}),
       });
     }
@@ -532,6 +563,9 @@ export function createAccountsHandler(
         clients,
         ...(options.controlPlaneOperations
           ? { operations: options.controlPlaneOperations }
+          : {}),
+        ...(resolveControlPlaneOperations
+          ? { resolveOperations: resolveControlPlaneOperations }
           : {}),
         ...(interfaceOAuthActivityValidator
           ? { interfaceOAuthActivityValidator }
@@ -553,6 +587,9 @@ export function createAccountsHandler(
         clients,
         ...(options.controlPlaneOperations
           ? { operations: options.controlPlaneOperations }
+          : {}),
+        ...(resolveControlPlaneOperations
+          ? { resolveOperations: resolveControlPlaneOperations }
           : {}),
         ...(interfaceOAuthActivityValidator
           ? { interfaceOAuthActivityValidator }
@@ -585,6 +622,9 @@ export function createAccountsHandler(
           request,
           store,
           operations: options.controlPlaneOperations,
+          ...(resolveControlPlaneOperations
+            ? { resolveOperations: resolveControlPlaneOperations }
+            : {}),
         });
       }
       return methodNotAllowed("GET, POST");
@@ -755,6 +795,7 @@ export function createAccountsHandler(
             store,
             issuer,
             operations: options.controlPlaneOperations,
+            resolveOperations: resolveControlPlaneOperations,
             ...(options.managedPublicBaseDomain
               ? { managedPublicBaseDomain: options.managedPublicBaseDomain }
               : {}),

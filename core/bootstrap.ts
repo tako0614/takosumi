@@ -153,8 +153,8 @@ import {
   BackupsService,
   type ServiceDataBackupRunner,
 } from "./domains/backups/mod.ts";
-import { bootstrapDefaultInstallConfig } from "./domains/capsules/default_install_config.ts";
-import { bootstrapOperatorInstallConfigs } from "./domains/capsules/operator_install_configs.ts";
+import { defaultCapsuleInstallConfig } from "./domains/capsules/default_install_config.ts";
+import { withHostInstallConfigs } from "./domains/capsules/host_install_config_store.ts";
 import type {
   CreateSourceRequest,
   CreateSourceResponse,
@@ -1300,8 +1300,12 @@ export async function createTakosumiService(
   // service share the SAME ledger (when no durable store is injected the
   // controller would otherwise build its own private in-memory store, leaving
   // the SourcesService backed by a different instance).
-  const sharedOpenTofuStore =
+  const durableOpenTofuStore =
     opentofuStore.store ?? new InMemoryOpenTofuControlStore();
+  const sharedOpenTofuStore = withHostInstallConfigs(durableOpenTofuStore, [
+    defaultCapsuleInstallConfig(),
+    ...(options.operatorInstallConfigs ?? []),
+  ]);
   const formRegistryStore =
     options.formRegistryStore ??
     (options.sqlClient
@@ -1443,14 +1447,6 @@ export async function createTakosumiService(
       ? { sensitiveOutputResolver: options.sensitiveOutputResolver }
       : {}),
   });
-  // Seed the required shared InstallConfigs before the service is exposed. The
-  // generic Capsule default powers the standard Git URL install flow, so a seed
-  // failure is a boot/readiness failure rather than a deferred dashboard error.
-  await bootstrapDefaultInstallConfig(sharedOpenTofuStore);
-  await bootstrapOperatorInstallConfigs(
-    capsulesService,
-    options.operatorInstallConfigs,
-  );
   opentofuController = new OpenTofuController({
     store: sharedOpenTofuStore,
     activity: activityService,

@@ -59,6 +59,33 @@ describe("classifyPlatformRequestDataAccess", () => {
     }
   });
 
+  test("classifies exact identity reads without admitting unknown identity routes", () => {
+    for (const path of [
+      "/.well-known/openid-configuration",
+      "/oauth/jwks",
+      "/v1/auth/providers",
+    ]) {
+      expect(
+        classifyPlatformRequestDataAccess(request(path), routingEnv()),
+      ).toEqual({ kind: "data-free", surface: "identity-discovery" });
+    }
+    expect(
+      classifyPlatformRequestDataAccess(
+        request("/v1/account/session/me"),
+        routingEnv(),
+      ),
+    ).toEqual({ kind: "stateful", targets: ["accounts"] });
+    for (const path of [
+      "/oauth/introspect",
+      "/oauth/userinfo",
+      "/v1/account/session/me/extra",
+    ]) {
+      expect(
+        classifyPlatformRequestDataAccess(request(path), routingEnv()),
+      ).toEqual({ kind: "stateful-or-unknown" });
+    }
+  });
+
   test("admits exact public assets and Vite hashed assets only", () => {
     for (const path of [
       "/tako.png",
@@ -123,7 +150,6 @@ describe("classifyPlatformRequestDataAccess", () => {
       "/settings/not-a-route",
       "/oauth/authorize",
       "/oauth/anything/deep",
-      "/v1/auth/providers",
     ]) {
       expect(
         classifyPlatformRequestDataAccess(request(path), routingEnv()),
@@ -135,7 +161,6 @@ describe("classifyPlatformRequestDataAccess", () => {
     for (const path of [
       "/api/v1/workspaces",
       "/v1/resources",
-      "/v1/account/session/me",
       "/internal/v1/run-callback",
       "/compat/s3/v1/bucket",
       "/hooks/sources/source_1",

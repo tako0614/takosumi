@@ -3,7 +3,6 @@ import type {
   InstallConfig,
   OutputAllowlistEntry,
 } from "takosumi-contract/install-configs";
-import type { OpenTofuControlStore } from "../deploy-control/store.ts";
 import { UI_SURFACE_OPEN_PERMISSION } from "takosumi-contract";
 
 export const DEFAULT_CAPSULE_INSTALL_CONFIG_ID = "cfg-default-opentofu-capsule";
@@ -20,7 +19,7 @@ export function defaultCapsuleOutputAllowlist(): Readonly<
 }
 
 export function defaultCapsuleInstallConfig(
-  now: Date = new Date(),
+  now: Date = new Date("2026-01-01T00:00:00.000Z"),
 ): InstallConfig {
   const timestamp = now.toISOString();
   return {
@@ -36,11 +35,4 @@ export function defaultCapsuleInstallConfig(
     createdAt: timestamp,
     updatedAt: timestamp,
   };
-}
-
-export async function bootstrapDefaultInstallConfig(
-  store: OpenTofuControlStore,
-  now: Date = new Date(),
-): Promise<void> {
-  await store.putInstallConfig(defaultCapsuleInstallConfig(now));
 }

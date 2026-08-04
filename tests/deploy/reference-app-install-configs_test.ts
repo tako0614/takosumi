@@ -17,7 +17,7 @@ import {
 import type { ControlPlaneOperations } from "../../accounts/service/src/control-operations.ts";
 import { uniqueStoreInstallConfigForSource } from "../../dashboard/src/views/new/install-helpers.ts";
 import { parseUiSurfaceInterface } from "../../dashboard/src/lib/ui-surface-interfaces.ts";
-import { REFERENCE_APP_INSTALL_CONFIGS } from "../../deploy/reference-app-install-configs.ts";
+import { REFERENCE_APP_INSTALL_CONFIGS } from "../fixtures/reference-app-install-configs.ts";
 import { seedCapsuleModel } from "../helpers/deploy-control/model_fixture.ts";
 
 const EXPECTED_STORE_SOURCES = [

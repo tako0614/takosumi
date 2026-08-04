@@ -47,7 +47,6 @@ import {
   REFERENCE_CREDENTIAL_RECIPE_COMPOSITION,
 } from "@takosumi/providers";
 import { createConnectionOAuthHelpers } from "../../../core/api/connection_oauth_helpers.ts";
-import { REFERENCE_APP_INSTALL_CONFIGS } from "../../reference-app-install-configs.ts";
 import {
   createNodeTakoformPackageHostComposition,
   type NodeTakoformPackageTrustPolicy,
@@ -102,7 +101,7 @@ export interface ComposedAppInput {
   readonly managedVanityHostnameSlotsPerOwner?: CreateTakosumiServiceArg["managedVanityHostnameSlotsPerOwner"];
   /** Complete host-installed recipe catalog; defaults at this composition root. */
   readonly credentialRecipes?: CreateTakosumiServiceArg["credentialRecipes"];
-  /** Complete host-installed app config set; an empty array disables references. */
+  /** Complete host-installed config set; omitted means no app-specific entries. */
   readonly operatorInstallConfigs?: CreateTakosumiServiceArg["operatorInstallConfigs"];
   /** Complete host-installed recipe driver registry. */
   readonly credentialRecipeDrivers?: CreateTakosumiServiceArg["credentialRecipeDrivers"];
@@ -181,8 +180,7 @@ export async function buildComposedApp(
     credentialRecipes:
       input.credentialRecipes ??
       REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipes,
-    operatorInstallConfigs:
-      input.operatorInstallConfigs ?? REFERENCE_APP_INSTALL_CONFIGS,
+    operatorInstallConfigs: input.operatorInstallConfigs ?? [],
     credentialRecipeDrivers:
       input.credentialRecipeDrivers ??
       REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipeDrivers,

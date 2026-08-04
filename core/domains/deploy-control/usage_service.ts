@@ -62,10 +62,10 @@ export class UsageReportingService {
     readonly billing: { readonly settings: BillingSettings };
   }> {
     requireNonEmptyString(workspaceId, "workspaceId");
-    await this.#requireWorkspace(workspaceId);
+    const workspace = await this.#requireWorkspace(workspaceId);
     return {
       billing: {
-        settings: await this.#billing.billingSettingsForWorkspace(workspaceId),
+        settings: this.#billing.billingSettingsForWorkspaceRecord(workspace),
       },
     };
   }
