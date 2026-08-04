@@ -59,16 +59,21 @@ describe("classifyPlatformRequestDataAccess", () => {
     }
   });
 
-  test("classifies exact identity reads without admitting unknown identity routes", () => {
+  test("classifies Accounts-backed OIDC reads and the env-only provider route separately", () => {
     for (const path of [
       "/.well-known/openid-configuration",
       "/oauth/jwks",
-      "/v1/auth/providers",
     ]) {
       expect(
         classifyPlatformRequestDataAccess(request(path), routingEnv()),
-      ).toEqual({ kind: "data-free", surface: "identity-discovery" });
+      ).toEqual({ kind: "stateful", targets: ["accounts"] });
     }
+    expect(
+      classifyPlatformRequestDataAccess(
+        request("/v1/auth/providers"),
+        routingEnv(),
+      ),
+    ).toEqual({ kind: "data-free", surface: "identity-discovery" });
     expect(
       classifyPlatformRequestDataAccess(
         request("/v1/account/session/me"),
@@ -76,6 +81,9 @@ describe("classifyPlatformRequestDataAccess", () => {
       ),
     ).toEqual({ kind: "stateful", targets: ["accounts"] });
     for (const path of [
+      "/.well-known/openid-configuration/extra",
+      "/oauth/jwks/extra",
+      "/v1/auth/providers/extra",
       "/oauth/introspect",
       "/oauth/userinfo",
       "/v1/account/session/me/extra",

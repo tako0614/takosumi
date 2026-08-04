@@ -164,12 +164,12 @@ const DATA_FREE_PRODUCT_DISCOVERY_PATHS = new Set<string>([
 ]);
 
 const DATA_FREE_IDENTITY_DISCOVERY_PATHS = new Set<string>([
-  "/.well-known/openid-configuration",
-  "/oauth/jwks",
   "/v1/auth/providers",
 ]);
 
 const ACCOUNTS_ONLY_READ_PATHS = new Set<string>([
+  "/.well-known/openid-configuration",
+  "/oauth/jwks",
   "/v1/account/session/me",
 ]);
 
