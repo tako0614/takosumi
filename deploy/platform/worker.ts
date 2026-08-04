@@ -2499,8 +2499,16 @@ async function recordPlatformOidcMetric(
 }
 
 export function isOidcMetricPath(pathname: string): boolean {
-  return (
+  // Public metadata reads stay off the Control D1 path. Recording a
+  // best-effort metric must not widen their maintenance or cost boundary.
+  if (
     pathname === "/.well-known/openid-configuration" ||
+    pathname === "/oauth/jwks" ||
+    pathname === "/v1/auth/providers"
+  ) {
+    return false;
+  }
+  return (
     pathname === "/oauth" ||
     pathname.startsWith("/oauth/") ||
     pathname === "/v1/auth" ||
@@ -2509,9 +2517,6 @@ export function isOidcMetricPath(pathname: string): boolean {
 }
 
 export function oidcMetricRoute(pathname: string): string {
-  if (pathname === "/.well-known/openid-configuration") {
-    return "/.well-known/openid-configuration";
-  }
   if (pathname === "/oauth" || pathname.startsWith("/oauth/authorize")) {
     return "/oauth/authorize";
   }
