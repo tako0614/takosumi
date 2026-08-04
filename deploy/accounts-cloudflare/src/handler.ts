@@ -412,10 +412,19 @@ async function observeAccountsHandlerInitialization(
 }
 
 function usesIdentityOnlyAccountsHandler(pathname: string): boolean {
-  // Introspection revalidates workspace-bound ordinary OAuth tokens and
-  // Interface OAuth evidence against canonical Core. Routing it through the
-  // identity-only cache makes every workspace-bound token look inactive.
-  if (pathname === "/oauth/introspect") return false;
+  // These OAuth endpoints can carry a Capsule-owned dynamic client or token.
+  // Every mint/use operation must therefore revalidate the live Capsule,
+  // InstallConfig and Workspace grant against canonical Core. Routing any of
+  // them through the identity-only cache makes a valid dynamic grant look
+  // inactive because that handler intentionally has no Control operations.
+  if (
+    pathname === "/oauth/authorize" ||
+    pathname === "/oauth/token" ||
+    pathname === "/oauth/userinfo" ||
+    pathname === "/oauth/introspect"
+  ) {
+    return false;
+  }
   if (
     pathname === "/oauth" ||
     pathname.startsWith("/oauth/") ||
