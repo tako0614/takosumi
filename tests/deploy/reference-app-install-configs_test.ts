@@ -371,9 +371,9 @@ test("Takos archives the repository root and pins lifecycle execution policy", (
       workingDirectory: ".",
       env: {
         TAKOS_RELEASE_ARTIFACT_DESCRIPTOR_URL:
-          "https://github.com/tako0614/takos/releases/download/v0.11.7/takosumi-artifact.json",
+          "https://github.com/tako0614/takos/releases/download/v0.11.8/takosumi-artifact.json",
         TAKOS_RELEASE_ARTIFACT_DESCRIPTOR_SHA256:
-          "sha256:67ce12a57813e2c704bd19cde1b0da3714e947b75496d7dda1fffd46ca829b98",
+          "sha256:f6e9ee74d352803bf9a4af07be57b7c03e9ed61d6127794c382e224ff1775b2c",
       },
       timeoutSeconds: 3600,
       runnerCapability: "capsule.lifecycle.command.v1",
@@ -406,9 +406,9 @@ test("Takos archives the repository root and pins lifecycle execution policy", (
   });
   expect(takos.lifecycleActions?.[0]?.env).toEqual({
     TAKOS_RELEASE_ARTIFACT_DESCRIPTOR_URL:
-      "https://github.com/tako0614/takos/releases/download/v0.11.7/takosumi-artifact.json",
+      "https://github.com/tako0614/takos/releases/download/v0.11.8/takosumi-artifact.json",
     TAKOS_RELEASE_ARTIFACT_DESCRIPTOR_SHA256:
-      "sha256:67ce12a57813e2c704bd19cde1b0da3714e947b75496d7dda1fffd46ca829b98",
+      "sha256:f6e9ee74d352803bf9a4af07be57b7c03e9ed61d6127794c382e224ff1775b2c",
   });
 });
 
