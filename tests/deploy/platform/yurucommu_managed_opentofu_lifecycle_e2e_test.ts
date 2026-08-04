@@ -629,16 +629,27 @@ e2e(
         (call) =>
           call.action === "apply" && call.resource?.kind === "EdgeWorker",
       );
-      expect(edgeWorkerApply?.input.hostRuntimeMaterialization).toMatchObject({
+      const hostRuntime = edgeWorkerApply?.input.hostRuntimeMaterialization;
+      expect(hostRuntime).toMatchObject({
         contract: "takosumi.host-runtime-materialization/v1",
         installConfigId: INSTALL_CONFIG_ID,
         workspaceId: WORKSPACE_ID,
         capsuleId: CAPSULE_ID,
         installingPrincipalId: INSTALLER_ID,
-        requirements: baseConfig.hostRuntimeMaterialization?.requirements,
         backgroundActivations:
           baseConfig.hostRuntimeMaterialization?.backgroundActivations,
       });
+      expect(hostRuntime?.requirements).toEqual([
+        ...baseConfig.hostRuntimeMaterialization!.requirements,
+        ...["DB", "DELIVERY_DLQ", "DELIVERY_QUEUE", "KV", "MEDIA"].map(
+          (binding) => ({
+            kind: "resource_binding",
+            binding,
+            connectionAlias: binding,
+            requiredPermission: "takosumi.resource.bind",
+          }),
+        ),
+      ]);
 
       const interfaceStores = createD1InterfaceStores(db);
       const edgeWorkerResource = resources.find(

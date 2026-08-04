@@ -175,6 +175,56 @@ test("DB-owned requirements are attached to the adapter with exact Capsule prove
   });
 });
 
+test("Capsule-owned EdgeWorker merges exact Form connections into DB-owned runtime requirements", async () => {
+  const request = await createDbOwnedHostRuntimeMaterializationResolver(
+    capsules,
+  )({
+    owner: {
+      kind: "Capsule",
+      id: capsule.id,
+      workspaceId: capsule.workspaceId,
+      installingPrincipalId: capsule.installingPrincipalId,
+    },
+    resourceId: "tkrn:workspace_1:EdgeWorker:app",
+    validatedSpec: {
+      connections: {
+        MEDIA: {
+          resource: "ObjectBucket/media",
+          projection: "object.binding.v1",
+          permissions: ["read", "write"],
+        },
+        DB: {
+          resource: "RelationalDatabase/main",
+          projection: "sql.binding.v1",
+          permissions: ["connect", "read", "write"],
+        },
+      },
+    },
+  });
+
+  expect(request).toMatchObject({
+    installConfigId: config.id,
+    workspaceId: capsule.workspaceId,
+    capsuleId: capsule.id,
+    installingPrincipalId: capsule.installingPrincipalId,
+    requirements: [
+      config.hostRuntimeMaterialization!.requirements[0],
+      {
+        kind: "resource_binding",
+        binding: "DB",
+        connectionAlias: "DB",
+        requiredPermission: "takosumi.resource.bind",
+      },
+      {
+        kind: "resource_binding",
+        binding: "MEDIA",
+        connectionAlias: "MEDIA",
+        requiredPermission: "takosumi.resource.bind",
+      },
+    ],
+  });
+});
+
 test("owner mismatch fails before the selected adapter", async () => {
   let called = false;
   const adapter: ResourceAdapter = {

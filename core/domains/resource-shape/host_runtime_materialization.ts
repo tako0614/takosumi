@@ -167,19 +167,31 @@ export function createDbOwnedHostRuntimeMaterializationResolver(
         "host runtime materialization requires the Capsule's Workspace-scoped InstallConfig",
       );
     }
-    if (config.hostRuntimeMaterialization === undefined) return undefined;
-    const parsed = parseInstallConfigHostRuntimeMaterialization(
-      config.hostRuntimeMaterialization,
+    const configured = config.hostRuntimeMaterialization
+      ? parseInstallConfigHostRuntimeMaterialization(
+          config.hostRuntimeMaterialization,
+        )
+      : undefined;
+    const resourceBindings =
+      resourceId && validatedSpec
+        ? resourceBindingRequirements({ resourceId, validatedSpec })
+        : [];
+    const requirements = mergeRuntimeRequirements(
+      configured?.requirements ?? [],
+      resourceBindings,
     );
+    if (requirements.length === 0 && !configured?.backgroundActivations) {
+      return undefined;
+    }
     return {
       contract: HOST_RUNTIME_MATERIALIZATION_CONTRACT,
       installConfigId: config.id,
       workspaceId: capsule.workspaceId,
       capsuleId: capsule.id,
       installingPrincipalId: owner.installingPrincipalId,
-      requirements: parsed.requirements,
-      ...(parsed.backgroundActivations
-        ? { backgroundActivations: parsed.backgroundActivations }
+      requirements,
+      ...(configured?.backgroundActivations
+        ? { backgroundActivations: configured.backgroundActivations }
         : {}),
     };
   };
@@ -213,9 +225,28 @@ export function formHostRuntimeMaterializationRequest(input: {
   const identity = /^tkrn:([^:]+):EdgeWorker:(.+)$/u.exec(input.resourceId);
   if (!identity?.[1] || !identity[2]) return undefined;
   const workspaceId = identity[1];
+  const requirements = resourceBindingRequirements(input);
+  if (requirements.length === 0) return undefined;
+  return {
+    contract: HOST_RUNTIME_MATERIALIZATION_CONTRACT,
+    // A form-host Resource is its own installation authority: the applying
+    // portable identity is the Resource itself, not a Capsule installer.
+    installConfigId: input.resourceId,
+    workspaceId,
+    capsuleId: input.resourceId,
+    installingPrincipalId: input.resourceId,
+    requirements,
+  };
+}
+
+function resourceBindingRequirements(input: {
+  readonly resourceId: string;
+  readonly validatedSpec: Readonly<Record<string, unknown>>;
+}) {
+  if (!/^tkrn:[^:]+:EdgeWorker:.+$/u.test(input.resourceId)) return [];
   const connections = input.validatedSpec.connections;
-  if (!connections || typeof connections !== "object") return undefined;
-  const requirements = Object.entries(
+  if (!connections || typeof connections !== "object") return [];
+  return Object.entries(
     connections as Record<string, unknown>,
   )
     .filter(([, value]) => {
@@ -232,17 +263,37 @@ export function formHostRuntimeMaterializationRequest(input: {
       requiredPermission: FORM_HOST_RESOURCE_BINDING_PERMISSION,
     }))
     .sort((left, right) => left.binding.localeCompare(right.binding));
-  if (requirements.length === 0) return undefined;
-  return {
-    contract: HOST_RUNTIME_MATERIALIZATION_CONTRACT,
-    // A form-host Resource is its own installation authority: the applying
-    // portable identity is the Resource itself, not a Capsule installer.
-    installConfigId: input.resourceId,
-    workspaceId,
-    capsuleId: input.resourceId,
-    installingPrincipalId: input.resourceId,
-    requirements,
-  };
+}
+
+function mergeRuntimeRequirements(
+  configured: HostRuntimeMaterializationRequest["requirements"],
+  resourceBindings: HostRuntimeMaterializationRequest["requirements"],
+): HostRuntimeMaterializationRequest["requirements"] {
+  const merged = [...configured];
+  const byBinding = new Map(
+    configured.flatMap((requirement) =>
+      "binding" in requirement ? [[requirement.binding, requirement]] : [],
+    ),
+  );
+  for (const requirement of resourceBindings) {
+    if (requirement.kind !== "resource_binding") continue;
+    const existing = byBinding.get(requirement.binding);
+    if (existing === undefined) {
+      merged.push(requirement);
+      byBinding.set(requirement.binding, requirement);
+      continue;
+    }
+    if (
+      existing.kind !== "resource_binding" ||
+      existing.connectionAlias !== requirement.connectionAlias ||
+      existing.requiredPermission !== requirement.requiredPermission
+    ) {
+      throw new Error(
+        `host runtime Resource binding ${requirement.binding} conflicts with the DB-owned InstallConfig`,
+      );
+    }
+  }
+  return merged;
 }
 
 /**
