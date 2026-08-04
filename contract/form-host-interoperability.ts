@@ -154,6 +154,7 @@ export type TakoformHostErrorCode =
   | "interface_instance_ambiguous"
   | "invalid_argument"
   | "not_implemented"
+  | "policy_denied"
   | "resource_not_found"
   | "resource_busy"
   | "unauthorized";
