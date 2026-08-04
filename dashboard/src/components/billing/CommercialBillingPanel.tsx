@@ -682,7 +682,12 @@ export default function CommercialBillingPanel(props: Props) {
                           }
                         >
                           {(amount) => (
-                            <option value={amount}>
+                            <option
+                              value={amount}
+                              selected={
+                                autoRecharge()?.thresholdUsdMicros === amount
+                              }
+                            >
                               {formatUsdMicros(amount)}
                             </option>
                           )}
@@ -707,7 +712,12 @@ export default function CommercialBillingPanel(props: Props) {
                           }
                         >
                           {(amount) => (
-                            <option value={amount}>
+                            <option
+                              value={amount}
+                              selected={
+                                autoRecharge()?.rechargeUsdMicros === amount
+                              }
+                            >
                               {formatUsdMicros(amount)}
                             </option>
                           )}
@@ -736,7 +746,12 @@ export default function CommercialBillingPanel(props: Props) {
                           }
                         >
                           {(amount) => (
-                            <option value={amount}>
+                            <option
+                              value={amount}
+                              selected={
+                                autoRecharge()?.monthlyLimitUsdMicros === amount
+                              }
+                            >
                               {formatUsdMicros(amount)}
                             </option>
                           )}
