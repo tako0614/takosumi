@@ -428,14 +428,19 @@ test("introspection fail-closes a Workspace token after live membership is lost"
     },
     members: { listMembers: async () => [] },
   } as unknown as ControlPlaneOperations;
+  let resolverCalls = 0;
 
   const response = await handleIntrospect({
     issuer: "https://accounts.example.test",
     request: introspectionRequest("opaque-revoked-member-pat"),
     store,
     clients: confidentialClients,
-    operations,
+    resolveOperations: async () => {
+      resolverCalls += 1;
+      return operations;
+    },
   });
+  expect(resolverCalls).toBe(1);
   expect(await response.json()).toEqual({ active: false });
 });
 

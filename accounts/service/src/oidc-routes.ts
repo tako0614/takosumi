@@ -1292,12 +1292,17 @@ export async function handleIntrospect(input: {
       patRecord.tokenId,
       Date.now(),
     );
+    const operations = await operationsForLiveGrant({
+      operations: input.operations,
+      resolveOperations: input.resolveOperations,
+      required: patRecord.workspaceId !== undefined,
+    });
     const liveRole = await introspectionWorkspaceRole(
-      input.operations,
+      operations,
       patRecord.workspaceId,
       patRecord.subject,
     );
-    if (input.operations && patRecord.workspaceId && !liveRole) {
+    if (patRecord.workspaceId !== undefined && !liveRole) {
       return json({ active: false });
     }
     return json(
