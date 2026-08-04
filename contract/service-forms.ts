@@ -27,6 +27,119 @@ export interface InstalledFormReference {
   readonly packageDigest: string;
 }
 
+/**
+ * Exact wire format emitted by the OSS host-proof tool and consumed by an
+ * operator bootstrap. This is a transport contract, not a Takoform lifecycle
+ * or approval state.
+ */
+export const TAKOFORM_INSTALL_ENVELOPE_SET_FORMAT =
+  "takosumi.takoform-install-envelope-set@v3" as const;
+
+export const TAKOFORM_INSTALL_ENVELOPE_SET_V3_KEYS = [
+  "format",
+  "repository",
+  "checkout",
+  "historicalCheckpoint",
+  "historicalPublication",
+  "verifierId",
+  "pins",
+  "publisher",
+  "trustedRoot",
+  "packages",
+] as const;
+
+export const TAKOFORM_INSTALL_ENVELOPE_CHECKPOINT_V3_KEYS = [
+  "root",
+  "version",
+  "tag",
+  "commit",
+  "tree",
+] as const;
+
+export const TAKOFORM_INSTALL_ENVELOPE_PIN_SET_V3_KEYS = [
+  "checkpointVersion",
+  "publishedTrust",
+  "packageIndexPolicy",
+  "trustedRoot",
+] as const;
+
+export interface TakoformInstallEnvelopePinnedArtifactV3 {
+  readonly path: string;
+  readonly digest: string;
+}
+
+export interface TakoformInstallEnvelopePublisherV3 {
+  readonly oidcIssuer: string;
+  readonly sourceRepository: string;
+  readonly workflow: string;
+  readonly refPattern: string;
+}
+
+export interface TakoformInstallEnvelopePackageV3 {
+  readonly kind: string;
+  readonly releaseCommit: string;
+  readonly releaseTag: string;
+  readonly definitionVersion: string;
+  readonly packageDigest: string;
+  readonly formRef: {
+    readonly apiVersion: string;
+    readonly kind: string;
+    readonly definitionVersion: string;
+    readonly schemaDigest: string;
+  };
+  readonly hostFormRef: FormRef;
+  readonly envelopeDigest: string;
+  readonly envelopeSize: number;
+  readonly envelopeFile: string;
+  readonly r2Key: string;
+  readonly installRequest: {
+    readonly file: string;
+    readonly body: {
+      readonly artifactRef: string;
+      readonly expectedPackageDigest: string;
+    };
+  };
+  readonly reverifyRequest: {
+    readonly file: string;
+    readonly body: FormRef & { readonly packageDigest: string };
+  };
+}
+
+export interface TakoformInstallEnvelopeSetManifestV3 {
+  readonly format: typeof TAKOFORM_INSTALL_ENVELOPE_SET_FORMAT;
+  readonly repository: string;
+  readonly checkout: {
+    readonly commit: string;
+    readonly version: string;
+  };
+  /** Immutable Legacy checkpoint used only to retain published package bytes. */
+  readonly historicalCheckpoint: {
+    readonly root: "admission/v4";
+    readonly version: string;
+    readonly tag: string;
+    readonly commit: string;
+    readonly tree: string;
+  };
+  readonly historicalPublication: {
+    readonly repository: string;
+    readonly publicationSet: TakoformInstallEnvelopePinnedArtifactV3;
+  };
+  readonly verifierId: string;
+  readonly pins: {
+    readonly checkpointVersion: TakoformInstallEnvelopePinnedArtifactV3;
+    readonly publishedTrust: TakoformInstallEnvelopePinnedArtifactV3;
+    readonly packageIndexPolicy: TakoformInstallEnvelopePinnedArtifactV3;
+    readonly trustedRoot: TakoformInstallEnvelopePinnedArtifactV3;
+  };
+  readonly publisher: TakoformInstallEnvelopePublisherV3;
+  readonly trustedRoot: {
+    readonly file: string;
+    readonly digest: string;
+    readonly r2Key: string;
+  };
+  readonly packages: readonly TakoformInstallEnvelopePackageV3[];
+}
+
 export function isInstalledFormReference(
   value: unknown,
 ): value is InstalledFormReference {

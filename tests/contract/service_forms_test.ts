@@ -8,6 +8,10 @@ import {
   isPortableInterfaceInputSource,
   isSha256Digest,
   PORTABLE_INTERFACE_INPUT_SOURCES,
+  TAKOFORM_INSTALL_ENVELOPE_CHECKPOINT_V3_KEYS,
+  TAKOFORM_INSTALL_ENVELOPE_PIN_SET_V3_KEYS,
+  TAKOFORM_INSTALL_ENVELOPE_SET_FORMAT,
+  TAKOFORM_INSTALL_ENVELOPE_SET_V3_KEYS,
   type FormRef,
 } from "../../contract/service-forms.ts";
 
@@ -66,4 +70,27 @@ test("portable Interface input sources include the host-owned resource URI marke
   ]);
   expect(isPortableInterfaceInputSource("resource_uri")).toBe(true);
   expect(isPortableInterfaceInputSource("host.resource_uri")).toBe(false);
+});
+
+test("the install-envelope v3 wire contract names Legacy provenance explicitly", () => {
+  expect(TAKOFORM_INSTALL_ENVELOPE_SET_FORMAT).toBe(
+    "takosumi.takoform-install-envelope-set@v3",
+  );
+  expect(TAKOFORM_INSTALL_ENVELOPE_SET_V3_KEYS).toContain(
+    "historicalCheckpoint",
+  );
+  expect(TAKOFORM_INSTALL_ENVELOPE_SET_V3_KEYS).not.toContain("admission");
+  expect(TAKOFORM_INSTALL_ENVELOPE_CHECKPOINT_V3_KEYS).toEqual([
+    "root",
+    "version",
+    "tag",
+    "commit",
+    "tree",
+  ]);
+  expect(TAKOFORM_INSTALL_ENVELOPE_PIN_SET_V3_KEYS).toEqual([
+    "checkpointVersion",
+    "publishedTrust",
+    "packageIndexPolicy",
+    "trustedRoot",
+  ]);
 });

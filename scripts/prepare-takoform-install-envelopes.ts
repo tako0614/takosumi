@@ -13,6 +13,11 @@ import {
   type CanonicalJsonValue,
 } from "../core/adapters/takoform/canonical_json.ts";
 import {
+  TAKOFORM_INSTALL_ENVELOPE_SET_FORMAT,
+  type TakoformInstallEnvelopePackageV3,
+  type TakoformInstallEnvelopeSetManifestV3,
+} from "../contract/service-forms.ts";
+import {
   loadReviewedPublishedPackageInstallSet,
   projectTakoformFormRef,
   REVIEWED_TAKOFORM_PACKAGE_KINDS,
@@ -123,7 +128,7 @@ function buildOutputFiles(
   }
 
   const files = new Map<string, Uint8Array>();
-  const manifestPackages: CanonicalJsonValue[] = [];
+  const manifestPackages: TakoformInstallEnvelopePackageV3[] = [];
   const kinds = new Set<string>();
   for (const entry of [...reviewed.packages].sort((left, right) =>
     left.kind.localeCompare(right.kind),
@@ -202,12 +207,12 @@ function buildOutputFiles(
         file: reverifyRequestFile,
         body: reverifyRequest,
       },
-    } as CanonicalJsonValue);
+    });
   }
 
   putUnique(files, TRUSTED_ROOT_FILE, reviewed.trustedRoot.bytes);
-  const manifest = canonicalJsonBytes({
-    format: "takosumi.takoform-install-envelope-set@v3",
+  const manifestDocument = {
+    format: TAKOFORM_INSTALL_ENVELOPE_SET_FORMAT,
     repository: reviewed.repository,
     checkout: {
       commit: reviewed.checkoutCommit,
@@ -232,7 +237,10 @@ function buildOutputFiles(
       r2Key: TRUSTED_ROOT_R2_KEY,
     },
     packages: manifestPackages,
-  } as CanonicalJsonValue);
+  } satisfies TakoformInstallEnvelopeSetManifestV3;
+  const manifest = canonicalJsonBytes(
+    manifestDocument as unknown as CanonicalJsonValue,
+  );
   putUnique(files, MANIFEST_FILE, manifest);
   return files;
 }

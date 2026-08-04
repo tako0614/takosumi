@@ -104,7 +104,7 @@ test("writes one deterministic canonical reviewed set with private modes", async
   );
   expect(manifest.historicalCheckpoint).toMatchObject({
     root: "admission/v4",
-    version: "1.0.6",
+    version: "1.0.7",
   });
   expect(manifest.historicalPublication.repository).toBe(
     "tako0614/terraform-provider-takoform",
