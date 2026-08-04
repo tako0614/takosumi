@@ -13,24 +13,10 @@ const source = readFileSync(
 );
 
 describe("RunView", () => {
-  test("the install layer shows ONE indicator: the progress bar", () => {
-    // A determinate bar already says "this is moving". The spinning ring that
-    // used to sit beside it read as a second, competing wait — and it was the
-    // only rotating element left in the add → install journey, which is now a
-    // bar-plus-label language end to end. The bar itself lives in the shared
-    // card so /new and this screen cannot drift apart again.
-    const card = readFileSync(
-      resolve(
-        import.meta.dir,
-        "../../../../../dashboard/src/components/install/InstallProgress.tsx",
-      ),
-      "utf8",
-    );
-    expect(source).toContain("InstallProgressCard");
-    expect(card).toContain('class="av-install-bar"');
-    expect(card).toContain('class="av-install-phase"');
-    expect(card).not.toContain("av-install-spin");
-    expect(source).not.toContain("av-install-spin");
+  test("the Run ledger no longer becomes a second install screen", () => {
+    expect(source).not.toContain("InstallProgressCard");
+    expect(source).not.toContain("installScreen");
+    expect(source).not.toContain("auto=install");
     const css = readFileSync(
       resolve(
         import.meta.dir,
@@ -39,11 +25,8 @@ describe("RunView", () => {
       "utf8",
     );
     expect(css).not.toContain(".av-install-spin");
-    // Dead step-list styling from the retired wizard stepper stays retired.
     expect(css).not.toContain(".av-install-steps");
     expect(css).not.toContain(".av-install-mk");
-    // The full run console keeps its spinner: that summary line is genuinely
-    // indeterminate and has no bar of its own.
     expect(source).toContain('class="av-run-spinner"');
   });
 
@@ -95,7 +78,7 @@ describe("RunView", () => {
     expect(source).toMatch(
       /changeCounts\(\)\.delete > 0 \|\|\s*\n?\s*!changeCountsKnown\(\)\)/,
     );
-    // ...and the ?auto=install auto-continue must WAIT for the logs refetch
+    // ...and the ?auto=update auto-continue must WAIT for the logs refetch
     // to settle before evaluating the gate on a summary-less run.
     expect(source).toContain(
       "if (!runHasChangeSummary(r) && logs.loading) return;",

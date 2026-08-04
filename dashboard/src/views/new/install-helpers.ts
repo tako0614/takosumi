@@ -1,7 +1,7 @@
 /**
  * /new install flow — pure helpers (no JSX, no component state).
  *
- * Split out of NewAppView.tsx so the view file holds only the flow state
+ * Shared with InstallView.tsx so the view file holds only the flow state
  * machine and rendering. Everything here is presentation-independent: store
  * listing → StoreEntry/metadata mapping, compatibility result display,
  * git/slug/url normalization, install-variable row plumbing, and the

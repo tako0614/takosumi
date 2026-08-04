@@ -6,6 +6,84 @@ import type { ja } from "./ja.ts";
  * here is a type error, so the locales cannot drift.
  */
 export const en: Record<keyof typeof ja, string> = {
+  "installStore.title": "Add a service",
+  "installStore.subtitle":
+    "Find it, then add it. Any required setup appears here after you add.",
+  "installStore.browseTitle": "Find a service",
+  "installStore.browseHint":
+    "Choose from a store or enter a public Git repository.",
+  "installStore.manual": "Add from a Git repository",
+  "installStore.back": "Choose again",
+  "installStore.entryLoadTitle": "Review the available choices",
+  "installStore.entryLoadHint":
+    "Load the chooser document from the specified Git repository. This action creates the read-only Source and sync Run used to fetch it.",
+  "installStore.entryLoad": "Load choices",
+  "installStore.entryHint": "Choose one service to add.",
+  "installStore.select": "Choose this",
+  "installStore.configureHint":
+    "Confirm the name and add. Repository analysis happens next.",
+  "installStore.name": "Service name",
+  "installStore.sourceDetails": "Source details",
+  "installStore.sourceUrl": "Git URL",
+  "installStore.sourceRef": "Ref (optional)",
+  "installStore.sourcePath": "Module path",
+  "installStore.sourceAuth": "Git connection",
+  "installStore.publicSource": "Public repository",
+  "installStore.add": "Add",
+  "installStore.preparing": "Preparing your service",
+  "installStore.preparingHint":
+    "Checking the repository and gathering only the connections and changes it needs.",
+  "installStore.compatibilityFailed":
+    "This service cannot be added to the current environment.",
+  "installStore.providerTitle": "A connection is needed",
+  "installStore.providerHint":
+    "Choose only the connections required by this service.",
+  "installStore.chooseConnection": "Choose a connection",
+  "installStore.connect": "Add a new connection",
+  "installStore.continue": "Continue",
+  "installStore.setupTitle": "Set up the service",
+  "installStore.setupHint": "Enter only the values this service asks for.",
+  "installStore.setupInvalid": "The service setup definition is invalid.",
+  "installStore.setupRequired": "Enter {label}.",
+  "installStore.secretUnavailable": "Configure this secret as a connection.",
+  "installStore.secretHint":
+    "Secrets are never sent as variables from this form.",
+  "installStore.reviewing": "Reviewing changes",
+  "installStore.reviewingHint": "Checking the Plan before anything is applied.",
+  "installStore.reviewTitle": "Review before install",
+  "installStore.reviewHint": "These are the changes Takosumi will make.",
+  "installStore.changes": "Changes",
+  "installStore.createCount": "Create",
+  "installStore.updateCount": "Change",
+  "installStore.deleteCount": "Delete",
+  "installStore.approve": "Approve Plan",
+  "installStore.confirmTitle": "These changes need confirmation",
+  "installStore.confirmHint":
+    "The Plan includes deletion or another explicitly reviewed change.",
+  "installStore.confirm": "I reviewed these changes",
+  "installStore.install": "Install",
+  "installStore.runDetails": "Technical details",
+  "installStore.installing": "Installing",
+  "installStore.installingHint":
+    "Keep this page open while installation finishes.",
+  "installStore.planBlocked": "This Plan cannot be applied",
+  "installStore.planBlockedHint": "Review the policy or Plan details.",
+  "installStore.readinessFailed":
+    "The service readiness state could not be checked. Open the technical details for more information.",
+  "installStore.activationFailed":
+    "Service activation failed. Open the technical details for more information.",
+  "installStore.runFailed": "Service setup did not finish",
+  "installStore.runFailedHint": "Open the technical details and try again.",
+  "installStore.doneTitle": "Service added",
+  "installStore.doneHint": "Open the service and start using it.",
+  "installStore.open": "Open service",
+  "installStore.chooseAnother": "Add another service",
+  "installStore.invalidSource": "Enter a valid HTTPS Git URL.",
+  "installStore.invalidName":
+    "Use lowercase letters, numbers, and hyphens for the service name.",
+  "installStore.planMissing": "The Plan response could not be identified.",
+  "installStore.listingUnavailable":
+    "This service is no longer available from the Store.",
   // --- common -------------------------------------------------------------
   "common.loading": "Loading…",
   "common.retry": "Retry",
@@ -238,31 +316,6 @@ export const en: Record<keyof typeof ja, string> = {
   "apps.sectionYours": "Your apps",
   "apps.manage": "Manage",
   "apps.manageAria": "Manage {name}",
-  "install.installingGeneric": "Adding…",
-  "install.wait": "This only takes a moment",
-  "install.progressAria": "Install progress",
-  "install.step.source": "Fetch code",
-  "install.step.create": "Create service",
-  "install.step.check": "Review changes",
-  "install.step.deploy": "Deploy",
-  "install.step.done": "Finish",
-  "install.doneTitle": "Added {name}",
-  "install.doneTitleGeneric": "Added",
-  "install.doneSub": "Deployed and ready to use.",
-  "install.activationPending": "Finishing app activation…",
-  "install.open": "Open app",
-  "install.toApps": "Go to apps",
-  "install.gateTitle": "Needs your review",
-  "install.gateSub": "This install needs a quick review before it continues.",
-  "install.gateCta": "Review",
-  "install.errorTitle": "Couldn't add it",
-  "install.errorSub": "Check the details and try again.",
-  "install.errorCta": "See details",
-  "update.installingGeneric": "Updating…",
-  "update.doneTitle": "Updated {name}",
-  "update.doneTitleGeneric": "Updated",
-  "update.doneSub": "You're on the latest version.",
-  "update.errorTitle": "The update failed",
   "apps.needsAttention": "Needs attention",
   "apps.openApp": "Open app",
   "apps.reviewChanges": "Review changes",
@@ -673,171 +726,10 @@ export const en: Record<keyof typeof ja, string> = {
     "Couldn't load service names — showing updates without them.",
 
   // --- add flow (/new) -------------------------------------------------------
-  "new.title": "Add service",
-  "new.discard.title": "Discard your entries?",
-  "new.discard.body": "The setup you entered for this service won't be saved.",
-  "new.discard.confirm": "Discard",
-  "new.discovery.aria": "Find a service to add",
-  "new.discovery.title": "Choose a service to add",
-  "new.discovery.subtitle": "Pick a service to add.",
-  "new.discovery.linkPlaceholder": "Install link or Git URL",
-  "new.discovery.linkCta": "Add from link",
-  "new.discovery.manualLead": "Can't find what you need?",
-  "new.discovery.manualToggle": "Add from a Git URL / install link",
-  "new.advancedImport.title": "Add from link",
-  "new.advancedImport.subtitle": "Paste an install link to add it.",
-  "new.selection.subtitle": "Check it first. Deploy happens after review.",
-  "new.flow.manual": "Manual add",
-  "new.flow.back": "Choose a different service",
-  "new.pick.checking": "Checking the selected service…",
-  "new.identity.label": "Public URL",
-  "new.identity.edit": "Change",
-  "new.identity.done": "Close",
-  "new.auth.title": "Authentication",
-  "new.auth.subtitle": "Choose how the first administrator signs in.",
-  "new.auth.mode": "Sign-in method",
-  "new.auth.oidc": "Sign in with Takosumi",
-  "new.auth.oidcHint":
-    "Takosumi registers the app and links the account adding this service.",
-  "new.auth.password": "Password",
-  "new.auth.initialPassword": "Initial password",
-  "new.auth.passwordHint":
-    "Set the first administrator password. It is handled as private setup material.",
-  "new.auth.unavailableTitle":
-    "This sign-in method is unavailable on this host",
-  "new.auth.unavailableBody":
-    "This host does not provide a safe password materialization path. The app publisher or operator needs to add support.",
-  "new.features.title": "Optional features",
-  "new.features.subtitle":
-    "Turn on only the integrations you want to configure now.",
-  "new.installUx.invalidTitle": "This app's setup form is unavailable",
-  "new.installUx.invalidBody":
-    "The setup declaration does not match this app version. The app publisher needs to update it before this Store install can continue.",
-  "new.installUx.loadingTitle": "Checking setup for this app version",
-  "new.installUx.loadingBody":
-    "Takosumi is preparing a validated setup form from the same commit as the app.",
-  "new.installUx.repositoryOwned": "Setup provided by app",
-  "new.storeInput.title": "Initial setup",
-  "new.storeInput.subtitle": "Settings this app asks for.",
-  "new.storeInput.errorRequired": "Enter {label}.",
-  "new.storeInput.errorUnsafeValue":
-    "{label} contains unsupported characters or is too long.",
-  "new.storeInput.errorSubdomain":
-    "Use a single {baseDomain} label for {label}. Lowercase letters, numbers, and hyphens are supported.",
-  "new.storeInput.errorCustomDomain":
-    "Use an https:// URL for {label}. {baseDomain} names must use one label; custom domains require ownership verification before deploy.",
-  "new.deeplink.aria": "Service from link",
-  "new.deeplink.kicker": "Added from link",
-  "new.deeplink.title": "Add {capsule}",
-  "new.deeplink.body":
-    "We checked the link details. Open the source if you need to change anything.",
-  "new.deeplink.source": "Source",
-  "new.deeplink.version": "Version",
-  "new.deeplink.folder": "Folder",
-  "new.git.url": "Install link",
-  "new.git.advanced": "Source details",
-  "new.git.ref": "Version",
   "new.git.defaultRef": "Git default branch",
-  "new.git.path": "Folder",
-  "new.sourceAccess.title": "Private link access",
-  "new.sourceAccess.body":
-    "Public links need no setup. For a private link, select or save access information.",
-  "new.sourceAccess.mode": "Access method",
-  "new.sourceAccess.public": "Public link",
-  "new.sourceAccess.existing": "Use saved access",
-  "new.sourceAccess.token": "Save access token",
-  "new.sourceAccess.connection": "Saved access",
-  "new.sourceAccess.selectConnection": "Select saved access",
-  "new.sourceAccess.noConnections":
-    "No verified source access is available in this workspace yet.",
-  "new.sourceAccess.username": "Username",
-  "new.sourceAccess.accessToken": "Access token",
-  "new.sourceAccess.tokenPlaceholder": "Read-only token",
-  "new.sourceAccess.saveToken": "Save access",
-  "new.sourceAccess.tokenBody":
-    "It is stored securely and cannot be read back, and is used only to check this workspace's source.",
-  "new.sourceAccess.errorTokenRequired": "Enter an access token.",
-  "new.sourceAccess.errorSaveToken":
-    "Save the private link token before checking.",
-  "new.sourceAccess.errorSelectConnection": "Select verified source access.",
-  "new.sourceAccess.errorConnectionUnavailable":
-    "The selected source access is no longer available.",
-  "new.sourceAccess.httpsConnection": "HTTPS source access",
-  "new.sourceAccess.sshConnection": "SSH source access",
-  "new.sourceAccess.defaultDisplayName": "{name} source access",
-  "new.name": "Service name",
-  "new.vars.projectName": "Service ID",
-  "new.hostPreview": "Public URL: {host}",
-  "new.hostname.mode.label": "URL type",
-  "new.hostname.mode.hint":
-    "Standard URLs are available per Workspace. A short URL consumes one account URL slot.",
-  "new.hostname.mode.scoped": "Standard URL",
-  "new.hostname.mode.vanity": "Use a short URL slot",
-  "new.advanced.title": "Advanced settings",
-  "new.advanced.customUrlHint":
-    "A full URL used instead of the default public URL.",
-  "new.advanced.routePatternHint": "Advanced: set the route pattern directly.",
-  "new.advanced.serviceIdHint": "Internal name. Also the default for the URL.",
-  "new.env.title": "Environment variables",
-  "new.env.body":
-    "Use this only for runtime environment variables the service can store in plain text. Pass private values through connected accounts.",
-  "new.env.name": "Variable name",
-  "new.env.value": "Value",
-  "new.env.valuePlaceholder": "value",
-  "new.env.add": "Add environment variable",
-  "new.env.remove": "Remove",
-  "new.env.errorNameRequired":
-    "Enter an environment variable name or remove the empty row.",
-  "new.env.errorUnsafeName":
-    "“{name}” must use uppercase letters, digits, and underscores.",
-  "new.env.errorUnsafeValue":
-    "The value for “{name}” is too long or contains an unsupported character.",
-  "new.env.errorDuplicate":
-    "Environment variable “{name}” is listed more than once.",
-  "new.vars.inputsTitle": "Other settings",
-  "new.vars.inputsBody":
-    "Add extra visible inputs only when the service asks for something not shown above.",
-  "new.vars.inputName": "Setting name",
-  "new.vars.inputValue": "Value",
-  "new.vars.namePlaceholder": "setting",
-  "new.vars.valuePlaceholder": "value",
-  "new.vars.addInput": "Add input",
-  "new.vars.removeInput": "Remove",
-  "new.vars.errorNameRequired":
-    "Enter a variable name or remove the empty row.",
-  "new.vars.errorUnsafeName":
-    "“{name}” cannot be passed as a link/input value. Use connected accounts for private values.",
-  "new.vars.errorUnsafeValue":
-    "The value for “{name}” is too long or contains an unsupported character.",
-  "new.vars.errorProjectNameReserved":
-    "Use the Service ID field for this value.",
-  "new.vars.errorStoreReserved": "Use the Service setup field for “{name}”.",
-  "new.vars.errorDuplicate": "“{name}” is listed more than once.",
-  "new.deeplink.invalidTitle": "This install link cannot be used",
-  "new.deeplink.invalidBody":
-    "The link is not a safe HTTPS link, or it includes information this browser cannot open. Choose a service or paste another link.",
-  "new.appHandoff.title": "Add a service for {app}",
-  "new.appHandoff.body":
-    "When the add completes here, the connection details return to the app automatically.",
-  "new.appHandoff.kicker": "Requested by an app",
-  "new.appHandoff.app": "App",
-  "new.appHandoff.return": "Return target",
-  "new.installCta": "Add",
-  "new.compat.recheck": "Check again",
-  "new.progress.slow":
-    "This is taking a little longer. You can continue when it finishes.",
-  "new.progress.details": "Detailed progress",
-  "new.progress.status": "Status: {status}",
-  "new.compat.title": "Check result",
-  "new.compat.details": "Detailed check result",
-  "new.compat.readyBrief": "Ready to continue.",
   "new.compat.ready": "Can be added as is",
   "new.compat.patch": "Needs manual changes",
   "new.compat.unsupported": "Cannot be added right now",
-  "new.compat.diagnostic.technicalNote":
-    "Detailed check result. Open it only when action is needed.",
-  "new.compat.patchHelp":
-    "Review the items above. Some issues require changes to the service itself, while others can be resolved by setting up the required connected account.",
   "new.compat.summary.providerCredentials":
     "Remove {provider} private values from the source before adding this.",
   "new.compat.summary.installUxInvalid":
@@ -860,48 +752,6 @@ export const en: Record<keyof typeof ja, string> = {
     "Pinned connection target information is included. After private values are removed, the pinned targets will be reviewed during add.",
   "new.compat.issue.reviewRequired.message":
     "An item needs review before this can be added.",
-  "new.existing.title": "This service is already added",
-  "new.existing.body":
-    "“{name}” already exists in the {environment} environment. Open the existing service instead of creating another one.",
-  "new.existing.open": "Open existing service",
-  "new.providers.title": "Provider access",
-  "new.providers.body":
-    "This only supplies credentials. The deployment target and changes are resolved and reviewed in the plan. If a Takosumi price applies, it appears in preview.",
-  "new.providers.alias": "Provider alias: {alias}",
-  "new.providers.connection": "Connected account",
-  "new.providers.selectConnection": "Select connected account",
-  "new.providers.errorConnection":
-    "Select a ready connected account for {provider}.",
-  "new.providers.missingTitle": "Connected account is required",
-  "new.providers.missingBody": "Set up a connected account to continue.",
-  "new.providers.setupMissing": "Set up required connected account",
-  "new.providers.returnNote":
-    "After you save the connection, you return here to finish adding.",
-  "new.step.register": "Prepare service",
-  "new.step.sync": "Fetch content",
-  "new.step.create": "Create service",
-  "new.step.plan": "Review changes",
-  "new.step.state.done": "Done",
-  "new.step.state.failed": "Failed",
-  "new.step.state.running": "In progress",
-  "new.step.state.pending": "Not started",
-  "new.error.workspaceRequired": "Select a workspace.",
-  "new.error.urlRequired": "Enter an install link.",
-  "new.error.nameRequired": "Enter a name.",
-  "new.error.nameInvalid":
-    "Use lowercase letters, numbers, and hyphens only for the service name.",
-  "new.error.configMissing": "Add configuration is not available yet.",
-  "new.error.configLoading": "Loading add configuration.",
-  "new.error.installUxInvalid":
-    "This app's setup form is invalid. Choose another version or wait for the publisher to fix it.",
-  "new.error.installUxPreviewMissing":
-    "The validated setup form is unavailable. Check it again before adding this app.",
-  "new.error.secretSetupUnavailable":
-    "This host cannot safely materialize the private setup required by this app, so it cannot be added here yet.",
-  "new.error.configLoadFailed":
-    "The add settings could not be loaded. Check your connection and retry.",
-  "new.error.syncPending":
-    "The source has not finished syncing. Wait a moment, then retry.",
   "new.error.sourceRefNotFound":
     "The selected version “{ref}” was not found. Check that the link offers this version.",
   "new.error.sourceFetchFailed":
@@ -911,29 +761,16 @@ export const en: Record<keyof typeof ja, string> = {
     "The service could not be added. Check the details and try again.",
   "new.error.genericWithDetails":
     "The service could not be added. Details: {message}",
-  "new.error.requestId":
-    "If this keeps happening, contact support with this ID: {id}",
   "new.error.invalidHostname":
     "This public name is too long or has characters that cannot be used. Try a shorter name.",
   "new.error.connectionRequired":
     "Publishing this service needs a connected cloud account. Set up the connection, then try again.",
   "new.error.appHostnameUnavailable":
     "That public URL name is already in use. Choose another name and try again.",
-  "new.hostnameConflict.title": "Choose another public URL name",
   "new.error.managedHostnameSlotLimit":
     "No short URL slots are available. Use a standard URL or release an existing short URL.",
-  "new.hostnameConflict.body":
-    "Use a different name for the public URL, then add the service again.",
-  "new.hostnameConflict.suggest": "Use suggested name",
   "new.error.alreadyExistsGeneric":
     "This service is already added. Open the existing service instead of creating another one.",
-  "new.error.nameReserved":
-    "That service name is reserved but was not found in the current list. Refresh services, delete the unfinished service if it appears, or choose another name.",
-  "new.error.notRunnable":
-    "This service cannot be added yet. Resolve the listed items, then check again.",
-  "new.error.checkIncomplete": "The check could not finish. Try again.",
-
-  // --- workspace settings ---------------------------------------------------------
   "workspaceSettings.title": "Settings",
   "workspaceSettings.tabsLabel": "Settings sections",
   "workspaceSettings.subtitle":

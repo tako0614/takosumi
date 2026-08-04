@@ -14,7 +14,7 @@ const storeBrowserCss = readFileSync(
 );
 // The store grid has exactly one host: the merged ストア/追加 page.
 const storeHostSource = readFileSync(
-  resolve(here, "../../../../../dashboard/src/views/new/NewAppView.tsx"),
+  resolve(here, "../../../../../dashboard/src/views/new/InstallView.tsx"),
   "utf8",
 );
 
@@ -181,10 +181,11 @@ describe("StoreBrowser install UI", () => {
     );
   });
 
-  test("keeps install readiness out of the discovery feed", () => {
-    expect(storeHostSource).toContain("repository-owned metadata");
-    expect(storeHostSource).toContain("nothing about build or deploy duration");
-    expect(storeHostSource).not.toContain("store-owned");
+  test("keeps provider readiness out of discovery and resolves it after Add", () => {
+    expect(storeHostSource).toContain('setPhase("preparing")');
+    expect(storeHostSource.indexOf('setPhase("preparing")')).toBeLessThan(
+      storeHostSource.indexOf("await checkCapsuleCompatibility({"),
+    );
     expect(storeHostSource).not.toContain("deriveInstallReadiness");
     expect(storeHostSource).not.toContain("listingBadge");
     expect(storeBrowserSource).not.toContain("listingBadge");

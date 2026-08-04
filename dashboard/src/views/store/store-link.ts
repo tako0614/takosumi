@@ -1,7 +1,7 @@
 import type { TcsListing } from "../../lib/tcs-client.ts";
 
 /**
- * Build the `/new?…` query that pre-fills NewAppView for a listing — field-for-
+ * Build the `/new?…` query that pre-fills InstallView for a listing — field-for-
  * field what `parseInstallPrefill` reads. Reuses the dashboard's own install-link
  * var guards so the produced query is guaranteed compatible. Store listings
  * only announce repository existence; ref/tag/commit and module-path selection

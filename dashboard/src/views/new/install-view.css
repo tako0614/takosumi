@@ -1,0 +1,52 @@
+/* Hallmark · pre-emit critique: P5 H5 E4 S5 R5 V4 */
+/* Hallmark · genre: modern-minimal · macrostructure: Catalogue · design-system: design.md · anchor: existing tg accent · contrast: pass (40–41) · nav: existing shell · footer: none · slop: pass (42–45) · honest: pass (46) · chrome: pass (47) · tokens: pass (48) · responsive: pass (49) · icons: pass (30) · mobile: pass (34, 49, 50–57) */
+
+.iv-page { width: min(100%, 72rem); margin-inline: auto; padding: var(--tg-s-6) var(--tg-s-4) var(--tg-s-10); overflow-x: clip; }
+.iv-hero { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--tg-s-4); margin-bottom: var(--tg-s-7); }
+.iv-hero h1, .iv-section-head h2, .iv-workbench h2, .iv-entry-card h3 { min-width: 0; margin: 0; overflow-wrap: anywhere; letter-spacing: -0.025em; }
+.iv-hero h1 { font-size: clamp(2rem, 7vw, 3.75rem); line-height: 0.96; }
+.iv-hero p, .iv-section-head p, .iv-app-summary p, .iv-entry-card p, .iv-status span, .iv-review-head p, .iv-review-warning p, .iv-error p, .iv-centered p { margin: var(--tg-s-2) 0 0; color: var(--tg-fg-muted); }
+.iv-kicker { display: block; margin-bottom: var(--tg-s-3); color: var(--tg-fg-muted); font-family: var(--tg-font-mono); font-size: var(--tg-fs-xs); letter-spacing: 0.12em; }
+.iv-catalogue, .iv-workbench { border: 1px solid var(--tg-line); border-radius: var(--tg-r-lg); background: var(--tg-bg-elev); box-shadow: var(--tg-shadow-sm); }
+.iv-catalogue { padding: var(--tg-s-5); }
+.iv-workbench { width: min(100%, 46rem); margin-inline: auto; padding: var(--tg-s-5); }
+.iv-section-head { display: grid; gap: var(--tg-s-1); margin-bottom: var(--tg-s-5); }
+.iv-manual, .iv-advanced { margin-top: var(--tg-s-5); border-top: 1px solid var(--tg-line); padding-top: var(--tg-s-4); }
+.iv-manual summary, .iv-advanced summary { min-height: 2.75rem; cursor: pointer; color: var(--tg-fg-muted); font-weight: 650; }
+.iv-manual-row { display: grid; gap: var(--tg-s-3); }
+.iv-app-summary { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: var(--tg-s-4); margin: var(--tg-s-4) 0 var(--tg-s-6); }
+.iv-app-summary > :first-child { width: 4rem; height: 4rem; }
+.iv-form, .iv-fields, .iv-connection-list { display: grid; gap: var(--tg-s-4); }
+.iv-form > .tg-btn, .iv-workbench > .tg-btn:last-child { justify-self: start; margin-top: var(--tg-s-5); white-space: nowrap; }
+.iv-action-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--tg-s-3); margin-top: var(--tg-s-5); }
+.iv-action-row .tg-btn { white-space: nowrap; }
+.iv-page .tg-btn { white-space: nowrap; }
+.iv-centered { display: grid; justify-items: center; min-height: 17rem; align-content: center; text-align: center; }
+.iv-centered h2 { margin-top: var(--tg-s-4); }
+.iv-error, .iv-review-warning { display: flex; gap: var(--tg-s-3); width: min(100%, 46rem); margin: 0 auto var(--tg-s-4); padding: var(--tg-s-4); border: 1px solid var(--tg-danger); border-radius: var(--tg-r-md); background: var(--tg-bg-subtle); color: var(--tg-fg); }
+.iv-entry-grid { display: grid; gap: var(--tg-s-3); }
+.iv-entry-card { display: grid; gap: var(--tg-s-4); padding: var(--tg-s-4); border: 1px solid var(--tg-line); border-radius: var(--tg-r-md); background: var(--tg-bg-hi); }
+.iv-entry-card code { display: block; max-width: 100%; margin-top: var(--tg-s-3); overflow: hidden; color: var(--tg-fg-muted); font-family: var(--tg-font-mono); font-size: var(--tg-fs-xs); text-overflow: ellipsis; white-space: nowrap; }
+.iv-execution { display: grid; gap: var(--tg-s-5); }
+.iv-review-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--tg-s-4); }
+.iv-status { display: flex; align-items: flex-start; gap: var(--tg-s-3); padding: var(--tg-s-4); border: 1px solid var(--tg-line); border-radius: var(--tg-r-md); background: var(--tg-bg-hi); }
+.iv-status strong, .iv-status span { display: block; }
+.iv-change-counts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--tg-s-2); margin: 0; }
+.iv-change-counts > div { padding: var(--tg-s-4); border: 1px solid var(--tg-line); border-radius: var(--tg-r-md); background: var(--tg-bg-hi); }
+.iv-change-counts dt { color: var(--tg-fg-muted); font-size: var(--tg-fs-sm); }
+.iv-change-counts dd { margin: var(--tg-s-2) 0 0; font-family: var(--tg-font-mono); font-size: var(--tg-fs-xl); }
+.iv-done > svg { color: var(--tg-success); }
+
+@media (min-width: 40rem) {
+  .iv-page { padding-inline: var(--tg-s-6); }
+  .iv-manual-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .iv-entry-card { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
+  .iv-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 39.99rem) {
+  .iv-hero, .iv-review-head { align-items: flex-start; flex-direction: column; }
+  .iv-catalogue, .iv-workbench { padding: var(--tg-s-4); }
+  .iv-action-row { align-items: stretch; flex-direction: column; }
+  .iv-action-row .tg-btn, .iv-form > .tg-btn { width: 100%; justify-content: center; }
+}
