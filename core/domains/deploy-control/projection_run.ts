@@ -275,6 +275,8 @@ export interface ProjectApplyRunOptions {
   readonly resourceId?: string;
   readonly environment?: string;
   readonly sourceSnapshotId?: string;
+  /** Compatibility review pinned by the source PlanRun. */
+  readonly compatibilityReportId?: string;
   /** Pinned DependencySnapshot id (spec §17), threaded from the source PlanRun. */
   readonly dependencySnapshotId?: string;
   /** RunGroup id (spec §19), threaded from the source PlanRun. */
@@ -302,6 +304,9 @@ export function projectApplyRun(
     status: applyUnifiedStatus(applyRun.status),
     ...(options.sourceSnapshotId
       ? { sourceSnapshotId: options.sourceSnapshotId }
+      : {}),
+    ...(options.compatibilityReportId
+      ? { compatibilityReportId: options.compatibilityReportId }
       : {}),
     ...(options.dependencySnapshotId
       ? { dependencySnapshotId: options.dependencySnapshotId }

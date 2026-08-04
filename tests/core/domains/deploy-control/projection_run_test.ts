@@ -6,6 +6,7 @@ import {
   projectPlanRunCost,
   projectSourceSyncRun,
 } from "../../../../core/domains/deploy-control/projection_run.ts";
+import { RunQueryService } from "../../../../core/domains/deploy-control/run_query.ts";
 import type { ApplyRun, PlanRun } from "@takosumi/internal/deploy-control-api";
 import type { SourceSyncRun } from "takosumi-contract/sources";
 import type { RunStatus } from "takosumi-contract/runs";
@@ -259,6 +260,32 @@ test("projectApplyRun maps create apply and a destroy apply", () => {
   );
   const failed = projectApplyRun(applyRun({ status: "failed" }));
   expect(failed.status).toBe("failed");
+});
+
+test("projectApplyRun retains the Plan compatibility review pin", () => {
+  const run = projectApplyRun(applyRun(), {
+    sourceSnapshotId: "snap_1",
+    compatibilityReportId: "caprep_1",
+  });
+
+  expect(run.sourceSnapshotId).toBe("snap_1");
+  expect(run.compatibilityReportId).toBe("caprep_1");
+});
+
+test("RunQueryService threads Plan compatibility review into Apply projection options", () => {
+  const query = new RunQueryService({} as never);
+
+  expect(
+    query.capsuleProjection(
+      planRun({
+        sourceSnapshotId: "snap_1",
+        compatibilityReportId: "caprep_1",
+      }),
+    ),
+  ).toMatchObject({
+    sourceSnapshotId: "snap_1",
+    compatibilityReportId: "caprep_1",
+  });
 });
 
 test("projectApplyRun projects non-secret run environment evidence", () => {

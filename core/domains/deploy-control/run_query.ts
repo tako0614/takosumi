@@ -54,6 +54,7 @@ export interface RunCapsuleProjection {
   resourceId?: string;
   environment?: string;
   sourceSnapshotId?: string;
+  compatibilityReportId?: string;
   dependencySnapshotId?: string;
   runGroupId?: string;
 }
@@ -297,6 +298,9 @@ export class RunQueryService {
         : {}),
       ...(planRun.sourceSnapshotId
         ? { sourceSnapshotId: planRun.sourceSnapshotId }
+        : {}),
+      ...(planRun.compatibilityReportId
+        ? { compatibilityReportId: planRun.compatibilityReportId }
         : {}),
       ...(planRun.dependencySnapshotId
         ? { dependencySnapshotId: planRun.dependencySnapshotId }
