@@ -153,7 +153,10 @@ import {
   BackupsService,
   type ServiceDataBackupRunner,
 } from "./domains/backups/mod.ts";
-import { defaultCapsuleInstallConfig } from "./domains/capsules/default_install_config.ts";
+import {
+  DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
+  defaultCapsuleInstallConfig,
+} from "./domains/capsules/default_install_config.ts";
 import { withHostInstallConfigs } from "./domains/capsules/host_install_config_store.ts";
 import type {
   CreateSourceRequest,
@@ -1302,9 +1305,20 @@ export async function createTakosumiService(
   // the SourcesService backed by a different instance).
   const durableOpenTofuStore =
     opentofuStore.store ?? new InMemoryOpenTofuControlStore();
+  const operatorInstallConfigs = options.operatorInstallConfigs ?? [];
+  const defaultInstallConfigOverrides = operatorInstallConfigs.filter(
+    (config) => config.id === DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
+  );
+  if (defaultInstallConfigOverrides.length > 1) {
+    throw new TypeError(
+      `duplicate host InstallConfig id: ${DEFAULT_CAPSULE_INSTALL_CONFIG_ID}`,
+    );
+  }
   const sharedOpenTofuStore = withHostInstallConfigs(durableOpenTofuStore, [
-    defaultCapsuleInstallConfig(),
-    ...(options.operatorInstallConfigs ?? []),
+    defaultInstallConfigOverrides[0] ?? defaultCapsuleInstallConfig(),
+    ...operatorInstallConfigs.filter(
+      (config) => config.id !== DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
+    ),
   ]);
   const formRegistryStore =
     options.formRegistryStore ??

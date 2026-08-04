@@ -89,3 +89,32 @@ test("service creation exposes host configs without durable InstallConfig writes
   ).toEqual([DEFAULT_CAPSULE_INSTALL_CONFIG_ID, operator.id]);
   expect(await durable.listInstallConfigs()).toEqual([]);
 });
+
+test("a host can replace the generic default policy without adding an app catalog", async () => {
+  const durable = new InMemoryOpenTofuControlStore();
+  const hostDefault = {
+    ...defaultCapsuleInstallConfig(NOW),
+    policy: {
+      ...defaultCapsuleInstallConfig(NOW).policy,
+      providerCredentials: {
+        requiredProviders: ["registry.opentofu.org/example/platform-provider"],
+      },
+    },
+  };
+
+  const { operations } = await createTakosumiService({
+    runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
+    opentofuControlStore: durable,
+    operatorInstallConfigs: [hostDefault],
+  });
+
+  expect(
+    await operations.capsules.getInstallConfig(
+      DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
+    ),
+  ).toEqual(hostDefault);
+  expect(await operations.capsules.listSharedInstallConfigs()).toEqual([
+    hostDefault,
+  ]);
+  expect(await durable.listInstallConfigs()).toEqual([]);
+});
