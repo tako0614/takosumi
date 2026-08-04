@@ -5188,6 +5188,82 @@ test("pre-destroy release commands run before OpenTofu destroy", async () => {
   });
 });
 
+test("destroy recovery executes pre-destroy commands from the reviewed recovery snapshot", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner(
+    {},
+    {
+      launch_url: { sensitive: false, value: "https://x.example" },
+    },
+  );
+  const seeded = await seedRunnableCapsuleModel(store, {
+    environment: "preview",
+    installConfig: lifecycleInstallConfig([
+      {
+        id: "delete-worker",
+        phase: "pre_destroy",
+        executor: "operator",
+        command: ["bun", "run", "takosumi:release", "--", "--destroy"],
+      },
+    ]),
+  });
+  const activations: ReleaseActivationInput[] = [];
+  const controller = controllerWith(store, runner, {
+    releaseActivator: {
+      activate: (input) => {
+        activations.push(input);
+        return Promise.resolve({ status: "succeeded" });
+      },
+    },
+  });
+
+  const create = await controller.createCapsulePlan(seeded.capsule.id);
+  const created = await controller.createApplyRun({
+    planRunId: create.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(create.planRun),
+  });
+  expect(created.applyRun.status).toBe("succeeded");
+  activations.length = 0;
+
+  const recoverySnapshot = {
+    ...seeded.snapshot,
+    id: "snap_recovery",
+    ref: "repair-commit",
+    resolvedCommit: "1234567890abcdef1234567890abcdef12345678",
+    archiveRef:
+      "workspaces/ws_test001/sources/src_fixture/snapshots/snap_recovery/source.tar.zst",
+    archiveDigest:
+      "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    fetchedByRunId: "run_recovery_sync",
+    fetchedAt: "2026-06-07T00:00:00.000Z",
+  };
+  await store.putSource({
+    ...seeded.source,
+    defaultRef: recoverySnapshot.ref,
+    updatedAt: recoverySnapshot.fetchedAt,
+  });
+  await store.putSourceSnapshot(recoverySnapshot);
+
+  const destroy = await controller.createCapsuleDestroyPlan(
+    seeded.capsule.id,
+    {},
+    { sourceSnapshotId: recoverySnapshot.id },
+  );
+  expect(destroy.planRun.sourceSnapshotId).toBe(recoverySnapshot.id);
+  await controller.approveRun(destroy.planRun.id);
+  const { applyRun } = await controller.createApplyRun({
+    planRunId: destroy.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(destroy.planRun),
+  });
+
+  expect(applyRun.status).toBe("succeeded");
+  expect(activations).toHaveLength(1);
+  expect(activations[0]?.sourceSnapshot?.id).toBe(recoverySnapshot.id);
+  expect(activations[0]?.sourceSnapshot?.resolvedCommit).toBe(
+    recoverySnapshot.resolvedCommit,
+  );
+});
+
 test("successful pre_destroy evidence survives retryable destroy requeue and blocks cancellation", async () => {
   const store = new InMemoryOpenTofuControlStore();
   const runner = recordingRunner();
