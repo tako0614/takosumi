@@ -1027,7 +1027,9 @@ function compileVariableProjections(
         kind: "oidc_client",
         variables: { ...variables },
         callbackPath: requirement.callbackPath,
-        ...(requirement.scopes ? { scopes: [...requirement.scopes] } : {}),
+        ...(requirement.scopes
+          ? { scopes: canonicalOidcScopes(requirement.scopes) }
+          : {}),
       });
     }
     // A generated secret has no variable form: the host never writes a secret
@@ -1078,7 +1080,9 @@ function compileHostRuntimeMaterialization(
         kind: "public_oidc",
         id: "repository-oidc",
         callbackPath: requirement.callbackPath,
-        scopes: [...(requirement.scopes ?? ["openid", "profile"])],
+        scopes: canonicalOidcScopes(
+          requirement.scopes ?? ["openid", "profile"],
+        ),
         bindings: {
           issuerUrl: oidcBinding(targets.issuerUrl!),
           clientId: oidcBinding(targets.clientId!),
@@ -1095,6 +1099,15 @@ function compileHostRuntimeMaterialization(
     contract: HOST_RUNTIME_MATERIALIZATION_CONTRACT,
     requirements: compiled,
   };
+}
+
+/**
+ * OAuth scopes are a set, while the host runtime contract stores sets in one
+ * deterministic order. Repository metadata may use any order, so canonicalize
+ * it at the repository-to-host authority seam before persistence validation.
+ */
+function canonicalOidcScopes(scopes: readonly string[]): readonly string[] {
+  return [...new Set(scopes)].sort();
 }
 
 function jsonValueMatchesType(
