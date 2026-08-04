@@ -11,6 +11,85 @@
  *   追加 (install) → 変更を確認 (plan) → デプロイ (apply) → デプロイ済み (active)
  */
 export const ja = {
+  "installStore.title": "サービスを追加",
+  "installStore.subtitle":
+    "見つけて、追加する。それだけです。必要な設定は追加後にこの画面で案内します。",
+  "installStore.browseTitle": "サービスを探す",
+  "installStore.browseHint":
+    "ストアから選ぶか、公開Gitリポジトリを指定します。",
+  "installStore.manual": "Gitリポジトリから追加",
+  "installStore.back": "選び直す",
+  "installStore.entryLoadTitle": "追加候補を確認",
+  "installStore.entryLoadHint":
+    "明示したGitリポジトリから候補文書を読み込みます。この操作で読み取り用のSourceとRunが作成されます。",
+  "installStore.entryLoad": "候補を読み込む",
+  "installStore.entryHint": "追加するサービスを1つ選んでください。",
+  "installStore.select": "これを選ぶ",
+  "installStore.configureHint":
+    "名前を確認したら追加できます。リポジトリ解析はその後に行います。",
+  "installStore.name": "サービス名",
+  "installStore.sourceDetails": "取得元の詳細",
+  "installStore.sourceUrl": "Git URL",
+  "installStore.sourceRef": "ref（省略可）",
+  "installStore.sourcePath": "module path",
+  "installStore.sourceAuth": "Git接続",
+  "installStore.publicSource": "公開リポジトリ",
+  "installStore.add": "追加",
+  "installStore.preparing": "追加の準備をしています",
+  "installStore.preparingHint":
+    "リポジトリを確認し、必要な接続と変更内容をまとめています。",
+  "installStore.compatibilityFailed":
+    "このサービスは現在の環境に追加できません。",
+  "installStore.providerTitle": "接続が必要です",
+  "installStore.providerHint": "このサービスに必要な接続だけを選びます。",
+  "installStore.chooseConnection": "接続を選択",
+  "installStore.connect": "新しい接続を追加",
+  "installStore.continue": "続ける",
+  "installStore.setupTitle": "サービスを設定",
+  "installStore.setupHint": "このサービスが必要とする項目だけを入力します。",
+  "installStore.setupInvalid": "サービスの設定定義が無効です。",
+  "installStore.setupRequired": "{label}を入力してください。",
+  "installStore.secretUnavailable":
+    "このシークレットは接続として設定してください。",
+  "installStore.secretHint":
+    "シークレットはこのフォームから変数として送信しません。",
+  "installStore.reviewing": "変更内容を確認しています",
+  "installStore.reviewingHint": "安全に適用できるかPlanを確認しています。",
+  "installStore.reviewTitle": "インストール前の確認",
+  "installStore.reviewHint": "Takosumiが行う変更です。",
+  "installStore.changes": "変更数",
+  "installStore.createCount": "作成",
+  "installStore.updateCount": "変更",
+  "installStore.deleteCount": "削除",
+  "installStore.approve": "Planを承認",
+  "installStore.confirmTitle": "確認が必要な変更があります",
+  "installStore.confirmHint":
+    "削除または明示承認が必要な変更を含みます。内容を確認してください。",
+  "installStore.confirm": "変更内容を確認しました",
+  "installStore.install": "インストール",
+  "installStore.runDetails": "技術的な詳細",
+  "installStore.installing": "インストールしています",
+  "installStore.installingHint": "この画面を開いたままお待ちください。",
+  "installStore.planBlocked": "このPlanは適用できません",
+  "installStore.planBlockedHint":
+    "ポリシーまたはPlanの詳細を確認してください。",
+  "installStore.readinessFailed":
+    "サービスの公開状態を確認できませんでした。技術的な詳細を確認してください。",
+  "installStore.activationFailed":
+    "サービスの公開処理に失敗しました。技術的な詳細を確認してください。",
+  "installStore.runFailed": "インストールを完了できませんでした",
+  "installStore.runFailedHint":
+    "技術的な詳細を確認して、もう一度お試しください。",
+  "installStore.doneTitle": "追加できました",
+  "installStore.doneHint": "サービスを開いて使い始められます。",
+  "installStore.open": "サービスを開く",
+  "installStore.chooseAnother": "別のサービスを追加",
+  "installStore.invalidSource": "有効なhttpsのGit URLを入力してください。",
+  "installStore.invalidName":
+    "サービス名は半角小文字・数字・ハイフンで入力してください。",
+  "installStore.planMissing": "Planの開始結果を確認できませんでした。",
+  "installStore.listingUnavailable":
+    "このサービスをStoreから取得できませんでした。",
   // --- common -------------------------------------------------------------
   "common.loading": "読み込み中…",
   "common.retry": "再試行",
@@ -244,31 +323,6 @@ export const ja = {
   "apps.sectionYours": "あなたのアプリ",
   "apps.manage": "管理",
   "apps.manageAria": "管理: {name}",
-  "install.installingGeneric": "追加中…",
-  "install.wait": "そのままお待ちください",
-  "install.progressAria": "追加の進行状況",
-  "install.step.source": "コードを取得",
-  "install.step.create": "サービスを作成",
-  "install.step.check": "内容を確認",
-  "install.step.deploy": "デプロイ",
-  "install.step.done": "仕上げ",
-  "install.doneTitle": "{name} を追加しました",
-  "install.doneTitleGeneric": "追加しました",
-  "install.doneSub": "デプロイ完了。すぐに使えます。",
-  "install.activationPending": "アプリの公開処理を仕上げています…",
-  "install.open": "アプリを開く",
-  "install.toApps": "アプリ一覧へ",
-  "install.gateTitle": "確認が必要です",
-  "install.gateSub": "続けるには内容の確認が必要です。",
-  "install.gateCta": "内容を確認する",
-  "install.errorTitle": "追加できませんでした",
-  "install.errorSub": "詳細を確認して、もう一度お試しください。",
-  "install.errorCta": "詳細を見る",
-  "update.installingGeneric": "更新中…",
-  "update.doneTitle": "{name} を更新しました",
-  "update.doneTitleGeneric": "更新しました",
-  "update.doneSub": "最新の状態になりました。",
-  "update.errorTitle": "更新できませんでした",
   "apps.needsAttention": "要対応",
   "apps.openApp": "アプリを開く",
   "apps.reviewChanges": "変更を確認",
@@ -677,170 +731,10 @@ export const ja = {
     "サービス名を取得できませんでした。名前なしで表示しています。",
 
   // --- add flow (/new) -------------------------------------------------------
-  "new.title": "サービスを追加",
-  "new.discard.title": "入力内容を破棄しますか？",
-  "new.discard.body": "このサービスの設定内容は保存されません。",
-  "new.discard.confirm": "破棄する",
-  "new.discovery.aria": "追加するサービスを探す",
-  "new.discovery.title": "追加するサービスを選ぶ",
-  "new.discovery.subtitle": "よく使うサービスから選んで追加します。",
-  "new.discovery.linkPlaceholder": "リンクまたは Git URL",
-  "new.discovery.linkCta": "リンクから追加",
-  "new.discovery.manualLead": "お探しのものがありませんか？",
-  "new.discovery.manualToggle": "Git URL / インストールリンクから追加",
-  "new.advancedImport.title": "リンクから追加",
-  "new.advancedImport.subtitle": "インストールリンクを貼り付けて追加します。",
-  "new.selection.subtitle":
-    "まず内容を確認します。デプロイは承認後に実行されます。",
-  "new.flow.manual": "手動追加",
-  "new.flow.back": "選び直す",
-  "new.pick.checking": "選択したサービスを確認しています…",
-  "new.identity.label": "公開URL",
-  "new.identity.edit": "変更",
-  "new.identity.done": "閉じる",
-  "new.auth.title": "認証",
-  "new.auth.subtitle": "最初の管理者がログインする方法を選びます。",
-  "new.auth.mode": "ログイン方法",
-  "new.auth.oidc": "Takosumi アカウントでログイン",
-  "new.auth.oidcHint":
-    "Takosumi がアプリを登録し、このサービスを追加したアカウントを紐づけます。",
-  "new.auth.password": "パスワード",
-  "new.auth.initialPassword": "初期パスワード",
-  "new.auth.passwordHint":
-    "最初の管理者用パスワードです。非公開の初期設定情報として扱われます。",
-  "new.auth.unavailableTitle": "この認証方法はこの環境で利用できません",
-  "new.auth.unavailableBody":
-    "パスワードを安全に受け渡す機能が提供されていません。配布元または運用者による対応が必要です。",
-  "new.features.title": "追加機能",
-  "new.features.subtitle": "今使う連携だけを有効にして設定します。",
-  "new.installUx.invalidTitle": "このアプリの初期設定を表示できません",
-  "new.installUx.invalidBody":
-    "初期設定の宣言がこのバージョンと一致していません。配布元が修正するまで、このストア導線からは追加できません。",
-  "new.installUx.loadingTitle": "このバージョンの初期設定を確認しています",
-  "new.installUx.loadingBody":
-    "取得したアプリと同じコミットから、安全に検証済みの設定フォームを準備しています。",
-  "new.installUx.repositoryOwned": "アプリ提供の初期設定",
-  "new.storeInput.title": "初期設定",
-  "new.storeInput.subtitle": "このアプリが求めている設定です。",
-  "new.storeInput.errorRequired": "{label} を入力してください。",
-  "new.storeInput.errorUnsafeValue":
-    "{label} の値が長すぎるか、使えない文字を含んでいます。",
-  "new.storeInput.errorSubdomain":
-    "{label} は {baseDomain} の前に付く1段の名前を入力してください。英小文字・数字・ハイフンが使えます。",
-  "new.storeInput.errorCustomDomain":
-    "{label} は https:// のURLを使ってください。{baseDomain} は1段の名前だけ使えます。独自ドメインはデプロイ前に所有確認が必要です。",
-  "new.deeplink.aria": "リンクから追加するサービス",
-  "new.deeplink.kicker": "リンクから追加",
-  "new.deeplink.title": "{capsule} を追加します",
-  "new.deeplink.body":
-    "リンクの内容を確認しました。必要なら取得元を開いて変更できます。",
-  "new.deeplink.source": "取得元",
-  "new.deeplink.version": "バージョン",
-  "new.deeplink.folder": "フォルダ",
-  "new.git.url": "インストールリンク",
-  "new.git.advanced": "取得元の詳細",
-  "new.git.ref": "バージョン",
   "new.git.defaultRef": "Git の既定ブランチ",
-  "new.git.path": "フォルダ",
-  "new.sourceAccess.title": "非公開リンクのアクセス",
-  "new.sourceAccess.body":
-    "公開されているリンクなら設定は不要です。非公開の場合だけアクセス情報を選びます。",
-  "new.sourceAccess.mode": "アクセス方法",
-  "new.sourceAccess.public": "公開リンク",
-  "new.sourceAccess.existing": "保存済みのアクセスを使う",
-  "new.sourceAccess.token": "アクセストークンを保存する",
-  "new.sourceAccess.connection": "保存済みのアクセス",
-  "new.sourceAccess.selectConnection": "保存済みのアクセスを選択",
-  "new.sourceAccess.noConnections":
-    "このワークスペースには、検証済みの取得元アクセスがまだありません。",
-  "new.sourceAccess.username": "ユーザー名",
-  "new.sourceAccess.accessToken": "アクセストークン",
-  "new.sourceAccess.tokenPlaceholder": "読み取り専用トークン",
-  "new.sourceAccess.saveToken": "アクセス情報を保存",
-  "new.sourceAccess.tokenBody":
-    "保存後は表示できない形で安全に保管され、このワークスペースの取得元確認にだけ使われます。",
-  "new.sourceAccess.errorTokenRequired": "アクセストークンを入力してください。",
-  "new.sourceAccess.errorSaveToken":
-    "確認する前に、非公開リンクのトークンを保存してください。",
-  "new.sourceAccess.errorSelectConnection":
-    "検証済みの取得元アクセスを選択してください。",
-  "new.sourceAccess.errorConnectionUnavailable":
-    "選択した取得元アクセスは現在利用できません。",
-  "new.sourceAccess.httpsConnection": "HTTPS 取得元アクセス",
-  "new.sourceAccess.sshConnection": "SSH 取得元アクセス",
-  "new.sourceAccess.defaultDisplayName": "{name} 取得元アクセス",
-  "new.name": "サービス名",
-  "new.vars.projectName": "サービスID",
-  "new.hostPreview": "公開URL: {host}",
-  "new.hostname.mode.label": "URLの種類",
-  "new.hostname.mode.hint":
-    "通常URLはワークスペースごとに使えます。短いURLはアカウントのURL枠を1つ使います。",
-  "new.hostname.mode.scoped": "通常URL",
-  "new.hostname.mode.vanity": "短いURL枠を使う",
-  "new.advanced.title": "詳細設定",
-  "new.advanced.customUrlHint": "既定の公開URLの代わりに使う完全なURLです。",
-  "new.advanced.routePatternHint":
-    "上級者向け: ルートパターンを直接指定します。",
-  "new.advanced.serviceIdHint": "内部名です。URLの既定値になります。",
-  "new.env.title": "環境変数",
-  "new.env.body":
-    "サービスが公開してよい実行時の環境変数を求める場合だけ使います。秘密の値は接続済みアカウントから渡してください。",
-  "new.env.name": "環境変数名",
-  "new.env.value": "値",
-  "new.env.valuePlaceholder": "値",
-  "new.env.add": "環境変数を追加",
-  "new.env.remove": "削除",
-  "new.env.errorNameRequired":
-    "環境変数名を入力するか、空の行を削除してください。",
-  "new.env.errorUnsafeName":
-    "「{name}」には大文字の英字、数字、アンダースコアだけを使ってください。",
-  "new.env.errorUnsafeValue":
-    "「{name}」の値が長すぎるか、使えない文字を含んでいます。",
-  "new.env.errorDuplicate": "環境変数「{name}」が重複しています。",
-  "new.vars.inputsTitle": "その他の設定",
-  "new.vars.inputsBody":
-    "上にない表示用の入力をサービスから求められた場合だけ使います。",
-  "new.vars.inputName": "設定名",
-  "new.vars.inputValue": "値",
-  "new.vars.namePlaceholder": "設定名",
-  "new.vars.valuePlaceholder": "値",
-  "new.vars.addInput": "入力を追加",
-  "new.vars.removeInput": "削除",
-  "new.vars.errorNameRequired":
-    "変数名を入力するか、空の行を削除してください。",
-  "new.vars.errorUnsafeName":
-    "「{name}」はリンク/入力値として渡せません。非公開の値は接続済みアカウントから渡してください。",
-  "new.vars.errorUnsafeValue":
-    "「{name}」の値が長すぎるか、使えない文字を含んでいます。",
-  "new.vars.errorProjectNameReserved":
-    "この値はサービスIDの欄で指定してください。",
-  "new.vars.errorStoreReserved":
-    "「{name}」はサービス設定の欄で指定してください。",
-  "new.vars.errorDuplicate": "「{name}」が重複しています。",
-  "new.deeplink.invalidTitle": "このインストールリンクは利用できません",
-  "new.deeplink.invalidBody":
-    "安全な HTTPS リンクではないか、ブラウザで開けない情報が含まれています。サービス候補から選ぶか、別のリンクを貼り付けてください。",
-  "new.appHandoff.title": "{app} に接続するサービスを追加します",
-  "new.appHandoff.body":
-    "この画面で追加が完了すると、接続先の情報が自動的にアプリへ戻ります。",
-  "new.appHandoff.kicker": "アプリからのリクエスト",
-  "new.appHandoff.app": "アプリ",
-  "new.appHandoff.return": "戻り先",
-  "new.installCta": "追加",
-  "new.compat.recheck": "もう一度確認",
-  "new.progress.slow": "少し時間がかかっています。このままお待ちください。",
-  "new.progress.details": "詳しい進行状況",
-  "new.progress.status": "状態: {status}",
-  "new.compat.title": "確認結果",
-  "new.compat.details": "詳しい確認結果",
-  "new.compat.readyBrief": "確認できました。",
   "new.compat.ready": "このまま追加できます",
   "new.compat.patch": "手直しが必要です",
   "new.compat.unsupported": "今は追加できません",
-  "new.compat.diagnostic.technicalNote":
-    "詳しい確認結果です。対応が必要な場合だけ確認してください。",
-  "new.compat.patchHelp":
-    "表示された内容を確認してください。サービス側の修正が必要な場合と、接続済みアカウントの設定で進められる場合があります。",
   "new.compat.summary.providerCredentials":
     "{provider} の非公開値を取得元から外す必要があります。",
   "new.compat.summary.installUxInvalid":
@@ -863,47 +757,6 @@ export const ja = {
     "利用する接続先の固定情報が含まれています。非公開値を外したあと、追加時に固定内容を確認します。",
   "new.compat.issue.reviewRequired.message":
     "追加前に確認が必要な項目があります。",
-  "new.existing.title": "このサービスは既に追加されています",
-  "new.existing.body":
-    "「{name}」は {environment} 環境に追加済みです。新しく作り直さず、既存サービスを開いて確認できます。",
-  "new.existing.open": "既存サービスを開く",
-  "new.providers.title": "プロバイダー接続",
-  "new.providers.body":
-    "ここでは認証情報だけを選びます。デプロイ先と変更内容は plan で解決・確認され、Takosumi の料金がある場合は preview に表示されます。",
-  "new.providers.alias": "プロバイダー alias: {alias}",
-  "new.providers.connection": "接続済みアカウント",
-  "new.providers.selectConnection": "接続済みアカウントを選択",
-  "new.providers.errorConnection":
-    "{provider} の利用可能な接続済みアカウントを選択してください。",
-  "new.providers.missingTitle": "接続済みアカウントの設定が必要です",
-  "new.providers.missingBody": "接続済みアカウントを設定すると続けられます。",
-  "new.providers.setupMissing": "必要な接続済みアカウントを設定",
-  "new.providers.returnNote": "接続を保存すると、この追加の続きに戻ります。",
-  "new.step.register": "サービスを準備",
-  "new.step.sync": "内容を取得",
-  "new.step.create": "サービスを作成",
-  "new.step.plan": "変更を確認",
-  "new.step.state.done": "完了",
-  "new.step.state.failed": "失敗",
-  "new.step.state.running": "実行中",
-  "new.step.state.pending": "未実行",
-  "new.error.workspaceRequired": "ワークスペースを選択してください。",
-  "new.error.urlRequired": "インストールリンクを入力してください。",
-  "new.error.nameRequired": "名前を入力してください。",
-  "new.error.nameInvalid":
-    "サービス名は半角英小文字・数字・ハイフンだけで入力してください。",
-  "new.error.configMissing": "追加設定がまだ利用できません。",
-  "new.error.configLoading": "追加設定を読み込み中です。",
-  "new.error.installUxInvalid":
-    "このアプリの初期設定フォームは利用できません。別のバージョンを選ぶか、配布元の修正をお待ちください。",
-  "new.error.installUxPreviewMissing":
-    "検証済みの初期設定を取得できませんでした。再確認してから追加してください。",
-  "new.error.secretSetupUnavailable":
-    "このアプリに必要な非公開の初期設定を安全に受け渡せないため、現在の環境では追加できません。",
-  "new.error.configLoadFailed":
-    "追加設定を読み込めませんでした。通信状態を確認して再試行してください。",
-  "new.error.syncPending":
-    "ソースの取得がまだ完了していません。少し待ってから「再試行」してください。",
   "new.error.sourceRefNotFound":
     "指定されたバージョン「{ref}」が見つかりません。リンク先にこのバージョンがあるか確認してください。",
   "new.error.sourceFetchFailed":
@@ -913,30 +766,16 @@ export const ja = {
     "サービスの追加に失敗しました。内容を確認して、もう一度お試しください。",
   "new.error.genericWithDetails":
     "サービスの追加に失敗しました。詳細: {message}",
-  "new.error.requestId":
-    "問題が続く場合はこのIDを添えて問い合わせてください: {id}",
   "new.error.invalidHostname":
     "この公開名は長すぎるか、使えない文字を含んでいます。もう少し短い名前にして、もう一度お試しください。",
   "new.error.connectionRequired":
     "このサービスの公開にはクラウドアカウントの接続が必要です。接続を設定してから、もう一度お試しください。",
   "new.error.appHostnameUnavailable":
     "この公開URL名は既に使われています。別の名前にして、もう一度お試しください。",
-  "new.hostnameConflict.title": "別の公開URL名にしてください",
   "new.error.managedHostnameSlotLimit":
     "短いURLの空き枠がありません。通常URLを使うか、既存の短いURLを解放してください。",
-  "new.hostnameConflict.body":
-    "公開URLに使う名前を変えてから、もう一度追加してください。",
-  "new.hostnameConflict.suggest": "候補名を使う",
   "new.error.alreadyExistsGeneric":
     "このサービスは既に追加されています。一覧から既存サービスを開いてください。",
-  "new.error.nameReserved":
-    "このサービス名は予約済みですが、現在の一覧では見つかりません。サービス一覧を更新し、未完了のサービスが表示されたら削除するか、別の名前を使ってください。",
-  "new.error.notRunnable":
-    "この確認結果ではまだ追加できません。表示された手直し内容を解消してから、もう一度確認してください。",
-  "new.error.checkIncomplete":
-    "確認を完了できませんでした。もう一度お試しください。",
-
-  // --- workspace settings ---------------------------------------------------------
   "workspaceSettings.title": "設定",
   "workspaceSettings.tabsLabel": "設定セクション",
   "workspaceSettings.subtitle":

@@ -40,25 +40,22 @@ afterEach(() => {
 describe("auto-apply consent", () => {
   test("a bare ?auto link carries no consent — only the flow that started it does", () => {
     installFakeSessionStorage();
-    // The victim's tab never started an install: a crafted
-    // /runs/<id>?auto=install link is just a parameter, so nothing authorizes
-    // the auto-apply.
-    expect(hasAutoApplyConsent("run_a", "install")).toBe(false);
+    // The victim's tab never started an update: a crafted query parameter is
+    // not authority to apply infrastructure changes.
     expect(hasAutoApplyConsent("run_a", "update")).toBe(false);
 
     // The in-app flow mints the token together with the URL it navigates to.
-    expect(autoApplyRunPath("/runs/run_a", "run_a", "install")).toBe(
-      "/runs/run_a?auto=install",
+    expect(autoApplyRunPath("/runs/run_a", "run_a", "update")).toBe(
+      "/runs/run_a?auto=update",
     );
-    expect(hasAutoApplyConsent("run_a", "install")).toBe(true);
+    expect(hasAutoApplyConsent("run_a", "update")).toBe(true);
   });
 
   test("consent is scoped to one run id and one mode", () => {
     installFakeSessionStorage();
-    grantAutoApplyConsent("run_a", "install");
-    expect(hasAutoApplyConsent("run_b", "install")).toBe(false);
-    expect(hasAutoApplyConsent("run_a", "update")).toBe(false);
-    expect(hasAutoApplyConsent("", "install")).toBe(false);
+    grantAutoApplyConsent("run_a", "update");
+    expect(hasAutoApplyConsent("run_b", "update")).toBe(false);
+    expect(hasAutoApplyConsent("", "update")).toBe(false);
   });
 
   test("the minted token is unguessable and preserves an existing query", () => {
@@ -75,12 +72,12 @@ describe("auto-apply consent", () => {
 
   test("fails closed when storage is unavailable", () => {
     Reflect.deleteProperty(globalThis, "sessionStorage");
-    expect(() => grantAutoApplyConsent("run_a", "install")).not.toThrow();
-    expect(hasAutoApplyConsent("run_a", "install")).toBe(false);
+    expect(() => grantAutoApplyConsent("run_a", "update")).not.toThrow();
+    expect(hasAutoApplyConsent("run_a", "update")).toBe(false);
   });
 
-  test("only the two real modes are accepted from the query string", () => {
-    expect(autoApplyModeFromParam("install")).toBe("install");
+  test("only the update mode is accepted from the query string", () => {
+    expect(autoApplyModeFromParam("install")).toBeNull();
     expect(autoApplyModeFromParam("update")).toBe("update");
     for (const value of [undefined, null, "", "1", "INSTALL", ["install"]]) {
       expect(autoApplyModeFromParam(value)).toBeNull();
@@ -98,17 +95,19 @@ describe("auto-apply consent call sites", () => {
     // tab minted the run-scoped token.
     expect(source).toContain("autoApplyModeFromParam(searchParams.auto)");
     expect(source).toContain("hasAutoApplyConsent(runId(), requested)");
-    expect(source).toContain("const autoInstall = () => autoMode() !== null;");
+    expect(source).toContain(
+      'const autoContinueEnabled = () => autoMode() === "update";',
+    );
     // The plan→apply hop and the re-plan mint consent for the run they open.
     expect(source).toContain("autoApplyRunPath(path, targetRunId, mode)");
   });
 
-  test("every in-app entry into the auto flow mints the token", () => {
-    expect(read("dashboard/src/views/new/NewAppView.tsx")).toContain(
-      'autoApplyRunPath(base, runId, "install")',
-    );
+  test("the update entry mints the token and install stays on /new", () => {
     expect(read("dashboard/src/views/apps/WorkloadDetailView.tsx")).toContain(
       'autoApplyRunPath(`/runs/${runId}`, runId, "update")',
+    );
+    expect(read("dashboard/src/views/new/InstallExecution.tsx")).not.toContain(
+      "autoApplyRunPath",
     );
   });
 });

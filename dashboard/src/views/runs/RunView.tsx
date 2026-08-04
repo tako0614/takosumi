@@ -104,13 +104,6 @@ import { runFailureHint } from "../../lib/run-errors.ts";
 import { clearCurrentStateVersionCache } from "../../lib/current-state-versions.ts";
 import { clearDashboardOverviewCache } from "../../lib/dashboard-overview.ts";
 import { clearInstallConfigListCache } from "../../lib/install-config-list.ts";
-import {
-  INSTALL_STEPS,
-  InstallProgressCard,
-  installStepLabel,
-  UPDATE_STEPS,
-  type InstallStep,
-} from "../../components/install/InstallProgress.tsx";
 import { listAuthorizedUiSurfaces } from "../../lib/ui-surface-interfaces.ts";
 import {
   formatDateTime,
@@ -692,20 +685,15 @@ function Inner() {
   const appHandoff = appHandoffFromSearch(
     typeof location === "undefined" ? "" : location.search,
   );
-  // Install context: NewAppView sends the plan run here with ?auto=install so
-  // this screen shows a clean App-Store-style install progress instead of the
-  // technical run console. withAuto() preserves the flag across the plan→apply
-  // hop and any re-plan so the whole install reads as one flow.
-  // ?auto=install (store install) and ?auto=update (1-tap update from the app
-  // detail) share the same App-Store-style progress screen; update mode only
-  // swaps the copy (更新中/更新しました instead of 追加中/追加しました).
+  // The app detail may request a consent-gated one-tap update. Initial install
+  // stays on /new; this route remains the technical Run ledger and review view.
   // Read ?auto REACTIVELY: this same component instance navigates run → run
   // in place (plan → apply, retry → fresh plan), so a value captured once from
   // location.search would leave stale install/update chrome on the next run.
   const [searchParams] = useSearchParams();
   // A URL parameter is never apply authority. ?auto only counts when THIS tab
   // started the flow and minted the run-scoped consent token (lib/auto-apply-
-  // consent.ts): otherwise a crafted /runs/:id?auto=install link opened by a
+  // consent.ts): otherwise a crafted /runs/:id?auto=update link opened by a
   // signed-in victim would apply their pending plan with no user action. With
   // no token this falls through to the ordinary console + deploy button.
   const autoMode = createMemo((): AutoApplyMode | null => {
@@ -714,8 +702,7 @@ function Inner() {
       ? requested
       : null;
   });
-  const autoUpdateMode = () => autoMode() === "update";
-  const autoInstall = () => autoMode() !== null;
+  const autoContinueEnabled = () => autoMode() === "update";
   // Carry the flag across the plan→apply hop and any re-plan — and mint the
   // consent for the run being navigated to, since the flag alone no longer
   // authorizes the next screen's auto-apply.
@@ -723,7 +710,6 @@ function Inner() {
     const mode = autoMode();
     return mode ? autoApplyRunPath(path, targetRunId, mode) : path;
   };
-  const [forceConsole, setForceConsole] = createSignal(false);
 
   const [run, { refetch: refetchRun, mutate: mutateRun }] = createResource(
     runId,
@@ -1173,17 +1159,13 @@ function Inner() {
     await Promise.all([refetchRun(), refetchLogs()]);
   });
 
-  // One-action install: NewAppView sends the plan run here with ?auto=install.
-  // When the plan is clean (succeeded, policy pass, no approval, no destructive
-  // change) we continue straight to apply so the visitor never presses "deploy"
-  // on a plan console. Any gate (approval / destructive / policy / delete)
-  // falls through to the explicit review + action button below.
+  // One-action update continues a clean update Plan only. Any approval,
+  // destructive, policy, or billing gate remains explicit in the console.
   const [autoContinued, setAutoContinued] = createSignal(false);
   // Per-run UI state must reset when this SAME component instance navigates
   // between runs (deploy → apply run, retry → fresh plan): stale `applied`
   // would fake a デプロイしました summary on a never-applied plan and hide the
-  // deploy button; stale autoContinued/forceConsole break the ?auto=install
-  // re-plan loop.
+  // deploy button; stale autoContinued would break the update re-plan loop.
   let lastRunId = runId();
   createEffect(() => {
     const id = runId();
@@ -1192,10 +1174,9 @@ function Inner() {
     setApplied(false);
     setNeedsConfirm(false);
     setAutoContinued(false);
-    setForceConsole(false);
   });
   // Once-per-plan-run guard that survives a re-mount: Back / revisit of an
-  // ?auto=install plan URL must NOT silently re-fire the auto-apply.
+  // ?auto=update plan URL must NOT silently re-fire the auto-apply.
   const autoAppliedKey = () => `takosumi.auto-applied@${runId()}`;
   const autoAppliedAlready = () => {
     try {
@@ -1206,7 +1187,13 @@ function Inner() {
   };
   createEffect(() => {
     const r = run.latest;
-    if (!autoInstall() || autoContinued() || applied() || deploy.busy() || !r) {
+    if (
+      !autoContinueEnabled() ||
+      autoContinued() ||
+      applied() ||
+      deploy.busy() ||
+      !r
+    ) {
       return;
     }
     // Revisited ?auto plan whose deploy approval a later apply already consumed
@@ -1215,7 +1202,6 @@ function Inner() {
     // escape below would fire and the install screen would spin 追加中… forever.
     // Drop to the honest console (it shows すでにデプロイ済み + a link to the app).
     if (deployApprovalConsumed(r)) {
-      setForceConsole(true);
       return;
     }
     // We already auto-applied this plan earlier this session and navigated on
@@ -1226,7 +1212,6 @@ function Inner() {
     // screen is always actionable, deployable or not. Checked before the logs
     // gate below because this path never auto-applies — it only escapes.
     if (autoAppliedAlready()) {
-      setForceConsole(true);
       return;
     }
     // Destructive-gate inputs must be SETTLED before auto-continuing: with no
@@ -1338,77 +1323,6 @@ function Inner() {
   const costBlocked = () => costInfo()?.blocked === true;
   const appConnectHref = () =>
     createAppHandoffConnectHref(appHandoff, completedRunLaunchUrl());
-
-  // --- install progress layer (App-Store-style, shown when ?auto=install) -----
-  // The steps come from components/install/InstallProgress.tsx, which /new also
-  // renders: an install is ONE bar that /new fills up to 内容を確認 and this
-  // screen carries the rest of the way. Nothing here restarts the list.
-  type InstallState =
-    | { readonly phase: "progress"; readonly step: InstallStep }
-    | { readonly phase: "gate" }
-    | { readonly phase: "error" }
-    | { readonly phase: "done" };
-  const installState = createMemo((): InstallState => {
-    // A dead run fetch (initial load only) or a failed apply-run creation must
-    // surface as an error, not an eternal spinner. A transient refetch error
-    // while a run is already on screen must NOT flip the install screen to the
-    // failure card — keep rendering from the last-good run below.
-    if ((run.error && !run.latest) || deploy.error()) {
-      return { phase: "error" };
-    }
-    const r = run.latest;
-    // The source was fetched and the service created back on /new — a run that
-    // has not loaded yet is still the 内容を確認 step, not a second 取得.
-    if (!r) return { phase: "progress", step: "check" };
-    // Terminal non-success states (failed / cancelled / expired) must not spin
-    // forever — polling has stopped, nothing will advance the screen.
-    if (
-      r.status === "failed" ||
-      r.status === "cancelled" ||
-      r.status === "expired"
-    ) {
-      return { phase: "error" };
-    }
-    if (r.type === "apply") {
-      if (r.status !== "succeeded") {
-        return { phase: "progress", step: "deploy" };
-      }
-      const readiness = completedRunReadiness();
-      if (readiness === "activation_failed") return { phase: "error" };
-      if (readiness === "ready") return { phase: "done" };
-      return { phase: "progress", step: "done" };
-    }
-    if (r.type === "destroy_apply") {
-      return r.status === "succeeded"
-        ? { phase: "done" }
-        : { phase: "progress", step: "deploy" };
-    }
-    // review (plan) run
-    if (r.status === "waiting_approval") return { phase: "gate" };
-    if (r.status === "succeeded") {
-      // Already deployed (a later apply consumed this plan's approval) — never
-      // spin "deploy" progress on a terminal plan. The auto-continue effect
-      // also forces the console here; this gate keeps an escape button in the
-      // brief window before that fires.
-      if (deployApprovalConsumed(r)) return { phase: "gate" };
-      // Clean plan auto-continues to apply; a gate (approval / destructive /
-      // blocked cost estimate) stops for explicit review.
-      return r.policyStatus === "pass" &&
-        !requiresDestructiveConfirmation(r) &&
-        !costBlocked()
-        ? { phase: "progress", step: "deploy" }
-        : { phase: "gate" };
-    }
-    return { phase: "progress", step: "check" };
-  });
-  /** A 1-tap update never runs 取得/作成, so it walks the shorter list rather
-   * than opening its bar half-full. */
-  const installSteps = () => (autoUpdateMode() ? UPDATE_STEPS : INSTALL_STEPS);
-  const installCurrentStep = createMemo((): InstallStep => {
-    const s = installState();
-    if (s.phase === "progress") return s.step;
-    return s.phase === "done" ? "done" : "check";
-  });
 
   // --- summary layer ---------------------------------------------------------
 
@@ -1625,15 +1539,6 @@ function Inner() {
     };
   });
 
-  // Consumer install/update error card copy — one friendly sentence, never the
-  // raw control-plane text. Action errors have already crossed a presentation
-  // boundary that intentionally retains no machine classification; only a
-  // persisted Run/RunDiagnostic code may select issue-specific behavior.
-  const installErrorText = (): string => {
-    if (deploy.error()) return t("install.errorSub");
-    return summary()?.sub ?? summary()?.text ?? t("install.errorSub");
-  };
-
   const supportDetailItems = (r: Run): readonly KVItem[] => {
     const out: KVItem[] = [
       { label: t("run.details.type"), value: operationLabel(r.type) },
@@ -1718,189 +1623,7 @@ function Inner() {
     return t("run.title.other");
   };
 
-  // One-line mirror of the install phase for the scoped live region below.
-  const installLiveText = () => {
-    const st = installState();
-    if (st.phase === "done") {
-      return autoUpdateMode()
-        ? t("update.doneTitleGeneric")
-        : t("install.doneTitleGeneric");
-    }
-    if (st.phase === "error") {
-      return autoUpdateMode()
-        ? t("update.errorTitle")
-        : t("install.errorTitle");
-    }
-    if (st.phase === "gate") return t("install.gateTitle");
-    return installStepLabel(installCurrentStep());
-  };
-
-  /** Clean App-Store-style install screen (progress → done → open/return),
-   * shown instead of the technical run console while ?auto=install is set. */
-  const installScreen = () => {
-    const st = installState();
-    const name = appName();
-    return (
-      <>
-        {/* Live region scoped to the one-line status only — putting it on
-            the whole screen re-announces every heading and button. */}
-        <p class="sr-only" role="status" aria-live="polite">
-          {installLiveText()}
-        </p>
-        <Switch>
-          <Match when={st.phase === "done"}>
-            <div class="av-install">
-              <div class="av-install-card av-install-done">
-                <span class="av-install-check" aria-hidden="true">
-                  ✓
-                </span>
-                <h2>
-                  {autoUpdateMode()
-                    ? name
-                      ? t("update.doneTitle", { name })
-                      : t("update.doneTitleGeneric")
-                    : name
-                      ? t("install.doneTitle", { name })
-                      : t("install.doneTitleGeneric")}
-                </h2>
-                <p>
-                  {autoUpdateMode()
-                    ? t("update.doneSub")
-                    : t("install.doneSub")}
-                </p>
-                <div class="av-install-actions">
-                  <Show when={completedRunLaunchUrl()}>
-                    {(url) => (
-                      <a
-                        class="tg-btn tg-btn-primary tg-btn-lg tg-btn-block"
-                        href={url()}
-                        target="_blank"
-                        rel="noreferrer noopener"
-                      >
-                        {t("install.open")}
-                      </a>
-                    )}
-                  </Show>
-                  <Show when={appConnectHref()}>
-                    {(href) => (
-                      <a
-                        class="tg-btn tg-btn-secondary tg-btn-block"
-                        href={href()}
-                      >
-                        {t("run.appHandoff.open", {
-                          app: appHandoffProductLabel(appHandoff!.product),
-                        })}
-                      </a>
-                    )}
-                  </Show>
-                  <a class="tg-btn tg-btn-ghost tg-btn-block" href="/">
-                    {t("install.toApps")}
-                  </a>
-                </div>
-              </div>
-            </div>
-          </Match>
-          <Match when={st.phase === "error"}>
-            <div class="av-install">
-              <div class="av-install-card">
-                <span
-                  class="av-install-badge av-install-badge-error"
-                  aria-hidden="true"
-                >
-                  !
-                </span>
-                <h2>
-                  {autoUpdateMode()
-                    ? t("update.errorTitle")
-                    : t("install.errorTitle")}
-                </h2>
-                {/* One plain sentence with the next action — the summary layer
-                  already classifies billing / account-access / known failure
-                  codes. The console stays behind 詳細を見る. */}
-                <p>{installErrorText()}</p>
-                <div class="av-install-actions">
-                  <button
-                    type="button"
-                    class="tg-btn tg-btn-secondary tg-btn-block"
-                    onClick={() => setForceConsole(true)}
-                  >
-                    {t("install.errorCta")}
-                  </button>
-                  <a class="tg-btn tg-btn-ghost tg-btn-block" href="/">
-                    {t("install.toApps")}
-                  </a>
-                </div>
-              </div>
-            </div>
-          </Match>
-          <Match when={st.phase === "gate"}>
-            <div class="av-install">
-              <div class="av-install-card">
-                <span
-                  class="av-install-badge av-install-badge-gate"
-                  aria-hidden="true"
-                >
-                  ?
-                </span>
-                <h2>{t("install.gateTitle")}</h2>
-                <p>{t("install.gateSub")}</p>
-                <div class="av-install-actions">
-                  <button
-                    type="button"
-                    class="tg-btn tg-btn-primary tg-btn-block"
-                    onClick={() => setForceConsole(true)}
-                  >
-                    {t("install.gateCta")}
-                  </button>
-                  <a class="tg-btn tg-btn-ghost tg-btn-block" href="/">
-                    {t("install.toApps")}
-                  </a>
-                </div>
-              </div>
-            </div>
-          </Match>
-          <Match when={st.phase === "progress"}>
-            {/* Same card, same step list, same bar as /new — this screen is the
-                second half of one install, not a new one. `live` stays off: the
-                region above already announces every phase. */}
-            <InstallProgressCard
-              name={name}
-              genericTitle={
-                autoUpdateMode()
-                  ? t("update.installingGeneric")
-                  : t("install.installingGeneric")
-              }
-              step={installCurrentStep()}
-              steps={installSteps()}
-              note={
-                completedRunReadiness() === "activation_pending"
-                  ? t("install.activationPending")
-                  : t("install.wait")
-              }
-            >
-              {/* Escape hatch: a long or wedged deploy must never be a dead
-                  end — drop to the full run console on demand. */}
-              <button
-                type="button"
-                class="tg-btn tg-btn-ghost tg-btn-sm av-install-detail"
-                onClick={() => setForceConsole(true)}
-              >
-                {t("install.errorCta")}
-              </button>
-            </InstallProgressCard>
-          </Match>
-        </Switch>
-      </>
-    );
-  };
-
-  return (
-    <>
-      <Show when={autoInstall() && !forceConsole()} fallback={installConsole()}>
-        {installScreen()}
-      </Show>
-    </>
-  );
+  return installConsole();
 
   function installConsole() {
     return (

@@ -8,7 +8,6 @@ import {
   useLocation,
   useParams,
 } from "@solidjs/router";
-import { hasCapsuleSourceOptionsInstallLink } from "takosumi-contract";
 import { installStaleAssetReload } from "./lib/chunk-reload.ts";
 import { initializeTakosumiRuntimeCapabilities } from "./lib/runtime-capabilities.ts";
 import { installHandoffTarget } from "./lib/app-handoff.ts";
@@ -58,13 +57,7 @@ const WorkloadListView = lazy(
 const WorkloadDetailView = lazy(
   () => import("./views/apps/WorkloadDetailView.tsx"),
 );
-const NewAppView = lazy(() => import("./views/new/NewAppView.tsx"));
-const CapsuleSourceOptionsInstallView = lazy(
-  () => import("./views/new/CapsuleSourceOptionsInstallView.tsx"),
-);
-const CompositionInstallView = lazy(
-  () => import("./views/new/CompositionInstallView.tsx"),
-);
+const InstallView = lazy(() => import("./views/new/InstallView.tsx"));
 const RunsListView = lazy(() => import("./views/runs/RunsListView.tsx"));
 const RunView = lazy(() => import("./views/runs/RunView.tsx"));
 const RunGroupView = lazy(() => import("./views/runs/RunGroupView.tsx"));
@@ -133,14 +126,7 @@ function InstallEntryRoute() {
     // parameters cannot turn a handoff into an automatic install.
     return <Navigate href={installHandoffTarget(handoff)} />;
   }
-  if (params.get("kind") === "composition") {
-    return <Navigate href={`/composition/install${location.search}`} />;
-  }
-  return hasCapsuleSourceOptionsInstallLink(location.search) ? (
-    <CapsuleSourceOptionsInstallView />
-  ) : (
-    <Navigate href={`/new${location.search}`} />
-  );
+  return <Navigate href={`/new${location.search}`} />;
 }
 
 /** Legacy Capsule-detail paths -> `/workloads/:id`. */
@@ -192,9 +178,12 @@ function App() {
         <Route path="/settings/billing" component={BillingView} />
         <Route path="/settings/manage" component={ManageView} />
         <Route path="/workloads" component={WorkloadListView} />
-        <Route path="/new" component={NewAppView} />
+        <Route path="/new" component={InstallView} />
         <Route path="/install" component={InstallEntryRoute} />
-        <Route path="/composition/install" component={CompositionInstallView} />
+        <Route
+          path="/composition/install"
+          component={() => <RedirectWithQuery to="/new" />}
+        />
         <Route path="/connections" component={ConnectionsView} />
         <Route path="/workloads/:id" component={WorkloadDetailView} />
         <Route path="/workloads/:id/:tab" component={WorkloadDetailView} />

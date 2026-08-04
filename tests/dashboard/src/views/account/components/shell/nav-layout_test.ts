@@ -56,7 +56,7 @@ describe("dashboard shell navigation layout", () => {
     // No view may re-wrap itself in the chrome (the layout owns it).
     const viewsThatMustNotWrap = [
       "views/apps/AppListView.tsx",
-      "views/new/NewAppView.tsx",
+      "views/new/InstallView.tsx",
       "views/runs/RunView.tsx",
       "views/workspace/WorkspaceSettingsView.tsx",
       "views/settings/SettingsView.tsx",
@@ -152,7 +152,7 @@ describe("dashboard shell navigation layout", () => {
     // The store tab renders the merged view — browsing and adding are the same
     // page, so there is no second store surface to drift.
     expect(indexSource).toContain(
-      '<Route path="/new" component={NewAppView} />',
+      '<Route path="/new" component={InstallView} />',
     );
     expect(indexSource).not.toContain("StoreView");
     // /store survives only as a query-preserving compatibility entrance.
@@ -161,12 +161,12 @@ describe("dashboard shell navigation layout", () => {
     expect(indexSource).toContain('path="/install"');
     // Exactly one StoreBrowser host in the app.
     const storeBrowserHosts = [
-      "views/new/NewAppView.tsx",
+      "views/new/InstallView.tsx",
       "views/apps/AppListView.tsx",
       "views/apps/WorkloadListView.tsx",
       "views/settings/SettingsView.tsx",
     ].filter((rel) => read(rel).includes("<StoreBrowser"));
-    expect(storeBrowserHosts).toEqual(["views/new/NewAppView.tsx"]);
+    expect(storeBrowserHosts).toEqual(["views/new/InstallView.tsx"]);
   });
 
   test("mobile bottom bar mirrors the sidebar trio, icon-only", () => {

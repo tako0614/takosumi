@@ -10,8 +10,8 @@ const workloadListViewSource = readFileSync(
   resolve(here, "../../../../../dashboard/src/views/apps/WorkloadListView.tsx"),
   "utf8",
 );
-const newAppViewSource = readFileSync(
-  resolve(here, "../../../../../dashboard/src/views/new/NewAppView.tsx"),
+const installViewSource = readFileSync(
+  resolve(here, "../../../../../dashboard/src/views/new/InstallView.tsx"),
   "utf8",
 );
 
@@ -21,11 +21,9 @@ describe("service add install posture", () => {
     expect(workloadListViewSource).not.toContain('href="/store"');
     expect(workloadListViewSource).not.toContain('href="/workloads/new"');
     expect(workloadListViewSource).not.toContain("createService(");
-    expect(newAppViewSource).toContain("StoreBrowser");
-    expect(newAppViewSource).toContain("startLinkImport");
-    expect(en["new.discovery.title"]).toBe("Choose a service to add");
-    expect(en["new.git.url"]).toBe("Install link");
-    expect(ja["new.discovery.title"]).toBe("追加するサービスを選ぶ");
-    expect(ja["new.git.url"]).toBe("インストールリンク");
+    expect(installViewSource).toContain("StoreBrowser");
+    expect(installViewSource).toContain("prepareInstall");
+    expect(en["installStore.browseTitle"]).toBe("Find a service");
+    expect(ja["installStore.browseTitle"]).toBe("サービスを探す");
   });
 });

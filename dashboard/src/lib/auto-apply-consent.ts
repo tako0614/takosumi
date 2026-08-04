@@ -1,9 +1,8 @@
 /**
- * Tab-local consent for the one-action install / update auto-apply.
+ * Tab-local consent for the one-action update auto-apply.
  *
- * `/runs/:id?auto=install` (and `?auto=update`) lets the run screen carry a
- * clean plan straight through to apply so the visitor never presses "deploy"
- * on a plan console. The query parameter alone is attacker-controllable: a
+ * `/runs/:id?auto=update` lets the run screen carry a clean update plan
+ * straight through to apply. The query parameter alone is attacker-controllable: a
  * crafted link handed to a signed-in victim would apply a pending plan in
  * their workspace — real infrastructure, real spend — with no user action,
  * using the victim as a confused deputy (CWE-352).
@@ -20,13 +19,13 @@
  * it — which is exactly the property `?auto` lacks.
  */
 
-export type AutoApplyMode = "install" | "update";
+export type AutoApplyMode = "update";
 
 const CONSENT_KEY_PREFIX = "takosumi.auto-apply-consent@";
 
 /** Narrow a raw `?auto` query value to a mode this app actually offers. */
 export function autoApplyModeFromParam(value: unknown): AutoApplyMode | null {
-  return value === "install" || value === "update" ? value : null;
+  return value === "update" ? value : null;
 }
 
 /**
