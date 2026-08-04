@@ -1504,7 +1504,9 @@ async function loadHostProofPins(): Promise<HostProofPins> {
       HISTORICAL_PUBLICATION_REPOSITORY ||
     !/^[a-f0-9]{40}$/u.test(pins.checkoutCommit) ||
     !/^\d+\.\d+\.\d+$/u.test(pins.checkoutVersion) ||
-    pins.checkoutTag !== `v${pins.checkoutVersion}` ||
+    (pins.checkoutTag !== `v${pins.checkoutVersion}` &&
+      pins.checkoutTag !==
+        `forms/admissions/v${pins.checkoutVersion}`) ||
     pins.admissionRoot !== "admission/v4" ||
     !/^\d+\.\d+\.\d+$/u.test(pins.admissionCheckpoint.version) ||
     pins.admissionCheckpoint.tag !==
