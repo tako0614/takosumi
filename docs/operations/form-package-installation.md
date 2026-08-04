@@ -178,9 +178,9 @@ bun run service-form:published-package-host-proof \
   --json
 ```
 
-The command requires the exact clean canonical checkout
-`tako0614/terraform-provider-takoform@v1.0.2` and Takosumi-owned pins for
-`admission/v4`, checkpoint `forms/admissions/v1.0.6`, the Standard admission
+The command requires the exact clean canonical checkout at the immutable
+`forms/admissions/v1.0.7` checkpoint and Takosumi-owned pins for
+`admission/v4`, the retained admission
 set, full immutable publication set, trust policy, and TrustedRoot. It selects
 exactly the nine Forms currently offered by Takosumi Cloud:
 `EdgeWorker`, `RelationalDatabase`, `ObjectBucket`, `KeyValueStore`, `Queue`,
