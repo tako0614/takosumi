@@ -21,3 +21,20 @@ export function isProviderConnectionCandidate(
     (connection.scope === "workspace" && connection.status === "verified")
   );
 }
+
+/**
+ * Returns the user-facing label for a Provider Connection in install choices.
+ *
+ * Public managed capacity is an operator-scoped Provider Connection. Its
+ * persisted display name is operator seed data (and may describe the backing
+ * host), so the install flow presents the product-owned label instead.
+ * Workspace connections retain the name chosen by the user.
+ */
+export function providerConnectionDisplayName(
+  connection: ProviderConnection,
+  managedLabel: string,
+): string {
+  return isPublicManagedProviderConnection(connection)
+    ? managedLabel
+    : connection.displayName || connection.id;
+}

@@ -76,7 +76,10 @@ import { listWorkspacesCached } from "../../lib/workspace-list.ts";
 import { clearCapsuleListCache } from "../../lib/capsule-list.ts";
 import { clearCurrentStateVersionCache } from "../../lib/current-state-versions.ts";
 import { clearDashboardOverviewCache } from "../../lib/dashboard-overview.ts";
-import { isProviderConnectionCandidate } from "../../lib/provider-connections.ts";
+import {
+  isProviderConnectionCandidate,
+  providerConnectionDisplayName,
+} from "../../lib/provider-connections.ts";
 import { friendlyError } from "../../lib/error-copy.ts";
 import { locale, t } from "../../i18n/index.ts";
 import { fetchTcsListing, type TcsListing } from "../../lib/tcs-client.ts";
@@ -1304,7 +1307,10 @@ function Inner() {
                         <For each={sourceCandidates()}>
                           {(connection) => (
                             <option value={connection.id}>
-                              {connection.displayName || connection.id}
+                              {providerConnectionDisplayName(
+                                connection,
+                                t("installStore.managedProvider"),
+                              )}
                             </option>
                           )}
                         </For>
@@ -1363,7 +1369,10 @@ function Inner() {
                       <For each={choices()}>
                         {(connection) => (
                           <option value={connection.id}>
-                            {connection.displayName || connection.id}
+                            {providerConnectionDisplayName(
+                              connection,
+                              t("installStore.managedProvider"),
+                            )}
                           </option>
                         )}
                       </For>
