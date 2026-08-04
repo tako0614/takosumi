@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import type { ProviderConnection } from "takosumi-contract";
-import { isProviderConnectionCandidate } from "../../../../dashboard/src/lib/provider-connections.ts";
+import {
+  isProviderConnectionCandidate,
+  providerConnectionDisplayName,
+} from "../../../../dashboard/src/lib/provider-connections.ts";
 
 const NOW = "2026-08-02T00:00:00.000Z";
 
@@ -77,5 +80,33 @@ describe("dashboard ProviderConnection candidates", () => {
         }),
       ),
     ).toBe(false);
+  });
+
+  test("uses the product label for public managed capacity", () => {
+    expect(
+      providerConnectionDisplayName(
+        connection({
+          scope: "operator",
+          displayName: "Takoform portable form host",
+          scopeHints: {
+            managedProvider: true,
+            managedProviderProfile: "takoform.form-host.v1",
+          },
+        }),
+        "Takosumi Cloud",
+      ),
+    ).toBe("Takosumi Cloud");
+  });
+
+  test("keeps Workspace-owned connection display names unchanged", () => {
+    expect(
+      providerConnectionDisplayName(
+        connection({ displayName: "My cloud account" }),
+        "Takosumi Cloud",
+      ),
+    ).toBe("My cloud account");
+    expect(
+      providerConnectionDisplayName(connection(), "Takosumi Cloud"),
+    ).toBe("connection_1");
   });
 });
