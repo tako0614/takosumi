@@ -388,6 +388,111 @@ test("Cloudflare Accounts authenticates before resolving the cold Control plane"
   expect(warmTiming).toMatch(/tk_control_init;dur=\d+(?:\.\d+)?/u);
 });
 
+test("Cloudflare authorize revalidates a Capsule OIDC client with canonical Control", async () => {
+  const db = await versionedAccountsDb();
+  const sessionSalt = "cloudflare-capsule-oidc-live-grant-session-salt";
+  registerSessionHashSaltConfig({ salt: sessionSalt });
+  const store = new D1AccountsStore(db, { schemaMode: "predeployed" });
+  const now = Date.now();
+  const subject = "tsub_capsule_oidc_live_grant";
+  const sessionId = "sess_capsule_oidc_live_grant";
+  const capsuleId = "cap_capsule_oidc_live_grant";
+  const workspaceId = "ws_capsule_oidc_live_grant";
+  const clientId = "toc_capsule_oidc_live_grant";
+  const redirectUri = "https://capsule.example.test/auth/oidc/callback";
+  const installConfig = {
+    id: "icfg_capsule_oidc_live_grant",
+    variableMapping: { oidc_client_id: clientId },
+    installExperience: {
+      projections: [
+        {
+          kind: "oidc_client",
+          variables: { clientId: "oidc_client_id" },
+          callbackPath: "/auth/oidc/callback",
+          scopes: ["openid", "profile"],
+        },
+      ],
+    },
+    updatedAt: new Date(now).toISOString(),
+  };
+  await store.saveAccount({
+    subject,
+    createdAt: now,
+    updatedAt: now,
+  });
+  await store.saveAccountSession({
+    sessionId,
+    subject,
+    createdAt: now,
+    expiresAt: now + 60_000,
+  });
+  await store.saveOidcClient({
+    clientId,
+    capsuleId,
+    namespacePath: "identity.oidc",
+    issuerUrl: "http://app.example.test",
+    redirectUris: [redirectUri],
+    allowedScopes: ["openid", "profile"],
+    subjectMode: "pairwise",
+    tokenEndpointAuthMethod: "none",
+    createdAt: now,
+    updatedAt: now,
+  });
+  let controlInitializationCalls = 0;
+  const worker = createCloudflareWorker({
+    controlPlaneOperations: async () => {
+      controlInitializationCalls += 1;
+      return {
+        capsules: {
+          getCapsule: async () => ({
+            id: capsuleId,
+            workspaceId,
+            installConfigId: installConfig.id,
+            name: "capsule-live-grant",
+            status: "active",
+          }),
+          getInstallConfig: async () => installConfig,
+        },
+        workspaces: {
+          getWorkspace: async () => ({
+            id: workspaceId,
+            ownerUserId: subject,
+          }),
+        },
+        members: { listMembers: async () => [] },
+      } as never;
+    },
+  });
+  const authorize = new URL("http://app.example.test/oauth/authorize");
+  authorize.search = new URLSearchParams({
+    response_type: "code",
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    scope: "openid profile",
+    code_challenge: "capsule-live-grant-challenge",
+    code_challenge_method: "S256",
+    state: "capsule-live-grant-state",
+  }).toString();
+
+  const response = await worker.fetch(
+    new Request(authorize, {
+      headers: { "x-takosumi-account-session": sessionId },
+    }),
+    env({
+      TAKOSUMI_ACCOUNTS_DB: db,
+      TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE: "predeployed",
+      TAKOSUMI_ACCOUNTS_ISSUER: "http://app.example.test",
+      TAKOSUMI_ACCOUNT_SESSION_HASH_SALT: sessionSalt,
+    }),
+  );
+
+  expect(response.status).toBe(302);
+  expect(response.headers.get("location")).toStartWith(
+    `${redirectUri}?code=`,
+  );
+  expect(controlInitializationCalls).toBe(1);
+});
+
 test("Cloudflare config preserves a host-specific public mobile OIDC client", () => {
   const mobileClient = {
     clientId: "takos-mobile-host-example",
