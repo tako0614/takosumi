@@ -139,10 +139,12 @@ function RedirectLegacyWorkloadDetail() {
 
 function RedirectLegacyWorkspaceSettingsTab() {
   const params = useParams<{ tab: string }>();
+  const target =
+    params.tab === "billing"
+      ? "/settings/billing"
+      : `/advanced/workspace/${encodeURIComponent(params.tab)}`;
   return (
-    <RedirectWithQuery
-      to={`/advanced/workspace/${encodeURIComponent(params.tab)}`}
-    />
+    <RedirectWithQuery to={target} />
   );
 }
 
@@ -196,6 +198,10 @@ function App() {
         <Route path="/activity" component={ActivityView} />
         <Route path="/notifications" component={NotificationsView} />
         <Route path="/advanced/workspace" component={AdvancedWorkspaceView} />
+        <Route
+          path="/advanced/workspace/billing"
+          component={() => <RedirectWithQuery to="/settings/billing" />}
+        />
         <Route
           path="/advanced/workspace/:tab"
           component={AdvancedWorkspaceView}

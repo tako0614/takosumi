@@ -257,7 +257,8 @@ describe("Run review ProviderConnection evidence", () => {
   test("gates commercial recovery behind the generic capability surface", () => {
     expect(runViewSource).toContain("hasPlatformExtensionCapability");
     expect(runViewSource).toContain('"billing.commercial.v1"');
-    expect(runViewSource).toContain('href="/billing"');
+    expect(runViewSource).toContain('href="/settings/billing"');
+    expect(runViewSource).not.toContain('href="/billing"');
     expect(runViewSource).toContain('"run.cost.billingCta"');
     expect(runViewSource).toContain('"run.cost.operatorHelp"');
     expect(en["run.cost.billingCta"]).toContain("billing");

@@ -94,6 +94,12 @@ describe("dashboard router fallbacks (FATAL FIX 3)", () => {
     expect(source).toMatch(
       /<Route\s+path="\/billing"\s+component=\{\(\)\s*=>\s*<RedirectWithQuery\s+to="\/settings\/billing"\s*\/>\}\s*\/>/,
     );
+    // The old advanced Workspace billing URL is redirect-only too; billing
+    // has one normal-user home under the settings hub.
+    expect(source).toMatch(
+      /<Route\s+path="\/advanced\/workspace\/billing"\s+component=\{\(\)\s*=>\s*<RedirectWithQuery\s+to="\/settings\/billing"\s*\/>\}\s*\/>/,
+    );
+    expect(source).toContain('params.tab === "billing"');
     expect(source).toContain(
       '<Route path="/advanced/workspace" component={AdvancedWorkspaceView} />',
     );

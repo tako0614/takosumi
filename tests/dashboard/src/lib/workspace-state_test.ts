@@ -47,7 +47,7 @@ test("Resources query selects a requested Workspace only after validation", () =
   );
   expect(
     resourcesWorkspaceQueryId(
-      "/advanced/workspace/billing",
+      "/settings/billing",
       "?workspaceId=ws_other",
     ),
   ).toBe("");
