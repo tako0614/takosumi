@@ -51,6 +51,7 @@ export async function ensureTakosumiAccountsOidcForCapsule(input: {
     workspace.handle,
     input.managedPublicBaseDomain,
     input.installConfig.managedPublicHostname?.mode ?? "scoped",
+    input.capsule.slug,
   );
   if (!redirectOrigin) return;
 
@@ -254,6 +255,7 @@ function appOriginFromInstallVariables(
   workspaceHandle?: string,
   managedPublicBaseDomain?: string,
   managedPublicHostnameMode: "scoped" | "vanity" = "scoped",
+  capsuleSlug?: string,
 ): string | undefined {
   if (!publicEndpoint) return undefined;
   const declaredBaseDomain = publicEndpointBaseDomain(
@@ -262,9 +264,10 @@ function appOriginFromInstallVariables(
   const baseDomain =
     normalizeManagedPublicBaseDomain(managedPublicBaseDomain) ??
     declaredBaseDomain;
-  const requestedSlug = publicEndpoint.subdomainVariable
-    ? stringInstallVariable(variables[publicEndpoint.subdomainVariable])
-    : undefined;
+  const requestedSlug =
+    (publicEndpoint.subdomainVariable
+      ? stringInstallVariable(variables[publicEndpoint.subdomainVariable])
+      : undefined) ?? capsuleSlug;
   for (const variableName of publicEndpoint.urlVariable
     ? [publicEndpoint.urlVariable]
     : []) {
