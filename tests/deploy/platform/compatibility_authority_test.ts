@@ -180,7 +180,10 @@ test("data-plane compatibility resolver rejects non-Ready evidence", async () =>
     },
   );
 
-  expect(Object.keys(authority.data ?? {})).toEqual(["resolveReadyResource"]);
+  expect(Object.keys(authority.data ?? {})).toEqual([
+    "resolveReadyResource",
+    "resolveReadyResourceGrant",
+  ]);
   expect(
     await authority.data?.resolveReadyResource({
       space: "space_example",
@@ -188,6 +191,45 @@ test("data-plane compatibility resolver rejects non-Ready evidence", async () =>
       name: "assets",
     }),
   ).toBeUndefined();
+});
+
+test("data-plane compatibility resolver keeps stored Resource grants exact", async () => {
+  const observed: unknown[] = [];
+  const authority = await createPlatformCompatibilityAuthority(
+    {
+      request: new Request("https://operator.example/compat/example/v1/data"),
+      env: {} as never,
+      route: {
+        basePath: "/compat/example/v1",
+        handlerKey: "EXAMPLE_COMPAT",
+        compatibilityProfiles: [
+          { profile: "compat.example.v1", planes: ["data"] },
+        ],
+      },
+    },
+    {
+      resolveReadyResourceGrant: async (input, grant) => {
+        observed.push({ input, grant });
+        return resourceEvidence("Ready");
+      },
+    },
+  );
+
+  const input = {
+    space: "space_example",
+    kind: "ObjectBucket" as const,
+    name: "assets",
+    interface: { type: "object.storage", permission: "get" },
+  };
+  const grant = {
+    workspaceId: "space_example",
+    resourceId: "tkrn:space_example:ObjectBucket:assets",
+    permission: "get",
+  };
+  await expect(
+    authority.data?.resolveReadyResourceGrant(input, grant),
+  ).resolves.toMatchObject({ resource: { status: { phase: "Ready" } } });
+  expect(observed).toEqual([{ input, grant }]);
 });
 
 test("compatibility profiles never fall back to the generic raw fetch handler", async () => {

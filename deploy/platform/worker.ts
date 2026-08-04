@@ -3027,6 +3027,20 @@ export interface PlatformCompatibilityAuthorization {
 }
 
 /**
+ * Exact capability already admitted and persisted by a compatibility
+ * protocol. This is not a Workspace role or a Principal InterfaceBinding:
+ * the caller must present the one Resource, Interface, and permission tuple
+ * that its own credential authorizes, and the host revalidates that tuple
+ * against current Ready/Resolved canonical state.
+ */
+export interface PlatformCompatibilityStoredResourceGrant {
+  readonly workspaceId: string;
+  readonly resourceId: string;
+  readonly interfaceId?: string;
+  readonly permission: string;
+}
+
+/**
  * The only mutation authority given to a control-plane compatibility profile.
  * Every accepted request is constrained to `/v1/resources` and dispatched to
  * the same Resource Deploy API used by the provider, CLI, and dashboard.
@@ -3595,6 +3609,10 @@ export interface PlatformCompatibilityDataReadResolver {
     input: PlatformCompatibilityReadyResourceInput,
     authorization?: PlatformCompatibilityAuthorization,
   ): Promise<PlatformCompatibilityReadyResourceEvidence | undefined>;
+  resolveReadyResourceGrant(
+    input: PlatformCompatibilityReadyResourceInput,
+    grant: PlatformCompatibilityStoredResourceGrant,
+  ): Promise<PlatformCompatibilityReadyResourceEvidence | undefined>;
 }
 
 /**
@@ -3792,6 +3810,7 @@ export type PlatformExtensionSessionVerifier = (
 export interface PlatformCompatibilityAuthorityDependencies {
   readonly dispatchResourceRequest?: typeof dispatchPlatformCompatibilityResourceRequest;
   readonly resolveReadyResource?: typeof resolvePlatformCompatibilityReadyResource;
+  readonly resolveReadyResourceGrant?: typeof resolvePlatformCompatibilityStoredResourceGrant;
   readonly routeInterfaces?: PlatformCompatibilityRouteInterfaceControlPort;
 }
 
@@ -3849,6 +3868,17 @@ export async function createPlatformCompatibilityAuthority(
                   resolvePlatformCompatibilityReadyResource,
                 resource,
                 authorization,
+                input,
+              ),
+            resolveReadyResourceGrant: (
+              resource: PlatformCompatibilityReadyResourceInput,
+              grant: PlatformCompatibilityStoredResourceGrant,
+            ) =>
+              resolveReadyCompatibilityGrantEvidence(
+                dependencies.resolveReadyResourceGrant ??
+                  resolvePlatformCompatibilityStoredResourceGrant,
+                resource,
+                grant,
                 input,
               ),
           }),
@@ -4276,6 +4306,21 @@ async function resolveReadyCompatibilityEvidence(
   return evidence?.resource.status?.phase === "Ready" ? evidence : undefined;
 }
 
+async function resolveReadyCompatibilityGrantEvidence(
+  resolver: typeof resolvePlatformCompatibilityStoredResourceGrant,
+  input: PlatformCompatibilityReadyResourceInput,
+  grant: PlatformCompatibilityStoredResourceGrant,
+  context: {
+    readonly request: Request;
+    readonly env: CloudflareWorkerEnv;
+    readonly route: PlatformExtensionRoute;
+    readonly session?: PlatformExtensionSessionContext;
+  },
+): Promise<PlatformCompatibilityReadyResourceEvidence | undefined> {
+  const evidence = await resolver(input, grant, context);
+  return evidence?.resource.status?.phase === "Ready" ? evidence : undefined;
+}
+
 async function dispatchPlatformCompatibilityResourceRequest(
   request: Request,
   authorization: PlatformCompatibilityAuthorization | undefined,
@@ -4510,6 +4555,112 @@ async function resolvePlatformCompatibilityReadyResource(
     ...evidence,
     ...(resolvedInterface ? { interface: resolvedInterface } : {}),
   });
+}
+
+async function resolvePlatformCompatibilityStoredResourceGrant(
+  input: PlatformCompatibilityReadyResourceInput,
+  grant: PlatformCompatibilityStoredResourceGrant,
+  context: {
+    readonly request: Request;
+    readonly env: CloudflareWorkerEnv;
+    readonly route: PlatformExtensionRoute;
+    readonly session?: PlatformExtensionSessionContext;
+  },
+): Promise<PlatformCompatibilityReadyResourceEvidence | undefined> {
+  const space = safePlatformExtensionContextId(input.space);
+  const name = safePlatformCompatibilityResourceName(input.name);
+  if (!space || !name || !isResourceShapeKind(input.kind) || !input.interface) {
+    return undefined;
+  }
+  const resourceId = `tkrn:${space}:${input.kind}:${name}`;
+  const grantWorkspaceId = safePlatformExtensionContextId(grant.workspaceId);
+  const grantResourceId = safePlatformExtensionSubject(grant.resourceId);
+  const grantInterfaceId = safePlatformExtensionContextId(grant.interfaceId);
+  const requestedInterfaceId = safePlatformExtensionContextId(
+    input.interface.id,
+  );
+  const requestedInterfaceType = safePlatformExtensionContextId(
+    input.interface.type,
+  );
+  const permission = input.interface.permission.trim();
+  if (
+    grantWorkspaceId !== space ||
+    grantResourceId !== resourceId ||
+    !permission ||
+    grant.permission.trim() !== permission ||
+    (requestedInterfaceId === undefined) ===
+      (requestedInterfaceType === undefined) ||
+    (grant.interfaceId !== undefined &&
+      (!grantInterfaceId || grantInterfaceId !== requestedInterfaceId))
+  ) {
+    return undefined;
+  }
+
+  const session = context.session?.authenticated
+    ? context.session
+    : {
+        authenticated: true as const,
+        authKind: "protocol-credential" as const,
+        workspaceId: space,
+        subject: `stored-resource-grant:${resourceId}`,
+      };
+  const verified = await platformExtensionVerifiedWorkspaceSession(
+    context.request,
+    context.env,
+    session,
+    space,
+    undefined,
+    "read",
+  );
+  if (!verified.ok) return undefined;
+
+  const operations = await takosumiOperationsFor(context.env);
+  const evidence = await operations.resourceCompatibility?.resolveReadyResource(
+    { space, kind: input.kind, name },
+  );
+  if (!evidence || evidence.resource.status?.phase !== "Ready") {
+    return undefined;
+  }
+
+  try {
+    const candidates = requestedInterfaceId
+      ? [await operations.interfaces.get(requestedInterfaceId)]
+      : await operations.interfaces.list({
+          workspaceId: space,
+          ownerKind: "Resource",
+          ownerId: resourceId,
+          type: requestedInterfaceType,
+          limit: 2,
+        });
+    const iface = selectUniquePlatformCompatibilityInterface(candidates, {
+      workspaceId: space,
+      resourceId,
+      selector: {
+        ...(requestedInterfaceId ? { id: requestedInterfaceId } : {}),
+        ...(requestedInterfaceType ? { type: requestedInterfaceType } : {}),
+      },
+    });
+    if (!iface || !interfaceDocumentAllows(iface, permission)) {
+      return undefined;
+    }
+    return structuredClone({ ...evidence, interface: iface });
+  } catch {
+    return undefined;
+  }
+}
+
+function interfaceDocumentAllows(
+  iface: Interface,
+  permission: string,
+): boolean {
+  const document = objectRecord(iface.spec.document);
+  const operations = Array.isArray(document.operations)
+    ? document.operations
+    : [];
+  return operations.some(
+    (operation) =>
+      typeof operation === "string" && operation.trim() === permission,
+  );
 }
 
 function compatibilityAuthoritySession(
