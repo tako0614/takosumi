@@ -304,15 +304,49 @@ test("Store preflight resolves the repository default before exact compatibility
   const cookie = seedSession(accountStore);
   const deployStore = new InMemoryOpenTofuControlStore();
   const runner = recordingRunner();
+  const repositoryUrl =
+    "https://git.example.com/example/repository-default.git";
+  const hostPolicy = {
+    id: "cfg_repo_default_host_policy",
+    name: "repo-default-host-policy",
+    sourceSelector: {
+      url: "https://git.example.com/example/repository-default/",
+      path: ".",
+    },
+    sourceBuild: {
+      commands: [{ argv: ["bun", "install", "--frozen-lockfile"] }],
+      outputs: ["node_modules/.ready"],
+    },
+    lifecycleActions: [
+      {
+        apiVersion: "takosumi.dev/v1alpha1" as const,
+        kind: "command" as const,
+        id: "repo-default-activate",
+        phase: "post_apply" as const,
+        executor: "runner" as const,
+        command: ["bun", "run", "activate"],
+        runnerCapability: "capsule.lifecycle.command.v1",
+      },
+    ],
+    variableMapping: {},
+    outputAllowlist: {},
+    policy: {
+      lifecycleActions: {
+        allowedExecutors: ["runner" as const],
+        allowedRunnerCapabilities: ["capsule.lifecycle.command.v1"],
+      },
+    },
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+  };
   const { operations } = await createTakosumiService({
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: deployStore,
     opentofuRunner: runner,
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    operatorInstallConfigs: [hostPolicy],
   });
-  const repositoryUrl =
-    "https://git.example.com/example/repository-default.git";
   const seeded = await seedCapsuleModel(deployStore, {
     workspaceId: "ws_repo_default_preflight",
     capsuleId: "cap_repo_default_seed",
@@ -320,24 +354,6 @@ test("Store preflight resolves the repository default before exact compatibility
     sourceUrl: repositoryUrl,
     installConfig: {
       modulePath: ".",
-      sourceSelector: {
-        url: "https://git.example.com/example/repository-default/",
-        path: "legacy/policy-path",
-      },
-      store: {
-        source: {
-          url: "https://git.example.com/example/repository-default",
-          path: "legacy/store-path",
-        },
-        order: 1,
-        surface: "service",
-        kind: "application",
-        provider: "portable",
-        suggestedName: "repo-default",
-        badge: { ja: "App", en: "App" },
-        name: { ja: "Repo default", en: "Repo default" },
-        description: { ja: "Fixture", en: "Fixture" },
-      },
     },
   });
   const digest = `sha256:${"c".repeat(64)}`;
@@ -391,6 +407,11 @@ test("Store preflight resolves the repository default before exact compatibility
     url: seeded.source.url,
     path: seeded.source.defaultPath,
   });
+  expect(derivedInstallConfig.store).toBeUndefined();
+  expect(derivedInstallConfig.sourceBuild).toEqual(hostPolicy.sourceBuild);
+  expect(derivedInstallConfig.lifecycleActions).toEqual(
+    hostPolicy.lifecycleActions,
+  );
 
   const createdFromDerivedConfig = await controlJson<{
     readonly capsule: { readonly id: string; readonly installConfigId: string };

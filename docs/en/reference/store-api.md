@@ -31,6 +31,9 @@ multi-module manifest requires an exact `defaultModule` in
 Multiple host overrides also fail closed; zero overrides use the generic host
 policy, so installing an app does not require registering an app-specific
 InstallConfig in the Store.
+A host override is execution policy matched by `sourceSelector.url`; it does
+not need `store` presentation metadata. Operator policy that permits lifecycle
+or credential use therefore cannot surface as a second Store listing.
 
 ## Authority boundary
 
