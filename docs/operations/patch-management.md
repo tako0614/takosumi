@@ -31,6 +31,7 @@ bun run deploy
 | CredentialRecipe / provider policy packs | `takosumi/docs/internal/core-spec.md`, schema/store/policy packages | CredentialRecipe/provider allowlist tests + custom provider policy evidence |
 | Custom runner policy                     | `takosumi/runner`, operator boundary policy                         | custom runner smoke + egress policy evidence                                |
 | Provider mirror/cache policy             | runner tofu CLI config / provider mirror                            | provider install attestation tests                                          |
+| App-owned provider CLI runtime            | pinned Node binary in `runner/Dockerfile`                            | checksum verification + selected lifecycle-action smoke                     |
 | OpenTofu modules                         | `takosumi/opentofu-modules`                                         | module tests / fixture plan where available                                 |
 | Bun/npm dependencies                     | each Takosumi package root                                          | `bun outdated`, `bun update`, checks                                        |
 | Operator realized config                 | operator-owned state outside source repositories                    | private config review; no secrets committed                                 |
@@ -46,6 +47,8 @@ and commands, but never secret values, provider account ids, or raw object keys.
 - Distro suite tags are allowed only with scheduled rebuild and vulnerability scan evidence.
 - Production container references in realized config should be digest-pinned after promotion.
 - Package installs must avoid unnecessary packages (`--no-install-recommends` or equivalent).
+- The runner's Bun server and app-owned provider CLI runtime are separate contracts. Provider
+  CLIs that declare a Node engine run through the checksum-pinned Node binary, not through Bun.
 
 ## Weekly Patch Window
 
