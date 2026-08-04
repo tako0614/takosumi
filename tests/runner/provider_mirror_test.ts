@@ -78,6 +78,26 @@ test("GA runner pins its base image and verified OpenTofu runtime bytes", async 
   expect(dockerfile).not.toContain("FROM oven/bun:1\n");
 });
 
+test("GA runner pins the Node runtime required by app-owned provider CLIs", async () => {
+  const dockerfile = await readFile(RUNNER_DOCKERFILE, "utf8");
+
+  expect(dockerfile).toContain("ARG NODE_VERSION=24.19.0");
+  expect(dockerfile).toContain(
+    "ARG NODE_SHA256=14b342e71204f811bde6153be8e04b62aef63c236fef92b55f9c83154b409647",
+  );
+  expect(dockerfile).toContain(
+    'https://nodejs.org/dist/v${NODE_VERSION}/${archive}',
+  );
+  expect(dockerfile).toContain("sha256sum -c /tmp/node_SHA256SUM");
+  expect(dockerfile).toContain("/usr/local/share/licenses/node");
+  expect(dockerfile).toContain(
+    '"node-v${NODE_VERSION}-linux-x64/LICENSE"',
+  );
+  expect(dockerfile).toContain(
+    'test "$(node --version)" = "v${NODE_VERSION}"',
+  );
+});
+
 test("runner image copies the lifecycle provider-configuration contract closure", async () => {
   const dockerfile = await readFile(RUNNER_DOCKERFILE, "utf8");
 

@@ -1,18 +1,40 @@
 ARG BUN_BASE_IMAGE=oven/bun:1@sha256:e10577f0db68676a7024391c6e5cb4b879ebd17188ab750cf10024a6d700e5c4
 FROM ${BUN_BASE_IMAGE}
 
-# GA runner runtime. Version and official release archive checksum are immutable
-# build inputs. The release workflow additionally verifies the upstream
-# SHA256SUMS Sigstore signature before this Dockerfile is built.
+# GA runner runtimes. Versions and official release archive checksums are
+# immutable build inputs. The release workflow additionally verifies the
+# OpenTofu SHA256SUMS Sigstore signature before this Dockerfile is built.
 ARG OPENTOFU_VERSION=1.12.5
 ARG OPENTOFU_SHA256=dade9650e6b74fc7a8b986bd8717497d32f9e09cf82e479afef4977fa3085536
+ARG NODE_VERSION=24.19.0
+ARG NODE_SHA256=14b342e71204f811bde6153be8e04b62aef63c236fef92b55f9c83154b409647
 
 # Source-sync (LANE M1) needs git + openssh-client to clone over https/ssh and
 # zstd to compress the deterministic source archive. tar is in the debian base.
 # ca-certificates + git + curl + unzip were already required by OpenTofu install.
+# xz-utils extracts the pinned Node runtime used by app-owned provider CLIs.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates curl git unzip openssh-client zstd \
+    ca-certificates curl git unzip openssh-client xz-utils zstd \
     && rm -rf /var/lib/apt/lists/*
+
+RUN set -eux; \
+    archive="node-v${NODE_VERSION}-linux-x64.tar.xz"; \
+    curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/${archive}" \
+      -o "/tmp/${archive}"; \
+    printf '%s  %s\n' "${NODE_SHA256}" "${archive}" \
+      > /tmp/node_SHA256SUM; \
+    (cd /tmp && sha256sum -c /tmp/node_SHA256SUM); \
+    tar -xJf "/tmp/${archive}" \
+      --strip-components=2 \
+      -C /usr/local/bin \
+      "node-v${NODE_VERSION}-linux-x64/bin/node"; \
+    install -d -m 0755 /usr/local/share/licenses/node; \
+    tar -xJf "/tmp/${archive}" \
+      --strip-components=1 \
+      -C /usr/local/share/licenses/node \
+      "node-v${NODE_VERSION}-linux-x64/LICENSE"; \
+    rm "/tmp/${archive}" /tmp/node_SHA256SUM; \
+    test "$(node --version)" = "v${NODE_VERSION}"
 
 RUN set -eux; \
     asset="tofu_${OPENTOFU_VERSION}_linux_amd64.zip"; \
