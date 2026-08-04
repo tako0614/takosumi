@@ -151,8 +151,6 @@ export const en: Record<keyof typeof ja, string> = {
     "Your usage, and the cost breakdown your operator provides",
   "settings.notifications.title": "Notifications",
   "settings.notifications.desc": "Updates and items needing attention",
-  "settings.billingSummary.manage": "Manage",
-  "settings.billingSummary.error": "Couldn't load usage status.",
   "settings.manage.entry": "Management tools",
   "settings.manage.entryDesc":
     "Detailed screens for service internals, connections, and run history",

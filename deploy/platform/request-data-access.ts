@@ -91,6 +91,7 @@ export const DASHBOARD_DOCUMENT_ROUTES = [
   "/activity",
   "/notifications",
   "/advanced/workspace",
+  "/advanced/workspace/billing",
   "/advanced/workspace/:tab",
   "/workspace/settings",
   "/workspace/settings/:tab",
