@@ -273,13 +273,21 @@ export type FormAvailabilityReason =
   | "principal_not_allowed"
   | "target_pool_class_unavailable";
 
-/** Structured discovery state for one exact form reference. */
+/**
+ * Host Support projection for one exact Form reference.
+ *
+ * This reports host facts only: retained definition/package state,
+ * executable Target/Adapter evidence, operator activation policy, and the
+ * caller's audience. It is neither Takoform lifecycle maturity nor a central
+ * approval/admission decision, and it carries no commercial availability.
+ */
 export interface FormAvailability {
   readonly form: InstalledFormReference;
   readonly definitionKnown: boolean;
   readonly installed: boolean;
   readonly executable: boolean;
   readonly executableReason?: FormAvailabilityReason;
+  /** An active exact FormActivation authorizes this host execution surface. */
   readonly activated: boolean;
   readonly availableToPrincipal: boolean;
   readonly availabilityReason?: FormAvailabilityReason;

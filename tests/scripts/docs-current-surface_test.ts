@@ -146,7 +146,7 @@ const FINAL_PUBLIC_CONCEPTS = [
   "AuditEvent",
 ] as const;
 
-const CLOUD_GA_SERVICE_FORMS = [
+const CLOUD_LAUNCH_FORM_OFFERINGS = [
   "EdgeWorker",
   "ObjectBucket",
   "KVStore",
@@ -159,7 +159,7 @@ const CLOUD_GA_SERVICE_FORMS = [
   "Schedule",
 ] as const;
 
-const CLOUD_GA_PUBLIC_SERVICES = [
+const CLOUD_LAUNCH_PUBLIC_SERVICES = [
   "Edge Worker",
   "Object Storage",
   "KV",
@@ -223,7 +223,7 @@ test("hosted Cloud docs keep current usage identity provider neutral", async () 
   }
 });
 
-test("Final Plan and hosted Cloud docs keep one all-or-nothing GA set Pre-GA before evidence activation", async () => {
+test("Final Plan and hosted Cloud docs keep launch policy separate from Form maturity", async () => {
   const finalPlan = await readText(
     new URL("docs/internal/final-plan.md", ROOT),
   );
@@ -238,14 +238,16 @@ test("Final Plan and hosted Cloud docs keep one all-or-nothing GA set Pre-GA bef
   const resources = await readText(new URL("app-docs/en/resources.md", ROOT));
   const endpoints = await readText(new URL("app-docs/en/endpoints.md", ROOT));
 
-  assert.match(publicOffering, /one\s+all-or-nothing set/);
-  assert.match(publicOffering, /Pre-GA \(one all-or-nothing GA set\)/);
+  assert.match(publicOffering, /Cloud-owned all-or-nothing launch policy/);
+  assert.match(publicOffering, /Pre-GA \(one Cloud commercial launch set\)/);
+  assert.match(publicOffering, /not a Takoform maturity class/);
   assert.match(
     gaContract,
-    /ten-form Service Form Stable set is all-or-nothing/,
+    /commercial launch only; the selection grants no Takoform maturity or approval/,
   );
+  assert.doesNotMatch(gaContract, /approved standard definition|Service Form Stable set/);
   assert.doesNotMatch(publicOffering, /\nStable:\s|\nPreview:\s/);
-  for (const service of CLOUD_GA_SERVICE_FORMS) {
+  for (const service of CLOUD_LAUNCH_FORM_OFFERINGS) {
     assert.ok(
       publicOffering.includes(service),
       `section 11 omitted ${service}`,
@@ -261,14 +263,15 @@ test("Final Plan and hosted Cloud docs keep one all-or-nothing GA set Pre-GA bef
   }
 
   for (const index of indexes) {
-    assert.match(index, /all-or-nothing GA (?:契約|contract)/);
+    assert.match(index, /all-or-nothing launch(?:契約| contract)/);
     assert.match(index, /Pre-GA/);
+    assert.match(index, /Form maturity/);
     assert.doesNotMatch(
       index,
       /seven\s+Stable|7\s*つの Stable|eight offerings/,
     );
     assert.doesNotMatch(index, /\|\s*(?:Stable|Preview)\s*\|/);
-    for (const service of CLOUD_GA_PUBLIC_SERVICES) {
+    for (const service of CLOUD_LAUNCH_PUBLIC_SERVICES) {
       assert.ok(
         index.toLowerCase().includes(service.toLowerCase()),
         `hosted availability matrix omitted ${service}`,
@@ -280,8 +283,23 @@ test("Final Plan and hosted Cloud docs keep one all-or-nothing GA set Pre-GA bef
   assert.match(resources, /public Resource identity remains `EdgeWorker`/);
   assert.match(resources, /exact OSS OfferingSelection/);
   assert.match(resources, /closed CommercialOfferingBinding/);
-  assert.match(endpoints, /ten Service Forms and two non-Form services/);
+  assert.match(
+    endpoints,
+    /ten exact Form-backed offerings\s+and two\s+non-Form services/,
+  );
   assert.doesNotMatch(endpoints, /Preview service forms|seven service forms/);
+});
+
+test("Form package operations require exact Host Support facts, not retired admission authority", async () => {
+  const runbook = await readText(
+    new URL("docs/operations/form-package-installation.md", ROOT),
+  );
+  assert.match(runbook, /exact `FormActivation` with principal audience/);
+  assert.match(runbook, /none is a current activation authority or approval vote/);
+  assert.doesNotMatch(
+    runbook,
+    /Production standard-form activation|signed host\/provider\/admission reports/,
+  );
 });
 
 test("public docs explain generic OSS Offering selection without Cloud binding internals", async () => {
@@ -454,7 +472,7 @@ test("Service Form migration docs keep portable identity separate from the old R
     assert.match(doc, /forms\.takoform\.com\/v1alpha1/);
     assert.match(doc, /0\.0\.0-legacy\.1/);
     assert.match(doc, /packageDigest/);
-    assert.match(doc, /ten-package legacy compatibility set/);
+    assert.match(doc, /historical package evidence alone/);
   }
 
   assert.match(finalPlan, /"packageDigest": "sha256:<exact-package-digest>"/);

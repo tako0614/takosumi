@@ -1,8 +1,6 @@
 import type {
   InstalledFormReference,
   JsonObject,
-  StandardFormNegativeFixture,
-  StandardFormConformanceProof,
   TakoformResource,
 } from "takosumi-contract";
 import {
@@ -43,12 +41,22 @@ export interface PortableFormHostConformanceInput {
  * `config` remains accepted only so older callers can be migrated without
  * changing what the host executes; emitted evidence always uses `desired`.
  */
-export type PortableFormHostNegativeFixture = Omit<
-  StandardFormNegativeFixture,
-  "stage"
-> & {
-  readonly stage: StandardFormNegativeFixture["stage"] | "desired";
-};
+export interface PortableFormHostNegativeFixture {
+  readonly name: string;
+  readonly stage: "config" | "desired";
+  readonly input: JsonObject;
+  readonly expectedErrorCode: string;
+}
+
+export interface PortableFormHostConformanceProof {
+  readonly subject: string;
+  readonly runnerVersion: string;
+  readonly identity: InstalledFormReference;
+  readonly status: "passed";
+  readonly positiveFixtures: readonly string[];
+  readonly negativeFixtures: readonly string[];
+  readonly evidenceDigest: string;
+}
 
 export interface PortableFormHostConformanceReport {
   readonly apiVersion: "takosumi.portable-form-host-conformance/v1";
@@ -397,7 +405,7 @@ export async function runPortableFormHostConformance(
 
 export function portableHostConformanceProof(
   report: PortableFormHostConformanceReport,
-): StandardFormConformanceProof {
+): PortableFormHostConformanceProof {
   return {
     subject: `host:${report.endpointOrigin}`,
     runnerVersion: "1.0.0",

@@ -126,4 +126,9 @@ test("authoritative docs reject a split Cloud GA availability contract", () => {
   expect(violations).toContainEqual(
     expect.objectContaining({ ruleId: "cloud-ga-split-contract" }),
   );
+  expect(violations).toContainEqual(
+    expect.objectContaining({
+      ruleId: "cloud-ga-form-maturity-conflation",
+    }),
+  );
 });

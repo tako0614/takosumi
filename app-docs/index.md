@@ -123,15 +123,15 @@ ownership と certificate が current の間だけ route を有効にします�
 検証が完了するまでは Takosumi Cloud 全体と同じく Pre-GA で、未確認・期限切れ・degraded な
 domain は安全側に停止します。
 
-## GA Contract と Launch Gate
+## Cloud Launch Contract と GA Gate
 
-Takosumi Cloud の GA はサービスごとの段階公開ではありません。10 個の Service Form
-（Object Storage は Standard / Infrequent Access の 2 offering）と、non-Form service の
-AI Gateway / Verified custom domain を 1 つの all-or-nothing GA 契約として扱います。
-全項目が同じ readiness matrix を通るまで、どの subset も Stable と広告せず、Takosumi Cloud
-全体を Pre-GA のままにします。
+Takosumi Cloud の今回の商用launchはサービスごとの段階公開ではありません。10個の
+exact Form-backed offering（Object StorageはStandard / Infrequent Accessの2 offering）と、
+non-Form serviceのAI Gateway / Verified custom domainを1つのall-or-nothing launch契約として
+扱います。これはCloudの商品方針であり、TakoformのForm maturity、承認集合、Host Supportを
+変更しません。全項目が同じreadiness matrixを通るまで、Takosumi Cloud全体をPre-GAのままにします。
 
-| 現在の状態 | GA scope                                                                          |
+| 現在の状態 | Cloud launch scope                                                                |
 | ---------- | --------------------------------------------------------------------------------- |
 | Pre-GA     | Edge Worker / Object Storage Standard・Infrequent Access / KV / Database / Queue  |
 | Pre-GA     | Vector Index / Durable Workflow / Container / Stateful Actor Namespace / Schedule |

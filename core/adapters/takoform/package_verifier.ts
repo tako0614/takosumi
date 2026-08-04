@@ -23,6 +23,7 @@ import {
   type StaticSchemaValidator,
   validateTakoformFormDefinition,
   validateTakoformPackageIndex,
+  validateTakoformPackageIndexV1Alpha2,
 } from "./json_schema_2020.ts";
 import {
   assertDraft202012Schema,
@@ -180,7 +181,7 @@ const TEXT_MEDIA_TYPES = new Set([
 interface PackageIndex {
   readonly apiVersion: string;
   readonly kind: string;
-  readonly packageVersion: string;
+  readonly packageVersion?: string;
   readonly formRef: TakoformFormRef;
   readonly definitionPath: string;
   readonly files: readonly PackageFile[];
@@ -258,6 +259,7 @@ interface TakoformDefinition {
 
 /**
  * Takosumi host adapter for the independent Takoform Form Package v1alpha1
+ * Legacy and content-addressed v1alpha2
  * contract. The internal envelope is transport only; package and FormRef
  * identity remain the signed canonical Takoform index and definition.
  */
@@ -267,7 +269,7 @@ export class TakoformDataOnlyPackageVerifier implements FormPackageVerifier {
   constructor(
     private readonly signatureVerifier: TakoformPackageSignatureVerifier,
   ) {
-    this.id = `takoform.form-package.v1alpha1+${signatureVerifier.id}`;
+    this.id = `takoform.form-package.v1alpha1-v1alpha2+${signatureVerifier.id}`;
   }
 
   async verify(
@@ -286,11 +288,8 @@ export class TakoformDataOnlyPackageVerifier implements FormPackageVerifier {
       MAX_INDEX_BYTES,
     );
     const indexValue = parseCanonicalJson(indexBytes);
-    assertSchema(
-      validateTakoformPackageIndex,
-      indexValue,
-      "package-index.json",
-    );
+    const packageIndexValidator = packageIndexSchemaValidator(indexValue);
+    assertSchema(packageIndexValidator, indexValue, "package-index.json");
     const index = indexValue as unknown as PackageIndex;
     assertPackageIndexClosure(index);
 
@@ -346,10 +345,7 @@ export class TakoformDataOnlyPackageVerifier implements FormPackageVerifier {
       ...(definition.description
         ? { description: definition.description }
         : {}),
-      operations: lifecycleOperations(
-        definition.lifecycleCapabilities,
-        definition.status,
-      ),
+      operations: lifecycleOperations(definition.lifecycleCapabilities),
       desiredSchema: structuredClone(
         definition.desiredSchema,
       ) as unknown as JsonObject,
@@ -360,6 +356,23 @@ export class TakoformDataOnlyPackageVerifier implements FormPackageVerifier {
     };
     return { packageDigest, definitions: [verifiedDefinition] };
   }
+}
+
+function packageIndexSchemaValidator(
+  value: CanonicalJsonValue,
+): StaticSchemaValidator {
+  if (!isRecord(value)) {
+    throw new TypeError("package-index.json must be an object");
+  }
+  if (value.apiVersion === "packages.forms.takoform.com/v1alpha1") {
+    return validateTakoformPackageIndex;
+  }
+  if (value.apiVersion === "packages.forms.takoform.com/v1alpha2") {
+    return validateTakoformPackageIndexV1Alpha2;
+  }
+  throw new TypeError(
+    `unsupported Form Package apiVersion ${String(value.apiVersion)}`,
+  );
 }
 
 function verifyDefinitionSemantics(definition: TakoformDefinition): void {
@@ -1870,7 +1883,6 @@ function assertJsonFixture(
 
 function lifecycleOperations(
   capabilities: readonly string[],
-  status: string,
 ): FormOperation[] {
   const result: FormOperation[] = [];
   for (const capability of capabilities) {
@@ -1885,10 +1897,7 @@ function lifecycleOperations(
       result.push(capability);
     }
   }
-  if (
-    status === "compatibility-candidate" &&
-    capabilities.includes("observe")
-  ) {
+  if (capabilities.includes("observe")) {
     if (!capabilities.includes("read")) result.push("read");
     if (!capabilities.includes("refresh")) result.push("refresh");
   }
@@ -1898,6 +1907,9 @@ function lifecycleOperations(
 function definitionMetadata(definition: TakoformDefinition): JsonObject {
   return {
     takoform: {
+      // This is an immutable Definition-document field, not current Form
+      // maturity. Runtime operations are derived only from capabilities and
+      // the principal-facing Form API deliberately omits this metadata.
       status: definition.status,
       ...(definition.immutableFields
         ? { immutableFields: [...definition.immutableFields] }

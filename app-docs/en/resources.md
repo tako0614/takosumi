@@ -45,10 +45,12 @@ Use these terms in landing pages and the main app screen:
 - Stateful Actor Namespace
 - Schedule
 
-The single [GA Contract and Launch Gate](./index.md#ga-contract-and-launch-gate)
-matrix is authoritative for public availability. All ten Service Forms plus AI
-Gateway and VerifiedDomain are in the same all-or-nothing GA scope and remain
-Pre-GA until the complete set's evidence is activated.
+The single [Cloud Launch Contract and GA Gate](./index.md#cloud-launch-contract-and-ga-gate)
+matrix is authoritative for public availability. All ten exact Form-backed
+offerings plus AI Gateway and VerifiedDomain are in the same all-or-nothing
+Cloud launch scope and remain Pre-GA until the complete set's evidence is
+activated. This commercial selection changes no Form maturity or Host Support
+fact.
 
 ## Runtime Architecture
 

@@ -103,14 +103,18 @@ package index, exact payload closure/digests/modes, Form Definition schema and
 data-only policy before one atomic Form Registry install. The Takosumi envelope
 is transport only and creates no portable definition authority. No package,
 publisher, trust root, FormActivation, implementation, or offering is implicit.
+The verifier accepts retained `packages.forms.takoform.com/v1alpha1` indexes
+and additive content-addressed `v1alpha2` indexes. `packageVersion` exists only
+in the retained v1alpha1 profile; registry identity remains the exact FormRef
+plus package digest in both cases.
 
-An immutable ten-package legacy compatibility set, with one package per current
-Resource Shape kind, may freeze current behavior for migration. That does not
-admit those FormRefs as portable standards. Every FormRef included in the
-standard typed provider or an official Cloud Stable offering must independently
-pass provider-neutral lifecycle, immutable-field, import/observe/drift,
-security, Interface, and governance review plus canonical positive and negative
-host/provider conformance for its exact schema digest.
+Takoform retains immutable Legacy publication evidence for its actually
+published packages. A host may pin selected packages from that ledger to freeze
+behavior for migration, but historical package evidence alone does not approve
+a Form, activate it, or create an Offering. Current portable
+maturity comes only from Takoform's lifecycle ledger. Current Takosumi Host
+Support comes only from exact registry, executable implementation,
+FormActivation, and principal-audience evidence.
 
 ## Core Responsibilities
 
@@ -548,7 +552,7 @@ for Interface resolution.
 | Stack          | Git-backed OpenTofu stack or form-backed Resource bundle                     |
 | Resource       | Canonical desired/observed host-owned resource object                        |
 | FormRegistry   | Installed trusted exact definitions visible to one host                      |
-| FormActivation | Generic OSS audience/policy admission for an executable exact FormRef        |
+| FormActivation | Generic OSS operator activation policy for an executable exact FormRef       |
 | Offering       | Generic OSS exact-subject availability and audience selection                |
 | Profile        | Ecosystem compatibility surface such as workers_bindings                     |
 | Implementation | Concrete backend such as cloudflare_workers or cloudflare_r2                 |
@@ -1033,8 +1037,9 @@ API and its data plane still resolves the canonical Ready Resource. This keeps
 service state portable without introducing a first-party provider.
 
 When a durable managed-service definition is justified, the portable project
-admits an exact versioned Service Form even if its public protocol is standard.
-A Takosumi operator separately installs an implementation and FormActivation,
+publishes an exact versioned Service Form and assigns lifecycle maturity even
+if its public protocol is standard. A Takosumi operator separately installs an
+implementation and exact FormActivation,
 then may publish an exact generic Offering. Cloud separately attaches a closed
 commercial binding to that Offering selection. One-off gaps and external infrastructure remain in
 declared-env-capable ProviderConnections and ordinary OpenTofu modules. Add a
@@ -1715,10 +1720,10 @@ isolation, quota, network egress policy, admin audit, and usage metering.
    Workspace-wide Output reconcile paths.
 6. Keep first-party provider source, release, custody, and public mirror lanes
    absent; use Takoform or the owning external provider instead.
-7. After public identity gates, extract FormRef and the data-only ten-package
-   legacy compatibility set, then standard definitions, portable
-   interoperability, typed provider, and conformance without moving Takosumi
-   lifecycle entities.
+7. After public identity gates, extract FormRef and immutable data-only package
+   publication, then portable definitions, interoperability, typed provider,
+   and conformance without moving Takosumi lifecycle entities or inventing a
+   central admission authority.
 8. Add exact FormRef persistence in a new additive D1/Postgres migration with
    shadow comparison, bounded backfill, retention, backup, and rollback.
 9. Replace bundled parser/default authority with an explicit Form Registry;

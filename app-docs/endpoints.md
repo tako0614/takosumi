@@ -327,7 +327,7 @@ provider の向き先と credential は Provider Binding / Provider Connection �
 ## Cloud resources inventory
 
 Cloud 画面のリソース一覧は canonical `/v1/resources` inventory の投影です。
-GA scope は次の 10 Service Forms と 2 つの non-Form service です。
+Cloud launch scopeは次の10 exact Form-backed offeringと2つのnon-Form serviceです。
 
 - Edge Worker
 - Object Storage Standard / Infrequent Access offering
@@ -336,9 +336,10 @@ GA scope は次の 10 Service Forms と 2 つの non-Form service です。
 - AI Gateway
 - Verified Custom Domain
 
-これは [GA Contract と Launch Gate](./index.md#ga-contract-と-launch-gate) の単一 all-or-nothing set で、全項目の
-evidence activation まではすべて Pre-GA です。active Offering がある項目だけ同じ一覧に状態を表示しますが、
-一部だけを Stable と広告しません。Compatibility API profile の
+これは[Cloud Launch ContractとGA Gate](./index.md#cloud-launch-contract-と-ga-gate)の単一
+all-or-nothing launch setで、全項目のevidence activationまではすべてPre-GAです。このCloud-owned
+selectionはForm maturityやHost Supportを変更しません。active Offeringがある項目だけ同じ一覧に状態を表示します。
+Compatibility API profileの
 仮想 inventory や独自 Resource 台帳は使いません。Dashboard、portable client、
 direct Deploy API はすべて同じ Resource に収束します。`resource_shapes` capability は型付き Resource Shape API が
 使えることを示すもので、別の lifecycle を意味しません。

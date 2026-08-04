@@ -5,6 +5,16 @@ import provenance from "../../../../core/adapters/takoform/schema-provenance.jso
 import { canonicalJsonBytes } from "../../../../core/adapters/takoform/canonical_json.ts";
 import { sha256HexAsync } from "../../../../core/shared/runtime/hash.ts";
 
+type SchemaProvenance = {
+  sourceRepository: string;
+  sourceCommit: string;
+  sourceCommitScope: string[];
+  sourceDirectory: string;
+  canonicalDigests: Record<string, string>;
+};
+
+const recordedProvenance = provenance as SchemaProvenance;
+
 // A Form Definition that declares a runtime interface is the ordinary case:
 // every portable Form Takoform publishes carries one. A vendored schema that
 // predates interface declarations therefore rejects real packages outright,
@@ -80,9 +90,40 @@ test("the vendored schemas match the provenance they claim", async () => {
       "../../../../core/adapters/takoform/schemas/package-index.schema.json",
       { with: { type: "json" } }
     ).then((module) => module.default),
+    "package-index-v1alpha2.schema.json": await import(
+      "../../../../core/adapters/takoform/schemas/package-index-v1alpha2.schema.json",
+      { with: { type: "json" } }
+    ).then((module) => module.default),
   };
-  for (const [name, digest] of Object.entries(provenance.canonicalDigests)) {
+  expect(Object.keys(recordedProvenance.canonicalDigests).sort()).toEqual(
+    Object.keys(schemas).sort(),
+  );
+  for (const [name, digest] of Object.entries(
+    recordedProvenance.canonicalDigests,
+  )) {
     const bytes = canonicalJsonBytes(schemas[name] as never);
     expect(`sha256:${await sha256HexAsync(bytes)}`).toBe(digest);
   }
+});
+
+test("every vendored schema belongs to the exact source commit", () => {
+  expect(Object.keys(recordedProvenance).sort()).toEqual(
+    [
+      "canonicalDigests",
+      "sourceCommit",
+      "sourceCommitScope",
+      "sourceDirectory",
+      "sourceRepository",
+    ].sort(),
+  );
+  expect(recordedProvenance.sourceRepository).not.toBe("");
+  expect(recordedProvenance.sourceDirectory).not.toBe("");
+  expect(recordedProvenance.sourceCommit).toMatch(/^[0-9a-f]{40}$/u);
+
+  expect([...new Set(recordedProvenance.sourceCommitScope)].sort()).toEqual(
+    Object.keys(recordedProvenance.canonicalDigests).sort(),
+  );
+  expect(recordedProvenance.sourceCommitScope).toHaveLength(
+    Object.keys(recordedProvenance.canonicalDigests).length,
+  );
 });

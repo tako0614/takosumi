@@ -77,7 +77,7 @@ test("writes one deterministic canonical reviewed set with private modes", async
   const manifest = JSON.parse(new TextDecoder().decode(manifestBytes)) as {
     format: string;
     repository: string;
-    admission: { root: string; version: string };
+    historicalCheckpoint: { root: string; version: string };
     historicalPublication: { repository: string };
     trustedRoot: { digest: string; file: string; r2Key: string };
     packages: Array<{
@@ -98,11 +98,11 @@ test("writes one deterministic canonical reviewed set with private modes", async
       };
     }>;
   };
-  expect(manifest.format).toBe("takosumi.takoform-install-envelope-set@v2");
+  expect(manifest.format).toBe("takosumi.takoform-install-envelope-set@v3");
   expect(manifest.repository).toBe(
     "tako0614/terraform-provider-takoform",
   );
-  expect(manifest.admission).toMatchObject({
+  expect(manifest.historicalCheckpoint).toMatchObject({
     root: "admission/v4",
     version: "1.0.6",
   });
@@ -316,14 +316,14 @@ async function sandbox(): Promise<{ root: string; takoformRoot: string }> {
 function fakeReviewedSet(): ReviewedPublishedPackageInstallSet {
   const trustedRootBytes = canonicalJsonBytes({ root: "test-public-root" });
   return {
-    format: "takosumi.reviewed-takoform-package-install-set@v2",
+    format: "takosumi.reviewed-takoform-package-install-set@v3",
     repository: "tako0614/terraform-provider-takoform",
     checkoutCommit: "a".repeat(40),
     checkoutVersion: "1.0.2",
-    admission: {
+    historicalCheckpoint: {
       root: "admission/v4",
-      version: "1.0.6",
-      tag: "forms/admissions/v1.0.6",
+      version: "1.0.7",
+      tag: "forms/admissions/v1.0.7",
       commit: "b".repeat(40),
       tree: "c".repeat(40),
     },
@@ -334,11 +334,7 @@ function fakeReviewedSet(): ReviewedPublishedPackageInstallSet {
         digest: `sha256:${"1".repeat(64)}`,
       },
     },
-    standardAdmissionSet: {
-      path: "admission/v4/standard-admission-set.json",
-      digest: `sha256:${"2".repeat(64)}`,
-    },
-    admissionVersion: {
+    checkpointVersion: {
       path: "admission/v4/version.json",
       digest: `sha256:${"3".repeat(64)}`,
     },

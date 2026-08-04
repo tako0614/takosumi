@@ -1,4 +1,11 @@
-import { chmod, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdtemp,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -11,6 +18,30 @@ import {
   projectTakoformFormRef,
   RetainedRoot,
 } from "../../scripts/verify-takoform-published-package-host-proof.ts";
+
+test("published package proof pins legacy publication, not current admission authority", async () => {
+  const pins = JSON.parse(
+    await readFile(
+      new URL(
+        "../../core/conformance/takoform-published-package-host-proof-v3.json",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  ) as Record<string, unknown>;
+
+  expect(pins.format).toBe(
+    "takosumi.takoform-published-package-host-proof-pins@v3",
+  );
+  expect(pins.historicalCheckpoint).toEqual({
+    commit: "e56cfc866cc98469bbe4fcfe106cfc73cb08ae8c",
+    tag: "forms/admissions/v1.0.7",
+    tree: "5b81172ca01f0c47a3d6b7ff653e591dd4b5d5bb",
+    version: "1.0.7",
+  });
+  expect(pins).not.toHaveProperty("standardAdmissionSet");
+  expect(pins).not.toHaveProperty("admissionCheckpoint");
+});
 
 test("published package policy projects one exact protected workflow ref", () => {
   expect(

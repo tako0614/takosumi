@@ -127,15 +127,16 @@ ownership and certificate state are current. The lifecycle remains Pre-GA with
 the rest of Takosumi Cloud until that lifecycle has been verified in production;
 unverified, expired, or degraded domains fail closed.
 
-## GA Contract And Launch Gate
+## Cloud Launch Contract And GA Gate
 
-Takosumi Cloud does not promote this release one service at a time. Its ten
-Service Forms (Object Storage has Standard and Infrequent Access offerings),
-plus the non-Form AI Gateway and Verified custom-domain services, are one
-all-or-nothing GA contract. Takosumi Cloud stays Pre-GA and advertises no subset
-as Stable until every item passes the same readiness matrix.
+Takosumi Cloud does not launch this commercial product one service at a time.
+Its ten exact Form-backed offerings (Object Storage has Standard and Infrequent
+Access offerings), plus the non-Form AI Gateway and Verified custom-domain
+services, are one all-or-nothing launch contract. This is Cloud product policy;
+it changes no Takoform Form maturity, approved subset, or Host Support fact.
+Takosumi Cloud stays Pre-GA until every item passes the same readiness matrix.
 
-| Current status | GA scope                                                                            |
+| Current status | Cloud launch scope                                                                  |
 | -------------- | ----------------------------------------------------------------------------------- |
 | Pre-GA         | Edge Worker / Object Storage Standard and Infrequent Access / KV / Database / Queue |
 | Pre-GA         | Vector Index / Durable Workflow / Container / Stateful Actor Namespace / Schedule   |

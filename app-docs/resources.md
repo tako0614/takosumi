@@ -45,9 +45,10 @@ Takosumi Cloud Resources =
 - Stateful Actor Namespace
 - Schedule
 
-公開時の利用可能性は [GA Contract と Launch Gate](./index.md#ga-contract-と-launch-gate) の単一 matrix が
-正本です。上の 10 Service Forms と AI Gateway / VerifiedDomain はすべて同じ all-or-nothing GA scope にあり、
-集合全体の evidence activation までは Pre-GA です。
+公開時の利用可能性は[Cloud Launch ContractとGA Gate](./index.md#cloud-launch-contract-と-ga-gate)の
+単一matrixが正本です。上の10 exact Form-backed offeringとAI Gateway / VerifiedDomainは同じ
+all-or-nothing Cloud launch scopeにあり、集合全体のevidence activationまではPre-GAです。
+この商用selectionはForm maturityやHost Supportを変更しません。
 
 ## Runtime Architecture
 

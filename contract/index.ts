@@ -18,7 +18,6 @@ export * from "./resource-artifacts.ts";
 export * from "./service-forms.ts";
 export * from "./offerings.ts";
 export * from "./form-host-interoperability.ts";
-export * from "./standard-form-admission.ts";
 export * from "./resource-deployment.ts";
 export * from "./plan-scope.ts";
 export * from "./interfaces.ts";

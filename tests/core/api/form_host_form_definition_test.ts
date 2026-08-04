@@ -35,7 +35,10 @@ const DEFINITION: FormDefinition = {
     properties: { name: { type: "string" } },
     required: ["name"],
   },
-  metadata: { operatorOnly: "must not cross the host boundary" },
+  metadata: {
+    operatorOnly: "must not cross the host boundary",
+    takoform: { status: "standard" },
+  },
   installedAt: "2026-08-01T00:00:00.000Z",
 };
 

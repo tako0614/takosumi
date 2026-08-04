@@ -2281,15 +2281,16 @@ Implementation can use Cloudflare primitives such as Workers for Platforms,
 Dynamic Workers, R2, D1, KV, Queues, Workflows, Containers, and AI Gateway.
 Those are implementation details behind operator-provided deployment targets.
 
-Docs must publish one service-availability matrix. The Cloud GA contract is one
-all-or-nothing set: all ten Service Forms from section 14 plus the AI Gateway
-service endpoint and Verified custom-domain lifecycle. ObjectBucket Standard
-and Infrequent Access are two offerings of one Service Form. No subset is
-advertised Stable while another item in this GA set remains Preview or lacks
-the required evidence:
+Docs must publish one service-availability matrix. The Cloud commercial launch
+contract groups ten exact Form-backed offerings from section 14 with the AI
+Gateway service endpoint and Verified custom-domain lifecycle. ObjectBucket
+Standard and Infrequent Access are two offerings of one Form. This is a
+Cloud-owned all-or-nothing launch policy, not a Takoform maturity class,
+approved Form subset, or Host Support fact. No subset is advertised as the
+Takosumi Cloud GA launch while another item lacks the required evidence:
 
 ```text
-Pre-GA (one all-or-nothing GA set):
+Pre-GA (one Cloud commercial launch set):
   EdgeWorker modules and static assets
   EdgeWorker vars, write-only secrets, bindings, reviewed deployments, and routes
   ObjectBucket Standard and Infrequent Access (two offerings) with the documented
@@ -2306,7 +2307,7 @@ Pre-GA (one all-or-nothing GA set):
   VerifiedDomain
 ```
 
-The entire set moves to Stable only after every item passes the section 14
+The entire product launch moves to Takosumi Cloud GA only after every item passes the section 14
 lifecycle, conformance, price coverage, immutable metering, spend enforcement,
 invoice reconciliation, recovery, tenant-isolation, dashboard, and live
 operator-evidence gates. An unavailable meter, inactive Offering or price
@@ -2620,7 +2621,7 @@ Takosumi software GA requires:
 plain OpenTofu Stack flow remains conformant
 zero-form Core can run a plain OpenTofu Capsule without any portable project or Cloud dependency
 installed Form Packages are signed, exact, retained, and independently versioned
-every GA Service Form exact FormRef passes its provider-neutral semantic audit and canonical positive/negative host/provider conformance; the ten-package legacy compatibility set alone does not qualify any kind as a standard form
+every GA Service Form exact FormRef has explicit Takoform lifecycle evidence and canonical positive/negative host/provider conformance; historical package evidence alone does not qualify a kind as Stable or Host-supported
 every form-backed Resource and ResolutionLock resolves to an exact immutable FormRef
 definition / installed / executable / activated discovery states and reason codes are truthful
 /v1/resources is the only Resource lifecycle authority
@@ -2638,12 +2639,15 @@ Resource/Run/state/output/audit recovery and migration evidence is complete
 OSS-to-Cloud dependency and package/provider secret-leakage gates pass
 ```
 
-Takosumi Cloud may call a Service Form Stable only when it additionally proves:
+Takosumi Cloud may advertise one exact Form-backed Offering only when it
+additionally proves:
 
 ```text
 an active versioned generic Offering subject pins exact FormRef/package + generic FormActivation
 the closed commercial binding pins that exact Offering selection, not a parallel catalog decision
-the offered exact FormRef is an approved standard definition with portable semantic and conformance evidence, not only a legacy compatibility definition
+the offered exact FormRef is present in Takoform lifecycle authority and its
+Experimental, Stable, or Legacy state and limitations are shown without being
+changed by this Offering
 installed definition + executable implementation + target/manager readiness
 immutable implementation fingerprint and PriceCatalog/SKU versions
 preview -> DeploymentQuote with immutable request/resolution/price binding
@@ -2655,7 +2659,8 @@ dashboard shows service -> inputs -> price -> preview -> deploy by default
 live tenant isolation, abuse/support, observability, backup/restore, and billing evidence
 ```
 
-The ten-form Service Form Stable set is all-or-nothing:
+The ten Form-backed Takosumi Cloud launch offerings are all-or-nothing for this
+commercial launch only; the selection grants no Takoform maturity or approval:
 
 ```text
 EdgeWorker

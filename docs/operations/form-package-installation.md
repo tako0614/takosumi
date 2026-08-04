@@ -178,21 +178,22 @@ bun run service-form:published-package-host-proof \
   --json
 ```
 
-The command requires the exact clean canonical checkout at the immutable
-`forms/admissions/v1.0.7` checkpoint and Takosumi-owned pins for
-`admission/v4`, the retained admission
-set, full immutable publication set, trust policy, and TrustedRoot. It selects
-exactly the nine Forms currently offered by Takosumi Cloud:
+The command requires the exact clean canonical checkout at the last published
+Legacy checkpoint, `forms/admissions/v1.0.7`, and Takosumi-owned pins for its
+historical `admission/v4` artifact root, full immutable publication set, trust
+policy, and TrustedRoot. The path retains its published historical name; it is
+not current admission authority. The proof selects these nine explicitly
+reviewed package kinds directly from the 34-entry publication ledger:
 `EdgeWorker`, `RelationalDatabase`, `ObjectBucket`, `KeyValueStore`, `Queue`,
 `Schedule`, `ContainerService`, `StatefulEntity`, and `VectorIndex`.
-`ModelEndpoint` remains in Takoform's broader Standard set but is not silently
-added to the Cloud package set. The proof verifies every retained asset,
-certificate/transparency evidence, install, service reconstruction with a fresh
-verifier and reloaded trust bytes, replay, and deliberate transparency
+It does not read the historical Standard admission set or infer the list from a
+Cloud catalog. The proof verifies every retained asset,
+certificate/transparency evidence, install, service reconstruction with a
+fresh verifier and reloaded trust bytes, replay, and deliberate transparency
 tampering rejection. This is repository-regression evidence, not a durable
 substrate restart. It proves package publication and host compatibility only,
 preserves Takoform's `external-required` revocation status, and never creates a
-FormActivation.
+FormActivation or Offering.
 
 ### Prepare the reviewed internal install inputs
 
@@ -210,9 +211,9 @@ Both paths must be absolute and canonical. The Takoform checkout must be the
 exact clean commit pinned by Takosumi. The output parent must not traverse a
 symlink and must be owned by the invoking user with mode `0700`. The dedicated
 output directory must not already exist, and it must be outside both source
-repositories. The command reads only the independently reviewed ten-entry
-Standard admission set, full publication record, and pinned trust documents,
-then selects the exact nine-package Cloud intersection described above. It
+repositories. The command reads the full immutable publication record and
+pinned trust documents, then selects the exact nine reviewed package kinds
+described above. It
 constructs RFC 8785 install
 envelopes, then runs every envelope through the actual Sigstore and data-only
 host verifier before making any output visible.
@@ -224,7 +225,7 @@ The completed directory is published with an atomic no-overwrite move, mode
   for each exact FormRef and package digest;
 - the pinned public Sigstore TrustedRoot; and
 - `install-envelope-manifest.json`, which binds the reviewed checkout and
-  admission checkpoint, per-package release commit and definition version,
+  historical publication checkpoint, per-package release commit and definition version,
   trust/policy/publication-set digests, the exact repository/publisher identity,
   package kind and digest, raw envelope digest, proposed immutable R2 key, and
   both request bodies.
@@ -244,8 +245,11 @@ evidence. The preparation command has no R2 client, deploy token, signing key,
 activation action, or network publication behavior; it cannot make an
 `external-required` package production-admissible.
 
-Production standard-form activation remains blocked until the independent
-publisher roles, signed host/provider/admission reports, and live revocation
-checkpoint required by Takoform's admission contract are settled. This
+Production Form activation remains an operator decision and is blocked until
+the exact package is installed and reverified, an executable implementation
+and Adapter are present, the applicable revocation policy is current, and an
+exact `FormActivation` with principal audience has been reviewed. Historical
+publisher, host, provider, or admission reports may support compatibility
+review, but none is a current activation authority or approval vote. This
 repository intentionally contains no production signing key or implicit
 activation.

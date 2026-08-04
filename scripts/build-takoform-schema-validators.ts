@@ -6,6 +6,7 @@ import standaloneCode from "ajv/dist/standalone/index.js";
 import formDefinitionSchema from "../core/adapters/takoform/schemas/form-definition.schema.json" with { type: "json" };
 import formRefSchema from "../core/adapters/takoform/schemas/form-ref.schema.json" with { type: "json" };
 import packageIndexSchema from "../core/adapters/takoform/schemas/package-index.schema.json" with { type: "json" };
+import packageIndexV1Alpha2Schema from "../core/adapters/takoform/schemas/package-index-v1alpha2.schema.json" with { type: "json" };
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const takoformOutputPath = join(
@@ -29,12 +30,14 @@ function createAjv(): Ajv2020 {
 const ajv = createAjv();
 ajv.addSchema(formRefSchema);
 ajv.addSchema(packageIndexSchema);
+ajv.addSchema(packageIndexV1Alpha2Schema);
 ajv.addSchema(formDefinitionSchema);
 
 const takoformGenerated = finalize(
   standaloneCode(ajv, {
     validateFormRef: formRefSchema.$id,
     validatePackageIndex: packageIndexSchema.$id,
+    validatePackageIndexV1Alpha2: packageIndexV1Alpha2Schema.$id,
     validateFormDefinition: formDefinitionSchema.$id,
   }),
 );

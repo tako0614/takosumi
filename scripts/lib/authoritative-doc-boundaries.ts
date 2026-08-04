@@ -143,7 +143,7 @@ const REQUIRED_DOC_CLAIMS: Readonly<
   ],
 };
 
-const CLOUD_GA_SERVICE_FORMS = [
+const CLOUD_LAUNCH_FORM_OFFERINGS = [
   "EdgeWorker",
   "ObjectBucket",
   "KVStore",
@@ -156,7 +156,7 @@ const CLOUD_GA_SERVICE_FORMS = [
   "Schedule",
 ] as const;
 
-const CLOUD_GA_PUBLIC_SERVICES = [
+const CLOUD_LAUNCH_PUBLIC_SERVICES = [
   "Edge Worker",
   "Object Storage",
   "KV",
@@ -235,6 +235,23 @@ export function findAuthoritativeDocViolations(
         excerpt: split[0].trim(),
       });
     }
+    const maturityConflation =
+      /approved standard definition|Service Form Stable set/iu.exec(
+        gaContract,
+      );
+    if (maturityConflation) {
+      violations.push({
+        ruleId: "cloud-ga-form-maturity-conflation",
+        path: finalPlan.path,
+        line: lineAt(
+          finalPlan.content,
+          finalPlan.content.indexOf(maturityConflation[0]),
+        ),
+        message:
+          "Cloud launch selection must not define Takoform maturity or an approved Form subset",
+        excerpt: maturityConflation[0],
+      });
+    }
     if (
       !/all-or-nothing/iu.test(publicOffering) ||
       !/Pre-GA/u.test(publicOffering)
@@ -244,12 +261,12 @@ export function findAuthoritativeDocViolations(
         path: finalPlan.path,
         line: lineAt(finalPlan.content, finalPlan.content.indexOf("## 11.")),
         message:
-          "Final Plan section 11 must name the single all-or-nothing Pre-GA contract",
+          "Final Plan section 11 must name the single all-or-nothing Pre-GA Cloud launch contract",
         excerpt: "## 11. Takosumi Cloud Public Offering",
       });
     }
     for (const service of [
-      ...CLOUD_GA_SERVICE_FORMS,
+      ...CLOUD_LAUNCH_FORM_OFFERINGS,
       "AI Gateway",
       "VerifiedDomain",
     ]) {
@@ -268,7 +285,7 @@ export function findAuthoritativeDocViolations(
   for (const path of ["app-docs/index.md", "app-docs/en/index.md"]) {
     const source = byPath.get(path);
     if (!source) continue;
-    for (const service of CLOUD_GA_PUBLIC_SERVICES) {
+    for (const service of CLOUD_LAUNCH_PUBLIC_SERVICES) {
       if (source.content.toLowerCase().includes(service.toLowerCase()))
         continue;
       violations.push({

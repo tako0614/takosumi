@@ -781,17 +781,13 @@ test("portable host evidence does not synthesize cross-principal replay outcomes
   expect(delegated).toBe(3);
 });
 
-test("portable host evidence source forbids lifecycle compensation", async () => {
+test("portable host evidence adapter forbids lifecycle compensation", async () => {
   const adapterSource = await Bun.file(
     new URL(
       "../../scripts/lib/takoform-portable-host-evidence.ts",
       import.meta.url,
     ),
   ).text();
-  const compositionSource = await Bun.file(
-    new URL("../../scripts/standard-form-host-report.ts", import.meta.url),
-  ).text();
-
   for (const forbidden of [
     "successfulIdempotencyFingerprints",
     "syntheticReplayResponses",
@@ -805,7 +801,4 @@ test("portable host evidence source forbids lifecycle compensation", async () =>
     expect(adapterSource).not.toContain(forbidden);
   }
   expect(adapterSource).toContain("readonly validatePlanBinding:");
-  expect(compositionSource).toContain(
-    "service.validateDeploymentReview(request,",
-  );
 });

@@ -354,7 +354,8 @@ Provider Connection. Do not put raw secrets in manifests.
 ## Cloud resources inventory
 
 The Cloud screen resource inventory projects the canonical `/v1/resources`
-inventory. The GA scope has ten Service Forms and two non-Form services:
+inventory. The Cloud launch scope has ten exact Form-backed offerings and two
+non-Form services:
 
 - Edge Worker
 - Object Storage Standard / Infrequent Access offerings
@@ -363,10 +364,11 @@ inventory. The GA scope has ten Service Forms and two non-Form services:
 - AI Gateway
 - Verified Custom Domain
 
-This is the single all-or-nothing set in [GA Contract and Launch Gate](./index.md#ga-contract-and-launch-gate).
-Every item remains Pre-GA until the complete evidence set is activated. Items
-appear in the same inventory only when an active Offering exists, but no subset
-is advertised as Stable. An installed Compatibility API profile owns no
+This is the single all-or-nothing launch set in
+[Cloud Launch Contract and GA Gate](./index.md#cloud-launch-contract-and-ga-gate).
+Every item remains Pre-GA until the complete evidence set is activated. This
+Cloud-owned selection changes no Form maturity or Host Support fact. Items
+appear in the same inventory only when an active Offering exists. An installed Compatibility API profile owns no
 virtual inventory or separate Resource ledger. Dashboard, portable clients,
 and direct Deploy API all converge on the same Resource. The
 `resource_shapes` capability means typed Resource Shape APIs are available; it

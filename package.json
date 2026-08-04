@@ -41,7 +41,6 @@
     "test:scripts": "bun test ./tests/scripts",
     "audit:public-sites": "(cd docs && npm audit --audit-level=moderate) && (cd website && npm audit --audit-level=moderate)",
     "service-form:host-conformance": "bun scripts/run-portable-form-host-conformance.ts",
-    "service-form:host-report": "bun scripts/standard-form-host-report.ts",
     "service-form:runtime-artifacts:check": "bun scripts/verify-standard-form-runtime-artifacts.ts check",
     "service-form:runtime-artifacts:oci-readback": "bun scripts/verify-standard-form-runtime-artifacts.ts check --verify-oci",
     "service-form:published-package-host-proof": "bun scripts/verify-takoform-published-package-host-proof.ts",

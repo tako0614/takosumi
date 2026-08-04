@@ -61,7 +61,7 @@ Cloud 側のリポジトリで管理します。
 ### Resource と Form package
 
 - [Form package の導入](./form-package-installation.md)
-- [standard Form の受け入れ](./standard-form-admission.md)
+- [Form Host Support と activation](./form-host-support.md)
 
 ## 公開仕様との関係
 

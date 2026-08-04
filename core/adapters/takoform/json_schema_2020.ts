@@ -2,6 +2,7 @@ import {
   validateFormDefinition,
   validateFormRef,
   validatePackageIndex,
+  validatePackageIndexV1Alpha2,
 } from "./schema_validators.generated.ts";
 
 export interface StaticSchemaValidationError {
@@ -19,5 +20,7 @@ export interface StaticSchemaValidator {
 export const validateTakoformFormRef = validateFormRef as StaticSchemaValidator;
 export const validateTakoformPackageIndex =
   validatePackageIndex as StaticSchemaValidator;
+export const validateTakoformPackageIndexV1Alpha2 =
+  validatePackageIndexV1Alpha2 as StaticSchemaValidator;
 export const validateTakoformFormDefinition =
   validateFormDefinition as StaticSchemaValidator;

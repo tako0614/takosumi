@@ -60,7 +60,7 @@ test("a signed exact data-only package reaches the durable Form Registry seam", 
   expect(signature.calls).toBe(1);
   expect(installed.packageDigest).toBe(artifact.packageDigest);
   expect(installed.verifierId).toBe(
-    "takoform.form-package.v1alpha1+test.sigstore.v1",
+    "takoform.form-package.v1alpha1-v1alpha2+test.sigstore.v1",
   );
   expect(installed.definitionRefs).toEqual([artifact.formRef]);
   const definition = await registry.getDefinition(artifact.formRef);
@@ -88,6 +88,50 @@ test("a signed exact data-only package reaches the durable Form Registry seam", 
       inputs: [{ name: "bucket", source: "output", pointer: "/bucket_name" }],
     },
   ]);
+});
+
+test("content-addressed v1alpha2 packages are additive and forbid packageVersion", async () => {
+  const verifier = new TakoformDataOnlyPackageVerifier(
+    new AcceptingSignatureVerifier(),
+  );
+  const current = await buildArtifact(undefined, {
+    packageApiVersion: "packages.forms.takoform.com/v1alpha2",
+  });
+  await expect(
+    verifier.verify(current.envelope, current.packageDigest),
+  ).resolves.toMatchObject({ packageDigest: current.packageDigest });
+
+  const splitIdentity = await buildArtifact(undefined, {
+    packageApiVersion: "packages.forms.takoform.com/v1alpha2",
+    includePackageVersion: true,
+  });
+  await expect(
+    verifier.verify(splitIdentity.envelope, splitIdentity.packageDigest),
+  ).rejects.toThrow("package-index.json does not satisfy the Takoform schema");
+});
+
+test("historical Definition status never changes host operations", async () => {
+  const verifier = new TakoformDataOnlyPackageVerifier(
+    new AcceptingSignatureVerifier(),
+  );
+  const withStatus = async (status: "compatibility-candidate" | "standard") => {
+    const artifact = await buildArtifact((definition) => ({
+      ...asRecord(definition),
+      status,
+      lifecycleCapabilities: ["observe"],
+    }));
+    const verified = await verifier.verify(
+      artifact.envelope,
+      artifact.packageDigest,
+    );
+    return verified.definitions[0]?.operations;
+  };
+
+  await expect(withStatus("compatibility-candidate")).resolves.toEqual([
+    "read",
+    "refresh",
+  ]);
+  await expect(withStatus("standard")).resolves.toEqual(["read", "refresh"]);
 });
 
 test("package digest and Sigstore verification fail closed before install", async () => {
@@ -481,6 +525,10 @@ async function buildArtifact(
     readonly negativeFixture?: CanonicalJsonValue;
     readonly negativeStage?: "desired" | "observed" | "output";
     readonly negativeExpectedFailure?: string;
+    readonly packageApiVersion?:
+      | "packages.forms.takoform.com/v1alpha1"
+      | "packages.forms.takoform.com/v1alpha2";
+    readonly includePackageVersion?: boolean;
   } = {},
 ) {
   const originalDefinition: CanonicalJsonValue = {
@@ -613,10 +661,15 @@ async function buildArtifact(
       digest: `sha256:${await sha256HexAsync(bytes)}`,
     })),
   );
+  const packageApiVersion =
+    options.packageApiVersion ?? "packages.forms.takoform.com/v1alpha1";
   const index: CanonicalJsonValue = {
-    apiVersion: "packages.forms.takoform.com/v1alpha1",
+    apiVersion: packageApiVersion,
     kind: "FormPackage",
-    packageVersion: "1.0.0",
+    ...(packageApiVersion === "packages.forms.takoform.com/v1alpha1" ||
+    options.includePackageVersion
+      ? { packageVersion: "1.0.0" }
+      : {}),
     formRef: portableFormRef,
     definitionPath,
     files: [

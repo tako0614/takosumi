@@ -3,12 +3,12 @@
 This directory is a Takosumi host implementation of the independent Takoform
 Form Package contract. It is not a second definition authority.
 
-The three JSON Schemas are canonical-JSON-equivalent copies of
+The retained v1alpha1 and current v1alpha2 JSON Schemas are
+canonical-JSON-equivalent copies of
 `github.com/tako0614/terraform-provider-takoform/formpackage/schemas` at commit
-`8a52edc5688e4bb844dc6e0da28bb13d369a2ff8` (`v0.2.0`). Exact source and RFC
-8785 digests are recorded in `schema-provenance.json`. Update them only after
-the independent project changes its contract and the host conformance tests are
-updated.
+`1b35d7e2005240f6c5530283c75e332ea1b64024`. Exact source and RFC 8785 digests
+are recorded in `schema-provenance.json`. Update either profile only with its
+owning contract and the host conformance tests.
 
 The `application/vnd.takosumi.takoform-package-install.v1+json` object is an
 internal transport envelope for immutable package-index bytes, payload bytes,
@@ -23,7 +23,7 @@ mode or extension, unsupported media, forbidden credential/operator/commercial
 fields, open or remote schema authority, and conformance fixture mismatch.
 
 Schema validation is safe for the Cloudflare Workers runtime. Fixed FormRef,
-package-index, Form Definition, and Draft 2020-12 meta-schema validators are
+both package-index profiles, Form Definition, and Draft 2020-12 meta-schema validators are
 generated ahead of time by `bun run takoform-schema-validators:assets`; the
 committed modules are self-contained and import neither Ajv nor runtime codegen.
 Portable desired/observed/output/document schemas pass the generated

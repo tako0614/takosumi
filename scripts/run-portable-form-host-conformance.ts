@@ -116,7 +116,7 @@ async function readNegativeFixtures(
   const value = await readJson(path);
   if (!Array.isArray(value) || !value.every(isNegativeFixture)) {
     throw new TypeError(
-      "--negative-fixtures must contain a StandardFormNegativeFixture JSON array",
+      "--negative-fixtures must contain a portable host negative-fixture JSON array",
     );
   }
   return value;

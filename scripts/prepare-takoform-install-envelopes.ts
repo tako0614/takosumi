@@ -35,7 +35,7 @@ export interface PrepareInstallEnvelopesOptions {
 }
 
 export interface PrepareInstallEnvelopesResult {
-  readonly format: "takosumi.takoform-install-envelope-output@v2";
+  readonly format: "takosumi.takoform-install-envelope-output@v3";
   readonly outputDir: string;
   readonly manifestFile: typeof MANIFEST_FILE;
   readonly packageCount: number;
@@ -82,7 +82,7 @@ export async function prepareInstallEnvelopes(
   const files = buildOutputFiles(reviewed);
   await publishDirectoryAtomically(outputDir, files);
   return {
-    format: "takosumi.takoform-install-envelope-output@v2",
+    format: "takosumi.takoform-install-envelope-output@v3",
     outputDir,
     manifestFile: MANIFEST_FILE,
     packageCount: reviewed.packages.length,
@@ -94,7 +94,7 @@ function buildOutputFiles(
   reviewed: ReviewedPublishedPackageInstallSet,
 ): ReadonlyMap<string, Uint8Array> {
   if (
-    reviewed.format !== "takosumi.reviewed-takoform-package-install-set@v2" ||
+    reviewed.format !== "takosumi.reviewed-takoform-package-install-set@v3" ||
     reviewed.repository !== "tako0614/terraform-provider-takoform" ||
     reviewed.packages.length !== REVIEWED_TAKOFORM_PACKAGE_KINDS.length ||
     !sameStrings(
@@ -103,12 +103,12 @@ function buildOutputFiles(
     ) ||
     !/^[a-f0-9]{40}$/u.test(reviewed.checkoutCommit) ||
     !/^\d+\.\d+\.\d+$/u.test(reviewed.checkoutVersion) ||
-    reviewed.admission.root !== "admission/v4" ||
-    !/^\d+\.\d+\.\d+$/u.test(reviewed.admission.version) ||
-    reviewed.admission.tag !==
-      `forms/admissions/v${reviewed.admission.version}` ||
-    !/^[a-f0-9]{40}$/u.test(reviewed.admission.commit) ||
-    !/^[a-f0-9]{40}$/u.test(reviewed.admission.tree) ||
+    reviewed.historicalCheckpoint.root !== "admission/v4" ||
+    !/^\d+\.\d+\.\d+$/u.test(reviewed.historicalCheckpoint.version) ||
+    reviewed.historicalCheckpoint.tag !==
+      `forms/admissions/v${reviewed.historicalCheckpoint.version}` ||
+    !/^[a-f0-9]{40}$/u.test(reviewed.historicalCheckpoint.commit) ||
+    !/^[a-f0-9]{40}$/u.test(reviewed.historicalCheckpoint.tree) ||
     reviewed.historicalPublication.repository !==
       "tako0614/terraform-provider-takoform"
   ) {
@@ -207,18 +207,17 @@ function buildOutputFiles(
 
   putUnique(files, TRUSTED_ROOT_FILE, reviewed.trustedRoot.bytes);
   const manifest = canonicalJsonBytes({
-    format: "takosumi.takoform-install-envelope-set@v2",
+    format: "takosumi.takoform-install-envelope-set@v3",
     repository: reviewed.repository,
     checkout: {
       commit: reviewed.checkoutCommit,
       version: reviewed.checkoutVersion,
     },
-    admission: reviewed.admission,
+    historicalCheckpoint: reviewed.historicalCheckpoint,
     historicalPublication: reviewed.historicalPublication,
     verifierId: reviewed.verifierId,
     pins: {
-      admissionVersion: reviewed.admissionVersion,
-      standardAdmissionSet: reviewed.standardAdmissionSet,
+      checkpointVersion: reviewed.checkpointVersion,
       publishedTrust: reviewed.publishedTrust,
       packageIndexPolicy: reviewed.packageIndexPolicy,
       trustedRoot: {
