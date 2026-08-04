@@ -121,6 +121,30 @@ test("capsule destroy-plan route requires the destroy operation", async () => {
   expect((await response.json()).error.message).toContain("destroy");
 });
 
+test("capsule destroy recovery SourceSnapshot is restricted to an unrestricted operator", async () => {
+  const { app } = await scopedApp({
+    workspaceIds: [WORKSPACE_ID],
+    operations: ["destroy"],
+    runnerProfileIds: "*",
+  });
+
+  const response = await app.request(
+    `/internal/v1/capsules/${CAPSULE_ID}/destroy-plan`,
+    {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify({
+        recoverySourceSnapshotId: "snap_recovery0001",
+      }),
+    },
+  );
+
+  expect(response.status).toEqual(403);
+  expect((await response.json()).error.message).toContain(
+    "unrestricted operator",
+  );
+});
+
 test("capsule plan route requires update on a Capsule that already has state", async () => {
   const { app } = await scopedApp(
     {

@@ -1126,9 +1126,11 @@ export interface CreateCapsulePlanInternal {
   /**
    * Pins the plan to a SPECIFIC SourceSnapshot id instead of resolving the
    * Source's latest snapshot for its default ref. Used by the §30 deployment
-   * rollback-plan path (`POST /internal/v1/state-versions/:id/rollback-plan`) to re-plan an
-   * Capsule against the source snapshot recorded by a prior StateVersion's Run.
-   * The snapshot must belong to the Capsule's Source.
+   * rollback-plan path (`POST /internal/v1/state-versions/:id/rollback-plan`) to
+   * re-plan a Capsule against the snapshot recorded by a prior StateVersion's
+   * Run. An unrestricted operator may also use the latest current-ref snapshot
+   * for a bounded destroy recovery when the historical materializer cannot
+   * complete cleanup. The snapshot must belong to the Capsule's Source.
    */
   readonly sourceSnapshotId?: string;
   /**
@@ -1573,7 +1575,10 @@ export class OpenTofuController {
   createCapsuleDestroyPlan(
     capsuleId: string,
     context: DeployControlActorContext = {},
-    internal: Pick<CreateCapsulePlanInternal, "runnerProfileId"> = {},
+    internal: Pick<
+      CreateCapsulePlanInternal,
+      "runnerProfileId" | "sourceSnapshotId"
+    > = {},
   ): Promise<PlanRunResponse> {
     return this.#runEngine.createCapsuleDestroyPlan(
       capsuleId,
