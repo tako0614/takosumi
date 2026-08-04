@@ -8077,10 +8077,15 @@ export class RunEngine {
         output.workspaceOutputs as Readonly<Record<string, unknown>>,
       ),
     };
-    const sourceSnapshotId = await this.#sourceSnapshotIdForStateVersion(
-      stateVersion,
-      new Set(),
-    );
+    // A normal destroy Plan is already pinned to the applied StateVersion's
+    // SourceSnapshot. An operator recovery Plan is the one deliberate
+    // exception: it pins a newer, validated snapshot so a broken historical
+    // cleanup command can be forward-repaired. Execute the reviewed Plan's
+    // source in both cases; fall back to the StateVersion only for legacy
+    // source-less Plans.
+    const sourceSnapshotId =
+      input.planRun.sourceSnapshotId ??
+      (await this.#sourceSnapshotIdForStateVersion(stateVersion, new Set()));
     const sourceSnapshot = sourceSnapshotId
       ? await this.#store.getSourceSnapshot(sourceSnapshotId)
       : undefined;
