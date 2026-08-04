@@ -94,13 +94,13 @@
     "age-encryption": "^0.3.0",
     "commander": "^12.1.0",
     "drizzle-orm": "^0.45.2",
-    "hono": "^4.12.27",
+    "hono": "^4.12.34",
     "pg": "^8.11.0",
     "yaml": "^2.8.2"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.2",
-    "@playwright/test": "1.53.1",
+    "@playwright/test": "1.55.1",
     "@types/bun": "^1.2.0",
     "@types/node": "^22.0.0",
     "@types/pg": "^8.11.0",
@@ -112,8 +112,9 @@
   },
   "overrides": {
     "esbuild": "0.28.1",
-    "fast-uri": "3.1.4",
+    "fast-uri": "3.1.5",
     "sharp": "0.35.3",
+    "undici": "7.29.0",
     "ws": "8.21.0"
   }
 }

@@ -5,6 +5,26 @@ import {
   portableTypeForShapeKind,
   shapeKindForPortableType,
 } from "../../contract/form-host-interoperability.ts";
+import type {
+  TakoformHostErrorCode,
+  TakoformHostErrorEnvelope,
+} from "../../contract/form-host-interoperability.ts";
+
+test("Takoform host errors include the public policy denial code", () => {
+  const envelope: TakoformHostErrorEnvelope = {
+    error: {
+      code: "policy_denied",
+      message: "portable form operation was rejected",
+      requestId: "req_policy_denied",
+      retryable: false,
+      hostCode: "deployment_admission_denied",
+    },
+  };
+  const code: TakoformHostErrorCode = envelope.error.code;
+  expect(code).toBe("policy_denied");
+  expect(envelope.error.retryable).toBe(false);
+  expect(envelope.error.hostCode).toBe("deployment_admission_denied");
+});
 
 test("Takoform discovery keeps the closed v1alpha1 endpoint vocabulary", () => {
   const discovery = createTakoformHostDiscovery("https://host.test/");

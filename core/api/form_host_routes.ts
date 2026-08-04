@@ -1577,7 +1577,7 @@ function serviceError(c: Context, error: ResourceServiceError): Response {
     reconcile_conflict: ["resource_busy", 409, true],
     import_conflict: ["conflict", 409, false],
     policy_denied: ["forbidden", 403, false],
-    deployment_admission_denied: ["forbidden", 403, false],
+    deployment_admission_denied: ["policy_denied", 403, false],
     // The published portable taxonomy permits automatic retry only for
     // resource_busy and backend_unavailable. Preserve admission retry evidence
     // in hostCode/details without inventing a Takosumi-only wire code.

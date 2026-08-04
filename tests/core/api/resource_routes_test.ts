@@ -273,6 +273,15 @@ function pendingDeploymentAdmission(): ResourceDeploymentAdmission {
   };
 }
 
+function deniedDeploymentAdmission(): ResourceDeploymentAdmission {
+  return {
+    ...NOOP_RESOURCE_DEPLOYMENT_ADMISSION,
+    async reserve(_context: ResourceDeploymentReserveContext) {
+      return { reasons: ["payment method required"] };
+    },
+  };
+}
+
 const EXACT_OBJECT_BUCKET_FORM: InstalledFormReference = {
   type: "object_bucket",
   version: "1.0.0",
@@ -951,6 +960,62 @@ test("portable Form host preserves pending admission in the stable retry taxonom
       attemptId: "attempt_route_123",
     },
   });
+});
+
+test("portable Form host maps admission denial to policy_denied", async () => {
+  const { app } = await buildApp(
+    {
+      resolveActor: () => ({
+        actorAccountId: "acct_portable_denied",
+        workspaceId: "workspace_1",
+        roles: ["owner"],
+        scopes: ["forms:read", "resources:*"],
+        requestId: "req_portable_denied",
+      }),
+    },
+    exactObjectBucketFormRegistry(),
+    {
+      adapter: new PortableFormStubResourceShapeAdapter(),
+      deploymentAdmission: deniedDeploymentAdmission(),
+    },
+  );
+  const base = "/apis/forms.takoform.com/v1alpha1";
+  const path = `${base}/resources/ObjectBucket/admission-denied`;
+  const desired = {
+    apiVersion: "forms.takoform.com/v1alpha1",
+    kind: "ObjectBucket",
+    form: portableFormReference(),
+    metadata: { name: "admission-denied", space: "space_1" },
+    spec: { name: "admission-denied", interfaces: ["s3_api"] },
+  };
+
+  const preview = await app.request(`${base}/resources/preview`, {
+    method: "POST",
+    headers: { ...JSON_HEADERS, "if-none-match": "*" },
+    body: JSON.stringify(desired),
+  });
+  expect(preview.status).toBe(200);
+  const previewBody = await preview.json();
+  const response = await app.request(path, {
+    method: "PUT",
+    headers: {
+      ...JSON_HEADERS,
+      "if-none-match": "*",
+      "idempotency-key": "portable-admission-denied-1",
+    },
+    body: JSON.stringify({
+      ...desired,
+      review: { planDigest: previewBody.review.planDigest },
+    }),
+  });
+  expect(response.status).toBe(403);
+  const body = await response.json();
+  expect(body.error).toMatchObject({
+    code: "policy_denied",
+    retryable: false,
+    hostCode: "deployment_admission_denied",
+  });
+  expect(body.error.code).not.toBe("forbidden");
 });
 
 test("public Resource API rejects malformed or kind-mismatched exact Form identity", async () => {

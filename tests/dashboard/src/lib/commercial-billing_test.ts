@@ -401,6 +401,18 @@ test("native commercial billing stays provider-neutral and uses extension APIs",
   expect(client).not.toContain("Stripe");
 });
 
+test("commercial billing auto-recharge options preserve canonical selections", () => {
+  expect(commercialBillingPanelSource).toContain(
+    "autoRecharge()?.thresholdUsdMicros === amount",
+  );
+  expect(commercialBillingPanelSource).toContain(
+    "autoRecharge()?.rechargeUsdMicros === amount",
+  );
+  expect(commercialBillingPanelSource).toContain(
+    "autoRecharge()?.monthlyLimitUsdMicros === amount",
+  );
+});
+
 test("native commercial billing keeps errored resources inside the panel", () => {
   const snapshotGuard = commercialBillingPanelSource.indexOf(
     "if (snapshot.error) return undefined;",

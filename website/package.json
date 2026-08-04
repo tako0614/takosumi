@@ -23,7 +23,7 @@
   },
   "overrides": {
     "@babel/core": "7.29.7",
-    "brace-expansion": "5.0.8",
+    "brace-expansion": "5.0.9",
     "esbuild": "0.28.1",
     "h3": "1.15.11",
     "postcss": "8.5.23",
