@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
 import type { RepositoryManifestDocument } from "takosumi-contract/repository-manifest";
+import { parseInstallConfigHostRuntimeMaterialization } from "../../../../contract/host-runtime-materialization.ts";
 import { compileRepositoryInstallUx } from "../../../../core/domains/capsules/repository_install_ux_compiler.ts";
 
 const document: RepositoryManifestDocument = {
@@ -144,7 +145,7 @@ describe("repository install UX compiler", () => {
           kind: "oidc_client",
           variables: { issuerUrl: "oidc_issuer" },
           callbackPath: "/api/auth/callback/takos",
-          scopes: ["openid", "profile", "email"],
+          scopes: ["email", "openid", "profile"],
         },
       ],
       features: [
@@ -161,6 +162,53 @@ describe("repository install UX compiler", () => {
       "app_url",
       "push_token",
     ]);
+  });
+
+  test("canonicalizes repository OIDC scopes before host runtime validation", () => {
+    const runtimeDocument = {
+      apiVersion: "takosumi.com/v1",
+      kind: "Repository",
+      install: {
+        modules: {
+          ".": {
+            inputs: [],
+            requires: [
+              {
+                kind: "identity.oidc",
+                callbackPath: "/api/auth/callback/takos",
+                scopes: ["openid", "profile", "email", "profile"],
+                deliver: {
+                  bindings: {
+                    issuerUrl: "TAKOSUMI_ACCOUNTS_ISSUER_URL",
+                    clientId: "TAKOSUMI_ACCOUNTS_CLIENT_ID",
+                    ownerSubject: "TAKOSUMI_ACCOUNTS_OWNER_SUB",
+                    redirectUri: "TAKOSUMI_ACCOUNTS_REDIRECT_URI",
+                  },
+                },
+              },
+            ],
+          },
+        },
+      },
+    } satisfies RepositoryManifestDocument;
+    const result = compile({
+      document: runtimeDocument,
+      compatibilityReport: report({
+        rootModuleVariables: [],
+        rootModuleVariableDeclarations: [],
+      }),
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(
+      result.compiled.hostRuntimeMaterialization?.requirements[0],
+    ).toMatchObject({ scopes: ["email", "openid", "profile"] });
+    expect(() =>
+      parseInstallConfigHostRuntimeMaterialization(
+        result.compiled.hostRuntimeMaterialization,
+      ),
+    ).not.toThrow();
   });
 
   test("requires an exact snapshot and module compatibility report", () => {
