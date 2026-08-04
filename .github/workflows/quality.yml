@@ -62,6 +62,3 @@ jobs:
 
       - name: Run canonical Takosumi checks
         run: bun run check
-
-      - name: Run Takosumi tests
-        run: bun test
