@@ -60,17 +60,25 @@ function Inner() {
     workspaceId,
     (id) => getDashboardOverviewCached(id),
   );
+  // Solid's createResource accessor throws while the resource is errored.
+  // Read the error state first so every derived view value can degrade to
+  // `undefined` and let the local retry branch render instead of reaching the
+  // root ErrorBoundary.
+  const overviewData = createMemo(() => {
+    if (overview.error) return undefined;
+    return overview();
+  });
   // The overview projection caps the capsule list (nextCapsuleCursor); the
   // full workload list must show every Capsule, so fetch the rest when capped.
   const fullListWorkspaceId = createMemo(() =>
-    overview()?.nextCapsuleCursor ? workspaceId() : undefined,
+    overviewData()?.nextCapsuleCursor ? workspaceId() : undefined,
   );
   const [fullCapsules, { refetch: refetchFullCapsules }] = createResource(
     fullListWorkspaceId,
     (id) => listCapsulesCached(id, { includeDestroyed: false }),
   );
   const capsules = createMemo(() => {
-    const base = overview()?.capsules ?? [];
+    const base = overviewData()?.capsules ?? [];
     // `.error` first: reading an errored resource THROWS. A failed
     // supplemental full-list fetch degrades to the overview's first page (the
     // fullCapsules.error toast + retry handles surfacing it) instead of
@@ -84,7 +92,9 @@ function Inner() {
   const visible = createMemo(() =>
     (capsules() ?? []).filter(isVisibleServiceCapsule),
   );
-  const installConfigs = createMemo(() => overview()?.installConfigs ?? []);
+  const installConfigs = createMemo(
+    () => overviewData()?.installConfigs ?? [],
+  );
   const kindByConfigId = createMemo(() => {
     const map = new Map<string, string>();
     for (const config of installConfigs() ?? []) {
@@ -134,7 +144,7 @@ function Inner() {
               </Button>
             </Toast>
           </Match>
-          <Match when={overview()}>
+          <Match when={overviewData()}>
             {/* The supplemental full-list fetch failing must not silently
                 truncate the list to the overview's first page. */}
             <Show when={fullCapsules.error}>

@@ -15,7 +15,7 @@ describe("WorkloadListView (/workloads)", () => {
   test("lists every visible service as a row that opens its detail", () => {
     expect(serviceListSource).toContain("isVisibleServiceCapsule");
     expect(serviceListSource).toContain("getDashboardOverviewCached");
-    expect(serviceListSource).toContain("overview()?.capsules");
+    expect(serviceListSource).toContain("overviewData()?.capsules");
     expect(serviceListSource).toContain('class="av-service-rows"');
     expect(serviceListSource).toContain('class="av-service-row"');
     expect(serviceListSource).toContain('class="av-service-row-main"');
@@ -33,6 +33,23 @@ describe("WorkloadListView (/workloads)", () => {
     expect(serviceListSource).toContain("refetchFullCapsules");
     expect(serviceListSource).toContain('t("workloads.listIncomplete")');
     expect(serviceListSource).toContain('t("common.retry")');
+  });
+
+  test("guards a failed overview before reading its throwing accessor", () => {
+    expect(serviceListSource).toContain("const overviewData = createMemo");
+    expect(serviceListSource).toContain("if (overview.error) return undefined;");
+    expect(serviceListSource).toContain("<Match when={overview.error}>");
+    expect(serviceListSource).toContain("fetchFailedMessage(overview.error, t)");
+    expect(serviceListSource).toContain("refetchOverview");
+
+    const overviewAccessors = [
+      ...serviceListSource.matchAll(/\boverview\(\)/g),
+    ];
+    expect(overviewAccessors).toHaveLength(1);
+    expect(overviewAccessors[0]?.index ?? -1).toBeGreaterThan(
+      serviceListSource.indexOf("if (overview.error) return undefined;"),
+    );
+    expect(serviceListSource).toContain("<Match when={overviewData()}>");
   });
 
   test("offers deletion review directly from the service list", () => {
