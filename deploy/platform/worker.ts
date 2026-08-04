@@ -328,6 +328,85 @@ export async function handlePlatformInternalEdgeRequest(
   return await seamForEnv(env).fetch(request);
 }
 
+const INTERNAL_PLATFORM_CAPSULE_PREFIX = "/internal/platform/capsules/";
+const INTERNAL_PLATFORM_DESTROY_RECOVERY_SUFFIX = "/destroy-recovery";
+const PLATFORM_CAPSULE_ID_PATTERN = /^cap_[0-9a-zA-Z]{8,96}$/;
+
+function destroyRecoveryCapsuleIdFromPath(
+  pathname: string,
+): string | undefined {
+  if (!pathname.startsWith(INTERNAL_PLATFORM_CAPSULE_PREFIX)) return undefined;
+  if (!pathname.endsWith(INTERNAL_PLATFORM_DESTROY_RECOVERY_SUFFIX)) {
+    return undefined;
+  }
+  const encoded = pathname.slice(
+    INTERNAL_PLATFORM_CAPSULE_PREFIX.length,
+    pathname.length - INTERNAL_PLATFORM_DESTROY_RECOVERY_SUFFIX.length,
+  );
+  if (!encoded || encoded.includes("/")) return undefined;
+  try {
+    const capsuleId = decodeURIComponent(encoded);
+    return PLATFORM_CAPSULE_ID_PATTERN.test(capsuleId) ? capsuleId : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Exposes one exact operator-only forward-repair action without enabling the
+ * generic internal API at the public edge. The embedded Core route remains the
+ * authority for snapshot ownership, latest-ref fencing, and destroy planning.
+ */
+export async function handlePlatformDestroyRecoveryRequest(
+  request: Request,
+  url: URL,
+  env: CloudflareWorkerEnv,
+  seamForEnv: (
+    env: CloudflareWorkerEnv,
+  ) => PlatformDeployControlSeam = deployControlSeam,
+): Promise<Response | undefined> {
+  const capsuleId = destroyRecoveryCapsuleIdFromPath(url.pathname);
+  if (!capsuleId) return undefined;
+  if (request.method !== "POST") {
+    return Response.json({ error: "method not allowed" }, { status: 405 });
+  }
+  const auth = requireDeployControlBearer(request, env);
+  if (auth) return auth;
+  const parsed = await readJsonRecord(request);
+  if (!parsed.ok) return parsed.response;
+  if (
+    Object.keys(parsed.value).length !== 1 ||
+    typeof parsed.value.recoverySourceSnapshotId !== "string" ||
+    !parsed.value.recoverySourceSnapshotId.trim()
+  ) {
+    return Response.json(
+      {
+        error: "invalid_request",
+        error_description:
+          "body must contain only a non-empty recoverySourceSnapshotId",
+      },
+      { status: 400 },
+    );
+  }
+  const target = new URL(request.url);
+  target.pathname = `${INTERNAL_V1_PREFIX}/capsules/${encodeURIComponent(capsuleId)}/destroy-plan`;
+  target.search = "";
+  target.hash = "";
+  return await seamForEnv(env).fetch(
+    new Request(target, {
+      method: "POST",
+      headers: {
+        authorization: request.headers.get("authorization") ?? "",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        recoverySourceSnapshotId:
+          parsed.value.recoverySourceSnapshotId.trim(),
+      }),
+    }),
+  );
+}
+
 async function controlPlaneOperationsFor(
   env: PlatformEnv,
 ): Promise<ControlPlaneOperations> {
@@ -1036,6 +1115,9 @@ export default {
     );
     if (internalEdgeResponse) return internalEdgeResponse;
     const url = new URL(request.url);
+    const destroyRecoveryResponse =
+      await handlePlatformDestroyRecoveryRequest(request, url, env);
+    if (destroyRecoveryResponse) return destroyRecoveryResponse;
     if (url.pathname === TAKOSUMI_WELL_KNOWN_PATH) {
       return Response.json(
         createTakosumiWellKnownDocument(

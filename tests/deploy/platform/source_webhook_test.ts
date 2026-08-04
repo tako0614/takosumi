@@ -20,6 +20,7 @@ import {
   driftCheckEnabled,
   evaluateProductionHardeningGates,
   handleOperatorBillingRequest,
+  handlePlatformDestroyRecoveryRequest,
   handlePlatformInternalEdgeRequest,
   handlePlatformExtensionRequest,
   handlePlatformExtensionCatalogRequest,
@@ -147,6 +148,91 @@ test("platform internal edge dispatch is local-only and never exposes coordinati
       seamForEnv,
     ),
   ).toBeUndefined();
+});
+
+test("platform destroy recovery exposes one exact operator-only Core action", async () => {
+  const forwarded: Array<{
+    readonly url: string;
+    readonly method: string;
+    readonly authorization: string | null;
+    readonly body: unknown;
+  }> = [];
+  const seamForEnv = () => ({
+    fetch: async (request: Request) => {
+      forwarded.push({
+        url: request.url,
+        method: request.method,
+        authorization: request.headers.get("authorization"),
+        body: await request.json(),
+      });
+      return Response.json({ run: { id: "plan_recovery0001" } }, { status: 201 });
+    },
+  });
+  const url = new URL(
+    "https://app.takosumi.com/internal/platform/capsules/cap_recovery0001/destroy-recovery",
+  );
+  const env = {
+    TAKOSUMI_DEPLOY_CONTROL_TOKEN: "operator-secret",
+  } as never;
+
+  const unauthorized = await handlePlatformDestroyRecoveryRequest(
+    new Request(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        recoverySourceSnapshotId: "snap_recovery0001",
+      }),
+    }),
+    url,
+    env,
+    seamForEnv,
+  );
+  expect(unauthorized?.status).toBe(401);
+  expect(forwarded).toHaveLength(0);
+
+  const invalid = await handlePlatformDestroyRecoveryRequest(
+    new Request(url, {
+      method: "POST",
+      headers: {
+        authorization: "Bearer operator-secret",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        recoverySourceSnapshotId: "snap_recovery0001",
+        runnerId: "unreviewed",
+      }),
+    }),
+    url,
+    env,
+    seamForEnv,
+  );
+  expect(invalid?.status).toBe(400);
+  expect(forwarded).toHaveLength(0);
+
+  const response = await handlePlatformDestroyRecoveryRequest(
+    new Request(url, {
+      method: "POST",
+      headers: {
+        authorization: "Bearer operator-secret",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        recoverySourceSnapshotId: "snap_recovery0001",
+      }),
+    }),
+    url,
+    env,
+    seamForEnv,
+  );
+  expect(response?.status).toBe(201);
+  expect(forwarded).toEqual([
+    {
+      url: "https://app.takosumi.com/internal/v1/capsules/cap_recovery0001/destroy-plan",
+      method: "POST",
+      authorization: "Bearer operator-secret",
+      body: { recoverySourceSnapshotId: "snap_recovery0001" },
+    },
+  ]);
 });
 
 test("compatibility data authority selects one exact Resource-owned Interface", () => {
