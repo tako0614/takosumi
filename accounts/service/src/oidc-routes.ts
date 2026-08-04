@@ -196,6 +196,29 @@ function oidcTokenClientCredentials(
   };
 }
 
+type OidcTokenDenialStage =
+  | "authorization_code_missing"
+  | "authorization_code_reused"
+  | "authorization_code_unknown_or_expired"
+  | "client_id_mismatch"
+  | "client_registration_missing"
+  | "client_authentication_failed"
+  | "redirect_uri_mismatch"
+  | "pkce_verification_failed"
+  | `live_grant_${OidcLiveGrantFailureReason}`;
+
+function oidcTokenDenial(
+  stage: OidcTokenDenialStage,
+  error: "invalid_client" | "invalid_grant",
+  status: 400 | 401 = 400,
+): Response {
+  // OAuth responses deliberately stay coarse so callers cannot probe code or
+  // client validity. The server log contains only a closed reason label: no
+  // code, client id, redirect URI, subject, or credential is emitted.
+  console.warn(JSON.stringify({ event: "oidc_token_denied", stage }));
+  return json({ error }, status);
+}
+
 function basicClientCredentials(
   authorization: string | null,
 ): { clientId: string; secret: string } | undefined {
@@ -600,7 +623,8 @@ export async function handleToken(input: {
   }
 
   const code = params.get("code");
-  if (!code) return json({ error: "invalid_grant" }, 400);
+  if (!code)
+    return oidcTokenDenial("authorization_code_missing", "invalid_grant");
 
   // Detect authorization-code reuse before consuming. consumeAuthorizationCode
   // is single-shot, but a second attempt may legitimately race or maliciously
@@ -609,16 +633,19 @@ export async function handleToken(input: {
   // subsequent retries.
   if (await input.store.isAuthorizationCodeConsumed(code)) {
     await cascadeRevokeAuthorizationCode(code, input.store);
-    return json({ error: "invalid_grant" }, 400);
+    return oidcTokenDenial("authorization_code_reused", "invalid_grant");
   }
   const record = await input.store.consumeAuthorizationCode(code);
   if (!record || record.expiresAt < Date.now()) {
-    return json({ error: "invalid_grant" }, 400);
+    return oidcTokenDenial(
+      "authorization_code_unknown_or_expired",
+      "invalid_grant",
+    );
   }
 
   const credentials = oidcTokenClientCredentials(input.request, params);
   if (credentials.clientId !== record.clientId) {
-    return json({ error: "invalid_grant" }, 400);
+    return oidcTokenDenial("client_id_mismatch", "invalid_grant");
   }
   const client = await resolveOidcClient({
     clientId: record.clientId,
@@ -626,16 +653,20 @@ export async function handleToken(input: {
     store: input.store,
   });
   if (!client) {
-    return json({ error: "invalid_grant" }, 400);
+    return oidcTokenDenial("client_registration_missing", "invalid_grant");
   }
   if (!(await validateOidcClientSecret(client, credentials.secret))) {
-    return json({ error: "invalid_client" }, 401);
+    return oidcTokenDenial(
+      "client_authentication_failed",
+      "invalid_client",
+      401,
+    );
   }
   if (params.get("redirect_uri") !== record.redirectUri) {
-    return json({ error: "invalid_grant" }, 400);
+    return oidcTokenDenial("redirect_uri_mismatch", "invalid_grant");
   }
   if (!(await isPkceVerifierValid(record, params.get("code_verifier")))) {
-    return json({ error: "invalid_grant" }, 400);
+    return oidcTokenDenial("pkce_verification_failed", "invalid_grant");
   }
   const operations = await operationsForLiveGrant({
     operations: input.operations,
@@ -653,7 +684,7 @@ export async function handleToken(input: {
     workspaceId: record.workspaceId,
   });
   if (!liveGrant.ok) {
-    return json({ error: "invalid_grant" }, 400);
+    return oidcTokenDenial(`live_grant_${liveGrant.reason}`, "invalid_grant");
   }
 
   // Mark this code as consumed and start tracking the tokens issued through

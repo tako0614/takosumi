@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import type { CapsuleStatus } from "takosumi-contract/install-configs";
 import type { WorkspaceMemberStatus } from "takosumi-contract/workspaces";
 import type { ControlPlaneOperations } from "../../../../accounts/service/src/control-operations.ts";
@@ -153,6 +153,39 @@ test("authorize resolves a current Capsule grant and terminal status revokes its
   expect(await denied.json()).toMatchObject({ error: "unauthorized_client" });
   expect(store.findOidcClient(clientId)).toBeUndefined();
   expect(store.findOidcClientForCapsule(capsuleId)).toBeUndefined();
+});
+
+test("authorization-code denial logs only its closed diagnostic stage", async () => {
+  const { store, operations } = liveGrantFixture();
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    const response = await handleToken({
+      issuer,
+      request: new Request(`${issuer}/oauth/token`, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "authorization_code",
+          client_id: "secret-client-id-must-not-be-logged",
+        }),
+      }),
+      store,
+      flow,
+      clients: new Map(),
+      operations,
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "invalid_grant" });
+    expect(warn).toHaveBeenCalledTimes(1);
+    const logged = String(warn.mock.calls[0]?.[0]);
+    expect(JSON.parse(logged)).toEqual({
+      event: "oidc_token_denied",
+      stage: "authorization_code_missing",
+    });
+    expect(logged).not.toContain("secret-client-id");
+  } finally {
+    warn.mockRestore();
+  }
 });
 
 test("UserInfo uses the current role and refresh revokes the chain after membership loss", async () => {
