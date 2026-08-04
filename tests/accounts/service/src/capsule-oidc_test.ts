@@ -6,7 +6,7 @@ import { InMemoryAccountsStore } from "../../../../accounts/service/src/store.ts
 import type { InstallConfig } from "../../../../contract/install-configs.ts";
 import { scopeIsAllowed } from "../../../../accounts/service/src/oidc-routes.ts";
 import { TAKOSUMI_ACCOUNTS_CAPSULE_DELEGATION_SCOPES } from "../../../../accounts/contract/src/mod.ts";
-import { REFERENCE_APP_INSTALL_CONFIGS } from "../../../../deploy/reference-app-install-configs.ts";
+import { REFERENCE_APP_INSTALL_CONFIGS } from "../../../fixtures/reference-app-install-configs.ts";
 
 test("Capsule OIDC registration never invents module variable names", async () => {
   const store = new InMemoryAccountsStore();

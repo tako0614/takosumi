@@ -555,10 +555,10 @@ test("Store preflight resolves the repository default before exact compatibility
     id: "icfg_repo_default_ambiguous",
     name: "repo-default-ambiguous",
   });
-  const ambiguous = await controlJson<{
-    readonly error: {
-      readonly code: string;
-      readonly details?: { readonly diagnosticCode?: string };
+  const historicalSharedRowsIgnored = await controlJson<{
+    readonly repositoryInstallUx: {
+      readonly status: "accepted";
+      readonly installConfigId: string;
     };
   }>(
     {
@@ -573,14 +573,11 @@ test("Store preflight resolves the repository default before exact compatibility
         compileInstallUx: true,
       },
     },
-    400,
+    201,
   );
-  expect(ambiguous.error).toMatchObject({
-    code: "repository_install_ux_invalid",
-    details: {
-      diagnosticCode: "repository_install_ux_base_config_ambiguous",
-    },
-  });
+  expect(historicalSharedRowsIgnored.repositoryInstallUx.status).toBe(
+    "accepted",
+  );
   expect(runner.capsuleSourceFileJobs).toHaveLength(1);
 
   const missing = await seedCapsuleModel(deployStore, {
@@ -604,10 +601,10 @@ test("Store preflight resolves the repository default before exact compatibility
       },
     },
   });
-  const missingBase = await controlJson<{
-    readonly error: {
-      readonly code: string;
-      readonly details?: { readonly diagnosticCode?: string };
+  const genericBase = await controlJson<{
+    readonly repositoryInstallUx: {
+      readonly status: "accepted";
+      readonly installConfigId: string;
     };
   }>(
     {
@@ -622,15 +619,10 @@ test("Store preflight resolves the repository default before exact compatibility
         compileInstallUx: true,
       },
     },
-    400,
+    201,
   );
-  expect(missingBase.error).toMatchObject({
-    code: "repository_install_ux_invalid",
-    details: {
-      diagnosticCode: "repository_install_ux_base_config_missing",
-    },
-  });
-  expect(runner.capsuleSourceFileJobs).toHaveLength(1);
+  expect(genericBase.repositoryInstallUx.status).toBe("accepted");
+  expect(runner.capsuleSourceFileJobs).toHaveLength(2);
 
   await controlJson(
     {
@@ -647,7 +639,7 @@ test("Store preflight resolves the repository default before exact compatibility
     },
     201,
   );
-  expect(runner.capsuleSourceFileJobs[1]?.modulePath).toBe("deploy/manual");
+  expect(runner.capsuleSourceFileJobs[2]?.modulePath).toBe("deploy/manual");
 
   const manual = await seedCapsuleModel(deployStore, {
     workspaceId: "ws_manual_module_create",

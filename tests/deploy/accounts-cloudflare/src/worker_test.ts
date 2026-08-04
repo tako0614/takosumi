@@ -305,8 +305,23 @@ test("Cloudflare auth discovery rejects malformed config without leaking it", as
   expect(text).not.toContain("must-never-be-returned");
 });
 
-test("Cloudflare Accounts handler reports cold/concurrent initialization waits only", async () => {
+test("Cloudflare Accounts authenticates before resolving the cold Control plane", async () => {
   const db = await versionedAccountsDb();
+  const sessionSalt = "cloudflare-handler-timing-test-session-salt";
+  registerSessionHashSaltConfig({ salt: sessionSalt });
+  const store = new D1AccountsStore(db, { schemaMode: "predeployed" });
+  const sessionId = "sess_control_initialization_timing";
+  await store.saveAccount({
+    subject: "tsub_control_initialization_timing",
+    createdAt: 1_000,
+    updatedAt: 1_000,
+  });
+  await store.saveAccountSession({
+    sessionId,
+    subject: "tsub_control_initialization_timing",
+    createdAt: 1_000,
+    expiresAt: Date.now() + 60_000,
+  });
   let releaseControlInitialization!: () => void;
   const controlInitialization = new Promise<void>((resolve) => {
     releaseControlInitialization = resolve;
@@ -321,22 +336,36 @@ test("Cloudflare Accounts handler reports cold/concurrent initialization waits o
       controlInitializationCalls += 1;
       signalControlInitializationStarted();
       await controlInitialization;
-      return {} as never;
+      return {
+        workspaces: {
+          listWorkspacesForAccountPage: async () => ({ items: [] }),
+        },
+      } as never;
     },
   });
   const workerEnv = env({
     TAKOSUMI_ACCOUNTS_DB: db,
     TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE: "predeployed",
     TAKOSUMI_ACCOUNTS_ISSUER: "http://app.example.test",
-    TAKOSUMI_ACCOUNT_SESSION_HASH_SALT:
-      "cloudflare-handler-timing-test-session-salt",
+    TAKOSUMI_ACCOUNT_SESSION_HASH_SALT: sessionSalt,
   });
-  const request = () =>
-    new Request("https://app.example.test/api/v1/workspaces");
+  const request = (authenticated = false) =>
+    new Request("https://app.example.test/api/v1/workspaces", {
+      ...(authenticated
+        ? { headers: { "x-takosumi-account-session": sessionId } }
+        : {}),
+    });
 
-  const coldRequest = worker.fetch(request(), workerEnv);
+  const anonymousResponse = await worker.fetch(request(), workerEnv);
+  expect(anonymousResponse.status).toBe(401);
+  expect(controlInitializationCalls).toBe(0);
+  const anonymousTiming = anonymousResponse.headers.get("server-timing") ?? "";
+  expect(anonymousTiming).toContain("tk_control_auth");
+  expect(anonymousTiming).not.toContain("tk_control_init");
+
+  const coldRequest = worker.fetch(request(true), workerEnv);
   await controlInitializationStarted;
-  const concurrentRequest = worker.fetch(request(), workerEnv);
+  const concurrentRequest = worker.fetch(request(true), workerEnv);
   releaseControlInitialization();
 
   const [coldResponse, concurrentResponse] = await Promise.all([
@@ -344,20 +373,19 @@ test("Cloudflare Accounts handler reports cold/concurrent initialization waits o
     concurrentRequest,
   ]);
   for (const response of [coldResponse, concurrentResponse]) {
-    expect(response.status).toBe(401);
+    expect(response.status).toBe(200);
     const timing = response.headers.get("server-timing") ?? "";
     expect(timing).toContain("tk_control_auth");
-    expect(timing).toMatch(/tk_accounts_init;dur=\d+(?:\.\d+)?/u);
     expect(timing).toMatch(/tk_control_init;dur=\d+(?:\.\d+)?/u);
   }
   expect(controlInitializationCalls).toBe(1);
 
-  const warmResponse = await worker.fetch(request(), workerEnv);
-  expect(warmResponse.status).toBe(401);
+  const warmResponse = await worker.fetch(request(true), workerEnv);
+  expect(warmResponse.status).toBe(200);
   const warmTiming = warmResponse.headers.get("server-timing") ?? "";
   expect(warmTiming).toContain("tk_control_auth");
   expect(warmTiming).not.toContain("tk_accounts_init");
-  expect(warmTiming).not.toContain("tk_control_init");
+  expect(warmTiming).toMatch(/tk_control_init;dur=\d+(?:\.\d+)?/u);
 });
 
 test("Cloudflare config preserves a host-specific public mobile OIDC client", () => {

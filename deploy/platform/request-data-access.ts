@@ -15,6 +15,7 @@ import {
 /** The public surfaces that are proven not to read account or control data. */
 export type PlatformDataFreeSurface =
   | "product-discovery"
+  | "identity-discovery"
   | "presence-probe"
   | "dashboard-asset"
   | "dashboard-document";
@@ -31,7 +32,13 @@ export type PlatformRequestDataAccess =
       readonly kind: "data-free";
       readonly surface: PlatformDataFreeSurface;
     }
+  | {
+      readonly kind: "stateful";
+      readonly targets: readonly PlatformDataTarget[];
+    }
   | { readonly kind: "stateful-or-unknown" };
+
+export type PlatformDataTarget = "accounts" | "control";
 
 /**
  * The only environment values consulted by the classifier. This is a routing
@@ -84,6 +91,7 @@ export const DASHBOARD_DOCUMENT_ROUTES = [
   "/activity",
   "/notifications",
   "/advanced/workspace",
+  "/advanced/workspace/billing",
   "/advanced/workspace/:tab",
   "/workspace/settings",
   "/workspace/settings/:tab",
@@ -155,6 +163,16 @@ const DATA_FREE_PRODUCT_DISCOVERY_PATHS = new Set<string>([
   TAKOSUMI_PRODUCT_CAPABILITIES_PATH,
 ]);
 
+const DATA_FREE_IDENTITY_DISCOVERY_PATHS = new Set<string>([
+  "/v1/auth/providers",
+]);
+
+const ACCOUNTS_ONLY_READ_PATHS = new Set<string>([
+  "/.well-known/openid-configuration",
+  "/oauth/jwks",
+  "/v1/account/session/me",
+]);
+
 const DATA_FREE_PRESENCE_PROBE_PATHS = new Set<string>(["/healthz", "/readyz"]);
 
 const STATEFUL_RESERVED_PREFIXES = [
@@ -202,6 +220,11 @@ const DATA_FREE_PROBE: PlatformRequestDataAccess = Object.freeze({
   surface: "presence-probe",
 });
 
+const ACCOUNTS_ONLY: PlatformRequestDataAccess = Object.freeze({
+  kind: "stateful",
+  targets: Object.freeze(["accounts"] as const),
+});
+
 /**
  * Classify a public Platform request before any account/control data access.
  *
@@ -235,6 +258,8 @@ export function classifyPlatformRequestDataAccess(
 
     const discovery = classifyExactDiscovery(pathname);
     if (discovery) return discovery;
+
+    if (ACCOUNTS_ONLY_READ_PATHS.has(pathname)) return ACCOUNTS_ONLY;
 
     if (isReservedPlatformPath(pathname)) return STATEFUL_UNKNOWN;
 
@@ -273,6 +298,9 @@ function classifyExactDiscovery(
 ): PlatformRequestDataAccess | undefined {
   if (DATA_FREE_PRODUCT_DISCOVERY_PATHS.has(pathname)) {
     return DATA_FREE_DISCOVERY;
+  }
+  if (DATA_FREE_IDENTITY_DISCOVERY_PATHS.has(pathname)) {
+    return { kind: "data-free", surface: "identity-discovery" };
   }
   if (DATA_FREE_PRESENCE_PROBE_PATHS.has(pathname)) {
     return DATA_FREE_PROBE;

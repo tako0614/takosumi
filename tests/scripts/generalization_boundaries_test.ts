@@ -319,7 +319,7 @@ describe("generalization boundary scanner", () => {
     expect(violations).toEqual([]);
   });
 
-  test("allows audited Output names inside the explicit service-side InstallConfig composition", () => {
+  test("rejects app-specific Output names from production InstallConfig composition", () => {
     const violations = findGeneralizationBoundaryViolations([
       {
         path: "deploy/reference-app-install-configs.ts",
@@ -330,7 +330,10 @@ describe("generalization boundary scanner", () => {
       },
     ]);
 
-    expect(violations).toEqual([]);
+    expect(violations.map((violation) => violation.ruleId)).toEqual([
+      "output-name-magic",
+      "output-name-magic",
+    ]);
   });
 
   test("allows Resource Shape Space only inside explicit mixed-file regions", () => {

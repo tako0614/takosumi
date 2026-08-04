@@ -107,26 +107,24 @@ export interface CreateCloudflareWorkerOptions<
   ) => Promise<ControlPlaneOperations | undefined>;
 }
 
-interface AccountsHandlerInitializationTimings {
-  controlPlaneMs?: number;
-}
-
 interface CachedAccountsHandler {
   readonly promise: Promise<AccountsHandler>;
-  readonly initializationTimings: AccountsHandlerInitializationTimings;
   settled: boolean;
 }
 
 interface CachedAccountsHandlerResult {
   readonly handler: AccountsHandler;
   readonly initializationWaitMs?: number;
-  readonly controlPlaneInitializationMs?: number;
 }
 
 const handlers = new WeakMap<CloudflareWorkerEnv, CachedAccountsHandler>();
 const identityHandlers = new WeakMap<
   CloudflareWorkerEnv,
   CachedAccountsHandler
+>();
+const controlPlaneOperationsByEnv = new WeakMap<
+  CloudflareWorkerEnv,
+  Promise<ControlPlaneOperations | undefined>
 >();
 
 type Es256PrivateJwk = JsonWebKey & {
@@ -344,14 +342,12 @@ async function cachedAccountsHandler<TEnv extends CloudflareWorkerEnv>(
   const waitsForInitialization = cached === undefined || !cached.settled;
   const waitStartedAt = waitsForInitialization ? nowMs() : undefined;
   if (!cached) {
-    const initializationTimings: AccountsHandlerInitializationTimings = {};
     const promise = observeAccountsHandlerInitialization(
-      buildAccountsHandler(env, options, identityOnly, initializationTimings),
+      buildAccountsHandler(env, options, identityOnly),
       identityOnly ? "identity" : "control",
     );
     cached = {
       promise,
-      initializationTimings,
       settled: false,
     };
     cache.set(env, cached);
@@ -369,12 +365,6 @@ async function cachedAccountsHandler<TEnv extends CloudflareWorkerEnv>(
   return {
     handler,
     initializationWaitMs: nowMs() - waitStartedAt,
-    ...(cached.initializationTimings.controlPlaneMs !== undefined
-      ? {
-          controlPlaneInitializationMs:
-            cached.initializationTimings.controlPlaneMs,
-        }
-      : {}),
   };
 }
 
@@ -386,11 +376,6 @@ function appendAccountsHandlerInitializationTiming(
   const metrics = [
     `tk_accounts_init;dur=${formatTimingDuration(timing.initializationWaitMs)}`,
   ];
-  if (timing.controlPlaneInitializationMs !== undefined) {
-    metrics.push(
-      `tk_control_init;dur=${formatTimingDuration(timing.controlPlaneInitializationMs)}`,
-    );
-  }
   const headers = new Headers(response.headers);
   const existing = headers.get("Server-Timing");
   const value = metrics.join(", ");
@@ -457,7 +442,6 @@ async function buildAccountsHandler<TEnv extends CloudflareWorkerEnv>(
   env: TEnv,
   options: CreateCloudflareWorkerOptions<TEnv>,
   identityOnly = false,
-  initializationTimings?: AccountsHandlerInitializationTimings,
 ): Promise<AccountsHandler> {
   if (!env.TAKOSUMI_ACCOUNTS_DB) {
     throw new TypeError("TAKOSUMI_ACCOUNTS_DB D1 binding is required");
@@ -484,18 +468,6 @@ async function buildAccountsHandler<TEnv extends CloudflareWorkerEnv>(
   }
   const issuer = issuerEnv;
   const clients = parseConfiguredOidcClients(env);
-  let controlPlaneOperations: ControlPlaneOperations | undefined;
-  if (!identityOnly && options.controlPlaneOperations) {
-    const controlPlaneStartedAt = nowMs();
-    try {
-      controlPlaneOperations = await options.controlPlaneOperations(env);
-    } finally {
-      if (initializationTimings) {
-        initializationTimings.controlPlaneMs =
-          nowMs() - controlPlaneStartedAt;
-      }
-    }
-  }
   // Keep ordinary identity requests on the lightweight handler. Canonical
   // Core is resolved lazily only when an Interface OAuth token is actually
   // presented to UserInfo/introspection.
@@ -520,7 +492,12 @@ async function buildAccountsHandler<TEnv extends CloudflareWorkerEnv>(
     upstreamOAuth: parseUpstreamOAuthFailClosed(env),
     passkeys: parsePasskeysFailClosed(env),
     loginEmailAllowlist: parseLoginEmailAllowlist(env, issuer),
-    ...(controlPlaneOperations ? { controlPlaneOperations } : {}),
+    ...(!identityOnly && options.controlPlaneOperations
+      ? {
+          resolveControlPlaneOperations: () =>
+            cachedControlPlaneOperations(env, options),
+        }
+      : {}),
     ...(interfaceOAuthActivityValidator
       ? { interfaceOAuthActivityValidator }
       : {}),
@@ -544,6 +521,24 @@ async function buildAccountsHandler<TEnv extends CloudflareWorkerEnv>(
     ...commonOptions,
     subject: optionalString(env.TAKOSUMI_ACCOUNTS_SUBJECT),
   });
+}
+
+function cachedControlPlaneOperations<TEnv extends CloudflareWorkerEnv>(
+  env: TEnv,
+  options: CreateCloudflareWorkerOptions<TEnv>,
+): Promise<ControlPlaneOperations | undefined> {
+  const cached = controlPlaneOperationsByEnv.get(env);
+  if (cached) return cached;
+  const attempt = options.controlPlaneOperations!(env).catch(
+    (error: unknown) => {
+      if (controlPlaneOperationsByEnv.get(env) === attempt) {
+        controlPlaneOperationsByEnv.delete(env);
+      }
+      throw error;
+    },
+  );
+  controlPlaneOperationsByEnv.set(env, attempt);
+  return attempt;
 }
 
 function nowMs(): number {

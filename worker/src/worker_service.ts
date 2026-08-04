@@ -20,6 +20,7 @@ import type { CloudflareWorkerEnv, OpenTofuRunAction } from "./bindings.ts";
 import {
   createCloudflareD1OpenTofuControlStore,
   createCloudflareD1OpenTofuControlStoreForRequest,
+  ensureD1OpenTofuLedgerSchema,
 } from "./d1_opentofu_store.ts";
 import { PortableHostIdempotencyCoordinator } from "../../core/api/portable_host_idempotency.ts";
 import { D1PortableHostIdempotencyLedger } from "./d1_portable_host_idempotency.ts";
@@ -91,7 +92,6 @@ import {
   configuredResourceShapeKinds,
   resourceShapeHostContributionsFromEnv,
 } from "./resource_shape_composition.ts";
-import { REFERENCE_APP_INSTALL_CONFIGS } from "../../deploy/reference-app-install-configs.ts";
 import {
   createR2TakoformPackageHostComposition,
   type TakoformPackageHostComposition,
@@ -176,6 +176,9 @@ export async function createWorkerServiceApp(
     throw new TypeError(
       "TAKOSUMI_CONTROL_D1_SCHEMA_MODE must be bootstrap or predeployed",
     );
+  }
+  if ((controlD1SchemaMode ?? "bootstrap") === "bootstrap") {
+    await ensureD1OpenTofuLedgerSchema(env.TAKOSUMI_CONTROL_DB);
   }
   const opentofuControlStore = createCloudflareD1OpenTofuControlStore(
     env.TAKOSUMI_CONTROL_DB,
@@ -281,12 +284,10 @@ export async function createWorkerServiceApp(
       descriptors: connectionOAuthDescriptorsFromEnv(runtimeEnv),
     });
   const operatorInstallConfigs = options.operatorInstallConfigs ??
-    env.TAKOSUMI_INSTALL_CONFIG_COMPOSITION ?? [
-      ...REFERENCE_APP_INSTALL_CONFIGS,
-      ...(operatorControlMcpEnabled(env)
-        ? [OPERATOR_CONTROL_MCP_INSTALL_CONFIG]
-        : []),
-    ];
+    env.TAKOSUMI_INSTALL_CONFIG_COMPOSITION ??
+    (operatorControlMcpEnabled(env)
+      ? [OPERATOR_CONTROL_MCP_INSTALL_CONFIG]
+      : []);
   const formPackageHost = resolveFormPackageHostComposition(env, options);
   const offeringHostComposition = resolveOfferingHostComposition(env, options);
   return await createTakosumiService({

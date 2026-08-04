@@ -166,7 +166,7 @@ cross-repository conformance gap, not merely missing UI polish.
 
 ### Yurucommu uses a transitional install path
 
-`deploy/reference-app-install-configs.ts` currently makes Yurucommu selectable
+The former `deploy/reference-app-install-configs.ts` made Yurucommu selectable
 with:
 
 ```text
@@ -247,8 +247,10 @@ execution policy.
 
 Current state:
 
-`deploy/reference-app-install-configs.ts` hard-codes first-party app variable
-names, callback paths, labels, and optional integration fields.
+The former `deploy/reference-app-install-configs.ts` hard-coded first-party app
+variable names, callback paths, labels, and optional integration fields. The
+production composition has removed that catalog; equivalent records remain
+test fixtures only, while pinned repository manifests drive new install UX.
 
 Required resolution:
 

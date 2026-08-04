@@ -219,13 +219,13 @@ function CostNotice(props: { readonly cost: RunCostInfo }) {
           fallback={
             <>
               <p class="muted">{t("run.cost.operatorHelp")}</p>
-              <Button variant="secondary" size="sm" href="/billing">
+              <Button variant="secondary" size="sm" href="/settings/billing">
                 {t("run.cost.quotaCta")}
               </Button>
             </>
           }
         >
-          <Button variant="secondary" size="sm" href="/billing">
+          <Button variant="secondary" size="sm" href="/settings/billing">
             {t("run.cost.billingCta")}
           </Button>
         </Show>

@@ -1,12 +1,12 @@
 /**
- * The dashboard's canonical Workspace billing surface.
+ * The dashboard's canonical billing surface.
  *
  * Billing providers return the browser to the dashboard, so these URLs must
  * stay on a route the SPA actually mounts. The workspace id remains a query
  * parameter because the dashboard's WorkspaceSwitcher owns the active
  * Workspace selection rather than encoding it in the route.
  */
-export const WORKSPACE_BILLING_ROUTE = "/advanced/workspace/billing" as const;
+export const WORKSPACE_BILLING_ROUTE = "/settings/billing" as const;
 
 export type BillingCheckoutResult = "success" | "cancelled";
 

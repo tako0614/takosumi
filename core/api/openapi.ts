@@ -3716,7 +3716,7 @@ function providerConnectionAndRecipeSchemas(): Record<
         installConfigId: {
           type: "string",
           description:
-            "DB-owned InstallConfig selected by a manual caller. Must be omitted when compileInstallUx is true; the server resolves the unique global Store policy config by repository URL.",
+            "DB-owned InstallConfig selected by a manual caller. Must be omitted when compileInstallUx is true; the server resolves an optional host policy override by repository URL and otherwise uses the generic host policy.",
         },
         compileInstallUx: {
           type: "boolean",

@@ -38,6 +38,19 @@ import type {
   ControlPlaneOperations,
   ControlWorkspaceRole,
 } from "./control-operations.ts";
+
+type ResolveControlPlaneOperations = () => Promise<
+  ControlPlaneOperations | undefined
+>;
+
+async function operationsForLiveGrant(input: {
+  readonly operations: ControlPlaneOperations | undefined;
+  readonly resolveOperations: ResolveControlPlaneOperations | undefined;
+  readonly required: boolean;
+}): Promise<ControlPlaneOperations | undefined> {
+  if (!input.required || input.operations) return input.operations;
+  return await input.resolveOperations?.();
+}
 import {
   validateOidcLiveGrant,
   type OidcLiveGrantFailureReason,
@@ -395,6 +408,7 @@ export async function handleAuthorize(input: {
   clients: ReadonlyMap<string, OidcClientRegistration>;
   store: AccountsStore;
   operations?: ControlPlaneOperations;
+  resolveOperations?: ResolveControlPlaneOperations;
 }): Promise<Response> {
   // OAuth authorization is a top-level navigation. A subresource request can
   // carry the account session cookie without any user interaction and follow
@@ -501,13 +515,18 @@ export async function handleAuthorize(input: {
     store: input.store,
   });
   if (!session.ok) return authorizeSignInRedirect(input.url);
+  const operations = await operationsForLiveGrant({
+    operations: input.operations,
+    resolveOperations: input.resolveOperations,
+    required: client.capsuleId !== undefined,
+  });
   const subject = await resolveOidcAuthorizationSubject({
     client,
     flow: input.flow,
     sessionSubject: session.subject,
     scope,
     store: input.store,
-    operations: input.operations,
+    operations,
   });
   if (!subject.ok) {
     return json(
@@ -558,6 +577,7 @@ export async function handleToken(input: {
   flow: OidcAuthorizationCodeFlow;
   clients: ReadonlyMap<string, OidcClientRegistration>;
   operations?: ControlPlaneOperations;
+  resolveOperations?: ResolveControlPlaneOperations;
   loginEmailAllowlist?: LoginEmailAllowlist;
 }): Promise<Response> {
   const params = await readFormUrlEncoded(input.request);
@@ -571,6 +591,7 @@ export async function handleToken(input: {
       flow: input.flow,
       clients: input.clients,
       operations: input.operations,
+      resolveOperations: input.resolveOperations,
       loginEmailAllowlist: input.loginEmailAllowlist,
     });
   }
@@ -616,9 +637,15 @@ export async function handleToken(input: {
   if (!(await isPkceVerifierValid(record, params.get("code_verifier")))) {
     return json({ error: "invalid_grant" }, 400);
   }
+  const operations = await operationsForLiveGrant({
+    operations: input.operations,
+    resolveOperations: input.resolveOperations,
+    required:
+      client.capsuleId !== undefined || record.workspaceId !== undefined,
+  });
   const liveGrant = await validateOidcLiveGrant({
     store: input.store,
-    operations: input.operations,
+    operations,
     client,
     scope: record.scope,
     takosumiSubject: record.takosumiSubject,
@@ -678,6 +705,7 @@ async function handleRefreshToken(input: {
   flow: OidcAuthorizationCodeFlow;
   clients: ReadonlyMap<string, OidcClientRegistration>;
   operations?: ControlPlaneOperations;
+  resolveOperations?: ResolveControlPlaneOperations;
   loginEmailAllowlist?: LoginEmailAllowlist;
 }): Promise<Response> {
   const refreshToken = input.params.get("refresh_token");
@@ -738,10 +766,16 @@ async function handleRefreshToken(input: {
   ) {
     return json({ error: "invalid_client" }, 401);
   }
+  const operations = await operationsForLiveGrant({
+    operations: input.operations,
+    resolveOperations: input.resolveOperations,
+    required:
+      client.capsuleId !== undefined || record.workspaceId !== undefined,
+  });
   const liveGrant = await observeSlowOidcRefreshStage("live_grant", () =>
     validateOidcLiveGrant({
       store: input.store,
-      operations: input.operations,
+      operations,
       client,
       scope: record.scope,
       takosumiSubject: record.takosumiSubject,
@@ -951,6 +985,7 @@ export async function handleUserInfo(input: {
   /** Static OIDC clients supplied by the Accounts composition root. */
   clients: ReadonlyMap<string, OidcClientRegistration>;
   operations?: ControlPlaneOperations;
+  resolveOperations?: ResolveControlPlaneOperations;
   /**
    * Optional expected audience for the access token. When provided, the
    * access token's recorded audience (or ordinary-token clientId fallback)
@@ -1011,9 +1046,15 @@ export async function handleUserInfo(input: {
       store: input.store,
     });
     if (!client) return bearerChallenge("invalid_token");
+    const operations = await operationsForLiveGrant({
+      operations: input.operations,
+      resolveOperations: input.resolveOperations,
+      required:
+        client.capsuleId !== undefined || record.workspaceId !== undefined,
+    });
     const liveGrant = await validateOidcLiveGrant({
       store: input.store,
-      operations: input.operations,
+      operations,
       client,
       scope: record.scope,
       takosumiSubject: record.takosumiSubject,
@@ -1140,6 +1181,7 @@ export async function handleIntrospect(input: {
   clients: ReadonlyMap<string, OidcClientRegistration>;
   interfaceOAuthActivityValidator?: InterfaceOAuthActivityValidator;
   operations?: ControlPlaneOperations;
+  resolveOperations?: ResolveControlPlaneOperations;
 }): Promise<Response> {
   const params = await readFormUrlEncoded(input.request);
   // RFC 7662 §2.1: the introspection endpoint MUST require client
@@ -1194,9 +1236,16 @@ export async function handleIntrospect(input: {
     }
     let liveRole: ControlWorkspaceRole | undefined;
     if (!interfaceOAuth) {
+      const operations = await operationsForLiveGrant({
+        operations: input.operations,
+        resolveOperations: input.resolveOperations,
+        required:
+          auth.client.capsuleId !== undefined ||
+          accessRecord.workspaceId !== undefined,
+      });
       const liveGrant = await validateOidcLiveGrant({
         store: input.store,
-        operations: input.operations,
+        operations,
         client: auth.client,
         scope: accessRecord.scope,
         takosumiSubject: accessRecord.takosumiSubject,
@@ -1213,9 +1262,16 @@ export async function handleIntrospect(input: {
     if (refreshRecord.clientId !== authenticatedClientId) {
       return json({ active: false });
     }
+    const operations = await operationsForLiveGrant({
+      operations: input.operations,
+      resolveOperations: input.resolveOperations,
+      required:
+        auth.client.capsuleId !== undefined ||
+        refreshRecord.workspaceId !== undefined,
+    });
     const liveGrant = await validateOidcLiveGrant({
       store: input.store,
-      operations: input.operations,
+      operations,
       client: auth.client,
       scope: refreshRecord.scope,
       takosumiSubject: refreshRecord.takosumiSubject,
@@ -1236,12 +1292,17 @@ export async function handleIntrospect(input: {
       patRecord.tokenId,
       Date.now(),
     );
+    const operations = await operationsForLiveGrant({
+      operations: input.operations,
+      resolveOperations: input.resolveOperations,
+      required: patRecord.workspaceId !== undefined,
+    });
     const liveRole = await introspectionWorkspaceRole(
-      input.operations,
+      operations,
       patRecord.workspaceId,
       patRecord.subject,
     );
-    if (input.operations && patRecord.workspaceId && !liveRole) {
+    if (patRecord.workspaceId !== undefined && !liveRole) {
       return json({ active: false });
     }
     return json(

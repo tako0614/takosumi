@@ -157,8 +157,6 @@ export const ja = {
   "settings.billing.desc": "利用状況と、運営者が示す費用の内訳",
   "settings.notifications.title": "通知",
   "settings.notifications.desc": "お知らせと要対応の確認",
-  "settings.billingSummary.manage": "管理する",
-  "settings.billingSummary.error": "使用量の状態を読み込めませんでした。",
   "settings.manage.entry": "管理ツール",
   "settings.manage.entryDesc":
     "サービスの内部、接続、実行履歴などの詳しい管理画面",

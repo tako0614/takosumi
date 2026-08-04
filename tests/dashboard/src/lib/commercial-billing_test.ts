@@ -31,8 +31,9 @@ const commercialBillingPanelSource = readFileSync(
 );
 
 test("billing provider returns use the canonical Workspace billing route", () => {
-  expect(WORKSPACE_BILLING_ROUTE).toBe("/advanced/workspace/billing");
+  expect(WORKSPACE_BILLING_ROUTE).toBe("/settings/billing");
   expect(dashboardIndexSource).toContain('path="/advanced/workspace/:tab"');
+  expect(dashboardIndexSource).toContain('path="/advanced/workspace/billing"');
   expect(commercialBillingPanelSource).toContain("checkoutReturnUrl");
   expect(commercialBillingPanelSource).toContain("billingReturnUrl");
   expect(commercialBillingPanelSource).not.toContain(
@@ -40,19 +41,13 @@ test("billing provider returns use the canonical Workspace billing route", () =>
   );
   expect(
     billingReturnUrl("workspace_1", DASHBOARD_ORIGIN).href,
-  ).toBe(
-    "https://app.takosumi.example/advanced/workspace/billing?workspaceId=workspace_1",
-  );
+  ).toBe("https://app.takosumi.example/settings/billing?workspaceId=workspace_1");
   expect(
     checkoutReturnUrl("workspace_1", "success", DASHBOARD_ORIGIN).href,
-  ).toBe(
-    "https://app.takosumi.example/advanced/workspace/billing?workspaceId=workspace_1&checkout=success",
-  );
+  ).toBe("https://app.takosumi.example/settings/billing?workspaceId=workspace_1&checkout=success");
   expect(
     checkoutReturnUrl("workspace_1", "cancelled", DASHBOARD_ORIGIN).href,
-  ).toBe(
-    "https://app.takosumi.example/advanced/workspace/billing?workspaceId=workspace_1&checkout=cancelled",
-  );
+  ).toBe("https://app.takosumi.example/settings/billing?workspaceId=workspace_1&checkout=cancelled");
 });
 
 test("commercial billing configuration validates bounded credit choices", () => {

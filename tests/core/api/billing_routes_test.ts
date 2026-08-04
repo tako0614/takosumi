@@ -31,6 +31,12 @@ async function makeApp() {
     idempotencyKey: "apply_1:opentofu.apply",
     createdAt: "2026-06-07T00:00:01.000Z",
   });
+  let workspaceReads = 0;
+  const originalGetWorkspace = store.getWorkspace.bind(store);
+  store.getWorkspace = async (id) => {
+    workspaceReads += 1;
+    return await originalGetWorkspace(id);
+  };
   const controller = new OpenTofuController({ store });
   const app = await createApiApp({
     registerDeployControlInternalRoutes: true,
@@ -48,7 +54,7 @@ async function makeApp() {
     },
     requestCorrelation: false,
   });
-  return { app, store };
+  return { app, store, workspaceReads: () => workspaceReads };
 }
 
 const HEADERS = {
@@ -57,7 +63,7 @@ const HEADERS = {
 } as const;
 
 test("GET /internal/v1/workspaces/:workspaceId/billing returns OSS showback settings only", async () => {
-  const { app } = await makeApp();
+  const { app, workspaceReads } = await makeApp();
   const response = await app.request(
     `/internal/v1/workspaces/${WORKSPACE_ID}/billing`,
     { headers: { authorization: "Bearer scoped-token" } },
@@ -67,6 +73,7 @@ test("GET /internal/v1/workspaces/:workspaceId/billing returns OSS showback sett
   expect(await response.json()).toEqual({
     billing: { settings: { mode: "showback" } },
   });
+  expect(workspaceReads()).toBe(1);
 });
 
 test("GET /internal/v1/workspaces/:workspaceId/usage lists USD showback events", async () => {

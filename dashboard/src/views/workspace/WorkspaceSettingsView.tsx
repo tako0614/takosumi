@@ -1,6 +1,6 @@
 /**
  * Advanced Workspace settings (`/advanced/workspace[/:tab]`) and standalone
- * normal-user surfaces (`/connections`, `/billing`). The standalone surfaces reuse the same
+ * normal-user surfaces (`/connections`, `/settings/billing`). The standalone surfaces reuse the same
  * tab implementations but do not present them as "Workspace settings"; the full
  * tabbed view remains for advanced and legacy routes.
  */
@@ -76,7 +76,7 @@ function Inner(props: {
       label: t("workspaceSettings.tab.connections"),
     },
     {
-      href: "/advanced/workspace/billing",
+      href: "/settings/billing",
       label: hasPlatformExtensionCapability("billing.commercial.v1")
         ? t("workspaceSettings.tab.billing")
         : t("workspaceSettings.tab.usageQuota"),

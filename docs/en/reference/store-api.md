@@ -18,16 +18,19 @@ UI, but they do not select executable content.
    immutable commit.
 3. Takosumi selects a module from the exact SourceSnapshot's
    [Repository manifest](./repository-manifest.md).
-4. The server uniquely resolves a global Store InstallConfig by matching the
-   repository URL and checks the exact module within that policy ceiling.
+4. The server uniquely resolves a host policy override matching the repository
+   URL. When none exists, it uses the generic Git InstallConfig and checks the
+   exact module within that policy ceiling.
 5. It persists the selected module path in a Workspace-scoped derived
    InstallConfig and continues through the ordinary review, Plan, and Apply flow.
 
 A Store client cannot send `modulePath` or `installConfigId` when requesting
 `compileInstallUx: true`. A single-module manifest selects its only module; a
 multi-module manifest requires an exact `defaultModule` in
-`takosumi.com/v2.1`. Missing candidates, missing defaults, and zero or multiple
-matching base InstallConfigs fail closed.
+`takosumi.com/v2.1`. Missing candidates and missing defaults fail closed.
+Multiple host overrides also fail closed; zero overrides use the generic host
+policy, so installing an app does not require registering an app-specific
+InstallConfig in the Store.
 
 ## Authority boundary
 
