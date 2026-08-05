@@ -1165,6 +1165,28 @@ managers directly, own lifecycle rows, or imply full vendor API compatibility.
 
 Resource objects use `apiVersion: takosumi.dev/v1alpha1`.
 
+Core owns one durable incarnation fence for every canonical Resource id. The
+fence is internal persistence authority and is never projected as a public
+Resource field. It retains the highest consumed generation after the public
+Resource and ResolutionLock are hard-deleted, and every canonical retirement
+advances its own monotonic fence revision. A read-only preview binds both the
+planned successor generation and the currently observed fence revision into
+`planDigest`. Apply/import then atomically compare-and-swap that exact fence
+while publishing the `Applying` Resource and ResolutionLock; only one preview
+of a given fence revision can win. A failed admission that proves no backend
+mutation restores the prior fence in the same rollback transaction, while a
+known or uncertain backend outcome retains the consumed generation.
+
+Delete atomically replaces the live incarnation with its retained fence before
+removing the Resource and ResolutionLock. Recreating the same canonical id
+therefore receives a strictly greater generation, yields a different reviewed
+plan and direct-plugin operation identity, and makes an older Resource-version
+delete precondition fail. Permanent HTTP idempotency remains historical replay
+evidence: Core does not invalidate old response rows or add provider nonces to
+change their meaning. If that replay evidence is lost, an old reviewed plan is
+still rejected by the durable fence instead of recreating the deleted
+incarnation. Exhausted or malformed generation/fence counters fail closed.
+
 That group and the current kind tokens remain the compatibility wire during
 extraction. Target persistence adds an exact resolved FormRef to Resource,
 ResolutionLock, Run/evidence, and NativeResource where replay requires it:

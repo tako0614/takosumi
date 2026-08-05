@@ -34,6 +34,7 @@ import type { SpaceId } from "../../shared/ids.ts";
 import type { IsoTimestamp } from "../../shared/time.ts";
 import type {
   ResolutionLockRecord,
+  ResourceIdentityFenceRecord,
   ResourceShapeExecutionRecord,
   ResourceShapePendingOperation,
   ResourceShapeRecord,
@@ -80,13 +81,18 @@ import {
   assertAtomicRemoveInput,
   assertApplyPair,
   assertExpectedTargetPool,
+  assertResourceIdentityFence,
+  consumeResourceIdentityFence,
   assertTargetPoolDeleteInput,
   assertTargetPoolPutInput,
+  matchesExpectedResourceIdentityFence,
   matchesApplyLock,
   matchesExpectedTargetPool,
   matchesExpectedLock,
   matchesTargetPool,
   matchesVersion,
+  matchesResourceIdentityFence,
+  retireResourceIdentityFence,
   resourceRecordRevision,
   assertResourceFormIdentityPinInput,
   targetPoolSpecsEqual,
@@ -138,6 +144,28 @@ type ResolutionLockRow = {
   readonly locked_at: string;
   readonly updated_at: string;
 };
+
+type ResourceIdentityFenceRow = {
+  readonly resource_id: string;
+  readonly last_generation: number | string;
+  readonly fence_revision: number | string;
+};
+
+/**
+ * A fence CAS can only lose after the transaction has already published a
+ * Resource/ResolutionLock pair when a caller races a missing fence row. Throw
+ * this private sentinel so SqlClient rolls the transaction back, then expose
+ * the same typed conflict result as the preflight comparison path.
+ */
+class SqlIdentityFenceConflict extends Error {
+  readonly fence: ResourceIdentityFenceRecord | undefined;
+
+  constructor(fence: ResourceIdentityFenceRecord | undefined) {
+    super("Resource identity fence changed during atomic apply");
+    this.name = "SqlIdentityFenceConflict";
+    this.fence = fence;
+  }
+}
 
 type NamedSpecRow = {
   readonly id: string;
@@ -784,6 +812,8 @@ export function createSqlResourceShapeStores(
     locks: new SqlResolutionLockStore(client),
     targetPools: new SqlTargetPoolStore(client),
     spacePolicies: new SqlSpacePolicyStore(client),
+    getResourceIdentityFence: (resourceId) =>
+      readSqlIdentityFence(client, resourceId),
     putTargetPool: (input) => putSqlTargetPool(client, input),
     deleteTargetPool: (input) => deleteSqlTargetPool(client, input),
     beginApply: (input) => beginSqlApply(client, input),
@@ -958,83 +988,143 @@ async function beginSqlApply(
 ): Promise<ResourceApplyBeginResult> {
   assertApplyPair(input.applyingRecord, input.plannedLock, "Applying");
   assertExpectedTargetPool(input);
-  return await client.transaction(async (transaction) => {
-    if (input.expectedTargetPool) {
-      // TargetPool is always the first aggregate lock. A concurrent pool PUT
-      // takes the same lock before inspecting ResolutionLocks, so either the
-      // new pool wins and this CAS rejects, or this claim wins and PUT sees the
-      // newly committed lock.
-      const currentPool = await readSqlTargetPool(
+  try {
+    return await client.transaction(async (transaction) => {
+      if (input.expectedTargetPool) {
+        // TargetPool is always the first aggregate lock. A concurrent pool PUT
+        // takes the same lock before inspecting ResolutionLocks, so either the
+        // new pool wins and this CAS rejects, or this claim wins and PUT sees the
+        // newly committed lock.
+        const currentPool = await readSqlTargetPool(
+          transaction,
+          input.expectedTargetPool.id,
+          true,
+        );
+        if (!matchesTargetPool(currentPool, input.expectedTargetPool)) {
+          return {
+            status: "target_pool_conflict",
+            ...(currentPool ? { record: currentPool } : {}),
+          };
+        }
+      }
+
+      // Keep the aggregate lock order Resource -> ResolutionLock -> identity
+      // fence. The same order is used by abort/remove, so a tombstone or
+      // rollback cannot deadlock with an in-flight apply claim.
+      const current = await readSqlResource(
         transaction,
-        input.expectedTargetPool.id,
+        input.applyingRecord.id,
         true,
       );
-      if (!matchesTargetPool(currentPool, input.expectedTargetPool)) {
+      await readSqlLock(transaction, input.applyingRecord.id, true);
+      const currentIdentityFence =
+        input.expectedIdentityFence === undefined
+          ? undefined
+          : await readSqlIdentityFence(
+              transaction,
+              input.applyingRecord.id,
+              true,
+            );
+      if (
+        input.expectedIdentityFence !== undefined &&
+        !matchesExpectedResourceIdentityFence(
+          currentIdentityFence,
+          input.expectedIdentityFence,
+        )
+      ) {
         return {
-          status: "target_pool_conflict",
-          ...(currentPool ? { record: currentPool } : {}),
+          status: "identity_fence_conflict",
+          ...(currentIdentityFence ? { fence: currentIdentityFence } : {}),
         };
       }
-    }
-    if (input.expected === undefined) {
-      const inserted = await transaction.query(
-        resourceInsertSql(names.resourceShapes, "on conflict do nothing"),
-        resourceParameters(input.applyingRecord),
-      );
-      if (inserted.rowCount === 0) {
-        const current = await readSqlResource(
-          transaction,
-          input.applyingRecord.id,
+
+      if (input.expected === undefined) {
+        if (current) {
+          if (current.managedBy !== input.applyingRecord.managedBy) {
+            return { status: "ownership_conflict", record: current };
+          }
+          return { status: "conflict", record: current };
+        }
+        const inserted = await transaction.query(
+          resourceInsertSql(names.resourceShapes, "on conflict do nothing"),
+          resourceParameters(input.applyingRecord),
         );
-        if (!current) {
-          throw new Error(
-            `resource create conflict did not resolve ${input.applyingRecord.id}`,
+        if (inserted.rowCount === 0) {
+          const winner = await readSqlResource(
+            transaction,
+            input.applyingRecord.id,
           );
+          if (!winner) {
+            throw new Error(
+              `resource create conflict did not resolve ${input.applyingRecord.id}`,
+            );
+          }
+          if (winner.managedBy !== input.applyingRecord.managedBy) {
+            return { status: "ownership_conflict", record: winner };
+          }
+          return { status: "conflict", record: winner };
         }
-        if (current.managedBy !== input.applyingRecord.managedBy) {
-          return { status: "ownership_conflict", record: current };
-        }
-        return { status: "conflict", record: current };
-      }
-    } else {
-      const updated = await updateSqlResource(
-        transaction,
-        input.applyingRecord,
-        {
-          ...input.expected,
-          revision:
-            input.expected.revision ??
-            resourceRecordRevision(input.applyingRecord),
-        },
-        input.applyingRecord.managedBy,
-      );
-      if (updated.rowCount === 0) {
-        const current = await readSqlResource(
-          transaction,
-          input.applyingRecord.id,
-        );
+      } else {
         if (!current) return { status: "not_found" };
         if (current.managedBy !== input.applyingRecord.managedBy) {
           return { status: "ownership_conflict", record: current };
         }
-        return { status: "conflict", record: current };
+        const updated = await updateSqlResource(
+          transaction,
+          input.applyingRecord,
+          {
+            ...input.expected,
+            revision:
+              input.expected.revision ??
+              resourceRecordRevision(input.applyingRecord),
+          },
+          input.applyingRecord.managedBy,
+        );
+        if (updated.rowCount === 0) {
+          const winner = await readSqlResource(
+            transaction,
+            input.applyingRecord.id,
+          );
+          if (!winner) return { status: "not_found" };
+          if (winner.managedBy !== input.applyingRecord.managedBy) {
+            return { status: "ownership_conflict", record: winner };
+          }
+          return { status: "conflict", record: winner };
+        }
       }
+
+      await transaction.query(
+        lockUpsertSql(names.resolutionLocks),
+        lockParameters(input.plannedLock),
+      );
+      if (input.expectedIdentityFence !== undefined) {
+        await consumeSqlIdentityFence(
+          transaction,
+          input.applyingRecord.id,
+          input.applyingRecord.generation,
+          input.expectedIdentityFence,
+        );
+      }
+      const persisted = await readSqlResource(
+        transaction,
+        input.applyingRecord.id,
+      );
+      if (!persisted) return { status: "not_found" };
+      return {
+        status: "begun",
+        record: persisted,
+        lock: input.plannedLock,
+      };
+    });
+  } catch (error) {
+    if (error instanceof SqlIdentityFenceConflict) {
+      return {
+        status: "identity_fence_conflict",
+        ...(error.fence ? { fence: error.fence } : {}),
+      };
     }
-    await transaction.query(
-      lockUpsertSql(names.resolutionLocks),
-      lockParameters(input.plannedLock),
-    );
-    const persisted = await readSqlResource(
-      transaction,
-      input.applyingRecord.id,
-    );
-    if (!persisted) return { status: "not_found" };
-    return {
-      status: "begun",
-      record: persisted,
-      lock: input.plannedLock,
-    };
-  });
+    throw error;
+  }
 }
 
 async function commitSqlApply(
@@ -1076,12 +1166,20 @@ async function abortSqlApply(
     // Lock in the same Resource -> ResolutionLock order used by begin/commit.
     const current = await readSqlResource(transaction, input.resourceId, true);
     const currentLock = await readSqlLock(transaction, input.resourceId, true);
+    const currentIdentityFence = input.identityFenceRollback
+      ? await readSqlIdentityFence(transaction, input.resourceId, true)
+      : undefined;
     if (!current && !currentLock) return { status: "not_found" };
     if (
       !current ||
       !currentLock ||
       !matchesVersion(current, input.expectedApplying) ||
-      !matchesApplyLock(currentLock, input.expectedPlannedLock)
+      !matchesApplyLock(currentLock, input.expectedPlannedLock) ||
+      (input.identityFenceRollback !== undefined &&
+        !matchesResourceIdentityFence(
+          currentIdentityFence,
+          input.identityFenceRollback.expected,
+        ))
     ) {
       return {
         status: "conflict",
@@ -1122,6 +1220,13 @@ async function abortSqlApply(
         [input.resourceId],
       );
     }
+    if (input.identityFenceRollback) {
+      await replaceSqlIdentityFence(
+        transaction,
+        input.identityFenceRollback.expected,
+        input.identityFenceRollback.replacement,
+      );
+    }
     return { status: "rolled_back" };
   });
 }
@@ -1150,6 +1255,26 @@ async function removeSqlResource(
       };
     }
 
+    const currentIdentityFence = await readSqlIdentityFence(
+      transaction,
+      input.resourceId,
+      true,
+    );
+    if (
+      currentIdentityFence &&
+      currentIdentityFence.lastGeneration !== current.generation
+    ) {
+      return {
+        status: "conflict",
+        record: current,
+        ...(currentLock ? { lock: currentLock } : {}),
+      };
+    }
+    const retiredIdentityFence = retireResourceIdentityFence(
+      current,
+      currentIdentityFence,
+    );
+
     await transaction.query(
       `delete from ${names.resolutionLocks} where resource_id = $1`,
       [input.resourceId],
@@ -1174,6 +1299,11 @@ async function removeSqlResource(
         `Resource ${input.resourceId} changed inside remove transaction`,
       );
     }
+    await retireSqlIdentityFence(
+      transaction,
+      currentIdentityFence,
+      retiredIdentityFence,
+    );
     return { status: "removed" };
   });
 }
@@ -1220,6 +1350,161 @@ function updateSqlResource(
       ...(expected.revision === undefined ? [] : [expected.revision]),
       ...(expectedManagedBy ? [expectedManagedBy] : []),
     ],
+  );
+}
+
+async function readSqlIdentityFence(
+  client: SqlClient,
+  resourceId: ResourceShapeRecordId,
+  forUpdate = false,
+): Promise<ResourceIdentityFenceRecord | undefined> {
+  const result = await client.query<ResourceIdentityFenceRow>(
+    `select resource_id, last_generation, fence_revision
+       from ${names.resourceIdentityFences}
+      where resource_id = $1 limit 1${forUpdate ? " for update" : ""}`,
+    [resourceId],
+  );
+  const row = result.rows[0];
+  if (!row) return undefined;
+  const fence: ResourceIdentityFenceRecord = {
+    resourceId: row.resource_id,
+    lastGeneration: Number(row.last_generation),
+    fenceRevision: Number(row.fence_revision),
+  };
+  assertResourceIdentityFence(fence);
+  return fence;
+}
+
+/** Consume one exact preview/import fence after Resource and lock writes. */
+async function consumeSqlIdentityFence(
+  transaction: SqlClient,
+  resourceId: ResourceShapeRecordId,
+  generation: number,
+  expected: ResourceIdentityFenceRecord | null,
+): Promise<void> {
+  const consumed = consumeResourceIdentityFence(
+    resourceId,
+    generation,
+    expected,
+  );
+  if (expected === null) {
+    const inserted = await transaction.query(
+      `insert into ${names.resourceIdentityFences}
+        (resource_id, last_generation, fence_revision)
+       values ($1, $2, $3)
+       on conflict (resource_id) do nothing`,
+      [consumed.resourceId, consumed.lastGeneration, consumed.fenceRevision],
+    );
+    if (inserted.rowCount === 1) return;
+  } else {
+    const updated = await transaction.query(
+      `update ${names.resourceIdentityFences}
+          set last_generation = $1, fence_revision = $2
+        where resource_id = $3
+          and last_generation = $4
+          and fence_revision = $5`,
+      [
+        consumed.lastGeneration,
+        consumed.fenceRevision,
+        consumed.resourceId,
+        expected.lastGeneration,
+        expected.fenceRevision,
+      ],
+    );
+    if (updated.rowCount === 1) return;
+  }
+
+  // A missing-row insert or CAS update can only lose to a transaction that
+  // changed this fence after our preflight read. The caller must roll back the
+  // already-written Resource/ResolutionLock pair before observing the loser.
+  throw new SqlIdentityFenceConflict(
+    await readSqlIdentityFence(transaction, resourceId, true),
+  );
+}
+
+/** Restore the exact fence consumed by an apply that never reached a backend. */
+async function replaceSqlIdentityFence(
+  transaction: SqlClient,
+  expected: ResourceIdentityFenceRecord,
+  replacement: ResourceIdentityFenceRecord | null,
+): Promise<void> {
+  assertResourceIdentityFence(expected);
+  if (replacement) {
+    assertResourceIdentityFence(replacement);
+    const updated = await transaction.query(
+      `update ${names.resourceIdentityFences}
+          set last_generation = $1, fence_revision = $2
+        where resource_id = $3
+          and last_generation = $4
+          and fence_revision = $5`,
+      [
+        replacement.lastGeneration,
+        replacement.fenceRevision,
+        expected.resourceId,
+        expected.lastGeneration,
+        expected.fenceRevision,
+      ],
+    );
+    if (updated.rowCount !== 1) {
+      throw new Error(
+        `Resource ${expected.resourceId} identity fence changed inside abort transaction`,
+      );
+    }
+    return;
+  }
+
+  const deleted = await transaction.query(
+    `delete from ${names.resourceIdentityFences}
+      where resource_id = $1
+        and last_generation = $2
+        and fence_revision = $3`,
+    [expected.resourceId, expected.lastGeneration, expected.fenceRevision],
+  );
+  if (deleted.rowCount !== 1) {
+    throw new Error(
+      `Resource ${expected.resourceId} identity fence changed inside abort transaction`,
+    );
+  }
+}
+
+/** Retire the live Resource incarnation while preserving its canonical id. */
+async function retireSqlIdentityFence(
+  transaction: SqlClient,
+  current: ResourceIdentityFenceRecord | undefined,
+  replacement: ResourceIdentityFenceRecord,
+): Promise<void> {
+  if (current) {
+    const updated = await transaction.query(
+      `update ${names.resourceIdentityFences}
+          set last_generation = $1, fence_revision = $2
+        where resource_id = $3
+          and last_generation = $4
+          and fence_revision = $5`,
+      [
+        replacement.lastGeneration,
+        replacement.fenceRevision,
+        replacement.resourceId,
+        current.lastGeneration,
+        current.fenceRevision,
+      ],
+    );
+    if (updated.rowCount === 1) return;
+  } else {
+    const inserted = await transaction.query(
+      `insert into ${names.resourceIdentityFences}
+        (resource_id, last_generation, fence_revision)
+       values ($1, $2, $3)
+       on conflict (resource_id) do nothing`,
+      [
+        replacement.resourceId,
+        replacement.lastGeneration,
+        replacement.fenceRevision,
+      ],
+    );
+    if (inserted.rowCount === 1) return;
+  }
+  throw new Error(
+    `Resource ${replacement.resourceId} identity fence changed inside remove transaction`,
   );
 }
 

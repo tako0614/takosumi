@@ -47,7 +47,9 @@ async function rowsForTable(
   db: SqliteFakeD1,
   table: string,
 ): Promise<readonly Record<string, unknown>[]> {
-  const result = await db.prepare(`select * from ${table}`).all<Record<string, unknown>>();
+  const result = await db
+    .prepare(`select * from ${table}`)
+    .all<Record<string, unknown>>();
   return result.results ?? [];
 }
 
@@ -258,10 +260,7 @@ test("v60 restores populated current and archived Service Form rows with inline 
   ]);
 
   for (const [table, externalIndex] of [
-    [
-      "service_form_definitions",
-      "service_form_definitions_ref_package_unique",
-    ],
+    ["service_form_definitions", "service_form_definitions_ref_package_unique"],
     [
       "service_form_definitions__takoform_v1alpha1",
       "service_form_definitions__takoform_v1alpha1_ref_package_unique",
@@ -297,13 +296,13 @@ test("v60 restores populated current and archived Service Form rows with inline 
       "service_form_activations__takoform_v1alpha1_identity_idx",
     ]),
   );
+  expect((await db.prepare(`pragma foreign_key_check`).all()).results).toEqual(
+    [],
+  );
   expect(
-    (await db.prepare(`pragma foreign_key_check`).all()).results,
-  ).toEqual([]);
-  expect(
-    (await db
+    await db
       .prepare(`select version, name from schema_migrations where version = 60`)
-      .first()),
+      .first(),
   ).toEqual({
     version: 60,
     name: "d1_service_form_restore_safe_unique_constraints",
@@ -325,7 +324,9 @@ test("v60 restores populated current and archived Service Form rows with inline 
   await ensureD1OpenTofuLedgerSchema(db);
   expect(
     await db
-      .prepare(`select count(*) as count from schema_migrations where version = 60`)
+      .prepare(
+        `select count(*) as count from schema_migrations where version = 60`,
+      )
       .first<{ readonly count: number }>(),
   ).toEqual({ count: 1 });
   expect(await rowsForTable(db, "service_form_activations")).toHaveLength(1);
@@ -356,11 +357,7 @@ test("v60 Service Form rebuild rolls back all shadow tables on a batch failure",
     )
     .bind(now)
     .run();
-  await db
-    .prepare(
-      `drop table service_form_activations`,
-    )
-    .run();
+  await db.prepare(`drop table service_form_activations`).run();
   await db
     .prepare(
       `create table service_form_activations (
@@ -393,7 +390,9 @@ test("v60 Service Form rebuild rolls back all shadow tables on a batch failure",
   expect(ensureD1OpenTofuLedgerSchema(db)).rejects.toThrow(
     /check constraint failed/i,
   );
-  expect(await tableNames(db)).not.toContain("service_form_definitions__takosumi_v60");
+  expect(await tableNames(db)).not.toContain(
+    "service_form_definitions__takosumi_v60",
+  );
   expect(await tableNames(db)).not.toContain(
     "service_form_activations__takosumi_v60",
   );
@@ -632,12 +631,14 @@ test("predeployed verification is strictly read-only", async () => {
   );
 });
 
-test("predeployed transition accepts only exact v60 or v61 ledgers", async () => {
+test("predeployed verification accepts only the exact current v61 ledger", async () => {
   const predecessor = new SqliteFakeD1();
   await ensureD1OpenTofuLedgerSchema(predecessor, {
     throughMigrationVersion: 60,
   });
-  await verifyD1OpenTofuLedgerSchemaPredeployed(predecessor);
+  await expect(
+    verifyD1OpenTofuLedgerSchemaPredeployed(predecessor),
+  ).rejects.toThrow("D1 OpenTofu predeployed schema verification failed");
   expect((await tableNames(predecessor)).has("resource_identity_fences")).toBe(
     false,
   );
@@ -651,13 +652,15 @@ test("predeployed transition accepts only exact v60 or v61 ledgers", async () =>
 
   const tooOld = new SqliteFakeD1();
   await ensureD1OpenTofuLedgerSchema(tooOld, { throughMigrationVersion: 59 });
-  await expect(
-    verifyD1OpenTofuLedgerSchemaPredeployed(tooOld),
-  ).rejects.toThrow("D1 OpenTofu predeployed schema verification failed");
+  await expect(verifyD1OpenTofuLedgerSchemaPredeployed(tooOld)).rejects.toThrow(
+    "D1 OpenTofu predeployed schema verification failed",
+  );
 
   const missing = new SqliteFakeD1();
   await ensureD1OpenTofuLedgerSchema(missing);
-  await missing.prepare(`delete from schema_migrations where version = 43`).run();
+  await missing
+    .prepare(`delete from schema_migrations where version = 43`)
+    .run();
   await expect(
     verifyD1OpenTofuLedgerSchemaPredeployed(missing),
   ).rejects.toThrow("D1 OpenTofu predeployed schema verification failed");
@@ -671,25 +674,9 @@ test("predeployed transition accepts only exact v60 or v61 ledgers", async () =>
     )
     .bind(`sha256:${"f".repeat(64)}`)
     .run();
-  await expect(
-    verifyD1OpenTofuLedgerSchemaPredeployed(extra),
-  ).rejects.toThrow("D1 OpenTofu predeployed schema verification failed");
-});
-
-test("predeployed v60 transition remains read-only and does not invent the v61 table", async () => {
-  const db = new SqliteFakeD1();
-  await ensureD1OpenTofuLedgerSchema(db, { throughMigrationVersion: 60 });
-  const store = createCloudflareD1OpenTofuControlStore(db, {
-    schemaMode: "predeployed",
-  });
-
-  expect(await store.listWorkspaces()).toEqual([]);
-  expect((await tableNames(db)).has("resource_identity_fences")).toBe(false);
-  expect(
-    await db
-      .prepare(`select max(version) as version from schema_migrations`)
-      .first(),
-  ).toEqual({ version: 60 });
+  await expect(verifyD1OpenTofuLedgerSchemaPredeployed(extra)).rejects.toThrow(
+    "D1 OpenTofu predeployed schema verification failed",
+  );
 });
 
 test("predeployed maintenance readiness uses one direct indexed read", async () => {

@@ -64,13 +64,17 @@ import {
   formatResourceShapeId,
   resourceFormIdentitiesEqual,
   type ResolutionLockRecord,
+  type ResourceIdentityFenceRecord,
   type ResourceShapeExecutionRecord,
   type ResourceShapePriorStateDescriptor,
   type ResourceShapeRecord,
   type SpacePolicyRecord,
   type TargetPoolRecord,
 } from "./records.ts";
-import type { ResourceShapeStores } from "./stores.ts";
+import {
+  consumeResourceIdentityFence,
+  type ResourceShapeStores,
+} from "./stores.ts";
 import type {
   AdapterApplyResult,
   AdapterObservationStatus,
@@ -920,7 +924,11 @@ export class ResourceShapeService {
     req: ApplyResourceRequest,
   ): Promise<ServiceResult<PreviewResourceResult>> {
     const resourceId = formatResourceShapeId(req.space, req.kind, req.name);
-    const existing = await this.#stores.resources.get(resourceId);
+    const [existing, existingLock, identityFence] = await Promise.all([
+      this.#stores.resources.get(resourceId),
+      this.#stores.locks.get(resourceId),
+      this.#stores.getResourceIdentityFence(resourceId),
+    ]);
     const ownerError = resourceOwnerConflict(resourceId, existing, req.owner);
     if (ownerError) return ownerError;
     const versionError = resourceGenerationError(
@@ -929,7 +937,13 @@ export class ResourceShapeService {
       req.expectedGeneration,
     );
     if (versionError) return versionError;
-    const existingLock = await this.#stores.locks.get(resourceId);
+    const identity = previewResourceIdentity(
+      resourceId,
+      req,
+      existing,
+      identityFence,
+    );
+    if (!identity.ok) return identity;
     const form = await this.#resolveExactForm(req, existing, existingLock);
     if (!form.ok) return form;
     const prepared = await this.#resolveAndPlan(req, existingLock);
@@ -949,13 +963,18 @@ export class ResourceShapeService {
       parsed,
     );
     if (!resolvedConnections.ok) return resolvedConnections;
-    const evidence = await resourceDeploymentEvidence(req, output, plan);
+    const evidence = await resourceDeploymentEvidence(
+      req,
+      output,
+      plan,
+      identity.value.evidence,
+    );
     const adapterInput = {
       resourceId: output.resolutionLock.resourceId,
       ...((req.owner ?? existing?.owner)
         ? { owner: req.owner ?? existing?.owner }
         : {}),
-      resourceGeneration: (existing?.generation ?? 0) + 1,
+      resourceGeneration: identity.value.generation,
       ...(existing?.lastOperationRunId
         ? { resourceRevisionId: existing.lastOperationRunId }
         : {}),
@@ -1125,7 +1144,13 @@ export class ResourceShapeService {
       };
     }
     const id = formatResourceShapeId(req.space, req.kind, req.name);
-    const existingLock = await this.#stores.locks.get(id);
+    const [existing, existingLock, identityFence] = await Promise.all([
+      this.#stores.resources.get(id),
+      this.#stores.locks.get(id),
+      this.#stores.getResourceIdentityFence(id),
+    ]);
+    const identity = previewResourceIdentity(id, req, existing, identityFence);
+    if (!identity.ok) return identity;
 
     // Keep the binding calculation on the exact Resolver -> Planner ->
     // resourceDeploymentEvidence path used by preview/apply. In particular,
@@ -1136,6 +1161,7 @@ export class ResourceShapeService {
       req,
       prepared.value.output,
       prepared.value.plan,
+      identity.value.evidence,
     );
     const reviewError = deploymentReviewError(review, evidence.planDigest);
     if (reviewError) {
@@ -1208,9 +1234,10 @@ export class ResourceShapeService {
       };
     }
     const id = formatResourceShapeId(req.space, req.kind, req.name);
-    const [existing, existingLock] = await Promise.all([
+    const [existing, existingLock, identityFence] = await Promise.all([
       this.#stores.resources.get(id),
       this.#stores.locks.get(id),
+      this.#stores.getResourceIdentityFence(id),
     ]);
     const recoveringApplying = existing?.phase === "Applying";
     if (
@@ -1280,6 +1307,10 @@ export class ResourceShapeService {
         },
       };
     }
+    const identity = recoveryRequested
+      ? recoveryResourceIdentity(existing)
+      : planResourceIdentity(id, existing, identityFence);
+    if (!identity.ok) return identity;
     const prepared = await this.#resolveAndPlan(req, existingLock);
     if (!prepared.ok) return prepared;
     const { output, plan, entry, parsed, targetPoolRecord } = prepared.value;
@@ -1298,7 +1329,12 @@ export class ResourceShapeService {
     );
     if (!resolvedConnections.ok) return resolvedConnections;
 
-    const evidence = await resourceDeploymentEvidence(req, output, plan);
+    const evidence = await resourceDeploymentEvidence(
+      req,
+      output,
+      plan,
+      identity.value.evidence,
+    );
     const adapterPlanDigest = await resourceAdapterPlanDigest(plan);
     // Recovery is an internal continuation of the already claimed Resource,
     // pinned ResolutionLock, and canonical operation Run. The pending
@@ -1335,11 +1371,7 @@ export class ResourceShapeService {
       recoveryRequested && recoveringApplying
         ? existing?.pendingOperation?.adapterPlanDigest
         : undefined;
-    if (
-      recoveryRequested &&
-      recoveringApplying &&
-      !pinnedAdapterPlanDigest
-    ) {
+    if (recoveryRequested && recoveringApplying && !pinnedAdapterPlanDigest) {
       return {
         ok: false,
         error: {
@@ -1386,9 +1418,7 @@ export class ResourceShapeService {
       this.#now(),
     );
     const now = nextApplyClaimTimestamp(this.#now(), existing?.updatedAt);
-    const generation = recoveringApplying
-      ? existing.generation
-      : (existing?.generation ?? 0) + 1;
+    const generation = identity.value.generation;
     const usesOpentofuRunAuthority =
       this.#adapter.id === "opentofu" &&
       !output.selectedImplementationDescriptor.plugin;
@@ -1487,8 +1517,7 @@ export class ResourceShapeService {
     }
 
     let recoveringOpenTofuApplyRun:
-      | { readonly applyRunId: string; readonly planRunId: string }
-      | undefined;
+      { readonly applyRunId: string; readonly planRunId: string } | undefined;
     if (recoveringApplying && usesOpentofuRunAuthority) {
       const pending = existing?.pendingOperation;
       if (
@@ -1511,6 +1540,25 @@ export class ResourceShapeService {
       };
     }
 
+    // Every new generation claim needs a caller-specific authority before the
+    // Resource CAS. Direct plugins already have a canonical Run id; the
+    // OpenTofu path receives its real ApplyRun only after this claim, so it
+    // persists a transient nonce in the existing pending-operation JSON and
+    // replaces it at the checkpoint immediately before dispatch.
+    const claimToken = recoveringApplying
+      ? existing?.pendingOperation?.runId
+      : (operationRun?.id ??
+        validatedOperationNonce(this.#newOperationNonce()));
+    const transientApplyClaim =
+      !recoveringApplying && operationRun === undefined
+        ? {
+            runId: claimToken!,
+            operation: "apply" as const,
+            operationKey: claimToken!,
+            authority: "resource_claim" as const,
+          }
+        : undefined;
+
     // A public preview has no apply Run yet, so a direct plugin may return a
     // provisional native identity there. Before the first backend mutation,
     // re-plan once with the canonical apply Run revision and persist that
@@ -1524,7 +1572,7 @@ export class ResourceShapeService {
       try {
         const applyPreview = await this.#adapter.preview({
           resourceId: id,
-          ...(req.owner ?? existing?.owner
+          ...((req.owner ?? existing?.owner)
             ? { owner: req.owner ?? existing?.owner }
             : {}),
           resourceGeneration: generation,
@@ -1612,11 +1660,29 @@ export class ResourceShapeService {
               operationKey: operationRun.resourceOperationKey,
               adapterPlanDigest,
               deploymentReview,
+              ...(identity.value.evidence
+                ? {
+                    identityFenceRevision:
+                      identity.value.evidence.fenceRevision,
+                  }
+                : {}),
             },
           }
-        : recoveringOpenTofuApplyRun && existing?.pendingOperation
-          ? { pendingOperation: existing.pendingOperation }
-          : {}),
+        : transientApplyClaim
+          ? {
+              pendingOperation: {
+                ...transientApplyClaim,
+                ...(identity.value.evidence
+                  ? {
+                      identityFenceRevision:
+                        identity.value.evidence.fenceRevision,
+                    }
+                  : {}),
+              },
+            }
+          : recoveringOpenTofuApplyRun && existing?.pendingOperation
+            ? { pendingOperation: existing.pendingOperation }
+            : {}),
       ...(existing?.lastOperationRunId
         ? { lastOperationRunId: existing.lastOperationRunId }
         : {}),
@@ -1658,6 +1724,9 @@ export class ResourceShapeService {
         plannedLock: lockRecord,
         expectedTargetPool: targetPoolRecord,
         ...(existing ? { expected: versionOf(existing) } : {}),
+        ...(!recoveryRequested
+          ? { expectedIdentityFence: identity.value.expectedFence ?? null }
+          : {}),
       });
       if (claim.status === "ownership_conflict") {
         const terminalized = await this.#failUnclaimedPluginOperationRun({
@@ -1676,6 +1745,25 @@ export class ResourceShapeService {
           claim.record.managedBy,
           "apply",
         );
+      }
+      if (claim.status === "identity_fence_conflict") {
+        const terminalized = await this.#failUnclaimedPluginOperationRun({
+          run: operationRun,
+          created: operationRunCreated,
+          error: new Error(
+            `resource ${id} incarnation fence changed before apply could be claimed`,
+          ),
+        });
+        if (!terminalized) {
+          return pluginOperationRunFinalizationPending(id, "apply");
+        }
+        return {
+          ok: false,
+          error: {
+            code: "reconcile_conflict",
+            message: `resource ${id} incarnation changed before apply could be claimed`,
+          },
+        };
       }
       claimSucceeded = claim.status === "begun";
       if (claim.status === "begun") {
@@ -1741,6 +1829,7 @@ export class ResourceShapeService {
           lockRecord,
           existing,
           existingLock,
+          identity.value.fenceRollback,
         );
         if (operationRun && operationRunCreated && rolledBack) {
           operationRun = await this.#failPluginOperationRun(
@@ -1759,6 +1848,7 @@ export class ResourceShapeService {
           lockRecord,
           existing,
           existingLock,
+          identity.value.fenceRollback,
         );
         if (operationRun && operationRunCreated && rolledBack) {
           operationRun = await this.#failPluginOperationRun(
@@ -1785,6 +1875,7 @@ export class ResourceShapeService {
         lockRecord,
         existing,
         existingLock,
+        identity.value.fenceRollback,
       );
       if (operationRun && operationRunCreated && rolledBack) {
         operationRun = await this.#failPluginOperationRun(operationRun, error);
@@ -1824,6 +1915,7 @@ export class ResourceShapeService {
                   operation: "apply",
                   deploymentReview,
                   adapterPlanDigest,
+                  identityFenceRevision: identity.value.evidence?.fenceRevision,
                   now: this.#now(),
                 });
               } catch (error) {
@@ -1845,6 +1937,7 @@ export class ResourceShapeService {
                   operation: "apply",
                   deploymentReview,
                   adapterPlanDigest,
+                  identityFenceRevision: identity.value.evidence?.fenceRevision,
                   now: this.#now(),
                 });
               } catch (error) {
@@ -2349,9 +2442,10 @@ export class ResourceShapeService {
 
     const id = formatResourceShapeId(req.space, req.kind, req.name);
     const importManagedBy = req.managedBy ?? "opentofu";
-    const [existing, existingLock] = await Promise.all([
+    const [existing, existingLock, identityFence] = await Promise.all([
       this.#stores.resources.get(id),
       this.#stores.locks.get(id),
+      this.#stores.getResourceIdentityFence(id),
     ]);
     const ownerError = resourceOwnerConflict(id, existing, req.owner);
     if (ownerError) return ownerError;
@@ -2452,6 +2546,11 @@ export class ResourceShapeService {
         },
       };
     }
+
+    const identity = recoveringImport
+      ? recoveryResourceIdentity(existing)
+      : planResourceIdentity(id, existing, identityFence);
+    if (!identity.ok) return identity;
 
     const prepared = await this.#resolveAndPlan(
       req,
@@ -2563,7 +2662,7 @@ export class ResourceShapeService {
               incarnationNonce: validatedOperationNonce(
                 this.#newOperationNonce(),
               ),
-              generation: (existing?.generation ?? 0) + 1,
+              generation: identity.value.generation,
               importRequestDigest,
               resolutionFingerprint:
                 output.resolutionLock.implementationFingerprint ??
@@ -2600,10 +2699,22 @@ export class ResourceShapeService {
       }
     }
 
+    const importClaimToken = recoveringImport
+      ? existing?.pendingOperation?.runId
+      : (operationRun?.id ??
+        validatedOperationNonce(this.#newOperationNonce()));
+    const transientImportClaim =
+      !recoveringImport && operationRun === undefined
+        ? {
+            runId: importClaimToken!,
+            operation: "import" as const,
+            operationKey: importClaimToken!,
+            authority: "resource_claim" as const,
+          }
+        : undefined;
+
     const now = nextApplyClaimTimestamp(this.#now(), existing?.updatedAt);
-    const generation = recoveringImport
-      ? existing!.generation
-      : (existing?.generation ?? 0) + 1;
+    const generation = identity.value.generation;
     const applyingRecord: ResourceShapeRecord = {
       id,
       spaceId: req.space,
@@ -2633,9 +2744,17 @@ export class ResourceShapeService {
               runId: operationRun.id,
               operation: "import" as const,
               operationKey: operationRun.resourceOperationKey,
+              ...(identity.value.evidence
+                ? {
+                    identityFenceRevision:
+                      identity.value.evidence.fenceRevision,
+                  }
+                : {}),
             },
           }
-        : {}),
+        : transientImportClaim
+          ? { pendingOperation: transientImportClaim }
+          : {}),
       labels: req.labels ?? existing?.labels,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
@@ -2665,6 +2784,9 @@ export class ResourceShapeService {
         plannedLock: lockRecord,
         expectedTargetPool: targetPoolRecord,
         ...(existing ? { expected: versionOf(existing) } : {}),
+        ...(!recoveringImport
+          ? { expectedIdentityFence: identity.value.expectedFence ?? null }
+          : {}),
       });
       if (claim.status === "ownership_conflict") {
         const terminalized = await this.#failUnclaimedPluginOperationRun({
@@ -2684,17 +2806,32 @@ export class ResourceShapeService {
           "import",
         );
       }
+      if (claim.status === "identity_fence_conflict") {
+        const terminalized = await this.#failUnclaimedPluginOperationRun({
+          run: operationRun,
+          created: operationRunCreated,
+          error: new Error(
+            `resource ${id} incarnation fence changed before import could be claimed`,
+          ),
+        });
+        if (!terminalized) {
+          return pluginOperationRunFinalizationPending(id, "import");
+        }
+        return {
+          ok: false,
+          error: {
+            code: "import_conflict",
+            message: `resource ${id} incarnation changed before import could be claimed`,
+          },
+        };
+      }
       claimSucceeded = claim.status === "begun";
     } catch (error) {
       let current: ResourceShapeRecord | undefined;
       try {
         current = await this.#stores.resources.get(id);
       } catch (observationError) {
-        return importClaimAcknowledgementPending(
-          id,
-          error,
-          observationError,
-        );
+        return importClaimAcknowledgementPending(id, error, observationError);
       }
       if (
         applyingClaimMatchesRecord(current, applyingRecord) ||
@@ -2894,6 +3031,9 @@ export class ResourceShapeService {
             updatingImport && existing && existingLock
               ? { record: existing, lock: existingLock }
               : { record: failedRecord, lock: lockRecord },
+          ...(updatingImport && identity.value.fenceRollback
+            ? { identityFenceRollback: identity.value.fenceRollback }
+            : {}),
         });
         failurePersisted = failed.status === "rolled_back";
       } catch (persistenceError) {
@@ -2919,7 +3059,7 @@ export class ResourceShapeService {
           generation,
           phase:
             failurePersisted && updatingImport
-              ? existing?.phase ?? "Ready"
+              ? (existing?.phase ?? "Ready")
               : failurePersisted
                 ? "Failed"
                 : "Applying",
@@ -3171,7 +3311,10 @@ export class ResourceShapeService {
         error: { code: "not_found", message: `resource ${id} not found` },
       };
     }
-    if (record.phase !== "Ready" || record.observedGeneration !== record.generation) {
+    if (
+      record.phase !== "Ready" ||
+      record.observedGeneration !== record.generation
+    ) {
       return {
         ok: false,
         error: {
@@ -3962,6 +4105,15 @@ export class ResourceShapeService {
           },
         };
       }
+      if (claim.status === "identity_fence_conflict") {
+        return {
+          ok: false,
+          error: {
+            code: "reconcile_conflict",
+            message: `resource ${id} incarnation changed while refresh was being claimed`,
+          },
+        };
+      }
       claimed = claim.record;
     }
     const claimVersion = {
@@ -4689,8 +4841,7 @@ export class ResourceShapeService {
     }
 
     let recoveringOpenTofuDeleteRun:
-      | { readonly applyRunId: string; readonly planRunId: string }
-      | undefined;
+      { readonly applyRunId: string; readonly planRunId: string } | undefined;
     if (usesOpentofuRunAuthority && record.phase === "Deleting") {
       const pending = record.pendingOperation;
       if (
@@ -6482,6 +6633,7 @@ async function checkpointOpentofuApplyRun(input: {
   readonly operation: "apply" | "delete";
   readonly deploymentReview?: ResourceDeploymentReview;
   readonly adapterPlanDigest?: `sha256:${string}`;
+  readonly identityFenceRevision?: number;
   readonly now: IsoTimestamp;
 }): Promise<ResourceShapeRecord> {
   const pendingOperation = {
@@ -6496,6 +6648,9 @@ async function checkpointOpentofuApplyRun(input: {
     ...(input.adapterPlanDigest
       ? { adapterPlanDigest: input.adapterPlanDigest }
       : {}),
+    ...(input.identityFenceRevision === undefined
+      ? {}
+      : { identityFenceRevision: input.identityFenceRevision }),
   };
   if (
     opentofuApplyRunCheckpointMatches(
@@ -6504,11 +6659,15 @@ async function checkpointOpentofuApplyRun(input: {
       input.planRunId,
       input.operation,
       input.adapterPlanDigest,
+      input.identityFenceRevision,
     )
   ) {
     return input.record;
   }
-  if (input.record.pendingOperation) {
+  if (
+    input.record.pendingOperation &&
+    input.record.pendingOperation.authority !== "resource_claim"
+  ) {
     throw new Error(
       `resource ${input.record.id} is fenced by a different pending operation`,
     );
@@ -6532,6 +6691,7 @@ async function checkpointOpentofuApplyRun(input: {
         input.planRunId,
         input.operation,
         input.adapterPlanDigest,
+        input.identityFenceRevision,
       )
     ) {
       return persisted.record;
@@ -6549,6 +6709,7 @@ async function checkpointOpentofuApplyRun(input: {
         input.planRunId,
         input.operation,
         input.adapterPlanDigest,
+        input.identityFenceRevision,
       )
     ) {
       return observed;
@@ -6563,6 +6724,7 @@ function opentofuApplyRunCheckpointMatches(
   planRunId: string,
   operation: "apply" | "delete",
   adapterPlanDigest?: string,
+  identityFenceRevision?: number,
 ): boolean {
   return (
     record.pendingOperation?.authority === "opentofu_apply_run" &&
@@ -6570,7 +6732,8 @@ function opentofuApplyRunCheckpointMatches(
     record.pendingOperation.runId === applyRunId &&
     record.pendingOperation.planRunId === planRunId &&
     record.pendingOperation.operationKey === applyRunId &&
-    record.pendingOperation.adapterPlanDigest === adapterPlanDigest
+    record.pendingOperation.adapterPlanDigest === adapterPlanDigest &&
+    record.pendingOperation.identityFenceRevision === identityFenceRevision
   );
 }
 
@@ -6629,6 +6792,12 @@ async function rollbackUnstartedApplyClaim(
   plannedLock: ResolutionLockRecord,
   previous: ResourceShapeRecord | undefined,
   previousLock: ResolutionLockRecord | undefined,
+  identityFenceRollback:
+    | {
+        readonly expected: ResourceIdentityFenceRecord;
+        readonly replacement: ResourceIdentityFenceRecord | null;
+      }
+    | undefined,
 ): Promise<boolean> {
   try {
     const restored = await stores.abortApply({
@@ -6642,6 +6811,7 @@ async function rollbackUnstartedApplyClaim(
       replacement: previous
         ? { record: previous, lock: previousLock ?? null }
         : null,
+      ...(identityFenceRollback ? { identityFenceRollback } : {}),
     });
     return restored.status === "rolled_back";
   } catch (error) {
@@ -6795,6 +6965,158 @@ function resourceGenerationError(
     error: {
       code: "resource_version_conflict",
       message: `resource ${resourceId} is at generation ${currentGeneration}; expected ${expectedGeneration}`,
+    },
+  };
+}
+
+interface ResourceIdentityEvidence {
+  /** Desired generation previewed for this exact canonical Resource id. */
+  readonly generation: number;
+  /** Fence revision observed before the desired generation is consumed. */
+  readonly fenceRevision: number;
+}
+
+interface PlannedResourceIdentity {
+  readonly generation: number;
+  /** Omitted only for recovery of a legacy pre-fence Applying row. */
+  readonly evidence?: ResourceIdentityEvidence;
+  /** Exact preview-time fence CAS; `null` means its observed absence. */
+  readonly expectedFence?: ResourceIdentityFenceRecord | null;
+  /** Exact inverse used only when backend mutation provably never started. */
+  readonly fenceRollback?: {
+    readonly expected: ResourceIdentityFenceRecord;
+    readonly replacement: ResourceIdentityFenceRecord | null;
+  };
+}
+
+/**
+ * An exact preview of an in-flight apply reproduces its already reviewed
+ * incarnation so the bounded recovery path can regain the same host quote.
+ * Any other preview plans a genuinely new desired generation.
+ */
+function previewResourceIdentity(
+  resourceId: string,
+  request: ApplyResourceRequest,
+  current: ResourceShapeRecord | undefined,
+  fence: ResourceIdentityFenceRecord | undefined,
+): ServiceResult<PlannedResourceIdentity> {
+  return current?.phase === "Applying" &&
+    applyingRequestMatchesRecord(request, current)
+    ? recoveryResourceIdentity(current)
+    : planResourceIdentity(resourceId, current, fence);
+}
+
+/**
+ * Plans one new desired incarnation without mutating durable authority.
+ *
+ * A retained fence always wins over public Resource absence. Legacy live rows
+ * without a fence remain upgradable by deriving their successor from the live
+ * generation; the first successful claim installs the durable fence.
+ */
+function planResourceIdentity(
+  resourceId: string,
+  current: ResourceShapeRecord | undefined,
+  fence: ResourceIdentityFenceRecord | undefined,
+): ServiceResult<PlannedResourceIdentity> {
+  if (
+    fence &&
+    (fence.resourceId !== resourceId ||
+      (current !== undefined && fence.lastGeneration !== current.generation))
+  ) {
+    return {
+      ok: false,
+      error: {
+        code: "reconcile_conflict",
+        message: `resource ${resourceId} identity fence does not match its live generation`,
+      },
+    };
+  }
+  const lastGeneration = fence?.lastGeneration ?? current?.generation ?? 0;
+  const fenceRevision = fence?.fenceRevision ?? 0;
+  if (
+    !Number.isSafeInteger(lastGeneration) ||
+    lastGeneration < 0 ||
+    lastGeneration === Number.MAX_SAFE_INTEGER ||
+    !Number.isSafeInteger(fenceRevision) ||
+    fenceRevision < 0 ||
+    fenceRevision === Number.MAX_SAFE_INTEGER
+  ) {
+    return {
+      ok: false,
+      error: {
+        code: "resource_version_conflict",
+        message: `resource ${resourceId} incarnation counter is exhausted or invalid`,
+      },
+    };
+  }
+  const generation = lastGeneration + 1;
+  const expectedFence = fence ?? null;
+  try {
+    const consumedFence = consumeResourceIdentityFence(
+      resourceId,
+      generation,
+      expectedFence,
+    );
+    return {
+      ok: true,
+      value: {
+        generation,
+        evidence: { generation, fenceRevision },
+        expectedFence,
+        fenceRollback: {
+          expected: consumedFence,
+          replacement: expectedFence,
+        },
+      },
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: {
+        code: "reconcile_conflict",
+        message: `resource ${resourceId} identity fence is invalid: ${errorMessage(error)}`,
+      },
+    };
+  }
+}
+
+/** Reconstructs the exact reviewed identity of an already claimed apply. */
+function recoveryResourceIdentity(
+  current: ResourceShapeRecord | undefined,
+): ServiceResult<PlannedResourceIdentity> {
+  if (
+    !current ||
+    !Number.isSafeInteger(current.generation) ||
+    current.generation < 1
+  ) {
+    return {
+      ok: false,
+      error: {
+        code: "reconcile_conflict",
+        message: "recovering Resource has no valid claimed generation",
+      },
+    };
+  }
+  const fenceRevision = current.pendingOperation?.identityFenceRevision;
+  if (fenceRevision === undefined) {
+    // Compatibility for a claim created before the incarnation fence. Its
+    // pinned deployment review was hashed without Resource identity evidence.
+    return { ok: true, value: { generation: current.generation } };
+  }
+  if (!Number.isSafeInteger(fenceRevision) || fenceRevision < 0) {
+    return {
+      ok: false,
+      error: {
+        code: "reconcile_conflict",
+        message: `resource ${current.id} has an invalid recovery identity fence revision`,
+      },
+    };
+  }
+  return {
+    ok: true,
+    value: {
+      generation: current.generation,
+      evidence: { generation: current.generation, fenceRevision },
     },
   };
 }
@@ -6997,8 +7319,7 @@ function importRequestMatchesRecord(
     request.kind === record.kind &&
     resourceFormIdentitiesEqual(request.form, record.form) &&
     request.name === record.name &&
-    (request.project ?? record.project ?? null) ===
-      (record.project ?? null) &&
+    (request.project ?? record.project ?? null) === (record.project ?? null) &&
     (request.environment ?? record.environment ?? null) ===
       (record.environment ?? null) &&
     canonicalJson(request.spec) === canonicalJson(record.spec) &&
@@ -7143,6 +7464,7 @@ async function resourceDeploymentEvidence(
   request: ApplyResourceRequest,
   output: ResolverOutput,
   plan: ResourceShapePlan,
+  resourceIdentity?: ResourceIdentityEvidence,
 ): Promise<ResourceDeploymentEvidence> {
   // ResolutionLock may retain a host-defined, human-readable implementation
   // fingerprint. Deploy review and commercial quote evidence must expose one
@@ -7200,6 +7522,10 @@ async function resourceDeploymentEvidence(
     },
     nativeResourcePlan: output.nativeResourcePlan,
     adapterPlan: plan,
+    // New plans bind the server-owned incarnation observed before mutation.
+    // The conditional omission preserves exact recovery for pre-fence
+    // Applying rows whose pinned review used the legacy digest shape.
+    ...(resourceIdentity ? { resourceIdentity } : {}),
   });
   return { planDigest, specDigest, resolutionFingerprint };
 }
@@ -8348,7 +8674,9 @@ function deploymentAdmissionPendingError(
     retryable: true,
     pending,
     retryAfterSeconds: pending.retryAfterSeconds,
-    ...(pending.attemptId === undefined ? {} : { attemptId: pending.attemptId }),
+    ...(pending.attemptId === undefined
+      ? {}
+      : { attemptId: pending.attemptId }),
   };
 }
 
