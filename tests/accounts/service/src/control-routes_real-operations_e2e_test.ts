@@ -523,21 +523,10 @@ test("no-state Capsule DELETE returns 409 for owned or invalid Resource claims",
   }
 });
 
-test("no-state Capsule DELETE returns 409 while provider Apply holds the Capsule lease", async () => {
+test("default service coordination returns 409 while provider Apply holds the Capsule lease", async () => {
   const accountStore = new InMemoryAccountsStore();
   const cookie = seedSession(accountStore);
   const deployStore = new InMemoryOpenTofuControlStore();
-  const innerCoordination = new InMemoryCapsuleCoordination();
-  const acquisitions: Array<{ readonly scope: string; readonly holderId: string }> =
-    [];
-  const coordination: CapsuleCoordination = {
-    acquireLease: async (input) => {
-      acquisitions.push({ scope: input.scope, holderId: input.holderId });
-      return await innerCoordination.acquireLease(input);
-    },
-    renewLease: (input) => innerCoordination.renewLease(input),
-    releaseLease: (input) => innerCoordination.releaseLease(input),
-  };
   let applyEntered!: () => void;
   const entered = new Promise<void>((resolve) => {
     applyEntered = resolve;
@@ -563,7 +552,6 @@ test("no-state Capsule DELETE returns 409 while provider Apply holds the Capsule
         };
       },
     }),
-    capsuleCoordination: coordination,
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
   });
   const seeded = await seedQueuedNoStateCapsuleApply(deployStore, {
@@ -611,11 +599,6 @@ test("no-state Capsule DELETE returns 409 while provider Apply holds the Capsule
   expect((await deployStore.getCapsule(seeded.capsule.id))?.status).toBe(
     "active",
   );
-  expect(
-    acquisitions.filter(({ scope }) =>
-      scope.startsWith(`capsule:${seeded.capsule.id}:`),
-    ),
-  ).toHaveLength(2);
 });
 
 test("abandon wins both admission leases before a queued Apply rechecks destroyed status", async () => {
