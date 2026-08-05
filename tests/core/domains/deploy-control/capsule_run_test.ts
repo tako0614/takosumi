@@ -5730,6 +5730,82 @@ test("post-apply lifecycle exception retains state but fails readiness", async (
   });
 });
 
+test("retryable post-apply substrate reset requeues the same apply and resumes activation", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner();
+  await seedRunnableCapsuleModel(store, {
+    environment: "preview",
+    installConfig: lifecycleInstallConfig([
+      {
+        id: "publish",
+        phase: "post_apply",
+        executor: "operator",
+        command: ["bun", "run", "release"],
+      },
+    ]),
+  });
+  const queued: Array<{
+    readonly action: "plan" | "apply" | "source_sync" | "restore";
+    readonly runId: string;
+    readonly workspaceId: string;
+  }> = [];
+  let activationAttempts = 0;
+  const controller = controllerWith(store, runner, {
+    enqueueRun: (dispatch) => {
+      queued.push(dispatch);
+      return Promise.resolve();
+    },
+    activity: activityRecorderFor(store),
+    releaseActivator: {
+      activate: () => {
+        activationAttempts += 1;
+        if (activationAttempts === 1) {
+          return Promise.reject(
+            new OpenTofuRunnerInfrastructureError(
+              "Durable Object reset because its code was updated.",
+              { reason: "substrate_reset" },
+            ),
+          );
+        }
+        return Promise.resolve({ status: "succeeded" as const });
+      },
+    },
+  });
+
+  const created = await controller.createCapsulePlan("cap_fixture1");
+  await controller.dispatchQueuedRun(queued.shift()!);
+  const planRun = (await store.getPlanRun(created.planRun.id))!;
+  const createdApply = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+
+  await expect(controller.dispatchQueuedRun(queued.shift()!)).rejects.toThrow(
+    /retryable_runner_infrastructure_error/,
+  );
+  const requeued = (await store.getApplyRun(createdApply.applyRun.id))!;
+  expect(requeued.status).toBe("queued");
+  expect(requeued.diagnostics).toBeUndefined();
+  expect(
+    requeued.auditEvents.some((event) => event.type === "apply.retry_scheduled"),
+  ).toBe(true);
+  expect(runner.applyJobs).toHaveLength(1);
+  expect(activationAttempts).toBe(1);
+  expect(
+    (await store.listActivityEvents("ws_test001")).some(
+      (event) =>
+        event.action === "release_activation.failed" &&
+        event.runId === createdApply.applyRun.id,
+    ),
+  ).toBe(true);
+
+  await controller.dispatchQueuedRun(queued.shift()!);
+  const completed = (await store.getApplyRun(createdApply.applyRun.id))!;
+  expect(completed.status).toBe("succeeded");
+  expect(runner.applyJobs).toHaveLength(2);
+  expect(activationAttempts).toBe(2);
+});
+
 test("post-apply lifecycle skipped result retains state but fails readiness", async () => {
   const store = new InMemoryOpenTofuControlStore();
   const runner = recordingRunner(
