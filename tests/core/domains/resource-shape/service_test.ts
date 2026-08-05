@@ -2439,7 +2439,12 @@ test("rated preview binds offering and catalog versions and captures only after 
   expect(admission.captureContexts).toHaveLength(1);
   expect(admission.releaseContexts).toHaveLength(0);
   expect(admission.settlementPendingContexts).toHaveLength(0);
-  expect((await stores.resources.get(APPLY_ID))?.phase).toBe("Ready");
+  const ready = await stores.resources.get(APPLY_ID);
+  expect(ready?.phase).toBe("Ready");
+  expect(admission.captureContexts[0]).toMatchObject({
+    resourceGeneration: ready?.generation,
+    resourceRevision: ready?.revision,
+  });
 });
 
 test("a host reservation settles after a portable plan-only review", async () => {

@@ -3203,6 +3203,8 @@ export interface PlatformCanonicalReadyResourceInventoryItem {
   readonly resourceId: string;
   readonly resource: ResourceObject;
   readonly resourceGeneration: number;
+  /** Canonical Resource row CAS revision proven by the coherent read. */
+  readonly resourceRevision: number;
   /** Canonical backend lifecycle revision proven by the Resource store. */
   readonly resourceRevisionId: string;
   readonly nativeResources: readonly NativeResourceRef[];

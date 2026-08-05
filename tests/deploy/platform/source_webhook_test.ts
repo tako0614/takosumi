@@ -2468,6 +2468,7 @@ test("canonical Ready Resource inventory is bounded, global, and lock-coherent",
     spec: { source: { artifactRef: `artifact:${name}` } },
     phase: "Ready",
     generation: 2,
+    revision: 1,
     observedGeneration: 2,
     lastOperationRunId: `run_resource_${space}_${name}`,
     createdAt: createdAt as ResourceShapeRecord["createdAt"],
@@ -2514,6 +2515,7 @@ test("canonical Ready Resource inventory is bounded, global, and lock-coherent",
   ).resolves.toMatchObject({
     resourceId: "tkrn:workspace_inventory_a:EdgeWorker:api",
     resourceGeneration: 2,
+    resourceRevision: 1,
     resourceRevisionId: "run_resource_workspace_inventory_a_api",
     resource: {
       kind: "EdgeWorker",
@@ -2549,6 +2551,7 @@ test("canonical Ready Resource inventory is bounded, global, and lock-coherent",
       .map((record) => ({
         resourceId: record.id,
         resourceGeneration: 2,
+        resourceRevision: 1,
         resourceRevisionId: record.lastOperationRunId,
         resource: {
           kind: "EdgeWorker",

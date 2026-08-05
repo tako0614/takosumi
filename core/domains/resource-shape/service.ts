@@ -2349,6 +2349,7 @@ export class ResourceShapeService {
             review: deploymentReview,
             ...(reservationId ? { reservationId } : {}),
             resourceGeneration: generation,
+            resourceRevision: requiredCapturedResourceRevision(finalizedRecord),
             nativeResources: result.nativeResources,
           });
           await this.#recordResourceEvent({
@@ -6821,6 +6822,16 @@ export class ResourceShapeService {
       deprecated,
     };
   }
+}
+
+function requiredCapturedResourceRevision(record: ResourceShapeRecord): number {
+  const revision = record.revision;
+  if (revision === undefined || !Number.isSafeInteger(revision) || revision < 1) {
+    throw new Error(
+      `Resource ${record.id} has no canonical revision for deployment capture`,
+    );
+  }
+  return revision;
 }
 
 // --- helpers (module-level, pure) ---------------------------------------------

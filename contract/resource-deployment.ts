@@ -193,6 +193,8 @@ export interface ResourceDeploymentCaptureContext extends ResourceDeploymentQuot
   readonly reservationId?: string;
   /** Exact canonical generation whose backend evidence was captured. */
   readonly resourceGeneration: number;
+  /** Exact canonical Resource CAS revision observed after Ready publication. */
+  readonly resourceRevision: number;
   readonly nativeResources: readonly NativeResourceRef[];
 }
 

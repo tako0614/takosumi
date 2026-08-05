@@ -1016,6 +1016,7 @@ export interface TakosumiOperations {
       | {
           readonly resource: ResourceObject;
           readonly resourceGeneration: number;
+          readonly resourceRevision: number;
           readonly resourceRevisionId: string;
           readonly nativeResources: readonly NativeResourceRef[];
         }
@@ -1041,6 +1042,7 @@ export interface TakosumiOperations {
       | {
           readonly resource: ResourceObject;
           readonly resourceGeneration: number;
+          readonly resourceRevision: number;
           readonly resourceRevisionId: string;
           readonly nativeResources: readonly NativeResourceRef[];
         }
@@ -1073,6 +1075,7 @@ export interface TakosumiOperations {
         readonly resourceId: string;
         readonly resource: ResourceObject;
         readonly resourceGeneration: number;
+        readonly resourceRevision: number;
         readonly resourceRevisionId: string;
         readonly nativeResources: readonly NativeResourceRef[];
       }[];
@@ -3099,6 +3102,7 @@ export async function createTakosumiService(
               return structuredClone({
                 resource: projected.value,
                 resourceGeneration: recordBefore.generation,
+                resourceRevision: resourceRecordRevision(recordBefore),
                 resourceRevisionId: input.resourceRevisionId,
                 nativeResources: lockBefore.nativeResources ?? [],
               });
@@ -3347,6 +3351,7 @@ export async function createTakosumiService(
               return structuredClone({
                 resource: result.value,
                 resourceGeneration: recordBefore.generation,
+                resourceRevision: resourceRecordRevision(recordBefore),
                 resourceRevisionId,
                 nativeResources: lockBefore.nativeResources ?? [],
               });
@@ -3500,6 +3505,7 @@ export async function createTakosumiService(
                     resourceId: candidate.id,
                     resource: projected.value,
                     resourceGeneration: candidate.generation,
+                    resourceRevision: resourceRecordRevision(currentBefore),
                     resourceRevisionId,
                     nativeResources: lockBefore.nativeResources ?? [],
                   });
