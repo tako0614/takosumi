@@ -32,6 +32,10 @@ acceptance case.
   principal; it does not recreate the Interface from an Output blueprint.
 - Invalid, stale, mismatched, or unsupported declarations are visible as
   actionable compatibility failures.
+- `takosumi.com/v2.2` can request a host Interface by provider-neutral
+  type/version. Takosumi resolves it from the persisted InstallConfig and binds
+  the Capsule OIDC client's pairwise Principal; repository metadata never
+  carries an Interface ID, endpoint, provider name, or credential.
 
 The findings below preserve the original audit rationale. Statements labelled
 as current state describe the pre-implementation baseline unless a resolution
@@ -45,15 +49,17 @@ Takosumi supports an optional, repository-owned general manifest at:
 .well-known/takosumi.json
 ```
 
-The current closed envelope is:
+The versioned closed envelope is:
 
 ```text
-apiVersion: takosumi.com/v1alpha1
+apiVersion: takosumi.com/v1 | takosumi.com/v2 | takosumi.com/v2.1 | takosumi.com/v2.2
 kind: Repository
 ```
 
-The current version defines only `install.modules`; it does not add empty
-reserved sections for future application, link, or Interface discovery.
+All versions define `install.modules`; later closed versions add provided
+Interfaces, exact multi-module default selection, and consumed Interface
+requirements. They do not add empty reserved sections for future application,
+link, or Interface discovery.
 `$schema` and the retired install-only `schemaVersion` are not wire fields.
 Future sections require a new closed `apiVersion`.
 

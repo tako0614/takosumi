@@ -43,6 +43,7 @@ import {
 } from "../activity/mod.ts";
 import {
   validateCapsuleInterfaceBlueprints,
+  validateCapsuleRequiredInterfaces,
   validateCapsuleResourceInterfaceBindingProposals,
 } from "../interfaces/service.ts";
 import { ProjectsService } from "../projects/mod.ts";
@@ -162,6 +163,7 @@ export class CapsulesService {
       throw error;
     }
     validateCapsuleInterfaceBlueprints(config.interfaceBlueprints ?? []);
+    validateCapsuleRequiredInterfaces(config.requiredInterfaces ?? []);
     if (
       capsuleInterfaceBlueprintsNeedInstallingPrincipal(
         config.interfaceBlueprints,
@@ -411,6 +413,7 @@ export class CapsulesService {
       if (stored) assertLifecycleActionsNotEscalated(stored, config);
     }
     validateCapsuleInterfaceBlueprints(config.interfaceBlueprints ?? []);
+    validateCapsuleRequiredInterfaces(config.requiredInterfaces ?? []);
     validateCapsuleResourceInterfaceBindingProposals(
       config.resourceInterfaceBindingProposals ?? [],
     );

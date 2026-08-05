@@ -17,7 +17,7 @@ persist 済み InstallConfig であり、manifest を実行時に再読込しま
 
 ```json
 {
-  "apiVersion": "takosumi.com/v2.1",
+  "apiVersion": "takosumi.com/v2.2",
   "kind": "Repository",
   "install": {}
 }
@@ -28,13 +28,15 @@ persist 済み InstallConfig であり、manifest を実行時に再読込しま
 | `takosumi.com/v1`   | `modules`                    | `inputs`, `requires`, `features`                 |
 | `takosumi.com/v2`   | `modules`                    | v1 + `interfaces`                                |
 | `takosumi.com/v2.1` | `modules`, `defaultModule`?  | v2 と同一                                        |
+| `takosumi.com/v2.2` | `modules`, `defaultModule`?  | v2.1 + `requires[].kind: interface.consume`      |
 
 各 object は closed です。表や各 section にない field、`$schema`、旧
 `schemaVersion: takosumi.install-ux/v1` は拒否されます。v1/v2 に
 `defaultModule` を追加しても v2.1 として解釈されません。
 
-v2.1 の公開 JSON Schema は
-[`repository-manifest-v2.1.schema.json`](/schemas/repository-manifest-v2.1.schema.json)
+公開 JSON Schema は
+[`repository-manifest-v2.1.schema.json`](/schemas/repository-manifest-v2.1.schema.json) と
+[`repository-manifest-v2.2.schema.json`](/schemas/repository-manifest-v2.2.schema.json)
 です。これは structural schema であり、JSON Schema と parser の完全な同値性を
 意味しません。cross-field uniqueness、`defaultModule` と動的 key の一致、JSON
 recursive depth（最大32）、下記の secret/authority vocabulary 検査は canonical
@@ -52,7 +54,8 @@ Source sync 後、server が exact SourceSnapshot の manifest だけから次�
 保存します。
 
 1. `modules` が1件なら、その唯一の key を選ぶ。
-2. 複数なら `takosumi.com/v2.1` の `install.defaultModule` が必須。
+2. 複数なら `takosumi.com/v2.1` または `takosumi.com/v2.2` の
+   `install.defaultModule` が必須。
 3. `defaultModule` は canonical path かつ `modules` の own key と byte-for-byte で
    一致しなければならない。
 
@@ -115,12 +118,23 @@ delivery 名だけを提案します。
 - `secret.generated`: `kind`, optional `bytes` (16〜64), optional
   `encoding` (`hex` / `base64url`), `deliver`。module ごとに最大8件。
 - `http.endpoint`: `kind`, `deliver`。
+- `interface.consume` (v2.2): `kind`, module 内で一意な `key`, exact
+  `interface.type` / `interface.version`, 1〜16件の `permissions`,
+  `{ "type": token }` だけを持つ `delivery`。
 
 `deliver` は `variables` または `bindings` のちょうど一方を持ちます。slot は kind
 ごとに closed で、値は exact OpenTofu variable name または runtime binding name
 です。別 requirement と同じ delivery 名を共有できません。OIDC と endpoint は
 module ごとに各1件までです。host-reserved binding、存在しない/non-string variable、
 operator が許可しない OIDC scope や requirement kind は compiler が拒否します。
+
+`interface.consume` は provider、製品名、Interface ID、endpoint、credential を宣言
+しません。host は Plan 後の DB-owned InstallConfig から exact type/version を読み、同じ
+Workspace にある `Resolved` Interface がちょうど1件の場合だけ、Capsule OIDC client の
+pairwise principal に最小 permissions の通常の `InterfaceBinding` を作ります。0件または
+複数件、revoked/conflicting binding、operator policy 外の permission/delivery は
+fail closed です。runtime credential は短期発行され、manifest や OpenTofu variable へ
+書き込みません。
 
 ## `features`
 
@@ -129,11 +143,12 @@ non-empty `inputs` だけを持ちます。`inputs` は同じ module に宣言�
 参照し、feature 間でも重複できません。feature は UI grouping であり、provider、
 resource、lifecycle を有効化する authority ではありません。
 
-## `interfaces` (v2 / v2.1)
+## `interfaces` (v2 / v2.1 / v2.2)
 
-v2 と v2.1 は module ごとに最大32件の generic Capsule Interface proposal を
-追加できます。v1 に `interfaces` を置くと invalid です。v2.1 は v2 の Interface
-schema と compiler semantics をそのまま保持します。
+v2、v2.1、v2.2 は module ごとに最大32件の generic Capsule Interface proposal を
+追加できます。v1 に `interfaces` を置くと invalid です。v2.1 と v2.2 は v2 の
+Interface schema と compiler semantics をそのまま保持します。この section は
+Capsule が提供する Interface、`interface.consume` は Capsule が利用する Interface です。
 
 各 declaration は `key`, `name`, `spec`, optional `bindingRequests` だけを持ちます。
 `spec` は `type`, `version`, public JSON `document`, optional `inputs`, `access` の
@@ -225,10 +240,11 @@ v2 に v2.1 field を足しても無効です。
 ## Migration と versioning
 
 version identifier は closed schema の識別子です。既存 version の field set や意味を
-後から広げません。v2.1 は v2 の module/Interface semantics を一切変えず、optional
-`install.defaultModule` だけを加える additive schema revision なので major number を
-増やしていません。未知 version/field は fail closed です。incompatible vocabulary や
-authority model の変更には別の schema identifier が必要です。
+後から広げません。v2.1 は optional `install.defaultModule`、v2.2 は provider-neutral な
+`interface.consume` だけを追加する additive schema revision です。既存の module、
+provided Interface、authority semantics は変えません。未知 version/field は fail closed
+です。incompatible vocabulary や authority model の変更には別の schema identifier が
+必要です。
 
 将来 metadata section を追加するときは新しい `apiVersion` を定義し、未知 field は
 fail closed のままにします。
@@ -236,6 +252,8 @@ fail closed のままにします。
 - v1/v2 の single-module repository はそのまま利用でき、唯一の key が選ばれます。
 - multi-module repository は v2.1 に上げ、exact `defaultModule` を追加します。
 - v2 の `interfaces` は v2.1 へ変更しても同じ形・意味で保持されます。
+- host Interface を利用する repository だけが v2.2 に上げ、
+  `interface.consume` を追加します。
 - v1/v2 の文書に field だけ backport してはいけません。
 
 Store はこの manifest を代理しません。TCS 2.0 との接続と URL-only handoff は

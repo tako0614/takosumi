@@ -185,6 +185,103 @@ test("unsupported binding delivery is persisted as a reference and stays NotRead
   expect(JSON.stringify(binding)).not.toContain("secretValue");
 });
 
+test("Capsule required Interface grants the exact pairwise Principal idempotently", async () => {
+  const stores = createInMemoryInterfaceStores();
+  let id = 0;
+  const service = new InterfaceService({
+    stores,
+    now: () => NOW,
+    newId: (prefix) => `${prefix}_${++id}`,
+    oauth2ResourceAuthorizer: () => true,
+    credentialIssuer: {
+      issuePrincipalOAuth2Token: async () => ({
+        accessToken: "test-short-lived-token",
+        expiresAt: "2026-07-13T12:01:00.000Z",
+      }),
+    },
+  });
+  const iface = await service.create({
+    workspaceId: "workspace_1",
+    name: "workspace-ai",
+    ownerRef: { kind: "Workspace", id: "workspace_1" },
+    spec: {
+      type: "takosumi.ai.gateway",
+      version: "1",
+      document: { protocol: "openai.compatible.v1" },
+      inputs: {
+        endpoint: {
+          source: "literal",
+          value: "https://platform.example.test/gateway/ai/v1",
+        },
+      },
+      access: { visibility: "workspace", resourceUriInput: "endpoint" },
+    },
+  });
+  await service.create({
+    workspaceId: "workspace_1",
+    name: "capsule-ai-is-not-the-host",
+    ownerRef: { kind: "Capsule", id: "capsule_other" },
+    spec: {
+      type: "takosumi.ai.gateway",
+      version: "1",
+      document: { protocol: "openai.compatible.v1" },
+      inputs: {
+        endpoint: {
+          source: "literal",
+          value: "https://capsule.example.test/gateway/ai/v1",
+        },
+      },
+      access: { visibility: "workspace", resourceUriInput: "endpoint" },
+    },
+  });
+  const requirement = {
+    key: "ai",
+    interface: { type: "takosumi.ai.gateway", version: "1" },
+    permissions: ["ai.chat"],
+    delivery: { type: "oauth2" },
+  } as const;
+
+  await service.ensureCapsuleRequiredInterfaces({
+    workspaceId: "workspace_1",
+    capsuleId: "capsule_takos",
+    principalId: "pairwise_takos_user",
+    requirements: [requirement],
+  });
+  await service.ensureCapsuleRequiredInterfaces({
+    workspaceId: "workspace_1",
+    capsuleId: "capsule_takos",
+    principalId: "pairwise_takos_user",
+    requirements: [requirement],
+  });
+
+  const bindings = await service.listBindings(iface.metadata.id);
+  expect(bindings).toHaveLength(1);
+  expect(bindings[0]).toMatchObject({
+    metadata: {
+      materializedFrom: {
+        source: "capsule_required_interface",
+        capsuleId: "capsule_takos",
+        requirementKey: "ai",
+      },
+    },
+    spec: {
+      subjectRef: { kind: "Principal", id: "pairwise_takos_user" },
+      permissions: ["ai.chat"],
+      delivery: { type: "oauth2" },
+    },
+    status: { phase: "Ready" },
+  });
+  await service.revokeBinding(iface.metadata.id, bindings[0]!.metadata.id);
+  await expect(
+    service.ensureCapsuleRequiredInterfaces({
+      workspaceId: "workspace_1",
+      capsuleId: "capsule_takos",
+      principalId: "pairwise_takos_user",
+      requirements: [requirement],
+    }),
+  ).rejects.toThrow("conflicting or revoked Principal grant");
+});
+
 test("Principal oauth2 delivery requires the host issuer and mints only from an exact Ready binding", async () => {
   const stores = createInMemoryInterfaceStores();
   const issued: Array<Record<string, unknown>> = [];

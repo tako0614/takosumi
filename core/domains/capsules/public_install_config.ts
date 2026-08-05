@@ -31,6 +31,7 @@ export function publicInstallConfigRecord(
     runnerId: _runnerId,
     internal: _internal,
     resourceInterfaceBindingProposals: _resourceBindings,
+    requiredInterfaces: _requiredInterfaces,
     hostRuntimeMaterialization: _hostRuntimeMaterialization,
     ...publicRecord
   } = config;

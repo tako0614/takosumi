@@ -109,7 +109,10 @@ import type {
 import type { JsonValue } from "takosumi-contract";
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
 import type { InterfaceOAuthActivityEvidence } from "./access-token-activity.ts";
-import type { Interface } from "takosumi-contract/interfaces";
+import type {
+  CapsuleRequiredInterface,
+  Interface,
+} from "takosumi-contract/interfaces";
 import type {
   ResourceCapsuleOwner,
   ResourceMetadata,
@@ -217,6 +220,12 @@ export interface ControlPlaneOperations {
    * binding/lifecycle authority; the account plane never reimplements it.
    */
   readonly interfaces?: {
+    ensureCapsuleRequiredInterfaces?(input: {
+      readonly workspaceId: string;
+      readonly capsuleId: string;
+      readonly principalId: string;
+      readonly requirements: readonly CapsuleRequiredInterface[];
+    }): Promise<void>;
     validatePrincipalOAuth2TokenEvidence(
       evidence: InterfaceOAuthActivityEvidence,
     ): Promise<boolean>;

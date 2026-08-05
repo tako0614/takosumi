@@ -211,6 +211,52 @@ describe("repository install UX compiler", () => {
     ).not.toThrow();
   });
 
+  test("compiles a consumed Interface into DB-owned requiredInterfaces", () => {
+    const consumedDocument = {
+      apiVersion: "takosumi.com/v2.2",
+      kind: "Repository",
+      install: {
+        defaultModule: ".",
+        modules: {
+          ".": {
+            inputs: [],
+            requires: [
+              {
+                kind: "interface.consume",
+                key: "ai",
+                interface: { type: "takosumi.ai.gateway", version: "1" },
+                permissions: ["ai.chat"],
+                delivery: { type: "oauth2" },
+              },
+            ],
+          },
+        },
+      },
+    } satisfies RepositoryManifestDocument;
+    const result = compile({
+      document: consumedDocument,
+      compatibilityReport: report({
+        rootModuleVariables: [],
+        rootModuleVariableDeclarations: [],
+      }),
+      policy: {
+        allowedInterfacePermissions: ["ai.chat"],
+        allowedInterfaceDeliveryTypes: ["oauth2"],
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.compiled.requiredInterfaces).toEqual([
+      {
+        key: "ai",
+        interface: { type: "takosumi.ai.gateway", version: "1" },
+        permissions: ["ai.chat"],
+        delivery: { type: "oauth2" },
+      },
+    ]);
+  });
+
   test("requires an exact snapshot and module compatibility report", () => {
     const snapshotMismatch = compile({ sourceSnapshotId: "snap_other" });
     expect(snapshotMismatch).toEqual({

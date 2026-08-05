@@ -5,6 +5,7 @@ import type { InstallConfig } from "takosumi-contract/install-configs";
 import {
   isRepositoryManifestInterfaceCapableApiVersion,
   TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_1,
+  TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_2,
   type RepositoryManifestDocument,
 } from "takosumi-contract/repository-manifest";
 import type { JsonValue } from "takosumi-contract/types";
@@ -86,6 +87,7 @@ export type RepoOwnedInstallConfigAdoptionResult =
       readonly installExperience: InstallConfig["installExperience"];
       readonly variableMapping: InstallConfig["variableMapping"];
       readonly interfaceBlueprints: InstallConfig["interfaceBlueprints"];
+      readonly requiredInterfaces?: InstallConfig["requiredInterfaces"];
       readonly outputAllowlist: InstallConfig["outputAllowlist"];
       /**
        * Compiled from the repository's own runtime requirements. A service or
@@ -261,6 +263,14 @@ export async function adoptRepoOwnedInstallConfig(
       allowedInterfacePermissions:
         input.baseConfig.policy?.repositoryInstallUx
           ?.allowedInterfacePermissions ?? [],
+      ...(input.baseConfig.policy?.repositoryInstallUx
+        ?.allowedInterfaceDeliveryTypes
+        ? {
+            allowedInterfaceDeliveryTypes:
+              input.baseConfig.policy.repositoryInstallUx
+                .allowedInterfaceDeliveryTypes,
+          }
+        : {}),
     },
   });
   if (!compiled.ok) {
@@ -319,6 +329,9 @@ export async function adoptRepoOwnedInstallConfig(
       input.baseConfig.variableMapping,
     ),
     interfaceBlueprints: interfaceBlueprints.value,
+    ...(compiled.compiled.requiredInterfaces.length > 0
+      ? { requiredInterfaces: compiled.compiled.requiredInterfaces }
+      : {}),
     outputAllowlist: outputAllowlist.value,
     ...((input.baseConfig.hostRuntimeMaterialization ??
     compiled.compiled.hostRuntimeMaterialization)
@@ -368,6 +381,9 @@ export async function previewRepoOwnedInstallConfig(
     )
       ? {
           interfaceBlueprints: adoption.interfaceBlueprints ?? [],
+          ...(adoption.requiredInterfaces
+            ? { requiredInterfaces: adoption.requiredInterfaces }
+            : {}),
           outputAllowlist: adoption.outputAllowlist,
         }
       : {};
@@ -443,6 +459,9 @@ export async function previewRepoOwnedInstallConfig(
     outputAllowlist: adoption.outputAllowlist,
     ...(adoption.interfaceBlueprints !== undefined
       ? { interfaceBlueprints: adoption.interfaceBlueprints }
+      : {}),
+    ...(adoption.requiredInterfaces !== undefined
+      ? { requiredInterfaces: adoption.requiredInterfaces }
       : {}),
     ...(adoption.hostRuntimeMaterialization
       ? { hostRuntimeMaterialization: adoption.hostRuntimeMaterialization }
@@ -673,7 +692,10 @@ export function resolveRepoOwnedInstallModulePath(input: {
 
   const document = observation.document;
   const modulePaths = Object.keys(document.install.modules);
-  if (document.apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_1) {
+  if (
+    document.apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_1 ||
+    document.apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_2
+  ) {
     const defaultModule = document.install.defaultModule;
     if (
       defaultModule !== undefined &&

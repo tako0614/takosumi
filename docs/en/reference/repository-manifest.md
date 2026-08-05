@@ -17,7 +17,7 @@ Every version has exactly three root fields:
 
 ```json
 {
-  "apiVersion": "takosumi.com/v2.1",
+  "apiVersion": "takosumi.com/v2.2",
   "kind": "Repository",
   "install": {}
 }
@@ -28,13 +28,16 @@ Every version has exactly three root fields:
 | `takosumi.com/v1`   | `modules`                    | `inputs`, `requires`, `features`                 |
 | `takosumi.com/v2`   | `modules`                    | v1 + `interfaces`                                |
 | `takosumi.com/v2.1` | `modules`, `defaultModule`?  | identical to v2                                  |
+| `takosumi.com/v2.2` | `modules`, `defaultModule`?  | v2.1 + `requires[].kind: interface.consume`      |
 
 Every object is closed. Fields not listed in this document, `$schema`, and the
 retired `schemaVersion: takosumi.install-ux/v1` are rejected. Adding
 `defaultModule` to a v1 or v2 document does not make it v2.1.
 
-The published v2.1 JSON Schema is
-[`repository-manifest-v2.1.schema.json`](/schemas/repository-manifest-v2.1.schema.json).
+The published JSON Schemas are
+[`repository-manifest-v2.1.schema.json`](/schemas/repository-manifest-v2.1.schema.json)
+and
+[`repository-manifest-v2.2.schema.json`](/schemas/repository-manifest-v2.2.schema.json).
 It is a structural schema, not a claim of JSON Schema/parser equivalence. The
 canonical parser additionally fails closed on constraints that require
 cross-field or value-aware inspection: uniqueness across related declarations,
@@ -54,7 +57,8 @@ SourceSnapshot manifest, runs compatibility for that exact path, and persists
 the same path in the derived InstallConfig:
 
 1. If `modules` has one entry, select its only key.
-2. Multiple entries require `install.defaultModule` in `takosumi.com/v2.1`.
+2. Multiple entries require `install.defaultModule` in `takosumi.com/v2.1` or
+   `takosumi.com/v2.2`.
 3. `defaultModule` must be canonical and byte-for-byte equal to an own
    `modules` key.
 
@@ -120,6 +124,9 @@ delivery names, never a value or credential.
 - `secret.generated`: `kind`, optional `bytes` (16–64), optional `encoding`
   (`hex` / `base64url`), and `deliver`; at most eight per module.
 - `http.endpoint`: `kind` and `deliver`.
+- `interface.consume` (v2.2): `kind`, a module-unique `key`, exact
+  `interface.type` / `interface.version`, 1–16 `permissions`, and a `delivery`
+  object containing only `{ "type": token }`.
 
 `deliver` contains exactly one of `variables` or `bindings`. Slot names are
 closed per requirement kind, and values are exact OpenTofu variable or runtime
@@ -127,6 +134,15 @@ binding names. Requirements cannot claim the same delivery name. OIDC and
 endpoint are each singletons per module. The compiler rejects host-reserved
 bindings, absent/non-string variables, and requirement kinds or OIDC scopes
 outside operator policy.
+
+`interface.consume` never declares a provider, product name, Interface ID,
+endpoint, or credential. After Plan, the host reads the DB-owned InstallConfig
+and resolves the exact type/version only when there is exactly one
+Workspace-owned `Resolved` Interface. It then creates an ordinary
+least-privilege `InterfaceBinding` for the Capsule OIDC client's pairwise
+principal. Zero or multiple matches, revoked/conflicting bindings, or
+permissions/delivery outside operator policy fail closed. Runtime credentials
+are short-lived and are never written to the manifest or an OpenTofu variable.
 
 ## `features`
 
@@ -136,11 +152,12 @@ user inputs declared by the same module and cannot be claimed by another
 feature. A feature is UI grouping, not provider, resource, or lifecycle
 authority.
 
-## `interfaces` (v2 / v2.1)
+## `interfaces` (v2 / v2.1 / v2.2)
 
-v2 and v2.1 may add at most 32 generic Capsule Interface proposals per module.
-An `interfaces` field is invalid in v1. v2.1 retains the exact v2 Interface
-schema and compiler semantics.
+v2, v2.1, and v2.2 may add at most 32 generic Capsule Interface proposals per
+module. An `interfaces` field is invalid in v1. v2.1 and v2.2 retain the exact
+v2 Interface schema and compiler semantics. This section declares Interfaces a
+Capsule provides; `interface.consume` declares an Interface it consumes.
 
 Each declaration contains only `key`, `name`, `spec`, and optional
 `bindingRequests`. `spec` is a closed object containing `type`, `version`, a
@@ -240,17 +257,19 @@ Public documents cannot embed secret or authority material:
 ## Migration and versioning
 
 An API identifier names a closed schema. Existing versions do not gain fields
-or new meanings later. v2.1 leaves all v2 module and Interface semantics
-unchanged and adds only optional `install.defaultModule`, so it is an additive
-schema revision rather than an inflated new major version. Unknown versions or
-fields fail closed. Incompatible vocabulary or authority changes require a
-separate schema identifier.
+or new meanings later. v2.1 adds only optional `install.defaultModule`; v2.2
+adds only provider-neutral `interface.consume`. Both are additive schema
+revisions that preserve existing module, provided-Interface, and authority
+semantics. Unknown versions or fields fail closed. Incompatible vocabulary or
+authority changes require a separate schema identifier.
 
 A future metadata section requires a new `apiVersion`; unknown fields continue to fail closed.
 
 - A single-module v1/v2 repository needs no migration; its only key is selected.
 - A multi-module repository upgrades to v2.1 and adds an exact `defaultModule`.
 - v2 `interfaces` keep the same shape and meaning after changing to v2.1.
+- Only a repository that consumes a host Interface upgrades to v2.2 and adds
+  `interface.consume`.
 - Do not backport the new field while retaining a v1/v2 identifier.
 
 The Store does not proxy this manifest. See [Store API](./store-api.md) for the

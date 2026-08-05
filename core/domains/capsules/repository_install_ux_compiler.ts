@@ -7,6 +7,7 @@ import type {
   CapsuleInterfaceBindingProposal,
   CapsuleInterfaceBlueprint,
   CapsuleInterfaceBlueprintInput,
+  CapsuleRequiredInterface,
 } from "takosumi-contract/interfaces";
 import type {
   InstallConfigHostRuntimeMaterialization,
@@ -45,6 +46,7 @@ const SUPPORTED_REQUIREMENT_KINDS = [
   "identity.oidc",
   "secret.generated",
   "http.endpoint",
+  "interface.consume",
 ] as const;
 
 /**
@@ -141,6 +143,8 @@ export interface CompiledRepositoryInstallUx {
   readonly userVariableNames: readonly string[];
   /** Normalized Capsule-owned Interface proposals for later InstallConfig merge. */
   readonly interfaceBlueprints: readonly CapsuleInterfaceBlueprint[];
+  /** Host Interface access requested by the Capsule runtime. */
+  readonly requiredInterfaces: readonly CapsuleRequiredInterface[];
   /** Least-privilege Output projections required by those Interfaces. */
   readonly outputAllowlist: Readonly<Record<string, OutputAllowlistEntry>>;
   /**
@@ -240,6 +244,8 @@ export function compileRepositoryInstallUx(
       declarationByName,
       requirementKinds,
       input.policy?.allowedOidcScopes,
+      input.policy?.allowedInterfacePermissions,
+      input.policy?.allowedInterfaceDeliveryTypes,
     );
     if (validation) return validation;
   }
@@ -339,6 +345,7 @@ export function compileRepositoryInstallUx(
   const hostRuntimeMaterialization = compileHostRuntimeMaterialization(
     requirements,
   );
+  const requiredInterfaces = compileRequiredInterfaces(requirements);
 
   return {
     ok: true,
@@ -365,6 +372,7 @@ export function compileRepositoryInstallUx(
         .map((declaration) => declaration.name)
         .sort(),
       interfaceBlueprints: interfaceCompilation.interfaceBlueprints,
+      requiredInterfaces,
       outputAllowlist: interfaceCompilation.outputAllowlist,
     },
   };
@@ -812,12 +820,42 @@ function validateRequirement(
   declarations: ReadonlyMap<string, CapsuleRootModuleVariableDeclaration>,
   allowedKinds: ReadonlySet<RepositoryRuntimeRequirement["kind"]>,
   allowedOidcScopes: readonly string[] | undefined,
+  allowedInterfacePermissions: readonly string[] | undefined,
+  allowedInterfaceDeliveryTypes: readonly string[] | undefined,
 ): CompileRepositoryInstallUxResult | undefined {
   if (!allowedKinds.has(requirement.kind)) {
     return invalid(
       "repository_install_ux_requirement_disallowed",
       `The ${requirement.kind} requirement is not allowed by operator policy.`,
     );
+  }
+  if (requirement.kind === "interface.consume") {
+    if (!allowedInterfacePermissions?.length) {
+      return invalid(
+        "repository_install_ux_interface_permission_disallowed",
+        "Consumed Interfaces require an explicit non-empty operator permission allowlist.",
+      );
+    }
+    if (
+      requirement.permissions.some(
+        (permission) => !allowedInterfacePermissions.includes(permission),
+      )
+    ) {
+      return invalid(
+        "repository_install_ux_interface_permission_disallowed",
+        `Consumed Interface ${boundedIdentifier(requirement.key)} requests a permission outside operator policy.`,
+      );
+    }
+    const allowedDeliveryTypes = new Set(
+      allowedInterfaceDeliveryTypes ?? DEFAULT_INTERFACE_DELIVERY_TYPES,
+    );
+    if (!allowedDeliveryTypes.has(requirement.delivery.type)) {
+      return invalid(
+        "repository_install_ux_interface_delivery_disallowed",
+        `Consumed Interface ${boundedIdentifier(requirement.key)} requests a delivery type outside operator policy.`,
+      );
+    }
+    return undefined;
   }
   const targets = deliveryTargets(requirement.deliver);
   if (deliversToVariables(requirement.deliver)) {
@@ -1016,6 +1054,7 @@ function compileVariableProjections(
     }
   }
   for (const requirement of requirements) {
+    if (requirement.kind === "interface.consume") continue;
     if (!deliversToVariables(requirement.deliver)) continue;
     const variables = deliveryTargets(requirement.deliver);
     if (requirement.kind === "http.endpoint") {
@@ -1057,7 +1096,14 @@ function compileHostRuntimeMaterialization(
   requirements: readonly RepositoryRuntimeRequirement[],
 ): InstallConfigHostRuntimeMaterialization | undefined {
   const materialized = requirements.filter(
-    (requirement) => !deliversToVariables(requirement.deliver),
+    (
+      requirement,
+    ): requirement is Exclude<
+      RepositoryRuntimeRequirement,
+      { readonly kind: "interface.consume" }
+    > =>
+      requirement.kind !== "interface.consume" &&
+      !deliversToVariables(requirement.deliver),
   );
   if (materialized.length === 0) return undefined;
   const compiled: InstallConfigHostRuntimeMaterialization["requirements"][number][] =
@@ -1099,6 +1145,27 @@ function compileHostRuntimeMaterialization(
     contract: HOST_RUNTIME_MATERIALIZATION_CONTRACT,
     requirements: compiled,
   };
+}
+
+function compileRequiredInterfaces(
+  requirements: readonly RepositoryRuntimeRequirement[],
+): readonly CapsuleRequiredInterface[] {
+  return requirements
+    .filter(
+      (
+        requirement,
+      ): requirement is Extract<
+        RepositoryRuntimeRequirement,
+        { readonly kind: "interface.consume" }
+      > => requirement.kind === "interface.consume",
+    )
+    .map((requirement) => ({
+      key: requirement.key,
+      interface: { ...requirement.interface },
+      permissions: [...new Set(requirement.permissions)].sort(),
+      delivery: { type: requirement.delivery.type },
+    }))
+    .sort((left, right) => left.key.localeCompare(right.key));
 }
 
 /**

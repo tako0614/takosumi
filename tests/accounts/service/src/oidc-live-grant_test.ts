@@ -1,5 +1,8 @@
 import { expect, spyOn, test } from "bun:test";
-import type { CapsuleStatus } from "takosumi-contract/install-configs";
+import type {
+  CapsuleStatus,
+  InstallConfig,
+} from "takosumi-contract/install-configs";
 import type { WorkspaceMemberStatus } from "takosumi-contract/workspaces";
 import type { ControlPlaneOperations } from "../../../../accounts/service/src/control-operations.ts";
 import {
@@ -64,8 +67,10 @@ function liveGrantFixture() {
         },
       ],
     },
+    requiredInterfaces: undefined as InstallConfig["requiredInterfaces"],
     updatedAt: new Date(now).toISOString(),
   };
+  const requiredInterfaceCalls: unknown[] = [];
   const operations = {
     capsules: {
       getCapsule: async () => ({
@@ -93,6 +98,11 @@ function liveGrantFixture() {
         },
       ],
     },
+    interfaces: {
+      ensureCapsuleRequiredInterfaces: async (input: unknown) => {
+        requiredInterfaceCalls.push(input);
+      },
+    },
   } as unknown as ControlPlaneOperations;
 
   store.saveAccount({
@@ -107,7 +117,13 @@ function liveGrantFixture() {
     expiresAt: now + 60_000,
   });
   store.saveOidcClient(client);
-  return { store, state, operations };
+  return {
+    store,
+    state,
+    operations,
+    installConfig,
+    requiredInterfaceCalls,
+  };
 }
 
 function authorizeRequest(): { request: Request; url: URL } {
@@ -153,6 +169,44 @@ test("authorize resolves a current Capsule grant and terminal status revokes its
   expect(await denied.json()).toMatchObject({ error: "unauthorized_client" });
   expect(store.findOidcClient(clientId)).toBeUndefined();
   expect(store.findOidcClientForCapsule(capsuleId)).toBeUndefined();
+});
+
+test("authorize materializes required Interfaces for the exact pairwise Principal", async () => {
+  const {
+    store,
+    operations,
+    installConfig,
+    requiredInterfaceCalls,
+  } = liveGrantFixture();
+  installConfig.requiredInterfaces = [
+    {
+      key: "ai",
+      interface: { type: "takosumi.ai.gateway", version: "1" },
+      permissions: ["ai.chat"],
+      delivery: { type: "oauth2" },
+    },
+  ];
+  const request = authorizeRequest();
+
+  const response = await handleAuthorize({
+    ...request,
+    flow,
+    clients: new Map(),
+    store,
+    operations,
+  });
+
+  expect(response.status).toBe(302);
+  expect(requiredInterfaceCalls).toHaveLength(1);
+  expect(requiredInterfaceCalls[0]).toMatchObject({
+    workspaceId,
+    capsuleId,
+    requirements: installConfig.requiredInterfaces,
+  });
+  const principalId = (requiredInterfaceCalls[0] as { principalId: string })
+    .principalId;
+  expect(principalId).not.toBe(accountSubject);
+  expect(principalId.length).toBeGreaterThan(20);
 });
 
 test("authorization-code denial logs only its closed diagnostic stage", async () => {
