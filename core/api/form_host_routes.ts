@@ -1572,6 +1572,8 @@ function serviceError(c: Context, error: ResourceServiceError): Response {
     form_not_installed: ["conflict", 409, false],
     form_identity_conflict: ["conflict", 409, false],
     not_found: ["resource_not_found", 404, false],
+    connection_not_found: ["resource_not_found", 404, false],
+    connection_not_ready: ["resource_busy", 409, false],
     resource_version_conflict: ["conflict", 412, false],
     ownership_conflict: ["resource_busy", 409, false],
     reconcile_conflict: ["resource_busy", 409, true],

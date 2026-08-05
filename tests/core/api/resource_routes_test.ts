@@ -254,7 +254,7 @@ async function buildApp(
     },
     requestCorrelation: false,
   });
-  return { app, service, activityStore };
+  return { app, service, activityStore, stores };
 }
 
 function pendingDeploymentAdmission(): ResourceDeploymentAdmission {
@@ -1016,6 +1016,83 @@ test("portable Form host maps admission denial to policy_denied", async () => {
     hostCode: "deployment_admission_denied",
   });
   expect(body.error.code).not.toBe("forbidden");
+});
+
+test("portable Form host maps connection failures to stable non-retryable errors", async () => {
+  const { app, stores } = await buildApp(
+    {
+      resolveActor: () => ({
+        actorAccountId: "acct_portable_connections",
+        workspaceId: "workspace_1",
+        roles: ["owner"],
+        scopes: ["forms:read", "resources:*"],
+        requestId: "req_portable_connections",
+      }),
+    },
+    exactObjectBucketFormRegistry(),
+  );
+  const base = "/apis/forms.takoform.com/v1alpha1";
+  const desired = (dependency: string, name: string) => ({
+    apiVersion: "forms.takoform.com/v1alpha1",
+    kind: "ObjectBucket",
+    form: portableFormReference(),
+    metadata: { name, space: "space_1" },
+    spec: {
+      name,
+      connections: {
+        dependency: {
+          resource: dependency,
+          permissions: ["read"],
+          projection: "s3_api",
+        },
+      },
+    },
+  });
+
+  const missing = await app.request(`${base}/resources/preview`, {
+    method: "POST",
+    headers: { ...JSON_HEADERS, "if-none-match": "*" },
+    body: JSON.stringify(
+      desired("tkrn:space_1:ObjectBucket:missing", "missing-connection"),
+    ),
+  });
+  expect(missing.status).toBe(404);
+  expect(await missing.json()).toMatchObject({
+    error: {
+      code: "resource_not_found",
+      hostCode: "connection_not_found",
+      retryable: false,
+    },
+  });
+
+  await stores.resources.upsert({
+    id: "tkrn:space_1:ObjectBucket:not-ready",
+    spaceId: "space_1",
+    kind: "ObjectBucket",
+    name: "not-ready",
+    managedBy: "opentofu",
+    spec: { name: "not-ready" },
+    phase: "Applying",
+    generation: 1,
+    observedGeneration: 0,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  });
+  const notReady = await app.request(`${base}/resources/preview`, {
+    method: "POST",
+    headers: { ...JSON_HEADERS, "if-none-match": "*" },
+    body: JSON.stringify(
+      desired("tkrn:space_1:ObjectBucket:not-ready", "not-ready-connection"),
+    ),
+  });
+  expect(notReady.status).toBe(409);
+  expect(await notReady.json()).toMatchObject({
+    error: {
+      code: "resource_busy",
+      hostCode: "connection_not_ready",
+      retryable: false,
+    },
+  });
 });
 
 test("public Resource API rejects malformed or kind-mismatched exact Form identity", async () => {
