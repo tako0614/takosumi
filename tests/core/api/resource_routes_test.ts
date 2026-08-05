@@ -262,7 +262,9 @@ function pendingDeploymentAdmission(): ResourceDeploymentAdmission {
     ...NOOP_RESOURCE_DEPLOYMENT_ADMISSION,
     async reserve(_context: ResourceDeploymentReserveContext): Promise<never> {
       throw Object.assign(
-        new Error("provider-specific pending detail must not cross the boundary"),
+        new Error(
+          "provider-specific pending detail must not cross the boundary",
+        ),
         {
           code: "auto_recharge_pending",
           attemptId: "attempt_route_123",
@@ -514,9 +516,7 @@ const FORM_INTERFACE_LIFECYCLE_DESCRIPTOR = {
   inputs: [{ name: "resource", source: "resource_uri" as const }],
 };
 
-async function formInterfaceLifecycleFixture(
-  failAfterApply: boolean,
-) {
+async function formInterfaceLifecycleFixture(failAfterApply: boolean) {
   const resourceShapeStores = createInMemoryResourceShapeStores();
   const interfaceStores = createInMemoryInterfaceStores();
   const formRegistryStore = new InMemoryFormRegistryStore();
@@ -598,7 +598,9 @@ test("bootstrap materializes a successful required Form Interface exactly once",
   );
   expect(applied.status).toBe(200);
   expect(harness.counts.postApplyResourceUriResolutions).toBe(1);
-  expect(await harness.resourceShapeStores.resources.get(harness.resourceId)).toMatchObject({
+  expect(
+    await harness.resourceShapeStores.resources.get(harness.resourceId),
+  ).toMatchObject({
     phase: "Ready",
   });
   const materialized = await harness.operations.interfaces.list({
@@ -814,9 +816,9 @@ test("bootstrap fences a Ready EdgeWorker when host runtime activation fails", a
       }),
     ]),
   );
-  expect((await created.operations.interfaces.get(iface.metadata.id)).status.phase).toBe(
-    "Unknown",
-  );
+  expect(
+    (await created.operations.interfaces.get(iface.metadata.id)).status.phase,
+  ).toBe("Unknown");
 });
 
 test("PUT /v1/resources/EdgeWorker/:name applies a first-class Worker shape", async () => {
@@ -1154,9 +1156,7 @@ test("portable Form host delegates exact lifecycle to the canonical Resource and
   const discovery = await app.request("/.well-known/takoform");
   expect(discovery.status).toBe(200);
   const discoveryBody = await discovery.json();
-  expect(discoveryBody.api_versions).toEqual([
-    "forms.takoform.com/v1alpha1",
-  ]);
+  expect(discoveryBody.api_versions).toEqual(["forms.takoform.com/v1alpha1"]);
   expect(discoveryBody.endpoints.api).toEndWith(base);
 
   const forms = await app.request(`${base}/forms?space=space_1`);
@@ -1334,6 +1334,94 @@ test("portable Form host delegates exact lifecycle to the canonical Resource and
     },
   );
   expect(deleteReplay.status).toBe(204);
+
+  // Permanent idempotency remains historical evidence. Replaying the old
+  // create after deletion returns its original representation but does not
+  // recreate generation 1 in the canonical Resource store.
+  const historicalCreateReplay = await app.request(path, {
+    method: "PUT",
+    headers: applyHeaders,
+    body: JSON.stringify(applyBody),
+  });
+  expect(historicalCreateReplay.status).toBe(200);
+  expect(historicalCreateReplay.headers.get("etag")).toBe('"1"');
+  expect((await historicalCreateReplay.json()).metadata.resourceVersion).toBe(
+    "1",
+  );
+  expect(
+    (await service.get("space_1", "ObjectBucket", "portable-assets")).ok,
+  ).toBe(false);
+
+  const recreatePreview = await app.request(`${base}/resources/preview`, {
+    method: "POST",
+    headers: { ...JSON_HEADERS, "if-none-match": "*" },
+    body: JSON.stringify(desired),
+  });
+  expect(recreatePreview.status).toBe(200);
+  const recreatePreviewBody = await recreatePreview.json();
+  expect(recreatePreviewBody.review.planDigest).not.toBe(
+    previewBody.review.planDigest,
+  );
+  const recreated = await app.request(path, {
+    method: "PUT",
+    headers: {
+      ...JSON_HEADERS,
+      "if-none-match": "*",
+      "idempotency-key": "portable-create-2",
+    },
+    body: JSON.stringify({
+      ...desired,
+      review: { planDigest: recreatePreviewBody.review.planDigest },
+    }),
+  });
+  expect(recreated.status).toBe(200);
+  expect(recreated.headers.get("etag")).toBe('"2"');
+  expect((await recreated.json()).metadata.resourceVersion).toBe("2");
+
+  // Replaying the old successful delete is likewise historical: it cannot
+  // target the new incarnation that now owns the same canonical id.
+  const historicalDeleteReplay = await app.request(
+    `${path}?space=space_1&${exactQuery}`,
+    {
+      method: "DELETE",
+      headers: {
+        "if-match": '"1"',
+        "idempotency-key": "portable-delete-1",
+      },
+    },
+  );
+  expect(historicalDeleteReplay.status).toBe(204);
+  expect(
+    await service.get("space_1", "ObjectBucket", "portable-assets"),
+  ).toMatchObject({
+    ok: true,
+    value: { metadata: { generation: 2 } },
+  });
+
+  const staleRecreatedDelete = await app.request(
+    `${path}?space=space_1&${exactQuery}`,
+    {
+      method: "DELETE",
+      headers: {
+        "if-match": '"1"',
+        "idempotency-key": "portable-delete-stale-recreated",
+      },
+    },
+  );
+  expect(staleRecreatedDelete.status).toBe(412);
+  expect((await staleRecreatedDelete.json()).error.code).toBe("conflict");
+
+  const recreatedDelete = await app.request(
+    `${path}?space=space_1&${exactQuery}`,
+    {
+      method: "DELETE",
+      headers: {
+        "if-match": '"2"',
+        "idempotency-key": "portable-delete-2",
+      },
+    },
+  );
+  expect(recreatedDelete.status).toBe(204);
 });
 
 test("portable Resource ownership comes only from authenticated host run context", async () => {

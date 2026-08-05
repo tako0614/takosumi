@@ -39,6 +39,21 @@ export type ResourceShapeRecordId = string;
 export type TargetPoolRecordId = string;
 export type SpacePolicyRecordId = string;
 
+/**
+ * Server-owned incarnation fence for one canonical Resource id.
+ *
+ * The row deliberately survives hard deletion of the public Resource. It is
+ * internal lifecycle authority, not another Resource projection and not a
+ * public wire field.
+ */
+export interface ResourceIdentityFenceRecord {
+  readonly resourceId: ResourceShapeRecordId;
+  /** Highest desired Resource generation consumed for this canonical id. */
+  readonly lastGeneration: number;
+  /** Monotonic CAS token changed by apply claims and canonical retirement. */
+  readonly fenceRevision: number;
+}
+
 /** A resolved/desired Resource Shape instance and its observed status. */
 export interface ResourceShapeRecord {
   readonly id: ResourceShapeRecordId;
@@ -101,7 +116,7 @@ export interface ResourceShapePendingOperation {
    * OpenTofu lifecycle recovery points at the shared deploy-control ApplyRun;
    * direct plugins omit this field and keep using ResourceOperationRun.
    */
-  readonly authority?: "opentofu_apply_run";
+  readonly authority?: "resource_claim" | "opentofu_apply_run";
   /** Exact reviewed PlanRun used to reconstruct a missing checkpointed ApplyRun. */
   readonly planRunId?: string;
   /**
@@ -110,6 +125,12 @@ export interface ResourceShapePendingOperation {
    * operation key; it never invents a fresh quote or redispatch identity.
    */
   readonly deploymentReview?: ResourceDeploymentReview;
+  /**
+   * Fence revision bound into the reviewed plan before this apply consumed it.
+   * New recovery uses this exact revision; legacy rows omit it and retain their
+   * pre-fence digest compatibility path.
+   */
+  readonly identityFenceRevision?: number;
 }
 
 export interface ResourceShapeExecutionRecord {

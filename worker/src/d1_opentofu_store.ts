@@ -7052,10 +7052,7 @@ ${D1_PORTABLE_HOST_IDEMPOTENCY_SCHEMA_STATEMENTS.join("\n---\n")}
       return D1_PORTABLE_HOST_IDEMPOTENCY_SCHEMA_STATEMENTS;
     },
     async apply(db) {
-      await runD1AtomicSql(
-        db,
-        D1_PORTABLE_HOST_IDEMPOTENCY_SCHEMA_STATEMENTS,
-      );
+      await runD1AtomicSql(db, D1_PORTABLE_HOST_IDEMPOTENCY_SCHEMA_STATEMENTS);
     },
   },
   {
@@ -7989,19 +7986,6 @@ type D1SchemaMigrationRow = {
 };
 
 /**
- * One bounded predeploy transition for the additive Resource identity fence.
- *
- * The transition Worker may run while the live control database is still at
- * v60, then continue serving after the reviewed predeploy job advances it to
- * v61. No older prefix is accepted. Remove this predecessor allowance from
- * the final fence-runtime release after v61 has been verified live.
- */
-const D1_PREDEPLOYED_RESOURCE_IDENTITY_FENCE_TRANSITION = {
-  predecessorVersion: 60,
-  currentVersion: 61,
-} as const;
-
-/**
  * Strict read-only readiness check for hosts that predeploy the OSS control
  * schema. Unlike {@link ensureD1OpenTofuLedgerSchema}, this function never
  * executes DDL or data migration. It requires the complete current migration
@@ -8037,23 +8021,7 @@ async function validateD1OpenTofuLedgerSchemaPredeployed(
   rows: readonly D1SchemaMigrationRow[],
 ): Promise<void> {
   assertD1SchemaMigrationLedgerShape(columns);
-  const transitionCurrentIndex = D1_OPEN_TOFU_SCHEMA_MIGRATIONS.findIndex(
-    (migration) =>
-      migration.version ===
-      D1_PREDEPLOYED_RESOURCE_IDENTITY_FENCE_TRANSITION.currentVersion,
-  );
-  const transitionPredecessorIndex =
-    D1_OPEN_TOFU_SCHEMA_MIGRATIONS.findIndex(
-      (migration) =>
-        migration.version ===
-        D1_PREDEPLOYED_RESOURCE_IDENTITY_FENCE_TRANSITION.predecessorVersion,
-    );
-  const isCurrent = rows.length === D1_OPEN_TOFU_SCHEMA_MIGRATIONS.length;
-  const isImmediatePredecessor =
-    transitionCurrentIndex === D1_OPEN_TOFU_SCHEMA_MIGRATIONS.length - 1 &&
-    transitionPredecessorIndex === transitionCurrentIndex - 1 &&
-    rows.length === transitionCurrentIndex;
-  if (!isCurrent && !isImmediatePredecessor) {
+  if (rows.length !== D1_OPEN_TOFU_SCHEMA_MIGRATIONS.length) {
     throw new Error("D1 OpenTofu predeployed schema verification failed");
   }
   const expectedChecksums = await expectedD1OpenTofuSchemaMigrationChecksums();

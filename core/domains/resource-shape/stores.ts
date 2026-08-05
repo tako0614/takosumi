@@ -19,6 +19,7 @@ import {
 import type { SpaceId } from "../../shared/ids.ts";
 import type {
   ResolutionLockRecord,
+  ResourceIdentityFenceRecord,
   ResourceShapeRecord,
   ResourceShapeStateAdoptionDescriptor,
   ResourceShapeRecordId,
@@ -82,6 +83,12 @@ export interface ResourceApplyBeginInput {
   readonly expectedTargetPool?: TargetPoolRecord;
   /** Omit only for a create-only claim. Present means CAS-only. */
   readonly expected?: ResourceRecordVersion;
+  /**
+   * Persisted fence observed by preview/import, or `null` for observed absence.
+   * `undefined` is reserved for lifecycle continuations that do not allocate a
+   * new desired generation (recovery/refresh and legacy internal callers).
+   */
+  readonly expectedIdentityFence?: ResourceIdentityFenceRecord | null;
 }
 
 export type ResourceApplyBeginResult =
@@ -99,6 +106,10 @@ export type ResourceApplyBeginResult =
   | {
       readonly status: "ownership_conflict";
       readonly record: ResourceShapeRecord;
+    }
+  | {
+      readonly status: "identity_fence_conflict";
+      readonly fence?: ResourceIdentityFenceRecord;
     };
 
 export interface ResourceApplyCommitInput {
@@ -130,6 +141,14 @@ export interface ResourceApplyAbortInput {
     readonly record: ResourceShapeRecord;
     readonly lock: ResolutionLockRecord | null;
   } | null;
+  /**
+   * Restore a fence consumed by beginApply only when backend mutation never
+   * started. Known/uncertain backend outcomes intentionally omit this rollback.
+   */
+  readonly identityFenceRollback?: {
+    readonly expected: ResourceIdentityFenceRecord;
+    readonly replacement: ResourceIdentityFenceRecord | null;
+  };
 }
 
 export type ResourceApplyAbortResult =
@@ -377,6 +396,10 @@ export interface ResourceShapeStores {
   readonly locks: ResolutionLockStore;
   readonly targetPools: TargetPoolStore;
   readonly spacePolicies: SpacePolicyStore;
+  /** Read the durable incarnation authority without materializing a Resource. */
+  getResourceIdentityFence(
+    resourceId: ResourceShapeRecordId,
+  ): Promise<ResourceIdentityFenceRecord | undefined>;
   /**
    * Atomically puts one exact TargetPool version only while no ResolutionLock
    * references the pool. An identical declaration is an allowed no-op even
@@ -753,9 +776,7 @@ export class InMemoryResolutionLockStore implements ResolutionLockStore {
     }
     return unique
       .map((resourceId) => this.#byResource.get(resourceId))
-      .filter(
-        (lock): lock is ResolutionLockRecord => lock !== undefined,
-      );
+      .filter((lock): lock is ResolutionLockRecord => lock !== undefined);
   }
 
   getSync(resourceId: ResourceShapeRecordId): ResolutionLockRecord | undefined {
@@ -902,12 +923,19 @@ export function createInMemoryResourceShapeStores(): ResourceShapeStores {
   const resources = new InMemoryResourceShapeStore();
   const locks = new InMemoryResolutionLockStore();
   const targetPools = new InMemoryTargetPoolStore();
+  const identityFences = new Map<
+    ResourceShapeRecordId,
+    ResourceIdentityFenceRecord
+  >();
   return {
     persistence: "ephemeral",
     resources,
     locks,
     targetPools,
     spacePolicies: new InMemorySpacePolicyStore(),
+    getResourceIdentityFence(resourceId) {
+      return Promise.resolve(identityFences.get(resourceId));
+    },
     putTargetPool(input) {
       assertTargetPoolPutInput(input);
       const currentById = targetPools.getSync(input.record.id);
@@ -977,6 +1005,19 @@ export function createInMemoryResourceShapeStores(): ResourceShapeStores {
         }
       }
       const current = resources.getSync(input.applyingRecord.id);
+      const currentIdentityFence = identityFences.get(input.applyingRecord.id);
+      if (
+        input.expectedIdentityFence !== undefined &&
+        !matchesExpectedResourceIdentityFence(
+          currentIdentityFence,
+          input.expectedIdentityFence,
+        )
+      ) {
+        return Promise.resolve({
+          status: "identity_fence_conflict",
+          ...(currentIdentityFence ? { fence: currentIdentityFence } : {}),
+        });
+      }
       if (input.expected === undefined) {
         if (current) {
           if (current.managedBy !== input.applyingRecord.managedBy) {
@@ -1014,8 +1055,19 @@ export function createInMemoryResourceShapeStores(): ResourceShapeStores {
             input.applyingRecord,
             resourceRecordRevision(input.applyingRecord),
           );
+      const consumedIdentityFence =
+        input.expectedIdentityFence === undefined
+          ? undefined
+          : consumeResourceIdentityFence(
+              input.applyingRecord.id,
+              input.applyingRecord.generation,
+              input.expectedIdentityFence,
+            );
       resources.replaceSync(persisted);
       locks.putSync(input.plannedLock);
+      if (consumedIdentityFence) {
+        identityFences.set(input.applyingRecord.id, consumedIdentityFence);
+      }
       return Promise.resolve({
         status: "begun",
         record: persisted,
@@ -1042,6 +1094,7 @@ export function createInMemoryResourceShapeStores(): ResourceShapeStores {
       assertAbortInput(input);
       const current = resources.getSync(input.resourceId);
       const currentLock = locks.getSync(input.resourceId);
+      const currentIdentityFence = identityFences.get(input.resourceId);
       if (!current && !currentLock) {
         return Promise.resolve({ status: "not_found" });
       }
@@ -1049,7 +1102,12 @@ export function createInMemoryResourceShapeStores(): ResourceShapeStores {
         !current ||
         !currentLock ||
         !matchesVersion(current, input.expectedApplying) ||
-        !matchesApplyLock(currentLock, input.expectedPlannedLock)
+        !matchesApplyLock(currentLock, input.expectedPlannedLock) ||
+        (input.identityFenceRollback !== undefined &&
+          !matchesResourceIdentityFence(
+            currentIdentityFence,
+            input.identityFenceRollback.expected,
+          ))
       ) {
         return Promise.resolve({
           status: "conflict",
@@ -1072,6 +1130,16 @@ export function createInMemoryResourceShapeStores(): ResourceShapeStores {
         resources.deleteSync(input.resourceId);
         locks.deleteSync(input.resourceId);
       }
+      if (input.identityFenceRollback) {
+        if (input.identityFenceRollback.replacement) {
+          identityFences.set(
+            input.resourceId,
+            input.identityFenceRollback.replacement,
+          );
+        } else {
+          identityFences.delete(input.resourceId);
+        }
+      }
       return Promise.resolve({ status: "rolled_back" });
     },
     removeResource(input) {
@@ -1092,11 +1160,27 @@ export function createInMemoryResourceShapeStores(): ResourceShapeStores {
           ...(currentLock ? { lock: currentLock } : {}),
         });
       }
+      const currentIdentityFence = identityFences.get(input.resourceId);
+      if (
+        currentIdentityFence &&
+        currentIdentityFence.lastGeneration !== current.generation
+      ) {
+        return Promise.resolve({
+          status: "conflict",
+          record: current,
+          ...(currentLock ? { lock: currentLock } : {}),
+        });
+      }
+      const retiredIdentityFence = retireResourceIdentityFence(
+        current,
+        currentIdentityFence,
+      );
       // All predicates are checked before either synchronous mutation, so a
       // caller can never observe a Resource without its expected lock (or the
       // inverse) during finalization.
       locks.deleteSync(input.resourceId);
       resources.deleteSync(input.resourceId);
+      identityFences.set(input.resourceId, retiredIdentityFence);
       return Promise.resolve({ status: "removed" });
     },
     pinExactFormIdentity(input) {
@@ -1325,6 +1409,111 @@ export function nextResourceRevision(record: ResourceShapeRecord): number {
   return revision + 1;
 }
 
+export function assertResourceIdentityFence(
+  fence: ResourceIdentityFenceRecord,
+): void {
+  if (!fence.resourceId) {
+    throw new Error("Resource identity fence requires a canonical resource id");
+  }
+  if (!Number.isSafeInteger(fence.lastGeneration) || fence.lastGeneration < 1) {
+    throw new Error(
+      `invalid Resource identity fence generation ${String(fence.lastGeneration)}`,
+    );
+  }
+  if (!Number.isSafeInteger(fence.fenceRevision) || fence.fenceRevision < 1) {
+    throw new Error(
+      `invalid Resource identity fence revision ${String(fence.fenceRevision)}`,
+    );
+  }
+}
+
+export function matchesResourceIdentityFence(
+  current: ResourceIdentityFenceRecord | undefined,
+  expected: ResourceIdentityFenceRecord,
+): boolean {
+  assertResourceIdentityFence(expected);
+  return (
+    current !== undefined &&
+    current.resourceId === expected.resourceId &&
+    current.lastGeneration === expected.lastGeneration &&
+    current.fenceRevision === expected.fenceRevision
+  );
+}
+
+export function matchesExpectedResourceIdentityFence(
+  current: ResourceIdentityFenceRecord | undefined,
+  expected: ResourceIdentityFenceRecord | null,
+): boolean {
+  return expected === null
+    ? current === undefined
+    : matchesResourceIdentityFence(current, expected);
+}
+
+/** Consume the exact read-only preview/import fence for one new generation. */
+export function consumeResourceIdentityFence(
+  resourceId: ResourceShapeRecordId,
+  generation: number,
+  expected: ResourceIdentityFenceRecord | null,
+): ResourceIdentityFenceRecord {
+  if (!Number.isSafeInteger(generation) || generation < 1) {
+    throw new Error(`invalid Resource generation ${String(generation)}`);
+  }
+  if (expected) {
+    assertResourceIdentityFence(expected);
+    if (expected.resourceId !== resourceId) {
+      throw new Error(
+        `Resource identity fence ${expected.resourceId} does not belong to ${resourceId}`,
+      );
+    }
+    if (generation !== expected.lastGeneration + 1) {
+      throw new Error(
+        `Resource ${resourceId} generation ${generation} does not advance identity fence ${expected.lastGeneration}`,
+      );
+    }
+    if (expected.fenceRevision === Number.MAX_SAFE_INTEGER) {
+      throw new Error(
+        `Resource ${resourceId} identity fence revision overflow`,
+      );
+    }
+  }
+  return {
+    resourceId,
+    lastGeneration: generation,
+    fenceRevision: (expected?.fenceRevision ?? 0) + 1,
+  };
+}
+
+/** Retire one exact live generation while preserving its canonical identity. */
+export function retireResourceIdentityFence(
+  record: ResourceShapeRecord,
+  current: ResourceIdentityFenceRecord | undefined,
+): ResourceIdentityFenceRecord {
+  if (!Number.isSafeInteger(record.generation) || record.generation < 1) {
+    throw new Error(
+      `invalid Resource ${record.id} generation ${String(record.generation)}`,
+    );
+  }
+  if (current) {
+    assertResourceIdentityFence(current);
+    if (
+      current.resourceId !== record.id ||
+      current.lastGeneration !== record.generation
+    ) {
+      throw new Error(
+        `Resource ${record.id} identity fence does not match live generation`,
+      );
+    }
+    if (current.fenceRevision === Number.MAX_SAFE_INTEGER) {
+      throw new Error(`Resource ${record.id} identity fence revision overflow`);
+    }
+  }
+  return {
+    resourceId: record.id,
+    lastGeneration: record.generation,
+    fenceRevision: (current?.fenceRevision ?? 0) + 1,
+  };
+}
+
 function withResourceRevision(
   record: ResourceShapeRecord,
   revision: number,
@@ -1407,6 +1596,23 @@ export function assertAbortInput(input: ResourceApplyAbortInput): void {
       throw new Error(
         "replacement ResolutionLock does not match rollback Resource",
       );
+    }
+  }
+  const fenceRollback = input.identityFenceRollback;
+  if (fenceRollback) {
+    assertResourceIdentityFence(fenceRollback.expected);
+    if (fenceRollback.expected.resourceId !== input.resourceId) {
+      throw new Error(
+        "expected identity fence does not match rollback Resource",
+      );
+    }
+    if (fenceRollback.replacement) {
+      assertResourceIdentityFence(fenceRollback.replacement);
+      if (fenceRollback.replacement.resourceId !== input.resourceId) {
+        throw new Error(
+          "replacement identity fence does not match rollback Resource",
+        );
+      }
     }
   }
 }

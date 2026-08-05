@@ -1195,7 +1195,10 @@ test("principal-readable Form Definition reuses exact availability evidence", as
     eligibleTargetPoolClasses: ["test"],
     deprecated: false,
   };
-  const readable = await readableFormService(evidence, definition).getReadableFormDefinition({
+  const readable = await readableFormService(
+    evidence,
+    definition,
+  ).getReadableFormDefinition({
     actor: ACTOR,
     space: "space_1",
     identity: EXACT_FORM,
@@ -1235,12 +1238,14 @@ test("principal-readable Form Definition fails closed for wrong package, unknown
     { ...base, definitionKnown: false },
     { ...base, availableToPrincipal: false },
   ]) {
-    const readable = await readableFormService(evidence, definition)
-      .getReadableFormDefinition({
-        actor: ACTOR,
-        space: "space_1",
-        identity: evidence.form,
-      });
+    const readable = await readableFormService(
+      evidence,
+      definition,
+    ).getReadableFormDefinition({
+      actor: ACTOR,
+      space: "space_1",
+      identity: evidence.form,
+    });
     expect(readable).toBeUndefined();
   }
 });
@@ -1561,7 +1566,7 @@ test("exact direct-plugin lifecycle propagates one immutable Form through Runs, 
   );
 });
 
-test("direct-plugin delete and recreate mints a fresh backend revision even when generation resets", async () => {
+test("direct-plugin delete and recreate advances the durable Resource incarnation", async () => {
   class RevisionScopedPlanAdapter extends PluginSpyAdapter {
     override async preview(
       input: AdapterApplyInput,
@@ -1616,7 +1621,16 @@ test("direct-plugin delete and recreate mints a fresh backend revision even when
   };
   const id = "tkrn:space_1:ContainerService:agent-recreated";
 
-  expect((await reviewedApply(service, request)).ok).toBe(true);
+  const firstPreview = await service.preview(request);
+  expect(firstPreview.ok).toBe(true);
+  if (!firstPreview.ok) throw new Error(firstPreview.error.message);
+  expect(
+    (
+      await service.apply(request, {
+        planDigest: firstPreview.value.planDigest,
+      })
+    ).ok,
+  ).toBe(true);
   const first = await stores.resources.get(id);
   expect(first?.generation).toBe(1);
   expect(first?.lastOperationRunId).toBeDefined();
@@ -1625,9 +1639,7 @@ test("direct-plugin delete and recreate mints a fresh backend revision even when
   );
   expect(adapter.applyInputs[0]?.previousResourceRevisionId).toBeUndefined();
   const firstNativeId = adapter.applyInputs[0]?.nativeResources?.[0]?.id;
-  expect(firstNativeId).toBe(
-    `agent-recreated@${first?.lastOperationRunId}`,
-  );
+  expect(firstNativeId).toBe(`agent-recreated@${first?.lastOperationRunId}`);
 
   expect(
     (
@@ -1644,21 +1656,113 @@ test("direct-plugin delete and recreate mints a fresh backend revision even when
   );
   expect(await stores.resources.get(id)).toBeUndefined();
 
-  expect((await reviewedApply(service, request)).ok).toBe(true);
+  const staleApply = await service.apply(request, {
+    planDigest: firstPreview.value.planDigest,
+  });
+  expect(staleApply).toMatchObject({
+    ok: false,
+    error: { code: "deployment_plan_changed" },
+  });
+  expect(await stores.resources.get(id)).toBeUndefined();
+
+  const secondPreview = await service.preview(request);
+  expect(secondPreview.ok).toBe(true);
+  if (!secondPreview.ok) throw new Error(secondPreview.error.message);
+  expect(secondPreview.value.planDigest).not.toBe(
+    firstPreview.value.planDigest,
+  );
+  expect(
+    (
+      await service.apply(request, {
+        planDigest: secondPreview.value.planDigest,
+      })
+    ).ok,
+  ).toBe(true);
   const recreated = await stores.resources.get(id);
-  expect(recreated?.generation).toBe(1);
+  expect(recreated?.generation).toBe(2);
   expect(recreated?.lastOperationRunId).toBeDefined();
   expect(recreated?.lastOperationRunId).not.toBe(first?.lastOperationRunId);
   expect(adapter.applyInputs[1]?.resourceRevisionId).toBe(
     recreated?.lastOperationRunId,
   );
   expect(adapter.applyInputs[1]?.previousResourceRevisionId).toBeUndefined();
-  const recreatedNativeId =
-    adapter.applyInputs[1]?.nativeResources?.[0]?.id;
+  const recreatedNativeId = adapter.applyInputs[1]?.nativeResources?.[0]?.id;
   expect(recreatedNativeId).toBe(
     `agent-recreated@${recreated?.lastOperationRunId}`,
   );
   expect(recreatedNativeId).not.toBe(firstNativeId);
+
+  const staleDelete = await service.delete(
+    "space_1",
+    "ContainerService",
+    "agent-recreated",
+    ACTOR,
+    { expectedGeneration: 1 },
+  );
+  expect(staleDelete).toMatchObject({
+    ok: false,
+    error: { code: "resource_version_conflict" },
+  });
+  expect(adapter.deleteInputs).toHaveLength(1);
+  expect(await stores.resources.get(id)).toMatchObject({ generation: 2 });
+
+  expect(
+    (
+      await service.delete(
+        "space_1",
+        "ContainerService",
+        "agent-recreated",
+        ACTOR,
+        { expectedGeneration: 2 },
+      )
+    ).ok,
+  ).toBe(true);
+  expect(adapter.deleteInputs[1]?.resourceGeneration).toBe(2);
+});
+
+test("Resource incarnation exhaustion fails preview closed before adapter work", async () => {
+  const stores = createInMemoryResourceShapeStores();
+  const adapter = new PluginSpyAdapter();
+  const service = new ResourceShapeService({
+    stores,
+    adapter,
+    ...directOperationLedger(),
+    now: () => NOW,
+  });
+  await seed(service);
+  await stores.resources.upsert({
+    id: "tkrn:space_1:ContainerService:exhausted",
+    spaceId: "space_1",
+    kind: "ContainerService",
+    name: "exhausted",
+    managedBy: "opentofu",
+    spec: {
+      name: "exhausted",
+      image: "ghcr.io/example/agent:1.0.0",
+    },
+    phase: "Ready",
+    generation: Number.MAX_SAFE_INTEGER,
+    observedGeneration: Number.MAX_SAFE_INTEGER,
+    createdAt: NOW,
+    updatedAt: NOW,
+  });
+
+  const preview = await service.preview({
+    actor: ACTOR,
+    space: "space_1",
+    kind: "ContainerService",
+    name: "exhausted",
+    expectedGeneration: Number.MAX_SAFE_INTEGER,
+    spec: {
+      name: "exhausted",
+      image: "ghcr.io/example/agent:2.0.0",
+    },
+  });
+  expect(preview).toMatchObject({
+    ok: false,
+    error: { code: "resource_version_conflict" },
+  });
+  expect(adapter.previewInputs).toHaveLength(0);
 });
 
 test("exact direct-plugin preview rejects adapter NativeResource Form substitution", async () => {
@@ -2421,6 +2525,7 @@ test("admission denial rolls back the claimed Resource before backend work", asy
   expect(adapter.applyInputs).toHaveLength(0);
   expect(await stores.resources.get(APPLY_ID)).toBeUndefined();
   expect(await stores.locks.get(APPLY_ID)).toBeUndefined();
+  expect(await stores.getResourceIdentityFence(APPLY_ID)).toBeUndefined();
 });
 
 test("pending deployment admission is provider-neutral and preserves retry evidence", async () => {
@@ -2889,7 +2994,9 @@ test("OpenTofu checkpoint write failure dispatches no ApplyRun and leaves Resour
   const retried = await reviewedApply(service, APPLY);
   expect(retried.ok).toBe(true);
   expect(adapter.applyRunIds).toEqual(["apply_exact_A"]);
-  expect(await stores.resources.get(APPLY_ID)).toMatchObject({ phase: "Ready" });
+  expect(await stores.resources.get(APPLY_ID)).toMatchObject({
+    phase: "Ready",
+  });
 });
 
 test("OpenTofu re-apply upgrades an exact legacy execution that has no state digest", async () => {
@@ -3127,6 +3234,48 @@ test("import adopts existing backend identity into Resource-owned state and outp
     },
   });
   expect(adapter.importInputs).toHaveLength(1);
+});
+
+test("failed existing-resource import restores its prior incarnation fence", async () => {
+  const stores = createInMemoryResourceShapeStores();
+  const adapter = new FailingImportAdapter();
+  const service = new ResourceShapeService({
+    stores,
+    adapter,
+    now: () => NOW,
+    moduleRegistry: TEST_RESOURCE_SHAPE_MODULE_REGISTRY,
+  });
+  await seed(service);
+  expect((await reviewedApply(service, APPLY)).ok).toBe(true);
+  const before = await stores.resources.get(APPLY_ID);
+  const lockBefore = await stores.locks.get(APPLY_ID);
+  if (!before || !lockBefore) throw new Error("missing Ready import fixture");
+  const fenceBefore = await stores.getResourceIdentityFence(APPLY_ID);
+  expect(fenceBefore).toEqual({
+    resourceId: APPLY_ID,
+    lastGeneration: 1,
+    fenceRevision: 1,
+  });
+
+  const failed = await service.importResource({
+    ...APPLY,
+    expectedGeneration: 1,
+    nativeId: "replacement-backend-456",
+  });
+  expect(failed).toMatchObject({
+    ok: false,
+    error: { code: "import_failed" },
+  });
+  expect(adapter.importInputs.at(-1)?.resourceGeneration).toBe(2);
+  expect(await stores.resources.get(APPLY_ID)).toMatchObject({
+    id: before.id,
+    spec: before.spec,
+    phase: "Ready",
+    generation: 1,
+    observedGeneration: 1,
+  });
+  expect(await stores.locks.get(APPLY_ID)).toEqual(lockBefore);
+  expect(await stores.getResourceIdentityFence(APPLY_ID)).toEqual(fenceBefore);
 });
 
 test("import finalization retries only the exact request without exposing nativeId in conditions", async () => {
@@ -4635,9 +4784,7 @@ test("Form-backed apply recovery consumes pinned admission after the backend was
     expect(pending.error.code).toBe("deployment_finalize_pending");
   }
   const pinnedReview = (
-    await stores.resources.get(
-      "tkrn:space_1:ContainerService:form-recovery",
-    )
+    await stores.resources.get("tkrn:space_1:ContainerService:form-recovery")
   )?.pendingOperation?.deploymentReview;
   expect(pinnedReview).toEqual({ planDigest: preview.value.planDigest });
 
@@ -5410,8 +5557,7 @@ test("direct-plugin EdgeWorker delete recovery retires retained runtime when pro
   );
   expect(retired).toEqual([
     {
-      resourceId:
-        "tkrn:space_1:EdgeWorker:missing-provider-retained-runtime",
+      resourceId: "tkrn:space_1:EdgeWorker:missing-provider-retained-runtime",
       resourceGeneration: 1,
       resourceRevisionId: firstAdapter.applyInputs[0]?.resourceRevisionId,
     },
@@ -6252,9 +6398,7 @@ test("a TargetPool delete that commits before apply claim makes apply reject wit
   const applying = reviewedApply(service, APPLY);
   await beginApplyEntered;
 
-  expect((await service.deleteTargetPool("space_1", "default")).ok).toBe(
-    true,
-  );
+  expect((await service.deleteTargetPool("space_1", "default")).ok).toBe(true);
   releaseBeginApply();
 
   const result = await applying;
@@ -6722,10 +6866,7 @@ test("OpenTofu delete finalization recovery reuses the checkpointed successful A
     ACTOR,
   );
   expect(recovered.ok).toBe(true);
-  expect(adapter.destroyRunIds).toEqual([
-    "destroy_exact_A",
-    "destroy_exact_A",
-  ]);
+  expect(adapter.destroyRunIds).toEqual(["destroy_exact_A", "destroy_exact_A"]);
   expect(adapter.deleteInputs[0]?.opentofuApplyRun?.applyRunId).toBeUndefined();
   expect(adapter.deleteInputs[1]?.opentofuApplyRun?.applyRunId).toBe(
     "destroy_exact_A",

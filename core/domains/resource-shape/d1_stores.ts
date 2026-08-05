@@ -34,6 +34,7 @@ import type { SpaceId } from "../../shared/ids.ts";
 import type { IsoTimestamp } from "../../shared/time.ts";
 import type {
   ResolutionLockRecord,
+  ResourceIdentityFenceRecord,
   ResourceShapeExecutionRecord,
   ResourceShapePendingOperation,
   ResourceShapeRecord,
@@ -80,14 +81,19 @@ import {
   assertAtomicRemoveInput,
   assertApplyPair,
   assertExpectedTargetPool,
+  assertResourceIdentityFence,
   assertTargetPoolDeleteInput,
   assertTargetPoolPutInput,
   matchesApplyLock,
   matchesExpectedTargetPool,
+  matchesExpectedResourceIdentityFence,
   matchesExpectedLock,
+  matchesResourceIdentityFence,
   matchesTargetPool,
   matchesVersion,
   resourceRecordRevision,
+  consumeResourceIdentityFence,
+  retireResourceIdentityFence,
   assertResourceFormIdentityPinInput,
   targetPoolSpecsEqual,
 } from "./stores.ts";
@@ -160,6 +166,12 @@ interface ResolutionLockRow {
   readonly native_resources_json: string | null;
   readonly locked_at: string;
   readonly updated_at: string;
+}
+
+interface ResourceIdentityFenceRow {
+  readonly resource_id: string;
+  readonly last_generation: number;
+  readonly fence_revision: number;
 }
 
 interface NamedSpecRow {
@@ -900,6 +912,9 @@ export function createD1ResourceShapeStores(db: D1Like): ResourceShapeStores {
     locks: new D1ResolutionLockStore(db),
     targetPools: new D1TargetPoolStore(db),
     spacePolicies: new D1SpacePolicyStore(db),
+    getResourceIdentityFence(resourceId) {
+      return readD1ResourceIdentityFence(db, resourceId);
+    },
     putTargetPool: (input) => putD1TargetPool(db, input),
     deleteTargetPool: (input) => deleteD1TargetPool(db, input),
     beginApply: (input) => beginD1Apply(db, input),
@@ -1069,6 +1084,36 @@ async function beginD1Apply(
   assertApplyPair(input.applyingRecord, input.plannedLock, "Applying");
   assertExpectedTargetPool(input);
   const batch = requireD1Batch(db);
+  const initialIdentityFence =
+    input.expectedIdentityFence === undefined
+      ? undefined
+      : await readD1ResourceIdentityFence(db, input.applyingRecord.id);
+  if (
+    input.expectedIdentityFence !== undefined &&
+    !matchesExpectedResourceIdentityFence(
+      initialIdentityFence,
+      input.expectedIdentityFence,
+    )
+  ) {
+    return {
+      status: "identity_fence_conflict",
+      ...(initialIdentityFence ? { fence: initialIdentityFence } : {}),
+    };
+  }
+  const consumedIdentityFence =
+    input.expectedIdentityFence === undefined
+      ? undefined
+      : consumeResourceIdentityFence(
+          input.applyingRecord.id,
+          input.applyingRecord.generation,
+          input.expectedIdentityFence,
+        );
+  // The pending-operation Run is the claimant authority already carried by
+  // the Resource row.  A fence/revision pair alone is not enough to identify
+  // the caller after an acknowledgement is lost: another caller can have
+  // preflighted the same pair and then lose the batch CAS.  Recovery must
+  // therefore prove that this exact Run is still the persisted claim.
+  const claimantAuthority = resourceClaimantAuthority(input.applyingRecord);
   const statements = [
     ...(input.expectedTargetPool
       ? [
@@ -1079,6 +1124,15 @@ async function beginD1Apply(
           ),
         ]
       : []),
+    ...(input.expectedIdentityFence === undefined
+      ? []
+      : [
+          resourceIdentityFenceGuardStatement(
+            db,
+            input.applyingRecord.id,
+            input.expectedIdentityFence,
+          ),
+        ]),
     input.expected === undefined
       ? createOnlyGuardStatement(db, input.applyingRecord.id)
       : versionGuardStatement(
@@ -1098,11 +1152,60 @@ async function beginD1Apply(
           .bind(...resourceParameters(input.applyingRecord))
       : resourceUpdateStatement(db, input.applyingRecord),
     lockUpsertStatement(db, input.plannedLock),
+    ...(consumedIdentityFence === undefined
+      ? []
+      : [resourceIdentityFenceUpsertStatement(db, consumedIdentityFence)]),
   ] as const;
   try {
     await batch(statements);
   } catch (error) {
-    const current = await readD1Resource(db, input.applyingRecord.id);
+    const [current, currentLock, currentIdentityFence] = await Promise.all([
+      readD1Resource(db, input.applyingRecord.id),
+      consumedIdentityFence === undefined
+        ? Promise.resolve(undefined)
+        : readD1Lock(db, input.applyingRecord.id),
+      input.expectedIdentityFence === undefined
+        ? Promise.resolve(undefined)
+        : readD1ResourceIdentityFence(db, input.applyingRecord.id),
+    ]);
+    const appliedRevision = expectedBeginResourceRevision(input);
+    if (
+      consumedIdentityFence !== undefined &&
+      claimantAuthority !== undefined &&
+      appliedRevision !== undefined &&
+      current !== undefined &&
+      currentLock !== undefined &&
+      currentIdentityFence !== undefined &&
+      resourceRecordsEqualForApply(
+        current,
+        input.applyingRecord,
+        appliedRevision,
+      ) &&
+      resourceClaimantAuthority(current) === claimantAuthority &&
+      matchesApplyLock(currentLock, input.plannedLock) &&
+      matchesResourceIdentityFence(currentIdentityFence, consumedIdentityFence)
+    ) {
+      // D1 can commit the batch and lose only the acknowledgement. Re-read
+      // the exact Resource + lock + consumed fence before treating the error
+      // as a conflict; a different winner remains fail-closed below.
+      return {
+        status: "begun",
+        record: current,
+        lock: currentLock,
+      };
+    }
+    if (
+      input.expectedIdentityFence !== undefined &&
+      !matchesExpectedResourceIdentityFence(
+        currentIdentityFence,
+        input.expectedIdentityFence,
+      )
+    ) {
+      return {
+        status: "identity_fence_conflict",
+        ...(currentIdentityFence ? { fence: currentIdentityFence } : {}),
+      };
+    }
     if (input.expected === undefined) {
       if (current) {
         if (current.managedBy !== input.applyingRecord.managedBy) {
@@ -1184,6 +1287,12 @@ async function abortD1Apply(
 ): Promise<ResourceApplyAbortResult> {
   assertAbortInput(input);
   const batch = requireD1Batch(db);
+  // Capture the pre-rollback revision/fence so acknowledgement-loss recovery
+  // can prove the exact replacement state, including D1's revision increment.
+  const [before, beforeIdentityFence] = await Promise.all([
+    readD1Resource(db, input.resourceId),
+    readD1ResourceIdentityFence(db, input.resourceId),
+  ]);
   const replacementStatements = input.replacement
     ? [
         resourceUpdateStatement(db, input.replacement.record),
@@ -1206,19 +1315,63 @@ async function abortD1Apply(
   try {
     await batch([
       applyAndLockGuardStatement(db, input),
+      ...(input.identityFenceRollback
+        ? [
+            resourceIdentityFenceGuardStatement(
+              db,
+              input.resourceId,
+              input.identityFenceRollback.expected,
+            ),
+          ]
+        : []),
       ...replacementStatements,
+      ...(input.identityFenceRollback
+        ? [
+            input.identityFenceRollback.replacement
+              ? resourceIdentityFenceUpsertStatement(
+                  db,
+                  input.identityFenceRollback.replacement,
+                )
+              : db
+                  .prepare(
+                    `delete from ${names.resourceIdentityFences} where resource_id = ?`,
+                  )
+                  .bind(input.resourceId),
+          ]
+        : []),
     ]);
   } catch (error) {
-    const [current, currentLock] = await Promise.all([
+    const [current, currentLock, currentIdentityFence] = await Promise.all([
       readD1Resource(db, input.resourceId),
       readD1Lock(db, input.resourceId),
+      readD1ResourceIdentityFence(db, input.resourceId),
     ]);
+    if (
+      abortPostStateMatches(
+        current,
+        currentLock,
+        currentIdentityFence,
+        before,
+        beforeIdentityFence,
+        input,
+      )
+    ) {
+      // D1 can commit the whole rollback and lose only the acknowledgement.
+      // Return success only for the exact intended Resource + Lock + Fence
+      // post-state; the old Applying pair is not sufficient evidence.
+      return { status: "rolled_back" };
+    }
     if (!current && !currentLock) return { status: "not_found" };
     if (
       !current ||
       !currentLock ||
       !matchesVersion(current, input.expectedApplying) ||
-      !matchesApplyLock(currentLock, input.expectedPlannedLock)
+      !matchesApplyLock(currentLock, input.expectedPlannedLock) ||
+      (input.identityFenceRollback !== undefined &&
+        !matchesExpectedResourceIdentityFence(
+          currentIdentityFence,
+          input.identityFenceRollback.expected,
+        ))
     ) {
       return {
         status: "conflict",
@@ -1231,32 +1384,121 @@ async function abortD1Apply(
   return { status: "rolled_back" };
 }
 
+function abortPostStateMatches(
+  current: ResourceShapeRecord | undefined,
+  currentLock: ResolutionLockRecord | undefined,
+  currentIdentityFence: ResourceIdentityFenceRecord | undefined,
+  before: ResourceShapeRecord | undefined,
+  beforeIdentityFence: ResourceIdentityFenceRecord | undefined,
+  input: ResourceApplyAbortInput,
+): boolean {
+  if (input.replacement === null) {
+    if (current !== undefined || currentLock !== undefined) return false;
+  } else {
+    const expectedRevision =
+      input.expectedApplying.revision !== undefined
+        ? input.expectedApplying.revision + 1
+        : before === undefined
+          ? resourceRecordRevision(input.replacement.record) + 1
+          : resourceRecordRevision(before) + 1;
+    const expectedRecord = {
+      ...input.replacement.record,
+      revision: expectedRevision,
+    };
+    if (
+      current === undefined ||
+      canonicalJson(current) !== canonicalJson(expectedRecord)
+    ) {
+      return false;
+    }
+    if (input.replacement.lock === null) {
+      if (currentLock !== undefined) return false;
+    } else if (
+      currentLock === undefined ||
+      !matchesApplyLock(currentLock, input.replacement.lock)
+    ) {
+      return false;
+    }
+  }
+
+  if (input.identityFenceRollback === undefined) {
+    return matchesFenceState(currentIdentityFence, beforeIdentityFence);
+  }
+  const replacement = input.identityFenceRollback.replacement;
+  return replacement === null
+    ? currentIdentityFence === undefined
+    : currentIdentityFence !== undefined &&
+        matchesResourceIdentityFence(currentIdentityFence, replacement);
+}
+
+function matchesFenceState(
+  current: ResourceIdentityFenceRecord | undefined,
+  expected: ResourceIdentityFenceRecord | undefined,
+): boolean {
+  if (expected === undefined) return current === undefined;
+  return (
+    current !== undefined && matchesResourceIdentityFence(current, expected)
+  );
+}
+
 async function removeD1Resource(
   db: D1Like,
   input: ResourceAtomicRemoveInput,
 ): Promise<ResourceAtomicRemoveResult> {
   assertAtomicRemoveInput(input);
   const batch = requireD1Batch(db);
+  const currentIdentityFence = await readD1ResourceIdentityFence(
+    db,
+    input.resourceId,
+  );
+  const expectedIdentityFence = currentIdentityFence ?? null;
+  const retiredIdentityFence =
+    currentIdentityFence === undefined
+      ? {
+          resourceId: input.resourceId,
+          lastGeneration: input.expected.generation,
+          fenceRevision: 1,
+        }
+      : currentIdentityFence.lastGeneration === input.expected.generation
+        ? retireResourceIdentityFence(
+            {
+              id: input.resourceId,
+              generation: input.expected.generation,
+            } as ResourceShapeRecord,
+            currentIdentityFence,
+          )
+        : {
+            // The guard below will reject this stale generation. Keep the
+            // statement bindable so the conflict can be mapped uniformly.
+            resourceId: input.resourceId,
+            lastGeneration: input.expected.generation,
+            fenceRevision: currentIdentityFence.fenceRevision,
+          };
   try {
     await batch([
-      atomicRemoveGuardStatement(db, input),
+      atomicRemoveGuardStatement(db, input, currentIdentityFence),
       db
         .prepare(`delete from ${names.resolutionLocks} where resource_id = ?`)
         .bind(input.resourceId),
       db
         .prepare(`delete from ${names.resourceShapes} where id = ?`)
         .bind(input.resourceId),
+      resourceIdentityFenceUpsertStatement(db, retiredIdentityFence),
     ]);
   } catch (error) {
-    const [current, currentLock] = await Promise.all([
+    const [current, currentLock, currentFence] = await Promise.all([
       readD1Resource(db, input.resourceId),
       readD1Lock(db, input.resourceId),
+      readD1ResourceIdentityFence(db, input.resourceId),
     ]);
     if (!current && !currentLock) return { status: "not_found" };
     if (
       !current ||
       !matchesVersion(current, input.expected) ||
-      !matchesExpectedLock(currentLock, input.expectedLock)
+      !matchesExpectedLock(currentLock, input.expectedLock) ||
+      (currentFence !== undefined &&
+        currentFence.lastGeneration !== input.expected.generation) ||
+      !matchesExpectedResourceIdentityFence(currentFence, expectedIdentityFence)
     ) {
       return {
         status: "conflict",
@@ -1281,6 +1523,62 @@ function requireD1Batch(
     throw new Error(`${operation} requires D1 batch support`);
   }
   return (statements) => db.batch!(statements);
+}
+
+/**
+ * D1 has no conditional batch branching. The nullable NOT NULL insert below
+ * succeeds only when the exact expected fence is present (or absent for a
+ * null expectation); every mismatch deliberately aborts the whole batch.
+ */
+function resourceIdentityFenceGuardStatement(
+  db: D1Like,
+  resourceId: ResourceShapeRecordId,
+  expected: ResourceIdentityFenceRecord | null,
+): D1LikePreparedStatement {
+  const predicate =
+    expected === null
+      ? `not exists (
+          select 1 from ${names.resourceIdentityFences}
+          where resource_id = ?
+        )`
+      : `exists (
+          select 1 from ${names.resourceIdentityFences}
+          where resource_id = ?
+            and last_generation = ?
+            and fence_revision = ?
+        )`;
+  return db
+    .prepare(
+      `insert into ${names.resourceIdentityFences} (
+        resource_id, last_generation, fence_revision
+      )
+      select ?, null, null
+      where not (${predicate})`,
+    )
+    .bind(
+      resourceId,
+      resourceId,
+      ...(expected === null
+        ? []
+        : [expected.lastGeneration, expected.fenceRevision]),
+    );
+}
+
+function resourceIdentityFenceUpsertStatement(
+  db: D1Like,
+  fence: ResourceIdentityFenceRecord,
+): D1LikePreparedStatement {
+  assertResourceIdentityFence(fence);
+  return db
+    .prepare(
+      `insert into ${names.resourceIdentityFences} (
+        resource_id, last_generation, fence_revision
+      ) values (?, ?, ?)
+      on conflict (resource_id) do update set
+        last_generation = excluded.last_generation,
+        fence_revision = excluded.fence_revision`,
+    )
+    .bind(fence.resourceId, fence.lastGeneration, fence.fenceRevision);
 }
 
 function targetPoolExpectationGuardStatement(
@@ -1621,6 +1919,7 @@ function applyAndLockGuardStatement(
 function atomicRemoveGuardStatement(
   db: D1Like,
   input: ResourceAtomicRemoveInput,
+  expectedIdentityFence: ResourceIdentityFenceRecord | undefined,
 ): D1LikePreparedStatement {
   const expectedLock = input.expectedLock;
   const revisionPredicate =
@@ -1648,6 +1947,17 @@ function atomicRemoveGuardStatement(
         select 1 from ${names.resolutionLocks} resolution
         where resolution.resource_id = resource.id
       )`;
+  const identityFencePredicate = expectedIdentityFence
+    ? `exists (
+        select 1 from ${names.resourceIdentityFences} identity_fence
+        where identity_fence.resource_id = resource.id
+          and identity_fence.last_generation = ?
+          and identity_fence.fence_revision = ?
+      )`
+    : `not exists (
+        select 1 from ${names.resourceIdentityFences} identity_fence
+        where identity_fence.resource_id = resource.id
+      )`;
   return db
     .prepare(
       `insert into ${names.resourceShapes} (
@@ -1663,6 +1973,7 @@ function atomicRemoveGuardStatement(
           and resource.updated_at = ?
           ${revisionPredicate}
           and ${lockPredicate}
+          and ${identityFencePredicate}
       )`,
     )
     .bind(
@@ -1675,6 +1986,9 @@ function atomicRemoveGuardStatement(
         ? []
         : [input.expected.revision]),
       ...(expectedLock ? exactLockParameters(expectedLock) : []),
+      ...(expectedIdentityFence
+        ? [input.expected.generation, expectedIdentityFence.fenceRevision]
+        : []),
     );
 }
 
@@ -1735,6 +2049,21 @@ async function readD1Resource(
     .bind(resourceId)
     .first<ResourceShapeRow>();
   return row ? resourceShapeFromRow(row) : undefined;
+}
+
+async function readD1ResourceIdentityFence(
+  db: D1Like,
+  resourceId: ResourceShapeRecordId,
+): Promise<ResourceIdentityFenceRecord | undefined> {
+  const row = await db
+    .prepare(
+      `select resource_id, last_generation, fence_revision
+       from ${names.resourceIdentityFences}
+       where resource_id = ? limit 1`,
+    )
+    .bind(resourceId)
+    .first<ResourceIdentityFenceRow>();
+  return row ? resourceIdentityFenceFromRow(row) : undefined;
 }
 
 async function readD1Lock(
@@ -1984,6 +2313,18 @@ function resourceShapeFromRow(row: ResourceShapeRow): ResourceShapeRecord {
   };
 }
 
+function resourceIdentityFenceFromRow(
+  row: ResourceIdentityFenceRow,
+): ResourceIdentityFenceRecord {
+  const fence: ResourceIdentityFenceRecord = {
+    resourceId: row.resource_id,
+    lastGeneration: Number(row.last_generation),
+    fenceRevision: Number(row.fence_revision),
+  };
+  assertResourceIdentityFence(fence);
+  return fence;
+}
+
 function normalizeStoredRevision(value: unknown): number {
   if (value === undefined || value === null) return 0;
   const revision = Number(value);
@@ -1991,6 +2332,56 @@ function normalizeStoredRevision(value: unknown): number {
     throw new Error(`invalid durable Resource revision ${String(value)}`);
   }
   return revision;
+}
+
+function expectedBeginResourceRevision(
+  input: ResourceApplyBeginInput,
+): number | undefined {
+  const currentRevision =
+    input.expected === undefined
+      ? resourceRecordRevision(input.applyingRecord)
+      : (input.expected.revision ??
+        resourceRecordRevision(input.applyingRecord));
+  if (input.expected === undefined) return currentRevision;
+  return currentRevision === Number.MAX_SAFE_INTEGER
+    ? undefined
+    : currentRevision + 1;
+}
+
+function resourceRecordsEqualForApply(
+  current: ResourceShapeRecord,
+  applying: ResourceShapeRecord,
+  expectedRevision: number,
+): boolean {
+  return (
+    canonicalJson(current) ===
+    canonicalJson({ ...applying, revision: expectedRevision })
+  );
+}
+
+/** Return the durable Run authority that identifies one apply claimant. */
+function resourceClaimantAuthority(
+  record: ResourceShapeRecord,
+): string | undefined {
+  const pending = record.pendingOperation;
+  if (!pending?.runId) return undefined;
+  return `${pending.operation}:${pending.runId}:${pending.operationKey}`;
+}
+
+function canonicalJson(value: unknown): string {
+  if (value === undefined) return "undefined";
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value) ?? "undefined";
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalJson).join(",")}]`;
+  }
+  const object = value as Readonly<Record<string, unknown>>;
+  return `{${Object.keys(object)
+    .filter((key) => object[key] !== undefined)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${canonicalJson(object[key])}`)
+    .join(",")}}`;
 }
 
 function resolutionLockFromRow(row: ResolutionLockRow): ResolutionLockRecord {
