@@ -9,6 +9,10 @@ import {
 import type { InstallConfig } from "takosumi-contract/install-configs";
 import type { ComposedAppInput } from "../../../../deploy/node-postgres/src/composed-app.ts";
 import type { NodeAccountsServerConfig } from "../../../../deploy/node-postgres/src/handler.ts";
+import {
+  InMemoryCapsuleCoordination,
+  type CapsuleCoordination,
+} from "../../../../core/domains/deploy-control/capsule_lease.ts";
 
 const globalWithRequire = globalThis as {
   require?: (specifier: string) => unknown;
@@ -121,6 +125,68 @@ test("composed app builds Accounts with the canonical control operations facade"
     new Request("http://localhost/dashboard"),
   );
   assert.equal(res.headers.get("x-handled-by"), "accounts");
+});
+
+test("Bun composition forwards one shared coordinator to ordered Capsule abandonment", async () => {
+  const inner = new InMemoryCapsuleCoordination();
+  const acquiredScopes: string[] = [];
+  const capsuleCoordination: CapsuleCoordination = {
+    acquireLease: async (input) => {
+      acquiredScopes.push(input.scope);
+      return await inner.acquireLease(input);
+    },
+    renewLease: (input) => inner.renewLease(input),
+    releaseLease: (input) => inner.releaseLease(input),
+  };
+  const { buildComposedApp } =
+    await import("../../../../deploy/node-postgres/src/composed-app.ts");
+  const created = await buildComposedApp({
+    config: testConfig(),
+    store: new PostgresAccountsStore(stubQueryClient()),
+    accountsHandler: accountsHandlerSpy().handler,
+    capsuleCoordination,
+  });
+  const workspace = await created.operations.workspaces.createWorkspace({
+    handle: "bun-abandon-coordination",
+    displayName: "Bun abandon coordination",
+    type: "personal",
+    ownerUserId: "principal_bun_abandon",
+  });
+  const now = new Date().toISOString();
+  await created.operations.capsules.putInstallConfig({
+    id: "cfg_bun_abandon",
+    workspaceId: workspace.id,
+    name: "bun-abandon",
+    variableMapping: {},
+    outputAllowlist: {},
+    policy: {},
+    createdAt: now,
+    updatedAt: now,
+  });
+  const { source } = await created.operations.createSource({
+    workspaceId: workspace.id,
+    name: "bun-abandon-source",
+    url: "https://example.test/bun-abandon.git",
+  });
+  const capsule = await created.operations.capsules.createCapsule({
+    workspaceId: workspace.id,
+    name: "bun-abandon",
+    environment: "production",
+    sourceId: source.id,
+    installConfigId: "cfg_bun_abandon",
+    installingPrincipalId: "principal_bun_abandon",
+  });
+
+  const abandoned = await created.operations.capsules.abandonUnappliedCapsule(
+    capsule.id,
+    "test",
+  );
+
+  assert.equal(abandoned.status, "destroyed");
+  assert.deepEqual(acquiredScopes, [
+    `capsule:${capsule.id}:${capsule.environment}`,
+    `capsule-resource-admission:${capsule.id}`,
+  ]);
 });
 
 test("composed app still serves an embedded service process route", async () => {

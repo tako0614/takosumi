@@ -133,6 +133,20 @@ export type CapsuleOwnedResourceAdmission = <T>(
   work: (capsule: Capsule) => Promise<T>,
 ) => Promise<T>;
 
+/**
+ * Host-owned admission for abandoning a no-state Capsule. Unlike a Resource
+ * claim, abandonment must serialize with both ordinary provider Runs and
+ * Capsule-owned Resource claims. The host therefore receives the full current
+ * Capsule, including its environment, and owns the ordered lease topology.
+ */
+export type CapsuleAbandonAdmission = <T>(
+  input: {
+    readonly capsule: Capsule;
+    readonly holderId: string;
+  },
+  work: (capsule: Capsule) => Promise<T>,
+) => Promise<T>;
+
 export interface CapsulesServiceDependencies {
   readonly store: OpenTofuControlStore;
   readonly newId?: (prefix: string) => string;
@@ -142,8 +156,8 @@ export interface CapsulesServiceDependencies {
   readonly projects?: ProjectsService;
   /** Optional host-owned Resource lifecycle fence; absent keeps legacy behavior. */
   readonly capsuleOwnedResourceFence?: CapsuleOwnedResourceFence;
-  /** Optional shared Capsule/Resource admission lease; absent keeps legacy behavior. */
-  readonly capsuleOwnedResourceAdmission?: CapsuleOwnedResourceAdmission;
+  /** Optional host-owned abandon admission; absent keeps legacy behavior. */
+  readonly capsuleAbandonAdmission?: CapsuleAbandonAdmission;
 }
 
 export class CapsulesService {
@@ -153,7 +167,7 @@ export class CapsulesService {
   readonly #activity: ActivityRecorder;
   readonly #projects: ProjectsService;
   #capsuleOwnedResourceFence?: CapsuleOwnedResourceFence;
-  #capsuleOwnedResourceAdmission?: CapsuleOwnedResourceAdmission;
+  #capsuleAbandonAdmission?: CapsuleAbandonAdmission;
 
   constructor(deps: CapsulesServiceDependencies) {
     this.#store = deps.store;
@@ -163,8 +177,7 @@ export class CapsulesService {
     this.#projects =
       deps.projects ?? new ProjectsService({ store: deps.store });
     this.#capsuleOwnedResourceFence = deps.capsuleOwnedResourceFence;
-    this.#capsuleOwnedResourceAdmission =
-      deps.capsuleOwnedResourceAdmission;
+    this.#capsuleAbandonAdmission = deps.capsuleAbandonAdmission;
   }
 
   /**
@@ -177,11 +190,11 @@ export class CapsulesService {
     this.#capsuleOwnedResourceFence = fence;
   }
 
-  /** Late-binds the shared Capsule/Resource admission fence after composition. */
-  setCapsuleOwnedResourceAdmission(
-    admission: CapsuleOwnedResourceAdmission | undefined,
+  /** Late-binds the host-owned ordered abandon admission after composition. */
+  setCapsuleAbandonAdmission(
+    admission: CapsuleAbandonAdmission | undefined,
   ): void {
-    this.#capsuleOwnedResourceAdmission = admission;
+    this.#capsuleAbandonAdmission = admission;
   }
 
   // --- Capsule (§5) ---------------------------------------------------------
@@ -420,6 +433,18 @@ export class CapsulesService {
     const existing = await this.#requireCapsule(id);
     const abandon = async (current: Capsule = existing): Promise<Capsule> => {
       await this.#assertCapsuleOwnedResourcesClear(current, "abandon");
+      const runtimeSafety = await this.#store.getCapsuleRuntimeSafety(current.id);
+      if (runtimeSafety) {
+        // Any durable runtime evidence proves that provider work reached a
+        // lifecycle boundary, even when the committed StateVersion is missing
+        // or corrupt. Keep the ledger row recoverable rather than converting
+        // known or uncertain runtime effects into a false no-state abandonment.
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `capsule ${current.id} runtime safety does not permit abandonment`,
+          { reason: CAPSULE_OWNED_RESOURCES_PENDING_REASON },
+        );
+      }
       if (
         current.currentStateVersionId ||
         current.currentStateGeneration > 0
@@ -458,7 +483,7 @@ export class CapsulesService {
       });
       return updated;
     };
-    const admission = this.#capsuleOwnedResourceAdmission;
+    const admission = this.#capsuleAbandonAdmission;
     return admission
       ? await admission(
           { capsule: existing, holderId: this.#newId("capsule-abandon") },

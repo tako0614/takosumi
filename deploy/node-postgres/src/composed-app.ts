@@ -51,6 +51,10 @@ import {
   createNodeTakoformPackageHostComposition,
   type NodeTakoformPackageTrustPolicy,
 } from "./takoform-package-composition.ts";
+import {
+  InMemoryCapsuleCoordination,
+  type CapsuleCoordination,
+} from "../../../core/domains/deploy-control/capsule_lease.ts";
 
 export interface ComposedAppInput {
   readonly config: NodeAccountsServerConfig;
@@ -99,6 +103,12 @@ export interface ComposedAppInput {
   readonly runnerProfiles?: CreateTakosumiServiceArg["runnerProfiles"];
   readonly defaultRunnerProfileId?: CreateTakosumiServiceArg["defaultRunnerProfileId"];
   readonly managedVanityHostnameSlotsPerOwner?: CreateTakosumiServiceArg["managedVanityHostnameSlotsPerOwner"];
+  /**
+   * Shared Capsule lifecycle coordinator. The single-process Bun composition
+   * defaults to one in-memory instance; multi-replica operators must inject a
+   * durable shared implementation rather than relying on process-local locks.
+   */
+  readonly capsuleCoordination?: CapsuleCoordination;
   /** Complete host-installed recipe catalog; defaults at this composition root. */
   readonly credentialRecipes?: CreateTakosumiServiceArg["credentialRecipes"];
   /** Complete host-installed config set; omitted means no app-specific entries. */
@@ -170,6 +180,8 @@ export async function buildComposedApp(
           input.takoformPackageTrustPolicy,
         )
       : undefined;
+  const capsuleCoordination =
+    input.capsuleCoordination ?? new InMemoryCapsuleCoordination();
   let controlPlaneOperations: CreatedTakosumiService["operations"] | undefined;
   const created = await createTakosumiService({
     runtimeEnv,
@@ -213,6 +225,7 @@ export async function buildComposedApp(
       ? { opentofuRunnerExecutors: input.opentofuRunnerExecutors }
       : {}),
     ...(input.runnerProfiles ? { runnerProfiles: input.runnerProfiles } : {}),
+    capsuleCoordination,
     ...(input.defaultRunnerProfileId
       ? { defaultRunnerProfileId: input.defaultRunnerProfileId }
       : {}),

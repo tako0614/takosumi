@@ -58,6 +58,8 @@ import type {
   ManagedPublicHostnameClaimResult,
 } from "takosumi-contract/install-configs";
 import {
+  CapsuleLeaseBusyError,
+  withCapsuleLease,
   withCapsuleResourceAdmission,
   type CapsuleCoordination,
 } from "./domains/deploy-control/capsule_lease.ts";
@@ -68,6 +70,7 @@ import {
 import {
   CAPSULE_OWNED_RESOURCES_PENDING_REASON,
   CapsulesService,
+  type CapsuleAbandonAdmission,
   type CapsuleOwnedResourceAdmission,
   type CapsuleOwnedResourceFence,
 } from "./domains/capsules/mod.ts";
@@ -1653,10 +1656,43 @@ export async function createTakosumiService(
           },
         )
     : undefined;
+  const capsuleAbandonAdmission: CapsuleAbandonAdmission | undefined =
+    options.capsuleCoordination && capsuleOwnedResourceAdmission
+      ? async ({ capsule, holderId }, work) => {
+          try {
+            // Keep the same global lock order as provider Apply/destroy:
+            // Capsule environment first, Capsule-owned Resource admission
+            // second. This prevents a no-state abandon from terminalizing the
+            // Capsule while an ordinary provider Apply is already in flight.
+            return await withCapsuleLease(
+              options.capsuleCoordination!,
+              {
+                capsuleId: capsule.id,
+                environment: capsule.environment,
+                holderId,
+              },
+              async () =>
+                await capsuleOwnedResourceAdmission(
+                  { capsule, holderId },
+                  async (current) => await work(current),
+                ),
+            );
+          } catch (error) {
+            // Coordination contention is an ordinary lifecycle conflict for
+            // the synchronous Accounts DELETE surface, not an internal 500.
+            if (error instanceof CapsuleLeaseBusyError) {
+              throw new OpenTofuControllerError(
+                "failed_precondition",
+                `capsule ${capsule.id} is busy with a provider or Resource mutation`,
+                { reason: CAPSULE_OWNED_RESOURCES_PENDING_REASON },
+              );
+            }
+            throw error;
+          }
+        }
+      : undefined;
   capsulesService.setCapsuleOwnedResourceFence(capsuleOwnedResourceFence);
-  capsulesService.setCapsuleOwnedResourceAdmission(
-    capsuleOwnedResourceAdmission,
-  );
+  capsulesService.setCapsuleAbandonAdmission(capsuleAbandonAdmission);
   opentofuController.setCapsuleOwnedResourceFence(capsuleOwnedResourceFence);
   // Control-backups domain: exports a Workspace's control ledger as a sealed
   // bundle. Resource exact pins require an explicit host-owned scope mapping;
