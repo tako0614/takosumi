@@ -7717,7 +7717,7 @@ test("capsule destroy-plan apply tears down state at base+1 after approval and m
   ).toEqual([1, 2]);
 });
 
-test("Capsule destroy Apply fails closed on pending owned Resources before teardown", async () => {
+test("Capsule destroy Apply lets provider teardown retire owned Resources before terminalization", async () => {
   const { store, runner, controller } = await seededController();
   const create = await controller.createCapsulePlan("cap_fixture1");
   await controller.createApplyRun({
@@ -7730,7 +7730,46 @@ test("Capsule destroy Apply fails closed on pending owned Resources before teard
     fenceCalls += 1;
     expect(capsule.id).toBe("cap_fixture1");
     expect(phase).toBe("destroy_apply");
-    return { status: "pending", resourceId: "tkrn:ws_test001:EdgeWorker:app" };
+    // The provider teardown is what removes Capsule-owned Resources. The
+    // fence must therefore run only after destroy has been dispatched.
+    expect(runner.destroyJobs).toHaveLength(1);
+    return { status: "clear" };
+  };
+  controller.setCapsuleOwnedResourceFence(fence);
+
+  const destroy = await controller.createCapsuleDestroyPlan("cap_fixture1");
+  await controller.approveRun(destroy.planRun.id);
+  const response = await controller.createApplyRun({
+    planRunId: destroy.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(destroy.planRun),
+  });
+
+  expect(response.applyRun.status).toBe("succeeded");
+  expect(fenceCalls).toBe(1);
+  expect(runner.destroyJobs).toHaveLength(1);
+  expect((await store.getCapsule("cap_fixture1"))?.status).toBe("destroyed");
+  expect(
+    (await store.getLatestStateVersion("cap_fixture1", "preview"))?.generation,
+  ).toBe(2);
+});
+
+test("Capsule destroy Apply checks the Resource fence before terminal commit", async () => {
+  const { store, runner, controller } = await seededController();
+  const create = await controller.createCapsulePlan("cap_fixture1");
+  await controller.createApplyRun({
+    planRunId: create.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(create.planRun),
+  });
+
+  let fenceCalls = 0;
+  const fence: CapsuleOwnedResourceFence = async ({ phase }) => {
+    expect(phase).toBe("destroy_apply");
+    fenceCalls += 1;
+    expect(runner.destroyJobs).toHaveLength(1);
+    return {
+      status: "pending",
+      resourceId: "tkrn:ws_test001:EdgeWorker:survived-destroy",
+    };
   };
   controller.setCapsuleOwnedResourceFence(fence);
 
@@ -7746,47 +7785,6 @@ test("Capsule destroy Apply fails closed on pending owned Resources before teard
     expect.objectContaining({ code: "capsule_owned_resources_pending" }),
   );
   expect(fenceCalls).toBe(1);
-  expect(runner.destroyJobs).toHaveLength(0);
-  expect(response.capsule?.status).toBe("active");
-  expect(response.capsule?.currentStateGeneration).toBe(1);
-  expect(
-    (await store.getLatestStateVersion("cap_fixture1", "preview"))?.generation,
-  ).toBe(1);
-});
-
-test("Capsule destroy Apply rechecks the Resource fence before terminal commit", async () => {
-  const { store, runner, controller } = await seededController();
-  const create = await controller.createCapsulePlan("cap_fixture1");
-  await controller.createApplyRun({
-    planRunId: create.planRun.id,
-    expected: applyExpectedGuardFromPlanRun(create.planRun),
-  });
-
-  let fenceCalls = 0;
-  const fence: CapsuleOwnedResourceFence = async ({ phase }) => {
-    expect(phase).toBe("destroy_apply");
-    fenceCalls += 1;
-    return fenceCalls === 1
-      ? { status: "clear" }
-      : {
-          status: "pending",
-          resourceId: "tkrn:ws_test001:EdgeWorker:appeared-during-destroy",
-        };
-  };
-  controller.setCapsuleOwnedResourceFence(fence);
-
-  const destroy = await controller.createCapsuleDestroyPlan("cap_fixture1");
-  await controller.approveRun(destroy.planRun.id);
-  const response = await controller.createApplyRun({
-    planRunId: destroy.planRun.id,
-    expected: applyExpectedGuardFromPlanRun(destroy.planRun),
-  });
-
-  expect(response.applyRun.status).toBe("failed");
-  expect(response.applyRun.diagnostics).toContainEqual(
-    expect.objectContaining({ code: "capsule_owned_resources_pending" }),
-  );
-  expect(fenceCalls).toBe(2);
   expect(runner.destroyJobs).toHaveLength(1);
   expect(response.capsule?.status).toBe("active");
   expect(response.capsule?.currentStateGeneration).toBe(1);

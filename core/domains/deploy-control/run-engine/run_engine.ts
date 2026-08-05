@@ -8604,10 +8604,13 @@ export class RunEngine {
           ),
       );
     }
-    // Capsule-owned Resources are an independent lifecycle authority. They
-    // must be absent before any Capsule lifecycle action or provider teardown;
-    // otherwise a Capsule destroy could orphan a still-live Resource.
-    await this.#assertCapsuleOwnedResourcesClear(capsule, "destroy_apply");
+    // Capsule-owned Resources may be present here because the reviewed
+    // OpenTofu destroy is the operation that retires them through their own
+    // lifecycle authority. Requiring an empty owner inventory before dispatch
+    // would make every Capsule that declares a Resource impossible to destroy.
+    // The inventory is checked after provider teardown and immediately before
+    // the atomic terminal commit below, so a lingering or newly-created
+    // Resource still prevents the Capsule from becoming destroyed.
     // A destroy_apply persists the post-teardown state at `base + 1`. Empty for
     // runs without capsule context.
     const persistGeneration = (planRun.baseStateGeneration ?? 0) + 1;
@@ -8848,9 +8851,9 @@ export class RunEngine {
         appliedApplyRunId: running.id,
         updatedAt: now,
       };
-      // Recheck immediately before the atomic terminal commit. A Resource may
-      // have appeared after the pre-dispatch inventory; in that case leave the
-      // Capsule and Resource ledgers nonterminal and fail the ApplyRun closed.
+      // Check immediately before the atomic terminal commit. If provider
+      // teardown left an owned Resource behind, or a new one appeared during
+      // destroy, leave both ledgers nonterminal and fail the ApplyRun closed.
       await this.#assertCapsuleOwnedResourcesClear(capsule, "destroy_apply");
       let committed: Awaited<
         ReturnType<OpenTofuControlStore["commitRunState"]>
