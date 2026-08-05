@@ -10,6 +10,7 @@ import { createTakosumiService } from "../../../../core/bootstrap.ts";
 import type { RepositoryManifestDocument } from "takosumi-contract/repository-manifest";
 import type {
   OpenTofuApplyJob,
+  OpenTofuApplyResult,
   OpenTofuCapsuleSourceFilesJob,
   OpenTofuDestroyJob,
   OpenTofuPlanJob,
@@ -18,6 +19,11 @@ import type {
   OpenTofuStableSourceTagResolutionJob,
   OpenTofuSourceSnapshotPresentationFileJob,
 } from "../../../../core/domains/deploy-control/mod.ts";
+import { applyExpectedGuardFromPlanRun } from "../../../../core/domains/deploy-control/mod.ts";
+import {
+  InMemoryCapsuleCoordination,
+  type CapsuleCoordination,
+} from "../../../../core/domains/deploy-control/capsule_lease.ts";
 import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
 import {
@@ -33,6 +39,10 @@ import {
   seedCapsuleModel,
   seedProviderConnections,
 } from "../../../helpers/deploy-control/model_fixture.ts";
+import type {
+  ApplyRun,
+  PlanRun,
+} from "@takosumi/internal/deploy-control-api";
 
 const ORIGIN = "https://app.takosumi.test";
 const PLAN_DIGEST =
@@ -304,6 +314,110 @@ function storeEligibleInstallConfig(url: string) {
   };
 }
 
+async function seedQueuedNoStateCapsuleApply(
+  store: InMemoryOpenTofuControlStore,
+  input: {
+    readonly workspaceId: string;
+    readonly capsuleId: string;
+    readonly planRunId: string;
+    readonly applyRunId: string;
+    readonly environment?: string;
+  },
+) {
+  const seeded = await seedCapsuleModel(store, {
+    workspaceId: input.workspaceId,
+    capsuleId: input.capsuleId,
+    sourceId: `src_${input.capsuleId}`,
+    snapshotId: `snap_${input.capsuleId}`,
+    installConfigId: `cfg_${input.capsuleId}`,
+    environment: input.environment ?? "production",
+  });
+  const capsule = {
+    ...seeded.capsule,
+    installingPrincipalId: "user_test",
+  };
+  await store.putCapsule(capsule);
+  const planRun: PlanRun = {
+    id: input.planRunId,
+    workspaceId: capsule.workspaceId,
+    capsuleId: capsule.id,
+    capsuleContext: {
+      workspaceId: capsule.workspaceId,
+      capsuleId: capsule.id,
+      environment: capsule.environment,
+    },
+    capsuleCurrentStateVersionId: null,
+    source: {
+      kind: "git",
+      url: seeded.source.url,
+      commit: seeded.snapshot.resolvedCommit,
+    },
+    sourceSnapshotId: seeded.snapshot.id,
+    sourceDigest: "sha256:source",
+    operation: "create",
+    runnerProfileId: "opentofu-default",
+    variablesDigest: "sha256:variables",
+    requiredProviders: [],
+    status: "succeeded",
+    policy: { status: "passed", reasons: [], checkedAt: 1 },
+    policyDecisionDigest: "sha256:policy",
+    planDigest: PLAN_DIGEST,
+    planArtifact: {
+      kind: "runner-local",
+      ref: `runner-local://plan/${input.planRunId}`,
+      digest: PLAN_DIGEST,
+    },
+    baseStateGeneration: 0,
+    auditEvents: [],
+    createdAt: 1,
+    updatedAt: 1,
+  };
+  await store.putPlanRun(planRun);
+  await store.putPlanRunInputs({
+    planRunId: planRun.id,
+    variables: {},
+    generatedRoot: {
+      files: { "main.tf": 'module "child" { source = "./module" }' },
+      moduleFiles: [{ path: "main.tf", text: "# fixture module" }],
+    },
+  });
+  const applyRun: ApplyRun = {
+    id: input.applyRunId,
+    planRunId: planRun.id,
+    workspaceId: capsule.workspaceId,
+    capsuleId: capsule.id,
+    operation: "create",
+    runnerProfileId: "opentofu-default",
+    status: "queued",
+    expected: applyExpectedGuardFromPlanRun(planRun),
+    stateBackend: { kind: "managed", ref: "state" } as never,
+    stateLock: { status: "pending", backendRef: "state" },
+    auditEvents: [],
+    createdAt: 1,
+    updatedAt: 1,
+  };
+  await store.putApplyRun(applyRun);
+  return { capsule, planRun, applyRun };
+}
+
+function applyRunner(input: {
+  readonly jobs: OpenTofuApplyJob[];
+  readonly apply?: (job: OpenTofuApplyJob) => Promise<OpenTofuApplyResult>;
+}): OpenTofuRunner {
+  return {
+    plan: () => Promise.reject(new Error("not used")),
+    apply: async (job) => {
+      input.jobs.push(job);
+      if (input.apply) return await input.apply(job);
+      return {
+        outputs: {},
+        stateDigest: STATE_DIGEST,
+        rawOutputRef: job.rawOutputRef,
+      };
+    },
+  };
+}
+
 test("no-state Capsule DELETE returns 409 for owned or invalid Resource claims", async () => {
   const cases = [
     {
@@ -407,6 +521,269 @@ test("no-state Capsule DELETE returns 409 for owned or invalid Resource claims",
     expect((await deployStore.getCapsule(capsuleId))?.status).toBe("pending");
     expect(await resourceStores.resources.get(resourceId)).toBeDefined();
   }
+});
+
+test("no-state Capsule DELETE returns 409 while provider Apply holds the Capsule lease", async () => {
+  const accountStore = new InMemoryAccountsStore();
+  const cookie = seedSession(accountStore);
+  const deployStore = new InMemoryOpenTofuControlStore();
+  const innerCoordination = new InMemoryCapsuleCoordination();
+  const acquisitions: Array<{ readonly scope: string; readonly holderId: string }> =
+    [];
+  const coordination: CapsuleCoordination = {
+    acquireLease: async (input) => {
+      acquisitions.push({ scope: input.scope, holderId: input.holderId });
+      return await innerCoordination.acquireLease(input);
+    },
+    renewLease: (input) => innerCoordination.renewLease(input),
+    releaseLease: (input) => innerCoordination.releaseLease(input),
+  };
+  let applyEntered!: () => void;
+  const entered = new Promise<void>((resolve) => {
+    applyEntered = resolve;
+  });
+  let releaseApply!: () => void;
+  const held = new Promise<void>((resolve) => {
+    releaseApply = resolve;
+  });
+  const applyJobs: OpenTofuApplyJob[] = [];
+  const { operations } = await createTakosumiService({
+    role: "takosumi-api",
+    runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
+    opentofuControlStore: deployStore,
+    opentofuRunner: applyRunner({
+      jobs: applyJobs,
+      apply: async (job) => {
+        applyEntered();
+        await held;
+        return {
+          outputs: {},
+          stateDigest: STATE_DIGEST,
+          rawOutputRef: job.rawOutputRef,
+        };
+      },
+    }),
+    capsuleCoordination: coordination,
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+  });
+  const seeded = await seedQueuedNoStateCapsuleApply(deployStore, {
+    workspaceId: "ws_abandon_apply_first",
+    capsuleId: "cap_abandon_apply_first",
+    planRunId: "plan_abandon_apply_first",
+    applyRunId: "apply_abandon_apply_first",
+  });
+  const applying = operations.dispatchQueuedRun({
+    action: "apply",
+    runId: seeded.applyRun.id,
+    workspaceId: seeded.capsule.workspaceId,
+  });
+  await entered;
+
+  let response: Response | undefined;
+  try {
+    const built = request(
+      "DELETE",
+      `/api/v1/capsules/${seeded.capsule.id}`,
+      { cookie },
+    );
+    response = await handleControlRoute({
+      request: built.request,
+      url: built.url,
+      store: accountStore,
+      operations,
+    });
+    expect(response?.status).toBe(409);
+    expect(await response?.json()).toMatchObject({
+      error: {
+        code: "failed_precondition",
+        details: { reason: "capsule_owned_resources_pending" },
+      },
+    });
+    expect((await deployStore.getCapsule(seeded.capsule.id))?.status).toBe(
+      "pending",
+    );
+  } finally {
+    releaseApply();
+    await applying;
+  }
+
+  expect(applyJobs).toHaveLength(1);
+  expect((await deployStore.getCapsule(seeded.capsule.id))?.status).toBe(
+    "active",
+  );
+  expect(
+    acquisitions.filter(({ scope }) =>
+      scope.startsWith(`capsule:${seeded.capsule.id}:`),
+    ),
+  ).toHaveLength(2);
+});
+
+test("abandon wins both admission leases before a queued Apply rechecks destroyed status", async () => {
+  const accountStore = new InMemoryAccountsStore();
+  const cookie = seedSession(accountStore);
+  const deployStore = new InMemoryOpenTofuControlStore();
+  const innerCoordination = new InMemoryCapsuleCoordination();
+  const acquiredScopes: string[] = [];
+  const coordination: CapsuleCoordination = {
+    acquireLease: async (input) => {
+      acquiredScopes.push(input.scope);
+      return await innerCoordination.acquireLease(input);
+    },
+    renewLease: (input) => innerCoordination.renewLease(input),
+    releaseLease: (input) => innerCoordination.releaseLease(input),
+  };
+  const applyJobs: OpenTofuApplyJob[] = [];
+  const { operations } = await createTakosumiService({
+    role: "takosumi-api",
+    runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
+    opentofuControlStore: deployStore,
+    opentofuRunner: applyRunner({ jobs: applyJobs }),
+    capsuleCoordination: coordination,
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+  });
+  const seeded = await seedQueuedNoStateCapsuleApply(deployStore, {
+    workspaceId: "ws_abandon_first",
+    capsuleId: "cap_abandon_first",
+    planRunId: "plan_abandon_first",
+    applyRunId: "apply_abandon_first",
+    environment: "preview",
+  });
+
+  await controlJson(
+    {
+      operations,
+      store: accountStore,
+      cookie,
+      method: "DELETE",
+      path: `/api/v1/capsules/${seeded.capsule.id}`,
+    },
+    202,
+  );
+  expect(acquiredScopes).toEqual([
+    `capsule:${seeded.capsule.id}:${seeded.capsule.environment}`,
+    `capsule-resource-admission:${seeded.capsule.id}`,
+  ]);
+  expect((await deployStore.getCapsule(seeded.capsule.id))?.status).toBe(
+    "destroyed",
+  );
+
+  await operations.dispatchQueuedRun({
+    action: "apply",
+    runId: seeded.applyRun.id,
+    workspaceId: seeded.capsule.workspaceId,
+  });
+
+  expect(applyJobs).toHaveLength(0);
+  expect((await deployStore.getApplyRun(seeded.applyRun.id))?.status).toBe(
+    "failed",
+  );
+  expect((await deployStore.getCapsule(seeded.capsule.id))?.status).toBe(
+    "destroyed",
+  );
+});
+
+test("no-state Capsule DELETE rejects any runtime effect but permits pre-dispatch failure", async () => {
+  const accountStore = new InMemoryAccountsStore();
+  const cookie = seedSession(accountStore);
+  const deployStore = new InMemoryOpenTofuControlStore();
+  const { operations } = await createTakosumiService({
+    role: "takosumi-api",
+    runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
+    opentofuControlStore: deployStore,
+  });
+  const unknown = await seedQueuedNoStateCapsuleApply(deployStore, {
+    workspaceId: "ws_abandon_unknown",
+    capsuleId: "cap_abandon_unknown",
+    planRunId: "plan_abandon_unknown",
+    applyRunId: "apply_abandon_unknown",
+  });
+  await deployStore.putApplyRun({
+    ...unknown.applyRun,
+    status: "failed",
+    startedAt: 2,
+    finishedAt: 3,
+    updatedAt: 3,
+    auditEvents: [
+      {
+        id: "audit_abandon_unknown",
+        type: "apply.failed",
+        at: 3,
+        data: { providerDispatched: true },
+      },
+    ],
+  });
+
+  await controlJson(
+    {
+      operations,
+      store: accountStore,
+      cookie,
+      method: "DELETE",
+      path: `/api/v1/capsules/${unknown.capsule.id}`,
+    },
+    409,
+  );
+  expect((await deployStore.getCapsule(unknown.capsule.id))?.status).toBe(
+    "pending",
+  );
+
+  const preDispatch = await seedQueuedNoStateCapsuleApply(deployStore, {
+    workspaceId: "ws_abandon_predispatch",
+    capsuleId: "cap_abandon_predispatch",
+    planRunId: "plan_abandon_predispatch",
+    applyRunId: "apply_abandon_predispatch",
+  });
+  await deployStore.putApplyRun({
+    ...preDispatch.applyRun,
+    status: "failed",
+    startedAt: 4,
+    finishedAt: 5,
+    updatedAt: 5,
+    auditEvents: [],
+  });
+
+  await controlJson(
+    {
+      operations,
+      store: accountStore,
+      cookie,
+      method: "DELETE",
+      path: `/api/v1/capsules/${preDispatch.capsule.id}`,
+    },
+    202,
+  );
+  expect((await deployStore.getCapsule(preDispatch.capsule.id))?.status).toBe(
+    "destroyed",
+  );
+
+  const safe = await seedQueuedNoStateCapsuleApply(deployStore, {
+    workspaceId: "ws_abandon_safe",
+    capsuleId: "cap_abandon_safe",
+    planRunId: "plan_abandon_safe",
+    applyRunId: "apply_abandon_safe",
+  });
+  await deployStore.putApplyRun({
+    ...safe.applyRun,
+    status: "succeeded",
+    startedAt: 6,
+    finishedAt: 7,
+    updatedAt: 7,
+    auditEvents: [],
+  });
+
+  await controlJson(
+    {
+      operations,
+      store: accountStore,
+      cookie,
+      method: "DELETE",
+      path: `/api/v1/capsules/${safe.capsule.id}`,
+    },
+    409,
+  );
+  expect((await deployStore.getCapsule(safe.capsule.id))?.status).toBe(
+    "pending",
+  );
 });
 
 test("Store preflight resolves the repository default before exact compatibility while manual Git keeps explicit modulePath", async () => {

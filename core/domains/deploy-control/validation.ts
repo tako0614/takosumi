@@ -32,7 +32,9 @@ import {
  *
  * The Workspace-owned Capsule no longer carries `runnerProfileId` or a
  * `source` identity (those are resolved through the InstallConfig / Source),
- * so only the Workspace binding and current-StateVersion cursor are checked here.
+ * so only the lifecycle status, Workspace binding, and current-StateVersion
+ * cursor are checked here. A destroyed Capsule is terminal: a PlanRun queued
+ * before abandon must not reach the runner after the Capsule is destroyed.
  * `Capsule.currentStateVersionId` is optional (`string | undefined`) while
  * `PlanRun.capsuleCurrentStateVersionId` stays `string | null` internally;
  * both null and undefined mean "no current StateVersion", so they are normalized
@@ -42,6 +44,12 @@ export function validatePlannedCapsuleCurrent(input: {
   readonly planRun: PlanRun;
   readonly capsule: Capsule;
 }): void {
+  if (input.capsule.status === "destroyed") {
+    throw new OpenTofuControllerError(
+      "failed_precondition",
+      `capsule ${input.capsule.id} is destroyed`,
+    );
+  }
   if (input.capsule.workspaceId !== input.planRun.workspaceId) {
     throw new OpenTofuControllerError(
       "failed_precondition",
