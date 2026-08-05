@@ -127,7 +127,7 @@ for (const backend of backends) {
       await close();
     });
 
-    test("matches exact Workspace/Capsule owner across all lifecycle phases", async () => {
+    test("surfaces exact Capsule id claims across all lifecycle phases", async () => {
       const cases: readonly {
         readonly name: string;
         readonly phase: ResourcePhase;
@@ -179,7 +179,7 @@ for (const backend of backends) {
           name: "other-workspace-owner",
           phase: "Ready",
           owner: capsuleOwner(CAPSULE, OTHER_SPACE),
-          included: false,
+          included: true,
         },
         {
           name: "other-workspace-row",
@@ -212,6 +212,55 @@ for (const backend of backends) {
       expect(page.items.every((item) => item.owner?.kind === "Capsule")).toBe(
         true,
       );
+    });
+
+    test("surfaces invalid ownership evidence that claims the exact Capsule", async () => {
+      const claims = [
+        resource({
+          name: "corrupt-owner",
+          phase: "Failed",
+          owner: {
+            kind: "Capsule",
+            id: CAPSULE,
+            workspaceId: SPACE,
+          } as unknown as ResourceShapeRecord["owner"],
+        }),
+        resource({
+          name: "principal-mismatch",
+          phase: "Applying",
+          owner: {
+            ...capsuleOwner(),
+            installingPrincipalId: "principal_other",
+          },
+        }),
+        resource({
+          name: "workspace-mismatch",
+          phase: "Deleting",
+          owner: capsuleOwner(CAPSULE, OTHER_SPACE),
+        }),
+        resource({
+          name: "unrelated-corrupt-owner",
+          phase: "Ready",
+          owner: {
+            kind: "Capsule",
+            id: OTHER_CAPSULE,
+            workspaceId: SPACE,
+          } as unknown as ResourceShapeRecord["owner"],
+        }),
+      ];
+      for (const claim of claims) await stores.resources.upsert(claim);
+
+      const page = await stores.resources.listByCapsuleOwnerPage(
+        SPACE,
+        CAPSULE,
+        { limit: 100 },
+      );
+
+      expect(page.items.map((item) => item.name)).toEqual([
+        "corrupt-owner",
+        "principal-mismatch",
+        "workspace-mismatch",
+      ]);
     });
 
     test("preserves the source keyset cursor through filtered pages", async () => {
