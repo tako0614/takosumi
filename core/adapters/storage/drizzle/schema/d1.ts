@@ -683,6 +683,7 @@ export const resourceIdentityFences = sqliteTable(
     resourceId: text("resource_id").primaryKey(),
     lastGeneration: integer("last_generation").notNull(),
     fenceRevision: integer("fence_revision").notNull(),
+    retiredOwnerJson: jsonText("retired_owner_json"),
   },
 );
 

@@ -116,6 +116,11 @@ export type PortableHostIdempotencyLedgerReleaseResult =
   | { readonly kind: "missing" }
   | { readonly kind: "conflict" };
 
+export type PortableHostIdempotencyLedgerQuarantineResult =
+  | { readonly kind: "quarantined" }
+  | { readonly kind: "missing" }
+  | { readonly kind: "conflict" };
+
 /**
  * Durable persistence port. Implementations MUST atomically create at most one
  * record for an exact scope and compare-and-set completion using the exact
@@ -135,6 +140,14 @@ export interface PortableHostIdempotencyLedger {
   release(
     reservation: PortableHostIdempotencyReservation,
   ): Promise<PortableHostIdempotencyLedgerReleaseResult>;
+  /**
+   * Compare-and-delete one succeeded response. Implementations MUST bind the
+   * complete scope, reservation, fingerprint, and serialized response bytes;
+   * a valid success or a substituted record must never be removed.
+   */
+  readonly quarantineSuccess?: (
+    record: PortableHostIdempotencySucceededRecord,
+  ) => Promise<PortableHostIdempotencyLedgerQuarantineResult>;
 }
 
 export type PortableHostIdempotencyReserveResult =
@@ -158,6 +171,11 @@ export type PortableHostIdempotencyLookupResult =
       readonly kind: "replay";
       readonly response: PortableHostSuccessWireResponse;
     };
+
+export type PortableHostIdempotencyQuarantineResult =
+  | { readonly kind: "quarantined" }
+  | { readonly kind: "missing" }
+  | { readonly kind: "valid" };
 
 export type PortableHostIdempotencyReleaseResult =
   | { readonly kind: "released" }
@@ -301,6 +319,66 @@ export class PortableHostIdempotencyCoordinator {
     return cloneResponse(result.record.response);
   }
 
+  /**
+   * Quarantines one malformed legacy success without weakening the permanent
+   * idempotency boundary. The request fingerprint and the exact response
+   * observed by the caller are both compared again at the durable ledger.
+   */
+  async quarantineReplay(
+    request: PortableHostIdempotencyRequest,
+    response: PortableHostSuccessWireResponse,
+    malformed: (
+      response: PortableHostSuccessWireResponse,
+    ) => boolean | Promise<boolean>,
+  ): Promise<PortableHostIdempotencyQuarantineResult> {
+    const identity = await requestIdentity(request);
+    const record = await this.ledger.lookup(identity.scope);
+    if (record === undefined) return { kind: "missing" };
+    assertValidLedgerRecord(record);
+    assertSameScope(record.scope, identity.scope);
+    if (!sameFingerprint(record.fingerprint, identity.fingerprint)) {
+      throw new PortableHostIdempotencyError(
+        "idempotency_conflict",
+        "Idempotency-Key is already bound to a different portable host request",
+      );
+    }
+    if (record.state !== "succeeded") return { kind: "missing" };
+    if (!sameResponse(record.response, response)) {
+      throw new PortableHostIdempotencyError(
+        "reservation_conflict",
+        "portable host idempotency replay changed before quarantine",
+      );
+    }
+    if (!(await malformed(record.response))) return { kind: "valid" };
+    if (!this.ledger.quarantineSuccess) {
+      throw ledgerInvariant(
+        "portable host idempotency ledger cannot quarantine a succeeded response",
+      );
+    }
+    const result = await this.ledger.quarantineSuccess({
+      ...cloneReservation(record),
+      state: "succeeded",
+      response: cloneResponse(record.response),
+    });
+    if (
+      !isObject(result) ||
+      (result.kind !== "quarantined" &&
+        result.kind !== "missing" &&
+        result.kind !== "conflict")
+    ) {
+      throw ledgerInvariant(
+        "idempotency ledger returned an invalid quarantine result",
+      );
+    }
+    if (result.kind === "conflict") {
+      throw new PortableHostIdempotencyError(
+        "reservation_conflict",
+        "portable host idempotency replay changed before quarantine",
+      );
+    }
+    return result;
+  }
+
   async release(
     reservation: PortableHostIdempotencyReservation,
   ): Promise<PortableHostIdempotencyReleaseResult> {
@@ -391,6 +469,24 @@ export class InMemoryPortableHostIdempotencyLedger
     }
     this.#records.delete(key);
     return { kind: "released" };
+  }
+
+  async quarantineSuccess(
+    candidate: PortableHostIdempotencySucceededRecord,
+  ): Promise<PortableHostIdempotencyLedgerQuarantineResult> {
+    const key = scopeKey(candidate.scope);
+    const existing = this.#records.get(key);
+    if (!existing) return { kind: "missing" };
+    if (
+      existing.state !== "succeeded" ||
+      existing.reservationId !== candidate.reservationId ||
+      !sameFingerprint(existing.fingerprint, candidate.fingerprint) ||
+      !sameResponse(existing.response, candidate.response)
+    ) {
+      return { kind: "conflict" };
+    }
+    this.#records.delete(key);
+    return { kind: "quarantined" };
   }
 }
 

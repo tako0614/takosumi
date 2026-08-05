@@ -58,6 +58,8 @@ import type {
   ResourceApplyBeginResult,
   ResourceApplyCommitInput,
   ResourceApplyCommitResult,
+  ResourceAggregateReplaceInput,
+  ResourceAggregateReplaceResult,
   ResourceAtomicRemoveInput,
   ResourceAtomicRemoveResult,
   ResourceCreateResult,
@@ -80,6 +82,7 @@ import {
   assertAbortInput,
   assertAtomicRemoveInput,
   assertApplyPair,
+  assertResourceAggregateReplaceInput,
   assertExpectedTargetPool,
   assertResourceIdentityFence,
   consumeResourceIdentityFence,
@@ -93,6 +96,7 @@ import {
   matchesVersion,
   matchesResourceIdentityFence,
   retireResourceIdentityFence,
+  filterCapsuleOwnerPage,
   resourceRecordRevision,
   assertResourceFormIdentityPinInput,
   targetPoolSpecsEqual,
@@ -149,6 +153,7 @@ type ResourceIdentityFenceRow = {
   readonly resource_id: string;
   readonly last_generation: number | string;
   readonly fence_revision: number | string;
+  readonly retired_owner_json: unknown;
 };
 
 /**
@@ -331,6 +336,18 @@ class SqlResourceShapeStore implements ResourceShapeStore {
           [spaceId, limit + 1],
         );
     return pageFromProbe(result.rows.map(resourceShapeFromRow), limit);
+  }
+
+  async listByCapsuleOwnerPage(
+    spaceId: SpaceId,
+    capsuleId: string,
+    params: PageParams,
+  ): Promise<Page<ResourceShapeRecord>> {
+    return filterCapsuleOwnerPage(
+      await this.listBySpacePage(spaceId, params),
+      spaceId,
+      capsuleId,
+    );
   }
 
   async listByKindsPage(
@@ -818,6 +835,8 @@ export function createSqlResourceShapeStores(
     deleteTargetPool: (input) => deleteSqlTargetPool(client, input),
     beginApply: (input) => beginSqlApply(client, input),
     commitApply: (input) => commitSqlApply(client, input),
+    replaceResourceAggregate: (input) =>
+      replaceSqlResourceAggregate(client, input),
     abortApply: (input) => abortSqlApply(client, input),
     removeResource: (input) => removeSqlResource(client, input),
     pinExactFormIdentity: (input) => pinSqlExactFormIdentity(client, input),
@@ -1157,6 +1176,56 @@ async function commitSqlApply(
   });
 }
 
+async function replaceSqlResourceAggregate(
+  client: SqlClient,
+  input: ResourceAggregateReplaceInput,
+): Promise<ResourceAggregateReplaceResult> {
+  assertResourceAggregateReplaceInput(input);
+  return await client.transaction(async (transaction) => {
+    const current = await readSqlResource(
+      transaction,
+      input.record.id,
+      true,
+    );
+    const currentLock = await readSqlLock(
+      transaction,
+      input.record.id,
+      true,
+    );
+    if (!current && !currentLock) return { status: "not_found" };
+    if (
+      !current ||
+      !currentLock ||
+      !matchesVersion(current, input.expectedResource) ||
+      !matchesApplyLock(currentLock, input.expectedLock)
+    ) {
+      return {
+        status: "conflict",
+        ...(current ? { record: current } : {}),
+        ...(currentLock ? { lock: currentLock } : {}),
+      };
+    }
+    const updated = await updateSqlResource(
+      transaction,
+      input.record,
+      input.expectedResource,
+    );
+    if (updated.rowCount !== 1) {
+      throw new Error(
+        `Resource ${input.record.id} changed inside aggregate replacement`,
+      );
+    }
+    await transaction.query(
+      lockUpsertSql(names.resolutionLocks),
+      lockParameters(input.lock),
+    );
+    const record = await readSqlResource(transaction, input.record.id);
+    const lock = await readSqlLock(transaction, input.record.id);
+    if (!record || !lock) return { status: "not_found" };
+    return { status: "replaced", record, lock };
+  });
+}
+
 async function abortSqlApply(
   client: SqlClient,
   input: ResourceApplyAbortInput,
@@ -1359,7 +1428,8 @@ async function readSqlIdentityFence(
   forUpdate = false,
 ): Promise<ResourceIdentityFenceRecord | undefined> {
   const result = await client.query<ResourceIdentityFenceRow>(
-    `select resource_id, last_generation, fence_revision
+    `select resource_id, last_generation, fence_revision,
+            retired_owner_json
        from ${names.resourceIdentityFences}
       where resource_id = $1 limit 1${forUpdate ? " for update" : ""}`,
     [resourceId],
@@ -1370,6 +1440,9 @@ async function readSqlIdentityFence(
     resourceId: row.resource_id,
     lastGeneration: Number(row.last_generation),
     fenceRevision: Number(row.fence_revision),
+    ...(parseResourceOwner(row.retired_owner_json) === undefined
+      ? {}
+      : { retiredOwner: parseResourceOwner(row.retired_owner_json) }),
   };
   assertResourceIdentityFence(fence);
   return fence;
@@ -1390,22 +1463,29 @@ async function consumeSqlIdentityFence(
   if (expected === null) {
     const inserted = await transaction.query(
       `insert into ${names.resourceIdentityFences}
-        (resource_id, last_generation, fence_revision)
-       values ($1, $2, $3)
+        (resource_id, last_generation, fence_revision, retired_owner_json)
+       values ($1, $2, $3, $4::jsonb)
        on conflict (resource_id) do nothing`,
-      [consumed.resourceId, consumed.lastGeneration, consumed.fenceRevision],
+      [
+        consumed.resourceId,
+        consumed.lastGeneration,
+        consumed.fenceRevision,
+        jsonOrNull(consumed.retiredOwner),
+      ],
     );
     if (inserted.rowCount === 1) return;
   } else {
     const updated = await transaction.query(
       `update ${names.resourceIdentityFences}
-          set last_generation = $1, fence_revision = $2
-        where resource_id = $3
-          and last_generation = $4
-          and fence_revision = $5`,
+          set last_generation = $1, fence_revision = $2,
+              retired_owner_json = $3::jsonb
+        where resource_id = $4
+          and last_generation = $5
+          and fence_revision = $6`,
       [
         consumed.lastGeneration,
         consumed.fenceRevision,
+        jsonOrNull(consumed.retiredOwner),
         consumed.resourceId,
         expected.lastGeneration,
         expected.fenceRevision,
@@ -1433,13 +1513,15 @@ async function replaceSqlIdentityFence(
     assertResourceIdentityFence(replacement);
     const updated = await transaction.query(
       `update ${names.resourceIdentityFences}
-          set last_generation = $1, fence_revision = $2
-        where resource_id = $3
-          and last_generation = $4
-          and fence_revision = $5`,
+          set last_generation = $1, fence_revision = $2,
+              retired_owner_json = $3::jsonb
+        where resource_id = $4
+          and last_generation = $5
+          and fence_revision = $6`,
       [
         replacement.lastGeneration,
         replacement.fenceRevision,
+        jsonOrNull(replacement.retiredOwner),
         expected.resourceId,
         expected.lastGeneration,
         expected.fenceRevision,
@@ -1476,13 +1558,15 @@ async function retireSqlIdentityFence(
   if (current) {
     const updated = await transaction.query(
       `update ${names.resourceIdentityFences}
-          set last_generation = $1, fence_revision = $2
-        where resource_id = $3
-          and last_generation = $4
-          and fence_revision = $5`,
+          set last_generation = $1, fence_revision = $2,
+              retired_owner_json = $3::jsonb
+        where resource_id = $4
+          and last_generation = $5
+          and fence_revision = $6`,
       [
         replacement.lastGeneration,
         replacement.fenceRevision,
+        jsonOrNull(replacement.retiredOwner),
         replacement.resourceId,
         current.lastGeneration,
         current.fenceRevision,
@@ -1492,13 +1576,14 @@ async function retireSqlIdentityFence(
   } else {
     const inserted = await transaction.query(
       `insert into ${names.resourceIdentityFences}
-        (resource_id, last_generation, fence_revision)
-       values ($1, $2, $3)
+        (resource_id, last_generation, fence_revision, retired_owner_json)
+       values ($1, $2, $3, $4::jsonb)
        on conflict (resource_id) do nothing`,
       [
         replacement.resourceId,
         replacement.lastGeneration,
         replacement.fenceRevision,
+        jsonOrNull(replacement.retiredOwner),
       ],
     );
     if (inserted.rowCount === 1) return;
@@ -1745,7 +1830,7 @@ function resourceShapeFromRow(row: ResourceShapeRow): ResourceShapeRecord {
   );
   const conditions = parseJson<readonly Condition[]>(row.conditions_json);
   const labels = parseJson<Record<string, string>>(row.labels_json);
-  const owner = parseJson<ResourceOwner>(row.owner_json);
+  const owner = parseResourceOwner(row.owner_json);
   const pendingOperation = parseJson<ResourceShapePendingOperation>(
     row.pending_operation_json,
   );
@@ -1858,6 +1943,18 @@ function jsonOrNull(value: unknown): string | null {
 function parseJson<T>(value: unknown): T | undefined {
   if (value === undefined || value === null || value === "") return undefined;
   return (typeof value === "string" ? JSON.parse(value) : value) as T;
+}
+
+/** Legacy owner rows may be returned as an unquoted scalar by SQL adapters. */
+function parseResourceOwner(value: unknown): ResourceOwner | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  if (typeof value !== "string") return value as ResourceOwner;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed === null ? undefined : (parsed as ResourceOwner);
+  } catch {
+    return value;
+  }
 }
 
 function exactFormIdentity(

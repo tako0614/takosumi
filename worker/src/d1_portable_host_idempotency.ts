@@ -1,5 +1,6 @@
 import type {
   PortableHostIdempotencyLedger,
+  PortableHostIdempotencyLedgerQuarantineResult,
   PortableHostIdempotencyLedgerReleaseResult,
   PortableHostIdempotencyLedgerReserveResult,
   PortableHostIdempotencyLedgerStoreResult,
@@ -174,6 +175,40 @@ export class D1PortableHostIdempotencyLedger
       .run();
     if (changes(result) === 1) return { kind: "released" };
     return (await this.#lookup(reservation.scope))
+      ? { kind: "conflict" }
+      : { kind: "missing" };
+  }
+
+  async quarantineSuccess(
+    candidate: PortableHostIdempotencySucceededRecord,
+  ): Promise<PortableHostIdempotencyLedgerQuarantineResult> {
+    await this.#ensureSchema();
+    const fingerprintJson = serializeFingerprint(candidate.fingerprint);
+    const responseJson = serializeResponse(candidate.response);
+    const result = await this.db
+      .prepare(
+        `delete from portable_host_idempotency
+         where workspace_id = ?
+           and actor_account_id = ?
+           and space = ?
+           and idempotency_key = ?
+           and state = 'succeeded'
+           and reservation_id = ?
+           and fingerprint_json = ?
+           and response_json = ?`,
+      )
+      .bind(
+        candidate.scope.workspaceId,
+        candidate.scope.actorAccountId,
+        candidate.scope.space,
+        candidate.scope.idempotencyKey,
+        candidate.reservationId,
+        fingerprintJson,
+        responseJson,
+      )
+      .run();
+    if (changes(result) === 1) return { kind: "quarantined" };
+    return (await this.#lookup(candidate.scope))
       ? { kind: "conflict" }
       : { kind: "missing" };
   }

@@ -22,6 +22,18 @@ export function capsuleLeaseScope(
 }
 
 /**
+ * The cross-domain admission fence for Resources owned by one Capsule.
+ *
+ * Resource creation/import and Capsule terminalization are different write
+ * lanes, so the ordinary `(Capsule, environment)` run lease cannot serialize
+ * them: a Resource has no Capsule environment in its portable request. Keep
+ * this scope Capsule-only and stable across isolates.
+ */
+export function capsuleResourceAdmissionScope(capsuleId: string): string {
+  return `capsule-resource-admission:${capsuleId}`;
+}
+
+/**
  * The lease key for a `create` plan apply. A `create` plan carries NO
  * capsuleId yet, so the `capsule:{id}:{env}` lease cannot cover it;
  * two concurrent create-applies would otherwise each allocate a brand-new
@@ -149,6 +161,31 @@ export async function withCapsuleLease<T>(
 ): Promise<T> {
   const scope = capsuleLeaseScope(input.capsuleId, input.environment);
   return await withScopedLease(coordination, scope, input.holderId, input.ttlMs, work);
+}
+
+/**
+ * Acquires the Capsule-owned Resource admission fence, runs `work`, and
+ * releases it in `finally`. Capsule destroy/abandon and Resource apply/import
+ * use this same scope so neither side can pass its final check concurrently
+ * with the other's terminalization/claim.
+ */
+export async function withCapsuleResourceAdmission<T>(
+  coordination: CapsuleCoordination,
+  input: {
+    readonly capsuleId: string;
+    readonly holderId: string;
+    readonly ttlMs?: number;
+  },
+  work: (handle: LeaseHandle) => Promise<T>,
+): Promise<T> {
+  const scope = capsuleResourceAdmissionScope(input.capsuleId);
+  return await withScopedLease(
+    coordination,
+    scope,
+    input.holderId,
+    input.ttlMs,
+    work,
+  );
 }
 
 /**

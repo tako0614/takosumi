@@ -981,7 +981,12 @@ export const postgresStorageTableDefinitions: readonly StorageTableDefinition[] 
     {
       name: "takosumi_resource_identity_fences",
       domain: "resources",
-      columns: ["resource_id", "last_generation", "fence_revision"],
+      columns: [
+        "resource_id",
+        "last_generation",
+        "fence_revision",
+        "retired_owner_json",
+      ],
       primaryKey: ["resource_id"],
     },
     {
@@ -4577,5 +4582,16 @@ create index if not exists takosumi_interface_bindings_authorized_current_idx
   fence_revision  integer not null
 );`,
       down: `drop table if exists takosumi_resource_identity_fences;`,
+    },
+    {
+      id: "resources.identity_fence.owner_receipt.add",
+      version: 106,
+      domain: "resources",
+      description:
+        "Persist the nullable last authenticated Resource owner on the durable identity fence so canonical retirement can prove the owner for an absent incarnation; consuming a new incarnation clears the receipt.",
+      sql: `alter table takosumi_resource_identity_fences
+  add column if not exists retired_owner_json jsonb;`,
+      down: `alter table takosumi_resource_identity_fences
+  drop column if exists retired_owner_json;`,
     },
   ]);

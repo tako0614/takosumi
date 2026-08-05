@@ -4404,6 +4404,21 @@ const D1_RESOURCE_IDENTITY_FENCE_STATEMENTS = [
   )`,
 ] as const;
 
+const D1_RESOURCE_IDENTITY_FENCE_OWNER_RECEIPT_STATEMENTS = [
+  `alter table resource_identity_fences add column retired_owner_json text`,
+] as const;
+
+async function d1ResourceIdentityFenceOwnerReceiptStatements(
+  db: D1Database,
+): Promise<readonly string[]> {
+  return await d1EnsureColumnStatements(
+    db,
+    "resource_identity_fences",
+    "retired_owner_json",
+    "text",
+  );
+}
+
 /**
  * Bootstrap the §27 control-plane tables for the default self-host mode.
  * Idempotent (`IF NOT EXISTS`) and called once per store instance via the
@@ -7099,6 +7114,24 @@ ${D1_RESOURCE_IDENTITY_FENCE_STATEMENTS.join("\n---\n")}
     },
     async apply(db) {
       await runD1AtomicSql(db, D1_RESOURCE_IDENTITY_FENCE_STATEMENTS);
+    },
+  },
+  {
+    version: 62,
+    name: "d1_resource_identity_fence_owner_receipt",
+    checksumSource: () => `
+Resource identity fences retain the last authenticated Resource owner across canonical retirement
+the nullable receipt is cleared when a new incarnation consumes its fence
+${D1_RESOURCE_IDENTITY_FENCE_OWNER_RECEIPT_STATEMENTS.join("\n---\n")}
+`,
+    async atomicStatements(db) {
+      return await d1ResourceIdentityFenceOwnerReceiptStatements(db);
+    },
+    async apply(db) {
+      await runD1AtomicSql(
+        db,
+        await d1ResourceIdentityFenceOwnerReceiptStatements(db),
+      );
     },
   },
 ] as const satisfies readonly D1OpenTofuSchemaMigration[];

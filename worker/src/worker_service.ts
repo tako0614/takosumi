@@ -657,7 +657,7 @@ function workerInterfaceOAuth2ResourceAuthorizer(
   };
 }
 
-function managedProviderCredentialIssuerFromEnv(
+export function managedProviderCredentialIssuerFromEnv(
   env: CloudflareWorkerEnv,
   store: Pick<OpenTofuControlStore, "getCapsule">,
 ): ManagedProviderCredentialIssuer | undefined {
@@ -675,6 +675,7 @@ function managedProviderCredentialIssuerFromEnv(
     if (
       !capsule ||
       capsule.workspaceId !== workspaceId ||
+      capsule.status === "destroyed" ||
       !installingPrincipalId
     ) {
       return undefined;

@@ -27,6 +27,7 @@ import {
   managedProviderRunTokenSecret,
   verifyManagedProviderRunToken,
 } from "../../core/shared/managed_provider_tokens.ts";
+import { ResourceCapsuleOwnerAuthorityError } from "../../core/api/form_host_routes.ts";
 
 /**
  * Builds the deploy-control Takosumi service (the `takosumi-api` role) directly,
@@ -170,8 +171,11 @@ export function platformResourceCapsuleOwnerResolver(
       .get(TAKOSUMI_INTERNAL_MANAGED_PROVIDER_PROFILE_HEADER)
       ?.trim();
     const secret = managedProviderRunTokenSecret(env);
-    if (!token || !profile || profile.length > 256 || !secret) {
+    if (!token && !profile) {
       return undefined;
+    }
+    if (!token || !profile || profile.length > 256 || !secret) {
+      throw new ResourceCapsuleOwnerAuthorityError();
     }
     const verified = await verifyManagedProviderRunToken(token, {
       secret,
@@ -179,7 +183,7 @@ export function platformResourceCapsuleOwnerResolver(
       expectedWorkspaceId: space,
       requiredScopes: ["write"],
     });
-    if (!verified.ok) return undefined;
+    if (!verified.ok) throw new ResourceCapsuleOwnerAuthorityError();
     const context = verified.payload;
     if (
       !context.capsuleId ||
@@ -188,7 +192,55 @@ export function platformResourceCapsuleOwnerResolver(
       (actor.workspaceId !== undefined &&
         actor.workspaceId !== context.workspaceId)
     ) {
-      return undefined;
+      throw new ResourceCapsuleOwnerAuthorityError();
+    }
+    const pathname = new URL(request.url).pathname;
+    const mutationNeedsApply =
+      request.method === "PUT" || pathname.endsWith("/import");
+    const mutationNeedsDestroy = request.method === "DELETE";
+    if (
+      (mutationNeedsApply && context.phase !== "apply") ||
+      (mutationNeedsDestroy && context.phase !== "destroy") ||
+      (!mutationNeedsApply &&
+        !mutationNeedsDestroy &&
+        context.phase !== "plan" &&
+        context.phase !== "apply")
+    ) {
+      throw new ResourceCapsuleOwnerAuthorityError();
+    }
+    if (context.phase === "plan") {
+      const run = await store.getPlanRun(context.runId);
+      if (
+        !run ||
+        run.status !== "running" ||
+        run.workspaceId !== context.workspaceId ||
+        run.capsuleId !== context.capsuleId ||
+        run.operation === "destroy"
+      ) {
+        throw new ResourceCapsuleOwnerAuthorityError();
+      }
+    } else {
+      const run = await store.getApplyRun(context.runId);
+      if (
+        !run ||
+        run.status !== "running" ||
+        run.workspaceId !== context.workspaceId ||
+        run.capsuleId !== context.capsuleId ||
+        (mutationNeedsDestroy
+          ? run.operation !== "destroy"
+          : run.operation === "destroy")
+      ) {
+        throw new ResourceCapsuleOwnerAuthorityError();
+      }
+    }
+    const runtimeSafety = await store.getCapsuleRuntimeSafety(
+      context.capsuleId,
+    );
+    if (
+      runtimeSafety?.phase === "retired" ||
+      (runtimeSafety?.phase === "terminating" && !mutationNeedsDestroy)
+    ) {
+      throw new ResourceCapsuleOwnerAuthorityError();
     }
     const capsule = await store.getCapsule(context.capsuleId);
     if (
@@ -197,7 +249,7 @@ export function platformResourceCapsuleOwnerResolver(
       capsule.installingPrincipalId !== context.installingPrincipalId ||
       capsule.status === "destroyed"
     ) {
-      return undefined;
+      throw new ResourceCapsuleOwnerAuthorityError();
     }
     return {
       kind: "Capsule",

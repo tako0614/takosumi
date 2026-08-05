@@ -7063,7 +7063,7 @@ test("delete timeout marks the resource failed instead of leaving it deleting fo
   adapter.finishDelete();
 });
 
-test("normal delete retries idempotent host retirement after the Resource is absent", async () => {
+test("normal delete retires the host before removing the Resource and replays absent success", async () => {
   const stores = createInMemoryResourceShapeStores();
   const adapter = new PluginSpyAdapter();
   const admission = new RecordingDeploymentAdmission();
@@ -7089,7 +7089,9 @@ test("normal delete retries idempotent host retirement after the Resource is abs
     expect(pending.error.code).toBe("deployment_finalize_pending");
     expect(pending.error.message).toContain("host lifecycle retirement");
   }
-  expect(await stores.resources.get(APPLY_ID)).toBeUndefined();
+  expect(await stores.resources.get(APPLY_ID)).toMatchObject({
+    phase: "Deleting",
+  });
   expect(adapter.deleteInputs).toHaveLength(1);
 
   admission.failRetire = false;
@@ -7100,7 +7102,7 @@ test("normal delete retries idempotent host retirement after the Resource is abs
     ACTOR,
   );
   expect(recovered.ok).toBe(true);
-  expect(adapter.deleteInputs).toHaveLength(1);
+  expect(adapter.deleteInputs).toHaveLength(2);
   expect(admission.retireContexts).toEqual([
     {
       space: "space_1",
@@ -7119,6 +7121,102 @@ test("normal delete retries idempotent host retirement after the Resource is abs
       now: NOW,
     },
   ]);
+
+  const replayed = await service.delete(
+    "space_1",
+    "ObjectBucket",
+    "assets",
+    ACTOR,
+  );
+  expect(replayed.ok).toBe(true);
+  expect(admission.retireContexts).toHaveLength(2);
+});
+
+test("managed delete retries absent host retirement only for the retired owner", async () => {
+  const stores = createInMemoryResourceShapeStores();
+  const adapter = new PluginSpyAdapter();
+  const admission = new RecordingDeploymentAdmission();
+  const service = new ResourceShapeService({
+    stores,
+    adapter,
+    deploymentAdmission: admission,
+    now: () => NOW,
+    moduleRegistry: TEST_RESOURCE_SHAPE_MODULE_REGISTRY,
+  });
+  const owner = {
+    kind: "Capsule" as const,
+    id: "cap_yuru",
+    workspaceId: "space_1",
+    installingPrincipalId: "acct_installer",
+  };
+  await seed(service);
+  expect((await reviewedApply(service, { ...APPLY, owner })).ok).toBe(true);
+
+  admission.failRetire = true;
+  const pending = await service.delete(
+    "space_1",
+    "ObjectBucket",
+    "assets",
+    ACTOR,
+    { expectedOwner: owner },
+  );
+  expect(pending.ok).toBe(false);
+  if (!pending.ok) {
+    expect(pending.error.code).toBe("deployment_finalize_pending");
+  }
+  expect(await stores.resources.get(APPLY_ID)).toMatchObject({
+    phase: "Deleting",
+  });
+  expect(admission.retireContexts).toHaveLength(1);
+
+  admission.failRetire = false;
+  const foreign = await service.delete(
+    "space_1",
+    "ObjectBucket",
+    "assets",
+    ACTOR,
+    { expectedOwner: { ...owner, id: "cap_foreign" } },
+  );
+  expect(foreign).toMatchObject({
+    ok: false,
+    error: { code: "ownership_conflict" },
+  });
+  expect(admission.retireContexts).toHaveLength(1);
+
+  const recovered = await service.delete(
+    "space_1",
+    "ObjectBucket",
+    "assets",
+    ACTOR,
+    { expectedOwner: owner },
+  );
+  expect(recovered.ok).toBe(true);
+  expect(adapter.deleteInputs).toHaveLength(2);
+  expect(admission.retireContexts).toHaveLength(2);
+  expect(await stores.getResourceIdentityFence(APPLY_ID)).toMatchObject({
+    retiredOwner: owner,
+  });
+
+  const absentForeign = await service.delete(
+    "space_1",
+    "ObjectBucket",
+    "assets",
+    ACTOR,
+    { expectedOwner: { ...owner, id: "cap_foreign" } },
+  );
+  expect(absentForeign).toMatchObject({
+    ok: false,
+    error: { code: "ownership_conflict" },
+  });
+  const absentOwnerReplay = await service.delete(
+    "space_1",
+    "ObjectBucket",
+    "assets",
+    ACTOR,
+    { expectedOwner: owner },
+  );
+  expect(absentOwnerReplay.ok).toBe(true);
+  expect(admission.retireContexts).toHaveLength(2);
 });
 
 test("force delete tombstones a failed resource without re-entering the adapter", async () => {
@@ -7180,15 +7278,13 @@ test("force delete tombstones a failed resource without re-entering the adapter"
   const remaining = await service.get("space_1", "ObjectBucket", "assets");
   expect(remaining.ok).toBe(false);
 
-  // A later normal idempotent delete may repeat canonical retirement, but the
-  // host can distinguish it from the force tombstone and preserve retained
-  // capacity until explicit backend-absence proof is supplied.
+  // A later absent retry is ledger-only. It must not call the host again or
+  // release force-retained capacity without explicit backend-absence proof.
   expect(
     (await service.delete("space_1", "ObjectBucket", "assets", ACTOR)).ok,
   ).toBe(true);
   expect(admission.retireContexts.map(({ reason }) => reason)).toEqual([
     "force_tombstone",
-    "canonical_delete",
   ]);
 });
 

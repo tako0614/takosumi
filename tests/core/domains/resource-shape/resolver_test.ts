@@ -275,6 +275,22 @@ test("ResolutionLock pins the complete target and descriptor snapshots", () => {
   );
 });
 
+test("legacy locks persist derived portability and native plans when normalized", () => {
+  const first = expectOk(resolve(input()));
+  const legacyLock: ResolutionLock = {
+    ...first.resolutionLock,
+    portability: undefined,
+    nativeResources: undefined,
+  };
+
+  const reapplied = expectOk(resolve(input({ existingLock: legacyLock })));
+
+  expect(reapplied.resolutionLock.portability).toBe(reapplied.portability);
+  expect(reapplied.resolutionLock.nativeResources).toEqual(
+    reapplied.nativeResourcePlan,
+  );
+});
+
 test("legacy locks without any recoverable descriptor fail closed", () => {
   const legacy: ResolutionLock = {
     resourceId: "tkrn:prod:ContainerService:agent",

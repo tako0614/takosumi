@@ -709,6 +709,7 @@ export const resourceIdentityFences = pgTable(
     resourceId: text("resource_id").primaryKey(),
     lastGeneration: integer("last_generation").notNull(),
     fenceRevision: integer("fence_revision").notNull(),
+    retiredOwnerJson: json("retired_owner_json"),
   },
 );
 

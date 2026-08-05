@@ -347,6 +347,54 @@ describe("D1 Resource identity fences", () => {
     });
   });
 
+  test("retains the retired owner receipt and clears it for the next incarnation", async () => {
+    const owner = {
+      kind: "Capsule" as const,
+      id: "cap_identity_fence",
+      workspaceId: SPACE,
+      installingPrincipalId: "acct_identity_fence",
+    };
+    const begun = expectBegun(
+      await stores.beginApply({
+        applyingRecord: { ...applyingRecord(), owner },
+        plannedLock: lock(),
+        expectedIdentityFence: null,
+      }),
+    );
+    expect(
+      await stores.removeResource({
+        resourceId: RESOURCE_ID,
+        expected: {
+          generation: begun.record.generation,
+          phase: begun.record.phase,
+          updatedAt: begun.record.updatedAt,
+          revision: begun.record.revision,
+        },
+        expectedLock: begun.lock,
+      }),
+    ).toEqual({ status: "removed" });
+    const retired = await stores.getResourceIdentityFence(RESOURCE_ID);
+    expect(retired).toEqual({
+      resourceId: RESOURCE_ID,
+      lastGeneration: 1,
+      fenceRevision: 2,
+      retiredOwner: owner,
+    });
+
+    expectBegun(
+      await stores.beginApply({
+        applyingRecord: applyingRecord(2, T1),
+        plannedLock: lock(T1),
+        expectedIdentityFence: retired!,
+      }),
+    );
+    expect(await stores.getResourceIdentityFence(RESOURCE_ID)).toEqual({
+      resourceId: RESOURCE_ID,
+      lastGeneration: 2,
+      fenceRevision: 3,
+    });
+  });
+
   test("abort rolls back the consumed fence with Resource and ResolutionLock", async () => {
     const begun = expectBegun(
       await stores.beginApply({

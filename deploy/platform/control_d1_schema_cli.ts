@@ -11,6 +11,7 @@ import {
 } from "./control_d1_schema.ts";
 import {
   ControlD1MaintenanceError,
+  releaseControlD1MaintenanceFence,
   readControlD1MaintenanceState,
   type ControlD1MaintenanceFence,
 } from "../../worker/src/d1_schema_maintenance.ts";
@@ -19,7 +20,7 @@ import {
   ControlD1RestError,
 } from "./control_d1_schema_rest.ts";
 
-type Command = "plan" | "verify" | "fence" | "apply";
+type Command = "plan" | "verify" | "fence" | "freeze" | "apply" | "release";
 type Environment = "staging" | "production";
 
 interface ParsedArgs {
@@ -121,7 +122,10 @@ export async function runControlD1SchemaCli(
     return 1;
   }
   if (
-    (args.command === "apply" || args.command === "fence") &&
+    (args.command === "apply" ||
+      args.command === "fence" ||
+      args.command === "freeze" ||
+      args.command === "release") &&
     args.confirmManifest !== plan.manifestDigest
   ) {
     write(
@@ -135,7 +139,12 @@ export async function runControlD1SchemaCli(
     return 1;
   }
 
-  if (args.command === "apply" || args.command === "fence") {
+  if (
+    args.command === "apply" ||
+    args.command === "fence" ||
+    args.command === "freeze" ||
+    args.command === "release"
+  ) {
     try {
       const source = await (
         dependencies.inspectSourceCheckout ?? inspectSourceCheckout
@@ -175,9 +184,54 @@ export async function runControlD1SchemaCli(
       return verification.status === "ready" ? 0 : 1;
     }
 
+    if (args.command === "release") {
+      const state = await readControlD1MaintenanceState(remote.database);
+      if (
+        state.status !== "active" ||
+        state.fence.sourceCommit !== provenance.sourceCommit ||
+        state.fence.manifestDigest !== plan.manifestDigest ||
+        state.fence.environment !== args.environment ||
+        state.fence.databaseRole !== "in_place" ||
+        state.fence.releasePolicy !== "in_place" ||
+        state.fence.databaseId !== (remote.databaseId ?? null) ||
+        state.fence.sourceExportSha256 !== null
+      ) {
+        throw new ControlD1SchemaError("maintenance_fence_release_mismatch");
+      }
+      await releaseControlD1MaintenanceFence(
+        remote.database,
+        state.fence,
+        provenance.generatedAt,
+      );
+      const released = await readControlD1MaintenanceState(remote.database);
+      if (released.status !== "inactive") {
+        throw new ControlD1SchemaError("maintenance_fence_release_failed");
+      }
+      write(
+        JSON.stringify(
+          {
+            kind: "takosumi.control-d1-schema-transcript@v1",
+            mode: "release",
+            environment: args.environment,
+            status: "released",
+            dryRun: false,
+            ...provenance,
+            ...planSummary(plan),
+            configurationDigest: remote.configurationDigest,
+            maintenanceFence: state.fence,
+            maintenanceStatus: "released",
+          },
+          null,
+          2,
+        ),
+      );
+      return 0;
+    }
+
     const maintenanceDrainMilliseconds =
       dependencies.maintenanceDrainMilliseconds ?? 5_000;
-    if (args.command === "fence") {
+    if (args.command === "fence" || args.command === "freeze") {
+      const releaseFreeze = args.command === "freeze";
       const fenced = await fenceControlD1Schema(remote.database, plan, {
         sourceCommit: provenance.sourceCommit,
         environment: args.environment,
@@ -187,8 +241,8 @@ export async function runControlD1SchemaCli(
         waitForRequestDrain:
           dependencies.waitForRequestDrain ?? waitForRequestDrain,
         retainMaintenanceFence: true,
-        databaseRole: "legacy",
-        releasePolicy: "never",
+        databaseRole: releaseFreeze ? "in_place" : "legacy",
+        releasePolicy: releaseFreeze ? "in_place" : "never",
         databaseId: remote.databaseId,
       });
       write(
@@ -281,7 +335,7 @@ function fenceTranscript(input: {
 }) {
   return {
     kind: "takosumi.control-d1-schema-transcript@v1",
-    mode: "fence",
+    mode: input.args.command,
     environment: input.args.environment,
     status: "fenced",
     dryRun: false,
@@ -489,7 +543,9 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     command !== "plan" &&
     command !== "verify" &&
     command !== "fence" &&
-    command !== "apply"
+    command !== "freeze" &&
+    command !== "apply" &&
+    command !== "release"
   ) {
     throw new Error("command_invalid");
   }
@@ -605,14 +661,20 @@ function helpText(): string {
   bun scripts/control-d1-schema.ts plan
   bun scripts/control-d1-schema.ts apply --dry-run [--environment staging|production]
   bun scripts/control-d1-schema.ts fence --environment staging|production --confirm-manifest sha256:...
+  bun scripts/control-d1-schema.ts freeze --environment staging|production --confirm-manifest sha256:...
+  bun scripts/control-d1-schema.ts release --environment staging|production --confirm-manifest sha256:...
   bun scripts/control-d1-schema.ts verify --environment staging|production
   bun scripts/control-d1-schema.ts apply --environment staging|production --confirm-manifest sha256:... [--retain-maintenance-fence]
     [--confirm-predecessor-source <40hex> --confirm-predecessor-manifest sha256:...]
 
 plan and apply --dry-run are local-only and perform no remote request. verify is
 read-only. fence freezes a legacy database without changing its application
-schema. apply requires the exact manifest digest emitted by plan. Official
+schema and is never releasable. freeze acquires the exact short-lived in-place
+release fence without changing schema; release removes only that exact fence.
+apply requires the exact manifest digest emitted by plan. Official
 Cloud blue/green candidates use --retain-maintenance-fence through cutover.
+release also requires the same source, manifest, environment, and database
+after the Worker cutover is proven.
 The paired predecessor confirmations allow one exact immediate-predecessor
 active in-place fence to transition atomically to the new reviewed plan; they
 never release application writes between plans.

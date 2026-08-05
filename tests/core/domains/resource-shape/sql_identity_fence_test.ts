@@ -184,4 +184,52 @@ describe("Postgres Resource identity fence store", () => {
       fenceRevision: 2,
     });
   });
+
+  test("retains the retired owner receipt and clears it for the next incarnation", async () => {
+    const durable = await setupStores();
+    const owner = {
+      kind: "Capsule" as const,
+      id: "cap_identity_fence",
+      workspaceId: SPACE,
+      installingPrincipalId: "acct_identity_fence",
+    };
+    const live = {
+      ...applyingRecord("owner-receipt", 1),
+      owner,
+      phase: "Ready" as const,
+      observedGeneration: 1,
+    };
+    const liveLock = lock(live.id);
+    await durable.resources.upsert(live);
+    await durable.locks.put(liveLock);
+
+    expect(
+      await durable.removeResource({
+        resourceId: live.id,
+        expected: version(live),
+        expectedLock: liveLock,
+      }),
+    ).toEqual({ status: "removed" });
+    const retired = await durable.getResourceIdentityFence(live.id);
+    expect(retired).toEqual({
+      resourceId: live.id,
+      lastGeneration: 1,
+      fenceRevision: 1,
+      retiredOwner: owner,
+    });
+
+    const next = applyingRecord("owner-receipt", 2, T1);
+    expect(
+      await durable.beginApply({
+        applyingRecord: next,
+        plannedLock: lock(next.id, T1),
+        expectedIdentityFence: retired!,
+      }),
+    ).toMatchObject({ status: "begun", record: next });
+    expect(await durable.getResourceIdentityFence(live.id)).toEqual({
+      resourceId: live.id,
+      lastGeneration: 2,
+      fenceRevision: 2,
+    });
+  });
 });

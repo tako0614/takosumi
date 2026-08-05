@@ -10,6 +10,8 @@ import {
   type CapsuleCoordination,
   InMemoryCapsuleCoordination,
   capsuleLeaseScope,
+  capsuleResourceAdmissionScope,
+  withCapsuleResourceAdmission,
 } from "../../../../core/domains/deploy-control/capsule_lease.ts";
 import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
@@ -244,4 +246,55 @@ test("the lease is released after a successful apply so the next run can acquire
     ttlMs: 60_000,
   });
   expect(after.acquired).toBe(true);
+});
+
+test("Capsule Resource admission is mutually exclusive in either race ordering", async () => {
+  const coordination = new InMemoryCapsuleCoordination();
+  let release!: () => void;
+  const heldWork = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+
+  // Resource claim wins first: a concurrent destroy cannot enter the same
+  // Capsule-only scope while the claim's admission callback is running.
+  const resourceFirst = withCapsuleResourceAdmission(
+    coordination,
+    { capsuleId: "cap_admission", holderId: "resource-claim" },
+    async () => await heldWork,
+  );
+  await Promise.resolve();
+  await expect(
+    withCapsuleResourceAdmission(
+      coordination,
+      { capsuleId: "cap_admission", holderId: "destroy-run" },
+      async () => undefined,
+    ),
+  ).rejects.toBeInstanceOf(CapsuleLeaseBusyError);
+  release();
+  await resourceFirst;
+
+  // Destroy wins first: a Resource claim is fenced until destroy releases;
+  // the caller must retry and re-read Capsule state after that release.
+  let destroyRelease!: () => void;
+  const destroyHeld = new Promise<void>((resolve) => {
+    destroyRelease = resolve;
+  });
+  const destroyFirst = withCapsuleResourceAdmission(
+    coordination,
+    { capsuleId: "cap_admission", holderId: "destroy-run" },
+    async () => await destroyHeld,
+  );
+  await Promise.resolve();
+  await expect(
+    withCapsuleResourceAdmission(
+      coordination,
+      { capsuleId: "cap_admission", holderId: "resource-claim" },
+      async () => undefined,
+    ),
+  ).rejects.toBeInstanceOf(CapsuleLeaseBusyError);
+  destroyRelease();
+  await destroyFirst;
+  expect(capsuleResourceAdmissionScope("cap_admission")).toBe(
+    "capsule-resource-admission:cap_admission",
+  );
 });

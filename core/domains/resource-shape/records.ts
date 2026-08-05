@@ -52,6 +52,12 @@ export interface ResourceIdentityFenceRecord {
   readonly lastGeneration: number;
   /** Monotonic CAS token changed by apply claims and canonical retirement. */
   readonly fenceRevision: number;
+  /**
+   * Last authenticated owner observed before canonical Resource retirement.
+   * This receipt is cleared when a new incarnation consumes the fence and is
+   * never exposed as part of the public Resource record.
+   */
+  readonly retiredOwner?: ResourceOwner;
 }
 
 /** A resolved/desired Resource Shape instance and its observed status. */

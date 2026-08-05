@@ -101,9 +101,11 @@ import {
 import { rootgenErrorForController } from "../rootgen_error.ts";
 import {
   DEFAULT_CAPSULE_LEASE_TTL_MS,
+  CapsuleLeaseBusyError,
   type CapsuleCoordination,
   type LeaseHandle,
   withCapsuleLease,
+  withCapsuleResourceAdmission,
   withPlanLease,
 } from "../capsule_lease.ts";
 import {
@@ -172,6 +174,11 @@ import type { ResolvedDependencies } from "../dependency_resolution.ts";
 import type { DependencyResolutionService } from "../dependency_resolution.ts";
 import type { RunVerificationService } from "../run_verification.ts";
 import type { SourceLifecycleService } from "../source_lifecycle.ts";
+import {
+  CAPSULE_OWNED_RESOURCES_PENDING_REASON,
+  type CapsuleOwnedResourceFence,
+  type CapsuleOwnedResourceFenceResult,
+} from "../../capsules/mod.ts";
 // Shared helpers, constants, and run-engine types stay in the controller module
 // (`../mod.ts`) so the domain's public entry point and external importers are
 // unchanged; this engine imports the ones its moved bodies reference. The
@@ -1103,6 +1110,8 @@ export interface RunEngineDependencies {
   readonly capsules: CapsuleQuery;
   readonly runSerialized: RunSerialized;
   readonly managedVanityHostnameSlotsPerOwner?: number;
+  /** Optional host-owned Resource lifecycle fence; absent keeps legacy behavior. */
+  readonly capsuleOwnedResourceFence?: CapsuleOwnedResourceFence;
 }
 
 export class RunEngine {
@@ -1136,6 +1145,7 @@ export class RunEngine {
   readonly #capsules: CapsuleQuery;
   readonly #runSerialized: RunSerialized;
   readonly #managedVanityHostnameSlotsPerOwner?: number;
+  #capsuleOwnedResourceFence?: CapsuleOwnedResourceFence;
   #connectionsService?: ConnectionsService;
   #terminalObserver?: (run: PlanRun | ApplyRun) => Promise<void>;
   #planQueuedObserver?: (run: PlanRun) => Promise<void>;
@@ -1181,6 +1191,14 @@ export class RunEngine {
     this.#runSerialized = deps.runSerialized;
     this.#managedVanityHostnameSlotsPerOwner =
       deps.managedVanityHostnameSlotsPerOwner;
+    this.#capsuleOwnedResourceFence = deps.capsuleOwnedResourceFence;
+  }
+
+  /** Late-binds the host-owned Resource inventory fence after composition. */
+  setCapsuleOwnedResourceFence(
+    fence: CapsuleOwnedResourceFence | undefined,
+  ): void {
+    this.#capsuleOwnedResourceFence = fence;
   }
 
   setTerminalObserver(
@@ -4083,10 +4101,36 @@ export class RunEngine {
     // guard (single-isolate correctness). The held-lease handle is threaded into
     // #executeApply so a long apply can renew the lease + re-stamp its heartbeat
     // while a single blocking runner fetch is in flight.
-    const runWork = (handle?: LeaseHandle) =>
-      this.#runSerialized(key, () =>
-        this.#executeApply(applyRun, planRun, profile, dispatch, handle),
-      );
+    const runWork = (handle?: LeaseHandle) => {
+      // Acquire the cross-domain Resource admission after the in-process
+      // Capsule serialization turn is available but before marking the Apply
+      // Run running. A busy fence therefore leaves the queue row untouched so
+      // redelivery does not wait for a stale heartbeat before retrying.
+      return this.#runSerialized(key, async () => {
+        const execute = (resourceAdmissionLease?: LeaseHandle) =>
+          this.#executeApply(
+            applyRun,
+            planRun,
+            profile,
+            dispatch,
+            combinedLeaseHandle(handle, resourceAdmissionLease),
+            planRun.operation === "destroy" &&
+              planRun.capsuleId !== undefined,
+          );
+        if (
+          this.#capsuleCoordination &&
+          planRun.operation === "destroy" &&
+          planRun.capsuleId
+        ) {
+          return await withCapsuleResourceAdmission(
+            this.#capsuleCoordination,
+            { capsuleId: planRun.capsuleId, holderId: applyRun.id },
+            execute,
+          );
+        }
+        return await execute();
+      });
+    };
     if (this.#capsuleCoordination && planRun.capsuleId) {
       const environment =
         planRun.capsuleContext?.environment ??
@@ -6572,6 +6616,7 @@ export class RunEngine {
     profile: RunnerProfile,
     dispatch: RunModuleDispatch,
     lease?: LeaseHandle,
+    resourceAdmissionHeld = false,
   ): Promise<ApplyRunResponse> {
     const startedAt = this.#now();
     const claim = await this.#markApplyRunning(applyRun, profile, startedAt);
@@ -6625,6 +6670,7 @@ export class RunEngine {
           dispatch,
           leaseToken,
           lease,
+          resourceAdmissionHeld,
         );
       }
       // Renewal harness: #dispatchApply's runner.apply() is ONE awaited blocking
@@ -6831,6 +6877,11 @@ export class RunEngine {
         now,
       });
     } catch (error) {
+      // A busy cross-domain Capsule Resource admission fence is a queue
+      // contention signal, not an Apply failure. Leave the claimed Run
+      // retryable so the queue owner redelivers after the Resource claim or
+      // destroy terminalization releases the shared scope.
+      if (error instanceof CapsuleLeaseBusyError) throw error;
       if (ledgerCommitted) {
         // The atomic provider ledger is already authoritative. Never route a
         // downstream cleanup/observer failure through reservation release or
@@ -8506,6 +8557,7 @@ export class RunEngine {
     dispatch: RunModuleDispatch,
     leaseToken: string,
     lease?: LeaseHandle,
+    resourceAdmissionHeld = false,
   ): Promise<ApplyRunResponse> {
     if (!planRun.planArtifact) {
       throw new OpenTofuControllerError(
@@ -8533,6 +8585,29 @@ export class RunEngine {
     }
     const capsule =
       plannedCapsule ?? (await this.#requireCurrentPlannedCapsule(planRun));
+    if (this.#capsuleCoordination && !resourceAdmissionHeld) {
+      return await withCapsuleResourceAdmission(
+        this.#capsuleCoordination,
+        { capsuleId: capsule.id, holderId: running.id },
+        async () =>
+          await this.#executeDestroyApply(
+            running,
+            planRun,
+            profile,
+            startedAt,
+            capsule,
+            credentials,
+            dispatch,
+            leaseToken,
+            lease,
+            true,
+          ),
+      );
+    }
+    // Capsule-owned Resources are an independent lifecycle authority. They
+    // must be absent before any Capsule lifecycle action or provider teardown;
+    // otherwise a Capsule destroy could orphan a still-live Resource.
+    await this.#assertCapsuleOwnedResourcesClear(capsule, "destroy_apply");
     // A destroy_apply persists the post-teardown state at `base + 1`. Empty for
     // runs without capsule context.
     const persistGeneration = (planRun.baseStateGeneration ?? 0) + 1;
@@ -8773,6 +8848,10 @@ export class RunEngine {
         appliedApplyRunId: running.id,
         updatedAt: now,
       };
+      // Recheck immediately before the atomic terminal commit. A Resource may
+      // have appeared after the pre-dispatch inventory; in that case leave the
+      // Capsule and Resource ledgers nonterminal and fail the ApplyRun closed.
+      await this.#assertCapsuleOwnedResourcesClear(capsule, "destroy_apply");
       let committed: Awaited<
         ReturnType<OpenTofuControlStore["commitRunState"]>
       >;
@@ -9151,6 +9230,56 @@ export class RunEngine {
     return { applyRun: finalized };
   }
 
+  async #assertCapsuleOwnedResourcesClear(
+    capsule: Capsule,
+    phase: "abandon" | "destroy_apply",
+  ): Promise<void> {
+    const fence = this.#capsuleOwnedResourceFence;
+    if (!fence) return;
+
+    let result: CapsuleOwnedResourceFenceResult;
+    try {
+      result = await fence({ capsule, phase });
+    } catch (error) {
+      // Resource inventory is an authority boundary. An unavailable or
+      // malformed host response must not be treated as an empty inventory.
+      if (
+        error instanceof OpenTofuControllerError &&
+        error.code === "failed_precondition" &&
+        typeof error.details === "object" &&
+        error.details !== null &&
+        !Array.isArray(error.details) &&
+        (error.details as { readonly reason?: unknown }).reason ===
+          CAPSULE_OWNED_RESOURCES_PENDING_REASON
+      ) {
+        throw error;
+      }
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `capsule ${capsule.id} Resource ownership could not be verified`,
+        { reason: CAPSULE_OWNED_RESOURCES_PENDING_REASON },
+      );
+    }
+    if (result?.status === "clear") return;
+    const status = result?.status;
+    throw new OpenTofuControllerError(
+      "failed_precondition",
+      `capsule ${capsule.id} has Capsule-owned Resources pending destruction`,
+      {
+        reason: CAPSULE_OWNED_RESOURCES_PENDING_REASON,
+        ...(status === "invalid_ownership"
+          ? {
+              ownership: "invalid" as const,
+              ...(result?.reason
+                ? { ownershipReason: result.reason }
+                : {}),
+            }
+          : {}),
+        ...(result?.resourceId ? { resourceId: result.resourceId } : {}),
+      },
+    );
+  }
+
   async #requireRunnerProfile(id: string): Promise<RunnerProfile> {
     requireNonEmptyString(id, "runnerProfileId");
     const configuredProfile = this.#runnerProfilesById.get(id);
@@ -9191,6 +9320,36 @@ export class RunEngine {
     validatePlannedCapsuleCurrent({ planRun, capsule: capsule });
     return capsule;
   }
+}
+
+/**
+ * Renews both independent execution fences as one run-renewal target.
+ * Release remains owned by each surrounding `with*Lease` scope; this handle
+ * only makes a long destroy fail closed if either lease is lost.
+ */
+function combinedLeaseHandle(
+  primary: LeaseHandle | undefined,
+  secondary: LeaseHandle | undefined,
+): LeaseHandle | undefined {
+  if (!primary) return secondary;
+  if (!secondary) return primary;
+  return {
+    scope: `${primary.scope}+${secondary.scope}`,
+    holderId: primary.holderId,
+    token: `${primary.token}:${secondary.token}`,
+    renew: async (ttlMs) => {
+      const [primaryRenewed, secondaryRenewed] = await Promise.all([
+        primary.renew(ttlMs),
+        secondary.renew(ttlMs),
+      ]);
+      if (!primaryRenewed.acquired) return primaryRenewed;
+      if (!secondaryRenewed.acquired) return secondaryRenewed;
+      return Date.parse(primaryRenewed.expiresAt) <=
+        Date.parse(secondaryRenewed.expiresAt)
+        ? primaryRenewed
+        : secondaryRenewed;
+    },
+  };
 }
 
 async function assertApplyRunCreationAuthority(

@@ -63,6 +63,7 @@ import {
   summarizePrometheusMetrics,
   verifyPlatformExtensionBearerToken,
   withPlatformAssetCacheHeaders,
+  createPlatformCanonicalHostRuntimeGraphReader,
   createPlatformCanonicalReadyResourceInventory,
   createPlatformCanonicalResourceReadAuthority,
   createPlatformCompatibilityAuthority,
@@ -2569,6 +2570,88 @@ test("canonical Ready Resource inventory is bounded, global, and lock-coherent",
   ).rejects.toThrow(
     `canonical Ready Resource inventory conflict for ${incoherent.id}`,
   );
+});
+
+test("host runtime graph admits only the exact fenced EdgeWorker recovery identity", async () => {
+  const database = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(database);
+  const stores = createD1ResourceShapeStores(database);
+  const record: ResourceShapeRecord = {
+    id: "tkrn:workspace_host_recovery:EdgeWorker:api",
+    spaceId: "workspace_host_recovery",
+    kind: "EdgeWorker",
+    name: "api",
+    managedBy: "takosumi.resource-api.v1",
+    spec: { source: { artifactRef: "artifact:api" }, connections: {} },
+    phase: "Degraded",
+    generation: 2,
+    observedGeneration: 2,
+    lastOperationRunId: "run_resource_host_recovery",
+    conditions: [
+      {
+        type: "Ready",
+        status: "false",
+        reason: "HostRuntimeNotReady",
+        observedGeneration: 2,
+        lastTransitionAt: "2026-08-05T00:00:00.000Z",
+      },
+    ],
+    createdAt: "2026-08-05T00:00:00.000Z",
+    updatedAt: "2026-08-05T00:00:01.000Z",
+  };
+  await stores.resources.upsert(record);
+  await stores.locks.put({
+    resourceId: record.id,
+    selectedImplementation: "cloudflare_workers",
+    target: "cloudflare-main",
+    locked: true,
+    reason: ["host runtime recovery"],
+    nativeResources: [
+      { type: "cloudflare_workers_script", id: "backend-recovery-api" },
+    ],
+    lockedAt: record.createdAt,
+    updatedAt: record.updatedAt,
+  });
+  const env = {
+    TAKOSUMI_CONTROL_DB: database,
+    TAKOSUMI_ENVIRONMENT: "test",
+    TAKOSUMI_DEV_MODE: "1",
+    TAKOSUMI_DEPLOY_CONTROL_TOKEN: "resource-token",
+    TAKOSUMI_RESOURCE_SHAPES: "EdgeWorker",
+  } as never;
+  const graph = createPlatformCanonicalHostRuntimeGraphReader(env);
+  const request = {
+    workspaceId: record.spaceId,
+    requirements: [],
+    backgroundActivations: [],
+  } as never;
+
+  await expect(
+    graph.read({
+      request,
+      resourceId: record.id,
+      resourceGeneration: record.generation,
+      resourceRevisionId: record.lastOperationRunId!,
+    }),
+  ).resolves.toMatchObject({
+    consumer: {
+      resourceId: record.id,
+      resourceGeneration: 2,
+      resourceRevisionId: record.lastOperationRunId,
+      nativeType: "cloudflare_workers_script",
+      nativeId: "backend-recovery-api",
+      resource: { status: { phase: "Degraded" } },
+    },
+    connections: {},
+  });
+  await expect(
+    graph.read({
+      request,
+      resourceId: record.id,
+      resourceGeneration: record.generation,
+      resourceRevisionId: "run_resource_replaced",
+    }),
+  ).resolves.toBeUndefined();
 });
 
 test("canonical Ready exact and paged inventory fail closed when ResolutionLock changes during projection", async () => {

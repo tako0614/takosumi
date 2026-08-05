@@ -47,6 +47,7 @@ import { parsePageQuery } from "./page_query.ts";
 import {
   PortableHostIdempotencyCoordinator,
   PortableHostIdempotencyError,
+  type PortableHostIdempotencyRequest,
   type PortableHostIdempotencyReservation,
   type PortableHostSuccessWireResponse,
 } from "./portable_host_idempotency.ts";
@@ -135,19 +136,55 @@ export interface RegisterPortableFormHostRoutesOptions {
     Partial<PortableInterfaceDeclarationWriter>;
 }
 
-async function withHostResourceOwner(
+/** Presented host execution context was invalid and must not become unowned. */
+export class ResourceCapsuleOwnerAuthorityError extends Error {
+  constructor(message = "managed Resource owner authority is invalid") {
+    super(message);
+    this.name = "ResourceCapsuleOwnerAuthorityError";
+  }
+}
+
+async function resolveHostResourceOwner(
   c: Context,
   options: RegisterPortableFormHostRoutesOptions,
-  request: ApplyResourceRequest,
-): Promise<ApplyResourceRequest> {
-  const owner = await options.resolveResourceCapsuleOwner?.({
-    actor: request.actor,
-    request: c.req.raw,
-    space: request.space,
-    kind: request.kind,
-    name: request.name,
-  });
-  if (!owner) return request;
+  input: {
+    readonly actor: ActorContext;
+    readonly request: Request;
+    readonly space: string;
+    readonly kind: ResourceShapeKind;
+    readonly name: string;
+  },
+): Promise<
+  | { readonly ok: true; readonly owner?: ResourceCapsuleOwner }
+  | { readonly ok: false; readonly response: Response }
+> {
+  let owner: ResourceCapsuleOwner | undefined;
+  try {
+    owner = await options.resolveResourceCapsuleOwner?.(input);
+  } catch (error) {
+    if (error instanceof ResourceCapsuleOwnerAuthorityError) {
+      return {
+        ok: false,
+        response: portableError(
+          c,
+          "permission_denied",
+          "managed Resource owner authority was rejected",
+          403,
+        ),
+      };
+    }
+    return {
+      ok: false,
+      response: portableError(
+        c,
+        "backend_unavailable",
+        "managed Resource owner authority is unavailable",
+        503,
+        true,
+      ),
+    };
+  }
+  if (!owner) return { ok: true };
   if (!isResourceCapsuleOwner(owner)) {
     throw new TypeError(
       "portable Resource Capsule owner resolver returned invalid authority",
@@ -160,21 +197,44 @@ async function withHostResourceOwner(
     !capsuleId ||
     !workspaceId ||
     !installingPrincipalId ||
-    (request.actor.workspaceId !== undefined &&
-      request.actor.workspaceId !== workspaceId)
+    (input.actor.workspaceId !== undefined &&
+      input.actor.workspaceId !== workspaceId)
   ) {
     throw new TypeError(
       "portable Resource Capsule owner resolver returned invalid authority",
     );
   }
   return {
-    ...request,
+    ok: true,
     owner: {
       kind: "Capsule",
       id: capsuleId,
       workspaceId,
       installingPrincipalId,
     },
+  };
+}
+
+async function withHostResourceOwner(
+  c: Context,
+  options: RegisterPortableFormHostRoutesOptions,
+  request: ApplyResourceRequest,
+): Promise<
+  | { readonly ok: true; readonly request: ApplyResourceRequest }
+  | { readonly ok: false; readonly response: Response }
+> {
+  const resolved = await resolveHostResourceOwner(c, options, {
+    actor: request.actor,
+    request: c.req.raw,
+    space: request.space,
+    kind: request.kind,
+    name: request.name,
+  });
+  if (!resolved.ok) return resolved;
+  if (!resolved.owner) return { ok: true, request };
+  return {
+    ok: true,
+    request: { ...request, owner: resolved.owner },
   };
 }
 
@@ -577,7 +637,9 @@ export function registerPortableFormHostRoutes(
     if (!auth.ok) return portableAuthError(c, auth.response);
     const parsed = await parseResourceBody(c, auth.actor, true);
     if (!parsed.ok) return parsed.response;
-    const request = await withHostResourceOwner(c, options, parsed.request);
+    const owned = await withHostResourceOwner(c, options, parsed.request);
+    if (!owned.ok) return owned.response;
+    const request = owned.request;
     const operation = await desiredWriteOperation(options.service, request);
     const available = await requireAvailableForm(
       c,
@@ -620,7 +682,9 @@ export function registerPortableFormHostRoutes(
       true,
     );
     if (!parsed.ok) return parsed.response;
-    const request = await withHostResourceOwner(c, options, parsed.request);
+    const owned = await withHostResourceOwner(c, options, parsed.request);
+    if (!owned.ok) return owned.response;
+    const request = owned.request;
     const review = reviewFromBody(c, parsed.body);
     if (!review.ok) return review.response;
     const operation = await desiredWriteOperation(options.service, request);
@@ -643,9 +707,19 @@ export function registerPortableFormHostRoutes(
       async () => {
         const result = await options.service.apply(request, review.value);
         if (!result.ok) return serviceError(c, result.error);
+        const resource = portableResource(result.value);
+        if (result.value.kind === "EdgeWorker" && !resource.status) {
+          return serviceError(c, {
+            code: "deployment_finalize_pending",
+            message:
+              "resource backend apply succeeded but portable status is not Ready",
+            retryable: true,
+            retryAfterSeconds: 5,
+          });
+        }
         return portableJson(
           c,
-          portableResource(result.value),
+          resource,
           200,
           key.value,
         );
@@ -657,12 +731,61 @@ export function registerPortableFormHostRoutes(
             review.value,
           );
           if (!result.ok) return serviceError(c, result.error);
+          const resource = portableResource(result.value);
+          if (result.value.kind === "EdgeWorker" && !resource.status) {
+            return serviceError(c, {
+              code: "deployment_finalize_pending",
+              message:
+                "resource backend apply succeeded but portable status is not Ready",
+              retryable: true,
+              retryAfterSeconds: 5,
+            });
+          }
           return portableJson(
             c,
-            portableResource(result.value),
+            resource,
             200,
             key.value,
           );
+        },
+        validateReplay: async (response, idempotencyRequest) => {
+          if (
+            request.kind !== "EdgeWorker" ||
+            portableReplayHasStatus(response)
+          ) {
+            return undefined;
+          }
+          try {
+            const quarantined = await options.idempotency!.quarantineReplay(
+              idempotencyRequest,
+              response,
+              (candidate) => !portableReplayHasStatus(candidate),
+            );
+            if (quarantined.kind === "quarantined") {
+              return serviceError(c, {
+                code: "deployment_finalize_pending",
+                message:
+                  "cached EdgeWorker success lacks portable status; retry after Core Resource recovery",
+                retryable: true,
+                retryAfterSeconds: 5,
+              });
+            }
+            return serviceError(c, {
+              code: "deployment_finalize_pending",
+              message:
+                "cached EdgeWorker success could not be safely replayed; retry after Core Resource recovery",
+              retryable: true,
+              retryAfterSeconds: 5,
+            });
+          } catch {
+            return portableError(
+              c,
+              "backend_unavailable",
+              "portable host idempotency replay quarantine failed",
+              503,
+              true,
+            );
+          }
         },
         retainReservationOnFailure: async () =>
           (await options.service.applyReplayStatus(request, review.value)) !==
@@ -682,7 +805,9 @@ export function registerPortableFormHostRoutes(
       true,
     );
     if (!parsed.ok) return parsed.response;
-    const request = await withHostResourceOwner(c, options, parsed.request);
+    const owned = await withHostResourceOwner(c, options, parsed.request);
+    if (!owned.ok) return owned.response;
+    const request = owned.request;
     const nativeId = stringValue(parsed.body.nativeId);
     if (!nativeId)
       return portableError(c, "invalid_argument", "nativeId is required", 400);
@@ -772,6 +897,23 @@ export function registerPortableFormHostRoutes(
     if (!space.ok) return space.response;
     const identity = formIdentityFromQuery(c, true);
     if (!identity.ok) return identity.response;
+    const observeKind = c.req.param("kind");
+    const observeName = c.req.param("name");
+    if (
+      !observeKind ||
+      !isResourceShapeKind(observeKind) ||
+      !observeName
+    ) {
+      return failed(c, "resource kind and name are required").response;
+    }
+    const observeOwner = await resolveHostResourceOwner(c, options, {
+      actor: auth.actor,
+      request: c.req.raw,
+      space: space.value,
+      kind: observeKind,
+      name: observeName,
+    });
+    if (observeOwner.ok === false) return observeOwner.response;
     // Observation is a read-side reconcile, so replaying the exact request is
     // the correct resume for an interrupted reservation.
     const runObserve = async (): Promise<Response> => {
@@ -782,7 +924,12 @@ export function registerPortableFormHostRoutes(
         located.value.kind,
         located.value.metadata.name,
         auth.actor,
-        { expectedGeneration: located.value.metadata.generation },
+        {
+          expectedGeneration: located.value.metadata.generation,
+          ...(observeOwner.owner
+            ? { expectedOwner: observeOwner.owner }
+            : {}),
+        },
       );
       if (!result.ok) return serviceError(c, result.error);
       return portableJson(
@@ -813,6 +960,23 @@ export function registerPortableFormHostRoutes(
     if (!space.ok) return space.response;
     const identity = formIdentityFromQuery(c, true);
     if (!identity.ok) return identity.response;
+    const refreshKind = c.req.param("kind");
+    const refreshName = c.req.param("name");
+    if (
+      !refreshKind ||
+      !isResourceShapeKind(refreshKind) ||
+      !refreshName
+    ) {
+      return failed(c, "resource kind and name are required").response;
+    }
+    const refreshOwner = await resolveHostResourceOwner(c, options, {
+      actor: auth.actor,
+      request: c.req.raw,
+      space: space.value,
+      kind: refreshKind,
+      name: refreshName,
+    });
+    if (refreshOwner.ok === false) return refreshOwner.response;
     // Refresh republishes observed backend state without redispatching a
     // desired-state mutation, so the exact request is its own resume.
     const runRefresh = async (): Promise<Response> => {
@@ -823,7 +987,12 @@ export function registerPortableFormHostRoutes(
         located.value.kind,
         located.value.metadata.name,
         auth.actor,
-        { expectedGeneration: located.value.metadata.generation },
+        {
+          expectedGeneration: located.value.metadata.generation,
+          ...(refreshOwner.owner
+            ? { expectedOwner: refreshOwner.owner }
+            : {}),
+        },
       );
       if (!result.ok) return serviceError(c, result.error);
       return portableJson(
@@ -848,7 +1017,7 @@ export function registerPortableFormHostRoutes(
     );
   });
 
-  app.delete(`${base}/resources/:kind/:name`, async (c) => {
+  app.delete(`${base}/resources/:kind/:name`, async (c): Promise<Response> => {
     const auth = await options.authorize(c);
     if (!auth.ok) return portableAuthError(c, auth.response);
     const key = idempotencyKey(c);
@@ -857,6 +1026,24 @@ export function registerPortableFormHostRoutes(
     if (!space.ok) return space.response;
     const identity = formIdentityFromQuery(c, true);
     if (!identity.ok) return identity.response;
+    const pathKind = c.req.param("kind");
+    const pathName = c.req.param("name");
+    if (!pathKind || !isResourceShapeKind(pathKind) || !pathName) {
+      return failed(c, "resource kind and name are required").response;
+    }
+    // A managed destroy token is a different authority from ordinary user
+    // deletion. Resolve it through the same host context seam so the worker
+    // can require the exact running destroy ApplyRun; ordinary user-auth
+    // requests still receive no owner and follow the existing delete path.
+    const resolvedOwner = await resolveHostResourceOwner(c, options, {
+      actor: auth.actor,
+      request: c.req.raw,
+      space: space.value,
+      kind: pathKind,
+      name: pathName,
+    });
+    if (resolvedOwner.ok === false) return resolvedOwner.response;
+    const expectedOwner = resolvedOwner.owner;
     // Deletion of one exact generation is idempotent: a resumed attempt either
     // finds the row already gone and retries canonical host retirement, or
     // continues retiring a record left in Deleting. Without this, an
@@ -874,7 +1061,10 @@ export function registerPortableFormHostRoutes(
           kind,
           name,
           auth.actor,
-          { expectedManagedBy: PORTABLE_FORM_MANAGER },
+          {
+            expectedManagedBy: PORTABLE_FORM_MANAGER,
+            ...(expectedOwner ? { expectedOwner } : {}),
+          },
         );
         if (!result.ok) return serviceError(c, result.error);
         c.header("idempotency-key", key.value);
@@ -888,6 +1078,7 @@ export function registerPortableFormHostRoutes(
         {
           expectedManagedBy: PORTABLE_FORM_MANAGER,
           expectedGeneration: located.value.metadata.generation,
+          ...(expectedOwner ? { expectedOwner } : {}),
         },
       );
       if (!result.ok) return serviceError(c, result.error);
@@ -1697,6 +1888,10 @@ async function executePortableIdempotentMutation(
   execute: () => Promise<Response>,
   recovery: {
     readonly resume?: () => Promise<Response>;
+    readonly validateReplay?: (
+      response: PortableHostSuccessWireResponse,
+      request: PortableHostIdempotencyRequest,
+    ) => Promise<Response | undefined>;
     readonly retainReservationOnFailure?: (
       response: Response,
     ) => Promise<boolean>;
@@ -1712,9 +1907,10 @@ async function executePortableIdempotentMutation(
     );
   }
   let reserved;
+  let idempotencyRequest: PortableHostIdempotencyRequest;
   try {
     const url = new URL(c.req.url);
-    reserved = await options.idempotency.reserve({
+    idempotencyRequest = {
       actor: input.actor,
       space: input.space,
       idempotencyKey: input.idempotencyKey,
@@ -1727,7 +1923,8 @@ async function executePortableIdempotentMutation(
         ? { ifNoneMatch: c.req.header("if-none-match") }
         : {}),
       body: new Uint8Array(await c.req.raw.clone().arrayBuffer()),
-    });
+    };
+    reserved = await options.idempotency.reserve(idempotencyRequest);
   } catch (error) {
     if (
       error instanceof PortableHostIdempotencyError &&
@@ -1744,6 +1941,13 @@ async function executePortableIdempotentMutation(
     );
   }
   if (reserved.kind === "replay") {
+    if (recovery.validateReplay) {
+      const validated = await recovery.validateReplay(
+        reserved.response,
+        idempotencyRequest,
+      );
+      if (validated) return validated;
+    }
     return responseFromPortableWire(reserved.response);
   }
   if (reserved.kind === "in_progress") {
@@ -2100,4 +2304,15 @@ function stringValue(value: unknown): string | undefined {
 
 function isJsonObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function portableReplayHasStatus(
+  response: PortableHostSuccessWireResponse,
+): boolean {
+  try {
+    const body = parseCanonicalJson(response.body);
+    return isJsonObject(body) && isJsonObject(body.status);
+  } catch {
+    return false;
+  }
 }

@@ -1673,9 +1673,18 @@ import:
   ask the host admission port before adapter/backend lookup or lifecycle write
 
 normal delete:
-  notify the host with reason canonical_delete only after the canonical
-  Resource is gone
-  retry host retirement through an idempotent delete of the absent Resource
+  notify the host with reason canonical_delete while the exact live Resource
+  revision and owner still fence the operation
+  remove the canonical Resource only after idempotent host retirement succeeds
+  persist the retired owner in the internal Resource identity fence
+  treat an exact absent-owner replay as completed without calling the host,
+  because a newer incarnation may begin immediately after the absence read
+
+upgrade from the retired remove-before-host-retire order:
+  do not guess host authority from an absent Resource or synthesize an owner
+  use the host operator's exact retained-runtime orphan recovery procedure,
+  fenced by canonical absence, retained generation/revision, and a recreation
+  freeze; block the upgrade when those proofs cannot be produced
 
 force tombstone:
   notify the host with reason force_tombstone before removing the canonical

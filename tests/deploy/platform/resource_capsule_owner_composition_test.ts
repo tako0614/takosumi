@@ -79,6 +79,31 @@ test("production platform durably replays a Capsule-owned portable Resource appl
     createdAt: NOW,
     updatedAt: NOW,
   });
+  await control.putApplyRun({
+    id: "run_capsule_owner_apply",
+    planRunId: "plan_capsule_owner_apply",
+    workspaceId: WORKSPACE_ID,
+    capsuleId: CAPSULE_ID,
+    operation: "create",
+    runnerProfileId: "opentofu-default",
+    status: "running",
+    expected: {
+      planRunId: "plan_capsule_owner_apply",
+      capsuleId: CAPSULE_ID,
+      runnerProfileId: "opentofu-default",
+      sourceDigest: "sha256:source",
+      variablesDigest: "sha256:variables",
+      policyDecisionDigest: "sha256:policy",
+      planDigest: "sha256:plan",
+      planArtifactDigest: "sha256:plan-artifact",
+    },
+    stateBackend: { kind: "managed", ref: "state" },
+    stateLock: { status: "recorded", backendRef: "state" },
+    auditEvents: [],
+    createdAt: 1,
+    updatedAt: 2,
+    startedAt: 2,
+  });
 
   const formRegistry = createD1FormRegistryStore(db);
   await formRegistry.installPackage(
@@ -300,6 +325,39 @@ test("production platform durably replays a Capsule-owned portable Resource appl
     "preview",
     "apply",
   ]);
+  const liveRun = await control.getApplyRun("run_capsule_owner_apply");
+  expect(liveRun).toBeDefined();
+  if (!liveRun) throw new Error("seeded apply Run disappeared");
+  await control.putApplyRun({
+    ...liveRun,
+    status: "succeeded",
+    updatedAt: 3,
+    finishedAt: 3,
+  });
+  const stale = await worker.fetch(
+    new Request(
+      `https://app.takosumi.test${TAKOFORM_FORM_HOST_API_PATH}/resources/preview`,
+      {
+        method: "POST",
+        headers: {
+          authorization,
+          "content-type": "application/json",
+          "if-none-match": "*",
+        },
+        body: JSON.stringify({
+          ...desired,
+          metadata: { space: WORKSPACE_ID, name: "stale-owner" },
+        }),
+      },
+    ),
+    env,
+  );
+  expect(stale.status).toBe(403);
+  expect(
+    await resourceStores.resources.get(
+      `tkrn:${WORKSPACE_ID}:ObjectBucket:stale-owner`,
+    ),
+  ).toBeUndefined();
 });
 
 test("production platform rejects an incomplete managed token before route resolution", async () => {

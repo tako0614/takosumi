@@ -245,6 +245,31 @@ e2e(
         createdAt: NOW,
         updatedAt: NOW,
       });
+      await control.putApplyRun({
+        id: "run_yurucommu_real_apply",
+        planRunId: "plan_yurucommu_real_apply",
+        workspaceId: WORKSPACE_ID,
+        capsuleId: CAPSULE_ID,
+        operation: "create",
+        runnerProfileId: "opentofu-default",
+        status: "running",
+        expected: {
+          planRunId: "plan_yurucommu_real_apply",
+          capsuleId: CAPSULE_ID,
+          runnerProfileId: "opentofu-default",
+          sourceDigest: "sha256:source",
+          variablesDigest: "sha256:variables",
+          policyDecisionDigest: "sha256:policy",
+          planDigest: "sha256:plan",
+          planArtifactDigest: "sha256:plan-artifact",
+        },
+        stateBackend: { kind: "managed", ref: "state" },
+        stateLock: { status: "recorded", backendRef: "state" },
+        auditEvents: [],
+        createdAt: 1,
+        updatedAt: 2,
+        startedAt: 2,
+      });
       const scopedInstallConfig =
         await control.getInstallConfig(INSTALL_CONFIG_ID);
       expect(scopedInstallConfig?.lifecycleActions).toEqual(

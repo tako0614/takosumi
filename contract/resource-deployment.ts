@@ -216,11 +216,12 @@ export interface ResourceDeploymentAdmission {
     context: ResourceDeploymentImportContext,
   ): Promise<ResourceDeploymentAdmissionDecision>;
   /**
-   * Finalizes host-owned lifecycle capacity after canonical retirement.
-   * Normal deletion may release capacity; a force tombstone must retain it
-   * until an explicit operator action proves the native backend is absent.
-   * Implementations must be idempotent because absent-resource retries repeat
-   * this hook after a prior finalization failure.
+   * Retires host-owned lifecycle capacity before canonical Resource removal.
+   * The exact live Resource remains the identity fence until this idempotent
+   * hook succeeds. A force tombstone must instead retain capacity until an
+   * explicit operator action proves the native backend is absent. Once the
+   * Resource is absent, ordinary delete replay is ledger-only and must not
+   * invoke this hook against a possibly newer incarnation.
    */
   retire(context: ResourceDeploymentRetireContext): Promise<void>;
 }

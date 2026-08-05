@@ -46,6 +46,8 @@ import {
   type CapsuleCoordination,
   InMemoryCapsuleCoordination,
   type CapsuleLease,
+  capsuleLeaseScope,
+  capsuleResourceAdmissionScope,
   type ReleaseCapsuleLeaseInput,
   type RenewCapsuleLeaseInput,
 } from "../../../../core/domains/deploy-control/capsule_lease.ts";
@@ -75,6 +77,7 @@ import type {
   BillingEnforcement,
   ShowbackRater,
 } from "takosumi-contract/billing";
+import type { CapsuleOwnedResourceFence } from "../../../../core/domains/capsules/mod.ts";
 import {
   FIXTURE_ARCHIVE_DIGEST,
   seedCapsuleModel,
@@ -248,9 +251,11 @@ async function expectWithin<T>(
 function observingCapsuleCoordination(now: () => number): {
   readonly coordination: CapsuleCoordination;
   readonly renewCalls: () => number;
+  readonly renewedScopes: () => readonly string[];
 } {
   const inner = new InMemoryCapsuleCoordination({ now });
   let renewCalls = 0;
+  const renewedScopes: string[] = [];
   return {
     coordination: {
       acquireLease: (input: AcquireCapsuleLeaseInput) =>
@@ -259,10 +264,12 @@ function observingCapsuleCoordination(now: () => number): {
         inner.releaseLease(input),
       renewLease: (input: RenewCapsuleLeaseInput): Promise<CapsuleLease> => {
         renewCalls += 1;
+        renewedScopes.push(input.scope);
         return inner.renewLease(input);
       },
     },
     renewCalls: () => renewCalls,
+    renewedScopes: () => renewedScopes,
   };
 }
 
@@ -4960,13 +4967,17 @@ test("pre-destroy failure remains secondary evidence when the final Capsule leas
   const inner = new InMemoryCapsuleCoordination({ now: sequenceNow(60_000) });
   let failDestroyFinalProbe = false;
   let destroyRenewAttempts = 0;
+  const initiallyRenewedDestroyScopes = new Set<string>();
   const coordination: CapsuleCoordination = {
     acquireLease: (input) => inner.acquireLease(input),
     releaseLease: (input) => inner.releaseLease(input),
     renewLease: (input) => {
       if (!failDestroyFinalProbe) return inner.renewLease(input);
       destroyRenewAttempts += 1;
-      if (destroyRenewAttempts === 1) return inner.renewLease(input);
+      if (!initiallyRenewedDestroyScopes.has(input.scope)) {
+        initiallyRenewedDestroyScopes.add(input.scope);
+        return inner.renewLease(input);
+      }
       return Promise.reject(
         Object.assign(new Error("coordination transport reset"), {
           retryable: true,
@@ -5020,7 +5031,13 @@ test("pre-destroy failure remains secondary evidence when the final Capsule leas
     lifecycleActionPhase: "pre_destroy",
     lifecycleActionStatus: "failed",
   });
-  expect(destroyRenewAttempts).toBe(3);
+  expect(initiallyRenewedDestroyScopes).toEqual(
+    new Set([
+      capsuleLeaseScope("cap_fixture1", "preview"),
+      capsuleResourceAdmissionScope("cap_fixture1"),
+    ]),
+  );
+  expect(destroyRenewAttempts).toBeGreaterThanOrEqual(4);
   expect(runner.destroyJobs).toHaveLength(0);
 });
 
@@ -5092,6 +5109,15 @@ test("pre-destroy lifecycle execution renews before provider destroy dispatch", 
     renewCalls: observed.renewCalls,
     initialRenewCalls: renewCallsBeforeDestroy,
   });
+
+  expect(
+    new Set(observed.renewedScopes().slice(renewCallsBeforeDestroy)),
+  ).toEqual(
+    new Set([
+      capsuleLeaseScope("cap_fixture1", "preview"),
+      capsuleResourceAdmissionScope("cap_fixture1"),
+    ]),
+  );
 
   expect(runner.destroyJobs).toHaveLength(0);
   releaseActivation();
@@ -7689,6 +7715,84 @@ test("capsule destroy-plan apply tears down state at base+1 after approval and m
       (stateVersion) => stateVersion.generation,
     ),
   ).toEqual([1, 2]);
+});
+
+test("Capsule destroy Apply fails closed on pending owned Resources before teardown", async () => {
+  const { store, runner, controller } = await seededController();
+  const create = await controller.createCapsulePlan("cap_fixture1");
+  await controller.createApplyRun({
+    planRunId: create.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(create.planRun),
+  });
+
+  let fenceCalls = 0;
+  const fence: CapsuleOwnedResourceFence = async ({ capsule, phase }) => {
+    fenceCalls += 1;
+    expect(capsule.id).toBe("cap_fixture1");
+    expect(phase).toBe("destroy_apply");
+    return { status: "pending", resourceId: "tkrn:ws_test001:EdgeWorker:app" };
+  };
+  controller.setCapsuleOwnedResourceFence(fence);
+
+  const destroy = await controller.createCapsuleDestroyPlan("cap_fixture1");
+  await controller.approveRun(destroy.planRun.id);
+  const response = await controller.createApplyRun({
+    planRunId: destroy.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(destroy.planRun),
+  });
+
+  expect(response.applyRun.status).toBe("failed");
+  expect(response.applyRun.diagnostics).toContainEqual(
+    expect.objectContaining({ code: "capsule_owned_resources_pending" }),
+  );
+  expect(fenceCalls).toBe(1);
+  expect(runner.destroyJobs).toHaveLength(0);
+  expect(response.capsule?.status).toBe("active");
+  expect(response.capsule?.currentStateGeneration).toBe(1);
+  expect(
+    (await store.getLatestStateVersion("cap_fixture1", "preview"))?.generation,
+  ).toBe(1);
+});
+
+test("Capsule destroy Apply rechecks the Resource fence before terminal commit", async () => {
+  const { store, runner, controller } = await seededController();
+  const create = await controller.createCapsulePlan("cap_fixture1");
+  await controller.createApplyRun({
+    planRunId: create.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(create.planRun),
+  });
+
+  let fenceCalls = 0;
+  const fence: CapsuleOwnedResourceFence = async ({ phase }) => {
+    expect(phase).toBe("destroy_apply");
+    fenceCalls += 1;
+    return fenceCalls === 1
+      ? { status: "clear" }
+      : {
+          status: "pending",
+          resourceId: "tkrn:ws_test001:EdgeWorker:appeared-during-destroy",
+        };
+  };
+  controller.setCapsuleOwnedResourceFence(fence);
+
+  const destroy = await controller.createCapsuleDestroyPlan("cap_fixture1");
+  await controller.approveRun(destroy.planRun.id);
+  const response = await controller.createApplyRun({
+    planRunId: destroy.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(destroy.planRun),
+  });
+
+  expect(response.applyRun.status).toBe("failed");
+  expect(response.applyRun.diagnostics).toContainEqual(
+    expect.objectContaining({ code: "capsule_owned_resources_pending" }),
+  );
+  expect(fenceCalls).toBe(2);
+  expect(runner.destroyJobs).toHaveLength(1);
+  expect(response.capsule?.status).toBe("active");
+  expect(response.capsule?.currentStateGeneration).toBe(1);
+  expect(
+    (await store.getLatestStateVersion("cap_fixture1", "preview"))?.generation,
+  ).toBe(1);
 });
 
 test("a second successful apply preserves StateVersion history and advances the cursor", async () => {

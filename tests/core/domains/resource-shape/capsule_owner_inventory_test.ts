@@ -1,0 +1,303 @@
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+
+import {
+  type ResourceCapsuleOwner,
+  type ResourcePhase,
+} from "takosumi-contract";
+import { ensureD1OpenTofuLedgerSchema } from "../../../../worker/src/d1_opentofu_store.ts";
+import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
+import { PGliteSqlClient } from "../../../helpers/deploy-control/pglite_sql_client.ts";
+import { createD1ResourceShapeStores } from "../../../../core/domains/resource-shape/d1_stores.ts";
+import {
+  formatResourceShapeId,
+  type ResolutionLockRecord,
+} from "../../../../core/domains/resource-shape/records.ts";
+import { createSqlResourceShapeStores } from "../../../../core/domains/resource-shape/sql_stores.ts";
+import {
+  createInMemoryResourceShapeStores,
+  resourceRecordRevision,
+  type ResourceShapeStores,
+} from "../../../../core/domains/resource-shape/stores.ts";
+import type { ResourceShapeRecord } from "../../../../core/domains/resource-shape/records.ts";
+import type { SpaceId } from "../../../../core/shared/ids.ts";
+import type { IsoTimestamp } from "../../../../core/shared/time.ts";
+
+const SPACE = "sp_capsule_inventory" as SpaceId;
+const OTHER_SPACE = "sp_other_inventory" as SpaceId;
+const CAPSULE = "capsule_inventory";
+const OTHER_CAPSULE = "capsule_other";
+const PRINCIPAL = "principal_inventory";
+const CREATED_AT = "2026-08-05T00:00:00.000Z" as IsoTimestamp;
+const RECOVERED_AT = "2026-08-05T00:00:01.000Z" as IsoTimestamp;
+
+function capsuleOwner(
+  id = CAPSULE,
+  workspaceId: SpaceId = SPACE,
+): ResourceCapsuleOwner {
+  return {
+    kind: "Capsule",
+    id,
+    workspaceId,
+    installingPrincipalId: PRINCIPAL,
+  };
+}
+
+function resource(input: {
+  readonly name: string;
+  readonly phase: ResourcePhase;
+  readonly owner?: ResourceShapeRecord["owner"];
+  readonly generation?: number;
+  readonly observedGeneration?: number;
+  readonly spaceId?: SpaceId;
+}): ResourceShapeRecord {
+  const generation = input.generation ?? 1;
+  return {
+    id: formatResourceShapeId(
+      input.spaceId ?? SPACE,
+      "EdgeWorker",
+      input.name,
+    ),
+    spaceId: input.spaceId ?? SPACE,
+    kind: "EdgeWorker",
+    name: input.name,
+    managedBy: "portable_iac",
+    spec: { name: input.name },
+    phase: input.phase,
+    generation,
+    observedGeneration: input.observedGeneration ?? generation,
+    ...(input.owner === undefined ? {} : { owner: input.owner }),
+    createdAt: CREATED_AT,
+    updatedAt: CREATED_AT,
+  };
+}
+
+interface Backend {
+  readonly label: string;
+  setup(): Promise<{
+    readonly stores: ResourceShapeStores;
+    readonly close: () => Promise<void>;
+  }>;
+}
+
+const backends: readonly Backend[] = [
+  {
+    label: "in-memory",
+    async setup() {
+      return {
+        stores: createInMemoryResourceShapeStores(),
+        close: async () => {},
+      };
+    },
+  },
+  {
+    label: "cloudflare-d1",
+    async setup() {
+      const db = new SqliteFakeD1();
+      await ensureD1OpenTofuLedgerSchema(db);
+      return {
+        stores: createD1ResourceShapeStores(db),
+        close: async () => {},
+      };
+    },
+  },
+  {
+    label: "postgres",
+    async setup() {
+      const client = await PGliteSqlClient.create();
+      return {
+        stores: createSqlResourceShapeStores(client),
+        close: () => client.close(),
+      };
+    },
+  },
+];
+
+for (const backend of backends) {
+  describe(`Capsule owner Resource inventory (${backend.label})`, () => {
+    let stores: ResourceShapeStores;
+    let close: () => Promise<void>;
+
+    beforeEach(async () => {
+      const setup = await backend.setup();
+      stores = setup.stores;
+      close = setup.close;
+    });
+
+    afterEach(async () => {
+      await close();
+    });
+
+    test("matches exact Workspace/Capsule owner across all lifecycle phases", async () => {
+      const cases: readonly {
+        readonly name: string;
+        readonly phase: ResourcePhase;
+        readonly owner?: ResourceShapeRecord["owner"];
+        readonly generation?: number;
+        readonly observedGeneration?: number;
+        readonly spaceId?: SpaceId;
+        readonly included: boolean;
+      }[] = [
+        {
+          name: "ready",
+          phase: "Ready",
+          owner: capsuleOwner(),
+          included: true,
+        },
+        {
+          name: "applying",
+          phase: "Applying",
+          owner: capsuleOwner(),
+          included: true,
+        },
+        {
+          name: "deleting",
+          phase: "Deleting",
+          owner: capsuleOwner(),
+          included: true,
+        },
+        {
+          name: "failed",
+          phase: "Failed",
+          owner: capsuleOwner(),
+          included: true,
+        },
+        {
+          name: "ready-observed-mismatch",
+          phase: "Ready",
+          owner: capsuleOwner(),
+          generation: 2,
+          observedGeneration: 1,
+          included: true,
+        },
+        {
+          name: "other-capsule",
+          phase: "Ready",
+          owner: capsuleOwner(OTHER_CAPSULE),
+          included: false,
+        },
+        {
+          name: "other-workspace-owner",
+          phase: "Ready",
+          owner: capsuleOwner(CAPSULE, OTHER_SPACE),
+          included: false,
+        },
+        {
+          name: "other-workspace-row",
+          phase: "Ready",
+          owner: capsuleOwner(CAPSULE, OTHER_SPACE),
+          spaceId: OTHER_SPACE,
+          included: false,
+        },
+        {
+          name: "legacy-principal-owner",
+          phase: "Ready",
+          owner: PRINCIPAL,
+          included: false,
+        },
+      ];
+
+      for (const item of cases) {
+        await stores.resources.upsert(resource(item));
+      }
+
+      const page = await stores.resources.listByCapsuleOwnerPage(
+        SPACE,
+        CAPSULE,
+        { limit: 100 },
+      );
+      expect(page.nextCursor).toBeUndefined();
+      expect(page.items.map((item) => item.name)).toEqual(
+        cases.filter((item) => item.included).map((item) => item.name).sort(),
+      );
+      expect(page.items.every((item) => item.owner?.kind === "Capsule")).toBe(
+        true,
+      );
+    });
+
+    test("preserves the source keyset cursor through filtered pages", async () => {
+      const records = [
+        resource({ name: "a-unrelated", phase: "Ready", owner: capsuleOwner(OTHER_CAPSULE) }),
+        resource({ name: "b-applying", phase: "Applying", owner: capsuleOwner() }),
+        resource({ name: "c-unrelated", phase: "Failed", owner: capsuleOwner(OTHER_CAPSULE) }),
+        resource({ name: "d-deleting", phase: "Deleting", owner: capsuleOwner() }),
+        resource({ name: "e-failed", phase: "Failed", owner: capsuleOwner() }),
+      ];
+      for (const record of records) await stores.resources.upsert(record);
+
+      const seen: string[] = [];
+      const pages: number[] = [];
+      let cursor: string | undefined;
+      for (let pageNumber = 0; pageNumber < 20; pageNumber += 1) {
+        const page = await stores.resources.listByCapsuleOwnerPage(
+          SPACE,
+          CAPSULE,
+          { limit: 1, ...(cursor ? { cursor } : {}) },
+        );
+        pages.push(page.items.length);
+        seen.push(...page.items.map((item) => item.name));
+        if (!page.nextCursor) break;
+        cursor = page.nextCursor;
+      }
+
+      expect(seen).toEqual(["b-applying", "d-deleting", "e-failed"]);
+      expect(pages).toEqual([0, 1, 0, 1, 1]);
+    });
+
+    test("atomically restores a coherent Resource and ResolutionLock pair", async () => {
+      const degraded = {
+        ...resource({
+          name: "recoverable",
+          phase: "Degraded",
+          owner: capsuleOwner(),
+        }),
+        lastOperationRunId: "resource-run-recoverable",
+      } satisfies ResourceShapeRecord;
+      const lock = {
+        resourceId: degraded.id,
+        selectedImplementation: "test.edge-worker",
+        targetPool: "default",
+        target: "managed",
+        implementationSnapshot: {
+          shape: "EdgeWorker",
+          implementation: "test.edge-worker",
+          interfaces: { http: "native" },
+          plugin: "test-edge-worker",
+        },
+        locked: true,
+        reason: ["test recovery"],
+        nativeResources: [{ type: "edge.worker", id: "recoverable" }],
+        lockedAt: CREATED_AT,
+        updatedAt: CREATED_AT,
+      } satisfies ResolutionLockRecord;
+      await stores.resources.upsert(degraded);
+      await stores.locks.put(lock);
+      const persisted = await stores.resources.get(degraded.id);
+      expect(persisted).toBeDefined();
+      if (!persisted) throw new Error("seeded Resource disappeared");
+
+      const result = await stores.replaceResourceAggregate({
+        record: {
+          ...persisted,
+          phase: "Ready",
+          updatedAt: RECOVERED_AT,
+        },
+        lock: { ...lock, updatedAt: RECOVERED_AT },
+        expectedResource: {
+          generation: persisted.generation,
+          phase: persisted.phase,
+          updatedAt: persisted.updatedAt,
+          revision: resourceRecordRevision(persisted),
+        },
+        expectedLock: lock,
+      });
+      expect(result.status).toBe("replaced");
+      if (result.status !== "replaced") return;
+      expect(result.record.phase).toBe("Ready");
+      expect(result.record.updatedAt).toBe(RECOVERED_AT);
+      expect(result.lock.updatedAt).toBe(RECOVERED_AT);
+      expect(resourceRecordRevision(result.record)).toBe(
+        resourceRecordRevision(persisted) + 1,
+      );
+    });
+  });
+}

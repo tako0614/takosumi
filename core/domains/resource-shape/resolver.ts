@@ -377,6 +377,8 @@ function buildLockedOutput(
         entry: target,
         descriptor,
       }),
+    portability,
+    nativeResources: nativeResourcePlan,
     locked: true,
   };
   return {

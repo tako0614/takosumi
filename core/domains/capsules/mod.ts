@@ -81,6 +81,58 @@ export interface CreateCapsuleRequest {
   readonly autoUpdate?: boolean;
 }
 
+/** Stable reason returned when a Capsule still owns a Resource Shape. */
+export const CAPSULE_OWNED_RESOURCES_PENDING_REASON =
+  "capsule_owned_resources_pending";
+
+/**
+ * Narrow host-owned lifecycle fence for Capsule-owned Resources.
+ *
+ * The Resource Shape store remains owned by its domain. Hosts provide this
+ * read-only port after composing both domains; the implementation should
+ * paginate the exact Workspace/Capsule owner inventory and fail closed for
+ * malformed or Principal-mismatched ownership evidence.
+ */
+export interface CapsuleOwnedResourceFenceInput {
+  readonly capsule: Capsule;
+  readonly phase: "abandon" | "destroy_apply";
+}
+
+export type CapsuleOwnedResourceFenceResult =
+  | { readonly status: "clear" }
+  | {
+      readonly status: "pending";
+      /** Optional internal evidence for logs/tests; never required by callers. */
+      readonly resourceId?: string;
+    }
+  | {
+      readonly status: "invalid_ownership";
+      /** Optional internal evidence for logs/tests; never required by callers. */
+      readonly resourceId?: string;
+      readonly reason?: "principal_mismatch" | "corrupt";
+    };
+
+export type CapsuleOwnedResourceFence = (
+  input: CapsuleOwnedResourceFenceInput,
+) => Promise<CapsuleOwnedResourceFenceResult>;
+
+/**
+ * Host-owned cross-domain admission fence for Capsule Resource mutations.
+ * The callback re-reads the current Capsule while the shared lease is held and
+ * only then invokes `work`; Resource Shape therefore need not own Capsule
+ * storage or infer lifecycle state from a portable request.
+ */
+export type CapsuleOwnedResourceAdmission = <T>(
+  input: {
+    readonly capsule: Pick<
+      Capsule,
+      "id" | "workspaceId" | "installingPrincipalId"
+    >;
+    readonly holderId: string;
+  },
+  work: (capsule: Capsule) => Promise<T>,
+) => Promise<T>;
+
 export interface CapsulesServiceDependencies {
   readonly store: OpenTofuControlStore;
   readonly newId?: (prefix: string) => string;
@@ -88,6 +140,10 @@ export interface CapsulesServiceDependencies {
   /** Workspace-scoped Activity audit trail (spec §27 / §34). Defaults to no-op. */
   readonly activity?: ActivityRecorder;
   readonly projects?: ProjectsService;
+  /** Optional host-owned Resource lifecycle fence; absent keeps legacy behavior. */
+  readonly capsuleOwnedResourceFence?: CapsuleOwnedResourceFence;
+  /** Optional shared Capsule/Resource admission lease; absent keeps legacy behavior. */
+  readonly capsuleOwnedResourceAdmission?: CapsuleOwnedResourceAdmission;
 }
 
 export class CapsulesService {
@@ -96,6 +152,8 @@ export class CapsulesService {
   readonly #now: () => Date;
   readonly #activity: ActivityRecorder;
   readonly #projects: ProjectsService;
+  #capsuleOwnedResourceFence?: CapsuleOwnedResourceFence;
+  #capsuleOwnedResourceAdmission?: CapsuleOwnedResourceAdmission;
 
   constructor(deps: CapsulesServiceDependencies) {
     this.#store = deps.store;
@@ -104,6 +162,26 @@ export class CapsulesService {
     this.#activity = deps.activity ?? NOOP_ACTIVITY_RECORDER;
     this.#projects =
       deps.projects ?? new ProjectsService({ store: deps.store });
+    this.#capsuleOwnedResourceFence = deps.capsuleOwnedResourceFence;
+    this.#capsuleOwnedResourceAdmission =
+      deps.capsuleOwnedResourceAdmission;
+  }
+
+  /**
+   * Late-binds the host-owned Resource inventory fence after both domains have
+   * been composed. Clearing the port restores the historical no-Resource path.
+   */
+  setCapsuleOwnedResourceFence(
+    fence: CapsuleOwnedResourceFence | undefined,
+  ): void {
+    this.#capsuleOwnedResourceFence = fence;
+  }
+
+  /** Late-binds the shared Capsule/Resource admission fence after composition. */
+  setCapsuleOwnedResourceAdmission(
+    admission: CapsuleOwnedResourceAdmission | undefined,
+  ): void {
+    this.#capsuleOwnedResourceAdmission = admission;
   }
 
   // --- Capsule (§5) ---------------------------------------------------------
@@ -340,34 +418,103 @@ export class CapsulesService {
    */
   async abandonUnappliedCapsule(id: string, reason: string): Promise<Capsule> {
     const existing = await this.#requireCapsule(id);
-    if (existing.currentStateVersionId || existing.currentStateGeneration > 0) {
+    const abandon = async (current: Capsule = existing): Promise<Capsule> => {
+      await this.#assertCapsuleOwnedResourcesClear(current, "abandon");
+      if (
+        current.currentStateVersionId ||
+        current.currentStateGeneration > 0
+      ) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `capsule ${id} has applied state and must use the destroy flow`,
+        );
+      }
+      const now = this.#now().toISOString();
+      const updated = await this.#store.patchCapsule(current.id, {
+        status: "destroyed",
+        updatedAt: now,
+      });
+      if (!updated) {
+        throw new OpenTofuControllerError(
+          "not_found",
+          `capsule ${id} not found`,
+        );
+      }
+      await this.#store.deleteProviderBindingSet(
+        updated.id,
+        updated.environment,
+      );
+      await this.#store.releasePublicHostsForCapsule(id, now);
+      await this.#activity.record({
+        workspaceId: updated.workspaceId,
+        action: "capsule.abandoned",
+        targetType: "capsule",
+        targetId: updated.id,
+        metadata: {
+          name: updated.name,
+          environment: updated.environment,
+          reason,
+        },
+      });
+      return updated;
+    };
+    const admission = this.#capsuleOwnedResourceAdmission;
+    return admission
+      ? await admission(
+          { capsule: existing, holderId: this.#newId("capsule-abandon") },
+          (current) => abandon(current),
+        )
+      : await abandon(existing);
+  }
+
+  async #assertCapsuleOwnedResourcesClear(
+    capsule: Capsule,
+    phase: CapsuleOwnedResourceFenceInput["phase"],
+  ): Promise<void> {
+    const fence = this.#capsuleOwnedResourceFence;
+    if (!fence) return;
+
+    let result: CapsuleOwnedResourceFenceResult;
+    try {
+      result = await fence({ capsule, phase });
+    } catch (error) {
+      // An unavailable or malformed host inventory is fail-closed: the
+      // Capsule must remain retryable rather than being terminalized blindly.
+      if (
+        error instanceof OpenTofuControllerError &&
+        error.code === "failed_precondition" &&
+        typeof error.details === "object" &&
+        error.details !== null &&
+        !Array.isArray(error.details) &&
+        (error.details as { readonly reason?: unknown }).reason ===
+          CAPSULE_OWNED_RESOURCES_PENDING_REASON
+      ) {
+        throw error;
+      }
       throw new OpenTofuControllerError(
         "failed_precondition",
-        `capsule ${id} has applied state and must use the destroy flow`,
+        `capsule ${capsule.id} Resource ownership could not be verified`,
+        { reason: CAPSULE_OWNED_RESOURCES_PENDING_REASON },
       );
     }
-    const now = this.#now().toISOString();
-    const updated = await this.#store.patchCapsule(id, {
-      status: "destroyed",
-      updatedAt: now,
-    });
-    if (!updated) {
-      throw new OpenTofuControllerError("not_found", `capsule ${id} not found`);
-    }
-    await this.#store.deleteProviderBindingSet(updated.id, updated.environment);
-    await this.#store.releasePublicHostsForCapsule(id, now);
-    await this.#activity.record({
-      workspaceId: updated.workspaceId,
-      action: "capsule.abandoned",
-      targetType: "capsule",
-      targetId: updated.id,
-      metadata: {
-        name: updated.name,
-        environment: updated.environment,
-        reason,
+    if (result?.status === "clear") return;
+    const status = result?.status;
+    throw new OpenTofuControllerError(
+      "failed_precondition",
+      `capsule ${capsule.id} has Capsule-owned Resources pending destruction`,
+      {
+        reason: CAPSULE_OWNED_RESOURCES_PENDING_REASON,
+        ...(status === "invalid_ownership"
+          ? {
+              ownership: "invalid" as const,
+              ...(result?.reason
+                ? { ownershipReason: result.reason }
+                : {}),
+            }
+          : {}),
+        ...(result?.resourceId ? { resourceId: result.resourceId } : {}),
       },
-    });
-    return updated;
+    );
   }
 
   // --- InstallConfig (§11) --------------------------------------------------

@@ -57,12 +57,20 @@ import type {
   ManagedPublicHostnameClaimRequest,
   ManagedPublicHostnameClaimResult,
 } from "takosumi-contract/install-configs";
-import type { CapsuleCoordination } from "./domains/deploy-control/capsule_lease.ts";
+import {
+  withCapsuleResourceAdmission,
+  type CapsuleCoordination,
+} from "./domains/deploy-control/capsule_lease.ts";
 import {
   type EnqueueSourceSync,
   SourcesService,
 } from "./domains/sources/mod.ts";
-import { CapsulesService } from "./domains/capsules/mod.ts";
+import {
+  CAPSULE_OWNED_RESOURCES_PENDING_REASON,
+  CapsulesService,
+  type CapsuleOwnedResourceAdmission,
+  type CapsuleOwnedResourceFence,
+} from "./domains/capsules/mod.ts";
 import { WorkspacesService } from "./domains/workspaces/mod.ts";
 import {
   type WorkspaceViewControlStoreFactory,
@@ -98,6 +106,7 @@ import {
   type ResourceAdapter,
   type ResourceObservationClaimInput,
   resourceRecordRevision,
+  type ResolutionLockRecord,
   type ResourceShapeModuleRegistry,
   type ResourceShapeRecord,
   type ResourceShapeRecordId,
@@ -993,6 +1002,32 @@ export interface TakosumiOperations {
     }>;
   };
   /**
+   * Exact recovery seam for a hosted EdgeWorker whose provider apply is
+   * durable but whose post-apply host-runtime activation temporarily fenced
+   * the Resource as Degraded. This is an in-process lifecycle port only; it
+   * never exposes Degraded Resources through the public Ready inventory.
+   */
+  readonly resourceHostRuntimeRecovery?: {
+    resolve(input: {
+      readonly resourceId: ResourceShapeRecordId;
+      readonly resourceGeneration: number;
+      readonly resourceRevisionId: string;
+    }): Promise<
+      | {
+          readonly resource: ResourceObject;
+          readonly resourceGeneration: number;
+          readonly resourceRevisionId: string;
+          readonly nativeResources: readonly NativeResourceRef[];
+        }
+      | undefined
+    >;
+    complete(input: {
+      readonly resourceId: ResourceShapeRecordId;
+      readonly resourceGeneration: number;
+      readonly resourceRevisionId: string;
+    }): Promise<boolean>;
+  };
+  /**
    * Read-only compatibility-profile projection. It returns evidence only for a
    * fully observed Ready Resource with a durable ResolutionLock; lifecycle
    * mutation remains exclusively on the Resource Deploy API.
@@ -1546,6 +1581,80 @@ export async function createTakosumiService(
     (options.sqlClient
       ? createSqlResourceShapeStores(options.sqlClient)
       : createInMemoryResourceShapeStores());
+  const capsuleOwnedResourceFence: CapsuleOwnedResourceFence = async ({
+    capsule,
+  }) => {
+    let cursor: string | undefined;
+    for (;;) {
+      const page = await resourceShapeStores.resources.listByCapsuleOwnerPage(
+        capsule.workspaceId,
+        capsule.id,
+        { limit: 100, ...(cursor ? { cursor } : {}) },
+      );
+      for (const resource of page.items) {
+        const owner = resource.owner;
+        if (
+          !isResourceCapsuleOwner(owner) ||
+          owner.workspaceId !== capsule.workspaceId ||
+          owner.id !== capsule.id ||
+          owner.installingPrincipalId !== capsule.installingPrincipalId
+        ) {
+          return {
+            status: "invalid_ownership",
+            resourceId: resource.id,
+            reason: isResourceCapsuleOwner(owner)
+              ? "principal_mismatch"
+              : "corrupt",
+          };
+        }
+        return { status: "pending", resourceId: resource.id };
+      }
+      if (!page.nextCursor) return { status: "clear" };
+      cursor = page.nextCursor;
+    }
+  };
+  const capsuleOwnedResourceAdmission:
+    | CapsuleOwnedResourceAdmission
+    | undefined = options.capsuleCoordination
+    ? async ({ capsule, holderId }, work) =>
+        await withCapsuleResourceAdmission(
+          options.capsuleCoordination!,
+          { capsuleId: capsule.id, holderId },
+          async () => {
+            const current = await sharedOpenTofuStore.getCapsule(capsule.id);
+            if (
+              !current ||
+              current.workspaceId !== capsule.workspaceId ||
+              current.installingPrincipalId !== capsule.installingPrincipalId ||
+              current.status === "destroyed"
+            ) {
+              throw new OpenTofuControllerError(
+                "failed_precondition",
+                `capsule ${capsule.id} is no longer available for Resource admission`,
+                { reason: CAPSULE_OWNED_RESOURCES_PENDING_REASON },
+              );
+            }
+            const runtimeSafety =
+              await sharedOpenTofuStore.getCapsuleRuntimeSafety(capsule.id);
+            if (
+              runtimeSafety?.phase === "terminating" ||
+              runtimeSafety?.phase === "retired"
+            ) {
+              throw new OpenTofuControllerError(
+                "failed_precondition",
+                `capsule ${capsule.id} is terminating; Resource admission is closed`,
+                { reason: CAPSULE_OWNED_RESOURCES_PENDING_REASON },
+              );
+            }
+            return await work(current);
+          },
+        )
+    : undefined;
+  capsulesService.setCapsuleOwnedResourceFence(capsuleOwnedResourceFence);
+  capsulesService.setCapsuleOwnedResourceAdmission(
+    capsuleOwnedResourceAdmission,
+  );
+  opentofuController.setCapsuleOwnedResourceFence(capsuleOwnedResourceFence);
   // Control-backups domain: exports a Workspace's control ledger as a sealed
   // bundle. Resource exact pins require an explicit host-owned scope mapping;
   // Core never infers matching ids.
@@ -1611,6 +1720,9 @@ export async function createTakosumiService(
         operationRuns: sharedOpenTofuStore,
         ...(options.resourceDeploymentAdmission
           ? { deploymentAdmission: options.resourceDeploymentAdmission }
+          : {}),
+        ...(capsuleOwnedResourceAdmission
+          ? { capsuleOwnedResourceAdmission }
           : {}),
         ...(options.resourceShapeModuleRegistry
           ? { moduleRegistry: options.resourceShapeModuleRegistry }
@@ -2208,10 +2320,12 @@ export async function createTakosumiService(
       };
       let changed;
       try {
-        changed = await resourceShapeStores.resources.compareAndSet(
-          degraded,
-          fence.resourceVersion,
-        );
+        changed = await resourceShapeStores.replaceResourceAggregate({
+          record: degraded,
+          lock: { ...lock, updatedAt: at },
+          expectedResource: fence.resourceVersion,
+          expectedLock: lock,
+        });
       } catch (persistenceError) {
         log.warn("service.resource_shape.host_runtime_fence_failed", {
           resourceId: fence.resourceId,
@@ -2219,7 +2333,7 @@ export async function createTakosumiService(
         });
         return false;
       }
-      if (changed.status === "updated") return true;
+      if (changed.status === "replaced") return true;
       if (changed.status === "not_found") return false;
       // A CAS conflict may be a harmless concurrent write. Re-read once more
       // so an exact same-generation retry can still fence the Ready claim;
@@ -2907,6 +3021,7 @@ export async function createTakosumiService(
     ...(options.runtimeCapabilityReader
       ? { runtimeCapabilityReader: options.runtimeCapabilityReader }
       : {}),
+    // --- Resource Shape host inventory
     ...(resourceShapeService
       ? {
           resourceCapsuleOwners: {
@@ -2931,8 +3046,233 @@ export async function createTakosumiService(
       : {}),
     ...(resourceShapeService
       ? {
+          resourceHostRuntimeRecovery: {
+            resolve: async (input: {
+              readonly resourceId: ResourceShapeRecordId;
+              readonly resourceGeneration: number;
+              readonly resourceRevisionId: string;
+            }) => {
+              const [recordBefore, lockBefore] = await Promise.all([
+                resourceShapeStores.resources.get(input.resourceId),
+                resourceShapeStores.locks.get(input.resourceId),
+              ]);
+              if (
+                !hostRuntimeRecoveryRecordMatches(
+                  recordBefore,
+                  lockBefore,
+                  input,
+                )
+              ) {
+                return undefined;
+              }
+              if (!lockBefore) {
+                throw new Error(
+                  `canonical host runtime recovery lock disappeared for ${input.resourceId}`,
+                );
+              }
+              const projected = await resourceShapeService.get(
+                recordBefore.spaceId,
+                recordBefore.kind,
+                recordBefore.name,
+              );
+              const [recordAfter, lockAfter] = await Promise.all([
+                resourceShapeStores.resources.get(input.resourceId),
+                resourceShapeStores.locks.get(input.resourceId),
+              ]);
+              if (
+                !projected.ok ||
+                !hostRuntimeRecoveryRecordMatches(
+                  recordAfter,
+                  lockAfter,
+                  input,
+                ) ||
+                recordAfter.updatedAt !== recordBefore.updatedAt ||
+                resourceRecordRevision(recordAfter) !==
+                  resourceRecordRevision(recordBefore) ||
+                !lockAfter ||
+                !matchesApplyLock(lockBefore, lockAfter)
+              ) {
+                throw new Error(
+                  `canonical host runtime recovery inventory conflict for ${input.resourceId}`,
+                );
+              }
+              return structuredClone({
+                resource: projected.value,
+                resourceGeneration: recordBefore.generation,
+                resourceRevisionId: input.resourceRevisionId,
+                nativeResources: lockBefore.nativeResources ?? [],
+              });
+            },
+            complete: async (input: {
+              readonly resourceId: ResourceShapeRecordId;
+              readonly resourceGeneration: number;
+              readonly resourceRevisionId: string;
+            }) => {
+              for (let attempt = 0; attempt < 4; attempt += 1) {
+                const [current, lock] = await Promise.all([
+                  resourceShapeStores.resources.get(input.resourceId),
+                  resourceShapeStores.locks.get(input.resourceId),
+                ]);
+                if (
+                  current?.phase === "Ready" &&
+                  current.id === input.resourceId &&
+                  current.kind === "EdgeWorker" &&
+                  lock !== undefined &&
+                  lock.resourceId === input.resourceId &&
+                  lock.locked === true &&
+                  current.generation === input.resourceGeneration &&
+                  current.observedGeneration === input.resourceGeneration &&
+                  canonicalReadyResourceRevisionId(current, lock) ===
+                    input.resourceRevisionId
+                ) {
+                  try {
+                    const workspaceId = resolveResourceInterfaceWorkspace
+                      ? await resolveResourceInterfaceWorkspace(
+                          resourceInterfaceWorkspaceInput(current),
+                        )
+                      : undefined;
+                    if (!workspaceId) {
+                      throw new Error(
+                        `Interface Workspace mapping is unavailable for ${input.resourceId}`,
+                      );
+                    }
+                    await interfaceService.reconcileResource(
+                      workspaceId,
+                      input.resourceId,
+                    );
+                    return true;
+                  } catch (error) {
+                    log.warn(
+                      "service.resource_shape.host_runtime_recovery_interface_failed",
+                      { resourceId: input.resourceId, error },
+                    );
+                    const at = new Date().toISOString();
+                    const degraded: ResourceShapeRecord = {
+                        ...current,
+                        phase: "Degraded",
+                        conditions: [
+                          ...(current.conditions ?? []).filter(
+                            (condition) =>
+                              condition.type.toLowerCase() !== "ready",
+                          ),
+                          {
+                            type: "Ready",
+                            status: "false",
+                            reason: "HostRuntimeNotReady",
+                            message:
+                              "host runtime Interface reconciliation is pending",
+                            observedGeneration: current.generation,
+                            lastTransitionAt: at,
+                          },
+                        ],
+                        updatedAt: at,
+                    };
+                    await resourceShapeStores.replaceResourceAggregate({
+                      record: degraded,
+                      lock: { ...lock, updatedAt: at },
+                      expectedResource: {
+                        generation: current.generation,
+                        phase: current.phase,
+                        updatedAt: current.updatedAt,
+                        revision: resourceRecordRevision(current),
+                      },
+                      expectedLock: lock,
+                    });
+                    return false;
+                  }
+                }
+                if (
+                  !hostRuntimeRecoveryRecordMatches(current, lock, input)
+                ) {
+                  return false;
+                }
+                if (!lock) return false;
+                const at = new Date().toISOString();
+                const recovered: ResourceShapeRecord = {
+                  ...current,
+                  phase: "Ready",
+                  conditions: [
+                    ...(current.conditions ?? []).filter(
+                      (condition) => condition.type.toLowerCase() !== "ready",
+                    ),
+                    {
+                      type: "Ready",
+                      status: "true",
+                      reason: "HostRuntimeActivated",
+                      observedGeneration: current.generation,
+                      lastTransitionAt: at,
+                    },
+                  ],
+                  updatedAt: at,
+                };
+                const changed =
+                  await resourceShapeStores.replaceResourceAggregate({
+                    record: recovered,
+                    lock: { ...lock, updatedAt: at },
+                    expectedResource: {
+                      generation: current.generation,
+                      phase: current.phase,
+                      updatedAt: current.updatedAt,
+                      revision: resourceRecordRevision(current),
+                    },
+                    expectedLock: lock,
+                  });
+                if (changed.status === "not_found") return false;
+                if (changed.status === "conflict") continue;
+                try {
+                  const workspaceId = resolveResourceInterfaceWorkspace
+                    ? await resolveResourceInterfaceWorkspace(
+                        resourceInterfaceWorkspaceInput(changed.record),
+                      )
+                    : undefined;
+                  if (!workspaceId) {
+                    throw new Error(
+                      `Interface Workspace mapping is unavailable for ${input.resourceId}`,
+                    );
+                  }
+                  await interfaceService.reconcileResource(
+                    workspaceId,
+                    input.resourceId,
+                  );
+                  return true;
+                } catch (error) {
+                  log.warn(
+                    "service.resource_shape.host_runtime_recovery_interface_failed",
+                    { resourceId: input.resourceId, error },
+                  );
+                  const rollbackAt = new Date().toISOString();
+                  const rolledBack =
+                    await resourceShapeStores.replaceResourceAggregate({
+                      record: { ...current, updatedAt: rollbackAt },
+                      lock: { ...lock, updatedAt: rollbackAt },
+                      expectedResource: {
+                        generation: changed.record.generation,
+                        phase: changed.record.phase,
+                        updatedAt: changed.record.updatedAt,
+                        revision: resourceRecordRevision(changed.record),
+                      },
+                      expectedLock: changed.lock,
+                    });
+                  if (rolledBack.status !== "replaced") {
+                    log.warn(
+                      "service.resource_shape.host_runtime_recovery_rollback_conflict",
+                      {
+                        resourceId: input.resourceId,
+                        status: rolledBack.status,
+                      },
+                    );
+                  }
+                  return false;
+                }
+              }
+              return false;
+            },
+          },
+        }
+      : {}),
+    ...(resourceShapeService
+      ? {
           resourceCompatibility: {
-            // --- Resource Shape host inventory
             resolveReadyResource: async (input: {
               readonly space: string;
               readonly kind: ResourceShapeKind;
@@ -3441,6 +3781,37 @@ function canonicalReadyResourceRevisionId(
     !/[\u0000-\u001f\u007f]/.test(candidate)
     ? candidate
     : undefined;
+}
+
+function hostRuntimeRecoveryRecordMatches(
+  record: ResourceShapeRecord | undefined,
+  lock: ResolutionLockRecord | undefined,
+  input: {
+    readonly resourceId: ResourceShapeRecordId;
+    readonly resourceGeneration: number;
+    readonly resourceRevisionId: string;
+  },
+): record is ResourceShapeRecord {
+  return (
+    record !== undefined &&
+    lock !== undefined &&
+    record.id === input.resourceId &&
+    record.kind === "EdgeWorker" &&
+    record.phase === "Degraded" &&
+    record.generation === input.resourceGeneration &&
+    record.observedGeneration === input.resourceGeneration &&
+    lock.resourceId === input.resourceId &&
+    lock.locked === true &&
+    canonicalReadyResourceRevisionId(record, lock) ===
+      input.resourceRevisionId &&
+    (record.conditions ?? []).some(
+      (condition) =>
+        condition.type === "Ready" &&
+        condition.status === "false" &&
+        condition.reason === "HostRuntimeNotReady" &&
+        condition.observedGeneration === input.resourceGeneration,
+    )
+  );
 }
 
 function processRoleFromRuntimeConfig(

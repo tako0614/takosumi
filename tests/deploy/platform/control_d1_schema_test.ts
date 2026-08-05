@@ -592,10 +592,12 @@ async function seedImmediatePredecessorV55(
     .run();
 }
 
-async function seedImmediatePredecessorV60(
+async function seedImmediatePredecessorV61(
   database: D1Database,
 ): Promise<void> {
-  await database.prepare(`delete from schema_migrations where version = 61`).run();
+  await database
+    .prepare(`delete from schema_migrations where version = 62`)
+    .run();
 }
 
 async function readPredecessorInterfaceRows(database: D1Database) {
@@ -651,10 +653,10 @@ test("control D1 plan captures the full OSS schema and migration ledger", async 
   expect(plan.manifestDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
   expect(plan.schemaDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
   expect(plan.ledgerDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
-  expect(plan.migrations.at(-1)?.version).toBe(61);
-  expect(plan.migrations).toHaveLength(58);
+  expect(plan.migrations.at(-1)?.version).toBe(62);
+  expect(plan.migrations).toHaveLength(59);
   expect(plan.migrations.at(-1)?.name).toBe(
-    "d1_resource_identity_fence",
+    "d1_resource_identity_fence_owner_receipt",
   );
   expect(plan.tables.some((table) => table.name === "target_pools")).toBe(true);
   expect(
@@ -744,7 +746,7 @@ test("control D1 verify is read-only and accepts host extension tables", async (
     const verification = await verifyControlD1Schema(database, plan);
     expect(verification.status).toBe("ready");
     expect(verification.issues).toEqual([]);
-    expect(verification.latestMigrationVersion).toBe(61);
+    expect(verification.latestMigrationVersion).toBe(62);
   } finally {
     database.close();
   }
@@ -2140,8 +2142,135 @@ test("control D1 CLI verify reports a ready remote ledger", async () => {
       mode: "verify",
       environment: "staging",
       status: "ready",
-      verification: { latestMigrationVersion: 61 },
+      verification: { latestMigrationVersion: 62 },
     });
+  } finally {
+    database.close();
+  }
+});
+
+test("control D1 CLI releases only the exact retained in-place fence", async () => {
+  const plan = await buildControlD1SchemaPlan();
+  const database = new SqliteControlD1Database();
+  try {
+    await ensureD1OpenTofuLedgerSchema(database);
+    const dependencies = {
+      sourceCommit: SOURCE_COMMIT,
+      now: () => NOW,
+      maintenanceDrainMilliseconds: 0,
+      waitForRequestDrain: async () => {},
+      inspectSourceCheckout: async () => ({
+        head: SOURCE_COMMIT,
+        clean: true,
+      }),
+      createRemoteDatabase: () => ({
+        database,
+        configurationDigest: `sha256:${"1".repeat(64)}`,
+        databaseId: "database_staging",
+      }),
+    };
+    const freezeOutput: string[] = [];
+    const freezeCode = await runControlD1SchemaCli(
+      [
+        "freeze",
+        "--environment",
+        "staging",
+        "--confirm-manifest",
+        plan.manifestDigest,
+      ],
+      {},
+      (value) => freezeOutput.push(value),
+      dependencies,
+    );
+    expect(freezeCode).toBe(0);
+    const freezeTranscript = JSON.parse(freezeOutput.at(-1) ?? "{}") as {
+      readonly maintenanceFence: { readonly fenceId: string };
+    };
+    expect(freezeOutput.at(-1)).toContain('"mode": "freeze"');
+    const output: string[] = [];
+    const code = await runControlD1SchemaCli(
+      [
+        "release",
+        "--environment",
+        "staging",
+        "--confirm-manifest",
+        plan.manifestDigest,
+      ],
+      {},
+      (value) => output.push(value),
+      {
+        ...dependencies,
+        now: () => "2026-08-05T12:00:05.000Z",
+      },
+    );
+    expect(code).toBe(0);
+    expect(JSON.parse(output.at(-1) ?? "{}")).toMatchObject({
+      mode: "release",
+      status: "released",
+      maintenanceStatus: "released",
+      maintenanceFence: {
+        fenceId: freezeTranscript.maintenanceFence.fenceId,
+      },
+    });
+    expect(await readControlD1MaintenanceState(database)).toEqual({
+      status: "inactive",
+    });
+  } finally {
+    database.close();
+  }
+});
+
+test("control D1 CLI release rejects a substituted retained fence", async () => {
+  const plan = await buildControlD1SchemaPlan();
+  const database = new SqliteControlD1Database();
+  try {
+    await ensureD1OpenTofuLedgerSchema(database);
+    await acquireControlD1MaintenanceFence(
+      database,
+      {
+        sourceCommit: PREDECESSOR_SOURCE_COMMIT,
+        manifestDigest: plan.manifestDigest,
+        environment: "staging",
+        databaseRole: "in_place",
+        releasePolicy: "in_place",
+        databaseId: "database_staging",
+      },
+      NOW,
+    );
+    const output: string[] = [];
+    const code = await runControlD1SchemaCli(
+      [
+        "release",
+        "--environment",
+        "staging",
+        "--confirm-manifest",
+        plan.manifestDigest,
+      ],
+      {},
+      (value) => output.push(value),
+      {
+        sourceCommit: SOURCE_COMMIT,
+        now: () => "2026-08-05T12:00:05.000Z",
+        inspectSourceCheckout: async () => ({
+          head: SOURCE_COMMIT,
+          clean: true,
+        }),
+        createRemoteDatabase: () => ({
+          database,
+          configurationDigest: `sha256:${"1".repeat(64)}`,
+          databaseId: "database_staging",
+        }),
+      },
+    );
+    expect(code).toBe(1);
+    expect(JSON.parse(output.at(-1) ?? "{}")).toMatchObject({
+      mode: "release",
+      status: "failed",
+      failureCode: "maintenance_fence_release_mismatch",
+    });
+    expect((await readControlD1MaintenanceState(database)).status).toBe(
+      "active",
+    );
   } finally {
     database.close();
   }
@@ -2201,7 +2330,7 @@ test("control D1 CLI reports the exact predecessor fence transition on recovery"
   const database = new SqliteControlD1Database();
   try {
     await ensureD1OpenTofuLedgerSchema(database);
-    await seedImmediatePredecessorV60(database);
+    await seedImmediatePredecessorV61(database);
     const predecessorFence = await acquireControlD1MaintenanceFence(
       database,
       {
@@ -2253,7 +2382,7 @@ test("control D1 CLI reports the exact predecessor fence transition on recovery"
     expect(code).toBe(0);
     expect(transcript).toMatchObject({
       status: "ready",
-      appliedMigrationVersions: [61],
+      appliedMigrationVersions: [62],
       maintenanceFenceTransition: {
         predecessorSourceCommit: PREDECESSOR_SOURCE_COMMIT,
         predecessorManifestDigest: PREDECESSOR_MANIFEST_DIGEST,
@@ -2284,7 +2413,7 @@ test("control D1 CLI preserves the fence transition on post-apply schema mismatc
   const database = new SqliteControlD1Database();
   try {
     await ensureD1OpenTofuLedgerSchema(database);
-    await seedImmediatePredecessorV60(database);
+    await seedImmediatePredecessorV61(database);
     await database
       .prepare(
         `create trigger unexpected_workspace_trigger
@@ -2369,7 +2498,7 @@ test("control D1 CLI preserves the fence transition on post-apply schema mismatc
       await database
         .prepare(`select max(version) as version from schema_migrations`)
         .first(),
-    ).toEqual({ version: 61 });
+    ).toEqual({ version: 62 });
     await expect(
       database
         .prepare(
@@ -2648,7 +2777,7 @@ test("control D1 REST import transport converges the live v24 fixture through ca
         .map((entry) => entry.version),
     );
     expect(applied.verification.status).toBe("ready");
-    expect(applied.verification.latestMigrationVersion).toBe(61);
+    expect(applied.verification.latestMigrationVersion).toBe(62);
     expect(stats.importIngests).toBeGreaterThan(0);
     expect(stats.queryTriggerRejections).toBe(0);
     expect(await readLiveV24ConvergenceRows(backing)).toEqual(before);

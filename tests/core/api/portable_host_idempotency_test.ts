@@ -84,6 +84,59 @@ test("portable host idempotency stores and replays the exact success wire respon
   });
 });
 
+test("portable host idempotency quarantines only an exact malformed success replay", async () => {
+  let reservationSequence = 0;
+  const coordinator = new PortableHostIdempotencyCoordinator(
+    new InMemoryPortableHostIdempotencyLedger(),
+    {
+      reservationIdFactory: () =>
+        `reservation_${(reservationSequence += 1)}`,
+    },
+  );
+  const request = requestFor();
+  const first = await coordinator.reserve(request);
+  expect(first.kind).toBe("execute");
+  if (first.kind !== "execute") throw new Error("expected reservation");
+
+  const malformed = {
+    ...successResponse(),
+    body: new TextEncoder().encode('{"kind":"EdgeWorker"}'),
+  };
+  await coordinator.storeSuccess(first.reservation, malformed);
+
+  expect(
+    await coordinator.quarantineReplay(
+      request,
+      malformed,
+      (response) => !JSON.parse(new TextDecoder().decode(response.body)).status,
+    ),
+  ).toEqual({ kind: "quarantined" });
+  expect(await coordinator.reserve(request)).toMatchObject({
+    kind: "execute",
+    reservation: { reservationId: "reservation_2" },
+  });
+
+  const validRequest = requestFor({ idempotencyKey: "portable-valid-replay" });
+  const valid = await coordinator.reserve(validRequest);
+  if (valid.kind !== "execute") throw new Error("expected valid reservation");
+  const validResponse = {
+    ...successResponse(),
+    body: new TextEncoder().encode('{"status":{"observed":{"ready":true}}}'),
+  };
+  await coordinator.storeSuccess(valid.reservation, validResponse);
+  expect(
+    await coordinator.quarantineReplay(
+      validRequest,
+      validResponse,
+      (response) => !JSON.parse(new TextDecoder().decode(response.body)).status,
+    ),
+  ).toEqual({ kind: "valid" });
+  expect(await coordinator.reserve(validRequest)).toEqual({
+    kind: "replay",
+    response: validResponse,
+  });
+});
+
 test("portable host idempotency rejects request substitution within one scoped key", async () => {
   const coordinator = new PortableHostIdempotencyCoordinator(
     new InMemoryPortableHostIdempotencyLedger(),

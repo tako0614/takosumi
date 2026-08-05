@@ -51,10 +51,12 @@ import {
   isResourceShapeKind,
   NOOP_RESOURCE_DEPLOYMENT_ADMISSION,
   shapeKindForPortableType,
+  isResourceCapsuleOwner,
   TAKOSUMI_API_VERSION,
 } from "takosumi-contract";
 import type { FormRef } from "takosumi-contract";
 import type { Page, PageParams } from "takosumi-contract/pagination";
+import type { CapsuleOwnedResourceAdmission } from "../capsules/mod.ts";
 import type { IsoTimestamp } from "../../shared/time.ts";
 import type { SpaceId } from "../../shared/ids.ts";
 import { log } from "../../shared/log.ts";
@@ -267,6 +269,8 @@ export interface ResourceShapeServiceDeps {
   readonly lifecycleObserver?: ResourceShapeLifecycleObserver;
   /** Optional host quote/payment policy. OSS uses a non-blocking no-op. */
   readonly deploymentAdmission?: ResourceDeploymentAdmission;
+  /** Shared host-owned Capsule/Resource admission lease. */
+  readonly capsuleOwnedResourceAdmission?: CapsuleOwnedResourceAdmission;
   /** Shared non-secret Activity ledger used for Resource event projection. */
   readonly activity?: ActivityLedger;
   /**
@@ -368,11 +372,15 @@ export interface DeleteResourceOptions {
   readonly expectedManagedBy?: ResourceManagedBy;
   /** Optional exact desired-generation fence used by portable clients. */
   readonly expectedGeneration?: number;
+  /** Host-proven Capsule owner for managed lifecycle deletion. */
+  readonly expectedOwner?: ResourceOwner;
 }
 
 export interface ResourceOperationPrecondition {
   /** Optional exact desired-generation fence used by portable clients. */
   readonly expectedGeneration?: number;
+  /** Host-proven Capsule owner for managed observe/refresh mutations. */
+  readonly expectedOwner?: ResourceOwner;
 }
 
 export interface ResourceOperationRunRepairResult {
@@ -404,6 +412,7 @@ export class ResourceShapeService {
   readonly #operationRuns: ResourceShapeServiceDeps["operationRuns"];
   readonly #newOperationNonce: () => string;
   readonly #deploymentAdmission: ResourceDeploymentAdmission;
+  readonly #capsuleOwnedResourceAdmission?: CapsuleOwnedResourceAdmission;
   #lifecycleObserver: ResourceShapeLifecycleObserver | undefined;
 
   constructor(deps: ResourceShapeServiceDeps) {
@@ -418,6 +427,8 @@ export class ResourceShapeService {
       deps.newOperationNonce ?? (() => crypto.randomUUID());
     this.#deploymentAdmission =
       deps.deploymentAdmission ?? NOOP_RESOURCE_DEPLOYMENT_ADMISSION;
+    this.#capsuleOwnedResourceAdmission =
+      deps.capsuleOwnedResourceAdmission;
     this.#moduleRegistry =
       deps.moduleRegistry ?? EMPTY_RESOURCE_SHAPE_MODULE_REGISTRY;
     this.#schemaRegistry =
@@ -438,6 +449,35 @@ export class ResourceShapeService {
     observer: ResourceShapeLifecycleObserver | undefined,
   ): void {
     this.#lifecycleObserver = observer;
+  }
+
+  /**
+   * Serialize a Capsule-owned Resource claim with Capsule abandonment/destroy.
+   * The host callback owns the durable Capsule read and lease; Core only
+   * supplies the authenticated owner tuple and a stable claim holder id.
+   */
+  async #withCapsuleOwnedResourceAdmission<T>(
+    owner: ResourceOwner | undefined,
+    holderId: string,
+    work: () => Promise<T>,
+  ): Promise<T> {
+    if (!isResourceCapsuleOwner(owner)) return await work();
+    const admission = this.#capsuleOwnedResourceAdmission;
+    // Local/OSS compositions may intentionally omit cross-isolate
+    // coordination; retain their historical single-isolate behavior. Hosted
+    // Worker composition injects the durable callback and takes the gate.
+    if (!admission) return await work();
+    return await admission(
+      {
+        capsule: {
+          id: owner.id,
+          workspaceId: owner.workspaceId,
+          installingPrincipalId: owner.installingPrincipalId,
+        },
+        holderId,
+      },
+      async () => await work(),
+    );
   }
 
   /**
@@ -1282,6 +1322,9 @@ export class ResourceShapeService {
     if (applyingRequestCanRecover(req, review, existing)) {
       return "recovering";
     }
+    if (pendingHostRuntimeFinalizationMatchesRecord(req, existing)) {
+      return "recovering";
+    }
     return completedApplyRequestMatchesRecord(req, existing)
       ? "completed"
       : undefined;
@@ -1331,6 +1374,21 @@ export class ResourceShapeService {
       return {
         ok: true,
         value: this.#assemble(existing, existingLock),
+      };
+    }
+    if (
+      recoveryRequested &&
+      existing &&
+      pendingHostRuntimeFinalizationMatchesRecord(req, existing)
+    ) {
+      return {
+        ok: false,
+        error: {
+          code: "deployment_finalize_pending",
+          message: `resource ${id} is waiting for exact host runtime activation`,
+          retryable: true,
+          retryAfterSeconds: 5,
+        },
       };
     }
     if (
@@ -1853,15 +1911,22 @@ export class ResourceShapeService {
     // idempotent reservation.
     let claimSucceeded = false;
     try {
-      const claim = await this.#stores.beginApply({
-        applyingRecord,
-        plannedLock: lockRecord,
-        expectedTargetPool: targetPoolRecord,
-        ...(existing ? { expected: versionOf(existing) } : {}),
-        ...(!recoveryRequested
-          ? { expectedIdentityFence: identity.value.expectedFence ?? null }
-          : {}),
-      });
+      const claim = await this.#withCapsuleOwnedResourceAdmission(
+        req.owner ?? existing?.owner,
+        claimToken!,
+        () =>
+          this.#stores.beginApply({
+            applyingRecord,
+            plannedLock: lockRecord,
+            expectedTargetPool: targetPoolRecord,
+            ...(existing ? { expected: versionOf(existing) } : {}),
+            ...(!recoveryRequested
+              ? {
+                  expectedIdentityFence: identity.value.expectedFence ?? null,
+                }
+              : {}),
+          }),
+      );
       if (claim.status === "ownership_conflict") {
         const terminalized = await this.#failUnclaimedPluginOperationRun({
           run: operationRun,
@@ -2347,6 +2412,17 @@ export class ResourceShapeService {
           error: {
             code: "deployment_finalize_pending",
             message: `resource ${id} is Ready but canonical Run audit finalization is pending`,
+          },
+        };
+      }
+      if (pendingHostRuntimeFinalizationMatchesRecord(req, finalizedRecord)) {
+        return {
+          ok: false,
+          error: {
+            code: "deployment_finalize_pending",
+            message: `resource ${id} backend apply succeeded but host runtime activation is still pending`,
+            retryable: true,
+            retryAfterSeconds: 5,
           },
         };
       }
@@ -2913,15 +2989,22 @@ export class ResourceShapeService {
 
     let claimSucceeded = false;
     try {
-      const claim = await this.#stores.beginApply({
-        applyingRecord,
-        plannedLock: lockRecord,
-        expectedTargetPool: targetPoolRecord,
-        ...(existing ? { expected: versionOf(existing) } : {}),
-        ...(!recoveringImport
-          ? { expectedIdentityFence: identity.value.expectedFence ?? null }
-          : {}),
-      });
+      const claim = await this.#withCapsuleOwnedResourceAdmission(
+        req.owner ?? existing?.owner,
+        importClaimToken!,
+        () =>
+          this.#stores.beginApply({
+            applyingRecord,
+            plannedLock: lockRecord,
+            expectedTargetPool: targetPoolRecord,
+            ...(existing ? { expected: versionOf(existing) } : {}),
+            ...(!recoveringImport
+              ? {
+                  expectedIdentityFence: identity.value.expectedFence ?? null,
+                }
+              : {}),
+          }),
+      );
       if (claim.status === "ownership_conflict") {
         const terminalized = await this.#failUnclaimedPluginOperationRun({
           run: operationRun,
@@ -3445,6 +3528,12 @@ export class ResourceShapeService {
         error: { code: "not_found", message: `resource ${id} not found` },
       };
     }
+    const ownerError = resourceOwnerPreconditionError(
+      id,
+      record,
+      precondition.expectedOwner,
+    );
+    if (ownerError) return ownerError;
     if (
       record.phase !== "Ready" ||
       record.observedGeneration !== record.generation
@@ -4036,6 +4125,12 @@ export class ResourceShapeService {
         error: { code: "not_found", message: `resource ${id} not found` },
       };
     }
+    const ownerError = resourceOwnerPreconditionError(
+      id,
+      record,
+      precondition.expectedOwner,
+    );
+    if (ownerError) return ownerError;
     const recoveringPluginRefresh =
       record.phase === "Applying" &&
       record.pendingOperation?.operation === "refresh";
@@ -4604,13 +4699,33 @@ export class ResourceShapeService {
     );
     if (versionError) return versionError;
     if (!record) {
-      return await this.#retireResourceDeployment(
-        space,
-        kind,
-        name,
-        options.force ? "force_tombstone" : "canonical_delete",
-      );
+      if (options.expectedOwner !== undefined) {
+        const fence = await this.#stores.getResourceIdentityFence(id);
+        if (
+          fence?.retiredOwner === undefined ||
+          !sameResourceOwner(fence.retiredOwner, options.expectedOwner)
+        ) {
+          return {
+            ok: false,
+            error: {
+              code: "ownership_conflict",
+              message: `resource ${id} owner cannot be proven after canonical retirement`,
+            },
+          };
+        }
+      }
+      // Canonical removal is committed only after host retirement succeeds.
+      // The retained owner receipt therefore proves a completed delete; an
+      // absent retry must not touch host capacity because a new incarnation
+      // may begin immediately after this read.
+      return { ok: true, value: undefined };
     }
+    const ownerError = resourceOwnerPreconditionError(
+      id,
+      record,
+      options.expectedOwner,
+    );
+    if (ownerError) return ownerError;
     if (options.force) {
       const lock = await this.#stores.locks.get(id);
       await this.#recordResourceEvent({
@@ -4749,6 +4864,13 @@ export class ResourceShapeService {
         spaceId: space,
         resourceId: id,
       });
+      const retired = await this.#retireResourceDeployment(
+        space,
+        kind,
+        name,
+        "canonical_delete",
+      );
+      if (!retired.ok) return retired;
       let removed;
       try {
         removed = await this.#stores.removeResource({
@@ -4790,12 +4912,7 @@ export class ResourceShapeService {
           importPending: true,
         },
       });
-      return await this.#retireResourceDeployment(
-        space,
-        kind,
-        name,
-        "canonical_delete",
-      );
+      return { ok: true, value: undefined };
     }
     const consumer = await this.#firstConnectionConsumer(space, id);
     if (consumer) {
@@ -4810,12 +4927,7 @@ export class ResourceShapeService {
     const lock = await this.#stores.locks.get(id);
     if (!lock) {
       if (!(await this.#stores.resources.get(id))) {
-        return await this.#retireResourceDeployment(
-          space,
-          kind,
-          name,
-          "canonical_delete",
-        );
+        return { ok: true, value: undefined };
       }
       return {
         ok: false,
@@ -4830,12 +4942,7 @@ export class ResourceShapeService {
     const entry = await this.#targetPoolEntryForLock(space, lock);
     if (!entry) {
       if (!(await this.#stores.resources.get(id))) {
-        return await this.#retireResourceDeployment(
-          space,
-          kind,
-          name,
-          "canonical_delete",
-        );
+        return { ok: true, value: undefined };
       }
       return {
         ok: false,
@@ -5023,12 +5130,7 @@ export class ResourceShapeService {
         claimedRecord = deleteClaim.record;
       }
       if (deleteClaim.status === "not_found") {
-        return await this.#retireResourceDeployment(
-          space,
-          kind,
-          name,
-          "canonical_delete",
-        );
+        return { ok: true, value: undefined };
       }
       if (deleteClaim.status === "conflict") {
         return {
@@ -5328,12 +5430,7 @@ export class ResourceShapeService {
       );
       if (failed.status === "not_found") {
         // A concurrent idempotent delete finalized the same canonical Resource.
-        return await this.#retireResourceDeployment(
-          space,
-          kind,
-          name,
-          "canonical_delete",
-        );
+        return { ok: true, value: undefined };
       }
       if (failed.status === "conflict") {
         await this.#recordResourceEvent({
@@ -5377,6 +5474,14 @@ export class ResourceShapeService {
         error: { code: "delete_failed", message: errorMessage(error) },
       };
     }
+
+    const retired = await this.#retireResourceDeployment(
+      space,
+      kind,
+      name,
+      "canonical_delete",
+    );
+    if (!retired.ok) return retired;
 
     let removed;
     try {
@@ -5457,13 +5562,6 @@ export class ResourceShapeService {
         metadata: successMetadata,
       });
     }
-    const retired = await this.#retireResourceDeployment(
-      space,
-      kind,
-      name,
-      "canonical_delete",
-    );
-    if (!retired.ok) return retired;
     if (operationAuditPending) {
       return {
         ok: false,
@@ -5473,7 +5571,7 @@ export class ResourceShapeService {
         },
       };
     }
-    return retired;
+    return { ok: true, value: undefined };
   }
 
   // --- internals --------------------------------------------------------------
@@ -7066,6 +7164,27 @@ function sameResourceOwner(left: ResourceOwner, right: ResourceOwner): boolean {
   );
 }
 
+function resourceOwnerPreconditionError(
+  resourceId: string,
+  current: ResourceShapeRecord,
+  expected: ResourceOwner | undefined,
+): { readonly ok: false; readonly error: ResourceServiceError } | undefined {
+  if (expected === undefined) return undefined;
+  if (
+    current.owner !== undefined &&
+    sameResourceOwner(current.owner, expected)
+  ) {
+    return undefined;
+  }
+  return {
+    ok: false,
+    error: {
+      code: "ownership_conflict",
+      message: `resource ${resourceId} belongs to a different authenticated execution owner`,
+    },
+  };
+}
+
 function resourceGenerationError(
   resourceId: string,
   current: ResourceShapeRecord | undefined,
@@ -7435,6 +7554,26 @@ function completedApplyRequestMatchesRecord(
     record.observedGeneration === record.generation &&
     applyRecoveryGenerationMatches(request.expectedGeneration, record) &&
     applyingRequestMatchesRecord(request, record)
+  );
+}
+
+function pendingHostRuntimeFinalizationMatchesRecord(
+  request: ApplyResourceRequest,
+  record: ResourceShapeRecord,
+): boolean {
+  return (
+    record.kind === "EdgeWorker" &&
+    record.phase === "Degraded" &&
+    record.observedGeneration === record.generation &&
+    applyRecoveryGenerationMatches(request.expectedGeneration, record) &&
+    applyingRequestMatchesRecord(request, record) &&
+    (record.conditions ?? []).some(
+      (condition) =>
+        condition.type === "Ready" &&
+        condition.status === "false" &&
+        condition.reason === "HostRuntimeNotReady" &&
+        condition.observedGeneration === record.generation,
+    )
   );
 }
 

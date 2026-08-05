@@ -4,6 +4,7 @@ import {
   InMemoryPortableHostIdempotencyLedger,
   PortableHostIdempotencyCoordinator,
   type PortableHostIdempotencyLedger,
+  type PortableHostIdempotencyRecord,
   type PortableHostIdempotencyReservedRecord,
   type PortableHostIdempotencySucceededRecord,
 } from "../../../core/api/portable_host_idempotency.ts";
@@ -393,6 +394,73 @@ function exactObjectBucketFormRegistry(
   };
 }
 
+const EXACT_EDGE_WORKER_FORM: InstalledFormReference = {
+  type: "edge_worker",
+  version: "1.0.0",
+  schemaDigest: `sha256:${"3".repeat(64)}`,
+  packageDigest: `sha256:${"4".repeat(64)}`,
+};
+
+function exactEdgeWorkerFormRegistry(): NonNullable<
+  ResourceShapeServiceDeps["formRegistry"]
+> {
+  const formRef = {
+    type: EXACT_EDGE_WORKER_FORM.type,
+    version: EXACT_EDGE_WORKER_FORM.version,
+    schemaDigest: EXACT_EDGE_WORKER_FORM.schemaDigest,
+  };
+  const definition: FormDefinition = {
+    identity: EXACT_EDGE_WORKER_FORM,
+    operations: ["create", "read", "update", "delete", "import", "refresh"],
+    desiredSchema: {
+      type: "object",
+      additionalProperties: true,
+    },
+    installedAt: "2026-01-01T00:00:00.000Z",
+  };
+  const formPackage: FormPackage = {
+    packageDigest: EXACT_EDGE_WORKER_FORM.packageDigest,
+    artifactRef: "oci://forms.example/edge-worker@sha256:exact",
+    verifierId: "test-verifier",
+    status: "installed",
+    definitionRefs: [formRef],
+    installedAt: "2026-01-01T00:00:00.000Z",
+    installedBy: "test",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  };
+  const activation: FormActivation = {
+    id: "activation_edge_worker",
+    identity: EXACT_EDGE_WORKER_FORM,
+    scope: { type: "space", id: "space_1" },
+    audience: { roles: ["owner"] },
+    policy: {},
+    eligibleTargetPoolClasses: ["edge.object-store"],
+    status: "active",
+    revision: 1,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    createdBy: "test",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    updatedBy: "test",
+  };
+  return {
+    getDefinition: async (candidate) =>
+      JSON.stringify(candidate) === JSON.stringify(formRef)
+        ? definition
+        : undefined,
+    getPackage: async (packageDigest) =>
+      packageDigest === EXACT_EDGE_WORKER_FORM.packageDigest
+        ? formPackage
+        : undefined,
+    getPackages: async (packageDigests) =>
+      packageDigests.includes(EXACT_EDGE_WORKER_FORM.packageDigest)
+        ? [formPackage]
+        : [],
+    getActivationsForForms: async () => [activation],
+    listDefinitions: async () => ({ items: [definition] }),
+    listActivations: async () => ({ items: [activation] }),
+  };
+}
+
 const JSON_HEADERS = { "content-type": "application/json" };
 const AUTH_HEADERS = {
   ...JSON_HEADERS,
@@ -536,6 +604,57 @@ class FailNthPortableSuccessLedger implements PortableHostIdempotencyLedger {
     reservation: Parameters<PortableHostIdempotencyLedger["release"]>[0],
   ) {
     return this.#inner.release(reservation);
+  }
+}
+
+class PoisonFirstPortableSuccessLedger implements PortableHostIdempotencyLedger {
+  readonly #inner = new InMemoryPortableHostIdempotencyLedger();
+  #poisoned = false;
+
+  async lookup(scope: Parameters<PortableHostIdempotencyLedger["lookup"]>[0]) {
+    return this.#poison(await this.#inner.lookup(scope));
+  }
+
+  async reserve(candidate: PortableHostIdempotencyReservedRecord) {
+    const result = await this.#inner.reserve(candidate);
+    return result.kind === "existing"
+      ? { ...result, record: await this.#poison(result.record) }
+      : result;
+  }
+
+  async storeSuccess(candidate: PortableHostIdempotencySucceededRecord) {
+    const result = await this.#inner.storeSuccess(candidate);
+    this.#poisoned = true;
+    return result;
+  }
+
+  release(
+    reservation: Parameters<PortableHostIdempotencyLedger["release"]>[0],
+  ) {
+    return this.#inner.release(reservation);
+  }
+
+  quarantineSuccess(
+    candidate: PortableHostIdempotencySucceededRecord,
+  ) {
+    return this.#inner.lookup(candidate.scope).then((record) =>
+      record?.state === "succeeded"
+        ? this.#inner.quarantineSuccess!(record)
+        : { kind: "missing" as const },
+    );
+  }
+
+  async #poison<T extends PortableHostIdempotencyRecord | undefined>(
+    record: T,
+  ): Promise<T> {
+    if (!this.#poisoned || record?.state !== "succeeded") return record;
+    return {
+      ...record,
+      response: {
+        ...record.response,
+        body: new TextEncoder().encode('{"kind":"EdgeWorker"}'),
+      },
+    } as T;
   }
 }
 
@@ -722,6 +841,7 @@ test("bootstrap fences a Ready EdgeWorker when host runtime activation fails", a
   const resourceShapeStores = createInMemoryResourceShapeStores();
   const adapter = new HostRuntimeStubResourceShapeAdapter();
   let failActivation = false;
+  let resolveInterfaceWorkspace = true;
   const lifecycleCalls: string[] = [];
   const hostRuntimeResourceLifecycle: HostRuntimeResourceLifecycle = {
     async activate(input) {
@@ -749,7 +869,9 @@ test("bootstrap fences a Ready EdgeWorker when host runtime activation fails", a
     resourceShapeModuleRegistry: ROUTE_MODULE_REGISTRY,
     hostRuntimeResourceLifecycle,
     resolveResourceInterfaceWorkspace: async ({ resourceSpaceId }) =>
-      resourceSpaceId === "space_1" ? "workspace_1" : undefined,
+      resolveInterfaceWorkspace && resourceSpaceId === "space_1"
+        ? "workspace_1"
+        : undefined,
   });
   const hostTargetPool: TargetPoolSpec = {
     classes: ["edge.object-store"],
@@ -868,7 +990,7 @@ test("bootstrap fences a Ready EdgeWorker when host runtime activation fails", a
       },
     },
   });
-  expect(failedWorker.status).toBe(200);
+  expect(failedWorker.status).toBe(502);
   const degraded = await resourceShapeStores.resources.get(
     "tkrn:space_1:EdgeWorker:api",
   );
@@ -885,6 +1007,61 @@ test("bootstrap fences a Ready EdgeWorker when host runtime activation fails", a
   expect(
     (await created.operations.interfaces.get(iface.metadata.id)).status.phase,
   ).toBe("Unknown");
+
+  const recovery = created.operations.resourceHostRuntimeRecovery;
+  expect(recovery).toBeDefined();
+  const recoveryIdentity = {
+    resourceId: "tkrn:space_1:EdgeWorker:api",
+    resourceGeneration: degraded!.generation,
+    resourceRevisionId: degraded!.lastOperationRunId!,
+  };
+  expect(await recovery!.resolve(recoveryIdentity)).toMatchObject({
+    resourceGeneration: 2,
+    resource: { status: { phase: "Degraded" } },
+  });
+  failActivation = false;
+  resolveInterfaceWorkspace = false;
+  expect(await recovery!.complete(recoveryIdentity)).toBe(false);
+  expect(
+    await resourceShapeStores.resources.get(recoveryIdentity.resourceId),
+  ).toMatchObject({ phase: "Degraded" });
+  resolveInterfaceWorkspace = true;
+  expect(await recovery!.complete(recoveryIdentity)).toBe(true);
+  expect(
+    await resourceShapeStores.resources.get(recoveryIdentity.resourceId),
+  ).toMatchObject({
+    phase: "Ready",
+    observedGeneration: 2,
+    conditions: [
+      expect.objectContaining({
+        type: "Ready",
+        status: "true",
+        reason: "HostRuntimeActivated",
+      }),
+    ],
+  });
+  expect(
+    (await created.operations.interfaces.get(iface.metadata.id)).status.phase,
+  ).toBe("Resolved");
+  expect(
+    await created.operations.resourceCompatibility?.fenceReadyResource({
+      resourceId: recoveryIdentity.resourceId,
+      space: "space_1",
+      kind: "EdgeWorker",
+      name: "api",
+      resourceGeneration: recoveryIdentity.resourceGeneration,
+      resourceRevisionId: recoveryIdentity.resourceRevisionId,
+    }),
+  ).toBe(true);
+  const ready = await resourceShapeStores.resources.get(
+    recoveryIdentity.resourceId,
+  );
+  expect(ready).toBeDefined();
+  await resourceShapeStores.resources.upsert({
+    ...ready!,
+    generation: ready!.generation + 1,
+  });
+  expect(await recovery!.complete(recoveryIdentity)).toBe(false);
 });
 
 test("PUT /v1/resources/EdgeWorker/:name applies a first-class Worker shape", async () => {
@@ -1500,6 +1677,95 @@ test("portable Form host delegates exact lifecycle to the canonical Resource and
   expect(recreatedDelete.status).toBe(204);
 });
 
+test("portable EdgeWorker does not replay a poisoned success without status", async () => {
+  const idempotency = new PortableHostIdempotencyCoordinator(
+    new PoisonFirstPortableSuccessLedger(),
+  );
+  const { app } = await buildApp(
+    {
+      resolveActor: () => ({
+        actorAccountId: "acct_edgeworker_replay",
+        workspaceId: "space_1",
+        roles: ["owner"],
+        scopes: ["forms:read", "resources:write"],
+        requestId: "req_edgeworker_replay",
+      }),
+      portableHostIdempotency: idempotency,
+    },
+    exactEdgeWorkerFormRegistry(),
+    { adapter: new PortableFormStubResourceShapeAdapter() },
+  );
+  const base = "/apis/forms.takoform.com/v1alpha1";
+  const path = `${base}/resources/EdgeWorker/poisoned-worker`;
+  const desired = {
+    apiVersion: "forms.takoform.com/v1alpha1",
+    kind: "EdgeWorker",
+    form: {
+      formRef: {
+        apiVersion: "forms.takoform.com/v1alpha1",
+        kind: "EdgeWorker",
+        definitionVersion: EXACT_EDGE_WORKER_FORM.version,
+        schemaDigest: EXACT_EDGE_WORKER_FORM.schemaDigest,
+      },
+      packageDigest: EXACT_EDGE_WORKER_FORM.packageDigest,
+    },
+    metadata: { name: "poisoned-worker", space: "space_1" },
+    spec: {
+      name: "poisoned-worker",
+      source: { artifactPath: "/work/dist/worker.js" },
+    },
+  };
+  const preview = await app.request(`${base}/resources/preview`, {
+    method: "POST",
+    headers: { ...JSON_HEADERS, "if-none-match": "*" },
+    body: JSON.stringify(desired),
+  });
+  expect(preview.status).toBe(200);
+  const review = (await preview.json()).review as { planDigest: string };
+  const request = {
+    method: "PUT",
+    headers: {
+      ...JSON_HEADERS,
+      "if-none-match": "*",
+      "idempotency-key": "edgeworker-poisoned-replay",
+    },
+    body: JSON.stringify({ ...desired, review }),
+  };
+
+  const first = await app.request(path, request);
+  expect(first.status).toBe(200);
+  expect((await first.json()).status).toMatchObject({
+    observed: { ready: true },
+  });
+
+  const replay = await app.request(path, request);
+  expect(replay.status).toBe(409);
+  expect(await replay.json()).toMatchObject({
+    error: {
+      code: "resource_busy",
+      hostCode: "deployment_finalize_pending",
+      retryable: true,
+    },
+  });
+
+  const freshReservation = await idempotency.reserve({
+    actor: {
+      actorAccountId: "acct_edgeworker_replay",
+      workspaceId: "space_1",
+      roles: ["owner"],
+      scopes: ["forms:read", "resources:write"],
+      requestId: "req_edgeworker_replay",
+    },
+    space: "space_1",
+    idempotencyKey: "edgeworker-poisoned-replay",
+    method: "PUT",
+    requestTarget: path,
+    ifNoneMatch: "*",
+    body: new TextEncoder().encode(request.body),
+  });
+  expect(freshReservation.kind).toBe("execute");
+});
+
 test("portable Form create retry recovers a fenced recreate left Applying", async () => {
   const idempotency = new PortableHostIdempotencyCoordinator(
     new FailNthPortableSuccessLedger(3),
@@ -1800,6 +2066,7 @@ test("portable Resource ownership comes only from authenticated host run context
     workspaceId: "workspace_1",
     installingPrincipalId: "acct_installer",
   };
+  let resolvedOwner = owner;
   const { app, service } = await buildApp(
     {
       resolveActor: () => ({
@@ -1809,7 +2076,7 @@ test("portable Resource ownership comes only from authenticated host run context
         scopes: ["forms:read", "resources:*"],
         requestId: "req_yuru",
       }),
-      resolveResourceCapsuleOwner: () => owner,
+      resolveResourceCapsuleOwner: () => resolvedOwner,
     },
     exactObjectBucketFormRegistry(),
   );
@@ -1848,6 +2115,38 @@ test("portable Resource ownership comes only from authenticated host run context
   expect((await applied.json()).metadata.owner).toBeUndefined();
   const canonical = await service.get("space_1", "ObjectBucket", "yuru-assets");
   expect(canonical.ok && canonical.value.metadata.owner).toEqual(owner);
+
+  resolvedOwner = { ...owner, id: "cap_foreign" };
+  const exactQuery = `space=space_1&${portableFormQuery()}`;
+  for (const operation of ["observe", "refresh"] as const) {
+    const response = await app.request(
+      `${base}/resources/ObjectBucket/yuru-assets/${operation}?${exactQuery}`,
+      {
+        method: "POST",
+        headers: {
+          ...JSON_HEADERS,
+          "if-match": '"1"',
+          "idempotency-key": `portable-yuru-foreign-${operation}`,
+        },
+      },
+    );
+    expect(response.status).toBe(409);
+    expect((await response.json()).error.code).toBe("resource_busy");
+  }
+  const absentDelete = await app.request(
+    `${base}/resources/ObjectBucket/missing-assets?${exactQuery}`,
+    {
+      method: "DELETE",
+      headers: {
+        ...JSON_HEADERS,
+        "if-match": '"1"',
+        "idempotency-key": "portable-yuru-foreign-absent-delete",
+      },
+    },
+  );
+  expect(absentDelete.status).toBe(409);
+  expect((await absentDelete.json()).error.code).toBe("resource_busy");
+  resolvedOwner = owner;
 
   const spoofed = await app.request(`${base}/resources/preview`, {
     method: "POST",

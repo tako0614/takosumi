@@ -58,6 +58,8 @@ import type {
   ResourceApplyBeginResult,
   ResourceApplyCommitInput,
   ResourceApplyCommitResult,
+  ResourceAggregateReplaceInput,
+  ResourceAggregateReplaceResult,
   ResourceAtomicRemoveInput,
   ResourceAtomicRemoveResult,
   ResourceCreateResult,
@@ -80,6 +82,7 @@ import {
   assertAbortInput,
   assertAtomicRemoveInput,
   assertApplyPair,
+  assertResourceAggregateReplaceInput,
   assertExpectedTargetPool,
   assertResourceIdentityFence,
   assertTargetPoolDeleteInput,
@@ -91,6 +94,7 @@ import {
   matchesResourceIdentityFence,
   matchesTargetPool,
   matchesVersion,
+  filterCapsuleOwnerPage,
   resourceRecordRevision,
   consumeResourceIdentityFence,
   retireResourceIdentityFence,
@@ -173,6 +177,7 @@ interface ResourceIdentityFenceRow {
   readonly resource_id: string;
   readonly last_generation: number;
   readonly fence_revision: number;
+  readonly retired_owner_json?: string | null;
 }
 
 interface NamedSpecRow {
@@ -359,6 +364,18 @@ class D1ResourceShapeStore implements ResourceShapeStore {
           .bind(spaceId, limit + 1)
           .all<ResourceShapeRow>();
     return pageFromProbe((rows.results ?? []).map(resourceShapeFromRow), limit);
+  }
+
+  async listByCapsuleOwnerPage(
+    spaceId: SpaceId,
+    capsuleId: string,
+    params: PageParams,
+  ): Promise<Page<ResourceShapeRecord>> {
+    return filterCapsuleOwnerPage(
+      await this.listBySpacePage(spaceId, params),
+      spaceId,
+      capsuleId,
+    );
   }
 
   async listByKindsPage(
@@ -920,6 +937,8 @@ export function createD1ResourceShapeStores(db: D1Like): ResourceShapeStores {
     deleteTargetPool: (input) => deleteD1TargetPool(db, input),
     beginApply: (input) => beginD1Apply(db, input),
     commitApply: (input) => commitD1Apply(db, input),
+    replaceResourceAggregate: (input) =>
+      replaceD1ResourceAggregate(db, input),
     abortApply: (input) => abortD1Apply(db, input),
     removeResource: (input) => removeD1Resource(db, input),
     pinExactFormIdentity: (input) => pinD1ExactFormIdentity(db, input),
@@ -1282,6 +1301,51 @@ async function commitD1Apply(
   };
 }
 
+async function replaceD1ResourceAggregate(
+  db: D1Like,
+  input: ResourceAggregateReplaceInput,
+): Promise<ResourceAggregateReplaceResult> {
+  assertResourceAggregateReplaceInput(input);
+  const batch = requireD1Batch(db, "atomic Resource aggregate replacement");
+  try {
+    await batch([
+      resourceAndLockGuardStatement(
+        db,
+        input.record.id,
+        input.expectedResource,
+        input.expectedLock,
+      ),
+      lockUpsertStatement(db, input.lock),
+      resourceUpdateStatement(db, input.record),
+    ]);
+  } catch (error) {
+    const [current, currentLock] = await Promise.all([
+      readD1Resource(db, input.record.id),
+      readD1Lock(db, input.record.id),
+    ]);
+    if (!current && !currentLock) return { status: "not_found" };
+    if (
+      !current ||
+      !currentLock ||
+      !matchesVersion(current, input.expectedResource) ||
+      !matchesApplyLock(currentLock, input.expectedLock)
+    ) {
+      return {
+        status: "conflict",
+        ...(current ? { record: current } : {}),
+        ...(currentLock ? { lock: currentLock } : {}),
+      };
+    }
+    throw error;
+  }
+  const [record, lock] = await Promise.all([
+    readD1Resource(db, input.record.id),
+    readD1Lock(db, input.record.id),
+  ]);
+  if (!record || !lock) return { status: "not_found" };
+  return { status: "replaced", record, lock };
+}
+
 async function abortD1Apply(
   db: D1Like,
   input: ResourceApplyAbortInput,
@@ -1448,24 +1512,25 @@ async function removeD1Resource(
 ): Promise<ResourceAtomicRemoveResult> {
   assertAtomicRemoveInput(input);
   const batch = requireD1Batch(db);
+  const current = await readD1Resource(db, input.resourceId);
   const currentIdentityFence = await readD1ResourceIdentityFence(
     db,
     input.resourceId,
   );
+  const retirementRecord =
+    current && matchesVersion(current, input.expected)
+      ? current
+      : ({
+          id: input.resourceId,
+          generation: input.expected.generation,
+        } as ResourceShapeRecord);
   const expectedIdentityFence = currentIdentityFence ?? null;
   const retiredIdentityFence =
     currentIdentityFence === undefined
-      ? {
-          resourceId: input.resourceId,
-          lastGeneration: input.expected.generation,
-          fenceRevision: 1,
-        }
+      ? retireResourceIdentityFence(retirementRecord, undefined)
       : currentIdentityFence.lastGeneration === input.expected.generation
         ? retireResourceIdentityFence(
-            {
-              id: input.resourceId,
-              generation: input.expected.generation,
-            } as ResourceShapeRecord,
+            retirementRecord,
             currentIdentityFence,
           )
         : {
@@ -1573,13 +1638,19 @@ function resourceIdentityFenceUpsertStatement(
   return db
     .prepare(
       `insert into ${names.resourceIdentityFences} (
-        resource_id, last_generation, fence_revision
-      ) values (?, ?, ?)
+        resource_id, last_generation, fence_revision, retired_owner_json
+      ) values (?, ?, ?, ?)
       on conflict (resource_id) do update set
         last_generation = excluded.last_generation,
-        fence_revision = excluded.fence_revision`,
+        fence_revision = excluded.fence_revision,
+        retired_owner_json = excluded.retired_owner_json`,
     )
-    .bind(fence.resourceId, fence.lastGeneration, fence.fenceRevision);
+    .bind(
+      fence.resourceId,
+      fence.lastGeneration,
+      fence.fenceRevision,
+      jsonOrNull(fence.retiredOwner),
+    );
 }
 
 function targetPoolExpectationGuardStatement(
@@ -1861,7 +1932,27 @@ function applyAndLockGuardStatement(
   db: D1Like,
   input: ResourceApplyAbortInput,
 ): D1LikePreparedStatement {
-  const lock = input.expectedPlannedLock;
+  return resourceAndLockGuardStatement(
+    db,
+    input.resourceId,
+    input.expectedApplying,
+    input.expectedPlannedLock,
+  );
+}
+
+function resourceAndLockGuardStatement(
+  db: D1Like,
+  resourceId: ResourceShapeRecordId,
+  expected: {
+    readonly generation: number;
+    readonly phase: ResourcePhase;
+    readonly updatedAt: string;
+    readonly revision?: number;
+  },
+  lock: ResolutionLockRecord,
+): D1LikePreparedStatement {
+  const revisionPredicate =
+    expected.revision === undefined ? "" : " and resource.revision = ?";
   return db
     .prepare(
       `insert into ${names.resourceShapes} (
@@ -1878,6 +1969,7 @@ function applyAndLockGuardStatement(
           and resource.generation = ?
           and resource.phase = ?
           and resource.updated_at = ?
+          ${revisionPredicate}
           and resolution.selected_implementation = ?
           and resolution.target_pool is ?
           and resolution.target = ?
@@ -1895,11 +1987,12 @@ function applyAndLockGuardStatement(
       )`,
     )
     .bind(
-      input.resourceId,
-      input.resourceId,
-      input.expectedApplying.generation,
-      input.expectedApplying.phase,
-      input.expectedApplying.updatedAt,
+      resourceId,
+      resourceId,
+      expected.generation,
+      expected.phase,
+      expected.updatedAt,
+      ...(expected.revision === undefined ? [] : [expected.revision]),
       lock.selectedImplementation,
       lock.targetPool ?? null,
       lock.target,
@@ -2058,7 +2151,8 @@ async function readD1ResourceIdentityFence(
 ): Promise<ResourceIdentityFenceRecord | undefined> {
   const row = await db
     .prepare(
-      `select resource_id, last_generation, fence_revision
+      `select resource_id, last_generation, fence_revision,
+              retired_owner_json
        from ${names.resourceIdentityFences}
        where resource_id = ? limit 1`,
     )
@@ -2279,7 +2373,7 @@ function resourceShapeFromRow(row: ResourceShapeRow): ResourceShapeRecord {
   );
   const conditions = parseJson<readonly Condition[]>(row.conditions_json);
   const labels = parseJson<Record<string, string>>(row.labels_json);
-  const owner = parseJson<ResourceOwner>(row.owner_json);
+  const owner = parseResourceOwner(row.owner_json);
   const pendingOperation = parseJson<ResourceShapePendingOperation>(
     row.pending_operation_json,
   );
@@ -2321,6 +2415,9 @@ function resourceIdentityFenceFromRow(
     resourceId: row.resource_id,
     lastGeneration: Number(row.last_generation),
     fenceRevision: Number(row.fence_revision),
+    ...(parseResourceOwner(row.retired_owner_json) === undefined
+      ? {}
+      : { retiredOwner: parseResourceOwner(row.retired_owner_json) }),
   };
   assertResourceIdentityFence(fence);
   return fence;
@@ -2454,6 +2551,18 @@ function jsonOrNull(value: unknown): string | null {
 function parseJson<T>(value: unknown): T | undefined {
   if (value === undefined || value === null || value === "") return undefined;
   return (typeof value === "string" ? JSON.parse(value) : value) as T;
+}
+
+/** Legacy owner rows may be returned as an unquoted scalar by SQL adapters. */
+function parseResourceOwner(value: unknown): ResourceOwner | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  if (typeof value !== "string") return value as ResourceOwner;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed === null ? undefined : (parsed as ResourceOwner);
+  } catch {
+    return value;
+  }
 }
 
 function exactFormIdentity(

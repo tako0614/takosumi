@@ -63,6 +63,7 @@ import type {
   TestConnectionResponse,
 } from "@takosumi/internal/deploy-control-api";
 import type { Capsule, PublicCapsule } from "takosumi-contract/capsules";
+import type { CapsuleOwnedResourceFence } from "../capsules/mod.ts";
 import type {
   CredentialRecipe,
   CredentialRecipeResponse,
@@ -1447,6 +1448,13 @@ export class OpenTofuController {
     observer: ((run: PlanRun | ApplyRun) => Promise<void>) | undefined,
   ): void {
     this.#runEngine.setTerminalObserver(observer);
+  }
+
+  /** Bind the host-owned Capsule Resource fence after domain composition. */
+  setCapsuleOwnedResourceFence(
+    fence: CapsuleOwnedResourceFence | undefined,
+  ): void {
+    this.#runEngine.setCapsuleOwnedResourceFence(fence);
   }
 
   setPlanRunQueuedObserver(

@@ -3213,6 +3213,19 @@ export interface PlatformCanonicalReadyResourceInventoryPage {
   readonly nextCursor?: string;
 }
 
+export interface PlatformCanonicalHostRuntimeResourceRecovery {
+  resolve(input: {
+    readonly resourceId: string;
+    readonly resourceGeneration: number;
+    readonly resourceRevisionId: string;
+  }): Promise<PlatformCanonicalReadyResourceInventoryItem | undefined>;
+  complete(input: {
+    readonly resourceId: string;
+    readonly resourceGeneration: number;
+    readonly resourceRevisionId: string;
+  }): Promise<boolean>;
+}
+
 /**
  * Read-only global Resource inventory for host-operated reconciliation jobs.
  * It is a composition port only: no public HTTP route exposes global
@@ -3321,16 +3334,36 @@ export function createPlatformCanonicalHostRuntimeGraphReader(
   }): Promise<PlatformCanonicalHostRuntimeGraphEvidence | undefined>;
 } {
   const inventory = createPlatformCanonicalReadyResourceInventory(env);
+  const recovery = createPlatformCanonicalHostRuntimeResourceRecovery(env);
   return Object.freeze({
     async read(input) {
       const parsed = platformCanonicalResourceId(input.resourceId);
       if (!parsed || parsed.workspaceId !== input.request.workspaceId) {
         return logCanonicalHostRuntimeGraphGap(env, "consumer_id_invalid");
       }
-      const consumer = await canonicalHostRuntimeResource(
+      let consumer = await canonicalHostRuntimeResource(
         inventory,
         input.resourceId,
       );
+      if (!consumer) {
+        const candidate = await recovery.resolve({
+          resourceId: input.resourceId,
+          resourceGeneration: input.resourceGeneration,
+          resourceRevisionId: input.resourceRevisionId,
+        });
+        if (candidate?.nativeResources.length === 1) {
+          consumer = {
+            workspaceId: parsed.workspaceId,
+            resourceId: input.resourceId,
+            resource: candidate.resource,
+            resourceGeneration: candidate.resourceGeneration,
+            resourceRevisionId: candidate.resourceRevisionId,
+            nativeType: candidate.nativeResources[0]!.type,
+            nativeId: candidate.nativeResources[0]!.id,
+            nativeResources: candidate.nativeResources,
+          };
+        }
+      }
       if (
         !consumer ||
         consumer.resourceGeneration !== input.resourceGeneration ||
@@ -4374,6 +4407,40 @@ export function createPlatformCanonicalReadyResourceInventory(
         ...(input.limit !== undefined ? { limit: input.limit } : {}),
       });
       return structuredClone(page);
+    },
+  });
+}
+
+/**
+ * Exact in-process recovery for a host-runtime activation that failed after
+ * the provider apply committed. Only Core can validate and transition the
+ * Degraded Resource; Cloud receives no store or generic mutation authority.
+ */
+export function createPlatformCanonicalHostRuntimeResourceRecovery(
+  env: CloudflareWorkerEnv,
+): PlatformCanonicalHostRuntimeResourceRecovery {
+  return Object.freeze({
+    resolve: async (
+      input: Parameters<
+        PlatformCanonicalHostRuntimeResourceRecovery["resolve"]
+      >[0],
+    ) => {
+      const operations = await takosumiOperationsFor(env);
+      const recovery = operations.resourceHostRuntimeRecovery;
+      if (!recovery) return undefined;
+      const evidence = await recovery.resolve(input);
+      return evidence
+        ? structuredClone({ resourceId: input.resourceId, ...evidence })
+        : undefined;
+    },
+    complete: async (
+      input: Parameters<
+        PlatformCanonicalHostRuntimeResourceRecovery["complete"]
+      >[0],
+    ) => {
+      const operations = await takosumiOperationsFor(env);
+      const recovery = operations.resourceHostRuntimeRecovery;
+      return recovery ? await recovery.complete(input) : false;
     },
   });
 }

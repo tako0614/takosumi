@@ -74,6 +74,33 @@ test("D1 portable host idempotency preserves exact-scope conflict and compare-an
   expect((await coordinator.lookup(requestFor())).kind).toBe("miss");
 });
 
+test("D1 portable host idempotency quarantines an exact malformed success with CAS", async () => {
+  const db = new SqliteFakeD1();
+  const coordinator = new PortableHostIdempotencyCoordinator(
+    new D1PortableHostIdempotencyLedger(db),
+    { reservationIdFactory: () => "reservation_one" },
+  );
+  const request = requestFor();
+  const reserved = await coordinator.reserve(request);
+  if (reserved.kind !== "execute") throw new Error("expected reservation");
+  const malformed = {
+    status: 200,
+    statusText: "OK",
+    headers: [["content-type", "application/json"]] as const,
+    body: new TextEncoder().encode('{"kind":"EdgeWorker"}'),
+  };
+  await coordinator.storeSuccess(reserved.reservation, malformed);
+
+  expect(
+    await coordinator.quarantineReplay(
+      request,
+      malformed,
+      (response) => !JSON.parse(new TextDecoder().decode(response.body)).status,
+    ),
+  ).toEqual({ kind: "quarantined" });
+  expect((await coordinator.lookup(request)).kind).toBe("miss");
+});
+
 function requestFor(
   overrides: Partial<{
     readonly body: Uint8Array;

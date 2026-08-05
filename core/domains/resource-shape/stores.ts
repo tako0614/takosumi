@@ -10,7 +10,10 @@ import type {
   ResourceManagedBy,
   ResourceShapeKind,
 } from "takosumi-contract";
-import { shapeKindForPortableType } from "takosumi-contract";
+import {
+  isResourceCapsuleOwner,
+  shapeKindForPortableType,
+} from "takosumi-contract";
 import {
   pageSorted,
   type Page,
@@ -127,6 +130,32 @@ export type ResourceApplyCommitResult =
   | { readonly status: "not_found" }
   | { readonly status: "conflict"; readonly record: ResourceShapeRecord };
 
+/**
+ * Exact aggregate replacement used by host-owned lifecycle recovery after the
+ * provider apply has already committed. Both the Resource and its immutable
+ * resolution evidence are fenced and replaced together so Ready inventory
+ * never observes a torn timestamp/revision pair.
+ */
+export interface ResourceAggregateReplaceInput {
+  readonly record: ResourceShapeRecord;
+  readonly lock: ResolutionLockRecord;
+  readonly expectedResource: ResourceRecordVersion;
+  readonly expectedLock: ResolutionLockRecord;
+}
+
+export type ResourceAggregateReplaceResult =
+  | {
+      readonly status: "replaced";
+      readonly record: ResourceShapeRecord;
+      readonly lock: ResolutionLockRecord;
+    }
+  | { readonly status: "not_found" }
+  | {
+      readonly status: "conflict";
+      readonly record?: ResourceShapeRecord;
+      readonly lock?: ResolutionLockRecord;
+    };
+
 export interface ResourceApplyAbortInput {
   readonly resourceId: ResourceShapeRecordId;
   readonly expectedApplying: ResourceApplyingVersion;
@@ -229,6 +258,19 @@ export interface ResourceShapeStore {
   /** Bounded keyset page for public Resource list reads. */
   listBySpacePage(
     spaceId: SpaceId,
+    params: PageParams,
+  ): Promise<Page<ResourceShapeRecord>>;
+  /**
+   * Bounded exact inventory for one authenticated Capsule owner. This reads
+   * every Resource phase (including Applying, Deleting, and Failed) and only
+   * accepts the structured owner whose Workspace and Capsule both match the
+   * requested scope. The page cursor is the underlying Workspace keyset: a
+   * filtered page may contain fewer rows than `limit` (or no rows), so callers
+   * must continue while `nextCursor` is present to prove completeness.
+   */
+  listByCapsuleOwnerPage(
+    spaceId: SpaceId,
+    capsuleId: string,
     params: PageParams,
   ): Promise<Page<ResourceShapeRecord>>;
   /**
@@ -429,6 +471,10 @@ export interface ResourceShapeStores {
   commitApply(
     input: ResourceApplyCommitInput,
   ): Promise<ResourceApplyCommitResult>;
+  /** Atomically replaces one exact Resource/ResolutionLock aggregate. */
+  replaceResourceAggregate(
+    input: ResourceAggregateReplaceInput,
+  ): Promise<ResourceAggregateReplaceResult>;
   /**
    * Atomically removes or replaces an unstarted/known-no-mutation Applying
    * claim and restores its prior lock state. Both the Applying Resource and
@@ -549,6 +595,18 @@ export class InMemoryResourceShapeStore implements ResourceShapeStore {
       .filter((record) => record.spaceId === spaceId)
       .sort(compareCreatedAtAndId);
     return Promise.resolve(pageSorted(records, params));
+  }
+
+  async listByCapsuleOwnerPage(
+    spaceId: SpaceId,
+    capsuleId: string,
+    params: PageParams,
+  ): Promise<Page<ResourceShapeRecord>> {
+    return filterCapsuleOwnerPage(
+      await this.listBySpacePage(spaceId, params),
+      spaceId,
+      capsuleId,
+    );
   }
 
   listByKindsPage(
@@ -1090,6 +1148,34 @@ export function createInMemoryResourceShapeStores(): ResourceShapeStores {
         lock: input.finalLock,
       });
     },
+    replaceResourceAggregate(input) {
+      assertResourceAggregateReplaceInput(input);
+      const current = resources.getSync(input.record.id);
+      const currentLock = locks.getSync(input.record.id);
+      if (!current && !currentLock) {
+        return Promise.resolve({ status: "not_found" });
+      }
+      if (
+        !current ||
+        !currentLock ||
+        !matchesVersion(current, input.expectedResource) ||
+        !matchesApplyLock(currentLock, input.expectedLock)
+      ) {
+        return Promise.resolve({
+          status: "conflict",
+          ...(current ? { record: current } : {}),
+          ...(currentLock ? { lock: currentLock } : {}),
+        });
+      }
+      const persisted = withNextResourceRevision(input.record, current);
+      resources.replaceSync(persisted);
+      locks.putSync(input.lock);
+      return Promise.resolve({
+        status: "replaced",
+        record: persisted,
+        lock: input.lock,
+      });
+    },
     abortApply(input) {
       assertAbortInput(input);
       const current = resources.getSync(input.resourceId);
@@ -1257,6 +1343,32 @@ export function assertApplyPair(
     );
   }
   assertNativeResourceFormIdentity(lock.nativeResources, record.form);
+}
+
+export function assertResourceAggregateReplaceInput(
+  input: ResourceAggregateReplaceInput,
+): void {
+  if (input.record.id !== input.expectedLock.resourceId) {
+    throw new Error("replacement Resource does not match expected lock");
+  }
+  if (input.lock.resourceId !== input.record.id) {
+    throw new Error("replacement ResolutionLock does not match Resource");
+  }
+  assertResourceFormIdentity(input.record.form, input.record.kind);
+  if (!resourceFormIdentitiesEqual(input.record.form, input.lock.form)) {
+    throw new Error(
+      "replacement Resource and ResolutionLock Form identities differ",
+    );
+  }
+  assertNativeResourceFormIdentity(
+    input.lock.nativeResources,
+    input.record.form,
+  );
+  if (input.record.updatedAt !== input.lock.updatedAt) {
+    throw new Error(
+      "replacement Resource and ResolutionLock timestamps must match",
+    );
+  }
 }
 
 export function assertExpectedTargetPool(input: ResourceApplyBeginInput): void {
@@ -1511,6 +1623,7 @@ export function retireResourceIdentityFence(
     resourceId: record.id,
     lastGeneration: record.generation,
     fenceRevision: (current?.fenceRevision ?? 0) + 1,
+    ...(record.owner === undefined ? {} : { retiredOwner: record.owner }),
   };
 }
 
@@ -1638,4 +1751,24 @@ function compareCreatedAtAndId(
     left.createdAt.localeCompare(right.createdAt) ||
     left.id.localeCompare(right.id)
   );
+}
+
+/** Apply the exact structured Capsule owner fence to one bounded source page. */
+export function filterCapsuleOwnerPage(
+  page: Page<ResourceShapeRecord>,
+  spaceId: SpaceId,
+  capsuleId: string,
+): Page<ResourceShapeRecord> {
+  return {
+    items: page.items.filter((record) => {
+      const owner = record.owner;
+      return (
+        record.spaceId === spaceId &&
+        isResourceCapsuleOwner(owner) &&
+        owner.workspaceId === spaceId &&
+        owner.id === capsuleId
+      );
+    }),
+    ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
+  };
 }
