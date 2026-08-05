@@ -931,11 +931,15 @@ export class ResourceShapeService {
     ]);
     const ownerError = resourceOwnerConflict(resourceId, existing, req.owner);
     if (ownerError) return ownerError;
-    const versionError = resourceGenerationError(
-      resourceId,
-      existing,
-      req.expectedGeneration,
-    );
+    const recoveringApplying =
+      existing !== undefined && applyingPreviewCanRecover(req, existing);
+    const versionError = recoveringApplying
+      ? undefined
+      : resourceGenerationError(
+          resourceId,
+          existing,
+          req.expectedGeneration,
+        );
     if (versionError) return versionError;
     const identity = previewResourceIdentity(
       resourceId,
@@ -944,6 +948,18 @@ export class ResourceShapeService {
       identityFence,
     );
     if (!identity.ok) return identity;
+    const recoveryReview = recoveringApplying
+      ? existing?.pendingOperation?.deploymentReview
+      : undefined;
+    if (recoveringApplying && !recoveryReview) {
+      return {
+        ok: false,
+        error: {
+          code: "deployment_plan_changed",
+          message: `resource ${resourceId} has no pinned deployment review for exact preview recovery`,
+        },
+      };
+    }
     const form = await this.#resolveExactForm(req, existing, existingLock);
     if (!form.ok) return form;
     const prepared = await this.#resolveAndPlan(req, existingLock);
@@ -1102,7 +1118,10 @@ export class ResourceShapeService {
       ok: true,
       value: {
         resource,
-        planDigest: evidence.planDigest,
+        // A provider retries by previewing before it replays the same
+        // idempotent PUT. The retried body must retain the original reviewed
+        // digest or the durable HTTP fingerprint would reject that replay.
+        planDigest: recoveryReview?.planDigest ?? evidence.planDigest,
         specDigest: evidence.specDigest,
         resolutionFingerprint: evidence.resolutionFingerprint,
         ...(quote ? { quote } : {}),
@@ -1187,16 +1206,12 @@ export class ResourceShapeService {
    */
   async applyReplayStatus(
     req: ApplyResourceRequest,
+    review: ResourceDeploymentReview,
   ): Promise<"recovering" | "completed" | undefined> {
     const id = formatResourceShapeId(req.space, req.kind, req.name);
     const existing = await this.#stores.resources.get(id);
-    if (!existing || !applyingRequestMatchesRecord(req, existing)) {
-      return undefined;
-    }
-    if (
-      existing.phase === "Applying" &&
-      applyRecoveryGenerationMatches(req, existing)
-    ) {
+    if (!existing) return undefined;
+    if (applyingRequestCanRecover(req, review, existing)) {
       return "recovering";
     }
     return completedApplyRequestMatchesRecord(req, existing)
@@ -1250,10 +1265,58 @@ export class ResourceShapeService {
         value: this.#assemble(existing, existingLock),
       };
     }
-    const versionError =
-      recoveryRequested && recoveringApplying
-        ? applyRecoveryGenerationError(id, existing, req.expectedGeneration)
-        : resourceGenerationError(id, existing, req.expectedGeneration);
+    if (
+      recoveryRequested &&
+      existing &&
+      completedRetainedCreateMatchesRecord(req, existing)
+    ) {
+      const identity = completedRetainedCreateIdentity(
+        id,
+        existing,
+        identityFence,
+      );
+      if (!identity.ok) return identity;
+      const prepared = await this.#resolveAndPlan(req, existingLock);
+      if (!prepared.ok) return prepared;
+      const evidence = await resourceDeploymentEvidence(
+        req,
+        prepared.value.output,
+        prepared.value.plan,
+        identity.value,
+      );
+      const reviewError = deploymentReviewError(review, evidence.planDigest);
+      if (reviewError) {
+        return {
+          ok: false,
+          error: { code: "deployment_plan_changed", message: reviewError },
+        };
+      }
+      return {
+        ok: true,
+        value: this.#assemble(existing, existingLock),
+      };
+    }
+    let versionError:
+      | { readonly ok: false; readonly error: ResourceServiceError }
+      | undefined;
+    if (
+      existing !== undefined &&
+      applyingRequestCanRecover(req, review, existing)
+    ) {
+      versionError = undefined;
+    } else if (recoveryRequested && recoveringApplying) {
+      versionError = applyRecoveryGenerationError(
+        id,
+        existing,
+        req.expectedGeneration,
+      );
+    } else {
+      versionError = resourceGenerationError(
+        id,
+        existing,
+        req.expectedGeneration,
+      );
+    }
     if (versionError) return versionError;
     const form = await this.#resolveExactForm(req, existing, existingLock, {
       allowRetainedPackage: recoveryRequested,
@@ -7000,8 +7063,7 @@ function previewResourceIdentity(
   current: ResourceShapeRecord | undefined,
   fence: ResourceIdentityFenceRecord | undefined,
 ): ServiceResult<PlannedResourceIdentity> {
-  return current?.phase === "Applying" &&
-    applyingRequestMatchesRecord(request, current)
+  return current !== undefined && applyingPreviewCanRecover(request, current)
     ? recoveryResourceIdentity(current)
     : planResourceIdentity(resourceId, current, fence);
 }
@@ -7122,12 +7184,12 @@ function recoveryResourceIdentity(
 }
 
 function applyRecoveryGenerationMatches(
-  request: ApplyResourceRequest,
+  expectedGeneration: number | undefined,
   current: ResourceShapeRecord,
 ): boolean {
   return (
-    request.expectedGeneration === undefined ||
-    current.generation === request.expectedGeneration + 1
+    expectedGeneration === undefined ||
+    current.generation === expectedGeneration + 1
   );
 }
 
@@ -7228,6 +7290,91 @@ function applyingRequestMatchesRecord(
   );
 }
 
+/**
+ * A portable create carries If-None-Match rather than the retained fence's
+ * predecessor generation. After delete/recreate, that maps to generation 0
+ * even when the exact Applying incarnation is generation 2 or later. Only an
+ * exact in-flight request may use that recovery exception; completed Resources
+ * keep the strict optimistic-generation rule.
+ */
+function applyingPreviewCanRecover(
+  request: ApplyResourceRequest,
+  record: ResourceShapeRecord,
+): boolean {
+  return (
+    record.phase === "Applying" &&
+    record.pendingOperation?.operation === "apply" &&
+    applyingRequestMatchesRecord(request, record) &&
+    (request.expectedGeneration === 0 ||
+      applyRecoveryGenerationMatches(request.expectedGeneration, record))
+  );
+}
+
+function applyingRequestCanRecover(
+  request: ApplyResourceRequest,
+  review: ResourceDeploymentReview,
+  record: ResourceShapeRecord,
+): boolean {
+  return (
+    applyingPreviewCanRecover(request, record) &&
+    deploymentReviewsEqual(review, record.pendingOperation?.deploymentReview)
+  );
+}
+
+function completedRetainedCreateMatchesRecord(
+  request: ApplyResourceRequest,
+  record: ResourceShapeRecord,
+): boolean {
+  return (
+    request.expectedGeneration === 0 &&
+    record.phase === "Ready" &&
+    record.observedGeneration === record.generation &&
+    applyingRequestMatchesRecord(request, record)
+  );
+}
+
+function completedRetainedCreateIdentity(
+  resourceId: string,
+  record: ResourceShapeRecord,
+  fence: ResourceIdentityFenceRecord | undefined,
+): ServiceResult<ResourceIdentityEvidence> {
+  if (
+    !fence ||
+    fence.resourceId !== resourceId ||
+    fence.lastGeneration !== record.generation ||
+    !Number.isSafeInteger(fence.fenceRevision) ||
+    fence.fenceRevision < 1
+  ) {
+    return {
+      ok: false,
+      error: {
+        code: "reconcile_conflict",
+        message: `resource ${resourceId} has no exact completed incarnation fence`,
+      },
+    };
+  }
+  return {
+    ok: true,
+    value: {
+      generation: record.generation,
+      fenceRevision: fence.fenceRevision - 1,
+    },
+  };
+}
+
+function deploymentReviewsEqual(
+  left: ResourceDeploymentReview | undefined,
+  right: ResourceDeploymentReview | undefined,
+): boolean {
+  return (
+    left !== undefined &&
+    right !== undefined &&
+    left.planDigest === right.planDigest &&
+    (left.quoteId ?? null) === (right.quoteId ?? null) &&
+    (left.quoteDigest ?? null) === (right.quoteDigest ?? null)
+  );
+}
+
 function completedApplyRequestMatchesRecord(
   request: ApplyResourceRequest,
   record: ResourceShapeRecord,
@@ -7235,7 +7382,7 @@ function completedApplyRequestMatchesRecord(
   return (
     record.phase === "Ready" &&
     record.observedGeneration === record.generation &&
-    applyRecoveryGenerationMatches(request, record) &&
+    applyRecoveryGenerationMatches(request.expectedGeneration, record) &&
     applyingRequestMatchesRecord(request, record)
   );
 }

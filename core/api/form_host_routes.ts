@@ -665,7 +665,8 @@ export function registerPortableFormHostRoutes(
           );
         },
         retainReservationOnFailure: async () =>
-          (await options.service.applyReplayStatus(request)) !== undefined,
+          (await options.service.applyReplayStatus(request, review.value)) !==
+          undefined,
       },
     );
   });
@@ -1585,6 +1586,7 @@ function serviceError(c: Context, error: ResourceServiceError): Response {
     // in hostCode/details without inventing a Takosumi-only wire code.
     deployment_admission_pending: ["resource_busy", 409, true],
     deployment_finalize_pending: ["resource_busy", 409, true],
+    deployment_plan_changed: ["conflict", 412, false],
   };
   const mapped =
     mapping[error.code] ??

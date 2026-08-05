@@ -3389,6 +3389,16 @@ test("Form-backed import recovery and completed replay do not re-run current hos
   const pending = await first.importResource(request);
   expect(pending.ok).toBe(false);
   expect((await stores.resources.get(APPLY_ID))?.phase).toBe("Applying");
+  expect(
+    await first.applyReplayStatus(
+      {
+        ...APPLY,
+        form: EXACT_FORM,
+        expectedGeneration: 0,
+      },
+      { planDigest: `sha256:${"0".repeat(64)}` },
+    ),
+  ).toBeUndefined();
 
   failCommit = false;
   let currentAdmissionCalls = 0;

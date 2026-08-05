@@ -3,6 +3,9 @@ import { createApiApp } from "../../../core/api/app.ts";
 import {
   InMemoryPortableHostIdempotencyLedger,
   PortableHostIdempotencyCoordinator,
+  type PortableHostIdempotencyLedger,
+  type PortableHostIdempotencyReservedRecord,
+  type PortableHostIdempotencySucceededRecord,
 } from "../../../core/api/portable_host_idempotency.ts";
 import {
   hasInterfaceDeclarationWriteScope,
@@ -198,7 +201,7 @@ async function buildApp(
       | "formDesiredStateAdmission"
       | "deploymentAdmission"
     >
-  >,
+  > & { readonly targetPool?: TargetPoolSpec },
 ) {
   const stores = createInMemoryResourceShapeStores();
   const activityStore = new InMemoryOpenTofuControlStore();
@@ -222,7 +225,11 @@ async function buildApp(
     deploymentAdmission: serviceOverrides?.deploymentAdmission,
     now: () => "2026-01-01T00:00:00.000Z",
   });
-  await service.putTargetPool("space_1", "default", POOL);
+  await service.putTargetPool(
+    "space_1",
+    "default",
+    serviceOverrides?.targetPool ?? POOL,
+  );
   await service.putSpacePolicy("space_1", "default", POLICY);
   const enabledResourceShapeKinds =
     routeOptions?.enabledResourceShapeKinds ?? RESOURCE_SHAPE_KINDS;
@@ -470,6 +477,60 @@ class UnknownOnceApplyAdapter extends StubResourceShapeAdapter {
       });
     }
     return await super.apply(input);
+  }
+}
+
+class PortablePluginApplyAdapter extends PortableFormStubResourceShapeAdapter {
+  override availabilityForImplementation(
+    implementation: TargetImplementationDescriptor,
+  ): { readonly adapterId: string } | undefined {
+    return implementation.plugin
+      ? { adapterId: implementation.plugin }
+      : super.availabilityForImplementation(implementation);
+  }
+}
+
+class UnknownSecondPortableApplyAdapter extends PortablePluginApplyAdapter {
+  #attempts = 0;
+
+  override async apply(input: AdapterApplyInput): Promise<AdapterApplyResult> {
+    this.#attempts += 1;
+    if (this.#attempts === 2) {
+      throw new ResourceAdapterApplyError(
+        "simulated lost recreate response",
+        { mutationOutcome: "unknown" },
+      );
+    }
+    return await super.apply(input);
+  }
+}
+
+class FailNthPortableSuccessLedger implements PortableHostIdempotencyLedger {
+  readonly #inner = new InMemoryPortableHostIdempotencyLedger();
+  #stores = 0;
+
+  constructor(readonly failOn: number) {}
+
+  lookup(scope: Parameters<PortableHostIdempotencyLedger["lookup"]>[0]) {
+    return this.#inner.lookup(scope);
+  }
+
+  reserve(candidate: PortableHostIdempotencyReservedRecord) {
+    return this.#inner.reserve(candidate);
+  }
+
+  async storeSuccess(candidate: PortableHostIdempotencySucceededRecord) {
+    this.#stores += 1;
+    if (this.#stores === this.failOn) {
+      throw new Error("simulated portable success ledger outage");
+    }
+    return await this.#inner.storeSuccess(candidate);
+  }
+
+  release(
+    reservation: Parameters<PortableHostIdempotencyLedger["release"]>[0],
+  ) {
+    return this.#inner.release(reservation);
   }
 }
 
@@ -1422,6 +1483,299 @@ test("portable Form host delegates exact lifecycle to the canonical Resource and
     },
   );
   expect(recreatedDelete.status).toBe(204);
+});
+
+test("portable Form create retry recovers a fenced recreate left Applying", async () => {
+  const idempotency = new PortableHostIdempotencyCoordinator(
+    new FailNthPortableSuccessLedger(3),
+  );
+  const { app, stores } = await buildApp(
+    {
+      resolveActor: () => ({
+        actorAccountId: "acct_portable_recreate_recovery",
+        workspaceId: "workspace_1",
+        roles: ["owner"],
+        scopes: ["forms:read", "resources:*"],
+        requestId: "req_portable_recreate_recovery",
+      }),
+      portableHostIdempotency: idempotency,
+    },
+    exactObjectBucketFormRegistry(),
+    {
+      adapter: new UnknownSecondPortableApplyAdapter(),
+      targetPool: {
+        classes: ["edge.object-store"],
+        targets: [
+          {
+            name: "portable-plugin",
+            type: "test",
+            ref: "test-account",
+            priority: 100,
+            implementations: [
+              {
+                shape: "ObjectBucket",
+                implementation: "portable_object_bucket",
+                plugin: "test.portable_object_bucket",
+                interfaces: { s3_api: "native" },
+              },
+            ],
+          },
+        ],
+      },
+    },
+  );
+  const base = "/apis/forms.takoform.com/v1alpha1";
+  const path = `${base}/resources/ObjectBucket/recreated-assets`;
+  const desired = {
+    apiVersion: "forms.takoform.com/v1alpha1",
+    kind: "ObjectBucket",
+    form: portableFormReference(),
+    metadata: { name: "recreated-assets", space: "space_1" },
+    spec: { name: "recreated-assets", interfaces: ["s3_api"] },
+  };
+  const previewCreate = async () => {
+    const response = await app.request(`${base}/resources/preview`, {
+      method: "POST",
+      headers: { ...JSON_HEADERS, "if-none-match": "*" },
+      body: JSON.stringify(desired),
+    });
+    const body = await response.json();
+    expect({ status: response.status, body }).toMatchObject({ status: 200 });
+    return body;
+  };
+  const putCreate = async (
+    planDigest: string,
+    idempotencyKey: string,
+  ) =>
+    await app.request(path, {
+      method: "PUT",
+      headers: {
+        ...JSON_HEADERS,
+        "if-none-match": "*",
+        "idempotency-key": idempotencyKey,
+      },
+      body: JSON.stringify({
+        ...desired,
+        review: { planDigest },
+      }),
+    });
+
+  const firstPreview = await previewCreate();
+  const first = await putCreate(
+    firstPreview.review.planDigest,
+    "portable-recovery-create-1",
+  );
+  expect(first.status).toBe(200);
+  expect(first.headers.get("etag")).toBe('"1"');
+
+  const deleted = await app.request(
+    `${path}?space=space_1&${portableFormQuery()}`,
+    {
+      method: "DELETE",
+      headers: {
+        "if-match": '"1"',
+        "idempotency-key": "portable-recovery-delete-1",
+      },
+    },
+  );
+  expect(deleted.status).toBe(204);
+
+  const recreatePreview = await previewCreate();
+  const pending = await putCreate(
+    recreatePreview.review.planDigest,
+    "portable-recovery-create-2",
+  );
+  expect(pending.status).toBe(409);
+  expect(await pending.json()).toMatchObject({
+    error: {
+      code: "resource_busy",
+      hostCode: "deployment_finalize_pending",
+      retryable: true,
+    },
+  });
+  expect(
+    await stores.resources.get(
+      "tkrn:space_1:ObjectBucket:recreated-assets",
+    ),
+  ).toMatchObject({
+    phase: "Applying",
+    generation: 2,
+    pendingOperation: {
+      deploymentReview: {
+        planDigest: recreatePreview.review.planDigest,
+      },
+    },
+  });
+
+  const recoveryPreview = await previewCreate();
+  expect(recoveryPreview.review.planDigest).toMatch(/^sha256:[0-9a-f]{64}$/u);
+  expect(recoveryPreview.review.planDigest).toBe(
+    recreatePreview.review.planDigest,
+  );
+
+  // A deployment from before the recovery fix may have lost its HTTP
+  // idempotency reservation. A fresh reservation must first observe the exact
+  // Applying incarnation, stay retryable, and then recover on its replay.
+  const recoveryPending = await putCreate(
+    recoveryPreview.review.planDigest,
+    "portable-recovery-create-3",
+  );
+  expect(recoveryPending.status).toBe(409);
+  expect(await recoveryPending.json()).toMatchObject({
+    error: {
+      code: "resource_busy",
+      hostCode: "deployment_finalize_pending",
+      retryable: true,
+    },
+  });
+
+  const unrecordedSuccess = await putCreate(
+    recoveryPreview.review.planDigest,
+    "portable-recovery-create-3",
+  );
+  expect(unrecordedSuccess.status).toBe(503);
+  expect(await unrecordedSuccess.json()).toMatchObject({
+    error: { code: "backend_unavailable", retryable: true },
+  });
+
+  const recovered = await putCreate(
+    recoveryPreview.review.planDigest,
+    "portable-recovery-create-3",
+  );
+  const recoveredBody = await recovered.json();
+  expect({ status: recovered.status, body: recoveredBody }).toMatchObject({
+    status: 200,
+  });
+  expect(recovered.headers.get("etag")).toBe('"2"');
+  expect(recoveredBody.metadata.resourceVersion).toBe("2");
+
+  const freshCreateAgainstReady = await putCreate(
+    recoveryPreview.review.planDigest,
+    "portable-recovery-create-4",
+  );
+  expect(freshCreateAgainstReady.status).toBe(412);
+});
+
+test("portable Form never rebinds an old reserved create to a later incarnation", async () => {
+  const idempotency = new PortableHostIdempotencyCoordinator(
+    new FailNthPortableSuccessLedger(1),
+  );
+  const { app } = await buildApp(
+    {
+      resolveActor: () => ({
+        actorAccountId: "acct_portable_old_reservation",
+        workspaceId: "workspace_1",
+        roles: ["owner"],
+        scopes: ["forms:read", "resources:*"],
+        requestId: "req_portable_old_reservation",
+      }),
+      portableHostIdempotency: idempotency,
+    },
+    exactObjectBucketFormRegistry(),
+    {
+      adapter: new PortablePluginApplyAdapter(),
+      targetPool: {
+        classes: ["edge.object-store"],
+        targets: [
+          {
+            name: "portable-plugin",
+            type: "test",
+            ref: "test-account",
+            priority: 100,
+            implementations: [
+              {
+                shape: "ObjectBucket",
+                implementation: "portable_object_bucket",
+                plugin: "test.portable_object_bucket",
+                interfaces: { s3_api: "native" },
+              },
+            ],
+          },
+        ],
+      },
+    },
+  );
+  const base = "/apis/forms.takoform.com/v1alpha1";
+  const path = `${base}/resources/ObjectBucket/reserved-assets`;
+  const desired = {
+    apiVersion: "forms.takoform.com/v1alpha1",
+    kind: "ObjectBucket",
+    form: portableFormReference(),
+    metadata: { name: "reserved-assets", space: "space_1" },
+    spec: { name: "reserved-assets", interfaces: ["s3_api"] },
+  };
+  const preview = async () => {
+    const response = await app.request(`${base}/resources/preview`, {
+      method: "POST",
+      headers: { ...JSON_HEADERS, "if-none-match": "*" },
+      body: JSON.stringify(desired),
+    });
+    const body = await response.json();
+    expect({ status: response.status, body }).toMatchObject({ status: 200 });
+    return body;
+  };
+  const put = async (key: string, planDigest: string) =>
+    await app.request(path, {
+      method: "PUT",
+      headers: {
+        ...JSON_HEADERS,
+        "if-none-match": "*",
+        "idempotency-key": key,
+      },
+      body: JSON.stringify({ ...desired, review: { planDigest } }),
+    });
+
+  const firstPreview = await preview();
+  const unrecordedFirst = await put(
+    "portable-old-reservation-create-1",
+    firstPreview.review.planDigest,
+  );
+  expect(unrecordedFirst.status).toBe(503);
+
+  const deleted = await app.request(
+    `${path}?space=space_1&${portableFormQuery()}`,
+    {
+      method: "DELETE",
+      headers: {
+        "if-match": '"1"',
+        "idempotency-key": "portable-old-reservation-delete-1",
+      },
+    },
+  );
+  expect(deleted.status).toBe(204);
+
+  const secondPreview = await preview();
+  expect(secondPreview.review.planDigest).not.toBe(
+    firstPreview.review.planDigest,
+  );
+  const second = await put(
+    "portable-old-reservation-create-2",
+    secondPreview.review.planDigest,
+  );
+  expect(second.status).toBe(200);
+  expect(second.headers.get("etag")).toBe('"2"');
+
+  const staleReplay = await put(
+    "portable-old-reservation-create-1",
+    firstPreview.review.planDigest,
+  );
+  const staleReplayBody = await staleReplay.json();
+  expect({ status: staleReplay.status, body: staleReplayBody }).toMatchObject({
+    status: 412,
+    body: {
+    error: {
+      code: "conflict",
+      hostCode: "deployment_plan_changed",
+      retryable: false,
+    },
+    },
+  });
+
+  const current = await app.request(
+    `${path}?space=space_1&${portableFormQuery()}`,
+  );
+  expect(current.status).toBe(200);
+  expect(current.headers.get("etag")).toBe('"2"');
 });
 
 test("portable Resource ownership comes only from authenticated host run context", async () => {
