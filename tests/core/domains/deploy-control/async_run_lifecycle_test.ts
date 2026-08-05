@@ -1151,7 +1151,7 @@ test("runner infrastructure errors fail a plan after the retry budget is exhaust
   ]);
 });
 
-test("a retryable runner infrastructure reset requeues apply without failing terminally", async () => {
+test("an ambiguous runner substrate reset terminally fails apply without replaying provider mutations", async () => {
   const store = new InMemoryOpenTofuControlStore();
   let applyCalls = 0;
   const retryDispatches: Parameters<EnqueueRun>[0][] = [];
@@ -1218,43 +1218,24 @@ test("a retryable runner infrastructure reset requeues apply without failing ter
   expect(applyRun.status).toEqual("queued");
   retryDispatches.length = 0;
 
-  await expect(
-    controller.dispatchQueuedRun({
-      action: "apply",
-      runId: applyRun.id,
-      workspaceId: applyRun.workspaceId,
-    }),
-  ).rejects.toThrow(/retryable_runner_infrastructure_error/);
-
-  const requeued = (await store.getApplyRun(applyRun.id))!;
-  expect(requeued.status).toEqual("queued");
-  expect(requeued.diagnostics).toBeUndefined();
-  expect(
-    requeued.auditEvents.some(
-      (event) => event.type === "apply.retry_scheduled",
-    ),
-  ).toEqual(true);
-  expect(applyCalls).toEqual(1);
-  expect(retryDispatches).toEqual([
-    {
-      action: "apply",
-      runId: applyRun.id,
-      workspaceId: applyRun.workspaceId,
-      cause: "controller_retry",
-    },
-  ]);
-
   await controller.dispatchQueuedRun({
     action: "apply",
     runId: applyRun.id,
     workspaceId: applyRun.workspaceId,
   });
-  const completed = (await store.getApplyRun(applyRun.id))!;
-  expect(completed.status).toEqual("succeeded");
-  expect(applyCalls).toEqual(2);
+
+  const failed = (await store.getApplyRun(applyRun.id))!;
+  expect(failed.status).toEqual("failed");
+  expect(failed.diagnostics?.[0]?.message).toContain(
+    "runner substrate reset during apply",
+  );
   expect(
-    (await store.getCapsule(request.capsuleId!))?.currentStateGeneration,
-  ).toEqual(1);
+    failed.auditEvents.some(
+      (event) => event.type === "apply.retry_scheduled",
+    ),
+  ).toEqual(false);
+  expect(applyCalls).toEqual(1);
+  expect(retryDispatches).toEqual([]);
 });
 
 test("runner infrastructure errors fail apply after the retry budget is exhausted", async () => {
@@ -1338,7 +1319,7 @@ test("runner infrastructure errors fail apply after the retry budget is exhauste
   ]);
 });
 
-test("a retryable runner infrastructure reset requeues destroy apply without failing terminally", async () => {
+test("an ambiguous runner substrate reset terminally fails destroy without replaying provider mutations", async () => {
   const store = new InMemoryOpenTofuControlStore();
   let destroyCalls = 0;
   const retryDispatches: Parameters<EnqueueRun>[0][] = [];
@@ -1414,36 +1395,19 @@ test("a retryable runner infrastructure reset requeues destroy apply without fai
     workspaceId: applyRun.workspaceId,
   });
 
-  const requeued = (await store.getApplyRun(applyRun.id))!;
-  expect(requeued.status).toEqual("queued");
-  expect(requeued.operation).toEqual("destroy");
-  expect(requeued.diagnostics).toBeUndefined();
+  const failed = (await store.getApplyRun(applyRun.id))!;
+  expect(failed.status).toEqual("failed");
+  expect(failed.operation).toEqual("destroy");
+  expect(failed.diagnostics?.[0]?.message).toContain(
+    "runner substrate reset during destroy",
+  );
   expect(
-    requeued.auditEvents.some(
+    failed.auditEvents.some(
       (event) => event.type === "destroy.retry_scheduled",
     ),
-  ).toEqual(true);
+  ).toEqual(false);
   expect(destroyCalls).toEqual(1);
-  expect(retryDispatches).toEqual([
-    {
-      action: "apply",
-      runId: applyRun.id,
-      workspaceId: applyRun.workspaceId,
-      cause: "controller_retry",
-    },
-  ]);
-
-  await controller.dispatchQueuedRun({
-    action: "apply",
-    runId: applyRun.id,
-    workspaceId: applyRun.workspaceId,
-  });
-  const completed = (await store.getApplyRun(applyRun.id))!;
-  expect(completed.status).toEqual("succeeded");
-  expect(destroyCalls).toEqual(2);
-  expect((await store.getCapsule(request.capsuleId!))?.status).toEqual(
-    "destroyed",
-  );
+  expect(retryDispatches).toEqual([]);
 });
 
 test("runner infrastructure errors fail destroy apply after the retry budget is exhausted", async () => {

@@ -272,6 +272,24 @@ function isRetryableRunnerInfrastructureError(error: unknown): boolean {
   return error instanceof OpenTofuRunnerInfrastructureError;
 }
 
+/**
+ * A mutating Run is safe to redeliver only when the runner proved either that
+ * capacity was refused before provider execution, or that an exact immutable
+ * artifact target can adopt a lost acknowledgement. A substrate reset is
+ * ambiguous: the provider may already have changed external state without
+ * returning a durable state artifact, so replaying the immutable Plan can
+ * duplicate creates or destroys.
+ */
+function isSafeMutatingRunnerInfrastructureRetryError(
+  error: unknown,
+): boolean {
+  return (
+    error instanceof OpenTofuRunnerInfrastructureError &&
+    (error.reason === "capacity_exhausted" ||
+      error.reason === "runner_artifact_relay_ambiguous")
+  );
+}
+
 const RUNNER_INFRASTRUCTURE_RETRY_LIMIT = 1;
 const PLAN_CREATION_STAGE_TIMEOUT_MS = 25_000;
 const RUN_EXECUTION_LEASE_LOST_REASON = "run_execution_lease_lost";
@@ -6886,7 +6904,10 @@ export class RunEngine {
           existingApplyRunId: error.existingApplyRunId,
         });
       }
-      if (runnerDispatched && isRetryableRunnerInfrastructureError(error)) {
+      if (
+        runnerDispatched &&
+        isSafeMutatingRunnerInfrastructureRetryError(error)
+      ) {
         const runningWithEnvironmentFailure = runEnvironmentFailedRun(
           runningForFailure,
           error,
@@ -7737,25 +7758,6 @@ export class RunEngine {
         metadataKeys: Object.keys(result.metadata ?? {}).sort(),
       };
     } catch (error) {
-      if (isRetryableRunnerInfrastructureError(error)) {
-        // Provider apply already crossed the runner boundary, but a rolling
-        // substrate update can reset the lifecycle executor before it reports
-        // readiness. Close the observable attempt and let the outer apply
-        // retry path requeue the same guarded Run. Converting this to an
-        // ordinary lifecycle outcome would make a transient host reset a
-        // terminal Capsule error and strand successfully-created resources.
-        await this.#recordReleaseActivationActivity({
-          applyRun: input.applyRun,
-          capsule: input.capsule,
-          stateVersion: input.stateVersion,
-          status: "failed",
-          kind: "takosumi.install-config-actions@v1",
-          message: errorMessage(error),
-          commandCount: commands.length,
-          outputCount: Object.keys(nonSensitiveOutputs).length,
-        });
-        throw error;
-      }
       return {
         ...base,
         reportedStatus: "error",
@@ -8877,7 +8879,10 @@ export class RunEngine {
         await this.#billing.releaseApplyBilling(planRun);
         throw new OpenTofuControllerError("failed_precondition", error.message);
       }
-      if (runnerDispatched && isRetryableRunnerInfrastructureError(error)) {
+      if (
+        runnerDispatched &&
+        isSafeMutatingRunnerInfrastructureRetryError(error)
+      ) {
         const runningWithEnvironmentFailure = runEnvironmentFailedRun(
           effectiveRunning,
           error,

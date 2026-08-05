@@ -5264,7 +5264,7 @@ test("destroy recovery executes pre-destroy commands from the reviewed recovery 
   );
 });
 
-test("successful pre_destroy evidence survives retryable destroy requeue and blocks cancellation", async () => {
+test("successful pre_destroy evidence survives an ambiguous destroy failure and blocks cancellation", async () => {
   const store = new InMemoryOpenTofuControlStore();
   const runner = recordingRunner();
   let destroyCalls = 0;
@@ -5326,12 +5326,12 @@ test("successful pre_destroy evidence survives retryable destroy requeue and blo
   });
   await controller.dispatchQueuedRun(queued.shift()!);
 
-  const requeued = (await store.getApplyRun(destroyApplyQueued.applyRun.id))!;
-  expect(requeued.status).toBe("queued");
-  expect(requeued.startedAt).toBeDefined();
+  const failed = (await store.getApplyRun(destroyApplyQueued.applyRun.id))!;
+  expect(failed.status).toBe("failed");
+  expect(failed.startedAt).toBeDefined();
   expect(destroyCalls).toBe(1);
   expect(
-    requeued.auditEvents.find(
+    failed.auditEvents.find(
       (event) => event.type === "lifecycle_action.pre_destroy.succeeded",
     )?.data,
   ).toMatchObject({
@@ -5339,12 +5339,12 @@ test("successful pre_destroy evidence survives retryable destroy requeue and blo
     status: "succeeded",
     actionDispatched: true,
   });
-  await expect(controller.cancelRun(requeued.id)).rejects.toThrow(
+  await expect(controller.cancelRun(failed.id)).rejects.toThrow(
     /has already started/,
   );
   expect(await store.getCapsuleRuntimeSafety("cap_fixture1")).toMatchObject({
-    phase: "terminating",
-    runId: requeued.id,
+    phase: "unknown",
+    runId: failed.id,
     runType: "destroy_apply",
   });
 });
@@ -5730,7 +5730,7 @@ test("post-apply lifecycle exception retains state but fails readiness", async (
   });
 });
 
-test("retryable post-apply substrate reset requeues the same apply and resumes activation", async () => {
+test("post-apply substrate reset retains state and consumes the failed apply without replay", async () => {
   const store = new InMemoryOpenTofuControlStore();
   const runner = recordingRunner();
   await seedRunnableCapsuleModel(store, {
@@ -5780,17 +5780,23 @@ test("retryable post-apply substrate reset requeues the same apply and resumes a
     expected: applyExpectedGuardFromPlanRun(planRun),
   });
 
-  await expect(controller.dispatchQueuedRun(queued.shift()!)).rejects.toThrow(
-    /retryable_runner_infrastructure_error/,
+  await controller.dispatchQueuedRun(queued.shift()!);
+  const failed = (await store.getApplyRun(createdApply.applyRun.id))!;
+  expect(failed.status).toBe("failed");
+  expect(failed.stateVersionId).toBeDefined();
+  expect(failed.outputId).toBeDefined();
+  expect(await store.getStateVersion(failed.stateVersionId!)).toBeDefined();
+  expect(await store.getOutput(failed.outputId!)).toBeDefined();
+  expect((await store.getCapsule("cap_fixture1"))?.status).toBe("error");
+  expect((await store.getPlanRun(planRun.id))?.appliedApplyRunId).toBe(
+    failed.id,
   );
-  const requeued = (await store.getApplyRun(createdApply.applyRun.id))!;
-  expect(requeued.status).toBe("queued");
-  expect(requeued.diagnostics).toBeUndefined();
   expect(
-    requeued.auditEvents.some((event) => event.type === "apply.retry_scheduled"),
-  ).toBe(true);
+    failed.auditEvents.some((event) => event.type === "apply.retry_scheduled"),
+  ).toBe(false);
   expect(runner.applyJobs).toHaveLength(1);
   expect(activationAttempts).toBe(1);
+  expect(queued).toHaveLength(0);
   expect(
     (await store.listActivityEvents("ws_test001")).some(
       (event) =>
@@ -5799,11 +5805,14 @@ test("retryable post-apply substrate reset requeues the same apply and resumes a
     ),
   ).toBe(true);
 
-  await controller.dispatchQueuedRun(queued.shift()!);
-  const completed = (await store.getApplyRun(createdApply.applyRun.id))!;
-  expect(completed.status).toBe("succeeded");
-  expect(runner.applyJobs).toHaveLength(2);
-  expect(activationAttempts).toBe(2);
+  const replay = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+  expect(replay.applyRun.id).toBe(failed.id);
+  expect(replay.applyRun.status).toBe("failed");
+  expect(runner.applyJobs).toHaveLength(1);
+  expect(activationAttempts).toBe(1);
 });
 
 test("post-apply lifecycle skipped result retains state but fails readiness", async () => {
@@ -6801,7 +6810,7 @@ test("first-apply cleanup pairing rejects a mismatched action id", async () => {
   expect(scenario.runner.destroyJobs).toHaveLength(0);
 });
 
-test("first-apply cleanup not_applicable marker is idempotent across destroy retry", async () => {
+test("first-apply cleanup not_applicable marker survives an ambiguous destroy failure", async () => {
   const store = new InMemoryOpenTofuControlStore();
   const runner = recordingRunner();
   runner.apply = async (job) => {
@@ -6891,25 +6900,17 @@ test("first-apply cleanup not_applicable marker is idempotent across destroy ret
     expected: applyExpectedGuardFromPlanRun(destroyPlan),
   });
   await controller.dispatchQueuedRun(queued.shift()!);
-  const requeued = (await store.getApplyRun(destroyApply.applyRun.id))!;
-  expect(requeued.status).toBe("queued");
+  const failed = (await store.getApplyRun(destroyApply.applyRun.id))!;
+  expect(failed.status).toBe("failed");
   expect(
-    requeued.auditEvents.filter(
+    failed.auditEvents.filter(
       (event) => event.type === "lifecycle_action.pre_destroy.not_applicable",
     ),
   ).toHaveLength(1);
   expect(activations).toHaveLength(0);
 
-  await controller.dispatchQueuedRun(queued.shift()!);
-  const completed = (await store.getApplyRun(destroyApply.applyRun.id))!;
-  expect(completed.status).toBe("succeeded");
-  expect(destroyCalls).toBe(2);
-  expect(
-    completed.auditEvents.filter(
-      (event) => event.type === "lifecycle_action.pre_destroy.not_applicable",
-    ),
-  ).toHaveLength(1);
-  expect(activations).toHaveLength(0);
+  expect(destroyCalls).toBe(1);
+  expect(queued).toHaveLength(0);
 });
 
 test("failed provider apply atomically retains partial state, consumes the Plan, and destroy uses it", async () => {
