@@ -59,6 +59,7 @@ import type {
 } from "takosumi-contract/install-configs";
 import {
   CapsuleLeaseBusyError,
+  InMemoryCapsuleCoordination,
   withCapsuleLease,
   withCapsuleResourceAdmission,
   type CapsuleCoordination,
@@ -805,8 +806,9 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
    * Capsule lease seam (Core Specification §10.2). The Workers adapter
    * injects a DO-backed implementation fronting the `COORDINATION`
    * CoordinationObject so only ONE write run per (Capsule, environment)
-   * runs at a time across isolates; when omitted the controller relies on its
-   * in-process serialization (single-isolate safe).
+   * runs at a time across isolates. When omitted, bootstrap creates one
+   * in-memory coordinator shared by every lifecycle path in this service
+   * instance; multi-replica hosts must inject a durable shared implementation.
    */
   readonly capsuleCoordination?: CapsuleCoordination;
   /**
@@ -1320,6 +1322,8 @@ export async function createTakosumiService(
     options.runtimeConfig ??
     (await loadRuntimeConfigFromEnv({ env: runtimeEnv }));
   const role = options.role ?? processRoleFromRuntimeConfig(runtimeConfig);
+  const capsuleCoordination =
+    options.capsuleCoordination ?? new InMemoryCapsuleCoordination();
   const context =
     options.context ??
     (await createAppContext({
@@ -1492,12 +1496,9 @@ export async function createTakosumiService(
   const dependenciesService = new DependenciesService({
     store: sharedOpenTofuStore,
     activity: activityService,
-    // Serialize the Workspace's dependency-graph cycle check-then-write across
-    // isolates when a coordination seam is wired (the Workers adapter injects a
-    // DO-backed implementation). Without it, creation stays single-isolate safe.
-    ...(options.capsuleCoordination
-      ? { coordination: options.capsuleCoordination }
-      : {}),
+    // The same service-scoped coordinator protects every lifecycle admission;
+    // Workers replace the in-memory default with their DO-backed implementation.
+    coordination: capsuleCoordination,
   });
   // OutputShares domain (Core Specification §18): the cross-Workspace output sharing
   // grant. Validates against the producer's latest Output over the SAME
@@ -1531,9 +1532,7 @@ export async function createTakosumiService(
     ...(options.defaultRunnerProfileId
       ? { defaultRunnerProfileId: options.defaultRunnerProfileId }
       : {}),
-    ...(options.capsuleCoordination
-      ? { capsuleCoordination: options.capsuleCoordination }
-      : {}),
+    capsuleCoordination,
     ...(options.sensitiveOutputResolver
       ? { sensitiveOutputResolver: options.sensitiveOutputResolver }
       : {}),
@@ -1619,78 +1618,77 @@ export async function createTakosumiService(
       cursor = page.nextCursor;
     }
   };
-  const capsuleOwnedResourceAdmission:
-    | CapsuleOwnedResourceAdmission
-    | undefined = options.capsuleCoordination
-    ? async ({ capsule, holderId }, work) =>
-        await withCapsuleResourceAdmission(
-          options.capsuleCoordination!,
-          { capsuleId: capsule.id, holderId },
-          async () => {
-            const current = await sharedOpenTofuStore.getCapsule(capsule.id);
-            if (
-              !current ||
-              current.workspaceId !== capsule.workspaceId ||
-              current.installingPrincipalId !== capsule.installingPrincipalId ||
-              current.status === "destroyed"
-            ) {
-              throw new OpenTofuControllerError(
-                "failed_precondition",
-                `capsule ${capsule.id} is no longer available for Resource admission`,
-                { reason: CAPSULE_OWNED_RESOURCES_PENDING_REASON },
-              );
-            }
-            const runtimeSafety =
-              await sharedOpenTofuStore.getCapsuleRuntimeSafety(capsule.id);
-            if (
-              runtimeSafety?.phase === "terminating" ||
-              runtimeSafety?.phase === "retired"
-            ) {
-              throw new OpenTofuControllerError(
-                "failed_precondition",
-                `capsule ${capsule.id} is terminating; Resource admission is closed`,
-                { reason: CAPSULE_OWNED_RESOURCES_PENDING_REASON },
-              );
-            }
-            return await work(current);
-          },
-        )
-    : undefined;
-  const capsuleAbandonAdmission: CapsuleAbandonAdmission | undefined =
-    options.capsuleCoordination && capsuleOwnedResourceAdmission
-      ? async ({ capsule, holderId }, work) => {
-          try {
-            // Keep the same global lock order as provider Apply/destroy:
-            // Capsule environment first, Capsule-owned Resource admission
-            // second. This prevents a no-state abandon from terminalizing the
-            // Capsule while an ordinary provider Apply is already in flight.
-            return await withCapsuleLease(
-              options.capsuleCoordination!,
-              {
-                capsuleId: capsule.id,
-                environment: capsule.environment,
-                holderId,
-              },
-              async () =>
-                await capsuleOwnedResourceAdmission(
-                  { capsule, holderId },
-                  async (current) => await work(current),
-                ),
-            );
-          } catch (error) {
-            // Coordination contention is an ordinary lifecycle conflict for
-            // the synchronous Accounts DELETE surface, not an internal 500.
-            if (error instanceof CapsuleLeaseBusyError) {
-              throw new OpenTofuControllerError(
-                "failed_precondition",
-                `capsule ${capsule.id} is busy with a provider or Resource mutation`,
-                { reason: CAPSULE_OWNED_RESOURCES_PENDING_REASON },
-              );
-            }
-            throw error;
-          }
+  const capsuleOwnedResourceAdmission: CapsuleOwnedResourceAdmission = async (
+    { capsule, holderId },
+    work,
+  ) =>
+    await withCapsuleResourceAdmission(
+      capsuleCoordination,
+      { capsuleId: capsule.id, holderId },
+      async () => {
+        const current = await sharedOpenTofuStore.getCapsule(capsule.id);
+        if (
+          !current ||
+          current.workspaceId !== capsule.workspaceId ||
+          current.installingPrincipalId !== capsule.installingPrincipalId ||
+          current.status === "destroyed"
+        ) {
+          throw new OpenTofuControllerError(
+            "failed_precondition",
+            `capsule ${capsule.id} is no longer available for Resource admission`,
+            { reason: CAPSULE_OWNED_RESOURCES_PENDING_REASON },
+          );
         }
-      : undefined;
+        const runtimeSafety =
+          await sharedOpenTofuStore.getCapsuleRuntimeSafety(capsule.id);
+        if (
+          runtimeSafety?.phase === "terminating" ||
+          runtimeSafety?.phase === "retired"
+        ) {
+          throw new OpenTofuControllerError(
+            "failed_precondition",
+            `capsule ${capsule.id} is terminating; Resource admission is closed`,
+            { reason: CAPSULE_OWNED_RESOURCES_PENDING_REASON },
+          );
+        }
+        return await work(current);
+      },
+    );
+  const capsuleAbandonAdmission: CapsuleAbandonAdmission = async (
+    { capsule, holderId },
+    work,
+  ) => {
+    try {
+      // Keep the same global lock order as provider Apply/destroy:
+      // Capsule environment first, Capsule-owned Resource admission
+      // second. This prevents a no-state abandon from terminalizing the
+      // Capsule while an ordinary provider Apply is already in flight.
+      return await withCapsuleLease(
+        capsuleCoordination,
+        {
+          capsuleId: capsule.id,
+          environment: capsule.environment,
+          holderId,
+        },
+        async () =>
+          await capsuleOwnedResourceAdmission(
+            { capsule, holderId },
+            async (current) => await work(current),
+          ),
+      );
+    } catch (error) {
+      // Coordination contention is an ordinary lifecycle conflict for
+      // the synchronous Accounts DELETE surface, not an internal 500.
+      if (error instanceof CapsuleLeaseBusyError) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `capsule ${capsule.id} is busy with a provider or Resource mutation`,
+          { reason: CAPSULE_OWNED_RESOURCES_PENDING_REASON },
+        );
+      }
+      throw error;
+    }
+  };
   capsulesService.setCapsuleOwnedResourceFence(capsuleOwnedResourceFence);
   capsulesService.setCapsuleAbandonAdmission(capsuleAbandonAdmission);
   opentofuController.setCapsuleOwnedResourceFence(capsuleOwnedResourceFence);
@@ -1760,9 +1758,7 @@ export async function createTakosumiService(
         ...(options.resourceDeploymentAdmission
           ? { deploymentAdmission: options.resourceDeploymentAdmission }
           : {}),
-        ...(capsuleOwnedResourceAdmission
-          ? { capsuleOwnedResourceAdmission }
-          : {}),
+        capsuleOwnedResourceAdmission,
         ...(options.resourceShapeModuleRegistry
           ? { moduleRegistry: options.resourceShapeModuleRegistry }
           : {}),
