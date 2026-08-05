@@ -40,6 +40,7 @@ import {
   installExperienceOidcClient,
   installExperiencePublicEndpoint,
   installExperienceServiceNameVariable,
+  isPublicManagedProviderConnection,
 } from "takosumi-contract";
 import { sameProviderSource } from "takosumi-contract/provider-env-rules";
 import Page from "../account/components/auth/Page.tsx";
@@ -71,6 +72,7 @@ import {
   setCapsuleAutoUpdate,
 } from "../../lib/control-api.ts";
 import { formatUsdMicros } from "../../lib/billing-format.ts";
+import { providerConnectionDisplayName } from "../../lib/provider-connections.ts";
 import { createAction } from "../account/lib/action.tsx";
 import {
   capsuleStatusLabel,
@@ -1253,7 +1255,10 @@ function providerConnectionLabel(
   providerConnection: ProviderConnection,
 ): string {
   return (
-    providerConnection.displayName ||
+    providerConnectionDisplayName(
+      providerConnection,
+      t("installStore.managedProvider"),
+    ) ||
     providerDisplayName(providerConnection.providerSource)
   );
 }
@@ -1273,7 +1278,16 @@ function boundConnectionLabel(
   return match ? providerConnectionLabel(match) : t("common.none");
 }
 
-function boundProviderLabel(row: ProviderBindingRow): string {
+function boundProviderLabel(
+  row: ProviderBindingRow,
+  providerConnections: readonly ProviderConnection[],
+): string {
+  const connection = providerConnections.find(
+    (candidate) => candidate.id === row.connectionId,
+  );
+  if (connection && isPublicManagedProviderConnection(connection)) {
+    return t("installStore.managedProvider");
+  }
   if (!row.provider.trim()) return t("app.bindings.providerPlaceholder");
   return row.childAlias
     ? `${providerDisplayName(row.provider)} (${row.childAlias})`
@@ -1866,7 +1880,10 @@ function SettingsTab(props: {
           >
             <KVList
               items={rows().map((row) => ({
-                label: boundProviderLabel(row),
+                label: boundProviderLabel(
+                  row,
+                  props.availableProviderConnections,
+                ),
                 value: boundConnectionLabel(
                   row,
                   props.availableProviderConnections,
@@ -1896,13 +1913,19 @@ function SettingsTab(props: {
                     return (
                       <div class="wa-binding-row">
                         <div class="wa-binding-head">
-                          <strong>{boundProviderLabel(row())}</strong>
+                          <strong>
+                            {boundProviderLabel(
+                              row(),
+                              props.availableProviderConnections,
+                            )}
+                          </strong>
                         </div>
                         <div class="wa-binding-controls">
                           <Select
-                            aria-label={`${boundProviderLabel(row())} ${t(
-                              "app.bindings.selectConnection",
-                            )}`}
+                            aria-label={`${boundProviderLabel(
+                              row(),
+                              props.availableProviderConnections,
+                            )} ${t("app.bindings.selectConnection")}`}
                             value={row().connectionId}
                             onChange={(e) =>
                               update(index, {

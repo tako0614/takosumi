@@ -39,6 +39,7 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.providerHint":
     "Choose only the connections required by this service.",
   "installStore.chooseConnection": "Choose a connection",
+  "installStore.destination": "Runs on",
   "installStore.managedProvider": "Takosumi Cloud",
   "installStore.connect": "Add a new connection",
   "installStore.continue": "Continue",

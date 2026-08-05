@@ -1356,7 +1356,10 @@ function Inner() {
               {(row) => {
                 const choices = () => candidatesFor(row.provider);
                 return (
-                  <FormField label={providerDisplayName(row.provider)} required>
+                  <FormField
+                    label={t("installStore.destination")}
+                    required
+                  >
                     <Select
                       value={row.connectionId}
                       onChange={(event) =>

@@ -60,6 +60,10 @@ describe("Workspace settings user-facing noise", () => {
 
   test("does not render raw provider connection ids, sources, or env names in the cloud account list", () => {
     expect(connectionsTabSource).toContain("providerConnectionProviderLabel");
+    expect(connectionsTabSource).toContain("providerConnectionDisplayName");
+    expect(connectionsTabSource).toContain(
+      "!isPublicManagedProviderConnection(connection)",
+    );
     expect(connectionsTabSource).not.toContain(
       '<code class="wc-code">{connection.id}</code>',
     );

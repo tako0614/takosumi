@@ -128,6 +128,8 @@ describe("Capsule detail StateVersion surface", () => {
   });
 
   test("keeps provider binding editing behind advanced service settings", () => {
+    expect(source).toContain("providerConnectionDisplayName");
+    expect(source).toContain("isPublicManagedProviderConnection");
     expect(source).toContain("function boundConnectionLabel");
     expect(source).toContain('t("app.bindings.none")');
     expect(source).toContain('t("app.bindings.editAdvanced")');

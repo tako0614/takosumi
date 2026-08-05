@@ -41,6 +41,8 @@ describe("Run review ProviderConnection evidence", () => {
     expect(runViewSource).toContain("rows={providerRowsNeedingAttention()}");
     expect(runViewSource).toContain("listProviderConnections");
     expect(runViewSource).toContain("providerConnectionsForRun");
+    expect(runViewSource).toContain("providerConnectionDisplayName");
+    expect(runViewSource).toContain("isPublicManagedProviderConnection");
     expect(en["run.details.title"]).toBe("Reference info");
     expect(ja["run.details.title"]).toBe("参照情報");
     expect(en["run.connections.reviewTitle"]).toBe(
