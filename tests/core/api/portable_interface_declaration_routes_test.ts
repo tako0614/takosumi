@@ -204,6 +204,6 @@ test("an unauthenticated caller never reaches the declaration read", async () =>
   });
   const response = await app.request(`${BASE}/interfaces?space=space_1`);
   expect(response.status).toBe(401);
-  expect((await response.json()).error.code).toBe("unauthorized");
+  expect((await response.json()).error.code).toBe("unauthenticated");
   expect(called).toBe(false);
 });

@@ -1295,7 +1295,7 @@ test("portable Form host delegates exact lifecycle to the canonical Resource and
     }),
   });
   expect(stale.status).toBe(412);
-  expect((await stale.json()).error.code).toBe("conflict");
+  expect((await stale.json()).error.code).toBe("resource_version_conflict");
 
   for (const action of ["observe", "refresh"] as const) {
     const missingMatch = await app.request(
@@ -1306,7 +1306,9 @@ test("portable Form host delegates exact lifecycle to the canonical Resource and
       },
     );
     expect(missingMatch.status).toBe(412);
-    expect((await missingMatch.json()).error.code).toBe("conflict");
+    expect((await missingMatch.json()).error.code).toBe(
+      "resource_version_conflict",
+    );
 
     const staleMatch = await app.request(
       `${path}/${action}?space=space_1&${exactQuery}`,
@@ -1319,7 +1321,9 @@ test("portable Form host delegates exact lifecycle to the canonical Resource and
       },
     );
     expect(staleMatch.status).toBe(412);
-    expect((await staleMatch.json()).error.code).toBe("conflict");
+    expect((await staleMatch.json()).error.code).toBe(
+      "resource_version_conflict",
+    );
   }
 
   const observe = await app.request(
@@ -1358,7 +1362,9 @@ test("portable Form host delegates exact lifecycle to the canonical Resource and
     },
   );
   expect(deleteWithoutMatch.status).toBe(412);
-  expect((await deleteWithoutMatch.json()).error.code).toBe("conflict");
+  expect((await deleteWithoutMatch.json()).error.code).toBe(
+    "resource_version_conflict",
+  );
 
   const deleteWithStaleMatch = await app.request(
     `${path}?space=space_1&${exactQuery}`,
@@ -1371,7 +1377,9 @@ test("portable Form host delegates exact lifecycle to the canonical Resource and
     },
   );
   expect(deleteWithStaleMatch.status).toBe(412);
-  expect((await deleteWithStaleMatch.json()).error.code).toBe("conflict");
+  expect((await deleteWithStaleMatch.json()).error.code).toBe(
+    "resource_version_conflict",
+  );
 
   const deleted = await app.request(`${path}?space=space_1&${exactQuery}`, {
     method: "DELETE",
@@ -1470,7 +1478,9 @@ test("portable Form host delegates exact lifecycle to the canonical Resource and
     },
   );
   expect(staleRecreatedDelete.status).toBe(412);
-  expect((await staleRecreatedDelete.json()).error.code).toBe("conflict");
+  expect((await staleRecreatedDelete.json()).error.code).toBe(
+    "resource_version_conflict",
+  );
 
   const recreatedDelete = await app.request(
     `${path}?space=space_1&${exactQuery}`,
@@ -1763,11 +1773,11 @@ test("portable Form never rebinds an old reserved create to a later incarnation"
   expect({ status: staleReplay.status, body: staleReplayBody }).toMatchObject({
     status: 412,
     body: {
-    error: {
-      code: "conflict",
-      hostCode: "deployment_plan_changed",
-      retryable: false,
-    },
+      error: {
+        code: "resource_version_conflict",
+        hostCode: "resource_version_conflict",
+        retryable: false,
+      },
     },
   });
 
@@ -2022,7 +2032,7 @@ test("portable Form host rejects incomplete and substituted exact identities", a
     }),
   });
   expect(substituted.status).toBe(404);
-  expect((await substituted.json()).error.code).toBe("resource_not_found");
+  expect((await substituted.json()).error.code).toBe("form_unknown");
 });
 
 test("portable Form host enforces the exact definition lifecycle operations", async () => {
@@ -2044,9 +2054,9 @@ test("portable Form host enforces the exact definition lifecycle operations", as
       }),
     },
   );
-  expect(preview.status).toBe(409);
+  expect(preview.status).toBe(503);
   expect((await preview.json()).error).toMatchObject({
-    code: "conflict",
+    code: "form_unavailable",
     message: "exact form does not support create",
   });
 });

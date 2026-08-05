@@ -111,7 +111,7 @@ test("portable Interface selectors and read scope fail closed", async () => {
   );
   expect(denied.status).toBe(403);
   expect(await denied.json()).toMatchObject({
-    error: { code: "forbidden" },
+    error: { code: "permission_denied" },
   });
 });
 

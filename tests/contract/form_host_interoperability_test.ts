@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import {
   createTakoformHostDiscovery,
+  TAKOFORM_HOST_ERROR_HTTP_STATUS,
   TAKOFORM_FORM_HOST_FORM_DEFINITIONS_PATH,
   portableTypeForShapeKind,
   shapeKindForPortableType,
@@ -24,6 +25,27 @@ test("Takoform host errors include the public policy denial code", () => {
   expect(code).toBe("policy_denied");
   expect(envelope.error.retryable).toBe(false);
   expect(envelope.error.hostCode).toBe("deployment_admission_denied");
+});
+
+test("Takoform host errors expose only the stable code and HTTP status pairs", () => {
+  expect(TAKOFORM_HOST_ERROR_HTTP_STATUS).toEqual({
+    invalid_argument: 400,
+    unauthenticated: 401,
+    permission_denied: 403,
+    form_unknown: 404,
+    form_not_installed: 409,
+    form_unavailable: 503,
+    form_identity_conflict: 409,
+    resource_not_found: 404,
+    resource_version_conflict: 412,
+    resource_busy: 409,
+    import_conflict: 409,
+    policy_denied: 403,
+    backend_unavailable: 503,
+    interface_identity_ambiguous: 409,
+    interface_instance_ambiguous: 409,
+    internal_error: 500,
+  });
 });
 
 test("Takoform discovery keeps the closed v1alpha1 endpoint vocabulary", () => {

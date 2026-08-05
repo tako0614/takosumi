@@ -235,7 +235,7 @@ export async function runPortableFormHostConformance(
     `${resourcePath}?space=${encodeURIComponent(input.space)}&${exactQuery(substituted)}`,
     { headers },
     409,
-    "conflict",
+    "form_identity_conflict",
   );
   checks.push("exact-digest-substitution-rejected");
 

@@ -314,7 +314,7 @@ export function registerPortableFormHostRoutes(
       if (!options.canReadForms(auth.actor)) {
         return portableError(
           c,
-          "forbidden",
+          "permission_denied",
           "interface declaration read scope is required",
           403,
         );
@@ -340,7 +340,7 @@ export function registerPortableFormHostRoutes(
       if (!options.canReadForms(auth.actor)) {
         return portableError(
           c,
-          "forbidden",
+          "permission_denied",
           "interface declaration read scope is required",
           403,
         );
@@ -396,7 +396,7 @@ export function registerPortableFormHostRoutes(
         if (!options.canWriteInterfaces?.(auth.actor)) {
           return portableError(
             c,
-            "forbidden",
+            "permission_denied",
             "interface declaration write scope is required",
             403,
           );
@@ -444,7 +444,7 @@ export function registerPortableFormHostRoutes(
         if (!options.canWriteInterfaces?.(auth.actor)) {
           return portableError(
             c,
-            "forbidden",
+            "permission_denied",
             "interface declaration write scope is required",
             403,
           );
@@ -480,7 +480,7 @@ export function registerPortableFormHostRoutes(
     if (!options.canReadForms(auth.actor)) {
       return portableError(
         c,
-        "forbidden",
+        "permission_denied",
         "form availability read scope is required",
         403,
       );
@@ -512,7 +512,7 @@ export function registerPortableFormHostRoutes(
     if (!options.canReadForms(auth.actor)) {
       return portableError(
         c,
-        "forbidden",
+        "permission_denied",
         "form definition read scope is required",
         403,
       );
@@ -528,7 +528,7 @@ export function registerPortableFormHostRoutes(
     ) {
       return portableError(
         c,
-        "resource_not_found",
+        "form_unknown",
         "exact form definition is unknown",
         404,
       );
@@ -537,7 +537,7 @@ export function registerPortableFormHostRoutes(
     if (!reader) {
       return portableError(
         c,
-        "resource_not_found",
+        "form_unknown",
         "exact form definition is unknown",
         404,
       );
@@ -561,7 +561,7 @@ export function registerPortableFormHostRoutes(
     ) {
       return portableError(
         c,
-        "resource_not_found",
+        "form_unknown",
         "exact form definition is unknown",
         404,
       );
@@ -1101,7 +1101,7 @@ function generationConflict(
     ok: false,
     response: portableError(
       c,
-      "conflict",
+      "resource_version_conflict",
       message,
       412,
       false,
@@ -1177,7 +1177,7 @@ async function exactStoredResource(
       ok: false,
       response: portableError(
         c,
-        "conflict",
+        "form_identity_conflict",
         "resource is pinned to a different exact form identity",
         409,
         false,
@@ -1193,7 +1193,7 @@ async function exactStoredResource(
       ok: false,
       response: portableError(
         c,
-        "conflict",
+        "resource_version_conflict",
         "serial precondition failed",
         412,
         false,
@@ -1293,7 +1293,7 @@ async function requireAvailableForm(
       ok: false,
       response: portableError(
         c,
-        "resource_not_found",
+        "form_unknown",
         "exact form identity is unknown",
         404,
         false,
@@ -1305,7 +1305,7 @@ async function requireAvailableForm(
       ok: false,
       response: portableError(
         c,
-        "resource_not_found",
+        "form_unknown",
         "exact form identity is unknown",
         404,
         false,
@@ -1318,7 +1318,7 @@ async function requireAvailableForm(
       ok: false,
       response: portableError(
         c,
-        "conflict",
+        "form_not_installed",
         "exact form package is not installed",
         409,
         false,
@@ -1330,9 +1330,9 @@ async function requireAvailableForm(
       ok: false,
       response: portableError(
         c,
-        "conflict",
+        "form_unavailable",
         "exact form is not executable on this host",
-        409,
+        503,
         false,
         "form_unavailable",
       ),
@@ -1342,7 +1342,7 @@ async function requireAvailableForm(
       ok: false,
       response: portableError(
         c,
-        "forbidden",
+        "policy_denied",
         "principal is not allowed to use this exact form",
         403,
       ),
@@ -1352,9 +1352,9 @@ async function requireAvailableForm(
       ok: false,
       response: portableError(
         c,
-        "conflict",
+        "form_unavailable",
         `exact form does not support ${operation}`,
-        409,
+        503,
         false,
         "form_unavailable",
       ),
@@ -1570,23 +1570,23 @@ function serviceError(c: Context, error: ResourceServiceError): Response {
   > = {
     invalid_form_ref: ["invalid_argument", 400, false],
     form_registry_unavailable: ["backend_unavailable", 503, true],
-    form_not_installed: ["conflict", 409, false],
-    form_identity_conflict: ["conflict", 409, false],
+    form_not_installed: ["form_not_installed", 409, false],
+    form_identity_conflict: ["form_identity_conflict", 409, false],
     not_found: ["resource_not_found", 404, false],
     connection_not_found: ["resource_not_found", 404, false],
     connection_not_ready: ["resource_busy", 409, false],
-    resource_version_conflict: ["conflict", 412, false],
+    resource_version_conflict: ["resource_version_conflict", 412, false],
     ownership_conflict: ["resource_busy", 409, false],
     reconcile_conflict: ["resource_busy", 409, true],
-    import_conflict: ["conflict", 409, false],
-    policy_denied: ["forbidden", 403, false],
+    import_conflict: ["import_conflict", 409, false],
+    policy_denied: ["policy_denied", 403, false],
     deployment_admission_denied: ["policy_denied", 403, false],
     // The published portable taxonomy permits automatic retry only for
     // resource_busy and backend_unavailable. Preserve admission retry evidence
     // in hostCode/details without inventing a Takosumi-only wire code.
     deployment_admission_pending: ["resource_busy", 409, true],
     deployment_finalize_pending: ["resource_busy", 409, true],
-    deployment_plan_changed: ["conflict", 412, false],
+    deployment_plan_changed: ["invalid_argument", 400, false],
   };
   const mapped =
     mapping[error.code] ??
@@ -1648,7 +1648,7 @@ function portableError(
 function portableAuthError(c: Context, response: Response): Response {
   return portableError(
     c,
-    response.status === 403 ? "forbidden" : "unauthorized",
+    response.status === 403 ? "permission_denied" : "unauthenticated",
     "portable form authentication failed",
     response.status === 403 ? 403 : 401,
   );
@@ -2053,7 +2053,7 @@ function interfaceWriteError(c: Context, error: unknown): Response {
       return portableError(c, "resource_not_found", error.message, 404);
     case "already_exists":
     case "conflict":
-      return portableError(c, "conflict", error.message, 412);
+      return portableError(c, "resource_version_conflict", error.message, 412);
     case "failed_precondition":
       return portableError(c, "resource_busy", error.message, 409);
   }

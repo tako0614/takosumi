@@ -146,18 +146,27 @@ export interface ListTakoformResourcesResponse {
   readonly nextCursor?: string;
 }
 
+export const TAKOFORM_HOST_ERROR_HTTP_STATUS = {
+  invalid_argument: 400,
+  unauthenticated: 401,
+  permission_denied: 403,
+  form_unknown: 404,
+  form_not_installed: 409,
+  form_unavailable: 503,
+  form_identity_conflict: 409,
+  resource_not_found: 404,
+  resource_version_conflict: 412,
+  resource_busy: 409,
+  import_conflict: 409,
+  policy_denied: 403,
+  backend_unavailable: 503,
+  interface_identity_ambiguous: 409,
+  interface_instance_ambiguous: 409,
+  internal_error: 500,
+} as const;
+
 export type TakoformHostErrorCode =
-  | "backend_unavailable"
-  | "conflict"
-  | "forbidden"
-  | "interface_identity_ambiguous"
-  | "interface_instance_ambiguous"
-  | "invalid_argument"
-  | "not_implemented"
-  | "policy_denied"
-  | "resource_not_found"
-  | "resource_busy"
-  | "unauthorized";
+  keyof typeof TAKOFORM_HOST_ERROR_HTTP_STATUS;
 
 export interface TakoformHostErrorEnvelope {
   readonly error: {

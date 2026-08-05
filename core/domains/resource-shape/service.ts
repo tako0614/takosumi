@@ -1288,7 +1288,10 @@ export class ResourceShapeService {
       if (reviewError) {
         return {
           ok: false,
-          error: { code: "deployment_plan_changed", message: reviewError },
+          // A completed retained create belongs to one exact incarnation.
+          // Replaying an older reservation after delete/recreate is a stale
+          // Resource version fence, not ordinary reviewed-plan substitution.
+          error: { code: "resource_version_conflict", message: reviewError },
         };
       }
       return {
