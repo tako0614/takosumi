@@ -157,12 +157,27 @@ describe("Resource Shape dashboard surface", () => {
 
   test("unifies deployed services and Resources in one inventory", () => {
     expect(inventory).toContain("readWorkspaceResourcesView");
+    expect(inventory).toContain("mergeWorkspaceResourcesViews");
+    expect(inventory).toContain("loadMoreResources");
+    expect(inventory).toContain(
+      "if (scope()?.workspaceId !== active.workspaceId) return;",
+    );
+    expect(inventory).toContain('t("resources.pagination.loadMore")');
+    expect(inventory).toContain('t("resources.pagination.hint")');
+    expect(inventory).toContain("visibleResourcesView");
     expect(inventory).toContain("rows={workloadRows()}");
     expect(inventory).toContain("rows={resourceRows()}");
     expect(inventory).toContain("formRows().filter");
     expect(inventory).not.toContain("listCapsules");
     expect(inventory).not.toContain("listResourceShapes");
     expect(inventory).toContain('class="rs-platform-advanced"');
+  });
+
+  test("keeps continuation copy available in both locales", () => {
+    expect(en).toContain('"resources.pagination.loadMore": "Load more"');
+    expect(ja).toContain('"resources.pagination.loadMore": "さらに読み込む"');
+    expect(en).toContain("one bounded page at a time");
+    expect(ja).toContain("安全な件数ごとに表示");
   });
 
   test("validates a Resources redirect Workspace before scoped inventory reads", () => {

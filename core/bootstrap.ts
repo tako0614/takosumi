@@ -66,7 +66,9 @@ import { CapsulesService } from "./domains/capsules/mod.ts";
 import { WorkspacesService } from "./domains/workspaces/mod.ts";
 import {
   type WorkspaceViewControlStoreFactory,
+  type WorkspaceResourcesProjectionReader,
   type WorkspaceViews,
+  SqlWorkspaceResourcesProjectionReader,
   WorkspaceViewsService,
 } from "./domains/workspace-views/mod.ts";
 import { ProjectsService } from "./domains/projects/mod.ts";
@@ -568,6 +570,11 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
    * node/in-memory hosts default to the service's shared control store.
    */
   readonly requestScopedOpenTofuControlStoreFactory?: WorkspaceViewControlStoreFactory;
+  /**
+   * Host projection optimized for the interactive resources view. Postgres is
+   * composed automatically from sqlClient; Worker/D1 hosts inject their reader.
+   */
+  readonly workspaceResourcesProjectionReader?: WorkspaceResourcesProjectionReader;
   /**
    * Host-owned allocator for opaque source/state/output/backup artifact refs.
    * Required by execution and backup paths; Core never derives storage layouts.
@@ -1709,6 +1716,17 @@ export async function createTakosumiService(
           (() => sharedOpenTofuStore),
         resourceStores: resourceShapeStores,
         resourceShapeService,
+        ...(options.workspaceResourcesProjectionReader
+          ? {
+              resourcesProjectionReader:
+                options.workspaceResourcesProjectionReader,
+            }
+          : options.sqlClient
+            ? {
+                resourcesProjectionReader:
+                  new SqlWorkspaceResourcesProjectionReader(options.sqlClient),
+              }
+            : {}),
       })
     : undefined;
   const resourceArtifactService =

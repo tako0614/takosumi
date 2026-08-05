@@ -74,6 +74,16 @@ export class InMemoryFormRegistryStore implements FormRegistryStore {
     return cloneOptional(this.#packages.get(packageDigest));
   }
 
+  async getPackages(
+    packageDigests: readonly string[],
+  ): Promise<readonly FormPackageRecord[]> {
+    assertBulkPackageRead(packageDigests);
+    return packageDigests.flatMap((packageDigest) => {
+      const record = this.#packages.get(packageDigest);
+      return record === undefined ? [] : [clone(record)];
+    });
+  }
+
   async listPackages(params: PageParams): Promise<Page<FormPackageRecord>> {
     return clonePage(
       pageSortedBy(
@@ -146,6 +156,19 @@ export class InMemoryFormRegistryStore implements FormRegistryStore {
     return cloneOptional(this.#activations.get(id));
   }
 
+  async getActivationsForForms(
+    formRefs: readonly FormRef[],
+  ): Promise<readonly FormActivationRecord[]> {
+    const keys = assertBulkFormRead(formRefs);
+    return [...this.#activations.values()]
+      .filter((activation) =>
+        keys.has(formRefKey(formRefOfInstalled(activation.identity))),
+      )
+      .sort(compareUpdatedId)
+      .slice(0, 10_000)
+      .map(clone);
+  }
+
   async listActivations(
     params: PageParams,
   ): Promise<Page<FormActivationRecord>> {
@@ -198,6 +221,20 @@ function clone<T>(value: T): T {
 
 function cloneOptional<T>(value: T | undefined): T | undefined {
   return value === undefined ? undefined : clone(value);
+}
+
+function assertBulkPackageRead(packageDigests: readonly string[]): void {
+  if (new Set(packageDigests).size > 100) {
+    throw new RangeError("Form package bulk read accepts at most 100 digests");
+  }
+}
+
+function assertBulkFormRead(formRefs: readonly FormRef[]): ReadonlySet<string> {
+  const keys = new Set(formRefs.map(formRefKey));
+  if (keys.size > 100) {
+    throw new RangeError("Form activation bulk read accepts at most 100 FormRefs");
+  }
+  return keys;
 }
 
 function clonePage<T>(page: Page<T>): Page<T> {

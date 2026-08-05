@@ -43,6 +43,15 @@ export interface FormRegistryStore {
     definitions: readonly FormDefinitionRecord[],
   ): Promise<InstallFormPackageResult>;
   getPackage(packageDigest: string): Promise<FormPackageRecord | undefined>;
+  /**
+   * Reads a bounded set of immutable package records in caller order.
+   * Duplicate digests remain duplicated while unknown digests are omitted.
+   * Durable adapters implement this as one physical query so a Form page does
+   * not become an N+1 package read.
+   */
+  getPackages(
+    packageDigests: readonly string[],
+  ): Promise<readonly FormPackageRecord[]>;
   listPackages(params: PageParams): Promise<Page<FormPackageRecord>>;
   updatePackageStatus(
     packageDigest: string,
@@ -55,6 +64,14 @@ export interface FormRegistryStore {
     activation: FormActivationRecord,
   ): Promise<CreateFormActivationResult>;
   getActivation(id: string): Promise<FormActivationRecord | undefined>;
+  /**
+   * Reads activation evidence for a bounded set of exact FormRefs in one
+   * durable query. Results are ordered by updatedAt/id and capped at the same
+   * 10,000-record fail-closed discovery ceiling as the legacy page walk.
+   */
+  getActivationsForForms(
+    formRefs: readonly FormRef[],
+  ): Promise<readonly FormActivationRecord[]>;
   listActivations(params: PageParams): Promise<Page<FormActivationRecord>>;
   updateActivation(
     activation: FormActivationRecord,

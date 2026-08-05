@@ -107,9 +107,9 @@ test("owner read resolves one control store and returns redacted live projection
       } as never,
     },
     resourceShapeService: {
-      listFormAvailability: async (input) => {
+      readFormAvailability: async (input) => {
         availabilityActor = input.actor;
-        return { items: [] };
+        return { forms: { items: [] }, hasTargetPool: true };
       },
     },
   });
@@ -483,10 +483,23 @@ function workspaceViewHarness(options: HarnessOptions = {}) {
       } as never,
     },
     resourceShapeService: {
-      listFormAvailability: async (input) => {
+      readFormAvailability: async (input) => {
         counts.data += 1;
         availabilityActors.push(input.actor);
-        return (await options.formPage?.(input.page?.cursor)) ?? { items: [] };
+        const formsRead = options.formPage?.(input.page?.cursor) ?? {
+          items: [],
+        };
+        counts.data += 1;
+        const targetPoolsRead = options.targetPoolPage?.() ?? { items: [] };
+        const [forms, targetPools] = await Promise.all([
+          formsRead,
+          targetPoolsRead,
+        ]);
+        options.afterDataRead?.();
+        return {
+          forms,
+          hasTargetPool: targetPools.items.length > 0,
+        };
       },
     },
   });

@@ -104,6 +104,7 @@ export interface D1Like {
     statements: readonly D1LikePreparedStatement[],
   ): Promise<
     readonly {
+      readonly results?: readonly T[];
       readonly meta?: { readonly changes?: number };
     }[]
   >;

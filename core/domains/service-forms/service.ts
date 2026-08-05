@@ -274,6 +274,10 @@ export class FormRegistryService {
     return this.#store.getPackage(packageDigest);
   }
 
+  getPackages(packageDigests: readonly string[]) {
+    return this.#store.getPackages(packageDigests);
+  }
+
   listPackages(params: PageParams = {}) {
     return this.#store.listPackages(params);
   }
@@ -376,6 +380,10 @@ export class FormRegistryService {
 
   getActivation(id: string) {
     return this.#store.getActivation(id);
+  }
+
+  getActivationsForForms(formRefs: readonly FormRef[]) {
+    return this.#store.getActivationsForForms(formRefs);
   }
 
   listActivations(params: PageParams = {}) {

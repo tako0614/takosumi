@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { readWorkspaceResourcesView } from "../../../../dashboard/src/lib/workspace-views.ts";
+import {
+  mergeWorkspaceResourcesViews,
+  readWorkspaceResourcesView,
+} from "../../../../dashboard/src/lib/workspace-views.ts";
 
 const realFetch = globalThis.fetch;
 
@@ -77,7 +80,48 @@ describe("Resources Workspace view client", () => {
     expect(view.forms.nextCursor).toBe("f_next");
   });
 
-  test("follows and accumulates the second inventory page", async () => {
+  test("keeps the initial inventory request to one bounded page", async () => {
+    const calls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const path = typeof input === "string" ? input : String(input);
+      calls.push(path);
+      return Response.json({
+        view: "resources.v1",
+        workspaceId: "workspace_1",
+        space: "workspace_1",
+        nextCursor: "cursor_next",
+        resources: {
+          items: [
+            {
+              id: "resource_1",
+              apiVersion: "takosumi.io/v1alpha1",
+              kind: "EdgeWorker",
+              metadata: {
+                name: "first",
+                space: "workspace_1",
+                managedBy: "opentofu",
+              },
+            },
+          ],
+        },
+        workloads: { items: [] },
+        forms: { items: [] },
+        hasTargetPool: true,
+      });
+    }) as typeof fetch;
+
+    const view = await readWorkspaceResourcesView("workspace_1");
+
+    expect(calls).toEqual([
+      "/api/v1/workspaces/workspace_1/views/resources.v1?limit=50",
+    ]);
+    expect(view.resources.items.map((item) => item.metadata.name)).toEqual([
+      "first",
+    ]);
+    expect(view.nextCursor).toBe("cursor_next");
+  });
+
+  test("loads and appends a continuation only when requested", async () => {
     const calls: string[] = [];
     globalThis.fetch = (async (input: RequestInfo | URL) => {
       const path = typeof input === "string" ? input : String(input);
@@ -140,7 +184,11 @@ describe("Resources Workspace view client", () => {
       });
     }) as typeof fetch;
 
-    const view = await readWorkspaceResourcesView("workspace_1");
+    const first = await readWorkspaceResourcesView("workspace_1");
+    const second = await readWorkspaceResourcesView("workspace_1", {
+      cursor: first.nextCursor,
+    });
+    const view = mergeWorkspaceResourcesViews(first, second);
 
     expect(calls).toEqual([
       "/api/v1/workspaces/workspace_1/views/resources.v1?limit=50",
@@ -153,28 +201,6 @@ describe("Resources Workspace view client", () => {
     expect(view.workloads.items).toHaveLength(2);
     expect(view.forms.items).toHaveLength(2);
     expect(view.nextCursor).toBeUndefined();
-  });
-
-  test("stops when a projection repeats its cursor", async () => {
-    let calls = 0;
-    globalThis.fetch = (async () => {
-      calls += 1;
-      return Response.json({
-        view: "resources.v1",
-        workspaceId: "workspace_1",
-        space: "workspace_1",
-        nextCursor: "same_cursor",
-        resources: { items: [] },
-        workloads: { items: [] },
-        forms: { items: [] },
-        hasTargetPool: false,
-      });
-    }) as typeof fetch;
-
-    const view = await readWorkspaceResourcesView("workspace_1");
-
-    expect(calls).toBe(2);
-    expect(view.nextCursor).toBe("same_cursor");
   });
 
   test("rejects malformed nested rows before UI rendering", async () => {

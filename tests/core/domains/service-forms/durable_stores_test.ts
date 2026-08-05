@@ -1,6 +1,8 @@
 import { expect, test } from "bun:test";
 import { formRefKey, type FormRef } from "takosumi-contract";
 import { ensureD1OpenTofuLedgerSchema } from "../../../../worker/src/d1_opentofu_store.ts";
+import type { D1PreparedStatement } from "../../../../worker/src/bindings.ts";
+import type { SqlClient } from "../../../../core/adapters/storage/sql.ts";
 import {
   D1FormRegistryStore,
   SqlFormRegistryStore,
@@ -16,6 +18,8 @@ const now = "2026-07-16T00:00:00.000Z";
 
 type StoreHandle = {
   readonly store: FormRegistryStore;
+  readonly queries: readonly string[];
+  readonly resetQueries: () => void;
   readonly close: () => Promise<void>;
 };
 
@@ -75,6 +79,19 @@ for (const dialect of dialects) {
       expect(
         await handle.store.getPackage(conflictingPackage.packageDigest),
       ).toBeUndefined();
+
+      expect(
+        (await handle.store.getPackages([
+          second.package.packageDigest,
+          first.package.packageDigest,
+          second.package.packageDigest,
+          digest("f"),
+        ])).map((record) => record.packageDigest),
+      ).toEqual([
+        second.package.packageDigest,
+        first.package.packageDigest,
+        second.package.packageDigest,
+      ]);
     } finally {
       await handle.close();
     }
@@ -129,21 +146,93 @@ for (const dialect of dialects) {
       await handle.close();
     }
   });
+
+  test(`${dialect} Form availability evidence uses one package and one activation query independent of page rows`, async () => {
+    const handle = await createStore(dialect);
+    try {
+      const first = fixture("edge_worker", "a", "1");
+      const second = fixture("object_bucket", "b", "2");
+      await handle.store.installPackage(first.package, [first.definition]);
+      await handle.store.installPackage(second.package, [second.definition]);
+      await handle.store.createActivation(activationFixture(first));
+      await handle.store.createActivation({
+        ...activationFixture(second),
+        id: "activation_second",
+      });
+      handle.resetQueries();
+
+      expect(
+        (await handle.store.getPackages([
+          first.package.packageDigest,
+          second.package.packageDigest,
+        ])).map((formPackage) => formPackage.packageDigest),
+      ).toEqual([
+        first.package.packageDigest,
+        second.package.packageDigest,
+      ]);
+      expect(
+        await handle.store.getActivationsForForms([first.ref, second.ref]),
+      ).toHaveLength(2);
+      expect(handle.queries).toHaveLength(2);
+      expect(
+        handle.queries.filter((query) =>
+          /from\s+(?:takosumi_)?service_form_packages\b/iu.test(query),
+        ),
+      ).toHaveLength(1);
+      expect(
+        handle.queries.filter((query) =>
+          /from\s+(?:takosumi_)?service_form_activations\b/iu.test(query),
+        ),
+      ).toHaveLength(1);
+    } finally {
+      await handle.close();
+    }
+  });
 }
 
 async function createStore(
   dialect: (typeof dialects)[number],
 ): Promise<StoreHandle> {
   if (dialect === "d1") {
-    const db = new SqliteFakeD1();
+    const db = new CountingD1();
     await ensureD1OpenTofuLedgerSchema(db);
-    return { store: new D1FormRegistryStore(db), close: async () => {} };
+    return {
+      store: new D1FormRegistryStore(db),
+      queries: db.queries,
+      resetQueries: () => {
+        db.queries.length = 0;
+      },
+      close: async () => {},
+    };
   }
-  const client = await PGliteSqlClient.create();
+  const database = await PGliteSqlClient.create();
+  const queries: string[] = [];
+  const client: SqlClient = {
+    query(sql, parameters) {
+      queries.push(sql);
+      return database.query(sql, parameters);
+    },
+    transaction(fn) {
+      return database.transaction(fn);
+    },
+  };
   return {
     store: new SqlFormRegistryStore(client),
-    close: async () => await client.close(),
+    queries,
+    resetQueries: () => {
+      queries.length = 0;
+    },
+    close: async () => await database.close(),
   };
+}
+
+class CountingD1 extends SqliteFakeD1 {
+  readonly queries: string[] = [];
+
+  override prepare(query: string): D1PreparedStatement {
+    this.queries.push(query);
+    return super.prepare(query);
+  }
 }
 
 function fixture(type: string, digestCharacter: string, suffix: string) {

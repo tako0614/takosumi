@@ -383,6 +383,11 @@ function exactObjectBucketFormRegistry(
       packageDigest === EXACT_OBJECT_BUCKET_FORM.packageDigest
         ? formPackage
         : undefined,
+    getPackages: async (packageDigests) =>
+      packageDigests.includes(EXACT_OBJECT_BUCKET_FORM.packageDigest)
+        ? [formPackage]
+        : [],
+    getActivationsForForms: async () => [activation],
     listDefinitions: async () => ({ items: [definition] }),
     listActivations: async () => ({ items: [activation] }),
   };

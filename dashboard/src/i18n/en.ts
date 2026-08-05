@@ -1103,6 +1103,10 @@ export const en: Record<keyof typeof ja, string> = {
   "resources.inventory.title": "Resource inventory",
   "resources.inventory.subtitle":
     "Status, placement, and ownership for resources you created.",
+  "resources.pagination.loadMore": "Load more",
+  "resources.pagination.hint":
+    "The inventory is shown one bounded page at a time.",
+  "resources.pagination.loadMoreFailed": "Could not load more — {message}",
   "resources.editor.createTitle": "Define resource",
   "resources.editor.editTitle": "Change desired state",
   "resources.editor.subtitle":

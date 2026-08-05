@@ -1,7 +1,10 @@
 import { expect, test, type Page } from "@playwright/test";
 import { PORTABLE_EXPECTATIONS } from "./fixture-data.ts";
 import { monitorDashboardTraffic } from "./traffic-monitor.ts";
-import type { DashboardE2EMode } from "./traffic-policy.ts";
+import {
+  shouldRecordControlPlaneMutation,
+  type DashboardE2EMode,
+} from "./traffic-policy.ts";
 
 type Expectations = {
   readonly workspaceName: string;
@@ -22,6 +25,11 @@ function requiredLive(name: string): string {
   if (!value) throw new Error(`live dashboard E2E requires ${name}`);
   return value;
 }
+
+const mutationOrigin =
+  mode === "portable"
+    ? "http://127.0.0.1:4179"
+    : (process.env.TAKOSUMI_E2E_BASE_URL?.trim() ?? "");
 
 const expectations: Expectations =
   mode === "portable"
@@ -134,7 +142,14 @@ test.describe("Takosumi dashboard browser surface", () => {
     const traffic = monitorDashboardTraffic(page, mode);
     const mutations: string[] = [];
     page.on("request", (request) => {
-      if (!["GET", "HEAD", "OPTIONS"].includes(request.method())) {
+      if (
+        shouldRecordControlPlaneMutation(
+          mode,
+          mutationOrigin,
+          request.url(),
+          request.method(),
+        )
+      ) {
         mutations.push(
           `${request.method()} ${new URL(request.url()).pathname}`,
         );
@@ -193,7 +208,14 @@ test.describe("Takosumi dashboard browser surface", () => {
       const request = route.request();
       const url = new URL(request.url());
       const path = url.pathname;
-      if (!["GET", "HEAD", "OPTIONS"].includes(request.method())) {
+      if (
+        shouldRecordControlPlaneMutation(
+          mode,
+          mutationOrigin,
+          request.url(),
+          request.method(),
+        )
+      ) {
         seenMutations.push(`${request.method()} ${path}`);
       }
       if (path === "/api/v1/connections") {

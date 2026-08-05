@@ -83,6 +83,20 @@ export interface WorkspaceViews {
   }): Promise<WorkspaceResourcesView>;
 }
 
+export interface WorkspaceResourcesProjectionReader {
+  read(input: {
+    readonly workspaceId: string;
+    readonly space: string;
+    /** `null` means this child page was exhausted by an earlier response. */
+    readonly resources: PageParams | null;
+    readonly workloads: PageParams | null;
+    readonly signal?: AbortSignal;
+  }): Promise<{
+    readonly resources: Page<WorkspaceResourceSummary>;
+    readonly workloads: Page<PublicCapsule>;
+  }>;
+}
+
 export type WorkspaceViewControlStoreFactory = () => OpenTofuControlStore;
 
 export interface WorkspaceViewsServiceOptions {
@@ -93,8 +107,10 @@ export interface WorkspaceViewsServiceOptions {
   >;
   readonly resourceShapeService: Pick<
     ResourceShapeService,
-    "listFormAvailability"
+    "readFormAvailability"
   >;
+  /** Durable operation-shaped projection. Omitted only by in-memory tests. */
+  readonly resourcesProjectionReader?: WorkspaceResourcesProjectionReader;
 }
 
 const CURSOR_VIEW = "takosumi.workspace-resources";
@@ -114,11 +130,13 @@ export class WorkspaceViewsService implements WorkspaceViews {
   readonly #controlStoreFactory: WorkspaceViewControlStoreFactory;
   readonly #resourceStores: WorkspaceViewsServiceOptions["resourceStores"];
   readonly #resourceShapeService: WorkspaceViewsServiceOptions["resourceShapeService"];
+  readonly #resourcesProjectionReader: WorkspaceResourcesProjectionReader | undefined;
 
   constructor(options: WorkspaceViewsServiceOptions) {
     this.#controlStoreFactory = options.controlStoreFactory;
     this.#resourceStores = options.resourceStores;
     this.#resourceShapeService = options.resourceShapeService;
+    this.#resourcesProjectionReader = options.resourcesProjectionReader;
   }
 
   async readResources(
@@ -176,68 +194,69 @@ export class WorkspaceViewsService implements WorkspaceViews {
       principalKind: "account",
     };
     const limit = clampPageLimit(input.page.limit);
-    const resourcesRead: Promise<Page<ResourceShapeRecord>> =
+    const resourcesParams =
       cursor?.resources === null
-        ? Promise.resolve({ items: [] })
-        : this.#resourceStores.resources.listBySpacePage(
-            input.space,
-            childPageParams(cursor?.resources, limit),
-          );
-    const locksRead = resourcesRead.then((page) =>
-      page.items.length === 0
-        ? Promise.resolve([] as readonly ResolutionLockRecord[])
-        : this.#resourceStores.locks.getMany(page.items.map((item) => item.id)),
-    );
-    const workloadsRead =
+        ? null
+        : childPageParams(cursor?.resources, limit);
+    const workloadsParams =
       cursor?.workloads === null
-        ? Promise.resolve({ items: [] } as Page<PublicCapsule>)
-        : controlStore.listCapsulesPage(
-            input.workspaceId,
-            childPageParams(cursor?.workloads, limit, {
-              includeDestroyed: false,
-            }),
-          );
-    const formsRead =
-      cursor?.forms === null
-        ? Promise.resolve({ items: [] } as Page<FormAvailability>)
-        : this.#resourceShapeService.listFormAvailability({
-            actor,
-            space: input.space,
-            page: childPageParams(cursor?.forms, limit),
-          });
-    const [resources, locks, workloads, forms, targetPools] = await Promise.all([
-      resourcesRead,
-      locksRead,
-      workloadsRead,
+        ? null
+        : childPageParams(cursor?.workloads, limit);
+    const projectionRead = this.#resourcesProjectionReader
+      ? this.#resourcesProjectionReader.read({
+          workspaceId: input.workspaceId,
+          space: input.space,
+          resources: resourcesParams,
+          workloads: workloadsParams,
+          ...(input.signal ? { signal: input.signal } : {}),
+        })
+      : this.#readGenericProjection({
+          controlStore,
+          space: input.space,
+          workspaceId: input.workspaceId,
+          resources: resourcesParams,
+          workloads: workloadsParams,
+        });
+    const formsRead = this.#resourceShapeService.readFormAvailability({
+      actor,
+      space: input.space,
+      includeForms: cursor?.forms !== null,
+      page: childPageParams(cursor?.forms, limit),
+    });
+    const [projection, formAvailability] = await Promise.all([
+      projectionRead,
       formsRead,
-      this.#resourceStores.targetPools.listBySpacePage(input.space, {
-        limit: 1,
-      }),
     ]);
     throwIfAborted(input.signal);
 
-    const locksByResourceId = new Map(
-      locks.map((lock) => [lock.resourceId, lock] as const),
-    );
     const resourcePage = projectPage(
-      resources,
+      projection.resources,
       cursor?.resources,
-      (resource) =>
-        projectResourceSummary(
-          resource,
-          locksByResourceId.get(resource.id),
-        ),
+      (resource) => resource,
     );
     const workloadPage = projectPage(
-      workloads,
+      projection.workloads,
       cursor?.workloads,
-      publicCapsule,
+      (workload) => workload,
     );
-    const formPage = projectPage(forms, cursor?.forms, (form) => form);
+    const formPage = projectPage(
+      formAvailability.forms,
+      cursor?.forms,
+      (form) => form,
+    );
     const next = nextWorkspaceResourcesCursor({
-      resources: cursor?.resources === null ? null : resources.nextCursor ?? null,
-      workloads: cursor?.workloads === null ? null : workloads.nextCursor ?? null,
-      forms: cursor?.forms === null ? null : forms.nextCursor ?? null,
+      resources:
+        cursor?.resources === null
+          ? null
+          : projection.resources.nextCursor ?? null,
+      workloads:
+        cursor?.workloads === null
+          ? null
+          : projection.workloads.nextCursor ?? null,
+      forms:
+        cursor?.forms === null
+          ? null
+          : formAvailability.forms.nextCursor ?? null,
     });
 
     return {
@@ -248,7 +267,50 @@ export class WorkspaceViewsService implements WorkspaceViews {
       resources: resourcePage,
       workloads: workloadPage,
       forms: formPage,
-      hasTargetPool: targetPools.items.length > 0,
+      hasTargetPool: formAvailability.hasTargetPool,
+    };
+  }
+
+  async #readGenericProjection(input: {
+    readonly controlStore: OpenTofuControlStore;
+    readonly space: string;
+    readonly workspaceId: string;
+    readonly resources: PageParams | null;
+    readonly workloads: PageParams | null;
+  }): Promise<{
+    readonly resources: Page<WorkspaceResourceSummary>;
+    readonly workloads: Page<PublicCapsule>;
+  }> {
+    const resourcesRead: Promise<Page<ResourceShapeRecord>> = input.resources
+      ? this.#resourceStores.resources.listBySpacePage(
+          input.space,
+          input.resources,
+        )
+      : Promise.resolve({ items: [] });
+    const locksRead = resourcesRead.then((page) =>
+      page.items.length === 0
+        ? Promise.resolve([] as readonly ResolutionLockRecord[])
+        : this.#resourceStores.locks.getMany(page.items.map((item) => item.id)),
+    );
+    const workloadsRead = input.workloads
+      ? input.controlStore.listCapsulesPage(input.workspaceId, {
+          ...input.workloads,
+          includeDestroyed: false,
+        })
+      : Promise.resolve({ items: [] });
+    const [resources, locks, workloads] = await Promise.all([
+      resourcesRead,
+      locksRead,
+      workloadsRead,
+    ]);
+    const locksByResourceId = new Map(
+      locks.map((lock) => [lock.resourceId, lock] as const),
+    );
+    return {
+      resources: mapPage(resources, (resource) =>
+        projectResourceSummary(resource, locksByResourceId.get(resource.id)),
+      ),
+      workloads: mapPage(workloads, publicCapsule),
     };
   }
 }
@@ -324,6 +386,13 @@ function projectPage<T, U>(
   project: (item: T) => U,
 ): WorkspaceViewPage<U> {
   if (inputCursor === null) return { items: [] };
+  return {
+    items: page.items.map(project),
+    ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
+  };
+}
+
+function mapPage<T, U>(page: Page<T>, project: (item: T) => U): Page<U> {
   return {
     items: page.items.map(project),
     ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),

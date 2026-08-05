@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { resolveExternalStorageState } from "../../../scripts/dashboard-browser-e2e/live-inputs.ts";
 import {
+  shouldRecordControlPlaneMutation,
   shouldRecordRequestFailure,
   shouldRecordResponseFailure,
 } from "./traffic-policy.ts";
@@ -89,4 +90,48 @@ test("traffic policy keeps live optional probes but fails required routes and 5x
     true,
   );
   expect(shouldRecordRequestFailure("data:text/plain,offline")).toBe(false);
+});
+
+test("mutation telemetry ignores external RUM and non-control-plane requests", () => {
+  const origin = "https://app-staging.takosumi.com";
+  expect(
+    shouldRecordControlPlaneMutation(
+      "live",
+      origin,
+      `${origin}/cdn-cgi/rum`,
+      "POST",
+    ),
+  ).toBe(false);
+  expect(
+    shouldRecordControlPlaneMutation(
+      "live",
+      origin,
+      `${origin}/api/v1/sources`,
+      "POST",
+    ),
+  ).toBe(true);
+  expect(
+    shouldRecordControlPlaneMutation(
+      "live",
+      origin,
+      `${origin}/v1/resources/ObjectBucket/assets`,
+      "DELETE",
+    ),
+  ).toBe(true);
+  expect(
+    shouldRecordControlPlaneMutation(
+      "live",
+      origin,
+      "https://store.example.test/api/v1/sources",
+      "POST",
+    ),
+  ).toBe(false);
+  expect(
+    shouldRecordControlPlaneMutation(
+      "live",
+      origin,
+      `${origin}/api/v1/workspaces`,
+      "GET",
+    ),
+  ).toBe(false);
 });

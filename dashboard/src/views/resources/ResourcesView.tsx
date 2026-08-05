@@ -45,8 +45,10 @@ import {
 } from "../../lib/control-api.ts";
 import { listWorkspacesCached } from "../../lib/workspace-list.ts";
 import {
+  mergeWorkspaceResourcesViews,
   readWorkspaceResourcesView,
   type WorkspaceResourceSummary,
+  type WorkspaceResourcesView,
 } from "../../lib/workspace-views.ts";
 import { friendlyError } from "../../lib/error-copy.ts";
 import {
@@ -158,20 +160,71 @@ function Inner(): JSX.Element {
     scope,
     ({ workspaceId: workspace }) => readWorkspaceResourcesView(workspace),
   );
+  const [visibleResourcesView, setVisibleResourcesView] =
+    createSignal<WorkspaceResourcesView>();
+  const [loadingMoreResources, setLoadingMoreResources] = createSignal(false);
+  const [loadMoreError, setLoadMoreError] = createSignal<unknown>();
+
+  // A refetch replaces the first page; an explicit continuation appends to
+  // the current view. Clear stale rows immediately when the Workspace scope
+  // changes, but keep them while the same-scope refresh is in flight.
+  createEffect(() => {
+    const activeScope = scope();
+    const visible = visibleResourcesView();
+    if (!activeScope || visible?.workspaceId !== activeScope.workspaceId) {
+      if (visible !== undefined) setVisibleResourcesView(undefined);
+      setLoadMoreError(undefined);
+    }
+  });
+  createEffect(() => {
+    if (resourcesView.loading || resourcesView.error) return;
+    const page = resourcesView();
+    if (!page) return;
+    setVisibleResourcesView(page);
+    setLoadMoreError(undefined);
+  });
   const [advancedOpen, setAdvancedOpen] = createSignal(false);
   const advancedScope = createMemo<Scope | undefined>(() =>
     advancedOpen() || showEditor() ? scope() : undefined,
   );
   const resourceRows = () =>
-    resourcesView.error ? [] : (resourcesView()?.resources.items ?? []);
+    resourcesView.error ? [] : (visibleResourcesView()?.resources.items ?? []);
   const workloadRows = () =>
-    resourcesView.error ? [] : (resourcesView()?.workloads.items ?? []);
+    resourcesView.error ? [] : (visibleResourcesView()?.workloads.items ?? []);
   const formRows = () =>
-    resourcesView.error ? [] : (resourcesView()?.forms.items ?? []);
+    resourcesView.error ? [] : (visibleResourcesView()?.forms.items ?? []);
+  const hasMoreResources = () =>
+    resourcesView.error === undefined &&
+    visibleResourcesView()?.nextCursor !== undefined;
+
+  async function loadMoreResources(): Promise<void> {
+    const active = scope();
+    const current = visibleResourcesView();
+    const cursor = current?.nextCursor;
+    if (!active || !current || !cursor || loadingMoreResources()) return;
+    setLoadingMoreResources(true);
+    setLoadMoreError(undefined);
+    try {
+      const next = await readWorkspaceResourcesView(active.workspaceId, {
+        cursor,
+      });
+      if (scope()?.workspaceId !== active.workspaceId) return;
+      setVisibleResourcesView((previous) => {
+        if (!previous || previous.workspaceId !== active.workspaceId) {
+          return next;
+        }
+        return mergeWorkspaceResourcesViews(previous, next);
+      });
+    } catch (cause) {
+      setLoadMoreError(cause);
+    } finally {
+      setLoadingMoreResources(false);
+    }
+  }
   const formDefinitionScope = createMemo(() => {
     const currentScope = scope();
     if (!currentScope || !showEditor() || resourcesView.error) return undefined;
-    const forms = resourcesView()?.forms.items;
+    const forms = visibleResourcesView()?.forms.items;
     return forms ? { ...currentScope, forms } : undefined;
   });
   const [formDefinitions] = createResource(
@@ -247,7 +300,7 @@ function Inner(): JSX.Element {
     return (
       resourcesView.loading ||
       resourcesView.error !== undefined ||
-      (targetPoolFact() ?? resourcesView()?.hasTargetPool) === true
+      (targetPoolFact() ?? visibleResourcesView()?.hasTargetPool) === true
     );
   };
 
@@ -742,6 +795,28 @@ function Inner(): JSX.Element {
                   }
                   empty={t("resources.empty")}
                 />
+                <Show when={hasMoreResources()}>
+                  <div class="rs-pagination-actions">
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      busy={loadingMoreResources()}
+                      onClick={() => void loadMoreResources()}
+                    >
+                      {t("resources.pagination.loadMore")}
+                    </Button>
+                    <span>{t("resources.pagination.hint")}</span>
+                  </div>
+                </Show>
+                <Show when={loadMoreError()}>
+                  {(cause) => (
+                    <Toast tone="error">
+                      {t("resources.pagination.loadMoreFailed", {
+                        message: friendlyError(cause(), t).message,
+                      })}
+                    </Toast>
+                  )}
+                </Show>
                 <Show when={!resourcesView.error && formRows().length > 0}>
                   <div class="rs-available-types">
                     <span>{t("resources.availableTypes.label")}</span>

@@ -1,5 +1,7 @@
 export type DashboardE2EMode = "portable" | "live";
 
+const READ_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+
 function parseHttpUrl(value: string): URL | undefined {
   try {
     const url = new URL(value);
@@ -41,6 +43,36 @@ function isRequiredLivePath(pathname: string): boolean {
     pathname === "/v1/cloud/s3-access-keys" ||
     pathname.startsWith("/v1/cloud/s3-access-keys/")
   );
+}
+
+function isControlPlanePath(pathname: string): boolean {
+  return (
+    pathname === "/api/v1" ||
+    pathname.startsWith("/api/v1/") ||
+    pathname === "/v1" ||
+    pathname.startsWith("/v1/")
+  );
+}
+
+/**
+ * Record only mutating requests that could change the dashboard control
+ * plane. External telemetry (for example Cloudflare Browser Insights' RUM
+ * POST) and Store/provider requests are intentionally outside this fence.
+ */
+export function shouldRecordControlPlaneMutation(
+  mode: DashboardE2EMode,
+  origin: string,
+  urlValue: string,
+  method: string,
+): boolean {
+  if (READ_METHODS.has(method.toUpperCase())) return false;
+  const url = parseHttpUrl(urlValue);
+  if (!url || !isSameOrigin(url, origin)) return false;
+  // Keep portable and live collection scoped to the configured dashboard
+  // origin. In live mode this is app-staging.takosumi.com; the fixture uses
+  // the local origin while preserving the same path fence.
+  if (mode !== "portable" && origin.trim() === "") return false;
+  return isControlPlanePath(url.pathname);
 }
 
 /**

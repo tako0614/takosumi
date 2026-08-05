@@ -20,7 +20,7 @@ import type { CloudflareWorkerEnv, OpenTofuRunAction } from "./bindings.ts";
 import {
   createCloudflareD1OpenTofuControlStore,
   createCloudflareD1OpenTofuControlStoreForRequest,
-  ensureD1OpenTofuLedgerSchema,
+  initializeD1OpenTofuLedgerSchemaBinding,
 } from "./d1_opentofu_store.ts";
 import { PortableHostIdempotencyCoordinator } from "../../core/api/portable_host_idempotency.ts";
 import { D1PortableHostIdempotencyLedger } from "./d1_portable_host_idempotency.ts";
@@ -38,6 +38,7 @@ import {
 } from "./release_activator.ts";
 import { CloudflareD1ObservabilitySink } from "./d1_observability.ts";
 import { createD1ResourceShapeStores } from "../../core/domains/resource-shape/d1_stores.ts";
+import { D1WorkspaceResourcesProjectionReader } from "../../core/domains/workspace-views/d1_reader.ts";
 import { createD1InterfaceStores } from "../../core/domains/interfaces/d1_stores.ts";
 import {
   createD1RuntimeCapabilityReader,
@@ -177,9 +178,10 @@ export async function createWorkerServiceApp(
       "TAKOSUMI_CONTROL_D1_SCHEMA_MODE must be bootstrap or predeployed",
     );
   }
-  if ((controlD1SchemaMode ?? "bootstrap") === "bootstrap") {
-    await ensureD1OpenTofuLedgerSchema(env.TAKOSUMI_CONTROL_DB);
-  }
+  await initializeD1OpenTofuLedgerSchemaBinding(
+    env.TAKOSUMI_CONTROL_DB,
+    controlD1SchemaMode ?? "bootstrap",
+  );
   const opentofuControlStore = createCloudflareD1OpenTofuControlStore(
     env.TAKOSUMI_CONTROL_DB,
     {
@@ -321,6 +323,8 @@ export async function createWorkerServiceApp(
       ),
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
     resourceShapeStores: createD1ResourceShapeStores(env.TAKOSUMI_CONTROL_DB),
+    workspaceResourcesProjectionReader:
+      new D1WorkspaceResourcesProjectionReader(env.TAKOSUMI_CONTROL_DB),
     formRegistryStore: createD1FormRegistryStore(env.TAKOSUMI_CONTROL_DB),
     offeringCatalogStore: createD1OfferingCatalogStore(env.TAKOSUMI_CONTROL_DB),
     portableHostIdempotency,

@@ -5,7 +5,10 @@ import type {
   D1Result,
 } from "../../../worker/src/bindings.ts";
 import type { CloudflareWorkerEnv } from "../../../worker/src/bindings.ts";
-import { ensureD1OpenTofuLedgerSchema } from "../../../worker/src/d1_opentofu_store.ts";
+import {
+  CloudflareD1OpenTofuControlStore,
+  ensureD1OpenTofuLedgerSchema,
+} from "../../../worker/src/d1_opentofu_store.ts";
 import { createWorkerServiceApp } from "../../../worker/src/worker_service.ts";
 import { SqliteFakeD1 } from "../../helpers/deploy-control/sqlite_fake_d1.ts";
 
@@ -48,13 +51,10 @@ test("cached Worker composition exposes WorkspaceViews with one fresh request ad
     hasTargetPool: false,
   });
   expect(db.maintenanceReads).toBe(1);
-  // This empty bootstrap-mode fixture currently uses ten physical D1 reads:
-  // request admission + absent-fence probe, Workspace, member, Resource page,
-  // Capsule page, definition page, activation page, and two TargetPool reads.
-  // It deliberately does not pretend the generic Form provider is one SQL
-  // statement. A non-empty Resource page adds one bounded lock batch; each
-  // returned Form currently adds its package-evidence read.
-  expect(db.preparedQueries).toHaveLength(10);
+  // Fixed cold-path statement budget for an empty first page: request
+  // admission + absent-fence probe, Workspace, member, one Resource+Lock join,
+  // one Capsule read, one definition page, and one TargetPool read.
+  expect(db.preparedQueries).toHaveLength(8);
 
   await operations.workspaceViews!.readResources({
     workspaceId: workspace.id,
@@ -67,7 +67,48 @@ test("cached Worker composition exposes WorkspaceViews with one fresh request ad
   // creates a new request-scoped store, and therefore a fresh durable
   // maintenance admission, for the second application read.
   expect(db.maintenanceReads).toBe(2);
-  expect(db.preparedQueries).toHaveLength(20);
+  expect(db.preparedQueries).toHaveLength(16);
+});
+
+test("predeployed schema proof completes at composition and stays outside cold and warm view reads", async () => {
+  const raw = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(raw);
+  const seededStore = new CloudflareD1OpenTofuControlStore(raw);
+  await seededStore.putWorkspace({
+    id: "workspace_predeployed_view",
+    handle: "predeployed-view",
+    displayName: "Predeployed View",
+    type: "organization",
+    ownerUserId: "owner_1",
+    createdAt: "2026-08-05T00:00:00.000Z",
+    updatedAt: "2026-08-05T00:00:00.000Z",
+  });
+  const db = new MaintenanceReadRecordingD1(raw);
+  const { operations } = await createWorkerServiceApp(
+    {
+      TAKOSUMI_CONTROL_DB: db,
+      TAKOSUMI_CONTROL_D1_SCHEMA_MODE: "predeployed",
+      TAKOSUMI_ENVIRONMENT: "test",
+      TAKOSUMI_DEV_MODE: "1",
+      TAKOSUMI_DEPLOY_CONTROL_TOKEN: "test-deploy-control-token",
+    } as unknown as CloudflareWorkerEnv,
+    "takosumi-api",
+    { operatorInstallConfigs: [] },
+  );
+
+  expect(schemaReadinessQueryCount(db.preparedQueries)).toBeGreaterThan(0);
+  db.resetMaintenanceReads();
+  for (let request = 0; request < 2; request += 1) {
+    await operations.workspaceViews!.readResources({
+      workspaceId: "workspace_predeployed_view",
+      space: "workspace_predeployed_view",
+      subject: "owner_1",
+      requiredAccess: "read",
+      page: { limit: 25 },
+    });
+    expect(schemaReadinessQueryCount(db.preparedQueries)).toBe(0);
+    expect(db.maintenanceReads).toBe(request + 1);
+  }
 });
 
 class MaintenanceReadRecordingD1 implements D1Database {
@@ -94,4 +135,13 @@ class MaintenanceReadRecordingD1 implements D1Database {
     this.maintenanceReads = 0;
     this.preparedQueries.length = 0;
   }
+}
+
+function schemaReadinessQueryCount(queries: readonly string[]): number {
+  return queries.filter(
+    (query) =>
+      /pragma_table_info\s*\(\s*['"]schema_migrations['"]\s*\)/iu.test(
+        query,
+      ) || /from\s+schema_migrations\s+order\s+by\s+version/iu.test(query),
+  ).length;
 }

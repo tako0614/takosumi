@@ -1114,6 +1114,10 @@ export const ja = {
   "resources.inventory.title": "リソース一覧",
   "resources.inventory.subtitle":
     "作成したリソースの状態、配置先、Authority を表示します。",
+  "resources.pagination.loadMore": "さらに読み込む",
+  "resources.pagination.hint":
+    "一覧は安全な件数ごとに表示しています。続きは必要なときに読み込めます。",
+  "resources.pagination.loadMoreFailed": "続きの読み込みに失敗しました — {message}",
   "resources.editor.createTitle": "リソースを定義",
   "resources.editor.editTitle": "望ましい状態を変更",
   "resources.editor.subtitle":

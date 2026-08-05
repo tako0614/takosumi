@@ -47,7 +47,6 @@ export interface WorkspaceResourcesView {
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
-const MAX_ACCUMULATED_PAGES = 20;
 
 export async function readWorkspaceResourcesView(
   workspaceId: string,
@@ -62,30 +61,30 @@ export async function readWorkspaceResourcesView(
       ? options.limit
       : DEFAULT_LIMIT;
   const limit = Math.min(Math.max(1, Math.trunc(requestedLimit)), MAX_LIMIT);
-  let page = await readWorkspaceResourcesViewPage(workspaceId, {
+  // Keep the first view request bounded. The aggregate projection has a
+  // continuation cursor; callers must opt into another request explicitly so
+  // a Resources navigation never turns into an unbounded inventory scan.
+  return readWorkspaceResourcesViewPage(workspaceId, {
     limit,
     ...(options.cursor ? { cursor: options.cursor } : {}),
     ...(options.signal ? { signal: options.signal } : {}),
   });
-  const seenCursors = new Set<string>();
-  if (options.cursor) seenCursors.add(options.cursor);
+}
 
-  for (
-    let pageNumber = 1;
-    pageNumber < MAX_ACCUMULATED_PAGES && page.nextCursor;
-    pageNumber += 1
-  ) {
-    const cursor = page.nextCursor;
-    if (seenCursors.has(cursor)) break;
-    seenCursors.add(cursor);
-    const nextPage = await readWorkspaceResourcesViewPage(workspaceId, {
-      limit,
-      cursor,
-      ...(options.signal ? { signal: options.signal } : {}),
-    });
-    page = mergeWorkspaceResourcesViews(page, nextPage);
+/** Append an explicitly requested continuation page to the visible view. */
+export function mergeWorkspaceResourcesViews(
+  current: WorkspaceResourcesView,
+  next: WorkspaceResourcesView,
+): WorkspaceResourcesView {
+  if (current.workspaceId !== next.workspaceId) {
+    throw new Error("Cannot merge Resources pages from different Workspaces");
   }
-  return page;
+  return {
+    ...next,
+    resources: mergeWorkspaceViewPage(current.resources, next.resources),
+    workloads: mergeWorkspaceViewPage(current.workloads, next.workloads),
+    forms: mergeWorkspaceViewPage(current.forms, next.forms),
+  };
 }
 
 async function readWorkspaceResourcesViewPage(
@@ -103,19 +102,6 @@ async function readWorkspaceResourcesViewPage(
     { signal: options.signal },
   );
   return parseWorkspaceResourcesView(body, workspaceId);
-}
-
-function mergeWorkspaceResourcesViews(
-  current: WorkspaceResourcesView,
-  next: WorkspaceResourcesView,
-): WorkspaceResourcesView {
-  return {
-    ...next,
-    ...(next.nextCursor ? { nextCursor: next.nextCursor } : {}),
-    resources: mergeWorkspaceViewPage(current.resources, next.resources),
-    workloads: mergeWorkspaceViewPage(current.workloads, next.workloads),
-    forms: mergeWorkspaceViewPage(current.forms, next.forms),
-  };
 }
 
 function mergeWorkspaceViewPage<T>(

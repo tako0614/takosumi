@@ -103,6 +103,35 @@ export class SqlFormRegistryStore implements FormRegistryStore {
     return getPackage(this.client, packageDigest);
   }
 
+  async getPackages(
+    packageDigests: readonly string[],
+  ): Promise<readonly FormPackageRecord[]> {
+    const unique = [...new Set(packageDigests)];
+    if (unique.length === 0) return [];
+    if (unique.length > 100) {
+      throw new RangeError("Form package bulk read accepts at most 100 digests");
+    }
+    const result = await this.client.query<JsonRow>(
+      `select record_json from ${names.serviceFormPackages}
+       where package_digest in (
+         select requested.package_digest
+         from jsonb_array_elements_text($1::jsonb)
+           as requested(package_digest)
+       )`,
+      [JSON.stringify(unique)],
+    );
+    const byDigest = new Map(
+      result.rows.map((row) => {
+        const record = decode<FormPackageRecord>(row.record_json);
+        return [record.packageDigest, record] as const;
+      }),
+    );
+    return packageDigests.flatMap((packageDigest) => {
+      const record = byDigest.get(packageDigest);
+      return record === undefined ? [] : [structuredClone(record)];
+    });
+  }
+
   async listPackages(params: PageParams): Promise<Page<FormPackageRecord>> {
     const limit = clampPageLimit(params.limit);
     const cursor = decodeCursor(params.cursor);
@@ -240,6 +269,29 @@ export class SqlFormRegistryStore implements FormRegistryStore {
     return result.rows[0] === undefined
       ? undefined
       : decode<FormActivationRecord>(result.rows[0].record_json);
+  }
+
+  async getActivationsForForms(
+    formRefs: readonly FormRef[],
+  ): Promise<readonly FormActivationRecord[]> {
+    const keys = [...new Set(formRefs.map(formRefKey))];
+    if (keys.length === 0) return [];
+    if (keys.length > 100) {
+      throw new RangeError("Form activation bulk read accepts at most 100 FormRefs");
+    }
+    const result = await this.client.query<JsonRow>(
+      `select record_json from ${names.serviceFormActivations}
+       where form_ref_key in (
+         select requested.form_ref_key
+         from jsonb_array_elements_text($1::jsonb)
+           as requested(form_ref_key)
+       )
+       order by updated_at asc, id asc limit 10000`,
+      [JSON.stringify(keys)],
+    );
+    return result.rows.map((row) =>
+      decode<FormActivationRecord>(row.record_json),
+    );
   }
 
   async listActivations(

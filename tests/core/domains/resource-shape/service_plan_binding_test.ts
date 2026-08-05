@@ -179,6 +179,9 @@ function formRegistry() {
         : undefined,
     getPackage: async (packageDigest: string) =>
       packageDigest === FORM.packageDigest ? formPackage : undefined,
+    getPackages: async (packageDigests: readonly string[]) =>
+      packageDigests.includes(FORM.packageDigest) ? [formPackage] : [],
+    getActivationsForForms: async () => [],
   };
 }
 

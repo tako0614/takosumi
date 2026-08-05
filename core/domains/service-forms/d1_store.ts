@@ -109,6 +109,35 @@ export class D1FormRegistryStore implements FormRegistryStore {
     return decodeOptional<FormPackageRecord>(row);
   }
 
+  async getPackages(
+    packageDigests: readonly string[],
+  ): Promise<readonly FormPackageRecord[]> {
+    const unique = [...new Set(packageDigests)];
+    if (unique.length === 0) return [];
+    if (unique.length > 100) {
+      throw new RangeError("Form package bulk read accepts at most 100 digests");
+    }
+    // One JSON parameter stays below D1's 100-parameter ceiling even when the
+    // public Form page itself is at its 100-row maximum.
+    const rows = await this.db
+      .prepare(
+        `select record_json from ${names.serviceFormPackages}
+         where package_digest in (select value from json_each(?))`,
+      )
+      .bind(JSON.stringify(unique))
+      .all<JsonRow>();
+    const byDigest = new Map(
+      (rows.results ?? []).map((row) => {
+        const record = decode<FormPackageRecord>(row.record_json);
+        return [record.packageDigest, record] as const;
+      }),
+    );
+    return packageDigests.flatMap((packageDigest) => {
+      const record = byDigest.get(packageDigest);
+      return record === undefined ? [] : [structuredClone(record)];
+    });
+  }
+
   async listPackages(params: PageParams): Promise<Page<FormPackageRecord>> {
     const limit = clampPageLimit(params.limit);
     const cursor = decodeCursor(params.cursor);
@@ -261,6 +290,27 @@ export class D1FormRegistryStore implements FormRegistryStore {
       .bind(id)
       .first<JsonRow>();
     return decodeOptional<FormActivationRecord>(row);
+  }
+
+  async getActivationsForForms(
+    formRefs: readonly FormRef[],
+  ): Promise<readonly FormActivationRecord[]> {
+    const keys = [...new Set(formRefs.map(formRefKey))];
+    if (keys.length === 0) return [];
+    if (keys.length > 100) {
+      throw new RangeError("Form activation bulk read accepts at most 100 FormRefs");
+    }
+    const rows = await this.db
+      .prepare(
+        `select record_json from ${names.serviceFormActivations}
+         where form_ref_key in (select value from json_each(?))
+         order by updated_at asc, id asc limit 10000`,
+      )
+      .bind(JSON.stringify(keys))
+      .all<JsonRow>();
+    return (rows.results ?? []).map((row) =>
+      decode<FormActivationRecord>(row.record_json),
+    );
   }
 
   async listActivations(

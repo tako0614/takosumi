@@ -418,6 +418,20 @@ function ensureBootstrapD1SchemaReady(db: D1Database): Promise<void> {
 }
 
 /**
+ * Establish immutable schema readiness at the cached service-composition
+ * boundary, before any request-scoped operation deadline starts. Maintenance
+ * admission intentionally remains request-local in the store.
+ */
+export function initializeD1OpenTofuLedgerSchemaBinding(
+  db: D1Database,
+  schemaMode: D1OpenTofuControlSchemaMode,
+): Promise<void> {
+  return schemaMode === "predeployed"
+    ? ensurePredeployedD1SchemaReady(db)
+    : ensureBootstrapD1SchemaReady(db);
+}
+
+/**
  * Admission evidence owned by one request-scoped store.
  *
  * The scope is deliberately not exported or accepted by the public

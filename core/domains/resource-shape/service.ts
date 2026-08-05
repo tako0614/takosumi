@@ -291,7 +291,13 @@ export interface ResourceShapeServiceDeps {
   readonly formRegistry?: {
     getDefinition(formRef: FormRef): Promise<FormDefinition | undefined>;
     getPackage(packageDigest: string): Promise<FormPackage | undefined>;
+    getPackages(
+      packageDigests: readonly string[],
+    ): Promise<readonly FormPackage[]>;
     getActivation?(id: string): Promise<FormActivation | undefined>;
+    getActivationsForForms(
+      formRefs: readonly FormRef[],
+    ): Promise<readonly FormActivation[]>;
     listDefinitions?(params?: PageParams): Promise<Page<FormDefinition>>;
     listActivations?(params?: PageParams): Promise<Page<FormActivation>>;
   };
@@ -755,7 +761,44 @@ export class ResourceShapeService {
     readonly identity?: InstalledFormReference;
     readonly page?: PageParams;
   }): Promise<Page<FormAvailability>> {
+    // Preserve the zero-form public API fast path. The Workspace view calls
+    // readFormAvailability directly because it also needs hasTargetPool.
     if (!this.#formRegistry && !input.identity) return { items: [] };
+    return (await this.readFormAvailability(input)).forms;
+  }
+
+  /**
+   * Operation-shaped discovery read shared by the resources view. Durable
+   * Form package/activation evidence is bulk-read once per bounded definition
+   * page; TargetPool evidence also supplies the view's private boolean without
+   * repeating that query.
+   */
+  async readFormAvailability(input: {
+    readonly actor: ActorContext;
+    readonly space: SpaceId;
+    readonly identity?: InstalledFormReference;
+    readonly page?: PageParams;
+    readonly includeForms?: boolean;
+  }): Promise<{
+    readonly forms: Page<FormAvailability>;
+    readonly hasTargetPool: boolean;
+  }> {
+    const needsFormEvidence =
+      input.includeForms !== false &&
+      (this.#formRegistry !== undefined || input.identity !== undefined);
+    const poolsPromise = needsFormEvidence
+      ? this.#stores.targetPools.listBySpace(input.space)
+      : this.#stores.targetPools
+          .listBySpacePage(input.space, { limit: 1 })
+          .then((page) => page.items);
+    if (input.includeForms === false) {
+      const pools = await poolsPromise;
+      return { forms: { items: [] }, hasTargetPool: pools.length > 0 };
+    }
+    if (!this.#formRegistry && !input.identity) {
+      const pools = await poolsPromise;
+      return { forms: { items: [] }, hasTargetPool: pools.length > 0 };
+    }
     const definitions = input.identity
       ? {
           items: [
@@ -768,8 +811,23 @@ export class ResourceShapeService {
       : this.#formRegistry?.listDefinitions
         ? await this.#formRegistry.listDefinitions(input.page ?? {})
         : { items: [], nextCursor: undefined };
-    const activations = await this.#allFormActivations();
-    const pools = await this.#stores.targetPools.listBySpace(input.space);
+    const identities = input.identity
+      ? [input.identity]
+      : definitions.items.flatMap((definition) =>
+          definition === undefined ? [] : [definition.identity],
+        );
+    const [activations, packages, pools] = await Promise.all([
+      this.#formRegistry?.getActivationsForForms(
+        identities.map(formRefOfInstalled),
+      ) ?? [],
+      this.#formRegistry?.getPackages(
+        identities.map((identity) => identity.packageDigest),
+      ) ?? [],
+      poolsPromise,
+    ]);
+    const packagesByDigest = new Map(
+      packages.map((formPackage) => [formPackage.packageDigest, formPackage]),
+    );
     const items = await Promise.all(
       definitions.items.map((definition) =>
         this.#formAvailabilityFor({
@@ -783,12 +841,20 @@ export class ResourceShapeService {
           definition,
           activations,
           pools,
+          packageRecord: packagesByDigest.get(
+            (input.identity ?? definition!.identity).packageDigest,
+          ),
         }),
       ),
     );
     return {
-      items,
-      ...(definitions.nextCursor ? { nextCursor: definitions.nextCursor } : {}),
+      forms: {
+        items,
+        ...(definitions.nextCursor
+          ? { nextCursor: definitions.nextCursor }
+          : {}),
+      },
+      hasTargetPool: pools.length > 0,
     };
   }
 
@@ -860,8 +926,9 @@ export class ResourceShapeService {
     readonly availability: FormAvailability;
     readonly evidenceFingerprint: string;
   }> {
-    const [definition, activation, pools] = await Promise.all([
+    const [definition, packageRecord, activation, pools] = await Promise.all([
       this.#formRegistry?.getDefinition(formRefOfInstalled(input.identity)),
+      this.#formRegistry?.getPackage(input.identity.packageDigest),
       this.#formRegistry?.getActivation?.(input.activationId),
       this.#stores.targetPools.listBySpace(input.space),
     ]);
@@ -870,6 +937,7 @@ export class ResourceShapeService {
       space: input.space,
       identity: input.identity,
       definition,
+      packageRecord,
       activations: activation ? [activation] : [],
       pools,
     });
@@ -6519,30 +6587,12 @@ export class ResourceShapeService {
     return current ? cloneImplementationDescriptor(current) : undefined;
   }
 
-  async #allFormActivations(): Promise<readonly FormActivation[]> {
-    if (!this.#formRegistry?.listActivations) return [];
-    const result: FormActivation[] = [];
-    let cursor: string | undefined;
-    // Cursor traversal is bounded to keep discovery from becoming an
-    // unbounded operator-table scan. Truncation fails closed (it can only
-    // hide an activation, never grant one).
-    for (let pageIndex = 0; pageIndex < 100; pageIndex += 1) {
-      const page = await this.#formRegistry.listActivations({
-        limit: 100,
-        ...(cursor ? { cursor } : {}),
-      });
-      result.push(...page.items);
-      if (!page.nextCursor) break;
-      cursor = page.nextCursor;
-    }
-    return result;
-  }
-
   async #formAvailabilityFor(input: {
     readonly actor: ActorContext;
     readonly space: SpaceId;
     readonly identity: InstalledFormReference;
     readonly definition: FormDefinition | undefined;
+    readonly packageRecord: FormPackage | undefined;
     readonly activations: readonly FormActivation[];
     readonly pools: readonly TargetPoolRecord[];
   }): Promise<FormAvailability> {
@@ -6550,9 +6600,7 @@ export class ResourceShapeService {
       input.definition !== undefined &&
       installedFormReferenceKey(input.definition.identity) ===
         installedFormReferenceKey(input.identity);
-    const packageRecord = await this.#formRegistry?.getPackage(
-      input.identity.packageDigest,
-    );
+    const packageRecord = input.packageRecord;
     const packageMatches = Boolean(
       definitionKnown &&
       packageRecord &&

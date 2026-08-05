@@ -1128,6 +1128,9 @@ function exactFormRegistry(
         : undefined,
     getPackage: async (packageDigest) =>
       packageDigest === identity.packageDigest ? formPackage : undefined,
+    getPackages: async (packageDigests) =>
+      packageDigests.includes(identity.packageDigest) ? [formPackage] : [],
+    getActivationsForForms: async () => [],
   };
 }
 
@@ -1151,6 +1154,9 @@ function readableFormRegistry(
         : undefined,
     getPackage: async (digest) =>
       digest === formPackage.packageDigest ? formPackage : undefined,
+    getPackages: async (digests) =>
+      digests.includes(formPackage.packageDigest) ? [formPackage] : [],
+    getActivationsForForms: async () => [],
   };
 }
 
@@ -1169,6 +1175,64 @@ function readableFormService(
   service.listFormAvailability = list;
   return service;
 }
+
+test("Form availability bulk-reads package evidence once per bounded page", async () => {
+  const identities = [EXACT_FORM, EXACT_EDGE_WORKER_FORM];
+  const definitions: readonly FormDefinition[] = identities.map((identity) => ({
+    identity,
+    operations: ["create", "read"],
+    installedAt: NOW,
+  }));
+  const packages: readonly FormPackage[] = identities.map((identity) => ({
+    packageDigest: identity.packageDigest,
+    artifactRef: `oci://forms.example/${identity.type}@${identity.packageDigest}`,
+    verifierId: "test-verifier",
+    status: "installed",
+    definitionRefs: [formRefOf(identity)],
+    installedAt: NOW,
+    installedBy: "test",
+    updatedAt: NOW,
+  }));
+  let singlePackageReads = 0;
+  let bulkPackageReads = 0;
+  const service = new ResourceShapeService({
+    stores: createInMemoryResourceShapeStores(),
+    adapter: new StubResourceShapeAdapter(),
+    ...directOperationLedger(),
+    now: () => NOW,
+    formRegistry: {
+      getDefinition: async () => undefined,
+      getPackage: async (packageDigest) => {
+        singlePackageReads += 1;
+        return packages.find(
+          (formPackage) => formPackage.packageDigest === packageDigest,
+        );
+      },
+      getPackages: async (packageDigests) => {
+        bulkPackageReads += 1;
+        return packageDigests.flatMap((packageDigest) => {
+          const record = packages.find(
+            (formPackage) => formPackage.packageDigest === packageDigest,
+          );
+          return record ? [record] : [];
+        });
+      },
+      getActivationsForForms: async () => [],
+      listDefinitions: async () => ({ items: definitions }),
+      listActivations: async () => ({ items: [] }),
+    },
+  });
+
+  const availability = await service.listFormAvailability({
+    actor: ACTOR,
+    space: "space_1",
+    page: { limit: 100 },
+  });
+
+  expect(availability.items.map((item) => item.form)).toEqual(identities);
+  expect(bulkPackageReads).toBe(1);
+  expect(singlePackageReads).toBe(0);
+});
 
 test("principal-readable Form Definition reuses exact availability evidence", async () => {
   const definition: FormDefinition = {

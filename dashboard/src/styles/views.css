@@ -154,6 +154,22 @@
   gap: var(--tg-s-2);
 }
 
+.rs-pagination-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--tg-s-3);
+  flex-wrap: wrap;
+  padding-top: var(--tg-s-3);
+  border-top: 1px solid var(--tg-line);
+}
+
+.rs-pagination-actions > span {
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-sm);
+  text-align: center;
+}
+
 .rs-platform-advanced {
   overflow: hidden;
   border: 1px solid var(--tg-line);
@@ -778,6 +794,15 @@
 
   .rs-available-types {
     flex-direction: column;
+  }
+
+  .rs-pagination-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .rs-pagination-actions > .tg-btn {
+    width: 100%;
   }
 
   .rs-form-grid,
