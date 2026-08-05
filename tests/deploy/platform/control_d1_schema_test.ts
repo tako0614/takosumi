@@ -2215,6 +2215,31 @@ test("control D1 CLI releases only the exact retained in-place fence", async () 
     expect(await readControlD1MaintenanceState(database)).toEqual({
       status: "inactive",
     });
+    const retryOutput: string[] = [];
+    const retryCode = await runControlD1SchemaCli(
+      [
+        "release",
+        "--environment",
+        "staging",
+        "--confirm-manifest",
+        plan.manifestDigest,
+      ],
+      {},
+      (value) => retryOutput.push(value),
+      {
+        ...dependencies,
+        now: () => "2026-08-05T12:00:10.000Z",
+      },
+    );
+    expect(retryCode).toBe(0);
+    expect(JSON.parse(retryOutput.at(-1) ?? "{}")).toMatchObject({
+      mode: "release",
+      status: "released",
+      maintenanceStatus: "released",
+      maintenanceFence: {
+        fenceId: freezeTranscript.maintenanceFence.fenceId,
+      },
+    });
   } finally {
     database.close();
   }

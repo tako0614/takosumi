@@ -163,6 +163,24 @@ export async function readControlD1MaintenanceState(
   return await controlD1MaintenanceStateFromRow(row);
 }
 
+/**
+ * Read the immutable identity retained by an already-released fence. This is
+ * deliberately separate from the request-path state so inactive still means
+ * only that writes are open, while release tooling can reconcile a lost
+ * acknowledgement without guessing which fence was removed.
+ */
+export async function readControlD1MaintenanceReleaseReceipt(
+  db: D1Database,
+): Promise<ControlD1MaintenanceFence | null> {
+  const state = await readControlD1MaintenanceState(db);
+  if (state.status !== "inactive") return null;
+  const row = await readMaintenanceRow(db);
+  if (!row) {
+    throw new ControlD1MaintenanceError("maintenance_fence_invalid");
+  }
+  return maintenanceFenceFromRow(row);
+}
+
 async function controlD1MaintenanceStateFromRow(
   row: ControlD1MaintenanceRow | null,
 ): Promise<Exclude<ControlD1MaintenanceState, { readonly status: "absent" }>> {
@@ -181,18 +199,7 @@ async function controlD1MaintenanceStateFromRow(
   if (active === 1 && bypass === 0 && row.released_at === null) {
     return {
       status: "active",
-      fence: {
-        fenceId: row.fence_id,
-        sourceCommit: row.source_commit,
-        manifestDigest: row.manifest_digest,
-        environment: row.environment,
-        activatedAt: row.activated_at,
-        databaseRole: databaseRole(row.database_role),
-        releasePolicy: releasePolicy(row.release_policy),
-        databaseId: row.database_id,
-        sourceExportSha256: row.source_export_sha256,
-        predecessor: maintenancePredecessor(row),
-      },
+      fence: maintenanceFenceFromRow(row),
     };
   }
   throw new ControlD1MaintenanceError("maintenance_fence_invalid");
@@ -289,18 +296,7 @@ export async function acquireControlD1MaintenanceFence(
   ) {
     throw new ControlD1MaintenanceError("maintenance_fence_occupied");
   }
-  return {
-    fenceId,
-    sourceCommit: row.source_commit,
-    manifestDigest: row.manifest_digest,
-    environment: row.environment,
-    activatedAt: row.activated_at,
-    databaseRole: databaseRole(row.database_role),
-    releasePolicy: releasePolicy(row.release_policy),
-    databaseId: row.database_id,
-    sourceExportSha256: row.source_export_sha256,
-    predecessor: maintenancePredecessor(row),
-  };
+  return maintenanceFenceFromRow(row);
 }
 
 /**
@@ -763,6 +759,23 @@ function maintenancePredecessor(
     fenceId: row.predecessor_fence_id,
     sourceCommit: row.predecessor_source_commit,
     manifestDigest: row.predecessor_manifest_digest,
+  };
+}
+
+function maintenanceFenceFromRow(
+  row: ControlD1MaintenanceRow,
+): ControlD1MaintenanceFence {
+  return {
+    fenceId: row.fence_id,
+    sourceCommit: row.source_commit,
+    manifestDigest: row.manifest_digest,
+    environment: row.environment,
+    activatedAt: row.activated_at,
+    databaseRole: databaseRole(row.database_role),
+    releasePolicy: releasePolicy(row.release_policy),
+    databaseId: row.database_id,
+    sourceExportSha256: row.source_export_sha256,
+    predecessor: maintenancePredecessor(row),
   };
 }
 

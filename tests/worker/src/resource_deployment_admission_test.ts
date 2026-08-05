@@ -22,6 +22,9 @@ const admission: ResourceDeploymentAdmission = {
   async admitImport() {
     return { reasons: [] };
   },
+  async authorizeRetirement() {
+    return { authorizationId: "retirement_1" };
+  },
   async retire() {},
 };
 
@@ -49,6 +52,6 @@ describe("Resource deployment admission Worker composition", () => {
           release: admission.release,
         }),
       ),
-    ).toThrow("release(), admitImport(), and retire()");
+    ).toThrow("release(), admitImport(), authorizeRetirement(), and retire()");
   });
 });

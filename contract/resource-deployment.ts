@@ -11,7 +11,7 @@
  */
 
 import type { NativeResourceRef } from "./resolution.ts";
-import type { ResourceShapeKind } from "./resource-shape.ts";
+import type { ResourceOwner, ResourceShapeKind } from "./resource-shape.ts";
 import type { InstalledFormReference } from "./service-forms.ts";
 import type { ActorContext, JsonObject, JsonValue } from "./types.ts";
 import type { UsageRatingStatus } from "./billing.ts";
@@ -138,19 +138,46 @@ export interface ResourceDeploymentImportContext {
   readonly now: string;
 }
 
-/**
- * Idempotent host notification for canonical retirement. A force tombstone
- * does not prove backend absence and therefore must retain host capacity until
- * a later explicit operator release supplies that proof.
- */
-export interface ResourceDeploymentRetireContext {
-  readonly space: string;
+/** Exact canonical incarnation that is allowed to retire host-owned state. */
+export interface ResourceDeploymentRetirementIncarnation {
+  readonly workspaceId: string;
   readonly resourceId: string;
+  readonly resourceGeneration: number;
+  /** Present on current rows; omitted only for a legacy row without a CAS revision. */
+  readonly resourceRevision?: number;
+  /** Authenticated canonical owner, when the Resource has one. */
+  readonly resourceOwner?: ResourceOwner;
+}
+
+/** Opaque, host-minted durable authority for one exact retirement attempt. */
+export interface ResourceDeploymentRetirementAuthorization {
+  readonly authorizationId: string;
+}
+
+/**
+ * Exact input used to mint retirement authority while the canonical Resource
+ * still exists. Hosts must bind the returned authorization to the exact
+ * incarnation, owner, kind/name, and reason. `now` records the first durable
+ * authorization time and is not a new identity on retry.
+ */
+export interface ResourceDeploymentRetirementAuthorizationContext extends ResourceDeploymentRetirementIncarnation {
   readonly kind: ResourceShapeKind;
   readonly name: string;
   readonly reason:
     "canonical_delete" | "force_tombstone" | "force_tombstone_cancelled";
   readonly now: string;
+}
+
+/**
+ * Idempotent host notification for canonical retirement. The authorization is
+ * minted while the exact Resource row is still present and consumed by this
+ * call. A legacy absent/remove-first caller has no authorization and must fail
+ * closed. A force tombstone does not prove backend absence and therefore must
+ * retain host capacity until a later explicit operator release supplies that
+ * proof.
+ */
+export interface ResourceDeploymentRetireContext extends ResourceDeploymentRetirementAuthorizationContext {
+  readonly authorization: ResourceDeploymentRetirementAuthorization;
 }
 
 export interface ResourceDeploymentReservationDecision extends ResourceDeploymentAdmissionDecision {
@@ -216,6 +243,14 @@ export interface ResourceDeploymentAdmission {
     context: ResourceDeploymentImportContext,
   ): Promise<ResourceDeploymentAdmissionDecision>;
   /**
+   * Mints exact, durable retirement authority while the canonical Resource is
+   * still the identity fence. Repeating the same request returns the same
+   * authority; stale incarnation evidence must fail closed.
+   */
+  authorizeRetirement(
+    context: ResourceDeploymentRetirementAuthorizationContext,
+  ): Promise<ResourceDeploymentRetirementAuthorization>;
+  /**
    * Retires host-owned lifecycle capacity before canonical Resource removal.
    * The exact live Resource remains the identity fence until this idempotent
    * hook succeeds. A force tombstone must instead retain capacity until an
@@ -238,6 +273,9 @@ export const NOOP_RESOURCE_DEPLOYMENT_ADMISSION: ResourceDeploymentAdmission = {
   async release(): Promise<void> {},
   async admitImport(): Promise<ResourceDeploymentAdmissionDecision> {
     return { reasons: [] };
+  },
+  async authorizeRetirement(): Promise<ResourceDeploymentRetirementAuthorization> {
+    return { authorizationId: "oss-noop-retirement" };
   },
   async retire(): Promise<void> {},
 };

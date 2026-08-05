@@ -4745,9 +4745,7 @@ export class ResourceShapeService {
       // retain its capacity record before deleting the last canonical row, so
       // an absent-resource normal retry can never release it blindly.
       const retained = await this.#retireResourceDeployment(
-        space,
-        kind,
-        name,
+        record,
         "force_tombstone",
       );
       if (!retained.ok) return retained;
@@ -4777,9 +4775,7 @@ export class ResourceShapeService {
           removed = { status: "removed" } as const;
         } else {
           const restored = await this.#retireResourceDeployment(
-            space,
-            kind,
-            name,
+            record,
             "force_tombstone_cancelled",
           );
           if (!restored.ok) return restored;
@@ -4794,9 +4790,7 @@ export class ResourceShapeService {
       }
       if (removed.status === "conflict") {
         const restored = await this.#retireResourceDeployment(
-          space,
-          kind,
-          name,
+          record,
           "force_tombstone_cancelled",
         );
         if (!restored.ok) return restored;
@@ -4865,9 +4859,7 @@ export class ResourceShapeService {
         resourceId: id,
       });
       const retired = await this.#retireResourceDeployment(
-        space,
-        kind,
-        name,
+        record,
         "canonical_delete",
       );
       if (!retired.ok) return retired;
@@ -5476,9 +5468,7 @@ export class ResourceShapeService {
     }
 
     const retired = await this.#retireResourceDeployment(
-      space,
-      kind,
-      name,
+      claimedRecord,
       "canonical_delete",
     );
     if (!retired.ok) return retired;
@@ -5577,21 +5567,33 @@ export class ResourceShapeService {
   // --- internals --------------------------------------------------------------
 
   async #retireResourceDeployment(
-    space: SpaceId,
-    kind: ResourceShapeKind,
-    name: string,
+    record: ResourceShapeRecord,
     reason:
       "canonical_delete" | "force_tombstone" | "force_tombstone_cancelled",
   ): Promise<ServiceResult<void>> {
-    const resourceId = formatResourceShapeId(space, kind, name);
+    const resourceId = record.id;
+    const context = {
+      workspaceId: record.spaceId,
+      resourceId,
+      resourceGeneration: record.generation,
+      ...(record.revision !== undefined
+        ? { resourceRevision: record.revision }
+        : {}),
+      ...(record.owner !== undefined ? { resourceOwner: record.owner } : {}),
+      kind: record.kind,
+      name: record.name,
+      reason,
+      now: this.#now(),
+    } as const;
     try {
+      // This must run while `record` is still the canonical row. A host can
+      // now reject every pre-contract remove-first caller because it has no
+      // exact durable authorization to consume.
+      const authorization =
+        await this.#deploymentAdmission.authorizeRetirement(context);
       await this.#deploymentAdmission.retire({
-        space,
-        resourceId,
-        kind,
-        name,
-        reason,
-        now: this.#now(),
+        ...context,
+        authorization,
       });
       return { ok: true, value: undefined };
     } catch (error) {

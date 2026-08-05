@@ -15,6 +15,7 @@ import type {
   ResourceDeploymentReleaseContext,
   ResourceDeploymentReserveContext,
   ResourceDeploymentReservationDecision,
+  ResourceDeploymentRetirementAuthorizationContext,
   ResourceDeploymentRetireContext,
   ResourceDeploymentReview,
   ResourceDeploymentSettlementPendingContext,
@@ -859,7 +860,10 @@ class RecordingDeploymentAdmission implements ResourceDeploymentAdmission {
     [];
   readonly releaseContexts: ResourceDeploymentReleaseContext[] = [];
   readonly importContexts: ResourceDeploymentImportContext[] = [];
+  readonly retirementAuthorizationContexts: ResourceDeploymentRetirementAuthorizationContext[] =
+    [];
   readonly retireContexts: ResourceDeploymentRetireContext[] = [];
+  readonly #retirementAuthorizations = new Map<string, string>();
   lastQuote: ResourceDeploymentQuote | undefined;
   failCapture = false;
   failSettlementPending = false;
@@ -929,6 +933,19 @@ class RecordingDeploymentAdmission implements ResourceDeploymentAdmission {
   ): Promise<ResourceDeploymentAdmissionDecision> {
     this.importContexts.push(context);
     return { reasons: this.importReasons };
+  }
+
+  async authorizeRetirement(
+    context: ResourceDeploymentRetirementAuthorizationContext,
+  ): Promise<{ readonly authorizationId: string }> {
+    this.retirementAuthorizationContexts.push(context);
+    const key = JSON.stringify(context);
+    let authorizationId = this.#retirementAuthorizations.get(key);
+    if (!authorizationId) {
+      authorizationId = `retirement_${this.#retirementAuthorizations.size + 1}`;
+      this.#retirementAuthorizations.set(key, authorizationId);
+    }
+    return { authorizationId };
   }
 
   async retire(context: ResourceDeploymentRetireContext): Promise<void> {
@@ -3526,12 +3543,15 @@ test("failed import remains a ledger-only removable record", async () => {
   expect(adapter.deleteInputs).toHaveLength(0);
   expect(admission.retireContexts).toEqual([
     {
-      space: "space_1",
+      workspaceId: "space_1",
       resourceId: APPLY_ID,
+      resourceGeneration: 1,
+      resourceRevision: 1,
       kind: "ObjectBucket",
       name: "assets",
       reason: "canonical_delete",
       now: NOW,
+      authorization: { authorizationId: "retirement_1" },
     },
   ]);
 });
@@ -7105,20 +7125,26 @@ test("normal delete retires the host before removing the Resource and replays ab
   expect(adapter.deleteInputs).toHaveLength(2);
   expect(admission.retireContexts).toEqual([
     {
-      space: "space_1",
+      workspaceId: "space_1",
       resourceId: APPLY_ID,
+      resourceGeneration: 1,
+      resourceRevision: 2,
       kind: "ObjectBucket",
       name: "assets",
       reason: "canonical_delete",
       now: NOW,
+      authorization: { authorizationId: "retirement_1" },
     },
     {
-      space: "space_1",
+      workspaceId: "space_1",
       resourceId: APPLY_ID,
+      resourceGeneration: 1,
+      resourceRevision: 2,
       kind: "ObjectBucket",
       name: "assets",
       reason: "canonical_delete",
       now: NOW,
+      authorization: { authorizationId: "retirement_1" },
     },
   ]);
 
@@ -7263,12 +7289,15 @@ test("force delete tombstones a failed resource without re-entering the adapter"
   expect(adapter.deleteInputs).toHaveLength(1);
   expect(admission.retireContexts).toEqual([
     {
-      space: "space_1",
+      workspaceId: "space_1",
       resourceId: APPLY_ID,
+      resourceGeneration: 1,
+      resourceRevision: 3,
       kind: "ObjectBucket",
       name: "assets",
       reason: "force_tombstone",
       now: NOW,
+      authorization: { authorizationId: "retirement_1" },
     },
   ]);
   expect(await stores.locks.get("tkrn:space_1:ObjectBucket:assets")).toBe(

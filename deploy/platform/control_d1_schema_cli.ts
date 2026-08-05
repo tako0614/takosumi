@@ -12,6 +12,7 @@ import {
 import {
   ControlD1MaintenanceError,
   releaseControlD1MaintenanceFence,
+  readControlD1MaintenanceReleaseReceipt,
   readControlD1MaintenanceState,
   type ControlD1MaintenanceFence,
 } from "../../worker/src/d1_schema_maintenance.ts";
@@ -186,23 +187,27 @@ export async function runControlD1SchemaCli(
 
     if (args.command === "release") {
       const state = await readControlD1MaintenanceState(remote.database);
+      const fence =
+        state.status === "active"
+          ? state.fence
+          : await readControlD1MaintenanceReleaseReceipt(remote.database);
       if (
-        state.status !== "active" ||
-        state.fence.sourceCommit !== provenance.sourceCommit ||
-        state.fence.manifestDigest !== plan.manifestDigest ||
-        state.fence.environment !== args.environment ||
-        state.fence.databaseRole !== "in_place" ||
-        state.fence.releasePolicy !== "in_place" ||
-        state.fence.databaseId !== (remote.databaseId ?? null) ||
-        state.fence.sourceExportSha256 !== null
+        !fenceMatchesRelease(fence, {
+          sourceCommit: provenance.sourceCommit,
+          manifestDigest: plan.manifestDigest,
+          environment: args.environment,
+          databaseId: remote.databaseId ?? null,
+        })
       ) {
         throw new ControlD1SchemaError("maintenance_fence_release_mismatch");
       }
-      await releaseControlD1MaintenanceFence(
-        remote.database,
-        state.fence,
-        provenance.generatedAt,
-      );
+      if (state.status === "active") {
+        await releaseControlD1MaintenanceFence(
+          remote.database,
+          fence,
+          provenance.generatedAt,
+        );
+      }
       const released = await readControlD1MaintenanceState(remote.database);
       if (released.status !== "inactive") {
         throw new ControlD1SchemaError("maintenance_fence_release_failed");
@@ -218,7 +223,7 @@ export async function runControlD1SchemaCli(
             ...provenance,
             ...planSummary(plan),
             configurationDigest: remote.configurationDigest,
-            maintenanceFence: state.fence,
+            maintenanceFence: fence,
             maintenanceStatus: "released",
           },
           null,
@@ -323,6 +328,27 @@ export async function runControlD1SchemaCli(
     );
     return 1;
   }
+}
+
+function fenceMatchesRelease(
+  fence: ControlD1MaintenanceFence | null,
+  expected: {
+    readonly sourceCommit: string;
+    readonly manifestDigest: string;
+    readonly environment: Environment;
+    readonly databaseId: string | null;
+  },
+): fence is ControlD1MaintenanceFence {
+  return Boolean(
+    fence &&
+    fence.sourceCommit === expected.sourceCommit &&
+    fence.manifestDigest === expected.manifestDigest &&
+    fence.environment === expected.environment &&
+    fence.databaseRole === "in_place" &&
+    fence.releasePolicy === "in_place" &&
+    fence.databaseId === expected.databaseId &&
+    fence.sourceExportSha256 === null,
+  );
 }
 
 function fenceTranscript(input: {
