@@ -204,21 +204,23 @@ export function platformResourceCapsuleOwnerResolver(
       (!mutationNeedsApply &&
         !mutationNeedsDestroy &&
         context.phase !== "plan" &&
-        context.phase !== "apply")
+        context.phase !== "apply" &&
+        context.phase !== "destroy")
     ) {
       throw new ResourceCapsuleOwnerAuthorityError();
     }
+    let destroyLifecycleAuthority = false;
     if (context.phase === "plan") {
       const run = await store.getPlanRun(context.runId);
       if (
         !run ||
         run.status !== "running" ||
         run.workspaceId !== context.workspaceId ||
-        run.capsuleId !== context.capsuleId ||
-        run.operation === "destroy"
+        run.capsuleId !== context.capsuleId
       ) {
         throw new ResourceCapsuleOwnerAuthorityError();
       }
+      destroyLifecycleAuthority = run.operation === "destroy";
     } else {
       const run = await store.getApplyRun(context.runId);
       if (
@@ -226,19 +228,18 @@ export function platformResourceCapsuleOwnerResolver(
         run.status !== "running" ||
         run.workspaceId !== context.workspaceId ||
         run.capsuleId !== context.capsuleId ||
-        (mutationNeedsDestroy
-          ? run.operation !== "destroy"
-          : run.operation === "destroy")
+        (run.operation === "destroy") !== (context.phase === "destroy")
       ) {
         throw new ResourceCapsuleOwnerAuthorityError();
       }
+      destroyLifecycleAuthority = run.operation === "destroy";
     }
     const runtimeSafety = await store.getCapsuleRuntimeSafety(
       context.capsuleId,
     );
     if (
       runtimeSafety?.phase === "retired" ||
-      (runtimeSafety?.phase === "terminating" && !mutationNeedsDestroy)
+      (runtimeSafety?.phase === "terminating" && !destroyLifecycleAuthority)
     ) {
       throw new ResourceCapsuleOwnerAuthorityError();
     }
