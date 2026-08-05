@@ -426,6 +426,40 @@ test("account-plane hostname errors redact owner details by structured reason", 
   expect(JSON.stringify(body)).not.toContain("private-ws");
 });
 
+test("no-state Capsule DELETE fails closed without the safe abandon operation", async () => {
+  const fixture = operationsFixture();
+  let statusPatches = 0;
+  const operations = {
+    ...fixture.operations,
+    capsules: {
+      ...fixture.operations.capsules,
+      patchCapsuleStatus: async () => {
+        statusPatches += 1;
+        return await fixture.operations.capsules.getCapsule("cap_1");
+      },
+    },
+  } as ControlPlaneOperations;
+  const request = new Request(
+    "https://app.example.test/api/v1/capsules/cap_1",
+    { method: "DELETE" },
+  );
+
+  const response = await handleCapsules(
+    context(operations, request),
+    ["capsules", "cap_1"],
+    "DELETE",
+  ).catch(controllerErrorResponse);
+
+  expect(response?.status).toBe(409);
+  expect(await response?.json()).toMatchObject({
+    error: {
+      code: "failed_precondition",
+      details: { reason: "capsule_owned_resources_pending" },
+    },
+  });
+  expect(statusPatches).toBe(0);
+});
+
 function operationsFixture() {
   const projects: Array<{
     id: string;

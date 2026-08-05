@@ -10,10 +10,7 @@ import type {
   ResourceManagedBy,
   ResourceShapeKind,
 } from "takosumi-contract";
-import {
-  isResourceCapsuleOwner,
-  shapeKindForPortableType,
-} from "takosumi-contract";
+import { shapeKindForPortableType } from "takosumi-contract";
 import {
   pageSorted,
   type Page,
@@ -261,12 +258,14 @@ export interface ResourceShapeStore {
     params: PageParams,
   ): Promise<Page<ResourceShapeRecord>>;
   /**
-   * Bounded exact inventory for one authenticated Capsule owner. This reads
-   * every Resource phase (including Applying, Deleting, and Failed) and only
-   * accepts the structured owner whose Workspace and Capsule both match the
-   * requested scope. The page cursor is the underlying Workspace keyset: a
-   * filtered page may contain fewer rows than `limit` (or no rows), so callers
-   * must continue while `nextCursor` is present to prove completeness.
+   * Bounded exact claim inventory for one Capsule id in a Workspace. This
+   * reads every Resource phase (including Applying, Deleting, and Failed) and
+   * deliberately preserves malformed or Workspace-mismatched owner objects
+   * whose `id` claims the requested Capsule. The host must validate the full
+   * structured owner and installing Principal and fail closed on mismatch.
+   * The page cursor is the underlying Workspace keyset: a filtered page may
+   * contain fewer rows than `limit` (or no rows), so callers must continue
+   * while `nextCursor` is present to prove completeness.
    */
   listByCapsuleOwnerPage(
     spaceId: SpaceId,
@@ -1753,7 +1752,7 @@ function compareCreatedAtAndId(
   );
 }
 
-/** Apply the exact structured Capsule owner fence to one bounded source page. */
+/** Preserve every exact Capsule-id claim so its full owner can be validated. */
 export function filterCapsuleOwnerPage(
   page: Page<ResourceShapeRecord>,
   spaceId: SpaceId,
@@ -1761,12 +1760,13 @@ export function filterCapsuleOwnerPage(
 ): Page<ResourceShapeRecord> {
   return {
     items: page.items.filter((record) => {
-      const owner = record.owner;
+      const owner: unknown = record.owner;
       return (
         record.spaceId === spaceId &&
-        isResourceCapsuleOwner(owner) &&
-        owner.workspaceId === spaceId &&
-        owner.id === capsuleId
+        owner !== null &&
+        typeof owner === "object" &&
+        !Array.isArray(owner) &&
+        (owner as { readonly id?: unknown }).id === capsuleId
       );
     }),
     ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),

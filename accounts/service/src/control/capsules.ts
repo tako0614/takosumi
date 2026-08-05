@@ -145,9 +145,13 @@ import {
   stringRecordValue,
 } from "./parse.ts";
 import {
+  CAPSULE_OWNED_RESOURCES_PENDING_REASON,
+} from "../../../../core/domains/capsules/mod.ts";
+import {
   DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
   defaultCapsuleOutputAllowlist,
 } from "../../../../core/domains/capsules/default_install_config.ts";
+import { OpenTofuControllerError } from "../../../../core/domains/deploy-control/errors.ts";
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import { decodeCursor, pageSorted } from "takosumi-contract/pagination";
 import { base64UrlEncodeBytes } from "../encoding.ts";
@@ -460,16 +464,19 @@ async function abandonUnappliedCapsule(input: {
   readonly capsule: Capsule;
   readonly reason: string;
 }): Promise<Response> {
-  const capsule =
-    input.operations.capsules.abandonUnappliedCapsule !== undefined
-      ? await input.operations.capsules.abandonUnappliedCapsule(
-          input.capsule.id,
-          input.reason,
-        )
-      : await input.operations.capsules.patchCapsuleStatus(
-          input.capsule.id,
-          "destroyed",
-        );
+  const abandon = input.operations.capsules.abandonUnappliedCapsule;
+  if (typeof abandon !== "function") {
+    throw new OpenTofuControllerError(
+      "failed_precondition",
+      `capsule ${input.capsule.id} Resource ownership could not be verified`,
+      { reason: CAPSULE_OWNED_RESOURCES_PENDING_REASON },
+    );
+  }
+  const capsule = await abandon.call(
+    input.operations.capsules,
+    input.capsule.id,
+    input.reason,
+  );
   return jsonStatus(
     {
       capsule: publicCapsule(capsule),

@@ -396,7 +396,7 @@ export interface ControlPlaneOperations {
     ): Promise<Page<InstallConfig>>;
     patchCapsuleStatus(id: string, status: Capsule["status"]): Promise<Capsule>;
     setCapsuleAutoUpdate(id: string, enabled: boolean): Promise<Capsule>;
-    abandonUnappliedCapsule?(id: string, reason: string): Promise<Capsule>;
+    abandonUnappliedCapsule(id: string, reason: string): Promise<Capsule>;
     putProviderBindingSet(
       profile: ProviderBindingSet,
     ): Promise<ProviderBindingSet>;

@@ -21,6 +21,11 @@ import type {
 import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
 import {
+  formatResourceShapeId,
+  type ResourceShapeRecord,
+} from "../../../../core/domains/resource-shape/records.ts";
+import { createInMemoryResourceShapeStores } from "../../../../core/domains/resource-shape/stores.ts";
+import {
   fakeProviderVault,
   FIXTURE_ARCHIVE_DIGEST,
   FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE,
@@ -298,6 +303,111 @@ function storeEligibleInstallConfig(url: string) {
     },
   };
 }
+
+test("no-state Capsule DELETE returns 409 for owned or invalid Resource claims", async () => {
+  const cases = [
+    {
+      name: "owned-observed-mismatch",
+      phase: "Ready" as const,
+      generation: 2,
+      observedGeneration: 1,
+      owner: (workspaceId: string, capsuleId: string) => ({
+        kind: "Capsule" as const,
+        id: capsuleId,
+        workspaceId,
+        installingPrincipalId: "user_test",
+      }),
+    },
+    {
+      name: "workspace-mismatch",
+      phase: "Deleting" as const,
+      generation: 1,
+      observedGeneration: 1,
+      owner: (_workspaceId: string, capsuleId: string) => ({
+        kind: "Capsule" as const,
+        id: capsuleId,
+        workspaceId: "ws_wrong_owner",
+        installingPrincipalId: "user_test",
+      }),
+    },
+    {
+      name: "corrupt-owner",
+      phase: "Failed" as const,
+      generation: 1,
+      observedGeneration: 0,
+      owner: (workspaceId: string, capsuleId: string) => ({
+        kind: "Capsule" as const,
+        id: capsuleId,
+        workspaceId,
+      }),
+    },
+  ];
+
+  for (const item of cases) {
+    const accountStore = new InMemoryAccountsStore();
+    const cookie = seedSession(accountStore);
+    const deployStore = new InMemoryOpenTofuControlStore();
+    const resourceStores = createInMemoryResourceShapeStores();
+    const { operations } = await createTakosumiService({
+      role: "takosumi-api",
+      runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
+      opentofuControlStore: deployStore,
+      resourceShapeStores: resourceStores,
+    });
+    const workspaceId = `ws_delete_fence_${item.name}`;
+    const capsuleId = `cap_delete_fence_${item.name}`;
+    const seeded = await seedCapsuleModel(deployStore, {
+      workspaceId,
+      capsuleId,
+    });
+    await deployStore.putCapsule({
+      ...seeded.capsule,
+      installingPrincipalId: "user_test",
+    });
+    const resourceId = formatResourceShapeId(
+      workspaceId,
+      "EdgeWorker",
+      `resource-${item.name}`,
+    );
+    await resourceStores.resources.upsert({
+      id: resourceId,
+      spaceId: workspaceId,
+      kind: "EdgeWorker",
+      name: `resource-${item.name}`,
+      managedBy: "portable_iac",
+      spec: { name: `resource-${item.name}` },
+      phase: item.phase,
+      generation: item.generation,
+      observedGeneration: item.observedGeneration,
+      owner: item.owner(workspaceId, capsuleId),
+      createdAt: seeded.capsule.createdAt,
+      updatedAt: seeded.capsule.updatedAt,
+    } as ResourceShapeRecord);
+
+    const result = await controlJson<{
+      readonly error: {
+        readonly code: string;
+        readonly details?: { readonly reason?: string };
+      };
+    }>(
+      {
+        operations,
+        store: accountStore,
+        cookie,
+        method: "DELETE",
+        path: `/api/v1/capsules/${capsuleId}`,
+      },
+      409,
+    );
+
+    expect(result.error).toMatchObject({
+      code: "failed_precondition",
+      details: { reason: "capsule_owned_resources_pending" },
+    });
+    expect((await deployStore.getCapsule(capsuleId))?.status).toBe("pending");
+    expect(await resourceStores.resources.get(resourceId)).toBeDefined();
+  }
+});
 
 test("Store preflight resolves the repository default before exact compatibility while manual Git keeps explicit modulePath", async () => {
   const accountStore = new InMemoryAccountsStore();
