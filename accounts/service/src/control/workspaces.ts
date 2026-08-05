@@ -1599,6 +1599,10 @@ async function createCapsule(
       ...(resolvedInterfaceBlueprints
         ? { interfaceBlueprints: resolvedInterfaceBlueprints }
         : {}),
+      ...(repoInstallUx.status === "accepted" &&
+      repoInstallUx.requiredInterfaces !== undefined
+        ? { requiredInterfaces: repoInstallUx.requiredInterfaces }
+        : {}),
       ...(resolvedResourceInterfaceBindingProposals
         ? {
             resourceInterfaceBindingProposals:

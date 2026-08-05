@@ -12,6 +12,7 @@
 
 import type {
   CapsuleInterfaceBlueprint,
+  CapsuleRequiredInterface,
   CapsuleResourceInterfaceBindingProposal,
 } from "./interfaces.ts";
 import type { InstallConfigHostRuntimeMaterialization } from "./host-runtime-materialization.ts";
@@ -270,6 +271,8 @@ export interface PolicyConfig {
    */
   readonly repositoryInstallUx?: {
     readonly allowedInterfacePermissions: readonly string[];
+    /** Delivery mechanisms repository-owned Interface requests may use. */
+    readonly allowedInterfaceDeliveryTypes?: readonly string[];
     /**
      * Optional operator gate for repository-owned install UX. When set, a
      * SourceSnapshot without this exact manifest API version cannot be used
@@ -579,6 +582,12 @@ export interface InstallConfig {
    */
   readonly resourceInterfaceBindingProposals?: readonly CapsuleResourceInterfaceBindingProposal[];
   /**
+   * Host Interface contracts this Capsule runtime must be authorized to use.
+   * The exact Interface and pairwise OIDC Principal are resolved by the host;
+   * this record carries no Interface id or credential.
+   */
+  readonly requiredInterfaces?: readonly CapsuleRequiredInterface[];
+  /**
    * DB-owned, provider-neutral runtime materialization requirements. Core
    * forwards only opaque secret/capability refs where required; Resource
    * bindings carry no runtime credential and resolved values remain inside the
@@ -595,6 +604,7 @@ export type PublicInstallConfig = Omit<
   | "runnerId"
   | "internal"
   | "resourceInterfaceBindingProposals"
+  | "requiredInterfaces"
   | "hostRuntimeMaterialization"
 >;
 

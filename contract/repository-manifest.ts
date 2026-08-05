@@ -9,6 +9,7 @@ import { containsSecretLikeString, isSecretKey } from "./redaction.ts";
  * object. Version 1 carries only install presentation. Version 2 adds generic
  * Capsule-owned Interface proposals. Version 2.1 retains that exact module
  * vocabulary and adds only an optional repository-owned default module key.
+ * Version 2.2 adds provider-neutral requests to consume a host Interface.
  * Every declaration is still only a proposal until Takosumi validates and
  * compiles it into its DB-owned InstallConfig before a reviewed Plan can use it.
  */
@@ -19,6 +20,8 @@ export const TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2 =
   "takosumi.com/v2" as const;
 export const TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_1 =
   "takosumi.com/v2.1" as const;
+export const TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_2 =
+  "takosumi.com/v2.2" as const;
 export const TAKOSUMI_REPOSITORY_MANIFEST_KIND = "Repository" as const;
 export const TAKOSUMI_REPOSITORY_MANIFEST_PATH =
   ".well-known/takosumi.json" as const;
@@ -88,6 +91,20 @@ export type RepositoryOidcSlot =
 export type RepositoryEndpointSlot = "url" | "subdomain" | "routePattern";
 export type RepositorySecretSlot = "value";
 
+export interface RepositoryConsumedInterfaceRequirement {
+  readonly kind: "interface.consume";
+  /** Stable identity within the selected module. */
+  readonly key: string;
+  /** Provider-neutral runtime contract selector; display names are irrelevant. */
+  readonly interface: {
+    readonly type: string;
+    readonly version: string;
+  };
+  readonly permissions: readonly string[];
+  /** Credential values are never delivered through repository metadata. */
+  readonly delivery: { readonly type: string };
+}
+
 /**
  * What the repository needs the host to provide before the app can run.
  *
@@ -112,7 +129,8 @@ export type RepositoryRuntimeRequirement =
   | {
       readonly kind: "http.endpoint";
       readonly deliver: RepositoryRuntimeDelivery<RepositoryEndpointSlot>;
-    };
+    }
+  | RepositoryConsumedInterfaceRequirement;
 
 /** Public output types that a Capsule Interface may consume. */
 export type RepositoryInterfaceOutputType =
@@ -202,11 +220,18 @@ export interface RepositoryManifestInstallV2_1 {
   readonly defaultModule?: string;
 }
 
+export interface RepositoryManifestInstallV2_2 {
+  readonly modules: Readonly<Record<string, RepositoryInstallUxModule>>;
+  /** Exact canonical key of `modules`; optional only for one-module inference. */
+  readonly defaultModule?: string;
+}
+
 /** Compatibility alias for callers that only need the install envelope. */
 export type RepositoryManifestInstall =
   | RepositoryManifestInstallV1
   | RepositoryManifestInstallV2
-  | RepositoryManifestInstallV2_1;
+  | RepositoryManifestInstallV2_1
+  | RepositoryManifestInstallV2_2;
 
 export interface RepositoryManifestDocumentV1 {
   readonly apiVersion: typeof TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION;
@@ -226,22 +251,31 @@ export interface RepositoryManifestDocumentV2_1 {
   readonly install: RepositoryManifestInstallV2_1;
 }
 
+export interface RepositoryManifestDocumentV2_2 {
+  readonly apiVersion: typeof TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_2;
+  readonly kind: typeof TAKOSUMI_REPOSITORY_MANIFEST_KIND;
+  readonly install: RepositoryManifestInstallV2_2;
+}
+
 export type RepositoryManifestDocument =
   | RepositoryManifestDocumentV1
   | RepositoryManifestDocumentV2
-  | RepositoryManifestDocumentV2_1;
+  | RepositoryManifestDocumentV2_1
+  | RepositoryManifestDocumentV2_2;
 
 export type RepositoryManifestInterfaceApiVersion =
   | typeof TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2
-  | typeof TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_1;
+  | typeof TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_1
+  | typeof TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_2;
 
-/** v2.1 is an additive schema revision and retains the full v2 Interface wire. */
+/** v2.1 and v2.2 retain the full v2 provided-Interface wire. */
 export function isRepositoryManifestInterfaceCapableApiVersion(
   apiVersion: RepositoryManifestDocument["apiVersion"] | string,
 ): apiVersion is RepositoryManifestInterfaceApiVersion {
   return (
     apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2 ||
-    apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_1
+    apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_1 ||
+    apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_2
   );
 }
 
@@ -278,10 +312,11 @@ export function parseRepositoryManifestText(
     TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION,
     TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2,
     TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_1,
+    TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_2,
   ] as const);
   if (!apiVersion) {
     return invalid(
-      `apiVersion must be ${TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION}, ${TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2}, or ${TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_1}`,
+      `apiVersion must be ${TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION}, ${TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2}, ${TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_1}, or ${TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_2}`,
     );
   }
   if (value.kind !== TAKOSUMI_REPOSITORY_MANIFEST_KIND) {
@@ -292,7 +327,8 @@ export function parseRepositoryManifestText(
   }
   const installKeys = exactKeys(value.install, [
     "modules",
-    ...(apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_1
+    ...(apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_1 ||
+    apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_2
       ? ["defaultModule"]
       : []),
   ]);
@@ -319,12 +355,14 @@ export function parseRepositoryManifestText(
       rawModule,
       modulePath,
       isRepositoryManifestInterfaceCapableApiVersion(apiVersion),
+      apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_2,
     );
     if (typeof parsed === "string") return invalid(parsed);
     modules[modulePath] = parsed;
   }
   const defaultModule =
-    apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_1
+    apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_1 ||
+    apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_2
       ? value.install.defaultModule
       : undefined;
   if (defaultModule !== undefined) {
@@ -359,6 +397,7 @@ function parseModule(
   value: unknown,
   modulePath: string,
   allowInterfaces: boolean,
+  allowConsumedInterfaces: boolean,
 ): RepositoryInstallUxModule | string {
   const prefix = `install.modules.${JSON.stringify(modulePath)}`;
   if (!isPlainRecord(value)) return `${prefix} must be an object`;
@@ -385,7 +424,11 @@ function parseModule(
     inputs.push(parsed);
   }
 
-  const requires = parseRequirements(value.requires, prefix);
+  const requires = parseRequirements(
+    value.requires,
+    prefix,
+    allowConsumedInterfaces,
+  );
   if (typeof requires === "string") return requires;
   const features = parseFeatures(value.features, prefix, inputNames);
   if (typeof features === "string") return features;
@@ -801,6 +844,7 @@ function parseInputSource(
 function parseRequirements(
   value: unknown,
   prefix: string,
+  allowConsumedInterfaces: boolean,
 ): readonly RepositoryRuntimeRequirement[] | string | undefined {
   if (value === undefined) return undefined;
   if (!Array.isArray(value)) return `${prefix}.requires must be an array`;
@@ -813,7 +857,11 @@ function parseRequirements(
   let generatedSecrets = 0;
   for (let index = 0; index < value.length; index += 1) {
     const entryPrefix = `${prefix}.requires[${index}]`;
-    const parsed = parseRequirement(value[index], entryPrefix);
+    const parsed = parseRequirement(
+      value[index],
+      entryPrefix,
+      allowConsumedInterfaces,
+    );
     if (typeof parsed === "string") return parsed;
     // Only a generated secret is plural: an app may need several, but one
     // identity and one endpoint are the whole of what a module can hold.
@@ -822,10 +870,19 @@ function parseRequirements(
       if (generatedSecrets > TAKOSUMI_MAX_GENERATED_SECRETS_PER_MODULE) {
         return `${prefix}.requires declares more than 8 generated secrets`;
       }
+    } else if (parsed.kind === "interface.consume") {
+      if (singletons.has(`interface.consume:${parsed.key}`)) {
+        return `${entryPrefix}.key must be unique`;
+      }
+      singletons.add(`interface.consume:${parsed.key}`);
     } else if (singletons.has(parsed.kind)) {
       return `${entryPrefix}.kind must be unique`;
     } else {
       singletons.add(parsed.kind);
+    }
+    if (!("deliver" in parsed)) {
+      requirements.push(parsed);
+      continue;
     }
     for (const name of Object.values(deliveryTargets(parsed.deliver))) {
       if (deliveredNames.has(name)) {
@@ -841,6 +898,7 @@ function parseRequirements(
 function parseRequirement(
   value: unknown,
   prefix: string,
+  allowConsumedInterfaces: boolean,
 ): RepositoryRuntimeRequirement | string {
   if (!isPlainRecord(value)) return `${prefix} must be an object`;
   switch (value.kind) {
@@ -918,6 +976,53 @@ function parseRequirement(
         ? deliver
         : { kind: "http.endpoint", deliver };
     }
+    case "interface.consume": {
+      if (!allowConsumedInterfaces) return `${prefix}.kind is unsupported`;
+      const keys = exactKeys(value, [
+        "kind",
+        "key",
+        "interface",
+        "permissions",
+        "delivery",
+      ]);
+      if (keys) return `${prefix}.${keys}`;
+      const key = token(value.key, 128);
+      if (!key) return `${prefix}.key must be a bounded token`;
+      if (!isPlainRecord(value.interface)) {
+        return `${prefix}.interface must be an object`;
+      }
+      const interfaceKeys = exactKeys(value.interface, ["type", "version"]);
+      if (interfaceKeys) return `${prefix}.interface.${interfaceKeys}`;
+      const interfaceType = token(value.interface.type, 128);
+      const interfaceVersion = token(value.interface.version, 128);
+      if (!interfaceType) {
+        return `${prefix}.interface.type must be a bounded token`;
+      }
+      if (!interfaceVersion) {
+        return `${prefix}.interface.version must be a bounded token`;
+      }
+      const permissions = parseInterfacePermissionList(
+        value.permissions,
+        `${prefix}.permissions`,
+      );
+      if (typeof permissions === "string") return permissions;
+      if (!isPlainRecord(value.delivery)) {
+        return `${prefix}.delivery must be an object`;
+      }
+      const deliveryKeys = exactKeys(value.delivery, ["type"]);
+      if (deliveryKeys) return `${prefix}.delivery.${deliveryKeys}`;
+      const deliveryType = token(value.delivery.type, 128);
+      if (!deliveryType) {
+        return `${prefix}.delivery.type must be a bounded token`;
+      }
+      return {
+        kind: "interface.consume",
+        key,
+        interface: { type: interfaceType, version: interfaceVersion },
+        permissions,
+        delivery: { type: deliveryType },
+      };
+    }
     default:
       return `${prefix}.kind is unsupported`;
   }
@@ -985,7 +1090,7 @@ function parseTargets<const K extends string>(
 
 /** The names one requirement writes, whichever surface it delivers to. */
 export function deliveryTargets(
-  deliver: RepositoryRuntimeRequirement["deliver"],
+  deliver: Exclude<RepositoryRuntimeRequirement, RepositoryConsumedInterfaceRequirement>["deliver"],
 ): Readonly<Record<string, string>> {
   return ("variables" in deliver ? deliver.variables : deliver.bindings) as
     Readonly<Record<string, string>>;
@@ -993,7 +1098,7 @@ export function deliveryTargets(
 
 /** True when a requirement is satisfied by writing module input variables. */
 export function deliversToVariables(
-  deliver: RepositoryRuntimeRequirement["deliver"],
+  deliver: Exclude<RepositoryRuntimeRequirement, RepositoryConsumedInterfaceRequirement>["deliver"],
 ): boolean {
   return "variables" in deliver;
 }
@@ -1016,6 +1121,31 @@ function parseScopes(
     scopes.push(scope);
   }
   return scopes;
+}
+
+function parseInterfacePermissionList(
+  value: unknown,
+  prefix: string,
+): readonly string[] | string {
+  if (
+    !Array.isArray(value) ||
+    value.length < 1 ||
+    value.length > TAKOSUMI_REPOSITORY_INTERFACE_MAX_PERMISSIONS
+  ) {
+    return `${prefix} must contain between 1 and ${TAKOSUMI_REPOSITORY_INTERFACE_MAX_PERMISSIONS} entries`;
+  }
+  const permissions: string[] = [];
+  const seen = new Set<string>();
+  for (let index = 0; index < value.length; index += 1) {
+    const permission = interfacePermissionToken(value[index]);
+    if (!permission) {
+      return `${prefix}[${index}] must be a bounded permission token`;
+    }
+    if (seen.has(permission)) return `${prefix}[${index}] must be unique`;
+    seen.add(permission);
+    permissions.push(permission);
+  }
+  return permissions;
 }
 
 function parseFeatures(

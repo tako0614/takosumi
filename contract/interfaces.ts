@@ -245,6 +245,14 @@ export interface InterfaceBinding {
           readonly key: string;
         }
       | {
+          /** Runtime grant for a host Interface required by one Capsule. */
+          readonly source: "capsule_required_interface";
+          readonly capsuleId: string;
+          readonly requirementKey: string;
+          readonly interfaceType: string;
+          readonly interfaceVersion: string;
+        }
+      | {
           /**
            * Host-materialized self-grant for a form-host Resource
            * whose Form descriptor declares a public runtime surface. The
@@ -355,6 +363,23 @@ export type CapsuleResourceInterfaceBindingProposal =
       readonly resourceName?: string;
     };
   };
+
+/**
+ * DB-owned request for a Capsule runtime to consume one host Interface.
+ * The repository selects only the portable type/version contract and requested
+ * permissions. The host resolves an exact Workspace Interface and the OIDC
+ * pairwise Principal; neither an Interface id nor a credential is persisted
+ * in repository metadata.
+ */
+export interface CapsuleRequiredInterface {
+  readonly key: string;
+  readonly interface: {
+    readonly type: string;
+    readonly version: string;
+  };
+  readonly permissions: readonly string[];
+  readonly delivery: InterfaceBindingDelivery;
+}
 
 /**
  * Service-side proposal attached to an InstallConfig. It is not repository

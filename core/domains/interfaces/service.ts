@@ -5,6 +5,7 @@ import type {
   CreateInterfaceRequest,
   CapsuleInterfaceBlueprint,
   CapsuleInterfaceBlueprintInput,
+  CapsuleRequiredInterface,
   CapsuleResourceInterfaceBindingProposal,
   Interface,
   InterfaceBinding,
@@ -284,6 +285,12 @@ export type InterfaceBindingServiceMaterialization =
       readonly resourceInterfaceName: string;
       readonly resourceInterfaceVersion: string;
       readonly resourceBindingKey: string;
+    }
+  | {
+      readonly requiredInterfaceCapsuleId: string;
+      readonly requiredInterfaceKey: string;
+      readonly requiredInterfaceType: string;
+      readonly requiredInterfaceVersion: string;
     }
   | {
       readonly formHostFormRefKey: string;
@@ -652,6 +659,113 @@ export class InterfaceService {
         );
         if (!accepted) throw error;
         history.push(accepted);
+      }
+    }
+  }
+
+  /**
+   * Authorize one Capsule's pairwise OIDC Principal to consume the exact
+   * Workspace Interface contracts compiled into its InstallConfig.
+   */
+  async ensureCapsuleRequiredInterfaces(input: {
+    readonly workspaceId: string;
+    readonly capsuleId: string;
+    readonly principalId: string;
+    readonly requirements: readonly CapsuleRequiredInterface[];
+  }): Promise<void> {
+    validateCapsuleRequiredInterfaces(input.requirements);
+    const workspaceId = requireText(input.workspaceId, "workspaceId");
+    const capsuleId = requireText(input.capsuleId, "capsuleId");
+    const principalId = requireText(input.principalId, "principalId");
+    for (const requirement of input.requirements) {
+      const candidates = await this.list({
+        workspaceId,
+        type: requirement.interface.type,
+        phase: "Resolved",
+        ownerKind: "Workspace",
+        ownerId: workspaceId,
+        includeRetired: false,
+        limit: 65,
+      });
+      if (candidates.length === 65) {
+        throw new InterfaceServiceError(
+          "failed_precondition",
+          `required Interface ${requirement.interface.type}@${requirement.interface.version} exceeds bounded resolution`,
+        );
+      }
+      const matches = candidates.filter(
+        (iface) => iface.spec.version === requirement.interface.version,
+      );
+      if (matches.length !== 1) {
+        throw new InterfaceServiceError(
+          "failed_precondition",
+          matches.length === 0
+            ? `required Interface ${requirement.interface.type}@${requirement.interface.version} is unavailable`
+            : `required Interface ${requirement.interface.type}@${requirement.interface.version} is ambiguous`,
+        );
+      }
+      const iface = matches[0]!;
+      const history = await this.#stores.bindings.listByInterface(
+        iface.metadata.id,
+      );
+      const existing = history.find(
+        (binding) =>
+          binding.spec.subjectRef.kind === "Principal" &&
+          binding.spec.subjectRef.id === principalId,
+      );
+      if (existing) {
+        const permissions = new Set(existing.spec.permissions);
+        if (
+          existing.status.phase === "Revoked" ||
+          existing.spec.delivery.type !== requirement.delivery.type ||
+          requirement.permissions.some(
+            (permission) => !permissions.has(permission),
+          )
+        ) {
+          throw new InterfaceServiceError(
+            "failed_precondition",
+            `required Interface ${requirement.key} has a conflicting or revoked Principal grant`,
+          );
+        }
+        continue;
+      }
+      try {
+        await this.createBinding(
+          iface.metadata.id,
+          {
+            subjectRef: { kind: "Principal", id: principalId },
+            permissions: requirement.permissions,
+            delivery: requirement.delivery,
+          },
+          undefined,
+          {
+            requiredInterfaceCapsuleId: capsuleId,
+            requiredInterfaceKey: requirement.key,
+            requiredInterfaceType: requirement.interface.type,
+            requiredInterfaceVersion: requirement.interface.version,
+          },
+        );
+      } catch (error) {
+        if (
+          !(error instanceof InterfaceServiceError) ||
+          error.code !== "already_exists"
+        ) {
+          throw error;
+        }
+        const refreshed = await this.#stores.bindings.listByInterface(
+          iface.metadata.id,
+        );
+        const accepted = refreshed.find(
+          (binding) =>
+            binding.spec.subjectRef.kind === "Principal" &&
+            binding.spec.subjectRef.id === principalId &&
+            binding.status.phase !== "Revoked" &&
+            binding.spec.delivery.type === requirement.delivery.type &&
+            requirement.permissions.every((permission) =>
+              binding.spec.permissions.includes(permission),
+            ),
+        );
+        if (!accepted) throw error;
       }
     }
   }
@@ -2994,6 +3108,56 @@ export function validateCapsuleResourceInterfaceBindingProposals(
   }
 }
 
+export function validateCapsuleRequiredInterfaces(
+  requirements: readonly CapsuleRequiredInterface[],
+): void {
+  if (!Array.isArray(requirements) || requirements.length > 64) {
+    throw new InterfaceServiceError(
+      "invalid_argument",
+      "requiredInterfaces must be an array with at most 64 entries",
+    );
+  }
+  const keys = new Set<string>();
+  const selectors = new Set<string>();
+  for (const requirement of requirements) {
+    const raw = requireRecord(requirement, "required Interface");
+    assertOnlyKeys(
+      raw,
+      ["key", "interface", "permissions", "delivery"],
+      "required Interface",
+    );
+    const key = requireText(raw.key, "required Interface key");
+    validateToken(key, "required Interface key");
+    if (keys.has(key)) {
+      throw new InterfaceServiceError(
+        "invalid_argument",
+        `duplicate required Interface key: ${key}`,
+      );
+    }
+    keys.add(key);
+    const selector = requireRecord(raw.interface, "required Interface selector");
+    assertOnlyKeys(selector, ["type", "version"], "required Interface selector");
+    validateToken(requireText(selector.type, "required Interface type"), "required Interface type");
+    validateToken(
+      requireText(selector.version, "required Interface version"),
+      "required Interface version",
+    );
+    const selectorIdentity = `${String(selector.type)}\u0000${String(selector.version)}`;
+    if (selectors.has(selectorIdentity)) {
+      throw new InterfaceServiceError(
+        "invalid_argument",
+        "required Interfaces must use distinct type/version selectors",
+      );
+    }
+    selectors.add(selectorIdentity);
+    validateBindingRequest({
+      subjectRef: { kind: "Principal", id: "pairwise-principal" },
+      permissions: raw.permissions,
+      delivery: raw.delivery,
+    } as CreateInterfaceBindingRequest);
+  }
+}
+
 function validateCapsuleInterfaceBindingProposals(
   proposals: CapsuleInterfaceBlueprint["bindings"],
 ): void {
@@ -3537,6 +3701,27 @@ function interfaceBindingMaterialization(
       key: requireText(
         materialization.bindingBlueprintKey,
         "bindingBlueprintKey",
+      ),
+    };
+  }
+  if ("requiredInterfaceKey" in materialization) {
+    return {
+      source: "capsule_required_interface",
+      capsuleId: requireText(
+        materialization.requiredInterfaceCapsuleId,
+        "requiredInterfaceCapsuleId",
+      ),
+      requirementKey: requireText(
+        materialization.requiredInterfaceKey,
+        "requiredInterfaceKey",
+      ),
+      interfaceType: requireText(
+        materialization.requiredInterfaceType,
+        "requiredInterfaceType",
+      ),
+      interfaceVersion: requireText(
+        materialization.requiredInterfaceVersion,
+        "requiredInterfaceVersion",
       ),
     };
   }

@@ -1226,8 +1226,17 @@ function policySchemas(): Record<string, Record<string, unknown>> {
               uniqueItems: true,
               items: { type: "string", minLength: 1, maxLength: 256 },
             },
+            allowedInterfaceDeliveryTypes: {
+              type: "array",
+              uniqueItems: true,
+              items: { type: "string", minLength: 1, maxLength: 128 },
+            },
             requiredManifestApiVersion: {
-              enum: ["takosumi.com/v2", "takosumi.com/v2.1"],
+              enum: [
+                "takosumi.com/v2",
+                "takosumi.com/v2.1",
+                "takosumi.com/v2.2",
+              ],
             },
           },
           additionalProperties: false,

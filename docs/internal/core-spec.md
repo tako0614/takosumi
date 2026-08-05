@@ -668,8 +668,17 @@ For Store preflight, `compileInstallUx: true` requires a pre-Capsule
 After root Source sync, the server selects the module from the exact
 SourceSnapshot repository manifest: one module is inferred; multiple modules
 require an exact canonical `install.defaultModule` under
-`takosumi.com/v2.1`. It MUST NOT infer `.`, object order, a TCS/presentation
+`takosumi.com/v2.1` or `takosumi.com/v2.2`. It MUST NOT infer `.`, object order, a TCS/presentation
 path, `Source.defaultPath`, or a base InstallConfig module path.
+
+`takosumi.com/v2.2` may additionally propose a host Interface requirement by
+exact type/version, permissions, and delivery token. It MUST NOT name an
+Interface ID, endpoint, provider, or credential. The derived InstallConfig is
+the authority consumed at Capsule OIDC authorization time: the host MUST find
+exactly one Workspace-owned Resolved Interface and materialize an ordinary
+Binding for that OIDC client's pairwise Principal. Missing, ambiguous,
+revoked, conflicting, or policy-disallowed requirements fail closed before a
+credential can be issued.
 
 The server separately resolves exactly one service-owned global Store
 InstallConfig as a policy ceiling. The config MUST be non-internal and

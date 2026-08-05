@@ -352,6 +352,41 @@ async function resolveOidcAuthorizationSubject(input: {
       liveGrant.capsuleId
     }:${input.client.clientId}`,
   });
+  try {
+    const capsule = await input.operations.capsules.getCapsule(
+      liveGrant.capsuleId,
+    );
+    const installConfig = await input.operations.capsules.getInstallConfig(
+      capsule.installConfigId,
+    );
+    if ((installConfig.requiredInterfaces?.length ?? 0) > 0) {
+      const ensureRequiredInterfaces =
+        input.operations.interfaces?.ensureCapsuleRequiredInterfaces;
+      if (!ensureRequiredInterfaces) {
+        return {
+          ok: false,
+          status: 503,
+          error: "temporarily_unavailable",
+          errorDescription:
+            "Capsule required Interface authorization is unavailable",
+        };
+      }
+      await ensureRequiredInterfaces.call(input.operations.interfaces, {
+        workspaceId: liveGrant.workspaceId!,
+        capsuleId: liveGrant.capsuleId,
+        principalId: pairwiseSubject,
+        requirements: installConfig.requiredInterfaces!,
+      });
+    }
+  } catch {
+    return {
+      ok: false,
+      status: 503,
+      error: "temporarily_unavailable",
+      errorDescription:
+        "Capsule required Interface authorization could not be established",
+    };
+  }
   return {
     ok: true,
     record: {

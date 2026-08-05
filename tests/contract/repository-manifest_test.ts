@@ -5,6 +5,9 @@ import { join } from "node:path";
 import repositoryManifestV2_1Schema from "../../docs/public/schemas/repository-manifest-v2.1.schema.json" with {
   type: "json",
 };
+import repositoryManifestV2_2Schema from "../../docs/public/schemas/repository-manifest-v2.2.schema.json" with {
+  type: "json",
+};
 
 import {
   parseRepositoryManifestText,
@@ -49,6 +52,52 @@ test("repository manifest accepts the closed v1 install proposal", async () => {
   ).toMatchObject({ name: "project_name", role: "service_name" });
 });
 
+test("repository manifest v2.2 declares consumed Interfaces without ids or credentials", () => {
+  const parsed = parseRepositoryManifestText(
+    JSON.stringify({
+      apiVersion: "takosumi.com/v2.2",
+      kind: "Repository",
+      install: {
+        defaultModule: ".",
+        modules: {
+          ".": {
+            inputs: [],
+            requires: [
+              {
+                kind: "interface.consume",
+                key: "ai",
+                interface: { type: "takosumi.ai.gateway", version: "1" },
+                permissions: ["ai.chat"],
+                delivery: { type: "oauth2" },
+              },
+            ],
+          },
+        },
+      },
+    }),
+  );
+  expect(parsed.ok).toBe(true);
+  if (!parsed.ok) return;
+  expect(parsed.document.install.modules["."]?.requires).toEqual([
+    {
+      kind: "interface.consume",
+      key: "ai",
+      interface: { type: "takosumi.ai.gateway", version: "1" },
+      permissions: ["ai.chat"],
+      delivery: { type: "oauth2" },
+    },
+  ]);
+
+  const oldVersion = JSON.parse(
+    JSON.stringify(parsed.document),
+  ) as Record<string, unknown>;
+  oldVersion.apiVersion = "takosumi.com/v2.1";
+  expect(parseRepositoryManifestText(JSON.stringify(oldVersion))).toEqual({
+    ok: false,
+    error: 'install.modules.".".requires[0].kind is unsupported',
+  });
+});
+
 test("repository manifest rejects unknown authority, fields, and versions", async () => {
   expect(
     parseRepositoryManifestText(await fixture("unknown-key.json")),
@@ -61,7 +110,7 @@ test("repository manifest rejects unknown authority, fields, and versions", asyn
   ).toEqual({
     ok: false,
     error:
-      "apiVersion must be takosumi.com/v1, takosumi.com/v2, or takosumi.com/v2.1",
+      "apiVersion must be takosumi.com/v1, takosumi.com/v2, takosumi.com/v2.1, or takosumi.com/v2.2",
   });
   expect(
     parseRepositoryManifestText(
@@ -445,6 +494,46 @@ test("the published v2.1 schema covers structure while the parser owns semantics
   expect(
     parseRepositoryManifestText(JSON.stringify(whitespaceModuleKey)).ok,
   ).toBe(false);
+});
+
+test("the published v2.2 schema adds only provider-neutral Interface consumption", () => {
+  const ajv = new Ajv2020({ allErrors: true, strict: false });
+  ajv.addSchema(repositoryManifestV2_1Schema);
+  const validate = ajv.compile(repositoryManifestV2_2Schema);
+  const document = {
+    apiVersion: "takosumi.com/v2.2",
+    kind: "Repository",
+    install: {
+      defaultModule: ".",
+      modules: {
+        ".": {
+          inputs: [],
+          requires: [
+            {
+              kind: "interface.consume",
+              key: "ai",
+              interface: { type: "takosumi.ai.gateway", version: "1" },
+              permissions: ["ai.chat"],
+              delivery: { type: "oauth2" },
+            },
+          ],
+        },
+      },
+    },
+  };
+
+  expect(validate(document), JSON.stringify(validate.errors)).toBe(true);
+  expect(parseRepositoryManifestText(JSON.stringify(document)).ok).toBe(true);
+
+  for (const forbiddenField of ["id", "endpoint", "provider", "credential"]) {
+    const invalid = structuredClone(document) as Record<string, any>;
+    invalid.install.modules["."].requires[0].interface[forbiddenField] =
+      "forbidden";
+    expect(validate(invalid)).toBe(false);
+    expect(parseRepositoryManifestText(JSON.stringify(invalid)).ok).toBe(
+      false,
+    );
+  }
 });
 
 test("parser-owned JSON depth and value scanning stay stricter than schema structure", async () => {
