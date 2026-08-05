@@ -4382,6 +4382,14 @@ const D1_INTERFACE_AUTHORIZATION_INDEX_STATEMENTS = [
     ) where phase = 'Ready'`,
 ] as const;
 
+const D1_RESOURCE_IDENTITY_FENCE_STATEMENTS = [
+  `create table if not exists resource_identity_fences (
+    resource_id text primary key,
+    last_generation integer not null,
+    fence_revision integer not null
+  )`,
+] as const;
+
 /**
  * Bootstrap the §27 control-plane tables for the default self-host mode.
  * Idempotent (`IF NOT EXISTS`) and called once per store instance via the
@@ -7066,6 +7074,22 @@ ${D1_SERVICE_FORM_RESTORE_SAFE_STATEMENTS.join("\n---\n")}
       await runD1AtomicSql(db, D1_SERVICE_FORM_RESTORE_SAFE_STATEMENTS);
     },
   },
+  {
+    version: 61,
+    name: "d1_resource_identity_fence",
+    checksumSource: () => `
+Resource identity fences are keyed by Resource id and preserve the last observed incarnation generation
+the additive table starts empty; live rows lazily adopt a fence when touched
+no historical Resource rows are backfilled by this migration
+${D1_RESOURCE_IDENTITY_FENCE_STATEMENTS.join("\n---\n")}
+`,
+    async atomicStatements() {
+      return D1_RESOURCE_IDENTITY_FENCE_STATEMENTS;
+    },
+    async apply(db) {
+      await runD1AtomicSql(db, D1_RESOURCE_IDENTITY_FENCE_STATEMENTS);
+    },
+  },
 ] as const satisfies readonly D1OpenTofuSchemaMigration[];
 
 /**
@@ -7965,6 +7989,19 @@ type D1SchemaMigrationRow = {
 };
 
 /**
+ * One bounded predeploy transition for the additive Resource identity fence.
+ *
+ * The transition Worker may run while the live control database is still at
+ * v60, then continue serving after the reviewed predeploy job advances it to
+ * v61. No older prefix is accepted. Remove this predecessor allowance from
+ * the final fence-runtime release after v61 has been verified live.
+ */
+const D1_PREDEPLOYED_RESOURCE_IDENTITY_FENCE_TRANSITION = {
+  predecessorVersion: 60,
+  currentVersion: 61,
+} as const;
+
+/**
  * Strict read-only readiness check for hosts that predeploy the OSS control
  * schema. Unlike {@link ensureD1OpenTofuLedgerSchema}, this function never
  * executes DDL or data migration. It requires the complete current migration
@@ -8000,15 +8037,27 @@ async function validateD1OpenTofuLedgerSchemaPredeployed(
   rows: readonly D1SchemaMigrationRow[],
 ): Promise<void> {
   assertD1SchemaMigrationLedgerShape(columns);
-  if (rows.length !== D1_OPEN_TOFU_SCHEMA_MIGRATIONS.length) {
+  const transitionCurrentIndex = D1_OPEN_TOFU_SCHEMA_MIGRATIONS.findIndex(
+    (migration) =>
+      migration.version ===
+      D1_PREDEPLOYED_RESOURCE_IDENTITY_FENCE_TRANSITION.currentVersion,
+  );
+  const transitionPredecessorIndex =
+    D1_OPEN_TOFU_SCHEMA_MIGRATIONS.findIndex(
+      (migration) =>
+        migration.version ===
+        D1_PREDEPLOYED_RESOURCE_IDENTITY_FENCE_TRANSITION.predecessorVersion,
+    );
+  const isCurrent = rows.length === D1_OPEN_TOFU_SCHEMA_MIGRATIONS.length;
+  const isImmediatePredecessor =
+    transitionCurrentIndex === D1_OPEN_TOFU_SCHEMA_MIGRATIONS.length - 1 &&
+    transitionPredecessorIndex === transitionCurrentIndex - 1 &&
+    rows.length === transitionCurrentIndex;
+  if (!isCurrent && !isImmediatePredecessor) {
     throw new Error("D1 OpenTofu predeployed schema verification failed");
   }
   const expectedChecksums = await expectedD1OpenTofuSchemaMigrationChecksums();
-  for (
-    let index = 0;
-    index < D1_OPEN_TOFU_SCHEMA_MIGRATIONS.length;
-    index += 1
-  ) {
+  for (let index = 0; index < rows.length; index += 1) {
     const migration = D1_OPEN_TOFU_SCHEMA_MIGRATIONS[index];
     const row = rows[index];
     if (

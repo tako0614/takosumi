@@ -66,6 +66,50 @@ test("ensureD1OpenTofuLedgerSchema converges on a fresh database", async () => {
   }
 });
 
+test("v61 creates an empty Resource identity fence without historical backfill", async () => {
+  const db = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(db, { throughMigrationVersion: 60 });
+  await db
+    .prepare(
+      `insert into resource_shapes (
+         id, space_id, kind, name, managed_by, spec_json, phase,
+         generation, observed_generation, created_at, updated_at
+       ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .bind(
+      "resource_identity_fence_legacy",
+      "workspace_identity_fence",
+      "ObjectBucket",
+      "legacy",
+      "user",
+      "{}",
+      "Ready",
+      7,
+      7,
+      "2026-08-01T00:00:00.000Z",
+      "2026-08-01T00:00:00.000Z",
+    )
+    .run();
+
+  expect((await tableNames(db)).has("resource_identity_fences")).toBe(false);
+  await ensureD1OpenTofuLedgerSchema(db);
+
+  expect(await rowsForTable(db, "resource_identity_fences")).toEqual([]);
+  expect(
+    await db
+      .prepare(
+        `select generation from resource_shapes
+         where id = 'resource_identity_fence_legacy'`,
+      )
+      .first(),
+  ).toEqual({ generation: 7 });
+  expect(
+    await db
+      .prepare(`select version, name from schema_migrations where version = 61`)
+      .first(),
+  ).toEqual({ version: 61, name: "d1_resource_identity_fence" });
+});
+
 test("v60 restores populated current and archived Service Form rows with inline parent keys", async () => {
   const db = new SqliteFakeD1();
   const now = "2026-08-01T00:00:00.000Z";
@@ -586,6 +630,66 @@ test("predeployed verification is strictly read-only", async () => {
   expect(queries.every((query) => /^(?:select|pragma)\b/iu.test(query))).toBe(
     true,
   );
+});
+
+test("predeployed transition accepts only exact v60 or v61 ledgers", async () => {
+  const predecessor = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(predecessor, {
+    throughMigrationVersion: 60,
+  });
+  await verifyD1OpenTofuLedgerSchemaPredeployed(predecessor);
+  expect((await tableNames(predecessor)).has("resource_identity_fences")).toBe(
+    false,
+  );
+
+  const current = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(current);
+  await verifyD1OpenTofuLedgerSchemaPredeployed(current);
+  expect((await tableNames(current)).has("resource_identity_fences")).toBe(
+    true,
+  );
+
+  const tooOld = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(tooOld, { throughMigrationVersion: 59 });
+  await expect(
+    verifyD1OpenTofuLedgerSchemaPredeployed(tooOld),
+  ).rejects.toThrow("D1 OpenTofu predeployed schema verification failed");
+
+  const missing = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(missing);
+  await missing.prepare(`delete from schema_migrations where version = 43`).run();
+  await expect(
+    verifyD1OpenTofuLedgerSchemaPredeployed(missing),
+  ).rejects.toThrow("D1 OpenTofu predeployed schema verification failed");
+
+  const extra = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(extra);
+  await extra
+    .prepare(
+      `insert into schema_migrations (version, name, checksum, applied_at)
+       values (62, 'unexpected', ?, '2026-08-05T00:00:00.000Z')`,
+    )
+    .bind(`sha256:${"f".repeat(64)}`)
+    .run();
+  await expect(
+    verifyD1OpenTofuLedgerSchemaPredeployed(extra),
+  ).rejects.toThrow("D1 OpenTofu predeployed schema verification failed");
+});
+
+test("predeployed v60 transition remains read-only and does not invent the v61 table", async () => {
+  const db = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(db, { throughMigrationVersion: 60 });
+  const store = createCloudflareD1OpenTofuControlStore(db, {
+    schemaMode: "predeployed",
+  });
+
+  expect(await store.listWorkspaces()).toEqual([]);
+  expect((await tableNames(db)).has("resource_identity_fences")).toBe(false);
+  expect(
+    await db
+      .prepare(`select max(version) as version from schema_migrations`)
+      .first(),
+  ).toEqual({ version: 60 });
 });
 
 test("predeployed maintenance readiness uses one direct indexed read", async () => {

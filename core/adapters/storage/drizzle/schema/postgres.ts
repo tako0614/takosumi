@@ -703,6 +703,15 @@ export const spacePolicies = pgTable(
   ],
 );
 
+export const resourceIdentityFences = pgTable(
+  names.resourceIdentityFences,
+  {
+    resourceId: text("resource_id").primaryKey(),
+    lastGeneration: integer("last_generation").notNull(),
+    fenceRevision: integer("fence_revision").notNull(),
+  },
+);
+
 export const interfaces = pgTable(
   names.interfaces,
   {

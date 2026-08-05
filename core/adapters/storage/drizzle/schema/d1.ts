@@ -677,6 +677,15 @@ export const spacePolicies = sqliteTable(
   ],
 );
 
+export const resourceIdentityFences = sqliteTable(
+  names.resourceIdentityFences,
+  {
+    resourceId: text("resource_id").primaryKey(),
+    lastGeneration: integer("last_generation").notNull(),
+    fenceRevision: integer("fence_revision").notNull(),
+  },
+);
+
 export const interfaces = sqliteTable(
   names.interfaces,
   {

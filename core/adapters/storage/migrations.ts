@@ -979,6 +979,12 @@ export const postgresStorageTableDefinitions: readonly StorageTableDefinition[] 
       indexes: [["space_id"]],
     },
     {
+      name: "takosumi_resource_identity_fences",
+      domain: "resources",
+      columns: ["resource_id", "last_generation", "fence_revision"],
+      primaryKey: ["resource_id"],
+    },
+    {
       name: "takosumi_interfaces",
       domain: "runtime",
       columns: [
@@ -4558,5 +4564,18 @@ create index if not exists takosumi_interface_bindings_authorized_current_idx
   on takosumi_interface_bindings (
     workspace_id, subject_kind, subject_id, interface_id
   ) where phase = 'Ready';`,
+    },
+    {
+      id: "resources.identity_fence.create",
+      version: 105,
+      domain: "resources",
+      description:
+        "Create the durable Resource identity fence keyed by Resource id. The additive table starts empty; live rows lazily adopt a fence as they are touched, so no historical backfill is performed.",
+      sql: `create table if not exists takosumi_resource_identity_fences (
+  resource_id     text    primary key,
+  last_generation integer not null,
+  fence_revision  integer not null
+);`,
+      down: `drop table if exists takosumi_resource_identity_fences;`,
     },
   ]);

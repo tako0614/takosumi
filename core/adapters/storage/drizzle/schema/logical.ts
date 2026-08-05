@@ -33,6 +33,7 @@ export const deployControlLogicalTables = [
   "resolutionLocks",
   "targetPools",
   "spacePolicies",
+  "resourceIdentityFences",
   // Runtime declaration layer shared by Capsule and Resource authoring flows.
   "interfaces",
   "interfaceBindings",
@@ -81,6 +82,7 @@ export const deployControlD1TableNames = {
   resolutionLocks: "resolution_locks",
   targetPools: "target_pools",
   spacePolicies: "space_policies",
+  resourceIdentityFences: "resource_identity_fences",
   interfaces: "interfaces",
   interfaceBindings: "interface_bindings",
   serviceFormPackages: "service_form_packages",
@@ -121,6 +123,7 @@ export const deployControlPostgresTableNames = {
   resolutionLocks: "takosumi_resolution_locks",
   targetPools: "takosumi_target_pools",
   spacePolicies: "takosumi_space_policies",
+  resourceIdentityFences: "takosumi_resource_identity_fences",
   interfaces: "takosumi_interfaces",
   interfaceBindings: "takosumi_interface_bindings",
   serviceFormPackages: "takosumi_service_form_packages",

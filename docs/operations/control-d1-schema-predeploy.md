@@ -49,7 +49,12 @@ resource_shapes
 resolution_locks
 target_pools
 space_policies
+resource_identity_fences
 ```
+
+`resource_identity_fences` is an additive Resource-incarnation fence. Migration
+61 creates it empty; live Resource rows adopt fence entries lazily, so the
+migration performs no historical backfill.
 
 Names such as `takosumi_target_pools` belong to the Postgres adapter and are
 not valid D1 readiness probes. Do not infer D1 readiness from a prefixed table
