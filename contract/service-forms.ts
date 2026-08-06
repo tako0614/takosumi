@@ -32,6 +32,9 @@ export interface InstalledFormReference {
  * operator bootstrap. This is a transport contract, not a Takoform lifecycle
  * or approval state.
  */
+export const TAKOFORM_CURRENT_FORM_API_VERSION =
+  "forms.takoform.com/v1alpha2" as const;
+
 export const TAKOFORM_INSTALL_ENVELOPE_SET_FORMAT =
   "takosumi.takoform-install-envelope-set@v3" as const;
 
