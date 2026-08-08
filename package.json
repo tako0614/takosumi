@@ -38,6 +38,7 @@
     "test:dashboard-new-flow": "bun test tests/dashboard/src/views/new/provider-connections-return_test.ts tests/dashboard/src/views/new/new-flow-guidance_test.ts",
     "dashboard:e2e:live": "bun scripts/run-dashboard-browser-e2e.ts live",
     "test:dashboard-browser-harness": "bun test tests/dashboard/e2e/harness_test.ts",
+    "test:critical-journeys": "bun scripts/run-critical-journeys.ts",
     "test:scripts": "bun test ./tests/scripts",
     "audit:public-sites": "(cd docs && npm audit --audit-level=moderate) && (cd website && npm audit --audit-level=moderate)",
     "service-form:host-conformance": "bun scripts/run-portable-form-host-conformance.ts",
