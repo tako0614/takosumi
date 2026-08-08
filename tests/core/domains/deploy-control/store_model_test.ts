@@ -1,4 +1,4 @@
-import { afterAll, expect, setDefaultTimeout, test } from "bun:test";
+import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 
 import type {
   ApplyRun,
@@ -31,7 +31,7 @@ setDefaultTimeout(20_000);
 const TS = "2026-06-06T00:00:00.000Z";
 const pgClients: PGliteSqlClient[] = [];
 
-afterAll(async () => {
+afterEach(async () => {
   await Promise.all(pgClients.splice(0).map((client) => client.close()));
 });
 

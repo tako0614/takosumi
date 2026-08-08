@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
 
 import { SqlOpenTofuControlStore } from "../../../../core/domains/deploy-control/store_sql.ts";
 import { CloudflareD1OpenTofuControlStore } from "../../../../worker/src/d1_opentofu_store.ts";
@@ -35,7 +35,7 @@ async function expectCompleteWorkspacePages(
   expect(new Set(ids).size).toBe(3);
 }
 
-afterAll(async () => {
+afterEach(async () => {
   await Promise.all(clients.splice(0).map((client) => client.close()));
 });
 

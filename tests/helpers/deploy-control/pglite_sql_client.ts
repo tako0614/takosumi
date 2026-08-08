@@ -108,6 +108,8 @@ async function runQuery<Row extends Record<string, unknown>>(
 }
 
 export class PGliteSqlClient implements SqlClient {
+  static #latestMigrationSnapshot: Promise<Blob> | undefined;
+
   readonly #db: PGlite;
 
   private constructor(db: PGlite) {
@@ -115,18 +117,14 @@ export class PGliteSqlClient implements SqlClient {
   }
 
   /**
-   * Spins up a fresh PGlite database and provisions it with the canonical
-   * Postgres migration DDL, applied statement-by-statement in catalog order
-   * (the same order the migration runner uses). Each statement is additive /
-   * `if not exists`, so the result is the migration end-state schema.
-   *
-   * The catalog must replay cleanly from an empty database. A migration failure
-   * here is a product bug, not a test fixture concern.
+   * Loads an isolated database from the canonical, fully migrated snapshot.
+   * The snapshot is built once per test process; every caller gets its own
+   * PGlite filesystem, so writes cannot leak across tests.
    */
   static async create(): Promise<PGliteSqlClient> {
-    return await PGliteSqlClient.createThroughMigrationVersion(
-      Number.POSITIVE_INFINITY,
-    );
+    const snapshot = await PGliteSqlClient.latestMigrationSnapshot();
+    const db = await PGlite.create({ loadDataDir: snapshot });
+    return new PGliteSqlClient(db);
   }
 
   /**
@@ -136,22 +134,67 @@ export class PGliteSqlClient implements SqlClient {
   static async createThroughMigrationVersion(
     maximumVersion: number,
   ): Promise<PGliteSqlClient> {
+    return await PGliteSqlClient.createFreshThroughMigrationVersion(
+      maximumVersion,
+    );
+  }
+
+  private static async createFreshThroughMigrationVersion(
+    maximumVersion: number,
+  ): Promise<PGliteSqlClient> {
     const db = new PGlite();
-    for (const migration of postgresStorageMigrationStatements.filter(
-      (entry) => entry.version <= maximumVersion,
-    )) {
-      for (const statement of splitSqlStatements(migration.sql)) {
-        try {
-          await db.exec(statement);
-        } catch (error) {
-          throw new Error(
-            `PGlite migration ${migration.id} failed on statement: ` +
-              `${statement.slice(0, 120)} — ${(error as Error).message}`,
-          );
+    try {
+      for (const migration of postgresStorageMigrationStatements.filter(
+        (entry) => entry.version <= maximumVersion,
+      )) {
+        for (const statement of splitSqlStatements(migration.sql)) {
+          try {
+            await db.exec(statement);
+          } catch (error) {
+            throw new Error(
+              `PGlite migration ${migration.id} failed on statement: ` +
+                `${statement.slice(0, 120)} — ${(error as Error).message}`,
+            );
+          }
         }
       }
+      return new PGliteSqlClient(db);
+    } catch (error) {
+      await db.close();
+      throw error;
     }
-    return new PGliteSqlClient(db);
+  }
+
+  /**
+   * Builds the latest migration snapshot once per test process. The source
+   * client is closed as soon as the immutable data archive is ready; each
+   * caller receives a fresh PGlite database loaded from that archive.
+   */
+  private static async latestMigrationSnapshot(): Promise<Blob> {
+    const existing = PGliteSqlClient.#latestMigrationSnapshot;
+    if (existing) return await existing;
+
+    const snapshotPromise = PGliteSqlClient.createMigrationSnapshot();
+    PGliteSqlClient.#latestMigrationSnapshot = snapshotPromise;
+    try {
+      return await snapshotPromise;
+    } catch (error) {
+      if (PGliteSqlClient.#latestMigrationSnapshot === snapshotPromise) {
+        PGliteSqlClient.#latestMigrationSnapshot = undefined;
+      }
+      throw error;
+    }
+  }
+
+  private static async createMigrationSnapshot(): Promise<Blob> {
+    const client = await PGliteSqlClient.createFreshThroughMigrationVersion(
+      Number.POSITIVE_INFINITY,
+    );
+    try {
+      return await client.#db.dumpDataDir("none");
+    } finally {
+      await client.close();
+    }
   }
 
   query<Row extends Record<string, unknown> = Record<string, unknown>>(
@@ -185,6 +228,10 @@ export class PGliteSqlClient implements SqlClient {
     sql: string,
   ): Promise<{ readonly rows: readonly Row[] }> {
     return this.#db.query<Row>(sql);
+  }
+
+  get closed(): boolean {
+    return this.#db.closed;
   }
 
   close(): Promise<void> {

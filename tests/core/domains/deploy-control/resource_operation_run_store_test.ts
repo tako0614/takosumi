@@ -1,4 +1,4 @@
-import { afterAll, expect, setDefaultTimeout, test } from "bun:test";
+import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 
 import {
   InMemoryOpenTofuControlStore,
@@ -29,7 +29,7 @@ const EXACT_FORM: InstalledFormReference = {
   packageDigest: `sha256:${"2".repeat(64)}`,
 };
 
-afterAll(async () => {
+afterEach(async () => {
   await Promise.all(clients.splice(0).map((client) => client.close()));
 });
 

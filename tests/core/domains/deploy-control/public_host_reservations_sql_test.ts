@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
 
 import type {
   OpenTofuControlStore,
@@ -9,7 +9,7 @@ import { PGliteSqlClient } from "../../../helpers/deploy-control/pglite_sql_clie
 
 const clients: PGliteSqlClient[] = [];
 
-afterAll(async () => {
+afterEach(async () => {
   await Promise.all(clients.splice(0).map((client) => client.close()));
 });
 

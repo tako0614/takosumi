@@ -16,7 +16,7 @@
   ],
   "scripts": {
     "wrangler": "wrangler",
-    "check": "bun run fmt:check && bun run check:package-script-boundaries && bun run check:production-migrations && bun run check:no-first-party-provider && bun run generated-assets:check && bun run service-form:runtime-artifacts:check && bun run check:authoritative-docs && bun run check:import-boundaries && bun run check:test-source-boundary && bun run check:generalization-boundaries && bun run test && tsc --noEmit && bun run check:dashboard && bun run check:dashboard-browser && bun run check:worker-types && bun run check:cloudflare-worker-build",
+    "check": "bun scripts/check-portable-gate.ts",
     "fmt:check": "bun scripts/check-source-format.mjs",
     "deploy": "bun scripts/deploy.mjs",
     "check:package-script-boundaries": "bun scripts/check-package-script-boundaries.ts",
@@ -30,7 +30,7 @@
     "check:dashboard-browser": "bun run test:dashboard-browser-harness && bun scripts/run-dashboard-browser-e2e.ts portable",
     "check:worker-types": "tsc --noEmit -p tsconfig.worker.json",
     "check:cloudflare-worker-build": "bun build --target browser --format esm --external cloudflare:workers deploy/platform/worker.ts --outfile /tmp/takosumi-platform-worker-check.mjs && bun scripts/assert-worker-schema-bundle.ts /tmp/takosumi-platform-worker-check.mjs",
-    "test": "bun test ./tests --path-ignore-patterns=tests/dashboard/e2e/**",
+    "test": "bun test --only-failures ./tests --path-ignore-patterns=tests/dashboard/e2e/**",
     "test:service": "bun test ./tests/core",
     "test:accounts": "bun test ./tests/accounts ./tests/deploy/node-postgres ./tests/deploy/accounts-cloudflare",
     "test:cli": "bun test ./tests/cli",

@@ -6,6 +6,7 @@ import {
   buildTestCommand,
   validateCriticalJourneyInventory,
 } from "../../scripts/run-critical-journeys.ts";
+import { PORTABLE_GATE_PHASES } from "../../scripts/check-portable-gate.ts";
 
 const root = resolve(import.meta.dir, "../..");
 
@@ -58,5 +59,10 @@ test("package exposes the focused command without changing the complete gate", a
   expect(packageJson.scripts?.["test:critical-journeys"]).toBe(
     "bun scripts/run-critical-journeys.ts",
   );
-  expect(packageJson.scripts?.check).toContain("bun run test");
+  expect(packageJson.scripts?.check).toBe("bun scripts/check-portable-gate.ts");
+  expect(
+    PORTABLE_GATE_PHASES.some(
+      ({ command }) => command.join(" ") === "bun run test",
+    ),
+  ).toBe(true);
 });
