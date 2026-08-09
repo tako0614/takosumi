@@ -48,6 +48,13 @@ export const ja = {
   "installStore.continue": "続ける",
   "installStore.setupTitle": "サービスを設定",
   "installStore.setupHint": "このサービスが必要とする項目だけを入力します。",
+  "installStore.sourceBuildTitle": "リポジトリのビルド手順",
+  "installStore.sourceBuildHint":
+    "Planを開始する前に、認証情報を使わないコマンドと生成されるパスを確認してください。",
+  "installStore.sourceBuildCommand": "コマンド {index}",
+  "installStore.sourceBuildWorkingDirectory": "作業ディレクトリ",
+  "installStore.sourceBuildSourceRoot": "Source root",
+  "installStore.sourceBuildOutputs": "生成されるパス",
   "installStore.setupInvalid": "サービスの設定定義が無効です。",
   "installStore.setupRequired": "{label}を入力してください。",
   "installStore.secretUnavailable":

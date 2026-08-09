@@ -17,7 +17,7 @@ Every version has exactly three root fields:
 
 ```json
 {
-  "apiVersion": "takosumi.com/v2.2",
+  "apiVersion": "takosumi.com/v2.3",
   "kind": "Repository",
   "install": {}
 }
@@ -29,6 +29,7 @@ Every version has exactly three root fields:
 | `takosumi.com/v2`   | `modules`                    | v1 + `interfaces`                                |
 | `takosumi.com/v2.1` | `modules`, `defaultModule`?  | identical to v2                                  |
 | `takosumi.com/v2.2` | `modules`, `defaultModule`?  | v2.1 + `requires[].kind: interface.consume`      |
+| `takosumi.com/v2.3` | `modules`, `defaultModule`?  | v2.2 + optional `sourceBuild`                   |
 
 Every object is closed. Fields not listed in this document, `$schema`, and the
 retired `schemaVersion: takosumi.install-ux/v1` are rejected. Adding
@@ -37,7 +38,9 @@ retired `schemaVersion: takosumi.install-ux/v1` are rejected. Adding
 The published JSON Schemas are
 [`repository-manifest-v2.1.schema.json`](/schemas/repository-manifest-v2.1.schema.json)
 and
-[`repository-manifest-v2.2.schema.json`](/schemas/repository-manifest-v2.2.schema.json).
+[`repository-manifest-v2.2.schema.json`](/schemas/repository-manifest-v2.2.schema.json)
+and
+[`repository-manifest-v2.3.schema.json`](/schemas/repository-manifest-v2.3.schema.json).
 It is a structural schema, not a claim of JSON Schema/parser equivalence. The
 canonical parser additionally fails closed on constraints that require
 cross-field or value-aware inspection: uniqueness across related declarations,
@@ -57,8 +60,8 @@ SourceSnapshot manifest, runs compatibility for that exact path, and persists
 the same path in the derived InstallConfig:
 
 1. If `modules` has one entry, select its only key.
-2. Multiple entries require `install.defaultModule` in `takosumi.com/v2.1` or
-   `takosumi.com/v2.2`.
+2. Multiple entries require `install.defaultModule` in `takosumi.com/v2.1`,
+   `takosumi.com/v2.2`, or `takosumi.com/v2.3`.
 3. `defaultModule` must be canonical and byte-for-byte equal to an own
    `modules` key.
 
@@ -152,9 +155,41 @@ user inputs declared by the same module and cannot be claimed by another
 feature. A feature is UI grouping, not provider, resource, or lifecycle
 authority.
 
-## `interfaces` (v2 / v2.1 / v2.2)
+## `sourceBuild` (v2.3)
 
-v2, v2.1, and v2.2 may add at most 32 generic Capsule Interface proposals per
+v2.3 modules may carry an optional credential-free `sourceBuild` proposal for
+preparing the Git SourceSnapshot checkout. This is not repository execution
+authority: after the exact compatibility review, Takosumi compiles the
+user-reviewed value into DB-owned `InstallConfig.sourceBuild`. An existing
+service/operator `baseConfig.sourceBuild` always wins over the repository
+proposal.
+
+```json
+{
+  "sourceBuild": {
+    "commands": [
+      { "argv": ["bun", "install", "--frozen-lockfile"] },
+      { "argv": ["bun", "run", "build"], "workingDirectory": "web" }
+    ],
+    "outputs": ["web/dist/index.js"]
+  }
+}
+```
+
+There are 1–8 commands. Each `argv` is a non-empty argv array (not a shell
+string) of at most 32 arguments, each at most 4096 characters. `workingDirectory`
+and `outputs` are safe paths relative to the SourceSnapshot root; there are
+1–16 outputs and `.` is not a produced path. Objects are closed: `env`,
+credentials, provider selection, and lifecycle fields are not allowed, and
+argv cannot contain secret-like material.
+
+Before Plan starts, the dashboard discloses the exact argv, working directory
+(Source root when omitted), and outputs. Plan/Run consumes only the persisted
+InstallConfig and never re-reads repository metadata at runtime.
+
+## `interfaces` (v2 / v2.1 / v2.2 / v2.3)
+
+v2, v2.1, v2.2, and v2.3 may add at most 32 generic Capsule Interface proposals per
 module. An `interfaces` field is invalid in v1. v2.1 and v2.2 retain the exact
 v2 Interface schema and compiler semantics. This section declares Interfaces a
 Capsule provides; `interface.consume` declares an Interface it consumes.
@@ -258,7 +293,8 @@ Public documents cannot embed secret or authority material:
 
 An API identifier names a closed schema. Existing versions do not gain fields
 or new meanings later. v2.1 adds only optional `install.defaultModule`; v2.2
-adds only provider-neutral `interface.consume`. Both are additive schema
+adds only provider-neutral `interface.consume`; v2.3 adds only bounded,
+credential-free `sourceBuild`. These are additive schema
 revisions that preserve existing module, provided-Interface, and authority
 semantics. Unknown versions or fields fail closed. Incompatible vocabulary or
 authority changes require a separate schema identifier.
@@ -270,6 +306,8 @@ A future metadata section requires a new `apiVersion`; unknown fields continue t
 - v2 `interfaces` keep the same shape and meaning after changing to v2.1.
 - Only a repository that consumes a host Interface upgrades to v2.2 and adds
   `interface.consume`.
+- A repository that proposes SourceSnapshot preparation upgrades to v2.3 and
+  adds `sourceBuild` per module.
 - Do not backport the new field while retaining a v1/v2 identifier.
 
 The Store does not proxy this manifest. See [Store API](./store-api.md) for the

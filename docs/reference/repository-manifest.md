@@ -17,7 +17,7 @@ persist 済み InstallConfig であり、manifest を実行時に再読込しま
 
 ```json
 {
-  "apiVersion": "takosumi.com/v2.2",
+  "apiVersion": "takosumi.com/v2.3",
   "kind": "Repository",
   "install": {}
 }
@@ -29,6 +29,7 @@ persist 済み InstallConfig であり、manifest を実行時に再読込しま
 | `takosumi.com/v2`   | `modules`                    | v1 + `interfaces`                                |
 | `takosumi.com/v2.1` | `modules`, `defaultModule`?  | v2 と同一                                        |
 | `takosumi.com/v2.2` | `modules`, `defaultModule`?  | v2.1 + `requires[].kind: interface.consume`      |
+| `takosumi.com/v2.3` | `modules`, `defaultModule`?  | v2.2 + optional `sourceBuild`                   |
 
 各 object は closed です。表や各 section にない field、`$schema`、旧
 `schemaVersion: takosumi.install-ux/v1` は拒否されます。v1/v2 に
@@ -36,7 +37,8 @@ persist 済み InstallConfig であり、manifest を実行時に再読込しま
 
 公開 JSON Schema は
 [`repository-manifest-v2.1.schema.json`](/schemas/repository-manifest-v2.1.schema.json) と
-[`repository-manifest-v2.2.schema.json`](/schemas/repository-manifest-v2.2.schema.json)
+[`repository-manifest-v2.2.schema.json`](/schemas/repository-manifest-v2.2.schema.json) と
+[`repository-manifest-v2.3.schema.json`](/schemas/repository-manifest-v2.3.schema.json)
 です。これは structural schema であり、JSON Schema と parser の完全な同値性を
 意味しません。cross-field uniqueness、`defaultModule` と動的 key の一致、JSON
 recursive depth（最大32）、下記の secret/authority vocabulary 検査は canonical
@@ -54,7 +56,7 @@ Source sync 後、server が exact SourceSnapshot の manifest だけから次�
 保存します。
 
 1. `modules` が1件なら、その唯一の key を選ぶ。
-2. 複数なら `takosumi.com/v2.1` または `takosumi.com/v2.2` の
+2. 複数なら `takosumi.com/v2.1`、`takosumi.com/v2.2`、または `takosumi.com/v2.3` の
    `install.defaultModule` が必須。
 3. `defaultModule` は canonical path かつ `modules` の own key と byte-for-byte で
    一致しなければならない。
@@ -143,9 +145,39 @@ non-empty `inputs` だけを持ちます。`inputs` は同じ module に宣言�
 参照し、feature 間でも重複できません。feature は UI grouping であり、provider、
 resource、lifecycle を有効化する authority ではありません。
 
-## `interfaces` (v2 / v2.1 / v2.2)
+## `sourceBuild` (v2.3)
 
-v2、v2.1、v2.2 は module ごとに最大32件の generic Capsule Interface proposal を
+v2.3 の module は、Git SourceSnapshot の checkout 前処理を行う任意の
+credential-free `sourceBuild` proposal を持てます。これは repository metadata の
+実行権限ではなく、exact compatibility review 後に DB-owned `InstallConfig.sourceBuild`
+へ compile される user-reviewed 値です。既存の service/operator `baseConfig.sourceBuild`
+があれば repository proposal より常に優先されます。
+
+```json
+{
+  "sourceBuild": {
+    "commands": [
+      { "argv": ["bun", "install", "--frozen-lockfile"] },
+      { "argv": ["bun", "run", "build"], "workingDirectory": "web" }
+    ],
+    "outputs": ["web/dist/index.js"]
+  }
+}
+```
+
+`commands` は1〜8件、各 `argv` は shell string ではない1〜32個の non-empty argv
+要素（各4096文字以内）です。`workingDirectory` と `outputs` は SourceSnapshot
+root からの safe relative path で、outputs は1〜16件かつ `.` ではない produced
+path を指定します。object は closed で、`env`、credential、provider、lifecycle
+field はありません。argv に secret-like material を含めることもできません。
+
+Dashboard は Plan を開始する前に exact argv、working directory（省略時は Source
+root）、outputs を表示します。Plan/Run は captured repository metadata を再読込せず、
+persist 済み InstallConfig だけを使います。
+
+## `interfaces` (v2 / v2.1 / v2.2 / v2.3)
+
+v2、v2.1、v2.2、v2.3 は module ごとに最大32件の generic Capsule Interface proposal を
 追加できます。v1 に `interfaces` を置くと invalid です。v2.1 と v2.2 は v2 の
 Interface schema と compiler semantics をそのまま保持します。この section は
 Capsule が提供する Interface、`interface.consume` は Capsule が利用する Interface です。
@@ -241,7 +273,8 @@ v2 に v2.1 field を足しても無効です。
 
 version identifier は closed schema の識別子です。既存 version の field set や意味を
 後から広げません。v2.1 は optional `install.defaultModule`、v2.2 は provider-neutral な
-`interface.consume` だけを追加する additive schema revision です。既存の module、
+`interface.consume`、v2.3 は bounded credential-free `sourceBuild` だけを追加する
+additive schema revision です。既存の module、
 provided Interface、authority semantics は変えません。未知 version/field は fail closed
 です。incompatible vocabulary や authority model の変更には別の schema identifier が
 必要です。
@@ -254,6 +287,8 @@ fail closed のままにします。
 - v2 の `interfaces` は v2.1 へ変更しても同じ形・意味で保持されます。
 - host Interface を利用する repository だけが v2.2 に上げ、
   `interface.consume` を追加します。
+- SourceSnapshot の前処理を提案する repository は v2.3 に上げ、module ごとに
+  `sourceBuild` を追加します。
 - v1/v2 の文書に field だけ backport してはいけません。
 
 Store はこの manifest を代理しません。TCS 2.0 との接続と URL-only handoff は

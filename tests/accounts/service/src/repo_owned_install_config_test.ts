@@ -298,6 +298,67 @@ describe("repository-owned default module selection", () => {
   });
 });
 
+describe("repository-owned sourceBuild adoption", () => {
+  const sourceBuildDocument = {
+    ...repositoryDocument,
+    apiVersion: "takosumi.com/v2.3",
+    install: {
+      ...repositoryDocument.install,
+      defaultModule: ".",
+      modules: {
+        ".": {
+          ...repositoryDocument.install.modules["."]!,
+          sourceBuild: {
+            commands: [
+              { argv: ["bun", "install", "--frozen-lockfile"] },
+              { argv: ["bun", "run", "build"], workingDirectory: "web" },
+            ],
+            outputs: ["web/dist/index.js"],
+          },
+        },
+      },
+    },
+  } satisfies RepositoryManifestDocument;
+
+  test("pins the repository proposal into adoption when the base has none", async () => {
+    const result = await adopt(baseConfig(), {
+      sourceSnapshot: snapshotWithManifest({
+        status: "present",
+        digest: MANIFEST_DIGEST,
+        document: sourceBuildDocument,
+      }),
+      installingPrincipalId: undefined,
+    });
+
+    expect(result.status).toBe("accepted");
+    if (result.status !== "accepted") return;
+    expect(result.sourceBuild).toEqual(
+      sourceBuildDocument.install.modules["."].sourceBuild,
+    );
+  });
+
+  test("keeps a differing service base sourceBuild as the final authority", async () => {
+    const baseSourceBuild = {
+      commands: [{ argv: ["npm", "run", "build"] }],
+      outputs: ["dist/operator.js"],
+    };
+    const result = await adopt(baseConfig({ sourceBuild: baseSourceBuild }), {
+      sourceSnapshot: snapshotWithManifest({
+        status: "present",
+        digest: MANIFEST_DIGEST,
+        document: sourceBuildDocument,
+      }),
+    });
+
+    expect(result.status).toBe("accepted");
+    if (result.status !== "accepted") return;
+    expect(result.sourceBuild).toEqual(baseSourceBuild);
+    expect(result.sourceBuild).not.toEqual(
+      sourceBuildDocument.install.modules["."].sourceBuild,
+    );
+  });
+});
+
 describe("repository-owned Interface InstallConfig adoption", () => {
   test("v2.1 preserves v2 Interface proposal merging and installing Principal resolution", async () => {
     const v2_1Document = {

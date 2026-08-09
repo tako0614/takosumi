@@ -44,6 +44,13 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.continue": "Continue",
   "installStore.setupTitle": "Set up the service",
   "installStore.setupHint": "Enter only the values this service asks for.",
+  "installStore.sourceBuildTitle": "Repository build steps",
+  "installStore.sourceBuildHint":
+    "Review these credential-free commands and produced paths before starting the Plan.",
+  "installStore.sourceBuildCommand": "Command {index}",
+  "installStore.sourceBuildWorkingDirectory": "Working directory",
+  "installStore.sourceBuildSourceRoot": "Source root",
+  "installStore.sourceBuildOutputs": "Produced paths",
   "installStore.setupInvalid": "The service setup definition is invalid.",
   "installStore.setupRequired": "Enter {label}.",
   "installStore.secretUnavailable": "Configure this secret as a connection.",

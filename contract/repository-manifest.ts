@@ -1,4 +1,5 @@
 import type { JsonValue } from "./types.ts";
+import type { SourceBuildConfig } from "./install-configs.ts";
 import { containsSecretLikeString, isSecretKey } from "./redaction.ts";
 
 /**
@@ -10,6 +11,8 @@ import { containsSecretLikeString, isSecretKey } from "./redaction.ts";
  * Capsule-owned Interface proposals. Version 2.1 retains that exact module
  * vocabulary and adds only an optional repository-owned default module key.
  * Version 2.2 adds provider-neutral requests to consume a host Interface.
+ * Version 2.3 adds an optional credential-free sourceBuild proposal per
+ * module. Earlier versions remain closed and reject that field.
  * Every declaration is still only a proposal until Takosumi validates and
  * compiles it into its DB-owned InstallConfig before a reviewed Plan can use it.
  */
@@ -22,6 +25,8 @@ export const TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_1 =
   "takosumi.com/v2.1" as const;
 export const TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_2 =
   "takosumi.com/v2.2" as const;
+export const TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_3 =
+  "takosumi.com/v2.3" as const;
 export const TAKOSUMI_REPOSITORY_MANIFEST_KIND = "Repository" as const;
 export const TAKOSUMI_REPOSITORY_MANIFEST_PATH =
   ".well-known/takosumi.json" as const;
@@ -226,12 +231,25 @@ export interface RepositoryManifestInstallV2_2 {
   readonly defaultModule?: string;
 }
 
+export interface RepositoryInstallUxModuleV2_3
+  extends RepositoryInstallUxModule {
+  /** Credential-free argv build proposal, reviewed before Plan. */
+  readonly sourceBuild?: SourceBuildConfig;
+}
+
+export interface RepositoryManifestInstallV2_3 {
+  readonly modules: Readonly<Record<string, RepositoryInstallUxModuleV2_3>>;
+  /** Exact canonical key of `modules`; optional only for one-module inference. */
+  readonly defaultModule?: string;
+}
+
 /** Compatibility alias for callers that only need the install envelope. */
 export type RepositoryManifestInstall =
   | RepositoryManifestInstallV1
   | RepositoryManifestInstallV2
   | RepositoryManifestInstallV2_1
-  | RepositoryManifestInstallV2_2;
+  | RepositoryManifestInstallV2_2
+  | RepositoryManifestInstallV2_3;
 
 export interface RepositoryManifestDocumentV1 {
   readonly apiVersion: typeof TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION;
@@ -257,25 +275,34 @@ export interface RepositoryManifestDocumentV2_2 {
   readonly install: RepositoryManifestInstallV2_2;
 }
 
+export interface RepositoryManifestDocumentV2_3 {
+  readonly apiVersion: typeof TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_3;
+  readonly kind: typeof TAKOSUMI_REPOSITORY_MANIFEST_KIND;
+  readonly install: RepositoryManifestInstallV2_3;
+}
+
 export type RepositoryManifestDocument =
   | RepositoryManifestDocumentV1
   | RepositoryManifestDocumentV2
   | RepositoryManifestDocumentV2_1
-  | RepositoryManifestDocumentV2_2;
+  | RepositoryManifestDocumentV2_2
+  | RepositoryManifestDocumentV2_3;
 
 export type RepositoryManifestInterfaceApiVersion =
   | typeof TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2
   | typeof TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_1
-  | typeof TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_2;
+  | typeof TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_2
+  | typeof TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_3;
 
-/** v2.1 and v2.2 retain the full v2 provided-Interface wire. */
+/** v2.1, v2.2, and v2.3 retain the full v2 provided-Interface wire. */
 export function isRepositoryManifestInterfaceCapableApiVersion(
   apiVersion: RepositoryManifestDocument["apiVersion"] | string,
 ): apiVersion is RepositoryManifestInterfaceApiVersion {
   return (
     apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2 ||
     apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_1 ||
-    apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_2
+    apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_2 ||
+    apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_3
   );
 }
 
@@ -313,10 +340,11 @@ export function parseRepositoryManifestText(
     TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2,
     TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_1,
     TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_2,
+    TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_3,
   ] as const);
   if (!apiVersion) {
     return invalid(
-      `apiVersion must be ${TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION}, ${TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2}, ${TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_1}, or ${TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_2}`,
+      `apiVersion must be ${TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION}, ${TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2}, ${TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_1}, ${TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_2}, or ${TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_3}`,
     );
   }
   if (value.kind !== TAKOSUMI_REPOSITORY_MANIFEST_KIND) {
@@ -328,7 +356,8 @@ export function parseRepositoryManifestText(
   const installKeys = exactKeys(value.install, [
     "modules",
     ...(apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_1 ||
-    apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_2
+    apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_2 ||
+    apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_3
       ? ["defaultModule"]
       : []),
   ]);
@@ -355,14 +384,17 @@ export function parseRepositoryManifestText(
       rawModule,
       modulePath,
       isRepositoryManifestInterfaceCapableApiVersion(apiVersion),
-      apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_2,
+      apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_2 ||
+        apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_3,
+      apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_3,
     );
     if (typeof parsed === "string") return invalid(parsed);
     modules[modulePath] = parsed;
   }
   const defaultModule =
     apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_1 ||
-    apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_2
+    apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_2 ||
+    apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_3
       ? value.install.defaultModule
       : undefined;
   if (defaultModule !== undefined) {
@@ -398,6 +430,7 @@ function parseModule(
   modulePath: string,
   allowInterfaces: boolean,
   allowConsumedInterfaces: boolean,
+  allowSourceBuild: boolean,
 ): RepositoryInstallUxModule | string {
   const prefix = `install.modules.${JSON.stringify(modulePath)}`;
   if (!isPlainRecord(value)) return `${prefix} must be an object`;
@@ -406,6 +439,7 @@ function parseModule(
     "requires",
     "features",
     ...(allowInterfaces ? ["interfaces"] : []),
+    ...(allowSourceBuild ? ["sourceBuild"] : []),
   ]);
   if (keys) return `${prefix}.${keys}`;
   if (!Array.isArray(value.inputs)) return `${prefix}.inputs must be an array`;
@@ -438,6 +472,11 @@ function parseModule(
     : undefined;
   if (typeof interfaces === "string") return interfaces;
 
+  const sourceBuild = allowSourceBuild
+    ? parseRepositorySourceBuild(value.sourceBuild, `${prefix}.sourceBuild`)
+    : undefined;
+  if (typeof sourceBuild === "string") return sourceBuild;
+
   const roles = new Set<string>();
   for (const input of inputs) {
     if (!input.role) continue;
@@ -452,7 +491,116 @@ function parseModule(
     ...(requires ? { requires } : {}),
     ...(features ? { features } : {}),
     ...(interfaces ? { interfaces } : {}),
+    ...(sourceBuild ? { sourceBuild } : {}),
   };
+}
+
+/**
+ * Parse the v2.3 credential-free source preparation proposal. The shape is
+ * intentionally the same as InstallConfig SourceBuildConfig, but the
+ * manifest parser keeps the object closed so repository metadata cannot add an
+ * env map, credential reference, or another execution knob.
+ */
+export function parseRepositorySourceBuild(
+  value: unknown,
+  prefix = "sourceBuild",
+): SourceBuildConfig | string | undefined {
+  if (value === undefined) return undefined;
+  if (!isPlainRecord(value)) return `${prefix} must be an object`;
+  const keys = exactKeys(value, ["commands", "outputs"]);
+  if (keys) return `${prefix}.${keys}`;
+  if (
+    !Array.isArray(value.commands) ||
+    value.commands.length < 1 ||
+    value.commands.length > 8
+  ) {
+    return `${prefix}.commands must contain 1-8 commands`;
+  }
+  if (
+    !Array.isArray(value.outputs) ||
+    value.outputs.length < 1 ||
+    value.outputs.length > 16
+  ) {
+    return `${prefix}.outputs must contain 1-16 paths`;
+  }
+
+  const commands: SourceBuildConfig["commands"][number][] = [];
+  for (let index = 0; index < value.commands.length; index += 1) {
+    const commandPrefix = `${prefix}.commands[${index}]`;
+    const rawCommand = value.commands[index];
+    if (!isPlainRecord(rawCommand)) {
+      return `${commandPrefix} must be an object`;
+    }
+    const commandKeys = exactKeys(rawCommand, ["argv", "workingDirectory"]);
+    if (commandKeys) return `${commandPrefix}.${commandKeys}`;
+    if (
+      !Array.isArray(rawCommand.argv) ||
+      rawCommand.argv.length < 1 ||
+      rawCommand.argv.length > 32
+    ) {
+      return `${commandPrefix}.argv must contain 1-32 arguments`;
+    }
+    const argv: string[] = [];
+    for (let argumentIndex = 0; argumentIndex < rawCommand.argv.length; argumentIndex += 1) {
+      const argument = rawCommand.argv[argumentIndex];
+      if (
+        typeof argument !== "string" ||
+        argument.length < 1 ||
+        argument.length > 4096 ||
+        argument.includes("\0")
+      ) {
+        return `${commandPrefix}.argv[${argumentIndex}] must be a bounded non-empty argument without NUL`;
+      }
+      if (containsSecretLikeString(argument)) {
+        return `${commandPrefix}.argv[${argumentIndex}] contains forbidden secret-like material`;
+      }
+      argv.push(argument);
+    }
+    const workingDirectory = sourceBuildRelativePath(
+      rawCommand.workingDirectory,
+    );
+    if (
+      rawCommand.workingDirectory !== undefined &&
+      workingDirectory === undefined
+    ) {
+      return `${commandPrefix}.workingDirectory must be a safe relative path`;
+    }
+    commands.push({
+      argv,
+      ...(workingDirectory ? { workingDirectory } : {}),
+    });
+  }
+
+  const outputs: string[] = [];
+  for (let index = 0; index < value.outputs.length; index += 1) {
+    const output = sourceBuildRelativePath(value.outputs[index]);
+    if (!output) {
+      return `${prefix}.outputs[${index}] must be a safe relative produced path`;
+    }
+    outputs.push(output);
+  }
+  return { commands, outputs };
+}
+
+function sourceBuildRelativePath(value: unknown): string | undefined {
+  if (typeof value !== "string" || value.length > 1_024) return undefined;
+  const raw = value.trim().replace(/\\/gu, "/");
+  if (
+    !raw ||
+    raw.startsWith("/") ||
+    /^[A-Za-z]:(?:\/|$)/u.test(raw) ||
+    raw.includes("\0")
+  ) {
+    return undefined;
+  }
+  const segments = raw.split("/");
+  const normalized: string[] = [];
+  for (const segment of segments) {
+    if (!segment || segment === ".") continue;
+    if (segment === "..") return undefined;
+    normalized.push(segment);
+  }
+  return normalized.join("/");
 }
 
 function parseInterfaces(

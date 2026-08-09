@@ -1241,6 +1241,7 @@ function policySchemas(): Record<string, Record<string, unknown>> {
                 "takosumi.com/v2",
                 "takosumi.com/v2.1",
                 "takosumi.com/v2.2",
+                "takosumi.com/v2.3",
               ],
             },
           },

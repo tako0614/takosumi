@@ -93,6 +93,61 @@ type StoreInstallFeature = NonNullable<
 >[number];
 type StoreAuthMode = "oidc" | "password";
 
+export interface SourceBuildPreview {
+  readonly commands: readonly {
+    readonly argv: readonly string[];
+    readonly workingDirectory?: string;
+  }[];
+  readonly outputs: readonly string[];
+}
+
+/**
+ * Public install preview projection for the persisted sourceBuild contract.
+ * Keep this deliberately allowlisted: a malformed/legacy API row must not
+ * make env, credential, or other execution fields visible in the dashboard.
+ */
+export function sourceBuildPreview(value: unknown): SourceBuildPreview | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  if (!Array.isArray(record.commands) || !Array.isArray(record.outputs)) {
+    return undefined;
+  }
+  const commands: SourceBuildPreview["commands"][number][] = [];
+  for (const command of record.commands) {
+    if (!command || typeof command !== "object" || Array.isArray(command)) {
+      return undefined;
+    }
+    const commandRecord = command as Record<string, unknown>;
+    if (
+      !Array.isArray(commandRecord.argv) ||
+      !commandRecord.argv.every((argument) => typeof argument === "string")
+    ) {
+      return undefined;
+    }
+    if (
+      commandRecord.workingDirectory !== undefined &&
+      typeof commandRecord.workingDirectory !== "string"
+    ) {
+      return undefined;
+    }
+    commands.push({
+      argv: [...commandRecord.argv] as string[],
+      ...(typeof commandRecord.workingDirectory === "string"
+        ? { workingDirectory: commandRecord.workingDirectory }
+        : {}),
+    });
+  }
+  if (!record.outputs.every((output) => typeof output === "string")) {
+    return undefined;
+  }
+  return {
+    commands,
+    outputs: [...record.outputs] as string[],
+  };
+}
+
 function safeText(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }

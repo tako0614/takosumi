@@ -8,6 +8,9 @@ import repositoryManifestV2_1Schema from "../../docs/public/schemas/repository-m
 import repositoryManifestV2_2Schema from "../../docs/public/schemas/repository-manifest-v2.2.schema.json" with {
   type: "json",
 };
+import repositoryManifestV2_3Schema from "../../docs/public/schemas/repository-manifest-v2.3.schema.json" with {
+  type: "json",
+};
 
 import {
   parseRepositoryManifestText,
@@ -110,7 +113,7 @@ test("repository manifest rejects unknown authority, fields, and versions", asyn
   ).toEqual({
     ok: false,
     error:
-      "apiVersion must be takosumi.com/v1, takosumi.com/v2, takosumi.com/v2.1, or takosumi.com/v2.2",
+      "apiVersion must be takosumi.com/v1, takosumi.com/v2, takosumi.com/v2.1, takosumi.com/v2.2, or takosumi.com/v2.3",
   });
   expect(
     parseRepositoryManifestText(
@@ -126,6 +129,74 @@ test("repository manifest rejects unknown authority, fields, and versions", asyn
     ok: false,
     error: "contains unsupported field $schema",
   });
+});
+
+test("repository manifest v2.3 accepts only the bounded credential-free sourceBuild proposal", () => {
+  const document = {
+    apiVersion: "takosumi.com/v2.3",
+    kind: "Repository",
+    install: {
+      defaultModule: ".",
+      modules: {
+        ".": {
+          inputs: [],
+          sourceBuild: {
+            commands: [
+              { argv: ["bun", "install", "--frozen-lockfile"] },
+              { argv: ["bun", "run", "build"], workingDirectory: "web" },
+            ],
+            outputs: ["web/dist/index.js"],
+          },
+        },
+      },
+    },
+  };
+  const parsed = parseRepositoryManifestText(JSON.stringify(document));
+  expect(parsed.ok).toBe(true);
+  if (!parsed.ok) return;
+  expect(parsed.document.apiVersion).toBe("takosumi.com/v2.3");
+  expect(parsed.document.install.modules["."]?.sourceBuild).toEqual(
+    document.install.modules["."].sourceBuild,
+  );
+
+  const earlierVersion = structuredClone(document);
+  earlierVersion.apiVersion = "takosumi.com/v2.2";
+  expect(parseRepositoryManifestText(JSON.stringify(earlierVersion))).toEqual({
+    ok: false,
+    error: 'install.modules.".".contains unsupported field sourceBuild',
+  });
+
+  const mutations: readonly [string, (value: typeof document) => void][] = [
+    ["env", (value) => ((value.install.modules["."].sourceBuild as any).env = {})],
+    [
+      "unsafe argv",
+      (value) => {
+        value.install.modules["."].sourceBuild.commands[0].argv = [
+          "bun\0run",
+        ];
+      },
+    ],
+    [
+      "unsafe output",
+      (value) => {
+        value.install.modules["."].sourceBuild.outputs = ["../dist/app.js"];
+      },
+    ],
+    [
+      "unsafe working directory",
+      (value) => {
+        value.install.modules["."].sourceBuild.commands[1].workingDirectory =
+          "../web";
+      },
+    ],
+  ];
+  for (const [label, mutate] of mutations) {
+    const invalid = structuredClone(document);
+    mutate(invalid);
+    expect(parseRepositoryManifestText(JSON.stringify(invalid)).ok, label).toBe(
+      false,
+    );
+  }
 });
 
 test("repository manifest rejects traversal and duplicate app vocabulary", async () => {
@@ -724,4 +795,32 @@ test("repository manifest v2 bounds one installer binding and workspace access",
     delivery: { type: "none" },
   });
   expect(parseRepositoryManifestText(JSON.stringify(document)).ok).toBe(false);
+});
+
+test("the published v2.3 schema covers sourceBuild structure while the parser owns path semantics", () => {
+  const ajv = new Ajv2020({ allErrors: true, strict: false });
+  ajv.addSchema(repositoryManifestV2_1Schema);
+  const validate = ajv.compile(repositoryManifestV2_3Schema);
+  const document = {
+    apiVersion: "takosumi.com/v2.3",
+    kind: "Repository",
+    install: {
+      modules: {
+        ".": {
+          inputs: [],
+          sourceBuild: {
+            commands: [{ argv: ["bun", "run", "build"], workingDirectory: "web" }],
+            outputs: ["web/dist/index.js"],
+          },
+        },
+      },
+    },
+  };
+  expect(validate(document), JSON.stringify(validate.errors)).toBe(true);
+  expect(parseRepositoryManifestText(JSON.stringify(document)).ok).toBe(true);
+
+  const unknownField = structuredClone(document);
+  (unknownField.install.modules["."]!.sourceBuild as Record<string, unknown>).env = {};
+  expect(validate(unknownField)).toBe(false);
+  expect(parseRepositoryManifestText(JSON.stringify(unknownField)).ok).toBe(false);
 });

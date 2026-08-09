@@ -6,6 +6,7 @@ import {
   isRepositoryManifestInterfaceCapableApiVersion,
   TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_1,
   TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_2,
+  TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_3,
   type RepositoryManifestDocument,
 } from "takosumi-contract/repository-manifest";
 import type { JsonValue } from "takosumi-contract/types";
@@ -89,6 +90,8 @@ export type RepoOwnedInstallConfigAdoptionResult =
       readonly interfaceBlueprints: InstallConfig["interfaceBlueprints"];
       readonly requiredInterfaces?: InstallConfig["requiredInterfaces"];
       readonly outputAllowlist: InstallConfig["outputAllowlist"];
+      /** Repository sourceBuild is a proposal; an existing base value wins. */
+      readonly sourceBuild?: InstallConfig["sourceBuild"];
       /**
        * Compiled from the repository's own runtime requirements. A service or
        * operator declaration on the base config keeps final authority.
@@ -311,6 +314,8 @@ export async function adoptRepoOwnedInstallConfig(
   if (!outputAllowlist.ok) {
     return { status: "invalid", diagnostic: outputAllowlist.diagnostic };
   }
+  const sourceBuild =
+    input.baseConfig.sourceBuild ?? compiled.compiled.sourceBuild;
 
   return {
     status: "accepted",
@@ -333,6 +338,7 @@ export async function adoptRepoOwnedInstallConfig(
       ? { requiredInterfaces: compiled.compiled.requiredInterfaces }
       : {}),
     outputAllowlist: outputAllowlist.value,
+    ...(sourceBuild ? { sourceBuild } : {}),
     ...((input.baseConfig.hostRuntimeMaterialization ??
     compiled.compiled.hostRuntimeMaterialization)
       ? {
@@ -408,6 +414,7 @@ export async function previewRepoOwnedInstallConfig(
     installExperience: adoption.installExperience ?? {},
     hostRuntimeMaterialization: adoption.hostRuntimeMaterialization ?? null,
     variableMapping: adoption.variableMapping,
+    ...(adoption.sourceBuild ? { sourceBuild: adoption.sourceBuild } : {}),
     ...repositoryInterfaceDigestFields,
     policy: input.baseConfig.policy,
   });
@@ -456,6 +463,7 @@ export async function previewRepoOwnedInstallConfig(
     variablePresentation: adoption.variablePresentation,
     installExperience: adoption.installExperience,
     variableMapping: adoption.variableMapping,
+    ...(adoption.sourceBuild ? { sourceBuild: adoption.sourceBuild } : {}),
     outputAllowlist: adoption.outputAllowlist,
     ...(adoption.interfaceBlueprints !== undefined
       ? { interfaceBlueprints: adoption.interfaceBlueprints }
@@ -694,7 +702,8 @@ export function resolveRepoOwnedInstallModulePath(input: {
   const modulePaths = Object.keys(document.install.modules);
   if (
     document.apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_1 ||
-    document.apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_2
+    document.apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_2 ||
+    document.apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_3
   ) {
     const defaultModule = document.install.defaultModule;
     if (

@@ -10,6 +10,7 @@ import type {
   CapsuleRequiredInterface,
 } from "takosumi-contract/interfaces";
 import type {
+  InstallConfig,
   InstallConfigHostRuntimeMaterialization,
   InstallConfigInstallExperience,
   InstallConfigInstallProjection,
@@ -31,6 +32,8 @@ import {
   deliveryTargets,
   findForbiddenRepositoryManifestMaterial,
   isRepositoryManifestInterfaceCapableApiVersion,
+  parseRepositorySourceBuild,
+  TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_3,
 } from "takosumi-contract/repository-manifest";
 import { HOST_RUNTIME_MATERIALIZATION_CONTRACT } from "takosumi-contract";
 import type { JsonValue } from "takosumi-contract/types";
@@ -105,7 +108,9 @@ export type RepositoryInstallUxDiagnosticCode =
   | "repository_install_ux_interface_output_type_conflict"
   | "repository_install_ux_interface_binding_invalid"
   | "repository_install_ux_interface_permission_disallowed"
-  | "repository_install_ux_interface_delivery_disallowed";
+  | "repository_install_ux_interface_delivery_disallowed"
+  | "repository_install_ux_source_build_version_unsupported"
+  | "repository_install_ux_source_build_invalid";
 
 export interface RepositoryInstallUxDiagnostic {
   readonly code: RepositoryInstallUxDiagnosticCode;
@@ -147,6 +152,8 @@ export interface CompiledRepositoryInstallUx {
   readonly requiredInterfaces: readonly CapsuleRequiredInterface[];
   /** Least-privilege Output projections required by those Interfaces. */
   readonly outputAllowlist: Readonly<Record<string, OutputAllowlistEntry>>;
+  /** Credential-free source preparation persisted into InstallConfig. */
+  readonly sourceBuild?: InstallConfig["sourceBuild"];
   /**
    * Requirements the repository asked the host to satisfy directly in the
    * application runtime. Absent when every requirement is delivered through
@@ -186,6 +193,38 @@ export function compileRepositoryInstallUx(
       "repository_install_ux_module_missing",
       `The repository install UX does not declare the selected module ${boundedIdentifier(modulePath)}.`,
     );
+  }
+
+  // `sourceBuild` is a v2.3-only field. Keep this runtime check in addition to
+  // the closed parser so manually constructed documents cannot smuggle it into
+  // an older API version and accidentally widen the execution contract.
+  const moduleWithSourceBuild = module as typeof module & {
+    readonly sourceBuild?: unknown;
+  };
+  if (
+    input.document.apiVersion !== TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_3 &&
+    moduleWithSourceBuild.sourceBuild !== undefined
+  ) {
+    return invalid(
+      "repository_install_ux_source_build_version_unsupported",
+      "Repository-owned sourceBuild requires takosumi.com/v2.3.",
+    );
+  }
+  let sourceBuild: InstallConfig["sourceBuild"];
+  if (
+    input.document.apiVersion === TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_3
+  ) {
+    const parsedSourceBuild = parseRepositorySourceBuild(
+      moduleWithSourceBuild.sourceBuild,
+      `install.modules.${JSON.stringify(modulePath)}.sourceBuild`,
+    );
+    if (typeof parsedSourceBuild === "string") {
+      return invalid(
+        "repository_install_ux_source_build_invalid",
+        "The repository sourceBuild proposal is invalid.",
+      );
+    }
+    sourceBuild = parsedSourceBuild;
   }
 
   const reportModulePath = canonicalModulePath(
@@ -367,6 +406,7 @@ export function compileRepositoryInstallUx(
         repositoryInstallUx: { status: "accepted" },
       },
       variableMapping,
+      ...(sourceBuild ? { sourceBuild } : {}),
       userVariableNames: module.inputs
         .filter((declaration) => declaration.source.kind === "user")
         .map((declaration) => declaration.name)
@@ -414,7 +454,7 @@ function compileInterfaceDeclarations(
   if (!isRepositoryManifestInterfaceCapableApiVersion(input.apiVersion)) {
     return invalid(
       "repository_install_ux_interface_version_unsupported",
-      "Repository-owned Interface declarations require takosumi.com/v2 or takosumi.com/v2.1.",
+      "Repository-owned Interface declarations require takosumi.com/v2, v2.1, v2.2, or v2.3.",
     );
   }
 
