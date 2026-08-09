@@ -59,6 +59,7 @@ const REQUIRED_PUBLIC_DOCS = [
 
 const REQUIRED_INTERNAL_DOCS = [
   "docs/internal/README.md",
+  "docs/internal/product-goal.md",
   "docs/internal/final-plan.md",
   "docs/internal/core-spec.md",
   "docs/internal/core-conformance.md",
@@ -335,7 +336,28 @@ test("Takosumi internal authority docs stay outside the public docs surface", as
     new URL("docs/internal/README.md", ROOT),
   );
   assert.match(internalReadme, /excluded from the published/);
+  assert.match(internalReadme, /Product Goal/);
   assert.match(internalReadme, /current OSS contract/);
+
+  const productGoal = await readText(
+    new URL("docs/internal/product-goal.md", ROOT),
+  );
+  assert.match(productGoal, /active product destination and definition of done/);
+  assert.match(productGoal, /not a\s+contract[\s\S]*roadmap\/backlog/);
+  assert.match(productGoal, /current public Takoform contract/);
+  assert.match(productGoal, /source candidate[\s\S]*isolated staging/);
+  assert.match(productGoal, /Production[\s\S]*immutable published identity/);
+  assert.match(productGoal, /self-host[\s\S]*hosted Cloud/);
+  assert.match(productGoal, /Core Spec/);
+  assert.match(productGoal, /Cloud GA smoke/);
+  assert.doesNotMatch(productGoal, /Final Plan.*current|authoritative.*roadmap/i);
+
+  const historicalFormEvidence = await readText(
+    new URL("docs/internal/form-lifecycle-and-host-evidence.md", ROOT),
+  );
+  assert.match(historicalFormEvidence, /superseded historical evidence note/);
+  assert.match(historicalFormEvidence, /does not define a current OSS Form Host/);
+  assert.doesNotMatch(historicalFormEvidence, /Takosumi owns one host lifecycle/);
 
   const finalPlan = await readText(
     new URL("docs/internal/final-plan.md", ROOT),

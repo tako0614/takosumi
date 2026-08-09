@@ -1,8 +1,8 @@
 # Generalization and Product-Boundary Audit
 
-Status: implementation audit for the pre-v1 clean cut. The product direction
-remains [`final-plan.md`](./final-plan.md); this document is a verification
-matrix, not a second specification.
+Status: implementation audit against the current [Core Spec](./core-spec.md)
+for the pre-v1 clean cut. This document is a verification matrix, not a
+second specification or product plan.
 
 ## Decision rule
 

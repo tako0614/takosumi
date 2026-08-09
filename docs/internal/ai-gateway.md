@@ -39,5 +39,6 @@ Cloud delta. Its operator runbook lives at
 `takosumi-cloud/docs/operations/ai-gateway.md`; customer-facing behavior lives
 in `app-docs`.
 
-See [Final Plan](final-plan.md#44-ai-gateway-is-not-a-resource-shape) and
-[Core Spec](core-spec.md) for the authoritative generic boundaries.
+See [Core Spec](core-spec.md#interfaces-and-interfacebindings) for the
+authoritative generic boundary. Hosted routing and evidence remain owned by
+the Cloud runbook linked above.
