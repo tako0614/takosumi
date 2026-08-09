@@ -803,7 +803,7 @@ test("repository manifest v2 bounds one installer binding and workspace access",
   expect(parseRepositoryManifestText(JSON.stringify(document)).ok).toBe(false);
 });
 
-test("the published v2.3 schema covers sourceBuild structure while the parser owns path semantics", () => {
+test("the published v2.3 schema and parser agree on closed sourceBuild paths", () => {
   const ajv = new Ajv2020({ allErrors: true, strict: false });
   ajv.addSchema(repositoryManifestV2_1Schema);
   const validate = ajv.compile(repositoryManifestV2_3Schema);
@@ -835,4 +835,9 @@ test("the published v2.3 schema covers sourceBuild structure while the parser ow
   expect(parseRepositoryManifestText(JSON.stringify(unknownField)).ok).toBe(
     false,
   );
+
+  const dotOutput = structuredClone(document);
+  dotOutput.install.modules["."]!.sourceBuild.outputs = ["."];
+  expect(validate(dotOutput)).toBe(false);
+  expect(parseRepositoryManifestText(JSON.stringify(dotOutput)).ok).toBe(false);
 });

@@ -19,8 +19,8 @@
     "Interface keys and names are unique and one Output name cannot request conflicting public types",
     "Interface access.resourceUriInput names a declared Interface input",
     "repository public presentation text and Interface JSON contain no known secret-like or host-authority material",
-    "interface.consume selectors resolve to exactly one Workspace-owned Resolved Interface and never carry an Interface id, endpoint, provider name, or credential"
-    ,"sourceBuild has 1-8 argv commands and 1-16 safe relative outputs; commands carry no env or credential fields"
+    "interface.consume selectors resolve to exactly one Workspace-owned Resolved Interface and never carry an Interface id, endpoint, provider name, or credential",
+    "sourceBuild has 1-8 argv commands and 1-16 safe non-dot relative outputs; commands carry no env or credential fields"
   ],
   "$defs": {
     "consumedInterfaceRequirement": {
@@ -145,6 +145,14 @@
       },
       "additionalProperties": false
     },
+    "sourceBuildOutputPath": {
+      "allOf": [
+        {
+          "$ref": "https://takosumi.com/docs/schemas/repository-manifest-v2.1.schema.json#/$defs/modulePath"
+        },
+        { "not": { "const": "." } }
+      ]
+    },
     "sourceBuild": {
       "type": "object",
       "required": ["commands", "outputs"],
@@ -160,7 +168,7 @@
           "minItems": 1,
           "maxItems": 16,
           "items": {
-            "$ref": "https://takosumi.com/docs/schemas/repository-manifest-v2.1.schema.json#/$defs/modulePath"
+            "$ref": "#/$defs/sourceBuildOutputPath"
           }
         }
       },
