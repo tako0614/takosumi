@@ -1,187 +1,64 @@
 # Takosumi Cloud
 
-Takosumi Cloud は、私たちが運営する Takosumi の公式ホスティングです。
-Git に置いたアプリや API を、ブラウザから `*.app.takos.jp` の URL で公開できます。
-ストレージ、データベース、キュー、AI などの Cloud resource も、必要な分だけ
-接続して使えます。料金は月額サブスクリプションのないプリペイドクレジット方式です
-([料金](./pricing.md))。
+Takosumi Cloud は、Git repository の OpenTofu module を実行し、必要なクラウドサービスと
+接続できる hosted Takosumi です。plan、apply、state、output、監査、利用量、クレジットを
+一つの Workspace で確認できます。
 
-この docs は `app.takosumi.com` で提供する hosted service としての
-Takosumi Cloud の docs です。自分で動かせる software としての Takosumi /
-Takosumi for Operator の docs は
-[takosumi.com/docs](https://takosumi.com/docs/) に分けています。
+> **Status:** Pre-GA。コードや catalog entry が存在しても、利用可能とは限りません。
+> Dashboard と認証済み Cloud catalog に表示される `available` が現在の提供状態です。
 
-## 何ができるか
+## 最初のデプロイ
 
-- app / API / service をホストする
-- `*.app.takos.jp` の URL をすぐ使う
-- Secret と環境変数を設定する
-- KV / Object Storage / Database / Queue / AI を binding として使う
-- Git URL から OpenTofu/Terraform のデプロイを実行する
-- 使用量、支払い状態、API key、リソース一覧を Dashboard で確認する
-
-## 提供の形
-
-Takosumi Cloud は、software としての Takosumi (Git を起点に、変更内容の確認 → 反映 →
-履歴の記録を行うデプロイ基盤) の上に、公式の実行先と課金・サポートを足したものです。
+1. [Dashboard](https://app.takosumi.com/) にサインインし、Workspace を選びます。
+2. Store または Git URL から repository を追加します。
+3. module が必要とする provider connection を選びます。
+4. plan と見積りを確認し、apply します。
+5. Run の Output と、アプリが公開した Interface から接続先を開きます。
 
 ```text
-Takosumi Cloud =
-  official hosted Takosumi for Operator
-  + operator-provided deployment targets
-  + Cloud-operated service backends
-  + billing / usage metering / spend guard
-  + support / operations
-
-Takosumi Cloud Resources =
-  Cloud Resource Offerings
-  + Cloud bindings
-  + OpenTofu deploy path
+Git repository
+  → OpenTofu plan / review / apply
+  → provider control plane
+  → state + typed Output
+  → authorized Interface
 ```
 
-Git から app / service を追加し、必要な resource を binding として接続すると、
-デプロイと更新が記録されます。Edge JS runtime、Object Storage、KV、Database、
-Queue、AI、Container は並列の Cloud resource で、使用量はクレジット残高、
-安全上限、支払い状態に基づいて管理されます。
+Cloudflare、AWS、Takoform などは runner から見ると同じ通常の provider です。各 provider
+の control plane が作成した object の lifecycle を所有し、Takosumi は同じ object を別の
+resource ledger に複製しません。
 
-## Runtime
+## Takosumi Cloud の役割
 
-Edge JS app は `EdgeWorker` resource として動きます。Takosumi Cloud はこれを
-Cloudflare Workers for Platforms と Takosumi が管理する dispatch layer で
-実装できます。これは Cloud が提供する resource のひとつで、ContainerService、
-Object Storage、KV、Database、Queue、AI とは別の service form です。
-AI Gateway、S3-compatible endpoint、Cloud usage endpoint は、同じ hosted Cloud
-origin 上の Cloud extension boundary を通して提供されます。
+Takosumi Cloud は次を提供します。
 
-どの現行入口から入っても — Dashboard、direct API、互換 endpoint のいずれでも —
-リクエストは同じ確認の流れを通ります。認証、発生元 Workspace の確認、
-支払い主体の確認、リソースの正規化、実行先の空き確認、使用量と上限の確認を経て、
-選ばれた backend (Workers for Platforms、R2、D1、KV、Queue、Containers など) が
-実行します。実行先が未設定の service form は、課金や backend 呼び出しの前に
-安全側に停止し、別の経路へ勝手に迂回しません。課金は Workspace ごとに
-分かれず、発生元 Workspace を記録として残しながら、所有ユーザーのアカウント残高から
-消費されます。
+- hosted dashboard、Accounts、runner、state、Output、audit
+- provider connection と credential の runner-only materialization
+- prepaid credit、利用量、quota、spend guard
+- 利用可能な hosted service と標準 protocol endpoint
+- deployed service へ安全に接続する Interface / InterfaceBinding
 
-Durable workflow は、利用可能な場合に Dynamic Workers と
-`@cloudflare/dynamic-workflows` を使います。operator/internal jobs は通常の
-Cloudflare Workflows を使います。
+Cloud 独自の提供可否、価格、容量、請求、support は Takoform の Form maturity とは別です。
+provider や schema が公開されただけでは Cloud service は有効になりません。
 
-| Service form           | Backing example                                   |
-| ---------------------- | ------------------------------------------------- |
-| Edge JS app            | Workers for Platforms dispatch namespace          |
-| Container service      | Cloudflare Containers or another operator target  |
-| Durable user workflow  | Dynamic Workers + `@cloudflare/dynamic-workflows` |
-| Operator/internal jobs | Cloudflare Workflows                              |
+## Takoform
 
-## Cloud Bindings
+Takosumi Cloud は official Takoform Host になる予定ですが、現在の candidate Host は未公開・
+未接続です。公開前の FormRef、schema digest、Host route は production capability として
+広告しません。
 
-Takosumi Cloud の resource は、app / service から binding として使います。
+公開後も Takoform は hidden runner mode にはなりません。Cloud の既定接続は通常の
+ProviderConnection / ProviderBinding を使い、利用者は自分の互換 Host 接続へ差し替えられます。
 
-| User-facing name | Purpose                         |
-| ---------------- | ------------------------------- |
-| Edge Worker      | Edge JS app / API runtime       |
-| Container        | OCI image based service         |
-| Route            | public URL / routing rule       |
-| Secrets          | write-only runtime secrets      |
-| KV               | small key-value data            |
-| Object Storage   | files and large objects         |
-| Database         | app relational data             |
-| Queue            | async jobs and event processing |
-| AI Gateway       | OpenAI-compatible AI endpoint   |
-| Durable Workflow | durable multi-step execution    |
-| Vector Index     | vector search index             |
-| Stateful Actor   | stateful actor namespace        |
-| Schedule         | cron-triggered invocation       |
+## Data endpoints
 
-## Domains
+既存サービスのデータを扱うため、Takosumi Cloud は S3-compatible object access と
+OpenAI-compatible AI access を提供できます。これらは作成 API ではありません。service の
+lifecycle は repository の provider graph が管理し、endpoint と権限は Output / Interface
+から取得します。
 
-現在、公開 HTTP resource には operator 管理 base domain 配下の Cloud URL を
-割り当てられます。Takosumi Cloud の既定 base domain は `app.takos.jp` です。
-割り当て mode は `scoped` と `vanity` の 2 種類です。
-
-```text
-scoped:
-  https://<workspace-handle>-<label>.app.takos.jp
-  vanity 枠を消費しない
-
-vanity:
-  https://<label>.app.takos.jp
-  Workspace の所有アカウントの有限枠を 1 つ消費する
-```
-
-この URL は preview、初回デプロイ、外部 DNS をまだ持っていない app の公開に使います。
-どちらも DNS の所有確認は不要です。`scoped` は vanity 枠を消費せず、
-`vanity` は DNS として有効な 1 ラベルであること、世界で重複しないこと、所有アカウントの
-空き枠、予約名 / abuse policy を満たす場合に、早い者勝ちで取得できます。
-重複や枠超過のエラーは、先に取得した人の Workspace / Capsule 名を公開しません。
-取得済みの名前と vanity 枠は Capsule と同じ寿命を持ち、Capsule の destroy が成功すると
-解放されます。個別 route の削除だけでは解放されません。
-
-ユーザー所有の custom domain は GA contract に含まれます。owner account / Workspace に属する
-`VerifiedDomain` が ownership challenge、証明書、attach/detach、renewal、expiry、delete を管理し、
-ownership と certificate が current の間だけ route を有効にします。本番環境でこの lifecycle の
-検証が完了するまでは Takosumi Cloud 全体と同じく Pre-GA で、未確認・期限切れ・degraded な
-domain は安全側に停止します。
-
-## Cloud Launch Contract と GA Gate
-
-Takosumi Cloud の今回の商用launchはサービスごとの段階公開ではありません。10個の
-exact Form-backed offering（Object StorageはStandard / Infrequent Accessの2 offering）と、
-non-Form serviceのAI Gateway / Verified custom domainを1つのall-or-nothing launch契約として
-扱います。これはCloudの商品方針であり、TakoformのForm maturity、承認集合、Host Supportを
-変更しません。全項目が同じreadiness matrixを通るまで、Takosumi Cloud全体をPre-GAのままにします。
-
-| 現在の状態 | Cloud launch scope                                                                |
-| ---------- | --------------------------------------------------------------------------------- |
-| Pre-GA     | Edge Worker / Object Storage Standard・Infrequent Access / KV / Database / Queue  |
-| Pre-GA     | Vector Index / Durable Workflow / Container / Stateful Actor Namespace / Schedule |
-| Pre-GA     | OpenAI-compatible AI Gateway endpoint / Verified custom domain                    |
-
-GA evidence には lifecycle、標準 API conformance（該当時）、価格 coverage、変更不可な metering、spend
-enforcement、invoice reconciliation、recovery、tenant isolation、Dashboard、本番環境での動作・運用検証が
-含まれます。unpriced meter、inactive Offering / PriceCatalog、未設定 manager/capacity binding、期限切れ quote、
-不足した live evidence は backend 実行前または GA activation 前に安全側に停止します。self-test、descriptor、
-未設定 manager、1 つの green client だけでは GA になりません。
-
-## Billing and Spend Guard
-
-Takosumi Cloud はプリペイドクレジット残高で動き、各 owner に一度だけ onboarding
-credit を付与します。課金対象の操作は active な PriceCatalog で価格が決まり、
-残高 / 上限 / 支払い状態で許可されない場合は
-実行前に止まります。cleanup / destroy は上限に達した後でも実行できるようにし、
-作った resource が消せなくなる状態を避けます。
-
-公開価格、onboarding credit、使用量の単価、spend guard の契約は
-[Takosumi Cloud pricing](./pricing.md) にまとめています。決済事業者との同期、
-margin guard、突合処理の実装詳細は公開 contract ではなく、サービス運用の範囲です。
-
-Dashboard では次を確認できます。
-
-- 利用可能な残高
-- 今月の使用量
-- Cloud resource の使用量
-- 最近の使用イベント
-- API keys
-- 現在の Cloud resources
-
-## Standard protocol endpoints
-
-Object Storage は scoped な `compat.s3.v1` data-plane profile を公開します。bucket の
-lifecycle authority は canonical Resource API のままで、S3 endpoint は Ready
-`ObjectBucket` と認可済み Interface を解決します。
-
-### AI Gateway OpenAI-compatible profile
-
-| Status | Scope                             |
-| ------ | --------------------------------- |
-| Pre-GA | `/gateway/ai/v1/models`           |
-| Pre-GA | `/gateway/ai/v1/chat/completions` |
-| Pre-GA | `/gateway/ai/v1/embeddings`       |
-
-詳細:
-
-- [Takosumi Cloud resources](./resources.md)
-- [Takosumi Cloud endpoints](./endpoints.md)
-- [Takosumi Cloud pricing](./pricing.md)
-- [Takosumi Cloud サポート](./support.md)
-- [Takosumi Cloud SLA](./sla.md)
+- [Resources and providers](./resources.md)
+- [Data endpoints](./endpoints.md)
+- [Pricing](./pricing.md)
+- [Support](./support.md)
+- [SLA](./sla.md)
+- [Takosumi software docs](https://takosumi.com/docs/)

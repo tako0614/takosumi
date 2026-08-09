@@ -29,7 +29,6 @@ import {
   ROUTE_FAMILIES,
   type RouteFamilyId,
 } from "./route_families.ts";
-import { TAKOFORM_FORM_HOST_WELL_KNOWN_PATH } from "takosumi-contract";
 
 /**
  * `session` — the host routes it through its authenticated ingress seam.
@@ -46,8 +45,11 @@ const EDGE_EXPOSURE_BY_FAMILY: Record<RouteFamilyId, EdgeExposure> = {
   // `/internal/v1/*` by construction; the host reaches it in process.
   "deployControl-internal": "off",
   metrics: "off",
-  // The Resource Shape API and the portable Form host facade it mounts.
-  "resource-shape": "session",
+  // Flow-B Resource Shape and the portable Form host facade are retained only
+  // for an explicit, operator-controlled drain lane. They are not part of the
+  // normal public edge, so a missing drain opt-in cannot accidentally route
+  // them through the session ingress.
+  "resource-shape": "off",
   // Operator-bearer surface; deliberately not reachable through the public
   // session seam, which injects the deploy-control bearer.
   "form-activations": "off",
@@ -57,9 +59,9 @@ const EDGE_EXPOSURE_BY_FAMILY: Record<RouteFamilyId, EdgeExposure> = {
 };
 
 const EDGE_EXPOSURE_OVERRIDES: Readonly<Record<string, EdgeExposure>> = {
-  // Portable host discovery is unauthenticated by the Takoform contract: a
-  // conformance runner reads it before it has any credential.
-  [TAKOFORM_FORM_HOST_WELL_KNOWN_PATH]: "public",
+  // No legacy Takoform discovery override. The host document is retained in
+  // code for inventory/drain work, but it is never edge-routed or advertised
+  // by the OSS platform.
 };
 
 interface EdgePathRule {

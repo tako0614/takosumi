@@ -1,25 +1,24 @@
 # Takosumi API
 
-Takosumi API は、OpenTofu control plane と Resource Shape API を公開します。control
-plane は Git を正とする情報源 (source of truth) として動きます。Workspace / Capsule /
-Run などの用語は [用語集](./glossary.md) を参照してください。
+Takosumi API は、Git を正とする OpenTofu / Terraform control plane、provider 接続、Run、
+Interface / InterfaceBinding を公開します。Workspace / Capsule / Run などの用語は
+[用語集](./glossary.md) を参照してください。
 
-外部インフラには既存 provider と標準 API を使います。Takosumi Cloud が提供する capacity
-や service は、provider-neutral な Resource Shape で定義します。その
-lifecycle は `/v1/resources` の Deploy API が一元管理します。
+外部インフラには既存 provider と標準 API を使います。Takoform は通常の OpenTofu
+provider です。その他の API / instance lifecycle は、それを提供する external Host が
+所有します。
 
 ## 基本方針
 
 | 状況 | 扱い方 |
 | --- | --- |
 | 外部 resource に標準 API / OpenTofu provider がある | plain Stack flow でその surface を使う |
-| Takosumi/operator が Cloud-provided service を提供する | provider-neutral な Takosumi Resource Shape として定義し、Deploy API で管理する |
+| Form を提供する Host がある | その Host が定義・instance・lifecycle の authority を持つ |
 | 一回限りの不足 | generic-env ProviderConnection と通常の OpenTofu module で扱う |
 
-Takosumi は自前の Terraform / OpenTofu provider を配布しません。portable Form は
-Takoform、operator 操作はこの API・CLI・dashboard を使います。外部 provider は
-plain Stack flow でそのまま実行され、Resource の canonical lifecycle は Takosumi
-endpoint が Resolver / Adapter / TargetPool / Policy に基づいて管理します。
+Takosumi は自前の Terraform / OpenTofu provider を配布しません。Takoform は通常の
+provider として使います。外部 provider は plain Stack flow でそのまま実行され、
+Interface / InterfaceBinding は provider-neutral な接続認可を表します。
 Cloudflare 固有の import/deploy compatibility profile は廃止済みです。
 
 ## エンドポイントの探索
@@ -48,12 +47,11 @@ capability を参照します。
   "api_versions": ["takosumi.dev/v1alpha1"],
   "features": {
     "stacks": true,
-    "resource_shapes": true,
     "opentofu_runner": true,
     "oidc": true,
     "workload_identity": true,
     "compat_framework": true,
-    "compatibility_profiles": ["compat.takoform.v1"],
+    "compatibility_profiles": [],
     "interfaces": true
   },
   "endpoints": {
@@ -72,51 +70,6 @@ field 名は snake_case です。`product` は常に `takosumi` で、client は
 設定していない endpoint では空配列です。mobile client 用の OIDC client id を
 設定した endpoint は `oidcClientId` も返します。追加の endpoint family を公開する
 endpoint は `endpoints.extensions` を併せて返します。
-
-## 共通のオブジェクト形式
-
-Resource Shape API の object は、Kubernetes 風の形式に揃えています。
-
-```json
-{
-  "apiVersion": "takosumi.dev/v1alpha1",
-  "kind": "EdgeWorker",
-  "metadata": {
-    "name": "api",
-    "space": "prod",
-    "managedBy": "opentofu",
-    "labels": {
-      "app": "example"
-    }
-  },
-  "spec": {
-    "name": "api",
-    "source": {
-      "artifactPath": "dist/worker.js"
-    },
-    "profiles": ["workers_bindings"]
-  },
-  "status": {
-    "phase": "Ready",
-    "observedGeneration": 3,
-    "conditions": [
-      {
-        "type": "Ready",
-        "status": "true"
-      }
-    ]
-  }
-}
-```
-
-`spec` はあるべき状態 (desired state)、`status` は Takosumi が観測した状態です。
-`metadata.managedBy` は Resource を生成・所有する authoring surface の識別子です。これは
-Resource の種類や Target の分類ではなく、複数の lifecycle authority が同じ Resource を
-編集しないための互換フィールドです。portable client は送信できず、trusted host または
-operator が設定します。
-secret の値は `spec`、`status`、公開 Output、ログ、監査記録に書きません。provider が
-管理する OpenTofu state には secret が含まれることがあるため、Takosumi は state 全体を
-暗号化して保存し、権限のある実行にだけ復号します。
 
 ## 認証
 
@@ -364,245 +317,6 @@ Content-Type: application/json
 クライアントは、返された SourceSyncRun が `succeeded` になるまで待ちます。その Run の
 `sourceSnapshotId` が一覧に現れてから、compatibility check と plan を続けます。
 
-## Deploy API / Resource Shape API
-
-`/v1/resources` は provider-neutral な Resource の Deploy API です。preview /
-apply / observe / refresh / import / delete をここで受け取ります。canonical Resource、
-ResolutionLock、NativeResource、Run、status、Output、audit の唯一の lifecycle authority
-も、この API です。CLI、dashboard、Takoform host API と明示的に導入した
-protocol adapter は、いずれもこの API の client です。
-
-multi-tenant platform には session、personal access token、service token、OAuth token の
-経路があります。どの経路でも、request の `space` は検証済みの Workspace id と一致して
-いなければなりません。platform worker は query、top-level body、`metadata.space` の
-すべてを照合してから internal actor へ変換します。異なる Space は `403` で拒否します。
-Core は暗黙の Space-to-Workspace mapping を作りません。別の Space を管理できるのは、
-direct deploy-control bearer を持つ operator 経路と、将来の明示的に検証された mapping
-だけです。
-
-control-plane Compatibility API は、対応範囲の request を typed Resource request へ
-変換してこの Deploy API を呼びます。lifecycle row、resolver decision、backend selection
-は、いずれも Deploy API 側にあります。data-plane Compatibility API は、backend へ
-到達する前に解決を行います。対象は Ready な canonical Resource と、認可済みの
-Interface / NativeResource evidence です。
-
-Core は既定では Resource kind を 1 つも広告・受理しません。host composition が code
-として schema authority を install します。そのうえで、desired state の作成・変更を
-許可する kind を明示的に enable します。現在の Takos / Takosumi composition は、凍結した
-10 種の v1alpha1 compatibility set を明示的に install します。どれを write-enabled に
-するかは operator の `TAKOSUMI_RESOURCE_SHAPES` が選びます。install 済みでも write-disabled に
-なった kind は、retained Resource の state/event read、明示 observe、delete を継続
-できます。この migration compatibility も、同じ canonical Resource / Run ledger を
-使います。
-
-```http
-POST   /v1/resources/preview
-PUT    /v1/resources/{kind}/{name}
-POST   /v1/resources/{kind}/{name}/import
-GET    /v1/resources/{kind}/{name}?space={spaceId}
-GET    /v1/resources/{kind}/{name}/events?space={spaceId}&limit={1..100}&cursor={opaque}
-POST   /v1/resources/{kind}/{name}/observe?space={spaceId}
-POST   /v1/resources/{kind}/{name}/refresh?space={spaceId}
-DELETE /v1/resources/{kind}/{name}?space={spaceId}
-GET    /v1/resources?space={spaceId}&limit={1..100}&cursor={opaque}
-```
-
-OSS の preview は価格を要求しません。host は capability document で広告した拡張を使い、
-preview に見積もりを追加できます。その場合も、適用する Resource と見積もりの内容が
-変わっていないことを apply 前に検証します。拡張固有の field は OSS の Resource object
-には追加しません。Takosumi Cloud の見積もりと請求については
-[Cloud の料金ページ](https://app.takosumi.com/docs/pricing)を参照してください。
-
-Resource 一覧は `createdAt` と Resource id による keyset pagination です。最終ページ
-以外では `nextCursor` を返すため、client は内容を解釈せず次の `cursor` へそのまま
-渡します。`limit` 省略時は 100 件、最大も 100 件です。
-
-`observe` は保存済み `ResolutionLock` の Target / implementation をそのまま使う
-read-only drift check です。OpenTofu-backed Resource では、apply 不能な
-`drift_check` Run を作ります。plugin-backed Resource では、adapter の `observe` action
-を呼びます。観測結果は CAS fence 付きで `Drifted` / `Reconciling` / `Degraded`
-condition に反映されます。観測中に apply / delete が進んだ場合は、古い結果で Resource を
-上書きしません。drift を見つけても自動 apply や Target の再選択は行わず、現在の
-revision と endpoint を固定したまま報告します。
-
-platform worker の scheduled observation も同じ `observe` を使います。有効な
-Resource Shape がある host では、既定で有効になります。観測するのは `Ready` かつ現
-generation の Resource だけで、全 Space を横断して古い順に見ます。重複を避けるために
-期限付きの lease を取ります。既定は 1 時間間隔、1 tick 最大 8 件、同時 4 件です。
-これは内部 scheduler の状態です。operator は頻度・batch・並列数・lease、または機能
-自体を環境変数で調整できます。
-
-`refresh` は同じ pinned Target / implementation に対して実行します。内容は OpenTofu の
-`plan -refresh-only` と保存済み plan の apply、または plugin の `refresh` action です。
-native provider resource は変更せず、Resource-owned state と public Output だけを
-更新します。成功したときだけ、影響を受ける Interface の revision を再解決します。
-実行中は CAS claim で通常の apply/delete と直列化し、失敗時は Resource を `Failed`、
-Interface を `Unknown` に固定します。refresh-only plan の drift changes は resource の
-作成・更新課金として扱わず、runner usage だけを別に記録します。
-
-`import` は既存の backend resource を Takosumi の Resource ledger へ取り込みます。request
-body は通常の Resource object と top-level の `nativeId` を含みます。Target の
-implementation には条件があります。plugin であるか、明示的な `moduleImportAddress`
-(child module 内の `resource_type.name`) を宣言していることです。OpenTofu-backed
-import は生成 root へ `import` block を追加し、通常の `Run` として plan します。
-保存済み plan を apply する
-のは、plan JSON が `change.importing` をちょうど 1 件含み、create/update/delete を一切
-含まない場合だけです。apply が済むと Resource-owned state / Output / NativeResource を
-公開します。plugin-backed import も read-only inventory lookup に限ります。失敗した
-未公開 record は backend delete を呼ばずに削除できます。`nativeId` は provider-native な
-identifier なので、secret を渡してはいけません。
-
-Resource event は `/events` から新しい順の keyset page として取得できます。これは
-共有 Activity / Run audit ledger を `space + resourceId` で絞った non-secret projection
-です。Resource record を削除したあとも監査履歴は取得できます。`metadata` が持つのは
-phase、generation、identifier、count だけで、credential、raw error、spec、state、
-Output の値は公開しません。
-
-Resource Shape API は現在の Service Form host compatibility surface であり、typed shape を
-前提にします。採用済み target の exact FormRef / Form Package / FormActivation も
-同じ扱いです。additive migration のあとも、同じ Resource / Run / state / audit ledger
-へ解決されます。通常 interface として `takosumi_resource { type, spec }` のような
-全部入り resource は公開しません。
-
-### FormActivation の operator API
-
-operator は exact な installed FormRef を generic・noncommercial な
-FormActivation API で audience に公開します。
-
-```http
-POST  /v1/form-activations
-GET   /v1/form-activations?limit={n}&cursor={opaque}
-GET   /v1/form-activations/{id}
-PATCH /v1/form-activations/{id}
-```
-
-この route は operator deploy-control bearer を必須とし、customer session / PAT
-では変更できません。`createdBy` / `updatedBy` は request JSON ではなく認証済み
-operator から決まります。create は exact `FormRef` + `packageDigest` を固定します。
-update は `expectedRevision` CAS を使い、結果の revision を `ETag` で返します。未知の
-field は拒否します。そのため price、SKU、payment、billing、Cloud capacity、region
-inventory、SLA、support を OSS policy record に混ぜることはできません。host 固有の
-料金や提供条件は、FormActivation とは別の拡張で扱います。
-
-operator CLI はこの API へ直接対応します。
-
-```bash
-takosumi form-activations list --url "$TAKOSUMI_DEPLOY_CONTROL_URL"
-takosumi form-activations create --file activation.json
-takosumi form-activations update activation_id --file update.json
-```
-
-### Form の利用可否を確認する
-
-認証済み principal は exact FormRef ごとの host 状態を read-only で取得できます。
-
-```http
-GET /v1/form-availability?space={space}&limit={n}&cursor={opaque}
-```
-
-完全一致 lookup は `type` / `version` / `schemaDigest` / `packageDigest` を
-すべて指定します。レスポンスは
-`definitionKnown` / `installed` / `executable` / `executableReason` /
-`activated` / `availableToPrincipal` / `availabilityReason` を返します。あわせて
-`operations` / `compatibleAdapterIds` / `eligibleTargetPoolClasses` / `deprecated`
-も返します。`forms:read` または `resources:read` scope が必要です。
-
-判定は根拠が揃わなければ安全側に停止します。根拠になるのは、Form Registry、installed schema、
-TargetPool descriptor、実際に注入済みの module/adapter、FormActivation の scope/audience
-です。Target 名、implementation/manager identity、credential、region、raw capacity は
-返しません。価格、SKU、請求、Cloud offering は別の closed catalog の責務です。
-
-`GET /v1/capabilities?space={space}` も同じ認証・scope で使えます。その principal の
-structured record を `formAvailability.forms` に投影します。この scoped projection
-では legacy `resources` boolean も `availableToPrincipal` から導出されます。
-`space` なしの capability document は、未移行 client 向けの context-free な host
-enablement view です。principal ごとの availability の根拠にはできません。
-
-```bash
-takosumi form-availability list --space space_1
-```
-
-次は Takosumi v1alpha1 compatibility schema が定義する shape です。実際に作成できる
-shape は endpoint ごとに異なるため、`/v1/form-availability` で確認してください。
-
-```text
-EdgeWorker
-ObjectBucket
-KVStore
-Queue
-SQLDatabase
-ContainerService
-VectorIndex
-DurableWorkflow
-StatefulActorNamespace
-Schedule
-```
-
-Takos のような複合 product も、専用の `takosumi_takos` resource ではなく、
-この汎用 shape の合成として表します。例えば `takos-worker` は `EdgeWorker`、
-workspace/control DB は `SQLDatabase` です。file/workspace object は `ObjectBucket`、
-agent job / event は `Queue`、`takos-agent` は `ContainerService` になります。別途
-install する `takos-git` は自身の generic service topology を持ちます。足りない
-service form が出た場合だけ、同じ prior-art gate を通して新しい typed shape を追加します。
-
-`EdgeWorker` や `ContainerService` のような消費側 shape は `connections`
-で他の shape への非 secret 接続を宣言できます。ここに置けるのは resource
-reference、permissions、projection kind だけです。credential や実際の binding
-生成は Credential / ProviderConnection / adapter 側が扱います。
-HCL では `connection` は予約語なので、provider surface は `connections = [...]`
-です。
-
-`ObjectBucket` があっても、data-plane は S3-compatible API を使います。
-`spec.storageClass` は新規 object の provider-neutral な既定 class です。exact value は
-`standard` / `infrequent_access` で、省略時は `standard` に正規化します。
-`infrequent_access` を解決できるのは、TargetPool が `storage_class_infrequent_access`
-capability を公開するときだけです。未対応なら backend 呼び出しの前に失敗します。既存
-object の class を暗黙に変更する selector ではありません。
-`AI Gateway` は provider resource ではなく OpenAI-compatible endpoint と env/secret
-projection として扱います。
-
-## Target / Credential / Policy API
-
-Resource Shape の backend は HCL に直接書きません。TargetPool / Policy /
-capability evidence / ResolutionLock で決まります。
-これは operator/advanced API です。通常の deploy UX は service form、必要な入力、
-価格、preview、apply だけを表示し、TargetPool / Policy / Adapter を要求しません。
-`/v1/capabilities.adapters` は adapter token を boolean で返します。Core が必ず返す
-key は `opentofu` だけです。ほかの key はすべて operator が
-`TAKOSUMI_RESOURCE_ADAPTERS` で宣言した open token で、固定の一覧はありません。
-adapter を足すのは既存の typed shape に実装先を増やすための拡張です。新しい shape を
-足すには、schema / API / provider の release が必要になります。
-
-```http
-PUT    /v1/target-pools/{name}
-GET    /v1/target-pools/{name}?space={spaceId}
-GET    /v1/target-pools?space={spaceId}&limit={1..100}&cursor={opaque}
-DELETE /v1/target-pools/{name}?space={spaceId}
-
-PUT    /v1/space-policies/{name}
-GET    /v1/space-policies/{name}?space={spaceId}
-GET    /v1/space-policies?space={spaceId}&limit={1..100}&cursor={opaque}
-DELETE /v1/space-policies/{name}?space={spaceId}
-```
-
-operator が既定 pool を bootstrap するときは、同じ PUT に
-`If-None-Match: *` を付けると atomic create-only になります。作成は `201`、同じ
-Space/name が既にあれば `412 target_pool_exists` で、既存の capability evidence を
-上書きしません。header なしの PUT は明示的な create/update です。
-
-Target は TargetPool の `spec.targets[]` に、operator が完全な capability evidence
-として宣言します。Resource Shape flow の SpacePolicy は、同じ Space-scoped endpoint で
-保存・取得・一覧・削除します。`TargetPool.spec.classes` が持つのは、FormActivation の
-`eligibleTargetPoolClasses` と照合する公開 placement class token だけです。target 名、
-credential、region、manager、capacity のような private な placement 情報を discovery へ
-投影するフィールドではありません。
-
-provider の実行 credential は、OpenTofu Stack flow の ProviderConnection と Credential
-Recipe が所有します。Recipe の `authModes` key と `preRun.type` は、operator/provider が
-公開する open token です。Core は `static` / `oidc` / cloud vendor のような固定 taxonomy
-を持ちません。secret value は write-only で、Run 時だけ recipe に従って env/file に
-書き出されます。
-
 ## OIDC と workload identity
 
 Takosumi Accounts は登録済み OIDC client のための標準 issuer surface を公開します。
@@ -632,8 +346,8 @@ token の実体は利用側の secret store に暗号化して保存し、OpenTo
 ## Compatibility API
 
 Compatibility API は標準 protocol / API の scoped facade です。control-plane profile は
-Deploy API の translation client として働きます。data-plane profile は、canonical な
-Ready Resource への認可済み access surface になります。
+supported control-plane API の translation client として働きます。data-plane profile は
+認可済み Interface への access surface になります。
 
 | profile                    | 範囲                                            |
 | -------------------------- | ----------------------------------------------- |
@@ -645,17 +359,13 @@ Ready Resource への認可済み access surface になります。
 これは full vendor API 互換を意味しません。範囲は capability と compatibility
 matrix で明示します。
 
-Takoform host API、明示的に導入した protocol adapter、dashboard、CLI は公開する
-protocol がそれぞれ違っても、同じ Resource desired state と Deploy API lifecycle
-に収束します。
-data-plane profile は既存 Resource を暗黙作成せず、Ready な Resource を解決します。
-表現できない操作は互換のように成功させず、compatibility matrix で範囲を明示して
-安全側に停止します。
+明示的に導入した protocol adapter、dashboard、CLI は公開する protocol がそれぞれ
+違っても、同じ supported control-plane lifecycle に収束します。表現できない操作は
+互換のように成功させず、compatibility matrix で範囲を明示して安全側に停止します。
 
 Cloudflare 固有の import/deploy compatibility profile は廃止済みで、v1 API と
-capability surface には含まれません。Cloudflare 上に配置する Resource も、
-利用者自身の Cloudflare account に作る Stack も、通常の Resource または
-ProviderConnection として扱います。
+capability surface には含まれません。利用者自身の Cloudflare account に作る Stack は
+通常の ProviderConnection として扱います。
 
 compatibility profile は Cloud hostname を作りません。runtime route は
 `http.route` Interface と InterfaceBinding で公開します。hostname の所有権は OSS の

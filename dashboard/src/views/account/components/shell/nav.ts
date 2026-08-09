@@ -119,7 +119,6 @@ export const SECTION_TITLES: ReadonlyArray<readonly [RegExp, MessageKey]> = [
   [/^\/runs(\/|$)/, "nav.runs"],
   [/^\/run-groups(\/|$)/, "nav.runs"],
   [/^\/graph(\/|$)/, "nav.graph"],
-  [/^\/resources(\/|$)/, "nav.resources"],
   [/^\/notifications(\/|$)/, "nav.notifications"],
   [/^\/activity(\/|$)/, "nav.activity"],
   [/^\/account(\/|$)/, "nav.account"],

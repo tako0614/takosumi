@@ -16,7 +16,7 @@ secret ストアから渡してください。
 | `PORT` | 任意 | `8788` | `bun core/index.ts` で起動したときの待ち受けポート |
 | `TAKOSUMI_DATABASE_URL` | `bun core/index.ts` で control plane を単体で動かすとき必須 | なし | control plane の PostgreSQL 接続先。`DATABASE_URL` も同じ用途で読みます。同梱の compose は control plane と accounts を 1 つの接続で動かすので、そちらでは `TAKOSUMI_ACCOUNTS_DATABASE_URL` だけを設定します |
 | `TAKOSUMI_DB_AUTO_MIGRATE` | 任意 | `false` | `bun core/index.ts` の起動時にマイグレーションを適用するか。既定では適用せず、読み取りだけで検証します。`staging` と `production` で `true` にすると起動が失敗します |
-| `TAKOSUMI_DEPLOY_CONTROL_TOKEN` | 実運用では必須・**秘密** | なし | operator 専用 API の bearer。CLI と operator client が使います。Cloudflare 構成でこれを設定しないと、`/v1/resources` から `/v1/form-activations` までの Resource 系 API がまるごと `404` になります |
+| `TAKOSUMI_DEPLOY_CONTROL_TOKEN` | 実運用では必須・**秘密** | なし | operator 専用 API の bearer。CLI と operator client が使います。legacy Resource/Form drain を使わない構成では、旧 surface は非公開のままです |
 | `TAKOSUMI_METRICS_SCRAPE_TOKEN` | 任意・**秘密** | なし | `/metrics` を読むための bearer。未設定のあいだ `/metrics` は `404` を返します |
 
 ```bash
@@ -85,46 +85,34 @@ export COMPANY_SSO_CLIENT_SECRET="<upstream client secret>"
 
 `providerId` は表示と識別のための名前で、挙動は選びません。何個でも並べられます。
 
-## Resource の型を開ける
+## Legacy Resource/Form drain (migration only)
 
-Takosumi は既定では Resource の型を 1 つも受け付けません。使えるようにする型は
-ここで明示します。
+Takosumi OSS supports one Git/OpenTofu/Terraform Stack flow. It does not
+advertise Resource Shape authoring, a Form Host, Form Registry, FormActivation,
+TargetPool, or SpacePolicy as a supported surface. New users should configure
+ordinary providers through a Stack and the ProviderConnection /
+CredentialRecipe / ProviderBinding path.
 
-| 変数 | 必須 | 既定値 | 決めること |
-| --- | --- | --- | --- |
-| `TAKOSUMI_RESOURCE_SHAPES` | 任意 | なし (公開する型なし) | `/v1/resources` に出す Resource の型。カンマか空白区切り、JSON の文字列配列、または `all` |
-| `TAKOSUMI_RESOURCE_ADAPTERS` | 任意 | なし | `/v1/capabilities` に出す adapter の capability token。書式は上と同じです。型を 1 つも開けていないあいだは何を書いても出ません |
-| `TAKOSUMI_OPERATOR_CAPABILITIES` | 任意 | なし | `/v1/capabilities` に出す運用系 capability。`all` も使えます |
-| `TAKOSUMI_RESOURCE_PROVIDER_BASE_URL_ALLOWLIST` | 任意 | なし | TargetPool の実装オプションに書いてよい provider API の base URL。未設定なら上書きを拒否します |
-
-```bash
-export TAKOSUMI_RESOURCE_SHAPES="ObjectBucket,EdgeWorker"
-```
-
-型の名前として書けるのは、この host にスキーマが入っているものだけです。入っていない
-名前を書くと、その時点で起動が失敗します。スキーマ自体はコードとして持ち込むもので、
-環境変数では追加できません。
-
-## 定期観測
-
-`TAKOSUMI_RESOURCE_SHAPES` で型を 1 つ以上開けると、Ready な Resource の定期観測が
-既定で動きます。観測は読み取り専用で、固定済みの配置先と実装に対して差分を見るだけです。
+Legacy Resource/Form routes return `404` by default. For an authenticated,
+operator-controlled migration window, set the exact value below together with
+`TAKOSUMI_DEPLOY_CONTROL_TOKEN` and the control database:
 
 | 変数 | 必須 | 既定値 | 決めること |
 | --- | --- | --- | --- |
-| `TAKOSUMI_RESOURCE_OBSERVATION_ENABLED` | 任意 | 型を開けていれば有効 | `1` で動かします。設定したうえで `1` 以外を書くと、`true` でも `yes` でも止まります |
-| `TAKOSUMI_RESOURCE_OBSERVATION_BATCH` | 任意 | `8` | 1 回の起動で受け持つ Resource の数。`1` から `32` まで |
-| `TAKOSUMI_RESOURCE_OBSERVATION_CONCURRENCY` | 任意 | `4` | 同時に走らせる観測の数。`1` から `8` まで。1 回で受け持つ数より大きくは走りません |
-| `TAKOSUMI_RESOURCE_OBSERVATION_INTERVAL_SECONDS` | 任意 | `3600` | 同じ Resource を続けて観測しない間隔。`300` から `604800` まで |
-| `TAKOSUMI_RESOURCE_OBSERVATION_LEASE_SECONDS` | 任意 | `900` | 放置された観測を他が引き取れるようになるまでの時間。`600` から `7200` まで |
+| `TAKOSUMI_LEGACY_RESOURCE_DRAIN_ENABLED` | 任意 | 未設定 (旧 surface は非公開) | `1` のときだけ bounded drain を有効化します。retained Resource の inventory/read/events/observe/delete と旧 configuration record の read/delete だけが exact deploy-control bearer で利用できます |
 
-```bash
-export TAKOSUMI_RESOURCE_OBSERVATION_INTERVAL_SECONDS=7200
-export TAKOSUMI_RESOURCE_OBSERVATION_CONCURRENCY=2
-```
+Drain を有効にしても discovery、FormActivation、Form Registry、preview/apply/
+recover/import/refresh、TargetPool/SpacePolicy の write、その他の旧操作は利用できません。
+認識済みでも廃止された操作は `410`、無効または未知の route は `404` です。
+この設定は新しい authoring flow を有効にしません。cron は停止途中の旧
+preview/apply/import/refresh/create/update を再開せず、drain 中の retained row に対する
+bounded observation だけを実行します。flag を外すと observation も停止します。
 
-範囲の外の値や数値でない値を書くと、既定値に戻ります。runner の空き容量に合わせて
-小さく保ってください。
+`TAKOSUMI_RESOURCE_SHAPES`、`TAKOSUMI_RESOURCE_ADAPTERS`、
+`TAKOSUMI_RESOURCE_PROVIDER_BASE_URL_ALLOWLIST`、および
+`TAKOSUMI_RESOURCE_OBSERVATION_*` は旧実装・移行証跡向けです。drainが有効な
+期間だけ、retained rowの観測batch/concurrency/interval/leaseを制御します。
+これらでResource/Formのdiscoveryやwriteを公開する手順はありません。
 
 ## Run と runner
 
@@ -147,25 +135,12 @@ export TAKOSUMI_ENABLED_RUNNER_PROFILES="opentofu-default"
 export TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR="/tmp/takosumi-provider-cache"
 ```
 
-## 署名済み Form Package を受け入れる
+## Form Package configuration (external Host only)
 
-署名済みの Form Package を使う場合だけ設定します。Cloudflare 構成では
-`R2_FORM_PACKAGES` binding と対にします。片方だけ設定すると起動しません。
-
-| 変数 | 必須 | 既定値 | 決めること |
-| --- | --- | --- | --- |
-| `TAKOSUMI_FORM_PACKAGE_TRUST_POLICY` | 任意 | なし | package を読む R2 の接頭辞、digest を固定した Sigstore の TrustedRoot、受け入れる publisher を書いた非 secret の JSON |
-
-```bash
-export TAKOSUMI_FORM_PACKAGE_TRUST_POLICY='{"schemaVersion":1,"artifactPrefix":"packages/","trustedRoot":{"key":"trust/trusted-root.json","digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"},"publishers":[{"oidcIssuer":"https://token.actions.githubusercontent.com","sourceRepository":"example/forms","workflow":".github/workflows/release.yml","tagPattern":"refs/tags/v*"}]}'
-```
-
-書ける鍵はこの 4 つずつだけで、余分な鍵があると読み込みに失敗します。
-`artifactPrefix` は `/` で終える必要があります。`tagPattern` は `refs/tags/` で
-始める完全な ref で書き、`*` はスラッシュをまたがない 1 区画に一致します。
-`workflow` は `.github/workflows/` の下の `.yml` か `.yaml` だけを指せます。
-この設定だけでは package は 1 つも導入されません。どの package を入れるかは別に
-決めます。
+Takosumi OSS does not install or host Form Packages. A Cloud or operator
+composition that owns a Form Host may document its private trust policy and
+artifact bindings in that Host's runbook; those settings are not a supported
+Takosumi OSS deployment path and do not create a FormActivation or Offering.
 
 ## Cloudflare 構成で使うもの
 

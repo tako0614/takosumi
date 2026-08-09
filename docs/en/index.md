@@ -27,19 +27,15 @@ same module can serve development and production with different connections.
 Takosumi records which Git commit ran, who ran it, and what changed. Each apply
 saves state and outputs for incident investigation and comparison.
 
-## Two ways to deploy
+## One Git/OpenTofu flow
 
-| Path           | Best for                                         | What you provide                         |
-| -------------- | ------------------------------------------------ | ---------------------------------------- |
-| **Git module** | apps, existing infrastructure, custom topologies | Git URL, ref, module path, and variables |
-| **Resource**   | managed services described by type and settings  | a Resource declaration                   |
-
-Takosumi calls a registered Git module a **Capsule**. For Resources, you choose
-from the types enabled by the operator. Both paths use the same Runs, state,
-outputs, and audit history.
+Takosumi calls a registered Git module a **Capsule**. The supported OSS path is
+one Stack flow: provide the Git URL, ref, module path, variables, and the
+provider connections required by that module. Runs, state, outputs, and audit
+history all belong to this flow.
 
 ```text
-Git URL or Resource declaration
+Git URL and module declaration
   → check inputs and connections
   → plan
   → review changes
@@ -79,11 +75,15 @@ durable database, and OpenTofu runner.
 - [Sources and Capsules](./concepts/sources.md) — pinning a Git ref to a commit
 - [Run model](./concepts/run-model.md) — plan, approval, apply, and destroy
 - [Credentials](./concepts/credentials.md) — passing connections to providers
-- [Resources](./concepts/resources.md) — creating typed services without writing a module
+- [Interfaces](./concepts/interfaces.md) — describing connections and granting use
 - [Self-hosting](./concepts/self-host.md) — operating a production installation
 - [Repository manifest](./reference/repository-manifest.md),
   [Store API](./reference/store-api.md), [API](./reference/api.md), and
   [CLI](./reference/cli.md) references
+
+The old Resource Shape / Form Host API is documented only in the
+[Resource migration note](./concepts/resources.md); it is not a new authoring
+surface.
 
 Pricing, Cloud resources, and support for the official hosted service are in
 the [Takosumi Cloud documentation](https://app.takosumi.com/docs/en/).

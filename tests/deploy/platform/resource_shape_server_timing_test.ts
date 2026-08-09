@@ -12,18 +12,14 @@ function platformEnv() {
     TAKOSUMI_DEV_MODE: "1",
     TAKOSUMI_ENVIRONMENT: "test",
     TAKOSUMI_RESOURCE_SHAPES: "ObjectBucket",
+    TAKOSUMI_LEGACY_RESOURCE_DRAIN_ENABLED: "1",
   } as never;
 }
 
-function readSession() {
-  return {
-    authenticated: true as const,
-    authKind: "personal-access-token" as const,
-    subject: "account_a",
-    workspaceId: "workspace_a",
-    workspaceRole: "member" as const,
-    scopes: ["read"],
-  };
+function drainRequest(path: string, token = "resource-token"): Request {
+  return new Request(`https://app.takosumi.test${path}`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
 }
 
 function timingNames(response: Response): string[] {
@@ -35,22 +31,15 @@ function timingNames(response: Response): string[] {
 
 test("bounded Resource reads expose honest platform phases", async () => {
   const response = await handlePlatformResourceShapeApiRequest(
-    new Request(
-      "https://app.takosumi.test/v1/resources?space=workspace_a&limit=1",
-    ),
+    drainRequest("/v1/resources?space=workspace_a&limit=1"),
     platformEnv(),
-    async () => readSession(),
   );
 
   expect(response.status).toBe(200);
   expect(await response.json()).toEqual({ resources: [] });
-  expect(timingNames(response)).toEqual([
-    "session",
-    "workspace-auth",
-    "resource-dispatch",
-  ]);
+  expect(timingNames(response)).toEqual(["resource-dispatch"]);
   expect(response.headers.get("server-timing")).toMatch(
-    /session;dur=\d+(?:\.\d+)?, workspace-auth;dur=\d+(?:\.\d+)?, resource-dispatch;dur=\d+(?:\.\d+)?/u,
+    /resource-dispatch;dur=\d+(?:\.\d+)?/u,
   );
 });
 
@@ -62,48 +51,42 @@ test("bounded TargetPool and SpacePolicy reads use the same platform phases", as
 
   for (const [path, collection] of reads) {
     const response = await handlePlatformResourceShapeApiRequest(
-      new Request(`https://app.takosumi.test${path}`),
+      drainRequest(path),
       platformEnv(),
-      async () => readSession(),
     );
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ [collection]: [] });
-    expect(timingNames(response)).toEqual([
-      "session",
-      "workspace-auth",
-      "resource-dispatch",
-    ]);
+    expect(timingNames(response)).toEqual(["resource-dispatch"]);
   }
 });
 
-test("authorization failures retain timing without changing the denial body", async () => {
+test("a wrong operator bearer fails before dispatch without leaking timing", async () => {
   const response = await handlePlatformResourceShapeApiRequest(
-    new Request(
-      "https://app.takosumi.test/v1/resources?space=workspace_victim",
-    ),
+    drainRequest("/v1/resources?space=workspace_a", "wrong-token"),
     platformEnv(),
-    async () => readSession(),
-  );
-
-  expect(response.status).toBe(403);
-  expect(await response.json()).toEqual({
-    error: "access_denied",
-    error_description: "workspace context is not authorized",
-  });
-  expect(timingNames(response)).toEqual(["session", "workspace-auth"]);
-});
-
-test("unauthenticated Resource reads retain session timing", async () => {
-  const response = await handlePlatformResourceShapeApiRequest(
-    new Request("https://app.takosumi.test/v1/resources?space=workspace_a"),
-    platformEnv(),
-    async () => ({ authenticated: false as const }),
   );
 
   expect(response.status).toBe(401);
   expect(await response.json()).toEqual({ error: "unauthenticated" });
-  expect(timingNames(response)).toEqual(["session"]);
+  expect(timingNames(response)).toEqual([]);
+});
+
+test("a missing operator bearer never invokes Workspace session auth", async () => {
+  let sessionVerified = false;
+  const response = await handlePlatformResourceShapeApiRequest(
+    new Request("https://app.takosumi.test/v1/resources?space=workspace_a"),
+    platformEnv(),
+    async () => {
+      sessionVerified = true;
+      return { authenticated: false as const };
+    },
+  );
+
+  expect(response.status).toBe(401);
+  expect(await response.json()).toEqual({ error: "unauthenticated" });
+  expect(sessionVerified).toBe(false);
+  expect(timingNames(response)).toEqual([]);
 });
 
 test("downstream Resource failures retain dispatch timing", async () => {

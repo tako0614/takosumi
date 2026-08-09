@@ -49,9 +49,11 @@ the dashboard and OpenTofu runner are not included. Follow the
 [Quickstart](docs/en/getting-started/quickstart.md) to plan and apply a Git
 module with the complete local stack.
 
-## Two ways to deploy
+## One Git/OpenTofu flow
 
-Both paths use the same run history, state, outputs, and audit trail.
+The supported OSS user path is one Stack flow: run a Git module with the
+providers it declares, using the shared run history, state, outputs, and audit
+trail.
 
 ### Run a module from Git
 
@@ -72,27 +74,26 @@ envelope defines only `install.modules`; execution authority remains with the
 DB-owned `InstallConfig`, Plan, and Run. See the
 [Repository manifest reference](docs/en/reference/repository-manifest.md).
 
-### Request a typed resource
+### Use providers
 
-When the operator enables it, you can request services such as object storage
-or a SQL database as a **Resource**. You describe the type and settings you
-need. Takosumi selects from the targets and implementations the operator has
-made available.
+The supported OSS user path is the Git-based OpenTofu/Terraform Stack flow.
+Takoform is an ordinary provider installed from
+`registry.terraform.io/tako0614/takoform`, just like any other provider. The
+Takoform definitions and any service that hosts and realizes Forms are not
+owned by this repository.
 
-Resources are optional. Available types differ between installations, so check
-`/.well-known/takosumi` or `/v1/capabilities`. Takoform is one format that can
-describe Resources; it is not the identity of Takosumi or of the cloud behind
-it.
-
-Read the [concepts overview](docs/en/concepts/index.md) and
-[Resources](docs/en/concepts/resources.md) for details.
+Earlier experiments exposed `/v1/resources`, Resource Shape, a Form Host,
+TargetPool, and SpacePolicy APIs and dashboard screens. They are not part of
+the current OSS supported product surface. Retained compatibility APIs,
+schemas, and persistence are migration internals; they are not user setup
+instructions or dashboard navigation.
 
 ## Takosumi and Takosumi Cloud
 
 - **Takosumi** is the software in this repository. You can operate it in your
   own environment.
 - **Takosumi Cloud** is the official hosted service at `app.takosumi.com`.
-  Managed resources, prices, capacity, and support are Cloud decisions.
+  Hosted Forms/services, prices, capacity, and support are Cloud decisions.
 
 The OSS software runs without the hosted service. Cloud pricing, Stripe, and
 private deployment targets are not public contracts of this repository. See
@@ -105,7 +106,7 @@ Its worker connects to a Takosumi endpoint as an external client.
 ## Documentation
 
 - [Quickstart](docs/en/getting-started/quickstart.md) — complete local stack with dashboard and runner
-- [Concepts](docs/en/concepts/index.md) — how Git modules, Resources, Runs, and state fit together
+- [Concepts](docs/en/concepts/index.md) — how Git modules, Runs, state, and Interfaces fit together
 - [Credentials](docs/en/concepts/credentials.md) — safely passing provider credentials
 - [Self-hosting](docs/en/concepts/self-host.md) — topology and operator decisions
 - [Repository manifest](docs/en/reference/repository-manifest.md) — repository-owned metadata and the `InstallConfig` boundary

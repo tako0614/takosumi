@@ -22,6 +22,8 @@ test("settings hub keeps billing behind its explicit route", () => {
   expect(source).not.toContain("BillingSummary");
   expect(source).not.toContain("getWorkspaceBilling");
   expect(source).not.toContain("createResource");
+  expect(source).not.toContain('href: "/resources"');
+  expect(source).not.toContain('titleKey: "nav.resources"');
 });
 
 test("workspace settings uses the canonical billing destination", () => {

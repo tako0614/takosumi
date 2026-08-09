@@ -11,7 +11,6 @@ type Expectations = {
   readonly switchWorkspaceName: string;
   readonly appName: string;
   readonly appUrl: string;
-  readonly objectBucketName: string;
 };
 
 const rawMode = process.env.TAKOSUMI_E2E_MODE ?? "portable";
@@ -39,7 +38,6 @@ const expectations: Expectations =
         switchWorkspaceName: requiredLive("TAKOSUMI_E2E_SWITCH_WORKSPACE_NAME"),
         appName: requiredLive("TAKOSUMI_E2E_APP_NAME"),
         appUrl: requiredLive("TAKOSUMI_E2E_APP_URL"),
-        objectBucketName: requiredLive("TAKOSUMI_E2E_OBJECT_BUCKET_NAME"),
       };
 
 function pageErrors(page: Page): string[] {
@@ -401,36 +399,6 @@ test.describe("Takosumi dashboard browser surface", () => {
     await expect(app).toBeVisible();
     await expect(app).toHaveAttribute("href", expectations.appUrl);
     await expect(app).toHaveAttribute("target", "_blank");
-    await assertNoPageErrors(errors);
-    traffic.assertNoFailures();
-  });
-
-  test("lists an ObjectBucket and renders its customer-key controls in detail", async ({
-    page,
-  }) => {
-    const errors = pageErrors(page);
-    const traffic = monitorDashboardTraffic(page, mode);
-    await page.goto("/resources", { waitUntil: "domcontentloaded" });
-    await expect(
-      page.getByText("ObjectBucket", { exact: true }).first(),
-    ).toBeVisible();
-
-    const detailHref = `/resources/ObjectBucket/${encodeURIComponent(expectations.objectBucketName)}`;
-    const detail = page.locator(`a[href="${detailHref}"]`).first();
-    await expect(detail).toBeVisible();
-    await detail.click();
-    await expect(page).toHaveURL(
-      new RegExp(`/resources/ObjectBucket/${expectations.objectBucketName}`),
-    );
-    await expect(
-      page.getByText(/S3互換アクセスキー|S3-compatible access keys/u).first(),
-    ).toBeVisible();
-    await expect(page.getByLabel(/キーのラベル|Key label/u)).toBeVisible();
-    await expect(
-      page.getByRole("button", {
-        name: /S3互換キーを作成|Create S3-compatible key/u,
-      }),
-    ).toBeVisible();
     await assertNoPageErrors(errors);
     traffic.assertNoFailures();
   });

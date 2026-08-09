@@ -392,6 +392,9 @@ function endpoint(
     summary: `Form Activation API: ${operationId}`,
     auth: "deploy-control-token",
     operationId,
+    // FormActivation is part of the retained legacy Service Form host lane;
+    // it is not a normal OSS discovery surface during the drain.
+    discoverable: false,
     tag: "form-activations",
     openapi: {
       okSchema: "FormActivation",

@@ -31,8 +31,7 @@ function resourceEvidence(
   };
 }
 
-test("control-plane compatibility handlers receive only canonical Resource and route Interface ports", async () => {
-  const translated: string[] = [];
+test("control-plane compatibility handlers receive only the route Interface port", async () => {
   const response = await handlePlatformExtensionRouteRequest(
     new Request("https://operator.example/compat/example/v1/buckets", {
       method: "POST",
@@ -47,26 +46,18 @@ test("control-plane compatibility handlers receive only canonical Resource and r
           >,
         ) {
           expect(Object.keys(authority.control ?? {})).toEqual([
-            "resourceApi",
             "routeInterfaces",
           ]);
-          expect(Object.keys(authority.control?.resourceApi ?? {})).toEqual([
-            "fetch",
-          ]);
+          expect(authority.control).not.toHaveProperty("resourceApi");
           expect(authority).not.toHaveProperty("env");
           expect(authority).not.toHaveProperty("store");
           expect(authority).not.toHaveProperty("adapter");
           expect(authority).not.toHaveProperty("backend");
-          return await authority.control!.resourceApi.fetch(
-            new Request("https://internal.invalid/v1/resources/preview", {
-              method: "POST",
-              body: JSON.stringify({
-                kind: "ObjectBucket",
-                metadata: { name: "assets", space: "space_example" },
-                spec: { name: "assets" },
-              }),
+          return Response.json({
+            routes: await authority.control!.routeInterfaces.list({
+              workspaceId: "space_example",
             }),
-          );
+          });
         },
       },
     } as never,
@@ -86,17 +77,12 @@ test("control-plane compatibility handlers receive only canonical Resource and r
     }),
     async (input) =>
       await createPlatformCompatibilityAuthority(input, {
-        dispatchResourceRequest: async (request) => {
-          translated.push(`${request.method} ${new URL(request.url).pathname}`);
-          return Response.json({ translated: true });
-        },
         routeInterfaces: routeInterfaceStub(),
       }),
   );
 
   expect(response.status).toBe(200);
-  expect(await response.json()).toEqual({ translated: true });
-  expect(translated).toEqual(["POST /v1/resources/preview"]);
+  expect(await response.json()).toEqual({ routes: [] });
 });
 
 test("route Interface compatibility port rejects a different Workspace before opening canonical services", async () => {

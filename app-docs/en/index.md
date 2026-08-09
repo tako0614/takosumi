@@ -1,196 +1,68 @@
 # Takosumi Cloud
 
-Takosumi Cloud is the official Takosumi hosting we operate. Publish apps and
-APIs from Git at a `*.app.takos.jp` URL, straight from the browser. Attach
-Cloud resources — storage, databases, queues, AI — as you need them. Paid
-pricing uses prepaid credits with no monthly subscription
-([pricing](./pricing.md)).
+Takosumi Cloud is hosted Takosumi for running OpenTofu modules from Git and
+connecting them to the cloud services they need. A Workspace keeps the plan,
+apply, state, outputs, audit, usage, and prepaid credit together.
 
-These docs cover the hosted Takosumi Cloud service served from
-`app.takosumi.com`. Portable Takosumi software and Takosumi for Operator docs
-live separately at [takosumi.com/docs](https://takosumi.com/docs/en/).
+> **Status:** Pre-GA. Code or a catalog entry does not mean a service is
+> available. The Dashboard and the authenticated Cloud catalog expose the
+> current `available` state.
 
-## What You Can Host
+## Your first deployment
 
-- host apps, APIs, and services
-- use a default `*.app.takos.jp` URL immediately
-- configure secrets and environment variables
-- use KV / Object Storage / Database / Queue / AI as bindings
-- deploy from a Git URL through OpenTofu/Terraform
-- inspect usage, payment state, API keys, and resource inventory in the Dashboard
-
-## What It Is Made Of
-
-Takosumi Cloud is Takosumi the software (a Git-based deploy control plane that
-records plan → review → apply) with operator-provided deployment targets, billing, and
-support on top.
+1. Sign in to the [Dashboard](https://app.takosumi.com/) and select a Workspace.
+2. Add a repository from the Store or by Git URL.
+3. Select the provider connections required by the module.
+4. Review the plan and quote, then apply it.
+5. Open the service from the Run outputs or an Interface published by the app.
 
 ```text
-Takosumi Cloud =
-  official hosted Takosumi for Operator
-  + operator-provided deployment targets
-  + Cloud-operated service backends
-  + billing / usage metering / spend guard
-  + support / operations
-
-Takosumi Cloud Resources =
-  Cloud Resource Offerings
-  + Cloud bindings
-  + OpenTofu deploy path
+Git repository
+  → OpenTofu plan / review / apply
+  → provider control plane
+  → state + typed Output
+  → authorized Interface
 ```
 
-Add an app or service from Git, attach the resources it needs as bindings, and
-deploys and updates are recorded. Edge JS runtime, Object Storage, KV,
-Database, Queue, AI, and Container are peer Cloud resources. Usage spends
-through the credit balance, safety limits, and payment-state guard.
+Cloudflare, AWS, Takoform, and other providers are ordinary peers from the
+runner's point of view. Each provider control plane owns the lifecycle of the
+objects it creates. Takosumi does not duplicate those objects into a second
+resource ledger.
 
-## Runtime
+## What Takosumi Cloud owns
 
-Edge JS apps run as `EdgeWorker` resources. Takosumi Cloud can implement them
-with Cloudflare Workers for Platforms and a Takosumi dispatch layer.
-This is one Cloud resource, separate from ContainerService, Object Storage, KV,
-Database, Queue, and AI.
-The AI Gateway, S3-compatible endpoint, and Cloud usage endpoint are handled through the Cloud extension boundary on the same hosted Cloud origin.
+Takosumi Cloud provides:
 
-Every Cloud resource entrypoint uses the same Cloud operation
-pipeline before a backend API is called. Whether the request comes from a
-compatibility endpoint, the direct API, or the Dashboard, it
-passes through authentication, source Workspace context, owner billing context, Resource /
-NativeResource normalization, operation dispatch planning,
-selected-manager availability checks, usage / spend guard, and then manager
-dispatch. The selected manager chooses Workers for Platforms, R2, D1, KV,
-Queues, Containers, or another operator backend. A recognized service form whose
-manager is not configured fails before usage is charged and before any backend
-API call; it does not fall back to another compatibility path.
-Billing is not separated per Workspace: usage preserves the source Workspace as
-metadata, while credits are spent from the owning user's account balance.
+- the hosted dashboard, Accounts, runner, state, outputs, and audit;
+- provider connections and runner-only credential materialization;
+- prepaid credit, usage, quota, and spend guards;
+- available hosted services and standard protocol endpoints; and
+- Interface and InterfaceBinding authorization for deployed services.
 
-Durable workflows use Dynamic Workers with `@cloudflare/dynamic-workflows` when
-available. Operator/internal jobs use normal Cloudflare Workflows.
+Cloud availability, price, capacity, billing, and support are separate from
+Takoform Form maturity. Publishing a provider or schema alone does not enable
+a Cloud service.
 
-| Service form           | Backing example                                   |
-| ---------------------- | ------------------------------------------------- |
-| Edge JS app            | Workers for Platforms dispatch namespace          |
-| Container service      | Cloudflare Containers or another operator target  |
-| Durable user workflow  | Dynamic Workers + `@cloudflare/dynamic-workflows` |
-| Operator/internal jobs | Cloudflare Workflows                              |
+## Takoform
 
-## Cloud Bindings
+Takosumi Cloud intends to be the official Takoform Host, but the current Host
+candidate is unpublished and unmounted. Pre-release FormRefs, schema digests,
+and Host routes are not advertised as production capabilities.
 
-Takosumi Cloud resources are exposed to apps and services as bindings.
+After release, Takoform will still be an ordinary provider rather than a hidden
+runner mode. The Cloud default uses ProviderConnection and ProviderBinding, and
+users may replace it with their own compatible Host connection.
 
-| User-facing name | Purpose                         |
-| ---------------- | ------------------------------- |
-| Edge Worker      | Edge JS app / API runtime       |
-| Container        | OCI image based service         |
-| Route            | public URL / routing rule       |
-| Secrets          | write-only runtime secrets      |
-| KV               | small key-value data            |
-| Object Storage   | files and large objects         |
-| Database         | app relational data             |
-| Queue            | async jobs and event processing |
-| AI Gateway       | OpenAI-compatible AI endpoint   |
-| Durable Workflow | durable multi-step execution    |
-| Vector Index     | vector search index             |
-| Stateful Actor   | stateful actor namespace        |
-| Schedule         | cron-triggered invocation       |
+## Data endpoints
 
-## Domains
+Takosumi Cloud can expose S3-compatible object access and OpenAI-compatible AI
+access for existing services. These are data paths, not creation APIs. The
+repository's provider graph owns lifecycle; outputs and Interfaces provide the
+endpoint and authorization.
 
-Public HTTP resources can currently receive a Cloud URL under an
-operator-owned base domain. The Takosumi Cloud default base domain is
-`app.takos.jp`. There are two allocation modes: `scoped` and `vanity`.
-
-```text
-scoped:
-  https://<workspace-handle>-<label>.app.takos.jp
-  consumes no vanity slot
-
-vanity:
-  https://<label>.app.takos.jp
-  consumes one finite slot owned by the Workspace's immutable owner account
-```
-
-Use this URL for previews, first deploys, and apps that do not have external DNS
-yet. Neither mode requires DNS ownership verification. `scoped` consumes no
-vanity slot. `vanity` is first-come-first-served and requires a DNS-valid single
-label, global uniqueness, an available owner-account slot, reserved-label
-checks, and abuse policy. Conflict and slot-limit errors do not disclose the
-claimant Workspace or Capsule.
-The reservation and vanity slot belong to the Capsule lifetime and are released
-by a successful Capsule destroy, not by deleting an individual route.
-
-User-owned custom domains are part of the GA contract. An owner-account and
-Workspace-scoped `VerifiedDomain` manages ownership challenge, certificate,
-attach/detach, renewal, expiry, and delete. A route is active only while both
-ownership and certificate state are current. The lifecycle remains Pre-GA with
-the rest of Takosumi Cloud until that lifecycle has been verified in production;
-unverified, expired, or degraded domains fail closed.
-
-## Cloud Launch Contract And GA Gate
-
-Takosumi Cloud does not launch this commercial product one service at a time.
-Its ten exact Form-backed offerings (Object Storage has Standard and Infrequent
-Access offerings), plus the non-Form AI Gateway and Verified custom-domain
-services, are one all-or-nothing launch contract. This is Cloud product policy;
-it changes no Takoform Form maturity, approved subset, or Host Support fact.
-Takosumi Cloud stays Pre-GA until every item passes the same readiness matrix.
-
-| Current status | Cloud launch scope                                                                  |
-| -------------- | ----------------------------------------------------------------------------------- |
-| Pre-GA         | Edge Worker / Object Storage Standard and Infrequent Access / KV / Database / Queue |
-| Pre-GA         | Vector Index / Durable Workflow / Container / Stateful Actor Namespace / Schedule   |
-| Pre-GA         | OpenAI-compatible AI Gateway endpoint / Verified custom domain                      |
-
-GA evidence includes lifecycle, applicable standard API conformance, price
-coverage, immutable metering, spend enforcement, invoice reconciliation,
-recovery, tenant isolation, Dashboard, and production behavior and operations
-validation. An unpriced meter, inactive Offering or PriceCatalog, missing
-manager/capacity binding, expired quote, or missing live evidence fails closed
-before backend execution or GA activation. A self-test, descriptor,
-unconfigured manager, or one green client does not establish GA.
-
-## Billing and Spend Guard
-
-Takosumi Cloud uses a prepaid credit balance with a one-time onboarding credit.
-Billable
-operations are priced by the active Cloud PriceCatalog and stop before execution when
-the balance, limits, or payment state do not allow the operation. Cleanup and
-destroy operations remain available after a spend-guard block so users can
-remove resources instead of leaving them stranded.
-
-Public prices, onboarding-credit terms, usage rates, and spend-guard behavior are
-documented in [Takosumi Cloud pricing](./pricing.md). Payment-provider
-synchronization, margin guards, and reconciliation implementation details are
-service operations rather than public contracts.
-
-The Dashboard shows:
-
-- available balance
-- this month's usage
-- Cloud resource usage
-- recent usage events
-- API keys
-- current Cloud resources
-
-## Standard protocol endpoints
-
-Object Storage exposes the scoped `compat.s3.v1` data-plane profile. The
-canonical Resource API remains the bucket lifecycle authority; the S3 endpoint
-resolves a Ready `ObjectBucket` and authorized Interface.
-
-### AI Gateway OpenAI-compatible profile
-
-| Status | Scope                             |
-| ------ | --------------------------------- |
-| Pre-GA | `/gateway/ai/v1/models`           |
-| Pre-GA | `/gateway/ai/v1/chat/completions` |
-| Pre-GA | `/gateway/ai/v1/embeddings`       |
-
-Details:
-
-- [Takosumi Cloud resources](./resources.md)
-- [Takosumi Cloud endpoints](./endpoints.md)
-- [Takosumi Cloud pricing](./pricing.md)
-- [Takosumi Cloud support](./support.md)
-- [Takosumi Cloud SLA](./sla.md)
+- [Resources and providers](./resources.md)
+- [Data endpoints](./endpoints.md)
+- [Pricing](./pricing.md)
+- [Support](./support.md)
+- [SLA](./sla.md)
+- [Takosumi software docs](https://takosumi.com/docs/en/)

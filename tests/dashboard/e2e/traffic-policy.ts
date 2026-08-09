@@ -37,11 +37,7 @@ function isRequiredLivePath(pathname: string): boolean {
   return (
     pathname === "/api/v1/dashboard/bootstrap" ||
     pathname === "/api/v1/workspaces" ||
-    pathname.startsWith("/api/v1/workspaces/") ||
-    pathname === "/v1/resources" ||
-    pathname.startsWith("/v1/resources/") ||
-    pathname === "/v1/cloud/s3-access-keys" ||
-    pathname.startsWith("/v1/cloud/s3-access-keys/")
+    pathname.startsWith("/api/v1/workspaces/")
   );
 }
 

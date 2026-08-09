@@ -224,6 +224,12 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
    */
   readonly TAKOSUMI_RESOURCE_SHAPES?: string;
   /**
+   * Explicit, temporary legacy Resource Shape drain lane. The value must be
+   * exactly `1`; omission keeps all Flow-B routes unmounted at the platform
+   * edge. Drain mode never enables discovery or new Resource/Form mutations.
+   */
+  readonly TAKOSUMI_LEGACY_RESOURCE_DRAIN_ENABLED?: string;
+  /**
    * Host-code contribution for operator-defined Resource Shape validation.
    * This is a runtime object supplied by a composing Worker, not a text var or
    * an OpenTofu output. Custom shape tokens are rejected without it.

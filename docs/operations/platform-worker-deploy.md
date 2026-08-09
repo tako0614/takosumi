@@ -29,9 +29,9 @@ Run queue, coordination/run-owner Durable Objects, and an OpenTofu runner.
 origins, IDs, and secrets belong to operator state outside the repository.
 Operators may wrap this composition through the documented generic extension
 and port seams; the OSS config must not name a closed handler as a dependency.
-An optional signed Takoform Form Registry uses the separate
-[`form-package-installation.md`](form-package-installation.md) procedure; no
-package, trust root, publisher, or activation is implicit in this worker.
+The worker does not install or host a Form Registry, FormActivation, or hosted
+Form. Any such closed Cloud Host is deployed and operated by its owning
+repository; the old package procedure is a superseded migration note.
 
 ## Self-host build and deployment
 
@@ -74,12 +74,15 @@ Container image reuse, capacity, keepalive, cache, egress, and timeout settings
 are explicit operator policy. A class or binding rename requires a durable
 migration; never assume production state can be discarded.
 
-When Resource Shape kinds are enabled, the platform worker also runs bounded
-read-only observation on the five-minute cron. Set its batch, concurrency,
-cadence, and abandoned-lease window with the
-`TAKOSUMI_RESOURCE_OBSERVATION_*` variables documented in
-[Configuration](../reference/configuration.md). This scheduler reports drift but never
-applies or refreshes a Resource.
+The platform worker does not advertise the retired Resource Shape API. The old
+`TAKOSUMI_RESOURCE_OBSERVATION_*` variables and five-minute cron are retained
+implementation vocabulary for migration custody only. The optional
+`TAKOSUMI_LEGACY_RESOURCE_DRAIN_ENABLED=1` lane permits only the exact
+deploy-control bearer to use bounded list/read/events/observe/delete and
+TargetPool/SpacePolicy `GET`/`HEAD`/`DELETE`; Workspace sessions, personal
+access tokens, and OAuth tokens are rejected. When explicitly enabled, the
+cron may run read-only observation, but it never invokes Resource operation
+repair or resumes preview/apply/import/refresh/create/update mutations.
 
 ## Authentication configuration
 
@@ -234,9 +237,9 @@ After deploy, verify:
   unconfigured Core exposes none;
 - Interface resolution and one exact InterfaceBinding authorization work
   without a reserved Output schema;
-- one `Ready` scratch Resource produces a scheduled apply-disabled
-  `drift_check`, the next tick does not duplicate its active lease, and
-  `takosumi_resource_observation_count` reports the outcome without an apply;
+- if the legacy drain is intentionally enabled, one authenticated retained
+  Resource can be listed/read, observed, and deleted without enabling writes;
+  otherwise all legacy Resource/Form paths return `404`;
 - logs, audit events, state, Outputs, and diagnostics contain no credential.
 
 Record these proofs with the OSS

@@ -16,7 +16,8 @@ values you explicitly mapped.
 ## Declaring one
 
 The Interface API is the canonical ledger. Declarations materialized from a Capsule
-blueprint or a Takoform Form descriptor converge on the same records.
+blueprint, or projected by an external Host from a Form descriptor, converge on the same
+records. The external Host owns the Form descriptor's definition and realization authority.
 
 ```http
 POST /v1/interfaces
@@ -54,23 +55,9 @@ Content-Type: application/json
 ```
 
 `visibility` is one of `private`, `workspace`, or `public`. `document` contains only
-non-secret JSON. An Interface is owned by a Workspace, Capsule, or Resource and is not
-copied into a second declaration system.
-
-Typed Resources also have an `interfaces` field, but it plays a different role. There it
-lists the ways you want that Resource to be usable, and Takosumi picks a Target that
-provides every one of them.
-
-```json
-{
-  "kind": "ObjectBucket",
-  "metadata": { "name": "assets", "space": "prod" },
-  "spec": {
-    "name": "assets",
-    "interfaces": ["s3_api", "signed_url"]
-  }
-}
-```
+non-secret JSON. An Interface is owned by a Workspace or Capsule and is not copied into a
+second declaration system. An endpoint may retain old Resource ownership for migration, but
+that compatibility path is not a new Interface authoring entry point.
 
 ## Mapping the values you publish
 
@@ -81,7 +68,7 @@ provides every one of them.
 | ----------------- | --------------------------------------------- | ------------------------------------ |
 | `literal`         | A value written straight into the declaration | `value`                              |
 | `capsule_output`  | A published Output of a Capsule               | `outputName`, optionally `capsuleId` |
-| `resource_output` | A published Output of a Resource              | `resourceId`, `outputName`           |
+| `resource_output` | A published Output of an old Resource (migration only) | `resourceId`, `outputName`           |
 
 Omitting `capsuleId` under `capsule_output` reads the Output of the declaring Capsule
 itself.
@@ -106,30 +93,26 @@ JSON Pointer of RFC 6901.
 readable from the Interface's `status.resolvedInputs`, and where it came from from
 `status.provenance`.
 
-## Using a Resource from a deployed app
+## Using another Capsule from a deployed app
 
-An Interface is an offer-side declaration. A host can also use the same Interface and
-InterfaceBinding ledger to deliver a Resource connection to a deployed app.
+An Interface is a provider-side declaration. A consumer Capsule uses the same Interface and
+InterfaceBinding ledger to receive a connection and its authorization.
 
 The two declarations remain separate.
 
 - `InstallConfig.interfaceBlueprints` proposes Interfaces that the Capsule **offers**.
-- The service-side `hostRuntimeMaterialization.requirements` lists Resource aliases and
-  permissions that a hosted runtime **consumes**. It is not repository metadata, an
-  Output convention, or provider configuration.
+- Consumer input mapping lists the Interface aliases and permissions it **consumes**. It is not
+  repository metadata, an Output convention, or provider configuration.
 
-After the consumer Resource is Ready, the host resolves the target Resource generation,
-Interface, Ready InterfaceBinding, and permissions. The runtime receives only a
-provider-native Resource binding and a materialization with exact authority for each
-alias. It does not receive provider credentials, account ids, native resource ids, or bearer
-tokens.
+Takosumi resolves the Capsule's Interface, Ready InterfaceBinding, and permissions. The runtime
+receives only a materialization with exact authority for each alias. It does not receive provider credentials, account ids, native resource ids, or bearer tokens.
 
-After a Binding is revoked or a Resource generation or permission changes, a host must
+After a Binding is revoked or an Interface generation or permission changes, a host must
 not fall back to an old materialization. It creates a new exact runtime version or fails
 the call closed.
 
-This is an explicit host capability. It does not replace the path where an OpenTofu
-module uses Cloudflare, AWS, or another provider directly.
+This is an Interface authorization capability. It does not replace the path where an OpenTofu
+module uses Cloudflare, AWS, Takoform, or another provider directly.
 
 ## Reading state and authorization
 
@@ -175,10 +158,10 @@ It is not something to reuse over a long period, so design for fetching one per 
 
 If any of these does not hold, Takosumi **stops there**.
 
-A successful Resource refresh re-resolves the versions of related Interfaces. That is why
-one can read `Unknown` briefly right after a deployment.
+An Output or Interface generation change re-resolves related Bindings. That is why one can read
+`Unknown` briefly right after a deployment.
 
 ## Related
 
-- [Resources](./resources.md)
+- [Resource migration internals](./resources.md)
 - [State and outputs](./state-and-outputs.md)

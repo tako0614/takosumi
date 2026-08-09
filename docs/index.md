@@ -25,19 +25,14 @@ Takosumi は `plan` と `apply` を 1 つの Run として扱います。確認�
 どの Git commit を誰が実行し、何が変わったかを記録します。適用ごとに state と output
 を保存するため、障害の調査や以前の状態との比較ができます。
 
-## 2 つのデプロイ方法
+## 1 つの Git/OpenTofu flow
 
-| 方法           | 向いているもの                              | 利用者が用意するもの            |
-| -------------- | ------------------------------------------- | ------------------------------- |
-| **Git module** | アプリ、既存インフラ、自由な構成            | Git URL、ref、module path、変数 |
-| **Resource**   | 種類と設定だけを指定できる managed サービス | Resource の宣言                 |
-
-Git module の経路では、登録した module を Takosumi が **Capsule** と呼びます。
-Resource の経路では、運用者が有効にした種類から選びます。どちらも同じ Run、state、
-output、監査記録を使います。
+登録した Git module を Takosumi は **Capsule** と呼びます。利用者が用意するのは Git
+URL、ref、module path、変数、そして module が宣言する provider の接続です。Run、state、
+output、監査記録はこの 1 つの Stack flow に集約されます。
 
 ```text
-Git URL または Resource の宣言
+Git URL と module の宣言
   → 入力と接続を確認
   → plan
   → 差分を確認
@@ -76,12 +71,15 @@ dashboard、サインイン、永続データベース、OpenTofu runner を含�
 - [Source と Capsule](./concepts/sources.md) — Git の ref を commit に固定する方法
 - [実行モデル](./concepts/run-model.md) — plan、承認、apply、destroy
 - [認証情報](./concepts/credentials.md) — provider に接続を渡す方法
-- [Resource](./concepts/resources.md) — module を書かずに型付きサービスを作る方法
+- [Interface](./concepts/interfaces.md) — デプロイの接続方法と利用許可
 - [自分で動かす](./concepts/self-host.md) — production を運用するための構成
 - [Repository manifest](./reference/repository-manifest.md) /
   [Store API](./reference/store-api.md) /
   [API](./reference/api.md) / [CLI](./reference/cli.md) /
   [設定](./reference/configuration.md)
 
-公式ホスティングの料金、managed リソース、サポートは
+旧 Resource Shape / Form Host API の資料は [Resource の移行メモ](./concepts/resources.md)
+にまとめています。新しい authoring surface ではありません。
+
+公式ホスティングの料金、hosted service、サポートは
 [Takosumi Cloud のドキュメント](https://app.takosumi.com/docs/)にあります。

@@ -4,7 +4,7 @@
  * The fixture is intentionally shaped like the public dashboard projections,
  * not like an internal store/database row. It proves that the browser can
  * authenticate, navigate, switch Workspace scope, and render the canonical
- * launcher/Resource projections without deploying anything.
+ * launcher projection without deploying anything.
  */
 
 const CREATED_AT = "2026-08-01T00:00:00.000Z";
@@ -16,7 +16,6 @@ export const PORTABLE_EXPECTATIONS = {
   switchWorkspaceName: "Beta Workspace",
   appName: "Repository Office",
   appUrl: "https://apps.example.test/repository-office",
-  objectBucketName: "assets",
 } as const;
 
 export const PORTABLE_WORKSPACES = [
@@ -124,46 +123,6 @@ export const PORTABLE_UI_SURFACES = {
       "https://apps.example.test/beta-office",
     ),
   ],
-} as const;
-
-export const PORTABLE_OBJECT_BUCKET = {
-  apiVersion: "takosumi.dev/v1alpha1",
-  kind: "ObjectBucket",
-  id: "tkrn:ws_alpha:ObjectBucket:assets",
-  metadata: {
-    name: PORTABLE_EXPECTATIONS.objectBucketName,
-    space: "ws_alpha",
-    generation: 1,
-    managedBy: "takosumi",
-  },
-  spec: {
-    name: PORTABLE_EXPECTATIONS.objectBucketName,
-    storageClass: "standard",
-  },
-  status: {
-    phase: "Ready",
-    observedGeneration: 1,
-    resolution: {
-      selectedImplementation: "object.storage",
-      target: "portable-e2e",
-      locked: true,
-      portability: "portable",
-    },
-    conditions: [
-      {
-        type: "Ready",
-        status: "true",
-        reason: "FixtureReady",
-        message: "Portable browser fixture is ready.",
-      },
-    ],
-  },
-} as const;
-
-export const PORTABLE_RESOURCE_INTERFACE = {
-  name: "object.storage",
-  version: "1",
-  resource: { kind: "ObjectBucket", name: PORTABLE_EXPECTATIONS.objectBucketName },
 } as const;
 
 export function workspacesResponse() {

@@ -81,52 +81,6 @@ takosumi connections revoke conn_...
 Compatibility APIs are explicit operator-installed extension capabilities. The
 Provider Connection CLI never infers a specific gateway or provider family.
 
-## Resource Shape
-
-The Resource Shape flow has no separate sync registry. The CLI operates directly
-on the Resource, TargetPool, and SpacePolicy declarations stored by Takosumi and
-on explicit reconcile operations. Write requests are read from non-secret JSON
-object files. Normal output shows only a Resource phase, Target, Run id, and other
-summary fields; it does not print the request body or Output values. Use `--json`
-only when the complete public response is required.
-
-```bash
-takosumi resources preview --file resource.json
-takosumi resources apply EdgeWorker api --file resource.json
-takosumi resources import EdgeWorker api --file resource-with-native-id.json
-
-takosumi resources list --space space_...
-takosumi resources get EdgeWorker api --space space_...
-takosumi resources events EdgeWorker api --space space_...
-takosumi resources observe EdgeWorker api --space space_...
-takosumi resources refresh EdgeWorker api --space space_...
-takosumi resources delete EdgeWorker api --space space_...
-```
-
-The `preview` and `apply` files carry the same `kind`, `metadata`, and `spec` as
-the Resource Shape API. An `import` file adds a top-level `nativeId`. Credentials
-and secrets belong in ProviderConnection / CredentialRecipe, never in a Resource
-spec or `nativeId`. `delete --force` succeeds only when the endpoint explicitly
-grants operator break-glass authorization.
-
-Target and Policy declarations are sent directly to the same endpoint.
-
-```bash
-takosumi target-pools put default --file target-pool.json
-takosumi target-pools list --space space_...
-takosumi target-pools get default --space space_...
-takosumi target-pools delete default --space space_...
-
-takosumi space-policies put default --file space-policy.json
-takosumi space-policies list --space space_...
-takosumi space-policies get default --space space_...
-takosumi space-policies delete default --space space_...
-```
-
-`target-pool.json` is an API request body with top-level `space` and
-`spec.targets`; `space-policy.json` has top-level `space` and `spec`. A list
-`nextCursor` is opaque and must be passed unchanged to the next `--cursor`.
-
 ## Deployment secrets
 
 The selected runtime adapter and operator vault own deployment-secret storage

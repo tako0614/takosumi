@@ -1426,6 +1426,9 @@ function endpoint(
     summary: `Resource Shape API: ${operationId}`,
     auth: "deploy-control-token",
     operationId,
+    // Flow-B is retained for a bounded, authenticated drain only. It must not
+    // appear in the normal capabilities/OpenAPI discovery inventory.
+    discoverable: false,
     tag: "resource-shape",
     openapi: {
       okSchema,

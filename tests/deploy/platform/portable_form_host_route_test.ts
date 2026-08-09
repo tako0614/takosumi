@@ -14,10 +14,11 @@ function platformEnv() {
     TAKOSUMI_DEPLOY_CONTROL_TOKEN: "resource-token",
     TAKOSUMI_DEV_MODE: "1",
     TAKOSUMI_RESOURCE_SHAPES: "ObjectBucket",
+    TAKOSUMI_LEGACY_RESOURCE_DRAIN_ENABLED: "1",
   } as never;
 }
 
-test("platform mounts the portable Form host with its D1 replay authority", async () => {
+test("platform keeps the retired portable Form host ahead of the SPA fallback", async () => {
   const assetRequests: string[] = [];
   const env = {
     ...platformEnv(),
@@ -37,8 +38,7 @@ test("platform mounts the portable Form host with its D1 replay authority", asyn
     ),
     env,
   );
-  expect(discovery.status).toBe(200);
-  expect(discovery.headers.get("content-type")).toContain("application/json");
+  expect(discovery.status).toBe(404);
 
   const forms = await worker.fetch(
     new Request(
@@ -47,12 +47,11 @@ test("platform mounts the portable Form host with its D1 replay authority", asyn
     ),
     env,
   );
-  expect(forms.status).toBe(200);
-  expect(forms.headers.get("content-type")).toContain("application/json");
+  expect(forms.status).toBe(404);
   expect(assetRequests).toEqual([]);
 });
 
-test("platform rejects portable Form selectors outside the verified Workspace", async () => {
+test("platform retired portable Form selectors never reach Workspace auth", async () => {
   const env = platformEnv();
   const verifyWorkspaceA = async () => ({
     authenticated: true as const,
@@ -69,7 +68,7 @@ test("platform rejects portable Form selectors outside the verified Workspace", 
     env,
     verifyWorkspaceA,
   );
-  expect(crossWorkspaceForms.status).toBe(403);
+  expect(crossWorkspaceForms.status).toBe(404);
 
   const crossWorkspacePreview = await handlePlatformResourceShapeApiRequest(
     new Request(
@@ -97,5 +96,5 @@ test("platform rejects portable Form selectors outside the verified Workspace", 
     env,
     verifyWorkspaceA,
   );
-  expect(crossWorkspacePreview.status).toBe(403);
+  expect(crossWorkspacePreview.status).toBe(404);
 });

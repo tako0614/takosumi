@@ -1,191 +1,29 @@
-import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { expect, test } from "bun:test";
+import { existsSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
 
-const src = (path: string) =>
-  readFileSync(
-    new URL(`../../../../../dashboard/src/${path}`, import.meta.url),
-    "utf8",
-  );
+const dashboardRoot = resolve(import.meta.dir, "../../../../../dashboard/src");
+const source = (path: string) => readFileSync(resolve(dashboardRoot, path), "utf8");
 
-const index = src("index.tsx");
-const settings = src("views/settings/SettingsView.tsx");
-const editor = src("views/resources/ResourceEditor.tsx");
-const serviceForm = src("lib/resource-service-form.ts");
-const en = src("i18n/en.ts");
-const ja = src("i18n/ja.ts");
-const detail = src("views/resources/ResourceDetailView.tsx");
-const inventory = src("views/resources/ResourcesView.tsx");
+test("Resource dashboard surface is no longer mounted or advertised", () => {
+  const index = source("index.tsx");
+  const nav = source("views/account/components/shell/nav.ts");
+  const settings = source("views/settings/SettingsView.tsx");
 
-describe("Resource Shape dashboard surface", () => {
-  test("is directly reachable from Settings with list and detail routes", () => {
-    expect(settings).toContain('href: "/resources"');
-    expect(settings).toContain('titleKey: "nav.resources"');
-    expect(index).toContain(
-      '<Route path="/resources" component={ResourcesView} />',
-    );
-    expect(index).toContain('path="/resources/:kind/:name"');
-  });
-
-  test("requires a current preview and explicit confirmation before apply/import", () => {
-    expect(editor).toContain("previewResourceShape");
-    expect(editor).toContain("previewFingerprint");
-    expect(editor).toContain("resourceShapeInputFingerprint");
-    expect(editor).toContain("if (!previewIsCurrent())");
-    expect(editor).toContain("await confirm({");
-    expect(editor).toContain("applyResourceShape");
-    expect(editor).toContain("importResourceShape");
-    expect(editor).toContain("planDigest: reviewedPreview.planDigest");
-    expect(editor).toContain("quoteId: reviewedPreview.quote.quoteId");
-    expect(editor).toContain("quoteDigest: reviewedPreview.quote.quoteDigest");
-  });
-
-  test("defaults to service-first guided forms before price, preview, and deploy", () => {
-    const service = editor.indexOf('data-step="service"');
-    const inputs = editor.indexOf('data-step="inputs"');
-    const preview = editor.indexOf('data-step="preview"');
-    const price = editor.indexOf('class="rs-price-review"');
-    const deploy = editor.indexOf('data-step="deploy"');
-    expect(service).toBeGreaterThan(-1);
-    expect(inputs).toBeGreaterThan(service);
-    expect(preview).toBeGreaterThan(inputs);
-    expect(price).toBeGreaterThan(preview);
-    expect(deploy).toBeGreaterThan(price);
-    expect(editor).toContain("<For each={availableForms()}>");
-    expect(editor).toContain("availableToPrincipal");
-    expect(editor).toContain("formIdentityKey(identity)");
-    expect(editor).toContain("formLabel(identity)");
-    expect(editor).toContain("buildGuidedResourceServiceSpec");
-    expect(editor).toContain("readGuidedResourceServiceForm");
-    expect(editor).toContain('value="infrequent_access"');
-    expect(detail).toContain("objectBucketStorageClass(item())");
-  });
-
-  test("keeps every guided editor implementation behind discovered availability", () => {
-    for (const kind of [
-      "EdgeWorker",
-      "ObjectBucket",
-      "KVStore",
-      "SQLDatabase",
-      "Queue",
-      "VectorIndex",
-      "DurableWorkflow",
-      "ContainerService",
-      "StatefulActorNamespace",
-      "Schedule",
-    ]) {
-      expect(serviceForm).toContain(`"${kind}"`);
-      expect(editor).toContain(`case "${kind}":`);
-    }
-    expect(editor).toContain("props.formAvailability");
-    expect(editor).toContain("<For each={availableForms()}>");
-    expect(editor).not.toContain("BUNDLED_KINDS");
-    expect(inventory).toContain("readWorkspaceResourcesView");
-    expect(inventory).toContain("formAvailability={formRows()}");
-    expect(inventory).not.toContain("listFormAvailability");
-    expect(detail).toContain("listFormAvailability");
-    expect(detail).toContain("formAvailability={formAvailability() ?? []}");
-    expect(editor).toContain("...(exactForm ? { form: exactForm } : {})");
-    expect(serviceForm).toContain("draftGuidedResourceServiceSpec");
-  });
-
-  test("labels the discovered set Stable without inventing AI or domain Resource kinds", () => {
-    expect(editor).toContain('t("resources.editor.stable")');
-    // The list is whatever the host offers — stated in product language now.
-    // `Form availability contract` is an internal host-contract noun and must
-    // not be the sentence an ordinary user reads.
-    expect(en).toContain("service types this deployment offers");
-    expect(ja).toContain("この環境が提供しているもの");
-    expect(en).not.toContain("Form availability contract");
-    expect(ja).not.toContain("Form availability");
-    expect(serviceForm).not.toContain('"AIGateway"');
-    expect(serviceForm).not.toContain('"VerifiedDomain"');
-    expect(editor).not.toContain('<option value="AIGateway">');
-    expect(editor).not.toContain('<option value="VerifiedDomain">');
-  });
-
-  test("keeps raw/custom and placement controls in advanced disclosure", () => {
-    const advanced = editor.indexOf('<details class="rs-advanced"');
-    expect(advanced).toBeGreaterThan(-1);
-    expect(editor.indexOf('t("resources.editor.project")')).toBeGreaterThan(
-      advanced,
-    );
-    expect(editor.indexOf('t("resources.editor.targetPool")')).toBeGreaterThan(
-      advanced,
-    );
-    expect(editor.indexOf('t("resources.editor.spec")')).toBeGreaterThan(
-      advanced,
-    );
-    expect(editor).toContain("setGuidedMode(false)");
-    expect(editor).toContain('setError(t("resources.editor.rawCannotGuide"))');
-    expect(serviceForm).toContain(
-      "the Deploy API remains the schema/capability authority",
-    );
-    expect(serviceForm).not.toMatch(
-      /ServiceOffering|PriceCatalog|cloudflare/iu,
-    );
-  });
-
-  test("keeps break-glass deletion out and launches through generic Resolved Interfaces", () => {
-    expect(detail).toContain("deleteResourceShape");
-    expect(detail).not.toContain("force:");
-    expect(detail).toContain("listResolvedResourceInterfaces");
-    expect(detail).toContain("resourceLaunchUrlProjections");
-    expect(detail).toContain("resolvedInterfaces.error");
-    expect(detail).toContain(
-      "Promise.allSettled([refetchResolvedInterfaces()])",
-    );
-    expect(detail).toContain("resourceOutputKeys(item())");
-    expect(detail).toContain("href={launch.url}");
-    expect(detail).toContain(
-      "`${launch.interfaceType}@${launch.interfaceVersion}`",
-    );
-    expect(detail).toContain('target="_blank"');
-    expect(detail).toContain('rel="noreferrer noopener"');
-    expect(detail).not.toContain("Object.entries(item().status?.outputs");
-    expect(detail).not.toContain("resourceSafeUrlProjections");
-    expect(detail).not.toContain("EdgeWorker");
-  });
-
-  test("makes SpacePolicy records discoverable, editable, and deletable", () => {
-    expect(inventory).toContain("listResourceSpacePolicies");
-    expect(inventory).toContain("editSpacePolicy");
-    expect(inventory).toContain("deleteResourceSpacePolicy");
-    expect(inventory).toContain(
-      "rows={spacePolicies.error ? [] : spacePolicies()}",
-    );
-  });
-
-  test("unifies deployed services and Resources in one inventory", () => {
-    expect(inventory).toContain("readWorkspaceResourcesView");
-    expect(inventory).toContain("mergeWorkspaceResourcesViews");
-    expect(inventory).toContain("loadMoreResources");
-    expect(inventory).toContain(
-      "if (scope()?.workspaceId !== active.workspaceId) return;",
-    );
-    expect(inventory).toContain('t("resources.pagination.loadMore")');
-    expect(inventory).toContain('t("resources.pagination.hint")');
-    expect(inventory).toContain("visibleResourcesView");
-    expect(inventory).toContain("rows={workloadRows()}");
-    expect(inventory).toContain("rows={resourceRows()}");
-    expect(inventory).toContain("formRows().filter");
-    expect(inventory).not.toContain("listCapsules");
-    expect(inventory).not.toContain("listResourceShapes");
-    expect(inventory).toContain('class="rs-platform-advanced"');
-  });
-
-  test("keeps continuation copy available in both locales", () => {
-    expect(en).toContain('"resources.pagination.loadMore": "Load more"');
-    expect(ja).toContain('"resources.pagination.loadMore": "さらに読み込む"');
-    expect(en).toContain("one bounded page at a time");
-    expect(ja).toContain("安全な件数ごとに表示");
-  });
-
-  test("validates a Resources redirect Workspace before scoped inventory reads", () => {
-    expect(inventory).toContain("resourcesWorkspaceQueryId");
-    expect(inventory).toContain("listWorkspacesCached");
-    expect(inventory).toContain("selectWorkspaceFromQuery");
-    expect(inventory).toContain("setCurrentWorkspaceId(selected)");
-    expect(inventory).toContain("canonicalResourcesSearch");
-    expect(inventory).toContain("if (validatedRouteWorkspace.error)");
-  });
+  expect(index).not.toContain("ResourcesView");
+  expect(index).not.toContain("ResourceDetailView");
+  expect(index).not.toContain('path="/resources"');
+  expect(index).not.toContain('path="/resources/:kind/:name"');
+  expect(nav).not.toContain("nav.resources");
+  expect(nav).not.toContain("/^\\/resources");
+  expect(settings).not.toContain('href: "/resources"');
+  expect(settings).not.toContain('titleKey: "nav.resources"');
+  for (const path of [
+    "views/resources/ResourcesView.tsx",
+    "views/resources/ResourceDetailView.tsx",
+    "views/resources/ResourceEditor.tsx",
+    "views/resources/components/S3CustomerAccessKeysCard.tsx",
+  ]) {
+    expect(existsSync(resolve(dashboardRoot, path))).toBe(false);
+  }
 });

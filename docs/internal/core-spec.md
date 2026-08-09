@@ -1,157 +1,40 @@
 # Takosumi Core Spec
 
-Last updated: 2026-07-28
+Last updated: 2026-08-09
 
-This document describes the OSS core specification. Product direction is fixed
-by [Takosumi Final Plan](./final-plan.md).
+This document is the present Takosumi OSS contract. It supersedes historical
+planning notes such as [`final-plan.md`](./final-plan.md); those notes cannot
+change the current route, ownership, or release boundary.
 
 ## Definition
 
-Takosumi OSS is a Git-based OpenTofu control plane and optional Service Form
-host. `Resource Shape` is the current implementation/wire compatibility name.
+Takosumi OSS is a Git-based OpenTofu/Terraform control plane. Its one supported
+Git/OpenTofu/Terraform deployment flow is a plain Stack through a reviewed Run,
+persisted state, Outputs, and audit evidence. A provider is selected by the user's
+OpenTofu configuration and explicit host bindings; there is no Takosumi DSL or
+second desired-state ledger.
 
-It supports two authoring flows and one shared runtime interaction layer:
+Takoform is an ordinary external provider and portable specification project.
+Takoform owns Form definitions, FormRef/package publication, provider releases,
+and portable conformance. Takosumi ships no first-party Terraform/OpenTofu provider
+and does not host a Form Registry or hosted Form lifecycle.
 
-```text
-Flow A:
-  plain OpenTofu/Terraform stack execution from Git
+## Ownership boundary
 
-Flow B:
-  exact Service Form-backed Resource deployed through the host lifecycle API
+| Area | Owner |
+| --- | --- |
+| Git sources, OpenTofu/Terraform init/validate/plan/apply/destroy, Runs, state, Outputs, audit, provider connections, credential recipes, provider bindings, Interfaces, InterfaceBindings | Takosumi OSS |
+| Portable Form schema, FormRef, data-only Form Packages, typed provider, package signatures, and conformance | Takoform |
+| Hosted Form instances, Form Host lifecycle, backend implementations, targets/capacity, commercial offerings, billing, SLA, support, and abuse controls | Takosumi Cloud or another external Host |
 
-Shared layer:
-  Workspace/Capsule/Resource Interface declaration and InterfaceBinding authorization
-```
-
-The current implementation has Flow A and a Takosumi-owned Resource Shape Flow
-B. The target moves portable definition/provider/interoperability authority out
-of Takosumi while preserving the current wire, state, and one Resource ledger
-through an additive migration.
-
-### Service Form target and current compatibility boundary
-
-The accepted target contract is:
-
-```text
-Takoform portable Service Form project (takoform.com, github.com/tako0614/terraform-provider-takoform):
-  Service Form / FormRef / data-only Form Package
-  forms.takoform.com/v1alpha1 interoperability
-  registry.terraform.io/tako0614/takoform typed provider / conformance
-
-Takosumi OSS:
-  zero-form-capable host
-  one canonical Resource / Run / state / audit lifecycle
-  Resolver / Planner / Reconciler / Target / Policy / Adapter / credentials
-  Interface / InterfaceBinding / generic FormActivation
-  generic noncommercial Offering catalog / audience / subject resolver
-
-Takosumi Cloud closed:
-  realized Offering contributions / official target and capacity / backend manager
-  commercial Offering binding
-  price / rating / billing / quota / abuse / SLA / support
-```
-
-The approved public identities are `Takoform`, `takoform.com`,
-`github.com/tako0614/terraform-provider-takoform`, `forms.takoform.com/v1alpha1`, and
-`registry.terraform.io/tako0614/takoform` with the `takoform_` prefix. The HCP Terraform
-organization `takoform` manages the GitHub-account-derived `tako0614` Public Registry namespace. Source
-publication is authorized; provider/package releases still require signing and
-real-install evidence. The current `takosumi.dev/v1alpha1`, `ResourceShape`,
-`/v1/resources`, IDs, kinds, imports, and database columns remain compatibility
-surfaces for the host API and Resource records. Takosumi ships no first-party
-Terraform/OpenTofu provider. No current code is conformant merely because this
-target is documented.
-
-Takosumi Core is provider-neutral beyond Takoform. Plain Stack execution accepts any
-runner-installable OpenTofu/Terraform provider configured through ProviderConnection,
-CredentialRecipe, and ProviderBinding. Optional Compatibility API/Adapter translation to an exact
-Takoform FormRef MUST converge on this Core's one Resource ledger and MUST NOT be required for
-provider-native Stack resources.
-
-`FormRef` is exact: `apiVersion`, `kind`, `definitionVersion`, and
-`schemaDigest`. Form Packages are signed, content-addressed, immutable,
-data-only definitions and fixtures. Executable validators/realizers are
-separately trusted Host Extensions/Adapters. Resources, ResolutionLocks,
-FormActivations, and Form-backed generic Offerings pin exact references; a
-closed commercial binding pins the exact Offering selection;
-`packageDigest` identifies the immutable package envelope beside the FormRef
-and is never one of its fields. Old definition bytes remain retained for
-observe/delete.
-
-Core has zero implicit Form Packages or Offerings. Portable host discovery reports definition
-known, installed, executable, activated, and available-to-principal as
-independent states. Generic Offering availability is a separate OSS projection
-with open subject types; a Form subject re-reads exact FormRef and
-FormActivation. Commercially available is a separate closed projection keyed
-by an exact Offering selection, not a field in portable FormAvailability or the
-generic Offering.
-Takosumi persists immutable generic catalogs through D1 v50/Postgres v97 and
-publishes deploy-control-bearer operator routes for exact publication,
-pagination, read, availability, and selection. Reusing an id/version with
-different content is a conflict; composed readers that both claim the same
-exact catalog are ambiguous and fail closed. Selection evidence hashes the
-complete catalog row together with the resolver's exact subject evidence.
 The portable project owns no Resource ID, lifecycle ledger, Run, StateVersion,
 Output, Target, credential, Policy, Adapter, Interface, or InterfaceBinding.
-
-The OSS host consumes this independent contract through injected package
-reader/verifier ports. The shipped Workers/D1 composition can read immutable
-install envelopes plus a digest-pinned offline Sigstore TrustedRoot from an
-operator R2 bucket; the Bun/Node/Postgres composition can read the same material
-from a private immutable-staging directory. Both verify the signed RFC 8785
-package index, exact payload closure/digests/modes, Form Definition schema and
-data-only policy before one atomic Form Registry install. The Takosumi envelope
-is transport only and creates no portable definition authority. No package,
-publisher, trust root, FormActivation, implementation, or offering is implicit.
-The verifier accepts retained `packages.forms.takoform.com/v1alpha1` indexes
-and additive content-addressed `v1alpha2` indexes. `packageVersion` exists only
-in the retained v1alpha1 profile; registry identity remains the exact FormRef
-plus package digest in both cases.
-
-Takoform retains immutable Legacy publication evidence for its actually
-published packages. A host may pin selected packages from that ledger to freeze
-behavior for migration, but historical package evidence alone does not approve
-a Form, activate it, or create an Offering. Current portable
-maturity comes only from Takoform's lifecycle ledger. Current Takosumi Host
-Support comes only from exact registry, executable implementation,
-FormActivation, and principal-audience evidence.
-
-## Core Responsibilities
-
-Takosumi Core owns:
-
-```text
-Git Source and immutable source snapshots
-OpenTofu/Terraform init / validate / plan / apply / destroy
-ProviderConnection
-CredentialRecipe
-ProviderBinding
-run-scoped env/file injection
-StateVersion storage and locking
-Secret storage
-Run ledger
-Run logs
-Output capture
-Output-to-input wiring
-Interface storage and input resolution
-InterfaceBinding authorization
-AuditEvent ledger
-Runner protocol
-policy and approval hooks
-Service Form host lifecycle (current `/v1/resources` Resource Shape API)
-Form Registry / generic FormActivation
-Target / TargetPool
-Credential / OIDC / Workload Identity
-Resolver / Planner / Reconciler
-Adapter framework
-Compatibility API framework
-usage event emission
-```
+Conversely, OSS does not acquire portable definition or provider authority by
+retaining migration rows.
 
 Takosumi Core does not own:
 
 ```text
-commercial customer management
 invoice / payment integration
 rated billing and payment enforcement
 operator-provided deployment target capacity
@@ -159,1617 +42,170 @@ official Takosumi native resource internals
 official SLA / support / abuse tooling
 ```
 
-Compatibility API framework is core; official managed capacity is not.
+Protocol-specific data paths may be composed around an existing deployed
+service, but they are not a second deployment lifecycle. Official hosted
+capacity is not an OSS Core responsibility.
 
-For Flow B, the current `/v1/resources` route is the Deploy API and sole
-lifecycle authority. A future portable route and the current provider, CLI,
-dashboard, CRD, and control-plane compatibility clients submit desired state
-to the same service. Core owns the canonical Resource, ResolutionLock,
-NativeResource, Run, status, Output, and audit evidence. Adapters and backend
-managers execute only after Deploy API resolution and do not own a parallel
-resource registry.
+## Supported Stack model
 
-## Public Model
+| Concept | Meaning |
+| --- | --- |
+| Workspace | User/team isolation boundary for sources, secrets, state, Runs, and audit |
+| Project | A service or infrastructure grouping |
+| Capsule | One OpenTofu/Terraform module execution unit |
+| Source | Git URL/ref/commit/path for a plain module |
+| ProviderConnection | Stored provider credential configuration |
+| CredentialRecipe | How a provider credential becomes a temporary env/file/pre-run value |
+| ProviderBinding | Mapping from provider name/alias to a ProviderConnection |
+| Run | One guarded init/validate/plan/apply/destroy/refresh action |
+| StateVersion | State generation with storage and locking |
+| Output | Ordinary root-module output captured after a successful Run |
+| Interface | Provider-neutral connection or runtime declaration |
+| InterfaceBinding | Authorization of an Interface to an invocation principal |
+| AuditEvent | Actor/action/target/result evidence |
 
-### OpenTofu Stack Flow
+StateVersion storage and locking are part of the canonical Run lifecycle; they
+are not a separate Resource/Form ledger.
 
-| Concept            | Meaning                                                                    |
-| ------------------ | -------------------------------------------------------------------------- |
-| Workspace          | User/team isolation boundary for projects, secrets, state, runs, and audit |
-| Project            | One service, product, or infrastructure group                              |
-| Capsule            | One OpenTofu/Terraform module execution unit                               |
-| Source             | Git URL/ref/commit/path for a plain OpenTofu/Terraform module              |
-| ProviderConnection | Stored provider credential configuration                                   |
-| CredentialRecipe   | How to materialize a provider credential as env/file/pre-run output        |
-| ProviderBinding    | Mapping from provider name/alias to ProviderConnection                     |
-| Secret             | Encrypted material referenced by ProviderConnection or Capsule inputs      |
-| Run                | One init/validate/plan/apply/destroy/refresh/output action                 |
-| StateVersion       | Stored state generation for a Capsule                                      |
-| Output             | Captured OpenTofu output value                                             |
-| Runner             | Local/docker/remote/operator/cloud execution worker                        |
-| AuditEvent         | Actor/action/target/result evidence                                        |
+Plan, Apply, Destroy, and Refresh are guarded Run operations, not separate
+ledgers. OpenTofu Outputs remain ordinary module values; an Interface may
+explicitly reference a Capsule output, but no reserved output name becomes a
+runtime registry or credential channel.
 
-Plan / Apply / Destroy are guarded Run operations, not separate ledgers.
+## Provider-neutral execution
 
-`Secret` here is the encrypted shared control-object boundary, not a bundled
-Service Form. The v1 contract provides write-only create/update/rotate/delete
-operations and metadata/version reads scoped to one Workspace. A read never
-returns secret material. ProviderConnection, an explicitly installed
-InterfaceBinding materializer, or an EdgeWorker secret binding can reference a
-Secret version; only the authorized run/invocation/backend boundary can open
-it. Secret values never enter Resource specs, Interface documents, Output,
-state, Run logs, audit payloads, or OpenTofu provider state. Selling a managed
-Secret Store would require a separate future `SecretStore` Service Form; it is not
-implied by this object.
+Plain Stack execution accepts any runner-installable OpenTofu/Terraform
+provider. The source address, version/checksum, provider configuration, and
+module inputs remain in the user's Stack and the explicit `Provider Connection`
+/ `CredentialRecipe` / `ProviderBinding` records. The runner receives only the
+run-scoped material it is authorized to use.
 
-#### OpenTofu Output Boundary
+Generic environment/file declarations are an escape hatch for arbitrary
+providers. A guided recipe catalog is descriptive metadata, not an execution
+allowlist. Core does not branch on a provider name and does not silently inject
+provider credentials.
 
-The baseline Stack flow captures `tofu output -json` as `Output` together with
-the successful apply's `StateVersion`. Explicit Dependency wiring and
-`terraform_remote_state` work independently of any Takosumi extension.
+Secrets are write-only at the control-object boundary. Secret values never
+enter Resource specs, Interface documents, Outputs, state, Run logs, audit
+payloads, or public discovery. Sensitive OpenTofu values remain in encrypted
+provider state and cannot become Interface inputs.
 
-Output remains an ordinary root module return value. Takosumi does not require
-a reserved Output name or a nested runtime schema. An Interface that needs a
-public Output uses an explicit service-side `capsule_output` input reference to
-the Capsule id, root Output name, and optional RFC 6901 JSON Pointer.
+## Interfaces and InterfaceBindings
 
-If the runner wraps the repository as a child module, generated-root
-materialization re-exports each selected output without renaming or changing
-its value/sensitivity metadata. If that contract cannot be preserved, the
-repository module executes as the root. Ephemeral outputs are not captured and
-cannot be Interface inputs; sensitive outputs may exist as OpenTofu values but
-the Interface resolver rejects them.
+Interfaces are provider-neutral declarations owned by a Workspace or Capsule.
+They use a closed `apiVersion`/`kind`/`metadata`/`spec`/`status` envelope and
+carry endpoint and input-resolution metadata, not provider account IDs,
+credentials, or native resource IDs. Resource-owned Interface rows are legacy
+migration records only.
 
-Output changes do not schedule Workspace-wide reconciliation. Only an explicit
-output-to-input Dependency marks a downstream Capsule stale. Runtime consumers
-observe Interface `resolvedRevision` changes without applying their own
-OpenTofu Capsule.
+An InterfaceBinding authorizes one exact Interface revision for a principal and
+may issue invocation-scoped credentials through the host's credential
+brokerage. The binding does not infer a provider, create an Offering, or
+schedule a Workspace-wide reconciliation. Runtime handlers fail closed when
+the Interface, revision, Workspace, or binding evidence does not match.
 
-Migration from the retired runtime Output convention is an operator-reviewed,
-one-time report/confirm operation. The report exposes Output names and digests,
-never values. Known first-party Capsules materialize their service-side
-InstallConfig Interface blueprints; unknown third-party Capsules require an
-explicit owner selection of Output name and Interface type/version and are
-never inferred from `service_exports`, `service_bindings`, or
-`app_deployment`. Confirmation is fenced to the reviewed Capsule,
-InstallConfig, current Output, names, and blueprint digest. It completes only
-after the Interface resolves and durable names/digests-only Activity evidence
-is written. A retry adopts the exact existing Interface and rewrites the same
-deterministic evidence id; legacy discovery is never fallback authority.
+## Generic Offering
 
-#### Artifact Reference Boundary
-
-`SourceSnapshot.archiveRef`, `StateVersion.stateRef`, `Output.rawArtifactRef`,
-`ArtifactRecord.ref`, and backup pointer `ref` values are opaque coordinates
-allocated by a host-injected `ArtifactReferenceAllocator`. Core passes the
-allocated value unchanged to the runner/storage adapter and records it only
-after that adapter confirms durable persistence. Core and the portable contract
-do not derive bucket names, object-key layouts, filesystem paths, or URI schemes.
-The Cloudflare adapter may interpret a ref as an R2 object key; another host may
-map it to a filesystem, database, or remote artifact service without changing
-the ledger contract.
-
-The Bun/Postgres filesystem adapter seals the state bytes, replay result, and
-raw Output envelope through the configured secret boundary. It publishes each
-`stateRef` and every apply's `rawOutputRef` immutably with an fsync-backed
-no-replace fence and permits adoption only for the exact Workspace, subject,
-environment, ApplyRun, action, generation, and content digest. An apply with no
-declared outputs still seals `{}`. A successful runner response never exposes
-`rawOutputRef` until the raw object is confirmed durable, and Core rejects a
-missing or different returned ref before publishing StateVersion, Output, or
-Capsule pointers. If state persistence succeeds but raw Output acknowledgement
-fails, same-ApplyRun replay opens the sealed result and repairs or adopts that
-exact raw object without repeating provider work. Production-like hosts
-therefore require the normal secret-store key; the explicit development
-placeholder remains a local-only opt-in.
-
-Cloudflare R2 state and raw Output objects carry immutable ApplyRun and action
-metadata. Redelivery adopts an existing target only after the state object's
-ApplyRun, action, generation, digest, and raw-output coordinate and the raw
-object's ApplyRun, action, and digest all match the dispatch. A cross-action
-same-run target, missing authority metadata, or mismatched raw object fails
-before container or provider I/O; `current.json` remains only a best-effort
-cache and never supplies adoption authority.
-
-Resource apply and delete execution predetermine the ApplyRun id and checkpoint
-that id plus its exact PlanRun id on `pendingOperation` before the ApplyRun row
-is persisted or dispatched. Recovery may adopt that exact ApplyRun or recreate
-it against the checkpointed PlanRun; it must not plan again or allocate a
-replacement id. ApplyRun creation is an atomic insert-or-adopt operation: a
-same-id running or terminal row is returned unchanged, never reset to queued or
-redispatched, and a different PlanRun, subject, operation, runner profile,
-expected guard, state backend, or returned id fails closed. A PlanRun already
-applied by another id cannot substitute for the checkpointed id. If insertion
-commits but its acknowledgement or the process is lost before enqueue, exact
-recovery re-enqueues only the still-queued row; duplicate queued delivery is
-fenced by the consumer's queued-to-running lease compare-and-set, while running
-and terminal rows are never redispatched. A real checkpoint write failure
-happens before provider dispatch and exits the Resource from `Applying` or
-`Deleting`, so a later retry is discoverable and unambiguous.
-
-Pre-digest Resource execution rows use the explicit
-`priorState.legacyDigestMissing=true` transition marker. A runner may restore
-such a row only by an exact read of its recorded `stateRef`; `current.json`,
-prefix listing, a lower generation, and empty-state fallback are forbidden.
-Authenticated ciphertext and any available creator/generation/digest metadata
-must validate, and a missing exact object fails closed. The next successful
-apply, refresh, or destroy records the runner-computed plaintext digest and
-therefore leaves the compatibility lane. Hosts may remove this lane only after
-a bounded inventory proves that no retained Resource execution with
-`stateGeneration > 0` lacks `stateDigest` (or those rows have been explicitly
-migrated or retired); removal must not silently reset or drop live state.
-
-For Resource desired-state artifacts, Core exposes the optional raw-byte route
-`POST /v1/resources/{kind}/{name}/artifacts?space={space}`. It requires
-`resources:write`, `Idempotency-Key`, `X-Takosumi-Artifact-Purpose`,
-`X-Takosumi-Artifact-Sha256`, and `Content-Type`; non-identity
-`Content-Encoding` is rejected. The host writer advertises a bounded maximum
-before Core reads the stream and must repeat that bound at physical storage.
-Core computes the digest, binds the idempotency key to caller + Workspace +
-Resource + complete byte identity, and persists the succeeded `artifact` Run,
-`ArtifactRecord`, and Activity outbox evidence. Ambiguous writer failures leave
-the Run retryable with the same bytes and key. A writer response with a changed
-purpose, digest, size, or non-idempotent ref fails closed.
-
-Artifact staging is not Resource apply. It does not infer desired state from
-the bytes and does not update Resource, ResolutionLock, NativeResource,
-StateVersion, Output, or Interface rows. Hosts may support only selected
-kind/purpose pairs and return no admission for the rest. Cloud storage,
-commercial quota, retention, and manager realization remain host concerns
-behind the same portable port.
-
-### Shared Interface Layer
-
-| Concept          | Meaning                                                                                                  |
-| ---------------- | -------------------------------------------------------------------------------------------------------- |
-| Interface        | Workspace-, Capsule-, or Resource-owned non-secret runtime contract and resolved public inputs           |
-| InterfaceBinding | Explicit runtime authorization from an Interface id to a Principal, ServiceAccount, Capsule, or Resource |
-| Principal        | Authenticated user or workload identity                                                                  |
-| ServiceAccount   | Stable workload identity used for runtime authorization                                                  |
-
-An Interface uses the standard Resource-style envelope
-`apiVersion / kind / metadata / spec / status`, but it is shared by both
-authoring flows and is not a Service Form. Its stable fields are:
+Generic Offerings remain an independent OSS projection. An immutable catalog
+selects an exact namespaced subject type/ref/version/digest with explicit
+requirements and audience; an installed subject resolver returns an exact
+resolution fingerprint; the result is an `OfferingSelection`.
 
 ```text
-metadata:
-  id / workspaceId / name / ownerRef(Workspace|Capsule|Resource) / generation / labels
-
-spec:
-  namespaced type / version
-  arbitrary non-secret JSON document
-  named inputs
-  visibility / policyRef / authorization resource URI
-
-status:
-  phase / observedGeneration / resolvedRevision
-  resolvedInputs / per-input provenance / conditions
+POST /v1/offering-catalogs
+GET  /v1/offering-catalogs
+GET  /v1/offering-catalogs/:catalogId/versions/:catalogVersion
+POST /v1/offering-availability/query
+POST /v1/offering-selections/resolve
 ```
 
-Takosumi Core treats `document` as opaque JSON. Unknown type/version pairs are
-stored and resolved; the consumer claiming support validates the document.
-Interface resolution never executes templates, expressions, transforms, shell,
-or HTTP fetches and never interpolates values into `document`. Consumers read
-`document + resolvedInputs`.
+Catalogs are operator/deploy-control surfaces, not a customer Form installer.
+There is no `latest` fallback, implicit provider selection, commercial field,
+or implicit capacity. Empty catalogs are valid and the Stack flow works with
+none installed. Takosumi Cloud may attach its own closed commercial binding to
+an exact selection; it cannot replace the generic resolver or create a second
+lifecycle ledger.
 
-For `mcp.server`, persisted documents contain transport/discovery metadata, not
-a tool catalog. Takos obtains current server capabilities and tools through MCP
-`initialize` and `tools/list` when it connects.
+## Takoform and external Form Hosts
 
-For well-known first-party Interface types, every consumer parses optional
-`document.display` through the contract-layer shared parser. Its fields are
-`title`, `description`, `icon`, `category`, and `sortOrder`. An icon is a
-credential-free absolute HTTPS URL, a leading-`/` path resolved against the
-runtime surface origin, or a short glyph of at most 16 characters containing
-none of `/`, `.`, or `:`. Core still treats the document as opaque.
+Takoform owns its current provider address, API versions, exact FormRef fields,
+package identity, and publication status. Takosumi pins the provider source,
+version, and checksum selected by the module; it does not duplicate a candidate
+Takoform registry or declare an unpublished API stable.
 
-The only v1alpha1 input sources are:
-
-```text
-literal:
-  explicitly configured non-secret JSON
-
-capsule_output:
-  same-Workspace Capsule id + ordinary root Output name + optional RFC 6901
-  JSON Pointer
-
-resource_output:
-  same-Workspace Resource id + public output name + optional RFC 6901 JSON
-  Pointer, Ready at its current generation
-```
-
-Each service-side Capsule Interface blueprint has an explicit immutable `key`
-for one-shot materialization provenance. The editable Interface `name` is not a
-fallback identity, and an unkeyed blueprint is invalid.
-
-Capsule-owned declarations come from `InstallConfig.interfaceBlueprints`
-(`capsule_blueprint`) only. Historical `capsule_resource` records remain
-readable and removable by operators under migration custody, but are not a new
-module-author or authentication surface. No Capsule-scoped Run credential is
-retained. A same-name blueprint never adopts or rewrites a historical record.
-
-Resource-owned declarations have two independent sources. A verified Takoform
-Form Package descriptor materializes with `form_descriptor` provenance. An
-application may instead declare the same generic, opaque document and input
-mapping in portable IaC; a compatible host writes it with `portable_iac`
-provenance through its advertised Interface endpoint. The IaC resource has no
-MCP-, HTTP-, UI-, storage-, or vendor-specific blocks and creates no
-InterfaceBinding. Scoped compatibility control may separately retain
-`compatibility_profile` provenance for its canonical Resource-owned
-`http.route`. None of these are Capsule declaration sources.
-
-The IaC provider endpoint, bearer token, and default Space may come from
-provider configuration or environment variables. They are control-plane
-transport only. An application endpoint is resolved from the Resource outputs
-or the host-supplied `resource_uri`, returned as Interface `values` /
-`resourceUri`, and invoked directly by the consumer after host-governed
-authorization. It is never routed through the provider or duplicated in an
-environment variable as another source of truth.
-
-Portable descriptors map inputs from `literal`, `output`, or `resource_uri`.
-The first two remain data-only declaration values and public Resource output
-references. `resource_uri` has no pointer or value: exactly one such input must
-be named by the descriptor's `resourceUriInput`, and a host-code resolver
-supplies the canonical credential-free HTTPS URI. Takosumi persists that URI as
-an ordinary non-secret literal Interface input and uses the named input as the
-OAuth audience. The URI is not an authorization grant; an exact
-InterfaceBinding and the existing ownership/resource-claim checks remain
-required. A missing or invalid host resolver fails a required descriptor closed
-before the Resource can remain Ready.
-
-One resolution pass pins each referenced StateVersion or Resource generation.
-Missing, null, sensitive, invalid-pointer, unavailable-generation, or cross-Workspace
-references fail closed as `NotReady`; an old resolved value is not exposed as
-current. A successful apply/refresh resolves only affected Interfaces and
-atomically advances their resolved revision. Plan unknowns leave the current
-revision unchanged with a pending condition. Apply failure marks affected
-Interfaces `Unknown`; owner destroy moves them through `Terminating` to
-`Retired` and stops/revokes runtime credential issuance.
-Drift observation adds a `Drifted` condition without switching the pinned
-resolved inputs; a successful refresh/apply is required to publish a new
-revision.
-
-An operator may inject a host-neutral Interface projection sink for runtime
-indexes. Core sends the canonical Interface and Bindings and, for a coherent
-Ready Resource owner, the exact Resource generation plus ResolutionLock
-NativeResource references. Delivery is best-effort after the canonical write
-and repaired through a bounded keyset scan. The sink is never a Resource,
-Interface, hostname, or compatibility lifecycle authority. When the Resource is
-absent, NotReady, generation-inconsistent, or lacks a coherent lock, Core omits
-Resource evidence so the host can remove or disable its cache fail-closed.
-
-The shipped Capsule lifecycle integration covers successful apply, uncertain
-apply/restore failure fencing, destroy start/success, queued-plan observation,
-and drift-check completion. A queued plan adds `ObservationPending` without
-changing the pinned resolved revision or revoking an existing Ready Binding;
-terminal observation clears only its matching condition, while a successful
-drift check adds or clears `Drifted`. Implementations do not infer any of these
-transitions from variable or Output names.
-
-Runtime authorization derives Capsule safety from the durable Run ledger, not
-only from best-effort lifecycle observers. Apply/restore uncertainty and
-destroy state therefore fence both existing and newly created Interfaces,
-including Workspace-owned Interfaces that reference Capsule Outputs. A Capsule
-marked `stale` by Source update remains safe at its last successful pinned
-revision. Runtime discovery hydrates only the requested Workspace and
-idempotently repairs missed InstallConfig blueprint materialization. It also
-replays Resource lifecycle from the durable Resource ledger for that Workspace,
-repairing missed Ready, Unknown, Terminating, and Retired observer transitions
-without an all-tenant startup scan.
-
-Public CRUD is rooted at `/v1/interfaces`; bindings are rooted at
-`/v1/interfaces/:id/bindings`. An authenticated runtime Principal requests an
-invocation credential from `POST /v1/interfaces/:id/token` with one exact
-`permission`. Spec writes and resolver status writes have separate
-authorization. ETag/generation protects desired updates, while
-resolvedRevision identifies observed input changes.
-
-`POST /v1/interfaces/:id/status` is the status-plane self-report route. It
-merges bounded non-reserved conditions by type without changing phase, spec,
-resolved inputs, provenance, or resolved revision. Observer-owned lifecycle
-condition types are rejected case-insensitively. A no-op report performs no
-durable write or activity amplification. Optional host probes and scheduled
-refresh Runs may also publish conditions, but remain status-only.
-
-InterfaceBinding carries the Interface id, a Principal/ServiceAccount/Capsule/
-Resource subjectRef, permissions, and an extensible delivery object. An exact
-Principal binding with `delivery.type = none` is Ready when its Interface is
-resolved. An exact Principal binding with `delivery.type = oauth2` is Ready
-only when the host injected an Interface credential issuer, the delivery has
-no credential reference/options, and `spec.access.resourceUriInput` resolves
-a credential-free absolute HTTPS resource URI. An OAuth resource
-authorizer must also prove that the Interface owner controls that URI's
-hostname; a literal or Output URL is not ownership proof by itself.
-
-The default OSS authorizer accepts only a Capsule owner with an active public
-hostname reservation matching the same Workspace and Capsule. Custom/external
-resources require an explicit host override; no proof means NotReady.
-
-Before an `oauth2` Binding becomes Ready, Core claims its canonical
-query/fragment-free resource URI for the exact `(Workspace, ownerRef)` through
-an Interface generation/revision CAS. D1 and Postgres enforce a unique partial
-index on that claim, so concurrent Bindings on two Interfaces produce exactly
-one Ready authority; the loser is `NotReady` with `OAuthResourceConflict`.
-Changing or retiring the Interface releases the projection atomically with the
-Interface row, and a later Binding refresh may acquire it.
-
-The token route reconciles lifecycle state and rechecks the exact Workspace,
-Principal, permission, Ready Binding, Binding observation of the current
-Interface revision, resolved resource audience, and host ownership proof
-immediately before calling the issuer. Core rejects issuer results that are not
-a non-empty Bearer or that expire more than 60 seconds after issuance. The OAuth-style response contains
-`access_token`, `token_type`, `expires_in`, `expires_at`, `scope`, and
-`resource`, is emitted with no-store headers, and has no refresh token. The raw
-credential is never stored by Core or written to Interface, resolvedInputs,
-Output/state, Run, logs, or audit; only non-secret issuance evidence is audited.
-
-The Accounts-backed node and Worker compositions implement this issuer with an
-opaque `taksrv_` token. Durable Accounts stores retain the hash plus the exact
-subject, Workspace, Interface id, Binding id, resolved revision, audience,
-scope, and expiry. `/oauth/userinfo` and authenticated `/oauth/introspect`
-expose an active token
-with `token_use = interface_oauth`, exact `aud` / `scope`, and the corresponding
-`takosumi` Interface/Binding/revision evidence (plus the Capsule id for a
-Capsule-owned Interface). Before returning an active result, Accounts calls a
-host-injected Core validator that reconciles lifecycle state and rechecks the
-exact current revision, resource claim/ownership, Principal Binding, subject,
-permission, and delivery. A missing/throwing validator or stale evidence is
-inactive and the opaque token record is removed. This is a host
-composition of the generic OSS Core issuer port, not a Cloud-only credential
-contract.
-
-The Accounts introspection endpoint always requires a registered client;
-Interface OAuth introspection also requires the exact resource URI. Platform
-composition derives ordinary OAuth, personal access, and Interface OAuth
-identity from explicit `token_use` claims, rejects unknown claims, and verifies
-the active result's audience, scope, Workspace/Capsule, and subject against the
-selected resource route. The returned Interface id, Binding id, and positive
-resolved revision are required evidence fields, not static target configuration:
-authenticated `active: true` is authoritative because Core just revalidated
-their current values. The target validates that evidence shape together with
-the exact audience/scope/Workspace/Capsule/subject, without pre-pinning values
-that exist only after apply. Opaque token prefixes are not routing or
-authorization authority.
-
-`delivery.type = workload_token` remains NotReady even when the Principal
-OAuth issuer exists; its future identity is ServiceAccount, not a repurposed
-human Principal. Secret-backed delivery, other subject/delivery combinations,
-and a `policyRef` without a host policy evaluator also remain NotReady until
-their explicit host authority exists. A static external credential can only be
-referenced through Secret and materialized at an authorized invocation.
-Provider-managed sensitive OpenTofu state remains encrypted and is ineligible
-for Interface resolution.
-
-### Service Form Host Flow (`Resource Shape` compatibility)
-
-| Concept        | Meaning                                                                      |
-| -------------- | ---------------------------------------------------------------------------- |
-| ServiceForm    | Portable versioned service definition                                        |
-| FormRef        | Exact API group/kind/definition version/schema digest                        |
-| FormPackage    | Signed, immutable, data-only definition distribution                         |
-| Space          | Resource API namespace and policy scope                                      |
-| Environment    | Deployment environment within a Space/Project                                |
-| Stack          | Git-backed OpenTofu stack or form-backed Resource bundle                     |
-| Resource       | Canonical desired/observed host-owned resource object                        |
-| FormRegistry   | Installed trusted exact definitions visible to one host                      |
-| FormActivation | Generic OSS operator activation policy for an executable exact FormRef       |
-| Offering       | Generic OSS exact-subject availability and audience selection                |
-| Profile        | Ecosystem compatibility surface such as workers_bindings                     |
-| Implementation | Concrete backend such as cloudflare_workers or cloudflare_r2                 |
-| Target         | Southbound account/cluster/fleet/runtime endpoint                            |
-| TargetPool     | Candidate targets used by the resolver                                       |
-| Credential     | Target or workload credential configuration                                  |
-| Policy         | Constraints, approvals, lifecycle, and resolution rules                      |
-| Adapter        | Trusted code that previews/applies/imports/observes/refreshes implementation |
-| ResolutionLock | Persisted exact FormRef + selected implementation + target                   |
-| NativeResource | Concrete backend resource reference                                          |
-| Condition      | Ready / Reconciling / Drifted / Degraded / Blocked evidence                  |
-
-The current v1alpha1 compatibility distribution can explicitly install this
-typed definition set:
-
-```text
-EdgeWorker
-ObjectBucket
-KVStore
-Queue
-SQLDatabase
-ContainerService
-VectorIndex
-DurableWorkflow
-StatefulActorNamespace
-Schedule
-```
-
-It is not a Core default. Until the Form Package/registry migration lands, the
-current code retains parsers for these names only behind the explicit
-`LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY` host contribution. Core,
-the lower-level Resource service, route admission, and discovery all start with
-zero installed/enabled kinds. The shipped Takos/Takosumi composition explicitly
-installs that frozen compatibility contribution; `TAKOSUMI_RESOURCE_SHAPES`
-then enables only a selected subset for new desired state. Removing a kind from
-that write allowlist does not hide retained state: an installed compatibility
-schema remains sufficient for GET/event reads, explicit observe, and delete.
-Refresh and every create/update/import path still require the enabled-kind
-allowlist. This compatibility install is not a Form Package, FormRef, Form
-Registry, or FormActivation and assigns no portable-definition authority before
-D-08 and the additive exact-reference work land.
-
-`VerifiedDomain` is a separate optional operator control object and capability,
-not a Service Form. It binds a user-owned hostname to an immutable owner
-account and Workspace, exposes non-secret challenge/status evidence, and
-requires current ownership plus certificate status before an authorized
-`http.route` Interface can become active. An OSS host may leave this capability
-disabled; Takosumi Cloud GA enables it through its managed domain backend.
-
-`Space` in this model is the Resource API namespace and policy scope. The public
-model uses Workspace / Project / Capsule / Run / StateVersion / Output /
-Service Form-backed Resource / Target / Adapter plus the shared Interface / InterfaceBinding
-layer.
-
-Core does not infer a Space-to-Workspace mapping. In the stock multi-tenant
-platform composition, a session, personal access token, service token, or OAuth
-token may use the current Resource Shape compatibility routes only with `space` equal to its verified
-Workspace id. The platform worker checks every query/body/metadata Space
-selector before replacing the external credential with its internal actor.
-Operator calls carrying the direct deploy-control bearer remain the explicit
-authority for managing another Space or implementing a future reviewed mapping.
-
-## Git Source And Run Input Model
-
-Takosumi's standard path runs the OpenTofu/Terraform module that lives in Git.
-
-```text
-Git URL + ref/tag/commit + module path
-  -> checkout
-  -> OpenTofu initialization
-  -> OpenTofu plan
-  -> OpenTofu apply
-```
-
-The runner may persist an immutable `SourceSnapshot` archive for reproducible
-plan/apply, but that snapshot is a copy of the Git module bytes selected by the
-source ref. `Source.autoSync` may prepare a newer immutable source snapshot.
-When the resolved Git commit differs from the SourceSnapshot currently applied
-by an active Capsule that tracks the Source, Takosumi marks that Capsule
-`stale`. The existing Workspace update / RunGroup flow can then create update
-plans in dependency order. Apply remains reviewed by default. A Capsule may
-explicitly opt into auto-update; only a clean non-destructive plan may continue
-to apply automatically, while destructive changes always stop for review.
-
-An explicit user update creates a SourceSyncRun with `manual_plan` intent,
-waits for that Run's exact immutable SourceSnapshot, checks compatibility for
-that snapshot, and pins the resulting report into the plan. This sync may mark
-the Capsule stale, but it must not independently start a competing auto-update
-plan/apply. Plan/apply remain ordinary OpenTofu Runs.
-
-Takosumi does not decide app artifact semantics. If a module needs an image
-reference, release tag, object key, URL, or digest, the module declares a normal
-variable or provider/data-source logic.
-
-## Install Store Experience Contract
-
-The install Store is discovery and presentation only. A TCS 2.0 Store node
-announces a Git repository URL and can present icons and descriptions. It does
-not hand off a module path and does not own setup fields or release selection:
-branch, tag, commit,
-SourceSnapshot, update cadence, and auto-sync policy belong to the Git Source /
-Run flow. Dashboard handoff must not pin a Store listing's optional `ref` as the
-installed ref.
-
-Operators and users can switch Store nodes. Switching the Store changes where
-listings are read from and which presentation metadata is used; it does not
-change the Capsule execution model, accepted Interface records, or create a
-second release/runtime authority.
-
-`variablePresentation`, `installExperience`, `interfaceBlueprints`, lifecycle
-actions, output policy, and source-build recipes are top-level DB-owned
-InstallConfig fields. They are administered separately from Store listings.
-Changing `store` cannot mutate any of them.
-
-For Store preflight, `compileInstallUx: true` requires a pre-Capsule
-`capsuleName` and rejects client-supplied `modulePath` and `installConfigId`.
-After root Source sync, the server selects the module from the exact
-SourceSnapshot repository manifest: one module is inferred; multiple modules
-require an exact canonical `install.defaultModule` under
-`takosumi.com/v2.1` or `takosumi.com/v2.2`. It MUST NOT infer `.`, object order, a TCS/presentation
-path, `Source.defaultPath`, or a base InstallConfig module path.
-
-`takosumi.com/v2.2` may additionally propose a host Interface requirement by
-exact type/version, permissions, and delivery token. It MUST NOT name an
-Interface ID, endpoint, provider, or credential. The derived InstallConfig is
-the authority consumed at Capsule OIDC authorization time: the host MUST find
-exactly one Workspace-owned Resolved Interface and materialize an ordinary
-Binding for that OIDC client's pairwise Principal. Missing, ambiguous,
-revoked, conflicting, or policy-disallowed requirements fail closed before a
-credential can be issued.
-
-The server separately resolves exactly one service-owned global Store
-InstallConfig as a policy ceiling. The config MUST be non-internal and
-Workspace-unscoped, and both its Store source URL and Source selector URL MUST
-canonically equal the Source URL. Paths do not participate. Resolution uses a
-bounded paginated catalog scan; zero, multiple, or an unprovably complete scan
-fail closed with typed diagnostics. Exact module selection happens before the
-compatibility check, and the resulting Workspace-scoped derived InstallConfig
-persists that same module path. Manual non-Store compatibility retains explicit
-`modulePath` and `installConfigId`.
-
-Lifecycle actions MUST be pinned into the same reviewed Plan that authorizes the
-provider mutation. They MUST NOT be read from repository metadata, source
-comments, package scripts, or OpenTofu Output. When a Plan declares
-`post_apply`, only terminal `succeeded` permits the Run to succeed, a Capsule
-to become `active`, or an Interface blueprint to become Ready. Missing
-activator, `pending`, `skipped`, `failed`, and exceptions MUST atomically retain
-the provider-applied StateVersion/Output while recording the Run as failed,
-the Capsule as `error`, and the Plan as applied. Actual provider apply usage and
-billing capture MUST still be recorded. Recovery MUST use a fresh reviewed
-plan/apply; the failed Plan MUST NOT be replayed. A declared `pre_destroy` action
-MUST terminal-succeed before provider destroy is dispatched. The sole
-non-dispatch exception is a command action whose reviewed `cleanupFor` names an
-exact `post_apply` action and whose cleanup is durably proven not applicable:
-the Capsule still points at generation 1 and its exact StateVersion, that
-StateVersion was created by the failed create ApplyRun, provider apply was
-dispatched and failed after persisting that state, no Output exists for the
-generation, and no lifecycle action was dispatched. Core MUST persist a
-`lifecycle_action.pre_destroy.not_applicable` marker that identifies the paired
-action, StateVersion, creator Run, and reason
-`provider_failed_before_post_apply` before provider destroy. Missing,
-contradictory, later-generation, or unpaired evidence MUST retain the ordinary
-terminal-success requirement. Core MUST use the generic Run/Capsule status and
-audit vocabulary and MUST NOT introduce an app-specific receipt/schema for
-these actions.
-
-Lifecycle dispatch MUST also resolve the Plan-fenced ProviderBinding set even
-when no command opts into provider credentials. Every resolved binding is
-carried in the canonical `takosumi.provider-configurations@v1` envelope, with a
-sorted `providers` array of `{ provider, alias, configuration }` entries.
-`configuration` is the validated non-secret
-`ProviderConnection.scopeHints.providerConfig`, or `{}` when the provider uses
-its defaults; an empty object remains explicit binding evidence. The binding
-digest and RunEnvironment evidence digest MUST cover the envelope. Runner
-commands receive its deterministic JSON as the reserved
-`TAKOSUMI_PROVIDER_CONFIGS_JSON` env value; user command env MUST NOT override
-it. The dispatch path MUST re-reject secret-like keys and values. Credential
-material stays separate and is minted only when the reviewed action explicitly
-allows it.
-
-A repository may publish `.well-known/tcs.json` as an optional repo-owned
-presentation document for Store indexers. It is not a Takosumi manifest and is
-not required for direct Git installs. It can contain display text, icon URL,
-and generic browse metadata. It must not contain `git`, `source`, `modulePath`,
-refs/commits, `installConfigId`, variable presentation/defaults,
-`installExperience`, output allowlists, release artifacts, domain defaults,
-OIDC wiring, lifecycle actions, or Interface blueprints. Public values come
-from the module's typed OpenTofu outputs after service-side policy is applied.
-Do not use source comments as the metadata schema.
-
-The repo-owned icon value may be a credential-free absolute HTTPS URL or a
-repository-relative source path. A Store indexer resolves and re-hosts a
-relative file from the pinned SourceSnapshot before publishing an absolute
-listing URL. Consumers never synthesize forge raw-file URLs; unresolved icons
-degrade to the no-icon fallback.
-
-For a Git Source, `source_sync` MUST record a bounded observation of the
-repository-root document on the same immutable `SourceSnapshot`, separately
-from the selected OpenTofu module archive. A snapshot with no such observation
-MAY still be reused by a later source sync. Missing, invalid, or changed
-presentation metadata MUST NOT block Store-backed planning or alter the stored
-InstallConfig.
-
-The separate `.well-known/takosumi.json` is an optional repository-owned public
-proposal pinned into `SourceSnapshot.repositoryManifest`. Each API version is
-closed: v1 defines install inputs/requirements/features; v2 adds generic
-Interface proposals; v2.1 preserves v2 exactly and adds only optional
-`install.defaultModule`. The parser validates bounded public metadata and
-rejects secret/authority material. Takosumi compiles the selected exact module
-against an exact compatibility report and host policy into a DB-owned
-InstallConfig. Plan and Run never re-read repository metadata as authority.
-
-The OpenTofu module still owns its variable names. A top-level DB-owned
-`installExperience` maps standard install concepts to those module variables:
+For retained historical rows, the old Resource wire-to-FormRef mapping remains
+migration data. A historical package example may therefore contain:
 
 ```json
 {
-  "projections": [
-    { "kind": "service_name", "variable": "project_name" },
-    {
-      "kind": "public_endpoint",
-      "variables": {
-        "subdomain": "worker_name",
-        "url": "app_url",
-        "routePattern": "cloudflare_route_pattern"
-      },
-      "baseDomain": "app.takos.jp"
-    },
-    {
-      "kind": "initial_secret",
-      "variable": "auth_password_hash",
-      "secretKind": "password_or_hash",
-      "optional": true
-    },
-    {
-      "kind": "oidc_client",
-      "variables": {
-        "issuerUrl": "takosumi_accounts_issuer_url",
-        "clientId": "takosumi_accounts_client_id"
-      },
-      "callbackPath": "/api/auth/callback/takos"
-    },
-    {
-      "kind": "artifact",
-      "variables": {
-        "url": "worker_bundle_url",
-        "sha256": "worker_bundle_sha256"
-      }
-    }
-  ]
+  "apiVersion": "forms.takoform.com/v1alpha1",
+  "kind": "ObjectBucket",
+  "definitionVersion": "0.0.0-legacy.1",
+  "schemaDigest": "sha256:<exact-schema-digest>",
+  "packageDigest": "sha256:<exact-package-digest>"
 }
 ```
 
-Rules:
-
-```text
-service_name projection:
-  friendly resource/service name input.
-
-public_endpoint projection:
-  optional public subdomain, URL, route pattern, and operator-managed base
-  domain. The dashboard and run engine may derive defaults such as
-  <subdomain>.<managed-base-domain> from this mapping, but the module still
-  receives plain variables. Takosumi Cloud uses app.takos.jp as its managed base
-  domain; other operators can use their own managed base domain under the same
-  contract. The repository projection is a portable default; when a managed
-  Target is selected, its Provider Connection may advertise
-  managedPublicBaseDomain and that value wins for generated URL/route inputs,
-  hostname reservations, and OIDC callbacks. This lets staging and production
-  use separate namespaces without rewriting Git metadata. Managed-base hostnames are broadly available and protected by
-  uniqueness / reserved-name / abuse controls. Arbitrary user-owned custom
-  domains are passed through to the selected provider/adapter path; managed
-  providers may require ownership verification, certificate provisioning,
-  plan/quota, and abuse policy before runtime activation.
-
-initial_secret projection:
-  optional first-run password/token input for apps that need one.
-  OIDC-backed apps should prefer automatic sign-in and treat this as fallback.
-
-oidc_client projection:
-  optional OIDC client variable mapping. Takosumi Accounts can mint client
-  metadata into the mapped variables without the app defining Takosumi-specific
-  manifest files. It may declare OAuth scopes; `openid` is required, scopes are
-  de-duplicated non-empty tokens, and secret-bearing material is not projected.
-  The application callback path is explicit and required. Omitted variable
-  mappings remain omitted; Takosumi never supplies reserved variable names or a
-  product-specific callback default.
-
-artifact projection:
-  optional artifact URL / SHA-256 variable mapping. The values stay ordinary
-  OpenTofu inputs and are usually produced by the app's Git CI/release flow.
-```
-
-There is no universal requirement that every Capsule has a subdomain, password,
-or Takosumi-specific env block. Apps that need a public endpoint opt into
-`public_endpoint`; apps that need a first-run secret opt into `initial_secret`;
-all other knobs stay ordinary variables and are passed to the OpenTofu module
-unchanged. Advanced variable presentation such as artifact URL,
-artifact digest, container image maps, and app-specific env still map directly
-to OpenTofu variables; they are not hidden runner directives.
-
-Install presentation is data-driven. The dashboard must not hide or promote
-inputs by hard-coded variable names such as a particular app's artifact URL,
-Cloudflare toggle, or route variable. Visibility, secret handling, and guided
-setup behavior come from top-level `variablePresentation` plus
-`installExperience`; unknown variables remain generic OpenTofu inputs.
-
-`variablePresentation[]` can include `format` (`text`, `url`, `hostname`,
-`subdomain`, `password`, `token`, `email`, or `sha256`) for presentation and
-validation. The submitted value remains a normal OpenTofu variable.
-
-Do not add `purpose` flags to individual inputs as a pseudo-standard. The
-contract is the mapping from standard install concepts to module variables.
-Unknown modules remain valid plain OpenTofu Capsules; without
-`installExperience`, Takosumi only uses generic variable defaults. Names such as
-`worker_name`, `app_url`, and `cloudflare_route_pattern` are ordinary OpenTofu
-variables unless the selected InstallConfig explicitly maps them through
-the `public_endpoint` projection.
-
-## Performance Model
-
-Takosumi should feel like an app install flow without leaving the
-Git/OpenTofu model.
-
-Allowed Takosumi-side speed mechanisms:
-
-```text
-SourceSnapshot reuse for identical resolved commits
-runner image provider mirror
-operator-configured OpenTofu provider plugin cache
-serialized tofu init per shared cache path
-runner capacity controls
-phase timing evidence
-user-level progress phases
-```
-
-App/container/bundle build optimization belongs in the app repo, CI/release
-pipeline, registry, provider, or OpenTofu module inputs.
-
-For hosted/operator materializers, prebuilt app/container artifacts should be
-required whenever the activation environment would otherwise build containers or
-expensive bundles on operator capacity. A Capsule may explicitly configure
-`sourceBuild` for build-on-install. The runner executes argv arrays against the
-pinned SourceSnapshot without provider credentials, verifies declared output
-paths, then materializes the same Git-hosted OpenTofu module. It never infers
-commands from package files, Store listings, or `.well-known/tcs.json`.
-
-## Provider Connections
-
-A ProviderConnection stores credential material or a reference to credential
-material for a real OpenTofu/Terraform provider.
-
-```yaml
-connections:
-  cloudflare-main:
-    provider: cloudflare
-    auth_type: api_token
-    secrets:
-      api_token: sec_cloudflare_token
-    values:
-      account_id: xxxxx
-
-  aws-prod:
-    provider: aws
-    auth_type: assume_role
-    values:
-      role_arn: arn:aws:iam::123456789012:role/takosumi
-      region: ap-northeast-1
-
-  snowflake-main:
-    provider: registry.opentofu.org/snowflake-labs/snowflake
-    auth_type: env
-    secrets:
-      SNOWFLAKE_PASSWORD: sec_snowflake_password
-    values:
-      SNOWFLAKE_ACCOUNT: example
-      SNOWFLAKE_USER: takosumi_runner
-```
-
-Secrets are decrypted only for the run sandbox. Runner/runtime-reserved env
-names such as `PATH`, `TAKOSUMI_*`, `OPENTOFU_*`, and `TF_*` are rejected for
-declared-env recipes.
-
-## Credential Recipes
-
-A CredentialRecipe defines how a provider credential becomes temporary runtime
-material.
-
-The reference provider package generates its recipe catalog from
-`recipes/providers/*.yaml` into
-`providers/credential-recipes.generated.ts`. The runner receives only the
-explicit per-Run recipe manifest; `contract/provider-env-rules.ts` contains
-generic env-name/source-address rules, not a vendor catalog. Tests keep YAML,
-guided provider setup metadata, and runner/vault projection in sync. This
-asset is not a Core default. A service composition explicitly installs the
-complete catalog, guided setup dispatcher, and runtime driver registry. With
-no installed catalog Core lists zero recipes, and the Vault rejects every
-provider recipe id as not installed. Arbitrary-env/file behavior is selected
-by the installed recipe's `declaredEnv` capability, not by a reserved
-`generic-env` recipe id. Hosts may map the reusable
-`DECLARED_ENV_CREDENTIAL_RECIPE_DRIVER` to any opaque recipe/auth-mode key;
-using the reference id is never required.
-
-A static recipe with no runtime driver is still executable: registration pins
-its resolved env/file declaration, `test()` verifies that the sealed material
-is structurally complete, and mint passes that material through unchanged. A
-mode with `preRun` is different because it promises generated material; it must
-have an explicit mint driver. Host compositions filter such modes out of the
-installed discovery catalog when no matching driver exists, and a stale stored
-row fails closed at test/mint time. The reference composition therefore keeps
-implemented AWS AssumeRole but does not advertise unimplemented Google service
-account impersonation.
-
-Generic env is a required escape hatch so arbitrary providers can run with
-explicit env/file declarations, runner policy, provider plugin policy, and
-egress policy.
-
-Credential Recipe discovery is metadata, not admission. The current API lists
-the service-installed recipes at `credential-recipes`; it does not expose a
-provider catalog. Every valid provider source uses the `opentofu-default`
-runner unless the caller explicitly selects an operator-defined capability
-profile. Recipe presence is credential-materialization availability only and
-never provider execution admission; selection never branches on provider
-address.
-
-Provider OAuth helpers are also host-installed. Core's OAuth engine accepts
-opaque descriptors and owns state signing, redirect, token exchange, and
-callback validation, but it does not discover vendor descriptors from env or
-install a reference helper set. The shipped Worker and Bun/Postgres
-compositions explicitly contribute the reference provider descriptors.
-
-Provider Connections may carry validated non-secret `providerConfig` and
-`moduleInputDefaults` maps. Root generation renders provider configuration and
-passes only module-declared defaults. Conflicting defaults fail before runner
-dispatch. Provider-specific input names are not encoded in core.
-
-An operator-scoped managed Provider Connection is public/runnable only when its
-service-side scope explicitly sets both `managedProvider: true` and a non-empty
-opaque `managedProviderProfile`. The receiving platform extension declares the
-same exact profile; temporary run credentials use that profile as their token
-audience. A missing or different profile fails closed. `providerConfig` remains
-opaque OpenTofu provider-block configuration: a `base_url`, provider address,
-request hostname, or URL path never makes a connection managed and never
-selects a credential issuer. Operators may define any profile tokens they own;
-Core ships no managed-provider profile catalog.
-
-The provider plugin cache and filesystem mirror are optimizations and optional
-supply-chain controls. Direct registry installation is allowed by default; an
-explicit policy may require mirror attestation. Dependency lockfile digest
-evidence remains required for provider-bearing Runs.
-
-Provider execution failures retain a stable machine code:
-
-```text
-provider_source_invalid
-provider_package_unavailable
-provider_platform_binary_unavailable
-provider_protocol_mismatch
-provider_policy_denied
-runner_capability_missing
-provider_checksum_mismatch
-opentofu_init_failed
-```
-
-If an industry-standard API or OpenTofu provider already expresses external
-infrastructure cleanly, Takosumi uses it through the Stack flow instead of
-creating a provider clone. If an operator offers the capacity as a
-Takosumi-managed service, its lifecycle is nevertheless modeled as a
-provider-neutral Service Form-backed Resource. Standard or compatible protocols then become
-control-plane translators into that Resource or data-plane access to a Ready
-Resource; they do not become lifecycle state owners.
-
-If a mature vendor-neutral provider exists for external infrastructure, prefer
-that provider in the Stack flow. For Takosumi-managed capacity, keep the
-provider-neutral Resource lifecycle canonical even when a universal client or
-protocol exists. Takoform's portable typed client is optional and does not
-define whether a form is installed, executable, activated, or offered.
-
-This remains true over time. A new universal client may replace the HCL provider
-as the preferred user surface, but its control operations still call the Deploy
-API and its data plane still resolves the canonical Ready Resource. This keeps
-service state portable without introducing a first-party provider.
-
-When a durable managed-service definition is justified, the portable project
-publishes an exact versioned Service Form and assigns lifecycle maturity even
-if its public protocol is standard. A Takosumi operator separately installs an
-implementation and exact FormActivation,
-then may publish an exact generic Offering. Cloud separately attaches a closed
-commercial binding to that Offering selection. One-off gaps and external infrastructure remain in
-declared-env-capable ProviderConnections and ordinary OpenTofu modules. Add a
-standard typed form-provider schema only for a repeated portable form with a
-clear schema, validation, lifecycle, adapter path, state/import/drift story,
-security review, and conformance evidence. Operator objects use
-API/CLI/dashboard.
-
-The target extension has two layers. Adding a standard HCL-facing form resource
-requires an immutable Form Package and Takoform typed-provider release so OpenTofu can keep
-typed plan diffs, validation, import, state upgrade, and completion. Adding a
-new backend for an existing shape is operator configuration: TargetPool entries
-can publish implementation tokens, adapter plugin ids, plugin-local non-secret
-options, and interface capability evidence. The Resolver and Adapter decide
-whether those tokens are supported by the endpoint.
-
-## Portable Form Provider And API Contract
-
-Takosumi ships no first-party Terraform/OpenTofu provider. Portable Form
-authoring and Form Package Interface descriptors belong to Takoform; active
-operator administration belongs to Takosumi API/CLI/dashboard.
-
-Portable host integration materializes a Form Package descriptor only onto the
-admitted Form-backed Resource, with no Capsule-scoped authoring credential and
-no InterfaceBinding authority.
-
-The target portable form provider is independently versioned from exact Form
-Packages, exposes statically typed standard form resources, and calls only the
-portable form-host interoperability boundary. It contains no TargetPool/admin
-resource and never calls a manager/vendor API. Its public FQN is not selected
-until name/domain/registry and both-CLI install gates close.
-
-Portable form-provider responsibilities:
-
-```text
-statically typed HCL schema from approved standard Form Packages
-local validation
-portable discovery of exact FormRef availability and reason codes
-portable create/read/observe/update/delete/import calls
-status polling and OpenTofu state output mapping
-exact definition identity and minimal host-owned Resource state mapping
-```
-
-Provider non-responsibilities:
-
-```text
-vendor API calls
-backend selection
-credential minting
-adapter execution
-secret storage
-catch-all generic resource handling
-edition branching
-service-offering or pricing authority
-lifecycle state ownership
-TargetPool or operator/admin authority
-```
-
-The Takosumi-native `/v1` routes and the independent Takoform protocol remain
-separate authoring surfaces over one canonical Resource authority.
-`/.well-known/takoform` advertises only the exact
-`/apis/forms.takoform.com/v1alpha1` provider-facing API; the old flat
-`/takoform/v0` envelope is not mounted. The exact facade requires the complete
-installed FormRef, principal-safe
-availability, ETag preconditions, mutation idempotency keys, and stable neutral
-errors, but delegates every operation to `ResourceShapeService`; it owns no
-second Resource, Run, audit, or idempotency state. Its response projection omits
-Target/implementation/manager/credential/capacity/commercial evidence and raw
-canonical Outputs. Changing provider address does not rename resource types;
-every supported state migration requires no-op and rollback fixtures. The
-current Takoform provider discovers and consumes this exact facade.
-
-Standard status is independently fail-closed. Admission consumes retained rows
-produced by the injected Takoform data-only package verifier plus exact semantic
-evidence; it does not parse a second package or infer status from a kind name.
-The exact schema digest, complete lifecycle/immutability/import/observe/drift/
-security/Interface audits, canonical desired/observed/output and negative
-fixtures, and full host/provider proof coverage must all pass. The legacy ten
-kinds remain compatibility candidates unless each exact definition supplies
-that evidence.
-
-The Resource API is Takosumi-native, but the wire model follows standard
-control-plane conventions:
-
-```text
-apiVersion / kind / metadata / spec / status
-stable ids and names
-idempotent create/update semantics
-preview before apply
-explicit delete
-observe/refresh for drift
-import for adoption
-structured error codes
-capability discovery
-cursor pagination
-```
-
-For a direct adapter plugin, Core supplies the same internal `operationKey`
-when an uncertain apply/delete is retried. `apply` must create or update the
-provider object by the stable canonical Resource identity and converge every
-side effect owned by that pinned declaration; `delete` must remove that same
-object idempotently. Replaying one key must never allocate a second native
-object. Apply recovery replays that exact `apply` contract with the original
-operation key, generation, plan, and planned native identity. It does not use
-read-only `refresh` as proof that partially committed apply work completed.
-Before backend dispatch, Core persists both the original deployment review and
-a digest of the exact canonical adapter plan. Recovery recomputes that plan and
-must match the digest before calling the adapter; a changed planner/operator
-module or a legacy pending row without this proof remains Applying and fails
-closed. A terminal-failed legacy Run is also not replaced, because replacement
-would mint a different adapter operation key and could duplicate secondary
-effects.
-Delete recovery first performs read-only `observe`, finalizes read-only for
-`missing`, and replays delete only for `current`/`drifted`.
-
-Compatibility APIs are clients around the Resource API. Control-plane profiles
-translate supported industry-standard requests into typed preview/apply/delete
-calls; data-plane profiles resolve an existing Ready Resource and its authorized
-Interface/NativeResource evidence. They do not select adapters, call backend
-managers directly, own lifecycle rows, or imply full vendor API compatibility.
-
-## Resource Objects
-
-Resource objects use `apiVersion: takosumi.dev/v1alpha1`.
-
-Core owns one durable incarnation fence for every canonical Resource id. The
-fence is internal persistence authority and is never projected as a public
-Resource field. It retains the highest consumed generation after the public
-Resource and ResolutionLock are hard-deleted, and every canonical retirement
-advances its own monotonic fence revision. A read-only preview binds both the
-planned successor generation and the currently observed fence revision into
-`planDigest`. Apply/import then atomically compare-and-swap that exact fence
-while publishing the `Applying` Resource and ResolutionLock; only one preview
-of a given fence revision can win. A failed admission that proves no backend
-mutation restores the prior fence in the same rollback transaction, while a
-known or uncertain backend outcome retains the consumed generation.
-
-Delete atomically replaces the live incarnation with its retained fence before
-removing the Resource and ResolutionLock. Recreating the same canonical id
-therefore receives a strictly greater generation, yields a different reviewed
-plan and direct-plugin operation identity, and makes an older Resource-version
-delete precondition fail. Permanent HTTP idempotency remains historical replay
-evidence: Core does not invalidate old response rows or add provider nonces to
-change their meaning. If that replay evidence is lost, an old reviewed plan is
-still rejected by the durable fence instead of recreating the deleted
-incarnation. Exhausted or malformed generation/fence counters fail closed.
-
-That group and the current kind tokens remain the compatibility wire during
-extraction. Target persistence adds an exact resolved FormRef to Resource,
-ResolutionLock, Run/evidence, and NativeResource where replay requires it:
-
-```text
-formRef.apiVersion = forms.takoform.com/v1alpha1
-formRef.kind = <current compatibility kind>
-formRef.definitionVersion = 0.0.0-legacy.1
-formRef.schemaDigest = sha256:<exact-definition-digest>
-packageDigest = sha256:<exact-package-digest>
-```
-
-A create request may ask for a compatible definition range, but the stored
-Resource pins one exact immutable reference. Existing rows backfill by kind to
-one explicitly selected installed package without changing Resource IDs,
-`tkrn`, kind, import ID, or backend object. The internal operator operation is
-bounded by keyset cursor/limit, supports dry-run, and accepts an explicit set of
-durable FormActivation ids. It refuses missing, inactive, wrong-kind,
-wrong-scope, unauthorized, ambiguous, deprecated, revoked, or mismatched
-candidates; it never resolves `latest` or invents a Cloud-local reference. A
-successful write atomically fills the same exact FormRef/packageDigest pair on
-the Resource and ResolutionLock and records redacted idempotent activity.
-The old Resource wire-to-FormRef mapping remains host-owned; package content
-does not rewrite that wire or own the canonical Resource identity. This uses
-additive D1 v46 / Postgres v94 migrations after the D1 v45 / Postgres v93
-Service Form Registry heads; neither registry nor pre-GA schema-convergence
-migration is rewritten. A missing or mismatched package blocks exact-form
-mutation and never falls through to `latest`. Deprecated or revoked definition
-bytes are retained for safe observe/delete or an explicit operator recovery
-path.
-
-For a Resource with an exact identity, the canonical direct-operation `Run`,
-its terminal result evidence, and every associated `NativeResource` reference
-MUST carry the same `FormRef`/`packageDigest` pair. Preview, apply, import,
-observe, refresh, delete, recovery, and rollback MUST reject a missing or
-substituted pair before backend replay. The adapter receives the pinned pair as
-input and cannot select a replacement. Replay MUST verify the retained package
-and definition bytes for that exact pair without re-resolution. These records
-MUST remain redacted: the identity is durable evidence, not a place for
-credentials or native values.
-
-Workspace and Capsule control backups include a redacted exact-pin sidecar for
-coherent Resource/ResolutionLock pairs. The sidecar excludes Resource spec,
-outputs, target/implementation details, and NativeResource values. Internal
-restore replay re-verifies the retained immutable package bytes and atomically
-replays only the exact pair onto an existing Resource/ResolutionLock; it does
-not invoke resolution. Installed package and definition rows have no
-destructive delete path, so revocation cannot erase lifecycle replay evidence.
-
-Resource interface requirements and Profile values are capability tokens. They
-are not runtime `Interface` objects. The examples in this spec are the built-in
-tokens Takosumi ships with; they are not closed enums in the provider binary.
-Operators can advertise additional tokens through TargetPool capability
-evidence and adapters.
-
-`ObjectBucket.spec.storageClass` is a closed portable selector rather than an
-endpoint-defined token. Core accepts exactly `standard` and
-`infrequent_access`, canonicalizes omission to `standard`, and treats it as the
-default for newly written objects. `infrequent_access` requires
-`storage_class_infrequent_access` capability evidence during resolution. Core
-does not encode provider storage-tier names or imply mutation of existing
-objects.
-
-```json
-{
-  "apiVersion": "takosumi.dev/v1alpha1",
-  "kind": "EdgeWorker",
-  "metadata": {
-    "name": "api",
-    "space": "prod",
-    "project": "myapp",
-    "managedBy": "opentofu"
-  },
-  "spec": {
-    "source": {
-      "artifactUrl": "https://example.com/releases/api-worker.js",
-      "artifactSha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
-    },
-    "compatibilityDate": "2026-06-29",
-    "profiles": ["workers_bindings"]
-  },
-  "status": {
-    "phase": "Ready",
-    "resolution": {
-      "selectedImplementation": "cloudflare_workers",
-      "target": "cloudflare-main",
-      "locked": true
-    },
-    "outputs": {
-      "worker_name": "api",
-      "url": "https://api.example.com"
-    }
-  }
-}
-```
-
-`profiles` are endpoint-defined tokens. `workers_bindings` is an example, not
-a closed provider-side enum. Validation of support belongs to capability
-discovery, TargetPool policy, adapter evidence, and the Resolver.
-
-Resource `connections` are resolved by the control plane immediately before
-adapter preview/apply. A referenced resource must exist in the same Space, be
-`Ready` at its current generation, and have a ResolutionLock. The adapter
-receives the declared permissions/projection together with the referenced
-resource kind, selected Target, NativeResource references, and public outputs.
-It never receives ProviderConnection or Secret material through this payload.
-An adapter must fail closed when it cannot materialize the requested projection
-or when a runtime-native binding crosses incompatible Targets. A resource that
-is still referenced by another desired Resource cannot be deleted; consumers
-must be removed first, matching OpenTofu dependency order. The desired
-connection graph must remain acyclic; an apply that would introduce a cycle is
-rejected before adapter execution.
-
-These `connections` are adapter-owned infrastructure binding requests. They do
-not authorize runtime consumers and must not be normalized into
-InterfaceBindings. Conversely, InterfaceBinding never creates or rewrites an
-adapter binding.
-
-### Scheduled Resource Observation
-
-The platform worker runs bounded, read-only Resource observation independently
-from the Capsule compatibility drift sweep. It is enabled by default when the
-host enables at least one Resource Shape kind and can be explicitly disabled by
-the operator. It never calls apply or refresh.
-
-Only `Ready` Resources whose `observedGeneration` equals `generation` are
-eligible. Candidate order is global across Spaces by the oldest previous
-attempt, falling back to `createdAt`, and then stable Resource id. The default
-cadence is one hour, with at most eight Resources and four concurrent
-observations per cron tick. Operator bounds prevent an accidental configuration
-from turning one tick into an unbounded runner fan-out.
-
-Selection uses internal durable lease/cadence columns on the canonical Resource
-row in both D1 and Postgres. Those columns are not Resource status, a public API,
-or a second lifecycle ledger. A claim has an opaque token and timestamp; only
-the exact token can finish it, and an abandoned claim becomes reclaimable after
-the lease window. Workers claim only when they have observation capacity, so a
-candidate does not consume most of its lease while waiting behind another slow
-backend.
-
-The scheduler passes the claimed Resource unchanged to the canonical
-`ResourceShapeService.observe` path with a `system` principal. It does not infer
-or create a Space-to-Workspace mapping. The service reconstructs the pinned
-Target/implementation, records the first-class apply-disabled Resource
-`drift_check` Run, and CAS-fences condition updates against concurrent apply or
-delete. Success, service-level failure, and backend exceptions all record the
-attempt cadence and release the matching lease; process loss relies on stale
-lease reclamation. One Resource failure never aborts the other claimed
-Resources. The platform exports bounded outcome metrics for operator evidence.
-
-## Composite Products
-
-Composite products are represented by composing typed generic Service Forms.
-They do not get product-specific catch-all forms.
-
-Takos is the reference example. Takosumi should be able to describe a Takos
-distribution as ordinary form-backed Resource objects:
-
-```text
-Takos distribution:
-  EdgeWorker        -> takos-worker
-  SQLDatabase       -> workspace/control database
-  KVStore           -> session/cache/state binding
-  ObjectBucket      -> files and workspace objects
-  Queue             -> agent jobs and product events
-  ContainerService  -> takos-agent container
-```
-
-The separately installed `takos-git` Capsule has its own generic service
-topology and is consumed through Interface/InterfaceBinding.
-
-This means there is no `takosumi_takos` resource and no generic
-`takosumi_resource { type, spec }` fallback for Takos. If Takos needs a service
-form that the explicitly installed standard package cannot express, admit that
-missing typed Service Form only after portable governance and conformance pass.
-The implementation/backend still remains
-an operator decision through TargetPool, Policy, adapter capability evidence,
-and ResolutionLock.
-
-## Resolver
-
-Resolver input:
-
-```text
-exact FormRef and validated desired Resource
-interfaces
-profiles
-connections
-triggers
-constraints
-preferences
-space policy
-target pool
-existing resolution lock
-cost model
-compliance rules
-```
-
-TargetPool entries may include operator-declared implementations. This is how
-an operator enables custom adapters through Takosumi API/CLI/dashboard without
-waiting for any Takosumi-owned HCL client to know the backend name.
-
-Each entry is a complete, non-secret execution descriptor. Core never infers a
-provider source, provider configuration, module template/input, native resource
-type, or capability matrix from Target `type`, Resource `shape`, or
-`implementation`. A descriptor chooses either `plugin`, or the explicit
-`providerSource` + `moduleTemplate` path. A newly created ResolutionLock stores
-the complete descriptor and Target snapshots; normal re-apply never migrates.
-There is no OSS Core fallback seed when `implementations` is omitted.
-
-```yaml
-targets:
-  - name: containers-main
-    type: kubernetes
-    ref: cluster-prod
-    credentialRef: conn_k8s_prod
-    priority: 80
-    implementations:
-      - shape: ContainerService
-        implementation: custom_container_runtime
-        plugin: takosumi-plugin-container-runtime
-        options:
-          runtime_class: edge
-        interfaces:
-          oci_container: native
-          public_http: shim
-          custom.mesh: native
-```
-
-The current compatibility API/plugin seam accepts operator-defined shape
-tokens, while target mutation requires a trusted installed exact FormRef. The
-ten current Resource Shape kind tokens remain API compatibility identities,
-not a global enum or target-definition authority. Portable typed authoring
-belongs to Takoform.
-
-`ref` is the target-native reference such as an account id, cluster id, or
-fleet id. `credentialRef` is the ProviderConnection / Credential id used by the
-opentofu-adapter. They are deliberately separate so account ids, cluster refs,
-and credentials cannot be confused.
-
-The current Resource Shape parser validates shape-specific structure and rejects empty
-or whitespace-bearing AI tokens, but it does not reject unknown AI
-interface/profile/provider-preference/routing-strategy tokens. Support is
-decided by the resolver, TargetPool capability evidence, policy, credentials,
-and the configured adapter.
-
-Resolver output:
-
-```text
-selected implementation
-selected target
-native resource plan
-compatibility score
-portability score
-cost estimate
-risk notes
-resolution lock
-```
-
-Capability levels:
-
-```text
-native
-shim
-emulated
-unsupported
-```
-
-## Compatibility API Framework
-
-Compatibility APIs are versioned capability profiles. Control-plane profiles
-are translation clients of the Deploy API when an operator needs an import or
-SDK-compatible facade. Data-plane profiles authorize and resolve canonical
-Ready Resources. They are not mandatory when an existing OpenTofu provider or
-standard endpoint is already enough.
-
-```text
-compat.s3.v1
-compat.oci.v1
-compat.cloudevents.v1
-compat.kubernetes.crd.v1
-compat.aws.sqs.v1
-compat.redis.v1
-compat.postgres.v1
-```
-
-These are possible capability tokens, not default Takosumi-owned replacements
-for Redis, Postgres, SQS, S3, OCI, or other standards. Existing providers and
-standard endpoints stay the default unless a Takosumi-managed import,
-projection, policy, or metering surface is actually needed.
-
-Do not claim complete provider API compatibility. Specific surfaces are enabled
-or disabled by `/v1/capabilities`.
-
-An installed profile declares its authority planes explicitly:
-
-```json
-{
-  "compatibilityProfiles": [
-    {
-      "profile": "compat.example.v1",
-      "planes": ["control", "data"]
-    }
-  ]
-}
-```
-
-The platform advertises the same plane metadata through
-`/v1/capabilities.compatibilityProfiles`. `control` dispatch receives only a
-Resource Deploy API port constrained to `/v1/resources` plus a fixed,
-profile-owned route Interface port. That route port can materialize only a
-Resource-owned `http.route` / `v1alpha1` Interface, its exact Principal
-`edge.request` Binding, and ETag-fenced update/retire; it never exposes generic
-Interface CRUD or stores. Its current Stable subset permits exactly one active
-route for each profile-owned `EdgeWorker`, requires an explicit path, accepts
-either no wildcard or one terminal `*`, and treats a different or overlapping
-second route as an explicit conflict/unsupported operation rather than applying
-specificity rules. `data` dispatch receives only a read resolver that
-rejects Resources that are not fully observed `Ready` and can return authorized
-resolved Interface/NativeResource evidence. The handler contract contains no
-environment, store, adapter, backend-manager, or compatibility lifecycle-state
-port. A `compat.*` capability
-without this declaration, a `/compat` raw extension route, or a handler that
-does not implement the restricted compatibility entrypoint fails closed and is
-not advertised. Core and Accounts route prefixes cannot be delegated to an
-extension and always retain dispatch precedence.
-
-Operator/Cloud implementations that expose managed capacity route every
-control-plane client through `/v1/resources`. The Deploy API resolves the
-provider-neutral shape, applies Policy, writes the ResolutionLock, verifies the
-Cloud offering/quote through its injected billing port, and only then dispatches
-an adapter/backend manager. The manager decides whether the substrate is
-Workers for Platforms, object storage, SQL, KV, queues, workflows, containers,
-or another implementation. A Resource adapter never invokes a compatibility
-handler as its backend.
-
-Cloud/operator offerings fail closed when a service form is recognized but its
-selected manager is not configured. That failure happens before billing
-reservation and before the backend API call, so an unsupported
-`ContainerService` manager cannot be translated through any compatibility path
-or unrelated route.
-
-For example, ordinary S3/R2/GCS object storage can use existing providers while
-`compat.s3.v1` remains disabled. An object-storage Service Form or S3
-compatibility facade is justified only when an operator needs Takosumi-owned
-binding projection, policy, metering, import, or managed placement semantics.
-
-## Discovery
-
-Any Takosumi endpoint should expose product discovery for tooling and current
-compatibility clients. A neutral portable discovery identity is added beside
-it after public naming/API decisions and conformance.
-
-```http
-GET /.well-known/takosumi
-GET /v1/capabilities
-```
-
-`/capabilities` remains the existing operator-gated route inventory endpoint.
-`/v1/capabilities` is the public product capability document.
-
-The current `resources: Record<string, boolean>` field is a compatibility view.
-Target discovery returns one bounded record per exact FormRef with definition
-known, installed, executable, executable reason, activated,
-available-to-principal, availability reason, operations, adapter/target classes,
-and deprecation. It does not expose credentials, manager identity, private
-target configuration, capacity, or Cloud internals. The boolean view is derived
-from structured truth only while supported clients require it.
-
-Interface support is advertised only when `/v1/interfaces`, input resolution,
-lifecycle conditions, and `/v1/interfaces/:id/bindings` are implemented. The
-capability document reports the supported input sources
-(`literal`, `capsule_output`, and `resource_output`); it does not claim support
-for arbitrary Interface type/version documents by every consumer. Clients must
-not infer support from edition or host identity.
-
-`/v1/capabilities.operator` describes operator operations that are available on
-the current host, such as multi-tenant Workspace management, runner pools,
-operator-scoped Connections, Target catalog, DB-backed configuration,
-CLI/API/runbook operation, usage showback, and audit evidence. It does not
-advertise an operator admin UI. Operator-only changes are applied through
-database-backed configuration, CLI/API operations, runbooks, and audit logs.
-
-The official hosted platform does not publish, index, build, sign, or retain a
-first-party provider. Generic runner mirror/cache support remains available
-for ordinary external providers and independently published Takoform bytes.
-
-## OIDC And Workload Identity
-
-Standard Takosumi includes the Accounts OIDC issuer. A separate workload
-identity API is not yet a current contract: it must be introduced through
-generic OIDC principal, Resource Credential/Policy, or Credential Recipe seams,
-not vendor-specific federation routes. Operator/Cloud may add enterprise SSO,
-SAML, SCIM, advanced session policy, and tenant isolation through those seams.
-
-Provider execution credentials use Provider Connection + Credential Recipe.
-Recipe `authModes` keys and `preRun.type` drivers are open operator/provider
-tokens; Core does not publish a closed `static_secret` / `oidc_federation` /
-`agent_local` / `managed` ownership taxonomy. Helpers may implement those flows,
-but only an explicitly selected recipe controls Run-local env/file/action
-materialization.
-
-## State
-
-Takosumi keeps three state layers separate:
-
-```text
-OpenTofu state
-Takosumi resource state
-Native resource state
-```
-
-For the Stack flow, a successful apply captures `tofu output -json` as the
-current Capsule Output. An Interface may explicitly resolve a non-sensitive
-value from that captured generation, but Output does not become a runtime
-registry or state store.
-
-## Billing And Usage Events
-
-Core records usage events reported by enabled shapes and adapters. Queue, DB,
-VM, and other service-family events exist only when an operator or Cloud
-adapter enables those service forms; their presence here is not a statement
-that OSS core owns those resources by default.
-
-```text
-EdgeWorker request count
-EdgeWorker execution time
-Object storage bytes, when an operator enables a managed storage surface
-Object storage request count, when an operator enables a managed storage surface
-Queue messages
-DB storage
-DB compute
-VM hours
-Build minutes
-Egress
-```
-
-Operator/Cloud turns usage into meters, rating, invoices, payment, commercial
-quota, and support tooling.
-
-Hosted form-backed Resource API and compatibility API calls are attributed to a
-Workspace, not to a required Capsule record. A request may carry a Capsule id
-when it exists, but direct `takosumi` provider and installed compatibility-profile
-calls can be metered with only an authenticated actor and verified Workspace.
-Cloud-only payment enforcement authorizes the
-normalized dispatch plan after selected-manager availability is confirmed and
-before forwarding to the backend. OSS core remains limited to disabled/showback
-usage recording unless an operator injects an enforcement port.
-
-Usage amounts are USD-denominated. New code writes `usdMicros` plus required
-`ratingStatus`; legacy `credits` are derived only for older storage and clients.
-Core records runner duration as the provider-neutral `runner_minute`
-measurement. Core owns no price: the host-injected `ShowbackRater` returns the
-amount and `rated` evidence. Without that port, showback persists zero /
-`unrated`; `disabled` persists no automatic measurement. An `unrated` event
-must always have zero `usdMicros`, while `rated` zero remains distinguishable.
-
-New usage quantities are canonical non-negative decimal integer strings paired
-with an explicit smallest unit. Implementations aggregate with `BigInt` and
-apply a catalog's rounding rule only after its window closes; JavaScript
-floating point and per-event rounding are not billing authorities. Migration
-readers may accept legacy non-negative safe integer JSON numbers, but writers
-emit only the canonical string representation.
-
-An enforcing Cloud host extends preview/apply through a commercial port without
-adding Cloud fields to the Resource shape. Its required semantics are:
-
-```text
-preview:
-  resolve an exact generic OSS OfferingSelection through its installed subject resolver
-  bind that exact selection to a closed commercial offering record
-  rate against a versioned PriceCatalog
-  return DeploymentQuote bound to desired-state + resolution digests
-
-apply:
-  require quote id + quote digest
-  bind immutable create/update intent to the reviewed quote
-  verify offering/price/currency/expiry/digests
-  reserve before adapter/backend work
-  capture only after canonical Resource success
-  release after failure or cancellation
-
-import:
-  ask the host admission port before adapter/backend lookup or lifecycle write
-
-normal delete:
-  notify the host with reason canonical_delete while the exact live Resource
-  revision and owner still fence the operation
-  remove the canonical Resource only after idempotent host retirement succeeds
-  persist the retired owner in the internal Resource identity fence
-  treat an exact absent-owner replay as completed without calling the host,
-  because a newer incarnation may begin immediately after the absence read
-
-upgrade from the retired remove-before-host-retire order:
-  do not guess host authority from an absent Resource or synthesize an owner
-  use the host operator's exact retained-runtime orphan recovery procedure,
-  fenced by canonical absence, retained generation/revision, and a recreation
-  freeze; block the upgrade when those proofs cannot be produced
-
-force tombstone:
-  notify the host with reason force_tombstone before removing the canonical
-  Resource so backend-absence-unknown capacity becomes retained
-  if canonical CAS/finalization fails while the Resource remains, notify with
-  force_tombstone_cancelled and restore the prior active/reserved allocation
-  if compensation fails, keep retained capacity and fail as finalize-pending
-  never release retained capacity from a later normal absent-Resource delete
-
-retained capacity release:
-  require an explicit operator service-token/admin operation after independent
-  backend observation proves the native object absent
-  persist immutable absence-reference/reason/time evidence atomically with the
-  retained allocation release; retries return the same evidence
-
-period close:
-  reconcile captured reservations + rated UsageEvents - releases/refunds
-  against payment-provider invoice lines
-```
-
-Unknown generic offerings, missing/mismatched commercial bindings, unpriced
-billable SKUs, expired/mismatched quotes, and unconfigured managers fail before
-reservation or backend work. Explicit free
-service uses a rated-zero SKU. Reservation/capture/release and invoice lines are
-idempotent and retain account, Workspace/Resource, offering/SKU/price version,
-quote/usage ids, quantity/unit, currency, tax treatment, period, and audit
-evidence. `DeploymentQuote` is a Cloud commercial record around a Resource
-operation; it is not an OSS `Deployment` lifecycle ledger.
-
-## Security
-
-OSS and Cloud share these invariants:
-
-```text
-secrets are encrypted at rest
-provider credentials are injected only into the run sandbox
-logs are redacted before persistence
-runs use a temporary workspace
-temporary credential files are removed after the run
-provider plugin cache stores provider binaries only
-state is isolated per Workspace/Capsule/Resource
-apply approval is supported
-destroy protection is supported
-audit log is required
-Interface documents and resolved inputs contain no secret values
-InterfaceBinding credentials are short-lived or invocation-materialized
-historical capsule_resource rows have no Capsule-scoped Run token or authoring path
-```
-
-Operator/Cloud deployments additionally require tenant isolation, runner pool
-isolation, quota, network egress policy, admin audit, and usage metering.
-
-## MVP Order
-
-1. Discovery and capability documents: `/.well-known/takosumi`,
-   `/v1/capabilities`.
-2. OpenTofu Stack controller: Git, runner, state, logs, approval, credentials.
-3. ProviderConnection / CredentialRecipe / generic env / OIDC federation.
-4. Interface storage/API, service-side blueprint ownership, generic input
-   resolution, provenance, lifecycle/status channels, operator cleanup of
-   retained historical rows, and InterfaceBinding authorization.
-5. Move first-party runtime consumers to Interface reads and invocation-time
-   Principal OAuth credentials; remove legacy Output convention and
-   Workspace-wide Output reconcile paths.
-6. Keep first-party provider source, release, custody, and public mirror lanes
-   absent; use Takoform or the owning external provider instead.
-7. After public identity gates, extract FormRef and immutable data-only package
-   publication, then portable definitions, interoperability, typed provider,
-   and conformance without moving Takosumi lifecycle entities or inventing a
-   central admission authority.
-8. Add exact FormRef persistence in a new additive D1/Postgres migration with
-   shadow comparison, bounded backfill, retention, backup, and rollback.
-9. Replace bundled parser/default authority with an explicit Form Registry;
-   make Core zero-form and add generic FormActivation.
-10. Dual-advertise portable and current compatibility routes over the same
-    Resource object/ledger; publish structured availability and reason codes.
-11. Add TargetPool implementation plugin fields and scoped compatibility
-    profiles only where provider/standard surfaces are insufficient.
-12. Keep secret material write-only inside ProviderConnection creation/update
-    and runner materialization; do not expose a standalone `/secrets` API or
-    Secret Resource shape. Keep the VerifiedDomain framework optional.
-13. Keep Kubernetes / VM / Machine / Job / Function specification-only for this
-    GA; add a manager only after separate portability and operation review.
-14. Migrate Cloud from its current ServiceOffering compatibility rows to exact
-    generic OfferingSelection + closed CommercialOfferingBinding records.
-    Form subjects additionally pin exact FormRef + FormActivation; non-Form
-    subjects use their own installed resolvers. Release provider/state
-    vocabulary changes only after no-op and rollback proof.
+Historical package evidence alone does not approve a Form, activate it, create
+an Offering, or make a backend available. An external Host must own its own
+registry, executable implementation, activation/audience policy, and backend
+lifecycle. OSS retains only the bytes and metadata needed to observe, delete,
+or migrate old rows safely.
+
+## Legacy Resource/Form drain
+
+The old `Resource Shape`, Form Host, and `/v1/resources` family are migration
+internals, not a supported OSS authoring flow. The platform edge defaults all
+legacy Resource/Form paths and discovery to `404`; no environment variable
+turns them into a new public product surface.
+
+An operator may opt into the bounded drain by setting
+`TAKOSUMI_LEGACY_RESOURCE_DRAIN_ENABLED=1` together with the authenticated
+control-plane configuration (`TAKOSUMI_DEPLOY_CONTROL_TOKEN` and the control
+database). The drain still requires authenticated access and permits only:
+
+| Legacy area | Allowed while drain is enabled |
+| --- | --- |
+| Resource collection and records | authenticated `GET`/`HEAD` list/read/events, `POST` observe, and `DELETE` |
+| TargetPool and SpacePolicy records | authenticated `GET`/`HEAD` (including list) and `DELETE` |
+
+Resource preview/apply/recover/import/refresh, TargetPool/SpacePolicy writes,
+Form Registry operations, FormActivation operations, portable Form discovery,
+and all other legacy actions remain unavailable. Disabled/unknown paths return
+`404`; recognized but retired operations return `410` while the drain is on.
+The drain never enables discovery, creates a Form, selects a TargetPool, or
+changes the supported Stack/Interface/Offering model.
+
+During the explicit drain window the platform cron may resume incomplete old
+Resource operations and perform bounded read-only observation of retained rows.
+Those maintenance jobs are disabled with the drain and cannot accept new
+desired state.
+
+## Migration custody
+
+Retained Resource, Run, state, audit, TargetPool, SpacePolicy, FormRef, and
+package rows may be read and transitioned by an operator migration. Such work
+must use exact immutable identities, authenticated actor/Workspace mapping,
+bounded pages, idempotent evidence, and an isolated backup/restore drill. It
+must not infer an identity from `latest`, caller-selected Space, or kind alone.
+
+Migration runbooks are historical procedures, not current authoring or release
+authority. A passing compatibility test or retained route does not make
+Resource Shape, Form Registry, FormActivation, TargetPool, or SpacePolicy a
+supported OSS surface.
+
+## Deployment and release
+
+The owning repository/operator deploys each production surface. A task, branch
+name, green check, or this document never authorizes production mutation. A
+release must bind the reviewed commit and artifact, prove post-conditions,
+state reversal/forward-repair, and record failure handling. Takosumi Cloud
+deployment and commercial readiness are separate external-Host decisions.
+
+## Conformance reading order
+
+Use this document for the present contract, public reference docs for stable
+user behavior, and `docs/operations/` for operator procedures. Treat
+`final-plan.md` and other historical notes as superseded records; if they
+conflict with this document, Core Spec wins and the conflict is a conformance
+gap to be corrected.

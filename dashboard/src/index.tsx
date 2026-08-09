@@ -62,10 +62,6 @@ const RunsListView = lazy(() => import("./views/runs/RunsListView.tsx"));
 const RunView = lazy(() => import("./views/runs/RunView.tsx"));
 const RunGroupView = lazy(() => import("./views/runs/RunGroupView.tsx"));
 const GraphView = lazy(() => import("./views/graph/GraphView.tsx"));
-const ResourcesView = lazy(() => import("./views/resources/ResourcesView.tsx"));
-const ResourceDetailView = lazy(
-  () => import("./views/resources/ResourceDetailView.tsx"),
-);
 const ActivityView = lazy(() => import("./views/activity/ActivityView.tsx"));
 const NotificationsView = lazy(
   () => import("./views/notifications/NotificationsView.tsx"),
@@ -193,8 +189,6 @@ function App() {
         <Route path="/runs/:id" component={RunView} />
         <Route path="/run-groups/:id" component={RunGroupView} />
         <Route path="/graph" component={GraphView} />
-        <Route path="/resources" component={ResourcesView} />
-        <Route path="/resources/:kind/:name" component={ResourceDetailView} />
         <Route path="/activity" component={ActivityView} />
         <Route path="/notifications" component={NotificationsView} />
         <Route path="/advanced/workspace" component={AdvancedWorkspaceView} />

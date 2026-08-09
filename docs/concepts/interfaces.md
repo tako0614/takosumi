@@ -13,9 +13,9 @@ InterfaceBinding が決めるので、**宣言しただけでは誰も呼べま�
 
 ## 宣言する
 
-Interface の正本は Takosumi の Interface API です。Capsule の blueprint または
-Takoform の Form descriptor から materialize する場合も、最終的には同じ台帳へ
-収束します。
+Interface の正本は Takosumi の Interface API です。Capsule の blueprint から
+materialize する場合も、外部 Host が Form descriptor を投影する場合も、最終的には
+同じ台帳へ収束します。Form descriptor の定義・実体化の authority は外部 Host 側です。
 
 ```http
 POST /v1/interfaces
@@ -53,23 +53,9 @@ Content-Type: application/json
 ```
 
 `visibility` は `private` / `workspace` / `public` のいずれかです。`document` には
-非 secret の JSON だけを書きます。owner は Workspace / Capsule / Resource の
-いずれかで、別の仕組みに複製しません。
-
-型付きの Resource にも `interfaces` という欄がありますが、役割は違います。こちらは
-その Resource にどの使い方ができてほしいかを並べるもので、Takosumi は挙げられた
-すべてを備える Target を選びます。
-
-```json
-{
-  "kind": "ObjectBucket",
-  "metadata": { "name": "assets", "space": "prod" },
-  "spec": {
-    "name": "assets",
-    "interfaces": ["s3_api", "signed_url"]
-  }
-}
-```
+非 secret の JSON だけを書きます。owner は Workspace または Capsule です。旧 Resource
+owner を読む compatibility code が残る endpoint でも、それは migration internal であり
+新しい Interface authoring の入口ではありません。
 
 ## 公開する値を対応付ける
 
@@ -79,7 +65,7 @@ Content-Type: application/json
 | ----------------- | ---------------------- | -------------------------------- |
 | `literal`         | 宣言に直接書いた値     | `value`                          |
 | `capsule_output`  | Capsule の公開 Output  | `outputName`、任意で `capsuleId` |
-| `resource_output` | Resource の公開 Output | `resourceId`、`outputName`       |
+| `resource_output` | 旧 Resource の公開 Output (migration only) | `resourceId`、`outputName`       |
 
 `capsule_output` で `capsuleId` を省くと、宣言している Capsule 自身の Output を
 読みます。
@@ -104,29 +90,27 @@ JSON Pointer です。
 値は Interface の `status.resolvedInputs`、その出どころは `status.provenance` で
 読めます。
 
-## デプロイ済みアプリから Resource を使う
+## デプロイ済みアプリから別の Capsule を使う
 
-Interface は提供側の宣言ですが、host は同じ Interface / InterfaceBinding 台帳を使って、
-デプロイ済みアプリに Resource への接続を渡すこともできます。
+Interface は提供側の宣言です。consumer Capsule に接続を渡す場合も、同じ
+Interface / InterfaceBinding 台帳で、値の出どころと認可を明示します。
 
 この場合、宣言は2種類を混ぜません。
 
 - `InstallConfig.interfaceBlueprints` は、その Capsule が**提供する** Interface の候補です。
-- service-side の `hostRuntimeMaterialization.requirements` は、その hosted runtime が
-  **利用する** Resource の alias と必要権限です。repository manifest、Output、
-  provider 設定ではありません。
+- consumer 側の input mapping は、repository manifest、Output、provider 設定とは別に、
+  どの Interface をどの権限で使うかを示します。
 
-host は consumer Resource が Ready になったあと、対象 Resource の generation、
-Interface、Ready な InterfaceBinding、permission を解決します。runtime には
-provider-native Resource binding と、alias ごとの exact authority を持つ
-materialization だけを渡します。provider credential、account id、native resource id、bearer token は
+Takosumi は対象 Capsule の Interface、Ready な InterfaceBinding、permission を解決します。
+runtime には alias ごとの exact authority を持つ materialization だけを渡します。
+provider credential、account id、native resource id、bearer token は
 渡しません。
 
-Binding の revoke、Resource generation の変更、permission の変更後に、
+Binding の revoke、Interface generation の変更、permission の変更後に、
 古い materialization へ fallback してはいけません。host は新しい exact runtime
 version を作るか、呼び出しを fail closed にします。
 
-これは host が明示的に提供する機能です。OpenTofu module が Cloudflare / AWS などの
+これは Interface の認可機能です。OpenTofu module が Cloudflare / AWS / Takoform などの
 provider を直接使う経路を置き換えません。
 
 ## 状態と認可を読む
@@ -172,10 +156,11 @@ curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/v1/interfaces/if_example/token" \
 
 いずれかを満たさない場合、Takosumi はその場で**停止します**。
 
-Resource の refresh が成功すると、関連する Interface の版が解決し直されます。
+接続元 Capsule の Output や Interface generation が変わると、関連する Binding の版が
+解決し直されます。
 デプロイ直後に一時的に `Unknown` になることがあるのはこのためです。
 
 ## 関連
 
-- [Resource](./resources.md)
+- [Resource migration internals](./resources.md)
 - [状態と出力](./state-and-outputs.md)

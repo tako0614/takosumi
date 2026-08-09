@@ -170,50 +170,6 @@ takosumi connections revoke conn_...
 Compatibility API は、operator が extension capability として明示的に構成します。CLI から
 作る ProviderConnection でも、対象の provider は `--provider` で明示します。
 
-## Resource Shape を操作する
-
-Resource Shape flow が操作するのは、Takosumi に保存された Resource / TargetPool /
-SpacePolicy の宣言と、明示的な reconcile operation です。write request は non-secret な
-JSON object を file から読みます。通常の出力は Resource の phase、Target、Run id といった
-要約だけで、request body や Output の値は表示しません。完全な public response が必要な
-場合だけ `--json` を指定します。
-
-```bash
-takosumi resources preview --file resource.json
-takosumi resources apply EdgeWorker api --file resource.json
-takosumi resources import EdgeWorker api --file resource-with-native-id.json
-
-takosumi resources list --space space_...
-takosumi resources get EdgeWorker api --space space_...
-takosumi resources events EdgeWorker api --space space_...
-takosumi resources observe EdgeWorker api --space space_...
-takosumi resources refresh EdgeWorker api --space space_...
-takosumi resources delete EdgeWorker api --space space_...
-```
-
-`preview` / `apply` の file は Resource Shape API と同じ `kind` / `metadata` / `spec` を持ちます。
-`import` はそれに top-level の `nativeId` を足します。credential や secret は Resource spec や
-`nativeId` に入れず、ProviderConnection / CredentialRecipe で管理します。`delete --force` は endpoint
-側で operator break-glass 認可が明示されている場合だけ成功します。
-
-Target と Policy の宣言も同じ endpoint に直接送ります。
-
-```bash
-takosumi target-pools put default --file target-pool.json
-takosumi target-pools list --space space_...
-takosumi target-pools get default --space space_...
-takosumi target-pools delete default --space space_...
-
-takosumi space-policies put default --file space-policy.json
-takosumi space-policies list --space space_...
-takosumi space-policies get default --space space_...
-takosumi space-policies delete default --space space_...
-```
-
-`target-pool.json` は top-level に `space` と `spec.targets` を持つ API request body です。
-`space-policy.json` は top-level に `space` と `spec` を持ちます。一覧の `nextCursor` は
-opaque なので、内容を解釈せず、そのまま次ページの `--cursor` に渡します。
-
 ## デプロイ先の secret
 
 deployment runtime の secret を保存して適用するのは、その runtime adapter と operator

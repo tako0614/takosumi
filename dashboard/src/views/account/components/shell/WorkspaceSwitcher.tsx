@@ -41,8 +41,6 @@ import {
 } from "../../../../lib/workspace-list.ts";
 import {
   currentWorkspaceId,
-  canonicalResourcesSearch,
-  resourcesWorkspaceQueryId,
   selectWorkspaceFromQuery,
   setCurrentWorkspaceId,
 } from "../../../../lib/workspace-state.ts";
@@ -75,13 +73,9 @@ function newWorkspaceHandle(): string {
 export default function WorkspaceSwitcher(props: Props = {}) {
   const navigate = useNavigate();
   const location = useLocation();
-  const requestedWorkspaceId = createMemo(() =>
-    resourcesWorkspaceQueryId(location.pathname, location.search),
-  );
   const [workspaces, { mutate, refetch }] = createResource(() =>
     listWorkspacesCached({
-      selectedWorkspaceId:
-        requestedWorkspaceId() || currentWorkspaceId() || undefined,
+      selectedWorkspaceId: currentWorkspaceId() || undefined,
     }),
   );
   const [switcherOpen, setSwitcherOpen] = createSignal(false);
@@ -104,7 +98,7 @@ export default function WorkspaceSwitcher(props: Props = {}) {
   );
   const selectedWorkspaceId = createMemo(() =>
     selectWorkspaceFromQuery(
-      requestedWorkspaceId(),
+      "",
       currentWorkspaceId(),
       loadedWorkspaces(),
     ),
@@ -134,22 +128,9 @@ export default function WorkspaceSwitcher(props: Props = {}) {
   // to the first Workspace before the refetch could land the new one.
   const onLoaded = (list: readonly Workspace[]) => {
     const current = untrack(currentWorkspaceId);
-    const next = selectWorkspaceFromQuery(
-      requestedWorkspaceId(),
-      current,
-      list,
-    );
+    const next = selectWorkspaceFromQuery("", current, list);
     if (next !== current) {
       setCurrentWorkspaceId(next);
-    }
-    const canonicalSearch = canonicalResourcesSearch(
-      location.pathname,
-      location.search,
-    );
-    if (canonicalSearch !== location.search) {
-      navigate(`${location.pathname}${canonicalSearch}${location.hash}`, {
-        replace: true,
-      });
     }
     if (!next) setSwitcherOpen(false);
     return list;
@@ -254,7 +235,6 @@ export default function WorkspaceSwitcher(props: Props = {}) {
     [/^\/workloads\/[^/]+/u, "/workloads"],
     [/^\/runs\/[^/]+/u, "/runs"],
     [/^\/run-groups\/[^/]+/u, "/runs"],
-    [/^\/resources\/[^/]+\/[^/]+/u, "/resources"],
   ];
   const choose = (id: string) => {
     setCurrentWorkspaceId(id);

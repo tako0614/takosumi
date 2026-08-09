@@ -66,6 +66,16 @@ const COMPLETE_BASELINE = [
     content:
       "No first-party provider source, release, custody, or public mirror lane exists.",
   },
+  {
+    path: "app-docs/index.md",
+    content:
+      "認証済み Cloud catalog の `available` が現在の提供状態です。",
+  },
+  {
+    path: "app-docs/en/index.md",
+    content:
+      "The authenticated Cloud catalog exposes the current `available` state.",
+  },
 ] as const;
 
 test("authoritative docs keep first-party provider implementation external", () => {
@@ -131,4 +141,38 @@ test("authoritative docs reject a split Cloud GA availability contract", () => {
       ruleId: "cloud-ga-form-maturity-conflation",
     }),
   );
+});
+
+test("hosted docs use the authenticated catalog instead of a hard-coded service matrix", () => {
+  const violations = findAuthoritativeDocViolations(
+    COMPLETE_BASELINE.map((source) =>
+      source.path === "app-docs/en/index.md"
+        ? { ...source, content: "Every service is always available." }
+        : source,
+    ),
+  );
+
+  expect(violations).toContainEqual(
+    expect.objectContaining({
+      ruleId: "cloud-docs-catalog-authority-missing",
+      path: "app-docs/en/index.md",
+    }),
+  );
+});
+
+test("current Core Spec owns the boundary and Final Plan is only historical", async () => {
+  const coreSpec = await Bun.file(
+    new URL("../../docs/internal/core-spec.md", import.meta.url),
+  ).text();
+  const finalPlan = await Bun.file(
+    new URL("../../docs/internal/final-plan.md", import.meta.url),
+  ).text();
+
+  expect(coreSpec).toMatch(/present Takosumi OSS contract/);
+  expect(coreSpec).toMatch(/one supported\s+Git\/OpenTofu\/Terraform deployment flow/);
+  expect(coreSpec).toMatch(/TAKOSUMI_LEGACY_RESOURCE_DRAIN_ENABLED=1/);
+  expect(coreSpec).toMatch(/does not host a Form Registry/);
+  expect(finalPlan).toMatch(/historical planning record|superseded/);
+  expect(finalPlan).toMatch(/present Takosumi OSS contract is \[Core Spec\]/);
+  expect(finalPlan).not.toMatch(/authoritative Takosumi product direction/);
 });

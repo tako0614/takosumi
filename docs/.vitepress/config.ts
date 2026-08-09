@@ -32,7 +32,6 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
         { text: "実行モデル", link: "/concepts/run-model" },
         { text: "状態と出力", link: "/concepts/state-and-outputs" },
         { text: "認証情報", link: "/concepts/credentials" },
-        { text: "Resource", link: "/concepts/resources" },
         { text: "Interface", link: "/concepts/interfaces" },
         { text: "利用量と課金", link: "/concepts/usage-and-billing" },
         { text: "自分で動かす", link: "/concepts/self-host" },
@@ -44,7 +43,6 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
       items: [
         { text: "API", link: "/reference/api" },
         { text: "CLI", link: "/reference/cli" },
-        { text: "Service Form host API", link: "/reference/takoform-host" },
         { text: "設定", link: "/reference/configuration" },
         {
           text: "Capsule source options",
@@ -86,7 +84,6 @@ const enSidebar: DefaultTheme.SidebarMulti = {
         { text: "Run model", link: "/en/concepts/run-model" },
         { text: "State and outputs", link: "/en/concepts/state-and-outputs" },
         { text: "Credentials", link: "/en/concepts/credentials" },
-        { text: "Resources", link: "/en/concepts/resources" },
         { text: "Interfaces", link: "/en/concepts/interfaces" },
         { text: "Usage and billing", link: "/en/concepts/usage-and-billing" },
         { text: "Running it yourself", link: "/en/concepts/self-host" },
@@ -121,7 +118,7 @@ const enSidebar: DefaultTheme.SidebarMulti = {
 export default defineConfig({
   title: "Takosumi",
   description:
-    "Git-based OpenTofu control plane, Resource Shape API, and adapter framework",
+    "Git-based OpenTofu control plane with provider-neutral connections and interfaces",
   lang: "ja",
   base: process.env.VITEPRESS_BASE ?? "/docs/",
   // Public docs must not publish product-local design notes or operator runbooks.
@@ -151,7 +148,7 @@ export default defineConfig({
       lang: "ja",
       title: "Takosumi",
       description:
-        "Git-based OpenTofu control plane, Resource Shape API, and adapter framework",
+        "Git-based OpenTofu control plane with provider-neutral connections and interfaces",
       themeConfig: {
         nav: jaNav,
         sidebar: jaSidebar,
@@ -177,7 +174,7 @@ export default defineConfig({
       lang: "en-US",
       title: "Takosumi",
       description:
-        "Git-based OpenTofu control plane, Resource Shape API, and adapter framework",
+        "Git-based OpenTofu control plane with provider-neutral connections and interfaces",
       themeConfig: {
         nav: enNav,
         sidebar: enSidebar,

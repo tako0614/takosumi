@@ -1,8 +1,6 @@
 import { join, relative, resolve, sep } from "node:path";
 import {
   PORTABLE_CAPSULES,
-  PORTABLE_OBJECT_BUCKET,
-  PORTABLE_RESOURCE_INTERFACE,
   PORTABLE_SESSION_COOKIE,
   PORTABLE_UI_SURFACES,
   PORTABLE_WORKSPACES,
@@ -52,44 +50,6 @@ function activityResponse() {
   return { events: [] };
 }
 
-function resourcePage() {
-  return { resources: [PORTABLE_OBJECT_BUCKET] };
-}
-
-function workspaceResourcesView(workspaceId: string) {
-  return {
-    view: "resources.v1",
-    workspaceId,
-    space: workspaceId,
-    resources: {
-      items: workspaceId === "ws_alpha" ? [portableObjectBucketSummary()] : [],
-    },
-    workloads: {
-      items: PORTABLE_CAPSULES[workspaceId as keyof typeof PORTABLE_CAPSULES] ?? [],
-    },
-    forms: { items: [] },
-    hasTargetPool: false,
-  };
-}
-
-function portableObjectBucketSummary() {
-  return {
-    apiVersion: PORTABLE_OBJECT_BUCKET.apiVersion,
-    kind: PORTABLE_OBJECT_BUCKET.kind,
-    id: PORTABLE_OBJECT_BUCKET.id,
-    metadata: {
-      name: PORTABLE_OBJECT_BUCKET.metadata.name,
-      space: PORTABLE_OBJECT_BUCKET.metadata.space,
-      managedBy: PORTABLE_OBJECT_BUCKET.metadata.managedBy,
-    },
-    status: {
-      phase: PORTABLE_OBJECT_BUCKET.status.phase,
-      observedGeneration: PORTABLE_OBJECT_BUCKET.status.observedGeneration,
-      resolution: PORTABLE_OBJECT_BUCKET.status.resolution,
-    },
-  };
-}
-
 function page(value: unknown, field: string): unknown {
   return { [field]: value };
 }
@@ -134,9 +94,6 @@ async function apiResponse(request: Request, url: URL): Promise<Response> {
     const workspaceId = decodeURIComponent(workspaceMatch[1] ?? "");
     const suffix = workspaceMatch[2] ?? "";
     if (!workspaceFor(workspaceId)) return json({ error: "not_found" }, 404);
-    if (suffix === "views/resources.v1") {
-      return json(workspaceResourcesView(workspaceId));
-    }
     if (suffix === "capsules") {
       return json(page(PORTABLE_CAPSULES[workspaceId as keyof typeof PORTABLE_CAPSULES] ?? [], "capsules"));
     }
@@ -149,24 +106,8 @@ async function apiResponse(request: Request, url: URL): Promise<Response> {
     if (suffix === "activity") return json(activityResponse());
     if (suffix === "current-state-versions") return json({ stateVersions: [] });
     if (suffix === "install-configs") return json({ installConfigs: [] });
-    if (suffix === "target-pools") return json({ targetPools: [] });
-    if (suffix === "space-policies") return json({ spacePolicies: [] });
   }
 
-  if (path === "/v1/resources") return json(resourcePage());
-  if (path === "/v1/form-availability") return json({ forms: [] });
-  if (path === "/v1/target-pools") return json({ targetPools: [] });
-  if (path === "/v1/space-policies") return json({ spacePolicies: [] });
-  if (path === "/v1/cloud/s3-access-keys") return json({ accessKeys: [] });
-  if (path === "/apis/forms.takoform.com/v1alpha1/interfaces") {
-    return json({ interfaces: [PORTABLE_RESOURCE_INTERFACE] });
-  }
-  if (path === "/v1/resources/ObjectBucket/assets") {
-    return json(PORTABLE_OBJECT_BUCKET);
-  }
-  if (path === "/v1/resources/ObjectBucket/assets/events") {
-    return json({ events: [] });
-  }
   if (path === "/.well-known/takosumi") {
     return json({
       apiVersion: "takosumi.dev/v1alpha1",
@@ -182,11 +123,7 @@ async function apiResponse(request: Request, url: URL): Promise<Response> {
       compatibilityProfiles: { "compat.e2e.v1": { planes: ["control"] } },
       identity: {},
       operator: {},
-      // This fixture exposes the matching `/v1/cloud/s3-access-keys` API above,
-      // so its public capability document must advertise that extension just
-      // like a composed host does. Portable OSS hosts that omit it keep the
-      // customer-key controls hidden.
-      extensions: ["s3.access-key.control.v1"],
+      extensions: [],
     });
   }
 

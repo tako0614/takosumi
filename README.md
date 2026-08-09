@@ -47,8 +47,7 @@ curl http://127.0.0.1:8788/v1/capabilities \
 
 ## デプロイ方法
 
-Takosumi には 2 つの入口があります。どちらも同じ実行履歴、state、output、監査記録を
-使います。
+Takosumi の利用者向け入口は、Git module を実行する 1 つの Stack flow です。
 
 ### Git の module を実行する
 
@@ -69,25 +68,23 @@ Takosumi 向け metadata を提案できます。現行contractは一般
 DB-owned `InstallConfig`、Plan、Runに残ります。詳細は
 [Repository manifest](docs/reference/repository-manifest.md)を参照してください。
 
-### 型を指定してリソースを作る
+### provider を使う
 
-運用者が有効にしている場合は、オブジェクトストレージや SQL データベースなどを
-**Resource** として宣言できます。利用者は欲しい種類と設定を書き、配置先と実装は
-運用者が用意した候補から選ばれます。
+Takosumi OSS の利用者向けの経路は、Git の OpenTofu / Terraform module を実行する
+Stack flow です。Takoform は `registry.terraform.io/tako0614/takoform` から
+インストールする、ほかの provider と同じ provider です。Takoform の Form 定義や、
+Form をホストして実体化するサービスはこのリポジトリの所有物ではありません。
 
-Resource は任意の機能です。使える種類は Takosumi の設置先ごとに異なり、
-`/.well-known/takosumi` または `/v1/capabilities` で確認できます。Takoform は
-Resource を記述するために利用できる形式の 1 つであり、Takosumi やクラウドそのもの
-ではありません。
-
-詳しくは[全体像](docs/concepts/index.md)と
-[Resource](docs/concepts/resources.md)を参照してください。
+過去の試作には `/v1/resources`、Resource Shape、Form Host、TargetPool、SpacePolicy を
+使う API と dashboard がありました。これらは現在の OSS の supported product surface
+ではありません。互換用の API、schema、保存データを残している箇所は migration
+internal として扱い、通常の利用者向け手順やナビゲーションには掲載しません。
 
 ## Takosumi と Takosumi Cloud
 
 - **Takosumi** はこのリポジトリのソフトウェアです。自分の環境で運用できます。
 - **Takosumi Cloud** は `app.takosumi.com` で提供する公式ホスティングです。Cloud が提供する
-  Resource、料金、容量、サポートは Cloud 側が決めます。
+  hosted Form/service、料金、容量、サポートは Cloud 側が決めます。
 
 OSS は Cloud がなくても動きます。Cloud 固有の価格、Stripe、内部の配置先はこの
 リポジトリの公開仕様ではありません。境界の詳細は
@@ -99,7 +96,7 @@ Takos は別の製品です。Accounts / deploy-control / dashboard / runner を
 ## ドキュメント
 
 - [クイックスタート](docs/getting-started/quickstart.md) — dashboard と runner を含むローカル環境
-- [全体像](docs/concepts/index.md) — Git module、Resource、Run、state のつながり
+- [全体像](docs/concepts/index.md) — Git module、Run、state、Interface のつながり
 - [認証情報](docs/concepts/credentials.md) — provider の接続情報を安全に渡す方法
 - [自分で動かす](docs/concepts/self-host.md) — self-host の構成と判断事項
 - [Repository manifest](docs/reference/repository-manifest.md) — repository-owned metadata と `InstallConfig` の境界

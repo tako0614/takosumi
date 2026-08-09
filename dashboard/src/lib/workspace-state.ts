@@ -53,28 +53,6 @@ export function selectWorkspaceFromQuery(
   return selectAvailableWorkspaceId(current, workspaces);
 }
 
-/** Read the Cloud compatibility redirect's Workspace query only on Resources. */
-export function resourcesWorkspaceQueryId(
-  pathname: string,
-  search: string,
-): string {
-  if (pathname !== "/resources") return "";
-  return new URLSearchParams(search).get("workspaceId")?.trim() ?? "";
-}
-
-/** Remove the one-shot Resources Workspace query while preserving other args. */
-export function canonicalResourcesSearch(
-  pathname: string,
-  search: string,
-): string {
-  if (pathname !== "/resources") return search;
-  const params = new URLSearchParams(search);
-  if (!params.has("workspaceId")) return search;
-  params.delete("workspaceId");
-  const next = params.toString();
-  return next ? `?${next}` : "";
-}
-
 /** Set (and persist) the current Workspace id. Pass "" to clear. */
 export function setCurrentWorkspaceId(workspaceId: string): void {
   const next = workspaceId.trim();

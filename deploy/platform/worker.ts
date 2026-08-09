@@ -1153,21 +1153,44 @@ export default {
     if (isPlatformExtensionContributionsPath(url.pathname)) {
       return handlePlatformExtensionContributionsRequest(request, url, env);
     }
-    const publicCoreRoute = matchPlatformPublicCoreRoute(url.pathname);
-    if (publicCoreRoute?.access === "public") {
-      return await handlePlatformTakoformDiscoveryRequest(
-        request,
-        env,
-        context,
-      );
-    }
-    if (publicCoreRoute?.access === "operator") {
-      if (!platformResourceShapeApiEnabled(env)) {
-        return Response.json({ error: "not found" }, { status: 404 });
+    // Legacy Flow-B paths are an explicit drain lane. Unknown/retired paths
+    // must not fall through to the Accounts SPA or another extension route.
+    if (isPlatformLegacyResourceShapePath(url.pathname)) {
+      if (!platformLegacyResourceDrainEnabled(env)) {
+        return legacyResourceNotFoundResponse();
       }
+      // Portable Takoform discovery and the v1alpha1 host facade are retired;
+      // drain mode never re-advertises or re-routes them.
+      if (isPlatformTakoformHostPath(url.pathname)) {
+        return legacyResourceNotFoundResponse();
+      }
+      if (
+        !platformLegacyDrainRequestAllowed(request, url.pathname) ||
+        isPathOrSubpath(url.pathname, "/v1/form-activations")
+      ) {
+        return legacyResourceRetiredResponse();
+      }
+      // The retained drain is an operator custody lane, not a Workspace API.
+      // Only the exact deploy-control bearer may reach a retained operation;
+      // retired methods above stay an unconditional 410.
+      const drainAuth = requireDeployControlBearer(request, env);
+      if (drainAuth) return drainAuth;
+    }
+    // Generic Interface/InterfaceBinding APIs remain a normal session edge
+    // surface even though the legacy Resource Shape family is drain-only.
+    if (
+      isPlatformInterfaceApiPath(url.pathname) ||
+      isPlatformOfferingApiPath(url.pathname)
+    ) {
       return await (
-        await cachedDeployControlService(env)
-      ).app.fetch(request, undefined, honoExecutionContext(context));
+        handlePlatformResourceShapeApiRequest(
+          request,
+          env,
+          verifyPlatformExtensionSession,
+          platformExtensionSessionCanAccessWorkspace,
+          context,
+        )
+      );
     }
     // Core lifecycle and identity prefixes always win over extension routing.
     // Descriptor validation rejects overlaps too; keeping the dispatch order
@@ -1232,9 +1255,9 @@ export default {
   // active autoSync sources and enqueue a deduped source_sync). When the
   // `TAKOSUMI_DRIFT_CHECK_ENABLED=1` flag is set (default OFF), ALSO runs the
   // current compatibility drift sweep for Workspaces with active Capsules.
-  // Resource Shape observation is a separate, read-only reconciler. It follows
-  // configured Resource Shape capability by default and uses waitUntil so slow
-  // runner-backed checks do not serialize the rest of the cron tick.
+  // Legacy Resource repair/observation run only inside the explicit drain
+  // window. Observation uses waitUntil so slow runner-backed checks do not
+  // serialize the rest of the cron tick.
   async scheduled(
     _event: unknown,
     env: CloudflareWorkerEnv,
@@ -1246,7 +1269,10 @@ export default {
     );
     await runScheduledSourcePoll(env);
     await runScheduledOpenTofuRunRepair(env);
-    await runScheduledResourceOperationRepair(env);
+    // Never resume old direct Resource operations from cron. In particular,
+    // preview/apply/import/refresh/create/update repair (including recoverApply)
+    // remains disabled even while an operator has the legacy drain flag on.
+    // The only retained Resource scheduler below is bounded observation.
     if (autoPlanStaleCapsulesEnabled(env)) {
       await runScheduledStaleCapsuleAutoPlan(env);
     }
@@ -1341,10 +1367,11 @@ function platformDiscoveryOptions(
 ): CreateTakosumiDiscoveryOptions {
   const extensionDiscovery = platformExtensionDiscovery(env);
   const operatorControlMcp = operatorControlMcpEnabled(env);
-  const resourceShapeApi = platformResourceShapeApiEnabled(env);
-  const resources = platformResourceCapabilities(env, resourceShapeApi);
-  const resourceShapes =
-    resourceShapeApi && resourceCapabilitiesEnabled(resources);
+  // Flow-B is a retained drain-only compatibility lane, never a product
+  // capability. Keep the normal Git/OpenTofu and Interface discovery truthful
+  // even when an operator temporarily enables the drain flag.
+  const resources = platformResourceCapabilities(env, false);
+  const resourceShapes = false;
   const adapters = platformAdapterCapabilities(env, resourceShapes);
   const operator = platformOperatorCapabilities(env, resourceShapes);
   const mobileOidcClientId = configuredTakosumiMobileOidcClientId(env);
@@ -1472,22 +1499,33 @@ function parseExtensionCapabilityTokens(value: unknown): readonly string[] {
 export function platformResourceShapeApiEnabled(
   env: CloudflareWorkerEnv,
 ): boolean {
+  // This is the shared service-binding check used by the generic Interface and
+  // operator Offering seams. It deliberately does not imply that the legacy
+  // Resource Shape surface is publicly enabled.
   return Boolean(env.TAKOSUMI_DEPLOY_CONTROL_TOKEN && env.TAKOSUMI_CONTROL_DB);
+}
+
+/**
+ * Temporary, fail-closed retirement lane for retained Flow-B state. The
+ * deployment token and control D1 are necessary but not sufficient: operators
+ * must explicitly set the narrowly-scoped drain flag as well.
+ */
+export function platformLegacyResourceDrainEnabled(
+  env: CloudflareWorkerEnv,
+): boolean {
+  return (
+    platformResourceShapeApiEnabled(env) &&
+    env.TAKOSUMI_LEGACY_RESOURCE_DRAIN_ENABLED === "1"
+  );
 }
 
 const PUBLIC_RESOURCE_API_MANAGED_BY = "takosumi.resource-api.v1";
 
 export function isPlatformResourceShapeApiPath(pathname: string): boolean {
   return (
-    pathname === "/v1/form-availability" ||
-    pathname === "/v1/offering-catalogs" ||
-    pathname.startsWith("/v1/offering-catalogs/") ||
-    pathname === "/v1/offering-availability/query" ||
-    pathname === "/v1/offering-selections/resolve" ||
+    isPathOrSubpath(pathname, "/v1/form-availability") ||
     pathname === TAKOFORM_FORM_HOST_API_PATH ||
     pathname.startsWith(`${TAKOFORM_FORM_HOST_API_PATH}/`) ||
-    pathname === "/v1/interfaces" ||
-    pathname.startsWith("/v1/interfaces/") ||
     pathname === "/v1/resources" ||
     pathname.startsWith("/v1/resources/") ||
     pathname === "/v1/target-pools" ||
@@ -1497,28 +1535,82 @@ export function isPlatformResourceShapeApiPath(pathname: string): boolean {
   );
 }
 
-export interface PlatformPublicCoreRoute {
-  readonly access: "public" | "operator";
+/** Generic Interface/InterfaceBinding ingress; kept independent from Flow-B. */
+export function isPlatformInterfaceApiPath(pathname: string): boolean {
+  return (
+    pathname === "/v1/interfaces" || pathname.startsWith("/v1/interfaces/")
+  );
+}
+
+/** Operator-only generic Offering ingress; not part of the legacy drain. */
+export function isPlatformOfferingApiPath(pathname: string): boolean {
+  return isPlatformOfferingOperatorApiPath(pathname);
+}
+
+function isPlatformLegacyResourceShapePath(pathname: string): boolean {
+  return (
+    isPathOrSubpath(pathname, TAKOFORM_FORM_HOST_WELL_KNOWN_PATH) ||
+    isPathOrSubpath(pathname, TAKOFORM_FORM_HOST_API_PATH) ||
+    isPlatformResourceShapeApiPath(pathname) ||
+    isPathOrSubpath(pathname, "/v1/form-activations")
+  );
+}
+
+function isPathOrSubpath(pathname: string, prefix: string): boolean {
+  return pathname === prefix || pathname.startsWith(`${prefix}/`);
+}
+
+function isPlatformTakoformHostPath(pathname: string): boolean {
+  return (
+    isPathOrSubpath(pathname, TAKOFORM_FORM_HOST_WELL_KNOWN_PATH) ||
+    isPathOrSubpath(pathname, TAKOFORM_FORM_HOST_API_PATH)
+  );
 }
 
 /**
- * Non-SPA Core routes that do not belong to the Workspace-scoped Resource
- * ingress. Keep this list exact so an unknown `/v1/*` path cannot escape into
- * either the operator bearer or the dashboard fallback by prefix accident.
+ * Drain only existing Resource state. All desired-state, provider/target
+ * configuration, Form availability, portable host, and activation operations
+ * are retired rather than silently creating a new Flow-B authority.
  */
-export function matchPlatformPublicCoreRoute(
+function platformLegacyDrainRequestAllowed(
+  request: Request,
   pathname: string,
-): PlatformPublicCoreRoute | undefined {
-  if (pathname === TAKOFORM_FORM_HOST_WELL_KNOWN_PATH) {
-    return { access: "public" };
+): boolean {
+  const method = request.method.toUpperCase();
+  if (pathname === "/v1/resources" && (method === "GET" || method === "HEAD")) {
+    return true;
   }
-  if (
-    pathname === "/v1/form-activations" ||
-    pathname.startsWith("/v1/form-activations/")
-  ) {
-    return { access: "operator" };
+  // TargetPool and SpacePolicy are retained configuration records. Their
+  // existing-state inventory and destroy reads remain available to an
+  // authenticated drain, while PUT/create-style mutations stay retired.
+  if (/^\/v1\/(?:target-pools|space-policies)$/u.test(pathname)) {
+    return method === "GET" || method === "HEAD";
   }
-  return undefined;
+  if (/^\/v1\/(?:target-pools|space-policies)\/[^/]+$/u.test(pathname)) {
+    return method === "GET" || method === "HEAD" || method === "DELETE";
+  }
+  const resourceMatch =
+    /^\/v1\/resources\/[^/]+\/[^/]+(?:\/([^/]+))?$/u.exec(pathname);
+  if (!resourceMatch) return false;
+  const action = resourceMatch[1];
+  if (!action) return method === "GET" || method === "HEAD" || method === "DELETE";
+  if (action === "events") return method === "GET" || method === "HEAD";
+  return action === "observe" && method === "POST";
+}
+
+function legacyResourceNotFoundResponse(): Response {
+  return Response.json({ error: "not found" }, { status: 404 });
+}
+
+function legacyResourceRetiredResponse(): Response {
+  return Response.json(
+    {
+      error: "legacy_resource_shape_retired",
+      error_description:
+        "Flow-B Resource Shape routes are in authenticated drain-only mode; new desired state and configuration are disabled",
+    },
+    { status: 410, headers: { "cache-control": "no-store" } },
+  );
 }
 
 function isPlatformOfferingOperatorApiPath(pathname: string): boolean {
@@ -1527,37 +1619,6 @@ function isPlatformOfferingOperatorApiPath(pathname: string): boolean {
     pathname.startsWith("/v1/offering-catalogs/") ||
     pathname === "/v1/offering-availability/query" ||
     pathname === "/v1/offering-selections/resolve"
-  );
-}
-
-/** Public, read-only Takoform discovery; lifecycle/read routes stay authenticated. */
-export async function handlePlatformTakoformDiscoveryRequest(
-  request: Request,
-  env: CloudflareWorkerEnv,
-  context?: PlatformExecutionContext,
-): Promise<Response> {
-  if (!platformResourceShapeApiEnabled(env)) {
-    return Response.json({ error: "not found" }, { status: 404 });
-  }
-  if (request.method !== "GET" && request.method !== "HEAD") {
-    return Response.json({ error: "method not allowed" }, { status: 405 });
-  }
-  const service = await cachedDeployControlService(env);
-  // Discovery is intentionally public. Do not forward caller credentials into
-  // the in-process control service just because the edge request carried them.
-  return await service.app.fetch(
-    new Request(request.url, {
-      method: request.method,
-      headers: { accept: request.headers.get("accept") ?? "application/json" },
-    }),
-    undefined,
-    honoExecutionContext(context),
-  );
-}
-
-function isPlatformInterfaceApiPath(pathname: string): boolean {
-  return (
-    pathname === "/v1/interfaces" || pathname.startsWith("/v1/interfaces/")
   );
 }
 
@@ -1575,12 +1636,76 @@ export async function handlePlatformResourceShapeApiRequest(
   workspaceAccess: PlatformExtensionWorkspaceAccess = platformExtensionSessionCanAccessWorkspace,
   context?: PlatformExecutionContext,
 ): Promise<Response> {
-  const timings = platformResourceShapeServerTimingBucket(
-    new URL(request.url).pathname,
+  return await handlePlatformResourceShapeApiRequestInternal(
+    request,
+    env,
+    sessionVerifier,
+    workspaceAccess,
+    context,
   );
-  if (!platformResourceShapeApiEnabled(env)) {
+}
+
+/**
+ * Shared Resource/Interface dispatch. The only caller that may bypass the
+ * public legacy-drain gate is the private canonical recovery authority below;
+ * it has already validated an exact, authenticated GET read before entering
+ * this function. Keeping the escape hatch private prevents direct exported
+ * handler callers from re-enabling retired Flow-B writes or discovery.
+ */
+async function handlePlatformResourceShapeApiRequestInternal(
+  request: Request,
+  env: CloudflareWorkerEnv,
+  sessionVerifier: PlatformExtensionSessionVerifier = verifyPlatformExtensionSession,
+  workspaceAccess: PlatformExtensionWorkspaceAccess = platformExtensionSessionCanAccessWorkspace,
+  context?: PlatformExecutionContext,
+  allowInternalCanonicalRead = false,
+): Promise<Response> {
+  const pathname = new URL(request.url).pathname;
+  const timings = platformResourceShapeServerTimingBucket(pathname);
+  const legacyPath =
+    isPlatformResourceShapeApiPath(pathname) ||
+    isPathOrSubpath(pathname, "/v1/form-activations");
+  const canonicalInternalRead =
+    allowInternalCanonicalRead &&
+    request.method === "GET" &&
+    /^\/v1\/resources\/[^/]+\/[^/]+$/u.test(pathname);
+  if (isPlatformTakoformHostPath(pathname)) {
     return appendPlatformResourceServerTiming(
-      Response.json({ error: "not found" }, { status: 404 }),
+      legacyResourceNotFoundResponse(),
+      timings,
+    );
+  }
+  if (legacyPath && !canonicalInternalRead) {
+    if (
+      !platformLegacyResourceDrainEnabled(env) ||
+      isPlatformTakoformHostPath(pathname)
+    ) {
+      return appendPlatformResourceServerTiming(
+        legacyResourceNotFoundResponse(),
+        timings,
+      );
+    }
+    if (!platformLegacyDrainRequestAllowed(request, pathname)) {
+      return appendPlatformResourceServerTiming(
+        legacyResourceRetiredResponse(),
+        timings,
+      );
+    }
+    // Legacy Resource state is retained for operator custody only. Never
+    // reinterpret a Workspace session, personal token, or delegated OAuth
+    // credential as drain authority; the exact deploy-control bearer is the
+    // sole public ingress authority for this compatibility lane.
+    const drainAuth = requireDeployControlBearer(request, env);
+    if (drainAuth) {
+      return appendPlatformResourceServerTiming(drainAuth, timings);
+    }
+  }
+  const enabled = legacyPath
+    ? canonicalInternalRead || platformLegacyResourceDrainEnabled(env)
+    : platformResourceShapeApiEnabled(env);
+  if (!enabled) {
+    return appendPlatformResourceServerTiming(
+      legacyResourceNotFoundResponse(),
       timings,
     );
   }
@@ -1594,7 +1719,7 @@ export async function handlePlatformResourceShapeApiRequest(
   // rewrite an account session into the operator bearer for these routes.
   if (
     !hasDeployControlBearer &&
-    isPlatformOfferingOperatorApiPath(new URL(request.url).pathname)
+    isPlatformOfferingApiPath(pathname)
   ) {
     const service = await cachedDeployControlService(env);
     const response = await measureServerTiming(
@@ -3128,18 +3253,6 @@ export interface PlatformCompatibilityStoredResourceGrant {
 }
 
 /**
- * The only mutation authority given to a control-plane compatibility profile.
- * Every accepted request is constrained to `/v1/resources` and dispatched to
- * the same Resource Deploy API used by the provider, CLI, and dashboard.
- */
-export interface PlatformCompatibilityResourceDeployApiPort {
-  fetch(
-    request: Request,
-    authorization?: PlatformCompatibilityAuthorization,
-  ): Promise<Response>;
-}
-
-/**
  * Canonical http.route Interface control available to scoped compatibility
  * profiles. The fixed service owns Interface/Binding validation and never
  * exposes the generic Interface store or CRUD service to an extension.
@@ -3771,7 +3884,6 @@ export function selectUniquePlatformCompatibilityInterface(
 export interface PlatformCompatibilityAuthority {
   readonly profiles: readonly PlatformCompatibilityProfile[];
   readonly control?: {
-    readonly resourceApi: PlatformCompatibilityResourceDeployApiPort;
     readonly routeInterfaces: PlatformCompatibilityRouteInterfaceControlPort;
   };
   readonly data?: PlatformCompatibilityDataReadResolver;
@@ -3930,7 +4042,6 @@ export type PlatformExtensionSessionVerifier = (
 ) => Promise<PlatformExtensionSessionContext>;
 
 export interface PlatformCompatibilityAuthorityDependencies {
-  readonly dispatchResourceRequest?: typeof dispatchPlatformCompatibilityResourceRequest;
   readonly resolveReadyResource?: typeof resolvePlatformCompatibilityReadyResource;
   readonly resolveReadyResourceGrant?: typeof resolvePlatformCompatibilityStoredResourceGrant;
   readonly routeInterfaces?: PlatformCompatibilityRouteInterfaceControlPort;
@@ -3962,16 +4073,6 @@ export async function createPlatformCompatibilityAuthority(
     ...(exposesControl
       ? {
           control: Object.freeze({
-            resourceApi: Object.freeze({
-              fetch: (
-                request: Request,
-                authorization?: PlatformCompatibilityAuthorization,
-              ) =>
-                (
-                  dependencies.dispatchResourceRequest ??
-                  dispatchPlatformCompatibilityResourceRequest
-                )(request, authorization, input),
-            }),
             routeInterfaces:
               dependencies.routeInterfaces ??
               createPlatformCompatibilityRouteInterfaceControlPort(input),
@@ -4318,9 +4419,13 @@ export function createPlatformCanonicalResourceReadAuthority(
         ),
       );
       headers.delete(TAKOSUMI_INTERNAL_RESOURCE_MANAGED_BY_HEADER);
-      return await handlePlatformResourceShapeApiRequest(
+      return await handlePlatformResourceShapeApiRequestInternal(
         new Request(url, { method: "GET", headers }),
         env,
+        undefined,
+        undefined,
+        undefined,
+        true,
       );
     },
   });
@@ -4475,142 +4580,6 @@ async function resolveReadyCompatibilityGrantEvidence(
 ): Promise<PlatformCompatibilityReadyResourceEvidence | undefined> {
   const evidence = await resolver(input, grant, context);
   return evidence?.resource.status?.phase === "Ready" ? evidence : undefined;
-}
-
-async function dispatchPlatformCompatibilityResourceRequest(
-  request: Request,
-  authorization: PlatformCompatibilityAuthorization | undefined,
-  context: {
-    readonly request: Request;
-    readonly env: CloudflareWorkerEnv;
-    readonly route: PlatformExtensionRoute;
-    readonly session?: PlatformExtensionSessionContext;
-  },
-): Promise<Response> {
-  const url = new URL(request.url);
-  if (!pathIsUnderBase(url.pathname, "/v1/resources")) {
-    return Response.json(
-      {
-        error: "invalid_compatibility_translation",
-        error_description:
-          "control-plane compatibility profiles may call only /v1/resources",
-      },
-      { status: 400 },
-    );
-  }
-  if (url.searchParams.has("force")) {
-    return Response.json(
-      {
-        error: "forbidden",
-        error_description:
-          "compatibility profiles cannot request break-glass Resource deletion",
-      },
-      { status: 403 },
-    );
-  }
-  const trustedManagedBy = compatibilityControlManagedBy(context.route);
-  if (!trustedManagedBy) {
-    return Response.json(
-      {
-        error: "invalid_compatibility_translation",
-        error_description:
-          "compatibility Resource authority requires exactly one declared control profile",
-      },
-      { status: 503 },
-    );
-  }
-  const session = compatibilityAuthoritySession(context.session, authorization);
-  if (!session) {
-    return Response.json(
-      {
-        error: "unauthenticated",
-        error_description:
-          "handler-auth compatibility calls require an authenticated Workspace assertion",
-      },
-      { status: 401 },
-    );
-  }
-
-  const normalized = compatibilityResourceApiRequest(request, context.request);
-  const authorized = await platformResourceShapeAuthorizedRequest(
-    normalized,
-    context.request,
-    context.env,
-    session,
-    trustedManagedBy,
-  );
-  if (!authorized.ok) return authorized.response;
-  const service = await cachedDeployControlService(context.env);
-  return await scopePlatformCompatibilityResourceResponse(
-    await service.app.fetch(authorized.request),
-    authorized.request,
-    trustedManagedBy,
-  );
-}
-
-async function scopePlatformCompatibilityResourceResponse(
-  response: Response,
-  request: Request,
-  trustedManagedBy: string,
-): Promise<Response> {
-  if (!response.ok || request.method !== "GET") return response;
-  const url = new URL(request.url);
-  const segments = url.pathname.split("/").filter(Boolean);
-  const isList = segments.length === 2 && url.pathname === "/v1/resources";
-  const isGet =
-    segments.length === 4 &&
-    segments[0] === "v1" &&
-    segments[1] === "resources";
-  if (!isList && !isGet) return response;
-  const body = objectRecord(await response.json().catch(() => undefined));
-  if (isGet) {
-    if (resourceObjectManagedBy(body) !== trustedManagedBy) {
-      return Response.json(
-        {
-          error: {
-            code: "not_found",
-            message: "resource was not found for this compatibility profile",
-          },
-        },
-        { status: 404 },
-      );
-    }
-    return jsonResponseWithHeaders(body, response);
-  }
-  if (!Array.isArray(body.resources)) {
-    return Response.json(
-      {
-        error: "invalid_resource_projection",
-        error_description:
-          "canonical Resource list returned an invalid projection",
-      },
-      { status: 502 },
-    );
-  }
-  return jsonResponseWithHeaders(
-    {
-      ...body,
-      resources: body.resources.filter(
-        (resource) =>
-          resourceObjectManagedBy(objectRecord(resource)) === trustedManagedBy,
-      ),
-    },
-    response,
-  );
-}
-
-function resourceObjectManagedBy(resource: Record<string, unknown>): string {
-  return valueString(objectRecord(resource.metadata).managedBy)?.trim() ?? "";
-}
-
-function jsonResponseWithHeaders(
-  body: Record<string, unknown>,
-  source: Response,
-): Response {
-  const headers = new Headers(source.headers);
-  headers.delete("content-length");
-  headers.set("content-type", "application/json; charset=UTF-8");
-  return Response.json(body, { status: source.status, headers });
 }
 
 function compatibilityControlManagedBy(
@@ -4843,34 +4812,6 @@ function compatibilityAuthoritySession(
     subject,
     ...(scopes.length > 0 ? { scopes } : {}),
   };
-}
-
-function compatibilityResourceApiRequest(
-  request: Request,
-  extensionRequest: Request,
-): Request {
-  const requestedUrl = new URL(request.url);
-  const normalizedUrl = new URL(extensionRequest.url);
-  normalizedUrl.pathname = requestedUrl.pathname;
-  normalizedUrl.search = requestedUrl.search;
-  normalizedUrl.hash = "";
-  const headers = new Headers(request.headers);
-  for (const name of [
-    ...PLATFORM_EXTENSION_RAW_CREDENTIAL_HEADERS,
-    ...PLATFORM_EXTENSION_TRUSTED_CONTEXT_HEADERS,
-    TAKOSUMI_INTERNAL_ACTOR_HEADER,
-  ]) {
-    headers.delete(name);
-  }
-  return new Request(normalizedUrl, {
-    method: request.method,
-    headers,
-    body:
-      request.method === "GET" || request.method === "HEAD"
-        ? undefined
-        : request.body,
-    redirect: request.redirect,
-  });
 }
 
 function safePlatformCompatibilityResourceName(
@@ -6474,10 +6415,12 @@ const RESOURCE_OBSERVATION_MIN_LEASE_SECONDS = 10 * 60;
 const RESOURCE_OBSERVATION_MAX_LEASE_SECONDS = 2 * 60 * 60;
 
 /**
- * Read-only Resource observation follows the host's enabled Resource Shape
- * capability unless the operator explicitly overrides it with `0` or `1`.
+ * Read-only legacy Resource observation is part of the explicit drain lane.
+ * Within that lane it follows the retained shape set unless the operator
+ * explicitly overrides it with `0` or `1`.
  */
 export function resourceObservationEnabled(env: CloudflareWorkerEnv): boolean {
+  if (!platformLegacyResourceDrainEnabled(env)) return false;
   const configured = env.TAKOSUMI_RESOURCE_OBSERVATION_ENABLED;
   if (configured !== undefined) {
     return typeof configured === "string" && configured === "1";

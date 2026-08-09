@@ -79,30 +79,32 @@ dashboard は内部の用語をそのまま出さず、次の言葉を使いま�
 | permission         | Binding が許す操作を表す token です。トークンを取るときにこの範囲を要求します。                           | [Interface](../concepts/interfaces.md) |
 | Interface トークン | Interface を呼ぶための、最大 60 秒だけ有効な更新不可の token です。文字列形式は発行する host が決めます。 | [Interface](../concepts/interfaces.md) |
 
-## 型付きサービス
+## 旧 Resource / Form migration vocabulary
 
-型を宣言するだけでサービスを作る経路で出てくる言葉です。
+次の語は旧 Resource Shape / Form Host API、保存データ、migration runbook にだけ残る
+内部語彙です。Takosumi OSS の supported authoring surface や dashboard navigation を
+示しません。現行の利用者向け経路では、Git module と通常の OpenTofu provider を使います。
 
 | 用語              | 意味                                                                                                          | 詳しい説明                                  |
 | ----------------- | ------------------------------------------------------------------------------------------------------------- | ------------------------------------------- |
-| Resource          | module を書かずに、宣言だけで作れる型付きのサービスです。                                                     | [Resource](../concepts/resources.md)        |
-| Resource Shape    | Resource の型を指す、現在の API・provider・state での呼び名です。単に shape とも書きます。                    | [Resource](../concepts/resources.md)        |
-| Service Form      | 実装から切り離してサービスの型を定義したものです。Resource Shape はその現在の呼び名です。                     | [Service Form host API](./takoform-host.md) |
-| FormRef           | Service Form の定義 1 つを一意に指す識別子です。型名、版、定義の digest から成ります。                        | [Service Form host API](./takoform-host.md) |
-| Form Package      | 定義の schema と付随情報だけを収めた bundle です。                                                            | [API](./api.md)                             |
-| Form Registry     | endpoint が信頼して固定した Form Package の一覧です。                                                         | [API](./api.md)                             |
-| FormActivation    | どの Form を誰に公開するかを operator が決める記録です。                                                      | [API](./api.md)                             |
-| Space             | Resource API の名前空間です。platform 経由の要求では Workspace の id と一致させます。                         | [API](./api.md)                             |
-| Target            | Resource を実際に作る先です。                                                                                 | [Resource](../concepts/resources.md)        |
-| TargetPool        | operator が有効にした Target の候補をまとめたものです。                                                       | [Resource](../concepts/resources.md)        |
-| SpacePolicy       | どの Resource をどこへ解決してよいかのルールです。                                                            | [API](./api.md)                             |
-| Resolver          | 宣言された Resource から、使う実装と配置先を選ぶ仕組みです。                                                  | [Resource](../concepts/resources.md)        |
-| Adapter           | 選ばれた実装を実際のリソースにする部品です。preview、apply、import、observe、refresh、delete を受け持ちます。 | [Resource](../concepts/resources.md)        |
-| ResolutionLock    | 一度決まった実装と配置先を固定する記録です。                                                                  | [Resource](../concepts/resources.md)        |
-| NativeResource    | Adapter が実際に作った、provider 側のリソースの記録です。                                                     | [Resource](../concepts/resources.md)        |
-| observe           | Resource に対する読み取り専用の差分確認です。                                                                 | [Resource](../concepts/resources.md)        |
-| import            | すでにある実物を Takosumi の記録に取り込む操作です。                                                          | [Resource](../concepts/resources.md)        |
-| portability       | 選んだ解決の移しやすさの区分です。`portable` / `mostly_portable` / `partial` / `locked_in` があります。       | [Resource](../concepts/resources.md)        |
+| Resource          | 旧 API が保持する型付きサービスの記録 (migration only)。                                                     | [Resource migration](../concepts/resources.md) |
+| Resource Shape    | 旧 API・schema・state で Resource の型を表す名前 (migration only)。                                            | [Resource migration](../concepts/resources.md) |
+| Service Form      | Takoform 側の portable 概念。Takosumi OSS の Host ownership ではない。                                          | [Resource migration](../concepts/resources.md) |
+| FormRef           | Takoform の exact な Form 定義を指す識別子 (external Host vocabulary)。                                        | [Resource migration](../concepts/resources.md) |
+| Form Package      | Takoform の定義 schema と付随情報の bundle (external Host vocabulary)。                                       | [Resource migration](../concepts/resources.md) |
+| Form Registry     | external Host が信頼して固定する Form Package の一覧 (migration only)。                                      | [Resource migration](../concepts/resources.md) |
+| FormActivation    | external Host/operator の Form 公開記録 (migration only)。                                                    | [Resource migration](../concepts/resources.md) |
+| Space             | 旧 Resource API の namespace (migration only)。                                                              | [Resource migration](../concepts/resources.md) |
+| Target            | 旧 Resource を作る先の記録 (migration only)。                                                                | [Resource migration](../concepts/resources.md) |
+| TargetPool        | 旧 operator target 候補の記録 (migration only)。                                                             | [Resource migration](../concepts/resources.md) |
+| SpacePolicy       | 旧 Resource の配置制約 (migration only)。                                                                    | [Resource migration](../concepts/resources.md) |
+| Resolver          | 旧 Resource の実装・配置選択部品 (migration only)。                                                         | [Resource migration](../concepts/resources.md) |
+| Adapter           | 旧 Resource backend adapter (migration only)。                                                              | [Resource migration](../concepts/resources.md) |
+| ResolutionLock    | 旧 Resource の実装・配置固定記録 (migration only)。                                                         | [Resource migration](../concepts/resources.md) |
+| NativeResource    | 旧 adapter が作った provider 側 resource の記録 (migration only)。                                           | [Resource migration](../concepts/resources.md) |
+| observe           | 旧 Resource の読み取り専用差分確認 (migration only)。                                                        | [Resource migration](../concepts/resources.md) |
+| import            | 旧 Resource 台帳へ既存実物を取り込む操作 (migration only)。                                                   | [Resource migration](../concepts/resources.md) |
+| portability       | 旧 Resource 解決の移しやすさ (migration only)。                                                             | [Resource migration](../concepts/resources.md) |
 | Compatibility API | S3 や OCI のような標準プロトコルを、範囲と版を決めて受け付ける入口です。                                      | [API](./api.md)                             |
 
 ## 状態の読み方
@@ -124,7 +126,7 @@ dashboard は内部の用語をそのまま出さず、次の言葉を使いま�
 | surface                | 外から使える入口のまとまりです。`/api/v1` と `/v1` は別の surface です。                                                   | [API](./api.md)                         |
 | digest                 | 内容から計算した SHA-256 の指紋です。同じ内容なら必ず同じ値になります。                                                    | [API](./api.md)                         |
 | fail closed            | 判断がつかないときに、通さずに止める動き方です。                                                                           | [Interface](../concepts/interfaces.md)  |
-| lease                  | 同じ対象を 2 か所で同時に処理しないよう、担当を期限つきで確保する仕組みです。                                              | [Resource](../concepts/resources.md)    |
+| lease                  | 同じ対象を 2 か所で同時に処理しないよう、担当を期限つきで確保する仕組みです。                                              | [API](./api.md)                         |
 | CAS (compare-and-swap) | 更新の直前に、読んだときの版のままかを確かめ、変わっていたら書き込まない方式です。                                         | [API](./api.md)                         |
 | cursor                 | 一覧の続きを読むための不透明な token です。中身は解釈せず、次の要求にそのまま渡します。                                    | [API](./api.md)                         |
 

@@ -12,7 +12,7 @@ Takosumi はクラウド API の代わりではありません。OpenTofu / Terr
 | **Source**    | 登録した Git リポジトリと module の場所                 |
 | **Capsule**   | Source から作った、1 つの module のデプロイ単位         |
 | **Run**       | plan、apply、refresh、destroy など 1 回の実行           |
-| **Resource**  | module を自分で書かず、種類と設定を指定して作るサービス |
+| **Interface** | デプロイしたものが提供する接続方法の宣言               |
 
 state、output、ログ、監査記録は Run の結果です。provider の API key などは
 **Connection** として別に保存し、必要な Run にだけ割り当てます。
@@ -38,28 +38,20 @@ Git に新しい commit が追加されても、自動では反映しません�
 詳しくは [Source と Capsule](./sources.md) と
 [実行モデル](./run-model.md)を参照してください。
 
-## Resource を作る
+## provider を使う
 
-Resource は、オブジェクトストレージや SQL データベースのようなサービスを、型と設定で
-要求する経路です。
+必要なサービスは、Git module が宣言する OpenTofu / Terraform provider で管理します。
+Cloudflare、AWS、Kubernetes、Takoform などはすべて通常の provider です。Takosumi は
+provider の接続情報を ProviderConnection / ProviderBinding から Run の間だけ runner に
+渡し、provider の state と実体は provider 側の契約に任せます。
 
-```text
-1. endpoint が対応する Resource の種類を確認
-2. 欲しい種類と設定を宣言
-3. Takosumi が利用可能な配置先と実装を選択
-4. plan を確認して apply
-5. 実際のサービスの状態と output を保存
-```
-
-使える Resource は運用者が決めます。Takosumi OSS は特定クラウドを強制せず、対応する
-実装が 0 個でも Git module の経路は使えます。Takoform はこの Resource 宣言を別の
-環境でも扱いやすくする形式の 1 つです。
-
-詳しくは [Resource](./resources.md) を参照してください。
+以前の Resource Shape / Form Host 経路は supported product ではありません。残る
+Resource API、schema、TargetPool、SpacePolicy は既存データを移行するための temporary
+migration internals です。[Resource の移行メモ](./resources.md) はこの扱いを説明します。
 
 ## デプロイしたものをつなぐ
 
-module と Resource は、接続先 URL や識別子などの非 secret 値を **Output** として
+module は、接続先 URL や識別子などの非 secret 値を **Output** として
 公開できます。別のデプロイから使う場合は、値の出どころと利用許可を Takosumi に
 記録します。
 
@@ -75,12 +67,12 @@ Takosumi では、デプロイしたものが提供する接続方法の説明�
 - secret の値は API から読み戻せず、Output やログにも載せません
 - apply の前に plan を作り、確認した計画を使います
 - Git の ref は実行前に commit へ固定します
-- Resource の配置先を決めたあと、別の実装へ黙って切り替えません
-- 読み取り専用の観測で差分が見つかっても、自動適用しません
+- provider の state と credential は Run の境界で分離します
+- Interface を宣言しただけでは InterfaceBinding の認可は増えません
 
 ## ソフトウェアと運用サービス
 
-このドキュメントは Takosumi OSS の共通動作を説明します。利用できる Resource、
+このドキュメントは Takosumi OSS の共通動作を説明します。hosted Form instance、
 保存容量、料金、SLA は endpoint の運用者が決めます。公式ホスティング固有の内容は
 Takosumi Cloud のドキュメントに分けています。
 

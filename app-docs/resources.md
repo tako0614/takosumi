@@ -1,219 +1,74 @@
-# Takosumi Cloud Resources
+# Resources and providers
 
-Takosumi Cloud は、Cloud が提供する deployment target 上でアプリ、サービス、データリソースを
-提供するホスト型の Takosumi for Operator です。`EdgeWorker` は複数あるサービス形態
-(service form) の一つです。
+Takosumi Cloud で使う cloud resource は、Git repository の OpenTofu module が宣言し、
+選択した provider が作成します。Takosumi は provider を置き換えず、Run と state の境界を
+提供します。
 
-```text
-Takosumi Cloud Resources =
-  EdgeWorker
-  + ContainerService
-  + ObjectBucket
-  + KVStore
-  + SQLDatabase
-  + Queue
-  + VectorIndex
-  + DurableWorkflow
-  + StatefulActorNamespace
-  + Schedule
-  + AI Gateway
-  + VerifiedDomain
-  + Cloud routes / URLs / secrets
-  + USD-denominated billing / usage metering
-  + OpenTofu deploys
-```
+## どの provider を使えるか
 
-## Product Vocabulary
+module の `required_providers` が選択の正本です。例えば次の経路を同じ Workspace で
+利用できます。
 
-通常のランディングページや画面では次の用語を使います。
+- 自分の Cloudflare、AWS、その他の cloud account
+- self-host または third-party provider endpoint
+- 公開後の Takosumi Cloud Takoform Host
 
-- App / Service
-- Edge Worker
-- Container
-- Bindings
-- Routes
-- Default URL
-- Custom Domain
-- Secrets
-- KV
-- Object Storage
-- Database
-- Queue
-- AI Gateway
-- Durable Workflow
-- Vector Index
-- Stateful Actor Namespace
-- Schedule
+Takosumi Cloud は provider 名から account、region、secret、価格を推測しません。
+Connection を作り、module の provider requirement へ Binding します。credential は Run の
+間だけ runner に materialize され、plan 表示、Output、Interface、ログへ書きません。
 
-公開時の利用可能性は[Cloud Launch ContractとGA Gate](./index.md#cloud-launch-contract-と-ga-gate)の
-単一matrixが正本です。上の10 exact Form-backed offeringとAI Gateway / VerifiedDomainは同じ
-all-or-nothing Cloud launch scopeにあり、集合全体のevidence activationまではPre-GAです。
-この商用selectionはForm maturityやHost Supportを変更しません。
-
-## Runtime Architecture
-
-`EdgeWorker` はエッジで動く JavaScript / TypeScript アプリのサービス形態です。Takosumi
-Cloud では Cloudflare Workers for Platforms と Takosumi が管理するディスパッチ層で
-実装できます。
-
-これは Cloud の実装上の詳細です。Cloud のリソースモデルは `EdgeWorker` に限定しません。
-OCI イメージで動くサービスは `ContainerService`、オブジェクトストレージは `ObjectBucket`、
-アプリデータベースは `SQLDatabase`、永続ワークフローは別のシェイプとして扱います。
-
-Object Storage の作成時には `standard` と `infrequent_access` の 2 つから storage class を
-選べます。省略時は `standard` です。この選択は新規 object の既定 class で、既存 object を
-暗黙に移動しません。`infrequent_access` は対応する公式 target が利用可能な場合だけ preview
-を通過し、価格差と retrieval を含む課金条件は apply 前の quote に表示します。
+## Lifecycle
 
 ```text
-Edge JS app:
-  EdgeWorker -> Cloudflare Workers for Platforms dispatch namespace
-
-Container service:
-  ContainerService -> Cloudflare Containers or another operator target
-
-Durable user workflow:
-  DurableWorkflow -> Dynamic Workers + @cloudflare/dynamic-workflows where available
-
-Operator/internal jobs:
-  Cloudflare Workflows
+repository commit
+  → provider requirements and variables
+  → reviewed OpenTofu plan
+  → provider apply
+  → versioned state and Output
 ```
 
-すべての Cloud Resource の control-plane 操作は、実際のバックエンド API を
-叩く前に canonical `/v1/resources` Deploy API へ収束します。Dashboard、直接 API、
-portable clients はこの lifecycle をそのまま呼びます。インストールされた
-Compatibility API profile がある場合も、protocol request を typed Resource request へ
-変換して同じ preview / reviewed apply / delete を呼び、manager や parallel lifecycle
-store は所有しません。
+更新と削除も同じ graph で行います。Dashboard の別操作や data endpoint から同じ object を
+作り直しません。provider が失敗した場合は Run に診断を残し、別 backend へ勝手に迂回せず
+fail closed します。
 
-```text
-compat control request -> typed Resource request
-portable client / direct API / Dashboard -> typed Resource request
-  -> /v1/resources preview + reviewed apply/delete
-  -> auth + Space/Workspace ownership
-  -> TargetPool + Policy + ResolutionLock
-  -> exact OSS OfferingSelection
-  -> closed CommercialOfferingBinding + versioned price quote + reserve
-  -> Cloud adapter + selected manager configured check
-  -> backend API
-  -> canonical Resource / NativeResource / Output / audit + capture/release
+## Cloud catalog
 
-compat data request
-  -> Ready canonical Resource + authorized Interface / NativeResource
-  -> usage guard + selected manager
-  -> backend data plane
-```
+認証済み `GET /v1/cloud/catalog` は、現在の Workspace で利用できる hosted service、価格、
+protocol、availability を返します。catalog は discovery と表示のための情報で、OpenTofu
+state や provider graph の authority ではありません。
 
-マネージャが未設定のサービス形態は、使用量の事前課金より前に安全側に停止します
-。つまり ContainerService などのバックエンドがまだ公式 Cloud に
-入っていない場合、クレジットだけ引かれたり、別の互換経路へ暗黙に迂回したりしません。
-Worker route contract は backend resource ではなく、Ready `EdgeWorker` が持つ
-canonical system URL に対する `http.route` Interface と exact Principal Binding です。
-route CRUD はこの共有 Interface authority を呼び、compatibility KV や backend route
-API を持ちません。custom domain は owner-account / Workspace に属する
-`VerifiedDomain` として所有確認・証明書状態を管理し、両方が current の場合だけ
-Interface route を active にします。
+次は別々に判定されます。
 
-この共通層では、Cloud のサービス形態ごとにマネージャ記述子を持ちます。
-記述子は Takosumi Cloud のサービスファミリ、使用量メーターファミリ、
-NativeResource type、現在のマネージャ実装を結びます。サービスファミリは
-`takosumi.edge_worker` のような安定した Cloud リソース契約で、使用量メーター
-ファミリは課金や互換性のための公開課金分類、マネージャは差し替え可能なバックエンド
-実装です。例えば `EdgeWorker` の現在のマネージャは Cloudflare Workers for Platforms
-dispatch namespace ですが、公開リソース名は `EdgeWorker` /
-`takosumi.edge_worker`、課金ファミリも `takosumi.edge_worker`、meter id は
-`takosumi:edge_worker:*` です。入口が異なっても課金 identity は変わりません。
-WfP は実装トークンであり、ユーザー向けのリソース名や課金単位にはしません。旧
-`cloudflare.workers_script` family は変更不可な過去の usage / invoice の再照合だけで
-読み取り、新しい使用量には書きません。
-同じ理由で、Cloud 内部の正規化リソース種別は `object_bucket` /
-`sql_database` / `durable_workflow` のようなサービス形態寄りの名前にします。
-`r2` や `d1` は backend-specific URL トークンや現在のバックエンドプレフィクスに限定し、
-共通の操作種別にはしません。
+- provider / protocol が公開済みか
+- Cloud backend と容量が構成済みか
+- commercial offering が有効か
+- Workspace の credit、quota、permission が足りるか
 
-EdgeWorker の現在の公式マネージャが Workers for Platforms dispatch namespace でも、
-公開 Resource identity は `EdgeWorker` のままです。将来マネージャを差し替える場合も、
-TargetPool / adapter / manager descriptor のエビデンスを変えます。
+いずれかが欠ける場合は、provider や billing backend を呼ぶ前に停止します。
 
-参考:
+## Output と Interface
 
-- [How Workers for Platforms works](https://developers.cloudflare.com/cloudflare-for-platforms/workers-for-platforms/how-workers-for-platforms-works/)
-- [Dynamic Workflows](https://developers.cloudflare.com/dynamic-workers/usage/dynamic-workflows/)
-- [R2 storage classes](https://developers.cloudflare.com/r2/buckets/storage-classes/)
+provider が返した typed Output は Run と state に記録されます。アプリが利用する接続情報は
+generic Interface として projection できます。
 
-## Delete And Cleanup
+Interface は endpoint や protocol document を表し、InterfaceBinding は誰が利用できるかを
+表します。bearer token、private key、provider credential を public Output や Interface
+document に入れません。表示された endpoint を利用し、hostname を推測しないでください。
 
-Takosumi Cloud が提供する Resource の削除は、何度実行しても結果が変わりません。
-すでにバックエンドが消えている場合も成功として扱い、同じ destroy を安全に再試行できます。後処理や destroy はクレジットを使い切った
-後も実行できます。
+## Takoform の提供状態
 
-Object Storage のようにデータ量で所要時間が変わるリソースは、削除を受理した後にバックグラウンド
-処理で中身を分割削除します。受理されたリソースはアクティブな一覧とデータプレーンから直ちに
-外れ、処理の完了までは同じ名前を再利用できません。削除は取り消せず、保存データも復元できません。
+Takoform は portable contract と OpenTofu/Terraform provider を所有します。Takosumi Cloud
+は official Host を提供する予定ですが、未公開 candidate を catalog に available として
+出しません。公開済みの exact contract、production adapter、billing/recovery、staging
+evidence がそろった後にだけ利用可能になります。
 
-ユーザー自身の ProviderConnection で作った BYOC リソースは、元のプロバイダの削除・保持
-ポリシーに従います。プロバイダが保持ロックや依存リソースを理由に拒否した場合、Takosumi は
-destroy の成功を偽装せず、Run を失敗として記録して修正後の再試行を可能にします。
+VM のような未対応 compute family は、対応済みと推測しません。現在の truth は hard-coded
+resource list ではなく認証済み catalog です。
 
-## Domains And Routes
+## Billing and deletion
 
-公開 HTTP surface には、所有権と lifecycle が異なる 2 種類の URL があります。
+有料 operation は実行前に quote、credit、spend limit を確認します。使用量は発生元
+Workspace と支払い owner に紐づきます。価格は [Pricing](./pricing.md) を参照してください。
 
-Capsule install の `public_endpoint` projection は、OSS hostname reservation authority
-が所有する Cloud URL です。Takosumi Cloud の既定ベースドメインは
-`app.takos.jp` で、現在の割り当て方式は `scoped` と `vanity` の 2 種類です。
-
-```text
-scoped: https://<workspace-handle>-<label>.app.takos.jp
-vanity: https://<label>.app.takos.jp
-```
-
-`scoped` は DNS 所有確認が不要で vanity 枠を消費しません。
-`vanity` は `<label>.<managed-base-domain>` を先着順で予約し、
-Workspace の変更不可な owner account の有限枠を 1 つ消費します。どちらもホスト名
-予約によるグローバル一意性、予約語、不正利用ポリシーの対象です。
-
-`scoped` は `<workspace-handle>-<label>.<managed-base-domain>`、`vanity` は
-`<label>.<managed-base-domain>` を予約します。
-重複・枠超過エラーは申請元の Workspace / Capsule 名を公開しません。
-ホスト名予約と vanity スロットは Capsule のライフタイムに属し、成功した
-Capsule destroy が予約を解放します。
-
-Cloud の `EdgeWorker` は別に、不透明で再現不能な canonical system URL を持ちます。
-その URL は Resource の `url` Output から取得します。
-クライアントは `ew-<hash>.<system-base-domain>` のような値を生成・推測してはいけません。
-この system URL は vanity hostname ではなく、Interface route の DELETE でも解放されません。
-
-EdgeWorker の route contract は、取得済み system URL のホストと明示 path を組み合わせた
-pattern だけを受理します。1 つの `EdgeWorker` につき active route は 1 つだけで、path
-wildcard は無し、または末尾 `*` 1 個だけです。host-only、複数・重複 route、infix wildcard、
-wildcard hostname、custom hostname は Interface を変更する前に拒否します。
-
-現在の route evidence は次の通りです。
-
-| Evidence         | Status   | Meaning                                                           |
-| ---------------- | -------- | ----------------------------------------------------------------- |
-| `system_url`     | Current  | Resource `url` Output から発見する opaque EdgeWorker URL          |
-| route pattern    | Current  | canonical host + explicit path + optional terminal `*`            |
-| `http.route`     | Current  | route id と strong ETag を持つ canonical Interface                |
-| InterfaceBinding | Current  | exact Principal に `edge.request` を許可する Binding              |
-| `custom_domains` | GA scope | active `VerifiedDomain` + certificate + exact Resource attachment |
-
-route CRUD は Interface / InterfaceBinding authority を呼びます。backend route API や別の
-hostname ownership ledger はありません。更新は strong ETag の CAS、DELETE
-は Binding を revoke して Interface を retire しますが、system URL や Capsule の
-hostname ownership は解放しません。
-
-ユーザー所有 custom domain は Cloud URL とは別の検証済みライフサイクルです。
-所有 challenge、証明書発行・更新、attach / detach、expiry を別々に記録し、pending / failed /
-expired 状態を利用可能な custom domain として保存・表示しません。
-
-アプリのインストールやストアでは、この値は `installExperience` の
-`public_endpoint` プロジェクションから普通の OpenTofu 変数へ渡します。例えば
-`subdomain` は Cloud URL の label、`url` は Cloud URL または通常の OpenTofu
-変数です。ユーザー所有 URL を
-BYOC provider に渡すことはできますが、Takosumi Cloud deployment target の custom domain として
-自動有効化せず、`VerifiedDomain` の確認を要求します。
-Takosumi は `worker_name` や `app_url` という変数名だけを見て意味を推論しません。
-store が明示したプロジェクションと input `format` だけが Dashboard の入力 UX と
-ホスト名予約の根拠です。
+既存 object の削除は、作成に使った provider graph から行います。残高不足を理由に cleanup
+を不可能にせず、曖昧な backend outcome は成功扱いしません。

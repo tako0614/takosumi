@@ -11,7 +11,6 @@ import {
 import { DEPLOY_CONTROL_ACTIVITY_ENDPOINTS } from "../../../core/api/deploy_control_activity_routes.ts";
 import { DEPLOY_CONTROL_RESOURCE_FORM_PIN_ENDPOINTS } from "../../../core/api/deploy_control_resource_form_pin_routes.ts";
 import { PORTABLE_FORM_HOST_ENDPOINTS } from "../../../core/api/form_host_routes.ts";
-import { RESOURCE_SHAPE_KINDS } from "../../../contract/resource-shape.ts";
 import { TAKOFORM_FORM_HOST_FORM_DEFINITIONS_PATH } from "../../../contract/form-host-interoperability.ts";
 import {
   ALWAYS_MOUNTED_ENDPOINTS,
@@ -68,32 +67,33 @@ test("all-mounted capabilities and openapi cover the same endpoint set", () => {
   );
 });
 
-test("Resource Shape OpenAPI publishes fail-closed TargetPool deletion", () => {
+test("legacy Resource Shape and FormActivation paths are not published", () => {
   const openapi = createTakosumiOpenApiDocument(ALL_MOUNTED);
-  const operation = openapi.paths["/v1/target-pools/{name}"]?.delete;
-  assert.ok(operation);
-  assert.ok(operation.responses["204"]);
-  assert.ok(operation.responses["409"]);
-  assert.ok(operation.responses["502"]);
-  assert.deepEqual(
-    operation.parameters?.map((parameter) => parameter.name),
-    ["name", "space"],
+  for (const path of [
+    "/v1/resources",
+    "/v1/resources/{kind}/{name}",
+    "/v1/target-pools/{name}",
+    "/v1/space-policies/{name}",
+    "/v1/form-availability",
+    "/v1/form-activations",
+    "/v1/form-activations/{id}",
+  ]) {
+    assert.equal(openapi.paths[path], undefined, path);
+  }
+  assert.equal(
+    openapi.paths["/v1/interfaces"]?.get !== undefined,
+    true,
   );
 });
 
-test("Resource Shape OpenAPI publishes the canonical bundled shape set", () => {
+test("legacy Resource Shape response schema is not published", () => {
   const openapi = createTakosumiOpenApiDocument(ALL_MOUNTED);
   const resource = openapi.components.schemas.ResourceShapeResponse;
-  const capabilities = openapi.components.schemas.TakosumiResourceCapabilities;
-  assert.ok(resource);
-  assert.ok(capabilities);
-
-  assert.deepEqual(resource.properties.kind.examples, RESOURCE_SHAPE_KINDS);
-  assert.deepEqual(capabilities.required, ["Stack", ...RESOURCE_SHAPE_KINDS]);
-  assert.deepEqual(Object.keys(capabilities.properties), [
-    "Stack",
-    ...RESOURCE_SHAPE_KINDS,
-  ]);
+  assert.equal(resource, undefined);
+  // The generic product-capability envelope remains part of the public
+  // contract. Runtime discovery reports every legacy resource kind as false;
+  // hiding this reusable schema would also remove the shape of that envelope.
+  assert.ok(openapi.components.schemas.TakosumiResourceCapabilities);
 });
 
 test("public OpenAPI does not publish internal Resource Run recovery evidence", () => {
@@ -112,21 +112,8 @@ test("public OpenAPI does not publish internal Resource Run recovery evidence", 
   );
 });
 
-test("Resource Shape OpenAPI publishes bounded list pagination", () => {
+test("legacy Resource Shape response schemas are not part of discovery", () => {
   const openapi = createTakosumiOpenApiDocument(ALL_MOUNTED);
-  for (const path of [
-    "/v1/resources",
-    "/v1/target-pools",
-    "/v1/space-policies",
-  ] as const) {
-    const operation = openapi.paths[path]?.get;
-    assert.ok(operation, path);
-    assert.deepEqual(
-      operation.parameters?.map((parameter) => parameter.name),
-      ["space", "limit", "cursor"],
-      path,
-    );
-  }
   for (const schemaName of [
     "ListResourceShapesResponse",
     "ListTargetPoolsResponse",
@@ -134,23 +121,8 @@ test("Resource Shape OpenAPI publishes bounded list pagination", () => {
     "ListResourceEventsResponse",
   ] as const) {
     const schema = openapi.components.schemas[schemaName];
-    assert.ok(schema, schemaName);
-    assert.deepEqual(schema.properties.nextCursor, { type: "string" });
+    assert.equal(schema, undefined, schemaName);
   }
-
-  const events = openapi.paths["/v1/resources/{kind}/{name}/events"]?.get;
-  assert.ok(events);
-  assert.deepEqual(
-    events.parameters?.map((parameter) => parameter.name),
-    ["kind", "name", "space", "limit", "cursor"],
-  );
-  assert.deepEqual(
-    openapi.components.schemas.ListResourceEventsResponse.properties.events,
-    {
-      type: "array",
-      items: { $ref: "#/components/schemas/ResourceEvent" },
-    },
-  );
 });
 
 test("portable Form Definition keeps its exact selector in the OpenAPI inventory", () => {
@@ -179,37 +151,18 @@ test("portable Form Definition keeps its exact selector in the OpenAPI inventory
   );
 });
 
-test("FormActivation OpenAPI publishes exact noncommercial operator contracts", () => {
+test("FormActivation schemas and operator paths are hidden from discovery", () => {
   const openapi = createTakosumiOpenApiDocument(ALL_MOUNTED);
   const collection = openapi.paths["/v1/form-activations"];
   const member = openapi.paths["/v1/form-activations/{id}"];
-  assert.ok(collection?.post);
-  assert.ok(collection.get);
-  assert.ok(member?.get);
-  assert.ok(member.patch);
-  assert.deepEqual(
-    collection.get.parameters?.map((parameter) => parameter.name),
-    ["limit", "cursor"],
-  );
-  assert.deepEqual(member.patch.security, [{ deployControlBearer: [] }]);
+  assert.equal(collection, undefined);
+  assert.equal(member, undefined);
 
   const activation = openapi.components.schemas.FormActivation;
-  assert.ok(activation);
-  assert.deepEqual(activation.properties.identity, {
-    $ref: "#/components/schemas/InstalledFormReference",
-  });
-  for (const commercialField of [
-    "price",
-    "sku",
-    "billing",
-    "capacity",
-    "sla",
-  ]) {
-    assert.equal(activation.properties[commercialField], undefined);
-  }
+  assert.equal(activation, undefined);
   assert.equal(
-    openapi.components.schemas.CreateFormActivationRequest.additionalProperties,
-    false,
+    openapi.components.schemas.CreateFormActivationRequest,
+    undefined,
   );
 });
 
@@ -413,38 +366,10 @@ test("openapi component schema refs are resolved", () => {
   }
 });
 
-test("deployment quote OpenAPI preserves exact versioned price evidence", () => {
+test("legacy Resource deployment quote schema is not published", () => {
   const openapi = createTakosumiOpenApiDocument(ALL_MOUNTED);
   const quote = openapi.components.schemas.ResourceDeploymentQuote;
-  const line = quote.properties.lineItems.items;
-
-  for (const field of [
-    "catalogId",
-    "catalogVersion",
-    "offeringId",
-    "offeringVersion",
-    "offeringSelection",
-    "region",
-  ]) {
-    assert.ok(quote.properties[field], `quote ${field} missing`);
-  }
-  for (const field of [
-    "sku",
-    "skuVersion",
-    "taxTreatment",
-    "invoiceDescription",
-    "meterId",
-    "meterIdPrefix",
-    "meterKind",
-    "unit",
-    "billingUnit",
-    "minimumChargeUsdMicros",
-    "unitPriceUsdMicros",
-    "amountUsdMicros",
-  ]) {
-    assert.ok(line.properties[field], `quote line ${field} missing`);
-  }
-  assert.equal(line.additionalProperties, false);
+  assert.equal(quote, undefined);
 });
 
 test("customer-safe process openapi schemas are concrete", () => {

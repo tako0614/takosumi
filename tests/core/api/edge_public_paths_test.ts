@@ -60,29 +60,24 @@ test("every session-exposed route path is routed by the platform gate", () => {
   }
 });
 
-test("the routes the previous hand-written gate missed are routed", () => {
-  // Regression pins for the exact paths that were advertised and 404ing.
-  assert.equal(edgeApiPathExposure("/v1/form-availability"), "session");
+test("legacy Flow-B paths stay off the default edge gate", () => {
+  for (const path of [
+    "/v1/form-availability",
+    TAKOFORM_FORM_HOST_WELL_KNOWN_PATH,
+    "/apis/forms.takoform.com/v1alpha1/forms",
+    `${TAKOFORM_FORM_HOST_FORM_DEFINITIONS_PATH}/ObjectBucket`,
+    "/apis/forms.takoform.com/v1alpha1/resources/EdgeWorker/site",
+    "/v1/resources/ObjectBucket/site",
+    "/v1/target-pools/default",
+    "/v1/space-policies/default",
+    "/v1/form-activations",
+  ]) {
+    assert.equal(edgeApiPathExposure(path), undefined, path);
+  }
+  // The generic Interface API is not part of Flow-B and remains session-routed.
+  assert.equal(edgeApiPathExposure("/v1/interfaces"), "session");
   assert.equal(
-    edgeApiPathExposure(TAKOFORM_FORM_HOST_WELL_KNOWN_PATH),
-    "public",
-  );
-  assert.equal(
-    edgeApiPathExposure("/apis/forms.takoform.com/v1alpha1/forms"),
-    "session",
-  );
-  assert.equal(
-    edgeApiPathExposure(`${TAKOFORM_FORM_HOST_FORM_DEFINITIONS_PATH}/ObjectBucket`),
-    "session",
-  );
-  assert.equal(
-    edgeApiPathExposure(
-      "/apis/forms.takoform.com/v1alpha1/resources/EdgeWorker/site",
-    ),
-    "session",
-  );
-  assert.equal(
-    edgeApiPathExposure("/apis/forms.takoform.com/v1alpha1/interfaces"),
+    edgeApiPathExposure("/v1/interfaces/if_1/bindings"),
     "session",
   );
 });
@@ -95,7 +90,7 @@ test("account-plane and operator-only surfaces stay off the edge gate", () => {
   assert.equal(edgeApiPathExposure("/metrics"), undefined);
 });
 
-test("the portable Form host facade is part of the published route inventory", () => {
+test("the retained portable Form host facade stays out of edge discovery", () => {
   const resourceShape = ROUTE_FAMILIES.find(
     (family) => family.id === "resource-shape",
   );
@@ -107,4 +102,9 @@ test("the portable Form host facade is part of the published route inventory", (
     true,
   );
   assert.equal(paths.includes("/v1/form-availability"), true);
+  assert.equal(
+    edgeExposureForEndpointPath(TAKOFORM_FORM_HOST_WELL_KNOWN_PATH),
+    "off",
+  );
+  assert.equal(edgeExposureForEndpointPath("/v1/form-availability"), "off");
 });

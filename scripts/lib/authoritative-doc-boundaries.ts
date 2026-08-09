@@ -156,21 +156,6 @@ const CLOUD_LAUNCH_FORM_OFFERINGS = [
   "Schedule",
 ] as const;
 
-const CLOUD_LAUNCH_PUBLIC_SERVICES = [
-  "Edge Worker",
-  "Object Storage",
-  "KV",
-  "Database",
-  "Queue",
-  "Vector Index",
-  "Durable Workflow",
-  "Container",
-  "Stateful Actor Namespace",
-  "Schedule",
-  "AI Gateway",
-  "Verified custom domain",
-] as const;
-
 export function findAuthoritativeDocViolations(
   sources: readonly AuthoritativeDocSource[],
 ): AuthoritativeDocViolation[] {
@@ -285,15 +270,19 @@ export function findAuthoritativeDocViolations(
   for (const path of ["app-docs/index.md", "app-docs/en/index.md"]) {
     const source = byPath.get(path);
     if (!source) continue;
-    for (const service of CLOUD_LAUNCH_PUBLIC_SERVICES) {
-      if (source.content.toLowerCase().includes(service.toLowerCase()))
-        continue;
+    if (
+      !/authenticated[\s\S]{0,160}Cloud catalog|認証済み[\s\S]{0,160}Cloud catalog/iu.test(
+        source.content,
+      ) ||
+      !/`available`/u.test(source.content)
+    ) {
       violations.push({
-        ruleId: "cloud-docs-ga-service-omitted",
+        ruleId: "cloud-docs-catalog-authority-missing",
         path,
         line: 1,
-        message: `hosted Cloud availability matrix must include ${service}`,
-        excerpt: service,
+        message:
+          "hosted Cloud availability must come from the authenticated catalog and its available field",
+        excerpt: "authenticated Cloud catalog: available",
       });
     }
     const staleStatus =

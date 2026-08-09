@@ -146,34 +146,6 @@ const FINAL_PUBLIC_CONCEPTS = [
   "AuditEvent",
 ] as const;
 
-const CLOUD_LAUNCH_FORM_OFFERINGS = [
-  "EdgeWorker",
-  "ObjectBucket",
-  "KVStore",
-  "SQLDatabase",
-  "Queue",
-  "VectorIndex",
-  "DurableWorkflow",
-  "ContainerService",
-  "StatefulActorNamespace",
-  "Schedule",
-] as const;
-
-const CLOUD_LAUNCH_PUBLIC_SERVICES = [
-  "Edge Worker",
-  "Object Storage",
-  "KV",
-  "Database",
-  "Queue",
-  "Vector Index",
-  "Durable Workflow",
-  "Container",
-  "Stateful Actor Namespace",
-  "Schedule",
-  "AI Gateway",
-  "Verified custom domain",
-] as const;
-
 test("Takosumi public docs are rebuilt around the current public surface", async () => {
   for (const path of REQUIRED_PUBLIC_DOCS) {
     const entry = await stat(new URL(path, ROOT));
@@ -199,36 +171,29 @@ test("Takosumi public docs are rebuilt around the current public surface", async
     /OpenTofu control plane|OpenTofu\/Terraform control plane/,
   );
   assert.match(docs, /plain OpenTofu(?:\s*\/\s*Terraform)? (?:module|source)/);
-  assert.match(docs, /Compatibility API framework/);
   assert.match(docs, /compatibility_profiles|compatibilityProfiles/);
-  assert.match(
-    docs,
-    /Cloud が提供する Resource|Cloud-provided Resource|Cloud resources/i,
-  );
-  assert.match(docs, /same hosted Cloud origin|同じ hosted Cloud origin/);
-  assert.match(docs, /Cloud extension boundary|Cloud extension の境界/);
-  assert.match(docs, /sole lifecycle authority|唯一の lifecycle authority/);
+  assert.match(docs, /ordinary provider|通常の provider|通常の OpenTofu provider/);
+  assert.match(docs, /provider control plane|provider graph/);
+  assert.match(docs, /second resource ledger|別の resource ledger/);
+  assert.doesNotMatch(docs, /Compatibility API framework/);
+  assert.doesNotMatch(docs, /Resource Shape API/);
   for (const concept of FINAL_PUBLIC_CONCEPTS) {
     assert.match(docs, new RegExp(`\\b${concept}\\b`), `missing ${concept}`);
   }
 });
 
-test("hosted Cloud docs keep current usage identity provider neutral", async () => {
+test("hosted Cloud docs keep lifecycle provider-owned", async () => {
   for (const path of ["app-docs/resources.md", "app-docs/en/resources.md"]) {
     const doc = await readText(new URL(path, ROOT));
-    assert.match(doc, /`takosumi\.edge_worker`/);
-    assert.match(doc, /`takosumi:edge_worker:\*`/);
-    assert.doesNotMatch(doc, /takosumi\.entrypoint=/);
-    assert.match(doc, /historical|過去/);
+    assert.match(doc, /required_providers/);
+    assert.match(doc, /provider (?:control plane|graph)/);
+    assert.match(doc, /authenticated[\s\S]{0,120}catalog|認証済み[\s\S]{0,120}catalog/i);
+    assert.doesNotMatch(doc, /takosumi\.edge_worker|takosumi:edge_worker/);
+    assert.doesNotMatch(doc, /TargetPool|NativeResource|ResolutionLock/);
   }
 });
 
-test("Final Plan and hosted Cloud docs keep launch policy separate from Form maturity", async () => {
-  const finalPlan = await readText(
-    new URL("docs/internal/final-plan.md", ROOT),
-  );
-  const publicOffering = section(finalPlan, "## 11.", "## 12.");
-  const gaContract = section(finalPlan, "## 14.", "## 15.");
+test("hosted Cloud availability stays catalog-driven and separate from Form maturity", async () => {
   const indexes = await Promise.all(
     ["app-docs/index.md", "app-docs/en/index.md"].map((path) =>
       readText(new URL(path, ROOT)),
@@ -238,68 +203,36 @@ test("Final Plan and hosted Cloud docs keep launch policy separate from Form mat
   const resources = await readText(new URL("app-docs/en/resources.md", ROOT));
   const endpoints = await readText(new URL("app-docs/en/endpoints.md", ROOT));
 
-  assert.match(publicOffering, /Cloud-owned all-or-nothing launch policy/);
-  assert.match(publicOffering, /Pre-GA \(one Cloud commercial launch set\)/);
-  assert.match(publicOffering, /not a Takoform maturity class/);
-  assert.match(
-    gaContract,
-    /commercial launch only; the selection grants no Takoform maturity or approval/,
-  );
-  assert.doesNotMatch(gaContract, /approved standard definition|Service Form Stable set/);
-  assert.doesNotMatch(publicOffering, /\nStable:\s|\nPreview:\s/);
-  for (const service of CLOUD_LAUNCH_FORM_OFFERINGS) {
-    assert.ok(
-      publicOffering.includes(service),
-      `section 11 omitted ${service}`,
-    );
-    assert.ok(gaContract.includes(service), `section 14 omitted ${service}`);
-  }
-  for (const service of ["AI Gateway", "VerifiedDomain"]) {
-    assert.ok(
-      publicOffering.includes(service),
-      `section 11 omitted ${service}`,
-    );
-    assert.ok(gaContract.includes(service), `section 14 omitted ${service}`);
-  }
-
   for (const index of indexes) {
-    assert.match(index, /all-or-nothing launch(?:契約| contract)/);
     assert.match(index, /Pre-GA/);
     assert.match(index, /Form maturity/);
+    assert.match(index, /authenticated Cloud catalog|認証済み Cloud catalog/);
+    assert.match(index, /`available`/);
     assert.doesNotMatch(
       index,
       /seven\s+Stable|7\s*つの Stable|eight offerings/,
     );
     assert.doesNotMatch(index, /\|\s*(?:Stable|Preview)\s*\|/);
-    for (const service of CLOUD_LAUNCH_PUBLIC_SERVICES) {
-      assert.ok(
-        index.toLowerCase().includes(service.toLowerCase()),
-        `hosted availability matrix omitted ${service}`,
-      );
-    }
   }
 
   assert.match(pricing, /unpriced meter, inactive catalog, missing manager/);
-  assert.match(resources, /public Resource identity remains `EdgeWorker`/);
-  assert.match(resources, /exact OSS OfferingSelection/);
-  assert.match(resources, /closed CommercialOfferingBinding/);
-  assert.match(
-    endpoints,
-    /ten exact Form-backed offerings\s+and two\s+non-Form services/,
-  );
-  assert.doesNotMatch(endpoints, /Preview service forms|seven service forms/);
+  assert.match(resources, /hard-coded resource list/);
+  assert.match(resources, /unpublished candidate is\s+never marked available/);
+  assert.match(endpoints, /data paths?, not creation APIs?|not an object lifecycle API/);
+  assert.match(endpoints, /\/compat\/s3\/v1/);
+  assert.match(endpoints, /\/gateway\/ai\/v1/);
+  assert.doesNotMatch(endpoints, /Resource Shape|TargetPool|NativeResource/);
 });
 
 test("Form package operations require exact Host Support facts, not retired admission authority", async () => {
   const runbook = await readText(
     new URL("docs/operations/form-package-installation.md", ROOT),
   );
-  assert.match(runbook, /exact `FormActivation` with principal audience/);
-  assert.match(runbook, /none is a current activation authority or approval vote/);
-  assert.doesNotMatch(
-    runbook,
-    /Production standard-form activation|signed host\/provider\/admission reports/,
-  );
+  assert.match(runbook, /superseded/);
+  assert.match(runbook, /(?:does not|no longer) host(?:s)? a Form Registry/);
+  assert.match(runbook, /Takosumi Cloud or another external\s+Host/);
+  assert.match(runbook, /exact `FormRef` and `packageDigest`/);
+  assert.doesNotMatch(runbook, /exact `FormActivation` with principal audience/);
 });
 
 test("public docs explain generic OSS Offering selection without Cloud binding internals", async () => {
@@ -401,21 +334,17 @@ test("Takosumi internal authority docs stay outside the public docs surface", as
   const internalReadme = await readText(
     new URL("docs/internal/README.md", ROOT),
   );
-  assert.match(internalReadme, /intentionally excluded/);
-  assert.match(internalReadme, /development authority documents/);
+  assert.match(internalReadme, /excluded from the published/);
+  assert.match(internalReadme, /current OSS contract/);
 
   const finalPlan = await readText(
     new URL("docs/internal/final-plan.md", ROOT),
   );
-  assert.match(finalPlan, /authoritative Takosumi product direction/);
-  assert.match(
-    finalPlan,
-    /Compatibility APIs are framework capabilities in standard Takosumi/,
-  );
-  assert.match(
-    finalPlan,
-    /specific compatibility\s+profile is enabled is reported through capabilities/,
-  );
+  assert.match(finalPlan, /historical planning record|superseded/);
+  assert.match(finalPlan, /present Takosumi OSS contract is \[Core Spec\]/);
+  assert.match(finalPlan, /TAKOSUMI_LEGACY_RESOURCE_DRAIN_ENABLED=1/);
+  assert.doesNotMatch(finalPlan, /authoritative Takosumi product direction/);
+  assert.doesNotMatch(finalPlan, /## 11\.|## 14\./);
 });
 
 test("source docs keep current source-module and modulePath vocabulary", async () => {
@@ -451,41 +380,78 @@ test("core spec names the final OSS model and excludes operator-provided capacit
   assert.match(coreSpec, /CredentialRecipe/);
   assert.match(coreSpec, /ProviderBinding/);
   assert.match(coreSpec, /StateVersion storage and locking/);
-  assert.match(coreSpec, /Compatibility API framework is core/);
+  assert.match(coreSpec, /Protocol-specific data paths may be composed/);
+  assert.match(coreSpec, /not a second deployment lifecycle/);
+  assert.doesNotMatch(coreSpec, /Compatibility API framework is core/);
   assert.match(coreSpec, /invoice \/ payment integration/);
   assert.match(coreSpec, /rated billing and payment enforcement/);
   assert.match(coreSpec, /operator-provided deployment target capacity/);
   assert.match(coreSpec, /official Takosumi native resource internals/);
   assert.match(coreSpec, /official SLA \/ support \/ abuse tooling/);
+  assert.match(coreSpec, /one supported\s+Git\/OpenTofu\/Terraform deployment flow/);
+  assert.match(coreSpec, /any runner-installable OpenTofu\/Terraform\s+provider/);
+  assert.match(coreSpec, /Takoform is an ordinary external provider/);
+  assert.match(coreSpec, /does not host a Form Registry/);
+  assert.match(coreSpec, /Takosumi Cloud or another external Host/);
+  assert.match(coreSpec, /TAKOSUMI_LEGACY_RESOURCE_DRAIN_ENABLED=1/);
+  assert.match(coreSpec, /recognized but retired operations return\s+`410`/);
+  assert.doesNotMatch(coreSpec, /Final Plan.*current direction|Final Plan.*authoritative/);
 });
 
 test("Service Form migration docs keep portable identity separate from the old Resource wire", async () => {
-  const finalPlan = await readText(
-    new URL("docs/internal/final-plan.md", ROOT),
-  );
   const coreSpec = await readText(new URL("docs/internal/core-spec.md", ROOT));
   const conformance = await readText(
     new URL("docs/internal/core-conformance.md", ROOT),
   );
 
-  for (const doc of [finalPlan, coreSpec]) {
+  for (const doc of [coreSpec]) {
     assert.match(doc, /forms\.takoform\.com\/v1alpha1/);
     assert.match(doc, /0\.0\.0-legacy\.1/);
     assert.match(doc, /packageDigest/);
-    assert.match(doc, /historical package evidence alone/);
+    assert.match(doc, /historical package evidence alone/i);
   }
 
-  assert.match(finalPlan, /"packageDigest": "sha256:<exact-package-digest>"/);
-  assert.match(
-    finalPlan,
-    /Form Package does not own\s+or rewrite this compatibility mapping/,
-  );
+  assert.match(coreSpec, /"packageDigest": "sha256:<exact-package-digest>"/);
   assert.match(
     coreSpec,
-    /old Resource wire-to-FormRef mapping remains host-owned/,
+    /old Resource wire-to-FormRef mapping remains\s+migration data/,
   );
-  assert.match(conformance, /claimed its `tako0614` Public Registry namespace/);
-  assert.match(conformance, /registered GPG key `34FC18AC897FB709`/);
+  assert.match(
+    await readText(new URL("docs/operations/exact-formref-migration.md", ROOT)),
+    /old Resource wire-to-FormRef mapping remains\s+migration data/,
+  );
+  assert.match(conformance, /Takoform owns portable Form definitions/);
+  assert.match(conformance, /No first-party provider source, release, custody, or public mirror lane exists/);
+});
+
+test("current docs keep the legacy drain bounded and externalize Form hosting", async () => {
+  const paths = [
+    "docs/internal/core-spec.md",
+    "docs/reference/configuration.md",
+    "docs/operations/form-host-support.md",
+    "docs/operations/form-package-installation.md",
+    "docs/operations/exact-formref-migration.md",
+    "docs/operations/platform-worker-deploy.md",
+  ] as const;
+  const docs = await Promise.all(
+    paths.map(async (path) => ({ path, text: await readText(new URL(path, ROOT)) })),
+  );
+  const combined = docs.map(({ text }) => text).join("\n");
+
+  assert.match(combined, /TAKOSUMI_LEGACY_RESOURCE_DRAIN_ENABLED=1/);
+  assert.match(combined, /Resource.*list\/read.*events.*observe.*delete/s);
+  assert.match(combined, /TargetPool\/SpacePolicy.*GET.*HEAD.*DELETE/s);
+  assert.match(combined, /default(?:s)?[^\n]*`404`|`404`[^\n]*default/s);
+  assert.match(combined, /discovery[^\n]*(?:unavailable|remain unavailable)/i);
+  assert.match(combined, /writes[^\n]*(?:unavailable|remain unavailable|disabled)/i);
+  assert.match(combined, /Takosumi Cloud (?:or another external )?Host/i);
+  assert.match(combined, /ordinary provider/i);
+
+  const config = docs.find(({ path }) => path === "docs/reference/configuration.md")?.text ?? "";
+  assert.doesNotMatch(config, /TAKOSUMI_RESOURCE_SHAPES.*\/v1\/resources.*(?:出す|enable|publish)/is);
+  const runbook = docs.find(({ path }) => path === "docs/operations/form-package-installation.md")?.text ?? "";
+  assert.doesNotMatch(runbook, /POST\s+\/internal\/v1\/form-packages\/install/);
+  assert.doesNotMatch(runbook, /production.*FormActivation.*reviewed/i);
 });
 
 test("workspace packages stay private source modules", async () => {
@@ -631,12 +597,4 @@ async function readText(path: URL): Promise<string> {
 
 function docPath(...segments: readonly string[]): string {
   return ["docs", ...segments].join("/");
-}
-
-function section(content: string, start: string, end: string): string {
-  const startIndex = content.indexOf(start);
-  const endIndex = content.indexOf(end, startIndex + start.length);
-  assert.notEqual(startIndex, -1, `missing section start: ${start}`);
-  assert.notEqual(endIndex, -1, `missing section end: ${end}`);
-  return content.slice(startIndex, endIndex);
 }

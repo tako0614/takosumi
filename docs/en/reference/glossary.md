@@ -80,30 +80,33 @@ docs use a different name, read it back through this table.
 | permission       | A token for an operation a Binding allows. You request this range when taking a token.                             |
 | Interface token  | A non-refreshable token valid for at most 60 seconds when calling an Interface. Its string format is host-defined. |
 
-## Typed services
+## Retained Resource / Form migration vocabulary
 
-These words appear on the path that creates a service by declaring a type only.
+These terms remain only in the old Resource Shape / Form Host API, stored data,
+and migration runbooks. They do not describe a supported OSS authoring surface
+or dashboard navigation. The current user path is a Git module with ordinary
+OpenTofu providers.
 
 | Term              | Meaning                                                                                                                                        |
 | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| Resource          | A typed service you can create by declaration alone, without writing a module.                                                                 |
-| Resource Shape    | The name the current API, provider, and state use for a Resource's type. Also written simply as shape.                                         |
-| Service Form      | A service type defined separately from any implementation. Resource Shape is its current name.                                                 |
-| FormRef           | The identifier that points to exactly one Service Form definition. It is made of the type name, the version, and the digest of the definition. |
-| Form Package      | A bundle holding only the definition schema and its accompanying information.                                                                  |
-| Form Registry     | The list of Form Packages an endpoint trusts and has pinned.                                                                                   |
-| FormActivation    | The record in which an operator decides which Form is exposed to whom.                                                                         |
-| Space             | The namespace of the Resource API. On requests through the platform it must match the Workspace id.                                            |
-| Target            | Where a Resource is actually created.                                                                                                          |
-| TargetPool        | The set of candidate Targets an operator has enabled.                                                                                          |
-| SpacePolicy       | The rules for which Resource may resolve where.                                                                                                |
-| Resolver          | The mechanism that picks the implementation and the placement from a declared Resource.                                                        |
-| Adapter           | The part that turns a chosen implementation into a real resource. It handles preview, apply, import, observe, refresh, and delete.             |
-| ResolutionLock    | The record that pins an implementation and placement once decided.                                                                             |
-| NativeResource    | The record of the provider-side resource an Adapter actually created.                                                                          |
-| observe           | A read-only drift check against a Resource.                                                                                                    |
-| import            | The operation that takes an existing real resource into Takosumi's records.                                                                    |
-| portability       | How movable a chosen resolution is. The values are `portable` / `mostly_portable` / `partial` / `locked_in`.                                   |
+| Resource          | An old typed-service record retained for migration only.                                                                                       |
+| Resource Shape    | An old API/schema/state name for a Resource type; migration only.                                                                               |
+| Service Form      | Takoform portable vocabulary; not Takosumi OSS Host ownership.                                                                                  |
+| FormRef           | An exact Takoform definition identity used by an external Host.                                                                                |
+| Form Package      | A Takoform definition bundle used by an external Host.                                                                                          |
+| Form Registry     | An external Host's pinned Form Package records; migration only here.                                                                           |
+| FormActivation    | An external Host/operator Form exposure record; migration only here.                                                                           |
+| Space             | The old Resource API namespace; migration only.                                                                                                 |
+| Target            | The old placement record for a Resource; migration only.                                                                                        |
+| TargetPool        | The old set of operator-enabled candidate Targets; migration only.                                                                              |
+| SpacePolicy       | The old placement constraints for a Resource; migration only.                                                                                   |
+| Resolver          | The old Resource implementation/placement selector; migration only.                                                                           |
+| Adapter           | The old Resource backend adapter; migration only.                                                                                               |
+| ResolutionLock    | The old record pinning Resource implementation and placement; migration only.                                                                  |
+| NativeResource    | The old provider-side object record; migration only.                                                                                            |
+| observe           | The old Resource read-only drift check; migration only.                                                                                         |
+| import            | The old operation taking an existing object into the Resource ledger; migration only.                                                          |
+| portability       | The old Resource-resolution mobility classification; migration only.                                                                            |
 | Compatibility API | An entry point that accepts a standard protocol such as S3 or OCI within a decided scope and version.                                          |
 
 ## Reading status

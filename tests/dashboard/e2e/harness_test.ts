@@ -66,7 +66,7 @@ test("traffic policy keeps live optional probes but fails required routes and 5x
     shouldRecordResponseFailure(
       "live",
       origin,
-      `${origin}/v1/form-availability`,
+      `${origin}/v1/optional-capability-probe`,
       404,
     ),
   ).toBe(false);
@@ -114,7 +114,7 @@ test("mutation telemetry ignores external RUM and non-control-plane requests", (
     shouldRecordControlPlaneMutation(
       "live",
       origin,
-      `${origin}/v1/resources/ObjectBucket/assets`,
+      `${origin}/v1/optional-mutation-probe`,
       "DELETE",
     ),
   ).toBe(true);

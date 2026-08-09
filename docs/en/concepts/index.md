@@ -13,7 +13,7 @@ that execution.
 | **Source**    | a registered Git repository and module location                        |
 | **Capsule**   | one deployable module created from a Source                            |
 | **Run**       | one plan, apply, refresh, destroy, or other execution                  |
-| **Resource**  | a service requested by type and settings instead of a module you write |
+| **Interface** | a declaration of the connection a deployment provides       |
 
 State, outputs, logs, and audit records are results of Runs. Provider API keys
 and similar credentials are stored separately as **Connections** and assigned
@@ -40,29 +40,21 @@ revision exists; the next plan and apply remain explicit actions.
 Read [Sources and Capsules](./sources.md) and the
 [Run model](./run-model.md) for details.
 
-## Creating a Resource
+## Using providers
 
-A Resource requests a service such as object storage or a SQL database by type
-and settings.
+Services are managed by the OpenTofu/Terraform providers declared by the Git
+module. Cloudflare, AWS, Kubernetes, and Takoform are all ordinary providers.
+Takosumi delivers provider connections to the runner only for the Run and leaves
+provider state and provider-side objects to that provider's contract.
 
-```text
-1. Check which Resource types the endpoint supports.
-2. Declare the type and settings you need.
-3. Takosumi selects an available target and implementation.
-4. Review the plan and apply it.
-5. Save the real service state and outputs.
-```
-
-The operator decides which Resources are available. Takosumi OSS does not
-require one cloud, and the Git module path still works when no Resource
-implementation is installed. Takoform is one portable format for describing
-these Resource requests.
-
-Read [Resources](./resources.md) for details.
+The former Resource Shape / Form Host path is not a supported product surface.
+Retained Resource APIs, schemas, TargetPool, and SpacePolicy are temporary
+migration internals for existing data. The [Resource migration note](./resources.md)
+explains that boundary.
 
 ## Connecting deployments
 
-Modules and Resources can publish non-secret values, such as an endpoint URL or
+Modules can publish non-secret values, such as an endpoint URL or
 identifier, as **Outputs**. When another deployment uses a value, Takosumi keeps
 both its source and the authorization.
 
@@ -78,14 +70,13 @@ Read [State and outputs](./state-and-outputs.md) and
 - Secret values cannot be read back and never belong in Outputs or logs.
 - A plan is created before apply, and apply uses the reviewed plan.
 - A Git ref is pinned to a commit before execution.
-- After a Resource target is selected, Takosumi does not silently move it to a
-  different implementation.
-- Read-only observation never applies a detected change automatically.
+- Provider state and credentials stay within the Run boundary.
+- Declaring an Interface does not grant an InterfaceBinding authorization.
 
 ## Software and hosted operations
 
-These docs describe behavior shared by Takosumi OSS installations. Available
-Resources, storage limits, pricing, and SLAs are operator decisions. Details
+These docs describe behavior shared by Takosumi OSS installations. Hosted Form
+instances, storage limits, pricing, and SLAs are operator decisions. Details
 specific to the official hosted service stay in the Takosumi Cloud docs.
 
 See [Product boundaries](./boundaries.md) for the exact split.
