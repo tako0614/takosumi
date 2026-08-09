@@ -39,6 +39,16 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
       ],
     },
     {
+      text: "移行・旧 Resource / Form Host",
+      items: [
+        { text: "Resource の移行メモ", link: "/concepts/resources" },
+        {
+          text: "Takoform provider integration (migration)",
+          link: "/reference/takoform-host",
+        },
+      ],
+    },
+    {
       text: "リファレンス",
       items: [
         { text: "API", link: "/reference/api" },
@@ -88,6 +98,12 @@ const enSidebar: DefaultTheme.SidebarMulti = {
         { text: "Usage and billing", link: "/en/concepts/usage-and-billing" },
         { text: "Running it yourself", link: "/en/concepts/self-host" },
         { text: "Product boundaries", link: "/en/concepts/boundaries" },
+      ],
+    },
+    {
+      text: "Migration and historical notes",
+      items: [
+        { text: "Resource migration note", link: "/en/concepts/resources" },
       ],
     },
     {

@@ -1,5 +1,9 @@
 # Takoform provider integration
 
+> Migration boundary note: Takosumi OSS retired its embedded Resource/Form Host.
+> This page records the remaining provider/Host boundary; it is not a supported
+> Resource authoring guide.
+
 Takosumi OSS は Takoform Host を実装しません。Takoform は Cloudflare、AWS、その他の
 OpenTofu provider と同じく、repository の module が選ぶ外部 provider の一つです。
 

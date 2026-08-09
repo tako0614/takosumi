@@ -1,5 +1,8 @@
 # Internal Takosumi notes
 
+Status: internal memo. This material is not customer-facing product docs; it
+guides product-local implementation, conformance, and historical review.
+
 `docs/internal/` contains product-local authority notes and migration evidence.
 It is excluded from the published VitePress surface. The current OSS contract
 is [Core Spec](./core-spec.md); historical plans and decision records must link
@@ -18,6 +21,11 @@ The public build excludes `internal/**/*.md` and `operations/**/*.md`. When a
 contract becomes user-facing, copy only the stable external behavior into
 `docs/reference/` or `app-docs/`; do not expose private paths, credentials,
 evidence files, or closed Cloud implementation details.
+
+Promotion checklist: keep only stable external behavior, remove private paths,
+credentials, evidence references, and closed implementation details, update any
+English counterpart, and run the docs-boundary and docs-build checks before
+moving material into a published surface.
 
 Current authority order for this product is:
 
