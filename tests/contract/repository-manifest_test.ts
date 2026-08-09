@@ -840,4 +840,36 @@ test("the published v2.3 schema and parser agree on closed sourceBuild paths", (
   dotOutput.install.modules["."]!.sourceBuild.outputs = ["."];
   expect(validate(dotOutput)).toBe(false);
   expect(parseRepositoryManifestText(JSON.stringify(dotOutput)).ok).toBe(false);
+
+  const pathCases = [
+    { value: "web/ui", workingDirectory: true, output: true },
+    { value: ".", workingDirectory: true, output: false },
+    { value: " web/ui", workingDirectory: false, output: false },
+    { value: "web/ui ", workingDirectory: false, output: false },
+    { value: "web//ui", workingDirectory: false, output: false },
+    { value: "web/./ui", workingDirectory: false, output: false },
+    { value: "web/../ui", workingDirectory: false, output: false },
+    { value: "web\\ui", workingDirectory: false, output: false },
+    { value: "web/\u0000ui", workingDirectory: false, output: false },
+    { value: "web\nui", workingDirectory: false, output: false },
+    { value: "web\tui", workingDirectory: false, output: false },
+    { value: "web\u007fui", workingDirectory: false, output: false },
+  ] as const;
+  for (const pathCase of pathCases) {
+    const workingDirectoryDocument = structuredClone(document);
+    workingDirectoryDocument.install.modules[
+      "."
+    ]!.sourceBuild.commands[0]!.workingDirectory = pathCase.value;
+    expect(validate(workingDirectoryDocument)).toBe(pathCase.workingDirectory);
+    expect(
+      parseRepositoryManifestText(JSON.stringify(workingDirectoryDocument)).ok,
+    ).toBe(pathCase.workingDirectory);
+
+    const outputDocument = structuredClone(document);
+    outputDocument.install.modules["."]!.sourceBuild.outputs = [pathCase.value];
+    expect(validate(outputDocument)).toBe(pathCase.output);
+    expect(parseRepositoryManifestText(JSON.stringify(outputDocument)).ok).toBe(
+      pathCase.output,
+    );
+  }
 });

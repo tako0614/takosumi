@@ -588,7 +588,7 @@ function sourceBuildRelativePath(value: unknown): string | undefined {
     raw.startsWith("/") ||
     /^[A-Za-z]:(?:\/|$)/u.test(raw) ||
     raw.includes("\\") ||
-    raw.includes("\0")
+    /[\u0000-\u001f\u007f]/u.test(raw)
   ) {
     return undefined;
   }

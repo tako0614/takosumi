@@ -140,16 +140,20 @@
           }
         },
         "workingDirectory": {
-          "$ref": "https://takosumi.com/docs/schemas/repository-manifest-v2.1.schema.json#/$defs/modulePath"
+          "$ref": "#/$defs/sourceBuildRelativePath"
         }
       },
       "additionalProperties": false
     },
+    "sourceBuildRelativePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^(?!.*[\\u0000-\\u001F\\u007F])(?!\\s)(?!.*\\s$)(?:\\.|(?!/|\\./|\\.\\.?$|\\.\\.?/|[A-Za-z]:)(?!.*\\\\)(?!.*//)(?!.*/\\.\\.?(?:/|$))(?!.*/$).+)$"
+    },
     "sourceBuildOutputPath": {
       "allOf": [
-        {
-          "$ref": "https://takosumi.com/docs/schemas/repository-manifest-v2.1.schema.json#/$defs/modulePath"
-        },
+        { "$ref": "#/$defs/sourceBuildRelativePath" },
         { "not": { "const": "." } }
       ]
     },
