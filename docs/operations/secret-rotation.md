@@ -22,6 +22,14 @@ returns raw values from normal GET APIs.
 - A hosting extension's commercial or Cloud-service secrets do not become OSS
   environment variables.
 
+The generic route-scoped Run credential signer is
+`TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET`. It is a dedicated random secret of at
+least 32 bytes; it must not reuse `TAKOSUMI_RUN_TOKEN_SECRET`, a deploy-control
+bearer, or ProviderConnection material. The current wire accepts one active
+signer, so rotate only after draining active Runs or record that affected Runs
+will be rejected and retried. Verify one new plan/apply/destroy credential and
+one rejected pre-rotation token without recording either token body.
+
 ## Preparation
 
 1. Identify environment, secret class, owner, affected Workspace/Capsule or

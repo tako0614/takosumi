@@ -33,6 +33,7 @@ platformのsecret lifecycleではありません。
 | Platform OIDC signing keypair (`TAKOSUMI_ACCOUNTS_ES256_*`)                                     | 12 months       | 18 months        | Yes                                           |
 | Pairwise subject / launch / export secrets                                                      | 12 months       | 18 months        | Production only                               |
 | Internal accounts/control-plane bearer or handshake token pair                                  | 6 months        | 12 months        | Production only                               |
+| Run credential HMAC signer (`TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET`)                             | 6 months        | 12 months        | Drain or retry active Runs                    |
 | Upstream OAuth provider secrets                                                                 | 6 months        | 12 months        | No if client id unchanged                     |
 | Takosumi Cloud payment processor secrets                                                        | 6 months        | 12 months        | Takosumi Cloud only                           |
 | Operator default connection bootstrap credentials                                               | 6 months        | 12 months        | Production if plan/apply may mint credentials |
@@ -76,6 +77,11 @@ ProviderConnection / Capsule integration secret の rotation contract:
   ProviderConnection id / Secret ref、scope、旧 secret ref、新 secret ref、rotation timestamp を残す。
 - Run credential の mint は secret rotation event ではなく、Run / AuditEvent
   に phase / provider / ProviderConnection id だけを non-secret audit として残す。
+- `TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET` は32 byte以上のrandom materialとし、
+  Capsule Runが使う `TAKOSUMI_RUN_TOKEN_SECRET` やdeploy-control bearerと共有しない。
+  現行wireは単一active signerであるため、rotation前にactive Runをdrainするか、
+  旧tokenを拒否して該当Runを再実行することを明示する。raw keyやtoken bodyは
+  rotation evidenceに残さない。
 - ProviderConnection credential rotation は ProviderConnection / Secret rotation として扱う。
   secret-backed provider policy は provider binary trust record であり credential ではないため、token rotation で作り直さない。
 - confidential OIDC client が必要な operator extension は public PKCE projection
