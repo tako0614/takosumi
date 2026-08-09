@@ -2907,11 +2907,62 @@ function runnerSchemas(): Record<string, Record<string, unknown>> {
 }
 
 /** Capsule records and their service-side InstallConfig. */
-function capsuleAndInstallConfigSchemas(): Record<
+export function capsuleAndInstallConfigSchemas(): Record<
   string,
   Record<string, unknown>
 > {
   return {
+    SourceBuildConfig: {
+      type: "object",
+      required: ["commands", "outputs"],
+      description:
+        "Credential-free argv build executed against the pinned Git SourceSnapshot before provider credentials are prepared.",
+      properties: {
+        commands: {
+          type: "array",
+          minItems: 1,
+          maxItems: 8,
+          items: {
+            type: "object",
+            required: ["argv"],
+            properties: {
+              argv: {
+                type: "array",
+                minItems: 1,
+                maxItems: 32,
+                items: {
+                  type: "string",
+                  minLength: 1,
+                  maxLength: 4096,
+                  pattern: "^[^\\u0000]*$",
+                },
+              },
+              workingDirectory: {
+                type: "string",
+                minLength: 1,
+                maxLength: 1024,
+                pattern:
+                  "^(?!\\s)(?!.*\\s$)(?:\\.|(?!/|\\./|\\.\\.?$|\\.\\.?/|[A-Za-z]:)(?!.*\\\\)(?!.*//)(?!.*/\\.\\.?(?:/|$))(?!.*/$).+)$",
+              },
+            },
+            additionalProperties: false,
+          },
+        },
+        outputs: {
+          type: "array",
+          minItems: 1,
+          maxItems: 16,
+          items: {
+            type: "string",
+            minLength: 1,
+            maxLength: 1024,
+            pattern:
+              "^(?!\\s)(?!.*\\s$)(?!(?:\\.|\\./?)$)(?!/|\\./|\\.\\.?$|\\.\\.?/|[A-Za-z]:)(?!.*\\\\)(?!.*//)(?!.*/\\.\\.?(?:/|$))(?!.*/$).+$",
+          },
+        },
+      },
+      additionalProperties: false,
+    },
     Capsule: {
       type: "object",
       required: [
@@ -2986,6 +3037,7 @@ function capsuleAndInstallConfigSchemas(): Record<
           additionalProperties: false,
         },
         modulePath: { type: "string" },
+        sourceBuild: ref("SourceBuildConfig"),
         lifecycleActions: {
           type: "array",
           maxItems: 20,
@@ -4551,7 +4603,7 @@ function dependencySchemas(): Record<string, Record<string, unknown>> {
 }
 
 /** Workspace, Project, Capsule request/response, and InstallConfig wrappers. */
-function workspaceProjectAndCapsuleRequestSchemas(): Record<
+export function workspaceProjectAndCapsuleRequestSchemas(): Record<
   string,
   Record<string, unknown>
 > {
@@ -4669,6 +4721,7 @@ function workspaceProjectAndCapsuleRequestSchemas(): Record<
         installConfigId: { type: "string" },
         autoUpdate: { type: "boolean" },
         modulePath: { type: "string" },
+        sourceBuild: ref("SourceBuildConfig"),
         runnerId: { type: "string" },
         outputAllowlist: {
           type: "object",

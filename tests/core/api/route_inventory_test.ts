@@ -4,9 +4,11 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createApiCapabilitiesDescription } from "../../../core/api/capabilities.ts";
 import {
+  capsuleAndInstallConfigSchemas,
   createTakosumiOpenApiDocument,
   resourceFormPinSchemas,
   TAKOSUMI_OPENAPI_VERSION,
+  workspaceProjectAndCapsuleRequestSchemas,
 } from "../../../core/api/openapi.ts";
 import { DEPLOY_CONTROL_ACTIVITY_ENDPOINTS } from "../../../core/api/deploy_control_activity_routes.ts";
 import { DEPLOY_CONTROL_RESOURCE_FORM_PIN_ENDPOINTS } from "../../../core/api/deploy_control_resource_form_pin_routes.ts";
@@ -80,10 +82,7 @@ test("legacy Resource Shape and FormActivation paths are not published", () => {
   ]) {
     assert.equal(openapi.paths[path], undefined, path);
   }
-  assert.equal(
-    openapi.paths["/v1/interfaces"]?.get !== undefined,
-    true,
-  );
+  assert.equal(openapi.paths["/v1/interfaces"]?.get !== undefined, true);
 });
 
 test("legacy Resource Shape response schema is not published", () => {
@@ -144,9 +143,7 @@ test("portable Form Definition keeps its exact selector in the OpenAPI inventory
   // exact query contract and edge routing.
   const openapi = createTakosumiOpenApiDocument(ALL_MOUNTED);
   assert.equal(
-    openapi.paths[
-      `${TAKOFORM_FORM_HOST_FORM_DEFINITIONS_PATH}/{kind}`
-    ]?.get,
+    openapi.paths[`${TAKOFORM_FORM_HOST_FORM_DEFINITIONS_PATH}/{kind}`]?.get,
     undefined,
   );
 });
@@ -330,6 +327,21 @@ test("openapi version follows package version", () => {
     createTakosumiOpenApiDocument(ALL_MOUNTED).info.version,
     pkg.version,
   );
+});
+
+test("public Capsule schemas expose the closed sourceBuild contract", () => {
+  const schemas = {
+    ...capsuleAndInstallConfigSchemas(),
+    ...workspaceProjectAndCapsuleRequestSchemas(),
+  };
+  assert.deepEqual(schemas.InstallConfig.properties.sourceBuild, {
+    $ref: "#/components/schemas/SourceBuildConfig",
+  });
+  assert.deepEqual(schemas.CreateCapsuleRequest.properties.sourceBuild, {
+    $ref: "#/components/schemas/SourceBuildConfig",
+  });
+  assert.equal(schemas.SourceBuildConfig.additionalProperties, false);
+  assert.deepEqual(schemas.SourceBuildConfig.required, ["commands", "outputs"]);
 });
 
 test("public openapi component names do not expose internal deploy-control seams", () => {

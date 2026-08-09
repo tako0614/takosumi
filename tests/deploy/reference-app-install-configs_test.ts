@@ -32,12 +32,13 @@ function bindingPermissions(blueprint: CapsuleInterfaceBlueprint): string[] {
   return [...(blueprint.bindings?.[0]?.permissions ?? [])];
 }
 
-type CurrentV2App = "takos" | "yurucommu";
+type CurrentRepositoryApp = "takos" | "yurucommu";
 
-const CURRENT_V2_FIXTURE_CASES = [
+const CURRENT_REPOSITORY_FIXTURE_CASES = [
   {
     configName: "yurucommu-main",
     app: "yurucommu",
+    apiVersion: "takosumi.com/v2.1",
     modulePath: ".",
     modulePaths: [".", "deploy/takoform"],
     sourceUrl: "https://github.com/tako0614/yurucommu.git",
@@ -45,6 +46,7 @@ const CURRENT_V2_FIXTURE_CASES = [
   {
     configName: "yurucommu-managed",
     app: "yurucommu",
+    apiVersion: "takosumi.com/v2.3",
     modulePath: "deploy/takoform",
     modulePaths: [".", "deploy/takoform"],
     sourceUrl: "https://github.com/tako0614/yurucommu.git",
@@ -52,6 +54,7 @@ const CURRENT_V2_FIXTURE_CASES = [
   {
     configName: "takos-main",
     app: "takos",
+    apiVersion: "takosumi.com/v2.1",
     modulePath: "deploy/opentofu",
     sourcePath: ".",
     modulePaths: ["deploy/opentofu"],
@@ -59,7 +62,8 @@ const CURRENT_V2_FIXTURE_CASES = [
   },
 ] as const satisfies readonly {
   readonly configName: string;
-  readonly app: CurrentV2App;
+  readonly app: CurrentRepositoryApp;
+  readonly apiVersion: "takosumi.com/v2.1" | "takosumi.com/v2.3";
   readonly modulePath: string;
   readonly sourcePath?: string;
   readonly modulePaths: readonly string[];
@@ -68,7 +72,7 @@ const CURRENT_V2_FIXTURE_CASES = [
 
 const REPOSITORY_FIXTURE_NOW = "2026-08-02T00:00:00.000Z";
 
-function currentV2Launcher(app: CurrentV2App) {
+function currentRepositoryLauncher(app: CurrentRepositoryApp) {
   const title = app === "takos" ? "Takos" : "Yurucommu";
   const icon = app === "takos" ? "/logo.png" : "/icons/yurucommu.svg";
   return {
@@ -101,20 +105,36 @@ function currentV2Launcher(app: CurrentV2App) {
   } as const;
 }
 
-function currentV2Manifest(
-  app: CurrentV2App,
+function currentRepositoryManifest(
+  app: CurrentRepositoryApp,
   modulePaths: readonly string[],
+  apiVersion: "takosumi.com/v2.1" | "takosumi.com/v2.3",
 ): RepositoryManifestDocument {
-  const launcher = currentV2Launcher(app);
+  const launcher = currentRepositoryLauncher(app);
   return {
-    apiVersion: "takosumi.com/v2.1",
+    apiVersion,
     kind: "Repository",
     install: {
       defaultModule: app === "takos" ? "deploy/opentofu" : "deploy/takoform",
       modules: Object.fromEntries(
         modulePaths.map((modulePath) => [
           modulePath,
-          { inputs: [], interfaces: [launcher] },
+          {
+            inputs: [],
+            interfaces: [launcher],
+            ...(apiVersion === "takosumi.com/v2.3" &&
+            modulePath === "deploy/takoform"
+              ? {
+                  sourceBuild: {
+                    commands: [
+                      { argv: ["bun", "install", "--frozen-lockfile"] },
+                      { argv: ["bun", "run", "build:worker"] },
+                    ],
+                    outputs: ["deploy/takoform/dist/yurucommu-worker.js"],
+                  },
+                }
+              : {}),
+          },
         ]),
       ),
     },
@@ -122,7 +142,7 @@ function currentV2Manifest(
 }
 
 function fixtureSource(input: {
-  readonly app: CurrentV2App;
+  readonly app: CurrentRepositoryApp;
   readonly sourceUrl: string;
   readonly modulePath: string;
   readonly sourcePath?: string;
@@ -327,11 +347,11 @@ test("reference app composition exposes five replaceable Store source identities
     }
     expect(config.policy?.repositoryInstallUx).toEqual({
       allowedInterfacePermissions: ["ui.open"],
-      ...(config.name === "takos-main" ||
-      config.name === "yurucommu-main" ||
-      config.name === "yurucommu-managed"
+      ...(config.name === "takos-main" || config.name === "yurucommu-main"
         ? { requiredManifestApiVersion: "takosumi.com/v2.1" }
-        : {}),
+        : config.name === "yurucommu-managed"
+          ? { requiredManifestApiVersion: "takosumi.com/v2.3" }
+          : {}),
     });
   }
 
@@ -417,7 +437,7 @@ test("managed Yurucommu requires short-lived Takoform provider credentials", () 
     (config) => config.name === "yurucommu-managed",
   );
   expect(managed?.policy?.providerCredentials).toEqual({
-    requiredProviders: ["registry.opentofu.org/tako0614/takoform"],
+    requiredProviders: ["registry.terraform.io/tako0614/takoform"],
     requireTemporary: true,
     requireTtlEnforced: true,
   });
@@ -690,13 +710,17 @@ test("reference configs contain no retired runtime authority schema", () => {
   });
 });
 
-test("current v2.1 app manifests are adopted into exact launcher/output/binding materialization", async () => {
-  for (const fixture of CURRENT_V2_FIXTURE_CASES) {
+test("current repository manifests are adopted into exact launcher/output/binding materialization", async () => {
+  for (const fixture of CURRENT_REPOSITORY_FIXTURE_CASES) {
     const config = REFERENCE_APP_INSTALL_CONFIGS.find(
       (candidate) => candidate.name === fixture.configName,
     )!;
     const source = fixtureSource(fixture);
-    const document = currentV2Manifest(fixture.app, fixture.modulePaths);
+    const document = currentRepositoryManifest(
+      fixture.app,
+      fixture.modulePaths,
+      fixture.apiVersion,
+    );
     const snapshot = fixtureSnapshot(source, {
       status: "present",
       digest: `sha256:${"d".repeat(64)}`,
@@ -720,7 +744,7 @@ test("current v2.1 app manifests are adopted into exact launcher/output/binding 
 
     expect(result.status).toBe("accepted");
     if (result.status !== "accepted") continue;
-    const manifestLauncher = currentV2Launcher(fixture.app);
+    const manifestLauncher = currentRepositoryLauncher(fixture.app);
     const expectedBlueprint = {
       key: manifestLauncher.key,
       name: manifestLauncher.name,
@@ -746,6 +770,17 @@ test("current v2.1 app manifests are adopted into exact launcher/output/binding 
     expect(result.outputAllowlist).toEqual({
       launch_url: { from: "launch_url", type: "url", required: true },
     });
+    expect(result.sourceBuild).toEqual(
+      fixture.apiVersion === "takosumi.com/v2.3"
+        ? {
+            commands: [
+              { argv: ["bun", "install", "--frozen-lockfile"] },
+              { argv: ["bun", "run", "build:worker"] },
+            ],
+            outputs: ["deploy/takoform/dist/yurucommu-worker.js"],
+          }
+        : config.sourceBuild,
+    );
     await materializeAdoptedLauncher({
       config,
       source,
@@ -756,15 +791,19 @@ test("current v2.1 app manifests are adopted into exact launcher/output/binding 
   }
 });
 
-test("strict v2.1 reference configs reject absent and legacy v1 snapshots before Capsule creation", async () => {
-  for (const fixture of CURRENT_V2_FIXTURE_CASES) {
+test("strict reference configs reject absent and legacy v1 snapshots before Capsule creation", async () => {
+  for (const fixture of CURRENT_REPOSITORY_FIXTURE_CASES) {
     const config = REFERENCE_APP_INSTALL_CONFIGS.find(
       (candidate) => candidate.name === fixture.configName,
     )!;
     expect(config.interfaceBlueprints).toBeUndefined();
     expect(config.outputAllowlist).toEqual({});
     const source = fixtureSource(fixture);
-    const currentDocument = currentV2Manifest(fixture.app, fixture.modulePaths);
+    const currentDocument = currentRepositoryManifest(
+      fixture.app,
+      fixture.modulePaths,
+      fixture.apiVersion,
+    );
     const currentSnapshot = fixtureSnapshot(source, {
       status: "present",
       digest: `sha256:${"e".repeat(64)}`,
@@ -782,8 +821,7 @@ test("strict v2.1 reference configs reject absent and legacy v1 snapshots before
       status: "invalid",
       diagnostic: {
         code: "repository_install_ux_manifest_api_version_required",
-        message:
-          "Repository install UX requires manifest API takosumi.com/v2.1; observed absent.",
+        message: `Repository install UX requires manifest API ${fixture.apiVersion}; observed absent.`,
       },
     });
 
@@ -814,8 +852,7 @@ test("strict v2.1 reference configs reject absent and legacy v1 snapshots before
       status: "invalid",
       diagnostic: {
         code: "repository_install_ux_manifest_api_version_required",
-        message:
-          "Repository install UX requires manifest API takosumi.com/v2.1; observed takosumi.com/v1.",
+        message: `Repository install UX requires manifest API ${fixture.apiVersion}; observed takosumi.com/v1.`,
       },
     });
   }

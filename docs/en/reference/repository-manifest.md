@@ -23,13 +23,13 @@ Every version has exactly three root fields:
 }
 ```
 
-| `apiVersion`        | `install` fields             | module fields                                    |
-| ------------------- | ---------------------------- | ------------------------------------------------ |
-| `takosumi.com/v1`   | `modules`                    | `inputs`, `requires`, `features`                 |
-| `takosumi.com/v2`   | `modules`                    | v1 + `interfaces`                                |
-| `takosumi.com/v2.1` | `modules`, `defaultModule`?  | identical to v2                                  |
-| `takosumi.com/v2.2` | `modules`, `defaultModule`?  | v2.1 + `requires[].kind: interface.consume`      |
-| `takosumi.com/v2.3` | `modules`, `defaultModule`?  | v2.2 + optional `sourceBuild`                   |
+| `apiVersion`        | `install` fields            | module fields                               |
+| ------------------- | --------------------------- | ------------------------------------------- |
+| `takosumi.com/v1`   | `modules`                   | `inputs`, `requires`, `features`            |
+| `takosumi.com/v2`   | `modules`                   | v1 + `interfaces`                           |
+| `takosumi.com/v2.1` | `modules`, `defaultModule`? | identical to v2                             |
+| `takosumi.com/v2.2` | `modules`, `defaultModule`? | v2.1 + `requires[].kind: interface.consume` |
+| `takosumi.com/v2.3` | `modules`, `defaultModule`? | v2.2 + optional `sourceBuild`               |
 
 Every object is closed. Fields not listed in this document, `$schema`, and the
 retired `schemaVersion: takosumi.install-ux/v1` are rejected. Adding
@@ -92,18 +92,18 @@ requests may continue to supply an explicit `modulePath`.
 Each module has a required `inputs` array with at most 128 entries. Every entry
 is closed:
 
-| field         | required | meaning |
-| ------------- | -------- | ------- |
-| `name`        | yes      | exact OpenTofu variable name |
-| `source`      | yes      | an object containing only `kind` |
-| `label`       | yes      | non-empty `{ "ja", "en" }` text |
-| `role`        | no       | `service_name` / `initial_secret` |
-| `type`        | no       | `string` / `number` / `boolean` / `json` |
-| `format`      | no       | bounded presentation token |
-| `required`    | no       | boolean |
-| `helper`      | no       | `{ "ja", "en" }` text |
-| `placeholder` | no       | non-empty bounded text |
-| `advanced`    | no       | boolean |
+| field         | required | meaning                                         |
+| ------------- | -------- | ----------------------------------------------- |
+| `name`        | yes      | exact OpenTofu variable name                    |
+| `source`      | yes      | an object containing only `kind`                |
+| `label`       | yes      | non-empty `{ "ja", "en" }` text                 |
+| `role`        | no       | `service_name` / `initial_secret`               |
+| `type`        | no       | `string` / `number` / `boolean` / `json`        |
+| `format`      | no       | bounded presentation token                      |
+| `required`    | no       | boolean                                         |
+| `helper`      | no       | `{ "ja", "en" }` text                           |
+| `placeholder` | no       | non-empty bounded text                          |
+| `advanced`    | no       | boolean                                         |
 | `secret`      | no       | route user input through secret materialization |
 
 `source.kind` is one of `user`, `capsule_name`,
@@ -179,7 +179,9 @@ proposal.
 There are 1–8 commands. Each `argv` is a non-empty argv array (not a shell
 string) of at most 32 arguments, each at most 4096 characters. `workingDirectory`
 and `outputs` are safe paths relative to the SourceSnapshot root; there are
-1–16 outputs and `.` is not a produced path. Objects are closed: `env`,
+1–16 outputs and `.` is not a produced path. Paths must already be canonical;
+leading/trailing whitespace, `\\`, `//`, and `.` or `..` segments are rejected
+rather than normalized. Objects are closed: `env`,
 credentials, provider selection, and lifecycle fields are not allowed, and
 argv cannot contain secret-like material.
 

@@ -23,13 +23,13 @@ persist 済み InstallConfig であり、manifest を実行時に再読込しま
 }
 ```
 
-| `apiVersion`        | `install` の field           | module の field                                  |
-| ------------------- | ---------------------------- | ------------------------------------------------ |
-| `takosumi.com/v1`   | `modules`                    | `inputs`, `requires`, `features`                 |
-| `takosumi.com/v2`   | `modules`                    | v1 + `interfaces`                                |
-| `takosumi.com/v2.1` | `modules`, `defaultModule`?  | v2 と同一                                        |
-| `takosumi.com/v2.2` | `modules`, `defaultModule`?  | v2.1 + `requires[].kind: interface.consume`      |
-| `takosumi.com/v2.3` | `modules`, `defaultModule`?  | v2.2 + optional `sourceBuild`                   |
+| `apiVersion`        | `install` の field          | module の field                             |
+| ------------------- | --------------------------- | ------------------------------------------- |
+| `takosumi.com/v1`   | `modules`                   | `inputs`, `requires`, `features`            |
+| `takosumi.com/v2`   | `modules`                   | v1 + `interfaces`                           |
+| `takosumi.com/v2.1` | `modules`, `defaultModule`? | v2 と同一                                   |
+| `takosumi.com/v2.2` | `modules`, `defaultModule`? | v2.1 + `requires[].kind: interface.consume` |
+| `takosumi.com/v2.3` | `modules`, `defaultModule`? | v2.2 + optional `sourceBuild`               |
 
 各 object は closed です。表や各 section にない field、`$schema`、旧
 `schemaVersion: takosumi.install-ux/v1` は拒否されます。v1/v2 に
@@ -87,18 +87,18 @@ compatibility request は、利用者が明示した `modulePath` を引き続�
 各 module の `inputs` は必須の配列で、最大128件です。各 entry は次の closed field を
 持ちます。
 
-| field         | 必須 | 内容 |
-| ------------- | ---- | ---- |
-| `name`        | yes  | exact OpenTofu variable name |
-| `source`      | yes  | `{ "kind": ... }` のみ |
-| `label`       | yes  | non-empty な `{ "ja", "en" }` |
-| `role`        | no   | `service_name` / `initial_secret` |
-| `type`        | no   | `string` / `number` / `boolean` / `json` |
-| `format`      | no   | bounded presentation token |
-| `required`    | no   | boolean |
-| `helper`      | no   | `{ "ja", "en" }` |
-| `placeholder` | no   | non-empty bounded text |
-| `advanced`    | no   | boolean |
+| field         | 必須 | 内容                                          |
+| ------------- | ---- | --------------------------------------------- |
+| `name`        | yes  | exact OpenTofu variable name                  |
+| `source`      | yes  | `{ "kind": ... }` のみ                        |
+| `label`       | yes  | non-empty な `{ "ja", "en" }`                 |
+| `role`        | no   | `service_name` / `initial_secret`             |
+| `type`        | no   | `string` / `number` / `boolean` / `json`      |
+| `format`      | no   | bounded presentation token                    |
+| `required`    | no   | boolean                                       |
+| `helper`      | no   | `{ "ja", "en" }`                              |
+| `placeholder` | no   | non-empty bounded text                        |
+| `advanced`    | no   | boolean                                       |
 | `secret`      | no   | user input を secret materialization に送る印 |
 
 `source.kind` は `user`、`capsule_name`、`workspace_scoped_capsule_name`、
@@ -168,7 +168,8 @@ credential-free `sourceBuild` proposal を持てます。これは repository me
 `commands` は1〜8件、各 `argv` は shell string ではない1〜32個の non-empty argv
 要素（各4096文字以内）です。`workingDirectory` と `outputs` は SourceSnapshot
 root からの safe relative path で、outputs は1〜16件かつ `.` ではない produced
-path を指定します。object は closed で、`env`、credential、provider、lifecycle
+path を指定します。path は canonical form が必須で、前後の空白、`\\`、`//`、
+`.` / `..` segment を正規化せず拒否します。object は closed で、`env`、credential、provider、lifecycle
 field はありません。argv に secret-like material を含めることもできません。
 
 Dashboard は Plan を開始する前に exact argv、working directory（省略時は Source

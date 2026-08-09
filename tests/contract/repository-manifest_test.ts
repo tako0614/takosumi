@@ -2,15 +2,9 @@ import { expect, test } from "bun:test";
 import Ajv2020 from "ajv/dist/2020.js";
 import { join } from "node:path";
 
-import repositoryManifestV2_1Schema from "../../docs/public/schemas/repository-manifest-v2.1.schema.json" with {
-  type: "json",
-};
-import repositoryManifestV2_2Schema from "../../docs/public/schemas/repository-manifest-v2.2.schema.json" with {
-  type: "json",
-};
-import repositoryManifestV2_3Schema from "../../docs/public/schemas/repository-manifest-v2.3.schema.json" with {
-  type: "json",
-};
+import repositoryManifestV2_1Schema from "../../docs/public/schemas/repository-manifest-v2.1.schema.json" with { type: "json" };
+import repositoryManifestV2_2Schema from "../../docs/public/schemas/repository-manifest-v2.2.schema.json" with { type: "json" };
+import repositoryManifestV2_3Schema from "../../docs/public/schemas/repository-manifest-v2.3.schema.json" with { type: "json" };
 
 import {
   parseRepositoryManifestText,
@@ -91,9 +85,10 @@ test("repository manifest v2.2 declares consumed Interfaces without ids or crede
     },
   ]);
 
-  const oldVersion = JSON.parse(
-    JSON.stringify(parsed.document),
-  ) as Record<string, unknown>;
+  const oldVersion = JSON.parse(JSON.stringify(parsed.document)) as Record<
+    string,
+    unknown
+  >;
   oldVersion.apiVersion = "takosumi.com/v2.1";
   expect(parseRepositoryManifestText(JSON.stringify(oldVersion))).toEqual({
     ok: false,
@@ -109,7 +104,7 @@ test("repository manifest rejects unknown authority, fields, and versions", asyn
     error: "contains unsupported field providers",
   });
   expect(
-  parseRepositoryManifestText(await fixture("unknown-version.json")),
+    parseRepositoryManifestText(await fixture("unknown-version.json")),
   ).toEqual({
     ok: false,
     error:
@@ -167,13 +162,14 @@ test("repository manifest v2.3 accepts only the bounded credential-free sourceBu
   });
 
   const mutations: readonly [string, (value: typeof document) => void][] = [
-    ["env", (value) => ((value.install.modules["."].sourceBuild as any).env = {})],
+    [
+      "env",
+      (value) => ((value.install.modules["."].sourceBuild as any).env = {}),
+    ],
     [
       "unsafe argv",
       (value) => {
-        value.install.modules["."].sourceBuild.commands[0].argv = [
-          "bun\0run",
-        ];
+        value.install.modules["."].sourceBuild.commands[0].argv = ["bun\0run"];
       },
     ],
     [
@@ -197,15 +193,28 @@ test("repository manifest v2.3 accepts only the bounded credential-free sourceBu
       false,
     );
   }
+
+  for (const output of [
+    " ./dist/app.js ",
+    "dist\\app.js",
+    "dist//app.js",
+    "dist/./app.js",
+  ]) {
+    const nonCanonical = structuredClone(document);
+    nonCanonical.install.modules["."].sourceBuild.outputs = [output];
+    expect(parseRepositoryManifestText(JSON.stringify(nonCanonical))).toEqual({
+      ok: false,
+      error:
+        'install.modules.".".sourceBuild.outputs[0] must be a safe relative produced path',
+    });
+  }
 });
 
 test("repository manifest rejects traversal and duplicate app vocabulary", async () => {
-  expect(
-    parseRepositoryManifestText(await fixture("traversal.json")).ok,
-  ).toBe(false);
-  expect(
-    parseRepositoryManifestText(await fixture("duplicate.json")),
-  ).toEqual({
+  expect(parseRepositoryManifestText(await fixture("traversal.json")).ok).toBe(
+    false,
+  );
+  expect(parseRepositoryManifestText(await fixture("duplicate.json"))).toEqual({
     ok: false,
     error: 'install.modules.".".inputs[1].name must be unique',
   });
@@ -220,9 +229,7 @@ test("repository manifest rejects secret env maps and unsupported requirements",
       'install.modules.".".inputs[0].secret must not target the plain env variable',
   });
   expect(
-    parseRepositoryManifestText(
-      await fixture("unsupported-requirement.json"),
-    ),
+    parseRepositoryManifestText(await fixture("unsupported-requirement.json")),
   ).toEqual({
     ok: false,
     error: 'install.modules.".".requires[0].kind is unsupported',
@@ -230,9 +237,7 @@ test("repository manifest rejects secret env maps and unsupported requirements",
 
   const unknownSource = JSON.parse(await fixture("valid.json"));
   unknownSource.install.modules["."].inputs[0].source.kind = "command";
-  expect(
-    parseRepositoryManifestText(JSON.stringify(unknownSource)),
-  ).toEqual({
+  expect(parseRepositoryManifestText(JSON.stringify(unknownSource))).toEqual({
     ok: false,
     error: 'install.modules.".".inputs[0].source.kind is unsupported',
   });
@@ -257,9 +262,9 @@ test("repository manifest rejects module aliases and unsafe callback paths", asy
   const originCallback = JSON.parse(await fixture("valid.json"));
   originCallback.install.modules["."].requires[1].callbackPath =
     "https://example.com/callback";
-  expect(
-    parseRepositoryManifestText(JSON.stringify(originCallback)).ok,
-  ).toBe(false);
+  expect(parseRepositoryManifestText(JSON.stringify(originCallback)).ok).toBe(
+    false,
+  );
 });
 
 test("a requirement names exactly one delivery surface", async () => {
@@ -303,7 +308,8 @@ test("a module may declare no more than eight generated secrets", async () => {
 
   expect(parseRepositoryManifestText(JSON.stringify(document))).toEqual({
     ok: false,
-    error: 'install.modules.".".requires declares more than 8 generated secrets',
+    error:
+      'install.modules.".".requires declares more than 8 generated secrets',
   });
 });
 
@@ -389,9 +395,9 @@ test("repository manifest treats special module names as data, not object protot
   );
   expect(parsed.ok).toBe(true);
   if (!parsed.ok) return;
-  expect(
-    Object.hasOwn(parsed.document.install.modules, "__proto__"),
-  ).toBe(true);
+  expect(Object.hasOwn(parsed.document.install.modules, "__proto__")).toBe(
+    true,
+  );
   expect(parsed.document.install.modules.__proto__).toEqual({ inputs: [] });
 });
 
@@ -400,8 +406,8 @@ test("repository manifest v2 accepts generic Capsule Interface declarations", as
   expect(parsed.ok).toBe(true);
   if (!parsed.ok) return;
   expect(parsed.document.apiVersion).toBe("takosumi.com/v2");
-  const declaration = parsed.document.install.modules["deploy/takoform"]
-    ?.interfaces?.[0];
+  const declaration =
+    parsed.document.install.modules["deploy/takoform"]?.interfaces?.[0];
   expect(declaration).toMatchObject({
     key: "launcher",
     name: "yurucommu.launcher",
@@ -502,9 +508,7 @@ test("the published v2.1 schema covers structure while the parser owns semantics
 
   for (const document of [minimal, full]) {
     expect(validate(document), JSON.stringify(validate.errors)).toBe(true);
-    expect(parseRepositoryManifestText(JSON.stringify(document)).ok).toBe(
-      true,
-    );
+    expect(parseRepositoryManifestText(JSON.stringify(document)).ok).toBe(true);
   }
 
   for (const mutate of [
@@ -515,8 +519,9 @@ test("the published v2.1 schema covers structure while the parser owns semantics
       document.install.defaultModule = "./deploy/takoform";
     },
     (document: Record<string, any>) => {
-      document.install.modules["deploy/takoform"].interfaces[0].spec.access.visibility =
-        "public";
+      document.install.modules[
+        "deploy/takoform"
+      ].interfaces[0].spec.access.visibility = "public";
     },
   ]) {
     const document = structuredClone(full);
@@ -601,9 +606,7 @@ test("the published v2.2 schema adds only provider-neutral Interface consumption
     invalid.install.modules["."].requires[0].interface[forbiddenField] =
       "forbidden";
     expect(validate(invalid)).toBe(false);
-    expect(parseRepositoryManifestText(JSON.stringify(invalid)).ok).toBe(
-      false,
-    );
+    expect(parseRepositoryManifestText(JSON.stringify(invalid)).ok).toBe(false);
   }
 });
 
@@ -635,22 +638,21 @@ test("parser-owned JSON depth and value scanning stay stricter than schema struc
     },
   ];
   expect(validate(presentationSecret)).toBe(true);
-  expect(parseRepositoryManifestText(JSON.stringify(presentationSecret)).ok).toBe(
-    false,
-  );
+  expect(
+    parseRepositoryManifestText(JSON.stringify(presentationSecret)).ok,
+  ).toBe(false);
 
   const whitespaceIdentifier = JSON.parse(await fixture("v2-launcher.json"));
   whitespaceIdentifier.apiVersion = "takosumi.com/v2.1";
-  whitespaceIdentifier.install.modules["deploy/takoform"].interfaces[0].spec.inputs.url.outputName =
-    " launch_url ";
+  whitespaceIdentifier.install.modules[
+    "deploy/takoform"
+  ].interfaces[0].spec.inputs.url.outputName = " launch_url ";
   expect(validate(whitespaceIdentifier)).toBe(false);
   expect(
     parseRepositoryManifestText(JSON.stringify(whitespaceIdentifier)).ok,
   ).toBe(false);
 
-  const descriptiveIdentifiers = JSON.parse(
-    await fixture("v2-launcher.json"),
-  );
+  const descriptiveIdentifiers = JSON.parse(await fixture("v2-launcher.json"));
   descriptiveIdentifiers.apiVersion = "takosumi.com/v2.1";
   const declaration =
     descriptiveIdentifiers.install.modules["deploy/takoform"].interfaces[0];
@@ -758,7 +760,9 @@ test("repository manifest v2 rejects secret-like values and authority IDs recurs
       display: { title: "Example" },
       nested: { authority: { [key]: "opaque-id" } },
     };
-    expect(parseRepositoryManifestText(JSON.stringify(document)).ok).toBe(false);
+    expect(parseRepositoryManifestText(JSON.stringify(document)).ok).toBe(
+      false,
+    );
   }
 
   for (const value of ["sk-example_12345678", "Bearer opaque-token"]) {
@@ -766,7 +770,9 @@ test("repository manifest v2 rejects secret-like values and authority IDs recurs
       display: { title: "Example" },
       nested: { values: [value] },
     };
-    expect(parseRepositoryManifestText(JSON.stringify(document)).ok).toBe(false);
+    expect(parseRepositoryManifestText(JSON.stringify(document)).ok).toBe(
+      false,
+    );
   }
 
   declaration.spec.document = { display: { title: "Example" } };
@@ -809,7 +815,9 @@ test("the published v2.3 schema covers sourceBuild structure while the parser ow
         ".": {
           inputs: [],
           sourceBuild: {
-            commands: [{ argv: ["bun", "run", "build"], workingDirectory: "web" }],
+            commands: [
+              { argv: ["bun", "run", "build"], workingDirectory: "web" },
+            ],
             outputs: ["web/dist/index.js"],
           },
         },
@@ -820,7 +828,11 @@ test("the published v2.3 schema covers sourceBuild structure while the parser ow
   expect(parseRepositoryManifestText(JSON.stringify(document)).ok).toBe(true);
 
   const unknownField = structuredClone(document);
-  (unknownField.install.modules["."]!.sourceBuild as Record<string, unknown>).env = {};
+  (
+    unknownField.install.modules["."]!.sourceBuild as Record<string, unknown>
+  ).env = {};
   expect(validate(unknownField)).toBe(false);
-  expect(parseRepositoryManifestText(JSON.stringify(unknownField)).ok).toBe(false);
+  expect(parseRepositoryManifestText(JSON.stringify(unknownField)).ok).toBe(
+    false,
+  );
 });

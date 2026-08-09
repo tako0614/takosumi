@@ -88,11 +88,7 @@ export type RepositoryRuntimeDelivery<K extends string> =
   | { readonly bindings: Readonly<Partial<Record<K, string>>> };
 
 export type RepositoryOidcSlot =
-  | "issuerUrl"
-  | "accountsUrl"
-  | "clientId"
-  | "redirectUri"
-  | "ownerSubject";
+  "issuerUrl" | "accountsUrl" | "clientId" | "redirectUri" | "ownerSubject";
 export type RepositoryEndpointSlot = "url" | "subdomain" | "routePattern";
 export type RepositorySecretSlot = "value";
 
@@ -139,12 +135,7 @@ export type RepositoryRuntimeRequirement =
 
 /** Public output types that a Capsule Interface may consume. */
 export type RepositoryInterfaceOutputType =
-  | "string"
-  | "url"
-  | "hostname"
-  | "number"
-  | "boolean"
-  | "json";
+  "string" | "url" | "hostname" | "number" | "boolean" | "json";
 
 /** The only two input forms a repository may propose for a Capsule Interface. */
 export type RepositoryInterfaceInput =
@@ -231,8 +222,7 @@ export interface RepositoryManifestInstallV2_2 {
   readonly defaultModule?: string;
 }
 
-export interface RepositoryInstallUxModuleV2_3
-  extends RepositoryInstallUxModule {
+export interface RepositoryInstallUxModuleV2_3 extends RepositoryInstallUxModule {
   /** Credential-free argv build proposal, reviewed before Plan. */
   readonly sourceBuild?: SourceBuildConfig;
 }
@@ -322,7 +312,7 @@ export function parseRepositoryManifestText(
 ): RepositoryManifestParseResult {
   if (
     new TextEncoder().encode(text).byteLength >
-      TAKOSUMI_REPOSITORY_MANIFEST_MAX_BYTES
+    TAKOSUMI_REPOSITORY_MANIFEST_MAX_BYTES
   ) {
     return invalid("document exceeds 128 KiB");
   }
@@ -449,7 +439,10 @@ function parseModule(
   const inputs: RepositoryInstallUxInput[] = [];
   const inputNames = new Set<string>();
   for (let index = 0; index < value.inputs.length; index += 1) {
-    const parsed = parseInput(value.inputs[index], `${prefix}.inputs[${index}]`);
+    const parsed = parseInput(
+      value.inputs[index],
+      `${prefix}.inputs[${index}]`,
+    );
     if (typeof parsed === "string") return parsed;
     if (inputNames.has(parsed.name)) {
       return `${prefix}.inputs[${index}].name must be unique`;
@@ -541,7 +534,11 @@ export function parseRepositorySourceBuild(
       return `${commandPrefix}.argv must contain 1-32 arguments`;
     }
     const argv: string[] = [];
-    for (let argumentIndex = 0; argumentIndex < rawCommand.argv.length; argumentIndex += 1) {
+    for (
+      let argumentIndex = 0;
+      argumentIndex < rawCommand.argv.length;
+      argumentIndex += 1
+    ) {
       const argument = rawCommand.argv[argumentIndex];
       if (
         typeof argument !== "string" ||
@@ -574,7 +571,7 @@ export function parseRepositorySourceBuild(
   const outputs: string[] = [];
   for (let index = 0; index < value.outputs.length; index += 1) {
     const output = sourceBuildRelativePath(value.outputs[index]);
-    if (!output) {
+    if (!output || output === ".") {
       return `${prefix}.outputs[${index}] must be a safe relative produced path`;
     }
     outputs.push(output);
@@ -584,23 +581,23 @@ export function parseRepositorySourceBuild(
 
 function sourceBuildRelativePath(value: unknown): string | undefined {
   if (typeof value !== "string" || value.length > 1_024) return undefined;
-  const raw = value.trim().replace(/\\/gu, "/");
+  const raw = value;
   if (
     !raw ||
+    raw !== raw.trim() ||
     raw.startsWith("/") ||
     /^[A-Za-z]:(?:\/|$)/u.test(raw) ||
+    raw.includes("\\") ||
     raw.includes("\0")
   ) {
     return undefined;
   }
+  if (raw === ".") return raw;
   const segments = raw.split("/");
-  const normalized: string[] = [];
   for (const segment of segments) {
-    if (!segment || segment === ".") continue;
-    if (segment === "..") return undefined;
-    normalized.push(segment);
+    if (!segment || segment === "." || segment === "..") return undefined;
   }
-  return normalized.join("/");
+  return raw;
 }
 
 function parseInterfaces(
@@ -680,7 +677,10 @@ function parseInterfaceDeclaration(
   }
   const inputs = parseInterfaceInputs(value.spec.inputs, `${prefix}.spec`);
   if (typeof inputs === "string") return inputs;
-  const access = parseInterfaceAccess(value.spec.access, `${prefix}.spec.access`);
+  const access = parseInterfaceAccess(
+    value.spec.access,
+    `${prefix}.spec.access`,
+  );
   if (typeof access === "string") return access;
   if (
     access.resourceUriInput !== undefined &&
@@ -771,7 +771,11 @@ function parseInterfaceAccess(
   prefix: string,
 ): RepositoryInterfaceAccess | string {
   if (!isPlainRecord(value)) return `${prefix} must be an object`;
-  const keys = exactKeys(value, ["visibility", "policyRef", "resourceUriInput"]);
+  const keys = exactKeys(value, [
+    "visibility",
+    "policyRef",
+    "resourceUriInput",
+  ]);
   if (keys) return `${prefix}.${keys}`;
   const visibility = oneOf(value.visibility, [
     "private",
@@ -846,8 +850,14 @@ function parseInterfaceBindingRequests(
     }
     const permissions: string[] = [];
     const permissionSet = new Set<string>();
-    for (let permissionIndex = 0; permissionIndex < raw.permissions.length; permissionIndex += 1) {
-      const permission = interfacePermissionToken(raw.permissions[permissionIndex]);
+    for (
+      let permissionIndex = 0;
+      permissionIndex < raw.permissions.length;
+      permissionIndex += 1
+    ) {
+      const permission = interfacePermissionToken(
+        raw.permissions[permissionIndex],
+      );
       if (!permission) {
         return `${entryPrefix}.permissions[${permissionIndex}] must be a bounded permission token`;
       }
@@ -1238,15 +1248,22 @@ function parseTargets<const K extends string>(
 
 /** The names one requirement writes, whichever surface it delivers to. */
 export function deliveryTargets(
-  deliver: Exclude<RepositoryRuntimeRequirement, RepositoryConsumedInterfaceRequirement>["deliver"],
+  deliver: Exclude<
+    RepositoryRuntimeRequirement,
+    RepositoryConsumedInterfaceRequirement
+  >["deliver"],
 ): Readonly<Record<string, string>> {
-  return ("variables" in deliver ? deliver.variables : deliver.bindings) as
-    Readonly<Record<string, string>>;
+  return (
+    "variables" in deliver ? deliver.variables : deliver.bindings
+  ) as Readonly<Record<string, string>>;
 }
 
 /** True when a requirement is satisfied by writing module input variables. */
 export function deliversToVariables(
-  deliver: Exclude<RepositoryRuntimeRequirement, RepositoryConsumedInterfaceRequirement>["deliver"],
+  deliver: Exclude<
+    RepositoryRuntimeRequirement,
+    RepositoryConsumedInterfaceRequirement
+  >["deliver"],
 ): boolean {
   return "variables" in deliver;
 }
@@ -1302,7 +1319,10 @@ function parseFeatures(
   inputNames: ReadonlySet<string>,
 ): readonly RepositoryInstallUxFeature[] | string | undefined {
   if (value === undefined) return undefined;
-  if (!Array.isArray(value) || value.length > TAKOSUMI_INSTALL_UX_MAX_FEATURES) {
+  if (
+    !Array.isArray(value) ||
+    value.length > TAKOSUMI_INSTALL_UX_MAX_FEATURES
+  ) {
     return `${prefix}.features must be an array of no more than 32 entries`;
   }
   const features: RepositoryInstallUxFeature[] = [];
@@ -1502,8 +1522,7 @@ function isRepositoryAuthorityKey(value: string): boolean {
 
 function stableId(value: unknown): string | undefined {
   const parsed = canonicalText(value, 96);
-  return parsed &&
-    /^[a-z0-9](?:[a-z0-9._-]{0,94}[a-z0-9])?$/u.test(parsed)
+  return parsed && /^[a-z0-9](?:[a-z0-9._-]{0,94}[a-z0-9])?$/u.test(parsed)
     ? parsed
     : undefined;
 }
