@@ -106,7 +106,6 @@ export function fakeProviderVault(
     connectionId,
     temporary: true,
     ttlEnforced: true,
-    phase: "plan" as const,
   };
   return {
     register: () => Promise.reject(new Error("not used")),
@@ -128,12 +127,20 @@ export function fakeProviderVault(
           [sharedEvidence],
         ),
       ),
-    mintForCapsuleProviderBindings: () =>
+    mintForCapsuleProviderBindings: (
+      _workspaceId: string,
+      entries: readonly { provider: string; connectionId: string }[],
+    ) =>
       Promise.resolve(
         new PhaseMintBundle(
           { env: { CLOUDFLARE_API_TOKEN: token } },
           [],
-          [sharedEvidence],
+          entries.map((entry) => ({
+            provider: entry.provider,
+            connectionId: entry.connectionId,
+            temporary: true,
+            ttlEnforced: true,
+          })),
         ),
       ),
   };

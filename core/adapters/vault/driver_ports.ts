@@ -11,53 +11,41 @@ import type {
   ProviderConnection,
 } from "takosumi-contract/connections";
 import type {
-  MintedFile,
   MintResponse,
   SourceGitConnectionKind,
 } from "takosumi-contract/sources";
-import type { ProviderCredentialMintEvidence } from "takosumi-contract/security";
+import type {
+  CredentialDriverFetch,
+  CredentialRecipeDriverRunContext,
+  CredentialRecipeIssuedRunCredential,
+  CredentialRecipeRunCredentialRequest,
+} from "takosumi-contract/credential-recipe-host";
+export {
+  credentialRecipeDriverKey,
+  type CredentialDriverFetch,
+  type CredentialRecipeDriverContext,
+  type CredentialRecipeDriverMintResult,
+  type CredentialRecipeDriverRegistry,
+  type CredentialRecipeDriverRunContext,
+  type CredentialRecipeIssuedRunCredential,
+  type CredentialRecipeIssueRunCredential,
+  type CredentialRecipeRunCredentialRequest,
+  type CredentialRecipeRuntimeDriver,
+} from "takosumi-contract/credential-recipe-host";
 
-export type CredentialDriverFetch = (
-  input: string,
-  init?: RequestInit,
-) => Promise<Response>;
-
-export interface CredentialRecipeDriverContext {
+/**
+ * Internal signer port installed by the OSS host. Vault supplies the canonical
+ * connection and Run; a provider driver never receives this wider callback.
+ */
+export type CredentialRecipeRunCredentialIssuer = (input: {
   readonly connection: ProviderConnection;
-  readonly values: Readonly<Record<string, string>>;
-  readonly files: readonly MintedFile[];
-  readonly fetch: CredentialDriverFetch;
-  readonly now: () => Date;
-  readonly staticEvidence: () => ProviderCredentialMintEvidence;
-}
-
-export interface CredentialRecipeDriverMintResult {
-  readonly env: Readonly<Record<string, string>>;
-  readonly files?: readonly MintedFile[];
-  readonly evidence: ProviderCredentialMintEvidence;
-}
-
-/** Runtime driver selected only by the explicit `recipeId/authMode` key. */
-export interface CredentialRecipeRuntimeDriver {
-  verify?(input: CredentialRecipeDriverContext): Promise<{
-    readonly ok: boolean;
-    readonly detail?: string;
-  }>;
-  mint?(
-    input: CredentialRecipeDriverContext,
-  ): Promise<CredentialRecipeDriverMintResult>;
-}
-
-export type CredentialRecipeDriverRegistry = Readonly<
-  Record<string, CredentialRecipeRuntimeDriver>
->;
-
-export function credentialRecipeDriverKey(recipe: {
-  readonly id: string;
-  readonly authMode: string;
-}): string {
-  return `${recipe.id}/${recipe.authMode}`;
-}
+  readonly run: CredentialRecipeDriverRunContext;
+  readonly request: {
+    readonly audience: string;
+    readonly scopes: readonly string[];
+    readonly ttlSeconds?: number;
+  };
+}) => Promise<CredentialRecipeIssuedRunCredential>;
 
 export interface SourceCredentialRegistrationInput {
   readonly kind: SourceGitConnectionKind;

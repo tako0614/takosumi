@@ -34,8 +34,10 @@ import {
   sameProviderSource,
 } from "takosumi-contract/provider-env-rules";
 import {
-  isPublicManagedProviderConnection,
-  managedProviderProfile,
+  hasLegacyManagedProviderScopeHints,
+  isCapsuleRunCredentialIssuance,
+  isWorkspaceBindableOperatorConnection,
+  sameCapsuleRunCredentialIssuance,
 } from "takosumi-contract/connections";
 import type { CredentialRecipe } from "takosumi-contract";
 import type { ProviderCredentialMintEvidence } from "takosumi-contract/security";
@@ -43,6 +45,11 @@ import {
   credentialRecipeDriverKey,
   type CredentialRecipeDriverRegistry,
   type CredentialRecipeRuntimeDriver,
+  type CredentialRecipeDriverRunContext,
+  type CredentialRecipeIssueRunCredential,
+  type CredentialRecipeIssuedRunCredential,
+  type CredentialRecipeRunCredentialIssuer,
+  type CredentialRecipeRunCredentialRequest,
   type CredentialDriverFetch,
   type SourceCredentialDriverRegistry,
 } from "./driver_ports.ts";
@@ -64,6 +71,7 @@ import type {
 } from "../../domains/deploy-control/store.ts";
 import type { SecretBoundaryCrypto } from "../secret-store/memory.ts";
 import type { SecretPartition } from "../secret-store/types.ts";
+import { resolveCanonicalCapsuleRunCredentialContext } from "../../domains/deploy-control/run_credential_context.ts";
 
 const CREDENTIAL_BUNDLE_MARKER = "[credential-bundle]";
 /**
@@ -122,32 +130,6 @@ export class CredentialBundle {
 }
 
 export type RegisterConnectionInput = CreateConnectionRequest;
-
-export interface ManagedProviderCredentialIssueRequest {
-  readonly workspaceId: string;
-  readonly capsuleId?: string;
-  readonly runId?: string;
-  /** Exact service-side profile selected by the Provider Connection. */
-  readonly managedProviderProfile: string;
-  readonly connection: ProviderConnection;
-  readonly phase?: MintPhase;
-}
-
-export interface ManagedProviderCredentialIssueResult {
-  readonly values: Readonly<Record<string, string>>;
-  readonly issuer: NonNullable<ProviderCredentialMintEvidence["issuer"]>;
-  readonly temporary: boolean;
-  readonly expiresAt?: string;
-  readonly ttlSeconds?: number;
-  readonly secretValueStored?: false;
-}
-
-export type ManagedProviderCredentialIssuer = (
-  request: ManagedProviderCredentialIssueRequest,
-) =>
-  | ManagedProviderCredentialIssueResult
-  | undefined
-  | Promise<ManagedProviderCredentialIssueResult | undefined>;
 
 function workspaceIdForConnectionInput(
   input: RegisterConnectionInput,
@@ -363,7 +345,6 @@ export interface StaticSecretConnectionVaultDependencies {
   readonly fetch?: VaultFetch;
   readonly now?: () => Date;
   readonly newId?: () => string;
-  readonly managedProviderCredentialIssuer?: ManagedProviderCredentialIssuer;
   /**
    * Complete installed recipe lookup. When omitted, no recipes are installed;
    * unknown recipe ids always fail closed.
@@ -372,6 +353,13 @@ export interface StaticSecretConnectionVaultDependencies {
     id: string,
   ) => CredentialRecipe | undefined;
   readonly credentialDrivers?: CredentialRecipeDriverRegistry;
+  /**
+   * Host-owned signer for generic Run credentials. Vault binds all identity
+   * claims, including the installed recipe's audience and scopes, to the
+   * current connection and canonical Run. The exact recipe driver may choose
+   * only a bounded TTL and never receives this signer or its secret.
+   */
+  readonly runCredentialIssuer?: CredentialRecipeRunCredentialIssuer;
   /**
    * Operator allowlist of provider/compat API base URLs that may appear in a
    * Workspace Connection's `scopeHints.providerConfig`. Omitted means no
@@ -391,11 +379,11 @@ export class StaticSecretConnectionVault implements ConnectionVault {
   readonly #fetch: VaultFetch;
   readonly #now: () => Date;
   readonly #newId: () => string;
-  readonly #managedProviderCredentialIssuer?: ManagedProviderCredentialIssuer;
   readonly #credentialRecipeResolver: (
     id: string,
   ) => CredentialRecipe | undefined;
   readonly #credentialDrivers: CredentialRecipeDriverRegistry;
+  readonly #runCredentialIssuer?: CredentialRecipeRunCredentialIssuer;
   readonly #sourceCredentialDrivers: SourceCredentialDriverRegistry;
   readonly #allowedProviderConfigUrls: ReadonlySet<string>;
 
@@ -405,13 +393,12 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     this.#fetch = deps.fetch ?? ((input, init) => fetch(input, init));
     this.#now = deps.now ?? (() => new Date());
     this.#newId = deps.newId ?? defaultConnectionId;
-    this.#managedProviderCredentialIssuer =
-      deps.managedProviderCredentialIssuer;
     // An omitted catalog means no provider recipe is installed. The Vault must
     // never turn a bundled discovery asset into admission authority.
     this.#credentialRecipeResolver =
       deps.credentialRecipeResolver ?? (() => undefined);
     this.#credentialDrivers = deps.credentialDrivers ?? {};
+    this.#runCredentialIssuer = deps.runCredentialIssuer;
     this.#sourceCredentialDrivers = deps.sourceCredentialDrivers ?? {};
     this.#allowedProviderConfigUrls = new Set(
       (deps.allowedProviderConfigUrls ?? []).map(
@@ -422,6 +409,12 @@ export class StaticSecretConnectionVault implements ConnectionVault {
 
   async register(input: RegisterConnectionInput): Promise<ProviderConnection> {
     const workspaceId = workspaceIdForConnectionInput(input);
+    if (hasLegacyManagedProviderScopeHints(input.scopeHints)) {
+      throw new ConnectionVaultError(
+        "invalid_argument",
+        "legacy managed-provider fields are decode-only and cannot be written",
+      );
+    }
     // workspaceId is absent for a global helper connection; when
     // present it must be a real id.
     if (workspaceId !== undefined || input.scope === "workspace") {
@@ -483,8 +476,50 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         `credential recipe ${requestedRecipe.id} does not declare provider source ${input.provider}`,
       );
     }
+    const runIssuance = resolvedRunIssuance(recipeMode.runIssuance);
+    const connectionScope =
+      input.scope ?? (workspaceId ? "workspace" : "operator");
+    if (requestedRecipe.runIssuance !== undefined) {
+      throw new ConnectionVaultError(
+        "invalid_argument",
+        "credentialRecipe.runIssuance is resolved only from the installed recipe",
+      );
+    }
+    if (runIssuance) {
+      const driver =
+        this.#credentialDrivers[credentialRecipeDriverKey(requestedRecipe)];
+      if (!recipeMode.preRun || !driver?.verify || !driver.mint) {
+        throw new ConnectionVaultError(
+          "failed_precondition",
+          `run-issued credential recipe ${requestedRecipe.id}/${requestedRecipe.authMode} requires preRun plus verify and mint driver methods`,
+        );
+      }
+      if (connectionScope !== "operator" || workspaceId !== undefined) {
+        throw new ConnectionVaultError(
+          "invalid_argument",
+          "run-issued credential connections must be operator-scoped without an owning Workspace",
+        );
+      }
+      if (requestedRecipe.secretPartition !== undefined) {
+        throw new ConnectionVaultError(
+          "invalid_argument",
+          "run-issued credential authority is resolved only from the installed recipe",
+        );
+      }
+      if (
+        !isRecord(input.values) ||
+        Object.keys(input.values).length !== 0 ||
+        (input.files !== undefined &&
+          (!Array.isArray(input.files) || input.files.length !== 0))
+      ) {
+        throw new ConnectionVaultError(
+          "invalid_argument",
+          "run-issued credential connections require values={} and no files",
+        );
+      }
+    }
     const declaredEnvRegistration =
-      recipeDefinition.declaredEnv === true
+      recipeDefinition.declaredEnv === true && !runIssuance
         ? validateDeclaredEnvInput(input)
         : undefined;
     if (!declaredEnvRegistration && input.files && input.files.length > 0) {
@@ -505,16 +540,21 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       );
     }
     const valueEnvNames = Object.keys(values);
-    // A managed provider connection delivers minted per-run material, so its
-    // runner-visible env surface is the recipe's declared set, not whichever
-    // subset the operator happened to store at registration. Recording only
-    // the stored names made the run manifest reject the minted remainder
-    // ("provider credential env name is not declared by the run recipe").
+    const resolvedModeEnvNames = Object.keys(recipeMode.env ?? {}).filter(
+      (name) => name !== "*",
+    );
     const envNames =
       declaredEnvRegistration?.envNames ??
-      (input.scopeHints?.managedProvider === true
-        ? (recipeDefinition.envNames ?? valueEnvNames)
-        : valueEnvNames);
+      (runIssuance
+        ? (recipeDefinition.envNames ?? resolvedModeEnvNames)
+        : recipeMode.preRun && resolvedModeEnvNames.length > 0
+          ? resolvedModeEnvNames
+          : valueEnvNames);
+    const fileEnvNames = runIssuance || recipeMode.preRun
+      ? Object.values(recipeMode.files ?? {}).flatMap((file) =>
+          file.envName ? [file.envName] : [],
+        )
+      : (declaredEnvRegistration?.fileEnvNames ?? []);
     if (envNames.length === 0) {
       throw new ConnectionVaultError(
         "invalid_argument",
@@ -542,10 +582,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     }
     if (
       !declaredEnvRegistration &&
-      // A managed provider connection stores nothing: every value is minted
-      // per run by the credential issuer, so registration cannot be required
-      // to supply material it will never use.
-      input.scopeHints?.managedProvider !== true &&
+      !runIssuance &&
       !requiredRecipeGroupsSatisfied(
         recipeDefinition.requiredEnvGroups ?? [],
         valueEnvNames,
@@ -567,61 +604,59 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         ? { secretPartition: requestedRecipe.secretPartition }
         : {}),
       envNames: [...envNames].sort(),
-      fileEnvNames: [...(declaredEnvRegistration?.fileEnvNames ?? [])].sort(),
+      fileEnvNames: [...fileEnvNames].sort(),
       requiredEnvGroups: (recipeDefinition.requiredEnvGroups ?? []).map(
         (group) => [...group],
       ),
       ...(recipeDefinition.declaredEnv === true ? { declaredEnv: true } : {}),
       ...(recipeMode.preRun ? { preRunAction: recipeMode.preRun.type } : {}),
+      ...(runIssuance ? { runIssuance } : {}),
     };
 
     // Validate every non-secret field before sealing or persisting credential
     // material. In particular, provider configuration and module defaults are
     // public connection metadata and must never become an alternate secret
     // transport around Credential Recipes.
-    const connectionScope =
-      input.scope ?? (workspaceId ? "workspace" : "operator");
     const scopeHints = normalizeScope(
       input.scopeHints,
       connectionScope,
       this.#allowedProviderConfigUrls,
     );
-    assertManagedProviderOperatorOwnership(
-      scopeHints,
-      workspaceId,
-      connectionScope,
-    );
     const now = this.#now();
     const expiresAt = normalizeConnectionExpiresAt(input.expiresAt, now);
     const id = this.#newId();
-    const secretPartition = secretPartitionForRegistration(credentialRecipe);
-    const secretMaterial = declaredEnvRegistration
-      ? {
-          env: values,
-          files: declaredEnvRegistration.files,
-        }
-      : values;
-    const sealed = await this.#crypto.seal(
-      JSON.stringify(secretMaterial),
-      secretPartition,
-      secretEnvelopeAad({
-        secretPartition,
-        ...(workspaceId ? { workspaceId: workspaceId } : {}),
-        connectionId: id,
-        provider: input.provider,
-      }),
-    );
     const nowIso = now.toISOString();
-    const blob = makeStoredSecretBlob({
-      connectionId: id,
-      ...(workspaceId ? { workspaceId: workspaceId } : {}),
-      provider: input.provider,
-      sealed,
-      secretPartition,
-      createdAt: nowIso,
-      crypto: this.#crypto,
-    });
-    await this.#store.putSecretBlob(blob);
+    const secretPartition = runIssuance
+      ? undefined
+      : secretPartitionForRegistration(credentialRecipe);
+    if (secretPartition) {
+      const secretMaterial = declaredEnvRegistration
+        ? {
+            env: values,
+            files: declaredEnvRegistration.files,
+          }
+        : values;
+      const sealed = await this.#crypto.seal(
+        JSON.stringify(secretMaterial),
+        secretPartition,
+        secretEnvelopeAad({
+          secretPartition,
+          ...(workspaceId ? { workspaceId: workspaceId } : {}),
+          connectionId: id,
+          provider: input.provider,
+        }),
+      );
+      const blob = makeStoredSecretBlob({
+        connectionId: id,
+        ...(workspaceId ? { workspaceId: workspaceId } : {}),
+        provider: input.provider,
+        sealed,
+        secretPartition,
+        createdAt: nowIso,
+        crypto: this.#crypto,
+      });
+      await this.#store.putSecretBlob(blob);
+    }
 
     const connection: ProviderConnection = {
       id,
@@ -629,16 +664,16 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       provider: input.provider,
       providerSource: canonicalProviderSource(input.provider),
       credentialRecipe,
-      secretPartition,
+      ...(secretPartition ? { secretPartition } : {}),
       scope: connectionScope,
       ...(input.displayName ? { displayName: input.displayName } : {}),
       status: "pending",
-      materialization: input.materialization ?? "secret",
+      materialization:
+        input.materialization ?? (runIssuance ? "run-issued" : "secret"),
       ...(scopeHints ? { scopeHints } : {}),
       envNames: [...envNames].sort(),
-      ...(declaredEnvRegistration &&
-      declaredEnvRegistration.fileEnvNames.length > 0
-        ? { fileEnvNames: declaredEnvRegistration.fileEnvNames }
+      ...(fileEnvNames.length > 0
+        ? { fileEnvNames: [...fileEnvNames].sort() }
         : {}),
       createdAt: nowIso,
       updatedAt: nowIso,
@@ -676,11 +711,6 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       input.scopeHints,
       connectionScope,
       this.#allowedProviderConfigUrls,
-    );
-    assertManagedProviderOperatorOwnership(
-      scopeHints,
-      workspaceId,
-      connectionScope,
     );
     const sourceDriver = sourceCredentialDriverForKind(
       kind,
@@ -764,7 +794,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         detail: `connection ${connectionId} expired at ${connection.expiresAt}`,
       };
     }
-    const material = await this.#openProviderSecretMaterial(connection);
+    const material = await this.#providerMaterialForConnection(connection);
     const values = material.env;
     let verified: { readonly ok: boolean; readonly detail?: string };
     if (isSourceGitKind(connection.kind)) {
@@ -778,12 +808,19 @@ export class StaticSecretConnectionVault implements ConnectionVault {
           detail: `no verification driver is configured for connection kind ${connection.kind ?? "(unknown)"} (provider ${connection.provider})`,
         };
       }
-      verified = await driver.verify({
-        connection,
-        values,
-        fetch: this.#fetch,
-        now: this.#now,
-      });
+      try {
+        verified = safeCredentialDriverVerificationResult(
+          await driver.verify({
+            connection,
+            values,
+            fetch: this.#fetch,
+            now: this.#now,
+          }),
+          Object.values(values),
+        );
+      } catch (error) {
+        throw wrapDriverError(error);
+      }
     } else {
       const driver = this.#credentialDriver(connection);
       if (!driver?.verify) {
@@ -795,15 +832,25 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         }
         verified = verifyStaticCredentialMaterial(connection, material);
       } else {
-        verified = await driver.verify({
-          connection,
-          values,
-          files: material.files,
-          fetch: this.#fetch,
-          now: this.#now,
-          staticEvidence: () =>
-            staticCredentialEvidence(connection, this.#now()),
-        });
+        try {
+          verified = safeCredentialDriverVerificationResult(
+            await driver.verify({
+              connection,
+              values,
+              files: material.files,
+              fetch: this.#fetch,
+              now: this.#now,
+              staticEvidence: () =>
+                staticCredentialEvidence(connection, this.#now()),
+            }),
+            [
+              ...Object.values(values),
+              ...material.files.map((file) => file.content),
+            ],
+          );
+        } catch (error) {
+          throw wrapDriverError(error);
+        }
       }
     }
     if (!verified.ok) {
@@ -852,10 +899,16 @@ export class StaticSecretConnectionVault implements ConnectionVault {
           [],
         );
       }
-      assertConnectionVerifiedUnlessManagedProvider(match);
-      const minted =
-        (await this.#mintManagedProviderValues(workspaceId, match, {})) ??
-        (await this.#mintProviderValues(match));
+      assertConnectionVerified(match);
+      if (isCapsuleRunCredentialIssuance(match.credentialRecipe?.runIssuance)) {
+        throw new ConnectionVaultError(
+          "failed_precondition",
+          `connection ${match.id} requires canonical Capsule Run context`,
+          undefined,
+          "credential_service_unavailable",
+        );
+      }
+      const minted = await this.#mintProviderValues(match);
       evidence.push(minted.evidence);
       for (const [name, value] of Object.entries(minted.values)) {
         env[name] = value;
@@ -920,7 +973,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       }
       if (
         connection.scope === "operator" &&
-        !isPublicManagedProviderConnection(connection)
+        !isWorkspaceBindableOperatorConnection(connection)
       ) {
         throw new ConnectionVaultError(
           "failed_precondition",
@@ -946,13 +999,18 @@ export class StaticSecretConnectionVault implements ConnectionVault {
           "provider_connection_setup_required",
         );
       }
-      assertConnectionVerifiedUnlessManagedProvider(connection);
-      const minted =
-        (await this.#mintManagedProviderValues(workspaceId, connection, {
-          phase,
-          ...(options?.capsuleId ? { capsuleId: options.capsuleId } : {}),
-          ...(options?.runId ? { runId: options.runId } : {}),
-        })) ?? (await this.#mintProviderValues(connection));
+      assertConnectionVerified(connection);
+      const run = isCapsuleRunCredentialIssuance(
+        connection.credentialRecipe?.runIssuance,
+      )
+        ? await this.#canonicalRunIssuanceContext(
+            workspaceId,
+            connection,
+            phase,
+            options,
+          )
+        : undefined;
+      const minted = await this.#mintProviderValues(connection, run);
       evidence.push(minted.evidence);
       mergeCredentialEnv(env, minted.values, entry);
       if (minted.files) files.push(...minted.files);
@@ -964,75 +1022,47 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     );
   }
 
-  async #mintManagedProviderValues(
+  async #canonicalRunIssuanceContext(
     workspaceId: string,
     connection: ProviderConnection,
-    options: {
-      readonly capsuleId?: string;
-      readonly runId?: string;
-      readonly phase?: MintPhase;
-    },
-  ): Promise<MintedProviderValues | undefined> {
-    if (connection.scopeHints?.managedProvider !== true) return undefined;
-    if (!isPublicManagedProviderConnection(connection)) {
+    phase: MintPhase | undefined,
+    options: CapsuleProviderBindingMintOptions | undefined,
+  ): Promise<CredentialRecipeDriverRunContext> {
+    if (!isWorkspaceBindableOperatorConnection(connection)) {
       throw new ConnectionVaultError(
         "failed_precondition",
-        `managed provider connection ${connection.id} requires explicit operator ownership and a managedProviderProfile`,
+        `connection ${connection.id} is not a verified workspace-bindable operator connection`,
+        undefined,
+        "provider_connection_not_ready",
+      );
+    }
+    const capsuleId = options?.capsuleId?.trim();
+    const runId = options?.runId?.trim();
+    if (
+      !capsuleId ||
+      !runId ||
+      (phase !== "plan" && phase !== "apply" && phase !== "destroy")
+    ) {
+      throw new ConnectionVaultError(
+        "failed_precondition",
+        `connection ${connection.id} requires exact Capsule, Run, and phase context`,
         undefined,
         "credential_service_unavailable",
       );
     }
-    const profile = managedProviderProfile(connection.scopeHints);
-    if (!profile) {
+    const resolved = await resolveCanonicalCapsuleRunCredentialContext(
+      this.#store,
+      { workspaceId, capsuleId, runId, phase },
+    );
+    if (!resolved.ok) {
       throw new ConnectionVaultError(
         "failed_precondition",
-        `managed provider connection ${connection.id} requires an explicit managedProviderProfile`,
+        `canonical Capsule Run credential context is unavailable (${resolved.reason})`,
         undefined,
         "credential_service_unavailable",
       );
     }
-    const issuer = this.#managedProviderCredentialIssuer;
-    if (!issuer) {
-      throw new ConnectionVaultError(
-        "failed_precondition",
-        `managed provider connection ${connection.id} requires a managed provider credential issuer`,
-        undefined,
-        "credential_service_unavailable",
-      );
-    }
-    const issued = await issuer({
-      workspaceId,
-      ...(options.capsuleId ? { capsuleId: options.capsuleId } : {}),
-      ...(options.runId ? { runId: options.runId } : {}),
-      managedProviderProfile: profile,
-      connection,
-      ...(options.phase ? { phase: options.phase } : {}),
-    });
-    if (!issued) {
-      throw new ConnectionVaultError(
-        "failed_precondition",
-        `managed provider connection ${connection.id} could not mint a run-scoped provider token`,
-        undefined,
-        "credential_service_unavailable",
-      );
-    }
-    return {
-      values: issued.values,
-      evidence: {
-        connectionId: connection.id,
-        provider: connection.provider,
-        temporary: issued.temporary,
-        ttlEnforced: issued.ttlSeconds !== undefined && issued.ttlSeconds > 0,
-        ...(issued.expiresAt ? { expiresAt: issued.expiresAt } : {}),
-        ...(issued.ttlSeconds !== undefined && issued.ttlSeconds > 0
-          ? { ttlSeconds: issued.ttlSeconds }
-          : {}),
-        issuer: issued.issuer,
-        ...(issued.secretValueStored === false
-          ? { secretValueStored: false }
-          : {}),
-      },
-    };
+    return resolved.context;
   }
 
   /**
@@ -1265,6 +1295,28 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     return { env: stringRecord(parsed), files: [] };
   }
 
+  async #providerMaterialForConnection(
+    connection: ProviderConnection,
+  ): Promise<ProviderSecretMaterial> {
+    if (
+      !isCapsuleRunCredentialIssuance(
+        connection.credentialRecipe?.runIssuance,
+      )
+    ) {
+      return await this.#openProviderSecretMaterial(connection);
+    }
+    const unexpected = await this.#store.getSecretBlob(connection.id);
+    if (unexpected) {
+      throw new ConnectionVaultError(
+        "failed_precondition",
+        `run-issued credential connection ${connection.id} unexpectedly has stored material`,
+        undefined,
+        "credential_service_unavailable",
+      );
+    }
+    return { env: {}, files: [] };
+  }
+
   async #openValues(
     connection: ProviderConnection,
   ): Promise<Record<string, string>> {
@@ -1273,6 +1325,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
 
   async #mintProviderValues(
     connection: ProviderConnection,
+    run?: CredentialRecipeDriverRunContext,
   ): Promise<MintedProviderValues> {
     if (connectionIsExpired(connection, this.#now())) {
       await this.#markConnectionExpired(connection);
@@ -1281,7 +1334,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         `connection ${connection.id} expired at ${connection.expiresAt}`,
       );
     }
-    const material = await this.#openProviderSecretMaterial(connection);
+    const material = await this.#providerMaterialForConnection(connection);
     const staticEvidence = () =>
       staticCredentialEvidence(connection, this.#now());
     const driver = this.#credentialDriver(connection);
@@ -1300,23 +1353,153 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         evidence: staticEvidence(),
       };
     }
+    if (!isSafeCredentialEvidenceText(driver.evidenceIssuer)) {
+      throw new ConnectionVaultError(
+        "failed_precondition",
+        "credential recipe driver has no valid evidence issuer",
+        undefined,
+        "credential_service_unavailable",
+      );
+    }
     try {
-      const minted = await driver.mint({
+      const issuedSecretValues: string[] = [];
+      const baseContext = {
         connection,
         values: material.env,
         files: material.files,
         fetch: this.#fetch,
         now: this.#now,
         staticEvidence,
+      };
+      const minted = run
+        ? await driver.mint({
+            ...baseContext,
+            run,
+            issueRunCredential: this.#runCredentialIssueCallback(
+              connection,
+              run,
+              (token) => issuedSecretValues.push(token),
+            ),
+          })
+        : await driver.mint(baseContext);
+      assertDriverMintMatchesResolvedRecipe(connection, minted);
+      const evidence = validatedProviderCredentialMintEvidence({
+        evidence: minted.evidence,
+        connectionId: connection.id,
+        provider: connection.provider,
+        expectedIssuer: driver.evidenceIssuer,
+        sensitiveValues: [
+          ...Object.values(material.env),
+          ...material.files.map((file) => file.content),
+          ...Object.values(minted.env),
+          ...(minted.files ?? []).map((file) => file.content),
+          ...issuedSecretValues,
+        ],
       });
       return {
         values: minted.env,
         ...(minted.files ? { files: minted.files } : {}),
-        evidence: minted.evidence,
+        evidence,
       };
     } catch (error) {
       throw wrapDriverError(error);
     }
+  }
+
+  #runCredentialIssueCallback(
+    connection: ProviderConnection,
+    run: CredentialRecipeDriverRunContext,
+    onIssued: (token: string) => void,
+  ): CredentialRecipeIssueRunCredential {
+    const issuance = connection.credentialRecipe?.runIssuance;
+    if (!isCapsuleRunCredentialIssuance(issuance)) {
+      throw new ConnectionVaultError(
+        "failed_precondition",
+        `connection ${connection.id} has no run-issuance authority`,
+        undefined,
+        "credential_service_unavailable",
+      );
+    }
+    const issuer = this.#runCredentialIssuer;
+    if (!issuer) {
+      throw new ConnectionVaultError(
+        "failed_precondition",
+        `connection ${connection.id} requires a configured Run credential issuer`,
+        undefined,
+        "credential_service_unavailable",
+      );
+    }
+    return async (request) => {
+      const exactRequest = exactRunCredentialIssueRequest(request);
+      const currentConnection = await this.#store.getConnection(connection.id);
+      const canonicalBoundProvider = canonicalProviderSource(
+        connection.provider,
+      );
+      const canonicalCurrentProvider = currentConnection
+        ? canonicalProviderSource(currentConnection.provider)
+        : undefined;
+      if (
+        !currentConnection ||
+        !isWorkspaceBindableOperatorConnection(currentConnection) ||
+        canonicalBoundProvider !== connection.provider ||
+        connection.providerSource !== canonicalBoundProvider ||
+        canonicalCurrentProvider !== currentConnection.provider ||
+        currentConnection.providerSource !== canonicalCurrentProvider ||
+        currentConnection.provider !== connection.provider ||
+        currentConnection.credentialRecipe?.id !==
+          connection.credentialRecipe?.id ||
+        currentConnection.credentialRecipe?.authMode !==
+          connection.credentialRecipe?.authMode ||
+        currentConnection.credentialRecipe?.preRunAction !==
+          connection.credentialRecipe?.preRunAction ||
+        !sameCapsuleRunCredentialIssuance(
+          currentConnection.credentialRecipe?.runIssuance,
+          issuance,
+        )
+      ) {
+        throw new ConnectionVaultError(
+          "failed_precondition",
+          `connection ${connection.id} no longer has the bound Run credential authority`,
+          undefined,
+          "credential_service_unavailable",
+        );
+      }
+      const unexpected = await this.#store.getSecretBlob(connection.id);
+      if (unexpected) {
+        throw new ConnectionVaultError(
+          "failed_precondition",
+          `run-issued credential connection ${connection.id} unexpectedly has stored material`,
+          undefined,
+          "credential_service_unavailable",
+        );
+      }
+      const canonical = await resolveCanonicalCapsuleRunCredentialContext(
+        this.#store,
+        run,
+      );
+      if (!canonical.ok || !sameRunCredentialContext(canonical.context, run)) {
+        throw new ConnectionVaultError(
+          "failed_precondition",
+          `canonical Capsule Run credential context is unavailable (${canonical.ok ? "authority_changed" : canonical.reason})`,
+          undefined,
+          "credential_service_unavailable",
+        );
+      }
+      const issued = await issuer({
+        connection: currentConnection,
+        run: canonical.context,
+        request: Object.freeze({
+          audience: issuance.audience,
+          scopes: Object.freeze([...issuance.scopes]),
+          ...(exactRequest.ttlSeconds !== undefined
+            ? { ttlSeconds: exactRequest.ttlSeconds }
+            : {}),
+        }),
+      });
+      const exact = exactIssuedRunCredential(issued, this.#now());
+      onIssued(exact.token);
+      return exact;
+    };
   }
 
   #credentialDriver(
@@ -1376,13 +1559,6 @@ function assertConnectionVerified(connection: ProviderConnection): void {
   }
 }
 
-function assertConnectionVerifiedUnlessManagedProvider(
-  connection: ProviderConnection,
-): void {
-  if (isPublicManagedProviderConnection(connection)) return;
-  assertConnectionVerified(connection);
-}
-
 function staticCredentialEvidence(
   connection: ProviderConnection,
   now: Date,
@@ -1403,6 +1579,159 @@ function staticCredentialEvidence(
       : {}),
     issuer: "static_secret",
   };
+}
+
+export function validatedProviderCredentialMintEvidence(input: {
+  readonly evidence: unknown;
+  readonly connectionId: string;
+  readonly provider: string;
+  /** Host-pinned driver label. Core persists this exact value. */
+  readonly expectedIssuer?: string;
+  readonly sensitiveValues?: readonly string[];
+}): ProviderCredentialMintEvidence {
+  const evidence = input.evidence;
+  const allowedKeys = new Set([
+    "connectionId",
+    "provider",
+    "temporary",
+    "ttlEnforced",
+    "expiresAt",
+    "ttlSeconds",
+    "issuer",
+    "secretValueStored",
+  ]);
+  if (
+    !isRecord(evidence) ||
+    Object.keys(evidence).some((key) => !allowedKeys.has(key)) ||
+    evidence.connectionId !== input.connectionId ||
+    evidence.provider !== input.provider ||
+    typeof evidence.temporary !== "boolean" ||
+    typeof evidence.ttlEnforced !== "boolean" ||
+    (evidence.expiresAt !== undefined &&
+      (typeof evidence.expiresAt !== "string" ||
+        !Number.isFinite(Date.parse(evidence.expiresAt)))) ||
+    (evidence.ttlSeconds !== undefined &&
+      (!Number.isSafeInteger(evidence.ttlSeconds) ||
+        (evidence.ttlSeconds as number) <= 0)) ||
+    !isSafeCredentialEvidenceText(
+      input.expectedIssuer ??
+        (typeof evidence === "object" && evidence !== null &&
+        typeof (evidence as Record<string, unknown>).issuer === "string"
+          ? (evidence as Record<string, unknown>).issuer
+          : "static_secret"),
+    ) ||
+    (evidence.issuer !== undefined &&
+      ((input.expectedIssuer !== undefined &&
+        evidence.issuer !== input.expectedIssuer) ||
+        !isSafeCredentialEvidenceText(evidence.issuer))) ||
+    (evidence.secretValueStored !== undefined &&
+      evidence.secretValueStored !== false) ||
+    credentialEvidenceContainsSensitiveValue(
+      driverControlledEvidence(
+        evidence,
+        input.expectedIssuer !== undefined,
+      ),
+      input.sensitiveValues ?? [],
+    )
+  ) {
+    throw invalidProviderCredentialMintEvidence();
+  }
+  return Object.freeze({
+    connectionId: input.connectionId,
+    provider: input.provider,
+    temporary: evidence.temporary,
+    ttlEnforced: evidence.ttlEnforced,
+    ...(typeof evidence.expiresAt === "string"
+      ? { expiresAt: evidence.expiresAt }
+      : {}),
+    ...(typeof evidence.ttlSeconds === "number"
+      ? { ttlSeconds: evidence.ttlSeconds }
+      : {}),
+    issuer:
+      input.expectedIssuer ??
+      (typeof evidence.issuer === "string"
+        ? evidence.issuer
+        : "static_secret"),
+    ...(evidence.secretValueStored === false
+      ? { secretValueStored: false as const }
+      : {}),
+  });
+}
+
+/**
+ * Connection/provider are always Core-owned metadata. The issuer is Core-owned
+ * only when the caller supplied an exact host-pinned expectedIssuer. Other
+ * ConnectionVault implementations cross this boundary too, so an unpinned
+ * issuer remains untrusted evidence and must be checked for secret material.
+ */
+function driverControlledEvidence(
+  evidence: Record<string, unknown>,
+  issuerIsHostPinned: boolean,
+): Record<string, unknown> {
+  const { connectionId: _connectionId, provider: _provider, ...rest } = evidence;
+  if (!issuerIsHostPinned) return rest;
+  const { issuer: _issuer, ...hostPinnedRest } = rest;
+  return hostPinnedRest;
+}
+
+function invalidProviderCredentialMintEvidence(): ConnectionVaultError {
+  return new ConnectionVaultError(
+    "failed_precondition",
+    "credential driver returned invalid provider credential mint evidence",
+    undefined,
+    "credential_service_unavailable",
+  );
+}
+
+function isSafeCredentialEvidenceText(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= 256 &&
+    value.trim() === value &&
+    !/[\u0000-\u001f\u007f]/u.test(value)
+  );
+}
+
+function credentialEvidenceContainsSensitiveValue(
+  evidence: Record<string, unknown>,
+  sensitiveValues: readonly string[],
+): boolean {
+  const evidenceValues = Object.values(evidence).flatMap((value) =>
+    typeof value === "string" ||
+      typeof value === "number" ||
+      typeof value === "boolean"
+      ? [String(value)]
+      : []
+  );
+  return sensitiveValues.some(
+    (sensitive) =>
+      sensitive.length > 0 &&
+      evidenceValues.some((value) => value.includes(sensitive)),
+  );
+}
+
+function safeCredentialDriverVerificationResult(
+  value: unknown,
+  sensitiveValues: readonly string[],
+): { readonly ok: boolean; readonly detail?: string } {
+  if (!isRecord(value) || typeof value.ok !== "boolean") {
+    throw new ConnectionVaultError(
+      "failed_precondition",
+      "credential driver returned an invalid verification result",
+    );
+  }
+  if (value.detail === undefined) return { ok: value.ok };
+  if (
+    !isSafeCredentialEvidenceText(value.detail) ||
+    credentialEvidenceContainsSensitiveValue(
+      { issuer: value.detail },
+      sensitiveValues,
+    )
+  ) {
+    return { ok: false, detail: "credential driver verification failed" };
+  }
+  return { ok: value.ok, detail: value.detail };
 }
 
 /**
@@ -1509,29 +1838,11 @@ function normalizeScope(
 ): ConnectionScopeHints | undefined {
   if (!scope) return undefined;
   const out: {
-    managedProvider?: boolean;
     providerConfig?: ConnectionScopeHints["providerConfig"];
     moduleInputDefaults?: ConnectionScopeHints["moduleInputDefaults"];
     providerSettings?: ConnectionScopeHints["providerSettings"];
-    managedProviderProfile?: string;
     managedPublicBaseDomain?: string;
   } = {};
-  const profile = managedProviderProfile(scope);
-  if (scope.managedProvider === true) {
-    if (!profile) {
-      throw new ConnectionVaultError(
-        "invalid_argument",
-        "scopeHints.managedProviderProfile is required when managedProvider is true",
-      );
-    }
-    out.managedProvider = true;
-    out.managedProviderProfile = profile;
-  } else if (profile) {
-    throw new ConnectionVaultError(
-      "invalid_argument",
-      "scopeHints.managedProviderProfile requires managedProvider: true",
-    );
-  }
   const providerConfig = normalizeNonSecretJsonRecord(
     scope.providerConfig,
     "scopeHints.providerConfig",
@@ -1569,20 +1880,6 @@ function normalizeScope(
     out.managedPublicBaseDomain = scope.managedPublicBaseDomain;
   }
   return Object.keys(out).length > 0 ? out : undefined;
-}
-
-function assertManagedProviderOperatorOwnership(
-  scopeHints: ConnectionScopeHints | undefined,
-  workspaceId: string | undefined,
-  scope: ProviderConnection["scope"],
-): void {
-  if (scopeHints?.managedProvider !== true) return;
-  if (scope !== "operator" || workspaceId !== undefined) {
-    throw new ConnectionVaultError(
-      "invalid_argument",
-      "managed provider connections must be operator-scoped and must not have an owning Workspace",
-    );
-  }
 }
 
 const SECRET_CONFIG_KEYS = new Set([
@@ -1757,18 +2054,159 @@ function normalizeCredentialRecipe(
   return explicit;
 }
 
+function resolvedRunIssuance(
+  value: unknown,
+): NonNullable<ProviderConnection["credentialRecipe"]>["runIssuance"] {
+  if (value === undefined) return undefined;
+  if (!isCapsuleRunCredentialIssuance(value)) {
+    throw new ConnectionVaultError(
+      "failed_precondition",
+      "installed Credential Recipe has an unsupported runIssuance descriptor",
+    );
+  }
+  return {
+    context: "capsule-run.v1",
+    operatorConnection: "workspace-bindable",
+    storedMaterial: "none",
+    audience: value.audience,
+    scopes: Object.freeze([...value.scopes].sort()),
+  };
+}
+
+function sameRunCredentialContext(
+  left: CredentialRecipeDriverRunContext,
+  right: CredentialRecipeDriverRunContext,
+): boolean {
+  return (
+    left.workspaceId === right.workspaceId &&
+    left.capsuleId === right.capsuleId &&
+    left.runId === right.runId &&
+    left.installingPrincipalId === right.installingPrincipalId &&
+    left.phase === right.phase
+  );
+}
+
+function exactRunCredentialIssueRequest(
+  value: CredentialRecipeRunCredentialRequest,
+): CredentialRecipeRunCredentialRequest {
+  if (!isRecord(value)) {
+    throw new ConnectionVaultError(
+      "invalid_argument",
+      "Run credential issue request must be an object",
+    );
+  }
+  const keys = Object.keys(value);
+  if (keys.some((key) => key !== "ttlSeconds")) {
+    throw new ConnectionVaultError(
+      "invalid_argument",
+      "Run credential drivers may select only ttlSeconds",
+    );
+  }
+  const ttlSeconds = value.ttlSeconds;
+  if (
+    ttlSeconds !== undefined &&
+    (typeof ttlSeconds !== "number" ||
+      !Number.isInteger(ttlSeconds) ||
+      ttlSeconds < 60 ||
+      ttlSeconds > 3600)
+  ) {
+    throw new ConnectionVaultError(
+      "invalid_argument",
+      "Run credential ttlSeconds must be an integer between 60 and 3600",
+    );
+  }
+  return Object.freeze({
+    ...(ttlSeconds !== undefined ? { ttlSeconds } : {}),
+  });
+}
+
+function exactIssuedRunCredential(
+  value: CredentialRecipeIssuedRunCredential,
+  now: Date,
+): CredentialRecipeIssuedRunCredential {
+  const expiresAtMs = isRecord(value) && typeof value.expiresAt === "string"
+    ? Date.parse(value.expiresAt)
+    : Number.NaN;
+  if (
+    !isRecord(value) ||
+    typeof value.token !== "string" ||
+    value.token.length === 0 ||
+    value.token.length > 32_768 ||
+    /[\u0000-\u0020\u007f-\u009f]/u.test(value.token) ||
+    typeof value.expiresAt !== "string" ||
+    !Number.isFinite(expiresAtMs) ||
+    !Number.isInteger(value.ttlSeconds) ||
+    value.ttlSeconds < 60 ||
+    value.ttlSeconds > 3600 ||
+    expiresAtMs <= now.getTime() ||
+    Math.abs(expiresAtMs - (now.getTime() + value.ttlSeconds * 1_000)) >
+      5_000
+  ) {
+    throw new ConnectionVaultError(
+      "failed_precondition",
+      "Run credential issuer returned malformed bounded material",
+      undefined,
+      "credential_service_unavailable",
+    );
+  }
+  return Object.freeze({
+    token: value.token,
+    expiresAt: value.expiresAt,
+    ttlSeconds: value.ttlSeconds,
+  });
+}
+
+function assertDriverMintMatchesResolvedRecipe(
+  connection: ProviderConnection,
+  minted: {
+    readonly env: Readonly<Record<string, string>>;
+    readonly files?: readonly MintedFile[];
+  },
+): void {
+  const allowedEnvNames = new Set(connection.envNames);
+  for (const name of Object.keys(minted.env)) {
+    if (!allowedEnvNames.has(name)) {
+      throw new ConnectionVaultError(
+        "failed_precondition",
+        `credential driver returned undeclared env name ${name}`,
+        undefined,
+        "credential_service_unavailable",
+      );
+    }
+  }
+  const allowedFileEnvNames = new Set(connection.fileEnvNames ?? []);
+  for (const file of minted.files ?? []) {
+    if (
+      (isCapsuleRunCredentialIssuance(
+        connection.credentialRecipe?.runIssuance,
+      ) && !file.envName) ||
+      (file.envName && !allowedFileEnvNames.has(file.envName))
+    ) {
+      throw new ConnectionVaultError(
+        "failed_precondition",
+        `credential driver returned undeclared file ${file.envName ?? file.path}`,
+        undefined,
+        "credential_service_unavailable",
+      );
+    }
+  }
+}
+
 /**
  * Re-wraps a provider credential driver error into the Vault's own
  * {@link ConnectionVaultError} surface. Provider drivers raise their own typed
  * failures; the Vault maps them to its
- * provider-neutral `failed_precondition` contract. Any non-Error value is
- * rethrown unchanged so unexpected failures are not masked.
+ * provider-neutral `failed_precondition` contract. Driver-controlled messages
+ * and thrown values are deliberately discarded because they may contain
+ * credential material.
  */
-function wrapDriverError(error: unknown): unknown {
-  if (error instanceof Error) {
-    return new ConnectionVaultError("failed_precondition", error.message);
-  }
-  return error;
+function wrapDriverError(_error: unknown): ConnectionVaultError {
+  return new ConnectionVaultError(
+    "failed_precondition",
+    "credential driver failed",
+    undefined,
+    "credential_service_unavailable",
+  );
 }
 
 /**

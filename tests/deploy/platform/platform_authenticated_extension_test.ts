@@ -9,21 +9,24 @@ const CONTEXT_ROUTE = {
   handlerKey: "CONTEXT_EXTENSION",
   authDelivery: "context" as const,
   workspaceContext: "query-required" as const,
+  runCredential: {
+    audience: "operator.example.provider.v1",
+    requiredScopes: ["example.write"],
+  },
 };
 
 const verifiedSession = async () => ({
   authenticated: true as const,
-  authKind: "service-token" as const,
-  subject: "principal_verified",
+  authKind: "run-credential" as const,
+  subject: "principal_installer",
   workspaceId: "workspace_verified",
   workspaceRole: "member" as const,
   scopes: ["example.read", "example.write"],
   capsuleId: "capsule_verified",
   runId: "run_verified",
   installingPrincipalId: "principal_installer",
-  managedProviderProfile: "operator.example.provider.v1",
-  managedProviderRunToken: "managed-run-token-must-not-cross",
-  audience: "https://app.takosumi.com/extensions/context",
+  audience: "operator.example.provider.v1",
+  phase: "apply" as const,
 });
 
 test("context delivery strips credentials and forged trusted headers, and freezes safe context", async () => {
@@ -132,18 +135,18 @@ test("context delivery strips credentials and forged trusted headers, and freeze
   }
   expect(forwardedRequest?.headers.get("x-extension-safe")).toBe("retained");
   expect(forwardedContext).toEqual({
-    authKind: "service-token",
-    subject: "principal_verified",
+    authKind: "run-credential",
+    subject: "principal_installer",
     workspaceId: "workspace_verified",
     workspaceRole: "member",
     scopes: ["example.read", "example.write"],
     capsuleId: "capsule_verified",
     runId: "run_verified",
     installingPrincipalId: "principal_installer",
-    managedProviderProfile: "operator.example.provider.v1",
-    audience: "https://app.takosumi.com/extensions/context",
+    audience: "operator.example.provider.v1",
+    phase: "apply",
   });
-  expect(forwardedContext).not.toHaveProperty("managedProviderRunToken");
+  expect(forwardedContext).not.toHaveProperty("token");
   expect(Object.isFrozen(forwardedContext)).toBe(true);
   expect(Object.isFrozen(forwardedContext?.scopes)).toBe(true);
   expect(await forwardedRequest?.text()).toBe(

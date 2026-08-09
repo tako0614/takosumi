@@ -1307,10 +1307,7 @@ function Inner() {
                         <For each={sourceCandidates()}>
                           {(connection) => (
                             <option value={connection.id}>
-                              {providerConnectionDisplayName(
-                                connection,
-                                t("installStore.managedProvider"),
-                              )}
+                              {providerConnectionDisplayName(connection)}
                             </option>
                           )}
                         </For>
@@ -1372,10 +1369,7 @@ function Inner() {
                       <For each={choices()}>
                         {(connection) => (
                           <option value={connection.id}>
-                            {providerConnectionDisplayName(
-                              connection,
-                              t("installStore.managedProvider"),
-                            )}
+                            {providerConnectionDisplayName(connection)}
                           </option>
                         )}
                       </For>

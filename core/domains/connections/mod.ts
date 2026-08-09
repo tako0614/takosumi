@@ -16,10 +16,7 @@ import type {
   ProviderBindings,
   ProviderConnectionMaterialization,
 } from "takosumi-contract/connections";
-import {
-  isPublicManagedProviderConnection,
-  managedProviderProfile,
-} from "takosumi-contract/connections";
+import { isWorkspaceBindableOperatorConnection } from "takosumi-contract/connections";
 import { sameProviderSource } from "takosumi-contract/provider-env-rules";
 import { stableJsonDigest } from "../../adapters/source/digest.ts";
 import {
@@ -147,8 +144,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 /**
  * Stable digest over a run's resolved Provider Connection bindings. The chosen
- * CredentialRecipe and managed-provider profile are pinned with the connection
- * id so changing a pre-run driver or token authority cannot slip between
+ * CredentialRecipe, including its resolved run-issuance descriptor, is pinned
+ * with the connection id so changing a pre-run driver or issuance authority cannot slip between
  * reviewed plan and apply. Mutable verification status is deliberately
  * excluded; revocation still fails before minting.
  */
@@ -167,8 +164,6 @@ export async function resolvedProviderBindingsDigest(
       connectionId: entry.connection.id,
       envNames: [...entry.connection.envNames].sort(),
       providerConfig: entry.connection.scopeHints?.providerConfig ?? null,
-      managedProviderProfile:
-        managedProviderProfile(entry.connection.scopeHints) ?? null,
     }))
     .sort((a, b) => {
       const providerOrder = compareText(a.provider, b.provider);
@@ -227,7 +222,7 @@ export class ConnectionsService {
     const operatorManagedConnections =
       workspaceId && this.#allowOperatorScopedProviderConnections
         ? (await this.#store.listOperatorConnections()).filter(
-            isPublicManagedProviderConnection,
+            isWorkspaceBindableOperatorConnection,
           )
         : [];
     return [...connections, ...operatorManagedConnections].filter(
@@ -356,7 +351,7 @@ export class ConnectionsService {
     if (connection.scope === "operator") {
       if (
         !this.#allowOperatorScopedProviderConnections ||
-        !isPublicManagedProviderConnection(connection)
+        !isWorkspaceBindableOperatorConnection(connection)
       ) {
         throw new OpenTofuControllerError(
           "permission_denied",
@@ -370,16 +365,6 @@ export class ConnectionsService {
         "failed_precondition",
         `Provider Connection ${binding.connectionId} provider ${connection.provider} does not match binding provider ${binding.provider}`,
         { reason: PROVIDER_CONNECTION_SETUP_REQUIRED_REASON },
-      );
-    }
-    if (
-      connection.scopeHints?.managedProvider === true &&
-      !isPublicManagedProviderConnection(connection)
-    ) {
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        `Provider Connection ${binding.connectionId} requires an explicit managedProviderProfile and operator scope`,
-        { reason: PROVIDER_CONNECTION_NOT_READY_REASON },
       );
     }
     if (!connectionUsableForProviderBinding(connection)) {
@@ -413,14 +398,7 @@ function isSourceGitKind(connection: ProviderConnection): boolean {
 function connectionUsableForProviderBinding(
   connection: ProviderConnection,
 ): boolean {
-  if (connection.scopeHints?.managedProvider === true) {
-    return (
-      (connection.status === "pending" || connection.status === "verified") &&
-      isPublicManagedProviderConnection(connection)
-    );
-  }
-  if (connection.status === "verified") return true;
-  return false;
+  return connection.status === "verified";
 }
 
 /** Collects the connection ids a run's vault-backed credential mint may draw from. */

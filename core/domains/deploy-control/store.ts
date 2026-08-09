@@ -813,6 +813,16 @@ export interface OpenTofuControlStore {
   // stored in a separate namespace so the public ProviderConnection can be listed
   // without ever touching ciphertext.
   putConnection(connection: ProviderConnection): Promise<ProviderConnection>;
+  /** Atomic fixed-id create used by deploy-time credential reconciliation. */
+  createConnectionIfAbsent(connection: ProviderConnection): Promise<boolean>;
+  /**
+   * Replaces one exact public Connection row. A concurrent mutation or removal
+   * loses the compare-and-swap and returns false without writing.
+   */
+  replaceConnectionIfUnchanged(
+    expected: ProviderConnection,
+    replacement: ProviderConnection,
+  ): Promise<boolean>;
   getConnection(id: string): Promise<ProviderConnection | undefined>;
   listConnections(workspaceId: string): Promise<readonly ProviderConnection[]>;
   /** Keyset-paged Workspace ProviderConnection listing (spec §30 connection list route). */
@@ -2013,6 +2023,30 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
   putConnection(connection: ProviderConnection): Promise<ProviderConnection> {
     this.#connections.set(connection.id, connection);
     return Promise.resolve(connection);
+  }
+
+  createConnectionIfAbsent(
+    connection: ProviderConnection,
+  ): Promise<boolean> {
+    if (this.#connections.has(connection.id)) return Promise.resolve(false);
+    this.#connections.set(connection.id, connection);
+    return Promise.resolve(true);
+  }
+
+  replaceConnectionIfUnchanged(
+    expected: ProviderConnection,
+    replacement: ProviderConnection,
+  ): Promise<boolean> {
+    const current = this.#connections.get(expected.id);
+    if (
+      !current ||
+      replacement.id !== expected.id ||
+      JSON.stringify(current) !== JSON.stringify(expected)
+    ) {
+      return Promise.resolve(false);
+    }
+    this.#connections.set(replacement.id, replacement);
+    return Promise.resolve(true);
   }
 
   getConnection(id: string): Promise<ProviderConnection | undefined> {

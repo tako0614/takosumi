@@ -88,11 +88,13 @@ import { ConnectionsService } from "./domains/connections/mod.ts";
 import { DependenciesService } from "./domains/dependencies/mod.ts";
 import { OutputSharesService } from "./domains/output-shares/mod.ts";
 import type { SensitiveOutputResolver } from "./domains/output-shares/mod.ts";
-import type {
-  ConnectionVault,
-  ManagedProviderCredentialIssuer,
-} from "./adapters/vault/mod.ts";
+import type { ConnectionVault } from "./adapters/vault/mod.ts";
 import { StaticSecretConnectionVault } from "./adapters/vault/mod.ts";
+import {
+  reconcileRunIssuedOperatorConnection,
+  resolveTargetConnection,
+} from "./adapters/vault/run_issued_operator_reconciliation.ts";
+import type { FixedOperatorProviderConnectionDeclaration } from "takosumi-contract/credential-recipe-host";
 import type { SecretBoundaryCrypto } from "./adapters/secret-store/memory.ts";
 import { RunGroupsService } from "./domains/run-groups/mod.ts";
 import { ActivityService } from "./domains/activity/mod.ts";
@@ -253,6 +255,7 @@ import {
 } from "takosumi-contract";
 import type {
   CredentialRecipeDriverRegistry,
+  CredentialRecipeRunCredentialIssuer,
   SourceCredentialDriverRegistry,
 } from "./adapters/vault/driver_ports.ts";
 
@@ -541,6 +544,14 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
    * `recipeId/authMode`. Omitted means no provider recipe drivers are installed.
    */
   readonly credentialRecipeDrivers?: CredentialRecipeDriverRegistry;
+  /** Host-declared fixed-id, credentialless operator Provider Connections. */
+  readonly operatorProviderConnections?: readonly FixedOperatorProviderConnectionDeclaration[];
+  /**
+   * Host-owned generic Run-credential signer. Core/Vault binds canonical
+   * identity claims and recipe-owned audience/scopes; recipe drivers may
+   * request only a bounded TTL and never receive this signer or its secret.
+   */
+  readonly runCredentialIssuer?: CredentialRecipeRunCredentialIssuer;
   /**
    * Complete host-installed Source credential driver registry. Core has no
    * implicit transport-specific credential implementation.
@@ -778,14 +789,6 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
    * instead of re-assembling the vault + store itself.
    */
   readonly secretCrypto?: SecretBoundaryCrypto;
-  /**
-   * Host-injected credential issuer for operator managed-provider compatibility
-   * Connections. OSS/self-host leaves this undefined and the Vault falls back to
-   * the stored static secret. A managed compatibility extension may use it to
-   * mint run-scoped, Workspace-bound provider tokens for protocols that cannot
-   * carry custom attribution headers.
-   */
-  readonly managedProviderCredentialIssuer?: ManagedProviderCredentialIssuer;
   /**
    * Asynchronous run dispatch seam. The GA Workers adapter schedules the
    * per-run Durable Object directly; when omitted the controller defaults to an
@@ -1410,6 +1413,34 @@ export async function createTakosumiService(
   }
   const credentialRecipeDrivers: CredentialRecipeDriverRegistry =
     options.credentialRecipeDrivers ?? {};
+  const operatorProviderConnections = options.operatorProviderConnections ?? [];
+  if (!Array.isArray(operatorProviderConnections)) {
+    throw new TypeError("operatorProviderConnections must be an array");
+  }
+  const prevalidatedOperatorConnections = new Set<string>();
+  const validationTimestamp = new Date().toISOString();
+  for (const declaration of operatorProviderConnections) {
+    if (prevalidatedOperatorConnections.has(declaration.id)) {
+      throw new TypeError(
+        `operator Provider Connection declaration id ${declaration.id} must be unique`,
+      );
+    }
+    prevalidatedOperatorConnections.add(declaration.id);
+    resolveTargetConnection(
+      declaration,
+      (id) => credentialRecipeById.get(id),
+      credentialRecipeDrivers,
+      validationTimestamp,
+    );
+  }
+  for (const declaration of operatorProviderConnections) {
+    await reconcileRunIssuedOperatorConnection({
+      store: sharedOpenTofuStore,
+      descriptor: declaration,
+      credentialRecipeResolver: (id) => credentialRecipeById.get(id),
+      credentialDrivers: credentialRecipeDrivers,
+    });
+  }
   // Provider-credential Vault: an explicitly injected vault wins; otherwise, when
   // the host supplied at-rest secret crypto, build the default
   // StaticSecretConnectionVault over the SAME shared store the controller uses
@@ -1425,13 +1456,10 @@ export async function createTakosumiService(
           crypto: options.secretCrypto,
           credentialRecipeResolver: (id) => credentialRecipeById.get(id),
           credentialDrivers: credentialRecipeDrivers,
-          sourceCredentialDrivers: options.sourceCredentialDrivers ?? {},
-          ...(options.managedProviderCredentialIssuer
-            ? {
-                managedProviderCredentialIssuer:
-                  options.managedProviderCredentialIssuer,
-              }
+          ...(options.runCredentialIssuer
+            ? { runCredentialIssuer: options.runCredentialIssuer }
             : {}),
+          sourceCredentialDrivers: options.sourceCredentialDrivers ?? {},
         })
       : undefined);
   // Activity domain (Core Specification §27 / §34): the Workspace-scoped audit

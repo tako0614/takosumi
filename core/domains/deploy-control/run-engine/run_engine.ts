@@ -8285,6 +8285,7 @@ export class RunEngine {
       planRun: input.planRun,
       phase: input.phase,
       auditRunId: releaseCommandRunId(input.applyRun.id),
+      credentialRunId: input.applyRun.id,
       credentialContext: "release_command",
       mintCredentials: input.commands.some(
         (command) =>

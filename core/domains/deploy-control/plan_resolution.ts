@@ -28,7 +28,7 @@ import { canonicalProviderAddress } from "./provider_policy.ts";
 import { OpenTofuControllerError } from "./errors.ts";
 import { normalizeProviders } from "./validation.ts";
 import { normalizeManagedPublicBaseDomain } from "./managed_public_domains.ts";
-import { isPublicManagedProviderConnection } from "takosumi-contract/connections";
+import { isWorkspaceBindableOperatorConnection } from "takosumi-contract/connections";
 
 /**
  * Provider context for a Capsule plan. A generated child-module wrapper is
@@ -129,7 +129,7 @@ function managedPublicBaseDomainFromResolved(
   for (const entry of resolved) {
     if (
       !entry.connection ||
-      !isPublicManagedProviderConnection(entry.connection)
+      !isWorkspaceBindableOperatorConnection(entry.connection)
     ) {
       continue;
     }

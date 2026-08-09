@@ -345,7 +345,6 @@ function fakeProviderVault() {
     connectionId: entry.connectionId,
     temporary: true,
     ttlEnforced: true,
-    phase: "plan" as const,
   });
   const envForEntry = (entry: {
     readonly provider: string;
@@ -379,7 +378,6 @@ function fakeProviderVault() {
               connectionId: "fixture",
               temporary: true,
               ttlEnforced: true,
-              phase: "plan",
             },
           ],
         ),
@@ -395,7 +393,6 @@ function fakeProviderVault() {
               connectionId: "fixture",
               temporary: true,
               ttlEnforced: true,
-              phase: "plan",
             },
           ],
         ),
@@ -533,7 +530,6 @@ function countingProviderVault() {
               connectionId: "fixture",
               temporary: true,
               ttlEnforced: true,
-              phase: "plan" as const,
             },
           ],
         ),
@@ -551,13 +547,15 @@ function countingProviderVault() {
               connectionId: "fixture",
               temporary: true,
               ttlEnforced: true,
-              phase: "plan" as const,
             },
           ],
         ),
       );
     },
-    mintForCapsuleProviderBindings: () => {
+    mintForCapsuleProviderBindings: (
+      _workspaceId: string,
+      entries: readonly { provider: string; connectionId: string }[],
+    ) => {
       mintCount += 1;
       return Promise.resolve(
         new PhaseMintBundle(
@@ -567,15 +565,12 @@ function countingProviderVault() {
             },
           },
           [],
-          [
-            {
-              provider: "registry.opentofu.org/cloudflare/cloudflare",
-              connectionId: "fixture",
-              temporary: true,
-              ttlEnforced: true,
-              phase: "plan" as const,
-            },
-          ],
+          entries.map((entry) => ({
+            provider: entry.provider,
+            connectionId: entry.connectionId,
+            temporary: true,
+            ttlEnforced: true,
+          })),
         ),
       );
     },

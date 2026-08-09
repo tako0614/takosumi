@@ -74,7 +74,7 @@ import {
   type SourceWebhookOperations,
 } from "../../../deploy/platform/worker.ts";
 import { platformResourceInterfaceWorkspaceResolver } from "../../../worker/src/deploy_control_seam.ts";
-import { createManagedProviderRunToken } from "../../../core/shared/managed_provider_tokens.ts";
+import { createRunCredentialToken } from "../../../core/shared/run_credential_tokens.ts";
 import { sha256HexAsync } from "../../../core/shared/runtime/hash.ts";
 import {
   createInMemoryResourceShapeStores,
@@ -3428,112 +3428,6 @@ test("platform cookie Workspace verification rechecks live membership even for a
   expect(verified.ok).toBe(false);
 });
 
-test("platform extension authenticates managed provider run tokens with Workspace context", async () => {
-  const issued = await createManagedProviderRunToken({
-    secret: "managed-secret",
-    audience: "compat.example.v1",
-    workspaceId: "space_cc8dbfedfc6347d5",
-    capsuleId: "capsule_ca4ebb681fb24044",
-    runId: "run_managed_provider_apply",
-    installingPrincipalId: "principal_capsule_installer",
-    connectionId: "conn_operator_managed_example",
-    provider: "registry.example/operator/provider",
-    phase: "apply",
-    scopes: ["write"],
-  });
-  expect(issued.token).toMatch(/^takmpt_v1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
-
-  const session = await verifyPlatformExtensionSession(
-    new Request(
-      "https://operator.example.test/compat/example/v1/resources/widgets",
-      {
-        method: "POST",
-        headers: { authorization: `Bearer ${issued.token}` },
-      },
-    ),
-    { TAKOSUMI_MANAGED_PROVIDER_TOKEN_SECRET: "managed-secret" } as never,
-    {
-      basePath: "/compat/example/v1",
-      handlerKey: "TEST_PROVIDER_COMPAT_EXTENSION",
-      requiredScopes: ["write"],
-      managedProviderProfile: "compat.example.v1",
-      compatibilityProfiles: [
-        {
-          profile: "compat.example.v1",
-          planes: ["control"],
-        },
-      ],
-    },
-  );
-
-  expect(session).toEqual({
-    authenticated: true,
-    authKind: "service-token",
-    subject: "provider-connection:conn_operator_managed_example",
-    workspaceId: "space_cc8dbfedfc6347d5",
-    capsuleId: "capsule_ca4ebb681fb24044",
-    runId: "run_managed_provider_apply",
-    installingPrincipalId: "principal_capsule_installer",
-    managedProviderRunToken: issued.token,
-    managedProviderProfile: "compat.example.v1",
-    scopes: ["write"],
-  });
-});
-
-test("platform extension rejects managed provider run tokens for another explicit profile", async () => {
-  const issued = await createManagedProviderRunToken({
-    secret: "managed-secret",
-    audience: "compat.example.v1",
-    workspaceId: "space_cc8dbfedfc6347d5",
-    connectionId: "conn_managed",
-    provider: "registry.example/operator/provider",
-    phase: "apply",
-    scopes: ["write"],
-  });
-
-  const session = await verifyPlatformExtensionSession(
-    new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions", {
-      method: "POST",
-      headers: { authorization: `Bearer ${issued.token}` },
-    }),
-    { TAKOSUMI_MANAGED_PROVIDER_TOKEN_SECRET: "managed-secret" } as never,
-    {
-      basePath: "/gateway/ai/v1",
-      handlerKey: "TEST_AI_EXTENSION",
-      requiredScopes: ["write"],
-      managedProviderProfile: "gateway.ai.v1",
-    },
-  );
-
-  expect(session).toEqual({ authenticated: false });
-});
-
-test("platform extension without an explicit profile rejects managed provider run tokens", async () => {
-  const issued = await createManagedProviderRunToken({
-    secret: "managed-secret",
-    audience: "operator.example.provider.v1",
-    workspaceId: "space_cc8dbfedfc6347d5",
-    connectionId: "conn_managed",
-    provider: "registry.example/operator/provider",
-    phase: "apply",
-    scopes: ["write"],
-  });
-
-  const session = await verifyPlatformExtensionSession(
-    new Request("https://provider.example.test/api/resources", {
-      headers: { authorization: `Bearer ${issued.token}` },
-    }),
-    { TAKOSUMI_MANAGED_PROVIDER_TOKEN_SECRET: "managed-secret" } as never,
-    {
-      basePath: "/api",
-      handlerKey: "TEST_PROVIDER_EXTENSION",
-      requiredScopes: ["write"],
-    },
-  );
-
-  expect(session).toEqual({ authenticated: false });
-});
-
 test("platform extension billing context reads the canonical Capsule", async () => {
   const seenPaths: string[] = [];
   const allowed = await platformExtensionSessionCanAccessCapsule(
@@ -4234,11 +4128,15 @@ test("platform Interface ingress separates control and runtime credentials", asy
   }
 });
 
-test("platform Interface ingress rejects signed managed-provider run tokens", async () => {
-  const issued = await createManagedProviderRunToken({
-    secret: "managed-secret",
+test("platform Interface ingress rejects generic Run credentials without an extension descriptor", async () => {
+  const issued = await createRunCredentialToken({
+    secret: "run-secret",
     audience: "operator.example.provider.v1",
+    subject: "untrusted-token-subject",
     workspaceId: "space_0123456789abcdef",
+    capsuleId: "capsule_0123456789abcdef",
+    runId: "apply_0123456789abcdef",
+    installingPrincipalId: "principal_installer",
     connectionId: "conn_managed",
     provider: "cloudflare",
     phase: "apply",
@@ -4258,7 +4156,7 @@ test("platform Interface ingress rejects signed managed-provider run tokens", as
       TAKOSUMI_ENVIRONMENT: "test",
       TAKOSUMI_DEV_MODE: "1",
       TAKOSUMI_DEPLOY_CONTROL_TOKEN: "resource-token",
-      TAKOSUMI_MANAGED_PROVIDER_TOKEN_SECRET: "managed-secret",
+      TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: "run-secret",
     } as never,
   );
 

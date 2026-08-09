@@ -75,6 +75,9 @@
       "takosumi-contract/credential-recipes": [
         "./contract/credential-recipes.ts"
       ],
+      "takosumi-contract/credential-recipe-host": [
+        "./contract/credential-recipe-host.ts"
+      ],
       "takosumi-rootgen": ["./lib/rootgen/src/mod.ts"],
       "takosumi-graph": ["./lib/graph/src/mod.ts"],
       "takosumi-policy": ["./lib/policy/src/mod.ts"],

@@ -53,7 +53,7 @@ import type {
 import type { ActivityEvent } from "takosumi-contract/activity";
 import type { Page, PageParams } from "takosumi-contract/pagination";
 import {
-  isPublicManagedProviderConnection,
+  isWorkspaceBindableOperatorConnection,
   type ProviderBinding,
   type ProviderBindings,
   type ProviderBindingSet,
@@ -211,5 +211,5 @@ function providerConnectionVisibleToWorkspace(
   if (connection.workspaceId === workspaceId) {
     return true;
   }
-  return isPublicManagedProviderConnection(connection);
+  return isWorkspaceBindableOperatorConnection(connection);
 }

@@ -237,16 +237,16 @@ const RULES: readonly BoundaryRule[] = [
     ],
   },
   {
-    id: "implicit-managed-provider-authority",
+    id: "run-credential-provider-inference",
     message:
-      "managed-provider usability and run-token authority must use the explicit service-side managedProviderProfile, never opaque providerConfig or route URL inference",
+      "run-credential admission and audience must come from the exact recipe, driver, and extension route declarations, never providerConfig or route URL inference",
     appliesTo: (path) =>
       path === "core/domains/connections/mod.ts" ||
       path === "accounts/service/src/control/shared.ts" ||
       path === "accounts/service/src/control/providers.ts" ||
       path === "dashboard/src/views/new/NewAppView.tsx" ||
       path === "worker/src/worker_service.ts" ||
-      path === "core/shared/managed_provider_tokens.ts" ||
+      path === "core/shared/run_credential_tokens.ts" ||
       path === "deploy/platform/worker.ts",
     patterns: [
       /scopeHints\??\.providerConfig\??\.base_url\b/,
@@ -256,17 +256,40 @@ const RULES: readonly BoundaryRule[] = [
     ],
   },
   {
-    id: "direct-managed-provider-marker-authority",
+    id: "workspace-bindable-predicate-inference",
     message:
-      "managed-provider consumers must use isPublicManagedProviderConnection so marker, profile, and operator ownership stay one authority",
+      "the workspace-bindable operator predicate is closed over scope, ownership, verification, and runIssuance only; it must never inspect provider, profile, scope hints, or URL data",
+    appliesTo: (path) => path === "contract/connections.ts",
+    patterns: [
+      /function\s+isWorkspaceBindableOperatorConnection[\s\S]{0,1200}?\bconnection\.(?:provider|providerSource|scopeHints)\b/,
+      /function\s+isWorkspaceBindableOperatorConnection[\s\S]{0,1200}?\b(?:managedProviderProfile|providerBaseUrl|base_url)\b/,
+    ],
+  },
+  {
+    id: "legacy-managed-provider-run-authority",
+    message:
+      "legacy managed-provider markers, profiles, helpers, and token modules are decode-only data and must not regain behavioral authority",
     appliesTo: (path) =>
-      path === "accounts/service/src/control/shared.ts" ||
-      path === "accounts/service/src/control/providers.ts" ||
-      path === "dashboard/src/views/new/NewAppView.tsx" ||
-      path === "worker/src/worker_service.ts" ||
-      path === "core/domains/deploy-control/plan_resolution.ts" ||
-      path === "deploy/platform/worker.ts",
-    patterns: [/scopeHints\??\.managedProvider\b/],
+      isImplementationPath(path) &&
+      path !== "contract/connections.ts" &&
+      path !== "core/api/openapi.ts" &&
+      path !==
+        "core/adapters/vault/run_issued_operator_reconciliation.ts",
+    patterns: [
+      /\b(?:ManagedProviderCredentialIssuer|managedProviderCredentialIssuerFromEnv|isPublicManagedProviderConnection|createManagedProviderRunToken|verifyManagedProviderRunToken)\b/,
+      /\bmanaged_provider_tokens(?:\.ts)?\b/,
+      /\bmanagedProviderProfile\b/,
+      /scopeHints\??\.managedProvider\b/,
+    ],
+  },
+  {
+    id: "oss-takoform-run-credential-env",
+    message:
+      "OSS run credentials are recipe-declared and provider-neutral; TAKOFORM endpoint, space, and token env semantics are allowed only in the compatibility decoder",
+    appliesTo: (path) =>
+      isImplementationPath(path) &&
+      path !== "core/domains/capsules/repository_install_ux_compiler.ts",
+    patterns: [/\bTAKOFORM_(?:ENDPOINT|SPACE|TOKEN)\b/],
   },
   {
     id: "provider-oauth-mapping-in-core",

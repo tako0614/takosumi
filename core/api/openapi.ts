@@ -794,7 +794,12 @@ export function resourceFormPinSchemas(): Record<
           minItems: 1,
           maxItems: 32,
           uniqueItems: true,
-          items: { type: "string", minLength: 1, maxLength: 256 },
+          items: {
+            type: "string",
+            minLength: 1,
+            maxLength: 256,
+            not: { const: "admin" },
+          },
         },
         dryRun: { type: "boolean" },
         ...pageProperties,
@@ -1962,7 +1967,12 @@ function interfaceSchemas(): Record<string, Record<string, unknown>> {
           type: "array",
           minItems: 1,
           uniqueItems: true,
-          items: { type: "string", minLength: 1, maxLength: 256 },
+          items: {
+            type: "string",
+            minLength: 1,
+            maxLength: 256,
+            not: { const: "admin" },
+          },
         },
         delivery: ref("InterfaceBindingDelivery"),
       },
@@ -3532,8 +3542,48 @@ function providerConnectionAndRecipeSchemas(): Record<
           type: "string",
           description: "Opaque installed pre-run driver token, when selected.",
         },
+        runIssuance: {
+          allOf: [ref("CredentialRecipeRunIssuance")],
+          readOnly: true,
+          description:
+            "Server-resolved run-issuance authority pinned from the installed recipe mode. Caller-supplied values are rejected.",
+        },
       },
       additionalProperties: false,
+    },
+    CredentialRecipeRunIssuance: {
+      type: "object",
+      required: [
+        "context",
+        "operatorConnection",
+        "storedMaterial",
+        "audience",
+        "scopes",
+      ],
+      properties: {
+        context: { const: "capsule-run.v1" },
+        operatorConnection: { const: "workspace-bindable" },
+        storedMaterial: { const: "none" },
+        audience: {
+          type: "string",
+          minLength: 1,
+          maxLength: 2048,
+          description:
+            "Exact host-owned audience. A recipe driver cannot redirect issuance.",
+        },
+        scopes: {
+          type: "array",
+          minItems: 1,
+          maxItems: 64,
+          uniqueItems: true,
+          items: { type: "string", minLength: 1, maxLength: 256 },
+          description:
+            "Exact minimal non-admin scope set owned by the installed recipe mode.",
+        },
+      },
+      additionalProperties: false,
+      description:
+        "Closed run-issued credential descriptor. Core admits it only with the exact installed pre-run driver and stores no credential material.",
     },
     CredentialRecipeMaterial: {
       type: "object",
@@ -3627,6 +3677,7 @@ function providerConnectionAndRecipeSchemas(): Record<
           },
           additionalProperties: false,
         },
+        runIssuance: ref("CredentialRecipeRunIssuance"),
         inputHints: {
           type: "object",
           additionalProperties: ref("CredentialRecipeInputHint"),
@@ -3867,7 +3918,13 @@ function connectionSchemas(): Record<string, Record<string, unknown>> {
     ConnectionScope: {
       type: "object",
       properties: {
-        managedProvider: { type: "boolean" },
+        managedProvider: {
+          type: "boolean",
+          deprecated: true,
+          readOnly: true,
+          description:
+            "Stored-row decode compatibility only. It grants no credential or binding authority and new writes are rejected.",
+        },
         providerConfig: {
           type: "object",
           additionalProperties: true,
@@ -3884,8 +3941,10 @@ function connectionSchemas(): Record<string, Record<string, unknown>> {
         },
         managedProviderProfile: {
           type: "string",
+          deprecated: true,
+          readOnly: true,
           description:
-            "Opaque operator-owned profile authorizing this public managed Provider Connection. It must exactly match the receiving extension profile and is never inferred from providerConfig.",
+            "Stored-row decode compatibility only. It grants no credential or extension authority and new writes are rejected.",
         },
         managedPublicBaseDomain: { type: "string", format: "hostname" },
       },

@@ -46,11 +46,9 @@ import {
   OpenTofuRunnerObject,
 } from "../../worker/src/handler.ts";
 import { cachedDeployControlService } from "../../worker/src/deploy_control_seam.ts";
+import { createCloudflareD1OpenTofuControlStore } from "../../worker/src/d1_opentofu_store.ts";
+import type { OpenTofuControlStore } from "../../core/domains/deploy-control/store.ts";
 import { recordWorkerMetric } from "../../worker/src/metrics.ts";
-import {
-  TAKOSUMI_INTERNAL_MANAGED_PROVIDER_PROFILE_HEADER,
-  TAKOSUMI_INTERNAL_MANAGED_PROVIDER_RUN_TOKEN_HEADER,
-} from "../../worker/src/resource_capsule_owner_context.ts";
 import {
   driftSweep,
   type DriftSweepOperations,
@@ -77,7 +75,6 @@ import {
 } from "../../core/domains/interfaces/runtime_capability_reader.ts";
 import { TAKOSUMI_METRICS_PATH } from "../../core/api/metrics_routes.ts";
 import { TAKOSUMI_INTERNAL_RESOURCE_MANAGED_BY_HEADER } from "../../core/api/resource_routes.ts";
-import { PORTABLE_FORM_MANAGER } from "../../core/api/form_host_routes.ts";
 import { DEPLOY_CONTROL_ERROR_HTTP_STATUS_BY_CODE } from "@takosumi/internal/deploy-control-api";
 import {
   createTakosumiProductCapabilities,
@@ -130,10 +127,19 @@ import {
 } from "takosumi-contract/internal/rpc";
 import type { BillingSettings } from "takosumi-contract/billing";
 import {
-  isManagedProviderRunToken,
-  managedProviderRunTokenSecret,
-  verifyManagedProviderRunToken,
-} from "../../core/shared/managed_provider_tokens.ts";
+  hasLegacyManagedProviderScopeHints,
+  isWorkspaceBindableOperatorConnection,
+} from "takosumi-contract/connections";
+import { canonicalProviderSource } from "takosumi-contract/provider-env-rules";
+import {
+  isRunCredentialToken,
+  runCredentialTokenSecret,
+  verifyRunCredentialToken,
+} from "../../core/shared/run_credential_tokens.ts";
+import {
+  resolveCanonicalCapsuleRunCredentialContext,
+  type CapsuleRunCredentialLedger,
+} from "../../core/domains/deploy-control/run_credential_context.ts";
 import type { TakosumiOperations } from "../../core/bootstrap.ts";
 import {
   OpenTofuControllerError,
@@ -144,7 +150,6 @@ import {
   isPlatformExtensionContributionsPath,
   matchPlatformExtensionRoute,
   pathIsUnderBase,
-  platformExtensionBasePathIsReserved,
   platformExtensionRoutes,
   resolvePlatformExtensionRequestScopeRoute,
   type PlatformCompatibilityProfile,
@@ -1160,6 +1165,32 @@ export default {
     if (isPlatformExtensionContributionsPath(url.pathname)) {
       return handlePlatformExtensionContributionsRequest(request, url, env);
     }
+    // Configured extension routes are composed before the retired Flow-B
+    // drain. This keeps an explicitly declared exact external-standard leaf
+    // (for example `/.well-known/takoform/v1alpha3`) on the same generic
+    // handler/auth seam as every other extension, without a Takoform branch.
+    // Malformed optional configuration remains unclaimed and cannot take a
+    // known core path down with it.
+    let extensionRoutes: readonly PlatformExtensionRoute[] = [];
+    try {
+      extensionRoutes = platformExtensionRoutes(
+        env as unknown as { readonly [key: string]: unknown },
+      );
+    } catch {
+      extensionRoutes = [];
+    }
+    const platformExtensionRoute = matchPlatformExtensionRoute(
+      url.pathname,
+      extensionRoutes,
+    );
+    if (platformExtensionRoute) {
+      return await handlePlatformExtensionRouteRequest(
+        request,
+        env,
+        platformExtensionRoute,
+        verifyPlatformExtensionSession,
+      );
+    }
     // Legacy Flow-B paths are an explicit drain lane. Unknown/retired paths
     // must not fall through to the Accounts SPA or another extension route.
     if (isPlatformLegacyResourceShapePath(url.pathname)) {
@@ -1222,22 +1253,6 @@ export default {
     // deploy-control service seam BEFORE delegating to the accounts handler.
     if (url.pathname.startsWith("/hooks/sources/")) {
       return await handleSourceWebhook(request, url, env);
-    }
-    if (!platformExtensionBasePathIsReserved(url.pathname)) {
-      const platformExtensionRoute = matchPlatformExtensionRoute(
-        url.pathname,
-        platformExtensionRoutes(
-          env as unknown as { readonly [key: string]: unknown },
-        ),
-      );
-      if (platformExtensionRoute) {
-        return await handlePlatformExtensionRouteRequest(
-          request,
-          env,
-          platformExtensionRoute,
-          verifyPlatformExtensionSession,
-        );
-      }
     }
     // `/compat` is an explicit profile namespace, never an accounts/dashboard
     // SPA route. An uninstalled or retired profile must fail closed instead of
@@ -2001,21 +2016,6 @@ async function platformResourceShapeAuthorizedRequest(
         effectiveManagedBy,
       );
       headers.delete(PLATFORM_EXTENSION_WORKSPACE_ROLE_HEADER);
-      headers.delete(TAKOSUMI_INTERNAL_MANAGED_PROVIDER_RUN_TOKEN_HEADER);
-      headers.delete(TAKOSUMI_INTERNAL_MANAGED_PROVIDER_PROFILE_HEADER);
-      const capsuleOwnerContext = platformTrustedResourceCapsuleOwnerContext(
-        verified.session,
-      );
-      if (capsuleOwnerContext) {
-        headers.set(
-          TAKOSUMI_INTERNAL_MANAGED_PROVIDER_RUN_TOKEN_HEADER,
-          capsuleOwnerContext.managedProviderRunToken,
-        );
-        headers.set(
-          TAKOSUMI_INTERNAL_MANAGED_PROVIDER_PROFILE_HEADER,
-          capsuleOwnerContext.managedProviderProfile,
-        );
-      }
       for (const header of PLATFORM_EXTENSION_RAW_CREDENTIAL_HEADERS) {
         if (header !== "authorization") headers.delete(header);
       }
@@ -2168,21 +2168,6 @@ async function platformResourceArtifactAuthorizedRequest(
     trustedManagedBy ?? PUBLIC_RESOURCE_API_MANAGED_BY,
   );
   headers.delete(PLATFORM_EXTENSION_WORKSPACE_ROLE_HEADER);
-  headers.delete(TAKOSUMI_INTERNAL_MANAGED_PROVIDER_RUN_TOKEN_HEADER);
-  headers.delete(TAKOSUMI_INTERNAL_MANAGED_PROVIDER_PROFILE_HEADER);
-  const capsuleOwnerContext = platformTrustedResourceCapsuleOwnerContext(
-    verified.session,
-  );
-  if (capsuleOwnerContext) {
-    headers.set(
-      TAKOSUMI_INTERNAL_MANAGED_PROVIDER_RUN_TOKEN_HEADER,
-      capsuleOwnerContext.managedProviderRunToken,
-    );
-    headers.set(
-      TAKOSUMI_INTERNAL_MANAGED_PROVIDER_PROFILE_HEADER,
-      capsuleOwnerContext.managedProviderProfile,
-    );
-  }
   for (const header of PLATFORM_EXTENSION_RAW_CREDENTIAL_HEADERS) {
     if (header !== "authorization") headers.delete(header);
   }
@@ -2343,21 +2328,8 @@ function platformInterfaceAccessFailure(
     );
   }
 
-  if (
-    session.authKind === "service-token" &&
-    platformTrustedResourceCapsuleOwnerContext(session)
-  ) {
-    const mayRead =
-      scopes.has("admin") ||
-      scopes.has("interfaces:read") ||
-      scopes.has("interfaces:write");
-    const mayWrite = scopes.has("admin") || scopes.has("interfaces:write");
-    if ((readOnly && mayRead) || (!readOnly && mayWrite)) return undefined;
-  }
-
-  // Interface OAuth credentials remain invocation-only. Managed-provider
-  // tokens may author portable declarations only with the exact signed
-  // Capsule/run/installer context and the independent interfaces:* scope.
+  // Interface OAuth credentials remain invocation-only. Run credentials are
+  // accepted only by an explicitly declared platform extension route.
   return Response.json(
     {
       error: "access_denied",
@@ -2640,9 +2612,17 @@ function platformExtensionDiscovery(env: CloudflareWorkerEnv): {
   readonly extensions: readonly string[];
   readonly endpoints: Readonly<Record<string, string>>;
 } {
-  const configuredRoutes = platformExtensionRoutes(
-    env as unknown as { readonly [key: string]: unknown },
-  ).filter((route) => platformExtensionRouteConfigured(env, route));
+  let configuredRoutes: readonly PlatformExtensionRoute[] = [];
+  try {
+    configuredRoutes = platformExtensionRoutes(
+      env as unknown as { readonly [key: string]: unknown },
+    ).filter((route) => platformExtensionRouteConfigured(env, route));
+  } catch {
+    // Discovery is a known core surface. Optional extension configuration is
+    // not allowed to make the core document unavailable; malformed routes are
+    // simply omitted until the operator fixes the composition.
+    configuredRoutes = [];
+  }
   const compat: Record<string, boolean> = {};
   const compatibilityProfiles: Record<
     string,
@@ -3074,6 +3054,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export interface PlatformExtensionCatalogItem {
   readonly id?: string;
   readonly basePath: `/${string}`;
+  readonly matchMode?: PlatformExtensionRoute["matchMode"];
   readonly configured: boolean;
   readonly capabilities?: readonly string[];
   readonly compatibilityProfiles?: readonly PlatformCompatibilityProfile[];
@@ -3105,6 +3086,7 @@ export function platformExtensionCatalog(
   ).map((route) => ({
     ...(route.id ? { id: route.id } : {}),
     basePath: route.basePath,
+    ...(route.matchMode ? { matchMode: route.matchMode } : {}),
     configured: platformExtensionRouteConfigured(env, route),
     ...(route.capabilities ? { capabilities: route.capabilities } : {}),
     ...(route.compatibilityProfiles
@@ -4086,20 +4068,15 @@ export interface PlatformExtensionSessionContext {
     | "interface-oauth-token"
     | "oauth-access-token"
     | "personal-access-token"
-    | "session";
+    | "session"
+    | "run-credential";
   readonly subject?: string;
   readonly capsuleId?: string;
-  /** Present only on a verified, short-lived managed-provider run token. */
+  /** Present only on a verified, short-lived Run credential. */
   readonly runId?: string;
-  /** Installer provenance signed into that run token from the Capsule ledger. */
+  /** Installer provenance re-read from the canonical Capsule ledger. */
   readonly installingPrincipalId?: string;
-  /**
-   * Sensitive authority retained only across the in-process platform seam.
-   * Extension handlers never receive this value as public auth context.
-   */
-  readonly managedProviderRunToken?: string;
-  /** Exact audience that was used to verify managedProviderRunToken. */
-  readonly managedProviderProfile?: string;
+  readonly phase?: "plan" | "apply" | "destroy";
   readonly workspaceId?: string;
   /** Live Workspace role carried by token introspection or membership lookup. */
   readonly workspaceRole?: WorkspaceRole;
@@ -4939,8 +4916,6 @@ const PLATFORM_EXTENSION_TRUSTED_CONTEXT_HEADERS = [
   PLATFORM_EXTENSION_INTERFACE_BINDING_ID_HEADER,
   PLATFORM_EXTENSION_INTERFACE_REVISION_HEADER,
   TAKOSUMI_INTERNAL_RESOURCE_MANAGED_BY_HEADER,
-  TAKOSUMI_INTERNAL_MANAGED_PROVIDER_RUN_TOKEN_HEADER,
-  TAKOSUMI_INTERNAL_MANAGED_PROVIDER_PROFILE_HEADER,
 ] as const;
 
 async function platformExtensionAuthContext(
@@ -4978,6 +4953,9 @@ async function platformExtensionAuthContext(
   for (const header of PLATFORM_EXTENSION_TRUSTED_CONTEXT_HEADERS) {
     headers.delete(header);
   }
+  for (const header of [...headers.keys()]) {
+    if (header.startsWith("x-takosumi-internal-")) headers.delete(header);
+  }
   if (delivery === "context") {
     headers.delete(TAKOSUMI_INTERNAL_ACTOR_HEADER);
     for (const header of [...headers.keys()]) {
@@ -4995,7 +4973,8 @@ async function platformExtensionAuthContext(
     (session.authKind === "service-token" ||
       session.authKind === "interface-oauth-token" ||
       session.authKind === "oauth-access-token" ||
-      session.authKind === "personal-access-token")
+      session.authKind === "personal-access-token" ||
+      session.authKind === "run-credential")
   ) {
     const scopes = session.scopes ?? [];
     const hasAll = requiredScopes.every(
@@ -5153,7 +5132,8 @@ function platformExtensionAuthenticatedContext(
     authKind !== "oauth-access-token" &&
     authKind !== "personal-access-token" &&
     authKind !== "session" &&
-    authKind !== "interface-oauth-token"
+    authKind !== "interface-oauth-token" &&
+    authKind !== "run-credential"
   ) {
     return undefined;
   }
@@ -5175,13 +5155,12 @@ function platformExtensionAuthenticatedContext(
   ) {
     return undefined;
   }
-  const managedProviderProfile = optionalSafePlatformExtensionText(
-    session.managedProviderProfile,
-    256,
-  );
+  const phase = session.phase;
   if (
-    session.managedProviderProfile !== undefined &&
-    !managedProviderProfile
+    phase !== undefined &&
+    phase !== "plan" &&
+    phase !== "apply" &&
+    phase !== "destroy"
   ) {
     return undefined;
   }
@@ -5204,8 +5183,8 @@ function platformExtensionAuthenticatedContext(
     ...(capsuleId ? { capsuleId } : {}),
     ...(runId ? { runId } : {}),
     ...(installingPrincipalId ? { installingPrincipalId } : {}),
-    ...(managedProviderProfile ? { managedProviderProfile } : {}),
     ...(audience ? { audience } : {}),
+    ...(phase ? { phase } : {}),
   });
 }
 
@@ -5522,17 +5501,13 @@ export async function verifyPlatformExtensionSession(
       scopes: ["admin"],
     };
   }
-  const managedProviderToken =
-    platformExtensionManagedProviderRunToken(request);
-  if (managedProviderToken) {
-    const managedProviderSession =
-      await verifyPlatformExtensionManagedProviderRunToken(
-        request,
-        env,
-        managedProviderToken,
-        route,
-      );
-    return managedProviderSession;
+  const runCredentialToken = platformExtensionRunCredentialToken(request);
+  if (runCredentialToken) {
+    return await verifyPlatformExtensionRunCredentialToken(
+      env,
+      runCredentialToken,
+      route,
+    );
   }
 
   if (opaqueBearer) {
@@ -5569,82 +5544,86 @@ export async function verifyPlatformExtensionSession(
   }
 }
 
-async function verifyPlatformExtensionManagedProviderRunToken(
-  request: Request,
+export async function verifyPlatformExtensionRunCredentialToken(
   env: CloudflareWorkerEnv,
   token: string,
   route?: PlatformExtensionRoute,
+  ledger: PlatformExtensionRunCredentialLedger = createCloudflareD1OpenTofuControlStore(
+    env.TAKOSUMI_CONTROL_DB,
+    { schemaMode: env.TAKOSUMI_CONTROL_D1_SCHEMA_MODE ?? "bootstrap" },
+  ),
 ): Promise<PlatformExtensionSessionContext> {
-  const secret = managedProviderRunTokenSecret(env);
-  const pathname = new URL(request.url).pathname;
-  const profile =
-    route?.managedProviderProfile ??
-    (pathname === TAKOFORM_FORM_HOST_API_PATH ||
-    pathname.startsWith(`${TAKOFORM_FORM_HOST_API_PATH}/`)
-      ? PORTABLE_FORM_MANAGER
-      : undefined);
-  if (!secret || !profile) return { authenticated: false };
-  const verified = await verifyManagedProviderRunToken(token, {
+  const secret = runCredentialTokenSecret(env);
+  const descriptor = route?.runCredential;
+  if (!secret || !descriptor) return { authenticated: false };
+  const verified = await verifyRunCredentialToken(token, {
     secret,
-    expectedAudience: profile,
-    ...(route?.requiredScopes ? { requiredScopes: route.requiredScopes } : {}),
+    expectedAudience: descriptor.audience,
+    requiredScopes: descriptor.requiredScopes,
   });
   if (!verified.ok) return { authenticated: false };
   const payload = verified.payload;
-  if (
-    profile === PORTABLE_FORM_MANAGER &&
-    (!payload.capsuleId || !payload.runId || !payload.installingPrincipalId)
-  ) {
-    return { authenticated: false };
-  }
   const scopes = [...payload.scopes];
   if (!platformExtensionScopesAllowAccess(scopes, route)) {
     return { authenticated: false };
   }
+  const [canonical, currentConnection, unexpectedBlob] = await Promise.all([
+    resolveCanonicalCapsuleRunCredentialContext(ledger, {
+      workspaceId: payload.workspaceId,
+      capsuleId: payload.capsuleId,
+      runId: payload.runId,
+      phase: payload.phase,
+    }),
+    ledger.getConnection(payload.connectionId),
+    ledger.getSecretBlob(payload.connectionId),
+  ]);
+  const canonicalLiveProvider = currentConnection
+    ? canonicalProviderSource(currentConnection.provider)
+    : undefined;
+  const liveIssuance = currentConnection?.credentialRecipe?.runIssuance;
+  if (
+    !canonical.ok ||
+    canonical.context.installingPrincipalId !== payload.installingPrincipalId ||
+    !currentConnection ||
+    canonicalLiveProvider !== payload.provider ||
+    currentConnection.provider !== payload.provider ||
+    currentConnection.providerSource !== canonicalLiveProvider ||
+    !isWorkspaceBindableOperatorConnection(currentConnection) ||
+    descriptor.audience !== liveIssuance?.audience ||
+    !sameExactScopes(descriptor.requiredScopes, liveIssuance?.scopes) ||
+    !sameExactScopes(scopes, liveIssuance?.scopes) ||
+    scopes.includes("admin") ||
+    hasLegacyManagedProviderScopeHints(currentConnection.scopeHints) ||
+    unexpectedBlob !== undefined
+  ) {
+    return { authenticated: false };
+  }
   return {
     authenticated: true,
-    authKind: "service-token",
-    subject: payload.sub,
-    workspaceId: payload.workspaceId,
-    ...(payload.capsuleId ? { capsuleId: payload.capsuleId } : {}),
-    ...(payload.runId ? { runId: payload.runId } : {}),
-    ...(payload.installingPrincipalId
-      ? { installingPrincipalId: payload.installingPrincipalId }
-      : {}),
-    managedProviderRunToken: token,
-    managedProviderProfile: profile,
+    authKind: "run-credential",
+    subject: canonical.context.installingPrincipalId,
+    workspaceId: canonical.context.workspaceId,
+    capsuleId: canonical.context.capsuleId,
+    runId: canonical.context.runId,
+    installingPrincipalId: canonical.context.installingPrincipalId,
+    phase: canonical.context.phase,
+    audience: descriptor.audience,
     scopes,
   };
 }
 
-function platformTrustedResourceCapsuleOwnerContext(
-  session: PlatformExtensionSessionContext,
-):
-  | {
-      readonly managedProviderRunToken: string;
-      readonly managedProviderProfile: string;
-    }
-  | undefined {
-  if (session.authKind !== "service-token") return undefined;
-  const capsuleId = safePlatformExtensionContextId(session.capsuleId);
-  const workspaceId = safePlatformExtensionContextId(session.workspaceId);
-  const installingPrincipalId = safePlatformExtensionContextId(
-    session.installingPrincipalId,
-  );
-  const runId = safePlatformExtensionContextId(session.runId);
-  const managedProviderRunToken = session.managedProviderRunToken;
-  const managedProviderProfile = safePlatformExtensionContextId(
-    session.managedProviderProfile,
-  );
-  return capsuleId &&
-    workspaceId &&
-    installingPrincipalId &&
-    runId &&
-    managedProviderRunToken &&
-    managedProviderProfile
-    ? { managedProviderRunToken, managedProviderProfile }
-    : undefined;
+function sameExactScopes(
+  left: readonly string[] | undefined,
+  right: readonly string[] | undefined,
+): boolean {
+  if (!left || !right || left.length !== right.length) return false;
+  const rightSet = new Set(right);
+  return left.every((scope) => rightSet.has(scope));
 }
+
+export type PlatformExtensionRunCredentialLedger =
+  CapsuleRunCredentialLedger &
+    Pick<OpenTofuControlStore, "getConnection" | "getSecretBlob">;
 
 export type PlatformExtensionIntrospectFetch = (
   request: Request,
@@ -5880,11 +5859,11 @@ async function defaultPlatformExtensionIntrospectFetch(
   return await accountsWorker.fetch(request, env);
 }
 
-function platformExtensionManagedProviderRunToken(
+function platformExtensionRunCredentialToken(
   request: Request,
 ): string | undefined {
   const token = bearerValue(request.headers.get("authorization"));
-  return token && isManagedProviderRunToken(token) ? token : undefined;
+  return token && isRunCredentialToken(token) ? token : undefined;
 }
 
 function platformExtensionRouteBaseUrl(

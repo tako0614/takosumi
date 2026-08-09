@@ -22,6 +22,7 @@ function connection(input: {
   readonly status?: ProviderConnection["status"];
   readonly materialization?: ProviderConnectionMaterialization;
   readonly scopeHints?: ProviderConnection["scopeHints"];
+  readonly credentialRecipe?: ProviderConnection["credentialRecipe"];
 }): ProviderConnection {
   return {
     id: input.id,
@@ -33,6 +34,9 @@ function connection(input: {
     status: input.status ?? "verified",
     materialization: input.materialization ?? "secret",
     envNames: ["CLOUDFLARE_API_TOKEN"],
+    ...(input.credentialRecipe
+      ? { credentialRecipe: input.credentialRecipe }
+      : {}),
     ...(input.scopeHints ? { scopeHints: input.scopeHints } : {}),
     createdAt: NOW,
     updatedAt: NOW,
@@ -162,30 +166,37 @@ test("a user-managed Resource Target cannot select an operator-scoped connection
       connectionId: "conn_operator_managed",
       required: true,
     }),
-  ).rejects.toThrow(/user-managed Resource Target/);
+  ).rejects.toThrow(/generic provider binding/);
 });
 
-test("Cloud mode resolves a pending public managed operator connection", async () => {
+test("operator mode resolves a verified workspace-bindable run-issued connection", async () => {
   const { store, model } = await setup();
   await store.putConnection(
     connection({
-      id: "conn_operator_pending",
-      status: "pending",
-      scopeHints: {
-        managedProvider: true,
-        managedProviderProfile: "compat.example.v1",
-        providerConfig: {
-          base_url: "https://operator.example.test/compat/example/v1",
+      id: "conn_operator_run_issued",
+      status: "verified",
+      materialization: "run-issued",
+      credentialRecipe: {
+        id: "operator-run-credential",
+        authMode: "broker",
+        runIssuance: {
+          context: "capsule-run.v1",
+          operatorConnection: "workspace-bindable",
+          storedMaterial: "none",
+          audience: "extension.example.v1",
+          scopes: ["extension:invoke"],
         },
       },
     }),
   );
   await store.putProviderBindingSet({
-    id: "dp_operator_pending",
+    id: "dp_operator_run_issued",
     workspaceId: model.workspace.id,
     capsuleId: model.capsule.id,
     environment: model.capsule.environment,
-    bindings: [{ provider: CLOUDFLARE, connectionId: "conn_operator_pending" }],
+    bindings: [
+      { provider: CLOUDFLARE, connectionId: "conn_operator_run_issued" },
+    ],
     createdAt: NOW,
     updatedAt: NOW,
   });
@@ -198,8 +209,10 @@ test("Cloud mode resolves a pending public managed operator connection", async (
   });
   const resolved = await cloudService.resolveProviderBindings(model.capsule);
   expect(resolved).toHaveLength(1);
-  expect(resolved[0]?.connection.id).toBe("conn_operator_pending");
-  expect(mintableConnectionIds(resolved)).toEqual(["conn_operator_pending"]);
+  expect(resolved[0]?.connection.id).toBe("conn_operator_run_issued");
+  expect(mintableConnectionIds(resolved)).toEqual([
+    "conn_operator_run_issued",
+  ]);
 });
 
 test("providerConfig base_url alone never authorizes an operator managed connection", async () => {
@@ -235,26 +248,36 @@ test("providerConfig base_url alone never authorizes an operator managed connect
   ).rejects.toThrow(/generic provider binding/);
 });
 
-test("binding digest ignores verification progress but detects connection replacement", async () => {
+test("binding digest ignores verification progress but pins run-issuance authority", async () => {
   const { store, model } = await setup();
-  const managed = connection({
-    id: "conn_operator_compat",
-    status: "pending",
+  const runIssued = connection({
+    id: "conn_operator_run_issued",
+    status: "verified",
+    materialization: "run-issued",
+    credentialRecipe: {
+      id: "operator-run-credential",
+      authMode: "broker",
+      runIssuance: {
+        context: "capsule-run.v1",
+        operatorConnection: "workspace-bindable",
+        storedMaterial: "none",
+        audience: "extension.example.v1",
+        scopes: ["extension:invoke"],
+      },
+    },
     scopeHints: {
-      managedProvider: true,
-      managedProviderProfile: "compat.example.v1",
       providerConfig: {
         base_url: "https://operator.example.test/compat/example/v1",
       },
     },
   });
-  await store.putConnection(managed);
+  await store.putConnection(runIssued);
   await store.putProviderBindingSet({
     id: "dp_operator_digest",
     workspaceId: model.workspace.id,
     capsuleId: model.capsule.id,
     environment: model.capsule.environment,
-    bindings: [{ provider: CLOUDFLARE, connectionId: managed.id }],
+    bindings: [{ provider: CLOUDFLARE, connectionId: runIssued.id }],
     createdAt: NOW,
     updatedAt: NOW,
   });
@@ -262,37 +285,36 @@ test("binding digest ignores verification progress but detects connection replac
     store,
     allowOperatorScopedProviderConnections: true,
   });
-  const pending = await cloudService.resolveProviderBindings(model.capsule);
-  const pendingDigest = await resolvedProviderBindingsDigest(pending);
-
-  await store.putConnection({
-    ...managed,
-    status: "verified",
-    verifiedAt: NOW,
-  });
   const verified = await cloudService.resolveProviderBindings(model.capsule);
-  expect(await resolvedProviderBindingsDigest(verified)).toBe(pendingDigest);
+  const verifiedDigest = await resolvedProviderBindingsDigest(verified);
+  const pendingProjection = verified.map((entry) => ({
+    ...entry,
+    connection: { ...entry.connection, status: "pending" as const },
+  }));
+  expect(await resolvedProviderBindingsDigest(pendingProjection)).toBe(
+    verifiedDigest,
+  );
 
   const replacement = verified.map((entry) => ({
     ...entry,
     connection: { ...entry.connection, id: "conn_operator_replacement" },
   }));
   expect(await resolvedProviderBindingsDigest(replacement)).not.toBe(
-    pendingDigest,
+    verifiedDigest,
   );
 
   const authorityChanged = verified.map((entry) => ({
     ...entry,
     connection: {
       ...entry.connection,
-      scopeHints: {
-        ...entry.connection.scopeHints,
-        managedProviderProfile: "compat.example.v2",
+      credentialRecipe: {
+        ...entry.connection.credentialRecipe!,
+        runIssuance: undefined,
       },
     },
   }));
   expect(await resolvedProviderBindingsDigest(authorityChanged)).not.toBe(
-    pendingDigest,
+    verifiedDigest,
   );
 
   const reorderedProviderConfig = verified.map((entry) => ({
@@ -308,7 +330,7 @@ test("binding digest ignores verification progress but detects connection replac
     },
   }));
   expect(await resolvedProviderBindingsDigest(reorderedProviderConfig)).toBe(
-    pendingDigest,
+    verifiedDigest,
   );
 
   const providerConfigChanged = verified.map((entry) => ({
@@ -324,11 +346,11 @@ test("binding digest ignores verification progress but detects connection replac
     },
   }));
   expect(await resolvedProviderBindingsDigest(providerConfigChanged)).not.toBe(
-    pendingDigest,
+    verifiedDigest,
   );
 });
 
-test("provider connection listing exposes only public managed operator connections in Cloud mode", async () => {
+test("provider connection listing exposes only workspace-bindable operator connections in operator mode", async () => {
   const { store, model, service } = await setup();
   await store.putConnection(
     connection({ id: "conn_space_cf", workspaceId: model.workspace.id }),
@@ -337,11 +359,16 @@ test("provider connection listing exposes only public managed operator connectio
   await store.putConnection(
     connection({
       id: "conn_operator_compat",
-      scopeHints: {
-        managedProvider: true,
-        managedProviderProfile: "compat.example.v1",
-        providerConfig: {
-          base_url: "https://operator.example.test/compat/example/v1",
+      materialization: "run-issued",
+      credentialRecipe: {
+        id: "operator-run-credential",
+        authMode: "broker",
+        runIssuance: {
+          context: "capsule-run.v1",
+          operatorConnection: "workspace-bindable",
+          storedMaterial: "none",
+          audience: "extension.example.v1",
+          scopes: ["extension:invoke"],
         },
       },
     }),

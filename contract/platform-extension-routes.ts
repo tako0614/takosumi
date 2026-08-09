@@ -10,13 +10,14 @@
  *
  * Deliberately narrower than all of `/v1`: operator extensions such as
  * `/v1/billing` and `/v1/cloud` are valid, while concrete Takosumi/Accounts
- * authorities are not.
+ * authorities are not. The `/.well-known` namespace is handled separately:
+ * the root and the two core leaves stay reserved, while an explicitly exact
+ * descriptor may claim an unknown sibling without claiming the namespace.
  */
 export const PLATFORM_EXTENSION_RESERVED_PREFIXES = [
   "/api",
   "/internal",
   "/__takosumi",
-  "/.well-known",
   "/oauth",
   "/hooks",
   "/install",
@@ -41,13 +42,76 @@ export const PLATFORM_EXTENSION_RESERVED_PREFIXES = [
   "/apis/forms.takoform.com/v1alpha1",
 ] as const;
 
+/** Exact well-known routes owned by Takosumi or its Accounts/OIDC issuer. */
+export const PLATFORM_EXTENSION_RESERVED_EXACT_PATHS = [
+  "/.well-known",
+  "/.well-known/openid-configuration",
+  "/.well-known/takosumi",
+] as const;
+
+/** External-standard namespaces where only explicit exact leaves may mount. */
+export const PLATFORM_EXTENSION_EXACT_LEAF_PARENT_PREFIXES = [
+  "/.well-known",
+] as const;
+
+export type PlatformExtensionMatchMode = "subtree" | "exact";
+
 export function pathIsUnderBase(pathname: string, basePath: string): boolean {
   return pathname === basePath || pathname.startsWith(`${basePath}/`);
 }
 
-export function platformExtensionBasePathIsReserved(basePath: string): boolean {
-  return PLATFORM_EXTENSION_RESERVED_PREFIXES.some(
-    (prefix) =>
-      pathIsUnderBase(basePath, prefix) || pathIsUnderBase(prefix, basePath),
-  );
+/**
+ * Whether a descriptor basePath would claim a Takosumi-owned route.
+ *
+ * The existing descriptor mode is a subtree claim. Exact descriptors are the
+ * only escape hatch under an external-standard parent such as `/.well-known`:
+ * they claim one canonical leaf and cannot shadow a reserved leaf or its
+ * descendants. A subtree descriptor still cannot claim any ancestor or child
+ * of a reserved route.
+ */
+export function platformExtensionBasePathIsReserved(
+  basePath: string,
+  matchMode: PlatformExtensionMatchMode = "subtree",
+): boolean {
+  if (
+    PLATFORM_EXTENSION_RESERVED_PREFIXES.some(
+      (prefix) =>
+        pathIsUnderBase(basePath, prefix) || pathIsUnderBase(prefix, basePath),
+    )
+  ) {
+    return true;
+  }
+
+  for (const exactPath of PLATFORM_EXTENSION_RESERVED_EXACT_PATHS) {
+    const isExactLeafParent = (
+      PLATFORM_EXTENSION_EXACT_LEAF_PARENT_PREFIXES as readonly string[]
+    ).includes(exactPath);
+    if (basePath === exactPath) {
+      return true;
+    }
+    if (
+      pathIsUnderBase(basePath, exactPath) &&
+      (!isExactLeafParent || matchMode === "subtree")
+    ) {
+      return true;
+    }
+    if (
+      matchMode === "subtree" && pathIsUnderBase(exactPath, basePath)
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/** Match one request path using the descriptor's declared route mode. */
+export function platformExtensionRouteMatchesPath(
+  pathname: string,
+  basePath: string,
+  matchMode: PlatformExtensionMatchMode = "subtree",
+): boolean {
+  return matchMode === "exact"
+    ? pathname === basePath
+    : pathIsUnderBase(pathname, basePath);
 }

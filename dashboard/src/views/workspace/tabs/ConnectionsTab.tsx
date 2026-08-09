@@ -25,7 +25,6 @@ import {
 } from "solid-js";
 import { ArrowLeft, Plug, Plus, Trash } from "lucide-solid";
 import {
-  isPublicManagedProviderConnection,
   isProviderEnvName,
   isReservedProviderEnvName,
 } from "takosumi-contract";
@@ -159,10 +158,7 @@ export default function ConnectionsTab(props: {
   const afterConnectionCreated = async (connection: ProviderConnection) => {
     // Never show a raw conn_… id in the toast — fall back to the provider name.
     setLastCreatedConnectionName(
-      providerConnectionDisplayName(
-        connection,
-        t("installStore.managedProvider"),
-      ) ||
+      providerConnectionDisplayName(connection) ||
         providerOptions().find(
           (candidate) =>
             candidate.providerSource === connection.providerSource ||
@@ -465,10 +461,8 @@ export default function ConnectionsTab(props: {
     // Same name fallback as the list row: never a raw conn_… id, and an
     // empty-string displayName must not slip through `??` and render 「」.
     const name =
-      providerConnectionDisplayName(
-        connection,
-        t("installStore.managedProvider"),
-      ) || providerConnectionProviderLabel(connection, providerOptions());
+      providerConnectionDisplayName(connection) ||
+      providerConnectionProviderLabel(connection, providerOptions());
     const ok = await confirm({
       title: t("conn.remove.confirmTitle"),
       // Warn that live Capsules' ProviderBindings referencing this connection
@@ -490,10 +484,7 @@ export default function ConnectionsTab(props: {
           <li class="wc-conn-row">
             <div class="wc-conn-head">
               <span class="wc-conn-name">
-                {providerConnectionDisplayName(
-                  connection,
-                  t("installStore.managedProvider"),
-                ) ||
+                {providerConnectionDisplayName(connection) ||
                   providerConnectionProviderLabel(
                     connection,
                     providerOptions(),
@@ -504,14 +495,12 @@ export default function ConnectionsTab(props: {
               </Badge>
             </div>
             <div class="wc-conn-meta">
-              <Show when={!isPublicManagedProviderConnection(connection)}>
-                <span>
-                  {providerConnectionProviderLabel(
-                    connection,
-                    providerOptions(),
-                  )}
-                </span>
-              </Show>
+              <span>
+                {providerConnectionProviderLabel(
+                  connection,
+                  providerOptions(),
+                )}
+              </span>
               <Show when={connection.expiresAt}>
                 {(expiresAt) => (
                   <span>

@@ -124,6 +124,7 @@ test("pre-run filtering is structural and does not encode provider ids", () => {
         id: "operator-defined",
         authMode: "implemented_exchange",
       })]: {
+        evidenceIssuer: "operator_defined",
         async mint(input) {
           return {
             env: input.values,

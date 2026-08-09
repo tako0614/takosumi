@@ -34,37 +34,48 @@ describe("dashboard ProviderConnection candidates", () => {
     ).toBe(false);
   });
 
-  test("accepts pending public managed operator capacity by explicit profile", () => {
-    const managed = {
+  test("accepts only verified operator capacity with the exact run recipe", () => {
+    const runIssued = {
       scope: "operator" as const,
-      scopeHints: {
-        managedProvider: true,
-        managedProviderProfile: "takoform.form-host.v1",
+      credentialRecipe: {
+        id: "operator-run",
+        authMode: "capsule-run",
+        preRunAction: "operator.run.v1",
+        runIssuance: {
+          context: "capsule-run.v1" as const,
+          operatorConnection: "workspace-bindable" as const,
+          storedMaterial: "none" as const,
+          audience: "extension.example.v1",
+          scopes: ["extension:invoke"],
+        },
       },
     };
     expect(
       isProviderConnectionCandidate(
-        connection({ ...managed, status: "pending" }),
+        connection({ ...runIssued, status: "pending" }),
       ),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       isProviderConnectionCandidate(
-        connection({ ...managed, status: "verified" }),
+        connection({ ...runIssued, status: "verified" }),
       ),
     ).toBe(true);
     for (const status of ["revoked", "expired", "error"] as const) {
       expect(
-        isProviderConnectionCandidate(connection({ ...managed, status })),
+        isProviderConnectionCandidate(connection({ ...runIssued, status })),
       ).toBe(false);
     }
   });
 
-  test("does not treat an unprofiled or Workspace-owned marker as public capacity", () => {
+  test("legacy managed fields and Workspace-owned run recipes grant no authority", () => {
     expect(
       isProviderConnectionCandidate(
         connection({
           scope: "operator",
-          scopeHints: { managedProvider: true },
+          scopeHints: {
+            managedProvider: true,
+            managedProviderProfile: "legacy.example.v1",
+          },
         }),
       ),
     ).toBe(false);
@@ -73,40 +84,50 @@ describe("dashboard ProviderConnection candidates", () => {
         connection({
           scope: "workspace",
           status: "pending",
-          scopeHints: {
-            managedProvider: true,
-            managedProviderProfile: "takoform.form-host.v1",
+          credentialRecipe: {
+            id: "operator-run",
+            authMode: "capsule-run",
+            runIssuance: {
+              context: "capsule-run.v1",
+              operatorConnection: "workspace-bindable",
+              storedMaterial: "none",
+              audience: "extension.example.v1",
+              scopes: ["extension:invoke"],
+            },
           },
         }),
       ),
     ).toBe(false);
   });
 
-  test("uses the product label for public managed capacity", () => {
+  test("keeps the persisted label for a verified run-issued operator connection", () => {
     expect(
       providerConnectionDisplayName(
         connection({
           scope: "operator",
           displayName: "Takoform portable form host",
-          scopeHints: {
-            managedProvider: true,
-            managedProviderProfile: "takoform.form-host.v1",
+          credentialRecipe: {
+            id: "operator-run",
+            authMode: "capsule-run",
+            runIssuance: {
+              context: "capsule-run.v1",
+              operatorConnection: "workspace-bindable",
+              storedMaterial: "none",
+              audience: "extension.example.v1",
+              scopes: ["extension:invoke"],
+            },
           },
         }),
-        "Takosumi Cloud",
       ),
-    ).toBe("Takosumi Cloud");
+    ).toBe("Takoform portable form host");
   });
 
   test("keeps Workspace-owned connection display names unchanged", () => {
     expect(
       providerConnectionDisplayName(
         connection({ displayName: "My cloud account" }),
-        "Takosumi Cloud",
       ),
     ).toBe("My cloud account");
-    expect(
-      providerConnectionDisplayName(connection(), "Takosumi Cloud"),
-    ).toBe("connection_1");
+    expect(providerConnectionDisplayName(connection())).toBe("connection_1");
   });
 });

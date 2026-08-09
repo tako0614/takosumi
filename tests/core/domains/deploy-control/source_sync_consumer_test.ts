@@ -888,7 +888,7 @@ test("source_sync consumer never mints a git token for a Source on a foreign hos
   expect(runner.calls).toHaveLength(0);
   const failed = await store.getSourceSyncRun(run.id);
   expect(failed?.status).toBe("failed");
-  expect(failed?.error).toContain("bound to github.com");
+  expect(failed?.error).toBe("credential driver failed");
   expect(JSON.stringify(failed)).not.toContain("ghp_super_secret");
 });
 
