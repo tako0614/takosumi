@@ -86,6 +86,31 @@ test("source build rejects outputs that resolve outside the checkout", async () 
   }
 });
 
+test("source build revalidates canonical repository paths at the Runner boundary", async () => {
+  const root = await mkdtemp(join(tmpdir(), "takosumi-source-build-path-"));
+  try {
+    for (const unsafePath of [
+      "C:relative",
+      "dist\\output.txt",
+      "dist//output.txt",
+      "dist/./output.txt",
+      "dist\u2028output.txt",
+    ]) {
+      await expect(
+        runSourceBuild(
+          {
+            commands: [{ argv: ["bun", "--version"] }],
+            outputs: [unsafePath],
+          },
+          root,
+        ),
+      ).rejects.toThrow("repository source-build output path contract");
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("source build leaves no surviving descendant behind", async () => {
   // A build command that daemonizes a helper would otherwise still be running,
   // as the same uid, once the run's provider credential files are written for

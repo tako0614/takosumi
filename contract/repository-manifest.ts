@@ -602,6 +602,20 @@ function sourceBuildRelativePath(value: unknown): string | undefined {
   return raw;
 }
 
+/** Exact path predicate shared with the Runner's final source-root jail. */
+export function isRepositorySourceBuildRelativePath(
+  value: unknown,
+): value is string {
+  return sourceBuildRelativePath(value) !== undefined;
+}
+
+/** Source-build outputs are paths, never the checkout root itself. */
+export function isRepositorySourceBuildOutputPath(
+  value: unknown,
+): value is string {
+  return value !== "." && sourceBuildRelativePath(value) !== undefined;
+}
+
 function codePointLength(value: string): number {
   return [...value].length;
 }
