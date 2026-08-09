@@ -56,9 +56,12 @@ test("sourceBuild API parsing uses the canonical repository path contract", () =
     "web//dist/app.js",
     "web/../dist/app.js",
     "web\\dist\\app.js",
+    "C:relative",
     "web/\u0000dist/app.js",
     "web\ndist/app.js",
     "web\u007fdist/app.js",
+    "web\u2028dist/app.js",
+    "web\u2029dist/app.js",
   ]) {
     expect(
       sourceBuildValue({

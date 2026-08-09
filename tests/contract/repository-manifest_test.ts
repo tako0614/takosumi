@@ -850,10 +850,14 @@ test("the published v2.3 schema and parser agree on closed sourceBuild paths", (
     { value: "web/./ui", workingDirectory: false, output: false },
     { value: "web/../ui", workingDirectory: false, output: false },
     { value: "web\\ui", workingDirectory: false, output: false },
+    { value: "C:relative", workingDirectory: false, output: false },
     { value: "web/\u0000ui", workingDirectory: false, output: false },
     { value: "web\nui", workingDirectory: false, output: false },
     { value: "web\tui", workingDirectory: false, output: false },
     { value: "web\u007fui", workingDirectory: false, output: false },
+    { value: "web\u2028ui", workingDirectory: false, output: false },
+    { value: "web\u2029ui", workingDirectory: false, output: false },
+    { value: "😀".repeat(513), workingDirectory: true, output: true },
   ] as const;
   for (const pathCase of pathCases) {
     const workingDirectoryDocument = structuredClone(document);

@@ -542,8 +542,8 @@ export function parseRepositorySourceBuild(
       const argument = rawCommand.argv[argumentIndex];
       if (
         typeof argument !== "string" ||
-        argument.length < 1 ||
-        argument.length > 4096 ||
+        codePointLength(argument) < 1 ||
+        codePointLength(argument) > 4096 ||
         argument.includes("\0")
       ) {
         return `${commandPrefix}.argv[${argumentIndex}] must be a bounded non-empty argument without NUL`;
@@ -580,15 +580,17 @@ export function parseRepositorySourceBuild(
 }
 
 function sourceBuildRelativePath(value: unknown): string | undefined {
-  if (typeof value !== "string" || value.length > 1_024) return undefined;
+  if (typeof value !== "string" || codePointLength(value) > 1_024) {
+    return undefined;
+  }
   const raw = value;
   if (
     !raw ||
     raw !== raw.trim() ||
     raw.startsWith("/") ||
-    /^[A-Za-z]:(?:\/|$)/u.test(raw) ||
+    /^[A-Za-z]:/u.test(raw) ||
     raw.includes("\\") ||
-    /[\u0000-\u001f\u007f]/u.test(raw)
+    /[\u0000-\u001f\u007f\u2028\u2029]/u.test(raw)
   ) {
     return undefined;
   }
@@ -598,6 +600,10 @@ function sourceBuildRelativePath(value: unknown): string | undefined {
     if (!segment || segment === "." || segment === "..") return undefined;
   }
   return raw;
+}
+
+function codePointLength(value: string): number {
+  return [...value].length;
 }
 
 function parseInterfaces(
