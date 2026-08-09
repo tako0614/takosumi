@@ -148,6 +148,8 @@ import {
   platformExtensionRoutes,
   resolvePlatformExtensionRequestScopeRoute,
   type PlatformCompatibilityProfile,
+  type PlatformExtensionAuthenticatedContext,
+  type PlatformExtensionAuthenticatedHandler,
   type PlatformExtensionRoute,
   type PlatformExtensionContribution,
 } from "./platform_extensions.ts";
@@ -184,6 +186,11 @@ export {
   platformExtensionBasePathIsReserved,
   platformExtensionRoutes,
   resolvePlatformExtensionRequestScopeRoute,
+} from "./platform_extensions.ts";
+export type {
+  PlatformExtensionAuthenticatedAuthKind,
+  PlatformExtensionAuthenticatedContext,
+  PlatformExtensionAuthenticatedHandler,
 } from "./platform_extensions.ts";
 export {
   evaluateProductionHardeningGates,
@@ -2043,8 +2050,7 @@ function platformExtensionSessionCsrfFailure(
     request.method === "OPTIONS";
   if (
     readOnly ||
-    session.authKind !== "session" ||
-    request.headers.has("authorization")
+    session.authKind !== "session"
   ) {
     return undefined;
   }
@@ -3916,6 +3922,36 @@ export async function handlePlatformExtensionRouteRequest(
     return Response.json({ error: "not found" }, { status: 404 });
   }
   route = requestRoute;
+  const authDelivery = route.authDelivery ?? "headers";
+  if (authDelivery !== "headers" && authDelivery !== "context") {
+    return Response.json(
+      { error: "invalid extension authentication delivery" },
+      { status: 400 },
+    );
+  }
+  if (authDelivery === "context" && route.authMode === "handler") {
+    return Response.json(
+      {
+        error: "invalid extension authentication delivery",
+        error_description:
+          "context delivery requires platform authentication",
+      },
+      { status: 400 },
+    );
+  }
+  if (
+    authDelivery === "context" &&
+    (route.compatibilityProfiles?.length ?? 0) > 0
+  ) {
+    return Response.json(
+      {
+        error: "invalid extension authentication delivery",
+        error_description:
+          "context delivery is not supported for compatibility profiles",
+      },
+      { status: 400 },
+    );
+  }
   const handler = platformExtensionHandler(env, route.handlerKey);
   if (!handler) return Response.json({ error: "not found" }, { status: 404 });
   if ((route.compatibilityProfiles?.length ?? 0) > 0) {
@@ -3950,6 +3986,44 @@ export async function handlePlatformExtensionRouteRequest(
     });
     return await handler.fetchCompatibility(authContext.request, authority);
   }
+  if (authDelivery === "context") {
+    if (typeof handler.fetchAuthenticated !== "function") {
+      return Response.json(
+        {
+          error: "authenticated context unavailable",
+          error_description:
+            "context delivery requires fetchAuthenticated(request, context)",
+        },
+        { status: 503 },
+      );
+    }
+    const authContext = await platformExtensionAuthContext(
+      request,
+      env,
+      route,
+      sessionVerifier,
+      workspaceAccess,
+      "context",
+    );
+    if (!authContext.ok) return authContext.response;
+    const authenticatedContext = platformExtensionAuthenticatedContext(
+      authContext.session,
+      authContext.workspaceRoleVerified,
+    );
+    if (!authenticatedContext) {
+      return Response.json(
+        {
+          error: "authenticated context unavailable",
+          error_description: "verified authentication context is incomplete",
+        },
+        { status: 401 },
+      );
+    }
+    return await handler.fetchAuthenticated(
+      authContext.request,
+      authenticatedContext,
+    );
+  }
   if (typeof handler.fetch !== "function") {
     return Response.json({ error: "not found" }, { status: 404 });
   }
@@ -3974,6 +4048,7 @@ export async function handlePlatformExtensionRouteRequest(
     route,
     sessionVerifier,
     workspaceAccess,
+    "headers",
   );
   if (!authContext.ok) return authContext.response;
   return await handler.fetch(authContext.request);
@@ -4874,11 +4949,13 @@ async function platformExtensionAuthContext(
   route: PlatformExtensionRoute | undefined,
   sessionVerifier: PlatformExtensionSessionVerifier,
   workspaceAccess: PlatformExtensionWorkspaceAccess,
+  delivery: "headers" | "context" = "headers",
 ): Promise<
   | {
       readonly ok: true;
       readonly request: Request;
       readonly session: PlatformExtensionSessionContext;
+      readonly workspaceRoleVerified: boolean;
     }
   | { readonly ok: false; readonly response: Response }
 > {
@@ -4900,6 +4977,14 @@ async function platformExtensionAuthContext(
   }
   for (const header of PLATFORM_EXTENSION_TRUSTED_CONTEXT_HEADERS) {
     headers.delete(header);
+  }
+  if (delivery === "context") {
+    headers.delete(TAKOSUMI_INTERNAL_ACTOR_HEADER);
+    for (const header of [...headers.keys()]) {
+      if (header.startsWith("x-takosumi-")) {
+        headers.delete(header);
+      }
+    }
   }
   // Descriptor-level scope enforcement applies only to token-based auth;
   // a full human session is allowed
@@ -4984,74 +5069,179 @@ async function platformExtensionAuthContext(
     }
   }
   const sessionContext = session;
-  headers.set(PLATFORM_EXTENSION_AUTHENTICATED_HEADER, "1");
-  if (sessionContext.authKind) {
-    headers.set(
-      PLATFORM_EXTENSION_AUTH_KIND_HEADER,
-      safePlatformExtensionHeaderValue(sessionContext.authKind),
-    );
-  }
-  if (sessionContext.scopes && sessionContext.scopes.length > 0) {
-    headers.set(
-      PLATFORM_EXTENSION_SCOPES_HEADER,
-      sessionContext.scopes.map(safePlatformExtensionHeaderValue).join(" "),
-    );
-  }
-  if (sessionContext.subject) {
-    headers.set(
-      PLATFORM_EXTENSION_SUBJECT_HEADER,
-      safePlatformExtensionHeaderValue(sessionContext.subject),
-    );
-  }
-  if (sessionContext.capsuleId) {
-    headers.set(
-      PLATFORM_EXTENSION_CAPSULE_ID_HEADER,
-      safePlatformExtensionHeaderValue(sessionContext.capsuleId),
-    );
-  }
-  if (sessionContext.workspaceId) {
-    headers.set(
-      PLATFORM_EXTENSION_WORKSPACE_ID_HEADER,
-      safePlatformExtensionHeaderValue(sessionContext.workspaceId),
-    );
-  }
-  if (workspaceRoleVerified) {
-    const workspaceRole = safePlatformWorkspaceRole(
-      sessionContext.workspaceRole,
-    );
-    if (workspaceRole) {
-      headers.set(PLATFORM_EXTENSION_WORKSPACE_ROLE_HEADER, workspaceRole);
+  if (delivery === "headers") {
+    headers.set(PLATFORM_EXTENSION_AUTHENTICATED_HEADER, "1");
+    if (sessionContext.authKind) {
+      headers.set(
+        PLATFORM_EXTENSION_AUTH_KIND_HEADER,
+        safePlatformExtensionHeaderValue(sessionContext.authKind),
+      );
     }
-  }
-  if (sessionContext.audience) {
-    headers.set(
-      PLATFORM_EXTENSION_AUDIENCE_HEADER,
-      safePlatformExtensionHeaderValue(sessionContext.audience),
-    );
-  }
-  if (sessionContext.interfaceId) {
-    headers.set(
-      PLATFORM_EXTENSION_INTERFACE_ID_HEADER,
-      safePlatformExtensionHeaderValue(sessionContext.interfaceId),
-    );
-  }
-  if (sessionContext.interfaceBindingId) {
-    headers.set(
-      PLATFORM_EXTENSION_INTERFACE_BINDING_ID_HEADER,
-      safePlatformExtensionHeaderValue(sessionContext.interfaceBindingId),
-    );
-  }
-  if (sessionContext.interfaceResolvedRevision !== undefined) {
-    headers.set(
-      PLATFORM_EXTENSION_INTERFACE_REVISION_HEADER,
-      String(sessionContext.interfaceResolvedRevision),
-    );
+    if (sessionContext.scopes && sessionContext.scopes.length > 0) {
+      headers.set(
+        PLATFORM_EXTENSION_SCOPES_HEADER,
+        sessionContext.scopes.map(safePlatformExtensionHeaderValue).join(" "),
+      );
+    }
+    if (sessionContext.subject) {
+      headers.set(
+        PLATFORM_EXTENSION_SUBJECT_HEADER,
+        safePlatformExtensionHeaderValue(sessionContext.subject),
+      );
+    }
+    if (sessionContext.capsuleId) {
+      headers.set(
+        PLATFORM_EXTENSION_CAPSULE_ID_HEADER,
+        safePlatformExtensionHeaderValue(sessionContext.capsuleId),
+      );
+    }
+    if (sessionContext.workspaceId) {
+      headers.set(
+        PLATFORM_EXTENSION_WORKSPACE_ID_HEADER,
+        safePlatformExtensionHeaderValue(sessionContext.workspaceId),
+      );
+    }
+    if (workspaceRoleVerified) {
+      const workspaceRole = safePlatformWorkspaceRole(
+        sessionContext.workspaceRole,
+      );
+      if (workspaceRole) {
+        headers.set(PLATFORM_EXTENSION_WORKSPACE_ROLE_HEADER, workspaceRole);
+      }
+    }
+    if (sessionContext.audience) {
+      headers.set(
+        PLATFORM_EXTENSION_AUDIENCE_HEADER,
+        safePlatformExtensionHeaderValue(sessionContext.audience),
+      );
+    }
+    if (sessionContext.interfaceId) {
+      headers.set(
+        PLATFORM_EXTENSION_INTERFACE_ID_HEADER,
+        safePlatformExtensionHeaderValue(sessionContext.interfaceId),
+      );
+    }
+    if (sessionContext.interfaceBindingId) {
+      headers.set(
+        PLATFORM_EXTENSION_INTERFACE_BINDING_ID_HEADER,
+        safePlatformExtensionHeaderValue(sessionContext.interfaceBindingId),
+      );
+    }
+    if (sessionContext.interfaceResolvedRevision !== undefined) {
+      headers.set(
+        PLATFORM_EXTENSION_INTERFACE_REVISION_HEADER,
+        String(sessionContext.interfaceResolvedRevision),
+      );
+    }
   }
   return {
     ok: true,
     request: clonePlatformExtensionRequest(request, headers),
     session: sessionContext,
+    workspaceRoleVerified,
   };
+}
+
+function platformExtensionAuthenticatedContext(
+  session: PlatformExtensionSessionContext,
+  workspaceRoleVerified: boolean,
+): PlatformExtensionAuthenticatedContext | undefined {
+  if (!session.authenticated) return undefined;
+  const authKind = session.authKind;
+  if (
+    authKind !== "service-token" &&
+    authKind !== "oauth-access-token" &&
+    authKind !== "personal-access-token" &&
+    authKind !== "session" &&
+    authKind !== "interface-oauth-token"
+  ) {
+    return undefined;
+  }
+  const subject = safePlatformExtensionSubject(session.subject);
+  if (!subject) return undefined;
+
+  const workspaceId = optionalSafePlatformExtensionId(session.workspaceId);
+  if (session.workspaceId !== undefined && !workspaceId) return undefined;
+  const capsuleId = optionalSafePlatformExtensionId(session.capsuleId);
+  if (session.capsuleId !== undefined && !capsuleId) return undefined;
+  const runId = optionalSafePlatformExtensionId(session.runId);
+  if (session.runId !== undefined && !runId) return undefined;
+  const installingPrincipalId = optionalSafePlatformExtensionId(
+    session.installingPrincipalId,
+  );
+  if (
+    session.installingPrincipalId !== undefined &&
+    !installingPrincipalId
+  ) {
+    return undefined;
+  }
+  const managedProviderProfile = optionalSafePlatformExtensionText(
+    session.managedProviderProfile,
+    256,
+  );
+  if (
+    session.managedProviderProfile !== undefined &&
+    !managedProviderProfile
+  ) {
+    return undefined;
+  }
+  const audience = optionalSafePlatformExtensionText(session.audience, 2048);
+  if (session.audience !== undefined && !audience) return undefined;
+  const scopes = optionalSafePlatformExtensionScopes(session.scopes);
+  if (session.scopes !== undefined && !scopes) return undefined;
+  const workspaceRole =
+    session.workspaceRole === undefined
+      ? undefined
+      : safePlatformWorkspaceRole(session.workspaceRole);
+  if (session.workspaceRole !== undefined && !workspaceRole) return undefined;
+
+  return Object.freeze({
+    authKind,
+    subject,
+    ...(workspaceId ? { workspaceId } : {}),
+    ...(workspaceRoleVerified && workspaceRole ? { workspaceRole } : {}),
+    ...(scopes ? { scopes } : {}),
+    ...(capsuleId ? { capsuleId } : {}),
+    ...(runId ? { runId } : {}),
+    ...(installingPrincipalId ? { installingPrincipalId } : {}),
+    ...(managedProviderProfile ? { managedProviderProfile } : {}),
+    ...(audience ? { audience } : {}),
+  });
+}
+
+function optionalSafePlatformExtensionId(
+  value: string | undefined,
+): string | undefined {
+  return value === undefined
+    ? undefined
+    : safePlatformExtensionContextId(value);
+}
+
+function optionalSafePlatformExtensionText(
+  value: string | undefined,
+  maxLength: number,
+): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 &&
+    trimmed.length <= maxLength &&
+    !/[\u0000-\u001f\u007f]/u.test(trimmed)
+    ? trimmed
+    : undefined;
+}
+
+function optionalSafePlatformExtensionScopes(
+  values: readonly string[] | undefined,
+): readonly string[] | undefined {
+  if (values === undefined) return undefined;
+  if (!Array.isArray(values)) return undefined;
+  const normalized = values.map((value) =>
+    optionalSafePlatformExtensionText(value, 256),
+  );
+  if (normalized.some((value) => value === undefined)) return undefined;
+  const safeValues = normalized as string[];
+  return safeValues.length > 0 ? Object.freeze(safeValues) : undefined;
 }
 
 type PlatformExtensionWorkspaceAccess = (
@@ -5730,6 +5920,7 @@ function safePlatformExtensionHeaderValue(value: string): string {
 
 interface PlatformExtensionHandler {
   fetch?(request: Request): Response | Promise<Response>;
+  fetchAuthenticated?: PlatformExtensionAuthenticatedHandler["fetchAuthenticated"];
   fetchCompatibility?(
     request: Request,
     authority: PlatformCompatibilityAuthority,
@@ -5745,6 +5936,8 @@ function platformExtensionHandler(
     !handler ||
     typeof handler !== "object" ||
     (typeof (handler as { fetch?: unknown }).fetch !== "function" &&
+      typeof (handler as { fetchAuthenticated?: unknown })
+        .fetchAuthenticated !== "function" &&
       typeof (handler as { fetchCompatibility?: unknown })
         .fetchCompatibility !== "function")
   ) {
@@ -5758,6 +5951,13 @@ function platformExtensionRouteConfigured(
   route: PlatformExtensionRoute,
 ): boolean {
   const handler = platformExtensionHandler(env, route.handlerKey);
+  if ((route.authDelivery ?? "headers") === "context") {
+    return (
+      route.authMode !== "handler" &&
+      (route.compatibilityProfiles?.length ?? 0) === 0 &&
+      typeof handler?.fetchAuthenticated === "function"
+    );
+  }
   return (route.compatibilityProfiles?.length ?? 0) > 0
     ? typeof handler?.fetchCompatibility === "function"
     : typeof handler?.fetch === "function";

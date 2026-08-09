@@ -298,6 +298,103 @@ test("one extension base path has one owner", () => {
   ).toThrow("basePath /extensions/example has multiple owners");
 });
 
+test("extension auth delivery and subtree ownership validate closed fields with safe defaults", () => {
+  const [defaultRoute, explicitRoute] = platformExtensionRoutes({
+    TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
+      { basePath: "/extensions/default", handlerKey: "DEFAULT" },
+      {
+        basePath: "/extensions/explicit",
+        handlerKey: "EXPLICIT",
+        authDelivery: "headers",
+        ownsPathSubtree: false,
+      },
+    ]),
+  });
+  expect(defaultRoute?.authDelivery ?? "headers").toBe("headers");
+  expect(defaultRoute?.ownsPathSubtree ?? false).toBe(false);
+  expect(explicitRoute).toMatchObject({
+    authDelivery: "headers",
+    ownsPathSubtree: false,
+  });
+
+  for (const authDelivery of ["query", true, null]) {
+    expect(() =>
+      platformExtensionRoutes({
+        TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
+          {
+            basePath: "/extensions/invalid-delivery",
+            handlerKey: "INVALID",
+            authDelivery,
+          },
+        ]),
+      }),
+    ).toThrow("authDelivery must be headers or context");
+  }
+  for (const ownsPathSubtree of ["true", 1, null]) {
+    expect(() =>
+      platformExtensionRoutes({
+        TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
+          {
+            basePath: "/extensions/invalid-ownership",
+            handlerKey: "INVALID",
+            ownsPathSubtree,
+          },
+        ]),
+      }),
+    ).toThrow("ownsPathSubtree must be a boolean");
+  }
+});
+
+test("context delivery rejects handler-auth and compatibility routes", () => {
+  expect(() =>
+    platformExtensionRoutes({
+      TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
+        {
+          basePath: "/extensions/protocol",
+          handlerKey: "PROTOCOL",
+          authMode: "handler",
+          authDelivery: "context",
+        },
+      ]),
+    }),
+  ).toThrow("authDelivery=context requires platform authentication");
+  expect(() =>
+    platformExtensionRoutes({
+      TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
+        {
+          basePath: "/compat/example/v1",
+          handlerKey: "COMPAT",
+          authDelivery: "context",
+          compatibilityProfiles: [
+            { profile: "compat.example.v1", planes: ["data"] },
+          ],
+        },
+      ]),
+    }),
+  ).toThrow("authDelivery=context is not supported for compatibilityProfiles");
+});
+
+test("subtree ownership rejects parent/child route collisions in either order", () => {
+  const descriptors = [
+    {
+      basePath: "/extensions/example",
+      handlerKey: "ROOT",
+      ownsPathSubtree: true,
+    },
+    {
+      basePath: "/extensions/example/admin",
+      handlerKey: "ADMIN",
+    },
+  ];
+  for (const order of [descriptors, [...descriptors].reverse()]) {
+    expect(() =>
+      platformExtensionRoutes({
+        TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify(order),
+      }),
+    ).toThrow("subtree ownership overlaps");
+  }
+});
+
 test("one extension route cannot accept two managed-provider profiles", () => {
   expect(() =>
     platformExtensionRoutes({

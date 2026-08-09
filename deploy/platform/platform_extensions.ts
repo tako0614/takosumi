@@ -10,6 +10,7 @@ import {
   isTakosumiCompatibilityProfileToken,
   type TakosumiCompatibilityPlane,
 } from "takosumi-contract/capabilities";
+import type { WorkspaceRole } from "takosumi-contract/workspaces";
 import {
   PLATFORM_EXTENSION_RESERVED_PREFIXES,
   pathIsUnderBase,
@@ -32,6 +33,10 @@ export interface PlatformExtensionRoute {
   readonly handlerKey: string;
   /** `platform` is the default; `handler` preserves protocol credentials. */
   readonly authMode?: "platform" | "handler";
+  /** `headers` is the default; `context` uses the typed authenticated seam. */
+  readonly authDelivery?: "headers" | "context";
+  /** Reject any parent/child route overlap when this route owns its subtree. */
+  readonly ownsPathSubtree?: boolean;
   /** Scopes required from platform token credentials. */
   readonly requiredScopes?: readonly string[];
   /** Exact method/path scope requirements relative to this basePath. */
@@ -57,6 +62,35 @@ export interface PlatformExtensionRoute {
   readonly compatibilityProfiles?: readonly PlatformCompatibilityProfile[];
   /** Safe dashboard links contributed by the extension. */
   readonly contributions?: readonly PlatformExtensionContribution[];
+}
+
+/** Provider-neutral authenticated identity delivered across the platform seam. */
+export type PlatformExtensionAuthenticatedAuthKind =
+  | "service-token"
+  | "oauth-access-token"
+  | "personal-access-token"
+  | "session"
+  | "interface-oauth-token";
+
+export interface PlatformExtensionAuthenticatedContext {
+  readonly authKind: PlatformExtensionAuthenticatedAuthKind;
+  readonly subject: string;
+  readonly workspaceId?: string;
+  readonly workspaceRole?: WorkspaceRole;
+  readonly scopes?: readonly string[];
+  readonly capsuleId?: string;
+  readonly runId?: string;
+  readonly installingPrincipalId?: string;
+  readonly managedProviderProfile?: string;
+  readonly audience?: string;
+}
+
+/** Handler contract for routes using `authDelivery: "context"`. */
+export interface PlatformExtensionAuthenticatedHandler {
+  fetchAuthenticated(
+    request: Request,
+    context: PlatformExtensionAuthenticatedContext,
+  ): Response | Promise<Response>;
 }
 
 /** Exact HTTP method/path scope requirement for a platform extension request. */
@@ -169,6 +203,14 @@ function platformExtensionRouteFromJson(
     throw new TypeError(`${label}.handlerKey must be a non-empty string`);
   }
   const authMode = platformExtensionAuthMode(record.authMode, label);
+  const authDelivery = platformExtensionAuthDelivery(
+    record.authDelivery,
+    label,
+  );
+  const ownsPathSubtree = platformExtensionOwnsPathSubtree(
+    record.ownsPathSubtree,
+    label,
+  );
   const workspaceContext = platformExtensionWorkspaceContext(
     record.workspaceContext,
     label,
@@ -207,6 +249,16 @@ function platformExtensionRouteFromJson(
     record.compatibilityProfiles,
     label,
   );
+  if (authDelivery === "context" && authMode === "handler") {
+    throw new TypeError(
+      `${label}.authDelivery=context requires platform authentication`,
+    );
+  }
+  if (authDelivery === "context" && (compatibilityProfiles?.length ?? 0) > 0) {
+    throw new TypeError(
+      `${label}.authDelivery=context is not supported for compatibilityProfiles`,
+    );
+  }
   const declaredCompatibilityTokens = (declaredCapabilities ?? []).filter(
     isCompatibilityProfileToken,
   );
@@ -243,6 +295,8 @@ function platformExtensionRouteFromJson(
     basePath: basePath as `/${string}`,
     handlerKey,
     ...(authMode ? { authMode } : {}),
+    ...(authDelivery ? { authDelivery } : {}),
+    ...(ownsPathSubtree !== undefined ? { ownsPathSubtree } : {}),
     ...(workspaceContext ? { workspaceContext } : {}),
     ...(requiredScopes ? { requiredScopes } : {}),
     ...(requestScopeRules ? { requestScopeRules } : {}),
@@ -251,6 +305,24 @@ function platformExtensionRouteFromJson(
     ...(compatibilityProfiles ? { compatibilityProfiles } : {}),
     ...(contributions ? { contributions } : {}),
   };
+}
+
+function platformExtensionAuthDelivery(
+  value: unknown,
+  label: string,
+): "headers" | "context" | undefined {
+  if (value === undefined) return undefined;
+  if (value === "headers" || value === "context") return value;
+  throw new TypeError(`${label}.authDelivery must be headers or context`);
+}
+
+function platformExtensionOwnsPathSubtree(
+  value: unknown,
+  label: string,
+): boolean | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value === "boolean") return value;
+  throw new TypeError(`${label}.ownsPathSubtree must be a boolean`);
 }
 
 function platformExtensionAuthMode(
@@ -276,6 +348,30 @@ function platformExtensionWorkspaceContext(
 function mergePlatformExtensionRoutes(
   routes: readonly PlatformExtensionRoute[],
 ): readonly PlatformExtensionRoute[] {
+  for (let leftIndex = 0; leftIndex < routes.length; leftIndex += 1) {
+    const left = routes[leftIndex];
+    if (!left) continue;
+    for (
+      let rightIndex = leftIndex + 1;
+      rightIndex < routes.length;
+      rightIndex += 1
+    ) {
+      const right = routes[rightIndex];
+      if (!right || left.basePath === right.basePath) continue;
+      const overlaps =
+        pathIsUnderBase(left.basePath, right.basePath) ||
+        pathIsUnderBase(right.basePath, left.basePath);
+      if (
+        overlaps &&
+        ((left.ownsPathSubtree ?? false) ||
+          (right.ownsPathSubtree ?? false))
+      ) {
+        throw new TypeError(
+          `platform extension route subtree ownership overlaps ${left.basePath} and ${right.basePath}`,
+        );
+      }
+    }
+  }
   const merged = new Map<string, PlatformExtensionRoute>();
   const managedProfileOwners = new Map<string, string>();
   const compatibilityProfileOwners = new Map<string, string>();
@@ -303,6 +399,10 @@ function mergePlatformExtensionRoutes(
       existing &&
       (existing.handlerKey !== route.handlerKey ||
         (existing.authMode ?? "platform") !== (route.authMode ?? "platform") ||
+        (existing.authDelivery ?? "headers") !==
+          (route.authDelivery ?? "headers") ||
+        (existing.ownsPathSubtree ?? false) !==
+          (route.ownsPathSubtree ?? false) ||
         existing.workspaceContext !== route.workspaceContext ||
         !sameStrings(existing.requiredScopes, route.requiredScopes) ||
         !sameRequestScopeRules(

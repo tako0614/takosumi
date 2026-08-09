@@ -3769,7 +3769,10 @@ test("platform session mutations require the exact configured issuer Origin", as
   const explicitBearer = await handlePlatformExtensionRouteRequest(
     new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions", {
       method: "POST",
-      headers: { authorization: "Bearer sess_explicit" },
+      headers: {
+        authorization: "Bearer sess_explicit",
+        origin: "https://app.takosumi.com",
+      },
     }),
     {
       ...binding,
