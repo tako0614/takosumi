@@ -10,6 +10,8 @@ const RUN_CREDENTIAL_TOKEN_MAX_TTL_SECONDS = 3600;
 const RUN_CREDENTIAL_TOKEN_DEFAULT_TTL_SECONDS = 900;
 const RUN_CREDENTIAL_TOKEN_CLOCK_SKEW_SECONDS = 60;
 const RUN_CREDENTIAL_TOKEN_MAX_LENGTH = 32_768;
+const RUN_CREDENTIAL_TOKEN_SECRET_MIN_BYTES = 32;
+const RUN_CREDENTIAL_TOKEN_SECRET_MAX_BYTES = 4_096;
 const RUN_CREDENTIAL_CLAIM_MAX_LENGTH = 2_048;
 const RUN_CREDENTIAL_JTI_MAX_LENGTH = 256;
 const RUN_CREDENTIAL_SCOPE_MAX_COUNT = 64;
@@ -90,7 +92,10 @@ export interface VerifyRunCredentialTokenInput {
 export function runCredentialTokenSecret(
   env: Record<string, unknown>,
 ): string | undefined {
-  return stringEnv(env.TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET);
+  const value = env.TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET;
+  return value === undefined
+    ? undefined
+    : requiredRunCredentialTokenSecret(value);
 }
 
 /** Only the bounded generic wire format is recognizable. */
@@ -110,7 +115,7 @@ export async function createRunCredentialToken(
   readonly expiresAt: string;
   readonly ttlSeconds: number;
 }> {
-  assertNonEmpty(input.secret, "secret");
+  requiredRunCredentialTokenSecret(input.secret);
   const payload = createPayload(input);
   const encodedPayload = base64UrlEncodeBytes(
     new TextEncoder().encode(JSON.stringify(payload)),
@@ -135,6 +140,7 @@ export async function verifyRunCredentialToken(
   token: string,
   input: VerifyRunCredentialTokenInput,
 ): Promise<RunCredentialTokenVerificationResult> {
+  requiredRunCredentialTokenSecret(input.secret);
   const tokenFormat = recognizedTokenFormat(token);
   if (!tokenFormat) return { ok: false, reason: "not_run_credential_token" };
   if (!boundedTokenEnvelope(token)) {
@@ -406,12 +412,25 @@ function normalizedClaim(value: string, name: string): string {
   return name === "audience" ? normalizeAudience(value) : value;
 }
 
-function assertNonEmpty(value: string, name: string): void {
-  if (!value.trim()) throw new TypeError(`${name} must be a non-empty string`);
-}
-
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
+function requiredRunCredentialTokenSecret(value: unknown): string {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value !== value.trim() ||
+    /[\u0000-\u001f\u007f-\u009f]/u.test(value)
+  ) {
+    throw new TypeError("Run credential token secret must be one exact string");
+  }
+  const byteLength = new TextEncoder().encode(value).byteLength;
+  if (
+    byteLength < RUN_CREDENTIAL_TOKEN_SECRET_MIN_BYTES ||
+    byteLength > RUN_CREDENTIAL_TOKEN_SECRET_MAX_BYTES
+  ) {
+    throw new TypeError(
+      `Run credential token secret must contain ${RUN_CREDENTIAL_TOKEN_SECRET_MIN_BYTES}-${RUN_CREDENTIAL_TOKEN_SECRET_MAX_BYTES} UTF-8 bytes`,
+    );
+  }
+  return value;
 }
 
 function isBoundedExactString(
@@ -433,10 +452,6 @@ function boundedTokenEnvelope(token: string): boolean {
     token.length <= RUN_CREDENTIAL_TOKEN_MAX_LENGTH &&
     /^[A-Za-z0-9._-]+$/u.test(token)
   );
-}
-
-function stringEnv(value: unknown): string | undefined {
-  return isNonEmptyString(value) ? value.trim() : undefined;
 }
 
 function normalizeAudience(value: string): string {

@@ -7,6 +7,7 @@ import {
 } from "../../../core/shared/run_credential_tokens.ts";
 
 const NOW = 1_800_000_000_000;
+const SIGNING_SECRET = "0123456789abcdef0123456789abcdef";
 const FULL_CLAIMS = {
   audience: "operator.example.provider.v1",
   subject: "untrusted-token-subject",
@@ -23,7 +24,7 @@ const FULL_CLAIMS = {
 describe("run credential token", () => {
   test("mints only the generic format and binds every authority claim", async () => {
     const issued = await createRunCredentialToken({
-      secret: "issuer-secret",
+      secret: SIGNING_SECRET,
       ...FULL_CLAIMS,
       ttlSeconds: 600,
       now: () => NOW,
@@ -33,7 +34,7 @@ describe("run credential token", () => {
     expect(issued.token.startsWith("takrct_v1.")).toBe(true);
     expect(isRunCredentialToken(issued.token)).toBe(true);
     const verified = await verifyRunCredentialToken(issued.token, {
-      secret: "issuer-secret",
+      secret: SIGNING_SECRET,
       expectedAudience: FULL_CLAIMS.audience,
       expectedWorkspaceId: FULL_CLAIMS.workspaceId,
       expectedCapsuleId: FULL_CLAIMS.capsuleId,
@@ -70,7 +71,7 @@ describe("run credential token", () => {
 
   test("rejects audience, scope, phase, and signature confusion", async () => {
     const issued = await createRunCredentialToken({
-      secret: "issuer-secret",
+      secret: SIGNING_SECRET,
       ...FULL_CLAIMS,
       now: () => NOW,
       jti: "jti-a",
@@ -88,7 +89,7 @@ describe("run credential token", () => {
     ] as const) {
       expect(
         await verifyRunCredentialToken(issued.token, {
-          secret: "issuer-secret",
+          secret: SIGNING_SECRET,
           now: () => NOW,
           ...input,
         }),
@@ -99,7 +100,7 @@ describe("run credential token", () => {
     const tampered = `${issued.token.slice(0, -1)}${final === "A" ? "B" : "A"}`;
     expect(
       await verifyRunCredentialToken(tampered, {
-        secret: "issuer-secret",
+        secret: SIGNING_SECRET,
         expectedAudience: FULL_CLAIMS.audience,
         now: () => NOW,
       }),
@@ -113,18 +114,38 @@ describe("run credential token", () => {
       }),
     ).toBeUndefined();
     expect(
-      runCredentialTokenSecret({ TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: "run-secret" }),
-    ).toBe("run-secret");
+      runCredentialTokenSecret({ TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: SIGNING_SECRET }),
+    ).toBe(SIGNING_SECRET);
     expect(runCredentialTokenSecret({})).toBeUndefined();
+    expect(() =>
+      runCredentialTokenSecret({
+        TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: "short-secret",
+      }),
+    ).toThrow("32-4096 UTF-8 bytes");
     const unrelated = "other_v1.payload.signature";
     expect(isRunCredentialToken(unrelated)).toBe(false);
     expect(
       await verifyRunCredentialToken(unrelated, {
-        secret: "issuer-secret",
+        secret: SIGNING_SECRET,
         expectedAudience: FULL_CLAIMS.audience,
         now: () => NOW,
       }),
     ).toEqual({ ok: false, reason: "not_run_credential_token" });
+  });
+
+  test("rejects weak signer material before minting or verification", async () => {
+    await expect(
+      createRunCredentialToken({
+        secret: "x",
+        ...FULL_CLAIMS,
+      }),
+    ).rejects.toThrow("32-4096 UTF-8 bytes");
+    await expect(
+      verifyRunCredentialToken("takrct_v1.payload.signature", {
+        secret: "x",
+        expectedAudience: FULL_CLAIMS.audience,
+      }),
+    ).rejects.toThrow("32-4096 UTF-8 bytes");
   });
 
   test("bounds the token envelope and every caller-selected claim", async () => {
@@ -132,7 +153,7 @@ describe("run credential token", () => {
     expect(isRunCredentialToken(oversized)).toBe(false);
     expect(
       await verifyRunCredentialToken(oversized, {
-        secret: "issuer-secret",
+        secret: SIGNING_SECRET,
         expectedAudience: FULL_CLAIMS.audience,
         now: () => NOW,
       }),
@@ -141,14 +162,14 @@ describe("run credential token", () => {
 
     await expect(
       createRunCredentialToken({
-        secret: "issuer-secret",
+        secret: SIGNING_SECRET,
         ...FULL_CLAIMS,
         audience: "extension.example.v1\n",
       }),
     ).rejects.toThrow(/exact bounded/);
     await expect(
       createRunCredentialToken({
-        secret: "issuer-secret",
+        secret: SIGNING_SECRET,
         ...FULL_CLAIMS,
         scopes: Array.from({ length: 65 }, (_, index) => `scope:${index}`),
       }),
@@ -179,9 +200,9 @@ describe("run credential token", () => {
     ]) {
       expect(
         await verifyRunCredentialToken(
-          await signedGenericToken(invalid, "issuer-secret"),
+          await signedGenericToken(invalid, SIGNING_SECRET),
           {
-            secret: "issuer-secret",
+            secret: SIGNING_SECRET,
             expectedAudience: FULL_CLAIMS.audience,
             now: () => NOW,
           },
@@ -192,10 +213,10 @@ describe("run credential token", () => {
       await verifyRunCredentialToken(
         await signedGenericToken(
           { ...payload, exp: payload.iat + 59 },
-          "issuer-secret",
+          SIGNING_SECRET,
         ),
         {
-          secret: "issuer-secret",
+          secret: SIGNING_SECRET,
           expectedAudience: FULL_CLAIMS.audience,
           now: () => NOW,
         },

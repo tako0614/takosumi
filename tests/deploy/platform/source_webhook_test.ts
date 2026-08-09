@@ -4130,7 +4130,7 @@ test("platform Interface ingress separates control and runtime credentials", asy
 
 test("platform Interface ingress rejects generic Run credentials without an extension descriptor", async () => {
   const issued = await createRunCredentialToken({
-    secret: "run-secret",
+    secret: "0123456789abcdef0123456789abcdef",
     audience: "operator.example.provider.v1",
     subject: "untrusted-token-subject",
     workspaceId: "space_0123456789abcdef",
@@ -4156,7 +4156,7 @@ test("platform Interface ingress rejects generic Run credentials without an exte
       TAKOSUMI_ENVIRONMENT: "test",
       TAKOSUMI_DEV_MODE: "1",
       TAKOSUMI_DEPLOY_CONTROL_TOKEN: "resource-token",
-      TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: "run-secret",
+      TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: "0123456789abcdef0123456789abcdef",
     } as never,
   );
 

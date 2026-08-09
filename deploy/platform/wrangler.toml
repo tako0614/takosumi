@@ -217,7 +217,7 @@ TAKOSUMI_PRODUCTION_HARDENING_GATE = "observe"
 #   TAKOSUMI_DEPLOY_CONTROL_TOKEN                  accounts/control-plane bearer
 #   TAKOSUMI_METRICS_SCRAPE_TOKEN                  Prometheus `/metrics` scrape bearer
 #   TAKOSUMI_RUN_TOKEN_SECRET                      Capsule run (`takrun_`) signing secret
-#   TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET           generic route-scoped run-credential signing secret
+#   TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET           generic route-scoped run-credential signing secret (32+ random bytes)
 # Optional release activation webhook:
 #   TAKOSUMI_RELEASE_ACTIVATOR_TOKEN               required only when TAKOSUMI_RELEASE_ACTIVATOR_URL is set
 # Commercial payment-provider credentials belong to the host extension and are

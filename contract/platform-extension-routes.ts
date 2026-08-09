@@ -31,6 +31,7 @@ export const PLATFORM_EXTENSION_RESERVED_PREFIXES = [
   "/v1/auth",
   "/v1/privacy",
   "/v1/capabilities",
+  "/v1/form-activations",
   "/v1/form-availability",
   "/v1/offering-catalogs",
   "/v1/offering-availability",

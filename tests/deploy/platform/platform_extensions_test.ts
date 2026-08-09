@@ -493,6 +493,8 @@ test("core route prefixes cannot be delegated to extensions", () => {
   for (const basePath of [
     "/v1/resources",
     "/v1/resources/preview",
+    "/v1/form-activations",
+    "/v1/form-activations/activation_1",
     "/v1/capabilities",
     "/.well-known/takosumi",
     "/api/v1/workspaces",

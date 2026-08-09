@@ -49,3 +49,17 @@ test("exact leaves cannot be nested below core well-known leaves", () => {
     expect(platformExtensionBasePathIsReserved(path, "exact")).toBe(true);
   }
 });
+
+test("retired Form activation routes remain core-owned in every match mode", () => {
+  for (const matchMode of ["subtree", "exact"] as const) {
+    expect(
+      platformExtensionBasePathIsReserved("/v1/form-activations", matchMode),
+    ).toBe(true);
+    expect(
+      platformExtensionBasePathIsReserved(
+        "/v1/form-activations/activation_1",
+        matchMode,
+      ),
+    ).toBe(true);
+  }
+});

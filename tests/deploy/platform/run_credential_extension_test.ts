@@ -7,6 +7,7 @@ import {
 } from "../../../deploy/platform/worker.ts";
 
 const NOW = Date.now();
+const SIGNING_SECRET = "0123456789abcdef0123456789abcdef";
 const RUN_ISSUANCE = {
   context: "capsule-run.v1",
   operatorConnection: "workspace-bindable",
@@ -24,7 +25,7 @@ const ROUTE = {
   },
 } as const satisfies PlatformExtensionRoute;
 const TOKEN_INPUT = {
-  secret: "run-secret",
+  secret: SIGNING_SECRET,
   audience: "extension.example.v1",
   subject: "token-subject-is-not-authority",
   workspaceId: "workspace_1",
@@ -40,10 +41,22 @@ const TOKEN_INPUT = {
 };
 
 describe("platform extension Run credential", () => {
+  test("rejects weak verifier configuration before accepting a token", async () => {
+    const issued = await createRunCredentialToken(TOKEN_INPUT);
+    await expect(
+      verifyPlatformExtensionRunCredentialToken(
+        { TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: "short-secret" } as never,
+        issued.token,
+        ROUTE,
+        ledger(),
+      ),
+    ).rejects.toThrow("32-4096 UTF-8 bytes");
+  });
+
   test("returns typed canonical installer context without raw bearer material", async () => {
     const issued = await createRunCredentialToken(TOKEN_INPUT);
     const session = await verifyPlatformExtensionRunCredentialToken(
-      { TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: "run-secret" } as never,
+      { TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: SIGNING_SECRET } as never,
       issued.token,
       ROUTE,
       ledger(),
@@ -68,7 +81,7 @@ describe("platform extension Run credential", () => {
   test("rejects absent route authority and wrong audience or scope", async () => {
     const issued = await createRunCredentialToken(TOKEN_INPUT);
     const env = {
-      TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: "run-secret",
+      TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: SIGNING_SECRET,
     } as never;
     expect(
       await verifyPlatformExtensionRunCredentialToken(
@@ -110,7 +123,7 @@ describe("platform extension Run credential", () => {
 
   test("rejects token scope expansion and route descriptors outside the live recipe authority", async () => {
     const env = {
-      TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: "run-secret",
+      TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: SIGNING_SECRET,
     } as never;
     for (const scopes of [
       ["extension:invoke", "extension:extra"],
@@ -161,7 +174,7 @@ describe("platform extension Run credential", () => {
 
   test("rejects stale, cross-Workspace, missing-installer, and wrong-phase ledger context", async () => {
     const env = {
-      TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: "run-secret",
+      TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: SIGNING_SECRET,
     } as never;
     const issued = await createRunCredentialToken(TOKEN_INPUT);
     for (const currentLedger of [
@@ -196,7 +209,7 @@ describe("platform extension Run credential", () => {
 
   test("rechecks durable runtime safety at the platform boundary", async () => {
     const env = {
-      TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: "run-secret",
+      TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: SIGNING_SECRET,
     } as never;
     const issued = await createRunCredentialToken(TOKEN_INPUT);
     for (const safety of [
@@ -225,7 +238,7 @@ describe("platform extension Run credential", () => {
 
   test("rechecks the exact live connection authority and zero stored material", async () => {
     const env = {
-      TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: "run-secret",
+      TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: SIGNING_SECRET,
     } as never;
     const issued = await createRunCredentialToken(TOKEN_INPUT);
     for (const currentLedger of [
