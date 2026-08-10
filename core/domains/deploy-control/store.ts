@@ -703,6 +703,19 @@ export interface OpenTofuControlStore {
 
   // Workspace records (spec §4). The owner namespace Capsules live under.
   putWorkspace(workspace: Workspace): Promise<Workspace>;
+  /**
+   * Claims the one system-managed personal bootstrap slot for an owner.
+   *
+   * The operation is atomic at the durable store boundary. It returns an
+   * already claimed Workspace, otherwise adopts the oldest owned personal
+   * Workspace, otherwise inserts `candidate`. A conflicting candidate handle
+   * or id returns `undefined`; ordinary personal Workspaces are never rejected
+   * merely because the owner already has a bootstrap claim.
+   */
+  claimPersonalWorkspaceBootstrap(
+    ownerUserId: string,
+    candidate: Workspace,
+  ): Promise<Workspace | undefined>;
   getWorkspace(id: string): Promise<Workspace | undefined>;
   listWorkspacesByIds(ids: readonly string[]): Promise<readonly Workspace[]>;
   getWorkspaceByHandle(handle: string): Promise<Workspace | undefined>;
@@ -1104,6 +1117,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
    */
   readonly #runLeases = new Map<string, string>();
   readonly #workspaces = new Map<string, Workspace>();
+  readonly #personalWorkspaceBootstrapIds = new Map<string, string>();
   readonly #workspaceMembers = new Map<string, WorkspaceMember>();
   readonly #projects = new Map<string, Project>();
   readonly #installConfigs = new Map<string, InstallConfig>();
@@ -1442,6 +1456,50 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
   putWorkspace(workspace: Workspace): Promise<Workspace> {
     this.#workspaces.set(workspace.id, workspace);
     return Promise.resolve(workspace);
+  }
+
+  claimPersonalWorkspaceBootstrap(
+    ownerUserId: string,
+    candidate: Workspace,
+  ): Promise<Workspace | undefined> {
+    const claimedId = this.#personalWorkspaceBootstrapIds.get(ownerUserId);
+    if (claimedId !== undefined) {
+      const claimed = this.#workspaces.get(claimedId);
+      if (!claimed) {
+        return Promise.reject(
+          new Error("personal Workspace bootstrap claim is dangling"),
+        );
+      }
+      return Promise.resolve(claimed);
+    }
+
+    const adoptable = Array.from(this.#workspaces.values())
+      .filter(
+        (workspace) =>
+          workspace.ownerUserId === ownerUserId &&
+          workspace.type === "personal",
+      )
+      .sort(
+        (left, right) =>
+          left.createdAt.localeCompare(right.createdAt) ||
+          left.id.localeCompare(right.id),
+      )[0];
+    if (adoptable) {
+      this.#personalWorkspaceBootstrapIds.set(ownerUserId, adoptable.id);
+      return Promise.resolve(adoptable);
+    }
+
+    if (
+      this.#workspaces.has(candidate.id) ||
+      Array.from(this.#workspaces.values()).some(
+        (workspace) => workspace.handle === candidate.handle,
+      )
+    ) {
+      return Promise.resolve(undefined);
+    }
+    this.#workspaces.set(candidate.id, candidate);
+    this.#personalWorkspaceBootstrapIds.set(ownerUserId, candidate.id);
+    return Promise.resolve(candidate);
   }
 
   getWorkspace(id: string): Promise<Workspace | undefined> {

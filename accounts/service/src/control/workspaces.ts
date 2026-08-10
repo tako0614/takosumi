@@ -646,13 +646,25 @@ async function listWorkspacePage(
         workspace.type === "personal" &&
         workspace.ownerUserId === session.subject,
     );
-  if (subject !== undefined && !hasOwnedPersonalWorkspace) {
+  if (subject !== undefined) {
+    // The bounded membership page is the only route preflight. Always invoke
+    // the canonical ensure so an already-visible personal Workspace still gets
+    // its owner membership and default Project repaired. The helper keeps that
+    // repair best-effort so other accessible Workspaces remain visible.
     await maybeEnsurePersonalWorkspaceForSubject({
       subject,
       store,
       operations,
     });
-    page = await listPage();
+    if (!hasOwnedPersonalWorkspace) {
+      try {
+        page = await listPage();
+      } catch {
+        // The initial bounded page is already usable. A best-effort bootstrap
+        // refresh must not discard it when control storage becomes unavailable.
+        page = initialPage;
+      }
+    }
   }
   const pinSelected =
     selected !== undefined &&

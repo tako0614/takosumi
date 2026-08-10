@@ -28,9 +28,25 @@ export const workspaces = pgTable(
     spaceJson: json("space_json").notNull(),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
+    ownerUserId: text("owner_user_id").generatedAlwaysAs(
+      sql`space_json ->> 'ownerUserId'`,
+    ),
+    workspaceType: text("workspace_type").generatedAlwaysAs(
+      sql`space_json ->> 'type'`,
+    ),
+    personalBootstrapOwnerId: text("personal_bootstrap_owner_id"),
   },
   (table) => [
     uniqueIndex("takosumi_workspaces_handle_unique").on(table.handle),
+    index("takosumi_workspaces_owner_type_created_idx").on(
+      table.ownerUserId,
+      table.workspaceType,
+      table.createdAt,
+      table.id,
+    ),
+    uniqueIndex("takosumi_workspaces_personal_bootstrap_owner_unique")
+      .on(table.personalBootstrapOwnerId)
+      .where(sql`${table.personalBootstrapOwnerId} is not null`),
   ],
 );
 

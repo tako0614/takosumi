@@ -948,6 +948,76 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     return workspace;
   }
 
+  async claimPersonalWorkspaceBootstrap(
+    ownerUserId: string,
+    candidate: Workspace,
+  ): Promise<Workspace | undefined> {
+    const exactClaim = async (): Promise<Workspace | undefined> => {
+      const rows = await this.#db
+        .select({ json: pgSchema.workspaces.spaceJson })
+        .from(pgSchema.workspaces)
+        .where(
+          eq(pgSchema.workspaces.personalBootstrapOwnerId, ownerUserId),
+        )
+        .limit(1);
+      return parseRow(rows[0]) as Workspace | undefined;
+    };
+    const existing = await exactClaim();
+    if (existing) return existing;
+
+    const adoptable = await this.#db
+      .select({ id: pgSchema.workspaces.id })
+      .from(pgSchema.workspaces)
+      .where(
+        and(
+          eq(pgSchema.workspaces.ownerUserId, ownerUserId),
+          eq(pgSchema.workspaces.workspaceType, "personal"),
+          isNull(pgSchema.workspaces.personalBootstrapOwnerId),
+        ),
+      )
+      .orderBy(
+        asc(pgSchema.workspaces.createdAt),
+        asc(pgSchema.workspaces.id),
+      )
+      .limit(1);
+    const adoptableId = adoptable[0]?.id;
+    if (adoptableId !== undefined) {
+      try {
+        await this.#db
+          .update(pgSchema.workspaces)
+          .set({ personalBootstrapOwnerId: ownerUserId })
+          .where(
+            and(
+              eq(pgSchema.workspaces.id, adoptableId),
+              eq(pgSchema.workspaces.ownerUserId, ownerUserId),
+              eq(pgSchema.workspaces.workspaceType, "personal"),
+              isNull(pgSchema.workspaces.personalBootstrapOwnerId),
+            ),
+          );
+      } catch (error) {
+        const raced = await exactClaim();
+        if (raced) return raced;
+        throw error;
+      }
+      const adopted = await exactClaim();
+      if (adopted) return adopted;
+      throw new Error("personal Workspace bootstrap adoption did not persist");
+    }
+
+    await this.#db
+      .insert(pgSchema.workspaces)
+      .values({
+        id: candidate.id,
+        handle: candidate.handle,
+        spaceJson: candidate,
+        createdAt: candidate.createdAt,
+        updatedAt: candidate.updatedAt,
+        personalBootstrapOwnerId: ownerUserId,
+      })
+      .onConflictDoNothing();
+    return await exactClaim();
+  }
+
   async getWorkspace(id: string): Promise<Workspace | undefined> {
     const rows = await this.#db
       .select({ json: pgSchema.workspaces.spaceJson })

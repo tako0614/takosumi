@@ -118,6 +118,79 @@ test("v61/v62 create an empty Resource identity fence without historical backfil
   );
 });
 
+test("v63 adds indexed personal bootstrap identity without marking existing personal rows", async () => {
+  const db = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(db, { throughMigrationVersion: 62 });
+  const oldest = {
+    id: "workspace_existing_oldest",
+    handle: "existing-oldest",
+    displayName: "Existing oldest",
+    type: "personal",
+    ownerUserId: "owner_existing",
+    createdAt: "2026-08-01T00:00:00.000Z",
+    updatedAt: "2026-08-01T00:00:00.000Z",
+  };
+  const newer = {
+    ...oldest,
+    id: "workspace_existing_newer",
+    handle: "existing-newer",
+    displayName: "Existing newer",
+    createdAt: "2026-08-01T00:01:00.000Z",
+    updatedAt: "2026-08-01T00:01:00.000Z",
+  };
+  for (const workspace of [oldest, newer]) {
+    await db
+      .prepare(
+        `insert into workspaces
+           (id, handle, record_json, created_at, updated_at)
+         values (?, ?, ?, ?, ?)`,
+      )
+      .bind(
+        workspace.id,
+        workspace.handle,
+        JSON.stringify(workspace),
+        workspace.createdAt,
+        workspace.updatedAt,
+      )
+      .run();
+  }
+
+  await ensureD1OpenTofuLedgerSchema(db);
+
+  const workspaceIndexes = await indexNames(db, "workspaces");
+  expect(workspaceIndexes.has("workspaces_owner_type_created_idx")).toBe(true);
+  expect(
+    workspaceIndexes.has("workspaces_personal_bootstrap_owner_unique"),
+  ).toBe(true);
+  expect(
+    await db
+      .prepare(
+        `select id, owner_user_id, workspace_type,
+                personal_bootstrap_owner_id
+         from workspaces
+         where owner_user_id = ? and workspace_type = 'personal'
+         order by created_at, id`,
+      )
+      .bind(oldest.ownerUserId)
+      .all(),
+  ).toMatchObject({
+    results: [
+      {
+        id: oldest.id,
+        owner_user_id: oldest.ownerUserId,
+        workspace_type: "personal",
+        personal_bootstrap_owner_id: null,
+      },
+      {
+        id: newer.id,
+        owner_user_id: newer.ownerUserId,
+        workspace_type: "personal",
+        personal_bootstrap_owner_id: null,
+      },
+    ],
+  });
+});
+
 test("v60 restores populated current and archived Service Form rows with inline parent keys", async () => {
   const db = new SqliteFakeD1();
   const now = "2026-08-01T00:00:00.000Z";
@@ -637,17 +710,19 @@ test("predeployed verification is strictly read-only", async () => {
   );
 });
 
-test("predeployed verification accepts only the exact current v62 ledger", async () => {
+test("predeployed verification accepts only the exact current v63 ledger", async () => {
   const predecessor = new SqliteFakeD1();
   await ensureD1OpenTofuLedgerSchema(predecessor, {
-    throughMigrationVersion: 60,
+    throughMigrationVersion: 62,
   });
   await expect(
     verifyD1OpenTofuLedgerSchemaPredeployed(predecessor),
   ).rejects.toThrow("D1 OpenTofu predeployed schema verification failed");
-  expect((await tableNames(predecessor)).has("resource_identity_fences")).toBe(
-    false,
-  );
+  expect(
+    (await indexNames(predecessor, "workspaces")).has(
+      "workspaces_personal_bootstrap_owner_unique",
+    ),
+  ).toBe(false);
 
   const current = new SqliteFakeD1();
   await ensureD1OpenTofuLedgerSchema(current);
@@ -657,7 +732,7 @@ test("predeployed verification accepts only the exact current v62 ledger", async
   );
 
   const tooOld = new SqliteFakeD1();
-  await ensureD1OpenTofuLedgerSchema(tooOld, { throughMigrationVersion: 59 });
+  await ensureD1OpenTofuLedgerSchema(tooOld, { throughMigrationVersion: 61 });
   await expect(verifyD1OpenTofuLedgerSchemaPredeployed(tooOld)).rejects.toThrow(
     "D1 OpenTofu predeployed schema verification failed",
   );
@@ -676,7 +751,7 @@ test("predeployed verification accepts only the exact current v62 ledger", async
   await extra
     .prepare(
       `insert into schema_migrations (version, name, checksum, applied_at)
-       values (63, 'unexpected', ?, '2026-08-05T00:00:00.000Z')`,
+       values (64, 'unexpected', ?, '2026-08-05T00:00:00.000Z')`,
     )
     .bind(`sha256:${"f".repeat(64)}`)
     .run();

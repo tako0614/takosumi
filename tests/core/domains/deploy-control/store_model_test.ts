@@ -19,6 +19,7 @@ import {
 } from "../../../../core/domains/deploy-control/store.ts";
 import { SqlOpenTofuControlStore } from "../../../../core/domains/deploy-control/store_sql.ts";
 import { CloudflareD1OpenTofuControlStore } from "../../../../worker/src/d1_opentofu_store.ts";
+import { WorkspacesService } from "../../../../core/domains/workspaces/mod.ts";
 import {
   seedCapsuleModel,
   seedProviderConnections,
@@ -280,6 +281,166 @@ test("Workspace and Project stores expose only canonical ownership fields", asyn
       label,
     ).toBe("project_a");
   }
+});
+
+test("personal Workspace bootstrap claims converge across memory, Postgres, and D1 stores", async () => {
+  const pgClient = await PGliteSqlClient.create();
+  pgClients.push(pgClient);
+  const memory = new InMemoryOpenTofuControlStore();
+  const d1 = new SqliteFakeD1();
+  const pairs: readonly [
+    string,
+    OpenTofuControlStore,
+    OpenTofuControlStore,
+  ][] = [
+    ["memory", memory, memory],
+    [
+      "postgres",
+      new SqlOpenTofuControlStore({ client: pgClient }),
+      new SqlOpenTofuControlStore({ client: pgClient }),
+    ],
+    [
+      "d1",
+      new CloudflareD1OpenTofuControlStore(d1),
+      new CloudflareD1OpenTofuControlStore(d1),
+    ],
+  ];
+
+  for (const [label, firstStore, secondStore] of pairs) {
+    // Initialize independently constructed durable adapters before racing only
+    // the owner claim itself.
+    await firstStore.listWorkspaces();
+    await secondStore.listWorkspaces();
+    let firstId = 0;
+    let secondId = 0;
+    const first = new WorkspacesService({
+      store: firstStore,
+      newId: (prefix) => `${prefix}_${label}_first_${(firstId += 1)}`,
+      now: () => new Date("2026-06-06T00:00:00.000Z"),
+    });
+    const second = new WorkspacesService({
+      store: secondStore,
+      newId: (prefix) => `${prefix}_${label}_second_${(secondId += 1)}`,
+      now: () => new Date("2026-06-06T00:00:01.000Z"),
+    });
+    const owner = `owner_bootstrap_${label}`;
+
+    const created = await Promise.all([
+      first.ensurePersonalWorkspace(owner, `${label}-first`),
+      second.ensurePersonalWorkspace(owner, `${label}-second`),
+    ]);
+
+    expect(new Set(created.map((row) => row.id)).size, label).toBe(1);
+    expect(
+      (await firstStore.listWorkspacesByOwner(owner)).filter(
+        (row) => row.type === "personal",
+      ),
+      label,
+    ).toHaveLength(1);
+
+    const samePresentationOwner = `owner_bootstrap_same_${label}`;
+    const samePresentation = await Promise.all([
+      first.ensurePersonalWorkspace(
+        samePresentationOwner,
+        `${label}-same-presentation`,
+      ),
+      second.ensurePersonalWorkspace(
+        samePresentationOwner,
+        `${label}-same-presentation`,
+      ),
+    ]);
+    expect(
+      new Set(samePresentation.map((row) => row.id)).size,
+      label,
+    ).toBe(1);
+    expect(
+      (await firstStore.listWorkspacesByOwner(samePresentationOwner)).filter(
+        (row) => row.type === "personal",
+      ),
+      label,
+    ).toHaveLength(1);
+
+    const adoptionOwner = `owner_adoption_${label}`;
+    const oldest = await first.createWorkspace({
+      handle: `${label}-existing-oldest`,
+      displayName: `${label} existing oldest`,
+      type: "personal",
+      ownerUserId: adoptionOwner,
+    });
+    await first.createWorkspace({
+      handle: `${label}-existing-newer`,
+      displayName: `${label} existing newer`,
+      type: "personal",
+      ownerUserId: adoptionOwner,
+    });
+
+    const adopted = await Promise.all([
+      first.ensurePersonalWorkspace(adoptionOwner, `${label}-presentation-a`),
+      second.ensurePersonalWorkspace(adoptionOwner, `${label}-presentation-b`),
+    ]);
+
+    expect(adopted.map((row) => row.id), label).toEqual([
+      oldest.id,
+      oldest.id,
+    ]);
+    expect(await firstStore.listWorkspacesByOwner(adoptionOwner), label)
+      .toHaveLength(2);
+
+    const squattedHandle = `${label}-foreign-preference`;
+    const foreign = await first.createWorkspace({
+      handle: squattedHandle,
+      displayName: `${label} foreign preference`,
+      type: "organization",
+      ownerUserId: `owner_foreign_${label}`,
+    });
+    const isolated = await second.ensurePersonalWorkspace(
+      `owner_requesting_${label}`,
+      squattedHandle,
+    );
+    expect(isolated.id, label).not.toBe(foreign.id);
+    expect(isolated.ownerUserId, label).toBe(`owner_requesting_${label}`);
+  }
+});
+
+test("D1 personal Workspace bootstrap lookup and adoption use exact indexes", async () => {
+  const db = new SqliteFakeD1();
+  const store = new CloudflareD1OpenTofuControlStore(db);
+  await store.putWorkspace(
+    workspace({
+      id: "workspace_bootstrap_plan",
+      handle: "bootstrap-plan",
+      ownerUserId: "owner_bootstrap_plan",
+    }),
+  );
+
+  const exact = await db
+    .prepare(
+      `explain query plan
+       select record_json from workspaces
+       where personal_bootstrap_owner_id = ?
+       limit 1`,
+    )
+    .bind("owner_bootstrap_plan")
+    .all<{ readonly detail: string }>();
+  const adoption = await db
+    .prepare(
+      `explain query plan
+       select id from workspaces
+       where owner_user_id = ?
+         and workspace_type = 'personal'
+         and personal_bootstrap_owner_id is null
+       order by created_at, id
+       limit 1`,
+    )
+    .bind("owner_bootstrap_plan")
+    .all<{ readonly detail: string }>();
+
+  expect(exact.results.map((row) => row.detail).join("\n")).toContain(
+    "workspaces_personal_bootstrap_owner_unique",
+  );
+  expect(adoption.results.map((row) => row.detail).join("\n")).toContain(
+    "workspaces_owner_type_created_idx",
+  );
 });
 
 test("InstallConfig stores preserve global enumeration and expose exact bounded scopes", async () => {

@@ -136,7 +136,7 @@ async function liveD1ColumnsOf(
   tableName: string,
 ): Promise<ColumnMirror[]> {
   const result = await db
-    .prepare(`pragma table_info(${tableName})`)
+    .prepare(`pragma table_xinfo(${tableName})`)
     .all<SqlitePragmaTableInfoRow>();
   return result.results.map((row) => ({
     name: row.name,
@@ -235,6 +235,35 @@ const defaulted = (name: string): ColumnMirror => ({
 });
 
 test("D1 Drizzle schema mirrors critical live D1 tables", () => {
+  expect(getTableName(d1Schema.workspaces)).toBe("workspaces");
+  expect(columnsOf(d1Schema.workspaces)).toEqual([
+    pk("id"),
+    nn("handle"),
+    nn("record_json"),
+    nn("created_at"),
+    nn("updated_at"),
+    nullable("owner_user_id"),
+    nullable("workspace_type"),
+    nullable("personal_bootstrap_owner_id"),
+  ]);
+  expect(sqliteUniqueIndexesOf(d1Schema.workspaces)).toEqual([
+    {
+      name: "workspaces_handle_unique",
+      columns: ["handle"],
+      unique: true,
+    },
+    {
+      name: "workspaces_owner_type_created_idx",
+      columns: ["owner_user_id", "workspace_type", "created_at", "id"],
+      unique: false,
+    },
+    {
+      name: "workspaces_personal_bootstrap_owner_unique",
+      columns: ["personal_bootstrap_owner_id"],
+      unique: true,
+    },
+  ]);
+
   expect(getTableName(d1Schema.connections)).toBe("connections");
   expect(columnsOf(d1Schema.connections)).toEqual([
     pk("id"),
@@ -575,7 +604,7 @@ test("Worker D1 bootstrap records canonical schema migration ledger", async () =
     1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 16, 17, 18, 19, 20, 21, 22, 23, 24,
     25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43,
     44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60,
-    61, 62,
+    61, 62, 63,
   ]);
   expect(rows.map((row) => row.name)).toEqual([
     "d1_opentofu_connections_and_secret_blobs_shape",
@@ -637,6 +666,7 @@ test("Worker D1 bootstrap records canonical schema migration ledger", async () =
     "d1_service_form_restore_safe_unique_constraints",
     "d1_resource_identity_fence",
     "d1_resource_identity_fence_owner_receipt",
+    "d1_personal_workspace_bootstrap_identity",
   ]);
   for (const row of rows) {
     expect(row.checksum).toMatch(/^sha256:[0-9a-f]{64}$/);
@@ -1340,6 +1370,35 @@ test("Worker D1 bootstrap additively migrates older ledger tables", async () => 
 });
 
 test("Postgres Drizzle schema mirrors critical migration catalog tables", () => {
+  expect(getTableName(postgresSchema.workspaces)).toBe("takosumi_workspaces");
+  expect(columnsOf(postgresSchema.workspaces)).toEqual([
+    pk("id"),
+    nn("handle"),
+    nn("space_json"),
+    nn("created_at"),
+    nn("updated_at"),
+    nullable("owner_user_id"),
+    nullable("workspace_type"),
+    nullable("personal_bootstrap_owner_id"),
+  ]);
+  expect(pgUniqueIndexesOf(postgresSchema.workspaces)).toEqual([
+    {
+      name: "takosumi_workspaces_handle_unique",
+      columns: ["handle"],
+      unique: true,
+    },
+    {
+      name: "takosumi_workspaces_owner_type_created_idx",
+      columns: ["owner_user_id", "workspace_type", "created_at", "id"],
+      unique: false,
+    },
+    {
+      name: "takosumi_workspaces_personal_bootstrap_owner_unique",
+      columns: ["personal_bootstrap_owner_id"],
+      unique: true,
+    },
+  ]);
+
   expect(getTableName(postgresSchema.connections)).toBe("takosumi_connections");
   expect(columnsOf(postgresSchema.connections)).toEqual([
     pk("id"),
@@ -1660,6 +1719,59 @@ test("Postgres migration end-state mirrors Drizzle indexes for every deploy tabl
         pgUniqueIndexesOf(table),
       );
     }
+  } finally {
+    await client.close();
+  }
+});
+
+test("Postgres personal bootstrap identity migration indexes legacy personal rows without marking them", async () => {
+  const client = await PGliteSqlClient.createThroughMigrationVersion(106);
+  try {
+    await client.exec(`insert into takosumi_workspaces
+      (id, handle, space_json, created_at, updated_at)
+      values
+      ('workspace_existing_oldest', 'existing-oldest',
+       '{"id":"workspace_existing_oldest","handle":"existing-oldest","displayName":"Existing oldest","type":"personal","ownerUserId":"owner_existing","createdAt":"2026-08-01T00:00:00.000Z","updatedAt":"2026-08-01T00:00:00.000Z"}',
+       '2026-08-01T00:00:00.000Z', '2026-08-01T00:00:00.000Z'),
+      ('workspace_existing_newer', 'existing-newer',
+       '{"id":"workspace_existing_newer","handle":"existing-newer","displayName":"Existing newer","type":"personal","ownerUserId":"owner_existing","createdAt":"2026-08-01T00:01:00.000Z","updatedAt":"2026-08-01T00:01:00.000Z"}',
+       '2026-08-01T00:01:00.000Z', '2026-08-01T00:01:00.000Z')`);
+    const migration = postgresStorageMigrationStatements.find(
+      (entry) => entry.id === "deploy.personal_workspace_bootstrap_identity.add",
+    );
+    expect(migration?.version).toBe(107);
+    for (const statement of splitSqlStatements(migration!.sql)) {
+      await client.exec(statement);
+    }
+
+    const rows = await client.rawQuery<{
+      id: string;
+      owner_user_id: string;
+      workspace_type: string;
+      personal_bootstrap_owner_id: string | null;
+    }>(`select id, owner_user_id, workspace_type,
+               personal_bootstrap_owner_id
+        from takosumi_workspaces
+        where owner_user_id = 'owner_existing'
+          and workspace_type = 'personal'
+        order by created_at, id`);
+    expect(rows.rows).toEqual([
+      {
+        id: "workspace_existing_oldest",
+        owner_user_id: "owner_existing",
+        workspace_type: "personal",
+        personal_bootstrap_owner_id: null,
+      },
+      {
+        id: "workspace_existing_newer",
+        owner_user_id: "owner_existing",
+        workspace_type: "personal",
+        personal_bootstrap_owner_id: null,
+      },
+    ]);
+    expect(await livePgIndexesOf(client, "takosumi_workspaces")).toEqual(
+      pgUniqueIndexesOf(postgresSchema.workspaces),
+    );
   } finally {
     await client.close();
   }

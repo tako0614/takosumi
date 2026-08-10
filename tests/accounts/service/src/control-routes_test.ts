@@ -17,6 +17,8 @@ import { handleWorkspaces } from "../../../../accounts/service/src/control/works
 import { handleDashboard } from "../../../../accounts/service/src/control/dashboard.ts";
 import { InMemoryAccountsStore } from "../../../../accounts/service/src/store.ts";
 import { encodeCursor } from "../../../../contract/pagination.ts";
+import { WorkspacesService } from "../../../../core/domains/workspaces/mod.ts";
+import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 
 const workspace = {
   id: "ws_owner",
@@ -705,26 +707,67 @@ test("Workspace list defaults to one bounded created-order page", async () => {
   ]);
 });
 
-test("Workspace list skips personal Workspace ensure when the first page already has one", async () => {
+test("Workspace list repairs an already-visible personal Workspace without refreshing", async () => {
   const fixture = operationsFixture();
-  let ensureCalls = 0;
+  const controlStore = new InMemoryOpenTofuControlStore();
+  let id = 0;
+  let defaultProjectRepairs = 0;
+  let pageCalls = 0;
+  const service = new WorkspacesService({
+    store: controlStore,
+    newId: (prefix) => `${prefix}_visible_repair_${(id += 1)}`,
+    now: () => new Date("2026-08-10T00:00:00.000Z"),
+    ensureDefaultProject: async () => {
+      defaultProjectRepairs += 1;
+    },
+  });
+  const existing = await service.createWorkspace({
+    handle: "visible-personal",
+    displayName: "Visible personal",
+    type: "personal",
+    ownerUserId: "tsub_owner",
+  });
+  const member = await controlStore.getWorkspaceMember(
+    existing.id,
+    "tsub_owner",
+  );
+  await controlStore.putWorkspaceMember({
+    ...member!,
+    roles: ["member"],
+    status: "active",
+  });
+  defaultProjectRepairs = 0;
   const operations = {
     ...fixture.operations,
     workspaces: {
       ...fixture.operations.workspaces,
-      ensurePersonalWorkspace: async () => {
-        ensureCalls += 1;
-        return workspace;
+      ensurePersonalWorkspace: service.ensurePersonalWorkspace.bind(service),
+      listWorkspacesForAccountPage: async (...args: Parameters<
+        typeof service.listWorkspacesForAccountPage
+      >) => {
+        pageCalls += 1;
+        return await service.listWorkspacesForAccountPage(...args);
+      },
+      getWorkspaceForAccount: service.getWorkspaceForAccount.bind(service),
+      listWorkspacesByOwner: async () => {
+        throw new Error("visible repair must not use an owner scan");
       },
     },
   } as ControlPlaneOperations;
+  const accountsStore = new InMemoryAccountsStore();
+  accountsStore.saveAccount({
+    subject: "tsub_owner",
+    displayName: "Owner Presentation",
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  });
   const request = new Request("https://app.example.test/api/v1/workspaces");
   const response = await handleWorkspaces(
     {
       request,
       url: new URL(request.url),
       operations,
-      store: new InMemoryAccountsStore(),
+      store: accountsStore,
       session: { subject: "tsub_owner" },
     },
     ["workspaces"],
@@ -732,9 +775,13 @@ test("Workspace list skips personal Workspace ensure when the first page already
   );
 
   expect(response?.status).toBe(200);
-  expect(await response?.json()).toMatchObject({ workspaces: [workspace] });
-  expect(ensureCalls).toBe(0);
-  expect(fixture.workspacePageCalls).toHaveLength(1);
+  expect(await response?.json()).toMatchObject({ workspaces: [existing] });
+  expect(
+    await controlStore.getWorkspaceMember(existing.id, "tsub_owner"),
+  ).toEqual(expect.objectContaining({ roles: ["owner"], status: "active" }));
+  expect(defaultProjectRepairs).toBe(1);
+  expect(pageCalls).toBe(1);
+  expect(await controlStore.listWorkspaces()).toHaveLength(1);
 });
 
 test("Workspace list awaits the idempotent personal Workspace ensure", async () => {
@@ -799,6 +846,186 @@ test("Workspace list awaits the idempotent personal Workspace ensure", async () 
   expect(fixture.workspacePageCalls).toHaveLength(2);
 });
 
+test("Workspace list adopts and repairs an existing personal Workspace missing from membership", async () => {
+  const fixture = operationsFixture();
+  const controlStore = new InMemoryOpenTofuControlStore();
+  let id = 0;
+  let defaultProjectRepairs = 0;
+  const service = new WorkspacesService({
+    store: controlStore,
+    newId: (prefix) => `${prefix}_route_repair_${(id += 1)}`,
+    now: () => new Date("2026-08-10T00:00:00.000Z"),
+    ensureDefaultProject: async () => {
+      defaultProjectRepairs += 1;
+    },
+  });
+  const existing = await service.createWorkspace({
+    handle: "existing-off-page",
+    displayName: "Existing off page",
+    type: "personal",
+    ownerUserId: "tsub_owner",
+  });
+  const member = await controlStore.getWorkspaceMember(
+    existing.id,
+    "tsub_owner",
+  );
+  await controlStore.putWorkspaceMember({
+    ...member!,
+    roles: ["member"],
+    status: "suspended",
+  });
+  defaultProjectRepairs = 0;
+  const operations = {
+    ...fixture.operations,
+    workspaces: {
+      ...fixture.operations.workspaces,
+      ensurePersonalWorkspace: service.ensurePersonalWorkspace.bind(service),
+      listWorkspacesForAccountPage:
+        service.listWorkspacesForAccountPage.bind(service),
+      getWorkspaceForAccount: service.getWorkspaceForAccount.bind(service),
+      listWorkspacesByOwner: async () => {
+        throw new Error("route repair must not use an owner scan");
+      },
+    },
+  } as ControlPlaneOperations;
+  const accountsStore = new InMemoryAccountsStore();
+  accountsStore.saveAccount({
+    subject: "tsub_owner",
+    displayName: "Owner Presentation",
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  });
+  const request = new Request("https://app.example.test/api/v1/workspaces");
+
+  const response = await handleWorkspaces(
+    {
+      request,
+      url: new URL(request.url),
+      operations,
+      store: accountsStore,
+      session: { subject: "tsub_owner" },
+    },
+    ["workspaces"],
+    "GET",
+  );
+
+  expect(response?.status).toBe(200);
+  expect(await response?.json()).toMatchObject({ workspaces: [existing] });
+  expect(
+    await controlStore.getWorkspaceMember(existing.id, "tsub_owner"),
+  ).toEqual(expect.objectContaining({ roles: ["owner"], status: "active" }));
+  expect(defaultProjectRepairs).toBe(1);
+  expect(await controlStore.listWorkspaces()).toHaveLength(1);
+});
+
+test("Workspace list keeps bootstrap outage best-effort without an owner scan", async () => {
+  const fixture = operationsFixture();
+  const pageWorkspace = {
+    ...workspace,
+    id: "ws_page_organization",
+    handle: "page-organization",
+    displayName: "Page Organization",
+    type: "organization" as const,
+    ownerUserId: "tsub_other",
+  };
+  let exactOwnerQueries = 0;
+  let ensureCalls = 0;
+  let pageCalls = 0;
+  const operations = {
+    ...fixture.operations,
+    workspaces: {
+      ...fixture.operations.workspaces,
+      listWorkspacesForAccountPage: async () => {
+        pageCalls += 1;
+        return { items: [pageWorkspace] };
+      },
+      listWorkspacesByOwner: async (ownerUserId: string) => {
+        exactOwnerQueries += 1;
+        expect(ownerUserId).toBe("tsub_owner");
+        throw new Error("the GET path must not scan owner Workspaces");
+      },
+      ensurePersonalWorkspace: async () => {
+        ensureCalls += 1;
+        throw new Error("control storage is temporarily unavailable");
+      },
+    },
+  } as ControlPlaneOperations;
+  const request = new Request("https://app.example.test/api/v1/workspaces");
+  const response = await handleWorkspaces(
+    {
+      request,
+      url: new URL(request.url),
+      operations,
+      store: new InMemoryAccountsStore(),
+      session: { subject: "tsub_owner" },
+    },
+    ["workspaces"],
+    "GET",
+  );
+
+  expect(response?.status).toBe(200);
+  expect(await response?.json()).toMatchObject({
+    workspaces: [pageWorkspace],
+  });
+  expect(exactOwnerQueries).toBe(0);
+  expect(ensureCalls).toBe(1);
+  expect(pageCalls).toBe(2);
+});
+
+test("Workspace list falls back to the initial page when bootstrap refresh fails", async () => {
+  const fixture = operationsFixture();
+  const initialWorkspace = {
+    ...workspace,
+    id: "ws_initial_organization",
+    handle: "initial-organization",
+    displayName: "Initial Organization",
+    type: "organization" as const,
+    ownerUserId: "tsub_other",
+  };
+  let ownerScans = 0;
+  let ensureCalls = 0;
+  let pageCalls = 0;
+  const operations = {
+    ...fixture.operations,
+    workspaces: {
+      ...fixture.operations.workspaces,
+      listWorkspacesForAccountPage: async () => {
+        pageCalls += 1;
+        if (pageCalls === 1) return { items: [initialWorkspace] };
+        throw new Error("refresh storage outage");
+      },
+      listWorkspacesByOwner: async () => {
+        ownerScans += 1;
+        throw new Error("the GET path must not scan owner Workspaces");
+      },
+      ensurePersonalWorkspace: async () => {
+        ensureCalls += 1;
+        return workspace;
+      },
+    },
+  } as ControlPlaneOperations;
+  const request = new Request("https://app.example.test/api/v1/workspaces");
+  const response = await handleWorkspaces(
+    {
+      request,
+      url: new URL(request.url),
+      operations,
+      store: new InMemoryAccountsStore(),
+      session: { subject: "tsub_owner" },
+    },
+    ["workspaces"],
+    "GET",
+  );
+
+  expect(response?.status).toBe(200);
+  expect(await response?.json()).toMatchObject({
+    workspaces: [initialWorkspace],
+  });
+  expect(ownerScans).toBe(0);
+  expect(ensureCalls).toBe(1);
+  expect(pageCalls).toBe(2);
+});
+
 test("Workspace-scoped list never bootstraps another personal Workspace", async () => {
   const fixture = operationsFixture();
   let workspaceEnsures = 0;
@@ -829,7 +1056,7 @@ test("Workspace-scoped list never bootstraps another personal Workspace", async 
   expect(workspaceEnsures).toBe(0);
 });
 
-test("Repeated Workspace lists skip the canonical ensure after the personal Workspace appears", async () => {
+test("Repeated Workspace lists always ensure but refresh only while personal is missing", async () => {
   const fixture = operationsFixture();
   const store = new InMemoryAccountsStore();
   store.saveAccount({
@@ -880,7 +1107,10 @@ test("Repeated Workspace lists skip the canonical ensure after the personal Work
     expect(response?.status).toBe(200);
   }
 
-  expect(ensureCalls).toEqual([{ ownerUserId: "tsub_owner", handle: "owner" }]);
+  expect(ensureCalls).toEqual([
+    { ownerUserId: "tsub_owner", handle: "owner" },
+    { ownerUserId: "tsub_owner", handle: "owner" },
+  ]);
   expect(createCalls).toBe(0);
   expect(fixture.workspacePageCalls).toHaveLength(3);
 });

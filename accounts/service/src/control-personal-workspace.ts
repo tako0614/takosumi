@@ -14,9 +14,13 @@ import type { AccountsStore } from "./store.ts";
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
 
 /**
- * Derives a stable handle from the authenticated account and awaits the
- * deploy-control domain's idempotent ensure. The returned promise never rejects
- * so a best-effort personal bootstrap cannot hide other accessible Workspaces.
+ * Derives a preferred handle from the authenticated account and awaits the
+ * deploy-control domain's idempotent ensure. The preferred handle is only
+ * presentation input: durable bootstrap identity is owner-scoped, existing
+ * owned personal Workspaces are eligible for deterministic adoption, and a
+ * subject fallback plus a fresh domain-generated candidate handle foreign
+ * claims. The returned promise never rejects so a best-effort bootstrap cannot
+ * hide other accessible Workspaces.
  */
 export async function maybeEnsurePersonalWorkspaceForSubject(input: {
   readonly subject: TakosumiSubject;

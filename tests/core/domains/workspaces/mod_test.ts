@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 
 import { WorkspacesService } from "../../../../core/domains/workspaces/mod.ts";
 import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
+import { WORKSPACE_HANDLE_PATTERN } from "../../../../contract/workspaces.ts";
 
 function build() {
   const store = new InMemoryOpenTofuControlStore();
@@ -262,14 +263,272 @@ test("updateWorkspace archives and restores a Workspace without deleting it", as
   expect((await service.getWorkspace(workspace.id)).archivedAt).toBeUndefined();
 });
 
-test("ensurePersonalWorkspace creates once and is idempotent by handle", async () => {
+test("ensurePersonalWorkspace adopts the oldest personal Workspace and leaves ordinary ones creatable", async () => {
   const { service } = build();
+  const ordinaryFirst = await service.createWorkspace({
+    handle: "personal-writing",
+    displayName: "Personal Writing",
+    type: "personal",
+    ownerUserId: "user_1",
+  });
+  const ordinarySecond = await service.createWorkspace({
+    handle: "personal-lab",
+    displayName: "Personal Lab",
+    type: "personal",
+    ownerUserId: "user_1",
+  });
   const first = await service.ensurePersonalWorkspace("user_1", "shota");
   expect(first.type).toBe("personal");
   expect(first.ownerUserId).toBe("user_1");
-  const second = await service.ensurePersonalWorkspace("user_1", "shota");
+  expect(first.id).toBe(ordinaryFirst.id);
+  const ordinaryThird = await service.createWorkspace({
+    handle: "personal-community",
+    displayName: "Personal Community",
+    type: "personal",
+    ownerUserId: "user_1",
+  });
+  const second = await service.ensurePersonalWorkspace(
+    "user_1",
+    "renamed-presentation",
+  );
   expect(second.id).toBe(first.id);
-  expect((await service.listWorkspaces()).length).toBe(1);
+  expect((await service.listWorkspaces()).map((row) => row.id)).toEqual([
+    ordinaryFirst.id,
+    ordinarySecond.id,
+    ordinaryThird.id,
+  ]);
+});
+
+test("ensurePersonalWorkspace never returns a preferred handle owned by another account", async () => {
+  const { service, store } = build();
+  const foreign = await service.createWorkspace({
+    handle: "same-handle",
+    displayName: "Same Handle",
+    type: "personal",
+    ownerUserId: "user_foreign",
+  });
+
+  const ensured = await service.ensurePersonalWorkspace(
+    "user_requesting",
+    "same-handle",
+  );
+
+  expect(ensured.id).not.toBe(foreign.id);
+  expect(ensured.type).toBe("personal");
+  expect(ensured.ownerUserId).toBe("user_requesting");
+  expect(ensured.handle).toBe("u-userrequesting");
+  expect(await store.listWorkspaceMembers(foreign.id)).toEqual([
+    expect.objectContaining({ accountId: "user_foreign", roles: ["owner"] }),
+  ]);
+  expect(await store.getWorkspaceMember(foreign.id, "user_requesting")).toBe(
+    undefined,
+  );
+  expect(await store.getWorkspaceMember(ensured.id, "user_requesting")).toEqual(
+    expect.objectContaining({ roles: ["owner"], status: "active" }),
+  );
+});
+
+test("ensurePersonalWorkspace escapes foreign squatting of every deterministic handle", async () => {
+  const { service, store } = build();
+  const deterministicHandles = [
+    "squatted-preferred",
+    "u-usersquatted",
+    "u-usersquatted-1eqj03w",
+  ];
+  const foreignRows = [];
+  for (const handle of deterministicHandles) {
+    foreignRows.push(
+      await service.createWorkspace({
+        handle,
+        displayName: `Foreign ${handle}`,
+        type: "personal",
+        ownerUserId: "user_foreign",
+      }),
+    );
+  }
+
+  const ensured = await service.ensurePersonalWorkspace(
+    "user_squatted",
+    "squatted-preferred",
+  );
+
+  expect(ensured.ownerUserId).toBe("user_squatted");
+  expect(ensured.type).toBe("personal");
+  expect(ensured.handle).toMatch(/^p-[a-f0-9]{32}$/u);
+  expect(deterministicHandles).not.toContain(ensured.handle);
+  expect(
+    (await store.listWorkspaces()).filter(
+      (workspace) => workspace.ownerUserId === "user_squatted",
+    ),
+  ).toEqual([ensured]);
+  for (const foreign of foreignRows) {
+    expect(
+      await store.getWorkspaceMember(foreign.id, "user_squatted"),
+    ).toBeUndefined();
+  }
+});
+
+test("ensurePersonalWorkspace falls back when the preferred handle is an organization", async () => {
+  const { service } = build();
+  const foreign = await service.createWorkspace({
+    handle: "shared-purpose",
+    displayName: "Shared Purpose",
+    type: "organization",
+    ownerUserId: "org_owner",
+  });
+
+  const ensured = await service.ensurePersonalWorkspace(
+    "user_personal",
+    "shared-purpose",
+  );
+
+  expect(ensured.id).not.toBe(foreign.id);
+  expect(ensured.type).toBe("personal");
+  expect(ensured.ownerUserId).toBe("user_personal");
+  expect(ensured.handle).toMatch(/^[a-z0-9][a-z0-9-]{1,38}$/u);
+  expect(ensured.handle.length).toBeLessThanOrEqual(39);
+});
+
+test("ensurePersonalWorkspace never persists an invalid presentation handle", async () => {
+  const { service } = build();
+
+  const ensured = await service.ensurePersonalWorkspace(
+    "user_valid_fallback",
+    "INVALID PRESENTATION!",
+  );
+
+  expect(ensured.handle).toBe("u-uservalidfallback");
+  expect(ensured.handle).toMatch(WORKSPACE_HANDLE_PATTERN);
+});
+
+test("separate Workspace services converge despite different presentation handles", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const first = new WorkspacesService({
+    store,
+    newId: (prefix) => `${prefix}_first_service`,
+    now: () => new Date("2026-06-06T00:00:00.000Z"),
+  });
+  const second = new WorkspacesService({
+    store,
+    newId: (prefix) => `${prefix}_second_service`,
+    now: () => new Date("2026-06-06T00:00:01.000Z"),
+  });
+  const results = await Promise.all([
+    first.ensurePersonalWorkspace("user_concurrent", "first-presentation"),
+    second.ensurePersonalWorkspace("user_concurrent", "second-presentation"),
+  ]);
+
+  expect(new Set(results.map((workspace) => workspace.id)).size).toBe(1);
+  expect(new Set(results.map((workspace) => workspace.handle)).size).toBe(1);
+  expect(
+    (await store.listWorkspaces()).filter(
+      (workspace) => workspace.ownerUserId === "user_concurrent",
+    ),
+  ).toHaveLength(1);
+  expect(
+    await store.listWorkspaceMembers(results[0].id),
+  ).toEqual([expect.objectContaining({
+    accountId: "user_concurrent",
+    roles: ["owner"],
+    status: "active",
+  })]);
+});
+
+test("separate Workspace services concurrently adopt the same oldest personal Workspace", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const seed = new WorkspacesService({
+    store,
+    newId: (() => {
+      let counter = 0;
+      return (prefix: string) => `${prefix}_seed_${(counter += 1)}`;
+    })(),
+    now: () => new Date("2026-06-06T00:00:00.000Z"),
+  });
+  const oldest = await seed.createWorkspace({
+    handle: "existing-oldest",
+    displayName: "Existing Oldest",
+    type: "personal",
+    ownerUserId: "user_adopt",
+  });
+  await seed.createWorkspace({
+    handle: "existing-newer",
+    displayName: "Existing Newer",
+    type: "personal",
+    ownerUserId: "user_adopt",
+  });
+  const first = new WorkspacesService({
+    store,
+    newId: (prefix) => `${prefix}_adopter_first`,
+  });
+  const second = new WorkspacesService({
+    store,
+    newId: (prefix) => `${prefix}_adopter_second`,
+  });
+
+  const adopted = await Promise.all([
+    first.ensurePersonalWorkspace("user_adopt", "first-presentation"),
+    second.ensurePersonalWorkspace("user_adopt", "second-presentation"),
+  ]);
+
+  expect(adopted.map((workspace) => workspace.id)).toEqual([
+    oldest.id,
+    oldest.id,
+  ]);
+  expect(
+    (await store.listWorkspaces()).filter(
+      (workspace) => workspace.ownerUserId === "user_adopt",
+    ),
+  ).toHaveLength(2);
+});
+
+test("ensurePersonalWorkspace repairs the durable bootstrap owner and default Project", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  let idCounter = 0;
+  let defaultProjectEnsures = 0;
+  const service = new WorkspacesService({
+    store,
+    newId: (prefix) => `${prefix}_repair_${(idCounter += 1)}`,
+    now: () => new Date("2026-06-06T00:00:00.000Z"),
+    ensureDefaultProject: async () => {
+      defaultProjectEnsures += 1;
+    },
+  });
+  const workspace = await service.ensurePersonalWorkspace(
+    "user_repair",
+    "repair-me",
+  );
+  const member = await store.getWorkspaceMember(workspace.id, "user_repair");
+  expect(member).toBeDefined();
+  await store.putWorkspaceMember({
+    ...member!,
+    roles: ["member"],
+    status: "suspended",
+  });
+
+  const repaired = await service.ensurePersonalWorkspace(
+    "user_repair",
+    "changed-presentation",
+  );
+
+  expect(repaired.id).toBe(workspace.id);
+  expect(await store.getWorkspaceMember(workspace.id, "user_repair")).toEqual(
+    expect.objectContaining({ roles: ["owner"], status: "active" }),
+  );
+  expect(defaultProjectEnsures).toBe(2);
+});
+
+test("ensurePersonalWorkspace never uses the unbounded owner list", async () => {
+  const { service, store } = build();
+  store.listWorkspacesByOwner = async () => {
+    throw new Error("bootstrap must use the exact owner-scoped identity");
+  };
+
+  const workspace = await service.ensurePersonalWorkspace(
+    "user_exact",
+    "exact-owner",
+  );
+
+  expect(workspace.ownerUserId).toBe("user_exact");
 });
 
 test("listWorkspaces returns all created Workspaces", async () => {
