@@ -96,6 +96,7 @@ import type {
   CommitRestoredStateResult,
   BeginResourceOperationRunResult,
   BeginApplyRunResult,
+  CapsuleExecutionAuthority,
   CapsuleRuntimeSafety,
   CapsulePatch,
   CapsuleStateVersionGuard,
@@ -261,6 +262,40 @@ function d1RunRuntimeSafetyRiskOrder(): SQL {
       ELSE 0
     END
   `;
+}
+
+function d1RuntimeSafetyCandidateWhere(capsuleId: string): SQL | undefined {
+  return and(
+    eq(schema.runs.capsuleId, capsuleId),
+    or(
+      and(
+        eq(schema.runs.type, "apply"),
+        or(
+          eq(schema.runs.status, "succeeded"),
+          and(eq(schema.runs.status, "failed"), d1RunMutationDispatched()),
+          and(eq(schema.runs.status, "expired"), d1RunStarted()),
+        ),
+      ),
+      and(
+        eq(schema.runs.type, "destroy_apply"),
+        or(
+          inArray(schema.runs.status, ["queued", "running", "succeeded"]),
+          and(eq(schema.runs.status, "failed"), d1RunMutationDispatched()),
+          and(eq(schema.runs.status, "expired"), d1RunStarted()),
+        ),
+      ),
+      and(
+        eq(schema.runs.type, RUN_KIND_RESTORE),
+        inArray(schema.runs.status, [
+          "queued",
+          "running",
+          "succeeded",
+          "failed",
+          "expired",
+        ]),
+      ),
+    ),
+  );
 }
 
 /** Mirrors applyRunMutationDispatched in the shared store model. */
@@ -891,43 +926,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       schema.runs,
       schema.runs.runJson,
       {
-        where: and(
-          eq(schema.runs.capsuleId, capsuleId),
-          or(
-            and(
-              eq(schema.runs.type, "apply"),
-              or(
-                eq(schema.runs.status, "succeeded"),
-                and(
-                  eq(schema.runs.status, "failed"),
-                  d1RunMutationDispatched(),
-                ),
-                and(eq(schema.runs.status, "expired"), d1RunStarted()),
-              ),
-            ),
-            and(
-              eq(schema.runs.type, "destroy_apply"),
-              or(
-                inArray(schema.runs.status, ["queued", "running", "succeeded"]),
-                and(
-                  eq(schema.runs.status, "failed"),
-                  d1RunMutationDispatched(),
-                ),
-                and(eq(schema.runs.status, "expired"), d1RunStarted()),
-              ),
-            ),
-            and(
-              eq(schema.runs.type, RUN_KIND_RESTORE),
-              inArray(schema.runs.status, [
-                "queued",
-                "running",
-                "succeeded",
-                "failed",
-                "expired",
-              ]),
-            ),
-          ),
-        ),
+        where: d1RuntimeSafetyCandidateWhere(capsuleId),
         orderBy: [
           desc(d1RunRuntimeSafetyInFlightOrder()),
           desc(d1RunRuntimeSafetyEffectAtMillisOrder()),
@@ -1736,6 +1735,48 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       updatedAt: normalized.updatedAt,
     });
     return normalized;
+  }
+
+  async resolveCapsuleExecutionAuthority(
+    workspaceId: string,
+    capsuleId: string,
+  ): Promise<CapsuleExecutionAuthority | undefined> {
+    await this.#ensureSchema();
+    const latestSafety = this.#orm
+      .select({ json: schema.runs.runJson })
+      .from(schema.runs)
+      .where(d1RuntimeSafetyCandidateWhere(capsuleId))
+      .orderBy(
+        desc(d1RunRuntimeSafetyInFlightOrder()),
+        desc(d1RunRuntimeSafetyEffectAtMillisOrder()),
+        desc(d1RunRuntimeSafetyRiskOrder()),
+        desc(schema.runs.id),
+      )
+      .limit(1)
+      .as("latest_capsule_runtime_safety");
+    const row = await this.#orm
+      .select({
+        epoch: schema.capsules.executionAuthorityEpoch,
+        safetyJson: latestSafety.json,
+      })
+      .from(schema.capsules)
+      .leftJoin(latestSafety, sql`true`)
+      .where(
+        and(
+          eq(schema.capsules.id, capsuleId),
+          eq(schema.capsules.workspaceId, workspaceId),
+          ne(schema.capsules.status, "destroyed"),
+        ),
+      )
+      .limit(1)
+      .get();
+    if (row === undefined) return undefined;
+    const safety = row.safetyJson === null
+      ? undefined
+      : capsuleRuntimeSafetyFromRun(row.safetyJson as ApplyRun | Run);
+    return safety !== undefined && safety.phase !== "safe"
+      ? undefined
+      : { workspaceId, capsuleId, executionAuthorityEpoch: row.epoch };
   }
 
   async getCapsule(id: string): Promise<Capsule | undefined> {
@@ -3953,6 +3994,7 @@ function d1InvalidCapsuleGuardRow(capsuleId: string) {
     recordJson: sql<Capsule>`null`.as("recordJson"),
     createdAt: sql<string>`null`.as("createdAt"),
     updatedAt: sql<string>`null`.as("updatedAt"),
+    executionAuthorityEpoch: sql<number>`1`.as("executionAuthorityEpoch"),
   };
 }
 
@@ -4562,6 +4604,30 @@ async function d1PersonalWorkspaceBootstrapIdentityStatements(
     `create unique index if not exists workspaces_personal_bootstrap_owner_unique
        on workspaces (personal_bootstrap_owner_id)
        where personal_bootstrap_owner_id is not null`,
+  ];
+}
+
+async function d1CapsuleExecutionAuthorityEpochStatements(
+  db: D1Database,
+): Promise<readonly string[]> {
+  return [
+    ...(await d1EnsureColumnStatements(
+      db,
+      "capsules",
+      "execution_authority_epoch",
+      "integer not null default 1 check (execution_authority_epoch >= 1)",
+    )),
+    `create trigger if not exists capsules_execution_authority_epoch_on_destroy
+       after update of status on capsules
+       for each row
+       when old.status <> 'destroyed' and new.status = 'destroyed'
+       begin
+         update capsules
+            set execution_authority_epoch = old.execution_authority_epoch + 1
+          where id = new.id;
+       end`,
+    `create index if not exists capsules_execution_authority_exact_idx
+       on capsules (space_id, id)`,
   ];
 }
 
@@ -7296,6 +7362,26 @@ ordinary personal Workspaces remain unlimited because only the marker is unique
       await runD1AtomicSql(
         db,
         await d1PersonalWorkspaceBootstrapIdentityStatements(db),
+      );
+    },
+  },
+  {
+    version: 64,
+    name: "d1_capsule_execution_authority_epoch",
+    checksumSource: `
+Capsules carry a private monotonic execution authority epoch with default one
+the epoch advances atomically only when status crosses from non-destroyed to destroyed
+the database trigger also covers terminal writes from older application processes
+exact Workspace and Capsule authority reads use a bounded indexed lookup
+Workspace visibility and membership changes never advance Capsule execution authority
+`,
+    async atomicStatements(db) {
+      return await d1CapsuleExecutionAuthorityEpochStatements(db);
+    },
+    async apply(db) {
+      await runD1AtomicSql(
+        db,
+        await d1CapsuleExecutionAuthorityEpochStatements(db),
       );
     },
   },

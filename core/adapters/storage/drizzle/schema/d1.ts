@@ -217,6 +217,9 @@ export const capsules = sqliteTable(
     recordJson: jsonText("record_json").notNull(),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
+    executionAuthorityEpoch: integer("execution_authority_epoch")
+      .notNull()
+      .default(1),
   },
   (table) => [
     uniqueIndex("capsules_project_name_environment_active_unique")
@@ -225,6 +228,10 @@ export const capsules = sqliteTable(
     index("capsules_space_idx").on(table.workspaceId),
     index("capsules_project_idx").on(table.projectId),
     index("capsules_current_state_version_idx").on(table.currentStateVersionId),
+    index("capsules_execution_authority_exact_idx").on(
+      table.workspaceId,
+      table.id,
+    ),
   ],
 );
 

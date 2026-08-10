@@ -82,6 +82,7 @@ import type {
   CommitRestoredStateResult,
   BeginResourceOperationRunResult,
   BeginApplyRunResult,
+  CapsuleExecutionAuthority,
   CapsuleRuntimeSafety,
   CapsulePatch,
   CapsuleStateVersionGuard,
@@ -225,6 +226,40 @@ function pgRunRuntimeSafetyRiskOrder(): SQL {
       ELSE 0
     END
   `;
+}
+
+function pgRuntimeSafetyCandidateWhere(capsuleId: string): SQL | undefined {
+  return and(
+    eq(pgSchema.runs.capsuleId, capsuleId),
+    or(
+      and(
+        eq(pgSchema.runs.kind, "apply"),
+        or(
+          eq(pgSchema.runs.status, "succeeded"),
+          and(eq(pgSchema.runs.status, "failed"), pgRunMutationDispatched()),
+          and(eq(pgSchema.runs.status, "expired"), pgRunStarted()),
+        ),
+      ),
+      and(
+        eq(pgSchema.runs.kind, "destroy_apply"),
+        or(
+          inArray(pgSchema.runs.status, ["queued", "running", "succeeded"]),
+          and(eq(pgSchema.runs.status, "failed"), pgRunMutationDispatched()),
+          and(eq(pgSchema.runs.status, "expired"), pgRunStarted()),
+        ),
+      ),
+      and(
+        eq(pgSchema.runs.kind, RUN_KIND_RESTORE),
+        inArray(pgSchema.runs.status, [
+          "queued",
+          "running",
+          "succeeded",
+          "failed",
+          "expired",
+        ]),
+      ),
+    ),
+  );
 }
 
 /** Mirrors applyRunMutationDispatched in the shared store model. */
@@ -701,47 +736,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       pgSchema.runs,
       pgSchema.runs.runJson,
       {
-        where: and(
-          eq(pgSchema.runs.capsuleId, capsuleId),
-          or(
-            and(
-              eq(pgSchema.runs.kind, "apply"),
-              or(
-                eq(pgSchema.runs.status, "succeeded"),
-                and(
-                  eq(pgSchema.runs.status, "failed"),
-                  pgRunMutationDispatched(),
-                ),
-                and(eq(pgSchema.runs.status, "expired"), pgRunStarted()),
-              ),
-            ),
-            and(
-              eq(pgSchema.runs.kind, "destroy_apply"),
-              or(
-                inArray(pgSchema.runs.status, [
-                  "queued",
-                  "running",
-                  "succeeded",
-                ]),
-                and(
-                  eq(pgSchema.runs.status, "failed"),
-                  pgRunMutationDispatched(),
-                ),
-                and(eq(pgSchema.runs.status, "expired"), pgRunStarted()),
-              ),
-            ),
-            and(
-              eq(pgSchema.runs.kind, RUN_KIND_RESTORE),
-              inArray(pgSchema.runs.status, [
-                "queued",
-                "running",
-                "succeeded",
-                "failed",
-                "expired",
-              ]),
-            ),
-          ),
-        ),
+        where: pgRuntimeSafetyCandidateWhere(capsuleId),
         orderBy: [
           desc(pgRunRuntimeSafetyInFlightOrder()),
           desc(pgRunRuntimeSafetyEffectAtMillisOrder()),
@@ -1461,6 +1456,53 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         },
       });
     return normalizeCapsuleRecord(capsule);
+  }
+
+  async resolveCapsuleExecutionAuthority(
+    workspaceId: string,
+    capsuleId: string,
+  ): Promise<CapsuleExecutionAuthority | undefined> {
+    const latestSafety = this.#db
+      .select({ json: pgSchema.runs.runJson })
+      .from(pgSchema.runs)
+      .where(pgRuntimeSafetyCandidateWhere(capsuleId))
+      .orderBy(
+        desc(pgRunRuntimeSafetyInFlightOrder()),
+        desc(pgRunRuntimeSafetyEffectAtMillisOrder()),
+        desc(pgRunRuntimeSafetyRiskOrder()),
+        desc(pgSchema.runs.id),
+      )
+      .limit(1)
+      .as("latest_capsule_runtime_safety");
+    const rows = await this.#db
+      .select({
+        epoch: pgSchema.capsules.executionAuthorityEpoch,
+        safetyJson: latestSafety.json,
+      })
+      .from(pgSchema.capsules)
+      .leftJoin(latestSafety, sql`true`)
+      .where(
+        and(
+          eq(pgSchema.capsules.id, capsuleId),
+          eq(pgSchema.capsules.workspaceId, workspaceId),
+          ne(pgSchema.capsules.status, "destroyed"),
+        ),
+      )
+      .limit(1);
+    const row = rows[0];
+    if (row === undefined) return undefined;
+    const safety = row.safetyJson === null
+      ? undefined
+      : capsuleRuntimeSafetyFromRun(
+          parseJson(row.safetyJson) as ApplyRun | Run,
+        );
+    return safety !== undefined && safety.phase !== "safe"
+      ? undefined
+      : {
+          workspaceId,
+          capsuleId,
+          executionAuthorityEpoch: row.epoch,
+        };
   }
 
   async getCapsule(id: string): Promise<Capsule | undefined> {
