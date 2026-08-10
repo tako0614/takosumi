@@ -37,8 +37,9 @@ blockerとして扱います。無関係なroutine artifact releaseは一律に�
 
 本 runbook で「account」は文脈ごとに以下を区別します:
 
-- **Workspace**: Takosumi の user/team boundary。Project / Capsule graph、ProviderConnection、Secret、
-  StateVersion、Output、AuditEvent の isolation scope。
+- **Workspace**: Takosumi の個人の用途・リソース・セキュリティ境界。メンバーシップと共有は
+  必要に応じて追加し、Project / Capsule graph、ProviderConnection、Secret、StateVersion、
+  Output、AuditEvent の isolation scope とする。
 - **Quota/showback ledger**: Takosumi platform worker が持つ operator-selected disabled/showback records。
   official billing / payment processor records are Takosumi Cloud-only commercial records.
 - **Cloud account**: provider account used by a Workspace-owned ProviderConnection.

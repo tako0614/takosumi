@@ -140,7 +140,6 @@ export default function GeneralTab(props: { readonly workspaceId: string }) {
       title: t("workspaceSettings.general.archive"),
       message: t("workspaceSettings.general.archiveConfirm"),
       confirmText: t("workspaceSettings.general.archive"),
-      danger: true,
     });
     if (!ok) return;
     setArchiving(true);
@@ -300,19 +299,17 @@ export default function GeneralTab(props: { readonly workspaceId: string }) {
                         },
                       ]}
                     />
+                    <Show when={activeWorkspaceTotal() <= 1}>
+                      <p class="muted" role="note">
+                        {t("workspaceSettings.general.archiveLastError")}
+                      </p>
+                    </Show>
                     <div class="wc-form-actions">
                       <Button
-                        variant="danger"
+                        variant="secondary"
                         type="button"
                         busy={archiving()}
                         disabled={archiving() || activeWorkspaceTotal() <= 1}
-                        // The disabled path is otherwise a dead end — surface
-                        // WHY the last workspace cannot be archived on hover.
-                        title={
-                          activeWorkspaceTotal() <= 1
-                            ? t("workspaceSettings.general.archiveLastError")
-                            : undefined
-                        }
                         onClick={archive}
                       >
                         {archiving()

@@ -306,6 +306,22 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.topbar-workspace-current-handle,
+.topbar-workspace-item-handle {
+  flex: none;
+  min-width: 0;
+  max-width: 11ch;
+  overflow: hidden;
+  color: var(--tg-fg-subtle);
+  font-family: var(--tg-font-mono);
+  font-size: var(--tg-fs-xs);
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.topbar-workspace-current-handle {
+  max-width: 10ch;
+}
 .topbar-workspace-caret {
   flex: none;
   color: var(--tg-fg-subtle);
@@ -463,7 +479,8 @@
   background: var(--tg-bg-subtle);
   color: var(--tg-fg);
 }
-/* Inline create form: the Workspace ID (`@handle`) row + its hint line. */
+/* Inline create form's technical-identifier styles remain available to
+ * compatibility surfaces; the primary switcher only shows purpose/name help. */
 .topbar-workspace-handle {
   display: flex;
   align-items: center;
@@ -691,19 +708,39 @@
   }
   .topbar-mobile-workspace {
     display: block;
-    flex: none;
+    flex: 1 1 auto;
     margin-left: auto;
     min-width: 0;
   }
-  /* Compact chip = avatar + caret only (the name lives in the popover), so the
-     switcher stops hogging the mobile header. */
+  /* Keep the current Workspace name in the compact chip. The flex minimum and
+     ellipsis make long purpose names fit without reducing the control to an
+     ambiguous initial. */
   .topbar-workspace.compact .topbar-workspace-current {
     min-height: 36px;
-    padding: 3px;
-    gap: 2px;
+    padding: 3px var(--tg-s-2) 3px 3px;
+    gap: var(--tg-s-1);
   }
   .topbar-workspace.compact .topbar-workspace-name {
-    display: none;
+    display: block;
+  }
+  .topbar-workspace.compact {
+    width: 100%;
+    max-width: min(100%, 260px);
+  }
+  /* The compact picker is part of the topbar flow, but its open menu must be
+     contained by the viewport rather than by the narrow workspace chip. */
+  .topbar-workspace.compact,
+  .topbar-workspace.compact .topbar-workspace-picker {
+    position: static;
+  }
+  .topbar-workspace.compact .topbar-workspace-menu {
+    left: auto;
+    right: auto;
+    inset-inline-start: auto;
+    inset-inline-end: var(--tg-s-3);
+    width: min(300px, calc(100vw - var(--tg-s-3) - var(--tg-s-3)));
+    min-width: 0;
+    max-width: calc(100vw - var(--tg-s-3) - var(--tg-s-3));
   }
   .topbar-actions {
     gap: var(--tg-s-1);

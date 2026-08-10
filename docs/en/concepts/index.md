@@ -6,14 +6,23 @@ that execution.
 
 ## Six terms to start with
 
-| Name          | In plain language                                                      |
-| ------------- | ---------------------------------------------------------------------- |
-| **Workspace** | a boundary for a team and its permissions                              |
-| **Project**   | a way to group apps and infrastructure within a Workspace              |
-| **Source**    | a registered Git repository and module location                        |
-| **Capsule**   | one deployable module created from a Source                            |
-| **Run**       | one plan, apply, refresh, destroy, or other execution                  |
-| **Interface** | a declaration of the connection a deployment provides       |
+| Name          | In plain language                                                                  |
+| ------------- | ---------------------------------------------------------------------------------- |
+| **Workspace** | a personal purpose, resource, and security context; sharing is added when needed  |
+| **Project**   | a way to group apps and infrastructure within a Workspace                         |
+| **Source**    | a registered Git repository and module location                                   |
+| **Capsule**   | one deployable module created from a Source                                       |
+| **Run**       | one plan, apply, refresh, destroy, or other execution                             |
+| **Interface** | a declaration of the connection a deployment provides                            |
+
+A Workspace is not team- or permission-first. It is a purpose-specific work,
+resource, and authorization boundary such as Personal, Work, Experiments, or
+Client. Add membership and sharing only when needed. The display name is the
+primary identity people see; `handle` is a stable, globally unique technical
+identifier for API and CLI use. First-party dashboard flows normally generate
+it and show `@handle` only for disambiguation or in advanced details. Concrete
+execution environments such as `production` and `preview` belong to Capsules;
+Environment is not another name for Workspace.
 
 State, outputs, logs, and audit records are results of Runs. Provider API keys
 and similar credentials are stored separately as **Connections** and assigned

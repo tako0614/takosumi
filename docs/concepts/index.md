@@ -5,14 +5,21 @@ Takosumi はクラウド API の代わりではありません。OpenTofu / Terr
 
 ## 最初に覚える 6 つ
 
-| 名前          | 普通の言葉でいうと                                      |
-| ------------- | ------------------------------------------------------- |
-| **Workspace** | チームと権限を分ける入れ物                              |
-| **Project**   | Workspace 内でアプリやインフラを整理する単位            |
-| **Source**    | 登録した Git リポジトリと module の場所                 |
-| **Capsule**   | Source から作った、1 つの module のデプロイ単位         |
-| **Run**       | plan、apply、refresh、destroy など 1 回の実行           |
-| **Interface** | デプロイしたものが提供する接続方法の宣言               |
+| 名前          | 普通の言葉でいうと                                                     |
+| ------------- | ---------------------------------------------------------------------- |
+| **Workspace** | 個人の用途・リソース・セキュリティを分ける入れ物。共有は必要なときだけ追加 |
+| **Project**   | Workspace 内でアプリやインフラを整理する単位                           |
+| **Source**    | 登録した Git リポジトリと module の場所                                |
+| **Capsule**   | Source から作った、1 つの module のデプロイ単位                        |
+| **Run**       | plan、apply、refresh、destroy など 1 回の実行                          |
+| **Interface** | デプロイしたものが提供する接続方法の宣言                              |
+
+Workspace はチームや権限を最初に作るためのものではありません。Personal、Work、
+Experiments、Client など、目的ごとの作業・リソース・認可境界です。必要な場合だけ
+メンバーシップと共有を追加します。表示名が主な識別子で、`handle` は API / CLI で使う
+安定したグローバル一意の技術識別子です。ダッシュボードでは通常自動生成し、名前が
+重複したときや詳細設定でだけ表示します。`production` や `preview` のような具体的な
+実行環境は Capsule に属し、Workspace の別名ではありません。
 
 state、output、ログ、監査記録は Run の結果です。provider の API key などは
 **Connection** として別に保存し、必要な Run にだけ割り当てます。

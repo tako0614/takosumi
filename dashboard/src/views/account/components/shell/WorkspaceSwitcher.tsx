@@ -5,8 +5,10 @@
  * Replaces the per-view `lib/workspace-state.ts` signal: every view
  * now reads the same `workspace-state.ts` signal this control writes. It lists
  * a bounded recent Workspace projection, always pins the current Workspace,
- * and defaults to the first Workspace when none is selected. Creation belongs
- * in setup/admin flows, not in the everyday topbar.
+ * and defaults to the first Workspace when none is selected. The inline create
+ * action asks for the human purpose/name only; the dashboard generates the
+ * stable public API handle and surfaces it only when it helps distinguish
+ * duplicate display names.
  *
  * The picker is a lightweight popover menu (not a native `<select>`): one tap
  * on the current-workspace chip opens a list with the active one checked.
@@ -23,10 +25,6 @@ import {
   Show,
   untrack,
 } from "solid-js";
-import {
-  isValidWorkspaceHandle,
-  slugifyWorkspaceHandle,
-} from "takosumi-contract";
 import {
   createWorkspace,
   DASHBOARD_WORKSPACE_LIST_LIMIT,
@@ -60,9 +58,10 @@ function workspaceInitial(name: string): string {
 }
 
 /**
- * Fresh unique handle for a workspace created from the switcher (same
- * time+random recipe as the /new and launcher first-workspace flows); the
- * user-facing identity is the display name they typed.
+ * Fresh valid public API handle candidate for a workspace created from the
+ * switcher (same time+random recipe as the /new and launcher first-workspace
+ * flows); global uniqueness is service-enforced, including collision errors.
+ * The primary flow asks only for the display name they typed.
  */
 function newWorkspaceHandle(): string {
   const time = Date.now().toString(36).slice(-6);
@@ -110,12 +109,33 @@ export default function WorkspaceSwitcher(props: Props = {}) {
   );
   const selectedWorkspaceName = createMemo(() => {
     const workspace = selectedWorkspace();
-    return workspace?.displayName || workspace?.handle || t("workspace.none");
+    return workspace?.displayName?.trim() || workspace?.handle || t("workspace.none");
   });
   const switcherId = () =>
     props.compact ? "workspace-switcher-compact" : "workspace-switcher-sidebar";
   const workspaceName = (workspace: Workspace) =>
-    workspace.displayName || workspace.handle;
+    workspace.displayName?.trim() || workspace.handle;
+  const workspaceNameCounts = createMemo(() => {
+    const counts = new Map<string, number>();
+    for (const workspace of loadedWorkspaces()) {
+      const name = workspaceName(workspace);
+      counts.set(name, (counts.get(name) ?? 0) + 1);
+    }
+    return counts;
+  });
+  const showsWorkspaceHandle = (workspace: Workspace) =>
+    Boolean(
+      workspace.displayName?.trim() &&
+        (workspaceNameCounts().get(workspaceName(workspace)) ?? 0) > 1,
+    );
+  const workspaceHandleLabel = (workspace: Workspace) =>
+    `@${workspace.handle}`;
+  const selectedWorkspaceLabel = createMemo(() => {
+    const workspace = selectedWorkspace();
+    return workspace && showsWorkspaceHandle(workspace)
+      ? `${selectedWorkspaceName()} ${workspaceHandleLabel(workspace)}`
+      : selectedWorkspaceName();
+  });
 
   // Reconcile persisted Workspace selection after sign-in. A browser can keep
   // the previous user's localStorage value, so never keep an id that is absent
@@ -249,55 +269,23 @@ export default function WorkspaceSwitcher(props: Props = {}) {
   };
 
   // ----- inline workspace creation ------------------------------------------
-  // Name + Workspace ID (the `@handle`) inside the menu popover. The id is the
-  // user-chosen, globally unique identifier: it defaults to a slug of the name
-  // but stays editable, and if left blank we fall back to a generated handle so
-  // a non-ASCII name (which slugifies to nothing) still creates instantly.
+  // The primary flow asks only for a purpose/name. Handles remain stable public
+  // API identifiers; this dashboard generates them and keeps their grammar out
+  // of the primary flow, showing them only for disambiguation when needed.
   const [createOpen, setCreateOpen] = createSignal(false);
   const [createName, setCreateName] = createSignal("");
-  const [createHandle, setCreateHandle] = createSignal("");
-  // Once the id is edited by hand we stop mirroring the name into it.
-  const [handleEdited, setHandleEdited] = createSignal(false);
   let createInputRef: HTMLInputElement | undefined;
 
-  const onNameInput = (value: string) => {
-    setCreateName(value);
-    if (!handleEdited()) setCreateHandle(slugifyWorkspaceHandle(value));
-  };
-  const onHandleInput = (value: string) => {
-    setHandleEdited(true);
-    setCreateHandle(value);
-  };
-  // Invalid only when non-empty and malformed — an empty id is allowed (a
-  // handle is then generated), so it must not paint the field red.
-  const handleInvalid = createMemo(() => {
-    const handle = createHandle().trim();
-    return handle.length > 0 && !isValidWorkspaceHandle(handle);
-  });
+  const onNameInput = (value: string) => setCreateName(value);
   const resetCreateForm = () => {
     setCreateName("");
-    setCreateHandle("");
-    setHandleEdited(false);
   };
 
   const create = createAction(async () => {
     const displayName = createName().trim();
     if (!displayName) throw new Error(t("workspace.create.nameRequired"));
-    const typedHandle = createHandle().trim();
-    if (typedHandle && !isValidWorkspaceHandle(typedHandle)) {
-      throw new Error(t("workspace.create.idInvalid"));
-    }
-    // Instant feedback for the common clash before the round-trip; the service
-    // remains the authority on uniqueness across every Workspace.
-    if (
-      typedHandle &&
-      loadedWorkspaces().some((workspace) => workspace.handle === typedHandle)
-    ) {
-      throw new Error(t("workspace.create.idTaken"));
-    }
-    const handle = typedHandle || newWorkspaceHandle();
     const workspace = await createWorkspace({
-      handle,
+      handle: newWorkspaceHandle(),
       displayName,
       type: "personal",
     });
@@ -425,10 +413,11 @@ export default function WorkspaceSwitcher(props: Props = {}) {
             <button
               type="button"
               class="topbar-workspace-current"
-              // Names the compact (topbar) variant, whose visible text is
-              // only the avatar letter; also states the control's purpose.
+              // Names the current Workspace even in the compact topbar; the
+              // CSS truncates long names instead of reducing the control to an
+              // unlabeled initial.
               aria-label={t("workspace.switcherAria", {
-                name: selectedWorkspaceName(),
+                name: selectedWorkspaceLabel(),
               })}
               aria-haspopup="menu"
               aria-expanded={switcherOpen()}
@@ -442,6 +431,15 @@ export default function WorkspaceSwitcher(props: Props = {}) {
               <span class="topbar-workspace-name">
                 {selectedWorkspaceName()}
               </span>
+              <Show when={selectedWorkspace()}>
+                {(workspace) => (
+                  <Show when={showsWorkspaceHandle(workspace())}>
+                    <span class="topbar-workspace-current-handle">
+                      {workspaceHandleLabel(workspace())}
+                    </span>
+                  </Show>
+                )}
+              </Show>
               <Show when={loadedWorkspaces().length > 1}>
                 <ChevronsUpDown
                   class="topbar-workspace-caret"
@@ -492,6 +490,11 @@ export default function WorkspaceSwitcher(props: Props = {}) {
                           <span class="topbar-workspace-item-name">
                             {workspaceName(workspace)}
                           </span>
+                          <Show when={showsWorkspaceHandle(workspace)}>
+                            <span class="topbar-workspace-item-handle">
+                              {workspaceHandleLabel(workspace)}
+                            </span>
+                          </Show>
                           <Show when={workspace.id === selectedWorkspaceId()}>
                             <Check
                               class="topbar-workspace-check"
@@ -563,54 +566,26 @@ export default function WorkspaceSwitcher(props: Props = {}) {
                       id={`${switcherId()}-create-name`}
                       class="tg-input"
                       type="text"
+                      required
                       value={createName()}
                       onInput={(event) =>
                         onNameInput(event.currentTarget.value)
                       }
                       placeholder={t("workspace.create.namePlaceholder")}
+                      aria-describedby={`${switcherId()}-create-name-help${
+                        create.error()
+                          ? ` ${switcherId()}-create-error`
+                          : ""
+                      }`}
                       autocomplete="off"
                       spellcheck={false}
                       ref={createInputRef}
                     />
-                    <label
-                      class="tg-field-label"
-                      for={`${switcherId()}-create-id`}
-                    >
-                      {t("workspace.create.idLabel")}
-                    </label>
-                    <div class="topbar-workspace-handle">
-                      <span
-                        class="topbar-workspace-handle-at"
-                        aria-hidden="true"
-                      >
-                        @
-                      </span>
-                      <input
-                        id={`${switcherId()}-create-id`}
-                        class="tg-input"
-                        classList={{ "tg-input-invalid": handleInvalid() }}
-                        type="text"
-                        inputmode="url"
-                        value={createHandle()}
-                        onInput={(event) =>
-                          onHandleInput(event.currentTarget.value)
-                        }
-                        placeholder={t("workspace.create.idPlaceholder")}
-                        autocomplete="off"
-                        autocapitalize="none"
-                        spellcheck={false}
-                        aria-invalid={handleInvalid()}
-                        aria-describedby={`${switcherId()}-create-id-help`}
-                      />
-                    </div>
                     <p
-                      id={`${switcherId()}-create-id-help`}
                       class="topbar-workspace-hint"
-                      classList={{ invalid: handleInvalid() }}
+                      id={`${switcherId()}-create-name-help`}
                     >
-                      {handleInvalid()
-                        ? t("workspace.create.idInvalid")
-                        : t("workspace.create.idHelp")}
+                      {t("workspace.create.purposeHelp")}
                     </p>
                     <div style={{ display: "flex", gap: "8px" }}>
                       <Button
@@ -634,7 +609,11 @@ export default function WorkspaceSwitcher(props: Props = {}) {
                     </div>
                     <Show when={create.error()}>
                       {(message) => (
-                        <p class="topbar-workspace-error" role="alert">
+                        <p
+                          class="topbar-workspace-error"
+                          id={`${switcherId()}-create-error`}
+                          role="alert"
+                        >
                           {t("workspace.create.failed", {
                             message: message(),
                           })}

@@ -60,8 +60,18 @@ describe("GeneralTab archive lifecycle", () => {
     expect(source).toContain('t("workspaceSettings.general.archivedHint")');
     // The archive confirm stays.
     expect(source).toContain('t("workspaceSettings.general.archiveConfirm")');
+    expect(source).toContain('t("workspaceSettings.general.archivedHint")');
+    expect(source).toContain('t("workspaceSettings.general.archiveLastError")');
+    expect(source).toContain('role="note"');
+    expect(source).not.toMatch(/title=\{\s*activeWorkspaceTotal\(\)/u);
     expect(en["workspaceSettings.general.archivedNamed"]).toContain("{name}");
     expect(ja["workspaceSettings.general.archivedNamed"]).toContain("{name}");
+    expect(en["workspaceSettings.general.archiveConfirm"]).toContain(
+      "not stopped or deleted",
+    );
+    expect(ja["workspaceSettings.general.archiveConfirm"]).toContain(
+      "停止・削除されません",
+    );
     expect(ja["workspaceSettings.general.archivedHint"]).toContain("復元");
   });
 

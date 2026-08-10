@@ -168,37 +168,35 @@ export const en: Record<keyof typeof ja, string> = {
   "settings.manage.runs": "Deploy and change execution records",
   "settings.manage.graph": "Dependencies between services",
   "settings.manage.activity": "Who changed what, and when",
-  "settings.manage.workspace": "Members, keys, backups, shares, policy",
+  "settings.manage.workspace":
+    "Access and sharing, keys, backups, and policy",
   "settings.manage.backups": "Create and restore restore points",
   "settings.manage.shares": "Manage values shared between services",
 
   // --- workspace switcher -------------------------------------------------------
-  "workspace.label": "Workspace",
-  "workspace.none": "No workspaces",
-  "workspace.select": "Select a workspace",
-  "workspace.selectMessage": "Pick a workspace from the switcher at the top.",
+  "workspace.label": "Your workspaces",
+  "workspace.none": "No workspaces yet",
+  "workspace.select": "Select a workspace for this view",
+  "workspace.selectMessage":
+    "Choose the Workspace where this work belongs.",
   "workspace.loading": "Loading workspaces…",
   "workspace.loadFailed": "Could not load workspaces — {message}",
   "workspace.settings": "Workspace settings",
   "workspace.switcherAria": "Switch workspace (current: {name})",
-  "workspace.defaultName": "My workspace",
-  "workspace.start.aria": "Start workspace",
-  "workspace.start.kicker": "No workspace yet",
-  "workspace.start.title": "Create your workspace to start",
+  "workspace.defaultName": "Personal",
+  "workspace.start.aria": "Start a personal workspace",
+  "workspace.start.kicker": "Personal workspace",
+  "workspace.start.title": "Create a workspace for a purpose",
   "workspace.start.body":
-    "Takosumi keeps your services, deploy history, and settings inside a workspace.",
-  "workspace.start.create": "Create workspace",
+    "Keep services, connected accounts, history, usage, and settings together in a private workspace.",
+  "workspace.start.create": "New workspace",
   "workspace.start.creating": "Creating workspace…",
-  "workspace.create.nameLabel": "Workspace name",
-  "workspace.create.namePlaceholder": "New workspace",
-  "workspace.create.nameRequired": "Enter a workspace name.",
-  "workspace.create.idLabel": "Workspace ID",
-  "workspace.create.idPlaceholder": "my-workspace",
-  "workspace.create.idHelp":
-    "Lowercase letters, numbers, and hyphens (2–39). Auto-generated if left blank.",
-  "workspace.create.idInvalid":
-    "Use 2–39 lowercase letters, numbers, or hyphens (no leading hyphen).",
-  "workspace.create.idTaken": "That ID is already taken.",
+  "workspace.create.nameLabel": "Purpose or name",
+  "workspace.create.namePlaceholder":
+    "Personal, Work, Experiments, Client A",
+  "workspace.create.nameRequired": "Enter a purpose or name.",
+  "workspace.create.purposeHelp":
+    "Private by default. You can share access later from advanced settings.",
   "workspace.create.failed": "Could not create the workspace — {message}",
 
   // --- auth -----------------------------------------------------------------
@@ -768,9 +766,9 @@ export const en: Record<keyof typeof ja, string> = {
   "workspaceSettings.title": "Settings",
   "workspaceSettings.tabsLabel": "Settings sections",
   "workspaceSettings.subtitle":
-    "Review the workspace name, members, connected accounts, and usage.",
+    "Review the workspace name, connected accounts, usage, and optional access controls.",
   "workspaceSettings.tab.general": "General",
-  "workspaceSettings.tab.members": "Members",
+  "workspaceSettings.tab.members": "Access & sharing",
   "workspaceSettings.tab.connections": "Connections",
   "workspaceSettings.tab.billing": "Usage",
   "workspaceSettings.tab.usageQuota": "Usage",
@@ -783,18 +781,19 @@ export const en: Record<keyof typeof ja, string> = {
   "workspaceSettings.general.updated": "Updated",
   "workspaceSettings.general.advancedDetails": "Advanced details",
   "workspaceSettings.general.saved": "Settings saved.",
-  "workspaceSettings.general.archive": "Archive workspace",
+  "workspaceSettings.general.archive": "Hide workspace",
   "workspaceSettings.general.archiveConfirm":
-    "This workspace will be hidden from the normal switcher. You can restore it any time from “Archived” below.",
-  "workspaceSettings.general.archivedNamed": "Archived “{name}”.",
+    "This only hides the workspace from the normal switcher. Running services, history, usage, and stored data are not stopped or deleted. You can restore it any time from “Archived” below.",
+  "workspaceSettings.general.archivedNamed":
+    "Hidden “{name}” from the normal switcher.",
   "workspaceSettings.general.archivedHint":
-    "You can restore it from the archived list below, or move to another workspace with the workspace switcher.",
+    "This only changes visibility; services and usage continue as before. Restore it from the archived list below, or move to another workspace with the workspace switcher.",
   "workspaceSettings.general.notFound":
     "This workspace was not found. Switch workspaces, or restore one below.",
   "workspaceSettings.general.archivedTitle": "Archived workspaces",
   "workspaceSettings.general.unarchive": "Restore",
   "workspaceSettings.general.archiveLastError":
-    "You cannot archive the last workspace.",
+    "You cannot hide the last workspace.",
   "workspaceSettings.general.nameRequired": "Enter a display name.",
 
   // --- members ---------------------------------------------------------------
@@ -805,7 +804,7 @@ export const en: Record<keyof typeof ja, string> = {
   "members.status.active": "Active",
   "members.status.invited": "Invited",
   "members.status.suspended": "Suspended",
-  "members.invite.title": "Add a member",
+  "members.invite.title": "Share access",
   "members.invite.subtitle":
     "Enter the email for someone who has already signed in. They get access immediately — no email is sent.",
   "members.invite.email": "Email",

@@ -50,9 +50,9 @@ capacity is not an OSS Core responsibility.
 
 | Concept | Meaning |
 | --- | --- |
-| Workspace | User/team isolation boundary for sources, secrets, state, Runs, and audit |
+| Workspace | Personal purpose, resource, and security boundary for sources, secrets, state, Runs, and audit; optional membership and sharing extend it |
 | Project | A service or infrastructure grouping |
-| Capsule | One OpenTofu/Terraform module execution unit |
+| Capsule | One OpenTofu/Terraform module execution unit, with concrete environments such as `production` and `preview` |
 | Source | Git URL/ref/commit/path for a plain module |
 | ProviderConnection | Stored provider credential configuration |
 | CredentialRecipe | How a provider credential becomes a temporary env/file/pre-run value |
@@ -63,6 +63,15 @@ capacity is not an OSS Core responsibility.
 | Interface | Provider-neutral connection or runtime declaration |
 | InterfaceBinding | Authorization of an Interface to an invocation principal |
 | AuditEvent | Actor/action/target/result evidence |
+
+A Workspace is not a team-first container or an alias for a deployment
+environment. It is a personal context for a purpose such as Personal, Work,
+Experiments, or Client, and membership/sharing are optional advanced
+composition around that context. `displayName` is the primary human-facing
+identity. `handle` is a stable, globally unique public API identifier that API
+and CLI callers may supply; it is not a required user choice. First-party
+dashboard flows generate handles and surface `@handle` only for disambiguation
+or advanced details. Concrete environments remain Capsule-scoped.
 
 StateVersion storage and locking are part of the canonical Run lifecycle; they
 are not a separate Resource/Form ledger.
