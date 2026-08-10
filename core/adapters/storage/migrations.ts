@@ -656,6 +656,7 @@ export const postgresStorageTableDefinitions: readonly StorageTableDefinition[] 
         "installation_json",
         "created_at",
         "updated_at",
+        "execution_authority_epoch",
       ],
       primaryKey: ["id"],
       indexes: [
@@ -663,6 +664,7 @@ export const postgresStorageTableDefinitions: readonly StorageTableDefinition[] 
         ["project_id"],
         ["current_state_version_id"],
         ["created_at"],
+        ["space_id", "id"],
       ],
     },
     {
@@ -4627,5 +4629,42 @@ alter table takosumi_workspaces
   drop column if exists personal_bootstrap_owner_id,
   drop column if exists workspace_type,
   drop column if exists owner_user_id;`,
+    },
+    {
+      id: "deploy.capsule_execution_authority_epoch.add",
+      version: 108,
+      domain: "deploy",
+      description:
+        "Add a private monotonic execution-authority epoch to each Capsule plus the exact Workspace/Capsule lookup index. A database trigger advances it exactly once on the terminal non-destroyed to destroyed transition, including writes from an older application process; Workspace visibility and membership changes do not affect it.",
+      sql: `alter table takosumi_capsules
+  add column if not exists execution_authority_epoch integer not null default 1
+    check (execution_authority_epoch >= 1);
+create or replace function takosumi_bump_capsule_execution_authority_epoch()
+returns trigger
+language plpgsql
+as $$
+begin
+  if old.status <> 'destroyed' and new.status = 'destroyed' then
+    new.execution_authority_epoch := old.execution_authority_epoch + 1;
+  else
+    new.execution_authority_epoch := old.execution_authority_epoch;
+  end if;
+  return new;
+end;
+$$;
+drop trigger if exists takosumi_capsules_execution_authority_epoch_on_destroy
+  on takosumi_capsules;
+create trigger takosumi_capsules_execution_authority_epoch_on_destroy
+before update of status on takosumi_capsules
+for each row
+execute function takosumi_bump_capsule_execution_authority_epoch();
+create index if not exists takosumi_capsules_execution_authority_exact_idx
+  on takosumi_capsules (space_id, id);`,
+      down: `drop trigger if exists takosumi_capsules_execution_authority_epoch_on_destroy
+  on takosumi_capsules;
+drop function if exists takosumi_bump_capsule_execution_authority_epoch();
+drop index if exists takosumi_capsules_execution_authority_exact_idx;
+alter table takosumi_capsules
+  drop column if exists execution_authority_epoch;`,
     },
   ]);

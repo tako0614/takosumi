@@ -96,6 +96,8 @@ import type {
   CommitRestoredStateResult,
   BeginResourceOperationRunResult,
   BeginApplyRunResult,
+  CapsuleExecutionAuthority,
+  CapsuleExecutionAuthorityInput,
   CapsuleRuntimeSafety,
   CapsulePatch,
   CapsuleStateVersionGuard,
@@ -262,6 +264,231 @@ function d1RunRuntimeSafetyRiskOrder(): SQL {
     END
   `;
 }
+
+function d1RuntimeSafetyCandidateWhere(capsuleId: string): SQL | undefined {
+  return and(
+    eq(schema.runs.capsuleId, capsuleId),
+    or(
+      and(
+        eq(schema.runs.type, "apply"),
+        or(
+          eq(schema.runs.status, "succeeded"),
+          and(eq(schema.runs.status, "failed"), d1RunMutationDispatched()),
+          and(eq(schema.runs.status, "expired"), d1RunStarted()),
+        ),
+      ),
+      and(
+        eq(schema.runs.type, "destroy_apply"),
+        or(
+          inArray(schema.runs.status, ["queued", "running", "succeeded"]),
+          and(eq(schema.runs.status, "failed"), d1RunMutationDispatched()),
+          and(eq(schema.runs.status, "expired"), d1RunStarted()),
+        ),
+      ),
+      and(
+        eq(schema.runs.type, RUN_KIND_RESTORE),
+        inArray(schema.runs.status, [
+          "queued",
+          "running",
+          "succeeded",
+          "failed",
+          "expired",
+        ]),
+      ),
+    ),
+  );
+}
+
+/**
+ * One ordered snapshot query for the exact Workspace/Capsule batch seam.
+ *
+ * The JSON request CTE keeps D1 at one bound parameter regardless of batch
+ * size, preserves duplicate pairs by their array index, and avoids the
+ * per-item statement interleaving that would make runtime safety non-atomic.
+ * Keep the candidate predicate and ordering in lockstep with the single-item
+ * Drizzle query and the shared runtime-safety model above.
+ */
+const D1_CAPSULE_EXECUTION_AUTHORITY_BATCH_SQL = `
+with ordered_capsule_authority_requests as (
+  select
+    cast(request.key as integer) as request_index,
+    json_extract(request.value, '$.workspaceId') as workspace_id,
+    json_extract(request.value, '$.capsuleId') as capsule_id
+  from json_each(?) as request
+),
+requested_capsule_ids as (
+  select distinct capsule_id
+  from ordered_capsule_authority_requests
+),
+latest_capsule_runtime_safety as (
+  select
+    request.capsule_id,
+    (
+      select candidate.run_json
+      from runs as candidate
+      where candidate.installation_id = request.capsule_id
+        and (
+          (
+            candidate.type = 'apply'
+            and (
+              candidate.status = 'succeeded'
+              or (
+                candidate.status = 'failed'
+                and exists (
+                  select 1
+                  from json_each(candidate.run_json, '$.auditEvents') as audit_event
+                  where json_extract(
+                    audit_event.value,
+                    '$.data.providerDispatched'
+                  ) = 1
+                     or json_extract(
+                       audit_event.value,
+                       '$.data.lifecycleActionDispatched'
+                     ) = 1
+                )
+              )
+              or (
+                candidate.status = 'expired'
+                and json_extract(candidate.run_json, '$.startedAt') is not null
+              )
+            )
+          )
+          or (
+            candidate.type = 'destroy_apply'
+            and (
+              candidate.status in ('queued', 'running', 'succeeded')
+              or (
+                candidate.status = 'failed'
+                and exists (
+                  select 1
+                  from json_each(candidate.run_json, '$.auditEvents') as audit_event
+                  where json_extract(
+                    audit_event.value,
+                    '$.data.providerDispatched'
+                  ) = 1
+                     or json_extract(
+                       audit_event.value,
+                       '$.data.lifecycleActionDispatched'
+                     ) = 1
+                )
+              )
+              or (
+                candidate.status = 'expired'
+                and json_extract(candidate.run_json, '$.startedAt') is not null
+              )
+            )
+          )
+          or (
+            candidate.type = 'restore'
+            and candidate.status in (
+              'queued', 'running', 'succeeded', 'failed', 'expired'
+            )
+          )
+        )
+      order by
+        case
+          when candidate.type = 'destroy_apply'
+            and candidate.status in ('queued', 'running') then 1
+          when candidate.type = 'restore'
+            and candidate.status in ('queued', 'running') then 1
+          else 0
+        end desc,
+        case
+          when candidate.type in ('apply', 'destroy_apply') then coalesce(
+            cast(json_extract(candidate.run_json, '$.finishedAt') as real),
+            cast(json_extract(candidate.run_json, '$.updatedAt') as real),
+            candidate.heartbeat_at,
+            cast(json_extract(candidate.run_json, '$.startedAt') as real),
+            case
+              when candidate.created_at <> ''
+                and candidate.created_at not glob '*[^0-9]*'
+                then cast(candidate.created_at as integer)
+              else (
+                cast(strftime('%s', candidate.created_at) as integer) * 1000
+                + cast(substr(strftime('%f', candidate.created_at), 4, 3) as integer)
+              )
+            end
+          )
+          when candidate.type = 'restore' then coalesce(
+            cast(
+              strftime(
+                '%s',
+                json_extract(candidate.run_json, '$.finishedAt')
+              ) as integer
+            ) * 1000 + cast(
+              substr(
+                strftime(
+                  '%f',
+                  json_extract(candidate.run_json, '$.finishedAt')
+                ),
+                4,
+                3
+              ) as integer
+            ),
+            candidate.heartbeat_at,
+            cast(
+              strftime(
+                '%s',
+                json_extract(candidate.run_json, '$.startedAt')
+              ) as integer
+            ) * 1000 + cast(
+              substr(
+                strftime(
+                  '%f',
+                  json_extract(candidate.run_json, '$.startedAt')
+                ),
+                4,
+                3
+              ) as integer
+            ),
+            case
+              when candidate.created_at <> ''
+                and candidate.created_at not glob '*[^0-9]*'
+                then cast(candidate.created_at as integer)
+              else (
+                cast(strftime('%s', candidate.created_at) as integer) * 1000
+                + cast(substr(strftime('%f', candidate.created_at), 4, 3) as integer)
+              )
+            end
+          )
+          else case
+            when candidate.created_at <> ''
+              and candidate.created_at not glob '*[^0-9]*'
+              then cast(candidate.created_at as integer)
+            else (
+              cast(strftime('%s', candidate.created_at) as integer) * 1000
+              + cast(substr(strftime('%f', candidate.created_at), 4, 3) as integer)
+            )
+          end
+        end desc,
+        case
+          when candidate.type = 'destroy_apply'
+            and candidate.status = 'succeeded' then 3
+          when candidate.type = 'destroy_apply'
+            and candidate.status in ('queued', 'running') then 2
+          when candidate.status in ('failed', 'expired') then 1
+          when candidate.type = 'restore'
+            and candidate.status in ('queued', 'running') then 1
+          else 0
+        end desc,
+        candidate.id desc
+      limit 1
+    ) as safety_json
+  from requested_capsule_ids as request
+)
+select
+  request.request_index,
+  capsule.execution_authority_epoch as epoch,
+  safety.safety_json
+from ordered_capsule_authority_requests as request
+left join capsules as capsule
+  on capsule.space_id = request.workspace_id
+ and capsule.id = request.capsule_id
+ and capsule.status <> 'destroyed'
+left join latest_capsule_runtime_safety as safety
+  on safety.capsule_id = request.capsule_id
+order by request.request_index
+`;
 
 /** Mirrors applyRunMutationDispatched in the shared store model. */
 function d1RunMutationDispatched(): SQL {
@@ -891,43 +1118,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       schema.runs,
       schema.runs.runJson,
       {
-        where: and(
-          eq(schema.runs.capsuleId, capsuleId),
-          or(
-            and(
-              eq(schema.runs.type, "apply"),
-              or(
-                eq(schema.runs.status, "succeeded"),
-                and(
-                  eq(schema.runs.status, "failed"),
-                  d1RunMutationDispatched(),
-                ),
-                and(eq(schema.runs.status, "expired"), d1RunStarted()),
-              ),
-            ),
-            and(
-              eq(schema.runs.type, "destroy_apply"),
-              or(
-                inArray(schema.runs.status, ["queued", "running", "succeeded"]),
-                and(
-                  eq(schema.runs.status, "failed"),
-                  d1RunMutationDispatched(),
-                ),
-                and(eq(schema.runs.status, "expired"), d1RunStarted()),
-              ),
-            ),
-            and(
-              eq(schema.runs.type, RUN_KIND_RESTORE),
-              inArray(schema.runs.status, [
-                "queued",
-                "running",
-                "succeeded",
-                "failed",
-                "expired",
-              ]),
-            ),
-          ),
-        ),
+        where: d1RuntimeSafetyCandidateWhere(capsuleId),
         orderBy: [
           desc(d1RunRuntimeSafetyInFlightOrder()),
           desc(d1RunRuntimeSafetyEffectAtMillisOrder()),
@@ -1736,6 +1927,86 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       updatedAt: normalized.updatedAt,
     });
     return normalized;
+  }
+
+  async resolveCapsuleExecutionAuthority(
+    workspaceId: string,
+    capsuleId: string,
+  ): Promise<CapsuleExecutionAuthority | undefined> {
+    await this.#ensureSchema();
+    const latestSafety = this.#orm
+      .select({ json: schema.runs.runJson })
+      .from(schema.runs)
+      .where(d1RuntimeSafetyCandidateWhere(capsuleId))
+      .orderBy(
+        desc(d1RunRuntimeSafetyInFlightOrder()),
+        desc(d1RunRuntimeSafetyEffectAtMillisOrder()),
+        desc(d1RunRuntimeSafetyRiskOrder()),
+        desc(schema.runs.id),
+      )
+      .limit(1)
+      .as("latest_capsule_runtime_safety");
+    const row = await this.#orm
+      .select({
+        epoch: schema.capsules.executionAuthorityEpoch,
+        safetyJson: latestSafety.json,
+      })
+      .from(schema.capsules)
+      .leftJoin(latestSafety, sql`true`)
+      .where(
+        and(
+          eq(schema.capsules.id, capsuleId),
+          eq(schema.capsules.workspaceId, workspaceId),
+          ne(schema.capsules.status, "destroyed"),
+        ),
+      )
+      .limit(1)
+      .get();
+    if (row === undefined) return undefined;
+    const safety = row.safetyJson === null
+      ? undefined
+      : capsuleRuntimeSafetyFromRun(row.safetyJson as ApplyRun | Run);
+    return safety !== undefined && safety.phase !== "safe"
+      ? undefined
+      : { workspaceId, capsuleId, executionAuthorityEpoch: row.epoch };
+  }
+
+  async resolveCapsuleExecutionAuthorities(
+    inputs: readonly CapsuleExecutionAuthorityInput[],
+  ): Promise<readonly (CapsuleExecutionAuthority | undefined)[]> {
+    if (inputs.length === 0) return [];
+    await this.#ensureSchema();
+    const rows = await this.db
+      .prepare(D1_CAPSULE_EXECUTION_AUTHORITY_BATCH_SQL)
+      .bind(JSON.stringify(inputs))
+      .all<{
+        readonly request_index: number;
+        readonly epoch: number | null;
+        readonly safety_json: unknown | null;
+      }>();
+    const resolved: (CapsuleExecutionAuthority | undefined)[] = inputs.map(
+      () => undefined,
+    );
+    for (const row of rows.results ?? []) {
+      const index = Number(row.request_index);
+      const input = inputs[index];
+      if (!Number.isSafeInteger(index) || index < 0 || input === undefined) {
+        throw new Error("D1 Capsule execution-authority batch index is invalid");
+      }
+      if (row.epoch === null) continue;
+      const safety = row.safety_json === null
+        ? undefined
+        : capsuleRuntimeSafetyFromRun(
+            jsonRecordFromD1Value(row.safety_json) as unknown as ApplyRun | Run,
+          );
+      if (safety !== undefined && safety.phase !== "safe") continue;
+      resolved[index] = {
+        workspaceId: input.workspaceId,
+        capsuleId: input.capsuleId,
+        executionAuthorityEpoch: Number(row.epoch),
+      };
+    }
+    return resolved;
   }
 
   async getCapsule(id: string): Promise<Capsule | undefined> {
@@ -3953,6 +4224,7 @@ function d1InvalidCapsuleGuardRow(capsuleId: string) {
     recordJson: sql<Capsule>`null`.as("recordJson"),
     createdAt: sql<string>`null`.as("createdAt"),
     updatedAt: sql<string>`null`.as("updatedAt"),
+    executionAuthorityEpoch: sql<number>`1`.as("executionAuthorityEpoch"),
   };
 }
 
@@ -4562,6 +4834,30 @@ async function d1PersonalWorkspaceBootstrapIdentityStatements(
     `create unique index if not exists workspaces_personal_bootstrap_owner_unique
        on workspaces (personal_bootstrap_owner_id)
        where personal_bootstrap_owner_id is not null`,
+  ];
+}
+
+async function d1CapsuleExecutionAuthorityEpochStatements(
+  db: D1Database,
+): Promise<readonly string[]> {
+  return [
+    ...(await d1EnsureColumnStatements(
+      db,
+      "capsules",
+      "execution_authority_epoch",
+      "integer not null default 1 check (execution_authority_epoch >= 1)",
+    )),
+    `create trigger if not exists capsules_execution_authority_epoch_on_destroy
+       after update of status on capsules
+       for each row
+       when old.status <> 'destroyed' and new.status = 'destroyed'
+       begin
+         update capsules
+            set execution_authority_epoch = old.execution_authority_epoch + 1
+          where id = new.id;
+       end`,
+    `create index if not exists capsules_execution_authority_exact_idx
+       on capsules (space_id, id)`,
   ];
 }
 
@@ -7296,6 +7592,26 @@ ordinary personal Workspaces remain unlimited because only the marker is unique
       await runD1AtomicSql(
         db,
         await d1PersonalWorkspaceBootstrapIdentityStatements(db),
+      );
+    },
+  },
+  {
+    version: 64,
+    name: "d1_capsule_execution_authority_epoch",
+    checksumSource: `
+Capsules carry a private monotonic execution authority epoch with default one
+the epoch advances atomically only when status crosses from non-destroyed to destroyed
+the database trigger also covers terminal writes from older application processes
+exact Workspace and Capsule authority reads use a bounded indexed lookup
+Workspace visibility and membership changes never advance Capsule execution authority
+`,
+    async atomicStatements(db) {
+      return await d1CapsuleExecutionAuthorityEpochStatements(db);
+    },
+    async apply(db) {
+      await runD1AtomicSql(
+        db,
+        await d1CapsuleExecutionAuthorityEpochStatements(db),
       );
     },
   },

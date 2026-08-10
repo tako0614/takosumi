@@ -782,6 +782,27 @@ export interface OpenTofuControlStore {
 
   // Capsule records (active UNIQUE(project_id, name, environment)).
   putCapsule(capsule: Capsule): Promise<Capsule>;
+  /**
+   * Resolves the private execution-authority epoch for one exact
+   * Workspace/Capsule pair. Destroyed Capsules and mismatched pairs are absent.
+   * Unsafe runtime phases are absent from the same store snapshot as the
+   * Capsule read. The epoch is durable metadata and is never projected into
+   * Capsule. Durable adapters must use one indexed database statement; callers
+   * must not compose Capsule and Run reads themselves.
+   */
+  resolveCapsuleExecutionAuthority(
+    workspaceId: string,
+    capsuleId: string,
+  ): Promise<CapsuleExecutionAuthority | undefined>;
+  /**
+   * Ordered batch form of {@link resolveCapsuleExecutionAuthority}. The result
+   * at each index belongs to the input at the same index, including duplicate
+   * pairs. Durable adapters resolve the whole batch in one database statement
+   * so callers cannot observe a different runtime-safety snapshot per item.
+   */
+  resolveCapsuleExecutionAuthorities(
+    inputs: readonly CapsuleExecutionAuthorityInput[],
+  ): Promise<readonly (CapsuleExecutionAuthority | undefined)[]>;
   getCapsule(id: string): Promise<Capsule | undefined>;
   getCapsulesByIds(ids: readonly string[]): Promise<readonly Capsule[]>;
   getCapsuleByName(
@@ -1089,6 +1110,55 @@ export interface OpenTofuControlStore {
   ): Promise<Page<BackupRecord>>;
 }
 
+export interface CapsuleExecutionAuthority {
+  readonly workspaceId: string;
+  readonly capsuleId: string;
+  readonly executionAuthorityEpoch: number;
+}
+
+export interface CapsuleExecutionAuthorityInput {
+  readonly workspaceId: string;
+  readonly capsuleId: string;
+}
+
+export interface CapsuleExecutionAuthorityResolver {
+  resolveExact(
+    input: CapsuleExecutionAuthorityInput,
+  ): Promise<CapsuleExecutionAuthority | undefined>;
+  resolveExactMany(
+    inputs: readonly CapsuleExecutionAuthorityInput[],
+  ): Promise<readonly (CapsuleExecutionAuthority | undefined)[]>;
+}
+
+/**
+ * Provider-neutral exact runtime-authority seam.
+ *
+ * The durable epoch changes only on irreversible Capsule retirement. Derived
+ * runtime safety is deliberately a reversible suspension: unsafe phases return
+ * no authority without consuming a new epoch. Each store adapter resolves the
+ * Capsule row and its latest runtime-safety candidate at one linearization
+ * point; the outer adapter never composes separate reads.
+ */
+export function createCapsuleExecutionAuthorityResolver(
+  store: Pick<
+    OpenTofuControlStore,
+    | "resolveCapsuleExecutionAuthority"
+    | "resolveCapsuleExecutionAuthorities"
+  >,
+): CapsuleExecutionAuthorityResolver {
+  return {
+    resolveExact(input) {
+      return store.resolveCapsuleExecutionAuthority(
+        input.workspaceId,
+        input.capsuleId,
+      );
+    },
+    resolveExactMany(inputs) {
+      return store.resolveCapsuleExecutionAuthorities(inputs);
+    },
+  };
+}
+
 /**
  * Read-coerces a persisted PlanRun / ApplyRun's `status` to the unified
  * {@link RunStatus} (RunStatus unify, S2). A row written before the `blocked` →
@@ -1122,6 +1192,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
   readonly #projects = new Map<string, Project>();
   readonly #installConfigs = new Map<string, InstallConfig>();
   readonly #capsules = new Map<string, Capsule>();
+  readonly #capsuleExecutionAuthorityEpochs = new Map<string, number>();
   readonly #publicHostReservations = new Map<string, PublicHostReservation>();
   readonly #connections = new Map<string, ProviderConnection>();
   readonly #secretBlobs = new Map<string, StoredSecretBlob>();
@@ -1410,18 +1481,20 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     );
   }
 
-  getCapsuleRuntimeSafety(
-    capsuleId: string,
-  ): Promise<CapsuleRuntimeSafety | undefined> {
+  #capsuleRuntimeSafety(capsuleId: string): CapsuleRuntimeSafety | undefined {
     const rows = Array.from(this.#runs.values()).filter(
       (run): run is ApplyRun | Run =>
         (isApplyRunRecord(run) || isPublicRunRecord(run)) &&
         runtimeSafetyCandidate(run, capsuleId),
     );
     const latest = rows.sort(compareRuntimeSafetyCandidatesDesc)[0];
-    return Promise.resolve(
-      latest ? capsuleRuntimeSafetyFromRun(latest) : undefined,
-    );
+    return latest ? capsuleRuntimeSafetyFromRun(latest) : undefined;
+  }
+
+  getCapsuleRuntimeSafety(
+    capsuleId: string,
+  ): Promise<CapsuleRuntimeSafety | undefined> {
+    return Promise.resolve(this.#capsuleRuntimeSafety(capsuleId));
   }
 
   listRecoverableOpenTofuRuns(
@@ -1764,8 +1837,63 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
         );
       }
     }
-    this.#capsules.set(capsule.id, capsule);
+    this.#setCapsule(capsule);
     return Promise.resolve(capsule);
+  }
+
+  #setCapsule(capsule: Capsule): void {
+    const previous = this.#capsules.get(capsule.id);
+    const epoch = this.#capsuleExecutionAuthorityEpochs.get(capsule.id) ?? 1;
+    this.#capsuleExecutionAuthorityEpochs.set(
+      capsule.id,
+      previous !== undefined &&
+        previous.status !== "destroyed" &&
+        capsule.status === "destroyed"
+        ? epoch + 1
+        : epoch,
+    );
+    this.#capsules.set(capsule.id, capsule);
+  }
+
+  resolveCapsuleExecutionAuthority(
+    workspaceId: string,
+    capsuleId: string,
+  ): Promise<CapsuleExecutionAuthority | undefined> {
+    return Promise.resolve(
+      this.#resolveCapsuleExecutionAuthority(workspaceId, capsuleId),
+    );
+  }
+
+  resolveCapsuleExecutionAuthorities(
+    inputs: readonly CapsuleExecutionAuthorityInput[],
+  ): Promise<readonly (CapsuleExecutionAuthority | undefined)[]> {
+    return Promise.resolve(
+      inputs.map(({ workspaceId, capsuleId }) =>
+        this.#resolveCapsuleExecutionAuthority(workspaceId, capsuleId),
+      ),
+    );
+  }
+
+  #resolveCapsuleExecutionAuthority(
+    workspaceId: string,
+    capsuleId: string,
+  ): CapsuleExecutionAuthority | undefined {
+    const capsule = this.#capsules.get(capsuleId);
+    const safety = this.#capsuleRuntimeSafety(capsuleId);
+    if (
+      !capsule ||
+      capsule.workspaceId !== workspaceId ||
+      capsule.status === "destroyed" ||
+      (safety !== undefined && safety.phase !== "safe")
+    ) {
+      return undefined;
+    }
+    return {
+      workspaceId,
+      capsuleId,
+      executionAuthorityEpoch:
+        this.#capsuleExecutionAuthorityEpochs.get(capsuleId) ?? 1,
+    };
   }
 
   getCapsule(id: string): Promise<Capsule | undefined> {
@@ -1949,7 +2077,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       );
     }
     const updated = normalizeCapsule({ ...existing, ...patch });
-    this.#capsules.set(id, updated);
+    this.#setCapsule(updated);
     return Promise.resolve(updated);
   }
 
@@ -2016,7 +2144,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       ...existing,
       ...capsulePatch.patch,
     });
-    this.#capsules.set(capsulePatch.id, updated);
+    this.#setCapsule(updated);
     return Promise.resolve({ capsule: updated });
   }
 
@@ -2074,7 +2202,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     }
     this.#runs.set(input.restoreRunTerminal.id, input.restoreRunTerminal);
     this.#runLeases.delete(input.restoreRunTerminal.id);
-    this.#capsules.set(capsulePatch.id, updated);
+    this.#setCapsule(updated);
     return Promise.resolve({ capsule: updated });
   }
 

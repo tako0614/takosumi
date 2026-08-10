@@ -223,7 +223,9 @@ import type {
   TakosumiResourceCapabilities,
 } from "takosumi-contract/capabilities";
 import {
+  createCapsuleExecutionAuthorityResolver,
   InMemoryOpenTofuControlStore,
+  type CapsuleExecutionAuthorityResolver,
   type OpenTofuControlStore,
 } from "./domains/deploy-control/store.ts";
 import { SqlOpenTofuControlStore } from "./domains/deploy-control/store_sql.ts";
@@ -914,6 +916,11 @@ export interface TakosumiOperations {
   readonly projects: ProjectsService;
   /** Capsule and service-side InstallConfig ledger over the shared store. */
   readonly capsules: CapsulesService;
+  /**
+   * Private provider-neutral authority for hosted Capsule execution. Hosts map
+   * their tenant/space vocabulary to the exact Workspace/Capsule pair.
+   */
+  readonly capsuleExecutionAuthority: CapsuleExecutionAuthorityResolver;
   /**
    * Canonical WorkspaceMember ledger backing the account-plane member surface.
    * It is persisted by the same store as Workspace/Project/Capsule; there is no
@@ -3072,6 +3079,8 @@ export async function createTakosumiService(
     workspaces: workspacesService,
     projects: projectsService,
     capsules: capsulesService,
+    capsuleExecutionAuthority:
+      createCapsuleExecutionAuthorityResolver(sharedOpenTofuStore),
     members,
     connections: connectionsService,
     dependencies: dependenciesService,

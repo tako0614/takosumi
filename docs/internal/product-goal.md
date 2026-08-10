@@ -43,10 +43,13 @@ An exact source candidate may be used for local and isolated staging
 conformance while that external project completes publication. Production,
 release, and GA evidence must consume an immutable published identity; a
 source commit is never presented as a Registry release. At this writing the
-released line is `registry.terraform.io/tako0614/takoform` provider `v2.0.0`
-with retained `forms.takoform.com/v1alpha2` resources, while the Edge Platform
-Family provider `v2.1.0` / Host API `forms.takoform.com/v1beta1` lane is the
-current external integration identity. Its exact discovery leaf is
+published compatibility distribution is **Provider 2.0.0** at
+`registry.terraform.io/tako0614/takoform`, paired with the retained Host API
+`forms.takoform.com/v1alpha2`. The independent current design target is
+**Provider 2.1.1**, paired with the Beta Host API
+`forms.takoform.com/v1beta1` and Edge Form Family
+`edge.forms.takoform.com/v1beta1`; its release descriptor remains
+`candidate-only` until signed publication and Registry readback. Its exact discovery leaf is
 `/.well-known/takoform/v1beta1`. Takosumi OSS does not implement or own that
 Host; it only provides the generic exact platform-extension seam for a
 verified external owner to compose. Retired alpha identities remain immutable

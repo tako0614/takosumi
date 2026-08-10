@@ -22,6 +22,26 @@ test("platform Worker exposes only handler-compatible runtime exports", () => {
   }
 });
 
+test("platform exports its already-composed Capsule execution authority", async () => {
+  const env = {
+    TAKOSUMI_CONTROL_DB: new SqliteFakeD1(),
+    TAKOSUMI_DEPLOY_CONTROL_TOKEN: "capsule-authority-token",
+    TAKOSUMI_DEV_MODE: "1",
+    TAKOSUMI_ENVIRONMENT: "test",
+  } as never;
+
+  const first = await platformWorker.platformCapsuleExecutionAuthority(env);
+  const second = await platformWorker.platformCapsuleExecutionAuthority(env);
+
+  expect(second).toBe(first);
+  expect(typeof first.resolveExactMany).toBe("function");
+  await expect(
+    first.resolveExactMany([
+      { workspaceId: "workspace_missing", capsuleId: "capsule_missing" },
+    ]),
+  ).resolves.toEqual([undefined]);
+});
+
 test("platform scheduled Accounts retention runs a bounded predeployed slice", async () => {
   const db = new SqliteFakeD1();
   await db.exec(D1_ACCOUNTS_STORE_INIT_SQL);

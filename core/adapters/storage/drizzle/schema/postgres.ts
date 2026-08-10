@@ -210,6 +210,9 @@ export const capsules = pgTable(
     capsuleJson: json("installation_json").notNull(),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
+    executionAuthorityEpoch: integer("execution_authority_epoch")
+      .notNull()
+      .default(1),
   },
   (table) => [
     uniqueIndex("takosumi_capsules_project_name_environment_active_unique")
@@ -221,6 +224,10 @@ export const capsules = pgTable(
       table.currentStateVersionId,
     ),
     index("takosumi_capsules_created_at_idx").on(table.createdAt),
+    index("takosumi_capsules_execution_authority_exact_idx").on(
+      table.workspaceId,
+      table.id,
+    ),
   ],
 );
 
