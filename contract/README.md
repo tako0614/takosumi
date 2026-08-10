@@ -5,8 +5,9 @@ contract.
 
 The target public contract is centered on the final Takosumi model:
 
-- `Workspace` - user/team boundary for projects, provider connections,
-  secrets, state isolation, and audit.
+- `Workspace` - personal purpose, resource, and security context for projects,
+  provider connections, secrets, state isolation, and audit. Membership and
+  sharing are optional extensions for advanced collaboration.
 - `Project` - one product, service, application, or infrastructure group.
 - `Capsule` - one Git-hosted OpenTofu/Terraform module execution unit.
 - `Source` - Git URL/ref/path registration and commit-pinned source identity.
@@ -27,6 +28,13 @@ The target public contract is centered on the final Takosumi model:
   OpenTofu execution, state sync, output extraction, and cleanup.
 - `AuditEvent` - actor/action/target/result evidence.
 - `Operator` - the party operating a Takosumi for Operator instance.
+
+`Workspace.displayName` is the primary human-facing identity. Its `handle` is a
+stable, globally unique public API identifier for API and CLI callers; it may be
+supplied by those callers but is not a required user choice. First-party
+dashboard flows generate handles and surface `@handle` only for disambiguation
+or advanced details. Concrete environments such as `production` and `preview`
+belong to Capsules, not Workspaces.
 
 The root contract facade exports canonical names only. Internal stores may still
 read old physical columns while operator data is migrated, but that storage

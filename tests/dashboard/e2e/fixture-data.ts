@@ -14,6 +14,7 @@ export const PORTABLE_SESSION_COOKIE = "takosumi_session=portable-e2e";
 export const PORTABLE_EXPECTATIONS = {
   workspaceName: "Alpha Workspace",
   switchWorkspaceName: "Beta Workspace",
+  duplicateWorkspaceHandle: "alpha-lab",
   appName: "Repository Office",
   appUrl: "https://apps.example.test/repository-office",
 } as const;
@@ -36,6 +37,15 @@ export const PORTABLE_WORKSPACES = [
     ownerUserId: "sub_portable_e2e",
     createdAt: CREATED_AT,
     updatedAt: "2026-08-01T00:00:01.000Z",
+  },
+  {
+    id: "ws_alpha_lab",
+    handle: PORTABLE_EXPECTATIONS.duplicateWorkspaceHandle,
+    displayName: PORTABLE_EXPECTATIONS.workspaceName,
+    type: "personal",
+    ownerUserId: "sub_portable_e2e",
+    createdAt: CREATED_AT,
+    updatedAt: "2026-08-01T00:00:00.500Z",
   },
 ] as const;
 

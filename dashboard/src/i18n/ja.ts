@@ -174,38 +174,35 @@ export const ja = {
   "settings.manage.runs": "デプロイと変更の実行記録",
   "settings.manage.graph": "サービス間の依存関係の表示",
   "settings.manage.activity": "だれが何を変更したかの操作履歴",
-  "settings.manage.workspace": "メンバー、キー、バックアップ、共有、ポリシー",
+  "settings.manage.workspace":
+    "アクセスと共有、キー、バックアップ、ポリシー",
   "settings.manage.backups": "復元ポイントの作成と復元",
   "settings.manage.shares": "サービス間で共有する値の管理",
 
   // --- workspace switcher -------------------------------------------------------
-  "workspace.label": "ワークスペース",
-  "workspace.none": "ワークスペースがありません",
-  "workspace.select": "ワークスペースを選択してください",
+  "workspace.label": "自分のワークスペース",
+  "workspace.none": "ワークスペースがまだありません",
+  "workspace.select": "この画面で使うワークスペースを選択",
   "workspace.selectMessage":
-    "上部のワークスペース切り替えからワークスペースを選ぶと表示されます。",
+    "この作業を保存するワークスペースを選びます。",
   "workspace.loading": "ワークスペースを読み込み中…",
   "workspace.loadFailed": "ワークスペースを読み込めませんでした — {message}",
   "workspace.settings": "ワークスペース設定",
-  "workspace.switcherAria": "ワークスペースを切り替え（現在: {name}）",
-  "workspace.defaultName": "自分のワークスペース",
-  "workspace.start.aria": "ワークスペースの開始",
-  "workspace.start.kicker": "ワークスペースがありません",
-  "workspace.start.title": "ワークスペースを作成して始める",
+  "workspace.switcherAria":
+    "自分のワークスペースを切り替え（現在: {name}）",
+  "workspace.defaultName": "個人",
+  "workspace.start.aria": "自分のワークスペースを始める",
+  "workspace.start.kicker": "自分のワークスペース",
+  "workspace.start.title": "用途ごとのワークスペースを作成",
   "workspace.start.body":
-    "サービス、デプロイ履歴、設定はワークスペースにまとめて保存されます。",
-  "workspace.start.create": "ワークスペースを作成",
+    "サービス、接続済みアカウント、履歴、使用量、設定を自分のワークスペースにまとめます。",
+  "workspace.start.create": "新しいワークスペース",
   "workspace.start.creating": "作成中…",
-  "workspace.create.nameLabel": "ワークスペース名",
-  "workspace.create.namePlaceholder": "新しいワークスペース",
-  "workspace.create.nameRequired": "ワークスペース名を入力してください。",
-  "workspace.create.idLabel": "ワークスペースID",
-  "workspace.create.idPlaceholder": "my-workspace",
-  "workspace.create.idHelp":
-    "英小文字・数字・ハイフン（2〜39文字）。空欄なら自動生成します。",
-  "workspace.create.idInvalid":
-    "IDは英小文字・数字・ハイフンで2〜39文字にしてください（先頭のハイフン不可）。",
-  "workspace.create.idTaken": "そのIDはすでに使われています。",
+  "workspace.create.nameLabel": "用途または名前",
+  "workspace.create.namePlaceholder": "個人、仕事、実験、Client A",
+  "workspace.create.nameRequired": "用途または名前を入力してください。",
+  "workspace.create.purposeHelp":
+    "初期状態は自分専用です。共有は詳しい設定から後で行えます。",
   "workspace.create.failed": "ワークスペースを作成できませんでした — {message}",
 
   // --- auth -----------------------------------------------------------------
@@ -774,9 +771,9 @@ export const ja = {
   "workspaceSettings.title": "設定",
   "workspaceSettings.tabsLabel": "設定セクション",
   "workspaceSettings.subtitle":
-    "ワークスペース名、メンバー、接続、使用量を確認します。",
+    "ワークスペース名、接続、使用量、必要に応じたアクセス設定を確認します。",
   "workspaceSettings.tab.general": "一般",
-  "workspaceSettings.tab.members": "メンバー",
+  "workspaceSettings.tab.members": "アクセスと共有",
   "workspaceSettings.tab.connections": "接続",
   "workspaceSettings.tab.billing": "使用量",
   "workspaceSettings.tab.usageQuota": "使用量",
@@ -789,18 +786,19 @@ export const ja = {
   "workspaceSettings.general.updated": "更新日時",
   "workspaceSettings.general.advancedDetails": "詳細情報",
   "workspaceSettings.general.saved": "設定を保存しました。",
-  "workspaceSettings.general.archive": "ワークスペースをアーカイブ",
+  "workspaceSettings.general.archive": "ワークスペースを非表示",
   "workspaceSettings.general.archiveConfirm":
-    "このワークスペースを通常の一覧から外します。下の「アーカイブ済み」からいつでも元に戻せます。",
-  "workspaceSettings.general.archivedNamed": "「{name}」をアーカイブしました。",
+    "ワークスペースを通常の切り替え一覧から非表示にするだけです。実行中のサービス、履歴、使用量、保存データは停止・削除されません。下の「アーカイブ済み」からいつでも元に戻せます。",
+  "workspaceSettings.general.archivedNamed":
+    "「{name}」を通常の切り替え一覧から非表示にしました。",
   "workspaceSettings.general.archivedHint":
-    "復元は下のアーカイブ済み一覧から、別のワークスペースへの移動はワークスペース切り替えからできます。",
+    "表示が変わるだけで、サービスと使用量はこれまでどおりです。復元は下のアーカイブ済み一覧から、別のワークスペースへの移動はワークスペース切り替えからできます。",
   "workspaceSettings.general.notFound":
     "このワークスペースは見つかりませんでした。切り替えるか、下のアーカイブ済みから復元してください。",
   "workspaceSettings.general.archivedTitle": "アーカイブ済みのワークスペース",
   "workspaceSettings.general.unarchive": "復元",
   "workspaceSettings.general.archiveLastError":
-    "最後のワークスペースはアーカイブできません。",
+    "最後のワークスペースは非表示にできません。",
   "workspaceSettings.general.nameRequired": "表示名を入力してください。",
 
   // --- members ---------------------------------------------------------------
@@ -811,7 +809,7 @@ export const ja = {
   "members.status.active": "有効",
   "members.status.invited": "招待中",
   "members.status.suspended": "停止中",
-  "members.invite.title": "メンバーを追加",
+  "members.invite.title": "アクセスを共有",
   "members.invite.subtitle":
     "一度サインイン済みの相手のメールアドレスを入力してください。追加するとすぐに利用できます（メールは送られません）。",
   "members.invite.email": "メールアドレス",

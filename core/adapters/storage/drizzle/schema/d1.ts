@@ -27,8 +27,28 @@ export const workspaces = sqliteTable(
     recordJson: jsonText("record_json").notNull(),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
+    ownerUserId: text("owner_user_id").generatedAlwaysAs(
+      sql`json_extract(record_json, '$.ownerUserId')`,
+      { mode: "virtual" },
+    ),
+    workspaceType: text("workspace_type").generatedAlwaysAs(
+      sql`json_extract(record_json, '$.type')`,
+      { mode: "virtual" },
+    ),
+    personalBootstrapOwnerId: text("personal_bootstrap_owner_id"),
   },
-  (table) => [uniqueIndex("workspaces_handle_unique").on(table.handle)],
+  (table) => [
+    uniqueIndex("workspaces_handle_unique").on(table.handle),
+    index("workspaces_owner_type_created_idx").on(
+      table.ownerUserId,
+      table.workspaceType,
+      table.createdAt,
+      table.id,
+    ),
+    uniqueIndex("workspaces_personal_bootstrap_owner_unique")
+      .on(table.personalBootstrapOwnerId)
+      .where(sql`${table.personalBootstrapOwnerId} is not null`),
+  ],
 );
 
 export const workspaceMembers = sqliteTable(

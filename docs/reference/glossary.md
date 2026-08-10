@@ -24,11 +24,13 @@ dashboard は内部の用語をそのまま出さず、次の言葉を使いま�
 | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
 | Takosumi                         | Git に置いた OpenTofu / Terraform の module を、計画・確認・反映の順に実行して履歴を残す control plane です。           | [Takosumi とは](../index.md)                   |
 | OpenTofu                         | インフラをコードで定義して適用するオープンソースのツールです。Terraform と互換があります。                              | [Takosumi とは](../index.md)                   |
-| Workspace                        | 人とリソースをまとめる境界です。メンバー、権限、接続、履歴がこの中で分かれます。                                        | [全体像](../concepts/index.md)                 |
-| Project                          | Workspace の中を整理するための区分です。                                                                                | [全体像](../concepts/index.md)                 |
-| Source                           | どのリポジトリの、どのディレクトリを、どの ref で追うかという登録です。                                                 | [Source と Capsule](../concepts/sources.md)    |
-| SourceSnapshot                   | Source が ref を解決した結果の commit です。実行されるのはいつもこちらです。                                            | [Source と Capsule](../concepts/sources.md)    |
-| Capsule                          | デプロイされたひとまとまりです。OpenTofu の root module 1 つ分が動きます。                                              | [Source と Capsule](../concepts/sources.md)    |
+| Workspace                        | Personal、Work、Experiments、Client など目的ごとの個人の用途・リソース・セキュリティ境界です。メンバーシップと共有は必要なときに追加し、メンバー、権限、接続、履歴もこの境界で分かれます。 | [全体像](../concepts/index.md)                 |
+| Handle                           | Workspace の安定したグローバル一意の公開 API 識別子です。`@handle` と書きます。API / CLI から指定できますが、必須の利用者選択ではありません。標準ダッシュボードは通常自動生成し、名前の重複時や詳細設定でだけ表示します。 | [全体像](../concepts/index.md)                 |
+| Project                          | Workspace の中を整理するための区分です。                                                                                                                                                | [全体像](../concepts/index.md)                 |
+| Source                           | どのリポジトリの、どのディレクトリを、どの ref で追うかという登録です。                                                                                                                 | [Source と Capsule](../concepts/sources.md)    |
+| SourceSnapshot                   | Source が ref を解決した結果の commit です。実行されるのはいつもこちらです。                                                                                                            | [Source と Capsule](../concepts/sources.md)    |
+| Capsule                          | デプロイされたひとまとまりです。OpenTofu の root module 1 つ分が動き、`production` や `preview` のような具体的な実行環境も Capsule が持ちます。                                              | [Source と Capsule](../concepts/sources.md)    |
+| Environment                      | Capsule が持つ具体的な実行環境です（`production`、`preview` など）。Workspace の別名ではありません。                                                                                      | [Source と Capsule](../concepts/sources.md)    |
 | stale                            | 追いかけている Source に新しい commit が来た Capsule の状態です。                                                       | [Source と Capsule](../concepts/sources.md)    |
 | Stack flow                       | 自分で書いた module を Git から実行する経路です。                                                                       | [全体像](../concepts/index.md)                 |
 | 互換性レポート                   | 登録した module を読み取り専用で解析し、必要な変数と provider を示した結果です。                                        | [Source と Capsule](../concepts/sources.md)    |

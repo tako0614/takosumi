@@ -577,9 +577,19 @@ export const postgresStorageTableDefinitions: readonly StorageTableDefinition[] 
     {
       name: "takosumi_workspaces",
       domain: "deploy",
-      columns: ["id", "handle", "space_json", "created_at", "updated_at"],
+      columns: [
+        "id",
+        "handle",
+        "space_json",
+        "created_at",
+        "updated_at",
+        "owner_user_id",
+        "workspace_type",
+        "personal_bootstrap_owner_id",
+      ],
       primaryKey: ["id"],
-      uniqueConstraints: [["handle"]],
+      uniqueConstraints: [["handle"], ["personal_bootstrap_owner_id"]],
+      indexes: [["owner_user_id", "workspace_type", "created_at", "id"]],
     },
     {
       name: "takosumi_workspace_members",
@@ -4593,5 +4603,29 @@ create index if not exists takosumi_interface_bindings_authorized_current_idx
   add column if not exists retired_owner_json jsonb;`,
       down: `alter table takosumi_resource_identity_fences
   drop column if exists retired_owner_json;`,
+    },
+    {
+      id: "deploy.personal_workspace_bootstrap_identity.add",
+      version: 107,
+      domain: "deploy",
+      description:
+        "Add a nullable owner-scoped system bootstrap identity and generated owner/type lookup columns to Workspaces. Existing personal rows remain marker-null and are adopted lazily in deterministic created/id order.",
+      sql: `alter table takosumi_workspaces
+  add column if not exists owner_user_id text
+    generated always as (space_json ->> 'ownerUserId') stored,
+  add column if not exists workspace_type text
+    generated always as (space_json ->> 'type') stored,
+  add column if not exists personal_bootstrap_owner_id text;
+create index if not exists takosumi_workspaces_owner_type_created_idx
+  on takosumi_workspaces (owner_user_id, workspace_type, created_at, id);
+create unique index if not exists takosumi_workspaces_personal_bootstrap_owner_unique
+  on takosumi_workspaces (personal_bootstrap_owner_id)
+  where personal_bootstrap_owner_id is not null;`,
+      down: `drop index if exists takosumi_workspaces_personal_bootstrap_owner_unique;
+drop index if exists takosumi_workspaces_owner_type_created_idx;
+alter table takosumi_workspaces
+  drop column if exists personal_bootstrap_owner_id,
+  drop column if exists workspace_type,
+  drop column if exists owner_user_id;`,
     },
   ]);

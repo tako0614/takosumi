@@ -25,11 +25,13 @@ docs use a different name, read it back through this table.
 | -------------------- | -------------------------------------------------------------------------------------------------------------------------- |
 | Takosumi             | A control plane that runs OpenTofu / Terraform modules kept in Git through plan, review, and apply, and keeps the history. |
 | OpenTofu             | An open-source tool that defines infrastructure as code and applies it. Compatible with Terraform.                         |
-| Workspace            | The boundary that groups people and resources. Members, permissions, connections, and history are separated by it.         |
-| Project              | A division used to organize the inside of a Workspace.                                                                     |
-| Source               | A registration of which repository, which directory, and which ref to follow.                                              |
-| SourceSnapshot       | The commit a Source resolved its ref to. This is always what gets executed.                                                |
-| Capsule              | One deployed unit. It runs a single OpenTofu root module.                                                                  |
+| Workspace            | A personal purpose, resource, and security context. Optional membership and sharing extend it; members, permissions, connections, and history remain separated by it. |
+| Handle               | A stable, globally unique public API identifier for a Workspace, written as `@handle`. API and CLI callers may supply it; first-party dashboard flows generate it and show it only for disambiguation or advanced details. |
+| Project              | A division used to organize the inside of a Workspace.                                                                                                          |
+| Source               | A registration of which repository, which directory, and which ref to follow.                                                                                   |
+| SourceSnapshot       | The commit a Source resolved its ref to. This is always what gets executed.                                                                                     |
+| Capsule              | One deployed unit. It runs a single OpenTofu root module and owns concrete execution environments such as `production` and `preview`.                           |
+| Environment          | A concrete execution lane owned by a Capsule, such as `production` or `preview`; it is not another name for Workspace.                                         |
 | stale                | The state of a Capsule whose tracked Source has a newer commit.                                                            |
 | Stack flow           | The path that runs a module you wrote yourself from Git.                                                                   |
 | Compatibility report | The result of analyzing a registered module read-only, showing the variables and providers it needs.                       |

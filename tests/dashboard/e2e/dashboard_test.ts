@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { PORTABLE_EXPECTATIONS } from "./fixture-data.ts";
 import { monitorDashboardTraffic } from "./traffic-monitor.ts";
 import {
@@ -50,6 +50,23 @@ async function assertNoPageErrors(errors: readonly string[]): Promise<void> {
   expect(errors, "dashboard page raised a browser runtime error").toEqual([]);
 }
 
+async function expectInsideViewport(
+  page: Page,
+  locator: Locator,
+  label: string,
+): Promise<void> {
+  const box = await locator.boundingBox();
+  expect(box, `${label} must have a visible bounding box`).not.toBeNull();
+  const viewport = page.viewportSize();
+  expect(viewport, "browser viewport must be available").not.toBeNull();
+  if (!box || !viewport) return;
+  expect(box.x, `${label} must not extend left of the viewport`).toBeGreaterThanOrEqual(0);
+  expect(
+    box.x + box.width,
+    `${label} must not extend right of the viewport`,
+  ).toBeLessThanOrEqual(viewport.width);
+}
+
 function workspaceTrigger(page: Page) {
   return page
     .getByRole("button", { name: /ワークスペースを切り替え|Switch workspace/u })
@@ -86,7 +103,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     await expect(menu).toBeVisible();
     const workspaces = menu.getByRole("menuitemradio");
     if (mode === "portable") {
-      await expect(workspaces).toHaveCount(2);
+      await expect(workspaces).toHaveCount(3);
     } else {
       expect(await workspaces.count()).toBeGreaterThanOrEqual(2);
     }
@@ -103,6 +120,98 @@ test.describe("Takosumi dashboard browser surface", () => {
         ),
       ),
     );
+    await assertNoPageErrors(errors);
+    traffic.assertNoFailures();
+  });
+
+  test("keeps the current Workspace name visible on compact widths and disambiguates duplicates", async ({
+    page,
+  }) => {
+    test.skip(
+      mode !== "portable",
+      "the duplicate-name Workspace fixture is portable-only",
+    );
+    const errors = pageErrors(page);
+    const traffic = monitorDashboardTraffic(page, mode);
+    await page.goto("/", { waitUntil: "domcontentloaded" });
+
+    for (const width of [320, 390, 880]) {
+      await page.setViewportSize({ width, height: 844 });
+      const trigger = workspaceTrigger(page);
+      await expect(trigger.locator(".topbar-workspace-name")).toContainText(
+        PORTABLE_EXPECTATIONS.workspaceName,
+      );
+      expect(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth - window.innerWidth,
+        ),
+        `Workspace chrome must not overflow a ${width}px viewport`,
+      ).toBeLessThanOrEqual(1);
+    }
+
+    for (const width of [320, 390]) {
+      await page.setViewportSize({ width, height: 844 });
+      const trigger = workspaceTrigger(page);
+      await trigger.click();
+      const menu = page.locator('[role="menu"]:visible').first();
+      await expect(menu).toBeVisible();
+      await expectInsideViewport(page, menu, `Workspace menu at ${width}px`);
+      const duplicates = menu
+        .getByRole("menuitemradio")
+        .filter({ hasText: PORTABLE_EXPECTATIONS.workspaceName });
+      await expect(duplicates).toHaveCount(2);
+      await expect(
+        duplicates.filter({ hasText: "@alpha" }).first(),
+      ).toBeVisible();
+      await expect(
+        duplicates
+          .filter({ hasText: `@${PORTABLE_EXPECTATIONS.duplicateWorkspaceHandle}` })
+          .first(),
+      ).toBeVisible();
+
+      await menu
+        .getByRole("menuitem", { name: /新しいワークスペース|New workspace/u })
+        .click();
+      const dialog = page.getByRole("dialog").first();
+      const form = dialog.locator("form.topbar-workspace-create");
+      const input = dialog.getByRole("textbox", {
+        name: /用途または名前|Purpose or name/u,
+      });
+      await expect(dialog).toBeVisible();
+      await expect(form).toBeVisible();
+      await expect(input).toBeVisible();
+      await expectInsideViewport(page, form, `Workspace create form at ${width}px`);
+      await expectInsideViewport(page, input, `Workspace create input at ${width}px`);
+      await expect(input).toHaveAttribute("required", "");
+      await expect(input).toHaveAttribute(
+        "aria-describedby",
+        /workspace-switcher-compact-create-name-help/u,
+      );
+      await dialog
+        .getByRole("button", { name: /キャンセル|Cancel/u })
+        .click();
+      await expect(page.locator('[role="menu"]:visible').first()).toBeVisible();
+      await trigger.click();
+      await expect(page.locator('[role="menu"]:visible')).toHaveCount(0);
+    }
+
+    await page.setViewportSize({ width: 880, height: 844 });
+    const trigger = workspaceTrigger(page);
+    await trigger.click();
+    const menu = page.locator('[role="menu"]:visible').first();
+    await expect(menu).toBeVisible();
+    const duplicates = menu
+      .getByRole("menuitemradio")
+      .filter({ hasText: PORTABLE_EXPECTATIONS.workspaceName });
+    await expect(duplicates).toHaveCount(2);
+    await expect(
+      duplicates.filter({ hasText: "@alpha" }).first(),
+    ).toBeVisible();
+    await expect(
+      duplicates
+        .filter({ hasText: `@${PORTABLE_EXPECTATIONS.duplicateWorkspaceHandle}` })
+        .first(),
+    ).toBeVisible();
     await assertNoPageErrors(errors);
     traffic.assertNoFailures();
   });

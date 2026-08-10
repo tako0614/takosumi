@@ -1064,6 +1064,76 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     return workspace;
   }
 
+  async claimPersonalWorkspaceBootstrap(
+    ownerUserId: string,
+    candidate: Workspace,
+  ): Promise<Workspace | undefined> {
+    await this.#ensureSchema();
+    const exactClaim = async (): Promise<Workspace | undefined> => {
+      const row = await this.#orm
+        .select({ value: schema.workspaces.recordJson })
+        .from(schema.workspaces)
+        .where(
+          eq(schema.workspaces.personalBootstrapOwnerId, ownerUserId),
+        )
+        .get();
+      return row?.value as Workspace | undefined;
+    };
+    const existing = await exactClaim();
+    if (existing) return existing;
+
+    const adoptable = await this.#orm
+      .select({ id: schema.workspaces.id })
+      .from(schema.workspaces)
+      .where(
+        and(
+          eq(schema.workspaces.ownerUserId, ownerUserId),
+          eq(schema.workspaces.workspaceType, "personal"),
+          isNull(schema.workspaces.personalBootstrapOwnerId),
+        ),
+      )
+      .orderBy(asc(schema.workspaces.createdAt), asc(schema.workspaces.id))
+      .limit(1)
+      .get();
+    if (adoptable !== undefined) {
+      try {
+        await this.#orm
+          .update(schema.workspaces)
+          .set({ personalBootstrapOwnerId: ownerUserId })
+          .where(
+            and(
+              eq(schema.workspaces.id, adoptable.id),
+              eq(schema.workspaces.ownerUserId, ownerUserId),
+              eq(schema.workspaces.workspaceType, "personal"),
+              isNull(schema.workspaces.personalBootstrapOwnerId),
+            ),
+          )
+          .run();
+      } catch (error) {
+        const raced = await exactClaim();
+        if (raced) return raced;
+        throw error;
+      }
+      const adopted = await exactClaim();
+      if (adopted) return adopted;
+      throw new Error("personal Workspace bootstrap adoption did not persist");
+    }
+
+    await this.#orm
+      .insert(schema.workspaces)
+      .values({
+        id: candidate.id,
+        handle: candidate.handle,
+        recordJson: candidate,
+        createdAt: candidate.createdAt,
+        updatedAt: candidate.updatedAt,
+        personalBootstrapOwnerId: ownerUserId,
+      })
+      .onConflictDoNothing()
+      .run();
+    return await exactClaim();
+  }
+
   async getWorkspace(id: string): Promise<Workspace | undefined> {
     return await this.#drizzleFirstJson<Workspace>(
       schema.workspaces,
@@ -4465,6 +4535,36 @@ async function d1ResourceIdentityFenceOwnerReceiptStatements(
   );
 }
 
+async function d1PersonalWorkspaceBootstrapIdentityStatements(
+  db: D1Database,
+): Promise<readonly string[]> {
+  return [
+    ...(await d1EnsureColumnStatements(
+      db,
+      "workspaces",
+      "owner_user_id",
+      `text generated always as (json_extract(record_json, '$.ownerUserId')) virtual`,
+    )),
+    ...(await d1EnsureColumnStatements(
+      db,
+      "workspaces",
+      "workspace_type",
+      `text generated always as (json_extract(record_json, '$.type')) virtual`,
+    )),
+    ...(await d1EnsureColumnStatements(
+      db,
+      "workspaces",
+      "personal_bootstrap_owner_id",
+      "text",
+    )),
+    `create index if not exists workspaces_owner_type_created_idx
+       on workspaces (owner_user_id, workspace_type, created_at, id)`,
+    `create unique index if not exists workspaces_personal_bootstrap_owner_unique
+       on workspaces (personal_bootstrap_owner_id)
+       where personal_bootstrap_owner_id is not null`,
+  ];
+}
+
 /**
  * Bootstrap the §27 control-plane tables for the default self-host mode.
  * Idempotent (`IF NOT EXISTS`) and called once per store instance via the
@@ -7180,6 +7280,25 @@ ${D1_RESOURCE_IDENTITY_FENCE_OWNER_RECEIPT_STATEMENTS.join("\n---\n")}
       );
     },
   },
+  {
+    version: 63,
+    name: "d1_personal_workspace_bootstrap_identity",
+    checksumSource: `
+Workspaces expose generated owner/type columns for indexed oldest-personal adoption
+personal_bootstrap_owner_id is a nullable system-only owner claim
+existing personal Workspaces remain marker-null until lazily adopted
+ordinary personal Workspaces remain unlimited because only the marker is unique
+`,
+    async atomicStatements(db) {
+      return await d1PersonalWorkspaceBootstrapIdentityStatements(db);
+    },
+    async apply(db) {
+      await runD1AtomicSql(
+        db,
+        await d1PersonalWorkspaceBootstrapIdentityStatements(db),
+      );
+    },
+  },
 ] as const satisfies readonly D1OpenTofuSchemaMigration[];
 
 /**
@@ -8835,7 +8954,9 @@ async function d1ColumnInfo(
   table: string,
 ): Promise<readonly D1TableInfoRow[]> {
   const result = await db
-    .prepare(`pragma table_info(${table})`)
+    // table_info omits generated columns. table_xinfo is the canonical
+    // superset and keeps additive generated projection migrations idempotent.
+    .prepare(`pragma table_xinfo(${table})`)
     .all<D1TableInfoRow>();
   return result.results ?? [];
 }

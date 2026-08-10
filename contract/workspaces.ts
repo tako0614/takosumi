@@ -1,12 +1,13 @@
 /**
- * Workspace owner-namespace contract.
+ * Workspace boundary contract.
  *
- * A Workspace is the owner namespace directly under which Projects and Capsules
- * live — close to a source-forge or organization namespace (`@acme`,
- * `@company`). It holds members,
- * sources, connections, projects, capsules, the dependency graph, policy,
- * activity, and optional billing. A personal Workspace is auto-created on first
- * login.
+ * A Workspace is a personal purpose, resource, and security context directly
+ * under which Projects and Capsules live. Common purposes include Personal,
+ * Work, Experiments, and Client. Optional membership and sharing extend the
+ * same boundary for advanced collaboration; they do not define its primary
+ * identity. It holds members, sources, connections, projects, capsules, the
+ * dependency graph, policy, activity, and optional billing. A personal
+ * Workspace is auto-created on first login.
  *
  */
 
@@ -40,12 +41,14 @@ export interface WorkspaceMember {
 }
 
 /**
- * Allowed shape of a Workspace `handle` (the user-chosen, globally unique
- * identifier shown as `@handle`). Lowercase letter/digit start, then 1-38 more
- * letters/digits/hyphens — 2-39 chars total, no uppercase, underscore, or
- * leading hyphen. This is the single source of truth: the control-plane service
- * (`core/domains/workspaces`) validates against this same pattern, and the
- * dashboard create form mirrors it for inline feedback.
+ * Allowed shape of a Workspace `handle`, a stable, globally unique public API
+ * identifier written as `@handle` when needed. API and CLI callers may supply
+ * it, but it is not the primary display identity or a required user choice;
+ * first-party dashboard flows generate it and surface it only for
+ * disambiguation or advanced details. Lowercase letter/digit start, then 1-38
+ * more letters/digits/hyphens — 2-39 chars total, no uppercase, underscore,
+ * or leading hyphen. This is the single source of truth: the control-plane
+ * service (`core/domains/workspaces`) validates against this same pattern.
  */
 export const WORKSPACE_HANDLE_PATTERN = /^[a-z0-9][a-z0-9-]{1,38}$/;
 
@@ -55,15 +58,14 @@ export function isValidWorkspaceHandle(handle: string): boolean {
 }
 
 /**
- * Derive a candidate Workspace handle from free-form text (typically the
- * display name) so the create form can pre-fill an editable id. Lowercases,
- * turns runs of unsupported characters into single hyphens, trims leading /
- * trailing hyphens, and clips to the 39-char maximum.
+ * Derive a candidate Workspace handle from free-form text for callers that
+ * need a deterministic public identifier. Lowercases, turns runs of
+ * unsupported characters into single hyphens, trims leading / trailing
+ * hyphens, and clips to the 39-char maximum.
  *
  * Returns `""` when nothing usable remains (e.g. a purely non-ASCII name like
- * "新プロジェクト") — the caller then leaves the id field for manual entry
- * rather than inventing a meaningless handle. A single leftover character is
- * also rejected because the pattern requires at least two.
+ * "新プロジェクト"). A single leftover character is also rejected because
+ * the pattern requires at least two.
  */
 export function slugifyWorkspaceHandle(input: string): string {
   const slug = input
@@ -77,8 +79,9 @@ export function slugifyWorkspaceHandle(input: string): string {
 
 export interface Workspace {
   readonly id: string;
-  /** Unique handle without the `@` prefix (`acme` for `@acme`). */
+  /** Stable, globally unique public API identifier without the `@` prefix. */
   readonly handle: string;
+  /** Primary human-facing Workspace identity. */
   readonly displayName: string;
   readonly type: WorkspaceType;
   readonly ownerUserId: string;
@@ -148,13 +151,13 @@ export interface PublicWorkspaceListPage {
   readonly pinnedWorkspaceId?: string;
 }
 
-/** Capsule full name (`@workspace/name`) helper shape. */
+/** Capsule full name (`@handle/name`) helper shape. */
 export interface CapsuleFullName {
   readonly workspaceHandle: string;
   readonly capsuleName: string;
 }
 
-/** Formats `@workspace/name`. */
+/** Formats `@handle/name` using the Workspace's stable public identifier. */
 export function formatCapsuleFullName(name: CapsuleFullName): string {
   return `@${name.workspaceHandle}/${name.capsuleName}`;
 }
