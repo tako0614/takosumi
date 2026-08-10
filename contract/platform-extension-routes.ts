@@ -11,8 +11,9 @@
  * Deliberately narrower than all of `/v1`: operator extensions such as
  * `/v1/billing` and `/v1/cloud` are valid, while concrete Takosumi/Accounts
  * authorities are not. The `/.well-known` namespace is handled separately:
- * the root and the two core leaves stay reserved, while an explicitly exact
- * descriptor may claim an unknown sibling without claiming the namespace.
+ * the root, the two core leaves, and the retired Takoform v1alpha1/v1alpha2/
+ * v1alpha3 leaves stay reserved, while an explicitly exact descriptor may
+ * claim an unknown sibling without claiming the namespace.
  */
 export const PLATFORM_EXTENSION_RESERVED_PREFIXES = [
   "/api",
@@ -41,18 +42,30 @@ export const PLATFORM_EXTENSION_RESERVED_PREFIXES = [
   "/v1/target-pools",
   "/v1/space-policies",
   "/apis/forms.takoform.com/v1alpha1",
+  "/apis/forms.takoform.com/v1alpha2",
+  "/apis/forms.takoform.com/v1alpha3",
 ] as const;
 
-/** Exact well-known routes owned by Takosumi or its Accounts/OIDC issuer. */
+/** Exact well-known routes owned by Takosumi/Accounts or held unavailable. */
 export const PLATFORM_EXTENSION_RESERVED_EXACT_PATHS = [
   "/.well-known",
   "/.well-known/openid-configuration",
   "/.well-known/takosumi",
+  // The retired Takoform Host namespace root itself cannot be reclaimed. It
+  // remains a parent for exact external leaves such as the current Beta path.
+  "/.well-known/takoform",
+  // Retired candidate Host discovery leaves must not be re-mounted or
+  // advertised by the generic Takosumi extension seam. The current external
+  // Beta identity is intentionally not listed and remains exact-configurable.
+  "/.well-known/takoform/v1alpha1",
+  "/.well-known/takoform/v1alpha2",
+  "/.well-known/takoform/v1alpha3",
 ] as const;
 
 /** External-standard namespaces where only explicit exact leaves may mount. */
 export const PLATFORM_EXTENSION_EXACT_LEAF_PARENT_PREFIXES = [
   "/.well-known",
+  "/.well-known/takoform",
 ] as const;
 
 export type PlatformExtensionMatchMode = "subtree" | "exact";

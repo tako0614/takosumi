@@ -7,11 +7,15 @@ import {
   platformExtensionRouteMatchesPath,
 } from "../../contract/platform-extension-routes.ts";
 
-test("well-known reservation keeps core leaves and root unclaimable", () => {
+test("well-known reservation keeps core and retired leaves unclaimable", () => {
   expect(PLATFORM_EXTENSION_RESERVED_EXACT_PATHS).toEqual([
     "/.well-known",
     "/.well-known/openid-configuration",
     "/.well-known/takosumi",
+    "/.well-known/takoform",
+    "/.well-known/takoform/v1alpha1",
+    "/.well-known/takoform/v1alpha2",
+    "/.well-known/takoform/v1alpha3",
   ]);
   expect(PLATFORM_EXTENSION_RESERVED_PREFIXES).not.toContain("/.well-known");
 
@@ -22,7 +26,7 @@ test("well-known reservation keeps core leaves and root unclaimable", () => {
 });
 
 test("exact leaves can mount under well-known without opening its namespace", () => {
-  const takoform = "/.well-known/takoform/v1alpha3";
+  const takoform = "/.well-known/takoform/v1beta1";
   const sibling = "/.well-known/social-server";
 
   expect(platformExtensionBasePathIsReserved(takoform, "subtree")).toBe(true);
@@ -39,6 +43,21 @@ test("exact leaves can mount under well-known without opening its namespace", ()
   expect(
     platformExtensionRouteMatchesPath(`${takoform}/extra`, takoform, "subtree"),
   ).toBe(true);
+});
+
+test("retired Takoform Host discovery leaves remain reserved", () => {
+  expect(
+    platformExtensionBasePathIsReserved("/.well-known/takoform", "exact"),
+  ).toBe(true);
+  for (const path of [
+    "/.well-known/takoform/v1alpha1",
+    "/.well-known/takoform/v1alpha2",
+    "/.well-known/takoform/v1alpha3",
+  ]) {
+    for (const matchMode of ["subtree", "exact"] as const) {
+      expect(platformExtensionBasePathIsReserved(path, matchMode)).toBe(true);
+    }
+  }
 });
 
 test("exact leaves cannot be nested below core well-known leaves", () => {
@@ -61,5 +80,20 @@ test("retired Form activation routes remain core-owned in every match mode", () 
         matchMode,
       ),
     ).toBe(true);
+  }
+});
+
+test("retired Takoform Host API prefixes remain core-owned", () => {
+  for (const path of [
+    "/apis/forms.takoform.com/v1alpha2",
+    "/apis/forms.takoform.com/v1alpha3",
+  ]) {
+    expect(PLATFORM_EXTENSION_RESERVED_PREFIXES).toContain(path);
+    for (const matchMode of ["subtree", "exact"] as const) {
+      expect(platformExtensionBasePathIsReserved(path, matchMode)).toBe(true);
+      expect(
+        platformExtensionBasePathIsReserved(`${path}/resources`, matchMode),
+      ).toBe(true);
+    }
   }
 });

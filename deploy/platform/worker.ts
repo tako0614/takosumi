@@ -1167,7 +1167,7 @@ export default {
     }
     // Configured extension routes are composed before the retired Flow-B
     // drain. This keeps an explicitly declared exact external-standard leaf
-    // (for example `/.well-known/takoform/v1alpha3`) on the same generic
+    // (for example `/.well-known/takoform/v1beta1`) on the same generic
     // handler/auth seam as every other extension, without a Takoform branch.
     // Malformed optional configuration remains unclaimed and cannot take a
     // known core path down with it.
@@ -1572,9 +1572,21 @@ export function isPlatformOfferingApiPath(pathname: string): boolean {
 function isPlatformLegacyResourceShapePath(pathname: string): boolean {
   return (
     isPathOrSubpath(pathname, TAKOFORM_FORM_HOST_WELL_KNOWN_PATH) ||
-    isPathOrSubpath(pathname, TAKOFORM_FORM_HOST_API_PATH) ||
+    isRetiredTakoformHostApiPath(pathname) ||
     isPlatformResourceShapeApiPath(pathname) ||
     isPathOrSubpath(pathname, "/v1/form-activations")
+  );
+}
+
+const RETIRED_TAKOFORM_HOST_API_PATHS = [
+  TAKOFORM_FORM_HOST_API_PATH,
+  "/apis/forms.takoform.com/v1alpha2",
+  "/apis/forms.takoform.com/v1alpha3",
+] as const;
+
+function isRetiredTakoformHostApiPath(pathname: string): boolean {
+  return RETIRED_TAKOFORM_HOST_API_PATHS.some((path) =>
+    isPathOrSubpath(pathname, path),
   );
 }
 
@@ -1585,7 +1597,7 @@ function isPathOrSubpath(pathname: string, prefix: string): boolean {
 function isPlatformTakoformHostPath(pathname: string): boolean {
   return (
     isPathOrSubpath(pathname, TAKOFORM_FORM_HOST_WELL_KNOWN_PATH) ||
-    isPathOrSubpath(pathname, TAKOFORM_FORM_HOST_API_PATH)
+    isRetiredTakoformHostApiPath(pathname)
   );
 }
 
