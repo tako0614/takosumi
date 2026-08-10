@@ -794,6 +794,15 @@ export interface OpenTofuControlStore {
     workspaceId: string,
     capsuleId: string,
   ): Promise<CapsuleExecutionAuthority | undefined>;
+  /**
+   * Ordered batch form of {@link resolveCapsuleExecutionAuthority}. The result
+   * at each index belongs to the input at the same index, including duplicate
+   * pairs. Durable adapters resolve the whole batch in one database statement
+   * so callers cannot observe a different runtime-safety snapshot per item.
+   */
+  resolveCapsuleExecutionAuthorities(
+    inputs: readonly CapsuleExecutionAuthorityInput[],
+  ): Promise<readonly (CapsuleExecutionAuthority | undefined)[]>;
   getCapsule(id: string): Promise<Capsule | undefined>;
   getCapsulesByIds(ids: readonly string[]): Promise<readonly Capsule[]>;
   getCapsuleByName(
@@ -1107,11 +1116,18 @@ export interface CapsuleExecutionAuthority {
   readonly executionAuthorityEpoch: number;
 }
 
+export interface CapsuleExecutionAuthorityInput {
+  readonly workspaceId: string;
+  readonly capsuleId: string;
+}
+
 export interface CapsuleExecutionAuthorityResolver {
-  resolveExact(input: {
-    readonly workspaceId: string;
-    readonly capsuleId: string;
-  }): Promise<CapsuleExecutionAuthority | undefined>;
+  resolveExact(
+    input: CapsuleExecutionAuthorityInput,
+  ): Promise<CapsuleExecutionAuthority | undefined>;
+  resolveExactMany(
+    inputs: readonly CapsuleExecutionAuthorityInput[],
+  ): Promise<readonly (CapsuleExecutionAuthority | undefined)[]>;
 }
 
 /**
@@ -1124,7 +1140,11 @@ export interface CapsuleExecutionAuthorityResolver {
  * point; the outer adapter never composes separate reads.
  */
 export function createCapsuleExecutionAuthorityResolver(
-  store: Pick<OpenTofuControlStore, "resolveCapsuleExecutionAuthority">,
+  store: Pick<
+    OpenTofuControlStore,
+    | "resolveCapsuleExecutionAuthority"
+    | "resolveCapsuleExecutionAuthorities"
+  >,
 ): CapsuleExecutionAuthorityResolver {
   return {
     resolveExact(input) {
@@ -1132,6 +1152,9 @@ export function createCapsuleExecutionAuthorityResolver(
         input.workspaceId,
         input.capsuleId,
       );
+    },
+    resolveExactMany(inputs) {
+      return store.resolveCapsuleExecutionAuthorities(inputs);
     },
   };
 }
@@ -1836,6 +1859,25 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     workspaceId: string,
     capsuleId: string,
   ): Promise<CapsuleExecutionAuthority | undefined> {
+    return Promise.resolve(
+      this.#resolveCapsuleExecutionAuthority(workspaceId, capsuleId),
+    );
+  }
+
+  resolveCapsuleExecutionAuthorities(
+    inputs: readonly CapsuleExecutionAuthorityInput[],
+  ): Promise<readonly (CapsuleExecutionAuthority | undefined)[]> {
+    return Promise.resolve(
+      inputs.map(({ workspaceId, capsuleId }) =>
+        this.#resolveCapsuleExecutionAuthority(workspaceId, capsuleId),
+      ),
+    );
+  }
+
+  #resolveCapsuleExecutionAuthority(
+    workspaceId: string,
+    capsuleId: string,
+  ): CapsuleExecutionAuthority | undefined {
     const capsule = this.#capsules.get(capsuleId);
     const safety = this.#capsuleRuntimeSafety(capsuleId);
     if (
@@ -1844,14 +1886,14 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
       capsule.status === "destroyed" ||
       (safety !== undefined && safety.phase !== "safe")
     ) {
-      return Promise.resolve(undefined);
+      return undefined;
     }
-    return Promise.resolve({
+    return {
       workspaceId,
       capsuleId,
       executionAuthorityEpoch:
         this.#capsuleExecutionAuthorityEpochs.get(capsuleId) ?? 1,
-    });
+    };
   }
 
   getCapsule(id: string): Promise<Capsule | undefined> {

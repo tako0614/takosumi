@@ -97,6 +97,7 @@ import type {
   BeginResourceOperationRunResult,
   BeginApplyRunResult,
   CapsuleExecutionAuthority,
+  CapsuleExecutionAuthorityInput,
   CapsuleRuntimeSafety,
   CapsulePatch,
   CapsuleStateVersionGuard,
@@ -297,6 +298,197 @@ function d1RuntimeSafetyCandidateWhere(capsuleId: string): SQL | undefined {
     ),
   );
 }
+
+/**
+ * One ordered snapshot query for the exact Workspace/Capsule batch seam.
+ *
+ * The JSON request CTE keeps D1 at one bound parameter regardless of batch
+ * size, preserves duplicate pairs by their array index, and avoids the
+ * per-item statement interleaving that would make runtime safety non-atomic.
+ * Keep the candidate predicate and ordering in lockstep with the single-item
+ * Drizzle query and the shared runtime-safety model above.
+ */
+const D1_CAPSULE_EXECUTION_AUTHORITY_BATCH_SQL = `
+with ordered_capsule_authority_requests as (
+  select
+    cast(request.key as integer) as request_index,
+    json_extract(request.value, '$.workspaceId') as workspace_id,
+    json_extract(request.value, '$.capsuleId') as capsule_id
+  from json_each(?) as request
+),
+requested_capsule_ids as (
+  select distinct capsule_id
+  from ordered_capsule_authority_requests
+),
+latest_capsule_runtime_safety as (
+  select
+    request.capsule_id,
+    (
+      select candidate.run_json
+      from runs as candidate
+      where candidate.installation_id = request.capsule_id
+        and (
+          (
+            candidate.type = 'apply'
+            and (
+              candidate.status = 'succeeded'
+              or (
+                candidate.status = 'failed'
+                and exists (
+                  select 1
+                  from json_each(candidate.run_json, '$.auditEvents') as audit_event
+                  where json_extract(
+                    audit_event.value,
+                    '$.data.providerDispatched'
+                  ) = 1
+                     or json_extract(
+                       audit_event.value,
+                       '$.data.lifecycleActionDispatched'
+                     ) = 1
+                )
+              )
+              or (
+                candidate.status = 'expired'
+                and json_extract(candidate.run_json, '$.startedAt') is not null
+              )
+            )
+          )
+          or (
+            candidate.type = 'destroy_apply'
+            and (
+              candidate.status in ('queued', 'running', 'succeeded')
+              or (
+                candidate.status = 'failed'
+                and exists (
+                  select 1
+                  from json_each(candidate.run_json, '$.auditEvents') as audit_event
+                  where json_extract(
+                    audit_event.value,
+                    '$.data.providerDispatched'
+                  ) = 1
+                     or json_extract(
+                       audit_event.value,
+                       '$.data.lifecycleActionDispatched'
+                     ) = 1
+                )
+              )
+              or (
+                candidate.status = 'expired'
+                and json_extract(candidate.run_json, '$.startedAt') is not null
+              )
+            )
+          )
+          or (
+            candidate.type = 'restore'
+            and candidate.status in (
+              'queued', 'running', 'succeeded', 'failed', 'expired'
+            )
+          )
+        )
+      order by
+        case
+          when candidate.type = 'destroy_apply'
+            and candidate.status in ('queued', 'running') then 1
+          when candidate.type = 'restore'
+            and candidate.status in ('queued', 'running') then 1
+          else 0
+        end desc,
+        case
+          when candidate.type in ('apply', 'destroy_apply') then coalesce(
+            cast(json_extract(candidate.run_json, '$.finishedAt') as real),
+            cast(json_extract(candidate.run_json, '$.updatedAt') as real),
+            candidate.heartbeat_at,
+            cast(json_extract(candidate.run_json, '$.startedAt') as real),
+            case
+              when candidate.created_at <> ''
+                and candidate.created_at not glob '*[^0-9]*'
+                then cast(candidate.created_at as integer)
+              else (
+                cast(strftime('%s', candidate.created_at) as integer) * 1000
+                + cast(substr(strftime('%f', candidate.created_at), 4, 3) as integer)
+              )
+            end
+          )
+          when candidate.type = 'restore' then coalesce(
+            cast(
+              strftime(
+                '%s',
+                json_extract(candidate.run_json, '$.finishedAt')
+              ) as integer
+            ) * 1000 + cast(
+              substr(
+                strftime(
+                  '%f',
+                  json_extract(candidate.run_json, '$.finishedAt')
+                ),
+                4,
+                3
+              ) as integer
+            ),
+            candidate.heartbeat_at,
+            cast(
+              strftime(
+                '%s',
+                json_extract(candidate.run_json, '$.startedAt')
+              ) as integer
+            ) * 1000 + cast(
+              substr(
+                strftime(
+                  '%f',
+                  json_extract(candidate.run_json, '$.startedAt')
+                ),
+                4,
+                3
+              ) as integer
+            ),
+            case
+              when candidate.created_at <> ''
+                and candidate.created_at not glob '*[^0-9]*'
+                then cast(candidate.created_at as integer)
+              else (
+                cast(strftime('%s', candidate.created_at) as integer) * 1000
+                + cast(substr(strftime('%f', candidate.created_at), 4, 3) as integer)
+              )
+            end
+          )
+          else case
+            when candidate.created_at <> ''
+              and candidate.created_at not glob '*[^0-9]*'
+              then cast(candidate.created_at as integer)
+            else (
+              cast(strftime('%s', candidate.created_at) as integer) * 1000
+              + cast(substr(strftime('%f', candidate.created_at), 4, 3) as integer)
+            )
+          end
+        end desc,
+        case
+          when candidate.type = 'destroy_apply'
+            and candidate.status = 'succeeded' then 3
+          when candidate.type = 'destroy_apply'
+            and candidate.status in ('queued', 'running') then 2
+          when candidate.status in ('failed', 'expired') then 1
+          when candidate.type = 'restore'
+            and candidate.status in ('queued', 'running') then 1
+          else 0
+        end desc,
+        candidate.id desc
+      limit 1
+    ) as safety_json
+  from requested_capsule_ids as request
+)
+select
+  request.request_index,
+  capsule.execution_authority_epoch as epoch,
+  safety.safety_json
+from ordered_capsule_authority_requests as request
+left join capsules as capsule
+  on capsule.space_id = request.workspace_id
+ and capsule.id = request.capsule_id
+ and capsule.status <> 'destroyed'
+left join latest_capsule_runtime_safety as safety
+  on safety.capsule_id = request.capsule_id
+order by request.request_index
+`;
 
 /** Mirrors applyRunMutationDispatched in the shared store model. */
 function d1RunMutationDispatched(): SQL {
@@ -1777,6 +1969,44 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     return safety !== undefined && safety.phase !== "safe"
       ? undefined
       : { workspaceId, capsuleId, executionAuthorityEpoch: row.epoch };
+  }
+
+  async resolveCapsuleExecutionAuthorities(
+    inputs: readonly CapsuleExecutionAuthorityInput[],
+  ): Promise<readonly (CapsuleExecutionAuthority | undefined)[]> {
+    if (inputs.length === 0) return [];
+    await this.#ensureSchema();
+    const rows = await this.db
+      .prepare(D1_CAPSULE_EXECUTION_AUTHORITY_BATCH_SQL)
+      .bind(JSON.stringify(inputs))
+      .all<{
+        readonly request_index: number;
+        readonly epoch: number | null;
+        readonly safety_json: unknown | null;
+      }>();
+    const resolved: (CapsuleExecutionAuthority | undefined)[] = inputs.map(
+      () => undefined,
+    );
+    for (const row of rows.results ?? []) {
+      const index = Number(row.request_index);
+      const input = inputs[index];
+      if (!Number.isSafeInteger(index) || index < 0 || input === undefined) {
+        throw new Error("D1 Capsule execution-authority batch index is invalid");
+      }
+      if (row.epoch === null) continue;
+      const safety = row.safety_json === null
+        ? undefined
+        : capsuleRuntimeSafetyFromRun(
+            jsonRecordFromD1Value(row.safety_json) as unknown as ApplyRun | Run,
+          );
+      if (safety !== undefined && safety.phase !== "safe") continue;
+      resolved[index] = {
+        workspaceId: input.workspaceId,
+        capsuleId: input.capsuleId,
+        executionAuthorityEpoch: Number(row.epoch),
+      };
+    }
+    return resolved;
   }
 
   async getCapsule(id: string): Promise<Capsule | undefined> {

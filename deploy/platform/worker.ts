@@ -47,7 +47,10 @@ import {
 } from "../../worker/src/handler.ts";
 import { cachedDeployControlService } from "../../worker/src/deploy_control_seam.ts";
 import { createCloudflareD1OpenTofuControlStore } from "../../worker/src/d1_opentofu_store.ts";
-import type { OpenTofuControlStore } from "../../core/domains/deploy-control/store.ts";
+import type {
+  CapsuleExecutionAuthorityResolver,
+  OpenTofuControlStore,
+} from "../../core/domains/deploy-control/store.ts";
 import { recordWorkerMetric } from "../../worker/src/metrics.ts";
 import {
   driftSweep,
@@ -235,6 +238,17 @@ export async function platformRuntimeCapabilityReader(
     throw new Error("runtime capability reader is unavailable");
   }
   return reader;
+}
+
+/**
+ * Public host-composition port for exact Workspace/Capsule execution authority.
+ * This returns the resolver already wired over the cached service's shared
+ * control store; it never creates a second D1 adapter or composes per-item reads.
+ */
+export async function platformCapsuleExecutionAuthority(
+  env: CloudflareWorkerEnv,
+): Promise<CapsuleExecutionAuthorityResolver> {
+  return (await takosumiOperationsFor(env)).capsuleExecutionAuthority;
 }
 
 // In-process deploy-control seam, one cached service per env, shared with the

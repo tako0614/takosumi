@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { Miniflare } from "miniflare";
 import type { ApplyRun } from "@takosumi/internal/deploy-control-api";
 import type { Capsule } from "takosumi-contract/capsules";
 
@@ -30,6 +31,10 @@ import type {
 const NOW = "2026-08-10T00:00:00.000Z";
 const WORKSPACE_ID = "workspace_authority";
 const CAPSULE_ID = "capsule_authority";
+const BATCH_CAPSULE_A = "capsule_authority_batch_a";
+const BATCH_CAPSULE_B = "capsule_authority_batch_b";
+const BATCH_CAPSULE_DESTROYED = "capsule_authority_batch_destroyed";
+const BATCH_CAPSULE_UNSAFE = "capsule_authority_batch_unsafe";
 const clients: PGliteSqlClient[] = [];
 
 interface RecordedQuery {
@@ -134,6 +139,87 @@ function terminatingRun(status: "queued" | "failed"): ApplyRun {
     startedAt: 1,
     ...(status === "failed" ? { finishedAt: 2 } : {}),
   };
+}
+
+function batchCapsule(
+  capsuleId: string,
+  status: Capsule["status"] = "active",
+): Capsule {
+  return {
+    ...capsule(status),
+    id: capsuleId,
+    projectId: `project_${capsuleId}`,
+    name: capsuleId,
+    slug: capsuleId,
+  };
+}
+
+function batchTerminatingRun(capsuleId: string): ApplyRun {
+  const run = terminatingRun("queued");
+  return {
+    ...run,
+    id: `run_destroy_${capsuleId}`,
+    planRunId: `plan_destroy_${capsuleId}`,
+    capsuleId,
+    expected: {
+      ...run.expected,
+      planRunId: `plan_destroy_${capsuleId}`,
+      capsuleId,
+    },
+  };
+}
+
+const batchAuthorityInputs = [
+  { workspaceId: WORKSPACE_ID, capsuleId: BATCH_CAPSULE_B },
+  { workspaceId: WORKSPACE_ID, capsuleId: BATCH_CAPSULE_A },
+  { workspaceId: WORKSPACE_ID, capsuleId: BATCH_CAPSULE_B },
+  { workspaceId: WORKSPACE_ID, capsuleId: "capsule_authority_batch_missing" },
+  { workspaceId: "workspace_foreign", capsuleId: BATCH_CAPSULE_A },
+  { workspaceId: WORKSPACE_ID, capsuleId: BATCH_CAPSULE_DESTROYED },
+  { workspaceId: WORKSPACE_ID, capsuleId: BATCH_CAPSULE_UNSAFE },
+] as const;
+
+const batchAuthorityExpected = [
+  {
+    workspaceId: WORKSPACE_ID,
+    capsuleId: BATCH_CAPSULE_B,
+    executionAuthorityEpoch: 1,
+  },
+  {
+    workspaceId: WORKSPACE_ID,
+    capsuleId: BATCH_CAPSULE_A,
+    executionAuthorityEpoch: 1,
+  },
+  {
+    workspaceId: WORKSPACE_ID,
+    capsuleId: BATCH_CAPSULE_B,
+    executionAuthorityEpoch: 1,
+  },
+  undefined,
+  undefined,
+  undefined,
+  undefined,
+] as const;
+
+async function seedBatchAuthorities(
+  store: OpenTofuControlStore,
+): Promise<void> {
+  await store.putCapsule(batchCapsule(BATCH_CAPSULE_A));
+  await store.putCapsule(batchCapsule(BATCH_CAPSULE_B));
+  await store.putCapsule(
+    batchCapsule(BATCH_CAPSULE_DESTROYED, "destroyed"),
+  );
+  await store.putCapsule(batchCapsule(BATCH_CAPSULE_UNSAFE));
+  await store.putApplyRun(batchTerminatingRun(BATCH_CAPSULE_UNSAFE));
+}
+
+async function expectBatchAuthorityParity(
+  store: OpenTofuControlStore,
+): Promise<void> {
+  await seedBatchAuthorities(store);
+  await expect(
+    store.resolveCapsuleExecutionAuthorities(batchAuthorityInputs),
+  ).resolves.toEqual(batchAuthorityExpected);
 }
 
 async function expectLifecycleParity(
@@ -249,6 +335,72 @@ describe("Capsule execution authority", () => {
     ]);
   });
 
+  test("ordered batches preserve duplicates and fail closed across all stores", async () => {
+    const client = await PGliteSqlClient.create();
+    clients.push(client);
+    await expectBatchAuthorityParity(new InMemoryOpenTofuControlStore());
+    await expectBatchAuthorityParity(
+      new CloudflareD1OpenTofuControlStore(new SqliteFakeD1()),
+    );
+    await expectBatchAuthorityParity(new SqlOpenTofuControlStore({ client }));
+  });
+
+  test("D1 resolves an ordered authority batch in one json_each statement", async () => {
+    const records: RecordedQuery[] = [];
+    const database = new SqliteFakeD1();
+    const store = new CloudflareD1OpenTofuControlStore(
+      recordingD1(database, records),
+    );
+    await seedBatchAuthorities(store);
+    records.length = 0;
+
+    await expect(
+      store.resolveCapsuleExecutionAuthorities(batchAuthorityInputs),
+    ).resolves.toEqual(batchAuthorityExpected);
+
+    const authorityStatements = records.filter((record) =>
+      record.sql.includes("ordered_capsule_authority_requests"),
+    );
+    expect(authorityStatements).toHaveLength(1);
+    const [authorityStatement] = authorityStatements;
+    if (!authorityStatement) throw new Error("D1 batch statement is missing");
+    expect(authorityStatement.sql).toContain("json_each");
+    expect(authorityStatement.parameters).toHaveLength(1);
+    const plan = await database
+      .prepare(`explain query plan ${authorityStatement.sql}`)
+      .bind(...authorityStatement.parameters)
+      .all<{ readonly detail: string }>();
+    const details = (plan.results ?? []).map((row) => row.detail);
+    expect(details.some((detail) =>
+      detail.includes("capsules_execution_authority_exact_idx")
+    )).toBe(true);
+    expect(details.some((detail) => detail.includes("runs_installation_idx")))
+      .toBe(true);
+  });
+
+  test("ordered authority batches execute on an isolated workerd D1", async () => {
+    const runtime = new Miniflare({
+      compatibilityDate: "2026-07-17",
+      modules: [
+        {
+          type: "ESModule",
+          path: "capsule-execution-authority-workerd.mjs",
+          contents: "export default {fetch(){return new Response('ok')}}",
+        },
+      ],
+      d1Databases: { CONTROL: "capsule-execution-authority-workerd" },
+    });
+    try {
+      const database = await runtime.getD1Database("CONTROL");
+      const store = new CloudflareD1OpenTofuControlStore(
+        database as unknown as D1Database,
+      );
+      await expectBatchAuthorityParity(store);
+    } finally {
+      await runtime.dispose();
+    }
+  }, 10_000);
+
   test("durable resolvers use one indexed database snapshot", async () => {
     const d1Records: RecordedQuery[] = [];
     const database = new SqliteFakeD1();
@@ -333,6 +485,13 @@ describe("Capsule execution authority", () => {
           ? { workspaceId, capsuleId, executionAuthorityEpoch: 7 }
           : undefined;
       },
+      async resolveCapsuleExecutionAuthorities(inputs) {
+        return inputs.map(({ workspaceId, capsuleId }) =>
+          phase === "safe"
+            ? { workspaceId, capsuleId, executionAuthorityEpoch: 7 }
+            : undefined,
+        );
+      },
     });
 
     await expect(
@@ -369,6 +528,10 @@ describe("Capsule execution authority", () => {
         phase = "terminating";
         return undefined;
       },
+      async resolveCapsuleExecutionAuthorities() {
+        phase = "terminating";
+        return [];
+      },
       async getCapsuleExecutionAuthority(workspaceId: string, capsuleId: string) {
         legacyReads += 1;
         if (legacyReads === 2) phase = "terminating";
@@ -394,6 +557,45 @@ describe("Capsule execution authority", () => {
     ).resolves.toBeUndefined();
     expect(atomicReads).toBe(1);
     expect(legacyReads).toBe(0);
+  });
+
+  test("batch resolver delegates once without per-item interleaving", async () => {
+    let singleReads = 0;
+    let batchReads = 0;
+    const resolver = createCapsuleExecutionAuthorityResolver({
+      async resolveCapsuleExecutionAuthority(workspaceId, capsuleId) {
+        singleReads += 1;
+        return { workspaceId, capsuleId, executionAuthorityEpoch: singleReads };
+      },
+      async resolveCapsuleExecutionAuthorities(inputs) {
+        batchReads += 1;
+        return inputs.map(({ workspaceId, capsuleId }) => ({
+          workspaceId,
+          capsuleId,
+          executionAuthorityEpoch: 11,
+        }));
+      },
+    });
+
+    await expect(
+      resolver.resolveExactMany([
+        { workspaceId: WORKSPACE_ID, capsuleId: BATCH_CAPSULE_A },
+        { workspaceId: WORKSPACE_ID, capsuleId: BATCH_CAPSULE_B },
+      ]),
+    ).resolves.toEqual([
+      {
+        workspaceId: WORKSPACE_ID,
+        capsuleId: BATCH_CAPSULE_A,
+        executionAuthorityEpoch: 11,
+      },
+      {
+        workspaceId: WORKSPACE_ID,
+        capsuleId: BATCH_CAPSULE_B,
+        executionAuthorityEpoch: 11,
+      },
+    ]);
+    expect(batchReads).toBe(1);
+    expect(singleReads).toBe(0);
   });
 
   test("D1 v64 upgrades a populated v63 row and fences an older writer", async () => {

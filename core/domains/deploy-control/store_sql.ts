@@ -83,6 +83,7 @@ import type {
   BeginResourceOperationRunResult,
   BeginApplyRunResult,
   CapsuleExecutionAuthority,
+  CapsuleExecutionAuthorityInput,
   CapsuleRuntimeSafety,
   CapsulePatch,
   CapsuleStateVersionGuard,
@@ -261,6 +262,153 @@ function pgRuntimeSafetyCandidateWhere(capsuleId: string): SQL | undefined {
     ),
   );
 }
+
+/** PostgreSQL counterpart of the ordered D1 authority snapshot statement. */
+const PG_CAPSULE_EXECUTION_AUTHORITY_BATCH_SQL = `
+with ordered_capsule_authority_requests as (
+  select
+    (request.ordinality - 1)::integer as request_index,
+    request.value ->> 'workspaceId' as workspace_id,
+    request.value ->> 'capsuleId' as capsule_id
+  from jsonb_array_elements($1::jsonb) with ordinality
+    as request(value, ordinality)
+),
+requested_capsule_ids as (
+  select distinct capsule_id
+  from ordered_capsule_authority_requests
+),
+latest_capsule_runtime_safety as (
+  select
+    request.capsule_id,
+    candidate.run_json as safety_json
+  from requested_capsule_ids as request
+  left join lateral (
+    select candidate.run_json
+    from takosumi_runs as candidate
+    where candidate.installation_id = request.capsule_id
+      and (
+        (
+          candidate.kind = 'apply'
+          and (
+            candidate.status = 'succeeded'
+            or (
+              candidate.status = 'failed'
+              and exists (
+                select 1
+                from jsonb_array_elements(
+                  coalesce(candidate.run_json -> 'auditEvents', '[]'::jsonb)
+                ) as audit_event
+                where audit_event -> 'data' ->> 'providerDispatched' = 'true'
+                   or audit_event -> 'data' ->> 'lifecycleActionDispatched' = 'true'
+              )
+            )
+            or (
+              candidate.status = 'expired'
+              and nullif(candidate.run_json ->> 'startedAt', '') is not null
+            )
+          )
+        )
+        or (
+          candidate.kind = 'destroy_apply'
+          and (
+            candidate.status in ('queued', 'running', 'succeeded')
+            or (
+              candidate.status = 'failed'
+              and exists (
+                select 1
+                from jsonb_array_elements(
+                  coalesce(candidate.run_json -> 'auditEvents', '[]'::jsonb)
+                ) as audit_event
+                where audit_event -> 'data' ->> 'providerDispatched' = 'true'
+                   or audit_event -> 'data' ->> 'lifecycleActionDispatched' = 'true'
+              )
+            )
+            or (
+              candidate.status = 'expired'
+              and nullif(candidate.run_json ->> 'startedAt', '') is not null
+            )
+          )
+        )
+        or (
+          candidate.kind = 'restore'
+          and candidate.status in (
+            'queued', 'running', 'succeeded', 'failed', 'expired'
+          )
+        )
+      )
+    order by
+      case
+        when candidate.kind = 'destroy_apply'
+          and candidate.status in ('queued', 'running') then 1
+        when candidate.kind = 'restore'
+          and candidate.status in ('queued', 'running') then 1
+        else 0
+      end desc,
+      case
+        when candidate.kind in ('apply', 'destroy_apply') then coalesce(
+          nullif(candidate.run_json ->> 'finishedAt', '')::double precision,
+          nullif(candidate.run_json ->> 'updatedAt', '')::double precision,
+          candidate.heartbeat_at::double precision,
+          nullif(candidate.run_json ->> 'startedAt', '')::double precision,
+          case
+            when candidate.created_at ~ '^[0-9]+$'
+              then candidate.created_at::double precision
+            else extract(epoch from candidate.created_at::timestamptz) * 1000
+          end
+        )
+        when candidate.kind = 'restore' then coalesce(
+          extract(
+            epoch from nullif(
+              candidate.run_json ->> 'finishedAt',
+              ''
+            )::timestamptz
+          ) * 1000,
+          candidate.heartbeat_at::double precision,
+          extract(
+            epoch from nullif(
+              candidate.run_json ->> 'startedAt',
+              ''
+            )::timestamptz
+          ) * 1000,
+          case
+            when candidate.created_at ~ '^[0-9]+$'
+              then candidate.created_at::double precision
+            else extract(epoch from candidate.created_at::timestamptz) * 1000
+          end
+        )
+        else case
+          when candidate.created_at ~ '^[0-9]+$'
+            then candidate.created_at::double precision
+          else extract(epoch from candidate.created_at::timestamptz) * 1000
+        end
+      end desc,
+      case
+        when candidate.kind = 'destroy_apply'
+          and candidate.status = 'succeeded' then 3
+        when candidate.kind = 'destroy_apply'
+          and candidate.status in ('queued', 'running') then 2
+        when candidate.status in ('failed', 'expired') then 1
+        when candidate.kind = 'restore'
+          and candidate.status in ('queued', 'running') then 1
+        else 0
+      end desc,
+      candidate.id desc
+    limit 1
+  ) as candidate on true
+)
+select
+  request.request_index,
+  capsule.execution_authority_epoch as epoch,
+  safety.safety_json
+from ordered_capsule_authority_requests as request
+left join takosumi_capsules as capsule
+  on capsule.space_id = request.workspace_id
+ and capsule.id = request.capsule_id
+ and capsule.status <> 'destroyed'
+left join latest_capsule_runtime_safety as safety
+  on safety.capsule_id = request.capsule_id
+order by request.request_index
+`;
 
 /** Mirrors applyRunMutationDispatched in the shared store model. */
 function pgRunMutationDispatched(): SQL {
@@ -1503,6 +1651,42 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
           capsuleId,
           executionAuthorityEpoch: row.epoch,
         };
+  }
+
+  async resolveCapsuleExecutionAuthorities(
+    inputs: readonly CapsuleExecutionAuthorityInput[],
+  ): Promise<readonly (CapsuleExecutionAuthority | undefined)[]> {
+    if (inputs.length === 0) return [];
+    const rows = await this.#client.query<{
+      readonly request_index: number | string;
+      readonly epoch: number | string | null;
+      readonly safety_json: unknown | null;
+    }>(PG_CAPSULE_EXECUTION_AUTHORITY_BATCH_SQL, [JSON.stringify(inputs)]);
+    const resolved: (CapsuleExecutionAuthority | undefined)[] = inputs.map(
+      () => undefined,
+    );
+    for (const row of rows.rows) {
+      const index = Number(row.request_index);
+      const input = inputs[index];
+      if (!Number.isSafeInteger(index) || index < 0 || input === undefined) {
+        throw new Error(
+          "Postgres Capsule execution-authority batch index is invalid",
+        );
+      }
+      if (row.epoch === null) continue;
+      const safety = row.safety_json === null
+        ? undefined
+        : capsuleRuntimeSafetyFromRun(
+            parseJson(row.safety_json) as ApplyRun | Run,
+          );
+      if (safety !== undefined && safety.phase !== "safe") continue;
+      resolved[index] = {
+        workspaceId: input.workspaceId,
+        capsuleId: input.capsuleId,
+        executionAuthorityEpoch: Number(row.epoch),
+      };
+    }
+    return resolved;
   }
 
   async getCapsule(id: string): Promise<Capsule | undefined> {
