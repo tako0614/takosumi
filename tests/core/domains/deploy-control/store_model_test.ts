@@ -625,6 +625,62 @@ test("ProviderConnection and ProviderBinding use Workspace and Capsule ids", asy
   }
 });
 
+test("ProviderConnection reconcile create and compare-and-swap are atomic on every store backend", async () => {
+  for (const [label, store] of await stores()) {
+    const original: ProviderConnection = {
+      id: `conn_reconcile_${label}`,
+      provider: "registry.example/operator/extension",
+      providerSource: "registry.example/operator/extension",
+      scope: "operator",
+      status: "pending",
+      materialization: "legacy-managed",
+      envNames: ["EXTENSION_RUN_TOKEN"],
+      createdAt: TS,
+      updatedAt: TS,
+    };
+    expect(await store.createConnectionIfAbsent(original), label).toBe(true);
+    expect(
+      await store.createConnectionIfAbsent({
+        ...original,
+        status: "verified",
+      }),
+      label,
+    ).toBe(false);
+    expect(await store.getConnection(original.id), label).toEqual(original);
+
+    const staleExpected = {
+      ...original,
+      updatedAt: "2026-06-06T00:00:00.001Z",
+    };
+    const replacement: ProviderConnection = {
+      ...original,
+      status: "verified",
+      materialization: "run-issued",
+      updatedAt: "2026-06-06T00:00:00.002Z",
+    };
+    expect(
+      await store.replaceConnectionIfUnchanged(staleExpected, replacement),
+      label,
+    ).toBe(false);
+    expect(
+      await store.replaceConnectionIfUnchanged(original, replacement),
+      label,
+    ).toBe(true);
+    expect(await store.getConnection(original.id), label).toEqual(replacement);
+    expect(
+      await store.replaceConnectionIfUnchanged(original, replacement),
+      label,
+    ).toBe(false);
+    expect(
+      await store.replaceConnectionIfUnchanged(replacement, {
+        ...replacement,
+        id: `${replacement.id}_other`,
+      }),
+      label,
+    ).toBe(false);
+  }
+});
+
 test("Source snapshots retain canonical Workspace and Source ownership", async () => {
   for (const [label, store] of await stores()) {
     const seeded = await seedCapsuleModel(store, {

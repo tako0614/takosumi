@@ -164,6 +164,70 @@ describe("repository install UX compiler", () => {
     ]);
   });
 
+  test("compiles a v2.3 sourceBuild proposal into the DB-owned result", () => {
+    const sourceBuildDocument = {
+      apiVersion: "takosumi.com/v2.3",
+      kind: "Repository",
+      install: {
+        defaultModule: ".",
+        modules: {
+          ".": {
+            inputs: [],
+            sourceBuild: {
+              commands: [
+                { argv: ["bun", "install", "--frozen-lockfile"] },
+                { argv: ["bun", "run", "build"], workingDirectory: "web" },
+              ],
+              outputs: ["web/dist/index.js"],
+            },
+          },
+        },
+      },
+    } satisfies RepositoryManifestDocument;
+    const result = compile({
+      document: sourceBuildDocument,
+      compatibilityReport: report({
+        rootModuleVariables: [],
+        rootModuleVariableDeclarations: [],
+      }),
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.compiled.sourceBuild).toEqual(
+      sourceBuildDocument.install.modules["."].sourceBuild,
+    );
+  });
+
+  test("rejects a manually constructed sourceBuild on an earlier manifest version", () => {
+    const legacyDocument = {
+      apiVersion: "takosumi.com/v2.2",
+      kind: "Repository",
+      install: {
+        modules: {
+          ".": {
+            inputs: [],
+            sourceBuild: {
+              commands: [{ argv: ["bun", "run", "build"] }],
+              outputs: ["dist/index.js"],
+            },
+          },
+        },
+      },
+    } as unknown as RepositoryManifestDocument;
+    const result = compile({
+      document: legacyDocument,
+      compatibilityReport: report({
+        rootModuleVariables: [],
+        rootModuleVariableDeclarations: [],
+      }),
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      diagnostic: { code: "repository_install_ux_source_build_version_unsupported" },
+    });
+  });
+
   test("canonicalizes repository OIDC scopes before host runtime validation", () => {
     const runtimeDocument = {
       apiVersion: "takosumi.com/v1",

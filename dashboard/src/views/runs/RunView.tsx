@@ -29,7 +29,6 @@ import {
 } from "solid-js";
 import { useNavigate, useParams, useSearchParams } from "@solidjs/router";
 import { Activity, ExternalLink } from "lucide-solid";
-import { isPublicManagedProviderConnection } from "takosumi-contract";
 import { redactString } from "takosumi-contract/redaction";
 import Page from "../account/components/auth/Page.tsx";
 import {
@@ -503,10 +502,8 @@ function providerConnectionName(
   if (!connectionId) return undefined;
   const connection = connectionsById.get(connectionId);
   return connection
-    ? providerConnectionDisplayName(
-        connection,
-        t("installStore.managedProvider"),
-      ) || providerDisplayName(connection.providerSource)
+    ? providerConnectionDisplayName(connection) ||
+        providerDisplayName(connection.providerSource)
     : undefined;
 }
 
@@ -525,10 +522,7 @@ function providerResolutionRows(
       ? connectionsById.get(connectionId)
       : undefined;
     return {
-      provider:
-        connection && isPublicManagedProviderConnection(connection)
-          ? t("installStore.managedProvider")
-          : providerRequirementLabel(resolution),
+      provider: providerRequirementLabel(resolution),
       connectionId,
       connectionName: providerConnectionName(connectionId, connectionsById),
       status: resolution.status,

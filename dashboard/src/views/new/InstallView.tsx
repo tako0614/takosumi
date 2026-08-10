@@ -114,6 +114,7 @@ import {
   storeFeatureLabel,
   storeFeatureInputNames,
   storeVariablePath,
+  sourceBuildPreview,
   type ProviderConnectionRow,
   type StoreEntry,
   type StoreInputField,
@@ -242,6 +243,9 @@ function Inner() {
   const [compatibility, setCompatibility] =
     createSignal<CapsuleCompatibilityResult>();
   const [installConfig, setInstallConfig] = createSignal<InstallConfig>();
+  const sourceBuild = createMemo(() =>
+    sourceBuildPreview(installConfig()?.sourceBuild),
+  );
   const [storeEntry, setStoreEntry] = createSignal<StoreEntry>();
   const [storeValues, setStoreValues] = createSignal<Record<string, string>>(
     {},
@@ -663,7 +667,8 @@ function Inner() {
       } else if (
         visibleSetupFields().length > 0 ||
         entry?.setupProjectionInvalid ||
-        (entry && storeRequiresUnavailableSecretMaterialization(entry))
+        (entry && storeRequiresUnavailableSecretMaterialization(entry)) ||
+        sourceBuild()
       ) {
         setPhase("setup");
       } else {
@@ -1307,10 +1312,7 @@ function Inner() {
                         <For each={sourceCandidates()}>
                           {(connection) => (
                             <option value={connection.id}>
-                              {providerConnectionDisplayName(
-                                connection,
-                                t("installStore.managedProvider"),
-                              )}
+                              {providerConnectionDisplayName(connection)}
                             </option>
                           )}
                         </For>
@@ -1372,10 +1374,7 @@ function Inner() {
                       <For each={choices()}>
                         {(connection) => (
                           <option value={connection.id}>
-                            {providerConnectionDisplayName(
-                              connection,
-                              t("installStore.managedProvider"),
-                            )}
+                            {providerConnectionDisplayName(connection)}
                           </option>
                         )}
                       </For>
@@ -1410,6 +1409,55 @@ function Inner() {
             <h2>{t("installStore.setupTitle")}</h2>
             <p>{t("installStore.setupHint")}</p>
           </div>
+          <Show when={sourceBuild()}>
+            {(build) => (
+              <section class="iv-source-build" aria-labelledby="iv-source-build-title">
+                <div class="iv-section-head">
+                  <h3 id="iv-source-build-title">
+                    {t("installStore.sourceBuildTitle")}
+                  </h3>
+                  <p>{t("installStore.sourceBuildHint")}</p>
+                </div>
+                <ol class="iv-source-build-commands">
+                  <For each={build().commands}>
+                    {(command, index) => (
+                      <li>
+                        <strong>
+                          {t("installStore.sourceBuildCommand", {
+                            index: String(index() + 1),
+                          })}
+                        </strong>
+                        <div class="iv-source-build-argv" aria-label="argv">
+                          <For each={command.argv}>
+                            {(argument) => <code>{argument}</code>}
+                          </For>
+                        </div>
+                        <p>
+                          {t("installStore.sourceBuildWorkingDirectory")}: {" "}
+                          <code>
+                            {command.workingDirectory ??
+                              t("installStore.sourceBuildSourceRoot")}
+                          </code>
+                        </p>
+                      </li>
+                    )}
+                  </For>
+                </ol>
+                <div class="iv-source-build-outputs">
+                  <strong>{t("installStore.sourceBuildOutputs")}</strong>
+                  <ul>
+                    <For each={build().outputs}>
+                      {(output) => (
+                        <li>
+                          <code>{output}</code>
+                        </li>
+                      )}
+                    </For>
+                  </ul>
+                </div>
+              </section>
+            )}
+          </Show>
           <Show when={storeEntry()}>
             {(entry) => (
               <>

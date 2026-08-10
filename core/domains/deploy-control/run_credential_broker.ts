@@ -29,7 +29,11 @@ import type {
   PolicyConfig,
 } from "@takosumi/internal/deploy-control-api";
 import type { ProviderCredentialMintEvidence } from "takosumi-contract/security";
-import { CredentialBundle } from "../../adapters/vault/mod.ts";
+import {
+  ConnectionVaultError,
+  CredentialBundle,
+  validatedProviderCredentialMintEvidence,
+} from "../../adapters/vault/mod.ts";
 import type {
   CapsuleProviderBindingMintEntry,
   ConnectionVault,
@@ -115,14 +119,21 @@ export class RunCredentialBroker {
     planRun: PlanRun,
     phase: "apply" | "destroy",
     auditRunId: string,
+    credentialRunId: string = auditRunId,
   ): Promise<RunCredentials | undefined> {
-    return await this.#mintCredentials(planRun, phase, auditRunId);
+    return await this.#mintCredentials(
+      planRun,
+      phase,
+      auditRunId,
+      credentialRunId,
+    );
   }
 
   async #mintCredentials(
     planRun: PlanRun,
     phase: "plan" | "apply" | "destroy",
     auditRunId: string,
+    credentialRunId: string = auditRunId,
   ): Promise<RunCredentials | undefined> {
     if (planRun.requiredProviders.length === 0) {
       return undefined;
@@ -221,14 +232,24 @@ export class RunCredentialBroker {
         providerEntries,
         {
           phase,
-          runId: auditRunId,
+          runId: credentialRunId,
           ...(capsuleId ? { capsuleId } : {}),
         },
       );
-      const evidence = [
-        ...bundle.providerCredentialEvidence,
-        ...recipeBundle.providerCredentialEvidence,
-      ];
+      const recipeResponse = recipeBundle.toMintResponse();
+      // Treat a Vault implementation as an untrusted persistence boundary:
+      // validate every evidence row against the exact resolved Connection and
+      // all runner-only values before either audit storage or policy evaluation.
+      // This is intentionally redundant with the in-process Vault validation so
+      // alternate / future Vault implementations cannot persist a raw token.
+      const evidence = validatedCredentialEvidenceForPersistence(
+        [
+          ...bundle.providerCredentialEvidence,
+          ...recipeBundle.providerCredentialEvidence,
+        ],
+        mintable,
+        recipeResponse,
+      );
       await this.#recordProviderCredentialMintEvents(
         planRun,
         mintable,
@@ -242,7 +263,6 @@ export class RunCredentialBroker {
         providerEntries.length,
         credentialEvidenceProviders,
       );
-      const recipeResponse = recipeBundle.toMintResponse();
       const env = { ...bundle.env, ...recipeResponse.env };
       const manifest = credentialManifest(mintable, recipeResponse.files);
       return recipeResponse.files && recipeResponse.files.length > 0
@@ -311,6 +331,43 @@ export class RunCredentialBroker {
       });
     }
   }
+}
+
+function validatedCredentialEvidenceForPersistence(
+  evidence: readonly ProviderCredentialMintEvidence[],
+  resolved: readonly ResolvedCapsuleProviderBinding[],
+  response: {
+    readonly env: Readonly<Record<string, string>>;
+    readonly files?: readonly { readonly content: string }[];
+  },
+): readonly ProviderCredentialMintEvidence[] {
+  const sensitiveValues = [
+    ...Object.values(response.env),
+    ...(response.files ?? []).map((file) => file.content),
+  ];
+  return Object.freeze(
+    evidence.map((item) => {
+      const expected = resolved.find(
+        (entry) =>
+          entry.connection.id === item?.connectionId &&
+          entry.connection.provider === item?.provider,
+      );
+      if (!expected) {
+        throw new ConnectionVaultError(
+          "failed_precondition",
+          "provider credential mint evidence does not match a resolved binding",
+          undefined,
+          "credential_service_unavailable",
+        );
+      }
+      return validatedProviderCredentialMintEvidence({
+        evidence: item,
+        connectionId: expected.connection.id,
+        provider: expected.connection.provider,
+        sensitiveValues,
+      });
+    }),
+  );
 }
 
 function credentialManifest(

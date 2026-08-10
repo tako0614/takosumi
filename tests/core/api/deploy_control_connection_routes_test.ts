@@ -379,9 +379,10 @@ test("POST /internal/v1/connections/setups/aws-assume-role returns 201 and never
   );
   expect(payload.connection.envNames).toEqual([
     "AWS_ACCESS_KEY_ID",
+    "AWS_DEFAULT_REGION",
     "AWS_REGION",
-    "AWS_ROLE_ARN",
     "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
   ]);
   expect(payload.connection.values).toBeUndefined();
 });

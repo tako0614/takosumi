@@ -1453,6 +1453,10 @@ async function createCapsule(
       );
     }
   }
+  // Repository Install UX adoption belongs to Capsule creation, after the
+  // compatibility review has produced a DB-owned InstallConfig. The separate
+  // /capsules/:id/plan and /runs/:id/apply routes consume that persisted
+  // config; they never call this route or recompile repository metadata.
   const repoMetadataSnapshot = await latestSourceSnapshotForSource(
     operations,
     source,
@@ -1594,7 +1598,12 @@ async function createCapsule(
       ...(resolvedStoreMetadata ? { store: resolvedStoreMetadata } : {}),
       ...(runnerProfileId ? { runnerId: runnerProfileId } : {}),
       ...(resolvedModulePath ? { modulePath: resolvedModulePath } : {}),
-      ...(sourceBuild ? { sourceBuild } : {}),
+      ...(sourceBuild
+        ? { sourceBuild }
+        : repoInstallUx.status === "accepted" &&
+            repoInstallUx.sourceBuild !== undefined
+          ? { sourceBuild: repoInstallUx.sourceBuild }
+          : {}),
       ...(managedPublicHostname ? { managedPublicHostname } : {}),
       ...(resolvedInterfaceBlueprints
         ? { interfaceBlueprints: resolvedInterfaceBlueprints }

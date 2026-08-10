@@ -2309,6 +2309,52 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     return connection;
   }
 
+  async createConnectionIfAbsent(
+    connection: ProviderConnection,
+  ): Promise<boolean> {
+    await this.#ensureSchema();
+    const inserted = await this.#orm
+      .insert(schema.connections)
+      .values({
+        id: connection.id,
+        workspaceId: connection.workspaceId ?? null,
+        provider: connection.provider,
+        status: connection.status,
+        connectionJson: connection,
+        createdAt: connection.createdAt,
+        updatedAt: connection.updatedAt,
+      })
+      .onConflictDoNothing({ target: schema.connections.id })
+      .run();
+    return changes(inserted as D1Result) > 0;
+  }
+
+  async replaceConnectionIfUnchanged(
+    expected: ProviderConnection,
+    replacement: ProviderConnection,
+  ): Promise<boolean> {
+    if (replacement.id !== expected.id) return false;
+    await this.#ensureSchema();
+    const result = await this.#orm
+      .update(schema.connections)
+      .set({
+        workspaceId: replacement.workspaceId ?? null,
+        provider: replacement.provider,
+        status: replacement.status,
+        connectionJson: replacement,
+        createdAt: replacement.createdAt,
+        updatedAt: replacement.updatedAt,
+      })
+      .where(
+        and(
+          eq(schema.connections.id, expected.id),
+          eq(schema.connections.connectionJson, expected),
+        ),
+      )
+      .run();
+    return changes(result as D1Result) > 0;
+  }
+
   async getConnection(id: string): Promise<ProviderConnection | undefined> {
     return await this.#drizzleFirstJson<ProviderConnection>(
       schema.connections,

@@ -1,105 +1,83 @@
 # Generalization and Product-Boundary Audit
 
-Status: implementation audit against the current [Core Spec](./core-spec.md)
-for the pre-v1 clean cut. This document is a verification matrix, not a
-second specification or product plan.
+Status: current audit against the [Core Spec](./core-spec.md). This is a
+verification note, not a second product contract. The Core Spec owns the
+current route and ownership decisions.
 
-## Decision rule
+## Current boundary
 
-Takosumi is not required to contain zero provider-specific code. A provider,
-target, billing implementation, runner substrate, or compatibility adapter may
-be specific when it is:
+Takosumi OSS is a provider-neutral Git/OpenTofu/Terraform control plane. Its
+supported deployment path is one Stack flow:
 
-1. selected explicitly through an open contract;
-2. owned by its adapter, plugin, operator configuration, or Cloud extension;
-3. replaceable without changing a Capsule or the core ledger; and
-4. unable to inject credentials or schedule work through metadata or Output.
+```text
+Git source and module
+  -> Workspace / Project / Capsule
+  -> ProviderConnection / CredentialRecipe / ProviderBinding
+  -> guarded Run
+  -> encrypted StateVersion and ordinary Output
+  -> AuditEvent and explicit Interface / InterfaceBinding
+```
 
-Takosumi Core **is** required to contain zero implicit Form Packages. Portable
-definition/provider/interoperability authority belongs to the independent
-Takoform project; Takosumi remains the optional one-ledger host. The approved
-identities are `takoform.com`, `github.com/tako0614/terraform-provider-takoform`,
-`forms.takoform.com/v1alpha1`, and `registry.terraform.io/tako0614/takoform`.
-The current Resource Shape code/wire/provider/state is an explicit
-migration compatibility surface, not proof that the target separation exists.
+The module and its provider configuration choose what is deployed. Takosumi
+does not ship a first-party provider, a Takosumi DSL, or a second desired-state
+ledger.
 
-The following are forbidden in the OSS core:
+Takoform owns portable Form definitions, FormRef and package publication,
+provider releases, and conformance. A Takosumi Cloud deployment or another
+external Host owns hosted Form instances, the Form Host lifecycle, backend
+implementations, targets, capacity, billing, SLA, support, and abuse controls.
+An external Host therefore owns the Form lifecycle; historical package or
+Resource data in OSS does not create or activate a Form.
 
-- choosing behavior from a vendor name, URL, Output name, Store document, or
-  repository convention;
-- treating one hosted deployment, provider, forge, payment processor, runner,
-  or target implementation as the implicit product default;
-- letting display/catalog metadata become executable configuration;
-- maintaining a second deployment, runtime-service, work, or resource ledger
-  beside the final `Run` / `StateVersion` / `Output`, `Runner`, and Resource
-  form-backed Resource records;
-- placing official managed capacity, payment enforcement, versioned pricing catalogs, SLA, or
-  support behavior in OSS; and
-- retaining retired public nouns as active read/write contracts under a new
-  label.
+## Generalization checks
 
-Generalization is not vocabulary erasure. `Space` remains the current Resource
-API namespace, a concrete compatibility adapter may use protocol-specific terms,
-and a module may expose ordinary outputs such as `worker_name` or `url`. Those
-names become a boundary violation only when generic Core,
-dashboard, or operator tooling interprets them without an explicit
-adapter/contribution or service-side mapping.
+The current implementation is conformant only when all of the following hold:
 
-## Whole-product matrix
+- Provider behavior comes from the module, an explicit provider binding, or an
+  explicitly selected adapter. Vendor names, URLs, Output names, and display
+  metadata do not select behavior.
+- `Run`, `StateVersion`, and `Output` remain the only Stack execution records.
+  Plan, apply, destroy, and refresh are Run operations, not extra ledgers.
+- Outputs are ordinary module values. Runtime or service connections require
+  an explicit Interface and InterfaceBinding; no reserved Output name becomes
+  a registry, credential channel, or lifecycle command.
+- Provider credentials arrive only through the run-scoped
+  `ProviderConnection` / `CredentialRecipe` / `ProviderBinding` path. Secret
+  values do not enter specs, Outputs, logs, audit records, or discovery.
+- Cloud-specific capacity, pricing, payment, SLA, and support stay in the
+  one-way Cloud extension or another external Host. OSS does not infer an
+  offering from a package, provider, or catalog entry.
+- Empty extension catalogs are valid. Adding or removing an extension does not
+  create a second deployment or reconciliation lifecycle.
 
-| Surface                        | Generic authority                                                                                                  | Allowed specialization                                                                                                            | Rejected coupling / required check                                                                                                                                                                                                                     |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Workspace ownership            | Workspace -> Project -> Capsule DB records and one WorkspaceMember ledger                                          | Operator membership/auth adapter                                                                                                  | No source-and-run `Space` alias, self-bootstrapped duplicate membership store, or no-op outbox worker; Project/member data must be durable and Workspace-scoped                                                                                        |
-| Git source                     | `GitAddress` and immutable `SourceSnapshot`; omitted ref means Git `HEAD`                                          | Forge authentication helper                                                                                                       | No GitHub identifier in core, guessed `main`/`master`, or upload/artifact authoring path for a Capsule                                                                                                                                                 |
-| Store / TCS / install links    | Service-side Git pointer plus display metadata                                                                     | Optional repo presentation evidence and Store-specific search/ranking UI                                                          | Repo metadata, Store switch, and external link must not select the module path or carry inputs, OIDC, policy, projections, ref resolution, or execution                                                                                                |
-| Install configuration          | Service-side `InstallConfig` with explicit literal/value-source defaults                                           | UI presentation chosen by operator/Workspace                                                                                      | No repository manifest authority, `InstallType`, trust-string admission, closed Store taxonomy, magic default string, built-in template binding, or implicit first-party template                                                                      |
-| Generated root                 | One child-module wrapper over the selected Git module                                                              | Provider blocks derived from explicit bindings                                                                                    | No root/module/app type switch; no vendor inference or credential values in HCL                                                                                                                                                                        |
-| Provider credentials           | Provider Connection + Credential Recipe + Provider Binding                                                         | Provider-owned recipe/helper and OAuth token-response mapper                                                                      | Env/file injection only; no vendor token/credential transformation in Core, generated-root secret variable, ownership kind, or implicit fallback                                                                                                       |
-| Runner                         | `Runner` + typed RunnerProfile lifecycle/availability + open `executorId` selected explicitly                      | Any operator substrate/image/network policy and injected executor adapter                                                         | No metadata/label scheduling, implicit executor fallback, Cloudflare Container-shaped core profile, or hidden runtime-agent work ledger                                                                                                                |
-| Run ledger                     | `Run` operation + successful `StateVersion` and `Output`                                                           | Runner-specific execution evidence                                                                                                | No active `Deployment`, `StateSnapshot`, `OutputSnapshot`, or separate apply/destroy ledger                                                                                                                                                            |
-| OpenTofu Output                | Ordinary root module return values                                                                                 | Explicit Interface/Dependency mapping to a named Output                                                                           | No reserved schema/name, credentials, MCP declaration, lifecycle command, or Workspace-wide reconcile                                                                                                                                                  |
-| Interface                      | Service-side Interface + Binding + explicit delivery-handler registry                                              | Protocol handler by type/version; OAuth2 is one registered delivery; explicit Resource Space-to-Workspace scope resolver          | No Output-discovered service graph, projection grant, runtime material token, fixed delivery switch, fallback transform, or Resource Space = Stack Workspace id inference                                                                              |
-| Dependency                     | Explicit Output-to-input edge pinned to producer state                                                             | Cross-Workspace authorization policy                                                                                              | No output-name inference, expression/template language, or hidden runtime-service dependency                                                                                                                                                           |
-| Lifecycle                      | Service-side Capsule actions                                                                                       | Operator-approved runner command policy                                                                                           | No Output-carried release command or Store/repository metadata execution                                                                                                                                                                               |
-| Portable Service Form          | Exact FormRef + signed immutable data-only Form Package + portable lifecycle/interoperability/conformance contract | Third-party package/provider under public trust and compatibility policy                                                          | No Takosumi Resource/Run/Target/credential/Interface ledger, executable package code, target/capacity/manager/price/SLA data, or untyped catch-all provider                                                                                            |
-| Form Registry / activation     | Explicit host package pins + executable implementation evidence + exact noncommercial FormActivation               | Operator-selected package publisher, Host Extension/Adapter, audience policy, and TargetPool                                      | No implicit bundled forms, package-install-is-activation, schema-known-is-available inference, commercial fields in FormActivation, or customer-triggered executable loading                                                                           |
-| Resource lifecycle             | One Takosumi Resource + exact FormRef + ResolutionLock + Run/state/audit lineage                                   | Current ResourceShape names/routes/columns as bounded migration aliases; target-specific implementation descriptor                | No second portable/compatibility ledger, mutable latest-definition reinterpretation, Resource/tkrn/kind/import-id churn, or FormRef retrofit by editing released/current migrations                                                                    |
-| Typed provider                 | Portable statically typed form provider; separate Takosumi historical state/migration custody                      | Independently versioned third-party provider and verified unchanged network mirror                                                | No dynamic schema, TargetPool/admin object in form provider, private manager/price selection, old-version overwrite, package-version-coupled binary, or address/type/API rename in one step                                                            |
-| Compatibility API              | Capability/version contract                                                                                        | Adapter-provided subset                                                                                                           | No claim of full vendor compatibility and no official resource pool in OSS                                                                                                                                                                             |
-| Billing                        | Disabled/showback measurement ledger plus injected ShowbackRater / enforcement / quota ports                       | Operator rating policy; Cloud PriceCatalog and payment extension                                                                  | No fixed price, plan-action weight, Stripe route/schema/env/client, official PriceCatalog, or payment gate in OSS; zero/unrated must remain distinct from rated zero                                                                                   |
-| Takosumi Cloud                 | Closed extension composed one-way onto OSS; exact FormRef + generic activation referenced by ServiceOffering       | Official targets/capacity/managers/credentials, implementation fingerprints, price/payment/quota/support                          | OSS must not import Cloud or know official deployment details; definition/install/executable/activation must not imply an offering                                                                                                                     |
-| Accounts / OIDC                | Account, membership, generic OIDC and Interface Principal                                                          | IdP/OAuth provider adapters                                                                                                       | No app runtime projection/material resolver or vendor-specific default issuer                                                                                                                                                                          |
-| Dashboard / CLI                | Capability-driven clients over public contracts                                                                    | Extension-contributed views/commands and recipe-provided setup presentation                                                       | No hostname, edition, provider catalog, Stripe, WfP, or Store-behavior heuristics                                                                                                                                                                      |
-| Backup / audit / observability | Generic ledgers, opaque artifact refs, and injected append-only sink/producer ports                                | Storage/export adapters such as S3 Object Lock; confirmed migration adoption may read an already-recorded historical ref opaquely | No R2 field names in portable contracts, retired Space/Installation object-key construction in current writers, provider-derived command env, provider lifecycle artifact registry, domain-owned S3 selection, or fake readiness work item as evidence |
-| Production durability          | Durable control-plane storage and observability adapters                                                           | Operator-selected D1/Postgres/export backend                                                                                      | No isolate-local audit chain, replay ledger, Project store, or other authoritative in-memory fallback in staging/production                                                                                                                            |
-| API discovery                  | Mounted capabilities, open contract versions, and versioned extension tokens                                       | Host-injected extension inventory and contributed endpoints                                                                       | No route/path substring inference, edition flag, fixed `commercial` capability branch, or Cloud-only route in OSS discovery                                                                                                                            |
+## Retained Resource/Form data
 
-## Verification gates
+The old Resource Shape, Form Host, TargetPool, SpacePolicy, and related rows are
+retained only as migration data. They are not current OSS authoring or release
+authority. OSS may keep the bytes and metadata needed to observe, delete, or
+perform an exact operator migration; the retained rows do not give OSS control
+of a Form or its backend.
 
-The implementation is conformant only when all of the following are true:
+The platform edge returns `404` for the legacy surface by default. An operator
+may enable the bounded drain with
+`TAKOSUMI_LEGACY_RESOURCE_DRAIN_ENABLED=1` together with the authenticated
+control-plane token and database. While the drain is enabled, the implemented
+legacy actions are limited to:
 
-1. source scans reject active retired ledgers, the compatibility runtime-agent,
-   Cloud/Stripe/WfP implementation terms in OSS core, runtime-cell topology,
-   storage-substrate fields in portable contracts, retired artifact-key layouts
-   outside immutable migration history, dashboard-owned provider
-   catalogs, fixed OSS showback prices/action weights, magic InstallConfig
-   defaults, and executable Store metadata outside explicit migration/history
-   allowlists;
-2. contract and OpenAPI tests prove that Output is opaque, current Resource
-   Shape kinds remain compatible while target Forms are exact, installed,
-   schema-bound, and fail closed when unregistered or digest-mismatched,
-   Target/implementation/runner-substrate tokens are open,
-   UsageEvent distinguishes rated zero from zero/unrated, and public records
-   contain no internal template or provider implementation fields;
-3. focused domain tests prove explicit selection and fail-closed behavior for
-   credentials, target implementations, Interface mappings, Store metadata,
-   unrated showback defaults, host rating, and extension absence;
-4. D1 and Postgres tests use the same canonical Workspace/Project/Capsule,
-   StateVersion, Output, Resource/FormRef, and FormActivation records; FormRef
-   arrives in a new additive migration with shadow/backfill/restore proof, and production composition persists its
-   audit chain rather than falling back to isolate memory; and
-5. zero-form plain OpenTofu, package signature/retention, one-ledger portable /
-   compatibility route equality, structured availability, immutable provider
-   releases, state no-op/rollback, and Cloud exact-offering tests pass; and
-6. TypeScript, Go provider, dashboard, CLI, accounts, Cloud dependency-direction,
-   and root product-boundary gates pass together.
+| Legacy area | Allowed action |
+| --- | --- |
+| Resource collection and records | Authenticated `GET`/`HEAD` list/read/events, `POST` observe, and `DELETE` |
+| TargetPool and SpacePolicy records | Authenticated `GET`/`HEAD` (including list) and `DELETE` |
+
+Resource preview, apply, recover, import, and refresh; Resource/Form writes;
+Form Registry and FormActivation operations; discovery; and TargetPool or
+SpacePolicy writes remain unavailable. Unknown or disabled paths return `404`;
+recognized retired operations return `410` while the drain is on. The drain
+does not create a Form, select capacity, or change the supported Stack model.
+
+## Review evidence
+
+Reviewers should compare implementation and docs with the Core Spec, then run
+the authoritative-doc, generalization-boundary, and import-boundary checks.
+Any retained Resource/Form route must be classified as migration-only and
+must not be described as a current lifecycle or provider authority.

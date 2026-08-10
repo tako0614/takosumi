@@ -36,6 +36,11 @@ acceptance case.
   type/version. Takosumi resolves it from the persisted InstallConfig and binds
   the Capsule OIDC client's pairwise Principal; repository metadata never
   carries an Interface ID, endpoint, provider name, or credential.
+- `takosumi.com/v2.3` can propose bounded, credential-free `sourceBuild` argv
+  commands and produced paths per module. The compiler persists the exact
+  proposal into the derived InstallConfig after compatibility review; a
+  service/operator base `sourceBuild` wins on collision and the dashboard
+  discloses the exact commands before Plan.
 
 The findings below preserve the original audit rationale. Statements labelled
 as current state describe the pre-implementation baseline unless a resolution
@@ -52,7 +57,7 @@ Takosumi supports an optional, repository-owned general manifest at:
 The versioned closed envelope is:
 
 ```text
-apiVersion: takosumi.com/v1 | takosumi.com/v2 | takosumi.com/v2.1 | takosumi.com/v2.2
+apiVersion: takosumi.com/v1 | takosumi.com/v2 | takosumi.com/v2.1 | takosumi.com/v2.2 | takosumi.com/v2.3
 kind: Repository
 ```
 

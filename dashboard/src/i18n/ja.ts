@@ -44,11 +44,17 @@ export const ja = {
   "installStore.providerHint": "このサービスに必要な接続だけを選びます。",
   "installStore.chooseConnection": "接続を選択",
   "installStore.destination": "実行先",
-  "installStore.managedProvider": "Takosumi Cloud",
   "installStore.connect": "新しい接続を追加",
   "installStore.continue": "続ける",
   "installStore.setupTitle": "サービスを設定",
   "installStore.setupHint": "このサービスが必要とする項目だけを入力します。",
+  "installStore.sourceBuildTitle": "リポジトリのビルド手順",
+  "installStore.sourceBuildHint":
+    "Planを開始する前に、認証情報を使わないコマンドと生成されるパスを確認してください。",
+  "installStore.sourceBuildCommand": "コマンド {index}",
+  "installStore.sourceBuildWorkingDirectory": "作業ディレクトリ",
+  "installStore.sourceBuildSourceRoot": "Source root",
+  "installStore.sourceBuildOutputs": "生成されるパス",
   "installStore.setupInvalid": "サービスの設定定義が無効です。",
   "installStore.setupRequired": "{label}を入力してください。",
   "installStore.secretUnavailable":

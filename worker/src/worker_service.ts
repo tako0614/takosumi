@@ -6,7 +6,6 @@ import {
 import type { AppAdapters } from "../../core/app_context.ts";
 import { selectSecretBoundaryCrypto } from "../../core/adapters/secret-store/memory.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../core/adapters/storage/artifact-references.ts";
-import type { ManagedProviderCredentialIssuer } from "../../core/adapters/vault/mod.ts";
 import type {
   EnqueueRun,
   OpenTofuRunnerExecutorRegistry,
@@ -16,7 +15,10 @@ import type { OpenTofuControlStore } from "../../core/domains/deploy-control/sto
 import type { EnqueueSourceSync } from "../../core/domains/sources/mod.ts";
 import type { CapsuleCoordination } from "../../core/domains/deploy-control/capsule_lease.ts";
 import type { RunnerProfile } from "@takosumi/internal/deploy-control-api";
-import type { CloudflareWorkerEnv, OpenTofuRunAction } from "./bindings.ts";
+import type {
+  CloudflareWorkerEnv,
+  OpenTofuRunAction,
+} from "./bindings.ts";
 import {
   createCloudflareD1OpenTofuControlStore,
   createCloudflareD1OpenTofuControlStoreForRequest,
@@ -46,7 +48,6 @@ import {
 } from "../../core/domains/interfaces/runtime_capability_reader.ts";
 import { createD1FormRegistryStore } from "../../core/domains/service-forms/mod.ts";
 import { createD1OfferingCatalogStore } from "../../core/domains/offerings/mod.ts";
-import { PORTABLE_FORM_MANAGER } from "../../core/api/form_host_routes.ts";
 import {
   ControllerOpentofuRunPort,
   OpentofuResourceShapeAdapter,
@@ -63,7 +64,6 @@ import {
   RESOURCE_SHAPE_KINDS,
   type ResourceShapeKind,
 } from "takosumi-contract";
-import { isPublicManagedProviderConnection } from "takosumi-contract/connections";
 import {
   decodeActorContext,
   TAKOSUMI_INTERNAL_ACTOR_HEADER,
@@ -76,10 +76,6 @@ import {
   type TakosumiResourceCapabilities,
 } from "takosumi-contract/capabilities";
 import {
-  createManagedProviderRunToken,
-  managedProviderRunTokenSecret,
-} from "../../core/shared/managed_provider_tokens.ts";
-import {
   D1AccountsStore,
   issueInterfaceOAuthAccessToken,
   resolveD1AccountsSchemaMode,
@@ -88,6 +84,16 @@ import {
   connectionOAuthDescriptorsFromEnv,
   REFERENCE_CREDENTIAL_RECIPE_COMPOSITION,
 } from "@takosumi/providers";
+import {
+  type CredentialRecipeRunCredentialIssuer,
+} from "../../core/adapters/vault/driver_ports.ts";
+import { isWorkspaceBindableOperatorConnection } from "takosumi-contract/connections";
+import { resolveCredentialRecipeHostComposition } from "takosumi-contract/credential-recipe-host";
+export { resolveCredentialRecipeHostComposition } from "takosumi-contract/credential-recipe-host";
+import {
+  createRunCredentialToken,
+  runCredentialTokenSecret,
+} from "../../core/shared/run_credential_tokens.ts";
 import { createConnectionOAuthHelpers } from "../../core/api/connection_oauth_helpers.ts";
 import {
   configuredResourceShapeKinds,
@@ -125,6 +131,8 @@ export async function createWorkerServiceApp(
     readonly operatorInstallConfigs?: CreateTakosumiServiceOptions["operatorInstallConfigs"];
     /** Complete host-installed recipe driver registry. */
     readonly credentialRecipeDrivers?: CreateTakosumiServiceOptions["credentialRecipeDrivers"];
+    /** Host-declared fixed-id operator Provider Connections. */
+    readonly operatorProviderConnections?: CreateTakosumiServiceOptions["operatorProviderConnections"];
     /** Complete host-installed Source credential driver registry. */
     readonly sourceCredentialDrivers?: CreateTakosumiServiceOptions["sourceCredentialDrivers"];
     /** Host-installed guided connection setup dispatcher. */
@@ -255,8 +263,6 @@ export async function createWorkerServiceApp(
     resourceShapeSchemaRegistry,
   );
   const operatorCapabilities = operatorCapabilitiesFromEnv(env);
-  const managedProviderCredentialIssuer =
-    managedProviderCredentialIssuerFromEnv(env, opentofuControlStore);
   const billingExtensionFactory = billingExtensionFactoryFromEnv(env);
   const resourceDeploymentAdmission = resourceDeploymentAdmissionFromEnv(env);
   const resourceArtifactWriter = resourceArtifactWriterFromEnv(env);
@@ -292,19 +298,49 @@ export async function createWorkerServiceApp(
       : []);
   const formPackageHost = resolveFormPackageHostComposition(env, options);
   const offeringHostComposition = resolveOfferingHostComposition(env, options);
+  const envCredentialRecipeHost =
+    env.TAKOSUMI_CREDENTIAL_RECIPE_HOST_COMPOSITION;
+  const credentialRecipeContribution =
+    options.operatorProviderConnections === undefined
+      ? envCredentialRecipeHost
+      : {
+          ...(envCredentialRecipeHost ?? {
+            credentialRecipes: [],
+            credentialRecipeDrivers: {},
+          }),
+          operatorProviderConnections: [
+            ...(envCredentialRecipeHost?.operatorProviderConnections ?? []),
+            ...options.operatorProviderConnections,
+          ],
+        };
+  const credentialRecipeHost = resolveCredentialRecipeHostComposition(
+    credentialRecipeContribution,
+    {
+      credentialRecipes:
+        options.credentialRecipes ??
+        REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipes,
+      credentialRecipeDrivers:
+        options.credentialRecipeDrivers ??
+        REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipeDrivers,
+    },
+  );
+  const runCredentialIssuer = runCredentialIssuerFromEnv(env);
   return await createTakosumiService({
     role,
     runtimeEnv,
     adapters,
     // The shipped Worker explicitly selects the reference provider package.
     // `createTakosumiService` itself has no implicit recipe/setup authority.
-    credentialRecipes:
-      options.credentialRecipes ??
-      REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipes,
+    credentialRecipes: credentialRecipeHost.credentialRecipes,
     operatorInstallConfigs,
-    credentialRecipeDrivers:
-      options.credentialRecipeDrivers ??
-      REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.credentialRecipeDrivers,
+    credentialRecipeDrivers: credentialRecipeHost.credentialRecipeDrivers,
+    ...(credentialRecipeHost.operatorProviderConnections
+      ? {
+          operatorProviderConnections:
+            credentialRecipeHost.operatorProviderConnections,
+        }
+      : {}),
+    ...(runCredentialIssuer ? { runCredentialIssuer } : {}),
     sourceCredentialDrivers:
       options.sourceCredentialDrivers ??
       REFERENCE_CREDENTIAL_RECIPE_COMPOSITION.sourceCredentialDrivers,
@@ -388,9 +424,6 @@ export async function createWorkerServiceApp(
       : {}),
     allowOperatorScopedProviderConnections,
     secretCrypto,
-    ...(managedProviderCredentialIssuer
-      ? { managedProviderCredentialIssuer }
-      : {}),
     ...(billingExtensionFactory ? { billingExtensionFactory } : {}),
     ...(resourceDeploymentAdmission ? { resourceDeploymentAdmission } : {}),
     ...(resourceArtifactWriter ? { resourceArtifactWriter } : {}),
@@ -425,6 +458,41 @@ export async function createWorkerServiceApp(
         }
       : {}),
   });
+}
+
+/**
+ * Keeps signing material inside the OSS composition root. Vault supplies the
+ * verified connection and canonical Run, adds the installed recipe's exact
+ * audience/scopes, and lets the recipe driver request only a bounded TTL.
+ */
+function runCredentialIssuerFromEnv(
+  env: CloudflareWorkerEnv,
+): CredentialRecipeRunCredentialIssuer | undefined {
+  const secret = runCredentialTokenSecret(env);
+  if (!secret) return undefined;
+  return async ({ connection, run, request }) => {
+    if (!isWorkspaceBindableOperatorConnection(connection)) {
+      throw new Error(
+        `connection ${connection.id} is not authorized for Run credential issuance`,
+      );
+    }
+    return await createRunCredentialToken({
+      secret,
+      audience: request.audience,
+      subject: run.installingPrincipalId,
+      workspaceId: run.workspaceId,
+      capsuleId: run.capsuleId,
+      runId: run.runId,
+      installingPrincipalId: run.installingPrincipalId,
+      connectionId: connection.id,
+      provider: connection.provider,
+      phase: run.phase,
+      scopes: request.scopes,
+      ...(request.ttlSeconds !== undefined
+        ? { ttlSeconds: request.ttlSeconds }
+        : {}),
+    });
+  };
 }
 
 function resolveOfferingHostComposition(
@@ -656,87 +724,6 @@ function workerInterfaceOAuth2ResourceAuthorizer(
       reservation.capsuleId === input.ownerRef.id
     );
   };
-}
-
-export function managedProviderCredentialIssuerFromEnv(
-  env: CloudflareWorkerEnv,
-  store: Pick<OpenTofuControlStore, "getCapsule">,
-): ManagedProviderCredentialIssuer | undefined {
-  const secret = managedProviderRunTokenSecret(env);
-  if (!secret) return undefined;
-  return async (request) => {
-    const { workspaceId, connection, phase } = request;
-    if (!isPublicManagedProviderConnection(connection)) return undefined;
-    if (!phase || connection.envNames.length === 0) return undefined;
-    const capsuleId = request.capsuleId?.trim();
-    const runId = request.runId?.trim();
-    if (!capsuleId || !runId) return undefined;
-    const capsule = await store.getCapsule(capsuleId);
-    const installingPrincipalId = capsule?.installingPrincipalId?.trim();
-    if (
-      !capsule ||
-      capsule.workspaceId !== workspaceId ||
-      capsule.status === "destroyed" ||
-      !installingPrincipalId
-    ) {
-      return undefined;
-    }
-    const issued = await createManagedProviderRunToken({
-      secret,
-      audience: request.managedProviderProfile,
-      workspaceId,
-      capsuleId,
-      runId,
-      installingPrincipalId,
-      connectionId: connection.id,
-      provider: connection.provider,
-      phase,
-      scopes:
-        request.managedProviderProfile === PORTABLE_FORM_MANAGER
-          ? // The takoform provider reads form availability and Resource
-            // documents before and after every mutation, so the run token
-            // carries the read grant alongside the write grants.
-            ["read", "write", "interfaces:write"]
-          : ["write"],
-    });
-    const values =
-      request.managedProviderProfile === PORTABLE_FORM_MANAGER
-        ? portableFormManagedProviderEnv(env, workspaceId, issued.token)
-        : Object.fromEntries(
-            connection.envNames.map((envName) => [envName, issued.token]),
-          );
-    if (!values) return undefined;
-    return {
-      values,
-      issuer: "takosumi_managed_provider_token",
-      temporary: true,
-      expiresAt: issued.expiresAt,
-      ttlSeconds: issued.ttlSeconds,
-      secretValueStored: false,
-    };
-  };
-}
-
-function portableFormManagedProviderEnv(
-  env: CloudflareWorkerEnv,
-  workspaceId: string,
-  token: string,
-): Readonly<Record<string, string>> | undefined {
-  const issuer =
-    typeof env.TAKOSUMI_ACCOUNTS_ISSUER === "string"
-      ? env.TAKOSUMI_ACCOUNTS_ISSUER.trim()
-      : "";
-  if (!issuer) return undefined;
-  try {
-    const endpoint = new URL(issuer).origin;
-    return {
-      TAKOFORM_ENDPOINT: endpoint,
-      TAKOFORM_SPACE: workspaceId,
-      TAKOFORM_TOKEN: token,
-    };
-  } catch {
-    return undefined;
-  }
 }
 
 function resourceShapeActorFromRequest(request: Request): ActorContext {

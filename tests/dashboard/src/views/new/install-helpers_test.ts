@@ -15,6 +15,7 @@ import {
   storeSupportsOidc,
   storeUsesRepositoryInstallUx,
   uniqueStoreInstallConfigForSource,
+  sourceBuildPreview,
 } from "../../../../../dashboard/src/views/new/install-helpers.ts";
 import type { TcsListing } from "../../../../../dashboard/src/lib/tcs-client.ts";
 import type { InstallConfig } from "../../../../../dashboard/src/lib/control-api.ts";
@@ -98,6 +99,33 @@ describe("plain environment variable names", () => {
     expect(isSafePlainEnvName("API_KEY")).toBe(true);
     expect(isSafePlainEnvName("lowercase")).toBe(false);
     expect(isSafePlainEnvName("BAD-NAME")).toBe(false);
+  });
+});
+
+describe("repository sourceBuild preview", () => {
+  test("allowlists exact argv, working directories, and outputs without env fields", () => {
+    expect(
+      sourceBuildPreview({
+        commands: [
+          { argv: ["bun", "install"] },
+          { argv: ["bun", "run", "build"], workingDirectory: "web" },
+        ],
+        outputs: ["web/dist/index.js"],
+        env: { SECRET: "must-not-render" },
+      }),
+    ).toEqual({
+      commands: [
+        { argv: ["bun", "install"] },
+        { argv: ["bun", "run", "build"], workingDirectory: "web" },
+      ],
+      outputs: ["web/dist/index.js"],
+    });
+    expect(
+      sourceBuildPreview({
+        commands: [{ argv: ["bun"] }],
+        outputs: [{ path: "secret" }],
+      }),
+    ).toBeUndefined();
   });
 });
 

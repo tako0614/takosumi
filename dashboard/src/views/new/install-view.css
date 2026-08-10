@@ -17,6 +17,14 @@
 .iv-app-summary { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: var(--tg-s-4); margin: var(--tg-s-4) 0 var(--tg-s-6); }
 .iv-app-summary > :first-child { width: 4rem; height: 4rem; }
 .iv-form, .iv-fields, .iv-connection-list { display: grid; gap: var(--tg-s-4); }
+.iv-source-build { display: grid; gap: var(--tg-s-4); margin: 0 0 var(--tg-s-5); padding: var(--tg-s-4); border: 1px solid var(--tg-line); border-radius: var(--tg-r-md); background: var(--tg-bg-hi); }
+.iv-source-build .iv-section-head { margin-bottom: 0; }
+.iv-source-build-commands, .iv-source-build-outputs ul { display: grid; gap: var(--tg-s-3); margin: 0; padding-left: var(--tg-s-5); }
+.iv-source-build-commands li { display: grid; gap: var(--tg-s-2); }
+.iv-source-build-argv { display: flex; flex-wrap: wrap; gap: var(--tg-s-2); }
+.iv-source-build-argv code, .iv-source-build-outputs code { padding: 0.2rem 0.35rem; border-radius: var(--tg-r-sm); background: var(--tg-bg-subtle); font-family: var(--tg-font-mono); font-size: var(--tg-fs-xs); overflow-wrap: anywhere; }
+.iv-source-build-commands p { margin: 0; color: var(--tg-fg-muted); font-size: var(--tg-fs-sm); }
+.iv-source-build-outputs { display: grid; gap: var(--tg-s-2); }
 .iv-form > .tg-btn, .iv-workbench > .tg-btn:last-child { justify-self: start; margin-top: var(--tg-s-5); white-space: nowrap; }
 .iv-action-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--tg-s-3); margin-top: var(--tg-s-5); }
 .iv-action-row .tg-btn { white-space: nowrap; }

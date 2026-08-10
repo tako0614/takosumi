@@ -11,7 +11,11 @@ test("generic extension descriptors accept localized UI contributions", () => {
       {
         basePath: "/extensions/example",
         handlerKey: "EXAMPLE_EXTENSION",
-        managedProviderProfile: "operator.example.provider.v1",
+        authDelivery: "context",
+        runCredential: {
+          audience: "operator.example.provider.v1",
+          requiredScopes: ["example.invoke"],
+        },
         capabilities: ["example.v1"],
         contributions: [
           {
@@ -32,12 +36,29 @@ test("generic extension descriptors accept localized UI contributions", () => {
     href: "/extensions/example/settings",
     presentation: "inline-frame",
   });
-  expect(routes[0]?.managedProviderProfile).toBe(
-    "operator.example.provider.v1",
-  );
+  expect(routes[0]?.runCredential).toEqual({
+    audience: "operator.example.provider.v1",
+    requiredScopes: ["example.invoke"],
+  });
   expect(
     matchPlatformExtensionRoute("/extensions/example/settings", routes),
   ).toBeDefined();
+});
+
+test("run credential route descriptors cannot grant admin", () => {
+  expect(() =>
+    platformExtensionRoutes({
+      TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([{
+        basePath: "/extensions/example",
+        handlerKey: "EXAMPLE_EXTENSION",
+        authDelivery: "context",
+        runCredential: {
+          audience: "operator.example.provider.v1",
+          requiredScopes: ["example.invoke", "admin"],
+        },
+      }]),
+    })
+  ).toThrow("cannot grant admin");
 });
 
 test("extension descriptors parse exact request scope rules without changing the audience base", () => {
@@ -395,43 +416,59 @@ test("subtree ownership rejects parent/child route collisions in either order", 
   }
 });
 
-test("one extension route cannot accept two managed-provider profiles", () => {
+test("one extension route cannot accept two Run credential audiences", () => {
   expect(() =>
     platformExtensionRoutes({
       TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
         {
           basePath: "/extensions/example",
           handlerKey: "EXAMPLE_EXTENSION",
-          managedProviderProfile: "operator.example.a.v1",
+          authDelivery: "context",
+          runCredential: {
+            audience: "operator.example.a.v1",
+            requiredScopes: ["invoke"],
+          },
         },
         {
           basePath: "/extensions/example",
           handlerKey: "EXAMPLE_EXTENSION",
-          managedProviderProfile: "operator.example.b.v1",
+          authDelivery: "context",
+          runCredential: {
+            audience: "operator.example.b.v1",
+            requiredScopes: ["invoke"],
+          },
         },
       ]),
     }),
   ).toThrow("basePath /extensions/example has multiple owners");
 });
 
-test("one managed-provider profile has one extension route owner", () => {
+test("one Run credential audience has one extension route owner", () => {
   expect(() =>
     platformExtensionRoutes({
       TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
         {
           basePath: "/extensions/example-a",
           handlerKey: "EXAMPLE_A",
-          managedProviderProfile: "operator.example.provider.v1",
+          authDelivery: "context",
+          runCredential: {
+            audience: "operator.example.provider.v1",
+            requiredScopes: ["invoke"],
+          },
         },
         {
           basePath: "/extensions/example-b",
           handlerKey: "EXAMPLE_B",
-          managedProviderProfile: "operator.example.provider.v1",
+          authDelivery: "context",
+          runCredential: {
+            audience: "operator.example.provider.v1",
+            requiredScopes: ["invoke"],
+          },
         },
       ]),
     }),
   ).toThrow(
-    "managed provider profile operator.example.provider.v1 has multiple route owners",
+    "run credential audience operator.example.provider.v1 has multiple route owners",
   );
 });
 
@@ -456,6 +493,8 @@ test("core route prefixes cannot be delegated to extensions", () => {
   for (const basePath of [
     "/v1/resources",
     "/v1/resources/preview",
+    "/v1/form-activations",
+    "/v1/form-activations/activation_1",
     "/v1/capabilities",
     "/.well-known/takosumi",
     "/api/v1/workspaces",

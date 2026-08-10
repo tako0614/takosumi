@@ -195,6 +195,56 @@ test("consumer plan + apply: credentials reach the dispatch payload but never th
   expect(await store.getPlanRunInputs(planRun.id)).toBeUndefined();
 });
 
+test("secret-bearing mint evidence fails without leaking into the Run or audit error surface", async () => {
+  const rawToken = "raw-driver-token-that-must-never-reach-run-logs";
+  const store = new InMemoryOpenTofuControlStore();
+  const vault = {
+    ...fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: rawToken } }),
+    mintForCapsuleProviderBindings: (
+      _workspaceId: string,
+      entries: readonly CapsuleProviderBindingMintEntry[],
+    ) =>
+      Promise.resolve(
+        new PhaseMintBundle(
+          { env: { CLOUDFLARE_API_TOKEN: rawToken } },
+          [],
+          entries.map((entry) => ({
+            provider: CLOUDFLARE,
+            connectionId: entry.connectionId,
+            temporary: true,
+            ttlEnforced: true,
+            issuer: `driver:${rawToken}`,
+            secretValueStored: false as const,
+          })),
+        ),
+      ),
+  } satisfies ConnectionVault;
+  const controller = new OpenTofuController({
+    store,
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+    now: monotonicNow(1100),
+    newId: deterministicIds(),
+    runner: stubRunner(),
+    vault,
+  });
+  const request = await seedUpdatable(store, {
+    capsuleId: "cap_secret_evidence",
+  });
+
+  const { planRun } = await controller.createPlanRun(request);
+  expect(planRun.status).toBe("failed");
+  const persisted = await store.getPlanRun(planRun.id);
+  const mintEvents = await store.listCredentialMintEventsForRun(planRun.id);
+  expect(JSON.stringify({ planRun, persisted, mintEvents })).not.toContain(
+    rawToken,
+  );
+  expect(mintEvents).toEqual([]);
+  expect(
+    planRun.auditEvents.find((event) => event.type === "plan.failed")?.data
+      ?.message,
+  ).toMatch(/credential/);
+});
+
 test("ApplyRun preparation checkpoint runs before durable put and provider dispatch", async () => {
   const store = new InMemoryOpenTofuControlStore();
   let providerApplyCalls = 0;
@@ -1777,7 +1827,6 @@ function fakeVault(
           connectionId: "conn_shared",
           temporary: true,
           ttlEnforced: true,
-          phase: "plan" as const,
         });
       }
       return Promise.resolve(new PhaseMintBundle({ env }, [], evidence));
@@ -1797,7 +1846,6 @@ function fakeVault(
           connectionId: entry.connectionId,
           temporary: true,
           ttlEnforced: true,
-          phase: "plan" as const,
         });
       }
       return Promise.resolve(new PhaseMintBundle({ env }, [], evidence));

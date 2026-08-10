@@ -70,6 +70,19 @@ describe("single-screen install surface", () => {
     );
   });
 
+  test("discloses persisted sourceBuild before the Plan starts", () => {
+    const view = read("dashboard/src/views/new/InstallView.tsx");
+    expect(view).toContain("sourceBuildPreview(installConfig()?.sourceBuild)");
+    expect(view).toContain('t("installStore.sourceBuildTitle")');
+    expect(view).toContain('t("installStore.sourceBuildWorkingDirectory")');
+    expect(view).toContain('t("installStore.sourceBuildOutputs")');
+    expect(view).toContain("sourceBuild()");
+    expect(view.indexOf("sourceBuild()")) .toBeLessThan(
+      view.indexOf("await preparePlan(workspace, result, config, rows, undefined)"),
+    );
+    expect(view).not.toContain("sourceBuild.env");
+  });
+
   test("retains typed Store setup and immutable chooser evidence", () => {
     const view = read("dashboard/src/views/new/InstallView.tsx");
     for (const token of [

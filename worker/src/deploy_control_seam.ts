@@ -19,15 +19,6 @@ import type {
 } from "../../core/domains/interfaces/mod.ts";
 import { createWorkerServiceApp } from "./worker_service.ts";
 import { createCloudflareD1OpenTofuControlStore } from "./d1_opentofu_store.ts";
-import {
-  TAKOSUMI_INTERNAL_MANAGED_PROVIDER_PROFILE_HEADER,
-  TAKOSUMI_INTERNAL_MANAGED_PROVIDER_RUN_TOKEN_HEADER,
-} from "./resource_capsule_owner_context.ts";
-import {
-  managedProviderRunTokenSecret,
-  verifyManagedProviderRunToken,
-} from "../../core/shared/managed_provider_tokens.ts";
-import { ResourceCapsuleOwnerAuthorityError } from "../../core/api/form_host_routes.ts";
 
 /**
  * Builds the deploy-control Takosumi service (the `takosumi-api` role) directly,
@@ -144,121 +135,17 @@ export function platformResourceInterfaceWorkspaceResolver(
   };
 }
 
-/**
- * Resolve only the existing signed managed-provider run authority forwarded by
- * platform ingress. Core verifies it again and cross-checks the claims against
- * the internal Capsule ledger; a caller-supplied actor, Capsule id, profile, or
- * matching Workspace string alone never creates Capsule ownership.
- */
 export function platformResourceCapsuleOwnerResolver(
-  env: CloudflareWorkerEnv,
+  _env: CloudflareWorkerEnv,
 ): NonNullable<
   NonNullable<
     Parameters<typeof createWorkerServiceApp>[2]
   >["resolveResourceCapsuleOwner"]
 > {
-  const store = createCloudflareD1OpenTofuControlStore(
-    env.TAKOSUMI_CONTROL_DB,
-    {
-      schemaMode: env.TAKOSUMI_CONTROL_D1_SCHEMA_MODE ?? "bootstrap",
-    },
-  );
-  return async ({ actor, request, space }) => {
-    const token = request.headers.get(
-      TAKOSUMI_INTERNAL_MANAGED_PROVIDER_RUN_TOKEN_HEADER,
-    );
-    const profile = request.headers
-      .get(TAKOSUMI_INTERNAL_MANAGED_PROVIDER_PROFILE_HEADER)
-      ?.trim();
-    const secret = managedProviderRunTokenSecret(env);
-    if (!token && !profile) {
-      return undefined;
-    }
-    if (!token || !profile || profile.length > 256 || !secret) {
-      throw new ResourceCapsuleOwnerAuthorityError();
-    }
-    const verified = await verifyManagedProviderRunToken(token, {
-      secret,
-      expectedAudience: profile,
-      expectedWorkspaceId: space,
-      requiredScopes: ["write"],
-    });
-    if (!verified.ok) throw new ResourceCapsuleOwnerAuthorityError();
-    const context = verified.payload;
-    if (
-      !context.capsuleId ||
-      !context.runId ||
-      !context.installingPrincipalId ||
-      (actor.workspaceId !== undefined &&
-        actor.workspaceId !== context.workspaceId)
-    ) {
-      throw new ResourceCapsuleOwnerAuthorityError();
-    }
-    const pathname = new URL(request.url).pathname;
-    const mutationNeedsApply =
-      request.method === "PUT" || pathname.endsWith("/import");
-    const mutationNeedsDestroy = request.method === "DELETE";
-    if (
-      (mutationNeedsApply && context.phase !== "apply") ||
-      (mutationNeedsDestroy && context.phase !== "destroy") ||
-      (!mutationNeedsApply &&
-        !mutationNeedsDestroy &&
-        context.phase !== "plan" &&
-        context.phase !== "apply" &&
-        context.phase !== "destroy")
-    ) {
-      throw new ResourceCapsuleOwnerAuthorityError();
-    }
-    let destroyLifecycleAuthority = false;
-    if (context.phase === "plan") {
-      const run = await store.getPlanRun(context.runId);
-      if (
-        !run ||
-        run.status !== "running" ||
-        run.workspaceId !== context.workspaceId ||
-        run.capsuleId !== context.capsuleId
-      ) {
-        throw new ResourceCapsuleOwnerAuthorityError();
-      }
-      destroyLifecycleAuthority = run.operation === "destroy";
-    } else {
-      const run = await store.getApplyRun(context.runId);
-      if (
-        !run ||
-        run.status !== "running" ||
-        run.workspaceId !== context.workspaceId ||
-        run.capsuleId !== context.capsuleId ||
-        (run.operation === "destroy") !== (context.phase === "destroy")
-      ) {
-        throw new ResourceCapsuleOwnerAuthorityError();
-      }
-      destroyLifecycleAuthority = run.operation === "destroy";
-    }
-    const runtimeSafety = await store.getCapsuleRuntimeSafety(
-      context.capsuleId,
-    );
-    if (
-      runtimeSafety?.phase === "retired" ||
-      (runtimeSafety?.phase === "terminating" && !destroyLifecycleAuthority)
-    ) {
-      throw new ResourceCapsuleOwnerAuthorityError();
-    }
-    const capsule = await store.getCapsule(context.capsuleId);
-    if (
-      !capsule ||
-      capsule.workspaceId !== context.workspaceId ||
-      capsule.installingPrincipalId !== context.installingPrincipalId ||
-      capsule.status === "destroyed"
-    ) {
-      throw new ResourceCapsuleOwnerAuthorityError();
-    }
-    return {
-      kind: "Capsule",
-      id: capsule.id,
-      workspaceId: capsule.workspaceId,
-      installingPrincipalId: context.installingPrincipalId,
-    };
-  };
+  // Run credentials are consumed only by an explicitly declared platform
+  // extension route. Raw bearer material is never forwarded into Core to
+  // manufacture Resource ownership.
+  return async () => undefined;
 }
 
 function nonNegativeInteger(value: unknown): number | undefined {

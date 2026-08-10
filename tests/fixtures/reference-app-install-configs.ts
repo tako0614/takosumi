@@ -35,6 +35,7 @@ import type {
 import {
   TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2,
   TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_1,
+  TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_3,
 } from "takosumi-contract/repository-manifest";
 import { CAPSULE_LIFECYCLE_COMMAND_CAPABILITY } from "takosumi-contract/install-configs";
 import { TAKOSUMI_ACCOUNTS_CAPSULE_DELEGATION_SCOPES } from "@takosjp/takosumi-accounts-contract";
@@ -45,7 +46,8 @@ const MANAGED_APP_BASE_DOMAIN = "app.takos.jp";
 function repositoryInstallUxPolicy(
   requiredManifestApiVersion?:
     | typeof TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2
-    | typeof TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_1,
+    | typeof TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_1
+    | typeof TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_3,
 ) {
   return {
     allowedInterfacePermissions: [UI_SURFACE_OPEN_PERMISSION],
@@ -635,8 +637,9 @@ const yurucommuManagedSource = source("yurucommu");
  * `.well-known/takosumi.json`. This service-owned row carries only host
  * authority which repository metadata cannot grant: managed hostname policy
  * and the host runtime/resource materialization needed by the managed
- * deployment. The repository's v2.1 manifest owns its default module, launcher
- * declaration, and `launch_url` projection.
+ * deployment. The repository's v2.3 manifest owns its default module,
+ * credential-free source build, launcher declaration, and `launch_url`
+ * projection.
  */
 const yurucommuManagedConfig = {
   id: "cfg-reference-yurucommu-managed",
@@ -719,10 +722,10 @@ const yurucommuManagedConfig = {
   },
   policy: {
     repositoryInstallUx: repositoryInstallUxPolicy(
-      TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_1,
+      TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_3,
     ),
     providerCredentials: {
-      requiredProviders: ["registry.opentofu.org/tako0614/takoform"],
+      requiredProviders: ["registry.terraform.io/tako0614/takoform"],
       requireTemporary: true,
       requireTtlEnforced: true,
     },

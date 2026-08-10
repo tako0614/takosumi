@@ -45,9 +45,12 @@ release, and GA evidence must consume an immutable published identity; a
 source commit is never presented as a Registry release. At this writing the
 released line is `registry.terraform.io/tako0614/takoform` provider `v2.0.0`
 with retained `forms.takoform.com/v1alpha2` resources, while the Edge Platform
-Family provider `v2.1.0` / Host API `forms.takoform.com/v1alpha3` lane is public
-source but not published. Retained Legacy identities remain immutable
-compatibility material.
+Family provider `v2.1.0` / Host API `forms.takoform.com/v1beta1` lane is the
+current external integration identity. Its exact discovery leaf is
+`/.well-known/takoform/v1beta1`. Takosumi OSS does not implement or own that
+Host; it only provides the generic exact platform-extension seam for a
+verified external owner to compose. Retired alpha identities remain immutable
+migration or compatibility material and are not current Takosumi routes.
 
 This goal does not redesign Takoform's Form Definition, FormRef, package,
 provider, Host API, maturity, or publication process. A change to those

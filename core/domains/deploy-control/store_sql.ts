@@ -2042,6 +2042,50 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     return connection;
   }
 
+  async createConnectionIfAbsent(
+    connection: ProviderConnection,
+  ): Promise<boolean> {
+    const inserted = await this.#db
+      .insert(pgSchema.connections)
+      .values({
+        id: connection.id,
+        workspaceId: connection.workspaceId ?? null,
+        provider: connection.provider,
+        status: connection.status,
+        connectionJson: connection,
+        createdAt: connection.createdAt,
+        updatedAt: connection.updatedAt,
+      })
+      .onConflictDoNothing({ target: pgSchema.connections.id })
+      .returning({ id: pgSchema.connections.id });
+    return inserted.length === 1;
+  }
+
+  async replaceConnectionIfUnchanged(
+    expected: ProviderConnection,
+    replacement: ProviderConnection,
+  ): Promise<boolean> {
+    if (replacement.id !== expected.id) return false;
+    const updated = await this.#db
+      .update(pgSchema.connections)
+      .set({
+        workspaceId: replacement.workspaceId ?? null,
+        provider: replacement.provider,
+        status: replacement.status,
+        connectionJson: replacement,
+        createdAt: replacement.createdAt,
+        updatedAt: replacement.updatedAt,
+      })
+      .where(
+        and(
+          eq(pgSchema.connections.id, expected.id),
+          sql`${pgSchema.connections.connectionJson}::jsonb = ${JSON.stringify(expected)}::jsonb`,
+        ),
+      )
+      .returning({ id: pgSchema.connections.id });
+    return updated.length === 1;
+  }
+
   async getConnection(id: string): Promise<ProviderConnection | undefined> {
     return await this.#pgFirstJson<ProviderConnection>(
       pgSchema.connections,

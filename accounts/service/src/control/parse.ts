@@ -90,6 +90,7 @@ import type {
   PublicRun,
 } from "takosumi-contract/runs";
 import type { JsonValue } from "takosumi-contract";
+import { parseRepositorySourceBuild } from "takosumi-contract/repository-manifest";
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
 import { isAbsolute, normalize } from "node:path";
 import { stringValue } from "../http-helpers.ts";
@@ -631,58 +632,8 @@ export function modulePathValue(value: unknown): string | undefined {
 export function sourceBuildValue(
   value: unknown,
 ): SourceBuildConfig | undefined {
-  if (!isPlainJsonObject(value)) return undefined;
-  if (
-    !Array.isArray(value.commands) ||
-    value.commands.length === 0 ||
-    value.commands.length > 8 ||
-    !Array.isArray(value.outputs) ||
-    value.outputs.length === 0 ||
-    value.outputs.length > 16
-  ) {
-    return undefined;
-  }
-  const commands: SourceBuildConfig["commands"][number][] = [];
-  for (const commandValue of value.commands) {
-    if (!isPlainJsonObject(commandValue) || !Array.isArray(commandValue.argv)) {
-      return undefined;
-    }
-    const argv = commandValue.argv;
-    if (
-      argv.length === 0 ||
-      argv.length > 32 ||
-      argv.some(
-        (argument) =>
-          typeof argument !== "string" ||
-          argument.length === 0 ||
-          argument.length > 4096 ||
-          argument.includes("\0"),
-      )
-    ) {
-      return undefined;
-    }
-    const workingDirectory =
-      commandValue.workingDirectory === undefined
-        ? undefined
-        : modulePathValue(commandValue.workingDirectory);
-    if (
-      commandValue.workingDirectory !== undefined &&
-      workingDirectory === undefined
-    ) {
-      return undefined;
-    }
-    commands.push({
-      argv: [...argv] as string[],
-      ...(workingDirectory ? { workingDirectory } : {}),
-    });
-  }
-  const outputs: string[] = [];
-  for (const output of value.outputs) {
-    const normalized = modulePathValue(output);
-    if (!normalized) return undefined;
-    outputs.push(normalized);
-  }
-  return { commands, outputs };
+  const parsed = parseRepositorySourceBuild(value);
+  return parsed && typeof parsed !== "string" ? parsed : undefined;
 }
 
 export function isJsonValue(value: unknown): value is JsonValue {

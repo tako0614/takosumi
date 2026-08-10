@@ -8,6 +8,7 @@ import {
 import { InMemoryAccountsStore } from "../../../../accounts/service/src/store.ts";
 import { createTakosumiService } from "../../../../core/bootstrap.ts";
 import type { RepositoryManifestDocument } from "takosumi-contract/repository-manifest";
+import type { SourceBuildConfig } from "takosumi-contract/install-configs";
 import type {
   OpenTofuApplyJob,
   OpenTofuApplyResult,
@@ -1163,6 +1164,149 @@ test("Store preflight resolves the repository default before exact compatibility
     manualCreated.capsule.installConfigId,
   );
   expect(manualConfig.modulePath).toBe("deploy/manual");
+});
+
+test("initial Plan and Apply keep the persisted repository sourceBuild after metadata changes", async () => {
+  const accountStore = new InMemoryAccountsStore();
+  const cookie = seedSession(accountStore);
+  const deployStore = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner();
+  const { operations } = await createTakosumiService({
+    role: "takosumi-api",
+    runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
+    opentofuControlStore: deployStore,
+    opentofuRunner: runner,
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+  });
+  const seeded = await seedCapsuleModel(deployStore, {
+    workspaceId: "ws_repo_source_build_pin",
+    capsuleId: "cap_repo_source_build_seed",
+    installConfigId: "icfg_repo_source_build_base",
+    sourceUrl: "https://git.example.com/example/source-build.git",
+  });
+  const digest = `sha256:${"e".repeat(64)}`;
+  const reviewedSourceBuild: SourceBuildConfig = {
+    commands: [
+      { argv: ["bun", "run", "build", "--reviewed"] },
+    ],
+    outputs: ["dist/reviewed.js"],
+  };
+  const changedSourceBuild: SourceBuildConfig = {
+    commands: [{ argv: ["bun", "run", "build", "--changed"] }],
+    outputs: ["dist/changed.js"],
+  };
+  const manifestWithSourceBuild = (sourceBuild: SourceBuildConfig) => ({
+    status: "present" as const,
+    digest,
+    document: {
+      apiVersion: "takosumi.com/v2.3" as const,
+      kind: "Repository" as const,
+      install: {
+        defaultModule: ".",
+        modules: {
+          ".": {
+            inputs: [],
+            sourceBuild,
+          },
+        },
+      },
+    },
+  });
+  await deployStore.putSourceSnapshot({
+    ...seeded.snapshot,
+    repositoryManifest: manifestWithSourceBuild(reviewedSourceBuild),
+  });
+
+  const preview = await controlJson<{
+    readonly repositoryInstallUx: {
+      readonly status: "accepted";
+      readonly installConfigId: string;
+    };
+  }>(
+    {
+      operations,
+      store: accountStore,
+      cookie,
+      method: "POST",
+      path: `/api/v1/sources/${seeded.source.id}/compatibility-check`,
+      body: {
+        sourceSnapshotId: seeded.snapshot.id,
+        capsuleName: "source-build-pin",
+        compileInstallUx: true,
+      },
+    },
+    201,
+  );
+  const reviewedConfig = await operations.capsules.getInstallConfig(
+    preview.repositoryInstallUx.installConfigId,
+  );
+  expect(reviewedConfig.sourceBuild).toEqual(reviewedSourceBuild);
+  const adoptionOnlyConfig = await operations.capsules.putInstallConfig({
+    ...reviewedConfig,
+    id: "icfg_repo_source_build_adoption_only",
+    name: "source-build-adoption-only",
+    sourceBuild: undefined,
+  });
+
+  const created = await controlJson<{
+    readonly capsule: { readonly id: string; readonly installConfigId: string };
+  }>(
+    {
+      operations,
+      store: accountStore,
+      cookie,
+      method: "POST",
+      path: `/api/v1/workspaces/${seeded.workspace.id}/capsules`,
+      body: {
+        name: "source-build-pin",
+        environment: "production",
+        sourceId: seeded.source.id,
+        installConfigId: adoptionOnlyConfig.id,
+      },
+    },
+    201,
+  );
+  const capsuleConfig = await operations.capsules.getInstallConfig(
+    created.capsule.installConfigId,
+  );
+  expect(capsuleConfig.sourceBuild).toEqual(reviewedSourceBuild);
+
+  // Keep the captured manifest digest stable while changing its proposal. A
+  // subsequent Plan must use the DB-owned InstallConfig, not recompile this
+  // changed repository metadata.
+  await deployStore.putSourceSnapshot({
+    ...seeded.snapshot,
+    repositoryManifest: manifestWithSourceBuild(changedSourceBuild),
+  });
+  const planBody = await controlJson<{
+    readonly run: { readonly id: string; readonly status: string };
+  }>(
+    {
+      operations,
+      store: accountStore,
+      cookie,
+      method: "POST",
+      path: `/api/v1/capsules/${created.capsule.id}/plan`,
+    },
+    201,
+  );
+  expect(planBody.run.status).toBe("succeeded");
+  expect(runner.planJobs[0]?.sourceBuild).toEqual(reviewedSourceBuild);
+
+  const applyBody = await controlJson<{
+    readonly run: { readonly status: string };
+  }>(
+    {
+      operations,
+      store: accountStore,
+      cookie,
+      method: "POST",
+      path: `/api/v1/runs/${planBody.run.id}/apply`,
+    },
+    201,
+  );
+  expect(applyBody.run.status).toBe("succeeded");
+  expect(runner.applyJobs[0]?.sourceBuild).toEqual(reviewedSourceBuild);
 });
 
 test("a Workspace session cannot grant itself operator lifecycle actions through the Capsule config patch", async () => {

@@ -1,5 +1,9 @@
 import { lstat, mkdir } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
+import {
+  isRepositorySourceBuildOutputPath,
+  isRepositorySourceBuildRelativePath,
+} from "takosumi-contract/repository-manifest";
 import type { CommandContext, SourceBuildConfig } from "./types.ts";
 import { SOURCE_BUILD_CACHE_DIR_ENV } from "./constants.ts";
 import {
@@ -39,6 +43,11 @@ export async function runSourceBuild(
 
   for (const [index, command] of sourceBuild.commands.entries()) {
     const relativeCwd = command.workingDirectory ?? ".";
+    if (!isRepositorySourceBuildRelativePath(relativeCwd)) {
+      throw new Error(
+        `sourceBuild.commands[${index}].workingDirectory must satisfy the repository source-build path contract`,
+      );
+    }
     assertSafeRelativePath(
       relativeCwd,
       `sourceBuild.commands[${index}].workingDirectory`,
@@ -70,6 +79,11 @@ export async function runSourceBuild(
   }
 
   for (const [index, output] of sourceBuild.outputs.entries()) {
+    if (!isRepositorySourceBuildOutputPath(output)) {
+      throw new Error(
+        `sourceBuild.outputs[${index}] must satisfy the repository source-build output path contract`,
+      );
+    }
     assertSafeRelativePath(output, `sourceBuild.outputs[${index}]`);
     const outputPath = resolve(sourceRoot, output);
     try {

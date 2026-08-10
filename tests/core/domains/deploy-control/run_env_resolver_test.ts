@@ -105,6 +105,7 @@ function resolver(input: {
   readonly calls?: Array<{
     phase: string;
     auditRunId: string;
+    credentialRunId?: string;
     context: "opentofu" | "release_command";
   }>;
 }): RunEnvResolver {
@@ -114,8 +115,18 @@ function resolver(input: {
         input.calls?.push({ phase, auditRunId, context: "opentofu" });
         return input.credentials();
       },
-      mintReleaseCommandCredentials: async (_planRun, phase, auditRunId) => {
-        input.calls?.push({ phase, auditRunId, context: "release_command" });
+      mintReleaseCommandCredentials: async (
+        _planRun,
+        phase,
+        auditRunId,
+        credentialRunId,
+      ) => {
+        input.calls?.push({
+          phase,
+          auditRunId,
+          ...(credentialRunId !== auditRunId ? { credentialRunId } : {}),
+          context: "release_command",
+        });
         return input.releaseCredentials?.() ?? input.credentials();
       },
     },
@@ -214,6 +225,7 @@ test("RunEnvResolver mints provider env for release command context", async () =
     planRun: planRun(),
     phase: "apply",
     auditRunId: "release_apply_1",
+    credentialRunId: "apply_1",
     credentialContext: "release_command",
   });
 
@@ -221,6 +233,7 @@ test("RunEnvResolver mints provider env for release command context", async () =
     {
       phase: "apply",
       auditRunId: "release_apply_1",
+      credentialRunId: "apply_1",
       context: "release_command",
     },
   ]);

@@ -15,6 +15,8 @@ import {
   PLATFORM_EXTENSION_RESERVED_PREFIXES,
   pathIsUnderBase,
   platformExtensionBasePathIsReserved,
+  platformExtensionRouteMatchesPath,
+  type PlatformExtensionMatchMode,
 } from "takosumi-contract/platform-extension-routes";
 
 export interface PlatformCompatibilityProfile {
@@ -29,6 +31,8 @@ export interface PlatformExtensionRoute {
   readonly id?: string;
   /** Path prefix dispatched to the handler. */
   readonly basePath: `/${string}`;
+  /** `subtree` is the default; `exact` claims one canonical leaf only. */
+  readonly matchMode?: PlatformExtensionMatchMode;
   /** Logical fetch handler key on the platform env. */
   readonly handlerKey: string;
   /** `platform` is the default; `handler` preserves protocol credentials. */
@@ -48,10 +52,12 @@ export interface PlatformExtensionRoute {
    */
   readonly workspaceContext?: "query-required" | "query-optional";
   /**
-   * Exact opaque profile accepted for managed-provider run tokens. Omitted
-   * routes reject that token class. It is never derived from basePath or host.
+   * Exact audience and scope set accepted for generic Run credentials. Both
+   * must equal the installed Credential Recipe descriptor at verification.
+   * Omitted routes reject that token class. Run credentials require the typed
+   * context seam, so their raw bearer is never delivered to a handler.
    */
-  readonly managedProviderProfile?: string;
+  readonly runCredential?: PlatformExtensionRunCredential;
   /** Public capability tokens advertised by discovery. */
   readonly capabilities?: readonly string[];
   /**
@@ -64,13 +70,19 @@ export interface PlatformExtensionRoute {
   readonly contributions?: readonly PlatformExtensionContribution[];
 }
 
+export interface PlatformExtensionRunCredential {
+  readonly audience: string;
+  readonly requiredScopes: readonly string[];
+}
+
 /** Provider-neutral authenticated identity delivered across the platform seam. */
 export type PlatformExtensionAuthenticatedAuthKind =
   | "service-token"
   | "oauth-access-token"
   | "personal-access-token"
   | "session"
-  | "interface-oauth-token";
+  | "interface-oauth-token"
+  | "run-credential";
 
 export interface PlatformExtensionAuthenticatedContext {
   readonly authKind: PlatformExtensionAuthenticatedAuthKind;
@@ -81,8 +93,8 @@ export interface PlatformExtensionAuthenticatedContext {
   readonly capsuleId?: string;
   readonly runId?: string;
   readonly installingPrincipalId?: string;
-  readonly managedProviderProfile?: string;
   readonly audience?: string;
+  readonly phase?: "plan" | "apply" | "destroy";
 }
 
 /** Handler contract for routes using `authDelivery: "context"`. */
@@ -193,7 +205,9 @@ function platformExtensionRouteFromJson(
       `${label}.basePath must be a canonical absolute path prefix`,
     );
   }
-  if (platformExtensionBasePathIsReserved(basePath)) {
+  const matchMode = platformExtensionMatchMode(record.matchMode, label);
+  const effectiveMatchMode = matchMode ?? "subtree";
+  if (platformExtensionBasePathIsReserved(basePath, effectiveMatchMode)) {
     throw new TypeError(
       `${label}.basePath ${basePath} overlaps a Takosumi core route prefix`,
     );
@@ -211,6 +225,11 @@ function platformExtensionRouteFromJson(
     record.ownsPathSubtree,
     label,
   );
+  if (effectiveMatchMode === "exact" && ownsPathSubtree === true) {
+    throw new TypeError(
+      `${label}.matchMode=exact cannot enable ownsPathSubtree`,
+    );
+  }
   const workspaceContext = platformExtensionWorkspaceContext(
     record.workspaceContext,
     label,
@@ -234,12 +253,7 @@ function platformExtensionRouteFromJson(
       `${label}.requestScopeRules cannot be combined with requiredScopes`,
     );
   }
-  const managedProviderProfile = nonEmptyString(record.managedProviderProfile);
-  if (record.managedProviderProfile !== undefined && !managedProviderProfile) {
-    throw new TypeError(
-      `${label}.managedProviderProfile must be a non-empty string`,
-    );
-  }
+  const runCredential = optionalRunCredential(record.runCredential, label);
   const declaredCapabilities = optionalStringArray(
     record.capabilities,
     label,
@@ -252,6 +266,11 @@ function platformExtensionRouteFromJson(
   if (authDelivery === "context" && authMode === "handler") {
     throw new TypeError(
       `${label}.authDelivery=context requires platform authentication`,
+    );
+  }
+  if (runCredential && authDelivery !== "context") {
+    throw new TypeError(
+      `${label}.runCredential requires authDelivery=context`,
     );
   }
   if (authDelivery === "context" && (compatibilityProfiles?.length ?? 0) > 0) {
@@ -293,6 +312,7 @@ function platformExtensionRouteFromJson(
   return {
     ...(nonEmptyString(record.id) ? { id: nonEmptyString(record.id) } : {}),
     basePath: basePath as `/${string}`,
+    ...(matchMode ? { matchMode } : {}),
     handlerKey,
     ...(authMode ? { authMode } : {}),
     ...(authDelivery ? { authDelivery } : {}),
@@ -300,11 +320,56 @@ function platformExtensionRouteFromJson(
     ...(workspaceContext ? { workspaceContext } : {}),
     ...(requiredScopes ? { requiredScopes } : {}),
     ...(requestScopeRules ? { requestScopeRules } : {}),
-    ...(managedProviderProfile ? { managedProviderProfile } : {}),
+    ...(runCredential ? { runCredential } : {}),
     ...(capabilities.length > 0 ? { capabilities } : {}),
     ...(compatibilityProfiles ? { compatibilityProfiles } : {}),
     ...(contributions ? { contributions } : {}),
   };
+}
+
+function platformExtensionMatchMode(
+  value: unknown,
+  label: string,
+): PlatformExtensionMatchMode | undefined {
+  if (value === undefined) return undefined;
+  if (value === "subtree" || value === "exact") return value;
+  throw new TypeError(`${label}.matchMode must be subtree or exact`);
+}
+
+function optionalRunCredential(
+  value: unknown,
+  label: string,
+): PlatformExtensionRunCredential | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError(`${label}.runCredential must be an object`);
+  }
+  const record = value as Record<string, unknown>;
+  const audience = nonEmptyString(record.audience);
+  if (!audience) {
+    throw new TypeError(
+      `${label}.runCredential.audience must be a non-empty string`,
+    );
+  }
+  const requiredScopes = optionalStringArray(
+    record.requiredScopes,
+    `${label}.runCredential`,
+    "requiredScopes",
+  );
+  if (!requiredScopes || requiredScopes.length === 0) {
+    throw new TypeError(
+      `${label}.runCredential.requiredScopes must contain at least one scope`,
+    );
+  }
+  if (requiredScopes.includes("admin")) {
+    throw new TypeError(
+      `${label}.runCredential.requiredScopes cannot grant admin`,
+    );
+  }
+  return Object.freeze({
+    audience,
+    requiredScopes: Object.freeze([...requiredScopes]),
+  });
 }
 
 function platformExtensionAuthDelivery(
@@ -373,17 +438,22 @@ function mergePlatformExtensionRoutes(
     }
   }
   const merged = new Map<string, PlatformExtensionRoute>();
-  const managedProfileOwners = new Map<string, string>();
+  const runCredentialAudienceOwners = new Map<string, string>();
   const compatibilityProfileOwners = new Map<string, string>();
   for (const route of routes) {
-    if (route.managedProviderProfile) {
-      const owner = managedProfileOwners.get(route.managedProviderProfile);
+    if (route.runCredential) {
+      const owner = runCredentialAudienceOwners.get(
+        route.runCredential.audience,
+      );
       if (owner && owner !== route.basePath) {
         throw new TypeError(
-          `managed provider profile ${route.managedProviderProfile} has multiple route owners`,
+          `run credential audience ${route.runCredential.audience} has multiple route owners`,
         );
       }
-      managedProfileOwners.set(route.managedProviderProfile, route.basePath);
+      runCredentialAudienceOwners.set(
+        route.runCredential.audience,
+        route.basePath,
+      );
     }
     for (const { profile } of route.compatibilityProfiles ?? []) {
       const owner = compatibilityProfileOwners.get(profile);
@@ -398,6 +468,7 @@ function mergePlatformExtensionRoutes(
     if (
       existing &&
       (existing.handlerKey !== route.handlerKey ||
+        (existing.matchMode ?? "subtree") !== (route.matchMode ?? "subtree") ||
         (existing.authMode ?? "platform") !== (route.authMode ?? "platform") ||
         (existing.authDelivery ?? "headers") !==
           (route.authDelivery ?? "headers") ||
@@ -409,7 +480,7 @@ function mergePlatformExtensionRoutes(
           existing.requestScopeRules,
           route.requestScopeRules,
         ) ||
-        existing.managedProviderProfile !== route.managedProviderProfile)
+        !sameRunCredential(existing.runCredential, route.runCredential))
     ) {
       throw new TypeError(
         `platform extension basePath ${route.basePath} has multiple owners`,
@@ -444,6 +515,16 @@ function mergePlatformExtensionRoutes(
     );
   }
   return [...merged.values()];
+}
+
+function sameRunCredential(
+  left: PlatformExtensionRunCredential | undefined,
+  right: PlatformExtensionRunCredential | undefined,
+): boolean {
+  return (
+    left?.audience === right?.audience &&
+    sameStrings(left?.requiredScopes, right?.requiredScopes)
+  );
 }
 
 function optionalCompatibilityProfiles(
@@ -792,7 +873,13 @@ export function matchPlatformExtensionRoute(
   routes: readonly PlatformExtensionRoute[],
 ): PlatformExtensionRoute | undefined {
   return routes
-    .filter((route) => pathIsUnderBase(pathname, route.basePath))
+    .filter((route) =>
+      platformExtensionRouteMatchesPath(
+        pathname,
+        route.basePath,
+        route.matchMode,
+      ),
+    )
     .sort((left, right) => right.basePath.length - left.basePath.length)[0];
 }
 
@@ -805,15 +892,20 @@ export function resolvePlatformExtensionRequestScopeRoute(
   request: Request,
   route: PlatformExtensionRoute,
 ): PlatformExtensionRoute | undefined {
+  const pathname = new URL(request.url).pathname;
+  if (
+    !platformExtensionRouteMatchesPath(
+      pathname,
+      route.basePath,
+      route.matchMode,
+    )
+  ) {
+    return undefined;
+  }
   const rules = route.requestScopeRules;
   if (!rules) return route;
-  const pathname = new URL(request.url).pathname;
   const relativePath =
-    pathname === route.basePath
-      ? "/"
-      : pathname.startsWith(`${route.basePath}/`)
-        ? pathname.slice(route.basePath.length)
-        : undefined;
+    pathname === route.basePath ? "/" : pathname.slice(route.basePath.length);
   if (!relativePath) return undefined;
   const rule = rules.find(
     (candidate) =>

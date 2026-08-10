@@ -40,7 +40,6 @@ import {
   installExperienceOidcClient,
   installExperiencePublicEndpoint,
   installExperienceServiceNameVariable,
-  isPublicManagedProviderConnection,
 } from "takosumi-contract";
 import { sameProviderSource } from "takosumi-contract/provider-env-rules";
 import Page from "../account/components/auth/Page.tsx";
@@ -1255,10 +1254,7 @@ function providerConnectionLabel(
   providerConnection: ProviderConnection,
 ): string {
   return (
-    providerConnectionDisplayName(
-      providerConnection,
-      t("installStore.managedProvider"),
-    ) ||
+    providerConnectionDisplayName(providerConnection) ||
     providerDisplayName(providerConnection.providerSource)
   );
 }
@@ -1285,9 +1281,6 @@ function boundProviderLabel(
   const connection = providerConnections.find(
     (candidate) => candidate.id === row.connectionId,
   );
-  if (connection && isPublicManagedProviderConnection(connection)) {
-    return t("installStore.managedProvider");
-  }
   if (!row.provider.trim()) return t("app.bindings.providerPlaceholder");
   return row.childAlias
     ? `${providerDisplayName(row.provider)} (${row.childAlias})`

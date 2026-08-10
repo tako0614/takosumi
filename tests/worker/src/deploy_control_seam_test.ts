@@ -1,16 +1,7 @@
 import { expect, test } from "bun:test";
 import { deployControlServiceOptions } from "../../../worker/src/deploy_control_seam.ts";
 import { platformResourceCapsuleOwnerResolver } from "../../../worker/src/deploy_control_seam.ts";
-import { managedProviderCredentialIssuerFromEnv } from "../../../worker/src/worker_service.ts";
 import type { CloudflareWorkerEnv } from "../../../worker/src/bindings.ts";
-import type { ProviderConnection } from "@takosumi/internal/deploy-control-api";
-import {
-  CloudflareD1OpenTofuControlStore,
-  ensureD1OpenTofuLedgerSchema,
-} from "../../../worker/src/d1_opentofu_store.ts";
-import { SqliteFakeD1 } from "../../helpers/deploy-control/sqlite_fake_d1.ts";
-import { createManagedProviderRunToken } from "../../../core/shared/managed_provider_tokens.ts";
-import { ResourceCapsuleOwnerAuthorityError } from "../../../core/api/form_host_routes.ts";
 import {
   createDefaultRunnerProfiles,
   type OpenTofuRunner,
@@ -103,173 +94,11 @@ test("Worker composition mounts ledger HTTP routes only for explicit private ing
   ).toBe(true);
 });
 
-test("managed provider credential mint refuses a destroyed Capsule", async () => {
-  let destroyed = false;
-  const issuer = managedProviderCredentialIssuerFromEnv(
-    {
-      TAKOSUMI_MANAGED_PROVIDER_TOKEN_SECRET: "managed-secret",
-    } as unknown as CloudflareWorkerEnv,
-    {
-      getCapsule: async () =>
-        destroyed
-          ? {
-              id: "capsule_1",
-              workspaceId: "workspace_1",
-              projectId: "project_1",
-              name: "capsule",
-              slug: "capsule",
-              sourceId: "source_1",
-              installConfigId: "config_1",
-              installingPrincipalId: "principal_1",
-              environment: "production",
-              currentStateGeneration: 0,
-              status: "destroyed" as const,
-              createdAt: "2026-01-01T00:00:00.000Z",
-              updatedAt: "2026-01-01T00:00:00.000Z",
-            }
-          : {
-              id: "capsule_1",
-              workspaceId: "workspace_1",
-              projectId: "project_1",
-              name: "capsule",
-              slug: "capsule",
-              sourceId: "source_1",
-              installConfigId: "config_1",
-              installingPrincipalId: "principal_1",
-              environment: "production",
-              currentStateGeneration: 0,
-              status: "active" as const,
-              createdAt: "2026-01-01T00:00:00.000Z",
-              updatedAt: "2026-01-01T00:00:00.000Z",
-            },
-    },
+test("legacy managed-provider headers cannot manufacture Capsule ownership", async () => {
+  const resolver = platformResourceCapsuleOwnerResolver(
+    {} as unknown as CloudflareWorkerEnv,
   );
-  expect(issuer).toBeDefined();
-  const connection: ProviderConnection = {
-    id: "connection_1",
-    provider: "registry.example/provider",
-    providerSource: "registry.example/provider",
-    scope: "operator",
-    status: "verified",
-    materialization: "env",
-    envNames: ["PROVIDER_TOKEN"],
-    scopeHints: {
-      managedProvider: true,
-      managedProviderProfile: "operator.example.provider.v1",
-    },
-    createdAt: "2026-01-01T00:00:00.000Z",
-    updatedAt: "2026-01-01T00:00:00.000Z",
-  };
-  const request = {
-    workspaceId: "workspace_1",
-    capsuleId: "capsule_1",
-    runId: "run_1",
-    managedProviderProfile: "operator.example.provider.v1",
-    connection,
-    phase: "apply" as const,
-  };
-  expect((await issuer!(request))?.issuer).toBe(
-    "takosumi_managed_provider_token",
-  );
-  destroyed = true;
-  await expect(issuer!(request)).resolves.toBeUndefined();
-});
 
-test("managed DELETE owner resolution accepts only the live destroy ApplyRun", async () => {
-  const db = new SqliteFakeD1();
-  await ensureD1OpenTofuLedgerSchema(db);
-  const store = new CloudflareD1OpenTofuControlStore(db);
-  await store.putWorkspace({
-    id: "workspace_1",
-    handle: "workspace",
-    displayName: "Workspace",
-    type: "personal",
-    ownerUserId: "principal_1",
-    createdAt: "2026-01-01T00:00:00.000Z",
-    updatedAt: "2026-01-01T00:00:00.000Z",
-  });
-  await store.putCapsule({
-    id: "capsule_1",
-    workspaceId: "workspace_1",
-    projectId: "project_1",
-    name: "capsule",
-    slug: "capsule",
-    sourceId: "source_1",
-    installConfigId: "config_1",
-    installingPrincipalId: "principal_1",
-    environment: "production",
-    currentStateGeneration: 0,
-    status: "active",
-    createdAt: "2026-01-01T00:00:00.000Z",
-    updatedAt: "2026-01-01T00:00:00.000Z",
-  });
-  await store.putApplyRun({
-    id: "destroy_run",
-    planRunId: "destroy_plan",
-    workspaceId: "workspace_1",
-    capsuleId: "capsule_1",
-    operation: "destroy",
-    runnerProfileId: "opentofu-default",
-    status: "running",
-    expected: {
-      planRunId: "destroy_plan",
-      capsuleId: "capsule_1",
-      runnerProfileId: "opentofu-default",
-      sourceDigest: "sha256:source",
-      variablesDigest: "sha256:variables",
-      policyDecisionDigest: "sha256:policy",
-      planDigest: "sha256:plan",
-      planArtifactDigest: "sha256:artifact",
-    },
-    stateBackend: { kind: "managed", ref: "state" },
-    stateLock: { status: "pending", backendRef: "state" },
-    auditEvents: [],
-    createdAt: 1,
-    updatedAt: 1,
-    startedAt: 1,
-  });
-  const env = {
-    TAKOSUMI_CONTROL_DB: db,
-    TAKOSUMI_MANAGED_PROVIDER_TOKEN_SECRET: "managed-secret",
-  } as unknown as CloudflareWorkerEnv;
-  const resolver = platformResourceCapsuleOwnerResolver(env);
-  const token = await createManagedProviderRunToken({
-    secret: "managed-secret",
-    audience: "operator.example.provider.v1",
-    workspaceId: "workspace_1",
-    capsuleId: "capsule_1",
-    runId: "destroy_run",
-    installingPrincipalId: "principal_1",
-    connectionId: "connection_1",
-    provider: "registry.example/provider",
-    phase: "destroy",
-    scopes: ["read", "write"],
-  });
-  await expect(
-    resolver({
-      actor: {
-        actorAccountId: "principal_1",
-        workspaceId: "workspace_1",
-        roles: ["owner"],
-        scopes: ["resources:*"],
-        requestId: "request_destroy_refresh",
-      },
-      request: new Request(
-        "https://app.takosumi.test/apis/forms.takoform.com/v1alpha1/resources/ObjectBucket/assets",
-        {
-          method: "GET",
-          headers: {
-            "x-takosumi-internal-managed-provider-run-token": token.token,
-            "x-takosumi-internal-managed-provider-profile":
-              "operator.example.provider.v1",
-          },
-        },
-      ),
-      space: "workspace_1",
-      kind: "ObjectBucket",
-      name: "assets",
-    }),
-  ).resolves.toMatchObject({ id: "capsule_1" });
   await expect(
     resolver({
       actor: {
@@ -279,153 +108,15 @@ test("managed DELETE owner resolution accepts only the live destroy ApplyRun", a
         scopes: ["resources:*"],
         requestId: "request_1",
       },
-      request: new Request(
-        "https://app.takosumi.test/apis/forms.takoform.com/v1alpha1/resources/ObjectBucket/assets",
-        {
-          method: "DELETE",
-          headers: {
-            "x-takosumi-internal-managed-provider-run-token": token.token,
-            "x-takosumi-internal-managed-provider-profile":
-              "operator.example.provider.v1",
-          },
+      request: new Request("https://app.takosumi.test/resources", {
+        headers: {
+          "x-takosumi-internal-managed-provider-run-token": "legacy-token",
+          "x-takosumi-internal-managed-provider-profile": "legacy-profile",
         },
-      ),
+      }),
       space: "workspace_1",
       kind: "ObjectBucket",
       name: "assets",
     }),
-  ).resolves.toMatchObject({ id: "capsule_1" });
-
-  const applyToken = await createManagedProviderRunToken({
-    secret: "managed-secret",
-    audience: "operator.example.provider.v1",
-    workspaceId: "workspace_1",
-    capsuleId: "capsule_1",
-    runId: "destroy_run",
-    installingPrincipalId: "principal_1",
-    connectionId: "connection_1",
-    provider: "registry.example/provider",
-    phase: "apply",
-    scopes: ["write"],
-  });
-  await expect(
-    resolver({
-      actor: {
-        actorAccountId: "principal_1",
-        workspaceId: "workspace_1",
-        roles: ["owner"],
-        scopes: ["resources:*"],
-        requestId: "request_1",
-      },
-      request: new Request(
-        "https://app.takosumi.test/apis/forms.takoform.com/v1alpha1/resources/ObjectBucket/assets",
-        {
-          method: "DELETE",
-          headers: {
-            "x-takosumi-internal-managed-provider-run-token": applyToken.token,
-            "x-takosumi-internal-managed-provider-profile":
-              "operator.example.provider.v1",
-          },
-        },
-      ),
-      space: "workspace_1",
-      kind: "ObjectBucket",
-      name: "assets",
-    }),
-  ).rejects.toBeInstanceOf(ResourceCapsuleOwnerAuthorityError);
-});
-
-test("managed destroy plan refresh accepts only the live destroy PlanRun", async () => {
-  const db = new SqliteFakeD1();
-  await ensureD1OpenTofuLedgerSchema(db);
-  const store = new CloudflareD1OpenTofuControlStore(db);
-  await store.putWorkspace({
-    id: "workspace_1",
-    handle: "workspace",
-    displayName: "Workspace",
-    type: "personal",
-    ownerUserId: "principal_1",
-    createdAt: "2026-01-01T00:00:00.000Z",
-    updatedAt: "2026-01-01T00:00:00.000Z",
-  });
-  await store.putCapsule({
-    id: "capsule_1",
-    workspaceId: "workspace_1",
-    projectId: "project_1",
-    name: "capsule",
-    slug: "capsule",
-    sourceId: "source_1",
-    installConfigId: "config_1",
-    installingPrincipalId: "principal_1",
-    environment: "production",
-    currentStateGeneration: 1,
-    status: "active",
-    createdAt: "2026-01-01T00:00:00.000Z",
-    updatedAt: "2026-01-01T00:00:00.000Z",
-  });
-  await store.putPlanRun({
-    id: "destroy_plan",
-    workspaceId: "workspace_1",
-    capsuleId: "capsule_1",
-    source: {
-      kind: "git",
-      url: "https://example.test/repository.git",
-      ref: "main",
-      path: ".",
-    },
-    sourceDigest: "sha256:source",
-    operation: "destroy",
-    runnerProfileId: "opentofu-default",
-    variablesDigest: "sha256:variables",
-    requiredProviders: ["registry.example/provider"],
-    status: "running",
-    policy: { status: "passed", reasons: [], checkedAt: 1 },
-    policyDecisionDigest: "sha256:policy",
-    auditEvents: [],
-    createdAt: 1,
-    updatedAt: 2,
-    startedAt: 2,
-  });
-  const resolver = platformResourceCapsuleOwnerResolver({
-    TAKOSUMI_CONTROL_DB: db,
-    TAKOSUMI_MANAGED_PROVIDER_TOKEN_SECRET: "managed-secret",
-  } as unknown as CloudflareWorkerEnv);
-  const token = await createManagedProviderRunToken({
-    secret: "managed-secret",
-    audience: "operator.example.provider.v1",
-    workspaceId: "workspace_1",
-    capsuleId: "capsule_1",
-    runId: "destroy_plan",
-    installingPrincipalId: "principal_1",
-    connectionId: "connection_1",
-    provider: "registry.example/provider",
-    phase: "plan",
-    scopes: ["read", "write"],
-  });
-
-  await expect(
-    resolver({
-      actor: {
-        actorAccountId: "principal_1",
-        workspaceId: "workspace_1",
-        roles: ["owner"],
-        scopes: ["resources:*"],
-        requestId: "request_destroy_plan_refresh",
-      },
-      request: new Request(
-        "https://app.takosumi.test/apis/forms.takoform.com/v1alpha1/resources/ObjectBucket/assets",
-        {
-          method: "GET",
-          headers: {
-            "x-takosumi-internal-managed-provider-run-token": token.token,
-            "x-takosumi-internal-managed-provider-profile":
-              "operator.example.provider.v1",
-          },
-        },
-      ),
-      space: "workspace_1",
-      kind: "ObjectBucket",
-      name: "assets",
-    }),
-  ).resolves.toMatchObject({ id: "capsule_1" });
+  ).resolves.toBeUndefined();
 });

@@ -51,6 +51,8 @@ export interface ResolveRunEnvironmentInput {
   readonly planRun: PlanRun;
   readonly phase: "plan" | "apply" | "destroy";
   readonly auditRunId: string;
+  /** Exact canonical PlanRun/ApplyRun used for credential authority. */
+  readonly credentialRunId?: string;
   readonly credentialContext?: "opentofu" | "release_command";
   /**
    * A lifecycle command without `useProviderCredentials` still needs the
@@ -125,6 +127,7 @@ export class RunEnvResolver {
               input.planRun,
               releaseCommandCredentialPhase(input.phase),
               input.auditRunId,
+              input.credentialRunId ?? input.auditRunId,
             )
           : await this.#credentials.mintRunCredentials(
               input.planRun,
@@ -149,6 +152,7 @@ export class RunEnvResolver {
       credentialEnvNamesFromRunCredentials(credentials);
     const runEnvironmentEvidenceDigest = await stableJsonDigest({
       runId: input.auditRunId,
+      credentialRunId: input.credentialRunId ?? input.auditRunId,
       phase: input.phase,
       credentialContext: input.credentialContext ?? "opentofu",
       providerResolutions,

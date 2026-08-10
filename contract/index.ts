@@ -114,6 +114,7 @@ export {
   isReservedProviderEnvName,
 } from "./provider-env-rules.ts";
 export * from "./credential-recipes.ts";
+export * from "./credential-recipe-host.ts";
 export * from "./dependencies.ts";
 export type {
   TakosumiApiErrorCode,

@@ -218,7 +218,6 @@ function fakeProviderVault() {
     connectionId: "conn_cf",
     temporary: true,
     ttlEnforced: true,
-    phase: "plan" as const,
   };
   return {
     register: () => Promise.reject(new Error("not used")),
@@ -234,7 +233,10 @@ function fakeProviderVault() {
           [sharedEvidence],
         ),
       ),
-    mintForCapsuleProviderBindings: () =>
+    mintForCapsuleProviderBindings: (
+      _workspaceId: string,
+      entries: readonly { provider: string; connectionId: string }[],
+    ) =>
       Promise.resolve(
         new PhaseMintBundle(
           {
@@ -243,7 +245,12 @@ function fakeProviderVault() {
             },
           },
           [],
-          [sharedEvidence],
+          entries.map((entry) => ({
+            provider: entry.provider,
+            connectionId: entry.connectionId,
+            temporary: true,
+            ttlEnforced: true,
+          })),
         ),
       ),
   };

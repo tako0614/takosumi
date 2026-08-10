@@ -222,6 +222,7 @@ export function connectionOAuthDescriptorsFromEnv(
 }
 
 const cloudflareDriver: CredentialRecipeRuntimeDriver = {
+  evidenceIssuer: "cloudflare_api_token_vending",
   async verify({ connection, values, fetch }) {
     const token = values.CLOUDFLARE_API_TOKEN ?? values.CF_API_TOKEN;
     if (!token)
@@ -249,11 +250,15 @@ const cloudflareDriver: CredentialRecipeRuntimeDriver = {
       });
       return { env: minted.values, evidence: minted.evidence };
     }
-    return { env: input.values, evidence: input.staticEvidence() };
+    return {
+      env: input.values,
+      evidence: { ...input.staticEvidence(), issuer: cloudflareDriver.evidenceIssuer },
+    };
   },
 };
 
 const awsAssumeRoleDriver: CredentialRecipeRuntimeDriver = {
+  evidenceIssuer: "aws_sts_assume_role",
   async verify({ connection, values, fetch, now }) {
     return await verifyAwsAssumeRole(connection, values, { fetch, now });
   },
@@ -266,7 +271,13 @@ const awsAssumeRoleDriver: CredentialRecipeRuntimeDriver = {
     );
     return minted
       ? { env: minted.values, evidence: minted.evidence }
-      : { env: input.values, evidence: input.staticEvidence() };
+      : {
+          env: input.values,
+          evidence: {
+            ...input.staticEvidence(),
+            issuer: awsAssumeRoleDriver.evidenceIssuer,
+          },
+        };
   },
 };
 
@@ -277,6 +288,7 @@ const awsAssumeRoleDriver: CredentialRecipeRuntimeDriver = {
  */
 export const DECLARED_ENV_CREDENTIAL_RECIPE_DRIVER: CredentialRecipeRuntimeDriver =
   {
+    evidenceIssuer: "declared_env",
     async verify({ connection, values, files }) {
       const available = new Set([
         ...Object.keys(values),
@@ -305,12 +317,13 @@ export const DECLARED_ENV_CREDENTIAL_RECIPE_DRIVER: CredentialRecipeRuntimeDrive
       return {
         env: minted.env,
         files: minted.files,
-        evidence: minted.evidence,
+        evidence: { ...minted.evidence, issuer: "declared_env" },
       };
     },
   };
 
 const googleServiceAccountDriver: CredentialRecipeRuntimeDriver = {
+  evidenceIssuer: "google_service_account",
   async verify({ values }) {
     const raw = values.GOOGLE_CREDENTIALS;
     if (!raw) return { ok: false, detail: "service account JSON is missing" };
@@ -328,7 +341,13 @@ const googleServiceAccountDriver: CredentialRecipeRuntimeDriver = {
     }
   },
   async mint(input) {
-    return { env: input.values, evidence: input.staticEvidence() };
+    return {
+      env: input.values,
+      evidence: {
+        ...input.staticEvidence(),
+        issuer: googleServiceAccountDriver.evidenceIssuer,
+      },
+    };
   },
 };
 

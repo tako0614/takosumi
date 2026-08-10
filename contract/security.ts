@@ -34,7 +34,7 @@ export interface ProviderCredentialMintEvidence {
   readonly ttlEnforced: boolean;
   readonly expiresAt?: string;
   readonly ttlSeconds?: number;
-  /** Open recipe/issuer driver token; adding a driver needs no contract enum edit. */
+  /** Non-secret recipe/issuer identifier; never credential material. */
   readonly issuer?: string;
   readonly secretValueStored?: false;
 }

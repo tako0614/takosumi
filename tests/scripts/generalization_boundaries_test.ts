@@ -578,7 +578,7 @@ describe("generalization boundary scanner", () => {
     ]);
   });
 
-  test("keeps managed-provider authority explicit and separate from providerConfig", () => {
+  test("keeps run-credential authority separate from providerConfig and URLs", () => {
     const violations = findGeneralizationBoundaryViolations([
       {
         path: "accounts/service/src/control/shared.ts",
@@ -592,11 +592,10 @@ describe("generalization boundary scanner", () => {
       },
       {
         path: "worker/src/worker_service.ts",
-        content:
-          "createManagedProviderRunToken({ audience: providerBaseUrl });",
+        content: "mintRunCredential({ audience: providerBaseUrl });",
       },
       {
-        path: "core/shared/managed_provider_tokens.ts",
+        path: "core/shared/run_credential_tokens.ts",
         content: [
           "readonly expectedProviderBaseUrl?: string;",
           "readonly providerBaseUrlHash?: string;",
@@ -605,17 +604,17 @@ describe("generalization boundary scanner", () => {
       {
         path: "deploy/platform/worker.ts",
         content:
-          "verifyManagedProviderRunToken(token, { expectedProviderBaseUrl: routeUrl });",
+          "verifyRunCredentialToken(token, { expectedProviderBaseUrl: routeUrl });",
       },
     ]);
 
     expect(violations.map((violation) => violation.ruleId)).toEqual([
-      "implicit-managed-provider-authority",
-      "implicit-managed-provider-authority",
-      "implicit-managed-provider-authority",
-      "implicit-managed-provider-authority",
-      "implicit-managed-provider-authority",
-      "implicit-managed-provider-authority",
+      "run-credential-provider-inference",
+      "run-credential-provider-inference",
+      "run-credential-provider-inference",
+      "run-credential-provider-inference",
+      "run-credential-provider-inference",
+      "run-credential-provider-inference",
     ]);
     expect(
       findGeneralizationBoundaryViolations([
@@ -658,23 +657,104 @@ describe("generalization boundary scanner", () => {
     ).toEqual(["control-error-message-inference"]);
   });
 
-  test("rejects direct managed-provider marker checks in authority consumers", () => {
+  test("keeps the workspace-bindable predicate independent of provider identity", () => {
+    const violations = findGeneralizationBoundaryViolations([
+      {
+        path: "contract/connections.ts",
+        content: [
+          "function isWorkspaceBindableOperatorConnection(connection: any) {",
+          "  return connection.provider === 'registry.example/provider';",
+          "}",
+          "function isWorkspaceBindableOperatorConnection(connection: any) {",
+          "  return connection.scopeHints?.providerConfig?.base_url;",
+          "}",
+        ].join("\n"),
+      },
+    ]);
+
+    expect(violations.map((violation) => violation.ruleId)).toEqual([
+      "workspace-bindable-predicate-inference",
+      "workspace-bindable-predicate-inference",
+    ]);
+  });
+
+  test("rejects legacy managed-provider behavior outside decode boundaries", () => {
     const violations = findGeneralizationBoundaryViolations([
       {
         path: "dashboard/src/views/new/NewAppView.tsx",
         content: "return connection.scopeHints?.managedProvider === true;",
       },
       {
-        path: "core/domains/deploy-control/plan_resolution.ts",
+        path: "worker/src/worker_service.ts",
         content:
-          "if (entry.connection?.scopeHints?.managedProvider !== true) continue;",
+          'import { createManagedProviderRunToken } from "../../core/shared/managed_provider_tokens.ts";',
+      },
+      {
+        path: "deploy/platform/worker.ts",
+        content: "const audience = route.managedProviderProfile;",
       },
     ]);
 
     expect(violations.map((violation) => violation.ruleId)).toEqual([
-      "direct-managed-provider-marker-authority",
-      "direct-managed-provider-marker-authority",
+      "legacy-managed-provider-run-authority",
+      "legacy-managed-provider-run-authority",
+      "legacy-managed-provider-run-authority",
     ]);
+
+    expect(
+      findGeneralizationBoundaryViolations([
+        {
+          path: "contract/connections.ts",
+          content: "readonly managedProviderProfile?: string;",
+        },
+        {
+          path: "core/adapters/vault/mod.ts",
+          content:
+            "if (hasLegacyManagedProviderScopeHints(input.scopeHints)) rejectWrite();",
+        },
+        {
+          path:
+            "core/adapters/vault/run_issued_operator_reconciliation.ts",
+          content:
+            "assertExactLegacy(input.scopeHints.managedProviderProfile);",
+        },
+      ]),
+    ).toEqual([]);
+    expect(
+      findGeneralizationBoundaryViolations([
+        {
+          path: "core/adapters/vault/mod.ts",
+          content: "if (input.scopeHints?.managedProvider) rejectWrite();",
+        },
+      ]).map((violation) => violation.ruleId),
+    ).toEqual(["legacy-managed-provider-run-authority"]);
+  });
+
+  test("rejects OSS Takoform credential env semantics outside the decoder", () => {
+    const violations = findGeneralizationBoundaryViolations([
+      {
+        path: "providers/example/run_driver.ts",
+        content: [
+          'env.TAKOFORM_ENDPOINT = endpoint;',
+          'env.TAKOFORM_SPACE = workspaceId;',
+          'env.TAKOFORM_TOKEN = token;',
+        ].join("\n"),
+      },
+    ]);
+
+    expect(violations.map((violation) => violation.ruleId)).toEqual([
+      "oss-takoform-run-credential-env",
+      "oss-takoform-run-credential-env",
+      "oss-takoform-run-credential-env",
+    ]);
+    expect(
+      findGeneralizationBoundaryViolations([
+        {
+          path: "core/domains/capsules/repository_install_ux_compiler.ts",
+          content: 'const legacy = ["TAKOFORM_TOKEN"];',
+        },
+      ]),
+    ).toEqual([]);
   });
 
   test("keeps Provider Connection material out of operator release webhooks", () => {

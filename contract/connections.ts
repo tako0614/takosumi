@@ -1,4 +1,5 @@
 import type { JsonValue } from "./types.ts";
+import type { CredentialRecipeRunIssuance } from "./credential-recipes.ts";
 import type { SourceGitConnectionKind } from "./sources.ts";
 import { INTERNAL_V1_PREFIX } from "./api-surface.ts";
 
@@ -54,6 +55,71 @@ export interface ProviderConnectionRecipeRef {
   readonly declaredEnv?: boolean;
   /** Explicit pre-run driver token selected by the recipe, if any. */
   readonly preRunAction?: string;
+  /** Server-resolved run-issuance authority pinned from the installed mode. */
+  readonly runIssuance?: CredentialRecipeRunIssuance;
+}
+
+/** Closed check for the only run-issued credential descriptor supported by v1. */
+export function isCapsuleRunCredentialIssuance(
+  value: unknown,
+): value is CredentialRecipeRunIssuance {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    Object.keys(record).length === 5 &&
+    record.context === "capsule-run.v1" &&
+    record.operatorConnection === "workspace-bindable" &&
+    record.storedMaterial === "none" &&
+    isExactRunCredentialAudience(record.audience) &&
+    isExactRunCredentialScopes(record.scopes)
+  );
+}
+
+/** Set-exact comparison for the authority pinned on a recipe/Connection. */
+export function sameCapsuleRunCredentialIssuance(
+  left: unknown,
+  right: unknown,
+): boolean {
+  if (
+    !isCapsuleRunCredentialIssuance(left) ||
+    !isCapsuleRunCredentialIssuance(right) ||
+    left.audience !== right.audience ||
+    left.scopes.length !== right.scopes.length
+  ) {
+    return false;
+  }
+  const rightScopes = new Set(right.scopes);
+  return left.scopes.every((scope) => rightScopes.has(scope));
+}
+
+function isExactRunCredentialAudience(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= 2048 &&
+    value.trim() === value &&
+    !/[\u0000-\u001f\u007f]/u.test(value)
+  );
+}
+
+function isExactRunCredentialScopes(
+  value: unknown,
+): value is readonly string[] {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 64) {
+    return false;
+  }
+  const scopes = value as unknown[];
+  return (
+    scopes.every(
+      (scope) =>
+        typeof scope === "string" &&
+        scope.length > 0 &&
+        scope.length <= 256 &&
+        scope.trim() === scope &&
+        !/[\u0000-\u001f\u007f]/u.test(scope) &&
+        scope !== "admin",
+    ) && new Set(scopes).size === scopes.length
+  );
 }
 
 /** True when the installed recipe permits caller-declared env/file names. */
@@ -111,11 +177,7 @@ export function publicProviderConnectionStatus(
 }
 
 export interface ConnectionScopeHints {
-  /**
-   * Marks an operator-scoped Provider Connection as a public managed-provider
-   * compatibility endpoint, not as a raw operator credential. Only rows with
-   * this marker may be projected into Workspace provider choices.
-   */
+  /** @deprecated Stored-row decode compatibility only; grants no authority. */
   readonly managedProvider?: boolean;
   /**
    * Non-secret provider-block arguments supplied by this Connection. Keys are
@@ -136,12 +198,7 @@ export interface ConnectionScopeHints {
    * keys but does not interpret a vendor schema.
    */
   readonly providerSettings?: Readonly<Record<string, JsonValue>>;
-  /**
-   * Opaque operator-owned profile that authorizes this row as a public managed
-   * Provider Connection. The same exact token is declared by the receiving
-   * platform extension and is used as the run-token audience. Core never
-   * derives it from a provider address, hostname, or `providerConfig` value.
-   */
+  /** @deprecated Stored-row decode compatibility only; grants no authority. */
   readonly managedProviderProfile?: string;
   /**
    * Public hostname namespace owned by this deployment target. A hosted operator
@@ -151,29 +208,32 @@ export interface ConnectionScopeHints {
   readonly managedPublicBaseDomain?: string;
 }
 
-/** Returns the explicit managed-provider profile, normalized for comparison. */
-export function managedProviderProfile(
-  scopeHints: ConnectionScopeHints | undefined,
-): string | undefined {
-  const profile = scopeHints?.managedProviderProfile;
-  return typeof profile === "string" && profile.trim().length > 0
-    ? profile.trim()
-    : undefined;
+/** Detects decoder-only fields so every new write can reject them explicitly. */
+export function hasLegacyManagedProviderScopeHints(
+  value: ConnectionScopeHints | undefined,
+): boolean {
+  return (
+    value?.managedProvider !== undefined ||
+    value?.managedProviderProfile !== undefined
+  );
 }
 
 /**
- * Public managed capacity is opt-in service-side configuration. An opaque
- * provider-block value such as `providerConfig.base_url` is never authority to
- * expose an operator credential or let a pending row back a Workspace Run.
+ * Closed, provider-neutral admission predicate for operator run credentials.
+ * Provider names, profiles, URLs, and legacy scope hints are deliberately not
+ * part of this decision.
  */
-export function isPublicManagedProviderConnection(
-  connection: Pick<ProviderConnection, "scope" | "workspaceId" | "scopeHints">,
+export function isWorkspaceBindableOperatorConnection(
+  connection: Pick<
+    ProviderConnection,
+    "scope" | "workspaceId" | "status" | "credentialRecipe"
+  >,
 ): boolean {
   return (
     connection.scope === "operator" &&
     connection.workspaceId === undefined &&
-    connection.scopeHints?.managedProvider === true &&
-    managedProviderProfile(connection.scopeHints) !== undefined
+    connection.status === "verified" &&
+    isCapsuleRunCredentialIssuance(connection.credentialRecipe?.runIssuance)
   );
 }
 

@@ -64,12 +64,29 @@ export interface CredentialRecipeAuthMode {
   readonly files?: Readonly<Record<string, CredentialRecipeFileMaterial>>;
   readonly preRun?: CredentialRecipePreRunAction;
   /**
+   * Declares that this mode stores no credential material and lets its exact
+   * pre-run driver issue a credential only for a canonical, running Capsule
+   * Run. This descriptor is closed deliberately: new authority modes require
+   * a contract revision instead of provider-name or URL inference.
+   */
+  readonly runIssuance?: CredentialRecipeRunIssuance;
+  /**
    * Optional service-side form hints. They are presentation only: Core derives
    * execution exclusively from env/files/preRun and never treats a hint as
    * credential material or admission authority.
    */
   readonly inputHints?: Readonly<Record<string, CredentialRecipeInputHint>>;
   readonly presentation?: CredentialRecipeAuthModePresentation;
+}
+
+export interface CredentialRecipeRunIssuance {
+  readonly context: "capsule-run.v1";
+  readonly operatorConnection: "workspace-bindable";
+  readonly storedMaterial: "none";
+  /** Exact host-owned audience. A recipe driver cannot redirect issuance. */
+  readonly audience: string;
+  /** Exact minimal scope set minted for every phase of this recipe mode. */
+  readonly scopes: readonly string[];
 }
 
 /**

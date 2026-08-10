@@ -1,3 +1,7 @@
+import type { CredentialRecipeHostComposition } from "takosumi-contract/credential-recipe-host";
+
+export type { CredentialRecipeHostComposition } from "takosumi-contract/credential-recipe-host";
+
 export interface CloudflareWorkerEnv extends Record<string, unknown> {
   readonly TAKOSUMI_CONTROL_DB: D1Database;
   /**
@@ -66,12 +70,8 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
   readonly RUNNER?: DurableObjectNamespace;
   /** Operator control-plane bearer for deploy-control routes mounted by hosts. */
   readonly TAKOSUMI_DEPLOY_CONTROL_TOKEN?: string;
-  /**
-   * Dedicated HMAC secret for run-scoped managed-provider tokens. Absence
-   * disables issuance and verification; deploy-control credentials are never
-   * reused for this purpose.
-   */
-  readonly TAKOSUMI_MANAGED_PROVIDER_TOKEN_SECRET?: string;
+  /** Dedicated HMAC secret for generic, route-scoped run credentials. */
+  readonly TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET?: string;
   /** Optional Operator/Cloud commercial billing extension (Seam B). */
   readonly TAKOSUMI_BILLING_EXTENSION_FACTORY?: import("takosumi-contract/billing").BillingExtensionFactory;
   /**
@@ -173,6 +173,12 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
    * contributes only the provider-neutral `opentofu-default` profile.
    */
   readonly TAKOSUMI_RUNNER_HOST_COMPOSITION?: RunnerHostComposition;
+  /**
+   * Additive, code-only Credential Recipe contribution supplied by a trusted
+   * composing Worker. This runtime object may contain driver functions and is
+   * therefore never decoded from JSON/text vars, database rows, or Outputs.
+   */
+  readonly TAKOSUMI_CREDENTIAL_RECIPE_HOST_COMPOSITION?: CredentialRecipeHostComposition;
   /**
    * Complete host-code InstallConfig composition. This runtime object replaces
    * the shipped reference app set (an empty array disables it); it is not a
