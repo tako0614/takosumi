@@ -209,6 +209,62 @@ describe("dashboard session bootstrap", () => {
     ]);
   });
 
+  test("clears the prior user's workspace cache when the session becomes empty", async () => {
+    const calls: string[] = [];
+    let phase: "old" | "signed-out" | "new" = "old";
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const path = typeof input === "string" ? input : String(input);
+      calls.push(path);
+      if (path === workspaceBootstrapPath) {
+        if (phase === "old") {
+          return new Response(
+            JSON.stringify({
+              session: { subject: "tsub_old" },
+              workspaces: [{ id: "space_old", handle: "old-private" }],
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+        if (phase === "new") {
+          return new Response(
+            JSON.stringify({
+              session: { subject: "tsub_new" },
+              workspaces: [{ id: "space_new", handle: "new-private" }],
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+      }
+      if (path === "/api/v1/dashboard/bootstrap?includeWorkspaces=false") {
+        return new Response(null, { status: 401 });
+      }
+      if (path === "/v1/account/session/me" && phase === "signed-out") {
+        return new Response(JSON.stringify({ session: null }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      throw new Error(`unexpected fetch during ${phase}: ${path}`);
+    }) as typeof fetch;
+
+    expect((await refreshSession({ includeWorkspaces: true }))?.subject).toBe(
+      "tsub_old",
+    );
+    expect((await listWorkspacesCached())[0]?.id).toBe("space_old");
+
+    phase = "signed-out";
+    expect(await refreshSession()).toBeNull();
+
+    phase = "new";
+    expect((await listWorkspacesCached())[0]?.id).toBe("space_new");
+    expect(calls).toEqual([
+      workspaceBootstrapPath,
+      "/api/v1/dashboard/bootstrap?includeWorkspaces=false",
+      "/v1/account/session/me",
+      workspaceBootstrapPath,
+    ]);
+  });
+
   test("keeps malformed successful account session responses as errors", async () => {
     const calls: string[] = [];
     globalThis.fetch = (async (input: RequestInfo | URL) => {

@@ -297,6 +297,7 @@ export function refreshSession(
       cachedError = null;
       cachedAt = Date.now();
       initialized = true;
+      if (!s) clearWorkspaceListCache();
       notify(s);
       notifyState(
         s ? { kind: "authenticated", session: s } : { kind: "unauthenticated" },
