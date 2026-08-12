@@ -1268,11 +1268,22 @@ export default {
     if (url.pathname.startsWith("/hooks/sources/")) {
       return await handleSourceWebhook(request, url, env);
     }
+    if (url.pathname === "/hooks" || url.pathname.startsWith("/hooks/")) {
+      return Response.json({ error: "not found" }, { status: 404 });
+    }
     // `/compat` is an explicit profile namespace, never an accounts/dashboard
     // SPA route. An uninstalled or retired profile must fail closed instead of
     // falling through to the accounts worker's HTML fallback.
     if (url.pathname === "/compat" || url.pathname.startsWith("/compat/")) {
       return Response.json({ error: "not found" }, { status: 404 });
+    }
+    if (isPlatformCoreProcessRoute(request, url)) {
+      const service = await cachedDeployControlService(env);
+      return service.app.fetch(
+        request,
+        undefined,
+        honoExecutionContext(context),
+      );
     }
     const accountsResponse = withPlatformAssetCacheHeaders(
       request,
@@ -1852,6 +1863,19 @@ function honoExecutionContext(
   // Cloudflare supplies the full ExecutionContext at runtime. The narrower
   // platform type intentionally exposes only waitUntil to application code.
   return context as HonoExecutionContext | undefined;
+}
+
+const PLATFORM_CORE_PROCESS_PATHS = new Set([
+  "/livez",
+  "/capabilities",
+  "/openapi.json",
+]);
+
+function isPlatformCoreProcessRoute(request: Request, url: URL): boolean {
+  return (
+    (request.method === "GET" || request.method === "HEAD") &&
+    PLATFORM_CORE_PROCESS_PATHS.has(url.pathname)
+  );
 }
 
 function platformResourceShapeHasDeployControlBearer(
