@@ -1,0 +1,9 @@
+/* VitePress keeps the mobile sidebar in the DOM while it is translated away.
+ * Hiding the closed state prevents its links from becoming keyboard stops
+ * during the short window before the client-side inert marker is applied. */
+@media (max-width: 959px) {
+  .VPSidebar:not(.open) {
+    visibility: hidden;
+    pointer-events: none;
+  }
+}
