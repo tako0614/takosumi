@@ -14,6 +14,18 @@ export function json(
   });
 }
 
+/**
+ * OAuth responses can carry one-shot credentials, authorization state, or
+ * private claims. Mutate the existing response so status, body, Location,
+ * and repeated Set-Cookie headers remain untouched while making the response
+ * uncacheable by browsers and intermediary caches.
+ */
+export function withOAuthNoStoreHeaders(response: Response): Response {
+  response.headers.set("cache-control", "no-store");
+  response.headers.set("pragma", "no-cache");
+  return response;
+}
+
 const REQUEST_ID_UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const REQUEST_ID_ULID_PATTERN = /^[0-9A-HJKMNP-TV-Z]{26}$/i;

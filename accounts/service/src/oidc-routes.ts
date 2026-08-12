@@ -21,6 +21,7 @@ import {
   json,
   readFormUrlEncoded,
   takosumiSubjectValue,
+  withOAuthNoStoreHeaders,
 } from "./http-helpers.ts";
 import {
   personalAccessTokenIntrospectionBody,
@@ -468,6 +469,27 @@ export async function handleAuthorize(input: {
   operations?: ControlPlaneOperations;
   resolveOperations?: ResolveControlPlaneOperations;
 }): Promise<Response> {
+  const response = await handleAuthorizeUncached(input);
+  // Authorize branches on the presented session cookie and fetch destination;
+  // no-store is the primary cache guard, while Vary documents those inputs
+  // for intermediaries that inspect the response metadata.
+  const vary = response.headers.get("vary");
+  response.headers.set(
+    "vary",
+    vary ? `${vary}, Cookie, Sec-Fetch-Dest` : "Cookie, Sec-Fetch-Dest",
+  );
+  return withOAuthNoStoreHeaders(response);
+}
+
+async function handleAuthorizeUncached(input: {
+  request: Request;
+  url: URL;
+  flow: OidcAuthorizationCodeFlow;
+  clients: ReadonlyMap<string, OidcClientRegistration>;
+  store: AccountsStore;
+  operations?: ControlPlaneOperations;
+  resolveOperations?: ResolveControlPlaneOperations;
+}): Promise<Response> {
   // OAuth authorization is a top-level navigation. A subresource request can
   // carry the account session cookie without any user interaction and follow
   // the code redirect to the registered client (for example via <img>).
@@ -629,6 +651,19 @@ function authorizeSignInRedirect(authorizeUrl: URL): Response {
 }
 
 export async function handleToken(input: {
+  issuer: string;
+  request: Request;
+  store: AccountsStore;
+  flow: OidcAuthorizationCodeFlow;
+  clients: ReadonlyMap<string, OidcClientRegistration>;
+  operations?: ControlPlaneOperations;
+  resolveOperations?: ResolveControlPlaneOperations;
+  loginEmailAllowlist?: LoginEmailAllowlist;
+}): Promise<Response> {
+  return withOAuthNoStoreHeaders(await handleTokenUncached(input));
+}
+
+async function handleTokenUncached(input: {
   issuer: string;
   request: Request;
   store: AccountsStore;
@@ -1063,6 +1098,18 @@ export async function handleUserInfo(input: {
   expectedAudience?: string;
   interfaceOAuthActivityValidator?: InterfaceOAuthActivityValidator;
 }): Promise<Response> {
+  return withOAuthNoStoreHeaders(await handleUserInfoUncached(input));
+}
+
+async function handleUserInfoUncached(input: {
+  request: Request;
+  store: AccountsStore;
+  clients: ReadonlyMap<string, OidcClientRegistration>;
+  operations?: ControlPlaneOperations;
+  resolveOperations?: ResolveControlPlaneOperations;
+  expectedAudience?: string;
+  interfaceOAuthActivityValidator?: InterfaceOAuthActivityValidator;
+}): Promise<Response> {
   const accessToken = bearerToken(input.request.headers.get("authorization"));
   if (!accessToken) return bearerChallenge("invalid_token");
 
@@ -1182,6 +1229,14 @@ export async function handleRevoke(input: {
   /** Static OIDC clients are always supplied by the Accounts composition root. */
   clients: ReadonlyMap<string, OidcClientRegistration>;
 }): Promise<Response> {
+  return withOAuthNoStoreHeaders(await handleRevokeUncached(input));
+}
+
+async function handleRevokeUncached(input: {
+  request: Request;
+  store: AccountsStore;
+  clients: ReadonlyMap<string, OidcClientRegistration>;
+}): Promise<Response> {
   const params = await readFormUrlEncoded(input.request);
   // RFC 7009 §2.1: the authorization server MUST require client
   // authentication for confidential clients and MUST authenticate clients
@@ -1244,6 +1299,18 @@ export async function handleIntrospect(input: {
   request: Request;
   store: AccountsStore;
   /** Static OIDC clients are always supplied by the Accounts composition root. */
+  clients: ReadonlyMap<string, OidcClientRegistration>;
+  interfaceOAuthActivityValidator?: InterfaceOAuthActivityValidator;
+  operations?: ControlPlaneOperations;
+  resolveOperations?: ResolveControlPlaneOperations;
+}): Promise<Response> {
+  return withOAuthNoStoreHeaders(await handleIntrospectUncached(input));
+}
+
+async function handleIntrospectUncached(input: {
+  issuer: string;
+  request: Request;
+  store: AccountsStore;
   clients: ReadonlyMap<string, OidcClientRegistration>;
   interfaceOAuthActivityValidator?: InterfaceOAuthActivityValidator;
   operations?: ControlPlaneOperations;
