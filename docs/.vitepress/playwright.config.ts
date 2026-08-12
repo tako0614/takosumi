@@ -19,7 +19,7 @@ export default defineConfig({
     {
       name: "docs-mobile",
       use: {
-        baseURL: "http://127.0.0.1:4180/docs/",
+        baseURL: "http://127.0.0.1:4180",
         channel: process.env.TAKOSUMI_E2E_BROWSER_CHANNEL?.trim() || "chrome",
         viewport: { width: 390, height: 844 },
       },

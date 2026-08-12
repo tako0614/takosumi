@@ -2,7 +2,12 @@ import { expect, test } from "@playwright/test";
 
 test.describe("Takosumi docs mobile navigation", () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/docs/");
+    await expect(page).toHaveURL(/\/docs\/$/u);
+    await expect(page).toHaveTitle("Takosumi");
+    await expect(page.locator("#app > .Layout")).toBeVisible();
+    await expect(page.locator(".VPNav")).toBeVisible();
+    await expect(page.locator("#VPContent main")).toBeVisible();
     expect(page.viewportSize()?.width).toBe(390);
   });
 

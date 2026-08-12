@@ -50,6 +50,10 @@ jobs:
         working-directory: dashboard
         run: bun install --frozen-lockfile
 
+      - name: Install locked docs dependencies
+        working-directory: docs
+        run: npm ci --no-audit --no-fund
+
       - name: Audit root JavaScript dependencies
         run: bun audit
 
