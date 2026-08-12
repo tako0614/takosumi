@@ -134,6 +134,21 @@ describe("SignInView disabled OAuth guidance", () => {
     expect(signInViewSource).toContain("nav(returnTo, { replace: true });");
   });
 
+  test("keeps legal policy links native and outside SPA interception", () => {
+    expect(signInViewSource).toContain(
+      '<a href={termsContribution()?.href} target="_self" class="link">',
+    );
+    expect(signInViewSource).toContain(
+      '<a href={privacyContribution()?.href} target="_self" class="link">',
+    );
+    // Solid Router treats any non-empty target as a document-navigation link.
+    // `_self` preserves the existing same-tab policy while native anchors keep
+    // their default keyboard activation semantics.
+    expect(signInViewSource).not.toContain('target="_blank"');
+    expect(signInViewSource).not.toContain('tabindex="-1"');
+    expect(signInViewSource).not.toContain('role="button"');
+  });
+
   test("accepts legacy return_to links while normalizing onto the sign-in screen", () => {
     expect(signInViewSource).toContain("return_to?: string");
     expect(signInViewSource).toContain("params.return || params.return_to");
