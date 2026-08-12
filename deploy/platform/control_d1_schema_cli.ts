@@ -170,7 +170,9 @@ export async function runControlD1SchemaCli(
     args.command === "fence" ||
     args.command === "freeze" ||
     args.command === "release" ||
+    args.command === "candidate-verify" ||
     args.command === "candidate-release" ||
+    args.command === "candidate-release-status" ||
     args.command === "transfer-source-verify"
   ) {
     try {

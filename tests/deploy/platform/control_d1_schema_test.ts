@@ -2546,6 +2546,62 @@ test("control D1 CLI exposes transferred candidate verify/release transcripts", 
   }
 });
 
+test("authoritative candidate reads require the exact clean source checkout", async () => {
+  const plan = await buildControlD1SchemaPlan();
+  const candidateDatabaseId = "control_candidate_source_check";
+  const sourceExportSha256 = `sha256:${"a".repeat(64)}`;
+  const fenceDigest = `sha256:${"b".repeat(64)}`;
+  const readinessDigest = `sha256:${"c".repeat(64)}`;
+  for (const command of ["candidate-verify", "candidate-release-status"] as const) {
+    const output: string[] = [];
+    const args = [
+      command,
+      "--environment",
+      "staging",
+      "--confirm-manifest",
+      plan.manifestDigest,
+      "--confirm-database-id",
+      candidateDatabaseId,
+      "--confirm-source-export-sha256",
+      sourceExportSha256,
+      "--confirm-fence-digest",
+      fenceDigest,
+      ...(command === "candidate-release-status"
+        ? [
+            "--confirm-release-readiness-digest",
+            readinessDigest,
+            "--released-at",
+            "2026-07-16T00:01:00.000Z",
+          ]
+        : []),
+    ];
+    let remoteCreations = 0;
+    const code = await runControlD1SchemaCli(
+      args,
+      {},
+      (value) => output.push(value),
+      {
+        sourceCommit: SOURCE_COMMIT,
+        inspectSourceCheckout: async () => ({
+          head: SOURCE_COMMIT,
+          clean: false,
+        }),
+        createRemoteDatabase: () => {
+          remoteCreations += 1;
+          throw new Error("dirty checkout must fail before remote access");
+        },
+      },
+    );
+    expect(code).toBe(1);
+    expect(remoteCreations).toBe(0);
+    expect(JSON.parse(output.at(-1) ?? "{}")).toMatchObject({
+      mode: command,
+      status: "failed",
+      failureCode: "source_checkout_dirty",
+    });
+  }
+});
+
 test("control D1 candidate release does not adopt an indeterminate release response", async () => {
   const plan = await buildControlD1SchemaPlan();
   const database = new SqliteControlD1Database();
@@ -2819,6 +2875,10 @@ test("control D1 CLI candidate-release-status reconciles an exact inactive recei
       {
         sourceCommit: SOURCE_COMMIT,
         now: () => releasedAt,
+        inspectSourceCheckout: async () => ({
+          head: SOURCE_COMMIT,
+          clean: true,
+        }),
         createRemoteDatabase: () => ({
           database: observed,
           configurationDigest: `sha256:${"3".repeat(64)}`,
