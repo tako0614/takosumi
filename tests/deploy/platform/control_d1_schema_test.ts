@@ -66,7 +66,10 @@ function createD1RestAndImportFetch(
 ) {
   const uploads = new Map<string, string>();
   const filenames = new Map<string, string>();
-  const bookmarks = new Map<string, { etag: string; remaining: number }>();
+  const bookmarks = new Map<
+    string,
+    { etag: string; remaining: number; sequence: number }
+  >();
   const completed = new Set<string>();
   const stats = {
     importIngests: 0,
@@ -145,8 +148,8 @@ function createD1RestAndImportFetch(
             result: { status: "complete", success: true },
           });
         }
-        const bookmark = `bookmark-${etag}`;
-        bookmarks.set(bookmark, { etag, remaining });
+        const bookmark = `bookmark-${etag}-0`;
+        bookmarks.set(bookmark, { etag, remaining, sequence: 0 });
         return Response.json({
           success: true,
           result: { at_bookmark: bookmark },
@@ -162,11 +165,17 @@ function createD1RestAndImportFetch(
           });
         }
         if (current.remaining > 1) {
-          bookmarks.set(body.current_bookmark, {
+          const nextBookmark = `bookmark-${current.etag}-${current.sequence + 1}`;
+          bookmarks.delete(body.current_bookmark);
+          bookmarks.set(nextBookmark, {
             ...current,
             remaining: current.remaining - 1,
+            sequence: current.sequence + 1,
           });
-          return Response.json({ success: true, result: {} });
+          return Response.json({
+            success: true,
+            result: { at_bookmark: nextBookmark },
+          });
         }
         completed.add(current.etag);
         bookmarks.delete(body.current_bookmark);
@@ -3880,7 +3889,9 @@ test("control D1 REST imports batches containing DROP TRIGGER with either suppor
 test("control D1 REST release keeps every query statement below D1's 100 KB limit", async () => {
   const plan = await buildControlD1SchemaPlan();
   const backing = new SqliteControlD1Database();
-  const base = createD1RestAndImportFetch(backing).fetch;
+  const { fetch: base, stats } = createD1RestAndImportFetch(backing, {
+    pendingPolls: 2,
+  });
   let maxAcceptedStatementBytes = 0;
   let oversizedStatements = 0;
   const fetch: typeof globalThis.fetch = async (input, init) => {
@@ -3944,6 +3955,7 @@ test("control D1 REST release keeps every query statement below D1's 100 KB limi
     });
     expect(applied.maintenanceStatus).toBe("released");
     expect(applied.verification.status).toBe("ready");
+    expect(stats.polls).toBeGreaterThan(1);
     expect(oversizedStatements).toBe(1);
     expect(maxAcceptedStatementBytes).toBeLessThan(80_000);
   } finally {
