@@ -6,7 +6,11 @@ import {
   buildControlD1SchemaPlan,
   ControlD1SchemaError,
   fenceControlD1Schema,
+  releaseControlD1Candidate,
+  reconcileControlD1CandidateRelease,
   type ControlD1SchemaPlan,
+  verifyControlD1TransferSource,
+  verifyControlD1Candidate,
   verifyControlD1Schema,
 } from "./control_d1_schema.ts";
 import {
@@ -21,13 +25,30 @@ import {
   ControlD1RestError,
 } from "./control_d1_schema_rest.ts";
 
-type Command = "plan" | "verify" | "fence" | "freeze" | "apply" | "release";
+type Command =
+  | "plan"
+  | "verify"
+  | "transfer-source-verify"
+  | "candidate-verify"
+  | "candidate-release"
+  | "candidate-release-status"
+  | "fence"
+  | "freeze"
+  | "apply"
+  | "release";
 type Environment = "staging" | "production";
 
 interface ParsedArgs {
   readonly command: Command;
   readonly environment?: Environment;
   readonly confirmManifest?: string;
+  readonly confirmDatabaseId?: string;
+  readonly confirmSourceExportSha256?: string;
+  readonly confirmSourceExportBookmark?: string;
+  readonly confirmFenceId?: string;
+  readonly confirmFenceDigest?: string;
+  readonly confirmReleaseReadinessDigest?: string;
+  readonly releasedAt?: string;
   readonly dryRun: boolean;
   readonly retainMaintenanceFence: boolean;
   readonly confirmPredecessorSource?: string;
@@ -126,7 +147,11 @@ export async function runControlD1SchemaCli(
     (args.command === "apply" ||
       args.command === "fence" ||
       args.command === "freeze" ||
-      args.command === "release") &&
+      args.command === "release" ||
+      args.command === "candidate-verify" ||
+      args.command === "candidate-release" ||
+      args.command === "candidate-release-status" ||
+      args.command === "transfer-source-verify") &&
     args.confirmManifest !== plan.manifestDigest
   ) {
     write(
@@ -144,7 +169,9 @@ export async function runControlD1SchemaCli(
     args.command === "apply" ||
     args.command === "fence" ||
     args.command === "freeze" ||
-    args.command === "release"
+    args.command === "release" ||
+    args.command === "candidate-release" ||
+    args.command === "transfer-source-verify"
   ) {
     try {
       const source = await (
@@ -167,6 +194,41 @@ export async function runControlD1SchemaCli(
   let remote: ControlD1RemoteTarget | undefined;
   try {
     remote = await createRemoteDatabase(args.environment, env);
+    if (args.command === "transfer-source-verify") {
+      if (
+        !args.confirmManifest ||
+        !args.confirmDatabaseId ||
+        !args.confirmSourceExportSha256 ||
+        !args.confirmSourceExportBookmark
+      ) {
+        throw new ControlD1SchemaError("transfer_source_confirmation_required");
+      }
+      if (remote.databaseId !== args.confirmDatabaseId) {
+        throw new ControlD1SchemaError("transfer_source_target_mismatch");
+      }
+      const source = await verifyControlD1TransferSource(remote.database, plan, {
+        environment: args.environment,
+        sourceCommit: provenance.sourceCommit,
+        manifestDigest: plan.manifestDigest,
+        sourceDatabaseId: args.confirmDatabaseId,
+        sourceExportSha256: args.confirmSourceExportSha256,
+        sourceExportBookmark: args.confirmSourceExportBookmark,
+      });
+      write(
+        JSON.stringify(
+          sourceTranscript({
+            plan,
+            args,
+            provenance,
+            configurationDigest: remote.configurationDigest,
+            source,
+          }),
+          null,
+          2,
+        ),
+      );
+      return source.status === "ready" ? 0 : 1;
+    }
     if (args.command === "verify") {
       const verification = await verifyControlD1Schema(remote.database, plan);
       write(
@@ -183,6 +245,92 @@ export async function runControlD1SchemaCli(
         ),
       );
       return verification.status === "ready" ? 0 : 1;
+    }
+
+    if (
+      args.command === "candidate-verify" ||
+      args.command === "candidate-release" ||
+      args.command === "candidate-release-status"
+    ) {
+      if (
+        !args.confirmDatabaseId ||
+        !args.confirmSourceExportSha256 ||
+        !args.confirmFenceDigest
+      ) {
+        throw new ControlD1SchemaError("candidate_confirmation_required");
+      }
+      if (
+        remote.databaseId !== args.confirmDatabaseId ||
+        !/^sha256:[0-9a-f]{64}$/u.test(args.confirmSourceExportSha256)
+      ) {
+        throw new ControlD1SchemaError("candidate_target_confirmation_mismatch");
+      }
+      const candidateOptions = {
+        environment: args.environment,
+        sourceCommit: provenance.sourceCommit,
+        manifestDigest: plan.manifestDigest,
+        candidateDatabaseId: args.confirmDatabaseId,
+        sourceExportSha256: args.confirmSourceExportSha256,
+        expectedFenceDigest: args.confirmFenceDigest,
+        ...(args.confirmFenceId
+          ? { expectedFenceId: args.confirmFenceId }
+          : {}),
+      } as const;
+      if (args.command === "candidate-verify") {
+        const candidate = await verifyControlD1Candidate(
+          remote.database,
+          plan,
+          candidateOptions,
+        );
+        write(
+          JSON.stringify(
+            candidateTranscript({
+              plan,
+              args,
+              provenance,
+              configurationDigest: remote.configurationDigest,
+              candidate,
+            }),
+            null,
+            2,
+          ),
+        );
+        return candidate.status === "ready" ? 0 : 1;
+      }
+      if (!args.confirmReleaseReadinessDigest || !args.releasedAt) {
+        throw new ControlD1SchemaError("candidate_release_confirmation_required");
+      }
+      const releaseOptions = {
+        ...candidateOptions,
+        confirmReleaseReadinessDigest: args.confirmReleaseReadinessDigest,
+        releasedAt: args.releasedAt,
+      } as const;
+      const released =
+        args.command === "candidate-release-status"
+          ? await reconcileControlD1CandidateRelease(
+              remote.database,
+              plan,
+              releaseOptions,
+            )
+          : await releaseControlD1Candidate(
+              remote.database,
+              plan,
+              releaseOptions,
+            );
+      write(
+        JSON.stringify(
+          candidateReleaseTranscript({
+            plan,
+            args,
+            provenance,
+            configurationDigest: remote.configurationDigest,
+            released,
+          }),
+          null,
+          2,
+        ),
+      );
+      return 0;
     }
 
     if (args.command === "release") {
@@ -469,6 +617,83 @@ function operationTranscript(input: {
   };
 }
 
+function candidateTranscript(input: {
+  readonly plan: ControlD1SchemaPlan;
+  readonly args: ParsedArgs;
+  readonly provenance: TranscriptProvenance;
+  readonly configurationDigest: string;
+  readonly candidate: Awaited<ReturnType<typeof verifyControlD1Candidate>>;
+}) {
+  return {
+    kind: "takosumi.control-d1-schema-transcript@v1",
+    mode: input.args.command,
+    environment: input.args.environment,
+    status: input.candidate.status,
+    dryRun: false,
+    ...input.provenance,
+    ...planSummary(input.plan),
+    configurationDigest: input.configurationDigest,
+    candidateDatabaseId: input.candidate.candidateDatabaseId,
+    sourceExportSha256: input.candidate.sourceExportSha256,
+    candidateFenceDigest: input.candidate.candidateFenceDigest,
+    maintenanceFenceDigest: input.candidate.candidateFenceDigest,
+    maintenanceFence: input.candidate.maintenanceFence,
+    maintenanceStatus: input.candidate.maintenanceStatus,
+    guardInventory: input.candidate.guardInventory,
+    integrity: input.candidate.integrity,
+    verification: input.candidate.verification,
+    issues: input.candidate.issues,
+  };
+}
+
+function sourceTranscript(input: {
+  readonly plan: ControlD1SchemaPlan;
+  readonly args: ParsedArgs;
+  readonly provenance: TranscriptProvenance;
+  readonly configurationDigest: string;
+  readonly source: Awaited<ReturnType<typeof verifyControlD1TransferSource>>;
+}) {
+  return {
+    ...input.source,
+    mode: input.args.command,
+    dryRun: false,
+    ...input.provenance,
+    ...planSummary(input.plan),
+    configurationDigest: input.configurationDigest,
+  };
+}
+
+function candidateReleaseTranscript(input: {
+  readonly plan: ControlD1SchemaPlan;
+  readonly args: ParsedArgs;
+  readonly provenance: TranscriptProvenance;
+  readonly configurationDigest: string;
+  readonly released: Awaited<ReturnType<typeof releaseControlD1Candidate>>;
+}) {
+  return {
+    kind: "takosumi.control-d1-schema-transcript@v1",
+    mode: input.args.command,
+    environment: input.args.environment,
+    status: input.released.status,
+    dryRun: false,
+    ...input.provenance,
+    ...planSummary(input.plan),
+    configurationDigest: input.configurationDigest,
+    candidateDatabaseId: input.released.candidateDatabaseId,
+    sourceExportSha256: input.released.sourceExportSha256,
+    releaseReadinessDigest: input.released.releaseReadinessDigest,
+    candidateFenceDigest: input.released.candidateFenceDigest,
+    maintenanceFenceDigest: input.released.candidateFenceDigest,
+    maintenanceFence: input.released.maintenanceFence,
+    maintenanceStatus: input.released.maintenanceStatus,
+    lostAcknowledgementReconciled:
+      input.released.lostAcknowledgementReconciled,
+    guardInventory: input.released.guardInventory,
+    integrity: input.released.integrity,
+    verification: input.released.verification,
+  };
+}
+
 function failureTranscript(
   failureCode: string,
   plan?: ControlD1SchemaPlan,
@@ -568,6 +793,10 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   if (
     command !== "plan" &&
     command !== "verify" &&
+    command !== "transfer-source-verify" &&
+    command !== "candidate-verify" &&
+    command !== "candidate-release" &&
+    command !== "candidate-release-status" &&
     command !== "fence" &&
     command !== "freeze" &&
     command !== "apply" &&
@@ -577,6 +806,13 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   }
   let environment: Environment | undefined;
   let confirmManifest: string | undefined;
+  let confirmDatabaseId: string | undefined;
+  let confirmSourceExportSha256: string | undefined;
+  let confirmSourceExportBookmark: string | undefined;
+  let confirmFenceId: string | undefined;
+  let confirmFenceDigest: string | undefined;
+  let confirmReleaseReadinessDigest: string | undefined;
+  let releasedAt: string | undefined;
   let dryRun = false;
   let retainMaintenanceFence = false;
   let confirmPredecessorSource: string | undefined;
@@ -594,6 +830,53 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     if (arg === "--confirm-manifest") {
       confirmManifest = argv[++index];
       if (!confirmManifest) throw new Error("confirmation_invalid");
+      continue;
+    }
+    if (arg === "--confirm-database-id") {
+      confirmDatabaseId = argv[++index]?.trim();
+      if (!confirmDatabaseId) throw new Error("candidate_database_id_invalid");
+      continue;
+    }
+    if (arg === "--confirm-source-export-sha256") {
+      confirmSourceExportSha256 = argv[++index]?.trim();
+      if (!/^sha256:[0-9a-f]{64}$/u.test(confirmSourceExportSha256 ?? "")) {
+        throw new Error("candidate_source_export_invalid");
+      }
+      continue;
+    }
+    if (arg === "--confirm-source-export-bookmark") {
+      confirmSourceExportBookmark = argv[++index]?.trim();
+      if (!/^[A-Za-z0-9_:.=-]{1,256}$/u.test(confirmSourceExportBookmark ?? "")) {
+        throw new Error("transfer_source_bookmark_invalid");
+      }
+      continue;
+    }
+    if (arg === "--confirm-fence-id") {
+      confirmFenceId = argv[++index]?.trim();
+      if (!/^sha256:[0-9a-f]{64}$/u.test(confirmFenceId ?? "")) {
+        throw new Error("candidate_fence_id_invalid");
+      }
+      continue;
+    }
+    if (arg === "--confirm-fence-digest") {
+      confirmFenceDigest = argv[++index]?.trim();
+      if (!/^sha256:[0-9a-f]{64}$/u.test(confirmFenceDigest ?? "")) {
+        throw new Error("candidate_fence_digest_invalid");
+      }
+      continue;
+    }
+    if (arg === "--confirm-release-readiness-digest") {
+      confirmReleaseReadinessDigest = argv[++index]?.trim();
+      if (
+        !/^sha256:[0-9a-f]{64}$/u.test(confirmReleaseReadinessDigest ?? "")
+      ) {
+        throw new Error("candidate_release_readiness_invalid");
+      }
+      continue;
+    }
+    if (arg === "--released-at") {
+      releasedAt = argv[++index]?.trim();
+      if (!releasedAt) throw new Error("candidate_release_time_invalid");
       continue;
     }
     if (arg === "--dry-run") {
@@ -633,10 +916,44 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
       throw new Error("predecessor_confirmation_invalid");
     }
   }
+  if (
+    command !== "candidate-verify" &&
+    command !== "candidate-release" &&
+    command !== "candidate-release-status" &&
+    command !== "transfer-source-verify" &&
+    (confirmDatabaseId ||
+      confirmSourceExportSha256 ||
+      confirmSourceExportBookmark ||
+      confirmFenceId ||
+      confirmFenceDigest ||
+      confirmReleaseReadinessDigest ||
+      releasedAt)
+  ) {
+    throw new Error("candidate_confirmation_invalid");
+  }
+  if (
+    command === "candidate-verify" &&
+    (confirmReleaseReadinessDigest || releasedAt)
+  ) {
+    throw new Error("candidate_release_confirmation_invalid");
+  }
+  if (
+    (command === "candidate-release" || command === "candidate-release-status") &&
+    !releasedAt
+  ) {
+    throw new Error("candidate_release_time_required");
+  }
   return {
     command,
     environment,
     confirmManifest,
+    confirmDatabaseId,
+    confirmSourceExportSha256,
+    confirmSourceExportBookmark,
+    confirmFenceId,
+    confirmFenceDigest,
+    confirmReleaseReadinessDigest,
+    releasedAt,
     dryRun,
     retainMaintenanceFence,
     confirmPredecessorSource,
@@ -690,6 +1007,20 @@ function helpText(): string {
   bun scripts/control-d1-schema.ts freeze --environment staging|production --confirm-manifest sha256:...
   bun scripts/control-d1-schema.ts release --environment staging|production --confirm-manifest sha256:...
   bun scripts/control-d1-schema.ts verify --environment staging|production
+  bun scripts/control-d1-schema.ts transfer-source-verify --environment staging|production --confirm-manifest sha256:...
+    --confirm-database-id <source-id> --confirm-source-export-sha256 sha256:...
+    --confirm-source-export-bookmark <bookmark>
+  bun scripts/control-d1-schema.ts candidate-verify --environment staging|production --confirm-manifest sha256:...
+    --confirm-database-id <candidate-id> --confirm-source-export-sha256 sha256:...
+    [--confirm-fence-id sha256:...] --confirm-fence-digest sha256:...
+  bun scripts/control-d1-schema.ts candidate-release --environment staging|production --confirm-manifest sha256:...
+    --confirm-database-id <candidate-id> --confirm-source-export-sha256 sha256:...
+    [--confirm-fence-id sha256:...] --confirm-fence-digest sha256:...
+    --confirm-release-readiness-digest sha256:... --released-at <ISO>
+  bun scripts/control-d1-schema.ts candidate-release-status --environment staging|production --confirm-manifest sha256:...
+    --confirm-database-id <candidate-id> --confirm-source-export-sha256 sha256:...
+    [--confirm-fence-id sha256:...] --confirm-fence-digest sha256:...
+    --confirm-release-readiness-digest sha256:... --released-at <ISO>
   bun scripts/control-d1-schema.ts apply --environment staging|production --confirm-manifest sha256:... [--retain-maintenance-fence]
     [--confirm-predecessor-source <40hex> --confirm-predecessor-manifest sha256:...]
 
@@ -701,6 +1032,19 @@ apply requires the exact manifest digest emitted by plan. Official
 Cloud blue/green candidates use --retain-maintenance-fence through cutover.
 release also requires the same source, manifest, environment, and database
 after the Worker cutover is proven.
+candidate-verify is read-only and accepts only an active candidate/cutover
+fence with the exact candidate database, source-export, and fence digest (an
+optional fence id confirmation is checked when supplied). candidate-release repeats that verification, requires the exact
+external promotion/readiness digest, releases only that candidate fence once,
+and re-reads its inactive receipt. It never releases legacy or in-place
+fences and never touches Accounts.
+candidate-release-status is read-only and is the only reconciliation path for
+an ambiguous candidate-release acknowledgement; it requires the same exact
+confirmations and accepts only an already inactive matching receipt.
+transfer-source-verify is read-only and accepts only the exact permanent
+legacy/never source fence. It emits canonical guard, strict integrity/FK,
+logical table, protected-content, export-lineage, and capture-authority
+digests; it never emits rows or raw SQL.
 The paired predecessor confirmations allow one exact immediate-predecessor
 active in-place fence to transition atomically to the new reviewed plan; they
 never release application writes between plans.

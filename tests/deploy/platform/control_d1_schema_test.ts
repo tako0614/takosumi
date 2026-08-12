@@ -4,8 +4,13 @@ import { resolve } from "node:path";
 import {
   applyControlD1Schema,
   buildControlD1SchemaPlan,
+  digestControlD1MaintenanceFence,
   fenceControlD1Schema,
+  releaseControlD1Candidate,
+  reconcileControlD1CandidateRelease,
   SqliteControlD1Database,
+  verifyControlD1Candidate,
+  verifyControlD1TransferSource,
   verifyControlD1Schema,
 } from "../../../deploy/platform/control_d1_schema.ts";
 import { runControlD1SchemaCli } from "../../../deploy/platform/control_d1_schema_cli.ts";
@@ -2162,6 +2167,853 @@ test("control D1 CLI verify reports a ready remote ledger", async () => {
       status: "ready",
       verification: { latestMigrationVersion: 64 },
     });
+  } finally {
+    database.close();
+  }
+});
+
+test("control D1 candidate verification and release bind the exact retained fence", async () => {
+  const plan = await buildControlD1SchemaPlan();
+  const database = new SqliteControlD1Database();
+  const candidateDatabaseId = "control_candidate_staging";
+  const sourceExportSha256 = `sha256:${"d".repeat(64)}`;
+  const releaseReadinessDigest = `sha256:${"e".repeat(64)}`;
+  try {
+    const applied = await applyControlD1Schema(database, plan, {
+      sourceCommit: SOURCE_COMMIT,
+      environment: "staging",
+      activatedAt: NOW,
+      releasedAt: () => NOW,
+      maintenanceDrainMilliseconds: 0,
+      waitForRequestDrain: async () => {},
+      retainMaintenanceFence: true,
+      databaseRole: "candidate",
+      releasePolicy: "cutover",
+      databaseId: candidateDatabaseId,
+      sourceExportSha256,
+    });
+    const fenceDigest = await digestControlD1MaintenanceFence(
+      applied.maintenanceFence,
+    );
+    const verified = await verifyControlD1Candidate(database, plan, {
+      environment: "staging",
+      sourceCommit: SOURCE_COMMIT,
+      manifestDigest: plan.manifestDigest,
+      candidateDatabaseId,
+      sourceExportSha256,
+      expectedFenceDigest: fenceDigest,
+    });
+    expect(verified.status).toBe("ready");
+    expect(verified.maintenanceStatus).toBe("retained");
+    expect(verified.integrity.status).toBe("ready");
+    expect(verified.guardInventory?.guardedTableCount).toBeGreaterThan(0);
+    expect(verified.guardInventory?.guardTriggerCount).toBe(
+      (verified.guardInventory?.guardedTableCount ?? 0) * 3,
+    );
+    const released = await releaseControlD1Candidate(database, plan, {
+      environment: "staging",
+      sourceCommit: SOURCE_COMMIT,
+      manifestDigest: plan.manifestDigest,
+      candidateDatabaseId,
+      sourceExportSha256,
+      expectedFenceDigest: fenceDigest,
+      confirmReleaseReadinessDigest: releaseReadinessDigest,
+      releasedAt: "2026-07-16T00:01:00.000Z",
+    });
+    expect(released.status).toBe("released");
+    expect(released.releaseReadinessDigest).toBe(releaseReadinessDigest);
+    expect(await readControlD1MaintenanceState(database)).toEqual({
+      status: "inactive",
+    });
+  } finally {
+    database.close();
+  }
+});
+
+test("control D1 candidate release rejects wrong fence digest before mutation", async () => {
+  const plan = await buildControlD1SchemaPlan();
+  const database = new SqliteControlD1Database();
+  const candidateDatabaseId = "control_candidate_staging";
+  const sourceExportSha256 = `sha256:${"f".repeat(64)}`;
+  try {
+    const applied = await applyControlD1Schema(database, plan, {
+      sourceCommit: SOURCE_COMMIT,
+      environment: "staging",
+      activatedAt: NOW,
+      releasedAt: () => NOW,
+      maintenanceDrainMilliseconds: 0,
+      waitForRequestDrain: async () => {},
+      retainMaintenanceFence: true,
+      databaseRole: "candidate",
+      releasePolicy: "cutover",
+      databaseId: candidateDatabaseId,
+      sourceExportSha256,
+    });
+    await expect(
+      releaseControlD1Candidate(database, plan, {
+        environment: "staging",
+        sourceCommit: SOURCE_COMMIT,
+        manifestDigest: plan.manifestDigest,
+        candidateDatabaseId,
+        sourceExportSha256,
+        expectedFenceDigest: `sha256:${"0".repeat(64)}`,
+        confirmReleaseReadinessDigest: `sha256:${"1".repeat(64)}`,
+        releasedAt: "2026-07-16T00:01:00.000Z",
+      }),
+    ).rejects.toThrow("candidate_verification_failed");
+    const state = await readControlD1MaintenanceState(database);
+    expect(state).toMatchObject({
+      status: "active",
+      fence: { fenceId: applied.maintenanceFence.fenceId },
+    });
+  } finally {
+    database.close();
+  }
+});
+
+test("control D1 transfer source verification binds the permanent legacy fence and logical evidence", async () => {
+  const plan = await buildControlD1SchemaPlan();
+  const database = new SqliteControlD1Database();
+  const sourceDatabaseId = "control_source_staging";
+  const sourceExportSha256 = `sha256:${"2".repeat(64)}`;
+  try {
+    await applyControlD1Schema(database, plan, {
+      sourceCommit: SOURCE_COMMIT,
+      environment: "staging",
+      activatedAt: NOW,
+      releasedAt: () => NOW,
+      maintenanceDrainMilliseconds: 0,
+      waitForRequestDrain: async () => {},
+      retainMaintenanceFence: true,
+      databaseRole: "legacy",
+      releasePolicy: "never",
+      databaseId: sourceDatabaseId,
+    });
+    const verified = await verifyControlD1TransferSource(database, plan, {
+      environment: "staging",
+      sourceCommit: SOURCE_COMMIT,
+      manifestDigest: plan.manifestDigest,
+      sourceDatabaseId,
+      sourceExportSha256,
+      sourceExportBookmark: "bookmark-source-staging",
+    });
+    expect(verified.status).toBe("ready");
+    expect(verified.sourceFence).toMatchObject({
+      databaseRole: "legacy",
+      releasePolicy: "never",
+      databaseId: sourceDatabaseId,
+      sourceExportSha256: null,
+      predecessor: null,
+    });
+    expect(verified.guardInventory?.guardTriggerCount).toBe(
+      (verified.guardInventory?.guardedTableCount ?? 0) * 3,
+    );
+    expect(verified.integrity.status).toBe("ready");
+    expect(verified.logical.kind).toBe("takosumi.sqlite-logical-content@v1");
+    expect(verified.logical.tables.length).toBeGreaterThan(6);
+    expect(verified.protectedContentDigest).toMatch(/^sha256:[0-9a-f]{64}$/u);
+    expect(verified.captureAuthorityDigest).toMatch(/^sha256:[0-9a-f]{64}$/u);
+    expect(verified.sourceExport.lineage.sourceFenceDigest).toBe(
+      verified.sourceFenceDigest,
+    );
+    expect(await readControlD1MaintenanceState(database)).toMatchObject({
+      status: "active",
+      fence: { databaseRole: "legacy", releasePolicy: "never" },
+    });
+  } finally {
+    database.close();
+  }
+});
+
+test("control D1 CLI transfer-source-verify emits digest-bound source transcript", async () => {
+  const plan = await buildControlD1SchemaPlan();
+  const database = new SqliteControlD1Database();
+  const sourceDatabaseId = "control_source_staging";
+  const sourceExportSha256 = `sha256:${"4".repeat(64)}`;
+  try {
+    await applyControlD1Schema(database, plan, {
+      sourceCommit: SOURCE_COMMIT,
+      environment: "staging",
+      activatedAt: NOW,
+      releasedAt: () => NOW,
+      maintenanceDrainMilliseconds: 0,
+      waitForRequestDrain: async () => {},
+      retainMaintenanceFence: true,
+      databaseRole: "legacy",
+      releasePolicy: "never",
+      databaseId: sourceDatabaseId,
+    });
+    const output: string[] = [];
+    const code = await runControlD1SchemaCli(
+      [
+        "transfer-source-verify",
+        "--environment",
+        "staging",
+        "--confirm-manifest",
+        plan.manifestDigest,
+        "--confirm-database-id",
+        sourceDatabaseId,
+        "--confirm-source-export-sha256",
+        sourceExportSha256,
+        "--confirm-source-export-bookmark",
+        "bookmark-source-staging",
+      ],
+      {},
+      (value) => output.push(value),
+      {
+        sourceCommit: SOURCE_COMMIT,
+        now: () => NOW,
+        inspectSourceCheckout: async () => ({ head: SOURCE_COMMIT, clean: true }),
+        createRemoteDatabase: () => ({
+          database,
+          configurationDigest: `sha256:${"5".repeat(64)}`,
+          databaseId: sourceDatabaseId,
+        }),
+      },
+    );
+    expect(code).toBe(0);
+    expect(JSON.parse(output.at(-1) ?? "{}")).toMatchObject({
+      kind: "takosumi.control-d1-transfer-source-verify@v1",
+      mode: "transfer-source-verify",
+      status: "ready",
+      captureAuthorityDigest: expect.stringMatching(/^sha256:[0-9a-f]{64}$/u),
+      protectedContentDigest: expect.stringMatching(/^sha256:[0-9a-f]{64}$/u),
+      evidenceDigest: expect.stringMatching(/^sha256:[0-9a-f]{64}$/u),
+    });
+  } finally {
+    database.close();
+  }
+});
+
+test("control D1 transfer source verification rejects source mismatch and tampered guard without mutation", async () => {
+  const plan = await buildControlD1SchemaPlan();
+  const database = new SqliteControlD1Database();
+  const sourceDatabaseId = "control_source_staging";
+  try {
+    await applyControlD1Schema(database, plan, {
+      sourceCommit: SOURCE_COMMIT,
+      environment: "staging",
+      activatedAt: NOW,
+      releasedAt: () => NOW,
+      maintenanceDrainMilliseconds: 0,
+      waitForRequestDrain: async () => {},
+      retainMaintenanceFence: true,
+      databaseRole: "legacy",
+      releasePolicy: "never",
+      databaseId: sourceDatabaseId,
+    });
+    const wrongSource = await verifyControlD1TransferSource(database, plan, {
+      environment: "staging",
+      sourceCommit: SOURCE_COMMIT,
+      manifestDigest: plan.manifestDigest,
+      sourceDatabaseId: "wrong-source",
+      sourceExportSha256: `sha256:${"3".repeat(64)}`,
+      sourceExportBookmark: "bookmark-source-staging",
+    });
+    expect(wrongSource.status).toBe("mismatch");
+    expect(wrongSource.issues).toContain("source_fence_database_id_mismatch");
+    const guard = wrongSource.guardInventory?.triggers[0];
+    expect(guard).toBeString();
+    database.exec(`drop trigger "${guard}"`);
+    const subset = await verifyControlD1TransferSource(database, plan, {
+      environment: "staging",
+      sourceCommit: SOURCE_COMMIT,
+      manifestDigest: plan.manifestDigest,
+      sourceDatabaseId,
+      sourceExportSha256: `sha256:${"3".repeat(64)}`,
+      sourceExportBookmark: "bookmark-source-staging",
+    });
+    expect(subset.status).toBe("mismatch");
+    expect(subset.issues).toContain("maintenance_guard_inventory_mismatch");
+    database.exec(
+      `create trigger "${guard}" after insert on "workspaces" begin select 1; end`,
+    );
+    const tampered = await verifyControlD1TransferSource(database, plan, {
+      environment: "staging",
+      sourceCommit: SOURCE_COMMIT,
+      manifestDigest: plan.manifestDigest,
+      sourceDatabaseId,
+      sourceExportSha256: `sha256:${"3".repeat(64)}`,
+      sourceExportBookmark: "bookmark-source-staging",
+    });
+    expect(tampered.status).toBe("mismatch");
+    expect(tampered.issues).toContain("maintenance_guard_inventory_mismatch");
+    expect(await readControlD1MaintenanceState(database)).toMatchObject({
+      status: "active",
+      fence: { databaseId: sourceDatabaseId },
+    });
+  } finally {
+    database.close();
+  }
+});
+
+test("control D1 CLI exposes transferred candidate verify/release transcripts", async () => {
+  const plan = await buildControlD1SchemaPlan();
+  const database = new SqliteControlD1Database();
+  const candidateDatabaseId = "control_candidate_staging";
+  const sourceExportSha256 = `sha256:${"a".repeat(64)}`;
+  const readinessDigest = `sha256:${"b".repeat(64)}`;
+  try {
+    const applied = await applyControlD1Schema(database, plan, {
+      sourceCommit: SOURCE_COMMIT,
+      environment: "staging",
+      activatedAt: NOW,
+      releasedAt: () => NOW,
+      maintenanceDrainMilliseconds: 0,
+      waitForRequestDrain: async () => {},
+      retainMaintenanceFence: true,
+      databaseRole: "candidate",
+      releasePolicy: "cutover",
+      databaseId: candidateDatabaseId,
+      sourceExportSha256,
+    });
+    const fenceDigest = await digestControlD1MaintenanceFence(
+      applied.maintenanceFence,
+    );
+    const dependencies = {
+      sourceCommit: SOURCE_COMMIT,
+      now: () => NOW,
+      inspectSourceCheckout: async () => ({
+        head: SOURCE_COMMIT,
+        clean: true,
+      }),
+      createRemoteDatabase: () => ({
+        database,
+        configurationDigest: `sha256:${"c".repeat(64)}`,
+        databaseId: candidateDatabaseId,
+      }),
+    };
+    const verifyOutput: string[] = [];
+    const verifyCode = await runControlD1SchemaCli(
+      [
+        "candidate-verify",
+        "--environment",
+        "staging",
+        "--confirm-manifest",
+        plan.manifestDigest,
+        "--confirm-database-id",
+        candidateDatabaseId,
+        "--confirm-source-export-sha256",
+        sourceExportSha256,
+        "--confirm-fence-digest",
+        fenceDigest,
+      ],
+      {},
+      (value) => verifyOutput.push(value),
+      dependencies,
+    );
+    expect(verifyCode).toBe(0);
+    expect(JSON.parse(verifyOutput.at(-1) ?? "{}")).toMatchObject({
+      mode: "candidate-verify",
+      status: "ready",
+      maintenanceFenceDigest: fenceDigest,
+      maintenanceStatus: "retained",
+    });
+    const releaseOutput: string[] = [];
+    const releaseCode = await runControlD1SchemaCli(
+      [
+        "candidate-release",
+        "--environment",
+        "staging",
+        "--confirm-manifest",
+        plan.manifestDigest,
+        "--confirm-database-id",
+        candidateDatabaseId,
+        "--confirm-source-export-sha256",
+        sourceExportSha256,
+        "--confirm-fence-digest",
+        fenceDigest,
+        "--confirm-release-readiness-digest",
+        readinessDigest,
+        "--released-at",
+        "2026-07-16T00:01:00.000Z",
+      ],
+      {},
+      (value) => releaseOutput.push(value),
+      dependencies,
+    );
+    expect(releaseCode).toBe(0);
+    expect(JSON.parse(releaseOutput.at(-1) ?? "{}")).toMatchObject({
+      mode: "candidate-release",
+      status: "released",
+      maintenanceFenceDigest: fenceDigest,
+      releaseReadinessDigest: readinessDigest,
+      maintenanceStatus: "released",
+      lostAcknowledgementReconciled: false,
+    });
+  } finally {
+    database.close();
+  }
+});
+
+test("control D1 candidate release does not adopt an indeterminate release response", async () => {
+  const plan = await buildControlD1SchemaPlan();
+  const database = new SqliteControlD1Database();
+  const candidateDatabaseId = "control_candidate_staging";
+  const sourceExportSha256 = `sha256:${"2".repeat(64)}`;
+  try {
+    const applied = await applyControlD1Schema(database, plan, {
+      sourceCommit: SOURCE_COMMIT,
+      environment: "staging",
+      activatedAt: NOW,
+      releasedAt: () => NOW,
+      maintenanceDrainMilliseconds: 0,
+      waitForRequestDrain: async () => {},
+      retainMaintenanceFence: true,
+      databaseRole: "candidate",
+      releasePolicy: "cutover",
+      databaseId: candidateDatabaseId,
+      sourceExportSha256,
+    });
+    const fenceDigest = await digestControlD1MaintenanceFence(
+      applied.maintenanceFence,
+    );
+    let batchCalls = 0;
+    const lostResponse: D1Database = {
+      prepare(query) {
+        return database.prepare(query);
+      },
+      async batch(statements) {
+        batchCalls += 1;
+        const result = await database.batch(statements);
+        if (batchCalls === 1) throw new Error("lost candidate release response");
+        return result;
+      },
+    };
+    await expect(
+      releaseControlD1Candidate(lostResponse, plan, {
+        environment: "staging",
+        sourceCommit: SOURCE_COMMIT,
+        manifestDigest: plan.manifestDigest,
+        candidateDatabaseId,
+        sourceExportSha256,
+        expectedFenceDigest: fenceDigest,
+        confirmReleaseReadinessDigest: `sha256:${"3".repeat(64)}`,
+        releasedAt: "2026-07-16T00:01:00.000Z",
+      }),
+    ).rejects.toThrow("maintenance_fence_release_failed");
+    expect(await readControlD1MaintenanceState(database)).toEqual({
+      status: "inactive",
+    });
+    expect(batchCalls).toBe(1);
+  } finally {
+    database.close();
+  }
+});
+
+test("control D1 candidate release reconciles one lost acknowledgement read-only", async () => {
+  const plan = await buildControlD1SchemaPlan();
+  const database = new SqliteControlD1Database();
+  const candidateDatabaseId = "control_candidate_staging";
+  const sourceExportSha256 = `sha256:${"8".repeat(64)}`;
+  const releaseReadinessDigest = `sha256:${"9".repeat(64)}`;
+  const releasedAt = "2026-07-16T00:01:00.000Z";
+  try {
+    const applied = await applyControlD1Schema(database, plan, {
+      sourceCommit: SOURCE_COMMIT,
+      environment: "staging",
+      activatedAt: NOW,
+      releasedAt: () => NOW,
+      maintenanceDrainMilliseconds: 0,
+      waitForRequestDrain: async () => {},
+      retainMaintenanceFence: true,
+      databaseRole: "candidate",
+      releasePolicy: "cutover",
+      databaseId: candidateDatabaseId,
+      sourceExportSha256,
+    });
+    const fenceDigest = await digestControlD1MaintenanceFence(
+      applied.maintenanceFence,
+    );
+    let batchCalls = 0;
+    const lostResponse: D1Database = {
+      prepare(query) {
+        return database.prepare(query);
+      },
+      async batch(statements) {
+        batchCalls += 1;
+        const result = await database.batch(statements);
+        if (batchCalls === 1) throw new Error("lost candidate release response");
+        return result;
+      },
+    };
+    await expect(
+      releaseControlD1Candidate(lostResponse, plan, {
+        environment: "staging",
+        sourceCommit: SOURCE_COMMIT,
+        manifestDigest: plan.manifestDigest,
+        candidateDatabaseId,
+        sourceExportSha256,
+        expectedFenceDigest: fenceDigest,
+        confirmReleaseReadinessDigest: releaseReadinessDigest,
+        releasedAt,
+      }),
+    ).rejects.toThrow("maintenance_fence_release_failed");
+    const reconciled = await releaseControlD1Candidate(database, plan, {
+      environment: "staging",
+      sourceCommit: SOURCE_COMMIT,
+      manifestDigest: plan.manifestDigest,
+      candidateDatabaseId,
+      sourceExportSha256,
+      expectedFenceDigest: fenceDigest,
+      confirmReleaseReadinessDigest: releaseReadinessDigest,
+      releasedAt,
+    });
+    expect(reconciled.lostAcknowledgementReconciled).toBe(true);
+    expect(reconciled.releaseReadinessDigest).toBe(releaseReadinessDigest);
+    expect(reconciled.guardInventory.guardTriggerCount).toBeGreaterThan(0);
+    expect(batchCalls).toBe(1);
+    await expect(
+      releaseControlD1Candidate(database, plan, {
+        environment: "staging",
+        sourceCommit: SOURCE_COMMIT,
+        manifestDigest: plan.manifestDigest,
+        candidateDatabaseId,
+        sourceExportSha256,
+        expectedFenceDigest: fenceDigest,
+        confirmReleaseReadinessDigest: `sha256:${"a".repeat(64)}`,
+        releasedAt,
+      }),
+    ).rejects.toThrow("candidate_release_receipt_mismatch");
+    await expect(
+      releaseControlD1Candidate(database, plan, {
+        environment: "staging",
+        sourceCommit: SOURCE_COMMIT,
+        manifestDigest: plan.manifestDigest,
+        candidateDatabaseId,
+        sourceExportSha256,
+        expectedFenceDigest: fenceDigest,
+        confirmReleaseReadinessDigest: releaseReadinessDigest,
+        releasedAt: "2026-07-16T00:02:00.000Z",
+      }),
+    ).rejects.toThrow("candidate_release_receipt_mismatch");
+    await expect(
+      releaseControlD1Candidate(database, plan, {
+        environment: "staging",
+        sourceCommit: SOURCE_COMMIT,
+        manifestDigest: plan.manifestDigest,
+        candidateDatabaseId,
+        sourceExportSha256,
+        expectedFenceDigest: `sha256:${"b".repeat(64)}`,
+        confirmReleaseReadinessDigest: releaseReadinessDigest,
+        releasedAt,
+      }),
+    ).rejects.toThrow("candidate_release_receipt_mismatch");
+  } finally {
+    database.close();
+  }
+});
+
+test("control D1 candidate-release-status is read-only and rejects an active fence", async () => {
+  const plan = await buildControlD1SchemaPlan();
+  const database = new SqliteControlD1Database();
+  const candidateDatabaseId = "control_candidate_status";
+  const sourceExportSha256 = `sha256:${"0".repeat(64)}`;
+  try {
+    await applyControlD1Schema(database, plan, {
+      sourceCommit: SOURCE_COMMIT,
+      environment: "staging",
+      activatedAt: NOW,
+      releasedAt: () => NOW,
+      maintenanceDrainMilliseconds: 0,
+      waitForRequestDrain: async () => {},
+      retainMaintenanceFence: true,
+      databaseRole: "candidate",
+      releasePolicy: "cutover",
+      databaseId: candidateDatabaseId,
+      sourceExportSha256,
+    });
+    let batches = 0;
+    const observed: D1Database = {
+      prepare(query) {
+        return database.prepare(query);
+      },
+      async batch(statements) {
+        batches += 1;
+        return database.batch(statements);
+      },
+    };
+    await expect(
+      reconcileControlD1CandidateRelease(observed, plan, {
+        environment: "staging",
+        sourceCommit: SOURCE_COMMIT,
+        manifestDigest: plan.manifestDigest,
+        candidateDatabaseId,
+        sourceExportSha256,
+        expectedFenceDigest: `sha256:${"1".repeat(64)}`,
+        confirmReleaseReadinessDigest: `sha256:${"2".repeat(64)}`,
+        releasedAt: "2026-07-16T00:01:00.000Z",
+      }),
+    ).rejects.toThrow("candidate_release_receipt_unavailable");
+    expect(batches).toBe(0);
+  } finally {
+    database.close();
+  }
+});
+
+test("control D1 CLI candidate-release-status reconciles an exact inactive receipt without a release batch", async () => {
+  const plan = await buildControlD1SchemaPlan();
+  const database = new SqliteControlD1Database();
+  const candidateDatabaseId = "control_candidate_status";
+  const sourceExportSha256 = `sha256:${"1".repeat(64)}`;
+  const releaseReadinessDigest = `sha256:${"2".repeat(64)}`;
+  const releasedAt = "2026-07-16T00:01:00.000Z";
+  try {
+    const applied = await applyControlD1Schema(database, plan, {
+      sourceCommit: SOURCE_COMMIT,
+      environment: "staging",
+      activatedAt: NOW,
+      releasedAt: () => NOW,
+      maintenanceDrainMilliseconds: 0,
+      waitForRequestDrain: async () => {},
+      retainMaintenanceFence: true,
+      databaseRole: "candidate",
+      releasePolicy: "cutover",
+      databaseId: candidateDatabaseId,
+      sourceExportSha256,
+    });
+    const fenceDigest = await digestControlD1MaintenanceFence(
+      applied.maintenanceFence,
+    );
+    await releaseControlD1Candidate(database, plan, {
+      environment: "staging",
+      sourceCommit: SOURCE_COMMIT,
+      manifestDigest: plan.manifestDigest,
+      candidateDatabaseId,
+      sourceExportSha256,
+      expectedFenceDigest: fenceDigest,
+      confirmReleaseReadinessDigest: releaseReadinessDigest,
+      releasedAt,
+    });
+    let batches = 0;
+    const observed: D1Database = {
+      prepare(query) {
+        return database.prepare(query);
+      },
+      async batch(statements) {
+        batches += 1;
+        return database.batch(statements);
+      },
+    };
+    const output: string[] = [];
+    const code = await runControlD1SchemaCli(
+      [
+        "candidate-release-status",
+        "--environment",
+        "staging",
+        "--confirm-manifest",
+        plan.manifestDigest,
+        "--confirm-database-id",
+        candidateDatabaseId,
+        "--confirm-source-export-sha256",
+        sourceExportSha256,
+        "--confirm-fence-digest",
+        fenceDigest,
+        "--confirm-release-readiness-digest",
+        releaseReadinessDigest,
+        "--released-at",
+        releasedAt,
+      ],
+      {},
+      (value) => output.push(value),
+      {
+        sourceCommit: SOURCE_COMMIT,
+        now: () => releasedAt,
+        createRemoteDatabase: () => ({
+          database: observed,
+          configurationDigest: `sha256:${"3".repeat(64)}`,
+          databaseId: candidateDatabaseId,
+        }),
+      },
+    );
+    expect(code).toBe(0);
+    expect(batches).toBe(0);
+    expect(JSON.parse(output.at(-1) ?? "{}")).toMatchObject({
+      mode: "candidate-release-status",
+      status: "released",
+      lostAcknowledgementReconciled: true,
+      maintenanceFenceDigest: fenceDigest,
+    });
+  } finally {
+    database.close();
+  }
+});
+
+test("control D1 candidate verification rejects a same-name no-op guard trigger", async () => {
+  const plan = await buildControlD1SchemaPlan();
+  const database = new SqliteControlD1Database();
+  const candidateDatabaseId = "control_candidate_staging";
+  const sourceExportSha256 = `sha256:${"4".repeat(64)}`;
+  try {
+    const applied = await applyControlD1Schema(database, plan, {
+      sourceCommit: SOURCE_COMMIT,
+      environment: "staging",
+      activatedAt: NOW,
+      releasedAt: () => NOW,
+      maintenanceDrainMilliseconds: 0,
+      waitForRequestDrain: async () => {},
+      retainMaintenanceFence: true,
+      databaseRole: "candidate",
+      releasePolicy: "cutover",
+      databaseId: candidateDatabaseId,
+      sourceExportSha256,
+    });
+    await database
+      .prepare(`drop trigger "_takosumi_schema_fence_workspaces_insert"`)
+      .run();
+    await database
+      .prepare(
+        `create trigger "_takosumi_schema_fence_workspaces_insert"
+         before insert on "workspaces"
+         begin
+           select 1;
+         end`,
+      )
+      .run();
+    const verified = await verifyControlD1Candidate(database, plan, {
+      environment: "staging",
+      sourceCommit: SOURCE_COMMIT,
+      manifestDigest: plan.manifestDigest,
+      candidateDatabaseId,
+      sourceExportSha256,
+      expectedFenceDigest: await digestControlD1MaintenanceFence(
+        applied.maintenanceFence,
+      ),
+    });
+    expect(verified.status).toBe("mismatch");
+    expect(verified.issues).toContain("maintenance_guard_inventory_mismatch");
+    expect(verified.guardInventory?.triggerSqlDigests).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "_takosumi_schema_fence_workspaces_insert",
+        }),
+      ]),
+    );
+  } finally {
+    database.close();
+  }
+});
+
+test("control D1 candidate release rejects a same-id fence change during the atomic release", async () => {
+  const plan = await buildControlD1SchemaPlan();
+  const database = new SqliteControlD1Database();
+  const candidateDatabaseId = "control_candidate_staging";
+  const sourceExportSha256 = `sha256:${"5".repeat(64)}`;
+  try {
+    const applied = await applyControlD1Schema(database, plan, {
+      sourceCommit: SOURCE_COMMIT,
+      environment: "staging",
+      activatedAt: NOW,
+      releasedAt: () => NOW,
+      maintenanceDrainMilliseconds: 0,
+      waitForRequestDrain: async () => {},
+      retainMaintenanceFence: true,
+      databaseRole: "candidate",
+      releasePolicy: "cutover",
+      databaseId: candidateDatabaseId,
+      sourceExportSha256,
+    });
+    const fenceDigest = await digestControlD1MaintenanceFence(
+      applied.maintenanceFence,
+    );
+    let batchCalls = 0;
+    const raced: D1Database = {
+      prepare(query) {
+        return database.prepare(query);
+      },
+      async batch(statements) {
+        batchCalls += 1;
+        await database
+          .prepare(
+            `update _takosumi_control_schema_maintenance
+             set activated_at = ? where singleton = 1`,
+          )
+          .bind("2026-07-16T00:00:01.000Z")
+          .run();
+        return await database.batch(statements);
+      },
+    };
+    await expect(
+      releaseControlD1Candidate(raced, plan, {
+        environment: "staging",
+        sourceCommit: SOURCE_COMMIT,
+        manifestDigest: plan.manifestDigest,
+        candidateDatabaseId,
+        sourceExportSha256,
+        expectedFenceDigest: fenceDigest,
+        confirmReleaseReadinessDigest: `sha256:${"6".repeat(64)}`,
+        releasedAt: "2026-07-16T00:01:00.000Z",
+      }),
+    ).rejects.toThrow("maintenance_fence_release_mismatch");
+    expect(batchCalls).toBe(1);
+    expect(await readControlD1MaintenanceState(database)).toMatchObject({
+      status: "active",
+      fence: {
+        fenceId: applied.maintenanceFence.fenceId,
+        activatedAt: "2026-07-16T00:00:01.000Z",
+      },
+    });
+    const triggers = await database
+      .prepare(
+        `select count(*) as count from sqlite_master
+         where type = 'trigger' and name like '_takosumi_schema_fence_%'`,
+      )
+      .first<{ readonly count: number }>();
+    expect(Number(triggers?.count)).toBeGreaterThan(0);
+  } finally {
+    database.close();
+  }
+});
+
+test("control D1 candidate verification fails closed when foreign key check is malformed", async () => {
+  const plan = await buildControlD1SchemaPlan();
+  const database = new SqliteControlD1Database();
+  const candidateDatabaseId = "control_candidate_staging";
+  const sourceExportSha256 = `sha256:${"7".repeat(64)}`;
+  try {
+    const applied = await applyControlD1Schema(database, plan, {
+      sourceCommit: SOURCE_COMMIT,
+      environment: "staging",
+      activatedAt: NOW,
+      releasedAt: () => NOW,
+      maintenanceDrainMilliseconds: 0,
+      waitForRequestDrain: async () => {},
+      retainMaintenanceFence: true,
+      databaseRole: "candidate",
+      releasePolicy: "cutover",
+      databaseId: candidateDatabaseId,
+      sourceExportSha256,
+    });
+    const malformed: D1Database = {
+      prepare(query) {
+        if (query.trim().toLowerCase() === "pragma foreign_key_check") {
+          return {
+            bind() {
+              return this;
+            },
+            first: async () => null,
+            all: async () => ({ success: true }),
+            run: async () => ({ success: true }),
+          };
+        }
+        return database.prepare(query);
+      },
+      batch: database.batch.bind(database),
+    };
+    const verified = await verifyControlD1Candidate(malformed, plan, {
+      environment: "staging",
+      sourceCommit: SOURCE_COMMIT,
+      manifestDigest: plan.manifestDigest,
+      candidateDatabaseId,
+      sourceExportSha256,
+      expectedFenceDigest: await digestControlD1MaintenanceFence(
+        applied.maintenanceFence,
+      ),
+    });
+    expect(verified.integrity.foreignKeyCheck).toBe("mismatch");
+    expect(verified.integrity.status).toBe("mismatch");
+    expect(verified.status).toBe("mismatch");
+    expect(verified.issues).toContain("database_integrity_mismatch");
   } finally {
     database.close();
   }
