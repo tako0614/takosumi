@@ -3783,6 +3783,80 @@ test("control D1 REST imports compound trigger batches and resolves only after p
   }
 });
 
+test("control D1 REST release keeps every query statement below D1's 100 KB limit", async () => {
+  const plan = await buildControlD1SchemaPlan();
+  const backing = new SqliteControlD1Database();
+  const base = createD1RestAndImportFetch(backing).fetch;
+  let maxAcceptedStatementBytes = 0;
+  let oversizedStatements = 0;
+  const fetch: typeof globalThis.fetch = async (input, init) => {
+    const url = new URL(String(input));
+    if (url.pathname.endsWith("/query")) {
+      const body = JSON.parse(String(init?.body ?? "{}")) as
+        | RestQuery
+        | { readonly batch: readonly RestQuery[] };
+      const queries = "batch" in body ? body.batch : [body];
+      for (const query of queries) {
+        const statementBytes = new TextEncoder().encode(query.sql).byteLength;
+        if (statementBytes > 100_000) {
+          oversizedStatements += 1;
+        } else {
+          maxAcceptedStatementBytes = Math.max(
+            maxAcceptedStatementBytes,
+            statementBytes,
+          );
+        }
+      }
+      if (queries.some((query) =>
+        new TextEncoder().encode(query.sql).byteLength > 100_000
+      )) {
+        return Response.json(
+          {
+            success: false,
+            errors: [{ code: 7500, message: "SQL statement exceeds D1 limit" }],
+          },
+          { status: 400 },
+        );
+      }
+    }
+    return await base(input, init);
+  };
+  const database = new CloudflareControlD1RestDatabase({
+    accountId: "account_123",
+    databaseId: "database_456",
+    apiToken: "secret-token",
+    fetch,
+    importPollIntervalMilliseconds: 0,
+    wait: async () => {},
+  });
+  try {
+    const oversizedQuery = `select '${"x".repeat(100_000)}'`;
+    await expect(database.prepare(oversizedQuery).all()).rejects.toThrow(
+      "cloudflare_d1_query_failed",
+    );
+    expect(oversizedStatements).toBe(1);
+    expect(
+      await backing
+        .prepare(`select count(*) as count from sqlite_master where type = 'table'`)
+        .first<{ readonly count: number }>(),
+    ).toEqual({ count: 0 });
+    const applied = await applyControlD1Schema(database, plan, {
+      sourceCommit: SOURCE_COMMIT,
+      environment: "staging",
+      activatedAt: NOW,
+      releasedAt: () => NOW,
+      maintenanceDrainMilliseconds: 0,
+      waitForRequestDrain: async () => {},
+    });
+    expect(applied.maintenanceStatus).toBe("released");
+    expect(applied.verification.status).toBe("ready");
+    expect(oversizedStatements).toBe(1);
+    expect(maxAcceptedStatementBytes).toBeLessThan(80_000);
+  } finally {
+    backing.close();
+  }
+});
+
 test("control D1 REST compound renderer fails closed on bind mismatch", async () => {
   let fetchCalls = 0;
   const database = new CloudflareControlD1RestDatabase({
