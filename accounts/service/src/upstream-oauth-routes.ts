@@ -14,7 +14,11 @@ import type {
   TakosumiAccountsAuthProvider,
   TakosumiAccountsAuthProvidersResponse,
 } from "@takosjp/takosumi-accounts-contract";
-import { json, stringValue } from "./http-helpers.ts";
+import {
+  json,
+  stringValue,
+  withOAuthNoStoreHeaders,
+} from "./http-helpers.ts";
 import {
   extractAccountSessionId,
   rotateAccountSession,
@@ -149,6 +153,14 @@ export function handleUpstreamAuthorizeRequest(input: {
   upstreamOAuth: UpstreamOAuthOptions;
   secureCookie: boolean;
 }): Response {
+  return withOAuthNoStoreHeaders(handleUpstreamAuthorizeRequestUncached(input));
+}
+
+function handleUpstreamAuthorizeRequestUncached(input: {
+  url: URL;
+  upstreamOAuth: UpstreamOAuthOptions;
+  secureCookie: boolean;
+}): Response {
   const resolved = resolveUpstreamClient(
     input.upstreamOAuth,
     input.url.searchParams.get("provider"),
@@ -201,6 +213,19 @@ export function handleUpstreamAuthorizeRequest(input: {
 }
 
 export async function handleUpstreamCallbackRequest(input: {
+  request: Request;
+  url: URL;
+  store: AccountsStore;
+  upstreamOAuth: UpstreamOAuthOptions;
+  secureCookie: boolean;
+  loginEmailAllowlist?: LoginEmailAllowlist;
+}): Promise<Response> {
+  return withOAuthNoStoreHeaders(
+    await handleUpstreamCallbackRequestUncached(input),
+  );
+}
+
+async function handleUpstreamCallbackRequestUncached(input: {
   request: Request;
   url: URL;
   store: AccountsStore;
