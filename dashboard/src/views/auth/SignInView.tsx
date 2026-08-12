@@ -235,11 +235,18 @@ export function SignInPanel() {
           {/* No hardcoded space between fragments: JA joins without one and
               the EN values carry their own spacing. */}
           {t("auth.termsPrefix")}
-          <a href={termsContribution()?.href} class="link">
+          {/*
+            Solid Router intercepts same-origin anchors unless they have a
+            target. `_self` deliberately keeps these documents in the current
+            tab while opting them into the browser's normal navigation path.
+            Keep these as native anchors so keyboard activation remains
+            available even when the legal document is served by the host.
+          */}
+          <a href={termsContribution()?.href} target="_self" class="link">
             {t("auth.termsOfService")}
           </a>
           {t("auth.and")}
-          <a href={privacyContribution()?.href} class="link">
+          <a href={privacyContribution()?.href} target="_self" class="link">
             {t("auth.privacyPolicy")}
           </a>
           {t("auth.termsSuffix")}
