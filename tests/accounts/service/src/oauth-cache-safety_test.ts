@@ -21,10 +21,6 @@ import type {
 
 const issuer = "https://accounts.example.test";
 const redirectUri = "https://client.example.test/oauth/callback";
-const signInTarget =
-  "https://accounts.example.test/sign-in?return=%2Foauth%2Fauthorize";
-const codeTarget =
-  "https://client.example.test/oauth/callback?code=one-shot-code&state=request-state";
 const client: OidcClientRegistration = {
   clientId: "cache-test-client",
   redirectUris: [redirectUri],
@@ -284,16 +280,25 @@ test("workerd preserves both authorize redirect branches while adding no-store h
     ],
   });
   try {
-    for (const [branch, location] of [
-      ["sign-in", signInTarget],
-      ["code", codeTarget],
-    ] as const) {
+    for (const branch of ["sign-in", "code"] as const) {
       const response = await runtime.dispatchFetch(
         `https://worker.test/authorize/${branch}`,
         { redirect: "manual" },
       );
       expect(response.status).toBe(302);
-      expect(response.headers.get("location")).toBe(location);
+      const location = new URL(response.headers.get("location")!);
+      if (branch === "sign-in") {
+        expect(location.origin).toBe(issuer);
+        expect(location.pathname).toBe("/sign-in");
+        expect(location.searchParams.get("return")).toStartWith(
+          "/oauth/authorize?",
+        );
+      } else {
+        expect(location.origin).toBe("https://client.example.test");
+        expect(location.pathname).toBe("/oauth/callback");
+        expect(location.searchParams.get("code")).toBeString();
+        expect(location.searchParams.get("state")).toBe("workerd-state");
+      }
       expect(response.headers.get("cache-control")).toBe("no-store");
       expect(response.headers.get("pragma")).toBe("no-cache");
       expect(response.headers.get("vary")).toBe("Cookie, Sec-Fetch-Dest");

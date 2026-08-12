@@ -469,7 +469,9 @@ export async function handleAuthorize(input: {
   operations?: ControlPlaneOperations;
   resolveOperations?: ResolveControlPlaneOperations;
 }): Promise<Response> {
-  const response = await handleAuthorizeUncached(input);
+  const response = withOAuthNoStoreHeaders(
+    await handleAuthorizeUncached(input),
+  );
   // Authorize branches on the presented session cookie and fetch destination;
   // no-store is the primary cache guard, while Vary documents those inputs
   // for intermediaries that inspect the response metadata.
@@ -478,7 +480,7 @@ export async function handleAuthorize(input: {
     "vary",
     vary ? `${vary}, Cookie, Sec-Fetch-Dest` : "Cookie, Sec-Fetch-Dest",
   );
-  return withOAuthNoStoreHeaders(response);
+  return response;
 }
 
 async function handleAuthorizeUncached(input: {
