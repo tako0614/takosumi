@@ -7,10 +7,14 @@ export function isWorkerLocalPath(pathname: string): boolean {
   return normalizePathname(pathname) === "/healthz";
 }
 
+export function isWorkerReadinessPath(pathname: string): boolean {
+  return normalizePathname(pathname) === "/readyz";
+}
+
 // Account-plane / service API namespaces handled by the accounts handler.
 // Everything NOT matched here is served as the dashboard SPA from the Worker's
-// static assets. `/healthz` is handled earlier in the Worker, so it is not
-// repeated here. (`/dashboard/*` is intentionally
+// static assets. `/healthz` and `/readyz` are handled earlier in the Worker,
+// so they are not repeated here. (`/dashboard/*` is intentionally
 // NOT in this set: the SPA owns the dashboard UI now that the former
 // server-HTML dashboard has been removed from accounts-service.)
 //

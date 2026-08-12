@@ -3,6 +3,7 @@ import {
   ACCOUNTS_API_PREFIXES,
   isAccountsApiPath,
   isWorkerLocalPath,
+  isWorkerReadinessPath,
 } from "../../../../deploy/accounts-cloudflare/src/routes.ts";
 import { ACCOUNTS_API_PREFIXES as NODE_POSTGRES_API_PREFIXES } from "../../../../deploy/node-postgres/src/static-assets.ts";
 
@@ -81,5 +82,14 @@ describe("isWorkerLocalPath", () => {
     expect(isWorkerLocalPath("/healthz/")).toBe(true);
     expect(isWorkerLocalPath("/")).toBe(false);
     expect(isWorkerLocalPath("/v1/account/session/me")).toBe(false);
+  });
+});
+
+describe("isWorkerReadinessPath", () => {
+  test("normalizes trailing slashes like the health probe", () => {
+    expect(isWorkerReadinessPath("/readyz")).toBe(true);
+    expect(isWorkerReadinessPath("/readyz/")).toBe(true);
+    expect(isWorkerReadinessPath("/readyz////")).toBe(true);
+    expect(isWorkerReadinessPath("/healthz")).toBe(false);
   });
 });

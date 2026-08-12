@@ -83,6 +83,36 @@ test("Cloudflare readiness checks canonical platform bindings only", async () =>
   expect(ready.status).toBe(200);
 });
 
+test("Cloudflare readiness keeps the same JSON response for a trailing slash", async () => {
+  const complete: Record<string, unknown> = {};
+  for (const name of [
+    ...REQUIRED_PLATFORM_BINDINGS.d1,
+    ...REQUIRED_PLATFORM_BINDINGS.r2,
+    ...REQUIRED_PLATFORM_BINDINGS.durableObjects,
+    ...REQUIRED_PLATFORM_BINDINGS.assets,
+  ]) {
+    complete[name] = {};
+  }
+  const worker = createCloudflareWorker();
+  const canonical = await worker.fetch(
+    new Request("https://app.example.test/readyz"),
+    env(complete),
+  );
+  const trailingSlash = await worker.fetch(
+    new Request("https://app.example.test/readyz/"),
+    env(complete),
+  );
+
+  expect(trailingSlash.status).toBe(canonical.status);
+  expect(await trailingSlash.json()).toEqual(await canonical.json());
+  expect(trailingSlash.headers.get("content-type")).toBe(
+    canonical.headers.get("content-type"),
+  );
+  expect(trailingSlash.headers.get("x-takosumi-version-id")).toBe(
+    canonical.headers.get("x-takosumi-version-id"),
+  );
+});
+
 test("dashboard documents keep inline scripts blocked while allowing the configured Cloudflare beacon", async () => {
   const response = await createCloudflareWorker().fetch(
     new Request("https://app.example.test/new"),

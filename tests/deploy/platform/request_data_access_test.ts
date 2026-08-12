@@ -41,7 +41,7 @@ describe("classifyPlatformRequestDataAccess", () => {
         routingEnv(),
       ),
     ).toEqual({ kind: "data-free", surface: "product-discovery" });
-    for (const path of ["/healthz", "/readyz"]) {
+    for (const path of ["/healthz", "/healthz/", "/readyz", "/readyz/"]) {
       expect(
         classifyPlatformRequestDataAccess(request(path), routingEnv()),
       ).toEqual({ kind: "data-free", surface: "presence-probe" });
