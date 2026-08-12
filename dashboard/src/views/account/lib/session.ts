@@ -133,6 +133,16 @@ function pickResponseRecord(data: SessionMeResponse): SessionRecord | null {
   return null;
 }
 
+function isExplicitUnauthenticatedSession(data: unknown): boolean {
+  if (typeof data !== "object" || data === null || Array.isArray(data)) {
+    return false;
+  }
+  return (
+    Object.prototype.hasOwnProperty.call(data, "session") &&
+    (data as { readonly session?: unknown }).session === null
+  );
+}
+
 interface SessionRefreshOptions {
   /**
    * The authenticated shell always needs the Workspace switcher. Asking the
@@ -206,6 +216,7 @@ async function fetchAccountSessionMe(): Promise<SessionRecord | null> {
     if (!res.ok) throw sessionErrorFromResponse(res, body);
     const session = pickResponseRecord(body as SessionMeResponse);
     if (!session) {
+      if (isExplicitUnauthenticatedSession(body)) return null;
       throw new SessionError(
         "error",
         res.status,
@@ -286,6 +297,7 @@ export function refreshSession(
       cachedError = null;
       cachedAt = Date.now();
       initialized = true;
+      if (!s) clearWorkspaceListCache();
       notify(s);
       notifyState(
         s ? { kind: "authenticated", session: s } : { kind: "unauthenticated" },
