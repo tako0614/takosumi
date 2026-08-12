@@ -253,6 +253,11 @@ per-check env aliases or infer checks from the runner/provider name.
 For source-and-run coverage use `bun run smoke:platform-control-plane` with
 operator-owned inputs. Its default path is the providerless plain OpenTofu
 fixture; a Cloudflare connection, resource preflight, or Worker verification is
-enabled only through the corresponding explicit options. Cloud extension,
-payment, and Cloud-capacity evidence belongs to the hosting layer, not this
-OSS runbook.
+enabled only through the corresponding explicit options. A host that needs to
+bind the lifecycle to one immutable serving release supplies the generic paired
+`--expected-service-identity-header` / `--expected-service-identity` options.
+The v3 smoke checks that header before the first lifecycle mutation and after
+cleanup, records only its SHA-256 digest, and writes `--out-file` once to a new
+owner-private path outside the source checkout. Session-token files follow the
+same owner-private boundary. Cloud extension, payment, and Cloud-capacity
+evidence belongs to the hosting layer, not this OSS runbook.

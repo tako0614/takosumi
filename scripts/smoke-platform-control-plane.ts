@@ -19,9 +19,14 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { canonicalProviderSource } from "../contract/provider-env-rules.ts";
+import {
+  assertNewOwnerPrivateEvidenceTarget,
+  readOwnerPrivateTextFile,
+  writeNewPrivateEvidenceJson,
+} from "./lib/private-evidence-file.ts";
 
 export const PLATFORM_CONTROL_PLANE_SMOKE_KIND =
-  "takosumi.platform-control-plane-smoke@v2" as const;
+  "takosumi.platform-control-plane-smoke@v3" as const;
 export const CLOUDFLARE_PUBLIC_URL_PROPAGATION_TIMEOUT_MS = 180_000;
 
 const TAKOSUMI_ROOT = resolve(import.meta.dir, "..");
@@ -35,6 +40,9 @@ const DEFAULT_PROVIDERLESS_CAPSULE_DIR = resolve(
 );
 const DEFAULT_PROVIDERLESS_RUNNER_PROFILE_ID = "opentofu-default";
 const DEFAULT_DEPLOY_TIMEOUT_SECONDS = 300;
+const PRIVATE_INPUT_MAX_BYTES = 64 * 1024;
+const HTTP_HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/u;
+const SERVICE_IDENTITY_MAX_BYTES = 1024;
 const API_PREFIX = "/api/v1";
 const CLOUDFLARE_PROVIDER_SOURCE =
   "registry.opentofu.org/cloudflare/cloudflare";
@@ -239,6 +247,10 @@ export interface PlatformControlPlaneSmokeOptions {
   readonly ensureWorkspace: boolean;
   readonly backupRestoreRehearsal: boolean;
   readonly workspaceDisplayName?: string;
+  readonly expectedServiceIdentity?: {
+    readonly headerName: string;
+    readonly value: string;
+  };
 }
 
 export interface PlatformControlPlaneSmokeResult {
@@ -254,6 +266,12 @@ export interface PlatformControlPlaneSmokeResult {
   readonly verificationMode: SmokeVerificationMode;
   readonly credentialPath: "workspace_scoped_provider_connection" | "none";
   readonly providerConnectionMode: SmokeProviderConnectionMode;
+  readonly serviceIdentity?: {
+    readonly headerName: string;
+    readonly identityDigest: `sha256:${string}`;
+    readonly sampleCount: number;
+    readonly result: "planned" | "passed" | "failed";
+  };
   /** Required end-to-end checkpoints for this smoke shape. */
   readonly steps: readonly string[];
   /** Checkpoints that were actually completed before the result was written. */
@@ -388,6 +406,8 @@ interface CliArgs {
   readonly deployTimeoutSeconds?: string;
   readonly pollIntervalMs?: string;
   readonly requireReleaseActivation?: string;
+  readonly expectedServiceIdentityHeader?: string;
+  readonly expectedServiceIdentity?: string;
 }
 
 interface RequestOptions {
@@ -659,6 +679,18 @@ export async function resolveOptions(
   if (!workspace) {
     throw new Error("--workspace or TAKOSUMI_SMOKE_WORKSPACE is required");
   }
+  const expectedServiceIdentity = parseExpectedServiceIdentity(
+    args.expectedServiceIdentityHeader ??
+      env.TAKOSUMI_SMOKE_EXPECTED_SERVICE_IDENTITY_HEADER,
+    args.expectedServiceIdentity ??
+      env.TAKOSUMI_SMOKE_EXPECTED_SERVICE_IDENTITY,
+  );
+  const outFile = args.outFile
+    ? await assertNewOwnerPrivateEvidenceTarget(args.outFile, {
+        sourceRoots: [TAKOSUMI_ROOT],
+        label: "platform control-plane smoke evidence",
+      })
+    : undefined;
   const cloudflareConnectionMode = parseCloudflareConnectionMode(
     args.cloudflareConnectionMode ??
       env.TAKOSUMI_SMOKE_CLOUDFLARE_CONNECTION_MODE,
@@ -932,7 +964,7 @@ export async function resolveOptions(
     dryRun: args.dryRun === true,
     noDefaultVars: args.noDefaultVars === true,
     json: args.json === true,
-    ...(args.outFile ? { outFile: resolve(args.outFile) } : {}),
+    ...(outFile ? { outFile } : {}),
     ...(requireReleaseActivation ? { requireReleaseActivation } : {}),
     keepConnection: args.keepConnection === true,
     ensureWorkspace: args.ensureWorkspace === true,
@@ -940,6 +972,7 @@ export async function resolveOptions(
     ...(args.workspaceDisplayName
       ? { workspaceDisplayName: args.workspaceDisplayName }
       : {}),
+    ...(expectedServiceIdentity ? { expectedServiceIdentity } : {}),
   };
 }
 
@@ -962,6 +995,15 @@ export function dryRunResult(
     verificationMode: options.verificationMode,
     credentialPath: providerCredentialPath(options),
     providerConnectionMode: options.cloudflareConnectionMode,
+    ...(options.expectedServiceIdentity
+      ? {
+          serviceIdentity: serviceIdentityEvidence(
+            options.expectedServiceIdentity,
+            0,
+            "planned",
+          ),
+        }
+      : {}),
     ...(options.providerConnectionId
       ? { providerConnectionId: options.providerConnectionId }
       : {}),
@@ -1141,7 +1183,8 @@ export async function runPlatformControlPlaneSmoke(
   assertBackupRestoreRehearsalUnavailable(options);
   const startedAtMs = Date.now();
   const startedAt = new Date(startedAtMs).toISOString();
-  const workspaceId = await resolveWorkspaceId(options);
+  let workspaceId = options.workspace;
+  let serviceIdentitySampleCount = 0;
   const completedSteps: string[] = [];
   const stepTimings: SmokeStepTiming[] = [];
   const runTimings: SmokeRunTiming[] = [];
@@ -1198,6 +1241,11 @@ export async function runPlatformControlPlaneSmoke(
     CloudflareResourcePreflightResult | undefined;
 
   try {
+    if (options.expectedServiceIdentity) {
+      await probeServiceIdentity(options);
+      serviceIdentitySampleCount += 1;
+    }
+    workspaceId = await resolveWorkspaceId(options);
     if (options.providerConnectionId !== undefined) {
       beginStep("existingProviderConnectionSelected");
       providerConnectionSource = await lookupExistingProviderConnectionSource(
@@ -1369,6 +1417,10 @@ export async function runPlatformControlPlaneSmoke(
       }
       completeStep("connectionRevoked");
     }
+    if (options.expectedServiceIdentity) {
+      await probeServiceIdentity(options);
+      serviceIdentitySampleCount += 1;
+    }
     const finishedAtMs = Date.now();
     const finishedAt = new Date(finishedAtMs).toISOString();
     return {
@@ -1384,6 +1436,15 @@ export async function runPlatformControlPlaneSmoke(
       verificationMode: options.verificationMode,
       credentialPath: providerCredentialPath(options),
       providerConnectionMode: options.cloudflareConnectionMode,
+      ...(options.expectedServiceIdentity
+        ? {
+            serviceIdentity: serviceIdentityEvidence(
+              options.expectedServiceIdentity,
+              serviceIdentitySampleCount,
+              serviceIdentitySampleCount === 2 ? "passed" : "failed",
+            ),
+          }
+        : {}),
       sourceMode: options.sourceMode,
       steps: requiredSteps(options),
       completedSteps,
@@ -1543,6 +1604,7 @@ export async function runPlatformControlPlaneSmoke(
     runCancellationError,
     connectionRevokeSkippedReason,
     failureCleanup,
+    serviceIdentitySampleCount,
     error: failure,
   });
 }
@@ -1583,6 +1645,7 @@ function failedResult(
     readonly runCancellationError?: string;
     readonly connectionRevokeSkippedReason?: string;
     readonly failureCleanup?: FailureCleanupResult;
+    readonly serviceIdentitySampleCount: number;
     readonly error: unknown;
   },
 ): PlatformControlPlaneSmokeResult {
@@ -1601,6 +1664,15 @@ function failedResult(
     verificationMode: options.verificationMode,
     credentialPath: providerCredentialPath(options),
     providerConnectionMode: options.cloudflareConnectionMode,
+    ...(options.expectedServiceIdentity
+      ? {
+          serviceIdentity: serviceIdentityEvidence(
+            options.expectedServiceIdentity,
+            input.serviceIdentitySampleCount,
+            "failed",
+          ),
+        }
+      : {}),
     sourceMode: options.sourceMode,
     steps: requiredSteps(options),
     completedSteps: input.completedSteps,
@@ -3595,7 +3667,13 @@ async function readSecret(input: {
 }): Promise<{ readonly value: string; readonly source: "env" | "file" }> {
   if (input.file) {
     if (input.dryRun) return { value: "<redacted>", source: "file" };
-    const value = (await readFile(input.file, "utf8")).trim();
+    const value = (
+      await readOwnerPrivateTextFile(input.file, {
+        sourceRoots: [TAKOSUMI_ROOT],
+        maxBytes: PRIVATE_INPUT_MAX_BYTES,
+        label: input.label,
+      })
+    ).trim();
     if (!value) throw new Error(`${input.label} file is empty`);
     return { value, source: "file" };
   }
@@ -3608,6 +3686,70 @@ async function readSecret(input: {
   throw new Error(
     `${input.label} is required: pass the matching --*-file option or set ${input.envName}`,
   );
+}
+
+function parseExpectedServiceIdentity(
+  rawHeaderName: string | undefined,
+  rawValue: string | undefined,
+): { readonly headerName: string; readonly value: string } | undefined {
+  if (rawHeaderName === undefined && rawValue === undefined) return undefined;
+  if (rawHeaderName === undefined || rawValue === undefined) {
+    throw new Error(
+      "--expected-service-identity-header and --expected-service-identity must be provided together",
+    );
+  }
+  const headerName = rawHeaderName.trim().toLowerCase();
+  const value = rawValue.trim();
+  if (!headerName || !HTTP_HEADER_NAME.test(headerName)) {
+    throw new Error("expected service identity header must be a valid HTTP header name");
+  }
+  if (
+    !value ||
+    Buffer.byteLength(value) > SERVICE_IDENTITY_MAX_BYTES ||
+    /[\r\n]/u.test(value)
+  ) {
+    throw new Error("expected service identity must be one bounded header value");
+  }
+  return { headerName, value };
+}
+
+async function probeServiceIdentity(
+  options: Pick<
+    PlatformControlPlaneSmokeOptions,
+    "url" | "expectedServiceIdentity"
+  >,
+): Promise<void> {
+  const expectation = options.expectedServiceIdentity;
+  if (!expectation) return;
+  const response = await fetch(options.url, {
+    method: "GET",
+    headers: { accept: "text/html,application/json" },
+    redirect: "manual",
+  });
+  await response.body?.cancel().catch(() => undefined);
+  assertServiceIdentityResponse(response.headers, expectation);
+}
+
+export function assertServiceIdentityResponse(
+  headers: Headers,
+  expectation: { readonly headerName: string; readonly value: string },
+): void {
+  if (headers.get(expectation.headerName) !== expectation.value) {
+    throw new Error("service identity response header did not match expectation");
+  }
+}
+
+function serviceIdentityEvidence(
+  expectation: { readonly headerName: string; readonly value: string },
+  sampleCount: number,
+  result: "planned" | "passed" | "failed",
+): NonNullable<PlatformControlPlaneSmokeResult["serviceIdentity"]> {
+  return {
+    headerName: expectation.headerName,
+    identityDigest: sha256(expectation.value) as `sha256:${string}`,
+    sampleCount,
+    result,
+  };
 }
 
 async function readNonSecretInput(input: {
@@ -4504,8 +4646,7 @@ async function writeResultFile(
   outFile: string,
   result: PlatformControlPlaneSmokeResult,
 ): Promise<void> {
-  await mkdir(dirname(outFile), { recursive: true });
-  await writeFile(outFile, `${JSON.stringify(result, null, 2)}\n`);
+  await writeNewPrivateEvidenceJson(outFile, result);
 }
 
 async function runSelfTest(): Promise<void> {
@@ -4530,7 +4671,9 @@ async function runSelfTest(): Promise<void> {
   const serialized = JSON.stringify(result);
   const tempRoot = await mkdtemp(resolve(tmpdir(), "takosumi-platform-smoke-"));
   try {
-    const outFile = resolve(tempRoot, "nested/smoke.json");
+    const evidenceDirectory = resolve(tempRoot, "nested");
+    await mkdir(evidenceDirectory, { mode: 0o700 });
+    const outFile = resolve(evidenceDirectory, "smoke.json");
     await writeResultFile(outFile, result);
     const saved = JSON.parse(await readFile(outFile, "utf8"));
     if (saved.kind !== PLATFORM_CONTROL_PLANE_SMOKE_KIND) {
@@ -5224,10 +5367,12 @@ Options:
   --functional-probe-env <NAME,...>               explicitly forward only these environment variables to the functional probe
   --require-release-activation <any|pending|succeeded|failed|none>
                                                    require a release_activation Activity event for the apply Run; default none
+  --expected-service-identity-header <name>        optional provider-neutral immutable service identity header; requires --expected-service-identity
+  --expected-service-identity <value>              expected opaque header value; recorded only as SHA-256 digest
   --timeout-seconds <n>                           default 600
   --deploy-timeout-seconds <n>                    default ${DEFAULT_DEPLOY_TIMEOUT_SECONDS}
   --poll-interval-ms <n>                          default 2000
-  --out-file <path>                               write the redacted result JSON to a private evidence file
+  --out-file <path>                               write once to a new owner-private evidence file outside this source checkout
   --keep-connection                               keep the temporary Workspace ProviderConnection
   --dry-run                                       validate shape and print redacted plan
   --json                                          print JSON only

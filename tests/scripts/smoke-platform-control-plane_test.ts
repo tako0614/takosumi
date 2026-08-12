@@ -1,3 +1,7 @@
+import { createHash } from "node:crypto";
+import { chmod, lstat, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { expect, test } from "bun:test";
 import {
   CLOUDFLARE_PUBLIC_URL_PROPAGATION_TIMEOUT_MS,
@@ -7,6 +11,7 @@ import {
   dryRunResult,
   isSmokeProviderConnectionMatch,
   isSelectableCapsuleInstallConfig,
+  main,
   resolveOptions,
   selectSmokeInstallConfigId,
   shouldMarkPendingSmokeCapsuleError,
@@ -15,6 +20,7 @@ import {
   smokeSourceCapsuleCreateBody,
   smokeCloudflareProviderConnectionMatch,
   smokeWorkspaceCloudflareConnectionBody,
+  assertServiceIdentityResponse,
 } from "../../scripts/smoke-platform-control-plane.ts";
 
 test("Cloudflare public URL verification allows bounded edge propagation", () => {
@@ -110,7 +116,7 @@ test("platform control-plane smoke dry-run is redacted and complete", async () =
   const result = dryRunResult(options);
   const json = JSON.stringify(result);
 
-  expect(result.kind).toBe(PLATFORM_CONTROL_PLANE_SMOKE_KIND);
+  expect(result.kind).toBe("takosumi.platform-control-plane-smoke@v3");
   expect(result.status).toBe("dry_run");
   expect(result.environment).toBe("smoke");
   expect(result.capsuleModule).toBe("git-opentofu-capsule");
@@ -156,6 +162,113 @@ test("platform control-plane smoke dry-run is redacted and complete", async () =
   expect(json).not.toContain("CLOUDFLARE_ACCOUNT_ID");
   expect(json).not.toContain("TAKOSUMI_ACCOUNT_SESSION_TOKEN");
   expect(json).not.toContain("CLOUDFLARE_API_TOKEN");
+});
+
+test("platform smoke binds an optional provider-neutral service identity without retaining it", async () => {
+  const identity = "immutable-release-revision";
+  const options = await resolveOptions(
+    {
+      dryRun: true,
+      url: "https://app-staging.takosumi.com",
+      workspace: "ws_test",
+      sessionTokenFile: "/operator/private/session",
+      cloudflareConnectionMode: "none",
+      verificationMode: "opentofu",
+      expectedServiceIdentityHeader: "X-Release-Revision",
+      expectedServiceIdentity: identity,
+    },
+    {},
+  );
+
+  const result = dryRunResult(options);
+  expect(result.serviceIdentity).toEqual({
+    headerName: "x-release-revision",
+    identityDigest: `sha256:${createHash("sha256")
+      .update(identity)
+      .digest("hex")}`,
+    sampleCount: 0,
+    result: "planned",
+  });
+  expect(JSON.stringify(result)).not.toContain(identity);
+  expect(() =>
+    assertServiceIdentityResponse(
+      new Headers({ "x-release-revision": identity }),
+      options.expectedServiceIdentity!,
+    ),
+  ).not.toThrow();
+  expect(() =>
+    assertServiceIdentityResponse(
+      new Headers({ "x-release-revision": "substituted" }),
+      options.expectedServiceIdentity!,
+    ),
+  ).toThrow("service identity response header did not match expectation");
+});
+
+test("platform smoke rejects partial service identity and unsafe private evidence inputs", async () => {
+  await expect(
+    resolveOptions(
+      {
+        dryRun: true,
+        url: "https://app-staging.takosumi.com",
+        workspace: "ws_test",
+        sessionTokenFile: "/operator/private/session",
+        cloudflareConnectionMode: "none",
+        verificationMode: "opentofu",
+        expectedServiceIdentityHeader: "x-release-revision",
+      },
+      {},
+    ),
+  ).rejects.toThrow("must be provided together");
+
+  const root = await mkdtemp(join(tmpdir(), "takosumi-platform-private-"));
+  try {
+    await chmod(root, 0o700);
+    const session = join(root, "session");
+    const evidence = join(root, "evidence.json");
+    await writeFile(session, "session-token\n", { mode: 0o644 });
+    await expect(
+      resolveOptions(
+        {
+          url: "https://app-staging.takosumi.com",
+          workspace: "ws_test",
+          sessionTokenFile: session,
+          sourceGitUrl: "https://github.com/example/repository.git",
+          cloudflareConnectionMode: "none",
+          verificationMode: "opentofu",
+        },
+        {},
+      ),
+    ).rejects.toThrow("mode 0600");
+
+    await chmod(session, 0o600);
+    const args = [
+      "--url",
+      "https://app-staging.takosumi.com",
+      "--workspace",
+      "ws_test",
+      "--session-token-file",
+      session,
+      "--cloudflare-connection-mode",
+      "none",
+      "--verification-mode",
+      "opentofu",
+      "--expected-service-identity-header",
+      "x-release-revision",
+      "--expected-service-identity",
+      "immutable-release-revision",
+      "--out-file",
+      evidence,
+      "--dry-run",
+    ] as const;
+    await expect(main(args)).resolves.toBe(0);
+    expect((await lstat(evidence)).mode & 0o777).toBe(0o600);
+    expect(await readFile(evidence, "utf8")).not.toContain(
+      "immutable-release-revision",
+    );
+    await expect(main(args)).rejects.toThrow("target already exists");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("platform control-plane smoke keeps the Capsule name independent from OpenTofu variable names", async () => {

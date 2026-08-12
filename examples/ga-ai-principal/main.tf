@@ -34,4 +34,23 @@ variable "takosumi_accounts_redirect_uri" {
 output "public_url" {
   description = "The public URL used by the principal Capsule."
   value       = var.public_url
+  sensitive   = false
+}
+
+output "takosumi_accounts_issuer_url" {
+  description = "The public Takosumi Accounts issuer for the Capsule OIDC client."
+  value       = var.takosumi_accounts_issuer_url
+  sensitive   = false
+}
+
+output "takosumi_accounts_client_id" {
+  description = "The public identifier of the Capsule OIDC client."
+  value       = var.takosumi_accounts_client_id
+  sensitive   = false
+}
+
+output "takosumi_accounts_redirect_uri" {
+  description = "The registered public redirect URI of the Capsule OIDC client."
+  value       = var.takosumi_accounts_redirect_uri
+  sensitive   = false
 }
