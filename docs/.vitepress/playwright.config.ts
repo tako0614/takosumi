@@ -15,6 +15,7 @@ export default defineConfig({
   timeout: 45_000,
   expect: { timeout: 10_000 },
   reporter: "line",
+  outputDir: resolve(repositoryRoot, "test-results/docs-mobile"),
   projects: [
     {
       name: "docs-mobile",
