@@ -1,5 +1,14 @@
 import { Database, type SQLQueryBindings } from "bun:sqlite";
 
+import {
+  canonicalSqliteLogicalJson,
+  canonicalSqliteLogicalRow,
+  isSqliteLogicalContentExcludedTable,
+  SQLITE_LOGICAL_CONTENT_DIGEST_KIND,
+  SQLITE_LOGICAL_CONTENT_MAX_PAGE_SIZE,
+  sqliteLogicalContentExcludedTables,
+  sqliteLogicalRowsQuery,
+} from "../../contract/sqlite-logical-content.ts";
 import type {
   D1Database,
   D1PreparedStatement,
@@ -237,7 +246,7 @@ export interface ControlD1TransferLogicalTableDigest {
 }
 
 export interface ControlD1TransferLogicalDatabaseDigest {
-  readonly kind: "takosumi.sqlite-logical-content@v1";
+  readonly kind: typeof SQLITE_LOGICAL_CONTENT_DIGEST_KIND;
   readonly algorithm: "sha256";
   readonly databaseDigest: string;
   readonly tables: readonly ControlD1TransferLogicalTableDigest[];
@@ -1187,52 +1196,60 @@ async function readControlD1TransferLogicalDatabaseDigest(
        order by name`,
     )
     .all<{ readonly name: string }>();
-  const names = (inventory.results ?? []).map((row) => String(row.name));
+  const names = (inventory.results ?? []).map((row) => row.name);
+  if (
+    names.some((name) => typeof name !== "string" || name.length === 0) ||
+    new Set(names).size !== names.length ||
+    [...names].sort().some((name, index) => name !== names[index])
+  ) {
+    throw new ControlD1SchemaError("logical_remote_inventory_invalid");
+  }
   const tables: ControlD1TransferLogicalTableDigest[] = [];
-  const excludedTables: Array<{
-    readonly table: string;
-    readonly reason: "cloudflare_internal";
-  }> = [];
+  const excludedTables = sqliteLogicalContentExcludedTables();
   for (const table of names) {
-    if (table === "_cf_KV") {
-      excludedTables.push({ table, reason: "cloudflare_internal" });
-      continue;
-    }
+    if (isSqliteLogicalContentExcludedTable(table)) continue;
     const columnsResult = await database
       .prepare(`pragma table_xinfo(${quoteSqlString(table)})`)
       .all<{ readonly cid: number | string; readonly name: string }>();
-    const columns = [...(columnsResult.results ?? [])]
-      .sort((left, right) => Number(left.cid) - Number(right.cid))
-      .map((column) => String(column.name));
-    if (columns.length === 0 || columns.some((column) => !/^[a-z_][a-z0-9_]{0,127}$/u.test(column))) {
+    const columnRows = [...(columnsResult.results ?? [])].sort(
+      (left, right) => Number(left.cid) - Number(right.cid),
+    );
+    const columns = columnRows.map((column) => column.name);
+    if (
+      columns.length === 0 ||
+      columnRows.some(
+        (column) =>
+          !Number.isSafeInteger(Number(column.cid)) ||
+          typeof column.name !== "string" ||
+          column.name.length === 0,
+      ) ||
+      new Set(columns).size !== columns.length
+    ) {
       throw new ControlD1SchemaError(`logical_table_columns_invalid:${table}`);
     }
-    const expression = transferCanonicalRowExpression(columns);
+    const query = sqliteLogicalRowsQuery(table, columns, true);
     const hasher = new Bun.CryptoHasher("sha256");
     let rowCount = 0;
-    for (let offset = 0; ; offset += 1_000) {
+    for (let offset = 0; ; offset += SQLITE_LOGICAL_CONTENT_MAX_PAGE_SIZE) {
       const page = await database
-        .prepare(
-          `select ${expression} as canonical_row
-          from ${transferQuotedIdentifier(table)}
-           order by canonical_row limit ? offset ?`,
-        )
-        .bind(1_000, offset)
-        .all<{ readonly canonical_row: string }>();
+        .prepare(query)
+        .bind(SQLITE_LOGICAL_CONTENT_MAX_PAGE_SIZE, offset)
+        .all<Record<string, unknown>>();
       const rows = page.results ?? [];
+      if (rows.length > SQLITE_LOGICAL_CONTENT_MAX_PAGE_SIZE) {
+        throw new ControlD1SchemaError(`logical_remote_page_invalid:${table}`);
+      }
       for (const row of rows) {
-        if (typeof row.canonical_row !== "string") {
-          throw new ControlD1SchemaError(`logical_remote_row_invalid:${table}`);
-        }
-        const bytes = new TextEncoder().encode(row.canonical_row);
+        const canonicalRow = canonicalSqliteLogicalRow(row, columns.length);
+        const bytes = new TextEncoder().encode(canonicalRow);
         hasher.update(`${bytes.byteLength}:`);
         hasher.update(bytes);
         rowCount += 1;
       }
-      if (rows.length < 1_000) break;
+      if (rows.length < SQLITE_LOGICAL_CONTENT_MAX_PAGE_SIZE) break;
     }
     const rowDigest = `sha256:${hasher.digest("hex")}`;
-    const contentDigest = await digestTransferValue({
+    const contentDigest = await digestLogicalContentValue({
       table,
       columns,
       rowCount,
@@ -1240,8 +1257,8 @@ async function readControlD1TransferLogicalDatabaseDigest(
     });
     tables.push({ table, columns, rowCount, rowDigest, contentDigest });
   }
-  const databaseDigest = await digestTransferValue({
-    kind: "takosumi.sqlite-logical-content@v1",
+  const databaseDigest = await digestLogicalContentValue({
+    kind: SQLITE_LOGICAL_CONTENT_DIGEST_KIND,
     tables: tables.map((table) => ({
       table: table.table,
       columns: table.columns,
@@ -1251,7 +1268,7 @@ async function readControlD1TransferLogicalDatabaseDigest(
     excludedTables,
   });
   return {
-    kind: "takosumi.sqlite-logical-content@v1",
+    kind: SQLITE_LOGICAL_CONTENT_DIGEST_KIND,
     algorithm: "sha256",
     databaseDigest,
     tables,
@@ -1259,32 +1276,8 @@ async function readControlD1TransferLogicalDatabaseDigest(
   };
 }
 
-function transferCanonicalRowExpression(columns: readonly string[]): string {
-  return columns
-    .map((column) => {
-      const identifier = transferQuotedIdentifier(column);
-      const encoded =
-        `case typeof(${identifier}) ` +
-        `when 'null' then 'N' ` +
-        `when 'integer' then 'I' || printf('%lld', ${identifier}) ` +
-        `when 'real' then 'R' || printf('%!.17g', ${identifier}) ` +
-        `when 'text' then 'T' || hex(cast(${identifier} as blob)) ` +
-        `when 'blob' then 'B' || hex(${identifier}) ` +
-        `else 'X' || typeof(${identifier}) end`;
-      return `length(${encoded}) || ':' || ${encoded}`;
-    })
-    .join(" || ");
-}
-
 function quoteSqlString(value: string): string {
   return `'${value.replaceAll("'", "''")}'`;
-}
-
-function transferQuotedIdentifier(value: string): string {
-  if (!/^[A-Za-z_][A-Za-z0-9_]{0,127}$/u.test(value)) {
-    throw new ControlD1SchemaError("logical_identifier_invalid");
-  }
-  return `"${value.replaceAll('"', '""')}"`;
 }
 
 export async function readControlD1MigrationLedger(
@@ -1612,6 +1605,14 @@ async function digest(value: unknown): Promise<string> {
 
 async function digestTransferValue(value: unknown): Promise<string> {
   const bytes = new TextEncoder().encode(canonicalTransferJson(value));
+  const valueDigest = await crypto.subtle.digest("SHA-256", bytes);
+  return `sha256:${[...new Uint8Array(valueDigest)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("")}`;
+}
+
+async function digestLogicalContentValue(value: unknown): Promise<string> {
+  const bytes = new TextEncoder().encode(canonicalSqliteLogicalJson(value));
   const valueDigest = await crypto.subtle.digest("SHA-256", bytes);
   return `sha256:${[...new Uint8Array(valueDigest)]
     .map((byte) => byte.toString(16).padStart(2, "0"))

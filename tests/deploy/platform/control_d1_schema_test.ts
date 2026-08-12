@@ -2312,7 +2312,10 @@ test("control D1 transfer source verification binds the permanent legacy fence a
       (verified.guardInventory?.guardedTableCount ?? 0) * 3,
     );
     expect(verified.integrity.status).toBe("ready");
-    expect(verified.logical.kind).toBe("takosumi.sqlite-logical-content@v1");
+    expect(verified.logical.kind).toBe("takosumi.sqlite-logical-content@v2");
+    expect(verified.logical.excludedTables).toEqual([
+      { table: "_cf_KV", reason: "cloudflare_internal" },
+    ]);
     expect(verified.logical.tables.length).toBeGreaterThan(6);
     expect(verified.protectedContentDigest).toMatch(/^sha256:[0-9a-f]{64}$/u);
     expect(verified.captureAuthorityDigest).toMatch(/^sha256:[0-9a-f]{64}$/u);
