@@ -54,7 +54,7 @@ Outputs are referenced only through explicit Interface input mappings.
 
 ## Routing shape
 
-The handler keeps `/healthz` as an edge-local route. Every account-plane path is handled directly by
+The handler keeps `/healthz` and `/readyz` as edge-local routes. Every account-plane path is handled directly by
 `createEphemeralAccountsHandler` (or `createAccountsHandler` when a stable ES256
 JWK is configured) with a `D1AccountsStore`. The default `bootstrap` mode
 initializes the D1 schema lazily and idempotently before the first account-plane

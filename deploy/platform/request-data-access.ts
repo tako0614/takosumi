@@ -192,8 +192,6 @@ const STATEFUL_RESERVED_PREFIXES = [
 
 const STATEFUL_RESERVED_EXACT_PATHS = new Set<string>([
   "/livez",
-  "/healthz/",
-  "/readyz/",
 ]);
 
 const STATEFUL_UNKNOWN: PlatformRequestDataAccess = Object.freeze({
@@ -302,10 +300,18 @@ function classifyExactDiscovery(
   if (DATA_FREE_IDENTITY_DISCOVERY_PATHS.has(pathname)) {
     return { kind: "data-free", surface: "identity-discovery" };
   }
-  if (DATA_FREE_PRESENCE_PROBE_PATHS.has(pathname)) {
+  if (
+    DATA_FREE_PRESENCE_PROBE_PATHS.has(pathname) ||
+    DATA_FREE_PRESENCE_PROBE_PATHS.has(normalizeProbePathname(pathname))
+  ) {
     return DATA_FREE_PROBE;
   }
   return undefined;
+}
+
+function normalizeProbePathname(pathname: string): string {
+  if (pathname === "/") return pathname;
+  return pathname.replace(/\/+$/g, "");
 }
 
 function isReservedPlatformPath(pathname: string): boolean {

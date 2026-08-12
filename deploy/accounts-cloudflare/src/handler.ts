@@ -26,7 +26,11 @@ import {
   resolveD1AccountsSchemaMode,
   resolveTakosumiMobileOidcClientId,
 } from "@takosjp/takosumi-accounts-service";
-import { isAccountsApiPath, isWorkerLocalPath } from "./routes.ts";
+import {
+  isAccountsApiPath,
+  isWorkerLocalPath,
+  isWorkerReadinessPath,
+} from "./routes.ts";
 import { checkPlatformBindings } from "./bindings-check.ts";
 
 export interface CloudflareWorkerEnv {
@@ -153,7 +157,7 @@ export function createCloudflareWorker<
       // required durable bindings exist and name any that are missing, so a
       // misconfigured deploy fails loudly here instead of deep in the run
       // pipeline. Presence-only (no D1/R2/DO I/O), so it stays cheap.
-      if (url.pathname === "/readyz") {
+      if (isWorkerReadinessPath(url.pathname)) {
         const check = checkPlatformBindings(
           env as unknown as Record<string, unknown>,
         );
