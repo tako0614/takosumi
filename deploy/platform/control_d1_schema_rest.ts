@@ -204,15 +204,23 @@ export class CloudflareControlD1RestDatabase implements D1Database {
   }
 
   async #pollImport(bookmark: string): Promise<void> {
+    let currentBookmark = opaqueImportValue(
+      bookmark,
+      "cloudflare_d1_import_response_invalid",
+    );
     for (let attempt = 0; attempt < this.#importPollAttempts; attempt += 1) {
       const result = await this.#requestImport({
         action: "poll",
-        current_bookmark: bookmark,
+        current_bookmark: currentBookmark,
       });
       if (importComplete(result)) return;
       if (result.status === "error" || result.error) {
         throw new ControlD1RestError("cloudflare_d1_import_failed");
       }
+      currentBookmark = opaqueImportValue(
+        result.at_bookmark,
+        "cloudflare_d1_import_response_invalid",
+      );
       if (attempt + 1 >= this.#importPollAttempts) break;
       await this.#wait(this.#importPollIntervalMilliseconds);
     }
