@@ -446,17 +446,24 @@ export async function applyControlD1Schema(
     throw new ControlD1SchemaError("post_apply_verification_failed");
   }
   if (!options.retainMaintenanceFence) {
+    const releasedAt = options.releasedAt();
     try {
       await releaseControlD1MaintenanceFence(
         database,
         fence,
-        options.releasedAt(),
+        releasedAt,
       );
     } catch (error) {
       // A transport can lose the response after D1 committed the release
-      // batch. Read durable state before deciding whether this is a real
-      // failure or merely a lost acknowledgement.
-      if (await isControlD1MaintenanceFenceActive(database)) throw error;
+      // batch. Accept only the exact durable receipt and released guard state;
+      // some other inactive fence never reconciles this acknowledgement.
+      if (!(await matchesExactInPlaceReleaseReceipt(
+        database,
+        fence,
+        releasedAt,
+      ))) {
+        throw error;
+      }
     }
     if (await isControlD1MaintenanceFenceActive(database)) {
       throw new ControlD1SchemaError("maintenance_fence_release_failed");
@@ -477,6 +484,39 @@ export async function applyControlD1Schema(
     ...(predecessorMaintenanceFence ? { predecessorMaintenanceFence } : {}),
     maintenanceStatus: options.retainMaintenanceFence ? "retained" : "released",
   };
+}
+
+async function matchesExactInPlaceReleaseReceipt(
+  database: D1Database,
+  fence: ControlD1MaintenanceFence,
+  releasedAt: string,
+): Promise<boolean> {
+  try {
+    const receipt = await readControlD1MaintenanceReleaseReceiptDetails(database);
+    const guards = await readControlD1MaintenanceGuardInventory(database);
+    const expectedTriggerSqlDigest =
+      await digestControlD1MaintenanceGuardTriggerInventory([]);
+    const expectedGuardDigest = await digestControlD1MaintenanceGuardInventory({
+      tables: guards.tables,
+      triggers: [],
+      triggerSqlDigests: [],
+    });
+    return (
+      receipt !== null &&
+      (await digestControlD1MaintenanceFence(receipt.fence)) ===
+        (await digestControlD1MaintenanceFence(fence)) &&
+      receipt.releasedAt === releasedAt &&
+      receipt.releaseReadinessDigest === null &&
+      guards.guardedTableCount === guards.tables.length &&
+      guards.guardTriggerCount === 0 &&
+      guards.triggers.length === 0 &&
+      guards.triggerSqlDigests.length === 0 &&
+      guards.triggerSqlDigest === expectedTriggerSqlDigest &&
+      guards.digest === expectedGuardDigest
+    );
+  } catch {
+    return false;
+  }
 }
 
 function predecessorRecoveryMigrationLedger(

@@ -752,15 +752,29 @@ export async function releaseControlD1MaintenanceFence(
     }
     throw error;
   }
-  const releaseChanges = releaseResults[1]?.meta?.changes;
-  if (Number(releaseChanges) !== 1) {
+  const releaseMeta = releaseResults[1]?.meta;
+  if (releaseMeta !== undefined && releaseMeta.changes !== 1) {
     throw new ControlD1MaintenanceError("maintenance_fence_release_mismatch");
   }
-  const released = await readControlD1MaintenanceState(db);
+  let receipt: ControlD1MaintenanceReleaseReceipt | null;
+  let postReleaseGuardInventory: ControlD1MaintenanceGuardInventory;
+  try {
+    receipt = await readControlD1MaintenanceReleaseReceiptDetails(db);
+    postReleaseGuardInventory =
+      await readControlD1MaintenanceGuardInventory(db);
+  } catch {
+    throw new ControlD1MaintenanceError("maintenance_fence_release_failed");
+  }
   if (
-    released.status !== "inactive" ||
-    (await readControlD1MaintenanceReleaseReceipt(db))?.fenceId !==
-      fence.fenceId
+    !receipt ||
+    !sameMaintenanceFenceIdentity(receipt.fence, fence) ||
+    receipt.releasedAt !== releasedAt ||
+    receipt.releaseReadinessDigest !==
+      (options.releaseReadinessDigest ?? null) ||
+    !(await matchesReleasedMaintenanceGuardInventory(
+      postReleaseGuardInventory,
+      guardedTables,
+    ))
   ) {
     throw new ControlD1MaintenanceError("maintenance_fence_release_failed");
   }
@@ -994,6 +1008,28 @@ async function matchesExpectedMaintenanceGuardInventory(
     JSON.stringify(actual.triggers) === JSON.stringify(expectedNames) &&
     JSON.stringify(actual.triggerSqlDigests) ===
       JSON.stringify(expectedTriggerSqlDigests) &&
+    actual.triggerSqlDigest === expectedTriggerSqlDigest &&
+    actual.digest === expectedDigest
+  );
+}
+
+async function matchesReleasedMaintenanceGuardInventory(
+  actual: ControlD1MaintenanceGuardInventory,
+  tables: readonly string[],
+): Promise<boolean> {
+  const expectedTables = [...tables].sort();
+  const expectedTriggerSqlDigest = await sha256Json([]);
+  const expectedDigest = await digestMaintenanceGuardInventory({
+    tables: expectedTables,
+    triggers: [],
+    triggerSqlDigests: [],
+  });
+  return (
+    actual.guardedTableCount === expectedTables.length &&
+    actual.guardTriggerCount === 0 &&
+    JSON.stringify(actual.tables) === JSON.stringify(expectedTables) &&
+    actual.triggers.length === 0 &&
+    actual.triggerSqlDigests.length === 0 &&
     actual.triggerSqlDigest === expectedTriggerSqlDigest &&
     actual.digest === expectedDigest
   );

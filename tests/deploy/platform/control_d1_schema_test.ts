@@ -1828,6 +1828,61 @@ test("control D1 apply recovers a committed fence release after a lost response"
   }
 });
 
+test("control D1 apply rejects a substituted inactive receipt after a lost release acknowledgement", async () => {
+  const plan = await buildControlD1SchemaPlan();
+  const database = new SqliteControlD1Database();
+  try {
+    await ensureD1OpenTofuLedgerSchema(database);
+    let batchCalls = 0;
+    const substitutedReceipt: D1Database = {
+      prepare(query) {
+        return database.prepare(query);
+      },
+      async batch(statements) {
+        batchCalls += 1;
+        const result = await database.batch(statements);
+        if (batchCalls === 2) {
+          const alternateFence = await acquireControlD1MaintenanceFence(
+            database,
+            {
+              sourceCommit: "f".repeat(40),
+              manifestDigest: plan.manifestDigest,
+              environment: "test",
+              databaseRole: "in_place",
+              releasePolicy: "in_place",
+            },
+            "2026-07-16T00:02:00.000Z",
+          );
+          await releaseControlD1MaintenanceFence(
+            database,
+            alternateFence,
+            "2026-07-16T00:03:00.000Z",
+          );
+          throw new Error("lost release response after receipt substitution");
+        }
+        return result;
+      },
+    };
+
+    await expect(
+      applyControlD1Schema(substitutedReceipt, plan, {
+        sourceCommit: SOURCE_COMMIT,
+        environment: "test",
+        activatedAt: NOW,
+        releasedAt: () => NOW,
+        maintenanceDrainMilliseconds: 0,
+        waitForRequestDrain: async () => {},
+      }),
+    ).rejects.toThrow("maintenance_fence_release_failed");
+    expect(batchCalls).toBe(2);
+    expect(await readControlD1MaintenanceState(database)).toEqual({
+      status: "inactive",
+    });
+  } finally {
+    database.close();
+  }
+});
+
 test("control D1 verification detects CHECK drift with identical columns", async () => {
   const plan = await buildControlD1SchemaPlan();
   const database = new SqliteControlD1Database();
@@ -3778,6 +3833,45 @@ test("control D1 REST imports compound trigger batches and resolves only after p
         )
         .run(),
     ).rejects.toThrow("blocked ?");
+  } finally {
+    backing.close();
+  }
+});
+
+test("control D1 REST imports batches containing DROP TRIGGER with either supported form", async () => {
+  const backing = new SqliteControlD1Database();
+  const { fetch, stats } = createD1RestAndImportFetch(backing);
+  const database = new CloudflareControlD1RestDatabase({
+    accountId: "account_123",
+    databaseId: "database_456",
+    apiToken: "secret-token",
+    fetch,
+    importPollIntervalMilliseconds: 0,
+    wait: async () => {},
+  });
+  try {
+    backing.exec(`
+      create table demo (id text primary key);
+      create trigger demo_insert before insert on demo begin select 1; end;
+      create trigger demo_update before update on demo begin select 1; end;
+    `);
+
+    const statements = [
+      database.prepare(`drop trigger demo_insert`),
+      database.prepare(`drop trigger if exists demo_update`),
+    ];
+    const results = await database.batch(statements);
+
+    expect(results).toHaveLength(statements.length);
+    expect(results.every((entry) => entry.success === true)).toBe(true);
+    expect(results.every((entry) => entry.meta === undefined)).toBe(true);
+    expect(stats.importIngests).toBe(1);
+    expect(stats.queryTriggerRejections).toBe(0);
+    expect(
+      await backing
+        .prepare(`select count(*) as count from sqlite_master where type = 'trigger'`)
+        .first(),
+    ).toEqual({ count: 0 });
   } finally {
     backing.close();
   }

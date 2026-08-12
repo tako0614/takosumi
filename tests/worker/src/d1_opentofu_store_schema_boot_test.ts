@@ -18,6 +18,8 @@ import type { D1Database } from "../../../worker/src/bindings.ts";
 import {
   acquireControlD1MaintenanceFence,
   assertControlD1MaintenanceInactive,
+  readControlD1MaintenanceGuardInventory,
+  readControlD1MaintenanceReleaseReceiptDetails,
   releaseControlD1MaintenanceFence,
 } from "../../../worker/src/d1_schema_maintenance.ts";
 import { SqliteFakeD1 } from "../../helpers/deploy-control/sqlite_fake_d1.ts";
@@ -788,6 +790,46 @@ test("predeployed maintenance readiness uses one direct indexed read", async () 
   expect(queries).toHaveLength(1);
   expect(queries[0]).toContain("where singleton = 1");
   expect(queries[0]).not.toContain("sqlite_master");
+});
+
+test("maintenance release accepts missing transport meta only with the exact durable null-digest receipt", async () => {
+  const db = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(db);
+  const fence = await acquireControlD1MaintenanceFence(
+    db,
+    {
+      sourceCommit: "a".repeat(40),
+      manifestDigest: `sha256:${"b".repeat(64)}`,
+      environment: "test",
+      databaseRole: "in_place",
+      releasePolicy: "in_place",
+    },
+    "2026-07-16T00:00:00.000Z",
+  );
+  const imported: D1Database = {
+    prepare: db.prepare.bind(db),
+    async batch(statements) {
+      const results = await db.batch(statements);
+      return results.map((result) => ({
+        success: result.success,
+        ...(result.results ? { results: result.results } : {}),
+      }));
+    },
+  };
+  const releasedAt = "2026-07-16T00:01:00.000Z";
+
+  await releaseControlD1MaintenanceFence(imported, fence, releasedAt);
+
+  expect(await readControlD1MaintenanceReleaseReceiptDetails(db)).toEqual({
+    fence,
+    releasedAt,
+    releaseReadinessDigest: null,
+  });
+  expect(await readControlD1MaintenanceGuardInventory(db)).toMatchObject({
+    guardTriggerCount: 0,
+    triggers: [],
+    triggerSqlDigests: [],
+  });
 });
 
 test("predeployed account Workspace page reads readiness, total, and data in one statement", async () => {
