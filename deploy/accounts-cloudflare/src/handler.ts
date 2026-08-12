@@ -1012,6 +1012,7 @@ async function withDashboardDocumentCsp(
   if (!isDocsDocumentPath(pathname)) {
     const headers = new Headers(response.headers);
     headers.set("content-security-policy", DASHBOARD_CSP);
+    headers.set("referrer-policy", "no-referrer");
     return new Response(response.body, {
       status: response.status,
       statusText: response.statusText,
@@ -1024,6 +1025,7 @@ async function withDashboardDocumentCsp(
     "content-security-policy",
     cspWithInlineScriptHashes(await inlineScriptHashes(html)),
   );
+  headers.set("referrer-policy", "no-referrer");
   return new Response(html, {
     status: response.status,
     statusText: response.statusText,

@@ -130,6 +130,7 @@ test("dashboard documents keep inline scripts blocked while allowing the configu
 
   expect(response.status).toBe(200);
   const csp = response.headers.get("content-security-policy") ?? "";
+  expect(response.headers.get("referrer-policy")).toBe("no-referrer");
   expect(csp).toContain(
     "script-src 'self' https://static.cloudflareinsights.com",
   );
@@ -180,6 +181,28 @@ test("hosted docs allow exactly their own inline scripts by hash, never unsafe-i
   expect(scriptSrc).not.toContain("'unsafe-inline'");
   expect(scriptSrc).toContain("'self'");
   expect(scriptSrc).toContain("https://static.cloudflareinsights.com");
+  expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+});
+
+test("OAuth callback documents never expose code or state in referrers", async () => {
+  const response = await createCloudflareWorker().fetch(
+    new Request(
+      "https://app.example.test/sign-in/callback?code=oauth-code&state=oauth-state",
+    ),
+    env({
+      ASSETS: {
+        fetch: () =>
+          Promise.resolve(
+            new Response("<!doctype html><html><body>callback</body></html>", {
+              headers: { "content-type": "text/html; charset=utf-8" },
+            }),
+          ),
+      },
+    }),
+  );
+
+  expect(response.status).toBe(200);
+  expect(response.headers.get("referrer-policy")).toBe("no-referrer");
 });
 
 test("a docs document with no inline script keeps the unmodified dashboard policy", async () => {

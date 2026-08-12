@@ -184,6 +184,65 @@ describe("dashboard session bootstrap", () => {
     ]);
   });
 
+  test("treats a successful empty account session as unauthenticated", async () => {
+    const calls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const path = typeof input === "string" ? input : String(input);
+      calls.push(path);
+      if (path === "/api/v1/dashboard/bootstrap?includeWorkspaces=false") {
+        return new Response(null, { status: 401 });
+      }
+      if (path === "/v1/account/session/me") {
+        return new Response(JSON.stringify({ session: null }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      throw new Error(`unexpected fetch: ${path}`);
+    }) as typeof fetch;
+
+    expect(await refreshSession()).toBeNull();
+    expect(readSessionState()).toEqual({ kind: "unauthenticated" });
+    expect(calls).toEqual([
+      "/api/v1/dashboard/bootstrap?includeWorkspaces=false",
+      "/v1/account/session/me",
+    ]);
+  });
+
+  test("keeps malformed successful account session responses as errors", async () => {
+    const calls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const path = typeof input === "string" ? input : String(input);
+      calls.push(path);
+      if (path === "/api/v1/dashboard/bootstrap?includeWorkspaces=false") {
+        return new Response(null, { status: 401 });
+      }
+      if (path === "/v1/account/session/me") {
+        return new Response(JSON.stringify({}), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      throw new Error(`unexpected fetch: ${path}`);
+    }) as typeof fetch;
+
+    let failure: unknown;
+    try {
+      await refreshSession();
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(SessionError);
+    if (!(failure instanceof SessionError)) return;
+    expect(failure.status).toBe(200);
+    expect(failure.body).toEqual({});
+    expect(readSessionState()).toMatchObject({ kind: "error" });
+    expect(calls).toEqual([
+      "/api/v1/dashboard/bootstrap?includeWorkspaces=false",
+      "/v1/account/session/me",
+    ]);
+  });
+
   test("keeps schema maintenance 503 typed, including headers/body, without a fallback", async () => {
     const calls: string[] = [];
     const body = {
