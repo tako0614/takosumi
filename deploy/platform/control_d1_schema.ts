@@ -9,16 +9,32 @@ import { ensureD1OpenTofuLedgerSchema } from "../../worker/src/d1_opentofu_store
 import {
   acquireControlD1MaintenanceFence,
   adoptControlD1LegacyCloneAsCandidate,
+  digestControlD1MaintenanceFence,
+  digestControlD1MaintenanceGuardInventory,
+  digestControlD1MaintenanceGuardTriggerSql,
+  digestControlD1MaintenanceGuardTriggerInventory,
+  readControlD1MaintenanceGuardInventory,
+  repairControlD1MaintenanceGuards,
   type ControlD1MaintenanceFence,
+  type ControlD1MaintenanceGuardInventory,
   type ControlD1MaintenanceDatabaseRole,
   type ControlD1MaintenanceReleasePolicy,
   isControlD1MaintenanceFenceActive,
   releaseControlD1MaintenanceFence,
+  readControlD1MaintenanceReleaseReceiptDetails,
+  readControlD1MaintenanceReleaseReceipt,
   readControlD1MaintenanceState,
   supersedeActiveControlD1MaintenanceFence,
 } from "../../worker/src/d1_schema_maintenance.ts";
 
 export { adoptControlD1LegacyCloneAsCandidate, readControlD1MaintenanceState };
+export {
+  digestControlD1MaintenanceFence,
+  digestControlD1MaintenanceGuardInventory,
+  digestControlD1MaintenanceGuardTriggerSql,
+  digestControlD1MaintenanceGuardTriggerInventory,
+  readControlD1MaintenanceGuardInventory,
+};
 
 export const CONTROL_D1_SCHEMA_MANIFEST_VERSION = 2 as const;
 
@@ -126,6 +142,146 @@ export interface ControlD1SchemaVerification {
   readonly tableCount: number;
   readonly issues: readonly string[];
 }
+
+export interface ControlD1CandidateVerificationOptions {
+  readonly environment: string;
+  readonly sourceCommit: string;
+  readonly manifestDigest: string;
+  readonly candidateDatabaseId: string;
+  readonly sourceExportSha256: string;
+  /** Exact retained candidate fence id supplied by Cloud evidence. */
+  readonly expectedFenceId?: string;
+  /** Digest of the complete retained candidate fence identity. */
+  readonly expectedFenceDigest?: string;
+  /** Compatibility aliases for callers using confirmation vocabulary. */
+  readonly confirmFenceId?: string;
+  readonly confirmFenceDigest?: string;
+  readonly fenceId?: string;
+  readonly fenceDigest?: string;
+}
+
+export interface ControlD1CandidateIntegrityVerification {
+  readonly status: "ready" | "unsupported" | "mismatch";
+  readonly integrityCheck: "ok" | "unsupported" | "mismatch";
+  readonly foreignKeyCheck: "ok" | "unsupported" | "mismatch";
+  readonly foreignKeyViolationCount: number;
+}
+
+export interface ControlD1CandidateVerification {
+  readonly status: "ready" | "mismatch";
+  readonly environment: string;
+  readonly sourceCommit: string;
+  readonly manifestDigest: string;
+  readonly candidateDatabaseId: string;
+  readonly sourceExportSha256: string;
+  readonly maintenanceStatus: "retained" | "not_retained";
+  readonly maintenanceFence: ControlD1MaintenanceFence | null;
+  readonly candidateFenceDigest: string | null;
+  readonly guardInventory: ControlD1MaintenanceGuardInventory | null;
+  readonly integrity: ControlD1CandidateIntegrityVerification;
+  readonly verification: ControlD1SchemaVerification;
+  readonly issues: readonly string[];
+}
+
+export interface ControlD1CandidateReleaseOptions
+  extends ControlD1CandidateVerificationOptions {
+  /** Exact external Cloud promotion/readiness confirmation digest. */
+  readonly releaseReadinessDigest?: string;
+  readonly confirmReleaseReadinessDigest?: string;
+  readonly promotionReadinessDigest?: string;
+  readonly releasedAt: string;
+}
+
+export interface ControlD1CandidateReleaseResult {
+  readonly status: "released";
+  readonly environment: string;
+  readonly sourceCommit: string;
+  readonly manifestDigest: string;
+  readonly candidateDatabaseId: string;
+  readonly sourceExportSha256: string;
+  readonly releaseReadinessDigest: string;
+  readonly maintenanceStatus: "released";
+  readonly maintenanceFence: ControlD1MaintenanceFence;
+  readonly candidateFenceDigest: string;
+  readonly guardInventory: ControlD1MaintenanceGuardInventory;
+  readonly integrity: ControlD1CandidateIntegrityVerification;
+  readonly verification: ControlD1SchemaVerification;
+  readonly lostAcknowledgementReconciled: boolean;
+}
+
+/** Tables whose logical content must remain byte-logically stable at transfer. */
+export const CONTROL_D1_TRANSFER_PROTECTED_TABLES = [
+  "capsule_compatibility_reports",
+  "resolution_locks",
+  "resource_shapes",
+  "runs",
+  "state_versions",
+  "workspaces",
+] as const;
+
+export interface ControlD1TransferSourceVerificationOptions {
+  readonly environment: "staging" | "production";
+  readonly sourceCommit: string;
+  readonly manifestDigest: string;
+  readonly sourceDatabaseId: string;
+  readonly sourceExportSha256: string;
+  readonly sourceExportBookmark: string;
+}
+
+export interface ControlD1TransferLogicalTableDigest {
+  readonly table: string;
+  readonly columns: readonly string[];
+  readonly rowCount: number;
+  readonly rowDigest: string;
+  readonly contentDigest: string;
+}
+
+export interface ControlD1TransferLogicalDatabaseDigest {
+  readonly kind: "takosumi.sqlite-logical-content@v1";
+  readonly algorithm: "sha256";
+  readonly databaseDigest: string;
+  readonly tables: readonly ControlD1TransferLogicalTableDigest[];
+  readonly excludedTables: readonly { readonly table: string; readonly reason: "cloudflare_internal" }[];
+}
+
+export interface ControlD1TransferSourceVerification {
+  readonly kind: "takosumi.control-d1-transfer-source-verify@v1";
+  readonly status: "ready" | "mismatch";
+  readonly environment: "staging" | "production";
+  readonly sourceCommit: string;
+  readonly manifestDigest: string;
+  readonly sourceDatabaseId: string;
+  readonly sourceFence: ControlD1MaintenanceFence | null;
+  readonly sourceFenceDigest: string | null;
+  readonly guardInventory: ControlD1MaintenanceGuardInventory | null;
+  readonly integrity: ControlD1CandidateIntegrityVerification;
+  readonly verification: ControlD1SchemaVerification;
+  readonly logical: ControlD1TransferLogicalDatabaseDigest;
+  readonly protectedContentDigest: string | null;
+  readonly sourceExport: {
+    readonly bookmark: string;
+    readonly sha256: string;
+    readonly lineage: {
+      readonly databaseId: string;
+      readonly sourceFenceDigest: string | null;
+      readonly sourceCommit: string;
+      readonly manifestDigest: string;
+    };
+  };
+  readonly captureAuthorityDigest: string | null;
+  readonly issues: readonly string[];
+  readonly evidenceDigest: string;
+}
+
+/** Explicit transferred-candidate aliases for Cloud's programmatic seam. */
+export type ControlD1TransferredCandidateVerificationOptions =
+  ControlD1CandidateVerificationOptions;
+export type ControlD1TransferredCandidateVerification =
+  ControlD1CandidateVerification;
+export type ControlD1TransferredCandidateReleaseOptions =
+  ControlD1CandidateReleaseOptions;
+export type ControlD1TransferredCandidateReleaseResult =
+  ControlD1CandidateReleaseResult;
 
 export interface ControlD1SchemaApplyResult {
   readonly beforeMigrationVersions: readonly number[];
@@ -282,6 +438,7 @@ export async function applyControlD1Schema(
   await ensureD1OpenTofuLedgerSchema(database, {
     throughMigrationVersion: plannedMigrationVersion,
   });
+  await repairControlD1MaintenanceGuards(database);
   const fencedVerification = await verifyControlD1Schema(database, plan, {
     allowActiveMaintenanceFence: true,
   });
@@ -409,6 +566,725 @@ export async function verifyControlD1Schema(
     tableCount: actualTables.length,
     issues,
   };
+}
+
+/**
+ * Verify one transferred Control candidate without opening its request path.
+ *
+ * This is deliberately narrower than the generic schema verifier: only an
+ * active `candidate`/`cutover` fence bound to the exact candidate database and
+ * source export is accepted. The candidate remains fenced while Cloud proves
+ * promotion, and all returned evidence is metadata/digest-only.
+ */
+export async function verifyControlD1Candidate(
+  database: D1Database,
+  plan: ControlD1SchemaPlan,
+  options: ControlD1CandidateVerificationOptions,
+): Promise<ControlD1CandidateVerification> {
+  const expected = normalizeCandidateVerificationOptions(options);
+  const state = await readControlD1MaintenanceState(database);
+  const issues: string[] = [];
+  if (plan.manifestDigest !== expected.manifestDigest) {
+    issues.push("schema_plan_manifest_mismatch");
+  }
+  let fence: ControlD1MaintenanceFence | null = null;
+  let candidateFenceDigest: string | null = null;
+  let guardInventory: ControlD1MaintenanceGuardInventory | null = null;
+
+  if (state.status !== "active") {
+    issues.push("candidate_fence_not_active");
+  } else {
+    fence = state.fence;
+    candidateFenceDigest = await digestControlD1MaintenanceFence(fence);
+    if (fence.sourceCommit !== expected.sourceCommit) {
+      issues.push("candidate_fence_source_commit_mismatch");
+    }
+    if (fence.manifestDigest !== expected.manifestDigest) {
+      issues.push("candidate_fence_manifest_mismatch");
+    }
+    if (fence.environment !== expected.environment) {
+      issues.push("candidate_fence_environment_mismatch");
+    }
+    if (fence.databaseRole !== "candidate") {
+      issues.push("candidate_fence_role_mismatch");
+    }
+    if (fence.releasePolicy !== "cutover") {
+      issues.push("candidate_fence_policy_mismatch");
+    }
+    if (fence.databaseId !== expected.candidateDatabaseId) {
+      issues.push("candidate_fence_database_id_mismatch");
+    }
+    if (fence.sourceExportSha256 !== expected.sourceExportSha256) {
+      issues.push("candidate_fence_source_export_mismatch");
+    }
+    if (
+      expected.expectedFenceId !== null &&
+      fence.fenceId !== expected.expectedFenceId
+    ) {
+      issues.push("candidate_fence_id_mismatch");
+    }
+    if (candidateFenceDigest !== expected.expectedFenceDigest) {
+      issues.push("candidate_fence_digest_mismatch");
+    }
+    guardInventory = await readControlD1MaintenanceGuardInventory(database);
+    const expectedTriggers = expectedMaintenanceGuardTriggers(
+      guardInventory.tables,
+    );
+    const expectedTriggerSqlDigests = await expectedMaintenanceGuardTriggerSqlDigests(
+      guardInventory.tables,
+    );
+    if (
+      JSON.stringify(guardInventory.triggers) !==
+        JSON.stringify(expectedTriggers) ||
+      JSON.stringify(guardInventory.triggerSqlDigests) !==
+        JSON.stringify(expectedTriggerSqlDigests) ||
+      guardInventory.triggerSqlDigest !==
+        (await digestControlD1MaintenanceGuardTriggerInventory(
+          expectedTriggerSqlDigests,
+        )) ||
+      guardInventory.digest !==
+        (await digestControlD1MaintenanceGuardInventory({
+          tables: guardInventory.tables,
+          triggers: expectedTriggers,
+          triggerSqlDigests: expectedTriggerSqlDigests,
+        }))
+    ) {
+      issues.push("maintenance_guard_inventory_mismatch");
+    }
+  }
+
+  const verification = await verifyControlD1Schema(database, plan, {
+    allowActiveMaintenanceFence: true,
+  });
+  if (verification.status !== "ready") {
+    issues.push(...verification.issues);
+  }
+  const integrity = await verifyControlD1Integrity(database);
+  if (integrity.status === "mismatch") {
+    issues.push("database_integrity_mismatch");
+  }
+
+  return {
+    status: issues.length === 0 ? "ready" : "mismatch",
+    environment: expected.environment,
+    sourceCommit: expected.sourceCommit,
+    manifestDigest: expected.manifestDigest,
+    candidateDatabaseId: expected.candidateDatabaseId,
+    sourceExportSha256: expected.sourceExportSha256,
+    maintenanceStatus:
+      state.status === "active" ? "retained" : "not_retained",
+    maintenanceFence: fence,
+    candidateFenceDigest,
+    guardInventory,
+    integrity,
+    verification,
+    issues,
+  };
+}
+
+/** Alias used by Cloud's transferred-candidate controller. */
+export const verifyControlD1TransferredCandidate = verifyControlD1Candidate;
+
+/**
+ * Read-only source authority proof for the Cloud transfer controller. This
+ * accepts only the permanent legacy/never fence and emits digests/metadata;
+ * it never exports rows, mutates D1, or opens the Accounts database.
+ */
+export async function verifyControlD1TransferSource(
+  database: D1Database,
+  plan: ControlD1SchemaPlan,
+  options: ControlD1TransferSourceVerificationOptions,
+): Promise<ControlD1TransferSourceVerification> {
+  const expected = normalizeTransferSourceVerificationOptions(options);
+  const state = await readControlD1MaintenanceState(database);
+  const issues: string[] = [];
+  if (plan.manifestDigest !== expected.manifestDigest) {
+    issues.push("schema_plan_manifest_mismatch");
+  }
+  let sourceFence: ControlD1MaintenanceFence | null = null;
+  let sourceFenceDigest: string | null = null;
+  let guardInventory: ControlD1MaintenanceGuardInventory | null = null;
+  if (state.status !== "active") {
+    issues.push("source_fence_not_active");
+  } else {
+    sourceFence = state.fence;
+    sourceFenceDigest = await digestControlD1MaintenanceFence(sourceFence);
+    if (sourceFence.sourceCommit !== expected.sourceCommit) {
+      issues.push("source_fence_source_commit_mismatch");
+    }
+    if (sourceFence.manifestDigest !== expected.manifestDigest) {
+      issues.push("source_fence_manifest_mismatch");
+    }
+    if (sourceFence.environment !== expected.environment) {
+      issues.push("source_fence_environment_mismatch");
+    }
+    if (sourceFence.databaseRole !== "legacy") {
+      issues.push("source_fence_role_mismatch");
+    }
+    if (sourceFence.releasePolicy !== "never") {
+      issues.push("source_fence_policy_mismatch");
+    }
+    if (sourceFence.databaseId !== expected.sourceDatabaseId) {
+      issues.push("source_fence_database_id_mismatch");
+    }
+    if (sourceFence.sourceExportSha256 !== null) {
+      issues.push("source_fence_export_binding_unexpected");
+    }
+    if (sourceFence.predecessor !== null) {
+      issues.push("source_fence_predecessor_unexpected");
+    }
+    guardInventory = await readControlD1MaintenanceGuardInventory(database);
+    const expectedTriggers = expectedMaintenanceGuardTriggers(guardInventory.tables);
+    const expectedTriggerSqlDigests = await expectedMaintenanceGuardTriggerSqlDigests(
+      guardInventory.tables,
+    );
+    const expectedTriggerSqlDigest = await digestControlD1MaintenanceGuardTriggerInventory(
+      expectedTriggerSqlDigests,
+    );
+    const expectedInventoryDigest = await digestControlD1MaintenanceGuardInventory({
+      tables: [...guardInventory.tables].sort(),
+      triggers: expectedTriggers,
+      triggerSqlDigests: expectedTriggerSqlDigests,
+    });
+    if (
+      JSON.stringify(guardInventory.tables) !== JSON.stringify([...guardInventory.tables].sort()) ||
+      JSON.stringify(guardInventory.triggers) !== JSON.stringify(expectedTriggers) ||
+      JSON.stringify(guardInventory.triggerSqlDigests) !== JSON.stringify(expectedTriggerSqlDigests) ||
+      guardInventory.guardedTableCount !== guardInventory.tables.length ||
+      guardInventory.guardTriggerCount !== guardInventory.tables.length * 3 ||
+      guardInventory.triggerSqlDigest !== expectedTriggerSqlDigest ||
+      guardInventory.digest !== expectedInventoryDigest
+    ) {
+      issues.push("maintenance_guard_inventory_mismatch");
+    }
+  }
+  const verification = await verifyControlD1Schema(database, plan, {
+    allowActiveMaintenanceFence: true,
+  });
+  if (verification.status !== "ready") issues.push(...verification.issues);
+  const integrity = await verifyControlD1Integrity(database);
+  if (integrity.status !== "ready") issues.push("database_integrity_mismatch");
+  const logical = await readControlD1TransferLogicalDatabaseDigest(database);
+  const protectedTables = CONTROL_D1_TRANSFER_PROTECTED_TABLES.map((table) =>
+    logical.tables.find((entry) => entry.table === table),
+  );
+  if (protectedTables.some((table) => !table)) {
+    issues.push("protected_table_missing");
+  }
+  const protectedContentDigest = protectedTables.every(Boolean)
+    ? await digestTransferValue({
+        kind: "takosumi.cloud-control-d1-protected-content@v1",
+        policy: CONTROL_D1_TRANSFER_PROTECTED_TABLES,
+        tables: protectedTables.map((table) => ({
+          table: table!.table,
+          columns: table!.columns,
+          rowCount: table!.rowCount,
+          contentDigest: table!.contentDigest,
+        })),
+      })
+    : null;
+  const sourceExport = {
+    bookmark: expected.sourceExportBookmark,
+    sha256: expected.sourceExportSha256,
+    lineage: {
+      databaseId: expected.sourceDatabaseId,
+      sourceFenceDigest,
+      sourceCommit: expected.sourceCommit,
+      manifestDigest: expected.manifestDigest,
+    },
+  } as const;
+  const captureAuthorityDigest = sourceFenceDigest
+    ? await digestTransferValue({
+        kind: "takosumi.cloud-control-d1-source-capture-authority@v1",
+        environment: expected.environment,
+        sourceCommit: expected.sourceCommit,
+        manifestDigest: expected.manifestDigest,
+        databaseId: expected.sourceDatabaseId,
+        sourceFenceDigest,
+        bookmark: expected.sourceExportBookmark,
+        exportDigest: expected.sourceExportSha256,
+      })
+    : null;
+  const evidence = {
+    kind: "takosumi.control-d1-transfer-source-verify@v1" as const,
+    status: issues.length === 0 ? ("ready" as const) : ("mismatch" as const),
+    environment: expected.environment,
+    sourceCommit: expected.sourceCommit,
+    manifestDigest: expected.manifestDigest,
+    sourceDatabaseId: expected.sourceDatabaseId,
+    sourceFence,
+    sourceFenceDigest,
+    guardInventory,
+    integrity,
+    verification,
+    logical,
+    protectedContentDigest,
+    sourceExport,
+    captureAuthorityDigest,
+    issues,
+  };
+  return { ...evidence, evidenceDigest: await digestTransferValue(evidence) };
+}
+
+function normalizeTransferSourceVerificationOptions(
+  options: ControlD1TransferSourceVerificationOptions,
+): Required<ControlD1TransferSourceVerificationOptions> {
+  const normalized = {
+    environment: stringOption(options?.environment),
+    sourceCommit: stringOption(options?.sourceCommit),
+    manifestDigest: stringOption(options?.manifestDigest),
+    sourceDatabaseId: stringOption(options?.sourceDatabaseId),
+    sourceExportSha256: stringOption(options?.sourceExportSha256),
+    sourceExportBookmark: stringOption(options?.sourceExportBookmark),
+  } as const;
+  if (
+    (normalized.environment !== "staging" && normalized.environment !== "production") ||
+    !/^[0-9a-f]{40}$/u.test(normalized.sourceCommit) ||
+    !/^sha256:[0-9a-f]{64}$/u.test(normalized.manifestDigest) ||
+    !/^[A-Za-z0-9_:.=-]{1,256}$/u.test(normalized.sourceDatabaseId) ||
+    !/^sha256:[0-9a-f]{64}$/u.test(normalized.sourceExportSha256) ||
+    !/^[A-Za-z0-9_:.=-]{1,256}$/u.test(normalized.sourceExportBookmark)
+  ) {
+    throw new ControlD1SchemaError("transfer_source_confirmation_invalid");
+  }
+  return normalized as Required<ControlD1TransferSourceVerificationOptions>;
+}
+
+/**
+ * Read-only reconciliation for a candidate release whose response may have
+ * been lost after commit. It never calls the release primitive and accepts
+ * only the exact inactive receipt plus deterministic post-release evidence.
+ */
+export async function reconcileControlD1CandidateRelease(
+  database: D1Database,
+  plan: ControlD1SchemaPlan,
+  options: ControlD1CandidateReleaseOptions,
+): Promise<ControlD1CandidateReleaseResult> {
+  const releaseReadinessDigest = normalizeReleaseReadinessDigest(options);
+  const state = await readControlD1MaintenanceState(database);
+  if (state.status !== "inactive") {
+    throw new ControlD1SchemaError("candidate_release_receipt_unavailable");
+  }
+  const receipt = await readControlD1MaintenanceReleaseReceiptDetails(database);
+  if (!receipt) {
+    throw new ControlD1SchemaError("candidate_release_receipt_mismatch");
+  }
+  const reconciled = await verifyReleasedControlD1Candidate(
+    database,
+    plan,
+    options,
+    releaseReadinessDigest,
+    receipt,
+  );
+  return { ...reconciled, lostAcknowledgementReconciled: true };
+}
+
+export const reconcileControlD1TransferredCandidateRelease =
+  reconcileControlD1CandidateRelease;
+
+/**
+ * Release exactly one verified Control candidate. There is intentionally no
+ * retry or readback adoption on an indeterminate release transport result;
+ * callers must retain the fence and investigate that outcome.
+ */
+export async function releaseControlD1Candidate(
+  database: D1Database,
+  plan: ControlD1SchemaPlan,
+  options: ControlD1CandidateReleaseOptions,
+): Promise<ControlD1CandidateReleaseResult> {
+  const releaseReadinessDigest = normalizeReleaseReadinessDigest(options);
+  const currentState = await readControlD1MaintenanceState(database);
+  if (currentState.status === "inactive") {
+    return reconcileControlD1CandidateRelease(database, plan, options);
+  }
+  const verification = await verifyControlD1Candidate(database, plan, options);
+  if (
+    verification.status !== "ready" ||
+    !verification.maintenanceFence ||
+    !verification.guardInventory ||
+    !verification.candidateFenceDigest
+  ) {
+    throw new ControlD1SchemaError("candidate_verification_failed");
+  }
+
+  // This is the only mutation in the candidate lane. The primitive performs
+  // its own exact active-fence identity check and is called once.
+  await releaseControlD1MaintenanceFence(
+    database,
+    verification.maintenanceFence,
+    options.releasedAt,
+    { releaseReadinessDigest },
+  );
+  const receipt = await readControlD1MaintenanceReleaseReceiptDetails(database);
+  if (!receipt) {
+    throw new ControlD1SchemaError("candidate_release_receipt_mismatch");
+  }
+  const released = await verifyReleasedControlD1Candidate(
+    database,
+    plan,
+    options,
+    releaseReadinessDigest,
+    receipt,
+  );
+  return { ...released, lostAcknowledgementReconciled: false };
+}
+
+async function verifyReleasedControlD1Candidate(
+  database: D1Database,
+  plan: ControlD1SchemaPlan,
+  options: ControlD1CandidateReleaseOptions,
+  releaseReadinessDigest: string,
+  receipt: Awaited<ReturnType<typeof readControlD1MaintenanceReleaseReceiptDetails>>,
+): Promise<Omit<ControlD1CandidateReleaseResult, "lostAcknowledgementReconciled">> {
+  if (!receipt) {
+    throw new ControlD1SchemaError("candidate_release_receipt_mismatch");
+  }
+  const expected = normalizeCandidateVerificationOptions(options);
+  const fence = receipt.fence;
+  if (
+    fence.sourceCommit !== expected.sourceCommit ||
+    fence.manifestDigest !== expected.manifestDigest ||
+    fence.environment !== expected.environment ||
+    fence.databaseRole !== "candidate" ||
+    fence.releasePolicy !== "cutover" ||
+    fence.databaseId !== expected.candidateDatabaseId ||
+    fence.sourceExportSha256 !== expected.sourceExportSha256 ||
+    (expected.expectedFenceId !== null &&
+      fence.fenceId !== expected.expectedFenceId) ||
+    (await digestControlD1MaintenanceFence(fence)) !==
+      expected.expectedFenceDigest ||
+    receipt.releasedAt !== options.releasedAt ||
+    receipt.releaseReadinessDigest !== releaseReadinessDigest
+  ) {
+    throw new ControlD1SchemaError("candidate_release_receipt_mismatch");
+  }
+  const verification = await verifyControlD1Schema(database, plan);
+  const guardInventory = await readControlD1MaintenanceGuardInventory(database);
+  const expectedTriggers = expectedMaintenanceGuardTriggers(guardInventory.tables);
+  const expectedTriggerSqlDigests = await expectedMaintenanceGuardTriggerSqlDigests(
+    guardInventory.tables,
+  );
+  const expectedGuardInventory = {
+    tables: [...guardInventory.tables].sort(),
+    triggers: expectedTriggers,
+    triggerSqlDigests: expectedTriggerSqlDigests,
+    triggerSqlDigest: await digestControlD1MaintenanceGuardTriggerInventory(
+      expectedTriggerSqlDigests,
+    ),
+    guardedTableCount: guardInventory.tables.length,
+    guardTriggerCount: expectedTriggers.length,
+    digest: await digestControlD1MaintenanceGuardInventory({
+      tables: [...guardInventory.tables].sort(),
+      triggers: expectedTriggers,
+      triggerSqlDigests: expectedTriggerSqlDigests,
+    }),
+  } satisfies ControlD1MaintenanceGuardInventory;
+  const expectedPostReleaseDigest = await digestControlD1MaintenanceGuardInventory({
+    tables: guardInventory.tables,
+    triggers: [],
+    triggerSqlDigests: [],
+  });
+  const expectedPostReleaseTriggerSqlDigest =
+    await digestControlD1MaintenanceGuardTriggerInventory([]);
+  if (
+    verification.status !== "ready" ||
+    guardInventory.guardedTableCount !== guardInventory.tables.length ||
+    guardInventory.triggers.length !== 0 ||
+    guardInventory.guardTriggerCount !== 0 ||
+    guardInventory.triggerSqlDigests.length !== 0 ||
+    guardInventory.triggerSqlDigest !== expectedPostReleaseTriggerSqlDigest ||
+    guardInventory.digest !== expectedPostReleaseDigest ||
+    expectedTriggers.length !== guardInventory.tables.length * 3 ||
+    expectedTriggerSqlDigests.length !== expectedTriggers.length
+  ) {
+    throw new ControlD1SchemaError("candidate_release_receipt_mismatch");
+  }
+  const integrity = await verifyControlD1Integrity(database);
+  if (integrity.status !== "ready") {
+    throw new ControlD1SchemaError("candidate_release_receipt_mismatch");
+  }
+  return {
+    status: "released",
+    environment: expected.environment,
+    sourceCommit: expected.sourceCommit,
+    manifestDigest: expected.manifestDigest,
+    candidateDatabaseId: expected.candidateDatabaseId,
+    sourceExportSha256: expected.sourceExportSha256,
+    releaseReadinessDigest,
+    maintenanceStatus: "released",
+    maintenanceFence: fence,
+    candidateFenceDigest: expected.expectedFenceDigest,
+    guardInventory: expectedGuardInventory,
+    integrity,
+    verification,
+  };
+}
+
+/** Alias used by Cloud's transferred-candidate controller. */
+export const releaseControlD1TransferredCandidate = releaseControlD1Candidate;
+
+function normalizeCandidateVerificationOptions(
+  options: ControlD1CandidateVerificationOptions,
+): Required<
+  Pick<
+    ControlD1CandidateVerificationOptions,
+    | "environment"
+    | "sourceCommit"
+    | "manifestDigest"
+    | "candidateDatabaseId"
+    | "sourceExportSha256"
+  >
+> & {
+  readonly expectedFenceId: string | null;
+  readonly expectedFenceDigest: string;
+} {
+  if (!options || typeof options !== "object") {
+    throw new ControlD1SchemaError("candidate_confirmation_invalid");
+  }
+  const expectedFenceId =
+    options.expectedFenceId ?? options.confirmFenceId ?? options.fenceId;
+  const expectedFenceDigest =
+    options.expectedFenceDigest ?? options.confirmFenceDigest ?? options.fenceDigest;
+  const normalized = {
+    environment: stringOption(options.environment),
+    sourceCommit: stringOption(options.sourceCommit),
+    manifestDigest: stringOption(options.manifestDigest),
+    candidateDatabaseId: stringOption(options.candidateDatabaseId),
+    sourceExportSha256: stringOption(options.sourceExportSha256),
+    expectedFenceId: stringOption(expectedFenceId) || null,
+    expectedFenceDigest: stringOption(expectedFenceDigest),
+  } as const;
+  if (
+    !/^[a-z][a-z0-9_-]{0,31}$/u.test(normalized.environment) ||
+    !/^[0-9a-f]{40}$/u.test(normalized.sourceCommit) ||
+    !/^sha256:[0-9a-f]{64}$/u.test(normalized.manifestDigest) ||
+    !/^[A-Za-z0-9_:.=-]{1,256}$/u.test(normalized.candidateDatabaseId) ||
+    !/^sha256:[0-9a-f]{64}$/u.test(normalized.sourceExportSha256) ||
+    (normalized.expectedFenceId !== null &&
+      !/^sha256:[0-9a-f]{64}$/u.test(normalized.expectedFenceId)) ||
+    !/^sha256:[0-9a-f]{64}$/u.test(normalized.expectedFenceDigest)
+  ) {
+    throw new ControlD1SchemaError("candidate_confirmation_invalid");
+  }
+  return normalized;
+}
+
+function normalizeReleaseReadinessDigest(
+  options: ControlD1CandidateReleaseOptions,
+): string {
+  if (!options || typeof options !== "object") {
+    throw new ControlD1SchemaError("candidate_release_confirmation_invalid");
+  }
+  const digest =
+    options.releaseReadinessDigest ??
+    options.confirmReleaseReadinessDigest ??
+    options.promotionReadinessDigest;
+  if (
+    typeof digest !== "string" ||
+    !/^sha256:[0-9a-f]{64}$/u.test(digest.trim())
+  ) {
+    throw new ControlD1SchemaError("candidate_release_readiness_required");
+  }
+  if (!validIsoTimestamp(options.releasedAt)) {
+    throw new ControlD1SchemaError("candidate_release_time_invalid");
+  }
+  return digest.trim();
+}
+
+function expectedMaintenanceGuardTriggers(
+  tables: readonly string[],
+): readonly string[] {
+  return tables
+    .flatMap((table) =>
+      (["insert", "update", "delete"] as const).map(
+        (operation) => `_takosumi_schema_fence_${table}_${operation}`,
+      ),
+    )
+    .sort();
+}
+
+async function expectedMaintenanceGuardTriggerSqlDigests(
+  tables: readonly string[],
+): Promise<ControlD1MaintenanceGuardInventory["triggerSqlDigests"]> {
+  const entries = await Promise.all(
+    tables.flatMap((table) =>
+      (["insert", "update", "delete"] as const).map(async (operation) => ({
+        name: `_takosumi_schema_fence_${table}_${operation}`,
+        table,
+        operation,
+        digest: await digestControlD1MaintenanceGuardTriggerSql(
+          table,
+          operation,
+        ),
+      })),
+    ),
+  );
+  return entries.sort((left, right) => left.name.localeCompare(right.name));
+}
+
+async function verifyControlD1Integrity(
+  database: D1Database,
+): Promise<ControlD1CandidateIntegrityVerification> {
+  let integrityCheck: ControlD1CandidateIntegrityVerification["integrityCheck"] =
+    "unsupported";
+  try {
+    const result = await database
+      .prepare("pragma integrity_check")
+      .all<{ readonly integrity_check?: unknown }>();
+    const values = (result.results ?? []).map((row) =>
+      String(row.integrity_check ?? "").trim().toLowerCase(),
+    );
+    integrityCheck = values.length === 1 && values[0] === "ok" ? "ok" : "mismatch";
+  } catch {
+    integrityCheck = "unsupported";
+  }
+
+  let foreignKeyCheck: ControlD1CandidateIntegrityVerification["foreignKeyCheck"] =
+    "unsupported";
+  let foreignKeyViolationCount = 0;
+  try {
+    const result = await database.prepare("pragma foreign_key_check").all();
+    if (!Array.isArray(result.results)) {
+      foreignKeyCheck = "mismatch";
+    } else {
+      foreignKeyViolationCount = result.results.length;
+      foreignKeyCheck =
+        foreignKeyViolationCount === 0 ? "ok" : "mismatch";
+    }
+  } catch {
+    foreignKeyCheck = "mismatch";
+  }
+  return {
+    status:
+      integrityCheck !== "ok" || foreignKeyCheck !== "ok"
+        ? "mismatch"
+        : "ready",
+    integrityCheck,
+    foreignKeyCheck,
+    foreignKeyViolationCount,
+  };
+}
+
+function validIsoTimestamp(value: string): boolean {
+  if (typeof value !== "string") return false;
+  const parsed = new Date(value);
+  return Number.isFinite(parsed.valueOf()) && parsed.toISOString() === value;
+}
+
+function stringOption(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+/** D1 logical-content evidence uses the same length-prefixed SQLite encoding
+ * as the Cloud transfer module, while keeping rows out of the transcript. */
+async function readControlD1TransferLogicalDatabaseDigest(
+  database: D1Database,
+): Promise<ControlD1TransferLogicalDatabaseDigest> {
+  const inventory = await database
+    .prepare(
+      `select name from sqlite_master
+       where type = 'table' and name not like 'sqlite_%'
+       order by name`,
+    )
+    .all<{ readonly name: string }>();
+  const names = (inventory.results ?? []).map((row) => String(row.name));
+  const tables: ControlD1TransferLogicalTableDigest[] = [];
+  const excludedTables: Array<{
+    readonly table: string;
+    readonly reason: "cloudflare_internal";
+  }> = [];
+  for (const table of names) {
+    if (table === "_cf_KV") {
+      excludedTables.push({ table, reason: "cloudflare_internal" });
+      continue;
+    }
+    const columnsResult = await database
+      .prepare(`pragma table_xinfo(${quoteSqlString(table)})`)
+      .all<{ readonly cid: number | string; readonly name: string }>();
+    const columns = [...(columnsResult.results ?? [])]
+      .sort((left, right) => Number(left.cid) - Number(right.cid))
+      .map((column) => String(column.name));
+    if (columns.length === 0 || columns.some((column) => !/^[a-z_][a-z0-9_]{0,127}$/u.test(column))) {
+      throw new ControlD1SchemaError(`logical_table_columns_invalid:${table}`);
+    }
+    const expression = transferCanonicalRowExpression(columns);
+    const hasher = new Bun.CryptoHasher("sha256");
+    let rowCount = 0;
+    for (let offset = 0; ; offset += 1_000) {
+      const page = await database
+        .prepare(
+          `select ${expression} as canonical_row
+          from ${transferQuotedIdentifier(table)}
+           order by canonical_row limit ? offset ?`,
+        )
+        .bind(1_000, offset)
+        .all<{ readonly canonical_row: string }>();
+      const rows = page.results ?? [];
+      for (const row of rows) {
+        if (typeof row.canonical_row !== "string") {
+          throw new ControlD1SchemaError(`logical_remote_row_invalid:${table}`);
+        }
+        const bytes = new TextEncoder().encode(row.canonical_row);
+        hasher.update(`${bytes.byteLength}:`);
+        hasher.update(bytes);
+        rowCount += 1;
+      }
+      if (rows.length < 1_000) break;
+    }
+    const rowDigest = `sha256:${hasher.digest("hex")}`;
+    const contentDigest = await digestTransferValue({
+      table,
+      columns,
+      rowCount,
+      rowDigest,
+    });
+    tables.push({ table, columns, rowCount, rowDigest, contentDigest });
+  }
+  const databaseDigest = await digestTransferValue({
+    kind: "takosumi.sqlite-logical-content@v1",
+    tables: tables.map((table) => ({
+      table: table.table,
+      columns: table.columns,
+      rowCount: table.rowCount,
+      contentDigest: table.contentDigest,
+    })),
+    excludedTables,
+  });
+  return {
+    kind: "takosumi.sqlite-logical-content@v1",
+    algorithm: "sha256",
+    databaseDigest,
+    tables,
+    excludedTables,
+  };
+}
+
+function transferCanonicalRowExpression(columns: readonly string[]): string {
+  return columns
+    .map((column) => {
+      const identifier = transferQuotedIdentifier(column);
+      const encoded =
+        `case typeof(${identifier}) ` +
+        `when 'null' then 'N' ` +
+        `when 'integer' then 'I' || printf('%lld', ${identifier}) ` +
+        `when 'real' then 'R' || printf('%!.17g', ${identifier}) ` +
+        `when 'text' then 'T' || hex(cast(${identifier} as blob)) ` +
+        `when 'blob' then 'B' || hex(${identifier}) ` +
+        `else 'X' || typeof(${identifier}) end`;
+      return `length(${encoded}) || ':' || ${encoded}`;
+    })
+    .join(" || ");
+}
+
+function quoteSqlString(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
+}
+
+function transferQuotedIdentifier(value: string): string {
+  if (!/^[A-Za-z_][A-Za-z0-9_]{0,127}$/u.test(value)) {
+    throw new ControlD1SchemaError("logical_identifier_invalid");
+  }
+  return `"${value.replaceAll('"', '""')}"`;
 }
 
 export async function readControlD1MigrationLedger(
@@ -732,6 +1608,24 @@ async function digest(value: unknown): Promise<string> {
   return `sha256:${[...new Uint8Array(valueDigest)]
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("")}`;
+}
+
+async function digestTransferValue(value: unknown): Promise<string> {
+  const bytes = new TextEncoder().encode(canonicalTransferJson(value));
+  const valueDigest = await crypto.subtle.digest("SHA-256", bytes);
+  return `sha256:${[...new Uint8Array(valueDigest)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("")}`;
+}
+
+function canonicalTransferJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalTransferJson).join(",")}]`;
+  const object = value as Record<string, unknown>;
+  return `{${Object.keys(object)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${canonicalTransferJson(object[key])}`)
+    .join(",")}}`;
 }
 
 function stableJson(value: unknown): string {

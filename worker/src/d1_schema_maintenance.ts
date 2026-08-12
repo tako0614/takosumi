@@ -61,6 +61,28 @@ export type ControlD1MaintenanceState =
       readonly fence: ControlD1MaintenanceFence;
     };
 
+export interface ControlD1MaintenanceGuardTriggerDigest {
+  readonly name: string;
+  readonly table: string;
+  readonly operation: "insert" | "update" | "delete" | "unknown";
+  readonly digest: string;
+}
+
+/**
+ * Read-only inventory of the request-path maintenance guards. Trigger SQL is
+ * represented only by canonical digests; no application rows or values are
+ * exposed.
+ */
+export interface ControlD1MaintenanceGuardInventory {
+  readonly tables: readonly string[];
+  readonly triggers: readonly string[];
+  readonly triggerSqlDigests: readonly ControlD1MaintenanceGuardTriggerDigest[];
+  readonly triggerSqlDigest: string;
+  readonly guardedTableCount: number;
+  readonly guardTriggerCount: number;
+  readonly digest: string;
+}
+
 const CREATE_MAINTENANCE_TABLE = `create table if not exists ${CONTROL_D1_MAINTENANCE_TABLE} (
   singleton integer primary key check (singleton = 1),
   active integer not null check (active in (0, 1)),
@@ -77,7 +99,8 @@ const CREATE_MAINTENANCE_TABLE = `create table if not exists ${CONTROL_D1_MAINTE
   source_export_sha256 text,
   predecessor_fence_id text,
   predecessor_source_commit text,
-  predecessor_manifest_digest text
+  predecessor_manifest_digest text,
+  release_readiness_digest text
 )`;
 
 const READ_MAINTENANCE_ROW = `select active, migration_bypass, fence_id, source_commit, manifest_digest, environment,
@@ -172,13 +195,102 @@ export async function readControlD1MaintenanceState(
 export async function readControlD1MaintenanceReleaseReceipt(
   db: D1Database,
 ): Promise<ControlD1MaintenanceFence | null> {
+  return (await readControlD1MaintenanceReleaseReceiptDetails(db))?.fence ?? null;
+}
+
+export interface ControlD1MaintenanceReleaseReceipt {
+  readonly fence: ControlD1MaintenanceFence;
+  readonly releasedAt: string;
+  readonly releaseReadinessDigest: string | null;
+}
+
+/** Read the exact durable release timestamp and opaque readiness confirmation. */
+export async function readControlD1MaintenanceReleaseReceiptDetails(
+  db: D1Database,
+): Promise<ControlD1MaintenanceReleaseReceipt | null> {
   const state = await readControlD1MaintenanceState(db);
   if (state.status !== "inactive") return null;
   const row = await readMaintenanceRow(db);
-  if (!row) {
+  if (!row || !row.released_at || !validTimestamp(row.released_at)) {
     throw new ControlD1MaintenanceError("maintenance_fence_invalid");
   }
-  return maintenanceFenceFromRow(row);
+  return {
+    fence: maintenanceFenceFromRow(row),
+    releasedAt: row.released_at,
+    releaseReadinessDigest: await readReleaseReadinessDigest(db),
+  };
+}
+
+/**
+ * Return the complete sorted maintenance guard inventory for candidate
+ * verification. A healthy active fence has three canonical triggers for each
+ * guarded application table.
+ */
+export async function readControlD1MaintenanceGuardInventory(
+  db: D1Database,
+): Promise<ControlD1MaintenanceGuardInventory> {
+  const tables = [...(await listGuardedTables(db))].sort();
+  const triggerRows = await listMaintenanceTriggers(db);
+  const triggers = triggerRows.map((row) => row.name).sort();
+  const triggerSqlDigests = await Promise.all(
+    [...triggerRows]
+      .sort((left, right) => left.name.localeCompare(right.name))
+      .map(async (row) => ({
+        name: row.name,
+        table: row.table,
+        operation: maintenanceTriggerOperation(row.name, row.table),
+        digest: await digestMaintenanceTriggerSql(row.sql),
+      })),
+  );
+  const triggerSqlDigest = await sha256Json(triggerSqlDigests);
+  return {
+    tables,
+    triggers,
+    triggerSqlDigests,
+    triggerSqlDigest,
+    guardedTableCount: tables.length,
+    guardTriggerCount: triggerSqlDigests.length,
+    digest: await digestMaintenanceGuardInventory({
+      tables,
+      triggers,
+      triggerSqlDigests,
+    }),
+  };
+}
+
+/** Digest the canonical reviewed SQL for one maintenance guard trigger. */
+export async function digestControlD1MaintenanceGuardTriggerSql(
+  table: string,
+  operation: "insert" | "update" | "delete",
+): Promise<string> {
+  return digestMaintenanceTriggerSql(
+    maintenanceTriggerSql(table, operation),
+  );
+}
+
+export async function digestControlD1MaintenanceGuardTriggerInventory(
+  entries: readonly ControlD1MaintenanceGuardTriggerDigest[],
+): Promise<string> {
+  return sha256Json(entries);
+}
+
+export async function digestControlD1MaintenanceGuardInventory(
+  input: Pick<
+    ControlD1MaintenanceGuardInventory,
+    "tables" | "triggers" | "triggerSqlDigests"
+  >,
+): Promise<string> {
+  return digestMaintenanceGuardInventory(input);
+}
+
+/**
+ * Canonical digest used by transferred-candidate evidence. The full parsed
+ * fence identity, including predecessor lineage, is covered by the digest.
+ */
+export async function digestControlD1MaintenanceFence(
+  fence: ControlD1MaintenanceFence,
+): Promise<string> {
+  return sha256Json(fence);
 }
 
 async function controlD1MaintenanceStateFromRow(
@@ -221,11 +333,12 @@ export async function acquireControlD1MaintenanceFence(
     db
       .prepare(
         `insert into ${CONTROL_D1_MAINTENANCE_TABLE} (
-           singleton, active, migration_bypass, fence_id, source_commit, manifest_digest,
-           environment, activated_at, released_at, database_role, release_policy,
+         singleton, active, migration_bypass, fence_id, source_commit, manifest_digest,
+           environment, activated_at, released_at, release_readiness_digest,
+           database_role, release_policy,
            database_id, source_export_sha256, predecessor_fence_id,
            predecessor_source_commit, predecessor_manifest_digest
-         ) values (1, 1, 0, ?, ?, ?, ?, ?, null, ?, ?, ?, ?, null, null, null)
+         ) values (1, 1, 0, ?, ?, ?, ?, ?, null, null, ?, ?, ?, ?, null, null, null)
          on conflict(singleton) do update set
            active = 1,
            migration_bypass = 0,
@@ -235,6 +348,7 @@ export async function acquireControlD1MaintenanceFence(
            environment = excluded.environment,
            activated_at = excluded.activated_at,
            released_at = null,
+           release_readiness_digest = null,
            database_role = excluded.database_role,
            release_policy = excluded.release_policy,
            database_id = excluded.database_id,
@@ -538,6 +652,9 @@ export async function releaseControlD1MaintenanceFence(
   db: D1Database,
   fence: ControlD1MaintenanceFence,
   releasedAt: string,
+  options: {
+    readonly releaseReadinessDigest?: string | null;
+  } = {},
 ): Promise<void> {
   if (!(
     (fence.databaseRole === "candidate" && fence.releasePolicy === "cutover") ||
@@ -545,25 +662,124 @@ export async function releaseControlD1MaintenanceFence(
   )) {
     throw new ControlD1MaintenanceError("maintenance_fence_not_releasable");
   }
+  const maintenanceUpgrade = await maintenanceTableUpgradeStatements(db);
+  if (maintenanceUpgrade.length > 0) {
+    await checkedBatch(
+      db,
+      maintenanceUpgrade,
+      "maintenance_fence_release_failed",
+    );
+  }
+  const current = await readControlD1MaintenanceState(db);
+  if (
+    current.status !== "active" ||
+    !sameMaintenanceFenceIdentity(current.fence, fence)
+  ) {
+    throw new ControlD1MaintenanceError("maintenance_fence_release_mismatch");
+  }
+  const strictCandidateRelease = fence.databaseRole === "candidate";
+  // Historical in-place migrations can carry a trigger name across a table
+  // rename. Canonicalize that legacy guard shape before the generic in-place
+  // release; the transferred-candidate lane remains strictly read-only here
+  // and rejects any reviewed-guard drift instead.
+  if (!strictCandidateRelease) {
+    await repairControlD1MaintenanceGuards(db);
+  }
   const guardedTables = await listGuardedTables(db);
-  const statements = [
+  const guardInventory = await readControlD1MaintenanceGuardInventory(db);
+  const expectedTriggers = expectedMaintenanceGuardTriggerRows(guardedTables);
+  if (!(await matchesExpectedMaintenanceGuardInventory(
+    guardInventory,
+    guardedTables,
+    expectedTriggers,
+  ))) {
+    throw new ControlD1MaintenanceError("maintenance_fence_release_mismatch");
+  }
+  const releasePredicate = maintenanceFenceReleasePredicate(
+    fence,
+    guardedTables,
+    expectedTriggers,
+  );
+  const releaseCondition = releasePredicate.sql.replace(
+    /^singleton = 1 and /u,
+    "",
+  );
+  const releaseStatements = [
+    db.prepare(
+      `insert into ${CONTROL_D1_MAINTENANCE_TABLE} (
+         singleton, active, migration_bypass, fence_id, source_commit,
+         manifest_digest, environment, activated_at
+       )
+       select 1, 2, 2, 'invalid', 'invalid', 'invalid', 'invalid', 'invalid'
+       where not exists (
+         select 1 from ${CONTROL_D1_MAINTENANCE_TABLE} where singleton = 1
+       )`,
+    ),
     db
       .prepare(
         `update ${CONTROL_D1_MAINTENANCE_TABLE}
-         set active = case
-               when active = 1 and fence_id = ? then 0
-               else 2
-             end,
-             migration_bypass = 0,
-             released_at = ?
+         set active = case when ${releaseCondition} then 0 else active end,
+             migration_bypass = case
+               when ${releaseCondition} then 0 else 2 end,
+             released_at = case
+               when ${releaseCondition} then ? else released_at end,
+             release_readiness_digest = case
+               when ${releaseCondition} then ? else release_readiness_digest end
          where singleton = 1`,
       )
-      .bind(fence.fenceId, releasedAt),
+      .bind(releasedAt, options.releaseReadinessDigest ?? null),
     ...guardedTables.flatMap((table) =>
       maintenanceDropTriggerStatements(db, table),
     ),
   ];
-  await checkedBatch(db, statements, "maintenance_fence_release_failed");
+  let releaseResults: readonly D1Result[];
+  try {
+    releaseResults = await checkedBatch(
+      db,
+      releaseStatements,
+      "maintenance_fence_release_failed",
+    );
+  } catch (error) {
+    if (strictCandidateRelease) {
+      const afterFailure = await readControlD1MaintenanceState(db);
+      if (afterFailure.status === "active") {
+        throw new ControlD1MaintenanceError(
+          "maintenance_fence_release_mismatch",
+        );
+      }
+    }
+    throw error;
+  }
+  const releaseChanges = releaseResults[1]?.meta?.changes;
+  if (Number(releaseChanges) !== 1) {
+    throw new ControlD1MaintenanceError("maintenance_fence_release_mismatch");
+  }
+  const released = await readControlD1MaintenanceState(db);
+  if (
+    released.status !== "inactive" ||
+    (await readControlD1MaintenanceReleaseReceipt(db))?.fenceId !==
+      fence.fenceId
+  ) {
+    throw new ControlD1MaintenanceError("maintenance_fence_release_failed");
+  }
+}
+
+function sameMaintenanceFenceIdentity(
+  left: ControlD1MaintenanceFence,
+  right: ControlD1MaintenanceFence,
+): boolean {
+  return (
+    left.fenceId === right.fenceId &&
+    left.sourceCommit === right.sourceCommit &&
+    left.manifestDigest === right.manifestDigest &&
+    left.environment === right.environment &&
+    left.activatedAt === right.activatedAt &&
+    left.databaseRole === right.databaseRole &&
+    left.releasePolicy === right.releasePolicy &&
+    left.databaseId === right.databaseId &&
+    left.sourceExportSha256 === right.sourceExportSha256 &&
+    JSON.stringify(left.predecessor) === JSON.stringify(right.predecessor)
+  );
 }
 
 export async function isControlD1MaintenanceFenceActive(
@@ -641,18 +857,21 @@ export async function repairControlD1MaintenanceGuards(
   const state = await readControlD1MaintenanceState(db);
   if (state.status !== "active") return;
   const tables = await listGuardedTables(db);
-  const existing = await listMaintenanceTriggerNames(db);
-  const incomplete = tables.filter((table) =>
-    (["insert", "update", "delete"] as const).some(
-      (operation) => !existing.has(maintenanceTriggerName(table, operation)),
-    ),
+  const expected = expectedMaintenanceGuardTriggerRows(tables);
+  const existing = await listMaintenanceTriggers(db);
+  const existingByName = new Map(
+    existing.map((trigger) => [trigger.name, trigger] as const),
   );
-  if (incomplete.length === 0) return;
+  const repair = expected.filter((trigger) => {
+    const current = existingByName.get(trigger.name);
+    return !current || current.table !== trigger.table || current.sql !== trigger.sql;
+  });
+  if (repair.length === 0) return;
   await checkedBatch(
     db,
-    incomplete.flatMap((table) => [
-      ...maintenanceDropTriggerStatements(db, table),
-      ...maintenanceTriggerStatements(db, table),
+    repair.flatMap((trigger) => [
+      db.prepare(`drop trigger if exists "${trigger.name}"`),
+      db.prepare(trigger.sql),
     ]),
     "maintenance_guard_repair_failed",
   );
@@ -664,6 +883,33 @@ async function readMaintenanceRow(
   return await db
     .prepare(READ_MAINTENANCE_ROW)
     .first<ControlD1MaintenanceRow>();
+}
+
+async function readReleaseReadinessDigest(
+  db: D1Database,
+): Promise<string | null> {
+  const columns = await db
+    .prepare(`pragma table_info("${CONTROL_D1_MAINTENANCE_TABLE}")`)
+    .all<{ readonly name: string }>();
+  if (
+    !(columns.results ?? []).some(
+      (column) => column.name === "release_readiness_digest",
+    )
+  ) {
+    return null;
+  }
+  const row = await db
+    .prepare(
+      `select release_readiness_digest
+       from ${CONTROL_D1_MAINTENANCE_TABLE}
+       where singleton = 1`,
+    )
+    .first<{ readonly release_readiness_digest: string | null }>();
+  if (!row || row.release_readiness_digest === null) return null;
+  if (!/^sha256:[0-9a-f]{64}$/u.test(row.release_readiness_digest)) {
+    throw new ControlD1MaintenanceError("maintenance_fence_invalid");
+  }
+  return row.release_readiness_digest;
 }
 
 async function listGuardedTables(db: D1Database): Promise<readonly string[]> {
@@ -685,14 +931,227 @@ async function listGuardedTables(db: D1Database): Promise<readonly string[]> {
 async function listMaintenanceTriggerNames(
   db: D1Database,
 ): Promise<ReadonlySet<string>> {
+  const rows = await listMaintenanceTriggers(db);
+  return new Set(rows.map((row) => row.name));
+}
+
+interface MaintenanceTriggerRow {
+  readonly name: string;
+  readonly table: string;
+  readonly sql: string | null;
+}
+
+interface ExpectedMaintenanceTriggerRow {
+  readonly name: string;
+  readonly table: string;
+  readonly operation: "insert" | "update" | "delete";
+  readonly sql: string;
+}
+
+function expectedMaintenanceGuardTriggerRows(
+  tables: readonly string[],
+): readonly ExpectedMaintenanceTriggerRow[] {
+  return tables
+    .flatMap((table) =>
+      (["insert", "update", "delete"] as const).map((operation) => ({
+        name: maintenanceTriggerName(table, operation),
+        table,
+        operation,
+        sql: maintenanceTriggerSql(table, operation)
+          .replace(/^create trigger if not exists /u, "CREATE TRIGGER ")
+          .replace(/;\s*$/u, ""),
+      })),
+    )
+    .sort((left, right) => left.name.localeCompare(right.name));
+}
+
+async function matchesExpectedMaintenanceGuardInventory(
+  actual: ControlD1MaintenanceGuardInventory,
+  tables: readonly string[],
+  expectedTriggers: readonly ExpectedMaintenanceTriggerRow[],
+): Promise<boolean> {
+  const expectedTriggerSqlDigests = await Promise.all(
+    expectedTriggers.map(async (trigger) => ({
+      name: trigger.name,
+      table: trigger.table,
+      operation: trigger.operation,
+      digest: await digestMaintenanceTriggerSql(trigger.sql),
+    })),
+  );
+  const expectedNames = expectedTriggers.map((trigger) => trigger.name);
+  const expectedTriggerSqlDigest = await sha256Json(expectedTriggerSqlDigests);
+  const expectedDigest = await digestMaintenanceGuardInventory({
+    tables: [...tables].sort(),
+    triggers: expectedNames,
+    triggerSqlDigests: expectedTriggerSqlDigests,
+  });
+  return (
+    actual.guardedTableCount === tables.length &&
+    actual.guardTriggerCount === expectedTriggers.length &&
+    JSON.stringify(actual.tables) === JSON.stringify([...tables].sort()) &&
+    JSON.stringify(actual.triggers) === JSON.stringify(expectedNames) &&
+    JSON.stringify(actual.triggerSqlDigests) ===
+      JSON.stringify(expectedTriggerSqlDigests) &&
+    actual.triggerSqlDigest === expectedTriggerSqlDigest &&
+    actual.digest === expectedDigest
+  );
+}
+
+function maintenanceFenceReleasePredicate(
+  fence: ControlD1MaintenanceFence,
+  guardedTables: readonly string[],
+  expectedTriggers: readonly ExpectedMaintenanceTriggerRow[],
+): { readonly sql: string; readonly bindings: readonly unknown[] } {
+  const predicates = [
+    "singleton = 1",
+    "active = 1",
+    "migration_bypass = 0",
+    "released_at is null",
+    "release_readiness_digest is null",
+    `fence_id = ${sqlLiteral(fence.fenceId)}`,
+    `source_commit = ${sqlLiteral(fence.sourceCommit)}`,
+    `manifest_digest = ${sqlLiteral(fence.manifestDigest)}`,
+    `environment = ${sqlLiteral(fence.environment)}`,
+    `activated_at = ${sqlLiteral(fence.activatedAt)}`,
+    `database_role = ${sqlLiteral(fence.databaseRole)}`,
+    `release_policy = ${sqlLiteral(fence.releasePolicy)}`,
+    `database_id is ${sqlNullableLiteral(fence.databaseId)}`,
+    `source_export_sha256 is ${sqlNullableLiteral(fence.sourceExportSha256)}`,
+    `predecessor_fence_id is ${sqlNullableLiteral(fence.predecessor?.fenceId)}`,
+    `predecessor_source_commit is ${sqlNullableLiteral(
+      fence.predecessor?.sourceCommit,
+    )}`,
+    `predecessor_manifest_digest is ${sqlNullableLiteral(
+      fence.predecessor?.manifestDigest,
+    )}`,
+  ];
+  const tableFilter =
+    "type = 'table' and name not like 'sqlite_%' and name != " +
+    sqlLiteral(CONTROL_D1_MAINTENANCE_TABLE) +
+    " and name != 'schema_migrations' and name != '_cf_KV'";
+  predicates.push(
+    `(select count(*) from sqlite_master where ${tableFilter}) = ${
+      guardedTables.length
+    }`,
+  );
+  if (guardedTables.length > 0) {
+    predicates.push(
+      `(select count(*) from sqlite_master where ${tableFilter}` +
+        ` and name in (${guardedTables.map(sqlLiteral).join(", ")})) = ${
+          guardedTables.length
+        }`,
+    );
+  }
+  const triggerFilter =
+    "type = 'trigger' and name like '_takosumi_schema_fence_%'";
+  predicates.push(
+    `(select count(*) from sqlite_master where ${triggerFilter}) = ${
+      expectedTriggers.length
+    }`,
+  );
+  if (expectedTriggers.length > 0) {
+    const expectedMatches = expectedTriggers
+      .map(
+        (trigger) =>
+          `(name = ${sqlLiteral(trigger.name)} and sql = ${sqlLiteral(
+            trigger.sql,
+          )})`,
+      )
+      .join(" or ");
+    predicates.push(
+      `(select count(*) from sqlite_master where ${triggerFilter}` +
+        ` and (${expectedMatches})) = ${expectedTriggers.length}`,
+    );
+  }
+  return {
+    sql: predicates.join(" and "),
+    bindings: [],
+  };
+}
+
+function sqlLiteral(value: string): string {
+  return `'${value.replace(/'/gu, "''")}'`;
+}
+
+function sqlNullableLiteral(value: string | null | undefined): string {
+  return value === null || value === undefined ? "null" : sqlLiteral(value);
+}
+
+async function listMaintenanceTriggers(
+  db: D1Database,
+): Promise<readonly MaintenanceTriggerRow[]> {
   const result = await db
     .prepare(
-      `select name from sqlite_master
+      `select name, tbl_name, sql from sqlite_master
        where type = 'trigger' and name like '_takosumi_schema_fence_%'
        order by name`,
     )
-    .all<{ readonly name: string }>();
-  return new Set((result.results ?? []).map((row) => String(row.name)));
+    .all<{
+      readonly name: string;
+      readonly tbl_name: string;
+      readonly sql: string | null;
+    }>();
+  return (result.results ?? []).map((row) => ({
+    name: String(row.name),
+    table: String(row.tbl_name),
+    sql: row.sql === null ? null : String(row.sql),
+  }));
+}
+
+async function digestMaintenanceGuardInventory(input: {
+  readonly tables: readonly string[];
+  readonly triggers: readonly string[];
+  readonly triggerSqlDigests: readonly ControlD1MaintenanceGuardTriggerDigest[];
+}): Promise<string> {
+  return sha256Json(input);
+}
+
+async function digestMaintenanceTriggerSql(
+  sql: string | null,
+): Promise<string> {
+  return sha256Json(
+    sql === null ? null : canonicalMaintenanceTriggerSql(sql),
+  );
+}
+
+function canonicalMaintenanceTriggerSql(sql: string): string {
+  return sql
+    .trim()
+    .replace(/\s+/gu, " ")
+    .replace(/^create trigger if not exists /iu, "create trigger ")
+    .replace(/;$/u, "")
+    .toLowerCase();
+}
+
+async function sha256Json(value: unknown): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(canonicalJson(value)),
+  );
+  return `sha256:${[...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("")}`;
+}
+
+function canonicalJson(value: unknown): string {
+  if (value === null) return "null";
+  if (typeof value === "string") return JSON.stringify(value);
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw new TypeError("non-finite number");
+    return JSON.stringify(value);
+  }
+  if (typeof value === "boolean") return value ? "true" : "false";
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => canonicalJson(entry)).join(",")}]`;
+  }
+  if (typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`)
+      .join(",")}}`;
+  }
+  return "null";
 }
 
 function maintenanceTriggerStatements(
@@ -700,8 +1159,15 @@ function maintenanceTriggerStatements(
   table: string,
 ): readonly D1PreparedStatement[] {
   return (["insert", "update", "delete"] as const).map((operation) =>
-    db.prepare(
-      `create trigger if not exists "${maintenanceTriggerName(table, operation)}"
+    db.prepare(maintenanceTriggerSql(table, operation)),
+  );
+}
+
+function maintenanceTriggerSql(
+  table: string,
+  operation: "insert" | "update" | "delete",
+): string {
+  return `create trigger if not exists "${maintenanceTriggerName(table, operation)}"
        before ${operation} on "${table}"
        when not coalesce((
          select (active = 0 and migration_bypass = 0)
@@ -711,9 +1177,19 @@ function maintenanceTriggerStatements(
        ), 0)
        begin
          select raise(abort, 'takosumi control schema maintenance');
-       end;`,
-    ),
-  );
+       end;`;
+}
+
+function maintenanceTriggerOperation(
+  name: string,
+  table: string,
+): "insert" | "update" | "delete" | "unknown" {
+  const prefix = `_takosumi_schema_fence_${table}_`;
+  const operation = name.startsWith(prefix) ? name.slice(prefix.length) : "";
+  if (operation === "insert" || operation === "update" || operation === "delete") {
+    return operation;
+  }
+  return "unknown";
 }
 
 function strictBinary(value: number | string): 0 | 1 {
@@ -894,6 +1370,7 @@ async function maintenanceTableUpgradeStatements(
     ["release_policy", "text not null default 'never'"],
     ["database_id", "text"],
     ["source_export_sha256", "text"],
+    ["release_readiness_digest", "text"],
     ["predecessor_fence_id", "text"],
     ["predecessor_source_commit", "text"],
     ["predecessor_manifest_digest", "text"],
@@ -1006,7 +1483,7 @@ async function checkedBatch(
   db: D1Database,
   statements: readonly D1PreparedStatement[],
   code: string,
-): Promise<void> {
+): Promise<readonly D1Result[]> {
   let results: readonly D1Result[];
   try {
     if (!db.batch) throw new Error("D1 batch unavailable");
@@ -1020,6 +1497,7 @@ async function checkedBatch(
   ) {
     throw new ControlD1MaintenanceError(code);
   }
+  return results;
 }
 
 export class ControlD1MaintenanceError extends Error {
