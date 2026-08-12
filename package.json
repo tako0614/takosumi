@@ -77,6 +77,7 @@
     "accounts": "bun cli/src/main.ts",
     "cli": "bun cli/src/main.ts",
     "docs:build": "cd docs && bun run build",
+    "docs:test:browser": "bun run docs:build && bunx --no-install playwright test docs/.vitepress/tests/mobile-navigation_test.ts --config=docs/.vitepress/playwright.config.ts",
     "app-docs:build": "bash scripts/build-app-docs.sh",
     "app-docs:dev": "cd app-docs && ../docs/node_modules/.bin/vitepress dev --host 0.0.0.0",
     "docs:build:all": "bun run docs:build && bun run app-docs:build",

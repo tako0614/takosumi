@@ -25,6 +25,7 @@ test("preserves the complete check phase order and commands", () => {
     "typescript",
     "dashboard",
     "dashboard-browser",
+    "docs-browser",
     "worker-types",
     "cloudflare-worker-build",
   ]);
@@ -43,6 +44,7 @@ test("preserves the complete check phase order and commands", () => {
     "tsc --noEmit",
     "bun run check:dashboard",
     "bun run check:dashboard-browser",
+    "bun run docs:test:browser",
     "bun run check:worker-types",
     "bun run check:cloudflare-worker-build",
   ]);

@@ -88,6 +88,7 @@ export const PORTABLE_GATE_PHASES: readonly PortableGatePhase[] = [
   phase("typescript", ["tsc", "--noEmit"]),
   phase("dashboard", ["bun", "run", "check:dashboard"]),
   phase("dashboard-browser", ["bun", "run", "check:dashboard-browser"]),
+  phase("docs-browser", ["bun", "run", "docs:test:browser"]),
   phase("worker-types", ["bun", "run", "check:worker-types"]),
   phase("cloudflare-worker-build", [
     "bun",
