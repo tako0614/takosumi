@@ -398,9 +398,10 @@ function sqliteLiteral(value: string | number | null): string {
 function requiresSqlFileImport(sql: string): boolean {
   const tokens = leadingSqlTokens(sql, 3);
   return (
-    tokens[0] === "CREATE" &&
-    (tokens[1] === "TRIGGER" ||
-      (tokens[1] === "TEMP" && tokens[2] === "TRIGGER"))
+    (tokens[0] === "CREATE" &&
+      (tokens[1] === "TRIGGER" ||
+        (tokens[1] === "TEMP" && tokens[2] === "TRIGGER"))) ||
+    (tokens[0] === "DROP" && tokens[1] === "TRIGGER")
   );
 }
 
