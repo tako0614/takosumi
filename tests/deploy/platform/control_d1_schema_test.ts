@@ -1,5 +1,8 @@
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+
 import { expect, test } from "bun:test";
-import { resolve } from "node:path";
 
 import {
   applyControlD1Schema,
@@ -2382,6 +2385,125 @@ test("control D1 CLI transfer-source-verify emits digest-bound source transcript
     });
   } finally {
     database.close();
+  }
+});
+
+test("control D1 authoritative source checks use reviewed nested Git", async () => {
+  const plan = await buildControlD1SchemaPlan();
+  const database = new SqliteControlD1Database();
+  const sourceDatabaseId = "control_source_nested_git_staging";
+  const sourceExportSha256 = `sha256:${"6".repeat(64)}`;
+  const captureRoot = await mkdtemp(
+    join(tmpdir(), "takosumi-control-d1-nested-git-"),
+  );
+  const fakeBin = join(captureRoot, "bin");
+  const gitWrapper = join(fakeBin, "git");
+  const previousPath = Bun.env.PATH;
+  const previousTmpdir = Bun.env.TMPDIR;
+  const checkout = resolve(import.meta.dir, "../../..");
+  try {
+    await mkdir(fakeBin, { recursive: true });
+    await writeFile(
+      gitWrapper,
+      [
+        "#!/bin/sh",
+        "set -eu",
+        'case "$*" in',
+        `  *"rev-parse HEAD"*) target="$TMPDIR/control-d1-git-rev-parse"; printf '%s\\n' "${SOURCE_COMMIT}";;`,
+        '  *"status --porcelain --untracked-files=all"*) target="$TMPDIR/control-d1-git-status";;',
+        '  *) echo "unexpected git invocation" >&2; exit 2;;',
+        "esac",
+        "{",
+        '  printf "argv=%s\\n" "$*"',
+        '  printf "GIT_CONFIG_NOSYSTEM=%s\\n" "${GIT_CONFIG_NOSYSTEM-}"',
+        '  printf "GIT_CONFIG_GLOBAL=%s\\n" "${GIT_CONFIG_GLOBAL-}"',
+        '  printf "GIT_TERMINAL_PROMPT=%s\\n" "${GIT_TERMINAL_PROMPT-}"',
+        '  printf "LC_ALL=%s\\n" "${LC_ALL-}"',
+        '  printf "LANG=%s\\n" "${LANG-}"',
+        '  printf "PATH=%s\\n" "${PATH-}"',
+        '  printf "HOME=%s\\n" "${HOME-}"',
+        '  printf "TMPDIR=%s\\n" "${TMPDIR-}"',
+        '} > "$target"',
+        "",
+      ].join("\n"),
+    );
+    await chmod(gitWrapper, 0o755);
+    Bun.env.PATH = `${fakeBin}:${previousPath ?? ""}`;
+    Bun.env.TMPDIR = captureRoot;
+
+    await applyControlD1Schema(database, plan, {
+      sourceCommit: SOURCE_COMMIT,
+      environment: "staging",
+      activatedAt: NOW,
+      releasedAt: () => NOW,
+      maintenanceDrainMilliseconds: 0,
+      waitForRequestDrain: async () => {},
+      retainMaintenanceFence: true,
+      databaseRole: "legacy",
+      releasePolicy: "never",
+      databaseId: sourceDatabaseId,
+    });
+    const output: string[] = [];
+    const code = await runControlD1SchemaCli(
+      [
+        "transfer-source-verify",
+        "--environment",
+        "staging",
+        "--confirm-manifest",
+        plan.manifestDigest,
+        "--confirm-database-id",
+        sourceDatabaseId,
+        "--confirm-source-export-sha256",
+        sourceExportSha256,
+        "--confirm-source-export-bookmark",
+        "bookmark-source-nested-git-staging",
+      ],
+      {},
+      (value) => output.push(value),
+      {
+        sourceCommit: SOURCE_COMMIT,
+        now: () => NOW,
+        createRemoteDatabase: () => ({
+          database,
+          configurationDigest: `sha256:${"7".repeat(64)}`,
+          databaseId: sourceDatabaseId,
+        }),
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(JSON.parse(output.at(-1) ?? "{}")).toMatchObject({
+      mode: "transfer-source-verify",
+      status: "ready",
+    });
+    const expectedConfigArgs =
+      "-c core.hooksPath=/dev/null -c core.fsmonitor=false " +
+      "-c core.attributesFile=/dev/null -c commit.gpgSign=false " +
+      "-c tag.gpgSign=false";
+    for (const [name, command] of [
+      ["rev-parse", "rev-parse HEAD"],
+      ["status", "status --porcelain --untracked-files=all"],
+    ] as const) {
+      const capture = await readFile(
+        join(captureRoot, `control-d1-git-${name}`),
+        "utf8",
+      );
+      expect(capture).toContain(
+        `argv=${expectedConfigArgs} -C ${checkout} ${command}`,
+      );
+      expect(capture).toContain("GIT_CONFIG_NOSYSTEM=1");
+      expect(capture).toContain("GIT_CONFIG_GLOBAL=/dev/null");
+      expect(capture).toContain("GIT_TERMINAL_PROMPT=0");
+      expect(capture).toContain("LC_ALL=C");
+      expect(capture).toContain("LANG=C");
+    }
+  } finally {
+    if (previousPath === undefined) delete Bun.env.PATH;
+    else Bun.env.PATH = previousPath;
+    if (previousTmpdir === undefined) delete Bun.env.TMPDIR;
+    else Bun.env.TMPDIR = previousTmpdir;
+    database.close();
+    await rm(captureRoot, { recursive: true, force: true });
   }
 });
 

@@ -1087,23 +1087,45 @@ async function inspectSourceCheckout(): Promise<{
   return { head, clean: status.length === 0 };
 }
 
+const REVIEWED_GIT_CONFIG_ARGS = [
+  "-c",
+  "core.hooksPath=/dev/null",
+  "-c",
+  "core.fsmonitor=false",
+  "-c",
+  "core.attributesFile=/dev/null",
+  "-c",
+  "commit.gpgSign=false",
+  "-c",
+  "tag.gpgSign=false",
+] as const;
+
 async function runGit(
   checkout: string,
   args: readonly string[],
 ): Promise<string> {
-  const child = Bun.spawn(["git", "-C", checkout, ...args], {
-    env: Object.fromEntries(
-      Object.entries({
-        PATH: process.env.PATH,
-        HOME: process.env.HOME,
-        TMPDIR: process.env.TMPDIR,
-        LANG: process.env.LANG,
-      }).filter((entry): entry is [string, string] => entry[1] !== undefined),
-    ),
-    stdin: "ignore",
-    stdout: "pipe",
-    stderr: "pipe",
-  });
+  const child = Bun.spawn(
+    ["git", ...REVIEWED_GIT_CONFIG_ARGS, "-C", checkout, ...args],
+    {
+      env: Object.fromEntries(
+        Object.entries({
+          PATH: process.env.PATH,
+          HOME: process.env.HOME,
+          TMPDIR: process.env.TMPDIR,
+          GIT_CONFIG_NOSYSTEM: "1",
+          GIT_CONFIG_GLOBAL: "/dev/null",
+          GIT_TERMINAL_PROMPT: "0",
+          LC_ALL: "C",
+          LANG: "C",
+        }).filter(
+          (entry): entry is [string, string] => entry[1] !== undefined,
+        ),
+      ),
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  );
   const [stdout, , exitCode] = await Promise.all([
     new Response(child.stdout).text(),
     new Response(child.stderr).text(),
