@@ -1,4 +1,8 @@
 import { expect, test } from "bun:test";
+import {
+  TAKOSUMI_PRODUCT_CAPABILITIES_PATH,
+  TAKOSUMI_WELL_KNOWN_PATH,
+} from "../../../contract/api-surface.ts";
 import worker from "../../../deploy/platform/worker.ts";
 import { SqliteFakeD1 } from "../../helpers/deploy-control/sqlite_fake_d1.ts";
 
@@ -48,6 +52,44 @@ for (const method of ["GET", "HEAD"] as const) {
   });
 }
 
+test("platform discovery leaves only GET and HEAD methods mounted", async () => {
+  for (const path of [
+    TAKOSUMI_WELL_KNOWN_PATH,
+    TAKOSUMI_PRODUCT_CAPABILITIES_PATH,
+  ]) {
+    for (const method of ["GET", "HEAD"] as const) {
+      const { env, assetRequests } = platformEnv();
+      const response = await worker.fetch(
+        new Request(`https://app.takosumi.test${path}`, { method }),
+        env,
+      );
+      expect(response.status, `${method} ${path}`).toBe(200);
+      expect(response.headers.get("content-type"), `${method} ${path}`).toMatch(
+        /application\/json/u,
+      );
+      expect(assetRequests, `${method} ${path}`).toEqual([]);
+    }
+    for (const method of ["POST", "PUT", "OPTIONS"] as const) {
+      const { env, assetRequests } = platformEnv();
+      const response = await worker.fetch(
+        new Request(`https://app.takosumi.test${path}`, { method }),
+        env,
+      );
+      expect(response.status, `${method} ${path}`).toBe(405);
+      expect(response.headers.get("allow"), `${method} ${path}`).toBe(
+        "GET, HEAD",
+      );
+      expect(response.headers.get("content-type"), `${method} ${path}`).toMatch(
+        /application\/json/u,
+      );
+      expect(await response.json(), `${method} ${path}`).toEqual({
+        error: "method_not_allowed",
+      });
+      expect(assetRequests, `${method} ${path}`).toEqual([]);
+    }
+  }
+});
+
 test("platform preserves Core inventory bearer semantics", async () => {
   for (const path of ["/capabilities", "/openapi.json"]) {
     const wrong = platformEnv();
@@ -72,20 +114,28 @@ test("platform preserves Core inventory bearer semantics", async () => {
 
 test("platform leaves trailing process paths to the explicit SPA fallback", async () => {
   const { env, assetRequests } = platformEnv();
-  for (const path of ["/livez/", "/capabilities/", "/openapi.json/"]) {
-    const response = await worker.fetch(
-      new Request(`https://app.takosumi.test${path}`),
-      env,
-    );
-    expect(response.status, path).toBe(200);
-    expect(response.headers.get("content-type"), path).toMatch(/text\/html/u);
-  }
-  expect(assetRequests).toEqual(["/livez/", "/capabilities/", "/openapi.json/"]);
+  const response = await worker.fetch(
+    new Request("https://app.takosumi.test/livez/"),
+    env,
+  );
+  expect(response.status).toBe(200);
+  expect(response.headers.get("content-type")).toMatch(/text\/html/u);
+  expect(assetRequests).toEqual(["/livez/"]);
 });
 
-test("platform reserves unknown webhook paths outside the SPA fallback", async () => {
+test("platform reserves unknown machine-prefix paths outside the SPA fallback", async () => {
   const { env, assetRequests } = platformEnv();
-  for (const path of ["/hooks", "/hooks/unknown"]) {
+  for (const path of [
+    "/__takosumi",
+    "/__takosumi/unknown",
+    "/hooks",
+    "/hooks/unknown",
+    "/metrics/unknown",
+    "/capabilities/",
+    "/capabilities/unknown",
+    "/openapi.json/",
+    "/openapi.json/unknown",
+  ]) {
     const response = await worker.fetch(
       new Request(`https://app.takosumi.test${path}`),
       env,
@@ -97,4 +147,29 @@ test("platform reserves unknown webhook paths outside the SPA fallback", async (
     expect(await response.json(), path).toEqual({ error: "not found" });
   }
   expect(assetRequests).toEqual([]);
+});
+
+test("platform does not broaden reserved prefixes to near-prefix paths", async () => {
+  const { env, assetRequests } = platformEnv();
+  for (const path of [
+    "/__takosumix",
+    "/hooksx",
+    "/metricsx",
+    "/capabilitiesx",
+    "/openapi.jsonx",
+  ]) {
+    const response = await worker.fetch(
+      new Request(`https://app.takosumi.test${path}`),
+      env,
+    );
+    expect(response.status, path).toBe(200);
+    expect(response.headers.get("content-type"), path).toMatch(/text\/html/u);
+  }
+  expect(assetRequests).toEqual([
+    "/__takosumix",
+    "/hooksx",
+    "/metricsx",
+    "/capabilitiesx",
+    "/openapi.jsonx",
+  ]);
 });

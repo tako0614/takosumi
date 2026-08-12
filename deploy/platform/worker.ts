@@ -1145,6 +1145,9 @@ export default {
       await handlePlatformDestroyRecoveryRequest(request, url, env);
     if (destroyRecoveryResponse) return destroyRecoveryResponse;
     if (url.pathname === TAKOSUMI_WELL_KNOWN_PATH) {
+      if (!platformGetHeadOnlyRequest(request)) {
+        return platformGetHeadOnlyMethodNotAllowedResponse();
+      }
       return Response.json(
         createTakosumiWellKnownDocument(
           platformDiscoveryOptions(url.origin, env),
@@ -1152,6 +1155,9 @@ export default {
       );
     }
     if (url.pathname === TAKOSUMI_PRODUCT_CAPABILITIES_PATH) {
+      if (!platformGetHeadOnlyRequest(request)) {
+        return platformGetHeadOnlyMethodNotAllowedResponse();
+      }
       return Response.json(
         createTakosumiProductCapabilities(
           platformDiscoveryOptions(url.origin, env),
@@ -1268,9 +1274,6 @@ export default {
     if (url.pathname.startsWith("/hooks/sources/")) {
       return await handleSourceWebhook(request, url, env);
     }
-    if (url.pathname === "/hooks" || url.pathname.startsWith("/hooks/")) {
-      return Response.json({ error: "not found" }, { status: 404 });
-    }
     // `/compat` is an explicit profile namespace, never an accounts/dashboard
     // SPA route. An uninstalled or retired profile must fail closed instead of
     // falling through to the accounts worker's HTML fallback.
@@ -1284,6 +1287,9 @@ export default {
         undefined,
         honoExecutionContext(context),
       );
+    }
+    if (isPlatformReservedMachinePath(url.pathname)) {
+      return Response.json({ error: "not found" }, { status: 404 });
     }
     const accountsResponse = withPlatformAssetCacheHeaders(
       request,
@@ -1871,10 +1877,35 @@ const PLATFORM_CORE_PROCESS_PATHS = new Set([
   "/openapi.json",
 ]);
 
+const PLATFORM_RESERVED_MACHINE_PREFIXES = [
+  "/__takosumi",
+  "/hooks",
+  "/metrics",
+  "/capabilities",
+  "/openapi.json",
+] as const;
+
 function isPlatformCoreProcessRoute(request: Request, url: URL): boolean {
   return (
     (request.method === "GET" || request.method === "HEAD") &&
     PLATFORM_CORE_PROCESS_PATHS.has(url.pathname)
+  );
+}
+
+function isPlatformReservedMachinePath(pathname: string): boolean {
+  return PLATFORM_RESERVED_MACHINE_PREFIXES.some(
+    (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
+  );
+}
+
+function platformGetHeadOnlyRequest(request: Request): boolean {
+  return request.method === "GET" || request.method === "HEAD";
+}
+
+function platformGetHeadOnlyMethodNotAllowedResponse(): Response {
+  return Response.json(
+    { error: "method_not_allowed" },
+    { status: 405, headers: { allow: "GET, HEAD" } },
   );
 }
 
