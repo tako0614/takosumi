@@ -717,14 +717,16 @@ export async function releaseControlD1MaintenanceFence(
     ),
     db
       .prepare(
+        // Evaluate the large identity/inventory predicate only once. A failed
+        // predicate writes migration_bypass=2, which violates the table CHECK
+        // constraint and rolls back this update and every trigger drop in the
+        // same D1 transaction, keeping the active fence fail-closed.
         `update ${CONTROL_D1_MAINTENANCE_TABLE}
-         set active = case when ${releaseCondition} then 0 else active end,
+         set active = 0,
              migration_bypass = case
                when ${releaseCondition} then 0 else 2 end,
-             released_at = case
-               when ${releaseCondition} then ? else released_at end,
-             release_readiness_digest = case
-               when ${releaseCondition} then ? else release_readiness_digest end
+             released_at = ?,
+             release_readiness_digest = ?
          where singleton = 1`,
       )
       .bind(releasedAt, options.releaseReadinessDigest ?? null),
