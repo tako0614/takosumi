@@ -1,4 +1,6 @@
 import { expect, test } from "bun:test";
+import { resolve } from "node:path";
+import { Miniflare } from "miniflare";
 import {
   handleAuthorize,
   handleIntrospect,
@@ -19,6 +21,10 @@ import type {
 
 const issuer = "https://accounts.example.test";
 const redirectUri = "https://client.example.test/oauth/callback";
+const signInTarget =
+  "https://accounts.example.test/sign-in?return=%2Foauth%2Fauthorize";
+const codeTarget =
+  "https://client.example.test/oauth/callback?code=one-shot-code&state=request-state";
 const client: OidcClientRegistration = {
   clientId: "cache-test-client",
   redirectUris: [redirectUri],
@@ -252,4 +258,47 @@ test("upstream OAuth authorize and session callback responses are uncacheable", 
   expectNoStore(callback);
   expect(callback.headers.get("set-cookie")).toContain("takosumi_oauth_state=");
   expect(callback.headers.get("set-cookie")).toContain("takosumi_session=");
+});
+
+test("workerd preserves both authorize redirect branches while adding no-store headers", async () => {
+  const build = await Bun.build({
+    entrypoints: [
+      resolve(import.meta.dir, "../fixtures/oauth-cache-runtime.ts"),
+    ],
+    target: "browser",
+    format: "esm",
+    minify: true,
+  });
+  expect(build.success, build.logs.map(String).join("\n")).toBe(true);
+  const output = build.outputs[0];
+  if (!output) throw new Error("OAuth cache runtime bundle is missing");
+
+  const runtime = new Miniflare({
+    compatibilityDate: "2026-07-17",
+    modules: [
+      {
+        type: "ESModule",
+        path: "oauth-cache-runtime.mjs",
+        contents: await output.text(),
+      },
+    ],
+  });
+  try {
+    for (const [branch, location] of [
+      ["sign-in", signInTarget],
+      ["code", codeTarget],
+    ] as const) {
+      const response = await runtime.dispatchFetch(
+        `https://worker.test/authorize/${branch}`,
+        { redirect: "manual" },
+      );
+      expect(response.status).toBe(302);
+      expect(response.headers.get("location")).toBe(location);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(response.headers.get("pragma")).toBe("no-cache");
+      expect(response.headers.get("vary")).toBe("Cookie, Sec-Fetch-Dest");
+    }
+  } finally {
+    await runtime.dispose();
+  }
 });

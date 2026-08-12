@@ -16,14 +16,35 @@ export function json(
 
 /**
  * OAuth responses can carry one-shot credentials, authorization state, or
- * private claims. Mutate the existing response so status, body, Location,
- * and repeated Set-Cookie headers remain untouched while making the response
- * uncacheable by browsers and intermediary caches.
+ * private claims. Rebuild the response with a fresh Headers object because
+ * `Response.redirect()` headers are immutable in Node/workerd. The original
+ * body, status, status text, Location, repeated Set-Cookie headers, and
+ * runtime-specific response metadata are carried forward unchanged.
  */
 export function withOAuthNoStoreHeaders(response: Response): Response {
-  response.headers.set("cache-control", "no-store");
-  response.headers.set("pragma", "no-cache");
-  return response;
+  const headers = new Headers(response.headers);
+  headers.set("cache-control", "no-store");
+  headers.set("pragma", "no-cache");
+
+  // Cloudflare's Response may carry these fields even though the standard
+  // ResponseInit type does not declare them. Preserve them when present so a
+  // shared wrapper never drops a WebSocket or operator response metadata.
+  const responseWithRuntimeFields = response as Response & {
+    readonly cf?: unknown;
+    readonly webSocket?: unknown;
+  };
+  const init = {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+    ...(responseWithRuntimeFields.cf !== undefined
+      ? { cf: responseWithRuntimeFields.cf }
+      : {}),
+    ...(responseWithRuntimeFields.webSocket !== undefined
+      ? { webSocket: responseWithRuntimeFields.webSocket }
+      : {}),
+  };
+  return new Response(response.body, init);
 }
 
 const REQUEST_ID_UUID_PATTERN =
