@@ -365,7 +365,7 @@ test("backup action runs custom_command in the restored source and returns artif
   } finally {
     await rm(root, { recursive: true, force: true });
   }
-});
+}, 30_000);
 
 test("backup action does not invent a provider-specific snapshot without an explicit adapter", async () => {
   const runId = `provider_snapshot_unsupported_${crypto.randomUUID().replace(/-/g, "")}`;

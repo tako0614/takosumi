@@ -59,6 +59,19 @@ test("package exposes the focused command without changing the complete gate", a
   expect(packageJson.scripts?.["test:critical-journeys"]).toBe(
     "bun scripts/run-critical-journeys.ts",
   );
+  expect(packageJson.scripts?.["test:workerd"]).toBe(
+    "bun test --isolate tests/runner/compatibility_check_test.ts tests/core/domains/interfaces/runtime_capability_reader_workerd_test.ts tests/core/domains/deploy-control/capsule_execution_authority_test.ts",
+  );
+  expect(packageJson.scripts?.test).toContain("bun run test:workerd");
+  for (const isolatedWorkerdTest of [
+    "tests/runner/compatibility_check_test.ts",
+    "tests/core/domains/interfaces/runtime_capability_reader_workerd_test.ts",
+    "tests/core/domains/deploy-control/capsule_execution_authority_test.ts",
+  ]) {
+    expect(packageJson.scripts?.test).toContain(
+      `--path-ignore-patterns=${isolatedWorkerdTest}`,
+    );
+  }
   expect(packageJson.scripts?.check).toBe("bun scripts/check-portable-gate.ts");
   expect(
     PORTABLE_GATE_PHASES.some(

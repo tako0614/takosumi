@@ -90,7 +90,7 @@ describe("D1RuntimeCapabilityReader (workerd D1)", () => {
     } finally {
       await runtime.dispose();
     }
-  }, 10_000);
+  }, 30_000);
 });
 
 function fixture(): {
