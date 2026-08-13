@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { D1AccountsStore } from "../../../accounts/service/src/mod.ts";
 import {
   TAKOSUMI_PRODUCT_CAPABILITIES_PATH,
   TAKOSUMI_WELL_KNOWN_PATH,
@@ -157,10 +158,55 @@ test("platform reserves unknown machine-prefix paths outside the SPA fallback", 
   expect(assetRequests).toEqual([]);
 });
 
+test("platform delegates the canonical Accounts API v1 surface", async () => {
+  const { env: baseEnv, assetRequests } = platformEnv();
+  const accountsDb = new SqliteFakeD1();
+  const accountsStore = new D1AccountsStore(accountsDb);
+  await accountsStore.initialize();
+  await accountsDb
+    .prepare(
+      "CREATE TABLE IF NOT EXISTS takosumi_accounts_schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL)",
+    )
+    .run();
+  await accountsDb
+    .prepare(
+      "INSERT INTO takosumi_accounts_schema_migrations (version, name, applied_at) VALUES (?, ?, ?)",
+    )
+    .bind(3, "current", Date.now())
+    .run();
+  const env = {
+    ...baseEnv,
+    TAKOSUMI_ACCOUNTS_DB: accountsDb,
+    TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE: "predeployed",
+    TAKOSUMI_ACCOUNTS_ISSUER: "http://app.takosumi.test",
+    TAKOSUMI_ACCOUNT_SESSION_HASH_SALT: "process-route-test-session-salt",
+  } as never;
+  for (const path of ["/api/v1/workspaces", "/api/v1/dashboard/bootstrap"]) {
+    const response = await worker.fetch(
+      new Request(`https://app.takosumi.test${path}`),
+      env,
+    );
+    expect(response.status, path).toBe(401);
+    expect(response.headers.get("content-type"), path).toMatch(
+      /application\/json/u,
+    );
+  }
+  const unknown = await worker.fetch(
+    new Request("https://app.takosumi.test/api/v1/unknown"),
+    env,
+  );
+  expect(unknown.status).toBe(401);
+  expect(unknown.headers.get("content-type")).toMatch(/application\/json/u);
+  expect(unknown.headers.get("www-authenticate")).toContain("Bearer");
+  expect(assetRequests).toEqual([]);
+});
+
 test("platform does not broaden reserved prefixes to near-prefix paths", async () => {
   const { env, assetRequests } = platformEnv();
   for (const path of [
     "/apix",
+    "/api/v1x",
+    "/api/v10",
     "/__takosumix",
     "/hooksx",
     "/metricsx",
@@ -177,6 +223,8 @@ test("platform does not broaden reserved prefixes to near-prefix paths", async (
   }
   expect(assetRequests).toEqual([
     "/apix",
+    "/api/v1x",
+    "/api/v10",
     "/__takosumix",
     "/hooksx",
     "/metricsx",
