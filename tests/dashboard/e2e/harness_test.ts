@@ -214,6 +214,14 @@ test("public-live binds every official-origin response to the exact Version", ()
     ),
   ).toBe(true);
   expect(
+    shouldRecordResponseFailure(
+      "public-live",
+      origin,
+      `${origin}/api/v1/dashboard/bootstrap`,
+      401,
+    ),
+  ).toBe(false);
+  expect(
     workerVersionHeaderFailure({
       mode: "public-live",
       origin,

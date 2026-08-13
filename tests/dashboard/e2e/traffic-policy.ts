@@ -140,6 +140,16 @@ export function shouldRecordResponseFailure(
 ): boolean {
   if (mode === "public-live" && status >= 300) {
     const url = parseHttpUrl(urlValue);
+    // The signed-out SPA intentionally probes this protected endpoint and
+    // must receive 401 before it falls back to the public session mirror.
+    if (
+      status === 401 &&
+      url !== undefined &&
+      isSameOrigin(url, origin) &&
+      url.pathname === "/api/v1/dashboard/bootstrap"
+    ) {
+      return false;
+    }
     return url !== undefined && isSameOrigin(url, origin);
   }
   if (status < 400) return false;
