@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { resolveExternalStorageState } from "../../../scripts/dashboard-browser-e2e/live-inputs.ts";
 import {
+  isExpectedPublicBootstrapDenial,
+  isPublicLiveTelemetryRequest,
   requiresLiveWorkerVersionHeader,
   shouldRecordControlPlaneMutation,
   shouldRecordRequestFailure,
@@ -155,6 +157,17 @@ test("live Version evidence rejects missing and substituted response headers", (
     ),
   ).toBe(true);
   expect(
+    requiresLiveWorkerVersionHeader(
+      "public-live",
+      origin,
+      `${origin}/cdn-cgi/rum`,
+      "fetch",
+    ),
+  ).toBe(false);
+  expect(
+    isPublicLiveTelemetryRequest(origin, `${origin}/cdn-cgi/rum?`),
+  ).toBe(true);
+  expect(
     workerVersionHeaderFailure({
       mode: "live",
       origin,
@@ -184,6 +197,135 @@ test("live Version evidence rejects missing and substituted response headers", (
       observedWorkerVersionId: null,
     }),
   ).toBeUndefined();
+});
+
+test("public-live binds every official-origin response to the exact Version", () => {
+  const origin = "https://app.takosumi.com";
+  const expected = "00000000-0000-4000-8000-000000000001";
+  expect(
+    requiresLiveWorkerVersionHeader(
+      "public-live",
+      origin,
+      `${origin}/assets/app.js`,
+      "script",
+    ),
+  ).toBe(true);
+  expect(
+    shouldRecordResponseFailure(
+      "public-live",
+      origin,
+      `${origin}/missing.css`,
+      404,
+    ),
+  ).toBe(true);
+  expect(
+    shouldRecordResponseFailure(
+      "public-live",
+      origin,
+      `${origin}/sign-in`,
+      302,
+    ),
+  ).toBe(true);
+  expect(
+    shouldRecordResponseFailure(
+      "public-live",
+      origin,
+      `${origin}/api/v1/dashboard/bootstrap`,
+      401,
+    ),
+  ).toBe(true);
+  expect(
+    isExpectedPublicBootstrapDenial({
+      origin,
+      urlValue: `${origin}/api/v1/dashboard/bootstrap?includeWorkspaces=false`,
+      status: 401,
+      contentType: "application/json; charset=utf-8",
+    }),
+  ).toBe(true);
+  expect(
+    isExpectedPublicBootstrapDenial({
+      origin,
+      urlValue: `${origin}/api/v1/dashboard/bootstrap?includeWorkspaces=true&workspaceLimit=50`,
+      status: 401,
+      contentType: "application/json",
+    }),
+  ).toBe(true);
+  expect(
+    isExpectedPublicBootstrapDenial({
+      origin,
+      urlValue: `${origin}/api/v1/dashboard/bootstrap?includeWorkspaces=true&workspaceLimit=51`,
+      status: 401,
+      contentType: "application/json",
+    }),
+  ).toBe(false);
+  expect(
+    isExpectedPublicBootstrapDenial({
+      origin,
+      urlValue: `${origin}/api/v1/dashboard/bootstrap?includeWorkspaces=false`,
+      status: 401,
+      contentType: "text/html",
+    }),
+  ).toBe(false);
+  expect(
+    shouldRecordControlPlaneMutation(
+      "public-live",
+      origin,
+      `${origin}/v1/auth/upstream/callback?code=one&state=two`,
+      "GET",
+    ),
+  ).toBe(true);
+  expect(
+    shouldRecordControlPlaneMutation(
+      "public-live",
+      origin,
+      `${origin}/api/v1/connections/oauth/helper/callback?code=one&state=two`,
+      "GET",
+    ),
+  ).toBe(true);
+  expect(
+    shouldRecordControlPlaneMutation(
+      "public-live",
+      origin,
+      `${origin}/api/v1/dashboard/bootstrap?includeWorkspaces=false`,
+      "GET",
+    ),
+  ).toBe(false);
+  expect(
+    shouldRecordControlPlaneMutation(
+      "public-live",
+      origin,
+      `${origin}/api/v1/dashboard/bootstrap?includeWorkspaces=true&workspaceLimit=50`,
+      "GET",
+    ),
+  ).toBe(false);
+  expect(
+    shouldRecordControlPlaneMutation(
+      "public-live",
+      origin,
+      `${origin}/api/v1/dashboard/bootstrap?includeWorkspaces=true&workspaceLimit=51`,
+      "GET",
+    ),
+  ).toBe(true);
+  expect(
+    workerVersionHeaderFailure({
+      mode: "public-live",
+      origin,
+      url: `${origin}/assets/app.js`,
+      resourceType: "script",
+      expectedWorkerVersionId: expected,
+      observedWorkerVersionId: expected,
+    }),
+  ).toBeUndefined();
+  expect(
+    workerVersionHeaderFailure({
+      mode: "public-live",
+      origin,
+      url: `${origin}/assets/app.js`,
+      resourceType: "script",
+      expectedWorkerVersionId: expected,
+      observedWorkerVersionId: null,
+    }),
+  ).toMatch(/expected x-takosumi-version-id/u);
 });
 
 test("live OIDC and unauthenticated API evidence rejects the wrong response", () => {

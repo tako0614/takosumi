@@ -6,9 +6,9 @@ import {
 } from "./dashboard-browser-e2e/live-inputs.ts";
 
 const mode = process.argv[2] ?? "";
-if (mode !== "portable" && mode !== "live") {
+if (mode !== "portable" && mode !== "live" && mode !== "public-live") {
   throw new Error(
-    "usage: bun scripts/run-dashboard-browser-e2e.ts <portable|live> [-- --playwright-args]",
+    "usage: bun scripts/run-dashboard-browser-e2e.ts <portable|live|public-live> [-- --playwright-args]",
   );
 }
 
@@ -18,6 +18,43 @@ const config = "tests/dashboard/e2e/playwright.config.ts";
 const extraArgs = process.argv.slice(3);
 if (extraArgs[0] === "--") extraArgs.shift();
 
+/** Allow the read-only public profile to be run without shell env mutation. */
+if (mode === "public-live") {
+  const publicArgs: string[] = [];
+  for (let index = 0; index < extraArgs.length; index += 1) {
+    const arg = extraArgs[index]!;
+    const match = arg.match(
+      /^--(?:base-url|expected-worker-version-id|worker-version-id)=(.*)$/u,
+    );
+    if (match) {
+      const key = arg.startsWith("--base-url")
+        ? "TAKOSUMI_E2E_BASE_URL"
+        : "TAKOSUMI_E2E_EXPECTED_WORKER_VERSION_ID";
+      process.env[key] = match[1];
+      continue;
+    }
+    if (
+      arg === "--base-url" ||
+      arg === "--expected-worker-version-id" ||
+      arg === "--worker-version-id"
+    ) {
+      const value = extraArgs[index + 1];
+      if (!value || value.startsWith("--")) {
+        throw new Error(`${arg} requires a value`);
+      }
+      process.env[
+        arg === "--base-url"
+          ? "TAKOSUMI_E2E_BASE_URL"
+          : "TAKOSUMI_E2E_EXPECTED_WORKER_VERSION_ID"
+      ] = value;
+      index += 1;
+      continue;
+    }
+    publicArgs.push(arg);
+  }
+  extraArgs.splice(0, extraArgs.length, ...publicArgs);
+}
+
 if (mode === "portable") {
   const distIndex = resolve(repoRoot, "dashboard/dist/index.html");
   if (!existsSync(distIndex)) {
@@ -25,7 +62,7 @@ if (mode === "portable") {
       "portable dashboard browser E2E requires dashboard/dist/index.html; run `bun run check:dashboard` first",
     );
   }
-} else {
+} else if (mode === "live") {
   const required = [
     "TAKOSUMI_E2E_BASE_URL",
     "TAKOSUMI_E2E_STORAGE_STATE",
@@ -47,6 +84,36 @@ if (mode === "portable") {
     process.env.TAKOSUMI_E2E_STORAGE_STATE!.trim(),
   );
   process.env.TAKOSUMI_E2E_STORAGE_STATE = storageState;
+  process.env.TAKOSUMI_E2E_EXPECTED_WORKER_VERSION_ID =
+    validateExpectedWorkerVersionId(
+      process.env.TAKOSUMI_E2E_EXPECTED_WORKER_VERSION_ID!.trim(),
+    );
+} else {
+  const required = [
+    "TAKOSUMI_E2E_BASE_URL",
+    "TAKOSUMI_E2E_EXPECTED_WORKER_VERSION_ID",
+  ];
+  const missing = required.filter((name) => !process.env[name]?.trim());
+  if (missing.length > 0) {
+    throw new Error(
+      `public live dashboard browser E2E is fail-closed; missing: ${missing.join(", ")}`,
+    );
+  }
+  let baseUrl: URL;
+  try {
+    baseUrl = new URL(process.env.TAKOSUMI_E2E_BASE_URL!.trim());
+  } catch {
+    throw new Error("TAKOSUMI_E2E_BASE_URL must be an absolute http(s) URL");
+  }
+  if (baseUrl.protocol !== "http:" && baseUrl.protocol !== "https:") {
+    throw new Error("TAKOSUMI_E2E_BASE_URL must use http or https");
+  }
+  if (baseUrl.username || baseUrl.password) {
+    throw new Error(
+      "TAKOSUMI_E2E_BASE_URL must not contain credentials; public live is unauthenticated",
+    );
+  }
+  process.env.TAKOSUMI_E2E_BASE_URL = baseUrl.toString().replace(/\/$/u, "");
   process.env.TAKOSUMI_E2E_EXPECTED_WORKER_VERSION_ID =
     validateExpectedWorkerVersionId(
       process.env.TAKOSUMI_E2E_EXPECTED_WORKER_VERSION_ID!.trim(),

@@ -6,6 +6,26 @@ or require credentials. The fixture covers dashboard bootstrap, Workspace
 switching, `/new`, repository-owned launcher URLs, and ObjectBucket customer-key
 controls.
 
+The `public-live` profile is a separate unauthenticated, read-only release
+probe. It needs only the official dashboard base URL and the exact lowercase
+Worker Version UUID; it never reads storage state and does not accept Workspace,
+app, provider, or other fixture inputs. It probes OIDC discovery, JWKS, the
+unauthenticated dashboard bootstrap (`401`), direct/deep SPA documents, and the
+signed-out `/install?...` return-link semantics. It records a zero-mutation
+control-plane/provider fence and fails closed on redirects, non-success status,
+non-HTML/JSON content types on the explicitly probed documents and JSON routes,
+request failures, callback-like same-origin GETs,
+or any missing/substituted
+`x-takosumi-version-id` on an official-origin response. The one intentional
+non-2xx exceptions are the protected dashboard bootstrap's exact signed-out
+request shapes (`?includeWorkspaces=false` or
+`?includeWorkspaces=true&workspaceLimit=50`) with a JSON `401`; every observed
+response body must be `{ error: "invalid_token" }`.
+The browser route blocks any stateful same-origin request before it reaches the
+service. Cloudflare's exact `/cdn-cgi/rum` Browser Insights route is excluded
+from Worker Version evidence because it is edge telemetry rather than a Worker
+response.
+
 `bun run check` invokes this gate through `check:dashboard-browser` after the
 dashboard build. The fixture deliberately fails on missing build output,
 missing auth cookie, unknown API routes, and browser runtime errors; it is not a
@@ -18,6 +38,9 @@ rejects HTTP 5xx and request failures, and treats bootstrap, Workspace/app,
 Resource, and S3 customer-key route 4xx responses as failures. Optional live
 probes such as capability and form-availability discovery may return 4xx while
 the required surfaces remain healthy.
+
+Public-live treats every same-origin 4xx/5xx and every HTTP request failure as
+fatal; external-origin telemetry is outside its mutation fence.
 
 Live mode also requires the operator-supplied immutable Worker Version identity
 on every top-level same-origin document and required API/probe response. This
@@ -58,6 +81,18 @@ session for the supplied base URL. Do not commit it or pass credentials in the
 URL. Live mode fails closed when any listed input is missing or the state file
 does not exist. Set `TAKOSUMI_E2E_BROWSER_CHANNEL` only when the installed
 Playwright-compatible browser is not the default system Chrome.
+
+The public-live evidence run has no storage-state argument:
+
+```bash
+TAKOSUMI_E2E_BASE_URL=https://app.takosumi.com \
+TAKOSUMI_E2E_EXPECTED_WORKER_VERSION_ID="00000000-0000-4000-8000-000000000001" \
+bun run dashboard:e2e:public-live
+```
+
+The same two values may be supplied explicitly for operator tooling with
+`--base-url <http(s)-url>` and `--worker-version-id <lowercase-uuid>` (or
+`--expected-worker-version-id`) on the direct runner command.
 
 The live runner deliberately does not automate sign-in, mint a session, or
 fake an OAuth callback. The authenticated checks start from the supplied
