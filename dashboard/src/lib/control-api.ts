@@ -122,6 +122,51 @@ export class ControlApiError extends Error {
   }
 }
 
+export interface ControlApiErrorSummary {
+  readonly category: "http" | "timeout" | "transport" | "unknown";
+  readonly status: number;
+  readonly code?: string;
+}
+
+function summarizeControlError(error: unknown): ControlApiErrorSummary {
+  if (error instanceof ControlApiError) {
+    return {
+      category:
+        error.status === 0 || error.code === "request_timeout"
+          ? "timeout"
+          : "http",
+      status: error.status,
+      ...(error.code ? { code: error.code } : {}),
+    };
+  }
+  if (error instanceof Error) {
+    return { category: "transport", status: 0 };
+  }
+  return { category: "unknown", status: 0 };
+}
+
+/**
+ * The server may have committed a mutation even though its response was not
+ * observed. Callers must reconcile the exact operation rather than blindly
+ * issuing another mutation.
+ */
+export class ControlApiIndeterminateError extends ControlApiError {
+  readonly operation: "apply" | "capsule_create";
+  readonly isIndeterminate = true;
+  readonly causeSummary?: ControlApiErrorSummary;
+
+  constructor(
+    operation: "apply" | "capsule_create",
+    message: string,
+    cause?: unknown,
+  ) {
+    super(0, "request_indeterminate", message);
+    this.name = "ControlApiIndeterminateError";
+    this.operation = operation;
+    if (cause !== undefined) this.causeSummary = summarizeControlError(cause);
+  }
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
@@ -366,6 +411,8 @@ export type CapsuleStatus =
 export interface Capsule {
   readonly id: string;
   readonly workspaceId: string;
+  /** Owning Project, when exposed by the public Capsule projection. */
+  readonly projectId?: string;
   readonly name: string;
   readonly slug: string;
   readonly sourceId?: string;
@@ -1073,6 +1120,30 @@ export async function listCapsules(
   );
 }
 
+/**
+ * Strict Capsule inventory used only around a create mutation. Unlike the
+ * general dashboard list helper, this cannot turn a missing/malformed array
+ * into `[]`: a complete before/after inventory is required for safe
+ * acknowledgement recovery.
+ */
+async function listCapsulesForCreateRecovery(
+  workspaceId: string,
+): Promise<readonly Capsule[]> {
+  return await fetchAllPages<Capsule>(
+    `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/capsules?includeDestroyed=false`,
+    (body) => {
+      if (!Array.isArray(body.capsules)) {
+        throw new ControlApiError(
+          502,
+          "invalid_capsule_list_response",
+          "Capsule list returned an invalid response.",
+        );
+      }
+      return body.capsules as readonly Capsule[];
+    },
+  );
+}
+
 export async function listWorkspaceCurrentStateVersions(
   workspaceId: string,
   options: { readonly includeDestroyed?: boolean } = {},
@@ -1095,8 +1166,102 @@ export async function getCapsule(id: string): Promise<Capsule> {
   return body.capsule;
 }
 
+const CAPSULE_STATUSES: ReadonlySet<CapsuleStatus> = new Set([
+  "pending",
+  "active",
+  "stale",
+  "error",
+  "disabled",
+  "destroyed",
+]);
+
+function isCapsuleResponse(value: unknown): value is Capsule {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.id === "string" &&
+    value.id.length > 0 &&
+    typeof value.workspaceId === "string" &&
+    value.workspaceId.length > 0 &&
+    typeof value.name === "string" &&
+    value.name.length > 0 &&
+    typeof value.slug === "string" &&
+    value.slug.length > 0 &&
+    typeof value.sourceId === "string" &&
+    value.sourceId.length > 0 &&
+    typeof value.installConfigId === "string" &&
+    value.installConfigId.length > 0 &&
+    typeof value.environment === "string" &&
+    value.environment.length > 0 &&
+    typeof value.currentStateGeneration === "number" &&
+    Number.isFinite(value.currentStateGeneration) &&
+    CAPSULE_STATUSES.has(value.status as CapsuleStatus) &&
+    typeof value.createdAt === "string" &&
+    value.createdAt.length > 0 &&
+    typeof value.updatedAt === "string" &&
+    value.updatedAt.length > 0 &&
+    (value.projectId === undefined ||
+      (typeof value.projectId === "string" && value.projectId.length > 0))
+  );
+}
+
+function isActiveCapsuleIdentity(value: unknown): value is Capsule {
+  return (
+    isCapsuleResponse(value) &&
+    value.status === "active" &&
+    typeof value.name === "string" &&
+    typeof value.environment === "string" &&
+    typeof value.sourceId === "string"
+  );
+}
+
+function capsuleMatchesCreateInput(
+  capsule: Capsule,
+  input: {
+    readonly workspaceId: string;
+    readonly projectId?: string;
+    readonly name: string;
+    readonly environment: string;
+    readonly sourceId: string;
+  },
+): boolean {
+  return (
+    capsule.workspaceId === input.workspaceId &&
+    capsule.name === input.name &&
+    capsule.environment === input.environment &&
+    capsule.sourceId === input.sourceId &&
+    (input.projectId === undefined || capsule.projectId === input.projectId)
+  );
+}
+
+function isMutationOutcomeUnknown(error: unknown): boolean {
+  if (error instanceof ControlApiIndeterminateError) return true;
+  if (error instanceof ControlApiError) {
+    return error.status === 0 || error.status >= 500;
+  }
+  // `fetch` rejects with a transport error when no HTTP response was
+  // observed. A definite HTTP rejection is always represented by
+  // ControlApiError and is handled above.
+  return true;
+}
+
+function invalidCapsuleResponse(): ControlApiError {
+  return new ControlApiError(
+    502,
+    "invalid_capsule_response",
+    "Capsule create returned an invalid response.",
+  );
+}
+
+function capsuleCreateIndeterminate(
+  message: string,
+  cause?: unknown,
+): ControlApiIndeterminateError {
+  return new ControlApiIndeterminateError("capsule_create", message, cause);
+}
+
 export async function createCapsule(input: {
   readonly workspaceId: string;
+  readonly projectId?: string;
   readonly name: string;
   readonly environment: string;
   readonly sourceId: string;
@@ -1108,32 +1273,107 @@ export async function createCapsule(input: {
   readonly autoUpdate?: boolean;
   readonly managedPublicHostname?: ManagedPublicHostnameAllocation;
 }): Promise<Capsule> {
-  const body = await controlFetch<{
-    capsule: Capsule;
-  }>(`${BASE}/workspaces/${encodeURIComponent(input.workspaceId)}/capsules`, {
-    method: "POST",
-    body: {
-      name: input.name,
-      environment: input.environment,
-      sourceId: input.sourceId,
-      installConfigId: input.installConfigId,
-      ...(input.modulePath && input.modulePath !== "."
-        ? { modulePath: input.modulePath }
-        : {}),
-      ...(input.sourceBuild ? { sourceBuild: input.sourceBuild } : {}),
-      ...(input.vars && Object.keys(input.vars).length > 0
-        ? { vars: input.vars }
-        : {}),
-      ...(input.outputAllowlist && Object.keys(input.outputAllowlist).length > 0
-        ? { outputAllowlist: input.outputAllowlist }
-        : {}),
-      ...(input.autoUpdate === true ? { autoUpdate: true } : {}),
-      ...(input.managedPublicHostname
-        ? { managedPublicHostname: input.managedPublicHostname }
-        : {}),
-    },
-  });
-  return body.capsule;
+  // Read the active baseline before the one-shot create. If the response is
+  // lost, this is the only readback that can prove whether the exact Capsule
+  // appeared; proceeding without it would authorize an unrecoverable blind
+  // create.
+  let baseline: readonly Capsule[];
+  try {
+    baseline = await listCapsulesForCreateRecovery(input.workspaceId);
+  } catch (error) {
+    throw capsuleCreateIndeterminate(
+      "Capsule create cannot start because the active Capsule baseline was unavailable.",
+      error,
+    );
+  }
+  // Inventory every non-destroyed status, not just active rows. A pre-existing
+  // pending Capsule may become active while this request is in flight; treating
+  // it as a newly-created candidate would make the lost-response proof false.
+  if (!baseline.every(isCapsuleResponse)) {
+    throw capsuleCreateIndeterminate(
+      "Capsule create cannot start because the Capsule baseline was invalid.",
+    );
+  }
+  const baselineIds = new Set(baseline.map((capsule) => capsule.id));
+
+  try {
+    const body = await controlFetch<unknown>(
+      `${BASE}/workspaces/${encodeURIComponent(input.workspaceId)}/capsules`,
+      {
+        method: "POST",
+        body: {
+          name: input.name,
+          environment: input.environment,
+          ...(input.projectId !== undefined
+            ? { projectId: input.projectId }
+            : {}),
+          sourceId: input.sourceId,
+          installConfigId: input.installConfigId,
+          ...(input.modulePath && input.modulePath !== "."
+            ? { modulePath: input.modulePath }
+            : {}),
+          ...(input.sourceBuild ? { sourceBuild: input.sourceBuild } : {}),
+          ...(input.vars && Object.keys(input.vars).length > 0
+            ? { vars: input.vars }
+            : {}),
+          ...(input.outputAllowlist && Object.keys(input.outputAllowlist).length > 0
+            ? { outputAllowlist: input.outputAllowlist }
+            : {}),
+          ...(input.autoUpdate === true ? { autoUpdate: true } : {}),
+          ...(input.managedPublicHostname
+            ? { managedPublicHostname: input.managedPublicHostname }
+            : {}),
+        },
+      },
+    );
+    if (
+      !isRecord(body) ||
+      !isCapsuleResponse(body.capsule) ||
+      !capsuleMatchesCreateInput(body.capsule, input)
+    ) {
+      throw invalidCapsuleResponse();
+    }
+    return body.capsule;
+  } catch (error) {
+    // A definite HTTP rejection is authoritative: do not issue another POST
+    // or turn a user-visible validation/duplicate error into readback noise.
+    if (!isMutationOutcomeUnknown(error)) throw error;
+
+    let after: readonly Capsule[];
+    try {
+      after = await listCapsulesForCreateRecovery(input.workspaceId);
+    } catch (readbackError) {
+      throw capsuleCreateIndeterminate(
+        "Capsule create outcome is indeterminate because the active Capsule readback was unavailable.",
+        readbackError,
+      );
+    }
+
+    if (!after.every(isCapsuleResponse)) {
+      throw capsuleCreateIndeterminate(
+        "Capsule create outcome is indeterminate: the active Capsule readback was invalid.",
+        error,
+      );
+    }
+    const newlyAppearedActive = after.filter(
+      (capsule) =>
+        isActiveCapsuleIdentity(capsule) && !baselineIds.has(capsule.id),
+    );
+    if (newlyAppearedActive.length !== 1) {
+      throw capsuleCreateIndeterminate(
+        `Capsule create outcome is indeterminate: expected exactly one newly appeared active Capsule, observed ${newlyAppearedActive.length}.`,
+        error,
+      );
+    }
+    const [candidate] = newlyAppearedActive;
+    if (!candidate || !capsuleMatchesCreateInput(candidate, input)) {
+      throw capsuleCreateIndeterminate(
+        "Capsule create outcome is indeterminate: the newly appeared active Capsule did not match the exact request identity.",
+        error,
+      );
+    }
+    return candidate;
+  }
 }
 
 /** Toggles the Capsule's auto-update opt-in (PATCH /capsules/:id). */
@@ -1942,6 +2182,19 @@ export async function getRunCostInfo(id: string): Promise<RunCostInfo> {
   return body.cost;
 }
 
+function isApplyRetryableTransportError(error: unknown): boolean {
+  if (error instanceof ControlApiIndeterminateError) return false;
+  if (!(error instanceof ControlApiError)) return true;
+  return error.status === 0 || error.code === "request_timeout";
+}
+
+function isAbortError(error: unknown): boolean {
+  return (
+    (error instanceof DOMException && error.name === "AbortError") ||
+    (error instanceof Error && error.name === "AbortError")
+  );
+}
+
 /**
  * Applies a reviewed plan Run through the unified Run surface. `planRunId` is
  * the id of the `plan` Run shown in the Run detail view. The backend rebuilds
@@ -1953,32 +2206,63 @@ export async function createApplyRun(
     readonly timeoutMs?: number;
   } = {},
 ): Promise<{ readonly run: Run }> {
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  const controller =
-    input.timeoutMs && input.timeoutMs > 0 ? new AbortController() : undefined;
-  if (controller && input.timeoutMs) {
-    timeout = setTimeout(() => controller.abort(), input.timeoutMs);
-  }
+  const attempt = async (): Promise<{ readonly run: Run }> => {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const controller =
+      input.timeoutMs && input.timeoutMs > 0
+        ? new AbortController()
+        : undefined;
+    if (controller && input.timeoutMs) {
+      timeout = setTimeout(() => controller.abort(), input.timeoutMs);
+    }
+    try {
+      const body = await controlFetch<unknown>(
+        `${BASE}/runs/${encodeURIComponent(planRunId)}/apply`,
+        {
+          method: "POST",
+          signal: controller?.signal,
+          body: {},
+        },
+      );
+      if (!isRecord(body) || !isRecord(body.run) || typeof body.run.id !== "string") {
+        throw new ControlApiError(
+          502,
+          "invalid_apply_response",
+          "Apply returned an invalid response.",
+        );
+      }
+      return { run: body.run as unknown as Run };
+    } catch (error) {
+      if (controller?.signal.aborted && isAbortError(error)) {
+        throw new ControlApiError(
+          0,
+          "request_timeout",
+          `apply request timed out after ${input.timeoutMs}ms`,
+        );
+      }
+      throw error;
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
+  };
+
   try {
-    return await controlFetch<{ run: Run }>(
-      `${BASE}/runs/${encodeURIComponent(planRunId)}/apply`,
-      {
-        method: "POST",
-        signal: controller?.signal,
-        body: {},
-      },
-    );
-  } catch (error) {
-    if (controller?.signal.aborted) {
-      throw new ControlApiError(
-        0,
-        "request_timeout",
-        `apply request timed out after ${input.timeoutMs}ms`,
+    return await attempt();
+  } catch (firstError) {
+    // Only a missing HTTP response or our explicit timeout is safe to retry.
+    // HTTP 4xx/5xx and malformed success envelopes are already typed and are
+    // not replayed here.
+    if (!isApplyRetryableTransportError(firstError)) throw firstError;
+    try {
+      return await attempt();
+    } catch (secondError) {
+      if (!isApplyRetryableTransportError(secondError)) throw secondError;
+      throw new ControlApiIndeterminateError(
+        "apply",
+        "Apply request outcome is indeterminate after the bounded retry; reconcile the exact PlanRun before trying again.",
+        secondError,
       );
     }
-    throw error;
-  } finally {
-    if (timeout) clearTimeout(timeout);
   }
 }
 
