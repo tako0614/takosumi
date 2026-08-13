@@ -827,7 +827,7 @@ test("apply rejects a rawOutputRef outside the canonical subject and Run path", 
   assert.equal(containerCalled, false);
 });
 
-test("apply with stateScope adopts same-run completed state without reapplying", async () => {
+test("apply does not adopt completed state without matching durable mutation authority", async () => {
   const artifacts = new FakeR2Bucket();
   const state = new FakeR2Bucket();
   const crypto = StateArtifactCrypto.fromEnv({
@@ -888,38 +888,56 @@ test("apply with stateScope adopts same-run completed state without reapplying",
       );
     },
   });
+  const requestBody = JSON.stringify({
+    kind: "takosumi.opentofu-run@v1",
+    action: "apply",
+    runId: "plan_1",
+    request: {
+      applyRun: { id: "plan_1" },
+      stateScope: targetScope,
+      rawOutputRef: RAW_OUTPUT_REF,
+      planArtifact: {
+        kind: "object-storage",
+        ref: "r2://takos-artifacts/opentofu-plan-runs/plan_1/tfplan",
+        digest: PLAN_DIGEST,
+      },
+    },
+  });
 
   const response = await runner.fetch(
     new Request("https://runner/runs/plan_1", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        kind: "takosumi.opentofu-run@v1",
-        action: "apply",
-        runId: "plan_1",
-        request: {
-          applyRun: { id: "plan_1" },
-          stateScope: targetScope,
-          rawOutputRef: RAW_OUTPUT_REF,
-          planArtifact: {
-            kind: "object-storage",
-            ref: "r2://takos-artifacts/opentofu-plan-runs/plan_1/tfplan",
-            digest: PLAN_DIGEST,
-          },
-        },
-      }),
+      body: requestBody,
     }),
   );
 
-  assert.equal(response.status, 200);
+  assert.equal(response.status, 409);
   assert.equal(containerCalled, false);
   const payload = (await response.json()) as Record<string, unknown>;
-  assert.deepEqual(payload.outputs, outputsEnvelope);
-  assert.equal(payload.rawOutputRef, RAW_OUTPUT_REF);
-  const stateField = payload.state as Record<string, unknown>;
-  assert.equal(stateField.generation, 1);
-  assert.equal(stateField.stateRef, targetStateKey);
-  assert.equal(stateField.digest, sealedState.contentDigest);
+  assert.equal(payload.errorCode, "runner_mutation_indeterminate");
+  assert.equal(payload.retryable, false);
+
+  const repeated = await runner.fetch(
+    new Request("https://runner/runs/plan_1", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: requestBody,
+    }),
+  );
+  assert.equal(repeated.status, 409);
+  assert.equal(containerCalled, false);
+
+  await state.delete(targetStateKey);
+  const afterTargetRemoval = await runner.fetch(
+    new Request("https://runner/runs/plan_1", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: requestBody,
+    }),
+  );
+  assert.equal(afterTargetRemoval.status, 409);
+  assert.equal(containerCalled, false);
 });
 
 test("apply redelivery adopts the exact ApplyRun artifacts after R2 responses are lost", async () => {
@@ -1210,7 +1228,7 @@ test("failed provider apply with no readable state returns an unavailable result
   assert.equal(artifacts.body(rawOutputRef), undefined);
 });
 
-test("destroy with stateScope adopts same-run completed state without destroying twice", async () => {
+test("destroy does not adopt completed state without matching durable mutation authority", async () => {
   const artifacts = new FakeR2Bucket();
   const state = new FakeR2Bucket();
   const crypto = StateArtifactCrypto.fromEnv({
@@ -1281,20 +1299,14 @@ test("destroy with stateScope adopts same-run completed state without destroying
     }),
   );
 
-  assert.equal(response.status, 200);
+  assert.equal(response.status, 409);
   assert.equal(containerCalled, false);
   const payload = (await response.json()) as Record<string, unknown>;
-  assert.equal(payload.status, "succeeded");
-  assert.equal(payload.exitCode, 0);
-  assert.equal(payload.outputs, undefined);
-  assert.equal(payload.rawOutputRef, undefined);
-  const stateField = payload.state as Record<string, unknown>;
-  assert.equal(stateField.generation, 1);
-  assert.equal(stateField.stateRef, targetStateKey);
-  assert.equal(stateField.digest, sealedState.contentDigest);
+  assert.equal(payload.errorCode, "runner_mutation_indeterminate");
+  assert.equal(payload.retryable, false);
 });
 
-test("same-run replay rejects a completed state written for the opposite action before provider I/O", async () => {
+test("preseeded opposite-action state without dispatch authority is blocked before provider I/O", async () => {
   const artifacts = new FakeR2Bucket();
   const state = new FakeR2Bucket();
   const crypto = StateArtifactCrypto.fromEnv({
@@ -1352,12 +1364,12 @@ test("same-run replay rejects a completed state written for the opposite action 
     }),
   );
 
-  assert.equal(response.status, 500);
+  assert.equal(response.status, 409);
   assert.equal(containerCalled, false);
   assert.equal(state.body(CURRENT_KEY), undefined);
 });
 
-test("same-run apply replay rejects raw output written for the opposite action before provider I/O", async () => {
+test("preseeded opposite-action raw output without dispatch authority is blocked before provider I/O", async () => {
   const artifacts = new FakeR2Bucket();
   const state = new FakeR2Bucket();
   const crypto = StateArtifactCrypto.fromEnv({
@@ -1430,7 +1442,7 @@ test("same-run apply replay rejects raw output written for the opposite action b
     }),
   );
 
-  assert.equal(response.status, 500);
+  assert.equal(response.status, 409);
   assert.equal(containerCalled, false);
   assert.equal(state.body(CURRENT_KEY), undefined);
 });
@@ -1512,7 +1524,7 @@ test("destroy succeeds when the best-effort current-state cache write fails", as
   assert.equal(state.listCalls.length, 0);
 });
 
-test("apply with stateScope does not adopt another run's target generation", async () => {
+test("apply does not adopt another run's preseeded target without dispatch authority", async () => {
   const calls: string[] = [];
   const artifacts = new FakeR2Bucket();
   const state = new FakeR2Bucket();
@@ -1583,7 +1595,7 @@ test("apply with stateScope does not adopt another run's target generation", asy
     }),
   );
 
-  assert.equal(response.status, 500);
+  assert.equal(response.status, 409);
   assert.deepEqual(calls, []);
 });
 
@@ -2015,7 +2027,7 @@ test("exact prior restore performs zero R2 list calls with a large state history
   assert.equal(state.listCalls.length, 0);
 });
 
-test("an existing target owned by another ApplyRun is never overwritten", async () => {
+test("a preseeded target owned by another ApplyRun is never overwritten", async () => {
   const artifacts = new FakeR2Bucket();
   const state = new FakeR2Bucket();
   const crypto = StateArtifactCrypto.fromEnv({
@@ -2081,7 +2093,7 @@ test("an existing target owned by another ApplyRun is never overwritten", async 
     }),
   );
 
-  assert.equal(response.status, 500);
+  assert.equal(response.status, 409);
   assert.equal(providerPosts, 0);
   assert.deepEqual(state.body(targetKey), stale.ciphertext);
   assert.equal(state.listCalls.length, 0);

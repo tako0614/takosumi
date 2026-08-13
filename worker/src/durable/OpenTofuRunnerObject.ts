@@ -284,11 +284,29 @@ interface RunnerMutationDispatchRecord {
   readonly action: RunnerMutationAction;
   /** SHA-256 over immutable inputs and stable credential authority claims. */
   readonly semanticDigest: string;
-  /** `preparing` is provably before provider dispatch. */
-  readonly phase: "preparing" | "dispatched" | "indeterminate";
+  /**
+   * `preparing` is provably before provider dispatch; `orphaned` means a
+   * target existed before this request had durable dispatch authority.
+   */
+  readonly phase:
+    | "preparing"
+    | "dispatched"
+    | "indeterminate"
+    | "orphaned";
   /** Once dispatched, this durable claim permanently forbids redispatch. */
   readonly redispatchBlocked: true;
 }
+
+type RunnerMutationAuthorityClaim =
+  | {
+      readonly kind: "preparing";
+      readonly record: RunnerMutationDispatchRecord;
+    }
+  | {
+      readonly kind: "replay";
+      readonly record: RunnerMutationDispatchRecord;
+    }
+  | { readonly kind: "blocked" };
 
 export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<CloudflareWorkerEnv> {
   defaultPort = 8080;
@@ -408,11 +426,8 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       console.error("OpenTofu runner artifact relay failed", {
         method: request.method,
         path: url.pathname,
-        errorName: error instanceof Error ? error.name : typeof error,
-        errorMessage: error instanceof Error ? error.message : String(error),
-        ...(error instanceof Error && error.stack
-          ? { stack: error.stack }
-          : {}),
+        reason: safeRunnerFailureReason(error),
+        errorName: safeRunnerErrorName(error),
       });
       if (error instanceof RunnerArtifactSizeLimitError) {
         return Response.json(
@@ -509,8 +524,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         return;
       } catch (error) {
         console.error("OpenTofu runner container destroy failed", {
-          errorName: error instanceof Error ? error.name : typeof error,
-          errorMessage: error instanceof Error ? error.message : String(error),
+          errorName: safeRunnerErrorName(error),
         });
       }
     }
@@ -521,8 +535,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       console.log("OpenTofu runner container stop requested");
     } catch (error) {
       console.error("OpenTofu runner container stop failed", {
-        errorName: error instanceof Error ? error.name : typeof error,
-        errorMessage: error instanceof Error ? error.message : String(error),
+        errorName: safeRunnerErrorName(error),
       });
     }
   }
@@ -588,21 +601,31 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     runId: string,
     action: RunnerMutationAction,
     requestPayload: unknown,
-  ): Promise<
-    | { readonly claimed: true; readonly record: RunnerMutationDispatchRecord }
-    | { readonly claimed: false }
-  > {
-    const semanticDigest = await runnerMutationSemanticDigest(
-      runId,
-      action,
-      requestPayload,
-      this.env,
-    );
+  ): Promise<RunnerMutationAuthorityClaim> {
+    let semanticDigest: string;
+    try {
+      semanticDigest = await runnerMutationSemanticDigest(
+        runId,
+        action,
+        requestPayload,
+        this.env,
+      );
+    } catch (error) {
+      // Credential expiry/signature/context failures and malformed semantic
+      // inputs are request rejection, not infrastructure retry authority. Do
+      // not let their potentially secret-bearing detail reach the outer log.
+      console.error("OpenTofu runner mutation authority rejected", {
+        action,
+        errorName: safeRunnerErrorName(error),
+        redispatchBlocked: true,
+      });
+      return { kind: "blocked" };
+    }
     // A Durable Object has one live isolate for this ID, so acquiring this
     // in-isolate owner before the first storage await closes concurrent claim
     // races. Durable storage below, not this Set, is the restart authority.
     if (this.#activeMutationPreparations.size > 0) {
-      return { claimed: false };
+      return { kind: "blocked" };
     }
     this.#activeMutationPreparations.add(semanticDigest);
     try {
@@ -613,17 +636,24 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         const existingRecord = parseRunnerMutationDispatchRecord(existing);
         if (
           !existingRecord ||
-          existingRecord.phase !== "preparing" ||
           existingRecord.action !== action ||
           existingRecord.semanticDigest !== semanticDigest
         ) {
           this.#activeMutationPreparations.delete(semanticDigest);
-          return { claimed: false };
+          return { kind: "blocked" };
+        }
+        if (existingRecord.phase === "orphaned") {
+          this.#activeMutationPreparations.delete(semanticDigest);
+          return { kind: "blocked" };
+        }
+        if (existingRecord.phase !== "preparing") {
+          this.#activeMutationPreparations.delete(semanticDigest);
+          return { kind: "replay", record: existingRecord };
         }
         // A persisted `preparing` phase proves no provider dispatch authority
         // was granted. Resume it only after isolate recreation (the in-memory
         // owner is absent); the durable phase carries restart safety.
-        return { claimed: true, record: existingRecord };
+        return { kind: "preparing", record: existingRecord };
       }
 
       const record: RunnerMutationDispatchRecord = {
@@ -634,11 +664,30 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         redispatchBlocked: true,
       };
       await this.#writeMutationDispatchRecord(record);
-      return { claimed: true, record };
+      return { kind: "preparing", record };
     } catch (error) {
       this.#activeMutationPreparations.delete(semanticDigest);
       throw error;
     }
+  }
+
+  async #blockPreparedMutationWithExistingTarget(
+    preparation: RunnerMutationDispatchRecord,
+  ): Promise<Response> {
+    try {
+      // The target predates any recorded provider dispatch for these
+      // semantics. Persist a distinct terminal phase so neither target removal
+      // nor a later exact replay can turn it into provider/adoption authority.
+      await this.#writeMutationDispatchRecord({
+        ...preparation,
+        phase: "orphaned",
+      });
+    } finally {
+      this.#activeMutationPreparations.delete(
+        preparation.semanticDigest,
+      );
+    }
+    return runnerMutationIndeterminateResponse(preparation.action);
   }
 
   async #markMutationDispatched(
@@ -801,10 +850,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     const stateKeys = stateScope
       ? []
       : await stateArtifactKeys(envelope.request);
-    if (
-      (envelope.action === "apply" || envelope.action === "destroy") &&
-      stateScope
-    ) {
+    if (isRunnerMutationAction(envelope.action) && stateScope) {
       if (envelope.action === "apply" && !rawOutputRef) {
         throw new Error("apply with stateScope requires rawOutputRef");
       }
@@ -820,13 +866,6 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
           rawOutputRef,
         );
       }
-      const adopted = await this.#adoptCompletedStateMutationFromR2(
-        applyRunId,
-        stateScope,
-        envelope.action,
-        rawOutputRef,
-      );
-      if (adopted) return adopted;
     }
     const dispatchRequest = () =>
       new Request(request.url, {
@@ -844,12 +883,37 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         envelope.action,
         envelope.request,
       );
-      if (!claim.claimed) {
-        // Exact R2 adoption is checked above before this fence. Without that
-        // authoritative readback, a prior dispatch can only be indeterminate.
+      if (claim.kind === "blocked") {
         return runnerMutationIndeterminateResponse(envelope.action);
       }
+      if (claim.kind === "replay") {
+        // A completed state/output target is only adoptable after the current
+        // credential has been freshly verified and the exact stable semantic
+        // digest matches the durable dispatch authority.
+        const adopted =
+          stateScope && applyRunId
+            ? await this.#adoptCompletedStateMutationFromR2(
+                applyRunId,
+                stateScope,
+                envelope.action,
+                rawOutputRef,
+              )
+            : undefined;
+        return (
+          adopted ?? runnerMutationIndeterminateResponse(envelope.action)
+        );
+      }
       mutationPreparation = claim.record;
+      if (
+        stateScope &&
+        (await this.#r2State().head(stateScope.stateRef))
+      ) {
+        // A target without a matching dispatched authority may be a legacy or
+        // out-of-band mutation. It cannot authorize adoption or provider I/O.
+        return await this.#blockPreparedMutationWithExistingTarget(
+          mutationPreparation,
+        );
+      }
     }
     try {
       // M2: restore the snapshotted source tree into the container before any
@@ -2474,6 +2538,25 @@ function safeRunnerErrorName(error: unknown): string {
   return "NonError";
 }
 
+function safeRunnerFailureReason(error: unknown): string {
+  if (error instanceof RunnerArtifactSizeLimitError) {
+    return "artifact_size_limit";
+  }
+  if (error instanceof RunnerArtifactRelayInfrastructureError) {
+    return "artifact_durability_ambiguous";
+  }
+  if (error instanceof R2ConditionalPutConflictError) {
+    return "artifact_authority_conflict";
+  }
+  if (error instanceof DOMException && error.name === "AbortError") {
+    return "request_aborted";
+  }
+  if (isContainerNotRunningError(error)) {
+    return "container_unavailable";
+  }
+  return "relay_failure";
+}
+
 async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -3291,7 +3374,8 @@ function parseRunnerMutationDispatchRecord(
     !/^sha256:[0-9a-f]{64}$/u.test(semanticDigest) ||
     (phase !== "preparing" &&
       phase !== "dispatched" &&
-      phase !== "indeterminate") ||
+      phase !== "indeterminate" &&
+      phase !== "orphaned") ||
     value.redispatchBlocked !== true
   ) {
     return undefined;

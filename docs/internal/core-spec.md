@@ -90,12 +90,17 @@ bound while token bytes, issuance/expiry times, and JTI remain secret and do
 not change identity. Opaque credential material is bound by a one-way digest
 and is never stored. A matching durable `preparing` record may therefore resume
 with a freshly issued equivalent credential, but `dispatched`, `indeterminate`,
-or any semantic mismatch never grants another provider dispatch. A transport
-failure after dispatch returns the typed `runner_mutation_indeterminate`
-outcome. Redelivery may complete only by adopting the exact immutable
-state/output target already written for that Run; without that authoritative
-readback, it remains indeterminate. Plan, read-only work, and a provable
-pre-dispatch preparation failure may retry without granting mutation authority.
+or any semantic mismatch never grants another provider dispatch. Completed
+state/output readback and adoption also require a freshly verified credential
+and an exact semantic match against that pre-existing post-dispatch record; an
+R2 target cannot mint its own adoption authority. A transport failure after
+dispatch returns the typed `runner_mutation_indeterminate` outcome. Redelivery
+may complete only by adopting the exact immutable state/output target already
+written for that Run; without that authoritative readback, it remains
+indeterminate. Plan, read-only work, and a provable pre-dispatch preparation
+failure may retry without granting mutation authority. Mutation-authority,
+relay, and container-lifecycle failure logs use only finite classifications and
+never include raw messages, stacks, request bodies, or credential material.
 
 ## Provider-neutral execution
 
