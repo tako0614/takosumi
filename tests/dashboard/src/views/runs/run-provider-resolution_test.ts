@@ -302,6 +302,11 @@ describe("Run review ProviderConnection evidence", () => {
     expect(runViewSource).toContain("completedRunReadiness");
     expect(runViewSource).toContain('readiness === "activation_pending"');
     expect(runViewSource).toContain('readiness === "activation_failed"');
+    expect(runViewSource).toContain('readiness === "unavailable"');
+    expect(runViewSource).toContain("stateVersions.error || activity.error");
+    expect(runViewSource).not.toContain("activity.error ? []");
+    expect(runViewSource).not.toContain("return [];");
+    expect(runViewSource).toContain('t("run.summary.readinessUnavailable")');
     expect(runViewSource).toContain('text: t("run.summary.activationFailed")');
     expect(runViewSource).toContain(
       'if (readiness === "ready" || readiness === "activation_failed") return;',
@@ -315,5 +320,7 @@ describe("Run review ProviderConnection evidence", () => {
     expect(ja["run.summary.activationPending"]).toContain("公開処理");
     expect(en["run.summary.activationFailed"]).toContain("failed");
     expect(ja["run.summary.activationFailed"]).toContain("失敗");
+    expect(en["run.summary.readinessUnavailable"]).toContain("could not be checked");
+    expect(ja["run.summary.readinessUnavailable"]).toContain("確認できません");
   });
 });

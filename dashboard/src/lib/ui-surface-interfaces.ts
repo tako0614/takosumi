@@ -1,4 +1,8 @@
-import type { Interface, InterfaceBinding } from "takosumi-contract";
+import type {
+  CapsuleInterfaceBlueprint,
+  Interface,
+  InterfaceBinding,
+} from "takosumi-contract";
 import {
   hasCredentialQueryParams,
   isValidInterfaceName,
@@ -14,6 +18,24 @@ import {
 // the literals.
 export { UI_SURFACE_INTERFACE_TYPE, UI_SURFACE_INTERFACE_VERSION };
 export const UI_SURFACE_PERMISSION = UI_SURFACE_OPEN_PERMISSION;
+
+/**
+ * Whether a reviewed InstallConfig promises an installer-authorized launcher.
+ * Completion must wait for this projection instead of falling back to a
+ * workload link and claiming that the service is ready to open.
+ */
+export function installConfigRequiresUiSurface(
+  blueprints: readonly CapsuleInterfaceBlueprint[] | undefined,
+): boolean {
+  return (blueprints ?? []).some(
+    (blueprint) =>
+      blueprint.spec.type === UI_SURFACE_INTERFACE_TYPE &&
+      blueprint.spec.version === UI_SURFACE_INTERFACE_VERSION &&
+      (blueprint.bindings ?? []).some((binding) =>
+        binding.permissions.includes(UI_SURFACE_OPEN_PERMISSION),
+      ),
+  );
+}
 
 /**
  * Strict dashboard consumer view of a Capsule-owned launcher Interface.

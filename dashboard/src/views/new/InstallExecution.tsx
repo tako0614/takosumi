@@ -83,7 +83,7 @@ export default function InstallExecution(props: Props) {
       ];
       const [versions, activity] = await Promise.all([
         listStateVersions(capsuleId),
-        listActivity(workspaceId, 100).catch(() => []),
+        listActivity(workspaceId, 100),
       ]);
       return stateVersionReadinessAfterApply(
         versions.find((version) => version.createdByRunId === applyRunId),
@@ -97,6 +97,7 @@ export default function InstallExecution(props: Props) {
     if (!readinessKey()) return;
     if (readiness.error) {
       setError(t("installStore.readinessFailed"));
+      return;
     }
     const state = readiness.latest;
     if (state === "ready") {

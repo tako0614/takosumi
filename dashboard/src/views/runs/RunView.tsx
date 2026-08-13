@@ -776,11 +776,7 @@ function Inner() {
     appliedRunStateVersionKey,
     async (key) => {
       const [id] = key.split(":");
-      try {
-        return await listStateVersions(id);
-      } catch {
-        return [];
-      }
+      return await listStateVersions(id);
     },
   );
   const completedRunStateVersion = createMemo(() => {
@@ -798,14 +794,12 @@ function Inner() {
     if (stateVersions.loading || activity.loading) {
       return "settling";
     }
-    // A failed activity fetch must NOT strand readiness in "settling" forever
-    // (activity never retries), nor throw out of this memo — reading an errored
-    // resource throws. Fall back to computing readiness from the stateVersion
-    // alone. Lifecycle requirements are not inferred from OpenTofu Outputs;
-    // matching lifecycle activity is the only activation signal here.
+    if (stateVersions.error || activity.error) {
+      return "unavailable";
+    }
     return stateVersionReadinessAfterApply(
       completedRunStateVersion(),
-      activity.error ? [] : (activity() ?? []),
+      activity() ?? [],
       capsuleId() ?? undefined,
     );
   });
@@ -1380,6 +1374,13 @@ function Inner() {
               kind: "error",
               text: t("run.summary.activationFailed"),
               sub: t("app.surfaces.activationFailed"),
+            };
+          }
+          if (readiness === "unavailable") {
+            return {
+              kind: "error",
+              text: t("run.summary.readinessUnavailable"),
+              sub: t("run.summary.readinessUnavailableHint"),
             };
           }
         }

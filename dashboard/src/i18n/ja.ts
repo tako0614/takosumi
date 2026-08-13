@@ -88,6 +88,11 @@ export const ja = {
     "サービスの公開状態を確認できませんでした。技術的な詳細を確認してください。",
   "installStore.activationFailed":
     "サービスの公開処理に失敗しました。技術的な詳細を確認してください。",
+  "installStore.finalizing": "サービスを準備しています",
+  "installStore.finalizingHint":
+    "サービスを開くためのリンクが利用可能になるまで待っています。",
+  "installStore.launchNotReady":
+    "サービスは適用されましたが、起動リンクをまだ確認できません。再確認するか、サービスの詳細を開いてください。",
   "installStore.runFailed": "インストールを完了できませんでした",
   "installStore.runFailedHint":
     "技術的な詳細を確認して、もう一度お試しください。",
@@ -525,6 +530,9 @@ export const ja = {
   "run.summary.activationPending": "サービスの公開処理を仕上げています…",
   "run.summary.activationFailed":
     "インフラのデプロイ後のサービス公開に失敗しました。",
+  "run.summary.readinessUnavailable": "サービスの準備状況を確認できません。",
+  "run.summary.readinessUnavailableHint":
+    "準備状況を再確認します。確認に成功するまで適用完了とは表示しません。",
   "run.summary.applySucceeded": "デプロイが完了しました。",
   "run.summary.removing": "削除しています…",
   "run.summary.removed": "削除が完了しました。",

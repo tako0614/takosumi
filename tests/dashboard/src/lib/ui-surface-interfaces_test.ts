@@ -1,10 +1,45 @@
 import { describe, expect, test } from "bun:test";
 import { TAKOSUMI_API_VERSION } from "takosumi-contract";
 import {
+  installConfigRequiresUiSurface,
   isReadyUiOpenBinding,
   listAuthorizedUiSurfaces,
   parseUiSurfaceInterface,
 } from "../../../../dashboard/src/lib/ui-surface-interfaces.ts";
+
+test("identifies install configs whose launcher must be read back", () => {
+  const launcher = {
+    key: "launcher",
+    name: "app.launcher",
+    spec: {
+      type: "interface.ui.surface",
+      version: "1",
+      document: { launcher: true },
+      access: { visibility: "workspace" },
+    },
+    bindings: [
+      {
+        key: "launcher.installer",
+        subject: { source: "installing_principal" },
+        permissions: ["ui.open"],
+        delivery: { type: "none" },
+      },
+    ],
+  } as const;
+
+  expect(installConfigRequiresUiSurface([launcher])).toBe(true);
+  expect(
+    installConfigRequiresUiSurface([
+      { ...launcher, bindings: [{ ...launcher.bindings[0], permissions: [] }] },
+    ]),
+  ).toBe(false);
+  expect(
+    installConfigRequiresUiSurface([
+      { ...launcher, spec: { ...launcher.spec, type: "interface.mcp" } },
+    ]),
+  ).toBe(false);
+  expect(installConfigRequiresUiSurface(undefined)).toBe(false);
+});
 
 function uiInterface(
   overrides: Record<string, unknown> = {},

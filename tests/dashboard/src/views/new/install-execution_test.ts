@@ -22,3 +22,11 @@ test("waiting approval exposes technical run details before approval", () => {
   expect(waitingApproval).toContain('t("installStore.runDetails")');
   expect(waitingApproval).toContain('t("installStore.approve")');
 });
+
+test("post-apply readiness fails closed when activity cannot be read", () => {
+  expect(source).toContain("listActivity(workspaceId, 100)");
+  expect(source).not.toContain("listActivity(workspaceId, 100).catch(() => [])");
+  expect(source).toContain('setError(t("installStore.readinessFailed"))');
+  expect(source).toContain("if (readiness.error) {");
+  expect(source).toContain("return;");
+});
