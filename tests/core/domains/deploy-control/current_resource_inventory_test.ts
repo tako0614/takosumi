@@ -141,7 +141,12 @@ test("projects only surviving value-free resources in stable order", async () =>
       actions: ["no-op"],
     },
     { address: "data.example.read", type: "example_data", actions: ["read"] },
-    { address: "read_only", type: "example_read", actions: ["read"] },
+    {
+      address: "read_only",
+      type: "example_read",
+      providerSource: "registry.opentofu.org/example/provider",
+      actions: ["read"],
+    },
     {
       address: "z.update",
       type: "example_update",
@@ -175,6 +180,11 @@ test("projects only surviving value-free resources in stable order", async () =>
     { address: "c.create", type: "example_create" },
     { address: "d.replace", type: "example_replace" },
     { address: "e.import", type: "example_import" },
+    {
+      address: "read_only",
+      type: "example_read",
+      providerSource: "registry.opentofu.org/example/provider",
+    },
     {
       address: "z.update",
       type: "example_update",

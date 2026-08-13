@@ -240,8 +240,7 @@ function projectResourceChange(
   }
   const actions = change.actions;
   const pureDelete = actions.length === 1 && actions[0] === "delete";
-  const pureRead = actions.length === 1 && actions[0] === "read";
-  if (pureDelete || pureRead) return undefined;
+  if (pureDelete) return undefined;
   const replacement =
     actions.length === 2 &&
     ((actions[0] === "delete" && actions[1] === "create") ||
@@ -249,6 +248,7 @@ function projectResourceChange(
   const survivor =
     (actions.length === 1 &&
       (actions[0] === "no-op" ||
+        actions[0] === "read" ||
         actions[0] === "create" ||
         actions[0] === "update")) ||
     replacement;
