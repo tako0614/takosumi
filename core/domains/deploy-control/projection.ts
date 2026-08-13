@@ -23,6 +23,8 @@ import type {
 } from "takosumi-contract/install-configs";
 import {
   OpenTofuControllerError,
+  OpenTofuRunnerExecutionError,
+  OpenTofuRunnerInfrastructureError,
   requireNonEmptyString,
   structuredErrorReason,
 } from "./errors.ts";
@@ -380,6 +382,13 @@ export function errorDiagnostic(error: unknown): RunDiagnostic {
 }
 
 export function errorMessage(error: unknown): string {
+  if (
+    error instanceof OpenTofuRunnerExecutionError ||
+    error instanceof OpenTofuRunnerInfrastructureError
+  ) {
+    const reason = structuredErrorReason(error) ?? "runner_failure";
+    return `runner failure (${reason})`;
+  }
   return redactString(error instanceof Error ? error.message : String(error));
 }
 

@@ -11,6 +11,8 @@ export type RunnerMutationAction = "apply" | "destroy";
 export interface RunnerMutationIndeterminatePayload {
   readonly error: "OpenTofu runner mutation outcome is indeterminate";
   readonly errorCode: typeof RUNNER_MUTATION_INDETERMINATE_CODE;
+  readonly status: "failed";
+  readonly phase: RunnerMutationAction;
   readonly retryable: false;
   readonly outcome: "indeterminate";
   readonly evidence: {

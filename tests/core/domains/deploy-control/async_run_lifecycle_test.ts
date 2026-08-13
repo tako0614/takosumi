@@ -1229,7 +1229,7 @@ test("a typed indeterminate runner mutation terminally fails apply without retry
         if (applyCalls === 1) {
           return Promise.reject(
             new OpenTofuRunnerExecutionError(
-              "runner mutation outcome is indeterminate",
+              "runner mutation outcome is indeterminate arbitrary-marker-run-diagnostic Authorization: Bearer run-diagnostic-token cookie=run-diagnostic-session body={raw:true}",
               { reason: "runner_mutation_indeterminate" },
             ),
           );
@@ -1280,9 +1280,22 @@ test("a typed indeterminate runner mutation terminally fails apply without retry
   expect(failed.diagnostics?.[0]?.code).toEqual(
     "runner_mutation_indeterminate",
   );
-  expect(failed.diagnostics?.[0]?.message).toContain(
-    "runner mutation outcome is indeterminate",
-  );
+  expect(failed.diagnostics?.[0]).toEqual({
+    severity: "error",
+    code: "runner_mutation_indeterminate",
+    message: "runner failure (runner_mutation_indeterminate)",
+  });
+  const persistedFailure = JSON.stringify(failed);
+  for (const forbidden of [
+    "arbitrary-marker-run-diagnostic",
+    "Bearer",
+    "run-diagnostic-token",
+    "run-diagnostic-session",
+    "body",
+    "raw:true",
+  ]) {
+    expect(persistedFailure).not.toContain(forbidden);
+  }
   expect(
     failed.auditEvents.some(
       (event) => event.type === "apply.retry_scheduled",
@@ -1452,9 +1465,11 @@ test("an ambiguous runner substrate reset terminally fails destroy without repla
   const failed = (await store.getApplyRun(applyRun.id))!;
   expect(failed.status).toEqual("failed");
   expect(failed.operation).toEqual("destroy");
-  expect(failed.diagnostics?.[0]?.message).toContain(
-    "runner substrate reset during destroy",
-  );
+  expect(failed.diagnostics?.[0]).toEqual({
+    severity: "error",
+    code: "substrate_reset",
+    message: "runner failure (substrate_reset)",
+  });
   expect(
     failed.auditEvents.some(
       (event) => event.type === "destroy.retry_scheduled",

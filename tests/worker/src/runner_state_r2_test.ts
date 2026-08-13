@@ -309,6 +309,8 @@ test("oversized chunked state with a forged Content-Length fails with no partial
   assert.deepEqual(await response.json(), {
     error: "OpenTofu runner artifact exceeds configured byte limit",
     errorCode: "artifact_size_limit_exceeded",
+    status: "failed",
+    phase: "run_dispatch",
     artifact: "state",
     maxBytes: stateLimit,
     observedBytes: stateLimit + 1,
@@ -1011,6 +1013,8 @@ test("apply redelivery adopts the exact ApplyRun artifacts after R2 responses ar
     error:
       "OpenTofu runner artifact durability acknowledgement is ambiguous",
     errorCode: "runner_artifact_relay_ambiguous",
+    status: "failed",
+    phase: "run_dispatch",
     retryable: true,
     detail:
       "redeliver the same ApplyRun; its immutable target will be adopted if the write committed",
@@ -1035,6 +1039,8 @@ test("apply redelivery adopts the exact ApplyRun artifacts after R2 responses ar
 });
 
 test("failed provider apply encrypts partial state and same-run replay stays failed without provider re-execution", async () => {
+  const failureMarker =
+    "provider-failure-marker Authorization: Bearer provider-failure-token cookie=provider-failure-session body={raw:true}";
   const artifacts = new FakeR2Bucket();
   const state = new FakeR2Bucket();
   const crypto = StateArtifactCrypto.fromEnv({
@@ -1066,7 +1072,13 @@ test("failed provider apply encrypts partial state and same-run replay stays fai
             providerExecutionFailure: {
               kind: "provider_execution_failed",
             },
-            stderr: "provider rejected a later resource",
+            error: `provider rejected a later resource ${failureMarker}`,
+            detail: failureMarker,
+            stderr: failureMarker,
+            stdout: failureMarker,
+            path: `/work/${failureMarker}`,
+            resource: failureMarker,
+            runId: failureMarker,
           },
           { status: 500 },
         );
@@ -1112,6 +1124,17 @@ test("failed provider apply encrypts partial state and same-run replay stays fai
   });
   assert.equal(firstPayload.outputs, undefined);
   assert.equal(firstPayload.rawOutputRef, undefined);
+  const firstSerialized = JSON.stringify(firstPayload);
+  for (const forbidden of [
+    "provider-failure-marker",
+    "Bearer",
+    "provider-failure-token",
+    "provider-failure-session",
+    "body",
+    "/work/",
+  ]) {
+    assert.equal(firstSerialized.includes(forbidden), false, forbidden);
+  }
   const firstState = firstPayload.state as Record<string, unknown>;
   assert.equal(firstState.stateRef, targetStateRef);
   assert.equal(firstState.digest, await digestOf(NEW_STATE_BYTES));

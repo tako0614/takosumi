@@ -39,7 +39,7 @@ test("container runner redacts stderr before plan diagnostics are returned", asy
   expect(diagnostics).not.toContain("diag-aws-secret");
   expect(diagnostics).not.toContain("diag-db-pass");
   expect(diagnostics).not.toContain("diag-auth");
-  expect(diagnostics).toContain("[redacted]");
+  expect(diagnostics).toContain("runner_diagnostics_redacted");
 });
 
 test("container runner returns provider installation attestation from plan result", async () => {
@@ -399,7 +399,7 @@ test("container runner redacts stderr before apply diagnostics are returned", as
   const diagnostics = JSON.stringify(result.diagnostics);
   expect(diagnostics).not.toContain("apply-diag-password");
   expect(diagnostics).not.toContain("apply-diag-auth");
-  expect(diagnostics).toContain("[redacted]");
+  expect(diagnostics).toContain("runner_diagnostics_redacted");
 });
 
 test("container runner surfaces non-2xx apply stderr instead of raw JSON envelope", async () => {
@@ -441,11 +441,11 @@ test("container runner surfaces non-2xx apply stderr instead of raw JSON envelop
 
   expect(error).toBeInstanceOf(Error);
   const message = error instanceof Error ? error.message : String(error);
-  expect(message).toContain("cloudflare_r2_bucket.assets");
-  expect(message).toContain("Error creating bucket");
-  expect(message).not.toContain("providerInstallation");
+  expect(message).toBe("runner request failed (runner_rejected)");
+  expect(message).not.toContain("cloudflare_r2_bucket.assets");
+  expect(message).not.toContain("Error creating bucket");
+  expect(message).not.toContain("/tmp/takosumi-provider-cache");
   expect(message).not.toContain("apply-secret");
-  expect(message).toContain("[redacted]");
 });
 
 test("container runner returns a typed failed apply with persisted partial state", async () => {
@@ -494,7 +494,7 @@ test("container runner returns a typed failed apply with persisted partial state
   expect(JSON.stringify(result.diagnostics)).not.toContain(
     "partial-apply-secret",
   );
-  expect(JSON.stringify(result.diagnostics)).toContain("[redacted]");
+  expect(result.diagnostics).toEqual([]);
 });
 
 test("container runner distinguishes failed provider execution without readable state", async () => {
@@ -606,7 +606,9 @@ test("container runner maps mutation ambiguity to a non-retryable typed executio
     RUNNER_MUTATION_INDETERMINATE_CODE,
   );
   expect((error as Error).message).not.toContain("adapter-raw-secret");
-  expect((error as Error).message).toContain("[redacted]");
+  expect((error as Error).message).toBe(
+    `runner request failed (${RUNNER_MUTATION_INDETERMINATE_CODE})`,
+  );
 });
 
 test("container runner reads Capsule compatibility source files", async () => {
@@ -680,9 +682,7 @@ test("container runner times out stuck Capsule compatibility reads", async () =>
         fetchedAt: "2026-06-07T00:00:00.000Z",
       },
     }),
-  ).rejects.toThrow(
-    "OpenTofu runner compatibility_check run compat_timeout exceeded 1ms timeout",
-  );
+  ).rejects.toThrow("runner request timed out");
 });
 
 test("container runner dispatches custom_command service-data backups to the backup action", async () => {

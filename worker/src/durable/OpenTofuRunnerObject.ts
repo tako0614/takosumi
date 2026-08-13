@@ -37,6 +37,18 @@ const R2_PUT_RETRY_BASE_MS = 500;
 const R2_PUT_RETRY_MAX_MS = 10_000;
 const BOUNDED_STREAM_INITIAL_BYTES = 64 * 1024;
 const RUNNER_ARTIFACT_RELAY_FAILED_CODE = "runner_artifact_relay_failed";
+const RUNNER_REJECTED_CODE = "runner_rejected";
+const RUNNER_PROVIDER_FAILURE_CODES = new Set(["apply_failed"]);
+type RunnerFailurePhase =
+  | "plan"
+  | "apply"
+  | "destroy"
+  | "restore"
+  | "source_sync"
+  | "backup"
+  | "release"
+  | "stable_semver_tag"
+  | "source_snapshot_file";
 const RUNNER_R2_LOG_REASON = Object.freeze({
   putRetryable: "r2_put_retryable",
   currentStateCacheWriteFailed: "current_state_cache_write_failed",
@@ -447,6 +459,8 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
           {
             error: "OpenTofu runner artifact exceeds configured byte limit",
             errorCode: error.code,
+            status: "failed",
+            phase: runnerRelayOperation(request),
             artifact: error.artifact,
             maxBytes: error.maxBytes,
             observedBytes: error.observedBytes,
@@ -460,6 +474,8 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
             error:
               "OpenTofu runner artifact durability acknowledgement is ambiguous",
             errorCode: error.code,
+            status: "failed",
+            phase: runnerRelayOperation(request),
             retryable: true,
             detail:
               "redeliver the same ApplyRun; its immutable target will be adopted if the write committed",
@@ -471,6 +487,8 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         {
           error: "OpenTofu runner artifact relay failed",
           errorCode: RUNNER_ARTIFACT_RELAY_FAILED_CODE,
+          status: "failed",
+          phase: runnerRelayOperation(request),
           reason: safeRunnerFailureReason(error),
           detail: "runner artifact relay failed",
         },
@@ -1053,6 +1071,13 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       }
     }
     if (envelope.action !== "plan" || !runnerResponse.ok) {
+      if (!runnerResponse.ok) {
+        return await normalizeRunnerFailureResponse(
+          runnerResponse,
+          envelope.action,
+          this.#artifactLimits.runnerResponse,
+        );
+      }
       return runnerResponse;
     }
     return await this.#persistPlanArtifact(
@@ -1101,7 +1126,13 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         }),
       url,
     );
-    if (!runnerResponse.ok) return runnerResponse;
+    if (!runnerResponse.ok) {
+      return await normalizeRunnerFailureResponse(
+        runnerResponse,
+        envelope.action,
+        this.#artifactLimits.runnerResponse,
+      );
+    }
     const payload = await readJsonObject(
       runnerResponse,
       this.#artifactLimits.runnerResponse,
@@ -3766,6 +3797,8 @@ function runnerMutationIndeterminateResponse(
   const payload: RunnerMutationIndeterminatePayload = {
     error: "OpenTofu runner mutation outcome is indeterminate",
     errorCode: RUNNER_MUTATION_INDETERMINATE_CODE,
+    status: "failed",
+    phase: action,
     retryable: false,
     outcome: "indeterminate",
     evidence: {
@@ -3799,7 +3832,7 @@ function providerFailureErrorCode(
   payload: Record<string, unknown>,
 ): string | undefined {
   const value = stringField(payload, "errorCode");
-  return value && /^[A-Za-z][A-Za-z0-9._:-]{0,127}$/u.test(value)
+  return value && RUNNER_PROVIDER_FAILURE_CODES.has(value)
     ? value
     : undefined;
 }
@@ -3809,15 +3842,12 @@ function failedProviderExecutionPayload(
   statePersistence: "persisted" | "unavailable",
   state?: Record<string, unknown>,
 ): Record<string, unknown> {
-  const {
-    outputs: _outputs,
-    rawOutputRef: _rawOutputRef,
-    state: _state,
-    ...failurePayload
-  } = payload;
   return {
-    ...failurePayload,
     status: "failed",
+    phase: "apply",
+    ...(providerFailureErrorCode(payload)
+      ? { errorCode: providerFailureErrorCode(payload) }
+      : {}),
     providerExecutionFailure: {
       kind: "provider_execution_failed",
       statePersistence,
@@ -3836,6 +3866,76 @@ async function readJsonObject(
   const value = text.length > 0 ? (JSON.parse(text) as unknown) : {};
   if (isRecord(value)) return value;
   throw new Error("OpenTofu runner response must be a JSON object");
+}
+
+async function normalizeRunnerFailureResponse(
+  response: Response,
+  phase: string | undefined,
+  maxBytes: number,
+): Promise<Response> {
+  let payload: Record<string, unknown> = {};
+  try {
+    payload = await readJsonObject(response.clone(), maxBytes);
+  } catch {
+    // The failure envelope below is intentionally finite even when the
+    // provider returned malformed or non-JSON text.
+  }
+  const errorCode = finiteRunnerFailureCode(payload);
+  if (errorCode === RUNNER_MUTATION_INDETERMINATE_CODE) {
+    return runnerMutationIndeterminateResponse(
+      phase === "apply" || phase === "destroy" ? phase : "apply",
+    );
+  }
+  return jsonResponse(
+    {
+      status: "failed",
+      errorCode,
+      phase: runnerFailurePhase(phase),
+      ...(errorCode === "runner_artifact_relay_ambiguous"
+        ? { retryable: true }
+        : {}),
+    },
+    response.status,
+  );
+}
+
+function finiteRunnerFailureCode(
+  payload: Record<string, unknown>,
+):
+  | typeof RUNNER_REJECTED_CODE
+  | typeof RUNNER_MUTATION_INDETERMINATE_CODE
+  | "runner_artifact_relay_ambiguous"
+  | "runner_artifact_relay_failed"
+  | "artifact_size_limit_exceeded" {
+  const value = stringField(payload, "errorCode");
+  switch (value) {
+    case RUNNER_MUTATION_INDETERMINATE_CODE:
+    case "runner_artifact_relay_ambiguous":
+    case "runner_artifact_relay_failed":
+    case "artifact_size_limit_exceeded":
+      return value;
+    default:
+      return RUNNER_REJECTED_CODE;
+  }
+}
+
+function runnerFailurePhase(
+  phase: string | undefined,
+): RunnerFailurePhase {
+  switch (phase) {
+    case "plan":
+    case "apply":
+    case "destroy":
+    case "restore":
+    case "source_sync":
+    case "backup":
+    case "release":
+    case "stable_semver_tag":
+    case "source_snapshot_file":
+      return phase;
+    default:
+      return "plan";
+  }
 }
 
 async function readRunnerFailureDetail(

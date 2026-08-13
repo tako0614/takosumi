@@ -1255,6 +1255,46 @@ test("OpenTofu runner Durable Object does not echo or log relay failure details"
   ]);
 });
 
+test("OpenTofu runner Durable Object normalizes arbitrary non-2xx runner payloads", async () => {
+  const marker = "arbitrary-runner-response-marker-8H4";
+  const runner = runnerWithContainer(new FakeR2Bucket(), {
+    async containerFetch(request) {
+      if (request.method === "GET") return Response.json({ status: "ok" });
+      return Response.json(
+        {
+          errorCode: "provider-raw-code",
+          error: `provider path=/work/${marker}`,
+          detail: `Authorization: Bearer ${marker}`,
+          stderr: `cookie=${marker}`,
+          stdout: `body=${marker}`,
+          runId: marker,
+        },
+        { status: 502 },
+      );
+    },
+  });
+
+  const response = await runner.fetch(
+    new Request("https://runner/runs/plan_arbitrary_response", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        kind: "takosumi.opentofu-run@v1",
+        action: "plan",
+        runId: "plan_arbitrary_response",
+        request: {},
+      }),
+    }),
+  );
+
+  assert.equal(response.status, 502);
+  assert.deepEqual(await response.json(), {
+    status: "failed",
+    errorCode: "runner_rejected",
+    phase: "plan",
+  });
+});
+
 test("OpenTofu runner Durable Object restores reviewed R2 plan artifact before apply", async () => {
   const calls: string[] = [];
   const r2 = new FakeR2Bucket();
