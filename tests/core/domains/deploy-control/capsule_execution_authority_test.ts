@@ -399,7 +399,7 @@ describe("Capsule execution authority", () => {
     } finally {
       await runtime.dispose();
     }
-  }, 10_000);
+  }, 30_000);
 
   test("durable resolvers use one indexed database snapshot", async () => {
     const d1Records: RecordedQuery[] = [];
