@@ -47,6 +47,7 @@ export const ja = {
   "installStore.providerHint": "このサービスに必要な接続だけを選びます。",
   "installStore.chooseConnection": "接続を選択",
   "installStore.destination": "実行先",
+  "installStore.destinationSummary": "実行先: {destination}",
   "installStore.connect": "新しい接続を追加",
   "installStore.continue": "続ける",
   "installStore.setupTitle": "サービスを設定",
