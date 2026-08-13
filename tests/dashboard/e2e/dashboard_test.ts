@@ -1,21 +1,23 @@
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import {
+  expect,
+  request as apiRequest,
+  test,
+  type Locator,
+  type Page,
+} from "@playwright/test";
 import {
   PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS,
   PORTABLE_EXPECTATIONS,
   PORTABLE_SOURCE_OPTIONS_COMMIT,
   PORTABLE_SOURCE_OPTION_DOCUMENTS,
 } from "./fixture-data.ts";
-import {
-  dashboardLiveEvidenceReport,
-  monitorDashboardTraffic,
-} from "./traffic-monitor.ts";
+import { monitorDashboardTraffic } from "./traffic-monitor.ts";
 import {
   shouldRecordControlPlaneMutation,
   type DashboardE2EMode,
 } from "./traffic-policy.ts";
-import {
-  validateExpectedWorkerVersionId,
-} from "../../../scripts/dashboard-browser-e2e/live-inputs.ts";
+import { validateExpectedWorkerVersionId } from "../../../scripts/dashboard-browser-e2e/live-inputs.ts";
+import { assertExpectedResponseUrl } from "../../../scripts/dashboard-browser-e2e/version-contract.ts";
 
 type Expectations = {
   readonly workspaceName: string;
@@ -68,14 +70,40 @@ async function assertNoPageErrors(errors: readonly string[]): Promise<void> {
   expect(errors, "dashboard page raised a browser runtime error").toEqual([]);
 }
 
+const EMPTY_API_STORAGE_STATE = { cookies: [], origins: [] };
+
+function routePath(value: string): string {
+  const url = new URL(value);
+  return `${url.pathname}${url.search}`;
+}
+
 async function gotoDashboardDocument(
   page: Page,
   path: string,
+  expectedPagePath = path,
 ): Promise<void> {
+  const requestedUrl = new URL(path, page.url());
+  const expectedPageUrl = new URL(expectedPagePath, requestedUrl.origin);
   const response = await page.goto(path, { waitUntil: "domcontentloaded" });
   expect(response, `${path} must return a top-level document`).not.toBeNull();
-  expect(response?.status(), path).toBe(200);
-  expect(response?.headers()["content-type"], path).toMatch(/text\/html/u);
+  if (!response) return;
+  expect(
+    response.request().redirectedFrom(),
+    `${path} must not redirect`,
+  ).toBeNull();
+  assertExpectedResponseUrl({
+    route: path,
+    expectedUrl: requestedUrl.toString(),
+    observedUrl: response.url(),
+  });
+  expect(response.status(), path).toBe(200);
+  expect(response.headers()["content-type"], path).toMatch(/text\/html/u);
+  await expect
+    .poll(() => page.url(), `${path} must finish on the expected SPA route`)
+    .toBe(expectedPageUrl.toString());
+  expect(routePath(page.url()), path).toBe(
+    routePath(expectedPageUrl.toString()),
+  );
 }
 
 async function fetchLiveEndpoint(
@@ -83,22 +111,44 @@ async function fetchLiveEndpoint(
   traffic: ReturnType<typeof monitorDashboardTraffic>,
   path: string,
   expectedStatus: number,
-) {
-  const response = await page.context().request.get(
-    new URL(path, page.url()).toString(),
-    {
+): Promise<{
+  readonly body: unknown;
+  readonly headers: Readonly<Record<string, string>>;
+  readonly status: number;
+  readonly url: string;
+}> {
+  const pageUrl = new URL(page.url());
+  const requestedUrl = new URL(path, pageUrl);
+  expect(requestedUrl.origin, path).toBe(pageUrl.origin);
+  const context = await apiRequest.newContext({
+    baseURL: requestedUrl.origin,
+    storageState: EMPTY_API_STORAGE_STATE,
+    maxRedirects: 0,
+  });
+  try {
+    const response = await context.get(requestedUrl.toString(), {
       headers: {
         accept: "application/json",
-        // The live browser state is intentionally not used for this probe.
-        // This proves the public OIDC surface and the unauthenticated API gate
-        // without minting or faking a sign-in callback.
-        cookie: "",
       },
-    },
-  );
-  expect(response.status(), path).toBe(expectedStatus);
-  traffic.recordVersionedResponse(path, response.status(), response.headers());
-  return response;
+      maxRedirects: 0,
+    });
+    assertExpectedResponseUrl({
+      route: path,
+      expectedUrl: requestedUrl.toString(),
+      observedUrl: response.url(),
+    });
+    expect(response.status(), path).toBe(expectedStatus);
+    const headers = response.headers();
+    traffic.recordVersionedResponse(path, response.status(), headers);
+    return {
+      body: await response.json(),
+      headers,
+      status: response.status(),
+      url: response.url(),
+    };
+  } finally {
+    await context.dispose();
+  }
 }
 
 async function expectInsideViewport(
@@ -428,13 +478,6 @@ async function stubProviderDestinationFixture(
 }
 
 test.describe("Takosumi dashboard browser surface", () => {
-  test.afterAll(() => {
-    const report = dashboardLiveEvidenceReport();
-    if (report) {
-      console.log(`[dashboard-e2e-evidence] ${JSON.stringify(report)}`);
-    }
-  });
-
   test("authenticates through dashboard bootstrap and switches Workspace scope", async ({
     page,
   }) => {
@@ -513,7 +556,7 @@ test.describe("Takosumi dashboard browser surface", () => {
       "/.well-known/openid-configuration",
       200,
     );
-    const discoveryBody = (await discovery.json()) as {
+    const discoveryBody = discovery.body as {
       readonly issuer?: unknown;
       readonly jwks_uri?: unknown;
     };
@@ -522,7 +565,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     expect(discoveryBody.jwks_uri).toBe(`${origin}/oauth/jwks`);
 
     const jwks = await fetchLiveEndpoint(page, traffic, "/oauth/jwks", 200);
-    const jwksBody = (await jwks.json()) as { readonly keys?: unknown };
+    const jwksBody = jwks.body as { readonly keys?: unknown };
     expect(Array.isArray(jwksBody.keys)).toBe(true);
     expect((jwksBody.keys as readonly unknown[]).length).toBeGreaterThan(0);
 
@@ -532,7 +575,7 @@ test.describe("Takosumi dashboard browser surface", () => {
       "/api/v1/dashboard/bootstrap",
       401,
     );
-    expect(await unauthenticated.json()).toMatchObject({
+    expect(unauthenticated.body).toMatchObject({
       error: "invalid_token",
     });
 
@@ -544,8 +587,10 @@ test.describe("Takosumi dashboard browser surface", () => {
     const installPath =
       "/install?git=https%3A%2F%2Fgithub.com%2Fexample%2Fservice.git" +
       "&ref=0123456789abcdef0123456789abcdef01234567&path=deploy%2Fopentofu";
-    await gotoDashboardDocument(page, installPath);
-    await expect(page).toHaveURL(/\/new\?/u);
+    const installTargetPath =
+      "/new?git=https%3A%2F%2Fgithub.com%2Fexample%2Fservice.git" +
+      "&ref=0123456789abcdef0123456789abcdef01234567&path=deploy%2Fopentofu";
+    await gotoDashboardDocument(page, installPath, installTargetPath);
     await expect(page.getByLabel(/Git URL/u)).toHaveValue(
       "https://github.com/example/service.git",
     );

@@ -24,8 +24,9 @@ on every top-level same-origin document and required API/probe response. This
 includes the dashboard bootstrap and Workspace routes, OIDC discovery,
 `/oauth/jwks`, and the unauthenticated API-gate probe. Static assets and other
 subresources are not used as Version evidence. Missing or substituted
-`x-takosumi-version-id` headers fail the run; the report contains only the
-expected/observed UUID and route status.
+`x-takosumi-version-id` headers fail the run. The runner emits no
+process-global success report; the Playwright exit status and retained failure
+artifacts are the evidence.
 
 The live journey opens the existing launcher/Workspace shell, `/new`, direct
 SPA deep links, and `/install?git=...&ref=...&path=...` and checks that the

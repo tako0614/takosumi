@@ -131,6 +131,9 @@ test("platform reserves unknown livez descendants outside the SPA fallback", asy
 test("platform reserves unknown machine-prefix paths outside the SPA fallback", async () => {
   const { env, assetRequests } = platformEnv();
   for (const path of [
+    "/api",
+    "/api/",
+    "/api/unknown",
     "/__takosumi",
     "/__takosumi/unknown",
     "/hooks",
@@ -157,6 +160,7 @@ test("platform reserves unknown machine-prefix paths outside the SPA fallback", 
 test("platform does not broaden reserved prefixes to near-prefix paths", async () => {
   const { env, assetRequests } = platformEnv();
   for (const path of [
+    "/apix",
     "/__takosumix",
     "/hooksx",
     "/metricsx",
@@ -172,6 +176,7 @@ test("platform does not broaden reserved prefixes to near-prefix paths", async (
     expect(response.headers.get("content-type"), path).toMatch(/text\/html/u);
   }
   expect(assetRequests).toEqual([
+    "/apix",
     "/__takosumix",
     "/hooksx",
     "/metricsx",

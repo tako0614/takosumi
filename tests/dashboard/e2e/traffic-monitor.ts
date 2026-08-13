@@ -22,8 +22,6 @@ export interface DashboardVersionObservation {
   readonly observedWorkerVersionId: string | null;
 }
 
-const liveVersionObservations: DashboardVersionObservation[] = [];
-
 export interface DashboardTrafficMonitor {
   readonly failures: DashboardTrafficFailure[];
   readonly versionObservations: DashboardVersionObservation[];
@@ -68,11 +66,6 @@ export function monitorDashboardTraffic(
       status,
       observedWorkerVersionId,
     });
-    liveVersionObservations.push({
-      route,
-      status,
-      observedWorkerVersionId,
-    });
     assertExpectedWorkerVersionId({
       route: `${route} ${status}`,
       expectedWorkerVersionId,
@@ -108,7 +101,6 @@ export function monitorDashboardTraffic(
             response.headers()["x-takosumi-version-id"]?.trim() || null,
         } satisfies DashboardVersionObservation;
         versionObservations.push(observation);
-        liveVersionObservations.push(observation);
       }
       if (versionFailure) {
         failures.push({
@@ -152,20 +144,5 @@ export function monitorDashboardTraffic(
           .join("\n")}`,
       );
     },
-  };
-}
-
-/** Sanitized operator-facing report; never include storage, cookies, or URLs. */
-export function dashboardLiveEvidenceReport(): {
-  readonly kind: "takosumi.dashboard-browser-live-evidence@v1";
-  readonly expectedWorkerVersionId: string;
-  readonly routes: readonly DashboardVersionObservation[];
-} | undefined {
-  const expected = process.env.TAKOSUMI_E2E_EXPECTED_WORKER_VERSION_ID?.trim();
-  if (!expected) return undefined;
-  return {
-    kind: "takosumi.dashboard-browser-live-evidence@v1",
-    expectedWorkerVersionId: validateExpectedWorkerVersionId(expected),
-    routes: [...liveVersionObservations],
   };
 }

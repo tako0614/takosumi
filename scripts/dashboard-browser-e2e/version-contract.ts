@@ -15,6 +15,18 @@ export function assertExpectedRouteStatus(input: {
   }
 }
 
+export function assertExpectedResponseUrl(input: {
+  readonly route: string;
+  readonly expectedUrl: string;
+  readonly observedUrl: string;
+}): void {
+  if (input.observedUrl !== input.expectedUrl) {
+    throw new Error(
+      `${input.route}: expected response URL ${input.expectedUrl}, observed ${input.observedUrl}`,
+    );
+  }
+}
+
 export function assertExpectedWorkerVersionId(input: {
   readonly route: string;
   readonly expectedWorkerVersionId: string;

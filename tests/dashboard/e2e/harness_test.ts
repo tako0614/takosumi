@@ -12,6 +12,7 @@ import {
   workerVersionHeaderFailure,
 } from "./traffic-policy.ts";
 import {
+  assertExpectedResponseUrl,
   assertExpectedRouteStatus,
   assertExpectedWorkerVersionId,
 } from "../../../scripts/dashboard-browser-e2e/version-contract.ts";
@@ -186,6 +187,14 @@ test("live Version evidence rejects missing and substituted response headers", (
 });
 
 test("live OIDC and unauthenticated API evidence rejects the wrong response", () => {
+  expect(() =>
+    assertExpectedResponseUrl({
+      route: "/.well-known/openid-configuration",
+      expectedUrl:
+        "https://app-staging.takosumi.com/.well-known/openid-configuration",
+      observedUrl: "https://app-staging.takosumi.com/sign-in",
+    }),
+  ).toThrow(/expected response URL .*observed .*sign-in/u);
   expect(() =>
     assertExpectedRouteStatus({
       route: "/.well-known/openid-configuration",

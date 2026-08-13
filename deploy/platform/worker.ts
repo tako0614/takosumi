@@ -1878,6 +1878,7 @@ const PLATFORM_CORE_PROCESS_PATHS = new Set([
 ]);
 
 const PLATFORM_RESERVED_MACHINE_PREFIXES = [
+  "/api",
   "/__takosumi",
   "/hooks",
   "/metrics",
