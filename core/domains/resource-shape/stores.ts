@@ -128,6 +128,28 @@ export type ResourceApplyCommitResult =
   | { readonly status: "conflict"; readonly record: ResourceShapeRecord };
 
 /**
+ * Pre-dispatch serialization claim for a host-owned aggregate mutation. The
+ * Resource row is the visible claim, while the exact ResolutionLock and
+ * incarnation fence are read-only CAS preconditions in the same transaction.
+ */
+export interface ResourceAggregateClaimInput {
+  readonly record: ResourceShapeRecord;
+  readonly expectedResource: ResourceRecordVersion;
+  readonly expectedLock: ResolutionLockRecord;
+  readonly expectedIdentityFence: ResourceIdentityFenceRecord | null;
+}
+
+export type ResourceAggregateClaimResult =
+  | { readonly status: "claimed"; readonly record: ResourceShapeRecord }
+  | { readonly status: "not_found" }
+  | {
+      readonly status: "conflict";
+      readonly record?: ResourceShapeRecord;
+      readonly lock?: ResolutionLockRecord;
+      readonly identityFence?: ResourceIdentityFenceRecord;
+    };
+
+/**
  * Exact aggregate replacement used by host-owned lifecycle recovery after the
  * provider apply has already committed. Both the Resource and its immutable
  * resolution evidence are fenced and replaced together so Ready inventory
@@ -138,6 +160,14 @@ export interface ResourceAggregateReplaceInput {
   readonly lock: ResolutionLockRecord;
   readonly expectedResource: ResourceRecordVersion;
   readonly expectedLock: ResolutionLockRecord;
+  /**
+   * Advance the server-owned incarnation fence with the same CAS as the
+   * Resource/ResolutionLock replacement. Omit for same-generation recovery
+   * writes; Form transitions supply the exact fence observed at admission.
+   */
+  readonly identityFenceAdvance?: {
+    readonly expected: ResourceIdentityFenceRecord | null;
+  };
 }
 
 export type ResourceAggregateReplaceResult =
@@ -145,6 +175,7 @@ export type ResourceAggregateReplaceResult =
       readonly status: "replaced";
       readonly record: ResourceShapeRecord;
       readonly lock: ResolutionLockRecord;
+      readonly identityFence?: ResourceIdentityFenceRecord;
     }
   | { readonly status: "not_found" }
   | {
@@ -470,6 +501,13 @@ export interface ResourceShapeStores {
   commitApply(
     input: ResourceApplyCommitInput,
   ): Promise<ResourceApplyCommitResult>;
+  /**
+   * Atomically writes one Resource claim while fencing its exact current lock
+   * and identity fence. No host mutation may begin before this succeeds.
+   */
+  claimResourceAggregate(
+    input: ResourceAggregateClaimInput,
+  ): Promise<ResourceAggregateClaimResult>;
   /** Atomically replaces one exact Resource/ResolutionLock aggregate. */
   replaceResourceAggregate(
     input: ResourceAggregateReplaceInput,
@@ -1147,10 +1185,54 @@ export function createInMemoryResourceShapeStores(): ResourceShapeStores {
         lock: input.finalLock,
       });
     },
+    claimResourceAggregate(input) {
+      assertResourceAggregateClaimInput(input);
+      const current = resources.getSync(input.record.id);
+      const currentLock = locks.getSync(input.record.id);
+      const currentIdentityFence = identityFences.get(input.record.id);
+      if (!current && !currentLock) {
+        return Promise.resolve({ status: "not_found" });
+      }
+      if (
+        current &&
+        currentLock &&
+        matchesClaimedResource(current, input) &&
+        matchesApplyLock(currentLock, input.expectedLock) &&
+        matchesExpectedResourceIdentityFence(
+          currentIdentityFence,
+          input.expectedIdentityFence,
+        )
+      ) {
+        return Promise.resolve({ status: "claimed", record: current });
+      }
+      if (
+        !current ||
+        !currentLock ||
+        !matchesVersion(current, input.expectedResource) ||
+        !matchesApplyLock(currentLock, input.expectedLock) ||
+        !matchesExpectedResourceIdentityFence(
+          currentIdentityFence,
+          input.expectedIdentityFence,
+        )
+      ) {
+        return Promise.resolve({
+          status: "conflict",
+          ...(current ? { record: current } : {}),
+          ...(currentLock ? { lock: currentLock } : {}),
+          ...(currentIdentityFence
+            ? { identityFence: currentIdentityFence }
+            : {}),
+        });
+      }
+      const persisted = withNextResourceRevision(input.record, current);
+      resources.replaceSync(persisted);
+      return Promise.resolve({ status: "claimed", record: persisted });
+    },
     replaceResourceAggregate(input) {
       assertResourceAggregateReplaceInput(input);
       const current = resources.getSync(input.record.id);
       const currentLock = locks.getSync(input.record.id);
+      const currentIdentityFence = identityFences.get(input.record.id);
       if (!current && !currentLock) {
         return Promise.resolve({ status: "not_found" });
       }
@@ -1158,7 +1240,12 @@ export function createInMemoryResourceShapeStores(): ResourceShapeStores {
         !current ||
         !currentLock ||
         !matchesVersion(current, input.expectedResource) ||
-        !matchesApplyLock(currentLock, input.expectedLock)
+        !matchesApplyLock(currentLock, input.expectedLock) ||
+        (input.identityFenceAdvance !== undefined &&
+          !matchesExpectedResourceIdentityFence(
+            currentIdentityFence,
+            input.identityFenceAdvance.expected,
+          ))
       ) {
         return Promise.resolve({
           status: "conflict",
@@ -1167,12 +1254,25 @@ export function createInMemoryResourceShapeStores(): ResourceShapeStores {
         });
       }
       const persisted = withNextResourceRevision(input.record, current);
+      const consumedIdentityFence = input.identityFenceAdvance
+        ? consumeResourceIdentityFence(
+            input.record.id,
+            input.record.generation,
+            input.identityFenceAdvance.expected,
+          )
+        : undefined;
       resources.replaceSync(persisted);
       locks.putSync(input.lock);
+      if (consumedIdentityFence) {
+        identityFences.set(input.record.id, consumedIdentityFence);
+      }
       return Promise.resolve({
         status: "replaced",
         record: persisted,
         lock: input.lock,
+        ...(consumedIdentityFence
+          ? { identityFence: consumedIdentityFence }
+          : {}),
       });
     },
     abortApply(input) {
@@ -1368,6 +1468,74 @@ export function assertResourceAggregateReplaceInput(
       "replacement Resource and ResolutionLock timestamps must match",
     );
   }
+  if (input.identityFenceAdvance) {
+    const expected = input.identityFenceAdvance.expected;
+    if (expected) {
+      assertResourceIdentityFence(expected);
+      if (expected.resourceId !== input.record.id) {
+        throw new Error(
+          "replacement identity fence does not match Resource",
+        );
+      }
+    }
+    // Validate the generation step before any durable write. The returned
+    // value is recomputed by each backend inside its atomic mutation.
+    consumeResourceIdentityFence(
+      input.record.id,
+      input.record.generation,
+      expected,
+    );
+  }
+}
+
+export function assertResourceAggregateClaimInput(
+  input: ResourceAggregateClaimInput,
+): void {
+  if (input.record.id !== input.expectedLock.resourceId) {
+    throw new Error("claimed Resource does not match expected lock");
+  }
+  if (
+    input.record.generation !== input.expectedResource.generation ||
+    input.record.phase !== input.expectedResource.phase
+  ) {
+    throw new Error("Resource claim must preserve generation and phase");
+  }
+  assertResourceFormIdentity(input.record.form, input.record.kind);
+  if (!resourceFormIdentitiesEqual(input.record.form, input.expectedLock.form)) {
+    throw new Error("Resource claim and expected lock Form identities differ");
+  }
+  assertNativeResourceFormIdentity(
+    input.expectedLock.nativeResources,
+    input.record.form,
+  );
+  const expectedFence = input.expectedIdentityFence;
+  if (expectedFence) {
+    assertResourceIdentityFence(expectedFence);
+    if (expectedFence.resourceId !== input.record.id) {
+      throw new Error("Resource claim identity fence does not match Resource");
+    }
+  }
+  const revision =
+    input.expectedResource.revision ?? resourceRecordRevision(input.record);
+  if (
+    !Number.isSafeInteger(revision) ||
+    revision < 0 ||
+    revision === Number.MAX_SAFE_INTEGER
+  ) {
+    throw new Error("Resource claim requires an advanceable exact revision");
+  }
+}
+
+export function matchesClaimedResource(
+  current: ResourceShapeRecord,
+  input: ResourceAggregateClaimInput,
+): boolean {
+  const expectedRevision =
+    input.expectedResource.revision ?? resourceRecordRevision(input.record);
+  return (
+    canonicalJson(current) ===
+    canonicalJson({ ...input.record, revision: expectedRevision + 1 })
+  );
 }
 
 export function assertExpectedTargetPool(input: ResourceApplyBeginInput): void {

@@ -16,3 +16,4 @@ export * from "./artifacts.ts";
 export * from "./legacy_state_adoption.ts";
 export * from "./form_pin_operations.ts";
 export * from "./form_pin_inventory.ts";
+export * from "./form_transition.ts";

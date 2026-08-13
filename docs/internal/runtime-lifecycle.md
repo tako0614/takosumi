@@ -55,10 +55,18 @@ host worker は service を作る前に routing を決めるので、静的な�
 - `tests/core/api/edge_public_paths_test.ts` が実際の Hono router を歩いて、
   mount 済み path が 1 つでも未分類なら落ちる。
 
-`public` は Takoform contract 上 unauthenticated な `/.well-known/takoform`
-だけで、host は caller の credential / trusted-context header を剥がしてから
-core app に渡す。operator bearer 面 (`/v1/form-activations`) は意図的に
-edge gate に載せない — session seam は deploy-control bearer を注入するため。
+既定 OSS edge では historical Takoform path は `404` のままにする。例外は host code が
+`forms.takoform.com/v1alpha1` の frozen maintenance composition、exact transition host、
+product/module evidence、current Run credential authority をすべて注入した場合だけである。
+この場合も transition route だけを special-case せず、provider が同じ configured origin
+で必要とする discovery、Form availability、read/observe/preview/update/delete と transition
+の closed inventory をまとめて gate する。
+
+composition 済み lane の `/.well-known/takoform` だけは contract 上 unauthenticated で、
+host は caller の credential / trusted-context header を剥がしてから core app に渡す。
+それ以外は route ごとの Run phase と current Capsule/ProviderBinding/Connection/recipe を
+検証して host-derived actor/owner context だけを注入する。operator bearer 面
+(`/v1/form-activations`) は edge gate に載せない。
 
 ## テスト側の機構
 

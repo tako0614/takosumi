@@ -28,6 +28,12 @@ const EXACT_FORM: InstalledFormReference = {
   schemaDigest: `sha256:${"1".repeat(64)}`,
   packageDigest: `sha256:${"2".repeat(64)}`,
 };
+const NEXT_EXACT_FORM: InstalledFormReference = {
+  ...EXACT_FORM,
+  version: "2.0.0",
+  schemaDigest: `sha256:${"3".repeat(64)}`,
+  packageDigest: `sha256:${"4".repeat(64)}`,
+};
 
 afterEach(async () => {
   await Promise.all(clients.splice(0).map((client) => client.close()));
@@ -64,6 +70,110 @@ function resourceRun(
     ...overrides,
   };
 }
+
+function formTransitionRun(): ResourceOperationRun {
+  const resourceId = "tkrn:space_a:ObjectBucket:assets";
+  return resourceRun({
+    id: "resource-form-transition:space_a:assets:old-form",
+    subject: { kind: "resource", id: resourceId },
+    resourceOperation: "form_transition",
+    resourceOperationKey: "transition-op-assets-v2",
+    resourceForm: EXACT_FORM,
+    type: "apply",
+    resourceFormTransition: {
+      operationId: "transition-op-assets-v2",
+      requestDigest: `sha256:${"5".repeat(64)}`,
+      desiredSpecDigest: `sha256:${"6".repeat(64)}`,
+      fromForm: EXACT_FORM,
+      toForm: NEXT_EXACT_FORM,
+      transitionEvidence: {
+        format: "takoform.module-form-transition@v1",
+        marker: "object-bucket-v1-to-v2",
+        digest: `sha256:${"7".repeat(64)}`,
+      },
+      expected: { resourceVersion: "1" },
+      resource: {
+        id: resourceId,
+        workspaceId: "space_a",
+        kind: "ObjectBucket",
+        name: "assets",
+        managedBy: "takoform.form-host.v1",
+        owner: {
+          kind: "Capsule",
+          id: "capsule_a",
+          workspaceId: "space_a",
+          installingPrincipalId: "account_a",
+        },
+        phase: "Ready",
+        generation: 1,
+        revision: 3,
+        observedGeneration: 1,
+        createdAt: CREATED_AT,
+        updatedAt: CREATED_AT,
+        revisionId: "run_resource_apply_assets",
+      },
+      claim: {
+        updatedAt: "2026-08-13T00:00:00.001Z",
+        revision: 4,
+      },
+      identityFence: null,
+      resolutionLock: {
+        resourceId,
+        form: EXACT_FORM,
+        selectedImplementation: "object_bucket",
+        target: "target_a",
+        locked: true,
+        reason: ["test"],
+        nativeResources: [
+          {
+            type: "r2_bucket",
+            id: "bucket-assets",
+            ownership: "resource",
+            form: EXACT_FORM,
+          },
+        ],
+        lockedAt: CREATED_AT,
+        updatedAt: CREATED_AT,
+      },
+    },
+  });
+}
+
+test("exact Form transition lookup and scheduler exclusion are backend-equivalent", async () => {
+  for (const [label, store] of await stores()) {
+    const run = formTransitionRun();
+    expect(await store.beginResourceOperationRun(run)).toMatchObject({
+      status: "created",
+    });
+    expect(
+      await store.getResourceFormTransitionRun({
+        workspaceId: run.workspaceId,
+        resourceId: run.subject.id,
+        operationId: run.resourceOperationKey,
+      }),
+    ).toEqual(run);
+    expect(
+      await store.getResourceFormTransitionRun({
+        workspaceId: run.workspaceId,
+        resourceId: `${run.subject.id}-${label}`,
+        operationId: run.resourceOperationKey,
+      }),
+    ).toBeUndefined();
+    expect(
+      await store.listRecoverableResourceOperationRuns({
+        workspaceId: run.workspaceId,
+      }),
+    ).toEqual([]);
+    const projected = await new RunQueryService(store).getRun(run.id);
+    expect(projected).toMatchObject({
+      id: run.id,
+      resourceOperation: "form_transition",
+      status: "running",
+    });
+    expect(JSON.stringify(projected)).not.toContain("bucket-assets");
+    expect(JSON.stringify(projected)).not.toContain("desiredSpecDigest");
+  }
+});
 
 test("direct Resource Run CAS is insert-only, monotonic, and backend-equivalent", async () => {
   for (const [label, store] of await stores()) {

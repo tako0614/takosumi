@@ -19,6 +19,12 @@ import type {
 } from "../../core/domains/interfaces/mod.ts";
 import { createWorkerServiceApp } from "./worker_service.ts";
 import { createCloudflareD1OpenTofuControlStore } from "./d1_opentofu_store.ts";
+import {
+  ResourceCapsuleOwnerAuthorityError,
+} from "../../core/api/form_host_routes.ts";
+
+export const TAKOSUMI_INTERNAL_RESOURCE_CAPSULE_OWNER_HEADER =
+  "x-takosumi-internal-resource-capsule-owner";
 
 /**
  * Builds the deploy-control Takosumi service (the `takosumi-api` role) directly,
@@ -54,9 +60,27 @@ export function deployControlServiceOptions(env: CloudflareWorkerEnv): {
       Parameters<typeof createWorkerServiceApp>[2]
     >["hostRuntimeResourceLifecycle"]
   >;
+  readonly resourceFormTransitionHost?: NonNullable<
+    NonNullable<
+      Parameters<typeof createWorkerServiceApp>[2]
+    >["resourceFormTransitionHost"]
+  >;
+  readonly resourceFormTransitionEvidence?: NonNullable<
+    NonNullable<
+      Parameters<typeof createWorkerServiceApp>[2]
+    >["resourceFormTransitionEvidence"]
+  >;
   readonly interfaceOAuth2ResourceAuthorizer?: InterfaceOAuth2ResourceAuthorizer;
   readonly mountInternalLedgerRoutes?: boolean;
 } {
+  if (
+    Boolean(env.TAKOSUMI_RESOURCE_FORM_TRANSITION_HOST) !==
+    Boolean(env.TAKOSUMI_RESOURCE_FORM_TRANSITION_EVIDENCE)
+  ) {
+    throw new TypeError(
+      "Resource Form transition host and evidence ports must be composed together",
+    );
+  }
   const hostComposition = runnerHostCompositionFromEnv(env);
   const managedVanityHostnameSlotsPerOwner = nonNegativeInteger(
     env.TAKOSUMI_MANAGED_VANITY_HOST_SLOTS_PER_OWNER,
@@ -76,6 +100,18 @@ export function deployControlServiceOptions(env: CloudflareWorkerEnv): {
       ? {
           hostRuntimeResourceLifecycle:
             env.TAKOSUMI_HOST_RUNTIME_RESOURCE_LIFECYCLE,
+        }
+      : {}),
+    ...(env.TAKOSUMI_RESOURCE_FORM_TRANSITION_HOST
+      ? {
+          resourceFormTransitionHost:
+            env.TAKOSUMI_RESOURCE_FORM_TRANSITION_HOST,
+        }
+      : {}),
+    ...(env.TAKOSUMI_RESOURCE_FORM_TRANSITION_EVIDENCE
+      ? {
+          resourceFormTransitionEvidence:
+            env.TAKOSUMI_RESOURCE_FORM_TRANSITION_EVIDENCE,
         }
       : {}),
     ...(interfaceOAuth2ResourceAuthorizer
@@ -142,10 +178,40 @@ export function platformResourceCapsuleOwnerResolver(
     Parameters<typeof createWorkerServiceApp>[2]
   >["resolveResourceCapsuleOwner"]
 > {
-  // Run credentials are consumed only by an explicitly declared platform
-  // extension route. Raw bearer material is never forwarded into Core to
-  // manufacture Resource ownership.
-  return async () => undefined;
+  return async ({ actor, request, space }) => {
+    const encoded = request.headers.get(
+      TAKOSUMI_INTERNAL_RESOURCE_CAPSULE_OWNER_HEADER,
+    );
+    if (!encoded) return undefined;
+    let raw: unknown;
+    try {
+      raw = JSON.parse(encoded);
+    } catch {
+      throw new ResourceCapsuleOwnerAuthorityError();
+    }
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      throw new ResourceCapsuleOwnerAuthorityError();
+    }
+    const value = raw as Record<string, unknown>;
+    if (
+      Object.keys(value).length !== 4 ||
+      value.kind !== "Capsule" ||
+      typeof value.id !== "string" ||
+      typeof value.workspaceId !== "string" ||
+      typeof value.installingPrincipalId !== "string" ||
+      value.workspaceId !== space ||
+      actor.workspaceId !== value.workspaceId ||
+      actor.actorAccountId !== value.installingPrincipalId
+    ) {
+      throw new ResourceCapsuleOwnerAuthorityError();
+    }
+    return {
+      kind: "Capsule",
+      id: value.id,
+      workspaceId: value.workspaceId,
+      installingPrincipalId: value.installingPrincipalId,
+    };
+  };
 }
 
 function nonNegativeInteger(value: unknown): number | undefined {

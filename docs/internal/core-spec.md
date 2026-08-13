@@ -206,6 +206,19 @@ and all other legacy actions remain unavailable. Disabled/unknown paths return
 The drain never enables discovery, creates a Form, selects a TargetPool, or
 changes the supported Stack/Interface/Offering model.
 
+The drain is distinct from the code-owned frozen v1alpha1 maintenance
+composition. A host may inject that complete, same-origin provider lane only
+with exact transition host/evidence and current Run-credential authority. It
+must expose discovery plus the provider's retained exact read/observe/preview/
+update/delete lifecycle; a transition-only advertisement is invalid. Its
+separate Form transition operation binds exact old/new installed identities,
+generation, revision/lock/native preconditions, desired spec digest, and
+product/module evidence. Normal Resource apply still rejects identity changes.
+The operation claims the canonical Resource before dispatch, invokes the host
+at most once, commits Form/spec/lock/native evidence atomically at `N + 1`, and
+uses exact host-ledger readback for indeterminate forward repair. It never
+infers a pair from semver or accepts owner/lock/credential claims from the body.
+
 During the explicit drain window the platform cron may resume incomplete old
 Resource operations and perform bounded read-only observation of retained rows.
 Those maintenance jobs are disabled with the drain and cannot accept new

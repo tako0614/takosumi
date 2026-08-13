@@ -45,7 +45,10 @@ import {
   OpenTofuRunOwnerObject,
   OpenTofuRunnerObject,
 } from "../../worker/src/handler.ts";
-import { cachedDeployControlService } from "../../worker/src/deploy_control_seam.ts";
+import {
+  cachedDeployControlService,
+  TAKOSUMI_INTERNAL_RESOURCE_CAPSULE_OWNER_HEADER,
+} from "../../worker/src/deploy_control_seam.ts";
 import { createCloudflareD1OpenTofuControlStore } from "../../worker/src/d1_opentofu_store.ts";
 import type {
   CapsuleExecutionAuthorityResolver,
@@ -132,6 +135,7 @@ import {
 import type { BillingSettings } from "takosumi-contract/billing";
 import {
   hasLegacyManagedProviderScopeHints,
+  isCapsuleRunCredentialIssuance,
   isWorkspaceBindableOperatorConnection,
 } from "takosumi-contract/connections";
 import { canonicalProviderSource } from "takosumi-contract/provider-env-rules";
@@ -139,6 +143,7 @@ import {
   isRunCredentialToken,
   runCredentialTokenSecret,
   verifyRunCredentialToken,
+  verifyRunCredentialTokenAuthority,
 } from "../../core/shared/run_credential_tokens.ts";
 import {
   resolveCanonicalCapsuleRunCredentialContext,
@@ -1212,6 +1217,13 @@ export default {
         verifyPlatformExtensionSession,
       );
     }
+    if (isPlatformTakoformV1alpha1CompatibilityRequest(request, url)) {
+      return await handlePlatformTakoformV1alpha1CompatibilityRequest(
+        request,
+        env,
+        context,
+      );
+    }
     // Legacy Flow-B paths are an explicit drain lane. Unknown/retired paths
     // must not fall through to the Accounts SPA or another extension route.
     if (isPlatformLegacyResourceShapePath(url.pathname)) {
@@ -1635,6 +1647,219 @@ function isPlatformTakoformHostPath(pathname: string): boolean {
     isRetiredTakoformHostApiPath(pathname)
   );
 }
+
+const PLATFORM_RESOURCE_FORM_TRANSITION_PATH =
+  /^\/apis\/forms\.takoform\.com\/v1alpha1\/resources\/[^/%]+\/[^/%]+\/form-transitions(?:\/formtx_[0-9a-f]{64})?$/u;
+const PLATFORM_TAKOFORM_V1ALPHA1_RESOURCE_PATH =
+  /^\/apis\/forms\.takoform\.com\/v1alpha1\/resources\/[^/%]+\/[^/%]+$/u;
+const PLATFORM_TAKOFORM_V1ALPHA1_OBSERVE_PATH =
+  /^\/apis\/forms\.takoform\.com\/v1alpha1\/resources\/[^/%]+\/[^/%]+\/observe$/u;
+
+type PlatformTakoformV1alpha1CompatibilityRoute = {
+  readonly kind:
+    | "discovery"
+    | "forms"
+    | "read"
+    | "observe"
+    | "preview"
+    | "apply"
+    | "delete"
+    | "transition";
+  readonly phases: readonly ("plan" | "apply" | "destroy")[];
+};
+
+type PlatformTakoformV1alpha1CredentialVerifier = (
+  env: CloudflareWorkerEnv,
+  token: string,
+  phases: readonly ("plan" | "apply" | "destroy")[],
+) => Promise<PlatformExtensionSessionContext>;
+
+function platformTakoformV1alpha1CompatibilityRoute(
+  request: Request,
+  url = new URL(request.url),
+): PlatformTakoformV1alpha1CompatibilityRoute | undefined {
+  const method = request.method.toUpperCase();
+  const path = url.pathname;
+  if (
+    path === TAKOFORM_FORM_HOST_WELL_KNOWN_PATH &&
+    method === "GET" &&
+    url.search === ""
+  ) {
+    return { kind: "discovery", phases: [] };
+  }
+  if (path === `${TAKOFORM_FORM_HOST_API_PATH}/forms` && method === "GET") {
+    return { kind: "forms", phases: ["apply"] };
+  }
+  if (
+    path === `${TAKOFORM_FORM_HOST_API_PATH}/resources/preview` &&
+    method === "POST"
+  ) {
+    return { kind: "preview", phases: ["apply"] };
+  }
+  if (PLATFORM_RESOURCE_FORM_TRANSITION_PATH.test(path)) {
+    const readback = /\/form-transitions\/formtx_[0-9a-f]{64}$/u.test(path);
+    if ((readback && method === "GET") || (!readback && method === "POST")) {
+      return { kind: "transition", phases: ["apply"] };
+    }
+    return undefined;
+  }
+  if (PLATFORM_TAKOFORM_V1ALPHA1_OBSERVE_PATH.test(path) && method === "POST") {
+    return { kind: "observe", phases: ["plan", "apply", "destroy"] };
+  }
+  if (!PLATFORM_TAKOFORM_V1ALPHA1_RESOURCE_PATH.test(path)) return undefined;
+  if (method === "GET") {
+    return { kind: "read", phases: ["plan", "apply", "destroy"] };
+  }
+  if (method === "PUT") return { kind: "apply", phases: ["apply"] };
+  if (method === "DELETE") return { kind: "delete", phases: ["destroy"] };
+  return undefined;
+}
+
+/** Exact transition matcher retained for provider/host conformance tests. */
+export function isPlatformResourceFormTransitionRequest(
+  request: Request,
+  url = new URL(request.url),
+): boolean {
+  return platformTakoformV1alpha1CompatibilityRoute(request, url)?.kind ===
+    "transition";
+}
+
+/**
+ * Complete frozen maintenance lane understood by the v1 provider. Matching a
+ * route does not mount it: the platform stays 404 until a host-code descriptor
+ * and every transition/credential port are present.
+ */
+export function isPlatformTakoformV1alpha1CompatibilityRequest(
+  request: Request,
+  url = new URL(request.url),
+): boolean {
+  return platformTakoformV1alpha1CompatibilityRoute(request, url) !== undefined;
+}
+
+function platformTakoformV1alpha1CompatibilityMounted(
+  env: CloudflareWorkerEnv,
+): boolean {
+  const mount = env.TAKOSUMI_TAKOFORM_V1ALPHA1_COMPATIBILITY_HOST;
+  const host = env.TAKOSUMI_RESOURCE_FORM_TRANSITION_HOST;
+  const evidence = env.TAKOSUMI_RESOURCE_FORM_TRANSITION_EVIDENCE;
+  return Boolean(
+    mount &&
+      typeof mount === "object" &&
+      !Array.isArray(mount) &&
+      Object.keys(mount).length === 2 &&
+      mount.apiVersion === "forms.takoform.com/v1alpha1" &&
+      mount.mode === "frozen-maintenance" &&
+      host &&
+      typeof host.dispatch === "function" &&
+      typeof host.readback === "function" &&
+      evidence &&
+      typeof evidence.authorize === "function" &&
+      typeof env.TAKOSUMI_DEPLOY_CONTROL_TOKEN === "string" &&
+      env.TAKOSUMI_DEPLOY_CONTROL_TOKEN.length > 0 &&
+      hasValidPlatformRunCredentialSecret(env),
+  );
+}
+
+function hasValidPlatformRunCredentialSecret(
+  env: CloudflareWorkerEnv,
+): boolean {
+  try {
+    return runCredentialTokenSecret(env) !== undefined;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Same-origin in-process adapter for the frozen v1 provider. Discovery is
+ * public. Every lifecycle request revalidates the current Run/Capsule/binding/
+ * recipe authority, strips caller-supplied trust headers, and forwards only
+ * host-derived actor/owner context to Core.
+ */
+export async function handlePlatformTakoformV1alpha1CompatibilityRequest(
+  request: Request,
+  env: CloudflareWorkerEnv,
+  context?: PlatformExecutionContext,
+  verifyCredential: PlatformTakoformV1alpha1CredentialVerifier =
+    verifyPlatformTakoformV1alpha1RunCredential,
+): Promise<Response> {
+  const route = platformTakoformV1alpha1CompatibilityRoute(request);
+  if (!route || !platformTakoformV1alpha1CompatibilityMounted(env)) {
+    return legacyResourceNotFoundResponse();
+  }
+  const deployControlToken = env.TAKOSUMI_DEPLOY_CONTROL_TOKEN;
+  if (typeof deployControlToken !== "string" || !deployControlToken) {
+    return legacyResourceNotFoundResponse();
+  }
+
+  const headers = new Headers(request.headers);
+  headers.delete(TAKOSUMI_INTERNAL_ACTOR_HEADER);
+  headers.delete(TAKOSUMI_INTERNAL_RESOURCE_CAPSULE_OWNER_HEADER);
+  for (const header of [...headers.keys()]) {
+    if (header.startsWith("x-takosumi-internal-")) headers.delete(header);
+  }
+
+  if (route.kind === "discovery") {
+    headers.delete("authorization");
+  } else {
+    const token = platformExtensionRunCredentialToken(request);
+    if (!token) {
+      return Response.json({ error: "unauthenticated" }, { status: 401 });
+    }
+    const session = await verifyCredential(env, token, route.phases);
+    if (!session.authenticated || session.authKind !== "run-credential") {
+      return Response.json({ error: "unauthenticated" }, { status: 401 });
+    }
+    if (
+      !session.workspaceId ||
+      !session.capsuleId ||
+      !session.installingPrincipalId ||
+      !session.phase ||
+      !route.phases.includes(session.phase)
+    ) {
+      return Response.json({ error: "unauthorized" }, { status: 403 });
+    }
+    const url = new URL(request.url);
+    const spaces = url.searchParams.getAll("space");
+    if (spaces.length > 0 && spaces.some((space) => space !== session.workspaceId)) {
+      return Response.json({ error: "forbidden" }, { status: 403 });
+    }
+    headers.set(
+      TAKOSUMI_INTERNAL_ACTOR_HEADER,
+      encodeActorContext({
+        actorAccountId: session.installingPrincipalId,
+        roles: ["operator"],
+        // The route verifier already proved the recipe's exact audience and
+        // scopes. Do not reinterpret provider-specific tokens as generic Core
+        // `forms:read`/`resources:*` claims or let the caller author them.
+        requestId: crypto.randomUUID(),
+        workspaceId: session.workspaceId,
+        principalKind: "account",
+      }),
+    );
+    headers.set(
+      TAKOSUMI_INTERNAL_RESOURCE_CAPSULE_OWNER_HEADER,
+      JSON.stringify({
+        kind: "Capsule",
+        id: session.capsuleId,
+        workspaceId: session.workspaceId,
+        installingPrincipalId: session.installingPrincipalId,
+      }),
+    );
+  }
+  headers.set("authorization", `Bearer ${deployControlToken}`);
+  const forwarded = new Request(request, { headers });
+  const service = await cachedDeployControlService(env);
+  return await service.app.fetch(
+    forwarded,
+    undefined,
+    honoExecutionContext(context),
+  );
+}
+
+/** Backward-compatible name for direct transition handler callers. */
+export const handlePlatformResourceFormTransitionRequest =
+  handlePlatformTakoformV1alpha1CompatibilityRequest;
 
 /**
  * Drain only existing Resource state. All desired-state, provider/target
@@ -5713,6 +5938,108 @@ export async function verifyPlatformExtensionRunCredentialToken(
   };
 }
 
+/**
+ * Authenticates a transition caller against the current Run, Capsule,
+ * ProviderBinding, ProviderConnection, and installed recipe-owned issuance.
+ * No audience, scope, owner, or provider claim is accepted from the body.
+ */
+export async function verifyPlatformResourceFormTransitionRunCredential(
+  env: CloudflareWorkerEnv,
+  token: string,
+  ledger: PlatformResourceFormTransitionRunCredentialLedger = createCloudflareD1OpenTofuControlStore(
+    env.TAKOSUMI_CONTROL_DB,
+    { schemaMode: env.TAKOSUMI_CONTROL_D1_SCHEMA_MODE ?? "bootstrap" },
+  ),
+): Promise<PlatformExtensionSessionContext> {
+  return await verifyPlatformTakoformV1alpha1RunCredential(
+    env,
+    token,
+    ["apply"],
+    ledger,
+  );
+}
+
+/**
+ * Route-scoped verifier for the complete frozen provider lifecycle. The live
+ * recipe remains the sole audience/scope authority; callers cannot select or
+ * echo either value. `phases` comes only from the exact platform route table.
+ */
+export async function verifyPlatformTakoformV1alpha1RunCredential(
+  env: CloudflareWorkerEnv,
+  token: string,
+  phases: readonly ("plan" | "apply" | "destroy")[],
+  ledger: PlatformResourceFormTransitionRunCredentialLedger = createCloudflareD1OpenTofuControlStore(
+    env.TAKOSUMI_CONTROL_DB,
+    { schemaMode: env.TAKOSUMI_CONTROL_D1_SCHEMA_MODE ?? "bootstrap" },
+  ),
+): Promise<PlatformExtensionSessionContext> {
+  const secret = runCredentialTokenSecret(env);
+  if (!secret || phases.length === 0) return { authenticated: false };
+  const authenticated = await verifyRunCredentialTokenAuthority(token, {
+    secret,
+  });
+  if (!authenticated.ok) return { authenticated: false };
+  const payload = authenticated.payload;
+  if (!phases.includes(payload.phase) || payload.scopes.includes("admin")) {
+    return { authenticated: false };
+  }
+  const capsule = await ledger.getCapsule(payload.capsuleId);
+  if (!capsule) return { authenticated: false };
+  const [canonical, connection, unexpectedBlob, bindings] = await Promise.all([
+    resolveCanonicalCapsuleRunCredentialContext(ledger, {
+      workspaceId: payload.workspaceId,
+      capsuleId: payload.capsuleId,
+      runId: payload.runId,
+      phase: payload.phase,
+    }),
+    ledger.getConnection(payload.connectionId),
+    ledger.getSecretBlob(payload.connectionId),
+    ledger.getProviderBindingSetByCapsule(
+      payload.capsuleId,
+      capsule.environment,
+    ),
+  ]);
+  const issuance = connection?.credentialRecipe?.runIssuance;
+  const bound = bindings?.bindings.some(
+    (binding) =>
+      binding.connectionId === payload.connectionId &&
+      canonicalProviderSource(binding.provider) === payload.provider,
+  );
+  if (
+    !canonical.ok ||
+    canonical.context.installingPrincipalId !== payload.installingPrincipalId ||
+    payload.sub !== payload.installingPrincipalId ||
+    !connection ||
+    !isWorkspaceBindableOperatorConnection(connection) ||
+    !isCapsuleRunCredentialIssuance(issuance) ||
+    issuance.audience !== payload.aud ||
+    !sameExactScopes(issuance.scopes, payload.scopes) ||
+    canonicalProviderSource(connection.provider) !== payload.provider ||
+    connection.provider !== payload.provider ||
+    connection.providerSource !== payload.provider ||
+    hasLegacyManagedProviderScopeHints(connection.scopeHints) ||
+    unexpectedBlob !== undefined ||
+    bindings?.workspaceId !== payload.workspaceId ||
+    bindings.capsuleId !== payload.capsuleId ||
+    bindings.environment !== capsule.environment ||
+    !bound
+  ) {
+    return { authenticated: false };
+  }
+  return {
+    authenticated: true,
+    authKind: "run-credential",
+    subject: canonical.context.installingPrincipalId,
+    workspaceId: canonical.context.workspaceId,
+    capsuleId: canonical.context.capsuleId,
+    runId: canonical.context.runId,
+    installingPrincipalId: canonical.context.installingPrincipalId,
+    phase: canonical.context.phase,
+    audience: issuance.audience,
+    scopes: [...issuance.scopes],
+  };
+}
+
 function sameExactScopes(
   left: readonly string[] | undefined,
   right: readonly string[] | undefined,
@@ -5725,6 +6052,10 @@ function sameExactScopes(
 export type PlatformExtensionRunCredentialLedger =
   CapsuleRunCredentialLedger &
     Pick<OpenTofuControlStore, "getConnection" | "getSecretBlob">;
+
+export type PlatformResourceFormTransitionRunCredentialLedger =
+  PlatformExtensionRunCredentialLedger &
+    Pick<OpenTofuControlStore, "getProviderBindingSetByCapsule">;
 
 export type PlatformExtensionIntrospectFetch = (
   request: Request,

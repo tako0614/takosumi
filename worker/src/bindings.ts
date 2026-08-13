@@ -97,6 +97,24 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
    */
   readonly TAKOSUMI_HOST_RUNTIME_RESOURCE_LIFECYCLE?: import("../../core/domains/resource-shape/host_runtime_materialization.ts").HostRuntimeResourceLifecycle;
   /**
+   * Code-only composition that performs and reads back one exact same-native
+   * Resource Form transition. A text/JSON Worker variable is never accepted.
+   */
+  readonly TAKOSUMI_RESOURCE_FORM_TRANSITION_HOST?: import("../../core/domains/resource-shape/form_transition.ts").ResourceFormTransitionHost;
+  /** Code-only product/module authority for an explicitly allowed exact pair. */
+  readonly TAKOSUMI_RESOURCE_FORM_TRANSITION_EVIDENCE?: import("../../core/domains/resource-shape/form_transition.ts").ResourceFormTransitionEvidenceAuthority;
+  /**
+   * Explicit code-owned mount for the frozen v1alpha1 maintenance host. The
+   * platform edge remains 404 unless a composing host supplies this descriptor
+   * together with transition host/evidence and current Run credential ports.
+   * This is deliberately not a text flag: OSS does not generally re-enable
+   * the retired portable Form-host surface.
+   */
+  readonly TAKOSUMI_TAKOFORM_V1ALPHA1_COMPATIBILITY_HOST?: {
+    readonly apiVersion: "forms.takoform.com/v1alpha1";
+    readonly mode: "frozen-maintenance";
+  };
+  /**
    * Enables the optional, versioned operator-control MCP adapter at the
    * platform worker's `/mcp/operator-control/v1` route. The route is absent
    * unless this exact flag is `1`; authorization still requires a current

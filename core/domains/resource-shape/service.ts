@@ -452,6 +452,30 @@ export class ResourceShapeService {
   }
 
   /**
+   * The canonical N+1 CAS clears the visible Resource claim atomically. Its
+   * lastOperationRunId still fences normal lifecycle work until the exact
+   * operation-bound host proof has reached a terminal Run row. This closes the
+   * crash window between those two durable stores without teaching normal
+   * apply how to change Form identity.
+   */
+  async #resourceHasUnsettledFormTransition(
+    record: ResourceShapeRecord | undefined,
+  ): Promise<boolean> {
+    if (record?.pendingOperation?.operation === "form_transition") return true;
+    const runId = record?.lastOperationRunId;
+    if (!runId || !/^resource-form-transition:formtx_[0-9a-f]{64}$/u.test(runId)) {
+      return false;
+    }
+    if (!this.#operationRuns) return true;
+    const run = await this.#operationRuns.getResourceOperationRun(runId);
+    return (
+      !run ||
+      run.resourceOperation !== "form_transition" ||
+      run.status !== "succeeded"
+    );
+  }
+
+  /**
    * Serialize a Capsule-owned Resource claim with Capsule abandonment/destroy.
    * The host callback owns the durable Capsule read and lease; Core only
    * supplies the authenticated owner tuple and a stable claim holder id.
@@ -1037,6 +1061,9 @@ export class ResourceShapeService {
       this.#stores.locks.get(resourceId),
       this.#stores.getResourceIdentityFence(resourceId),
     ]);
+    if (await this.#resourceHasUnsettledFormTransition(existing)) {
+      return formTransitionClaimConflict(resourceId);
+    }
     const ownerError = resourceOwnerConflict(resourceId, existing, req.owner);
     if (ownerError) return ownerError;
     const recoveringApplying =
@@ -1276,6 +1303,9 @@ export class ResourceShapeService {
       this.#stores.locks.get(id),
       this.#stores.getResourceIdentityFence(id),
     ]);
+    if (await this.#resourceHasUnsettledFormTransition(existing)) {
+      return formTransitionClaimConflict(id);
+    }
     const identity = previewResourceIdentity(id, req, existing, identityFence);
     if (!identity.ok) return identity;
 
@@ -1365,6 +1395,9 @@ export class ResourceShapeService {
       this.#stores.locks.get(id),
       this.#stores.getResourceIdentityFence(id),
     ]);
+    if (await this.#resourceHasUnsettledFormTransition(existing)) {
+      return formTransitionClaimConflict(id);
+    }
     const recoveringApplying = existing?.phase === "Applying";
     if (
       recoveryRequested &&
@@ -2658,6 +2691,9 @@ export class ResourceShapeService {
       this.#stores.locks.get(id),
       this.#stores.getResourceIdentityFence(id),
     ]);
+    if (await this.#resourceHasUnsettledFormTransition(existing)) {
+      return formTransitionClaimConflict(id);
+    }
     const ownerError = resourceOwnerConflict(id, existing, req.owner);
     if (ownerError) return ownerError;
     const importRequestDigest = await resourceImportRequestDigest(req);
@@ -3517,6 +3553,9 @@ export class ResourceShapeService {
   ): Promise<ServiceResult<ObserveResourceResult>> {
     const id = formatResourceShapeId(space, kind, name);
     const record = await this.#stores.resources.get(id);
+    if (await this.#resourceHasUnsettledFormTransition(record)) {
+      return formTransitionClaimConflict(id);
+    }
     const versionError = resourceGenerationError(
       id,
       record,
@@ -4114,6 +4153,9 @@ export class ResourceShapeService {
   ): Promise<ServiceResult<RefreshResourceResult>> {
     const id = formatResourceShapeId(space, kind, name);
     const record = await this.#stores.resources.get(id);
+    if (await this.#resourceHasUnsettledFormTransition(record)) {
+      return formTransitionClaimConflict(id);
+    }
     const versionError = resourceGenerationError(
       id,
       record,
@@ -4693,6 +4735,9 @@ export class ResourceShapeService {
   ): Promise<ServiceResult<void>> {
     const id = formatResourceShapeId(space, kind, name);
     const record = await this.#stores.resources.get(id);
+    if (await this.#resourceHasUnsettledFormTransition(record)) {
+      return formTransitionClaimConflict(id);
+    }
     const versionError = resourceGenerationError(
       id,
       record,
@@ -7211,6 +7256,18 @@ function resourceGenerationError(
     error: {
       code: "resource_version_conflict",
       message: `resource ${resourceId} is at generation ${currentGeneration}; expected ${expectedGeneration}`,
+    },
+  };
+}
+
+function formTransitionClaimConflict<T>(
+  resourceId: string,
+): ServiceResult<T> {
+  return {
+    ok: false,
+    error: {
+      code: "reconcile_conflict",
+      message: `resource ${resourceId} is fenced by an exact Form transition operation`,
     },
   };
 }

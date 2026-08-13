@@ -11,6 +11,8 @@ import type {
   TakoformDeclaredInterface,
   TakoformResource,
   TakoformHostErrorCode,
+  TakoformNativeIdentity,
+  TakoformResourceFormTransitionRequest,
 } from "takosumi-contract";
 import {
   createTakoformHostDiscovery,
@@ -26,12 +28,20 @@ import {
   TAKOFORM_FORM_HOST_INTERFACES_PATH,
   TAKOFORM_FORM_HOST_WELL_KNOWN_PATH,
   type TakoformFormDefinition,
+  TAKOFORM_RESOURCE_FORM_TRANSITION_EVIDENCE_FORMAT,
 } from "takosumi-contract";
 import type { Page, PageParams } from "takosumi-contract/pagination";
 import type {
   ApplyResourceRequest,
+  ResolutionLockRecord,
   ResourceServiceError,
+  ResourceShapeRecord,
   ResourceShapeService,
+} from "../domains/resource-shape/mod.ts";
+import {
+  ResourceFormTransitionError,
+  type ResourceFormTransitionResult,
+  type ResourceFormTransitionService,
 } from "../domains/resource-shape/mod.ts";
 import {
   canonicalJsonBytes,
@@ -55,6 +65,7 @@ import {
 /** Exact first-party audience for short-lived Takoform provider run tokens. */
 export const PORTABLE_FORM_MANAGER = "takoform.form-host.v1";
 const IDEMPOTENCY_KEY_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{7,127}$/u;
+const FORM_TRANSITION_OPERATION_ID_RE = /^formtx_[0-9a-f]{64}$/u;
 
 export interface PortableFormAvailabilityReader {
   listFormAvailability(input: {
@@ -134,6 +145,8 @@ export interface RegisterPortableFormHostRoutesOptions {
     | Promise<ResourceCapsuleOwner | undefined>;
   readonly interfaceDeclarations?: PortableInterfaceDeclarationReader &
     Partial<PortableInterfaceDeclarationWriter>;
+  /** Explicit host-composed identity transition. Omission hides the feature. */
+  readonly formTransition?: ResourceFormTransitionService;
 }
 
 /** Presented host execution context was invalid and must not become unowned. */
@@ -316,6 +329,16 @@ export const PORTABLE_FORM_HOST_ENDPOINTS: readonly ApiEndpoint[] = [
     `${TAKOFORM_FORM_HOST_API_PATH}/resources/:kind/:name/refresh`,
     { operationId: "refreshTakoformResource" },
   ),
+  portableEndpoint(
+    "POST",
+    `${TAKOFORM_FORM_HOST_API_PATH}/resources/:kind/:name/form-transitions`,
+    { operationId: "transitionTakoformResourceForm", query: ["space"] },
+  ),
+  portableEndpoint(
+    "GET",
+    `${TAKOFORM_FORM_HOST_API_PATH}/resources/:kind/:name/form-transitions/:operationId`,
+    { operationId: "getTakoformResourceFormTransition", query: ["space"] },
+  ),
 ] as const;
 
 function portableEndpoint(
@@ -362,10 +385,15 @@ export function registerPortableFormHostRoutes(
         interfaceDeclarationWrites:
           declarations?.putDeclaredInterface !== undefined &&
           declarations.deleteDeclaredInterface !== undefined,
+        resourceFormTransition: options.formTransition !== undefined,
       }),
       200,
     ),
   );
+
+  if (options.formTransition) {
+    registerPortableResourceFormTransitionRoutes(app, options);
+  }
 
   if (declarations) {
     app.get(interfaceBase, async (c) => {
@@ -1095,6 +1123,472 @@ export function registerPortableFormHostRoutes(
   });
 }
 
+const PORTABLE_FORM_TRANSITION_BODY_MAX_BYTES = 64 * 1024;
+const PORTABLE_FORM_TRANSITION_KEYS = new Set([
+  "operationId",
+  "fromForm",
+  "toForm",
+  "resource",
+  "expected",
+  "transitionEvidence",
+]);
+const PORTABLE_FORM_TRANSITION_RESOURCE_KEYS = new Set([
+  "apiVersion",
+  "kind",
+  "form",
+  "metadata",
+  "spec",
+]);
+const PORTABLE_FORM_TRANSITION_METADATA_KEYS = new Set([
+  "name",
+  "space",
+  "resourceVersion",
+]);
+
+function registerPortableResourceFormTransitionRoutes(
+  app: Hono,
+  options: RegisterPortableFormHostRoutesOptions,
+): void {
+  const transitions = options.formTransition!;
+  const path = `${TAKOFORM_FORM_HOST_API_PATH}/resources/:kind/:name/form-transitions`;
+
+  app.post(path, async (c) => {
+    const auth = await options.authorize(c);
+    if (!auth.ok) return portableAuthError(c, auth.response);
+    const key = idempotencyKey(c);
+    if (!key.ok) return key.response;
+    const identity = portableTransitionPathIdentity(c);
+    if (!identity.ok) return identity.response;
+    const ifMatch = portableTransitionIfMatch(c);
+    if (!ifMatch.ok) return ifMatch.response;
+    const parsed = await parsePortableFormTransitionBody(c, identity.value);
+    if (!parsed.ok) return parsed.response;
+    if (key.value !== parsed.value.operationId) {
+      return failed(c, "Idempotency-Key must equal operationId").response;
+    }
+    if (ifMatch.value !== parsed.value.expected.resourceVersion) {
+      return generationConflict(
+        c,
+        "If-Match must equal expected.resourceVersion",
+      ).response;
+    }
+    const resolvedOwner = await resolveHostResourceOwner(c, options, {
+      actor: auth.actor,
+      request: c.req.raw,
+      space: identity.value.space,
+      kind: identity.value.kind,
+      name: identity.value.name,
+    });
+    if (!resolvedOwner.ok) return resolvedOwner.response;
+    if (!resolvedOwner.owner) {
+      return portableError(
+        c,
+        "permission_denied",
+        "exact Capsule Run owner authority is required",
+        403,
+      );
+    }
+    try {
+      const result = await transitions.transition({
+        workspaceId: resolvedOwner.owner.workspaceId,
+        spaceId: identity.value.space as never,
+        kind: identity.value.kind,
+        name: identity.value.name,
+        actorId: auth.actor.actorAccountId,
+        owner: resolvedOwner.owner,
+        operationId: parsed.value.operationId,
+        fromForm: parsed.value.fromForm,
+        toForm: parsed.value.toForm,
+        desiredSpec: parsed.value.desiredSpec,
+        expected: parsed.value.expected,
+        transitionEvidence: parsed.value.transitionEvidence,
+      });
+      return await portableTransitionResponse(c, result, identity.value);
+    } catch (error) {
+      return portableTransitionError(c, error);
+    }
+  });
+
+  app.get(`${path}/:operationId`, async (c) => {
+    const auth = await options.authorize(c);
+    if (!auth.ok) return portableAuthError(c, auth.response);
+    const identity = portableTransitionPathIdentity(c);
+    if (!identity.ok) return identity.response;
+    const operationId = c.req.param("operationId");
+    if (!FORM_TRANSITION_OPERATION_ID_RE.test(operationId)) {
+      return failed(c, "operationId is invalid").response;
+    }
+    const resolvedOwner = await resolveHostResourceOwner(c, options, {
+      actor: auth.actor,
+      request: c.req.raw,
+      space: identity.value.space,
+      kind: identity.value.kind,
+      name: identity.value.name,
+    });
+    if (!resolvedOwner.ok) return resolvedOwner.response;
+    if (!resolvedOwner.owner) {
+      return portableError(
+        c,
+        "permission_denied",
+        "exact Capsule Run owner authority is required",
+        403,
+      );
+    }
+    try {
+      const result = await transitions.readback({
+        workspaceId: resolvedOwner.owner.workspaceId,
+        spaceId: identity.value.space as never,
+        kind: identity.value.kind,
+        name: identity.value.name,
+        owner: resolvedOwner.owner,
+        operationId,
+      });
+      return await portableTransitionResponse(c, result, identity.value);
+    } catch (error) {
+      return portableTransitionError(c, error);
+    }
+  });
+}
+
+function portableTransitionPathIdentity(c: Context):
+  | {
+      readonly ok: true;
+      readonly value: {
+        readonly space: string;
+        readonly kind: ResourceShapeKind;
+        readonly name: string;
+      };
+    }
+  | { readonly ok: false; readonly response: Response } {
+  const url = new URL(c.req.url);
+  if (
+    [...url.searchParams.keys()].some((key) => key !== "space") ||
+    url.searchParams.getAll("space").length !== 1
+  ) {
+    return failed(c, "form transition accepts exactly one space query field");
+  }
+  const space = url.searchParams.get("space")?.trim();
+  const kind = c.req.param("kind");
+  const name = c.req.param("name")?.trim();
+  if (!space || !name || !isResourceShapeKind(kind)) {
+    return failed(c, "transition space, kind, and name are required");
+  }
+  return { ok: true, value: { space, kind, name } };
+}
+
+function portableTransitionIfMatch(c: Context):
+  | { readonly ok: true; readonly value: string }
+  | { readonly ok: false; readonly response: Response } {
+  if (c.req.header("if-none-match") !== undefined) {
+    return failed(c, "If-None-Match is not valid for a Form transition");
+  }
+  const value = c.req.header("if-match")?.trim();
+  if (value === undefined) {
+    return generationConflict(c, "If-Match is required");
+  }
+  const match = /^"([^"]*)"$/u.exec(value);
+  const resourceVersion = match?.[1];
+  return resourceVersion && isPortableResourceVersion(resourceVersion)
+    ? { ok: true, value: resourceVersion }
+    : failed(
+        c,
+        "If-Match must contain one quoted canonical resourceVersion",
+      );
+}
+
+async function parsePortableFormTransitionBody(
+  c: Context,
+  identity: { readonly space: string; readonly kind: ResourceShapeKind; readonly name: string },
+): Promise<
+  | {
+      readonly ok: true;
+      readonly value: {
+        readonly operationId: string;
+        readonly fromForm: InstalledFormReference;
+        readonly toForm: InstalledFormReference;
+        readonly desiredSpec: JsonObject;
+        readonly expected: {
+          readonly resourceVersion: string;
+          readonly nativeIdentity?: TakoformNativeIdentity;
+        };
+        readonly transitionEvidence: TakoformResourceFormTransitionRequest["transitionEvidence"];
+      };
+    }
+  | { readonly ok: false; readonly response: Response }
+> {
+  let bytes: Uint8Array;
+  try {
+    bytes = new Uint8Array(await c.req.raw.clone().arrayBuffer());
+  } catch {
+    return failed(c, "portable transition body could not be read");
+  }
+  if (bytes.byteLength === 0 || bytes.byteLength > PORTABLE_FORM_TRANSITION_BODY_MAX_BYTES) {
+    return failed(c, "portable transition body must be 1..65536 bytes");
+  }
+  let body: JsonObject;
+  try {
+    const parsed = parseCanonicalJson(bytes);
+    if (!isJsonObject(parsed)) throw new TypeError("not an object");
+    body = parsed as JsonObject;
+  } catch {
+    return failed(c, "portable transition body must be complete UTF-8 I-JSON with unique object names");
+  }
+  if (
+    !exactObjectKeys(body, PORTABLE_FORM_TRANSITION_KEYS, [
+      "operationId",
+      "fromForm",
+      "toForm",
+      "resource",
+      "expected",
+      "transitionEvidence",
+    ])
+  ) {
+    return failed(c, "portable transition body has missing or unknown fields");
+  }
+  const operationId = stringValue(body.operationId);
+  const fromForm = installedFormFromPortable(body.fromForm, identity.kind);
+  const toForm = installedFormFromPortable(body.toForm, identity.kind);
+  if (
+    !operationId ||
+    !FORM_TRANSITION_OPERATION_ID_RE.test(operationId) ||
+    !fromForm ||
+    !toForm
+  ) {
+    return failed(c, "operationId and exact fromForm/toForm are required");
+  }
+  if (!isJsonObject(body.resource)) {
+    return failed(c, "resource must be a desired Takoform Resource");
+  }
+  const resource = body.resource;
+  if (
+    !exactObjectKeys(resource, PORTABLE_FORM_TRANSITION_RESOURCE_KEYS, [
+      "apiVersion",
+      "kind",
+      "form",
+      "metadata",
+      "spec",
+    ]) ||
+    resource.apiVersion !== TAKOFORM_FORM_HOST_API_VERSION ||
+    resource.kind !== identity.kind ||
+    !isJsonObject(resource.metadata) ||
+    !isJsonObject(resource.spec)
+  ) {
+    return failed(c, "resource must be a closed desired v1alpha1 Resource");
+  }
+  const desiredForm = installedFormFromPortable(resource.form, identity.kind);
+  if (
+    !desiredForm ||
+    installedFormReferenceKey(desiredForm) !== installedFormReferenceKey(toForm)
+  ) {
+    return failed(c, "resource.form must equal the exact toForm");
+  }
+  if (
+    !exactObjectKeys(resource.metadata, PORTABLE_FORM_TRANSITION_METADATA_KEYS, [
+      "name",
+      "space",
+      "resourceVersion",
+    ]) ||
+    resource.metadata.name !== identity.name ||
+    resource.metadata.space !== identity.space
+  ) {
+    return failed(c, "resource metadata must preserve the exact path name and space");
+  }
+
+  if (
+    !isJsonObject(body.expected) ||
+    !exactObjectKeys(
+      body.expected,
+      new Set(["resourceVersion", "nativeIdentity"]),
+      ["resourceVersion"],
+    )
+  ) {
+    return failed(c, "expected.resourceVersion is required; unknown fields are rejected");
+  }
+  const expectedResourceVersion = stringValue(body.expected.resourceVersion);
+  if (
+    !expectedResourceVersion ||
+    !isPortableResourceVersion(expectedResourceVersion)
+  ) {
+    return failed(c, "expected.resourceVersion is invalid");
+  }
+  let nativeIdentity: TakoformNativeIdentity | undefined;
+  if (body.expected.nativeIdentity !== undefined) {
+    if (
+      !isJsonObject(body.expected.nativeIdentity) ||
+      !exactObjectKeys(body.expected.nativeIdentity, new Set(["type", "id"]), ["type", "id"])
+    ) {
+      return failed(c, "expected.nativeIdentity must contain only type and id");
+    }
+    const type = boundedIdentityText(body.expected.nativeIdentity.type);
+    const id = boundedIdentityText(body.expected.nativeIdentity.id);
+    if (!type || !id) return failed(c, "expected.nativeIdentity is invalid");
+    nativeIdentity = { type, id };
+  }
+  const expected = {
+    resourceVersion: expectedResourceVersion,
+    ...(nativeIdentity ? { nativeIdentity } : {}),
+  };
+  const resourceVersion = stringValue(resource.metadata.resourceVersion);
+  if (!resourceVersion || !isPortableResourceVersion(resourceVersion)) {
+    return failed(c, "resource.metadata.resourceVersion is invalid");
+  }
+  if (resourceVersion !== expected.resourceVersion) {
+    return failed(c, "resourceVersion does not match expected.resourceVersion");
+  }
+  if (
+    !isJsonObject(body.transitionEvidence) ||
+    !exactObjectKeys(
+      body.transitionEvidence,
+      new Set(["format", "marker", "digest"]),
+      ["format", "marker", "digest"],
+    ) ||
+    body.transitionEvidence.format !== TAKOFORM_RESOURCE_FORM_TRANSITION_EVIDENCE_FORMAT ||
+    typeof body.transitionEvidence.marker !== "string" ||
+    typeof body.transitionEvidence.digest !== "string"
+  ) {
+    return failed(c, "transitionEvidence is invalid");
+  }
+  return {
+    ok: true,
+    value: {
+      operationId,
+      fromForm,
+      toForm,
+      desiredSpec: resource.spec,
+      expected,
+      transitionEvidence: {
+        format: TAKOFORM_RESOURCE_FORM_TRANSITION_EVIDENCE_FORMAT,
+        marker: body.transitionEvidence.marker,
+        digest: body.transitionEvidence.digest as `sha256:${string}`,
+      },
+    },
+  };
+}
+
+async function portableTransitionResponse(
+  c: Context,
+  result: ResourceFormTransitionResult,
+  identity: { readonly space: string; readonly kind: ResourceShapeKind; readonly name: string },
+): Promise<Response> {
+  const reconcilePath =
+    `${TAKOFORM_FORM_HOST_API_PATH}/resources/${encodeURIComponent(identity.kind)}/` +
+    `${encodeURIComponent(identity.name)}/form-transitions/${encodeURIComponent(result.operationId)}` +
+    `?space=${encodeURIComponent(identity.space)}`;
+  if (result.status === "prepared" || result.status === "indeterminate") {
+    return c.json(
+      {
+        operation: {
+          operationId: result.operationId,
+          status: result.status,
+          requestDigest: result.requestDigest,
+          reconcilePath,
+          dispatchAttempted: result.dispatchAttempted,
+        },
+      },
+      202,
+    );
+  }
+  if (result.status === "rejected") {
+    const rejectionCode = /^[a-z][a-z0-9_]{0,63}$/u.test(
+      result.rejectionCode,
+    )
+      ? result.rejectionCode
+      : "host_rejected";
+    return portableError(
+      c,
+      "form_identity_conflict",
+      "exact Resource Form transition was rejected",
+      409,
+      false,
+      rejectionCode,
+      {
+        operationId: result.operationId,
+        requestDigest: result.requestDigest,
+        status: "failed",
+        failureCode: rejectionCode,
+      },
+    );
+  }
+  const native = result.proof.nativeResources[0];
+  if (!native) {
+    return portableError(c, "internal_error", "committed transition proof is incomplete", 500);
+  }
+  return c.json(
+    {
+      operation: {
+        operationId: result.operationId,
+        status: "committed",
+        requestDigest: result.requestDigest,
+        reconcilePath,
+      },
+      resource: portableResource(
+        transitionResourceObject(result.resource, result.lock),
+        { resourceVersion: String(result.proof.resourceGeneration) },
+      ),
+      transitionProof: {
+        operationId: result.operationId,
+        fromForm: portableFormReference(result.proof.fromForm, identity.kind),
+        toForm: portableFormReference(result.proof.toForm, identity.kind),
+        transitionEvidenceDigest: result.proof.transitionEvidenceDigest,
+        observedSpecDigest: result.proof.observedSpecDigest,
+        resourceVersion: String(result.proof.resourceGeneration),
+        nativeIdentity: { type: native.type, id: native.id },
+        committed: true,
+      },
+    },
+    200,
+  );
+}
+
+function portableTransitionError(c: Context, cause: unknown): Response {
+  if (!(cause instanceof ResourceFormTransitionError)) {
+    return portableError(c, "backend_unavailable", "Resource Form transition is unavailable", 503, true);
+  }
+  const mapping: Record<
+    ResourceFormTransitionError["code"],
+    readonly [TakoformHostErrorCode, number, boolean]
+  > = {
+    invalid_request: ["invalid_argument", 400, false],
+    resource_not_found: ["resource_not_found", 404, false],
+    operation_not_found: ["resource_not_found", 404, false],
+    ownership_conflict: ["permission_denied", 403, false],
+    resource_not_ready: ["resource_busy", 409, false],
+    form_identity_conflict: ["form_identity_conflict", 409, false],
+    form_not_retained: ["form_not_installed", 409, false],
+    transition_not_allowed: ["policy_denied", 403, false],
+    resource_version_conflict: ["resource_version_conflict", 412, false],
+    native_identity_conflict: ["form_identity_conflict", 409, false],
+    operation_conflict: ["resource_busy", 409, false],
+    canonical_conflict: ["resource_busy", 409, true],
+    backend_unavailable: ["backend_unavailable", 503, true],
+  };
+  const selected = mapping[cause.code];
+  return portableError(
+    c,
+    selected[0],
+    "Resource Form transition was rejected",
+    selected[1],
+    selected[2],
+    cause.code === "operation_not_found"
+      ? "form_transition_operation_not_found"
+      : cause.code,
+  );
+}
+
+function exactObjectKeys(
+  value: JsonObject,
+  allowed: ReadonlySet<string>,
+  required: readonly string[],
+): boolean {
+  const keys = Object.keys(value);
+  return keys.every((key) => allowed.has(key)) && required.every((key) => keys.includes(key));
+}
+
+function boundedIdentityText(value: unknown): string | undefined {
+  if (typeof value !== "string" || value.length < 1 || value.length > 256) return undefined;
+  return value.trim() === value && !/[\u0000-\u001f\u007f]/u.test(value) ? value : undefined;
+}
+
 async function readPortableJsonObject(
   c: Context,
 ): Promise<
@@ -1559,6 +2053,40 @@ async function desiredWriteOperation(
 ): Promise<"create" | "update"> {
   const current = await service.get(request.space, request.kind, request.name);
   return current.ok ? "update" : "create";
+}
+
+function transitionResourceObject(
+  record: ResourceShapeRecord,
+  lock: ResolutionLockRecord,
+): ResourceObject {
+  return {
+    apiVersion: "takosumi.dev/v1alpha1",
+    kind: record.kind,
+    ...(record.form ? { form: record.form } : {}),
+    metadata: {
+      name: record.name,
+      space: record.spaceId,
+      generation: record.generation,
+      ...(record.project ? { project: record.project } : {}),
+      ...(record.environment ? { environment: record.environment } : {}),
+      ...(record.owner ? { owner: record.owner } : {}),
+      ...(record.labels ? { labels: record.labels } : {}),
+      managedBy: record.managedBy,
+    },
+    spec: record.spec,
+    status: {
+      phase: record.phase,
+      observedGeneration: record.observedGeneration,
+      resolution: {
+        selectedImplementation: lock.selectedImplementation,
+        target: lock.target,
+        locked: lock.locked,
+        portability: lock.portability ?? "partial",
+      },
+      ...(record.outputs ? { outputs: record.outputs } : {}),
+      ...(record.conditions ? { conditions: record.conditions } : {}),
+    },
+  };
 }
 
 function portableResource(

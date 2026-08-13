@@ -778,6 +778,28 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
     );
   }
 
+  async getResourceFormTransitionRun(input: {
+    readonly workspaceId: string;
+    readonly resourceId: string;
+    readonly operationId: string;
+  }): Promise<ResourceOperationRun | undefined> {
+    const rows = await this.#pgManyJson<ResourceOperationRun>(
+      pgSchema.runs,
+      pgSchema.runs.runJson,
+      {
+        where: and(
+          eq(pgSchema.runs.kind, RUN_KIND_RESOURCE_OPERATION),
+          eq(pgSchema.runs.workspaceId, input.workspaceId),
+          sql`${pgSchema.runs.runJson} ->> 'resourceOperation' = 'form_transition'`,
+          sql`${pgSchema.runs.runJson} -> 'subject' ->> 'id' = ${input.resourceId}`,
+          sql`${pgSchema.runs.runJson} ->> 'resourceOperationKey' = ${input.operationId}`,
+        ),
+        limit: 1,
+      },
+    );
+    return rows[0];
+  }
+
   async transitionResourceOperationRun(
     input: TransitionResourceOperationRunInput,
   ): Promise<TransitionResourceOperationRunResult> {
@@ -831,7 +853,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
           or(
             and(
               eq(pgSchema.runs.status, "running"),
-              sql`${pgSchema.runs.runJson} ->> 'resourceOperation' <> 'artifact'`,
+              sql`${pgSchema.runs.runJson} ->> 'resourceOperation' NOT IN ('artifact', 'form_transition')`,
             ),
             sql`${pgSchema.runs.runJson} -> 'resourceOperationAudit' ->> 'status' = 'pending'`,
           ),

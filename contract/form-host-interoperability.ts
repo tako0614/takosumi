@@ -23,6 +23,14 @@ export const TAKOFORM_INTERFACE_DECLARATIONS_FEATURE =
   "interface_declarations" as const;
 export const TAKOFORM_INTERFACE_DECLARATION_WRITES_FEATURE =
   "interface_declaration_writes" as const;
+export const TAKOFORM_RESOURCE_FORM_TRANSITION_FEATURE =
+  "resource_form_transition" as const;
+export const TAKOFORM_RESOURCE_FORM_TRANSITION_EVIDENCE_FORMAT =
+  "takoform.module-form-transition@v1" as const;
+export const TAKOFORM_RESOURCE_FORM_TRANSITION_OPERATION_FORMAT =
+  "takoform.resource-form-transition-operation@v1" as const;
+export const TAKOFORM_RESOURCE_FORM_TRANSITION_REQUEST_FORMAT =
+  "takoform.resource-form-transition-request@v1" as const;
 
 export interface TakoformHostDiscovery {
   readonly api_versions: readonly [typeof TAKOFORM_FORM_HOST_API_VERSION];
@@ -33,6 +41,8 @@ export interface TakoformHostDiscovery {
     readonly idempotent_lifecycle: true;
     readonly interface_declarations?: true;
     readonly interface_declaration_writes?: true;
+    /** Separate, explicitly composed exact-identity transition operation. */
+    readonly resource_form_transition?: true;
   };
   readonly endpoints: {
     readonly api: string;
@@ -74,6 +84,94 @@ export interface TakoformFormReference {
   };
   readonly packageDigest: string;
 }
+
+/** Non-secret adapter identity used to prove a transition retained its object. */
+export interface TakoformNativeIdentity {
+  readonly type: string;
+  readonly id: string;
+}
+
+/** Product/module declaration bound to one exact old/new FormRef pair. */
+export interface TakoformResourceFormTransitionEvidence {
+  readonly format: typeof TAKOFORM_RESOURCE_FORM_TRANSITION_EVIDENCE_FORMAT;
+  readonly marker: string;
+  /** RFC 8785 SHA-256 over `{format,marker,fromForm,toForm}`. */
+  readonly digest: `sha256:${string}`;
+}
+
+/**
+ * Narrow v1alpha1 request for changing only a canonical Resource Form identity.
+ * Owner, ResolutionLock, revision id, and native evidence are host authority
+ * and therefore deliberately absent from this caller-authored envelope.
+ */
+export interface TakoformResourceFormTransitionRequest {
+  readonly operationId: string;
+  readonly fromForm: TakoformFormReference;
+  readonly toForm: TakoformFormReference;
+  /** Desired to-Form Resource applied by the host in the same transition. */
+  readonly resource: TakoformResource & {
+    readonly metadata: TakoformResource["metadata"] & {
+      /** Same exact current generation N as `expected.resourceVersion`. */
+      readonly resourceVersion: string;
+    };
+  };
+  readonly expected: {
+    /** Exact current generation N; a committed transition returns N + 1. */
+    readonly resourceVersion: string;
+    readonly nativeIdentity?: TakoformNativeIdentity;
+  };
+  readonly transitionEvidence: TakoformResourceFormTransitionEvidence;
+}
+
+export interface TakoformResourceFormTransitionProof {
+  readonly operationId: string;
+  readonly fromForm: TakoformFormReference;
+  readonly toForm: TakoformFormReference;
+  readonly transitionEvidenceDigest: `sha256:${string}`;
+  /** RFC 8785 SHA-256 of the desired `resource.spec` observed by the host. */
+  readonly observedSpecDigest: `sha256:${string}`;
+  readonly resourceVersion: string;
+  readonly nativeIdentity: TakoformNativeIdentity;
+  readonly committed: true;
+}
+
+export type TakoformResourceFormTransitionOperationStatus =
+  | "prepared"
+  | "indeterminate"
+  | "committed";
+
+interface TakoformResourceFormTransitionOperationBase {
+  readonly operationId: string;
+  readonly requestDigest: `sha256:${string}`;
+  readonly reconcilePath: string;
+}
+
+/** Closed public projection: unresolved states always expose the dispatch fence. */
+export type TakoformResourceFormTransitionResponse =
+  | {
+      readonly operation: TakoformResourceFormTransitionOperationBase & {
+        readonly status: "prepared";
+        /** False is the sole same-operation POST resume grant. */
+        readonly dispatchAttempted: false;
+      };
+      readonly resource?: never;
+      readonly transitionProof?: never;
+    }
+  | {
+      readonly operation: TakoformResourceFormTransitionOperationBase & {
+        readonly status: "indeterminate";
+        readonly dispatchAttempted: true;
+      };
+      readonly resource?: never;
+      readonly transitionProof?: never;
+    }
+  | {
+      readonly operation: TakoformResourceFormTransitionOperationBase & {
+        readonly status: "committed";
+      };
+      readonly resource: TakoformResource;
+      readonly transitionProof: TakoformResourceFormTransitionProof;
+    };
 
 /** Principal-readable projection of one verified exact Form Definition. */
 export interface TakoformFormDefinition {
@@ -184,6 +282,7 @@ export function createTakoformHostDiscovery(
   options: {
     readonly interfaceDeclarations?: boolean;
     readonly interfaceDeclarationWrites?: boolean;
+    readonly resourceFormTransition?: boolean;
   } = {},
 ): TakoformHostDiscovery {
   const normalized = origin.replace(/\/+$/u, "");
@@ -200,6 +299,9 @@ export function createTakoformHostDiscovery(
         : {}),
       ...(options.interfaceDeclarationWrites
         ? { interface_declaration_writes: true as const }
+        : {}),
+      ...(options.resourceFormTransition
+        ? { resource_form_transition: true as const }
         : {}),
     },
     endpoints: {

@@ -40,6 +40,7 @@ import {
   type ResourceServiceError,
   type ResourceServiceErrorCode,
   type ResourceShapeService,
+  type ResourceFormTransitionService,
 } from "../domains/resource-shape/mod.ts";
 
 /**
@@ -59,6 +60,8 @@ export interface RegisterResourceShapeRoutesOptions {
   readonly takoformHost?: boolean;
   /** Durable replay authority for the portable Form host lifecycle surface. */
   readonly portableHostIdempotency?: PortableHostIdempotencyCoordinator;
+  /** Separate exact-Form identity transition service and durable saga. */
+  readonly resourceFormTransition?: ResourceFormTransitionService;
   /** Optional canonical byte ingress backed by a host-installed artifact writer. */
   readonly artifactService?: ResourceArtifactService;
   /**
@@ -273,6 +276,9 @@ export function registerResourceShapeRoutes(
             resolveResourceCapsuleOwner:
               options.resolveResourceCapsuleOwner,
           }
+        : {}),
+      ...(options.resourceFormTransition
+        ? { formTransition: options.resourceFormTransition }
         : {}),
       ...(options.interfaceDeclarations
         ? { interfaceDeclarations: options.interfaceDeclarations }
