@@ -85,7 +85,11 @@ export type ReleaseActivationStatus =
   "not_required" | "pending" | "succeeded" | "failed";
 
 export type StateVersionReadiness =
-  "settling" | "activation_pending" | "ready" | "activation_failed";
+  | "settling"
+  | "activation_pending"
+  | "ready"
+  | "activation_failed"
+  | "unavailable";
 
 interface LaunchableStateVersion {
   readonly id: string;

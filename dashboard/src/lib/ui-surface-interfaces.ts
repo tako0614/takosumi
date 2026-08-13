@@ -1,4 +1,8 @@
-import type { Interface, InterfaceBinding } from "takosumi-contract";
+import type {
+  CapsuleInterfaceBlueprint,
+  Interface,
+  InterfaceBinding,
+} from "takosumi-contract";
 import {
   hasCredentialQueryParams,
   isValidInterfaceName,
@@ -14,6 +18,50 @@ import {
 // the literals.
 export { UI_SURFACE_INTERFACE_TYPE, UI_SURFACE_INTERFACE_VERSION };
 export const UI_SURFACE_PERMISSION = UI_SURFACE_OPEN_PERMISSION;
+
+/**
+ * Whether a reviewed InstallConfig promises an installer-authorized launcher.
+ * Completion must wait for this projection instead of falling back to a
+ * workload link and claiming that the service is ready to open.
+ */
+export interface InstallConfigUiSurfaceContext {
+  /** The account-plane Principal for the current authenticated dashboard. */
+  readonly installingPrincipalId?: string;
+  /** The reviewed repository-owned config was compiled by the control plane. */
+  readonly repositoryInstallUxAccepted?: boolean;
+}
+
+export function installConfigRequiresUiSurface(
+  blueprints: readonly CapsuleInterfaceBlueprint[] | undefined,
+  context: InstallConfigUiSurfaceContext = {},
+): boolean {
+  const installingPrincipalId = context.installingPrincipalId?.trim();
+  return (blueprints ?? []).some(
+    (blueprint) =>
+      blueprint.spec.type === UI_SURFACE_INTERFACE_TYPE &&
+      blueprint.spec.version === UI_SURFACE_INTERFACE_VERSION &&
+      isLauncherDocument(blueprint.spec.document) &&
+      (blueprint.bindings ?? []).some((binding) =>
+        binding.permissions.includes(UI_SURFACE_OPEN_PERMISSION) &&
+        // Before the Capsule config is persisted the contract carries an
+        // explicit installer placeholder. After repository install-UX
+        // compilation that placeholder is intentionally resolved to an exact
+        // Principal ref. The marker is provenance, not authority by itself:
+        // only the current authenticated Principal can make that resolved
+        // binding a dashboard-launch requirement. Arbitrary fixed Principal
+        // or embedded bindings therefore do not trigger futile polling.
+        (binding.subject?.source === "installing_principal" ||
+          (context.repositoryInstallUxAccepted === true &&
+            installingPrincipalId !== undefined &&
+            binding.subjectRef?.kind === "Principal" &&
+            binding.subjectRef.id === installingPrincipalId)),
+      ),
+  );
+}
+
+function isLauncherDocument(value: unknown): value is Record<string, unknown> {
+  return isRecord(value) && value.launcher === true;
+}
 
 /**
  * Strict dashboard consumer view of a Capsule-owned launcher Interface.

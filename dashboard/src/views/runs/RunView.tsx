@@ -773,11 +773,7 @@ function Inner() {
     appliedRunStateVersionKey,
     async (key) => {
       const [id] = key.split(":");
-      try {
-        return await listStateVersions(id);
-      } catch {
-        return [];
-      }
+      return await listStateVersions(id);
     },
   );
   const completedRunStateVersion = createMemo(() => {
@@ -785,7 +781,13 @@ function Inner() {
     if (!r || r.type !== "apply" || r.status !== "succeeded") {
       return undefined;
     }
-    return (stateVersions() ?? []).find((row) => row.createdByRunId === r.id);
+    // A rejected Resource accessor throws. This memo is a separate reactive
+    // computation from `completedRunReadiness`, so its dependency can update
+    // on the rejection before the parent memo gets a chance to inspect
+    // `stateVersions.error`. Guard here as well and keep the last UI shell
+    // alive; the parent maps the failed read to `unavailable` and retries it.
+    if (stateVersions.error) return undefined;
+    return (stateVersions.latest ?? []).find((row) => row.createdByRunId === r.id);
   });
   const completedRunReadiness = createMemo((): StateVersionReadiness => {
     const r = run.latest;
@@ -795,14 +797,12 @@ function Inner() {
     if (stateVersions.loading || activity.loading) {
       return "settling";
     }
-    // A failed activity fetch must NOT strand readiness in "settling" forever
-    // (activity never retries), nor throw out of this memo — reading an errored
-    // resource throws. Fall back to computing readiness from the stateVersion
-    // alone. Lifecycle requirements are not inferred from OpenTofu Outputs;
-    // matching lifecycle activity is the only activation signal here.
+    if (stateVersions.error || activity.error) {
+      return "unavailable";
+    }
     return stateVersionReadinessAfterApply(
       completedRunStateVersion(),
-      activity.error ? [] : (activity() ?? []),
+      activity.latest ?? [],
       capsuleId() ?? undefined,
     );
   });
@@ -1377,6 +1377,13 @@ function Inner() {
               kind: "error",
               text: t("run.summary.activationFailed"),
               sub: t("app.surfaces.activationFailed"),
+            };
+          }
+          if (readiness === "unavailable") {
+            return {
+              kind: "error",
+              text: t("run.summary.readinessUnavailable"),
+              sub: t("run.summary.readinessUnavailableHint"),
             };
           }
         }

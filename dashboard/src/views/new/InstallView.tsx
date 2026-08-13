@@ -50,7 +50,10 @@ import {
   type ProviderBindings,
   type ProviderConnection,
 } from "../../lib/control-api.ts";
-import { listAuthorizedUiSurfaces } from "../../lib/ui-surface-interfaces.ts";
+import {
+  installConfigRequiresUiSurface,
+  listAuthorizedUiSurfaces,
+} from "../../lib/ui-surface-interfaces.ts";
 import {
   capsuleNameFromUrl,
   hasInstallPrefillParams,
@@ -133,7 +136,11 @@ type Phase =
   | "connections"
   | "setup"
   | "review"
+  | "finishing"
   | "done";
+
+const UI_SURFACE_READBACK_ATTEMPTS = 10;
+const UI_SURFACE_READBACK_DELAY_MS = 3_000;
 
 interface EntryChoice {
   readonly id: string;
@@ -199,10 +206,14 @@ function rowsFromCompatibility(
 }
 
 export default function InstallView() {
-  return <Page title={t("installStore.title")}>{() => <Inner />}</Page>;
+  return (
+    <Page title={t("installStore.title")}>
+      {(session) => <Inner installingPrincipalId={session.subject} />}
+    </Page>
+  );
 }
 
-function Inner() {
+function Inner(props: { readonly installingPrincipalId: string }) {
   const location = useLocation();
   const initial = parseInstallPrefill(location.search);
   const appHandoff = appHandoffFromSearch(location.search);
@@ -272,6 +283,7 @@ function Inner() {
   const [busy, setBusy] = createSignal(false);
   const [entryEvidence, setEntryEvidence] = createSignal<EntryEvidence>();
   const [interfaceUrl, setInterfaceUrl] = createSignal<string>();
+  let completionAttempt = 0;
 
   const selectedTitle = createMemo(() => {
     const selected = listing();
@@ -926,6 +938,7 @@ function Inner() {
   };
 
   const reset = () => {
+    completionAttempt += 1;
     setListing(null);
     setGitUrl("");
     setGitRef("");
@@ -996,19 +1009,54 @@ function Inner() {
     evidence.requestedRef ?? evidence.resolvedTag ?? evidence.commit;
 
   const finishInstallation = async () => {
-    setPhase("done");
+    const attempt = ++completionAttempt;
+    setPhase("finishing");
     setInterfaceUrl(undefined);
+    setError(undefined);
     const workspace = currentWorkspaceId();
     const capsule = capsuleId();
-    if (!workspace || !capsule || !workspaceIsCurrent(workspace)) return;
-    try {
-      const surfaces = await listAuthorizedUiSurfaces(workspace, {
-        capsuleId: capsule,
-      });
-      if (workspaceIsCurrent(workspace)) setInterfaceUrl(surfaces[0]?.url);
-    } catch {
-      // The service detail link remains the safe completion target when the
-      // Interface projection is still settling or unavailable.
+    if (!workspace || !capsule || !workspaceIsCurrent(workspace)) {
+      setError(t("installStore.launchNotReady"));
+      return;
+    }
+    const config = installConfig();
+    if (
+      !installConfigRequiresUiSurface(config?.interfaceBlueprints, {
+        installingPrincipalId: props.installingPrincipalId,
+        repositoryInstallUxAccepted:
+          config?.installExperience?.repositoryInstallUx?.status ===
+          "accepted",
+      })
+    ) {
+      setPhase("done");
+      return;
+    }
+    for (let index = 0; index < UI_SURFACE_READBACK_ATTEMPTS; index += 1) {
+      try {
+        const surfaces = await listAuthorizedUiSurfaces(workspace, {
+          capsuleId: capsule,
+        });
+        if (attempt !== completionAttempt || !workspaceIsCurrent(workspace)) {
+          return;
+        }
+        const surface = surfaces[0];
+        if (surface) {
+          setInterfaceUrl(surface.url);
+          setPhase("done");
+          return;
+        }
+      } catch {
+        // A transient read failure is retried within the same bounded
+        // completion attempt. It is never converted into successful setup.
+      }
+      if (index + 1 < UI_SURFACE_READBACK_ATTEMPTS) {
+        await new Promise((resolve) =>
+          globalThis.setTimeout(resolve, UI_SURFACE_READBACK_DELAY_MS),
+        );
+      }
+    }
+    if (attempt === completionAttempt && workspaceIsCurrent(workspace)) {
+      setError(t("installStore.launchNotReady"));
     }
   };
 
@@ -1592,6 +1640,37 @@ function Inner() {
             capsuleId={capsuleId()!}
             onDone={() => void finishInstallation()}
           />
+        </section>
+      </Show>
+
+      <Show when={phase() === "finishing" && capsuleId()}>
+        <section
+          class="iv-workbench iv-centered"
+          role="status"
+          aria-live="polite"
+        >
+          <Show when={!error()}>
+            <Spinner size={24} />
+            <h2>{t("installStore.finalizing")}</h2>
+            <p>{t("installStore.finalizingHint")}</p>
+          </Show>
+          <Show when={error()}>
+            <div class="iv-action-row">
+              <Button
+                type="button"
+                variant="primary"
+                onClick={() => void finishInstallation()}
+              >
+                {t("common.retry")}
+              </Button>
+              <Button
+                href={`/workloads/${encodeURIComponent(capsuleId()!)}`}
+                variant="secondary"
+              >
+                {t("installStore.runDetails")}
+              </Button>
+            </div>
+          </Show>
         </section>
       </Show>
 
