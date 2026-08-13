@@ -11,6 +11,17 @@ import {
   StateArtifactCrypto,
   type SealedArtifact,
 } from "../state_crypto.ts";
+import {
+  RUNNER_MUTATION_INDETERMINATE_CODE,
+  type RunnerMutationAction,
+  type RunnerMutationIndeterminatePayload,
+} from "../runner_protocol.ts";
+import {
+  isRunCredentialToken,
+  runCredentialTokenSecret,
+  verifyRunCredentialTokenAuthority,
+  type RunCredentialTokenPayload,
+} from "../../../core/shared/run_credential_tokens.ts";
 import { redactString } from "takosumi-contract/redaction";
 
 const DEFAULT_PLAN_ARTIFACT_BUCKET = "takos-artifacts";
@@ -25,6 +36,39 @@ const R2_PUT_RETRY_ATTEMPTS = 8;
 const R2_PUT_RETRY_BASE_MS = 500;
 const R2_PUT_RETRY_MAX_MS = 10_000;
 const BOUNDED_STREAM_INITIAL_BYTES = 64 * 1024;
+const RUNNER_ARTIFACT_RELAY_FAILED_CODE = "runner_artifact_relay_failed";
+const RUNNER_REJECTED_CODE = "runner_rejected";
+const RUNNER_PROVIDER_EXECUTION_FAILED_CODE = "provider_execution_failed";
+const RUNNER_PROVIDER_FAILURE_CODES = new Set([
+  "apply_failed",
+  RUNNER_PROVIDER_EXECUTION_FAILED_CODE,
+]);
+type RunnerFailurePhase =
+  | "plan"
+  | "apply"
+  | "destroy"
+  | "restore"
+  | "source_sync"
+  | "backup"
+  | "release"
+  | "stable_semver_tag"
+  | "source_snapshot_file"
+  | "compatibility_check";
+const RUNNER_R2_LOG_REASON = Object.freeze({
+  putRetryable: "r2_put_retryable",
+  currentStateCacheWriteFailed: "current_state_cache_write_failed",
+});
+const RUNNER_R2_LOG_ARTIFACT = Object.freeze({
+  sourceArchive: "source_archive",
+  stateObject: "state_object",
+  rawOutputs: "raw_outputs",
+  restoredStateObject: "restored_state_object",
+  planArtifact: "plan_artifact",
+  planJsonArtifact: "plan_json_artifact",
+  stateArtifact: "state_artifact",
+  statePointer: "state_pointer",
+  other: "other",
+});
 
 export const RUNNER_ARTIFACT_LIMIT_DEFAULTS = Object.freeze({
   sourceArchive: 50 * 1024 * 1024,
@@ -258,6 +302,44 @@ const DEFAULT_RUNNER_KEEPALIVE_SECONDS = 0;
 const RUNNER_MIN_ACTIVITY_GRACE_SECONDS = 30;
 const MAX_RUNNER_KEEPALIVE_SECONDS = 900;
 const RUNNER_STARTUP_SECONDS_HEADER = "x-takosumi-runner-startup-seconds";
+const RUNNER_MUTATION_INDETERMINATE_HEADER =
+  "x-takosumi-runner-mutation-indeterminate";
+// This is a permanent authority slot, not a schema-versioned cache key. An
+// unrecognized record at this key fails closed instead of letting a future
+// record-format migration accidentally grant a second provider dispatch.
+const RUNNER_MUTATION_AUTHORITY_STORAGE_KEY =
+  "runner-mutation-authority";
+const RUNNER_MUTATION_DISPATCH_STORAGE_PREFIX =
+  "runner-mutation-dispatch@v2:";
+
+interface RunnerMutationDispatchRecord {
+  readonly kind: "takosumi.runner-mutation-dispatch@v2";
+  readonly action: RunnerMutationAction;
+  /** SHA-256 over immutable inputs and stable credential authority claims. */
+  readonly semanticDigest: string;
+  /**
+   * `preparing` is provably before provider dispatch; `orphaned` means a
+   * target existed before this request had durable dispatch authority.
+   */
+  readonly phase:
+    | "preparing"
+    | "dispatched"
+    | "indeterminate"
+    | "orphaned";
+  /** Once dispatched, this durable claim permanently forbids redispatch. */
+  readonly redispatchBlocked: true;
+}
+
+type RunnerMutationAuthorityClaim =
+  | {
+      readonly kind: "preparing";
+      readonly record: RunnerMutationDispatchRecord;
+    }
+  | {
+      readonly kind: "replay";
+      readonly record: RunnerMutationDispatchRecord;
+    }
+  | { readonly kind: "blocked" };
 
 export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<CloudflareWorkerEnv> {
   defaultPort = 8080;
@@ -268,6 +350,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
 
   #stateCryptoInstance: StateArtifactCrypto | undefined;
   #lastStartupSeconds: number | undefined;
+  readonly #activeMutationPreparations = new Set<string>();
   readonly #localRunnerProxyUrl: URL | undefined;
   readonly #artifactLimits: RunnerArtifactLimits;
 
@@ -278,7 +361,6 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     if (env.LOCAL_SUBSTRATE_TEST_BED === "1") {
       console.log("OpenTofu runner local proxy composition", {
         configured: Boolean(this.#localRunnerProxyUrl),
-        target: this.#localRunnerProxyUrl?.origin,
       });
     }
     const keepaliveSeconds = runnerKeepaliveSeconds(env);
@@ -311,7 +393,11 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
   }
 
   onError(error: unknown): unknown {
-    console.error("OpenTofu runner container failed", error);
+    // Container errors can include request/provider diagnostics. The mutation
+    // owner records only a safe type and never emits the raw message or stack.
+    console.error("OpenTofu runner container failed", {
+      errorName: safeRunnerErrorName(error),
+    });
     throw error;
   }
 
@@ -324,7 +410,9 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
   }
 
   onStop(params: { readonly exitCode: number; readonly reason: string }): void {
-    console.error("OpenTofu runner container stopped", params);
+    console.error("OpenTofu runner container stopped", {
+      exitCode: params.exitCode,
+    });
   }
 
   async onActivityExpired(): Promise<void> {
@@ -351,10 +439,13 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       runDispatch &&
       runnerShouldShutdownAfterRun(runAction, runnerKeepaliveSeconds(this.env));
     let runSucceeded = false;
+    let mutationIndeterminate = false;
     try {
       this.#lastStartupSeconds = undefined;
       const response = await this.#fetchWithDurablePlanArtifacts(request);
       runSucceeded = response.ok;
+      mutationIndeterminate =
+        response.headers.get(RUNNER_MUTATION_INDETERMINATE_HEADER) === "1";
       const output = runDispatch
         ? await bufferedResponse(
             response,
@@ -363,21 +454,18 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         : response;
       return withRunnerStartupHeader(output, this.#lastStartupSeconds);
     } catch (error) {
-      const url = new URL(request.url);
       console.error("OpenTofu runner artifact relay failed", {
-        method: request.method,
-        path: url.pathname,
-        errorName: error instanceof Error ? error.name : typeof error,
-        errorMessage: error instanceof Error ? error.message : String(error),
-        ...(error instanceof Error && error.stack
-          ? { stack: error.stack }
-          : {}),
+        operation: runnerRelayOperation(request),
+        reason: safeRunnerFailureReason(error),
+        errorName: safeRunnerErrorName(error),
       });
       if (error instanceof RunnerArtifactSizeLimitError) {
         return Response.json(
           {
             error: "OpenTofu runner artifact exceeds configured byte limit",
             errorCode: error.code,
+            status: "failed",
+            phase: runnerRelayOperation(request),
             artifact: error.artifact,
             maxBytes: error.maxBytes,
             observedBytes: error.observedBytes,
@@ -391,6 +479,8 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
             error:
               "OpenTofu runner artifact durability acknowledgement is ambiguous",
             errorCode: error.code,
+            status: "failed",
+            phase: runnerRelayOperation(request),
             retryable: true,
             detail:
               "redeliver the same ApplyRun; its immutable target will be adopted if the write committed",
@@ -401,12 +491,20 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       return Response.json(
         {
           error: "OpenTofu runner artifact relay failed",
-          detail: redactedErrorMessage(error, "run artifact relay failed"),
+          errorCode: RUNNER_ARTIFACT_RELAY_FAILED_CODE,
+          status: "failed",
+          phase: runnerRelayOperation(request),
+          reason: safeRunnerFailureReason(error),
+          detail: "runner artifact relay failed",
         },
         { status: 500 },
       );
     } finally {
-      if (runDispatch && (!runSucceeded || shutdownAfterRun)) {
+      if (
+        runDispatch &&
+        !mutationIndeterminate &&
+        (!runSucceeded || shutdownAfterRun)
+      ) {
         await this.#shutdownContainerIfSupported();
       }
       this.#lastStartupSeconds = undefined;
@@ -464,8 +562,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         return;
       } catch (error) {
         console.error("OpenTofu runner container destroy failed", {
-          errorName: error instanceof Error ? error.name : typeof error,
-          errorMessage: error instanceof Error ? error.message : String(error),
+          errorName: safeRunnerErrorName(error),
         });
       }
     }
@@ -476,8 +573,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       console.log("OpenTofu runner container stop requested");
     } catch (error) {
       console.error("OpenTofu runner container stop failed", {
-        errorName: error instanceof Error ? error.name : typeof error,
-        errorMessage: error instanceof Error ? error.message : String(error),
+        errorName: safeRunnerErrorName(error),
       });
     }
   }
@@ -539,6 +635,217 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     }
   }
 
+  async #claimMutationPreparation(
+    runId: string,
+    action: RunnerMutationAction,
+    requestPayload: unknown,
+  ): Promise<RunnerMutationAuthorityClaim> {
+    let semanticDigest: string;
+    try {
+      semanticDigest = await runnerMutationSemanticDigest(
+        runId,
+        action,
+        requestPayload,
+        this.env,
+      );
+    } catch (error) {
+      // Credential expiry/signature/context failures and malformed semantic
+      // inputs are request rejection, not infrastructure retry authority. Do
+      // not let their potentially secret-bearing detail reach the outer log.
+      console.error("OpenTofu runner mutation authority rejected", {
+        action,
+        errorName: safeRunnerErrorName(error),
+        redispatchBlocked: true,
+      });
+      return { kind: "blocked" };
+    }
+    // A Durable Object has one live isolate for this ID, so acquiring this
+    // in-isolate owner before the first storage await closes concurrent claim
+    // races. Durable storage below, not this Set, is the restart authority.
+    if (this.#activeMutationPreparations.size > 0) {
+      return { kind: "blocked" };
+    }
+    this.#activeMutationPreparations.add(semanticDigest);
+    try {
+      const existing = await this.ctx.storage.get<unknown>(
+        RUNNER_MUTATION_AUTHORITY_STORAGE_KEY,
+      );
+      if (existing !== undefined) {
+        const existingRecord = parseRunnerMutationDispatchRecord(existing);
+        if (
+          !existingRecord ||
+          existingRecord.action !== action ||
+          existingRecord.semanticDigest !== semanticDigest
+        ) {
+          this.#activeMutationPreparations.delete(semanticDigest);
+          return { kind: "blocked" };
+        }
+        if (existingRecord.phase === "orphaned") {
+          this.#activeMutationPreparations.delete(semanticDigest);
+          return { kind: "blocked" };
+        }
+        if (existingRecord.phase !== "preparing") {
+          this.#activeMutationPreparations.delete(semanticDigest);
+          return { kind: "replay", record: existingRecord };
+        }
+        // A persisted `preparing` phase proves no provider dispatch authority
+        // was granted. Resume it only after isolate recreation (the in-memory
+        // owner is absent); the durable phase carries restart safety.
+        return { kind: "preparing", record: existingRecord };
+      }
+
+      const record: RunnerMutationDispatchRecord = {
+        kind: "takosumi.runner-mutation-dispatch@v2",
+        action,
+        semanticDigest,
+        phase: "preparing",
+        redispatchBlocked: true,
+      };
+      await this.#writeMutationDispatchRecord(record);
+      return { kind: "preparing", record };
+    } catch (error) {
+      this.#activeMutationPreparations.delete(semanticDigest);
+      throw error;
+    }
+  }
+
+  async #blockPreparedMutationWithExistingTarget(
+    preparation: RunnerMutationDispatchRecord,
+  ): Promise<Response> {
+    try {
+      // The target predates any recorded provider dispatch for these
+      // semantics. Persist a distinct terminal phase so neither target removal
+      // nor a later exact replay can turn it into provider/adoption authority.
+      await this.#writeMutationDispatchRecord({
+        ...preparation,
+        phase: "orphaned",
+      });
+    } finally {
+      this.#activeMutationPreparations.delete(
+        preparation.semanticDigest,
+      );
+    }
+    return runnerMutationIndeterminateResponse(preparation.action);
+  }
+
+  async #markMutationDispatched(
+    preparation: RunnerMutationDispatchRecord,
+  ): Promise<RunnerMutationDispatchRecord | undefined> {
+    const current = parseRunnerMutationDispatchRecord(
+      await this.ctx.storage.get<unknown>(
+        RUNNER_MUTATION_AUTHORITY_STORAGE_KEY,
+      ),
+    );
+    if (
+      !current ||
+      current.phase !== "preparing" ||
+      current.action !== preparation.action ||
+      current.semanticDigest !== preparation.semanticDigest
+    ) {
+      this.#activeMutationPreparations.delete(preparation.semanticDigest);
+      return undefined;
+    }
+    const dispatched: RunnerMutationDispatchRecord = {
+      ...current,
+      phase: "dispatched",
+    };
+    await this.#writeMutationDispatchRecord(dispatched);
+    this.#activeMutationPreparations.delete(preparation.semanticDigest);
+    return dispatched;
+  }
+
+  async #releaseMutationPreparation(
+    preparation: RunnerMutationDispatchRecord,
+  ): Promise<void> {
+    try {
+      const current = parseRunnerMutationDispatchRecord(
+        await this.ctx.storage.get<unknown>(
+          RUNNER_MUTATION_AUTHORITY_STORAGE_KEY,
+        ),
+      );
+      if (
+        !current ||
+        current.phase !== "preparing" ||
+        current.action !== preparation.action ||
+        current.semanticDigest !== preparation.semanticDigest
+      ) {
+        return;
+      }
+      // No provider dispatch was authorized, so both preparation records can
+      // be removed and the exact request may safely retry. Issue both deletes
+      // without an intervening await to keep the storage update atomic.
+      const authorityDelete = this.ctx.storage.delete(
+        RUNNER_MUTATION_AUTHORITY_STORAGE_KEY,
+      );
+      const evidenceDelete = this.ctx.storage.delete(
+        `${RUNNER_MUTATION_DISPATCH_STORAGE_PREFIX}${preparation.semanticDigest}`,
+      );
+      await Promise.all([authorityDelete, evidenceDelete]);
+    } finally {
+      this.#activeMutationPreparations.delete(preparation.semanticDigest);
+    }
+  }
+
+  async #writeMutationDispatchRecord(
+    record: RunnerMutationDispatchRecord,
+  ): Promise<void> {
+    // Both puts are issued without an intervening await so Durable Object
+    // storage coalesces them atomically. The fixed authority key fences request
+    // digest drift; the digest-keyed entry is the exact durable evidence.
+    const authorityWrite = this.ctx.storage.put(
+      RUNNER_MUTATION_AUTHORITY_STORAGE_KEY,
+      record,
+    );
+    const evidenceWrite = this.ctx.storage.put(
+      `${RUNNER_MUTATION_DISPATCH_STORAGE_PREFIX}${record.semanticDigest}`,
+      record,
+    );
+    await Promise.all([authorityWrite, evidenceWrite]);
+  }
+
+  async #dispatchMutationOnce(
+    request: Request,
+    record: RunnerMutationDispatchRecord,
+  ): Promise<Response> {
+    try {
+      return await this.#containerFetch(request);
+    } catch (error) {
+      return await this.#recordMutationIndeterminate(record, error);
+    }
+  }
+
+  async #recordMutationIndeterminate(
+    record: RunnerMutationDispatchRecord,
+    error: unknown,
+  ): Promise<Response> {
+    // Once containerFetch has been invoked, no transport exception proves that
+    // provider execution did not happen. Never inspect or log its message: it
+    // may contain materialized provider credentials.
+    console.error("OpenTofu runner mutation outcome is indeterminate", {
+      action: record.action,
+      errorName: safeRunnerErrorName(error),
+      redispatchBlocked: true,
+    });
+    try {
+      await this.#writeMutationDispatchRecord({
+        ...record,
+        phase: "indeterminate",
+      });
+    } catch (storageError) {
+      // The already-durable `dispatched` phase still blocks replay if this
+      // evidence refinement is unavailable. Never log storage diagnostics.
+      console.error(
+        "OpenTofu runner mutation indeterminate evidence update failed",
+        {
+          action: record.action,
+          errorName: safeRunnerErrorName(storageError),
+          redispatchBlocked: true,
+        },
+      );
+    }
+    return runnerMutationIndeterminateResponse(record.action);
+  }
+
   async #fetchWithDurablePlanArtifacts(request: Request): Promise<Response> {
     const url = new URL(request.url);
     const match = /^\/runs\/([^/]+)$/.exec(url.pathname);
@@ -581,10 +888,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     const stateKeys = stateScope
       ? []
       : await stateArtifactKeys(envelope.request);
-    if (
-      (envelope.action === "apply" || envelope.action === "destroy") &&
-      stateScope
-    ) {
+    if (isRunnerMutationAction(envelope.action) && stateScope) {
       if (envelope.action === "apply" && !rawOutputRef) {
         throw new Error("apply with stateScope requires rawOutputRef");
       }
@@ -600,56 +904,141 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
           rawOutputRef,
         );
       }
-      const adopted = await this.#adoptCompletedStateMutationFromR2(
-        applyRunId,
-        stateScope,
-        envelope.action,
-        rawOutputRef,
-      );
-      if (adopted) return adopted;
     }
-    // M2: restore the snapshotted source tree into the container before any
-    // build/plan phase (mirrors the plan-artifact restore protocol).
-    if (sourceArchive) {
-      await this.#restoreSourceArchive(runId, sourceArchive, url);
-    }
-    // remote_state dependencies (spec §15): fetch + decrypt each producer state
-    // and stream it to the container's dep-state restore route BEFORE init/plan/
-    // apply, so the consumer's `terraform_remote_state` data sources resolve.
-    if (depStates.length > 0) {
-      await this.#restoreDepStates(runId, depStates, url);
-    }
-    if (envelope.action === "apply" || envelope.action === "destroy") {
-      await this.#restorePlanArtifact(runId, envelope.request, url);
-    }
-    if (stateScope) {
-      await this.#restoreStateFromR2State(
+    const dispatchRequest = () =>
+      new Request(request.url, {
+        method: request.method,
+        headers: runnerRequestHeaders(request),
+        body: bodyText,
+        signal: request.signal,
+      });
+    let mutationPreparation: RunnerMutationDispatchRecord | undefined;
+    let mutationDispatch: RunnerMutationDispatchRecord | undefined;
+    let mutationRequest: Request | undefined;
+    if (isRunnerMutationAction(envelope.action)) {
+      const claim = await this.#claimMutationPreparation(
         runId,
-        stateScope,
-        url,
         envelope.action,
-        stateAdoption,
+        envelope.request,
       );
-    } else if (stateKeys.length > 0) {
-      await this.#restoreStateArtifact(runId, stateKeys, url);
+      if (claim.kind === "blocked") {
+        return runnerMutationIndeterminateResponse(envelope.action);
+      }
+      if (claim.kind === "replay") {
+        // A completed state/output target is only adoptable after the current
+        // credential has been freshly verified and the exact stable semantic
+        // digest matches the durable dispatch authority.
+        const adopted =
+          stateScope && applyRunId
+            ? await this.#adoptCompletedStateMutationFromR2(
+                applyRunId,
+                stateScope,
+                envelope.action,
+                rawOutputRef,
+              )
+            : undefined;
+        return (
+          adopted ?? runnerMutationIndeterminateResponse(envelope.action)
+        );
+      }
+      mutationPreparation = claim.record;
+      if (
+        stateScope &&
+        (await this.#r2State().head(stateScope.stateRef))
+      ) {
+        // A target without a matching dispatched authority may be a legacy or
+        // out-of-band mutation. It cannot authorize adoption or provider I/O.
+        return await this.#blockPreparedMutationWithExistingTarget(
+          mutationPreparation,
+        );
+      }
     }
-    await this.#ensureContainerReady(url);
-    const unboundedRunnerResponse = await this.#containerFetchAfterReady(
-      () =>
-        new Request(request.url, {
-          method: request.method,
-          headers: runnerRequestHeaders(request),
-          body: bodyText,
-          signal: request.signal,
-        }),
-      url,
-    );
+    try {
+      // M2: restore the snapshotted source tree into the container before any
+      // build/plan phase (mirrors the plan-artifact restore protocol).
+      if (sourceArchive) {
+        await this.#restoreSourceArchive(runId, sourceArchive, url);
+      }
+      // remote_state dependencies (spec §15): fetch + decrypt each producer
+      // state and stream it to the container BEFORE init/plan/apply.
+      if (depStates.length > 0) {
+        await this.#restoreDepStates(runId, depStates, url);
+      }
+      if (envelope.action === "apply" || envelope.action === "destroy") {
+        await this.#restorePlanArtifact(runId, envelope.request, url);
+      }
+      if (stateScope) {
+        await this.#restoreStateFromR2State(
+          runId,
+          stateScope,
+          url,
+          envelope.action,
+          stateAdoption,
+        );
+      } else if (stateKeys.length > 0) {
+        await this.#restoreStateArtifact(runId, stateKeys, url);
+      }
+      await this.#ensureContainerReady(url);
+      if (mutationPreparation) {
+        // Construct and preflight before advancing the durable phase. An
+        // already-aborted request is a provable pre-dispatch failure.
+        mutationRequest = dispatchRequest();
+        if (mutationRequest.signal.aborted) {
+          throw mutationRequest.signal.reason instanceof Error
+            ? mutationRequest.signal.reason
+            : new DOMException(
+                "OpenTofu runner mutation was aborted before dispatch",
+                "AbortError",
+              );
+        }
+        mutationDispatch = await this.#markMutationDispatched(
+          mutationPreparation,
+        );
+        if (!mutationDispatch) {
+          return runnerMutationIndeterminateResponse(
+            mutationPreparation.action,
+          );
+        }
+      }
+    } catch (error) {
+      if (mutationPreparation && !mutationDispatch) {
+        await this.#releaseMutationPreparation(mutationPreparation);
+      }
+      throw error;
+    }
+
+    let unboundedRunnerResponse: Response;
+    if (mutationDispatch && mutationRequest) {
+      unboundedRunnerResponse = await this.#dispatchMutationOnce(
+        mutationRequest,
+        mutationDispatch,
+      );
+    } else {
+      unboundedRunnerResponse = await this.#containerFetchAfterReady(
+        dispatchRequest,
+        url,
+      );
+    }
     // Bound every container result before any state/plan persistence. This also
     // covers legacy state paths that do not otherwise parse the JSON payload.
-    const runnerResponse = await bufferedResponse(
-      unboundedRunnerResponse,
-      this.#artifactLimits.runnerResponse,
-    );
+    let runnerResponse: Response;
+    try {
+      runnerResponse = await bufferedResponse(
+        unboundedRunnerResponse,
+        this.#artifactLimits.runnerResponse,
+      );
+    } catch (error) {
+      if (
+        mutationDispatch &&
+        !(error instanceof RunnerArtifactSizeLimitError)
+      ) {
+        return await this.#recordMutationIndeterminate(
+          mutationDispatch,
+          error,
+        );
+      }
+      throw error;
+    }
     const providerExecutionFailed =
       envelope.action === "apply" &&
       !runnerResponse.ok &&
@@ -673,13 +1062,27 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
           envelope.action,
           rawOutputRef,
           providerExecutionFailed,
+          mutationDispatch!,
         );
       }
       if (runnerResponse.ok && stateKeys.length > 0) {
-        await this.#persistStateArtifact(runId, stateKeys, url);
+        const indeterminate = await this.#persistStateArtifact(
+          runId,
+          stateKeys,
+          url,
+          mutationDispatch!,
+        );
+        if (indeterminate) return indeterminate;
       }
     }
     if (envelope.action !== "plan" || !runnerResponse.ok) {
+      if (!runnerResponse.ok) {
+        return await normalizeRunnerFailureResponse(
+          runnerResponse,
+          envelope.action,
+          this.#artifactLimits.runnerResponse,
+        );
+      }
       return runnerResponse;
     }
     return await this.#persistPlanArtifact(
@@ -728,7 +1131,13 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         }),
       url,
     );
-    if (!runnerResponse.ok) return runnerResponse;
+    if (!runnerResponse.ok) {
+      return await normalizeRunnerFailureResponse(
+        runnerResponse,
+        envelope.action,
+        this.#artifactLimits.runnerResponse,
+      );
+    }
     const payload = await readJsonObject(
       runnerResponse,
       this.#artifactLimits.runnerResponse,
@@ -1045,11 +1454,22 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     runnerResponse: Response,
     action: "apply" | "destroy",
     rawOutputRef: string | undefined,
-    providerExecutionFailed = false,
+    providerExecutionFailed: boolean,
+    mutationDispatch: RunnerMutationDispatchRecord,
   ): Promise<Response> {
-    const stateResponse = await this.#containerFetch(
-      new Request(stateArtifactUrl(baseUrl, containerRunId), { method: "GET" }),
-    );
+    let stateResponse: Response;
+    try {
+      stateResponse = await this.#containerFetch(
+        new Request(stateArtifactUrl(baseUrl, containerRunId), {
+          method: "GET",
+        }),
+      );
+    } catch (error) {
+      return await this.#recordMutationIndeterminate(
+        mutationDispatch,
+        error,
+      );
+    }
     if (stateResponse.status === 404) {
       if (providerExecutionFailed) {
         const payload = await readJsonObject(
@@ -1070,11 +1490,20 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         `container state artifact fetch failed: ${stateResponse.status}`,
       );
     }
-    const plaintext = await readBoundedResponseBytes(
-      stateResponse,
-      "state",
-      this.#artifactLimits.state,
-    );
+    let plaintext: Uint8Array;
+    try {
+      plaintext = await readBoundedResponseBytes(
+        stateResponse,
+        "state",
+        this.#artifactLimits.state,
+      );
+    } catch (error) {
+      if (error instanceof RunnerArtifactSizeLimitError) throw error;
+      return await this.#recordMutationIndeterminate(
+        mutationDispatch,
+        error,
+      );
+    }
     const sealed = await this.#stateCrypto().seal(plaintext);
     const payload = await readJsonObject(
       runnerResponse,
@@ -1591,7 +2020,8 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     } catch (error) {
       if (!(error instanceof RunnerArtifactSizeLimitError)) throw error;
       console.warn("skipping oversized OpenTofu plan JSON artifact", {
-        runId,
+        artifact: "plan_json",
+        reason: "artifact_size_limit",
         sizeBytes: error.observedBytes,
         maxBytes,
       });
@@ -1713,21 +2143,39 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     runId: string,
     keys: readonly string[],
     baseUrl: URL,
-  ): Promise<void> {
-    const response = await this.#containerFetch(
-      new Request(stateArtifactUrl(baseUrl, runId), { method: "GET" }),
-    );
-    if (response.status === 404) return;
+    mutationDispatch: RunnerMutationDispatchRecord,
+  ): Promise<Response | undefined> {
+    let response: Response;
+    try {
+      response = await this.#containerFetch(
+        new Request(stateArtifactUrl(baseUrl, runId), { method: "GET" }),
+      );
+    } catch (error) {
+      return await this.#recordMutationIndeterminate(
+        mutationDispatch,
+        error,
+      );
+    }
+    if (response.status === 404) return undefined;
     if (!response.ok) {
       throw new Error(
         `container state artifact fetch failed: ${response.status}`,
       );
     }
-    const bytes = await readBoundedResponseBytes(
-      response,
-      "state",
-      this.#artifactLimits.state,
-    );
+    let bytes: Uint8Array;
+    try {
+      bytes = await readBoundedResponseBytes(
+        response,
+        "state",
+        this.#artifactLimits.state,
+      );
+    } catch (error) {
+      if (error instanceof RunnerArtifactSizeLimitError) throw error;
+      return await this.#recordMutationIndeterminate(
+        mutationDispatch,
+        error,
+      );
+    }
     const sealed = await this.#stateCrypto().seal(bytes);
     for (const key of keys) {
       await putR2ObjectWithRetry(
@@ -1746,6 +2194,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         "state artifact",
       );
     }
+    return undefined;
   }
 
   #planArtifactBucket(): string {
@@ -1822,37 +2271,31 @@ async function putR2ObjectWithRetry(
   options: R2PutOptions | undefined,
   context: string,
 ): Promise<R2Object> {
-  let lastError: unknown;
   for (let attempt = 1; attempt <= R2_PUT_RETRY_ATTEMPTS; attempt += 1) {
     try {
       const object = await bucket.put(key, value, options);
       if (!object) {
-        throw new R2ConditionalPutConflictError(
-          `${context} conditional R2 put was refused`,
-        );
+        throw new R2ConditionalPutConflictError();
       }
       return object;
     } catch (error) {
-      lastError = error;
       if (error instanceof R2ConditionalPutConflictError) throw error;
       if (options?.onlyIf?.etagDoesNotMatch === "*") {
-        throw new RunnerArtifactRelayInfrastructureError(
-          `${context} immutable R2 put outcome is ambiguous`,
-        );
+        throw new RunnerArtifactRelayInfrastructureError();
       }
       if (attempt >= R2_PUT_RETRY_ATTEMPTS || !isRetryableR2PutError(error)) {
         throw new Error(
-          `${context} R2 put failed after ${attempt} attempt${
+          `runner R2 ${runnerR2LogArtifact(context, key)} put failed after ${attempt} attempt${
             attempt === 1 ? "" : "s"
-          }: ${redactedErrorMessage(error, "r2 put failed")}`,
+          }`,
         );
       }
       console.warn("OpenTofu runner R2 put failed; retrying", {
-        context,
-        key,
+        artifact: runnerR2LogArtifact(context, key),
         attempt,
         maxAttempts: R2_PUT_RETRY_ATTEMPTS,
-        error: redactedErrorMessage(error, "r2 put failed"),
+        reason: RUNNER_R2_LOG_REASON.putRetryable,
+        errorName: safeRunnerErrorName(error),
       });
       await sleep(
         Math.min(
@@ -1862,12 +2305,12 @@ async function putR2ObjectWithRetry(
       );
     }
   }
-  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+  throw new Error("runner R2 put retry budget exhausted");
 }
 
 class R2ConditionalPutConflictError extends Error {
-  constructor(message: string) {
-    super(message);
+  constructor() {
+    super("runner R2 conditional put conflict");
     this.name = "R2ConditionalPutConflictError";
   }
 }
@@ -1878,8 +2321,8 @@ const RUNNER_ARTIFACT_RELAY_AMBIGUOUS_CODE =
 class RunnerArtifactRelayInfrastructureError extends Error {
   readonly code = RUNNER_ARTIFACT_RELAY_AMBIGUOUS_CODE;
 
-  constructor(message: string) {
-    super(message);
+  constructor() {
+    super("runner R2 immutable put outcome is ambiguous");
     this.name = "RunnerArtifactRelayInfrastructureError";
   }
 }
@@ -1901,6 +2344,39 @@ function artifactUrl(baseUrl: URL, runId: string): string {
 function isRunDispatchRequest(request: Request): boolean {
   if (request.method !== "POST") return false;
   return /^\/runs\/[^/]+$/.test(new URL(request.url).pathname);
+}
+
+function runnerRelayOperation(request: Request): "run_dispatch" | "other" {
+  return isRunDispatchRequest(request) ? "run_dispatch" : "other";
+}
+
+function runnerR2LogArtifact(
+  context: string,
+  key: string,
+): string {
+  switch (context) {
+    case "source archive":
+      return RUNNER_R2_LOG_ARTIFACT.sourceArchive;
+    case "state object":
+      return RUNNER_R2_LOG_ARTIFACT.stateObject;
+    case "raw outputs":
+      return RUNNER_R2_LOG_ARTIFACT.rawOutputs;
+    case "restored state object":
+      return RUNNER_R2_LOG_ARTIFACT.restoredStateObject;
+    case "plan artifact":
+      return RUNNER_R2_LOG_ARTIFACT.planArtifact;
+    case "plan json artifact":
+      return RUNNER_R2_LOG_ARTIFACT.planJsonArtifact;
+    case "state artifact":
+      return RUNNER_R2_LOG_ARTIFACT.stateArtifact;
+    case "restored state pointer":
+    case "state pointer cache":
+      return RUNNER_R2_LOG_ARTIFACT.statePointer;
+    default:
+      return key.endsWith("/current.json")
+        ? RUNNER_R2_LOG_ARTIFACT.statePointer
+        : RUNNER_R2_LOG_ARTIFACT.other;
+  }
 }
 
 async function readRunDispatchAction(
@@ -2132,6 +2608,34 @@ function isContainerNotRunningError(error: unknown): boolean {
   );
 }
 
+function safeRunnerErrorName(error: unknown): string {
+  if (error instanceof DOMException) return "DOMException";
+  if (error instanceof TypeError) return "TypeError";
+  if (error instanceof RangeError) return "RangeError";
+  if (error instanceof SyntaxError) return "SyntaxError";
+  if (error instanceof Error) return "Error";
+  return "NonError";
+}
+
+function safeRunnerFailureReason(error: unknown): string {
+  if (error instanceof RunnerArtifactSizeLimitError) {
+    return "artifact_size_limit";
+  }
+  if (error instanceof RunnerArtifactRelayInfrastructureError) {
+    return "artifact_durability_ambiguous";
+  }
+  if (error instanceof R2ConditionalPutConflictError) {
+    return "artifact_authority_conflict";
+  }
+  if (error instanceof DOMException && error.name === "AbortError") {
+    return "request_aborted";
+  }
+  if (isContainerNotRunningError(error)) {
+    return "container_unavailable";
+  }
+  return "relay_failure";
+}
+
 async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -2274,7 +2778,8 @@ async function writeCurrentStateCache(
     // repair must never turn a successful mutation into a provider replay.
     console.warn("OpenTofu runner current-state cache write failed", {
       generation: pointer.generation,
-      error: redactedErrorMessage(error, "state pointer cache write failed"),
+      reason: RUNNER_R2_LOG_REASON.currentStateCacheWriteFailed,
+      errorName: safeRunnerErrorName(error),
     });
   }
 }
@@ -2929,6 +3434,395 @@ function parseRunEnvelope(bodyText: string): {
   };
 }
 
+function isRunnerMutationAction(
+  action: string | undefined,
+): action is RunnerMutationAction {
+  return action === "apply" || action === "destroy";
+}
+
+function parseRunnerMutationDispatchRecord(
+  value: unknown,
+): RunnerMutationDispatchRecord | undefined {
+  if (!isRecord(value)) return undefined;
+  const action = stringField(value, "action");
+  const semanticDigest = stringField(value, "semanticDigest");
+  const phase = stringField(value, "phase");
+  if (
+    value.kind !== "takosumi.runner-mutation-dispatch@v2" ||
+    !isRunnerMutationAction(action) ||
+    !semanticDigest ||
+    !/^sha256:[0-9a-f]{64}$/u.test(semanticDigest) ||
+    (phase !== "preparing" &&
+      phase !== "dispatched" &&
+      phase !== "indeterminate" &&
+      phase !== "orphaned") ||
+    value.redispatchBlocked !== true
+  ) {
+    return undefined;
+  }
+  return {
+    kind: "takosumi.runner-mutation-dispatch@v2",
+    action,
+    semanticDigest,
+    phase,
+    redispatchBlocked: true,
+  };
+}
+
+const MUTABLE_RUN_EVIDENCE_FIELDS = new Set([
+  "auditEvents",
+  "createdAt",
+  "diagnostics",
+  "finishedAt",
+  "heartbeatAt",
+  "startedAt",
+  "status",
+  "updatedAt",
+]);
+
+interface RunnerVerifiedCredentialAuthority {
+  readonly kind: "takosumi.run-credential-authority@v1";
+  readonly tokenType: string;
+  readonly tokenVersion: number;
+  /** Nested only in the semantic hash; the signer secret is never persisted. */
+  readonly signingAuthorityDigest: string;
+  readonly audience: string;
+  readonly subject: string;
+  readonly workspaceId: string;
+  readonly capsuleId: string;
+  readonly runId: string;
+  readonly installingPrincipalId: string;
+  readonly connectionId: string;
+  readonly provider: string;
+  readonly phase: "apply" | "destroy";
+  readonly scopes: readonly string[];
+  readonly deliveries: readonly string[];
+}
+
+async function runnerMutationSemanticDigest(
+  runId: string,
+  action: RunnerMutationAction,
+  requestPayload: unknown,
+  env: CloudflareWorkerEnv,
+): Promise<string> {
+  if (!isRecord(requestPayload)) {
+    throw new Error("runner mutation request must be an object");
+  }
+  const request: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(requestPayload)) {
+    if (key === "credentials") continue;
+    if (key === "applyRun" || key === "planRun") {
+      request[key] = stableMutationRunEvidence(value, key);
+      continue;
+    }
+    request[key] = value;
+  }
+  request.credentials = await runnerMutationCredentialSemantics(
+    requestPayload.credentials,
+    requestPayload,
+    action,
+    env,
+  );
+  return await digestText(
+    canonicalRunnerMutationJson({
+      kind: "takosumi.runner-mutation-semantics@v2",
+      runId,
+      action,
+      request,
+    }),
+  );
+}
+
+function stableMutationRunEvidence(value: unknown, label: string): unknown {
+  if (!isRecord(value)) {
+    throw new Error(`${label} must be an object`);
+  }
+  const stable: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (MUTABLE_RUN_EVIDENCE_FIELDS.has(key)) continue;
+    if (key === "stateLock" && isRecord(entry)) {
+      stable.stateLock = {
+        ...(stringField(entry, "backendRef")
+          ? { backendRef: stringField(entry, "backendRef")! }
+          : {}),
+        ...(stringField(entry, "lockRef")
+          ? { lockRef: stringField(entry, "lockRef")! }
+          : {}),
+      };
+      continue;
+    }
+    stable[key] = entry;
+  }
+  return stable;
+}
+
+async function runnerMutationCredentialSemantics(
+  value: unknown,
+  requestPayload: Readonly<Record<string, unknown>>,
+  action: RunnerMutationAction,
+  env: CloudflareWorkerEnv,
+): Promise<unknown> {
+  if (value === undefined) return null;
+  if (!isRecord(value)) {
+    throw new Error("runner mutation credentials must be an object");
+  }
+  const rawEnv = recordField(value, "env") ?? {};
+  const envNames = Object.keys(rawEnv).sort();
+  if (Object.values(rawEnv).some((entry) => typeof entry !== "string")) {
+    throw new Error("runner mutation credential env must contain strings");
+  }
+  const rawFiles = value.files;
+  if (rawFiles !== undefined && !Array.isArray(rawFiles)) {
+    throw new Error("runner mutation credential files must be an array");
+  }
+  const fileSemantics = (Array.isArray(rawFiles) ? rawFiles : []).map(
+    (entry) => {
+      if (!isRecord(entry)) {
+        throw new Error("runner mutation credential file must be an object");
+      }
+      const path = stringField(entry, "path");
+      const content = stringField(entry, "content");
+      const mode = entry.mode;
+      if (!path || content === undefined || typeof mode !== "number") {
+        throw new Error(
+          "runner mutation credential file requires path, mode, and content",
+        );
+      }
+      return {
+        path,
+        mode,
+        ...(stringField(entry, "envName")
+          ? { envName: stringField(entry, "envName")! }
+          : {}),
+      };
+    },
+  );
+  const secretEntries = [
+    ...Object.entries(rawEnv).map(([name, entry]) => ({
+      delivery: `env:${name}`,
+      value: entry as string,
+    })),
+    ...(Array.isArray(rawFiles)
+      ? rawFiles.flatMap((entry) =>
+          isRecord(entry) &&
+          typeof entry.path === "string" &&
+          typeof entry.content === "string"
+            ? [{ delivery: `file:${entry.path}`, value: entry.content }]
+            : [],
+        )
+      : []),
+  ];
+  const signedTokenDeliveries = new Map<string, Set<string>>();
+  for (const entry of secretEntries) {
+    if (!isRunCredentialToken(entry.value)) continue;
+    const deliveries = signedTokenDeliveries.get(entry.value) ?? new Set();
+    deliveries.add(entry.delivery);
+    signedTokenDeliveries.set(entry.value, deliveries);
+  }
+  const staticMaterialDigests = await Promise.all(
+    secretEntries
+      .filter((entry) => !isRunCredentialToken(entry.value))
+      .map(async (entry) => ({
+        delivery: entry.delivery,
+        digest: await digestText(entry.value),
+      })),
+  );
+  const authorities = await verifiedRunnerCredentialAuthorities(
+    signedTokenDeliveries,
+    requestPayload,
+    action,
+    value,
+    env,
+  );
+  return {
+    envNames,
+    files: fileSemantics.sort((left, right) =>
+      canonicalRunnerMutationJson(left).localeCompare(
+        canonicalRunnerMutationJson(right),
+      ),
+    ),
+    manifest: value.manifest ?? null,
+    authorities,
+    staticMaterialDigests: staticMaterialDigests.sort((left, right) =>
+      left.delivery.localeCompare(right.delivery),
+    ),
+  };
+}
+
+async function verifiedRunnerCredentialAuthorities(
+  tokenDeliveries: ReadonlyMap<string, ReadonlySet<string>>,
+  requestPayload: Readonly<Record<string, unknown>>,
+  action: RunnerMutationAction,
+  credentials: Readonly<Record<string, unknown>>,
+  env: CloudflareWorkerEnv,
+): Promise<readonly RunnerVerifiedCredentialAuthority[]> {
+  if (tokenDeliveries.size === 0) return [];
+  const secret = runCredentialTokenSecret(env as Record<string, unknown>);
+  if (!secret) {
+    throw new Error("Run credential verification authority is unavailable");
+  }
+  const context = mutationCredentialExpectedContext(requestPayload, action);
+  const bindings = mutationCredentialManifestBindings(credentials);
+  const signingAuthorityDigest = await digestText(secret);
+  const authorities: RunnerVerifiedCredentialAuthority[] = [];
+  for (const [token, deliveries] of tokenDeliveries) {
+    const verified = await verifyRunCredentialTokenAuthority(token, { secret });
+    if (!verified.ok) {
+      throw new Error(`Run credential verification failed: ${verified.reason}`);
+    }
+    assertMutationCredentialAuthority(verified.payload, context, bindings);
+    authorities.push({
+      kind: "takosumi.run-credential-authority@v1",
+      tokenType: verified.payload.typ,
+      tokenVersion: verified.payload.v,
+      signingAuthorityDigest,
+      audience: verified.payload.aud,
+      subject: verified.payload.sub,
+      workspaceId: verified.payload.workspaceId,
+      capsuleId: verified.payload.capsuleId,
+      runId: verified.payload.runId,
+      installingPrincipalId: verified.payload.installingPrincipalId,
+      connectionId: verified.payload.connectionId,
+      provider: verified.payload.provider,
+      phase: action,
+      scopes: [...verified.payload.scopes].sort(),
+      deliveries: [...deliveries].sort(),
+    });
+  }
+  return authorities.sort((left, right) =>
+    canonicalRunnerMutationJson(left).localeCompare(
+      canonicalRunnerMutationJson(right),
+    ),
+  );
+}
+
+function mutationCredentialExpectedContext(
+  requestPayload: Readonly<Record<string, unknown>>,
+  action: RunnerMutationAction,
+): {
+  readonly workspaceId: string;
+  readonly capsuleId: string;
+  readonly runId: string;
+  readonly action: RunnerMutationAction;
+} {
+  const applyRun = recordField(requestPayload, "applyRun");
+  const planRun = recordField(requestPayload, "planRun");
+  const workspaceId = applyRun && stringField(applyRun, "workspaceId");
+  const capsuleId =
+    (applyRun && stringField(applyRun, "capsuleId")) ??
+    (planRun && stringField(planRun, "capsuleId"));
+  const runId = applyRun && stringField(applyRun, "id");
+  if (!workspaceId || !capsuleId || !runId) {
+    throw new Error(
+      "signed Run credentials require exact ApplyRun Workspace and Capsule context",
+    );
+  }
+  if (
+    planRun &&
+    ((stringField(planRun, "workspaceId") !== undefined &&
+      stringField(planRun, "workspaceId") !== workspaceId) ||
+      (stringField(planRun, "capsuleId") !== undefined &&
+        stringField(planRun, "capsuleId") !== capsuleId))
+  ) {
+    throw new Error("signed Run credential context mismatches the PlanRun");
+  }
+  return { workspaceId, capsuleId, runId, action };
+}
+
+function mutationCredentialManifestBindings(
+  credentials: Readonly<Record<string, unknown>>,
+): readonly Readonly<Record<string, unknown>>[] {
+  const manifest = recordField(credentials, "manifest");
+  const bindings = manifest?.bindings;
+  if (!Array.isArray(bindings)) {
+    throw new Error("signed Run credentials require a credential manifest");
+  }
+  return bindings.map((binding) => {
+    if (!isRecord(binding)) {
+      throw new Error("credential manifest binding must be an object");
+    }
+    return binding;
+  });
+}
+
+function assertMutationCredentialAuthority(
+  payload: RunCredentialTokenPayload,
+  context: ReturnType<typeof mutationCredentialExpectedContext>,
+  bindings: readonly Readonly<Record<string, unknown>>[],
+): void {
+  if (
+    payload.workspaceId !== context.workspaceId ||
+    payload.capsuleId !== context.capsuleId ||
+    payload.runId !== context.runId ||
+    payload.phase !== context.action ||
+    payload.sub !== payload.installingPrincipalId
+  ) {
+    throw new Error("signed Run credential authority mismatches the mutation");
+  }
+  if (
+    !bindings.some(
+      (binding) =>
+        stringField(binding, "connectionId") === payload.connectionId &&
+        stringField(binding, "providerSource") === payload.provider,
+    )
+  ) {
+    throw new Error(
+      "signed Run credential authority mismatches the credential manifest",
+    );
+  }
+}
+
+function canonicalRunnerMutationJson(value: unknown): string {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "boolean" ||
+    typeof value === "number"
+  ) {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalRunnerMutationJson).join(",")}]`;
+  }
+  if (isRecord(value)) {
+    return `{${Object.keys(value)
+      .sort()
+      .map(
+        (key) =>
+          `${JSON.stringify(key)}:${canonicalRunnerMutationJson(value[key])}`,
+      )
+      .join(",")}}`;
+  }
+  throw new Error("runner mutation identity must be canonical JSON");
+}
+
+function runnerMutationIndeterminateResponse(
+  action: RunnerMutationAction,
+): Response {
+  const payload: RunnerMutationIndeterminatePayload = {
+    error: "OpenTofu runner mutation outcome is indeterminate",
+    errorCode: RUNNER_MUTATION_INDETERMINATE_CODE,
+    status: "failed",
+    phase: action,
+    retryable: false,
+    outcome: "indeterminate",
+    evidence: {
+      kind: RUNNER_MUTATION_INDETERMINATE_CODE,
+      action,
+      redispatchBlocked: true,
+    },
+    detail:
+      "provider mutation may have occurred; automatic redispatch is blocked until an authoritative reconcile or adopt path confirms the outcome",
+  };
+  return Response.json(
+    payload,
+    {
+      status: 409,
+      headers: { [RUNNER_MUTATION_INDETERMINATE_HEADER]: "1" },
+    },
+  );
+}
+
 function runnerProviderExecutionFailed(
   payload: Record<string, unknown>,
 ): boolean {
@@ -2943,7 +3837,7 @@ function providerFailureErrorCode(
   payload: Record<string, unknown>,
 ): string | undefined {
   const value = stringField(payload, "errorCode");
-  return value && /^[A-Za-z][A-Za-z0-9._:-]{0,127}$/u.test(value)
+  return value && RUNNER_PROVIDER_FAILURE_CODES.has(value)
     ? value
     : undefined;
 }
@@ -2953,15 +3847,11 @@ function failedProviderExecutionPayload(
   statePersistence: "persisted" | "unavailable",
   state?: Record<string, unknown>,
 ): Record<string, unknown> {
-  const {
-    outputs: _outputs,
-    rawOutputRef: _rawOutputRef,
-    state: _state,
-    ...failurePayload
-  } = payload;
   return {
-    ...failurePayload,
     status: "failed",
+    phase: "apply",
+    errorCode:
+      providerFailureErrorCode(payload) ?? RUNNER_PROVIDER_EXECUTION_FAILED_CODE,
     providerExecutionFailure: {
       kind: "provider_execution_failed",
       statePersistence,
@@ -2980,6 +3870,90 @@ async function readJsonObject(
   const value = text.length > 0 ? (JSON.parse(text) as unknown) : {};
   if (isRecord(value)) return value;
   throw new Error("OpenTofu runner response must be a JSON object");
+}
+
+async function normalizeRunnerFailureResponse(
+  response: Response,
+  phase: string | undefined,
+  maxBytes: number,
+): Promise<Response> {
+  let payload: Record<string, unknown> = {};
+  try {
+    payload = await readJsonObject(response.clone(), maxBytes);
+  } catch {
+    // The failure envelope below is intentionally finite even when the
+    // provider returned malformed or non-JSON text.
+  }
+  const errorCode = finiteRunnerFailureCode(payload);
+  if (errorCode === RUNNER_MUTATION_INDETERMINATE_CODE) {
+    return runnerMutationIndeterminateResponse(
+      phase === "apply" || phase === "destroy" ? phase : "apply",
+    );
+  }
+  return jsonResponse(
+    {
+      status: "failed",
+      errorCode,
+      phase: runnerFailurePhase(phase),
+      ...(errorCode === "runner_artifact_relay_ambiguous"
+        ? { retryable: true }
+        : {}),
+    },
+    response.status,
+  );
+}
+
+function finiteRunnerFailureCode(
+  payload: Record<string, unknown>,
+):
+  | typeof RUNNER_REJECTED_CODE
+  | typeof RUNNER_MUTATION_INDETERMINATE_CODE
+  | typeof RUNNER_PROVIDER_EXECUTION_FAILED_CODE
+  | "apply_failed"
+  | "runner_artifact_relay_ambiguous"
+  | "runner_artifact_relay_failed"
+  | "artifact_size_limit_exceeded" {
+  const value = stringField(payload, "errorCode");
+  const providerFailure = recordField(payload, "providerExecutionFailure");
+  if (
+    isRecord(providerFailure) &&
+    stringField(providerFailure, "kind") === "provider_execution_failed"
+  ) {
+    return value && RUNNER_PROVIDER_FAILURE_CODES.has(value)
+      ? (value as "apply_failed" | typeof RUNNER_PROVIDER_EXECUTION_FAILED_CODE)
+      : RUNNER_PROVIDER_EXECUTION_FAILED_CODE;
+  }
+  switch (value) {
+    case RUNNER_PROVIDER_EXECUTION_FAILED_CODE:
+    case "apply_failed":
+    case RUNNER_MUTATION_INDETERMINATE_CODE:
+    case "runner_artifact_relay_ambiguous":
+    case "runner_artifact_relay_failed":
+    case "artifact_size_limit_exceeded":
+      return value;
+    default:
+      return RUNNER_REJECTED_CODE;
+  }
+}
+
+function runnerFailurePhase(
+  phase: string | undefined,
+): RunnerFailurePhase {
+  switch (phase) {
+    case "plan":
+    case "apply":
+    case "destroy":
+    case "restore":
+    case "source_sync":
+    case "backup":
+    case "release":
+    case "stable_semver_tag":
+    case "source_snapshot_file":
+    case "compatibility_check":
+      return phase;
+    default:
+      return "plan";
+  }
 }
 
 async function readRunnerFailureDetail(
@@ -3007,12 +3981,6 @@ async function readRunnerFailureDetail(
 
 function jsonResponse(payload: unknown, status: number): Response {
   return Response.json(payload, { status });
-}
-
-function redactedErrorMessage(error: unknown, fallback: string): string {
-  const message = error instanceof Error ? error.message : String(error);
-  const text = message && message.trim().length > 0 ? message : fallback;
-  return redactString(text, { redactedValue: "[redacted]" });
 }
 
 function runnerKeepaliveSeconds(env: CloudflareWorkerEnv): number {

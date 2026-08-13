@@ -20,12 +20,17 @@ import {
   digestBytes,
   StateArtifactCrypto,
 } from "../../../../worker/src/state_crypto.ts";
+import { createRunCredentialToken } from "../../../../core/shared/run_credential_tokens.ts";
 
 const PLAN_BYTES = new TextEncoder().encode("reviewed tfplan bytes");
 const PLAN_DIGEST =
   "sha256:0fd9817656d95201f5c8073b9b4b4c2d5bfe8468b69e7bf771e5311b122a90e7";
 const STATE_BYTES = new TextEncoder().encode('{"serial":1}');
 const UPDATED_STATE_BYTES = new TextEncoder().encode('{"serial":2}');
+const RUN_CREDENTIAL_SIGNING_SECRET =
+  "0123456789abcdef0123456789abcdef0123456789abcdef";
+const RUN_CREDENTIAL_PROVIDER =
+  "registry.opentofu.org/example/ephemeral";
 
 test("local runner proxy Durable Object refuses non-local composition", () => {
   assert.throws(
@@ -215,11 +220,17 @@ test("OpenTofu runner rejects one-byte-oversized plans before R2 persistence", a
 });
 
 test("OpenTofu runner Durable Object retries transient R2 put errors", async () => {
+  const sensitiveFailure =
+    "timeout arbitrary-marker-7QZ9 Authorization: Bearer relay-token cookie=session-secret body={secret:true}";
+  const warnCalls: unknown[][] = [];
+  const originalConsoleWarn = console.warn;
+  console.warn = (...args: unknown[]) => {
+    warnCalls.push(args);
+  };
   const r2 = new FlakyR2Bucket({
     failKey: "opentofu-plan-runs/plan_retry/tfplan.enc",
     failTimes: 2,
-    message:
-      "put: Please look at https://www.cloudflarestatus.com for issues or contact customer support. (10043)",
+    message: sensitiveFailure,
   });
   const runner = runnerWithContainer(r2, {
     async containerFetch(request) {
@@ -255,37 +266,86 @@ test("OpenTofu runner Durable Object retries transient R2 put errors", async () 
     },
   });
 
-  const response = await runner.fetch(
-    new Request("https://runner/runs/plan_retry", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        kind: "takosumi.opentofu-run@v1",
-        action: "plan",
-        runId: "plan_retry",
-        request: {},
+  let response: Response;
+  try {
+    response = await runner.fetch(
+      new Request("https://runner/runs/plan_retry", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          kind: "takosumi.opentofu-run@v1",
+          action: "plan",
+          runId: "plan_retry",
+          request: {},
+        }),
       }),
-    }),
-  );
+    );
+  } finally {
+    console.warn = originalConsoleWarn;
+  }
 
   assert.equal(response.status, 200);
   assert.equal(r2.putAttempts("opentofu-plan-runs/plan_retry/tfplan.enc"), 3);
   assert.ok(r2.body("opentofu-plan-runs/plan_retry/tfplan.enc"));
+  const logged = JSON.stringify(warnCalls);
+  for (const forbidden of [
+    "arbitrary-marker-7QZ9",
+    "Authorization",
+    "Bearer",
+    "relay-token",
+    "cookie",
+    "session-secret",
+    "body",
+    "secret:true",
+    "stack",
+  ]) {
+    assert.equal(logged.includes(forbidden), false, `logged ${forbidden}`);
+  }
+  assert.deepEqual(warnCalls, [
+    [
+      "OpenTofu runner R2 put failed; retrying",
+      {
+        artifact: "plan_artifact",
+        attempt: 1,
+        maxAttempts: 8,
+        reason: "r2_put_retryable",
+        errorName: "Error",
+      },
+    ],
+    [
+      "OpenTofu runner R2 put failed; retrying",
+      {
+        artifact: "plan_artifact",
+        attempt: 2,
+        maxAttempts: 8,
+        reason: "r2_put_retryable",
+        errorName: "Error",
+      },
+    ],
+  ]);
 });
 
-test("OpenTofu runner Durable Object returns contextual R2 put failures", async () => {
-  const r2 = new FailingR2Bucket("permission denied");
+test("OpenTofu runner Durable Object returns finite R2 put failure details", async () => {
+  const runId = "plan_r2_denied-raw-key-marker-2L6";
+  const sensitiveFailure =
+    "permission denied arbitrary-marker-final-9K2 Authorization: Bearer final-token cookie=final-session body={secret:true}";
+  const errorCalls: unknown[][] = [];
+  const originalConsoleError = console.error;
+  console.error = (...args: unknown[]) => {
+    errorCalls.push(args);
+  };
+  const r2 = new FailingR2Bucket(sensitiveFailure);
   const runner = runnerWithContainer(r2, {
     async containerFetch(request) {
       const path = new URL(request.url).pathname;
-      if (request.method === "POST" && path === "/runs/plan_r2_denied") {
+      if (request.method === "POST" && path === `/runs/${runId}`) {
         return Response.json({
           status: "succeeded",
           exitCode: 0,
           planDigest: PLAN_DIGEST,
           planArtifact: {
             kind: "runner-local",
-            ref: "runner-local://plan_r2_denied/tfplan",
+            ref: `runner-local://${runId}/tfplan`,
             digest: PLAN_DIGEST,
             contentType: "application/vnd.opentofu.plan",
           },
@@ -293,7 +353,7 @@ test("OpenTofu runner Durable Object returns contextual R2 put failures", async 
       }
       if (
         request.method === "GET" &&
-        path === "/runs/plan_r2_denied/artifacts/tfplan"
+        path === `/runs/${runId}/artifacts/tfplan`
       ) {
         return new Response(PLAN_BYTES, {
           headers: { "content-type": "application/vnd.opentofu.plan" },
@@ -303,24 +363,338 @@ test("OpenTofu runner Durable Object returns contextual R2 put failures", async 
     },
   });
 
-  const response = await runner.fetch(
-    new Request("https://runner/runs/plan_r2_denied", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        kind: "takosumi.opentofu-run@v1",
-        action: "plan",
-        runId: "plan_r2_denied",
-        request: {},
+  let response: Response;
+  try {
+    response = await runner.fetch(
+      new Request(`https://runner/runs/${runId}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          kind: "takosumi.opentofu-run@v1",
+          action: "plan",
+          runId,
+          request: {},
+        }),
       }),
-    }),
-  );
+    );
+  } finally {
+    console.error = originalConsoleError;
+  }
 
   assert.equal(response.status, 500);
   const body = (await response.json()) as Record<string, unknown>;
   assert.equal(body.error, "OpenTofu runner artifact relay failed");
-  assert.match(String(body.detail), /plan artifact R2 put failed/);
-  assert.match(String(body.detail), /permission denied/);
+  assert.equal(body.errorCode, "runner_artifact_relay_failed");
+  assert.equal(body.reason, "relay_failure");
+  assert.equal(body.detail, "runner artifact relay failed");
+  const responseText = JSON.stringify(body);
+  for (const forbidden of [
+    runId,
+    "arbitrary-marker-final-9K2",
+    "Authorization",
+    "Bearer",
+    "final-token",
+    "cookie",
+    "final-session",
+    "body",
+    "secret:true",
+    "stack",
+  ]) {
+    assert.equal(responseText.includes(forbidden), false, `response ${forbidden}`);
+  }
+  const logged = JSON.stringify(errorCalls);
+  for (const forbidden of [
+    runId,
+    "arbitrary-marker-final-9K2",
+    "Authorization",
+    "Bearer",
+    "final-token",
+    "cookie",
+    "final-session",
+    "body",
+    "secret:true",
+    "stack",
+  ]) {
+    assert.equal(logged.includes(forbidden), false, `logged ${forbidden}`);
+  }
+  assert.deepEqual(errorCalls, [
+    [
+      "OpenTofu runner artifact relay failed",
+      {
+        operation: "run_dispatch",
+        reason: "relay_failure",
+        errorName: "Error",
+      },
+    ],
+  ]);
+});
+
+test("OpenTofu runner keeps raw-output immutable-put failures out of logs", async () => {
+  const planRunId = "apply_raw_output_r2_failure";
+  const rawOutputRef = rawOutputRefFor(planRunId);
+  const sensitiveFailure =
+    "permission denied arbitrary-marker-raw-output-4M7 Authorization: Bearer raw-output-token cookie=raw-output-session body={raw:true}";
+  const artifacts = new FlakyR2Bucket({
+    failKey: rawOutputRef,
+    failTimes: 1,
+    message: sensitiveFailure,
+  });
+  await seedEncryptedPlan(artifacts, planRunId);
+  const state = new FakeR2Bucket();
+  const storage = new FakeDoStorage();
+  let providerCalls = 0;
+  const token = await signedMutationToken(planRunId, {
+    jti: "raw-output-r2-failure",
+  });
+  const errorCalls: unknown[][] = [];
+  const originalConsoleError = console.error;
+  console.error = (...args: unknown[]) => {
+    errorCalls.push(args);
+  };
+
+  let response: Response;
+  try {
+    response = await runnerWithContainer(
+      artifacts,
+      mutationSuccessContainer(planRunId, () => {
+        providerCalls += 1;
+      }),
+      {
+        storage,
+        stateBucket: state,
+        env: {
+          TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET:
+            RUN_CREDENTIAL_SIGNING_SECRET,
+        },
+      },
+    ).fetch(
+      signedMutationRequest(planRunId, token, {
+        rawOutputRef,
+        stateScope: capsuleStateScope(),
+      }),
+    );
+  } finally {
+    console.error = originalConsoleError;
+  }
+
+  assert.equal(response.status, 500);
+  assert.equal(providerCalls, 1);
+  assert.equal(artifacts.body(rawOutputRef), undefined);
+  assertNoSensitiveR2LogSerialization(errorCalls, sensitiveFailure);
+  assert.deepEqual(errorCalls, [
+    [
+      "OpenTofu runner artifact relay failed",
+      {
+        operation: "run_dispatch",
+        reason: "relay_failure",
+        errorName: "Error",
+      },
+    ],
+  ]);
+});
+
+test("OpenTofu runner keeps immutable state-put failures out of logs", async () => {
+  const planRunId = "apply_state_r2_failure";
+  const stateScope = capsuleStateScope();
+  const sensitiveFailure =
+    "permission denied arbitrary-marker-state-object-6N8 Authorization: Bearer state-object-token cookie=state-object-session body={state:true}";
+  const artifacts = new FakeR2Bucket();
+  await seedEncryptedPlan(artifacts, planRunId);
+  const state = new FlakyR2Bucket({
+    failKey: stateScope.stateRef,
+    failTimes: 1,
+    message: sensitiveFailure,
+  });
+  const storage = new FakeDoStorage();
+  let providerCalls = 0;
+  const token = await signedMutationToken(planRunId, {
+    jti: "state-object-r2-failure",
+  });
+  const errorCalls: unknown[][] = [];
+  const originalConsoleError = console.error;
+  console.error = (...args: unknown[]) => {
+    errorCalls.push(args);
+  };
+
+  let response: Response;
+  try {
+    response = await runnerWithContainer(
+      artifacts,
+      mutationSuccessContainer(planRunId, () => {
+        providerCalls += 1;
+      }),
+      {
+        storage,
+        stateBucket: state,
+        env: {
+          TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET:
+            RUN_CREDENTIAL_SIGNING_SECRET,
+        },
+      },
+    ).fetch(
+      signedMutationRequest(planRunId, token, {
+        rawOutputRef: rawOutputRefFor(planRunId),
+        stateScope,
+      }),
+    );
+  } finally {
+    console.error = originalConsoleError;
+  }
+
+  assert.equal(response.status, 503);
+  assert.equal(providerCalls, 1);
+  assert.equal(state.body(stateScope.stateRef), undefined);
+  assertNoSensitiveR2LogSerialization(errorCalls, sensitiveFailure);
+  assert.deepEqual(errorCalls, [
+    [
+      "OpenTofu runner artifact relay failed",
+      {
+        operation: "run_dispatch",
+        reason: "artifact_durability_ambiguous",
+        errorName: "Error",
+      },
+    ],
+  ]);
+});
+
+test("OpenTofu runner keeps current-state pointer retry logs finite", async () => {
+  const planRunId = "apply_current_pointer_retry";
+  const stateScope = capsuleStateScope();
+  const currentKey = stateScope.stateRef.replace(
+    /[0-9]{8}\.tfstate\.enc$/u,
+    "current.json",
+  );
+  const sensitiveFailure =
+    "timeout arbitrary-marker-current-pointer-retry-2P9 Authorization: Bearer pointer-retry-token cookie=pointer-retry-session body={pointer:true}";
+  const artifacts = new FakeR2Bucket();
+  await seedEncryptedPlan(artifacts, planRunId);
+  const state = new FlakyR2Bucket({
+    failKey: currentKey,
+    failTimes: 2,
+    message: sensitiveFailure,
+  });
+  const storage = new FakeDoStorage();
+  const token = await signedMutationToken(planRunId, {
+    jti: "current-pointer-retry",
+  });
+  const warnCalls: unknown[][] = [];
+  const originalConsoleWarn = console.warn;
+  console.warn = (...args: unknown[]) => {
+    warnCalls.push(args);
+  };
+
+  let response: Response;
+  try {
+    response = await runnerWithContainer(
+      artifacts,
+      mutationSuccessContainer(planRunId, () => undefined),
+      {
+        storage,
+        stateBucket: state,
+        env: {
+          TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET:
+            RUN_CREDENTIAL_SIGNING_SECRET,
+        },
+      },
+    ).fetch(
+      signedMutationRequest(planRunId, token, {
+        rawOutputRef: rawOutputRefFor(planRunId),
+        stateScope,
+      }),
+    );
+  } finally {
+    console.warn = originalConsoleWarn;
+  }
+
+  assert.equal(response.status, 200);
+  assert.ok(state.body(currentKey));
+  assertNoSensitiveR2LogSerialization(warnCalls, sensitiveFailure);
+  assert.deepEqual(warnCalls, [
+    [
+      "OpenTofu runner R2 put failed; retrying",
+      {
+        artifact: "state_pointer",
+        attempt: 1,
+        maxAttempts: 8,
+        reason: "r2_put_retryable",
+        errorName: "Error",
+      },
+    ],
+    [
+      "OpenTofu runner R2 put failed; retrying",
+      {
+        artifact: "state_pointer",
+        attempt: 2,
+        maxAttempts: 8,
+        reason: "r2_put_retryable",
+        errorName: "Error",
+      },
+    ],
+  ]);
+});
+
+test("OpenTofu runner keeps current-state pointer final-failure logs finite", async () => {
+  const planRunId = "apply_current_pointer_failure";
+  const stateScope = capsuleStateScope();
+  const currentKey = stateScope.stateRef.replace(
+    /[0-9]{8}\.tfstate\.enc$/u,
+    "current.json",
+  );
+  const sensitiveFailure =
+    "permission denied arbitrary-marker-current-pointer-final-8R1 Authorization: Bearer pointer-final-token cookie=pointer-final-session body={pointer:true}";
+  const artifacts = new FakeR2Bucket();
+  await seedEncryptedPlan(artifacts, planRunId);
+  const state = new FlakyR2Bucket({
+    failKey: currentKey,
+    failTimes: 1,
+    message: sensitiveFailure,
+  });
+  const storage = new FakeDoStorage();
+  const token = await signedMutationToken(planRunId, {
+    jti: "current-pointer-final",
+  });
+  const warnCalls: unknown[][] = [];
+  const originalConsoleWarn = console.warn;
+  console.warn = (...args: unknown[]) => {
+    warnCalls.push(args);
+  };
+
+  let response: Response;
+  try {
+    response = await runnerWithContainer(
+      artifacts,
+      mutationSuccessContainer(planRunId, () => undefined),
+      {
+        storage,
+        stateBucket: state,
+        env: {
+          TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET:
+            RUN_CREDENTIAL_SIGNING_SECRET,
+        },
+      },
+    ).fetch(
+      signedMutationRequest(planRunId, token, {
+        rawOutputRef: rawOutputRefFor(planRunId),
+        stateScope,
+      }),
+    );
+  } finally {
+    console.warn = originalConsoleWarn;
+  }
+
+  assert.equal(response.status, 200);
+  assert.equal(state.body(currentKey), undefined);
+  assertNoSensitiveR2LogSerialization(warnCalls, sensitiveFailure);
+  assert.deepEqual(warnCalls, [
+    [
+      "OpenTofu runner current-state cache write failed",
+      {
+        generation: stateScope.generation,
+        reason: "current_state_cache_write_failed",
+        errorName: "Error",
+      },
+    ],
+  ]);
 });
 
 test("OpenTofu runner Durable Object skips oversized plan JSON artifacts", async () => {
@@ -633,6 +1007,49 @@ test("OpenTofu runner Durable Object destroys non-plan containers even when keep
   assert.deepEqual(calls, ["fetch POST /runs/compatibility_snap_1", "destroy"]);
 });
 
+test("OpenTofu runner Durable Object labels compatibility failures with a finite phase", async () => {
+  const marker = "compatibility-failure-marker-7J3";
+  const runner = runnerWithContainer(new FakeR2Bucket(), {
+    async containerFetch() {
+      return Response.json(
+        {
+          error: `path=/work/${marker}`,
+          detail: `Authorization: Bearer ${marker}`,
+          stderr: `cookie=${marker}`,
+          stdout: `body=${marker}`,
+          runId: marker,
+        },
+        { status: 502 },
+      );
+    },
+  });
+
+  const response = await runner.fetch(
+    new Request("https://runner/runs/compatibility_failure", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        kind: "takosumi.opentofu-run@v1",
+        action: "compatibility_check",
+        runId: "compatibility_failure",
+        request: {},
+      }),
+    }),
+  );
+
+  assert.equal(response.status, 502);
+  const body = JSON.stringify(await response.json());
+  assert.equal(
+    body,
+    JSON.stringify({
+      status: "failed",
+      errorCode: "runner_rejected",
+      phase: "compatibility_check",
+    }),
+  );
+  assert.equal(body.includes(marker), false);
+});
+
 test("OpenTofu runner Durable Object destroys a successful run container by default", async () => {
   const calls: string[] = [];
   const runner = runnerWithContainer(
@@ -807,30 +1224,118 @@ test("OpenTofu runner Durable Object destroys the container when activity expire
   assert.deepEqual(calls, ["destroy"]);
 });
 
-test("OpenTofu runner Durable Object does not echo relay failure details", async () => {
+test("OpenTofu runner Durable Object does not echo or log relay failure details", async () => {
+  const relayMarker = "arbitrary-marker-relay-path-5V8";
+  const errorCalls: unknown[][] = [];
+  const originalConsoleError = console.error;
+  console.error = (...args: unknown[]) => {
+    errorCalls.push(args);
+  };
+  const runner = runnerWithContainer(
+    new FakeR2Bucket(),
+    {
+      containerFetch() {
+        throw new Error(
+          `Authorization: Bearer relay-secret-token cookie=relay-session body={secret:true} ${relayMarker}`,
+        );
+      },
+    },
+    {
+      async destroy() {
+        throw new Error(
+          `Authorization: Bearer cleanup-secret-token cookie=cleanup-session body={secret:true} ${relayMarker}`,
+        );
+      },
+    },
+  );
+
+  let response: Response;
+  try {
+    response = await runner.fetch(
+      new Request(`https://runner/runs/plan_1-${relayMarker}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          kind: "takosumi.opentofu-run@v1",
+          action: "plan",
+          runId: `plan_1-${relayMarker}`,
+          request: {},
+        }),
+      }),
+    );
+  } finally {
+    console.error = originalConsoleError;
+  }
+
+  assert.equal(response.status, 500);
+  const text = await response.text();
+  assert.equal(text.includes("relay-secret-token"), false);
+  assert.equal(text.includes(relayMarker), false);
+  assert.equal(text.includes("Authorization"), false);
+  assert.equal(text.includes("Bearer"), false);
+  assert.equal(text.includes("relay-session"), false);
+  assert.equal(text.includes("body"), false);
+  assert.equal(text.includes("OpenTofu runner artifact relay failed"), true);
+  const logged = JSON.stringify(errorCalls);
+  assert.equal(logged.includes("relay-secret-token"), false);
+  assert.equal(logged.includes("cleanup-secret-token"), false);
+  assert.equal(logged.includes("Authorization"), false);
+  assert.equal(logged.includes("Bearer"), false);
+  assert.equal(logged.includes("stack"), false);
+  assert.deepEqual(errorCalls, [
+    [
+      "OpenTofu runner artifact relay failed",
+      {
+        operation: "run_dispatch",
+        reason: "relay_failure",
+        errorName: "Error",
+      },
+    ],
+    [
+      "OpenTofu runner container destroy failed",
+      { errorName: "Error" },
+    ],
+  ]);
+});
+
+test("OpenTofu runner Durable Object normalizes arbitrary non-2xx runner payloads", async () => {
+  const marker = "arbitrary-runner-response-marker-8H4";
   const runner = runnerWithContainer(new FakeR2Bucket(), {
-    containerFetch() {
-      throw new Error("Authorization: Bearer relay-secret-token");
+    async containerFetch(request) {
+      if (request.method === "GET") return Response.json({ status: "ok" });
+      return Response.json(
+        {
+          errorCode: "provider-raw-code",
+          error: `provider path=/work/${marker}`,
+          detail: `Authorization: Bearer ${marker}`,
+          stderr: `cookie=${marker}`,
+          stdout: `body=${marker}`,
+          runId: marker,
+        },
+        { status: 502 },
+      );
     },
   });
 
   const response = await runner.fetch(
-    new Request("https://runner/runs/plan_1", {
+    new Request("https://runner/runs/plan_arbitrary_response", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         kind: "takosumi.opentofu-run@v1",
         action: "plan",
-        runId: "plan_1",
+        runId: "plan_arbitrary_response",
         request: {},
       }),
     }),
   );
 
-  assert.equal(response.status, 500);
-  const text = await response.text();
-  assert.equal(text.includes("relay-secret-token"), false);
-  assert.equal(text.includes("OpenTofu runner artifact relay failed"), true);
+  assert.equal(response.status, 502);
+  assert.deepEqual(await response.json(), {
+    status: "failed",
+    errorCode: "runner_rejected",
+    phase: "plan",
+  });
 });
 
 test("OpenTofu runner Durable Object restores reviewed R2 plan artifact before apply", async () => {
@@ -891,6 +1396,722 @@ test("OpenTofu runner Durable Object restores reviewed R2 plan artifact before a
   ]);
 });
 
+for (const mutation of [
+  {
+    action: "apply" as const,
+    runId: "apply_transport_lost",
+    transportError: new Error(
+      "The container is not running after provider token=apply-raw-secret was accepted",
+    ),
+  },
+  {
+    action: "destroy" as const,
+    runId: "destroy_transport_lost",
+    transportError: new TypeError(
+      "transport lost after provider password=destroy-raw-secret was accepted",
+    ),
+  },
+]) {
+  test(`OpenTofu runner Durable Object makes ${mutation.action} transport loss durably indeterminate without provider replay`, async () => {
+    const r2 = new FakeR2Bucket();
+    await seedEncryptedPlan(r2, mutation.runId);
+    const storage = new FakeDoStorage();
+    let providerCalls = 0;
+    let destroyCalls = 0;
+    const container: ContainerRequestFetcher = {
+      async containerFetch(request) {
+        const path = new URL(request.url).pathname;
+        if (
+          request.method === "PUT" &&
+          path === `/runs/${mutation.runId}/artifacts/tfplan`
+        ) {
+          return Response.json({ ok: true });
+        }
+        if (
+          request.method === "POST" &&
+          path === `/runs/${mutation.runId}`
+        ) {
+          providerCalls += 1;
+          throw mutation.transportError;
+        }
+        return Response.json({ error: "unexpected" }, { status: 500 });
+      },
+    };
+    const request = (input: {
+      readonly requestedAt?: string;
+      readonly providerToken?: string;
+    } = {}) =>
+      new Request(`https://runner/runs/${mutation.runId}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          kind: "takosumi.opentofu-run@v1",
+          action: mutation.action,
+          runId: mutation.runId,
+          requestedAt:
+            input.requestedAt ?? "2026-08-13T00:00:00.000Z",
+          request: {
+            planArtifact: {
+              kind: "object-storage",
+              ref: `r2://takos-artifacts/opentofu-plan-runs/${mutation.runId}/tfplan`,
+              digest: PLAN_DIGEST,
+            },
+            env: {
+              PROVIDER_TOKEN:
+                input.providerToken ??
+                `${mutation.action}-request-raw-secret`,
+            },
+          },
+        }),
+      });
+
+    const runnerOptions = {
+      storage,
+      async destroy() {
+        destroyCalls += 1;
+      },
+    };
+    const firstRunner = runnerWithContainer(r2, container, runnerOptions);
+    const firstResponse = await firstRunner.fetch(request());
+    assert.equal(firstResponse.status, 409);
+    const firstText = await firstResponse.text();
+    assertMutationIndeterminateResponse(firstText, mutation.action);
+    assert.equal(firstText.includes(`${mutation.action}-raw-secret`), false);
+    assert.equal(
+      firstText.includes(`${mutation.action}-request-raw-secret`),
+      false,
+    );
+    assert.equal(providerCalls, 1);
+    const storedEvidence = JSON.stringify(storage.entries());
+    assert.equal(storedEvidence.includes(`${mutation.action}-raw-secret`), false);
+    assert.equal(
+      storedEvidence.includes(`${mutation.action}-request-raw-secret`),
+      false,
+    );
+    assert.match(storedEvidence, /takosumi\.runner-mutation-dispatch@v2/);
+    assert.match(storedEvidence, /sha256:[0-9a-f]{64}/);
+    assert.match(storedEvidence, /"phase":"indeterminate"/);
+    assert.equal(destroyCalls, 0);
+
+    // Recreate the Durable Object around the same persistent storage to prove
+    // the no-replay fence survives isolate eviction/restart.
+    const restartedRunner = runnerWithContainer(r2, container, runnerOptions);
+    const replayResponse = await restartedRunner.fetch(
+      request({ requestedAt: "2026-08-13T00:01:00.000Z" }),
+    );
+    assert.equal(replayResponse.status, 409);
+    const replayText = await replayResponse.text();
+    assertMutationIndeterminateResponse(replayText, mutation.action);
+    assert.equal(replayText.includes(`${mutation.action}-raw-secret`), false);
+    assert.equal(
+      replayText.includes(`${mutation.action}-request-raw-secret`),
+      false,
+    );
+    assert.equal(providerCalls, 1);
+    assert.equal(destroyCalls, 0);
+
+    // The run-level authority fence also rejects request-digest drift instead
+    // of treating a changed payload as fresh mutation authority.
+    const driftedReplay = await restartedRunner.fetch(
+      request({ providerToken: `${mutation.action}-changed-raw-secret` }),
+    );
+    assert.equal(driftedReplay.status, 409);
+    assert.equal(
+      (await driftedReplay.text()).includes(
+        `${mutation.action}-changed-raw-secret`,
+      ),
+      false,
+    );
+    assert.equal(providerCalls, 1);
+    assert.equal(destroyCalls, 0);
+  });
+}
+
+test("OpenTofu runner resumes a durable pre-dispatch claim with an equivalent freshly minted credential", async () => {
+  const planRunId = "plan_preparing_resume";
+  const r2 = new FakeR2Bucket();
+  await seedEncryptedPlan(r2, planRunId);
+  const storage = new FakeDoStorage();
+  storage.failPutAfterCommit(1);
+  let providerCalls = 0;
+  const container = mutationSuccessContainer(planRunId, () => {
+    providerCalls += 1;
+  });
+  const issuanceNow = Date.now();
+  const firstToken = await signedMutationToken(planRunId, {
+    jti: "first-ephemeral-jti",
+    nowMs: issuanceNow - 60_000,
+  });
+  const first = await runnerWithContainer(r2, container, {
+    storage,
+    env: {
+      TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET:
+        RUN_CREDENTIAL_SIGNING_SECRET,
+    },
+  }).fetch(signedMutationRequest(planRunId, firstToken));
+  assert.equal(first.status, 500);
+  assert.equal(providerCalls, 0);
+  const preparingEvidence = JSON.stringify(storage.entries());
+  assert.match(preparingEvidence, /"phase":"preparing"/);
+  assert.equal(preparingEvidence.includes(firstToken), false);
+  assert.equal(preparingEvidence.includes("first-ephemeral-jti"), false);
+  assert.equal(
+    preparingEvidence.includes(RUN_CREDENTIAL_SIGNING_SECRET),
+    false,
+  );
+  assert.equal(storage.entries().length, 2);
+
+  const remintedToken = await signedMutationToken(planRunId, {
+    jti: "second-ephemeral-jti",
+    nowMs: issuanceNow,
+  });
+  assert.notEqual(firstToken, remintedToken);
+  const resumed = await runnerWithContainer(r2, container, {
+    storage,
+    env: {
+      TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET:
+        RUN_CREDENTIAL_SIGNING_SECRET,
+    },
+  }).fetch(
+    signedMutationRequest(planRunId, remintedToken, {
+      heartbeatAt: 2,
+      requestedAt: "2026-08-13T00:01:00.000Z",
+    }),
+  );
+  assert.equal(resumed.status, 200);
+  assert.equal(providerCalls, 1);
+  const dispatchedEvidence = JSON.stringify(storage.entries());
+  assert.match(dispatchedEvidence, /"phase":"dispatched"/);
+  assert.equal(dispatchedEvidence.includes(remintedToken), false);
+  assert.equal(dispatchedEvidence.includes("second-ephemeral-jti"), false);
+});
+
+test("OpenTofu runner rejects changed credential authority or immutable mutation inputs while preparing", async () => {
+  const planRunId = "plan_preparing_semantic_mismatch";
+  const r2 = new FakeR2Bucket();
+  await seedEncryptedPlan(r2, planRunId);
+  const storage = new FakeDoStorage();
+  storage.failPutAfterCommit(1);
+  let providerCalls = 0;
+  const container = mutationSuccessContainer(planRunId, () => {
+    providerCalls += 1;
+  });
+  const options = {
+    storage,
+    env: {
+      TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET:
+        RUN_CREDENTIAL_SIGNING_SECRET,
+    },
+  };
+  const firstToken = await signedMutationToken(planRunId, {
+    jti: "semantic-original",
+  });
+  const first = await runnerWithContainer(r2, container, options).fetch(
+    signedMutationRequest(planRunId, firstToken),
+  );
+  assert.equal(first.status, 500);
+  assert.equal(providerCalls, 0);
+
+  const changedScope = await signedMutationToken(planRunId, {
+    jti: "semantic-scope",
+    scopes: ["provider:apply", "provider:admin"],
+  });
+  const changedScopeResponse = await runnerWithContainer(
+    r2,
+    container,
+    options,
+  ).fetch(signedMutationRequest(planRunId, changedScope));
+  assert.equal(changedScopeResponse.status, 409);
+
+  const changedSubject = await signedMutationToken(planRunId, {
+    jti: "semantic-subject",
+    subject: "principal_changed",
+  });
+  const changedSubjectResponse = await runnerWithContainer(
+    r2,
+    container,
+    options,
+  ).fetch(signedMutationRequest(planRunId, changedSubject));
+  assert.equal(changedSubjectResponse.status, 409);
+
+  const changedRun = await signedMutationToken(planRunId, {
+    jti: "semantic-run",
+    runId: "apply_different",
+  });
+  const changedRunResponse = await runnerWithContainer(
+    r2,
+    container,
+    options,
+  ).fetch(signedMutationRequest(planRunId, changedRun));
+  assert.equal(changedRunResponse.status, 409);
+  assertMutationIndeterminateResponse(
+    await changedRunResponse.text(),
+    "apply",
+  );
+
+  const currentToken = await signedMutationToken(planRunId, {
+    jti: "semantic-input",
+  });
+  const changedInputResponse = await runnerWithContainer(
+    r2,
+    container,
+    options,
+  ).fetch(
+    signedMutationRequest(planRunId, currentToken, {
+      operatorModuleText: "terraform { required_version = \">= 2.0\" }\n",
+    }),
+  );
+  assert.equal(changedInputResponse.status, 409);
+  assert.equal(providerCalls, 0);
+
+  const resumed = await runnerWithContainer(r2, container, options).fetch(
+    signedMutationRequest(planRunId, currentToken),
+  );
+  assert.equal(resumed.status, 200);
+  assert.equal(providerCalls, 1);
+});
+
+test("OpenTofu runner never dispatches when the durable dispatched transition loses its acknowledgement", async () => {
+  const planRunId = "plan_dispatched_ack_lost";
+  const r2 = new FakeR2Bucket();
+  await seedEncryptedPlan(r2, planRunId);
+  const storage = new FakeDoStorage();
+  // Calls 1-2 atomically persist `preparing`; calls 3-4 atomically persist
+  // `dispatched`. Lose the first acknowledgement of the second batch.
+  storage.failPutAfterCommit(3);
+  let providerCalls = 0;
+  const container = mutationSuccessContainer(planRunId, () => {
+    providerCalls += 1;
+  });
+  const options = {
+    storage,
+    env: {
+      TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET:
+        RUN_CREDENTIAL_SIGNING_SECRET,
+    },
+  };
+  const firstToken = await signedMutationToken(planRunId, {
+    jti: "dispatched-first",
+  });
+  const first = await runnerWithContainer(r2, container, options).fetch(
+    signedMutationRequest(planRunId, firstToken),
+  );
+  assert.equal(first.status, 500);
+  assert.equal(providerCalls, 0);
+  const dispatchedEvidence = JSON.stringify(storage.entries());
+  assert.match(dispatchedEvidence, /"phase":"dispatched"/);
+  assert.equal(storage.entries().length, 2);
+
+  const remintedToken = await signedMutationToken(planRunId, {
+    jti: "dispatched-second",
+  });
+  const replay = await runnerWithContainer(r2, container, options).fetch(
+    signedMutationRequest(planRunId, remintedToken),
+  );
+  assert.equal(replay.status, 409);
+  assertMutationIndeterminateResponse(await replay.text(), "apply");
+  assert.equal(providerCalls, 0);
+});
+
+test("OpenTofu runner adopts completed state only after fresh exact mutation authority verification", async () => {
+  const planRunId = "plan_completed_destroy_adoption";
+  const artifacts = new FakeR2Bucket();
+  const state = new FakeR2Bucket();
+  await seedEncryptedPlan(artifacts, planRunId);
+  const storage = new FakeDoStorage();
+  let providerCalls = 0;
+  const container = mutationSuccessContainer(planRunId, () => {
+    providerCalls += 1;
+  });
+  const options = {
+    storage,
+    stateBucket: state,
+    env: {
+      TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET:
+        RUN_CREDENTIAL_SIGNING_SECRET,
+    },
+  };
+  const stateScope = {
+    workspaceId: "workspace_semantic",
+    subject: { kind: "capsule", id: "capsule_semantic" },
+    environment: "production",
+    generation: 1,
+    stateRef:
+      "workspaces/workspace_semantic/capsules/capsule_semantic/environments/production/state-versions/00000001.tfstate.enc",
+  };
+  const originalToken = await signedMutationToken(planRunId, {
+    action: "destroy",
+    jti: "completed-original",
+  });
+  const first = await runnerWithContainer(artifacts, container, options).fetch(
+    signedMutationRequest(planRunId, originalToken, {
+      action: "destroy",
+      stateScope,
+    }),
+  );
+  assert.equal(first.status, 200);
+  assert.equal(providerCalls, 1);
+  assert.match(JSON.stringify(storage.entries()), /"phase":"dispatched"/);
+
+  const expiredToken = await signedMutationToken(planRunId, {
+    action: "destroy",
+    jti: "completed-expired",
+    nowMs: Date.now() - 120_000,
+    ttlSeconds: 60,
+  });
+  const expiredReplay = await runnerWithContainer(
+    artifacts,
+    container,
+    options,
+  ).fetch(
+    signedMutationRequest(planRunId, expiredToken, {
+      action: "destroy",
+      stateScope,
+    }),
+  );
+  assert.equal(expiredReplay.status, 409);
+  assertMutationIndeterminateResponse(
+    await expiredReplay.text(),
+    "destroy",
+  );
+  assert.equal(providerCalls, 1);
+
+  const changedAuthorityToken = await signedMutationToken(planRunId, {
+    action: "destroy",
+    jti: "completed-changed-scope",
+    scopes: ["provider:destroy", "provider:admin"],
+  });
+  const changedAuthorityReplay = await runnerWithContainer(
+    artifacts,
+    container,
+    options,
+  ).fetch(
+    signedMutationRequest(planRunId, changedAuthorityToken, {
+      action: "destroy",
+      stateScope,
+    }),
+  );
+  assert.equal(changedAuthorityReplay.status, 409);
+  assertMutationIndeterminateResponse(
+    await changedAuthorityReplay.text(),
+    "destroy",
+  );
+  assert.equal(providerCalls, 1);
+
+  const changedSubjectToken = await signedMutationToken(planRunId, {
+    action: "destroy",
+    jti: "completed-changed-subject",
+    subject: "principal_changed",
+  });
+  const changedSubjectReplay = await runnerWithContainer(
+    artifacts,
+    container,
+    options,
+  ).fetch(
+    signedMutationRequest(planRunId, changedSubjectToken, {
+      action: "destroy",
+      stateScope,
+    }),
+  );
+  assert.equal(changedSubjectReplay.status, 409);
+  assertMutationIndeterminateResponse(
+    await changedSubjectReplay.text(),
+    "destroy",
+  );
+  assert.equal(providerCalls, 1);
+
+  const changedRunToken = await signedMutationToken(planRunId, {
+    action: "destroy",
+    jti: "completed-changed-run",
+    runId: "apply_different",
+  });
+  const changedRunReplay = await runnerWithContainer(
+    artifacts,
+    container,
+    options,
+  ).fetch(
+    signedMutationRequest(planRunId, changedRunToken, {
+      action: "destroy",
+      stateScope,
+    }),
+  );
+  assert.equal(changedRunReplay.status, 409);
+  assertMutationIndeterminateResponse(
+    await changedRunReplay.text(),
+    "destroy",
+  );
+  assert.equal(providerCalls, 1);
+
+  const freshToken = await signedMutationToken(planRunId, {
+    action: "destroy",
+    jti: "completed-fresh",
+  });
+  const changedInputReplay = await runnerWithContainer(
+    artifacts,
+    container,
+    options,
+  ).fetch(
+    signedMutationRequest(planRunId, freshToken, {
+      action: "destroy",
+      stateScope,
+      operatorModuleText: "terraform { required_version = \">= 2.0\" }\n",
+    }),
+  );
+  assert.equal(changedInputReplay.status, 409);
+  assertMutationIndeterminateResponse(
+    await changedInputReplay.text(),
+    "destroy",
+  );
+  assert.equal(providerCalls, 1);
+
+  const exactReplay = await runnerWithContainer(
+    artifacts,
+    container,
+    options,
+  ).fetch(
+    signedMutationRequest(planRunId, freshToken, {
+      action: "destroy",
+      stateScope,
+      heartbeatAt: 2,
+      requestedAt: "2026-08-13T00:02:00.000Z",
+    }),
+  );
+  assert.equal(exactReplay.status, 200);
+  assert.equal(providerCalls, 1);
+});
+
+test("OpenTofu runner Durable Object grants one concurrent mutation dispatch authority", async () => {
+  const runId = "apply_concurrent_redelivery";
+  const r2 = new FakeR2Bucket();
+  await seedEncryptedPlan(r2, runId);
+  const storage = new FakeDoStorage();
+  const claimGate = storage.deferNextGet();
+  let providerCalls = 0;
+  const container: ContainerRequestFetcher = {
+    async containerFetch(request) {
+      const path = new URL(request.url).pathname;
+      if (request.method === "PUT") return Response.json({ ok: true });
+      if (request.method === "POST" && path === `/runs/${runId}`) {
+        providerCalls += 1;
+        return Response.json({ status: "succeeded", exitCode: 0 });
+      }
+      return Response.json({ error: "unexpected" }, { status: 500 });
+    },
+  };
+  const runner = runnerWithContainer(r2, container, { storage });
+
+  const first = runner.fetch(mutationRequest(runId, "apply"));
+  await claimGate.entered;
+  const redelivery = runner.fetch(mutationRequest(runId, "apply"));
+  const redeliveryResponse = await redelivery;
+  assert.equal(redeliveryResponse.status, 409);
+  assertMutationIndeterminateResponse(
+    await redeliveryResponse.text(),
+    "apply",
+  );
+  assert.equal(providerCalls, 0);
+
+  claimGate.release();
+  assert.equal((await first).status, 200);
+  assert.equal(providerCalls, 1);
+});
+
+test("OpenTofu runner Durable Object treats a response-body transport loss after apply as indeterminate", async () => {
+  const runId = "apply_response_stream_lost";
+  const r2 = new FakeR2Bucket();
+  await seedEncryptedPlan(r2, runId);
+  const storage = new FakeDoStorage();
+  let providerCalls = 0;
+  let destroyCalls = 0;
+  const container: ContainerRequestFetcher = {
+    async containerFetch(request) {
+      const path = new URL(request.url).pathname;
+      if (request.method === "PUT") return Response.json({ ok: true });
+      if (request.method === "POST" && path === `/runs/${runId}`) {
+        providerCalls += 1;
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(
+                new TextEncoder().encode('{"status":"succeeded"'),
+              );
+              controller.error(
+                new Error("response stream token=stream-raw-secret lost"),
+              );
+            },
+          }),
+          { headers: { "content-type": "application/json" } },
+        );
+      }
+      return Response.json({ error: "unexpected" }, { status: 500 });
+    },
+  };
+  const request = () => mutationRequest(runId, "apply");
+  const options = {
+    storage,
+    async destroy() {
+      destroyCalls += 1;
+    },
+  };
+
+  const first = await runnerWithContainer(r2, container, options).fetch(
+    request(),
+  );
+  assert.equal(first.status, 409);
+  const firstText = await first.text();
+  assertMutationIndeterminateResponse(firstText, "apply");
+  assert.equal(firstText.includes("stream-raw-secret"), false);
+  assert.equal(providerCalls, 1);
+  assert.equal(destroyCalls, 0);
+
+  const replay = await runnerWithContainer(r2, container, options).fetch(
+    request(),
+  );
+  assert.equal(replay.status, 409);
+  assert.equal(providerCalls, 1);
+  assert.equal(destroyCalls, 0);
+});
+
+test("OpenTofu runner Durable Object treats post-apply state transport loss as indeterminate", async () => {
+  const runId = "apply_state_transport_lost";
+  const r2 = new FakeR2Bucket();
+  await seedEncryptedPlan(r2, runId);
+  const storage = new FakeDoStorage();
+  let providerCalls = 0;
+  const container: ContainerRequestFetcher = {
+    async containerFetch(request) {
+      const path = new URL(request.url).pathname;
+      if (request.method === "PUT") return Response.json({ ok: true });
+      if (request.method === "POST" && path === `/runs/${runId}`) {
+        providerCalls += 1;
+        return Response.json({ status: "succeeded", exitCode: 0 });
+      }
+      if (
+        request.method === "GET" &&
+        path === `/runs/${runId}/artifacts/tfstate`
+      ) {
+        throw new TypeError(
+          "state transport password=state-transport-raw-secret lost",
+        );
+      }
+      return Response.json({ error: "unexpected" }, { status: 500 });
+    },
+  };
+  const request = () =>
+    mutationRequest(runId, "apply", {
+      planRun: { id: runId, capsuleId: "capsule_state_transport" },
+    });
+
+  const first = await runnerWithContainer(r2, container, { storage }).fetch(
+    request(),
+  );
+  assert.equal(first.status, 409);
+  const firstText = await first.text();
+  assertMutationIndeterminateResponse(firstText, "apply");
+  assert.equal(firstText.includes("state-transport-raw-secret"), false);
+  assert.equal(providerCalls, 1);
+
+  const replay = await runnerWithContainer(r2, container, { storage }).fetch(
+    request(),
+  );
+  assert.equal(replay.status, 409);
+  assert.equal(providerCalls, 1);
+});
+
+test("OpenTofu runner Durable Object may redispatch read-only plan after a stopped-container race", async () => {
+  let planCalls = 0;
+  const runner = runnerWithContainer(new FakeR2Bucket(), {
+    async containerFetch(request) {
+      if (
+        request.method === "POST" &&
+        new URL(request.url).pathname === "/runs/plan_safe_retry"
+      ) {
+        planCalls += 1;
+        if (planCalls === 1) {
+          throw new Error(
+            "The container is not running, consider calling start()",
+          );
+        }
+        return Response.json({ status: "succeeded", exitCode: 0 });
+      }
+      return Response.json({ error: "unexpected" }, { status: 500 });
+    },
+  });
+
+  const response = await runner.fetch(
+    new Request("https://runner/runs/plan_safe_retry", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        kind: "takosumi.opentofu-run@v1",
+        action: "plan",
+        runId: "plan_safe_retry",
+        request: {},
+      }),
+    }),
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(planCalls, 2);
+});
+
+test("OpenTofu runner Durable Object releases a provable pre-dispatch preparation for safe retry", async () => {
+  const runId = "apply_health_retry";
+  const r2 = new FakeR2Bucket();
+  await seedEncryptedPlan(r2, runId);
+  const storage = new FakeDoStorage();
+  let providerCalls = 0;
+  const container: ContainerRequestFetcher = {
+    async containerFetch(request) {
+      const path = new URL(request.url).pathname;
+      if (
+        request.method === "PUT" &&
+        path === `/runs/${runId}/artifacts/tfplan`
+      ) {
+        return Response.json({ ok: true });
+      }
+      if (request.method === "POST" && path === `/runs/${runId}`) {
+        providerCalls += 1;
+        return Response.json({ status: "succeeded", exitCode: 0 });
+      }
+      return Response.json({ error: "unexpected" }, { status: 500 });
+    },
+  };
+  const request = () =>
+    new Request(`https://runner/runs/${runId}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        kind: "takosumi.opentofu-run@v1",
+        action: "apply",
+        runId,
+        request: {
+          planArtifact: {
+            kind: "object-storage",
+            ref: `r2://takos-artifacts/opentofu-plan-runs/${runId}/tfplan`,
+            digest: PLAN_DIGEST,
+          },
+        },
+      }),
+    });
+
+  const unavailableRunner = runnerWithContainer(r2, container, {
+    storage,
+    async healthFetch() {
+      throw new Error("container health unavailable before dispatch");
+    },
+  });
+  const unavailable = await unavailableRunner.fetch(request());
+  assert.equal(unavailable.status, 500);
+  assert.equal(providerCalls, 0);
+  assert.deepEqual(storage.entries(), []);
+
+  const restartedRunner = runnerWithContainer(r2, container, { storage });
+  const retried = await restartedRunner.fetch(request());
+  assert.equal(retried.status, 200);
+  assert.equal(providerCalls, 1);
+});
+
 test("OpenTofu runner Durable Object rejects plaintext-only R2 plan artifacts", async () => {
   const r2 = new FakeR2Bucket();
   await r2.put("opentofu-plan-runs/plan_1/tfplan", PLAN_BYTES, {
@@ -925,7 +2146,9 @@ test("OpenTofu runner Durable Object rejects plaintext-only R2 plan artifacts", 
   assert.equal(response.status, 500);
   const text = await response.text();
   assert.match(text, /OpenTofu runner artifact relay failed/);
-  assert.match(text, /plan artifact object not found/);
+  assert.match(text, /runner_artifact_relay_failed/);
+  assert.match(text, /relay_failure/);
+  assert.equal(text.includes("plan artifact object not found"), false);
 });
 
 test("OpenTofu runner Durable Object restores and persists operator-managed state", async () => {
@@ -1204,9 +2427,12 @@ function runnerWithContainer(
     ) => Promise<void>;
     readonly destroy?: () => Promise<void>;
     readonly stop?: () => Promise<void>;
+    readonly storage?: FakeDoStorage;
   } = {},
 ): OpenTofuRunnerObject {
-  const runner = new OpenTofuRunnerObject({ storage: new FakeDoStorage() }, {
+  const runner = new OpenTofuRunnerObject({
+    storage: options.storage ?? new FakeDoStorage(),
+  }, {
     TAKOSUMI_CONTROL_DB: {} as CloudflareWorkerEnv["TAKOSUMI_CONTROL_DB"],
     R2_ARTIFACTS: r2,
     ...(options.stateBucket ? { R2_STATE: options.stateBucket } : {}),
@@ -1245,20 +2471,343 @@ function runnerWithContainer(
   return runner;
 }
 
+async function seedEncryptedPlan(
+  r2: FakeR2Bucket,
+  runId: string,
+): Promise<void> {
+  const crypto = StateArtifactCrypto.fromEnv({
+    TAKOSUMI_SECRET_STORE_PASSPHRASE: TEST_PASSPHRASE,
+  });
+  const sealedPlan = await crypto.seal(PLAN_BYTES);
+  await r2.put(
+    `opentofu-plan-runs/${runId}/tfplan.enc`,
+    sealedPlan.ciphertext,
+    {
+      httpMetadata: { contentType: "application/vnd.opentofu.plan" },
+      customMetadata: {
+        "takosumi-content-digest": sealedPlan.contentDigest,
+      },
+    },
+  );
+}
+
+function mutationRequest(
+  runId: string,
+  action: "apply" | "destroy",
+  requestFields: Readonly<Record<string, unknown>> = {},
+): Request {
+  return new Request(`https://runner/runs/${runId}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      kind: "takosumi.opentofu-run@v1",
+      action,
+      runId,
+      request: {
+        ...requestFields,
+        planArtifact: {
+          kind: "object-storage",
+          ref: `r2://takos-artifacts/opentofu-plan-runs/${runId}/tfplan`,
+          digest: PLAN_DIGEST,
+        },
+      },
+    }),
+  });
+}
+
+async function signedMutationToken(
+  planRunId: string,
+  options: {
+    readonly action?: "apply" | "destroy";
+    readonly jti: string;
+    readonly nowMs?: number;
+    readonly ttlSeconds?: number;
+    readonly scopes?: readonly string[];
+    readonly subject?: string;
+    readonly runId?: string;
+  },
+): Promise<string> {
+  const subject = options.subject ?? "principal_installer";
+  const action = options.action ?? "apply";
+  return (
+    await createRunCredentialToken({
+      secret: RUN_CREDENTIAL_SIGNING_SECRET,
+      audience: "provider.example.v1",
+      subject,
+      workspaceId: "workspace_semantic",
+      capsuleId: "capsule_semantic",
+      runId: options.runId ?? `apply_${planRunId}`,
+      installingPrincipalId: subject,
+      connectionId: "connection_semantic",
+      provider: RUN_CREDENTIAL_PROVIDER,
+      phase: action,
+      scopes: options.scopes ?? [`provider:${action}`],
+      jti: options.jti,
+      ...(options.ttlSeconds === undefined
+        ? {}
+        : { ttlSeconds: options.ttlSeconds }),
+      ...(options.nowMs === undefined
+        ? {}
+        : { now: () => options.nowMs! }),
+    })
+  ).token;
+}
+
+function signedMutationRequest(
+  planRunId: string,
+  token: string,
+  options: {
+    readonly action?: "apply" | "destroy";
+    readonly heartbeatAt?: number;
+    readonly requestedAt?: string;
+    readonly operatorModuleText?: string;
+    readonly rawOutputRef?: string;
+    readonly stateScope?: Readonly<Record<string, unknown>>;
+  } = {},
+): Request {
+  const action = options.action ?? "apply";
+  const operation = action === "destroy" ? "destroy" : "update";
+  const planArtifact = {
+    kind: "object-storage",
+    ref: `r2://takos-artifacts/opentofu-plan-runs/${planRunId}/tfplan`,
+    digest: PLAN_DIGEST,
+  };
+  return new Request(`https://runner/runs/${planRunId}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      kind: "takosumi.opentofu-run@v1",
+      action,
+      runId: planRunId,
+      requestedAt: options.requestedAt ?? "2026-08-13T00:00:00.000Z",
+      request: {
+        applyRun: {
+          id: `apply_${planRunId}`,
+          planRunId,
+          workspaceId: "workspace_semantic",
+          capsuleId: "capsule_semantic",
+          operation,
+          runnerProfileId: "opentofu-default",
+          status: "running",
+          heartbeatAt: options.heartbeatAt ?? 1,
+          runEnvironmentEvidenceDigest:
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          stateBackend: { kind: "runner-local" },
+          stateLock: {
+            status: "recorded",
+            backendRef: "runner-local://workspace_semantic/capsule_semantic",
+            acquiredAt: options.heartbeatAt ?? 1,
+          },
+          auditEvents: [],
+          updatedAt: options.heartbeatAt ?? 1,
+        },
+        planRun: {
+          id: planRunId,
+          workspaceId: "workspace_semantic",
+          capsuleId: "capsule_semantic",
+          source: {
+            kind: "git",
+            url: "https://example.test/repository.git",
+            ref: "0123456789abcdef0123456789abcdef01234567",
+            modulePath: ".",
+          },
+          sourceDigest:
+            "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          operation,
+          runnerProfileId: "opentofu-default",
+          variablesDigest:
+            "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          requiredProviders: [RUN_CREDENTIAL_PROVIDER],
+          status: "succeeded",
+          policyDecisionDigest:
+            "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          planDigest: PLAN_DIGEST,
+          planArtifact,
+          resolvedProviderBindingsDigest:
+            "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          capsuleContext: {
+            workspaceId: "workspace_semantic",
+            capsuleId: "capsule_semantic",
+            environment: "production",
+          },
+          auditEvents: [],
+          updatedAt: options.heartbeatAt ?? 1,
+        },
+        planArtifact,
+        operatorModule: {
+          files: [
+            {
+              path: "main.tf",
+              text:
+                options.operatorModuleText ??
+                'terraform { required_version = ">= 1.8" }\n',
+            },
+          ],
+        },
+        ...(options.stateScope ? { stateScope: options.stateScope } : {}),
+        ...(options.rawOutputRef ? { rawOutputRef: options.rawOutputRef } : {}),
+        credentials: {
+          env: { PROVIDER_RUN_TOKEN: token },
+          manifest: {
+            bindings: [
+              {
+                providerSource: RUN_CREDENTIAL_PROVIDER,
+                connectionId: "connection_semantic",
+                recipeId: "ephemeral-run-token",
+                authMode: "run-token",
+                envNames: ["PROVIDER_RUN_TOKEN"],
+                fileEnvNames: [],
+                requiredEnvGroups: [["PROVIDER_RUN_TOKEN"]],
+              },
+            ],
+          },
+        },
+      },
+    }),
+  });
+}
+
+function rawOutputRefFor(planRunId: string): string {
+  return `workspaces/workspace_semantic/capsules/capsule_semantic/runs/apply_${planRunId}/outputs.raw.json.enc`;
+}
+
+function capsuleStateScope(): {
+  readonly workspaceId: string;
+  readonly subject: { readonly kind: "capsule"; readonly id: string };
+  readonly environment: string;
+  readonly generation: number;
+  readonly stateRef: string;
+} {
+  return {
+    workspaceId: "workspace_semantic",
+    subject: { kind: "capsule", id: "capsule_semantic" },
+    environment: "production",
+    generation: 1,
+    stateRef:
+      "workspaces/workspace_semantic/capsules/capsule_semantic/environments/production/state-versions/00000001.tfstate.enc",
+  };
+}
+
+function assertNoSensitiveR2LogSerialization(
+  calls: readonly unknown[][],
+  failure: string,
+): void {
+  const logged = JSON.stringify(calls);
+  const marker = failure.match(/arbitrary-marker-[a-z0-9-]+/iu)?.[0];
+  assert.ok(marker);
+  for (const forbidden of [
+    marker,
+    "Authorization",
+    "Bearer",
+    "cookie",
+    "body",
+    "stack",
+  ]) {
+    assert.equal(logged.includes(forbidden), false, `logged ${forbidden}`);
+  }
+}
+
+function mutationSuccessContainer(
+  planRunId: string,
+  onProviderCall: () => void,
+): ContainerRequestFetcher {
+  return {
+    async containerFetch(request) {
+      const path = new URL(request.url).pathname;
+      if (request.method === "PUT") return Response.json({ ok: true });
+      if (request.method === "POST" && path === `/runs/${planRunId}`) {
+        onProviderCall();
+        return Response.json({ status: "succeeded", exitCode: 0 });
+      }
+      if (
+        request.method === "GET" &&
+        path === `/runs/${planRunId}/artifacts/tfstate`
+      ) {
+        return new Response(STATE_BYTES, {
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return Response.json({ error: "unexpected" }, { status: 500 });
+    },
+  };
+}
+
+function assertMutationIndeterminateResponse(
+  text: string,
+  action: "apply" | "destroy",
+): void {
+  const payload = JSON.parse(text) as Record<string, unknown>;
+  assert.equal(payload.errorCode, "runner_mutation_indeterminate");
+  assert.equal(payload.retryable, false);
+  assert.equal(payload.outcome, "indeterminate");
+  assert.deepEqual(payload.evidence, {
+    kind: "runner_mutation_indeterminate",
+    action,
+    redispatchBlocked: true,
+  });
+}
+
 class FakeDoStorage {
   #values = new Map<string, unknown>();
+  #putCalls = 0;
+  readonly #putFailuresAfterCommit = new Set<number>();
+  #nextGetGate:
+    | {
+        readonly entered: () => void;
+        readonly wait: Promise<void>;
+      }
+    | undefined;
 
-  get<T = unknown>(key: string): Promise<T | undefined> {
-    return Promise.resolve(this.#values.get(key) as T | undefined);
+  async get<T = unknown>(key: string): Promise<T | undefined> {
+    const gate = this.#nextGetGate;
+    if (gate) {
+      this.#nextGetGate = undefined;
+      gate.entered();
+      await gate.wait;
+    }
+    return this.#values.get(key) as T | undefined;
   }
 
   put<T = unknown>(key: string, value: T): Promise<void> {
+    this.#putCalls += 1;
     this.#values.set(key, value);
+    if (this.#putFailuresAfterCommit.delete(this.#putCalls)) {
+      return Promise.reject(
+        new Error("simulated Durable Object storage acknowledgement loss"),
+      );
+    }
     return Promise.resolve();
   }
 
   delete(key: string): Promise<boolean> {
     return Promise.resolve(this.#values.delete(key));
+  }
+
+  entries(): readonly (readonly [string, unknown])[] {
+    return Array.from(this.#values.entries());
+  }
+
+  failPutAfterCommit(call: number): void {
+    this.#putFailuresAfterCommit.add(call);
+  }
+
+  deferNextGet(): {
+    readonly entered: Promise<void>;
+    readonly release: () => void;
+  } {
+    let markEntered: (() => void) | undefined;
+    const entered = new Promise<void>((resolve) => {
+      markEntered = resolve;
+    });
+    let release: (() => void) | undefined;
+    const wait = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.#nextGetGate = {
+      entered: () => markEntered!(),
+      wait,
+    };
+    return { entered, release: () => release!() };
   }
 }
 

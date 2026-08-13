@@ -26,7 +26,10 @@ import type {
   ReleaseCommandRunJob,
   ReleaseCommandRunResult,
 } from "../../core/domains/deploy-control/mod.ts";
-import { OpenTofuRunnerInfrastructureError } from "../../core/domains/deploy-control/mod.ts";
+import {
+  OpenTofuRunnerExecutionError,
+  OpenTofuRunnerInfrastructureError,
+} from "../../core/domains/deploy-control/mod.ts";
 import type {
   CloudflareWorkerEnv,
   OpenTofuRunAction,
@@ -35,6 +38,7 @@ import { redactString } from "takosumi-contract/redaction";
 import { normalizePlanResourceScope } from "takosumi-contract";
 import { parseRepositoryManifestSnapshot } from "takosumi-contract/sources";
 import { recordWorkerMetric, type WorkerMetricSink } from "./metrics.ts";
+import { RUNNER_MUTATION_INDETERMINATE_CODE } from "./runner_protocol.ts";
 
 /**
  * Implements {@link OpenTofuRunner} over the RUNNER Durable Object: each
@@ -53,6 +57,15 @@ const RUNNER_SUBSTRATE_RESET_PATTERN =
   /durable object reset because its code was updated/i;
 const RUNNER_ARTIFACT_RELAY_AMBIGUOUS_CODE =
   "runner_artifact_relay_ambiguous";
+const RUNNER_REJECTED_CODE = "runner_rejected";
+const RUNNER_TRANSPORT_FAILED_CODE = "runner_transport_failed";
+const RUNNER_REQUEST_ABORTED_CODE = "runner_request_aborted";
+const RUNNER_TIMEOUT_CODE = "runner_timeout";
+const RUNNER_PROVIDER_EXECUTION_FAILED_CODE = "provider_execution_failed";
+const RUNNER_PROVIDER_FAILURE_CODES = new Set([
+  "apply_failed",
+  RUNNER_PROVIDER_EXECUTION_FAILED_CODE,
+]);
 const RUNNER_STARTUP_SECONDS_HEADER = "x-takosumi-runner-startup-seconds";
 type ContainerRunnerAction =
   | OpenTofuRunAction
@@ -87,11 +100,7 @@ export class CloudflareContainerOpenTofuRunner
         stdout: stringFromRecord(result, "stdout") ?? "",
         stderr: stringFromRecord(result, "stderr") ?? "",
       }));
-    const planArtifact = planArtifactFromContainerResult(
-      result,
-      job.planRun.id,
-      planDigest,
-    );
+    const planArtifact = planArtifactFromContainerResult(result, planDigest);
     const planResourceChanges = planResourceChangesFromContainerResult(result);
     const plannedOutputs = plannedOutputsFromContainerResult(result);
     return {
@@ -155,9 +164,7 @@ export class CloudflareContainerOpenTofuRunner
         (providerExecutionFailure.statePersistence === "persisted") !==
         Boolean(stateDigest)
       ) {
-        throw new Error(
-          `OpenTofu runner apply ${job.applyRun.id} returned inconsistent failed-state persistence evidence`,
-        );
+        throw new Error("runner failed-state persistence evidence is inconsistent");
       }
       return {
         providerExecutionFailure,
@@ -231,9 +238,7 @@ export class CloudflareContainerOpenTofuRunner
     const stateRef = state ? stringFromRecord(state, "stateRef") : undefined;
     const digest = state ? stringFromRecord(state, "digest") : undefined;
     if (typeof generation !== "number" || !stateRef || !digest) {
-      throw new Error(
-        `OpenTofu runner restore ${job.runId} returned an incomplete state result`,
-      );
+      throw new Error("runner restore returned an incomplete state result");
     }
     return {
       state: { generation, stateRef, digest },
@@ -335,9 +340,7 @@ export class CloudflareContainerOpenTofuRunner
       result.repositoryManifest,
     );
     if (!resolvedCommit || !archiveDigest || archiveSizeBytes === undefined) {
-      throw new Error(
-        `OpenTofu runner source_sync ${job.runId} returned an incomplete result`,
-      );
+      throw new Error("runner source sync returned an incomplete result");
     }
     const phaseTimings = phaseTimingsFromContainerResult(result);
     return {
@@ -372,9 +375,7 @@ export class CloudflareContainerOpenTofuRunner
     );
     const files = result.files;
     if (!Array.isArray(files)) {
-      throw new Error(
-        `OpenTofu runner compatibility_check ${job.runId} returned no files`,
-      );
+      throw new Error("runner compatibility check returned no files");
     }
     return files.map((entry) => {
       if (!isRecord(entry)) {
@@ -479,13 +480,13 @@ export class CloudflareContainerOpenTofuRunner
       };
     }
     const reason =
-      stringFromRecord(result, "reason") ??
-      stringFromRecord(result, "stderr") ??
-      "backup runner did not export service-data pointer";
+      status === "unsupported"
+        ? "backup_unsupported"
+        : "backup_artifact_unavailable";
     return {
       status: status === "unsupported" ? "unsupported" : "missing",
       runId,
-      reason: redactRunnerDiagnosticText(reason),
+      reason,
     };
   }
 
@@ -502,10 +503,7 @@ export class CloudflareContainerOpenTofuRunner
       throw new Error("RUNNER binding is not configured");
     }
     if (options.signal?.aborted) {
-      throw abortReason(
-        options.signal,
-        `OpenTofu runner ${action} run ${runId} was aborted before dispatch`,
-      );
+      throw abortReason(options.signal);
     }
     const id = this.env.RUNNER.idFromName(runId);
     const timeoutMs = positiveTimeoutMs(options.timeoutMs);
@@ -561,49 +559,50 @@ export class CloudflareContainerOpenTofuRunner
               action === "apply" &&
               providerExecutionFailureFromContainerResult(payload)
             ) {
-              return payload;
+              return failedProviderExecutionResult(payload);
             }
-            const detail = runnerFailureDetail(payload, redactedText);
-            const message = `OpenTofu runner rejected ${action} run ${runId}: ${response.status}${detail ? ` (${detail})` : ""}`;
+            const failure = runnerFailureEnvelope(
+              payload,
+              redactedText,
+              response.status,
+              action,
+            );
+            const executionError = runnerExecutionErrorFromPayload(payload);
+            if (executionError) throw executionError;
             const relayInfrastructureError =
-              runnerInfrastructureErrorFromPayload(payload, message);
+              runnerInfrastructureErrorFromPayload(payload);
             if (relayInfrastructureError) {
               throw relayInfrastructureError;
             }
             if (
               attempt < attempts &&
-              isRunnerCapacityExceededMessage(message)
+              failure.code === "capacity_exhausted"
             ) {
               await sleepBeforeCapacityRetry(this.env, attempt, controller);
               continue;
             }
-            throw (
-              runnerInfrastructureErrorFromMessage(message) ??
-              new Error(message)
-            );
+            throw runnerErrorFromFailureEnvelope(failure);
           }
           return payload;
         } catch (error) {
           if (options.signal?.aborted) {
-            throw abortReason(
-              options.signal,
-              `OpenTofu runner ${action} run ${runId} was aborted`,
-            );
+            throw abortReason(options.signal);
           }
           if (controller?.signal.aborted && timeoutMs) {
-            throw new Error(
-              `OpenTofu runner ${action} run ${runId} exceeded ${timeoutMs}ms timeout`,
+            throw new OpenTofuRunnerInfrastructureError(
+              "runner request timed out",
+              { reason: RUNNER_TIMEOUT_CODE },
             );
           }
           if (attempt < attempts && isRunnerCapacityExceededError(error)) {
             await sleepBeforeCapacityRetry(this.env, attempt, controller);
             continue;
           }
-          throw runnerInfrastructureErrorFromUnknown(error) ?? error;
+          throw runnerErrorFromUnknown(error);
         }
       }
       throw new OpenTofuRunnerInfrastructureError(
-        `OpenTofu runner ${action} run ${runId} exhausted capacity retries`,
+        "runner capacity retries exhausted",
         { reason: "capacity_exhausted" },
       );
     } finally {
@@ -654,9 +653,27 @@ function providerExecutionFailureFromContainerResult(
   return {
     kind: "provider_execution_failed",
     statePersistence,
-    ...(errorCode && /^[A-Za-z][A-Za-z0-9._:-]{0,127}$/u.test(errorCode)
-      ? { errorCode }
-      : {}),
+    errorCode:
+      errorCode && RUNNER_PROVIDER_FAILURE_CODES.has(errorCode)
+        ? errorCode
+        : RUNNER_PROVIDER_EXECUTION_FAILED_CODE,
+  };
+}
+
+function failedProviderExecutionResult(
+  result: Record<string, unknown>,
+): Record<string, unknown> {
+  const failure = providerExecutionFailureFromContainerResult(result);
+  const state = recordFromRecord(result, "state");
+  const stateDigest = state ? stringFromRecord(state, "digest") : undefined;
+  return {
+    status: "failed",
+    errorCode: failure?.errorCode ?? RUNNER_PROVIDER_EXECUTION_FAILED_CODE,
+    providerExecutionFailure: {
+      kind: "provider_execution_failed",
+      statePersistence: failure?.statePersistence ?? "unavailable",
+    },
+    ...(stateDigest ? { state: { digest: stateDigest } } : {}),
   };
 }
 
@@ -691,10 +708,8 @@ async function abortableSleep(
   });
 }
 
-function abortReason(signal: AbortSignal, fallback: string): Error {
-  return signal.reason instanceof Error
-    ? signal.reason
-    : new DOMException(fallback, "AbortError");
+function abortReason(_signal: AbortSignal): Error {
+  return new DOMException(RUNNER_REQUEST_ABORTED_CODE, "AbortError");
 }
 
 function runnerCapacityRetryAttempts(env: CloudflareWorkerEnv): number {
@@ -720,51 +735,127 @@ function runnerCapacityRetryDelayMs(
 
 function isRunnerCapacityExceededError(error: unknown): boolean {
   return (
-    error instanceof Error && isRunnerCapacityExceededMessage(error.message)
-  );
+    error instanceof OpenTofuRunnerInfrastructureError &&
+    error.reason === "capacity_exhausted"
+  ) || (error instanceof Error && isRunnerCapacityExceededMessage(error.message));
 }
 
 function isRunnerCapacityExceededMessage(message: string): boolean {
   return RUNNER_CAPACITY_EXCEEDED_PATTERN.test(message);
 }
 
-function runnerInfrastructureErrorFromUnknown(
-  error: unknown,
-): OpenTofuRunnerInfrastructureError | undefined {
-  if (error instanceof OpenTofuRunnerInfrastructureError) return error;
-  if (!(error instanceof Error)) return undefined;
-  return runnerInfrastructureErrorFromMessage(error.message, error);
+function runnerErrorFromUnknown(error: unknown): Error {
+  if (error instanceof OpenTofuRunnerExecutionError) {
+    const reason = finiteRunnerReason(error.reason, RUNNER_REJECTED_CODE);
+    return new OpenTofuRunnerExecutionError(
+      runnerFailureMessage(reason),
+      { reason, originalError: error },
+    );
+  }
+  if (error instanceof OpenTofuRunnerInfrastructureError) {
+    const reason = finiteRunnerReason(error.reason, RUNNER_TRANSPORT_FAILED_CODE);
+    return new OpenTofuRunnerInfrastructureError(
+      runnerFailureMessage(reason),
+      { reason, originalError: error },
+    );
+  }
+  if (error instanceof Error) {
+    const reason = RUNNER_CAPACITY_EXCEEDED_PATTERN.test(error.message)
+      ? "capacity_exhausted"
+      : RUNNER_SUBSTRATE_RESET_PATTERN.test(error.message)
+        ? "substrate_reset"
+        : RUNNER_TRANSPORT_FAILED_CODE;
+    return new OpenTofuRunnerInfrastructureError(
+      runnerFailureMessage(reason),
+      { reason, originalError: error },
+    );
+  }
+  return new OpenTofuRunnerInfrastructureError(
+    runnerFailureMessage(RUNNER_TRANSPORT_FAILED_CODE),
+    { reason: RUNNER_TRANSPORT_FAILED_CODE },
+  );
 }
 
-function runnerInfrastructureErrorFromMessage(
-  message: string,
-  originalError?: unknown,
-): OpenTofuRunnerInfrastructureError | undefined {
-  const reason = RUNNER_CAPACITY_EXCEEDED_PATTERN.test(message)
-    ? "capacity_exhausted"
-    : RUNNER_SUBSTRATE_RESET_PATTERN.test(message)
-      ? "substrate_reset"
-      : undefined;
-  return reason
-    ? new OpenTofuRunnerInfrastructureError(message, {
-        reason,
-        originalError,
-      })
-    : undefined;
+type RunnerFailureEnvelope = Readonly<{
+  readonly code:
+    | typeof RUNNER_REJECTED_CODE
+    | typeof RUNNER_TRANSPORT_FAILED_CODE
+    | "capacity_exhausted"
+    | "substrate_reset";
+  readonly status: number;
+  readonly phase: ContainerRunnerAction;
+}>;
+
+function runnerFailureEnvelope(
+  payload: Record<string, unknown>,
+  redactedText: string,
+  status: number,
+  phase: ContainerRunnerAction,
+): RunnerFailureEnvelope {
+  const errorCode = stringFromRecord(payload, "errorCode");
+  const code =
+    errorCode === "runner_artifact_relay_ambiguous"
+      ? "runner_rejected"
+      : RUNNER_CAPACITY_EXCEEDED_PATTERN.test(redactedText) ||
+          RUNNER_CAPACITY_EXCEEDED_PATTERN.test(
+            stringFromRecord(payload, "error") ?? "",
+          )
+        ? "capacity_exhausted"
+        : RUNNER_SUBSTRATE_RESET_PATTERN.test(redactedText)
+          ? "substrate_reset"
+          : RUNNER_REJECTED_CODE;
+  return { code, status, phase };
+}
+
+function runnerErrorFromFailureEnvelope(
+  failure: RunnerFailureEnvelope,
+): OpenTofuRunnerInfrastructureError {
+  return new OpenTofuRunnerInfrastructureError(
+    runnerFailureMessage(failure.code),
+    { reason: failure.code },
+  );
+}
+
+function runnerFailureMessage(reason: string): string {
+  return `runner request failed (${reason})`;
+}
+
+function finiteRunnerReason(
+  reason: string | undefined,
+  fallback: string,
+): string {
+  return reason && /^[a-z][a-z0-9_]{0,63}$/u.test(reason) ? reason : fallback;
 }
 
 function runnerInfrastructureErrorFromPayload(
   payload: Record<string, unknown>,
-  message: string,
 ): OpenTofuRunnerInfrastructureError | undefined {
   const errorCode = stringFromRecord(payload, "errorCode");
   if (
     payload.retryable === true &&
     errorCode === RUNNER_ARTIFACT_RELAY_AMBIGUOUS_CODE
   ) {
-    return new OpenTofuRunnerInfrastructureError(message, {
+    return new OpenTofuRunnerInfrastructureError(runnerFailureMessage(errorCode), {
       reason: errorCode,
     });
+  }
+  return undefined;
+}
+
+function runnerExecutionErrorFromPayload(
+  payload: Record<string, unknown>,
+): OpenTofuRunnerExecutionError | undefined {
+  const errorCode = stringFromRecord(payload, "errorCode");
+  if (
+    payload.retryable === false &&
+    errorCode === RUNNER_MUTATION_INDETERMINATE_CODE
+  ) {
+    return new OpenTofuRunnerExecutionError(
+      runnerFailureMessage(RUNNER_MUTATION_INDETERMINATE_CODE),
+      {
+      reason: RUNNER_MUTATION_INDETERMINATE_CODE,
+      },
+    );
   }
   return undefined;
 }
@@ -841,37 +932,6 @@ async function readResponseJsonObject(response: Response): Promise<{
   throw new Error("OpenTofu runner response must be a JSON object");
 }
 
-function runnerFailureDetail(
-  payload: Record<string, unknown>,
-  redactedText: string,
-): string | undefined {
-  const errorCode = stringFromRecord(payload, "errorCode");
-  const withCode = (detail: string): string =>
-    errorCode ? `${errorCode}: ${detail}` : detail;
-  const detail = stringFromRecord(payload, "detail");
-  if (detail) return withCode(redactRunnerDiagnosticText(detail));
-  const error = stringFromRecord(payload, "error");
-  if (error) return withCode(redactRunnerDiagnosticText(error));
-  const stderr = stringFromRecord(payload, "stderr");
-  const stdout = stringFromRecord(payload, "stdout");
-  if (stderr?.trim() && stdout?.trim()) {
-    return withCode(
-      redactRunnerDiagnosticText(
-        `${stderr.trim()}\n\n--- runner stdout ---\n${tailText(stdout.trim(), 12000)}`,
-      ),
-    );
-  }
-  if (stderr?.trim()) {
-    return withCode(redactRunnerDiagnosticText(stderr.trim()));
-  }
-  if (stdout?.trim()) {
-    return withCode(redactRunnerDiagnosticText(stdout.trim()));
-  }
-  const trimmed = redactedText.trim();
-  if (trimmed.length > 0) return withCode(trimmed.slice(0, 500));
-  return errorCode ? `${errorCode}: runner failed` : undefined;
-}
-
 function repositoryInstallMetadataFromContainerResult(
   result: Record<string, unknown>,
 ): OpenTofuSourceSyncResult["repositoryInstallMetadata"] | undefined {
@@ -907,7 +967,8 @@ function diagnosticsFromContainerResult(
   if (stderr && stderr.trim().length > 0) {
     diagnostics.push({
       severity: "warning",
-      message: redactRunnerDiagnosticText(stderr),
+      code: "runner_diagnostics_redacted",
+      message: "runner provider diagnostics omitted",
     });
   }
   const phaseTimingDetail = phaseTimingDetailFromContainerResult(result);
@@ -1025,27 +1086,20 @@ function redactRunnerDiagnosticText(text: string): string {
 
 function planArtifactFromContainerResult(
   result: Record<string, unknown>,
-  runId: string,
   planDigest: string,
 ): OpenTofuPlanResult["planArtifact"] {
   const artifact = recordFromRecord(result, "planArtifact");
   if (!artifact) {
-    throw new Error(
-      `OpenTofu runner plan ${runId} did not return a planArtifact`,
-    );
+    throw new Error("runner plan did not return a planArtifact");
   }
   const kind = stringFromRecord(artifact, "kind");
   const ref = stringFromRecord(artifact, "ref");
   const digest = stringFromRecord(artifact, "digest");
   if (!kind || !ref || !digest) {
-    throw new Error(
-      `OpenTofu runner plan ${runId} returned an incomplete planArtifact`,
-    );
+    throw new Error("runner plan returned an incomplete planArtifact");
   }
   if (digest !== planDigest) {
-    throw new Error(
-      `OpenTofu runner plan ${runId} returned a planArtifact digest that does not match planDigest`,
-    );
+    throw new Error("runner plan artifact digest does not match planDigest");
   }
   return {
     kind,

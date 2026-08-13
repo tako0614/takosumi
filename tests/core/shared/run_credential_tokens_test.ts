@@ -4,6 +4,7 @@ import {
   isRunCredentialToken,
   runCredentialTokenSecret,
   verifyRunCredentialToken,
+  verifyRunCredentialTokenAuthority,
 } from "../../../core/shared/run_credential_tokens.ts";
 
 const NOW = 1_800_000_000_000;
@@ -66,6 +67,35 @@ describe("run credential token", () => {
         exp: NOW / 1000 + 600,
         jti: "run_01J-CUSTOM:apply:1",
       },
+    });
+  });
+
+  test("verifies signed authority before a caller projects stable semantic claims", async () => {
+    const issued = await createRunCredentialToken({
+      secret: SIGNING_SECRET,
+      ...FULL_CLAIMS,
+      now: () => NOW,
+      jti: "ephemeral-issuance-id",
+    });
+    const verified = await verifyRunCredentialTokenAuthority(issued.token, {
+      secret: SIGNING_SECRET,
+      now: () => NOW + 1_000,
+    });
+
+    expect(verified.ok).toBe(true);
+    if (!verified.ok) throw new Error(verified.reason);
+    expect(verified.payload).toMatchObject({
+      typ: "takosumi-run-credential",
+      aud: FULL_CLAIMS.audience,
+      sub: FULL_CLAIMS.subject,
+      workspaceId: FULL_CLAIMS.workspaceId,
+      capsuleId: FULL_CLAIMS.capsuleId,
+      runId: FULL_CLAIMS.runId,
+      connectionId: FULL_CLAIMS.connectionId,
+      provider: FULL_CLAIMS.provider,
+      phase: FULL_CLAIMS.phase,
+      scopes: FULL_CLAIMS.scopes,
+      jti: "ephemeral-issuance-id",
     });
   });
 

@@ -2,7 +2,11 @@ import { expect, test } from "bun:test";
 import type { CloudflareWorkerEnv } from "../../../worker/src/bindings.ts";
 import { CloudflareContainerOpenTofuRunner } from "../../../worker/src/container_runner.ts";
 import { InMemoryObservabilitySink } from "../../../core/domains/observability/mod.ts";
-import { OpenTofuRunnerInfrastructureError } from "../../../core/domains/deploy-control/mod.ts";
+import {
+  OpenTofuRunnerExecutionError,
+  OpenTofuRunnerInfrastructureError,
+} from "../../../core/domains/deploy-control/mod.ts";
+import { RUNNER_MUTATION_INDETERMINATE_CODE } from "../../../worker/src/runner_protocol.ts";
 
 const PLAN_DIGEST =
   "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -35,7 +39,7 @@ test("container runner redacts stderr before plan diagnostics are returned", asy
   expect(diagnostics).not.toContain("diag-aws-secret");
   expect(diagnostics).not.toContain("diag-db-pass");
   expect(diagnostics).not.toContain("diag-auth");
-  expect(diagnostics).toContain("[redacted]");
+  expect(diagnostics).toContain("runner_diagnostics_redacted");
 });
 
 test("container runner returns provider installation attestation from plan result", async () => {
@@ -395,7 +399,7 @@ test("container runner redacts stderr before apply diagnostics are returned", as
   const diagnostics = JSON.stringify(result.diagnostics);
   expect(diagnostics).not.toContain("apply-diag-password");
   expect(diagnostics).not.toContain("apply-diag-auth");
-  expect(diagnostics).toContain("[redacted]");
+  expect(diagnostics).toContain("runner_diagnostics_redacted");
 });
 
 test("container runner surfaces non-2xx apply stderr instead of raw JSON envelope", async () => {
@@ -437,11 +441,11 @@ test("container runner surfaces non-2xx apply stderr instead of raw JSON envelop
 
   expect(error).toBeInstanceOf(Error);
   const message = error instanceof Error ? error.message : String(error);
-  expect(message).toContain("cloudflare_r2_bucket.assets");
-  expect(message).toContain("Error creating bucket");
-  expect(message).not.toContain("providerInstallation");
+  expect(message).toBe("runner request failed (runner_rejected)");
+  expect(message).not.toContain("cloudflare_r2_bucket.assets");
+  expect(message).not.toContain("Error creating bucket");
+  expect(message).not.toContain("/tmp/takosumi-provider-cache");
   expect(message).not.toContain("apply-secret");
-  expect(message).toContain("[redacted]");
 });
 
 test("container runner returns a typed failed apply with persisted partial state", async () => {
@@ -490,7 +494,7 @@ test("container runner returns a typed failed apply with persisted partial state
   expect(JSON.stringify(result.diagnostics)).not.toContain(
     "partial-apply-secret",
   );
-  expect(JSON.stringify(result.diagnostics)).toContain("[redacted]");
+  expect(result.diagnostics).toEqual([]);
 });
 
 test("container runner distinguishes failed provider execution without readable state", async () => {
@@ -529,6 +533,46 @@ test("container runner distinguishes failed provider execution without readable 
   expect(result.stateDigest).toBeUndefined();
 });
 
+test("container runner requires a finite provider failure code", async () => {
+  for (const errorCode of [undefined, "provider-raw-code"] as const) {
+    const marker = `provider-failure-${errorCode ?? "missing"}-marker`;
+    const payload = {
+      status: "failed",
+      providerExecutionFailure: {
+        kind: "provider_execution_failed",
+        statePersistence: "unavailable",
+      },
+      ...(errorCode ? { errorCode } : {}),
+      detail: `path=/work/${marker} Authorization: Bearer ${marker}`,
+      stderr: `cookie=${marker}`,
+      stdout: `body=${marker}`,
+      runId: marker,
+    };
+    const runner = new CloudflareContainerOpenTofuRunner(
+      envReturning(payload, undefined, 500),
+    );
+    const result = await runner.apply({
+      applyRun: { id: `apply_${errorCode ?? "missing"}` },
+      planRun: { id: `plan_${errorCode ?? "missing"}` },
+      planArtifact: {
+        kind: "runner-local",
+        ref: `runner-local://plan_${errorCode ?? "missing"}/tfplan`,
+        digest: PLAN_DIGEST,
+      },
+    } as Parameters<CloudflareContainerOpenTofuRunner["apply"]>[0]);
+
+    expect(result.providerExecutionFailure).toEqual({
+      kind: "provider_execution_failed",
+      statePersistence: "unavailable",
+      errorCode: "provider_execution_failed",
+    });
+    const serialized = JSON.stringify(result);
+    expect(serialized).not.toContain(marker);
+    expect(serialized).not.toContain("Bearer");
+    expect(serialized).not.toContain("/work/");
+  }
+});
+
 test("container runner maps typed artifact relay ambiguity to retryable infrastructure", async () => {
   const runner = new CloudflareContainerOpenTofuRunner(
     envReturning(
@@ -562,6 +606,48 @@ test("container runner maps typed artifact relay ambiguity to retryable infrastr
   expect((error as OpenTofuRunnerInfrastructureError).retryable).toBe(true);
   expect((error as OpenTofuRunnerInfrastructureError).reason).toBe(
     "runner_artifact_relay_ambiguous",
+  );
+});
+
+test("container runner maps mutation ambiguity to a non-retryable typed execution error", async () => {
+  const runner = new CloudflareContainerOpenTofuRunner(
+    envReturning(
+      {
+        error: "OpenTofu runner mutation outcome is indeterminate",
+        errorCode: RUNNER_MUTATION_INDETERMINATE_CODE,
+        retryable: false,
+        outcome: "indeterminate",
+        detail:
+          "provider mutation may have occurred; token=adapter-raw-secret",
+      },
+      undefined,
+      409,
+    ),
+  );
+
+  let error: unknown;
+  try {
+    await runner.apply({
+      applyRun: { id: "apply_indeterminate" },
+      planRun: { id: "plan_indeterminate" },
+      planArtifact: {
+        kind: "runner-local",
+        ref: "runner-local://plan_indeterminate/tfplan",
+        digest: PLAN_DIGEST,
+      },
+    } as Parameters<CloudflareContainerOpenTofuRunner["apply"]>[0]);
+  } catch (caught) {
+    error = caught;
+  }
+
+  expect(error).toBeInstanceOf(OpenTofuRunnerExecutionError);
+  expect(error).not.toBeInstanceOf(OpenTofuRunnerInfrastructureError);
+  expect((error as OpenTofuRunnerExecutionError).reason).toBe(
+    RUNNER_MUTATION_INDETERMINATE_CODE,
+  );
+  expect((error as Error).message).not.toContain("adapter-raw-secret");
+  expect((error as Error).message).toBe(
+    `runner request failed (${RUNNER_MUTATION_INDETERMINATE_CODE})`,
   );
 });
 
@@ -636,9 +722,7 @@ test("container runner times out stuck Capsule compatibility reads", async () =>
         fetchedAt: "2026-06-07T00:00:00.000Z",
       },
     }),
-  ).rejects.toThrow(
-    "OpenTofu runner compatibility_check run compat_timeout exceeded 1ms timeout",
-  );
+  ).rejects.toThrow("runner request timed out");
 });
 
 test("container runner dispatches custom_command service-data backups to the backup action", async () => {

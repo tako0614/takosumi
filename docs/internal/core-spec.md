@@ -81,6 +81,27 @@ ledgers. OpenTofu Outputs remain ordinary module values; an Interface may
 explicitly reference a Capsule output, but no reserved output name becomes a
 runtime registry or credential channel.
 
+Apply and Destroy are at-most-once provider dispatches. Before either request
+can reach the runner container, the runner Durable Object durably records the
+stable semantics of the exact Run/action and immutable source, plan, state,
+module, and provider-binding inputs. Signed Run credentials are reverified on
+each delivery; their stable authority claims and delivery coordinates are
+bound while token bytes, issuance/expiry times, and JTI remain secret and do
+not change identity. Opaque credential material is bound by a one-way digest
+and is never stored. A matching durable `preparing` record may therefore resume
+with a freshly issued equivalent credential, but `dispatched`, `indeterminate`,
+or any semantic mismatch never grants another provider dispatch. Completed
+state/output readback and adoption also require a freshly verified credential
+and an exact semantic match against that pre-existing post-dispatch record; an
+R2 target cannot mint its own adoption authority. A transport failure after
+dispatch returns the typed `runner_mutation_indeterminate` outcome. Redelivery
+may complete only by adopting the exact immutable state/output target already
+written for that Run; without that authoritative readback, it remains
+indeterminate. Plan, read-only work, and a provable pre-dispatch preparation
+failure may retry without granting mutation authority. Mutation-authority,
+relay, and container-lifecycle failure logs use only finite classifications and
+never include raw messages, stacks, request bodies, or credential material.
+
 ## Provider-neutral execution
 
 Plain Stack execution accepts any runner-installable OpenTofu/Terraform
