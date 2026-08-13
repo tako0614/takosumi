@@ -215,6 +215,69 @@ test("readiness contribution definitions reject unknown keys at every closed sha
   }
 });
 
+test("readiness contribution semantic rules require unconditional schema fields", () => {
+  const optionalExpiry = {
+    ...contribution,
+    evidenceSchemas: {
+      "external-operation-proof": {
+        anyOf: [["validUntil", "fallbackRef"]],
+        formats: { validUntil: "utc-timestamp" },
+        notExpired: ["validUntil"],
+      },
+    },
+  };
+  expect(isPlatformReadinessContribution(optionalExpiry)).toBe(false);
+  expect(platformReadinessContributionErrors(optionalExpiry)).toContain(
+    "contribution.evidenceSchemas must contain valid evidence schemas",
+  );
+  expect(
+    isPlatformReadinessContribution({
+      ...optionalExpiry,
+      evidenceSchemas: {
+        "external-operation-proof": {
+          anyOf: [["validUntil"]],
+          formats: { validUntil: "utc-timestamp" },
+          notExpired: ["validUntil"],
+        },
+      },
+    }),
+  ).toBe(true);
+
+  const misspelledConsistencyField = {
+    ...contribution,
+    domains: [
+      {
+        id: "external-operation",
+        requiredEvidenceTypes: [
+          "external-operation-proof",
+          "external-operation-review",
+        ],
+      },
+    ],
+    consistentFields: [
+      {
+        field: "validUntil",
+        evidenceTypes: [
+          "external-operation-proof",
+          "external-operation-review",
+        ],
+      },
+    ],
+    evidenceSchemas: {
+      "external-operation-proof": { fields: ["validUntil"] },
+      "external-operation-review": { fields: ["validUntill"] },
+    },
+  };
+  expect(isPlatformReadinessContribution(misspelledConsistencyField)).toBe(
+    false,
+  );
+  expect(
+    platformReadinessContributionErrors(misspelledConsistencyField),
+  ).toContain(
+    "contribution.consistentFields[0].field validUntil must be required by contribution.evidenceSchemas.external-operation-review",
+  );
+});
+
 test("contribution evidence schemas validate without extension code", () => {
   const schema = contribution.evidenceSchemas["external-operation-proof"];
   expect(

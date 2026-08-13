@@ -2,6 +2,7 @@ import {
   createPlatformReadinessContributionRegistry,
   isPlatformReadinessContribution,
   platformReadinessContributionErrors,
+  platformReadinessEvidenceSchemaRequiresField,
   type PlatformReadinessContribution,
   type PlatformReadinessConsistencyRule,
   type PlatformReadinessEvidenceSchema,
@@ -144,6 +145,17 @@ export function composePlatformReadinessDefinition(
     crossScopeConsistency,
     domains,
     rehearsal,
+    evidenceSchemas,
+  );
+  validateConsistencyRuleSchemaFields(
+    domainConsistency,
+    "domains",
+    evidenceSchemas,
+  );
+  validateConsistencyRuleSchemaFields(
+    rehearsalConsistency,
+    "rehearsal",
+    evidenceSchemas,
   );
 
   return {
@@ -281,6 +293,9 @@ function validateCrossScopeConsistencyRules(
   rules: readonly PlatformReadinessConsistencyRule[],
   domains: Readonly<Record<string, readonly string[]>>,
   rehearsal: Readonly<Record<string, readonly string[]>>,
+  evidenceSchemas: Readonly<
+    Record<string, PlatformReadinessEvidenceSchema>
+  >,
 ): void {
   const occurrenceCounts = new Map<string, number>();
   for (const requirements of [domains, rehearsal]) {
@@ -303,6 +318,51 @@ function validateCrossScopeConsistencyRules(
           `platform readiness cross-scope consistency rule ${rule.field} requires exactly one ${type} reference, found ${count}`,
         );
       }
+    }
+    validateConsistencyRuleSchemaField(
+      rule,
+      "crossScope",
+      evidenceSchemas,
+    );
+  }
+}
+
+function validateConsistencyRuleSchemaFields(
+  rulesByGroup: Readonly<
+    Record<string, readonly PlatformReadinessConsistencyRule[]>
+  >,
+  scope: "domains" | "rehearsal",
+  evidenceSchemas: Readonly<
+    Record<string, PlatformReadinessEvidenceSchema>
+  >,
+): void {
+  for (const [id, rules] of Object.entries(rulesByGroup)) {
+    for (const rule of rules) {
+      validateConsistencyRuleSchemaField(
+        rule,
+        `${scope}.${id}`,
+        evidenceSchemas,
+      );
+    }
+  }
+}
+
+function validateConsistencyRuleSchemaField(
+  rule: PlatformReadinessConsistencyRule,
+  scope: string,
+  evidenceSchemas: Readonly<
+    Record<string, PlatformReadinessEvidenceSchema>
+  >,
+): void {
+  for (const type of rule.evidenceTypes) {
+    const schema = evidenceSchemas[type];
+    if (
+      schema &&
+      !platformReadinessEvidenceSchemaRequiresField(schema, rule.field)
+    ) {
+      throw new TypeError(
+        `platform readiness consistency rule ${scope}.${rule.field} requires ${type}.${rule.field} to be an unconditionally required evidence field`,
+      );
     }
   }
 }

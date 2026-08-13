@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join as pathJoin } from "node:path";
 import { main } from "../../../cli/src/main.ts";
 import { runAccountsMigrateD1 } from "../../../cli/src/cli-accounts-commands.ts";
+import { composePlatformReadinessDefinition } from "../../../cli/src/cli-platform-readiness-definition.ts";
 import {
   applyD1AccountsMigrations,
   type D1ExecuteCommand,
@@ -2548,6 +2549,75 @@ test("launch-readiness rejects ambiguous cross-scope consistency definitions", a
     );
   } finally {
     await removePath(contributionFile);
+  }
+});
+
+test("platform readiness composition rejects consistency fields absent from referenced schemas", () => {
+  expect(() =>
+    composePlatformReadinessDefinition([
+      {
+        kind: "takosumi.platform-readiness-contribution@v2",
+        id: "invalid-composed-consistency-profile",
+        version: "1.0.0",
+        capability: "operator.invalid-composed-consistency.v1",
+        consistentFields: [
+          {
+            field: "validUntil",
+            evidenceTypes: ["dashboard-link", "alert-routing"],
+          },
+        ],
+      },
+    ]),
+  ).toThrow(
+    "platform readiness consistency rule crossScope.validUntil requires dashboard-link.validUntil to be an unconditionally required evidence field",
+  );
+});
+
+test("launch-readiness validate fails an invalid semantic contribution definition", async () => {
+  const contributionFile = await makeTempFile({ suffix: ".json" });
+  const readinessFile = await makeTempFile({ suffix: ".json" });
+  const invalidContribution = {
+    kind: "takosumi.platform-readiness-contribution@v2",
+    id: "invalid-composed-consistency-profile",
+    version: "1.0.0",
+    capability: "operator.invalid-composed-consistency.v1",
+    consistentFields: [
+      {
+        field: "validUntil",
+        evidenceTypes: ["dashboard-link", "alert-routing"],
+      },
+    ],
+  };
+  const document = await platformReadinessTemplateForTest();
+  document.contributions = [invalidContribution];
+  await writeTextFile(contributionFile, JSON.stringify(invalidContribution));
+  await writeTextFile(readinessFile, JSON.stringify(document));
+
+  try {
+    const stdout: string[] = [];
+    expect(
+      await main(
+        [
+          "launch-readiness",
+          "validate",
+          "--file",
+          readinessFile,
+          "--contribution-file",
+          contributionFile,
+          "--json",
+        ],
+        {
+          stdout: (line) => stdout.push(line),
+          stderr: () => undefined,
+        },
+      ),
+    ).toEqual(1);
+    expect(JSON.parse(stdout.join("\n")).errors).toContain(
+      "platform readiness consistency rule crossScope.validUntil requires dashboard-link.validUntil to be an unconditionally required evidence field",
+    );
+  } finally {
+    await removePath(contributionFile);
+    await removePath(readinessFile);
   }
 });
 

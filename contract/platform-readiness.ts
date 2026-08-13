@@ -201,6 +201,9 @@ export function platformReadinessContributionErrors(
     errors.push(`${label}.evidenceSchemas must contain valid evidence schemas`);
   }
   errors.push(
+    ...platformReadinessContributionConsistencySchemaErrors(record, label),
+  );
+  errors.push(
     ...collectionClassHintErrors(
       record.collectionClassHints,
       record.evidenceSchemas,
@@ -387,6 +390,21 @@ export function platformReadinessEvidenceSchemaErrors(
   return errors;
 }
 
+/** Whether every accepted evidence object must carry the selected field. */
+export function platformReadinessEvidenceSchemaRequiresField(
+  schema: PlatformReadinessEvidenceSchema,
+  field: string,
+): boolean {
+  if (schema.fields?.includes(field)) return true;
+  if (Object.hasOwn(schema.values ?? {}, field)) return true;
+  return (
+    schema.anyOf?.some(
+      (alternatives) =>
+        new Set(alternatives).size === 1 && alternatives[0] === field,
+    ) ?? false
+  );
+}
+
 function optionalRequirementGroups(value: unknown): boolean {
   if (value === undefined) return true;
   return (
@@ -513,12 +531,60 @@ function optionalEvidenceSchemas(value: unknown): boolean {
       (Array.isArray(record.notExpired)
         ? record.notExpired.every(
             (field) =>
+              platformReadinessEvidenceSchemaRequiresField(
+                record as unknown as PlatformReadinessEvidenceSchema,
+                field,
+              ) &&
               isPlainRecord(record.formats) &&
               record.formats[field] === "utc-timestamp",
           )
         : true)
     );
   });
+}
+
+function platformReadinessContributionConsistencySchemaErrors(
+  record: Record<string, unknown>,
+  label: string,
+): string[] {
+  const evidenceSchemas = record.evidenceSchemas;
+  if (!isPlainRecord(evidenceSchemas)) return [];
+  const errors: string[] = [];
+  const inspect = (value: unknown, ruleLabel: string): void => {
+    if (!Array.isArray(value)) return;
+    value.forEach((rule, index) => {
+      if (!isPlainRecord(rule) || !nonEmptyString(rule.field)) return;
+      if (!Array.isArray(rule.evidenceTypes)) return;
+      for (const type of rule.evidenceTypes) {
+        if (typeof type !== "string") continue;
+        const schema = evidenceSchemas[type];
+        if (!isPlainRecord(schema)) continue;
+        if (
+          !platformReadinessEvidenceSchemaRequiresField(
+            schema as unknown as PlatformReadinessEvidenceSchema,
+            rule.field,
+          )
+        ) {
+          errors.push(
+            `${ruleLabel}[${index}].field ${rule.field} must be required by ${label}.evidenceSchemas.${type}`,
+          );
+        }
+      }
+    });
+  };
+  inspect(record.consistentFields, `${label}.consistentFields`);
+  for (const scope of ["domains", "rehearsalSteps"] as const) {
+    const groups = record[scope];
+    if (!Array.isArray(groups)) continue;
+    groups.forEach((group, index) => {
+      if (!isPlainRecord(group)) return;
+      inspect(
+        group.consistentFields,
+        `${label}.${scope}[${index}].consistentFields`,
+      );
+    });
+  }
+  return errors;
 }
 
 function platformReadinessContributionClosedShapeErrors(
