@@ -462,6 +462,7 @@ async function stubProviderDestinationFixture(
             id: "cap_provider_destination_e2e",
             workspaceId: "ws_alpha",
             name: "cloudflare-service",
+            slug: "cloudflare-service",
             environment: "production",
             sourceId,
             installConfigId: "cfg-default-opentofu-capsule",
@@ -918,7 +919,28 @@ test.describe("Takosumi dashboard browser surface", () => {
     );
     const errors = pageErrors(page);
     const traffic = monitorDashboardTraffic(page, mode);
-    const state = await stubProviderDestinationFixture(page);
+    const managedV02 = {
+      ...PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS[0]!,
+      id: "pc_takosumi_cloud_v02",
+      providerSource: "registry.opentofu.org/cloudflare/cloudflare-v02",
+    };
+    const directV02 = {
+      ...PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS[1]!,
+      id: "pc_cloudflare_direct_v02",
+      providerSource: "registry.opentofu.org/cloudflare/cloudflare-v02",
+    };
+    const state = await stubProviderDestinationFixture(
+      page,
+      [managedV02, directV02],
+      [
+        {
+          source: "cloudflare/cloudflare-v02",
+          aliases: [],
+          allowed: true,
+          credentialRequired: true,
+        },
+      ],
+    );
     const query = new URLSearchParams({
       git: "https://github.com/example/cloudflare-service.git",
       ref: PORTABLE_SOURCE_OPTIONS_COMMIT,
@@ -936,11 +958,27 @@ test.describe("Takosumi dashboard browser surface", () => {
       .poll(() => state.bindingBody?.bindings)
       .toEqual([
         {
-          provider: "cloudflare/cloudflare",
-          moduleLocalName: "cloudflare",
-          connectionId: "pc_takosumi_cloud",
+          provider: "cloudflare/cloudflare-v02",
+          moduleLocalName: "cloudflare-v02",
+          connectionId: "pc_takosumi_cloud_v02",
         },
       ]);
+    const destination = page.locator(
+      '[data-install-provider-destination="auto-selected"]',
+    );
+    await expect(destination).toBeVisible();
+    await expect(destination).toContainText("Runs on Takosumi Cloud");
+    await expect(destination).toHaveAttribute(
+      "data-provider-connection-id",
+      "pc_takosumi_cloud_v02",
+    );
+    const destinationControl = page.getByLabel(/実行先|Runs on/u);
+    await expect(destinationControl).toHaveCount(1);
+    await expect(destinationControl).toHaveValue("pc_takosumi_cloud_v02");
+    await expect(destinationControl.locator("option:checked")).toHaveText(
+      "Takosumi Cloud",
+    );
+    await expect(destinationControl).toBeDisabled();
     await expect
       .poll(() => state.mutations.indexOf("PUT /api/v1/capsules/cap_provider_destination_e2e/provider-bindings"))
       .toBeGreaterThanOrEqual(0);
@@ -987,6 +1025,9 @@ test.describe("Takosumi dashboard browser surface", () => {
         name: /新しい接続を追加|Add a new connection/u,
       }),
     ).toBeVisible();
+    await expect(
+      page.locator('[data-install-provider-destination="auto-selected"]'),
+    ).toHaveCount(0);
     expect(state.bindingBody).toBeUndefined();
     expect(state.mutations).not.toContain(
       "PUT /api/v1/capsules/cap_provider_destination_e2e/provider-bindings",
@@ -1029,6 +1070,60 @@ test.describe("Takosumi dashboard browser surface", () => {
       }),
     ).toHaveCount(0);
     await expect(page.getByLabel(/実行先|Runs on/u)).toBeVisible();
+    await expect(
+      page.locator('[data-install-provider-destination="auto-selected"]'),
+    ).toHaveCount(0);
+    await assertNoPageErrors(errors);
+    traffic.assertNoFailures();
+  });
+
+  test("unrelated v01 provider labels cannot masquerade as a v02 destination", async ({
+    page,
+  }) => {
+    test.skip(
+      mode !== "portable",
+      "the provider version mismatch fixture is portable-only",
+    );
+    const errors = pageErrors(page);
+    const traffic = monitorDashboardTraffic(page, mode);
+    const unrelatedV01 = {
+      ...PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS[0]!,
+      id: "pc_takosumi_cloud_v01",
+      providerSource: "registry.opentofu.org/cloudflare/cloudflare-v01",
+      displayName: "Takosumi Cloud",
+    };
+    await stubProviderDestinationFixture(
+      page,
+      [unrelatedV01],
+      [
+        {
+          source: "cloudflare/cloudflare-v02",
+          aliases: [],
+          allowed: true,
+          credentialRequired: true,
+        },
+      ],
+    );
+    const query = new URLSearchParams({
+      git: "https://github.com/example/cloudflare-service.git",
+      ref: PORTABLE_SOURCE_OPTIONS_COMMIT,
+      path: ".",
+      name: "cloudflare-service",
+    });
+    await page.goto(`/new?${query}`, { waitUntil: "domcontentloaded" });
+    await page.getByRole("button", { name: /追加|Add/u }).click();
+
+    await expect(
+      page.getByRole("heading", { name: /接続が必要|A connection is needed/u }),
+    ).toBeVisible();
+    await expect(
+      page.locator('[data-install-provider-destination="auto-selected"]'),
+    ).toHaveCount(0);
+    await expect(
+      page.getByRole("link", {
+        name: /新しい接続を追加|Add a new connection/u,
+      }),
+    ).toBeVisible();
     await assertNoPageErrors(errors);
     traffic.assertNoFailures();
   });
@@ -1241,6 +1336,7 @@ test.describe("Takosumi dashboard browser surface", () => {
               id: "cap_install_e2e",
               workspaceId: "ws_alpha",
               name: "example-service",
+              slug: "example-service",
               environment: "production",
               sourceId: "src_install_e2e",
               installConfigId: "cfg_install_e2e",

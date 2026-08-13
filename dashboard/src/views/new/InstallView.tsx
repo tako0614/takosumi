@@ -81,6 +81,7 @@ import { clearCurrentStateVersionCache } from "../../lib/current-state-versions.
 import { clearDashboardOverviewCache } from "../../lib/dashboard-overview.ts";
 import {
   isProviderConnectionCandidate,
+  providerConnectionMatchesProviderSource,
   preferredProviderConnection,
   providerConnectionDisplayName,
 } from "../../lib/provider-connections.ts";
@@ -179,9 +180,9 @@ function providerTail(provider: string): string {
 }
 
 function sameProviderSource(required: string, connected: string): boolean {
-  return (
-    canonicalProviderSource(required) === canonicalProviderSource(connected)
-  );
+  return providerConnectionMatchesProviderSource(required, {
+    providerSource: connected,
+  });
 }
 
 function rowsFromCompatibility(
@@ -252,6 +253,8 @@ function Inner(props: { readonly installingPrincipalId: string }) {
   const [providerRows, setProviderRows] = createSignal<ProviderConnectionRow[]>(
     [],
   );
+  const [autoSelectedProviderRows, setAutoSelectedProviderRows] =
+    createSignal<ReadonlySet<string>>(new Set());
   const [compatibility, setCompatibility] =
     createSignal<CapsuleCompatibilityResult>();
   const [installConfig, setInstallConfig] = createSignal<InstallConfig>();
@@ -314,6 +317,59 @@ function Inner(props: { readonly installingPrincipalId: string }) {
         (connection) => connection.id === row.connectionId,
       ),
     );
+
+  const providerRowKey = (row: ProviderConnectionRow): string =>
+    `${row.provider}|${row.moduleLocalName}|${row.childAlias}`;
+
+  /**
+   * A destination summary is evidence of the exact preferred selection made
+   * during preparation. It must not infer a product label from an arbitrary
+   * connection name or provider row, and it disappears when the user changes
+   * that row manually.
+   */
+  const autoSelectedDestination = (): ProviderConnection | undefined => {
+    const destinations = new Map<string, ProviderConnection>();
+    for (const row of providerRows()) {
+      if (!autoSelectedProviderRows().has(providerRowKey(row))) continue;
+      const connection = providerConnections().find(
+        (candidate) =>
+          candidate.id === row.connectionId &&
+          isProviderConnectionCandidate(candidate) &&
+          sameProviderSource(row.provider, candidate.providerSource),
+      );
+      if (connection) destinations.set(connection.id, connection);
+    }
+    const values = [...destinations.values()];
+    return values.length === 1 ? values[0] : undefined;
+  };
+
+  const autoSelectedDestinationSummary = () => (
+    <Show when={autoSelectedDestination()}>
+      {(destination) => (
+        <div
+          class="iv-destination-summary"
+          data-testid="install-provider-destination"
+          data-install-provider-destination="auto-selected"
+          data-provider-connection-id={destination().id}
+          title={t("installStore.destinationSummary", {
+            destination: providerConnectionDisplayName(destination()),
+          })}
+        >
+          <span>{t("installStore.destination")}</span>{" "}
+          <Select
+            aria-label={t("installStore.destination")}
+            value={destination().id}
+            disabled={true}
+            data-provider-connection-id={destination().id}
+          >
+            <option value={destination().id}>
+              {providerConnectionDisplayName(destination())}
+            </option>
+          </Select>
+        </div>
+      )}
+    </Show>
+  );
 
   const providerConnectionSetupRequired = () =>
     providerRows().some((row) => candidatesFor(row.provider).length === 0);
@@ -526,6 +582,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     setStoreInputTouched({});
     setStoreFeatureSelections({});
     setProviderRows([]);
+    setAutoSelectedProviderRows(new Set<string>());
     setCapsuleId(undefined);
     setPlanRunId(undefined);
     setInterfaceUrl(undefined);
@@ -576,7 +633,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
   const updateProviderRow = (
     target: ProviderConnectionRow,
     connectionId: string,
-  ) =>
+  ) => {
     setProviderRows((rows) =>
       rows.map((row) =>
         row.provider === target.provider &&
@@ -586,6 +643,12 @@ function Inner(props: { readonly installingPrincipalId: string }) {
           : row,
       ),
     );
+    setAutoSelectedProviderRows((current) => {
+      const next = new Set(current);
+      next.delete(providerRowKey(target));
+      return next;
+    });
+  };
 
   const prepareInstall = async () => {
     const validation = validateBasic();
@@ -657,6 +720,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
             )
           : {},
       );
+      const selectedRows = new Set<string>();
       const rows = rowsFromCompatibility(result).map((row) => {
         const matches = providers.filter(
           (connection) =>
@@ -664,10 +728,11 @@ function Inner(props: { readonly installingPrincipalId: string }) {
             sameProviderSource(row.provider, connection.providerSource),
         );
         const preferred = preferredProviderConnection(matches);
-        return preferred
-          ? { ...row, connectionId: preferred.id }
-          : row;
+        if (!preferred) return row;
+        selectedRows.add(providerRowKey(row));
+        return { ...row, connectionId: preferred.id };
       });
+      setAutoSelectedProviderRows(selectedRows);
       setProviderRows(rows);
       if (
         rows.some(
@@ -955,6 +1020,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     setStoreInputTouched({});
     setStoreFeatureSelections({});
     setSourceAuthConnectionId("");
+    setAutoSelectedProviderRows(new Set<string>());
     setEntryEvidence(undefined);
     setInterfaceUrl(undefined);
     setError(undefined);
@@ -1470,6 +1536,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
 
       <Show when={phase() === "setup"}>
         <section class="iv-workbench">
+          {autoSelectedDestinationSummary()}
           <div class="iv-section-head">
             <h2>{t("installStore.setupTitle")}</h2>
             <p>{t("installStore.setupHint")}</p>
@@ -1635,6 +1702,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
 
       <Show when={phase() === "review" && planRunId() && capsuleId()}>
         <section class="iv-workbench">
+          {autoSelectedDestinationSummary()}
           <InstallExecution
             planRunId={planRunId()!}
             capsuleId={capsuleId()!}

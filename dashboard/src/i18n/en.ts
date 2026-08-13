@@ -43,6 +43,7 @@ export const en: Record<keyof typeof ja, string> = {
     "Choose only the connections required by this service.",
   "installStore.chooseConnection": "Choose a connection",
   "installStore.destination": "Runs on",
+  "installStore.destinationSummary": "Runs on {destination}",
   "installStore.connect": "Add a new connection",
   "installStore.continue": "Continue",
   "installStore.setupTitle": "Set up the service",

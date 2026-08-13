@@ -36,6 +36,8 @@
 .iv-entry-card { display: grid; gap: var(--tg-s-4); padding: var(--tg-s-4); border: 1px solid var(--tg-line); border-radius: var(--tg-r-md); background: var(--tg-bg-hi); }
 .iv-entry-card code { display: block; max-width: 100%; margin-top: var(--tg-s-3); overflow: hidden; color: var(--tg-fg-muted); font-family: var(--tg-font-mono); font-size: var(--tg-fs-xs); text-overflow: ellipsis; white-space: nowrap; }
 .iv-execution { display: grid; gap: var(--tg-s-5); }
+.iv-destination-summary { display: flex; align-items: center; gap: var(--tg-s-2); margin-bottom: var(--tg-s-5); padding: var(--tg-s-3) var(--tg-s-4); border: 1px solid var(--tg-line); border-radius: var(--tg-r-md); background: var(--tg-bg-subtle); color: var(--tg-fg-muted); font-size: var(--tg-fs-sm); }
+.iv-destination-summary .tg-select { min-width: min(100%, 20rem); margin: 0; color: var(--tg-fg); }
 .iv-review-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--tg-s-4); }
 .iv-status { display: flex; align-items: flex-start; gap: var(--tg-s-3); padding: var(--tg-s-4); border: 1px solid var(--tg-line); border-radius: var(--tg-r-md); background: var(--tg-bg-hi); }
 .iv-status strong, .iv-status span { display: block; }

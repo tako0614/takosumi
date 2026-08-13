@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { ProviderConnection } from "takosumi-contract";
 import {
   isProviderConnectionCandidate,
+  providerConnectionMatchesProviderSource,
   preferredProviderConnection,
   providerConnectionDisplayName,
 } from "../../../../dashboard/src/lib/provider-connections.ts";
@@ -192,5 +193,46 @@ describe("dashboard ProviderConnection candidates", () => {
         }),
       ]),
     ).toBeUndefined();
+  });
+
+  test("does not let a display name stand in for an exact provider destination", () => {
+    const v01 = connection({
+      id: "connection_v01",
+      providerSource: "registry.opentofu.org/example/provider-v01",
+      scope: "operator",
+      displayName: "Takosumi Cloud",
+      credentialRecipe: {
+        id: "operator-run",
+        authMode: "capsule-run",
+        runIssuance: {
+          context: "capsule-run.v1",
+          operatorConnection: "workspace-bindable",
+          storedMaterial: "none",
+          audience: "extension.example.v1",
+          scopes: ["extension:invoke"],
+        },
+      },
+    });
+    const v02 = connection({
+      id: "connection_v02",
+      providerSource: "registry.opentofu.org/example/provider-v02",
+      scope: "operator",
+      displayName: "Takosumi Cloud",
+      credentialRecipe: v01.credentialRecipe,
+    });
+
+    expect(preferredProviderConnection([v01])).toBe(v01);
+    expect(preferredProviderConnection([v02])).toBe(v02);
+    expect(
+      providerConnectionMatchesProviderSource(
+        "registry.opentofu.org/example/provider-v02",
+        v01,
+      ),
+    ).toBe(false);
+    expect(
+      providerConnectionMatchesProviderSource("example/provider-v02", v02),
+    ).toBe(true);
+    expect(providerConnectionDisplayName(v01)).toBe("Takosumi Cloud");
+    expect(providerConnectionDisplayName(v02)).toBe("Takosumi Cloud");
   });
 });
