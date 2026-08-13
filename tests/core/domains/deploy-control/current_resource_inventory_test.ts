@@ -135,6 +135,11 @@ test("projects only surviving value-free resources in stable order", async () =>
       type: "cloudflare_zone",
       actions: ["no-op"],
     },
+    {
+      address: "module.network.data.cloudflare_zone.this",
+      type: "cloudflare_zone",
+      actions: ["no-op"],
+    },
     { address: "data.example.read", type: "example_data", actions: ["read"] },
     { address: "read_only", type: "example_read", actions: ["read"] },
     {

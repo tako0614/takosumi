@@ -235,7 +235,9 @@ function projectResourceChange(
   // Data sources are read dependencies, not deployed survivors. OpenTofu
   // normally keeps them out of resource_changes; this guard protects against
   // malformed or legacy rows that used a data-prefixed address/type.
-  if (address.startsWith("data.") || type.startsWith("data.")) return undefined;
+  if (/(?:^|\.)data\./u.test(address) || type.startsWith("data.")) {
+    return undefined;
+  }
   const actions = change.actions;
   const pureDelete = actions.length === 1 && actions[0] === "delete";
   const pureRead = actions.length === 1 && actions[0] === "read";
