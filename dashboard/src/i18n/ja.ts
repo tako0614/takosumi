@@ -409,10 +409,9 @@ export const ja = {
   "app.deploys.sourceImpactSingle": "このワークロードだけが取得元を使っています。",
   "app.deploys.sourceImpactShared":
     "この取得元は {count} 件のワークロードで共有されています。変更するとすべてに反映されます。",
-  "app.deploys.sourceImpactMore": "ほか {count} 件",
   "app.deploys.sourceImpactConfirmTitle": "共有された取得元のバージョンを変更しますか？",
   "app.deploys.sourceImpactConfirmMessage":
-    "この取得元は {count} 件のワークロードで使われています。すべてにこのコミットを設定しますか？",
+    "この取得元は {count} 件のワークロードで使われています:\n{workloads}\nすべてにこのコミットを設定しますか？",
   "app.deploys.sourceImpactConfirmCta": "共有バージョンを変更",
   "app.deploys.empty": "まだデプロイ履歴はありません。",
   "app.deploys.restore": "この状態に戻す",

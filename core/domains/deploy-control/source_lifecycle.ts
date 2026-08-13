@@ -278,6 +278,23 @@ export class SourceLifecycleService {
   ): Promise<SourceSyncRun> {
     const finishedAtMs = this.#now();
     const finishedAtIso = new Date(finishedAtMs).toISOString();
+    // A manual Workload review may pin the Source to an immutable commit. The
+    // runner is untrusted with respect to that authority: never persist a
+    // succeeded Run or Snapshot when it resolves a different (or malformed)
+    // commit. Throwing here is caught by the consumer and records the existing
+    // Run as failed before any Snapshot write occurs.
+    if (
+      isExactImmutableGitCommit(running.ref) &&
+      (!isExactImmutableGitCommit(result.resolvedCommit) ||
+        normalizeGitObjectId(result.resolvedCommit) !==
+          normalizeGitObjectId(running.ref))
+    ) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "source_sync resolved a commit different from the requested immutable Source revision",
+        { reason: "source_revision_mismatch" },
+      );
+    }
     const snapshotId = running.snapshotId ?? this.#newId("snap");
     const archiveRef = this.#verifiedSourceArchiveRef(
       running,
@@ -686,6 +703,10 @@ function sourceSyncResultFromSnapshot(
 
 function isPinnedGitCommit(value: string): boolean {
   return /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/i.test(value);
+}
+
+function isExactImmutableGitCommit(value: string): boolean {
+  return /^[a-f0-9]{40}$/iu.test(value);
 }
 
 function normalizeGitObjectId(value: string): string {

@@ -404,10 +404,9 @@ export const en: Record<keyof typeof ja, string> = {
   "app.deploys.sourceImpactSingle": "Only this Workload uses the Source.",
   "app.deploys.sourceImpactShared":
     "This Source is shared by {count} Workloads. Changing it updates all of them.",
-  "app.deploys.sourceImpactMore": "and {count} more",
   "app.deploys.sourceImpactConfirmTitle": "Change a shared Source version?",
   "app.deploys.sourceImpactConfirmMessage":
-    "This Source is used by {count} Workloads. Set the exact commit for all of them?",
+    "This Source is used by {count} Workloads:\n{workloads}\nSet the exact commit for all of them?",
   "app.deploys.sourceImpactConfirmCta": "Change shared version",
   "app.deploys.empty": "No deploys yet.",
   "app.deploys.restore": "Restore this state",

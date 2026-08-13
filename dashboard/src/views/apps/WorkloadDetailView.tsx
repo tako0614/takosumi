@@ -441,10 +441,14 @@ function Inner() {
       );
     }
     if (affectedCapsuleIds.length > 1) {
+      const affectedWorkloadSummary = affectedCapsules
+        .map((candidate) => `${candidate.name} (${candidate.id})`)
+        .join("\n");
       const confirmed = await confirm({
         title: t("app.deploys.sourceImpactConfirmTitle"),
         message: t("app.deploys.sourceImpactConfirmMessage", {
           count: affectedCapsuleIds.length,
+          workloads: affectedWorkloadSummary,
         }),
         confirmText: t("app.deploys.sourceImpactConfirmCta"),
         cancelText: t("common.cancel"),
@@ -1246,20 +1250,15 @@ function DeploysTab(props: {
                   </p>
                   <Show when={props.affectedWorkloads.length > 1}>
                     <ul class="wa-source-impact-list">
-                      <For each={props.affectedWorkloads.slice(0, 5)}>
+                      <For each={props.affectedWorkloads}>
                         {(workload) => (
                           <li>
-                            {workload.name} <span class="muted">({workload.status})</span>
+                            <span>{workload.name}</span>{" "}
+                            <code>{workload.id}</code>{" "}
+                            <span class="muted">({workload.status})</span>
                           </li>
                         )}
                       </For>
-                      <Show when={props.affectedWorkloads.length > 5}>
-                        <li class="muted">
-                          {t("app.deploys.sourceImpactMore", {
-                            count: props.affectedWorkloads.length - 5,
-                          })}
-                        </li>
-                      </Show>
                     </ul>
                   </Show>
                 </Show>

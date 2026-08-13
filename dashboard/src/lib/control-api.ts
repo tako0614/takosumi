@@ -1944,8 +1944,8 @@ export async function updateCapsuleSourceRevision(
   revision: string,
   options: {
     /** Source-global Capsule membership captured and confirmed by the UI. */
-    readonly affectedCapsuleIds?: readonly string[];
-  } = {},
+    readonly affectedCapsuleIds: readonly string[];
+  },
 ): Promise<Source> {
   if (!isImmutableSourceRevision(revision)) {
     throw new ControlApiError(
@@ -1954,6 +1954,10 @@ export async function updateCapsuleSourceRevision(
       "Source revision must be an exact 40-character hexadecimal commit.",
     );
   }
+  const expectedCapsuleIds = normalizeCapsuleIds(
+    (options as { readonly affectedCapsuleIds?: unknown } | undefined)
+      ?.affectedCapsuleIds,
+  );
   const capsule = await getCapsule(capsuleId);
   if (
     capsule.workspaceId !== identity.workspaceId ||
@@ -1970,24 +1974,21 @@ export async function updateCapsuleSourceRevision(
     );
   }
 
-  const expectedCapsuleIds = normalizeCapsuleIds(options.affectedCapsuleIds);
-  if (expectedCapsuleIds) {
-    if (!expectedCapsuleIds.includes(capsuleId)) {
-      throw sourceMembershipMismatch(
-        "The requested Source membership does not include this Workload.",
-      );
-    }
-    const beforeMembers = await listCapsulesForSourceMembership(
-      identity.workspaceId,
-    );
-    assertSourceMembership(
-      beforeMembers,
-      identity.workspaceId,
-      identity.sourceId,
-      expectedCapsuleIds,
-      "before the Source revision update",
+  if (!expectedCapsuleIds.includes(capsuleId)) {
+    throw sourceMembershipMismatch(
+      "The requested Source membership does not include this Workload.",
     );
   }
+  const beforeMembers = await listCapsulesForSourceMembership(
+    identity.workspaceId,
+  );
+  assertSourceMembership(
+    beforeMembers,
+    identity.workspaceId,
+    identity.sourceId,
+    expectedCapsuleIds,
+    "before the Source revision update",
+  );
 
   let patchError: unknown;
   try {
@@ -1997,41 +1998,39 @@ export async function updateCapsuleSourceRevision(
     patchError = error;
   }
 
-  let readback: Source;
+  let readback: Source | undefined;
+  let readbackError: unknown;
   try {
     readback = await getSource(identity.sourceId);
   } catch (error) {
+    readbackError = error;
+  }
+  let membershipError: unknown;
+  try {
+    const afterMembers = await listCapsulesForSourceMembership(
+      identity.workspaceId,
+    );
+    assertSourceMembership(
+      afterMembers,
+      identity.workspaceId,
+      identity.sourceId,
+      expectedCapsuleIds,
+      "during the Source revision update",
+    );
+  } catch (error) {
+    membershipError = error;
+  }
+  if (membershipError) {
     throw sourcePatchIndeterminate(
-      "Source revision update outcome is indeterminate because the authoritative readback was unavailable.",
-      patchError ?? error,
+      "Source revision update outcome is indeterminate because affected Workload membership changed or was unavailable.",
+      patchError ?? readbackError ?? membershipError,
     );
   }
-  if (expectedCapsuleIds) {
-    let afterMembers: readonly Capsule[];
-    try {
-      afterMembers = await listCapsulesForSourceMembership(
-        identity.workspaceId,
-      );
-    } catch (error) {
-      throw sourcePatchIndeterminate(
-        "Source revision update outcome is indeterminate because Source membership readback was unavailable.",
-        patchError ?? error,
-      );
-    }
-    try {
-      assertSourceMembership(
-        afterMembers,
-        identity.workspaceId,
-        identity.sourceId,
-        expectedCapsuleIds,
-        "during the Source revision update",
-      );
-    } catch (error) {
-      throw sourcePatchIndeterminate(
-        "Source revision update outcome is indeterminate because affected Workload membership changed.",
-        patchError ?? error,
-      );
-    }
+  if (readbackError || !readback) {
+    throw sourcePatchIndeterminate(
+      "Source revision update outcome is indeterminate because the authoritative readback was unavailable.",
+      patchError ?? readbackError,
+    );
   }
   const exact =
     sourceIdentityMatches(readback, capsule, identity) &&
@@ -2052,10 +2051,31 @@ export async function updateCapsuleSourceRevision(
 }
 
 function normalizeCapsuleIds(
-  ids: readonly string[] | undefined,
-): readonly string[] | undefined {
-  if (ids === undefined) return undefined;
-  return [...new Set(ids)].sort();
+  ids: unknown,
+): readonly string[] {
+  if (
+    !Array.isArray(ids) ||
+    ids.length === 0 ||
+    !ids.every(
+      (id) =>
+        typeof id === "string" && id.length > 0 && id.trim() === id,
+    )
+  ) {
+    throw new ControlApiError(
+      400,
+      "invalid_source_membership",
+      "Source revision updates require a non-empty exact Workload membership.",
+    );
+  }
+  const unique = new Set(ids);
+  if (unique.size !== ids.length) {
+    throw new ControlApiError(
+      400,
+      "invalid_source_membership",
+      "Source revision updates require each affected Workload exactly once.",
+    );
+  }
+  return [...unique].sort();
 }
 
 function assertSourceMembership(

@@ -258,6 +258,7 @@ function capsuleResponse(capsule: unknown = CAPSULE) {
 
 describe("explicit immutable Workload Source revision", () => {
   const revision = "b".repeat(40);
+  const membership = { affectedCapsuleIds: ["cap_1"] } as const;
 
   test("accepts one PATCH only after exact identity preflight and authoritative readback", async () => {
     const calls: Array<{ url: string; method: string; body?: unknown }> = [];
@@ -273,6 +274,9 @@ describe("explicit immutable Workload Source revision", () => {
         typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
       calls.push({ url, method, ...(body === undefined ? {} : { body }) });
       if (url === "/api/v1/capsules/cap_1") return capsuleResponse();
+      if (url.includes("/workspaces/workspace_1/capsules")) {
+        return json({ capsules: [CAPSULE] });
+      }
       if (url === "/api/v1/sources/src_1" && method === "GET") {
         sourceReads += 1;
         return sourceResponse(sourceReads === 1 ? SOURCE : updated);
@@ -284,17 +288,30 @@ describe("explicit immutable Workload Source revision", () => {
     }) as typeof fetch;
 
     await expect(
-      updateCapsuleSourceRevision("cap_1", SOURCE_IDENTITY, revision),
+      updateCapsuleSourceRevision(
+        "cap_1",
+        SOURCE_IDENTITY,
+        revision,
+        membership,
+      ),
     ).resolves.toMatchObject({ defaultRef: revision });
     expect(calls).toEqual([
       { url: "/api/v1/capsules/cap_1", method: "GET" },
       { url: "/api/v1/sources/src_1", method: "GET" },
+      {
+        url: "/api/v1/workspaces/workspace_1/capsules?includeDestroyed=false",
+        method: "GET",
+      },
       {
         url: "/api/v1/sources/src_1",
         method: "PATCH",
         body: { defaultRef: revision },
       },
       { url: "/api/v1/sources/src_1", method: "GET" },
+      {
+        url: "/api/v1/workspaces/workspace_1/capsules?includeDestroyed=false",
+        method: "GET",
+      },
     ]);
   });
 
@@ -308,6 +325,9 @@ describe("explicit immutable Workload Source revision", () => {
       const url = String(input);
       const method = (init?.method ?? "GET").toUpperCase();
       if (url === "/api/v1/capsules/cap_1") return capsuleResponse();
+      if (url.includes("/workspaces/workspace_1/capsules")) {
+        return json({ capsules: [CAPSULE] });
+      }
       if (url !== "/api/v1/sources/src_1") throw new Error(`unexpected ${url}`);
       if (method === "PATCH") {
         patches += 1;
@@ -318,7 +338,12 @@ describe("explicit immutable Workload Source revision", () => {
     }) as typeof fetch;
 
     await expect(
-      updateCapsuleSourceRevision("cap_1", SOURCE_IDENTITY, revision),
+      updateCapsuleSourceRevision(
+        "cap_1",
+        SOURCE_IDENTITY,
+        revision,
+        membership,
+      ),
     ).rejects.toMatchObject({
       status: 409,
       code: "source_revision_mismatch",
@@ -337,6 +362,9 @@ describe("explicit immutable Workload Source revision", () => {
       const url = String(input);
       const method = (init?.method ?? "GET").toUpperCase();
       if (url === "/api/v1/capsules/cap_1") return capsuleResponse();
+      if (url.includes("/workspaces/workspace_1/capsules")) {
+        return json({ capsules: [CAPSULE] });
+      }
       if (url !== "/api/v1/sources/src_1") throw new Error(`unexpected ${url}`);
       if (method === "PATCH") {
         patches += 1;
@@ -349,7 +377,12 @@ describe("explicit immutable Workload Source revision", () => {
     }) as typeof fetch;
 
     await expect(
-      updateCapsuleSourceRevision("cap_1", SOURCE_IDENTITY, revision),
+      updateCapsuleSourceRevision(
+        "cap_1",
+        SOURCE_IDENTITY,
+        revision,
+        membership,
+      ),
     ).resolves.toMatchObject({ defaultRef: revision });
     expect(patches).toBe(1);
     expect(sourceReads).toBe(2);
@@ -365,6 +398,9 @@ describe("explicit immutable Workload Source revision", () => {
       const url = String(input);
       const method = (init?.method ?? "GET").toUpperCase();
       if (url === "/api/v1/capsules/cap_1") return capsuleResponse();
+      if (url.includes("/workspaces/workspace_1/capsules")) {
+        return json({ capsules: [CAPSULE] });
+      }
       if (url !== "/api/v1/sources/src_1") throw new Error(`unexpected ${url}`);
       if (method === "PATCH") {
         patches += 1;
@@ -375,7 +411,12 @@ describe("explicit immutable Workload Source revision", () => {
     }) as typeof fetch;
 
     await expect(
-      updateCapsuleSourceRevision("cap_1", SOURCE_IDENTITY, revision),
+      updateCapsuleSourceRevision(
+        "cap_1",
+        SOURCE_IDENTITY,
+        revision,
+        membership,
+      ),
     ).rejects.toMatchObject({
       code: "request_indeterminate",
       operation: "source_patch",
@@ -396,6 +437,9 @@ describe("explicit immutable Workload Source revision", () => {
         const url = String(input);
         const method = (init?.method ?? "GET").toUpperCase();
         if (url === "/api/v1/capsules/cap_1") return capsuleResponse();
+        if (url.includes("/workspaces/workspace_1/capsules")) {
+          return json({ capsules: [CAPSULE] });
+        }
         if (url !== "/api/v1/sources/src_1") {
           throw new Error(`unexpected ${url}`);
         }
@@ -410,7 +454,12 @@ describe("explicit immutable Workload Source revision", () => {
       }) as typeof fetch;
 
       await expect(
-        updateCapsuleSourceRevision("cap_1", SOURCE_IDENTITY, revision),
+        updateCapsuleSourceRevision(
+          "cap_1",
+          SOURCE_IDENTITY,
+          revision,
+          membership,
+        ),
       ).rejects.toMatchObject({
         code: "request_indeterminate",
         operation: "source_patch",
@@ -505,9 +554,35 @@ describe("explicit immutable Workload Source revision", () => {
     for (const value of ["main", "v1.2.3", ""]) {
       expect(isImmutableSourceRevision(value)).toBe(false);
       await expect(
-        updateCapsuleSourceRevision("cap_1", SOURCE_IDENTITY, value),
+        updateCapsuleSourceRevision(
+          "cap_1",
+          SOURCE_IDENTITY,
+          value,
+          membership,
+        ),
       ).rejects.toMatchObject({ code: "invalid_source_revision" });
     }
+    expect(calls).toBe(0);
+  });
+
+  test("rejects a direct mutation call that omits Source membership", async () => {
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      throw new Error("unexpected network request");
+    }) as typeof fetch;
+    const invokeWithoutOptions = updateCapsuleSourceRevision as unknown as (
+      capsuleId: string,
+      identity: typeof SOURCE_IDENTITY,
+      revision: string,
+    ) => Promise<unknown>;
+
+    await expect(
+      invokeWithoutOptions("cap_1", SOURCE_IDENTITY, revision),
+    ).rejects.toMatchObject({
+      status: 400,
+      code: "invalid_source_membership",
+    });
     expect(calls).toBe(0);
   });
 
@@ -524,7 +599,12 @@ describe("explicit immutable Workload Source revision", () => {
       throw new Error(`unexpected request: ${String(input)}`);
     }) as typeof fetch;
     await expect(
-      updateCapsuleSourceRevision("cap_1", SOURCE_IDENTITY, revision),
+      updateCapsuleSourceRevision(
+        "cap_1",
+        SOURCE_IDENTITY,
+        revision,
+        membership,
+      ),
     ).rejects.toMatchObject({ code: "source_revision_mismatch" });
     expect(patches).toBe(0);
   });

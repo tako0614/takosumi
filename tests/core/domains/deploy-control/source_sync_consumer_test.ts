@@ -263,6 +263,35 @@ test("source_sync consumer (public repo) records a snapshot and lastSeenCommit",
   expect(await store.listCredentialMintEventsForRun(run.id)).toEqual([]);
 });
 
+test("source_sync rejects a runner result that resolves a different immutable Source revision", async () => {
+  const { store, sourcesService, runner, controller } = build();
+  const requested = "a".repeat(40);
+  runner.result = {
+    ...runner.result,
+    resolvedCommit: "b".repeat(40),
+  };
+  const { source } = await sourcesService.createSource({
+    workspaceId: "workspace_1",
+    name: "pinned-repo",
+    url: "https://github.com/acme/repo.git",
+    defaultRef: requested,
+  });
+  const { run } = await controller.createSourceSync(source.id);
+
+  await controller.dispatchQueuedRun({
+    action: "source_sync",
+    runId: run.id,
+    workspaceId: "workspace_1",
+  });
+
+  const finished = await store.getSourceSyncRun(run.id);
+  expect(finished?.status).toBe("failed");
+  expect(finished?.errorCode).toBe("source_revision_mismatch");
+  expect(finished?.resolvedCommit).toBeUndefined();
+  expect(await store.listSourceSnapshots(source.id)).toEqual([]);
+  expect((await store.getSource(source.id))?.lastSeenCommit).toBeUndefined();
+});
+
 test("source_sync fails terminally when the selected runner lacks source-sync capability", async () => {
   const store = new InMemoryOpenTofuControlStore();
   const artifactReferenceAllocator = new ObjectKeyArtifactReferenceAllocator();
