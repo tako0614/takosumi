@@ -1036,6 +1036,94 @@ test.describe("Takosumi dashboard browser surface", () => {
     traffic.assertNoFailures();
   });
 
+  test("mixed manual and auto-selected destinations do not show a singular summary", async ({
+    page,
+  }) => {
+    test.skip(
+      mode !== "portable",
+      "the mixed ProviderConnection fixture is portable-only",
+    );
+    const errors = pageErrors(page);
+    const traffic = monitorDashboardTraffic(page, mode);
+    const managedV02 = {
+      ...PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS[0]!,
+      id: "pc_takosumi_cloud_v02_mixed",
+      providerSource: "registry.opentofu.org/cloudflare/cloudflare-v02",
+    };
+    const awsPrimary = {
+      ...PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS[1]!,
+      id: "pc_aws_primary_mixed",
+      provider: "aws",
+      providerSource: "registry.opentofu.org/hashicorp/aws",
+      displayName: "AWS primary",
+    };
+    const awsSecondary = {
+      ...awsPrimary,
+      id: "pc_aws_secondary_mixed",
+      displayName: "AWS secondary",
+    };
+    const state = await stubProviderDestinationFixture(
+      page,
+      [managedV02, awsPrimary, awsSecondary],
+      [
+        {
+          source: "cloudflare/cloudflare-v02",
+          aliases: [],
+          allowed: true,
+          credentialRequired: true,
+        },
+        {
+          source: "hashicorp/aws",
+          aliases: [],
+          allowed: true,
+          credentialRequired: true,
+        },
+      ],
+    );
+    const query = new URLSearchParams({
+      git: "https://github.com/example/cloudflare-service.git",
+      ref: PORTABLE_SOURCE_OPTIONS_COMMIT,
+      path: ".",
+      name: "cloudflare-service",
+    });
+    await page.goto(`/new?${query}`, { waitUntil: "domcontentloaded" });
+    await page.getByRole("button", { name: /追加|Add/u }).click();
+
+    await expect(
+      page.getByRole("heading", {
+        name: /実行先を選択|Choose where this runs/u,
+      }),
+    ).toBeVisible();
+    const destinations = page.locator(".iv-connection-list select");
+    await expect(destinations).toHaveCount(2);
+    await expect(destinations.nth(0)).toHaveValue("pc_takosumi_cloud_v02_mixed");
+    await destinations.nth(1).selectOption("pc_aws_primary_mixed");
+    await page.getByRole("button", { name: /続ける|Continue/u }).click();
+
+    await expect(
+      page.getByRole("heading", { name: /Review before install/u }),
+    ).toBeVisible();
+    await expect(
+      page.locator('[data-install-provider-destination="auto-selected"]'),
+    ).toHaveCount(0);
+    await expect
+      .poll(() => state.bindingBody?.bindings)
+      .toEqual([
+        {
+          provider: "cloudflare/cloudflare-v02",
+          moduleLocalName: "cloudflare-v02",
+          connectionId: "pc_takosumi_cloud_v02_mixed",
+        },
+        {
+          provider: "hashicorp/aws",
+          moduleLocalName: "aws",
+          connectionId: "pc_aws_primary_mixed",
+        },
+      ]);
+    await assertNoPageErrors(errors);
+    traffic.assertNoFailures();
+  });
+
   test("ambiguous supported destinations ask for a choice without connection setup", async ({
     page,
   }) => {

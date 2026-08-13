@@ -155,7 +155,7 @@ describe("single-screen install surface", () => {
     expect(view).toContain("data-provider-connection-id");
     expect(view).toContain("providerConnectionDisplayName(destination())");
     expect(view).toContain("setAutoSelectedProviderRows");
-    expect(view).toContain("next.delete(providerRowKey(target))");
+    expect(view).toContain("setAutoSelectedProviderRows(new Set<string>());");
   });
 
   test("keeps TCS handoffs in the same install surface", () => {

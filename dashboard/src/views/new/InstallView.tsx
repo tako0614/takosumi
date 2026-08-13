@@ -328,9 +328,12 @@ function Inner(props: { readonly installingPrincipalId: string }) {
    * that row manually.
    */
   const autoSelectedDestination = (): ProviderConnection | undefined => {
+    const rows = providerRows();
+    const selectedRows = autoSelectedProviderRows();
+    if (rows.length === 0 || selectedRows.size !== rows.length) return undefined;
     const destinations = new Map<string, ProviderConnection>();
-    for (const row of providerRows()) {
-      if (!autoSelectedProviderRows().has(providerRowKey(row))) continue;
+    for (const row of rows) {
+      if (!selectedRows.has(providerRowKey(row))) return undefined;
       const connection = providerConnections().find(
         (candidate) =>
           candidate.id === row.connectionId &&
@@ -643,11 +646,11 @@ function Inner(props: { readonly installingPrincipalId: string }) {
           : row,
       ),
     );
-    setAutoSelectedProviderRows((current) => {
-      const next = new Set(current);
-      next.delete(providerRowKey(target));
-      return next;
-    });
+    // A manual choice means the final destination set is no longer wholly
+    // the exact preferred set discovered during preparation. Do not leave a
+    // summary for a different row that could imply the whole install runs on
+    // the displayed connection.
+    setAutoSelectedProviderRows(new Set<string>());
   };
 
   const prepareInstall = async () => {
@@ -1500,7 +1503,10 @@ function Inner(props: { readonly installingPrincipalId: string }) {
                       </option>
                       <For each={choices()}>
                         {(connection) => (
-                          <option value={connection.id}>
+                          <option
+                            value={connection.id}
+                            selected={connection.id === row.connectionId}
+                          >
                             {providerConnectionDisplayName(connection)}
                           </option>
                         )}
