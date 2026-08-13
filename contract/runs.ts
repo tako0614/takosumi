@@ -132,6 +132,9 @@ export interface Run {
   readonly planRunId?: string;
   /** Present for Source-scoped rows such as `source_sync`. */
   readonly sourceId?: string;
+  /** Source-scoped sync address and resolved immutable commit, when present. */
+  readonly ref?: string;
+  readonly resolvedCommit?: string;
   /** Explicit execution subject for non-Capsule and new generic run flows. */
   readonly subject?: RunSubject;
   /** Exact Deploy API operation for a Resource-owned Run. */

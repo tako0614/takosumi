@@ -271,6 +271,41 @@ test("source register -> sync -> snapshots flow", async () => {
   expect((await snaps.json()).snapshots).toEqual([]);
 });
 
+test("source sync accepts an exact expectedRef and rejects a raced ref", async () => {
+  const app = await makeApp();
+  const revision = "a".repeat(40);
+  const created = await app.request("/internal/v1/sources", {
+    method: "POST",
+    headers: HEADERS,
+    body: JSON.stringify({
+      workspaceId: "ws_001",
+      name: "r",
+      url: "https://github.com/acme/repo.git",
+      defaultRef: revision,
+    }),
+  });
+  expect(created.status).toBe(201);
+  const sourceId = (await created.json()).source.id;
+
+  const synced = await app.request(`/internal/v1/sources/${sourceId}/sync`, {
+    method: "POST",
+    headers: { ...HEADERS, "content-type": "application/json" },
+    body: JSON.stringify({ intent: "manual_plan", expectedRef: revision }),
+  });
+  expect(synced.status).toBe(201);
+  expect((await synced.json()).run.ref).toBe(revision);
+
+  const raced = await app.request(`/internal/v1/sources/${sourceId}/sync`, {
+    method: "POST",
+    headers: { ...HEADERS, "content-type": "application/json" },
+    body: JSON.stringify({ intent: "manual_plan", expectedRef: "b".repeat(40) }),
+  });
+  expect(raced.status).toBe(409);
+  expect((await raced.json()).error.details.reason).toBe(
+    "source_revision_mismatch",
+  );
+});
+
 test("source snapshot API exposes repository manifest status and digest without content", async () => {
   const fileJobs: unknown[] = [];
   const { app, store } = await makeAppWithStore({

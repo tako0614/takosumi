@@ -264,6 +264,54 @@ test("createSync does not dedupe manual-plan refresh into an observe sync", asyn
   expect(manual.run.intent).toBe("manual_plan");
 });
 
+test("createSync binds manual-plan dedupe to the expected immutable ref", async () => {
+  const { service } = makeService();
+  const { source } = await service.createSource({
+    workspaceId: "workspace_1",
+    name: "a",
+    url: "https://github.com/a/b",
+  });
+  const revision = "a".repeat(40);
+  await service.patchSource(source.id, { defaultRef: revision });
+
+  const first = await service.createSync(source.id, {
+    dedupe: true,
+    intent: "manual_plan",
+    expectedRef: revision,
+  });
+  const second = await service.createSync(source.id, {
+    dedupe: true,
+    intent: "manual_plan",
+    expectedRef: revision.toUpperCase(),
+  });
+
+  expect(second.run.id).toBe(first.run.id);
+  expect(second.run.ref).toBe(revision);
+});
+
+test("createSync rejects a raced Source revision before creating a run", async () => {
+  const { service } = makeService();
+  const { source } = await service.createSource({
+    workspaceId: "workspace_1",
+    name: "a",
+    url: "https://github.com/a/b",
+  });
+  const requested = "a".repeat(40);
+  const current = "b".repeat(40);
+  await service.patchSource(source.id, { defaultRef: current });
+
+  await expect(
+    service.createSync(source.id, {
+      dedupe: true,
+      intent: "manual_plan",
+      expectedRef: requested,
+    }),
+  ).rejects.toMatchObject({
+    code: "failed_precondition",
+    details: { reason: "source_revision_mismatch" },
+  });
+});
+
 test("createSync dedupe does not re-enqueue a fresh running run", async () => {
   const dispatched: unknown[] = [];
   const { store, service } = makeService({

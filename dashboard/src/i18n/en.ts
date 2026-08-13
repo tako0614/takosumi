@@ -387,6 +387,28 @@ export const en: Record<keyof typeof ja, string> = {
   "app.deploys.reviewTitle": "Update service",
   "app.deploys.reviewSubtitle":
     "Check available changes before deploying them.",
+  "app.deploys.sourceVersionTitle": "Source version",
+  "app.deploys.sourceVersionSubtitle":
+    "Choose an exact Git commit before reviewing changes.",
+  "app.deploys.sourceVersionCurrent": "Current version",
+  "app.deploys.sourceVersionChange": "Change version",
+  "app.deploys.sourceVersionInput": "Exact commit",
+  "app.deploys.sourceVersionHint":
+    "Enter a 40-character Git commit. Branches and tags are not accepted.",
+  "app.deploys.sourceVersionApply": "Set version",
+  "app.deploys.sourceVersionUnavailable":
+    "The existing Source could not be loaded.",
+  "app.deploys.sourceImpactTitle": "Affected Workloads",
+  "app.deploys.sourceImpactLoading": "Checking which Workloads use this Source.",
+  "app.deploys.sourceImpactUnavailable":
+    "Affected Workloads could not be verified. Try again before changing the version.",
+  "app.deploys.sourceImpactSingle": "Only this Workload uses the Source.",
+  "app.deploys.sourceImpactShared":
+    "This Source is shared by {count} Workloads. Changing it updates all of them.",
+  "app.deploys.sourceImpactConfirmTitle": "Change a shared Source version?",
+  "app.deploys.sourceImpactConfirmMessage":
+    "This Source is used by {count} Workloads:\n{workloads}\nSet the exact commit for all of them?",
+  "app.deploys.sourceImpactConfirmCta": "Change shared version",
   "app.deploys.empty": "No deploys yet.",
   "app.deploys.restore": "Restore this state",
   "app.deploys.restoreDisclosure": "Restore a previous version",
@@ -552,6 +574,10 @@ export const en: Record<keyof typeof ja, string> = {
     "Values from a connected service aren't available right now. Try again in a moment.",
   "controlError.sourceChanged":
     "The source contents changed. Review the changes again.",
+  "controlError.sourceRevisionMismatch":
+    "The source identity or exact version changed. Review the current service again.",
+  "controlError.invalidSourceRevision":
+    "Enter an exact 40-character Git commit before reviewing changes.",
   "controlError.compatibilityStale":
     "The check result is out of date. Check again.",
   "controlError.runnerUnavailable":

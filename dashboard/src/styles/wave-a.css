@@ -419,6 +419,41 @@
   color: var(--tg-fg-muted);
 }
 
+/* --- Source-global revision impact ---------------------------------------- */
+.wa-source-impact {
+  display: grid;
+  gap: var(--tg-s-2);
+  margin-top: var(--tg-s-4);
+  padding-top: var(--tg-s-3);
+  border-top: 1px solid var(--tg-line);
+}
+.wa-source-impact p {
+  margin: 0;
+}
+.wa-source-impact-list {
+  display: grid;
+  gap: var(--tg-s-1);
+  max-height: 16rem;
+  overflow-y: auto;
+  margin: 0;
+  padding: var(--tg-s-2) var(--tg-s-3);
+  border: 1px solid var(--tg-line);
+  border-radius: var(--tg-r-md);
+  list-style: none;
+}
+.wa-source-impact-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--tg-s-1);
+  font-size: var(--tg-fs-sm);
+}
+.wa-source-impact-list code {
+  overflow-wrap: anywhere;
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-xs);
+}
+
 /* --- Recorded current-resource inventory --------------------------------- */
 .wa-kv-list {
   display: grid;

@@ -12,6 +12,7 @@ import type { SourcesService } from "../sources/mod.ts";
 import type {
   CreateSourceRequest,
   CreateSourceResponse,
+  CreateSourceSyncRequest,
   CreateSourceSyncResponse,
   ListSourcesResponse,
   ListSourceSnapshotsResponse,
@@ -19,7 +20,6 @@ import type {
   Source,
   SourceResponse,
   SourceSnapshot,
-  SourceSyncIntent,
   SourceSyncRun,
 } from "takosumi-contract/sources";
 import type {
@@ -67,10 +67,7 @@ export class SourceManagement {
 
   async createSourceSync(
     sourceId: string,
-    options: {
-      readonly dedupe?: boolean;
-      readonly intent?: SourceSyncIntent;
-    } = {},
+    options: CreateSourceSyncRequest & { readonly dedupe?: boolean } = {},
   ): Promise<CreateSourceSyncResponse> {
     return await this.#require().createSync(sourceId, options);
   }

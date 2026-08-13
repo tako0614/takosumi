@@ -880,9 +880,14 @@
   color: var(--tg-fg);
 }
 .tg-confirm-message {
+  width: 100%;
+  max-height: 16rem;
+  overflow-y: auto;
   margin: 0;
   font-size: 0.875rem;
   line-height: 1.5;
+  text-align: left;
+  white-space: pre-line;
   color: var(--tg-fg-muted);
 }
 .tg-confirm-actions {

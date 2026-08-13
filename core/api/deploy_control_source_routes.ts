@@ -6,6 +6,7 @@
 
 import type {
   CreateSourceRequest,
+  CreateSourceSyncRequest,
   PatchSourceRequest,
   StableSourceTagResolutionRequest,
   SourceSnapshotFileResponse,
@@ -131,6 +132,7 @@ export const DEPLOY_CONTROL_SOURCE_ENDPOINTS: readonly DeployControlEndpoint[] =
       operationId: "createSourceSync",
       openapi: {
         pathParams: ["sourceId"],
+        requestSchema: "CreateSourceSyncRequest",
         okStatus: "201",
         okSchema: "CreateSourceSyncResponse",
       },
@@ -302,10 +304,15 @@ export function mountDeployControlSourceRoutes(
     defineRoute({
       ctx,
       param: SOURCE_ID_PARAM,
+      enforceBody: false,
       handler: async ({ c, principal, id }) => {
         const existing = await controller.getSource(id);
         ensureWorkspacePermission(principal, existing.source.workspaceId);
-        return c.json(await controller.createSourceSync(id), 201);
+        const body = await readOptionalJsonBody<CreateSourceSyncRequest>(
+          c,
+          "sourceSync",
+        );
+        return c.json(await controller.createSourceSync(id, body), 201);
       },
     }),
   );

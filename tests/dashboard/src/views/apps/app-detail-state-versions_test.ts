@@ -115,10 +115,11 @@ describe("Capsule detail StateVersion surface", () => {
     expect(source).toContain('title: t("app.danger.destroyConfirmTitle")');
     expect(ja["app.danger.destroyConfirmMessage"]).toContain("{name}");
     expect(en["app.danger.destroyConfirmMessage"]).toContain("{name}");
-    // Still exactly two confirm() dialogs: the immediate-delete gate above and
-    // the settings-tab unsaved-edits leave guard. No blanket delete modal.
+    // There are now three explicit confirmations: the shared Source revision
+    // gate, immediate-delete gate, and settings-tab unsaved-edits guard. No
+    // blanket delete modal.
     expect(source).toContain('title: t("app.settings.leaveConfirm.title")');
-    expect(source.match(/await confirm\(/g)?.length).toBe(2);
+    expect(source.match(/await confirm\(/g)?.length).toBe(3);
     // The danger tab still names the service in its warning header.
     expect(source).toContain(
       't("app.danger.destroyBody", {\n                          name: serviceLabel(),\n                        })',

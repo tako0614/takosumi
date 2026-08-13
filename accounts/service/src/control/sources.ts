@@ -198,6 +198,14 @@ export async function handleSources(
           400,
         );
       }
+      const expectedRef = body.expectedRef;
+      if (expectedRef !== undefined && typeof expectedRef !== "string") {
+        return errorJson(
+          "invalid_request",
+          "expectedRef must be a string when provided",
+          400,
+        );
+      }
       const { source } = await operations.getSource(sourceId);
       const workspaceId = sourceWorkspaceId(source);
       if (!workspaceId) return sourceWorkspaceIdentityMissing();
@@ -211,6 +219,7 @@ export async function handleSources(
       const response = await operations.createSourceSync(sourceId, {
         dedupe: true,
         intent,
+        ...(expectedRef === undefined ? {} : { expectedRef }),
       });
       return jsonStatus(
         isRecord(response) && isRecord(response.run)

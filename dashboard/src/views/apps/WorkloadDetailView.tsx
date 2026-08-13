@@ -46,6 +46,7 @@ import Page from "../account/components/auth/Page.tsx";
 import {
   type BackupRecord,
   type ActivityEvent,
+  type Capsule,
   ControlApiError,
   type InstallConfig,
   type ProviderBinding,
@@ -59,8 +60,11 @@ import {
   getInstallConfig,
   getCapsuleProviderBindingSet,
   getCapsule,
+  isImmutableSourceRevision,
   getWorkspaceGraph,
+  updateCapsuleSourceRevision,
   listActivity,
+  listCapsules,
   listStateVersions,
   listProviderConnections,
   listSources,
@@ -205,7 +209,21 @@ function Inner() {
     if (installConfig.error) return undefined;
     return capsuleDisplayName(installConfig(), locale());
   });
+  // Source metadata is needed on the Updates tab for the explicit immutable
+  // revision step as well as in Settings' support disclosure. Keep the
+  // settings resource scoped to that tab; the update flow owns a separate
+  // readback resource so switching tabs cannot reseed either view's data.
   const [sources] = createResource(settingsWorkspaceId, listSources);
+  const deploySourceWorkspaceId = () =>
+    tab() === "deploys" ? (workspaceId() ?? null) : null;
+  const [deploySources, { refetch: refetchDeploySources }] = createResource(
+    deploySourceWorkspaceId,
+    listSources,
+  );
+  const [sourceCapsules, { refetch: refetchSourceCapsules }] = createResource(
+    deploySourceWorkspaceId,
+    (id) => listCapsules(id, { includeDestroyed: false }),
+  );
   const [stateVersions] = createResource(deploysCapsuleId, listStateVersions);
   const [resourceInventory] = createResource(
     deploysCapsuleId,
@@ -251,7 +269,12 @@ function Inner() {
   const activityEvents = createMemo(() =>
     activity.error ? [] : (activity() ?? []),
   );
-  const sourceList = () => (sources.error ? [] : (sources() ?? []));
+  const sourceList = () => {
+    const resource = tab() === "deploys" ? deploySources : sources;
+    return resource.error ? [] : (resource() ?? []);
+  };
+  const sourceCapsuleList = () =>
+    sourceCapsules.error ? [] : (sourceCapsules.latest ?? []);
   const graphData = () => (graph.error ? undefined : graph());
   const stateVersionList = () =>
     stateVersions.error ? [] : (stateVersions() ?? []);
@@ -272,6 +295,61 @@ function Inner() {
   const source = createMemo(() =>
     sourceList().find((item) => item.id === capsuleData()?.sourceId),
   );
+  const [sourceRevisionReadback, setSourceRevisionReadback] =
+    createSignal<string | undefined>();
+  const [sourceRevisionPendingReadback, setSourceRevisionPendingReadback] =
+    createSignal(false);
+  createEffect(() => {
+    const current = source()?.defaultRef;
+    if (
+      sourceRevisionReadback() === undefined &&
+      current !== undefined &&
+      isImmutableSourceRevision(current)
+    ) {
+      // An exact value from the owning Source projection is already a safe
+      // initial readback; mutable branch/tag values remain unverified.
+      setSourceRevisionReadback(current);
+    }
+  });
+  const currentSourceRevision = () =>
+    sourceRevisionReadback() ?? source()?.defaultRef;
+  const sourceRevisionReady = () => {
+    const revision = currentSourceRevision();
+    return (
+      !sourceRevisionPendingReadback() &&
+      revision !== undefined &&
+      isImmutableSourceRevision(revision)
+    );
+  };
+  const sourceIdentity = () => {
+    const inst = capsuleData();
+    const src = source();
+    if (!inst || !src) return undefined;
+    return {
+      workspaceId: inst.workspaceId,
+      sourceId: src.id,
+      url: src.url,
+      defaultPath: src.defaultPath,
+    } as const;
+  };
+  const affectedSourceCapsules = createMemo(() => {
+    const sourceId = source()?.id;
+    if (!sourceId) return [] as readonly Capsule[];
+    return sourceCapsuleList()
+      .filter(
+        (candidate) =>
+          candidate.workspaceId === workspaceId() &&
+          candidate.sourceId === sourceId && candidate.status !== "destroyed",
+      )
+      .sort((left, right) =>
+        (left.name || left.id).localeCompare(right.name || right.id),
+      );
+  });
+  const sourceMembershipReady = () =>
+    !sourceCapsules.loading &&
+    !sourceCapsules.error &&
+    sourceCapsules.latest !== undefined;
+  const { confirm } = useConfirmDialog();
   const producers = createMemo(() =>
     dependencyRows(capsuleData(), graphData(), "producer"),
   );
@@ -337,8 +415,74 @@ function Inner() {
   );
 
   // --- actions ---------------------------------------------------------------
+  const changeSourceRevision = createAction(async (revision: string) => {
+    const identity = sourceIdentity();
+    if (!identity) {
+      throw new ControlApiError(
+        409,
+        "source_revision_mismatch",
+        "The existing Source could not be verified for this service.",
+      );
+    }
+    if (!sourceMembershipReady()) {
+      throw new ControlApiError(
+        409,
+        "source_membership_changed",
+        "Affected Workloads could not be verified; review the Source again.",
+      );
+    }
+    const affectedCapsules = affectedSourceCapsules();
+    const affectedCapsuleIds = affectedCapsules.map((candidate) => candidate.id);
+    if (!affectedCapsuleIds.includes(capsuleId())) {
+      throw new ControlApiError(
+        409,
+        "source_membership_changed",
+        "This Workload is no longer attached to the Source.",
+      );
+    }
+    if (affectedCapsuleIds.length > 1) {
+      const affectedWorkloadSummary = affectedCapsules
+        .map((candidate) => `${candidate.name} (${candidate.id})`)
+        .join("\n");
+      const confirmed = await confirm({
+        title: t("app.deploys.sourceImpactConfirmTitle"),
+        message: t("app.deploys.sourceImpactConfirmMessage", {
+          count: affectedCapsuleIds.length,
+          workloads: affectedWorkloadSummary,
+        }),
+        confirmText: t("app.deploys.sourceImpactConfirmCta"),
+        cancelText: t("common.cancel"),
+      });
+      if (!confirmed) return undefined;
+    }
+    const updated = await updateCapsuleSourceRevision(
+      capsuleId(),
+      identity,
+      revision,
+      { affectedCapsuleIds },
+    );
+    // The update helper has performed the authoritative GET. Keep that exact
+    // value as the only revision eligible for Review changes while the list
+    // projection catches up.
+    setSourceRevisionReadback(updated.defaultRef);
+    setSourceRevisionPendingReadback(false);
+    await Promise.all([refetchDeploySources(), refetchSourceCapsules()]);
+    return updated;
+  });
   const plan = createAction(async () => {
-    const envelope = await planCapsuleUpdate(capsuleId());
+    const identity = sourceIdentity();
+    const revision = currentSourceRevision();
+    if (!identity || !revision || !isImmutableSourceRevision(revision)) {
+      throw new ControlApiError(
+        409,
+        "invalid_source_revision",
+        "Review changes requires an exact Source revision readback.",
+      );
+    }
+    const envelope = await planCapsuleUpdate(capsuleId(), {
+      sourceRevision: revision,
+      sourceIdentity: identity,
+    });
     const runId = extractRunId(envelope);
     if (runId) navigate(`/runs/${runId}`);
   });
@@ -347,7 +491,19 @@ function Inner() {
   // this button is the authority for that apply, so mint the tab-local consent
   // token with the URL — the flag alone never authorizes it.
   const update = createAction(async () => {
-    const envelope = await planCapsuleUpdate(capsuleId());
+    const identity = sourceIdentity();
+    const revision = currentSourceRevision();
+    if (!identity || !revision || !isImmutableSourceRevision(revision)) {
+      throw new ControlApiError(
+        409,
+        "invalid_source_revision",
+        "An exact Source revision is required before updating this service.",
+      );
+    }
+    const envelope = await planCapsuleUpdate(capsuleId(), {
+      sourceRevision: revision,
+      sourceIdentity: identity,
+    });
     const runId = extractRunId(envelope);
     if (runId) navigate(autoApplyRunPath(`/runs/${runId}`, runId, "update"));
   });
@@ -375,7 +531,6 @@ function Inner() {
     }
     navigate("/workloads");
   });
-  const { confirm } = useConfirmDialog();
   /**
    * Delete is confirmed exactly once — normally at destroy-APPLY on the run
    * screen, where the plan shows what will be removed. Creating a plan removes
@@ -520,7 +675,7 @@ function Inner() {
                         variant="primary"
                         type="button"
                         busy={update.busy()}
-                        disabled={update.busy()}
+                        disabled={update.busy() || !sourceRevisionReady()}
                         onClick={() => void update.run()}
                         icon={<RefreshCw size={16} />}
                       >
@@ -617,6 +772,23 @@ function Inner() {
                   </Match>
                   <Match when={tab() === "deploys"}>
                     <DeploysTab
+                      source={source()}
+                      sourceLoading={deploySources.loading}
+                      sourceRevision={currentSourceRevision()}
+                      sourceRevisionReady={sourceRevisionReady()}
+                      affectedWorkloads={affectedSourceCapsules()}
+                      affectedWorkloadsLoading={sourceCapsules.loading}
+                      affectedWorkloadsError={Boolean(sourceCapsules.error)}
+                      changeVersionBusy={changeSourceRevision.busy()}
+                      changeVersionError={changeSourceRevision.error()}
+                      onRevisionInputChange={(value) => {
+                        setSourceRevisionPendingReadback(
+                          value.trim() !== currentSourceRevision(),
+                        );
+                      }}
+                      onChangeVersion={async (revision) =>
+                        (await changeSourceRevision.run(revision)) !== undefined
+                      }
                       loading={stateVersions.loading}
                       error={
                         stateVersions.error
@@ -975,6 +1147,24 @@ function RuntimeSurfaceLink(props: {
 // === deploys =================================================================
 
 function DeploysTab(props: {
+  readonly source:
+    | {
+        readonly id: string;
+        readonly url: string;
+        readonly defaultRef: string;
+        readonly defaultPath: string;
+      }
+    | undefined;
+  readonly sourceLoading: boolean;
+  readonly sourceRevision?: string;
+  readonly sourceRevisionReady: boolean;
+  readonly affectedWorkloads: readonly Capsule[];
+  readonly affectedWorkloadsLoading: boolean;
+  readonly affectedWorkloadsError: boolean;
+  readonly changeVersionBusy: boolean;
+  readonly changeVersionError: string | null;
+  readonly onRevisionInputChange: (value: string) => void;
+  readonly onChangeVersion: (revision: string) => Promise<boolean>;
   readonly loading: boolean;
   readonly error?: string;
   readonly history: readonly {
@@ -1000,8 +1190,127 @@ function DeploysTab(props: {
   readonly resourceInventoryLoading: boolean;
   readonly resourceInventoryError: boolean;
 }) {
+  const [revisionInput, setRevisionInput] = createSignal("");
+  const currentRevision = () => props.sourceRevision ?? "";
+  const revisionCandidate = () => revisionInput().trim();
+  const submitRevision = async () => {
+    const revision = revisionCandidate();
+    if (!isImmutableSourceRevision(revision)) return;
+    if (await props.onChangeVersion(revision)) setRevisionInput("");
+  };
   return (
     <>
+      <Card>
+        <CardHeader
+          title={t("app.deploys.sourceVersionTitle")}
+          subtitle={t("app.deploys.sourceVersionSubtitle")}
+        />
+        <Show
+          when={props.source}
+          fallback={
+            <p class="muted">
+              {props.sourceLoading
+                ? t("app.source.loading")
+                : t("app.deploys.sourceVersionUnavailable")}
+            </p>
+          }
+        >
+          {(source) => (
+            <>
+              <KVList
+                items={[
+                  {
+                    label: t("app.deploys.sourceVersionCurrent"),
+                    value: <code>{currentRevision() || "—"}</code>,
+                  },
+                ]}
+              />
+              <div class="wa-source-impact" role="status">
+                <strong>{t("app.deploys.sourceImpactTitle")}</strong>
+                <Show when={props.affectedWorkloadsLoading}>
+                  <p class="muted">{t("app.deploys.sourceImpactLoading")}</p>
+                </Show>
+                <Show when={props.affectedWorkloadsError}>
+                  <p class="wa-error">
+                    {t("app.deploys.sourceImpactUnavailable")}
+                  </p>
+                </Show>
+                <Show
+                  when={
+                    !props.affectedWorkloadsLoading &&
+                    !props.affectedWorkloadsError
+                  }
+                >
+                  <p class="muted">
+                    {props.affectedWorkloads.length > 1
+                      ? t("app.deploys.sourceImpactShared", {
+                          count: props.affectedWorkloads.length,
+                        })
+                      : t("app.deploys.sourceImpactSingle")}
+                  </p>
+                  <Show when={props.affectedWorkloads.length > 1}>
+                    <ul class="wa-source-impact-list">
+                      <For each={props.affectedWorkloads}>
+                        {(workload) => (
+                          <li>
+                            <span>{workload.name}</span>{" "}
+                            <code>{workload.id}</code>{" "}
+                            <span class="muted">({workload.status})</span>
+                          </li>
+                        )}
+                      </For>
+                    </ul>
+                  </Show>
+                </Show>
+              </div>
+              <details class="wb-disclosure">
+                <summary>{t("app.deploys.sourceVersionChange")}</summary>
+                <div class="wa-form-actions">
+                  <FormField
+                    label={t("app.deploys.sourceVersionInput")}
+                    hint={t("app.deploys.sourceVersionHint")}
+                  >
+                    <Input
+                      value={revisionInput()}
+                      placeholder={source().defaultRef}
+                      spellcheck={false}
+                      autocomplete="off"
+                      onInput={(event) => {
+                        const value = event.currentTarget.value;
+                        setRevisionInput(value);
+                        props.onRevisionInputChange(value);
+                      }}
+                    />
+                  </FormField>
+                  <Button
+                    variant="secondary"
+                    type="button"
+                    disabled={
+                      props.changeVersionBusy ||
+                      props.affectedWorkloadsLoading ||
+                      props.affectedWorkloadsError ||
+                      props.affectedWorkloads.length === 0 ||
+                      !isImmutableSourceRevision(revisionCandidate())
+                    }
+                    busy={props.changeVersionBusy}
+                    onClick={() => void submitRevision()}
+                  >
+                    {t("app.deploys.sourceVersionApply")}
+                  </Button>
+                </div>
+                <Show when={props.changeVersionError}>
+                  {(message) => (
+                    <p class="wa-error" role="alert">
+                      {message()}
+                    </p>
+                  )}
+                </Show>
+              </details>
+            </>
+          )}
+        </Show>
+      </Card>
+
       <Card>
         <CardHeader
           title={t("app.deploys.reviewTitle")}
@@ -1012,7 +1321,7 @@ function DeploysTab(props: {
                 variant="primary"
                 size="sm"
                 type="button"
-                disabled={props.reviewBusy}
+                disabled={props.reviewBusy || !props.sourceRevisionReady}
                 busy={props.reviewBusy}
                 onClick={() => props.onReview()}
               >
