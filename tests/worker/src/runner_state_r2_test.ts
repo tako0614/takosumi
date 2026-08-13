@@ -1068,7 +1068,7 @@ test("failed provider apply encrypts partial state and same-run replay stays fai
           {
             status: "failed",
             exitCode: 1,
-            errorCode: "apply_failed",
+            errorCode: "provider-raw-code",
             providerExecutionFailure: {
               kind: "provider_execution_failed",
             },
@@ -1118,6 +1118,7 @@ test("failed provider apply encrypts partial state and same-run replay stays fai
   );
   assert.equal(first.status, 500);
   const firstPayload = (await first.json()) as Record<string, unknown>;
+  assert.equal(firstPayload.errorCode, "provider_execution_failed");
   assert.deepEqual(firstPayload.providerExecutionFailure, {
     kind: "provider_execution_failed",
     statePersistence: "persisted",
@@ -1160,6 +1161,7 @@ test("failed provider apply encrypts partial state and same-run replay stays fai
   assert.equal(replay.status, 500);
   assert.equal(providerPosts, 1);
   const replayPayload = (await replay.json()) as Record<string, unknown>;
+  assert.equal(replayPayload.errorCode, "provider_execution_failed");
   assert.deepEqual(replayPayload.providerExecutionFailure, {
     kind: "provider_execution_failed",
     statePersistence: "persisted",

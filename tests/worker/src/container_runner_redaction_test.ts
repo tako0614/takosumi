@@ -533,6 +533,46 @@ test("container runner distinguishes failed provider execution without readable 
   expect(result.stateDigest).toBeUndefined();
 });
 
+test("container runner requires a finite provider failure code", async () => {
+  for (const errorCode of [undefined, "provider-raw-code"] as const) {
+    const marker = `provider-failure-${errorCode ?? "missing"}-marker`;
+    const payload = {
+      status: "failed",
+      providerExecutionFailure: {
+        kind: "provider_execution_failed",
+        statePersistence: "unavailable",
+      },
+      ...(errorCode ? { errorCode } : {}),
+      detail: `path=/work/${marker} Authorization: Bearer ${marker}`,
+      stderr: `cookie=${marker}`,
+      stdout: `body=${marker}`,
+      runId: marker,
+    };
+    const runner = new CloudflareContainerOpenTofuRunner(
+      envReturning(payload, undefined, 500),
+    );
+    const result = await runner.apply({
+      applyRun: { id: `apply_${errorCode ?? "missing"}` },
+      planRun: { id: `plan_${errorCode ?? "missing"}` },
+      planArtifact: {
+        kind: "runner-local",
+        ref: `runner-local://plan_${errorCode ?? "missing"}/tfplan`,
+        digest: PLAN_DIGEST,
+      },
+    } as Parameters<CloudflareContainerOpenTofuRunner["apply"]>[0]);
+
+    expect(result.providerExecutionFailure).toEqual({
+      kind: "provider_execution_failed",
+      statePersistence: "unavailable",
+      errorCode: "provider_execution_failed",
+    });
+    const serialized = JSON.stringify(result);
+    expect(serialized).not.toContain(marker);
+    expect(serialized).not.toContain("Bearer");
+    expect(serialized).not.toContain("/work/");
+  }
+});
+
 test("container runner maps typed artifact relay ambiguity to retryable infrastructure", async () => {
   const runner = new CloudflareContainerOpenTofuRunner(
     envReturning(

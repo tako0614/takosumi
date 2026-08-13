@@ -61,7 +61,11 @@ const RUNNER_REJECTED_CODE = "runner_rejected";
 const RUNNER_TRANSPORT_FAILED_CODE = "runner_transport_failed";
 const RUNNER_REQUEST_ABORTED_CODE = "runner_request_aborted";
 const RUNNER_TIMEOUT_CODE = "runner_timeout";
-const RUNNER_PROVIDER_FAILURE_CODES = new Set(["apply_failed"]);
+const RUNNER_PROVIDER_EXECUTION_FAILED_CODE = "provider_execution_failed";
+const RUNNER_PROVIDER_FAILURE_CODES = new Set([
+  "apply_failed",
+  RUNNER_PROVIDER_EXECUTION_FAILED_CODE,
+]);
 const RUNNER_STARTUP_SECONDS_HEADER = "x-takosumi-runner-startup-seconds";
 type ContainerRunnerAction =
   | OpenTofuRunAction
@@ -649,9 +653,10 @@ function providerExecutionFailureFromContainerResult(
   return {
     kind: "provider_execution_failed",
     statePersistence,
-    ...(errorCode && RUNNER_PROVIDER_FAILURE_CODES.has(errorCode)
-      ? { errorCode }
-      : {}),
+    errorCode:
+      errorCode && RUNNER_PROVIDER_FAILURE_CODES.has(errorCode)
+        ? errorCode
+        : RUNNER_PROVIDER_EXECUTION_FAILED_CODE,
   };
 }
 
@@ -663,7 +668,7 @@ function failedProviderExecutionResult(
   const stateDigest = state ? stringFromRecord(state, "digest") : undefined;
   return {
     status: "failed",
-    ...(failure?.errorCode ? { errorCode: failure.errorCode } : {}),
+    errorCode: failure?.errorCode ?? RUNNER_PROVIDER_EXECUTION_FAILED_CODE,
     providerExecutionFailure: {
       kind: "provider_execution_failed",
       statePersistence: failure?.statePersistence ?? "unavailable",

@@ -38,7 +38,11 @@ const R2_PUT_RETRY_MAX_MS = 10_000;
 const BOUNDED_STREAM_INITIAL_BYTES = 64 * 1024;
 const RUNNER_ARTIFACT_RELAY_FAILED_CODE = "runner_artifact_relay_failed";
 const RUNNER_REJECTED_CODE = "runner_rejected";
-const RUNNER_PROVIDER_FAILURE_CODES = new Set(["apply_failed"]);
+const RUNNER_PROVIDER_EXECUTION_FAILED_CODE = "provider_execution_failed";
+const RUNNER_PROVIDER_FAILURE_CODES = new Set([
+  "apply_failed",
+  RUNNER_PROVIDER_EXECUTION_FAILED_CODE,
+]);
 type RunnerFailurePhase =
   | "plan"
   | "apply"
@@ -48,7 +52,8 @@ type RunnerFailurePhase =
   | "backup"
   | "release"
   | "stable_semver_tag"
-  | "source_snapshot_file";
+  | "source_snapshot_file"
+  | "compatibility_check";
 const RUNNER_R2_LOG_REASON = Object.freeze({
   putRetryable: "r2_put_retryable",
   currentStateCacheWriteFailed: "current_state_cache_write_failed",
@@ -3845,9 +3850,8 @@ function failedProviderExecutionPayload(
   return {
     status: "failed",
     phase: "apply",
-    ...(providerFailureErrorCode(payload)
-      ? { errorCode: providerFailureErrorCode(payload) }
-      : {}),
+    errorCode:
+      providerFailureErrorCode(payload) ?? RUNNER_PROVIDER_EXECUTION_FAILED_CODE,
     providerExecutionFailure: {
       kind: "provider_execution_failed",
       statePersistence,
@@ -3904,11 +3908,24 @@ function finiteRunnerFailureCode(
 ):
   | typeof RUNNER_REJECTED_CODE
   | typeof RUNNER_MUTATION_INDETERMINATE_CODE
+  | typeof RUNNER_PROVIDER_EXECUTION_FAILED_CODE
+  | "apply_failed"
   | "runner_artifact_relay_ambiguous"
   | "runner_artifact_relay_failed"
   | "artifact_size_limit_exceeded" {
   const value = stringField(payload, "errorCode");
+  const providerFailure = recordField(payload, "providerExecutionFailure");
+  if (
+    isRecord(providerFailure) &&
+    stringField(providerFailure, "kind") === "provider_execution_failed"
+  ) {
+    return value && RUNNER_PROVIDER_FAILURE_CODES.has(value)
+      ? (value as "apply_failed" | typeof RUNNER_PROVIDER_EXECUTION_FAILED_CODE)
+      : RUNNER_PROVIDER_EXECUTION_FAILED_CODE;
+  }
   switch (value) {
+    case RUNNER_PROVIDER_EXECUTION_FAILED_CODE:
+    case "apply_failed":
     case RUNNER_MUTATION_INDETERMINATE_CODE:
     case "runner_artifact_relay_ambiguous":
     case "runner_artifact_relay_failed":
@@ -3932,6 +3949,7 @@ function runnerFailurePhase(
     case "release":
     case "stable_semver_tag":
     case "source_snapshot_file":
+    case "compatibility_check":
       return phase;
     default:
       return "plan";

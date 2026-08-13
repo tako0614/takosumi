@@ -1007,6 +1007,49 @@ test("OpenTofu runner Durable Object destroys non-plan containers even when keep
   assert.deepEqual(calls, ["fetch POST /runs/compatibility_snap_1", "destroy"]);
 });
 
+test("OpenTofu runner Durable Object labels compatibility failures with a finite phase", async () => {
+  const marker = "compatibility-failure-marker-7J3";
+  const runner = runnerWithContainer(new FakeR2Bucket(), {
+    async containerFetch() {
+      return Response.json(
+        {
+          error: `path=/work/${marker}`,
+          detail: `Authorization: Bearer ${marker}`,
+          stderr: `cookie=${marker}`,
+          stdout: `body=${marker}`,
+          runId: marker,
+        },
+        { status: 502 },
+      );
+    },
+  });
+
+  const response = await runner.fetch(
+    new Request("https://runner/runs/compatibility_failure", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        kind: "takosumi.opentofu-run@v1",
+        action: "compatibility_check",
+        runId: "compatibility_failure",
+        request: {},
+      }),
+    }),
+  );
+
+  assert.equal(response.status, 502);
+  const body = JSON.stringify(await response.json());
+  assert.equal(
+    body,
+    JSON.stringify({
+      status: "failed",
+      errorCode: "runner_rejected",
+      phase: "compatibility_check",
+    }),
+  );
+  assert.equal(body.includes(marker), false);
+});
+
 test("OpenTofu runner Durable Object destroys a successful run container by default", async () => {
   const calls: string[] = [];
   const runner = runnerWithContainer(
