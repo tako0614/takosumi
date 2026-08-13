@@ -1,5 +1,5 @@
 export const TAKOSUMI_PLATFORM_READINESS_CONTRIBUTION_KIND =
-  "takosumi.platform-readiness-contribution@v1" as const;
+  "takosumi.platform-readiness-contribution@v2" as const;
 
 export const platformReadinessCollectionClassIds = [
   "browser-user-e2e",
@@ -26,6 +26,12 @@ export interface PlatformReadinessContribution {
   readonly capability: string;
   readonly domains?: readonly PlatformReadinessRequirementGroup[];
   readonly rehearsalSteps?: readonly PlatformReadinessRequirementGroup[];
+  /**
+   * Evidence fields which must have one value across requirement-group scopes.
+   * Each referenced evidence type must be required exactly once by the
+   * composed definition so the generic validator has one unambiguous source.
+   */
+  readonly consistentFields?: readonly PlatformReadinessConsistencyRule[];
   readonly evidenceSchemas?: Readonly<
     Record<string, PlatformReadinessEvidenceSchema>
   >;
@@ -86,6 +92,8 @@ export interface PlatformReadinessEvidenceSchema {
   readonly distinctFields?: readonly (readonly string[])[];
   /** Maps a later timestamp field to the earlier timestamp field. */
   readonly after?: Readonly<Record<string, string>>;
+  /** Canonical UTC timestamp fields which must still be in their validity window. */
+  readonly notExpired?: readonly string[];
 }
 
 export const platformReadinessEvidenceFieldFormats = [
@@ -141,6 +149,11 @@ export function platformReadinessContributionErrors(
   if (!optionalRequirementGroups(record.rehearsalSteps)) {
     errors.push(
       `${label}.rehearsalSteps must contain valid requirement groups`,
+    );
+  }
+  if (!optionalConsistencyRules(record.consistentFields)) {
+    errors.push(
+      `${label}.consistentFields must contain valid consistency rules`,
     );
   }
   if (!optionalEvidenceSchemas(record.evidenceSchemas)) {
@@ -324,6 +337,12 @@ export function platformReadinessEvidenceSchemaErrors(
       errors.push(`${label}.${laterField} must be after ${earlierField}`);
     }
   }
+  for (const field of schema.notExpired ?? []) {
+    const validUntil = strictUtcDate(record[field]);
+    if (validUntil && validUntil.getTime() <= Date.now()) {
+      errors.push(`${label}.${field} must not be expired`);
+    }
+  }
   return errors;
 }
 
@@ -347,18 +366,27 @@ function optionalRequirementGroups(value: unknown): boolean {
 
 function optionalConsistencyRules(value: unknown): boolean {
   if (value === undefined) return true;
-  return (
-    Array.isArray(value) &&
-    value.length > 0 &&
-    value.every(
-      (entry) =>
-        entry !== null &&
-        typeof entry === "object" &&
-        !Array.isArray(entry) &&
-        nonEmptyString((entry as Record<string, unknown>).field) &&
-        stringArray((entry as Record<string, unknown>).evidenceTypes),
-    )
-  );
+  if (!Array.isArray(value) || value.length === 0) return false;
+  const keys = new Set<string>();
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      return false;
+    }
+    const record = entry as Record<string, unknown>;
+    if (!nonEmptyString(record.field) || !stringArray(record.evidenceTypes)) {
+      return false;
+    }
+    if (
+      record.evidenceTypes.length < 2 ||
+      new Set(record.evidenceTypes).size !== record.evidenceTypes.length
+    ) {
+      return false;
+    }
+    const key = `${record.field}:${[...record.evidenceTypes].sort().join(",")}`;
+    if (keys.has(key)) return false;
+    keys.add(key);
+  }
+  return true;
 }
 
 function optionalEvidenceSchemas(value: unknown): boolean {
@@ -389,7 +417,8 @@ function optionalEvidenceSchemas(value: unknown): boolean {
       optionalStringRecord(record.requiredItems, true) &&
       optionalStringRecord(record.exactItems, true) &&
       optionalDistinctFieldGroups(record.distinctFields) &&
-      optionalStringRecord(record.after, false)
+      optionalStringRecord(record.after, false) &&
+      optionalUniqueStringArray(record.notExpired)
     )) {
       return false;
     }
@@ -422,6 +451,9 @@ function optionalEvidenceSchemas(value: unknown): boolean {
             Array.isArray(group) ? group.filter(nonEmptyString) : [],
           )
         : []),
+      ...(Array.isArray(record.notExpired)
+        ? record.notExpired.filter(nonEmptyString)
+        : []),
     ];
     return (
       referencedFields.every((field) => declaredFields.has(field)) &&
@@ -430,9 +462,21 @@ function optionalEvidenceSchemas(value: unknown): boolean {
           declaredFields.has(laterField) &&
           typeof earlierField === "string" &&
           declaredFields.has(earlierField),
-      )
+      ) &&
+      (Array.isArray(record.notExpired)
+        ? record.notExpired.every(
+            (field) =>
+              isPlainRecord(record.formats) &&
+              record.formats[field] === "utc-timestamp",
+          )
+        : true)
     );
   });
+}
+
+function optionalUniqueStringArray(value: unknown): boolean {
+  if (value === undefined) return true;
+  return stringArray(value) && new Set(value).size === value.length;
 }
 
 function optionalEnumRecord(
@@ -616,7 +660,7 @@ function matchesEvidenceFieldFormat(
       return !!parsed && parsed.getTime() <= Date.now() + 5 * 60_000;
     }
     case "utc-timestamp":
-      return !!strictUtcDate(normalized);
+      return !!strictUtcDate(value);
   }
 }
 
