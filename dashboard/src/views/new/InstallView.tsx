@@ -78,6 +78,7 @@ import { clearCurrentStateVersionCache } from "../../lib/current-state-versions.
 import { clearDashboardOverviewCache } from "../../lib/dashboard-overview.ts";
 import {
   isProviderConnectionCandidate,
+  preferredProviderConnection,
   providerConnectionDisplayName,
 } from "../../lib/provider-connections.ts";
 import { friendlyError } from "../../lib/error-copy.ts";
@@ -301,6 +302,9 @@ function Inner() {
         (connection) => connection.id === row.connectionId,
       ),
     );
+
+  const providerConnectionSetupRequired = () =>
+    providerRows().some((row) => candidatesFor(row.provider).length === 0);
 
   const storeFeatureKey = (entry: StoreEntry, feature: StoreInstallFeature) =>
     `${entry.id}:${feature.id}`;
@@ -647,8 +651,9 @@ function Inner() {
             isProviderConnectionCandidate(connection) &&
             sameProviderSource(row.provider, connection.providerSource),
         );
-        return matches.length === 1
-          ? { ...row, connectionId: matches[0]!.id }
+        const preferred = preferredProviderConnection(matches);
+        return preferred
+          ? { ...row, connectionId: preferred.id }
           : row;
       });
       setProviderRows(rows);
@@ -1350,8 +1355,16 @@ function Inner() {
         <section class="iv-workbench">
           <div class="iv-section-head">
             <PlugZap size={24} aria-hidden="true" />
-            <h2>{t("installStore.providerTitle")}</h2>
-            <p>{t("installStore.providerHint")}</p>
+            <h2>
+              {providerConnectionSetupRequired()
+                ? t("installStore.providerTitle")
+                : t("installStore.destinationTitle")}
+            </h2>
+            <p>
+              {providerConnectionSetupRequired()
+                ? t("installStore.providerHint")
+                : t("installStore.destinationHint")}
+            </p>
           </div>
           <div class="iv-connection-list">
             <For each={providerRows()}>
@@ -1385,12 +1398,16 @@ function Inner() {
             </For>
           </div>
           <div class="iv-action-row">
-            <Button
-              href={providerConnectionsHrefForInstallReturn(sourceReturnPath())}
-              variant="secondary"
-            >
-              {t("installStore.connect")}
-            </Button>
+            <Show when={providerConnectionSetupRequired()}>
+              <Button
+                href={providerConnectionsHrefForInstallReturn(
+                  sourceReturnPath(),
+                )}
+                variant="secondary"
+              >
+                {t("installStore.connect")}
+              </Button>
+            </Show>
             <Button
               type="button"
               variant="primary"

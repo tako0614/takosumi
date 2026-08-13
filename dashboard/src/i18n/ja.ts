@@ -41,6 +41,9 @@ export const ja = {
   "installStore.compatibilityFailed":
     "このサービスは現在の環境に追加できません。",
   "installStore.providerTitle": "接続が必要です",
+  "installStore.destinationTitle": "実行先を選択",
+  "installStore.destinationHint":
+    "利用できる実行先が複数あります。このサービスで使う実行先を選んでください。",
   "installStore.providerHint": "このサービスに必要な接続だけを選びます。",
   "installStore.chooseConnection": "接続を選択",
   "installStore.destination": "実行先",

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { ProviderConnection } from "takosumi-contract";
 import {
   isProviderConnectionCandidate,
+  preferredProviderConnection,
   providerConnectionDisplayName,
 } from "../../../../dashboard/src/lib/provider-connections.ts";
 
@@ -129,5 +130,67 @@ describe("dashboard ProviderConnection candidates", () => {
       ),
     ).toBe("My cloud account");
     expect(providerConnectionDisplayName(connection())).toBe("connection_1");
+  });
+
+  test("prefers one supported operator destination over BYOK choices", () => {
+    const managed = connection({
+      id: "connection_managed",
+      scope: "operator",
+      displayName: "Takosumi Cloud",
+      credentialRecipe: {
+        id: "operator-run",
+        authMode: "capsule-run",
+        runIssuance: {
+          context: "capsule-run.v1",
+          operatorConnection: "workspace-bindable",
+          storedMaterial: "none",
+          audience: "extension.example.v1",
+          scopes: ["extension:invoke"],
+        },
+      },
+    });
+    const direct = connection({
+      id: "connection_direct",
+      displayName: "Cloudflare (direct)",
+    });
+
+    expect(preferredProviderConnection([direct, managed])).toBe(managed);
+  });
+
+  test("keeps unsupported and ambiguous destinations explicit", () => {
+    const direct = connection({ id: "connection_direct" });
+    expect(preferredProviderConnection([direct])).toBe(direct);
+    expect(
+      preferredProviderConnection([
+        direct,
+        connection({ id: "connection_direct_2" }),
+      ]),
+    ).toBeUndefined();
+
+    const managedRecipe = {
+      id: "operator-run",
+      authMode: "capsule-run",
+      runIssuance: {
+        context: "capsule-run.v1" as const,
+        operatorConnection: "workspace-bindable" as const,
+        storedMaterial: "none" as const,
+        audience: "extension.example.v1",
+        scopes: ["extension:invoke"],
+      },
+    };
+    expect(
+      preferredProviderConnection([
+        connection({
+          id: "connection_managed_1",
+          scope: "operator",
+          credentialRecipe: managedRecipe,
+        }),
+        connection({
+          id: "connection_managed_2",
+          scope: "operator",
+          credentialRecipe: managedRecipe,
+        }),
+      ]),
+    ).toBeUndefined();
   });
 });

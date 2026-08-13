@@ -36,6 +36,9 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.compatibilityFailed":
     "This service cannot be added to the current environment.",
   "installStore.providerTitle": "A connection is needed",
+  "installStore.destinationTitle": "Choose where this runs",
+  "installStore.destinationHint":
+    "More than one supported destination is available. Choose the destination for this service.",
   "installStore.providerHint":
     "Choose only the connections required by this service.",
   "installStore.chooseConnection": "Choose a connection",
