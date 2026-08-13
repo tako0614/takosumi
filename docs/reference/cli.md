@@ -119,6 +119,7 @@ takosumi accounts serve \
 
 `takosumi launch-readiness template` は OSS/Operator に共通する baseline を生成します。
 hosted service や別の edition が追加の運用証跡を要求する場合は、owner 側が versioned な
+`takosumi.platform-readiness-contribution@v2` の
 `PlatformReadinessContribution` JSON を管理します。template を生成するときに
 `--contribution-file <path>` で選びます。
 
@@ -127,16 +128,30 @@ takosumi launch-readiness template \
   --contribution-file <owner-controlled-contribution.json> \
   > readiness.private.json
 
-takosumi launch-readiness validate --file readiness.private.json
+takosumi launch-readiness validate \
+  --file readiness.private.json \
+  --contribution-file <owner-controlled-contribution.json>
 ```
 
 生成される `takosumi.platform-readiness@v2` document には、contribution の `id` /
 `version` / `capability` が埋め込まれます。追加の requirement / evidence schema も同じ
-document に入ります。そのため validate と public-summary は、その document だけで
-検証でき、根拠が足りなければ安全側に停止します。
+document に入ります。ただし embedded copy は authority ではありません。contribution を
+含む document の validate / public-summary / public-summary validate では、owner-controlled
+`--contribution-file` をもう一度渡します。validator はその trusted input で profile を組み立て、
+embedded copy の全 content が完全一致しなければ安全側に停止します。
 provider 固有のコードや外部 registry の lookup は使いません。contribution の version が
 違えば、別の readiness profile として扱います。旧 baseline ID は validate 時に二重解釈せず、
 明示的な `launch-readiness migrate-final-model` で一度だけ更新します。
+
+一定期間だけ再利用できる証跡は、evidence schema の `formats` で対象 field を
+`utc-timestamp` と宣言し、同じ field を `notExpired` に列挙します。validator は field 名から
+有効期限を推測せず、この schema data がある場合だけ canonical UTC timestamp を現在時刻と
+比較します。期限切れの reference は incomplete となり、report の `ready` は false です。
+domain と rehearsal をまたぐ複数の evidence type が同じ identity field を持つ必要がある場合は、
+contribution 直下の `consistentFields` に対象 field と type の組を宣言します。各 type は profile
+全体でちょうど一つの requirement group に属する必要があり、値が違えば validation は失敗します。
+`ready` は選択した profile の証跡が validation 時点で整合しているという結果だけを表し、
+GA/open-access の判断、deploy/release approval、mutation authority は与えません。
 
 contribution が collection planning を補助するときに使えるのは `collectionClassHints`
 だけです。これは contribution 自身が定義した evidence type を、既存の固定 class へ

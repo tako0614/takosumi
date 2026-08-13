@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join as pathJoin } from "node:path";
 import { main } from "../../../cli/src/main.ts";
 import { runAccountsMigrateD1 } from "../../../cli/src/cli-accounts-commands.ts";
+import { composePlatformReadinessDefinition } from "../../../cli/src/cli-platform-readiness-definition.ts";
 import {
   applyD1AccountsMigrations,
   type D1ExecuteCommand,
@@ -2000,7 +2001,7 @@ test("launch-readiness composes an extension contribution through template, vali
   const contributionFile = await makeTempFile({ suffix: ".json" });
   const readinessFile = await makeTempFile({ suffix: ".json" });
   const contribution = {
-    kind: "takosumi.platform-readiness-contribution@v1",
+    kind: "takosumi.platform-readiness-contribution@v2",
     id: "operator-external-system",
     version: "2.1.0",
     capability: "operator.external-system.v1",
@@ -2010,11 +2011,29 @@ test("launch-readiness composes an extension contribution through template, vali
         requiredEvidenceTypes: ["external-system-proof"],
       },
     ],
+    rehearsalSteps: [
+      {
+        id: "external-system-rehearsal",
+        requiredEvidenceTypes: ["external-system-review"],
+      },
+    ],
+    consistentFields: [
+      {
+        field: "cadenceWindowId",
+        evidenceTypes: ["external-system-proof", "external-system-review"],
+      },
+    ],
     evidenceSchemas: {
       "external-system-proof": {
-        fields: ["proofId", "classes"],
+        fields: ["proofId", "classes", "validUntil", "cadenceWindowId"],
         patterns: { proofId: "^proof_[a-z0-9]{6,}$" },
+        formats: { validUntil: "utc-timestamp" },
         exactItems: { classes: ["alpha", "beta"] },
+        notExpired: ["validUntil"],
+      },
+      "external-system-review": {
+        fields: ["reviewId", "cadenceWindowId"],
+        patterns: { reviewId: "^review_[a-z0-9]{6,}$" },
       },
     },
     collectionClassHints: {
@@ -2064,11 +2083,27 @@ test("launch-readiness composes an extension contribution through template, vali
     );
     extensionEntry.evidence[0].proofId = "proof_abcdef";
     extensionEntry.evidence[0].classes = ["alpha", "beta"];
+    extensionEntry.evidence[0].validUntil = "2100-01-01T00:00:00.000Z";
+    extensionEntry.evidence[0].cadenceWindowId = "cadence-2026-q3";
+    const extensionRehearsalEntry = document.rehearsal.find(
+      (entry: Record<string, unknown>) =>
+        entry.id === "external-system-rehearsal",
+    );
+    extensionRehearsalEntry.evidence[0].reviewId = "review_abcdef";
+    extensionRehearsalEntry.evidence[0].cadenceWindowId = "cadence-2026-q3";
     await writeTextFile(readinessFile, JSON.stringify(document));
 
     const validateStdout: string[] = [];
     const validateCode = await main(
-      ["launch-readiness", "validate", "--file", readinessFile, "--json"],
+      [
+        "launch-readiness",
+        "validate",
+        "--file",
+        readinessFile,
+        "--contribution-file",
+        contributionFile,
+        "--json",
+      ],
       {
         stdout: (line) => validateStdout.push(line),
         stderr: () => undefined,
@@ -2094,15 +2129,93 @@ test("launch-readiness composes an extension contribution through template, vali
       document.rehearsal.map((entry: Record<string, unknown>) => entry.id),
     );
 
+    extensionRehearsalEntry.evidence[0].cadenceWindowId = "cadence-2026-q4";
+    await writeTextFile(readinessFile, JSON.stringify(document));
+    const inconsistentStdout: string[] = [];
+    expect(
+      await main(
+        [
+          "launch-readiness",
+          "validate",
+          "--file",
+          readinessFile,
+          "--contribution-file",
+          contributionFile,
+          "--json",
+        ],
+        {
+          stdout: (line) => inconsistentStdout.push(line),
+          stderr: () => undefined,
+        },
+      ),
+    ).toEqual(1);
+    const inconsistentReport = JSON.parse(inconsistentStdout.join("\n"));
+    expect(inconsistentReport.ready).toBe(false);
+    expect(inconsistentReport.errors).toContain(
+      "evidence.cadenceWindowId must be consistent across external-system-proof, external-system-review",
+    );
+    extensionRehearsalEntry.evidence[0].cadenceWindowId = "cadence-2026-q3";
+
+    extensionEntry.evidence[0].validUntil = "2000-01-01T00:00:00.000Z";
+    await writeTextFile(readinessFile, JSON.stringify(document));
+    const expiredStdout: string[] = [];
+    expect(
+      await main(
+        [
+          "launch-readiness",
+          "validate",
+          "--file",
+          readinessFile,
+          "--contribution-file",
+          contributionFile,
+          "--json",
+        ],
+        {
+          stdout: (line) => expiredStdout.push(line),
+          stderr: () => undefined,
+        },
+      ),
+    ).toEqual(1);
+    const expiredReport = JSON.parse(expiredStdout.join("\n"));
+    expect(expiredReport.ready).toBe(false);
+    expect(expiredReport.incompleteDomains).toContain(
+      "external-system-operation",
+    );
+    expect(expiredReport.gapDetails).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          scope: "domains",
+          id: "external-system-operation",
+          evidenceReferenceGaps: expect.arrayContaining([
+            expect.objectContaining({
+              type: "external-system-proof",
+              blockingFields: expect.arrayContaining(["validUntil"]),
+            }),
+          ]),
+        }),
+      ]),
+    );
+    extensionEntry.evidence[0].validUntil = "2100-01-01T00:00:00.000Z";
+
     extensionEntry.evidence[0].classes.push("gamma");
     await writeTextFile(readinessFile, JSON.stringify(document));
     const invalidStdout: string[] = [];
     const invalidStderr: string[] = [];
     expect(
-      await main(["launch-readiness", "validate", "--file", readinessFile], {
-        stdout: (line) => invalidStdout.push(line),
-        stderr: (line) => invalidStderr.push(line),
-      }),
+      await main(
+        [
+          "launch-readiness",
+          "validate",
+          "--file",
+          readinessFile,
+          "--contribution-file",
+          contributionFile,
+        ],
+        {
+          stdout: (line) => invalidStdout.push(line),
+          stderr: (line) => invalidStderr.push(line),
+        },
+      ),
     ).toEqual(1);
     expect([...invalidStdout, ...invalidStderr].join("\n")).toContain(
       "evidence fields: external-system-proof(classes)",
@@ -2117,6 +2230,8 @@ test("launch-readiness composes an extension contribution through template, vali
         "public-summary",
         "--file",
         readinessFile,
+        "--contribution-file",
+        contributionFile,
         "--evidence-ref",
         "vault://readiness/operator-extension",
         "--public-summary",
@@ -2137,12 +2252,188 @@ test("launch-readiness composes an extension contribution through template, vali
   }
 });
 
+test("launch-readiness requires trusted contribution content for validation and public summaries", async () => {
+  const contributionFile = await makeTempFile({ suffix: ".json" });
+  const readinessFile = await makeTempFile({ suffix: ".json" });
+  const summaryFile = await makeTempFile({ suffix: ".json" });
+  const contribution = {
+    kind: "takosumi.platform-readiness-contribution@v2",
+    id: "operator-trusted-profile",
+    version: "1.9.0",
+    capability: "operator.trusted-profile.v1",
+    domains: [
+      {
+        id: "trusted-external-operation",
+        requiredEvidenceTypes: ["trusted-external-proof"],
+      },
+    ],
+    evidenceSchemas: {
+      "trusted-external-proof": { fields: ["proofId"] },
+    },
+  };
+  const claimedIdentityOnly = {
+    kind: contribution.kind,
+    id: contribution.id,
+    version: contribution.version,
+    capability: contribution.capability,
+  };
+  await writeTextFile(contributionFile, JSON.stringify(contribution));
+
+  const document = await platformReadinessTemplateForTest();
+  const rehearsalRun = completeRehearsalRun();
+  document.rehearsalRun = rehearsalRun;
+  document.domains = document.domains.map((entry) =>
+    completePlatformReadinessEntry(entry),
+  );
+  document.rehearsal = document.rehearsal.map((entry) =>
+    completePlatformReadinessEntry(entry, rehearsalRun.id),
+  );
+  document.contributions = [claimedIdentityOnly];
+  const evidenceDigest = await writePlatformReadinessForTest(
+    readinessFile,
+    document,
+  );
+
+  try {
+    const untrustedValidateStdout: string[] = [];
+    expect(
+      await main(
+        ["launch-readiness", "validate", "--file", readinessFile, "--json"],
+        {
+          stdout: (line) => untrustedValidateStdout.push(line),
+          stderr: () => undefined,
+        },
+      ),
+    ).toEqual(1);
+    expect(
+      JSON.parse(untrustedValidateStdout.join("\n")).errors,
+    ).toContain(
+      "readiness document contributions require trusted --contribution-file input",
+    );
+
+    const trustedValidateStdout: string[] = [];
+    expect(
+      await main(
+        [
+          "launch-readiness",
+          "validate",
+          "--file",
+          readinessFile,
+          "--contribution-file",
+          contributionFile,
+          "--json",
+        ],
+        {
+          stdout: (line) => trustedValidateStdout.push(line),
+          stderr: () => undefined,
+        },
+      ),
+    ).toEqual(1);
+    const trustedReport = JSON.parse(trustedValidateStdout.join("\n"));
+    expect(trustedReport.errors).toContain(
+      "readiness document contribution operator-trusted-profile@1.9.0 does not exactly match trusted contribution content",
+    );
+    expect(trustedReport.requiredDomainIds).toContain(
+      "trusted-external-operation",
+    );
+    expect(trustedReport.missingDomains).toContain(
+      "trusted-external-operation",
+    );
+
+    for (const contributionArgs of [
+      [] as string[],
+      ["--contribution-file", contributionFile],
+    ]) {
+      const stderr: string[] = [];
+      expect(
+        await main(
+          [
+            "launch-readiness",
+            "public-summary",
+            "--file",
+            readinessFile,
+            "--evidence-ref",
+            "vault://readiness/trusted-profile",
+            "--public-summary",
+            "P0 evidence and one staged launch rehearsal passed; operator approval remains separate.",
+            ...contributionArgs,
+          ],
+          {
+            stdout: () => undefined,
+            stderr: (line) => stderr.push(line),
+          },
+        ),
+      ).toEqual(2);
+      expect(stderr.join("\n")).toContain(
+        contributionArgs.length === 0
+          ? "readiness document contributions require trusted --contribution-file input"
+          : "does not exactly match trusted contribution content",
+      );
+    }
+
+    await writeTextFile(
+      summaryFile,
+      JSON.stringify({
+        kind: "takosumi.platform-readiness-public-summary@v2",
+        status: "validator-passed",
+        ready: true,
+        date: "2026-05-12",
+        environment: "staging",
+        rehearsalRun: rehearsalRun.id,
+        profile: { contributions: [claimedIdentityOnly] },
+        validator: {
+          ready: true,
+          evidenceDigest,
+          missingDomains: [],
+          incompleteDomains: [],
+          missingRehearsalSteps: [],
+          incompleteRehearsalSteps: [],
+        },
+        privateEvidenceRefClass: "vault://...",
+        publicResult:
+          "P0 evidence and one staged launch rehearsal passed; operator approval remains separate.",
+        notes: "Platform activation still requires separate operator approval.",
+      }),
+    );
+    const summaryValidateStdout: string[] = [];
+    expect(
+      await main(
+        [
+          "launch-readiness",
+          "public-summary",
+          "validate",
+          "--file",
+          summaryFile,
+          "--readiness-file",
+          readinessFile,
+          "--contribution-file",
+          contributionFile,
+          "--json",
+        ],
+        {
+          stdout: (line) => summaryValidateStdout.push(line),
+          stderr: () => undefined,
+        },
+      ),
+    ).toEqual(1);
+    expect(
+      JSON.parse(summaryValidateStdout.join("\n")).errors,
+    ).toContain(
+      "readiness document contribution operator-trusted-profile@1.9.0 does not exactly match trusted contribution content",
+    );
+  } finally {
+    await removePath(contributionFile);
+    await removePath(readinessFile);
+    await removePath(summaryFile);
+  }
+});
+
 test("launch-readiness rejects contribution definitions that are not self-contained", async () => {
   const contributionFile = await makeTempFile({ suffix: ".json" });
   await writeTextFile(
     contributionFile,
     JSON.stringify({
-      kind: "takosumi.platform-readiness-contribution@v1",
+      kind: "takosumi.platform-readiness-contribution@v2",
       id: "incomplete-operator-extension",
       version: "1.0.0",
       capability: "operator.incomplete-extension.v1",
@@ -2170,6 +2461,163 @@ test("launch-readiness rejects contribution definitions that are not self-contai
     );
   } finally {
     await removePath(contributionFile);
+  }
+});
+
+test("launch-readiness rejects invalid notExpired contribution definitions", async () => {
+  const contributionFile = await makeTempFile({ suffix: ".json" });
+  await writeTextFile(
+    contributionFile,
+    JSON.stringify({
+      kind: "takosumi.platform-readiness-contribution@v2",
+      id: "invalid-expiry-operator-extension",
+      version: "1.0.0",
+      capability: "operator.invalid-expiry-extension.v1",
+      domains: [
+        {
+          id: "external-system-operation",
+          requiredEvidenceTypes: ["invalid-expiry-proof"],
+        },
+      ],
+      evidenceSchemas: {
+        "invalid-expiry-proof": {
+          fields: ["validUntil"],
+          formats: { validUntil: "utc-timestamp" },
+          notExpired: ["undeclaredField"],
+        },
+      },
+    }),
+  );
+
+  try {
+    const stderr: string[] = [];
+    const code = await main(
+      ["launch-readiness", "template", "--contribution-file", contributionFile],
+      {
+        stdout: () => undefined,
+        stderr: (line) => stderr.push(line),
+      },
+    );
+    expect(code).toEqual(2);
+    expect(stderr.join("\n")).toContain(
+      "evidenceSchemas must contain valid evidence schemas",
+    );
+  } finally {
+    await removePath(contributionFile);
+  }
+});
+
+test("launch-readiness rejects ambiguous cross-scope consistency definitions", async () => {
+  const contributionFile = await makeTempFile({ suffix: ".json" });
+  await writeTextFile(
+    contributionFile,
+    JSON.stringify({
+      kind: "takosumi.platform-readiness-contribution@v2",
+      id: "invalid-consistency-operator-extension",
+      version: "1.0.0",
+      capability: "operator.invalid-consistency-extension.v1",
+      domains: [
+        {
+          id: "external-system-operation",
+          requiredEvidenceTypes: ["external-system-proof"],
+        },
+      ],
+      consistentFields: [
+        {
+          field: "cadenceWindowId",
+          evidenceTypes: ["external-system-proof", "unrequired-proof"],
+        },
+      ],
+      evidenceSchemas: {
+        "external-system-proof": { fields: ["cadenceWindowId"] },
+      },
+    }),
+  );
+
+  try {
+    const stderr: string[] = [];
+    const code = await main(
+      ["launch-readiness", "template", "--contribution-file", contributionFile],
+      {
+        stdout: () => undefined,
+        stderr: (line) => stderr.push(line),
+      },
+    );
+    expect(code).toEqual(2);
+    expect(stderr.join("\n")).toContain(
+      "cross-scope consistency rule cadenceWindowId requires exactly one unrequired-proof reference, found 0",
+    );
+  } finally {
+    await removePath(contributionFile);
+  }
+});
+
+test("platform readiness composition rejects consistency fields absent from referenced schemas", () => {
+  expect(() =>
+    composePlatformReadinessDefinition([
+      {
+        kind: "takosumi.platform-readiness-contribution@v2",
+        id: "invalid-composed-consistency-profile",
+        version: "1.0.0",
+        capability: "operator.invalid-composed-consistency.v1",
+        consistentFields: [
+          {
+            field: "validUntil",
+            evidenceTypes: ["dashboard-link", "alert-routing"],
+          },
+        ],
+      },
+    ]),
+  ).toThrow(
+    "platform readiness consistency rule crossScope.validUntil requires dashboard-link.validUntil to be an unconditionally required evidence field",
+  );
+});
+
+test("launch-readiness validate fails an invalid semantic contribution definition", async () => {
+  const contributionFile = await makeTempFile({ suffix: ".json" });
+  const readinessFile = await makeTempFile({ suffix: ".json" });
+  const invalidContribution = {
+    kind: "takosumi.platform-readiness-contribution@v2",
+    id: "invalid-composed-consistency-profile",
+    version: "1.0.0",
+    capability: "operator.invalid-composed-consistency.v1",
+    consistentFields: [
+      {
+        field: "validUntil",
+        evidenceTypes: ["dashboard-link", "alert-routing"],
+      },
+    ],
+  };
+  const document = await platformReadinessTemplateForTest();
+  document.contributions = [invalidContribution];
+  await writeTextFile(contributionFile, JSON.stringify(invalidContribution));
+  await writeTextFile(readinessFile, JSON.stringify(document));
+
+  try {
+    const stdout: string[] = [];
+    expect(
+      await main(
+        [
+          "launch-readiness",
+          "validate",
+          "--file",
+          readinessFile,
+          "--contribution-file",
+          contributionFile,
+          "--json",
+        ],
+        {
+          stdout: (line) => stdout.push(line),
+          stderr: () => undefined,
+        },
+      ),
+    ).toEqual(1);
+    expect(JSON.parse(stdout.join("\n")).errors).toContain(
+      "platform readiness consistency rule crossScope.validUntil requires dashboard-link.validUntil to be an unconditionally required evidence field",
+    );
+  } finally {
+    await removePath(contributionFile);
+    await removePath(readinessFile);
   }
 });
 
@@ -2753,7 +3201,7 @@ test("launch-readiness migrate-final-model reconciles replacement contribution e
   const out = await makeTempFile({ suffix: ".json" });
   const contributionFile = await makeTempFile({ suffix: ".json" });
   const oldContribution = {
-    kind: "takosumi.platform-readiness-contribution@v1",
+    kind: "takosumi.platform-readiness-contribution@v2",
     id: "example-hosted-readiness",
     version: "1.0.0",
     capability: "example.hosted-readiness.v1",

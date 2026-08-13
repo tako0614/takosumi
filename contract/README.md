@@ -71,8 +71,11 @@ edition requirements use the public, versioned
 `PlatformReadinessContribution` contract. A contribution declares requirement
 groups, evidence schemas, consistency rules, and redaction patterns as data;
 the generic validator composes them through a duplicate-rejecting registry and
-embeds the selected definitions in the readiness document. Extension code is
-not a second validation authority, and absent contributions add no requirements.
+embeds a copy of the selected definitions in the readiness document. Validation
+still requires the owner-controlled canonical contribution input and compares
+that copy exactly; a document cannot grant itself a weaker profile by retaining
+only an id/version claim. Extension code is not a second validation authority,
+and absent trusted contributions add no requirements.
 Optional `collectionClassHints` only maps contribution-owned evidence types to
 the fixed generic collector classes; it cannot define a new collector DSL or
 attach host vocabulary to the OSS baseline.

@@ -2,6 +2,7 @@ import {
   createPlatformReadinessContributionRegistry,
   isPlatformReadinessContribution,
   platformReadinessContributionErrors,
+  platformReadinessEvidenceSchemaRequiresField,
   type PlatformReadinessContribution,
   type PlatformReadinessConsistencyRule,
   type PlatformReadinessEvidenceSchema,
@@ -14,6 +15,7 @@ import {
   platformReadinessStructuredEvidenceRules,
   platformReadinessStructuredEvidenceRequirements,
 } from "./cli-platform-readiness-constants.ts";
+import { canonicalJson } from "./cli-util.ts";
 
 export interface PlatformReadinessDefinition {
   readonly contributions: readonly PlatformReadinessContribution[];
@@ -33,6 +35,7 @@ export interface PlatformReadinessDefinition {
     readonly rehearsal: Readonly<
       Record<string, readonly PlatformReadinessConsistencyRule[]>
     >;
+    readonly crossScope: readonly PlatformReadinessConsistencyRule[];
   };
   readonly forbiddenSummaryPatterns: readonly string[];
   readonly collectionClassHints: Readonly<Record<string, readonly string[]>>;
@@ -80,6 +83,7 @@ export function composePlatformReadinessDefinition(
     string,
     PlatformReadinessConsistencyRule[]
   > = cloneConsistencyRules(platformReadinessConsistencyRules.rehearsal);
+  const crossScopeConsistency: PlatformReadinessConsistencyRule[] = [];
 
   for (const contribution of registry.contributions) {
     mergeGroups(
@@ -93,6 +97,10 @@ export function composePlatformReadinessDefinition(
       rehearsal,
       rehearsalConsistency,
       contribution.rehearsalSteps ?? [],
+    );
+    mergeCrossScopeConsistency(
+      crossScopeConsistency,
+      contribution.consistentFields ?? [],
     );
     for (const [type, schema] of Object.entries(
       contribution.evidenceSchemas ?? {},
@@ -133,6 +141,22 @@ export function composePlatformReadinessDefinition(
       }
     }
   }
+  validateCrossScopeConsistencyRules(
+    crossScopeConsistency,
+    domains,
+    rehearsal,
+    evidenceSchemas,
+  );
+  validateConsistencyRuleSchemaFields(
+    domainConsistency,
+    "domains",
+    evidenceSchemas,
+  );
+  validateConsistencyRuleSchemaFields(
+    rehearsalConsistency,
+    "rehearsal",
+    evidenceSchemas,
+  );
 
   return {
     contributions: registry.contributions,
@@ -143,6 +167,7 @@ export function composePlatformReadinessDefinition(
     consistencyRules: {
       domains: domainConsistency,
       rehearsal: rehearsalConsistency,
+      crossScope: crossScopeConsistency,
     },
     forbiddenSummaryPatterns,
     collectionClassHints,
@@ -180,27 +205,165 @@ export function readinessContributionsFromDocument(document: unknown): {
   return { contributions, errors };
 }
 
-export function platformReadinessDefinitionFromDocument(document: unknown): {
+export function platformReadinessDefinitionFromDocument(
+  document: unknown,
+  trustedContributions: readonly PlatformReadinessContribution[] = [],
+): {
   readonly definition: PlatformReadinessDefinition;
   readonly errors: readonly string[];
 } {
-  const result = readinessContributionsFromDocument(document);
-  if (result.errors.length > 0) {
-    return {
-      definition: OSS_PLATFORM_READINESS_DEFINITION,
-      errors: result.errors,
-    };
-  }
+  const embedded = readinessContributionsFromDocument(document);
+  let definition: PlatformReadinessDefinition;
   try {
-    return {
-      definition: composePlatformReadinessDefinition(result.contributions),
-      errors: [],
-    };
+    definition = composePlatformReadinessDefinition(trustedContributions);
   } catch (error) {
     return {
       definition: OSS_PLATFORM_READINESS_DEFINITION,
       errors: [error instanceof Error ? error.message : String(error)],
     };
+  }
+
+  const errors = [...embedded.errors];
+  if (embedded.errors.length === 0) {
+    try {
+      createPlatformReadinessContributionRegistry(embedded.contributions);
+    } catch (error) {
+      errors.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+  if (embedded.contributions.length > 0 && trustedContributions.length === 0) {
+    errors.push(
+      "readiness document contributions require trusted --contribution-file input",
+    );
+    return { definition, errors };
+  }
+
+  const embeddedById = new Map(
+    embedded.contributions.map((contribution) => [contribution.id, contribution]),
+  );
+  const trustedById = new Map(
+    trustedContributions.map((contribution) => [contribution.id, contribution]),
+  );
+  for (const contribution of embedded.contributions) {
+    const trusted = trustedById.get(contribution.id);
+    if (!trusted) {
+      errors.push(
+        `readiness document contribution ${contribution.id}@${contribution.version} has no trusted contribution input`,
+      );
+      continue;
+    }
+    if (canonicalJson(contribution) !== canonicalJson(trusted)) {
+      errors.push(
+        `readiness document contribution ${contribution.id}@${contribution.version} does not exactly match trusted contribution content`,
+      );
+    }
+  }
+  for (const contribution of trustedContributions) {
+    if (!embeddedById.has(contribution.id)) {
+      errors.push(
+        `readiness document is missing trusted contribution ${contribution.id}@${contribution.version}`,
+      );
+    }
+  }
+  return { definition, errors };
+}
+
+function mergeCrossScopeConsistency(
+  target: PlatformReadinessConsistencyRule[],
+  rules: readonly PlatformReadinessConsistencyRule[],
+): void {
+  for (const rule of rules) {
+    const key = `${rule.field}:${[...rule.evidenceTypes].sort().join(",")}`;
+    if (
+      !target.some(
+        (existing) =>
+          `${existing.field}:${[...existing.evidenceTypes].sort().join(",")}` ===
+          key,
+      )
+    ) {
+      target.push({
+        field: rule.field,
+        evidenceTypes: [...rule.evidenceTypes],
+      });
+    }
+  }
+}
+
+function validateCrossScopeConsistencyRules(
+  rules: readonly PlatformReadinessConsistencyRule[],
+  domains: Readonly<Record<string, readonly string[]>>,
+  rehearsal: Readonly<Record<string, readonly string[]>>,
+  evidenceSchemas: Readonly<
+    Record<string, PlatformReadinessEvidenceSchema>
+  >,
+): void {
+  const occurrenceCounts = new Map<string, number>();
+  for (const requirements of [domains, rehearsal]) {
+    for (const types of Object.values(requirements)) {
+      for (const type of types) {
+        occurrenceCounts.set(type, (occurrenceCounts.get(type) ?? 0) + 1);
+      }
+    }
+  }
+  for (const rule of rules) {
+    if (rule.evidenceTypes.length < 2) {
+      throw new TypeError(
+        `platform readiness cross-scope consistency rule ${rule.field} must reference at least two evidence types`,
+      );
+    }
+    for (const type of rule.evidenceTypes) {
+      const count = occurrenceCounts.get(type) ?? 0;
+      if (count !== 1) {
+        throw new TypeError(
+          `platform readiness cross-scope consistency rule ${rule.field} requires exactly one ${type} reference, found ${count}`,
+        );
+      }
+    }
+    validateConsistencyRuleSchemaField(
+      rule,
+      "crossScope",
+      evidenceSchemas,
+    );
+  }
+}
+
+function validateConsistencyRuleSchemaFields(
+  rulesByGroup: Readonly<
+    Record<string, readonly PlatformReadinessConsistencyRule[]>
+  >,
+  scope: "domains" | "rehearsal",
+  evidenceSchemas: Readonly<
+    Record<string, PlatformReadinessEvidenceSchema>
+  >,
+): void {
+  for (const [id, rules] of Object.entries(rulesByGroup)) {
+    for (const rule of rules) {
+      validateConsistencyRuleSchemaField(
+        rule,
+        `${scope}.${id}`,
+        evidenceSchemas,
+      );
+    }
+  }
+}
+
+function validateConsistencyRuleSchemaField(
+  rule: PlatformReadinessConsistencyRule,
+  scope: string,
+  evidenceSchemas: Readonly<
+    Record<string, PlatformReadinessEvidenceSchema>
+  >,
+): void {
+  for (const type of rule.evidenceTypes) {
+    const schema = evidenceSchemas[type];
+    if (
+      schema &&
+      !platformReadinessEvidenceSchemaRequiresField(schema, rule.field)
+    ) {
+      throw new TypeError(
+        `platform readiness consistency rule ${scope}.${rule.field} requires ${type}.${rule.field} to be an unconditionally required evidence field`,
+      );
+    }
   }
 }
 
@@ -323,6 +486,7 @@ function cloneSchema(
       ? { distinctFields: schema.distinctFields.map((group) => [...group]) }
       : {}),
     ...(schema.after ? { after: { ...schema.after } } : {}),
+    ...(schema.notExpired ? { notExpired: [...schema.notExpired] } : {}),
   };
 }
 
@@ -377,6 +541,10 @@ function mergeSchema(
     contribution.after,
     `${type}.after`,
   );
+  const notExpired = unique([
+    ...(baseline.notExpired ?? []),
+    ...(contribution.notExpired ?? []),
+  ]);
   const allowedValues: Record<string, readonly string[]> = {
     ...(baseline.allowedValues ?? {}),
   };
@@ -416,6 +584,7 @@ function mergeSchema(
     ...(Object.keys(exactItems).length > 0 ? { exactItems } : {}),
     ...(distinctFields.length > 0 ? { distinctFields } : {}),
     ...(Object.keys(after).length > 0 ? { after } : {}),
+    ...(notExpired.length > 0 ? { notExpired } : {}),
   };
 }
 

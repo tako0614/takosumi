@@ -2,11 +2,12 @@ import { expect, test } from "bun:test";
 import {
   createPlatformReadinessContributionRegistry,
   isPlatformReadinessContribution,
+  platformReadinessContributionErrors,
   platformReadinessEvidenceSchemaErrors,
 } from "../../contract/platform-readiness.ts";
 
 const contribution = {
-  kind: "takosumi.platform-readiness-contribution@v1",
+  kind: "takosumi.platform-readiness-contribution@v2",
   id: "example-operator-readiness",
   version: "1.2.0",
   capability: "example.operator-readiness.v1",
@@ -47,6 +48,61 @@ test("readiness contributions are versioned and registry selected", () => {
     isPlatformReadinessContribution({
       ...contribution,
       evidenceSchemas: { "external-operation-proof": [] },
+    }),
+  ).toBe(false);
+  expect(
+    isPlatformReadinessContribution({
+      ...contribution,
+      evidenceSchemas: {
+        "external-operation-proof": {
+          fields: ["validUntil"],
+          formats: { validUntil: "utc-timestamp" },
+          notExpired: ["undeclaredField"],
+        },
+      },
+    }),
+  ).toBe(false);
+  expect(
+    isPlatformReadinessContribution({
+      ...contribution,
+      evidenceSchemas: {
+        "external-operation-proof": {
+          fields: ["validUntil"],
+          formats: { validUntil: "utc-timestamp" },
+          notExpired: ["validUntil", "validUntil"],
+        },
+      },
+    }),
+  ).toBe(false);
+  expect(
+    isPlatformReadinessContribution({
+      ...contribution,
+      evidenceSchemas: {
+        "external-operation-proof": {
+          fields: ["validUntil"],
+          notExpired: ["validUntil"],
+        },
+      },
+    }),
+  ).toBe(false);
+  expect(
+    isPlatformReadinessContribution({
+      ...contribution,
+      kind: "takosumi.platform-readiness-contribution@v1",
+    }),
+  ).toBe(false);
+  expect(
+    isPlatformReadinessContribution({
+      ...contribution,
+      consistentFields: [
+        {
+          field: "proofId",
+          evidenceTypes: [
+            "external-operation-proof",
+            "external-operation-proof",
+          ],
+        },
+      ],
     }),
   ).toBe(false);
   expect(
@@ -104,6 +160,122 @@ test("readiness contributions are versioned and registry selected", () => {
       { ...contribution, version: "1.3.0" },
     ]),
   ).toThrow("contribution id is duplicated");
+});
+
+test("readiness contribution definitions reject unknown keys at every closed shape", () => {
+  const cases = [
+    {
+      value: { ...contribution, consistentField: [] },
+      error: "contribution.consistentField is not allowed",
+    },
+    {
+      value: {
+        ...contribution,
+        domains: [
+          {
+            ...contribution.domains[0],
+            consistentField: [],
+          },
+        ],
+      },
+      error: "contribution.domains[0].consistentField is not allowed",
+    },
+    {
+      value: {
+        ...contribution,
+        consistentFields: [
+          {
+            field: "proofId",
+            evidenceTypes: ["external-operation-proof", "other-proof"],
+            evidenceType: "other-proof",
+          },
+        ],
+      },
+      error: "contribution.consistentFields[0].evidenceType is not allowed",
+    },
+    {
+      value: {
+        ...contribution,
+        evidenceSchemas: {
+          "external-operation-proof": {
+            fields: ["validUntil"],
+            formats: { validUntil: "utc-timestamp" },
+            notExpire: ["validUntil"],
+          },
+        },
+      },
+      error:
+        "contribution.evidenceSchemas.external-operation-proof.notExpire is not allowed",
+    },
+  ];
+
+  for (const { value, error } of cases) {
+    expect(isPlatformReadinessContribution(value)).toBe(false);
+    expect(platformReadinessContributionErrors(value)).toContain(error);
+  }
+});
+
+test("readiness contribution semantic rules require unconditional schema fields", () => {
+  const optionalExpiry = {
+    ...contribution,
+    evidenceSchemas: {
+      "external-operation-proof": {
+        anyOf: [["validUntil", "fallbackRef"]],
+        formats: { validUntil: "utc-timestamp" },
+        notExpired: ["validUntil"],
+      },
+    },
+  };
+  expect(isPlatformReadinessContribution(optionalExpiry)).toBe(false);
+  expect(platformReadinessContributionErrors(optionalExpiry)).toContain(
+    "contribution.evidenceSchemas must contain valid evidence schemas",
+  );
+  expect(
+    isPlatformReadinessContribution({
+      ...optionalExpiry,
+      evidenceSchemas: {
+        "external-operation-proof": {
+          anyOf: [["validUntil"]],
+          formats: { validUntil: "utc-timestamp" },
+          notExpired: ["validUntil"],
+        },
+      },
+    }),
+  ).toBe(true);
+
+  const misspelledConsistencyField = {
+    ...contribution,
+    domains: [
+      {
+        id: "external-operation",
+        requiredEvidenceTypes: [
+          "external-operation-proof",
+          "external-operation-review",
+        ],
+      },
+    ],
+    consistentFields: [
+      {
+        field: "validUntil",
+        evidenceTypes: [
+          "external-operation-proof",
+          "external-operation-review",
+        ],
+      },
+    ],
+    evidenceSchemas: {
+      "external-operation-proof": { fields: ["validUntil"] },
+      "external-operation-review": { fields: ["validUntill"] },
+    },
+  };
+  expect(isPlatformReadinessContribution(misspelledConsistencyField)).toBe(
+    false,
+  );
+  expect(
+    platformReadinessContributionErrors(misspelledConsistencyField),
+  ).toContain(
+    "contribution.consistentFields[0].field validUntil must be required by contribution.evidenceSchemas.external-operation-review",
+  );
 });
 
 test("contribution evidence schemas validate without extension code", () => {
@@ -208,4 +380,41 @@ test("UTC timestamp format accepts future expiry values without weakening eviden
       { expiresAt: "2100-02-30T00:00:00Z" },
     ),
   ).toEqual(["evidence.expiresAt is not a valid utc-timestamp"]);
+  expect(
+    platformReadinessEvidenceSchemaErrors(
+      { fields: ["expiresAt"], formats: { expiresAt: "utc-timestamp" } },
+      { expiresAt: " 2100-01-01T00:00:00.000Z " },
+    ),
+  ).toEqual(["evidence.expiresAt is not a valid utc-timestamp"]);
+});
+
+test("notExpired is an explicit data-driven evidence semantic", () => {
+  const schema = {
+    fields: ["validUntil"],
+    formats: { validUntil: "utc-timestamp" },
+    notExpired: ["validUntil"],
+  } as const;
+  expect(
+    platformReadinessEvidenceSchemaErrors(
+      schema,
+      { validUntil: "2100-01-01T00:00:00.000Z" },
+      "cadence-evidence",
+    ),
+  ).toEqual([]);
+  expect(
+    platformReadinessEvidenceSchemaErrors(
+      schema,
+      { validUntil: "2000-01-01T00:00:00.000Z" },
+      "cadence-evidence",
+    ),
+  ).toEqual(["cadence-evidence.validUntil must not be expired"]);
+  expect(
+    platformReadinessEvidenceSchemaErrors(
+      schema,
+      { validUntil: " 2000-01-01T00:00:00.000Z " },
+      "cadence-evidence",
+    ),
+  ).toEqual([
+    "cadence-evidence.validUntil is not a valid utc-timestamp",
+  ]);
 });

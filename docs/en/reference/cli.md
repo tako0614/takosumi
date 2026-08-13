@@ -38,14 +38,19 @@ takosumi launch-readiness template \
   --contribution-file <owner-controlled-contribution.json> \
   > readiness.private.json
 
-takosumi launch-readiness validate --file readiness.private.json
+takosumi launch-readiness validate \
+  --file readiness.private.json \
+  --contribution-file <owner-controlled-contribution.json>
 ```
 
 The generated `takosumi.platform-readiness@v2` document embeds the
 contribution's `id`, `version`, and `capability` plus its additional
-requirement/evidence schema. That lets `validate` and the public summary verify
-fail-closed from the document alone, without provider-specific code or an
-external registry lookup. A different contribution version is never implicitly
+requirement/evidence schema. That embedded copy is not authority. `validate`,
+`public-summary`, and `public-summary validate` require the owner-controlled
+`--contribution-file` again whenever a document selects contributions. The
+validator composes the trusted input and fails closed unless the entire embedded
+content matches it exactly, without provider-specific code or an external
+registry lookup. A different contribution version is never implicitly
 treated as the same readiness profile. `validate` never double-interprets a
 legacy baseline ID; an explicit `launch-readiness migrate-final-model` updates
 it exactly once.

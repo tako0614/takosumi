@@ -650,7 +650,7 @@ export const platformReadinessStructuredEvidenceRequirements: Record<
     allowedValues: { result: ["passed"] },
   },
   "signup-event": {
-    fields: ["eventId", "workspaceId"],
+    fields: ["eventId", "accountId", "workspaceId"],
     anyOf: [["accountId", "sessionSubject", "sessionSubjectDigest"]],
   },
   "capsule-created": {

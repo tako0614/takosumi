@@ -77,8 +77,18 @@ export async function runLaunchReadinessValidate(
     return 2;
   }
 
+  let contributions: readonly PlatformReadinessContribution[];
+  try {
+    contributions = await loadPlatformReadinessContributionFile(
+      optionalStringOption(options, "contributionFile"),
+    );
+  } catch (error) {
+    io.stderr(error instanceof Error ? error.message : String(error));
+    return 2;
+  }
+
   const report = {
-    ...validatePlatformReadinessDocument(document),
+    ...validatePlatformReadinessDocument(document, contributions),
     evidenceDigest: await platformReadinessDigest(document),
   };
   if (booleanOption(options, "json")) {
@@ -117,8 +127,18 @@ export async function runLaunchReadinessPublicSummary(
     return 2;
   }
 
+  let contributions: readonly PlatformReadinessContribution[];
+  try {
+    contributions = await loadPlatformReadinessContributionFile(
+      optionalStringOption(options, "contributionFile"),
+    );
+  } catch (error) {
+    io.stderr(error instanceof Error ? error.message : String(error));
+    return 2;
+  }
+
   const report = {
-    ...validatePlatformReadinessDocument(document),
+    ...validatePlatformReadinessDocument(document, contributions),
     evidenceDigest: await platformReadinessDigest(document),
   };
   const evidenceRef = optionalStringOption(options, "evidenceRef");
@@ -141,7 +161,10 @@ export async function runLaunchReadinessPublicSummary(
   const publicSummary =
     optionalStringOption(options, "publicSummary") ??
     defaultPlatformReadinessPublicSummary(report.ready);
-  const definitionResult = platformReadinessDefinitionFromDocument(document);
+  const definitionResult = platformReadinessDefinitionFromDocument(
+    document,
+    contributions,
+  );
   const publicSummaryErrors = [
     ...definitionResult.errors,
     ...platformReadinessPublicSummaryErrors(
@@ -304,14 +327,25 @@ async function runLaunchReadinessPublicSummaryValidate(
     return 2;
   }
 
+  let contributions: readonly PlatformReadinessContribution[];
+  try {
+    contributions = await loadPlatformReadinessContributionFile(
+      optionalStringOption(options, "contributionFile"),
+    );
+  } catch (error) {
+    io.stderr(error instanceof Error ? error.message : String(error));
+    return 2;
+  }
+
   const readinessReport = {
-    ...validatePlatformReadinessDocument(readinessDocument),
+    ...validatePlatformReadinessDocument(readinessDocument, contributions),
     evidenceDigest: await platformReadinessDigest(readinessDocument),
   };
   const report = validatePlatformReadinessPublicSummaryArtifact(
     summary,
     readinessDocument,
     readinessReport,
+    contributions,
   );
   if (booleanOption(options, "json")) {
     io.stdout(JSON.stringify(report, null, 2));

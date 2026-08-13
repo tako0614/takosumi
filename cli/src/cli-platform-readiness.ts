@@ -46,6 +46,7 @@ const orderedUserJourneyRehearsalStepIds = [
 
 export function validatePlatformReadinessDocument(
   document: unknown,
+  trustedContributions: readonly PlatformReadinessContribution[] = [],
 ): PlatformReadinessReport {
   const errors: string[] = [];
   if (!isRecord(document)) {
@@ -72,7 +73,10 @@ export function validatePlatformReadinessDocument(
     errors.push(`kind must be ${platformReadinessKind}`);
   }
 
-  const definitionResult = platformReadinessDefinitionFromDocument(document);
+  const definitionResult = platformReadinessDefinitionFromDocument(
+    document,
+    trustedContributions,
+  );
   errors.push(...definitionResult.errors);
   const definition = definitionResult.definition;
 
@@ -93,6 +97,8 @@ export function validatePlatformReadinessDocument(
     rehearsalRunResult,
     definition,
   );
+  const crossScopeConsistencyErrors =
+    platformReadinessCrossScopeConsistencyErrors(document, definition);
   const gapDetails = [
     ...buildPlatformReadinessGapDetails({
       entries: document.domains,
@@ -119,7 +125,8 @@ export function validatePlatformReadinessDocument(
       rehearsalRunResult.errors.length === 0 &&
       rehearsalResult.missing.length === 0 &&
       rehearsalResult.incomplete.length === 0 &&
-      rehearsalResult.errors.length === 0,
+      rehearsalResult.errors.length === 0 &&
+      crossScopeConsistencyErrors.length === 0,
     contributions: definition.contributions.map(
       ({ id, version, capability }) => ({
         id,
@@ -145,6 +152,7 @@ export function validatePlatformReadinessDocument(
       ...domainResult.errors,
       ...rehearsalRunResult.errors,
       ...rehearsalResult.errors,
+      ...crossScopeConsistencyErrors,
     ],
   };
   return report;
@@ -1476,6 +1484,51 @@ function evidenceReferencesByType(
   return references;
 }
 
+function platformReadinessCrossScopeConsistencyErrors(
+  document: Record<string, unknown>,
+  definition: PlatformReadinessDefinition,
+): string[] {
+  const references = new Map<string, Record<string, unknown>[]>();
+  for (const scope of [document.domains, document.rehearsal]) {
+    if (!Array.isArray(scope)) continue;
+    for (const entry of scope) {
+      if (!isRecord(entry) || !Array.isArray(entry.evidence)) continue;
+      for (const reference of entry.evidence) {
+        if (!isRecord(reference)) continue;
+        const type = stringValue(reference.type)?.trim();
+        if (!type) continue;
+        const existing = references.get(type) ?? [];
+        existing.push(reference);
+        references.set(type, existing);
+      }
+    }
+  }
+
+  const errors: string[] = [];
+  for (const rule of definition.consistencyRules.crossScope) {
+    const values: string[] = [];
+    let comparable = true;
+    for (const type of rule.evidenceTypes) {
+      const candidates = references.get(type) ?? [];
+      const value =
+        candidates.length === 1
+          ? stringValue(candidates[0]?.[rule.field])
+          : undefined;
+      if (!value) {
+        comparable = false;
+        break;
+      }
+      values.push(value);
+    }
+    if (comparable && new Set(values).size !== 1) {
+      errors.push(
+        `evidence.${rule.field} must be consistent across ${rule.evidenceTypes.join(", ")}`,
+      );
+    }
+  }
+  return errors;
+}
+
 function sameEvidenceField(
   evidenceByType: Map<string, Record<string, unknown>>,
   types: readonly string[],
@@ -1634,10 +1687,13 @@ export function validatePlatformReadinessPublicSummaryArtifact(
   summary: unknown,
   readinessDocument: unknown,
   readinessReport: PlatformReadinessReport & { evidenceDigest: string },
+  trustedContributions: readonly PlatformReadinessContribution[] = [],
 ): Record<string, unknown> & { valid: boolean; errors: string[] } {
   const errors: string[] = [];
-  const definitionResult =
-    platformReadinessDefinitionFromDocument(readinessDocument);
+  const definitionResult = platformReadinessDefinitionFromDocument(
+    readinessDocument,
+    trustedContributions,
+  );
   const definition = definitionResult.definition;
   errors.push(...definitionResult.errors);
   if (!isRecord(summary)) {
