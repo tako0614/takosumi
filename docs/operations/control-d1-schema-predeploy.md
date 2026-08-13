@@ -219,6 +219,35 @@ incident/restore procedure, not ad hoc SQL. Run staging functional checks
 before repeating backup, apply, and verify with `--environment production` and
 the same manifest digest.
 
+### Forward-repair release for an older fence source
+
+If an active or inactive in-place fence was created by an older clean OSS
+commit, a reviewed repair may release that exact fence from a newer clean
+checkout without rerunning schema work:
+
+```bash
+export TAKOSUMI_CONTROL_D1_SOURCE_COMMIT="$(git rev-parse HEAD)"
+
+bun run control-d1-schema:release -- \
+  --environment staging \
+  --confirm-manifest "$control_manifest_digest" \
+  --confirm-fence-source-commit <older-40-hex-commit> \
+  > "$PRIVATE_EVIDENCE_DIR/control-d1-forward-repair-release.json"
+```
+
+The repair checkout must be clean and its actual `HEAD` must equal
+`TAKOSUMI_CONTROL_D1_SOURCE_COMMIT`; the confirmation does not override that
+source check. The current checkout builds the exact current manifest, while
+`--confirm-fence-source-commit` identifies the older fence source only. The
+release command matches the active fence or durable inactive receipt against
+that source, the current manifest, selected environment, and selected
+database, then uses the existing atomic guard predicate and release readback.
+It is accepted only by `release`, never applies a schema or migration, and
+fails closed on any source, manifest, environment, database, or fence mismatch.
+The transcript's `sourceCommit` is the current repair checkout and
+`confirmedFenceSourceCommit` is the separately confirmed older fence source;
+no provider credentials or raw provider response is emitted.
+
 Schema migration is forward-only. A Worker rollback must remain compatible
 with the migrated schema; use a reviewed forward repair or an approved D1
 restore rather than ad hoc down-migration SQL.

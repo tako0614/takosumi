@@ -3417,6 +3417,290 @@ test("control D1 CLI release rejects a substituted retained fence", async () => 
   }
 });
 
+test("control D1 CLI forward-repair release binds the current checkout to an older fence source", async () => {
+  const plan = await buildControlD1SchemaPlan();
+  const database = new SqliteControlD1Database();
+  try {
+    await ensureD1OpenTofuLedgerSchema(database);
+    const predecessorFence = await acquireControlD1MaintenanceFence(
+      database,
+      {
+        sourceCommit: PREDECESSOR_SOURCE_COMMIT,
+        manifestDigest: plan.manifestDigest,
+        environment: "staging",
+        databaseRole: "in_place",
+        releasePolicy: "in_place",
+        databaseId: "database_staging",
+      },
+      NOW,
+    );
+    const dependencies = {
+      sourceCommit: SOURCE_COMMIT,
+      inspectSourceCheckout: async () => ({
+        head: SOURCE_COMMIT,
+        clean: true,
+      }),
+      createRemoteDatabase: () => ({
+        database,
+        configurationDigest: `sha256:${"1".repeat(64)}`,
+        databaseId: "database_staging",
+      }),
+    };
+    const releaseArgs = [
+      "release",
+      "--environment",
+      "staging",
+      "--confirm-manifest",
+      plan.manifestDigest,
+      "--confirm-fence-source-commit",
+      PREDECESSOR_SOURCE_COMMIT,
+    ];
+    const output: string[] = [];
+    const code = await runControlD1SchemaCli(
+      releaseArgs,
+      {},
+      (value) => output.push(value),
+      { ...dependencies, now: () => "2026-08-05T12:00:05.000Z" },
+    );
+    expect(code).toBe(0);
+    expect(JSON.parse(output.at(-1) ?? "{}")).toMatchObject({
+      mode: "release",
+      status: "released",
+      sourceCommit: SOURCE_COMMIT,
+      confirmedFenceSourceCommit: PREDECESSOR_SOURCE_COMMIT,
+      maintenanceStatus: "released",
+      maintenanceFence: {
+        fenceId: predecessorFence.fenceId,
+        sourceCommit: PREDECESSOR_SOURCE_COMMIT,
+        manifestDigest: plan.manifestDigest,
+        environment: "staging",
+        databaseRole: "in_place",
+        releasePolicy: "in_place",
+        databaseId: "database_staging",
+      },
+    });
+    expect(await readControlD1MaintenanceState(database)).toEqual({
+      status: "inactive",
+    });
+
+    const retryOutput: string[] = [];
+    const retryCode = await runControlD1SchemaCli(
+      releaseArgs,
+      {},
+      (value) => retryOutput.push(value),
+      { ...dependencies, now: () => "2026-08-05T12:00:10.000Z" },
+    );
+    expect(retryCode).toBe(0);
+    expect(JSON.parse(retryOutput.at(-1) ?? "{}")).toMatchObject({
+      mode: "release",
+      status: "released",
+      sourceCommit: SOURCE_COMMIT,
+      confirmedFenceSourceCommit: PREDECESSOR_SOURCE_COMMIT,
+      maintenanceFence: { fenceId: predecessorFence.fenceId },
+    });
+  } finally {
+    database.close();
+  }
+});
+
+test("control D1 CLI forward-repair release rejects source, manifest, environment, and database mismatches", async () => {
+  const plan = await buildControlD1SchemaPlan();
+  const cases = [
+    {
+      name: "source",
+      flagSource: SOURCE_COMMIT,
+      manifest: plan.manifestDigest,
+      environment: "staging" as const,
+      databaseId: "database_staging",
+      expected: "maintenance_fence_release_mismatch",
+    },
+    {
+      name: "environment",
+      flagSource: PREDECESSOR_SOURCE_COMMIT,
+      manifest: plan.manifestDigest,
+      environment: "production" as const,
+      databaseId: "database_staging",
+      expected: "maintenance_fence_release_mismatch",
+    },
+    {
+      name: "database",
+      flagSource: PREDECESSOR_SOURCE_COMMIT,
+      manifest: plan.manifestDigest,
+      environment: "staging" as const,
+      databaseId: "database_other",
+      expected: "maintenance_fence_release_mismatch",
+    },
+    {
+      name: "manifest",
+      flagSource: PREDECESSOR_SOURCE_COMMIT,
+      manifest: `sha256:${"0".repeat(64)}`,
+      environment: "staging" as const,
+      databaseId: "database_staging",
+      expected: "manifest_confirmation_required",
+    },
+  ] as const;
+  for (const current of cases) {
+    const database = new SqliteControlD1Database();
+    try {
+      await ensureD1OpenTofuLedgerSchema(database);
+      await acquireControlD1MaintenanceFence(
+        database,
+        {
+          sourceCommit: PREDECESSOR_SOURCE_COMMIT,
+          manifestDigest: plan.manifestDigest,
+          environment: "staging",
+          databaseRole: "in_place",
+          releasePolicy: "in_place",
+          databaseId: "database_staging",
+        },
+        NOW,
+      );
+      const output: string[] = [];
+      const code = await runControlD1SchemaCli(
+        [
+          "release",
+          "--environment",
+          current.environment,
+          "--confirm-manifest",
+          current.manifest,
+          "--confirm-fence-source-commit",
+          current.flagSource,
+        ],
+        {},
+        (value) => output.push(value),
+        {
+          sourceCommit: SOURCE_COMMIT,
+          now: () => "2026-08-05T12:00:05.000Z",
+          inspectSourceCheckout: async () => ({
+            head: SOURCE_COMMIT,
+            clean: true,
+          }),
+          createRemoteDatabase: () => ({
+            database,
+            configurationDigest: `sha256:${"1".repeat(64)}`,
+            databaseId: current.databaseId,
+          }),
+        },
+      );
+      expect(code, current.name).toBe(1);
+      expect(JSON.parse(output.at(-1) ?? "{}")).toMatchObject({
+        mode: "release",
+        status: "failed",
+        failureCode: current.expected,
+        sourceCommit: SOURCE_COMMIT,
+        confirmedFenceSourceCommit: current.flagSource,
+      });
+      expect((await readControlD1MaintenanceState(database)).status).toBe(
+        "active",
+      );
+    } finally {
+      database.close();
+    }
+  }
+});
+
+test("control D1 CLI fence-source confirmation is release-only and exact", async () => {
+  for (const argv of [
+    ["release", "--confirm-fence-source-commit"],
+    ["release", "--confirm-fence-source-commit", "not-a-commit"],
+    [
+      "verify",
+      "--confirm-fence-source-commit",
+      PREDECESSOR_SOURCE_COMMIT,
+    ],
+    [
+      "apply",
+      "--confirm-fence-source-commit",
+      PREDECESSOR_SOURCE_COMMIT,
+    ],
+    [
+      "candidate-release",
+      "--confirm-fence-source-commit",
+      PREDECESSOR_SOURCE_COMMIT,
+    ],
+  ]) {
+    const output: string[] = [];
+    const code = await runControlD1SchemaCli(
+      argv,
+      {},
+      (value) => output.push(value),
+      { sourceCommit: SOURCE_COMMIT, now: () => NOW },
+    );
+    expect(code).toBe(1);
+    expect(JSON.parse(output.at(-1) ?? "{}")).toMatchObject({
+      status: "failed",
+      failureCode: "arguments_invalid",
+    });
+  }
+});
+
+test("control D1 CLI forward-repair release still requires the current clean checkout", async () => {
+  const plan = await buildControlD1SchemaPlan();
+  for (const checkout of [
+    { head: PREDECESSOR_SOURCE_COMMIT, clean: true, expected: "source_commit_mismatch" },
+    { head: SOURCE_COMMIT, clean: false, expected: "source_checkout_dirty" },
+  ] as const) {
+    const database = new SqliteControlD1Database();
+    let remoteCalls = 0;
+    try {
+      await ensureD1OpenTofuLedgerSchema(database);
+      await acquireControlD1MaintenanceFence(
+        database,
+        {
+          sourceCommit: PREDECESSOR_SOURCE_COMMIT,
+          manifestDigest: plan.manifestDigest,
+          environment: "staging",
+          databaseRole: "in_place",
+          releasePolicy: "in_place",
+          databaseId: "database_staging",
+        },
+        NOW,
+      );
+      const output: string[] = [];
+      const code = await runControlD1SchemaCli(
+        [
+          "release",
+          "--environment",
+          "staging",
+          "--confirm-manifest",
+          plan.manifestDigest,
+          "--confirm-fence-source-commit",
+          PREDECESSOR_SOURCE_COMMIT,
+        ],
+        {},
+        (value) => output.push(value),
+        {
+          sourceCommit: SOURCE_COMMIT,
+          now: () => NOW,
+          inspectSourceCheckout: async () => checkout,
+          createRemoteDatabase: () => {
+            remoteCalls += 1;
+            return {
+              database,
+              configurationDigest: `sha256:${"1".repeat(64)}`,
+              databaseId: "database_staging",
+            };
+          },
+        },
+      );
+      expect(code).toBe(1);
+      expect(remoteCalls).toBe(0);
+      expect(JSON.parse(output.at(-1) ?? "{}")).toMatchObject({
+        mode: "release",
+        status: "failed",
+        failureCode: checkout.expected,
+        sourceCommit: SOURCE_COMMIT,
+        confirmedFenceSourceCommit: PREDECESSOR_SOURCE_COMMIT,
+      });
+      expect((await readControlD1MaintenanceState(database)).status).toBe(
+        "active",
+      );
+    } finally {
+      database.close();
+    }
+  }
+});
+
 test("control D1 CLI apply requires exact manifest confirmation", async () => {
   const output: string[] = [];
   const code = await runControlD1SchemaCli(

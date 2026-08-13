@@ -56,6 +56,7 @@ interface ParsedArgs {
   readonly confirmFenceDigest?: string;
   readonly confirmReleaseReadinessDigest?: string;
   readonly releasedAt?: string;
+  readonly confirmFenceSourceCommit?: string;
   readonly dryRun: boolean;
   readonly retainMaintenanceFence: boolean;
   readonly confirmPredecessorSource?: string;
@@ -397,6 +398,8 @@ export async function runControlD1SchemaCli(
     }
 
     if (args.command === "release") {
+      const expectedFenceSourceCommit =
+        args.confirmFenceSourceCommit ?? provenance.sourceCommit;
       const state = await readControlD1MaintenanceState(remote.database);
       const fence =
         state.status === "active"
@@ -404,7 +407,7 @@ export async function runControlD1SchemaCli(
           : await readControlD1MaintenanceReleaseReceipt(remote.database);
       if (
         !fenceMatchesRelease(fence, {
-          sourceCommit: provenance.sourceCommit,
+          sourceCommit: expectedFenceSourceCommit,
           manifestDigest: plan.manifestDigest,
           environment: args.environment,
           databaseId: remote.databaseId ?? null,
@@ -423,6 +426,22 @@ export async function runControlD1SchemaCli(
       if (released.status !== "inactive") {
         throw new ControlD1SchemaError("maintenance_fence_release_failed");
       }
+      if (args.confirmFenceSourceCommit) {
+        const releasedFence = await readControlD1MaintenanceReleaseReceipt(
+          remote.database,
+        );
+        if (
+          !fenceMatchesRelease(releasedFence, {
+            sourceCommit: expectedFenceSourceCommit,
+            manifestDigest: plan.manifestDigest,
+            environment: args.environment,
+            databaseId: remote.databaseId ?? null,
+          }) ||
+          releasedFence?.fenceId !== fence?.fenceId
+        ) {
+          throw new ControlD1SchemaError("maintenance_fence_release_failed");
+        }
+      }
       write(
         JSON.stringify(
           {
@@ -432,6 +451,11 @@ export async function runControlD1SchemaCli(
             status: "released",
             dryRun: false,
             ...provenance,
+            ...(args.confirmFenceSourceCommit
+              ? {
+                  confirmedFenceSourceCommit: args.confirmFenceSourceCommit,
+                }
+              : {}),
             ...planSummary(plan),
             configurationDigest: remote.configurationDigest,
             maintenanceFence: fence,
@@ -773,6 +797,9 @@ function failureTranscript(
       dryRun: args?.dryRun ?? false,
       failureCode,
       ...(provenance ?? {}),
+      ...(args?.confirmFenceSourceCommit
+        ? { confirmedFenceSourceCommit: args.confirmFenceSourceCommit }
+        : {}),
       ...(plan ? planSummary(plan) : {}),
       ...(maintenanceFenceTransition ? { maintenanceFenceTransition } : {}),
     },
@@ -880,6 +907,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   let confirmFenceDigest: string | undefined;
   let confirmReleaseReadinessDigest: string | undefined;
   let releasedAt: string | undefined;
+  let confirmFenceSourceCommit: string | undefined;
   let dryRun = false;
   let retainMaintenanceFence = false;
   let confirmPredecessorSource: string | undefined;
@@ -946,6 +974,13 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
       if (!releasedAt) throw new Error("candidate_release_time_invalid");
       continue;
     }
+    if (arg === "--confirm-fence-source-commit") {
+      confirmFenceSourceCommit = argv[++index]?.trim();
+      if (!/^[0-9a-f]{40}$/u.test(confirmFenceSourceCommit ?? "")) {
+        throw new Error("fence_source_commit_invalid");
+      }
+      continue;
+    }
     if (arg === "--dry-run") {
       dryRun = true;
       continue;
@@ -973,6 +1008,9 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   if (command !== "apply" && dryRun) throw new Error("dry_run_invalid");
   if (command !== "apply" && retainMaintenanceFence) {
     throw new Error("retain_fence_invalid");
+  }
+  if (command !== "release" && confirmFenceSourceCommit) {
+    throw new Error("fence_source_confirmation_invalid");
   }
   if (
     command !== "apply" ||
@@ -1021,6 +1059,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     confirmFenceDigest,
     confirmReleaseReadinessDigest,
     releasedAt,
+    confirmFenceSourceCommit,
     dryRun,
     retainMaintenanceFence,
     confirmPredecessorSource,
@@ -1074,7 +1113,7 @@ function helpText(): string {
   bun scripts/control-d1-schema.ts apply --dry-run [--environment staging|production]
   bun scripts/control-d1-schema.ts fence --environment staging|production --confirm-manifest sha256:...
   bun scripts/control-d1-schema.ts freeze --environment staging|production --confirm-manifest sha256:...
-  bun scripts/control-d1-schema.ts release --environment staging|production --confirm-manifest sha256:...
+  bun scripts/control-d1-schema.ts release --environment staging|production --confirm-manifest sha256:... [--confirm-fence-source-commit <40hex>]
   bun scripts/control-d1-schema.ts verify --environment staging|production
   bun scripts/control-d1-schema.ts transfer-source-verify --environment staging|production --confirm-manifest sha256:...
     --confirm-database-id <source-id> --confirm-source-export-sha256 sha256:...
@@ -1101,6 +1140,13 @@ apply requires the exact manifest digest emitted by plan. Official
 Cloud blue/green candidates use --retain-maintenance-fence through cutover.
 release also requires the same source, manifest, environment, and database
 after the Worker cutover is proven.
+When a reviewed forward repair must release a fence retained by an older OSS
+commit, pass --confirm-fence-source-commit with that exact lowercase 40-hex
+fence source. The transcript keeps sourceCommit bound to the current clean
+repair checkout and records the confirmed fence source separately. This flag is
+release-only, requires the current manifest, and never bypasses the clean
+checkout/HEAD check; it releases only the matching active or inactive fence
+receipt and never runs schema apply or migration work.
 candidate-verify is read-only and accepts only an active candidate/cutover
 fence with the exact candidate database, source-export, and fence digest (an
 optional fence id confirmation is checked when supplied). candidate-release repeats that verification, requires the exact
