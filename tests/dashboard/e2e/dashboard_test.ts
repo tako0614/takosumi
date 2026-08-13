@@ -279,6 +279,15 @@ interface ProviderDestinationFixtureState {
 /** Stub a complete manual source check while retaining mutation ordering. */
 async function stubProviderDestinationFixture(
   page: Page,
+  providerConnections = PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS,
+  compatibilityProviders: readonly Record<string, unknown>[] = [
+    {
+      source: "cloudflare/cloudflare",
+      aliases: [],
+      allowed: true,
+      credentialRequired: true,
+    },
+  ],
 ): Promise<ProviderDestinationFixtureState> {
   const state: ProviderDestinationFixtureState = { mutations: [] };
   const sourceId = "src_provider_destination_e2e";
@@ -297,7 +306,7 @@ async function stubProviderDestinationFixture(
     }
     if (path === "/api/v1/provider-connections") {
       return route.fulfill({
-        json: { providerConnections: PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS },
+        json: { providerConnections },
       });
     }
     if (path === "/api/v1/sources" && request.method() === "POST") {
@@ -371,14 +380,7 @@ async function stubProviderDestinationFixture(
             id: "report_provider_destination_e2e",
             level: "ready",
             findings: [],
-            providers: [
-              {
-                source: "cloudflare/cloudflare",
-                aliases: [],
-                allowed: true,
-                credentialRequired: true,
-              },
-            ],
+            providers: compatibilityProviders,
             resources: [],
             rootModuleVariables: [],
           },
@@ -853,7 +855,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     traffic.assertNoFailures();
   });
 
-  test("provider destination uses the selected managed Takosumi Cloud connection before Plan", async ({
+  test("supported resources use the managed Takosumi Cloud destination before Plan", async ({
     page,
   }) => {
     test.skip(
@@ -874,15 +876,7 @@ test.describe("Takosumi dashboard browser surface", () => {
 
     await expect(
       page.getByRole("heading", { name: /接続が必要|A connection is needed/u }),
-    ).toBeVisible();
-    const destination = page.getByLabel(/実行先|Runs on/u);
-    await expect(destination).toBeVisible();
-    await expect(destination.locator("option").nth(1)).toHaveText("Takosumi Cloud");
-    await expect(destination.locator("option").nth(2)).toHaveText("Cloudflare (direct)");
-    await destination.selectOption({ label: "Takosumi Cloud" });
-    const continueButton = page.getByRole("button", { name: /続ける|Continue/u });
-    await expect(continueButton).toBeEnabled();
-    await continueButton.click();
+    ).toHaveCount(0);
 
     await expect
       .poll(() => state.bindingBody?.bindings)
@@ -908,6 +902,130 @@ test.describe("Takosumi dashboard browser surface", () => {
         "POST /api/v1/capsules/cap_provider_destination_e2e/plan",
       ),
     );
+    await assertNoPageErrors(errors);
+    traffic.assertNoFailures();
+  });
+
+  test("unsupported resources offer connection setup before Plan", async ({
+    page,
+  }) => {
+    test.skip(
+      mode !== "portable",
+      "the unsupported provider fixture is portable-only",
+    );
+    const errors = pageErrors(page);
+    const traffic = monitorDashboardTraffic(page, mode);
+    const state = await stubProviderDestinationFixture(page, []);
+    const query = new URLSearchParams({
+      git: "https://github.com/example/cloudflare-service.git",
+      ref: PORTABLE_SOURCE_OPTIONS_COMMIT,
+      path: ".",
+      name: "cloudflare-service",
+    });
+    await page.goto(`/new?${query}`, { waitUntil: "domcontentloaded" });
+    await page.getByRole("button", { name: /追加|Add/u }).click();
+
+    await expect(
+      page.getByRole("heading", { name: /接続が必要|A connection is needed/u }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("link", {
+        name: /新しい接続を追加|Add a new connection/u,
+      }),
+    ).toBeVisible();
+    expect(state.bindingBody).toBeUndefined();
+    expect(state.mutations).not.toContain(
+      "PUT /api/v1/capsules/cap_provider_destination_e2e/provider-bindings",
+    );
+    await assertNoPageErrors(errors);
+    traffic.assertNoFailures();
+  });
+
+  test("ambiguous supported destinations ask for a choice without connection setup", async ({
+    page,
+  }) => {
+    test.skip(
+      mode !== "portable",
+      "the ambiguous managed destination fixture is portable-only",
+    );
+    const errors = pageErrors(page);
+    const traffic = monitorDashboardTraffic(page, mode);
+    const managed = PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS[0]!;
+    await stubProviderDestinationFixture(page, [
+      managed,
+      { ...managed, id: "pc_takosumi_cloud_secondary" },
+    ]);
+    const query = new URLSearchParams({
+      git: "https://github.com/example/cloudflare-service.git",
+      ref: PORTABLE_SOURCE_OPTIONS_COMMIT,
+      path: ".",
+      name: "cloudflare-service",
+    });
+    await page.goto(`/new?${query}`, { waitUntil: "domcontentloaded" });
+    await page.getByRole("button", { name: /追加|Add/u }).click();
+
+    await expect(
+      page.getByRole("heading", {
+        name: /実行先を選択|Choose where this runs/u,
+      }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("link", {
+        name: /新しい接続を追加|Add a new connection/u,
+      }),
+    ).toHaveCount(0);
+    await expect(page.getByLabel(/実行先|Runs on/u)).toBeVisible();
+    await assertNoPageErrors(errors);
+    traffic.assertNoFailures();
+  });
+
+  test("mixed provider support keeps connection setup available for the unsupported provider", async ({
+    page,
+  }) => {
+    test.skip(
+      mode !== "portable",
+      "the mixed provider fixture is portable-only",
+    );
+    const errors = pageErrors(page);
+    const traffic = monitorDashboardTraffic(page, mode);
+    await stubProviderDestinationFixture(
+      page,
+      [PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS[0]!],
+      [
+        {
+          source: "cloudflare/cloudflare",
+          aliases: [],
+          allowed: true,
+          credentialRequired: true,
+        },
+        {
+          source: "hashicorp/aws",
+          aliases: [],
+          allowed: true,
+          credentialRequired: true,
+        },
+      ],
+    );
+    const query = new URLSearchParams({
+      git: "https://github.com/example/cloudflare-service.git",
+      ref: PORTABLE_SOURCE_OPTIONS_COMMIT,
+      path: ".",
+      name: "cloudflare-service",
+    });
+    await page.goto(`/new?${query}`, { waitUntil: "domcontentloaded" });
+    await page.getByRole("button", { name: /追加|Add/u }).click();
+
+    await expect(
+      page.getByRole("heading", { name: /接続が必要|A connection is needed/u }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("link", {
+        name: /新しい接続を追加|Add a new connection/u,
+      }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: /続ける|Continue/u }),
+    ).toBeDisabled();
     await assertNoPageErrors(errors);
     traffic.assertNoFailures();
   });
