@@ -339,11 +339,15 @@ test("projectSourceSyncRun maps the sync lifecycle and snapshot id", () => {
     createdAt: "2026-06-06T00:00:00.000Z",
     updatedAt: "2026-06-06T00:01:00.000Z",
     snapshotId: "snap_1",
+    resolvedCommit: "a".repeat(40),
   };
   const run = projectSourceSyncRun(base);
   expect(run.type).toBe("source_sync");
   expect(run.status).toBe("succeeded");
   expect(run.sourceSnapshotId).toBe("snap_1");
+  expect(run.sourceId).toBe("src_1");
+  expect(run.ref).toBe("main");
+  expect(run.resolvedCommit).toBe("a".repeat(40));
 
   // A queued sync does not yet expose a resolved snapshot id.
   const queued = projectSourceSyncRun({ ...base, status: "queued" });

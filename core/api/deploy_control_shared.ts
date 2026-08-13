@@ -208,6 +208,7 @@ export const ALLOWED_KEYS: Record<
     "capsuleId",
     "installConfigId",
   ]),
+  sourceSync: new Set(["intent", "expectedRef"]),
   stableSourceTagResolution: new Set(["url"]),
   workspaceCreate: new Set(["handle", "displayName", "type", "ownerUserId"]),
   workspacePatch: new Set(["displayName", "policy", "archived"]),
@@ -290,6 +291,7 @@ export type DeployControlRouteName =
   | "sourceCreate"
   | "sourcePatch"
   | "sourceCompatibilityCheck"
+  | "sourceSync"
   | "stableSourceTagResolution"
   | "workspaceCreate"
   | "workspacePatch"

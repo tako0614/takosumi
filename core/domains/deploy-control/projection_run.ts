@@ -333,6 +333,9 @@ export function projectSourceSyncRun(run: SourceSyncRun): Run {
     workspaceId: run.workspaceId,
     type: "source_sync",
     status: syncUnifiedStatus(run.status),
+    sourceId: run.sourceId,
+    ref: run.ref,
+    ...(run.resolvedCommit ? { resolvedCommit: run.resolvedCommit } : {}),
     ...(run.snapshotId && run.status === "succeeded"
       ? { sourceSnapshotId: run.snapshotId }
       : {}),

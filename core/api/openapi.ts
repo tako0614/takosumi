@@ -4347,6 +4347,19 @@ function sourceSchemas(): Record<string, Record<string, unknown>> {
       },
       additionalProperties: false,
     },
+    CreateSourceSyncRequest: {
+      type: "object",
+      properties: {
+        intent: { enum: ["observe", "manual_plan"] },
+        expectedRef: {
+          type: "string",
+          pattern: "^[0-9a-fA-F]{40}$",
+          description:
+            "Optional exact immutable commit expected before dispatching this sync.",
+        },
+      },
+      additionalProperties: false,
+    },
     CreateSourceSyncResponse: {
       type: "object",
       required: ["run"],

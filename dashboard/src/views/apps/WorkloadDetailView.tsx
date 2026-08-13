@@ -46,6 +46,7 @@ import Page from "../account/components/auth/Page.tsx";
 import {
   type BackupRecord,
   type ActivityEvent,
+  type Capsule,
   ControlApiError,
   type InstallConfig,
   type ProviderBinding,
@@ -63,6 +64,7 @@ import {
   getWorkspaceGraph,
   updateCapsuleSourceRevision,
   listActivity,
+  listCapsules,
   listStateVersions,
   listProviderConnections,
   listSources,
@@ -218,6 +220,10 @@ function Inner() {
     deploySourceWorkspaceId,
     listSources,
   );
+  const [sourceCapsules, { refetch: refetchSourceCapsules }] = createResource(
+    deploySourceWorkspaceId,
+    (id) => listCapsules(id, { includeDestroyed: false }),
+  );
   const [stateVersions] = createResource(deploysCapsuleId, listStateVersions);
   const [resourceInventory] = createResource(
     deploysCapsuleId,
@@ -267,6 +273,8 @@ function Inner() {
     const resource = tab() === "deploys" ? deploySources : sources;
     return resource.error ? [] : (resource() ?? []);
   };
+  const sourceCapsuleList = () =>
+    sourceCapsules.error ? [] : (sourceCapsules.latest ?? []);
   const graphData = () => (graph.error ? undefined : graph());
   const stateVersionList = () =>
     stateVersions.error ? [] : (stateVersions() ?? []);
@@ -324,6 +332,24 @@ function Inner() {
       defaultPath: src.defaultPath,
     } as const;
   };
+  const affectedSourceCapsules = createMemo(() => {
+    const sourceId = source()?.id;
+    if (!sourceId) return [] as readonly Capsule[];
+    return sourceCapsuleList()
+      .filter(
+        (candidate) =>
+          candidate.workspaceId === workspaceId() &&
+          candidate.sourceId === sourceId && candidate.status !== "destroyed",
+      )
+      .sort((left, right) =>
+        (left.name || left.id).localeCompare(right.name || right.id),
+      );
+  });
+  const sourceMembershipReady = () =>
+    !sourceCapsules.loading &&
+    !sourceCapsules.error &&
+    sourceCapsules.latest !== undefined;
+  const { confirm } = useConfirmDialog();
   const producers = createMemo(() =>
     dependencyRows(capsuleData(), graphData(), "producer"),
   );
@@ -398,17 +424,45 @@ function Inner() {
         "The existing Source could not be verified for this service.",
       );
     }
+    if (!sourceMembershipReady()) {
+      throw new ControlApiError(
+        409,
+        "source_membership_changed",
+        "Affected Workloads could not be verified; review the Source again.",
+      );
+    }
+    const affectedCapsules = affectedSourceCapsules();
+    const affectedCapsuleIds = affectedCapsules.map((candidate) => candidate.id);
+    if (!affectedCapsuleIds.includes(capsuleId())) {
+      throw new ControlApiError(
+        409,
+        "source_membership_changed",
+        "This Workload is no longer attached to the Source.",
+      );
+    }
+    if (affectedCapsuleIds.length > 1) {
+      const confirmed = await confirm({
+        title: t("app.deploys.sourceImpactConfirmTitle"),
+        message: t("app.deploys.sourceImpactConfirmMessage", {
+          count: affectedCapsuleIds.length,
+        }),
+        confirmText: t("app.deploys.sourceImpactConfirmCta"),
+        cancelText: t("common.cancel"),
+      });
+      if (!confirmed) return undefined;
+    }
     const updated = await updateCapsuleSourceRevision(
       capsuleId(),
       identity,
       revision,
+      { affectedCapsuleIds },
     );
     // The update helper has performed the authoritative GET. Keep that exact
     // value as the only revision eligible for Review changes while the list
     // projection catches up.
     setSourceRevisionReadback(updated.defaultRef);
     setSourceRevisionPendingReadback(false);
-    await refetchDeploySources();
+    await Promise.all([refetchDeploySources(), refetchSourceCapsules()]);
     return updated;
   });
   const plan = createAction(async () => {
@@ -473,7 +527,6 @@ function Inner() {
     }
     navigate("/workloads");
   });
-  const { confirm } = useConfirmDialog();
   /**
    * Delete is confirmed exactly once — normally at destroy-APPLY on the run
    * screen, where the plan shows what will be removed. Creating a plan removes
@@ -719,6 +772,9 @@ function Inner() {
                       sourceLoading={deploySources.loading}
                       sourceRevision={currentSourceRevision()}
                       sourceRevisionReady={sourceRevisionReady()}
+                      affectedWorkloads={affectedSourceCapsules()}
+                      affectedWorkloadsLoading={sourceCapsules.loading}
+                      affectedWorkloadsError={Boolean(sourceCapsules.error)}
                       changeVersionBusy={changeSourceRevision.busy()}
                       changeVersionError={changeSourceRevision.error()}
                       onRevisionInputChange={(value) => {
@@ -1098,6 +1154,9 @@ function DeploysTab(props: {
   readonly sourceLoading: boolean;
   readonly sourceRevision?: string;
   readonly sourceRevisionReady: boolean;
+  readonly affectedWorkloads: readonly Capsule[];
+  readonly affectedWorkloadsLoading: boolean;
+  readonly affectedWorkloadsError: boolean;
   readonly changeVersionBusy: boolean;
   readonly changeVersionError: string | null;
   readonly onRevisionInputChange: (value: string) => void;
@@ -1162,6 +1221,49 @@ function DeploysTab(props: {
                   },
                 ]}
               />
+              <div class="wa-source-impact" role="status">
+                <strong>{t("app.deploys.sourceImpactTitle")}</strong>
+                <Show when={props.affectedWorkloadsLoading}>
+                  <p class="muted">{t("app.deploys.sourceImpactLoading")}</p>
+                </Show>
+                <Show when={props.affectedWorkloadsError}>
+                  <p class="wa-error">
+                    {t("app.deploys.sourceImpactUnavailable")}
+                  </p>
+                </Show>
+                <Show
+                  when={
+                    !props.affectedWorkloadsLoading &&
+                    !props.affectedWorkloadsError
+                  }
+                >
+                  <p class="muted">
+                    {props.affectedWorkloads.length > 1
+                      ? t("app.deploys.sourceImpactShared", {
+                          count: props.affectedWorkloads.length,
+                        })
+                      : t("app.deploys.sourceImpactSingle")}
+                  </p>
+                  <Show when={props.affectedWorkloads.length > 1}>
+                    <ul class="wa-source-impact-list">
+                      <For each={props.affectedWorkloads.slice(0, 5)}>
+                        {(workload) => (
+                          <li>
+                            {workload.name} <span class="muted">({workload.status})</span>
+                          </li>
+                        )}
+                      </For>
+                      <Show when={props.affectedWorkloads.length > 5}>
+                        <li class="muted">
+                          {t("app.deploys.sourceImpactMore", {
+                            count: props.affectedWorkloads.length - 5,
+                          })}
+                        </li>
+                      </Show>
+                    </ul>
+                  </Show>
+                </Show>
+              </div>
               <details class="wb-disclosure">
                 <summary>{t("app.deploys.sourceVersionChange")}</summary>
                 <div class="wa-form-actions">
@@ -1186,6 +1288,9 @@ function DeploysTab(props: {
                     type="button"
                     disabled={
                       props.changeVersionBusy ||
+                      props.affectedWorkloadsLoading ||
+                      props.affectedWorkloadsError ||
+                      props.affectedWorkloads.length === 0 ||
                       !isImmutableSourceRevision(revisionCandidate())
                     }
                     busy={props.changeVersionBusy}

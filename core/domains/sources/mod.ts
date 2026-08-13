@@ -11,6 +11,7 @@
 import type {
   CreateSourceRequest,
   CreateSourceResponse,
+  CreateSourceSyncRequest,
   CreateSourceSyncResponse,
   ListSourcesResponse,
   ListSourceSnapshotsResponse,
@@ -60,6 +61,19 @@ const DEFAULT_REF = "HEAD";
 const DEFAULT_PATH = ".";
 const REPOSITORY_INSTALL_METADATA_PATH = ".well-known/tcs.json";
 const SOURCE_SYNC_REQUEUE_STALE_MS = 10 * 60 * 1000;
+const IMMUTABLE_SOURCE_REVISION = /^[0-9a-f]{40}$/iu;
+
+function isImmutableSourceRevision(value: string): boolean {
+  return IMMUTABLE_SOURCE_REVISION.test(value);
+}
+
+function sameGitRef(left: unknown, right: unknown): boolean {
+  return (
+    typeof left === "string" &&
+    typeof right === "string" &&
+    left.toLowerCase() === right.toLowerCase()
+  );
+}
 
 /**
  * Out-of-process source-sync dispatch seam. Mirrors the deploy-control
@@ -306,15 +320,47 @@ export class SourcesService {
    */
   async createSync(
     sourceId: string,
-    options: {
-      readonly dedupe?: boolean;
-      readonly intent?: SourceSyncIntent;
-    } = {},
+    options: CreateSourceSyncRequest & { readonly dedupe?: boolean } = {},
   ): Promise<CreateSourceSyncResponse> {
     const stored = await this.#requireSource(sourceId);
     const intent = options.intent ?? "observe";
+    if (intent !== "observe" && intent !== "manual_plan") {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        "intent must be observe or manual_plan",
+      );
+    }
+    if (
+      options.expectedRef !== undefined &&
+      typeof options.expectedRef !== "string"
+    ) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        "expectedRef must be a string when provided",
+        { reason: "invalid_source_revision" },
+      );
+    }
+    const expectedRef = options.expectedRef?.trim();
+    if (expectedRef !== undefined && !isImmutableSourceRevision(expectedRef)) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        "expectedRef must be an exact 40-character hexadecimal commit.",
+        { reason: "invalid_source_revision" },
+      );
+    }
+    if (
+      expectedRef !== undefined &&
+      !sameGitRef(stored.defaultRef, expectedRef)
+    ) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "Source defaultRef changed before the requested sync was dispatched.",
+        { reason: "source_revision_mismatch" },
+      );
+    }
+    const runRef = expectedRef ?? stored.defaultRef;
     if (options.dedupe) {
-      const existing = await this.#activeSyncRun(sourceId, intent);
+      const existing = await this.#activeSyncRun(sourceId, intent, runRef);
       if (existing) {
         if (existing.status === "queued") {
           await this.#enqueue({
@@ -328,7 +374,11 @@ export class SourcesService {
         if (shouldReplaceStaleRunningSyncRun(existing, this.#now().getTime())) {
           const replaced = await this.#failStaleSyncRun(existing);
           if (!replaced) {
-            const current = await this.#activeSyncRun(sourceId, intent);
+            const current = await this.#activeSyncRun(
+              sourceId,
+              intent,
+              runRef,
+            );
             return { run: current ?? existing };
           }
           // Fall through and create a fresh run. A per-run owner Durable Object
@@ -361,7 +411,7 @@ export class SourcesService {
       workspaceId: stored.workspaceId,
       sourceId,
       url: stored.url,
-      ref: stored.defaultRef,
+      ref: runRef,
       path: stored.defaultPath,
       archiveRef,
       intent,
@@ -748,12 +798,14 @@ export class SourcesService {
   async #activeSyncRun(
     sourceId: string,
     intent: SourceSyncIntent,
+    ref: string,
   ): Promise<SourceSyncRun | undefined> {
     const runs = await this.#store.listSourceSyncRuns(sourceId);
     return runs.find(
       (run) =>
         (run.status === "queued" || run.status === "running") &&
-        (run.intent ?? "observe") === intent,
+        (run.intent ?? "observe") === intent &&
+        sameGitRef(run.ref, ref),
     );
   }
 

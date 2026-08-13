@@ -28,12 +28,12 @@ import type {
   Source,
   CreateSourceRequest,
   CreateSourceResponse,
+  CreateSourceSyncRequest,
   ListSourceSnapshotsResponse,
   ListSourcesResponse,
   PatchSourceRequest,
   SourceResponse,
   SourceSnapshot,
-  SourceSyncIntent,
   StableSourceTagResolutionResponse,
   SourceSnapshotFileResponse,
 } from "takosumi-contract/sources";
@@ -690,10 +690,7 @@ export interface ControlPlaneOperations {
   patchSource(id: string, patch: PatchSourceRequest): Promise<SourceResponse>;
   createSourceSync(
     sourceId: string,
-    options?: {
-      readonly dedupe?: boolean;
-      readonly intent?: SourceSyncIntent;
-    },
+    options?: CreateSourceSyncRequest & { readonly dedupe?: boolean },
   ): Promise<unknown>;
   listSourceSnapshots(
     sourceId: string,

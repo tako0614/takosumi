@@ -401,6 +401,19 @@ export const ja = {
   "app.deploys.sourceVersionApply": "バージョンを設定",
   "app.deploys.sourceVersionUnavailable":
     "既存の取得元を読み込めませんでした。",
+  "app.deploys.sourceImpactTitle": "影響を受けるワークロード",
+  "app.deploys.sourceImpactLoading":
+    "この取得元を使っているワークロードを確認しています。",
+  "app.deploys.sourceImpactUnavailable":
+    "影響を受けるワークロードを確認できません。バージョン変更の前に再試行してください。",
+  "app.deploys.sourceImpactSingle": "このワークロードだけが取得元を使っています。",
+  "app.deploys.sourceImpactShared":
+    "この取得元は {count} 件のワークロードで共有されています。変更するとすべてに反映されます。",
+  "app.deploys.sourceImpactMore": "ほか {count} 件",
+  "app.deploys.sourceImpactConfirmTitle": "共有された取得元のバージョンを変更しますか？",
+  "app.deploys.sourceImpactConfirmMessage":
+    "この取得元は {count} 件のワークロードで使われています。すべてにこのコミットを設定しますか？",
+  "app.deploys.sourceImpactConfirmCta": "共有バージョンを変更",
   "app.deploys.empty": "まだデプロイ履歴はありません。",
   "app.deploys.restore": "この状態に戻す",
   "app.deploys.restoreDisclosure": "以前の状態に戻す",

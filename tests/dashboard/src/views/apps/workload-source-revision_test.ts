@@ -21,6 +21,11 @@ test("Workload revision changes are explicit, progressive, and readback-gated", 
   expect(viewSource).toContain(
     '<summary>{t("app.deploys.sourceVersionChange")}</summary>',
   );
+  expect(viewSource).toContain("affectedSourceCapsules");
+  expect(viewSource).toContain("affectedCapsuleIds");
+  expect(viewSource).toContain("sourceImpactConfirmTitle");
+  expect(viewSource).toContain("if (!confirmed) return undefined;");
+  expect(viewSource).toContain("source_membership_changed");
   expect(viewSource).toContain('t("app.deploys.sourceVersionCurrent")');
   expect(viewSource).toContain('t("app.deploys.sourceVersionApply")');
   expect(viewSource).not.toContain("authConnectionId");

@@ -589,6 +589,9 @@ export interface Run {
   /** Exact PlanRun id consumed by an ApplyRun, when this is an apply row. */
   readonly planRunId?: string;
   readonly sourceId?: string;
+  /** Source-scoped sync ref and resolved commit, when exposed by the API. */
+  readonly ref?: string;
+  readonly resolvedCommit?: string;
   readonly capsuleId?: string;
   readonly environment?: string;
   readonly type: RunType;
@@ -702,6 +705,41 @@ const IMMUTABLE_SOURCE_REVISION = /^[0-9a-f]{40}$/iu;
 /** True only for an exact 40-hex Git commit. */
 export function isImmutableSourceRevision(value: string): boolean {
   return IMMUTABLE_SOURCE_REVISION.test(value);
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function isSourceResponse(value: unknown): value is Source {
+  if (!isRecord(value)) return false;
+  return (
+    isNonEmptyString(value.id) &&
+    isNonEmptyString(value.workspaceId) &&
+    isNonEmptyString(value.name) &&
+    isNonEmptyString(value.url) &&
+    isNonEmptyString(value.defaultRef) &&
+    isNonEmptyString(value.defaultPath) &&
+    (value.authConnectionId === undefined ||
+      isNonEmptyString(value.authConnectionId)) &&
+    (value.status === "active" ||
+      value.status === "disabled" ||
+      value.status === "error") &&
+    typeof value.autoSync === "boolean" &&
+    isNonEmptyString(value.createdAt) &&
+    isNonEmptyString(value.updatedAt)
+  );
+}
+
+function decodeSourceEnvelope(body: unknown): Source {
+  if (!isRecord(body) || !isSourceResponse(body.source)) {
+    throw new ControlApiError(
+      502,
+      "invalid_source_response",
+      "Source returned an invalid response.",
+    );
+  }
+  return body.source;
 }
 
 export interface SourcePatchRequest {
@@ -1170,6 +1208,34 @@ async function listCapsulesForCreateRecovery(
   );
 }
 
+/**
+ * Complete, runtime-validated Capsule inventory used to bind a Source-global
+ * revision mutation to the Workloads it affects. The ordinary list helper is
+ * intentionally forgiving for presentation; this seam must fail closed when
+ * the membership projection is incomplete or malformed.
+ */
+async function listCapsulesForSourceMembership(
+  workspaceId: string,
+): Promise<readonly Capsule[]> {
+  return await fetchAllPages<Capsule>(
+    `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/capsules?includeDestroyed=false`,
+    (body) => {
+      if (
+        !Array.isArray(body.capsules) ||
+        !body.capsules.every(isCapsuleResponse) ||
+        (body.nextCursor !== undefined && typeof body.nextCursor !== "string")
+      ) {
+        throw new ControlApiError(
+          502,
+          "invalid_capsule_list_response",
+          "Capsule membership returned an invalid response.",
+        );
+      }
+      return body.capsules;
+    },
+  );
+}
+
 export async function listWorkspaceCurrentStateVersions(
   workspaceId: string,
   options: { readonly includeDestroyed?: boolean } = {},
@@ -1212,8 +1278,8 @@ function isCapsuleResponse(value: unknown): value is Capsule {
     value.name.length > 0 &&
     typeof value.slug === "string" &&
     value.slug.length > 0 &&
-    typeof value.sourceId === "string" &&
-    value.sourceId.length > 0 &&
+    (value.sourceId === undefined ||
+      (typeof value.sourceId === "string" && value.sourceId.length > 0)) &&
     typeof value.installConfigId === "string" &&
     value.installConfigId.length > 0 &&
     typeof value.environment === "string" &&
@@ -1819,21 +1885,21 @@ export async function listSources(
 }
 
 export async function getSource(sourceId: string): Promise<Source> {
-  const body = await controlFetch<{ readonly source: Source }>(
+  const body = await controlFetch<unknown>(
     `${BASE}/sources/${encodeURIComponent(sourceId)}`,
   );
-  return body.source;
+  return decodeSourceEnvelope(body);
 }
 
 export async function patchSource(
   sourceId: string,
   patch: SourcePatchRequest,
 ): Promise<Source> {
-  const body = await controlFetch<{ readonly source: Source }>(
+  const body = await controlFetch<unknown>(
     `${BASE}/sources/${encodeURIComponent(sourceId)}`,
     { method: "PATCH", body: patch },
   );
-  return body.source;
+  return decodeSourceEnvelope(body);
 }
 
 function sourceIdentityMatches(
@@ -1855,6 +1921,10 @@ function sourceRevisionMismatch(message: string): ControlApiError {
   return new ControlApiError(409, "source_revision_mismatch", message);
 }
 
+function sourceMembershipMismatch(message: string): ControlApiError {
+  return new ControlApiError(409, "source_membership_changed", message);
+}
+
 function sourcePatchIndeterminate(
   message: string,
   cause?: unknown,
@@ -1872,6 +1942,10 @@ export async function updateCapsuleSourceRevision(
   capsuleId: string,
   identity: CapsuleSourceIdentity,
   revision: string,
+  options: {
+    /** Source-global Capsule membership captured and confirmed by the UI. */
+    readonly affectedCapsuleIds?: readonly string[];
+  } = {},
 ): Promise<Source> {
   if (!isImmutableSourceRevision(revision)) {
     throw new ControlApiError(
@@ -1896,6 +1970,25 @@ export async function updateCapsuleSourceRevision(
     );
   }
 
+  const expectedCapsuleIds = normalizeCapsuleIds(options.affectedCapsuleIds);
+  if (expectedCapsuleIds) {
+    if (!expectedCapsuleIds.includes(capsuleId)) {
+      throw sourceMembershipMismatch(
+        "The requested Source membership does not include this Workload.",
+      );
+    }
+    const beforeMembers = await listCapsulesForSourceMembership(
+      identity.workspaceId,
+    );
+    assertSourceMembership(
+      beforeMembers,
+      identity.workspaceId,
+      identity.sourceId,
+      expectedCapsuleIds,
+      "before the Source revision update",
+    );
+  }
+
   let patchError: unknown;
   try {
     await patchSource(identity.sourceId, { defaultRef: revision });
@@ -1913,9 +2006,36 @@ export async function updateCapsuleSourceRevision(
       patchError ?? error,
     );
   }
+  if (expectedCapsuleIds) {
+    let afterMembers: readonly Capsule[];
+    try {
+      afterMembers = await listCapsulesForSourceMembership(
+        identity.workspaceId,
+      );
+    } catch (error) {
+      throw sourcePatchIndeterminate(
+        "Source revision update outcome is indeterminate because Source membership readback was unavailable.",
+        patchError ?? error,
+      );
+    }
+    try {
+      assertSourceMembership(
+        afterMembers,
+        identity.workspaceId,
+        identity.sourceId,
+        expectedCapsuleIds,
+        "during the Source revision update",
+      );
+    } catch (error) {
+      throw sourcePatchIndeterminate(
+        "Source revision update outcome is indeterminate because affected Workload membership changed.",
+        patchError ?? error,
+      );
+    }
+  }
   const exact =
     sourceIdentityMatches(readback, capsule, identity) &&
-    readback.defaultRef === revision;
+    sameGitRef(readback.defaultRef, revision);
   if (patchError) {
     if (exact) return readback;
     throw sourcePatchIndeterminate(
@@ -1929,6 +2049,47 @@ export async function updateCapsuleSourceRevision(
     );
   }
   return readback;
+}
+
+function normalizeCapsuleIds(
+  ids: readonly string[] | undefined,
+): readonly string[] | undefined {
+  if (ids === undefined) return undefined;
+  return [...new Set(ids)].sort();
+}
+
+function assertSourceMembership(
+  capsules: readonly Capsule[],
+  workspaceId: string,
+  sourceId: string,
+  expectedIds: readonly string[],
+  phase: string,
+): void {
+  const actualIds = capsules
+    .filter(
+      (candidate) =>
+        candidate.workspaceId === workspaceId &&
+        candidate.sourceId === sourceId &&
+        candidate.status !== "destroyed",
+    )
+    .map((candidate) => candidate.id)
+    .sort();
+  if (
+    actualIds.length !== expectedIds.length ||
+    actualIds.some((id, index) => id !== expectedIds[index])
+  ) {
+    throw sourceMembershipMismatch(
+      `Source membership changed ${phase}; review the affected Workloads again.`,
+    );
+  }
+}
+
+function sameGitRef(left: unknown, right: unknown): boolean {
+  return (
+    typeof left === "string" &&
+    typeof right === "string" &&
+    left.toLowerCase() === right.toLowerCase()
+  );
 }
 
 export interface CreateSourceResult {
@@ -1967,6 +2128,7 @@ export async function syncSource(
   options: {
     readonly signal?: AbortSignal;
     readonly intent?: "observe" | "manual_plan";
+    readonly expectedRef?: string;
   } = {},
 ): Promise<unknown> {
   return await controlFetch<unknown>(
@@ -1974,7 +2136,12 @@ export async function syncSource(
     {
       method: "POST",
       signal: options.signal,
-      body: options.intent ? { intent: options.intent } : {},
+      body: {
+        ...(options.intent ? { intent: options.intent } : {}),
+        ...(options.expectedRef === undefined
+          ? {}
+          : { expectedRef: options.expectedRef }),
+      },
     },
   );
 }
@@ -2039,6 +2206,8 @@ export async function waitForLatestSourceSnapshot(
     readonly pollMs?: number;
     readonly maxPollMs?: number;
     readonly signal?: AbortSignal;
+    /** Require the returned Run and Snapshot to resolve this exact commit. */
+    readonly expectedRef?: string;
     readonly onProgress?: (progress: SourceSnapshotWaitProgress) => void;
   } = {},
 ): Promise<SourceSnapshot> {
@@ -2075,6 +2244,24 @@ export async function waitForLatestSourceSnapshot(
           snapshots: lastSnapshots,
         });
       }
+      if (
+        options.expectedRef !== undefined &&
+        run &&
+        (!run.ref || !sameGitRef(run.ref, options.expectedRef))
+      ) {
+        throw sourceRevisionMismatch(
+          "Source sync returned a Run for a different revision.",
+        );
+      }
+      if (
+        options.expectedRef !== undefined &&
+        run?.status === "succeeded" &&
+        !run.sourceSnapshotId
+      ) {
+        throw sourceRevisionMismatch(
+          "Source sync succeeded without an authoritative Snapshot relation.",
+        );
+      }
     }
 
     lastSnapshots = await listSourceSnapshots(sourceId, {
@@ -2088,7 +2275,18 @@ export async function waitForLatestSourceSnapshot(
         const exact = lastSnapshots.find(
           (snapshot) => snapshot.id === run.sourceSnapshotId,
         );
-        if (exact) return exact;
+        if (exact) {
+          if (
+            options.expectedRef !== undefined &&
+            (!sameGitRef(exact.ref, options.expectedRef) ||
+              !sameGitRef(exact.resolvedCommit, options.expectedRef))
+          ) {
+            throw sourceRevisionMismatch(
+              "Source sync returned a Snapshot for a different revision.",
+            );
+          }
+          return exact;
+        }
       }
     } else {
       const latest = [...lastSnapshots].sort((a, b) =>
@@ -2220,7 +2418,7 @@ export async function planCapsuleUpdate(
         "The Source URL, path, or Workspace changed; review the current service again.",
       );
     }
-    if (source.defaultRef !== options.sourceRevision) {
+    if (!sameGitRef(source.defaultRef, options.sourceRevision)) {
       throw sourceRevisionMismatch(
         "The requested exact Source revision is not the current readback.",
       );
@@ -2230,6 +2428,9 @@ export async function planCapsuleUpdate(
 
   const syncEnvelope = await syncSource(capsule.sourceId, {
     intent: "manual_plan",
+    ...(options.sourceRevision
+      ? { expectedRef: options.sourceRevision }
+      : {}),
   });
   const sourceSyncRunId = extractRunId(syncEnvelope);
   if (!sourceSyncRunId) {
@@ -2242,6 +2443,9 @@ export async function planCapsuleUpdate(
   }
   const snapshot = await waitForLatestSourceSnapshot(capsule.sourceId, {
     runId: sourceSyncRunId,
+    ...(options.sourceRevision
+      ? { expectedRef: options.sourceRevision }
+      : {}),
   });
   const compatibility = await controlFetch<{
     readonly report: { readonly id: string };

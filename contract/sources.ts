@@ -330,6 +330,17 @@ export type SourceSyncRunStatus = "queued" | "running" | "succeeded" | "failed";
 
 export type SourceSyncIntent = "observe" | "manual_plan";
 
+/**
+ * Narrow request for an explicit Source sync. `expectedRef` is optional for
+ * scheduler/webhook observations, but a manual plan may supply an immutable
+ * commit so the control plane can reject a raced Source update before it
+ * creates or reuses a run.
+ */
+export interface CreateSourceSyncRequest {
+  readonly intent?: SourceSyncIntent;
+  readonly expectedRef?: string;
+}
+
 export interface SourceSyncPhaseTiming {
   readonly phase: string;
   readonly startedAt: string;

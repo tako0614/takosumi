@@ -181,6 +181,7 @@ import { withHostInstallConfigs } from "./domains/capsules/host_install_config_s
 import type {
   CreateSourceRequest,
   CreateSourceResponse,
+  CreateSourceSyncRequest,
   CreateSourceSyncResponse,
   ListSourcesResponse,
   ListSourceSnapshotsResponse,
@@ -1291,7 +1292,7 @@ export interface TakosumiOperations {
   patchSource(id: string, patch: PatchSourceRequest): Promise<SourceResponse>;
   createSourceSync(
     sourceId: string,
-    options?: { readonly dedupe?: boolean },
+    options?: CreateSourceSyncRequest & { readonly dedupe?: boolean },
   ): Promise<CreateSourceSyncResponse>;
   createSourceCompatibilityCheck(
     sourceId: string,

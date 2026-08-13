@@ -397,6 +397,18 @@ export const en: Record<keyof typeof ja, string> = {
   "app.deploys.sourceVersionApply": "Set version",
   "app.deploys.sourceVersionUnavailable":
     "The existing Source could not be loaded.",
+  "app.deploys.sourceImpactTitle": "Affected Workloads",
+  "app.deploys.sourceImpactLoading": "Checking which Workloads use this Source.",
+  "app.deploys.sourceImpactUnavailable":
+    "Affected Workloads could not be verified. Try again before changing the version.",
+  "app.deploys.sourceImpactSingle": "Only this Workload uses the Source.",
+  "app.deploys.sourceImpactShared":
+    "This Source is shared by {count} Workloads. Changing it updates all of them.",
+  "app.deploys.sourceImpactMore": "and {count} more",
+  "app.deploys.sourceImpactConfirmTitle": "Change a shared Source version?",
+  "app.deploys.sourceImpactConfirmMessage":
+    "This Source is used by {count} Workloads. Set the exact commit for all of them?",
+  "app.deploys.sourceImpactConfirmCta": "Change shared version",
   "app.deploys.empty": "No deploys yet.",
   "app.deploys.restore": "Restore this state",
   "app.deploys.restoreDisclosure": "Restore a previous version",
