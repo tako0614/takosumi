@@ -41,8 +41,10 @@ describe("/new Provider Connections return context", () => {
   test("candidate matching is verified and exact after registry qualification", () => {
     expect(install).toContain("isProviderConnectionCandidate(connection)");
     expect(install).toContain("sameProviderSource(");
-    expect(install).toContain("canonicalProviderSource(required)");
-    expect(install).toContain("canonicalProviderSource(connected)");
+    expect(install).toContain("providerConnectionMatchesProviderSource,");
+    expect(install).toContain(
+      "providerConnectionMatchesProviderSource(required, {",
+    );
   });
 
   test("source credentials, bindings, and compatibility authority reach Plan", () => {
