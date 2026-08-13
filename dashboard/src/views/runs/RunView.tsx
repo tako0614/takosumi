@@ -169,15 +169,12 @@ function latestApplyRunForPlan(
   runs: readonly Run[],
   planRun: Run,
 ): Run | undefined {
-  const planCreatedAt = Date.parse(planRun.createdAt);
   return runs.find((candidate) => {
-    if (candidate.type !== "apply") return false;
+    if (candidate.type !== "apply" && candidate.type !== "destroy_apply") {
+      return false;
+    }
     if (candidate.capsuleId !== planRun.capsuleId) return false;
-    if (Number.isNaN(planCreatedAt)) return true;
-    const candidateCreatedAt = Date.parse(candidate.createdAt);
-    return Number.isNaN(candidateCreatedAt)
-      ? true
-      : candidateCreatedAt >= planCreatedAt;
+    return candidate.planRunId === planRun.id;
   });
 }
 
@@ -1035,12 +1032,11 @@ function Inner() {
   const [needsConfirm, setNeedsConfirm] = createSignal(false);
 
   // Whether this plan's deploy approval is still OPEN is not a run-local
-  // fact: any apply / destroy_apply created for the same Capsule at/after the
-  // plan consumes it (the run history's semantics, shared via
-  // lib/run-approval.ts). The Run payload carries no applied-by linkage, so
-  // read the newest slice of the Workspace Run ledger whenever this run COULD
-  // await a deploy — an already-applied plan opened from history must not
-  // present 承認待ち + an active デプロイを実行 CTA again.
+  // fact: an apply / destroy_apply explicitly linked by planRunId consumes it
+  // (the run history's semantics, shared via lib/run-approval.ts). Read the
+  // newest slice of the Workspace Run ledger whenever this run COULD await a
+  // deploy — an already-applied plan opened from history must not present
+  // 承認待ち + an active デプロイを実行 CTA again.
   const [siblingRuns] = createResource(
     () => {
       if (run.error) return null;
@@ -1063,9 +1059,10 @@ function Inner() {
     return awaitsDeployApproval(r, siblings);
   };
   // True once the sibling ledger POSITIVELY shows this plan's approval was
-  // consumed by a later apply attempt (never true while the ledger read is
-  // still loading or failed) — drives the settled "already deployed" summary
-  // line instead of a contradictory "ready to deploy" with no button.
+  // consumed by an explicitly linked apply attempt (never true while the
+  // ledger read is still loading or failed) — drives the settled "already
+  // deployed" summary line instead of a contradictory "ready to deploy" with
+  // no button.
   const deployApprovalConsumed = (r: Run): boolean => {
     if (!isDeployApprovalCandidate(r) || applied()) return false;
     if (siblingRuns.error) return false;

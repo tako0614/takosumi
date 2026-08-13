@@ -295,6 +295,7 @@ export function projectApplyRun(
     id: applyRun.id,
     ...(options.runGroupId ? { runGroupId: options.runGroupId } : {}),
     workspaceId: applyRun.workspaceId,
+    planRunId: applyRun.planRunId,
     ...(options.resourceId
       ? { subject: { kind: "resource" as const, id: options.resourceId } }
       : {}),

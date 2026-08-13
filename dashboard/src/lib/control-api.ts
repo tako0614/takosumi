@@ -539,6 +539,8 @@ export interface Run {
   readonly id: string;
   readonly runGroupId?: string;
   readonly workspaceId: string;
+  /** Exact PlanRun id consumed by an ApplyRun, when this is an apply row. */
+  readonly planRunId?: string;
   readonly sourceId?: string;
   readonly capsuleId?: string;
   readonly environment?: string;

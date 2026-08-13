@@ -254,7 +254,9 @@ test("projectPlanRun surfaces a structured error code from a failed plan", () =>
 });
 
 test("projectApplyRun maps create apply and a destroy apply", () => {
-  expect(projectApplyRun(applyRun()).type).toBe("apply");
+  const projected = projectApplyRun(applyRun());
+  expect(projected.type).toBe("apply");
+  expect(projected.planRunId).toBe("plan_1");
   expect(projectApplyRun(applyRun({ operation: "destroy" })).type).toBe(
     "destroy_apply",
   );

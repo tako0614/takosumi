@@ -46,7 +46,7 @@ describe("RunView", () => {
   test("deploy CTA follows the SHARED approval predicate over the sibling ledger", () => {
     // An already-applied plan opened from history must not present 承認待ち +
     // an active デプロイを実行 CTA: the run list's semantics (any apply /
-    // destroy_apply at/after the plan consumes the approval) are shared via
+    // an explicitly linked destroy_apply consumes the approval) are shared via
     // lib/run-approval.ts, and RunView feeds it the Workspace Run ledger.
     expect(source).toContain('from "../../lib/run-approval.ts"');
     expect(source).toContain("isDeployApprovalCandidate");
@@ -61,6 +61,11 @@ describe("RunView", () => {
     expect(source).toContain('t("run.summary.alreadyApplied")');
     expect(ja["run.summary.alreadyApplied"].length).toBeGreaterThan(0);
     expect(en["run.summary.alreadyApplied"].length).toBeGreaterThan(0);
+  });
+
+  test("timeout recovery uses the exact Apply Run -> Plan Run relation", () => {
+    expect(source).toContain("candidate.planRunId === planRun.id");
+    expect(source).not.toContain("Date.parse(planRun.createdAt)");
   });
 
   test("summary-less runs are honest: no fake zeros, fail-closed destructive gate", () => {
