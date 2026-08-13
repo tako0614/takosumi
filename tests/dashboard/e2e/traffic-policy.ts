@@ -21,6 +21,55 @@ function isSameOrigin(url: URL, origin: string): boolean {
   }
 }
 
+/**
+ * Responses owned by the hosted Worker must carry the exact immutable
+ * Version identity supplied to the live run. Static assets and other
+ * subresources are intentionally excluded because their serving contract is
+ * independent from the control/API response contract.
+ */
+export function requiresLiveWorkerVersionHeader(
+  mode: DashboardE2EMode,
+  origin: string,
+  urlValue: string,
+  resourceType: string,
+): boolean {
+  if (mode !== "live") return false;
+  const url = parseHttpUrl(urlValue);
+  if (!url || !isSameOrigin(url, origin)) return false;
+  if (resourceType === "document") return true;
+  return (
+    url.pathname.startsWith("/api/v1/") ||
+    url.pathname === "/.well-known/openid-configuration" ||
+    url.pathname === "/oauth/jwks" ||
+    url.pathname === "/healthz" ||
+    url.pathname === "/readyz"
+  );
+}
+
+/** Return a fail-closed diagnostic for a missing or substituted Version id. */
+export function workerVersionHeaderFailure(input: {
+  readonly mode: DashboardE2EMode;
+  readonly origin: string;
+  readonly url: string;
+  readonly resourceType: string;
+  readonly expectedWorkerVersionId: string;
+  readonly observedWorkerVersionId: string | null | undefined;
+}): string | undefined {
+  if (
+    !requiresLiveWorkerVersionHeader(
+      input.mode,
+      input.origin,
+      input.url,
+      input.resourceType,
+    )
+  ) {
+    return undefined;
+  }
+  const observed = input.observedWorkerVersionId?.trim() || "<missing>";
+  if (observed === input.expectedWorkerVersionId) return undefined;
+  return `expected x-takosumi-version-id ${input.expectedWorkerVersionId}, observed ${observed}`;
+}
+
 function isPortableMonitoredPath(pathname: string): boolean {
   return (
     pathname.startsWith("/api/") ||

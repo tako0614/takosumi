@@ -1,6 +1,9 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
-import { resolveExternalStorageState } from "./dashboard-browser-e2e/live-inputs.ts";
+import {
+  resolveExternalStorageState,
+  validateExpectedWorkerVersionId,
+} from "./dashboard-browser-e2e/live-inputs.ts";
 
 const mode = process.argv[2] ?? "";
 if (mode !== "portable" && mode !== "live") {
@@ -31,6 +34,7 @@ if (mode === "portable") {
     "TAKOSUMI_E2E_APP_NAME",
     "TAKOSUMI_E2E_APP_URL",
     "TAKOSUMI_E2E_OBJECT_BUCKET_NAME",
+    "TAKOSUMI_E2E_EXPECTED_WORKER_VERSION_ID",
   ];
   const missing = required.filter((name) => !process.env[name]?.trim());
   if (missing.length > 0) {
@@ -43,6 +47,10 @@ if (mode === "portable") {
     process.env.TAKOSUMI_E2E_STORAGE_STATE!.trim(),
   );
   process.env.TAKOSUMI_E2E_STORAGE_STATE = storageState;
+  process.env.TAKOSUMI_E2E_EXPECTED_WORKER_VERSION_ID =
+    validateExpectedWorkerVersionId(
+      process.env.TAKOSUMI_E2E_EXPECTED_WORKER_VERSION_ID!.trim(),
+    );
 }
 
 const child = Bun.spawn(

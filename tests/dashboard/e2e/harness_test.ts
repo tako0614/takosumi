@@ -5,10 +5,17 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { resolveExternalStorageState } from "../../../scripts/dashboard-browser-e2e/live-inputs.ts";
 import {
+  requiresLiveWorkerVersionHeader,
   shouldRecordControlPlaneMutation,
   shouldRecordRequestFailure,
   shouldRecordResponseFailure,
+  workerVersionHeaderFailure,
 } from "./traffic-policy.ts";
+import {
+  assertExpectedResponseUrl,
+  assertExpectedRouteStatus,
+  assertExpectedWorkerVersionId,
+} from "../../../scripts/dashboard-browser-e2e/version-contract.ts";
 
 const repoRoot = resolve(import.meta.dir, "../../..");
 
@@ -134,4 +141,79 @@ test("mutation telemetry ignores external RUM and non-control-plane requests", (
       "GET",
     ),
   ).toBe(false);
+});
+
+test("live Version evidence rejects missing and substituted response headers", () => {
+  const origin = "https://app-staging.takosumi.com";
+  const expected = "00000000-0000-4000-8000-000000000001";
+  expect(
+    requiresLiveWorkerVersionHeader(
+      "live",
+      origin,
+      `${origin}/api/v1/workspaces`,
+      "xhr",
+    ),
+  ).toBe(true);
+  expect(
+    workerVersionHeaderFailure({
+      mode: "live",
+      origin,
+      url: `${origin}/api/v1/workspaces`,
+      resourceType: "xhr",
+      expectedWorkerVersionId: expected,
+      observedWorkerVersionId: null,
+    }),
+  ).toMatch(/observed <missing>/u);
+  expect(
+    workerVersionHeaderFailure({
+      mode: "live",
+      origin,
+      url: `${origin}/api/v1/workspaces`,
+      resourceType: "xhr",
+      expectedWorkerVersionId: expected,
+      observedWorkerVersionId: "00000000-0000-4000-8000-000000000002",
+    }),
+  ).toMatch(/expected x-takosumi-version-id/u);
+  expect(
+    workerVersionHeaderFailure({
+      mode: "live",
+      origin,
+      url: `${origin}/assets/app-12345678.js`,
+      resourceType: "script",
+      expectedWorkerVersionId: expected,
+      observedWorkerVersionId: null,
+    }),
+  ).toBeUndefined();
+});
+
+test("live OIDC and unauthenticated API evidence rejects the wrong response", () => {
+  expect(() =>
+    assertExpectedResponseUrl({
+      route: "/.well-known/openid-configuration",
+      expectedUrl:
+        "https://app-staging.takosumi.com/.well-known/openid-configuration",
+      observedUrl: "https://app-staging.takosumi.com/sign-in",
+    }),
+  ).toThrow(/expected response URL .*observed .*sign-in/u);
+  expect(() =>
+    assertExpectedRouteStatus({
+      route: "/.well-known/openid-configuration",
+      expectedStatus: 200,
+      observedStatus: 401,
+    }),
+  ).toThrow(/expected status 200, observed 401/u);
+  expect(() =>
+    assertExpectedRouteStatus({
+      route: "/api/v1/dashboard/bootstrap",
+      expectedStatus: 401,
+      observedStatus: 200,
+    }),
+  ).toThrow(/expected status 401, observed 200/u);
+  expect(() =>
+    assertExpectedWorkerVersionId({
+      route: "/oauth/jwks",
+      expectedWorkerVersionId: "00000000-0000-4000-8000-000000000001",
+      observedWorkerVersionId: null,
+    }),
+  ).toThrow(/missing x-takosumi-version-id/u);
 });

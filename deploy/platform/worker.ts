@@ -84,6 +84,7 @@ import {
   createTakosumiWellKnownDocument,
 } from "takosumi-contract/capabilities";
 import {
+  API_V1_PREFIX,
   INTERNAL_V1_PREFIX,
   TAKOSUMI_PRODUCT_CAPABILITIES_PATH,
   TAKOSUMI_WELL_KNOWN_PATH,
@@ -1288,6 +1289,9 @@ export default {
         honoExecutionContext(context),
       );
     }
+    if (isPlatformUnknownApiPath(url.pathname)) {
+      return Response.json({ error: "not found" }, { status: 404 });
+    }
     if (isPlatformReservedMachinePath(url.pathname)) {
       return Response.json({ error: "not found" }, { status: 404 });
     }
@@ -1881,6 +1885,7 @@ const PLATFORM_RESERVED_MACHINE_PREFIXES = [
   "/__takosumi",
   "/hooks",
   "/metrics",
+  "/livez",
   "/capabilities",
   "/openapi.json",
 ] as const;
@@ -1896,6 +1901,21 @@ function isPlatformReservedMachinePath(pathname: string): boolean {
   return PLATFORM_RESERVED_MACHINE_PREFIXES.some(
     (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
   );
+}
+
+function isPlatformUnknownApiPath(pathname: string): boolean {
+  if (pathname === "/api" || pathname === "/api/") return true;
+  if (!pathname.startsWith("/api/")) return false;
+  // Keep the canonical /api/v1 surface with Accounts. Near-prefix paths such
+  // as /api/v1x and /api/v10 are still normal SPA routes, not API paths.
+  if (
+    pathname === API_V1_PREFIX ||
+    pathname.startsWith(`${API_V1_PREFIX}/`)
+  ) {
+    return false;
+  }
+  if (pathname.startsWith(API_V1_PREFIX)) return false;
+  return true;
 }
 
 function platformGetHeadOnlyRequest(request: Request): boolean {

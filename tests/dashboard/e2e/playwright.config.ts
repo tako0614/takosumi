@@ -1,7 +1,10 @@
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "@playwright/test";
-import { resolveExternalStorageState } from "../../../scripts/dashboard-browser-e2e/live-inputs.ts";
+import {
+  resolveExternalStorageState,
+  validateExpectedWorkerVersionId,
+} from "../../../scripts/dashboard-browser-e2e/live-inputs.ts";
 
 const configDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(configDir, "../../..");
@@ -39,6 +42,9 @@ function liveConfig(): {
   const storageState = resolveExternalStorageState(
     repoRoot,
     requiredLiveEnv("TAKOSUMI_E2E_STORAGE_STATE"),
+  );
+  validateExpectedWorkerVersionId(
+    requiredLiveEnv("TAKOSUMI_E2E_EXPECTED_WORKER_VERSION_ID"),
   );
   return { baseURL: parsed.toString().replace(/\/$/u, ""), storageState };
 }
