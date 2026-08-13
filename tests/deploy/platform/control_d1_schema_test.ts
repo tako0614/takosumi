@@ -3963,6 +3963,112 @@ test("control D1 REST release keeps every query statement below D1's 100 KB limi
   }
 });
 
+test("control D1 REST release balances its guard predicate below SQLite expression depth", async () => {
+  const plan = await buildControlD1SchemaPlan();
+  const backing = new SqliteControlD1Database();
+  const { fetch: base, stats } = createD1RestAndImportFetch(backing);
+  const fetch: typeof globalThis.fetch = async (input, init) => {
+    const url = new URL(String(input));
+    if (url.pathname.endsWith("/import")) {
+      const body = JSON.parse(String(init?.body ?? "{}")) as {
+        readonly action?: string;
+      };
+      if (body.action === "ingest") {
+        const releaseSql = [...stats.uploadedSql]
+          .reverse()
+          .find((sql) =>
+            sql.includes(
+              `update _takosumi_control_schema_maintenance\n         set active = 0`,
+            ),
+          );
+        if (releaseSql && maxSameDepthOrRun(releaseSql) > 100) {
+          return Response.json({
+            success: true,
+            result: {
+              status: "error",
+              error: "expression tree is too large",
+            },
+          });
+        }
+      }
+    }
+    return await base(input, init);
+  };
+  const database = new CloudflareControlD1RestDatabase({
+    accountId: "account_123",
+    databaseId: "database_456",
+    apiToken: "secret-token",
+    fetch,
+    importPollIntervalMilliseconds: 0,
+    wait: async () => {},
+  });
+  try {
+    await applyControlD1Schema(database, plan, {
+      sourceCommit: SOURCE_COMMIT,
+      environment: "staging",
+      activatedAt: NOW,
+      releasedAt: () => NOW,
+      maintenanceDrainMilliseconds: 0,
+      waitForRequestDrain: async () => {},
+    });
+    const releaseSql = stats.uploadedSql
+      .filter((sql) =>
+        sql.includes(
+          `update _takosumi_control_schema_maintenance\n         set active = 0`,
+        ),
+      )
+      .at(-1);
+    expect(releaseSql).toBeString();
+    expect(maxSameDepthOrRun(releaseSql ?? "")).toBeLessThanOrEqual(100);
+  } finally {
+    backing.close();
+  }
+});
+
+function maxSameDepthOrRun(sql: string): number {
+  let depth = 0;
+  let quoted: string | undefined;
+  let previousDepth: number | undefined;
+  let run = 0;
+  let maximum = 0;
+  for (let index = 0; index < sql.length; index += 1) {
+    const character = sql[index]!;
+    if (quoted !== undefined) {
+      if (character === quoted) {
+        if (sql[index + 1] === quoted) {
+          index += 1;
+        } else {
+          quoted = undefined;
+        }
+      }
+      continue;
+    }
+    if (character === "'" || character === '"' || character === "`") {
+      quoted = character;
+      continue;
+    }
+    if (character === "(") {
+      depth += 1;
+      continue;
+    }
+    if (character === ")") {
+      depth = Math.max(0, depth - 1);
+      continue;
+    }
+    if (
+      sql.slice(index, index + 2).toLowerCase() === "or" &&
+      !/[A-Za-z0-9_]/u.test(sql[index - 1] ?? "") &&
+      !/[A-Za-z0-9_]/u.test(sql[index + 2] ?? "")
+    ) {
+      run = previousDepth === depth ? run + 1 : 1;
+      previousDepth = depth;
+      maximum = Math.max(maximum, run);
+      index += 1;
+    }
+  }
+  return maximum;
+}
+
 test("control D1 REST compound renderer fails closed on bind mismatch", async () => {
   let fetchCalls = 0;
   const database = new CloudflareControlD1RestDatabase({

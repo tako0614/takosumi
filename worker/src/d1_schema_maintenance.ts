@@ -1088,14 +1088,14 @@ function maintenanceFenceReleasePredicate(
     }`,
   );
   if (expectedTriggers.length > 0) {
-    const expectedMatches = expectedTriggers
-      .map(
+    const expectedMatches = boundedSqlOr(
+      expectedTriggers.map(
         (trigger) =>
           `(name = ${sqlLiteral(trigger.name)} and sql = ${sqlLiteral(
             trigger.sql,
           )})`,
-      )
-      .join(" or ");
+      ),
+    );
     predicates.push(
       `(select count(*) from sqlite_master where ${triggerFilter}` +
         ` and (${expectedMatches})) = ${expectedTriggers.length}`,
@@ -1105,6 +1105,29 @@ function maintenanceFenceReleasePredicate(
     sql: predicates.join(" and "),
     bindings: [],
   };
+}
+
+/**
+ * Build a balanced OR tree for D1's SQLite expression-depth limit.
+ *
+ * A long left-associated `a or b or c ...` expression can exceed D1's
+ * maximum expression depth even while remaining below the 100 KB statement
+ * limit. The release predicate is generated from the exact guard inventory,
+ * so balancing the equivalent leaves preserves the atomic fail-closed check.
+ */
+function boundedSqlOr(expressions: readonly string[]): string {
+  if (expressions.length === 0) return "0";
+  let level = [...expressions];
+  while (level.length > 1) {
+    const next: string[] = [];
+    for (let index = 0; index < level.length; index += 2) {
+      const left = level[index]!;
+      const right = level[index + 1];
+      next.push(right === undefined ? left : `(${left} or ${right})`);
+    }
+    level = next;
+  }
+  return level[0]!;
 }
 
 function sqlLiteral(value: string): string {
