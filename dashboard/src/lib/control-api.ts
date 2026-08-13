@@ -697,9 +697,9 @@ export interface Source {
 }
 
 /** Git's canonical immutable commit spelling accepted by the Workload flow. */
-const IMMUTABLE_SOURCE_REVISION = /^[0-9a-f]{40}$/u;
+const IMMUTABLE_SOURCE_REVISION = /^[0-9a-f]{40}$/iu;
 
-/** True only for an exact, lowercase 40-hex Git commit. */
+/** True only for an exact 40-hex Git commit. */
 export function isImmutableSourceRevision(value: string): boolean {
   return IMMUTABLE_SOURCE_REVISION.test(value);
 }
