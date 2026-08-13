@@ -151,12 +151,12 @@ function summarizeControlError(error: unknown): ControlApiErrorSummary {
  * issuing another mutation.
  */
 export class ControlApiIndeterminateError extends ControlApiError {
-  readonly operation: "apply" | "capsule_create";
+  readonly operation: "apply" | "capsule_create" | "source_patch";
   readonly isIndeterminate = true;
   readonly causeSummary?: ControlApiErrorSummary;
 
   constructor(
-    operation: "apply" | "capsule_create",
+    operation: "apply" | "capsule_create" | "source_patch",
     message: string,
     cause?: unknown,
   ) {
@@ -694,6 +694,30 @@ export interface Source {
   readonly autoSync: boolean;
   readonly createdAt: string;
   readonly updatedAt: string;
+}
+
+/** Git's canonical immutable commit spelling accepted by the Workload flow. */
+const IMMUTABLE_SOURCE_REVISION = /^[0-9a-f]{40}$/u;
+
+/** True only for an exact, lowercase 40-hex Git commit. */
+export function isImmutableSourceRevision(value: string): boolean {
+  return IMMUTABLE_SOURCE_REVISION.test(value);
+}
+
+export interface SourcePatchRequest {
+  readonly name?: string;
+  readonly defaultRef?: string;
+  readonly defaultPath?: string;
+  readonly authConnectionId?: string | null;
+  readonly status?: Source["status"];
+  readonly autoSync?: boolean;
+}
+
+export interface CapsuleSourceIdentity {
+  readonly workspaceId: string;
+  readonly sourceId: string;
+  readonly url: string;
+  readonly defaultPath: string;
 }
 
 export type SourceSnapshotOrigin = "git";
@@ -1794,6 +1818,119 @@ export async function listSources(
   );
 }
 
+export async function getSource(sourceId: string): Promise<Source> {
+  const body = await controlFetch<{ readonly source: Source }>(
+    `${BASE}/sources/${encodeURIComponent(sourceId)}`,
+  );
+  return body.source;
+}
+
+export async function patchSource(
+  sourceId: string,
+  patch: SourcePatchRequest,
+): Promise<Source> {
+  const body = await controlFetch<{ readonly source: Source }>(
+    `${BASE}/sources/${encodeURIComponent(sourceId)}`,
+    { method: "PATCH", body: patch },
+  );
+  return body.source;
+}
+
+function sourceIdentityMatches(
+  source: Source,
+  capsule: Capsule,
+  identity: CapsuleSourceIdentity,
+): boolean {
+  return (
+    capsule.workspaceId === identity.workspaceId &&
+    capsule.sourceId === identity.sourceId &&
+    source.workspaceId === identity.workspaceId &&
+    source.id === identity.sourceId &&
+    source.url === identity.url &&
+    source.defaultPath === identity.defaultPath
+  );
+}
+
+function sourceRevisionMismatch(message: string): ControlApiError {
+  return new ControlApiError(409, "source_revision_mismatch", message);
+}
+
+function sourcePatchIndeterminate(
+  message: string,
+  cause?: unknown,
+): ControlApiIndeterminateError {
+  return new ControlApiIndeterminateError("source_patch", message, cause);
+}
+
+/**
+ * Advances one existing Capsule Source to an exact commit. The Source URL,
+ * path, identity, and Workspace are read before the write and checked again
+ * after it. There is one PATCH at most; an uncertain PATCH gets one GET
+ * readback and is never blindly replayed.
+ */
+export async function updateCapsuleSourceRevision(
+  capsuleId: string,
+  identity: CapsuleSourceIdentity,
+  revision: string,
+): Promise<Source> {
+  if (!isImmutableSourceRevision(revision)) {
+    throw new ControlApiError(
+      400,
+      "invalid_source_revision",
+      "Source revision must be an exact 40-character hexadecimal commit.",
+    );
+  }
+  const capsule = await getCapsule(capsuleId);
+  if (
+    capsule.workspaceId !== identity.workspaceId ||
+    capsule.sourceId !== identity.sourceId
+  ) {
+    throw sourceRevisionMismatch(
+      "The requested Source does not belong to this Capsule and Workspace.",
+    );
+  }
+  const before = await getSource(identity.sourceId);
+  if (!sourceIdentityMatches(before, capsule, identity)) {
+    throw sourceRevisionMismatch(
+      "The Source URL, path, or Workspace changed; the version was not updated.",
+    );
+  }
+
+  let patchError: unknown;
+  try {
+    await patchSource(identity.sourceId, { defaultRef: revision });
+  } catch (error) {
+    if (!isMutationOutcomeUnknown(error)) throw error;
+    patchError = error;
+  }
+
+  let readback: Source;
+  try {
+    readback = await getSource(identity.sourceId);
+  } catch (error) {
+    throw sourcePatchIndeterminate(
+      "Source revision update outcome is indeterminate because the authoritative readback was unavailable.",
+      patchError ?? error,
+    );
+  }
+  const exact =
+    sourceIdentityMatches(readback, capsule, identity) &&
+    readback.defaultRef === revision;
+  if (patchError) {
+    if (exact) return readback;
+    throw sourcePatchIndeterminate(
+      "Source revision update outcome is indeterminate; reconcile the Source before trying again.",
+      patchError,
+    );
+  }
+  if (!exact) {
+    throw sourceRevisionMismatch(
+      "The Source did not read back with the requested exact revision.",
+    );
+  }
+  return readback;
+}
+
 export interface CreateSourceResult {
   readonly source: Source;
   readonly hookSecret: string;
@@ -2049,9 +2186,46 @@ export async function planCapsule(
  */
 export async function planCapsuleUpdate(
   capsuleId: string,
-  options: { readonly timeoutMs?: number } = {},
+  options: {
+    readonly timeoutMs?: number;
+    /** Require this exact Source revision before starting sync/plan. */
+    readonly sourceRevision?: string;
+    /** Verify that the existing Source identity remains unchanged. */
+    readonly sourceIdentity?: CapsuleSourceIdentity;
+  } = {},
 ): Promise<unknown> {
   const capsule = await getCapsule(capsuleId);
+  if (options.sourceRevision !== undefined) {
+    if (!isImmutableSourceRevision(options.sourceRevision)) {
+      throw new ControlApiError(
+        400,
+        "invalid_source_revision",
+        "Source revision must be an exact 40-character hexadecimal commit.",
+      );
+    }
+    if (!capsule.sourceId) {
+      throw sourceRevisionMismatch(
+        "This Capsule has no existing Git Source to update.",
+      );
+    }
+    const source = await getSource(capsule.sourceId);
+    const identity = options.sourceIdentity ?? {
+      workspaceId: capsule.workspaceId,
+      sourceId: capsule.sourceId,
+      url: source.url,
+      defaultPath: source.defaultPath,
+    };
+    if (!sourceIdentityMatches(source, capsule, identity)) {
+      throw sourceRevisionMismatch(
+        "The Source URL, path, or Workspace changed; review the current service again.",
+      );
+    }
+    if (source.defaultRef !== options.sourceRevision) {
+      throw sourceRevisionMismatch(
+        "The requested exact Source revision is not the current readback.",
+      );
+    }
+  }
   if (!capsule.sourceId) return await planCapsule(capsuleId, options);
 
   const syncEnvelope = await syncSource(capsule.sourceId, {
