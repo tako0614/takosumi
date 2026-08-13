@@ -147,7 +147,6 @@ function isPublicLiveAllowedRead(url: URL, method: string): boolean {
   if (url.pathname !== "/api/v1/dashboard/bootstrap") {
     return url.search === "";
   }
-  if (url.search === "") return true;
   if (
     url.searchParams.size === 1 &&
     url.searchParams.get("includeWorkspaces") === "false"

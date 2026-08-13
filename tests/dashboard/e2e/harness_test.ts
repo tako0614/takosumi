@@ -261,6 +261,14 @@ test("public-live binds every official-origin response to the exact Version", ()
   expect(
     isExpectedPublicBootstrapDenial({
       origin,
+      urlValue: `${origin}/api/v1/dashboard/bootstrap`,
+      status: 401,
+      contentType: "application/json",
+    }),
+  ).toBe(false);
+  expect(
+    isExpectedPublicBootstrapDenial({
+      origin,
       urlValue: `${origin}/api/v1/dashboard/bootstrap?includeWorkspaces=false`,
       status: 401,
       contentType: "text/html",
@@ -303,6 +311,14 @@ test("public-live binds every official-origin response to the exact Version", ()
       "public-live",
       origin,
       `${origin}/api/v1/dashboard/bootstrap?includeWorkspaces=true&workspaceLimit=51`,
+      "GET",
+    ),
+  ).toBe(true);
+  expect(
+    shouldRecordControlPlaneMutation(
+      "public-live",
+      origin,
+      `${origin}/api/v1/dashboard/bootstrap`,
       "GET",
     ),
   ).toBe(true);
