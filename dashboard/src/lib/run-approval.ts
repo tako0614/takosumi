@@ -2,12 +2,12 @@
  * Shared deploy-approval predicate for review runs.
  *
  * A succeeded, policy-passed review run (plan / destroy_plan) "awaits deploy
- * approval" only until SOME apply / destroy_apply for the same Capsule has
- * been created at/after it — any apply attempt consumes the approval,
- * regardless of that apply's outcome. Both the run history rows and the run
- * detail screen (承認待ち badge + デプロイを実行 CTA) MUST derive from this
- * one predicate so an already-applied plan opened from history can never
- * present an active deploy approval again.
+ * approval" only until an apply / destroy_apply explicitly references it via
+ * `planRunId` — any matching apply attempt consumes the approval, regardless
+ * of that apply's outcome. Both the run history rows and the run detail screen
+ * (承認待ち badge + デプロイを実行 CTA) MUST derive from this one predicate
+ * so an already-applied plan opened from history can never present an active
+ * deploy approval again.
  */
 import type { Run } from "./control-api.ts";
 
@@ -34,24 +34,20 @@ export function isDeployApprovalCandidate(run: Run): boolean {
 
 /**
  * True when a succeeded review run (plan / destroy_plan) is still waiting on
- * the user's deploy approval: policy passed, and no apply / destroy_apply for
- * the same Capsule has been created at/after it. `runs` is the Workspace Run
- * ledger (or the newest slice of it) the plan lives in.
+ * the user's deploy approval: policy passed, and no apply / destroy_apply
+ * explicitly references it through `planRunId`. `runs` is the Workspace Run
+ * ledger (or the newest slice of it) the plan lives in. Rows without the
+ * relation are legacy/unknown and do not consume approval.
  */
 export function awaitsDeployApproval(run: Run, runs: readonly Run[]): boolean {
   if (!isDeployApprovalCandidate(run)) return false;
   const planCapsuleId = runCapsuleId(run);
   if (!planCapsuleId) return false;
-  const planCreatedAt = Date.parse(run.createdAt);
   return !runs.some((candidate) => {
     if (candidate.type !== "apply" && candidate.type !== "destroy_apply") {
       return false;
     }
     if (runCapsuleId(candidate) !== planCapsuleId) return false;
-    if (Number.isNaN(planCreatedAt)) return true;
-    const candidateCreatedAt = Date.parse(candidate.createdAt);
-    return Number.isNaN(candidateCreatedAt)
-      ? true
-      : candidateCreatedAt >= planCreatedAt;
+    return candidate.planRunId === run.id;
   });
 }

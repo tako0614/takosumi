@@ -5112,6 +5112,11 @@ function runSchemas(): Record<string, Record<string, unknown>> {
         id: { type: "string" },
         runGroupId: { type: "string" },
         workspaceId: { type: "string" },
+        planRunId: {
+          type: "string",
+          description:
+            "Exact PlanRun consumed by this ApplyRun; absent on non-apply or legacy rows.",
+        },
         sourceId: { type: "string" },
         subject: {
           type: "object",

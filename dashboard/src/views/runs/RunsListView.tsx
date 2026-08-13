@@ -269,10 +269,11 @@ function RunHistoryRowView(props: { readonly row: RunHistoryRow }) {
   );
 }
 
-// The 承認待ち presentation (a succeeded review run whose deploy approval no
-// apply attempt has consumed) derives from the SHARED predicate in
-// lib/run-approval.ts — the same one RunView's badge + deploy CTA use — so the
-// list and the run screen can never disagree about an open approval.
+// The 承認待ち presentation (a succeeded review run whose deploy approval has
+// not been consumed by an explicitly linked apply attempt) derives from the
+// SHARED predicate in lib/run-approval.ts — the same one RunView's badge +
+// deploy CTA use — so the list and the run screen can never disagree about an
+// open approval.
 
 function rowsFromRuns(
   runs: readonly Run[],

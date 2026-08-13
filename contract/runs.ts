@@ -128,6 +128,8 @@ export interface Run {
   readonly id: string;
   readonly runGroupId?: string;
   readonly workspaceId: string;
+  /** Exact PlanRun id consumed by an ApplyRun, when this is an apply row. */
+  readonly planRunId?: string;
   /** Present for Source-scoped rows such as `source_sync`. */
   readonly sourceId?: string;
   /** Explicit execution subject for non-Capsule and new generic run flows. */

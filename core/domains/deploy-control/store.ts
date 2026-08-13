@@ -3124,7 +3124,7 @@ export function runtimeSafetyCandidate(
   capsuleId: string,
 ): boolean {
   if (row.capsuleId !== capsuleId) return false;
-  if ("planRunId" in row) {
+  if (isApplyRunRecord(row)) {
     if (row.operation === "destroy") {
       if (
         row.status === "queued" ||
@@ -3165,7 +3165,7 @@ export function applyRunMutationDispatched(row: ApplyRun): boolean {
 export function capsuleRuntimeSafetyFromRun(
   row: ApplyRun | Run,
 ): CapsuleRuntimeSafety {
-  if ("planRunId" in row) {
+  if (isApplyRunRecord(row)) {
     if (row.operation === "destroy") {
       if (row.status === "succeeded") {
         return { phase: "retired", runId: row.id, runType: "destroy_apply" };
@@ -3196,7 +3196,7 @@ export function capsuleRuntimeSafetyFromRun(
  * projection until it reaches a terminal status.
  */
 export function runtimeSafetyCandidateIsInFlight(row: ApplyRun | Run): boolean {
-  if ("planRunId" in row) {
+  if (isApplyRunRecord(row)) {
     return (
       row.operation === "destroy" &&
       (row.status === "queued" || row.status === "running")
@@ -3217,7 +3217,7 @@ export function runtimeSafetyCandidateIsInFlight(row: ApplyRun | Run): boolean {
 export function runtimeSafetyCandidateEffectTimestamp(
   row: ApplyRun | Run,
 ): number {
-  if ("planRunId" in row) {
+  if (isApplyRunRecord(row)) {
     return (
       runTimestampValue(row.finishedAt) ??
       runTimestampValue(row.updatedAt) ??

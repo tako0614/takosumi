@@ -24,6 +24,7 @@ function planRun(overrides: Partial<Run> = {}): Run {
 function applyRun(overrides: Partial<Run> = {}): Run {
   return planRun({
     id: "run_apply",
+    planRunId: "run_plan",
     type: "apply",
     createdAt: "2026-07-01T00:05:00.000Z",
     ...overrides,
@@ -38,7 +39,7 @@ describe("shared deploy-approval predicate (run list ↔ run view)", () => {
     expect(awaitsDeployApproval(plan, [plan])).toBe(true);
   });
 
-  test("ANY apply attempt at/after the plan consumes the approval — even a failed one", () => {
+  test("an exact linked apply consumes the approval — even when failed", () => {
     const plan = planRun();
     expect(awaitsDeployApproval(plan, [plan, applyRun()])).toBe(false);
     expect(
@@ -54,15 +55,27 @@ describe("shared deploy-approval predicate (run list ↔ run view)", () => {
     ).toBe(false);
   });
 
-  test("applies for OTHER capsules or from BEFORE the plan do not consume it", () => {
+  test("only an exact planRunId consumes approval", () => {
     const plan = planRun();
     expect(
       awaitsDeployApproval(plan, [
         plan,
         applyRun({ capsuleId: "capsule_other" }),
-        applyRun({ createdAt: "2026-06-30T23:59:00.000Z" }),
+        applyRun({ planRunId: "run_plan_other" }),
       ]),
     ).toBe(true);
+    expect(
+      awaitsDeployApproval(plan, [plan, applyRun({ planRunId: undefined })]),
+    ).toBe(true);
+    expect(
+      awaitsDeployApproval(plan, [
+        plan,
+        applyRun({
+          planRunId: "run_plan",
+          createdAt: "2020-01-01T00:00:00.000Z",
+        }),
+      ]),
+    ).toBe(false);
   });
 
   test("non-candidates never await approval", () => {
@@ -77,13 +90,25 @@ describe("shared deploy-approval predicate (run list ↔ run view)", () => {
     );
   });
 
-  test("an unparseable plan timestamp fails safe: any apply for the capsule consumes", () => {
+  test("legacy or missing relation fails closed without a timestamp guess", () => {
     const plan = planRun({ createdAt: "not-a-date" });
     expect(
       awaitsDeployApproval(plan, [
         plan,
-        applyRun({ createdAt: "2020-01-01T00:00:00.000Z" }),
+        applyRun({
+          planRunId: undefined,
+          createdAt: "2020-01-01T00:00:00.000Z",
+        }),
       ]),
-    ).toBe(false);
+    ).toBe(true);
+    expect(
+      awaitsDeployApproval(plan, [
+        plan,
+        applyRun({
+          planRunId: "legacy_unknown",
+          createdAt: "2030-01-01T00:00:00.000Z",
+        }),
+      ]),
+    ).toBe(true);
   });
 });
