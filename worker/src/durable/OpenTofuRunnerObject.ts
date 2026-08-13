@@ -16,6 +16,12 @@ import {
   type RunnerMutationAction,
   type RunnerMutationIndeterminatePayload,
 } from "../runner_protocol.ts";
+import {
+  isRunCredentialToken,
+  runCredentialTokenSecret,
+  verifyRunCredentialTokenAuthority,
+  type RunCredentialTokenPayload,
+} from "../../../core/shared/run_credential_tokens.ts";
 import { redactString } from "takosumi-contract/redaction";
 
 const DEFAULT_PLAN_ARTIFACT_BUCKET = "takos-artifacts";
@@ -265,16 +271,19 @@ const MAX_RUNNER_KEEPALIVE_SECONDS = 900;
 const RUNNER_STARTUP_SECONDS_HEADER = "x-takosumi-runner-startup-seconds";
 const RUNNER_MUTATION_INDETERMINATE_HEADER =
   "x-takosumi-runner-mutation-indeterminate";
+// This is a permanent authority slot, not a schema-versioned cache key. An
+// unrecognized record at this key fails closed instead of letting a future
+// record-format migration accidentally grant a second provider dispatch.
 const RUNNER_MUTATION_AUTHORITY_STORAGE_KEY =
-  "runner-mutation-authority@v1";
+  "runner-mutation-authority";
 const RUNNER_MUTATION_DISPATCH_STORAGE_PREFIX =
-  "runner-mutation-dispatch@v1:";
+  "runner-mutation-dispatch@v2:";
 
 interface RunnerMutationDispatchRecord {
-  readonly kind: "takosumi.runner-mutation-dispatch@v1";
+  readonly kind: "takosumi.runner-mutation-dispatch@v2";
   readonly action: RunnerMutationAction;
-  /** SHA-256 over canonical JSON containing the exact run/action/request. */
-  readonly identityDigest: string;
+  /** SHA-256 over immutable inputs and stable credential authority claims. */
+  readonly semanticDigest: string;
   /** `preparing` is provably before provider dispatch. */
   readonly phase: "preparing" | "dispatched" | "indeterminate";
   /** Once dispatched, this durable claim permanently forbids redispatch. */
@@ -583,10 +592,11 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     | { readonly claimed: true; readonly record: RunnerMutationDispatchRecord }
     | { readonly claimed: false }
   > {
-    const identityDigest = await runnerMutationIdentityDigest(
+    const semanticDigest = await runnerMutationSemanticDigest(
       runId,
       action,
       requestPayload,
+      this.env,
     );
     // A Durable Object has one live isolate for this ID, so acquiring this
     // in-isolate owner before the first storage await closes concurrent claim
@@ -594,7 +604,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     if (this.#activeMutationPreparations.size > 0) {
       return { claimed: false };
     }
-    this.#activeMutationPreparations.add(identityDigest);
+    this.#activeMutationPreparations.add(semanticDigest);
     try {
       const existing = await this.ctx.storage.get<unknown>(
         RUNNER_MUTATION_AUTHORITY_STORAGE_KEY,
@@ -605,9 +615,9 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
           !existingRecord ||
           existingRecord.phase !== "preparing" ||
           existingRecord.action !== action ||
-          existingRecord.identityDigest !== identityDigest
+          existingRecord.semanticDigest !== semanticDigest
         ) {
-          this.#activeMutationPreparations.delete(identityDigest);
+          this.#activeMutationPreparations.delete(semanticDigest);
           return { claimed: false };
         }
         // A persisted `preparing` phase proves no provider dispatch authority
@@ -617,16 +627,16 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       }
 
       const record: RunnerMutationDispatchRecord = {
-        kind: "takosumi.runner-mutation-dispatch@v1",
+        kind: "takosumi.runner-mutation-dispatch@v2",
         action,
-        identityDigest,
+        semanticDigest,
         phase: "preparing",
         redispatchBlocked: true,
       };
       await this.#writeMutationDispatchRecord(record);
       return { claimed: true, record };
     } catch (error) {
-      this.#activeMutationPreparations.delete(identityDigest);
+      this.#activeMutationPreparations.delete(semanticDigest);
       throw error;
     }
   }
@@ -643,9 +653,9 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       !current ||
       current.phase !== "preparing" ||
       current.action !== preparation.action ||
-      current.identityDigest !== preparation.identityDigest
+      current.semanticDigest !== preparation.semanticDigest
     ) {
-      this.#activeMutationPreparations.delete(preparation.identityDigest);
+      this.#activeMutationPreparations.delete(preparation.semanticDigest);
       return undefined;
     }
     const dispatched: RunnerMutationDispatchRecord = {
@@ -653,7 +663,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       phase: "dispatched",
     };
     await this.#writeMutationDispatchRecord(dispatched);
-    this.#activeMutationPreparations.delete(preparation.identityDigest);
+    this.#activeMutationPreparations.delete(preparation.semanticDigest);
     return dispatched;
   }
 
@@ -670,7 +680,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         !current ||
         current.phase !== "preparing" ||
         current.action !== preparation.action ||
-        current.identityDigest !== preparation.identityDigest
+        current.semanticDigest !== preparation.semanticDigest
       ) {
         return;
       }
@@ -681,11 +691,11 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         RUNNER_MUTATION_AUTHORITY_STORAGE_KEY,
       );
       const evidenceDelete = this.ctx.storage.delete(
-        `${RUNNER_MUTATION_DISPATCH_STORAGE_PREFIX}${preparation.identityDigest}`,
+        `${RUNNER_MUTATION_DISPATCH_STORAGE_PREFIX}${preparation.semanticDigest}`,
       );
       await Promise.all([authorityDelete, evidenceDelete]);
     } finally {
-      this.#activeMutationPreparations.delete(preparation.identityDigest);
+      this.#activeMutationPreparations.delete(preparation.semanticDigest);
     }
   }
 
@@ -700,7 +710,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       record,
     );
     const evidenceWrite = this.ctx.storage.put(
-      `${RUNNER_MUTATION_DISPATCH_STORAGE_PREFIX}${record.identityDigest}`,
+      `${RUNNER_MUTATION_DISPATCH_STORAGE_PREFIX}${record.semanticDigest}`,
       record,
     );
     await Promise.all([authorityWrite, evidenceWrite]);
@@ -3272,13 +3282,13 @@ function parseRunnerMutationDispatchRecord(
 ): RunnerMutationDispatchRecord | undefined {
   if (!isRecord(value)) return undefined;
   const action = stringField(value, "action");
-  const identityDigest = stringField(value, "identityDigest");
+  const semanticDigest = stringField(value, "semanticDigest");
   const phase = stringField(value, "phase");
   if (
-    value.kind !== "takosumi.runner-mutation-dispatch@v1" ||
+    value.kind !== "takosumi.runner-mutation-dispatch@v2" ||
     !isRunnerMutationAction(action) ||
-    !identityDigest ||
-    !/^sha256:[0-9a-f]{64}$/u.test(identityDigest) ||
+    !semanticDigest ||
+    !/^sha256:[0-9a-f]{64}$/u.test(semanticDigest) ||
     (phase !== "preparing" &&
       phase !== "dispatched" &&
       phase !== "indeterminate") ||
@@ -3287,27 +3297,315 @@ function parseRunnerMutationDispatchRecord(
     return undefined;
   }
   return {
-    kind: "takosumi.runner-mutation-dispatch@v1",
+    kind: "takosumi.runner-mutation-dispatch@v2",
     action,
-    identityDigest,
+    semanticDigest,
     phase,
     redispatchBlocked: true,
   };
 }
 
-async function runnerMutationIdentityDigest(
+const MUTABLE_RUN_EVIDENCE_FIELDS = new Set([
+  "auditEvents",
+  "createdAt",
+  "diagnostics",
+  "finishedAt",
+  "heartbeatAt",
+  "startedAt",
+  "status",
+  "updatedAt",
+]);
+
+interface RunnerVerifiedCredentialAuthority {
+  readonly kind: "takosumi.run-credential-authority@v1";
+  readonly tokenType: string;
+  readonly tokenVersion: number;
+  /** Nested only in the semantic hash; the signer secret is never persisted. */
+  readonly signingAuthorityDigest: string;
+  readonly audience: string;
+  readonly subject: string;
+  readonly workspaceId: string;
+  readonly capsuleId: string;
+  readonly runId: string;
+  readonly installingPrincipalId: string;
+  readonly connectionId: string;
+  readonly provider: string;
+  readonly phase: "apply" | "destroy";
+  readonly scopes: readonly string[];
+  readonly deliveries: readonly string[];
+}
+
+async function runnerMutationSemanticDigest(
   runId: string,
   action: RunnerMutationAction,
   requestPayload: unknown,
+  env: CloudflareWorkerEnv,
 ): Promise<string> {
+  if (!isRecord(requestPayload)) {
+    throw new Error("runner mutation request must be an object");
+  }
+  const request: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(requestPayload)) {
+    if (key === "credentials") continue;
+    if (key === "applyRun" || key === "planRun") {
+      request[key] = stableMutationRunEvidence(value, key);
+      continue;
+    }
+    request[key] = value;
+  }
+  request.credentials = await runnerMutationCredentialSemantics(
+    requestPayload.credentials,
+    requestPayload,
+    action,
+    env,
+  );
   return await digestText(
     canonicalRunnerMutationJson({
-      kind: "takosumi.runner-mutation-identity@v1",
+      kind: "takosumi.runner-mutation-semantics@v2",
       runId,
       action,
-      request: requestPayload ?? null,
+      request,
     }),
   );
+}
+
+function stableMutationRunEvidence(value: unknown, label: string): unknown {
+  if (!isRecord(value)) {
+    throw new Error(`${label} must be an object`);
+  }
+  const stable: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (MUTABLE_RUN_EVIDENCE_FIELDS.has(key)) continue;
+    if (key === "stateLock" && isRecord(entry)) {
+      stable.stateLock = {
+        ...(stringField(entry, "backendRef")
+          ? { backendRef: stringField(entry, "backendRef")! }
+          : {}),
+        ...(stringField(entry, "lockRef")
+          ? { lockRef: stringField(entry, "lockRef")! }
+          : {}),
+      };
+      continue;
+    }
+    stable[key] = entry;
+  }
+  return stable;
+}
+
+async function runnerMutationCredentialSemantics(
+  value: unknown,
+  requestPayload: Readonly<Record<string, unknown>>,
+  action: RunnerMutationAction,
+  env: CloudflareWorkerEnv,
+): Promise<unknown> {
+  if (value === undefined) return null;
+  if (!isRecord(value)) {
+    throw new Error("runner mutation credentials must be an object");
+  }
+  const rawEnv = recordField(value, "env") ?? {};
+  const envNames = Object.keys(rawEnv).sort();
+  if (Object.values(rawEnv).some((entry) => typeof entry !== "string")) {
+    throw new Error("runner mutation credential env must contain strings");
+  }
+  const rawFiles = value.files;
+  if (rawFiles !== undefined && !Array.isArray(rawFiles)) {
+    throw new Error("runner mutation credential files must be an array");
+  }
+  const fileSemantics = (Array.isArray(rawFiles) ? rawFiles : []).map(
+    (entry) => {
+      if (!isRecord(entry)) {
+        throw new Error("runner mutation credential file must be an object");
+      }
+      const path = stringField(entry, "path");
+      const content = stringField(entry, "content");
+      const mode = entry.mode;
+      if (!path || content === undefined || typeof mode !== "number") {
+        throw new Error(
+          "runner mutation credential file requires path, mode, and content",
+        );
+      }
+      return {
+        path,
+        mode,
+        ...(stringField(entry, "envName")
+          ? { envName: stringField(entry, "envName")! }
+          : {}),
+      };
+    },
+  );
+  const secretEntries = [
+    ...Object.entries(rawEnv).map(([name, entry]) => ({
+      delivery: `env:${name}`,
+      value: entry as string,
+    })),
+    ...(Array.isArray(rawFiles)
+      ? rawFiles.flatMap((entry) =>
+          isRecord(entry) &&
+          typeof entry.path === "string" &&
+          typeof entry.content === "string"
+            ? [{ delivery: `file:${entry.path}`, value: entry.content }]
+            : [],
+        )
+      : []),
+  ];
+  const signedTokenDeliveries = new Map<string, Set<string>>();
+  for (const entry of secretEntries) {
+    if (!isRunCredentialToken(entry.value)) continue;
+    const deliveries = signedTokenDeliveries.get(entry.value) ?? new Set();
+    deliveries.add(entry.delivery);
+    signedTokenDeliveries.set(entry.value, deliveries);
+  }
+  const staticMaterialDigests = await Promise.all(
+    secretEntries
+      .filter((entry) => !isRunCredentialToken(entry.value))
+      .map(async (entry) => ({
+        delivery: entry.delivery,
+        digest: await digestText(entry.value),
+      })),
+  );
+  const authorities = await verifiedRunnerCredentialAuthorities(
+    signedTokenDeliveries,
+    requestPayload,
+    action,
+    value,
+    env,
+  );
+  return {
+    envNames,
+    files: fileSemantics.sort((left, right) =>
+      canonicalRunnerMutationJson(left).localeCompare(
+        canonicalRunnerMutationJson(right),
+      ),
+    ),
+    manifest: value.manifest ?? null,
+    authorities,
+    staticMaterialDigests: staticMaterialDigests.sort((left, right) =>
+      left.delivery.localeCompare(right.delivery),
+    ),
+  };
+}
+
+async function verifiedRunnerCredentialAuthorities(
+  tokenDeliveries: ReadonlyMap<string, ReadonlySet<string>>,
+  requestPayload: Readonly<Record<string, unknown>>,
+  action: RunnerMutationAction,
+  credentials: Readonly<Record<string, unknown>>,
+  env: CloudflareWorkerEnv,
+): Promise<readonly RunnerVerifiedCredentialAuthority[]> {
+  if (tokenDeliveries.size === 0) return [];
+  const secret = runCredentialTokenSecret(env as Record<string, unknown>);
+  if (!secret) {
+    throw new Error("Run credential verification authority is unavailable");
+  }
+  const context = mutationCredentialExpectedContext(requestPayload, action);
+  const bindings = mutationCredentialManifestBindings(credentials);
+  const signingAuthorityDigest = await digestText(secret);
+  const authorities: RunnerVerifiedCredentialAuthority[] = [];
+  for (const [token, deliveries] of tokenDeliveries) {
+    const verified = await verifyRunCredentialTokenAuthority(token, { secret });
+    if (!verified.ok) {
+      throw new Error(`Run credential verification failed: ${verified.reason}`);
+    }
+    assertMutationCredentialAuthority(verified.payload, context, bindings);
+    authorities.push({
+      kind: "takosumi.run-credential-authority@v1",
+      tokenType: verified.payload.typ,
+      tokenVersion: verified.payload.v,
+      signingAuthorityDigest,
+      audience: verified.payload.aud,
+      subject: verified.payload.sub,
+      workspaceId: verified.payload.workspaceId,
+      capsuleId: verified.payload.capsuleId,
+      runId: verified.payload.runId,
+      installingPrincipalId: verified.payload.installingPrincipalId,
+      connectionId: verified.payload.connectionId,
+      provider: verified.payload.provider,
+      phase: action,
+      scopes: [...verified.payload.scopes].sort(),
+      deliveries: [...deliveries].sort(),
+    });
+  }
+  return authorities.sort((left, right) =>
+    canonicalRunnerMutationJson(left).localeCompare(
+      canonicalRunnerMutationJson(right),
+    ),
+  );
+}
+
+function mutationCredentialExpectedContext(
+  requestPayload: Readonly<Record<string, unknown>>,
+  action: RunnerMutationAction,
+): {
+  readonly workspaceId: string;
+  readonly capsuleId: string;
+  readonly runId: string;
+  readonly action: RunnerMutationAction;
+} {
+  const applyRun = recordField(requestPayload, "applyRun");
+  const planRun = recordField(requestPayload, "planRun");
+  const workspaceId = applyRun && stringField(applyRun, "workspaceId");
+  const capsuleId =
+    (applyRun && stringField(applyRun, "capsuleId")) ??
+    (planRun && stringField(planRun, "capsuleId"));
+  const runId = applyRun && stringField(applyRun, "id");
+  if (!workspaceId || !capsuleId || !runId) {
+    throw new Error(
+      "signed Run credentials require exact ApplyRun Workspace and Capsule context",
+    );
+  }
+  if (
+    planRun &&
+    ((stringField(planRun, "workspaceId") !== undefined &&
+      stringField(planRun, "workspaceId") !== workspaceId) ||
+      (stringField(planRun, "capsuleId") !== undefined &&
+        stringField(planRun, "capsuleId") !== capsuleId))
+  ) {
+    throw new Error("signed Run credential context mismatches the PlanRun");
+  }
+  return { workspaceId, capsuleId, runId, action };
+}
+
+function mutationCredentialManifestBindings(
+  credentials: Readonly<Record<string, unknown>>,
+): readonly Readonly<Record<string, unknown>>[] {
+  const manifest = recordField(credentials, "manifest");
+  const bindings = manifest?.bindings;
+  if (!Array.isArray(bindings)) {
+    throw new Error("signed Run credentials require a credential manifest");
+  }
+  return bindings.map((binding) => {
+    if (!isRecord(binding)) {
+      throw new Error("credential manifest binding must be an object");
+    }
+    return binding;
+  });
+}
+
+function assertMutationCredentialAuthority(
+  payload: RunCredentialTokenPayload,
+  context: ReturnType<typeof mutationCredentialExpectedContext>,
+  bindings: readonly Readonly<Record<string, unknown>>[],
+): void {
+  if (
+    payload.workspaceId !== context.workspaceId ||
+    payload.capsuleId !== context.capsuleId ||
+    payload.runId !== context.runId ||
+    payload.phase !== context.action ||
+    payload.sub !== payload.installingPrincipalId
+  ) {
+    throw new Error("signed Run credential authority mismatches the mutation");
+  }
+  if (
+    !bindings.some(
+      (binding) =>
+        stringField(binding, "connectionId") === payload.connectionId &&
+        stringField(binding, "providerSource") === payload.provider,
+    )
+  ) {
+    throw new Error(
+      "signed Run credential authority mismatches the credential manifest",
+    );
+  }
 }
 
 function canonicalRunnerMutationJson(value: unknown): string {

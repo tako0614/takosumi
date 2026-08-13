@@ -83,9 +83,16 @@ runtime registry or credential channel.
 
 Apply and Destroy are at-most-once provider dispatches. Before either request
 can reach the runner container, the runner Durable Object durably records the
-exact run/action/request identity. A transport failure after dispatch returns
-the typed `runner_mutation_indeterminate` outcome and never redispatches the
-provider mutation. Redelivery may complete only by adopting the exact immutable
+stable semantics of the exact Run/action and immutable source, plan, state,
+module, and provider-binding inputs. Signed Run credentials are reverified on
+each delivery; their stable authority claims and delivery coordinates are
+bound while token bytes, issuance/expiry times, and JTI remain secret and do
+not change identity. Opaque credential material is bound by a one-way digest
+and is never stored. A matching durable `preparing` record may therefore resume
+with a freshly issued equivalent credential, but `dispatched`, `indeterminate`,
+or any semantic mismatch never grants another provider dispatch. A transport
+failure after dispatch returns the typed `runner_mutation_indeterminate`
+outcome. Redelivery may complete only by adopting the exact immutable
 state/output target already written for that Run; without that authoritative
 readback, it remains indeterminate. Plan, read-only work, and a provable
 pre-dispatch preparation failure may retry without granting mutation authority.

@@ -88,6 +88,11 @@ export interface VerifyRunCredentialTokenInput {
   readonly now?: () => number;
 }
 
+export interface VerifyRunCredentialTokenAuthorityInput {
+  readonly secret: string;
+  readonly now?: () => number;
+}
+
 /** The generic signer secret is the only accepted token authority. */
 export function runCredentialTokenSecret(
   env: Record<string, unknown>,
@@ -139,6 +144,75 @@ export async function createRunCredentialToken(
 export async function verifyRunCredentialToken(
   token: string,
   input: VerifyRunCredentialTokenInput,
+): Promise<RunCredentialTokenVerificationResult> {
+  const verified = await verifyRunCredentialTokenAuthority(token, input);
+  if (!verified.ok) return verified;
+  const payload = verified.payload;
+  if (payload.aud !== normalizeAudience(input.expectedAudience)) {
+    return { ok: false, reason: "audience_mismatch" };
+  }
+  if (
+    input.expectedWorkspaceId !== undefined &&
+    payload.workspaceId !== input.expectedWorkspaceId
+  ) {
+    return { ok: false, reason: "workspace_mismatch" };
+  }
+  if (
+    input.expectedCapsuleId !== undefined &&
+    payload.capsuleId !== input.expectedCapsuleId
+  ) {
+    return { ok: false, reason: "capsule_mismatch" };
+  }
+  if (
+    input.expectedRunId !== undefined &&
+    payload.runId !== input.expectedRunId
+  ) {
+    return { ok: false, reason: "run_mismatch" };
+  }
+  if (
+    input.expectedInstallingPrincipalId !== undefined &&
+    payload.installingPrincipalId !== input.expectedInstallingPrincipalId
+  ) {
+    return { ok: false, reason: "installing_principal_mismatch" };
+  }
+  if (
+    input.expectedConnectionId !== undefined &&
+    payload.connectionId !== input.expectedConnectionId
+  ) {
+    return { ok: false, reason: "connection_mismatch" };
+  }
+  if (
+    input.expectedProvider !== undefined &&
+    payload.provider !== input.expectedProvider
+  ) {
+    return { ok: false, reason: "provider_mismatch" };
+  }
+  if (
+    input.expectedPhase !== undefined &&
+    payload.phase !== input.expectedPhase
+  ) {
+    return { ok: false, reason: "phase_mismatch" };
+  }
+  if (
+    input.expectedSubject !== undefined &&
+    payload.sub !== input.expectedSubject
+  ) {
+    return { ok: false, reason: "subject_mismatch" };
+  }
+  if (input.requiredScopes?.some((scope) => !payload.scopes.includes(scope))) {
+    return { ok: false, reason: "scope_mismatch" };
+  }
+  return verified;
+}
+
+/**
+ * Verifies the signed, bounded Run credential and its lifetime without
+ * projecting ephemeral issuance fields into a caller's semantic identity.
+ * Callers still own comparison against their canonical Run/Connection context.
+ */
+export async function verifyRunCredentialTokenAuthority(
+  token: string,
+  input: VerifyRunCredentialTokenAuthorityInput,
 ): Promise<RunCredentialTokenVerificationResult> {
   requiredRunCredentialTokenSecret(input.secret);
   const tokenFormat = recognizedTokenFormat(token);
@@ -194,60 +268,6 @@ export async function verifyRunCredentialToken(
     lifetimeSeconds > RUN_CREDENTIAL_TOKEN_MAX_TTL_SECONDS
   ) {
     return { ok: false, reason: "invalid_lifetime" };
-  }
-  if (payload.aud !== normalizeAudience(input.expectedAudience)) {
-    return { ok: false, reason: "audience_mismatch" };
-  }
-  if (
-    input.expectedWorkspaceId !== undefined &&
-    payload.workspaceId !== input.expectedWorkspaceId
-  ) {
-    return { ok: false, reason: "workspace_mismatch" };
-  }
-  if (
-    input.expectedCapsuleId !== undefined &&
-    payload.capsuleId !== input.expectedCapsuleId
-  ) {
-    return { ok: false, reason: "capsule_mismatch" };
-  }
-  if (
-    input.expectedRunId !== undefined &&
-    payload.runId !== input.expectedRunId
-  ) {
-    return { ok: false, reason: "run_mismatch" };
-  }
-  if (
-    input.expectedInstallingPrincipalId !== undefined &&
-    payload.installingPrincipalId !== input.expectedInstallingPrincipalId
-  ) {
-    return { ok: false, reason: "installing_principal_mismatch" };
-  }
-  if (
-    input.expectedConnectionId !== undefined &&
-    payload.connectionId !== input.expectedConnectionId
-  ) {
-    return { ok: false, reason: "connection_mismatch" };
-  }
-  if (
-    input.expectedProvider !== undefined &&
-    payload.provider !== input.expectedProvider
-  ) {
-    return { ok: false, reason: "provider_mismatch" };
-  }
-  if (
-    input.expectedPhase !== undefined &&
-    payload.phase !== input.expectedPhase
-  ) {
-    return { ok: false, reason: "phase_mismatch" };
-  }
-  if (
-    input.expectedSubject !== undefined &&
-    payload.sub !== input.expectedSubject
-  ) {
-    return { ok: false, reason: "subject_mismatch" };
-  }
-  if (input.requiredScopes?.some((scope) => !payload.scopes.includes(scope))) {
-    return { ok: false, reason: "scope_mismatch" };
   }
   return { ok: true, payload };
 }
