@@ -36,9 +36,21 @@ const R2_PUT_RETRY_ATTEMPTS = 8;
 const R2_PUT_RETRY_BASE_MS = 500;
 const R2_PUT_RETRY_MAX_MS = 10_000;
 const BOUNDED_STREAM_INITIAL_BYTES = 64 * 1024;
+const RUNNER_ARTIFACT_RELAY_FAILED_CODE = "runner_artifact_relay_failed";
 const RUNNER_R2_LOG_REASON = Object.freeze({
   putRetryable: "r2_put_retryable",
   currentStateCacheWriteFailed: "current_state_cache_write_failed",
+});
+const RUNNER_R2_LOG_ARTIFACT = Object.freeze({
+  sourceArchive: "source_archive",
+  stateObject: "state_object",
+  rawOutputs: "raw_outputs",
+  restoredStateObject: "restored_state_object",
+  planArtifact: "plan_artifact",
+  planJsonArtifact: "plan_json_artifact",
+  stateArtifact: "state_artifact",
+  statePointer: "state_pointer",
+  other: "other",
 });
 
 export const RUNNER_ARTIFACT_LIMIT_DEFAULTS = Object.freeze({
@@ -332,7 +344,6 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     if (env.LOCAL_SUBSTRATE_TEST_BED === "1") {
       console.log("OpenTofu runner local proxy composition", {
         configured: Boolean(this.#localRunnerProxyUrl),
-        target: this.#localRunnerProxyUrl?.origin,
       });
     }
     const keepaliveSeconds = runnerKeepaliveSeconds(env);
@@ -426,10 +437,8 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         : response;
       return withRunnerStartupHeader(output, this.#lastStartupSeconds);
     } catch (error) {
-      const url = new URL(request.url);
       console.error("OpenTofu runner artifact relay failed", {
-        method: request.method,
-        path: url.pathname,
+        operation: runnerRelayOperation(request),
         reason: safeRunnerFailureReason(error),
         errorName: safeRunnerErrorName(error),
       });
@@ -461,7 +470,9 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       return Response.json(
         {
           error: "OpenTofu runner artifact relay failed",
-          detail: redactedErrorMessage(error, "run artifact relay failed"),
+          errorCode: RUNNER_ARTIFACT_RELAY_FAILED_CODE,
+          reason: safeRunnerFailureReason(error),
+          detail: "runner artifact relay failed",
         },
         { status: 500 },
       );
@@ -1973,7 +1984,8 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     } catch (error) {
       if (!(error instanceof RunnerArtifactSizeLimitError)) throw error;
       console.warn("skipping oversized OpenTofu plan JSON artifact", {
-        runId,
+        artifact: "plan_json",
+        reason: "artifact_size_limit",
         sizeBytes: error.observedBytes,
         maxBytes,
       });
@@ -2223,34 +2235,27 @@ async function putR2ObjectWithRetry(
   options: R2PutOptions | undefined,
   context: string,
 ): Promise<R2Object> {
-  let lastError: unknown;
   for (let attempt = 1; attempt <= R2_PUT_RETRY_ATTEMPTS; attempt += 1) {
     try {
       const object = await bucket.put(key, value, options);
       if (!object) {
-        throw new R2ConditionalPutConflictError(
-          `${context} conditional R2 put was refused`,
-        );
+        throw new R2ConditionalPutConflictError();
       }
       return object;
     } catch (error) {
-      lastError = error;
       if (error instanceof R2ConditionalPutConflictError) throw error;
       if (options?.onlyIf?.etagDoesNotMatch === "*") {
-        throw new RunnerArtifactRelayInfrastructureError(
-          `${context} immutable R2 put outcome is ambiguous`,
-        );
+        throw new RunnerArtifactRelayInfrastructureError();
       }
       if (attempt >= R2_PUT_RETRY_ATTEMPTS || !isRetryableR2PutError(error)) {
         throw new Error(
-          `${context} R2 put failed after ${attempt} attempt${
+          `runner R2 ${runnerR2LogArtifact(context, key)} put failed after ${attempt} attempt${
             attempt === 1 ? "" : "s"
-          }: ${redactedErrorMessage(error, "r2 put failed")}`,
+          }`,
         );
       }
       console.warn("OpenTofu runner R2 put failed; retrying", {
-        context,
-        key,
+        artifact: runnerR2LogArtifact(context, key),
         attempt,
         maxAttempts: R2_PUT_RETRY_ATTEMPTS,
         reason: RUNNER_R2_LOG_REASON.putRetryable,
@@ -2264,12 +2269,12 @@ async function putR2ObjectWithRetry(
       );
     }
   }
-  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+  throw new Error("runner R2 put retry budget exhausted");
 }
 
 class R2ConditionalPutConflictError extends Error {
-  constructor(message: string) {
-    super(message);
+  constructor() {
+    super("runner R2 conditional put conflict");
     this.name = "R2ConditionalPutConflictError";
   }
 }
@@ -2280,8 +2285,8 @@ const RUNNER_ARTIFACT_RELAY_AMBIGUOUS_CODE =
 class RunnerArtifactRelayInfrastructureError extends Error {
   readonly code = RUNNER_ARTIFACT_RELAY_AMBIGUOUS_CODE;
 
-  constructor(message: string) {
-    super(message);
+  constructor() {
+    super("runner R2 immutable put outcome is ambiguous");
     this.name = "RunnerArtifactRelayInfrastructureError";
   }
 }
@@ -2303,6 +2308,39 @@ function artifactUrl(baseUrl: URL, runId: string): string {
 function isRunDispatchRequest(request: Request): boolean {
   if (request.method !== "POST") return false;
   return /^\/runs\/[^/]+$/.test(new URL(request.url).pathname);
+}
+
+function runnerRelayOperation(request: Request): "run_dispatch" | "other" {
+  return isRunDispatchRequest(request) ? "run_dispatch" : "other";
+}
+
+function runnerR2LogArtifact(
+  context: string,
+  key: string,
+): string {
+  switch (context) {
+    case "source archive":
+      return RUNNER_R2_LOG_ARTIFACT.sourceArchive;
+    case "state object":
+      return RUNNER_R2_LOG_ARTIFACT.stateObject;
+    case "raw outputs":
+      return RUNNER_R2_LOG_ARTIFACT.rawOutputs;
+    case "restored state object":
+      return RUNNER_R2_LOG_ARTIFACT.restoredStateObject;
+    case "plan artifact":
+      return RUNNER_R2_LOG_ARTIFACT.planArtifact;
+    case "plan json artifact":
+      return RUNNER_R2_LOG_ARTIFACT.planJsonArtifact;
+    case "state artifact":
+      return RUNNER_R2_LOG_ARTIFACT.stateArtifact;
+    case "restored state pointer":
+    case "state pointer cache":
+      return RUNNER_R2_LOG_ARTIFACT.statePointer;
+    default:
+      return key.endsWith("/current.json")
+        ? RUNNER_R2_LOG_ARTIFACT.statePointer
+        : RUNNER_R2_LOG_ARTIFACT.other;
+  }
 }
 
 async function readRunDispatchAction(
@@ -3825,12 +3863,6 @@ async function readRunnerFailureDetail(
 
 function jsonResponse(payload: unknown, status: number): Response {
   return Response.json(payload, { status });
-}
-
-function redactedErrorMessage(error: unknown, fallback: string): string {
-  const message = error instanceof Error ? error.message : String(error);
-  const text = message && message.trim().length > 0 ? message : fallback;
-  return redactString(text, { redactedValue: "[redacted]" });
 }
 
 function runnerKeepaliveSeconds(env: CloudflareWorkerEnv): number {

@@ -305,8 +305,7 @@ test("OpenTofu runner Durable Object retries transient R2 put errors", async () 
     [
       "OpenTofu runner R2 put failed; retrying",
       {
-        context: "plan artifact",
-        key: "opentofu-plan-runs/plan_retry/tfplan.enc",
+        artifact: "plan_artifact",
         attempt: 1,
         maxAttempts: 8,
         reason: "r2_put_retryable",
@@ -316,8 +315,7 @@ test("OpenTofu runner Durable Object retries transient R2 put errors", async () 
     [
       "OpenTofu runner R2 put failed; retrying",
       {
-        context: "plan artifact",
-        key: "opentofu-plan-runs/plan_retry/tfplan.enc",
+        artifact: "plan_artifact",
         attempt: 2,
         maxAttempts: 8,
         reason: "r2_put_retryable",
@@ -327,7 +325,8 @@ test("OpenTofu runner Durable Object retries transient R2 put errors", async () 
   ]);
 });
 
-test("OpenTofu runner Durable Object returns contextual R2 put failures", async () => {
+test("OpenTofu runner Durable Object returns finite R2 put failure details", async () => {
+  const runId = "plan_r2_denied-raw-key-marker-2L6";
   const sensitiveFailure =
     "permission denied arbitrary-marker-final-9K2 Authorization: Bearer final-token cookie=final-session body={secret:true}";
   const errorCalls: unknown[][] = [];
@@ -339,14 +338,14 @@ test("OpenTofu runner Durable Object returns contextual R2 put failures", async 
   const runner = runnerWithContainer(r2, {
     async containerFetch(request) {
       const path = new URL(request.url).pathname;
-      if (request.method === "POST" && path === "/runs/plan_r2_denied") {
+      if (request.method === "POST" && path === `/runs/${runId}`) {
         return Response.json({
           status: "succeeded",
           exitCode: 0,
           planDigest: PLAN_DIGEST,
           planArtifact: {
             kind: "runner-local",
-            ref: "runner-local://plan_r2_denied/tfplan",
+            ref: `runner-local://${runId}/tfplan`,
             digest: PLAN_DIGEST,
             contentType: "application/vnd.opentofu.plan",
           },
@@ -354,7 +353,7 @@ test("OpenTofu runner Durable Object returns contextual R2 put failures", async 
       }
       if (
         request.method === "GET" &&
-        path === "/runs/plan_r2_denied/artifacts/tfplan"
+        path === `/runs/${runId}/artifacts/tfplan`
       ) {
         return new Response(PLAN_BYTES, {
           headers: { "content-type": "application/vnd.opentofu.plan" },
@@ -367,13 +366,13 @@ test("OpenTofu runner Durable Object returns contextual R2 put failures", async 
   let response: Response;
   try {
     response = await runner.fetch(
-      new Request("https://runner/runs/plan_r2_denied", {
+      new Request(`https://runner/runs/${runId}`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           kind: "takosumi.opentofu-run@v1",
           action: "plan",
-          runId: "plan_r2_denied",
+          runId,
           request: {},
         }),
       }),
@@ -385,10 +384,27 @@ test("OpenTofu runner Durable Object returns contextual R2 put failures", async 
   assert.equal(response.status, 500);
   const body = (await response.json()) as Record<string, unknown>;
   assert.equal(body.error, "OpenTofu runner artifact relay failed");
-  assert.match(String(body.detail), /plan artifact R2 put failed/);
-  assert.match(String(body.detail), /permission denied/);
+  assert.equal(body.errorCode, "runner_artifact_relay_failed");
+  assert.equal(body.reason, "relay_failure");
+  assert.equal(body.detail, "runner artifact relay failed");
+  const responseText = JSON.stringify(body);
+  for (const forbidden of [
+    runId,
+    "arbitrary-marker-final-9K2",
+    "Authorization",
+    "Bearer",
+    "final-token",
+    "cookie",
+    "final-session",
+    "body",
+    "secret:true",
+    "stack",
+  ]) {
+    assert.equal(responseText.includes(forbidden), false, `response ${forbidden}`);
+  }
   const logged = JSON.stringify(errorCalls);
   for (const forbidden of [
+    runId,
     "arbitrary-marker-final-9K2",
     "Authorization",
     "Bearer",
@@ -405,8 +421,7 @@ test("OpenTofu runner Durable Object returns contextual R2 put failures", async 
     [
       "OpenTofu runner artifact relay failed",
       {
-        method: "POST",
-        path: "/runs/plan_r2_denied",
+        operation: "run_dispatch",
         reason: "relay_failure",
         errorName: "Error",
       },
@@ -470,8 +485,7 @@ test("OpenTofu runner keeps raw-output immutable-put failures out of logs", asyn
     [
       "OpenTofu runner artifact relay failed",
       {
-        method: "POST",
-        path: `/runs/${planRunId}`,
+        operation: "run_dispatch",
         reason: "relay_failure",
         errorName: "Error",
       },
@@ -535,8 +549,7 @@ test("OpenTofu runner keeps immutable state-put failures out of logs", async () 
     [
       "OpenTofu runner artifact relay failed",
       {
-        method: "POST",
-        path: `/runs/${planRunId}`,
+        operation: "run_dispatch",
         reason: "artifact_durability_ambiguous",
         errorName: "Error",
       },
@@ -600,8 +613,7 @@ test("OpenTofu runner keeps current-state pointer retry logs finite", async () =
     [
       "OpenTofu runner R2 put failed; retrying",
       {
-        context: "state pointer cache",
-        key: currentKey,
+        artifact: "state_pointer",
         attempt: 1,
         maxAttempts: 8,
         reason: "r2_put_retryable",
@@ -611,8 +623,7 @@ test("OpenTofu runner keeps current-state pointer retry logs finite", async () =
     [
       "OpenTofu runner R2 put failed; retrying",
       {
-        context: "state pointer cache",
-        key: currentKey,
+        artifact: "state_pointer",
         attempt: 2,
         maxAttempts: 8,
         reason: "r2_put_retryable",
@@ -1171,6 +1182,7 @@ test("OpenTofu runner Durable Object destroys the container when activity expire
 });
 
 test("OpenTofu runner Durable Object does not echo or log relay failure details", async () => {
+  const relayMarker = "arbitrary-marker-relay-path-5V8";
   const errorCalls: unknown[][] = [];
   const originalConsoleError = console.error;
   console.error = (...args: unknown[]) => {
@@ -1180,12 +1192,16 @@ test("OpenTofu runner Durable Object does not echo or log relay failure details"
     new FakeR2Bucket(),
     {
       containerFetch() {
-        throw new Error("Authorization: Bearer relay-secret-token");
+        throw new Error(
+          `Authorization: Bearer relay-secret-token cookie=relay-session body={secret:true} ${relayMarker}`,
+        );
       },
     },
     {
       async destroy() {
-        throw new Error("Authorization: Bearer cleanup-secret-token");
+        throw new Error(
+          `Authorization: Bearer cleanup-secret-token cookie=cleanup-session body={secret:true} ${relayMarker}`,
+        );
       },
     },
   );
@@ -1193,13 +1209,13 @@ test("OpenTofu runner Durable Object does not echo or log relay failure details"
   let response: Response;
   try {
     response = await runner.fetch(
-      new Request("https://runner/runs/plan_1", {
+      new Request(`https://runner/runs/plan_1-${relayMarker}`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           kind: "takosumi.opentofu-run@v1",
           action: "plan",
-          runId: "plan_1",
+          runId: `plan_1-${relayMarker}`,
           request: {},
         }),
       }),
@@ -1211,6 +1227,11 @@ test("OpenTofu runner Durable Object does not echo or log relay failure details"
   assert.equal(response.status, 500);
   const text = await response.text();
   assert.equal(text.includes("relay-secret-token"), false);
+  assert.equal(text.includes(relayMarker), false);
+  assert.equal(text.includes("Authorization"), false);
+  assert.equal(text.includes("Bearer"), false);
+  assert.equal(text.includes("relay-session"), false);
+  assert.equal(text.includes("body"), false);
   assert.equal(text.includes("OpenTofu runner artifact relay failed"), true);
   const logged = JSON.stringify(errorCalls);
   assert.equal(logged.includes("relay-secret-token"), false);
@@ -1222,8 +1243,7 @@ test("OpenTofu runner Durable Object does not echo or log relay failure details"
     [
       "OpenTofu runner artifact relay failed",
       {
-        method: "POST",
-        path: "/runs/plan_1",
+        operation: "run_dispatch",
         reason: "relay_failure",
         errorName: "Error",
       },
@@ -2043,7 +2063,9 @@ test("OpenTofu runner Durable Object rejects plaintext-only R2 plan artifacts", 
   assert.equal(response.status, 500);
   const text = await response.text();
   assert.match(text, /OpenTofu runner artifact relay failed/);
-  assert.match(text, /plan artifact object not found/);
+  assert.match(text, /runner_artifact_relay_failed/);
+  assert.match(text, /relay_failure/);
+  assert.equal(text.includes("plan artifact object not found"), false);
 });
 
 test("OpenTofu runner Durable Object restores and persists operator-managed state", async () => {
