@@ -69,6 +69,9 @@
       "takosumi-contract/interfaces": ["./contract/interfaces.ts"],
       "takosumi-contract/runs": ["./contract/runs.ts"],
       "takosumi-contract/state-versions": ["./contract/state-versions.ts"],
+      "takosumi-contract/current-resource-inventory": [
+        "./contract/current-resource-inventory.ts"
+      ],
       "takosumi-contract/backups": ["./contract/backups.ts"],
       "takosumi-contract/billing": ["./contract/billing.ts"],
       "takosumi-contract/security": ["./contract/security.ts"],

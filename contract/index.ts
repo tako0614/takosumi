@@ -135,6 +135,7 @@ export type {
   PublicStateVersion as StateVersion,
   PublicStateVersion,
 } from "./state-versions.ts";
+export * from "./current-resource-inventory.ts";
 export * from "./backups.ts";
 export * from "./billing.ts";
 export * from "./platform-readiness.ts";

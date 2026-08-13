@@ -88,6 +88,9 @@ import type {
 } from "takosumi-contract/outputs";
 import type { StateVersion } from "takosumi-contract/state-versions";
 import type {
+  CapsuleCurrentResourceInventoryResponse,
+} from "takosumi-contract/current-resource-inventory";
+import type {
   BackupRecord,
   CreateBackupResponse,
   CreateRestoreRequest,
@@ -644,6 +647,9 @@ export interface ControlPlaneOperations {
    * Reads one StateVersion by id. A missing id is a typed `not_found`.
    */
   getStateVersion(id: string): Promise<GetStateVersionResponse>;
+  getCurrentResourceInventory(
+    capsuleId: string,
+  ): Promise<CapsuleCurrentResourceInventoryResponse>;
   /**
    * Reads an Output ledger row by its internal id. Session handlers may call
    * this only after resolving and authorizing the owning Capsule, and must

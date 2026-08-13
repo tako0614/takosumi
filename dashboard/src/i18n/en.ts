@@ -390,6 +390,19 @@ export const en: Record<keyof typeof ja, string> = {
   "app.deploys.backup": "Create backup",
   "app.deploys.backupCreated": "Backup created.",
   "app.deploys.backupSupportRef": "Backup ID",
+  "app.deploys.inventoryTitle": "Deployed resources",
+  "app.deploys.inventoryRecordedNote":
+    "Recorded in the current applied state; this is not live health.",
+  "app.deploys.inventoryLoadError":
+    "The recorded resource inventory could not be loaded.",
+  "app.deploys.inventoryLegacyUnavailable":
+    "This older applied state has no resource inventory record.",
+  "app.deploys.inventoryGeneration": "State generation",
+  "app.deploys.inventoryRecordedAt": "Recorded",
+  "app.deploys.inventoryStateVersion": "State version",
+  "app.deploys.inventoryApplyRun": "Apply run",
+  "app.deploys.inventoryPlanRun": "Plan run",
+  "app.deploys.inventoryEmpty": "No deployed resources were recorded.",
   "app.recentActivity.title": "Recent updates",
   "app.recentActivity.open": "Details",
   "app.recentActivity.releaseActivation": "Service activation",

@@ -15,6 +15,12 @@ import {
 import type { PageParams } from "takosumi-contract/pagination";
 import type { OpenTofuControlStore } from "./store.ts";
 import { OpenTofuControllerError, requireNonEmptyString } from "./errors.ts";
+import {
+  getCurrentResourceInventory,
+} from "./current_resource_inventory.ts";
+import type {
+  CapsuleCurrentResourceInventoryResponse,
+} from "takosumi-contract/current-resource-inventory";
 
 export type PublicCapsuleProjector = (capsule: Capsule) => PublicCapsule;
 
@@ -140,6 +146,12 @@ export class CapsuleQuery {
       );
     }
     return { stateVersion };
+  }
+
+  async getCurrentResourceInventory(
+    capsuleId: string,
+  ): Promise<CapsuleCurrentResourceInventoryResponse> {
+    return await getCurrentResourceInventory(this.#store, capsuleId);
   }
 }
 

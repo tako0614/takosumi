@@ -57,6 +57,9 @@ import type {
   ManagedPublicHostnameClaimRequest,
   ManagedPublicHostnameClaimResult,
 } from "takosumi-contract/install-configs";
+import type {
+  CapsuleCurrentResourceInventoryResponse,
+} from "takosumi-contract/current-resource-inventory";
 import {
   CapsuleLeaseBusyError,
   InMemoryCapsuleCoordination,
@@ -1189,6 +1192,10 @@ export interface TakosumiOperations {
     workspaceId: string,
   ): Promise<readonly StateVersion[]>;
   getStateVersion(id: string): Promise<GetStateVersionResponse>;
+  /** OSS-owned value-free inventory for the current Capsule apply lineage. */
+  getCurrentResourceInventory(
+    capsuleId: string,
+  ): Promise<CapsuleCurrentResourceInventoryResponse>;
   /** Internal Output lookup used only after a caller authorizes its Capsule. */
   getOutput(id: string): Promise<Output | undefined>;
   /** Creates a rollback PLAN run from a StateVersion's Run provenance. */
@@ -3680,6 +3687,8 @@ export async function createTakosumiService(
     listStateVersionsByWorkspace: (workspaceId) =>
       opentofuController.listStateVersionsByWorkspace(workspaceId),
     getStateVersion: (id) => opentofuController.getStateVersion(id),
+    getCurrentResourceInventory: (capsuleId) =>
+      opentofuController.getCurrentResourceInventory(capsuleId),
     getOutput: (id) => opentofuController.getOutput(id),
     createStateVersionRollbackPlan: (stateVersionId) =>
       opentofuController.createStateVersionRollbackPlan(stateVersionId),

@@ -65,6 +65,8 @@ import {
   listProviderConnections,
   listSources,
   getCapsuleUsageSummary,
+  getCurrentResourceInventory,
+  type CapsuleCurrentResourceInventory,
   planCapsuleUpdate,
   patchInstallConfig,
   putCapsuleProviderBindingSet,
@@ -205,6 +207,10 @@ function Inner() {
   });
   const [sources] = createResource(settingsWorkspaceId, listSources);
   const [stateVersions] = createResource(deploysCapsuleId, listStateVersions);
+  const [resourceInventory] = createResource(
+    deploysCapsuleId,
+    getCurrentResourceInventory,
+  );
   const [currentStateVersionResource] = createResource(
     currentStateVersionId,
     getStateVersion,
@@ -631,6 +637,13 @@ function Inner() {
                       onReview={() => void plan.run()}
                       reviewError={plan.error()}
                       settingsHref={`/workloads/${encodeURIComponent(capsuleId())}/settings`}
+                      resourceInventory={
+                        resourceInventory.error
+                          ? undefined
+                          : resourceInventory()
+                      }
+                      resourceInventoryLoading={resourceInventory.loading}
+                      resourceInventoryError={Boolean(resourceInventory.error)}
                     />
                   </Match>
                   <Match when={tab() === "settings"}>
@@ -983,6 +996,9 @@ function DeploysTab(props: {
   readonly onReview: () => void;
   readonly reviewError: string | null;
   readonly settingsHref: string;
+  readonly resourceInventory?: CapsuleCurrentResourceInventory;
+  readonly resourceInventoryLoading: boolean;
+  readonly resourceInventoryError: boolean;
 }) {
   return (
     <>
@@ -1126,6 +1142,12 @@ function DeploysTab(props: {
         </details>
       </Card>
 
+      <DeployedResourcesDisclosure
+        inventory={props.resourceInventory}
+        loading={props.resourceInventoryLoading}
+        error={props.resourceInventoryError}
+      />
+
       <Show when={props.recentActivity.length > 0}>
         <details class="wb-disclosure">
           <summary>{t("app.recentActivity.title")}</summary>
@@ -1154,6 +1176,87 @@ function DeploysTab(props: {
         </details>
       </Show>
     </>
+  );
+}
+
+function DeployedResourcesDisclosure(props: {
+  readonly inventory?: CapsuleCurrentResourceInventory;
+  readonly loading: boolean;
+  readonly error: boolean;
+}) {
+  const recordedInventory = () => {
+    const inventory = props.inventory;
+    return inventory?.availability === "recorded" ? inventory : undefined;
+  };
+
+  return (
+    <details class="wb-disclosure">
+      <summary>{t("app.deploys.inventoryTitle")}</summary>
+      <Card>
+        <p class="muted">{t("app.deploys.inventoryRecordedNote")}</p>
+        <Switch>
+          <Match when={props.loading}>
+            <Skeleton variant="row" count={2} />
+          </Match>
+          <Match when={props.error}>
+            <p class="wa-error" role="alert">
+              {t("app.deploys.inventoryLoadError")}
+            </p>
+          </Match>
+          <Match when={props.inventory?.availability === "legacy_unavailable"}>
+            <p class="muted">{t("app.deploys.inventoryLegacyUnavailable")}</p>
+          </Match>
+          <Match when={recordedInventory()}>
+            {(inventory) => (
+              <>
+                <dl class="wa-kv-list">
+                  <div>
+                    <dt>{t("app.deploys.inventoryGeneration")}</dt>
+                    <dd>{inventory().generation}</dd>
+                  </div>
+                  <div>
+                    <dt>{t("app.deploys.inventoryRecordedAt")}</dt>
+                    <dd>{formatDateTime(inventory().recordedAt)}</dd>
+                  </div>
+                  <div>
+                    <dt>{t("app.deploys.inventoryStateVersion")}</dt>
+                    <dd><code>{inventory().stateVersionId}</code></dd>
+                  </div>
+                  <div>
+                    <dt>{t("app.deploys.inventoryApplyRun")}</dt>
+                    <dd><code>{inventory().applyRunId}</code></dd>
+                  </div>
+                  <div>
+                    <dt>{t("app.deploys.inventoryPlanRun")}</dt>
+                    <dd><code>{inventory().planRunId}</code></dd>
+                  </div>
+                </dl>
+                <Show
+                  when={inventory().resources.length > 0}
+                  fallback={
+                    <p class="muted">{t("app.deploys.inventoryEmpty")}</p>
+                  }
+                >
+                  <ul class="wa-deploy-resource-list">
+                    <For each={inventory().resources}>
+                      {(resource) => (
+                        <li class="wa-deploy-resource-row">
+                          <code>{resource.address}</code>
+                          <span class="muted">{resource.type}</span>
+                          <Show when={resource.providerSource}>
+                            {(provider) => <code>{provider()}</code>}
+                          </Show>
+                        </li>
+                      )}
+                    </For>
+                  </ul>
+                </Show>
+              </>
+            )}
+          </Match>
+        </Switch>
+      </Card>
+    </details>
   );
 }
 

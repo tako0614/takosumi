@@ -169,6 +169,9 @@ import type {
 } from "takosumi-contract/backups";
 import type { Output } from "takosumi-contract/outputs";
 import type { StateVersion } from "takosumi-contract/state-versions";
+import type {
+  CapsuleCurrentResourceInventoryResponse,
+} from "takosumi-contract/current-resource-inventory";
 import type { ArtifactReferenceAllocator } from "../../adapters/storage/artifact-references.ts";
 import type { SensitiveOutputResolver } from "../output-shares/mod.ts";
 import type {
@@ -1724,6 +1727,12 @@ export class OpenTofuController {
 
   async getStateVersion(id: string): Promise<GetStateVersionResponse> {
     return await this.#capsules.getStateVersion(id);
+  }
+
+  async getCurrentResourceInventory(
+    capsuleId: string,
+  ): Promise<CapsuleCurrentResourceInventoryResponse> {
+    return await this.#capsules.getCurrentResourceInventory(capsuleId);
   }
 
   /** Internal domain read used by adapters following an ApplyRun.outputId. */
