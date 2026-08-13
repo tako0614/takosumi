@@ -14,6 +14,7 @@ import {
   platformReadinessStructuredEvidenceRules,
   platformReadinessStructuredEvidenceRequirements,
 } from "./cli-platform-readiness-constants.ts";
+import { canonicalJson } from "./cli-util.ts";
 
 export interface PlatformReadinessDefinition {
   readonly contributions: readonly PlatformReadinessContribution[];
@@ -192,28 +193,67 @@ export function readinessContributionsFromDocument(document: unknown): {
   return { contributions, errors };
 }
 
-export function platformReadinessDefinitionFromDocument(document: unknown): {
+export function platformReadinessDefinitionFromDocument(
+  document: unknown,
+  trustedContributions: readonly PlatformReadinessContribution[] = [],
+): {
   readonly definition: PlatformReadinessDefinition;
   readonly errors: readonly string[];
 } {
-  const result = readinessContributionsFromDocument(document);
-  if (result.errors.length > 0) {
-    return {
-      definition: OSS_PLATFORM_READINESS_DEFINITION,
-      errors: result.errors,
-    };
-  }
+  const embedded = readinessContributionsFromDocument(document);
+  let definition: PlatformReadinessDefinition;
   try {
-    return {
-      definition: composePlatformReadinessDefinition(result.contributions),
-      errors: [],
-    };
+    definition = composePlatformReadinessDefinition(trustedContributions);
   } catch (error) {
     return {
       definition: OSS_PLATFORM_READINESS_DEFINITION,
       errors: [error instanceof Error ? error.message : String(error)],
     };
   }
+
+  const errors = [...embedded.errors];
+  if (embedded.errors.length === 0) {
+    try {
+      createPlatformReadinessContributionRegistry(embedded.contributions);
+    } catch (error) {
+      errors.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+  if (embedded.contributions.length > 0 && trustedContributions.length === 0) {
+    errors.push(
+      "readiness document contributions require trusted --contribution-file input",
+    );
+    return { definition, errors };
+  }
+
+  const embeddedById = new Map(
+    embedded.contributions.map((contribution) => [contribution.id, contribution]),
+  );
+  const trustedById = new Map(
+    trustedContributions.map((contribution) => [contribution.id, contribution]),
+  );
+  for (const contribution of embedded.contributions) {
+    const trusted = trustedById.get(contribution.id);
+    if (!trusted) {
+      errors.push(
+        `readiness document contribution ${contribution.id}@${contribution.version} has no trusted contribution input`,
+      );
+      continue;
+    }
+    if (canonicalJson(contribution) !== canonicalJson(trusted)) {
+      errors.push(
+        `readiness document contribution ${contribution.id}@${contribution.version} does not exactly match trusted contribution content`,
+      );
+    }
+  }
+  for (const contribution of trustedContributions) {
+    if (!embeddedById.has(contribution.id)) {
+      errors.push(
+        `readiness document is missing trusted contribution ${contribution.id}@${contribution.version}`,
+      );
+    }
+  }
+  return { definition, errors };
 }
 
 function mergeCrossScopeConsistency(

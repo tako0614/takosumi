@@ -128,13 +128,17 @@ takosumi launch-readiness template \
   --contribution-file <owner-controlled-contribution.json> \
   > readiness.private.json
 
-takosumi launch-readiness validate --file readiness.private.json
+takosumi launch-readiness validate \
+  --file readiness.private.json \
+  --contribution-file <owner-controlled-contribution.json>
 ```
 
 生成される `takosumi.platform-readiness@v2` document には、contribution の `id` /
 `version` / `capability` が埋め込まれます。追加の requirement / evidence schema も同じ
-document に入ります。そのため validate と public-summary は、その document だけで
-検証でき、根拠が足りなければ安全側に停止します。
+document に入ります。ただし embedded copy は authority ではありません。contribution を
+含む document の validate / public-summary / public-summary validate では、owner-controlled
+`--contribution-file` をもう一度渡します。validator はその trusted input で profile を組み立て、
+embedded copy の全 content が完全一致しなければ安全側に停止します。
 provider 固有のコードや外部 registry の lookup は使いません。contribution の version が
 違えば、別の readiness profile として扱います。旧 baseline ID は validate 時に二重解釈せず、
 明示的な `launch-readiness migrate-final-model` で一度だけ更新します。

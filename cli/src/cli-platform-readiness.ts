@@ -46,6 +46,7 @@ const orderedUserJourneyRehearsalStepIds = [
 
 export function validatePlatformReadinessDocument(
   document: unknown,
+  trustedContributions: readonly PlatformReadinessContribution[] = [],
 ): PlatformReadinessReport {
   const errors: string[] = [];
   if (!isRecord(document)) {
@@ -72,7 +73,10 @@ export function validatePlatformReadinessDocument(
     errors.push(`kind must be ${platformReadinessKind}`);
   }
 
-  const definitionResult = platformReadinessDefinitionFromDocument(document);
+  const definitionResult = platformReadinessDefinitionFromDocument(
+    document,
+    trustedContributions,
+  );
   errors.push(...definitionResult.errors);
   const definition = definitionResult.definition;
 
@@ -1683,10 +1687,13 @@ export function validatePlatformReadinessPublicSummaryArtifact(
   summary: unknown,
   readinessDocument: unknown,
   readinessReport: PlatformReadinessReport & { evidenceDigest: string },
+  trustedContributions: readonly PlatformReadinessContribution[] = [],
 ): Record<string, unknown> & { valid: boolean; errors: string[] } {
   const errors: string[] = [];
-  const definitionResult =
-    platformReadinessDefinitionFromDocument(readinessDocument);
+  const definitionResult = platformReadinessDefinitionFromDocument(
+    readinessDocument,
+    trustedContributions,
+  );
   const definition = definitionResult.definition;
   errors.push(...definitionResult.errors);
   if (!isRecord(summary)) {

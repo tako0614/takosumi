@@ -109,6 +109,46 @@ export const platformReadinessEvidenceFieldFormats = [
 export type PlatformReadinessEvidenceFieldFormat =
   (typeof platformReadinessEvidenceFieldFormats)[number];
 
+const PLATFORM_READINESS_CONTRIBUTION_KEYS = new Set([
+  "kind",
+  "id",
+  "version",
+  "capability",
+  "domains",
+  "rehearsalSteps",
+  "consistentFields",
+  "evidenceSchemas",
+  "collectionClassHints",
+  "forbiddenSummaryPatterns",
+]);
+const PLATFORM_READINESS_REQUIREMENT_GROUP_KEYS = new Set([
+  "id",
+  "requiredEvidenceTypes",
+  "consistentFields",
+]);
+const PLATFORM_READINESS_CONSISTENCY_RULE_KEYS = new Set([
+  "field",
+  "evidenceTypes",
+]);
+const PLATFORM_READINESS_EVIDENCE_SCHEMA_KEYS = new Set([
+  "fields",
+  "anyOf",
+  "values",
+  "allowedValues",
+  "patterns",
+  "formats",
+  "numericBounds",
+  "requiredItems",
+  "exactItems",
+  "distinctFields",
+  "after",
+  "notExpired",
+]);
+const PLATFORM_READINESS_NUMERIC_BOUND_KEYS = new Set([
+  "minimum",
+  "exclusiveMinimum",
+]);
+
 export interface PlatformReadinessNumericBound {
   readonly minimum: number;
   readonly exclusiveMinimum?: boolean;
@@ -129,6 +169,7 @@ export function platformReadinessContributionErrors(
   }
   const record = value as Record<string, unknown>;
   const errors: string[] = [];
+  errors.push(...platformReadinessContributionClosedShapeErrors(record, label));
   if (record.kind !== TAKOSUMI_PLATFORM_READINESS_CONTRIBUTION_KIND) {
     errors.push(
       `${label}.kind must be ${TAKOSUMI_PLATFORM_READINESS_CONTRIBUTION_KIND}`,
@@ -356,6 +397,7 @@ function optionalRequirementGroups(value: unknown): boolean {
       }
       const record = entry as Record<string, unknown>;
       return (
+        hasOnlyKeys(record, PLATFORM_READINESS_REQUIREMENT_GROUP_KEYS) &&
         nonEmptyString(record.id) &&
         stringArray(record.requiredEvidenceTypes) &&
         optionalConsistencyRules(record.consistentFields)
@@ -373,7 +415,11 @@ function optionalConsistencyRules(value: unknown): boolean {
       return false;
     }
     const record = entry as Record<string, unknown>;
-    if (!nonEmptyString(record.field) || !stringArray(record.evidenceTypes)) {
+    if (
+      !hasOnlyKeys(record, PLATFORM_READINESS_CONSISTENCY_RULE_KEYS) ||
+      !nonEmptyString(record.field) ||
+      !stringArray(record.evidenceTypes)
+    ) {
       return false;
     }
     if (
@@ -403,6 +449,7 @@ function optionalEvidenceSchemas(value: unknown): boolean {
     }
     const record = schema as Record<string, unknown>;
     if (!(
+      hasOnlyKeys(record, PLATFORM_READINESS_EVIDENCE_SCHEMA_KEYS) &&
       (record.fields === undefined || stringArray(record.fields)) &&
       (record.anyOf === undefined ||
         (Array.isArray(record.anyOf) && record.anyOf.every(stringArray))) &&
@@ -472,6 +519,104 @@ function optionalEvidenceSchemas(value: unknown): boolean {
         : true)
     );
   });
+}
+
+function platformReadinessContributionClosedShapeErrors(
+  record: Record<string, unknown>,
+  label: string,
+): string[] {
+  const errors = unknownKeyErrors(
+    record,
+    PLATFORM_READINESS_CONTRIBUTION_KEYS,
+    label,
+  );
+  for (const scope of ["domains", "rehearsalSteps"] as const) {
+    const groups = record[scope];
+    if (!Array.isArray(groups)) continue;
+    groups.forEach((group, groupIndex) => {
+      if (!isPlainRecord(group)) return;
+      const groupLabel = `${label}.${scope}[${groupIndex}]`;
+      errors.push(
+        ...unknownKeyErrors(
+          group,
+          PLATFORM_READINESS_REQUIREMENT_GROUP_KEYS,
+          groupLabel,
+        ),
+      );
+      errors.push(
+        ...consistencyRuleUnknownKeyErrors(
+          group.consistentFields,
+          `${groupLabel}.consistentFields`,
+        ),
+      );
+    });
+  }
+  errors.push(
+    ...consistencyRuleUnknownKeyErrors(
+      record.consistentFields,
+      `${label}.consistentFields`,
+    ),
+  );
+  if (isPlainRecord(record.evidenceSchemas)) {
+    for (const [type, schema] of Object.entries(record.evidenceSchemas)) {
+      if (!isPlainRecord(schema)) continue;
+      const schemaLabel = `${label}.evidenceSchemas.${type}`;
+      errors.push(
+        ...unknownKeyErrors(
+          schema,
+          PLATFORM_READINESS_EVIDENCE_SCHEMA_KEYS,
+          schemaLabel,
+        ),
+      );
+      if (isPlainRecord(schema.numericBounds)) {
+        for (const [field, bound] of Object.entries(schema.numericBounds)) {
+          if (!isPlainRecord(bound)) continue;
+          errors.push(
+            ...unknownKeyErrors(
+              bound,
+              PLATFORM_READINESS_NUMERIC_BOUND_KEYS,
+              `${schemaLabel}.numericBounds.${field}`,
+            ),
+          );
+        }
+      }
+    }
+  }
+  return errors;
+}
+
+function consistencyRuleUnknownKeyErrors(
+  value: unknown,
+  label: string,
+): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((rule, index) =>
+    isPlainRecord(rule)
+      ? unknownKeyErrors(
+          rule,
+          PLATFORM_READINESS_CONSISTENCY_RULE_KEYS,
+          `${label}[${index}]`,
+        )
+      : [],
+  );
+}
+
+function unknownKeyErrors(
+  record: Record<string, unknown>,
+  allowed: ReadonlySet<string>,
+  label: string,
+): string[] {
+  return Object.keys(record)
+    .filter((key) => !allowed.has(key))
+    .sort()
+    .map((key) => `${label}.${key} is not allowed`);
+}
+
+function hasOnlyKeys(
+  record: Record<string, unknown>,
+  allowed: ReadonlySet<string>,
+): boolean {
+  return Object.keys(record).every((key) => allowed.has(key));
 }
 
 function optionalUniqueStringArray(value: unknown): boolean {

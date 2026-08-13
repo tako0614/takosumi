@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import {
   createPlatformReadinessContributionRegistry,
   isPlatformReadinessContribution,
+  platformReadinessContributionErrors,
   platformReadinessEvidenceSchemaErrors,
 } from "../../contract/platform-readiness.ts";
 
@@ -159,6 +160,59 @@ test("readiness contributions are versioned and registry selected", () => {
       { ...contribution, version: "1.3.0" },
     ]),
   ).toThrow("contribution id is duplicated");
+});
+
+test("readiness contribution definitions reject unknown keys at every closed shape", () => {
+  const cases = [
+    {
+      value: { ...contribution, consistentField: [] },
+      error: "contribution.consistentField is not allowed",
+    },
+    {
+      value: {
+        ...contribution,
+        domains: [
+          {
+            ...contribution.domains[0],
+            consistentField: [],
+          },
+        ],
+      },
+      error: "contribution.domains[0].consistentField is not allowed",
+    },
+    {
+      value: {
+        ...contribution,
+        consistentFields: [
+          {
+            field: "proofId",
+            evidenceTypes: ["external-operation-proof", "other-proof"],
+            evidenceType: "other-proof",
+          },
+        ],
+      },
+      error: "contribution.consistentFields[0].evidenceType is not allowed",
+    },
+    {
+      value: {
+        ...contribution,
+        evidenceSchemas: {
+          "external-operation-proof": {
+            fields: ["validUntil"],
+            formats: { validUntil: "utc-timestamp" },
+            notExpire: ["validUntil"],
+          },
+        },
+      },
+      error:
+        "contribution.evidenceSchemas.external-operation-proof.notExpire is not allowed",
+    },
+  ];
+
+  for (const { value, error } of cases) {
+    expect(isPlatformReadinessContribution(value)).toBe(false);
+    expect(platformReadinessContributionErrors(value)).toContain(error);
+  }
 });
 
 test("contribution evidence schemas validate without extension code", () => {
