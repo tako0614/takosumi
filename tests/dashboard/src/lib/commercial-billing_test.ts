@@ -377,6 +377,8 @@ test("native commercial billing stays provider-neutral and uses extension APIs",
   expect(component).toContain("DataTable");
   expect(component).toContain("availableUsdMicros");
   expect(component).toContain("suspensionReason");
+  expect(component).toContain("billing.commercial.lowCredit");
+  expect(component).toContain("billing.commercial.account.blocked");
   expect(component).toContain("partially_refunded");
   expect(component).toContain('name="billingCustomerType"');
   expect(component).toContain('name="billingCountry"');
@@ -394,6 +396,21 @@ test("native commercial billing stays provider-neutral and uses extension APIs",
   expect(client).toContain('"portal"');
   expect(client).toContain('credentials: "include"');
   expect(client).not.toContain("Stripe");
+});
+
+test("native commercial billing keeps detail surfaces collapsed and lazy", () => {
+  expect(commercialBillingPanelSource).toContain("transactionDetailsOpen");
+  expect(commercialBillingPanelSource).toContain("handleTransactionToggle");
+  expect(commercialBillingPanelSource).toContain(
+    "<details class=\"wb-billing-disclosure\"",
+  );
+  expect(commercialBillingPanelSource).toContain(
+    "<details class=\"wb-billing-auto-disclosure\"",
+  );
+  expect(commercialBillingPanelSource).toContain('variant="primary"');
+  expect(commercialBillingPanelSource).not.toContain(
+    "createResource(\n    () => ({ basePath: props.basePath, workspaceId: props.workspaceId }),\n    ({ basePath, workspaceId }) =>\n      loadCommercialBillingTransactions",
+  );
 });
 
 test("commercial billing auto-recharge options preserve canonical selections", () => {

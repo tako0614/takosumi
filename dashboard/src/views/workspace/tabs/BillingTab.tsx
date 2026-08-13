@@ -68,6 +68,8 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
   const [usageRows, setUsageRows] = createSignal<readonly UsageEvent[]>([]);
   const [usageCursor, setUsageCursor] = createSignal<string | undefined>();
   const [usageLoading, setUsageLoading] = createSignal(false);
+  const [usageLoaded, setUsageLoaded] = createSignal(false);
+  const [usageDetailsOpen, setUsageDetailsOpen] = createSignal(false);
   const [usageError, setUsageError] = createSignal<string | undefined>();
 
   const current = createMemo(() => (billing.error ? undefined : billing()));
@@ -118,6 +120,7 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
         append ? [...rows, ...page.usageEvents] : page.usageEvents,
       );
       setUsageCursor(page.nextCursor);
+      setUsageLoaded(true);
     } catch (error) {
       setUsageError(friendlyError(error, t).message);
     } finally {
@@ -125,7 +128,12 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
     }
   };
 
-  onMount(() => void loadUsage(false));
+  const handleUsageToggle = (event: Event) => {
+    const details = event.currentTarget as HTMLDetailsElement | null;
+    if (!details?.open) return;
+    setUsageDetailsOpen(true);
+    if (!usageLoaded() && !usageLoading()) void loadUsage(false);
+  };
 
   return (
     <div class="wa-stack">
@@ -210,45 +218,59 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
         }}
       </For>
 
-      <Card>
-        <CardHeader
-          title={t("billing.usage.title")}
-          subtitle={t("billing.usage.subtitle")}
-        />
-        <Show when={usageError()}>
-          {(message) => (
-            <Toast tone="error">
-              {t("billing.usage.error", { message: message() })}
-              <Button
-                variant="secondary"
-                size="sm"
-                type="button"
-                busy={usageLoading()}
-                onClick={() => void loadUsage(false)}
-              >
-                {t("common.retry")}
-              </Button>
-            </Toast>
-          )}
-        </Show>
-        <Show when={!usageError()}>
-          <DataTable
-            columns={usageColumns()}
-            rows={usageRows()}
-            rowKey={(event) => event.id}
-            loading={usageLoading() && usageRows().length === 0}
-            empty={t("billing.usage.empty")}
-          />
-          <Show when={usageCursor()}>
-            <Button
-              variant="secondary"
-              busy={usageLoading()}
-              onClick={() => void loadUsage(true)}
-            >
-              {t("billing.usage.more")}
-            </Button>
+      <Card class="wb-billing-history">
+        <details
+          class="wb-billing-disclosure"
+          onToggle={handleUsageToggle}
+        >
+          <summary>
+            <span>
+              <span>
+                <strong>{t("billing.usage.title")}</strong>
+                <small>{t("billing.usage.subtitle")}</small>
+              </span>
+            </span>
+            <span>{t("common.details")}</span>
+          </summary>
+          <Show when={usageDetailsOpen()}>
+            <div class="wb-billing-history-body">
+              <Show when={usageError()}>
+                {(message) => (
+                  <Toast tone="error">
+                    {t("billing.usage.error", { message: message() })}
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      type="button"
+                      busy={usageLoading()}
+                      onClick={() => void loadUsage(false)}
+                    >
+                      {t("common.retry")}
+                    </Button>
+                  </Toast>
+                )}
+              </Show>
+              <Show when={!usageError()}>
+                <DataTable
+                  columns={usageColumns()}
+                  rows={usageRows()}
+                  rowKey={(event) => event.id}
+                  loading={usageLoading() && usageRows().length === 0}
+                  empty={t("billing.usage.empty")}
+                />
+                <Show when={usageCursor()}>
+                  <Button
+                    variant="secondary"
+                    busy={usageLoading()}
+                    onClick={() => void loadUsage(true)}
+                  >
+                    {t("billing.usage.more")}
+                  </Button>
+                </Show>
+              </Show>
+            </div>
           </Show>
-        </Show>
+        </details>
       </Card>
     </div>
   );

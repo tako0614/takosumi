@@ -31,10 +31,14 @@ test("BillingTab is provider-neutral and keeps usage/showback visible", () => {
   expect(source).not.toContain("hasCommercialBillingCapability");
 });
 
-test("BillingTab automatically loads a bounded first usage page", () => {
+test("BillingTab keeps the raw usage ledger collapsed and lazy", () => {
   expect(source).toContain("USAGE_LEDGER_PAGE_SIZE = 25");
   expect(source).toContain("listWorkspaceUsagePage");
-  expect(source).toContain("onMount(() => void loadUsage(false))");
+  expect(source).toContain("usageDetailsOpen");
+  expect(source).toContain("handleUsageToggle");
+  expect(source).toContain("usageLoaded");
+  expect(source).toContain('class="wb-billing-disclosure"');
+  expect(source).not.toContain("onMount(() => void loadUsage(false))");
   expect(source).toContain("usageCursor");
   expect(source).toContain("loadUsage(true)");
 });

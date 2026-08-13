@@ -1194,6 +1194,8 @@ export const ja = {
     "課金アカウントが無効なため、新しいTakosumi Cloudの利用を停止しています。表示中のプリペイドクレジットは失効しません。支払い設定を確認してください。",
   "billing.commercial.account.blocked.suspended":
     "課金アカウントの確認が必要なため、新しいTakosumi Cloudの利用を停止しています。表示中のプリペイドクレジットは失効しません。支払い設定を確認してください。",
+  "billing.commercial.lowCredit":
+    "利用可能クレジットが少なくなっています。利用を続けるにはプリペイドクレジットを追加してください。",
   "billing.commercial.customerType.label": "利用区分",
   "billing.commercial.customerType.individual": "個人",
   "billing.commercial.customerType.business": "法人",
@@ -1221,7 +1223,6 @@ export const ja = {
   "billing.commercial.autoRecharge.enable": "自動チャージを有効にする",
   "billing.commercial.autoRecharge.requiresCard":
     "最初に一度プリペイドクレジットを追加して、支払い方法を保存してください。",
-  "billing.commercial.autoRecharge.status": "自動チャージ",
   "billing.commercial.autoRecharge.on": "オン",
   "billing.commercial.autoRecharge.off": "オフ",
   "billing.commercial.autoRecharge.onSummary":
