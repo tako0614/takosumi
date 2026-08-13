@@ -31,10 +31,21 @@ export function installConfigRequiresUiSurface(
     (blueprint) =>
       blueprint.spec.type === UI_SURFACE_INTERFACE_TYPE &&
       blueprint.spec.version === UI_SURFACE_INTERFACE_VERSION &&
+      isLauncherDocument(blueprint.spec.document) &&
       (blueprint.bindings ?? []).some((binding) =>
-        binding.permissions.includes(UI_SURFACE_OPEN_PERMISSION),
+        binding.permissions.includes(UI_SURFACE_OPEN_PERMISSION) &&
+        // The install flow can prove that the current signed-in Principal is
+        // the grant target only for the contract's install-time placeholder.
+        // A fixed Principal (or another delivery subject) may be valid for a
+        // non-interactive composition, but polling this dashboard's session
+        // for it would be an unbounded/futile readiness check.
+        binding.subject?.source === "installing_principal",
       ),
   );
+}
+
+function isLauncherDocument(value: unknown): value is Record<string, unknown> {
+  return isRecord(value) && value.launcher === true;
 }
 
 /**

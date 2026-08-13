@@ -38,6 +38,29 @@ test("identifies install configs whose launcher must be read back", () => {
       { ...launcher, spec: { ...launcher.spec, type: "interface.mcp" } },
     ]),
   ).toBe(false);
+  expect(
+    installConfigRequiresUiSurface([
+      {
+        ...launcher,
+        spec: { ...launcher.spec, document: { launcher: false } },
+      },
+    ]),
+  ).toBe(false);
+  expect(
+    installConfigRequiresUiSurface([
+      {
+        ...launcher,
+        bindings: [
+          {
+            key: "launcher.fixed",
+            subjectRef: { kind: "Principal", id: "principal_fixed" },
+            permissions: ["ui.open"],
+            delivery: { type: "none" },
+          },
+        ],
+      },
+    ]),
+  ).toBe(false);
   expect(installConfigRequiresUiSurface(undefined)).toBe(false);
 });
 

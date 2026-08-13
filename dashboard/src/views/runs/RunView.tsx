@@ -784,7 +784,13 @@ function Inner() {
     if (!r || r.type !== "apply" || r.status !== "succeeded") {
       return undefined;
     }
-    return (stateVersions() ?? []).find((row) => row.createdByRunId === r.id);
+    // A rejected Resource accessor throws. This memo is a separate reactive
+    // computation from `completedRunReadiness`, so its dependency can update
+    // on the rejection before the parent memo gets a chance to inspect
+    // `stateVersions.error`. Guard here as well and keep the last UI shell
+    // alive; the parent maps the failed read to `unavailable` and retries it.
+    if (stateVersions.error) return undefined;
+    return (stateVersions.latest ?? []).find((row) => row.createdByRunId === r.id);
   });
   const completedRunReadiness = createMemo((): StateVersionReadiness => {
     const r = run.latest;
@@ -799,7 +805,7 @@ function Inner() {
     }
     return stateVersionReadinessAfterApply(
       completedRunStateVersion(),
-      activity() ?? [],
+      activity.latest ?? [],
       capsuleId() ?? undefined,
     );
   });

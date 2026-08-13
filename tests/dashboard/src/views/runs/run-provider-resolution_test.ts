@@ -303,6 +303,10 @@ describe("Run review ProviderConnection evidence", () => {
     expect(runViewSource).toContain('readiness === "activation_pending"');
     expect(runViewSource).toContain('readiness === "activation_failed"');
     expect(runViewSource).toContain('readiness === "unavailable"');
+    expect(runViewSource).toContain("if (stateVersions.error) return undefined;");
+    expect(runViewSource).toContain("stateVersions.latest");
+    expect(runViewSource).toContain("activity.latest");
+    expect(runViewSource).not.toContain("stateVersions()");
     expect(runViewSource).toContain("stateVersions.error || activity.error");
     expect(runViewSource).not.toContain("activity.error ? []");
     expect(runViewSource).not.toContain("return [];");

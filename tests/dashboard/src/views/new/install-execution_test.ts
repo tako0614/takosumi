@@ -29,4 +29,9 @@ test("post-apply readiness fails closed when activity cannot be read", () => {
   expect(source).toContain('setError(t("installStore.readinessFailed"))');
   expect(source).toContain("if (readiness.error) {");
   expect(source).toContain("return;");
+  expect(source).toContain("!readiness.error");
+  expect(source).toContain("readinessFailure()");
+  expect(source).toContain("onClick={retryReadiness}");
+  expect(source).toContain('t("common.details")');
+  expect(source).toContain('t("installStore.runDetails")');
 });
