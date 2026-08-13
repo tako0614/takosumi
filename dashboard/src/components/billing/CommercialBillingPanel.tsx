@@ -186,16 +186,25 @@ export default function CommercialBillingPanel(props: Props) {
       limit: formatUsdMicros(settings.monthlyLimitUsdMicros),
     });
   });
+  const serverAutoRecharge = createMemo(
+    () => completeSnapshot()?.billing.credits.autoRecharge,
+  );
   const lowCredit = createMemo(() => {
     const current = completeSnapshot();
-    if (!current?.billing.configured || current.billing.account?.usageAllowed === false) {
+    const settings = serverAutoRecharge();
+    if (
+      !current?.billing.configured ||
+      current.billing.account?.usageAllowed === false ||
+      !settings
+    ) {
       return false;
     }
-    const threshold =
-      autoRecharge()?.thresholdUsdMicros ??
-      current.configuration.credits.autoRecharge.defaultSettings
-        .thresholdUsdMicros;
-    return current.billing.credits.availableUsdMicros <= threshold;
+    return current.billing.credits.availableUsdMicros <= settings.thresholdUsdMicros;
+  });
+  const lowCreditMessage = createMemo(() => {
+    return serverAutoRecharge()?.enabled === true
+      ? t("billing.commercial.lowCredit.autoRecharge")
+      : t("billing.commercial.lowCredit.manual");
   });
 
   const paymentColumns = createMemo<
@@ -477,14 +486,23 @@ export default function CommercialBillingPanel(props: Props) {
               {(account) => (
                 <Show when={!account().usageAllowed}>
                   <Toast tone="error">
-                    {billingAccountBlockingMessage(account())}
+                    <span>{billingAccountBlockingMessage(account())}</span>
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      busy={portalBusy()}
+                      icon={<CreditCard size={16} />}
+                      onClick={() => void openPortal()}
+                    >
+                      {t("billing.commercial.manage")}
+                    </Button>
                   </Toast>
                 </Show>
               )}
             </Show>
             <Show when={lowCredit()}>
               <Toast tone="neutral">
-                {t("billing.commercial.lowCredit")}
+                {lowCreditMessage()}
               </Toast>
             </Show>
 
