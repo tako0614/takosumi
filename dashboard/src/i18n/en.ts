@@ -83,6 +83,11 @@ export const en: Record<keyof typeof ja, string> = {
     "The service readiness state could not be checked. Open the technical details for more information.",
   "installStore.activationFailed":
     "Service activation failed. Open the technical details for more information.",
+  "installStore.finalizing": "Preparing the service",
+  "installStore.finalizingHint":
+    "Waiting for the service launch link to become available.",
+  "installStore.launchNotReady":
+    "The service was applied, but its launch link is not ready yet. Retry the check or open the service details.",
   "installStore.runFailed": "Service setup did not finish",
   "installStore.runFailedHint": "Open the technical details and try again.",
   "installStore.doneTitle": "Service added",
@@ -531,6 +536,9 @@ export const en: Record<keyof typeof ja, string> = {
   "run.summary.activationPending": "Finishing service activation…",
   "run.summary.activationFailed":
     "Service activation failed after the infrastructure deploy completed.",
+  "run.summary.readinessUnavailable": "Service readiness could not be checked.",
+  "run.summary.readinessUnavailableHint":
+    "Takosumi will retry the readiness read. The apply is not reported as ready until the check succeeds.",
   "run.summary.applySucceeded": "Deploy complete.",
   "run.summary.removing": "Removing…",
   "run.summary.removed": "Removal complete.",

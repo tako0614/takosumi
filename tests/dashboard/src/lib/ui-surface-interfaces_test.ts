@@ -1,10 +1,97 @@
 import { describe, expect, test } from "bun:test";
 import { TAKOSUMI_API_VERSION } from "takosumi-contract";
 import {
+  installConfigRequiresUiSurface,
   isReadyUiOpenBinding,
   listAuthorizedUiSurfaces,
   parseUiSurfaceInterface,
 } from "../../../../dashboard/src/lib/ui-surface-interfaces.ts";
+
+test("identifies install configs whose launcher must be read back", () => {
+  const launcher = {
+    key: "launcher",
+    name: "app.launcher",
+    spec: {
+      type: "interface.ui.surface",
+      version: "1",
+      document: { launcher: true },
+      access: { visibility: "workspace" },
+    },
+    bindings: [
+      {
+        key: "launcher.installer",
+        subject: { source: "installing_principal" },
+        permissions: ["ui.open"],
+        delivery: { type: "none" },
+      },
+    ],
+  } as const;
+
+  expect(installConfigRequiresUiSurface([launcher])).toBe(true);
+  expect(
+    installConfigRequiresUiSurface([
+      { ...launcher, bindings: [{ ...launcher.bindings[0], permissions: [] }] },
+    ]),
+  ).toBe(false);
+  expect(
+    installConfigRequiresUiSurface([
+      { ...launcher, spec: { ...launcher.spec, type: "interface.mcp" } },
+    ]),
+  ).toBe(false);
+  expect(
+    installConfigRequiresUiSurface([
+      {
+        ...launcher,
+        spec: { ...launcher.spec, document: { launcher: false } },
+      },
+    ]),
+  ).toBe(false);
+  expect(
+    installConfigRequiresUiSurface([
+      {
+        ...launcher,
+        bindings: [
+          {
+            key: "launcher.fixed",
+            subjectRef: { kind: "Principal", id: "principal_fixed" },
+            permissions: ["ui.open"],
+            delivery: { type: "none" },
+          },
+        ],
+      },
+    ]),
+  ).toBe(false);
+
+  const resolvedInstaller = {
+    ...launcher,
+    bindings: [
+      {
+        key: "launcher.installer",
+        subjectRef: { kind: "Principal", id: "principal_current" },
+        permissions: ["ui.open"],
+        delivery: { type: "none" },
+      },
+    ],
+  } as const;
+  expect(
+    installConfigRequiresUiSurface([resolvedInstaller], {
+      installingPrincipalId: "principal_current",
+      repositoryInstallUxAccepted: true,
+    }),
+  ).toBe(true);
+  expect(
+    installConfigRequiresUiSurface([resolvedInstaller], {
+      installingPrincipalId: "principal_other",
+      repositoryInstallUxAccepted: true,
+    }),
+  ).toBe(false);
+  expect(
+    installConfigRequiresUiSurface([resolvedInstaller], {
+      installingPrincipalId: "principal_current",
+    }),
+  ).toBe(false);
+  expect(installConfigRequiresUiSurface(undefined)).toBe(false);
+});
 
 function uiInterface(
   overrides: Record<string, unknown> = {},
