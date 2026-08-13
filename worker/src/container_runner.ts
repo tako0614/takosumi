@@ -26,7 +26,10 @@ import type {
   ReleaseCommandRunJob,
   ReleaseCommandRunResult,
 } from "../../core/domains/deploy-control/mod.ts";
-import { OpenTofuRunnerInfrastructureError } from "../../core/domains/deploy-control/mod.ts";
+import {
+  OpenTofuRunnerExecutionError,
+  OpenTofuRunnerInfrastructureError,
+} from "../../core/domains/deploy-control/mod.ts";
 import type {
   CloudflareWorkerEnv,
   OpenTofuRunAction,
@@ -35,6 +38,7 @@ import { redactString } from "takosumi-contract/redaction";
 import { normalizePlanResourceScope } from "takosumi-contract";
 import { parseRepositoryManifestSnapshot } from "takosumi-contract/sources";
 import { recordWorkerMetric, type WorkerMetricSink } from "./metrics.ts";
+import { RUNNER_MUTATION_INDETERMINATE_CODE } from "./runner_protocol.ts";
 
 /**
  * Implements {@link OpenTofuRunner} over the RUNNER Durable Object: each
@@ -565,6 +569,11 @@ export class CloudflareContainerOpenTofuRunner
             }
             const detail = runnerFailureDetail(payload, redactedText);
             const message = `OpenTofu runner rejected ${action} run ${runId}: ${response.status}${detail ? ` (${detail})` : ""}`;
+            const executionError = runnerExecutionErrorFromPayload(
+              payload,
+              message,
+            );
+            if (executionError) throw executionError;
             const relayInfrastructureError =
               runnerInfrastructureErrorFromPayload(payload, message);
             if (relayInfrastructureError) {
@@ -764,6 +773,22 @@ function runnerInfrastructureErrorFromPayload(
   ) {
     return new OpenTofuRunnerInfrastructureError(message, {
       reason: errorCode,
+    });
+  }
+  return undefined;
+}
+
+function runnerExecutionErrorFromPayload(
+  payload: Record<string, unknown>,
+  message: string,
+): OpenTofuRunnerExecutionError | undefined {
+  const errorCode = stringFromRecord(payload, "errorCode");
+  if (
+    payload.retryable === false &&
+    errorCode === RUNNER_MUTATION_INDETERMINATE_CODE
+  ) {
+    return new OpenTofuRunnerExecutionError(message, {
+      reason: RUNNER_MUTATION_INDETERMINATE_CODE,
     });
   }
   return undefined;

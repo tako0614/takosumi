@@ -2,7 +2,11 @@ import { expect, test } from "bun:test";
 import type { CloudflareWorkerEnv } from "../../../worker/src/bindings.ts";
 import { CloudflareContainerOpenTofuRunner } from "../../../worker/src/container_runner.ts";
 import { InMemoryObservabilitySink } from "../../../core/domains/observability/mod.ts";
-import { OpenTofuRunnerInfrastructureError } from "../../../core/domains/deploy-control/mod.ts";
+import {
+  OpenTofuRunnerExecutionError,
+  OpenTofuRunnerInfrastructureError,
+} from "../../../core/domains/deploy-control/mod.ts";
+import { RUNNER_MUTATION_INDETERMINATE_CODE } from "../../../worker/src/runner_protocol.ts";
 
 const PLAN_DIGEST =
   "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -563,6 +567,46 @@ test("container runner maps typed artifact relay ambiguity to retryable infrastr
   expect((error as OpenTofuRunnerInfrastructureError).reason).toBe(
     "runner_artifact_relay_ambiguous",
   );
+});
+
+test("container runner maps mutation ambiguity to a non-retryable typed execution error", async () => {
+  const runner = new CloudflareContainerOpenTofuRunner(
+    envReturning(
+      {
+        error: "OpenTofu runner mutation outcome is indeterminate",
+        errorCode: RUNNER_MUTATION_INDETERMINATE_CODE,
+        retryable: false,
+        outcome: "indeterminate",
+        detail:
+          "provider mutation may have occurred; token=adapter-raw-secret",
+      },
+      undefined,
+      409,
+    ),
+  );
+
+  let error: unknown;
+  try {
+    await runner.apply({
+      applyRun: { id: "apply_indeterminate" },
+      planRun: { id: "plan_indeterminate" },
+      planArtifact: {
+        kind: "runner-local",
+        ref: "runner-local://plan_indeterminate/tfplan",
+        digest: PLAN_DIGEST,
+      },
+    } as Parameters<CloudflareContainerOpenTofuRunner["apply"]>[0]);
+  } catch (caught) {
+    error = caught;
+  }
+
+  expect(error).toBeInstanceOf(OpenTofuRunnerExecutionError);
+  expect(error).not.toBeInstanceOf(OpenTofuRunnerInfrastructureError);
+  expect((error as OpenTofuRunnerExecutionError).reason).toBe(
+    RUNNER_MUTATION_INDETERMINATE_CODE,
+  );
+  expect((error as Error).message).not.toContain("adapter-raw-secret");
+  expect((error as Error).message).toContain("[redacted]");
 });
 
 test("container runner reads Capsule compatibility source files", async () => {

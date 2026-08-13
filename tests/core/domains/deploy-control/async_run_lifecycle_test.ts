@@ -7,6 +7,7 @@ import {
   type OpenTofuPlanJob,
   OpenTofuController,
   type OpenTofuRunner,
+  OpenTofuRunnerExecutionError,
   OpenTofuRunnerInfrastructureError,
 } from "../../../../core/domains/deploy-control/mod.ts";
 import {
@@ -1201,7 +1202,7 @@ test("runner infrastructure errors fail a plan after the retry budget is exhaust
   ]);
 });
 
-test("an ambiguous runner substrate reset terminally fails apply without replaying provider mutations", async () => {
+test("a typed indeterminate runner mutation terminally fails apply without retry classification", async () => {
   const store = new InMemoryOpenTofuControlStore();
   let applyCalls = 0;
   const retryDispatches: Parameters<EnqueueRun>[0][] = [];
@@ -1227,9 +1228,9 @@ test("an ambiguous runner substrate reset terminally fails apply without replayi
         applyCalls++;
         if (applyCalls === 1) {
           return Promise.reject(
-            new OpenTofuRunnerInfrastructureError(
-              "runner substrate reset during apply",
-              { reason: "substrate_reset" },
+            new OpenTofuRunnerExecutionError(
+              "runner mutation outcome is indeterminate",
+              { reason: "runner_mutation_indeterminate" },
             ),
           );
         }
@@ -1276,8 +1277,11 @@ test("an ambiguous runner substrate reset terminally fails apply without replayi
 
   const failed = (await store.getApplyRun(applyRun.id))!;
   expect(failed.status).toEqual("failed");
+  expect(failed.diagnostics?.[0]?.code).toEqual(
+    "runner_mutation_indeterminate",
+  );
   expect(failed.diagnostics?.[0]?.message).toContain(
-    "runner substrate reset during apply",
+    "runner mutation outcome is indeterminate",
   );
   expect(
     failed.auditEvents.some(

@@ -11,6 +11,11 @@ import {
   StateArtifactCrypto,
   type SealedArtifact,
 } from "../state_crypto.ts";
+import {
+  RUNNER_MUTATION_INDETERMINATE_CODE,
+  type RunnerMutationAction,
+  type RunnerMutationIndeterminatePayload,
+} from "../runner_protocol.ts";
 import { redactString } from "takosumi-contract/redaction";
 
 const DEFAULT_PLAN_ARTIFACT_BUCKET = "takos-artifacts";
@@ -258,6 +263,23 @@ const DEFAULT_RUNNER_KEEPALIVE_SECONDS = 0;
 const RUNNER_MIN_ACTIVITY_GRACE_SECONDS = 30;
 const MAX_RUNNER_KEEPALIVE_SECONDS = 900;
 const RUNNER_STARTUP_SECONDS_HEADER = "x-takosumi-runner-startup-seconds";
+const RUNNER_MUTATION_INDETERMINATE_HEADER =
+  "x-takosumi-runner-mutation-indeterminate";
+const RUNNER_MUTATION_AUTHORITY_STORAGE_KEY =
+  "runner-mutation-authority@v1";
+const RUNNER_MUTATION_DISPATCH_STORAGE_PREFIX =
+  "runner-mutation-dispatch@v1:";
+
+interface RunnerMutationDispatchRecord {
+  readonly kind: "takosumi.runner-mutation-dispatch@v1";
+  readonly action: RunnerMutationAction;
+  /** SHA-256 over canonical JSON containing the exact run/action/request. */
+  readonly identityDigest: string;
+  /** `preparing` is provably before provider dispatch. */
+  readonly phase: "preparing" | "dispatched" | "indeterminate";
+  /** Once dispatched, this durable claim permanently forbids redispatch. */
+  readonly redispatchBlocked: true;
+}
 
 export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<CloudflareWorkerEnv> {
   defaultPort = 8080;
@@ -268,6 +290,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
 
   #stateCryptoInstance: StateArtifactCrypto | undefined;
   #lastStartupSeconds: number | undefined;
+  readonly #activeMutationPreparations = new Set<string>();
   readonly #localRunnerProxyUrl: URL | undefined;
   readonly #artifactLimits: RunnerArtifactLimits;
 
@@ -311,7 +334,11 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
   }
 
   onError(error: unknown): unknown {
-    console.error("OpenTofu runner container failed", error);
+    // Container errors can include request/provider diagnostics. The mutation
+    // owner records only a safe type and never emits the raw message or stack.
+    console.error("OpenTofu runner container failed", {
+      errorName: safeRunnerErrorName(error),
+    });
     throw error;
   }
 
@@ -324,7 +351,9 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
   }
 
   onStop(params: { readonly exitCode: number; readonly reason: string }): void {
-    console.error("OpenTofu runner container stopped", params);
+    console.error("OpenTofu runner container stopped", {
+      exitCode: params.exitCode,
+    });
   }
 
   async onActivityExpired(): Promise<void> {
@@ -351,10 +380,13 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       runDispatch &&
       runnerShouldShutdownAfterRun(runAction, runnerKeepaliveSeconds(this.env));
     let runSucceeded = false;
+    let mutationIndeterminate = false;
     try {
       this.#lastStartupSeconds = undefined;
       const response = await this.#fetchWithDurablePlanArtifacts(request);
       runSucceeded = response.ok;
+      mutationIndeterminate =
+        response.headers.get(RUNNER_MUTATION_INDETERMINATE_HEADER) === "1";
       const output = runDispatch
         ? await bufferedResponse(
             response,
@@ -406,7 +438,11 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         { status: 500 },
       );
     } finally {
-      if (runDispatch && (!runSucceeded || shutdownAfterRun)) {
+      if (
+        runDispatch &&
+        !mutationIndeterminate &&
+        (!runSucceeded || shutdownAfterRun)
+      ) {
         await this.#shutdownContainerIfSupported();
       }
       this.#lastStartupSeconds = undefined;
@@ -539,6 +575,180 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     }
   }
 
+  async #claimMutationPreparation(
+    runId: string,
+    action: RunnerMutationAction,
+    requestPayload: unknown,
+  ): Promise<
+    | { readonly claimed: true; readonly record: RunnerMutationDispatchRecord }
+    | { readonly claimed: false }
+  > {
+    const identityDigest = await runnerMutationIdentityDigest(
+      runId,
+      action,
+      requestPayload,
+    );
+    // A Durable Object has one live isolate for this ID, so acquiring this
+    // in-isolate owner before the first storage await closes concurrent claim
+    // races. Durable storage below, not this Set, is the restart authority.
+    if (this.#activeMutationPreparations.size > 0) {
+      return { claimed: false };
+    }
+    this.#activeMutationPreparations.add(identityDigest);
+    try {
+      const existing = await this.ctx.storage.get<unknown>(
+        RUNNER_MUTATION_AUTHORITY_STORAGE_KEY,
+      );
+      if (existing !== undefined) {
+        const existingRecord = parseRunnerMutationDispatchRecord(existing);
+        if (
+          !existingRecord ||
+          existingRecord.phase !== "preparing" ||
+          existingRecord.action !== action ||
+          existingRecord.identityDigest !== identityDigest
+        ) {
+          this.#activeMutationPreparations.delete(identityDigest);
+          return { claimed: false };
+        }
+        // A persisted `preparing` phase proves no provider dispatch authority
+        // was granted. Resume it only after isolate recreation (the in-memory
+        // owner is absent); the durable phase carries restart safety.
+        return { claimed: true, record: existingRecord };
+      }
+
+      const record: RunnerMutationDispatchRecord = {
+        kind: "takosumi.runner-mutation-dispatch@v1",
+        action,
+        identityDigest,
+        phase: "preparing",
+        redispatchBlocked: true,
+      };
+      await this.#writeMutationDispatchRecord(record);
+      return { claimed: true, record };
+    } catch (error) {
+      this.#activeMutationPreparations.delete(identityDigest);
+      throw error;
+    }
+  }
+
+  async #markMutationDispatched(
+    preparation: RunnerMutationDispatchRecord,
+  ): Promise<RunnerMutationDispatchRecord | undefined> {
+    const current = parseRunnerMutationDispatchRecord(
+      await this.ctx.storage.get<unknown>(
+        RUNNER_MUTATION_AUTHORITY_STORAGE_KEY,
+      ),
+    );
+    if (
+      !current ||
+      current.phase !== "preparing" ||
+      current.action !== preparation.action ||
+      current.identityDigest !== preparation.identityDigest
+    ) {
+      this.#activeMutationPreparations.delete(preparation.identityDigest);
+      return undefined;
+    }
+    const dispatched: RunnerMutationDispatchRecord = {
+      ...current,
+      phase: "dispatched",
+    };
+    await this.#writeMutationDispatchRecord(dispatched);
+    this.#activeMutationPreparations.delete(preparation.identityDigest);
+    return dispatched;
+  }
+
+  async #releaseMutationPreparation(
+    preparation: RunnerMutationDispatchRecord,
+  ): Promise<void> {
+    try {
+      const current = parseRunnerMutationDispatchRecord(
+        await this.ctx.storage.get<unknown>(
+          RUNNER_MUTATION_AUTHORITY_STORAGE_KEY,
+        ),
+      );
+      if (
+        !current ||
+        current.phase !== "preparing" ||
+        current.action !== preparation.action ||
+        current.identityDigest !== preparation.identityDigest
+      ) {
+        return;
+      }
+      // No provider dispatch was authorized, so both preparation records can
+      // be removed and the exact request may safely retry. Issue both deletes
+      // without an intervening await to keep the storage update atomic.
+      const authorityDelete = this.ctx.storage.delete(
+        RUNNER_MUTATION_AUTHORITY_STORAGE_KEY,
+      );
+      const evidenceDelete = this.ctx.storage.delete(
+        `${RUNNER_MUTATION_DISPATCH_STORAGE_PREFIX}${preparation.identityDigest}`,
+      );
+      await Promise.all([authorityDelete, evidenceDelete]);
+    } finally {
+      this.#activeMutationPreparations.delete(preparation.identityDigest);
+    }
+  }
+
+  async #writeMutationDispatchRecord(
+    record: RunnerMutationDispatchRecord,
+  ): Promise<void> {
+    // Both puts are issued without an intervening await so Durable Object
+    // storage coalesces them atomically. The fixed authority key fences request
+    // digest drift; the digest-keyed entry is the exact durable evidence.
+    const authorityWrite = this.ctx.storage.put(
+      RUNNER_MUTATION_AUTHORITY_STORAGE_KEY,
+      record,
+    );
+    const evidenceWrite = this.ctx.storage.put(
+      `${RUNNER_MUTATION_DISPATCH_STORAGE_PREFIX}${record.identityDigest}`,
+      record,
+    );
+    await Promise.all([authorityWrite, evidenceWrite]);
+  }
+
+  async #dispatchMutationOnce(
+    request: Request,
+    record: RunnerMutationDispatchRecord,
+  ): Promise<Response> {
+    try {
+      return await this.#containerFetch(request);
+    } catch (error) {
+      return await this.#recordMutationIndeterminate(record, error);
+    }
+  }
+
+  async #recordMutationIndeterminate(
+    record: RunnerMutationDispatchRecord,
+    error: unknown,
+  ): Promise<Response> {
+    // Once containerFetch has been invoked, no transport exception proves that
+    // provider execution did not happen. Never inspect or log its message: it
+    // may contain materialized provider credentials.
+    console.error("OpenTofu runner mutation outcome is indeterminate", {
+      action: record.action,
+      errorName: safeRunnerErrorName(error),
+      redispatchBlocked: true,
+    });
+    try {
+      await this.#writeMutationDispatchRecord({
+        ...record,
+        phase: "indeterminate",
+      });
+    } catch (storageError) {
+      // The already-durable `dispatched` phase still blocks replay if this
+      // evidence refinement is unavailable. Never log storage diagnostics.
+      console.error(
+        "OpenTofu runner mutation indeterminate evidence update failed",
+        {
+          action: record.action,
+          errorName: safeRunnerErrorName(storageError),
+          redispatchBlocked: true,
+        },
+      );
+    }
+    return runnerMutationIndeterminateResponse(record.action);
+  }
+
   async #fetchWithDurablePlanArtifacts(request: Request): Promise<Response> {
     const url = new URL(request.url);
     const match = /^\/runs\/([^/]+)$/.exec(url.pathname);
@@ -608,48 +818,115 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       );
       if (adopted) return adopted;
     }
-    // M2: restore the snapshotted source tree into the container before any
-    // build/plan phase (mirrors the plan-artifact restore protocol).
-    if (sourceArchive) {
-      await this.#restoreSourceArchive(runId, sourceArchive, url);
-    }
-    // remote_state dependencies (spec §15): fetch + decrypt each producer state
-    // and stream it to the container's dep-state restore route BEFORE init/plan/
-    // apply, so the consumer's `terraform_remote_state` data sources resolve.
-    if (depStates.length > 0) {
-      await this.#restoreDepStates(runId, depStates, url);
-    }
-    if (envelope.action === "apply" || envelope.action === "destroy") {
-      await this.#restorePlanArtifact(runId, envelope.request, url);
-    }
-    if (stateScope) {
-      await this.#restoreStateFromR2State(
+    const dispatchRequest = () =>
+      new Request(request.url, {
+        method: request.method,
+        headers: runnerRequestHeaders(request),
+        body: bodyText,
+        signal: request.signal,
+      });
+    let mutationPreparation: RunnerMutationDispatchRecord | undefined;
+    let mutationDispatch: RunnerMutationDispatchRecord | undefined;
+    let mutationRequest: Request | undefined;
+    if (isRunnerMutationAction(envelope.action)) {
+      const claim = await this.#claimMutationPreparation(
         runId,
-        stateScope,
-        url,
         envelope.action,
-        stateAdoption,
+        envelope.request,
       );
-    } else if (stateKeys.length > 0) {
-      await this.#restoreStateArtifact(runId, stateKeys, url);
+      if (!claim.claimed) {
+        // Exact R2 adoption is checked above before this fence. Without that
+        // authoritative readback, a prior dispatch can only be indeterminate.
+        return runnerMutationIndeterminateResponse(envelope.action);
+      }
+      mutationPreparation = claim.record;
     }
-    await this.#ensureContainerReady(url);
-    const unboundedRunnerResponse = await this.#containerFetchAfterReady(
-      () =>
-        new Request(request.url, {
-          method: request.method,
-          headers: runnerRequestHeaders(request),
-          body: bodyText,
-          signal: request.signal,
-        }),
-      url,
-    );
+    try {
+      // M2: restore the snapshotted source tree into the container before any
+      // build/plan phase (mirrors the plan-artifact restore protocol).
+      if (sourceArchive) {
+        await this.#restoreSourceArchive(runId, sourceArchive, url);
+      }
+      // remote_state dependencies (spec §15): fetch + decrypt each producer
+      // state and stream it to the container BEFORE init/plan/apply.
+      if (depStates.length > 0) {
+        await this.#restoreDepStates(runId, depStates, url);
+      }
+      if (envelope.action === "apply" || envelope.action === "destroy") {
+        await this.#restorePlanArtifact(runId, envelope.request, url);
+      }
+      if (stateScope) {
+        await this.#restoreStateFromR2State(
+          runId,
+          stateScope,
+          url,
+          envelope.action,
+          stateAdoption,
+        );
+      } else if (stateKeys.length > 0) {
+        await this.#restoreStateArtifact(runId, stateKeys, url);
+      }
+      await this.#ensureContainerReady(url);
+      if (mutationPreparation) {
+        // Construct and preflight before advancing the durable phase. An
+        // already-aborted request is a provable pre-dispatch failure.
+        mutationRequest = dispatchRequest();
+        if (mutationRequest.signal.aborted) {
+          throw mutationRequest.signal.reason instanceof Error
+            ? mutationRequest.signal.reason
+            : new DOMException(
+                "OpenTofu runner mutation was aborted before dispatch",
+                "AbortError",
+              );
+        }
+        mutationDispatch = await this.#markMutationDispatched(
+          mutationPreparation,
+        );
+        if (!mutationDispatch) {
+          return runnerMutationIndeterminateResponse(
+            mutationPreparation.action,
+          );
+        }
+      }
+    } catch (error) {
+      if (mutationPreparation && !mutationDispatch) {
+        await this.#releaseMutationPreparation(mutationPreparation);
+      }
+      throw error;
+    }
+
+    let unboundedRunnerResponse: Response;
+    if (mutationDispatch && mutationRequest) {
+      unboundedRunnerResponse = await this.#dispatchMutationOnce(
+        mutationRequest,
+        mutationDispatch,
+      );
+    } else {
+      unboundedRunnerResponse = await this.#containerFetchAfterReady(
+        dispatchRequest,
+        url,
+      );
+    }
     // Bound every container result before any state/plan persistence. This also
     // covers legacy state paths that do not otherwise parse the JSON payload.
-    const runnerResponse = await bufferedResponse(
-      unboundedRunnerResponse,
-      this.#artifactLimits.runnerResponse,
-    );
+    let runnerResponse: Response;
+    try {
+      runnerResponse = await bufferedResponse(
+        unboundedRunnerResponse,
+        this.#artifactLimits.runnerResponse,
+      );
+    } catch (error) {
+      if (
+        mutationDispatch &&
+        !(error instanceof RunnerArtifactSizeLimitError)
+      ) {
+        return await this.#recordMutationIndeterminate(
+          mutationDispatch,
+          error,
+        );
+      }
+      throw error;
+    }
     const providerExecutionFailed =
       envelope.action === "apply" &&
       !runnerResponse.ok &&
@@ -673,10 +950,17 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
           envelope.action,
           rawOutputRef,
           providerExecutionFailed,
+          mutationDispatch!,
         );
       }
       if (runnerResponse.ok && stateKeys.length > 0) {
-        await this.#persistStateArtifact(runId, stateKeys, url);
+        const indeterminate = await this.#persistStateArtifact(
+          runId,
+          stateKeys,
+          url,
+          mutationDispatch!,
+        );
+        if (indeterminate) return indeterminate;
       }
     }
     if (envelope.action !== "plan" || !runnerResponse.ok) {
@@ -1045,11 +1329,22 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     runnerResponse: Response,
     action: "apply" | "destroy",
     rawOutputRef: string | undefined,
-    providerExecutionFailed = false,
+    providerExecutionFailed: boolean,
+    mutationDispatch: RunnerMutationDispatchRecord,
   ): Promise<Response> {
-    const stateResponse = await this.#containerFetch(
-      new Request(stateArtifactUrl(baseUrl, containerRunId), { method: "GET" }),
-    );
+    let stateResponse: Response;
+    try {
+      stateResponse = await this.#containerFetch(
+        new Request(stateArtifactUrl(baseUrl, containerRunId), {
+          method: "GET",
+        }),
+      );
+    } catch (error) {
+      return await this.#recordMutationIndeterminate(
+        mutationDispatch,
+        error,
+      );
+    }
     if (stateResponse.status === 404) {
       if (providerExecutionFailed) {
         const payload = await readJsonObject(
@@ -1070,11 +1365,20 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         `container state artifact fetch failed: ${stateResponse.status}`,
       );
     }
-    const plaintext = await readBoundedResponseBytes(
-      stateResponse,
-      "state",
-      this.#artifactLimits.state,
-    );
+    let plaintext: Uint8Array;
+    try {
+      plaintext = await readBoundedResponseBytes(
+        stateResponse,
+        "state",
+        this.#artifactLimits.state,
+      );
+    } catch (error) {
+      if (error instanceof RunnerArtifactSizeLimitError) throw error;
+      return await this.#recordMutationIndeterminate(
+        mutationDispatch,
+        error,
+      );
+    }
     const sealed = await this.#stateCrypto().seal(plaintext);
     const payload = await readJsonObject(
       runnerResponse,
@@ -1713,21 +2017,39 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     runId: string,
     keys: readonly string[],
     baseUrl: URL,
-  ): Promise<void> {
-    const response = await this.#containerFetch(
-      new Request(stateArtifactUrl(baseUrl, runId), { method: "GET" }),
-    );
-    if (response.status === 404) return;
+    mutationDispatch: RunnerMutationDispatchRecord,
+  ): Promise<Response | undefined> {
+    let response: Response;
+    try {
+      response = await this.#containerFetch(
+        new Request(stateArtifactUrl(baseUrl, runId), { method: "GET" }),
+      );
+    } catch (error) {
+      return await this.#recordMutationIndeterminate(
+        mutationDispatch,
+        error,
+      );
+    }
+    if (response.status === 404) return undefined;
     if (!response.ok) {
       throw new Error(
         `container state artifact fetch failed: ${response.status}`,
       );
     }
-    const bytes = await readBoundedResponseBytes(
-      response,
-      "state",
-      this.#artifactLimits.state,
-    );
+    let bytes: Uint8Array;
+    try {
+      bytes = await readBoundedResponseBytes(
+        response,
+        "state",
+        this.#artifactLimits.state,
+      );
+    } catch (error) {
+      if (error instanceof RunnerArtifactSizeLimitError) throw error;
+      return await this.#recordMutationIndeterminate(
+        mutationDispatch,
+        error,
+      );
+    }
     const sealed = await this.#stateCrypto().seal(bytes);
     for (const key of keys) {
       await putR2ObjectWithRetry(
@@ -1746,6 +2068,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         "state artifact",
       );
     }
+    return undefined;
   }
 
   #planArtifactBucket(): string {
@@ -2130,6 +2453,15 @@ function isContainerNotRunningError(error: unknown): boolean {
   return (
     error instanceof Error && CONTAINER_NOT_RUNNING_PATTERN.test(error.message)
   );
+}
+
+function safeRunnerErrorName(error: unknown): string {
+  if (error instanceof DOMException) return "DOMException";
+  if (error instanceof TypeError) return "TypeError";
+  if (error instanceof RangeError) return "RangeError";
+  if (error instanceof SyntaxError) return "SyntaxError";
+  if (error instanceof Error) return "Error";
+  return "NonError";
 }
 
 async function sleep(ms: number): Promise<void> {
@@ -2927,6 +3259,104 @@ function parseRunEnvelope(bodyText: string): {
     action: stringField(body, "action"),
     request: body.request,
   };
+}
+
+function isRunnerMutationAction(
+  action: string | undefined,
+): action is RunnerMutationAction {
+  return action === "apply" || action === "destroy";
+}
+
+function parseRunnerMutationDispatchRecord(
+  value: unknown,
+): RunnerMutationDispatchRecord | undefined {
+  if (!isRecord(value)) return undefined;
+  const action = stringField(value, "action");
+  const identityDigest = stringField(value, "identityDigest");
+  const phase = stringField(value, "phase");
+  if (
+    value.kind !== "takosumi.runner-mutation-dispatch@v1" ||
+    !isRunnerMutationAction(action) ||
+    !identityDigest ||
+    !/^sha256:[0-9a-f]{64}$/u.test(identityDigest) ||
+    (phase !== "preparing" &&
+      phase !== "dispatched" &&
+      phase !== "indeterminate") ||
+    value.redispatchBlocked !== true
+  ) {
+    return undefined;
+  }
+  return {
+    kind: "takosumi.runner-mutation-dispatch@v1",
+    action,
+    identityDigest,
+    phase,
+    redispatchBlocked: true,
+  };
+}
+
+async function runnerMutationIdentityDigest(
+  runId: string,
+  action: RunnerMutationAction,
+  requestPayload: unknown,
+): Promise<string> {
+  return await digestText(
+    canonicalRunnerMutationJson({
+      kind: "takosumi.runner-mutation-identity@v1",
+      runId,
+      action,
+      request: requestPayload ?? null,
+    }),
+  );
+}
+
+function canonicalRunnerMutationJson(value: unknown): string {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "boolean" ||
+    typeof value === "number"
+  ) {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalRunnerMutationJson).join(",")}]`;
+  }
+  if (isRecord(value)) {
+    return `{${Object.keys(value)
+      .sort()
+      .map(
+        (key) =>
+          `${JSON.stringify(key)}:${canonicalRunnerMutationJson(value[key])}`,
+      )
+      .join(",")}}`;
+  }
+  throw new Error("runner mutation identity must be canonical JSON");
+}
+
+function runnerMutationIndeterminateResponse(
+  action: RunnerMutationAction,
+): Response {
+  const payload: RunnerMutationIndeterminatePayload = {
+    error: "OpenTofu runner mutation outcome is indeterminate",
+    errorCode: RUNNER_MUTATION_INDETERMINATE_CODE,
+    retryable: false,
+    outcome: "indeterminate",
+    evidence: {
+      kind: RUNNER_MUTATION_INDETERMINATE_CODE,
+      action,
+      redispatchBlocked: true,
+    },
+    detail:
+      "provider mutation may have occurred; automatic redispatch is blocked until an authoritative reconcile or adopt path confirms the outcome",
+  };
+  return Response.json(
+    payload,
+    {
+      status: 409,
+      headers: { [RUNNER_MUTATION_INDETERMINATE_HEADER]: "1" },
+    },
+  );
 }
 
 function runnerProviderExecutionFailed(

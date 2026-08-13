@@ -81,6 +81,15 @@ ledgers. OpenTofu Outputs remain ordinary module values; an Interface may
 explicitly reference a Capsule output, but no reserved output name becomes a
 runtime registry or credential channel.
 
+Apply and Destroy are at-most-once provider dispatches. Before either request
+can reach the runner container, the runner Durable Object durably records the
+exact run/action/request identity. A transport failure after dispatch returns
+the typed `runner_mutation_indeterminate` outcome and never redispatches the
+provider mutation. Redelivery may complete only by adopting the exact immutable
+state/output target already written for that Run; without that authoritative
+readback, it remains indeterminate. Plan, read-only work, and a provable
+pre-dispatch preparation failure may retry without granting mutation authority.
+
 ## Provider-neutral execution
 
 Plain Stack execution accepts any runner-installable OpenTofu/Terraform

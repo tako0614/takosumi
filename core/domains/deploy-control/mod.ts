@@ -256,6 +256,7 @@ import {
 // domain's public entry point stays `./mod.ts` for importers and tests.
 export {
   OpenTofuControllerError,
+  OpenTofuRunnerExecutionError,
   OpenTofuRunnerInfrastructureError,
   isRunnerInfrastructureRequeueError,
   RUNNER_INFRASTRUCTURE_REQUEUED_REASON,
