@@ -1,4 +1,4 @@
-export type DashboardE2EMode = "portable" | "live";
+export type DashboardE2EMode = "portable" | "live" | "public-live";
 
 const READ_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
@@ -23,9 +23,10 @@ function isSameOrigin(url: URL, origin: string): boolean {
 
 /**
  * Responses owned by the hosted Worker must carry the exact immutable
- * Version identity supplied to the live run. Static assets and other
- * subresources are intentionally excluded because their serving contract is
- * independent from the control/API response contract.
+ * Version identity supplied to the live run. The authenticated live profile
+ * scopes evidence to top-level documents and control/API responses; the
+ * public-live profile intentionally expands that fence to the whole official
+ * origin.
  */
 export function requiresLiveWorkerVersionHeader(
   mode: DashboardE2EMode,
@@ -33,9 +34,13 @@ export function requiresLiveWorkerVersionHeader(
   urlValue: string,
   resourceType: string,
 ): boolean {
-  if (mode !== "live") return false;
+  if (mode !== "live" && mode !== "public-live") return false;
   const url = parseHttpUrl(urlValue);
   if (!url || !isSameOrigin(url, origin)) return false;
+  // The public profile is intentionally a whole-origin read-only probe. It
+  // cannot rely on a session or a fixture, so every response served by the
+  // official origin is evidence for the exact published Worker Version.
+  if (mode === "public-live") return true;
   if (resourceType === "document") return true;
   return (
     url.pathname.startsWith("/api/v1/") ||
@@ -125,7 +130,7 @@ export function shouldRecordControlPlaneMutation(
  *
  * Portable mode owns every same-origin API/asset response. Live mode keeps
  * optional capability probes compatible while treating the required dashboard
- * routes as authoritative; any HTTP 5xx remains fatal in live mode.
+ * routes as authoritative; public-live owns every same-origin response.
  */
 export function shouldRecordResponseFailure(
   mode: DashboardE2EMode,
@@ -139,6 +144,7 @@ export function shouldRecordResponseFailure(
   if (mode === "live" && status >= 500) return true;
   if (!isSameOrigin(url, origin)) return false;
   if (mode === "portable") return isPortableMonitoredPath(url.pathname);
+  if (mode === "public-live") return true;
   return status < 500 && isRequiredLivePath(url.pathname);
 }
 

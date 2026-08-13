@@ -27,13 +27,15 @@ type Expectations = {
 };
 
 const rawMode = process.env.TAKOSUMI_E2E_MODE ?? "portable";
-if (rawMode !== "portable" && rawMode !== "live") {
-  throw new Error("TAKOSUMI_E2E_MODE must be either portable or live");
+if (rawMode !== "portable" && rawMode !== "live" && rawMode !== "public-live") {
+  throw new Error(
+    "TAKOSUMI_E2E_MODE must be portable, live, or public-live",
+  );
 }
 const mode: DashboardE2EMode = rawMode;
 
 const expectedWorkerVersionId =
-  mode === "live"
+  mode === "live" || mode === "public-live"
     ? validateExpectedWorkerVersionId(
         process.env.TAKOSUMI_E2E_EXPECTED_WORKER_VERSION_ID ?? "",
       )
@@ -53,12 +55,21 @@ const mutationOrigin =
 const expectations: Expectations =
   mode === "portable"
     ? PORTABLE_EXPECTATIONS
-    : {
-        workspaceName: requiredLive("TAKOSUMI_E2E_WORKSPACE_NAME"),
-        switchWorkspaceName: requiredLive("TAKOSUMI_E2E_SWITCH_WORKSPACE_NAME"),
-        appName: requiredLive("TAKOSUMI_E2E_APP_NAME"),
-        appUrl: requiredLive("TAKOSUMI_E2E_APP_URL"),
-      };
+    : mode === "live"
+      ? {
+          workspaceName: requiredLive("TAKOSUMI_E2E_WORKSPACE_NAME"),
+          switchWorkspaceName: requiredLive(
+            "TAKOSUMI_E2E_SWITCH_WORKSPACE_NAME",
+          ),
+          appName: requiredLive("TAKOSUMI_E2E_APP_NAME"),
+          appUrl: requiredLive("TAKOSUMI_E2E_APP_URL"),
+        }
+      : {
+          workspaceName: "",
+          switchWorkspaceName: "",
+          appName: "",
+          appUrl: "",
+        };
 
 function pageErrors(page: Page): string[] {
   const errors: string[] = [];
@@ -106,6 +117,41 @@ async function gotoDashboardDocument(
   );
 }
 
+/**
+ * Public-live only: a signed-out document must be served directly, then the
+ * SPA must preserve the requested deep link in its expected sign-in return.
+ * This distinguishes an intentional client route from an HTTP redirect.
+ */
+async function gotoPublicDocument(page: Page, path: string): Promise<void> {
+  const requestedUrl = new URL(path, page.url());
+  const expectedReturn = encodeURIComponent(
+    requestedUrl.pathname + requestedUrl.search,
+  );
+  const expectedPageUrl = new URL(
+    `/sign-in?return=${expectedReturn}`,
+    requestedUrl.origin,
+  );
+  const response = await page.goto(path, { waitUntil: "domcontentloaded" });
+  expect(response, `${path} must return a top-level document`).not.toBeNull();
+  if (!response) return;
+  expect(
+    response.request().redirectedFrom(),
+    `${path} must not HTTP redirect`,
+  ).toBeNull();
+  assertExpectedResponseUrl({
+    route: path,
+    expectedUrl: requestedUrl.toString(),
+    observedUrl: response.url(),
+  });
+  expect(response.status(), path).toBe(200);
+  expect(response.headers()["content-type"], path).toMatch(
+    /^text\/html(?:;|$)/u,
+  );
+  await expect
+    .poll(() => page.url(), `${path} must preserve its sign-in return`)
+    .toBe(expectedPageUrl.toString());
+}
+
 async function fetchLiveEndpoint(
   page: Page,
   traffic: ReturnType<typeof monitorDashboardTraffic>,
@@ -139,6 +185,9 @@ async function fetchLiveEndpoint(
     });
     expect(response.status(), path).toBe(expectedStatus);
     const headers = response.headers();
+    expect(headers["content-type"], `${path} must return JSON`).toMatch(
+      /^application\/json(?:;|$)/u,
+    );
     traffic.recordVersionedResponse(path, response.status(), headers);
     return {
       body: await response.json(),
@@ -480,6 +529,11 @@ async function stubProviderDestinationFixture(
 }
 
 test.describe("Takosumi dashboard browser surface", () => {
+  test.skip(
+    mode === "public-live",
+    "public-live is an unauthenticated read-only profile",
+  );
+
   test("authenticates through dashboard bootstrap and switches Workspace scope", async ({
     page,
   }) => {
@@ -1273,5 +1327,83 @@ test.describe("Takosumi dashboard browser surface", () => {
     expect(status).toBe(404);
     await expect.poll(() => traffic.failures.length).toBe(1);
     expect(() => traffic.assertNoFailures()).toThrow(/404/u);
+  });
+});
+
+test.describe("Takosumi public-live browser profile", () => {
+  test.skip(mode !== "public-live", "public-live profile only");
+
+  test("probes public identity, signed-out routes, and zero mutations", async ({
+    page,
+  }) => {
+    const errors = pageErrors(page);
+    const traffic = monitorDashboardTraffic(page, mode);
+    const mutations: string[] = [];
+    page.on("request", (request) => {
+      if (
+        shouldRecordControlPlaneMutation(
+          mode,
+          mutationOrigin,
+          request.url(),
+          request.method(),
+        )
+      ) {
+        mutations.push(`${request.method()} ${new URL(request.url()).pathname}`);
+      }
+    });
+
+    await gotoPublicDocument(page, "/");
+    const origin = new URL(page.url()).origin;
+
+    const discovery = await fetchLiveEndpoint(
+      page,
+      traffic,
+      "/.well-known/openid-configuration",
+      200,
+    );
+    const discoveryBody = discovery.body as {
+      readonly issuer?: unknown;
+      readonly jwks_uri?: unknown;
+    };
+    expect(discoveryBody.issuer).toBe(origin);
+    expect(discoveryBody.jwks_uri).toBe(`${origin}/oauth/jwks`);
+
+    const jwks = await fetchLiveEndpoint(page, traffic, "/oauth/jwks", 200);
+    const jwksBody = jwks.body as { readonly keys?: unknown };
+    expect(Array.isArray(jwksBody.keys)).toBe(true);
+    expect((jwksBody.keys as readonly unknown[]).length).toBeGreaterThan(0);
+
+    const unauthenticated = await fetchLiveEndpoint(
+      page,
+      traffic,
+      "/api/v1/dashboard/bootstrap",
+      401,
+    );
+    expect(unauthenticated.body).toMatchObject({ error: "invalid_token" });
+
+    for (const path of [
+      "/settings",
+      "/workloads",
+      "/advanced/workspace",
+      "/new",
+    ]) {
+      await gotoPublicDocument(page, path);
+    }
+
+    const installPath =
+      "/install?git=https%3A%2F%2Fgithub.com%2Fexample%2Fservice.git" +
+      "&ref=0123456789abcdef0123456789abcdef01234567&path=deploy%2Fopentofu";
+    await gotoPublicDocument(page, installPath);
+    expect(new URL(page.url()).searchParams.get("return")).toBe(installPath);
+
+    expect(
+      mutations,
+      "public-live browser discovery and navigation must issue zero mutations",
+    ).toEqual([]);
+    await assertNoPageErrors(errors);
+    traffic.assertNoFailures();
+    expect(expectedWorkerVersionId).toMatch(
+      /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u,
+    );
   });
 });

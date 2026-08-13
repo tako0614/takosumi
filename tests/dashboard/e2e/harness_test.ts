@@ -186,6 +186,47 @@ test("live Version evidence rejects missing and substituted response headers", (
   ).toBeUndefined();
 });
 
+test("public-live binds every official-origin response to the exact Version", () => {
+  const origin = "https://app.takosumi.com";
+  const expected = "00000000-0000-4000-8000-000000000001";
+  expect(
+    requiresLiveWorkerVersionHeader(
+      "public-live",
+      origin,
+      `${origin}/assets/app.js`,
+      "script",
+    ),
+  ).toBe(true);
+  expect(
+    shouldRecordResponseFailure(
+      "public-live",
+      origin,
+      `${origin}/missing.css`,
+      404,
+    ),
+  ).toBe(true);
+  expect(
+    workerVersionHeaderFailure({
+      mode: "public-live",
+      origin,
+      url: `${origin}/assets/app.js`,
+      resourceType: "script",
+      expectedWorkerVersionId: expected,
+      observedWorkerVersionId: expected,
+    }),
+  ).toBeUndefined();
+  expect(
+    workerVersionHeaderFailure({
+      mode: "public-live",
+      origin,
+      url: `${origin}/assets/app.js`,
+      resourceType: "script",
+      expectedWorkerVersionId: expected,
+      observedWorkerVersionId: null,
+    }),
+  ).toMatch(/expected x-takosumi-version-id/u);
+});
+
 test("live OIDC and unauthenticated API evidence rejects the wrong response", () => {
   expect(() =>
     assertExpectedResponseUrl({

@@ -10,8 +10,10 @@ const configDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(configDir, "../../..");
 const mode = process.env.TAKOSUMI_E2E_MODE ?? "portable";
 
-if (mode !== "portable" && mode !== "live") {
-  throw new Error("TAKOSUMI_E2E_MODE must be either portable or live");
+if (mode !== "portable" && mode !== "live" && mode !== "public-live") {
+  throw new Error(
+    "TAKOSUMI_E2E_MODE must be portable, live, or public-live",
+  );
 }
 
 function requiredLiveEnv(name: string): string {
@@ -49,8 +51,32 @@ function liveConfig(): {
   return { baseURL: parsed.toString().replace(/\/$/u, ""), storageState };
 }
 
+function publicLiveConfig(): { readonly baseURL: string } {
+  const baseURL = requiredLiveEnv("TAKOSUMI_E2E_BASE_URL");
+  let parsed: URL;
+  try {
+    parsed = new URL(baseURL);
+  } catch {
+    throw new Error("TAKOSUMI_E2E_BASE_URL must be an absolute http(s) URL");
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("TAKOSUMI_E2E_BASE_URL must use http or https");
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error(
+      "TAKOSUMI_E2E_BASE_URL must not contain credentials; public live is unauthenticated",
+    );
+  }
+  validateExpectedWorkerVersionId(
+    requiredLiveEnv("TAKOSUMI_E2E_EXPECTED_WORKER_VERSION_ID"),
+  );
+  return { baseURL: parsed.toString().replace(/\/$/u, "") };
+}
+
 const live = mode === "live" ? liveConfig() : undefined;
-const baseURL = live?.baseURL ?? "http://127.0.0.1:4179";
+const publicLive = mode === "public-live" ? publicLiveConfig() : undefined;
+const baseURL =
+  live?.baseURL ?? publicLive?.baseURL ?? "http://127.0.0.1:4179";
 const portableStorageState = {
     cookies: [
       {
@@ -66,7 +92,8 @@ const portableStorageState = {
     ],
     origins: [],
   };
-const storageState = live?.storageState ?? portableStorageState;
+const storageState =
+  live?.storageState ?? (mode === "portable" ? portableStorageState : undefined);
 
 export default defineConfig({
   testDir: configDir,

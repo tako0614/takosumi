@@ -37,6 +37,7 @@
     "test:control-d1-schema": "bun test tests/deploy/platform/control_d1_schema_test.ts tests/deploy/platform/control_d1_release_capability_test.ts tests/worker/src/d1_opentofu_store_schema_boot_test.ts tests/core/adapters/storage/drizzle/schema/schema_mirror_test.ts",
     "test:dashboard-new-flow": "bun test tests/dashboard/src/views/new/provider-connections-return_test.ts tests/dashboard/src/views/new/new-flow-guidance_test.ts",
     "dashboard:e2e:live": "bun scripts/run-dashboard-browser-e2e.ts live",
+    "dashboard:e2e:public-live": "bun scripts/run-dashboard-browser-e2e.ts public-live",
     "test:dashboard-browser-harness": "bun test tests/dashboard/e2e/harness_test.ts",
     "test:critical-journeys": "bun scripts/run-critical-journeys.ts",
     "test:scripts": "bun test ./tests/scripts",

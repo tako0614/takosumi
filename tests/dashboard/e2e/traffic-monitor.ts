@@ -10,7 +10,7 @@ import { validateExpectedWorkerVersionId } from "../../../scripts/dashboard-brow
 import { assertExpectedWorkerVersionId } from "../../../scripts/dashboard-browser-e2e/version-contract.ts";
 
 export interface DashboardTrafficFailure {
-  readonly kind: "response" | "requestfailed" | "version";
+  readonly kind: "response" | "requestfailed" | "version" | "redirect";
   readonly url: string;
   readonly status?: number;
   readonly detail?: string;
@@ -47,7 +47,7 @@ export function monitorDashboardTraffic(
   const versionObservations: DashboardVersionObservation[] = [];
   const origin = expectedOrigin(mode);
   const expectedWorkerVersionId =
-    mode === "live"
+    mode === "live" || mode === "public-live"
       ? validateExpectedWorkerVersionId(
           process.env.TAKOSUMI_E2E_EXPECTED_WORKER_VERSION_ID ?? "",
         )
@@ -58,7 +58,7 @@ export function monitorDashboardTraffic(
     status: number,
     headers: Readonly<Record<string, string>>,
   ): void => {
-    if (mode !== "live") return;
+    if (mode !== "live" && mode !== "public-live") return;
     const observedWorkerVersionId =
       headers["x-takosumi-version-id"]?.trim() || null;
     versionObservations.push({
@@ -76,7 +76,7 @@ export function monitorDashboardTraffic(
   page.on("response", (response) => {
     const status = response.status();
     const url = new URL(response.url());
-    if (mode === "live") {
+    if (mode === "live" || mode === "public-live") {
       const versionFailure = workerVersionHeaderFailure({
         mode,
         origin,
@@ -111,6 +111,17 @@ export function monitorDashboardTraffic(
         });
       }
     }
+    if (
+      mode === "public-live" &&
+      response.request().redirectedFrom() !== null
+    ) {
+      failures.push({
+        kind: "redirect",
+        url: response.url(),
+        status,
+        detail: "official-origin response followed an HTTP redirect",
+      });
+    }
     if (shouldRecordResponseFailure(mode, origin, response.url(), status)) {
       failures.push({
         kind: "response",
@@ -118,6 +129,14 @@ export function monitorDashboardTraffic(
         status,
       });
     }
+  });
+  page.on("request", (request) => {
+    if (mode !== "public-live" || request.redirectedFrom() === null) return;
+    failures.push({
+      kind: "redirect",
+      url: request.url(),
+      detail: "official-origin request followed an HTTP redirect",
+    });
   });
   page.on("requestfailed", (request) => {
     if (!shouldRecordRequestFailure(request.url())) return;
