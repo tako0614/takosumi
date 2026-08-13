@@ -24,6 +24,12 @@ import {
   CloudflareControlD1RestDatabase,
   ControlD1RestError,
 } from "./control_d1_schema_rest.ts";
+import {
+  buildControlD1ReleaseCapability,
+  CONTROL_D1_RELEASE_CAPABILITY_KIND,
+  type ControlD1ReleaseCapability,
+  ControlD1ReleaseCapabilityError,
+} from "./control_d1_release_capability.ts";
 
 type Command =
   | "plan"
@@ -35,7 +41,8 @@ type Command =
   | "fence"
   | "freeze"
   | "apply"
-  | "release";
+  | "release"
+  | "release-capability";
 type Environment = "staging" | "production";
 
 interface ParsedArgs {
@@ -82,6 +89,9 @@ interface CliDependencies {
     readonly head: string;
     readonly clean: boolean;
   }>;
+  readonly buildReleaseCapability?: (
+    options: Readonly<{ readonly sourceCommit: string }>,
+  ) => Promise<ControlD1ReleaseCapability>;
 }
 
 interface TranscriptProvenance {
@@ -99,12 +109,63 @@ export async function runControlD1SchemaCli(
   try {
     args = parseArgs(argv);
   } catch {
-    write(failureTranscript("arguments_invalid"));
+    if (argv[0] === "release-capability") {
+      write(
+        JSON.stringify(
+          {
+            kind: CONTROL_D1_RELEASE_CAPABILITY_KIND,
+            status: "failed",
+            failureCode: "arguments_invalid",
+          },
+          null,
+          2,
+        ),
+      );
+    } else {
+      write(failureTranscript("arguments_invalid"));
+    }
     return 1;
   }
   if (args.help) {
     write(helpText());
     return 0;
+  }
+
+  if (args.command === "release-capability") {
+    try {
+      const source = await (
+        dependencies.inspectSourceCheckout ?? inspectSourceCheckout
+      )();
+      const requestedSourceCommit =
+        dependencies.sourceCommit ?? env.TAKOSUMI_CONTROL_D1_SOURCE_COMMIT;
+      const sourceCommitValueToUse = requestedSourceCommit
+        ? sourceCommit(requestedSourceCommit)
+        : source.head;
+      if (source.head !== sourceCommitValueToUse) {
+        throw new ControlD1ReleaseCapabilityError("source_commit_mismatch");
+      }
+      if (!source.clean) {
+        throw new ControlD1ReleaseCapabilityError("source_checkout_dirty");
+      }
+      const capability = await (
+        dependencies.buildReleaseCapability ?? buildControlD1ReleaseCapability
+      )({ sourceCommit: sourceCommitValueToUse });
+      write(JSON.stringify(capability, null, 2));
+      return 0;
+    } catch (error) {
+      write(
+        JSON.stringify(
+          {
+            kind: CONTROL_D1_RELEASE_CAPABILITY_KIND,
+            status: "failed",
+            failureCode: errorCode(error),
+          },
+          null,
+          2,
+        ),
+      );
+      return 1;
+    }
   }
 
   const now = dependencies.now ?? (() => new Date().toISOString());
@@ -802,9 +863,13 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     command !== "fence" &&
     command !== "freeze" &&
     command !== "apply" &&
-    command !== "release"
+    command !== "release" &&
+    command !== "release-capability"
   ) {
     throw new Error("command_invalid");
+  }
+  if (command === "release-capability" && argv.length !== 1) {
+    throw new Error("release_capability_arguments_invalid");
   }
   let environment: Environment | undefined;
   let confirmManifest: string | undefined;
@@ -991,7 +1056,8 @@ function errorCode(error: unknown): string {
   if (
     error instanceof ControlD1SchemaError ||
     error instanceof ControlD1RestError ||
-    error instanceof ControlD1MaintenanceError
+    error instanceof ControlD1MaintenanceError ||
+    error instanceof ControlD1ReleaseCapabilityError
   ) {
     const code = error.code.split(":", 1)[0] ?? "";
     return /^[a-z][a-z0-9_]{0,127}$/u.test(code)
@@ -1003,6 +1069,7 @@ function errorCode(error: unknown): string {
 
 function helpText(): string {
   return `Usage:
+  bun scripts/control-d1-schema.ts release-capability
   bun scripts/control-d1-schema.ts plan
   bun scripts/control-d1-schema.ts apply --dry-run [--environment staging|production]
   bun scripts/control-d1-schema.ts fence --environment staging|production --confirm-manifest sha256:...
