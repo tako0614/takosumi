@@ -81,9 +81,9 @@ TAKOSUMI_E2E_EXPECTED_WORKER_VERSION_ID="00000000-0000-4000-8000-000000000001" \
 bun run dashboard:e2e:public-live
 ```
 
-The same two values may be supplied explicitly for operator tooling as
+The same two values may be supplied explicitly for operator tooling with
 `--base-url <http(s)-url>` and `--worker-version-id <lowercase-uuid>` (or
-`--expected-worker-version-id`) after the `public-live` runner name.
+`--expected-worker-version-id`) on the direct runner command.
 
 The live runner deliberately does not automate sign-in, mint a session, or
 fake an OAuth callback. The authenticated checks start from the supplied
