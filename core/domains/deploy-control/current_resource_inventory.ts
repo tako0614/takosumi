@@ -41,6 +41,13 @@ const KNOWN_ACTIONS = new Set([
   "delete",
 ]);
 
+// A Terraform data-source address is `data.<type>.<name>` after zero or more
+// complete `module.<name>[index]` segments. Anchoring the pattern at those
+// module pairs avoids mistaking a legal module call named `data` (for example,
+// `module.data.aws_instance.main`) for a data source.
+const DATA_SOURCE_ADDRESS_PATTERN =
+  /^(?:module\.[A-Za-z_][A-Za-z0-9_-]*(?:\[[^\]]+\])?\.)*data\.[A-Za-z_][A-Za-z0-9_-]*(?:\[[^\]]+\])?\.[A-Za-z_][A-Za-z0-9_-]*/u;
+
 /** Read the complete current inventory for one Capsule. */
 export async function getCurrentResourceInventory(
   store: OpenTofuControlStore,
@@ -235,7 +242,7 @@ function projectResourceChange(
   // Data sources are read dependencies, not deployed survivors. OpenTofu
   // normally keeps them out of resource_changes; this guard protects against
   // malformed or legacy rows that used a data-prefixed address/type.
-  if (/(?:^|\.)data\./u.test(address) || type.startsWith("data.")) {
+  if (DATA_SOURCE_ADDRESS_PATTERN.test(address) || type.startsWith("data.")) {
     return undefined;
   }
   const actions = change.actions;
