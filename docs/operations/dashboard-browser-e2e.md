@@ -14,7 +14,8 @@ unauthenticated dashboard bootstrap (`401`), direct/deep SPA documents, and the
 signed-out `/install?...` return-link semantics. It records a zero-mutation
 control-plane/provider fence and fails closed on redirects, non-success status,
 non-HTML/JSON content types, request failures, or any missing/substituted
-`x-takosumi-version-id` on an official-origin response.
+`x-takosumi-version-id` on an official-origin response. The one intentional
+non-2xx exception is the protected dashboard bootstrap's expected `401`.
 
 `bun run check` invokes this gate through `check:dashboard-browser` after the
 dashboard build. The fixture deliberately fails on missing build output,
