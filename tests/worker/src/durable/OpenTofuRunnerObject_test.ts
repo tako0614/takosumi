@@ -220,11 +220,17 @@ test("OpenTofu runner rejects one-byte-oversized plans before R2 persistence", a
 });
 
 test("OpenTofu runner Durable Object retries transient R2 put errors", async () => {
+  const sensitiveFailure =
+    "timeout arbitrary-marker-7QZ9 Authorization: Bearer relay-token cookie=session-secret body={secret:true}";
+  const warnCalls: unknown[][] = [];
+  const originalConsoleWarn = console.warn;
+  console.warn = (...args: unknown[]) => {
+    warnCalls.push(args);
+  };
   const r2 = new FlakyR2Bucket({
     failKey: "opentofu-plan-runs/plan_retry/tfplan.enc",
     failTimes: 2,
-    message:
-      "put: Please look at https://www.cloudflarestatus.com for issues or contact customer support. (10043)",
+    message: sensitiveFailure,
   });
   const runner = runnerWithContainer(r2, {
     async containerFetch(request) {
@@ -260,26 +266,76 @@ test("OpenTofu runner Durable Object retries transient R2 put errors", async () 
     },
   });
 
-  const response = await runner.fetch(
-    new Request("https://runner/runs/plan_retry", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        kind: "takosumi.opentofu-run@v1",
-        action: "plan",
-        runId: "plan_retry",
-        request: {},
+  let response: Response;
+  try {
+    response = await runner.fetch(
+      new Request("https://runner/runs/plan_retry", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          kind: "takosumi.opentofu-run@v1",
+          action: "plan",
+          runId: "plan_retry",
+          request: {},
+        }),
       }),
-    }),
-  );
+    );
+  } finally {
+    console.warn = originalConsoleWarn;
+  }
 
   assert.equal(response.status, 200);
   assert.equal(r2.putAttempts("opentofu-plan-runs/plan_retry/tfplan.enc"), 3);
   assert.ok(r2.body("opentofu-plan-runs/plan_retry/tfplan.enc"));
+  const logged = JSON.stringify(warnCalls);
+  for (const forbidden of [
+    "arbitrary-marker-7QZ9",
+    "Authorization",
+    "Bearer",
+    "relay-token",
+    "cookie",
+    "session-secret",
+    "body",
+    "secret:true",
+    "stack",
+  ]) {
+    assert.equal(logged.includes(forbidden), false, `logged ${forbidden}`);
+  }
+  assert.deepEqual(warnCalls, [
+    [
+      "OpenTofu runner R2 put failed; retrying",
+      {
+        context: "plan artifact",
+        key: "opentofu-plan-runs/plan_retry/tfplan.enc",
+        attempt: 1,
+        maxAttempts: 8,
+        reason: "r2_put_retryable",
+        errorName: "Error",
+      },
+    ],
+    [
+      "OpenTofu runner R2 put failed; retrying",
+      {
+        context: "plan artifact",
+        key: "opentofu-plan-runs/plan_retry/tfplan.enc",
+        attempt: 2,
+        maxAttempts: 8,
+        reason: "r2_put_retryable",
+        errorName: "Error",
+      },
+    ],
+  ]);
 });
 
 test("OpenTofu runner Durable Object returns contextual R2 put failures", async () => {
-  const r2 = new FailingR2Bucket("permission denied");
+  const sensitiveFailure =
+    "permission denied arbitrary-marker-final-9K2 Authorization: Bearer final-token cookie=final-session body={secret:true}";
+  const errorCalls: unknown[][] = [];
+  const originalConsoleError = console.error;
+  console.error = (...args: unknown[]) => {
+    errorCalls.push(args);
+  };
+  const r2 = new FailingR2Bucket(sensitiveFailure);
   const runner = runnerWithContainer(r2, {
     async containerFetch(request) {
       const path = new URL(request.url).pathname;
@@ -308,24 +364,326 @@ test("OpenTofu runner Durable Object returns contextual R2 put failures", async 
     },
   });
 
-  const response = await runner.fetch(
-    new Request("https://runner/runs/plan_r2_denied", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        kind: "takosumi.opentofu-run@v1",
-        action: "plan",
-        runId: "plan_r2_denied",
-        request: {},
+  let response: Response;
+  try {
+    response = await runner.fetch(
+      new Request("https://runner/runs/plan_r2_denied", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          kind: "takosumi.opentofu-run@v1",
+          action: "plan",
+          runId: "plan_r2_denied",
+          request: {},
+        }),
       }),
-    }),
-  );
+    );
+  } finally {
+    console.error = originalConsoleError;
+  }
 
   assert.equal(response.status, 500);
   const body = (await response.json()) as Record<string, unknown>;
   assert.equal(body.error, "OpenTofu runner artifact relay failed");
   assert.match(String(body.detail), /plan artifact R2 put failed/);
   assert.match(String(body.detail), /permission denied/);
+  const logged = JSON.stringify(errorCalls);
+  for (const forbidden of [
+    "arbitrary-marker-final-9K2",
+    "Authorization",
+    "Bearer",
+    "final-token",
+    "cookie",
+    "final-session",
+    "body",
+    "secret:true",
+    "stack",
+  ]) {
+    assert.equal(logged.includes(forbidden), false, `logged ${forbidden}`);
+  }
+  assert.deepEqual(errorCalls, [
+    [
+      "OpenTofu runner artifact relay failed",
+      {
+        method: "POST",
+        path: "/runs/plan_r2_denied",
+        reason: "relay_failure",
+        errorName: "Error",
+      },
+    ],
+  ]);
+});
+
+test("OpenTofu runner keeps raw-output immutable-put failures out of logs", async () => {
+  const planRunId = "apply_raw_output_r2_failure";
+  const rawOutputRef = rawOutputRefFor(planRunId);
+  const sensitiveFailure =
+    "permission denied arbitrary-marker-raw-output-4M7 Authorization: Bearer raw-output-token cookie=raw-output-session body={raw:true}";
+  const artifacts = new FlakyR2Bucket({
+    failKey: rawOutputRef,
+    failTimes: 1,
+    message: sensitiveFailure,
+  });
+  await seedEncryptedPlan(artifacts, planRunId);
+  const state = new FakeR2Bucket();
+  const storage = new FakeDoStorage();
+  let providerCalls = 0;
+  const token = await signedMutationToken(planRunId, {
+    jti: "raw-output-r2-failure",
+  });
+  const errorCalls: unknown[][] = [];
+  const originalConsoleError = console.error;
+  console.error = (...args: unknown[]) => {
+    errorCalls.push(args);
+  };
+
+  let response: Response;
+  try {
+    response = await runnerWithContainer(
+      artifacts,
+      mutationSuccessContainer(planRunId, () => {
+        providerCalls += 1;
+      }),
+      {
+        storage,
+        stateBucket: state,
+        env: {
+          TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET:
+            RUN_CREDENTIAL_SIGNING_SECRET,
+        },
+      },
+    ).fetch(
+      signedMutationRequest(planRunId, token, {
+        rawOutputRef,
+        stateScope: capsuleStateScope(),
+      }),
+    );
+  } finally {
+    console.error = originalConsoleError;
+  }
+
+  assert.equal(response.status, 500);
+  assert.equal(providerCalls, 1);
+  assert.equal(artifacts.body(rawOutputRef), undefined);
+  assertNoSensitiveR2LogSerialization(errorCalls, sensitiveFailure);
+  assert.deepEqual(errorCalls, [
+    [
+      "OpenTofu runner artifact relay failed",
+      {
+        method: "POST",
+        path: `/runs/${planRunId}`,
+        reason: "relay_failure",
+        errorName: "Error",
+      },
+    ],
+  ]);
+});
+
+test("OpenTofu runner keeps immutable state-put failures out of logs", async () => {
+  const planRunId = "apply_state_r2_failure";
+  const stateScope = capsuleStateScope();
+  const sensitiveFailure =
+    "permission denied arbitrary-marker-state-object-6N8 Authorization: Bearer state-object-token cookie=state-object-session body={state:true}";
+  const artifacts = new FakeR2Bucket();
+  await seedEncryptedPlan(artifacts, planRunId);
+  const state = new FlakyR2Bucket({
+    failKey: stateScope.stateRef,
+    failTimes: 1,
+    message: sensitiveFailure,
+  });
+  const storage = new FakeDoStorage();
+  let providerCalls = 0;
+  const token = await signedMutationToken(planRunId, {
+    jti: "state-object-r2-failure",
+  });
+  const errorCalls: unknown[][] = [];
+  const originalConsoleError = console.error;
+  console.error = (...args: unknown[]) => {
+    errorCalls.push(args);
+  };
+
+  let response: Response;
+  try {
+    response = await runnerWithContainer(
+      artifacts,
+      mutationSuccessContainer(planRunId, () => {
+        providerCalls += 1;
+      }),
+      {
+        storage,
+        stateBucket: state,
+        env: {
+          TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET:
+            RUN_CREDENTIAL_SIGNING_SECRET,
+        },
+      },
+    ).fetch(
+      signedMutationRequest(planRunId, token, {
+        rawOutputRef: rawOutputRefFor(planRunId),
+        stateScope,
+      }),
+    );
+  } finally {
+    console.error = originalConsoleError;
+  }
+
+  assert.equal(response.status, 503);
+  assert.equal(providerCalls, 1);
+  assert.equal(state.body(stateScope.stateRef), undefined);
+  assertNoSensitiveR2LogSerialization(errorCalls, sensitiveFailure);
+  assert.deepEqual(errorCalls, [
+    [
+      "OpenTofu runner artifact relay failed",
+      {
+        method: "POST",
+        path: `/runs/${planRunId}`,
+        reason: "artifact_durability_ambiguous",
+        errorName: "Error",
+      },
+    ],
+  ]);
+});
+
+test("OpenTofu runner keeps current-state pointer retry logs finite", async () => {
+  const planRunId = "apply_current_pointer_retry";
+  const stateScope = capsuleStateScope();
+  const currentKey = stateScope.stateRef.replace(
+    /[0-9]{8}\.tfstate\.enc$/u,
+    "current.json",
+  );
+  const sensitiveFailure =
+    "timeout arbitrary-marker-current-pointer-retry-2P9 Authorization: Bearer pointer-retry-token cookie=pointer-retry-session body={pointer:true}";
+  const artifacts = new FakeR2Bucket();
+  await seedEncryptedPlan(artifacts, planRunId);
+  const state = new FlakyR2Bucket({
+    failKey: currentKey,
+    failTimes: 2,
+    message: sensitiveFailure,
+  });
+  const storage = new FakeDoStorage();
+  const token = await signedMutationToken(planRunId, {
+    jti: "current-pointer-retry",
+  });
+  const warnCalls: unknown[][] = [];
+  const originalConsoleWarn = console.warn;
+  console.warn = (...args: unknown[]) => {
+    warnCalls.push(args);
+  };
+
+  let response: Response;
+  try {
+    response = await runnerWithContainer(
+      artifacts,
+      mutationSuccessContainer(planRunId, () => undefined),
+      {
+        storage,
+        stateBucket: state,
+        env: {
+          TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET:
+            RUN_CREDENTIAL_SIGNING_SECRET,
+        },
+      },
+    ).fetch(
+      signedMutationRequest(planRunId, token, {
+        rawOutputRef: rawOutputRefFor(planRunId),
+        stateScope,
+      }),
+    );
+  } finally {
+    console.warn = originalConsoleWarn;
+  }
+
+  assert.equal(response.status, 200);
+  assert.ok(state.body(currentKey));
+  assertNoSensitiveR2LogSerialization(warnCalls, sensitiveFailure);
+  assert.deepEqual(warnCalls, [
+    [
+      "OpenTofu runner R2 put failed; retrying",
+      {
+        context: "state pointer cache",
+        key: currentKey,
+        attempt: 1,
+        maxAttempts: 8,
+        reason: "r2_put_retryable",
+        errorName: "Error",
+      },
+    ],
+    [
+      "OpenTofu runner R2 put failed; retrying",
+      {
+        context: "state pointer cache",
+        key: currentKey,
+        attempt: 2,
+        maxAttempts: 8,
+        reason: "r2_put_retryable",
+        errorName: "Error",
+      },
+    ],
+  ]);
+});
+
+test("OpenTofu runner keeps current-state pointer final-failure logs finite", async () => {
+  const planRunId = "apply_current_pointer_failure";
+  const stateScope = capsuleStateScope();
+  const currentKey = stateScope.stateRef.replace(
+    /[0-9]{8}\.tfstate\.enc$/u,
+    "current.json",
+  );
+  const sensitiveFailure =
+    "permission denied arbitrary-marker-current-pointer-final-8R1 Authorization: Bearer pointer-final-token cookie=pointer-final-session body={pointer:true}";
+  const artifacts = new FakeR2Bucket();
+  await seedEncryptedPlan(artifacts, planRunId);
+  const state = new FlakyR2Bucket({
+    failKey: currentKey,
+    failTimes: 1,
+    message: sensitiveFailure,
+  });
+  const storage = new FakeDoStorage();
+  const token = await signedMutationToken(planRunId, {
+    jti: "current-pointer-final",
+  });
+  const warnCalls: unknown[][] = [];
+  const originalConsoleWarn = console.warn;
+  console.warn = (...args: unknown[]) => {
+    warnCalls.push(args);
+  };
+
+  let response: Response;
+  try {
+    response = await runnerWithContainer(
+      artifacts,
+      mutationSuccessContainer(planRunId, () => undefined),
+      {
+        storage,
+        stateBucket: state,
+        env: {
+          TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET:
+            RUN_CREDENTIAL_SIGNING_SECRET,
+        },
+      },
+    ).fetch(
+      signedMutationRequest(planRunId, token, {
+        rawOutputRef: rawOutputRefFor(planRunId),
+        stateScope,
+      }),
+    );
+  } finally {
+    console.warn = originalConsoleWarn;
+  }
+
+  assert.equal(response.status, 200);
+  assert.equal(state.body(currentKey), undefined);
+  assertNoSensitiveR2LogSerialization(warnCalls, sensitiveFailure);
+  assert.deepEqual(warnCalls, [
+    [
+      "OpenTofu runner current-state cache write failed",
+      {
+        generation: stateScope.generation,
+        reason: "current_state_cache_write_failed",
+        errorName: "Error",
+      },
+    ],
+  ]);
 });
 
 test("OpenTofu runner Durable Object skips oversized plan JSON artifacts", async () => {
@@ -2098,6 +2456,7 @@ function signedMutationRequest(
     readonly heartbeatAt?: number;
     readonly requestedAt?: string;
     readonly operatorModuleText?: string;
+    readonly rawOutputRef?: string;
     readonly stateScope?: Readonly<Record<string, unknown>>;
   } = {},
 ): Request {
@@ -2181,6 +2540,7 @@ function signedMutationRequest(
           ],
         },
         ...(options.stateScope ? { stateScope: options.stateScope } : {}),
+        ...(options.rawOutputRef ? { rawOutputRef: options.rawOutputRef } : {}),
         credentials: {
           env: { PROVIDER_RUN_TOKEN: token },
           manifest: {
@@ -2200,6 +2560,46 @@ function signedMutationRequest(
       },
     }),
   });
+}
+
+function rawOutputRefFor(planRunId: string): string {
+  return `workspaces/workspace_semantic/capsules/capsule_semantic/runs/apply_${planRunId}/outputs.raw.json.enc`;
+}
+
+function capsuleStateScope(): {
+  readonly workspaceId: string;
+  readonly subject: { readonly kind: "capsule"; readonly id: string };
+  readonly environment: string;
+  readonly generation: number;
+  readonly stateRef: string;
+} {
+  return {
+    workspaceId: "workspace_semantic",
+    subject: { kind: "capsule", id: "capsule_semantic" },
+    environment: "production",
+    generation: 1,
+    stateRef:
+      "workspaces/workspace_semantic/capsules/capsule_semantic/environments/production/state-versions/00000001.tfstate.enc",
+  };
+}
+
+function assertNoSensitiveR2LogSerialization(
+  calls: readonly unknown[][],
+  failure: string,
+): void {
+  const logged = JSON.stringify(calls);
+  const marker = failure.match(/arbitrary-marker-[a-z0-9-]+/iu)?.[0];
+  assert.ok(marker);
+  for (const forbidden of [
+    marker,
+    "Authorization",
+    "Bearer",
+    "cookie",
+    "body",
+    "stack",
+  ]) {
+    assert.equal(logged.includes(forbidden), false, `logged ${forbidden}`);
+  }
 }
 
 function mutationSuccessContainer(

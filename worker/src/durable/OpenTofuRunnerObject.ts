@@ -36,6 +36,10 @@ const R2_PUT_RETRY_ATTEMPTS = 8;
 const R2_PUT_RETRY_BASE_MS = 500;
 const R2_PUT_RETRY_MAX_MS = 10_000;
 const BOUNDED_STREAM_INITIAL_BYTES = 64 * 1024;
+const RUNNER_R2_LOG_REASON = Object.freeze({
+  putRetryable: "r2_put_retryable",
+  currentStateCacheWriteFailed: "current_state_cache_write_failed",
+});
 
 export const RUNNER_ARTIFACT_LIMIT_DEFAULTS = Object.freeze({
   sourceArchive: 50 * 1024 * 1024,
@@ -2249,7 +2253,8 @@ async function putR2ObjectWithRetry(
         key,
         attempt,
         maxAttempts: R2_PUT_RETRY_ATTEMPTS,
-        error: redactedErrorMessage(error, "r2 put failed"),
+        reason: RUNNER_R2_LOG_REASON.putRetryable,
+        errorName: safeRunnerErrorName(error),
       });
       await sleep(
         Math.min(
@@ -2699,7 +2704,8 @@ async function writeCurrentStateCache(
     // repair must never turn a successful mutation into a provider replay.
     console.warn("OpenTofu runner current-state cache write failed", {
       generation: pointer.generation,
-      error: redactedErrorMessage(error, "state pointer cache write failed"),
+      reason: RUNNER_R2_LOG_REASON.currentStateCacheWriteFailed,
+      errorName: safeRunnerErrorName(error),
     });
   }
 }
