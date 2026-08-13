@@ -1183,6 +1183,10 @@ export const en: Record<keyof typeof ja, string> = {
     "New Takosumi Cloud usage is blocked because the billing account is disabled. Your visible prepaid credit does not expire. Review payment settings.",
   "billing.commercial.account.blocked.suspended":
     "New Takosumi Cloud usage is blocked while the billing account needs attention. Your visible prepaid credit does not expire. Review payment settings.",
+  "billing.commercial.lowCredit.autoRecharge":
+    "Available credit is low. Auto-recharge will add prepaid credit at the saved threshold.",
+  "billing.commercial.lowCredit.manual":
+    "Available credit is low. Add prepaid credit to keep usage available.",
   "billing.commercial.customerType.label": "Account type",
   "billing.commercial.customerType.individual": "Individual",
   "billing.commercial.customerType.business": "Business",
@@ -1210,7 +1214,6 @@ export const en: Record<keyof typeof ja, string> = {
   "billing.commercial.autoRecharge.enable": "Enable auto-recharge",
   "billing.commercial.autoRecharge.requiresCard":
     "Add prepaid credit once to save a payment method before enabling auto-recharge.",
-  "billing.commercial.autoRecharge.status": "Auto-recharge",
   "billing.commercial.autoRecharge.on": "On",
   "billing.commercial.autoRecharge.off": "Off",
   "billing.commercial.autoRecharge.onSummary":

@@ -6,6 +6,8 @@ import {
   checkoutReturnUrl,
   WORKSPACE_BILLING_ROUTE,
 } from "../../../../dashboard/src/lib/billing-return-url.ts";
+import { en } from "../../../../dashboard/src/i18n/en.ts";
+import { ja } from "../../../../dashboard/src/i18n/ja.ts";
 import {
   commercialBillingDestination,
   CommercialBillingLoadError,
@@ -377,6 +379,8 @@ test("native commercial billing stays provider-neutral and uses extension APIs",
   expect(component).toContain("DataTable");
   expect(component).toContain("availableUsdMicros");
   expect(component).toContain("suspensionReason");
+  expect(component).toContain("billing.commercial.lowCredit");
+  expect(component).toContain("billing.commercial.account.blocked");
   expect(component).toContain("partially_refunded");
   expect(component).toContain('name="billingCustomerType"');
   expect(component).toContain('name="billingCountry"');
@@ -394,6 +398,71 @@ test("native commercial billing stays provider-neutral and uses extension APIs",
   expect(client).toContain('"portal"');
   expect(client).toContain('credentials: "include"');
   expect(client).not.toContain("Stripe");
+});
+
+test("native commercial billing keeps detail surfaces collapsed and lazy", () => {
+  expect(commercialBillingPanelSource).toContain("transactionDetailsOpen");
+  expect(commercialBillingPanelSource).toContain("handleTransactionToggle");
+  expect(commercialBillingPanelSource).toContain(
+    "<details class=\"wb-billing-disclosure\"",
+  );
+  expect(commercialBillingPanelSource).toContain(
+    "<details class=\"wb-billing-auto-disclosure\"",
+  );
+  expect(commercialBillingPanelSource).toContain('variant="primary"');
+  expect(commercialBillingPanelSource).not.toContain(
+    "createResource(\n    () => ({ basePath: props.basePath, workspaceId: props.workspaceId }),\n    ({ basePath, workspaceId }) =>\n      loadCommercialBillingTransactions",
+  );
+});
+
+test("blocked billing state keeps direct payment recovery visible", () => {
+  const warningStart = commercialBillingPanelSource.indexOf(
+    "billingAccountBlockingMessage(account())",
+  );
+  const walletStart = commercialBillingPanelSource.indexOf(
+    '<Card class="wb-billing-wallet">',
+  );
+  const warning = commercialBillingPanelSource.slice(warningStart, walletStart);
+  expect(warningStart).toBeGreaterThanOrEqual(0);
+  expect(walletStart).toBeGreaterThan(warningStart);
+  expect(warning).toContain("openPortal()");
+  expect(warning).toContain('t("billing.commercial.manage")');
+  expect(warning).toContain('variant="primary"');
+  expect(warning).toContain("portalBusy()");
+});
+
+test("low-credit recovery uses the server auto-recharge projection, not the draft", () => {
+  const lowCreditStart = commercialBillingPanelSource.indexOf(
+    "const lowCredit = createMemo",
+  );
+  const paymentColumnsStart = commercialBillingPanelSource.indexOf(
+    "const paymentColumns = createMemo",
+  );
+  const lowCredit = commercialBillingPanelSource.slice(
+    lowCreditStart,
+    paymentColumnsStart,
+  );
+  expect(lowCredit).toContain("serverAutoRecharge()");
+  expect(lowCredit).not.toContain("autoRecharge() ??");
+  expect(lowCredit).not.toContain("autoRecharge()?.thresholdUsdMicros");
+  expect(commercialBillingPanelSource).toContain(
+    't("billing.commercial.lowCredit.autoRecharge")',
+  );
+  expect(commercialBillingPanelSource).toContain(
+    't("billing.commercial.lowCredit.manual")',
+  );
+  expect(en["billing.commercial.lowCredit.autoRecharge"]).toMatch(
+    /auto-recharge/i,
+  );
+  expect(en["billing.commercial.lowCredit.manual"]).toMatch(
+    /add prepaid/i,
+  );
+  expect(ja["billing.commercial.lowCredit.autoRecharge"]).toContain(
+    "自動チャージ",
+  );
+  expect(ja["billing.commercial.lowCredit.manual"]).toContain(
+    "プリペイドクレジット",
+  );
 });
 
 test("commercial billing auto-recharge options preserve canonical selections", () => {

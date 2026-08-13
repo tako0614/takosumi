@@ -607,7 +607,7 @@
 }
 .wb-billing-stats {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
   gap: 1px;
   margin: 0;
   overflow: hidden;
@@ -684,12 +684,16 @@
   font-size: var(--tg-fs-xs);
 }
 .wb-billing-auto {
+  padding-block: 0;
+}
+.wb-billing-auto-disclosure {
   display: grid;
-  gap: var(--tg-s-4);
 }
 .wb-billing-auto-body {
   display: grid;
   gap: var(--tg-s-3);
+  padding-block: var(--tg-s-4);
+  border-top: 1px solid var(--tg-line);
 }
 .wb-billing-auto-body > span {
   color: var(--tg-fg-muted);
@@ -711,10 +715,12 @@
 .wb-billing-history {
   padding-block: 0;
 }
-.wb-billing-history details {
+.wb-billing-history details,
+.wb-billing-auto details {
   display: grid;
 }
-.wb-billing-history summary {
+.wb-billing-history summary,
+.wb-billing-auto summary {
   min-height: 76px;
   display: flex;
   align-items: center;
@@ -723,23 +729,31 @@
   cursor: pointer;
   list-style: none;
 }
-.wb-billing-history summary::-webkit-details-marker {
+.wb-billing-history summary::-webkit-details-marker,
+.wb-billing-auto summary::-webkit-details-marker {
   display: none;
 }
-.wb-billing-history summary > span:first-child {
+.wb-billing-history summary > span:first-child,
+.wb-billing-auto summary > span:first-child {
   display: flex;
   align-items: center;
   gap: var(--tg-s-3);
 }
-.wb-billing-history summary > span:first-child > span {
+.wb-billing-history summary > span:first-child > span,
+.wb-billing-auto summary > span:first-child > span {
   display: grid;
   gap: var(--tg-s-1);
 }
 .wb-billing-history summary small,
 .wb-billing-history summary > span:last-child,
+.wb-billing-auto summary small,
+.wb-billing-auto summary > span:last-child,
 .wb-billing-history-body > p {
   color: var(--tg-fg-muted);
   font-size: var(--tg-fs-sm);
+}
+.wb-billing-auto summary > .tg-badge {
+  flex: 0 0 auto;
 }
 .wb-billing-history-body {
   display: grid;
@@ -752,6 +766,13 @@
 }
 .wb-billing-empty {
   margin: 0;
+}
+.wb-billing-payment-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--tg-s-3);
+  padding-top: var(--tg-s-4);
 }
 
 @media (max-width: 720px) {
@@ -773,5 +794,9 @@
   }
   .wb-billing-auto-body > .tg-btn {
     justify-self: stretch;
+  }
+  .wb-billing-payment-actions {
+    align-items: stretch;
+    flex-direction: column;
   }
 }
