@@ -1881,6 +1881,7 @@ const PLATFORM_RESERVED_MACHINE_PREFIXES = [
   "/__takosumi",
   "/hooks",
   "/metrics",
+  "/livez",
   "/capabilities",
   "/openapi.json",
 ] as const;

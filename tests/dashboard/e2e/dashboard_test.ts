@@ -5,11 +5,17 @@ import {
   PORTABLE_SOURCE_OPTIONS_COMMIT,
   PORTABLE_SOURCE_OPTION_DOCUMENTS,
 } from "./fixture-data.ts";
-import { monitorDashboardTraffic } from "./traffic-monitor.ts";
+import {
+  dashboardLiveEvidenceReport,
+  monitorDashboardTraffic,
+} from "./traffic-monitor.ts";
 import {
   shouldRecordControlPlaneMutation,
   type DashboardE2EMode,
 } from "./traffic-policy.ts";
+import {
+  validateExpectedWorkerVersionId,
+} from "../../../scripts/dashboard-browser-e2e/live-inputs.ts";
 
 type Expectations = {
   readonly workspaceName: string;
@@ -23,6 +29,13 @@ if (rawMode !== "portable" && rawMode !== "live") {
   throw new Error("TAKOSUMI_E2E_MODE must be either portable or live");
 }
 const mode: DashboardE2EMode = rawMode;
+
+const expectedWorkerVersionId =
+  mode === "live"
+    ? validateExpectedWorkerVersionId(
+        process.env.TAKOSUMI_E2E_EXPECTED_WORKER_VERSION_ID ?? "",
+      )
+    : undefined;
 
 function requiredLive(name: string): string {
   const value = process.env[name]?.trim();
@@ -53,6 +66,39 @@ function pageErrors(page: Page): string[] {
 
 async function assertNoPageErrors(errors: readonly string[]): Promise<void> {
   expect(errors, "dashboard page raised a browser runtime error").toEqual([]);
+}
+
+async function gotoDashboardDocument(
+  page: Page,
+  path: string,
+): Promise<void> {
+  const response = await page.goto(path, { waitUntil: "domcontentloaded" });
+  expect(response, `${path} must return a top-level document`).not.toBeNull();
+  expect(response?.status(), path).toBe(200);
+  expect(response?.headers()["content-type"], path).toMatch(/text\/html/u);
+}
+
+async function fetchLiveEndpoint(
+  page: Page,
+  traffic: ReturnType<typeof monitorDashboardTraffic>,
+  path: string,
+  expectedStatus: number,
+) {
+  const response = await page.context().request.get(
+    new URL(path, page.url()).toString(),
+    {
+      headers: {
+        accept: "application/json",
+        // The live browser state is intentionally not used for this probe.
+        // This proves the public OIDC surface and the unauthenticated API gate
+        // without minting or faking a sign-in callback.
+        cookie: "",
+      },
+    },
+  );
+  expect(response.status(), path).toBe(expectedStatus);
+  traffic.recordVersionedResponse(path, response.status(), response.headers());
+  return response;
 }
 
 async function expectInsideViewport(
@@ -382,6 +428,13 @@ async function stubProviderDestinationFixture(
 }
 
 test.describe("Takosumi dashboard browser surface", () => {
+  test.afterAll(() => {
+    const report = dashboardLiveEvidenceReport();
+    if (report) {
+      console.log(`[dashboard-e2e-evidence] ${JSON.stringify(report)}`);
+    }
+  });
+
   test("authenticates through dashboard bootstrap and switches Workspace scope", async ({
     page,
   }) => {
@@ -430,6 +483,88 @@ test.describe("Takosumi dashboard browser surface", () => {
     );
     await assertNoPageErrors(errors);
     traffic.assertNoFailures();
+  });
+
+  test("live probes keep OIDC, unauthenticated API, and SPA documents on one Version", async ({
+    page,
+  }) => {
+    test.skip(mode !== "live", "immutable Version probes are live-only");
+    const errors = pageErrors(page);
+    const traffic = monitorDashboardTraffic(page, mode);
+    const mutations: string[] = [];
+    page.on("request", (request) => {
+      if (
+        shouldRecordControlPlaneMutation(
+          mode,
+          mutationOrigin,
+          request.url(),
+          request.method(),
+        )
+      ) {
+        mutations.push(`${request.method()} ${new URL(request.url()).pathname}`);
+      }
+    });
+
+    await gotoDashboardDocument(page, "/");
+
+    const discovery = await fetchLiveEndpoint(
+      page,
+      traffic,
+      "/.well-known/openid-configuration",
+      200,
+    );
+    const discoveryBody = (await discovery.json()) as {
+      readonly issuer?: unknown;
+      readonly jwks_uri?: unknown;
+    };
+    const origin = new URL(page.url()).origin;
+    expect(discoveryBody.issuer).toBe(origin);
+    expect(discoveryBody.jwks_uri).toBe(`${origin}/oauth/jwks`);
+
+    const jwks = await fetchLiveEndpoint(page, traffic, "/oauth/jwks", 200);
+    const jwksBody = (await jwks.json()) as { readonly keys?: unknown };
+    expect(Array.isArray(jwksBody.keys)).toBe(true);
+    expect((jwksBody.keys as readonly unknown[]).length).toBeGreaterThan(0);
+
+    const unauthenticated = await fetchLiveEndpoint(
+      page,
+      traffic,
+      "/api/v1/dashboard/bootstrap",
+      401,
+    );
+    expect(await unauthenticated.json()).toMatchObject({
+      error: "invalid_token",
+    });
+
+    for (const path of ["/settings", "/workloads", "/advanced/workspace", "/new"]) {
+      await gotoDashboardDocument(page, path);
+      await expect(page.locator("body")).not.toContainText("undefined.trim");
+    }
+
+    const installPath =
+      "/install?git=https%3A%2F%2Fgithub.com%2Fexample%2Fservice.git" +
+      "&ref=0123456789abcdef0123456789abcdef01234567&path=deploy%2Fopentofu";
+    await gotoDashboardDocument(page, installPath);
+    await expect(page).toHaveURL(/\/new\?/u);
+    await expect(page.getByLabel(/Git URL/u)).toHaveValue(
+      "https://github.com/example/service.git",
+    );
+    await expect(page.getByLabel(/Ref \(optional\)|ref（省略可）/u)).toHaveValue(
+      "0123456789abcdef0123456789abcdef01234567",
+    );
+    await expect(page.getByLabel(/Module path|module path/u)).toHaveValue(
+      "deploy/opentofu",
+    );
+
+    expect(
+      mutations,
+      "live browser discovery and navigation must not mutate the control plane",
+    ).toEqual([]);
+    await assertNoPageErrors(errors);
+    traffic.assertNoFailures();
+    expect(expectedWorkerVersionId).toMatch(
+      /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u,
+    );
   });
 
   test("keeps the current Workspace name visible on compact widths and disambiguates duplicates", async ({

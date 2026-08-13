@@ -112,15 +112,20 @@ test("platform preserves Core inventory bearer semantics", async () => {
   }
 });
 
-test("platform leaves trailing process paths to the explicit SPA fallback", async () => {
+test("platform reserves unknown livez descendants outside the SPA fallback", async () => {
   const { env, assetRequests } = platformEnv();
-  const response = await worker.fetch(
-    new Request("https://app.takosumi.test/livez/"),
-    env,
-  );
-  expect(response.status).toBe(200);
-  expect(response.headers.get("content-type")).toMatch(/text\/html/u);
-  expect(assetRequests).toEqual(["/livez/"]);
+  for (const path of ["/livez/", "/livez/unknown"]) {
+    const response = await worker.fetch(
+      new Request(`https://app.takosumi.test${path}`),
+      env,
+    );
+    expect(response.status, path).toBe(404);
+    expect(response.headers.get("content-type"), path).toMatch(
+      /application\/json/u,
+    );
+    expect(await response.json(), path).toEqual({ error: "not found" });
+  }
+  expect(assetRequests).toEqual([]);
 });
 
 test("platform reserves unknown machine-prefix paths outside the SPA fallback", async () => {
@@ -155,6 +160,7 @@ test("platform does not broaden reserved prefixes to near-prefix paths", async (
     "/__takosumix",
     "/hooksx",
     "/metricsx",
+    "/livezx",
     "/capabilitiesx",
     "/openapi.jsonx",
   ]) {
@@ -169,6 +175,7 @@ test("platform does not broaden reserved prefixes to near-prefix paths", async (
     "/__takosumix",
     "/hooksx",
     "/metricsx",
+    "/livezx",
     "/capabilitiesx",
     "/openapi.jsonx",
   ]);
