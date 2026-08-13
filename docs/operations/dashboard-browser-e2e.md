@@ -13,9 +13,18 @@ app, provider, or other fixture inputs. It probes OIDC discovery, JWKS, the
 unauthenticated dashboard bootstrap (`401`), direct/deep SPA documents, and the
 signed-out `/install?...` return-link semantics. It records a zero-mutation
 control-plane/provider fence and fails closed on redirects, non-success status,
-non-HTML/JSON content types, request failures, or any missing/substituted
+non-HTML/JSON content types on the explicitly probed documents and JSON routes,
+request failures, callback-like same-origin GETs,
+or any missing/substituted
 `x-takosumi-version-id` on an official-origin response. The one intentional
-non-2xx exception is the protected dashboard bootstrap's expected `401`.
+non-2xx exceptions are the protected dashboard bootstrap's exact signed-out
+request shapes (`?includeWorkspaces=false` or
+`?includeWorkspaces=true&workspaceLimit=50`) with a JSON `401`; every observed
+response body must be `{ error: "invalid_token" }`.
+The browser route blocks any stateful same-origin request before it reaches the
+service. Cloudflare's exact `/cdn-cgi/rum` Browser Insights route is excluded
+from Worker Version evidence because it is edge telemetry rather than a Worker
+response.
 
 `bun run check` invokes this gate through `check:dashboard-browser` after the
 dashboard build. The fixture deliberately fails on missing build output,

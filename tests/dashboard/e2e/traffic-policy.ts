@@ -2,6 +2,15 @@ export type DashboardE2EMode = "portable" | "live" | "public-live";
 
 const READ_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
+const PUBLIC_LIVE_READ_PATHS = new Set([
+  "/.well-known/openid-configuration",
+  "/oauth/jwks",
+  "/api/v1/dashboard/bootstrap",
+  "/v1/account/session/me",
+  "/v1/auth/providers",
+  "/v1/capabilities",
+]);
+
 function parseHttpUrl(value: string): URL | undefined {
   try {
     const url = new URL(value);
@@ -19,6 +28,19 @@ function isSameOrigin(url: URL, origin: string): boolean {
   } catch {
     return false;
   }
+}
+
+/** Cloudflare Browser Insights is edge telemetry, not a Worker response. */
+export function isPublicLiveTelemetryRequest(
+  origin: string,
+  urlValue: string,
+): boolean {
+  const url = parseHttpUrl(urlValue);
+  return (
+    url !== undefined &&
+    isSameOrigin(url, origin) &&
+    url.pathname === "/cdn-cgi/rum"
+  );
 }
 
 /**
@@ -40,7 +62,9 @@ export function requiresLiveWorkerVersionHeader(
   // The public profile is intentionally a whole-origin read-only probe. It
   // cannot rely on a session or a fixture, so every response served by the
   // official origin is evidence for the exact published Worker Version.
-  if (mode === "public-live") return true;
+  if (mode === "public-live") {
+    return !isPublicLiveTelemetryRequest(origin, urlValue);
+  }
   if (resourceType === "document") return true;
   return (
     url.pathname.startsWith("/api/v1/") ||
@@ -104,6 +128,57 @@ function isControlPlanePath(pathname: string): boolean {
   );
 }
 
+function isPublicLiveStatefulPath(pathname: string): boolean {
+  return (
+    isControlPlanePath(pathname) ||
+    pathname === "/oauth" ||
+    pathname.startsWith("/oauth/") ||
+    pathname === "/internal" ||
+    pathname.startsWith("/internal/") ||
+    pathname === "/sign-in/callback"
+  );
+}
+
+function isPublicLiveAllowedRead(url: URL, method: string): boolean {
+  if (!PUBLIC_LIVE_READ_PATHS.has(url.pathname)) return false;
+  if (method !== "GET" && method !== "HEAD" && method !== "OPTIONS") {
+    return false;
+  }
+  if (url.pathname !== "/api/v1/dashboard/bootstrap") {
+    return url.search === "";
+  }
+  if (url.search === "") return true;
+  if (
+    url.searchParams.size === 1 &&
+    url.searchParams.get("includeWorkspaces") === "false"
+  ) {
+    return true;
+  }
+  return (
+    url.searchParams.size === 2 &&
+    url.searchParams.get("includeWorkspaces") === "true" &&
+    url.searchParams.get("workspaceLimit") === "50"
+  );
+}
+
+export function isExpectedPublicBootstrapDenial(input: {
+  readonly origin: string;
+  readonly urlValue: string;
+  readonly status: number;
+  readonly contentType: string | null | undefined;
+}): boolean {
+  if (input.status !== 401) return false;
+  const url = parseHttpUrl(input.urlValue);
+  if (!url || !isSameOrigin(url, input.origin)) return false;
+  if (
+    url.pathname !== "/api/v1/dashboard/bootstrap" ||
+    !isPublicLiveAllowedRead(url, "GET")
+  ) {
+    return false;
+  }
+  return /^application\/json(?:;|$)/u.test(input.contentType?.trim() ?? "");
+}
+
 /**
  * Record only mutating requests that could change the dashboard control
  * plane. External telemetry (for example Cloudflare Browser Insights' RUM
@@ -115,9 +190,14 @@ export function shouldRecordControlPlaneMutation(
   urlValue: string,
   method: string,
 ): boolean {
-  if (READ_METHODS.has(method.toUpperCase())) return false;
   const url = parseHttpUrl(urlValue);
   if (!url || !isSameOrigin(url, origin)) return false;
+  const normalizedMethod = method.toUpperCase();
+  if (mode === "public-live") {
+    if (!isPublicLiveStatefulPath(url.pathname)) return false;
+    return !isPublicLiveAllowedRead(url, normalizedMethod);
+  }
+  if (READ_METHODS.has(normalizedMethod)) return false;
   // Keep portable and live collection scoped to the configured dashboard
   // origin. In live mode this is app-staging.takosumi.com; the fixture uses
   // the local origin while preserving the same path fence.
@@ -140,17 +220,11 @@ export function shouldRecordResponseFailure(
 ): boolean {
   if (mode === "public-live" && status >= 300) {
     const url = parseHttpUrl(urlValue);
-    // The signed-out SPA intentionally probes this protected endpoint and
-    // must receive 401 before it falls back to the public session mirror.
-    if (
-      status === 401 &&
+    return (
       url !== undefined &&
       isSameOrigin(url, origin) &&
-      url.pathname === "/api/v1/dashboard/bootstrap"
-    ) {
-      return false;
-    }
-    return url !== undefined && isSameOrigin(url, origin);
+      !isPublicLiveTelemetryRequest(origin, urlValue)
+    );
   }
   if (status < 400) return false;
   const url = parseHttpUrl(urlValue);

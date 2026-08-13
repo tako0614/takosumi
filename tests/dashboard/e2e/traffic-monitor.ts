@@ -1,5 +1,7 @@
 import type { Page } from "@playwright/test";
 import {
+  isExpectedPublicBootstrapDenial,
+  isPublicLiveTelemetryRequest,
   requiresLiveWorkerVersionHeader,
   shouldRecordRequestFailure,
   shouldRecordResponseFailure,
@@ -113,6 +115,7 @@ export function monitorDashboardTraffic(
     }
     if (
       mode === "public-live" &&
+      !isPublicLiveTelemetryRequest(origin, response.url()) &&
       response.request().redirectedFrom() !== null
     ) {
       failures.push({
@@ -122,7 +125,18 @@ export function monitorDashboardTraffic(
         detail: "official-origin response followed an HTTP redirect",
       });
     }
-    if (shouldRecordResponseFailure(mode, origin, response.url(), status)) {
+    const expectedPublicBootstrapDenial =
+      mode === "public-live" &&
+      isExpectedPublicBootstrapDenial({
+        origin,
+        urlValue: response.url(),
+        status,
+        contentType: response.headers()["content-type"],
+      });
+    if (
+      !expectedPublicBootstrapDenial &&
+      shouldRecordResponseFailure(mode, origin, response.url(), status)
+    ) {
       failures.push({
         kind: "response",
         url: response.url(),
@@ -131,7 +145,13 @@ export function monitorDashboardTraffic(
     }
   });
   page.on("request", (request) => {
-    if (mode !== "public-live" || request.redirectedFrom() === null) return;
+    if (
+      mode !== "public-live" ||
+      isPublicLiveTelemetryRequest(origin, request.url()) ||
+      request.redirectedFrom() === null
+    ) {
+      return;
+    }
     failures.push({
       kind: "redirect",
       url: request.url(),
@@ -139,6 +159,12 @@ export function monitorDashboardTraffic(
     });
   });
   page.on("requestfailed", (request) => {
+    if (
+      mode === "public-live" &&
+      isPublicLiveTelemetryRequest(origin, request.url())
+    ) {
+      return;
+    }
     if (!shouldRecordRequestFailure(request.url())) return;
     failures.push({
       kind: "requestfailed",

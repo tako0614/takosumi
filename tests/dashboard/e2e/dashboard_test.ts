@@ -93,7 +93,7 @@ async function gotoDashboardDocument(
   path: string,
   expectedPagePath = path,
 ): Promise<void> {
-  const requestedUrl = new URL(path, page.url());
+  const requestedUrl = new URL(path, mutationOrigin);
   const expectedPageUrl = new URL(expectedPagePath, requestedUrl.origin);
   const response = await page.goto(path, { waitUntil: "domcontentloaded" });
   expect(response, `${path} must return a top-level document`).not.toBeNull();
@@ -123,7 +123,7 @@ async function gotoDashboardDocument(
  * This distinguishes an intentional client route from an HTTP redirect.
  */
 async function gotoPublicDocument(page: Page, path: string): Promise<void> {
-  const requestedUrl = new URL(path, page.url());
+  const requestedUrl = new URL(path, mutationOrigin);
   const expectedReturn = encodeURIComponent(
     requestedUrl.pathname + requestedUrl.search,
   );
@@ -1339,7 +1339,9 @@ test.describe("Takosumi public-live browser profile", () => {
     const errors = pageErrors(page);
     const traffic = monitorDashboardTraffic(page, mode);
     const mutations: string[] = [];
-    page.on("request", (request) => {
+    const bootstrapDenials: Promise<void>[] = [];
+    await page.route("**/*", async (route) => {
+      const request = route.request();
       if (
         shouldRecordControlPlaneMutation(
           mode,
@@ -1348,10 +1350,35 @@ test.describe("Takosumi public-live browser profile", () => {
           request.method(),
         )
       ) {
-        mutations.push(`${request.method()} ${new URL(request.url()).pathname}`);
+        const requestUrl = new URL(request.url());
+        mutations.push(
+          `${request.method()} ${requestUrl.pathname}${requestUrl.search}`,
+        );
+        await route.abort("blockedbyclient");
+        return;
       }
+      await route.continue();
     });
-
+    page.on("response", (response) => {
+      const responseUrl = new URL(response.url());
+      if (
+        responseUrl.origin !== new URL(mutationOrigin).origin ||
+        responseUrl.pathname !== "/api/v1/dashboard/bootstrap"
+      ) {
+        return;
+      }
+      bootstrapDenials.push(
+        (async () => {
+          expect(response.status(), response.url()).toBe(401);
+          expect(response.headers()["content-type"], response.url()).toMatch(
+            /^application\/json(?:;|$)/u,
+          );
+          expect(await response.json(), response.url()).toMatchObject({
+            error: "invalid_token",
+          });
+        })(),
+      );
+    });
     await gotoPublicDocument(page, "/");
     const origin = new URL(page.url()).origin;
 
@@ -1376,7 +1403,7 @@ test.describe("Takosumi public-live browser profile", () => {
     const unauthenticated = await fetchLiveEndpoint(
       page,
       traffic,
-      "/api/v1/dashboard/bootstrap",
+      "/api/v1/dashboard/bootstrap?includeWorkspaces=false",
       401,
     );
     expect(unauthenticated.body).toMatchObject({ error: "invalid_token" });
@@ -1396,6 +1423,11 @@ test.describe("Takosumi public-live browser profile", () => {
     await gotoPublicDocument(page, installPath);
     expect(new URL(page.url()).searchParams.get("return")).toBe(installPath);
 
+    // SignInPanel discovery starts after mount. Keep a short, bounded quiet
+    // window so late same-origin responses cannot arrive after the assertions.
+    await page.waitForTimeout(500);
+    await Promise.all(bootstrapDenials);
+    expect(bootstrapDenials.length).toBeGreaterThan(0);
     expect(
       mutations,
       "public-live browser discovery and navigation must issue zero mutations",
