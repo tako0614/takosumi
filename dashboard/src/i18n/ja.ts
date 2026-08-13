@@ -390,6 +390,17 @@ export const ja = {
   "app.deploys.reviewTitle": "サービスを更新",
   "app.deploys.reviewSubtitle":
     "変更がある場合は内容を確認してからデプロイできます。",
+  "app.deploys.sourceVersionTitle": "取得元のバージョン",
+  "app.deploys.sourceVersionSubtitle":
+    "変更を確認する前に、Git のコミットを明示してください。",
+  "app.deploys.sourceVersionCurrent": "現在のバージョン",
+  "app.deploys.sourceVersionChange": "バージョンを変更",
+  "app.deploys.sourceVersionInput": "コミット",
+  "app.deploys.sourceVersionHint":
+    "40 桁の Git コミットを入力してください。ブランチ名やタグは使えません。",
+  "app.deploys.sourceVersionApply": "バージョンを設定",
+  "app.deploys.sourceVersionUnavailable":
+    "既存の取得元を読み込めませんでした。",
   "app.deploys.empty": "まだデプロイ履歴はありません。",
   "app.deploys.restore": "この状態に戻す",
   "app.deploys.restoreDisclosure": "以前の状態に戻す",
@@ -559,6 +570,10 @@ export const ja = {
     "連携しているサービスの値をいま取得できません。時間をおいてもう一度お試しください。",
   "controlError.sourceChanged":
     "取得元の内容が変わりました。もう一度変更を確認してください。",
+  "controlError.sourceRevisionMismatch":
+    "取得元の識別情報または指定したバージョンが変わりました。現在のサービスを確認し直してください。",
+  "controlError.invalidSourceRevision":
+    "変更を確認する前に、40 桁の Git コミットを指定してください。",
   "controlError.compatibilityStale":
     "確認結果が古くなりました。もう一度確認してください。",
   "controlError.runnerUnavailable":

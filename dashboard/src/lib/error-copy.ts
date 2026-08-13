@@ -134,6 +134,8 @@ const REASON_MESSAGES: Readonly<Record<string, MessageKey>> = {
   dependency_value_sealer_unavailable: "controlError.dependencyUnavailable",
   sensitive_output_resolver_unavailable: "controlError.dependencyUnavailable",
   source_ref_changed: "controlError.sourceChanged",
+  source_revision_mismatch: "controlError.sourceRevisionMismatch",
+  invalid_source_revision: "controlError.invalidSourceRevision",
   source_snapshot_mismatch: "controlError.sourceChanged",
   source_snapshot_missing: "controlError.sourceChanged",
   compatibility_report_missing: "controlError.compatibilityStale",

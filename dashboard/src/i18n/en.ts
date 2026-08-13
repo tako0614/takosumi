@@ -386,6 +386,17 @@ export const en: Record<keyof typeof ja, string> = {
   "app.deploys.reviewTitle": "Update service",
   "app.deploys.reviewSubtitle":
     "Check available changes before deploying them.",
+  "app.deploys.sourceVersionTitle": "Source version",
+  "app.deploys.sourceVersionSubtitle":
+    "Choose an exact Git commit before reviewing changes.",
+  "app.deploys.sourceVersionCurrent": "Current version",
+  "app.deploys.sourceVersionChange": "Change version",
+  "app.deploys.sourceVersionInput": "Exact commit",
+  "app.deploys.sourceVersionHint":
+    "Enter a 40-character Git commit. Branches and tags are not accepted.",
+  "app.deploys.sourceVersionApply": "Set version",
+  "app.deploys.sourceVersionUnavailable":
+    "The existing Source could not be loaded.",
   "app.deploys.empty": "No deploys yet.",
   "app.deploys.restore": "Restore this state",
   "app.deploys.restoreDisclosure": "Restore a previous version",
@@ -551,6 +562,10 @@ export const en: Record<keyof typeof ja, string> = {
     "Values from a connected service aren't available right now. Try again in a moment.",
   "controlError.sourceChanged":
     "The source contents changed. Review the changes again.",
+  "controlError.sourceRevisionMismatch":
+    "The source identity or exact version changed. Review the current service again.",
+  "controlError.invalidSourceRevision":
+    "Enter an exact 40-character Git commit before reviewing changes.",
   "controlError.compatibilityStale":
     "The check result is out of date. Check again.",
   "controlError.runnerUnavailable":
