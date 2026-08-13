@@ -138,6 +138,10 @@ export function shouldRecordResponseFailure(
   urlValue: string,
   status: number,
 ): boolean {
+  if (mode === "public-live" && status >= 300) {
+    const url = parseHttpUrl(urlValue);
+    return url !== undefined && isSameOrigin(url, origin);
+  }
   if (status < 400) return false;
   const url = parseHttpUrl(urlValue);
   if (!url) return false;

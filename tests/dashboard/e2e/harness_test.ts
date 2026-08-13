@@ -206,6 +206,14 @@ test("public-live binds every official-origin response to the exact Version", ()
     ),
   ).toBe(true);
   expect(
+    shouldRecordResponseFailure(
+      "public-live",
+      origin,
+      `${origin}/sign-in`,
+      302,
+    ),
+  ).toBe(true);
+  expect(
     workerVersionHeaderFailure({
       mode: "public-live",
       origin,
