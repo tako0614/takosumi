@@ -206,10 +206,14 @@ function rowsFromCompatibility(
 }
 
 export default function InstallView() {
-  return <Page title={t("installStore.title")}>{() => <Inner />}</Page>;
+  return (
+    <Page title={t("installStore.title")}>
+      {(session) => <Inner installingPrincipalId={session.subject} />}
+    </Page>
+  );
 }
 
-function Inner() {
+function Inner(props: { readonly installingPrincipalId: string }) {
   const location = useLocation();
   const initial = parseInstallPrefill(location.search);
   const appHandoff = appHandoffFromSearch(location.search);
@@ -1015,7 +1019,15 @@ function Inner() {
       setError(t("installStore.launchNotReady"));
       return;
     }
-    if (!installConfigRequiresUiSurface(installConfig()?.interfaceBlueprints)) {
+    const config = installConfig();
+    if (
+      !installConfigRequiresUiSurface(config?.interfaceBlueprints, {
+        installingPrincipalId: props.installingPrincipalId,
+        repositoryInstallUxAccepted:
+          config?.installExperience?.repositoryInstallUx?.status ===
+          "accepted",
+      })
+    ) {
       setPhase("done");
       return;
     }

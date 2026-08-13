@@ -24,9 +24,18 @@ export const UI_SURFACE_PERMISSION = UI_SURFACE_OPEN_PERMISSION;
  * Completion must wait for this projection instead of falling back to a
  * workload link and claiming that the service is ready to open.
  */
+export interface InstallConfigUiSurfaceContext {
+  /** The account-plane Principal for the current authenticated dashboard. */
+  readonly installingPrincipalId?: string;
+  /** The reviewed repository-owned config was compiled by the control plane. */
+  readonly repositoryInstallUxAccepted?: boolean;
+}
+
 export function installConfigRequiresUiSurface(
   blueprints: readonly CapsuleInterfaceBlueprint[] | undefined,
+  context: InstallConfigUiSurfaceContext = {},
 ): boolean {
+  const installingPrincipalId = context.installingPrincipalId?.trim();
   return (blueprints ?? []).some(
     (blueprint) =>
       blueprint.spec.type === UI_SURFACE_INTERFACE_TYPE &&
@@ -34,12 +43,18 @@ export function installConfigRequiresUiSurface(
       isLauncherDocument(blueprint.spec.document) &&
       (blueprint.bindings ?? []).some((binding) =>
         binding.permissions.includes(UI_SURFACE_OPEN_PERMISSION) &&
-        // The install flow can prove that the current signed-in Principal is
-        // the grant target only for the contract's install-time placeholder.
-        // A fixed Principal (or another delivery subject) may be valid for a
-        // non-interactive composition, but polling this dashboard's session
-        // for it would be an unbounded/futile readiness check.
-        binding.subject?.source === "installing_principal",
+        // Before the Capsule config is persisted the contract carries an
+        // explicit installer placeholder. After repository install-UX
+        // compilation that placeholder is intentionally resolved to an exact
+        // Principal ref. The marker is provenance, not authority by itself:
+        // only the current authenticated Principal can make that resolved
+        // binding a dashboard-launch requirement. Arbitrary fixed Principal
+        // or embedded bindings therefore do not trigger futile polling.
+        (binding.subject?.source === "installing_principal" ||
+          (context.repositoryInstallUxAccepted === true &&
+            installingPrincipalId !== undefined &&
+            binding.subjectRef?.kind === "Principal" &&
+            binding.subjectRef.id === installingPrincipalId)),
       ),
   );
 }

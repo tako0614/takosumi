@@ -61,6 +61,35 @@ test("identifies install configs whose launcher must be read back", () => {
       },
     ]),
   ).toBe(false);
+
+  const resolvedInstaller = {
+    ...launcher,
+    bindings: [
+      {
+        key: "launcher.installer",
+        subjectRef: { kind: "Principal", id: "principal_current" },
+        permissions: ["ui.open"],
+        delivery: { type: "none" },
+      },
+    ],
+  } as const;
+  expect(
+    installConfigRequiresUiSurface([resolvedInstaller], {
+      installingPrincipalId: "principal_current",
+      repositoryInstallUxAccepted: true,
+    }),
+  ).toBe(true);
+  expect(
+    installConfigRequiresUiSurface([resolvedInstaller], {
+      installingPrincipalId: "principal_other",
+      repositoryInstallUxAccepted: true,
+    }),
+  ).toBe(false);
+  expect(
+    installConfigRequiresUiSurface([resolvedInstaller], {
+      installingPrincipalId: "principal_current",
+    }),
+  ).toBe(false);
   expect(installConfigRequiresUiSurface(undefined)).toBe(false);
 });
 

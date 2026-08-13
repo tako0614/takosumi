@@ -127,6 +127,14 @@ describe("single-screen install surface", () => {
     expect(view).toContain('t("common.retry")');
   });
 
+  test("matches resolved repository launcher bindings to the authenticated Principal", () => {
+    const view = read("dashboard/src/views/new/InstallView.tsx");
+    expect(view).toContain("installingPrincipalId={session.subject}");
+    expect(view).toContain("installingPrincipalId: props.installingPrincipalId");
+    expect(view).toContain("repositoryInstallUxAccepted:");
+    expect(view).toContain("config?.installExperience?.repositoryInstallUx");
+  });
+
   test("review and apply stay inside /new", () => {
     const view = read("dashboard/src/views/new/InstallView.tsx");
     const execution = read("dashboard/src/views/new/InstallExecution.tsx");
