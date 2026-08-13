@@ -240,6 +240,12 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
     },
     {
       method: "GET",
+      path: "/api/v1/capsules/{capsuleId}/current-resource-inventory",
+      summary: "Read the Capsule's current recorded OpenTofu resource inventory",
+      auth: "account-session",
+    },
+    {
+      method: "GET",
       path: "/api/v1/capsules/{capsuleId}/dependencies",
       summary: "List Capsule Dependencies",
       auth: "account-session",

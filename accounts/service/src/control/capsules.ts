@@ -275,6 +275,10 @@ export async function handleCapsules(
       if (method !== "GET") return methodNotAllowed("GET");
       return await getCapsuleOutput(operations, capsule);
     }
+    if (leaf === "current-resource-inventory" && segments.length === 3) {
+      if (method !== "GET") return methodNotAllowed("GET");
+      return json(await operations.getCurrentResourceInventory(capsuleId));
+    }
     if (leaf === "dependencies" && segments.length === 3) {
       if (method === "GET") {
         const dependencies =

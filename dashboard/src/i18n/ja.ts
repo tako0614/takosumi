@@ -394,6 +394,19 @@ export const ja = {
   "app.deploys.backup": "バックアップを作成",
   "app.deploys.backupCreated": "バックアップを作成しました。",
   "app.deploys.backupSupportRef": "バックアップ ID",
+  "app.deploys.inventoryTitle": "デプロイ済みリソース",
+  "app.deploys.inventoryRecordedNote":
+    "現在の適用状態に記録された内容です。ライブ稼働状態ではありません。",
+  "app.deploys.inventoryLoadError":
+    "記録済みリソース一覧を読み込めませんでした。",
+  "app.deploys.inventoryLegacyUnavailable":
+    "この古い適用状態にはリソース一覧の記録がありません。",
+  "app.deploys.inventoryGeneration": "状態世代",
+  "app.deploys.inventoryRecordedAt": "記録日時",
+  "app.deploys.inventoryStateVersion": "状態バージョン",
+  "app.deploys.inventoryApplyRun": "Apply 実行",
+  "app.deploys.inventoryPlanRun": "Plan 実行",
+  "app.deploys.inventoryEmpty": "デプロイ済みリソースは記録されていません。",
   "app.recentActivity.title": "最近の更新",
   "app.recentActivity.open": "詳細",
   "app.recentActivity.releaseActivation": "サービス公開",

@@ -419,6 +419,54 @@
   color: var(--tg-fg-muted);
 }
 
+/* --- Recorded current-resource inventory --------------------------------- */
+.wa-kv-list {
+  display: grid;
+  gap: var(--tg-s-2);
+  margin: var(--tg-s-3) 0 0;
+}
+.wa-kv-list > div {
+  display: grid;
+  grid-template-columns: minmax(9rem, 0.35fr) minmax(0, 1fr);
+  gap: var(--tg-s-3);
+  padding-top: var(--tg-s-2);
+  border-top: 1px solid var(--tg-line);
+}
+.wa-kv-list dt {
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-sm);
+}
+.wa-kv-list dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.wa-deploy-resource-list {
+  display: grid;
+  gap: var(--tg-s-2);
+  list-style: none;
+  margin: var(--tg-s-4) 0 0;
+  padding: 0;
+}
+.wa-deploy-resource-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(8rem, 0.8fr) minmax(0, 1fr);
+  gap: var(--tg-s-3);
+  align-items: baseline;
+  padding: var(--tg-s-3) 0;
+  border-top: 1px solid var(--tg-line);
+}
+.wa-deploy-resource-row code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 640px) {
+  .wa-deploy-resource-row {
+    grid-template-columns: 1fr;
+    gap: var(--tg-s-1);
+  }
+}
+
 /* --- Provider Connection binding editor ------------------------------------- */
 .wa-binding-grid {
   display: flex;

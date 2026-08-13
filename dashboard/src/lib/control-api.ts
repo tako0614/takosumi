@@ -45,6 +45,7 @@ import type {
   Workspace as ContractWorkspace,
   PublicWorkspaceListPage as ContractPublicWorkspaceListPage,
   UsageEvent as ContractUsageEvent,
+  CapsuleCurrentResourceInventory as ContractCapsuleCurrentResourceInventory,
 } from "takosumi-contract";
 
 // ===========================================================================
@@ -2018,6 +2019,24 @@ export async function getStateVersion(
     `${BASE}/state-versions/${encodeURIComponent(stateVersionId)}`,
   );
   return body.stateVersion;
+}
+
+export type CapsuleCurrentResourceInventory =
+  ContractCapsuleCurrentResourceInventory;
+
+/**
+ * Reads the value-free OpenTofu resource inventory recorded by the current
+ * Capsule apply lineage. This is not a provider health check.
+ */
+export async function getCurrentResourceInventory(
+  capsuleId: string,
+): Promise<CapsuleCurrentResourceInventory> {
+  const body = await controlFetch<{
+    readonly inventory: CapsuleCurrentResourceInventory;
+  }>(
+    `${BASE}/capsules/${encodeURIComponent(capsuleId)}/current-resource-inventory`,
+  );
+  return body.inventory;
 }
 
 /**
