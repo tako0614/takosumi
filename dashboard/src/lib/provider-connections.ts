@@ -40,6 +40,24 @@ export function preferredProviderConnection(
 }
 
 /**
+ * Matches a compatibility provider requirement to a Provider Connection by
+ * canonical source. Display names are presentation only and never establish
+ * that a connection belongs to the required provider.
+ */
+export function providerConnectionMatchesProviderSource(
+  provider: string,
+  connection: Pick<ProviderConnection, "providerSource">,
+): boolean {
+  const canonical = (value: string): string => {
+    const normalized = value.toLowerCase().trim();
+    return normalized.split("/").length === 2
+      ? `registry.opentofu.org/${normalized}`
+      : normalized;
+  };
+  return canonical(provider) === canonical(connection.providerSource);
+}
+
+/**
  * Returns the user-facing label for a Provider Connection in install choices.
  *
  * The connection owner chooses the persisted display name. In particular,

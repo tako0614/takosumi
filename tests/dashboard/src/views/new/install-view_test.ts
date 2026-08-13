@@ -147,6 +147,17 @@ describe("single-screen install surface", () => {
     expect(execution).not.toContain("auto=install");
   });
 
+  test("shows the exact auto-selected destination as read-only review evidence", () => {
+    const view = read("dashboard/src/views/new/InstallView.tsx");
+    expect(view).toContain("autoSelectedDestination");
+    expect(view).toContain('t("installStore.destinationSummary"');
+    expect(view).toContain('data-install-provider-destination="auto-selected"');
+    expect(view).toContain("data-provider-connection-id");
+    expect(view).toContain("providerConnectionDisplayName(destination())");
+    expect(view).toContain("setAutoSelectedProviderRows");
+    expect(view).toContain("setAutoSelectedProviderRows(new Set<string>());");
+  });
+
   test("keeps TCS handoffs in the same install surface", () => {
     const view = read("dashboard/src/views/new/InstallView.tsx");
     expect(view).toContain("parseInitialTcsHandoff(location.search)");
