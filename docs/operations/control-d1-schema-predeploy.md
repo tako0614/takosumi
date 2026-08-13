@@ -228,7 +228,7 @@ checkout without rerunning schema work:
 ```bash
 export TAKOSUMI_CONTROL_D1_SOURCE_COMMIT="$(git rev-parse HEAD)"
 
-bun run control-d1-schema:release -- \
+bun scripts/control-d1-schema.ts release \
   --environment staging \
   --confirm-manifest "$control_manifest_digest" \
   --confirm-fence-source-commit <older-40-hex-commit> \

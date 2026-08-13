@@ -3503,6 +3503,78 @@ test("control D1 CLI forward-repair release binds the current checkout to an old
   }
 });
 
+test("control D1 CLI forward-repair release refuses migration checksum drift before mutation", async () => {
+  const plan = await buildControlD1SchemaPlan();
+  const database = new SqliteControlD1Database();
+  try {
+    await ensureD1OpenTofuLedgerSchema(database);
+    await acquireControlD1MaintenanceFence(
+      database,
+      {
+        sourceCommit: PREDECESSOR_SOURCE_COMMIT,
+        manifestDigest: plan.manifestDigest,
+        environment: "staging",
+        databaseRole: "in_place",
+        releasePolicy: "in_place",
+        databaseId: "database_staging",
+      },
+      NOW,
+    );
+    await database
+      .prepare(
+        `update schema_migrations
+         set checksum = 'drift'
+         where version = 1`,
+      )
+      .run();
+    const output: string[] = [];
+    const code = await runControlD1SchemaCli(
+      [
+        "release",
+        "--environment",
+        "staging",
+        "--confirm-manifest",
+        plan.manifestDigest,
+        "--confirm-fence-source-commit",
+        PREDECESSOR_SOURCE_COMMIT,
+      ],
+      {},
+      (value) => output.push(value),
+      {
+        sourceCommit: SOURCE_COMMIT,
+        now: () => "2026-08-05T12:00:05.000Z",
+        inspectSourceCheckout: async () => ({
+          head: SOURCE_COMMIT,
+          clean: true,
+        }),
+        createRemoteDatabase: () => ({
+          database,
+          configurationDigest: `sha256:${"1".repeat(64)}`,
+          databaseId: "database_staging",
+        }),
+      },
+    );
+    expect(code).toBe(1);
+    expect(JSON.parse(output.at(-1) ?? "{}")).toMatchObject({
+      mode: "release",
+      status: "failed",
+      failureCode: "pre_release_verification_failed",
+      sourceCommit: SOURCE_COMMIT,
+      confirmedFenceSourceCommit: PREDECESSOR_SOURCE_COMMIT,
+    });
+    expect((await readControlD1MaintenanceState(database)).status).toBe(
+      "active",
+    );
+    const verification = await verifyControlD1Schema(database, plan, {
+      allowActiveMaintenanceFence: true,
+    });
+    expect(verification.status).toBe("mismatch");
+    expect(verification.issues).toContain("migration_ledger_mismatch");
+  } finally {
+    database.close();
+  }
+});
+
 test("control D1 CLI forward-repair release rejects source, manifest, environment, and database mismatches", async () => {
   const plan = await buildControlD1SchemaPlan();
   const cases = [
@@ -3699,6 +3771,19 @@ test("control D1 CLI forward-repair release still requires the current clean che
       database.close();
     }
   }
+});
+
+test("control D1 forward-repair runbook uses the public schema CLI entrypoint", async () => {
+  const runbook = await readFile(
+    resolve(
+      import.meta.dir,
+      "../../../docs/operations/control-d1-schema-predeploy.md",
+    ),
+    "utf8",
+  );
+  expect(runbook).toContain("bun scripts/control-d1-schema.ts release \\");
+  expect(runbook).toContain("--confirm-fence-source-commit");
+  expect(runbook).not.toContain("bun run control-d1-schema:release");
 });
 
 test("control D1 CLI apply requires exact manifest confirmation", async () => {

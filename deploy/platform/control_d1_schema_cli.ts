@@ -415,6 +415,14 @@ export async function runControlD1SchemaCli(
       ) {
         throw new ControlD1SchemaError("maintenance_fence_release_mismatch");
       }
+      const preReleaseVerification = await verifyControlD1Schema(
+        remote.database,
+        plan,
+        { allowActiveMaintenanceFence: true },
+      );
+      if (preReleaseVerification.status !== "ready") {
+        throw new ControlD1SchemaError("pre_release_verification_failed");
+      }
       if (state.status === "active") {
         await releaseControlD1MaintenanceFence(
           remote.database,
