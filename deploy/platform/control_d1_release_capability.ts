@@ -75,6 +75,35 @@ export interface ControlD1ReleaseCapabilityImportPollEvidence {
   readonly carriesEveryReturnedAtBookmark: true;
 }
 
+export interface ControlD1ReleaseCapabilitySchemaReleaseEvidence {
+  readonly status: "ready";
+  readonly maintenanceStatus: "released";
+  readonly plan: {
+    readonly manifestDigest: string;
+    readonly expectedLatestMigrationVersion: number;
+    readonly expectedMigrationCount: number;
+  };
+  readonly verification: {
+    readonly status: "ready";
+    readonly schemaDigest: string;
+    readonly ledgerDigest: string;
+    readonly latestMigrationVersion: number;
+    readonly migrationCount: number;
+    readonly tableCount: number;
+  };
+  readonly imports: {
+    readonly count: number;
+    readonly pollCount: number;
+    readonly dropTriggerStatementCount: number;
+    readonly dropTriggerImportCount: number;
+    readonly dropTriggerQueryRequestCount: number;
+    readonly dropTriggerImportDigest: string;
+    readonly importTranscriptDigest: string;
+  };
+  readonly zeroQueryDropTriggerRequests: true;
+  readonly digest: string;
+}
+
 export interface ControlD1ReleaseCapability {
   readonly kind: typeof CONTROL_D1_RELEASE_CAPABILITY_KIND;
   readonly status: "ready";
@@ -99,6 +128,7 @@ export interface ControlD1ReleaseCapability {
   };
   readonly transport: {
     readonly query: ControlD1ReleaseCapabilityQueryEvidence;
+    readonly schemaRelease: ControlD1ReleaseCapabilitySchemaReleaseEvidence;
     readonly dropTriggerBatch: ControlD1ReleaseCapabilityDropTriggerEvidence;
     readonly importPoll: ControlD1ReleaseCapabilityImportPollEvidence;
     readonly digest: string;
@@ -174,6 +204,7 @@ export async function buildControlD1ReleaseCapability(
 
   const queryStats: CapabilityFetchStats = emptyFetchStats();
   const queryBacking = new SqliteControlD1Database();
+  let schemaRelease: ControlD1ReleaseCapabilitySchemaReleaseEvidence;
   try {
     const queryFetch = createCapabilityFetch(queryBacking, queryStats, 2);
     const database = createRestDatabase(queryFetch);
@@ -192,6 +223,17 @@ export async function buildControlD1ReleaseCapability(
         "schema_self_test_verification_failed",
       );
     }
+    if (applied.maintenanceStatus !== "released") {
+      throw new ControlD1ReleaseCapabilityError(
+        "schema_self_test_maintenance_not_released",
+      );
+    }
+    schemaRelease = buildSchemaReleaseEvidence(
+      plan,
+      applied.verification,
+      applied.maintenanceStatus,
+      queryStats,
+    );
   } finally {
     queryBacking.close();
   }
@@ -295,7 +337,12 @@ export async function buildControlD1ReleaseCapability(
   if (!testFile) {
     throw new ControlD1ReleaseCapabilityError("test_source_digest_missing");
   }
-  const transportDigest = digestJson({ query, dropTriggerBatch: dropTriggerEvidence, importPoll });
+  const transportDigest = digestJson({
+    query,
+    schemaRelease,
+    dropTriggerBatch: dropTriggerEvidence,
+    importPoll,
+  });
   const capabilityWithoutDigest = {
     kind: CONTROL_D1_RELEASE_CAPABILITY_KIND,
     status: "ready" as const,
@@ -316,6 +363,7 @@ export async function buildControlD1ReleaseCapability(
     },
     transport: {
       query,
+      schemaRelease,
       dropTriggerBatch: dropTriggerEvidence,
       importPoll,
       digest: transportDigest,
@@ -523,6 +571,78 @@ async function handleImportRequest(
     success: true,
     result: { status: "complete", success: true },
   });
+}
+
+function buildSchemaReleaseEvidence(
+  plan: Awaited<ReturnType<typeof buildControlD1SchemaPlan>>,
+  verification: {
+    readonly status: "ready" | "mismatch";
+    readonly schemaDigest: string;
+    readonly ledgerDigest: string;
+    readonly latestMigrationVersion: number;
+    readonly migrationCount: number;
+    readonly tableCount: number;
+  },
+  maintenanceStatus: "retained" | "released",
+  stats: CapabilityFetchStats,
+): ControlD1ReleaseCapabilitySchemaReleaseEvidence {
+  if (verification.status !== "ready") {
+    throw new ControlD1ReleaseCapabilityError(
+      "schema_release_verification_not_ready",
+    );
+  }
+  if (maintenanceStatus !== "released") {
+    throw new ControlD1ReleaseCapabilityError(
+      "schema_release_maintenance_not_released",
+    );
+  }
+  const dropTriggerImports = stats.uploadedSql.filter(
+    (sql) => countDropTriggerStatements(sql) > 0,
+  );
+  const dropTriggerStatementCount = dropTriggerImports.reduce(
+    (count, sql) => count + countDropTriggerStatements(sql),
+    0,
+  );
+  if (stats.queryDropTriggerRequests !== 0) {
+    throw new ControlD1ReleaseCapabilityError(
+      "schema_release_drop_trigger_used_query_transport",
+    );
+  }
+  const body = {
+    status: "ready" as const,
+    maintenanceStatus: "released" as const,
+    plan: {
+      manifestDigest: plan.manifestDigest,
+      expectedLatestMigrationVersion: plan.migrations.at(-1)?.version ?? 0,
+      expectedMigrationCount: plan.migrations.length,
+    },
+    verification: {
+      status: "ready" as const,
+      schemaDigest: verification.schemaDigest,
+      ledgerDigest: verification.ledgerDigest,
+      latestMigrationVersion: verification.latestMigrationVersion,
+      migrationCount: verification.migrationCount,
+      tableCount: verification.tableCount,
+    },
+    imports: {
+      count: stats.importIngestCount,
+      pollCount: stats.importPollCount,
+      dropTriggerStatementCount,
+      dropTriggerImportCount: dropTriggerImports.length,
+      dropTriggerQueryRequestCount: stats.queryDropTriggerRequests,
+      dropTriggerImportDigest: digestJson(dropTriggerImports.map(digestText)),
+      importTranscriptDigest: digestJson(stats.uploadedSql.map(digestText)),
+    },
+    zeroQueryDropTriggerRequests: true as const,
+  };
+  return { ...body, digest: digestJson(body) };
+}
+
+function countDropTriggerStatements(sql: string): number {
+  const matches = sql.match(
+    /(?:^|\n)\s*drop\s+trigger(?:\s+if\s+exists)?\b/giu,
+  );
+  return matches?.length ?? 0;
 }
 
 function queryEvidence(

@@ -38,6 +38,15 @@ test("control D1 release capability proves bounded REST transport without provid
           "/client/v4/accounts/:accountId/d1/database/:databaseId/query",
         limitBytes: 100_000,
       },
+      schemaRelease: {
+        status: "ready",
+        maintenanceStatus: "released",
+        verification: { status: "ready" },
+        imports: {
+          dropTriggerQueryRequestCount: 0,
+        },
+        zeroQueryDropTriggerRequests: true,
+      },
       dropTriggerBatch: {
         queryRequestCount: 0,
         routedToAtomicSqlFileImport: true,
@@ -54,6 +63,27 @@ test("control D1 release capability proves bounded REST transport without provid
   });
   expect(capability.transport.query.maxActualStatementBytes).toBeLessThan(
     capability.transport.query.limitBytes,
+  );
+  expect(
+    capability.transport.schemaRelease.verification.latestMigrationVersion,
+  ).toBe(capability.transport.schemaRelease.plan.expectedLatestMigrationVersion);
+  expect(
+    capability.transport.schemaRelease.verification.migrationCount,
+  ).toBe(capability.transport.schemaRelease.plan.expectedMigrationCount);
+  expect(
+    capability.transport.schemaRelease.imports.dropTriggerStatementCount,
+  ).toBeGreaterThan(0);
+  expect(
+    capability.transport.schemaRelease.imports.dropTriggerImportCount,
+  ).toBeGreaterThan(0);
+  expect(
+    capability.transport.schemaRelease.imports.dropTriggerImportDigest,
+  ).toMatch(/^sha256:[0-9a-f]{64}$/u);
+  expect(
+    capability.transport.schemaRelease.imports.importTranscriptDigest,
+  ).toMatch(/^sha256:[0-9a-f]{64}$/u);
+  expect(capability.transport.schemaRelease.digest).toMatch(
+    /^sha256:[0-9a-f]{64}$/u,
   );
   expect(capability.transport.importPoll.returnedAtBookmarkCount).toBe(
     capability.transport.importPoll.requestedCurrentBookmarkCount,
