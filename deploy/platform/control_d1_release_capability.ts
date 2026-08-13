@@ -54,6 +54,21 @@ export interface ControlD1ReleaseCapabilityQueryEvidence {
   readonly maxStatementDigest: string;
 }
 
+export interface ControlD1ReleaseCapabilityStatementLimitEvidence {
+  readonly limitBytes: typeof CONTROL_D1_RELEASE_CAPABILITY_QUERY_LIMIT_BYTES;
+  readonly queryMaxStatementBytes: number;
+  /**
+   * A deliberately conservative bound: every complete Import file must fit
+   * inside the per-statement limit, so every statement in that file does too.
+   */
+  readonly maxImportFileBytes: number;
+  readonly maxObservedTransportUnitBytes: number;
+  readonly maxObservedTransportUnitShapeDigest: string;
+  readonly conservativeImportFileBound: true;
+  readonly allObservedTransportUnitsWithinLimit: true;
+  readonly oversizedImportStatementProbeRejected: true;
+}
+
 export interface ControlD1ReleaseCapabilityDropTriggerEvidence {
   readonly statementCount: number;
   readonly queryRequestCount: number;
@@ -63,14 +78,13 @@ export interface ControlD1ReleaseCapabilityDropTriggerEvidence {
   readonly importPollCount: number;
   readonly uploadedSqlDigest: string;
   readonly routedToAtomicSqlFileImport: true;
-  readonly rollbackProof: true;
+  /** Proves only the local SQLite harness rollback; it is not a provider SLA. */
+  readonly syntheticLocalRollbackProbe: true;
 }
 
 export interface ControlD1ReleaseCapabilityImportPollEvidence {
   readonly returnedAtBookmarkCount: number;
   readonly requestedCurrentBookmarkCount: number;
-  readonly returnedAtBookmarkDigest: string;
-  readonly requestedCurrentBookmarkDigest: string;
   readonly bookmarkSequenceDigest: string;
   readonly carriesEveryReturnedAtBookmark: true;
 }
@@ -98,7 +112,7 @@ export interface ControlD1ReleaseCapabilitySchemaReleaseEvidence {
     readonly dropTriggerImportCount: number;
     readonly dropTriggerQueryRequestCount: number;
     readonly dropTriggerImportDigest: string;
-    readonly importTranscriptDigest: string;
+    readonly importPayloadShapeDigest: string;
   };
   readonly zeroQueryDropTriggerRequests: true;
   readonly digest: string;
@@ -128,6 +142,7 @@ export interface ControlD1ReleaseCapability {
   };
   readonly transport: {
     readonly query: ControlD1ReleaseCapabilityQueryEvidence;
+    readonly statementLimit: ControlD1ReleaseCapabilityStatementLimitEvidence;
     readonly schemaRelease: ControlD1ReleaseCapabilitySchemaReleaseEvidence;
     readonly dropTriggerBatch: ControlD1ReleaseCapabilityDropTriggerEvidence;
     readonly importPoll: ControlD1ReleaseCapabilityImportPollEvidence;
@@ -177,6 +192,7 @@ type CapabilityFetchStats = {
   importIngestCount: number;
   importPollCount: number;
   uploadedSql: string[];
+  rejectedOversizedImportUploads: number;
   returnedAtBookmarks: string[];
   requestedCurrentBookmarks: string[];
 };
@@ -284,9 +300,9 @@ export async function buildControlD1ReleaseCapability(
       importPollCount: triggerStats.importPollCount,
     } as const;
 
-    // A failed import must leave both triggers in place. This exercises the
-    // same BEGIN IMMEDIATE/COMMIT/ROLLBACK transaction used by the self-test
-    // import endpoint and proves that the batch is not split into queries.
+    // The synthetic endpoint deliberately models one local SQLite transaction.
+    // This proves the harness observes rollback and that the adapter did not
+    // split the batch into queries; it does not claim a provider guarantee.
     triggerBacking.exec(`
       create trigger capability_trigger_probe_insert
         before insert on capability_trigger_probe begin select 1; end;
@@ -322,13 +338,35 @@ export async function buildControlD1ReleaseCapability(
       ...successfulImportCounts,
       uploadedSqlDigest: digestText(successfulUploadedSql),
       routedToAtomicSqlFileImport: true,
-      rollbackProof: true,
+      syntheticLocalRollbackProbe: true,
     };
+
+    const oversizedTrigger = `create trigger capability_oversized_insert
+      before insert on capability_trigger_probe begin
+        select '${"x".repeat(CONTROL_D1_RELEASE_CAPABILITY_QUERY_LIMIT_BYTES)}';
+      end`;
+    await expectRestFailure(
+      database.batch([database.prepare(oversizedTrigger)]),
+    );
+    const oversizedTriggerCount = await triggerBacking
+      .prepare(
+        "select count(*) as count from sqlite_master where type = 'trigger' and name = 'capability_oversized_insert'",
+      )
+      .first<{ readonly count: number }>();
+    if (
+      oversizedTriggerCount?.count !== 0 ||
+      triggerStats.rejectedOversizedImportUploads !== 1
+    ) {
+      throw new ControlD1ReleaseCapabilityError(
+        "oversized_import_statement_not_rejected",
+      );
+    }
   } finally {
     triggerBacking.close();
   }
 
   const query = queryEvidence(queryStats);
+  const statementLimit = statementLimitEvidence(queryStats, triggerStats);
   const importPoll = importPollEvidence(queryStats);
   const sourceDigest = digestJson(sourceFiles);
   const testFile = sourceFiles.find(
@@ -339,6 +377,7 @@ export async function buildControlD1ReleaseCapability(
   }
   const transportDigest = digestJson({
     query,
+    statementLimit,
     schemaRelease,
     dropTriggerBatch: dropTriggerEvidence,
     importPoll,
@@ -363,6 +402,7 @@ export async function buildControlD1ReleaseCapability(
     },
     transport: {
       query,
+      statementLimit,
       schemaRelease,
       dropTriggerBatch: dropTriggerEvidence,
       importPoll,
@@ -396,6 +436,7 @@ function emptyFetchStats(): CapabilityFetchStats {
     importIngestCount: 0,
     importPollCount: 0,
     uploadedSql: [],
+    rejectedOversizedImportUploads: 0,
     returnedAtBookmarks: [],
     requestedCurrentBookmarks: [],
   };
@@ -410,11 +451,21 @@ function createCapabilityFetch(
   const filenames = new Map<string, string>();
   const bookmarks = new Map<string, ImportBookmark>();
   const completed = new Set<string>();
-  return async (input, init) => {
+  const handler = async (
+    input: Parameters<typeof globalThis.fetch>[0],
+    init?: Parameters<typeof globalThis.fetch>[1],
+  ): Promise<Response> => {
     const url = new URL(String(input));
     if (url.hostname === "d1-import-upload.example.test") {
       const etag = url.pathname.slice(1);
       const sql = String(init?.body ?? "");
+      if (
+        new TextEncoder().encode(sql).byteLength >
+        CONTROL_D1_RELEASE_CAPABILITY_QUERY_LIMIT_BYTES
+      ) {
+        stats.rejectedOversizedImportUploads += 1;
+        return new Response(null, { status: 413 });
+      }
       uploads.set(etag, sql);
       stats.importUploadCount += 1;
       stats.uploadedSql.push(sql);
@@ -442,7 +493,8 @@ function createCapabilityFetch(
     if (!url.pathname.endsWith("/query")) {
       throw new ControlD1ReleaseCapabilityError("self_test_endpoint_invalid");
     }
-    const queries = "batch" in body ? body.batch : [body];
+    const queryBody = body as RestQuery | { readonly batch: readonly RestQuery[] };
+    const queries = "batch" in queryBody ? queryBody.batch : [queryBody];
     stats.queryRequests += 1;
     for (const query of queries) {
       const bytes = new TextEncoder().encode(query.sql).byteLength;
@@ -457,16 +509,16 @@ function createCapabilityFetch(
     }
     try {
       const results =
-        "batch" in body
+        "batch" in queryBody
           ? await backing.batch(
-              body.batch.map((query) =>
+              queryBody.batch.map((query) =>
                 backing.prepare(query.sql).bind(...(query.params ?? [])),
               ),
             )
           : [
               await backing
-                .prepare(body.sql)
-                .bind(...(body.params ?? []))
+                .prepare(queryBody.sql)
+                .bind(...(queryBody.params ?? []))
                 .all(),
             ];
       return Response.json({ success: true, result: results });
@@ -477,6 +529,9 @@ function createCapabilityFetch(
       );
     }
   };
+  return Object.assign(handler, {
+    preconnect: globalThis.fetch.preconnect.bind(globalThis.fetch),
+  });
 }
 
 async function handleImportRequest(
@@ -631,7 +686,12 @@ function buildSchemaReleaseEvidence(
       dropTriggerImportCount: dropTriggerImports.length,
       dropTriggerQueryRequestCount: stats.queryDropTriggerRequests,
       dropTriggerImportDigest: digestJson(dropTriggerImports.map(digestText)),
-      importTranscriptDigest: digestJson(stats.uploadedSql.map(digestText)),
+      importPayloadShapeDigest: digestJson(
+        stats.uploadedSql.map((sql) => ({
+          bytes: new TextEncoder().encode(sql).byteLength,
+          dropTriggerStatementCount: countDropTriggerStatements(sql),
+        })),
+      ),
     },
     zeroQueryDropTriggerRequests: true as const,
   };
@@ -669,6 +729,58 @@ function queryEvidence(
   };
 }
 
+function statementLimitEvidence(
+  ...statsSets: readonly CapabilityFetchStats[]
+): ControlD1ReleaseCapabilityStatementLimitEvidence {
+  const queryStatements = statsSets.flatMap((stats) => stats.queryStatements);
+  const importFiles = statsSets
+    .flatMap((stats) => stats.uploadedSql)
+    .map((sql) => ({ bytes: new TextEncoder().encode(sql).byteLength }));
+  const queryMaxStatementBytes = Math.max(
+    0,
+    ...queryStatements.map((statement) => statement.bytes),
+  );
+  const maxImportFileBytes = Math.max(0, ...importFiles.map((file) => file.bytes));
+  const maxObservedTransportUnitBytes = Math.max(
+    queryMaxStatementBytes,
+    maxImportFileBytes,
+  );
+  if (
+    queryMaxStatementBytes === 0 ||
+    maxImportFileBytes === 0 ||
+    maxObservedTransportUnitBytes >
+      CONTROL_D1_RELEASE_CAPABILITY_QUERY_LIMIT_BYTES
+  ) {
+    throw new ControlD1ReleaseCapabilityError(
+      "transport_statement_or_import_file_over_limit",
+    );
+  }
+  if (
+    statsSets.reduce(
+      (count, stats) => count + stats.rejectedOversizedImportUploads,
+      0,
+    ) !== 1
+  ) {
+    throw new ControlD1ReleaseCapabilityError(
+      "oversized_import_statement_probe_missing",
+    );
+  }
+  return {
+    limitBytes: CONTROL_D1_RELEASE_CAPABILITY_QUERY_LIMIT_BYTES,
+    queryMaxStatementBytes,
+    maxImportFileBytes,
+    maxObservedTransportUnitBytes,
+    maxObservedTransportUnitShapeDigest: digestJson({
+      transport:
+        maxImportFileBytes >= queryMaxStatementBytes ? "import-file" : "query",
+      bytes: maxObservedTransportUnitBytes,
+    }),
+    conservativeImportFileBound: true,
+    allObservedTransportUnitsWithinLimit: true,
+    oversizedImportStatementProbeRejected: true,
+  };
+}
+
 function importPollEvidence(
   stats: CapabilityFetchStats,
 ): ControlD1ReleaseCapabilityImportPollEvidence {
@@ -692,13 +804,9 @@ function importPollEvidence(
   return {
     returnedAtBookmarkCount: returned.length,
     requestedCurrentBookmarkCount: requested.length,
-    returnedAtBookmarkDigest: digestJson(returned.map(digestText)),
-    requestedCurrentBookmarkDigest: digestJson(requested.map(digestText)),
     bookmarkSequenceDigest: digestJson(
       returned.map((bookmark, index) => ({
         sequence: index,
-        returnedAtBookmarkDigest: digestText(bookmark),
-        requestedCurrentBookmarkDigest: digestText(requested[index]!),
         carried: bookmark === requested[index],
       })),
     ),

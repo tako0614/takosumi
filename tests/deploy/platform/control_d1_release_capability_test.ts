@@ -38,6 +38,12 @@ test("control D1 release capability proves bounded REST transport without provid
           "/client/v4/accounts/:accountId/d1/database/:databaseId/query",
         limitBytes: 100_000,
       },
+      statementLimit: {
+        limitBytes: 100_000,
+        conservativeImportFileBound: true,
+        allObservedTransportUnitsWithinLimit: true,
+        oversizedImportStatementProbeRejected: true,
+      },
       schemaRelease: {
         status: "ready",
         maintenanceStatus: "released",
@@ -50,7 +56,7 @@ test("control D1 release capability proves bounded REST transport without provid
       dropTriggerBatch: {
         queryRequestCount: 0,
         routedToAtomicSqlFileImport: true,
-        rollbackProof: true,
+        syntheticLocalRollbackProbe: true,
       },
       importPoll: {
         carriesEveryReturnedAtBookmark: true,
@@ -63,6 +69,12 @@ test("control D1 release capability proves bounded REST transport without provid
   });
   expect(capability.transport.query.maxActualStatementBytes).toBeLessThan(
     capability.transport.query.limitBytes,
+  );
+  expect(
+    capability.transport.statementLimit.maxObservedTransportUnitBytes,
+  ).toBeLessThanOrEqual(capability.transport.statementLimit.limitBytes);
+  expect(capability.transport.statementLimit.maxImportFileBytes).toBeLessThanOrEqual(
+    capability.transport.statementLimit.limitBytes,
   );
   expect(
     capability.transport.schemaRelease.verification.latestMigrationVersion,
@@ -80,19 +92,13 @@ test("control D1 release capability proves bounded REST transport without provid
     capability.transport.schemaRelease.imports.dropTriggerImportDigest,
   ).toMatch(/^sha256:[0-9a-f]{64}$/u);
   expect(
-    capability.transport.schemaRelease.imports.importTranscriptDigest,
+    capability.transport.schemaRelease.imports.importPayloadShapeDigest,
   ).toMatch(/^sha256:[0-9a-f]{64}$/u);
   expect(capability.transport.schemaRelease.digest).toMatch(
     /^sha256:[0-9a-f]{64}$/u,
   );
   expect(capability.transport.importPoll.returnedAtBookmarkCount).toBe(
     capability.transport.importPoll.requestedCurrentBookmarkCount,
-  );
-  expect(capability.transport.importPoll.returnedAtBookmarkDigest).toMatch(
-    /^sha256:[0-9a-f]{64}$/u,
-  );
-  expect(capability.transport.importPoll.requestedCurrentBookmarkDigest).toMatch(
-    /^sha256:[0-9a-f]{64}$/u,
   );
   expect(capability.transport.importPoll.bookmarkSequenceDigest).toMatch(
     /^sha256:[0-9a-f]{64}$/u,
@@ -119,6 +125,14 @@ test("control D1 release capability proves bounded REST transport without provid
   expect(capability.digest).toBe(
     `sha256:${createHash("sha256").update(canonical).digest("hex")}`,
   );
+
+  const repeated = await buildControlD1ReleaseCapability({
+    root: ROOT,
+    sourceCommit: SOURCE_COMMIT,
+    toolVersion: "1.3.14-test",
+    packageVersion: "1.0.0-test",
+  });
+  expect(repeated.digest).toBe(capability.digest);
 });
 
 test("control D1 release-capability CLI is provider-free and machine-readable", async () => {
