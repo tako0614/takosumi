@@ -3,6 +3,7 @@ import {
   createMemo,
   createSignal,
   For,
+  onCleanup,
   onMount,
   Show,
 } from "solid-js";
@@ -34,6 +35,7 @@ import {
 } from "../../components/ui/index.ts";
 import {
   checkCapsuleCompatibility,
+  ControlApiError,
   createCapsule,
   createWorkspace,
   extractRunId,
@@ -142,6 +144,15 @@ type Phase =
 
 const UI_SURFACE_READBACK_ATTEMPTS = 10;
 const UI_SURFACE_READBACK_DELAY_MS = 3_000;
+const INSTALL_PREPARATION_TIMEOUT_MS = 60_000;
+
+type PreparationStage =
+  | "workspace"
+  | "connections"
+  | "source"
+  | "compatibility"
+  | "config"
+  | "plan";
 
 interface EntryChoice {
   readonly id: string;
@@ -284,9 +295,32 @@ function Inner(props: { readonly installingPrincipalId: string }) {
   );
   const [entryTitle, setEntryTitle] = createSignal("");
   const [busy, setBusy] = createSignal(false);
+  const [preparationStage, setPreparationStage] =
+    createSignal<PreparationStage>("workspace");
+  const [preparationController, setPreparationController] =
+    createSignal<AbortController>();
   const [entryEvidence, setEntryEvidence] = createSignal<EntryEvidence>();
   const [interfaceUrl, setInterfaceUrl] = createSignal<string>();
   let completionAttempt = 0;
+  let activePreparationController: AbortController | undefined;
+  onCleanup(() => activePreparationController?.abort());
+
+  const preparationStageHint = (): string => {
+    switch (preparationStage()) {
+      case "workspace":
+        return t("installStore.preparingWorkspace");
+      case "connections":
+        return t("installStore.preparingConnections");
+      case "source":
+        return t("installStore.preparingSource");
+      case "compatibility":
+        return t("installStore.preparingCompatibility");
+      case "config":
+        return t("installStore.preparingConfig");
+      case "plan":
+        return t("installStore.preparingPlan");
+    }
+  };
 
   const selectedTitle = createMemo(() => {
     const selected = listing();
@@ -661,14 +695,27 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     }
     // “Add” responds immediately. Repository and provider analysis belongs to
     // the requested operation, never to the button's enabled state.
+    activePreparationController?.abort();
+    const controller = new AbortController();
+    activePreparationController = controller;
+    setPreparationController(() => controller);
+    setPreparationStage("workspace");
     setPhase("preparing");
     setBusy(true);
     setError(undefined);
     try {
       const workspace = await ensureWorkspace();
-      if (!workspaceIsCurrent(workspace)) return;
+      if (controller.signal.aborted || !workspaceIsCurrent(workspace)) {
+        setPhase("configure");
+        return;
+      }
+      setPreparationStage("connections");
       const providers = await loadConnections(workspace);
-      if (!workspaceIsCurrent(workspace)) return;
+      if (controller.signal.aborted || !workspaceIsCurrent(workspace)) {
+        setPhase("configure");
+        return;
+      }
+      setPreparationStage("source");
       const result = await checkCapsuleCompatibility({
         workspaceId: workspace,
         sourceId: sourceId(),
@@ -683,11 +730,18 @@ function Inner(props: { readonly installingPrincipalId: string }) {
           ? { installConfigId: DEFAULT_CAPSULE_INSTALL_CONFIG_ID }
           : {}),
         compileInstallUx: listing() !== null,
+        signal: controller.signal,
+        timeoutMs: INSTALL_PREPARATION_TIMEOUT_MS,
+        onSourceSyncProgress: () => setPreparationStage("source"),
+        onSourceSnapshot: () => setPreparationStage("compatibility"),
         onSourceCreated: (createdSourceId) => {
           if (workspaceIsCurrent(workspace)) setSourceId(createdSourceId);
         },
       });
-      if (!workspaceIsCurrent(workspace)) return;
+      if (controller.signal.aborted || !workspaceIsCurrent(workspace)) {
+        setPhase("configure");
+        return;
+      }
       setCompatibility(result);
       // Compatibility is a hard gate. A report that needs a patch is not
       // executable merely because the endpoint returned 200; stop before any
@@ -701,8 +755,12 @@ function Inner(props: { readonly installingPrincipalId: string }) {
         result.repositoryInstallUx?.status === "accepted"
           ? result.repositoryInstallUx.installConfigId
           : (result.installConfigId ?? DEFAULT_CAPSULE_INSTALL_CONFIG_ID);
+      setPreparationStage("config");
       const config = await getInstallConfig(configId);
-      if (!workspaceIsCurrent(workspace)) return;
+      if (controller.signal.aborted || !workspaceIsCurrent(workspace)) {
+        setPhase("configure");
+        return;
+      }
       setInstallConfig(config);
       const selectedListing = listing();
       const entry = selectedListing
@@ -757,12 +815,27 @@ function Inner(props: { readonly installingPrincipalId: string }) {
       ) {
         setPhase("setup");
       } else {
+        activePreparationController = undefined;
+        setPreparationController(undefined);
         await preparePlan(workspace, result, config, rows, undefined);
       }
     } catch (cause) {
-      setError(friendlyError(cause, t).message);
+      if (controller.signal.aborted) {
+        setError(undefined);
+      } else if (
+        cause instanceof ControlApiError &&
+        cause.code === "request_timeout"
+      ) {
+        setError(t("installStore.preparingTimeout"));
+      } else {
+        setError(friendlyError(cause, t).message);
+      }
       setPhase("configure");
     } finally {
+      if (activePreparationController === controller) {
+        activePreparationController = undefined;
+        setPreparationController(undefined);
+      }
       setBusy(false);
     }
   };
@@ -808,6 +881,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
       setPhase("connections");
       return;
     }
+    setPreparationStage("plan");
     setPhase("preparing");
     setBusy(true);
     setError(undefined);
@@ -1464,7 +1538,16 @@ function Inner(props: { readonly installingPrincipalId: string }) {
         >
           <Spinner size={24} />
           <h2>{t("installStore.preparing")}</h2>
-          <p>{t("installStore.preparingHint")}</p>
+          <p>{preparationStageHint()}</p>
+          <Show when={preparationController()}>
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => activePreparationController?.abort()}
+            >
+              {t("common.cancel")}
+            </Button>
+          </Show>
         </section>
       </Show>
 

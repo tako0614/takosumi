@@ -1602,7 +1602,7 @@ export async function patchInstallConfig(
 
 // --- OpenTofu Capsule compatibility ---------------------------------------
 
-export async function checkCapsuleCompatibility(input: {
+export interface CheckCapsuleCompatibilityInput {
   readonly workspaceId: string;
   readonly sourceId?: string;
   readonly gitUrl: string;
@@ -1618,12 +1618,58 @@ export async function checkCapsuleCompatibility(input: {
    */
   readonly compileInstallUx?: boolean;
   readonly signal?: AbortSignal;
+  /**
+   * Bounds the complete Source sync and compatibility response. The final
+   * compatibility POST is included; a server-side Run completing must never
+   * leave the dashboard waiting forever for a lost HTTP response.
+   */
+  readonly timeoutMs?: number;
   readonly onSourceCreated?: (sourceId: string) => void;
   readonly onSourceSyncProgress?: (
     progress: SourceSnapshotWaitProgress,
   ) => void;
   readonly onSourceSnapshot?: (snapshot: SourceSnapshot) => void;
-}): Promise<CapsuleCompatibilityResult> {
+}
+
+export async function checkCapsuleCompatibility(
+  input: CheckCapsuleCompatibilityInput,
+): Promise<CapsuleCompatibilityResult> {
+  if (input.timeoutMs === undefined) {
+    return await checkCapsuleCompatibilityRequest(input, input.signal);
+  }
+  if (!Number.isSafeInteger(input.timeoutMs) || input.timeoutMs <= 0) {
+    throw new TypeError("compatibility timeoutMs must be a positive integer");
+  }
+  const controller = new AbortController();
+  let timedOut = false;
+  const abortFromCaller = () => controller.abort(input.signal?.reason);
+  if (input.signal?.aborted) abortFromCaller();
+  else input.signal?.addEventListener("abort", abortFromCaller, { once: true });
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, input.timeoutMs);
+  try {
+    return await checkCapsuleCompatibilityRequest(input, controller.signal);
+  } catch (error) {
+    if (timedOut && isAbortError(error)) {
+      throw new ControlApiError(
+        0,
+        "request_timeout",
+        `compatibility preparation timed out after ${input.timeoutMs}ms`,
+      );
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+    input.signal?.removeEventListener("abort", abortFromCaller);
+  }
+}
+
+async function checkCapsuleCompatibilityRequest(
+  input: CheckCapsuleCompatibilityInput,
+  signal: AbortSignal | undefined,
+): Promise<CapsuleCompatibilityResult> {
   const sourceId =
     input.sourceId ??
     (
@@ -1634,13 +1680,14 @@ export async function checkCapsuleCompatibility(input: {
         defaultRef: input.ref,
         defaultPath: ".",
         autoSync: true,
+        signal,
         ...(input.authConnectionId
           ? { authConnectionId: input.authConnectionId }
           : {}),
       })
     ).source.id;
   input.onSourceCreated?.(sourceId);
-  const syncEnvelope = await syncSource(sourceId, { signal: input.signal });
+  const syncEnvelope = await syncSource(sourceId, { signal });
   const sourceSyncRunId = extractRunId(syncEnvelope);
   if (!sourceSyncRunId) {
     throw new ControlApiError(
@@ -1652,7 +1699,7 @@ export async function checkCapsuleCompatibility(input: {
   }
   const snapshot = await waitForLatestSourceSnapshot(sourceId, {
     runId: sourceSyncRunId,
-    signal: input.signal,
+    signal,
     onProgress: input.onSourceSyncProgress,
   });
   input.onSourceSnapshot?.(snapshot);
@@ -1687,6 +1734,7 @@ export async function checkCapsuleCompatibility(input: {
     readonly repositoryInstallUx?: RepositoryInstallUxPreview;
   }>(`${BASE}/sources/${encodeURIComponent(sourceId)}/compatibility-check`, {
     method: "POST",
+    signal,
     body: {
       sourceSnapshotId: snapshot.id,
       // Gate the pre-install check against the selected InstallConfig's policy
@@ -2125,9 +2173,11 @@ export async function createSource(input: {
   readonly defaultPath?: string;
   readonly authConnectionId?: string;
   readonly autoSync?: boolean;
+  readonly signal?: AbortSignal;
 }): Promise<CreateSourceResult> {
   return await controlFetch<CreateSourceResult>(`${BASE}/sources`, {
     method: "POST",
+    signal: input.signal,
     body: {
       workspaceId: input.workspaceId,
       name: input.name,

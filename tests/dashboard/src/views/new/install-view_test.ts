@@ -37,6 +37,17 @@ describe("single-screen install surface", () => {
     expect(view).not.toContain("checkingCompatibility() || !provider");
   });
 
+  test("preparation is bounded, names its current stage, and can be cancelled", () => {
+    const view = read("dashboard/src/views/new/InstallView.tsx");
+    expect(view).toContain("INSTALL_PREPARATION_TIMEOUT_MS");
+    expect(view).toContain("timeoutMs: INSTALL_PREPARATION_TIMEOUT_MS");
+    expect(view).toContain("onSourceSyncProgress:");
+    expect(view).toContain("onSourceSnapshot:");
+    expect(view).toContain("preparationStageHint()");
+    expect(view).toContain("activePreparationController?.abort()");
+    expect(view).toContain('t("common.cancel")');
+  });
+
   test("authoritative refs stay exact and prepared state is invalidated by edits", () => {
     const view = read("dashboard/src/views/new/InstallView.tsx");
     expect(view).not.toContain("refInputValue(");

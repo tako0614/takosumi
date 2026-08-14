@@ -33,6 +33,15 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.preparing": "Preparing your service",
   "installStore.preparingHint":
     "Checking the repository and gathering only the connections and changes it needs.",
+  "installStore.preparingWorkspace": "Confirming the selected workspace.",
+  "installStore.preparingConnections": "Reading available connections.",
+  "installStore.preparingSource": "Fetching the repository snapshot.",
+  "installStore.preparingCompatibility":
+    "Checking the repository against this environment.",
+  "installStore.preparingConfig": "Preparing the service setup fields.",
+  "installStore.preparingPlan": "Preparing the reviewable change plan.",
+  "installStore.preparingTimeout":
+    "Preparation took too long. No service was created; try again.",
   "installStore.compatibilityFailed":
     "This service cannot be added to the current environment.",
   "installStore.providerTitle": "A connection is needed",
