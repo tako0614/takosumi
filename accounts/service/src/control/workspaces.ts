@@ -708,9 +708,18 @@ async function createWorkspace(
 ): Promise<Response> {
   const body = await readJsonObject(request);
   if (!body) return errorJson("invalid_request", "invalid request", 400);
+  const type = Object.prototype.hasOwnProperty.call(body, "type")
+    ? workspaceTypeValue(body.type)
+    : "personal";
+  if (type === undefined) {
+    return errorJson(
+      "invalid_request",
+      "type must be personal or organization",
+      400,
+    );
+  }
   const handle = stringValue(body.handle);
   const displayName = stringValue(body.displayName) ?? handle;
-  const type = workspaceTypeValue(body.type) ?? "personal";
   if (!handle) {
     return errorJson("invalid_request", "handle is required", 400);
   }

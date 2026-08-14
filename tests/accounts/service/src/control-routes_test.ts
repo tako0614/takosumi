@@ -635,6 +635,96 @@ function context(
   };
 }
 
+function workspaceCreateFixture() {
+  const createCalls: Parameters<
+    ControlPlaneOperations["workspaces"]["createWorkspace"]
+  >[0][] = [];
+  const operations = {
+    workspaces: {
+      createWorkspace: async (
+        input: Parameters<
+          ControlPlaneOperations["workspaces"]["createWorkspace"]
+        >[0],
+      ) => {
+        createCalls.push(input);
+        return {
+          ...workspace,
+          ...input,
+          id: `ws_created_${createCalls.length}`,
+        };
+      },
+    },
+  } as unknown as ControlPlaneOperations;
+  return { operations, createCalls };
+}
+
+test("Workspace create rejects unknown types before calling canonical operations", async () => {
+  for (const [label, type] of [
+    ["team", "team"],
+    ["typo", "persoanl"],
+    ["null", null],
+    ["object", { kind: "organization" }],
+    ["number", 42],
+  ] as const) {
+    const fixture = workspaceCreateFixture();
+    const request = new Request("https://app.example.test/api/v1/workspaces", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        handle: `invalid-${label}`,
+        displayName: "Invalid Workspace",
+        type,
+      }),
+    });
+
+    const response = await handleWorkspaces(
+      context(fixture.operations, request),
+      ["workspaces"],
+      "POST",
+    );
+
+    expect(response?.status).toBe(400);
+    expect(await response?.json()).toMatchObject({
+      error: { code: "invalid_request" },
+    });
+    expect(fixture.createCalls).toHaveLength(0);
+  }
+});
+
+test("Workspace create defaults only an omitted type and preserves canonical types", async () => {
+  for (const [label, body, expectedType] of [
+    ["omitted", {}, "personal"],
+    ["personal", { type: "personal" }, "personal"],
+    ["organization", { type: "organization" }, "organization"],
+  ] as const) {
+    const fixture = workspaceCreateFixture();
+    const request = new Request("https://app.example.test/api/v1/workspaces", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        handle: `valid-${label}`,
+        displayName: "Valid Workspace",
+        ...body,
+      }),
+    });
+
+    const response = await handleWorkspaces(
+      context(fixture.operations, request),
+      ["workspaces"],
+      "POST",
+    );
+
+    expect(response?.status).toBe(201);
+    expect(fixture.createCalls).toHaveLength(1);
+    expect(fixture.createCalls[0]).toMatchObject({
+      handle: `valid-${label}`,
+      displayName: "Valid Workspace",
+      type: expectedType,
+      ownerUserId: "tsub_owner",
+    });
+  }
+});
+
 test("Project create/list/get routes are a facade over canonical operations", async () => {
   const fixture = operationsFixture();
   const createRequest = new Request(
