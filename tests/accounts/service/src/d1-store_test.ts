@@ -9,6 +9,7 @@ import {
 } from "../../../../accounts/service/src/d1-store.ts";
 import {
   __resetSessionHashSaltConfigForTesting,
+  hashSessionIdWithSalt,
   registerSessionHashSaltConfig,
 } from "../../../../accounts/service/src/session-hash-salt.ts";
 import { requireAccountsBearer } from "../../../../accounts/service/src/account-session.ts";
@@ -37,6 +38,45 @@ test("D1AccountsStore persists identity/session data without a Capsule mirror", 
 
   expect((await store.findAccount("tsub_d1"))?.email).toBe("d1@example.test");
   expect((await store.findAccountSession("sess_d1"))?.subject).toBe("tsub_d1");
+});
+
+test("D1AccountsStore keeps an explicit session salt immutable across interleaved stores", async () => {
+  const credential = "sess_interleaved_store_salt";
+  const saltA = "d1-explicit-session-salt-a";
+  const saltB = "d1-explicit-session-salt-b";
+  const hashA = await hashSessionIdWithSalt(credential, saltA);
+  const hashB = await hashSessionIdWithSalt(credential, saltB);
+  const dbA = new MemoryD1Database();
+  const dbB = new MemoryD1Database();
+  const storeA = new D1AccountsStore(dbA, { sessionHashSalt: saltA });
+  const storeB = new D1AccountsStore(dbB, { sessionHashSalt: saltB });
+
+  registerSessionHashSaltConfig({ salt: saltA });
+  await storeA.saveAccountSession({
+    sessionId: credential,
+    subject: "tsub_explicit_salt_a",
+    createdAt: 1_000,
+    expiresAt: 60_000,
+  });
+  expect(dbA.documents.has(documentKey("account_sessions", hashA))).toBe(true);
+
+  registerSessionHashSaltConfig({ salt: saltB });
+  await storeB.saveAccountSession({
+    sessionId: credential,
+    subject: "tsub_explicit_salt_b",
+    createdAt: 2_000,
+    expiresAt: 120_000,
+  });
+  expect(dbB.documents.has(documentKey("account_sessions", hashB))).toBe(true);
+
+  expect((await storeA.findAccountSession(credential))?.subject).toBe(
+    "tsub_explicit_salt_a",
+  );
+  await storeA.deleteAccountSession(credential);
+  expect(dbA.documents.has(documentKey("account_sessions", hashA))).toBe(
+    false,
+  );
+  expect(dbB.documents.has(documentKey("account_sessions", hashB))).toBe(true);
 });
 
 test("D1AccountsStore indexes Capsule OIDC registrations directly", async () => {

@@ -130,7 +130,10 @@ export type {
   RunGroupWithRunsLike,
 } from "./control-routes.ts";
 export { handleAuthenticatedControlRoute } from "./control-routes.ts";
-export type { LoginEmailAllowlist } from "./login-email-allowlist.ts";
+export {
+  rejectDisallowedPresentedSession,
+  type LoginEmailAllowlist,
+} from "./login-email-allowlist.ts";
 export type {
   PatWorkspaceMembership,
   PatWorkspaceMembershipReader,
@@ -154,7 +157,9 @@ export * from "./postgres-store.ts";
 export * from "./d1-store.ts";
 export {
   registerSessionHashSaltConfig,
+  resolveSessionHashSaltConfig,
   resolveSessionHashSalt,
+  type SessionHashSaltConfig,
 } from "./session-hash-salt.ts";
 export type { PasskeyChallengeIntent } from "./passkey-challenge-store.ts";
 

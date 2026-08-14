@@ -5,6 +5,7 @@ import { readEnvVar } from "../../../../accounts/service/src/read-env.ts";
 import {
   __resetSessionHashSaltConfigForTesting,
   registerSessionHashSaltConfig,
+  resolveSessionHashSaltConfig,
   resolveSessionHashSalt,
 } from "../../../../accounts/service/src/session-hash-salt.ts";
 
@@ -63,6 +64,28 @@ test("resolveSessionHashSalt prefers a registered salt over env and markers", ()
     expect(resolveSessionHashSalt(SALT_ENV)).toEqual(
       "registered-operator-secret",
     );
+  } finally {
+    restoreEnv(snapshot);
+    __resetSessionHashSaltConfigForTesting();
+  }
+});
+
+test("resolveSessionHashSaltConfig is pure across explicit Worker environments", () => {
+  const snapshot = snapshotEnv([SALT_ENV, ...PRODUCTION_MARKERS]);
+  try {
+    __resetSessionHashSaltConfigForTesting();
+    delete process.env[SALT_ENV];
+    process.env["NODE_ENV"] = "production";
+    registerSessionHashSaltConfig({ salt: "legacy-registered-secret" });
+
+    expect(
+      resolveSessionHashSaltConfig({ salt: "per-store-worker-secret" }),
+    ).toBe("per-store-worker-secret");
+    expect(resolveSessionHashSaltConfig({ allowDevFallback: true })).toBe(
+      "takosumi:dev-only-session-hash-salt",
+    );
+    expect(resolveSessionHashSaltConfig({})).toBeUndefined();
+    expect(resolveSessionHashSalt(SALT_ENV)).toBe("legacy-registered-secret");
   } finally {
     restoreEnv(snapshot);
     __resetSessionHashSaltConfigForTesting();

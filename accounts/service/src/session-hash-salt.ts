@@ -15,11 +15,10 @@
 // (NODE_ENV / TAKOSUMI_ENV) AND the salt env are ALL invisible to this resolver.
 // Relying on those markers therefore failed OPEN on Workers — a Workers
 // operator who forgot to wire the salt silently served real sessions hashed
-// with the public dev salt. To fix-close that, the Workers entry MUST register
-// its salt (and, for dev/test, an explicit dev-fallback opt-in) via
-// `registerSessionHashSaltConfig` before the store hashes any session id. When
-// running on Workers with no registered salt and no explicit dev opt-in, the
-// resolver throws instead of using the dev fallback.
+// with the public dev salt. Worker compositions now resolve binding-backed
+// configuration explicitly and inject the result into each store. Legacy
+// callers may still register a salt (and, for dev/test, an explicit fallback
+// opt-in); without either explicit path, Workers refuse the dev fallback.
 
 import { isWorkersRuntime, readEnvVar } from "./read-env.ts";
 import { sha256Text } from "./encoding.ts";
@@ -54,7 +53,7 @@ export async function hashSessionIdWithSalt(
   return await sha256Text(`${salt}:${sessionId}`);
 }
 
-interface RegisteredSaltConfig {
+export interface SessionHashSaltConfig {
   /** Explicit salt injected from a Worker env binding (preferred on Workers). */
   readonly salt?: string;
   /**
@@ -65,18 +64,30 @@ interface RegisteredSaltConfig {
   readonly allowDevFallback?: boolean;
 }
 
-let registeredSaltConfig: RegisteredSaltConfig | undefined;
+let registeredSaltConfig: SessionHashSaltConfig | undefined;
 
 /**
- * Register the per-deployment session hash salt from a runtime that cannot
- * expose process-level env (e.g. Cloudflare Workers, which surface secrets via
- * `env` bindings). Call this once during Worker bootstrap with the salt parsed
- * from the Worker `env` binding. Pass `allowDevFallback: true` ONLY in
- * dev/test Workers entries; production Workers entries must register a real
- * salt (or nothing, which then fails closed on Workers).
+ * Resolve one explicitly supplied runtime's salt without reading or mutating
+ * module-global registration or process state. Cloudflare compositions use the
+ * returned value as immutable per-store configuration.
+ */
+export function resolveSessionHashSaltConfig(
+  config: SessionHashSaltConfig,
+): string | undefined {
+  const salt = config.salt;
+  if (salt && salt.length > 0) return salt;
+  return config.allowDevFallback ? DEV_ONLY_SESSION_HASH_SALT : undefined;
+}
+
+/**
+ * Legacy registration path for a runtime that cannot expose process-level env.
+ * New request-time compositions should prefer `resolveSessionHashSaltConfig`
+ * and inject its result into an immutable store instance. Pass
+ * `allowDevFallback: true` ONLY in dev/test runtimes; production runtimes must
+ * supply a real salt (or nothing, which then fails closed on Workers).
  */
 export function registerSessionHashSaltConfig(
-  config: RegisteredSaltConfig,
+  config: SessionHashSaltConfig,
 ): void {
   registeredSaltConfig = config;
 }

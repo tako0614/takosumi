@@ -18,12 +18,6 @@ export interface LoginEmailIdentity {
   readonly emailVerified?: boolean;
 }
 
-const ALLOWED_CREDENTIAL_CACHE_TTL_MS = 5_000;
-const MAX_ALLOWED_CREDENTIAL_CACHE_ENTRIES = 512;
-
-const allowedCredentialCache = new Map<string, number>();
-const pendingAllowlistChecks = new Map<string, Promise<Response | undefined>>();
-
 export function normalizeLoginEmail(
   value: string | undefined,
 ): string | undefined {
@@ -123,24 +117,10 @@ export async function rejectDisallowedPresentedSession(input: {
 }): Promise<Response | undefined> {
   if (!input.allowlist || !input.credential) return undefined;
   const credential = input.credential;
-  const now = Date.now();
-  const cachedUntil = allowedCredentialCache.get(credential);
-  if (cachedUntil !== undefined && cachedUntil > now) return undefined;
-  if (cachedUntil !== undefined) allowedCredentialCache.delete(credential);
-
-  const pending = pendingAllowlistChecks.get(credential);
-  if (pending) return await pending;
-
-  const check = rejectDisallowedPresentedCredentialUncached(
+  return await rejectDisallowedPresentedCredential(
     { ...input, credential, allowlist: input.allowlist },
-    now,
+    Date.now(),
   );
-  pendingAllowlistChecks.set(credential, check);
-  try {
-    return await check;
-  } finally {
-    pendingAllowlistChecks.delete(credential);
-  }
 }
 
 /** One live account-plane credential resolved from the presented value. */
@@ -149,11 +129,9 @@ interface PresentedCredential {
   readonly subject: TakosumiSubject;
   /** Owning account when the store resolved it alongside the credential. */
   readonly account?: TakosumiAccountRecord;
-  /** Credential expiry, used to bound how long an allow decision is cached. */
-  readonly expiresAt: number;
 }
 
-async function rejectDisallowedPresentedCredentialUncached(
+async function rejectDisallowedPresentedCredential(
   input: {
     readonly request: Request;
     readonly store: AccountsStore;
@@ -172,25 +150,19 @@ async function rejectDisallowedPresentedCredentialUncached(
   // answer to the route's own authentication, exactly as before.
   if (presented.length === 0) return undefined;
 
-  let allowedUntil = now + ALLOWED_CREDENTIAL_CACHE_TTL_MS;
   let disallowedSession = false;
   let disallowed = false;
   for (const candidate of presented) {
     const account =
       candidate.account ?? (await input.store.findAccount(candidate.subject));
     if (account && loginEmailIsAllowed(account, input.allowlist)) {
-      allowedUntil = Math.min(allowedUntil, candidate.expiresAt);
       continue;
     }
     disallowed = true;
     if (candidate.kind === "session") disallowedSession = true;
   }
-  if (!disallowed) {
-    rememberAllowedCredential(input.credential, allowedUntil);
-    return undefined;
-  }
+  if (!disallowed) return undefined;
 
-  allowedCredentialCache.delete(input.credential);
   if (disallowedSession) {
     // Browser sessions keep their existing revocation behaviour: the session
     // record is deleted and the cookie cleared on the spot.
@@ -227,7 +199,6 @@ async function resolvePresentedCredentials(
       kind: "session",
       subject: session.subject,
       ...(resolved.sessionAccount ? { account: resolved.sessionAccount } : {}),
-      expiresAt: session.expiresAt,
     });
   }
   const accessToken = resolved.accessToken;
@@ -240,7 +211,6 @@ async function resolvePresentedCredentials(
     presented.push({
       kind: "oauth-access-token",
       subject: accessToken.takosumiSubject,
-      expiresAt: accessToken.expiresAt,
     });
   }
   const personalAccessToken = resolved.personalAccessToken;
@@ -251,7 +221,6 @@ async function resolvePresentedCredentials(
     presented.push({
       kind: "personal-access-token",
       subject: personalAccessToken.subject,
-      expiresAt: personalAccessToken.expiresAt ?? Number.POSITIVE_INFINITY,
     });
   }
   return presented;
@@ -271,18 +240,6 @@ async function resolveCredentialCandidatesSeparately(
     ...(accessToken ? { accessToken } : {}),
     ...(personalAccessToken ? { personalAccessToken } : {}),
   };
-}
-
-function rememberAllowedCredential(
-  credential: string,
-  expiresAt: number,
-): void {
-  allowedCredentialCache.set(credential, expiresAt);
-  if (allowedCredentialCache.size <= MAX_ALLOWED_CREDENTIAL_CACHE_ENTRIES) {
-    return;
-  }
-  const oldest = allowedCredentialCache.keys().next().value;
-  if (oldest) allowedCredentialCache.delete(oldest);
 }
 
 export function accountMatchesLoginAllowlist(

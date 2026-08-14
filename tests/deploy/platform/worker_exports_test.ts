@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import worker, * as platformWorker from "../../../deploy/platform/worker.ts";
+import { rejectDisallowedCloudflarePresentedSession } from "../../../deploy/accounts-cloudflare/src/handler.ts";
 import {
   D1_ACCOUNTS_STORE_INIT_SQL,
   type D1Database,
@@ -20,6 +21,12 @@ test("platform Worker exposes only handler-compatible runtime exports", () => {
       "function",
     );
   }
+});
+
+test("platform publicly composes the canonical Cloudflare presented-session gate", () => {
+  expect(platformWorker.rejectDisallowedCloudflarePresentedSession).toBe(
+    rejectDisallowedCloudflarePresentedSession,
+  );
 });
 
 test("platform exports its already-composed Capsule execution authority", async () => {

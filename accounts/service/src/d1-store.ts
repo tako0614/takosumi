@@ -8,7 +8,10 @@ import {
   sqliteTable,
   text,
 } from "drizzle-orm/sqlite-core";
-import { hashSessionId } from "./session-hash-salt.ts";
+import {
+  hashSessionId,
+  hashSessionIdWithSalt,
+} from "./session-hash-salt.ts";
 // hashSecret is the canonical sha256:<base64url> hasher shared across the
 // package (previously re-implemented locally). Aliased to keep call sites.
 import { sha256Text as hashSecret } from "./encoding.ts";
@@ -77,6 +80,12 @@ export interface D1AccountsStoreOptions {
    * responsibility and this store must never issue DDL.
    */
   readonly schemaMode?: D1AccountsSchemaMode;
+  /**
+   * Immutable deployment salt for account-session hashes. Cloudflare request
+   * stores pass this explicitly so concurrent environments never share the
+   * legacy module-global salt registration.
+   */
+  readonly sessionHashSalt?: string;
 }
 
 /** Canonical physical table names shared with narrow in-process D1 readers. */
@@ -552,12 +561,14 @@ export class D1AccountsStore implements AccountsStore {
   readonly #db: D1Database;
   readonly #documents: D1AccountsDocumentIndexStore;
   readonly #schemaMode: D1AccountsSchemaMode;
+  readonly #sessionHashSalt: string | undefined;
   #initialized?: Promise<void>;
 
   constructor(db: D1Database, options: D1AccountsStoreOptions = {}) {
     this.#db = db;
     this.#documents = new D1AccountsDocumentIndexStore(db);
     this.#schemaMode = resolveD1AccountsSchemaMode(options.schemaMode);
+    this.#sessionHashSalt = options.sessionHashSalt;
   }
 
   async initialize(): Promise<void> {
@@ -570,11 +581,18 @@ export class D1AccountsStore implements AccountsStore {
     await this.#initialized;
   }
 
+  #hashSessionId(sessionId: string): Promise<string> {
+    const salt = this.#sessionHashSalt;
+    return salt === undefined
+      ? hashSessionId(sessionId)
+      : hashSessionIdWithSalt(sessionId, salt);
+  }
+
   async resolveAccountsBearerCandidates(
     token: string,
   ): Promise<AccountsBearerCredentialCandidates> {
     const [sessionHash, tokenHash] = await Promise.all([
-      hashSessionId(token),
+      this.#hashSessionId(token),
       hashSecret(token),
     ]);
     const result = await this.#db
@@ -698,7 +716,7 @@ export class D1AccountsStore implements AccountsStore {
     // `TAKOSUMI_ACCOUNT_SESSION_HASH_SALT`. The raw sessionId is preserved
     // in-memory on the returned record so logging/debugging keeps the
     // raw identity.
-    const sessionHash = await hashSessionId(record.sessionId);
+    const sessionHash = await this.#hashSessionId(record.sessionId);
     await this.#put("account_sessions", sessionHash, {
       ...record,
       sessionId: sessionHash,
@@ -708,7 +726,7 @@ export class D1AccountsStore implements AccountsStore {
   async findAccountSession(
     sessionId: string,
   ): Promise<AccountSessionRecord | undefined> {
-    const sessionHash = await hashSessionId(sessionId);
+    const sessionHash = await this.#hashSessionId(sessionId);
     const stored = await this.#get<AccountSessionRecord>(
       "account_sessions",
       sessionHash,
@@ -720,7 +738,7 @@ export class D1AccountsStore implements AccountsStore {
   }
 
   async deleteAccountSession(sessionId: string): Promise<void> {
-    const sessionHash = await hashSessionId(sessionId);
+    const sessionHash = await this.#hashSessionId(sessionId);
     await this.#delete("account_sessions", sessionHash);
   }
 
@@ -730,8 +748,8 @@ export class D1AccountsStore implements AccountsStore {
   ): Promise<boolean> {
     await this.initialize();
     const [previousHash, nextHash] = await Promise.all([
-      hashSessionId(previousSessionId),
-      hashSessionId(next.sessionId),
+      this.#hashSessionId(previousSessionId),
+      this.#hashSessionId(next.sessionId),
     ]);
     if (previousHash === nextHash) return false;
     const nextDocument = JSON.stringify({ ...next, sessionId: nextHash });
