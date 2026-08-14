@@ -567,9 +567,15 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     return workspace.id;
   };
 
-  const loadConnections = async (workspace: string, signal: AbortSignal) => {
+  const loadConnections = async (
+    workspace: string,
+    signal: AbortSignal,
+    includeSourceConnections: boolean,
+  ) => {
     const [all, releaseOwnedProviders] = await Promise.all([
-      listConnectionsWithSignal(workspace, signal),
+      includeSourceConnections
+        ? listConnectionsWithSignal(workspace, signal)
+        : Promise.resolve([] as ProviderConnection[]),
       listReleaseOwnedProviderConnectionsWithSignal(workspace, signal),
     ]);
     const providers = [
@@ -714,7 +720,11 @@ function Inner(props: { readonly installingPrincipalId: string }) {
         return;
       }
       setPreparationStage("connections");
-      const providers = await loadConnections(workspace, controller.signal);
+      const providers = await loadConnections(
+        workspace,
+        controller.signal,
+        listing() === null,
+      );
       if (controller.signal.aborted || !workspaceIsCurrent(workspace)) {
         setError(
           preparationTimedOut ? t("installStore.preparingTimeout") : undefined,

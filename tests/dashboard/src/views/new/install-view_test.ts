@@ -43,7 +43,9 @@ describe("single-screen install surface", () => {
     expect(view).toContain("const preparationTimeout = setTimeout(");
     expect(view).toContain("preparationTimedOut = true;");
     expect(view).toContain("timeoutMs: INSTALL_PREPARATION_TIMEOUT_MS");
-    expect(view).toContain("loadConnections(workspace, controller.signal)");
+    expect(view).toContain("listing() === null");
+    expect(view).toContain("includeSourceConnections");
+    expect(view).toContain("Promise.resolve([] as ProviderConnection[])");
     expect(view).toContain("listConnectionsWithSignal(workspace, signal)");
     expect(view).toContain(
       "listReleaseOwnedProviderConnectionsWithSignal(workspace, signal)",
@@ -77,7 +79,7 @@ describe("single-screen install surface", () => {
     expect(view).not.toContain('phase() !== "configure" && connectionsLoaded()');
     expect(view).toContain("const prepareInstall = async () =>");
     expect(view).toContain(
-      "const providers = await loadConnections(workspace, controller.signal);",
+      "const providers = await loadConnections(",
     );
   });
 
