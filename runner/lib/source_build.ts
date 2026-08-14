@@ -3,7 +3,7 @@ import { isAbsolute, join, resolve } from "node:path";
 import {
   isRepositorySourceBuildOutputPath,
   isRepositorySourceBuildRelativePath,
-} from "takosumi-contract/repository-manifest";
+} from "../../contract/repository-manifest.ts";
 import type { CommandContext, SourceBuildConfig } from "./types.ts";
 import { SOURCE_BUILD_CACHE_DIR_ENV } from "./constants.ts";
 import {

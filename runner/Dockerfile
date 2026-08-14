@@ -108,7 +108,10 @@ COPY runner/entrypoint.ts ./runner/entrypoint.ts
 # container fails at runtime when entrypoint.ts imports ./lib/*.
 COPY runner/lib/ ./runner/lib/
 COPY runner/start.sh ./runner/start.sh
-RUN chmod 0755 ./runner/start.sh
+# Sealed/private source checkouts may have owner-only source modes. COPY keeps
+# those modes, so normalize only the immutable runtime closure before USER bun.
+RUN chmod -R a+rX ./contract ./runner \
+    && chmod 0755 ./runner/start.sh
 
 # Provider/module code is untrusted workload input. The reference runner must
 # not execute it as container root. Keep only the bounded run/cache directories
