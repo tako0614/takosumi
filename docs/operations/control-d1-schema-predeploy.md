@@ -219,34 +219,118 @@ incident/restore procedure, not ad hoc SQL. Run staging functional checks
 before repeating backup, apply, and verify with `--environment production` and
 the same manifest digest.
 
-### Forward-repair release for an older fence source
+### Sealed in-place release recovery
 
-If an active or inactive in-place fence was created by an older clean OSS
-commit, a reviewed repair may release that exact fence from a newer clean
-checkout without rerunning schema work:
+Use this path only for a reviewed in-place fence whose OSS schema work already
+completed and whose release requires an explicit recovery authorization. It
+does not apply migrations, upgrade the maintenance table, repair guards, or
+reuse a hosted/candidate release controller.
+
+First select one exact release timestamp and run the read-only status command:
 
 ```bash
 export TAKOSUMI_CONTROL_D1_SOURCE_COMMIT="$(git rev-parse HEAD)"
+release_timestamp="2026-08-05T12:00:05.000Z"
+
+bun run control-d1-schema:release-status -- \
+  --environment staging \
+  --confirm-manifest "$control_manifest_digest" \
+  --released-at "$release_timestamp" \
+  > "$PRIVATE_EVIDENCE_DIR/control-d1-release-status.json"
+```
+
+A releasable transcript has top-level `status: "ready"` and
+`maintenanceStatus: "active"`. It proves the stored and recomputed fence ID,
+original fence source, current clean tool source, manifest, environment,
+role/policy, source-export state, predecessor lineage, maintenance flags and
+timestamps, selected-target digest, current maintenance-table shape, stable
+`schema_version`, exact OSS schema and migration ledger, integrity/FK checks,
+canonical guard count/digests, and exact generated release-plan budgets/digest.
+The maintenance proof includes a sanitized exact DDL digest and required-CHECK
+result; it never emits the DDL itself. All three reserved recovery relations
+must be absent.
+It emits no native account/database ID, provider token, or raw SQL.
+
+Copy every confirmation from that same ready transcript. Do not recompute or
+substitute a value:
+
+```bash
+release_status="$PRIVATE_EVIDENCE_DIR/control-d1-release-status.json"
 
 bun scripts/control-d1-schema.ts release \
   --environment staging \
   --confirm-manifest "$control_manifest_digest" \
-  --confirm-fence-source-commit <older-40-hex-commit> \
+  --released-at "$release_timestamp" \
+  --confirm-release-status-digest "$(jq -er .statusDigest "$release_status")" \
+  --confirm-release-readiness-digest "$(jq -er .releaseReadinessDigest "$release_status")" \
+  --confirm-fence-id "$(jq -er .fence.fenceId "$release_status")" \
+  --confirm-fence-source-commit "$(jq -er .fence.originalSourceCommit "$release_status")" \
+  --confirm-tool-source-commit "$(jq -er .fence.currentToolSourceCommit "$release_status")" \
+  --confirm-target-digest "$(jq -er .fence.targetDigest "$release_status")" \
   > "$PRIVATE_EVIDENCE_DIR/control-d1-forward-repair-release.json"
 ```
 
+Immediately before dispatch, `release` recomputes the complete semantic status
+and compares every confirmation. Its only mutation is one atomic D1 Import:
+it creates guard-inventory, migration-ledger, and self-checking assertion
+relations without `IF NOT EXISTS`, populates the expected inventories in
+measured chunks, atomically checks the exact maintenance DDL, schema version,
+migration ledger, table/guard identity, integrity and foreign keys, then
+inserts the compact result into the assertion relation. Only that successful
+self-contained assertion is followed by the unconditional inactive update,
+preselected timestamp/authorization receipt, exact guard drops, and removal of
+all three relations. Every rendered statement is strictly below
+100,000 UTF-8 bytes and uses zero bindings (below the 100-binding contract);
+the complete rendered Import is measured separately. Any false predicate or
+mid-Import error rolls back the release and keeps the fence and guards active.
+A pre-existing reserved relation is a status failure and is never auto-dropped.
+
+The mutating command dispatches at most once. If its acknowledgement is lost,
+do **not** rerun `release`. Use only the read-only status command with every
+sealed value from the original active transcript and the identical timestamp:
+
+```bash
+bun run control-d1-schema:release-status -- \
+  --environment staging \
+  --confirm-manifest "$control_manifest_digest" \
+  --released-at "$release_timestamp" \
+  --confirm-release-status-digest "$(jq -er .statusDigest "$release_status")" \
+  --confirm-release-authorization-digest "$(jq -er .releaseAuthorizationDigest "$release_status")" \
+  --confirm-release-readiness-digest "$(jq -er .releaseReadinessDigest "$release_status")" \
+  --confirm-fence-id "$(jq -er .fence.fenceId "$release_status")" \
+  --confirm-fence-source-commit "$(jq -er .fence.originalSourceCommit "$release_status")" \
+  --confirm-tool-source-commit "$(jq -er .fence.currentToolSourceCommit "$release_status")" \
+  --confirm-target-digest "$(jq -er .fence.targetDigest "$release_status")" \
+  > "$PRIVATE_EVIDENCE_DIR/control-d1-release-receipt-status.json"
+```
+
+An exact committed receipt reports `status: "released"`,
+`maintenanceStatus: "inactive"`, `receiptMatchesAuthorization: true`,
+`receiptMatchesReleaseReadiness: true`, and
+`receiptConfirmationsExact: true`. A reconciliation invocation that still
+finds an active fence reports a non-ready ambiguous-receipt issue and cannot be
+reused as a fresh release preflight. Any active or mismatched result is
+investigation evidence, never permission for an automatic second release.
+
+The separate provider-free capability command exercises a 221-user-table,
+657-guard **worst-case regression fixture**. Those numbers are not a claim
+about any hosted production database:
+
+```bash
+bun run control-d1-schema:release-recovery-capability \
+  > "$PRIVATE_EVIDENCE_DIR/control-d1-release-recovery-capability.json"
+```
+
+Its `@v2` transcript proves the bounded plan, exact local REST/Import success,
+and injected mid-Import rollback. It explicitly reports
+`targetAuthorization.status: "not_authorized"`: local SQLite evidence cannot
+authorize a target. Disposable live D1 exact-shape success and injected
+rollback evidence remain a separate operator-owned requirement. The existing
+`release-capability` `@v1` command and its hosted consumer are unchanged.
+
 The repair checkout must be clean and its actual `HEAD` must equal
-`TAKOSUMI_CONTROL_D1_SOURCE_COMMIT`; the confirmation does not override that
-source check. The current checkout builds the exact current manifest, while
-`--confirm-fence-source-commit` identifies the older fence source only. The
-release command matches the active fence or durable inactive receipt against
-that source, the current manifest, selected environment, and selected
-database, then uses the existing atomic guard predicate and release readback.
-It is accepted only by `release`, never applies a schema or migration, and
-fails closed on any source, manifest, environment, database, or fence mismatch.
-The transcript's `sourceCommit` is the current repair checkout and
-`confirmedFenceSourceCommit` is the separately confirmed older fence source;
-no provider credentials or raw provider response is emitted.
+`TAKOSUMI_CONTROL_D1_SOURCE_COMMIT`; confirming an older fence source never
+overrides that check.
 
 Schema migration is forward-only. A Worker rollback must remain compatible
 with the migrated schema; use a reviewed forward repair or an approved D1

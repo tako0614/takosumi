@@ -6,6 +6,8 @@ import {
   buildControlD1SchemaPlan,
   ControlD1SchemaError,
   fenceControlD1Schema,
+  readControlD1ReleaseStatus,
+  releaseControlD1InPlaceRecovery,
   releaseControlD1Candidate,
   reconcileControlD1CandidateRelease,
   type ControlD1SchemaPlan,
@@ -15,8 +17,6 @@ import {
 } from "./control_d1_schema.ts";
 import {
   ControlD1MaintenanceError,
-  releaseControlD1MaintenanceFence,
-  readControlD1MaintenanceReleaseReceipt,
   readControlD1MaintenanceState,
   type ControlD1MaintenanceFence,
 } from "../../worker/src/d1_schema_maintenance.ts";
@@ -30,6 +30,12 @@ import {
   type ControlD1ReleaseCapability,
   ControlD1ReleaseCapabilityError,
 } from "./control_d1_release_capability.ts";
+import {
+  buildControlD1ReleaseRecoveryCapability,
+  CONTROL_D1_RELEASE_RECOVERY_CAPABILITY_KIND,
+  type ControlD1ReleaseRecoveryCapability,
+  ControlD1ReleaseRecoveryCapabilityError,
+} from "./control_d1_release_recovery_capability.ts";
 
 type Command =
   | "plan"
@@ -42,7 +48,9 @@ type Command =
   | "freeze"
   | "apply"
   | "release"
-  | "release-capability";
+  | "release-status"
+  | "release-capability"
+  | "release-recovery-capability";
 type Environment = "staging" | "production";
 
 interface ParsedArgs {
@@ -55,8 +63,12 @@ interface ParsedArgs {
   readonly confirmFenceId?: string;
   readonly confirmFenceDigest?: string;
   readonly confirmReleaseReadinessDigest?: string;
+  readonly confirmReleaseAuthorizationDigest?: string;
+  readonly confirmReleaseStatusDigest?: string;
   readonly releasedAt?: string;
   readonly confirmFenceSourceCommit?: string;
+  readonly confirmToolSourceCommit?: string;
+  readonly confirmTargetDigest?: string;
   readonly dryRun: boolean;
   readonly retainMaintenanceFence: boolean;
   readonly confirmPredecessorSource?: string;
@@ -93,6 +105,9 @@ interface CliDependencies {
   readonly buildReleaseCapability?: (
     options: Readonly<{ readonly sourceCommit: string }>,
   ) => Promise<ControlD1ReleaseCapability>;
+  readonly buildReleaseRecoveryCapability?: (
+    options: Readonly<{ readonly sourceCommit: string }>,
+  ) => Promise<ControlD1ReleaseRecoveryCapability>;
 }
 
 interface TranscriptProvenance {
@@ -115,6 +130,18 @@ export async function runControlD1SchemaCli(
         JSON.stringify(
           {
             kind: CONTROL_D1_RELEASE_CAPABILITY_KIND,
+            status: "failed",
+            failureCode: "arguments_invalid",
+          },
+          null,
+          2,
+        ),
+      );
+    } else if (argv[0] === "release-recovery-capability") {
+      write(
+        JSON.stringify(
+          {
+            kind: CONTROL_D1_RELEASE_RECOVERY_CAPABILITY_KIND,
             status: "failed",
             failureCode: "arguments_invalid",
           },
@@ -169,6 +196,48 @@ export async function runControlD1SchemaCli(
     }
   }
 
+  if (args.command === "release-recovery-capability") {
+    try {
+      const source = await (
+        dependencies.inspectSourceCheckout ?? inspectSourceCheckout
+      )();
+      const requestedSourceCommit =
+        dependencies.sourceCommit ?? env.TAKOSUMI_CONTROL_D1_SOURCE_COMMIT;
+      const sourceCommitValueToUse = requestedSourceCommit
+        ? sourceCommit(requestedSourceCommit)
+        : source.head;
+      if (source.head !== sourceCommitValueToUse) {
+        throw new ControlD1ReleaseRecoveryCapabilityError(
+          "source_commit_mismatch",
+        );
+      }
+      if (!source.clean) {
+        throw new ControlD1ReleaseRecoveryCapabilityError(
+          "source_checkout_dirty",
+        );
+      }
+      const capability = await (
+        dependencies.buildReleaseRecoveryCapability ??
+        buildControlD1ReleaseRecoveryCapability
+      )({ sourceCommit: sourceCommitValueToUse });
+      write(JSON.stringify(capability, null, 2));
+      return 0;
+    } catch (error) {
+      write(
+        JSON.stringify(
+          {
+            kind: CONTROL_D1_RELEASE_RECOVERY_CAPABILITY_KIND,
+            status: "failed",
+            failureCode: errorCode(error),
+          },
+          null,
+          2,
+        ),
+      );
+      return 1;
+    }
+  }
+
   const now = dependencies.now ?? (() => new Date().toISOString());
   let provenance: TranscriptProvenance;
   try {
@@ -210,6 +279,7 @@ export async function runControlD1SchemaCli(
       args.command === "fence" ||
       args.command === "freeze" ||
       args.command === "release" ||
+      args.command === "release-status" ||
       args.command === "candidate-verify" ||
       args.command === "candidate-release" ||
       args.command === "candidate-release-status" ||
@@ -232,6 +302,7 @@ export async function runControlD1SchemaCli(
     args.command === "fence" ||
     args.command === "freeze" ||
     args.command === "release" ||
+    args.command === "release-status" ||
     args.command === "candidate-verify" ||
     args.command === "candidate-release" ||
     args.command === "candidate-release-status" ||
@@ -397,83 +468,51 @@ export async function runControlD1SchemaCli(
       return 0;
     }
 
-    if (args.command === "release") {
-      const expectedFenceSourceCommit =
-        args.confirmFenceSourceCommit ?? provenance.sourceCommit;
-      const state = await readControlD1MaintenanceState(remote.database);
-      const fence =
-        state.status === "active"
-          ? state.fence
-          : await readControlD1MaintenanceReleaseReceipt(remote.database);
-      if (
-        !fenceMatchesRelease(fence, {
-          sourceCommit: expectedFenceSourceCommit,
-          manifestDigest: plan.manifestDigest,
-          environment: args.environment,
-          databaseId: remote.databaseId ?? null,
-        })
-      ) {
-        throw new ControlD1SchemaError("maintenance_fence_release_mismatch");
+    if (args.command === "release" || args.command === "release-status") {
+      if (!remote.databaseId || !args.releasedAt) {
+        throw new ControlD1SchemaError("release_status_target_required");
       }
-      const preReleaseVerification = await verifyControlD1Schema(
-        remote.database,
-        plan,
-        { allowActiveMaintenanceFence: true },
-      );
-      if (preReleaseVerification.status !== "ready") {
-        throw new ControlD1SchemaError("pre_release_verification_failed");
-      }
-      if (state.status === "active") {
-        await releaseControlD1MaintenanceFence(
-          remote.database,
-          fence,
-          provenance.generatedAt,
-        );
-      }
-      const released = await readControlD1MaintenanceState(remote.database);
-      if (released.status !== "inactive") {
-        throw new ControlD1SchemaError("maintenance_fence_release_failed");
-      }
-      if (args.confirmFenceSourceCommit) {
-        const releasedFence = await readControlD1MaintenanceReleaseReceipt(
-          remote.database,
-        );
-        if (
-          !fenceMatchesRelease(releasedFence, {
-            sourceCommit: expectedFenceSourceCommit,
-            manifestDigest: plan.manifestDigest,
-            environment: args.environment,
-            databaseId: remote.databaseId ?? null,
-          }) ||
-          releasedFence?.fenceId !== fence?.fenceId
-        ) {
-          throw new ControlD1SchemaError("maintenance_fence_release_failed");
-        }
-      }
+      const statusOptions = {
+        currentToolSourceCommit: provenance.sourceCommit,
+        environment: args.environment,
+        manifestDigest: plan.manifestDigest,
+        targetDatabaseId: remote.databaseId,
+        targetDigest: remote.configurationDigest,
+        releasedAt: args.releasedAt,
+        ...(args.command === "release-status"
+          ? releaseStatusReceiptConfirmations(args)
+          : {}),
+      } as const;
+      const releaseStatus =
+        args.command === "release-status"
+          ? await readControlD1ReleaseStatus(
+              remote.database,
+              plan,
+              statusOptions,
+            )
+          : await releaseControlD1InPlaceRecovery(
+              remote.database,
+              plan,
+              {
+                ...statusOptions,
+                ...releaseRecoveryConfirmations(args),
+              },
+            );
       write(
         JSON.stringify(
           {
-            kind: "takosumi.control-d1-schema-transcript@v1",
-            mode: "release",
-            environment: args.environment,
-            status: "released",
-            dryRun: false,
-            ...provenance,
-            ...(args.confirmFenceSourceCommit
-              ? {
-                  confirmedFenceSourceCommit: args.confirmFenceSourceCommit,
-                }
-              : {}),
-            ...planSummary(plan),
-            configurationDigest: remote.configurationDigest,
-            maintenanceFence: fence,
-            maintenanceStatus: "released",
+            ...releaseStatus,
+            mode: args.command,
+            generatedAt: provenance.generatedAt,
           },
           null,
           2,
         ),
       );
-      return 0;
+      return releaseStatus.status === "ready" ||
+        releaseStatus.status === "released"
+        ? 0
+        : 1;
     }
 
     const maintenanceDrainMilliseconds =
@@ -571,27 +610,6 @@ export async function runControlD1SchemaCli(
     );
     return 1;
   }
-}
-
-function fenceMatchesRelease(
-  fence: ControlD1MaintenanceFence | null,
-  expected: {
-    readonly sourceCommit: string;
-    readonly manifestDigest: string;
-    readonly environment: Environment;
-    readonly databaseId: string | null;
-  },
-): fence is ControlD1MaintenanceFence {
-  return Boolean(
-    fence &&
-    fence.sourceCommit === expected.sourceCommit &&
-    fence.manifestDigest === expected.manifestDigest &&
-    fence.environment === expected.environment &&
-    fence.databaseRole === "in_place" &&
-    fence.releasePolicy === "in_place" &&
-    fence.databaseId === expected.databaseId &&
-    fence.sourceExportSha256 === null,
-  );
 }
 
 function fenceTranscript(input: {
@@ -899,11 +917,17 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     command !== "freeze" &&
     command !== "apply" &&
     command !== "release" &&
-    command !== "release-capability"
+    command !== "release-status" &&
+    command !== "release-capability" &&
+    command !== "release-recovery-capability"
   ) {
     throw new Error("command_invalid");
   }
-  if (command === "release-capability" && argv.length !== 1) {
+  if (
+    (command === "release-capability" ||
+      command === "release-recovery-capability") &&
+    argv.length !== 1
+  ) {
     throw new Error("release_capability_arguments_invalid");
   }
   let environment: Environment | undefined;
@@ -914,8 +938,12 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   let confirmFenceId: string | undefined;
   let confirmFenceDigest: string | undefined;
   let confirmReleaseReadinessDigest: string | undefined;
+  let confirmReleaseAuthorizationDigest: string | undefined;
+  let confirmReleaseStatusDigest: string | undefined;
   let releasedAt: string | undefined;
   let confirmFenceSourceCommit: string | undefined;
+  let confirmToolSourceCommit: string | undefined;
+  let confirmTargetDigest: string | undefined;
   let dryRun = false;
   let retainMaintenanceFence = false;
   let confirmPredecessorSource: string | undefined;
@@ -977,6 +1005,24 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
       }
       continue;
     }
+    if (arg === "--confirm-release-authorization-digest") {
+      confirmReleaseAuthorizationDigest = argv[++index]?.trim();
+      if (
+        !/^sha256:[0-9a-f]{64}$/u.test(
+          confirmReleaseAuthorizationDigest ?? "",
+        )
+      ) {
+        throw new Error("release_authorization_invalid");
+      }
+      continue;
+    }
+    if (arg === "--confirm-release-status-digest") {
+      confirmReleaseStatusDigest = argv[++index]?.trim();
+      if (!/^sha256:[0-9a-f]{64}$/u.test(confirmReleaseStatusDigest ?? "")) {
+        throw new Error("release_status_digest_invalid");
+      }
+      continue;
+    }
     if (arg === "--released-at") {
       releasedAt = argv[++index]?.trim();
       if (!releasedAt) throw new Error("candidate_release_time_invalid");
@@ -986,6 +1032,20 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
       confirmFenceSourceCommit = argv[++index]?.trim();
       if (!/^[0-9a-f]{40}$/u.test(confirmFenceSourceCommit ?? "")) {
         throw new Error("fence_source_commit_invalid");
+      }
+      continue;
+    }
+    if (arg === "--confirm-tool-source-commit") {
+      confirmToolSourceCommit = argv[++index]?.trim();
+      if (!/^[0-9a-f]{40}$/u.test(confirmToolSourceCommit ?? "")) {
+        throw new Error("tool_source_commit_invalid");
+      }
+      continue;
+    }
+    if (arg === "--confirm-target-digest") {
+      confirmTargetDigest = argv[++index]?.trim();
+      if (!/^sha256:[0-9a-f]{64}$/u.test(confirmTargetDigest ?? "")) {
+        throw new Error("target_digest_invalid");
       }
       continue;
     }
@@ -1017,7 +1077,11 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   if (command !== "apply" && retainMaintenanceFence) {
     throw new Error("retain_fence_invalid");
   }
-  if (command !== "release" && confirmFenceSourceCommit) {
+  if (
+    command !== "release" &&
+    command !== "release-status" &&
+    (confirmFenceSourceCommit || confirmToolSourceCommit || confirmTargetDigest)
+  ) {
     throw new Error("fence_source_confirmation_invalid");
   }
   if (
@@ -1029,20 +1093,60 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
       throw new Error("predecessor_confirmation_invalid");
     }
   }
+  const candidateOrTransfer =
+    command === "candidate-verify" ||
+    command === "candidate-release" ||
+    command === "candidate-release-status" ||
+    command === "transfer-source-verify";
+  if (
+    !candidateOrTransfer &&
+    (confirmDatabaseId ||
+      confirmSourceExportSha256 ||
+      confirmSourceExportBookmark ||
+      confirmFenceDigest)
+  ) {
+    throw new Error("candidate_confirmation_invalid");
+  }
   if (
     command !== "candidate-verify" &&
     command !== "candidate-release" &&
     command !== "candidate-release-status" &&
-    command !== "transfer-source-verify" &&
-    (confirmDatabaseId ||
-      confirmSourceExportSha256 ||
-      confirmSourceExportBookmark ||
-      confirmFenceId ||
-      confirmFenceDigest ||
-      confirmReleaseReadinessDigest ||
-      releasedAt)
+    command !== "release" &&
+    command !== "release-status" &&
+    confirmFenceId
   ) {
-    throw new Error("candidate_confirmation_invalid");
+    throw new Error("fence_confirmation_invalid");
+  }
+  if (
+    command !== "candidate-release" &&
+    command !== "candidate-release-status" &&
+    command !== "release" &&
+    command !== "release-status" &&
+    confirmReleaseReadinessDigest
+  ) {
+    throw new Error("release_readiness_confirmation_invalid");
+  }
+  if (
+    command !== "release-status" &&
+    confirmReleaseAuthorizationDigest
+  ) {
+    throw new Error("release_authorization_confirmation_invalid");
+  }
+  if (
+    command !== "release" &&
+    command !== "release-status" &&
+    confirmReleaseStatusDigest
+  ) {
+    throw new Error("release_status_confirmation_invalid");
+  }
+  if (
+    command !== "release" &&
+    command !== "release-status" &&
+    command !== "candidate-release" &&
+    command !== "candidate-release-status" &&
+    releasedAt
+  ) {
+    throw new Error("release_time_invalid");
   }
   if (
     command === "candidate-verify" &&
@@ -1056,6 +1160,21 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   ) {
     throw new Error("candidate_release_time_required");
   }
+  if (command === "release-status" && !releasedAt) {
+    throw new Error("release_status_time_required");
+  }
+  if (
+    command === "release" &&
+    (!releasedAt ||
+      !confirmReleaseStatusDigest ||
+      !confirmReleaseReadinessDigest ||
+      !confirmFenceId ||
+      !confirmFenceSourceCommit ||
+      !confirmToolSourceCommit ||
+      !confirmTargetDigest)
+  ) {
+    throw new Error("release_recovery_confirmation_required");
+  }
   return {
     command,
     environment,
@@ -1066,14 +1185,88 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     confirmFenceId,
     confirmFenceDigest,
     confirmReleaseReadinessDigest,
+    confirmReleaseAuthorizationDigest,
+    confirmReleaseStatusDigest,
     releasedAt,
     confirmFenceSourceCommit,
+    confirmToolSourceCommit,
+    confirmTargetDigest,
     dryRun,
     retainMaintenanceFence,
     confirmPredecessorSource,
     confirmPredecessorManifest,
     help: false,
   };
+}
+
+function releaseRecoveryConfirmations(args: ParsedArgs) {
+  if (
+    !args.confirmReleaseStatusDigest ||
+    !args.confirmReleaseReadinessDigest ||
+    !args.confirmFenceId ||
+    !args.confirmFenceSourceCommit ||
+    !args.confirmToolSourceCommit ||
+    !args.confirmManifest ||
+    !args.confirmTargetDigest
+  ) {
+    throw new ControlD1SchemaError(
+      "release_recovery_confirmation_required",
+    );
+  }
+  return {
+    confirmStatusDigest: args.confirmReleaseStatusDigest,
+    confirmReleaseReadinessDigest: args.confirmReleaseReadinessDigest,
+    confirmFenceId: args.confirmFenceId,
+    confirmOriginalSourceCommit: args.confirmFenceSourceCommit,
+    confirmCurrentToolSourceCommit: args.confirmToolSourceCommit,
+    confirmManifestDigest: args.confirmManifest,
+    confirmTargetDigest: args.confirmTargetDigest,
+  } as const;
+}
+
+function releaseStatusReceiptConfirmations(args: ParsedArgs) {
+  const requested = Boolean(
+    args.confirmReleaseStatusDigest ||
+      args.confirmReleaseAuthorizationDigest ||
+      args.confirmReleaseReadinessDigest ||
+      args.confirmFenceId ||
+      args.confirmFenceSourceCommit ||
+      args.confirmToolSourceCommit ||
+      args.confirmTargetDigest,
+  );
+  if (!requested) return {};
+  return {
+    ...(args.confirmReleaseStatusDigest
+      ? { confirmedActiveStatusDigest: args.confirmReleaseStatusDigest }
+      : {}),
+    ...(args.confirmReleaseAuthorizationDigest
+      ? {
+          confirmedReleaseAuthorizationDigest:
+            args.confirmReleaseAuthorizationDigest,
+        }
+      : {}),
+    ...(args.confirmReleaseReadinessDigest
+      ? {
+          confirmedReleaseReadinessDigest:
+            args.confirmReleaseReadinessDigest,
+        }
+      : {}),
+    ...(args.confirmFenceId
+      ? { confirmedFenceId: args.confirmFenceId }
+      : {}),
+    ...(args.confirmFenceSourceCommit
+      ? { confirmedOriginalSourceCommit: args.confirmFenceSourceCommit }
+      : {}),
+    ...(args.confirmToolSourceCommit
+      ? { confirmedCurrentToolSourceCommit: args.confirmToolSourceCommit }
+      : {}),
+    ...(args.confirmManifest
+      ? { confirmedManifestDigest: args.confirmManifest }
+      : {}),
+    ...(args.confirmTargetDigest
+      ? { confirmedTargetDigest: args.confirmTargetDigest }
+      : {}),
+  } as const;
 }
 
 function requiredEnv(value: string | undefined, code: string): string {
@@ -1104,7 +1297,8 @@ function errorCode(error: unknown): string {
     error instanceof ControlD1SchemaError ||
     error instanceof ControlD1RestError ||
     error instanceof ControlD1MaintenanceError ||
-    error instanceof ControlD1ReleaseCapabilityError
+    error instanceof ControlD1ReleaseCapabilityError ||
+    error instanceof ControlD1ReleaseRecoveryCapabilityError
   ) {
     const code = error.code.split(":", 1)[0] ?? "";
     return /^[a-z][a-z0-9_]{0,127}$/u.test(code)
@@ -1117,11 +1311,22 @@ function errorCode(error: unknown): string {
 function helpText(): string {
   return `Usage:
   bun scripts/control-d1-schema.ts release-capability
+  bun scripts/control-d1-schema.ts release-recovery-capability
   bun scripts/control-d1-schema.ts plan
   bun scripts/control-d1-schema.ts apply --dry-run [--environment staging|production]
   bun scripts/control-d1-schema.ts fence --environment staging|production --confirm-manifest sha256:...
   bun scripts/control-d1-schema.ts freeze --environment staging|production --confirm-manifest sha256:...
-  bun scripts/control-d1-schema.ts release --environment staging|production --confirm-manifest sha256:... [--confirm-fence-source-commit <40hex>]
+  bun scripts/control-d1-schema.ts release-status --environment staging|production --confirm-manifest sha256:...
+    --released-at <ISO> [--confirm-release-status-digest sha256:...
+    --confirm-release-authorization-digest sha256:...
+    --confirm-release-readiness-digest sha256:... --confirm-fence-id sha256:...
+    --confirm-fence-source-commit <40hex> --confirm-tool-source-commit <40hex>
+    --confirm-target-digest sha256:...]
+  bun scripts/control-d1-schema.ts release --environment staging|production --confirm-manifest sha256:...
+    --released-at <ISO> --confirm-release-status-digest sha256:...
+    --confirm-release-readiness-digest sha256:... --confirm-fence-id sha256:...
+    --confirm-fence-source-commit <40hex> --confirm-tool-source-commit <40hex>
+    --confirm-target-digest sha256:...
   bun scripts/control-d1-schema.ts verify --environment staging|production
   bun scripts/control-d1-schema.ts transfer-source-verify --environment staging|production --confirm-manifest sha256:...
     --confirm-database-id <source-id> --confirm-source-export-sha256 sha256:...
@@ -1143,18 +1348,23 @@ function helpText(): string {
 plan and apply --dry-run are local-only and perform no remote request. verify is
 read-only. fence freezes a legacy database without changing its application
 schema and is never releasable. freeze acquires the exact short-lived in-place
-release fence without changing schema; release removes only that exact fence.
+release fence without changing schema. release-status is metadata-only and
+proves the exact active fence, schema/ledger/integrity/FK state, canonical guard
+inventory, and bounded atomic release plan without exposing a native database
+id, provider token, or raw SQL. Its preselected --released-at value is part of
+the seal. After an ambiguous release acknowledgement, rerun release-status with
+the original status, authorization, and readiness digests, fence id, original
+and current source commits, manifest, target digest, and timestamp.
+never retry release automatically. Reconciliation that still observes an active fence is
+non-ready and cannot become a fresh release authorization.
+release dispatches the sole atomic recovery Import at most once and only after
+all values copied from a ready release-status transcript are repeated exactly.
 apply requires the exact manifest digest emitted by plan. Official
 Cloud blue/green candidates use --retain-maintenance-fence through cutover.
-release also requires the same source, manifest, environment, and database
-after the Worker cutover is proven.
-When a reviewed forward repair must release a fence retained by an older OSS
-commit, pass --confirm-fence-source-commit with that exact lowercase 40-hex
-fence source. The transcript keeps sourceCommit bound to the current clean
-repair checkout and records the confirmed fence source separately. This flag is
-release-only, requires the current manifest, and never bypasses the clean
-checkout/HEAD check; it releases only the matching active or inactive fence
-receipt and never runs schema apply or migration work.
+release also requires the original fence source, current clean repair checkout
+source, manifest, selected-target digest, exact fence id, status/readiness
+digests, and timestamp. It never runs schema apply, maintenance-table upgrades,
+or guard repair and never treats an inactive receipt as permission to mutate.
 candidate-verify is read-only and accepts only an active candidate/cutover
 fence with the exact candidate database, source-export, and fence digest (an
 optional fence id confirmation is checked when supplied). candidate-release repeats that verification, requires the exact

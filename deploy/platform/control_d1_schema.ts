@@ -9,11 +9,16 @@ import { ensureD1OpenTofuLedgerSchema } from "../../worker/src/d1_opentofu_store
 import {
   acquireControlD1MaintenanceFence,
   adoptControlD1LegacyCloneAsCandidate,
+  buildControlD1MaintenanceReleasePlanMetrics,
+  CONTROL_D1_MAINTENANCE_RELEASE_SCHEMA_CHANGE_COUNT,
   digestControlD1MaintenanceFence,
   digestControlD1MaintenanceGuardInventory,
   digestControlD1MaintenanceGuardTriggerSql,
   digestControlD1MaintenanceGuardTriggerInventory,
   readControlD1MaintenanceGuardInventory,
+  readControlD1MaintenanceMigrationLedger,
+  readControlD1MaintenanceStatus,
+  readControlD1SchemaVersion,
   repairControlD1MaintenanceGuards,
   type ControlD1MaintenanceFence,
   type ControlD1MaintenanceGuardInventory,
@@ -21,10 +26,12 @@ import {
   type ControlD1MaintenanceReleasePolicy,
   isControlD1MaintenanceFenceActive,
   releaseControlD1MaintenanceFence,
+  releaseControlD1MaintenanceFenceRecovery,
   readControlD1MaintenanceReleaseReceiptDetails,
   readControlD1MaintenanceReleaseReceipt,
   readControlD1MaintenanceState,
   supersedeActiveControlD1MaintenanceFence,
+  type ControlD1MaintenanceReleasePlanMetrics,
 } from "../../worker/src/d1_schema_maintenance.ts";
 
 export { adoptControlD1LegacyCloneAsCandidate, readControlD1MaintenanceState };
@@ -321,6 +328,124 @@ export interface ControlD1SchemaFenceResult {
   readonly maintenanceDrainMilliseconds: number;
 }
 
+export const CONTROL_D1_RELEASE_STATUS_KIND =
+  "takosumi.control-d1-release-status@v1" as const;
+export const CONTROL_D1_RELEASE_AUTHORIZATION_KIND =
+  "takosumi.control-d1-release-authorization@v1" as const;
+export const CONTROL_D1_RELEASE_READINESS_KIND =
+  "takosumi.control-d1-release-readiness@v1" as const;
+
+export interface ControlD1ReleaseStatusOptions {
+  readonly currentToolSourceCommit: string;
+  readonly environment: "staging" | "production" | "test";
+  readonly manifestDigest: string;
+  /** Used for exact comparison only; it is never returned in public evidence. */
+  readonly targetDatabaseId: string;
+  /** Public metadata-only digest of the selected account/database target. */
+  readonly targetDigest: string;
+  /** Preselected timestamp sealed into the plan before any mutation. */
+  readonly releasedAt: string;
+  /** Active status digest retained after an ambiguous release acknowledgement. */
+  readonly confirmedActiveStatusDigest?: string;
+  readonly confirmedReleaseAuthorizationDigest?: string;
+  readonly confirmedReleaseReadinessDigest?: string;
+  readonly confirmedFenceId?: string;
+  readonly confirmedOriginalSourceCommit?: string;
+  readonly confirmedCurrentToolSourceCommit?: string;
+  readonly confirmedManifestDigest?: string;
+  readonly confirmedTargetDigest?: string;
+}
+
+export interface ControlD1ReleaseFenceEvidence {
+  readonly fenceId: string;
+  readonly recomputedFenceId: string;
+  readonly fenceIdMatches: boolean;
+  readonly originalSourceCommit: string;
+  readonly currentToolSourceCommit: string;
+  readonly manifestDigest: string;
+  readonly environment: string;
+  readonly databaseRole: ControlD1MaintenanceDatabaseRole;
+  readonly releasePolicy: ControlD1MaintenanceReleasePolicy;
+  readonly targetDigest: string;
+  readonly databaseIdDigest: string;
+  readonly sourceExportSha256: string | null;
+  readonly activatedAt: string;
+  readonly releasedAt: string | null;
+  readonly predecessor: {
+    readonly fenceId: string;
+    readonly sourceCommit: string;
+    readonly manifestDigest: string;
+  } | null;
+}
+
+export interface ControlD1ReleaseStatus {
+  readonly kind: typeof CONTROL_D1_RELEASE_STATUS_KIND;
+  readonly status: "ready" | "not_ready" | "released" | "receipt_mismatch";
+  readonly maintenanceStatus: "active" | "inactive";
+  readonly fence: ControlD1ReleaseFenceEvidence;
+  readonly maintenance: {
+    readonly active: 0 | 1;
+    readonly migrationBypass: 0;
+    readonly maintenanceTableShapeDigest: string;
+    readonly maintenanceTableShapeMatches: boolean;
+    readonly maintenanceTableDdlDigest: string;
+    readonly maintenanceTableDdlMatches: boolean;
+    readonly releaseGuardRelationAbsent: boolean;
+    readonly releaseMigrationRelationAbsent: boolean;
+    readonly releaseAssertionRelationAbsent: boolean;
+    readonly storedReleaseAuthorizationDigest: string | null;
+  };
+  readonly schemaVersion: {
+    readonly before: number;
+    readonly after: number;
+    readonly stable: boolean;
+  };
+  readonly schema: ControlD1SchemaVerification;
+  readonly ledger: {
+    readonly migrationCount: number;
+    readonly latestMigrationVersion: number;
+    readonly ledgerDigest: string;
+    readonly expectedLedgerDigest: string;
+    readonly exactMatch: boolean;
+  };
+  readonly integrity: ControlD1CandidateIntegrityVerification;
+  readonly guards: {
+    readonly guardedTableCount: number;
+    readonly guardTriggerCount: number;
+    readonly inventoryDigest: string;
+    readonly triggerSqlDigest: string;
+    readonly canonical: boolean;
+  };
+  readonly releasePlan: ControlD1MaintenanceReleasePlanMetrics | null;
+  readonly requestedReleasedAt: string;
+  readonly statusDigest: string;
+  readonly confirmedActiveStatusDigest: string | null;
+  readonly confirmedReleaseAuthorizationDigest: string | null;
+  readonly confirmedReleaseReadinessDigest: string | null;
+  readonly confirmedFenceId: string | null;
+  readonly confirmedOriginalSourceCommit: string | null;
+  readonly confirmedCurrentToolSourceCommit: string | null;
+  readonly confirmedManifestDigest: string | null;
+  readonly confirmedTargetDigest: string | null;
+  readonly releaseAuthorizationDigest: string;
+  readonly releaseReadinessDigest: string;
+  readonly receiptMatchesAuthorization: boolean | null;
+  readonly receiptMatchesReleaseReadiness: boolean | null;
+  readonly receiptConfirmationsExact: boolean | null;
+  readonly issues: readonly string[];
+}
+
+export interface ControlD1ReleaseRecoveryOptions
+  extends ControlD1ReleaseStatusOptions {
+  readonly confirmStatusDigest: string;
+  readonly confirmReleaseReadinessDigest: string;
+  readonly confirmFenceId: string;
+  readonly confirmOriginalSourceCommit: string;
+  readonly confirmCurrentToolSourceCommit: string;
+  readonly confirmManifestDigest: string;
+  readonly confirmTargetDigest: string;
+}
+
 /**
  * Freeze a legacy database without mutating its application schema. Official
  * Cloud keeps this fence forever and clones from the resulting read-only
@@ -388,6 +513,641 @@ export async function buildControlD1SchemaPlan(
 }
 
 /**
+ * Read-only, metadata-only proof for one retained or already released in-place
+ * fence. The schema version is sampled around every semantic read so a caller
+ * never seals evidence assembled across an observed schema race.
+ */
+export async function readControlD1ReleaseStatus(
+  database: D1Database,
+  plan: ControlD1SchemaPlan,
+  options: ControlD1ReleaseStatusOptions,
+): Promise<ControlD1ReleaseStatus> {
+  return (await collectControlD1ReleaseStatus(database, plan, options)).status;
+}
+
+/**
+ * Dispatch the sole recovery Import at most once. A transport failure is
+ * deliberately returned to the caller; only readControlD1ReleaseStatus may be
+ * used after an ambiguous acknowledgement.
+ */
+export async function releaseControlD1InPlaceRecovery(
+  database: D1Database,
+  plan: ControlD1SchemaPlan,
+  options: ControlD1ReleaseRecoveryOptions,
+): Promise<ControlD1ReleaseStatus> {
+  const normalized = normalizeControlD1ReleaseRecoveryOptions(options);
+  const fresh = await collectControlD1ReleaseStatus(database, plan, normalized);
+  const status = fresh.status;
+  if (
+    status.status !== "ready" ||
+    status.maintenanceStatus !== "active" ||
+    status.statusDigest !== normalized.confirmStatusDigest ||
+    status.releaseReadinessDigest !==
+      normalized.confirmReleaseReadinessDigest ||
+    status.fence.fenceId !== normalized.confirmFenceId ||
+    status.fence.originalSourceCommit !==
+      normalized.confirmOriginalSourceCommit ||
+    status.fence.currentToolSourceCommit !==
+      normalized.confirmCurrentToolSourceCommit ||
+    status.fence.manifestDigest !== normalized.confirmManifestDigest ||
+    status.fence.targetDigest !== normalized.confirmTargetDigest ||
+    status.requestedReleasedAt !== normalized.releasedAt
+  ) {
+    throw new ControlD1SchemaError("release_recovery_confirmation_mismatch");
+  }
+
+  await releaseControlD1MaintenanceFenceRecovery(
+    database,
+    fresh.maintenanceFence,
+    normalized.releasedAt,
+    {
+      releaseAuthorizationDigest: status.releaseAuthorizationDigest,
+      expectedSchemaVersion: status.schemaVersion.before,
+      expectedMigrations: fresh.migrations,
+    },
+  );
+
+  const receipt = await collectControlD1ReleaseStatus(database, plan, {
+    ...normalized,
+    confirmedActiveStatusDigest: status.statusDigest,
+    confirmedReleaseAuthorizationDigest:
+      status.releaseAuthorizationDigest,
+    confirmedReleaseReadinessDigest: status.releaseReadinessDigest,
+    confirmedFenceId: status.fence.fenceId,
+    confirmedOriginalSourceCommit: status.fence.originalSourceCommit,
+    confirmedCurrentToolSourceCommit: status.fence.currentToolSourceCommit,
+    confirmedManifestDigest: status.fence.manifestDigest,
+    confirmedTargetDigest: status.fence.targetDigest,
+  });
+  if (receipt.status.status !== "released") {
+    throw new ControlD1SchemaError("release_recovery_receipt_mismatch");
+  }
+  return receipt.status;
+}
+
+interface CollectedControlD1ReleaseStatus {
+  readonly status: ControlD1ReleaseStatus;
+  readonly maintenanceFence: ControlD1MaintenanceFence;
+  readonly migrations: readonly ControlD1MigrationLedgerRow[];
+}
+
+async function collectControlD1ReleaseStatus(
+  database: D1Database,
+  plan: ControlD1SchemaPlan,
+  options: ControlD1ReleaseStatusOptions,
+): Promise<CollectedControlD1ReleaseStatus> {
+  const normalized = normalizeControlD1ReleaseStatusOptions(options);
+  const schemaVersionBefore = await readControlD1SchemaVersion(database);
+  const maintenance = await readControlD1MaintenanceStatus(database);
+  const schema = await verifyControlD1Schema(database, plan, {
+    allowActiveMaintenanceFence: maintenance.status === "active",
+  });
+  const migrations = await readControlD1MaintenanceMigrationLedger(database);
+  const ledgerDigest = await digest(migrations);
+  const integrity = await verifyControlD1Integrity(database);
+  const inventory = await readControlD1MaintenanceGuardInventory(database);
+  const expectedTriggers = expectedMaintenanceGuardTriggers(inventory.tables);
+  const expectedTriggerSqlDigests =
+    await expectedMaintenanceGuardTriggerSqlDigests(inventory.tables);
+  const activeGuardCanonical =
+    inventory.guardedTableCount === inventory.tables.length &&
+    inventory.guardTriggerCount === expectedTriggers.length &&
+    stableJson(inventory.triggers) === stableJson(expectedTriggers) &&
+    stableJson(inventory.triggerSqlDigests) ===
+      stableJson(expectedTriggerSqlDigests) &&
+    inventory.triggerSqlDigest ===
+      (await digestControlD1MaintenanceGuardTriggerInventory(
+        expectedTriggerSqlDigests,
+      )) &&
+    inventory.digest ===
+      (await digestControlD1MaintenanceGuardInventory({
+        tables: inventory.tables,
+        triggers: expectedTriggers,
+        triggerSqlDigests: expectedTriggerSqlDigests,
+      }));
+  const inactiveGuardCanonical =
+    inventory.guardedTableCount === inventory.tables.length &&
+    inventory.guardTriggerCount === 0 &&
+    inventory.triggers.length === 0 &&
+    inventory.triggerSqlDigests.length === 0 &&
+    inventory.triggerSqlDigest ===
+      (await digestControlD1MaintenanceGuardTriggerInventory([])) &&
+    inventory.digest ===
+      (await digestControlD1MaintenanceGuardInventory({
+        tables: inventory.tables,
+        triggers: [],
+        triggerSqlDigests: [],
+      }));
+  const guardCanonical =
+    maintenance.status === "active"
+      ? activeGuardCanonical
+      : inactiveGuardCanonical;
+  const confirmedActiveStatusDigest =
+    normalized.confirmedActiveStatusDigest ?? null;
+  const confirmedReleaseAuthorizationDigest =
+    normalized.confirmedReleaseAuthorizationDigest ?? null;
+  const confirmedReleaseReadinessDigest =
+    normalized.confirmedReleaseReadinessDigest ?? null;
+  const confirmedFenceId = normalized.confirmedFenceId ?? null;
+  const confirmedOriginalSourceCommit =
+    normalized.confirmedOriginalSourceCommit ?? null;
+  const confirmedCurrentToolSourceCommit =
+    normalized.confirmedCurrentToolSourceCommit ?? null;
+  const confirmedManifestDigest = normalized.confirmedManifestDigest ?? null;
+  const confirmedTargetDigest = normalized.confirmedTargetDigest ?? null;
+  const receiptReconciliationRequested = [
+    confirmedActiveStatusDigest,
+    confirmedReleaseAuthorizationDigest,
+    confirmedReleaseReadinessDigest,
+    confirmedFenceId,
+    confirmedOriginalSourceCommit,
+    confirmedCurrentToolSourceCommit,
+    confirmedManifestDigest,
+    confirmedTargetDigest,
+  ].some((value) => value !== null);
+  const zeroDigest = `sha256:${"0".repeat(64)}`;
+  const authorizationStatusDigest = confirmedActiveStatusDigest ?? zeroDigest;
+  const expectedReceiptAuthorizationDigest = await digest({
+    kind: CONTROL_D1_RELEASE_AUTHORIZATION_KIND,
+    statusDigest: authorizationStatusDigest,
+    releasedAt: normalized.releasedAt,
+  });
+  const releasePlanPreconditions =
+    maintenance.maintenanceTableShapeMatches &&
+    maintenance.maintenanceTableDdlMatches &&
+    maintenance.releaseGuardRelationAbsent &&
+    maintenance.releaseMigrationRelationAbsent &&
+    maintenance.releaseAssertionRelationAbsent &&
+    guardCanonical;
+  const reconstructedActiveSchemaVersion =
+    schemaVersionBefore -
+    expectedTriggers.length -
+    CONTROL_D1_MAINTENANCE_RELEASE_SCHEMA_CHANGE_COUNT;
+  const inactiveReleasePlan =
+    maintenance.status === "inactive" &&
+    releasePlanPreconditions &&
+    reconstructedActiveSchemaVersion >= 0
+      ? await buildControlD1MaintenanceReleasePlanMetrics(
+          database,
+          maintenance.fence,
+          normalized.releasedAt,
+          {
+            releaseAuthorizationDigest: expectedReceiptAuthorizationDigest,
+            expectedSchemaVersion: reconstructedActiveSchemaVersion,
+            expectedMigrations: migrations,
+          },
+        )
+      : null;
+  const placeholderReleasePlan =
+    maintenance.status === "active" && releasePlanPreconditions
+      ? await buildControlD1MaintenanceReleasePlanMetrics(
+          database,
+          maintenance.fence,
+          normalized.releasedAt,
+          {
+            releaseAuthorizationDigest: zeroDigest,
+            expectedSchemaVersion: schemaVersionBefore,
+            expectedMigrations: migrations,
+          },
+        )
+      : inactiveReleasePlan;
+  const schemaVersionAfter = await readControlD1SchemaVersion(database);
+  const schemaVersion = {
+    before: schemaVersionBefore,
+    after: schemaVersionAfter,
+    stable: schemaVersionBefore === schemaVersionAfter,
+  } as const;
+  const fence: ControlD1ReleaseFenceEvidence = {
+    fenceId: maintenance.fence.fenceId,
+    recomputedFenceId: maintenance.recomputedFenceId,
+    fenceIdMatches: maintenance.fenceIdMatches,
+    originalSourceCommit: maintenance.fence.sourceCommit,
+    currentToolSourceCommit: normalized.currentToolSourceCommit,
+    manifestDigest: maintenance.fence.manifestDigest,
+    environment: maintenance.fence.environment,
+    databaseRole: maintenance.fence.databaseRole,
+    releasePolicy: maintenance.fence.releasePolicy,
+    targetDigest: normalized.targetDigest,
+    databaseIdDigest: await digest({
+      kind: "takosumi.control-d1-database-id@v1",
+      databaseId: maintenance.fence.databaseId,
+    }),
+    sourceExportSha256: maintenance.fence.sourceExportSha256,
+    activatedAt: maintenance.fence.activatedAt,
+    releasedAt: maintenance.releasedAt,
+    predecessor: maintenance.fence.predecessor,
+  };
+  const maintenanceEvidence = {
+    active: maintenance.active,
+    migrationBypass: maintenance.migrationBypass,
+    maintenanceTableShapeDigest: maintenance.maintenanceTableShapeDigest,
+    maintenanceTableShapeMatches: maintenance.maintenanceTableShapeMatches,
+    maintenanceTableDdlDigest: maintenance.maintenanceTableDdlDigest,
+    maintenanceTableDdlMatches: maintenance.maintenanceTableDdlMatches,
+    releaseGuardRelationAbsent: maintenance.releaseGuardRelationAbsent,
+    releaseMigrationRelationAbsent:
+      maintenance.releaseMigrationRelationAbsent,
+    releaseAssertionRelationAbsent:
+      maintenance.releaseAssertionRelationAbsent,
+    storedReleaseAuthorizationDigest: maintenance.releaseReadinessDigest,
+  } as const;
+  const ledger = {
+    migrationCount: migrations.length,
+    latestMigrationVersion: migrations.at(-1)?.version ?? 0,
+    ledgerDigest,
+    expectedLedgerDigest: plan.ledgerDigest,
+    exactMatch: stableJson(migrations) === stableJson(plan.migrations),
+  } as const;
+  const guards = {
+    guardedTableCount: inventory.guardedTableCount,
+    guardTriggerCount: inventory.guardTriggerCount,
+    inventoryDigest: inventory.digest,
+    triggerSqlDigest: inventory.triggerSqlDigest,
+    canonical: guardCanonical,
+  } as const;
+  const issues: string[] = [];
+  if (plan.manifestDigest !== normalized.manifestDigest) {
+    issues.push("release_manifest_plan_mismatch");
+  }
+  if (!maintenance.fenceIdMatches) issues.push("release_fence_id_mismatch");
+  if (!maintenance.maintenanceTableShapeMatches) {
+    issues.push("release_maintenance_table_shape_mismatch");
+  }
+  if (!maintenance.maintenanceTableDdlMatches) {
+    issues.push("release_maintenance_table_ddl_mismatch");
+  }
+  if (!maintenance.releaseGuardRelationAbsent) {
+    issues.push("release_guard_relation_present");
+  }
+  if (!maintenance.releaseMigrationRelationAbsent) {
+    issues.push("release_migration_relation_present");
+  }
+  if (!maintenance.releaseAssertionRelationAbsent) {
+    issues.push("release_assertion_relation_present");
+  }
+  if (!schemaVersion.stable) issues.push("release_schema_version_changed");
+  if (maintenance.fence.manifestDigest !== normalized.manifestDigest) {
+    issues.push("release_fence_manifest_mismatch");
+  }
+  if (maintenance.fence.environment !== normalized.environment) {
+    issues.push("release_fence_environment_mismatch");
+  }
+  if (
+    maintenance.fence.databaseRole !== "in_place" ||
+    maintenance.fence.releasePolicy !== "in_place"
+  ) {
+    issues.push("release_fence_role_policy_mismatch");
+  }
+  if (maintenance.fence.databaseId !== normalized.targetDatabaseId) {
+    issues.push("release_fence_target_mismatch");
+  }
+  if (maintenance.fence.sourceExportSha256 !== null) {
+    issues.push("release_fence_export_mismatch");
+  }
+  if (schema.status !== "ready") issues.push("release_schema_not_ready");
+  if (!ledger.exactMatch) issues.push("release_ledger_mismatch");
+  if (integrity.status !== "ready") issues.push("release_integrity_mismatch");
+  if (!guardCanonical) issues.push("release_guard_inventory_mismatch");
+  if (maintenance.status === "active") {
+    if (
+      maintenance.releasedAt !== null ||
+      maintenance.releaseReadinessDigest !== null
+    ) {
+      issues.push("release_active_receipt_present");
+    }
+    if (receiptReconciliationRequested) {
+      issues.push("release_ambiguous_receipt_still_active");
+    }
+  } else {
+    if (maintenance.releasedAt !== normalized.releasedAt) {
+      issues.push("release_receipt_timestamp_mismatch");
+    }
+    const requireReceiptConfirmation = (
+      value: string | null,
+      expected: string,
+      requiredIssue: string,
+      mismatchIssue: string,
+    ): boolean => {
+      if (value === null) {
+        issues.push(requiredIssue);
+        return false;
+      }
+      if (value !== expected) {
+        issues.push(mismatchIssue);
+        return false;
+      }
+      return true;
+    };
+    requireReceiptConfirmation(
+      confirmedActiveStatusDigest,
+      authorizationStatusDigest,
+      "release_active_status_confirmation_required",
+      "release_active_status_confirmation_mismatch",
+    );
+    requireReceiptConfirmation(
+      confirmedReleaseAuthorizationDigest,
+      expectedReceiptAuthorizationDigest,
+      "release_authorization_confirmation_required",
+      "release_authorization_confirmation_mismatch",
+    );
+    requireReceiptConfirmation(
+      confirmedFenceId,
+      maintenance.fence.fenceId,
+      "release_fence_confirmation_required",
+      "release_fence_confirmation_mismatch",
+    );
+    requireReceiptConfirmation(
+      confirmedOriginalSourceCommit,
+      maintenance.fence.sourceCommit,
+      "release_original_source_confirmation_required",
+      "release_original_source_confirmation_mismatch",
+    );
+    requireReceiptConfirmation(
+      confirmedCurrentToolSourceCommit,
+      normalized.currentToolSourceCommit,
+      "release_tool_source_confirmation_required",
+      "release_tool_source_confirmation_mismatch",
+    );
+    requireReceiptConfirmation(
+      confirmedManifestDigest,
+      normalized.manifestDigest,
+      "release_manifest_confirmation_required",
+      "release_manifest_confirmation_mismatch",
+    );
+    requireReceiptConfirmation(
+      confirmedTargetDigest,
+      normalized.targetDigest,
+      "release_target_confirmation_required",
+      "release_target_confirmation_mismatch",
+    );
+    if (reconstructedActiveSchemaVersion < 0 || inactiveReleasePlan === null) {
+      issues.push("release_plan_reconstruction_mismatch");
+    }
+  }
+  const reconstructedReleaseReadinessDigest = await digest({
+    kind: CONTROL_D1_RELEASE_READINESS_KIND,
+    statusDigest: authorizationStatusDigest,
+    releaseAuthorizationDigest: expectedReceiptAuthorizationDigest,
+    releasePlan: inactiveReleasePlan,
+  });
+  const receiptMatchesAuthorization =
+    maintenance.status === "active"
+      ? null
+      : confirmedReleaseAuthorizationDigest ===
+          expectedReceiptAuthorizationDigest &&
+        maintenance.releaseReadinessDigest ===
+          expectedReceiptAuthorizationDigest;
+  const receiptMatchesReleaseReadiness =
+    maintenance.status === "active"
+      ? null
+      : confirmedReleaseReadinessDigest ===
+        reconstructedReleaseReadinessDigest;
+  if (maintenance.status === "inactive") {
+    if (!receiptMatchesAuthorization) {
+      issues.push("release_receipt_authorization_mismatch");
+    }
+    if (confirmedReleaseReadinessDigest === null) {
+      issues.push("release_readiness_confirmation_required");
+    } else if (!receiptMatchesReleaseReadiness) {
+      issues.push("release_readiness_confirmation_mismatch");
+    }
+  }
+  const receiptConfirmationsExact =
+    maintenance.status === "active"
+      ? null
+      : issues.length === 0;
+  const statusSeal = {
+    kind: CONTROL_D1_RELEASE_STATUS_KIND,
+    maintenanceStatus: maintenance.status,
+    fence,
+    maintenance: maintenanceEvidence,
+    schemaVersion,
+    schema,
+    ledger,
+    integrity,
+    guards,
+    releasePlan: releasePlanBudget(placeholderReleasePlan),
+    requestedReleasedAt: normalized.releasedAt,
+    confirmedActiveStatusDigest,
+    confirmedReleaseAuthorizationDigest,
+    confirmedReleaseReadinessDigest,
+    confirmedFenceId,
+    confirmedOriginalSourceCommit,
+    confirmedCurrentToolSourceCommit,
+    confirmedManifestDigest,
+    confirmedTargetDigest,
+    receiptMatchesAuthorization,
+    receiptMatchesReleaseReadiness,
+    receiptConfirmationsExact,
+    issues: [...issues],
+  } as const;
+  const statusDigest = await digest(statusSeal);
+  const releaseAuthorizationDigest =
+    maintenance.status === "active"
+      ? await digest({
+          kind: CONTROL_D1_RELEASE_AUTHORIZATION_KIND,
+          statusDigest,
+          releasedAt: normalized.releasedAt,
+        })
+      : expectedReceiptAuthorizationDigest;
+  const releasePlan =
+    maintenance.status === "active"
+      ? releasePlanPreconditions
+        ? await buildControlD1MaintenanceReleasePlanMetrics(
+            database,
+            maintenance.fence,
+            normalized.releasedAt,
+            {
+              releaseAuthorizationDigest,
+              expectedSchemaVersion: schemaVersionBefore,
+              expectedMigrations: migrations,
+            },
+          )
+        : null
+      : inactiveReleasePlan;
+  const releaseReadinessDigest =
+    maintenance.status === "active"
+      ? await digest({
+          kind: CONTROL_D1_RELEASE_READINESS_KIND,
+          statusDigest,
+          releaseAuthorizationDigest,
+          releasePlan,
+        })
+      : reconstructedReleaseReadinessDigest;
+  const status =
+    maintenance.status === "active"
+      ? issues.length === 0
+        ? "ready"
+        : "not_ready"
+      : issues.length === 0
+        ? "released"
+        : "receipt_mismatch";
+  return {
+    status: {
+      kind: CONTROL_D1_RELEASE_STATUS_KIND,
+      status,
+      maintenanceStatus: maintenance.status,
+      fence,
+      maintenance: maintenanceEvidence,
+      schemaVersion,
+      schema,
+      ledger,
+      integrity,
+      guards,
+      releasePlan,
+      requestedReleasedAt: normalized.releasedAt,
+      statusDigest,
+      confirmedActiveStatusDigest,
+      confirmedReleaseAuthorizationDigest,
+      confirmedReleaseReadinessDigest,
+      confirmedFenceId,
+      confirmedOriginalSourceCommit,
+      confirmedCurrentToolSourceCommit,
+      confirmedManifestDigest,
+      confirmedTargetDigest,
+      releaseAuthorizationDigest,
+      releaseReadinessDigest,
+      receiptMatchesAuthorization,
+      receiptMatchesReleaseReadiness,
+      receiptConfirmationsExact,
+      issues,
+    },
+    maintenanceFence: maintenance.fence,
+    migrations,
+  };
+}
+
+function normalizeControlD1ReleaseStatusOptions(
+  options: ControlD1ReleaseStatusOptions,
+): ControlD1ReleaseStatusOptions {
+  const normalized = {
+    currentToolSourceCommit: stringOption(options.currentToolSourceCommit),
+    environment: options.environment,
+    manifestDigest: stringOption(options.manifestDigest),
+    targetDatabaseId: stringOption(options.targetDatabaseId),
+    targetDigest: stringOption(options.targetDigest),
+    releasedAt: stringOption(options.releasedAt),
+    confirmedActiveStatusDigest: options.confirmedActiveStatusDigest
+      ? stringOption(options.confirmedActiveStatusDigest)
+      : undefined,
+    confirmedReleaseAuthorizationDigest:
+      options.confirmedReleaseAuthorizationDigest
+        ? stringOption(options.confirmedReleaseAuthorizationDigest)
+        : undefined,
+    confirmedReleaseReadinessDigest: options.confirmedReleaseReadinessDigest
+      ? stringOption(options.confirmedReleaseReadinessDigest)
+      : undefined,
+    confirmedFenceId: options.confirmedFenceId
+      ? stringOption(options.confirmedFenceId)
+      : undefined,
+    confirmedOriginalSourceCommit: options.confirmedOriginalSourceCommit
+      ? stringOption(options.confirmedOriginalSourceCommit)
+      : undefined,
+    confirmedCurrentToolSourceCommit: options.confirmedCurrentToolSourceCommit
+      ? stringOption(options.confirmedCurrentToolSourceCommit)
+      : undefined,
+    confirmedManifestDigest: options.confirmedManifestDigest
+      ? stringOption(options.confirmedManifestDigest)
+      : undefined,
+    confirmedTargetDigest: options.confirmedTargetDigest
+      ? stringOption(options.confirmedTargetDigest)
+      : undefined,
+  } as const;
+  if (
+    !/^[0-9a-f]{40}$/u.test(normalized.currentToolSourceCommit) ||
+    (normalized.environment !== "staging" &&
+      normalized.environment !== "production" &&
+      normalized.environment !== "test") ||
+    !/^sha256:[0-9a-f]{64}$/u.test(normalized.manifestDigest) ||
+    !normalized.targetDatabaseId ||
+    normalized.targetDatabaseId.length > 256 ||
+    !/^sha256:[0-9a-f]{64}$/u.test(normalized.targetDigest) ||
+    !validIsoTimestamp(normalized.releasedAt) ||
+    (normalized.confirmedActiveStatusDigest !== undefined &&
+      !/^sha256:[0-9a-f]{64}$/u.test(
+        normalized.confirmedActiveStatusDigest,
+      )) ||
+    (normalized.confirmedReleaseAuthorizationDigest !== undefined &&
+      !/^sha256:[0-9a-f]{64}$/u.test(
+        normalized.confirmedReleaseAuthorizationDigest,
+      )) ||
+    (normalized.confirmedReleaseReadinessDigest !== undefined &&
+      !/^sha256:[0-9a-f]{64}$/u.test(
+        normalized.confirmedReleaseReadinessDigest,
+      )) ||
+    (normalized.confirmedFenceId !== undefined &&
+      !/^sha256:[0-9a-f]{64}$/u.test(normalized.confirmedFenceId)) ||
+    (normalized.confirmedOriginalSourceCommit !== undefined &&
+      !/^[0-9a-f]{40}$/u.test(
+        normalized.confirmedOriginalSourceCommit,
+      )) ||
+    (normalized.confirmedCurrentToolSourceCommit !== undefined &&
+      !/^[0-9a-f]{40}$/u.test(
+        normalized.confirmedCurrentToolSourceCommit,
+      )) ||
+    (normalized.confirmedManifestDigest !== undefined &&
+      !/^sha256:[0-9a-f]{64}$/u.test(normalized.confirmedManifestDigest)) ||
+    (normalized.confirmedTargetDigest !== undefined &&
+      !/^sha256:[0-9a-f]{64}$/u.test(normalized.confirmedTargetDigest))
+  ) {
+    throw new ControlD1SchemaError("release_status_confirmation_invalid");
+  }
+  return normalized;
+}
+
+function normalizeControlD1ReleaseRecoveryOptions(
+  options: ControlD1ReleaseRecoveryOptions,
+): ControlD1ReleaseRecoveryOptions {
+  const status = normalizeControlD1ReleaseStatusOptions(options);
+  const normalized = {
+    ...status,
+    confirmStatusDigest: stringOption(options.confirmStatusDigest),
+    confirmReleaseReadinessDigest: stringOption(
+      options.confirmReleaseReadinessDigest,
+    ),
+    confirmFenceId: stringOption(options.confirmFenceId),
+    confirmOriginalSourceCommit: stringOption(
+      options.confirmOriginalSourceCommit,
+    ),
+    confirmCurrentToolSourceCommit: stringOption(
+      options.confirmCurrentToolSourceCommit,
+    ),
+    confirmManifestDigest: stringOption(options.confirmManifestDigest),
+    confirmTargetDigest: stringOption(options.confirmTargetDigest),
+  };
+  if (
+    !/^sha256:[0-9a-f]{64}$/u.test(normalized.confirmStatusDigest) ||
+    !/^sha256:[0-9a-f]{64}$/u.test(
+      normalized.confirmReleaseReadinessDigest,
+    ) ||
+    !/^sha256:[0-9a-f]{64}$/u.test(normalized.confirmFenceId) ||
+    !/^[0-9a-f]{40}$/u.test(normalized.confirmOriginalSourceCommit) ||
+    !/^[0-9a-f]{40}$/u.test(normalized.confirmCurrentToolSourceCommit) ||
+    !/^sha256:[0-9a-f]{64}$/u.test(normalized.confirmManifestDigest) ||
+    !/^sha256:[0-9a-f]{64}$/u.test(normalized.confirmTargetDigest) ||
+    normalized.confirmedActiveStatusDigest !== undefined ||
+    normalized.confirmedReleaseAuthorizationDigest !== undefined ||
+    normalized.confirmedReleaseReadinessDigest !== undefined ||
+    normalized.confirmedFenceId !== undefined ||
+    normalized.confirmedOriginalSourceCommit !== undefined ||
+    normalized.confirmedCurrentToolSourceCommit !== undefined ||
+    normalized.confirmedManifestDigest !== undefined ||
+    normalized.confirmedTargetDigest !== undefined
+  ) {
+    throw new ControlD1SchemaError("release_recovery_confirmation_invalid");
+  }
+  return normalized;
+}
+
+function releasePlanBudget(
+  metrics: ControlD1MaintenanceReleasePlanMetrics | null,
+): Omit<ControlD1MaintenanceReleasePlanMetrics, "digest"> | null {
+  if (!metrics) return null;
+  const { digest: _digest, ...budget } = metrics;
+  return budget;
+}
+
+/**
  * Apply the canonical OSS control-ledger bootstrap/migration chain to a D1
  * target selected by the operator, then run the same read-only verification as
  * the standalone verify command.
@@ -448,15 +1208,11 @@ export async function applyControlD1Schema(
   if (!options.retainMaintenanceFence) {
     const releasedAt = options.releasedAt();
     try {
-      await releaseControlD1MaintenanceFence(
-        database,
-        fence,
-        releasedAt,
-      );
+      await releaseControlD1MaintenanceFence(database, fence, releasedAt);
     } catch (error) {
-      // A transport can lose the response after D1 committed the release
-      // batch. Accept only the exact durable receipt and released guard state;
-      // some other inactive fence never reconciles this acknowledgement.
+      // Ordinary apply preserves its historical exact-receipt adoption. This
+      // is separate from the sealed recovery command, which never catches an
+      // ambiguous mutating acknowledgement and is status-only thereafter.
       if (!(await matchesExactInPlaceReleaseReceipt(
         database,
         fence,

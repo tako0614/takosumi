@@ -9,7 +9,9 @@ import {
   buildControlD1SchemaPlan,
   digestControlD1MaintenanceFence,
   fenceControlD1Schema,
+  readControlD1ReleaseStatus,
   releaseControlD1Candidate,
+  releaseControlD1InPlaceRecovery,
   reconcileControlD1CandidateRelease,
   SqliteControlD1Database,
   verifyControlD1Candidate,
@@ -26,7 +28,14 @@ import { ensureD1OpenTofuLedgerSchema } from "../../../worker/src/d1_opentofu_st
 import {
   acquireControlD1MaintenanceFence,
   assertControlD1MaintenanceInactive,
+  buildControlD1MaintenanceReleasePlanMetrics,
+  CONTROL_D1_MAINTENANCE_RELEASE_ASSERTION_TABLE,
+  CONTROL_D1_MAINTENANCE_RELEASE_GUARDS_TABLE,
+  CONTROL_D1_MAINTENANCE_RELEASE_MIGRATIONS_TABLE,
   ControlD1MaintenanceError,
+  readControlD1MaintenanceGuardInventory,
+  readControlD1MaintenanceMigrationLedger,
+  readControlD1SchemaVersion,
   readControlD1MaintenanceState,
   releaseControlD1MaintenanceFence,
 } from "../../../worker/src/d1_schema_maintenance.ts";
@@ -35,6 +44,168 @@ const SOURCE_COMMIT = "a".repeat(40);
 const PREDECESSOR_SOURCE_COMMIT = "b".repeat(40);
 const PREDECESSOR_MANIFEST_DIGEST = `sha256:${"c".repeat(64)}`;
 const NOW = "2026-07-16T00:00:00.000Z";
+const TARGET_DIGEST = `sha256:${"1".repeat(64)}`;
+
+interface ReadyReleaseStatusTranscript {
+  readonly status: "ready";
+  readonly statusDigest: string;
+  readonly releaseAuthorizationDigest: string;
+  readonly releaseReadinessDigest: string;
+  readonly fence: {
+    readonly fenceId: string;
+    readonly originalSourceCommit: string;
+    readonly currentToolSourceCommit: string;
+    readonly manifestDigest: string;
+    readonly targetDigest: string;
+  };
+}
+
+function releaseStatusCliArgs(
+  manifestDigest: string,
+  releasedAt: string,
+  confirmed?: ReadyReleaseStatusTranscript,
+): string[] {
+  return [
+    "release-status",
+    "--environment",
+    "staging",
+    "--confirm-manifest",
+    manifestDigest,
+    "--released-at",
+    releasedAt,
+    ...(confirmed
+      ? [
+          "--confirm-release-status-digest",
+          confirmed.statusDigest,
+          "--confirm-release-authorization-digest",
+          confirmed.releaseAuthorizationDigest,
+          "--confirm-release-readiness-digest",
+          confirmed.releaseReadinessDigest,
+          "--confirm-fence-id",
+          confirmed.fence.fenceId,
+          "--confirm-fence-source-commit",
+          confirmed.fence.originalSourceCommit,
+          "--confirm-tool-source-commit",
+          confirmed.fence.currentToolSourceCommit,
+          "--confirm-target-digest",
+          confirmed.fence.targetDigest,
+        ]
+      : []),
+  ];
+}
+
+function releaseRecoveryCliArgs(
+  manifestDigest: string,
+  releasedAt: string,
+  status: ReadyReleaseStatusTranscript,
+): string[] {
+  return [
+    "release",
+    "--environment",
+    "staging",
+    "--confirm-manifest",
+    manifestDigest,
+    "--released-at",
+    releasedAt,
+    "--confirm-release-status-digest",
+    status.statusDigest,
+    "--confirm-release-readiness-digest",
+    status.releaseReadinessDigest,
+    "--confirm-fence-id",
+    status.fence.fenceId,
+    "--confirm-fence-source-commit",
+    status.fence.originalSourceCommit,
+    "--confirm-tool-source-commit",
+    status.fence.currentToolSourceCommit,
+    "--confirm-target-digest",
+    status.fence.targetDigest,
+  ];
+}
+
+function withoutCliOption(args: readonly string[], flag: string): string[] {
+  const index = args.indexOf(flag);
+  if (index < 0) throw new Error(`missing CLI option: ${flag}`);
+  return [...args.slice(0, index), ...args.slice(index + 2)];
+}
+
+function replaceCliOption(
+  args: readonly string[],
+  flag: string,
+  value: string,
+): string[] {
+  const replaced = [...args];
+  const index = replaced.indexOf(flag);
+  if (index < 0) throw new Error(`missing CLI option: ${flag}`);
+  replaced[index + 1] = value;
+  return replaced;
+}
+
+async function retainReadyRecoveryFence(
+  database: D1Database,
+  plan: Awaited<ReturnType<typeof buildControlD1SchemaPlan>>,
+  releasedAt: string,
+) {
+  await applyControlD1Schema(database, plan, {
+    sourceCommit: PREDECESSOR_SOURCE_COMMIT,
+    environment: "test",
+    activatedAt: NOW,
+    releasedAt: () => releasedAt,
+    maintenanceDrainMilliseconds: 0,
+    waitForRequestDrain: async () => {},
+    retainMaintenanceFence: true,
+    databaseRole: "in_place",
+    releasePolicy: "in_place",
+    databaseId: "database_456",
+  });
+  const options = {
+    currentToolSourceCommit: SOURCE_COMMIT,
+    environment: "test" as const,
+    manifestDigest: plan.manifestDigest,
+    targetDatabaseId: "database_456",
+    targetDigest: TARGET_DIGEST,
+    releasedAt,
+  };
+  const status = await readControlD1ReleaseStatus(database, plan, options);
+  if (status.status !== "ready") {
+    throw new Error(`expected ready recovery status: ${status.issues.join(",")}`);
+  }
+  return { options, status };
+}
+
+function recoveryOptions(
+  options: Awaited<ReturnType<typeof retainReadyRecoveryFence>>["options"],
+  status: Awaited<ReturnType<typeof retainReadyRecoveryFence>>["status"],
+) {
+  return {
+    ...options,
+    confirmStatusDigest: status.statusDigest,
+    confirmReleaseReadinessDigest: status.releaseReadinessDigest,
+    confirmFenceId: status.fence.fenceId,
+    confirmOriginalSourceCommit: status.fence.originalSourceCommit,
+    confirmCurrentToolSourceCommit: status.fence.currentToolSourceCommit,
+    confirmManifestDigest: status.fence.manifestDigest,
+    confirmTargetDigest: status.fence.targetDigest,
+  };
+}
+
+function releaseReceiptOptions(
+  ready: Awaited<ReturnType<typeof retainReadyRecoveryFence>>,
+) {
+  return {
+    ...ready.options,
+    confirmedActiveStatusDigest: ready.status.statusDigest,
+    confirmedReleaseAuthorizationDigest:
+      ready.status.releaseAuthorizationDigest,
+    confirmedReleaseReadinessDigest: ready.status.releaseReadinessDigest,
+    confirmedFenceId: ready.status.fence.fenceId,
+    confirmedOriginalSourceCommit:
+      ready.status.fence.originalSourceCommit,
+    confirmedCurrentToolSourceCommit:
+      ready.status.fence.currentToolSourceCommit,
+    confirmedManifestDigest: ready.status.fence.manifestDigest,
+    confirmedTargetDigest: ready.status.fence.targetDigest,
+  };
+}
 
 interface AppliedControlD1CatalogFixture {
   readonly schemaVersion: 1;
@@ -3265,9 +3436,10 @@ test("control D1 candidate verification fails closed when foreign key check is m
   }
 });
 
-test("control D1 CLI releases only the exact retained in-place fence", async () => {
+test("control D1 CLI seals status, releases once, and reconciles lost acknowledgement read-only", async () => {
   const plan = await buildControlD1SchemaPlan();
   const database = new SqliteControlD1Database();
+  const releasedAt = "2026-08-05T12:00:05.000Z";
   try {
     await ensureD1OpenTofuLedgerSchema(database);
     const dependencies = {
@@ -3281,7 +3453,7 @@ test("control D1 CLI releases only the exact retained in-place fence", async () 
       }),
       createRemoteDatabase: () => ({
         database,
-        configurationDigest: `sha256:${"1".repeat(64)}`,
+        configurationDigest: TARGET_DIGEST,
         databaseId: "database_staging",
       }),
     };
@@ -3303,28 +3475,71 @@ test("control D1 CLI releases only the exact retained in-place fence", async () 
       readonly maintenanceFence: { readonly fenceId: string };
     };
     expect(freezeOutput.at(-1)).toContain('"mode": "freeze"');
-    const output: string[] = [];
-    const code = await runControlD1SchemaCli(
-      [
-        "release",
-        "--environment",
-        "staging",
-        "--confirm-manifest",
-        plan.manifestDigest,
-      ],
+    const statusOutput: string[] = [];
+    const statusCode = await runControlD1SchemaCli(
+      releaseStatusCliArgs(plan.manifestDigest, releasedAt),
       {},
-      (value) => output.push(value),
+      (value) => statusOutput.push(value),
       {
         ...dependencies,
-        now: () => "2026-08-05T12:00:05.000Z",
+        now: () => "2026-08-05T12:00:04.000Z",
       },
+    );
+    expect(statusCode).toBe(0);
+    const ready = JSON.parse(
+      statusOutput.at(-1) ?? "{}",
+    ) as ReadyReleaseStatusTranscript;
+    expect(ready).toMatchObject({
+      kind: "takosumi.control-d1-release-status@v1",
+      mode: "release-status",
+      status: "ready",
+      maintenanceStatus: "active",
+      fence: {
+        fenceId: freezeTranscript.maintenanceFence.fenceId,
+        originalSourceCommit: SOURCE_COMMIT,
+        currentToolSourceCommit: SOURCE_COMMIT,
+        targetDigest: TARGET_DIGEST,
+      },
+    });
+    expect(statusOutput.join("\n")).not.toContain("database_staging");
+
+    const prematureReceiptOutput: string[] = [];
+    const prematureReceiptCode = await runControlD1SchemaCli(
+      releaseStatusCliArgs(plan.manifestDigest, releasedAt, ready),
+      {},
+      (value) => prematureReceiptOutput.push(value),
+      dependencies,
+    );
+    expect(prematureReceiptCode).toBe(1);
+    expect(JSON.parse(prematureReceiptOutput.at(-1) ?? "{}")).toMatchObject({
+      mode: "release-status",
+      status: "not_ready",
+      maintenanceStatus: "active",
+      issues: expect.arrayContaining([
+        "release_ambiguous_receipt_still_active",
+      ]),
+    });
+
+    const output: string[] = [];
+    const releaseArgs = releaseRecoveryCliArgs(
+      plan.manifestDigest,
+      releasedAt,
+      ready,
+    );
+    const code = await runControlD1SchemaCli(
+      releaseArgs,
+      {},
+      (value) => output.push(value),
+      { ...dependencies, now: () => releasedAt },
     );
     expect(code).toBe(0);
     expect(JSON.parse(output.at(-1) ?? "{}")).toMatchObject({
       mode: "release",
       status: "released",
-      maintenanceStatus: "released",
-      maintenanceFence: {
+      maintenanceStatus: "inactive",
+      confirmedActiveStatusDigest: ready.statusDigest,
+      receiptMatchesAuthorization: true,
+      fence: {
         fenceId: freezeTranscript.maintenanceFence.fenceId,
       },
     });
@@ -3333,13 +3548,7 @@ test("control D1 CLI releases only the exact retained in-place fence", async () 
     });
     const retryOutput: string[] = [];
     const retryCode = await runControlD1SchemaCli(
-      [
-        "release",
-        "--environment",
-        "staging",
-        "--confirm-manifest",
-        plan.manifestDigest,
-      ],
+      releaseArgs,
       {},
       (value) => retryOutput.push(value),
       {
@@ -3347,15 +3556,84 @@ test("control D1 CLI releases only the exact retained in-place fence", async () 
         now: () => "2026-08-05T12:00:10.000Z",
       },
     );
-    expect(retryCode).toBe(0);
+    expect(retryCode).toBe(1);
     expect(JSON.parse(retryOutput.at(-1) ?? "{}")).toMatchObject({
       mode: "release",
-      status: "released",
-      maintenanceStatus: "released",
-      maintenanceFence: {
-        fenceId: freezeTranscript.maintenanceFence.fenceId,
-      },
+      status: "failed",
+      failureCode: "release_recovery_confirmation_mismatch",
     });
+
+    let receiptBatchCalls = 0;
+    const receiptDatabase: D1Database = {
+      prepare(query) {
+        return database.prepare(query);
+      },
+      async batch(statements) {
+        receiptBatchCalls += 1;
+        return database.batch(statements);
+      },
+    };
+    const receiptDependencies = {
+      ...dependencies,
+      now: () => "2026-08-05T12:00:11.000Z",
+      createRemoteDatabase: () => ({
+        database: receiptDatabase,
+        configurationDigest: TARGET_DIGEST,
+        databaseId: "database_staging",
+      }),
+    };
+    const receiptArgs = releaseStatusCliArgs(
+      plan.manifestDigest,
+      releasedAt,
+      ready,
+    );
+    const receiptOutput: string[] = [];
+    const receiptCode = await runControlD1SchemaCli(
+      receiptArgs,
+      {},
+      (value) => receiptOutput.push(value),
+      receiptDependencies,
+    );
+    expect(receiptCode).toBe(0);
+    expect(JSON.parse(receiptOutput.at(-1) ?? "{}")).toMatchObject({
+      mode: "release-status",
+      status: "released",
+      maintenanceStatus: "inactive",
+      confirmedActiveStatusDigest: ready.statusDigest,
+      receiptMatchesAuthorization: true,
+      receiptMatchesReleaseReadiness: true,
+      receiptConfirmationsExact: true,
+    });
+    const receiptMismatches = [
+      ["--confirm-release-status-digest", `sha256:${"f".repeat(64)}`],
+      ["--confirm-release-authorization-digest", `sha256:${"e".repeat(64)}`],
+      ["--confirm-release-readiness-digest", `sha256:${"d".repeat(64)}`],
+      ["--confirm-fence-id", `sha256:${"c".repeat(64)}`],
+      ["--confirm-fence-source-commit", "b".repeat(40)],
+      ["--confirm-tool-source-commit", "c".repeat(40)],
+      ["--confirm-manifest", `sha256:${"0".repeat(64)}`],
+      ["--confirm-target-digest", `sha256:${"2".repeat(64)}`],
+      ["--released-at", "2026-08-05T12:00:06.000Z"],
+      ["--environment", "production"],
+    ] as const;
+    for (const [flag, mismatch] of receiptMismatches) {
+      for (const args of [
+        withoutCliOption(receiptArgs, flag),
+        replaceCliOption(receiptArgs, flag, mismatch),
+      ]) {
+        const mismatchOutput: string[] = [];
+        expect(
+          await runControlD1SchemaCli(
+            args,
+            {},
+            (value) => mismatchOutput.push(value),
+            receiptDependencies,
+          ),
+          flag,
+        ).toBe(1);
+      }
+    }
+    expect(receiptBatchCalls).toBe(0);
   } finally {
     database.close();
   }
@@ -3364,6 +3642,7 @@ test("control D1 CLI releases only the exact retained in-place fence", async () 
 test("control D1 CLI release rejects a substituted retained fence", async () => {
   const plan = await buildControlD1SchemaPlan();
   const database = new SqliteControlD1Database();
+  const releasedAt = "2026-08-05T12:00:05.000Z";
   try {
     await ensureD1OpenTofuLedgerSchema(database);
     await acquireControlD1MaintenanceFence(
@@ -3378,36 +3657,50 @@ test("control D1 CLI release rejects a substituted retained fence", async () => 
       },
       NOW,
     );
+    const dependencies = {
+      sourceCommit: SOURCE_COMMIT,
+      now: () => "2026-08-05T12:00:04.000Z",
+      inspectSourceCheckout: async () => ({
+        head: SOURCE_COMMIT,
+        clean: true,
+      }),
+      createRemoteDatabase: () => ({
+        database,
+        configurationDigest: TARGET_DIGEST,
+        databaseId: "database_staging",
+      }),
+    };
+    const statusOutput: string[] = [];
+    expect(
+      await runControlD1SchemaCli(
+        releaseStatusCliArgs(plan.manifestDigest, releasedAt),
+        {},
+        (value) => statusOutput.push(value),
+        dependencies,
+      ),
+    ).toBe(0);
+    const ready = JSON.parse(
+      statusOutput.at(-1) ?? "{}",
+    ) as ReadyReleaseStatusTranscript;
+    const releaseArgs = releaseRecoveryCliArgs(
+      plan.manifestDigest,
+      releasedAt,
+      ready,
+    );
+    const sourceIndex = releaseArgs.indexOf("--confirm-fence-source-commit") + 1;
+    releaseArgs[sourceIndex] = SOURCE_COMMIT;
     const output: string[] = [];
     const code = await runControlD1SchemaCli(
-      [
-        "release",
-        "--environment",
-        "staging",
-        "--confirm-manifest",
-        plan.manifestDigest,
-      ],
+      releaseArgs,
       {},
       (value) => output.push(value),
-      {
-        sourceCommit: SOURCE_COMMIT,
-        now: () => "2026-08-05T12:00:05.000Z",
-        inspectSourceCheckout: async () => ({
-          head: SOURCE_COMMIT,
-          clean: true,
-        }),
-        createRemoteDatabase: () => ({
-          database,
-          configurationDigest: `sha256:${"1".repeat(64)}`,
-          databaseId: "database_staging",
-        }),
-      },
+      dependencies,
     );
     expect(code).toBe(1);
     expect(JSON.parse(output.at(-1) ?? "{}")).toMatchObject({
       mode: "release",
       status: "failed",
-      failureCode: "maintenance_fence_release_mismatch",
+      failureCode: "release_recovery_confirmation_mismatch",
     });
     expect((await readControlD1MaintenanceState(database)).status).toBe(
       "active",
@@ -3420,6 +3713,7 @@ test("control D1 CLI release rejects a substituted retained fence", async () => 
 test("control D1 CLI forward-repair release binds the current checkout to an older fence source", async () => {
   const plan = await buildControlD1SchemaPlan();
   const database = new SqliteControlD1Database();
+  const releasedAt = "2026-08-05T12:00:05.000Z";
   try {
     await ensureD1OpenTofuLedgerSchema(database);
     const predecessorFence = await acquireControlD1MaintenanceFence(
@@ -3442,19 +3736,34 @@ test("control D1 CLI forward-repair release binds the current checkout to an old
       }),
       createRemoteDatabase: () => ({
         database,
-        configurationDigest: `sha256:${"1".repeat(64)}`,
+        configurationDigest: TARGET_DIGEST,
         databaseId: "database_staging",
       }),
     };
-    const releaseArgs = [
-      "release",
-      "--environment",
-      "staging",
-      "--confirm-manifest",
+    const statusOutput: string[] = [];
+    expect(
+      await runControlD1SchemaCli(
+        releaseStatusCliArgs(plan.manifestDigest, releasedAt),
+        {},
+        (value) => statusOutput.push(value),
+        { ...dependencies, now: () => "2026-08-05T12:00:04.000Z" },
+      ),
+    ).toBe(0);
+    const ready = JSON.parse(
+      statusOutput.at(-1) ?? "{}",
+    ) as ReadyReleaseStatusTranscript;
+    expect(ready.fence).toMatchObject({
+      fenceId: predecessorFence.fenceId,
+      originalSourceCommit: PREDECESSOR_SOURCE_COMMIT,
+      currentToolSourceCommit: SOURCE_COMMIT,
+      manifestDigest: plan.manifestDigest,
+      targetDigest: TARGET_DIGEST,
+    });
+    const releaseArgs = releaseRecoveryCliArgs(
       plan.manifestDigest,
-      "--confirm-fence-source-commit",
-      PREDECESSOR_SOURCE_COMMIT,
-    ];
+      releasedAt,
+      ready,
+    );
     const output: string[] = [];
     const code = await runControlD1SchemaCli(
       releaseArgs,
@@ -3466,19 +3775,20 @@ test("control D1 CLI forward-repair release binds the current checkout to an old
     expect(JSON.parse(output.at(-1) ?? "{}")).toMatchObject({
       mode: "release",
       status: "released",
-      sourceCommit: SOURCE_COMMIT,
-      confirmedFenceSourceCommit: PREDECESSOR_SOURCE_COMMIT,
-      maintenanceStatus: "released",
-      maintenanceFence: {
+      maintenanceStatus: "inactive",
+      confirmedActiveStatusDigest: ready.statusDigest,
+      fence: {
         fenceId: predecessorFence.fenceId,
-        sourceCommit: PREDECESSOR_SOURCE_COMMIT,
+        originalSourceCommit: PREDECESSOR_SOURCE_COMMIT,
+        currentToolSourceCommit: SOURCE_COMMIT,
         manifestDigest: plan.manifestDigest,
         environment: "staging",
         databaseRole: "in_place",
         releasePolicy: "in_place",
-        databaseId: "database_staging",
+        targetDigest: TARGET_DIGEST,
       },
     });
+    expect(output.join("\n")).not.toContain("database_staging");
     expect(await readControlD1MaintenanceState(database)).toEqual({
       status: "inactive",
     });
@@ -3490,20 +3800,18 @@ test("control D1 CLI forward-repair release binds the current checkout to an old
       (value) => retryOutput.push(value),
       { ...dependencies, now: () => "2026-08-05T12:00:10.000Z" },
     );
-    expect(retryCode).toBe(0);
+    expect(retryCode).toBe(1);
     expect(JSON.parse(retryOutput.at(-1) ?? "{}")).toMatchObject({
       mode: "release",
-      status: "released",
-      sourceCommit: SOURCE_COMMIT,
-      confirmedFenceSourceCommit: PREDECESSOR_SOURCE_COMMIT,
-      maintenanceFence: { fenceId: predecessorFence.fenceId },
+      status: "failed",
+      failureCode: "release_recovery_confirmation_mismatch",
     });
   } finally {
     database.close();
   }
 });
 
-test("control D1 CLI forward-repair release refuses migration checksum drift before mutation", async () => {
+test("control D1 CLI release-status refuses migration checksum drift before mutation", async () => {
   const plan = await buildControlD1SchemaPlan();
   const database = new SqliteControlD1Database();
   try {
@@ -3529,15 +3837,10 @@ test("control D1 CLI forward-repair release refuses migration checksum drift bef
       .run();
     const output: string[] = [];
     const code = await runControlD1SchemaCli(
-      [
-        "release",
-        "--environment",
-        "staging",
-        "--confirm-manifest",
+      releaseStatusCliArgs(
         plan.manifestDigest,
-        "--confirm-fence-source-commit",
-        PREDECESSOR_SOURCE_COMMIT,
-      ],
+        "2026-08-05T12:00:05.000Z",
+      ),
       {},
       (value) => output.push(value),
       {
@@ -3556,11 +3859,13 @@ test("control D1 CLI forward-repair release refuses migration checksum drift bef
     );
     expect(code).toBe(1);
     expect(JSON.parse(output.at(-1) ?? "{}")).toMatchObject({
-      mode: "release",
-      status: "failed",
-      failureCode: "pre_release_verification_failed",
-      sourceCommit: SOURCE_COMMIT,
-      confirmedFenceSourceCommit: PREDECESSOR_SOURCE_COMMIT,
+      mode: "release-status",
+      status: "not_ready",
+      maintenanceStatus: "active",
+      issues: expect.arrayContaining([
+        "release_schema_not_ready",
+        "release_ledger_mismatch",
+      ]),
     });
     expect((await readControlD1MaintenanceState(database)).status).toBe(
       "active",
@@ -3575,40 +3880,29 @@ test("control D1 CLI forward-repair release refuses migration checksum drift bef
   }
 });
 
-test("control D1 CLI forward-repair release rejects source, manifest, environment, and database mismatches", async () => {
+test("control D1 CLI release-status rejects manifest, environment, and database mismatches", async () => {
   const plan = await buildControlD1SchemaPlan();
   const cases = [
     {
-      name: "source",
-      flagSource: SOURCE_COMMIT,
-      manifest: plan.manifestDigest,
-      environment: "staging" as const,
-      databaseId: "database_staging",
-      expected: "maintenance_fence_release_mismatch",
-    },
-    {
       name: "environment",
-      flagSource: PREDECESSOR_SOURCE_COMMIT,
       manifest: plan.manifestDigest,
       environment: "production" as const,
       databaseId: "database_staging",
-      expected: "maintenance_fence_release_mismatch",
+      expectedIssue: "release_fence_environment_mismatch",
     },
     {
       name: "database",
-      flagSource: PREDECESSOR_SOURCE_COMMIT,
       manifest: plan.manifestDigest,
       environment: "staging" as const,
       databaseId: "database_other",
-      expected: "maintenance_fence_release_mismatch",
+      expectedIssue: "release_fence_target_mismatch",
     },
     {
       name: "manifest",
-      flagSource: PREDECESSOR_SOURCE_COMMIT,
       manifest: `sha256:${"0".repeat(64)}`,
       environment: "staging" as const,
       databaseId: "database_staging",
-      expected: "manifest_confirmation_required",
+      expectedFailure: "manifest_confirmation_required",
     },
   ] as const;
   for (const current of cases) {
@@ -3628,16 +3922,13 @@ test("control D1 CLI forward-repair release rejects source, manifest, environmen
         NOW,
       );
       const output: string[] = [];
+      const args = releaseStatusCliArgs(
+        current.manifest,
+        "2026-08-05T12:00:05.000Z",
+      );
+      args[2] = current.environment;
       const code = await runControlD1SchemaCli(
-        [
-          "release",
-          "--environment",
-          current.environment,
-          "--confirm-manifest",
-          current.manifest,
-          "--confirm-fence-source-commit",
-          current.flagSource,
-        ],
+        args,
         {},
         (value) => output.push(value),
         {
@@ -3655,13 +3946,23 @@ test("control D1 CLI forward-repair release rejects source, manifest, environmen
         },
       );
       expect(code, current.name).toBe(1);
-      expect(JSON.parse(output.at(-1) ?? "{}")).toMatchObject({
-        mode: "release",
-        status: "failed",
-        failureCode: current.expected,
-        sourceCommit: SOURCE_COMMIT,
-        confirmedFenceSourceCommit: current.flagSource,
-      });
+      const transcript = JSON.parse(output.at(-1) ?? "{}") as Record<
+        string,
+        unknown
+      >;
+      if ("expectedFailure" in current) {
+        expect(transcript).toMatchObject({
+          mode: "release-status",
+          status: "failed",
+          failureCode: current.expectedFailure,
+        });
+      } else {
+        expect(transcript).toMatchObject({
+          mode: "release-status",
+          status: "not_ready",
+          issues: expect.arrayContaining([current.expectedIssue]),
+        });
+      }
       expect((await readControlD1MaintenanceState(database)).status).toBe(
         "active",
       );
@@ -3729,16 +4030,24 @@ test("control D1 CLI forward-repair release still requires the current clean che
         NOW,
       );
       const output: string[] = [];
+      const releaseArgs = releaseRecoveryCliArgs(
+        plan.manifestDigest,
+        "2026-08-05T12:00:05.000Z",
+        {
+          status: "ready",
+          statusDigest: `sha256:${"2".repeat(64)}`,
+          releaseReadinessDigest: `sha256:${"3".repeat(64)}`,
+          fence: {
+            fenceId: `sha256:${"4".repeat(64)}`,
+            originalSourceCommit: PREDECESSOR_SOURCE_COMMIT,
+            currentToolSourceCommit: SOURCE_COMMIT,
+            manifestDigest: plan.manifestDigest,
+            targetDigest: TARGET_DIGEST,
+          },
+        },
+      );
       const code = await runControlD1SchemaCli(
-        [
-          "release",
-          "--environment",
-          "staging",
-          "--confirm-manifest",
-          plan.manifestDigest,
-          "--confirm-fence-source-commit",
-          PREDECESSOR_SOURCE_COMMIT,
-        ],
+        releaseArgs,
         {},
         (value) => output.push(value),
         {
@@ -3781,9 +4090,17 @@ test("control D1 forward-repair runbook uses the public schema CLI entrypoint", 
     ),
     "utf8",
   );
+  expect(runbook).toContain("bun run control-d1-schema:release-status -- \\");
   expect(runbook).toContain("bun scripts/control-d1-schema.ts release \\");
+  expect(runbook).toContain("--confirm-release-status-digest");
+  expect(runbook).toContain("--confirm-release-readiness-digest");
+  expect(runbook).toContain("--confirm-fence-id");
   expect(runbook).toContain("--confirm-fence-source-commit");
-  expect(runbook).not.toContain("bun run control-d1-schema:release");
+  expect(runbook).toContain("--confirm-tool-source-commit");
+  expect(runbook).toContain("--confirm-target-digest");
+  expect(runbook).toContain("do **not** rerun `release`");
+  expect(runbook).toContain("targetAuthorization.status: \"not_authorized\"");
+  expect(runbook).not.toContain("bun run control-d1-schema:release --");
 });
 
 test("control D1 CLI apply requires exact manifest confirmation", async () => {
@@ -4332,6 +4649,951 @@ test("control D1 REST release keeps every query statement below D1's 100 KB limi
   }
 });
 
+test("control D1 release stays within provider-neutral worst-case Import budgets at 221 tables and 657 guards", async () => {
+  const plan = await buildControlD1SchemaPlan();
+  const backing = new SqliteControlD1Database();
+  const { fetch, stats } = createD1RestAndImportFetch(backing);
+  const database = new CloudflareControlD1RestDatabase({
+    accountId: "account_123",
+    databaseId: "database_456",
+    apiToken: "secret-token",
+    fetch,
+    importPollIntervalMilliseconds: 0,
+    wait: async () => {},
+  });
+  try {
+    await ensureD1OpenTofuLedgerSchema(backing);
+    const hostTableCount = 221 - plan.tables.length - 1;
+    expect(hostTableCount).toBeGreaterThan(0);
+    const hostTables = Array.from({ length: hostTableCount }, (_, index) => {
+      const prefix = `host_extension_${String(index).padStart(3, "0")}_`;
+      return `${prefix}${"x".repeat(128 - prefix.length)}`;
+    });
+    backing.exec(
+      hostTables
+        .map((table) => `create table "${table}" (id integer primary key);`)
+        .join("\n"),
+    );
+
+    const fence = await acquireControlD1MaintenanceFence(
+      database,
+      {
+        sourceCommit: SOURCE_COMMIT,
+        manifestDigest: plan.manifestDigest,
+        environment: "staging",
+        databaseRole: "in_place",
+        releasePolicy: "in_place",
+        databaseId: "database_456",
+      },
+      NOW,
+    );
+    const guarded = await readControlD1MaintenanceGuardInventory(database);
+    expect(guarded.guardedTableCount).toBe(219);
+    expect(guarded.guardTriggerCount).toBe(657);
+    expect(
+      await backing
+        .prepare(
+          `select count(*) as count from sqlite_master
+           where type = 'table' and name not like 'sqlite_%'`,
+        )
+        .first<{ readonly count: number }>(),
+    ).toEqual({ count: 221 });
+
+    const releaseMetrics = await buildControlD1MaintenanceReleasePlanMetrics(
+      database,
+      fence,
+      "2026-07-16T00:01:00.000Z",
+      {
+        releaseAuthorizationDigest: `sha256:${"d".repeat(64)}`,
+        expectedSchemaVersion: await readControlD1SchemaVersion(database),
+        expectedMigrations:
+          await readControlD1MaintenanceMigrationLedger(database),
+      },
+    );
+    expect(releaseMetrics).toEqual({
+      kind: "takosumi.control-d1-maintenance-release-plan@v1",
+      statementCount: 672,
+      guardInsertStatementCount: 6,
+      migrationInsertStatementCount: 1,
+      guardedTableCount: 219,
+      guardTriggerCount: 657,
+      maxStatementBytes: 99_792,
+      statementLimitBytes: 100_000,
+      maxStatementBindings: 0,
+      statementBindingLimit: 100,
+      totalImportBytes: 683_937,
+      importLimitBytes: 5_000_000_000,
+      digest:
+        "sha256:706e5f6957fe1bc8b8ca1e7d8fae3a45206ea7ed6a89d9b60175d5cee5af1c9f",
+    });
+
+    await releaseControlD1MaintenanceFence(
+      database,
+      fence,
+      "2026-07-16T00:01:00.000Z",
+      { releaseReadinessDigest: `sha256:${"d".repeat(64)}` },
+    );
+
+    const releaseImport = [...stats.uploadedSql]
+      .reverse()
+      .find((sql) =>
+        sql.includes(
+          `update _takosumi_control_schema_maintenance\n  set active = 0`,
+        ),
+      );
+    expect(releaseImport).toBeDefined();
+    const updateStart = releaseImport!.indexOf(
+      "update _takosumi_control_schema_maintenance",
+    );
+    const updateEndMarker = "\n  where singleton = 1;\n";
+    const updateEndStart = releaseImport!.indexOf(updateEndMarker, updateStart);
+    const updateEnd = updateEndStart + updateEndMarker.length;
+    expect(updateStart).toBeGreaterThanOrEqual(0);
+    expect(updateEndStart).toBeGreaterThan(updateStart);
+    expect(updateEnd).toBeGreaterThan(updateStart);
+    const releaseUpdateBytes = new TextEncoder().encode(
+      releaseImport!.slice(updateStart, updateEnd),
+    ).byteLength;
+    const releaseImportBytes = new TextEncoder().encode(releaseImport!).byteLength;
+    expect(releaseUpdateBytes).toBeLessThan(100_000);
+    expect(releaseImportBytes).toBeLessThanOrEqual(5_000_000_000);
+  } finally {
+    backing.close();
+  }
+});
+
+test("control D1 recovery status seals exact metadata and dispatches one bounded Import", async () => {
+  const plan = await buildControlD1SchemaPlan();
+  const database = new SqliteControlD1Database();
+  const targetDigest = `sha256:${"1".repeat(64)}`;
+  const releasedAt = "2026-07-16T00:01:00.000Z";
+  try {
+    const applied = await applyControlD1Schema(database, plan, {
+      sourceCommit: PREDECESSOR_SOURCE_COMMIT,
+      environment: "test",
+      activatedAt: NOW,
+      releasedAt: () => releasedAt,
+      maintenanceDrainMilliseconds: 0,
+      waitForRequestDrain: async () => {},
+      retainMaintenanceFence: true,
+      databaseRole: "in_place",
+      releasePolicy: "in_place",
+      databaseId: "database_456",
+    });
+    expect(applied.maintenanceStatus).toBe("retained");
+
+    const statusOptions = {
+      currentToolSourceCommit: SOURCE_COMMIT,
+      environment: "test" as const,
+      manifestDigest: plan.manifestDigest,
+      targetDatabaseId: "database_456",
+      targetDigest,
+      releasedAt,
+    };
+    const active = await readControlD1ReleaseStatus(
+      database,
+      plan,
+      statusOptions,
+    );
+    expect(active).toMatchObject({
+      kind: "takosumi.control-d1-release-status@v1",
+      status: "ready",
+      maintenanceStatus: "active",
+      fence: {
+        fenceId: applied.maintenanceFence.fenceId,
+        recomputedFenceId: applied.maintenanceFence.fenceId,
+        fenceIdMatches: true,
+        originalSourceCommit: PREDECESSOR_SOURCE_COMMIT,
+        currentToolSourceCommit: SOURCE_COMMIT,
+        manifestDigest: plan.manifestDigest,
+        environment: "test",
+        databaseRole: "in_place",
+        releasePolicy: "in_place",
+        targetDigest,
+        sourceExportSha256: null,
+        activatedAt: NOW,
+        releasedAt: null,
+      },
+      maintenance: {
+        active: 1,
+        migrationBypass: 0,
+        maintenanceTableShapeMatches: true,
+        releaseGuardRelationAbsent: true,
+        releaseMigrationRelationAbsent: true,
+        storedReleaseAuthorizationDigest: null,
+      },
+      schemaVersion: { stable: true },
+      schema: { status: "ready" },
+      ledger: { exactMatch: true },
+      integrity: { status: "ready" },
+      guards: { canonical: true },
+      requestedReleasedAt: releasedAt,
+      receiptMatchesAuthorization: null,
+      issues: [],
+    });
+    expect(active.releasePlan).not.toBeNull();
+    expect(active.releasePlan?.maxStatementBytes).toBeLessThan(100_000);
+    expect(active.releasePlan?.maxStatementBindings).toBe(0);
+    expect(active.statusDigest).toMatch(/^sha256:[0-9a-f]{64}$/u);
+    expect(active.releaseAuthorizationDigest).toMatch(
+      /^sha256:[0-9a-f]{64}$/u,
+    );
+    expect(active.releaseReadinessDigest).toMatch(/^sha256:[0-9a-f]{64}$/u);
+    expect(JSON.stringify(active)).not.toContain("database_456");
+    expect(JSON.stringify(active).toLowerCase()).not.toContain("create table");
+
+    let recoveryBatchCalls = 0;
+    const oneShotDatabase: D1Database = {
+      prepare(query) {
+        return database.prepare(query);
+      },
+      async batch(statements) {
+        recoveryBatchCalls += 1;
+        return database.batch(statements);
+      },
+    };
+    const released = await releaseControlD1InPlaceRecovery(
+      oneShotDatabase,
+      plan,
+      {
+        ...statusOptions,
+        confirmStatusDigest: active.statusDigest,
+        confirmReleaseReadinessDigest: active.releaseReadinessDigest,
+        confirmFenceId: active.fence.fenceId,
+        confirmOriginalSourceCommit: active.fence.originalSourceCommit,
+        confirmCurrentToolSourceCommit: active.fence.currentToolSourceCommit,
+        confirmManifestDigest: active.fence.manifestDigest,
+        confirmTargetDigest: active.fence.targetDigest,
+      },
+    );
+    expect(recoveryBatchCalls).toBe(1);
+    expect(released).toMatchObject({
+      status: "released",
+      maintenanceStatus: "inactive",
+      requestedReleasedAt: releasedAt,
+      confirmedActiveStatusDigest: active.statusDigest,
+      releaseAuthorizationDigest: active.releaseAuthorizationDigest,
+      receiptMatchesAuthorization: true,
+      releasePlan: expect.objectContaining({
+        digest: active.releasePlan?.digest,
+      }),
+      issues: [],
+      maintenance: {
+        active: 0,
+        migrationBypass: 0,
+        storedReleaseAuthorizationDigest: active.releaseAuthorizationDigest,
+        releaseGuardRelationAbsent: true,
+        releaseMigrationRelationAbsent: true,
+      },
+      guards: { guardTriggerCount: 0, canonical: true },
+    });
+    expect(JSON.stringify(released)).not.toContain("database_456");
+  } finally {
+    database.close();
+  }
+});
+
+test("control D1 release-status reconciliation refuses to reseal an active fence", async () => {
+  const plan = await buildControlD1SchemaPlan();
+  const database = new SqliteControlD1Database();
+  const releasedAt = "2026-07-16T00:01:00.000Z";
+  try {
+    const ready = await retainReadyRecoveryFence(database, plan, releasedAt);
+    const ambiguous = await readControlD1ReleaseStatus(
+      database,
+      plan,
+      releaseReceiptOptions(ready),
+    );
+    expect(ambiguous.status).toBe("not_ready");
+    expect(ambiguous.maintenanceStatus).toBe("active");
+    expect(ambiguous.issues).toContain(
+      "release_ambiguous_receipt_still_active",
+    );
+    expect(ambiguous.statusDigest).not.toBe(ready.status.statusDigest);
+  } finally {
+    database.close();
+  }
+});
+
+test("control D1 recovery Import rejects schema-version and ledger races with the fence active", async () => {
+  const plan = await buildControlD1SchemaPlan();
+  for (const race of ["schema_version", "ledger"] as const) {
+    const database = new SqliteControlD1Database();
+    const releasedAt = "2026-07-16T00:01:00.000Z";
+    try {
+      const ready = await retainReadyRecoveryFence(database, plan, releasedAt);
+      let batchCalls = 0;
+      const raced: D1Database = {
+        prepare(query) {
+          return database.prepare(query);
+        },
+        async batch(statements) {
+          batchCalls += 1;
+          if (race === "schema_version") {
+            database.exec(
+              `create table host_race_after_status (id integer primary key)`,
+            );
+          } else {
+            await database
+              .prepare(
+                `update schema_migrations set checksum = 'raced' where version = 1`,
+              )
+              .run();
+          }
+          return database.batch(statements);
+        },
+      };
+      await expect(
+        releaseControlD1InPlaceRecovery(
+          raced,
+          plan,
+          recoveryOptions(ready.options, ready.status),
+        ),
+      ).rejects.toThrow("maintenance_fence_release_failed");
+      expect(batchCalls, race).toBe(1);
+      expect((await readControlD1MaintenanceState(database)).status).toBe(
+        "active",
+      );
+      expect(
+        (await readControlD1MaintenanceGuardInventory(database))
+          .guardTriggerCount,
+      ).toBeGreaterThan(0);
+      expect(
+        await database
+          .prepare(
+            `select count(*) as count from sqlite_master
+             where name in (?, ?, ?)`,
+          )
+          .bind(
+            CONTROL_D1_MAINTENANCE_RELEASE_GUARDS_TABLE,
+            CONTROL_D1_MAINTENANCE_RELEASE_MIGRATIONS_TABLE,
+            CONTROL_D1_MAINTENANCE_RELEASE_ASSERTION_TABLE,
+          )
+          .first(),
+      ).toEqual({ count: 0 });
+    } finally {
+      database.close();
+    }
+  }
+});
+
+test("control D1 recovery requires every sealed confirmation before dispatch", async () => {
+  const plan = await buildControlD1SchemaPlan();
+  const database = new SqliteControlD1Database();
+  const releasedAt = "2026-07-16T00:01:00.000Z";
+  try {
+    const ready = await retainReadyRecoveryFence(database, plan, releasedAt);
+    const exact = recoveryOptions(ready.options, ready.status);
+    const mismatches = [
+      {
+        name: "status digest",
+        options: { ...exact, confirmStatusDigest: `sha256:${"2".repeat(64)}` },
+      },
+      {
+        name: "readiness digest",
+        options: {
+          ...exact,
+          confirmReleaseReadinessDigest: `sha256:${"3".repeat(64)}`,
+        },
+      },
+      {
+        name: "fence id",
+        options: { ...exact, confirmFenceId: `sha256:${"4".repeat(64)}` },
+      },
+      {
+        name: "original source",
+        options: { ...exact, confirmOriginalSourceCommit: "c".repeat(40) },
+      },
+      {
+        name: "tool source",
+        options: { ...exact, confirmCurrentToolSourceCommit: "d".repeat(40) },
+      },
+      {
+        name: "manifest",
+        options: {
+          ...exact,
+          confirmManifestDigest: `sha256:${"5".repeat(64)}`,
+        },
+      },
+      {
+        name: "target",
+        options: { ...exact, confirmTargetDigest: `sha256:${"6".repeat(64)}` },
+      },
+      {
+        name: "releasedAt",
+        options: { ...exact, releasedAt: "2026-07-16T00:01:01.000Z" },
+      },
+    ] as const;
+    let batchCalls = 0;
+    const observed: D1Database = {
+      prepare(query) {
+        return database.prepare(query);
+      },
+      async batch(statements) {
+        batchCalls += 1;
+        return database.batch(statements);
+      },
+    };
+    for (const mismatch of mismatches) {
+      await expect(
+        releaseControlD1InPlaceRecovery(
+          observed,
+          plan,
+          mismatch.options,
+        ),
+        mismatch.name,
+      ).rejects.toThrow("release_recovery_confirmation_mismatch");
+    }
+    expect(batchCalls).toBe(0);
+    expect((await readControlD1MaintenanceState(database)).status).toBe(
+      "active",
+    );
+  } finally {
+    database.close();
+  }
+});
+
+test("control D1 recovery rolls back every reviewed Import failure point", async () => {
+  const plan = await buildControlD1SchemaPlan();
+  const releasedAt = "2026-07-16T00:01:00.000Z";
+  const failurePoints = [
+    "pre_assertion",
+    "post_assertion_pre_update",
+    "post_update",
+    "mid_trigger_drop",
+    "relation_drop",
+  ] as const;
+  for (const failurePoint of failurePoints) {
+    const database = new SqliteControlD1Database();
+    try {
+      const ready = await retainReadyRecoveryFence(database, plan, releasedAt);
+      const fullGuardCount = ready.status.guards.guardTriggerCount;
+      const statementSql = new WeakMap<object, string>();
+      let batchCalls = 0;
+      const failImport: D1Database = {
+        prepare(query) {
+          const statement = database.prepare(query);
+          statementSql.set(statement as object, query.trim().toLowerCase());
+          return statement;
+        },
+        async batch(statements) {
+          batchCalls += 1;
+          const queries = statements.map(
+            (statement) => statementSql.get(statement as object) ?? "",
+          );
+          const assertionIndex = queries.findIndex((query) =>
+            query.startsWith(
+              `insert into "${CONTROL_D1_MAINTENANCE_RELEASE_ASSERTION_TABLE}"`,
+            ),
+          );
+          const updateIndex = queries.findIndex((query) =>
+            query.startsWith(
+              "update _takosumi_control_schema_maintenance",
+            ),
+          );
+          const triggerDropIndexes = queries
+            .map((query, index) =>
+              query.startsWith("drop trigger ") ? index : -1,
+            )
+            .filter((index) => index >= 0);
+          const relationDropIndex = queries.findIndex((query) =>
+            query.startsWith(
+              `drop table "${CONTROL_D1_MAINTENANCE_RELEASE_MIGRATIONS_TABLE}"`,
+            ),
+          );
+          const injectionIndex =
+            failurePoint === "pre_assertion"
+              ? assertionIndex
+              : failurePoint === "post_assertion_pre_update"
+                ? updateIndex
+                : failurePoint === "post_update"
+                  ? updateIndex + 1
+                  : failurePoint === "mid_trigger_drop"
+                    ? triggerDropIndexes[
+                        Math.floor(triggerDropIndexes.length / 2)
+                      ]! + 1
+                    : relationDropIndex + 1;
+          if (
+            assertionIndex < 0 ||
+            updateIndex < 0 ||
+            triggerDropIndexes.length === 0 ||
+            relationDropIndex < 0 ||
+            injectionIndex <= 0
+          ) {
+            throw new Error(`missing injection point: ${failurePoint}`);
+          }
+          return database.batch([
+            ...statements.slice(0, injectionIndex),
+            database.prepare(
+              `insert into _takosumi_injected_missing_relation values (1)`,
+            ),
+            ...statements.slice(injectionIndex),
+          ]);
+        },
+      };
+      await expect(
+        releaseControlD1InPlaceRecovery(
+          failImport,
+          plan,
+          recoveryOptions(ready.options, ready.status),
+        ),
+        failurePoint,
+      ).rejects.toThrow("maintenance_fence_release_failed");
+      expect(batchCalls, failurePoint).toBe(1);
+      expect(
+        (await readControlD1MaintenanceState(database)).status,
+        failurePoint,
+      ).toBe("active");
+      expect(
+        (await readControlD1MaintenanceGuardInventory(database))
+          .guardTriggerCount,
+        failurePoint,
+      ).toBe(fullGuardCount);
+      expect(
+        await database
+          .prepare(
+            `select count(*) as count from sqlite_master
+             where name in (?, ?, ?)`,
+          )
+          .bind(
+            CONTROL_D1_MAINTENANCE_RELEASE_GUARDS_TABLE,
+            CONTROL_D1_MAINTENANCE_RELEASE_MIGRATIONS_TABLE,
+            CONTROL_D1_MAINTENANCE_RELEASE_ASSERTION_TABLE,
+          )
+          .first(),
+        failurePoint,
+      ).toEqual({ count: 0 });
+      const retained = await readControlD1ReleaseStatus(
+        database,
+        plan,
+        ready.options,
+      );
+      expect(retained.status, failurePoint).toBe("ready");
+      expect(
+        retained.maintenance.storedReleaseAuthorizationDigest,
+        failurePoint,
+      ).toBeNull();
+      expect(retained.fence.releasedAt, failurePoint).toBeNull();
+    } finally {
+      database.close();
+    }
+  }
+});
+
+test("control D1 recovery lost acknowledgement permits status-only reconciliation and no release retry", async () => {
+  const plan = await buildControlD1SchemaPlan();
+  const database = new SqliteControlD1Database();
+  const releasedAt = "2026-07-16T00:01:00.000Z";
+  try {
+    const ready = await retainReadyRecoveryFence(database, plan, releasedAt);
+    let batchCalls = 0;
+    const lostAcknowledgement: D1Database = {
+      prepare(query) {
+        return database.prepare(query);
+      },
+      async batch(statements) {
+        batchCalls += 1;
+        const result = await database.batch(statements);
+        throw new Error(`lost acknowledgement after ${result.length} results`);
+      },
+    };
+    const confirmed = recoveryOptions(ready.options, ready.status);
+    await expect(
+      releaseControlD1InPlaceRecovery(
+        lostAcknowledgement,
+        plan,
+        confirmed,
+      ),
+    ).rejects.toThrow("maintenance_fence_release_failed");
+    expect(batchCalls).toBe(1);
+    expect(await readControlD1MaintenanceState(database)).toEqual({
+      status: "inactive",
+    });
+    await expect(
+      releaseControlD1InPlaceRecovery(
+        lostAcknowledgement,
+        plan,
+        confirmed,
+      ),
+    ).rejects.toThrow("release_recovery_confirmation_mismatch");
+    expect(batchCalls).toBe(1);
+    const receiptOptions = releaseReceiptOptions(ready);
+    const receiptConfirmations = [
+      ["confirmedActiveStatusDigest", `sha256:${"f".repeat(64)}`],
+      ["confirmedReleaseAuthorizationDigest", `sha256:${"e".repeat(64)}`],
+      ["confirmedReleaseReadinessDigest", `sha256:${"d".repeat(64)}`],
+      ["confirmedFenceId", `sha256:${"c".repeat(64)}`],
+      ["confirmedOriginalSourceCommit", "c".repeat(40)],
+      ["confirmedCurrentToolSourceCommit", "d".repeat(40)],
+      ["confirmedManifestDigest", `sha256:${"b".repeat(64)}`],
+      ["confirmedTargetDigest", `sha256:${"2".repeat(64)}`],
+    ] as const;
+    for (const [name, mismatch] of receiptConfirmations) {
+      const missing = { ...receiptOptions } as Record<string, unknown>;
+      delete missing[name];
+      expect(
+        (await readControlD1ReleaseStatus(database, plan, missing as never))
+          .status,
+        `${name} omission`,
+      ).toBe("receipt_mismatch");
+      expect(
+        (
+          await readControlD1ReleaseStatus(database, plan, {
+            ...receiptOptions,
+            [name]: mismatch,
+          })
+        ).status,
+        `${name} mismatch`,
+      ).toBe("receipt_mismatch");
+    }
+    const receipt = await readControlD1ReleaseStatus(
+      database,
+      plan,
+      receiptOptions,
+    );
+    expect(receipt).toMatchObject({
+      status: "released",
+      maintenanceStatus: "inactive",
+      confirmedActiveStatusDigest: ready.status.statusDigest,
+      receiptMatchesAuthorization: true,
+      receiptMatchesReleaseReadiness: true,
+      receiptConfirmationsExact: true,
+      releaseAuthorizationDigest:
+        ready.status.releaseAuthorizationDigest,
+      releaseReadinessDigest: ready.status.releaseReadinessDigest,
+      releasePlan: expect.objectContaining({
+        digest: ready.status.releasePlan?.digest,
+      }),
+      issues: [],
+    });
+  } finally {
+    database.close();
+  }
+});
+
+test("control D1 recovery serializes two controllers with the same sealed status", async () => {
+  const plan = await buildControlD1SchemaPlan();
+  const database = new SqliteControlD1Database();
+  const releasedAt = "2026-07-16T00:01:00.000Z";
+  try {
+    const ready = await retainReadyRecoveryFence(database, plan, releasedAt);
+    let releaseBarrier: (() => void) | undefined;
+    const barrier = new Promise<void>((resolve) => {
+      releaseBarrier = resolve;
+    });
+    let waitingControllers = 0;
+    let batchCalls = 0;
+    const controller = (): D1Database => ({
+      prepare(query) {
+        return database.prepare(query);
+      },
+      async batch(statements) {
+        batchCalls += 1;
+        waitingControllers += 1;
+        if (waitingControllers === 2) releaseBarrier?.();
+        await barrier;
+        return database.batch(statements);
+      },
+    });
+    const confirmed = recoveryOptions(ready.options, ready.status);
+    const results = await Promise.allSettled([
+      releaseControlD1InPlaceRecovery(controller(), plan, confirmed),
+      releaseControlD1InPlaceRecovery(controller(), plan, confirmed),
+    ]);
+    const winners = results.filter(
+      (result): result is PromiseFulfilledResult<Awaited<
+        ReturnType<typeof releaseControlD1InPlaceRecovery>
+      >> => result.status === "fulfilled",
+    );
+    const losers = results.filter(
+      (result): result is PromiseRejectedResult =>
+        result.status === "rejected",
+    );
+    expect(batchCalls).toBe(2);
+    expect(winners).toHaveLength(1);
+    expect(winners[0]?.value.status).toBe("released");
+    expect(losers).toHaveLength(1);
+    expect(String(losers[0]?.reason)).toContain(
+      "maintenance_fence_release_failed",
+    );
+    expect(await readControlD1MaintenanceState(database)).toEqual({
+      status: "inactive",
+    });
+    expect(
+      (await readControlD1MaintenanceGuardInventory(database))
+        .guardTriggerCount,
+    ).toBe(0);
+    expect(
+      await database
+        .prepare(
+          `select count(*) as count from sqlite_master
+           where name in (?, ?, ?)`,
+        )
+        .bind(
+          CONTROL_D1_MAINTENANCE_RELEASE_GUARDS_TABLE,
+          CONTROL_D1_MAINTENANCE_RELEASE_MIGRATIONS_TABLE,
+          CONTROL_D1_MAINTENANCE_RELEASE_ASSERTION_TABLE,
+        )
+        .first(),
+    ).toEqual({ count: 0 });
+    const reconciled = await readControlD1ReleaseStatus(
+      database,
+      plan,
+      releaseReceiptOptions(ready),
+    );
+    expect(reconciled).toMatchObject({
+      status: "released",
+      receiptMatchesAuthorization: true,
+      receiptMatchesReleaseReadiness: true,
+      receiptConfirmationsExact: true,
+      issues: [],
+    });
+  } finally {
+    database.close();
+  }
+});
+
+test("control D1 recovery never removes a stale reserved relation before status", async () => {
+  const plan = await buildControlD1SchemaPlan();
+  const database = new SqliteControlD1Database();
+  const releasedAt = "2026-07-16T00:01:00.000Z";
+  try {
+    const ready = await retainReadyRecoveryFence(database, plan, releasedAt);
+    database.exec(
+      `create table "${CONTROL_D1_MAINTENANCE_RELEASE_GUARDS_TABLE}" (
+         marker text not null
+       )`,
+    );
+    const blocked = await readControlD1ReleaseStatus(
+      database,
+      plan,
+      ready.options,
+    );
+    expect(blocked.status).toBe("not_ready");
+    expect(blocked.issues).toEqual(
+      expect.arrayContaining([
+        "release_guard_relation_present",
+        "release_guard_inventory_mismatch",
+      ]),
+    );
+    let batchCalls = 0;
+    const observed: D1Database = {
+      prepare(query) {
+        return database.prepare(query);
+      },
+      async batch(statements) {
+        batchCalls += 1;
+        return database.batch(statements);
+      },
+    };
+    await expect(
+      releaseControlD1InPlaceRecovery(
+        observed,
+        plan,
+        recoveryOptions(ready.options, ready.status),
+      ),
+    ).rejects.toThrow("release_recovery_confirmation_mismatch");
+    expect(batchCalls).toBe(0);
+    expect(
+      await database
+        .prepare(
+          `select count(*) as count from sqlite_master where name = ?`,
+        )
+        .bind(CONTROL_D1_MAINTENANCE_RELEASE_GUARDS_TABLE)
+        .first(),
+    ).toEqual({ count: 1 });
+    expect((await readControlD1MaintenanceState(database)).status).toBe(
+      "active",
+    );
+  } finally {
+    database.close();
+  }
+});
+
+test("control D1 recovery seals and rejects a stale assertion relation", async () => {
+  const plan = await buildControlD1SchemaPlan();
+  const database = new SqliteControlD1Database();
+  const releasedAt = "2026-07-16T00:01:00.000Z";
+  try {
+    const ready = await retainReadyRecoveryFence(database, plan, releasedAt);
+    database.exec(
+      `create table "${CONTROL_D1_MAINTENANCE_RELEASE_ASSERTION_TABLE}" (
+         marker text not null
+       )`,
+    );
+    const blocked = await readControlD1ReleaseStatus(
+      database,
+      plan,
+      ready.options,
+    );
+    expect(blocked.status).toBe("not_ready");
+    expect(blocked.maintenance.releaseAssertionRelationAbsent).toBe(false);
+    expect(blocked.issues).toContain("release_assertion_relation_present");
+    expect(blocked.statusDigest).not.toBe(ready.status.statusDigest);
+    expect(blocked.releaseReadinessDigest).not.toBe(
+      ready.status.releaseReadinessDigest,
+    );
+    expect(
+      await database
+        .prepare(`select count(*) as count from sqlite_master where name = ?`)
+        .bind(CONTROL_D1_MAINTENANCE_RELEASE_ASSERTION_TABLE)
+        .first(),
+    ).toEqual({ count: 1 });
+    expect((await readControlD1MaintenanceState(database)).status).toBe(
+      "active",
+    );
+  } finally {
+    database.close();
+  }
+});
+
+test("control D1 recovery rejects an identical column shape with weakened maintenance CHECK constraints", async () => {
+  const plan = await buildControlD1SchemaPlan();
+  const database = new SqliteControlD1Database();
+  const releasedAt = "2026-07-16T00:01:00.000Z";
+  try {
+    const ready = await retainReadyRecoveryFence(database, plan, releasedAt);
+    database.exec(`
+      create table maintenance_row_backup as
+        select * from _takosumi_control_schema_maintenance;
+      drop table _takosumi_control_schema_maintenance;
+      create table _takosumi_control_schema_maintenance (
+        singleton integer primary key,
+        active integer not null check (active in (0, 1, 2)),
+        migration_bypass integer not null,
+        fence_id text not null,
+        source_commit text not null,
+        manifest_digest text not null,
+        environment text not null,
+        activated_at text not null,
+        released_at text,
+        database_role text not null default 'legacy',
+        release_policy text not null default 'never',
+        database_id text,
+        source_export_sha256 text,
+        predecessor_fence_id text,
+        predecessor_source_commit text,
+        predecessor_manifest_digest text,
+        release_readiness_digest text
+      );
+      insert into _takosumi_control_schema_maintenance
+        select * from maintenance_row_backup;
+      drop table maintenance_row_backup;
+    `);
+
+    const blocked = await readControlD1ReleaseStatus(
+      database,
+      plan,
+      ready.options,
+    );
+    expect(blocked.status).toBe("not_ready");
+    expect(blocked.maintenance.maintenanceTableShapeMatches).toBe(true);
+    expect(blocked.maintenance.maintenanceTableDdlMatches).toBe(false);
+    expect(blocked.issues).toContain(
+      "release_maintenance_table_ddl_mismatch",
+    );
+    expect(blocked.statusDigest).not.toBe(ready.status.statusDigest);
+    expect(blocked.releaseReadinessDigest).not.toBe(
+      ready.status.releaseReadinessDigest,
+    );
+
+    let batchCalls = 0;
+    const observed: D1Database = {
+      prepare(query) {
+        return database.prepare(query);
+      },
+      async batch(statements) {
+        batchCalls += 1;
+        return database.batch(statements);
+      },
+    };
+    await expect(
+      releaseControlD1InPlaceRecovery(
+        observed,
+        plan,
+        recoveryOptions(ready.options, ready.status),
+      ),
+    ).rejects.toThrow("release_recovery_confirmation_mismatch");
+    expect(batchCalls).toBe(0);
+    expect((await readControlD1MaintenanceState(database)).status).toBe(
+      "active",
+    );
+    expect(
+      (await readControlD1MaintenanceGuardInventory(database))
+        .guardTriggerCount,
+    ).toBeGreaterThan(0);
+  } finally {
+    database.close();
+  }
+});
+
+test("control D1 recovery Import fail-closes on atomic foreign-key evidence", async () => {
+  const plan = await buildControlD1SchemaPlan();
+  const database = new SqliteControlD1Database();
+  const releasedAt = "2026-07-16T00:01:00.000Z";
+  try {
+    database.exec(`
+      pragma foreign_keys = off;
+      create table host_parent (id integer primary key);
+      create table host_child (
+        id integer primary key,
+        parent_id integer not null references host_parent(id)
+      );
+      insert into host_child (id, parent_id) values (1, 999);
+      pragma foreign_keys = on;
+    `);
+    const hidePreflightViolation: D1Database = {
+      prepare(query) {
+        if (query.trim().toLowerCase() === "pragma foreign_key_check") {
+          return {
+            bind() {
+              return this;
+            },
+            first: async () => null,
+            all: async () => ({ success: true, results: [] }),
+            run: async () => ({ success: true, results: [] }),
+          };
+        }
+        return database.prepare(query);
+      },
+      batch: database.batch.bind(database),
+    };
+    const ready = await retainReadyRecoveryFence(
+      hidePreflightViolation,
+      plan,
+      releasedAt,
+    );
+    await expect(
+      releaseControlD1InPlaceRecovery(
+        hidePreflightViolation,
+        plan,
+        recoveryOptions(ready.options, ready.status),
+      ),
+    ).rejects.toThrow("maintenance_fence_release_failed");
+    expect((await readControlD1MaintenanceState(database)).status).toBe(
+      "active",
+    );
+    expect(
+      await database.prepare("pragma foreign_key_check").all(),
+    ).toMatchObject({ results: expect.arrayContaining([expect.any(Object)]) });
+    expect(
+      await database
+        .prepare(
+          `select count(*) as count from sqlite_master
+           where name in (?, ?, ?)`,
+        )
+        .bind(
+          CONTROL_D1_MAINTENANCE_RELEASE_GUARDS_TABLE,
+          CONTROL_D1_MAINTENANCE_RELEASE_MIGRATIONS_TABLE,
+          CONTROL_D1_MAINTENANCE_RELEASE_ASSERTION_TABLE,
+        )
+        .first(),
+    ).toEqual({ count: 0 });
+  } finally {
+    database.close();
+  }
+});
+
 test("control D1 REST release balances its guard predicate below SQLite expression depth", async () => {
   const plan = await buildControlD1SchemaPlan();
   const backing = new SqliteControlD1Database();
@@ -4347,7 +5609,7 @@ test("control D1 REST release balances its guard predicate below SQLite expressi
           .reverse()
           .find((sql) =>
             sql.includes(
-              `update _takosumi_control_schema_maintenance\n         set active = 0`,
+              `update _takosumi_control_schema_maintenance\n  set active = 0`,
             ),
           );
         if (releaseSql && maxSameDepthOrRun(releaseSql) > 100) {
@@ -4383,7 +5645,7 @@ test("control D1 REST release balances its guard predicate below SQLite expressi
     const releaseSql = stats.uploadedSql
       .filter((sql) =>
         sql.includes(
-          `update _takosumi_control_schema_maintenance\n         set active = 0`,
+          `update _takosumi_control_schema_maintenance\n  set active = 0`,
         ),
       )
       .at(-1);
