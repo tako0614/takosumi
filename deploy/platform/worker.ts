@@ -216,6 +216,7 @@ export {
 } from "./production_hardening.ts";
 export {
   createCloudflareD1WorkspaceBootstrapReader,
+  readWorkspaceBootstrapRequest,
   type CloudflareD1WorkspaceBootstrapReaderOptions,
   type PlatformWorkspaceBootstrapFacts,
   type PlatformWorkspaceBootstrapTargetPool,

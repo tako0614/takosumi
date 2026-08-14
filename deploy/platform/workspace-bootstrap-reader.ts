@@ -1,5 +1,6 @@
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
 import { d1AccountsTableNames } from "@takosjp/takosumi-accounts-service";
+import { extractAccountSessionId } from "../../accounts/service/src/account-session.ts";
 import { hashSessionIdWithSalt } from "../../accounts/service/src/session-hash-salt.ts";
 import { deployControlD1TableNames } from "../../core/adapters/storage/drizzle/schema/logical.ts";
 import {
@@ -16,7 +17,10 @@ import type {
   WorkspaceMember,
 } from "takosumi-contract/workspaces";
 
-import { createCloudflareD1PatWorkspaceMembershipReader } from "./pat-workspace-membership-reader.ts";
+import {
+  createCloudflareD1PatWorkspaceMembershipReader,
+  type CloudflareD1PatWorkspaceMembershipReader,
+} from "./pat-workspace-membership-reader.ts";
 import type { ReadOnlyD1Database } from "./pat-workspace-membership-reader.ts";
 
 export interface WorkspaceBootstrapReadInput {
@@ -47,10 +51,39 @@ export type WorkspaceBootstrapReadResult =
   | PlatformWorkspaceBootstrapFacts
   | { readonly status: "invalid_session" }
   | { readonly status: "not_owner" }
-  | { readonly status: "incomplete" };
+  | { readonly status: "incomplete" }
+  | { readonly status: "unavailable" };
 
 export interface WorkspaceBootstrapReader {
   read(input: WorkspaceBootstrapReadInput): Promise<WorkspaceBootstrapReadResult>;
+}
+
+/**
+ * Adapt the canonical Accounts request credential into the zero-write reader.
+ *
+ * Credential precedence belongs to Accounts' `extractAccountSessionId`; this
+ * seam only admits session-shaped credentials and translates unexpected reader
+ * failures into the public unavailable result.
+ */
+export async function readWorkspaceBootstrapRequest(
+  reader: WorkspaceBootstrapReader,
+  input: {
+    readonly request: Request;
+    readonly workspaceId: string;
+    readonly now: number;
+  },
+): Promise<WorkspaceBootstrapReadResult> {
+  const sessionId = extractAccountSessionId(input.request);
+  if (!canonicalSessionId(sessionId)) return { status: "invalid_session" };
+  try {
+    return await reader.read({
+      sessionId,
+      workspaceId: input.workspaceId,
+      now: input.now,
+    });
+  } catch {
+    return { status: "unavailable" };
+  }
 }
 
 export interface CloudflareD1WorkspaceBootstrapReaderOptions {
@@ -86,6 +119,28 @@ interface WorkspaceBootstrapControlRow {
   readonly target_pool_spec_json: unknown;
   readonly target_pool_created_at: unknown;
   readonly target_pool_updated_at: unknown;
+}
+
+type ReadOnlyD1PreparedStatement = ReturnType<
+  ReadOnlyD1Database["prepare"]
+>;
+
+interface WorkspaceBootstrapReadOnlyD1Result<T> {
+  readonly success?: boolean;
+  readonly results?: readonly T[];
+}
+
+/**
+ * Internal marker for a failure while executing the membership D1 read. The
+ * membership reader deliberately reports malformed/duplicate rows by throwing
+ * too, so the database seam must preserve the structural origin before that
+ * reader validates its returned evidence.
+ */
+class WorkspaceBootstrapD1ReadError extends Error {
+  constructor(readonly cause: unknown) {
+    super("Workspace bootstrap D1 read failed");
+    this.name = "WorkspaceBootstrapD1ReadError";
+  }
 }
 
 const ACCOUNTS_SESSION_AUTHORITY_SQL = `with presented_session as (
@@ -151,14 +206,28 @@ select workspace.id as workspace_id,
 export function createCloudflareD1WorkspaceBootstrapReader(
   options: CloudflareD1WorkspaceBootstrapReaderOptions,
 ): WorkspaceBootstrapReader {
-  if (!options.sessionHashSalt) {
-    throw new TypeError("Workspace bootstrap session hash salt is required");
+  let membershipReader: CloudflareD1PatWorkspaceMembershipReader | undefined;
+  try {
+    if (
+      !options ||
+      typeof options.sessionHashSalt !== "string" ||
+      options.sessionHashSalt.length === 0 ||
+      !options.accountsDb ||
+      typeof options.accountsDb.prepare !== "function" ||
+      !options.controlDb ||
+      typeof options.controlDb.prepare !== "function"
+    ) {
+      throw new TypeError("Workspace bootstrap reader configuration is invalid");
+    }
+    membershipReader = createCloudflareD1PatWorkspaceMembershipReader(
+      workspaceBootstrapMembershipDatabase(options.controlDb),
+    );
+  } catch {
+    membershipReader = undefined;
   }
-  const membershipReader = createCloudflareD1PatWorkspaceMembershipReader(
-    options.controlDb,
-  );
   return {
     async read(input) {
+      if (!membershipReader) return { status: "unavailable" };
       if (!workspaceBootstrapInputIsCanonical(input)) {
         return { status: "invalid_session" };
       }
@@ -171,8 +240,8 @@ export function createCloudflareD1WorkspaceBootstrapReader(
           input.workspaceId,
           session.subject,
         );
-      } catch {
-        return { status: "incomplete" };
+      } catch (error) {
+        return membershipReadFailureResult(error);
       }
       if (
         !membership ||
@@ -187,7 +256,7 @@ export function createCloudflareD1WorkspaceBootstrapReader(
         input.workspaceId,
         session.subject,
       );
-      if (!control) return { status: "incomplete" };
+      if (control.status !== "ready") return control;
       return {
         status: "authenticated_owner",
         subject: session.subject,
@@ -207,6 +276,7 @@ async function readAccountsSessionAuthority(
   | { readonly status: "authenticated"; readonly subject: TakosumiSubject }
   | Extract<WorkspaceBootstrapReadResult, { status: "invalid_session" }>
   | Extract<WorkspaceBootstrapReadResult, { status: "incomplete" }>
+  | Extract<WorkspaceBootstrapReadResult, { status: "unavailable" }>
 > {
   let sessionHash: string;
   let result;
@@ -220,14 +290,15 @@ async function readAccountsSessionAuthority(
       .bind(sessionHash)
       .all<AccountsSessionAuthorityRow>();
   } catch {
-    return { status: "incomplete" };
+    return { status: "unavailable" };
   }
-  if (!result.success || !Array.isArray(result.results)) {
-    return { status: "incomplete" };
+  if (!result || !result.success || !Array.isArray(result.results)) {
+    return { status: "unavailable" };
   }
   if (result.results.length === 0) return { status: "invalid_session" };
   if (result.results.length !== 1) return { status: "incomplete" };
   const row = result.results[0]!;
+  if (!row || typeof row !== "object") return { status: "incomplete" };
   if (row.account_key === null && row.account_json === null) {
     return { status: "invalid_session" };
   }
@@ -267,11 +338,13 @@ async function readWorkspaceBootstrapControl(
   subject: TakosumiSubject,
 ): Promise<
   | {
+      readonly status: "ready";
       readonly workspace: Workspace;
       readonly defaultProject: Project;
       readonly defaultTargetPool: PlatformWorkspaceBootstrapTargetPool;
     }
-  | undefined
+  | { readonly status: "incomplete" }
+  | { readonly status: "unavailable" }
 > {
   const projectId = defaultProjectId(workspaceId);
   const targetPoolId = formatResourceShapeId(
@@ -286,26 +359,82 @@ async function readWorkspaceBootstrapControl(
       .bind(workspaceId, projectId, workspaceId, targetPoolId, workspaceId)
       .all<WorkspaceBootstrapControlRow>();
   } catch {
-    return undefined;
+    return { status: "unavailable" };
   }
-  if (
-    result.success !== true ||
-    !Array.isArray(result.results) ||
-    result.results.length !== 1
-  ) {
-    return undefined;
+  if (!result || result.success !== true || !Array.isArray(result.results)) {
+    return { status: "unavailable" };
   }
+  if (result.results.length !== 1) return { status: "incomplete" };
   const row = result.results[0]!;
+  if (!row || typeof row !== "object") return { status: "incomplete" };
   const workspace = workspaceFromRow(row, workspaceId, subject);
   const project = projectFromRow(row, workspaceId, projectId);
   const targetPool = targetPoolFromRow(row, workspaceId, targetPoolId);
   return workspace && project && targetPool
     ? {
+        status: "ready",
         workspace,
         defaultProject: project,
         defaultTargetPool: targetPool,
       }
-    : undefined;
+    : { status: "incomplete" };
+}
+
+function membershipReadFailureResult(
+  error: unknown,
+): Extract<WorkspaceBootstrapReadResult, { status: "incomplete" | "unavailable" }> {
+  // The bounded membership reader intentionally exposes only its read port.
+  // Its raw errors therefore represent malformed/duplicate evidence only after
+  // the wrapped D1 seam has proved that prepare/bind/all succeeded.
+  return error instanceof WorkspaceBootstrapD1ReadError
+    ? { status: "unavailable" }
+    : { status: "incomplete" };
+}
+
+function workspaceBootstrapMembershipDatabase(
+  db: ReadOnlyD1Database,
+): ReadOnlyD1Database {
+  return {
+    prepare(query) {
+      let statement: ReadOnlyD1PreparedStatement;
+      try {
+        statement = db.prepare(query);
+      } catch (cause) {
+        throw new WorkspaceBootstrapD1ReadError(cause);
+      }
+      return workspaceBootstrapMembershipStatement(statement);
+    },
+  };
+}
+
+function workspaceBootstrapMembershipStatement(
+  statement: ReadOnlyD1PreparedStatement,
+): ReadOnlyD1PreparedStatement {
+  return {
+    bind(...values) {
+      let bound: ReadOnlyD1PreparedStatement;
+      try {
+        bound = statement.bind(...values);
+      } catch (cause) {
+        throw new WorkspaceBootstrapD1ReadError(cause);
+      }
+      return workspaceBootstrapMembershipStatement(bound);
+    },
+    async all<T = unknown>() {
+      let result: WorkspaceBootstrapReadOnlyD1Result<T>;
+      try {
+        result = await statement.all<T>();
+      } catch (cause) {
+        throw new WorkspaceBootstrapD1ReadError(cause);
+      }
+      if (!result || result.success !== true || !Array.isArray(result.results)) {
+        throw new WorkspaceBootstrapD1ReadError(
+          new TypeError("Workspace membership D1 result failed"),
+        );
+      }
+      return result;
+    },
+  };
 }
 
 function workspaceFromRow(
@@ -401,11 +530,19 @@ function workspaceBootstrapInputIsCanonical(
   input: WorkspaceBootstrapReadInput,
 ): boolean {
   return (
-    /^sess_[A-Za-z0-9._~-]+$/u.test(input.sessionId) &&
-    input.sessionId.length <= 512 &&
+    Boolean(input) &&
+    canonicalSessionId(input.sessionId) &&
     /^ws_[A-Za-z0-9._~-]+$/u.test(input.workspaceId) &&
     input.workspaceId.length <= 256 &&
     isSafeTimestamp(input.now)
+  );
+}
+
+function canonicalSessionId(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length <= 512 &&
+    /^sess_[A-Za-z0-9._~-]+$/u.test(value)
   );
 }
 
