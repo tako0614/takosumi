@@ -35,6 +35,22 @@ function fixture(input: {
   return store;
 }
 
+function sessionFixture(input: {
+  readonly subject: `tsub_${string}`;
+  readonly email: string;
+  readonly credential: string;
+}): InMemoryAccountsStore {
+  const store = fixture(input);
+  const now = Date.now();
+  store.saveAccountSession({
+    sessionId: input.credential,
+    subject: input.subject,
+    createdAt: now,
+    expiresAt: now + 60_000,
+  });
+  return store;
+}
+
 test("the deployment gate refuses a personal access token whose account left the allowlist", async () => {
   const subject = "tsub_pat_removed" as const;
   const store = fixture({ subject, email: "removed@example.test" });
@@ -107,6 +123,123 @@ test("the deployment gate keeps allowlisted token and session credentials workin
     }),
   ).toBeUndefined();
   expect(store.findAccountSession("sess_kept_gate")).toBeDefined();
+});
+
+test("the deployment gate reads each store when environments reuse one raw credential", async () => {
+  const credential = "sess_same_raw_sequential_environments";
+  const allowedStore = sessionFixture({
+    subject: "tsub_same_raw_allowed",
+    email: "kept@example.test",
+    credential,
+  });
+  const disallowedStore = sessionFixture({
+    subject: "tsub_same_raw_disallowed",
+    email: "removed@example.test",
+    credential,
+  });
+
+  expect(
+    await rejectDisallowedPresentedSession({
+      request: gateRequest(credential),
+      store: allowedStore,
+      credential,
+      allowlist,
+      secureCookie: true,
+    }),
+  ).toBeUndefined();
+
+  const rejected = await rejectDisallowedPresentedSession({
+    request: gateRequest(credential),
+    store: disallowedStore,
+    credential,
+    allowlist,
+    secureCookie: true,
+  });
+  expect(rejected?.status).toBe(403);
+  expect(disallowedStore.findAccountSession(credential)).toBeUndefined();
+});
+
+test("concurrent environments resolve the same raw credential against their own evidence", async () => {
+  const credential = "sess_same_raw_concurrent_evidence";
+  const allowedStore = sessionFixture({
+    subject: "tsub_concurrent_allowed",
+    email: "kept@example.test",
+    credential,
+  });
+  const disallowedStore = sessionFixture({
+    subject: "tsub_concurrent_disallowed",
+    email: "removed@example.test",
+    credential,
+  });
+
+  const allowed = rejectDisallowedPresentedSession({
+    request: gateRequest(credential),
+    store: allowedStore,
+    credential,
+    allowlist,
+    secureCookie: true,
+  });
+  const disallowed = rejectDisallowedPresentedSession({
+    request: gateRequest(credential),
+    store: disallowedStore,
+    credential,
+    allowlist,
+    secureCookie: true,
+  });
+  const [allowedResponse, disallowedResponse] = await Promise.all([
+    allowed,
+    disallowed,
+  ]);
+
+  expect(allowedResponse).toBeUndefined();
+  expect(disallowedResponse?.status).toBe(403);
+  expect(disallowedStore.findAccountSession(credential)).toBeUndefined();
+});
+
+test("concurrent denials keep each request's response identity and request id", async () => {
+  const credential = "sess_same_raw_concurrent_request_ids";
+  const firstStore = sessionFixture({
+    subject: "tsub_concurrent_denial_first",
+    email: "first-removed@example.test",
+    credential,
+  });
+  const secondStore = sessionFixture({
+    subject: "tsub_concurrent_denial_second",
+    email: "second-removed@example.test",
+    credential,
+  });
+  const firstRequestId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const secondRequestId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+
+  const first = rejectDisallowedPresentedSession({
+    request: new Request(`${issuer}/api/v1/workspaces`, {
+      headers: { "x-request-id": firstRequestId },
+    }),
+    store: firstStore,
+    credential,
+    allowlist,
+    secureCookie: true,
+  });
+  const second = rejectDisallowedPresentedSession({
+    request: new Request(`${issuer}/api/v1/workspaces`, {
+      headers: { "x-request-id": secondRequestId },
+    }),
+    store: secondStore,
+    credential,
+    allowlist,
+    secureCookie: true,
+  });
+  const [firstResponse, secondResponse] = await Promise.all([first, second]);
+
+  expect(firstResponse).not.toBe(secondResponse);
+  expect(await firstResponse?.json()).toMatchObject({
+    error: { requestId: firstRequestId },
+  });
+  expect(await secondResponse?.json()).toMatchObject({
+    error: { requestId: secondRequestId },
+  });
+  expect(firstStore.findAccountSession(credential)).toBeUndefined();
+  expect(secondStore.findAccountSession(credential)).toBeUndefined();
 });
 
 test("the deployment gate refuses an OAuth access token whose account left the allowlist", async () => {

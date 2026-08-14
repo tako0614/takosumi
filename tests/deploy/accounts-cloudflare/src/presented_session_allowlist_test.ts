@@ -11,7 +11,10 @@ import type {
   D1Result,
   D1Value,
 } from "../../../../accounts/service/src/mod.ts";
-import { __resetSessionHashSaltConfigForTesting } from "../../../../accounts/service/src/session-hash-salt.ts";
+import {
+  __resetSessionHashSaltConfigForTesting,
+  hashSessionIdWithSalt,
+} from "../../../../accounts/service/src/session-hash-salt.ts";
 
 afterEach(() => {
   __resetSessionHashSaltConfigForTesting();
@@ -37,6 +40,56 @@ test("unconfigured presented-session allowlist performs zero D1 I/O", async () =
     }),
   ).resolves.toBeUndefined();
 });
+
+test.each([
+  [
+    "malformed allowlist access config",
+    {
+      TAKOSUMI_ACCOUNTS_LOGIN_EMAIL_ALLOWLIST: "allowed@example.test",
+      TAKOSUMI_ACCOUNTS_PLATFORM_ACCESS: "restricted",
+    },
+  ],
+  [
+    "closed access without a non-empty allowlist",
+    {
+      TAKOSUMI_ACCOUNTS_LOGIN_EMAIL_ALLOWLIST: "*",
+      TAKOSUMI_ACCOUNTS_PLATFORM_ACCESS: "closed",
+    },
+  ],
+  [
+    "an invalid verified-email boolean",
+    {
+      TAKOSUMI_ACCOUNTS_LOGIN_EMAIL_ALLOWLIST: "allowed@example.test",
+      TAKOSUMI_ACCOUNTS_LOGIN_EMAIL_ALLOWLIST_REQUIRE_VERIFIED: "sometimes",
+    },
+  ],
+] as const)(
+  "absent presented session bypasses %s before config, salt, or D1 work",
+  async (_label, config) => {
+    const env = new Proxy(
+      {
+        TAKOSUMI_ACCOUNTS_DB: forbiddenD1("absent presented session"),
+        ...config,
+      },
+      {
+        get(target, property, receiver) {
+          if (property === "TAKOSUMI_ACCOUNT_SESSION_HASH_SALT") {
+            throw new Error("absent presented session read session hash salt");
+          }
+          return Reflect.get(target, property, receiver);
+        },
+      },
+    ) as CloudflareWorkerEnv;
+
+    await expect(
+      rejectDisallowedCloudflarePresentedSession({
+        request: new Request("https://platform.example.test/bootstrap"),
+        env,
+        sessionCredential: null,
+      }),
+    ).resolves.toBeUndefined();
+  },
+);
 
 test("allowlisted presented session performs one bounded SELECT and no initialization", async () => {
   const db = new RecordingD1([
@@ -147,6 +200,86 @@ test("disallowed presented session is canonically rejected and exactly revoked",
     "DELETE FROM takosumi_accounts_indexes WHERE bucket = ? AND document_key = ?",
   );
   expect(db.bound[2]).toEqual(db.bound[1]);
+});
+
+test("same raw session is re-read and rejected in a second Cloudflare environment", async () => {
+  const credential = "sess_same_raw_cloudflare_environments";
+  const allowedDb = new RecordingD1(
+    presentedSessionRows({
+      subject: "tsub_cloudflare_same_raw_allowed",
+      email: "allowed@example.test",
+    }),
+  );
+  const disallowedDb = new RecordingD1(
+    presentedSessionRows({
+      subject: "tsub_cloudflare_same_raw_disallowed",
+      email: "removed@example.test",
+    }),
+  );
+
+  await expect(
+    rejectDisallowedCloudflarePresentedSession({
+      request: new Request("https://a.example.test/bootstrap"),
+      env: configuredEnv(allowedDb, "same-raw-cloudflare-salt-a"),
+      sessionCredential: credential,
+    }),
+  ).resolves.toBeUndefined();
+
+  const rejected = await rejectDisallowedCloudflarePresentedSession({
+    request: new Request("https://b.example.test/bootstrap"),
+    env: configuredEnv(disallowedDb, "same-raw-cloudflare-salt-b"),
+    sessionCredential: credential,
+  });
+  expect(rejected?.status).toBe(403);
+  expect(disallowedDb.allCalls).toBe(1);
+  expect(disallowedDb.batchCalls).toBe(1);
+});
+
+test("concurrent Cloudflare environments keep lookup and deletion on one immutable salt", async () => {
+  const credential = "sess_concurrent_cloudflare_salts";
+  const saltA = "concurrent-cloudflare-session-salt-a";
+  const saltB = "concurrent-cloudflare-session-salt-b";
+  const hashA = await hashSessionIdWithSalt(credential, saltA);
+  const hashB = await hashSessionIdWithSalt(credential, saltB);
+  const dbA = new RecordingD1(
+    presentedSessionRows({
+      subject: "tsub_concurrent_cloudflare_disallowed",
+      email: "removed@example.test",
+    }),
+  );
+  const dbB = new RecordingD1(
+    presentedSessionRows({
+      subject: "tsub_concurrent_cloudflare_allowed",
+      email: "allowed@example.test",
+    }),
+  );
+  const lookupStarted = deferred();
+  const releaseLookup = deferred();
+  dbA.allStarted = lookupStarted.resolve;
+  dbA.allGate = releaseLookup.promise;
+
+  const pendingA = rejectDisallowedCloudflarePresentedSession({
+    request: new Request("https://a.example.test/bootstrap"),
+    env: configuredEnv(dbA, saltA),
+    sessionCredential: credential,
+  });
+  await lookupStarted.promise;
+
+  await expect(
+    rejectDisallowedCloudflarePresentedSession({
+      request: new Request("https://b.example.test/bootstrap"),
+      env: configuredEnv(dbB, saltB),
+      sessionCredential: credential,
+    }),
+  ).resolves.toBeUndefined();
+  releaseLookup.resolve();
+
+  const rejectedA = await pendingA;
+  expect(rejectedA?.status).toBe(403);
+  expect(dbA.bound[0]?.[0]).toBe(hashA);
+  expect(dbA.bound[1]?.[1]).toBe(hashA);
+  expect(dbA.bound[1]?.[1]).not.toBe(hashB);
+  expect(dbB.bound[0]?.[0]).toBe(hashB);
 });
 
 test.each([
@@ -357,6 +490,41 @@ function configuredEnv(db: D1Database, salt: string): CloudflareWorkerEnv {
   } as CloudflareWorkerEnv;
 }
 
+function presentedSessionRows(input: {
+  readonly subject: `tsub_${string}`;
+  readonly email: string;
+}): readonly unknown[] {
+  return [
+    {
+      kind: "session",
+      document: JSON.stringify({
+        sessionId: "stored-session-hash",
+        subject: input.subject,
+        createdAt: 1_000,
+        expiresAt: Date.now() + 60_000,
+      }),
+    },
+    {
+      kind: "session_account",
+      document: JSON.stringify({
+        subject: input.subject,
+        email: input.email,
+        emailVerified: true,
+        createdAt: 500,
+        updatedAt: 1_500,
+      }),
+    },
+  ];
+}
+
+function deferred(): { readonly promise: Promise<void>; resolve(): void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
 function dbFailureSlug(value: string): string {
   return value.toLowerCase().replaceAll(/[^a-z0-9]+/gu, "_");
 }
@@ -373,6 +541,8 @@ class RecordingD1 implements D1Database {
   execCalls = 0;
   allFailure: unknown;
   allResult: D1Result | undefined;
+  allStarted: (() => void) | undefined;
+  allGate: Promise<void> | undefined;
 
   constructor(private readonly rows: readonly unknown[]) {}
 
@@ -408,6 +578,8 @@ class RecordingStatement implements D1PreparedStatement {
 
   async all<T = unknown>(): Promise<D1Result<T>> {
     this.db.allCalls += 1;
+    this.db.allStarted?.();
+    await this.db.allGate;
     if (this.db.allFailure !== undefined) throw this.db.allFailure;
     if (this.db.allResult !== undefined) {
       return this.db.allResult as D1Result<T>;

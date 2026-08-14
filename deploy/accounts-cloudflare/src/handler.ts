@@ -17,7 +17,7 @@ import {
   type OidcClientAuthMethod,
   type OidcClientRegistration,
   rejectDisallowedPresentedSession,
-  registerSessionHashSaltConfig,
+  resolveSessionHashSaltConfig,
   type PasskeyHttpOptions,
   type PatWorkspaceMembershipReader,
   signEs256Jwt,
@@ -320,22 +320,25 @@ export async function rejectDisallowedCloudflarePresentedSession(input: {
   readonly env: CloudflareWorkerEnv;
   readonly sessionCredential: string | null;
 }): Promise<Response | undefined> {
+  const sessionCredential = input.sessionCredential;
+  if (!sessionCredential) return undefined;
   const allowlist = parseLoginEmailAllowlist(
     input.env,
     new URL(input.request.url).origin,
   );
-  if (!allowlist || !input.sessionCredential) return undefined;
+  if (!allowlist) return undefined;
   if (!input.env.TAKOSUMI_ACCOUNTS_DB) {
     throw new TypeError("TAKOSUMI_ACCOUNTS_DB D1 binding is required");
   }
-  configureSessionHashSalt(input.env);
+  const sessionHashSalt = resolveCloudflareSessionHashSalt(input.env);
   const store = new D1AccountsStore(input.env.TAKOSUMI_ACCOUNTS_DB, {
     schemaMode: "predeployed",
+    sessionHashSalt,
   });
   return await rejectDisallowedPresentedSession({
     request: input.request,
     store,
-    credential: input.sessionCredential,
+    credential: sessionCredential,
     allowlist,
     secureCookie: true,
   });
@@ -505,8 +508,11 @@ async function buildAccountsHandler<TEnv extends CloudflareWorkerEnv>(
     throw new TypeError("TAKOSUMI_ACCOUNTS_DB D1 binding is required");
   }
   const schemaMode = accountsD1SchemaMode(env);
-  configureSessionHashSalt(env);
-  const store = new D1AccountsStore(env.TAKOSUMI_ACCOUNTS_DB, { schemaMode });
+  const sessionHashSalt = resolveCloudflareSessionHashSalt(env);
+  const store = new D1AccountsStore(env.TAKOSUMI_ACCOUNTS_DB, {
+    schemaMode,
+    sessionHashSalt,
+  });
   if (schemaMode === "bootstrap") {
     await store.initialize();
   }
@@ -605,16 +611,12 @@ function nowMs(): number {
   return typeof performance !== "undefined" ? performance.now() : Date.now();
 }
 
-function configureSessionHashSalt(env: CloudflareWorkerEnv): void {
-  const salt = optionalString(env.TAKOSUMI_ACCOUNT_SESSION_HASH_SALT);
-  if (salt) {
-    registerSessionHashSaltConfig({ salt });
-    return;
-  }
-  if (optionalString(env.LOCAL_SUBSTRATE_TEST_BED) === "1") {
-    registerSessionHashSaltConfig({ allowDevFallback: true });
-    return;
-  }
+function resolveCloudflareSessionHashSalt(env: CloudflareWorkerEnv): string {
+  const resolved = resolveSessionHashSaltConfig({
+    salt: optionalString(env.TAKOSUMI_ACCOUNT_SESSION_HASH_SALT),
+    allowDevFallback: optionalString(env.LOCAL_SUBSTRATE_TEST_BED) === "1",
+  });
+  if (resolved) return resolved;
   throw new TypeError(
     "TAKOSUMI_ACCOUNT_SESSION_HASH_SALT must be set for the Cloudflare Worker account session store",
   );

@@ -157,7 +157,9 @@ export * from "./postgres-store.ts";
 export * from "./d1-store.ts";
 export {
   registerSessionHashSaltConfig,
+  resolveSessionHashSaltConfig,
   resolveSessionHashSalt,
+  type SessionHashSaltConfig,
 } from "./session-hash-salt.ts";
 export type { PasskeyChallengeIntent } from "./passkey-challenge-store.ts";
 

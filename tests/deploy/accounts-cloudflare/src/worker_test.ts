@@ -15,6 +15,7 @@ import {
   type D1Result,
   issueInterfaceOAuthAccessToken,
   registerSessionHashSaltConfig,
+  resolveSessionHashSalt,
 } from "../../../../accounts/service/src/mod.ts";
 import { __resetSessionHashSaltConfigForTesting } from "../../../../accounts/service/src/session-hash-salt.ts";
 import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
@@ -55,6 +56,26 @@ test("Cloudflare Accounts worker keeps health local", async () => {
     ok: true,
     service: "takosumi-accounts",
   });
+});
+
+test("full Cloudflare handler keeps request-time salt out of legacy global registration", async () => {
+  const legacySalt = "legacy-global-session-salt-sentinel";
+  registerSessionHashSaltConfig({ salt: legacySalt });
+  const response = await createCloudflareWorker().fetch(
+    new Request("https://app.example.test/api/v1/workspaces"),
+    env({
+      TAKOSUMI_ACCOUNTS_DB: await versionedAccountsDb(),
+      TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE: "predeployed",
+      TAKOSUMI_ACCOUNTS_ISSUER: "http://app.example.test",
+      TAKOSUMI_ACCOUNT_SESSION_HASH_SALT:
+        "full-handler-explicit-session-salt",
+    }),
+  );
+
+  expect(response.status).toBe(401);
+  expect(resolveSessionHashSalt("TAKOSUMI_ACCOUNT_SESSION_HASH_SALT")).toBe(
+    legacySalt,
+  );
 });
 
 test("Cloudflare readiness checks canonical platform bindings only", async () => {
