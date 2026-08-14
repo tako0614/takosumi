@@ -14,7 +14,10 @@ import { hashSessionIdWithSalt } from "../../../accounts/service/src/session-has
 import { deployControlD1TableNames } from "../../../core/adapters/storage/drizzle/schema/logical.ts";
 import { defaultProjectId } from "../../../core/domains/projects/mod.ts";
 import { formatResourceShapeId } from "../../../core/domains/resource-shape/records.ts";
-import { createCloudflareD1WorkspaceBootstrapReader } from "../../../deploy/platform/workspace-bootstrap-reader.ts";
+import {
+  createCloudflareD1WorkspaceBootstrapReader,
+  readWorkspaceBootstrapRequest,
+} from "../../../deploy/platform/workspace-bootstrap-reader.ts";
 
 const SESSION_ID = "sess_workspace_bootstrap";
 const SESSION_SALT = "workspace-bootstrap-test-session-salt";
@@ -22,6 +25,134 @@ const SUBJECT = "tsub_workspace_bootstrap" as const;
 const WORKSPACE_ID = "ws_workspace_bootstrap";
 const CREATED_AT = "2026-01-01T00:00:00.000Z";
 const UPDATED_AT = "2026-01-02T00:00:00.000Z";
+
+test("workspace bootstrap request adapter follows canonical credential precedence", async () => {
+  const seen: string[] = [];
+  const reader = {
+    async read(input: {
+      readonly sessionId: string;
+      readonly workspaceId: string;
+      readonly now: number;
+    }) {
+      seen.push(input.sessionId);
+      return { status: "not_owner" as const };
+    },
+  };
+
+  const result = await readWorkspaceBootstrapRequest(reader, {
+    request: new Request("https://platform.example.test/bootstrap", {
+      headers: {
+        authorization: "Bearer sess_from_bearer",
+        "x-takosumi-account-session": "sess_from_header",
+        cookie: "takosumi_session=sess_from_cookie",
+      },
+    }),
+    workspaceId: WORKSPACE_ID,
+    now: 2_000,
+  });
+
+  expect(result).toEqual({ status: "not_owner" });
+  expect(seen).toEqual(["sess_from_bearer"]);
+
+  const headerResult = await readWorkspaceBootstrapRequest(reader, {
+    request: new Request("https://platform.example.test/bootstrap", {
+      headers: {
+        "x-takosumi-account-session": "sess_from_header",
+        cookie: "takosumi_session=sess_from_cookie",
+      },
+    }),
+    workspaceId: WORKSPACE_ID,
+    now: 2_000,
+  });
+  expect(headerResult).toEqual({ status: "not_owner" });
+  expect(seen).toEqual(["sess_from_bearer", "sess_from_header"]);
+
+  const cookieResult = await readWorkspaceBootstrapRequest(reader, {
+    request: new Request("https://platform.example.test/bootstrap", {
+      headers: { cookie: "takosumi_session=sess_from_cookie" },
+    }),
+    workspaceId: WORKSPACE_ID,
+    now: 2_000,
+  });
+  expect(cookieResult).toEqual({ status: "not_owner" });
+  expect(seen).toEqual([
+    "sess_from_bearer",
+    "sess_from_header",
+    "sess_from_cookie",
+  ]);
+});
+
+test("workspace bootstrap request adapter rejects missing and non-session credentials", async () => {
+  let reads = 0;
+  const reader = {
+    async read() {
+      reads += 1;
+      return { status: "not_owner" as const };
+    },
+  };
+
+  for (const request of [
+    new Request("https://platform.example.test/bootstrap"),
+    new Request("https://platform.example.test/bootstrap", {
+      headers: { authorization: "Bearer takpat_not_a_session" },
+    }),
+    new Request("https://platform.example.test/bootstrap", {
+      headers: { "x-takosumi-account-session": "oauth_access_token" },
+    }),
+  ]) {
+    await expect(
+      readWorkspaceBootstrapRequest(reader, {
+        request,
+        workspaceId: WORKSPACE_ID,
+        now: 2_000,
+      }),
+    ).resolves.toEqual({ status: "invalid_session" });
+  }
+  expect(reads).toBe(0);
+});
+
+test("workspace bootstrap request adapter keeps an invalid preferred credential from falling back", async () => {
+  let reads = 0;
+  const reader = {
+    async read() {
+      reads += 1;
+      return { status: "not_owner" as const };
+    },
+  };
+
+  await expect(
+    readWorkspaceBootstrapRequest(reader, {
+      request: new Request("https://platform.example.test/bootstrap", {
+        headers: {
+          authorization: "Bearer not-a-session",
+          "x-takosumi-account-session": "sess_valid_header",
+          cookie: "takosumi_session=sess_valid_cookie",
+        },
+      }),
+      workspaceId: WORKSPACE_ID,
+      now: 2_000,
+    }),
+  ).resolves.toEqual({ status: "invalid_session" });
+  expect(reads).toBe(0);
+});
+
+test("workspace bootstrap request adapter maps reader failures to unavailable", async () => {
+  const reader = {
+    async read() {
+      throw new Error("unexpected reader failure");
+    },
+  };
+
+  await expect(
+    readWorkspaceBootstrapRequest(reader, {
+      request: new Request("https://platform.example.test/bootstrap", {
+        headers: { cookie: "takosumi_session=sess_reader_failure" },
+      }),
+      workspaceId: WORKSPACE_ID,
+      now: 2_000,
+    }),
+  ).resolves.toEqual({ status: "unavailable" });
+});
 
 test("workspace bootstrap returns exact authenticated-owner facts in three bounded SELECTs", async () => {
   const evidence = await validEvidence();
@@ -117,6 +248,89 @@ test("expired and orphaned sessions fail without cleanup or Control reads", asyn
   }
 });
 
+test("workspace bootstrap maps D1 exceptions and failed results to unavailable", async () => {
+  const evidence = await validEvidence();
+
+  const accountsFailure = new CountingD1([evidence.accounts]);
+  accountsFailure.failure = new Error("accounts D1 unavailable");
+  await expect(
+    createCloudflareD1WorkspaceBootstrapReader({
+      accountsDb: accountsFailure,
+      controlDb: new CountingD1([]),
+      sessionHashSalt: SESSION_SALT,
+    }).read({ sessionId: SESSION_ID, workspaceId: WORKSPACE_ID, now: 2_000 }),
+  ).resolves.toEqual({ status: "unavailable" });
+
+  const accountsFailedResult = new CountingD1([evidence.accounts]);
+  accountsFailedResult.result = { success: false, results: [] };
+  await expect(
+    createCloudflareD1WorkspaceBootstrapReader({
+      accountsDb: accountsFailedResult,
+      controlDb: new CountingD1([]),
+      sessionHashSalt: SESSION_SALT,
+    }).read({ sessionId: SESSION_ID, workspaceId: WORKSPACE_ID, now: 2_000 }),
+  ).resolves.toEqual({ status: "unavailable" });
+
+  const controlFailure = new CountingD1([
+    evidence.membership,
+    evidence.control,
+  ]);
+  controlFailure.failure = new Error("control D1 unavailable");
+  controlFailure.failureOnCall = 2;
+  await expect(
+    createCloudflareD1WorkspaceBootstrapReader({
+      accountsDb: new CountingD1([evidence.accounts]),
+      controlDb: controlFailure,
+      sessionHashSalt: SESSION_SALT,
+    }).read({ sessionId: SESSION_ID, workspaceId: WORKSPACE_ID, now: 2_000 }),
+  ).resolves.toEqual({ status: "unavailable" });
+
+  const controlFailedResult = new CountingD1([
+    evidence.membership,
+    evidence.control,
+  ]);
+  controlFailedResult.result = { success: false, results: [] };
+  controlFailedResult.resultOnCall = 2;
+  await expect(
+    createCloudflareD1WorkspaceBootstrapReader({
+      accountsDb: new CountingD1([evidence.accounts]),
+      controlDb: controlFailedResult,
+      sessionHashSalt: SESSION_SALT,
+    }).read({ sessionId: SESSION_ID, workspaceId: WORKSPACE_ID, now: 2_000 }),
+  ).resolves.toEqual({ status: "unavailable" });
+
+  const membershipFailure = new CountingD1([evidence.membership]);
+  membershipFailure.failure = new Error("membership D1 unavailable");
+  await expect(
+    createCloudflareD1WorkspaceBootstrapReader({
+      accountsDb: new CountingD1([evidence.accounts]),
+      controlDb: membershipFailure,
+      sessionHashSalt: SESSION_SALT,
+    }).read({ sessionId: SESSION_ID, workspaceId: WORKSPACE_ID, now: 2_000 }),
+  ).resolves.toEqual({ status: "unavailable" });
+
+  const membershipFailedResult = new CountingD1([evidence.membership]);
+  membershipFailedResult.result = { success: false, results: [] };
+  await expect(
+    createCloudflareD1WorkspaceBootstrapReader({
+      accountsDb: new CountingD1([evidence.accounts]),
+      controlDb: membershipFailedResult,
+      sessionHashSalt: SESSION_SALT,
+    }).read({ sessionId: SESSION_ID, workspaceId: WORKSPACE_ID, now: 2_000 }),
+  ).resolves.toEqual({ status: "unavailable" });
+});
+
+test("workspace bootstrap maps missing configuration to unavailable", async () => {
+  const reader = createCloudflareD1WorkspaceBootstrapReader({
+    accountsDb: new CountingD1([]),
+    controlDb: new CountingD1([]),
+    sessionHashSalt: "",
+  });
+  await expect(
+    reader.read({ sessionId: SESSION_ID, workspaceId: WORKSPACE_ID, now: 2_000 }),
+  ).resolves.toEqual({ status: "unavailable" });
+});
+
 test("workspace bootstrap distinguishes non-owner from malformed or duplicate evidence", async () => {
   const evidence = await validEvidence();
   const memberOnly = membershipRow({
@@ -133,6 +347,8 @@ test("workspace bootstrap distinguishes non-owner from malformed or duplicate ev
     [evidence.accounts[0]!, evidence.accounts[0]!],
     [{ ...evidence.accounts[0], session_json: "{" }],
     [{ ...evidence.accounts[0], account_key: "tsub_wrong" }],
+    [undefined],
+    [null],
   ]) {
     const read = await readWithEvidence({ accounts, control: [] });
     expect(read.result).toEqual({ status: "incomplete" });
@@ -151,6 +367,8 @@ test("workspace bootstrap distinguishes non-owner from malformed or duplicate ev
     [evidence.control[0]!, evidence.control[0]!],
     [{ ...evidence.control[0], project_id: "prj_wrong" }],
     [{ ...evidence.control[0], target_pool_spec_json: "[]" }],
+    [undefined],
+    [null],
     [
       {
         ...evidence.control[0],
@@ -317,6 +535,10 @@ class CountingD1 implements D1Database {
   runCalls = 0;
   batchCalls = 0;
   execCalls = 0;
+  failure: unknown;
+  failureOnCall: number | undefined;
+  result: D1Result | undefined;
+  resultOnCall: number | undefined;
   #reads: Array<readonly unknown[]>;
 
   constructor(reads: readonly (readonly unknown[])[]) {
@@ -354,6 +576,20 @@ class CountingStatement implements D1PreparedStatement {
 
   async all<T = unknown>(): Promise<D1Result<T>> {
     this.db.allCalls += 1;
+    if (
+      this.db.failure !== undefined &&
+      (this.db.failureOnCall === undefined ||
+        this.db.failureOnCall === this.db.allCalls)
+    ) {
+      throw this.db.failure;
+    }
+    if (
+      this.db.result &&
+      (this.db.resultOnCall === undefined ||
+        this.db.resultOnCall === this.db.allCalls)
+    ) {
+      return this.db.result as D1Result<T>;
+    }
     return { success: true, results: [...this.rows] as T[] };
   }
 
