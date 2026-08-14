@@ -3,6 +3,10 @@ import { assertThrows } from "../../../helpers/assert.ts";
 import {
   buildOidcDiscoveryDocument,
   normalizeIssuer,
+  TAKOSUMI_ACCOUNTS_CURRENT_PAT_AUTHORITY_KIND,
+  TAKOSUMI_ACCOUNTS_CURRENT_PAT_AUTHORITY_PATH,
+  TAKOSUMI_ACCOUNTS_PAT_INVENTORY_KIND,
+  TAKOSUMI_ACCOUNTS_PAT_INVENTORY_PATH,
   TAKOSUMI_ACCOUNTS_ACCOUNT_TOKENS_PATH,
   TAKOSUMI_ACCOUNTS_PASSKEY_AUTHENTICATE_COMPLETE_PATH,
   TAKOSUMI_ACCOUNTS_PASSKEY_AUTHENTICATE_OPTIONS_PATH,
@@ -63,6 +67,18 @@ test("account token contract exposes the Accounts PAT route surface", () => {
   expect(TAKOSUMI_ACCOUNTS_PAT_SCOPES).toEqual(["read", "write", "admin"]);
   expect(TAKOSUMI_ACCOUNTS_SELF_SERVICE_PAT_SCOPES).toEqual(["read", "write"]);
   expect(TAKOSUMI_ACCOUNTS_ACCOUNT_TOKENS_PATH).toEqual("/v1/account/tokens");
+  expect(TAKOSUMI_ACCOUNTS_CURRENT_PAT_AUTHORITY_PATH).toEqual(
+    "/v1/account/tokens/current",
+  );
+  expect(TAKOSUMI_ACCOUNTS_CURRENT_PAT_AUTHORITY_KIND).toEqual(
+    "takosumi.account-pat-authority@v1",
+  );
+  expect(TAKOSUMI_ACCOUNTS_PAT_INVENTORY_PATH).toEqual(
+    "/v1/account/tokens/inventory.v1",
+  );
+  expect(TAKOSUMI_ACCOUNTS_PAT_INVENTORY_KIND).toEqual(
+    "takosumi.account-pat-inventory@v1",
+  );
   expect(takosumiAccountsAccountTokenRevokePath("pat_1")).toEqual(
     "/v1/account/tokens/pat_1/revoke",
   );

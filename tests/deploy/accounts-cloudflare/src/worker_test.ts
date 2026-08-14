@@ -441,6 +441,75 @@ test("Cloudflare Accounts authenticates before resolving the cold Control plane"
   expect(warmTiming).toMatch(/tk_control_init;dur=\d+(?:\.\d+)?/u);
 });
 
+test("Cloudflare PAT self authority uses only the dedicated membership reader", async () => {
+  const db = await versionedAccountsDb();
+  const store = new D1AccountsStore(db, { schemaMode: "predeployed" });
+  const now = Date.now();
+  const rawToken = "takpat_cloudflare_workspace_authority";
+  await store.savePersonalAccessToken(rawToken, {
+    tokenId: "pat_cloudflare_workspace_authority",
+    tokenPrefix: "takpat_cloudflar",
+    subject: "tsub_cloudflare_workspace_authority",
+    name: "Cloudflare authority",
+    scopes: ["write", "read"],
+    workspaceId: "ws_cloudflare_workspace_authority",
+    createdAt: now,
+    expiresAt: now + 60_000,
+  });
+  let membershipReads = 0;
+  let controlInitializations = 0;
+  const worker = createCloudflareWorker({
+    patWorkspaceMembershipReader: () => ({
+      getMember: async (workspaceId, subject) => {
+        membershipReads += 1;
+        expect([workspaceId, subject]).toEqual([
+          "ws_cloudflare_workspace_authority",
+          "tsub_cloudflare_workspace_authority",
+        ]);
+        return {
+          workspaceId,
+          accountId: subject,
+          status: "active",
+          roles: ["owner"],
+        };
+      },
+    }),
+    controlPlaneOperations: async () => {
+      controlInitializations += 1;
+      throw new Error("the full Control plane must not initialize");
+    },
+  });
+
+  const response = await worker.fetch(
+    new Request("http://app.example.test/v1/account/tokens/current", {
+      headers: { authorization: `Bearer ${rawToken}` },
+    }),
+    env({
+      TAKOSUMI_ACCOUNTS_DB: db,
+      TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE: "predeployed",
+      TAKOSUMI_ACCOUNTS_ISSUER: "http://app.example.test",
+      TAKOSUMI_ACCOUNT_SESSION_HASH_SALT:
+        "cloudflare-pat-authority-session-salt",
+    }),
+  );
+
+  const responseBody = await response.json();
+  expect(response.status).toBe(200);
+  expect(response.headers.get("cache-control")).toBe("no-store");
+  expect(response.headers.get("pragma")).toBe("no-cache");
+  expect(responseBody).toEqual({
+    kind: "takosumi.account-pat-authority@v1",
+    token_id: "pat_cloudflare_workspace_authority",
+    subject: "tsub_cloudflare_workspace_authority",
+    scopes: ["read", "write"],
+    workspace_id: "ws_cloudflare_workspace_authority",
+    expires_at: new Date(now + 60_000).toISOString(),
+    workspace_role: "owner",
+  });
+  expect(membershipReads).toBe(1);
+  expect(controlInitializations).toBe(0);
+});
+
 test("Cloudflare authorize revalidates a Capsule OIDC client with canonical Control", async () => {
   const db = await versionedAccountsDb();
   const sessionSalt = "cloudflare-capsule-oidc-live-grant-session-salt";

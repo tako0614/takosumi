@@ -84,6 +84,41 @@ capability として公開します。Takosumi Cloud の API key は、Takosumi 
 personal access token です。S3-compatible endpoint のように標準 protocol 自体が
 署名方式を持つ場合は、その protocol の署名を使います。
 
+### Accounts personal access token
+
+PAT の公開 Accounts surface は次のとおりです。これらの応答は成功・認証失敗・入力
+エラーを含め、必ず `Cache-Control: no-store` と `Pragma: no-cache` を返します。
+
+| メソッド | パス                                  | 認証                               | 説明                                |
+| -------- | ------------------------------------- | ---------------------------------- | ----------------------------------- |
+| GET      | `/v1/account/tokens`                  | account session                    | 互換用の対話的一覧                  |
+| POST     | `/v1/account/tokens`                  | account session                    | PAT を作成する                      |
+| POST     | `/v1/account/tokens/{tokenId}/revoke` | account session                    | PAT を失効する                      |
+| GET      | `/v1/account/tokens/inventory.v1`     | account session                    | 完全な versioned metadata inventory |
+| GET      | `/v1/account/tokens/current`          | `Authorization: Bearer <PAT>` のみ | 提示した PAT 自身の現在の authority |
+
+`GET /v1/account/tokens/inventory.v1` は既存 dashboard 用一覧を置き換えません。既定
+`limit` は 50、最大は 100 で、`created_at`、次に `token_id` の昇順です。応答 kind は
+`takosumi.account-pat-inventory@v1` で、閉じた envelope の field は `kind`、`tokens`、
+`total`、`returned`、`limit`、`truncated`、`next_cursor` です。`total` は cursor 適用前の
+active / revoked を含む subject 所有 PAT 全数で、同じ一つの storage statement が count、
+cursor anchor、`limit + 1` page を読みます。各 token は `token_id`、`subject`、`name`、
+`prefix`、`scopes`、`workspace_id`、`created_at`、`expires_at`、`revoked_at`、
+`last_used_at` だけを持ち、任意 metadata は `null` です。secret は返しません。cursor は
+opaque で、malformed または subject に属する exact anchor が失われた cursor は 400
+`invalid_request` です。
+
+`GET /v1/account/tokens/current` は ambient cookie、
+`x-takosumi-account-session`、query/body の token を使いません。提示された opaque bearer
+を account session、OAuth access token、PAT の全 store に照合し、衝突、non-PAT、失効、
+期限切れは 401 `invalid_token` です。成功 kind は
+`takosumi.account-pat-authority@v1` で、field は `kind`、`token_id`、`subject`、`scopes`、
+`workspace_id`、`expires_at`、`workspace_role` だけです。generic PAT では Workspace field
+は `null` です。Workspace-bound PAT は現在の active membership を専用の一件 SELECT
+で検証します。検証不能は 503 `verification_unavailable`、inactive / 不一致は 403
+`workspace_membership_inactive` です。この read は `last_used_at`、audit、session、Control
+schema、Workspace / Project / TargetPool を更新・bootstrap しません。
+
 ## OpenTofu Stack API
 
 Stack API は plain OpenTofu / Terraform module を Git から実行します。

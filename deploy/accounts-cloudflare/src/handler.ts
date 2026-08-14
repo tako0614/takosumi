@@ -18,6 +18,7 @@ import {
   type OidcClientRegistration,
   registerSessionHashSaltConfig,
   type PasskeyHttpOptions,
+  type PatWorkspaceMembershipReader,
   signEs256Jwt,
   type UpstreamOAuthOptions,
   upstreamOAuthOptionsFromEnvironment,
@@ -109,6 +110,13 @@ export interface CreateCloudflareWorkerOptions<
   readonly controlPlaneOperations?: (
     env: TEnv,
   ) => Promise<ControlPlaneOperations | undefined>;
+  /**
+   * Narrow, read-only Workspace membership authority for the PAT self view.
+   * This is deliberately separate from the lazy full Control composition.
+   */
+  readonly patWorkspaceMembershipReader?: (
+    env: TEnv,
+  ) => PatWorkspaceMembershipReader | undefined;
 }
 
 interface CachedAccountsHandler {
@@ -502,6 +510,8 @@ async function buildAccountsHandler<TEnv extends CloudflareWorkerEnv>(
     issuer,
     clients,
     store,
+    patWorkspaceMembershipReader:
+      options.patWorkspaceMembershipReader?.(env),
     upstreamOAuth: parseUpstreamOAuthFailClosed(env),
     passkeys: parsePasskeysFailClosed(env),
     loginEmailAllowlist: parseLoginEmailAllowlist(env, issuer),

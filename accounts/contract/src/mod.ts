@@ -13,6 +13,14 @@ export const TAKOSUMI_ACCOUNTS_USERINFO_PATH = "/oauth/userinfo";
 export const TAKOSUMI_ACCOUNTS_REVOKE_PATH = "/oauth/revoke";
 export const TAKOSUMI_ACCOUNTS_INTROSPECT_PATH = "/oauth/introspect";
 export const TAKOSUMI_ACCOUNTS_ACCOUNT_TOKENS_PATH = "/v1/account/tokens";
+export const TAKOSUMI_ACCOUNTS_CURRENT_PAT_AUTHORITY_PATH =
+  `${TAKOSUMI_ACCOUNTS_ACCOUNT_TOKENS_PATH}/current`;
+export const TAKOSUMI_ACCOUNTS_CURRENT_PAT_AUTHORITY_KIND =
+  "takosumi.account-pat-authority@v1" as const;
+export const TAKOSUMI_ACCOUNTS_PAT_INVENTORY_PATH =
+  `${TAKOSUMI_ACCOUNTS_ACCOUNT_TOKENS_PATH}/inventory.v1`;
+export const TAKOSUMI_ACCOUNTS_PAT_INVENTORY_KIND =
+  "takosumi.account-pat-inventory@v1" as const;
 export const TAKOSUMI_ACCOUNTS_PRIVACY_REQUESTS_PATH = "/v1/privacy/requests";
 export const TAKOSUMI_ACCOUNTS_UPSTREAM_AUTHORIZE_PATH =
   "/v1/auth/upstream/authorize";
@@ -103,6 +111,54 @@ export interface TakosumiAccountsListPatsResponse {
 
 export interface TakosumiAccountsRevokePatResponse {
   token: TakosumiAccountsPatMetadata;
+}
+
+export type TakosumiAccountsWorkspaceRole =
+  | "owner"
+  | "admin"
+  | "member"
+  | "viewer";
+
+/**
+ * Closed, read-only projection of the authority carried by the PAT presented
+ * to `GET /v1/account/tokens/current`.
+ */
+export interface TakosumiAccountsCurrentPatAuthorityResponse {
+  readonly kind: typeof TAKOSUMI_ACCOUNTS_CURRENT_PAT_AUTHORITY_KIND;
+  readonly token_id: string;
+  readonly subject: TakosumiSubject;
+  readonly scopes: readonly TakosumiAccountsPatScope[];
+  readonly workspace_id: string | null;
+  readonly expires_at: string | null;
+  readonly workspace_role: TakosumiAccountsWorkspaceRole | null;
+}
+
+/** Closed PAT metadata row returned only by the versioned owner inventory. */
+export interface TakosumiAccountsPatInventoryToken {
+  readonly token_id: string;
+  readonly subject: TakosumiSubject;
+  readonly name: string;
+  readonly prefix: string;
+  readonly scopes: readonly TakosumiAccountsPatScope[];
+  readonly workspace_id: string | null;
+  readonly created_at: string;
+  readonly expires_at: string | null;
+  readonly revoked_at: string | null;
+  readonly last_used_at: string | null;
+}
+
+/**
+ * Complete, keyset-paginated metadata inventory for one authenticated account.
+ * `total` counts both active and revoked subject-owned PATs.
+ */
+export interface TakosumiAccountsPatInventoryResponse {
+  readonly kind: typeof TAKOSUMI_ACCOUNTS_PAT_INVENTORY_KIND;
+  readonly tokens: readonly TakosumiAccountsPatInventoryToken[];
+  readonly total: number;
+  readonly returned: number;
+  readonly limit: number;
+  readonly truncated: boolean;
+  readonly next_cursor: string | null;
 }
 
 export type TakosumiAccountsPrivacyRequestKind = "export" | "delete";

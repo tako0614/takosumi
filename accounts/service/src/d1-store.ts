@@ -1,4 +1,5 @@
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
+import { TAKOSUMI_ACCOUNTS_PAT_SCOPES } from "@takosjp/takosumi-accounts-contract";
 import { and, asc, eq } from "drizzle-orm";
 import { drizzle, type DrizzleD1Database } from "drizzle-orm/d1";
 import {
@@ -18,12 +19,15 @@ import type {
   AuthorizationCodeRecord,
   OidcClientRecord,
   PasskeyCredentialRecord,
+  PersonalAccessTokenInventoryPage,
+  PersonalAccessTokenInventoryPageInput,
   PersonalAccessTokenRecord,
   PrivacyRequestRecord,
   TakosumiAccountRecord,
   TokenRecord,
   UpstreamIdentityRecord,
 } from "./store.ts";
+import { assertPersonalAccessTokenInventoryPageInput } from "./store.ts";
 import {
   emptyRefreshChainPruneResult,
   isRefreshChainRetentionPhase,
@@ -75,6 +79,12 @@ export interface D1AccountsStoreOptions {
   readonly schemaMode?: D1AccountsSchemaMode;
 }
 
+/** Canonical physical table names shared with narrow in-process D1 readers. */
+export const d1AccountsTableNames = {
+  documents: "takosumi_accounts_documents",
+  indexes: "takosumi_accounts_indexes",
+} as const;
+
 export function resolveD1AccountsSchemaMode(
   value: unknown,
 ): D1AccountsSchemaMode {
@@ -89,10 +99,10 @@ export function resolveD1AccountsSchemaMode(
 // statement must fit on one line — both for real Cloudflare D1 and for
 // miniflare's emulation. Keep these single-line and terminated with `;`.
 export const D1_ACCOUNTS_STORE_INIT_SQL: string = [
-  "CREATE TABLE IF NOT EXISTS takosumi_accounts_documents (bucket TEXT NOT NULL, key TEXT NOT NULL, document TEXT NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY (bucket, key));",
-  "CREATE TABLE IF NOT EXISTS takosumi_accounts_indexes (index_name TEXT NOT NULL, index_key TEXT NOT NULL, bucket TEXT NOT NULL, document_key TEXT NOT NULL, sort_key INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (index_name, index_key, bucket, document_key));",
-  "CREATE INDEX IF NOT EXISTS takosumi_accounts_indexes_lookup ON takosumi_accounts_indexes (index_name, index_key, sort_key);",
-  "CREATE INDEX IF NOT EXISTS takosumi_accounts_indexes_document ON takosumi_accounts_indexes (bucket, document_key);",
+  `CREATE TABLE IF NOT EXISTS ${d1AccountsTableNames.documents} (bucket TEXT NOT NULL, key TEXT NOT NULL, document TEXT NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY (bucket, key));`,
+  `CREATE TABLE IF NOT EXISTS ${d1AccountsTableNames.indexes} (index_name TEXT NOT NULL, index_key TEXT NOT NULL, bucket TEXT NOT NULL, document_key TEXT NOT NULL, sort_key INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (index_name, index_key, bucket, document_key));`,
+  `CREATE INDEX IF NOT EXISTS takosumi_accounts_indexes_lookup ON ${d1AccountsTableNames.indexes} (index_name, index_key, sort_key);`,
+  `CREATE INDEX IF NOT EXISTS takosumi_accounts_indexes_document ON ${d1AccountsTableNames.indexes} (bucket, document_key);`,
 ].join("\n");
 
 interface D1IndexEntry {
@@ -102,7 +112,7 @@ interface D1IndexEntry {
 }
 
 const d1AccountsDocuments = sqliteTable(
-  "takosumi_accounts_documents",
+  d1AccountsTableNames.documents,
   {
     bucket: text("bucket").notNull(),
     key: text("key").notNull(),
@@ -113,7 +123,7 @@ const d1AccountsDocuments = sqliteTable(
 );
 
 const d1AccountsIndexes = sqliteTable(
-  "takosumi_accounts_indexes",
+  d1AccountsTableNames.indexes,
   {
     indexName: text("index_name").notNull(),
     indexKey: text("index_key").notNull(),
@@ -176,6 +186,120 @@ from presented_pat_secret
 join takosumi_accounts_documents as pat
   on pat.bucket = 'personal_access_tokens'
  and pat.key = json_extract(presented_pat_secret.document, '$.tokenId')`;
+
+const PERSONAL_ACCESS_TOKEN_INVENTORY_PAGE_SQL = `with
+  subject_tokens as (
+    select idx.sort_key as created_at,
+           idx.document_key as token_id,
+           doc.document as document
+      from ${d1AccountsTableNames.indexes} as idx
+      join ${d1AccountsTableNames.documents} as doc
+        on doc.bucket = 'personal_access_tokens'
+       and doc.key = idx.document_key
+     where idx.index_name = 'personal_access_tokens_by_subject'
+       and idx.index_key = ?
+       and idx.bucket = 'personal_access_tokens'
+  ),
+  cursor_state as (
+    select case when ? = 0 then 0 else (
+      select count(*) from subject_tokens
+       where created_at = ? and token_id = ?
+    ) end as anchor_count
+  ),
+  page as (
+    select created_at, token_id, document
+      from subject_tokens
+     where ? = 0
+        or created_at > ?
+        or (created_at = ? and token_id > ?)
+     order by created_at asc, token_id asc
+     limit ?
+  )
+select 0 as row_kind,
+       (select count(*) from subject_tokens) as total,
+       cursor_state.anchor_count as anchor_count,
+       cast(null as integer) as created_at,
+       cast(null as text) as token_id,
+       cast(null as text) as document
+  from cursor_state
+union all
+select 1 as row_kind,
+       cast(null as integer) as total,
+       cast(null as integer) as anchor_count,
+       page.created_at,
+       page.token_id,
+       page.document
+  from page
+order by row_kind asc, created_at asc, token_id asc`;
+
+interface D1PersonalAccessTokenInventoryRow {
+  readonly row_kind: unknown;
+  readonly total: unknown;
+  readonly anchor_count: unknown;
+  readonly created_at: unknown;
+  readonly token_id: unknown;
+  readonly document: unknown;
+}
+
+function personalAccessTokenInventoryRecordFromD1Row(
+  row: D1PersonalAccessTokenInventoryRow,
+  subject: TakosumiSubject,
+): PersonalAccessTokenRecord {
+  if (
+    row.row_kind !== 1 ||
+    !Number.isSafeInteger(row.created_at) ||
+    (row.created_at as number) < 0 ||
+    typeof row.token_id !== "string" ||
+    row.token_id.length === 0 ||
+    typeof row.document !== "string"
+  ) {
+    throw new Error("D1 PAT inventory row is malformed");
+  }
+  let record: unknown;
+  try {
+    record = JSON.parse(row.document);
+  } catch {
+    throw new Error("D1 PAT inventory document is malformed");
+  }
+  if (
+    !isUnknownRecord(record) ||
+    record.tokenId !== row.token_id ||
+    record.subject !== subject ||
+    record.createdAt !== row.created_at ||
+    typeof record.tokenPrefix !== "string" ||
+    typeof record.name !== "string" ||
+    !Array.isArray(record.scopes) ||
+    record.scopes.length === 0 ||
+    new Set(record.scopes).size !== record.scopes.length ||
+    !record.scopes.every(
+      (scope) =>
+        typeof scope === "string" &&
+        (TAKOSUMI_ACCOUNTS_PAT_SCOPES as readonly string[]).includes(scope),
+    ) ||
+    !optionalStringIsValid(record.workspaceId) ||
+    !optionalTimestampIsValid(record.expiresAt) ||
+    !optionalTimestampIsValid(record.revokedAt) ||
+    !optionalTimestampIsValid(record.lastUsedAt)
+  ) {
+    throw new Error("D1 PAT inventory document is malformed");
+  }
+  return record as unknown as PersonalAccessTokenRecord;
+}
+
+function isUnknownRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function optionalStringIsValid(value: unknown): boolean {
+  return value === undefined || (typeof value === "string" && value.length > 0);
+}
+
+function optionalTimestampIsValid(value: unknown): boolean {
+  return (
+    value === undefined ||
+    (Number.isSafeInteger(value) && (value as number) >= 0)
+  );
+}
 
 function duplicateBearerCandidate(
   kind: D1AccountsBearerCandidateRow["kind"],
@@ -740,6 +864,53 @@ export class D1AccountsStore implements AccountsStore {
     subject: TakosumiSubject,
   ): Promise<readonly PersonalAccessTokenRecord[]> {
     return this.#listByIndex("personal_access_tokens_by_subject", subject);
+  }
+
+  async listPersonalAccessTokenInventoryPage(
+    input: PersonalAccessTokenInventoryPageInput,
+  ): Promise<PersonalAccessTokenInventoryPage> {
+    assertPersonalAccessTokenInventoryPageInput(input);
+    await this.initialize();
+    const hasCursor = input.cursor ? 1 : 0;
+    const cursorCreatedAt = input.cursor?.createdAt ?? 0;
+    const cursorTokenId = input.cursor?.tokenId ?? "";
+    const result = await this.#db
+      .prepare(PERSONAL_ACCESS_TOKEN_INVENTORY_PAGE_SQL)
+      .bind(
+        input.subject,
+        hasCursor,
+        cursorCreatedAt,
+        cursorTokenId,
+        hasCursor,
+        cursorCreatedAt,
+        cursorCreatedAt,
+        cursorTokenId,
+        input.limit + 1,
+      )
+      .all<D1PersonalAccessTokenInventoryRow>();
+    if (!result.success || !Array.isArray(result.results)) {
+      throw new Error("D1 PAT inventory read failed");
+    }
+    const [meta, ...rows] = result.results;
+    if (
+      !meta ||
+      meta.row_kind !== 0 ||
+      !Number.isSafeInteger(meta.total) ||
+      (meta.total as number) < 0 ||
+      (meta.anchor_count !== 0 && meta.anchor_count !== 1) ||
+      (hasCursor === 0 && meta.anchor_count !== 0) ||
+      rows.length > input.limit + 1
+    ) {
+      throw new Error("D1 PAT inventory metadata is malformed");
+    }
+    const items = rows.map((row) =>
+      personalAccessTokenInventoryRecordFromD1Row(row, input.subject),
+    );
+    return {
+      items,
+      total: meta.total as number,
+      cursorValid: hasCursor === 0 || meta.anchor_count === 1,
+    };
   }
 
   async revokePersonalAccessToken(input: {

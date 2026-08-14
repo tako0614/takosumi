@@ -4,6 +4,8 @@ import {
   type JsonWebKeySet,
   normalizeIssuer,
   TAKOSUMI_ACCOUNTS_ACCOUNT_TOKENS_PATH,
+  TAKOSUMI_ACCOUNTS_CURRENT_PAT_AUTHORITY_PATH,
+  TAKOSUMI_ACCOUNTS_PAT_INVENTORY_PATH,
   TAKOSUMI_ACCOUNTS_AUTH_PROVIDERS_PATH,
   TAKOSUMI_ACCOUNTS_AUTHORIZE_PATH,
   TAKOSUMI_ACCOUNTS_INTROSPECT_PATH,
@@ -49,9 +51,12 @@ import {
   handlePasskeyRegisterOptions,
 } from "./passkey-routes.ts";
 import {
+  handleCurrentPersonalAccessTokenAuthority,
   handleCreatePersonalAccessToken,
   handleListPersonalAccessTokens,
+  handlePersonalAccessTokenInventory,
   handleRevokePersonalAccessToken,
+  type PatWorkspaceMembershipReader,
 } from "./pat-routes.ts";
 import {
   handleCompletePrivacyRequest,
@@ -74,6 +79,7 @@ import {
   RequestBodyReadError,
   readJsonObject,
   stringValue,
+  withPrivateNoStoreHeaders,
 } from "./http-helpers.ts";
 import { createAccountsHttpApp } from "./http-app.ts";
 import { constantTimeEqual } from "./encoding.ts";
@@ -125,6 +131,10 @@ export type {
 } from "./control-routes.ts";
 export { handleAuthenticatedControlRoute } from "./control-routes.ts";
 export type { LoginEmailAllowlist } from "./login-email-allowlist.ts";
+export type {
+  PatWorkspaceMembership,
+  PatWorkspaceMembershipReader,
+} from "./pat-routes.ts";
 
 export * from "./subject.ts";
 export * from "./store.ts";
@@ -179,6 +189,8 @@ export interface AccountsHandlerOptions {
   resolveControlPlaneOperations?: () => Promise<
     ControlPlaneOperations | undefined
   >;
+  /** Dedicated exact read port for PAT self-authority verification. */
+  patWorkspaceMembershipReader?: PatWorkspaceMembershipReader;
   /** Canonical current-state check for short-lived Interface OAuth tokens. */
   interfaceOAuthActivityValidator?: InterfaceOAuthActivityValidator;
   /** Operator-owned hostname namespace used for managed Capsule endpoints. */
@@ -207,6 +219,7 @@ export interface EphemeralAccountsHandlerOptions {
   resolveControlPlaneOperations?: () => Promise<
     ControlPlaneOperations | undefined
   >;
+  patWorkspaceMembershipReader?: PatWorkspaceMembershipReader;
   interfaceOAuthActivityValidator?: InterfaceOAuthActivityValidator;
   managedPublicBaseDomain?: string;
   loginEmailAllowlist?: LoginEmailAllowlist;
@@ -326,6 +339,7 @@ export async function createEphemeralAccountsHandler(
     passkeys: options.passkeys,
     controlPlaneOperations: options.controlPlaneOperations,
     resolveControlPlaneOperations: options.resolveControlPlaneOperations,
+    patWorkspaceMembershipReader: options.patWorkspaceMembershipReader,
     interfaceOAuthActivityValidator: options.interfaceOAuthActivityValidator,
     ...(options.managedPublicBaseDomain
       ? { managedPublicBaseDomain: options.managedPublicBaseDomain }
@@ -630,6 +644,22 @@ export function createAccountsHandler(
       return methodNotAllowed("GET, POST");
     }
 
+    if (url.pathname === TAKOSUMI_ACCOUNTS_CURRENT_PAT_AUTHORITY_PATH) {
+      if (request.method !== "GET") return methodNotAllowed("GET");
+      return await handleCurrentPersonalAccessTokenAuthority({
+        request,
+        store,
+        ...(options.patWorkspaceMembershipReader
+          ? { membershipReader: options.patWorkspaceMembershipReader }
+          : {}),
+      });
+    }
+
+    if (url.pathname === TAKOSUMI_ACCOUNTS_PAT_INVENTORY_PATH) {
+      if (request.method !== "GET") return methodNotAllowed("GET");
+      return await handlePersonalAccessTokenInventory({ request, url, store });
+    }
+
     if (url.pathname === TAKOSUMI_ACCOUNTS_PRIVACY_REQUESTS_PATH) {
       const session = await requireAccountSession({
         request: request.clone(),
@@ -825,7 +855,12 @@ export function createAccountsHandler(
       if (!(error instanceof RequestBodyReadError)) throw error;
       response = errorJson(error.code, error.message, error.status, request);
     }
-    return withSecurityHeaders(response, isProductionIssuer);
+    const privateResponse = isPersonalAccessTokenRoutePath(
+      new URL(request.url).pathname,
+    )
+      ? withPrivateNoStoreHeaders(response)
+      : response;
+    return withSecurityHeaders(privateResponse, isProductionIssuer);
   };
 }
 
@@ -1005,11 +1040,21 @@ function accountsIngressSecurityFailure(
 
 function isLoginAllowlistBypassPath(pathname: string): boolean {
   return (
+    pathname === TAKOSUMI_ACCOUNTS_CURRENT_PAT_AUTHORITY_PATH ||
     pathname === TAKOSUMI_ACCOUNTS_AUTH_PROVIDERS_PATH ||
     pathname === TAKOSUMI_ACCOUNTS_UPSTREAM_AUTHORIZE_PATH ||
     pathname === TAKOSUMI_ACCOUNTS_UPSTREAM_CALLBACK_PATH ||
     pathname === TAKOSUMI_ACCOUNTS_PASSKEY_AUTHENTICATE_OPTIONS_PATH ||
     pathname === TAKOSUMI_ACCOUNTS_PASSKEY_AUTHENTICATE_COMPLETE_PATH
+  );
+}
+
+function isPersonalAccessTokenRoutePath(pathname: string): boolean {
+  return (
+    pathname === TAKOSUMI_ACCOUNTS_ACCOUNT_TOKENS_PATH ||
+    pathname === TAKOSUMI_ACCOUNTS_CURRENT_PAT_AUTHORITY_PATH ||
+    pathname === TAKOSUMI_ACCOUNTS_PAT_INVENTORY_PATH ||
+    matchAccountTokenRevokeRoute(pathname) !== null
   );
 }
 
