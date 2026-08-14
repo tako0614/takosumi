@@ -58,6 +58,7 @@ import {
 } from "./control/connections.ts";
 import { handleOutputShares } from "./control/output-shares.ts";
 import { handleDashboard } from "./control/dashboard.ts";
+import { handleAccountWorkspaceViews } from "./control/account-workspace-views.ts";
 import { handleProjects } from "./control/projects.ts";
 import {
   appendServerTiming,
@@ -106,6 +107,7 @@ const RESOURCE_HANDLERS: Partial<Record<string, ControlResourceHandler>> = {
   connections: handleConnections,
   "output-shares": handleOutputShares,
   dashboard: handleDashboard,
+  views: handleAccountWorkspaceViews,
 };
 
 /**

@@ -151,6 +151,25 @@ export interface PublicWorkspaceListPage {
   readonly pinnedWorkspaceId?: string;
 }
 
+/**
+ * Exact account-scoped Workspace inventory envelope for migration and
+ * cross-product discovery clients. Unlike the interactive Workspace list,
+ * this view always includes archived Workspaces and carries an exact total of
+ * all active membership rows before cursor filtering.
+ */
+export const ACCOUNT_WORKSPACE_INVENTORY_PAGE_V1_KIND =
+  "takosumi.account-workspace-inventory@v1" as const;
+
+export interface AccountWorkspaceInventoryPageV1 {
+  readonly kind: typeof ACCOUNT_WORKSPACE_INVENTORY_PAGE_V1_KIND;
+  readonly workspaces: readonly Workspace[];
+  readonly total: number;
+  readonly returned: number;
+  readonly limit: number;
+  readonly truncated: boolean;
+  readonly nextCursor?: string;
+}
+
 /** Capsule full name (`@handle/name`) helper shape. */
 export interface CapsuleFullName {
   readonly workspaceHandle: string;

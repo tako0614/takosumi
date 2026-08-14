@@ -108,7 +108,20 @@ Stack flow のエンドポイントはすべて `/api/v1` の下にあります�
 404 になります。
 
 正本は `accounts/service/src/control-route-inventory.ts` で、公開されているのは
-次の 74 件です。
+次の 81 件です。
+
+**Account views**
+
+| メソッド | パス                             | 説明                                                        |
+| -------- | -------------------------------- | ----------------------------------------------------------- |
+| GET      | `/api/v1/views/workspaces.v1`    | アカウントの active membership Workspace inventory を読む |
+
+`/api/v1/views/workspaces.v1` は、初回ログインの個人 Workspace 作成・修復を持つ
+`GET /api/v1/workspaces` とは別の読み取り専用 projection です。認証済みアカウントの
+active membership を `created_asc` で返し、archived Workspace も含めます。`limit` は
+省略時 100、最大 100、`cursor` は opaque token です。クエリキーは `limit` と
+`cursor` だけを受け付けます。レスポンスの `total` は cursor 適用前の全 active
+membership 行数です。Workspace-scoped credential では利用できません。
 
 **Workspace**
 

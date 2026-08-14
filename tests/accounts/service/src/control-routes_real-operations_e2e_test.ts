@@ -298,6 +298,81 @@ async function controlJson<T>(
   return (await response!.json()) as T;
 }
 
+test("account Workspace inventory follows real active membership pagination", async () => {
+  const accountStore = new InMemoryAccountsStore();
+  const cookie = seedSession(accountStore);
+  const deployStore = new InMemoryOpenTofuControlStore();
+  const { operations } = await createTakosumiService({
+    role: "takosumi-api",
+    runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
+    opentofuControlStore: deployStore,
+  });
+
+  const first = await operations.workspaces.createWorkspace({
+    handle: "inventory-first",
+    displayName: "Inventory first",
+    type: "personal",
+    ownerUserId: "user_test",
+  });
+  const archived = await operations.workspaces.createWorkspace({
+    handle: "inventory-archived",
+    displayName: "Inventory archived",
+    type: "organization",
+    ownerUserId: "user_test",
+  });
+  await operations.workspaces.updateWorkspace(archived.id, { archived: true });
+
+  const firstPage = await controlJson<{
+    readonly kind: string;
+    readonly workspaces: readonly { readonly id: string }[];
+    readonly total: number;
+    readonly returned: number;
+    readonly limit: number;
+    readonly truncated: boolean;
+    readonly nextCursor?: string;
+  }>(
+    {
+      operations,
+      store: accountStore,
+      cookie,
+      method: "GET",
+      path: "/api/v1/views/workspaces.v1?limit=1",
+    },
+    200,
+  );
+  expect(firstPage.kind).toBe("takosumi.account-workspace-inventory@v1");
+  expect(firstPage.total).toBe(2);
+  expect(firstPage.returned).toBe(1);
+  expect(firstPage.limit).toBe(1);
+  expect(firstPage.truncated).toBe(true);
+  expect(firstPage.nextCursor).toBeString();
+
+  const secondPage = await controlJson<typeof firstPage>(
+    {
+      operations,
+      store: accountStore,
+      cookie,
+      method: "GET",
+      path: `/api/v1/views/workspaces.v1?limit=1&cursor=${encodeURIComponent(firstPage.nextCursor!)}`,
+    },
+    200,
+  );
+  expect(secondPage.kind).toBe(firstPage.kind);
+  expect(secondPage.total).toBe(2);
+  expect(secondPage.returned).toBe(1);
+  expect(secondPage.limit).toBe(1);
+  expect(secondPage.truncated).toBe(false);
+  expect(secondPage.nextCursor).toBeUndefined();
+  expect(new Set([
+    firstPage.workspaces[0]?.id,
+    secondPage.workspaces[0]?.id,
+  ])).toEqual(new Set([first.id, archived.id]));
+  expect(
+    firstPage.workspaces.some((workspace) => workspace.id === archived.id) ||
+      secondPage.workspaces.some((workspace) => workspace.id === archived.id),
+  ).toBe(true);
+});
+
 function storeEligibleInstallConfig(url: string) {
   return {
     sourceSelector: { url, path: "legacy/policy-path" },
