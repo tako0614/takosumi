@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import type { ControlPlaneOperations } from "../../../../accounts/service/src/control-operations.ts";
 import {
+  handleAuthenticatedControlRoute,
   handleControlRoute,
   isControlRoutePath,
 } from "../../../../accounts/service/src/control-routes.ts";
@@ -14,8 +15,12 @@ import {
   type ControlDispatchContext,
 } from "../../../../accounts/service/src/control/shared.ts";
 import { handleWorkspaces } from "../../../../accounts/service/src/control/workspaces.ts";
+import { handleAccountWorkspaceViews } from "../../../../accounts/service/src/control/account-workspace-views.ts";
 import { handleDashboard } from "../../../../accounts/service/src/control/dashboard.ts";
-import { InMemoryAccountsStore } from "../../../../accounts/service/src/store.ts";
+import {
+  InMemoryAccountsStore,
+  type AccountsStore,
+} from "../../../../accounts/service/src/store.ts";
 import { encodeCursor } from "../../../../contract/pagination.ts";
 import { WorkspacesService } from "../../../../core/domains/workspaces/mod.ts";
 import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
@@ -795,6 +800,362 @@ test("Workspace list defaults to one bounded created-order page", async () => {
       limit: 100,
     },
   ]);
+});
+
+test("account Workspace inventory is a fixed, read-only public projection", async () => {
+  const pageCalls: Array<{ accountId: string; params: Record<string, unknown> }> = [];
+  let writerCalls = 0;
+  const archivedWorkspace = {
+    ...workspace,
+    id: "ws_archived",
+    handle: "archived",
+    displayName: "Archived",
+    archivedAt: "2026-08-01T00:00:00.000Z",
+    internalSecretId: "must-not-leak",
+  } as typeof workspace & { archivedAt: string; internalSecretId: string };
+  const operations = {
+    workspaces: {
+      listWorkspacesForAccountPage: async (
+        accountId: string,
+        params: Record<string, unknown>,
+      ) => {
+        pageCalls.push({ accountId, params });
+        return {
+          items: [archivedWorkspace],
+          total: 1,
+        };
+      },
+      ensurePersonalWorkspace: async () => {
+        writerCalls += 1;
+        throw new Error("inventory must not ensure");
+      },
+      createWorkspace: async () => {
+        writerCalls += 1;
+        throw new Error("inventory must not create");
+      },
+    },
+    members: {
+      listMembers: async () => {
+        writerCalls += 1;
+        throw new Error("inventory must not read membership separately");
+      },
+    },
+    projects: {
+      listProjects: async () => {
+        writerCalls += 1;
+        throw new Error("inventory must not read projects");
+      },
+    },
+  } as unknown as ControlPlaneOperations;
+  const cursor = encodeCursor({
+    createdAt: "2026-01-01T00:00:00.000Z",
+    id: "ws_before",
+  });
+  const request = new Request(
+    `https://app.example.test/api/v1/views/workspaces.v1?limit=101&cursor=${cursor}`,
+  );
+  const response = await handleAccountWorkspaceViews(
+    {
+      request,
+      url: new URL(request.url),
+      operations,
+      store: new InMemoryAccountsStore(),
+      session: { subject: "tsub_owner" },
+    },
+    ["views", "workspaces.v1"],
+    "GET",
+  );
+
+  expect(response?.status).toBe(200);
+  expect(await response?.json()).toEqual({
+    kind: "takosumi.account-workspace-inventory@v1",
+    workspaces: [
+      {
+        id: archivedWorkspace.id,
+        handle: archivedWorkspace.handle,
+        displayName: archivedWorkspace.displayName,
+        type: archivedWorkspace.type,
+        ownerUserId: archivedWorkspace.ownerUserId,
+        archivedAt: archivedWorkspace.archivedAt,
+        createdAt: archivedWorkspace.createdAt,
+        updatedAt: archivedWorkspace.updatedAt,
+      },
+    ],
+    total: 1,
+    returned: 1,
+    limit: 100,
+    truncated: false,
+  });
+  expect(pageCalls).toEqual([
+    {
+      accountId: "tsub_owner",
+      params: {
+        includeArchived: true,
+        includeTotal: true,
+        order: "created_asc",
+        limit: 100,
+        cursor,
+      },
+    },
+  ]);
+  expect(writerCalls).toBe(0);
+});
+
+test("account Workspace inventory is mounted through the public control dispatcher", async () => {
+  const operations = {
+    workspaces: {
+      listWorkspacesForAccountPage: async () => ({
+        items: [],
+        total: 0,
+      }),
+    },
+  } as unknown as ControlPlaneOperations;
+  const request = new Request(
+    "https://app.example.test/api/v1/views/workspaces.v1",
+  );
+  const response = await handleAuthenticatedControlRoute({
+    request,
+    url: new URL(request.url),
+    operations,
+    store: new InMemoryAccountsStore(),
+    subject: "tsub_owner",
+  });
+  expect(response?.status).toBe(200);
+  expect(await response?.json()).toEqual({
+    kind: "takosumi.account-workspace-inventory@v1",
+    workspaces: [],
+    total: 0,
+    returned: 0,
+    limit: 100,
+    truncated: false,
+  });
+});
+
+test("account Workspace inventory rejects unknown query keys and malformed cursors", async () => {
+  let pageCalls = 0;
+  const operations = {
+    workspaces: {
+      listWorkspacesForAccountPage: async () => {
+        pageCalls += 1;
+        return { items: [], total: 0 };
+      },
+    },
+  } as unknown as ControlPlaneOperations;
+  for (const path of [
+    "/api/v1/views/workspaces.v1?includeArchived=true",
+    "/api/v1/views/workspaces.v1?cursor=malformed-cursor",
+  ]) {
+    const request = new Request(`https://app.example.test${path}`);
+    const response = await handleAccountWorkspaceViews(
+      {
+        request,
+        url: new URL(request.url),
+        operations,
+        store: new InMemoryAccountsStore(),
+        session: { subject: "tsub_owner" },
+      },
+      ["views", "workspaces.v1"],
+      "GET",
+    );
+    expect(response?.status).toBe(400);
+    expect(await response?.json()).toMatchObject({
+      error: { code: "invalid_request" },
+    });
+  }
+  expect(pageCalls).toBe(0);
+});
+
+test("Workspace-scoped account Workspace inventory is forbidden before any store or operation read", async () => {
+  let pageCalls = 0;
+  const operations = {
+    workspaces: {
+      listWorkspacesForAccountPage: async () => {
+        pageCalls += 1;
+        return { items: [], total: 0 };
+      },
+    },
+  } as unknown as ControlPlaneOperations;
+  const store = new Proxy(new InMemoryAccountsStore(), {
+    get() {
+      throw new Error("workspace-scoped inventory must not read the store");
+    },
+  }) as unknown as InMemoryAccountsStore;
+  const request = new Request(
+    "https://app.example.test/api/v1/views/workspaces.v1",
+  );
+  // The public auth entry point necessarily reads the credential store first;
+  // this authenticated composition seam isolates the route's own scope check.
+  const direct = await handleAuthenticatedControlRoute({
+    request,
+    url: new URL(request.url),
+    operations,
+    store,
+    subject: "tsub_owner",
+    workspaceId: "ws_scoped",
+  });
+  expect(direct?.status).toBe(403);
+  expect(pageCalls).toBe(0);
+});
+
+test("dispatcher fences Workspace-scoped inventory before lazy Control initialization", async () => {
+  let resolverCalls = 0;
+  let storeReads = 0;
+  const store = new Proxy({} as AccountsStore, {
+    get() {
+      storeReads += 1;
+      throw new Error("workspace-scoped inventory must not touch the store");
+    },
+  });
+  for (const path of [
+    "/api/v1/views/workspaces.v1",
+    "/api/v1/views/workspaces.v1/",
+    "/api/v1//views/workspaces.v1",
+  ]) {
+    const request = new Request(`https://app.example.test${path}`);
+    const response = await handleAuthenticatedControlRoute({
+      request,
+      url: new URL(request.url),
+      store,
+      subject: "tsub_owner",
+      workspaceId: "ws_scoped",
+      resolveOperations: async () => {
+        resolverCalls += 1;
+        throw new Error(
+          "workspace-scoped inventory must not initialize Control",
+        );
+      },
+    });
+    expect(response?.status).toBe(403);
+    expect(await response?.json()).toMatchObject({
+      error: { code: "forbidden" },
+    });
+  }
+  expect(resolverCalls).toBe(0);
+  expect(storeReads).toBe(0);
+});
+
+test("unscoped inventory aliases use the normalized public projection route", async () => {
+  let resolverCalls = 0;
+  let pageCalls = 0;
+  const operations = {
+    workspaces: {
+      listWorkspacesForAccountPage: async () => {
+        pageCalls += 1;
+        return { items: [], total: 0 };
+      },
+    },
+  } as unknown as ControlPlaneOperations;
+  const store = {} as AccountsStore;
+  for (const path of [
+    "/api/v1/views/workspaces.v1",
+    "/api/v1/views/workspaces.v1/",
+    "/api/v1//views/workspaces.v1",
+  ]) {
+    const request = new Request(`https://app.example.test${path}`);
+    const response = await handleAuthenticatedControlRoute({
+      request,
+      url: new URL(request.url),
+      store,
+      subject: "tsub_owner",
+      resolveOperations: async () => {
+        resolverCalls += 1;
+        return operations;
+      },
+    });
+    expect(response?.status).toBe(200);
+    expect(await response?.json()).toMatchObject({
+      kind: "takosumi.account-workspace-inventory@v1",
+      workspaces: [],
+      total: 0,
+    });
+  }
+  expect(resolverCalls).toBe(3);
+  expect(pageCalls).toBe(3);
+});
+
+test("public Workspace-scoped PAT inventory rejects before lazy Control initialization", async () => {
+  const pat = "pat_workspace_inventory_scope";
+  const store = new InMemoryAccountsStore();
+  let bearerResolutions = 0;
+  store.resolveAccountsBearerCandidates = async (token) => {
+    bearerResolutions += 1;
+    expect(token).toBe(pat);
+    return {
+      personalAccessToken: {
+        tokenId: "pat_workspace_inventory_scope",
+        tokenPrefix: "pat_workspace_inventory",
+        subject: "tsub_owner",
+        name: "Workspace inventory",
+        scopes: ["read"],
+        workspaceId: "ws_scoped",
+        createdAt: Date.now(),
+      },
+    };
+  };
+  let resolverCalls = 0;
+  let operationCalls = 0;
+  const operations = {
+    workspaces: {
+      listWorkspacesForAccountPage: async () => {
+        operationCalls += 1;
+        throw new Error("workspace-scoped inventory must not read Operations");
+      },
+    },
+  } as unknown as ControlPlaneOperations;
+  const request = new Request(
+    "https://app.example.test/api/v1/views/workspaces.v1",
+    { headers: { authorization: `Bearer ${pat}` } },
+  );
+  const response = await handleControlRoute({
+    request,
+    url: new URL(request.url),
+    store,
+    resolveOperations: async () => {
+      resolverCalls += 1;
+      return operations;
+    },
+  });
+  expect(response?.status).toBe(403);
+  expect(await response?.json()).toMatchObject({
+    error: { code: "forbidden" },
+  });
+  expect(bearerResolutions).toBe(1);
+  expect(resolverCalls).toBe(0);
+  expect(operationCalls).toBe(0);
+  expect(response?.headers.get("server-timing")).toMatch(
+    /tk_control_auth;dur=/u,
+  );
+  expect(response?.headers.get("server-timing")).not.toContain(
+    "tk_control_init",
+  );
+});
+
+test("account Workspace inventory fails closed when total is missing or inconsistent", async () => {
+  for (const page of [
+    { items: [workspace] },
+    { items: [workspace], total: 0 },
+    { items: [workspace], total: 1, nextCursor: "next" },
+  ]) {
+    const operations = {
+      workspaces: {
+        listWorkspacesForAccountPage: async () => page,
+      },
+    } as unknown as ControlPlaneOperations;
+    const request = new Request(
+      "https://app.example.test/api/v1/views/workspaces.v1",
+    );
+    const response = await handleAuthenticatedControlRoute({
+      request,
+      url: new URL(request.url),
+      operations,
+      store: new InMemoryAccountsStore(),
+      subject: "tsub_owner",
+    });
+    expect(response?.status).toBe(500);
+    expect(await response?.json()).toMatchObject({
+      error: { code: "internal_error" },
+    });
+  }
 });
 
 test("Workspace list repairs an already-visible personal Workspace without refreshing", async () => {

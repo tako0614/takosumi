@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 
 import { PUBLIC_SESSION_CONTROL_ENDPOINTS } from "../../../../accounts/service/src/control-route-inventory.ts";
 import {
@@ -59,6 +60,9 @@ test("inventory resource keys use the public vocabulary directly", () => {
   expect(controlInventoryResourceKey("/api/v1/provider-connections")).toBe(
     "provider-connections",
   );
+  expect(controlInventoryResourceKey("/api/v1/views/workspaces.v1")).toBe(
+    "views",
+  );
   // Non-control paths are not owned by this surface.
   expect(controlInventoryResourceKey("/v1/account/session/me")).toBeUndefined();
 });
@@ -90,4 +94,36 @@ test("public session inventory does not publish backup restore", () => {
         "/api/v1/workspaces/{workspaceId}/backups/{backupId}/restores",
     ),
   ).toBe(false);
+});
+
+test("account Workspace inventory is published exactly once", () => {
+  const inventoryRoutes = PUBLIC_SESSION_CONTROL_ENDPOINTS.filter(
+    (endpoint) => endpoint.path === "/api/v1/views/workspaces.v1",
+  );
+  expect(inventoryRoutes).toEqual([
+    {
+      method: "GET",
+      path: "/api/v1/views/workspaces.v1",
+      summary: "Read the account Workspace inventory projection",
+      auth: "account-session",
+    },
+  ]);
+});
+
+test("documentation route counts match the runtime inventory", () => {
+  const endpointCount = PUBLIC_SESSION_CONTROL_ENDPOINTS.length;
+  const japanese = readFileSync(
+    new URL("../../../../docs/reference/api.md", import.meta.url),
+    "utf8",
+  );
+  const english = readFileSync(
+    new URL("../../../../docs/en/reference/api.md", import.meta.url),
+    "utf8",
+  );
+  const japaneseCount = japanese.match(/次の\s+(\d+)\s+件です。/u)?.[1];
+  const englishCount = english.match(
+    /currently contains\s+(\d+)\s+public route descriptors/u,
+  )?.[1];
+  expect(japaneseCount).toBe(String(endpointCount));
+  expect(englishCount).toBe(String(endpointCount));
 });

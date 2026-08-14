@@ -109,8 +109,8 @@ Resource, Interface, Form, and capability control surface. Mixing the two
 prefixes produces a 404 even when authentication is valid.
 
 The authoritative session-route inventory is
-`accounts/service/src/control-route-inventory.ts`. Representative operations
-from that inventory are:
+`accounts/service/src/control-route-inventory.ts`; it currently contains 80
+public route descriptors. Representative operations from that inventory are:
 
 ```http
 POST  /api/v1/workspaces
@@ -167,6 +167,23 @@ omit it so D1/Postgres complete with a `limit + 1` probe and no extra
 `count(*)`. The queryless `GET /api/v1/workspaces` is also a bounded page in
 `created_asc` order with a maximum of 100 rows. Clients that genuinely need all
 authorized Workspaces must follow `nextCursor`.
+
+Account-wide migration and discovery clients use the separate read-only
+projection:
+
+```http
+GET /api/v1/views/workspaces.v1?limit=100&cursor=<opaque>
+```
+
+This route derives its subject only from the authenticated account session and
+always requests active membership rows in `created_asc` order with archived
+Workspaces included and an exact `total` counted before cursor filtering. The
+default and hard maximum `limit` are 100; the only accepted query keys are
+`limit` and `cursor`. A Workspace-scoped session, PAT, or OAuth credential is
+rejected with 403, and the route performs no personal-Workspace bootstrap or
+other writes. The response `kind` is
+`takosumi.account-workspace-inventory@v1` and contains `workspaces`, `total`,
+`returned`, `limit`, `truncated`, and an optional opaque `nextCursor`.
 
 The Dashboard reads launcher Interfaces authorized with `ui.open` for the
 exact Principal derived from the current account session through one
