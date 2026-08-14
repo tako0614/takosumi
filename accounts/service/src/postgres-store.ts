@@ -5,6 +5,8 @@ import type {
   AuthorizationCodeRecord,
   OidcClientRecord,
   PasskeyCredentialRecord,
+  PersonalAccessTokenInventoryPage,
+  PersonalAccessTokenInventoryPageInput,
   PersonalAccessTokenRecord,
   PrivacyRequestRecord,
   TakosumiAccountRecord,
@@ -208,6 +210,12 @@ export class PostgresAccountsStore implements AccountsStore {
     subject: TakosumiSubject,
   ): Promise<readonly PersonalAccessTokenRecord[]> {
     return tokens.listPersonalAccessTokensForSubject(this.#client, subject);
+  }
+
+  listPersonalAccessTokenInventoryPage(
+    input: PersonalAccessTokenInventoryPageInput,
+  ): Promise<PersonalAccessTokenInventoryPage> {
+    return tokens.listPersonalAccessTokenInventoryPage(this.#client, input);
   }
 
   revokePersonalAccessToken(input: {

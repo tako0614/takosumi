@@ -8,9 +8,12 @@ import { drizzle } from "drizzle-orm/pg-proxy";
 import { bigint, pgSchema, text, timestamp } from "drizzle-orm/pg-core";
 import type {
   AuthorizationCodeRecord,
+  PersonalAccessTokenInventoryPage,
+  PersonalAccessTokenInventoryPageInput,
   PersonalAccessTokenRecord,
   TokenRecord,
 } from "../store.ts";
+import { assertPersonalAccessTokenInventoryPageInput } from "../store.ts";
 import {
   authorizationCodeFromRow,
   type AuthorizationCodeRow,
@@ -184,6 +187,65 @@ function personalAccessTokenSelection() {
     revoked_at: personalAccessTokens.revokedAt,
     last_used_at: personalAccessTokens.lastUsedAt,
   };
+}
+
+const PERSONAL_ACCESS_TOKEN_INVENTORY_PAGE_SQL = `with
+  subject_tokens as (
+    select token_id, token_prefix, subject, name, scopes, workspace_id,
+           created_at, expires_at, revoked_at, last_used_at
+      from accounts_v1.personal_access_tokens
+     where subject = $1
+  ),
+  cursor_state as (
+    select case when not $2::boolean then 0::bigint else (
+      select count(*)::bigint from subject_tokens
+       where created_at = $3::timestamptz and token_id = $4
+    ) end as anchor_count
+  ),
+  page as (
+    select * from subject_tokens
+     where not $2::boolean
+        or created_at > $3::timestamptz
+        or (created_at = $3::timestamptz and token_id > $4)
+     order by created_at asc, token_id asc
+     limit $5
+  )
+select 0 as row_kind,
+       (select count(*)::bigint from subject_tokens) as total,
+       cursor_state.anchor_count,
+       null::text as token_id,
+       null::text as token_prefix,
+       null::text as subject,
+       null::text as name,
+       null::text[] as scopes,
+       null::text as workspace_id,
+       null::timestamptz as created_at,
+       null::timestamptz as expires_at,
+       null::timestamptz as revoked_at,
+       null::timestamptz as last_used_at
+  from cursor_state
+union all
+select 1 as row_kind,
+       null::bigint as total,
+       null::bigint as anchor_count,
+       page.token_id,
+       page.token_prefix,
+       page.subject,
+       page.name,
+       page.scopes,
+       page.workspace_id,
+       page.created_at,
+       page.expires_at,
+       page.revoked_at,
+       page.last_used_at
+  from page
+order by row_kind asc, created_at asc, token_id asc`;
+
+interface PersonalAccessTokenInventoryPostgresRow
+  extends PersonalAccessTokenRow {
+  readonly row_kind: number;
+  readonly total: number | string | null;
+  readonly anchor_count: number | string | null;
 }
 
 export async function saveAuthorizationCode(
@@ -400,6 +462,71 @@ export async function listPersonalAccessTokensForSubject(
       ),
   );
   return rows.map(personalAccessTokenFromRow);
+}
+
+export async function listPersonalAccessTokenInventoryPage(
+  client: PostgresQueryClient,
+  input: PersonalAccessTokenInventoryPageInput,
+): Promise<PersonalAccessTokenInventoryPage> {
+  assertPersonalAccessTokenInventoryPageInput(input);
+  const hasCursor = input.cursor !== undefined;
+  const rows = (
+    await runQuery<PersonalAccessTokenInventoryPostgresRow>(
+      client,
+      PERSONAL_ACCESS_TOKEN_INVENTORY_PAGE_SQL,
+      [
+        input.subject,
+        hasCursor,
+        toDate(input.cursor?.createdAt ?? 0),
+        input.cursor?.tokenId ?? "",
+        input.limit + 1,
+      ],
+    )
+  ).rows;
+  const [meta, ...pageRows] = rows;
+  const total = meta ? safeCount(meta.total) : undefined;
+  const anchorCount = meta ? safeCount(meta.anchor_count) : undefined;
+  if (
+    !meta ||
+    meta.row_kind !== 0 ||
+    total === undefined ||
+    anchorCount === undefined ||
+    anchorCount > 1 ||
+    (!hasCursor && anchorCount !== 0) ||
+    pageRows.length > input.limit + 1 ||
+    pageRows.some(
+      (row) =>
+        row.row_kind !== 1 ||
+        row.subject !== input.subject ||
+        typeof row.token_id !== "string",
+    )
+  ) {
+    throw new Error("Postgres PAT inventory result is malformed");
+  }
+  const items = pageRows.map(personalAccessTokenFromRow);
+  for (let index = 1; index < items.length; index += 1) {
+    const previous = items[index - 1]!;
+    const current = items[index]!;
+    if (
+      current.createdAt < previous.createdAt ||
+      (current.createdAt === previous.createdAt &&
+        current.tokenId <= previous.tokenId)
+    ) {
+      throw new Error("Postgres PAT inventory order is malformed");
+    }
+  }
+  return {
+    items,
+    total,
+    cursorValid: !hasCursor || anchorCount === 1,
+  };
+}
+
+function safeCount(value: number | string | null): number | undefined {
+  const parsed = typeof value === "string" ? Number(value) : value;
+  return Number.isSafeInteger(parsed) && (parsed as number) >= 0
+    ? (parsed as number)
+    : undefined;
 }
 
 export async function revokePersonalAccessToken(

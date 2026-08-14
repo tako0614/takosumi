@@ -21,7 +21,7 @@ export function json(
  * body, status, status text, Location, repeated Set-Cookie headers, and
  * runtime-specific response metadata are carried forward unchanged.
  */
-export function withOAuthNoStoreHeaders(response: Response): Response {
+export function withPrivateNoStoreHeaders(response: Response): Response {
   const headers = new Headers(response.headers);
   headers.set("cache-control", "no-store");
   headers.set("pragma", "no-cache");
@@ -45,6 +45,11 @@ export function withOAuthNoStoreHeaders(response: Response): Response {
       : {}),
   };
   return new Response(response.body, init);
+}
+
+/** OAuth protocol alias retained for the call sites that own that vocabulary. */
+export function withOAuthNoStoreHeaders(response: Response): Response {
+  return withPrivateNoStoreHeaders(response);
 }
 
 const REQUEST_ID_UUID_PATTERN =

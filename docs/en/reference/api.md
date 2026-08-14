@@ -83,6 +83,46 @@ its operator through capabilities. Takosumi Cloud API keys are Takosumi
 Accounts personal access tokens. Endpoints with their own standard signing
 model, such as S3-compatible storage, use that protocol's signature instead.
 
+### Accounts personal access tokens
+
+The public Accounts PAT surface is listed below. Every response, including
+authentication and input errors, carries `Cache-Control: no-store` and
+`Pragma: no-cache`.
+
+| Method | Path                                  | Authentication                     | Purpose                               |
+| ------ | ------------------------------------- | ---------------------------------- | ------------------------------------- |
+| GET    | `/v1/account/tokens`                  | account session                    | compatibility interactive list        |
+| POST   | `/v1/account/tokens`                  | account session                    | create a PAT                          |
+| POST   | `/v1/account/tokens/{tokenId}/revoke` | account session                    | revoke a PAT                          |
+| GET    | `/v1/account/tokens/inventory.v1`     | account session                    | complete versioned metadata inventory |
+| GET    | `/v1/account/tokens/current`          | `Authorization: Bearer <PAT>` only | current authority of the presented PAT |
+
+`GET /v1/account/tokens/inventory.v1` does not replace the existing Dashboard
+list. Its default `limit` is 50 and its hard maximum is 100. Rows are ordered
+by `created_at`, then `token_id`, ascending. The response kind is
+`takosumi.account-pat-inventory@v1`; its closed envelope contains only `kind`,
+`tokens`, `total`, `returned`, `limit`, `truncated`, and `next_cursor`. `total`
+is the complete pre-cursor count of subject-owned active and revoked PATs. One
+storage statement reads that count, the exact cursor anchor, and the
+`limit + 1` page. Each token contains only `token_id`, `subject`, `name`,
+`prefix`, `scopes`, `workspace_id`, `created_at`, `expires_at`, `revoked_at`,
+and `last_used_at`; optional metadata is `null`, and the secret is never
+returned. The cursor is opaque. A malformed cursor or one whose exact
+subject-owned anchor is gone returns 400 `invalid_request`.
+
+`GET /v1/account/tokens/current` ignores ambient cookies,
+`x-takosumi-account-session`, and query/body tokens. Accounts resolves the
+presented opaque bearer across the account-session, OAuth access-token, and PAT
+stores before selecting a kind. A collision, non-PAT, revoked PAT, or expired
+PAT returns 401 `invalid_token`. Success kind is
+`takosumi.account-pat-authority@v1`, with only `kind`, `token_id`, `subject`,
+`scopes`, `workspace_id`, `expires_at`, and `workspace_role`. Generic PATs have
+null Workspace fields. Workspace-bound PATs use one dedicated exact membership
+SELECT: unavailable verification returns 503 `verification_unavailable`, while
+an inactive or mismatched membership returns 403
+`workspace_membership_inactive`. This read does not update `last_used_at`,
+audit, sessions, the Control schema, or Workspace / Project / TargetPool state.
+
 ## OpenTofu Stack API
 
 The Stack API runs plain OpenTofu / Terraform modules from Git. Existing

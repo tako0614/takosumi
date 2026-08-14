@@ -50,6 +50,7 @@ import {
   TAKOSUMI_INTERNAL_RESOURCE_CAPSULE_OWNER_HEADER,
 } from "../../worker/src/deploy_control_seam.ts";
 import { createCloudflareD1OpenTofuControlStore } from "../../worker/src/d1_opentofu_store.ts";
+import { createCloudflareD1PatWorkspaceMembershipReader } from "./pat-workspace-membership-reader.ts";
 import type {
   CapsuleExecutionAuthorityResolver,
   OpenTofuControlStore,
@@ -213,6 +214,15 @@ export {
   type ProductionHardeningContributionResult,
   type ProductionHardeningGateResult,
 } from "./production_hardening.ts";
+export {
+  createCloudflareD1WorkspaceBootstrapReader,
+  type CloudflareD1WorkspaceBootstrapReaderOptions,
+  type PlatformWorkspaceBootstrapFacts,
+  type PlatformWorkspaceBootstrapTargetPool,
+  type WorkspaceBootstrapReader,
+  type WorkspaceBootstrapReadInput,
+  type WorkspaceBootstrapReadResult,
+} from "./workspace-bootstrap-reader.ts";
 export {
   CoordinationObject,
   LocalSubstrateOpenTofuRunnerProxyObject,
@@ -1131,6 +1141,10 @@ const accountsWorker = createCloudflareWorker<CloudflareWorkerEnv>({
   // in-process operations facade adapted to the `ControlPlaneOperations`
   // shape (see `controlPlaneOperationsFor`).
   controlPlaneOperations: (env) => controlPlaneOperationsFor(env),
+  // PAT self authority is one bounded Control D1 membership SELECT. It must
+  // not initialize the full deploy-control service or run schema/bootstrap.
+  patWorkspaceMembershipReader: (env) =>
+    createCloudflareD1PatWorkspaceMembershipReader(env.TAKOSUMI_CONTROL_DB),
 });
 
 export default {

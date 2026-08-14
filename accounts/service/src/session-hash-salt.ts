@@ -42,6 +42,15 @@ export const SESSION_HASH_SALT_ENV = "TAKOSUMI_ACCOUNT_SESSION_HASH_SALT";
  */
 export async function hashSessionId(sessionId: string): Promise<string> {
   const salt = resolveSessionHashSalt(SESSION_HASH_SALT_ENV);
+  return await hashSessionIdWithSalt(sessionId, salt);
+}
+
+/** Pure composition helper for readers that receive the canonical salt. */
+export async function hashSessionIdWithSalt(
+  sessionId: string,
+  salt: string,
+): Promise<string> {
+  if (!salt) throw new TypeError("account session hash salt is required");
   return await sha256Text(`${salt}:${sessionId}`);
 }
 

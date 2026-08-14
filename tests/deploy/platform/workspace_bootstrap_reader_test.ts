@@ -1,0 +1,369 @@
+import { expect, test } from "bun:test";
+
+import type {
+  D1Database,
+  D1ExecResult,
+  D1PreparedStatement,
+  D1Result,
+  D1Value,
+} from "../../../accounts/service/src/d1-store.ts";
+import {
+  d1AccountsTableNames,
+} from "../../../accounts/service/src/d1-store.ts";
+import { hashSessionIdWithSalt } from "../../../accounts/service/src/session-hash-salt.ts";
+import { deployControlD1TableNames } from "../../../core/adapters/storage/drizzle/schema/logical.ts";
+import { defaultProjectId } from "../../../core/domains/projects/mod.ts";
+import { formatResourceShapeId } from "../../../core/domains/resource-shape/records.ts";
+import { createCloudflareD1WorkspaceBootstrapReader } from "../../../deploy/platform/workspace-bootstrap-reader.ts";
+
+const SESSION_ID = "sess_workspace_bootstrap";
+const SESSION_SALT = "workspace-bootstrap-test-session-salt";
+const SUBJECT = "tsub_workspace_bootstrap" as const;
+const WORKSPACE_ID = "ws_workspace_bootstrap";
+const CREATED_AT = "2026-01-01T00:00:00.000Z";
+const UPDATED_AT = "2026-01-02T00:00:00.000Z";
+
+test("workspace bootstrap returns exact authenticated-owner facts in three bounded SELECTs", async () => {
+  const evidence = await validEvidence();
+  const accountsDb = new CountingD1([evidence.accounts]);
+  const controlDb = new CountingD1([
+    evidence.membership,
+    evidence.control,
+  ]);
+  const reader = createCloudflareD1WorkspaceBootstrapReader({
+    accountsDb,
+    controlDb,
+    sessionHashSalt: SESSION_SALT,
+  });
+
+  const result = await reader.read({
+    sessionId: SESSION_ID,
+    workspaceId: WORKSPACE_ID,
+    now: 2_000,
+  });
+
+  expect(result).toEqual({
+    status: "authenticated_owner",
+    subject: SUBJECT,
+    workspace: workspaceRecord(),
+    membership: membershipRecord(),
+    defaultProject: projectRecord(),
+    defaultTargetPool: {
+      id: formatResourceShapeId(WORKSPACE_ID, "TargetPool", "default"),
+      workspaceId: WORKSPACE_ID,
+      name: "default",
+      spec: targetPoolSpec(),
+      createdAt: CREATED_AT,
+      updatedAt: UPDATED_AT,
+    },
+  });
+  expect(accountsDb.prepared).toHaveLength(1);
+  expect(controlDb.prepared).toHaveLength(2);
+  expect(accountsDb.prepared[0]).toContain(d1AccountsTableNames.documents);
+  expect(controlDb.prepared[0]).toContain(
+    deployControlD1TableNames.workspaceMembers,
+  );
+  expect(controlDb.prepared[1]).toContain(deployControlD1TableNames.workspaces);
+  expect(controlDb.prepared[1]).toContain(deployControlD1TableNames.projects);
+  expect(controlDb.prepared[1]).toContain(deployControlD1TableNames.targetPools);
+  expect(
+    [...accountsDb.prepared, ...controlDb.prepared].every((sql) =>
+      sql.toLowerCase().includes("limit 2"),
+    ),
+  ).toBe(true);
+  expect(accountsDb.bound[0]).toHaveLength(1);
+  expect(accountsDb.bound[0]?.[0]).not.toBe(SESSION_ID);
+  expect(String(accountsDb.bound[0]?.[0])).toStartWith("sha256:");
+  expect(controlDb.bound).toEqual([
+    [WORKSPACE_ID, SUBJECT],
+    [
+      WORKSPACE_ID,
+      defaultProjectId(WORKSPACE_ID),
+      WORKSPACE_ID,
+      formatResourceShapeId(WORKSPACE_ID, "TargetPool", "default"),
+      WORKSPACE_ID,
+    ],
+  ]);
+  expect(accountsDb.allCalls + controlDb.allCalls).toBe(3);
+  assertNoWrites(accountsDb);
+  assertNoWrites(controlDb);
+});
+
+test("expired and orphaned sessions fail without cleanup or Control reads", async () => {
+  const evidence = await validEvidence();
+  const expiredSession = JSON.parse(
+    evidence.accounts[0]!.session_json as string,
+  ) as Record<string, unknown>;
+  expiredSession.expiresAt = 2_000;
+
+  for (const accountsRows of [
+    [{ ...evidence.accounts[0], session_json: JSON.stringify(expiredSession) }],
+    [{ ...evidence.accounts[0], account_key: null, account_json: null }],
+    [],
+  ]) {
+    const accountsDb = new CountingD1([accountsRows]);
+    const controlDb = new CountingD1([]);
+    const result = await createCloudflareD1WorkspaceBootstrapReader({
+      accountsDb,
+      controlDb,
+      sessionHashSalt: SESSION_SALT,
+    }).read({ sessionId: SESSION_ID, workspaceId: WORKSPACE_ID, now: 2_000 });
+
+    expect(result).toEqual({ status: "invalid_session" });
+    expect(accountsDb.allCalls).toBe(1);
+    expect(controlDb.prepared).toEqual([]);
+    assertNoWrites(accountsDb);
+    assertNoWrites(controlDb);
+  }
+});
+
+test("workspace bootstrap distinguishes non-owner from malformed or duplicate evidence", async () => {
+  const evidence = await validEvidence();
+  const memberOnly = membershipRow({
+    roles: ["member"],
+  });
+  const nonOwner = await readWithEvidence({
+    accounts: evidence.accounts,
+    control: [[memberOnly]],
+  });
+  expect(nonOwner.result).toEqual({ status: "not_owner" });
+  expect(nonOwner.controlDb.prepared).toHaveLength(1);
+
+  for (const accounts of [
+    [evidence.accounts[0]!, evidence.accounts[0]!],
+    [{ ...evidence.accounts[0], session_json: "{" }],
+    [{ ...evidence.accounts[0], account_key: "tsub_wrong" }],
+  ]) {
+    const read = await readWithEvidence({ accounts, control: [] });
+    expect(read.result).toEqual({ status: "incomplete" });
+    expect(read.controlDb.prepared).toEqual([]);
+    assertNoWrites(read.accountsDb);
+  }
+
+  const duplicateMembership = await readWithEvidence({
+    accounts: evidence.accounts,
+    control: [[evidence.membership[0]!, evidence.membership[0]!]],
+  });
+  expect(duplicateMembership.result).toEqual({ status: "incomplete" });
+  expect(duplicateMembership.controlDb.prepared).toHaveLength(1);
+
+  for (const aggregateRows of [
+    [evidence.control[0]!, evidence.control[0]!],
+    [{ ...evidence.control[0], project_id: "prj_wrong" }],
+    [{ ...evidence.control[0], target_pool_spec_json: "[]" }],
+    [
+      {
+        ...evidence.control[0],
+        workspace_record_json: JSON.stringify({
+          ...workspaceRecord(),
+          policy: "malformed",
+        }),
+      },
+    ],
+  ]) {
+    const read = await readWithEvidence({
+      accounts: evidence.accounts,
+      control: [evidence.membership, aggregateRows],
+    });
+    expect(read.result).toEqual({ status: "incomplete" });
+    expect(read.accountsDb.allCalls + read.controlDb.allCalls).toBe(3);
+    assertNoWrites(read.accountsDb);
+    assertNoWrites(read.controlDb);
+  }
+});
+
+async function readWithEvidence(input: {
+  readonly accounts: readonly unknown[];
+  readonly control: readonly (readonly unknown[])[];
+}) {
+  const accountsDb = new CountingD1([input.accounts]);
+  const controlDb = new CountingD1(input.control);
+  const result = await createCloudflareD1WorkspaceBootstrapReader({
+    accountsDb,
+    controlDb,
+    sessionHashSalt: SESSION_SALT,
+  }).read({ sessionId: SESSION_ID, workspaceId: WORKSPACE_ID, now: 2_000 });
+  return { result, accountsDb, controlDb };
+}
+
+async function validEvidence() {
+  const sessionHash = await hashSessionIdWithSalt(SESSION_ID, SESSION_SALT);
+  return {
+    accounts: [
+      {
+        session_key: sessionHash,
+        session_json: JSON.stringify({
+          sessionId: sessionHash,
+          subject: SUBJECT,
+          createdAt: 1_000,
+          expiresAt: 3_000,
+        }),
+        account_key: SUBJECT,
+        account_json: JSON.stringify({
+          subject: SUBJECT,
+          createdAt: 500,
+          updatedAt: 1_500,
+        }),
+      },
+    ],
+    membership: [membershipRow()],
+    control: [controlRow()],
+  };
+}
+
+function membershipRow(patch: { roles?: readonly string[] } = {}) {
+  const record = membershipRecord(patch.roles);
+  return {
+    id: record.id,
+    workspace_id: record.workspaceId,
+    account_id: record.accountId,
+    status: record.status,
+    record_json: JSON.stringify(record),
+    created_at: record.createdAt,
+    updated_at: record.updatedAt,
+  };
+}
+
+function membershipRecord(roles: readonly string[] = ["owner"]) {
+  return {
+    id: "wsm_workspace_bootstrap",
+    workspaceId: WORKSPACE_ID,
+    accountId: SUBJECT,
+    roles,
+    status: "active",
+    createdAt: CREATED_AT,
+    updatedAt: UPDATED_AT,
+  };
+}
+
+function workspaceRecord() {
+  return {
+    id: WORKSPACE_ID,
+    handle: "workspace-bootstrap",
+    displayName: "Workspace Bootstrap",
+    type: "personal",
+    ownerUserId: SUBJECT,
+    createdAt: CREATED_AT,
+    updatedAt: UPDATED_AT,
+  };
+}
+
+function projectRecord() {
+  return {
+    id: defaultProjectId(WORKSPACE_ID),
+    workspaceId: WORKSPACE_ID,
+    name: "Default",
+    slug: "default",
+    projectJson: {},
+    createdAt: CREATED_AT,
+    updatedAt: UPDATED_AT,
+  };
+}
+
+function targetPoolSpec() {
+  return {
+    classes: ["managed"],
+    targets: [
+      {
+        name: "cloud",
+        type: "cloudflare",
+        priority: 100,
+      },
+    ],
+  };
+}
+
+function controlRow() {
+  const workspace = workspaceRecord();
+  const project = projectRecord();
+  return {
+    workspace_id: workspace.id,
+    workspace_handle: workspace.handle,
+    workspace_record_json: JSON.stringify(workspace),
+    workspace_created_at: workspace.createdAt,
+    workspace_updated_at: workspace.updatedAt,
+    project_id: project.id,
+    project_workspace_id: project.workspaceId,
+    project_name: project.name,
+    project_slug: project.slug,
+    project_record_json: JSON.stringify(project),
+    project_created_at: project.createdAt,
+    project_updated_at: project.updatedAt,
+    target_pool_id: formatResourceShapeId(
+      WORKSPACE_ID,
+      "TargetPool",
+      "default",
+    ),
+    target_pool_space_id: WORKSPACE_ID,
+    target_pool_name: "default",
+    target_pool_spec_json: JSON.stringify(targetPoolSpec()),
+    target_pool_created_at: CREATED_AT,
+    target_pool_updated_at: UPDATED_AT,
+  };
+}
+
+function assertNoWrites(db: CountingD1) {
+  expect(db.firstCalls).toBe(0);
+  expect(db.runCalls).toBe(0);
+  expect(db.batchCalls).toBe(0);
+  expect(db.execCalls).toBe(0);
+}
+
+class CountingD1 implements D1Database {
+  readonly prepared: string[] = [];
+  readonly bound: D1Value[][] = [];
+  allCalls = 0;
+  firstCalls = 0;
+  runCalls = 0;
+  batchCalls = 0;
+  execCalls = 0;
+  #reads: Array<readonly unknown[]>;
+
+  constructor(reads: readonly (readonly unknown[])[]) {
+    this.#reads = reads.map((rows) => [...rows]);
+  }
+
+  prepare(query: string): D1PreparedStatement {
+    this.prepared.push(query);
+    return new CountingStatement(this, this.#reads.shift() ?? []);
+  }
+
+  async batch<T = unknown>(
+    _statements: readonly D1PreparedStatement[],
+  ): Promise<readonly D1Result<T>[]> {
+    this.batchCalls += 1;
+    return [];
+  }
+
+  async exec(_query: string): Promise<D1ExecResult> {
+    this.execCalls += 1;
+    return { count: 0, duration: 0 };
+  }
+}
+
+class CountingStatement implements D1PreparedStatement {
+  constructor(
+    readonly db: CountingD1,
+    readonly rows: readonly unknown[],
+  ) {}
+
+  bind(...values: readonly D1Value[]): D1PreparedStatement {
+    this.db.bound.push([...values]);
+    return this;
+  }
+
+  async all<T = unknown>(): Promise<D1Result<T>> {
+    this.db.allCalls += 1;
+    return { success: true, results: [...this.rows] as T[] };
+  }
+
+  async first<T = unknown>(_column?: string): Promise<T | null> {
+    this.db.firstCalls += 1;
+    return null;
+  }
+
+  async run<T = unknown>(): Promise<D1Result<T>> {
+    this.db.runCalls += 1;
+    return { success: true };
+  }
+}

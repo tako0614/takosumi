@@ -53,6 +53,63 @@ export interface PersonalAccessTokenRecord {
   lastUsedAt?: number;
 }
 
+export const PERSONAL_ACCESS_TOKEN_INVENTORY_MAX_LIMIT = 100;
+
+export interface PersonalAccessTokenInventoryCursor {
+  readonly createdAt: number;
+  readonly tokenId: string;
+}
+
+export interface PersonalAccessTokenInventoryPageInput {
+  readonly subject: TakosumiSubject;
+  /** Public page size. Stores read one additional row as the truncation probe. */
+  readonly limit: number;
+  readonly cursor?: PersonalAccessTokenInventoryCursor;
+}
+
+export interface PersonalAccessTokenInventoryPage {
+  /** At most `input.limit + 1` rows, in canonical ascending tuple order. */
+  readonly items: readonly PersonalAccessTokenRecord[];
+  /** All active and revoked PATs currently owned by `input.subject`. */
+  readonly total: number;
+  /** False only when a supplied cursor tuple is no longer subject-owned. */
+  readonly cursorValid: boolean;
+}
+
+export function assertPersonalAccessTokenInventoryPageInput(
+  input: PersonalAccessTokenInventoryPageInput,
+): void {
+  if (
+    !Number.isInteger(input.limit) ||
+    input.limit < 1 ||
+    input.limit > PERSONAL_ACCESS_TOKEN_INVENTORY_MAX_LIMIT
+  ) {
+    throw new TypeError(
+      `PAT inventory limit must be between 1 and ${PERSONAL_ACCESS_TOKEN_INVENTORY_MAX_LIMIT}`,
+    );
+  }
+  if (
+    input.cursor &&
+    (!Number.isSafeInteger(input.cursor.createdAt) ||
+      input.cursor.createdAt < 0 ||
+      typeof input.cursor.tokenId !== "string" ||
+      input.cursor.tokenId.length === 0 ||
+      input.cursor.tokenId.length > 256)
+  ) {
+    throw new TypeError("PAT inventory cursor tuple is invalid");
+  }
+}
+
+function comparePersonalAccessTokenInventoryTuple(
+  left: PersonalAccessTokenRecord,
+  right: PersonalAccessTokenRecord,
+): number {
+  return (
+    left.createdAt - right.createdAt ||
+    (left.tokenId < right.tokenId ? -1 : left.tokenId > right.tokenId ? 1 : 0)
+  );
+}
+
 export interface TakosumiAccountRecord {
   subject: TakosumiSubject;
   email?: string;
@@ -286,6 +343,12 @@ export interface AccountsStore {
   ):
     | readonly PersonalAccessTokenRecord[]
     | Promise<readonly PersonalAccessTokenRecord[]>;
+  /** Atomic metadata count + keyset page read for the versioned inventory. */
+  listPersonalAccessTokenInventoryPage(
+    input: PersonalAccessTokenInventoryPageInput,
+  ):
+    | PersonalAccessTokenInventoryPage
+    | Promise<PersonalAccessTokenInventoryPage>;
   revokePersonalAccessToken(input: {
     subject: TakosumiSubject;
     tokenId: string;
@@ -686,6 +749,37 @@ export class InMemoryAccountsStore implements AccountsStore {
       .filter((record) => record.subject === subject)
       .sort((left, right) => left.createdAt - right.createdAt)
       .map((record) => ({ ...record }));
+  }
+
+  listPersonalAccessTokenInventoryPage(
+    input: PersonalAccessTokenInventoryPageInput,
+  ): PersonalAccessTokenInventoryPage {
+    assertPersonalAccessTokenInventoryPageInput(input);
+    const records = [...this.#personalAccessTokens.values()]
+      .filter((record) => record.subject === input.subject)
+      .sort(comparePersonalAccessTokenInventoryTuple);
+    const cursorValid = input.cursor
+      ? records.some(
+          (record) =>
+            record.createdAt === input.cursor!.createdAt &&
+            record.tokenId === input.cursor!.tokenId,
+        )
+      : true;
+    const after = input.cursor
+      ? records.filter(
+          (record) =>
+            record.createdAt > input.cursor!.createdAt ||
+            (record.createdAt === input.cursor!.createdAt &&
+              record.tokenId > input.cursor!.tokenId),
+        )
+      : records;
+    return {
+      items: after
+        .slice(0, input.limit + 1)
+        .map((record) => ({ ...record })),
+      total: records.length,
+      cursorValid,
+    };
   }
 
   revokePersonalAccessToken(input: {
