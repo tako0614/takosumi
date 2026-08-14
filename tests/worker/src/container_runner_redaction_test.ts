@@ -651,6 +651,40 @@ test("container runner maps mutation ambiguity to a non-retryable typed executio
   );
 });
 
+test("container runner maps finite plan failures to non-retryable execution errors", async () => {
+  const runner = new CloudflareContainerOpenTofuRunner(
+    envReturning(
+      {
+        status: "failed",
+        errorCode: "provider_package_unavailable",
+        phase: "plan",
+        stderr: "token=must-not-escape",
+      },
+      undefined,
+      500,
+    ),
+  );
+
+  let error: unknown;
+  try {
+    await runner.plan({
+      planRun: { id: "plan_provider_unavailable" },
+    } as Parameters<CloudflareContainerOpenTofuRunner["plan"]>[0]);
+  } catch (caught) {
+    error = caught;
+  }
+
+  expect(error).toBeInstanceOf(OpenTofuRunnerExecutionError);
+  expect(error).not.toBeInstanceOf(OpenTofuRunnerInfrastructureError);
+  expect((error as OpenTofuRunnerExecutionError).reason).toBe(
+    "provider_package_unavailable",
+  );
+  expect((error as Error).message).toBe(
+    "runner request failed (provider_package_unavailable)",
+  );
+  expect((error as Error).message).not.toContain("must-not-escape");
+});
+
 test("container runner reads Capsule compatibility source files", async () => {
   let captured: Record<string, unknown> | undefined;
   const runner = new CloudflareContainerOpenTofuRunner(

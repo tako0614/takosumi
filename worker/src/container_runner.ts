@@ -58,6 +58,16 @@ const RUNNER_SUBSTRATE_RESET_PATTERN =
 const RUNNER_ARTIFACT_RELAY_AMBIGUOUS_CODE =
   "runner_artifact_relay_ambiguous";
 const RUNNER_REJECTED_CODE = "runner_rejected";
+const RUNNER_PLAN_EXECUTION_FAILURE_CODES = new Set([
+  "provider_source_invalid",
+  "provider_package_unavailable",
+  "provider_platform_binary_unavailable",
+  "provider_protocol_mismatch",
+  "provider_policy_denied",
+  "runner_capability_missing",
+  "provider_checksum_mismatch",
+  "opentofu_init_failed",
+]);
 const RUNNER_TRANSPORT_FAILED_CODE = "runner_transport_failed";
 const RUNNER_REQUEST_ABORTED_CODE = "runner_request_aborted";
 const RUNNER_TIMEOUT_CODE = "runner_timeout";
@@ -846,6 +856,11 @@ function runnerExecutionErrorFromPayload(
   payload: Record<string, unknown>,
 ): OpenTofuRunnerExecutionError | undefined {
   const errorCode = stringFromRecord(payload, "errorCode");
+  if (errorCode && RUNNER_PLAN_EXECUTION_FAILURE_CODES.has(errorCode)) {
+    return new OpenTofuRunnerExecutionError(runnerFailureMessage(errorCode), {
+      reason: errorCode,
+    });
+  }
   if (
     payload.retryable === false &&
     errorCode === RUNNER_MUTATION_INDETERMINATE_CODE

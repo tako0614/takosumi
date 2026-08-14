@@ -43,6 +43,16 @@ const RUNNER_PROVIDER_FAILURE_CODES = new Set([
   "apply_failed",
   RUNNER_PROVIDER_EXECUTION_FAILED_CODE,
 ]);
+const RUNNER_PLAN_EXECUTION_FAILURE_CODES = new Set([
+  "provider_source_invalid",
+  "provider_package_unavailable",
+  "provider_platform_binary_unavailable",
+  "provider_protocol_mismatch",
+  "provider_policy_denied",
+  "runner_capability_missing",
+  "provider_checksum_mismatch",
+  "opentofu_init_failed",
+]);
 type RunnerFailurePhase =
   | "plan"
   | "apply"
@@ -3912,7 +3922,15 @@ function finiteRunnerFailureCode(
   | "apply_failed"
   | "runner_artifact_relay_ambiguous"
   | "runner_artifact_relay_failed"
-  | "artifact_size_limit_exceeded" {
+  | "artifact_size_limit_exceeded"
+  | "provider_source_invalid"
+  | "provider_package_unavailable"
+  | "provider_platform_binary_unavailable"
+  | "provider_protocol_mismatch"
+  | "provider_policy_denied"
+  | "runner_capability_missing"
+  | "provider_checksum_mismatch"
+  | "opentofu_init_failed" {
   const value = stringField(payload, "errorCode");
   const providerFailure = recordField(payload, "providerExecutionFailure");
   if (
@@ -3932,7 +3950,17 @@ function finiteRunnerFailureCode(
     case "artifact_size_limit_exceeded":
       return value;
     default:
-      return RUNNER_REJECTED_CODE;
+      return value && RUNNER_PLAN_EXECUTION_FAILURE_CODES.has(value)
+        ? (value as
+            | "provider_source_invalid"
+            | "provider_package_unavailable"
+            | "provider_platform_binary_unavailable"
+            | "provider_protocol_mismatch"
+            | "provider_policy_denied"
+            | "runner_capability_missing"
+            | "provider_checksum_mismatch"
+            | "opentofu_init_failed")
+        : RUNNER_REJECTED_CODE;
   }
 }
 
