@@ -46,8 +46,10 @@ describe("single-screen install surface", () => {
     expect(view).toContain("loadConnections(workspace, controller.signal)");
     expect(view).toContain("listConnectionsWithSignal(workspace, signal)");
     expect(view).toContain(
-      "listProviderConnectionsWithSignal(workspace, signal)",
+      "listReleaseOwnedProviderConnectionsWithSignal(workspace, signal)",
     );
+    expect(view).toContain("...all.filter(isProviderConnectionCandidate)");
+    expect(view).toContain("...releaseOwnedProviders");
     expect(view).toContain("onSourceSyncProgress:");
     expect(view).toContain("onSourceSnapshot:");
     expect(view).toContain("preparationStageHint()");

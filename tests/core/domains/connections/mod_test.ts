@@ -423,10 +423,16 @@ test("release-owned operator connections are listed and resolved without durable
     },
   });
   let durableOperatorListReads = 0;
+  let durableWorkspaceListReads = 0;
   const originalList = store.listOperatorConnections.bind(store);
+  const originalWorkspaceList = store.listConnections.bind(store);
   store.listOperatorConnections = async () => {
     durableOperatorListReads += 1;
     return await originalList();
+  };
+  store.listConnections = async (workspaceId) => {
+    durableWorkspaceListReads += 1;
+    return await originalWorkspaceList(workspaceId);
   };
   await store.putProviderBindingSet({
     id: "dp_release_owned",
@@ -444,10 +450,17 @@ test("release-owned operator connections are listed and resolved without durable
     allowOperatorScopedProviderConnections: true,
   });
   expect(
+    (await service.listReleaseOwnedProviderConnections(model.workspace.id)).map(
+      (row) => row.id,
+    ),
+  ).toEqual([fixed.id]);
+  expect(durableWorkspaceListReads).toBe(0);
+  expect(
     (await service.listProviderConnections(model.workspace.id)).map(
       (row) => row.id,
     ),
   ).toEqual([fixed.id]);
+  expect(durableWorkspaceListReads).toBe(1);
   expect((await service.getProviderConnection(fixed.id)).id).toBe(fixed.id);
   expect((await service.resolveProviderBindings(model.capsule))[0]?.connection)
     .toEqual(fixed);

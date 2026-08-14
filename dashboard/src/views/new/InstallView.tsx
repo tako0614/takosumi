@@ -41,7 +41,7 @@ import {
   extractRunId,
   getInstallConfig,
   listConnectionsWithSignal,
-  listProviderConnectionsWithSignal,
+  listReleaseOwnedProviderConnectionsWithSignal,
   planCapsule,
   putCapsuleProviderBindingSet,
   readSourceSnapshotFile,
@@ -568,10 +568,18 @@ function Inner(props: { readonly installingPrincipalId: string }) {
   };
 
   const loadConnections = async (workspace: string, signal: AbortSignal) => {
-    const [all, providers] = await Promise.all([
+    const [all, releaseOwnedProviders] = await Promise.all([
       listConnectionsWithSignal(workspace, signal),
-      listProviderConnectionsWithSignal(workspace, signal),
+      listReleaseOwnedProviderConnectionsWithSignal(workspace, signal),
     ]);
+    const providers = [
+      ...new Map(
+        [
+          ...all.filter(isProviderConnectionCandidate),
+          ...releaseOwnedProviders,
+        ].map((connection) => [connection.id, connection] as const),
+      ).values(),
+    ];
     if (currentWorkspaceId() === workspace || workspaceId() === workspace) {
       setSourceConnections(all);
       setProviderConnections(providers);

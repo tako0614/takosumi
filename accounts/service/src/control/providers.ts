@@ -194,8 +194,20 @@ async function listProviderConnections(
     session,
   });
   if (!auth.ok) return auth.response;
+  const projection = url.searchParams.get("projection");
+  if (projection !== null && projection !== "release-owned") {
+    return errorJson(
+      "invalid_request",
+      "projection must be release-owned when provided",
+      400,
+    );
+  }
   const providerConnections = (
-    await operations.connections.listProviderConnections(workspaceId)
+    projection === "release-owned"
+      ? await operations.connections.listReleaseOwnedProviderConnections(
+          workspaceId,
+        )
+      : await operations.connections.listProviderConnections(workspaceId)
   ).filter((connection) =>
     providerConnectionVisibleToWorkspace(connection, workspaceId),
   );

@@ -234,14 +234,25 @@ export class ConnectionsService {
       ? await this.#store.listConnections(workspaceId)
       : [];
     const operatorManagedConnections =
-      workspaceId && this.#allowOperatorScopedProviderConnections
-        ? [...this.#operatorProviderConnections.values()].filter(
-            isWorkspaceBindableOperatorConnection,
-          )
-        : [];
+      await this.listReleaseOwnedProviderConnections(workspaceId);
     return [...connections, ...operatorManagedConnections].filter(
       (connection) => !isSourceGitKind(connection),
     );
+  }
+
+  /**
+   * Lists only immutable release-owned Provider Connections. This projection
+   * deliberately performs no durable store read so a slow Control database
+   * cannot hide a built-in deployment destination from install discovery.
+   */
+  async listReleaseOwnedProviderConnections(
+    workspaceId?: string,
+  ): Promise<readonly ProviderConnection[]> {
+    return workspaceId && this.#allowOperatorScopedProviderConnections
+      ? [...this.#operatorProviderConnections.values()].filter(
+          isWorkspaceBindableOperatorConnection,
+        )
+      : [];
   }
 
   async getProviderConnection(id: string): Promise<ProviderConnection> {

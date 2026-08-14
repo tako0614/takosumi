@@ -2854,6 +2854,24 @@ export async function listProviderConnectionsWithSignal(
   return body.providerConnections ?? [];
 }
 
+export async function listReleaseOwnedProviderConnectionsWithSignal(
+  workspaceId: string,
+  signal?: AbortSignal,
+): Promise<readonly ProviderConnection[]> {
+  const normalized = normalizedWorkspaceId(workspaceId);
+  if (!normalized) return [];
+  const body = await controlFetch<{
+    providerConnections?: readonly ProviderConnection[];
+  }>(
+    `${BASE}/provider-connections${query({
+      workspaceId: normalized,
+      projection: "release-owned",
+    })}`,
+    { signal },
+  );
+  return body.providerConnections ?? [];
+}
+
 /**
  * Registers a Workspace-owned provider-credential ProviderConnection. `values` are
  * write-only credential material (e.g. `{ CLOUDFLARE_API_TOKEN }`) and must be

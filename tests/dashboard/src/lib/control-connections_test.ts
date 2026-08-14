@@ -5,6 +5,7 @@ import {
   listConnectionsWithSignal,
   listProviderConnections,
   listProviderConnectionsWithSignal,
+  listReleaseOwnedProviderConnectionsWithSignal,
   putCapsuleProviderBindingSet,
 } from "../../../../dashboard/src/lib/control-api.ts";
 
@@ -50,10 +51,14 @@ describe("connection list clients", () => {
 
     expect(await listConnections(" space_1 ")).toEqual([]);
     expect(await listProviderConnections(" space_1 ")).toEqual([]);
+    expect(
+      await listReleaseOwnedProviderConnectionsWithSignal(" space_1 "),
+    ).toEqual([]);
 
     expect(calls()).toEqual([
       "/api/v1/connections?workspaceId=space_1",
       "/api/v1/provider-connections?workspaceId=space_1",
+      "/api/v1/provider-connections?workspaceId=space_1&projection=release-owned",
     ]);
   });
 
@@ -78,12 +83,20 @@ describe("connection list clients", () => {
     const pending = Promise.all([
       listConnectionsWithSignal("space_1", controller.signal),
       listProviderConnectionsWithSignal("space_1", controller.signal),
+      listReleaseOwnedProviderConnectionsWithSignal(
+        "space_1",
+        controller.signal,
+      ),
     ]);
     await Promise.resolve();
     controller.abort();
 
     await expect(pending).rejects.toMatchObject({ name: "AbortError" });
-    expect(signals).toEqual([controller.signal, controller.signal]);
+    expect(signals).toEqual([
+      controller.signal,
+      controller.signal,
+      controller.signal,
+    ]);
   });
 });
 

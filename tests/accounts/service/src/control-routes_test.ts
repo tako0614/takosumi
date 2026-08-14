@@ -17,6 +17,7 @@ import {
 import { handleWorkspaces } from "../../../../accounts/service/src/control/workspaces.ts";
 import { handleAccountWorkspaceViews } from "../../../../accounts/service/src/control/account-workspace-views.ts";
 import { handleDashboard } from "../../../../accounts/service/src/control/dashboard.ts";
+import { handleProviderConnections } from "../../../../accounts/service/src/control/providers.ts";
 import {
   InMemoryAccountsStore,
   type AccountsStore,
@@ -87,6 +88,60 @@ async function authenticatedControlRequest(input: {
   expect(response).toBeDefined();
   return response!;
 }
+
+test("release-owned ProviderConnection projection bypasses the durable provider list", async () => {
+  let durableListReads = 0;
+  let releaseProjectionReads = 0;
+  const fixed = {
+    id: "conn_release_takoform",
+    provider: "takoform",
+    providerSource: "registry.opentofu.org/tako0614/takoform",
+    kind: "takosumi_cloud_takoform",
+    scope: "operator",
+    status: "verified",
+    materialization: "run-issued",
+    credentialRecipe: {
+      id: "takosumi-cloud-takoform-v02",
+      authMode: "broker",
+      runIssuance: {
+        context: "capsule-run.v1",
+        operatorConnection: "workspace-bindable",
+        storedMaterial: "none",
+        audience: "takosumi-cloud-takoform.v1",
+        scopes: ["takoform:invoke"],
+      },
+    },
+    createdAt: "1970-01-01T00:00:00.000Z",
+    updatedAt: "1970-01-01T00:00:00.000Z",
+  } as const;
+  const operations = {
+    ...workspaceAuthorizationOperations(),
+    connections: {
+      listProviderConnections: async () => {
+        durableListReads += 1;
+        return [];
+      },
+      listReleaseOwnedProviderConnections: async () => {
+        releaseProjectionReads += 1;
+        return [fixed];
+      },
+    },
+  } as unknown as ControlPlaneOperations;
+  const request = new Request(
+    "https://app.example.test/api/v1/provider-connections?workspaceId=ws_owner&projection=release-owned",
+  );
+
+  const response = await handleProviderConnections(
+    context(operations, request),
+    ["provider-connections"],
+    "GET",
+  );
+
+  expect(response?.status).toBe(200);
+  expect(await response?.json()).toEqual({ providerConnections: [fixed] });
+  expect(releaseProjectionReads).toBe(1);
+  expect(durableListReads).toBe(0);
+});
 
 test("Workspace-scoped PAT and OAuth credentials cannot select another Workspace", async () => {
   for (const credential of ["pat", "oauth"] as const) {
