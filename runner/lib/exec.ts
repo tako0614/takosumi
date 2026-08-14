@@ -245,7 +245,9 @@ export type OpenTofuFailureCode =
   | "provider_policy_denied"
   | "runner_capability_missing"
   | "provider_checksum_mismatch"
-  | "opentofu_init_failed";
+  | "opentofu_init_failed"
+  | "source_build_failed"
+  | "opentofu_plan_failed";
 
 export function classifyOpenTofuFailure(
   text: string,
@@ -308,5 +310,14 @@ export function classifyOpenTofuFailure(
   ) {
     return "runner_capability_missing";
   }
-  return phase === "init" ? "opentofu_init_failed" : undefined;
+  if (
+    phase === "runtime" &&
+    (normalized.includes("source build") ||
+      normalized.includes("sourcebuild output"))
+  ) {
+    return "source_build_failed";
+  }
+  if (phase === "init") return "opentofu_init_failed";
+  if (phase === "plan") return "opentofu_plan_failed";
+  return undefined;
 }

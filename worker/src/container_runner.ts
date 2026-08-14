@@ -67,6 +67,8 @@ const RUNNER_PLAN_EXECUTION_FAILURE_CODES = new Set([
   "runner_capability_missing",
   "provider_checksum_mismatch",
   "opentofu_init_failed",
+  "source_build_failed",
+  "opentofu_plan_failed",
 ]);
 const RUNNER_TRANSPORT_FAILED_CODE = "runner_transport_failed";
 const RUNNER_REQUEST_ABORTED_CODE = "runner_request_aborted";

@@ -42,7 +42,22 @@ test("falls back to a concrete init failure code", () => {
   );
   expect(
     classifyOpenTofuFailure("unexpected tofu plan failure", "plan"),
-  ).toBeUndefined();
+  ).toBe("opentofu_plan_failed");
+});
+
+test("keeps source preparation failures out of infrastructure retries", () => {
+  expect(
+    classifyOpenTofuFailure(
+      "source build 1/1 (bun) failed with exit code 1",
+      "runtime",
+    ),
+  ).toBe("source_build_failed");
+  expect(
+    classifyOpenTofuFailure(
+      "sourceBuild output was not produced: dist/worker.js",
+      "runtime",
+    ),
+  ).toBe("source_build_failed");
 });
 
 test("command failure payload carries the stable code without exposing secrets", () => {

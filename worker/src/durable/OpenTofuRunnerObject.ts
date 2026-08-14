@@ -52,6 +52,8 @@ const RUNNER_PLAN_EXECUTION_FAILURE_CODES = new Set([
   "runner_capability_missing",
   "provider_checksum_mismatch",
   "opentofu_init_failed",
+  "source_build_failed",
+  "opentofu_plan_failed",
 ]);
 type RunnerFailurePhase =
   | "plan"
@@ -3930,7 +3932,9 @@ function finiteRunnerFailureCode(
   | "provider_policy_denied"
   | "runner_capability_missing"
   | "provider_checksum_mismatch"
-  | "opentofu_init_failed" {
+  | "opentofu_init_failed"
+  | "source_build_failed"
+  | "opentofu_plan_failed" {
   const value = stringField(payload, "errorCode");
   const providerFailure = recordField(payload, "providerExecutionFailure");
   if (
@@ -3959,7 +3963,9 @@ function finiteRunnerFailureCode(
             | "provider_policy_denied"
             | "runner_capability_missing"
             | "provider_checksum_mismatch"
-            | "opentofu_init_failed")
+            | "opentofu_init_failed"
+            | "source_build_failed"
+            | "opentofu_plan_failed")
         : RUNNER_REJECTED_CODE;
   }
 }
