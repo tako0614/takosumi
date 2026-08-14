@@ -300,13 +300,22 @@ test("workspace bootstrap maps D1 exceptions and failed results to unavailable",
   ).resolves.toEqual({ status: "unavailable" });
 
   const membershipFailure = new CountingD1([evidence.membership]);
-  membershipFailure.failure = new Error("membership D1 unavailable");
+  membershipFailure.failure = new Error(
+    "Workspace membership evidence is malformed",
+  );
+  const membershipReader = createCloudflareD1WorkspaceBootstrapReader({
+    accountsDb: new CountingD1([evidence.accounts]),
+    controlDb: membershipFailure,
+    sessionHashSalt: SESSION_SALT,
+  });
   await expect(
-    createCloudflareD1WorkspaceBootstrapReader({
-      accountsDb: new CountingD1([evidence.accounts]),
-      controlDb: membershipFailure,
-      sessionHashSalt: SESSION_SALT,
-    }).read({ sessionId: SESSION_ID, workspaceId: WORKSPACE_ID, now: 2_000 }),
+    readWorkspaceBootstrapRequest(membershipReader, {
+      request: new Request("https://platform.example.test/bootstrap", {
+        headers: { cookie: `takosumi_session=${SESSION_ID}` },
+      }),
+      workspaceId: WORKSPACE_ID,
+      now: 2_000,
+    }),
   ).resolves.toEqual({ status: "unavailable" });
 
   const membershipFailedResult = new CountingD1([evidence.membership]);

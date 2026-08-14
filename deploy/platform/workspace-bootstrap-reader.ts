@@ -121,6 +121,28 @@ interface WorkspaceBootstrapControlRow {
   readonly target_pool_updated_at: unknown;
 }
 
+type ReadOnlyD1PreparedStatement = ReturnType<
+  ReadOnlyD1Database["prepare"]
+>;
+
+interface WorkspaceBootstrapReadOnlyD1Result<T> {
+  readonly success?: boolean;
+  readonly results?: readonly T[];
+}
+
+/**
+ * Internal marker for a failure while executing the membership D1 read. The
+ * membership reader deliberately reports malformed/duplicate rows by throwing
+ * too, so the database seam must preserve the structural origin before that
+ * reader validates its returned evidence.
+ */
+class WorkspaceBootstrapD1ReadError extends Error {
+  constructor(readonly cause: unknown) {
+    super("Workspace bootstrap D1 read failed");
+    this.name = "WorkspaceBootstrapD1ReadError";
+  }
+}
+
 const ACCOUNTS_SESSION_AUTHORITY_SQL = `with presented_session as (
   select key, document
     from ${d1AccountsTableNames.documents}
@@ -198,7 +220,7 @@ export function createCloudflareD1WorkspaceBootstrapReader(
       throw new TypeError("Workspace bootstrap reader configuration is invalid");
     }
     membershipReader = createCloudflareD1PatWorkspaceMembershipReader(
-      options.controlDb,
+      workspaceBootstrapMembershipDatabase(options.controlDb),
     );
   } catch {
     membershipReader = undefined;
@@ -362,19 +384,57 @@ function membershipReadFailureResult(
   error: unknown,
 ): Extract<WorkspaceBootstrapReadResult, { status: "incomplete" | "unavailable" }> {
   // The bounded membership reader intentionally exposes only its read port.
-  // Preserve malformed/duplicate durable evidence as incomplete while treating
-  // failed D1 execution or an unknown reader failure as unavailable.
-  if (error instanceof Error) {
-    const message = error.message.toLowerCase();
-    if (
-      message.includes("exactly one row") ||
-      message.includes("evidence is malformed") ||
-      message.includes("evidence identity is invalid")
-    ) {
-      return { status: "incomplete" };
-    }
-  }
-  return { status: "unavailable" };
+  // Its raw errors therefore represent malformed/duplicate evidence only after
+  // the wrapped D1 seam has proved that prepare/bind/all succeeded.
+  return error instanceof WorkspaceBootstrapD1ReadError
+    ? { status: "unavailable" }
+    : { status: "incomplete" };
+}
+
+function workspaceBootstrapMembershipDatabase(
+  db: ReadOnlyD1Database,
+): ReadOnlyD1Database {
+  return {
+    prepare(query) {
+      let statement: ReadOnlyD1PreparedStatement;
+      try {
+        statement = db.prepare(query);
+      } catch (cause) {
+        throw new WorkspaceBootstrapD1ReadError(cause);
+      }
+      return workspaceBootstrapMembershipStatement(statement);
+    },
+  };
+}
+
+function workspaceBootstrapMembershipStatement(
+  statement: ReadOnlyD1PreparedStatement,
+): ReadOnlyD1PreparedStatement {
+  return {
+    bind(...values) {
+      let bound: ReadOnlyD1PreparedStatement;
+      try {
+        bound = statement.bind(...values);
+      } catch (cause) {
+        throw new WorkspaceBootstrapD1ReadError(cause);
+      }
+      return workspaceBootstrapMembershipStatement(bound);
+    },
+    async all<T = unknown>() {
+      let result: WorkspaceBootstrapReadOnlyD1Result<T>;
+      try {
+        result = await statement.all<T>();
+      } catch (cause) {
+        throw new WorkspaceBootstrapD1ReadError(cause);
+      }
+      if (!result || result.success !== true || !Array.isArray(result.results)) {
+        throw new WorkspaceBootstrapD1ReadError(
+          new TypeError("Workspace membership D1 result failed"),
+        );
+      }
+      return result;
+    },
+  };
 }
 
 function workspaceFromRow(
