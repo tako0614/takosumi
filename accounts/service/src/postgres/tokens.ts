@@ -196,17 +196,35 @@ const PERSONAL_ACCESS_TOKEN_INVENTORY_PAGE_SQL = `with
       from accounts_v1.personal_access_tokens
      where subject = $1
   ),
+  cursor_anchor as (
+    select created_at, token_id
+      from subject_tokens
+     where $2::boolean
+       and token_id = $4
+       and date_trunc('milliseconds', created_at) = $3::timestamptz
+  ),
   cursor_state as (
     select case when not $2::boolean then 0::bigint else (
-      select count(*)::bigint from subject_tokens
-       where created_at = $3::timestamptz and token_id = $4
+      select count(*)::bigint from cursor_anchor
     ) end as anchor_count
   ),
   page as (
     select * from subject_tokens
      where not $2::boolean
-        or created_at > $3::timestamptz
-        or (created_at = $3::timestamptz and token_id > $4)
+        or created_at > coalesce(
+          (select created_at from cursor_anchor),
+          $3::timestamptz
+        )
+        or (
+          created_at = coalesce(
+            (select created_at from cursor_anchor),
+            $3::timestamptz
+          )
+          and token_id > coalesce(
+            (select token_id from cursor_anchor),
+            $4
+          )
+        )
      order by created_at asc, token_id asc
      limit $5
   )

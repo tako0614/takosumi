@@ -22,6 +22,7 @@ import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts"
 
 const SUBJECT = "tsub_pat_inventory" as const;
 const OTHER_SUBJECT = "tsub_pat_inventory_other" as const;
+const MICROSECOND_SUBJECT = "tsub_pat_inventory_microseconds" as const;
 const TOKENS = [
   {
     secret: "takpat_inventory_secret_a",
@@ -127,6 +128,105 @@ test("Postgres PAT inventory has memory parity in one statement", async () => {
 
   client.calls.length = 0;
   await expectCanonicalInventoryPages(store);
+  expect(client.calls).toHaveLength(4);
+  expect(client.calls.every((call) => call.sql.trimStart().startsWith("with")))
+    .toBe(true);
+  await db.close();
+});
+
+test("Postgres accepts its own cursor for microsecond PAT timestamps", async () => {
+  const db = new PGlite();
+  await db.exec(`
+    create schema accounts_v1;
+    create table accounts_v1.accounts (subject text primary key);
+    create table accounts_v1.personal_access_tokens (
+      token_id text primary key,
+      token_hash text not null unique,
+      token_prefix text not null,
+      subject text not null references accounts_v1.accounts(subject),
+      name text not null,
+      scopes text[] not null,
+      workspace_id text,
+      created_at timestamptz not null,
+      expires_at timestamptz,
+      revoked_at timestamptz,
+      last_used_at timestamptz
+    );
+    create index personal_access_tokens_subject_idx
+      on accounts_v1.personal_access_tokens(subject, created_at, token_id);
+    insert into accounts_v1.accounts(subject)
+      values ('${MICROSECOND_SUBJECT}');
+    insert into accounts_v1.personal_access_tokens (
+      token_id, token_hash, token_prefix, subject, name, scopes,
+      workspace_id, created_at, expires_at, revoked_at, last_used_at
+    ) values
+      (
+        'pat_inventory_microsecond_a', 'sha256:microsecond-a', 'takpat_micro_a',
+        '${MICROSECOND_SUBJECT}', 'Microsecond A', array['read']::text[], null,
+        '2026-01-01T00:00:00.000100Z', null, null, null
+      ),
+      (
+        'pat_inventory_microsecond_b', 'sha256:microsecond-b', 'takpat_micro_b',
+        '${MICROSECOND_SUBJECT}', 'Microsecond B', array['read']::text[], null,
+        '2026-01-01T00:00:00.000900Z', null, null, null
+      );
+  `);
+  const client = new CountingPostgresClient(db);
+  const store = new PostgresAccountsStore(client);
+
+  const first = await store.listPersonalAccessTokenInventoryPage({
+    subject: MICROSECOND_SUBJECT,
+    limit: 1,
+  });
+  expect(first.items.map((token) => token.tokenId)).toEqual([
+    "pat_inventory_microsecond_a",
+    "pat_inventory_microsecond_b",
+  ]);
+  expect(first.items.map((token) => token.createdAt)).toEqual([
+    Date.parse("2026-01-01T00:00:00.000Z"),
+    Date.parse("2026-01-01T00:00:00.000Z"),
+  ]);
+  expect(first.total).toBe(2);
+  expect(first.cursorValid).toBe(true);
+  const serverCursor = {
+    createdAt: first.items[0]!.createdAt,
+    tokenId: first.items[0]!.tokenId,
+  };
+
+  const second = await store.listPersonalAccessTokenInventoryPage({
+    subject: MICROSECOND_SUBJECT,
+    limit: 1,
+    cursor: serverCursor,
+  });
+  expect(second.cursorValid).toBe(true);
+  expect([
+    first.items[0]!.tokenId,
+    ...second.items.map((token) => token.tokenId),
+  ]).toEqual([
+    "pat_inventory_microsecond_a",
+    "pat_inventory_microsecond_b",
+  ]);
+
+  const missing = await store.listPersonalAccessTokenInventoryPage({
+    subject: MICROSECOND_SUBJECT,
+    limit: 1,
+    cursor: { ...serverCursor, tokenId: "pat_inventory_microsecond_missing" },
+  });
+  expect(missing.cursorValid).toBe(false);
+  const mismatchedTimestamp = await store
+    .listPersonalAccessTokenInventoryPage({
+      subject: MICROSECOND_SUBJECT,
+      limit: 1,
+      cursor: { ...serverCursor, createdAt: serverCursor.createdAt + 1 },
+    });
+  expect(mismatchedTimestamp.cursorValid).toBe(false);
+  await expect(
+    store.listPersonalAccessTokenInventoryPage({
+      subject: MICROSECOND_SUBJECT,
+      limit: 1,
+      cursor: { ...serverCursor, tokenId: "" },
+    }),
+  ).rejects.toThrow("cursor tuple is invalid");
   expect(client.calls).toHaveLength(4);
   expect(client.calls.every((call) => call.sql.trimStart().startsWith("with")))
     .toBe(true);
