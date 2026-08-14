@@ -2,6 +2,18 @@ import type { D1Database, D1PreparedStatement, D1Result } from "./bindings.ts";
 
 export const CONTROL_D1_MAINTENANCE_TABLE =
   "_takosumi_control_schema_maintenance" as const;
+export const CONTROL_D1_MAINTENANCE_RELEASE_GUARDS_TABLE =
+  "_takosumi_control_schema_release_expected_guards" as const;
+export const CONTROL_D1_MAINTENANCE_RELEASE_MIGRATIONS_TABLE =
+  "_takosumi_control_schema_release_expected_migrations" as const;
+export const CONTROL_D1_MAINTENANCE_RELEASE_ASSERTION_TABLE =
+  "_takosumi_control_schema_release_assertion" as const;
+export const CONTROL_D1_MAINTENANCE_RELEASE_PLAN_KIND =
+  "takosumi.control-d1-maintenance-release-plan@v1" as const;
+export const CONTROL_D1_SQL_STATEMENT_LIMIT_BYTES = 100_000 as const;
+export const CONTROL_D1_SQL_STATEMENT_BINDING_LIMIT = 100 as const;
+export const CONTROL_D1_SQL_FILE_IMPORT_LIMIT_BYTES = 5_000_000_000;
+export const CONTROL_D1_MAINTENANCE_RELEASE_SCHEMA_CHANGE_COUNT = 6 as const;
 
 export interface ControlD1MaintenanceFenceIdentity {
   readonly sourceCommit: string;
@@ -53,6 +65,46 @@ interface ControlD1MaintenanceRow {
   readonly predecessor_manifest_digest: string | null;
 }
 
+export interface ControlD1MaintenanceMigrationLedgerRow {
+  readonly version: number;
+  readonly name: string;
+  readonly checksum: string;
+}
+
+export interface ControlD1MaintenanceReleasePlanMetrics {
+  readonly kind: typeof CONTROL_D1_MAINTENANCE_RELEASE_PLAN_KIND;
+  readonly statementCount: number;
+  readonly guardInsertStatementCount: number;
+  readonly migrationInsertStatementCount: number;
+  readonly guardedTableCount: number;
+  readonly guardTriggerCount: number;
+  readonly maxStatementBytes: number;
+  readonly statementLimitBytes: typeof CONTROL_D1_SQL_STATEMENT_LIMIT_BYTES;
+  readonly maxStatementBindings: 0;
+  readonly statementBindingLimit: typeof CONTROL_D1_SQL_STATEMENT_BINDING_LIMIT;
+  readonly totalImportBytes: number;
+  readonly importLimitBytes: number;
+  readonly digest: string;
+}
+
+export interface ControlD1MaintenanceStatus {
+  readonly status: "active" | "inactive";
+  readonly active: 0 | 1;
+  readonly migrationBypass: 0;
+  readonly fence: ControlD1MaintenanceFence;
+  readonly releasedAt: string | null;
+  readonly releaseReadinessDigest: string | null;
+  readonly recomputedFenceId: string;
+  readonly fenceIdMatches: boolean;
+  readonly maintenanceTableShapeDigest: string;
+  readonly maintenanceTableShapeMatches: boolean;
+  readonly maintenanceTableDdlDigest: string;
+  readonly maintenanceTableDdlMatches: boolean;
+  readonly releaseGuardRelationAbsent: boolean;
+  readonly releaseMigrationRelationAbsent: boolean;
+  readonly releaseAssertionRelationAbsent: boolean;
+}
+
 export type ControlD1MaintenanceState =
   | { readonly status: "absent" }
   | { readonly status: "inactive" }
@@ -102,6 +154,13 @@ const CREATE_MAINTENANCE_TABLE = `create table if not exists ${CONTROL_D1_MAINTE
   predecessor_manifest_digest text,
   release_readiness_digest text
 )`;
+
+function canonicalMaintenanceTableSql(): string {
+  return CREATE_MAINTENANCE_TABLE.replace(
+    /^create table if not exists/u,
+    "CREATE TABLE",
+  );
+}
 
 const READ_MAINTENANCE_ROW = `select active, migration_bypass, fence_id, source_commit, manifest_digest, environment,
        activated_at, released_at, database_role, release_policy,
@@ -219,6 +278,107 @@ export async function readControlD1MaintenanceReleaseReceiptDetails(
     releasedAt: row.released_at,
     releaseReadinessDigest: await readReleaseReadinessDigest(db),
   };
+}
+
+/**
+ * Strict metadata-only maintenance read for release recovery. Unlike the
+ * request-path state reader, this also proves the current control-table shape
+ * and that no abandoned release-plan relations are present.
+ */
+export async function readControlD1MaintenanceStatus(
+  db: D1Database,
+): Promise<ControlD1MaintenanceStatus> {
+  const row = await readMaintenanceRow(db);
+  const state = await controlD1MaintenanceStateFromRow(row);
+  if (!row) throw new ControlD1MaintenanceError("maintenance_fence_invalid");
+  const active = strictBinary(row.active);
+  const bypass = strictBinary(row.migration_bypass);
+  if (bypass !== 0) {
+    throw new ControlD1MaintenanceError("maintenance_fence_invalid");
+  }
+  const fence = state.status === "active" ? state.fence : maintenanceFenceFromRow(row);
+  const columns = await readMaintenanceTableShape(db);
+  const normalizedColumns = normalizeMaintenanceTableShape(columns);
+  const maintenanceTableSql = await readMaintenanceTableSql(db);
+  const releaseReadinessDigest = await readReleaseReadinessDigest(db);
+  const recomputedFenceId = await maintenanceFenceId(fence);
+  return {
+    status: state.status,
+    active,
+    migrationBypass: 0,
+    fence,
+    releasedAt: row.released_at,
+    releaseReadinessDigest,
+    recomputedFenceId,
+    fenceIdMatches: fence.fenceId === recomputedFenceId,
+    maintenanceTableShapeDigest: await sha256Json(normalizedColumns),
+    maintenanceTableShapeMatches:
+      JSON.stringify(normalizedColumns) ===
+      JSON.stringify(EXPECTED_MAINTENANCE_TABLE_SHAPE),
+    maintenanceTableDdlDigest: await sha256Text(maintenanceTableSql),
+    maintenanceTableDdlMatches:
+      maintenanceTableDdlHasRequiredChecks(maintenanceTableSql),
+    releaseGuardRelationAbsent: await schemaObjectAbsent(
+      db,
+      CONTROL_D1_MAINTENANCE_RELEASE_GUARDS_TABLE,
+    ),
+    releaseMigrationRelationAbsent: await schemaObjectAbsent(
+      db,
+      CONTROL_D1_MAINTENANCE_RELEASE_MIGRATIONS_TABLE,
+    ),
+    releaseAssertionRelationAbsent: await schemaObjectAbsent(
+      db,
+      CONTROL_D1_MAINTENANCE_RELEASE_ASSERTION_TABLE,
+    ),
+  };
+}
+
+/** Recompute the deterministic fence id without exposing any provider token. */
+export async function recomputeControlD1MaintenanceFenceId(
+  fence: ControlD1MaintenanceFence,
+): Promise<string> {
+  return maintenanceFenceId(fence);
+}
+
+export async function readControlD1SchemaVersion(
+  db: D1Database,
+): Promise<number> {
+  const row = await db
+    .prepare("pragma schema_version")
+    .first<{ readonly schema_version?: number | string }>();
+  const value = Number(row?.schema_version);
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new ControlD1MaintenanceError("maintenance_schema_version_invalid");
+  }
+  return value;
+}
+
+export async function readControlD1MaintenanceMigrationLedger(
+  db: D1Database,
+): Promise<readonly ControlD1MaintenanceMigrationLedgerRow[]> {
+  const result = await db
+    .prepare(
+      `select version, name, checksum from schema_migrations order by version`,
+    )
+    .all<{
+      readonly version: number | string;
+      readonly name: string;
+      readonly checksum: string;
+    }>();
+  return (result.results ?? []).map((row) => {
+    const version = Number(row.version);
+    if (
+      !Number.isSafeInteger(version) ||
+      version <= 0 ||
+      typeof row.name !== "string" ||
+      !row.name ||
+      typeof row.checksum !== "string" ||
+      !row.checksum
+    ) {
+      throw new ControlD1MaintenanceError("maintenance_migration_ledger_invalid");
+    }
+    return { version, name: row.name, checksum: row.checksum };
+  });
 }
 
 /**
@@ -695,45 +855,158 @@ export async function releaseControlD1MaintenanceFence(
   ))) {
     throw new ControlD1MaintenanceError("maintenance_fence_release_mismatch");
   }
-  const releasePredicate = maintenanceFenceReleasePredicate(
+  const expectedSchemaVersion = await readControlD1SchemaVersion(db);
+  const expectedMigrations = await readControlD1MaintenanceMigrationLedger(db);
+  await executeControlD1MaintenanceFenceRelease(
+    db,
     fence,
+    releasedAt,
+    options.releaseReadinessDigest ?? null,
+    expectedSchemaVersion,
+    expectedMigrations,
     guardedTables,
     expectedTriggers,
+    strictCandidateRelease,
   );
-  const releaseCondition = releasePredicate.sql.replace(
-    /^singleton = 1 and /u,
-    "",
+}
+
+export interface ControlD1MaintenanceRecoveryReleaseOptions {
+  readonly releaseAuthorizationDigest: string;
+  readonly expectedSchemaVersion: number;
+  readonly expectedMigrations: readonly ControlD1MaintenanceMigrationLedgerRow[];
+}
+
+/**
+ * One-shot recovery release. Every operation before the sole batch is
+ * read-only: this path never upgrades the maintenance table, repairs guards,
+ * or removes an abandoned relation. The atomic Import is the only mutation.
+ */
+export async function releaseControlD1MaintenanceFenceRecovery(
+  db: D1Database,
+  fence: ControlD1MaintenanceFence,
+  releasedAt: string,
+  options: ControlD1MaintenanceRecoveryReleaseOptions,
+): Promise<void> {
+  if (
+    fence.databaseRole !== "in_place" ||
+    fence.releasePolicy !== "in_place" ||
+    !validTimestamp(releasedAt) ||
+    !/^sha256:[0-9a-f]{64}$/u.test(options.releaseAuthorizationDigest) ||
+    !Number.isSafeInteger(options.expectedSchemaVersion) ||
+    options.expectedSchemaVersion < 0
+  ) {
+    throw new ControlD1MaintenanceError("maintenance_fence_release_mismatch");
+  }
+  const current = await readControlD1MaintenanceStatus(db);
+  if (
+    current.status !== "active" ||
+    !current.maintenanceTableShapeMatches ||
+    !current.maintenanceTableDdlMatches ||
+    !current.releaseGuardRelationAbsent ||
+    !current.releaseMigrationRelationAbsent ||
+    !current.releaseAssertionRelationAbsent ||
+    current.releaseReadinessDigest !== null ||
+    !current.fenceIdMatches ||
+    !sameMaintenanceFenceIdentity(current.fence, fence)
+  ) {
+    throw new ControlD1MaintenanceError("maintenance_fence_release_mismatch");
+  }
+  const guardedTables = await listGuardedTables(db);
+  const expectedTriggers = expectedMaintenanceGuardTriggerRows(guardedTables);
+  const guardInventory = await readControlD1MaintenanceGuardInventory(db);
+  if (!(await matchesExpectedMaintenanceGuardInventory(
+    guardInventory,
+    guardedTables,
+    expectedTriggers,
+  ))) {
+    throw new ControlD1MaintenanceError("maintenance_fence_release_mismatch");
+  }
+  await executeControlD1MaintenanceFenceRelease(
+    db,
+    fence,
+    releasedAt,
+    options.releaseAuthorizationDigest,
+    options.expectedSchemaVersion,
+    options.expectedMigrations,
+    guardedTables,
+    expectedTriggers,
+    false,
   );
-  const releaseStatements = [
-    db.prepare(
-      `insert into ${CONTROL_D1_MAINTENANCE_TABLE} (
-         singleton, active, migration_bypass, fence_id, source_commit,
-         manifest_digest, environment, activated_at
-       )
-       select 1, 2, 2, 'invalid', 'invalid', 'invalid', 'invalid', 'invalid'
-       where not exists (
-         select 1 from ${CONTROL_D1_MAINTENANCE_TABLE} where singleton = 1
-       )`,
-    ),
-    db
-      .prepare(
-        // Evaluate the large identity/inventory predicate only once. A failed
-        // predicate writes migration_bypass=2, which violates the table CHECK
-        // constraint and rolls back this update and every trigger drop in the
-        // same D1 transaction, keeping the active fence fail-closed.
-        `update ${CONTROL_D1_MAINTENANCE_TABLE}
-         set active = 0,
-             migration_bypass = case
-               when ${releaseCondition} then 0 else 2 end,
-             released_at = ?,
-             release_readiness_digest = ?
-         where singleton = 1`,
-      )
-      .bind(releasedAt, options.releaseReadinessDigest ?? null),
-    ...guardedTables.flatMap((table) =>
-      maintenanceDropTriggerStatements(db, table),
-    ),
-  ];
+}
+
+export async function buildControlD1MaintenanceReleasePlanMetrics(
+  db: D1Database,
+  fence: ControlD1MaintenanceFence,
+  releasedAt: string,
+  options: ControlD1MaintenanceRecoveryReleaseOptions,
+): Promise<ControlD1MaintenanceReleasePlanMetrics> {
+  const guardedTables = await listGuardedTables(db);
+  const maintenanceTableSql = await readMaintenanceTableSql(db);
+  if (!maintenanceTableDdlHasRequiredChecks(maintenanceTableSql)) {
+    throw new ControlD1MaintenanceError("maintenance_release_plan_invalid");
+  }
+  return (
+    await buildControlD1MaintenanceReleaseSqlPlan(
+      fence,
+      releasedAt,
+      options.releaseAuthorizationDigest,
+      options.expectedSchemaVersion,
+      options.expectedMigrations,
+      guardedTables,
+      expectedMaintenanceGuardTriggerRows(guardedTables),
+      maintenanceTableSql,
+    )
+  ).metrics;
+}
+
+/** Build exact SQL-file metrics from a previously sealed table inventory. */
+export async function buildControlD1MaintenanceReleasePlanMetricsForInventory(
+  fence: ControlD1MaintenanceFence,
+  releasedAt: string,
+  options: ControlD1MaintenanceRecoveryReleaseOptions,
+  guardedTables: readonly string[],
+): Promise<ControlD1MaintenanceReleasePlanMetrics> {
+  const expectedTriggers = expectedMaintenanceGuardTriggerRows(guardedTables);
+  return (
+    await buildControlD1MaintenanceReleaseSqlPlan(
+      fence,
+      releasedAt,
+      options.releaseAuthorizationDigest,
+      options.expectedSchemaVersion,
+      options.expectedMigrations,
+      guardedTables,
+      expectedTriggers,
+      canonicalMaintenanceTableSql(),
+    )
+  ).metrics;
+}
+
+async function executeControlD1MaintenanceFenceRelease(
+  db: D1Database,
+  fence: ControlD1MaintenanceFence,
+  releasedAt: string,
+  releaseReadinessDigest: string | null,
+  expectedSchemaVersion: number,
+  expectedMigrations: readonly ControlD1MaintenanceMigrationLedgerRow[],
+  guardedTables: readonly string[],
+  expectedTriggers: readonly ExpectedMaintenanceTriggerRow[],
+  strictCandidateRelease: boolean,
+): Promise<void> {
+  const maintenanceTableSql = await readMaintenanceTableSql(db);
+  if (!maintenanceTableDdlHasRequiredChecks(maintenanceTableSql)) {
+    throw new ControlD1MaintenanceError("maintenance_fence_release_mismatch");
+  }
+  const plan = await buildControlD1MaintenanceReleaseSqlPlan(
+    fence,
+    releasedAt,
+    releaseReadinessDigest,
+    expectedSchemaVersion,
+    expectedMigrations,
+    guardedTables,
+    expectedTriggers,
+    maintenanceTableSql,
+  );
+  const releaseStatements = plan.statements.map((sql) => db.prepare(sql));
   let releaseResults: readonly D1Result[];
   try {
     releaseResults = await checkedBatch(
@@ -752,7 +1025,7 @@ export async function releaseControlD1MaintenanceFence(
     }
     throw error;
   }
-  const releaseMeta = releaseResults[1]?.meta;
+  const releaseMeta = releaseResults[plan.releaseUpdateStatementIndex]?.meta;
   if (releaseMeta !== undefined && releaseMeta.changes !== 1) {
     throw new ControlD1MaintenanceError("maintenance_fence_release_mismatch");
   }
@@ -769,8 +1042,7 @@ export async function releaseControlD1MaintenanceFence(
     !receipt ||
     !sameMaintenanceFenceIdentity(receipt.fence, fence) ||
     receipt.releasedAt !== releasedAt ||
-    receipt.releaseReadinessDigest !==
-      (options.releaseReadinessDigest ?? null) ||
+    receipt.releaseReadinessDigest !== releaseReadinessDigest ||
     !(await matchesReleasedMaintenanceGuardInventory(
       postReleaseGuardInventory,
       guardedTables,
@@ -899,6 +1171,156 @@ async function readMaintenanceRow(
   return await db
     .prepare(READ_MAINTENANCE_ROW)
     .first<ControlD1MaintenanceRow>();
+}
+
+interface MaintenanceTableColumnRow {
+  readonly name: string;
+  readonly type: string;
+  readonly notnull: number | string;
+  readonly dflt_value: string | null;
+  readonly pk: number | string;
+}
+
+interface NormalizedMaintenanceTableColumn {
+  readonly name: string;
+  readonly type: string;
+  readonly notNull: 0 | 1;
+  readonly defaultValue: string | null;
+  readonly primaryKey: 0 | 1;
+}
+
+const EXPECTED_MAINTENANCE_TABLE_SHAPE = normalizeMaintenanceTableShape([
+  { name: "singleton", type: "INTEGER", notnull: 0, dflt_value: null, pk: 1 },
+  { name: "active", type: "INTEGER", notnull: 1, dflt_value: null, pk: 0 },
+  {
+    name: "migration_bypass",
+    type: "INTEGER",
+    notnull: 1,
+    dflt_value: null,
+    pk: 0,
+  },
+  { name: "fence_id", type: "TEXT", notnull: 1, dflt_value: null, pk: 0 },
+  { name: "source_commit", type: "TEXT", notnull: 1, dflt_value: null, pk: 0 },
+  { name: "manifest_digest", type: "TEXT", notnull: 1, dflt_value: null, pk: 0 },
+  { name: "environment", type: "TEXT", notnull: 1, dflt_value: null, pk: 0 },
+  { name: "activated_at", type: "TEXT", notnull: 1, dflt_value: null, pk: 0 },
+  { name: "released_at", type: "TEXT", notnull: 0, dflt_value: null, pk: 0 },
+  {
+    name: "database_role",
+    type: "TEXT",
+    notnull: 1,
+    dflt_value: "'legacy'",
+    pk: 0,
+  },
+  {
+    name: "release_policy",
+    type: "TEXT",
+    notnull: 1,
+    dflt_value: "'never'",
+    pk: 0,
+  },
+  { name: "database_id", type: "TEXT", notnull: 0, dflt_value: null, pk: 0 },
+  {
+    name: "source_export_sha256",
+    type: "TEXT",
+    notnull: 0,
+    dflt_value: null,
+    pk: 0,
+  },
+  {
+    name: "predecessor_fence_id",
+    type: "TEXT",
+    notnull: 0,
+    dflt_value: null,
+    pk: 0,
+  },
+  {
+    name: "predecessor_source_commit",
+    type: "TEXT",
+    notnull: 0,
+    dflt_value: null,
+    pk: 0,
+  },
+  {
+    name: "predecessor_manifest_digest",
+    type: "TEXT",
+    notnull: 0,
+    dflt_value: null,
+    pk: 0,
+  },
+  {
+    name: "release_readiness_digest",
+    type: "TEXT",
+    notnull: 0,
+    dflt_value: null,
+    pk: 0,
+  },
+]);
+
+async function readMaintenanceTableShape(
+  db: D1Database,
+): Promise<readonly MaintenanceTableColumnRow[]> {
+  const result = await db
+    .prepare(`pragma table_info("${CONTROL_D1_MAINTENANCE_TABLE}")`)
+    .all<MaintenanceTableColumnRow>();
+  return result.results ?? [];
+}
+
+async function readMaintenanceTableSql(db: D1Database): Promise<string> {
+  const row = await db
+    .prepare(
+      `select sql from sqlite_master where type = 'table' and name = ?`,
+    )
+    .bind(CONTROL_D1_MAINTENANCE_TABLE)
+    .first<{ readonly sql?: string | null }>();
+  if (typeof row?.sql !== "string" || !row.sql.trim()) {
+    throw new ControlD1MaintenanceError("maintenance_fence_invalid");
+  }
+  return row.sql;
+}
+
+function maintenanceTableDdlHasRequiredChecks(sql: string): boolean {
+  const normalized = sql
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/gu, " ");
+  return (
+    /(?:\(|,) singleton integer primary key check\s*\(\s*singleton\s*=\s*1\s*\)(?:,|\s*\))/u.test(
+      normalized,
+    ) &&
+    /(?:\(|,) active integer not null check\s*\(\s*active\s+in\s*\(\s*0\s*,\s*1\s*\)\s*\)(?:,|\s*\))/u.test(
+      normalized,
+    ) &&
+    /(?:\(|,) migration_bypass integer not null check\s*\(\s*migration_bypass\s+in\s*\(\s*0\s*,\s*1\s*\)\s*\)(?:,|\s*\))/u.test(
+      normalized,
+    )
+  );
+}
+
+function normalizeMaintenanceTableShape(
+  columns: readonly MaintenanceTableColumnRow[],
+): readonly NormalizedMaintenanceTableColumn[] {
+  return columns
+    .map((column) => ({
+      name: String(column.name),
+      type: String(column.type).trim().toUpperCase(),
+      notNull: strictBinary(column.notnull),
+      defaultValue:
+        column.dflt_value === null ? null : String(column.dflt_value).trim(),
+      primaryKey: strictBinary(column.pk),
+    }))
+    .sort((left, right) => left.name.localeCompare(right.name));
+}
+
+async function schemaObjectAbsent(
+  db: D1Database,
+  name: string,
+): Promise<boolean> {
+  const result = await db
+    .prepare(`select count(*) as count from sqlite_master where name = ?`)
+    .bind(name)
+    .first<{ readonly count?: number | string }>();
+  return Number(result?.count) === 0;
 }
 
 async function readReleaseReadinessDigest(
@@ -1035,99 +1457,313 @@ async function matchesReleasedMaintenanceGuardInventory(
   );
 }
 
-function maintenanceFenceReleasePredicate(
+interface ControlD1MaintenanceReleaseSqlPlan {
+  readonly statements: readonly string[];
+  readonly releaseUpdateStatementIndex: number;
+  readonly metrics: ControlD1MaintenanceReleasePlanMetrics;
+}
+
+async function buildControlD1MaintenanceReleaseSqlPlan(
   fence: ControlD1MaintenanceFence,
+  releasedAt: string,
+  releaseReadinessDigest: string | null,
+  expectedSchemaVersion: number,
+  expectedMigrations: readonly ControlD1MaintenanceMigrationLedgerRow[],
   guardedTables: readonly string[],
   expectedTriggers: readonly ExpectedMaintenanceTriggerRow[],
-): { readonly sql: string; readonly bindings: readonly unknown[] } {
-  const predicates = [
-    "singleton = 1",
-    "active = 1",
-    "migration_bypass = 0",
-    "released_at is null",
-    "release_readiness_digest is null",
-    `fence_id = ${sqlLiteral(fence.fenceId)}`,
-    `source_commit = ${sqlLiteral(fence.sourceCommit)}`,
-    `manifest_digest = ${sqlLiteral(fence.manifestDigest)}`,
-    `environment = ${sqlLiteral(fence.environment)}`,
-    `activated_at = ${sqlLiteral(fence.activatedAt)}`,
-    `database_role = ${sqlLiteral(fence.databaseRole)}`,
-    `release_policy = ${sqlLiteral(fence.releasePolicy)}`,
-    `database_id is ${sqlNullableLiteral(fence.databaseId)}`,
-    `source_export_sha256 is ${sqlNullableLiteral(fence.sourceExportSha256)}`,
-    `predecessor_fence_id is ${sqlNullableLiteral(fence.predecessor?.fenceId)}`,
-    `predecessor_source_commit is ${sqlNullableLiteral(
+  expectedMaintenanceTableSql: string,
+): Promise<ControlD1MaintenanceReleaseSqlPlan> {
+  if (
+    !validTimestamp(releasedAt) ||
+    (releaseReadinessDigest !== null &&
+      !/^sha256:[0-9a-f]{64}$/u.test(releaseReadinessDigest)) ||
+    !Number.isSafeInteger(expectedSchemaVersion) ||
+    expectedSchemaVersion < 0 ||
+    !maintenanceTableDdlHasRequiredChecks(expectedMaintenanceTableSql)
+  ) {
+    throw new ControlD1MaintenanceError("maintenance_release_plan_invalid");
+  }
+  const migrations = normalizeExpectedMigrations(expectedMigrations);
+  const createGuardRelation = `create table "${CONTROL_D1_MAINTENANCE_RELEASE_GUARDS_TABLE}" (
+    trigger_name text primary key,
+    table_name text not null,
+    operation text not null check (operation in ('insert', 'update', 'delete')),
+    trigger_sql text not null,
+    unique (table_name, operation)
+  ) without rowid`;
+  const createMigrationRelation = `create table "${CONTROL_D1_MAINTENANCE_RELEASE_MIGRATIONS_TABLE}" (
+    version integer primary key,
+    name text not null,
+    checksum text not null
+  ) without rowid`;
+  const createAssertionRelation = `create table "${CONTROL_D1_MAINTENANCE_RELEASE_ASSERTION_TABLE}" (
+    singleton integer primary key check (singleton = 1),
+    passed integer not null check (passed = 1)
+  ) without rowid`;
+  const guardInsertStatements = chunkedInsertStatements(
+    CONTROL_D1_MAINTENANCE_RELEASE_GUARDS_TABLE,
+    ["trigger_name", "table_name", "operation", "trigger_sql"],
+    expectedTriggers.map((trigger) => [
+      sqlLiteral(trigger.name),
+      sqlLiteral(trigger.table),
+      sqlLiteral(trigger.operation),
+      sqlLiteral(trigger.sql),
+    ]),
+  );
+  const migrationInsertStatements = chunkedInsertStatements(
+    CONTROL_D1_MAINTENANCE_RELEASE_MIGRATIONS_TABLE,
+    ["version", "name", "checksum"],
+    migrations.map((migration) => [
+      String(migration.version),
+      sqlLiteral(migration.name),
+      sqlLiteral(migration.checksum),
+    ]),
+  );
+  const applicationTableFilter =
+    "actual.type = 'table' and actual.name not like 'sqlite_%'" +
+    ` and actual.name != ${sqlLiteral(CONTROL_D1_MAINTENANCE_TABLE)}` +
+    " and actual.name != 'schema_migrations' and actual.name != '_cf_KV'" +
+    ` and actual.name != ${sqlLiteral(
+      CONTROL_D1_MAINTENANCE_RELEASE_GUARDS_TABLE,
+    )}` +
+    ` and actual.name != ${sqlLiteral(
+      CONTROL_D1_MAINTENANCE_RELEASE_MIGRATIONS_TABLE,
+    )}` +
+    ` and actual.name != ${sqlLiteral(
+      CONTROL_D1_MAINTENANCE_RELEASE_ASSERTION_TABLE,
+    )}`;
+  const releaseCondition = [
+    "maintenance.active = 1",
+    "maintenance.migration_bypass = 0",
+    "maintenance.released_at is null",
+    "maintenance.release_readiness_digest is null",
+    `maintenance.fence_id = ${sqlLiteral(fence.fenceId)}`,
+    `maintenance.source_commit = ${sqlLiteral(fence.sourceCommit)}`,
+    `maintenance.manifest_digest = ${sqlLiteral(fence.manifestDigest)}`,
+    `maintenance.environment = ${sqlLiteral(fence.environment)}`,
+    `maintenance.activated_at = ${sqlLiteral(fence.activatedAt)}`,
+    `maintenance.database_role = ${sqlLiteral(fence.databaseRole)}`,
+    `maintenance.release_policy = ${sqlLiteral(fence.releasePolicy)}`,
+    `maintenance.database_id is ${sqlNullableLiteral(fence.databaseId)}`,
+    `maintenance.source_export_sha256 is ${sqlNullableLiteral(fence.sourceExportSha256)}`,
+    `maintenance.predecessor_fence_id is ${sqlNullableLiteral(fence.predecessor?.fenceId)}`,
+    `maintenance.predecessor_source_commit is ${sqlNullableLiteral(
       fence.predecessor?.sourceCommit,
     )}`,
-    `predecessor_manifest_digest is ${sqlNullableLiteral(
+    `maintenance.predecessor_manifest_digest is ${sqlNullableLiteral(
       fence.predecessor?.manifestDigest,
     )}`,
-  ];
-  const tableFilter =
-    "type = 'table' and name not like 'sqlite_%' and name != " +
-    sqlLiteral(CONTROL_D1_MAINTENANCE_TABLE) +
-    " and name != 'schema_migrations' and name != '_cf_KV'";
-  predicates.push(
-    `(select count(*) from sqlite_master where ${tableFilter}) = ${
-      guardedTables.length
+    `(select sql from sqlite_master where type = 'table' and name = ${sqlLiteral(
+      CONTROL_D1_MAINTENANCE_TABLE,
+    )}) = ${sqlLiteral(expectedMaintenanceTableSql)}`,
+    `(select schema_version from pragma_schema_version) = ${
+      expectedSchemaVersion + 3
     }`,
-  );
-  if (guardedTables.length > 0) {
-    predicates.push(
-      `(select count(*) from sqlite_master where ${tableFilter}` +
-        ` and name in (${guardedTables.map(sqlLiteral).join(", ")})) = ${
-          guardedTables.length
-        }`,
-    );
-  }
-  const triggerFilter =
-    "type = 'trigger' and name like '_takosumi_schema_fence_%'";
-  predicates.push(
-    `(select count(*) from sqlite_master where ${triggerFilter}) = ${
+    `(select count(*) from "${CONTROL_D1_MAINTENANCE_RELEASE_GUARDS_TABLE}") = ${
       expectedTriggers.length
     }`,
-  );
-  if (expectedTriggers.length > 0) {
-    const expectedMatches = boundedSqlOr(
-      expectedTriggers.map(
-        (trigger) =>
-          `(name = ${sqlLiteral(trigger.name)} and sql = ${sqlLiteral(
-            trigger.sql,
-          )})`,
-      ),
-    );
-    predicates.push(
-      `(select count(*) from sqlite_master where ${triggerFilter}` +
-        ` and (${expectedMatches})) = ${expectedTriggers.length}`,
-    );
+    `(select count(distinct table_name) from "${CONTROL_D1_MAINTENANCE_RELEASE_GUARDS_TABLE}") = ${
+      guardedTables.length
+    }`,
+    `(select count(*) from sqlite_master actual where ${applicationTableFilter}) = ${
+      guardedTables.length
+    }`,
+    `not exists (
+       select 1
+       from "${CONTROL_D1_MAINTENANCE_RELEASE_GUARDS_TABLE}" expected
+       left join sqlite_master actual
+         on actual.type = 'table' and actual.name = expected.table_name
+       where actual.name is null
+     )`,
+    `not exists (
+       select 1
+       from "${CONTROL_D1_MAINTENANCE_RELEASE_GUARDS_TABLE}" expected
+       left join sqlite_master actual
+         on actual.type = 'trigger'
+        and actual.name = expected.trigger_name
+        and actual.tbl_name = expected.table_name
+        and actual.sql = expected.trigger_sql
+       where actual.name is null
+     )`,
+    `not exists (
+       select 1
+       from sqlite_master actual
+       left join "${CONTROL_D1_MAINTENANCE_RELEASE_GUARDS_TABLE}" expected
+         on expected.trigger_name = actual.name
+        and expected.table_name = actual.tbl_name
+        and expected.trigger_sql = actual.sql
+       where actual.type = 'trigger'
+         and actual.name like '_takosumi_schema_fence_%'
+         and expected.trigger_name is null
+     )`,
+    `(select count(*) from "${CONTROL_D1_MAINTENANCE_RELEASE_MIGRATIONS_TABLE}") = ${
+      migrations.length
+    }`,
+    `not exists (
+       select 1
+       from "${CONTROL_D1_MAINTENANCE_RELEASE_MIGRATIONS_TABLE}" expected
+       left join schema_migrations actual
+         on actual.version = expected.version
+        and actual.name = expected.name
+        and actual.checksum = expected.checksum
+       where actual.version is null
+     )`,
+    `not exists (
+       select 1
+       from schema_migrations actual
+       left join "${CONTROL_D1_MAINTENANCE_RELEASE_MIGRATIONS_TABLE}" expected
+         on expected.version = actual.version
+        and expected.name = actual.name
+        and expected.checksum = actual.checksum
+       where expected.version is null
+     )`,
+    `(select group_concat(integrity_check, char(0)) from pragma_integrity_check) = 'ok'`,
+    `not exists (select 1 from pragma_foreign_key_check)`,
+  ].join(" and ");
+  const assertion = `insert into "${CONTROL_D1_MAINTENANCE_RELEASE_ASSERTION_TABLE}" (
+    singleton, passed
+  )
+  select 1, case when exists (
+    select 1 from ${CONTROL_D1_MAINTENANCE_TABLE} maintenance
+    where maintenance.singleton = 1 and ${releaseCondition}
+  ) then 1 else 0 end`;
+  const update = `update ${CONTROL_D1_MAINTENANCE_TABLE}
+  set active = 0,
+      migration_bypass = 0,
+      released_at = ${sqlLiteral(releasedAt)},
+      release_readiness_digest = ${sqlNullableLiteral(releaseReadinessDigest)}
+  where singleton = 1`;
+  const beforeUpdate = [
+    createGuardRelation,
+    createMigrationRelation,
+    createAssertionRelation,
+    ...guardInsertStatements,
+    ...migrationInsertStatements,
+    assertion,
+  ];
+  const statements = [
+    ...beforeUpdate,
+    update,
+    ...expectedTriggers.map(
+      (trigger) => `drop trigger "${trigger.name}"`,
+    ),
+    `drop table "${CONTROL_D1_MAINTENANCE_RELEASE_MIGRATIONS_TABLE}"`,
+    `drop table "${CONTROL_D1_MAINTENANCE_RELEASE_GUARDS_TABLE}"`,
+    `drop table "${CONTROL_D1_MAINTENANCE_RELEASE_ASSERTION_TABLE}"`,
+  ];
+  const renderedStatements = statements.map(renderReleaseStatement);
+  const statementBytes = renderedStatements.map(utf8Bytes);
+  const maxStatementBytes = Math.max(0, ...statementBytes);
+  const renderedImport = `${renderedStatements.join("\n")}\n`;
+  const totalImportBytes = utf8Bytes(renderedImport);
+  if (
+    statements.length === 0 ||
+    maxStatementBytes >= CONTROL_D1_SQL_STATEMENT_LIMIT_BYTES ||
+    totalImportBytes > CONTROL_D1_SQL_FILE_IMPORT_LIMIT_BYTES
+  ) {
+    throw new ControlD1MaintenanceError("maintenance_release_plan_over_limit");
   }
   return {
-    sql: predicates.join(" and "),
-    bindings: [],
+    statements,
+    releaseUpdateStatementIndex: beforeUpdate.length,
+    metrics: {
+      kind: CONTROL_D1_MAINTENANCE_RELEASE_PLAN_KIND,
+      statementCount: statements.length,
+      guardInsertStatementCount: guardInsertStatements.length,
+      migrationInsertStatementCount: migrationInsertStatements.length,
+      guardedTableCount: guardedTables.length,
+      guardTriggerCount: expectedTriggers.length,
+      maxStatementBytes,
+      statementLimitBytes: CONTROL_D1_SQL_STATEMENT_LIMIT_BYTES,
+      maxStatementBindings: 0,
+      statementBindingLimit: CONTROL_D1_SQL_STATEMENT_BINDING_LIMIT,
+      totalImportBytes,
+      importLimitBytes: CONTROL_D1_SQL_FILE_IMPORT_LIMIT_BYTES,
+      digest: await sha256Text(renderedImport),
+    },
   };
 }
 
-/**
- * Build a balanced OR tree for D1's SQLite expression-depth limit.
- *
- * A long left-associated `a or b or c ...` expression can exceed D1's
- * maximum expression depth even while remaining below the 100 KB statement
- * limit. The release predicate is generated from the exact guard inventory,
- * so balancing the equivalent leaves preserves the atomic fail-closed check.
- */
-function boundedSqlOr(expressions: readonly string[]): string {
-  if (expressions.length === 0) return "0";
-  let level = [...expressions];
-  while (level.length > 1) {
-    const next: string[] = [];
-    for (let index = 0; index < level.length; index += 2) {
-      const left = level[index]!;
-      const right = level[index + 1];
-      next.push(right === undefined ? left : `(${left} or ${right})`);
-    }
-    level = next;
+function normalizeExpectedMigrations(
+  rows: readonly ControlD1MaintenanceMigrationLedgerRow[],
+): readonly ControlD1MaintenanceMigrationLedgerRow[] {
+  const normalized = rows.map((row) => ({
+    version: Number(row.version),
+    name: String(row.name),
+    checksum: String(row.checksum),
+  }));
+  if (
+    normalized.length === 0 ||
+    normalized.some(
+      (row) =>
+        !Number.isSafeInteger(row.version) ||
+        row.version <= 0 ||
+        !row.name ||
+        !row.checksum,
+    ) ||
+    normalized.some(
+      (row, index) => index > 0 && row.version <= normalized[index - 1]!.version,
+    )
+  ) {
+    throw new ControlD1MaintenanceError("maintenance_release_plan_invalid");
   }
-  return level[0]!;
+  return normalized;
+}
+
+function chunkedInsertStatements(
+  table: string,
+  columns: readonly string[],
+  rows: readonly (readonly string[])[],
+): readonly string[] {
+  if (rows.length === 0) return [];
+  const prefix = `insert into "${table}" (${columns
+    .map((column) => `"${column}"`)
+    .join(", ")}) values\n`;
+  const statements: string[] = [];
+  let current: string[] = [];
+  for (const row of rows) {
+    if (row.length !== columns.length) {
+      throw new ControlD1MaintenanceError("maintenance_release_plan_invalid");
+    }
+    const renderedRow = `  (${row.join(", ")})`;
+    const candidate = `${prefix}${[...current, renderedRow].join(",\n")}`;
+    if (utf8Bytes(renderReleaseStatement(candidate)) >= CONTROL_D1_SQL_STATEMENT_LIMIT_BYTES) {
+      if (current.length === 0) {
+        throw new ControlD1MaintenanceError("maintenance_release_plan_over_limit");
+      }
+      statements.push(`${prefix}${current.join(",\n")}`);
+      current = [renderedRow];
+      if (
+        utf8Bytes(renderReleaseStatement(`${prefix}${renderedRow}`)) >=
+        CONTROL_D1_SQL_STATEMENT_LIMIT_BYTES
+      ) {
+        throw new ControlD1MaintenanceError("maintenance_release_plan_over_limit");
+      }
+    } else {
+      current.push(renderedRow);
+    }
+  }
+  if (current.length > 0) statements.push(`${prefix}${current.join(",\n")}`);
+  return statements;
+}
+
+function renderReleaseStatement(sql: string): string {
+  const normalized = sql.trim();
+  return normalized.endsWith(";") ? normalized : `${normalized};`;
+}
+
+function utf8Bytes(value: string): number {
+  return new TextEncoder().encode(value).byteLength;
+}
+
+async function sha256Text(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(value),
+  );
+  return `sha256:${[...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("")}`;
 }
 
 function sqlLiteral(value: string): string {
