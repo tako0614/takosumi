@@ -16,6 +16,7 @@ import {
   type Component,
 } from "solid-js";
 import {
+  filterTcsItems,
   initTcsState,
   loadMoreTcs,
   sortTcsItems,
@@ -46,8 +47,8 @@ const STR = {
   loadMore: { ja: "さらに読み込む", en: "Load more" },
   none: { ja: "該当するサービスがありません", en: "No matching services" },
   noneUnfetched: {
-    ja: "読み込み済みの範囲には該当がありません。続きを読み込むか、Enter でストア全体を検索できます。",
-    en: "No matches in what's loaded yet. Load more, or press Enter to search the whole store.",
+    ja: "読み込み済みの範囲には該当がありません。続きを読み込むと検索対象が増えます。",
+    en: "No matches in what's loaded yet. Load more to search more listings.",
   },
   loadFailed: {
     ja: "ストアに接続できませんでした。",
@@ -115,20 +116,6 @@ function repoUrl(git: string): string | undefined {
     return undefined;
   }
 }
-function listingSearchText(listing: TcsListing, locale: TcsLocale): string {
-  return [
-    pick(listing.name, locale),
-    pick(listing.description, locale),
-    listing.suggestedName,
-    listing.provider,
-    listing.category,
-    ...(listing.badges ?? []),
-    listing.source.url,
-  ]
-    .join(" ")
-    .toLowerCase();
-}
-
 /** The store's frame around the shared face (icon → monogram). The monogram
  * rule and the broken-icon fallback live in components/AppFace.tsx so the same
  * app wears the same face here, on the launcher, and in the add flow. */
@@ -166,7 +153,6 @@ export interface StoreBrowserProps {
 export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
   const [sort, setSort] = createSignal<TcsSort>("updated");
   const [searchInput, setSearchInput] = createSignal("");
-  const [activeQuery, setActiveQuery] = createSignal("");
   const [activeStore, setActiveStore] = createSignal("");
   const [agg, setAgg] = createSignal<TcsAggregateState>(EMPTY);
   const [selected, setSelected] = createSignal<AggregatedTcsListing | null>(
@@ -180,18 +166,12 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
   const showSourceControls = () => props.showSourceControls ?? true;
   const showSortControl = () => props.showSortControl ?? true;
 
-  const setSearchValue = (value: string) => {
-    setSearchInput(value);
-    setActiveQuery(value.trim());
-  };
-
   let reqToken = 0;
   async function rebuild() {
     const token = ++reqToken;
     const base = initTcsState(getTcsServers(), {
       sort: sort(),
       locale: props.locale,
-      q: activeQuery() || undefined,
     });
     setAgg({ ...base, loading: true });
     const next = await loadMoreTcs(base);
@@ -219,8 +199,6 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
 
   const onSearch = (e: Event) => {
     e.preventDefault();
-    setActiveQuery(searchInput().trim());
-    void rebuild();
   };
   const onSort = (v: TcsSort) => {
     setSort(v);
@@ -228,7 +206,7 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
   };
   const onLoadMore = async () => {
     // Same request token as rebuild(): a stale load-more result must not
-    // clobber a newer search/sort/server rebuild.
+    // clobber a newer sort/server rebuild.
     const token = ++reqToken;
     setAgg((p) => ({ ...p, loading: true }));
     const next = await loadMoreTcs(agg());
@@ -287,21 +265,14 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
     };
   };
 
-  // The local substring filter is for INCREMENTAL typing only. Once a query has
-  // been submitted, the aggregate already holds server-filtered results, and
-  // re-testing them with `includes()` silently discarded matches the store had
-  // found (a two-word query, or a match on a field the client does not index).
+  // Search is deliberately local. Store discovery only needs the canonical
+  // paginated listings interface; an optional server-side search route must
+  // never become an availability dependency for adding an app by Git URL.
   const displayed = createMemo(() => {
-    const submitted = agg().q ?? "";
-    const localQuery = submitted === activeQuery() ? "" : activeQuery();
-    return allItems()
+    return filterTcsItems(allItems(), searchInput())
       .filter(
         (l) =>
-          (!activeStore() || l.seenOn.includes(activeStore())) &&
-          (!localQuery ||
-            listingSearchText(l, props.locale).includes(
-              localQuery.toLowerCase(),
-            )),
+          !activeStore() || l.seenOn.includes(activeStore()),
       )
       .map((listing) => listingForActiveStore(listing));
   });
@@ -345,7 +316,7 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
             name="storeSearch"
             type="search"
             value={searchInput()}
-            onInput={(e) => setSearchValue(e.currentTarget.value)}
+            onInput={(e) => setSearchInput(e.currentTarget.value)}
             placeholder={s("search", props.locale)}
             aria-label={s("search", props.locale)}
           />

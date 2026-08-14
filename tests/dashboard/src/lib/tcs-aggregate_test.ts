@@ -1,11 +1,12 @@
 /**
  * Client-side TCS aggregation: merge across servers, de-dup by (url,path)
- * with seenOn, isolate failures, skip search-unsupported nodes, paginate per
- * server. fetch is stubbed so these run without network.
+ * with seenOn, isolate failures, filter loaded metadata locally, and paginate
+ * per server. fetch is stubbed so these run without network.
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   initTcsState,
+  filterTcsItems,
   loadMoreTcs,
   mergeTcsListingBatches,
   sortTcsItems,
@@ -236,19 +237,25 @@ describe("tcs aggregate", () => {
     expect(s.status.find((st) => st.base === "https://b.test")!.ok).toBe(false);
   });
 
-  test("search-unsupported (501) server is marked, not fatal", async () => {
-    stub((url) =>
-      url.host === "a.test"
-        ? json({ items: [W("x")] })
-        : json({ error: { code: "not_implemented" } }, 501),
-    );
+  test("searches loaded metadata locally without calling the reserved search route", async () => {
+    const requests: string[] = [];
+    stub((url) => {
+      requests.push(`${url.pathname}${url.search}`);
+      return json({ items: [W("takos"), W("yurucommu")] });
+    });
+
     const s = await loadMoreTcs(
-      initTcsState(SERVERS, { sort: "updated", locale: "en", q: "foo" }),
+      initTcsState(SERVERS.slice(0, 1), {
+        sort: "updated",
+        locale: "en",
+      }),
     );
-    expect(s.items.map((i) => i.id)).toEqual(["x"]);
-    expect(s.status.find((st) => st.base === "https://b.test")!.supported).toBe(
-      false,
-    );
+
+    expect(requests).toEqual(["/tcs/v2/listings?sort=updated&limit=24"]);
+    expect(filterTcsItems(s.items, "YURU").map((i) => i.id)).toEqual([
+      "yurucommu",
+    ]);
+    expect(s.status[0]?.ok).toBe(true);
   });
 
   test("paginates per-server until cursors exhaust", async () => {

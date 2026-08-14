@@ -49,6 +49,18 @@ Takosumi ignores any path retained by a legacy response or presentation
 document when selecting a module. Switching Store nodes does not change the
 authority of an existing Capsule, Source, InstallConfig, Plan, or Run.
 
+## Discovery and local search
+
+The required Store discovery interface is limited to server info, paginated
+listings, and listing detail. The dashboard searches presentation metadata from
+already fetched listings locally and does not call the reserved TCS 2.0
+`/tcs/v2/listings/search` route. When more pages remain, Load more expands the
+local search set.
+
+An unavailable server-side search must therefore never make the Store, Git
+repository discovery, or the Add action unavailable. The Store exists to
+discover Git URLs, not to provide a search index or installation policy.
+
 ## Third-party Stores
 
 A third-party Store works by implementing the TCS 2.0 read contract; it does
