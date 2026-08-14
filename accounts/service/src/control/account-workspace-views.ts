@@ -18,12 +18,19 @@ import { parseControlPageParams } from "./shared.ts";
 
 const ACCOUNT_WORKSPACE_INVENTORY_PATH = "workspaces.v1";
 
-/** The exact public path for the account-wide Workspace inventory projection. */
-export const ACCOUNT_WORKSPACE_INVENTORY_ROUTE =
-  "/api/v1/views/workspaces.v1";
-
 const ACCOUNT_WORKSPACE_INVENTORY_FORBIDDEN_MESSAGE =
   "A Workspace-scoped credential cannot read the account Workspace inventory.";
+
+/** Matches the normalized dispatcher segments for this inventory route. */
+export function isAccountWorkspaceInventorySegments(
+  segments: readonly string[],
+): boolean {
+  return (
+    segments.length === 2 &&
+    segments[0] === "views" &&
+    segments[1] === ACCOUNT_WORKSPACE_INVENTORY_PATH
+  );
+}
 
 /**
  * Returns the canonical scope error for the inventory route. The dispatcher
@@ -44,13 +51,7 @@ export async function handleAccountWorkspaceViews(
   segments: readonly string[],
   method: string,
 ): Promise<Response | undefined> {
-  if (
-    segments.length !== 2 ||
-    segments[0] !== "views" ||
-    segments[1] !== ACCOUNT_WORKSPACE_INVENTORY_PATH
-  ) {
-    return undefined;
-  }
+  if (!isAccountWorkspaceInventorySegments(segments)) return undefined;
   if (method !== "GET") return methodNotAllowed("GET");
 
   // A Workspace-scoped credential cannot ask this account-wide view to widen

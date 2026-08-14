@@ -1006,26 +1006,71 @@ test("dispatcher fences Workspace-scoped inventory before lazy Control initializ
       throw new Error("workspace-scoped inventory must not touch the store");
     },
   });
-  const request = new Request(
-    "https://app.example.test/api/v1/views/workspaces.v1",
-  );
-  const response = await handleAuthenticatedControlRoute({
-    request,
-    url: new URL(request.url),
-    store,
-    subject: "tsub_owner",
-    workspaceId: "ws_scoped",
-    resolveOperations: async () => {
-      resolverCalls += 1;
-      throw new Error("workspace-scoped inventory must not initialize Control");
-    },
-  });
-  expect(response?.status).toBe(403);
-  expect(await response?.json()).toMatchObject({
-    error: { code: "forbidden" },
-  });
+  for (const path of [
+    "/api/v1/views/workspaces.v1",
+    "/api/v1/views/workspaces.v1/",
+    "/api/v1//views/workspaces.v1",
+  ]) {
+    const request = new Request(`https://app.example.test${path}`);
+    const response = await handleAuthenticatedControlRoute({
+      request,
+      url: new URL(request.url),
+      store,
+      subject: "tsub_owner",
+      workspaceId: "ws_scoped",
+      resolveOperations: async () => {
+        resolverCalls += 1;
+        throw new Error(
+          "workspace-scoped inventory must not initialize Control",
+        );
+      },
+    });
+    expect(response?.status).toBe(403);
+    expect(await response?.json()).toMatchObject({
+      error: { code: "forbidden" },
+    });
+  }
   expect(resolverCalls).toBe(0);
   expect(storeReads).toBe(0);
+});
+
+test("unscoped inventory aliases use the normalized public projection route", async () => {
+  let resolverCalls = 0;
+  let pageCalls = 0;
+  const operations = {
+    workspaces: {
+      listWorkspacesForAccountPage: async () => {
+        pageCalls += 1;
+        return { items: [], total: 0 };
+      },
+    },
+  } as unknown as ControlPlaneOperations;
+  const store = {} as AccountsStore;
+  for (const path of [
+    "/api/v1/views/workspaces.v1",
+    "/api/v1/views/workspaces.v1/",
+    "/api/v1//views/workspaces.v1",
+  ]) {
+    const request = new Request(`https://app.example.test${path}`);
+    const response = await handleAuthenticatedControlRoute({
+      request,
+      url: new URL(request.url),
+      store,
+      subject: "tsub_owner",
+      resolveOperations: async () => {
+        resolverCalls += 1;
+        return operations;
+      },
+    });
+    expect(response?.status).toBe(200);
+    expect(await response?.json()).toMatchObject({
+      kind: "takosumi.account-workspace-inventory@v1",
+      workspaces: [],
+      total: 0,
+    });
+  }
+  expect(resolverCalls).toBe(3);
+  expect(pageCalls).toBe(3);
 });
 
 test("public Workspace-scoped PAT inventory rejects before lazy Control initialization", async () => {

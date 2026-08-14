@@ -60,8 +60,8 @@ import { handleOutputShares } from "./control/output-shares.ts";
 import { handleDashboard } from "./control/dashboard.ts";
 import {
   accountWorkspaceInventoryForbiddenResponse,
-  ACCOUNT_WORKSPACE_INVENTORY_ROUTE,
   handleAccountWorkspaceViews,
+  isAccountWorkspaceInventorySegments,
 } from "./control/account-workspace-views.ts";
 import { handleProjects } from "./control/projects.ts";
 import {
@@ -202,6 +202,8 @@ async function dispatchAuthenticatedControlRoute(
   timings: ServerTimingBucket,
 ): Promise<Response> {
   const { request, url } = context;
+  const tail = url.pathname.slice(API_V1_PREFIX.length);
+  const segments = normalizeControlRouteSegments(tail);
 
   // The account-wide Workspace inventory is intentionally unavailable to a
   // Workspace-scoped credential. Keep this fence before resolving the Control
@@ -210,7 +212,7 @@ async function dispatchAuthenticatedControlRoute(
   // for direct composition callers.
   if (
     request.method.toUpperCase() === "GET" &&
-    url.pathname === ACCOUNT_WORKSPACE_INVENTORY_ROUTE &&
+    isAccountWorkspaceInventorySegments(segments) &&
     context.session.workspaceId !== undefined
   ) {
     return appendServerTiming(
@@ -229,7 +231,6 @@ async function dispatchAuthenticatedControlRoute(
   }
   if (!operations)
     return appendServerTiming(controlPlaneUnavailable(), timings);
-  const tail = url.pathname.slice(API_V1_PREFIX.length);
   try {
     const response = await measureServerTiming(
       timings,
@@ -384,7 +385,7 @@ interface DispatchInput {
 }
 
 async function dispatch(input: DispatchInput): Promise<Response> {
-  const rawSegments = input.tail.split("/").filter(Boolean);
+  const rawSegments = normalizeControlRouteSegments(input.tail);
   if (RETIRED_PUBLIC_CONTROL_SEGMENTS.has(rawSegments[0] ?? "")) {
     return errorJson("not_found", "not found", 404);
   }
@@ -408,4 +409,8 @@ async function dispatch(input: DispatchInput): Promise<Response> {
     if (response) return response;
   }
   return errorJson("not_found", "not found", 404);
+}
+
+function normalizeControlRouteSegments(tail: string): string[] {
+  return tail.split("/").filter(Boolean);
 }
