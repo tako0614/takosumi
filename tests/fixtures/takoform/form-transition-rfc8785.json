@@ -1,0 +1,48 @@
+{
+  "format": "takoform.form-transition-rfc8785-fixture@v1",
+  "resource": {
+    "space": "prod",
+    "kind": "RelationalDatabase",
+    "name": "app"
+  },
+  "fromForm": {
+    "formRef": {
+      "apiVersion": "forms.takoform.com/v1alpha1",
+      "kind": "RelationalDatabase",
+      "definitionVersion": "2.0.0",
+      "schemaDigest": "sha256:3898f8ee507bcebd9e03e80fbc1931b67b477299b1ebe2ff395facb7acf018de"
+    },
+    "packageDigest": "sha256:dc131e4858ddedbb84d553fdf7808c55fc898a37f15d84839e414fe3ca57c910"
+  },
+  "toForm": {
+    "formRef": {
+      "apiVersion": "forms.takoform.com/v1alpha1",
+      "kind": "RelationalDatabase",
+      "definitionVersion": "3.0.0",
+      "schemaDigest": "sha256:e4c7aedb5962e6b719d7afe7a8f002ceb00ae4a1c74ebfc1eff712e257bf4044"
+    },
+    "packageDigest": "sha256:599e60e4f3a5b735c58f8ff5029f72b5a25445be6f317816590eca12b44e5a31"
+  },
+  "desiredSpec": {
+    "name": "app",
+    "engine": "postgres",
+    "schemaUrl": "https://artifacts.portable-conformance.invalid/schema.json",
+    "schemaSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "schemaFormat": "takosumi.resource-migrations"
+  },
+  "expected": {
+    "resourceVersion": "7",
+    "nativeIdentity": {
+      "type": "cloudflare-d1-database",
+      "id": "native-1"
+    }
+  },
+  "transitionEvidence": {
+    "format": "takoform.module-form-transition@v1",
+    "marker": "relational-database-v2-to-v3",
+    "digest": "sha256:7106e4a5ea37f0295b9406fccc8a6f5230b2ec92cb1f629b1fc243c99aeedbe7"
+  },
+  "desiredSpecDigest": "sha256:eb513896ecaa2908ba5764042996de5e38b4702601fc528883f7d85a7a1d1f71",
+  "operationId": "formtx_72a212a092456ba911676bf56bc5698bdf5a7a6953047ab43f845c2b0d813078",
+  "requestDigest": "sha256:28fdf2d78b12ae92fff10dfd18489f41c44dd37a58d78d39e1b7e23dcb514531"
+}

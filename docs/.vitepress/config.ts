@@ -104,6 +104,10 @@ const enSidebar: DefaultTheme.SidebarMulti = {
       text: "Migration and historical notes",
       items: [
         { text: "Resource migration note", link: "/en/concepts/resources" },
+        {
+          text: "Takoform provider integration (migration)",
+          link: "/en/reference/takoform-host",
+        },
       ],
     },
     {

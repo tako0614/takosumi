@@ -1,6 +1,9 @@
 import { expect, test } from "bun:test";
 import { deployControlServiceOptions } from "../../../worker/src/deploy_control_seam.ts";
-import { platformResourceCapsuleOwnerResolver } from "../../../worker/src/deploy_control_seam.ts";
+import {
+  platformResourceCapsuleOwnerResolver,
+  TAKOSUMI_INTERNAL_RESOURCE_CAPSULE_OWNER_HEADER,
+} from "../../../worker/src/deploy_control_seam.ts";
 import type { CloudflareWorkerEnv } from "../../../worker/src/bindings.ts";
 import {
   createDefaultRunnerProfiles,
@@ -94,6 +97,22 @@ test("Worker composition mounts ledger HTTP routes only for explicit private ing
   ).toBe(true);
 });
 
+test("Worker composes exact Form transition host/evidence ports only as code", () => {
+  const host = { dispatch: async () => ({ status: "rejected", code: "test" }), readback: async () => ({ status: "absent" }) };
+  const evidence = { authorize: async () => true };
+  const options = deployControlServiceOptions({
+    TAKOSUMI_RESOURCE_FORM_TRANSITION_HOST: host,
+    TAKOSUMI_RESOURCE_FORM_TRANSITION_EVIDENCE: evidence,
+  } as unknown as CloudflareWorkerEnv);
+  expect(options.resourceFormTransitionHost).toBe(host);
+  expect(options.resourceFormTransitionEvidence).toBe(evidence);
+  expect(() =>
+    deployControlServiceOptions({
+      TAKOSUMI_RESOURCE_FORM_TRANSITION_HOST: host,
+    } as unknown as CloudflareWorkerEnv)
+  ).toThrow("must be composed together");
+});
+
 test("legacy managed-provider headers cannot manufacture Capsule ownership", async () => {
   const resolver = platformResourceCapsuleOwnerResolver(
     {} as unknown as CloudflareWorkerEnv,
@@ -119,4 +138,55 @@ test("legacy managed-provider headers cannot manufacture Capsule ownership", asy
       name: "assets",
     }),
   ).resolves.toBeUndefined();
+});
+
+test("only the trusted internal Run bridge resolves exact Capsule ownership", async () => {
+  const resolver = platformResourceCapsuleOwnerResolver(
+    {} as unknown as CloudflareWorkerEnv,
+  );
+  const owner = {
+    kind: "Capsule",
+    id: "capsule_1",
+    workspaceId: "workspace_1",
+    installingPrincipalId: "principal_1",
+  } as const;
+  await expect(
+    resolver({
+      actor: {
+        actorAccountId: "principal_1",
+        workspaceId: "workspace_1",
+        roles: ["operator"],
+        requestId: "request_1",
+      },
+      request: new Request("https://app.takosumi.test/resources", {
+        headers: {
+          [TAKOSUMI_INTERNAL_RESOURCE_CAPSULE_OWNER_HEADER]:
+            JSON.stringify(owner),
+        },
+      }),
+      space: "workspace_1",
+      kind: "RelationalDatabase",
+      name: "database",
+    }),
+  ).resolves.toEqual(owner);
+
+  await expect(
+    resolver({
+      actor: {
+        actorAccountId: "principal_other",
+        workspaceId: "workspace_1",
+        roles: ["operator"],
+        requestId: "request_2",
+      },
+      request: new Request("https://app.takosumi.test/resources", {
+        headers: {
+          [TAKOSUMI_INTERNAL_RESOURCE_CAPSULE_OWNER_HEADER]:
+            JSON.stringify(owner),
+        },
+      }),
+      space: "workspace_1",
+      kind: "RelationalDatabase",
+      name: "database",
+    }),
+  ).rejects.toThrow("owner authority is invalid");
 });

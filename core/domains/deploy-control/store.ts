@@ -89,6 +89,12 @@ import type {
   JsonObject,
   JsonValue,
   NativeResourceRef,
+  ResourceCapsuleOwner,
+  ResourceManagedBy,
+  ResourcePhase,
+  ResourceShapeKind,
+  TakoformNativeIdentity,
+  TakoformResourceFormTransitionEvidence,
 } from "takosumi-contract";
 import {
   installedFormReferenceKey,
@@ -96,6 +102,10 @@ import {
 } from "takosumi-contract";
 import { currentRuntime } from "../../shared/runtime/index.ts";
 import { log } from "../../shared/log.ts";
+import type {
+  ResolutionLockRecord,
+  ResourceIdentityFenceRecord,
+} from "../resource-shape/records.ts";
 
 export interface CapsuleListPageParams extends PageParams {
   readonly includeDestroyed?: boolean;
@@ -507,7 +517,59 @@ export type ResourceOperationRun = Run & {
   readonly resourceOperationVersion: number;
   readonly resourceOperationResult?: ResourceOperationResultEvidence;
   readonly resourceOperationAudit?: ResourceOperationAuditEvidence;
+  /**
+   * Immutable, value-free canonical precondition snapshot for the separate
+   * exact-Form transition saga. It is recorded before host dispatch and is not
+   * accepted from the portable request.
+   */
+  readonly resourceFormTransition?: ResourceFormTransitionRunEvidence;
+  /**
+   * Durable one-way dispatch fence. Once present, neither retries nor generic
+   * recovery may invoke the transition host again; only exact readback may
+   * reconcile the outcome.
+   */
+  readonly resourceFormTransitionDispatch?: {
+    readonly status: "attempted";
+    readonly attemptedAt: string;
+  };
 };
+
+export interface ResourceFormTransitionRunEvidence {
+  readonly operationId: string;
+  readonly requestDigest: `sha256:${string}`;
+  readonly desiredSpecDigest: `sha256:${string}`;
+  readonly fromForm: InstalledFormReference;
+  readonly toForm: InstalledFormReference;
+  readonly transitionEvidence: TakoformResourceFormTransitionEvidence;
+  readonly expected: {
+    readonly resourceVersion: string;
+    readonly nativeIdentity?: TakoformNativeIdentity;
+  };
+  readonly resource: {
+    readonly id: string;
+    readonly workspaceId: string;
+    readonly kind: ResourceShapeKind;
+    readonly name: string;
+    readonly managedBy: ResourceManagedBy;
+    readonly owner: ResourceCapsuleOwner;
+    readonly phase: ResourcePhase;
+    readonly generation: number;
+    readonly revision: number;
+    readonly observedGeneration: number;
+    readonly createdAt: string;
+    readonly updatedAt: string;
+    readonly revisionId: string;
+  };
+  /** Predicted exact Resource CAS result used as the pre-dispatch claim. */
+  readonly claim: {
+    readonly updatedAt: string;
+    readonly revision: number;
+  };
+  /** Exact hidden desired-generation fence observed before host dispatch. */
+  readonly identityFence: ResourceIdentityFenceRecord | null;
+  /** Exact hidden lock/native evidence; never projected through public Run APIs. */
+  readonly resolutionLock: ResolutionLockRecord;
+}
 
 /** Internal restart-safe direct-adapter result; never projected publicly. */
 export interface ResourceOperationResultEvidence {
@@ -666,6 +728,12 @@ export interface OpenTofuControlStore {
   getResourceOperationRun(
     id: string,
   ): Promise<ResourceOperationRun | undefined>;
+  /** Exact transition lookup for operation readback; never a paginated scan. */
+  getResourceFormTransitionRun(input: {
+    readonly workspaceId: string;
+    readonly resourceId: string;
+    readonly operationId: string;
+  }): Promise<ResourceOperationRun | undefined>;
   /** Version- and status-fenced transition; terminal outcomes are never upserted. */
   transitionResourceOperationRun(
     input: TransitionResourceOperationRunInput,
@@ -1407,6 +1475,22 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     return Promise.resolve(
       run && isResourceOperationRun(run) ? run : undefined,
     );
+  }
+
+  getResourceFormTransitionRun(input: {
+    readonly workspaceId: string;
+    readonly resourceId: string;
+    readonly operationId: string;
+  }): Promise<ResourceOperationRun | undefined> {
+    const run = Array.from(this.#runs.values()).find(
+      (candidate): candidate is ResourceOperationRun =>
+        isResourceOperationRun(candidate) &&
+        candidate.resourceOperation === "form_transition" &&
+        candidate.workspaceId === input.workspaceId &&
+        candidate.subject.id === input.resourceId &&
+        candidate.resourceOperationKey === input.operationId,
+    );
+    return Promise.resolve(run);
   }
 
   transitionResourceOperationRun(
@@ -2931,6 +3015,14 @@ export function isResourceOperationRun(
       isInstalledFormReference(
         candidate.resourceOperationResult.resourceForm,
       )) &&
+    (candidate.resourceOperation !== "form_transition" ||
+      (isResourceFormTransitionRunEvidence(candidate.resourceFormTransition) &&
+        isResourceFormTransitionDispatch(
+          candidate.resourceFormTransitionDispatch,
+        ))) &&
+    (candidate.resourceOperation === "form_transition" ||
+      (candidate.resourceFormTransition === undefined &&
+        candidate.resourceFormTransitionDispatch === undefined)) &&
     resourceOperationRunType(candidate.resourceOperation) === candidate.type &&
     typeof candidate.resourceOperationKey === "string" &&
     candidate.resourceOperationKey.length > 0 &&
@@ -2948,6 +3040,12 @@ export function resourceOperationRunNeedsRecovery(
   // exact bytes and terminal artifact evidence have committed, however, the
   // ordinary Activity outbox repair no longer needs those bytes.
   if (run.resourceOperation === "artifact" && run.status === "running") {
+    return false;
+  }
+  // A Form transition may only continue through its exact public operation
+  // readback. The generic scheduler has no host-ledger proof authority and
+  // must never redispatch or infer this operation.
+  if (run.resourceOperation === "form_transition" && run.status === "running") {
     return false;
   }
   return (
@@ -2973,6 +3071,7 @@ export function assertResourceOperationRunStart(
     run.resourceOperationVersion !== 1 ||
     run.resourceOperationResult !== undefined ||
     run.resourceOperationAudit !== undefined ||
+    run.resourceFormTransitionDispatch !== undefined ||
     run.finishedAt !== undefined ||
     run.errorCode !== undefined
   ) {
@@ -2990,6 +3089,7 @@ function isResourceOperationToken(value: unknown): value is ResourceOperation {
     value === "import" ||
     value === "observe" ||
     value === "refresh" ||
+    value === "form_transition" ||
     value === "delete"
   );
 }
@@ -3016,7 +3116,51 @@ export function sameResourceOperationIdentity(
     optionalInstalledFormReferenceKey(left.resourceForm) ===
       optionalInstalledFormReferenceKey(right.resourceForm) &&
     left.resourceOperationKey === right.resourceOperationKey &&
+    canonicalStoreJson(left.resourceFormTransition) ===
+      canonicalStoreJson(right.resourceFormTransition) &&
     left.type === right.type
+  );
+}
+
+function isResourceFormTransitionRunEvidence(
+  value: unknown,
+): value is ResourceFormTransitionRunEvidence {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const evidence = value as Partial<ResourceFormTransitionRunEvidence>;
+  return (
+    typeof evidence.operationId === "string" &&
+    evidence.operationId.length > 0 &&
+    typeof evidence.requestDigest === "string" &&
+    typeof evidence.expected === "object" &&
+    evidence.expected !== null &&
+    typeof evidence.expected.resourceVersion === "string" &&
+    isInstalledFormReference(evidence.fromForm) &&
+    isInstalledFormReference(evidence.toForm) &&
+    typeof evidence.resource === "object" &&
+    evidence.resource !== null &&
+    typeof evidence.claim === "object" &&
+    evidence.claim !== null &&
+    typeof evidence.claim.updatedAt === "string" &&
+    Number.isSafeInteger(evidence.claim.revision) &&
+    (evidence.identityFence === null ||
+      (typeof evidence.identityFence === "object" &&
+        evidence.identityFence !== null)) &&
+    typeof evidence.resolutionLock === "object" &&
+    evidence.resolutionLock !== null
+  );
+}
+
+function isResourceFormTransitionDispatch(
+  value: ResourceOperationRun["resourceFormTransitionDispatch"],
+): boolean {
+  return (
+    value === undefined ||
+    (value.status === "attempted" &&
+      typeof value.attemptedAt === "string" &&
+      value.attemptedAt.length > 0 &&
+      value.attemptedAt === value.attemptedAt.trim())
   );
 }
 
@@ -3041,6 +3185,22 @@ export function resourceOperationRunTransitionAllowed(
     next.resourceOperationVersion !== current.resourceOperationVersion + 1 ||
     resourceOperationRunImmutableJson(current) !==
       resourceOperationRunImmutableJson(next)
+  ) {
+    return false;
+  }
+  if (
+    current.resourceFormTransitionDispatch !== undefined &&
+    canonicalStoreJson(current.resourceFormTransitionDispatch) !==
+      canonicalStoreJson(next.resourceFormTransitionDispatch)
+  ) {
+    return false;
+  }
+  if (
+    current.resourceFormTransitionDispatch === undefined &&
+    next.resourceFormTransitionDispatch !== undefined &&
+    (current.resourceOperation !== "form_transition" ||
+      current.status !== "running" ||
+      next.status !== "running")
   ) {
     return false;
   }
@@ -3096,6 +3256,7 @@ function resourceOperationRunImmutableJson(run: ResourceOperationRun): string {
     resourceOperationVersion: _version,
     resourceOperationResult: _result,
     resourceOperationAudit: _audit,
+    resourceFormTransitionDispatch: _transitionDispatch,
     finishedAt: _finishedAt,
     errorCode: _errorCode,
     ...immutable

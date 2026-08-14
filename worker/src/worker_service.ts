@@ -170,6 +170,9 @@ export async function createWorkerServiceApp(
     readonly resolveResourceCapsuleOwner?: CreateTakosumiServiceOptions["resolveResourceCapsuleOwner"];
     /** Cloud-hosted sealed material activation/retirement lifecycle. */
     readonly hostRuntimeResourceLifecycle?: CreateTakosumiServiceOptions["hostRuntimeResourceLifecycle"];
+    /** Exact same-native Form transition ports; both or neither must be set. */
+    readonly resourceFormTransitionHost?: CreateTakosumiServiceOptions["resourceFormTransitionHost"];
+    readonly resourceFormTransitionEvidence?: CreateTakosumiServiceOptions["resourceFormTransitionEvidence"];
   } = {},
 ): Promise<CreatedTakosumiService> {
   const runtimeEnv = cloudflareRuntimeEnv(env, role);
@@ -394,6 +397,15 @@ export async function createWorkerServiceApp(
       : {}),
     ...(options.hostRuntimeResourceLifecycle
       ? { hostRuntimeResourceLifecycle: options.hostRuntimeResourceLifecycle }
+      : {}),
+    ...(options.resourceFormTransitionHost
+      ? { resourceFormTransitionHost: options.resourceFormTransitionHost }
+      : {}),
+    ...(options.resourceFormTransitionEvidence
+      ? {
+          resourceFormTransitionEvidence:
+            options.resourceFormTransitionEvidence,
+        }
       : {}),
     ...(interfaceCredentialIssuer ? { interfaceCredentialIssuer } : {}),
     interfaceOAuth2ResourceAuthorizer,

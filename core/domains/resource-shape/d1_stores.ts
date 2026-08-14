@@ -58,6 +58,8 @@ import type {
   ResourceApplyBeginResult,
   ResourceApplyCommitInput,
   ResourceApplyCommitResult,
+  ResourceAggregateClaimInput,
+  ResourceAggregateClaimResult,
   ResourceAggregateReplaceInput,
   ResourceAggregateReplaceResult,
   ResourceAtomicRemoveInput,
@@ -82,6 +84,7 @@ import {
   assertAbortInput,
   assertAtomicRemoveInput,
   assertApplyPair,
+  assertResourceAggregateClaimInput,
   assertResourceAggregateReplaceInput,
   assertExpectedTargetPool,
   assertResourceIdentityFence,
@@ -937,6 +940,8 @@ export function createD1ResourceShapeStores(db: D1Like): ResourceShapeStores {
     deleteTargetPool: (input) => deleteD1TargetPool(db, input),
     beginApply: (input) => beginD1Apply(db, input),
     commitApply: (input) => commitD1Apply(db, input),
+    claimResourceAggregate: (input) =>
+      claimD1ResourceAggregate(db, input),
     replaceResourceAggregate: (input) =>
       replaceD1ResourceAggregate(db, input),
     abortApply: (input) => abortD1Apply(db, input),
@@ -1196,7 +1201,7 @@ async function beginD1Apply(
       current !== undefined &&
       currentLock !== undefined &&
       currentIdentityFence !== undefined &&
-      resourceRecordsEqualForApply(
+      resourceRecordsEqualAtRevision(
         current,
         input.applyingRecord,
         appliedRevision,
@@ -1301,12 +1306,98 @@ async function commitD1Apply(
   };
 }
 
+async function claimD1ResourceAggregate(
+  db: D1Like,
+  input: ResourceAggregateClaimInput,
+): Promise<ResourceAggregateClaimResult> {
+  assertResourceAggregateClaimInput(input);
+  const batch = requireD1Batch(db, "atomic Resource aggregate claim");
+  const expectedRevision =
+    input.expectedResource.revision ?? resourceRecordRevision(input.record);
+  const claimedRevision = expectedRevision + 1;
+  try {
+    await batch([
+      resourceAndLockGuardStatement(
+        db,
+        input.record.id,
+        { ...input.expectedResource, revision: expectedRevision },
+        input.expectedLock,
+      ),
+      resourceIdentityFenceGuardStatement(
+        db,
+        input.record.id,
+        input.expectedIdentityFence,
+      ),
+      resourceUpdateStatement(db, input.record),
+    ]);
+  } catch (error) {
+    const [current, currentLock, currentIdentityFence] = await Promise.all([
+      readD1Resource(db, input.record.id),
+      readD1Lock(db, input.record.id),
+      readD1ResourceIdentityFence(db, input.record.id),
+    ]);
+    if (
+      current &&
+      currentLock &&
+      resourceRecordsEqualAtRevision(
+        current,
+        input.record,
+        claimedRevision,
+      ) &&
+      matchesApplyLock(currentLock, input.expectedLock) &&
+      matchesExpectedResourceIdentityFence(
+        currentIdentityFence,
+        input.expectedIdentityFence,
+      )
+    ) {
+      // D1 may commit the batch and lose only its acknowledgement. The exact
+      // claimed row plus unchanged lock/fence is sufficient to recover that
+      // outcome without a second mutation.
+      return { status: "claimed", record: current };
+    }
+    if (!current && !currentLock) return { status: "not_found" };
+    if (
+      !current ||
+      !currentLock ||
+      !matchesVersion(current, {
+        ...input.expectedResource,
+        revision: expectedRevision,
+      }) ||
+      !matchesApplyLock(currentLock, input.expectedLock) ||
+      !matchesExpectedResourceIdentityFence(
+        currentIdentityFence,
+        input.expectedIdentityFence,
+      )
+    ) {
+      return {
+        status: "conflict",
+        ...(current ? { record: current } : {}),
+        ...(currentLock ? { lock: currentLock } : {}),
+        ...(currentIdentityFence
+          ? { identityFence: currentIdentityFence }
+          : {}),
+      };
+    }
+    throw error;
+  }
+  const record = await readD1Resource(db, input.record.id);
+  if (!record) return { status: "not_found" };
+  return { status: "claimed", record };
+}
+
 async function replaceD1ResourceAggregate(
   db: D1Like,
   input: ResourceAggregateReplaceInput,
 ): Promise<ResourceAggregateReplaceResult> {
   assertResourceAggregateReplaceInput(input);
   const batch = requireD1Batch(db, "atomic Resource aggregate replacement");
+  const consumedIdentityFence = input.identityFenceAdvance
+    ? consumeResourceIdentityFence(
+        input.record.id,
+        input.record.generation,
+        input.identityFenceAdvance.expected,
+      )
+    : undefined;
   try {
     await batch([
       resourceAndLockGuardStatement(
@@ -1315,20 +1406,40 @@ async function replaceD1ResourceAggregate(
         input.expectedResource,
         input.expectedLock,
       ),
+      ...(input.identityFenceAdvance
+        ? [
+            resourceIdentityFenceGuardStatement(
+              db,
+              input.record.id,
+              input.identityFenceAdvance.expected,
+            ),
+          ]
+        : []),
       lockUpsertStatement(db, input.lock),
       resourceUpdateStatement(db, input.record),
+      ...(consumedIdentityFence
+        ? [resourceIdentityFenceUpsertStatement(db, consumedIdentityFence)]
+        : []),
     ]);
   } catch (error) {
-    const [current, currentLock] = await Promise.all([
+    const [current, currentLock, currentIdentityFence] = await Promise.all([
       readD1Resource(db, input.record.id),
       readD1Lock(db, input.record.id),
+      input.identityFenceAdvance
+        ? readD1ResourceIdentityFence(db, input.record.id)
+        : Promise.resolve(undefined),
     ]);
     if (!current && !currentLock) return { status: "not_found" };
     if (
       !current ||
       !currentLock ||
       !matchesVersion(current, input.expectedResource) ||
-      !matchesApplyLock(currentLock, input.expectedLock)
+      !matchesApplyLock(currentLock, input.expectedLock) ||
+      (input.identityFenceAdvance !== undefined &&
+        !matchesExpectedResourceIdentityFence(
+          currentIdentityFence,
+          input.identityFenceAdvance.expected,
+        ))
     ) {
       return {
         status: "conflict",
@@ -1338,12 +1449,20 @@ async function replaceD1ResourceAggregate(
     }
     throw error;
   }
-  const [record, lock] = await Promise.all([
+  const [record, lock, identityFence] = await Promise.all([
     readD1Resource(db, input.record.id),
     readD1Lock(db, input.record.id),
+    consumedIdentityFence
+      ? readD1ResourceIdentityFence(db, input.record.id)
+      : Promise.resolve(undefined),
   ]);
   if (!record || !lock) return { status: "not_found" };
-  return { status: "replaced", record, lock };
+  return {
+    status: "replaced",
+    record,
+    lock,
+    ...(identityFence ? { identityFence } : {}),
+  };
 }
 
 async function abortD1Apply(
@@ -2446,14 +2565,14 @@ function expectedBeginResourceRevision(
     : currentRevision + 1;
 }
 
-function resourceRecordsEqualForApply(
+function resourceRecordsEqualAtRevision(
   current: ResourceShapeRecord,
-  applying: ResourceShapeRecord,
+  candidate: ResourceShapeRecord,
   expectedRevision: number,
 ): boolean {
   return (
     canonicalJson(current) ===
-    canonicalJson({ ...applying, revision: expectedRevision })
+    canonicalJson({ ...candidate, revision: expectedRevision })
   );
 }
 

@@ -114,6 +114,16 @@ bounded observation だけを実行します。flag を外すと observation も
 期間だけ、retained rowの観測batch/concurrency/interval/leaseを制御します。
 これらでResource/Formのdiscoveryやwriteを公開する手順はありません。
 
+例外となる frozen v1alpha1 maintenance lane は environment variable ではありません。
+composing Host の code が
+`TAKOSUMI_TAKOFORM_V1ALPHA1_COMPATIBILITY_HOST`、
+`TAKOSUMI_RESOURCE_FORM_TRANSITION_HOST`、
+`TAKOSUMI_RESOURCE_FORM_TRANSITION_EVIDENCE` を runtime object として同時に注入し、
+Run credential secret、deploy-control token、current Capsule/ProviderBinding/Connection/
+CredentialRecipe ledger を構成した場合だけ mount されます。文字列/JSON の Worker var、
+transition port 単体、legacy drain flag では有効になりません。詳細は
+[Takoform provider integration](./takoform-host.md) を参照してください。
+
 ## Run と runner
 
 | 変数 | 必須 | 既定値 | 決めること |

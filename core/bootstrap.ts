@@ -110,6 +110,7 @@ import {
   matchesVersion,
   ResourceFormPinInventoryService,
   ResourceFormPinOperations,
+  ResourceFormTransitionService,
   ResourceArtifactService,
   ResourceShapeService,
   type ResourceAdapter,
@@ -122,6 +123,8 @@ import {
   type ResourceRecordVersion,
   type ResourceShapeSchemaRegistry,
   type ResourceShapeStores,
+  type ResourceFormTransitionHost,
+  type ResourceFormTransitionEvidenceAuthority,
 } from "./domains/resource-shape/mod.ts";
 import { createSqlResourceShapeStores } from "./domains/resource-shape/sql_stores.ts";
 import {
@@ -660,6 +663,14 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
    * Omission keeps portable host discovery and mutation routes fail-closed.
    */
   readonly portableHostIdempotency?: PortableHostIdempotencyCoordinator;
+  /**
+   * Host composition that performs one same-native-resource Form transition
+   * and exposes exact operation-ledger readback. Core never supplies a
+   * backend-specific implementation.
+   */
+  readonly resourceFormTransitionHost?: ResourceFormTransitionHost;
+  /** Product/module evidence authority for explicitly allowed exact pairs. */
+  readonly resourceFormTransitionEvidence?: ResourceFormTransitionEvidenceAuthority;
   /**
    * Explicit host-owned Workspace -> Resource authorization-scope mapping used
    * for the redacted exact-Form backup sidecar and exact FormRef migration.
@@ -1899,6 +1910,27 @@ export async function createTakosumiService(
           : {}),
       })
     : undefined;
+  if (
+    Boolean(options.resourceFormTransitionHost) !==
+    Boolean(options.resourceFormTransitionEvidence)
+  ) {
+    throw new TypeError(
+      "Resource Form transition host and product/module evidence authority must be composed together",
+    );
+  }
+  const resourceFormTransition =
+    resourceShapeService &&
+    formRegistryService &&
+    options.resourceFormTransitionHost &&
+    options.resourceFormTransitionEvidence
+      ? new ResourceFormTransitionService({
+          stores: resourceShapeStores,
+          operations: sharedOpenTofuStore,
+          forms: formRegistryService,
+          evidence: options.resourceFormTransitionEvidence,
+          host: options.resourceFormTransitionHost,
+        })
+      : undefined;
   const workspaceViews = resourceShapeService
     ? new WorkspaceViewsService({
         controlStoreFactory:
@@ -2947,6 +2979,9 @@ export async function createTakosumiService(
                 portableHostIdempotency:
                   options.portableHostIdempotency,
               }
+            : {}),
+          ...(resourceFormTransition
+            ? { resourceFormTransition }
             : {}),
           ...(options.resolveResourceCapsuleOwner
             ? {

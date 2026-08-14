@@ -72,6 +72,8 @@ export type ResourceOperation =
   | "import"
   | "observe"
   | "refresh"
+  /** Explicit exact-Form identity transition; never a normal apply widening. */
+  | "form_transition"
   | "delete";
 
 /** Default page size for a Workspace Run listing when no limit is given. */

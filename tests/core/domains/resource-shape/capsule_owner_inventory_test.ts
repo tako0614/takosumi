@@ -348,5 +348,167 @@ for (const backend of backends) {
         resourceRecordRevision(persisted) + 1,
       );
     });
+
+    test("atomically claims a Resource only with its exact lock and identity fence", async () => {
+      const ready = {
+        ...resource({
+          name: "transition-claim",
+          phase: "Ready",
+          owner: capsuleOwner(),
+        }),
+        lastOperationRunId: "resource-run-transition-claim",
+      } satisfies ResourceShapeRecord;
+      const readyLock = {
+        resourceId: ready.id,
+        selectedImplementation: "test.edge-worker",
+        targetPool: "default",
+        target: "managed",
+        locked: true,
+        reason: ["test transition claim"],
+        nativeResources: [{ type: "edge.worker", id: "transition-claim" }],
+        lockedAt: CREATED_AT,
+        updatedAt: CREATED_AT,
+      } satisfies ResolutionLockRecord;
+      await stores.resources.upsert(ready);
+      await stores.locks.put(readyLock);
+      const persisted = await stores.resources.get(ready.id);
+      if (!persisted) throw new Error("seeded Resource disappeared");
+      const input = {
+        record: {
+          ...persisted,
+          pendingOperation: {
+            runId: "resource-form-transition:claim",
+            operation: "form_transition",
+            operationKey: "claim",
+            authority: "resource_claim",
+            identityFenceRevision: 0,
+          },
+          updatedAt: RECOVERED_AT,
+        },
+        expectedResource: {
+          generation: persisted.generation,
+          phase: persisted.phase,
+          updatedAt: persisted.updatedAt,
+          revision: resourceRecordRevision(persisted),
+        },
+        expectedLock: readyLock,
+        expectedIdentityFence: null,
+      } as const;
+
+      const first = await stores.claimResourceAggregate(input);
+      const second = await stores.claimResourceAggregate(input);
+      expect([first.status, second.status].sort()).toEqual([
+        "claimed",
+        "claimed",
+      ]);
+      const claimed = await stores.resources.get(ready.id);
+      expect(claimed?.pendingOperation).toMatchObject({
+        operation: "form_transition",
+        operationKey: "claim",
+      });
+      expect(resourceRecordRevision(claimed!)).toBe(
+        resourceRecordRevision(persisted) + 1,
+      );
+      expect(await stores.locks.get(ready.id)).toEqual(readyLock);
+
+      const drifted = {
+        ...resource({
+          name: "transition-claim-lock-drift",
+          phase: "Ready",
+          owner: capsuleOwner(),
+        }),
+        lastOperationRunId: "resource-run-transition-claim-drift",
+      } satisfies ResourceShapeRecord;
+      const oldLock = {
+        ...readyLock,
+        resourceId: drifted.id,
+        nativeResources: [
+          { type: "edge.worker", id: "transition-claim-lock-drift" },
+        ],
+      } satisfies ResolutionLockRecord;
+      await stores.resources.upsert(drifted);
+      await stores.locks.put({
+        ...oldLock,
+        reason: [...oldLock.reason, "concurrent drift"],
+      });
+      const driftPersisted = await stores.resources.get(drifted.id);
+      if (!driftPersisted) throw new Error("drift Resource disappeared");
+      expect(await stores.claimResourceAggregate({
+        record: {
+          ...driftPersisted,
+          pendingOperation: input.record.pendingOperation,
+          updatedAt: RECOVERED_AT,
+        },
+        expectedResource: {
+          generation: driftPersisted.generation,
+          phase: driftPersisted.phase,
+          updatedAt: driftPersisted.updatedAt,
+          revision: resourceRecordRevision(driftPersisted),
+        },
+        expectedLock: oldLock,
+        expectedIdentityFence: null,
+      })).toMatchObject({ status: "conflict" });
+      expect(
+        (await stores.resources.get(drifted.id))?.pendingOperation,
+      ).toBeUndefined();
+    });
+
+    test("atomically advances desired generation and the identity fence", async () => {
+      const ready = {
+        ...resource({
+          name: "generation-transition",
+          phase: "Ready",
+          owner: capsuleOwner(),
+        }),
+        lastOperationRunId: "resource-run-generation-1",
+      } satisfies ResourceShapeRecord;
+      const readyLock = {
+        resourceId: ready.id,
+        selectedImplementation: "test.edge-worker",
+        targetPool: "default",
+        target: "managed",
+        locked: true,
+        reason: ["test generation transition"],
+        nativeResources: [{ type: "edge.worker", id: "generation-transition" }],
+        lockedAt: CREATED_AT,
+        updatedAt: CREATED_AT,
+      } satisfies ResolutionLockRecord;
+      await stores.resources.upsert(ready);
+      await stores.locks.put(readyLock);
+      const persisted = await stores.resources.get(ready.id);
+      if (!persisted) throw new Error("seeded Resource disappeared");
+
+      const input = {
+        record: {
+          ...persisted,
+          spec: { name: ready.name, revision: 2 },
+          generation: 2,
+          observedGeneration: 2,
+          updatedAt: RECOVERED_AT,
+        },
+        lock: { ...readyLock, updatedAt: RECOVERED_AT },
+        expectedResource: {
+          generation: persisted.generation,
+          phase: persisted.phase,
+          updatedAt: persisted.updatedAt,
+          revision: resourceRecordRevision(persisted),
+        },
+        expectedLock: readyLock,
+        identityFenceAdvance: { expected: null },
+      } as const;
+      const winner = await stores.replaceResourceAggregate(input);
+      const loser = await stores.replaceResourceAggregate(input);
+      expect([winner.status, loser.status].sort()).toEqual([
+        "conflict",
+        "replaced",
+      ]);
+      const fence = await stores.getResourceIdentityFence(ready.id);
+      expect(fence).toMatchObject({
+        resourceId: ready.id,
+        lastGeneration: 2,
+        fenceRevision: 1,
+      });
+      expect((await stores.resources.get(ready.id))?.generation).toBe(2);
+    });
   });
 }

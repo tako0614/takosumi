@@ -58,6 +58,8 @@ import type {
   ResourceApplyBeginResult,
   ResourceApplyCommitInput,
   ResourceApplyCommitResult,
+  ResourceAggregateClaimInput,
+  ResourceAggregateClaimResult,
   ResourceAggregateReplaceInput,
   ResourceAggregateReplaceResult,
   ResourceAtomicRemoveInput,
@@ -82,6 +84,7 @@ import {
   assertAbortInput,
   assertAtomicRemoveInput,
   assertApplyPair,
+  assertResourceAggregateClaimInput,
   assertResourceAggregateReplaceInput,
   assertExpectedTargetPool,
   assertResourceIdentityFence,
@@ -89,6 +92,7 @@ import {
   assertTargetPoolDeleteInput,
   assertTargetPoolPutInput,
   matchesExpectedResourceIdentityFence,
+  matchesClaimedResource,
   matchesApplyLock,
   matchesExpectedTargetPool,
   matchesExpectedLock,
@@ -835,6 +839,8 @@ export function createSqlResourceShapeStores(
     deleteTargetPool: (input) => deleteSqlTargetPool(client, input),
     beginApply: (input) => beginSqlApply(client, input),
     commitApply: (input) => commitSqlApply(client, input),
+    claimResourceAggregate: (input) =>
+      claimSqlResourceAggregate(client, input),
     replaceResourceAggregate: (input) =>
       replaceSqlResourceAggregate(client, input),
     abortApply: (input) => abortSqlApply(client, input),
@@ -1176,12 +1182,14 @@ async function commitSqlApply(
   });
 }
 
-async function replaceSqlResourceAggregate(
+async function claimSqlResourceAggregate(
   client: SqlClient,
-  input: ResourceAggregateReplaceInput,
-): Promise<ResourceAggregateReplaceResult> {
-  assertResourceAggregateReplaceInput(input);
+  input: ResourceAggregateClaimInput,
+): Promise<ResourceAggregateClaimResult> {
+  assertResourceAggregateClaimInput(input);
   return await client.transaction(async (transaction) => {
+    // Preserve the Resource -> ResolutionLock -> identity-fence lock order
+    // shared by apply, abort, replace, and remove aggregate mutations.
     const current = await readSqlResource(
       transaction,
       input.record.id,
@@ -1192,17 +1200,41 @@ async function replaceSqlResourceAggregate(
       input.record.id,
       true,
     );
+    const currentIdentityFence = await readSqlIdentityFence(
+      transaction,
+      input.record.id,
+      true,
+    );
     if (!current && !currentLock) return { status: "not_found" };
+    if (
+      current &&
+      currentLock &&
+      matchesClaimedResource(current, input) &&
+      matchesApplyLock(currentLock, input.expectedLock) &&
+      matchesExpectedResourceIdentityFence(
+        currentIdentityFence,
+        input.expectedIdentityFence,
+      )
+    ) {
+      return { status: "claimed", record: current };
+    }
     if (
       !current ||
       !currentLock ||
       !matchesVersion(current, input.expectedResource) ||
-      !matchesApplyLock(currentLock, input.expectedLock)
+      !matchesApplyLock(currentLock, input.expectedLock) ||
+      !matchesExpectedResourceIdentityFence(
+        currentIdentityFence,
+        input.expectedIdentityFence,
+      )
     ) {
       return {
         status: "conflict",
         ...(current ? { record: current } : {}),
         ...(currentLock ? { lock: currentLock } : {}),
+        ...(currentIdentityFence
+          ? { identityFence: currentIdentityFence }
+          : {}),
       };
     }
     const updated = await updateSqlResource(
@@ -1212,18 +1244,102 @@ async function replaceSqlResourceAggregate(
     );
     if (updated.rowCount !== 1) {
       throw new Error(
-        `Resource ${input.record.id} changed inside aggregate replacement`,
+        `Resource ${input.record.id} changed inside aggregate claim`,
       );
     }
-    await transaction.query(
-      lockUpsertSql(names.resolutionLocks),
-      lockParameters(input.lock),
-    );
     const record = await readSqlResource(transaction, input.record.id);
-    const lock = await readSqlLock(transaction, input.record.id);
-    if (!record || !lock) return { status: "not_found" };
-    return { status: "replaced", record, lock };
+    return record
+      ? { status: "claimed", record }
+      : { status: "not_found" };
   });
+}
+
+async function replaceSqlResourceAggregate(
+  client: SqlClient,
+  input: ResourceAggregateReplaceInput,
+): Promise<ResourceAggregateReplaceResult> {
+  assertResourceAggregateReplaceInput(input);
+  try {
+    return await client.transaction(async (transaction) => {
+      const current = await readSqlResource(
+        transaction,
+        input.record.id,
+        true,
+      );
+      const currentLock = await readSqlLock(
+        transaction,
+        input.record.id,
+        true,
+      );
+      const currentIdentityFence = input.identityFenceAdvance
+        ? await readSqlIdentityFence(transaction, input.record.id, true)
+        : undefined;
+      if (!current && !currentLock) return { status: "not_found" };
+      if (
+        !current ||
+        !currentLock ||
+        !matchesVersion(current, input.expectedResource) ||
+        !matchesApplyLock(currentLock, input.expectedLock) ||
+        (input.identityFenceAdvance !== undefined &&
+          !matchesExpectedResourceIdentityFence(
+            currentIdentityFence,
+            input.identityFenceAdvance.expected,
+          ))
+      ) {
+        return {
+          status: "conflict",
+          ...(current ? { record: current } : {}),
+          ...(currentLock ? { lock: currentLock } : {}),
+        };
+      }
+      const updated = await updateSqlResource(
+        transaction,
+        input.record,
+        input.expectedResource,
+      );
+      if (updated.rowCount !== 1) {
+        throw new Error(
+          `Resource ${input.record.id} changed inside aggregate replacement`,
+        );
+      }
+      await transaction.query(
+        lockUpsertSql(names.resolutionLocks),
+        lockParameters(input.lock),
+      );
+      if (input.identityFenceAdvance) {
+        await consumeSqlIdentityFence(
+          transaction,
+          input.record.id,
+          input.record.generation,
+          input.identityFenceAdvance.expected,
+        );
+      }
+      const record = await readSqlResource(transaction, input.record.id);
+      const lock = await readSqlLock(transaction, input.record.id);
+      const identityFence = input.identityFenceAdvance
+        ? await readSqlIdentityFence(transaction, input.record.id)
+        : undefined;
+      if (!record || !lock) return { status: "not_found" };
+      return {
+        status: "replaced",
+        record,
+        lock,
+        ...(identityFence ? { identityFence } : {}),
+      };
+    });
+  } catch (error) {
+    if (!(error instanceof SqlIdentityFenceConflict)) throw error;
+    const [current, currentLock] = await Promise.all([
+      readSqlResource(client, input.record.id),
+      readSqlLock(client, input.record.id),
+    ]);
+    if (!current && !currentLock) return { status: "not_found" };
+    return {
+      status: "conflict",
+      ...(current ? { record: current } : {}),
+      ...(currentLock ? { lock: currentLock } : {}),
+    };
+  }
 }
 
 async function abortSqlApply(

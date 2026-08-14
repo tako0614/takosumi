@@ -1003,6 +1003,28 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     ]);
   }
 
+  async getResourceFormTransitionRun(input: {
+    readonly workspaceId: string;
+    readonly resourceId: string;
+    readonly operationId: string;
+  }): Promise<ResourceOperationRun | undefined> {
+    const rows = await this.#drizzleManyJson<ResourceOperationRun>(
+      schema.runs,
+      schema.runs.runJson,
+      {
+        where: and(
+          eq(schema.runs.type, RUN_KIND_RESOURCE_OPERATION),
+          eq(schema.runs.workspaceId, input.workspaceId),
+          sql`json_extract(${schema.runs.runJson}, '$.resourceOperation') = 'form_transition'`,
+          sql`json_extract(${schema.runs.runJson}, '$.subject.id') = ${input.resourceId}`,
+          sql`json_extract(${schema.runs.runJson}, '$.resourceOperationKey') = ${input.operationId}`,
+        ),
+        limit: 1,
+      },
+    );
+    return rows[0];
+  }
+
   async transitionResourceOperationRun(
     input: TransitionResourceOperationRunInput,
   ): Promise<TransitionResourceOperationRunResult> {
@@ -1061,7 +1083,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
           or(
             and(
               eq(schema.runs.status, "running"),
-              sql`json_extract(${schema.runs.runJson}, '$.resourceOperation') <> 'artifact'`,
+              sql`json_extract(${schema.runs.runJson}, '$.resourceOperation') NOT IN ('artifact', 'form_transition')`,
             ),
             sql`json_extract(${schema.runs.runJson}, '$.resourceOperationAudit.status') = 'pending'`,
           ),
