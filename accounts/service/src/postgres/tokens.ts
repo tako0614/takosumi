@@ -192,16 +192,17 @@ function personalAccessTokenSelection() {
 const PERSONAL_ACCESS_TOKEN_INVENTORY_PAGE_SQL = `with
   subject_tokens as (
     select token_id, token_prefix, subject, name, scopes, workspace_id,
-           created_at, expires_at, revoked_at, last_used_at
+           created_at, expires_at, revoked_at, last_used_at,
+           date_trunc('milliseconds', created_at) as cursor_created_at
       from accounts_v1.personal_access_tokens
      where subject = $1
   ),
   cursor_anchor as (
-    select created_at, token_id
+    select cursor_created_at, token_id
       from subject_tokens
      where $2::boolean
        and token_id = $4
-       and date_trunc('milliseconds', created_at) = $3::timestamptz
+       and cursor_created_at = $3::timestamptz
   ),
   cursor_state as (
     select case when not $2::boolean then 0::bigint else (
@@ -211,13 +212,13 @@ const PERSONAL_ACCESS_TOKEN_INVENTORY_PAGE_SQL = `with
   page as (
     select * from subject_tokens
      where not $2::boolean
-        or created_at > coalesce(
-          (select created_at from cursor_anchor),
+        or cursor_created_at > coalesce(
+          (select cursor_created_at from cursor_anchor),
           $3::timestamptz
         )
         or (
-          created_at = coalesce(
-            (select created_at from cursor_anchor),
+          cursor_created_at = coalesce(
+            (select cursor_created_at from cursor_anchor),
             $3::timestamptz
           )
           and token_id > coalesce(
@@ -225,7 +226,7 @@ const PERSONAL_ACCESS_TOKEN_INVENTORY_PAGE_SQL = `with
             $4
           )
         )
-     order by created_at asc, token_id asc
+     order by cursor_created_at asc, token_id asc
      limit $5
   )
 select 0 as row_kind,
@@ -252,7 +253,7 @@ select 1 as row_kind,
        page.name,
        page.scopes,
        page.workspace_id,
-       page.created_at,
+       page.cursor_created_at as created_at,
        page.expires_at,
        page.revoked_at,
        page.last_used_at

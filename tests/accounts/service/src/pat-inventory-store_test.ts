@@ -3,6 +3,7 @@ import { PGlite } from "@electric-sql/pglite";
 
 import {
   type AccountsStore,
+  createAccountsHandler,
   D1AccountsStore,
   InMemoryAccountsStore,
   PostgresAccountsStore,
@@ -23,6 +24,8 @@ import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts"
 const SUBJECT = "tsub_pat_inventory" as const;
 const OTHER_SUBJECT = "tsub_pat_inventory_other" as const;
 const MICROSECOND_SUBJECT = "tsub_pat_inventory_microseconds" as const;
+const MICROSECOND_SESSION_ID = "sess_pat_inventory_microseconds";
+const ORIGIN = "https://accounts.example.test";
 const TOKENS = [
   {
     secret: "takpat_inventory_secret_a",
@@ -134,7 +137,7 @@ test("Postgres PAT inventory has memory parity in one statement", async () => {
   await db.close();
 });
 
-test("Postgres accepts its own cursor for microsecond PAT timestamps", async () => {
+test("Postgres serves canonical pages for reverse-lexical microsecond timestamps", async () => {
   const db = new PGlite();
   await db.exec(`
     create schema accounts_v1;
@@ -161,59 +164,95 @@ test("Postgres accepts its own cursor for microsecond PAT timestamps", async () 
       workspace_id, created_at, expires_at, revoked_at, last_used_at
     ) values
       (
-        'pat_inventory_microsecond_a', 'sha256:microsecond-a', 'takpat_micro_a',
-        '${MICROSECOND_SUBJECT}', 'Microsecond A', array['read']::text[], null,
+        'pat_inventory_microsecond_z_early', 'sha256:microsecond-z',
+        'takpat_micro_z', '${MICROSECOND_SUBJECT}', 'Microsecond Z early',
+        array['read']::text[], null,
         '2026-01-01T00:00:00.000100Z', null, null, null
       ),
       (
-        'pat_inventory_microsecond_b', 'sha256:microsecond-b', 'takpat_micro_b',
-        '${MICROSECOND_SUBJECT}', 'Microsecond B', array['read']::text[], null,
+        'pat_inventory_microsecond_a_late', 'sha256:microsecond-a',
+        'takpat_micro_a', '${MICROSECOND_SUBJECT}', 'Microsecond A late',
+        array['read']::text[], null,
         '2026-01-01T00:00:00.000900Z', null, null, null
       );
   `);
   const client = new CountingPostgresClient(db);
-  const store = new PostgresAccountsStore(client);
-
-  const first = await store.listPersonalAccessTokenInventoryPage({
+  const postgresStore = new PostgresAccountsStore(client);
+  const sessionStore = new InMemoryAccountsStore();
+  sessionStore.saveAccount({
     subject: MICROSECOND_SUBJECT,
-    limit: 1,
+    createdAt: 1,
+    updatedAt: 1,
   });
-  expect(first.items.map((token) => token.tokenId)).toEqual([
-    "pat_inventory_microsecond_a",
-    "pat_inventory_microsecond_b",
-  ]);
-  expect(first.items.map((token) => token.createdAt)).toEqual([
-    Date.parse("2026-01-01T00:00:00.000Z"),
-    Date.parse("2026-01-01T00:00:00.000Z"),
-  ]);
+  sessionStore.saveAccountSession({
+    sessionId: MICROSECOND_SESSION_ID,
+    subject: MICROSECOND_SUBJECT,
+    createdAt: 1,
+    expiresAt: Date.now() + 60_000,
+  });
+  const routeStore = new Proxy<AccountsStore>(sessionStore, {
+    get(target, property) {
+      if (property === "listPersonalAccessTokenInventoryPage") {
+        return postgresStore.listPersonalAccessTokenInventoryPage.bind(
+          postgresStore,
+        );
+      }
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  const handler = createAccountsHandler({ issuer: ORIGIN, store: routeStore });
+
+  const firstResponse = await handler(
+    new Request(`${ORIGIN}/v1/account/tokens/inventory.v1?limit=1`, {
+      headers: { authorization: `Bearer ${MICROSECOND_SESSION_ID}` },
+    }),
+  );
+  expect(firstResponse.status).toBe(200);
+  const first = await firstResponse.json();
+  expect(first.tokens.map((token: { token_id: string }) => token.token_id))
+    .toEqual(["pat_inventory_microsecond_a_late"]);
+  expect(first.tokens[0]?.created_at).toBe("2026-01-01T00:00:00.000Z");
   expect(first.total).toBe(2);
-  expect(first.cursorValid).toBe(true);
-  const serverCursor = {
-    createdAt: first.items[0]!.createdAt,
-    tokenId: first.items[0]!.tokenId,
-  };
+  expect(first.returned).toBe(1);
+  expect(first.truncated).toBe(true);
+  expect(first.next_cursor).toEqual(expect.any(String));
 
-  const second = await store.listPersonalAccessTokenInventoryPage({
-    subject: MICROSECOND_SUBJECT,
-    limit: 1,
-    cursor: serverCursor,
-  });
-  expect(second.cursorValid).toBe(true);
+  const secondResponse = await handler(
+    new Request(
+      `${ORIGIN}/v1/account/tokens/inventory.v1?limit=1&cursor=${
+        encodeURIComponent(first.next_cursor)
+      }`,
+      { headers: { authorization: `Bearer ${MICROSECOND_SESSION_ID}` } },
+    ),
+  );
+  expect(secondResponse.status).toBe(200);
+  const second = await secondResponse.json();
+  expect(second.tokens.map((token: { token_id: string }) => token.token_id))
+    .toEqual(["pat_inventory_microsecond_z_early"]);
+  expect(second.total).toBe(2);
+  expect(second.returned).toBe(1);
+  expect(second.truncated).toBe(false);
+  expect(second.next_cursor).toBeNull();
   expect([
-    first.items[0]!.tokenId,
-    ...second.items.map((token) => token.tokenId),
+    ...first.tokens.map((token: { token_id: string }) => token.token_id),
+    ...second.tokens.map((token: { token_id: string }) => token.token_id),
   ]).toEqual([
-    "pat_inventory_microsecond_a",
-    "pat_inventory_microsecond_b",
+    "pat_inventory_microsecond_a_late",
+    "pat_inventory_microsecond_z_early",
   ]);
 
-  const missing = await store.listPersonalAccessTokenInventoryPage({
+  const serverCursor = {
+    createdAt: Date.parse("2026-01-01T00:00:00.000Z"),
+    tokenId: "pat_inventory_microsecond_a_late",
+  };
+  const missing = await postgresStore.listPersonalAccessTokenInventoryPage({
     subject: MICROSECOND_SUBJECT,
     limit: 1,
     cursor: { ...serverCursor, tokenId: "pat_inventory_microsecond_missing" },
   });
   expect(missing.cursorValid).toBe(false);
-  const mismatchedTimestamp = await store
+  const mismatchedTimestamp = await postgresStore
     .listPersonalAccessTokenInventoryPage({
       subject: MICROSECOND_SUBJECT,
       limit: 1,
@@ -221,7 +260,7 @@ test("Postgres accepts its own cursor for microsecond PAT timestamps", async () 
     });
   expect(mismatchedTimestamp.cursorValid).toBe(false);
   await expect(
-    store.listPersonalAccessTokenInventoryPage({
+    postgresStore.listPersonalAccessTokenInventoryPage({
       subject: MICROSECOND_SUBJECT,
       limit: 1,
       cursor: { ...serverCursor, tokenId: "" },
