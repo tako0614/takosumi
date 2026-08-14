@@ -31,8 +31,6 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.publicSource": "Public repository",
   "installStore.add": "Add",
   "installStore.preparing": "Preparing your service",
-  "installStore.preparingHint":
-    "Checking the repository and gathering only the connections and changes it needs.",
   "installStore.preparingWorkspace": "Confirming the selected workspace.",
   "installStore.preparingConnections": "Reading available connections.",
   "installStore.preparingSource": "Fetching the repository snapshot.",
