@@ -658,7 +658,8 @@ test("container runner maps finite plan failures to non-retryable execution erro
         status: "failed",
         errorCode: "provider_package_unavailable",
         phase: "plan",
-        stderr: "token=must-not-escape",
+        stderr:
+          "Error: provider request failed for token=must-not-escape at main.tf:42",
       },
       undefined,
       500,
@@ -683,6 +684,15 @@ test("container runner maps finite plan failures to non-retryable execution erro
     "runner request failed (provider_package_unavailable)",
   );
   expect((error as Error).message).not.toContain("must-not-escape");
+  expect((error as OpenTofuRunnerExecutionError).detail).toContain(
+    "Error: provider request failed",
+  );
+  expect((error as OpenTofuRunnerExecutionError).detail).toContain(
+    "[redacted]",
+  );
+  expect((error as OpenTofuRunnerExecutionError).detail).not.toContain(
+    "must-not-escape",
+  );
 });
 
 test("container runner reads Capsule compatibility source files", async () => {

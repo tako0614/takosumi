@@ -78,6 +78,7 @@ const RUNNER_PROVIDER_FAILURE_CODES = new Set([
   "apply_failed",
   RUNNER_PROVIDER_EXECUTION_FAILED_CODE,
 ]);
+const MAX_RUNNER_EXECUTION_DETAIL_CHARS = 4_096;
 const RUNNER_STARTUP_SECONDS_HEADER = "x-takosumi-runner-startup-seconds";
 type ContainerRunnerAction =
   | OpenTofuRunAction
@@ -761,7 +762,11 @@ function runnerErrorFromUnknown(error: unknown): Error {
     const reason = finiteRunnerReason(error.reason, RUNNER_REJECTED_CODE);
     return new OpenTofuRunnerExecutionError(
       runnerFailureMessage(reason),
-      { reason, originalError: error },
+      {
+        reason,
+        ...(error.detail ? { detail: error.detail } : {}),
+        originalError: error,
+      },
     );
   }
   if (error instanceof OpenTofuRunnerInfrastructureError) {
@@ -859,8 +864,10 @@ function runnerExecutionErrorFromPayload(
 ): OpenTofuRunnerExecutionError | undefined {
   const errorCode = stringFromRecord(payload, "errorCode");
   if (errorCode && RUNNER_PLAN_EXECUTION_FAILURE_CODES.has(errorCode)) {
+    const detail = runnerExecutionDetailFromPayload(payload);
     return new OpenTofuRunnerExecutionError(runnerFailureMessage(errorCode), {
       reason: errorCode,
+      ...(detail ? { detail } : {}),
     });
   }
   if (
@@ -875,6 +882,23 @@ function runnerExecutionErrorFromPayload(
     );
   }
   return undefined;
+}
+
+function runnerExecutionDetailFromPayload(
+  payload: Record<string, unknown>,
+): string | undefined {
+  const detail = [
+    stringFromRecord(payload, "stderr"),
+    stringFromRecord(payload, "stdout"),
+  ]
+    .filter((value): value is string => Boolean(value))
+    .join("\n")
+    .trim();
+  if (!detail) return undefined;
+  return tailText(
+    redactRunnerDiagnosticText(detail),
+    MAX_RUNNER_EXECUTION_DETAIL_CHARS,
+  );
 }
 
 function compatibilityCheckTimeoutMs(env: CloudflareWorkerEnv): number {
