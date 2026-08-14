@@ -40,11 +40,19 @@ describe("single-screen install surface", () => {
   test("preparation is bounded, names its current stage, and can be cancelled", () => {
     const view = read("dashboard/src/views/new/InstallView.tsx");
     expect(view).toContain("INSTALL_PREPARATION_TIMEOUT_MS");
+    expect(view).toContain("const preparationTimeout = setTimeout(");
+    expect(view).toContain("preparationTimedOut = true;");
     expect(view).toContain("timeoutMs: INSTALL_PREPARATION_TIMEOUT_MS");
+    expect(view).toContain("loadConnections(workspace, controller.signal)");
+    expect(view).toContain("listConnectionsWithSignal(workspace, signal)");
+    expect(view).toContain(
+      "listProviderConnectionsWithSignal(workspace, signal)",
+    );
     expect(view).toContain("onSourceSyncProgress:");
     expect(view).toContain("onSourceSnapshot:");
     expect(view).toContain("preparationStageHint()");
     expect(view).toContain("activePreparationController?.abort()");
+    expect(view).toContain("clearTimeout(preparationTimeout)");
     expect(view).toContain('t("common.cancel")');
   });
 
@@ -66,7 +74,20 @@ describe("single-screen install surface", () => {
     expect(view).toContain('throw new Error(t("workspace.selectMessage"));');
     expect(view).not.toContain('phase() !== "configure" && connectionsLoaded()');
     expect(view).toContain("const prepareInstall = async () =>");
-    expect(view).toContain("const providers = await loadConnections(workspace);");
+    expect(view).toContain(
+      "const providers = await loadConnections(workspace, controller.signal);",
+    );
+  });
+
+  test("validates persisted Workspace selection before scoped connection reads", () => {
+    const view = read("dashboard/src/views/new/InstallView.tsx");
+    const ensureStart = view.indexOf("const ensureWorkspace = async");
+    const ensureEnd = view.indexOf("const loadConnections = async", ensureStart);
+    const ensureSource = view.slice(ensureStart, ensureEnd);
+    expect(ensureSource).toContain("const workspaces = await listWorkspacesCached()");
+    expect(ensureSource).toContain("selectAvailableWorkspaceId(");
+    expect(ensureSource).toContain("currentWorkspaceId(),");
+    expect(ensureSource).not.toContain("if (workspaceId()) {");
   });
 
   test("only ready compatibility can reach Capsule creation", () => {

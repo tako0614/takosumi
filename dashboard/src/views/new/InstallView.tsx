@@ -40,8 +40,8 @@ import {
   createWorkspace,
   extractRunId,
   getInstallConfig,
-  listConnections,
-  listProviderConnections,
+  listConnectionsWithSignal,
+  listProviderConnectionsWithSignal,
   planCapsule,
   putCapsuleProviderBindingSet,
   readSourceSnapshotFile,
@@ -541,18 +541,6 @@ function Inner(props: { readonly installingPrincipalId: string }) {
   };
 
   const ensureWorkspace = async (): Promise<string> => {
-    const selected = currentWorkspaceId();
-    if (selected && selected !== workspaceId()) setWorkspaceId(selected);
-    if (workspaceId()) {
-      if (!workspaceHandle()) {
-        const workspaces = await listWorkspacesCached();
-        setWorkspaceHandle(
-          workspaces.find((workspace) => workspace.id === workspaceId())
-            ?.handle,
-        );
-      }
-      return workspaceId();
-    }
     const workspaces = await listWorkspacesCached();
     const existing = selectAvailableWorkspaceId(
       currentWorkspaceId(),
@@ -579,10 +567,10 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     return workspace.id;
   };
 
-  const loadConnections = async (workspace: string) => {
+  const loadConnections = async (workspace: string, signal: AbortSignal) => {
     const [all, providers] = await Promise.all([
-      listConnections(workspace),
-      listProviderConnections(workspace),
+      listConnectionsWithSignal(workspace, signal),
+      listProviderConnectionsWithSignal(workspace, signal),
     ]);
     if (currentWorkspaceId() === workspace || workspaceId() === workspace) {
       setSourceConnections(all);
@@ -697,6 +685,11 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     // the requested operation, never to the button's enabled state.
     activePreparationController?.abort();
     const controller = new AbortController();
+    let preparationTimedOut = false;
+    const preparationTimeout = setTimeout(() => {
+      preparationTimedOut = true;
+      controller.abort();
+    }, INSTALL_PREPARATION_TIMEOUT_MS);
     activePreparationController = controller;
     setPreparationController(() => controller);
     setPreparationStage("workspace");
@@ -706,12 +699,18 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     try {
       const workspace = await ensureWorkspace();
       if (controller.signal.aborted || !workspaceIsCurrent(workspace)) {
+        setError(
+          preparationTimedOut ? t("installStore.preparingTimeout") : undefined,
+        );
         setPhase("configure");
         return;
       }
       setPreparationStage("connections");
-      const providers = await loadConnections(workspace);
+      const providers = await loadConnections(workspace, controller.signal);
       if (controller.signal.aborted || !workspaceIsCurrent(workspace)) {
+        setError(
+          preparationTimedOut ? t("installStore.preparingTimeout") : undefined,
+        );
         setPhase("configure");
         return;
       }
@@ -821,7 +820,9 @@ function Inner(props: { readonly installingPrincipalId: string }) {
       }
     } catch (cause) {
       if (controller.signal.aborted) {
-        setError(undefined);
+        setError(
+          preparationTimedOut ? t("installStore.preparingTimeout") : undefined,
+        );
       } else if (
         cause instanceof ControlApiError &&
         cause.code === "request_timeout"
@@ -832,6 +833,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
       }
       setPhase("configure");
     } finally {
+      clearTimeout(preparationTimeout);
       if (activePreparationController === controller) {
         activePreparationController = undefined;
         setPreparationController(undefined);

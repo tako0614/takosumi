@@ -350,7 +350,7 @@ test("binding digest ignores verification progress but pins run-issuance authori
   );
 });
 
-test("provider connection listing exposes only workspace-bindable operator connections in operator mode", async () => {
+test("provider connection listing ignores durable operator rows in favor of release-owned projections", async () => {
   const { store, model, service } = await setup();
   await store.putConnection(
     connection({ id: "conn_space_cf", workspaceId: model.workspace.id }),
@@ -401,7 +401,58 @@ test("provider connection listing exposes only workspace-bindable operator conne
     (await cloudService.listProviderConnections(model.workspace.id)).map(
       (row) => row.id,
     ),
-  ).toEqual(["conn_space_cf", "conn_operator_compat"]);
+  ).toEqual(["conn_space_cf"]);
+});
+
+test("release-owned operator connections are listed and resolved without durable operator rows", async () => {
+  const { store, model } = await setup();
+  const fixed = connection({
+    id: "conn_release_owned",
+    status: "verified",
+    materialization: "run-issued",
+    credentialRecipe: {
+      id: "operator-run-credential",
+      authMode: "broker",
+      runIssuance: {
+        context: "capsule-run.v1",
+        operatorConnection: "workspace-bindable",
+        storedMaterial: "none",
+        audience: "extension.example.v1",
+        scopes: ["extension:invoke"],
+      },
+    },
+  });
+  let durableOperatorListReads = 0;
+  const originalList = store.listOperatorConnections.bind(store);
+  store.listOperatorConnections = async () => {
+    durableOperatorListReads += 1;
+    return await originalList();
+  };
+  await store.putProviderBindingSet({
+    id: "dp_release_owned",
+    workspaceId: model.workspace.id,
+    capsuleId: model.capsule.id,
+    environment: model.capsule.environment,
+    bindings: [{ provider: CLOUDFLARE, connectionId: fixed.id }],
+    createdAt: NOW,
+    updatedAt: NOW,
+  });
+
+  const service = new ConnectionsService({
+    store,
+    operatorProviderConnections: [fixed],
+    allowOperatorScopedProviderConnections: true,
+  });
+  expect(
+    (await service.listProviderConnections(model.workspace.id)).map(
+      (row) => row.id,
+    ),
+  ).toEqual([fixed.id]);
+  expect((await service.getProviderConnection(fixed.id)).id).toBe(fixed.id);
+  expect((await service.resolveProviderBindings(model.capsule))[0]?.connection)
+    .toEqual(fixed);
+  expect(await store.getConnection(fixed.id)).toBeUndefined();
+  expect(durableOperatorListReads).toBe(0);
 });
 
 test("oauth ProviderConnection binding carries the oauth materialization", async () => {

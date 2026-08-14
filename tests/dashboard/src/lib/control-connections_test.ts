@@ -2,7 +2,9 @@ import { afterEach, describe, expect, test } from "bun:test";
 import {
   getCapsuleProviderBindingSet,
   listConnections,
+  listConnectionsWithSignal,
   listProviderConnections,
+  listProviderConnectionsWithSignal,
   putCapsuleProviderBindingSet,
 } from "../../../../dashboard/src/lib/control-api.ts";
 
@@ -53,6 +55,35 @@ describe("connection list clients", () => {
       "/api/v1/connections?workspaceId=space_1",
       "/api/v1/provider-connections?workspaceId=space_1",
     ]);
+  });
+
+  test("propagate cancellation to both connection discovery requests", async () => {
+    const signals: AbortSignal[] = [];
+    globalThis.fetch = ((_input: RequestInfo | URL, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal;
+        if (!signal) {
+          reject(new Error("connection discovery omitted its AbortSignal"));
+          return;
+        }
+        signals.push(signal);
+        signal.addEventListener(
+          "abort",
+          () => reject(new DOMException("aborted", "AbortError")),
+          { once: true },
+        );
+      })) as typeof fetch;
+
+    const controller = new AbortController();
+    const pending = Promise.all([
+      listConnectionsWithSignal("space_1", controller.signal),
+      listProviderConnectionsWithSignal("space_1", controller.signal),
+    ]);
+    await Promise.resolve();
+    controller.abort();
+
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    expect(signals).toEqual([controller.signal, controller.signal]);
   });
 });
 

@@ -2818,22 +2818,39 @@ function normalizedWorkspaceId(value: string): string {
 export async function listConnections(
   workspaceId: string,
 ): Promise<readonly ProviderConnection[]> {
+  return await listConnectionsWithSignal(workspaceId);
+}
+
+export async function listConnectionsWithSignal(
+  workspaceId: string,
+  signal?: AbortSignal,
+): Promise<readonly ProviderConnection[]> {
   const normalized = normalizedWorkspaceId(workspaceId);
   if (!normalized) return [];
   return await fetchAllPages<ProviderConnection>(
     `${BASE}/connections${query({ workspaceId: normalized })}`,
     (body) => (body.connections as readonly ProviderConnection[]) ?? [],
+    { signal },
   );
 }
 
 export async function listProviderConnections(
   workspaceId: string,
 ): Promise<readonly ProviderConnection[]> {
+  return await listProviderConnectionsWithSignal(workspaceId);
+}
+
+export async function listProviderConnectionsWithSignal(
+  workspaceId: string,
+  signal?: AbortSignal,
+): Promise<readonly ProviderConnection[]> {
   const normalized = normalizedWorkspaceId(workspaceId);
   if (!normalized) return [];
   const body = await controlFetch<{
     providerConnections?: readonly ProviderConnection[];
-  }>(`${BASE}/provider-connections${query({ workspaceId: normalized })}`);
+  }>(`${BASE}/provider-connections${query({ workspaceId: normalized })}`, {
+    signal,
+  });
   return body.providerConnections ?? [];
 }
 
