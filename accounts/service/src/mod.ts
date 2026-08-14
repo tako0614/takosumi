@@ -130,7 +130,10 @@ export type {
   RunGroupWithRunsLike,
 } from "./control-routes.ts";
 export { handleAuthenticatedControlRoute } from "./control-routes.ts";
-export type { LoginEmailAllowlist } from "./login-email-allowlist.ts";
+export {
+  rejectDisallowedPresentedSession,
+  type LoginEmailAllowlist,
+} from "./login-email-allowlist.ts";
 export type {
   PatWorkspaceMembership,
   PatWorkspaceMembershipReader,

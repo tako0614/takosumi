@@ -16,6 +16,7 @@ import {
   type JsonWebKeySet,
   type OidcClientAuthMethod,
   type OidcClientRegistration,
+  rejectDisallowedPresentedSession,
   registerSessionHashSaltConfig,
   type PasskeyHttpOptions,
   type PatWorkspaceMembershipReader,
@@ -302,6 +303,42 @@ export function parseLoginEmailAllowlist(
         env.TAKOSUMI_ACCOUNTS_LOGIN_EMAIL_ALLOWLIST_REQUIRE_VERIFIED,
       ) ?? true,
   };
+}
+
+/**
+ * Apply the Cloudflare deployment's login-email policy to one credential that
+ * the caller has already classified as an Accounts browser session.
+ *
+ * The caller owns credential extraction and precedence. In particular, it
+ * must not pass a PAT or OAuth access token through this session-only port.
+ * Invalid configuration or storage evidence rejects the promise and is a
+ * terminal enforcement failure; callers must never continue bootstrap work
+ * after such a rejection.
+ */
+export async function rejectDisallowedCloudflarePresentedSession(input: {
+  readonly request: Request;
+  readonly env: CloudflareWorkerEnv;
+  readonly sessionCredential: string | null;
+}): Promise<Response | undefined> {
+  const allowlist = parseLoginEmailAllowlist(
+    input.env,
+    new URL(input.request.url).origin,
+  );
+  if (!allowlist || !input.sessionCredential) return undefined;
+  if (!input.env.TAKOSUMI_ACCOUNTS_DB) {
+    throw new TypeError("TAKOSUMI_ACCOUNTS_DB D1 binding is required");
+  }
+  configureSessionHashSalt(input.env);
+  const store = new D1AccountsStore(input.env.TAKOSUMI_ACCOUNTS_DB, {
+    schemaMode: "predeployed",
+  });
+  return await rejectDisallowedPresentedSession({
+    request: input.request,
+    store,
+    credential: input.sessionCredential,
+    allowlist,
+    secureCookie: true,
+  });
 }
 
 /**

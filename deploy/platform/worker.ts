@@ -20,6 +20,7 @@ import {
   accountsExternalLoginConfigured,
   configuredTakosumiMobileOidcClientId,
   createCloudflareWorker,
+  rejectDisallowedCloudflarePresentedSession,
 } from "../accounts-cloudflare/src/handler.ts";
 import {
   D1AccountsStore,
@@ -229,6 +230,7 @@ export {
   LocalSubstrateOpenTofuRunnerProxyObject,
   OpenTofuRunOwnerObject,
   OpenTofuRunnerObject,
+  rejectDisallowedCloudflarePresentedSession,
 };
 export type {
   RuntimeCapability,
