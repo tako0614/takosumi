@@ -18,6 +18,26 @@ import { parseControlPageParams } from "./shared.ts";
 
 const ACCOUNT_WORKSPACE_INVENTORY_PATH = "workspaces.v1";
 
+/** The exact public path for the account-wide Workspace inventory projection. */
+export const ACCOUNT_WORKSPACE_INVENTORY_ROUTE =
+  "/api/v1/views/workspaces.v1";
+
+const ACCOUNT_WORKSPACE_INVENTORY_FORBIDDEN_MESSAGE =
+  "A Workspace-scoped credential cannot read the account Workspace inventory.";
+
+/**
+ * Returns the canonical scope error for the inventory route. The dispatcher
+ * uses this before resolving Control operations; the handler repeats the same
+ * guard as defense in depth for direct composition callers.
+ */
+export function accountWorkspaceInventoryForbiddenResponse(): Response {
+  return errorJson(
+    "forbidden",
+    ACCOUNT_WORKSPACE_INVENTORY_FORBIDDEN_MESSAGE,
+    403,
+  );
+}
+
 /** Handles `GET /api/v1/views/workspaces.v1`. */
 export async function handleAccountWorkspaceViews(
   ctx: ControlDispatchContext,
@@ -37,11 +57,7 @@ export async function handleAccountWorkspaceViews(
   // its authority. Check the signed session restriction before touching either
   // the AccountsStore or any operation port.
   if (ctx.session.workspaceId !== undefined) {
-    return errorJson(
-      "forbidden",
-      "A Workspace-scoped credential cannot read the account Workspace inventory.",
-      403,
-    );
+    return accountWorkspaceInventoryForbiddenResponse();
   }
 
   const unknownQueryKey = [...ctx.url.searchParams.keys()].find(

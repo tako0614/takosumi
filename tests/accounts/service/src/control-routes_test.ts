@@ -17,7 +17,10 @@ import {
 import { handleWorkspaces } from "../../../../accounts/service/src/control/workspaces.ts";
 import { handleAccountWorkspaceViews } from "../../../../accounts/service/src/control/account-workspace-views.ts";
 import { handleDashboard } from "../../../../accounts/service/src/control/dashboard.ts";
-import { InMemoryAccountsStore } from "../../../../accounts/service/src/store.ts";
+import {
+  InMemoryAccountsStore,
+  type AccountsStore,
+} from "../../../../accounts/service/src/store.ts";
 import { encodeCursor } from "../../../../contract/pagination.ts";
 import { WorkspacesService } from "../../../../core/domains/workspaces/mod.ts";
 import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
@@ -992,6 +995,94 @@ test("Workspace-scoped account Workspace inventory is forbidden before any store
   });
   expect(direct?.status).toBe(403);
   expect(pageCalls).toBe(0);
+});
+
+test("dispatcher fences Workspace-scoped inventory before lazy Control initialization", async () => {
+  let resolverCalls = 0;
+  let storeReads = 0;
+  const store = new Proxy({} as AccountsStore, {
+    get() {
+      storeReads += 1;
+      throw new Error("workspace-scoped inventory must not touch the store");
+    },
+  });
+  const request = new Request(
+    "https://app.example.test/api/v1/views/workspaces.v1",
+  );
+  const response = await handleAuthenticatedControlRoute({
+    request,
+    url: new URL(request.url),
+    store,
+    subject: "tsub_owner",
+    workspaceId: "ws_scoped",
+    resolveOperations: async () => {
+      resolverCalls += 1;
+      throw new Error("workspace-scoped inventory must not initialize Control");
+    },
+  });
+  expect(response?.status).toBe(403);
+  expect(await response?.json()).toMatchObject({
+    error: { code: "forbidden" },
+  });
+  expect(resolverCalls).toBe(0);
+  expect(storeReads).toBe(0);
+});
+
+test("public Workspace-scoped PAT inventory rejects before lazy Control initialization", async () => {
+  const pat = "pat_workspace_inventory_scope";
+  const store = new InMemoryAccountsStore();
+  let bearerResolutions = 0;
+  store.resolveAccountsBearerCandidates = async (token) => {
+    bearerResolutions += 1;
+    expect(token).toBe(pat);
+    return {
+      personalAccessToken: {
+        tokenId: "pat_workspace_inventory_scope",
+        tokenPrefix: "pat_workspace_inventory",
+        subject: "tsub_owner",
+        name: "Workspace inventory",
+        scopes: ["read"],
+        workspaceId: "ws_scoped",
+        createdAt: Date.now(),
+      },
+    };
+  };
+  let resolverCalls = 0;
+  let operationCalls = 0;
+  const operations = {
+    workspaces: {
+      listWorkspacesForAccountPage: async () => {
+        operationCalls += 1;
+        throw new Error("workspace-scoped inventory must not read Operations");
+      },
+    },
+  } as unknown as ControlPlaneOperations;
+  const request = new Request(
+    "https://app.example.test/api/v1/views/workspaces.v1",
+    { headers: { authorization: `Bearer ${pat}` } },
+  );
+  const response = await handleControlRoute({
+    request,
+    url: new URL(request.url),
+    store,
+    resolveOperations: async () => {
+      resolverCalls += 1;
+      return operations;
+    },
+  });
+  expect(response?.status).toBe(403);
+  expect(await response?.json()).toMatchObject({
+    error: { code: "forbidden" },
+  });
+  expect(bearerResolutions).toBe(1);
+  expect(resolverCalls).toBe(0);
+  expect(operationCalls).toBe(0);
+  expect(response?.headers.get("server-timing")).toMatch(
+    /tk_control_auth;dur=/u,
+  );
+  expect(response?.headers.get("server-timing")).not.toContain(
+    "tk_control_init",
+  );
 });
 
 test("account Workspace inventory fails closed when total is missing or inconsistent", async () => {

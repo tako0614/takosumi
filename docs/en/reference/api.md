@@ -109,8 +109,8 @@ Resource, Interface, Form, and capability control surface. Mixing the two
 prefixes produces a 404 even when authentication is valid.
 
 The authoritative session-route inventory is
-`accounts/service/src/control-route-inventory.ts`. Representative operations
-from that inventory are:
+`accounts/service/src/control-route-inventory.ts`; it currently contains 80
+public route descriptors. Representative operations from that inventory are:
 
 ```http
 POST  /api/v1/workspaces

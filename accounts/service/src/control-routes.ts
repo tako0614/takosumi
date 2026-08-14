@@ -58,7 +58,11 @@ import {
 } from "./control/connections.ts";
 import { handleOutputShares } from "./control/output-shares.ts";
 import { handleDashboard } from "./control/dashboard.ts";
-import { handleAccountWorkspaceViews } from "./control/account-workspace-views.ts";
+import {
+  accountWorkspaceInventoryForbiddenResponse,
+  ACCOUNT_WORKSPACE_INVENTORY_ROUTE,
+  handleAccountWorkspaceViews,
+} from "./control/account-workspace-views.ts";
 import { handleProjects } from "./control/projects.ts";
 import {
   appendServerTiming,
@@ -198,6 +202,23 @@ async function dispatchAuthenticatedControlRoute(
   timings: ServerTimingBucket,
 ): Promise<Response> {
   const { request, url } = context;
+
+  // The account-wide Workspace inventory is intentionally unavailable to a
+  // Workspace-scoped credential. Keep this fence before resolving the Control
+  // operations facade: a rejected request must not initialize or otherwise
+  // touch the Control D1/store substrate. The handler repeats the same guard
+  // for direct composition callers.
+  if (
+    request.method.toUpperCase() === "GET" &&
+    url.pathname === ACCOUNT_WORKSPACE_INVENTORY_ROUTE &&
+    context.session.workspaceId !== undefined
+  ) {
+    return appendServerTiming(
+      accountWorkspaceInventoryForbiddenResponse(),
+      timings,
+    );
+  }
+
   let operations = context.operations;
   if (!operations && context.resolveOperations) {
     operations = await measureServerTiming(

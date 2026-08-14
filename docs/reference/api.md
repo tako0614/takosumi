@@ -108,7 +108,7 @@ Stack flow のエンドポイントはすべて `/api/v1` の下にあります�
 404 になります。
 
 正本は `accounts/service/src/control-route-inventory.ts` で、公開されているのは
-次の 81 件です。
+次の 80 件です。
 
 **Account views**
 
