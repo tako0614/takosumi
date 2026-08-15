@@ -150,6 +150,7 @@ function applyRunForSafety(input: {
   readonly status: "queued" | "succeeded" | "failed";
   readonly effectAt: number;
   readonly auditEvents?: ApplyRun["auditEvents"];
+  readonly diagnostics?: ApplyRun["diagnostics"];
 }): ApplyRun {
   const planRunId = `plan_${input.id}`;
   return {
@@ -173,6 +174,7 @@ function applyRunForSafety(input: {
     stateBackend: { kind: "managed", ref: "state" } as never,
     stateLock: { status: "recorded", backendRef: "state" },
     auditEvents: input.auditEvents ?? [],
+    ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
     createdAt: input.effectAt - 10,
     updatedAt: input.effectAt,
     ...(input.status === "queued"
@@ -288,23 +290,20 @@ test("personal Workspace bootstrap claims converge across memory, Postgres, and 
   pgClients.push(pgClient);
   const memory = new InMemoryOpenTofuControlStore();
   const d1 = new SqliteFakeD1();
-  const pairs: readonly [
-    string,
-    OpenTofuControlStore,
-    OpenTofuControlStore,
-  ][] = [
-    ["memory", memory, memory],
+  const pairs: readonly [string, OpenTofuControlStore, OpenTofuControlStore][] =
     [
-      "postgres",
-      new SqlOpenTofuControlStore({ client: pgClient }),
-      new SqlOpenTofuControlStore({ client: pgClient }),
-    ],
-    [
-      "d1",
-      new CloudflareD1OpenTofuControlStore(d1),
-      new CloudflareD1OpenTofuControlStore(d1),
-    ],
-  ];
+      ["memory", memory, memory],
+      [
+        "postgres",
+        new SqlOpenTofuControlStore({ client: pgClient }),
+        new SqlOpenTofuControlStore({ client: pgClient }),
+      ],
+      [
+        "d1",
+        new CloudflareD1OpenTofuControlStore(d1),
+        new CloudflareD1OpenTofuControlStore(d1),
+      ],
+    ];
 
   for (const [label, firstStore, secondStore] of pairs) {
     // Initialize independently constructed durable adapters before racing only
@@ -349,10 +348,7 @@ test("personal Workspace bootstrap claims converge across memory, Postgres, and 
         `${label}-same-presentation`,
       ),
     ]);
-    expect(
-      new Set(samePresentation.map((row) => row.id)).size,
-      label,
-    ).toBe(1);
+    expect(new Set(samePresentation.map((row) => row.id)).size, label).toBe(1);
     expect(
       (await firstStore.listWorkspacesByOwner(samePresentationOwner)).filter(
         (row) => row.type === "personal",
@@ -379,12 +375,14 @@ test("personal Workspace bootstrap claims converge across memory, Postgres, and 
       second.ensurePersonalWorkspace(adoptionOwner, `${label}-presentation-b`),
     ]);
 
-    expect(adopted.map((row) => row.id), label).toEqual([
-      oldest.id,
-      oldest.id,
-    ]);
-    expect(await firstStore.listWorkspacesByOwner(adoptionOwner), label)
-      .toHaveLength(2);
+    expect(
+      adopted.map((row) => row.id),
+      label,
+    ).toEqual([oldest.id, oldest.id]);
+    expect(
+      await firstStore.listWorkspacesByOwner(adoptionOwner),
+      label,
+    ).toHaveLength(2);
 
     const squattedHandle = `${label}-foreign-preference`;
     const foreign = await first.createWorkspace({
@@ -1029,10 +1027,12 @@ test("commitRunState records a failed provider apply without inventing state", a
     });
     expect(committed.capsule?.currentOutputId, label).toBeUndefined();
     expect(
-      (await store.getLatestStateVersion(
-        seeded.capsule.id,
-        seeded.capsule.environment,
-      ))?.id,
+      (
+        await store.getLatestStateVersion(
+          seeded.capsule.id,
+          seeded.capsule.environment,
+        )
+      )?.id,
       label,
     ).toBe(currentState.id);
   }
@@ -1252,6 +1252,63 @@ test("runtime safety treats lifecycle-only mutation evidence identically in memo
   }
 });
 
+test("runtime safety ignores a later structured pre-provider runner failure across every store", async () => {
+  for (const [label, store] of await stores()) {
+    const capsuleId = `capsule_pre_provider_failure_${label}`;
+    await store.putApplyRun(
+      applyRunForSafety({
+        id: `apply_partial_${label}`,
+        capsuleId,
+        operation: "update",
+        status: "failed",
+        effectAt: 100,
+        auditEvents: [
+          {
+            id: `audit_partial_${label}`,
+            type: "apply.failed",
+            at: 100,
+            data: {
+              providerDispatched: true,
+              providerApplySucceeded: false,
+              statePersistence: "persisted",
+            },
+          },
+        ],
+      }),
+    );
+    await store.putApplyRun(
+      applyRunForSafety({
+        id: `apply_init_failed_${label}`,
+        capsuleId,
+        operation: "update",
+        status: "failed",
+        effectAt: 200,
+        auditEvents: [
+          {
+            id: `audit_init_failed_${label}`,
+            type: "apply.failed",
+            at: 200,
+            data: { providerDispatched: true },
+          },
+        ],
+        diagnostics: [
+          {
+            severity: "error",
+            code: "opentofu_init_failed",
+            message: "runner failure (opentofu_init_failed)",
+          },
+        ],
+      }),
+    );
+
+    expect(await store.getCapsuleRuntimeSafety(capsuleId), label).toEqual({
+      phase: "unknown",
+      runId: `apply_partial_${label}`,
+      runType: "apply",
+    });
+  }
+});
+
 test("ApplyRun begin is insert-or-adopt and never resets an existing running or terminal row", async () => {
   for (const [label, store] of await stores()) {
     for (const status of ["running", "succeeded"] as const) {
@@ -1263,9 +1320,10 @@ test("ApplyRun begin is insert-or-adopt and never resets an existing running or 
         status: "queued",
         effectAt: 100,
       });
-      expect(await store.beginApplyRun(candidate), `${label}:${status}`).toEqual(
-        { status: "created", run: candidate },
-      );
+      expect(
+        await store.beginApplyRun(candidate),
+        `${label}:${status}`,
+      ).toEqual({ status: "created", run: candidate });
       const advanced: ApplyRun = {
         ...candidate,
         status,
@@ -1278,7 +1336,9 @@ test("ApplyRun begin is insert-or-adopt and never resets an existing running or 
       const adopted = await store.beginApplyRun(candidate);
       expect(adopted.status, `${label}:${status}`).toBe("existing");
       expect(adopted.run, `${label}:${status}`).toEqual(advanced);
-      expect(await store.getApplyRun(id), `${label}:${status}`).toEqual(advanced);
+      expect(await store.getApplyRun(id), `${label}:${status}`).toEqual(
+        advanced,
+      );
     }
   }
 });

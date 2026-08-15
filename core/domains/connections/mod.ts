@@ -185,6 +185,13 @@ export interface ConnectionsServiceDependencies {
   readonly newId?: (prefix: string) => string;
   readonly now?: () => string;
   /**
+   * Host-owned, credentialless Provider Connections projected directly from
+   * the running release. They are not runtime database rows: release tooling
+   * may reconcile durable copies for audit/migration purposes, but ordinary
+   * reads and Run binding resolution use this immutable code authority.
+   */
+  readonly operatorProviderConnections?: readonly ProviderConnection[];
+  /**
    * An operator extension may expose a Workspace-scoped Provider Connection
    * backed by an operator-scoped credential. OSS leaves this disabled so
    * operator credentials never become bindable by accident.
@@ -197,6 +204,10 @@ export class ConnectionsService {
   readonly #newId: (prefix: string) => string;
   readonly #now: () => string;
   readonly #allowOperatorScopedProviderConnections: boolean;
+  readonly #operatorProviderConnections: ReadonlyMap<
+    string,
+    ProviderConnection
+  >;
 
   constructor(dependencies: ConnectionsServiceDependencies) {
     this.#store = dependencies.store;
@@ -207,6 +218,9 @@ export class ConnectionsService {
     this.#now = dependencies.now ?? (() => new Date().toISOString());
     this.#allowOperatorScopedProviderConnections =
       dependencies.allowOperatorScopedProviderConnections === true;
+    this.#operatorProviderConnections = operatorConnectionMap(
+      dependencies.operatorProviderConnections ?? [],
+    );
   }
 
   /**
@@ -220,18 +234,32 @@ export class ConnectionsService {
       ? await this.#store.listConnections(workspaceId)
       : [];
     const operatorManagedConnections =
-      workspaceId && this.#allowOperatorScopedProviderConnections
-        ? (await this.#store.listOperatorConnections()).filter(
-            isWorkspaceBindableOperatorConnection,
-          )
-        : [];
+      await this.listReleaseOwnedProviderConnections(workspaceId);
     return [...connections, ...operatorManagedConnections].filter(
       (connection) => !isSourceGitKind(connection),
     );
   }
 
+  /**
+   * Lists only immutable release-owned Provider Connections. This projection
+   * deliberately performs no durable store read so a slow Control database
+   * cannot hide a built-in deployment destination from install discovery.
+   */
+  async listReleaseOwnedProviderConnections(
+    workspaceId?: string,
+  ): Promise<readonly ProviderConnection[]> {
+    return workspaceId && this.#allowOperatorScopedProviderConnections
+      ? [...this.#operatorProviderConnections.values()].filter(
+          isWorkspaceBindableOperatorConnection,
+        )
+      : [];
+  }
+
   async getProviderConnection(id: string): Promise<ProviderConnection> {
-    const connection = await this.#store.getConnection(nonEmptyField(id, "id"));
+    const connectionId = nonEmptyField(id, "id");
+    const connection =
+      this.#operatorProviderConnections.get(connectionId) ??
+      (await this.#store.getConnection(connectionId));
     if (!connection || isSourceGitKind(connection)) {
       throw new OpenTofuControllerError(
         "not_found",
@@ -323,7 +351,9 @@ export class ConnectionsService {
     capsule: Pick<Capsule, "workspaceId">,
     binding: ProviderBinding,
   ): Promise<ResolvedCapsuleProviderBinding> {
-    const connection = await this.#store.getConnection(binding.connectionId);
+    const connection =
+      this.#operatorProviderConnections.get(binding.connectionId) ??
+      (await this.#store.getConnection(binding.connectionId));
     if (!connection) {
       throw new OpenTofuControllerError(
         "not_found",
@@ -386,6 +416,26 @@ export class ConnectionsService {
       materialization: connection.materialization,
     };
   }
+}
+
+function operatorConnectionMap(
+  connections: readonly ProviderConnection[],
+): ReadonlyMap<string, ProviderConnection> {
+  const result = new Map<string, ProviderConnection>();
+  for (const connection of connections) {
+    if (!isWorkspaceBindableOperatorConnection(connection)) {
+      throw new TypeError(
+        `operator Provider Connection ${connection.id} must be a verified workspace-bindable run-issued connection`,
+      );
+    }
+    if (result.has(connection.id)) {
+      throw new TypeError(
+        `operator Provider Connection id ${connection.id} must be unique`,
+      );
+    }
+    result.set(connection.id, Object.freeze({ ...connection }));
+  }
+  return result;
 }
 
 function isSourceGitKind(connection: ProviderConnection): boolean {

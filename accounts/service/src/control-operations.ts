@@ -506,6 +506,9 @@ export interface ControlPlaneOperations {
     listProviderConnections(
       workspaceId?: string,
     ): Promise<readonly ProviderConnection[]>;
+    listReleaseOwnedProviderConnections(
+      workspaceId?: string,
+    ): Promise<readonly ProviderConnection[]>;
     getProviderConnection?(id: string): Promise<ProviderConnection>;
   };
   // --- OutputShares (§18) ---

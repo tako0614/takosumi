@@ -7,7 +7,6 @@
  */
 import {
   fetchTcsListingsPage,
-  TcsNotSupportedError,
   tcsListingIdentity,
   type TcsListing,
   type TcsPageQuery,
@@ -27,7 +26,6 @@ export interface TcsServerStatus {
   readonly base: string;
   readonly isDefault: boolean;
   readonly ok: boolean;
-  readonly supported: boolean;
   readonly error?: string;
 }
 
@@ -35,7 +33,6 @@ export interface TcsAggregateState {
   readonly servers: readonly TcsServer[];
   readonly sort: TcsSort;
   readonly locale: TcsLocale;
-  readonly q?: string;
   readonly limitPerServer: number;
   readonly cursors: Record<string, string | null | undefined>;
   readonly items: readonly AggregatedTcsListing[];
@@ -49,7 +46,6 @@ export function initTcsState(
   opts: {
     sort: TcsSort;
     locale: TcsLocale;
-    q?: string;
     limitPerServer?: number;
   },
 ): TcsAggregateState {
@@ -57,7 +53,6 @@ export function initTcsState(
     servers,
     sort: opts.sort,
     locale: opts.locale,
-    q: opts.q,
     limitPerServer: opts.limitPerServer ?? 24,
     cursors: {},
     items: [],
@@ -65,7 +60,6 @@ export function initTcsState(
       base: s.base,
       isDefault: s.isDefault,
       ok: true,
-      supported: true,
     })),
     done: false,
     loading: false,
@@ -147,6 +141,46 @@ export function sortTcsItems(
   return copy;
 }
 
+/**
+ * Search is a dashboard presentation operation over listings already obtained
+ * through the canonical paginated discovery route. TCS 2.0 deliberately does
+ * not require a server-side search capability, so this function is the only
+ * search seam the Store browser needs.
+ */
+export function filterTcsItems<T extends TcsListing>(
+  items: readonly T[],
+  query: string,
+): T[] {
+  const terms = query
+    .normalize("NFKC")
+    .toLowerCase()
+    .trim()
+    .split(/\s+/u)
+    .filter(Boolean);
+  if (terms.length === 0) return [...items];
+
+  return items.filter((listing) => {
+    const text = [
+      listing.id,
+      listing.name.ja,
+      listing.name.en,
+      listing.description.ja,
+      listing.description.en,
+      listing.suggestedName,
+      listing.publisher?.handle,
+      listing.publisher?.displayName,
+      listing.category,
+      ...(listing.badges ?? []),
+      listing.source.url,
+    ]
+      .filter((value): value is string => typeof value === "string")
+      .join(" ")
+      .normalize("NFKC")
+      .toLowerCase();
+    return terms.every((term) => text.includes(term));
+  });
+}
+
 /** Fetch the next page from every not-yet-exhausted server and merge. */
 export async function loadMoreTcs(
   state: TcsAggregateState,
@@ -161,7 +195,6 @@ export async function loadMoreTcs(
       const query: TcsPageQuery = {
         sort: state.sort,
         limit: state.limitPerServer,
-        ...(state.q ? { q: state.q } : {}),
         ...(typeof cursor === "string" ? { cursor } : {}),
       };
       const { signal, cancel } = withTimeout(timeoutMs);
@@ -173,21 +206,16 @@ export async function loadMoreTcs(
         return {
           server,
           ok: true,
-          supported: true,
           items: page.items,
           nextCursor: page.nextCursor ?? null,
         };
       } catch (err) {
-        const unsupported = err instanceof TcsNotSupportedError;
         return {
           server,
-          ok: unsupported,
-          supported: !unsupported,
+          ok: false,
           items: [] as readonly TcsListing[],
           nextCursor: null,
-          error: unsupported
-            ? undefined
-            : String((err as Error)?.message ?? err),
+          error: String((err as Error)?.message ?? err),
         };
       } finally {
         cancel();
@@ -216,7 +244,6 @@ export async function loadMoreTcs(
       base: r.server.base,
       isDefault: r.server.isDefault,
       ok: r.ok,
-      supported: r.supported,
       ...(r.error ? { error: r.error } : {}),
     });
   }

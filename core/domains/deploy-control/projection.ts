@@ -378,6 +378,9 @@ export function errorDiagnostic(error: unknown): RunDiagnostic {
     severity: "error",
     ...(code ? { code } : {}),
     message,
+    ...(error instanceof OpenTofuRunnerExecutionError && error.detail
+      ? { detail: redactString(error.detail) }
+      : {}),
   };
 }
 

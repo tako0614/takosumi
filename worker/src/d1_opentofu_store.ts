@@ -138,6 +138,7 @@ import {
   sameResourceOperationIdentity,
   normalizeStoredCapsuleCompatibilityLevel,
   normalizeStoredCapsuleCompatibilityReport,
+  PRE_PROVIDER_RUNNER_FAILURE_DIAGNOSTIC_CODES,
 } from "../../core/domains/deploy-control/store.ts";
 import {
   artifactRecordFromRow,
@@ -173,6 +174,11 @@ const RUN_KIND_COMPATIBILITY_CHECK = "compatibility_check" as const;
 const RUN_KIND_RESOURCE_OPERATION = "resource_operation" as const;
 const RUN_KIND_BACKUP = "backup" as const;
 const RUN_KIND_RESTORE = "restore" as const;
+
+const D1_PRE_PROVIDER_FAILURE_CODE_SQL =
+  PRE_PROVIDER_RUNNER_FAILURE_DIAGNOSTIC_CODES.map((code) => `'${code}'`).join(
+    ", ",
+  );
 
 function compatibilityReportSourceId(value: string | null | undefined): string {
   if (!value?.trim()) {
@@ -338,13 +344,30 @@ latest_capsule_runtime_safety as (
                   select 1
                   from json_each(candidate.run_json, '$.auditEvents') as audit_event
                   where json_extract(
-                    audit_event.value,
-                    '$.data.providerDispatched'
-                  ) = 1
-                     or json_extract(
                        audit_event.value,
                        '$.data.lifecycleActionDispatched'
                      ) = 1
+                     or (
+                       json_extract(
+                         audit_event.value,
+                         '$.data.providerDispatched'
+                       ) = 1
+                       and not exists (
+                         select 1
+                         from json_each(
+                           candidate.run_json,
+                           '$.diagnostics'
+                         ) as diagnostic
+                         where json_extract(
+                           diagnostic.value,
+                           '$.severity'
+                         ) = 'error'
+                           and json_extract(
+                             diagnostic.value,
+                             '$.code'
+                           ) in (${D1_PRE_PROVIDER_FAILURE_CODE_SQL})
+                       )
+                     )
                 )
               )
               or (
@@ -363,13 +386,30 @@ latest_capsule_runtime_safety as (
                   select 1
                   from json_each(candidate.run_json, '$.auditEvents') as audit_event
                   where json_extract(
-                    audit_event.value,
-                    '$.data.providerDispatched'
-                  ) = 1
-                     or json_extract(
                        audit_event.value,
                        '$.data.lifecycleActionDispatched'
                      ) = 1
+                     or (
+                       json_extract(
+                         audit_event.value,
+                         '$.data.providerDispatched'
+                       ) = 1
+                       and not exists (
+                         select 1
+                         from json_each(
+                           candidate.run_json,
+                           '$.diagnostics'
+                         ) as diagnostic
+                         where json_extract(
+                           diagnostic.value,
+                           '$.severity'
+                         ) = 'error'
+                           and json_extract(
+                             diagnostic.value,
+                             '$.code'
+                           ) in (${D1_PRE_PROVIDER_FAILURE_CODE_SQL})
+                       )
+                     )
                 )
               )
               or (
@@ -492,18 +532,36 @@ order by request.request_index
 
 /** Mirrors applyRunMutationDispatched in the shared store model. */
 function d1RunMutationDispatched(): SQL {
+  const preProviderFailureCodes = sql.join(
+    PRE_PROVIDER_RUNNER_FAILURE_DIAGNOSTIC_CODES.map((code) => sql`${code}`),
+    sql`, `,
+  );
   return sql`
     EXISTS (
       SELECT 1
       FROM json_each(${schema.runs.runJson}, '$.auditEvents') AS audit_event
       WHERE json_extract(
         audit_event.value,
-        '$.data.providerDispatched'
+        '$.data.lifecycleActionDispatched'
       ) = 1
-         OR json_extract(
-           audit_event.value,
-           '$.data.lifecycleActionDispatched'
-         ) = 1
+    )
+    OR (
+      EXISTS (
+        SELECT 1
+        FROM json_each(${schema.runs.runJson}, '$.auditEvents') AS audit_event
+        WHERE json_extract(
+          audit_event.value,
+          '$.data.providerDispatched'
+        ) = 1
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM json_each(${schema.runs.runJson}, '$.diagnostics') AS diagnostic
+        WHERE json_extract(diagnostic.value, '$.severity') = 'error'
+          AND json_extract(diagnostic.value, '$.code') IN (
+            ${preProviderFailureCodes}
+          )
+      )
     )
   `;
 }
@@ -600,6 +658,11 @@ type D1PredeployedWorkspacePageRow = {
   readonly sort_key: string | null;
   readonly workspace_id: string | null;
 };
+
+type D1PredeployedWorkspaceRow = Pick<
+  D1PredeployedWorkspacePageRow,
+  "maintenance_json" | "columns_json" | "migrations_json" | "workspace_record"
+>;
 
 // `createTakosumiWorkerService` constructs a fresh store for every request, but
 // Cloudflare reuses the bound D1 object for the lifetime of an isolate. Keep the
@@ -1286,9 +1349,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       const row = await this.#orm
         .select({ value: schema.workspaces.recordJson })
         .from(schema.workspaces)
-        .where(
-          eq(schema.workspaces.personalBootstrapOwnerId, ownerUserId),
-        )
+        .where(eq(schema.workspaces.personalBootstrapOwnerId, ownerUserId))
         .get();
       return row?.value as Workspace | undefined;
     };
@@ -1348,11 +1409,92 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   }
 
   async getWorkspace(id: string): Promise<Workspace | undefined> {
+    if (this.#schemaMode === "predeployed") {
+      return await this.#getPredeployedWorkspace(id);
+    }
     return await this.#drizzleFirstJson<Workspace>(
       schema.workspaces,
       schema.workspaces.recordJson,
       eq(schema.workspaces.id, id),
     );
+  }
+
+  async #getPredeployedWorkspace(id: string): Promise<Workspace | undefined> {
+    const includeSchemaEvidence = !this.#predeployedSchemaVerified;
+    const result = await this.db
+      .prepare(
+        `SELECT (
+                  SELECT json_object(
+                    'active', active,
+                    'migration_bypass', migration_bypass,
+                    'fence_id', fence_id,
+                    'source_commit', source_commit,
+                    'manifest_digest', manifest_digest,
+                    'environment', environment,
+                    'activated_at', activated_at,
+                    'released_at', released_at,
+                    'database_role', database_role,
+                    'release_policy', release_policy,
+                    'database_id', database_id,
+                    'source_export_sha256', source_export_sha256,
+                    'predecessor_fence_id', predecessor_fence_id,
+                    'predecessor_source_commit', predecessor_source_commit,
+                    'predecessor_manifest_digest', predecessor_manifest_digest
+                  )
+                  FROM _takosumi_control_schema_maintenance
+                  WHERE singleton = 1
+                ) AS maintenance_json,
+                ${
+                  includeSchemaEvidence
+                    ? `(
+                         SELECT json_group_array(json_object(
+                           'cid', cid,
+                           'name', name,
+                           'type', type,
+                           'notnull', "notnull",
+                           'dflt_value', dflt_value,
+                           'pk', pk
+                         ))
+                         FROM pragma_table_info('schema_migrations')
+                       )`
+                    : "NULL"
+                } AS columns_json,
+                ${
+                  includeSchemaEvidence
+                    ? `(
+                         SELECT json_group_array(json_object(
+                           'version', version,
+                           'name', name,
+                           'checksum', checksum,
+                           'applied_at', applied_at
+                         ))
+                         FROM (
+                           SELECT version, name, checksum, applied_at
+                           FROM schema_migrations
+                           ORDER BY version
+                         ) AS ordered_migrations
+                       )`
+                    : "NULL"
+                } AS migrations_json,
+                (
+                  SELECT record_json
+                  FROM workspaces
+                  WHERE id = ?
+                  LIMIT 1
+                ) AS workspace_record`,
+      )
+      .bind(id)
+      .first<D1PredeployedWorkspaceRow>();
+    if (!result) {
+      throw new Error("D1 predeployed Workspace read evidence is incomplete");
+    }
+    await this.#acceptPredeployedReadinessEvidence(
+      result,
+      includeSchemaEvidence,
+    );
+    return result.workspace_record === null
+      ? undefined
+      : parseD1WorkspaceRecord(result.workspace_record);
   }
 
   async listWorkspacesByIds(
@@ -1721,28 +1863,10 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     ) {
       throw new Error("D1 predeployed Workspace read evidence is incomplete");
     }
-    const maintenance = parseD1JsonObject(
-      readiness.maintenance_json,
-      "maintenance",
+    await this.#acceptPredeployedReadinessEvidence(
+      readiness,
+      includeSchemaEvidence,
     );
-    await assertControlD1MaintenanceResultInactive({
-      results: [maintenance],
-      success: true,
-    });
-    if (includeSchemaEvidence) {
-      const columns = parseD1JsonArray<D1TableInfoRow>(
-        readiness.columns_json,
-        "schema columns",
-      );
-      const migrations = parseD1JsonArray<D1SchemaMigrationRow>(
-        readiness.migrations_json,
-        "migration ledger",
-      );
-      await validateD1OpenTofuLedgerSchemaPredeployed(columns, migrations);
-      this.#predeployedSchemaVerified = true;
-      verifiedPredeployedD1Bindings.add(this.db);
-      this.#initialized = Promise.resolve();
-    }
 
     const workspaces = rows
       .slice(1)
@@ -1757,6 +1881,37 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       throw new Error("D1 predeployed Workspace total is invalid");
     }
     return { ...page, ...(total === undefined ? {} : { total }) };
+  }
+
+  async #acceptPredeployedReadinessEvidence(
+    readiness: Pick<
+      D1PredeployedWorkspacePageRow,
+      "maintenance_json" | "columns_json" | "migrations_json"
+    >,
+    includeSchemaEvidence: boolean,
+  ): Promise<void> {
+    const maintenance = parseD1JsonObject(
+      readiness.maintenance_json,
+      "maintenance",
+    );
+    await assertControlD1MaintenanceResultInactive({
+      results: [maintenance],
+      success: true,
+    });
+    if (!includeSchemaEvidence) return;
+
+    const columns = parseD1JsonArray<D1TableInfoRow>(
+      readiness.columns_json,
+      "schema columns",
+    );
+    const migrations = parseD1JsonArray<D1SchemaMigrationRow>(
+      readiness.migrations_json,
+      "migration ledger",
+    );
+    await validateD1OpenTofuLedgerSchemaPredeployed(columns, migrations);
+    this.#predeployedSchemaVerified = true;
+    verifiedPredeployedD1Bindings.add(this.db);
+    this.#initialized = Promise.resolve();
   }
 
   async putProject(project: Project): Promise<Project> {
@@ -1985,9 +2140,10 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       .limit(1)
       .get();
     if (row === undefined) return undefined;
-    const safety = row.safetyJson === null
-      ? undefined
-      : capsuleRuntimeSafetyFromRun(row.safetyJson as ApplyRun | Run);
+    const safety =
+      row.safetyJson === null
+        ? undefined
+        : capsuleRuntimeSafetyFromRun(row.safetyJson as ApplyRun | Run);
     return safety !== undefined && safety.phase !== "safe"
       ? undefined
       : { workspaceId, capsuleId, executionAuthorityEpoch: row.epoch };
@@ -2013,14 +2169,18 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       const index = Number(row.request_index);
       const input = inputs[index];
       if (!Number.isSafeInteger(index) || index < 0 || input === undefined) {
-        throw new Error("D1 Capsule execution-authority batch index is invalid");
+        throw new Error(
+          "D1 Capsule execution-authority batch index is invalid",
+        );
       }
       if (row.epoch === null) continue;
-      const safety = row.safety_json === null
-        ? undefined
-        : capsuleRuntimeSafetyFromRun(
-            jsonRecordFromD1Value(row.safety_json) as unknown as ApplyRun | Run,
-          );
+      const safety =
+        row.safety_json === null
+          ? undefined
+          : capsuleRuntimeSafetyFromRun(
+              jsonRecordFromD1Value(row.safety_json) as unknown as
+                ApplyRun | Run,
+            );
       if (safety !== undefined && safety.phase !== "safe") continue;
       resolved[index] = {
         workspaceId: input.workspaceId,

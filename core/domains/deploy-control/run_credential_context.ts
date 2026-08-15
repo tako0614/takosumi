@@ -75,6 +75,8 @@ export async function resolveCanonicalCapsuleRunCredentialContext(
     return { ok: false, reason: "capsule_unavailable" };
   }
 
+  let planOperation: "create" | "update" | "destroy" | undefined;
+  let plannedCapsuleStateVersionId: string | null | undefined;
   if (input.phase === "plan") {
     const run = await store.getPlanRun(runId);
     if (
@@ -88,6 +90,8 @@ export async function resolveCanonicalCapsuleRunCredentialContext(
     ) {
       return { ok: false, reason: "plan_run_mismatch" };
     }
+    planOperation = run.operation;
+    plannedCapsuleStateVersionId = run.capsuleCurrentStateVersionId;
   } else {
     const run = await store.getApplyRun(runId);
     if (
@@ -108,14 +112,44 @@ export async function resolveCanonicalCapsuleRunCredentialContext(
     ) {
       return { ok: false, reason: "apply_plan_mismatch" };
     }
+    planOperation = planRun.operation;
+    plannedCapsuleStateVersionId = planRun.capsuleCurrentStateVersionId;
   }
 
   const runtimeSafety = await store.getCapsuleRuntimeSafety(capsuleId);
-  const runtimeSafetyMatches = input.phase === "destroy"
-    ? runtimeSafety?.phase === "terminating" &&
-      runtimeSafety.runType === "destroy_apply" &&
-      runtimeSafety.runId === runId
-    : runtimeSafety === undefined || runtimeSafety.phase === "safe";
+  const persistedPartialApplyRecoveryMatches =
+    input.phase !== "destroy" &&
+    planOperation !== "destroy" &&
+    runtimeSafety?.phase === "unknown" &&
+    runtimeSafety.runType === "apply" &&
+    capsule.currentStateVersionId !== undefined &&
+    plannedCapsuleStateVersionId === capsule.currentStateVersionId &&
+    (await persistedPartialApplyMatches(
+      store,
+      runtimeSafety.runId,
+      workspaceId,
+      capsuleId,
+      capsule.currentStateVersionId,
+    ));
+  const currentApplyExecutionMatches =
+    input.phase === "apply" &&
+    planOperation !== "destroy" &&
+    runtimeSafety?.phase === "unknown" &&
+    runtimeSafety.runType === "apply" &&
+    runtimeSafety.runId === runId;
+  const runtimeSafetyMatches =
+    input.phase === "destroy"
+      ? runtimeSafety?.phase === "terminating" &&
+        runtimeSafety.runType === "destroy_apply" &&
+        runtimeSafety.runId === runId
+      : input.phase === "plan" && planOperation === "destroy"
+        ? runtimeSafety === undefined ||
+          runtimeSafety.phase === "safe" ||
+          runtimeSafety.phase === "unknown"
+        : runtimeSafety === undefined ||
+          runtimeSafety.phase === "safe" ||
+          currentApplyExecutionMatches ||
+          persistedPartialApplyRecoveryMatches;
   if (!runtimeSafetyMatches) {
     return { ok: false, reason: "runtime_safety_mismatch" };
   }
@@ -130,6 +164,41 @@ export async function resolveCanonicalCapsuleRunCredentialContext(
       phase: input.phase,
     },
   };
+}
+
+/**
+ * A provider-dispatched ordinary apply can fail after its exact partial state
+ * was durably committed as the Capsule's current StateVersion. A fresh reviewed
+ * plan/apply is the only normal convergence path. Bind that recovery to the
+ * decisive failed ApplyRun and its exact persisted-state receipt; every other
+ * unknown/restore/destroy or stale-state condition remains fail-closed.
+ */
+async function persistedPartialApplyMatches(
+  store: CapsuleRunCredentialLedger,
+  failedApplyRunId: string,
+  workspaceId: string,
+  capsuleId: string,
+  currentStateVersionId: string,
+): Promise<boolean> {
+  const failed = await store.getApplyRun(failedApplyRunId);
+  if (
+    !failed ||
+    failed.status !== "failed" ||
+    failed.operation === "destroy" ||
+    failed.workspaceId !== workspaceId ||
+    failed.capsuleId !== capsuleId ||
+    failed.stateVersionId !== currentStateVersionId
+  ) {
+    return false;
+  }
+  return failed.auditEvents.some(
+    (event) =>
+      event.type === "apply.failed" &&
+      event.data?.providerDispatched === true &&
+      event.data.providerApplySucceeded === false &&
+      event.data.statePersistence === "persisted" &&
+      event.data.stateVersionId === currentStateVersionId,
+  );
 }
 
 function exactNonEmpty(value: string): string | undefined {

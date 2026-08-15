@@ -30,6 +30,7 @@ import type {
   PlanRunResponse,
   PolicyConfig,
   PolicyDecision,
+  ProviderConnection,
   RunStatus,
   RunnerProfile,
   RunnerSecretExposurePolicy,
@@ -1097,6 +1098,7 @@ export interface RunEngineDependencies {
   readonly observability?: Pick<ObservabilitySink, "recordMetric">;
   readonly metricTags: Record<string, string>;
   readonly allowOperatorScopedProviderConnections: boolean;
+  readonly operatorProviderConnections: readonly ProviderConnection[];
   readonly runnerProfiles: readonly RunnerProfile[];
   readonly seededProfiles: Promise<void>;
   readonly runQuery: RunQueryService;
@@ -1132,6 +1134,7 @@ export class RunEngine {
   readonly #observability?: Pick<ObservabilitySink, "recordMetric">;
   readonly #metricTags: Record<string, string>;
   readonly #allowOperatorScopedProviderConnections: boolean;
+  readonly #operatorProviderConnections: readonly ProviderConnection[];
   readonly #runnerProfilesById: ReadonlyMap<string, RunnerProfile>;
   readonly #seededProfiles: Promise<void>;
   readonly #runQuery: RunQueryService;
@@ -1175,6 +1178,7 @@ export class RunEngine {
     this.#metricTags = deps.metricTags;
     this.#allowOperatorScopedProviderConnections =
       deps.allowOperatorScopedProviderConnections;
+    this.#operatorProviderConnections = deps.operatorProviderConnections;
     this.#runnerProfilesById = new Map(
       deps.runnerProfiles.map((profile) => [profile.id, profile]),
     );
@@ -2527,6 +2531,7 @@ export class RunEngine {
     if (!input.capsule) return { reasons: [] };
     this.#connectionsService ??= new ConnectionsService({
       store: this.#store,
+      operatorProviderConnections: this.#operatorProviderConnections,
       allowOperatorScopedProviderConnections:
         this.#allowOperatorScopedProviderConnections,
     });
@@ -3111,6 +3116,7 @@ export class RunEngine {
   ): Promise<readonly ResolvedCapsuleProviderBinding[]> {
     this.#connectionsService ??= new ConnectionsService({
       store: this.#store,
+      operatorProviderConnections: this.#operatorProviderConnections,
       allowOperatorScopedProviderConnections:
         this.#allowOperatorScopedProviderConnections,
     });
@@ -4651,6 +4657,7 @@ export class RunEngine {
     if (planRun.resourceContext) {
       this.#connectionsService ??= new ConnectionsService({
         store: this.#store,
+        operatorProviderConnections: this.#operatorProviderConnections,
         allowOperatorScopedProviderConnections:
           this.#allowOperatorScopedProviderConnections,
       });
@@ -4678,6 +4685,7 @@ export class RunEngine {
     }
     this.#connectionsService ??= new ConnectionsService({
       store: this.#store,
+      operatorProviderConnections: this.#operatorProviderConnections,
       allowOperatorScopedProviderConnections:
         this.#allowOperatorScopedProviderConnections,
     });

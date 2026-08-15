@@ -124,6 +124,7 @@ import {
   sameResourceOperationIdentity,
   normalizeStoredCapsuleCompatibilityLevel,
   normalizeStoredCapsuleCompatibilityReport,
+  PRE_PROVIDER_RUNNER_FAILURE_DIAGNOSTIC_CODES,
 } from "./store.ts";
 import {
   artifactRecordFromRow,
@@ -158,6 +159,11 @@ function compatibilityReportSourceId(value: string | null | undefined): string {
 }
 const RUN_KIND_BACKUP = "backup";
 const RUN_KIND_RESTORE = "restore";
+
+const PG_PRE_PROVIDER_FAILURE_CODE_SQL =
+  PRE_PROVIDER_RUNNER_FAILURE_DIAGNOSTIC_CODES.map((code) => `'${code}'`).join(
+    ", ",
+  );
 
 function pgRunCreatedAtMillisOrder(): SQL {
   return sql`
@@ -298,8 +304,18 @@ latest_capsule_runtime_safety as (
                 from jsonb_array_elements(
                   coalesce(candidate.run_json -> 'auditEvents', '[]'::jsonb)
                 ) as audit_event
-                where audit_event -> 'data' ->> 'providerDispatched' = 'true'
-                   or audit_event -> 'data' ->> 'lifecycleActionDispatched' = 'true'
+                where audit_event -> 'data' ->> 'lifecycleActionDispatched' = 'true'
+                   or (
+                     audit_event -> 'data' ->> 'providerDispatched' = 'true'
+                     and not exists (
+                       select 1
+                       from jsonb_array_elements(
+                         coalesce(candidate.run_json -> 'diagnostics', '[]'::jsonb)
+                       ) as diagnostic
+                       where diagnostic ->> 'severity' = 'error'
+                         and diagnostic ->> 'code' in (${PG_PRE_PROVIDER_FAILURE_CODE_SQL})
+                     )
+                   )
               )
             )
             or (
@@ -319,8 +335,18 @@ latest_capsule_runtime_safety as (
                 from jsonb_array_elements(
                   coalesce(candidate.run_json -> 'auditEvents', '[]'::jsonb)
                 ) as audit_event
-                where audit_event -> 'data' ->> 'providerDispatched' = 'true'
-                   or audit_event -> 'data' ->> 'lifecycleActionDispatched' = 'true'
+                where audit_event -> 'data' ->> 'lifecycleActionDispatched' = 'true'
+                   or (
+                     audit_event -> 'data' ->> 'providerDispatched' = 'true'
+                     and not exists (
+                       select 1
+                       from jsonb_array_elements(
+                         coalesce(candidate.run_json -> 'diagnostics', '[]'::jsonb)
+                       ) as diagnostic
+                       where diagnostic ->> 'severity' = 'error'
+                         and diagnostic ->> 'code' in (${PG_PRE_PROVIDER_FAILURE_CODE_SQL})
+                     )
+                   )
               )
             )
             or (
@@ -412,14 +438,34 @@ order by request.request_index
 
 /** Mirrors applyRunMutationDispatched in the shared store model. */
 function pgRunMutationDispatched(): SQL {
+  const preProviderFailureCodes = sql.join(
+    PRE_PROVIDER_RUNNER_FAILURE_DIAGNOSTIC_CODES.map((code) => sql`${code}`),
+    sql`, `,
+  );
   return sql`
     EXISTS (
       SELECT 1
       FROM jsonb_array_elements(
         COALESCE(${pgSchema.runs.runJson} -> 'auditEvents', '[]'::jsonb)
       ) AS audit_event
-      WHERE audit_event -> 'data' ->> 'providerDispatched' = 'true'
-         OR audit_event -> 'data' ->> 'lifecycleActionDispatched' = 'true'
+      WHERE audit_event -> 'data' ->> 'lifecycleActionDispatched' = 'true'
+    )
+    OR (
+      EXISTS (
+        SELECT 1
+        FROM jsonb_array_elements(
+          COALESCE(${pgSchema.runs.runJson} -> 'auditEvents', '[]'::jsonb)
+        ) AS audit_event
+        WHERE audit_event -> 'data' ->> 'providerDispatched' = 'true'
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM jsonb_array_elements(
+          COALESCE(${pgSchema.runs.runJson} -> 'diagnostics', '[]'::jsonb)
+        ) AS diagnostic
+        WHERE diagnostic ->> 'severity' = 'error'
+          AND diagnostic ->> 'code' IN (${preProviderFailureCodes})
+      )
     )
   `;
 }
@@ -1121,9 +1167,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       const rows = await this.#db
         .select({ json: pgSchema.workspaces.spaceJson })
         .from(pgSchema.workspaces)
-        .where(
-          eq(pgSchema.workspaces.personalBootstrapOwnerId, ownerUserId),
-        )
+        .where(eq(pgSchema.workspaces.personalBootstrapOwnerId, ownerUserId))
         .limit(1);
       return parseRow(rows[0]) as Workspace | undefined;
     };
@@ -1140,10 +1184,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
           isNull(pgSchema.workspaces.personalBootstrapOwnerId),
         ),
       )
-      .orderBy(
-        asc(pgSchema.workspaces.createdAt),
-        asc(pgSchema.workspaces.id),
-      )
+      .orderBy(asc(pgSchema.workspaces.createdAt), asc(pgSchema.workspaces.id))
       .limit(1);
     const adoptableId = adoptable[0]?.id;
     if (adoptableId !== undefined) {
@@ -1661,11 +1702,12 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
       .limit(1);
     const row = rows[0];
     if (row === undefined) return undefined;
-    const safety = row.safetyJson === null
-      ? undefined
-      : capsuleRuntimeSafetyFromRun(
-          parseJson(row.safetyJson) as ApplyRun | Run,
-        );
+    const safety =
+      row.safetyJson === null
+        ? undefined
+        : capsuleRuntimeSafetyFromRun(
+            parseJson(row.safetyJson) as ApplyRun | Run,
+          );
     return safety !== undefined && safety.phase !== "safe"
       ? undefined
       : {
@@ -1696,11 +1738,12 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         );
       }
       if (row.epoch === null) continue;
-      const safety = row.safety_json === null
-        ? undefined
-        : capsuleRuntimeSafetyFromRun(
-            parseJson(row.safety_json) as ApplyRun | Run,
-          );
+      const safety =
+        row.safety_json === null
+          ? undefined
+          : capsuleRuntimeSafetyFromRun(
+              parseJson(row.safety_json) as ApplyRun | Run,
+            );
       if (safety !== undefined && safety.phase !== "safe") continue;
       resolved[index] = {
         workspaceId: input.workspaceId,
@@ -1890,9 +1933,7 @@ export class SqlOpenTofuControlStore implements OpenTofuControlStore {
         [hostname],
       );
       const row = existing.rows[0];
-      const reservation = row
-        ? publicHostReservationFromRow(row)
-        : undefined;
+      const reservation = row ? publicHostReservationFromRow(row) : undefined;
       if (
         reservation?.status === "reserved" &&
         reservation.capsuleId !== input.capsuleId

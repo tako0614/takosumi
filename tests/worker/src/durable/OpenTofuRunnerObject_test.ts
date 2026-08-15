@@ -1338,6 +1338,49 @@ test("OpenTofu runner Durable Object normalizes arbitrary non-2xx runner payload
   });
 });
 
+test("OpenTofu runner Durable Object preserves finite plan execution failures", async () => {
+  const marker = "provider-init-marker-9K2";
+  const runner = runnerWithContainer(new FakeR2Bucket(), {
+    async containerFetch(request) {
+      if (request.method === "GET") return Response.json({ status: "ok" });
+      return Response.json(
+        {
+          errorCode: "provider_package_unavailable",
+          stderr: `token=${marker}`,
+          detail: marker,
+        },
+        { status: 500 },
+      );
+    },
+  });
+
+  const response = await runner.fetch(
+    new Request("https://runner/runs/plan_provider_unavailable", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        kind: "takosumi.opentofu-run@v1",
+        action: "plan",
+        runId: "plan_provider_unavailable",
+        request: {},
+      }),
+    }),
+  );
+
+  assert.equal(response.status, 500);
+  const body = JSON.stringify(await response.json());
+  assert.equal(
+    body,
+    JSON.stringify({
+      status: "failed",
+      errorCode: "provider_package_unavailable",
+      phase: "plan",
+      detail: "token=[redacted]",
+    }),
+  );
+  assert.equal(body.includes(marker), false);
+});
+
 test("OpenTofu runner Durable Object restores reviewed R2 plan artifact before apply", async () => {
   const calls: string[] = [];
   const r2 = new FakeR2Bucket();

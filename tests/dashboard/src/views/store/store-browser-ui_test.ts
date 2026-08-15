@@ -169,6 +169,14 @@ describe("StoreBrowser install UI", () => {
     expect(storeBrowserSource).not.toContain("sortName");
   });
 
+  test("keeps search local instead of making the reserved TCS search route a dependency", () => {
+    expect(storeBrowserSource).toContain("filterTcsItems(");
+    expect(storeBrowserSource).not.toContain("setActiveQuery");
+    expect(storeBrowserSource).not.toContain("q: activeQuery");
+    expect(storeBrowserSource).not.toContain("search the whole store");
+    expect(storeBrowserSource).not.toContain("ストア全体を検索");
+  });
+
   test("the invalid-server alert is associated with the URL input", () => {
     expect(storeBrowserSource).toContain(
       "const serverErrorId = createUniqueId()",

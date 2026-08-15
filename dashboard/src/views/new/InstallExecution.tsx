@@ -23,19 +23,13 @@ import {
   stateVersionReadinessAfterApply,
   type StateVersionReadiness,
 } from "../../lib/capsules-ui.ts";
+import { installRunNeedsFallbackRead } from "./install-run-polling.ts";
 
 interface Props {
   readonly planRunId: string;
   readonly capsuleId: string;
   readonly onDone: () => void;
 }
-
-const TERMINAL = new Set<Run["status"]>([
-  "succeeded",
-  "failed",
-  "cancelled",
-  "expired",
-]);
 
 const READINESS_READ_ATTEMPTS = 3;
 const READINESS_RETRY_DELAY_MS = 1_000;
@@ -131,21 +125,14 @@ export default function InstallExecution(props: Props) {
 
   createEffect(() => {
     const id = runId();
-    let streamOpen = false;
     const close = openRunStream(id, {
-      onOpen: () => {
-        streamOpen = true;
-      },
       onRun: (next) => {
         mutate(next);
-      },
-      onError: () => {
-        streamOpen = false;
       },
     });
     const timer = globalThis.setInterval(() => {
       const latest = run.latest;
-      if (!streamOpen && (!latest || !TERMINAL.has(latest.status))) {
+      if (installRunNeedsFallbackRead(latest)) {
         void refetch();
       }
     }, 3_000);

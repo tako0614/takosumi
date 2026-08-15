@@ -882,6 +882,8 @@ export interface OpenTofuControllerDependencies {
    * operator-scoped Provider Connections. Defaults off for OSS/self-host.
    */
   readonly allowOperatorScopedProviderConnections?: boolean;
+  /** Immutable release-owned connections used without runtime DB reconciliation. */
+  readonly operatorProviderConnections?: readonly ProviderConnection[];
   readonly runnerProfiles?: readonly RunnerProfile[];
   readonly defaultRunnerProfileId?: string;
   readonly newId?: (prefix: string) => string;
@@ -1424,6 +1426,8 @@ export class OpenTofuController {
       metricTags: this.#metricTags,
       allowOperatorScopedProviderConnections:
         this.#allowOperatorScopedProviderConnections,
+      operatorProviderConnections:
+        dependencies.operatorProviderConnections ?? [],
       runnerProfiles,
       seededProfiles: this.#seededProfiles,
       runQuery: this.#runQuery,

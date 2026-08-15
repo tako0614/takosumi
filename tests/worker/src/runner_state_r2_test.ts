@@ -707,10 +707,7 @@ test("apply with stateScope encrypts the raw outputs envelope to R2_ARTIFACTS an
     state.metadata(RESOURCE_NEXT_STATE_KEY)?.["takosumi-action"],
     "apply",
   );
-  assert.equal(
-    artifacts.metadata(rawOutputRef)?.["takosumi-action"],
-    "apply",
-  );
+  assert.equal(artifacts.metadata(rawOutputRef)?.["takosumi-action"], "apply");
 
   // It decrypts back to the EXACT raw envelope (sensitive flags intact).
   const opened = await crypto.open(stored!);
@@ -959,7 +956,10 @@ test("apply redelivery adopts the exact ApplyRun artifacts after R2 responses ar
     targetStateRef,
     new Error("injected ambiguous target put response"),
   );
-  const rawOutputRef = RAW_OUTPUT_REF.replace("/runs/plan_1/", `/runs/${applyRunId}/`);
+  const rawOutputRef = RAW_OUTPUT_REF.replace(
+    "/runs/plan_1/",
+    `/runs/${applyRunId}/`,
+  );
   artifacts.failNextPutResponse(
     rawOutputRef,
     new Error("injected ambiguous raw-output put response"),
@@ -1010,8 +1010,7 @@ test("apply redelivery adopts the exact ApplyRun artifacts after R2 responses ar
   );
   assert.equal(first.status, 503);
   assert.deepEqual(await first.json(), {
-    error:
-      "OpenTofu runner artifact durability acknowledgement is ambiguous",
+    error: "OpenTofu runner artifact durability acknowledgement is ambiguous",
     errorCode: "runner_artifact_relay_ambiguous",
     status: "failed",
     phase: "run_dispatch",
@@ -1030,17 +1029,23 @@ test("apply redelivery adopts the exact ApplyRun artifacts after R2 responses ar
   assert.equal(second.status, 200);
   assert.equal(providerPosts, 1);
   assert.equal(
-    state.metadata(`${STATE_PREFIX}/00000001.tfstate.enc`)?.[
-      "takosumi-run-id"
-    ],
+    state.metadata(`${STATE_PREFIX}/00000001.tfstate.enc`)?.["takosumi-run-id"],
     applyRunId,
   );
   assert.equal(state.listCalls.length, 0);
 });
 
 test("failed provider apply encrypts partial state and same-run replay stays failed without provider re-execution", async () => {
+  const safeFailureDetail =
+    "Error: SQLiteMigrationSet rejected migration 7 after earlier resources were created";
+  const finalFailureDetail = "Error: provider process exited with status 1";
+  const repeatedWarnings = Array.from(
+    { length: 180 },
+    (_, index) =>
+      `Warning ${index}: Takoform Host Support could not be read for resource shape`,
+  ).join("\n");
   const failureMarker =
-    "provider-failure-marker Authorization: Bearer provider-failure-token cookie=provider-failure-session body={raw:true}";
+    "provider-failure-token Authorization: Bearer provider-failure-token cookie=provider-failure-session body={raw:true}";
   const artifacts = new FakeR2Bucket();
   const state = new FakeR2Bucket();
   const crypto = StateArtifactCrypto.fromEnv({
@@ -1074,7 +1079,7 @@ test("failed provider apply encrypts partial state and same-run replay stays fai
             },
             error: `provider rejected a later resource ${failureMarker}`,
             detail: failureMarker,
-            stderr: failureMarker,
+            stderr: `${safeFailureDetail}\n${failureMarker}\n${repeatedWarnings}\n${finalFailureDetail}`,
             stdout: failureMarker,
             path: `/work/${failureMarker}`,
             resource: failureMarker,
@@ -1123,11 +1128,18 @@ test("failed provider apply encrypts partial state and same-run replay stays fai
     kind: "provider_execution_failed",
     statePersistence: "persisted",
   });
+  assert.equal(String(firstPayload.detail).includes(safeFailureDetail), true);
+  assert.equal(String(firstPayload.detail).includes(finalFailureDetail), true);
+  assert.equal(
+    String(firstPayload.detail).includes("diagnostics omitted"),
+    true,
+  );
+  assert.equal(String(firstPayload.detail).length <= 4_096, true);
   assert.equal(firstPayload.outputs, undefined);
   assert.equal(firstPayload.rawOutputRef, undefined);
   const firstSerialized = JSON.stringify(firstPayload);
   for (const forbidden of [
-    "provider-failure-marker",
+    "provider-failure-token",
     "Bearer",
     "provider-failure-token",
     "provider-failure-session",
@@ -1207,9 +1219,12 @@ test("failed provider apply with no readable state returns an unavailable result
         );
       }
       if (request.method === "GET" && path.endsWith("/artifacts/tfstate")) {
-        return Response.json({ error: "state artifact not found" }, {
-          status: 404,
-        });
+        return Response.json(
+          { error: "state artifact not found" },
+          {
+            status: 404,
+          },
+        );
       }
       return Response.json({ error: "unexpected" }, { status: 500 });
     },
@@ -1483,7 +1498,10 @@ test("destroy succeeds when the best-effort current-state cache write fails", as
     "opentofu-plan-runs/plan_1/tfplan.enc",
     sealedPlan.ciphertext,
   );
-  state.failNextPut(CURRENT_KEY, new Error("injected pointer persistence failure"));
+  state.failNextPut(
+    CURRENT_KEY,
+    new Error("injected pointer persistence failure"),
+  );
 
   const applyRunId = "apply_destroy_1";
   let providerPosts = 0;
@@ -1507,7 +1525,11 @@ test("destroy succeeds when the best-effort current-state cache write fails", as
     runId: "plan_1",
     request: {
       applyRun: { id: applyRunId },
-      stateScope: { ...SCOPE, generation: 1, stateRef: `${STATE_PREFIX}/00000001.tfstate.enc` },
+      stateScope: {
+        ...SCOPE,
+        generation: 1,
+        stateRef: `${STATE_PREFIX}/00000001.tfstate.enc`,
+      },
       planArtifact: {
         kind: "object-storage",
         ref: "r2://takos-artifacts/opentofu-plan-runs/plan_1/tfplan",
@@ -1535,15 +1557,11 @@ test("destroy succeeds when the best-effort current-state cache write fails", as
   assert.equal(second.status, 200);
   assert.equal(providerPosts, 1);
   assert.equal(
-    state.metadata(`${STATE_PREFIX}/00000001.tfstate.enc`)?.[
-      "takosumi-action"
-    ],
+    state.metadata(`${STATE_PREFIX}/00000001.tfstate.enc`)?.["takosumi-action"],
     "destroy",
   );
   assert.equal(
-    state.metadata(`${STATE_PREFIX}/00000001.tfstate.enc`)?.[
-      "takosumi-run-id"
-    ],
+    state.metadata(`${STATE_PREFIX}/00000001.tfstate.enc`)?.["takosumi-run-id"],
     applyRunId,
   );
   assert.equal(state.listCalls.length, 0);
@@ -2018,8 +2036,11 @@ test("exact prior restore performs zero R2 list calls with a large state history
   const exactKey = `${STATE_PREFIX}/00000250.tfstate.enc`;
   const runner = runnerWithContainer(new FakeR2Bucket(), state, {
     containerFetch(request) {
-      if (request.method === "PUT") return Promise.resolve(Response.json({ ok: true }));
-      return Promise.resolve(Response.json({ status: "succeeded", exitCode: 0 }));
+      if (request.method === "PUT")
+        return Promise.resolve(Response.json({ ok: true }));
+      return Promise.resolve(
+        Response.json({ status: "succeeded", exitCode: 0 }),
+      );
     },
   });
 
@@ -2755,9 +2776,7 @@ class FakeR2Bucket implements R2Bucket {
   readonly #nextPutResponseFailures = new Map<string, Error>();
   readonly listCalls: R2ListOptions[] = [];
 
-  constructor(
-    private readonly listPageSize = Number.POSITIVE_INFINITY,
-  ) {}
+  constructor(private readonly listPageSize = Number.POSITIVE_INFINITY) {}
 
   async put(
     key: string,
@@ -2769,10 +2788,7 @@ class FakeR2Bucket implements R2Bucket {
       this.#nextPutFailures.delete(key);
       throw failure;
     }
-    if (
-      options?.onlyIf?.etagDoesNotMatch === "*" &&
-      this.#objects.has(key)
-    ) {
+    if (options?.onlyIf?.etagDoesNotMatch === "*" && this.#objects.has(key)) {
       return null;
     }
     const bytes = await bytesFromR2PutValue(value);

@@ -385,6 +385,22 @@ test("error diagnostics carry an explicit structured reason separately from pros
   });
 });
 
+test("runner execution diagnostics preserve only adapter-redacted detail", () => {
+  expect(
+    errorDiagnostic(
+      new OpenTofuRunnerExecutionError("runner request failed", {
+        reason: "opentofu_plan_failed",
+        detail: "Error: invalid resource\ntoken=must-not-escape",
+      }),
+    ),
+  ).toEqual({
+    severity: "error",
+    code: "opentofu_plan_failed",
+    message: "runner failure (opentofu_plan_failed)",
+    detail: "Error: invalid resource\ntoken=[REDACTED]",
+  });
+});
+
 test("structured error reasons classify provider credential preparation failures", () => {
   expect(
     runErrorCode(

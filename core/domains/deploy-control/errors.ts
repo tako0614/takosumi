@@ -58,18 +58,21 @@ export class OpenTofuControllerError extends Error {
  */
 export class OpenTofuRunnerExecutionError extends Error {
   readonly reason?: string;
+  readonly detail?: string;
   readonly originalError?: unknown;
 
   constructor(
     message: string,
     options: {
       readonly reason?: string;
+      readonly detail?: string;
       readonly originalError?: unknown;
     } = {},
   ) {
     super(message);
     this.name = "OpenTofuRunnerExecutionError";
     this.reason = options.reason;
+    this.detail = options.detail;
     this.originalError = options.originalError;
   }
 }

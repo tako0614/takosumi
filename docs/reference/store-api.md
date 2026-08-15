@@ -45,6 +45,17 @@ legacy response や presentation metadata に path が残っていても、Takos
 選択に使いません。Store を切り替えても、既存 Capsule、Source、InstallConfig、Plan、
 Run の authority は変わりません。
 
+## Discovery and local search
+
+Takosumi が Store に必須とする discovery interface は server info、paginated listings、
+listing detail だけです。Dashboard は取得済み listing の表示 metadata をローカル検索し、
+TCS 2.0 で予約されている `/tcs/v2/listings/search` を呼びません。未取得 page がある場合は
+「さらに読み込む」で検索対象を増やします。
+
+したがって server-side search の未実装や失敗を、Store 全体の到達不能、Git repository
+URL の発見失敗、または追加不可へ昇格させてはいけません。Store の目的は Git URL の発見で
+あり、検索 index や install policy の提供ではありません。
+
 ## Third-party Store
 
 third-party Store は TCS 2.0 の read contract を実装すれば利用できます。Takosumi 固有の

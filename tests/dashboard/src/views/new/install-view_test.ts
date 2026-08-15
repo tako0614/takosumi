@@ -37,6 +37,39 @@ describe("single-screen install surface", () => {
     expect(view).not.toContain("checkingCompatibility() || !provider");
   });
 
+  test("preparation is bounded, names its current stage, and can be cancelled", () => {
+    const view = read("dashboard/src/views/new/InstallView.tsx");
+    expect(view).toContain("INSTALL_PREPARATION_TIMEOUT_MS");
+    expect(view).toContain("const preparationTimeout = setTimeout(");
+    expect(view).toContain("preparationTimedOut = true;");
+    expect(view).toContain("timeoutMs: INSTALL_PREPARATION_TIMEOUT_MS");
+    expect(view).toContain("sourceAuthConnectionId().length > 0");
+    expect(view).toContain("includeSourceConnections");
+    expect(view).toContain("Promise.resolve([] as ProviderConnection[])");
+    expect(view).toContain("listConnectionsWithSignal(workspace, signal)");
+    expect(view).toContain(
+      "listReleaseOwnedProviderConnectionsWithSignal(workspace, signal)",
+    );
+    expect(view).toContain("...all.filter(isProviderConnectionCandidate)");
+    expect(view).toContain("...releaseOwnedProviders");
+    expect(view).toContain("onSourceSyncProgress:");
+    expect(view).toContain("onSourceSnapshot:");
+    expect(view).toContain("preparationStageHint()");
+    expect(view).toContain("activePreparationController?.abort()");
+    expect(view).toContain("clearTimeout(preparationTimeout)");
+    expect(view).toContain('t("common.cancel")');
+  });
+
+  test("public Git discovery never waits for the optional source credential inventory", () => {
+    const view = read("dashboard/src/views/new/InstallView.tsx");
+    expect(view).toContain(
+      "sourceAuthConnectionId().length > 0",
+    );
+    expect(view).not.toContain(
+      "listing() === null,\n      );",
+    );
+  });
+
   test("authoritative refs stay exact and prepared state is invalidated by edits", () => {
     const view = read("dashboard/src/views/new/InstallView.tsx");
     expect(view).not.toContain("refInputValue(");
@@ -55,7 +88,20 @@ describe("single-screen install surface", () => {
     expect(view).toContain('throw new Error(t("workspace.selectMessage"));');
     expect(view).not.toContain('phase() !== "configure" && connectionsLoaded()');
     expect(view).toContain("const prepareInstall = async () =>");
-    expect(view).toContain("const providers = await loadConnections(workspace);");
+    expect(view).toContain(
+      "const providers = await loadConnections(",
+    );
+  });
+
+  test("validates persisted Workspace selection before scoped connection reads", () => {
+    const view = read("dashboard/src/views/new/InstallView.tsx");
+    const ensureStart = view.indexOf("const ensureWorkspace = async");
+    const ensureEnd = view.indexOf("const loadConnections = async", ensureStart);
+    const ensureSource = view.slice(ensureStart, ensureEnd);
+    expect(ensureSource).toContain("const workspaces = await listWorkspacesCached()");
+    expect(ensureSource).toContain("selectAvailableWorkspaceId(");
+    expect(ensureSource).toContain("currentWorkspaceId(),");
+    expect(ensureSource).not.toContain("if (workspaceId()) {");
   });
 
   test("only ready compatibility can reach Capsule creation", () => {

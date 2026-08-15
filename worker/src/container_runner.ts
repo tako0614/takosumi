@@ -30,10 +30,7 @@ import {
   OpenTofuRunnerExecutionError,
   OpenTofuRunnerInfrastructureError,
 } from "../../core/domains/deploy-control/mod.ts";
-import type {
-  CloudflareWorkerEnv,
-  OpenTofuRunAction,
-} from "./bindings.ts";
+import type { CloudflareWorkerEnv, OpenTofuRunAction } from "./bindings.ts";
 import { redactString } from "takosumi-contract/redaction";
 import { normalizePlanResourceScope } from "takosumi-contract";
 import { parseRepositoryManifestSnapshot } from "takosumi-contract/sources";
@@ -55,9 +52,20 @@ const RUNNER_CAPACITY_EXCEEDED_PATTERN =
   /maximum number of running container instances exceeded/i;
 const RUNNER_SUBSTRATE_RESET_PATTERN =
   /durable object reset because its code was updated/i;
-const RUNNER_ARTIFACT_RELAY_AMBIGUOUS_CODE =
-  "runner_artifact_relay_ambiguous";
+const RUNNER_ARTIFACT_RELAY_AMBIGUOUS_CODE = "runner_artifact_relay_ambiguous";
 const RUNNER_REJECTED_CODE = "runner_rejected";
+const RUNNER_PLAN_EXECUTION_FAILURE_CODES = new Set([
+  "provider_source_invalid",
+  "provider_package_unavailable",
+  "provider_platform_binary_unavailable",
+  "provider_protocol_mismatch",
+  "provider_policy_denied",
+  "runner_capability_missing",
+  "provider_checksum_mismatch",
+  "opentofu_init_failed",
+  "source_build_failed",
+  "opentofu_plan_failed",
+]);
 const RUNNER_TRANSPORT_FAILED_CODE = "runner_transport_failed";
 const RUNNER_REQUEST_ABORTED_CODE = "runner_request_aborted";
 const RUNNER_TIMEOUT_CODE = "runner_timeout";
@@ -66,12 +74,12 @@ const RUNNER_PROVIDER_FAILURE_CODES = new Set([
   "apply_failed",
   RUNNER_PROVIDER_EXECUTION_FAILED_CODE,
 ]);
+const MAX_RUNNER_EXECUTION_DETAIL_CHARS = 4_096;
+const UNSAFE_PROVIDER_FAILURE_DETAIL_LINE =
+  /(?:\b(?:authorization|bearer|cookie|token|password|passwd|secret|credential|api[_-]?key|body)\b|\/work\/)/iu;
 const RUNNER_STARTUP_SECONDS_HEADER = "x-takosumi-runner-startup-seconds";
 type ContainerRunnerAction =
-  | OpenTofuRunAction
-  | "release"
-  | "stable_semver_tag"
-  | "source_snapshot_file";
+  OpenTofuRunAction | "release" | "stable_semver_tag" | "source_snapshot_file";
 
 export class CloudflareContainerOpenTofuRunner
   implements OpenTofuRunner, ServiceDataBackupRunner
@@ -150,7 +158,10 @@ export class CloudflareContainerOpenTofuRunner
       "apply",
       runnerRunIdFromPlanArtifact(job.planArtifact) ?? job.planRun.id,
       job,
-      { signal: control?.signal },
+      {
+        signal: control?.signal,
+        runnerObjectName: job.applyRun.id,
+      },
     );
     // The DO echoes the persisted state digest and opaque raw-output ref. Thread
     // both onto the result so the controller
@@ -164,7 +175,9 @@ export class CloudflareContainerOpenTofuRunner
         (providerExecutionFailure.statePersistence === "persisted") !==
         Boolean(stateDigest)
       ) {
-        throw new Error("runner failed-state persistence evidence is inconsistent");
+        throw new Error(
+          "runner failed-state persistence evidence is inconsistent",
+        );
       }
       return {
         providerExecutionFailure,
@@ -211,7 +224,10 @@ export class CloudflareContainerOpenTofuRunner
       "destroy",
       runnerRunIdFromPlanArtifact(job.planArtifact) ?? job.planRun.id,
       job,
-      { signal: control?.signal },
+      {
+        signal: control?.signal,
+        runnerObjectName: job.applyRun.id,
+      },
     );
     const state = recordFromRecord(result, "state");
     return {
@@ -250,37 +266,42 @@ export class CloudflareContainerOpenTofuRunner
     job: ReleaseCommandRunJob,
     control?: RunExecutionControl,
   ): Promise<ReleaseCommandRunResult> {
-    const result = await this.#runContainer("release", job.runId, {
-      release: {
-        commands: job.commands.map((command) => ({
-          id: command.id,
-          command: [...command.command],
-          ...(command.workingDirectory
-            ? { workingDirectory: command.workingDirectory }
-            : {}),
-          ...(command.env ? { env: command.env } : {}),
-          ...(command.timeoutSeconds
-            ? { timeoutSeconds: command.timeoutSeconds }
-            : {}),
-        })),
-        ...(job.sourceBuild ? { sourceBuild: job.sourceBuild } : {}),
+    const result = await this.#runContainer(
+      "release",
+      job.runId,
+      {
+        release: {
+          commands: job.commands.map((command) => ({
+            id: command.id,
+            command: [...command.command],
+            ...(command.workingDirectory
+              ? { workingDirectory: command.workingDirectory }
+              : {}),
+            ...(command.env ? { env: command.env } : {}),
+            ...(command.timeoutSeconds
+              ? { timeoutSeconds: command.timeoutSeconds }
+              : {}),
+          })),
+          ...(job.sourceBuild ? { sourceBuild: job.sourceBuild } : {}),
+        },
+        sourceArchive: {
+          ref: job.sourceSnapshot.archiveRef,
+          digest: job.sourceSnapshot.archiveDigest,
+        },
+        outputs: job.nonSensitiveOutputs,
+        providerConfigurations: job.providerConfigurations,
+        ...(job.credentials ? { credentials: job.credentials } : {}),
+        activation: {
+          applyRunId: job.applyRunId,
+          ...(job.workspaceId ? { workspaceId: job.workspaceId } : {}),
+          capsuleId: job.capsuleId,
+          stateVersionId: job.stateVersionId,
+          sourceSnapshotId: job.sourceSnapshot.id,
+          sourceCommit: job.sourceSnapshot.resolvedCommit,
+        },
       },
-      sourceArchive: {
-        ref: job.sourceSnapshot.archiveRef,
-        digest: job.sourceSnapshot.archiveDigest,
-      },
-      outputs: job.nonSensitiveOutputs,
-      providerConfigurations: job.providerConfigurations,
-      ...(job.credentials ? { credentials: job.credentials } : {}),
-      activation: {
-        applyRunId: job.applyRunId,
-        ...(job.workspaceId ? { workspaceId: job.workspaceId } : {}),
-        capsuleId: job.capsuleId,
-        stateVersionId: job.stateVersionId,
-        sourceSnapshotId: job.sourceSnapshot.id,
-        sourceCommit: job.sourceSnapshot.resolvedCommit,
-      },
-    }, { signal: control?.signal });
+      { signal: control?.signal },
+    );
     const status = stringFromRecord(result, "status");
     if (status !== "succeeded") {
       throw new Error(
@@ -497,6 +518,12 @@ export class CloudflareContainerOpenTofuRunner
     options: {
       readonly timeoutMs?: number;
       readonly signal?: AbortSignal;
+      /**
+       * Durable Object instance authority. Apply/destroy restore the reviewed
+       * Plan artifact under its original Run id, but must not reuse that
+       * Plan's Container: its activity shutdown can race the mutation.
+       */
+      readonly runnerObjectName?: string;
     } = {},
   ): Promise<Record<string, unknown>> {
     if (!this.env.RUNNER) {
@@ -505,7 +532,9 @@ export class CloudflareContainerOpenTofuRunner
     if (options.signal?.aborted) {
       throw abortReason(options.signal);
     }
-    const id = this.env.RUNNER.idFromName(runId);
+    const id = this.env.RUNNER.idFromName(
+      options.runnerObjectName ?? runId,
+    );
     const timeoutMs = positiveTimeoutMs(options.timeoutMs);
     const controller =
       timeoutMs || options.signal ? new AbortController() : undefined;
@@ -574,10 +603,7 @@ export class CloudflareContainerOpenTofuRunner
             if (relayInfrastructureError) {
               throw relayInfrastructureError;
             }
-            if (
-              attempt < attempts &&
-              failure.code === "capacity_exhausted"
-            ) {
+            if (attempt < attempts && failure.code === "capacity_exhausted") {
               await sleepBeforeCapacityRetry(this.env, attempt, controller);
               continue;
             }
@@ -643,10 +669,7 @@ function providerExecutionFailureFromContainerResult(
     return undefined;
   }
   const statePersistence = stringFromRecord(failure, "statePersistence");
-  if (
-    statePersistence !== "persisted" &&
-    statePersistence !== "unavailable"
-  ) {
+  if (statePersistence !== "persisted" && statePersistence !== "unavailable") {
     return undefined;
   }
   const errorCode = stringFromRecord(result, "errorCode");
@@ -666,6 +689,7 @@ function failedProviderExecutionResult(
   const failure = providerExecutionFailureFromContainerResult(result);
   const state = recordFromRecord(result, "state");
   const stateDigest = state ? stringFromRecord(state, "digest") : undefined;
+  const detail = providerExecutionDetailFromPayload(result);
   return {
     status: "failed",
     errorCode: failure?.errorCode ?? RUNNER_PROVIDER_EXECUTION_FAILED_CODE,
@@ -673,6 +697,7 @@ function failedProviderExecutionResult(
       kind: "provider_execution_failed",
       statePersistence: failure?.statePersistence ?? "unavailable",
     },
+    ...(detail ? { detail } : {}),
     ...(stateDigest ? { state: { digest: stateDigest } } : {}),
   };
 }
@@ -735,9 +760,10 @@ function runnerCapacityRetryDelayMs(
 
 function isRunnerCapacityExceededError(error: unknown): boolean {
   return (
-    error instanceof OpenTofuRunnerInfrastructureError &&
-    error.reason === "capacity_exhausted"
-  ) || (error instanceof Error && isRunnerCapacityExceededMessage(error.message));
+    (error instanceof OpenTofuRunnerInfrastructureError &&
+      error.reason === "capacity_exhausted") ||
+    (error instanceof Error && isRunnerCapacityExceededMessage(error.message))
+  );
 }
 
 function isRunnerCapacityExceededMessage(message: string): boolean {
@@ -747,17 +773,21 @@ function isRunnerCapacityExceededMessage(message: string): boolean {
 function runnerErrorFromUnknown(error: unknown): Error {
   if (error instanceof OpenTofuRunnerExecutionError) {
     const reason = finiteRunnerReason(error.reason, RUNNER_REJECTED_CODE);
-    return new OpenTofuRunnerExecutionError(
-      runnerFailureMessage(reason),
-      { reason, originalError: error },
-    );
+    return new OpenTofuRunnerExecutionError(runnerFailureMessage(reason), {
+      reason,
+      ...(error.detail ? { detail: error.detail } : {}),
+      originalError: error,
+    });
   }
   if (error instanceof OpenTofuRunnerInfrastructureError) {
-    const reason = finiteRunnerReason(error.reason, RUNNER_TRANSPORT_FAILED_CODE);
-    return new OpenTofuRunnerInfrastructureError(
-      runnerFailureMessage(reason),
-      { reason, originalError: error },
+    const reason = finiteRunnerReason(
+      error.reason,
+      RUNNER_TRANSPORT_FAILED_CODE,
     );
+    return new OpenTofuRunnerInfrastructureError(runnerFailureMessage(reason), {
+      reason,
+      originalError: error,
+    });
   }
   if (error instanceof Error) {
     const reason = RUNNER_CAPACITY_EXCEEDED_PATTERN.test(error.message)
@@ -765,10 +795,10 @@ function runnerErrorFromUnknown(error: unknown): Error {
       : RUNNER_SUBSTRATE_RESET_PATTERN.test(error.message)
         ? "substrate_reset"
         : RUNNER_TRANSPORT_FAILED_CODE;
-    return new OpenTofuRunnerInfrastructureError(
-      runnerFailureMessage(reason),
-      { reason, originalError: error },
-    );
+    return new OpenTofuRunnerInfrastructureError(runnerFailureMessage(reason), {
+      reason,
+      originalError: error,
+    });
   }
   return new OpenTofuRunnerInfrastructureError(
     runnerFailureMessage(RUNNER_TRANSPORT_FAILED_CODE),
@@ -835,9 +865,12 @@ function runnerInfrastructureErrorFromPayload(
     payload.retryable === true &&
     errorCode === RUNNER_ARTIFACT_RELAY_AMBIGUOUS_CODE
   ) {
-    return new OpenTofuRunnerInfrastructureError(runnerFailureMessage(errorCode), {
-      reason: errorCode,
-    });
+    return new OpenTofuRunnerInfrastructureError(
+      runnerFailureMessage(errorCode),
+      {
+        reason: errorCode,
+      },
+    );
   }
   return undefined;
 }
@@ -846,6 +879,13 @@ function runnerExecutionErrorFromPayload(
   payload: Record<string, unknown>,
 ): OpenTofuRunnerExecutionError | undefined {
   const errorCode = stringFromRecord(payload, "errorCode");
+  if (errorCode && RUNNER_PLAN_EXECUTION_FAILURE_CODES.has(errorCode)) {
+    const detail = runnerExecutionDetailFromPayload(payload);
+    return new OpenTofuRunnerExecutionError(runnerFailureMessage(errorCode), {
+      reason: errorCode,
+      ...(detail ? { detail } : {}),
+    });
+  }
   if (
     payload.retryable === false &&
     errorCode === RUNNER_MUTATION_INDETERMINATE_CODE
@@ -853,11 +893,53 @@ function runnerExecutionErrorFromPayload(
     return new OpenTofuRunnerExecutionError(
       runnerFailureMessage(RUNNER_MUTATION_INDETERMINATE_CODE),
       {
-      reason: RUNNER_MUTATION_INDETERMINATE_CODE,
+        reason: RUNNER_MUTATION_INDETERMINATE_CODE,
       },
     );
   }
   return undefined;
+}
+
+function runnerExecutionDetailFromPayload(
+  payload: Record<string, unknown>,
+): string | undefined {
+  const detail = runnerExecutionRawDetailFromPayload(payload);
+  if (!detail) return undefined;
+  return boundedDiagnosticText(
+    redactRunnerDiagnosticText(detail),
+    MAX_RUNNER_EXECUTION_DETAIL_CHARS,
+  );
+}
+
+function runnerExecutionRawDetailFromPayload(
+  payload: Record<string, unknown>,
+): string | undefined {
+  const detail = [
+    stringFromRecord(payload, "detail"),
+    stringFromRecord(payload, "stderr"),
+    stringFromRecord(payload, "stdout"),
+  ]
+    .filter((value): value is string => Boolean(value))
+    .join("\n")
+    .trim();
+  return detail || undefined;
+}
+
+function providerExecutionDetailFromPayload(
+  payload: Record<string, unknown>,
+): string | undefined {
+  const detail = runnerExecutionRawDetailFromPayload(payload);
+  if (!detail) return undefined;
+  const safeLines = detail
+    .split(/\r?\n/u)
+    .filter((line) => !UNSAFE_PROVIDER_FAILURE_DETAIL_LINE.test(line))
+    .join("\n")
+    .trim();
+  if (!safeLines) return undefined;
+  return boundedDiagnosticText(
+    redactRunnerDiagnosticText(safeLines),
+    MAX_RUNNER_EXECUTION_DETAIL_CHARS,
+  );
 }
 
 function compatibilityCheckTimeoutMs(env: CloudflareWorkerEnv): number {
@@ -952,9 +1034,14 @@ function repositoryInstallMetadataFromContainerResult(
   return undefined;
 }
 
-function tailText(text: string, maxLength: number): string {
+function boundedDiagnosticText(text: string, maxLength: number): string {
   if (text.length <= maxLength) return text;
-  return `...${text.slice(text.length - maxLength)}`;
+  const omission = "\n... diagnostics omitted ...\n";
+  if (maxLength <= omission.length) return text.slice(0, maxLength);
+  const retainedLength = maxLength - omission.length;
+  const headLength = Math.ceil(retainedLength / 2);
+  const tailLength = retainedLength - headLength;
+  return `${text.slice(0, headLength)}${omission}${text.slice(-tailLength)}`;
 }
 
 function diagnosticsFromContainerResult(
@@ -969,6 +1056,18 @@ function diagnosticsFromContainerResult(
       severity: "warning",
       code: "runner_diagnostics_redacted",
       message: "runner provider diagnostics omitted",
+    });
+  }
+  const providerFailure = providerExecutionFailureFromContainerResult(result);
+  const providerFailureDetail = providerFailure
+    ? providerExecutionDetailFromPayload(result)
+    : undefined;
+  if (providerFailure && providerFailureDetail) {
+    diagnostics.push({
+      severity: "error",
+      code: providerFailure.errorCode,
+      message: "OpenTofu provider execution failed after dispatch",
+      detail: providerFailureDetail,
     });
   }
   const phaseTimingDetail = phaseTimingDetailFromContainerResult(result);

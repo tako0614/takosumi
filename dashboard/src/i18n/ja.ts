@@ -36,8 +36,15 @@ export const ja = {
   "installStore.publicSource": "公開リポジトリ",
   "installStore.add": "追加",
   "installStore.preparing": "追加の準備をしています",
-  "installStore.preparingHint":
-    "リポジトリを確認し、必要な接続と変更内容をまとめています。",
+  "installStore.preparingWorkspace": "選択中のWorkspaceを確認しています。",
+  "installStore.preparingConnections": "利用できる接続を確認しています。",
+  "installStore.preparingSource": "リポジトリの内容を取得しています。",
+  "installStore.preparingCompatibility":
+    "この環境で追加できるか確認しています。",
+  "installStore.preparingConfig": "サービスの設定項目を準備しています。",
+  "installStore.preparingPlan": "確認用の変更内容を準備しています。",
+  "installStore.preparingTimeout":
+    "準備に時間がかかりすぎました。サービスは作成されていません。もう一度お試しください。",
   "installStore.compatibilityFailed":
     "このサービスは現在の環境に追加できません。",
   "installStore.providerTitle": "接続が必要です",
