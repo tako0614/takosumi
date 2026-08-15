@@ -601,6 +601,11 @@ type D1PredeployedWorkspacePageRow = {
   readonly workspace_id: string | null;
 };
 
+type D1PredeployedWorkspaceRow = Pick<
+  D1PredeployedWorkspacePageRow,
+  "maintenance_json" | "columns_json" | "migrations_json" | "workspace_record"
+>;
+
 // `createTakosumiWorkerService` constructs a fresh store for every request, but
 // Cloudflare reuses the bound D1 object for the lifetime of an isolate. Keep the
 // expensive immutable migration-catalog proof on that binding rather than on a
@@ -1348,11 +1353,92 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
   }
 
   async getWorkspace(id: string): Promise<Workspace | undefined> {
+    if (this.#schemaMode === "predeployed") {
+      return await this.#getPredeployedWorkspace(id);
+    }
     return await this.#drizzleFirstJson<Workspace>(
       schema.workspaces,
       schema.workspaces.recordJson,
       eq(schema.workspaces.id, id),
     );
+  }
+
+  async #getPredeployedWorkspace(id: string): Promise<Workspace | undefined> {
+    const includeSchemaEvidence = !this.#predeployedSchemaVerified;
+    const result = await this.db
+      .prepare(
+        `SELECT (
+                  SELECT json_object(
+                    'active', active,
+                    'migration_bypass', migration_bypass,
+                    'fence_id', fence_id,
+                    'source_commit', source_commit,
+                    'manifest_digest', manifest_digest,
+                    'environment', environment,
+                    'activated_at', activated_at,
+                    'released_at', released_at,
+                    'database_role', database_role,
+                    'release_policy', release_policy,
+                    'database_id', database_id,
+                    'source_export_sha256', source_export_sha256,
+                    'predecessor_fence_id', predecessor_fence_id,
+                    'predecessor_source_commit', predecessor_source_commit,
+                    'predecessor_manifest_digest', predecessor_manifest_digest
+                  )
+                  FROM _takosumi_control_schema_maintenance
+                  WHERE singleton = 1
+                ) AS maintenance_json,
+                ${
+                  includeSchemaEvidence
+                    ? `(
+                         SELECT json_group_array(json_object(
+                           'cid', cid,
+                           'name', name,
+                           'type', type,
+                           'notnull', "notnull",
+                           'dflt_value', dflt_value,
+                           'pk', pk
+                         ))
+                         FROM pragma_table_info('schema_migrations')
+                       )`
+                    : "NULL"
+                } AS columns_json,
+                ${
+                  includeSchemaEvidence
+                    ? `(
+                         SELECT json_group_array(json_object(
+                           'version', version,
+                           'name', name,
+                           'checksum', checksum,
+                           'applied_at', applied_at
+                         ))
+                         FROM (
+                           SELECT version, name, checksum, applied_at
+                           FROM schema_migrations
+                           ORDER BY version
+                         ) AS ordered_migrations
+                       )`
+                    : "NULL"
+                } AS migrations_json,
+                (
+                  SELECT record_json
+                  FROM workspaces
+                  WHERE id = ?
+                  LIMIT 1
+                ) AS workspace_record`,
+      )
+      .bind(id)
+      .first<D1PredeployedWorkspaceRow>();
+    if (!result) {
+      throw new Error("D1 predeployed Workspace read evidence is incomplete");
+    }
+    await this.#acceptPredeployedReadinessEvidence(
+      result,
+      includeSchemaEvidence,
+    );
+    return result.workspace_record === null
+      ? undefined
+      : parseD1WorkspaceRecord(result.workspace_record);
   }
 
   async listWorkspacesByIds(
@@ -1721,28 +1807,10 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
     ) {
       throw new Error("D1 predeployed Workspace read evidence is incomplete");
     }
-    const maintenance = parseD1JsonObject(
-      readiness.maintenance_json,
-      "maintenance",
+    await this.#acceptPredeployedReadinessEvidence(
+      readiness,
+      includeSchemaEvidence,
     );
-    await assertControlD1MaintenanceResultInactive({
-      results: [maintenance],
-      success: true,
-    });
-    if (includeSchemaEvidence) {
-      const columns = parseD1JsonArray<D1TableInfoRow>(
-        readiness.columns_json,
-        "schema columns",
-      );
-      const migrations = parseD1JsonArray<D1SchemaMigrationRow>(
-        readiness.migrations_json,
-        "migration ledger",
-      );
-      await validateD1OpenTofuLedgerSchemaPredeployed(columns, migrations);
-      this.#predeployedSchemaVerified = true;
-      verifiedPredeployedD1Bindings.add(this.db);
-      this.#initialized = Promise.resolve();
-    }
 
     const workspaces = rows
       .slice(1)
@@ -1757,6 +1825,37 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       throw new Error("D1 predeployed Workspace total is invalid");
     }
     return { ...page, ...(total === undefined ? {} : { total }) };
+  }
+
+  async #acceptPredeployedReadinessEvidence(
+    readiness: Pick<
+      D1PredeployedWorkspacePageRow,
+      "maintenance_json" | "columns_json" | "migrations_json"
+    >,
+    includeSchemaEvidence: boolean,
+  ): Promise<void> {
+    const maintenance = parseD1JsonObject(
+      readiness.maintenance_json,
+      "maintenance",
+    );
+    await assertControlD1MaintenanceResultInactive({
+      results: [maintenance],
+      success: true,
+    });
+    if (!includeSchemaEvidence) return;
+
+    const columns = parseD1JsonArray<D1TableInfoRow>(
+      readiness.columns_json,
+      "schema columns",
+    );
+    const migrations = parseD1JsonArray<D1SchemaMigrationRow>(
+      readiness.migrations_json,
+      "migration ledger",
+    );
+    await validateD1OpenTofuLedgerSchemaPredeployed(columns, migrations);
+    this.#predeployedSchemaVerified = true;
+    verifiedPredeployedD1Bindings.add(this.db);
+    this.#initialized = Promise.resolve();
   }
 
   async putProject(project: Project): Promise<Project> {
