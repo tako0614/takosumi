@@ -35,6 +35,8 @@ const BATCH_CAPSULE_A = "capsule_authority_batch_a";
 const BATCH_CAPSULE_B = "capsule_authority_batch_b";
 const BATCH_CAPSULE_DESTROYED = "capsule_authority_batch_destroyed";
 const BATCH_CAPSULE_UNSAFE = "capsule_authority_batch_unsafe";
+const BATCH_CAPSULE_PRE_PROVIDER_FAILURE =
+  "capsule_authority_batch_pre_provider_failure";
 const clients: PGliteSqlClient[] = [];
 
 interface RecordedQuery {
@@ -169,6 +171,37 @@ function batchTerminatingRun(capsuleId: string): ApplyRun {
   };
 }
 
+function batchPreProviderFailureRun(capsuleId: string): ApplyRun {
+  const run = terminatingRun("failed");
+  return {
+    ...run,
+    id: `run_init_failed_${capsuleId}`,
+    planRunId: `plan_init_failed_${capsuleId}`,
+    capsuleId,
+    operation: "update",
+    expected: {
+      ...run.expected,
+      planRunId: `plan_init_failed_${capsuleId}`,
+      capsuleId,
+    },
+    auditEvents: [
+      {
+        id: `audit_init_failed_${capsuleId}`,
+        type: "apply.failed",
+        at: 2,
+        data: { providerDispatched: true },
+      },
+    ],
+    diagnostics: [
+      {
+        severity: "error",
+        code: "opentofu_init_failed",
+        message: "runner failure (opentofu_init_failed)",
+      },
+    ],
+  };
+}
+
 const batchAuthorityInputs = [
   { workspaceId: WORKSPACE_ID, capsuleId: BATCH_CAPSULE_B },
   { workspaceId: WORKSPACE_ID, capsuleId: BATCH_CAPSULE_A },
@@ -177,6 +210,10 @@ const batchAuthorityInputs = [
   { workspaceId: "workspace_foreign", capsuleId: BATCH_CAPSULE_A },
   { workspaceId: WORKSPACE_ID, capsuleId: BATCH_CAPSULE_DESTROYED },
   { workspaceId: WORKSPACE_ID, capsuleId: BATCH_CAPSULE_UNSAFE },
+  {
+    workspaceId: WORKSPACE_ID,
+    capsuleId: BATCH_CAPSULE_PRE_PROVIDER_FAILURE,
+  },
 ] as const;
 
 const batchAuthorityExpected = [
@@ -199,6 +236,11 @@ const batchAuthorityExpected = [
   undefined,
   undefined,
   undefined,
+  {
+    workspaceId: WORKSPACE_ID,
+    capsuleId: BATCH_CAPSULE_PRE_PROVIDER_FAILURE,
+    executionAuthorityEpoch: 1,
+  },
 ] as const;
 
 async function seedBatchAuthorities(
@@ -206,11 +248,13 @@ async function seedBatchAuthorities(
 ): Promise<void> {
   await store.putCapsule(batchCapsule(BATCH_CAPSULE_A));
   await store.putCapsule(batchCapsule(BATCH_CAPSULE_B));
-  await store.putCapsule(
-    batchCapsule(BATCH_CAPSULE_DESTROYED, "destroyed"),
-  );
+  await store.putCapsule(batchCapsule(BATCH_CAPSULE_DESTROYED, "destroyed"));
   await store.putCapsule(batchCapsule(BATCH_CAPSULE_UNSAFE));
   await store.putApplyRun(batchTerminatingRun(BATCH_CAPSULE_UNSAFE));
+  await store.putCapsule(batchCapsule(BATCH_CAPSULE_PRE_PROVIDER_FAILURE));
+  await store.putApplyRun(
+    batchPreProviderFailureRun(BATCH_CAPSULE_PRE_PROVIDER_FAILURE),
+  );
 }
 
 async function expectBatchAuthorityParity(
@@ -242,9 +286,8 @@ async function expectLifecycleParity(
 
   await first.patchCapsule(CAPSULE_ID, { status: "stale", updatedAt: NOW });
   expect(
-    (
-      await first.resolveCapsuleExecutionAuthority(WORKSPACE_ID, CAPSULE_ID)
-    )?.executionAuthorityEpoch,
+    (await first.resolveCapsuleExecutionAuthority(WORKSPACE_ID, CAPSULE_ID))
+      ?.executionAuthorityEpoch,
   ).toBe(1);
 
   await first.putApplyRun(terminatingRun("queued"));
@@ -270,9 +313,8 @@ async function expectLifecycleParity(
   // that retirement did not reset the private fence to its default.
   await first.patchCapsule(CAPSULE_ID, { status: "active", updatedAt: NOW });
   expect(
-    (
-      await first.resolveCapsuleExecutionAuthority(WORKSPACE_ID, CAPSULE_ID)
-    )?.executionAuthorityEpoch,
+    (await first.resolveCapsuleExecutionAuthority(WORKSPACE_ID, CAPSULE_ID))
+      ?.executionAuthorityEpoch,
   ).toBe(2);
 
   await first.commitRunState({
@@ -284,9 +326,8 @@ async function expectLifecycleParity(
   });
   await first.patchCapsule(CAPSULE_ID, { status: "active", updatedAt: NOW });
   expect(
-    (
-      await first.resolveCapsuleExecutionAuthority(WORKSPACE_ID, CAPSULE_ID)
-    )?.executionAuthorityEpoch,
+    (await first.resolveCapsuleExecutionAuthority(WORKSPACE_ID, CAPSULE_ID))
+      ?.executionAuthorityEpoch,
   ).toBe(3);
 }
 
@@ -371,11 +412,14 @@ describe("Capsule execution authority", () => {
       .bind(...authorityStatement.parameters)
       .all<{ readonly detail: string }>();
     const details = (plan.results ?? []).map((row) => row.detail);
-    expect(details.some((detail) =>
-      detail.includes("capsules_execution_authority_exact_idx")
-    )).toBe(true);
-    expect(details.some((detail) => detail.includes("runs_installation_idx")))
-      .toBe(true);
+    expect(
+      details.some((detail) =>
+        detail.includes("capsules_execution_authority_exact_idx"),
+      ),
+    ).toBe(true);
+    expect(
+      details.some((detail) => detail.includes("runs_installation_idx")),
+    ).toBe(true);
   });
 
   test("ordered authority batches execute on an isolated workerd D1", async () => {
@@ -426,9 +470,11 @@ describe("Capsule execution authority", () => {
     expect(d1PlanDetails).toContain(
       "SEARCH capsules USING INDEX capsules_execution_authority_exact_idx (space_id=? AND id=?)",
     );
-    expect(d1PlanDetails.some((detail) =>
-      detail.includes("runs_installation_idx (installation_id=?)")
-    )).toBe(true);
+    expect(
+      d1PlanDetails.some((detail) =>
+        detail.includes("runs_installation_idx (installation_id=?)"),
+      ),
+    ).toBe(true);
 
     const client = await PGliteSqlClient.create();
     clients.push(client);
@@ -470,9 +516,7 @@ describe("Capsule execution authority", () => {
     expect(pgPlanJson).toContain(
       "takosumi_capsules_execution_authority_exact_idx",
     );
-    expect(pgPlanJson).toContain(
-      "takosumi_runs_installation_created_at_idx",
-    );
+    expect(pgPlanJson).toContain("takosumi_runs_installation_created_at_idx");
   });
 
   test("resolver suspends unsafe runtime phases without consuming an epoch", async () => {
@@ -523,7 +567,10 @@ describe("Capsule execution authority", () => {
     let atomicReads = 0;
     let legacyReads = 0;
     const interleavableStore = {
-      async resolveCapsuleExecutionAuthority(workspaceId: string, capsuleId: string) {
+      async resolveCapsuleExecutionAuthority(
+        workspaceId: string,
+        capsuleId: string,
+      ) {
         atomicReads += 1;
         phase = "terminating";
         return undefined;
@@ -532,7 +579,10 @@ describe("Capsule execution authority", () => {
         phase = "terminating";
         return [];
       },
-      async getCapsuleExecutionAuthority(workspaceId: string, capsuleId: string) {
+      async getCapsuleExecutionAuthority(
+        workspaceId: string,
+        capsuleId: string,
+      ) {
         legacyReads += 1;
         if (legacyReads === 2) phase = "terminating";
         return {
@@ -547,7 +597,8 @@ describe("Capsule execution authority", () => {
           : { phase, runId: "run_destroy", runType: "destroy_apply" };
       },
     };
-    const resolver = createCapsuleExecutionAuthorityResolver(interleavableStore);
+    const resolver =
+      createCapsuleExecutionAuthorityResolver(interleavableStore);
 
     await expect(
       resolver.resolveExact({

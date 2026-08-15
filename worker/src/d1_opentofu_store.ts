@@ -138,6 +138,7 @@ import {
   sameResourceOperationIdentity,
   normalizeStoredCapsuleCompatibilityLevel,
   normalizeStoredCapsuleCompatibilityReport,
+  PRE_PROVIDER_RUNNER_FAILURE_DIAGNOSTIC_CODES,
 } from "../../core/domains/deploy-control/store.ts";
 import {
   artifactRecordFromRow,
@@ -173,6 +174,11 @@ const RUN_KIND_COMPATIBILITY_CHECK = "compatibility_check" as const;
 const RUN_KIND_RESOURCE_OPERATION = "resource_operation" as const;
 const RUN_KIND_BACKUP = "backup" as const;
 const RUN_KIND_RESTORE = "restore" as const;
+
+const D1_PRE_PROVIDER_FAILURE_CODE_SQL =
+  PRE_PROVIDER_RUNNER_FAILURE_DIAGNOSTIC_CODES.map((code) => `'${code}'`).join(
+    ", ",
+  );
 
 function compatibilityReportSourceId(value: string | null | undefined): string {
   if (!value?.trim()) {
@@ -338,13 +344,30 @@ latest_capsule_runtime_safety as (
                   select 1
                   from json_each(candidate.run_json, '$.auditEvents') as audit_event
                   where json_extract(
-                    audit_event.value,
-                    '$.data.providerDispatched'
-                  ) = 1
-                     or json_extract(
                        audit_event.value,
                        '$.data.lifecycleActionDispatched'
                      ) = 1
+                     or (
+                       json_extract(
+                         audit_event.value,
+                         '$.data.providerDispatched'
+                       ) = 1
+                       and not exists (
+                         select 1
+                         from json_each(
+                           candidate.run_json,
+                           '$.diagnostics'
+                         ) as diagnostic
+                         where json_extract(
+                           diagnostic.value,
+                           '$.severity'
+                         ) = 'error'
+                           and json_extract(
+                             diagnostic.value,
+                             '$.code'
+                           ) in (${D1_PRE_PROVIDER_FAILURE_CODE_SQL})
+                       )
+                     )
                 )
               )
               or (
@@ -363,13 +386,30 @@ latest_capsule_runtime_safety as (
                   select 1
                   from json_each(candidate.run_json, '$.auditEvents') as audit_event
                   where json_extract(
-                    audit_event.value,
-                    '$.data.providerDispatched'
-                  ) = 1
-                     or json_extract(
                        audit_event.value,
                        '$.data.lifecycleActionDispatched'
                      ) = 1
+                     or (
+                       json_extract(
+                         audit_event.value,
+                         '$.data.providerDispatched'
+                       ) = 1
+                       and not exists (
+                         select 1
+                         from json_each(
+                           candidate.run_json,
+                           '$.diagnostics'
+                         ) as diagnostic
+                         where json_extract(
+                           diagnostic.value,
+                           '$.severity'
+                         ) = 'error'
+                           and json_extract(
+                             diagnostic.value,
+                             '$.code'
+                           ) in (${D1_PRE_PROVIDER_FAILURE_CODE_SQL})
+                       )
+                     )
                 )
               )
               or (
@@ -492,18 +532,36 @@ order by request.request_index
 
 /** Mirrors applyRunMutationDispatched in the shared store model. */
 function d1RunMutationDispatched(): SQL {
+  const preProviderFailureCodes = sql.join(
+    PRE_PROVIDER_RUNNER_FAILURE_DIAGNOSTIC_CODES.map((code) => sql`${code}`),
+    sql`, `,
+  );
   return sql`
     EXISTS (
       SELECT 1
       FROM json_each(${schema.runs.runJson}, '$.auditEvents') AS audit_event
       WHERE json_extract(
         audit_event.value,
-        '$.data.providerDispatched'
+        '$.data.lifecycleActionDispatched'
       ) = 1
-         OR json_extract(
-           audit_event.value,
-           '$.data.lifecycleActionDispatched'
-         ) = 1
+    )
+    OR (
+      EXISTS (
+        SELECT 1
+        FROM json_each(${schema.runs.runJson}, '$.auditEvents') AS audit_event
+        WHERE json_extract(
+          audit_event.value,
+          '$.data.providerDispatched'
+        ) = 1
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM json_each(${schema.runs.runJson}, '$.diagnostics') AS diagnostic
+        WHERE json_extract(diagnostic.value, '$.severity') = 'error'
+          AND json_extract(diagnostic.value, '$.code') IN (
+            ${preProviderFailureCodes}
+          )
+      )
     )
   `;
 }
@@ -1291,9 +1349,7 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       const row = await this.#orm
         .select({ value: schema.workspaces.recordJson })
         .from(schema.workspaces)
-        .where(
-          eq(schema.workspaces.personalBootstrapOwnerId, ownerUserId),
-        )
+        .where(eq(schema.workspaces.personalBootstrapOwnerId, ownerUserId))
         .get();
       return row?.value as Workspace | undefined;
     };
@@ -2084,9 +2140,10 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       .limit(1)
       .get();
     if (row === undefined) return undefined;
-    const safety = row.safetyJson === null
-      ? undefined
-      : capsuleRuntimeSafetyFromRun(row.safetyJson as ApplyRun | Run);
+    const safety =
+      row.safetyJson === null
+        ? undefined
+        : capsuleRuntimeSafetyFromRun(row.safetyJson as ApplyRun | Run);
     return safety !== undefined && safety.phase !== "safe"
       ? undefined
       : { workspaceId, capsuleId, executionAuthorityEpoch: row.epoch };
@@ -2112,14 +2169,18 @@ export class CloudflareD1OpenTofuControlStore implements OpenTofuControlStore {
       const index = Number(row.request_index);
       const input = inputs[index];
       if (!Number.isSafeInteger(index) || index < 0 || input === undefined) {
-        throw new Error("D1 Capsule execution-authority batch index is invalid");
+        throw new Error(
+          "D1 Capsule execution-authority batch index is invalid",
+        );
       }
       if (row.epoch === null) continue;
-      const safety = row.safety_json === null
-        ? undefined
-        : capsuleRuntimeSafetyFromRun(
-            jsonRecordFromD1Value(row.safety_json) as unknown as ApplyRun | Run,
-          );
+      const safety =
+        row.safety_json === null
+          ? undefined
+          : capsuleRuntimeSafetyFromRun(
+              jsonRecordFromD1Value(row.safety_json) as unknown as
+                ApplyRun | Run,
+            );
       if (safety !== undefined && safety.phase !== "safe") continue;
       resolved[index] = {
         workspaceId: input.workspaceId,

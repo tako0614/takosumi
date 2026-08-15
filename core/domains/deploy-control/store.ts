@@ -1210,8 +1210,7 @@ export interface CapsuleExecutionAuthorityResolver {
 export function createCapsuleExecutionAuthorityResolver(
   store: Pick<
     OpenTofuControlStore,
-    | "resolveCapsuleExecutionAuthority"
-    | "resolveCapsuleExecutionAuthorities"
+    "resolveCapsuleExecutionAuthority" | "resolveCapsuleExecutionAuthorities"
   >,
 ): CapsuleExecutionAuthorityResolver {
   return {
@@ -2295,9 +2294,7 @@ export class InMemoryOpenTofuControlStore implements OpenTofuControlStore {
     return Promise.resolve(connection);
   }
 
-  createConnectionIfAbsent(
-    connection: ProviderConnection,
-  ): Promise<boolean> {
+  createConnectionIfAbsent(connection: ProviderConnection): Promise<boolean> {
     if (this.#connections.has(connection.id)) return Promise.resolve(false);
     this.#connections.set(connection.id, connection);
     return Promise.resolve(true);
@@ -3310,17 +3307,54 @@ export function runtimeSafetyCandidate(
 }
 
 /**
+ * Stable runner diagnostics that prove an Apply stopped before provider
+ * mutation could begin. Keep the SQL-backed stores in lockstep with this
+ * exported list; human-readable messages are deliberately not authority.
+ */
+export const PRE_PROVIDER_RUNNER_FAILURE_DIAGNOSTIC_CODES = [
+  "provider_source_invalid",
+  "provider_package_unavailable",
+  "provider_platform_binary_unavailable",
+  "provider_protocol_mismatch",
+  "provider_policy_denied",
+  "runner_capability_missing",
+  "provider_checksum_mismatch",
+  "opentofu_init_failed",
+  "source_build_failed",
+  "opentofu_plan_failed",
+] as const;
+
+const PRE_PROVIDER_RUNNER_FAILURE_DIAGNOSTIC_CODE_SET = new Set<string>(
+  PRE_PROVIDER_RUNNER_FAILURE_DIAGNOSTIC_CODES,
+);
+
+function applyRunStoppedBeforeProviderMutation(row: ApplyRun): boolean {
+  return (
+    row.diagnostics?.some(
+      (diagnostic) =>
+        diagnostic.severity === "error" &&
+        diagnostic.code !== undefined &&
+        PRE_PROVIDER_RUNNER_FAILURE_DIAGNOSTIC_CODE_SET.has(diagnostic.code),
+    ) ?? false
+  );
+}
+
+/**
  * Failed apply/destroy rows are decisive only after provider dispatch or a
  * service-side lifecycle action was actually invoked. Pre-flight credential,
  * policy, stale-plan, unavailable-activator, or queue failures cannot have
  * changed the Capsule and therefore keep the last pinned runtime revision.
  */
 export function applyRunMutationDispatched(row: ApplyRun): boolean {
-  return row.auditEvents.some(
-    (event) =>
-      event.data?.providerDispatched === true ||
-      event.data?.lifecycleActionDispatched === true,
+  const lifecycleActionDispatched = row.auditEvents.some(
+    (event) => event.data?.lifecycleActionDispatched === true,
   );
+  if (lifecycleActionDispatched) return true;
+
+  const providerRunnerInvoked = row.auditEvents.some(
+    (event) => event.data?.providerDispatched === true,
+  );
+  return providerRunnerInvoked && !applyRunStoppedBeforeProviderMutation(row);
 }
 
 export function capsuleRuntimeSafetyFromRun(
