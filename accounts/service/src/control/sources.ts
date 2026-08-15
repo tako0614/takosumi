@@ -332,9 +332,9 @@ export async function handleSources(
         );
       }
       const capsuleId = stringValue(body.capsuleId);
-      // Manual Git callers may select an existing DB-owned InstallConfig.
-      // Store compilation resolves an optional host policy override by URL and
-      // otherwise uses the generic host config; the client cannot choose it.
+      // A legacy/manual compatibility check may select an existing DB-owned
+      // InstallConfig. Repository compilation instead resolves the host policy
+      // ceiling by URL; Store discovery is never execution authority.
       const installConfigId = stringValue(body.installConfigId);
       const compileInstallUx = body.compileInstallUx === true;
       const capsuleName = stringValue(body.capsuleName);
@@ -355,13 +355,10 @@ export async function handleSources(
           400,
         );
       }
-      if (
-        compileInstallUx &&
-        (body.modulePath !== undefined || body.installConfigId !== undefined)
-      ) {
+      if (compileInstallUx && body.installConfigId !== undefined) {
         return errorJson(
           "invalid_request",
-          "compileInstallUx resolves installConfigId and modulePath server-side; Store callers must not select them.",
+          "compileInstallUx resolves installConfigId server-side; callers must not select it.",
           400,
           request,
         );
@@ -391,20 +388,29 @@ export async function handleSources(
             },
           );
         }
-        const moduleSelection = resolveRepoOwnedInstallModulePath({
-          sourceSnapshot: installUxSnapshot,
-        });
-        if (!moduleSelection.ok) {
-          return errorJson(
-            "repository_install_ux_invalid",
-            moduleSelection.diagnostic.message,
-            400,
-            request,
-            {},
-            { diagnosticCode: moduleSelection.diagnostic.code },
-          );
+        const manifest = installUxSnapshot.repositoryManifest;
+        if (!manifest || manifest.status === "absent") {
+          // Plain OpenTofu repositories keep the ordinary explicit-path flow.
+          // When a repository manifest is present, the same immutable snapshot
+          // validates the selected module before any DB-owned config is made.
+          installUxModulePath = modulePath ?? source.defaultPath;
+        } else {
+          const moduleSelection = resolveRepoOwnedInstallModulePath({
+            sourceSnapshot: installUxSnapshot,
+            ...(modulePath !== undefined ? { modulePath } : {}),
+          });
+          if (!moduleSelection.ok) {
+            return errorJson(
+              "repository_install_ux_invalid",
+              moduleSelection.diagnostic.message,
+              400,
+              request,
+              {},
+              { diagnosticCode: moduleSelection.diagnostic.code },
+            );
+          }
+          installUxModulePath = moduleSelection.modulePath;
         }
-        installUxModulePath = moduleSelection.modulePath;
         const baseConfigResolution = await resolveStoreBaseInstallConfig(
           operations,
           source,

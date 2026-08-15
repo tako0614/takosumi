@@ -738,15 +738,15 @@ function Inner(props: { readonly installingPrincipalId: string }) {
         sourceId: sourceId(),
         gitUrl: gitUrl().trim(),
         ref: gitRef().trim(),
-        path: listing() ? "." : modulePath().trim() || ".",
+        path: modulePath().trim() || ".",
         name: name().trim(),
         ...(sourceAuthConnectionId()
           ? { authConnectionId: sourceAuthConnectionId() }
           : {}),
-        ...(!listing()
-          ? { installConfigId: DEFAULT_CAPSULE_INSTALL_CONFIG_ID }
-          : {}),
-        compileInstallUx: listing() !== null,
+        // Store is URL/presentation discovery only. Every immutable repository
+        // snapshot gets the same repo-owned install compilation, including
+        // direct Git and CapsuleSourceOptions handoffs.
+        compileInstallUx: true,
         signal: controller.signal,
         timeoutMs: INSTALL_PREPARATION_TIMEOUT_MS,
         onSourceSyncProgress: () => setPreparationStage("source"),

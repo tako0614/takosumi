@@ -115,6 +115,15 @@ describe("single-screen install surface", () => {
     );
   });
 
+  test("repository install compilation is independent from Store discovery", () => {
+    const view = read("dashboard/src/views/new/InstallView.tsx");
+    expect(view).toContain("compileInstallUx: true");
+    expect(view).not.toContain("compileInstallUx: listing() !== null");
+    expect(view).not.toContain(
+      "!listing()\n          ? { installConfigId: DEFAULT_CAPSULE_INSTALL_CONFIG_ID }",
+    );
+  });
+
   test("discloses persisted sourceBuild before the Plan starts", () => {
     const view = read("dashboard/src/views/new/InstallView.tsx");
     expect(view).toContain("sourceBuildPreview(installConfig()?.sourceBuild)");

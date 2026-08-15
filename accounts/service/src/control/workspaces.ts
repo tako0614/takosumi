@@ -1614,6 +1614,12 @@ async function createCapsule(
         ? {
             variablePresentation: repoInstallUx.variablePresentation,
             installExperience: repoInstallUx.installExperience,
+            ...(repoInstallUx.hostRuntimeMaterialization
+              ? {
+                  hostRuntimeMaterialization:
+                    repoInstallUx.hostRuntimeMaterialization,
+                }
+              : {}),
           }
         : {}),
       ...(resolvedStoreMetadata ? { store: resolvedStoreMetadata } : {}),

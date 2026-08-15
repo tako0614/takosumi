@@ -27,6 +27,7 @@ import {
 } from "../../../../core/domains/deploy-control/capsule_lease.ts";
 import { InMemoryOpenTofuControlStore } from "../../../../core/domains/deploy-control/store.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../../../core/adapters/storage/artifact-references.ts";
+import { DEFAULT_CAPSULE_INSTALL_CONFIG_ID } from "../../../../core/domains/capsules/default_install_config.ts";
 import {
   formatResourceShapeId,
   type ResourceShapeRecord,
@@ -845,7 +846,7 @@ test("no-state Capsule DELETE rejects any runtime effect but permits pre-dispatc
   );
 });
 
-test("Store preflight resolves the repository default before exact compatibility while manual Git keeps explicit modulePath", async () => {
+test("repository preflight resolves the default before exact compatibility while manual Git keeps explicit modulePath", async () => {
   const accountStore = new InMemoryAccountsStore();
   const cookie = seedSession(accountStore);
   const deployStore = new InMemoryOpenTofuControlStore();
@@ -1239,6 +1240,144 @@ test("Store preflight resolves the repository default before exact compatibility
     manualCreated.capsule.installConfigId,
   );
   expect(manualConfig.modulePath).toBe("deploy/manual");
+});
+
+test("repository compilation preserves plain Git explicit paths when the manifest is absent", async () => {
+  const accountStore = new InMemoryAccountsStore();
+  const cookie = seedSession(accountStore);
+  const deployStore = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner();
+  const { operations } = await createTakosumiService({
+    role: "takosumi-api",
+    runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
+    opentofuControlStore: deployStore,
+    opentofuRunner: runner,
+    artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
+  });
+  const seeded = await seedCapsuleModel(deployStore, {
+    workspaceId: "ws_plain_git_compile",
+    sourceId: "src_plain_git_compile",
+    snapshotId: "snap_plain_git_compile",
+    capsuleId: "cap_plain_git_compile",
+    installConfigId: "icfg_plain_git_compile",
+    sourceUrl: "https://git.example.com/example/plain-opentofu.git",
+  });
+
+  const result = await controlJson<{
+    readonly report: { readonly level: string };
+    readonly repositoryInstallUx: { readonly status: "absent" };
+  }>(
+    {
+      operations,
+      store: accountStore,
+      cookie,
+      method: "POST",
+      path: `/api/v1/sources/${seeded.source.id}/compatibility-check`,
+      body: {
+        sourceSnapshotId: seeded.snapshot.id,
+        modulePath: "deploy/manual",
+        capsuleName: "plain-git",
+        compileInstallUx: true,
+      },
+    },
+    201,
+  );
+
+  expect(result.report.level).toBe("ready");
+  expect(result.repositoryInstallUx).toEqual({ status: "absent" });
+  expect(runner.capsuleSourceFileJobs).toHaveLength(1);
+  expect(runner.capsuleSourceFileJobs[0]?.modulePath).toBe("deploy/manual");
+
+  const manifestDigest = `sha256:${"7".repeat(64)}`;
+  await deployStore.putSourceSnapshot({
+    ...seeded.snapshot,
+    repositoryManifest: {
+      status: "present",
+      digest: manifestDigest,
+      document: {
+        apiVersion: "takosumi.com/v2.3",
+        kind: "Repository",
+        install: {
+          defaultModule: "deploy/current",
+          modules: {
+            "deploy/current": { inputs: [] },
+            "deploy/manual": {
+              inputs: [],
+              requires: [
+                {
+                  kind: "secret.generated",
+                  bytes: 32,
+                  encoding: "hex",
+                  deliver: { bindings: { value: "ENCRYPTION_KEY" } },
+                },
+              ],
+            },
+          },
+        },
+      },
+    },
+  });
+
+  const compiled = await controlJson<{
+    readonly repositoryInstallUx: {
+      readonly status: "accepted";
+      readonly installConfigId: string;
+    };
+  }>(
+    {
+      operations,
+      store: accountStore,
+      cookie,
+      method: "POST",
+      path: `/api/v1/sources/${seeded.source.id}/compatibility-check`,
+      body: {
+        sourceSnapshotId: seeded.snapshot.id,
+        modulePath: "deploy/manual",
+        capsuleName: "repo-explicit",
+        compileInstallUx: true,
+      },
+    },
+    201,
+  );
+  const preview = await operations.capsules.getInstallConfig(
+    compiled.repositoryInstallUx.installConfigId,
+  );
+  expect(preview.modulePath).toBe("deploy/manual");
+  expect(preview.hostRuntimeMaterialization?.requirements).toEqual([
+    {
+      kind: "generated_secret",
+      binding: "ENCRYPTION_KEY",
+      secretRef: "secret:repository/ENCRYPTION_KEY",
+      bytes: 32,
+      encoding: "hex",
+    },
+  ]);
+
+  const created = await controlJson<{
+    readonly capsule: { readonly installConfigId: string };
+  }>(
+    {
+      operations,
+      store: accountStore,
+      cookie,
+      method: "POST",
+      path: `/api/v1/workspaces/${seeded.workspace.id}/capsules`,
+      body: {
+        name: "repo-explicit-create",
+        environment: "production",
+        sourceId: seeded.source.id,
+        installConfigId: DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
+        modulePath: "deploy/manual",
+      },
+    },
+    201,
+  );
+  const scoped = await operations.capsules.getInstallConfig(
+    created.capsule.installConfigId,
+  );
+  expect(scoped.hostRuntimeMaterialization).toEqual(
+    preview.hostRuntimeMaterialization,
+  );
 });
 
 test("initial Plan and Apply keep the persisted repository sourceBuild after metadata changes", async () => {
