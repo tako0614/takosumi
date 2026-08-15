@@ -222,6 +222,87 @@ describe("canonical Capsule Run credential context", () => {
     ).toEqual({ ok: false, reason: "runtime_safety_mismatch" });
   });
 
+  test("allows only an exact fresh plan and apply to reconcile persisted ordinary apply state", async () => {
+    const capsule = {
+      ...CAPSULE,
+      currentStateVersionId: "state_partial_1",
+    };
+    const plan = {
+      ...PLAN,
+      capsuleCurrentStateVersionId: "state_partial_1",
+    };
+    const safety = {
+      phase: "unknown" as const,
+      runId: "apply_failed_partial",
+      runType: "apply" as const,
+    };
+    const priorApply = {
+      ...APPLY,
+      id: "apply_failed_partial",
+      status: "failed",
+      stateVersionId: "state_partial_1",
+      auditEvents: [{
+        type: "apply.failed",
+        data: {
+          providerDispatched: true,
+          providerApplySucceeded: false,
+          statePersistence: "persisted",
+          stateVersionId: "state_partial_1",
+        },
+      }],
+    };
+
+    for (const phase of ["plan", "apply"] as const) {
+      expect(
+        await resolveCanonicalCapsuleRunCredentialContext(
+          ledger({ capsule, plan, priorApply, safety }),
+          {
+            workspaceId: "workspace_1",
+            capsuleId: "capsule_1",
+            runId: phase === "plan" ? "plan_1" : "apply_1",
+            phase,
+          },
+        ),
+      ).toMatchObject({ ok: true, context: { phase } });
+    }
+
+    for (const overrides of [
+      {
+        capsule: { ...capsule, currentStateVersionId: "state_other" },
+      },
+      {
+        plan: { ...plan, capsuleCurrentStateVersionId: "state_other" },
+      },
+      {
+        priorApply: { ...priorApply, stateVersionId: undefined },
+      },
+      {
+        priorApply: {
+          ...priorApply,
+          auditEvents: [{
+            type: "apply.failed",
+            data: {
+              providerDispatched: true,
+              statePersistence: "unavailable",
+            },
+          }],
+        },
+      },
+    ]) {
+      expect(
+        await resolveCanonicalCapsuleRunCredentialContext(
+          ledger({ capsule, plan, priorApply, safety, ...overrides }),
+          {
+            workspaceId: "workspace_1",
+            capsuleId: "capsule_1",
+            runId: "plan_1",
+            phase: "plan",
+          },
+        ),
+      ).toEqual({ ok: false, reason: "runtime_safety_mismatch" });
+    }
+  });
+
   test("fails closed on a runtime phase outside the public union", async () => {
     expect(
       await resolveCanonicalCapsuleRunCredentialContext(ledger(), {
@@ -239,16 +320,19 @@ function ledger(
     readonly capsule?: Record<string, unknown>;
     readonly plan?: Record<string, unknown>;
     readonly apply?: Record<string, unknown>;
+    readonly priorApply?: Record<string, unknown>;
     readonly safety?: Record<string, unknown>;
   } = {},
 ): CapsuleRunCredentialLedger {
   const capsule = overrides.capsule ?? CAPSULE;
   const plan = overrides.plan ?? PLAN;
   const apply = overrides.apply ?? APPLY;
+  const priorApply = overrides.priorApply;
   return {
     getCapsule: async (id) => (id === capsule.id ? capsule : undefined) as never,
     getPlanRun: async (id) => (id === plan.id ? plan : undefined) as never,
-    getApplyRun: async (id) => (id === apply.id ? apply : undefined) as never,
+    getApplyRun: async (id) =>
+      (id === apply.id ? apply : id === priorApply?.id ? priorApply : undefined) as never,
     getCapsuleRuntimeSafety: async () => overrides.safety as never,
   };
 }
