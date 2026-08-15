@@ -88,9 +88,8 @@ describe("single-screen install surface", () => {
     expect(view).toContain('throw new Error(t("workspace.selectMessage"));');
     expect(view).not.toContain('phase() !== "configure" && connectionsLoaded()');
     expect(view).toContain("const prepareInstall = async () =>");
-    expect(view).toContain(
-      "const providers = await loadConnections(",
-    );
+    expect(view).toContain("const providersResult = loadConnections(");
+    expect(view).toContain("const providerResult = await providersResult;");
   });
 
   test("validates persisted Workspace selection before scoped connection reads", () => {
