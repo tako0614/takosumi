@@ -158,7 +158,10 @@ export class CloudflareContainerOpenTofuRunner
       "apply",
       runnerRunIdFromPlanArtifact(job.planArtifact) ?? job.planRun.id,
       job,
-      { signal: control?.signal },
+      {
+        signal: control?.signal,
+        runnerObjectName: job.applyRun.id,
+      },
     );
     // The DO echoes the persisted state digest and opaque raw-output ref. Thread
     // both onto the result so the controller
@@ -221,7 +224,10 @@ export class CloudflareContainerOpenTofuRunner
       "destroy",
       runnerRunIdFromPlanArtifact(job.planArtifact) ?? job.planRun.id,
       job,
-      { signal: control?.signal },
+      {
+        signal: control?.signal,
+        runnerObjectName: job.applyRun.id,
+      },
     );
     const state = recordFromRecord(result, "state");
     return {
@@ -512,6 +518,12 @@ export class CloudflareContainerOpenTofuRunner
     options: {
       readonly timeoutMs?: number;
       readonly signal?: AbortSignal;
+      /**
+       * Durable Object instance authority. Apply/destroy restore the reviewed
+       * Plan artifact under its original Run id, but must not reuse that
+       * Plan's Container: its activity shutdown can race the mutation.
+       */
+      readonly runnerObjectName?: string;
     } = {},
   ): Promise<Record<string, unknown>> {
     if (!this.env.RUNNER) {
@@ -520,7 +532,9 @@ export class CloudflareContainerOpenTofuRunner
     if (options.signal?.aborted) {
       throw abortReason(options.signal);
     }
-    const id = this.env.RUNNER.idFromName(runId);
+    const id = this.env.RUNNER.idFromName(
+      options.runnerObjectName ?? runId,
+    );
     const timeoutMs = positiveTimeoutMs(options.timeoutMs);
     const controller =
       timeoutMs || options.signal ? new AbortController() : undefined;

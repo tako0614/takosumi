@@ -245,7 +245,7 @@ test("container runner records active run and startup metrics", async () => {
   expect(startup[0]?.value).toBe(1.25);
 });
 
-test("container runner applies and destroys through the plan runner object for warm reuse", async () => {
+test("container runner isolates apply and destroy from the plan runner object", async () => {
   const runnerIds: string[] = [];
   const requests: { readonly id: string; readonly path: string }[] = [];
   const runner = new CloudflareContainerOpenTofuRunner({
@@ -282,10 +282,10 @@ test("container runner applies and destroys through the plan runner object for w
     },
   } as Parameters<CloudflareContainerOpenTofuRunner["destroy"]>[0]);
 
-  expect(runnerIds).toEqual(["plan_cache", "destroy_plan_cache"]);
+  expect(runnerIds).toEqual(["apply_cache", "destroy_cache"]);
   expect(requests).toEqual([
-    { id: "plan_cache", path: "/runs/plan_cache" },
-    { id: "destroy_plan_cache", path: "/runs/destroy_plan_cache" },
+    { id: "apply_cache", path: "/runs/plan_cache" },
+    { id: "destroy_cache", path: "/runs/destroy_plan_cache" },
   ]);
 });
 
@@ -350,6 +350,7 @@ test("container runner returns provider installation attestation from apply and 
   );
 
   const apply = await runner.apply({
+    applyRun: { id: "apply_provider" },
     planRun: { id: "apply_provider" },
     planArtifact: {
       kind: "runner-local",
@@ -358,6 +359,7 @@ test("container runner returns provider installation attestation from apply and 
     },
   } as Parameters<CloudflareContainerOpenTofuRunner["apply"]>[0]);
   const destroy = await runner.destroy({
+    applyRun: { id: "destroy_provider_apply" },
     planRun: { id: "destroy_provider" },
     planArtifact: {
       kind: "runner-local",
@@ -388,6 +390,7 @@ test("container runner redacts stderr before apply diagnostics are returned", as
   );
 
   const result = await runner.apply({
+    applyRun: { id: "apply_diag_attempt" },
     planRun: { id: "apply_diag" },
     planArtifact: {
       kind: "runner-local",
@@ -428,6 +431,7 @@ test("container runner surfaces non-2xx apply stderr instead of raw JSON envelop
   let error: unknown;
   try {
     await runner.apply({
+      applyRun: { id: "apply_failed_attempt" },
       planRun: { id: "apply_failed" },
       planArtifact: {
         kind: "runner-local",
