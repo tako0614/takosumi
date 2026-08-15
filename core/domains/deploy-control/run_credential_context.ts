@@ -75,6 +75,7 @@ export async function resolveCanonicalCapsuleRunCredentialContext(
     return { ok: false, reason: "capsule_unavailable" };
   }
 
+  let planOperation: "create" | "update" | "destroy" | undefined;
   if (input.phase === "plan") {
     const run = await store.getPlanRun(runId);
     if (
@@ -88,6 +89,7 @@ export async function resolveCanonicalCapsuleRunCredentialContext(
     ) {
       return { ok: false, reason: "plan_run_mismatch" };
     }
+    planOperation = run.operation;
   } else {
     const run = await store.getApplyRun(runId);
     if (
@@ -111,11 +113,16 @@ export async function resolveCanonicalCapsuleRunCredentialContext(
   }
 
   const runtimeSafety = await store.getCapsuleRuntimeSafety(capsuleId);
-  const runtimeSafetyMatches = input.phase === "destroy"
-    ? runtimeSafety?.phase === "terminating" &&
-      runtimeSafety.runType === "destroy_apply" &&
-      runtimeSafety.runId === runId
-    : runtimeSafety === undefined || runtimeSafety.phase === "safe";
+  const runtimeSafetyMatches =
+    input.phase === "destroy"
+      ? runtimeSafety?.phase === "terminating" &&
+        runtimeSafety.runType === "destroy_apply" &&
+        runtimeSafety.runId === runId
+      : input.phase === "plan" && planOperation === "destroy"
+        ? runtimeSafety === undefined ||
+          runtimeSafety.phase === "safe" ||
+          runtimeSafety.phase === "unknown"
+        : runtimeSafety === undefined || runtimeSafety.phase === "safe";
   if (!runtimeSafetyMatches) {
     return { ok: false, reason: "runtime_safety_mismatch" };
   }

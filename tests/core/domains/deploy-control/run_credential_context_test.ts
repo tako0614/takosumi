@@ -190,6 +190,38 @@ describe("canonical Capsule Run credential context", () => {
     ).toEqual({ ok: false, reason: "runtime_safety_mismatch" });
   });
 
+  test("allows a destroy Plan to inspect persisted partial state while ordinary Plans remain blocked", async () => {
+    const unknown = {
+      phase: "unknown" as const,
+      runId: "apply_failed_partial",
+      runType: "apply" as const,
+    };
+
+    expect(
+      await resolveCanonicalCapsuleRunCredentialContext(
+        ledger({ plan: { ...PLAN, operation: "destroy" }, safety: unknown }),
+        {
+          workspaceId: "workspace_1",
+          capsuleId: "capsule_1",
+          runId: "plan_1",
+          phase: "plan",
+        },
+      ),
+    ).toMatchObject({ ok: true, context: { phase: "plan" } });
+
+    expect(
+      await resolveCanonicalCapsuleRunCredentialContext(
+        ledger({ plan: { ...PLAN, operation: "update" }, safety: unknown }),
+        {
+          workspaceId: "workspace_1",
+          capsuleId: "capsule_1",
+          runId: "plan_1",
+          phase: "plan",
+        },
+      ),
+    ).toEqual({ ok: false, reason: "runtime_safety_mismatch" });
+  });
+
   test("fails closed on a runtime phase outside the public union", async () => {
     expect(
       await resolveCanonicalCapsuleRunCredentialContext(ledger(), {

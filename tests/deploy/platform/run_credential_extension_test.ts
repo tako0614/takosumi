@@ -238,6 +238,34 @@ describe("platform extension Run credential", () => {
     }
   });
 
+  test("accepts a destroy Plan credential for persisted partial-state recovery", async () => {
+    const issued = await createRunCredentialToken({
+      ...TOKEN_INPUT,
+      runId: "plan_1",
+      phase: "plan",
+      jti: "jti_destroy_plan_recovery",
+    });
+    const result = await verifyPlatformExtensionRunCredentialToken(
+      { TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: SIGNING_SECRET } as never,
+      issued.token,
+      ROUTE,
+      ledger({
+        plan: { operation: "destroy" },
+        safety: {
+          phase: "unknown",
+          runId: "apply_failed_partial",
+          runType: "apply",
+        },
+      }),
+    );
+
+    expect(result).toMatchObject({
+      authenticated: true,
+      runId: "plan_1",
+      phase: "plan",
+    });
+  });
+
   test("rechecks the exact live connection authority and zero stored material", async () => {
     const env = {
       TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: SIGNING_SECRET,
