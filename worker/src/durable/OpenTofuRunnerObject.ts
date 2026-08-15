@@ -56,6 +56,8 @@ const RUNNER_PLAN_EXECUTION_FAILURE_CODES = new Set([
   "opentofu_plan_failed",
 ]);
 const MAX_NORMALIZED_RUNNER_FAILURE_DETAIL_CHARS = 4_096;
+const UNSAFE_PROVIDER_FAILURE_DETAIL_LINE =
+  /(?:\b(?:authorization|bearer|cookie|token|password|passwd|secret|credential|api[_-]?key|body)\b|\/work\/)/iu;
 type RunnerFailurePhase =
   | "plan"
   | "apply"
@@ -3848,10 +3850,10 @@ function runnerProviderExecutionFailed(
 
 function providerFailureErrorCode(
   payload: Record<string, unknown>,
-): string | undefined {
+): "apply_failed" | typeof RUNNER_PROVIDER_EXECUTION_FAILED_CODE | undefined {
   const value = stringField(payload, "errorCode");
   return value && RUNNER_PROVIDER_FAILURE_CODES.has(value)
-    ? value
+    ? (value as "apply_failed" | typeof RUNNER_PROVIDER_EXECUTION_FAILED_CODE)
     : undefined;
 }
 
@@ -3860,15 +3862,18 @@ function failedProviderExecutionPayload(
   statePersistence: "persisted" | "unavailable",
   state?: Record<string, unknown>,
 ): Record<string, unknown> {
+  const errorCode =
+    providerFailureErrorCode(payload) ?? RUNNER_PROVIDER_EXECUTION_FAILED_CODE;
+  const detail = normalizedRunnerExecutionFailureDetail(payload, errorCode);
   return {
     status: "failed",
     phase: "apply",
-    errorCode:
-      providerFailureErrorCode(payload) ?? RUNNER_PROVIDER_EXECUTION_FAILED_CODE,
+    errorCode,
     providerExecutionFailure: {
       kind: "provider_execution_failed",
       statePersistence,
     },
+    ...(detail ? { detail } : {}),
     ...(state ? { state } : {}),
   };
 }
@@ -3922,7 +3927,12 @@ function normalizedRunnerExecutionFailureDetail(
   payload: Record<string, unknown>,
   errorCode: ReturnType<typeof finiteRunnerFailureCode>,
 ): string | undefined {
-  if (!RUNNER_PLAN_EXECUTION_FAILURE_CODES.has(errorCode)) return undefined;
+  if (
+    !RUNNER_PLAN_EXECUTION_FAILURE_CODES.has(errorCode) &&
+    !RUNNER_PROVIDER_FAILURE_CODES.has(errorCode)
+  ) {
+    return undefined;
+  }
   const detail = [
     stringField(payload, "stderr"),
     stringField(payload, "stdout"),
@@ -3931,7 +3941,17 @@ function normalizedRunnerExecutionFailureDetail(
     .join("\n")
     .trim();
   if (!detail) return undefined;
-  const redacted = redactString(detail, { redactedValue: "[redacted]" });
+  const boundedSource = RUNNER_PROVIDER_FAILURE_CODES.has(errorCode)
+    ? detail
+        .split(/\r?\n/u)
+        .filter((line) => !UNSAFE_PROVIDER_FAILURE_DETAIL_LINE.test(line))
+        .join("\n")
+        .trim()
+    : detail;
+  if (!boundedSource) return undefined;
+  const redacted = redactString(boundedSource, {
+    redactedValue: "[redacted]",
+  });
   return redacted.slice(-MAX_NORMALIZED_RUNNER_FAILURE_DETAIL_CHARS);
 }
 

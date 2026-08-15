@@ -1039,8 +1039,10 @@ test("apply redelivery adopts the exact ApplyRun artifacts after R2 responses ar
 });
 
 test("failed provider apply encrypts partial state and same-run replay stays failed without provider re-execution", async () => {
+  const safeFailureDetail =
+    "Error: SQLiteMigrationSet rejected migration 7 after earlier resources were created";
   const failureMarker =
-    "provider-failure-marker Authorization: Bearer provider-failure-token cookie=provider-failure-session body={raw:true}";
+    "provider-failure-token Authorization: Bearer provider-failure-token cookie=provider-failure-session body={raw:true}";
   const artifacts = new FakeR2Bucket();
   const state = new FakeR2Bucket();
   const crypto = StateArtifactCrypto.fromEnv({
@@ -1074,7 +1076,7 @@ test("failed provider apply encrypts partial state and same-run replay stays fai
             },
             error: `provider rejected a later resource ${failureMarker}`,
             detail: failureMarker,
-            stderr: failureMarker,
+            stderr: `${safeFailureDetail}\n${failureMarker}`,
             stdout: failureMarker,
             path: `/work/${failureMarker}`,
             resource: failureMarker,
@@ -1123,11 +1125,15 @@ test("failed provider apply encrypts partial state and same-run replay stays fai
     kind: "provider_execution_failed",
     statePersistence: "persisted",
   });
+  assert.equal(
+    String(firstPayload.detail).includes(safeFailureDetail),
+    true,
+  );
   assert.equal(firstPayload.outputs, undefined);
   assert.equal(firstPayload.rawOutputRef, undefined);
   const firstSerialized = JSON.stringify(firstPayload);
   for (const forbidden of [
-    "provider-failure-marker",
+    "provider-failure-token",
     "Bearer",
     "provider-failure-token",
     "provider-failure-session",

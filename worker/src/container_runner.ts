@@ -79,6 +79,8 @@ const RUNNER_PROVIDER_FAILURE_CODES = new Set([
   RUNNER_PROVIDER_EXECUTION_FAILED_CODE,
 ]);
 const MAX_RUNNER_EXECUTION_DETAIL_CHARS = 4_096;
+const UNSAFE_PROVIDER_FAILURE_DETAIL_LINE =
+  /(?:\b(?:authorization|bearer|cookie|token|password|passwd|secret|credential|api[_-]?key|body)\b|\/work\/)/iu;
 const RUNNER_STARTUP_SECONDS_HEADER = "x-takosumi-runner-startup-seconds";
 type ContainerRunnerAction =
   | OpenTofuRunAction
@@ -679,6 +681,7 @@ function failedProviderExecutionResult(
   const failure = providerExecutionFailureFromContainerResult(result);
   const state = recordFromRecord(result, "state");
   const stateDigest = state ? stringFromRecord(state, "digest") : undefined;
+  const detail = providerExecutionDetailFromPayload(result);
   return {
     status: "failed",
     errorCode: failure?.errorCode ?? RUNNER_PROVIDER_EXECUTION_FAILED_CODE,
@@ -686,6 +689,7 @@ function failedProviderExecutionResult(
       kind: "provider_execution_failed",
       statePersistence: failure?.statePersistence ?? "unavailable",
     },
+    ...(detail ? { detail } : {}),
     ...(stateDigest ? { state: { digest: stateDigest } } : {}),
   };
 }
@@ -902,6 +906,19 @@ function runnerExecutionDetailFromPayload(
   );
 }
 
+function providerExecutionDetailFromPayload(
+  payload: Record<string, unknown>,
+): string | undefined {
+  const detail = runnerExecutionDetailFromPayload(payload);
+  if (!detail) return undefined;
+  const safeLines = detail
+    .split(/\r?\n/u)
+    .filter((line) => !UNSAFE_PROVIDER_FAILURE_DETAIL_LINE.test(line))
+    .join("\n")
+    .trim();
+  return safeLines || undefined;
+}
+
 function compatibilityCheckTimeoutMs(env: CloudflareWorkerEnv): number {
   return (
     positiveTimeoutMs(env.TAKOSUMI_COMPATIBILITY_CHECK_TIMEOUT_MS) ??
@@ -1011,6 +1028,18 @@ function diagnosticsFromContainerResult(
       severity: "warning",
       code: "runner_diagnostics_redacted",
       message: "runner provider diagnostics omitted",
+    });
+  }
+  const providerFailure = providerExecutionFailureFromContainerResult(result);
+  const providerFailureDetail = providerFailure
+    ? providerExecutionDetailFromPayload(result)
+    : undefined;
+  if (providerFailure && providerFailureDetail) {
+    diagnostics.push({
+      severity: "error",
+      code: providerFailure.errorCode,
+      message: "OpenTofu provider execution failed after dispatch",
+      detail: providerFailureDetail,
     });
   }
   const phaseTimingDetail = phaseTimingDetailFromContainerResult(result);

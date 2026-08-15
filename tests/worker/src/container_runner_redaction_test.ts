@@ -450,6 +450,8 @@ test("container runner surfaces non-2xx apply stderr instead of raw JSON envelop
 
 test("container runner returns a typed failed apply with persisted partial state", async () => {
   const stateDigest = `sha256:${"e".repeat(64)}`;
+  const safeFailureDetail =
+    "Error: SQLiteMigrationSet rejected migration 7 after earlier resources were created";
   const runner = new CloudflareContainerOpenTofuRunner(
     envReturning(
       {
@@ -465,8 +467,7 @@ test("container runner returns a typed failed apply with persisted partial state
           must_not_publish: { sensitive: false, value: "stale" },
         },
         rawOutputRef: "must-not-publish",
-        stderr:
-          "password=partial-apply-secret provider rejected a later resource",
+        detail: `${safeFailureDetail}\npassword=partial-apply-secret`,
       },
       undefined,
       500,
@@ -491,10 +492,15 @@ test("container runner returns a typed failed apply with persisted partial state
   expect(result.stateDigest).toBe(stateDigest);
   expect(result.outputs).toBeUndefined();
   expect(result.rawOutputRef).toBeUndefined();
-  expect(JSON.stringify(result.diagnostics)).not.toContain(
-    "partial-apply-secret",
-  );
-  expect(result.diagnostics).toEqual([]);
+  expect(JSON.stringify(result.diagnostics)).not.toContain("partial-apply-secret");
+  expect(result.diagnostics).toEqual([
+    {
+      severity: "error",
+      code: "apply_failed",
+      message: "OpenTofu provider execution failed after dispatch",
+      detail: expect.stringContaining(safeFailureDetail),
+    },
+  ]);
 });
 
 test("container runner distinguishes failed provider execution without readable state", async () => {
