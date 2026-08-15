@@ -83,7 +83,10 @@ import {
 } from "../../core/domains/interfaces/runtime_capability_reader.ts";
 import { TAKOSUMI_METRICS_PATH } from "../../core/api/metrics_routes.ts";
 import { TAKOSUMI_INTERNAL_RESOURCE_MANAGED_BY_HEADER } from "../../core/api/resource_routes.ts";
-import { DEPLOY_CONTROL_ERROR_HTTP_STATUS_BY_CODE } from "@takosumi/internal/deploy-control-api";
+import {
+  DEPLOY_CONTROL_ERROR_HTTP_STATUS_BY_CODE,
+  type ProviderConnection,
+} from "@takosumi/internal/deploy-control-api";
 import {
   createTakosumiProductCapabilities,
   createTakosumiWellKnownDocument,
@@ -5891,11 +5894,14 @@ export async function verifyPlatformExtensionRunCredentialToken(
   env: CloudflareWorkerEnv,
   token: string,
   route?: PlatformExtensionRoute,
-  ledger: PlatformExtensionRunCredentialLedger = createCloudflareD1OpenTofuControlStore(
-    env.TAKOSUMI_CONTROL_DB,
-    { schemaMode: env.TAKOSUMI_CONTROL_D1_SCHEMA_MODE ?? "bootstrap" },
-  ),
+  ledger?: PlatformExtensionRunCredentialLedger,
+  resolveConnection?: PlatformRunCredentialConnectionResolver,
 ): Promise<PlatformExtensionSessionContext> {
+  const durableLedger =
+    ledger ??
+    createCloudflareD1OpenTofuControlStore(env.TAKOSUMI_CONTROL_DB, {
+      schemaMode: env.TAKOSUMI_CONTROL_D1_SCHEMA_MODE ?? "bootstrap",
+    });
   const secret = runCredentialTokenSecret(env);
   const descriptor = route?.runCredential;
   if (!secret || !descriptor) return { authenticated: false };
@@ -5911,14 +5917,19 @@ export async function verifyPlatformExtensionRunCredentialToken(
     return { authenticated: false };
   }
   const [canonical, currentConnection, unexpectedBlob] = await Promise.all([
-    resolveCanonicalCapsuleRunCredentialContext(ledger, {
+    resolveCanonicalCapsuleRunCredentialContext(durableLedger, {
       workspaceId: payload.workspaceId,
       capsuleId: payload.capsuleId,
       runId: payload.runId,
       phase: payload.phase,
     }),
-    ledger.getConnection(payload.connectionId),
-    ledger.getSecretBlob(payload.connectionId),
+    (resolveConnection ??
+      (ledger
+        ? (id) => durableLedger.getConnection(id)
+        : (id) => resolveComposedProviderConnection(env, id)))(
+      payload.connectionId,
+    ),
+    durableLedger.getSecretBlob(payload.connectionId),
   ]);
   const canonicalLiveProvider = currentConnection
     ? canonicalProviderSource(currentConnection.provider)
@@ -5963,16 +5974,15 @@ export async function verifyPlatformExtensionRunCredentialToken(
 export async function verifyPlatformResourceFormTransitionRunCredential(
   env: CloudflareWorkerEnv,
   token: string,
-  ledger: PlatformResourceFormTransitionRunCredentialLedger = createCloudflareD1OpenTofuControlStore(
-    env.TAKOSUMI_CONTROL_DB,
-    { schemaMode: env.TAKOSUMI_CONTROL_D1_SCHEMA_MODE ?? "bootstrap" },
-  ),
+  ledger?: PlatformResourceFormTransitionRunCredentialLedger,
+  resolveConnection?: PlatformRunCredentialConnectionResolver,
 ): Promise<PlatformExtensionSessionContext> {
   return await verifyPlatformTakoformV1alpha1RunCredential(
     env,
     token,
     ["apply"],
     ledger,
+    resolveConnection,
   );
 }
 
@@ -5985,11 +5995,14 @@ export async function verifyPlatformTakoformV1alpha1RunCredential(
   env: CloudflareWorkerEnv,
   token: string,
   phases: readonly ("plan" | "apply" | "destroy")[],
-  ledger: PlatformResourceFormTransitionRunCredentialLedger = createCloudflareD1OpenTofuControlStore(
-    env.TAKOSUMI_CONTROL_DB,
-    { schemaMode: env.TAKOSUMI_CONTROL_D1_SCHEMA_MODE ?? "bootstrap" },
-  ),
+  ledger?: PlatformResourceFormTransitionRunCredentialLedger,
+  resolveConnection?: PlatformRunCredentialConnectionResolver,
 ): Promise<PlatformExtensionSessionContext> {
+  const durableLedger =
+    ledger ??
+    createCloudflareD1OpenTofuControlStore(env.TAKOSUMI_CONTROL_DB, {
+      schemaMode: env.TAKOSUMI_CONTROL_D1_SCHEMA_MODE ?? "bootstrap",
+    });
   const secret = runCredentialTokenSecret(env);
   if (!secret || phases.length === 0) return { authenticated: false };
   const authenticated = await verifyRunCredentialTokenAuthority(token, {
@@ -6000,18 +6013,23 @@ export async function verifyPlatformTakoformV1alpha1RunCredential(
   if (!phases.includes(payload.phase) || payload.scopes.includes("admin")) {
     return { authenticated: false };
   }
-  const capsule = await ledger.getCapsule(payload.capsuleId);
+  const capsule = await durableLedger.getCapsule(payload.capsuleId);
   if (!capsule) return { authenticated: false };
   const [canonical, connection, unexpectedBlob, bindings] = await Promise.all([
-    resolveCanonicalCapsuleRunCredentialContext(ledger, {
+    resolveCanonicalCapsuleRunCredentialContext(durableLedger, {
       workspaceId: payload.workspaceId,
       capsuleId: payload.capsuleId,
       runId: payload.runId,
       phase: payload.phase,
     }),
-    ledger.getConnection(payload.connectionId),
-    ledger.getSecretBlob(payload.connectionId),
-    ledger.getProviderBindingSetByCapsule(
+    (resolveConnection ??
+      (ledger
+        ? (id) => durableLedger.getConnection(id)
+        : (id) => resolveComposedProviderConnection(env, id)))(
+      payload.connectionId,
+    ),
+    durableLedger.getSecretBlob(payload.connectionId),
+    durableLedger.getProviderBindingSetByCapsule(
       payload.capsuleId,
       capsule.environment,
     ),
@@ -6070,9 +6088,25 @@ export type PlatformExtensionRunCredentialLedger =
   CapsuleRunCredentialLedger &
     Pick<OpenTofuControlStore, "getConnection" | "getSecretBlob">;
 
+export type PlatformRunCredentialConnectionResolver = (
+  id: string,
+) => Promise<ProviderConnection | undefined>;
+
 export type PlatformResourceFormTransitionRunCredentialLedger =
   PlatformExtensionRunCredentialLedger &
     Pick<OpenTofuControlStore, "getProviderBindingSetByCapsule">;
+
+async function resolveComposedProviderConnection(
+  env: CloudflareWorkerEnv,
+  id: string,
+): Promise<ProviderConnection | undefined> {
+  try {
+    const operations = await takosumiOperationsFor(env);
+    return await operations.connections.getProviderConnection(id);
+  } catch {
+    return undefined;
+  }
+}
 
 export type PlatformExtensionIntrospectFetch = (
   request: Request,
