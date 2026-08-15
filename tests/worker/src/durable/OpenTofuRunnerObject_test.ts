@@ -1375,6 +1375,7 @@ test("OpenTofu runner Durable Object preserves finite plan execution failures", 
       status: "failed",
       errorCode: "provider_package_unavailable",
       phase: "plan",
+      detail: "token=[redacted]",
     }),
   );
   assert.equal(body.includes(marker), false);

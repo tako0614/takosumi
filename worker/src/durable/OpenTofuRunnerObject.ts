@@ -55,6 +55,7 @@ const RUNNER_PLAN_EXECUTION_FAILURE_CODES = new Set([
   "source_build_failed",
   "opentofu_plan_failed",
 ]);
+const MAX_NORMALIZED_RUNNER_FAILURE_DETAIL_CHARS = 4_096;
 type RunnerFailurePhase =
   | "plan"
   | "apply"
@@ -3902,17 +3903,36 @@ async function normalizeRunnerFailureResponse(
       phase === "apply" || phase === "destroy" ? phase : "apply",
     );
   }
+  const detail = normalizedRunnerExecutionFailureDetail(payload, errorCode);
   return jsonResponse(
     {
       status: "failed",
       errorCode,
       phase: runnerFailurePhase(phase),
+      ...(detail ? { detail } : {}),
       ...(errorCode === "runner_artifact_relay_ambiguous"
         ? { retryable: true }
         : {}),
     },
     response.status,
   );
+}
+
+function normalizedRunnerExecutionFailureDetail(
+  payload: Record<string, unknown>,
+  errorCode: ReturnType<typeof finiteRunnerFailureCode>,
+): string | undefined {
+  if (!RUNNER_PLAN_EXECUTION_FAILURE_CODES.has(errorCode)) return undefined;
+  const detail = [
+    stringField(payload, "stderr"),
+    stringField(payload, "stdout"),
+  ]
+    .filter((value): value is string => Boolean(value))
+    .join("\n")
+    .trim();
+  if (!detail) return undefined;
+  const redacted = redactString(detail, { redactedValue: "[redacted]" });
+  return redacted.slice(-MAX_NORMALIZED_RUNNER_FAILURE_DETAIL_CHARS);
 }
 
 function finiteRunnerFailureCode(

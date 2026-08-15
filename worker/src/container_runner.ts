@@ -888,6 +888,7 @@ function runnerExecutionDetailFromPayload(
   payload: Record<string, unknown>,
 ): string | undefined {
   const detail = [
+    stringFromRecord(payload, "detail"),
     stringFromRecord(payload, "stderr"),
     stringFromRecord(payload, "stdout"),
   ]
