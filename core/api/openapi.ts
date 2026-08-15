@@ -3823,7 +3823,7 @@ function providerConnectionAndRecipeSchemas(): Record<
         modulePath: {
           type: "string",
           description:
-            "Safe relative OpenTofu/Terraform module path for a manual check. Must be omitted when compileInstallUx is true; the server selects from the repository manifest.",
+            "Safe relative OpenTofu/Terraform module path. With compileInstallUx, an explicit direct-Git or repository source-option path must name the exact immutable manifest module; Store URL discovery omits it so the server selects the repository default.",
         },
         capsuleId: { type: "string" },
         installConfigId: {
@@ -3834,7 +3834,7 @@ function providerConnectionAndRecipeSchemas(): Record<
         compileInstallUx: {
           type: "boolean",
           description:
-            "Compile repository-owned install UX before Capsule creation. Requires capsuleName and rejects capsuleId, modulePath, and installConfigId.",
+            "Compile repository-owned install UX before Capsule creation. Requires capsuleName, rejects capsuleId and installConfigId, and accepts an optional exact manifest modulePath.",
         },
         capsuleName: {
           type: "string",

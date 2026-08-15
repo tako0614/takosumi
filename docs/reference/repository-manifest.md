@@ -55,6 +55,10 @@ Source sync 後、server が exact SourceSnapshot の manifest だけから次�
 その path の compatibility check を実行してから derived InstallConfig に同じ値を
 保存します。
 
+直接 Git と repository-owned source option は `compileInstallUx` を同じく使用し、
+選択済みの `modulePath` を送れます。その path は exact SourceSnapshot manifest の
+`install.modules` key として検証され、Store metadata は実行選択に関与しません。
+
 1. `modules` が1件なら、その唯一の key を選ぶ。
 2. 複数なら `takosumi.com/v2.1`、`takosumi.com/v2.2`、または `takosumi.com/v2.3` の
    `install.defaultModule` が必須。
@@ -63,8 +67,8 @@ Source sync 後、server が exact SourceSnapshot の manifest だけから次�
 
 `.`、JSON object の先頭 key、`.well-known/tcs.json` の path、`Source.defaultPath`、
 base `InstallConfig.modulePath` を fallback として推測しません。missing/invalid default
-は typed diagnostic で compatibility 実行前に失敗します。通常の manual Git
-compatibility request は、利用者が明示した `modulePath` を引き続き使用できます。
+は typed diagnostic で compatibility 実行前に失敗します。manifest がない通常の
+plain Git repository も、利用者が明示した `modulePath` を引き続き使用できます。
 
 ### 有効な v2.1 multi-module 例
 
