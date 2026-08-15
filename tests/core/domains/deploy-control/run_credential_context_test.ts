@@ -107,6 +107,52 @@ describe("canonical Capsule Run credential context", () => {
     ).toEqual({ ok: false, reason: "apply_plan_mismatch" });
   });
 
+  test("keeps the exact running apply credential valid after provider dispatch", async () => {
+    const safety = {
+      phase: "unknown" as const,
+      runId: "apply_1",
+      runType: "apply" as const,
+    };
+
+    expect(
+      await resolveCanonicalCapsuleRunCredentialContext(
+        ledger({ safety }),
+        {
+          workspaceId: "workspace_1",
+          capsuleId: "capsule_1",
+          runId: "apply_1",
+          phase: "apply",
+        },
+      ),
+    ).toMatchObject({ ok: true, context: { runId: "apply_1", phase: "apply" } });
+
+    expect(
+      await resolveCanonicalCapsuleRunCredentialContext(
+        ledger({ safety }),
+        {
+          workspaceId: "workspace_1",
+          capsuleId: "capsule_1",
+          runId: "plan_1",
+          phase: "plan",
+        },
+      ),
+    ).toEqual({ ok: false, reason: "runtime_safety_mismatch" });
+
+    expect(
+      await resolveCanonicalCapsuleRunCredentialContext(
+        ledger({
+          safety: { ...safety, runId: "apply_other" },
+        }),
+        {
+          workspaceId: "workspace_1",
+          capsuleId: "capsule_1",
+          runId: "apply_1",
+          phase: "apply",
+        },
+      ),
+    ).toEqual({ ok: false, reason: "runtime_safety_mismatch" });
+  });
+
   test("rejects unknown, terminating, and retired runtime safety for plan or apply", async () => {
     for (const safety of [
       { phase: "unknown", runId: "restore_1", runType: "restore" },

@@ -131,6 +131,12 @@ export async function resolveCanonicalCapsuleRunCredentialContext(
       capsuleId,
       capsule.currentStateVersionId,
     ));
+  const currentApplyExecutionMatches =
+    input.phase === "apply" &&
+    planOperation !== "destroy" &&
+    runtimeSafety?.phase === "unknown" &&
+    runtimeSafety.runType === "apply" &&
+    runtimeSafety.runId === runId;
   const runtimeSafetyMatches =
     input.phase === "destroy"
       ? runtimeSafety?.phase === "terminating" &&
@@ -142,6 +148,7 @@ export async function resolveCanonicalCapsuleRunCredentialContext(
           runtimeSafety.phase === "unknown"
         : runtimeSafety === undefined ||
           runtimeSafety.phase === "safe" ||
+          currentApplyExecutionMatches ||
           persistedPartialApplyRecoveryMatches;
   if (!runtimeSafetyMatches) {
     return { ok: false, reason: "runtime_safety_mismatch" };
