@@ -492,7 +492,9 @@ test("container runner returns a typed failed apply with persisted partial state
   expect(result.stateDigest).toBe(stateDigest);
   expect(result.outputs).toBeUndefined();
   expect(result.rawOutputRef).toBeUndefined();
-  expect(JSON.stringify(result.diagnostics)).not.toContain("partial-apply-secret");
+  expect(JSON.stringify(result.diagnostics)).not.toContain(
+    "partial-apply-secret",
+  );
   expect(result.diagnostics).toEqual([
     {
       severity: "error",
@@ -501,6 +503,55 @@ test("container runner returns a typed failed apply with persisted partial state
       detail: expect.stringContaining(safeFailureDetail),
     },
   ]);
+});
+
+test("container runner preserves the root provider error when warnings exceed the diagnostic bound", async () => {
+  const rootFailure =
+    "Error: SQLiteMigrationSet apply failed because host transition receipt was rejected";
+  const finalFailure = "Error: provider process exited with status 1";
+  const repeatedWarnings = Array.from(
+    { length: 180 },
+    (_, index) =>
+      `Warning ${index}: Takoform Host Support could not be read for resource shape`,
+  ).join("\n");
+  const runner = new CloudflareContainerOpenTofuRunner(
+    envReturning(
+      {
+        status: "failed",
+        exitCode: 1,
+        errorCode: "apply_failed",
+        providerExecutionFailure: {
+          kind: "provider_execution_failed",
+          statePersistence: "unavailable",
+        },
+        stderr: [
+          rootFailure,
+          "Authorization: Bearer must-not-survive",
+          repeatedWarnings,
+          finalFailure,
+        ].join("\n"),
+      },
+      undefined,
+      500,
+    ),
+  );
+
+  const result = await runner.apply({
+    applyRun: { id: "apply_long_failure" },
+    planRun: { id: "plan_long_failure" },
+    planArtifact: {
+      kind: "runner-local",
+      ref: "runner-local://plan_long_failure/tfplan",
+      digest: PLAN_DIGEST,
+    },
+  } as Parameters<CloudflareContainerOpenTofuRunner["apply"]>[0]);
+
+  const detail = result.diagnostics?.[0]?.detail ?? "";
+  expect(detail).toContain(rootFailure);
+  expect(detail).toContain(finalFailure);
+  expect(detail).toContain("diagnostics omitted");
+  expect(detail).not.toContain("must-not-survive");
+  expect(detail.length).toBeLessThanOrEqual(4_096);
 });
 
 test("container runner distinguishes failed provider execution without readable state", async () => {
@@ -623,8 +674,7 @@ test("container runner maps mutation ambiguity to a non-retryable typed executio
         errorCode: RUNNER_MUTATION_INDETERMINATE_CODE,
         retryable: false,
         outcome: "indeterminate",
-        detail:
-          "provider mutation may have occurred; token=adapter-raw-secret",
+        detail: "provider mutation may have occurred; token=adapter-raw-secret",
       },
       undefined,
       409,

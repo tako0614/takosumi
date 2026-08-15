@@ -322,10 +322,8 @@ const RUNNER_MUTATION_INDETERMINATE_HEADER =
 // This is a permanent authority slot, not a schema-versioned cache key. An
 // unrecognized record at this key fails closed instead of letting a future
 // record-format migration accidentally grant a second provider dispatch.
-const RUNNER_MUTATION_AUTHORITY_STORAGE_KEY =
-  "runner-mutation-authority";
-const RUNNER_MUTATION_DISPATCH_STORAGE_PREFIX =
-  "runner-mutation-dispatch@v2:";
+const RUNNER_MUTATION_AUTHORITY_STORAGE_KEY = "runner-mutation-authority";
+const RUNNER_MUTATION_DISPATCH_STORAGE_PREFIX = "runner-mutation-dispatch@v2:";
 
 interface RunnerMutationDispatchRecord {
   readonly kind: "takosumi.runner-mutation-dispatch@v2";
@@ -336,11 +334,7 @@ interface RunnerMutationDispatchRecord {
    * `preparing` is provably before provider dispatch; `orphaned` means a
    * target existed before this request had durable dispatch authority.
    */
-  readonly phase:
-    | "preparing"
-    | "dispatched"
-    | "indeterminate"
-    | "orphaned";
+  readonly phase: "preparing" | "dispatched" | "indeterminate" | "orphaned";
   /** Once dispatched, this durable claim permanently forbids redispatch. */
   readonly redispatchBlocked: true;
 }
@@ -462,10 +456,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       mutationIndeterminate =
         response.headers.get(RUNNER_MUTATION_INDETERMINATE_HEADER) === "1";
       const output = runDispatch
-        ? await bufferedResponse(
-            response,
-            this.#artifactLimits.runnerResponse,
-          )
+        ? await bufferedResponse(response, this.#artifactLimits.runnerResponse)
         : response;
       return withRunnerStartupHeader(output, this.#lastStartupSeconds);
     } catch (error) {
@@ -736,9 +727,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         phase: "orphaned",
       });
     } finally {
-      this.#activeMutationPreparations.delete(
-        preparation.semanticDigest,
-      );
+      this.#activeMutationPreparations.delete(preparation.semanticDigest);
     }
     return runnerMutationIndeterminateResponse(preparation.action);
   }
@@ -913,11 +902,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         );
       }
       if (rawOutputRef) {
-        assertRawOutputRefForScope(
-          stateScope,
-          applyRunId,
-          rawOutputRef,
-        );
+        assertRawOutputRefForScope(stateScope, applyRunId, rawOutputRef);
       }
     }
     const dispatchRequest = () =>
@@ -952,15 +937,10 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
                 rawOutputRef,
               )
             : undefined;
-        return (
-          adopted ?? runnerMutationIndeterminateResponse(envelope.action)
-        );
+        return adopted ?? runnerMutationIndeterminateResponse(envelope.action);
       }
       mutationPreparation = claim.record;
-      if (
-        stateScope &&
-        (await this.#r2State().head(stateScope.stateRef))
-      ) {
+      if (stateScope && (await this.#r2State().head(stateScope.stateRef))) {
         // A target without a matching dispatched authority may be a legacy or
         // out-of-band mutation. It cannot authorize adoption or provider I/O.
         return await this.#blockPreparedMutationWithExistingTarget(
@@ -1006,9 +986,8 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
                 "AbortError",
               );
         }
-        mutationDispatch = await this.#markMutationDispatched(
-          mutationPreparation,
-        );
+        mutationDispatch =
+          await this.#markMutationDispatched(mutationPreparation);
         if (!mutationDispatch) {
           return runnerMutationIndeterminateResponse(
             mutationPreparation.action,
@@ -1047,10 +1026,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         mutationDispatch &&
         !(error instanceof RunnerArtifactSizeLimitError)
       ) {
-        return await this.#recordMutationIndeterminate(
-          mutationDispatch,
-          error,
-        );
+        return await this.#recordMutationIndeterminate(mutationDispatch, error);
       }
       throw error;
     }
@@ -1406,19 +1382,23 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         );
       }
     }
-    const adopted =
-      adoption
-        ? await readConfirmedStateAdoption(
-            bucket,
-            scope,
-            adoption,
-            expectedGeneration,
-          )
-        : undefined;
+    const adopted = adoption
+      ? await readConfirmedStateAdoption(
+          bucket,
+          scope,
+          adoption,
+          expectedGeneration,
+        )
+      : undefined;
     const resolved =
       adopted ??
       (scope.priorState
-        ? await readCanonicalPriorState(bucket, scope, scope.priorState, expectedGeneration)
+        ? await readCanonicalPriorState(
+            bucket,
+            scope,
+            scope.priorState,
+            expectedGeneration,
+          )
         : undefined);
     if (!resolved && expectedGeneration > 0) {
       throw new Error(
@@ -1480,10 +1460,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         }),
       );
     } catch (error) {
-      return await this.#recordMutationIndeterminate(
-        mutationDispatch,
-        error,
-      );
+      return await this.#recordMutationIndeterminate(mutationDispatch, error);
     }
     if (stateResponse.status === 404) {
       if (providerExecutionFailed) {
@@ -1514,10 +1491,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       );
     } catch (error) {
       if (error instanceof RunnerArtifactSizeLimitError) throw error;
-      return await this.#recordMutationIndeterminate(
-        mutationDispatch,
-        error,
-      );
+      return await this.#recordMutationIndeterminate(mutationDispatch, error);
     }
     const sealed = await this.#stateCrypto().seal(plaintext);
     const payload = await readJsonObject(
@@ -1772,8 +1746,9 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         "completed failed provider state unexpectedly records raw output authority",
       );
     }
-    const ciphertextLength =
-      Number(object.customMetadata?.["takosumi-ciphertext-length"]);
+    const ciphertextLength = Number(
+      object.customMetadata?.["takosumi-ciphertext-length"],
+    );
     await writeCurrentStateCache(bucket, scope, {
       generation: scope.generation,
       objectKey: scope.stateRef,
@@ -2107,11 +2082,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       ciphertext,
       expectedDigest,
     );
-    assertArtifactSize(
-      "plan",
-      this.#artifactLimits.plan,
-      plaintext.byteLength,
-    );
+    assertArtifactSize("plan", this.#artifactLimits.plan, plaintext.byteLength);
     return plaintext;
   }
 
@@ -2132,11 +2103,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         ciphertext,
         object.customMetadata?.["takosumi-content-digest"],
       );
-      assertArtifactSize(
-        "state",
-        this.#artifactLimits.state,
-        bytes.byteLength,
-      );
+      assertArtifactSize("state", this.#artifactLimits.state, bytes.byteLength);
       await this.#ensureContainerReady(baseUrl);
       const response = await this.#containerFetch(
         new Request(stateArtifactUrl(baseUrl, runId), {
@@ -2166,10 +2133,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         new Request(stateArtifactUrl(baseUrl, runId), { method: "GET" }),
       );
     } catch (error) {
-      return await this.#recordMutationIndeterminate(
-        mutationDispatch,
-        error,
-      );
+      return await this.#recordMutationIndeterminate(mutationDispatch, error);
     }
     if (response.status === 404) return undefined;
     if (!response.ok) {
@@ -2186,10 +2150,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       );
     } catch (error) {
       if (error instanceof RunnerArtifactSizeLimitError) throw error;
-      return await this.#recordMutationIndeterminate(
-        mutationDispatch,
-        error,
-      );
+      return await this.#recordMutationIndeterminate(mutationDispatch, error);
     }
     const sealed = await this.#stateCrypto().seal(bytes);
     for (const key of keys) {
@@ -2330,8 +2291,7 @@ class R2ConditionalPutConflictError extends Error {
   }
 }
 
-const RUNNER_ARTIFACT_RELAY_AMBIGUOUS_CODE =
-  "runner_artifact_relay_ambiguous";
+const RUNNER_ARTIFACT_RELAY_AMBIGUOUS_CODE = "runner_artifact_relay_ambiguous";
 
 class RunnerArtifactRelayInfrastructureError extends Error {
   readonly code = RUNNER_ARTIFACT_RELAY_AMBIGUOUS_CODE;
@@ -2365,10 +2325,7 @@ function runnerRelayOperation(request: Request): "run_dispatch" | "other" {
   return isRunDispatchRequest(request) ? "run_dispatch" : "other";
 }
 
-function runnerR2LogArtifact(
-  context: string,
-  key: string,
-): string {
+function runnerR2LogArtifact(context: string, key: string): string {
   switch (context) {
     case "source archive":
       return RUNNER_R2_LOG_ARTIFACT.sourceArchive;
@@ -2463,11 +2420,7 @@ function assertArtifactSize(
   observedBytes: number,
 ): void {
   if (observedBytes > maxBytes) {
-    throw new RunnerArtifactSizeLimitError(
-      artifact,
-      maxBytes,
-      observedBytes,
-    );
+    throw new RunnerArtifactSizeLimitError(artifact, maxBytes, observedBytes);
   }
 }
 
@@ -2487,11 +2440,7 @@ export async function readBoundedResponseBytes(
   );
   if (declaredLength !== undefined && declaredLength > maxBytes) {
     await cancelResponseBody(response);
-    throw new RunnerArtifactSizeLimitError(
-      artifact,
-      maxBytes,
-      declaredLength,
-    );
+    throw new RunnerArtifactSizeLimitError(artifact, maxBytes, declaredLength);
   }
   if (!response.body) return new Uint8Array();
 
@@ -2544,15 +2493,8 @@ async function readBoundedR2ObjectBytes(
   artifact: RunnerArtifactKind,
   maxBytes: number,
 ): Promise<Uint8Array> {
-  if (
-    !Number.isSafeInteger(object.size) ||
-    object.size < 0
-  ) {
-    throw new RunnerArtifactSizeLimitError(
-      artifact,
-      maxBytes,
-      maxBytes + 1,
-    );
+  if (!Number.isSafeInteger(object.size) || object.size < 0) {
+    throw new RunnerArtifactSizeLimitError(artifact, maxBytes, maxBytes + 1);
   }
   assertArtifactSize(artifact, maxBytes, object.size);
   // The current Cloudflare R2ObjectBody exposes `body`, while the repository's
@@ -2882,9 +2824,7 @@ async function readCanonicalPriorState(
     (descriptor.digest || metadataRunId) &&
     metadataRunId !== descriptor.createdByRunId
   ) {
-    throw new Error(
-      "canonical priorState creator does not match R2 metadata",
-    );
+    throw new Error("canonical priorState creator does not match R2 metadata");
   }
   const metadataGeneration = object.customMetadata?.["takosumi-generation"];
   if (
@@ -3829,13 +3769,10 @@ function runnerMutationIndeterminateResponse(
     detail:
       "provider mutation may have occurred; automatic redispatch is blocked until an authoritative reconcile or adopt path confirms the outcome",
   };
-  return Response.json(
-    payload,
-    {
-      status: 409,
-      headers: { [RUNNER_MUTATION_INDETERMINATE_HEADER]: "1" },
-    },
-  );
+  return Response.json(payload, {
+    status: 409,
+    headers: { [RUNNER_MUTATION_INDETERMINATE_HEADER]: "1" },
+  });
 }
 
 function runnerProviderExecutionFailed(
@@ -3952,7 +3889,20 @@ function normalizedRunnerExecutionFailureDetail(
   const redacted = redactString(boundedSource, {
     redactedValue: "[redacted]",
   });
-  return redacted.slice(-MAX_NORMALIZED_RUNNER_FAILURE_DETAIL_CHARS);
+  return boundedRunnerFailureDetail(
+    redacted,
+    MAX_NORMALIZED_RUNNER_FAILURE_DETAIL_CHARS,
+  );
+}
+
+function boundedRunnerFailureDetail(text: string, maxLength: number): string {
+  if (text.length <= maxLength) return text;
+  const omission = "\n... diagnostics omitted ...\n";
+  if (maxLength <= omission.length) return text.slice(0, maxLength);
+  const retainedLength = maxLength - omission.length;
+  const headLength = Math.ceil(retainedLength / 2);
+  const tailLength = retainedLength - headLength;
+  return `${text.slice(0, headLength)}${omission}${text.slice(-tailLength)}`;
 }
 
 function finiteRunnerFailureCode(
@@ -4010,9 +3960,7 @@ function finiteRunnerFailureCode(
   }
 }
 
-function runnerFailurePhase(
-  phase: string | undefined,
-): RunnerFailurePhase {
+function runnerFailurePhase(phase: string | undefined): RunnerFailurePhase {
   switch (phase) {
     case "plan":
     case "apply":
