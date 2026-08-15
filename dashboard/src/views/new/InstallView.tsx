@@ -723,7 +723,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
       const providers = await loadConnections(
         workspace,
         controller.signal,
-        listing() === null,
+        sourceAuthConnectionId().length > 0,
       );
       if (controller.signal.aborted || !workspaceIsCurrent(workspace)) {
         setError(

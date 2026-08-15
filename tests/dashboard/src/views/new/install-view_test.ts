@@ -43,7 +43,7 @@ describe("single-screen install surface", () => {
     expect(view).toContain("const preparationTimeout = setTimeout(");
     expect(view).toContain("preparationTimedOut = true;");
     expect(view).toContain("timeoutMs: INSTALL_PREPARATION_TIMEOUT_MS");
-    expect(view).toContain("listing() === null");
+    expect(view).toContain("sourceAuthConnectionId().length > 0");
     expect(view).toContain("includeSourceConnections");
     expect(view).toContain("Promise.resolve([] as ProviderConnection[])");
     expect(view).toContain("listConnectionsWithSignal(workspace, signal)");
@@ -58,6 +58,16 @@ describe("single-screen install surface", () => {
     expect(view).toContain("activePreparationController?.abort()");
     expect(view).toContain("clearTimeout(preparationTimeout)");
     expect(view).toContain('t("common.cancel")');
+  });
+
+  test("public Git discovery never waits for the optional source credential inventory", () => {
+    const view = read("dashboard/src/views/new/InstallView.tsx");
+    expect(view).toContain(
+      "sourceAuthConnectionId().length > 0",
+    );
+    expect(view).not.toContain(
+      "listing() === null,\n      );",
+    );
   });
 
   test("authoritative refs stay exact and prepared state is invalidated by edits", () => {
