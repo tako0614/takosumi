@@ -190,6 +190,7 @@ import {
   composeResourceShapeSchemaRegistries,
   LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY,
 } from "../../core/domains/resource-shape/mod.ts";
+import { createDbOwnedHostRuntimeMaterializationResolver } from "../../core/domains/resource-shape/host_runtime_materialization.ts";
 import { evaluateProductionHardeningGates } from "./production_hardening.ts";
 import {
   OPERATOR_CONTROL_MCP_PATH,
@@ -271,6 +272,93 @@ export async function platformCapsuleExecutionAuthority(
   env: CloudflareWorkerEnv,
 ): Promise<CapsuleExecutionAuthorityResolver> {
   return (await takosumiOperationsFor(env)).capsuleExecutionAuthority;
+}
+
+interface PlatformCapsuleHostRuntimeMaterializationDependencies {
+  readonly operationsForEnv?: (
+    env: PlatformEnv,
+  ) => Promise<Pick<TakosumiOperations, "capsules">>;
+}
+
+/**
+ * Read the DB-owned runtime declaration for one exact Capsule installation.
+ *
+ * This is a host-composition port, not an API route: it uses the cached
+ * Takosumi operations facade and the same canonical resolver that Resource
+ * lifecycle uses. Only opaque declaration refs cross the boundary; generated
+ * values and other secret material never do.
+ */
+export async function platformCapsuleHostRuntimeMaterialization(
+  env: CloudflareWorkerEnv,
+  input: {
+    readonly workspaceId: string;
+    readonly capsuleId: string;
+  },
+  dependencies: PlatformCapsuleHostRuntimeMaterializationDependencies = {},
+): Promise<HostRuntimeMaterializationRequest | undefined> {
+  const workspaceId = requiredPlatformIdentity(
+    input.workspaceId,
+    "Capsule Workspace id",
+  );
+  const capsuleId = requiredPlatformIdentity(input.capsuleId, "Capsule id");
+  const operations = await (
+    dependencies.operationsForEnv ?? takosumiOperationsFor
+  )(env);
+
+  let capsule: Capsule;
+  try {
+    capsule = await operations.capsules.getCapsule(capsuleId);
+  } catch (error) {
+    if (
+      error instanceof OpenTofuControllerError &&
+      error.code === "not_found"
+    ) {
+      return undefined;
+    }
+    throw error;
+  }
+  if (
+    capsule.id !== capsuleId ||
+    capsule.workspaceId !== workspaceId ||
+    capsule.status === "destroyed" ||
+    !capsule.installingPrincipalId
+  ) {
+    return undefined;
+  }
+
+  const resolve = createDbOwnedHostRuntimeMaterializationResolver(
+    operations.capsules,
+  );
+  try {
+    return await resolve({
+      owner: {
+        kind: "Capsule",
+        id: capsule.id,
+        workspaceId,
+        installingPrincipalId: capsule.installingPrincipalId,
+      },
+    });
+  } catch (error) {
+    // A concurrent destroy/ownership change, or a missing InstallConfig, is
+    // not a declaration this read may expose. Keep malformed declarations as
+    // errors so the canonical parser remains fail-closed and observable.
+    if (
+      error instanceof OpenTofuControllerError &&
+      error.code === "not_found"
+    ) {
+      return undefined;
+    }
+    if (
+      error instanceof Error &&
+      (error.message ===
+        "host runtime materialization owner does not match the canonical Capsule" ||
+        error.message ===
+          "host runtime materialization requires the Capsule's Workspace-scoped InstallConfig")
+    ) {
+      return undefined;
+    }
+    throw error;
+  }
 }
 
 // In-process deploy-control seam, one cached service per env, shared with the
