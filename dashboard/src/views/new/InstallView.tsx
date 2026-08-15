@@ -719,19 +719,19 @@ function Inner(props: { readonly installingPrincipalId: string }) {
         setPhase("configure");
         return;
       }
-      setPreparationStage("connections");
-      const providers = await loadConnections(
+      // Provider discovery is independent from Source synchronization and
+      // compatibility analysis. Start it now, but do not make public Git
+      // installs stare at a serial “checking connections” phase before the
+      // repository work can begin. The resolved provider set is consumed only
+      // after compatibility tells us which provider rows are required.
+      const providersResult = loadConnections(
         workspace,
         controller.signal,
         sourceAuthConnectionId().length > 0,
+      ).then(
+        (providers) => ({ ok: true as const, providers }),
+        (cause: unknown) => ({ ok: false as const, cause }),
       );
-      if (controller.signal.aborted || !workspaceIsCurrent(workspace)) {
-        setError(
-          preparationTimedOut ? t("installStore.preparingTimeout") : undefined,
-        );
-        setPhase("configure");
-        return;
-      }
       setPreparationStage("source");
       const result = await checkCapsuleCompatibility({
         workspaceId: workspace,
@@ -765,6 +765,17 @@ function Inner(props: { readonly installingPrincipalId: string }) {
       // InstallConfig/Capsule creation and show its diagnostics to the user.
       if (result.level !== "ready") {
         setError(result.summary || t("installStore.compatibilityFailed"));
+        setPhase("configure");
+        return;
+      }
+      setPreparationStage("connections");
+      const providerResult = await providersResult;
+      if (!providerResult.ok) throw providerResult.cause;
+      const providers = providerResult.providers;
+      if (controller.signal.aborted || !workspaceIsCurrent(workspace)) {
+        setError(
+          preparationTimedOut ? t("installStore.preparingTimeout") : undefined,
+        );
         setPhase("configure");
         return;
       }
