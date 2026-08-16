@@ -228,31 +228,64 @@ type SourceOptionsFixture =
 
 const SOURCE_OPTIONS_DIGEST = `sha256:${"1".repeat(64)}`;
 
+interface SourceCreateFixtureState {
+  readonly sourceListReads: string[];
+  readonly sourcePosts: string[];
+}
+
+function expectSingleSourceCreate(state: SourceCreateFixtureState): void {
+  expect(state.sourceListReads).toEqual([
+    "/api/v1/sources?workspaceId=ws_alpha&limit=100",
+  ]);
+  expect(state.sourcePosts).toEqual(["/api/v1/sources"]);
+}
+
 /** Stub only the public source/snapshot projections needed by the real chooser. */
 async function stubSourceOptionsRead(
   page: Page,
   fixture: SourceOptionsFixture,
-): Promise<void> {
+): Promise<SourceCreateFixtureState> {
   const sourceId = `src_options_${fixture.metadata.name}`;
   const snapshotId = `snap_options_${fixture.metadata.name}`;
   const syncRunId = `run_options_${fixture.metadata.name}`;
   const fileText = JSON.stringify(fixture);
+  const state: SourceCreateFixtureState = {
+    sourceListReads: [],
+    sourcePosts: [],
+  };
   await page.route("**/api/v1/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
     const path = url.pathname;
+    if (
+      path === "/api/v1/sources" &&
+      request.method() === "GET" &&
+      url.search === "?workspaceId=ws_alpha&limit=100"
+    ) {
+      state.sourceListReads.push(`${path}${url.search}`);
+      return route.fulfill({ json: { sources: [] } });
+    }
     if (path === "/api/v1/sources" && request.method() === "POST") {
+      const body = request.postDataJSON() as {
+        readonly workspaceId: string;
+        readonly name: string;
+        readonly url: string;
+        readonly defaultRef?: string;
+        readonly defaultPath?: string;
+        readonly autoSync?: boolean;
+      };
+      state.sourcePosts.push(path);
       return route.fulfill({
         json: {
           source: {
             id: sourceId,
-            workspaceId: "ws_alpha",
-            name: `options-${fixture.metadata.name}`,
-            url: fixture.options[0]!.source.url,
-            defaultRef: PORTABLE_SOURCE_OPTIONS_COMMIT,
-            defaultPath: ".",
+            workspaceId: body.workspaceId,
+            name: body.name,
+            url: body.url,
+            defaultRef: body.defaultRef ?? "HEAD",
+            defaultPath: body.defaultPath ?? ".",
             status: "active",
-            autoSync: false,
+            autoSync: body.autoSync ?? false,
             createdAt: "2026-08-01T00:00:00.000Z",
             updatedAt: "2026-08-01T00:00:00.000Z",
           },
@@ -318,9 +351,10 @@ async function stubSourceOptionsRead(
     }
     return route.fallback();
   });
+  return state;
 }
 
-interface ProviderDestinationFixtureState {
+interface ProviderDestinationFixtureState extends SourceCreateFixtureState {
   readonly mutations: string[];
   bindingBody?: { readonly bindings?: readonly Record<string, unknown>[] };
 }
@@ -338,7 +372,11 @@ async function stubProviderDestinationFixture(
     },
   ],
 ): Promise<ProviderDestinationFixtureState> {
-  const state: ProviderDestinationFixtureState = { mutations: [] };
+  const state: ProviderDestinationFixtureState = {
+    mutations: [],
+    sourceListReads: [],
+    sourcePosts: [],
+  };
   const sourceId = "src_provider_destination_e2e";
   const snapshotId = "snap_provider_destination_e2e";
   const syncRunId = "run_provider_source_sync_e2e";
@@ -350,6 +388,14 @@ async function stubProviderDestinationFixture(
     if (request.method() !== "GET") {
       state.mutations.push(`${request.method()} ${path}`);
     }
+    if (
+      path === "/api/v1/sources" &&
+      request.method() === "GET" &&
+      url.search === "?workspaceId=ws_alpha&limit=100"
+    ) {
+      state.sourceListReads.push(`${path}${url.search}`);
+      return route.fulfill({ json: { sources: [] } });
+    }
     if (path === "/api/v1/connections") {
       return route.fulfill({ json: { connections: [] } });
     }
@@ -359,17 +405,26 @@ async function stubProviderDestinationFixture(
       });
     }
     if (path === "/api/v1/sources" && request.method() === "POST") {
+      const body = request.postDataJSON() as {
+        readonly workspaceId: string;
+        readonly name: string;
+        readonly url: string;
+        readonly defaultRef?: string;
+        readonly defaultPath?: string;
+        readonly autoSync?: boolean;
+      };
+      state.sourcePosts.push(path);
       return route.fulfill({
         json: {
           source: {
             id: sourceId,
-            workspaceId: "ws_alpha",
-            name: "cloudflare-service",
-            url: "https://github.com/example/cloudflare-service.git",
-            defaultRef: PORTABLE_SOURCE_OPTIONS_COMMIT,
-            defaultPath: ".",
+            workspaceId: body.workspaceId,
+            name: body.name,
+            url: body.url,
+            defaultRef: body.defaultRef ?? "HEAD",
+            defaultPath: body.defaultPath ?? ".",
             status: "active",
-            autoSync: true,
+            autoSync: body.autoSync ?? false,
             createdAt: "2026-08-01T00:00:00.000Z",
             updatedAt: "2026-08-01T00:00:00.000Z",
           },
@@ -845,7 +900,7 @@ test.describe("Takosumi dashboard browser surface", () => {
       localStorage.setItem("takosumi.currentWorkspaceId", "ws_alpha");
     });
     const fixture = PORTABLE_SOURCE_OPTION_DOCUMENTS.takos;
-    await stubSourceOptionsRead(page, fixture);
+    const state = await stubSourceOptionsRead(page, fixture);
     const query = new URLSearchParams({
       kind: "capsule-source-options",
       git: fixture.options[0]!.source.url,
@@ -867,6 +922,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     await expect(cards.nth(0)).not.toContainText("github.com/tako0614/yurucommu");
     await expect(cards.nth(1)).not.toContainText("github.com/tako0614/yurucommu");
     await expect(page.locator(".iv-entry-card").filter({ hasText: "Yurucommu" })).toHaveCount(0);
+    expectSingleSourceCreate(state);
     await assertNoPageErrors(errors);
     traffic.assertNoFailures();
   });
@@ -884,7 +940,7 @@ test.describe("Takosumi dashboard browser surface", () => {
       localStorage.setItem("takosumi.currentWorkspaceId", "ws_alpha");
     });
     const fixture = PORTABLE_SOURCE_OPTION_DOCUMENTS.yurucommu;
-    await stubSourceOptionsRead(page, fixture);
+    const state = await stubSourceOptionsRead(page, fixture);
     const query = new URLSearchParams({
       kind: "capsule-source-options",
       git: fixture.options[0]!.source.url,
@@ -906,6 +962,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     await expect(cards.nth(0)).not.toContainText("github.com/tako0614/takos.git");
     await expect(cards.nth(1)).not.toContainText("github.com/tako0614/takos.git");
     await expect(page.locator(".iv-entry-card").filter({ hasText: "Portable cloud" })).toHaveCount(0);
+    expectSingleSourceCreate(state);
     await assertNoPageErrors(errors);
     traffic.assertNoFailures();
   });
@@ -994,6 +1051,7 @@ test.describe("Takosumi dashboard browser surface", () => {
         "POST /api/v1/capsules/cap_provider_destination_e2e/plan",
       ),
     );
+    expectSingleSourceCreate(state);
     await assertNoPageErrors(errors);
     traffic.assertNoFailures();
   });
@@ -1032,6 +1090,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     expect(state.mutations).not.toContain(
       "PUT /api/v1/capsules/cap_provider_destination_e2e/provider-bindings",
     );
+    expectSingleSourceCreate(state);
     await assertNoPageErrors(errors);
     traffic.assertNoFailures();
   });
@@ -1120,6 +1179,7 @@ test.describe("Takosumi dashboard browser surface", () => {
           connectionId: "pc_aws_primary_mixed",
         },
       ]);
+    expectSingleSourceCreate(state);
     await assertNoPageErrors(errors);
     traffic.assertNoFailures();
   });
@@ -1134,7 +1194,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     const errors = pageErrors(page);
     const traffic = monitorDashboardTraffic(page, mode);
     const managed = PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS[0]!;
-    await stubProviderDestinationFixture(page, [
+    const state = await stubProviderDestinationFixture(page, [
       managed,
       { ...managed, id: "pc_takosumi_cloud_secondary" },
     ]);
@@ -1161,6 +1221,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     await expect(
       page.locator('[data-install-provider-destination="auto-selected"]'),
     ).toHaveCount(0);
+    expectSingleSourceCreate(state);
     await assertNoPageErrors(errors);
     traffic.assertNoFailures();
   });
@@ -1180,7 +1241,7 @@ test.describe("Takosumi dashboard browser surface", () => {
       providerSource: "registry.opentofu.org/cloudflare/cloudflare-v01",
       displayName: "Takosumi Cloud",
     };
-    await stubProviderDestinationFixture(
+    const state = await stubProviderDestinationFixture(
       page,
       [unrelatedV01],
       [
@@ -1212,6 +1273,7 @@ test.describe("Takosumi dashboard browser surface", () => {
         name: /新しい接続を追加|Add a new connection/u,
       }),
     ).toBeVisible();
+    expectSingleSourceCreate(state);
     await assertNoPageErrors(errors);
     traffic.assertNoFailures();
   });
@@ -1225,7 +1287,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     );
     const errors = pageErrors(page);
     const traffic = monitorDashboardTraffic(page, mode);
-    await stubProviderDestinationFixture(
+    const state = await stubProviderDestinationFixture(
       page,
       [PORTABLE_CLOUDFLARE_PROVIDER_CONNECTIONS[0]!],
       [
@@ -1263,6 +1325,7 @@ test.describe("Takosumi dashboard browser surface", () => {
     await expect(
       page.getByRole("button", { name: /続ける|Continue/u }),
     ).toBeDisabled();
+    expectSingleSourceCreate(state);
     await assertNoPageErrors(errors);
     traffic.assertNoFailures();
   });
@@ -1276,6 +1339,10 @@ test.describe("Takosumi dashboard browser surface", () => {
     );
     const now = "2026-08-04T00:00:00.000Z";
     const seenMutations: string[] = [];
+    const sourceState: SourceCreateFixtureState = {
+      sourceListReads: [],
+      sourcePosts: [],
+    };
     await page.route("https://store.example.test/**", async (route) => {
       await route.fulfill({
         contentType: "application/json",
@@ -1305,6 +1372,14 @@ test.describe("Takosumi dashboard browser surface", () => {
       ) {
         seenMutations.push(`${request.method()} ${path}`);
       }
+      if (
+        path === "/api/v1/sources" &&
+        request.method() === "GET" &&
+        url.search === "?workspaceId=ws_alpha&limit=100"
+      ) {
+        sourceState.sourceListReads.push(`${path}${url.search}`);
+        return route.fulfill({ json: { sources: [] } });
+      }
       if (path === "/api/v1/connections") {
         return route.fulfill({ json: { connections: [] } });
       }
@@ -1312,17 +1387,26 @@ test.describe("Takosumi dashboard browser surface", () => {
         return route.fulfill({ json: { providerConnections: [] } });
       }
       if (path === "/api/v1/sources" && request.method() === "POST") {
+        const body = request.postDataJSON() as {
+          readonly workspaceId: string;
+          readonly name: string;
+          readonly url: string;
+          readonly defaultRef?: string;
+          readonly defaultPath?: string;
+          readonly autoSync?: boolean;
+        };
+        sourceState.sourcePosts.push(path);
         return route.fulfill({
           json: {
             source: {
               id: "src_install_e2e",
-              workspaceId: "ws_alpha",
-              name: "example-service",
-              url: "https://github.com/example/service.git",
-              defaultRef: "",
-              defaultPath: ".",
+              workspaceId: body.workspaceId,
+              name: body.name,
+              url: body.url,
+              defaultRef: body.defaultRef ?? "HEAD",
+              defaultPath: body.defaultPath ?? ".",
               status: "active",
-              autoSync: true,
+              autoSync: body.autoSync ?? false,
               createdAt: now,
               updatedAt: now,
             },
@@ -1474,6 +1558,7 @@ test.describe("Takosumi dashboard browser surface", () => {
         seenMutations.includes("POST /api/v1/capsules/cap_install_e2e/plan"),
       )
       .toBe(true);
+    expectSingleSourceCreate(sourceState);
   });
 
   test("shows the repository-owned installed app and its launch URL", async ({
