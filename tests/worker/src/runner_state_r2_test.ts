@@ -392,7 +392,7 @@ test("oversized raw outputs fail before state, pointer, or output persistence", 
   assert.equal(artifacts.body(RESOURCE_RAW_OUTPUT_REF), undefined);
 });
 
-test("apply validates rawOutputRef against the Apply Run when the plan container is reused", async () => {
+test("apply validates rawOutputRef against the Apply Run in the image-local same-container harness", async () => {
   const artifacts = new FakeR2Bucket();
   const state = new FakeR2Bucket();
   const applyRawOutputRef = RESOURCE_RAW_OUTPUT_REF.replace(

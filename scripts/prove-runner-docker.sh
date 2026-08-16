@@ -14,10 +14,10 @@
 #     runner-local artifact -> expect outputs base_domain/public_origin/
 #     member_issuer/service_registry_url
 #
-# The container keeps the plan workspace warm between plan and apply (the same
-# container handles both), so the apply restores the runner-local tfplan from the
-# still-warm /work/<runId> workspace with no R2 callback. This is exactly the
-# runner-local artifact path the DO relies on before it promotes artifacts.
+# This image-local proof deliberately sends plan and apply to one container so
+# it can exercise the runner-local artifact endpoint without an R2 callback.
+# Production Cloud execution does not reuse that container: Plan and Apply have
+# distinct Run-scoped objects and Apply restores the reviewed durable artifact.
 #
 # Usage: scripts/prove-runner-docker.sh
 # Run from anywhere; it resolves the repo root from its own location.

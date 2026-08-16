@@ -441,18 +441,10 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       );
     }
     const runDispatch = isRunDispatchRequest(request);
-    const runAction = runDispatch
-      ? await readRunDispatchAction(request.clone())
-      : undefined;
-    const shutdownAfterRun =
-      runDispatch &&
-      runnerShouldShutdownAfterRun(runAction, runnerKeepaliveSeconds(this.env));
-    let runSucceeded = false;
     let mutationIndeterminate = false;
     try {
       this.#lastStartupSeconds = undefined;
       const response = await this.#fetchWithDurablePlanArtifacts(request);
-      runSucceeded = response.ok;
       mutationIndeterminate =
         response.headers.get(RUNNER_MUTATION_INDETERMINATE_HEADER) === "1";
       const output = runDispatch
@@ -506,11 +498,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         { status: 500 },
       );
     } finally {
-      if (
-        runDispatch &&
-        !mutationIndeterminate &&
-        (!runSucceeded || shutdownAfterRun)
-      ) {
+      if (runDispatch && !mutationIndeterminate) {
         await this.#shutdownContainerIfSupported();
       }
       this.#lastStartupSeconds = undefined;
@@ -2349,24 +2337,6 @@ function runnerR2LogArtifact(context: string, key: string): string {
         ? RUNNER_R2_LOG_ARTIFACT.statePointer
         : RUNNER_R2_LOG_ARTIFACT.other;
   }
-}
-
-async function readRunDispatchAction(
-  request: Request,
-): Promise<string | undefined> {
-  try {
-    return parseRunEnvelope(await request.text()).action;
-  } catch {
-    return undefined;
-  }
-}
-
-function runnerShouldShutdownAfterRun(
-  action: string | undefined,
-  keepaliveSeconds: number,
-): boolean {
-  if (keepaliveSeconds <= 0) return true;
-  return action !== "plan";
 }
 
 function runnerArtifactLimits(env: CloudflareWorkerEnv): RunnerArtifactLimits {

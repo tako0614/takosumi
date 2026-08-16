@@ -171,11 +171,9 @@ TAKOSUMI_ENABLED_RUNNER_PROFILES = "opentofu-default"
 #   TAKOSUMI_RELEASE_ACTIVATION_FAILURE_SURFACING_EVIDENCE_REF / _DIGEST
 #   TAKOSUMI_RELEASE_ACTIVATION_LEDGER_INDEPENDENCE_EVIDENCE_REF / _DIGEST
 #   TAKOSUMI_RELEASE_ACTIVATION_PAYLOAD_BOUNDARY_EVIDENCE_REF / _DIGEST
-# OpenTofu runner capacity knob. Runner DO ids are currently run-scoped, so a
-# positive keepalive keeps that run's container alive but does not reuse it for
-# the next source_sync / compatibility / plan / apply run. Keep this at "0"
-# until stable runner affinity exists; otherwise bursty installs can exhaust
-# Cloudflare container max_instances.
+# Legacy OpenTofu runner activity-expiry grace. Runner DO ids are run-scoped,
+# and every completed non-indeterminate dispatch explicitly destroys its
+# container. Keep this compatibility input at "0"; it is not a cross-Run cache.
 TAKOSUMI_RUNNER_KEEPALIVE_SECONDS = "0"
 # Provider binaries only; credentials, generated roots, plans, state, and
 # outputs remain run/ledger scoped. This path is inside the runner container.

@@ -289,9 +289,9 @@ export class SourcesService {
   }
 
   /**
-   * Scheduler scan: active sources whose autoSync flag is set and whose ref can
-   * move, capped at `limit`. An exact commit is already immutable, so polling it
-   * would only start a runner container that cannot discover a newer revision.
+   * Scheduler scan: active sources whose autoSync flag is set, capped at
+   * `limit`. An exact commit remains eligible until one successful sync records
+   * that same commit; after that, polling could not discover a newer revision.
    * Returns the public Source records (the scheduler only needs the id).
    */
   async listAutoSyncSources(limit: number): Promise<readonly Source[]> {

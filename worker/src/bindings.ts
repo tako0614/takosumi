@@ -145,7 +145,8 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
   /**
    * Runner performance knobs forwarded to the OpenTofu runner container. These
    * are non-secret operational settings: the plugin cache stores provider
-   * binaries only, and keepalive only controls warm container lifetime.
+   * binaries only. Keepalive is a legacy activity-expiry grace; every completed
+   * non-indeterminate Run explicitly destroys its Run-scoped container.
    */
   readonly TAKOSUMI_RUNNER_KEEPALIVE_SECONDS?: string;
   readonly TAKOSUMI_RUNNER_CAPACITY_RETRY_ATTEMPTS?: string;

@@ -930,7 +930,7 @@ test("OpenTofu runner Durable Object keeps a minimum activity grace while startu
   assert.equal(runner.sleepAfter, "30s");
 });
 
-test("OpenTofu runner Durable Object keeps only successful plan containers warm when keepalive is enabled", async () => {
+test("OpenTofu runner Durable Object destroys successful plan containers even when legacy keepalive is enabled", async () => {
   const calls: string[] = [];
   const runner = runnerWithContainer(
     new FakeR2Bucket(),
@@ -969,7 +969,7 @@ test("OpenTofu runner Durable Object keeps only successful plan containers warm 
   );
 
   assert.equal(response.status, 200);
-  assert.deepEqual(calls, ["fetch POST /runs/plan_warm"]);
+  assert.deepEqual(calls, ["fetch POST /runs/plan_warm", "destroy"]);
 });
 
 test("OpenTofu runner Durable Object destroys non-plan containers even when keepalive is enabled", async () => {
