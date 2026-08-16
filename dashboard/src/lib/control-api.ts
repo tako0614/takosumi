@@ -1985,6 +1985,8 @@ const SOURCE_CREATE_DEFAULT_REF = "HEAD";
 const SOURCE_CREATE_DEFAULT_PATH = ".";
 const SOURCE_CREATE_PAGE_LIMIT = 100;
 const SOURCE_CREATE_MAX_PAGES = 100;
+const SOURCE_CREATE_BASELINE_MAX_ATTEMPTS = 2;
+const SOURCE_CREATE_BASELINE_ATTEMPT_TIMEOUT_MS = 15_000;
 /**
  * A Source create is the first mutation in the install preparation flow. Keep
  * a small part of that flow's deadline available for the authoritative
@@ -1999,6 +2001,117 @@ export async function listSources(
     `${BASE}/sources${query({ workspaceId: workspaceId })}`,
     (body) => (body.sources as readonly Source[]) ?? [],
   );
+}
+
+interface SourceCreateBaselineAttempt {
+  readonly signal: AbortSignal;
+  readonly timedOut: () => boolean;
+  readonly clearAttemptTimer: () => void;
+  readonly cleanup: () => void;
+}
+
+interface SourceCreateBaselineResult {
+  readonly sources: readonly Source[];
+  /** Kept until the complete create/readback flow has finished. */
+  readonly cleanup: () => void;
+}
+
+/**
+ * Gives one strict baseline read a short, attempt-local timeout. The shared
+ * mutation signal is still authoritative: a parent or mutation-window abort
+ * cancels the attempt but can never be mistaken for a retryable timeout.
+ */
+function sourceCreateBaselineAttempt(
+  mutationSignal: AbortSignal | undefined,
+): SourceCreateBaselineAttempt {
+  const controller = new AbortController();
+  let timedOut = false;
+  const abortFromMutation = () => {
+    controller.abort(mutationSignal?.reason);
+  };
+  if (mutationSignal?.aborted) {
+    abortFromMutation();
+  } else {
+    mutationSignal?.addEventListener("abort", abortFromMutation, {
+      once: true,
+    });
+  }
+  let timeoutActive = true;
+  const timeout =
+    mutationSignal?.aborted === true
+      ? undefined
+      : setTimeout(() => {
+          if (!timeoutActive) return;
+          timedOut = true;
+          controller.abort();
+        }, SOURCE_CREATE_BASELINE_ATTEMPT_TIMEOUT_MS);
+  const clearAttemptTimer = () => {
+    timeoutActive = false;
+    if (timeout !== undefined) clearTimeout(timeout);
+  };
+  return {
+    signal: controller.signal,
+    timedOut: () => timedOut,
+    clearAttemptTimer,
+    cleanup: () => {
+      clearAttemptTimer();
+      mutationSignal?.removeEventListener("abort", abortFromMutation);
+    },
+  };
+}
+
+/**
+ * Reads the complete strict Source baseline, retrying only when the current
+ * attempt's own timer aborted an otherwise pending GET. HTTP/invalid response
+ * errors and the shared parent/mutation abort are never replayed.
+ */
+async function listSourcesForCreateBaseline(
+  workspaceId: string,
+  mutationSignal: AbortSignal | undefined,
+): Promise<SourceCreateBaselineResult> {
+  for (
+    let attempt = 0;
+    attempt < SOURCE_CREATE_BASELINE_MAX_ATTEMPTS;
+    attempt += 1
+  ) {
+    // A shared parent/mutation abort that arrives between attempts is
+    // authoritative; do not start another GET after it has fired.
+    throwIfAborted(mutationSignal);
+    const attemptSignals = sourceCreateBaselineAttempt(mutationSignal);
+    try {
+      const sources = await listSourcesForCreateRecovery(workspaceId, {
+        signal: attemptSignals.signal,
+      });
+      if (attemptSignals.timedOut()) {
+        attemptSignals.cleanup();
+        if (mutationSignal?.aborted) throwIfAborted(mutationSignal);
+        if (attempt + 1 >= SOURCE_CREATE_BASELINE_MAX_ATTEMPTS) {
+          throw new ControlApiError(
+            0,
+            "request_timeout",
+            "Source baseline attempt timed out.",
+          );
+        }
+        continue;
+      }
+      // The child signal must remain linked to the mutation window until the
+      // POST/readback flow is complete, but its local timer is no longer
+      // needed once this complete baseline has returned.
+      attemptSignals.clearAttemptTimer();
+      return { sources, cleanup: attemptSignals.cleanup };
+    } catch (error) {
+      attemptSignals.cleanup();
+      if (
+        mutationSignal?.aborted ||
+        !attemptSignals.timedOut() ||
+        !isAbortError(error) ||
+        attempt + 1 >= SOURCE_CREATE_BASELINE_MAX_ATTEMPTS
+      ) {
+        throw error;
+      }
+    }
+  }
+  throw new Error("Source baseline attempts exhausted.");
 }
 
 /**
@@ -2669,12 +2782,22 @@ export async function createSource(input: {
     input.deadlineAt,
   );
   let mutationDispatched = false;
+  let baselineCleanup: (() => void) | undefined;
   try {
     let baseline: readonly Source[];
     try {
-      baseline = await listSourcesForCreateRecovery(input.workspaceId, {
-        signal: baselineAndReadbackSignals.mutationSignal,
-      });
+      if (input.deadlineAt === undefined) {
+        baseline = await listSourcesForCreateRecovery(input.workspaceId, {
+          signal: baselineAndReadbackSignals.mutationSignal,
+        });
+      } else {
+        const result = await listSourcesForCreateBaseline(
+          input.workspaceId,
+          baselineAndReadbackSignals.mutationSignal,
+        );
+        baseline = result.sources;
+        baselineCleanup = result.cleanup;
+      }
     } catch (error) {
       if (input.signal?.aborted) throw error;
       throw sourceCreateBaselineUnavailable(error);
@@ -2748,6 +2871,7 @@ export async function createSource(input: {
       }
     }
   } finally {
+    baselineCleanup?.();
     baselineAndReadbackSignals.cleanup();
   }
 }

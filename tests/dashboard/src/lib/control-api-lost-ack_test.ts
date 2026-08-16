@@ -793,35 +793,302 @@ describe("createSource acknowledgement recovery", () => {
 
   test("does not dispatch POST when the authoritative baseline fails", async () => {
     let posts = 0;
+    let reads = 0;
     globalThis.fetch = (async (
       _input: RequestInfo | URL,
       init?: RequestInit,
     ) => {
       if ((init?.method ?? "GET") === "POST") posts += 1;
+      else reads += 1;
       throw new Error("baseline unavailable");
     }) as typeof fetch;
 
-    await expect(createSource(sourceInput)).rejects.toMatchObject({
+    await expect(
+      createSource({ ...sourceInput, deadlineAt: Date.now() + 60_000 }),
+    ).rejects.toMatchObject({
       code: "source_create_baseline_unavailable",
       isIndeterminate: false,
     });
     expect(posts).toBe(0);
+    expect(reads).toBe(1);
   });
 
   test("does not dispatch POST when baseline pagination is incomplete", async () => {
     let posts = 0;
+    let reads = 0;
     globalThis.fetch = (async (
       _input: RequestInfo | URL,
       init?: RequestInit,
     ) => {
       if ((init?.method ?? "GET") === "POST") posts += 1;
+      else reads += 1;
       return json({ sources: [], nextCursor: "" });
     }) as typeof fetch;
 
-    await expect(createSource(sourceInput)).rejects.toMatchObject({
+    await expect(
+      createSource({ ...sourceInput, deadlineAt: Date.now() + 60_000 }),
+    ).rejects.toMatchObject({
       code: "source_create_baseline_unavailable",
       isIndeterminate: false,
     });
+    expect(posts).toBe(0);
+    expect(reads).toBe(1);
+  });
+
+  test("retries one baseline GET after an attempt-local timeout before posting", async () => {
+    const realSetTimeout = globalThis.setTimeout;
+    const realClearTimeout = globalThis.clearTimeout;
+    const timers: Array<{ delay: number; callback: () => void }> = [];
+    const calls: Array<{ url: string; method: string }> = [];
+    let baselineSignal: AbortSignal | undefined;
+    let baselineReadStarted = false;
+    let reads = 0;
+    let posts = 0;
+    const candidate = sourceRecord();
+    globalThis.setTimeout = ((callback: TimerHandler, delay?: number) => {
+      timers.push({
+        delay: Number(delay ?? 0),
+        callback: callback as () => void,
+      });
+      return timers.length as unknown as ReturnType<typeof setTimeout>;
+    }) as typeof setTimeout;
+    globalThis.clearTimeout = (() => undefined) as typeof clearTimeout;
+    globalThis.fetch = (async (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ) => {
+      const method = init?.method ?? "GET";
+      calls.push({ url: String(input), method });
+      if (method === "POST") {
+        posts += 1;
+        return json({ source: candidate, hookSecret: "hook_secret_once" }, 201);
+      }
+      reads += 1;
+      if (reads === 1) {
+        baselineReadStarted = true;
+        baselineSignal = init?.signal;
+        return await new Promise<Response>((_resolve, reject) => {
+          baselineSignal?.addEventListener(
+            "abort",
+            () => reject(new DOMException("timed out", "AbortError")),
+            { once: true },
+          );
+        });
+      }
+      return json({ sources: [] });
+    }) as typeof fetch;
+    try {
+      const attempt = createSource({
+        ...sourceInput,
+        deadlineAt: Date.now() + 60_000,
+      });
+      while (!baselineReadStarted) await Promise.resolve();
+      expect(timers.map(({ delay }) => delay)).toContain(15_000);
+      timers.find(({ delay }) => delay === 15_000)?.callback();
+      await expect(attempt).resolves.toEqual({
+        source: candidate,
+        hookSecret: "hook_secret_once",
+      });
+      expect(calls).toEqual([
+        {
+          url: "/api/v1/sources?workspaceId=workspace_1&limit=100",
+          method: "GET",
+        },
+        {
+          url: "/api/v1/sources?workspaceId=workspace_1&limit=100",
+          method: "GET",
+        },
+        { url: "/api/v1/sources", method: "POST" },
+      ]);
+      expect(reads).toBe(2);
+      expect(posts).toBe(1);
+    } finally {
+      globalThis.setTimeout = realSetTimeout;
+      globalThis.clearTimeout = realClearTimeout;
+    }
+  });
+
+  test("restarts a paginated baseline from the first page after a page timeout", async () => {
+    const realSetTimeout = globalThis.setTimeout;
+    const realClearTimeout = globalThis.clearTimeout;
+    const timers: Array<{ delay: number; callback: () => void }> = [];
+    const calls: Array<{ url: string; method: string }> = [];
+    let reads = 0;
+    let posts = 0;
+    const candidate = sourceRecord();
+    globalThis.setTimeout = ((callback: TimerHandler, delay?: number) => {
+      timers.push({
+        delay: Number(delay ?? 0),
+        callback: callback as () => void,
+      });
+      return timers.length as unknown as ReturnType<typeof setTimeout>;
+    }) as typeof setTimeout;
+    globalThis.clearTimeout = (() => undefined) as typeof clearTimeout;
+    globalThis.fetch = (async (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ) => {
+      const method = init?.method ?? "GET";
+      calls.push({ url: String(input), method });
+      if (method === "POST") {
+        posts += 1;
+        return json({ source: candidate, hookSecret: "hook_secret_once" }, 201);
+      }
+      reads += 1;
+      if (reads === 1) return json({ sources: [], nextCursor: "partial_cursor" });
+      if (reads === 2) {
+        return await new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            "abort",
+            () => reject(new DOMException("timed out", "AbortError")),
+            { once: true },
+          );
+        });
+      }
+      return json({ sources: [] });
+    }) as typeof fetch;
+    try {
+      const attempt = createSource({
+        ...sourceInput,
+        deadlineAt: Date.now() + 60_000,
+      });
+      while (reads < 2) await Promise.resolve();
+      timers.find(({ delay }) => delay === 15_000)?.callback();
+      await expect(attempt).resolves.toEqual({
+        source: candidate,
+        hookSecret: "hook_secret_once",
+      });
+      expect(calls).toEqual([
+        {
+          url: "/api/v1/sources?workspaceId=workspace_1&limit=100",
+          method: "GET",
+        },
+        {
+          url: "/api/v1/sources?workspaceId=workspace_1&limit=100&cursor=partial_cursor",
+          method: "GET",
+        },
+        {
+          url: "/api/v1/sources?workspaceId=workspace_1&limit=100",
+          method: "GET",
+        },
+        { url: "/api/v1/sources", method: "POST" },
+      ]);
+      expect(reads).toBe(3);
+      expect(posts).toBe(1);
+    } finally {
+      globalThis.setTimeout = realSetTimeout;
+      globalThis.clearTimeout = realClearTimeout;
+    }
+  });
+
+  test("returns a definite baseline-unavailable error after two attempt timeouts", async () => {
+    const realSetTimeout = globalThis.setTimeout;
+    const realClearTimeout = globalThis.clearTimeout;
+    const timers: Array<{ delay: number; callback: () => void }> = [];
+    const calls: Array<{ url: string; method: string }> = [];
+    let reads = 0;
+    let posts = 0;
+    globalThis.setTimeout = ((callback: TimerHandler, delay?: number) => {
+      timers.push({
+        delay: Number(delay ?? 0),
+        callback: callback as () => void,
+      });
+      return timers.length as unknown as ReturnType<typeof setTimeout>;
+    }) as typeof setTimeout;
+    globalThis.clearTimeout = (() => undefined) as typeof clearTimeout;
+    globalThis.fetch = (async (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ) => {
+      const method = init?.method ?? "GET";
+      calls.push({ url: String(input), method });
+      if (method === "POST") {
+        posts += 1;
+        throw new Error("POST must not be dispatched");
+      }
+      reads += 1;
+      return await new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener(
+          "abort",
+          () => reject(new DOMException("timed out", "AbortError")),
+          { once: true },
+        );
+      });
+    }) as typeof fetch;
+    try {
+      const attempt = createSource({
+        ...sourceInput,
+        deadlineAt: Date.now() + 60_000,
+      });
+      while (reads < 1) await Promise.resolve();
+      expect(timers.filter(({ delay }) => delay === 15_000)).toHaveLength(1);
+      timers.find(({ delay }) => delay === 15_000)?.callback();
+      while (reads < 2) await Promise.resolve();
+      expect(timers.filter(({ delay }) => delay === 15_000)).toHaveLength(2);
+      timers.filter(({ delay }) => delay === 15_000)[1]?.callback();
+      await expect(attempt).rejects.toMatchObject({
+        code: "source_create_baseline_unavailable",
+        status: 0,
+        isIndeterminate: false,
+      });
+      expect(calls).toEqual([
+        {
+          url: "/api/v1/sources?workspaceId=workspace_1&limit=100",
+          method: "GET",
+        },
+        {
+          url: "/api/v1/sources?workspaceId=workspace_1&limit=100",
+          method: "GET",
+        },
+      ]);
+      expect(reads).toBe(2);
+      expect(posts).toBe(0);
+    } finally {
+      globalThis.setTimeout = realSetTimeout;
+      globalThis.clearTimeout = realClearTimeout;
+    }
+  });
+
+  test("does not retry a baseline GET when the parent signal aborts", async () => {
+    const parent = new AbortController();
+    const calls: Array<{ url: string; method: string }> = [];
+    let reads = 0;
+    let posts = 0;
+    globalThis.fetch = (async (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ) => {
+      const method = init?.method ?? "GET";
+      calls.push({ url: String(input), method });
+      if (method === "POST") {
+        posts += 1;
+        throw new Error("POST must not be dispatched");
+      }
+      reads += 1;
+      return await new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener(
+          "abort",
+          () => reject(new DOMException("cancelled", "AbortError")),
+          { once: true },
+        );
+      });
+    }) as typeof fetch;
+
+    const attempt = createSource({
+      ...sourceInput,
+      signal: parent.signal,
+      deadlineAt: Date.now() + 60_000,
+    });
+    while (reads < 1) await Promise.resolve();
+    parent.abort();
+    await expect(attempt).rejects.toMatchObject({ name: "AbortError" });
+    expect(calls).toEqual([
+      {
+        url: "/api/v1/sources?workspaceId=workspace_1&limit=100",
+        method: "GET",
+      },
+    ]);
+    expect(reads).toBe(1);
     expect(posts).toBe(0);
   });
 
@@ -932,6 +1199,8 @@ describe("createSource acknowledgement recovery", () => {
       while (postSignal === undefined) await Promise.resolve();
       expect(timers.map(({ delay }) => delay)).toContain(5_000);
       expect(timers.map(({ delay }) => delay)).toContain(10_000);
+      timers.find(({ delay }) => delay === 15_000)?.callback();
+      expect(baselineSignal?.aborted).toBe(false);
       timers.find(({ delay }) => delay === 5_000)?.callback();
       await expect(attempt).rejects.toBeInstanceOf(
         SourceCreateIndeterminateError,
