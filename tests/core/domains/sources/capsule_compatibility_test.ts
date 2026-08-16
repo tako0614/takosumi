@@ -251,7 +251,7 @@ output "ok" {
   expect(result.findings).toEqual([]);
 });
 
-test("fails closed when a required provider version is non-literal", () => {
+test("omits a non-literal required provider version without downgrading compatibility", () => {
   const result = analyzeOpenTofuCapsuleFiles({
     sourceId: "src_provider_dynamic_version",
     sourceSnapshot: snapshot,
@@ -280,7 +280,7 @@ output "ok" {
     ],
   });
 
-  expect(result.level).toBe("unsupported");
+  expect(result.level).toBe("ready");
   expect(result.providers).toEqual([
     {
       source: "cloudflare/cloudflare",
@@ -289,38 +289,14 @@ output "ok" {
       allowed: true,
     },
   ]);
-  expect(result.findings).toContainEqual(
-    expect.objectContaining({
-      code: "provider_version_constraint_non_literal",
-      severity: "error",
-      compatibilityImpact: "unsupported",
-      context: {
-        provider: "cloudflare",
-        localName: "cloudflare",
-        source: "cloudflare/cloudflare",
-      },
-    }),
-  );
+  expect(result.findings).toEqual([]);
 });
 
-test("fails closed on conflicting literal versions for one required provider", () => {
+test("omits a provider version when the provider appears across reachable modules", () => {
   const result = analyzeOpenTofuCapsuleFiles({
-    sourceId: "src_provider_conflicting_versions",
+    sourceId: "src_provider_intersecting_versions",
     sourceSnapshot: snapshot,
     files: [
-      {
-        path: "versions.tf",
-        text: `
-terraform {
-  required_providers {
-    cloudflare = {
-      source  = "cloudflare/cloudflare"
-      version = "= 5.19.1"
-    }
-  }
-}
-`,
-      },
       {
         path: "main.tf",
         text: `
@@ -328,8 +304,66 @@ terraform {
   required_providers {
     cloudflare = {
       source  = "cloudflare/cloudflare"
-      version = "= 5.20.0"
+      version = ">= 5.0"
+    }
+  }
+}
+
+module "service" {
+  source = "./modules/service"
+}
+
+output "ok" {
+  value = true
+}
+`,
+      },
+      {
+        path: "modules/service/main.tf",
+        text: `
+terraform {
+  required_providers {
+    cloudflare = {
+      source  = "cloudflare/cloudflare"
+      version = "< 6.0"
       configuration_aliases = [cloudflare.zone]
+    }
+  }
+}
+`,
+      },
+    ],
+  });
+
+  expect(result.level).toBe("ready");
+  expect(result.providers).toEqual([
+    {
+      source: "cloudflare/cloudflare",
+      localName: "cloudflare",
+      aliases: ["zone"],
+      allowed: true,
+    },
+  ]);
+  expect(result.findings).toEqual([]);
+});
+
+test("omits provider versions when local names share one canonical source", () => {
+  const result = analyzeOpenTofuCapsuleFiles({
+    sourceId: "src_provider_canonical_source_duplicates",
+    sourceSnapshot: snapshot,
+    files: [
+      {
+        path: "main.tf",
+        text: `
+terraform {
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = ">= 5.0"
+    }
+    cloud = {
+      source  = "registry.opentofu.org/hashicorp/aws"
+      version = "< 6.0"
     }
   }
 }
@@ -342,28 +376,63 @@ output "ok" {
     ],
   });
 
-  expect(result.level).toBe("unsupported");
+  expect(result.level).toBe("ready");
+  expect(result.providers).toEqual([
+    {
+      source: "hashicorp/aws",
+      localName: "aws",
+      aliases: [],
+      allowed: true,
+    },
+    {
+      source: "registry.opentofu.org/hashicorp/aws",
+      localName: "cloud",
+      aliases: [],
+      allowed: true,
+    },
+  ]);
+  expect(result.findings).toEqual([]);
+});
+
+test("omits a quoted template provider version without downgrading compatibility", () => {
+  const result = analyzeOpenTofuCapsuleFiles({
+    sourceId: "src_provider_quoted_template_version",
+    sourceSnapshot: snapshot,
+    files: [
+      {
+        path: "main.tf",
+        text: `
+variable "provider_version" {
+  type = string
+}
+
+terraform {
+  required_providers {
+    cloudflare = {
+      source  = "cloudflare/cloudflare"
+      version = "\${var.provider_version}"
+    }
+  }
+}
+
+output "ok" {
+  value = true
+}
+`,
+      },
+    ],
+  });
+
+  expect(result.level).toBe("ready");
   expect(result.providers).toEqual([
     {
       source: "cloudflare/cloudflare",
       localName: "cloudflare",
-      aliases: ["zone"],
+      aliases: [],
       allowed: true,
     },
   ]);
-  expect(result.findings).toContainEqual(
-    expect.objectContaining({
-      code: "provider_version_constraint_conflict",
-      severity: "error",
-      compatibilityImpact: "unsupported",
-      context: {
-        provider: "cloudflare",
-        localName: "cloudflare",
-        source: "cloudflare/cloudflare",
-        constraints: "= 5.19.1, = 5.20.0",
-      },
-    }),
-  );
+  expect(result.findings).toEqual([]);
 });
 
 test("treats provider-free output modules as runnable", () => {

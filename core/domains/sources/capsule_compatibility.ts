@@ -354,10 +354,11 @@ function collectProviders(
       readonly source: string;
       readonly localName: string;
       readonly aliases: Set<string>;
-      readonly versionConstraints: Set<string>;
-      versionConstraintNonLiteral: boolean;
+      versionConstraintOccurrences: number;
+      versionConstraint?: string;
     }
   >();
+  const canonicalProviderOccurrences = new Map<string, number>();
   for (const file of files) {
     const terraformBlocks = matchBlocks(file.text, "terraform");
     for (const block of terraformBlocks) {
@@ -373,40 +374,30 @@ function collectProviders(
             stringAttribute(providerBlock.body, "source") ??
             `hashicorp/${providerBlock.name}`;
           const localName = providerBlock.name;
+          const canonicalSource = canonicalProviderSource(source);
+          canonicalProviderOccurrences.set(
+            canonicalSource,
+            (canonicalProviderOccurrences.get(canonicalSource) ?? 0) + 1,
+          );
           const aliases = aliasesAttribute(providerBlock.body, localName);
           const key = `${localName}\u0000${source}`;
           const entry = providers.get(key) ?? {
             source,
             localName,
             aliases: new Set<string>(),
-            versionConstraints: new Set<string>(),
-            versionConstraintNonLiteral: false,
+            versionConstraintOccurrences: 0,
           };
           for (const alias of aliases) entry.aliases.add(alias);
+          entry.versionConstraintOccurrences += 1;
           const versionConstraint = stringAttributeValue(
             providerBlock.body,
             "version",
           );
-          if (versionConstraint.kind === "literal") {
-            entry.versionConstraints.add(versionConstraint.value);
-          } else if (versionConstraint.kind === "non_literal") {
-            entry.versionConstraintNonLiteral = true;
-            findings.push({
-              severity: "error",
-              compatibilityImpact: "unsupported",
-              code: "provider_version_constraint_non_literal",
-              message:
-                `Provider ${localName} uses a non-literal version constraint ` +
-                "that compatibility analysis cannot preserve safely.",
-              path: file.path,
-              context: {
-                provider: localName,
-                localName,
-                source,
-              },
-              suggestion:
-                "Use a literal version constraint in required_providers so Takosumi can preserve the provider selection exactly.",
-            });
+          if (
+            entry.versionConstraintOccurrences === 1 &&
+            versionConstraint.kind === "literal"
+          ) {
+            entry.versionConstraint = versionConstraint.value;
           }
           providers.set(key, entry);
         }
@@ -468,36 +459,17 @@ function collectProviders(
         source,
         localName,
         aliases,
-        versionConstraints,
-        versionConstraintNonLiteral,
+        versionConstraintOccurrences,
+        versionConstraint,
       }) => {
-        const sortedVersionConstraints = Array.from(versionConstraints).sort();
-        const versionConstraintConflict = sortedVersionConstraints.length > 1;
-        if (versionConstraintConflict) {
-          findings.push({
-            severity: "error",
-            compatibilityImpact: "unsupported",
-            code: "provider_version_constraint_conflict",
-            message:
-              `Provider ${localName} has conflicting literal version constraints ` +
-              `for source ${source}.`,
-            context: {
-              provider: localName,
-              localName,
-              source,
-              constraints: sortedVersionConstraints.join(", "),
-            },
-            suggestion:
-              "Declare one literal version constraint for each local provider/source pair.",
-          });
-        }
         const provider = {
           source,
           localName,
-          ...(sortedVersionConstraints.length === 1 &&
-          !versionConstraintNonLiteral &&
-          !versionConstraintConflict
-            ? { versionConstraint: sortedVersionConstraints[0] }
+          ...(versionConstraintOccurrences === 1 &&
+          canonicalProviderOccurrences.get(canonicalProviderSource(source)) ===
+            1 &&
+          versionConstraint !== undefined
+            ? { versionConstraint }
             : {}),
           aliases: Array.from(aliases).sort(),
           allowed: providerAllowed(source, allowedProviders),
@@ -827,6 +799,12 @@ function providerAllowed(
   return allowlistContains(allowedProviders, source, providerInSet);
 }
 
+function canonicalProviderSource(source: string): string {
+  return source.startsWith("registry.opentofu.org/")
+    ? source.slice("registry.opentofu.org/".length)
+    : source;
+}
+
 function providerInSet(
   source: string,
   providers: ReadonlySet<string>,
@@ -938,9 +916,11 @@ function stringAttributeValue(
   if (!assignment) return { kind: "missing" };
   const expression = assignment[2]!.trim();
   const literal = /^"((?:[^"\\]|\\.)*)"$/u.exec(expression);
-  return literal
-    ? { kind: "literal", value: literal[1]! }
-    : { kind: "non_literal" };
+  if (!literal) return { kind: "non_literal" };
+  const value = literal[1]!;
+  return value.includes("${") || value.includes("%{")
+    ? { kind: "non_literal" }
+    : { kind: "literal", value };
 }
 
 function aliasesAttribute(body: string, localName: string): string[] {
