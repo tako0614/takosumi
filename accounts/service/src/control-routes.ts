@@ -71,6 +71,15 @@ import {
   type ServerTimingBucket,
 } from "./server-timing.ts";
 
+const CONTROL_OPERATIONS_INIT_DEADLINE_MS = 5_000;
+
+class ControlOperationsInitializationTimeoutError extends Error {
+  constructor() {
+    super("control operations initialization timed out");
+    this.name = "TimeoutError";
+  }
+}
+
 // Re-exports keep the pre-split import surface stable for in-tree consumers
 // (`mod.ts`, `control-personal-workspace.ts`, and the control-route tests).
 export type {
@@ -163,6 +172,187 @@ interface ControlRouteContext {
   readonly managedPublicBaseDomain?: string;
 }
 
+type ControlOperationsResolution = ControlPlaneOperations | undefined;
+
+type SharedAttemptOutcome<T> =
+  | { readonly status: "fulfilled"; readonly value: T }
+  | { readonly status: "rejected"; readonly error: unknown };
+
+interface SharedAttemptWaiter<T> {
+  readonly resolve: (value: T | PromiseLike<T>) => void;
+  readonly reject: (reason?: unknown) => void;
+  active: boolean;
+  timer?: ReturnType<typeof setTimeout>;
+}
+
+export interface ControlOperationsSharedAttempt<T> {
+  readonly waiterCount: number;
+  readonly wait: (timeoutMs: number) => Promise<T>;
+}
+
+interface ControlOperationsSharedAttemptOptions {
+  readonly onFailure?: (error: unknown) => void;
+  readonly onRejected?: (error: unknown) => void;
+}
+
+/**
+ * A single-flight initializer with one settlement observer and removable
+ * request waiters. A request timeout removes only its waiter; it never adds a
+ * Promise.race reaction to the retained initializer. The initializer itself
+ * remains owned by the composition/cache layer and is neither aborted nor
+ * evicted by a request deadline. Runtime continuation after a timeout is not
+ * guaranteed when the host terminates the isolate.
+ */
+export function createControlOperationsSharedAttempt<T>(
+  operation: () => T | Promise<T>,
+  options: ControlOperationsSharedAttemptOptions = {},
+): ControlOperationsSharedAttempt<T> {
+  const waiters = new Set<SharedAttemptWaiter<T>>();
+  let outcome: SharedAttemptOutcome<T> | undefined;
+  let failureReported = false;
+
+  const reportFailure = (error: unknown): void => {
+    if (failureReported) return;
+    failureReported = true;
+    options.onFailure?.(error);
+  };
+
+  const operationPromise = (() => {
+    try {
+      return Promise.resolve(operation());
+    } catch (error) {
+      return Promise.reject(error);
+    }
+  })();
+
+  const settle = (next: SharedAttemptOutcome<T>): void => {
+    if (outcome !== undefined) return;
+    outcome = next;
+    if (next.status === "rejected") {
+      reportFailure(next.error);
+      options.onRejected?.(next.error);
+    }
+    const pending = [...waiters];
+    waiters.clear();
+    for (const waiter of pending) {
+      if (!waiter.active) continue;
+      waiter.active = false;
+      if (waiter.timer !== undefined) clearTimeout(waiter.timer);
+      if (next.status === "fulfilled") waiter.resolve(next.value);
+      else waiter.reject(next.error);
+    }
+  };
+
+  // This is the only reaction attached to the retained initializer. Its
+  // rejection branch settles waiters and returns normally, so the observer
+  // itself cannot become an unhandled rejection.
+  void operationPromise.then(
+    (value) => settle({ status: "fulfilled", value }),
+    (error) => settle({ status: "rejected", error }),
+  );
+
+  return {
+    get waiterCount() {
+      return waiters.size;
+    },
+    wait(timeoutMs: number): Promise<T> {
+      if (outcome !== undefined) {
+        if (outcome.status === "fulfilled") return Promise.resolve(outcome.value);
+        return Promise.reject(outcome.error);
+      }
+      return new Promise<T>((resolve, reject) => {
+        const waiter: SharedAttemptWaiter<T> = {
+          resolve,
+          reject,
+          active: true,
+        };
+        waiters.add(waiter);
+        waiter.timer = setTimeout(() => {
+          if (!waiter.active) return;
+          waiter.active = false;
+          waiters.delete(waiter);
+          const timeout = new ControlOperationsInitializationTimeoutError();
+          reportFailure(timeout);
+          reject(timeout);
+        }, timeoutMs);
+      });
+    },
+  };
+}
+
+type ControlOperationsResolver = NonNullable<
+  ControlRouteContext["resolveOperations"]
+>;
+
+const controlOperationsAttempts = new WeakMap<
+  ControlOperationsResolver,
+  ControlOperationsSharedAttempt<ControlOperationsResolution>
+>();
+
+function controlOperationsAttempt(
+  resolveOperations: ControlOperationsResolver,
+): ControlOperationsSharedAttempt<ControlOperationsResolution> {
+  const cached = controlOperationsAttempts.get(resolveOperations);
+  if (cached) return cached;
+
+  let attempt!: ControlOperationsSharedAttempt<ControlOperationsResolution>;
+  attempt = createControlOperationsSharedAttempt(resolveOperations, {
+    onFailure: (error) => logControlOperationsInitializationFailure(error),
+    onRejected: () => {
+      if (controlOperationsAttempts.get(resolveOperations) === attempt) {
+        controlOperationsAttempts.delete(resolveOperations);
+      }
+    },
+  });
+  controlOperationsAttempts.set(resolveOperations, attempt);
+  return attempt;
+}
+
+/**
+ * Bounds only this request's wait for the shared Control operations facade.
+ * The resolver owns its own lifecycle and is intentionally not given the
+ * request signal: a timed-out caller must not abort or evict a concurrent
+ * shared initialization attempt. A late rejection is consumed explicitly so
+ * an initializer that settles after this request's deadline cannot become an
+ * unhandled rejection.
+ */
+async function resolveOperationsForRequest(
+  resolveOperations: ControlOperationsResolver,
+  timings: ServerTimingBucket,
+): Promise<ControlOperationsResolution> {
+  const attempt = controlOperationsAttempt(resolveOperations);
+  try {
+    return await measureServerTiming(timings, "tk_control_init", () =>
+      attempt.wait(CONTROL_OPERATIONS_INIT_DEADLINE_MS),
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+function logControlOperationsInitializationFailure(error: unknown): void {
+  console.warn(
+    JSON.stringify({
+      event: "control_operations_initialization_unavailable",
+      stage: "resolve_operations",
+      thresholdMs: CONTROL_OPERATIONS_INIT_DEADLINE_MS,
+      errorName: safeControlOperationsErrorName(error),
+    }),
+  );
+}
+
+function safeControlOperationsErrorName(error: unknown): string {
+  if (error instanceof ControlOperationsInitializationTimeoutError) {
+    return "TimeoutError";
+  }
+  if (error instanceof DOMException) return "DOMException";
+  if (error instanceof TypeError) return "TypeError";
+  if (error instanceof RangeError) return "RangeError";
+  if (error instanceof SyntaxError) return "SyntaxError";
+  if (error instanceof Error) return "Error";
+  return "NonError";
+}
+
 /**
  * Dispatches the public control surface after a composition root has already
  * authenticated one exact Accounts subject.
@@ -223,10 +413,9 @@ async function dispatchAuthenticatedControlRoute(
 
   let operations = context.operations;
   if (!operations && context.resolveOperations) {
-    operations = await measureServerTiming(
-      timings,
-      "tk_control_init",
+    operations = await resolveOperationsForRequest(
       context.resolveOperations,
+      timings,
     );
   }
   if (!operations)
@@ -286,22 +475,20 @@ export async function handleControlRoute(
     const operations =
       context.operations ??
       (context.resolveOperations
-        ? await measureServerTiming(
-            timings,
-            "tk_control_init",
-            context.resolveOperations,
-          )
+        ? await resolveOperationsForRequest(context.resolveOperations, timings)
         : undefined);
-    if (!operations) return controlPlaneUnavailable();
+    if (!operations)
+      return appendServerTiming(controlPlaneUnavailable(), timings);
     try {
-      return await completeConnectionOAuth(
+      const response = await completeConnectionOAuth(
         operations,
         store,
         url,
         connectionOAuthHelperId,
       );
+      return appendServerTiming(response, timings);
     } catch (error) {
-      return controllerErrorResponse(error);
+      return appendServerTiming(controllerErrorResponse(error), timings);
     }
   }
 

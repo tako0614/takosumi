@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import type { ControlPlaneOperations } from "../../../../accounts/service/src/control-operations.ts";
 import {
+  createControlOperationsSharedAttempt,
   handleAuthenticatedControlRoute,
   handleControlRoute,
   isControlRoutePath,
@@ -1180,6 +1181,464 @@ test("public Workspace-scoped PAT inventory rejects before lazy Control initiali
   expect(response?.headers.get("server-timing")).toMatch(
     /tk_control_auth;dur=/u,
   );
+  expect(response?.headers.get("server-timing")).not.toContain(
+    "tk_control_init",
+  );
+});
+
+test("shared Control initialization removes timed-out waiters and coalesces its warning", async () => {
+  let starts = 0;
+  let resolveUnderlying: ((value: string) => void) | undefined;
+  const warnings: unknown[] = [];
+  const underlying = new Promise<string>((resolve) => {
+    resolveUnderlying = resolve;
+  });
+  const attempt = createControlOperationsSharedAttempt(
+    async () => {
+      starts += 1;
+      return await underlying;
+    },
+    {
+      onFailure: (error) => warnings.push(error),
+    },
+  );
+  const waits = Array.from({ length: 12 }, () =>
+    attempt.wait(1).catch(() => undefined),
+  );
+  await Promise.all(waits);
+
+  expect(starts).toBe(1);
+  expect(attempt.waiterCount).toBe(0);
+  expect(warnings).toHaveLength(1);
+
+  resolveUnderlying!("ready");
+  await expect(attempt.wait(20)).resolves.toBe("ready");
+  expect(attempt.waiterCount).toBe(0);
+  expect(warnings).toHaveLength(1);
+});
+
+test("shared Control initialization exposes one rejection for eviction", async () => {
+  let rejected = 0;
+  const attempt = createControlOperationsSharedAttempt(
+    async () => {
+      throw new Error("bootstrap failed");
+    },
+    { onRejected: () => rejected += 1 },
+  );
+
+  await expect(attempt.wait(20)).rejects.toThrow("bootstrap failed");
+  expect(rejected).toBe(1);
+  expect(attempt.waiterCount).toBe(0);
+});
+
+test("request floods coalesce one Control initialization warning", async () => {
+  const never = new Promise<ControlPlaneOperations>(() => undefined);
+  let starts = 0;
+  const resolveOperations = async () => {
+    starts += 1;
+    return await never;
+  };
+  const warnings: string[] = [];
+  const originalWarn = console.warn;
+  const originalSetTimeout = globalThis.setTimeout;
+  console.warn = (line?: unknown) => warnings.push(String(line));
+  globalThis.setTimeout = ((
+    callback: TimerHandler,
+    _timeout?: number,
+    ...args: unknown[]
+  ) => originalSetTimeout(callback, 0, ...args)) as typeof globalThis.setTimeout;
+  try {
+    const responses = await Promise.all(
+      Array.from({ length: 20 }, () => {
+        const request = new Request(
+          "https://app.example.test/api/v1/views/workspaces.v1",
+        );
+        return handleAuthenticatedControlRoute({
+          request,
+          url: new URL(request.url),
+          store: {} as AccountsStore,
+          subject: "tsub_owner",
+          resolveOperations,
+        });
+      }),
+    );
+    expect(responses.every((response) => response?.status === 503)).toBe(true);
+  } finally {
+    globalThis.setTimeout = originalSetTimeout;
+    console.warn = originalWarn;
+  }
+  expect(starts).toBe(1);
+  expect(warnings).toHaveLength(1);
+});
+
+test("authenticated Source POST returns a bounded generic 503 when Control initialization never resolves", async () => {
+  const marker = "source-body-must-not-be-read";
+  const request = new Request("https://app.example.test/api/v1/sources", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ marker }),
+  });
+  const storeReads = { count: 0 };
+  const store = new Proxy({} as AccountsStore, {
+    get() {
+      storeReads.count += 1;
+      throw new Error("Control initialization timeout must not read the store");
+    },
+  });
+  let resolverCalls = 0;
+  const never = new Promise<ControlPlaneOperations>(() => undefined);
+
+  // Keep this test fast while asserting that production schedules the fixed
+  // five-second request deadline. The resolver itself remains pending, so the
+  // route can only complete through the deadline path.
+  const originalSetTimeout = globalThis.setTimeout;
+  const scheduledDelays: number[] = [];
+  globalThis.setTimeout = ((
+    callback: TimerHandler,
+    timeout?: number,
+    ...args: unknown[]
+  ) => {
+    scheduledDelays.push(Number(timeout));
+    return originalSetTimeout(callback, 0, ...args);
+  }) as typeof globalThis.setTimeout;
+  let response: Response | undefined;
+  try {
+    response = await handleAuthenticatedControlRoute({
+      request,
+      url: new URL(request.url),
+      store,
+      subject: "tsub_owner",
+      resolveOperations: async () => {
+        resolverCalls += 1;
+        return await never;
+      },
+    });
+  } finally {
+    globalThis.setTimeout = originalSetTimeout;
+  }
+
+  expect(response?.status).toBe(503);
+  expect(request.bodyUsed).toBe(false);
+  const body = await response?.text();
+  expect(body).toMatch(/feature_unavailable/u);
+  expect(body).not.toContain(marker);
+  expect(response?.headers.get("server-timing")).toMatch(
+    /tk_control_init;dur=/u,
+  );
+  expect(response?.headers.get("server-timing")).not.toContain(
+    "tk_control_dispatch",
+  );
+  expect(resolverCalls).toBe(1);
+  expect(storeReads.count).toBe(0);
+  expect(scheduledDelays).toContain(5_000);
+});
+
+test("Control initialization rejection returns the same generic 503 without dispatch", async () => {
+  const marker = "resolver-secret-marker";
+  const request = new Request("https://app.example.test/api/v1/sources", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ marker }),
+  });
+  const storeReads = { count: 0 };
+  const store = new Proxy({} as AccountsStore, {
+    get() {
+      storeReads.count += 1;
+      throw new Error("Control initialization rejection must not read the store");
+    },
+  });
+  const warnings: string[] = [];
+  const originalWarn = console.warn;
+  console.warn = (line?: unknown) => warnings.push(String(line));
+  let response: Response | undefined;
+  try {
+    response = await handleAuthenticatedControlRoute({
+      request,
+      url: new URL(request.url),
+      store,
+      subject: "tsub_owner",
+      resolveOperations: async () => {
+        throw new Error(marker);
+      },
+    });
+  } finally {
+    console.warn = originalWarn;
+  }
+
+  expect(response?.status).toBe(503);
+  const body = await response?.text();
+  expect(body).toMatch(/feature_unavailable/u);
+  expect(body).not.toContain(marker);
+  expect(response?.headers.get("server-timing")).toMatch(
+    /tk_control_init;dur=/u,
+  );
+  expect(response?.headers.get("server-timing")).not.toContain(
+    "tk_control_dispatch",
+  );
+  expect(storeReads.count).toBe(0);
+  expect(warnings).toHaveLength(1);
+  expect(warnings[0]).not.toContain(marker);
+  expect(warnings[0]).toContain('"stage":"resolve_operations"');
+});
+
+test("credential OAuth callback initialization rejection is also generic and bounded", async () => {
+  const marker = "oauth-query-secret";
+  const request = new Request(
+    `https://app.example.test/api/v1/connections/oauth/helper/callback?code=${marker}&state=state-1`,
+  );
+  const storeReads = { count: 0 };
+  const store = new Proxy({} as AccountsStore, {
+    get() {
+      storeReads.count += 1;
+      throw new Error("OAuth initialization rejection must not read the store");
+    },
+  });
+  const warnings: string[] = [];
+  const originalWarn = console.warn;
+  console.warn = (line?: unknown) => warnings.push(String(line));
+  let response: Response | undefined;
+  try {
+    response = await handleControlRoute({
+      request,
+      url: new URL(request.url),
+      store,
+      resolveOperations: async () => {
+        throw new Error(marker);
+      },
+    });
+  } finally {
+    console.warn = originalWarn;
+  }
+
+  expect(response?.status).toBe(503);
+  const body = await response?.text();
+  expect(body).toMatch(/feature_unavailable/u);
+  expect(body).not.toContain(marker);
+  expect(response?.headers.get("server-timing")).toMatch(
+    /tk_control_init;dur=/u,
+  );
+  expect(response?.headers.get("server-timing")).not.toContain(
+    "tk_control_dispatch",
+  );
+  expect(storeReads.count).toBe(0);
+  expect(warnings).toHaveLength(1);
+  expect(warnings[0]).not.toContain(marker);
+  expect(warnings[0]).toContain('"thresholdMs":5000');
+});
+
+test("credential OAuth callback timeout does not cancel its shared initializer", async () => {
+  const request = new Request(
+    "https://app.example.test/api/v1/connections/oauth/helper/callback?code=code-1&state=state-1",
+  );
+  const store = {} as AccountsStore;
+  const never = new Promise<ControlPlaneOperations>(() => undefined);
+  let resolverCalls = 0;
+  const originalSetTimeout = globalThis.setTimeout;
+  const scheduledDelays: number[] = [];
+  globalThis.setTimeout = ((
+    callback: TimerHandler,
+    timeout?: number,
+    ...args: unknown[]
+  ) => {
+    scheduledDelays.push(Number(timeout));
+    return originalSetTimeout(callback, 0, ...args);
+  }) as typeof globalThis.setTimeout;
+  let response: Response | undefined;
+  try {
+    response = await handleControlRoute({
+      request,
+      url: new URL(request.url),
+      store,
+      resolveOperations: async () => {
+        resolverCalls += 1;
+        return await never;
+      },
+    });
+  } finally {
+    globalThis.setTimeout = originalSetTimeout;
+  }
+
+  expect(response?.status).toBe(503);
+  expect(response?.headers.get("server-timing")).toMatch(
+    /tk_control_init;dur=/u,
+  );
+  expect(response?.headers.get("server-timing")).not.toContain(
+    "tk_control_dispatch",
+  );
+  expect(resolverCalls).toBe(1);
+  expect(scheduledDelays).toContain(5_000);
+});
+
+test("credential OAuth callback success preserves tk_control_init timing", async () => {
+  const operations = {
+    connectionOAuth: {
+      helper: {
+        complete: async () => ({
+          request: { workspaceId: workspace.id },
+          subject: workspace.ownerUserId,
+        }),
+      },
+    },
+    workspaces: {
+      getWorkspace: async () => workspace,
+    },
+    createConnection: async () => ({ connection: { id: "conn_oauth" } }),
+    testConnection: async () => ({ status: "verified" }),
+  } as unknown as ControlPlaneOperations;
+  const request = new Request(
+    "https://app.example.test/api/v1/connections/oauth/helper/callback?code=code-1&state=state-1",
+  );
+  const response = await handleControlRoute({
+    request,
+    url: new URL(request.url),
+    store: new InMemoryAccountsStore(),
+    resolveOperations: async () => operations,
+  });
+
+  expect(response?.status).toBe(303);
+  expect(response?.headers.get("location")).toContain("connected=1");
+  expect(response?.headers.get("server-timing")).toMatch(
+    /tk_control_init;dur=/u,
+  );
+});
+
+test("credential OAuth callback failure preserves tk_control_init timing", async () => {
+  const operations = {
+    connectionOAuth: {
+      helper: {
+        complete: async () => {
+          throw new Error("upstream failure");
+        },
+      },
+    },
+  } as unknown as ControlPlaneOperations;
+  const request = new Request(
+    "https://app.example.test/api/v1/connections/oauth/helper/callback?code=code-1&state=state-1",
+  );
+  const response = await handleControlRoute({
+    request,
+    url: new URL(request.url),
+    store: new InMemoryAccountsStore(),
+    resolveOperations: async () => operations,
+  });
+
+  expect(response?.status).toBe(303);
+  expect(response?.headers.get("location")).toContain(
+    "connection_error=oauth_failed",
+  );
+  expect(response?.headers.get("server-timing")).toMatch(
+    /tk_control_init;dur=/u,
+  );
+});
+
+test("a timed-out caller can use the same initializer after it resolves", async () => {
+  const request = new Request(
+    "https://app.example.test/api/v1/views/workspaces.v1",
+  );
+  const operations = {
+    workspaces: {
+      listWorkspacesForAccountPage: async () => ({ items: [], total: 0 }),
+    },
+  } as unknown as ControlPlaneOperations;
+  let resolveShared: ((value: ControlPlaneOperations) => void) | undefined;
+  const shared = new Promise<ControlPlaneOperations>((resolve) => {
+    resolveShared = resolve;
+  });
+  let resolverCalls = 0;
+  const resolveOperations = async () => {
+    resolverCalls += 1;
+    return await shared;
+  };
+
+  const originalSetTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = ((
+    callback: TimerHandler,
+    _timeout?: number,
+    ...args: unknown[]
+  ) => originalSetTimeout(callback, 0, ...args)) as typeof globalThis.setTimeout;
+  let timedOut: Response | undefined;
+  try {
+    timedOut = await handleAuthenticatedControlRoute({
+      request,
+      url: new URL(request.url),
+      store: {} as AccountsStore,
+      subject: "tsub_owner",
+      resolveOperations,
+    });
+  } finally {
+    globalThis.setTimeout = originalSetTimeout;
+  }
+  expect(timedOut?.status).toBe(503);
+
+  resolveShared!(operations);
+  const served = await handleAuthenticatedControlRoute({
+    request,
+    url: new URL(request.url),
+    store: {} as AccountsStore,
+    subject: "tsub_owner",
+    resolveOperations,
+  });
+  expect(served?.status).toBe(200);
+  expect(await served?.json()).toMatchObject({
+    kind: "takosumi.account-workspace-inventory@v1",
+  });
+  expect(resolverCalls).toBe(1);
+});
+
+test("a rejected Control initializer is evicted before the next request retries", async () => {
+  const request = new Request(
+    "https://app.example.test/api/v1/views/workspaces.v1",
+  );
+  const operations = {
+    workspaces: {
+      listWorkspacesForAccountPage: async () => ({ items: [], total: 0 }),
+    },
+  } as unknown as ControlPlaneOperations;
+  let attempts = 0;
+  const resolveOperations = async () => {
+    attempts += 1;
+    if (attempts === 1) throw new Error("first bootstrap failed");
+    return operations;
+  };
+
+  const first = await handleAuthenticatedControlRoute({
+    request,
+    url: new URL(request.url),
+    store: {} as AccountsStore,
+    subject: "tsub_owner",
+    resolveOperations,
+  });
+  const second = await handleAuthenticatedControlRoute({
+    request,
+    url: new URL(request.url),
+    store: {} as AccountsStore,
+    subject: "tsub_owner",
+    resolveOperations,
+  });
+
+  expect(first?.status).toBe(503);
+  expect(second?.status).toBe(200);
+  expect(attempts).toBe(2);
+});
+
+test("authentication failures do not resolve the Control plane", async () => {
+  let resolverCalls = 0;
+  const request = new Request("https://app.example.test/api/v1/sources", {
+    method: "POST",
+    body: "must-not-be-parsed",
+  });
+  const response = await handleControlRoute({
+    request,
+    url: new URL(request.url),
+    store: new InMemoryAccountsStore(),
+    resolveOperations: async () => {
+      resolverCalls += 1;
+      throw new Error("authentication must run first");
+    },
+  });
+
+  expect(response?.status).toBe(401);
+  expect(resolverCalls).toBe(0);
   expect(response?.headers.get("server-timing")).not.toContain(
     "tk_control_init",
   );
