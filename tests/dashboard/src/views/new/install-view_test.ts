@@ -55,7 +55,8 @@ describe("single-screen install surface", () => {
     expect(view).toContain("...all.filter(isProviderConnectionCandidate)");
     expect(view).toContain("...releaseOwnedProviders");
     expect(view).toContain("onSourceSyncProgress:");
-    expect(view).toContain("onSourceSnapshot:");
+    expect(view).toContain("await prepareCapsuleSourceSnapshot({");
+    expect(view).toContain("onSourceCreated:");
     expect(view).toContain("preparationStageHint()");
     expect(view).toContain("activePreparationController?.abort()");
     expect(view).toContain("clearTimeout(preparationTimeout)");
@@ -156,8 +157,11 @@ describe("single-screen install surface", () => {
 
   test("requires visible confirmation of the DB-owned deployment profile", () => {
     const view = read("dashboard/src/views/new/InstallView.tsx");
-    expect(view).toContain("listInstallConfigs(undefined, { view: STORE_VIEW })");
-    expect(view).toContain("storeDeploymentProfileCatalogForSource");
+    expect(view).toContain("listSourceSnapshotDeploymentProfiles(");
+    expect(view).toContain("storeDeploymentProfileCatalogFromSnapshot");
+    expect(view.indexOf("await prepareCapsuleSourceSnapshot({")).toBeLessThan(
+      view.indexOf("listSourceSnapshotDeploymentProfiles("),
+    );
     expect(view).toContain("selectedDeploymentProfileKey");
     expect(view).toContain("deploymentProfileConfirmed");
     expect(view).toContain('t("installStore.deploymentProfileConfirm")');
@@ -166,12 +170,13 @@ describe("single-screen install surface", () => {
     expect(view).not.toContain("profile.provider");
   });
 
-  test("switching deployment profile clears every derived authority row", () => {
+  test("switching deployment profile preserves the snapshot and clears compiled authority", () => {
     const view = read("dashboard/src/views/new/InstallView.tsx");
     const switchStart = view.indexOf("const switchDeploymentProfile =");
     const switchEnd = view.indexOf("const prepareInstall =", switchStart);
     const switchSource = view.slice(switchStart, switchEnd);
-    expect(switchSource).toContain("resetPreparedSource();");
+    expect(switchSource).toContain("resetCompiledPreparation();");
+    expect(switchSource).not.toContain("resetPreparedSource();");
     for (const reset of [
       "setCompatibility(undefined)",
       "setInstallConfig(undefined)",
