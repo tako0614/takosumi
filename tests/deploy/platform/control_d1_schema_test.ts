@@ -4332,6 +4332,136 @@ test("control D1 REST release keeps every query statement below D1's 100 KB limi
   }
 });
 
+test("control D1 REST release keeps a 220-table update predicate below D1's 100 KB limit", async () => {
+  const tableNames = Array.from(
+    { length: 220 },
+    (_, index) =>
+      `release_scale_${String(index).padStart(3, "0")}_${"x".repeat(40)}`,
+  );
+  const backing = new SqliteControlD1Database();
+  backing.exec(
+    tableNames
+      .map((table) => `create table "${table}" (id text primary key);`)
+      .join("\n"),
+  );
+  try {
+    const fence = await acquireControlD1MaintenanceFence(
+      backing,
+      {
+        sourceCommit: SOURCE_COMMIT,
+        manifestDigest: `sha256:${"d".repeat(64)}`,
+        environment: "test",
+        databaseRole: "in_place",
+        releasePolicy: "in_place",
+      },
+      NOW,
+    );
+    const { fetch, stats } = createD1RestAndImportFetch(backing);
+    const database = new CloudflareControlD1RestDatabase({
+      accountId: "account_123",
+      databaseId: "database_456",
+      apiToken: "secret-token",
+      fetch,
+      importPollIntervalMilliseconds: 0,
+      wait: async () => {},
+    });
+
+    await releaseControlD1MaintenanceFence(database, fence, NOW);
+
+    const releaseSql = stats.uploadedSql.at(-1);
+    expect(releaseSql).toBeString();
+    const updateStart = releaseSql?.indexOf(
+      `update _takosumi_control_schema_maintenance\n         set active = 0`,
+    );
+    const updateEnd = releaseSql?.indexOf("\ndrop trigger", updateStart);
+    expect(updateStart).toBeGreaterThanOrEqual(0);
+    expect(updateEnd).toBeGreaterThan(updateStart ?? -1);
+    const updateSql = releaseSql?.slice(updateStart, updateEnd);
+    expect(new TextEncoder().encode(updateSql ?? "").byteLength).toBeLessThan(
+      100_000,
+    );
+    expect(
+      new TextEncoder().encode(releaseSql ?? "").byteLength,
+    ).toBeLessThan(100_000);
+    expect(await readControlD1MaintenanceState(database)).toEqual({
+      status: "inactive",
+    });
+    expect(
+      await backing
+        .prepare(
+          `select count(*) as count from sqlite_master
+           where type = 'trigger' and name like '_takosumi_schema_fence_%'`,
+        )
+        .first(),
+    ).toEqual({ count: 0 });
+  } finally {
+    backing.close();
+  }
+});
+
+test("control D1 candidate release fails closed on exact trigger SQL, name, and table drift", async () => {
+  const drifts = ["sql", "name", "table"] as const;
+  for (const drift of drifts) {
+    const backing = new SqliteControlD1Database();
+    backing.exec(`
+      create table demo (id text primary key);
+      create table other (id text primary key);
+    `);
+    try {
+      const fence = await acquireControlD1MaintenanceFence(
+        backing,
+        {
+          sourceCommit: SOURCE_COMMIT,
+          manifestDigest: `sha256:${"e".repeat(64)}`,
+          environment: "test",
+          databaseRole: "candidate",
+          releasePolicy: "cutover",
+          databaseId: "candidate_123",
+          sourceExportSha256: `sha256:${"f".repeat(64)}`,
+        },
+        NOW,
+      );
+      let releaseBatches = 0;
+      const database: D1Database = {
+        prepare(query) {
+          return backing.prepare(query);
+        },
+        async batch(statements) {
+          releaseBatches += 1;
+          if (releaseBatches === 1) {
+            backing.exec(
+              `drop trigger "_takosumi_schema_fence_demo_insert";`,
+            );
+            const table = drift === "table" ? "other" : "demo";
+            const name =
+              drift === "name"
+                ? "_takosumi_schema_fence_demo_insert_drift"
+                : "_takosumi_schema_fence_demo_insert";
+            const body =
+              drift === "sql"
+                ? "select raise(abort, 'drift');"
+                : "select 1;";
+            backing.exec(
+              `create trigger "${name}" before insert on "${table}" begin ${body} end;`,
+            );
+          }
+          return await backing.batch(statements);
+        },
+      };
+
+      await expect(
+        releaseControlD1MaintenanceFence(database, fence, NOW),
+      ).rejects.toThrow("maintenance_fence_release_mismatch");
+      expect(releaseBatches).toBe(1);
+      expect((await readControlD1MaintenanceState(backing)).status).toBe(
+        "active",
+      );
+    } finally {
+      backing.close();
+    }
+  }
+});
+
 test("control D1 REST release balances its guard predicate below SQLite expression depth", async () => {
   const plan = await buildControlD1SchemaPlan();
   const backing = new SqliteControlD1Database();

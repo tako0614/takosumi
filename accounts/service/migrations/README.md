@@ -13,7 +13,10 @@ Migration `037` adds a `NOT VALID` PAT scope admission check for the
 workspace-bound `resources:read` authority without rewriting stored rows.
 Migration `038` validates that check in its own transaction while the legacy
 check remains active. Migration `039` then removes the superseded check in a
-separate short transaction; the validated v2 constraint remains in place.
+separate short transaction. Migration `040` adds the `NOT VALID` v3 check for
+the Workspace-bound `ai.models.read`, `ai.chat`, and `ai.embeddings` scopes;
+migration `041` validates it while v2 remains active, and migration `042`
+removes the superseded v2 check in a separate short transaction.
 
 - **Substrate**: Postgres (the `node-postgres` reference distribution and any
   compatible operator deployment).

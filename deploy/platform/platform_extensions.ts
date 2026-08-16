@@ -153,6 +153,9 @@ export const PLATFORM_EXTENSIONS_ENV = "TAKOSUMI_PLATFORM_EXTENSIONS";
 /** Closed until each new PAT authority has a matching storage and route proof. */
 export const PLATFORM_EXTENSION_SELF_SERVICE_PAT_SCOPE_ALLOWLIST = [
   "resources:read",
+  "ai.models.read",
+  "ai.chat",
+  "ai.embeddings",
 ] as const;
 export const PLATFORM_EXTENSION_CATALOG_PATH =
   "/__takosumi/platform/extensions" as const;

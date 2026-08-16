@@ -52,6 +52,9 @@ export const TAKOSUMI_ACCOUNTS_PAT_SCOPES = [
   "write",
   "admin",
   "resources:read",
+  "ai.models.read",
+  "ai.chat",
+  "ai.embeddings",
 ] as const;
 /**
  * Scopes an authenticated account session may grant through the public
@@ -70,6 +73,9 @@ export const TAKOSUMI_ACCOUNTS_SELF_SERVICE_PAT_SCOPES = [
  */
 export const TAKOSUMI_ACCOUNTS_EXTENSION_SELF_SERVICE_PAT_SCOPES = [
   "resources:read",
+  "ai.models.read",
+  "ai.chat",
+  "ai.embeddings",
 ] as const;
 
 export const TAKOSUMI_ACCOUNTS_CAPSULE_OAUTH_SCOPES = [

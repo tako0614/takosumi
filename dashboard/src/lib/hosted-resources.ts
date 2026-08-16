@@ -453,7 +453,10 @@ function optionalRequestScopeRules(
       return method;
     });
     if (new Set(methods).size !== methods.length) throw invalidCatalog();
-    const requiredScopes = catalogStringArray(record.requiredScopes);
+    // Public preflight rules (for example AI OPTIONS) intentionally require
+    // no scopes.  Keep the empty-array exception local to request rules;
+    // capability and owner scope declarations remain non-empty.
+    const requiredScopes = catalogStringArray(record.requiredScopes, true);
     for (const method of methods) {
       const key = `${path}\u0000${method}`;
       if (seen.has(key)) throw invalidCatalog();
@@ -536,8 +539,13 @@ function optionalCatalogStringArray(value: unknown): readonly string[] | undefin
   return catalogStringArray(value);
 }
 
-function catalogStringArray(value: unknown): readonly string[] {
-  if (!Array.isArray(value) || value.length === 0) throw invalidCatalog();
+function catalogStringArray(
+  value: unknown,
+  allowEmpty = false,
+): readonly string[] {
+  if (!Array.isArray(value) || (!allowEmpty && value.length === 0)) {
+    throw invalidCatalog();
+  }
   const values = value.map((entry) => catalogString(entry));
   if (new Set(values).size !== values.length) throw invalidCatalog();
   return values;

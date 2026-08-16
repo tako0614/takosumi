@@ -34,6 +34,7 @@ import {
   type RefreshChainRetentionRunResult,
 } from "@takosjp/takosumi-accounts-service";
 import {
+  TAKOSUMI_ACCOUNTS_EXTENSION_SELF_SERVICE_PAT_SCOPES,
   normalizeIssuer,
   type TakosumiAccountsPatScope,
 } from "@takosjp/takosumi-accounts-contract";
@@ -1245,7 +1246,9 @@ function platformExtensionSelfServicePatScopesForAccounts(
     return platformExtensionSelfServicePatScopes(
       routes.filter((route) => platformExtensionRouteConfigured(env, route)),
     ).filter((scope): scope is TakosumiAccountsPatScope =>
-      scope === "resources:read",
+      (
+        TAKOSUMI_ACCOUNTS_EXTENSION_SELF_SERVICE_PAT_SCOPES as readonly string[]
+      ).includes(scope),
     );
   } catch {
     // The platform router fails closed on malformed extension configuration;

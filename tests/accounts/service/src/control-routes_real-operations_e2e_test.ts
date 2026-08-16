@@ -1311,13 +1311,20 @@ test("Store deployment profiles are listed, selected by opaque key, and module-p
     recommended: false,
     order: 10,
   });
+  const missing = profile({
+    id: "icfg_profile_missing",
+    key: "missing-module-v1",
+    modulePath: "deploy/missing",
+    recommended: false,
+    order: 30,
+  });
   const { operations } = await createTakosumiService({
     role: "takosumi-api",
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
     opentofuControlStore: deployStore,
     opentofuRunner: runner,
     artifactReferenceAllocator: new ObjectKeyArtifactReferenceAllocator(),
-    operatorInstallConfigs: [managed, byoc],
+    operatorInstallConfigs: [managed, byoc, missing],
   });
   const seeded = await seedCapsuleModel(deployStore, {
     workspaceId: "ws_profile_preflight",
@@ -1347,20 +1354,25 @@ test("Store deployment profiles are listed, selected by opaque key, and module-p
   });
 
   const listed = await controlJson<{
-    readonly installConfigs: readonly InstallConfig[];
+    readonly status: "ready";
+    readonly profiles: readonly NonNullable<
+      NonNullable<InstallConfig["store"]>["deploymentProfile"]
+    >[];
   }>(
     {
       operations,
       store: accountStore,
       cookie,
       method: "GET",
-      path: "/api/v1/capsule-configs?view=store",
+      path: `/api/v1/sources/${seeded.source.id}/snapshots/${seeded.snapshot.id}/deployment-profiles`,
     },
     200,
   );
-  expect(
-    listed.installConfigs.map((config) => config.store?.deploymentProfile),
-  ).toEqual([byoc.store!.deploymentProfile, managed.store!.deploymentProfile]);
+  expect(listed).toEqual({
+    status: "ready",
+    profiles: [managed.store!.deploymentProfile, byoc.store!.deploymentProfile],
+  });
+  expect(runner.capsuleSourceFileJobs).toHaveLength(0);
 
   for (const body of [
     {

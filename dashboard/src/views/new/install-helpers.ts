@@ -23,6 +23,7 @@ import {
   type CapsuleCompatibilityResult,
   type InstallConfig,
   type RunStatus,
+  type SourceSnapshotDeploymentProfileCatalog,
 } from "../../lib/control-api.ts";
 import {
   hasInstallPrefillParams,
@@ -964,6 +965,34 @@ function storeDeploymentProfileCatalogForSource(
 }
 
 /**
+ * Validate the narrow snapshot-backed API projection before rendering it.
+ * Source URL and module eligibility are intentionally absent here: the
+ * authenticated server already bound both to the exact SourceSnapshot.
+ */
+function storeDeploymentProfileCatalogFromSnapshot(
+  catalog: SourceSnapshotDeploymentProfileCatalog,
+): StoreDeploymentProfileCatalog {
+  if (catalog.status !== "ready") {
+    return { status: catalog.status, profiles: [] };
+  }
+  if (
+    catalog.profiles.length === 0 ||
+    !installConfigDeploymentProfileSetIsValid(catalog.profiles)
+  ) {
+    return { status: "invalid", profiles: [] };
+  }
+  const profiles = [...catalog.profiles].sort(
+    compareInstallConfigDeploymentProfiles,
+  );
+  const preselectedKey = profiles.find((profile) => profile.recommended)?.key;
+  return {
+    status: "ready",
+    profiles,
+    ...(preselectedKey !== undefined ? { preselectedKey } : {}),
+  };
+}
+
+/**
  * Store navigation may resolve exactly one explicitly Store-eligible,
  * service-owned InstallConfig by repository URL. Direct Git imports keep their
  * independent URL/path selector; a Store listing may never choose that generic
@@ -1242,6 +1271,7 @@ export {
   storeSourceMatchesCoordinate,
   storeInstallConfigsForSource,
   storeDeploymentProfileCatalogForSource,
+  storeDeploymentProfileCatalogFromSnapshot,
   uniqueStoreInstallConfigForSource,
   storeMetadataFromStoreListing,
   storeEntryIdFromStoreListing,

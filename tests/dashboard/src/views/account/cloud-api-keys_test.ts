@@ -99,6 +99,9 @@ describe("Cloud API key management", () => {
       "write",
       "admin",
       "resources:read",
+      "ai.models.read",
+      "ai.chat",
+      "ai.embeddings",
     ]);
     expect(TAKOSUMI_ACCOUNTS_SELF_SERVICE_PAT_SCOPES).toEqual([
       "read",

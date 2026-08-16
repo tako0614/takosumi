@@ -348,6 +348,13 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
       auth: "account-session",
     },
     {
+      method: "GET",
+      path: "/api/v1/sources/{sourceId}/snapshots/{sourceSnapshotId}/deployment-profiles",
+      summary:
+        "List DB-owned deployment profiles proven against one SourceSnapshot manifest",
+      auth: "account-session",
+    },
+    {
       method: "POST",
       path: "/api/v1/workspaces/{workspaceId}/source-ref-resolutions/stable-semver",
       summary: "Resolve the highest public stable SemVer Git tag",

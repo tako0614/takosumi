@@ -92,10 +92,18 @@ authentication and input errors, carries `Cache-Control: no-store` and
 | Method | Path                                  | Authentication                     | Purpose                               |
 | ------ | ------------------------------------- | ---------------------------------- | ------------------------------------- |
 | GET    | `/v1/account/tokens`                  | account session                    | compatibility interactive list        |
+| GET    | `/v1/account/tokens/scopes`           | account session                    | current self-service scope catalog     |
 | POST   | `/v1/account/tokens`                  | account session                    | create a PAT                          |
 | POST   | `/v1/account/tokens/{tokenId}/revoke` | account session                    | revoke a PAT                          |
 | GET    | `/v1/account/tokens/inventory.v1`     | account session                    | complete versioned metadata inventory |
 | GET    | `/v1/account/tokens/current`          | `Authorization: Bearer <PAT>` only | current authority of the presented PAT |
+
+The scope catalog marks only core `read` / `write` and allowlisted extension
+scopes explicitly declared by the same owning route through
+`selfServicePatScopes` as self-service. Cloud AI `ai.models.read`, `ai.chat`,
+and `ai.embeddings`, plus `resources:read`, require a Workspace binding.
+Accounts never infers self-service authority from request scopes and never
+exposes `admin` or an undeclared scope for self-service issuance.
 
 `GET /v1/account/tokens/inventory.v1` does not replace the existing Dashboard
 list. Its default `limit` is 50 and its hard maximum is 100. Rows are ordered
@@ -149,7 +157,7 @@ Resource, Interface, Form, and capability control surface. Mixing the two
 prefixes produces a 404 even when authentication is valid.
 
 The authoritative session-route inventory is
-`accounts/service/src/control-route-inventory.ts`; it currently contains 80
+`accounts/service/src/control-route-inventory.ts`; it currently contains 81
 public route descriptors. Representative operations from that inventory are:
 
 ```http
@@ -165,6 +173,7 @@ GET   /api/v1/sources/{sourceId}
 PATCH /api/v1/sources/{sourceId}
 POST  /api/v1/sources/{sourceId}/sync
 GET   /api/v1/sources/{sourceId}/snapshots
+GET   /api/v1/sources/{sourceId}/snapshots/{sourceSnapshotId}/deployment-profiles
 
 POST  /api/v1/workspaces/{workspaceId}/capsules
 GET   /api/v1/capsules/{capsuleId}

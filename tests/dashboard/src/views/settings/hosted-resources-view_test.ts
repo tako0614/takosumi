@@ -192,6 +192,46 @@ test("hosted catalog requires an exact GET scope for request-rule routes", () =>
   ).toThrow();
 });
 
+test("hosted catalog accepts canonical public OPTIONS request rules", () => {
+  const cloudAiGateway = {
+    id: "cloud-ai-gateway",
+    basePath: "/gateway/ai/v1",
+    configured: true,
+    requestScopeRules: [
+      {
+        path: "/models",
+        methods: ["GET", "HEAD"],
+        requiredScopes: ["ai.models.read"],
+      },
+      {
+        path: "/chat/completions",
+        methods: ["POST"],
+        requiredScopes: ["ai.chat"],
+      },
+      {
+        path: "/chat/completions",
+        methods: ["OPTIONS"],
+        requiredScopes: [],
+      },
+    ],
+  } as const;
+  const parsed = parsePlatformExtensionCatalog(
+    catalog([cloudAiGateway, hostedExtension()]),
+  );
+
+  expect(parsed.extensions[0]?.requestScopeRules?.[2]?.requiredScopes).toEqual(
+    [],
+  );
+  expect(resolveHostedResourceContribution(parsed)).toEqual({
+    href: "/extensions/hosted-resources/inventory",
+  });
+  expect(() =>
+    parsePlatformExtensionCatalog(
+      catalog([hostedExtension({ requiredScopes: [] })]),
+    ),
+  ).toThrow();
+});
+
 test("hosted catalog rejects malformed descriptors and unsafe contribution routes", () => {
   expect(() =>
     parsePlatformExtensionCatalog(

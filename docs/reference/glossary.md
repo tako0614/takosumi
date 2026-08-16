@@ -68,7 +68,7 @@ dashboard は内部の用語をそのまま出さず、次の言葉を使いま�
 | CredentialRecipe      | provider ごとに必要な環境変数名やファイル名をまとめた設定補助です。                        | [認証情報](../concepts/credentials.md) |
 | Secret                | 暗号化して保存される秘密の値です。                                                         | [認証情報](../concepts/credentials.md) |
 | secret partition      | 秘密を保存するときの暗号の区画を指す token です。Connection を作るときに指定します。       | [CLI](./cli.md)                        |
-| personal access token | Accounts が発行する API 用のトークンです。`read` / `write` / `admin` の scope を持ちます。 | [CLI](./cli.md)                        |
+| personal access token | Accounts が発行する API 用のトークンです。core scope と、owning route が明示した Workspace-bound extension scope を持てます。`admin` は operator 発行専用です。 | [API](./api.md)                        |
 
 ## 実行時の連携
 

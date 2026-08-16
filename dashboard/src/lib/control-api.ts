@@ -23,6 +23,7 @@ import type {
   CredentialRecipe as ContractCredentialRecipe,
   Dependency as ContractDependency,
   InstallConfig as ContractInstallConfig,
+  InstallConfigDeploymentProfile,
   InstallConfigVariableDefault as ContractInstallConfigVariableDefault,
   Capsule as ContractCapsule,
   JsonValue as ContractJsonValue,
@@ -1631,6 +1632,8 @@ export async function patchInstallConfig(
 export interface CheckCapsuleCompatibilityInput {
   readonly workspaceId: string;
   readonly sourceId?: string;
+  /** Exact snapshot already prepared and reviewed by the install flow. */
+  readonly sourceSnapshotId?: string;
   readonly gitUrl: string;
   readonly ref: string;
   readonly path: string;
@@ -1734,43 +1737,34 @@ async function checkCapsuleCompatibilityRequest(
       "deploymentProfileKey requires repository install UX compilation",
     );
   }
-  const sourceId =
-    input.sourceId ??
-    (
-      await createSource({
+  if (input.sourceSnapshotId !== undefined && input.sourceId === undefined) {
+    throw new TypeError("sourceSnapshotId requires sourceId");
+  }
+  const prepared = input.sourceSnapshotId
+    ? { sourceId: input.sourceId!, sourceSnapshotId: input.sourceSnapshotId }
+    : await prepareCapsuleSourceSnapshot({
         workspaceId: input.workspaceId,
+        sourceId: input.sourceId,
+        gitUrl: input.gitUrl,
+        ref: input.ref,
         name: input.name,
-        url: input.gitUrl,
-        defaultRef: input.ref,
-        defaultPath: ".",
-        autoSync: true,
         signal,
-        ...(input.sourceCreateReconciliationToken
-          ? { reconciliationToken: input.sourceCreateReconciliationToken }
-          : {}),
-        ...(deadlineAt !== undefined ? { deadlineAt } : {}),
         ...(input.authConnectionId
           ? { authConnectionId: input.authConnectionId }
           : {}),
-      })
-    ).source.id;
-  input.onSourceCreated?.(sourceId);
-  const syncEnvelope = await syncSource(sourceId, { signal });
-  const sourceSyncRunId = extractRunId(syncEnvelope);
-  if (!sourceSyncRunId) {
-    throw new ControlApiError(
-      500,
-      "invalid_source_sync_response",
-      "Source sync did not return a Run id.",
-      syncEnvelope,
-    );
-  }
-  const snapshot = await waitForLatestSourceSnapshot(sourceId, {
-    runId: sourceSyncRunId,
-    signal,
-    onProgress: input.onSourceSyncProgress,
-  });
-  input.onSourceSnapshot?.(snapshot);
+        ...(input.sourceCreateReconciliationToken
+          ? {
+              sourceCreateReconciliationToken:
+                input.sourceCreateReconciliationToken,
+            }
+          : {}),
+        ...(deadlineAt !== undefined ? { deadlineAt } : {}),
+        onSourceCreated: input.onSourceCreated,
+        onSourceSyncProgress: input.onSourceSyncProgress,
+        onSourceSnapshot: input.onSourceSnapshot,
+      });
+  const sourceId = prepared.sourceId;
+  const sourceSnapshotId = prepared.sourceSnapshotId;
   const body = await controlFetch<{
     report: {
       readonly id: string;
@@ -1804,7 +1798,7 @@ async function checkCapsuleCompatibilityRequest(
     method: "POST",
     signal,
     body: {
-      sourceSnapshotId: snapshot.id,
+      sourceSnapshotId,
       // Gate the pre-install check against the selected InstallConfig's policy
       // when one is supplied (the install view passes the Workspace's resolved
       // profile), otherwise fall back to the instance-wide default policy.
@@ -1877,7 +1871,7 @@ async function checkCapsuleCompatibilityRequest(
     }));
   return {
     reportId: body.report.id,
-    sourceSnapshotId: snapshot.id,
+    sourceSnapshotId,
     level:
       body.repositoryInstallUx?.status === "invalid"
         ? "unsupported"
@@ -2893,6 +2887,94 @@ export async function createSource(input: {
     baselineCleanup?.();
     baselineAndReadbackSignals.cleanup();
   }
+}
+
+export interface PreparedCapsuleSourceSnapshot {
+  readonly sourceId: string;
+  readonly sourceSnapshotId: string;
+  readonly snapshot: SourceSnapshot;
+}
+
+/**
+ * Create (when needed), sync, and return the exact SourceSnapshot produced by
+ * that sync. This is the read boundary used before snapshot-backed hosting
+ * choices are displayed; it does not compile or persist an InstallConfig.
+ */
+export async function prepareCapsuleSourceSnapshot(input: {
+  readonly workspaceId: string;
+  readonly sourceId?: string;
+  readonly gitUrl: string;
+  readonly ref: string;
+  readonly name: string;
+  readonly authConnectionId?: string;
+  readonly signal?: AbortSignal;
+  readonly deadlineAt?: number;
+  readonly sourceCreateReconciliationToken?: SourceCreateReconciliationToken;
+  readonly onSourceCreated?: (sourceId: string) => void;
+  readonly onSourceSyncProgress?: (
+    progress: SourceSnapshotWaitProgress,
+  ) => void;
+  readonly onSourceSnapshot?: (snapshot: SourceSnapshot) => void;
+}): Promise<PreparedCapsuleSourceSnapshot> {
+  const sourceId =
+    input.sourceId ??
+    (
+      await createSource({
+        workspaceId: input.workspaceId,
+        name: input.name,
+        url: input.gitUrl,
+        defaultRef: input.ref,
+        defaultPath: ".",
+        autoSync: true,
+        signal: input.signal,
+        ...(input.deadlineAt !== undefined
+          ? { deadlineAt: input.deadlineAt }
+          : {}),
+        ...(input.sourceCreateReconciliationToken
+          ? { reconciliationToken: input.sourceCreateReconciliationToken }
+          : {}),
+        ...(input.authConnectionId
+          ? { authConnectionId: input.authConnectionId }
+          : {}),
+      })
+    ).source.id;
+  input.onSourceCreated?.(sourceId);
+  const syncEnvelope = await syncSource(sourceId, { signal: input.signal });
+  const sourceSyncRunId = extractRunId(syncEnvelope);
+  if (!sourceSyncRunId) {
+    throw new ControlApiError(
+      500,
+      "invalid_source_sync_response",
+      "Source sync did not return a Run id.",
+      syncEnvelope,
+    );
+  }
+  const snapshot = await waitForLatestSourceSnapshot(sourceId, {
+    runId: sourceSyncRunId,
+    signal: input.signal,
+    onProgress: input.onSourceSyncProgress,
+  });
+  input.onSourceSnapshot?.(snapshot);
+  return { sourceId, sourceSnapshotId: snapshot.id, snapshot };
+}
+
+export type SourceSnapshotDeploymentProfileCatalog =
+  | { readonly status: "none" | "legacy"; readonly profiles: readonly [] }
+  | { readonly status: "invalid"; readonly profiles: readonly [] }
+  | {
+      readonly status: "ready";
+      readonly profiles: readonly InstallConfigDeploymentProfile[];
+    };
+
+export async function listSourceSnapshotDeploymentProfiles(
+  sourceId: string,
+  sourceSnapshotId: string,
+  options: { readonly signal?: AbortSignal } = {},
+): Promise<SourceSnapshotDeploymentProfileCatalog> {
+  return await controlFetch<SourceSnapshotDeploymentProfileCatalog>(
+    `${BASE}/sources/${encodeURIComponent(sourceId)}/snapshots/${encodeURIComponent(sourceSnapshotId)}/deployment-profiles`,
+    { signal: options.signal },
+  );
 }
 
 /** Kick a `source_sync` run. Returns the opaque run envelope. */

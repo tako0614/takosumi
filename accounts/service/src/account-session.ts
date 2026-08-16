@@ -19,11 +19,7 @@ import {
 
 export const TAKOSUMI_ACCOUNTS_SESSION_ME_PATH = "/v1/account/session/me";
 
-export type AccountsBearerRequiredScope =
-  | "read"
-  | "write"
-  | "admin"
-  | "resources:read";
+export type AccountsBearerRequiredScope = TakosumiAccountsPatScope;
 
 export type AccountsBearerSubject = {
   readonly subject: TakosumiSubject;
@@ -465,7 +461,14 @@ export async function requireAccountsBearer(input: {
 function oauthScopeForRequiredAccess(
   required: AccountsBearerRequiredScope,
 ): string {
-  if (required === "resources:read") return "resources:read";
+  if (
+    required === "resources:read" ||
+    required === "ai.models.read" ||
+    required === "ai.chat" ||
+    required === "ai.embeddings"
+  ) {
+    return required;
+  }
   return required === "read" ? "capsules:read" : "capsules:write";
 }
 
@@ -475,7 +478,14 @@ function oauthAccessTokenHasScope(
 ): boolean {
   if (required === "admin") return false;
   const scopes = new Set(scope.split(/\s+/u).filter(Boolean));
-  if (required === "resources:read") return scopes.has("resources:read");
+  if (
+    required === "resources:read" ||
+    required === "ai.models.read" ||
+    required === "ai.chat" ||
+    required === "ai.embeddings"
+  ) {
+    return scopes.has(required);
+  }
   if (scopes.has("capsules:write")) return true;
   return required === "read" && scopes.has("capsules:read");
 }

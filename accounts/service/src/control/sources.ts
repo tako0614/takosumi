@@ -142,6 +142,7 @@ import {
 import {
   latestSourceSnapshotForSource,
   previewRepoOwnedInstallConfig,
+  repoOwnedDeploymentProfileCatalog,
   resolveRepoOwnedDeploymentProfile,
   resolveRepoOwnedInstallModulePath,
 } from "./repo-owned-install-config.ts";
@@ -305,6 +306,44 @@ export async function handleSources(
         sourceSnapshotId,
         ...file,
       } satisfies SourceSnapshotFileResponse);
+    }
+    if (
+      segments.length === 5 &&
+      segments[2] === "snapshots" &&
+      segments[4] === "deployment-profiles"
+    ) {
+      if (method !== "GET") return methodNotAllowed("GET");
+      const sourceId = decodeURIComponent(segments[1] ?? "");
+      const sourceSnapshotId = decodeURIComponent(segments[3] ?? "");
+      const { source } = await operations.getSource(sourceId);
+      const workspaceId = sourceWorkspaceId(source);
+      if (!workspaceId) return sourceWorkspaceIdentityMissing();
+      const auth = await requireWorkspaceAccess({
+        operations,
+        store,
+        workspaceId,
+        session: ctx.session,
+      });
+      if (!auth.ok) return auth.response;
+      const sourceSnapshot = await operations.getSourceSnapshot(
+        sourceSnapshotId,
+      );
+      if (
+        sourceSnapshot.sourceId !== sourceId ||
+        sourceSnapshot.workspaceId !== workspaceId
+      ) {
+        return errorJson("not_found", "SourceSnapshot not found", 404);
+      }
+      const inventory = await listBoundedSharedInstallConfigs(operations);
+      return json(
+        inventory.ok
+          ? repoOwnedDeploymentProfileCatalog({
+              source,
+              sourceSnapshot,
+              candidates: inventory.candidates,
+            })
+          : { status: "invalid", profiles: [] },
+      );
     }
     if (segments.length === 3 && segments[2] === "compatibility-check") {
       const sourceId = decodeURIComponent(segments[1] ?? "");
@@ -586,6 +625,78 @@ export async function handleSources(
 const STORE_BASE_CONFIG_PAGE_SIZE = 100;
 const STORE_BASE_CONFIG_SCAN_LIMIT = 1_000;
 
+type SharedInstallConfigInventoryResolution =
+  | { readonly ok: true; readonly candidates: readonly InstallConfig[] }
+  | {
+      readonly ok: false;
+      readonly reason: "unavailable" | "ambiguous";
+      readonly message: string;
+    };
+
+async function listBoundedSharedInstallConfigs(
+  operations: ControlPlaneOperations,
+): Promise<SharedInstallConfigInventoryResolution> {
+  const listPage = operations.capsules.listSharedInstallConfigsPage;
+  if (!listPage) {
+    return {
+      ok: false,
+      reason: "unavailable",
+      message:
+        "Takosumi cannot prove deployment profiles from the bounded global catalog.",
+    };
+  }
+
+  const candidates: InstallConfig[] = [];
+  let scanned = 0;
+  let cursor: string | undefined;
+  let pagesScanned = 0;
+  const seenCursors = new Set<string>();
+  do {
+    const page = await listPage.call(
+      operations.capsules,
+      {
+        limit: STORE_BASE_CONFIG_PAGE_SIZE,
+        ...(cursor ? { cursor } : {}),
+      },
+      // Count every row toward the hard scan bound. Resolution rejects scoped,
+      // internal, or URL-mismatched rows only after the complete bounded
+      // inventory, so conflicts cannot be hidden on a later page.
+      { includeInternal: true },
+    );
+    pagesScanned += 1;
+    scanned += page.items.length;
+    candidates.push(...page.items);
+    if (scanned > STORE_BASE_CONFIG_SCAN_LIMIT) {
+      return {
+        ok: false,
+        reason: "ambiguous",
+        message:
+          "Takosumi could not prove a unique Store InstallConfig within the bounded global catalog scan.",
+      };
+    }
+    cursor = page.nextCursor;
+    if (!cursor) break;
+    if (
+      seenCursors.has(cursor) ||
+      scanned >= STORE_BASE_CONFIG_SCAN_LIMIT ||
+      pagesScanned >=
+        Math.ceil(
+          STORE_BASE_CONFIG_SCAN_LIMIT / STORE_BASE_CONFIG_PAGE_SIZE,
+        )
+    ) {
+      return {
+        ok: false,
+        reason: "ambiguous",
+        message:
+          "Takosumi could not prove a unique Store InstallConfig within the bounded global catalog scan.",
+      };
+    }
+    seenCursors.add(cursor);
+  } while (true);
+
+  return { ok: true, candidates };
+}
+
 type StoreBaseInstallConfigResolution =
   | {
       readonly ok: true;
@@ -618,15 +729,8 @@ async function resolveStoreBaseInstallConfig(
   sourceSnapshot: SourceSnapshot,
   deploymentProfileKey: string | undefined,
 ): Promise<StoreBaseInstallConfigResolution> {
-  const candidates: InstallConfig[] = [];
-  let scanned = 0;
-  const inspect = (configs: readonly InstallConfig[]): void => {
-    scanned += configs.length;
-    candidates.push(...configs);
-  };
-
-  const listPage = operations.capsules.listSharedInstallConfigsPage;
-  if (!listPage) {
+  const inventory = await listBoundedSharedInstallConfigs(operations);
+  if (!inventory.ok && inventory.reason === "unavailable") {
     if (deploymentProfileKey !== undefined) {
       return invalidStoreDeploymentProfile(
         "repository_install_ux_deployment_profile_invalid",
@@ -635,49 +739,12 @@ async function resolveStoreBaseInstallConfig(
     }
     return await resolveDefaultStoreBaseInstallConfig(operations);
   }
-  let cursor: string | undefined;
-  let pagesScanned = 0;
-  const seenCursors = new Set<string>();
-  do {
-    const page = await listPage.call(
-      operations.capsules,
-      {
-        limit: STORE_BASE_CONFIG_PAGE_SIZE,
-        ...(cursor ? { cursor } : {}),
-      },
-      // Count every row toward the hard scan bound. Resolution rejects scoped,
-      // internal, or URL-mismatched rows only after the complete bounded
-      // inventory, so conflicts cannot be hidden on a later page.
-      { includeInternal: true },
-    );
-    pagesScanned += 1;
-    inspect(page.items);
-    if (scanned > STORE_BASE_CONFIG_SCAN_LIMIT) {
-      return ambiguousStoreBaseConfig(
-        "Takosumi could not prove a unique Store InstallConfig within the bounded global catalog scan.",
-      );
-    }
-    cursor = page.nextCursor;
-    if (!cursor) break;
-    if (
-      seenCursors.has(cursor) ||
-      scanned >= STORE_BASE_CONFIG_SCAN_LIMIT ||
-      pagesScanned >=
-        Math.ceil(
-          STORE_BASE_CONFIG_SCAN_LIMIT / STORE_BASE_CONFIG_PAGE_SIZE,
-        )
-    ) {
-      return ambiguousStoreBaseConfig(
-        "Takosumi could not prove a unique Store InstallConfig within the bounded global catalog scan.",
-      );
-    }
-    seenCursors.add(cursor);
-  } while (true);
+  if (!inventory.ok) return ambiguousStoreBaseConfig(inventory.message);
 
   const selected = resolveRepoOwnedDeploymentProfile({
     source,
     sourceSnapshot,
-    candidates,
+    candidates: inventory.candidates,
     ...(deploymentProfileKey !== undefined ? { deploymentProfileKey } : {}),
   });
   if (!selected.ok) return selected;

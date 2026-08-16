@@ -127,6 +127,30 @@ const PERSONAL_ACCESS_TOKEN_SCOPE_CATALOG_METADATA: Readonly<
     },
     workspaceBinding: "required",
   },
+  "ai.models.read": {
+    label: { ja: "AIモデルの読み取り", en: "AI model read" },
+    description: {
+      ja: "指定した Workspace で利用できる AI モデルを読み取ります。",
+      en: "Read AI models available to one bound Workspace.",
+    },
+    workspaceBinding: "required",
+  },
+  "ai.chat": {
+    label: { ja: "AIチャット", en: "AI chat" },
+    description: {
+      ja: "指定した Workspace の課金枠で AI チャットを実行します。",
+      en: "Run AI chat against the billing authority of one bound Workspace.",
+    },
+    workspaceBinding: "required",
+  },
+  "ai.embeddings": {
+    label: { ja: "AI埋め込み", en: "AI embeddings" },
+    description: {
+      ja: "指定した Workspace の課金枠で AI 埋め込みを生成します。",
+      en: "Generate AI embeddings against the billing authority of one bound Workspace.",
+    },
+    workspaceBinding: "required",
+  },
 };
 
 export function personalAccessTokenScopeCatalog(
@@ -751,10 +775,17 @@ export async function handleCreatePersonalAccessToken(input: {
       403,
     );
   }
-  if (scopes.includes("resources:read") && !workspaceId) {
+  if (
+    scopes.some(
+      (scope) =>
+        PERSONAL_ACCESS_TOKEN_SCOPE_CATALOG_METADATA[scope]
+          .workspaceBinding === "required",
+    ) &&
+    !workspaceId
+  ) {
     return errorJson(
       "invalid_request",
-      "resources:read personal access tokens require workspace_id",
+      "the selected personal access token scopes require workspace_id",
       400,
     );
   }

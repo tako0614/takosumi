@@ -1339,6 +1339,8 @@ test.describe("Takosumi dashboard browser surface", () => {
     );
     const now = "2026-08-04T00:00:00.000Z";
     const seenMutations: string[] = [];
+    const prematureConfigReads: string[] = [];
+    const profileDiscoveryRequests: string[] = [];
     const sourceState: SourceCreateFixtureState = {
       sourceListReads: [],
       sourcePosts: [],
@@ -1385,6 +1387,7 @@ test.describe("Takosumi dashboard browser surface", () => {
         request.method() === "GET" &&
         url.search === "?view=store"
       ) {
+        prematureConfigReads.push(`${path}${url.search}`);
         const profileConfig = (input: {
           readonly id: string;
           readonly key: string;
@@ -1529,6 +1532,46 @@ test.describe("Takosumi dashboard browser surface", () => {
           },
         });
       }
+      if (
+        path ===
+          "/api/v1/sources/src_install_e2e/snapshots/snap_install_e2e/deployment-profiles" &&
+        request.method() === "GET"
+      ) {
+        profileDiscoveryRequests.push(path);
+        return route.fulfill({
+          json: {
+            status: "ready",
+            profiles: [
+              {
+                key: "managed-v1",
+                label: {
+                  ja: "Takosumi hosted",
+                  en: "Takosumi hosted",
+                },
+                description: {
+                  ja: "Takosumi hosted fixture",
+                  en: "Takosumi hosted fixture",
+                },
+                order: 20,
+                recommended: true,
+              },
+              {
+                key: "byoc-v1",
+                label: {
+                  ja: "Bring your own cloud",
+                  en: "Bring your own cloud",
+                },
+                description: {
+                  ja: "Bring your own cloud fixture",
+                  en: "Bring your own cloud fixture",
+                },
+                order: 10,
+                recommended: false,
+              },
+            ],
+          },
+        });
+      }
       if (path === "/api/v1/sources/src_install_e2e/compatibility-check") {
         return route.fulfill({
           json: {
@@ -1617,14 +1660,26 @@ test.describe("Takosumi dashboard browser surface", () => {
       tcsListing: "example/service",
     });
     await page.goto(`/new?${handoff}`, { waitUntil: "domcontentloaded" });
+    await page.waitForLoadState("networkidle");
     const hostingOption = page.getByRole("combobox", {
       name: /デプロイ方法|Hosting option/u,
     });
+    await expect(hostingOption).toHaveCount(0);
+    expect(prematureConfigReads).toEqual([]);
+    await page.getByRole("button", { name: /追加|Add/u }).last().click();
     await expect(hostingOption).toBeVisible();
-    await expect(hostingOption).toHaveValue("managed-v1");
+    expect(profileDiscoveryRequests).toEqual([
+      "/api/v1/sources/src_install_e2e/snapshots/snap_install_e2e/deployment-profiles",
+    ]);
+    expect(seenMutations).not.toContain(
+      "POST /api/v1/sources/src_install_e2e/compatibility-check",
+    );
+    await expect(hostingOption).toHaveValue("");
     await expect(hostingOption).toContainText(
       /Takosumi hosted.*おすすめ|Takosumi hosted.*Recommended/u,
     );
+    await hostingOption.selectOption("managed-v1");
+    await expect(hostingOption).toHaveValue("managed-v1");
     await expect(page.getByText("Takosumi hosted fixture", { exact: true })).toBeVisible();
     const hostingOptionConfirmation = page.getByRole("checkbox", {
       name: /このデプロイ方法で追加することを確認しました|I confirm this hosting option/u,

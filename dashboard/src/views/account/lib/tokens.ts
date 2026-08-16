@@ -119,6 +119,9 @@ function isScopeCatalogEntry(
     case "admin":
       return !value.selfService && value.workspaceBinding === "optional";
     case "resources:read":
+    case "ai.models.read":
+    case "ai.chat":
+    case "ai.embeddings":
       return value.workspaceBinding === "required";
   }
 }

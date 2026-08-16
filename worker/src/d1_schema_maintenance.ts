@@ -1088,17 +1088,35 @@ function maintenanceFenceReleasePredicate(
     }`,
   );
   if (expectedTriggers.length > 0) {
-    const expectedMatches = boundedSqlOr(
-      expectedTriggers.map(
-        (trigger) =>
-          `(name = ${sqlLiteral(trigger.name)} and sql = ${sqlLiteral(
-            trigger.sql,
-          )})`,
-      ),
-    );
     predicates.push(
-      `(select count(*) from sqlite_master where ${triggerFilter}` +
-        ` and (${expectedMatches})) = ${expectedTriggers.length}`,
+      `not exists (
+         select 1
+         from (
+           select 'insert' as operation
+           union all select 'update'
+           union all select 'delete'
+         ) as expected_operation
+         cross join sqlite_master as guarded_table
+         where guarded_table.type = 'table'
+           and guarded_table.name not like 'sqlite_%'
+           and guarded_table.name != ${sqlLiteral(CONTROL_D1_MAINTENANCE_TABLE)}
+           and guarded_table.name != 'schema_migrations'
+           and guarded_table.name != '_cf_KV'
+           and not exists (
+             select 1
+             from sqlite_master as actual_trigger
+             where actual_trigger.type = 'trigger'
+               and actual_trigger.name like '_takosumi_schema_fence_%'
+               and actual_trigger.name =
+                 '_takosumi_schema_fence_' || guarded_table.name || '_' ||
+                 expected_operation.operation
+               and actual_trigger.tbl_name = guarded_table.name
+               and actual_trigger.sql = ${maintenanceTriggerSqlExpression(
+                 "guarded_table.name",
+                 "expected_operation.operation",
+               )}
+           )
+       )`,
     );
   }
   return {
@@ -1107,27 +1125,25 @@ function maintenanceFenceReleasePredicate(
   };
 }
 
-/**
- * Build a balanced OR tree for D1's SQLite expression-depth limit.
- *
- * A long left-associated `a or b or c ...` expression can exceed D1's
- * maximum expression depth even while remaining below the 100 KB statement
- * limit. The release predicate is generated from the exact guard inventory,
- * so balancing the equivalent leaves preserves the atomic fail-closed check.
- */
-function boundedSqlOr(expressions: readonly string[]): string {
-  if (expressions.length === 0) return "0";
-  let level = [...expressions];
-  while (level.length > 1) {
-    const next: string[] = [];
-    for (let index = 0; index < level.length; index += 2) {
-      const left = level[index]!;
-      const right = level[index + 1];
-      next.push(right === undefined ? left : `(${left} or ${right})`);
-    }
-    level = next;
-  }
-  return level[0]!;
+/** Derive one canonical fence-trigger SQL definition from sqlite_master data. */
+function maintenanceTriggerSqlExpression(
+  tableExpression: string,
+  operationExpression: string,
+): string {
+  return [
+    sqlLiteral('CREATE TRIGGER "'),
+    sqlLiteral("_takosumi_schema_fence_"),
+    tableExpression,
+    sqlLiteral("_"),
+    operationExpression,
+    sqlLiteral('"\n       before '),
+    operationExpression,
+    sqlLiteral(' on "'),
+    tableExpression,
+    sqlLiteral('"\n       when not coalesce((\n         select (active = 0 and migration_bypass = 0)\n             or (active = 1 and migration_bypass = 1)\n         from '),
+    sqlLiteral(CONTROL_D1_MAINTENANCE_TABLE),
+    sqlLiteral('\n         where singleton = 1\n       ), 0)\n       begin\n         select raise(abort, \'takosumi control schema maintenance\');\n       end'),
+  ].join(" || ");
 }
 
 function sqlLiteral(value: string): string {

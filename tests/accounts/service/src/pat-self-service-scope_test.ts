@@ -101,6 +101,56 @@ test("resources:read PAT creation rejects a workspace outside the account fence"
   expect(store.listPersonalAccessTokensForSubject(SUBJECT)).toHaveLength(0);
 });
 
+test("Cloud AI PAT scopes are explicit, workspace-bound, and cataloged", async () => {
+  const store = seededStore();
+  const aiScopes = ["ai.models.read", "ai.chat", "ai.embeddings"] as const;
+  const handler = createAccountsHandler({
+    issuer: ORIGIN,
+    store,
+    personalAccessTokenSelfServiceScopes: aiScopes,
+    controlPlaneOperations: {
+      workspaces: {
+        getWorkspaceForAccount: async (_subject, workspaceId) =>
+          workspaceId === "ws_ai" ? { id: workspaceId } : undefined,
+      },
+    } as unknown as ControlPlaneOperations,
+  });
+
+  const missingWorkspace = await handler(
+    createRequest({ name: "AI", scopes: ["ai.chat"] }),
+  );
+  expect(missingWorkspace.status).toBe(400);
+
+  const created = await handler(
+    createRequest({
+      name: "AI",
+      scopes: aiScopes,
+      workspace_id: "ws_ai",
+    }),
+  );
+  expect(created.status).toBe(201);
+  expect(await created.json()).toMatchObject({
+    token_record: { scopes: aiScopes, workspace_id: "ws_ai" },
+  });
+
+  const catalog = await handler(
+    new Request(`${ORIGIN}/v1/account/tokens/scopes`, {
+      headers: { authorization: `Bearer ${SESSION}` },
+    }),
+  );
+  expect(catalog.status).toBe(200);
+  const body = await catalog.json();
+  for (const scope of aiScopes) {
+    expect(body.scopes).toContainEqual(
+      expect.objectContaining({
+        scope,
+        selfService: true,
+        workspaceBinding: "required",
+      }),
+    );
+  }
+});
+
 test("resources:read is not inferred from route metadata or legacy write", async () => {
   const store = seededStore();
   const handler = createAccountsHandler({ issuer: ORIGIN, store });
@@ -177,6 +227,36 @@ test("self-service PAT scope catalog is authenticated, safe, and session-only", 
           en: "Read hosted-resource inventory for one bound Workspace.",
         },
         selfService: true,
+        workspaceBinding: "required",
+      },
+      {
+        scope: "ai.models.read",
+        label: { ja: "AIモデルの読み取り", en: "AI model read" },
+        description: {
+          ja: "指定した Workspace で利用できる AI モデルを読み取ります。",
+          en: "Read AI models available to one bound Workspace.",
+        },
+        selfService: false,
+        workspaceBinding: "required",
+      },
+      {
+        scope: "ai.chat",
+        label: { ja: "AIチャット", en: "AI chat" },
+        description: {
+          ja: "指定した Workspace の課金枠で AI チャットを実行します。",
+          en: "Run AI chat against the billing authority of one bound Workspace.",
+        },
+        selfService: false,
+        workspaceBinding: "required",
+      },
+      {
+        scope: "ai.embeddings",
+        label: { ja: "AI埋め込み", en: "AI embeddings" },
+        description: {
+          ja: "指定した Workspace の課金枠で AI 埋め込みを生成します。",
+          en: "Generate AI embeddings against the billing authority of one bound Workspace.",
+        },
+        selfService: false,
         workspaceBinding: "required",
       },
     ],
