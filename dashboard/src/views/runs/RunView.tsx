@@ -43,7 +43,8 @@ import {
   getRunLogs,
   listActivity,
   listStateVersions,
-  listProviderConnections,
+  listProviderConnectionsWithSignal,
+  listReleaseOwnedProviderConnectionsWithSignal,
   listRuns,
   destroyPlanCapsule,
   openRunStream,
@@ -60,6 +61,10 @@ import {
 import { hasPlatformExtensionCapability } from "../../lib/runtime-capabilities.ts";
 import { readableProviderSourceLabel } from "../../lib/provider-labels.ts";
 import { providerConnectionDisplayName } from "../../lib/provider-connections.ts";
+import {
+  createRunProviderConnectionRequestLoader,
+  providerConnectionIdsFromResolutions,
+} from "../../lib/run-provider-connections.ts";
 import { createAction } from "../account/lib/action.tsx";
 import {
   changeCountsForRun,
@@ -739,10 +744,44 @@ function Inner() {
       return undefined;
     }
   });
-  const [providerConnectionsForRun] = createResource(
-    () => run.latest?.workspaceId ?? null,
-    listProviderConnections,
-  );
+  const providerConnectionRequest = createMemo(() => {
+    const current = run.latest;
+    const referencedConnectionIds = providerConnectionIdsFromResolutions(
+      current?.providerResolutions,
+    );
+    const workspaceId =
+      referencedConnectionIds.length > 0 ? (current?.workspaceId ?? "") : "";
+    // Keep the resource key stable across ordinary Run polling when the
+    // referenced ids have not changed. The empty JSON request is deliberately
+    // truthy: Solid must invoke the fetcher on an ids -> zero transition so it
+    // can abort the previous read, while the helper performs no network reads.
+    // JSON preserves exact id boundaries — no provider/name/source inference or
+    // delimiter ambiguity.
+    return JSON.stringify({
+      workspaceId,
+      referencedConnectionIds,
+    });
+  });
+  const providerConnectionRequestLoader =
+    createRunProviderConnectionRequestLoader({
+      releaseOwned: listReleaseOwnedProviderConnectionsWithSignal,
+      workspace: listProviderConnectionsWithSignal,
+    });
+  onCleanup(() => providerConnectionRequestLoader.abort());
+  const [providerConnectionsForRun, { refetch: refetchProviderConnections }] =
+    createResource<readonly ProviderConnection[], string>(
+      providerConnectionRequest,
+      (request: string) => {
+        const parsed = JSON.parse(request) as {
+          readonly workspaceId: string;
+          readonly referencedConnectionIds: readonly string[];
+        };
+        return providerConnectionRequestLoader.load(
+          parsed.workspaceId,
+          parsed.referencedConnectionIds,
+        );
+      },
+    );
   // Activity feeds post-apply readiness, so fetch it only for a succeeded
   // apply/destroy-apply run, then poll only while release activation remains
   // unsettled. Runtime launch URLs are read separately from Interface.
@@ -992,7 +1031,8 @@ function Inner() {
     () =>
       // `.error` first: reading an errored resource throws, which would take the
       // whole run view (and, via the root boundary, the shell) down. A failed
-      // connection list degrades to no name resolution, not a crash.
+      // connection list degrades to no name resolution, not a crash; the
+      // explicit retry notice below keeps the failure visible.
       new Map(
         (providerConnectionsForRun.error
           ? []
@@ -2095,6 +2135,30 @@ function Inner() {
                   <Card>
                     <PlanResourceReview resources={planResources()} />
                   </Card>
+                </Show>
+
+                {/* Provider resolution evidence remains rendered from the Run
+                    even when its optional name lookup fails. Keep that read
+                    failure explicit and retryable instead of silently turning
+                    the connection map into an empty state. */}
+                <Show when={providerConnectionsForRun.error}>
+                  {(error) => (
+                    <Card>
+                      <p class="wa-notice" role="alert">
+                        <span>
+                          {fetchFailedMessage(error(), t)}
+                        </span>{" "}
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          type="button"
+                          onClick={() => void refetchProviderConnections()}
+                        >
+                          {t("common.retry")}
+                        </Button>
+                      </p>
+                    </Card>
+                  )}
                 </Show>
 
                 <Show when={providerRowsNeedingAttention().length > 0}>
