@@ -417,13 +417,14 @@ test("listAutoSyncSources returns only active autoSync sources, capped", async (
     id: string,
     status: StoredSource["status"],
     autoSync: boolean,
+    defaultRef = "main",
   ) => {
     await store.putSource({
       id,
       workspaceId: "workspace_1",
       name: id,
       url: "https://github.com/a/b",
-      defaultRef: "main",
+      defaultRef,
       defaultPath: ".",
       status,
       createdAt: "2026-06-06T00:00:00.000Z",
@@ -435,6 +436,7 @@ test("listAutoSyncSources returns only active autoSync sources, capped", async (
   await seed("src_a", "active", true);
   await seed("src_b", "active", false);
   await seed("src_c", "disabled", true);
+  await seed("src_d", "active", true, "a".repeat(40));
   const scanned = await service.listAutoSyncSources(50);
   expect(scanned.map((s) => s.id)).toEqual(["src_a"]);
   expect((await service.listAutoSyncSources(0)).length).toBe(0);
@@ -447,13 +449,14 @@ test("listAutoSyncSourcesPage stays bounded while advancing across sparse rows",
     workspaceId: string,
     status: StoredSource["status"],
     autoSync: boolean,
+    defaultRef = "main",
   ) => {
     await store.putSource({
       id,
       workspaceId,
       name: id,
       url: "https://github.com/a/b",
-      defaultRef: "main",
+      defaultRef,
       defaultPath: ".",
       status,
       createdAt: `2026-06-06T00:00:00.00${id.at(-1)}Z`,
@@ -462,7 +465,7 @@ test("listAutoSyncSourcesPage stays bounded while advancing across sparse rows",
       autoSync,
     });
   };
-  await seed("src_a1", "workspace_1", "active", false);
+  await seed("src_a1", "workspace_1", "active", true, "b".repeat(40));
   await seed("src_a2", "workspace_1", "active", true);
   await seed("src_b3", "workspace_2", "disabled", true);
   await seed("src_b4", "workspace_2", "active", true);
