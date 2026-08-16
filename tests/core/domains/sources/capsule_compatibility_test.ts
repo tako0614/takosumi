@@ -213,6 +213,159 @@ output "attachments_bucket" {
   expect(result.findings).toEqual([]);
 });
 
+test("preserves literal required provider version constraints", () => {
+  const result = analyzeOpenTofuCapsuleFiles({
+    sourceId: "src_provider_version",
+    sourceSnapshot: snapshot,
+    files: [
+      {
+        path: "main.tf",
+        text: `
+terraform {
+  required_providers {
+    takoform = {
+      source  = "registry.opentofu.org/tako0614/takoform"
+      version = "= 2.1.1"
+    }
+  }
+}
+
+output "ok" {
+  value = true
+}
+`,
+      },
+    ],
+  });
+
+  expect(result.level).toBe("ready");
+  expect(result.providers).toEqual([
+    {
+      source: "registry.opentofu.org/tako0614/takoform",
+      localName: "takoform",
+      versionConstraint: "= 2.1.1",
+      aliases: [],
+      allowed: true,
+    },
+  ]);
+  expect(result.findings).toEqual([]);
+});
+
+test("fails closed when a required provider version is non-literal", () => {
+  const result = analyzeOpenTofuCapsuleFiles({
+    sourceId: "src_provider_dynamic_version",
+    sourceSnapshot: snapshot,
+    files: [
+      {
+        path: "main.tf",
+        text: `
+variable "provider_version" {
+  type = string
+}
+
+terraform {
+  required_providers {
+    cloudflare = {
+      source  = "cloudflare/cloudflare"
+      version = var.provider_version
+    }
+  }
+}
+
+output "ok" {
+  value = true
+}
+`,
+      },
+    ],
+  });
+
+  expect(result.level).toBe("unsupported");
+  expect(result.providers).toEqual([
+    {
+      source: "cloudflare/cloudflare",
+      localName: "cloudflare",
+      aliases: [],
+      allowed: true,
+    },
+  ]);
+  expect(result.findings).toContainEqual(
+    expect.objectContaining({
+      code: "provider_version_constraint_non_literal",
+      severity: "error",
+      compatibilityImpact: "unsupported",
+      context: {
+        provider: "cloudflare",
+        localName: "cloudflare",
+        source: "cloudflare/cloudflare",
+      },
+    }),
+  );
+});
+
+test("fails closed on conflicting literal versions for one required provider", () => {
+  const result = analyzeOpenTofuCapsuleFiles({
+    sourceId: "src_provider_conflicting_versions",
+    sourceSnapshot: snapshot,
+    files: [
+      {
+        path: "versions.tf",
+        text: `
+terraform {
+  required_providers {
+    cloudflare = {
+      source  = "cloudflare/cloudflare"
+      version = "= 5.19.1"
+    }
+  }
+}
+`,
+      },
+      {
+        path: "main.tf",
+        text: `
+terraform {
+  required_providers {
+    cloudflare = {
+      source  = "cloudflare/cloudflare"
+      version = "= 5.20.0"
+      configuration_aliases = [cloudflare.zone]
+    }
+  }
+}
+
+output "ok" {
+  value = true
+}
+`,
+      },
+    ],
+  });
+
+  expect(result.level).toBe("unsupported");
+  expect(result.providers).toEqual([
+    {
+      source: "cloudflare/cloudflare",
+      localName: "cloudflare",
+      aliases: ["zone"],
+      allowed: true,
+    },
+  ]);
+  expect(result.findings).toContainEqual(
+    expect.objectContaining({
+      code: "provider_version_constraint_conflict",
+      severity: "error",
+      compatibilityImpact: "unsupported",
+      context: {
+        provider: "cloudflare",
+        localName: "cloudflare",
+        source: "cloudflare/cloudflare",
+        constraints: "= 5.19.1, = 5.20.0",
+      },
+    }),
+  );
+});
+
 test("treats provider-free output modules as runnable", () => {
   const result = analyzeOpenTofuCapsuleFiles({
     sourceId: "src_test",

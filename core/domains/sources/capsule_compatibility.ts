@@ -354,6 +354,8 @@ function collectProviders(
       readonly source: string;
       readonly localName: string;
       readonly aliases: Set<string>;
+      readonly versionConstraints: Set<string>;
+      versionConstraintNonLiteral: boolean;
     }
   >();
   for (const file of files) {
@@ -377,8 +379,35 @@ function collectProviders(
             source,
             localName,
             aliases: new Set<string>(),
+            versionConstraints: new Set<string>(),
+            versionConstraintNonLiteral: false,
           };
           for (const alias of aliases) entry.aliases.add(alias);
+          const versionConstraint = stringAttributeValue(
+            providerBlock.body,
+            "version",
+          );
+          if (versionConstraint.kind === "literal") {
+            entry.versionConstraints.add(versionConstraint.value);
+          } else if (versionConstraint.kind === "non_literal") {
+            entry.versionConstraintNonLiteral = true;
+            findings.push({
+              severity: "error",
+              compatibilityImpact: "unsupported",
+              code: "provider_version_constraint_non_literal",
+              message:
+                `Provider ${localName} uses a non-literal version constraint ` +
+                "that compatibility analysis cannot preserve safely.",
+              path: file.path,
+              context: {
+                provider: localName,
+                localName,
+                source,
+              },
+              suggestion:
+                "Use a literal version constraint in required_providers so Takosumi can preserve the provider selection exactly.",
+            });
+          }
           providers.set(key, entry);
         }
       }
@@ -434,16 +463,52 @@ function collectProviders(
     }
   }
   return Array.from(providers.values())
-    .map(({ source, localName, aliases }) => ({
-      source,
-      localName,
-      aliases: Array.from(aliases).sort(),
-      allowed: providerAllowed(source, allowedProviders),
-      ...(credentialRequiredProviders.has("*") ||
-      providerInSet(source, credentialRequiredProviders)
-        ? { credentialRequired: true }
-        : {}),
-    }))
+    .map(
+      ({
+        source,
+        localName,
+        aliases,
+        versionConstraints,
+        versionConstraintNonLiteral,
+      }) => {
+        const sortedVersionConstraints = Array.from(versionConstraints).sort();
+        const versionConstraintConflict = sortedVersionConstraints.length > 1;
+        if (versionConstraintConflict) {
+          findings.push({
+            severity: "error",
+            compatibilityImpact: "unsupported",
+            code: "provider_version_constraint_conflict",
+            message:
+              `Provider ${localName} has conflicting literal version constraints ` +
+              `for source ${source}.`,
+            context: {
+              provider: localName,
+              localName,
+              source,
+              constraints: sortedVersionConstraints.join(", "),
+            },
+            suggestion:
+              "Declare one literal version constraint for each local provider/source pair.",
+          });
+        }
+        const provider = {
+          source,
+          localName,
+          ...(sortedVersionConstraints.length === 1 &&
+          !versionConstraintNonLiteral &&
+          !versionConstraintConflict
+            ? { versionConstraint: sortedVersionConstraints[0] }
+            : {}),
+          aliases: Array.from(aliases).sort(),
+          allowed: providerAllowed(source, allowedProviders),
+          ...(credentialRequiredProviders.has("*") ||
+          providerInSet(source, credentialRequiredProviders)
+            ? { credentialRequired: true }
+            : {}),
+        };
+        return provider;
+      },
+    )
     .sort(
       (a, b) =>
         a.localName.localeCompare(b.localName) ||
@@ -855,6 +920,27 @@ function containsCredentialAttribute(body: string): boolean {
 function stringAttribute(body: string, name: string): string | undefined {
   const pattern = new RegExp(`(^|\\n)\\s*${name}\\s*=\\s*"([^"]+)"`, "m");
   return pattern.exec(body)?.[2];
+}
+
+type StringAttributeValue =
+  | { readonly kind: "missing" }
+  | { readonly kind: "literal"; readonly value: string }
+  | { readonly kind: "non_literal" };
+
+function stringAttributeValue(
+  body: string,
+  name: string,
+): StringAttributeValue {
+  const assignment = new RegExp(
+    `(^|\\n)\\s*${name}\\s*=\\s*(.*)$`,
+    "mu",
+  ).exec(body);
+  if (!assignment) return { kind: "missing" };
+  const expression = assignment[2]!.trim();
+  const literal = /^"((?:[^"\\]|\\.)*)"$/u.exec(expression);
+  return literal
+    ? { kind: "literal", value: literal[1]! }
+    : { kind: "non_literal" };
 }
 
 function aliasesAttribute(body: string, localName: string): string[] {
