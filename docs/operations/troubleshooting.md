@@ -22,7 +22,7 @@
 | unknown provider が runnable にならない | Compatibility Report の provider finding / missing Provider Connection                                     | declared-env CredentialRecipe、ProviderConnection status、runner profile provider allowlist、egress policy を確認                                                           |
 | producer 更新後に downstream が古い     | Capsule `stale` マーク                                                                                     | dependency graph を確認し、 Workspace update として DAG 順に plan/apply                                                                                                     |
 | runner が起動しない                     | dispatch timeout / runner infrastructure error                                                             | selected RunnerProfile / executor adapter / pool capacity を確認し、queue 使用時は DLQ を確認                                                                               |
-| install / deploy が遅い                 | phase timings で `source_clone` / `tofu_init` / `tofu_apply` のどれかが長い                                | SourceSnapshot reuse、provider mirror/cache、app repo 側の image/build 最適化を分けて確認。keepalive は plan->apply / destroy-plan->destroy-apply の warm window にだけ効く |
+| install / deploy が遅い                 | phase timings で `source_clone` / `tofu_init` / `tofu_apply` のどれかが長い                                | SourceSnapshot reuse、provider mirror/cache、app repo 側の image/build 最適化を分けて確認。Run-scoped Cloudflare container は完了後に破棄されるため、keepalive を cold-start 対策にしない |
 
 ## 切り分けの基本
 
@@ -42,12 +42,12 @@
 5. **遅さは phase timings で見る**: `source_clone` が長いなら Git/ref/path と
    SourceSnapshot reuse、`tofu_init` が長いなら provider mirror/cache、
    `tofu_apply` が長いなら provider 側 API / resource 作成待ちを確認する。
-   keepalive / warm reuse を提供する executor adapter では、apply / destroy
-   apply が reviewed plan の executor に戻る短い window だけを温存する。
-   source_sync や別 plan の cold start 対策とは分ける。deploy 直後の
+   reviewed plan artifact は durable storage から Apply / Destroy の別 Run
+   container へ復元する。Run-scoped Cloudflare container は完了後に破棄され、
+   keepalive / warm reuse を前提にしない。deploy 直後の
    compatibility preflight timeout は configured compatibility-check timeout
    を確認する。Cloudflare Container reference adapter を使う場合だけ
-   `TAKOSUMI_RUNNER_KEEPALIVE_SECONDS`、
+   legacy compatibility input の `TAKOSUMI_RUNNER_KEEPALIVE_SECONDS`、
    `TAKOSUMI_RUNNER_CAPACITY_RETRY_ATTEMPTS`、
    `TAKOSUMI_RUNNER_CAPACITY_RETRY_BASE_MS`、`max_instances` を追加確認する。
    他の adapter は自身の typed infrastructure error と pool policy を使う。

@@ -2,10 +2,15 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
+  TAKOSUMI_ACCOUNTS_PAT_SCOPE_CATALOG_KIND,
+  TAKOSUMI_ACCOUNTS_PAT_SCOPE_CATALOG_PATH,
   TAKOSUMI_ACCOUNTS_PAT_SCOPES,
   TAKOSUMI_ACCOUNTS_SELF_SERVICE_PAT_SCOPES,
 } from "@takosjp/takosumi-accounts-contract";
-import { buildSelfServiceCloudApiKeyRequest } from "../../../../../dashboard/src/views/account/lib/tokens.ts";
+import {
+  buildSelfServiceCloudApiKeyRequest,
+  normalizeCloudApiKeyScopeCatalog,
+} from "../../../../../dashboard/src/views/account/lib/tokens.ts";
 import { en } from "../../../../../dashboard/src/i18n/en.ts";
 import { ja } from "../../../../../dashboard/src/i18n/ja.ts";
 
@@ -22,12 +27,62 @@ const read = (relativePath: string) =>
 const component = read("components/CloudApiKeysCard.tsx");
 const client = read("lib/tokens.ts");
 
+const CATALOG = {
+  kind: TAKOSUMI_ACCOUNTS_PAT_SCOPE_CATALOG_KIND,
+  scopes: [
+    {
+      scope: "read",
+      label: { ja: "読み取り", en: "Read" },
+      description: {
+        ja: "アカウント情報を読み取ります。",
+        en: "Read account information.",
+      },
+      selfService: true,
+      workspaceBinding: "optional",
+    },
+    {
+      scope: "write",
+      label: { ja: "変更", en: "Write" },
+      description: {
+        ja: "アカウント情報を変更します。",
+        en: "Change account information.",
+      },
+      selfService: true,
+      workspaceBinding: "optional",
+    },
+    {
+      scope: "admin",
+      label: { ja: "管理", en: "Admin" },
+      description: {
+        ja: "運用者向けの管理権限です。",
+        en: "Operator-issued administrative access.",
+      },
+      selfService: false,
+      workspaceBinding: "optional",
+    },
+    {
+      scope: "resources:read",
+      label: { ja: "リソースの読み取り", en: "Read resources" },
+      description: {
+        ja: "選択したワークスペースのリソースを読み取ります。",
+        en: "Read resources in the selected workspace.",
+      },
+      selfService: true,
+      workspaceBinding: "required",
+    },
+  ],
+} as const;
+
 describe("Cloud API key management", () => {
   test("uses the canonical Accounts PAT contract and supports revoke", () => {
     expect(client).toContain("TAKOSUMI_ACCOUNTS_ACCOUNT_TOKENS_PATH");
+    expect(client).toContain("TAKOSUMI_ACCOUNTS_PAT_SCOPE_CATALOG_PATH");
     expect(client).toContain("takosumiAccountsAccountTokenRevokePath");
     expect(client).toContain('method: "POST"');
     expect(client).not.toContain('"/v1/account/tokens"');
+    expect(TAKOSUMI_ACCOUNTS_PAT_SCOPE_CATALOG_PATH).toBe(
+      "/v1/account/tokens/scopes",
+    );
   });
 
   test("shows a new secret once and keeps list rows metadata-only", () => {
@@ -43,29 +98,176 @@ describe("Cloud API key management", () => {
       "read",
       "write",
       "admin",
+      "resources:read",
     ]);
     expect(TAKOSUMI_ACCOUNTS_SELF_SERVICE_PAT_SCOPES).toEqual([
       "read",
       "write",
     ]);
-    expect(component).toContain(
+    expect(component).toContain("listCloudApiKeyScopeCatalog");
+    expect(component).toContain("selfService");
+    expect(component).toContain('workspaceBinding === "required"');
+    expect(component).not.toContain(
       "TAKOSUMI_ACCOUNTS_SELF_SERVICE_PAT_SCOPES",
     );
-    expect(component).not.toContain('["read", "write", "admin"]');
-    expect(component).toContain('case "admin":');
+    expect(component).not.toContain('"resources:read"');
     expect(component).toContain("expires_at:");
     expect(component).toContain("workspace_id: props.workspaceId");
-    expect(component).toContain('createSignal(true)');
   });
 
   test("never sends operator-issued admin scope through self-service", () => {
-    const request = buildSelfServiceCloudApiKeyRequest({
-      name: "Development CLI",
-      scopes: ["read", "admin", "write"],
-    });
+    expect(() =>
+      buildSelfServiceCloudApiKeyRequest(
+        {
+          name: "Development CLI",
+          scopes: ["read", "admin", "write"],
+        },
+        CATALOG.scopes,
+      ),
+    ).toThrow("not available for self-service");
+  });
 
-    expect(request.scopes).toEqual(["read", "write"]);
-    expect(request.scopes).not.toContain("admin");
+  test("accepts only catalog-advertised self-service scopes", () => {
+    expect(
+      buildSelfServiceCloudApiKeyRequest(
+        {
+          name: "Development CLI",
+          scopes: ["read", "write"],
+        },
+        CATALOG.scopes,
+      ),
+    ).toEqual({
+      name: "Development CLI",
+      scopes: ["read", "write"],
+    });
+  });
+
+  test("requires a workspace for every required-binding scope", () => {
+    expect(() =>
+      buildSelfServiceCloudApiKeyRequest(
+        { name: "Inventory", scopes: ["resources:read"] },
+        CATALOG.scopes,
+      ),
+    ).toThrow("requires a workspace binding");
+
+    expect(
+      buildSelfServiceCloudApiKeyRequest(
+        {
+          name: "Inventory",
+          scopes: ["resources:read"],
+          workspace_id: "ws_inventory",
+        },
+        CATALOG.scopes,
+      ),
+    ).toEqual({
+      name: "Inventory",
+      scopes: ["resources:read"],
+      workspace_id: "ws_inventory",
+    });
+  });
+
+  test("rejects empty and duplicate create scopes", () => {
+    expect(() =>
+      buildSelfServiceCloudApiKeyRequest(
+        { name: "Empty", scopes: [] },
+        CATALOG.scopes,
+      ),
+    ).toThrow("at least one scope");
+    expect(() =>
+      buildSelfServiceCloudApiKeyRequest(
+        { name: "Duplicate", scopes: ["read", "read"] },
+        CATALOG.scopes,
+      ),
+    ).toThrow("duplicate scope");
+  });
+
+  test("rejects malformed or unversioned scope catalogs", () => {
+    expect(normalizeCloudApiKeyScopeCatalog(CATALOG)).toEqual(CATALOG);
+    expect(() =>
+      normalizeCloudApiKeyScopeCatalog({
+        kind: "takosumi.account-pat-scope-catalog@old",
+        scopes: CATALOG.scopes,
+      }),
+    ).toThrow("scope catalog");
+    expect(() =>
+      normalizeCloudApiKeyScopeCatalog({
+        kind: TAKOSUMI_ACCOUNTS_PAT_SCOPE_CATALOG_KIND,
+        scopes: ["read"],
+      }),
+    ).toThrow("scope catalog");
+  });
+
+  test("rejects catalog key drift and widened built-in authority", () => {
+    expect(() =>
+      normalizeCloudApiKeyScopeCatalog({ ...CATALOG, extra: true }),
+    ).toThrow("scope catalog");
+    expect(() =>
+      normalizeCloudApiKeyScopeCatalog({
+        ...CATALOG,
+        scopes: [
+          { ...CATALOG.scopes[0], extra: true },
+          ...CATALOG.scopes.slice(1),
+        ],
+      }),
+    ).toThrow("scope catalog");
+    expect(() =>
+      normalizeCloudApiKeyScopeCatalog({
+        ...CATALOG,
+        scopes: [
+          {
+            ...CATALOG.scopes[0],
+            label: { ...CATALOG.scopes[0].label, extra: "unsafe" },
+          },
+          ...CATALOG.scopes.slice(1),
+        ],
+      }),
+    ).toThrow("scope catalog");
+    expect(() =>
+      normalizeCloudApiKeyScopeCatalog({
+        ...CATALOG,
+        scopes: CATALOG.scopes.map((entry) =>
+          entry.scope === "admin" ? { ...entry, selfService: true } : entry,
+        ),
+      }),
+    ).toThrow("scope catalog");
+    expect(() =>
+      normalizeCloudApiKeyScopeCatalog({
+        ...CATALOG,
+        scopes: CATALOG.scopes.map((entry) =>
+          entry.scope === "resources:read"
+            ? { ...entry, workspaceBinding: "optional" }
+            : entry,
+        ),
+      }),
+    ).toThrow("scope catalog");
+    expect(() =>
+      normalizeCloudApiKeyScopeCatalog({
+        ...CATALOG,
+        scopes: CATALOG.scopes.map((entry) =>
+          entry.scope === "read"
+            ? { ...entry, workspaceBinding: "required" }
+            : entry,
+        ),
+      }),
+    ).toThrow("scope catalog");
+  });
+
+  test("fails closed with a visible catalog retry", () => {
+    expect(component).toContain("scopeCatalog.error");
+    expect(component).toContain("refetchScopeCatalog");
+    expect(component).toContain('t("account.apiKeys.scopeCatalog.retry")');
+    expect(component).toContain('t("account.apiKeys.scopeCatalog.loadFailed")');
+  });
+
+  test("uses server-provided localized scope labels and descriptions", () => {
+    expect(component).toContain("scope.label[locale()]");
+    expect(component).toContain("scope.description[locale()]");
+    expect(en["account.apiKeys.scopeCatalog.workspaceRequired"]).toContain(
+      "workspace",
+    );
+    expect(ja["account.apiKeys.scopeCatalog.workspaceRequired"]).toContain(
+      "ワークスペース",
+    );
   });
 
   test("explains why administrative access is unavailable", () => {

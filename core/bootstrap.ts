@@ -94,7 +94,6 @@ import type { SensitiveOutputResolver } from "./domains/output-shares/mod.ts";
 import type { ConnectionVault } from "./adapters/vault/mod.ts";
 import { StaticSecretConnectionVault } from "./adapters/vault/mod.ts";
 import {
-  reconcileRunIssuedOperatorConnection,
   resolveTargetConnection,
 } from "./adapters/vault/run_issued_operator_reconciliation.ts";
 import type { FixedOperatorProviderConnectionDeclaration } from "takosumi-contract/credential-recipe-host";
@@ -1444,7 +1443,11 @@ export async function createTakosumiService(
     throw new TypeError("operatorProviderConnections must be an array");
   }
   const prevalidatedOperatorConnections = new Set<string>();
-  const validationTimestamp = new Date().toISOString();
+  const operatorProviderConnectionProjection: ProviderConnection[] = [];
+  // Code-owned fixed Connections are a release projection, not runtime DB
+  // records. A stable synthetic lifecycle timestamp keeps response bytes
+  // deterministic; release tooling owns any durable reconciliation separately.
+  const validationTimestamp = "1970-01-01T00:00:00.000Z";
   for (const declaration of operatorProviderConnections) {
     if (prevalidatedOperatorConnections.has(declaration.id)) {
       throw new TypeError(
@@ -1452,20 +1455,14 @@ export async function createTakosumiService(
       );
     }
     prevalidatedOperatorConnections.add(declaration.id);
-    resolveTargetConnection(
-      declaration,
-      (id) => credentialRecipeById.get(id),
-      credentialRecipeDrivers,
-      validationTimestamp,
+    operatorProviderConnectionProjection.push(
+      resolveTargetConnection(
+        declaration,
+        (id) => credentialRecipeById.get(id),
+        credentialRecipeDrivers,
+        validationTimestamp,
+      ),
     );
-  }
-  for (const declaration of operatorProviderConnections) {
-    await reconcileRunIssuedOperatorConnection({
-      store: sharedOpenTofuStore,
-      descriptor: declaration,
-      credentialRecipeResolver: (id) => credentialRecipeById.get(id),
-      credentialDrivers: credentialRecipeDrivers,
-    });
   }
   // Provider-credential Vault: an explicitly injected vault wins; otherwise, when
   // the host supplied at-rest secret crypto, build the default
@@ -1480,6 +1477,7 @@ export async function createTakosumiService(
       ? new StaticSecretConnectionVault({
           store: sharedOpenTofuStore,
           crypto: options.secretCrypto,
+          operatorProviderConnections: operatorProviderConnectionProjection,
           credentialRecipeResolver: (id) => credentialRecipeById.get(id),
           credentialDrivers: credentialRecipeDrivers,
           ...(options.runCredentialIssuer
@@ -1539,6 +1537,7 @@ export async function createTakosumiService(
   });
   const connectionsService = new ConnectionsService({
     store: sharedOpenTofuStore,
+    operatorProviderConnections: operatorProviderConnectionProjection,
     allowOperatorScopedProviderConnections:
       options.allowOperatorScopedProviderConnections === true,
   });
@@ -1573,6 +1572,7 @@ export async function createTakosumiService(
       : {}),
     allowOperatorScopedProviderConnections:
       options.allowOperatorScopedProviderConnections === true,
+    operatorProviderConnections: operatorProviderConnectionProjection,
     ...(opentofuConnectionVault ? { vault: opentofuConnectionVault } : {}),
     credentialRecipes,
     ...(options.enqueueRun ? { enqueueRun: options.enqueueRun } : {}),

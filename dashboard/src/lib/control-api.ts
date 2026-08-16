@@ -56,6 +56,9 @@ import type {
 
 /** Error thrown for any non-2xx control-plane response. */
 export class ControlApiError extends Error {
+  /** Definite errors are safe to surface without mutation reconciliation. */
+  readonly isIndeterminate: boolean = false;
+
   constructor(
     readonly status: number,
     readonly code: string | undefined,
@@ -151,12 +154,16 @@ function summarizeControlError(error: unknown): ControlApiErrorSummary {
  * issuing another mutation.
  */
 export class ControlApiIndeterminateError extends ControlApiError {
-  readonly operation: "apply" | "capsule_create" | "source_patch";
+  readonly operation:
+    | "apply"
+    | "capsule_create"
+    | "source_create"
+    | "source_patch";
   readonly isIndeterminate = true;
   readonly causeSummary?: ControlApiErrorSummary;
 
   constructor(
-    operation: "apply" | "capsule_create" | "source_patch",
+    operation: "apply" | "capsule_create" | "source_create" | "source_patch",
     message: string,
     cause?: unknown,
   ) {
@@ -1544,9 +1551,28 @@ export async function listInstallConfigs(
   );
 }
 
-export async function getInstallConfig(id: string): Promise<InstallConfig> {
+export type GetInstallConfigOptions = {
+  readonly signal?: AbortSignal;
+};
+
+export function getInstallConfig(
+  id: string,
+  options?: GetInstallConfigOptions,
+): Promise<InstallConfig>;
+export function getInstallConfig(
+  id: string,
+  options?: object,
+): Promise<InstallConfig>;
+export async function getInstallConfig(
+  id: string,
+  options?: object,
+): Promise<InstallConfig> {
+  const signal = isRecord(options)
+    ? (options.signal as AbortSignal | undefined)
+    : undefined;
   const body = await controlFetch<{ installConfig: InstallConfig }>(
     `${BASE}/capsule-configs/${encodeURIComponent(id)}`,
+    { signal },
   );
   return body.installConfig;
 }
@@ -1602,7 +1628,7 @@ export async function patchInstallConfig(
 
 // --- OpenTofu Capsule compatibility ---------------------------------------
 
-export async function checkCapsuleCompatibility(input: {
+export interface CheckCapsuleCompatibilityInput {
   readonly workspaceId: string;
   readonly sourceId?: string;
   readonly gitUrl: string;
@@ -1617,13 +1643,97 @@ export async function checkCapsuleCompatibility(input: {
    * The repository document itself is never returned to this client.
    */
   readonly compileInstallUx?: boolean;
+  /** Opaque DB-owned profile choice; meaningful only with compileInstallUx. */
+  readonly deploymentProfileKey?: string;
   readonly signal?: AbortSignal;
+  /**
+   * Bounds the complete Source sync and compatibility response. The final
+   * compatibility POST is included; a server-side Run completing must never
+   * leave the dashboard waiting forever for a lost HTTP response.
+   */
+  readonly timeoutMs?: number;
+  /** Absolute outer preparation deadline shared with Source create/readback. */
+  readonly deadlineAt?: number;
+  /** Continue a previously ambiguous Source create without issuing another POST. */
+  readonly sourceCreateReconciliationToken?: SourceCreateReconciliationToken;
   readonly onSourceCreated?: (sourceId: string) => void;
   readonly onSourceSyncProgress?: (
     progress: SourceSnapshotWaitProgress,
   ) => void;
   readonly onSourceSnapshot?: (snapshot: SourceSnapshot) => void;
-}): Promise<CapsuleCompatibilityResult> {
+}
+
+export async function checkCapsuleCompatibility(
+  input: CheckCapsuleCompatibilityInput,
+): Promise<CapsuleCompatibilityResult> {
+  if (
+    input.timeoutMs !== undefined &&
+    (!Number.isSafeInteger(input.timeoutMs) || input.timeoutMs <= 0)
+  ) {
+    throw new TypeError("compatibility timeoutMs must be a positive integer");
+  }
+  const deadlineAt =
+    input.deadlineAt ??
+    (input.timeoutMs === undefined
+      ? undefined
+      : Date.now() + input.timeoutMs);
+  if (deadlineAt === undefined) {
+    return await checkCapsuleCompatibilityRequest(input, input.signal);
+  }
+  if (!Number.isSafeInteger(deadlineAt) || deadlineAt <= 0) {
+    throw new TypeError("compatibility deadlineAt must be a positive integer");
+  }
+  const remainingMs = deadlineAt - Date.now();
+  if (remainingMs <= 0) {
+    throw new ControlApiError(
+      0,
+      "request_timeout",
+      "compatibility preparation deadline has expired",
+    );
+  }
+  const controller = new AbortController();
+  let timedOut = false;
+  const abortFromCaller = () => controller.abort(input.signal?.reason);
+  if (input.signal?.aborted) abortFromCaller();
+  else input.signal?.addEventListener("abort", abortFromCaller, { once: true });
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, remainingMs);
+  try {
+    return await checkCapsuleCompatibilityRequest(
+      input,
+      controller.signal,
+      deadlineAt,
+    );
+  } catch (error) {
+    if (timedOut && isAbortError(error)) {
+      throw new ControlApiError(
+        0,
+        "request_timeout",
+        "compatibility preparation deadline expired",
+      );
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+    input.signal?.removeEventListener("abort", abortFromCaller);
+  }
+}
+
+async function checkCapsuleCompatibilityRequest(
+  input: CheckCapsuleCompatibilityInput,
+  signal: AbortSignal | undefined,
+  deadlineAt?: number,
+): Promise<CapsuleCompatibilityResult> {
+  if (
+    input.deploymentProfileKey !== undefined &&
+    input.compileInstallUx !== true
+  ) {
+    throw new TypeError(
+      "deploymentProfileKey requires repository install UX compilation",
+    );
+  }
   const sourceId =
     input.sourceId ??
     (
@@ -1634,13 +1744,18 @@ export async function checkCapsuleCompatibility(input: {
         defaultRef: input.ref,
         defaultPath: ".",
         autoSync: true,
+        signal,
+        ...(input.sourceCreateReconciliationToken
+          ? { reconciliationToken: input.sourceCreateReconciliationToken }
+          : {}),
+        ...(deadlineAt !== undefined ? { deadlineAt } : {}),
         ...(input.authConnectionId
           ? { authConnectionId: input.authConnectionId }
           : {}),
       })
     ).source.id;
   input.onSourceCreated?.(sourceId);
-  const syncEnvelope = await syncSource(sourceId, { signal: input.signal });
+  const syncEnvelope = await syncSource(sourceId, { signal });
   const sourceSyncRunId = extractRunId(syncEnvelope);
   if (!sourceSyncRunId) {
     throw new ControlApiError(
@@ -1652,7 +1767,7 @@ export async function checkCapsuleCompatibility(input: {
   }
   const snapshot = await waitForLatestSourceSnapshot(sourceId, {
     runId: sourceSyncRunId,
-    signal: input.signal,
+    signal,
     onProgress: input.onSourceSyncProgress,
   });
   input.onSourceSnapshot?.(snapshot);
@@ -1687,18 +1802,28 @@ export async function checkCapsuleCompatibility(input: {
     readonly repositoryInstallUx?: RepositoryInstallUxPreview;
   }>(`${BASE}/sources/${encodeURIComponent(sourceId)}/compatibility-check`, {
     method: "POST",
+    signal,
     body: {
       sourceSnapshotId: snapshot.id,
       // Gate the pre-install check against the selected InstallConfig's policy
       // when one is supplied (the install view passes the Workspace's resolved
       // profile), otherwise fall back to the instance-wide default policy.
-      ...(input.installConfigId
-        ? { installConfigId: input.installConfigId }
-        : {}),
       ...(input.compileInstallUx
-        ? { compileInstallUx: true, capsuleName: input.name }
-        : {}),
-      ...(input.path && input.path !== "." ? { modulePath: input.path } : {}),
+        ? {
+            compileInstallUx: true,
+            capsuleName: input.name,
+            ...(input.deploymentProfileKey !== undefined
+              ? { deploymentProfileKey: input.deploymentProfileKey }
+              : {}),
+          }
+        : {
+            ...(input.installConfigId
+              ? { installConfigId: input.installConfigId }
+              : {}),
+            ...(input.path && input.path !== "."
+              ? { modulePath: input.path }
+              : {}),
+          }),
     },
   });
   const diagnostics: CapsuleCompatibilityDiagnostic[] = (
@@ -1875,12 +2000,218 @@ export async function listRuns(
 
 // --- Sources ---------------------------------------------------------------
 
+const SOURCE_CREATE_DEFAULT_REF = "HEAD";
+const SOURCE_CREATE_DEFAULT_PATH = ".";
+const SOURCE_CREATE_PAGE_LIMIT = 100;
+const SOURCE_CREATE_MAX_PAGES = 100;
+const SOURCE_CREATE_BASELINE_MAX_ATTEMPTS = 2;
+const SOURCE_CREATE_BASELINE_ATTEMPT_TIMEOUT_MS = 15_000;
+/**
+ * A Source create is the first mutation in the install preparation flow. Keep
+ * a small part of that flow's deadline available for the authoritative
+ * readback when the POST's response is lost.
+ */
+const SOURCE_CREATE_READBACK_BUDGET_MS = 5_000;
+
 export async function listSources(
   workspaceId: string,
 ): Promise<readonly Source[]> {
   return await fetchAllPages<Source>(
     `${BASE}/sources${query({ workspaceId: workspaceId })}`,
     (body) => (body.sources as readonly Source[]) ?? [],
+  );
+}
+
+interface SourceCreateBaselineAttempt {
+  readonly signal: AbortSignal;
+  readonly timedOut: () => boolean;
+  readonly clearAttemptTimer: () => void;
+  readonly cleanup: () => void;
+}
+
+interface SourceCreateBaselineResult {
+  readonly sources: readonly Source[];
+  /** Kept until the complete create/readback flow has finished. */
+  readonly cleanup: () => void;
+}
+
+/**
+ * Gives one strict baseline read a short, attempt-local timeout. The shared
+ * mutation signal is still authoritative: a parent or mutation-window abort
+ * cancels the attempt but can never be mistaken for a retryable timeout.
+ */
+function sourceCreateBaselineAttempt(
+  mutationSignal: AbortSignal | undefined,
+): SourceCreateBaselineAttempt {
+  const controller = new AbortController();
+  let timedOut = false;
+  const abortFromMutation = () => {
+    controller.abort(mutationSignal?.reason);
+  };
+  if (mutationSignal?.aborted) {
+    abortFromMutation();
+  } else {
+    mutationSignal?.addEventListener("abort", abortFromMutation, {
+      once: true,
+    });
+  }
+  let timeoutActive = true;
+  const timeout =
+    mutationSignal?.aborted === true
+      ? undefined
+      : setTimeout(() => {
+          if (!timeoutActive) return;
+          timedOut = true;
+          controller.abort();
+        }, SOURCE_CREATE_BASELINE_ATTEMPT_TIMEOUT_MS);
+  const clearAttemptTimer = () => {
+    timeoutActive = false;
+    if (timeout !== undefined) clearTimeout(timeout);
+  };
+  return {
+    signal: controller.signal,
+    timedOut: () => timedOut,
+    clearAttemptTimer,
+    cleanup: () => {
+      clearAttemptTimer();
+      mutationSignal?.removeEventListener("abort", abortFromMutation);
+    },
+  };
+}
+
+/**
+ * Reads the complete strict Source baseline, retrying only when the current
+ * attempt's own timer aborted an otherwise pending GET. HTTP/invalid response
+ * errors and the shared parent/mutation abort are never replayed.
+ */
+async function listSourcesForCreateBaseline(
+  workspaceId: string,
+  mutationSignal: AbortSignal | undefined,
+): Promise<SourceCreateBaselineResult> {
+  for (
+    let attempt = 0;
+    attempt < SOURCE_CREATE_BASELINE_MAX_ATTEMPTS;
+    attempt += 1
+  ) {
+    // A shared parent/mutation abort that arrives between attempts is
+    // authoritative; do not start another GET after it has fired.
+    throwIfAborted(mutationSignal);
+    const attemptSignals = sourceCreateBaselineAttempt(mutationSignal);
+    try {
+      const sources = await listSourcesForCreateRecovery(workspaceId, {
+        signal: attemptSignals.signal,
+      });
+      if (attemptSignals.timedOut()) {
+        attemptSignals.cleanup();
+        if (mutationSignal?.aborted) throwIfAborted(mutationSignal);
+        if (attempt + 1 >= SOURCE_CREATE_BASELINE_MAX_ATTEMPTS) {
+          throw new ControlApiError(
+            0,
+            "request_timeout",
+            "Source baseline attempt timed out.",
+          );
+        }
+        continue;
+      }
+      // The child signal must remain linked to the mutation window until the
+      // POST/readback flow is complete, but its local timer is no longer
+      // needed once this complete baseline has returned.
+      attemptSignals.clearAttemptTimer();
+      return { sources, cleanup: attemptSignals.cleanup };
+    } catch (error) {
+      attemptSignals.cleanup();
+      if (
+        mutationSignal?.aborted ||
+        !attemptSignals.timedOut() ||
+        !isAbortError(error) ||
+        attempt + 1 >= SOURCE_CREATE_BASELINE_MAX_ATTEMPTS
+      ) {
+        throw error;
+      }
+    }
+  }
+  throw new Error("Source baseline attempts exhausted.");
+}
+
+/**
+ * Strict Source inventory used only around the one-shot create mutation.
+ *
+ * The ordinary dashboard list helper intentionally tolerates an absent or
+ * malformed array because it powers presentation views. A create baseline and
+ * readback are proof obligations instead: every page and every row must be
+ * valid, pagination must terminate with an omitted cursor, and the Workspace
+ * projection must remain scoped to the requested Workspace.
+ */
+async function listSourcesForCreateRecovery(
+  workspaceId: string,
+  options: { readonly signal?: AbortSignal } = {},
+): Promise<readonly Source[]> {
+  const all: Source[] = [];
+  const ids = new Set<string>();
+  const cursors = new Set<string>();
+  let cursor: string | undefined;
+  for (let page = 0; page < SOURCE_CREATE_MAX_PAGES; page += 1) {
+    const path = `${BASE}/sources${query({
+      workspaceId,
+      limit: SOURCE_CREATE_PAGE_LIMIT,
+      ...(cursor === undefined ? {} : { cursor }),
+    })}`;
+    const body = await controlFetch<unknown>(path, {
+      signal: options.signal,
+    });
+    if (!isRecord(body) || !Array.isArray(body.sources)) {
+      throw new ControlApiError(
+        502,
+        "invalid_source_list_response",
+        "Source list returned an invalid response.",
+      );
+    }
+    const pageSources = body.sources;
+    if (
+      !pageSources.every(isSourceResponse) ||
+      pageSources.some((source) => source.workspaceId !== workspaceId)
+    ) {
+      throw new ControlApiError(
+        502,
+        "invalid_source_list_response",
+        "Source list returned an invalid response.",
+      );
+    }
+    for (const source of pageSources) {
+      if (ids.has(source.id)) {
+        throw new ControlApiError(
+          502,
+          "invalid_source_list_response",
+          "Source list returned duplicate records.",
+        );
+      }
+      ids.add(source.id);
+      all.push(source);
+    }
+
+    // The pagination contract omits `nextCursor` on the final page. An
+    // explicit empty, null, or non-string cursor is incomplete and cannot
+    // prove that the inventory is complete.
+    if (!("nextCursor" in body)) return all;
+    const nextCursor = body.nextCursor;
+    if (
+      typeof nextCursor !== "string" ||
+      nextCursor.length === 0 ||
+      cursors.has(nextCursor)
+    ) {
+      throw new ControlApiError(
+        502,
+        "invalid_source_list_pagination",
+        "Source list pagination was incomplete.",
+      );
+    }
+    cursors.add(nextCursor);
+    cursor = nextCursor;
+  }
+  throw new ControlApiError(
+    502,
+    "invalid_source_list_pagination",
+    "Source list pagination did not terminate.",
   );
 }
 
@@ -2112,9 +2443,317 @@ function sameGitRef(left: unknown, right: unknown): boolean {
   );
 }
 
-export interface CreateSourceResult {
+export interface AcknowledgedSourceCreateResult {
   readonly source: Source;
   readonly hookSecret: string;
+  readonly recovery?: never;
+}
+
+/**
+ * A lost Source-create acknowledgement can prove the durable Source row but
+ * can never recover the one-shot hook secret. Callers must not mistake this
+ * result for an acknowledged response or attempt to use it as a webhook
+ * credential.
+ */
+export interface RecoveredSourceCreateResult {
+  readonly source: Source;
+  readonly recovery: "authoritative_readback";
+  readonly hookSecret?: never;
+}
+
+export type CreateSourceResult =
+  | AcknowledgedSourceCreateResult
+  | RecoveredSourceCreateResult;
+
+export interface SourceCreateIdentity {
+  readonly workspaceId: string;
+  readonly name: string;
+  readonly url: string;
+  readonly defaultRef: string;
+  readonly defaultPath: string;
+  readonly authConnectionId?: string;
+  readonly autoSync: boolean;
+}
+
+/**
+ * Client-owned proof context for a Source create whose acknowledgement was
+ * ambiguous. It is intentionally opaque to the install UI: only the control
+ * client may inspect the exact identity and original baseline ids.
+ */
+export interface SourceCreateReconciliationToken {
+  readonly kind: "source_create_reconciliation";
+  readonly identity: SourceCreateIdentity;
+  readonly baselineIds: readonly string[];
+}
+
+export class SourceCreateIndeterminateError extends ControlApiIndeterminateError {
+  readonly reconciliationToken: SourceCreateReconciliationToken;
+
+  constructor(
+    message: string,
+    reconciliationToken: SourceCreateReconciliationToken,
+    cause?: unknown,
+  ) {
+    super("source_create", message, cause);
+    this.name = "SourceCreateIndeterminateError";
+    this.reconciliationToken = reconciliationToken;
+  }
+}
+
+function sourceCreateIdentity(input: {
+  readonly workspaceId: string;
+  readonly name: string;
+  readonly url: string;
+  readonly defaultRef?: string;
+  readonly defaultPath?: string;
+  readonly authConnectionId?: string;
+  readonly autoSync?: boolean;
+}): SourceCreateIdentity {
+  return {
+    workspaceId: input.workspaceId,
+    name: input.name,
+    // The control plane trims URL/ref/path before storing them. Keep the
+    // dashboard's identity check aligned with those durable values while
+    // preserving the exact name and connection id sent by the caller.
+    url: input.url.trim(),
+    defaultRef:
+      input.defaultRef?.trim() || SOURCE_CREATE_DEFAULT_REF,
+    defaultPath:
+      input.defaultPath?.trim() || SOURCE_CREATE_DEFAULT_PATH,
+    ...(input.authConnectionId
+      ? { authConnectionId: input.authConnectionId }
+      : {}),
+    autoSync: input.autoSync === true,
+  };
+}
+
+function sourceMatchesCreateIdentity(
+  source: Source,
+  identity: SourceCreateIdentity,
+): boolean {
+  return (
+    source.workspaceId === identity.workspaceId &&
+    source.name === identity.name &&
+    source.url === identity.url &&
+    source.defaultRef === identity.defaultRef &&
+    source.defaultPath === identity.defaultPath &&
+    source.authConnectionId === identity.authConnectionId &&
+    source.autoSync === identity.autoSync
+  );
+}
+
+function projectSource(source: Source): Source {
+  return {
+    id: source.id,
+    workspaceId: source.workspaceId,
+    name: source.name,
+    url: source.url,
+    defaultRef: source.defaultRef,
+    defaultPath: source.defaultPath,
+    ...(source.authConnectionId
+      ? { authConnectionId: source.authConnectionId }
+      : {}),
+    status: source.status,
+    autoSync: source.autoSync,
+    createdAt: source.createdAt,
+    updatedAt: source.updatedAt,
+  };
+}
+
+function sourceCreateIdentitiesEqual(
+  left: SourceCreateIdentity,
+  right: SourceCreateIdentity,
+): boolean {
+  return (
+    left.workspaceId === right.workspaceId &&
+    left.name === right.name &&
+    left.url === right.url &&
+    left.defaultRef === right.defaultRef &&
+    left.defaultPath === right.defaultPath &&
+    left.authConnectionId === right.authConnectionId &&
+    left.autoSync === right.autoSync
+  );
+}
+
+function sourceCreateReconciliationToken(
+  identity: SourceCreateIdentity,
+  baselineIds: ReadonlySet<string>,
+): SourceCreateReconciliationToken {
+  return Object.freeze({
+    kind: "source_create_reconciliation" as const,
+    identity: Object.freeze({ ...identity }),
+    baselineIds: Object.freeze([...baselineIds]),
+  });
+}
+
+function isSourceCreateReconciliationToken(
+  value: unknown,
+): value is SourceCreateReconciliationToken {
+  if (!isRecord(value) || value.kind !== "source_create_reconciliation") {
+    return false;
+  }
+  const identity = value.identity;
+  const baselineIds = value.baselineIds;
+  if (!isRecord(identity) || !Array.isArray(baselineIds)) return false;
+  if (
+    typeof identity.workspaceId !== "string" ||
+    typeof identity.name !== "string" ||
+    typeof identity.url !== "string" ||
+    typeof identity.defaultRef !== "string" ||
+    typeof identity.defaultPath !== "string" ||
+    (identity.authConnectionId !== undefined &&
+      typeof identity.authConnectionId !== "string") ||
+    typeof identity.autoSync !== "boolean"
+  ) {
+    return false;
+  }
+  return (
+    baselineIds.length === new Set(baselineIds).size &&
+    baselineIds.every(
+      (id) => typeof id === "string" && id.length > 0 && id.trim() === id,
+    )
+  );
+}
+
+function invalidSourceCreateResponse(): ControlApiError {
+  return new ControlApiError(
+    502,
+    "invalid_source_response",
+    "Source create returned an invalid response.",
+  );
+}
+
+function sourceCreateIndeterminate(
+  message: string,
+  reconciliationToken: SourceCreateReconciliationToken,
+  cause?: unknown,
+): SourceCreateIndeterminateError {
+  return new SourceCreateIndeterminateError(
+    message,
+    reconciliationToken,
+    cause,
+  );
+}
+
+function sourceCreateBaselineUnavailable(cause: unknown): ControlApiError {
+  // Baseline failure happens before the mutation is dispatched. It is a
+  // definite precondition failure, not an indeterminate mutation outcome.
+  void cause;
+  return new ControlApiError(
+    0,
+    "source_create_baseline_unavailable",
+    "Source create cannot start because the authoritative Source baseline was unavailable.",
+  );
+}
+
+interface SourceCreateRequestSignals {
+  readonly mutationSignal?: AbortSignal;
+  readonly readbackSignal?: AbortSignal;
+  readonly cleanup: () => void;
+}
+
+/**
+ * Splits the install deadline into a mutation window and a readback window.
+ * The parent signal still cancels both windows (for user cancellation or an
+ * outer navigation), while the mutation window is stopped early enough that a
+ * lost POST response cannot consume the readback budget.
+ */
+function sourceCreateRequestSignals(
+  parentSignal: AbortSignal | undefined,
+  deadlineAt: number | undefined,
+): SourceCreateRequestSignals {
+  if (deadlineAt === undefined) {
+    return {
+      mutationSignal: parentSignal,
+      readbackSignal: parentSignal,
+      cleanup: () => undefined,
+    };
+  }
+
+  const mutationController = new AbortController();
+  const readbackController = new AbortController();
+  const abortFromParent = () => {
+    const reason = parentSignal?.reason;
+    mutationController.abort(reason);
+    readbackController.abort(reason);
+  };
+  if (parentSignal?.aborted) abortFromParent();
+  else parentSignal?.addEventListener("abort", abortFromParent, { once: true });
+
+  const remaining = Math.max(0, deadlineAt - Date.now());
+  const readbackBudget = Math.min(SOURCE_CREATE_READBACK_BUDGET_MS, remaining);
+  const mutationWindow = Math.max(0, remaining - readbackBudget);
+  if (mutationWindow === 0) mutationController.abort();
+  const mutationTimer =
+    mutationWindow > 0
+      ? setTimeout(() => mutationController.abort(), mutationWindow)
+      : undefined;
+  if (remaining === 0) readbackController.abort();
+  const readbackTimer =
+    remaining > 0
+      ? setTimeout(() => readbackController.abort(), remaining)
+      : undefined;
+
+  return {
+    mutationSignal: mutationController.signal,
+    readbackSignal: readbackController.signal,
+    cleanup: () => {
+      if (mutationTimer) clearTimeout(mutationTimer);
+      if (readbackTimer) clearTimeout(readbackTimer);
+      parentSignal?.removeEventListener("abort", abortFromParent);
+    },
+  };
+}
+
+/**
+ * Completes a previously ambiguous Source create without ever issuing a POST.
+ * The original baseline ids are part of the token, so a pre-existing exact
+ * Source can never be mistaken for the result of the ambiguous mutation.
+ */
+export async function reconcileSourceCreate(
+  reconciliationToken: SourceCreateReconciliationToken,
+  options: { readonly signal?: AbortSignal } = {},
+): Promise<RecoveredSourceCreateResult> {
+  if (!isSourceCreateReconciliationToken(reconciliationToken)) {
+    throw new ControlApiError(
+      400,
+      "invalid_source_create_reconciliation_token",
+      "Source create reconciliation token is invalid.",
+    );
+  }
+  let after: readonly Source[];
+  try {
+    after = await listSourcesForCreateRecovery(
+      reconciliationToken.identity.workspaceId,
+      { signal: options.signal },
+    );
+  } catch (error) {
+    throw sourceCreateIndeterminate(
+      "Source create outcome is indeterminate because the authoritative Source readback was unavailable.",
+      reconciliationToken,
+      error,
+    );
+  }
+  const baselineIds = new Set(reconciliationToken.baselineIds);
+  const newlyAppeared = after.filter((source) => !baselineIds.has(source.id));
+  if (newlyAppeared.length !== 1) {
+    throw sourceCreateIndeterminate(
+      `Source create outcome is indeterminate: expected exactly one newly appeared Source, observed ${newlyAppeared.length}.`,
+      reconciliationToken,
+    );
+  }
+  const [candidate] = newlyAppeared;
+  if (
+    !candidate ||
+    candidate.status !== "active" ||
+    !sourceMatchesCreateIdentity(candidate, reconciliationToken.identity)
+  ) {
+    throw sourceCreateIndeterminate(
+      "Source create outcome is indeterminate: the newly appeared Source did not match the exact active request identity.",
+      reconciliationToken,
+    );
+  }
+  return { source: projectSource(candidate), recovery: "authoritative_readback" };
 }
 
 export async function createSource(input: {
@@ -2125,21 +2764,135 @@ export async function createSource(input: {
   readonly defaultPath?: string;
   readonly authConnectionId?: string;
   readonly autoSync?: boolean;
+  readonly signal?: AbortSignal;
+  /** Internal install deadline; reserves time for lost-ack readback. */
+  readonly deadlineAt?: number;
+  readonly reconciliationToken?: SourceCreateReconciliationToken;
 }): Promise<CreateSourceResult> {
-  return await controlFetch<CreateSourceResult>(`${BASE}/sources`, {
-    method: "POST",
-    body: {
-      workspaceId: input.workspaceId,
-      name: input.name,
-      url: input.url,
-      ...(input.defaultRef ? { defaultRef: input.defaultRef } : {}),
-      ...(input.defaultPath ? { defaultPath: input.defaultPath } : {}),
-      ...(input.authConnectionId
-        ? { authConnectionId: input.authConnectionId }
-        : {}),
-      ...(input.autoSync !== undefined ? { autoSync: input.autoSync } : {}),
-    },
-  });
+  const identity = sourceCreateIdentity(input);
+  if (input.reconciliationToken !== undefined) {
+    if (
+      !isSourceCreateReconciliationToken(input.reconciliationToken) ||
+      !sourceCreateIdentitiesEqual(
+        identity,
+        input.reconciliationToken.identity,
+      )
+    ) {
+      throw new ControlApiError(
+        409,
+        "source_create_reconciliation_token_mismatch",
+        "Source create reconciliation does not match the current request.",
+      );
+    }
+    const signals = sourceCreateRequestSignals(
+      input.signal,
+      input.deadlineAt,
+    );
+    try {
+      return await reconcileSourceCreate(input.reconciliationToken, {
+        signal: signals.readbackSignal,
+      });
+    } finally {
+      signals.cleanup();
+    }
+  }
+  const baselineAndReadbackSignals = sourceCreateRequestSignals(
+    input.signal,
+    input.deadlineAt,
+  );
+  let mutationDispatched = false;
+  let baselineCleanup: (() => void) | undefined;
+  try {
+    let baseline: readonly Source[];
+    try {
+      if (input.deadlineAt === undefined) {
+        baseline = await listSourcesForCreateRecovery(input.workspaceId, {
+          signal: baselineAndReadbackSignals.mutationSignal,
+        });
+      } else {
+        const result = await listSourcesForCreateBaseline(
+          input.workspaceId,
+          baselineAndReadbackSignals.mutationSignal,
+        );
+        baseline = result.sources;
+        baselineCleanup = result.cleanup;
+      }
+    } catch (error) {
+      if (input.signal?.aborted) throw error;
+      throw sourceCreateBaselineUnavailable(error);
+    }
+    const baselineIds = new Set(baseline.map((source) => source.id));
+
+    try {
+      mutationDispatched = true;
+      const body = await controlFetch<unknown>(`${BASE}/sources`, {
+        method: "POST",
+        signal: baselineAndReadbackSignals.mutationSignal,
+        body: {
+          workspaceId: input.workspaceId,
+          name: input.name,
+          url: input.url,
+          ...(input.defaultRef ? { defaultRef: input.defaultRef } : {}),
+          ...(input.defaultPath ? { defaultPath: input.defaultPath } : {}),
+          ...(input.authConnectionId
+            ? { authConnectionId: input.authConnectionId }
+            : {}),
+          ...(input.autoSync !== undefined ? { autoSync: input.autoSync } : {}),
+        },
+      });
+      if (
+        !isRecord(body) ||
+        !isSourceResponse(body.source) ||
+        body.source.status !== "active" ||
+        !sourceMatchesCreateIdentity(body.source, identity) ||
+        baselineIds.has(body.source.id) ||
+        !isNonEmptyString(body.hookSecret)
+      ) {
+        throw invalidSourceCreateResponse();
+      }
+      // Project the public acknowledgement deliberately. The hook secret is
+      // one-shot, while arbitrary server fields (request ids, recovery hints,
+      // or caller-controlled extras) are not part of this client contract.
+      return {
+        source: projectSource(body.source),
+        hookSecret: body.hookSecret,
+      };
+    } catch (error) {
+      // A definite HTTP rejection is authoritative. Do not turn a 4xx
+      // validation/authorization result into readback noise or a retry.
+      if (!isMutationOutcomeUnknown(error)) throw error;
+      const reconciliationToken = sourceCreateReconciliationToken(
+        identity,
+        baselineIds,
+      );
+      // Spend the reserved readback window before surfacing the token. This
+      // can adopt exactly one newly appeared active Source, while zero,
+      // multiple, mismatched, incomplete, or unavailable readbacks retain the
+      // opaque token for the next read-only reconciliation attempt.
+      try {
+        return await reconcileSourceCreate(reconciliationToken, {
+          signal: baselineAndReadbackSignals.readbackSignal,
+        });
+      } catch (readbackError) {
+        if (input.signal?.aborted && !mutationDispatched) throw readbackError;
+        if (input.signal?.aborted) {
+          throw sourceCreateIndeterminate(
+            "Source create acknowledgement was ambiguous; retrying will only reconcile this exact attempt.",
+            reconciliationToken,
+            error ?? readbackError,
+          );
+        }
+        throw sourceCreateIndeterminate(
+          "Source create acknowledgement was ambiguous; retrying will only reconcile this exact attempt.",
+          reconciliationToken,
+          error ?? readbackError,
+        );
+      }
+    }
+  } finally {
+    baselineCleanup?.();
+    baselineAndReadbackSignals.cleanup();
+  }
 }
 
 /** Kick a `source_sync` run. Returns the opaque run envelope. */
@@ -2768,22 +3521,57 @@ function normalizedWorkspaceId(value: string): string {
 export async function listConnections(
   workspaceId: string,
 ): Promise<readonly ProviderConnection[]> {
+  return await listConnectionsWithSignal(workspaceId);
+}
+
+export async function listConnectionsWithSignal(
+  workspaceId: string,
+  signal?: AbortSignal,
+): Promise<readonly ProviderConnection[]> {
   const normalized = normalizedWorkspaceId(workspaceId);
   if (!normalized) return [];
   return await fetchAllPages<ProviderConnection>(
     `${BASE}/connections${query({ workspaceId: normalized })}`,
     (body) => (body.connections as readonly ProviderConnection[]) ?? [],
+    { signal },
   );
 }
 
 export async function listProviderConnections(
   workspaceId: string,
 ): Promise<readonly ProviderConnection[]> {
+  return await listProviderConnectionsWithSignal(workspaceId);
+}
+
+export async function listProviderConnectionsWithSignal(
+  workspaceId: string,
+  signal?: AbortSignal,
+): Promise<readonly ProviderConnection[]> {
   const normalized = normalizedWorkspaceId(workspaceId);
   if (!normalized) return [];
   const body = await controlFetch<{
     providerConnections?: readonly ProviderConnection[];
-  }>(`${BASE}/provider-connections${query({ workspaceId: normalized })}`);
+  }>(`${BASE}/provider-connections${query({ workspaceId: normalized })}`, {
+    signal,
+  });
+  return body.providerConnections ?? [];
+}
+
+export async function listReleaseOwnedProviderConnectionsWithSignal(
+  workspaceId: string,
+  signal?: AbortSignal,
+): Promise<readonly ProviderConnection[]> {
+  const normalized = normalizedWorkspaceId(workspaceId);
+  if (!normalized) return [];
+  const body = await controlFetch<{
+    providerConnections?: readonly ProviderConnection[];
+  }>(
+    `${BASE}/provider-connections${query({
+      workspaceId: normalized,
+      projection: "release-owned",
+    })}`,
+    { signal },
+  );
   return body.providerConnections ?? [];
 }
 

@@ -43,6 +43,11 @@ export interface PlatformExtensionRoute {
   readonly ownsPathSubtree?: boolean;
   /** Scopes required from platform token credentials. */
   readonly requiredScopes?: readonly string[];
+  /**
+   * Explicit scopes an account session may grant to a self-service PAT for
+   * this route. This declaration is never inferred from `requiredScopes`.
+   */
+  readonly selfServicePatScopes?: readonly string[];
   /** Exact method/path scope requirements relative to this basePath. */
   readonly requestScopeRules?: readonly PlatformExtensionRequestScopeRule[];
   /**
@@ -145,6 +150,10 @@ export {
 };
 
 export const PLATFORM_EXTENSIONS_ENV = "TAKOSUMI_PLATFORM_EXTENSIONS";
+/** Closed until each new PAT authority has a matching storage and route proof. */
+export const PLATFORM_EXTENSION_SELF_SERVICE_PAT_SCOPE_ALLOWLIST = [
+  "resources:read",
+] as const;
 export const PLATFORM_EXTENSION_CATALOG_PATH =
   "/__takosumi/platform/extensions" as const;
 export const PLATFORM_EXTENSION_CONTRIBUTIONS_PATH =
@@ -253,6 +262,17 @@ function platformExtensionRouteFromJson(
       `${label}.requestScopeRules cannot be combined with requiredScopes`,
     );
   }
+  const selfServicePatScopes = optionalSelfServicePatScopes(
+    record.selfServicePatScopes,
+    label,
+    requiredScopes,
+    requestScopeRules,
+  );
+  if (selfServicePatScopes && authMode === "handler") {
+    throw new TypeError(
+      `${label}.selfServicePatScopes requires platform authentication`,
+    );
+  }
   const runCredential = optionalRunCredential(record.runCredential, label);
   const declaredCapabilities = optionalStringArray(
     record.capabilities,
@@ -319,6 +339,7 @@ function platformExtensionRouteFromJson(
     ...(ownsPathSubtree !== undefined ? { ownsPathSubtree } : {}),
     ...(workspaceContext ? { workspaceContext } : {}),
     ...(requiredScopes ? { requiredScopes } : {}),
+    ...(selfServicePatScopes ? { selfServicePatScopes } : {}),
     ...(requestScopeRules ? { requestScopeRules } : {}),
     ...(runCredential ? { runCredential } : {}),
     ...(capabilities.length > 0 ? { capabilities } : {}),
@@ -479,6 +500,10 @@ function mergePlatformExtensionRoutes(
         !sameRequestScopeRules(
           existing.requestScopeRules,
           route.requestScopeRules,
+        ) ||
+        !sameStrings(
+          existing.selfServicePatScopes,
+          route.selfServicePatScopes,
         ) ||
         !sameRunCredential(existing.runCredential, route.runCredential))
     ) {
@@ -740,6 +765,51 @@ function optionalStringArray(
   return values.length > 0 ? uniqueStrings(values) : undefined;
 }
 
+function optionalSelfServicePatScopes(
+  value: unknown,
+  label: string,
+  requiredScopes: readonly string[] | undefined,
+  requestScopeRules: readonly PlatformExtensionRequestScopeRule[] | undefined,
+): readonly string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new TypeError(
+      `${label}.selfServicePatScopes must be a non-empty array`,
+    );
+  }
+  const scopes = optionalStringArray(
+    value,
+    label,
+    "selfServicePatScopes",
+  );
+  if (!scopes || scopes.length === 0) {
+    throw new TypeError(
+      `${label}.selfServicePatScopes must be a non-empty array`,
+    );
+  }
+  const referenced = new Set([
+    ...(requiredScopes ?? []),
+    ...(requestScopeRules ?? []).flatMap((rule) => rule.requiredScopes),
+  ]);
+  for (const scope of scopes) {
+    if (
+      !(PLATFORM_EXTENSION_SELF_SERVICE_PAT_SCOPE_ALLOWLIST as readonly string[]).includes(
+        scope,
+      )
+    ) {
+      throw new TypeError(
+        `${label}.selfServicePatScopes contains unsupported scope ${scope}`,
+      );
+    }
+    if (!referenced.has(scope)) {
+      throw new TypeError(
+        `${label}.selfServicePatScopes scope ${scope} must be explicitly referenced by requiredScopes or requestScopeRules`,
+      );
+    }
+  }
+  return scopes;
+}
+
 function optionalRequestScopeRules(
   value: unknown,
   label: string,
@@ -917,6 +987,21 @@ export function resolvePlatformExtensionRequestScopeRoute(
     ...route,
     requiredScopes: rule.requiredScopes,
   };
+}
+
+/**
+ * Return the explicitly declared, allowlisted self-service PAT scopes from a
+ * parsed extension route set. Required route scopes alone never contribute.
+ */
+export function platformExtensionSelfServicePatScopes(
+  routes: readonly PlatformExtensionRoute[],
+): readonly string[] {
+  const declared = new Set(
+    routes.flatMap((route) => route.selfServicePatScopes ?? []),
+  );
+  return PLATFORM_EXTENSION_SELF_SERVICE_PAT_SCOPE_ALLOWLIST.filter((scope) =>
+    declared.has(scope),
+  );
 }
 
 export function isPlatformExtensionCatalogPath(pathname: string): boolean {

@@ -340,15 +340,41 @@ const inProcessDeployControlServices = new WeakMap<
   Promise<CreatedTakosumiService>
 >();
 
+/**
+ * @internal
+ *
+ * Resolve one service attempt per environment and evict only rejected
+ * attempts. The identity check prevents a late rejection from an older
+ * generation from deleting a newer retry. Pending attempts are deliberately
+ * retained: request-level deadlines belong to the Accounts caller and must
+ * not abort or replace this shared initializer. A genuinely never-resolving
+ * initializer therefore remains a pending cache entry. The code does not
+ * abort or evict it, but cannot guarantee that the runtime will keep the
+ * isolate alive; future cooperative cancellation/generation fencing is
+ * required for self-recovery beyond this containment boundary.
+ */
+export function cachedServiceAttempt<TEnvironment extends object, TValue>(
+  cache: WeakMap<TEnvironment, Promise<TValue>>,
+  env: TEnvironment,
+  create: () => Promise<TValue>,
+): Promise<TValue> {
+  const cached = cache.get(env);
+  if (cached) return cached;
+
+  const attempt = Promise.resolve().then(create);
+  cache.set(env, attempt);
+  void attempt.catch(() => {
+    if (cache.get(env) === attempt) cache.delete(env);
+  });
+  return attempt;
+}
+
 export function cachedDeployControlService(
   env: CloudflareWorkerEnv,
 ): Promise<CreatedTakosumiService> {
-  let service = inProcessDeployControlServices.get(env);
-  if (!service) {
-    service = createDeployControlService(env);
-    inProcessDeployControlServices.set(env, service);
-  }
-  return service;
+  return cachedServiceAttempt(inProcessDeployControlServices, env, () =>
+    createDeployControlService(env),
+  );
 }
 
 const runOwnerDeployControlServices = new WeakMap<
@@ -359,10 +385,7 @@ const runOwnerDeployControlServices = new WeakMap<
 export function cachedRunOwnerDeployControlService(
   env: CloudflareWorkerEnv,
 ): Promise<CreatedTakosumiService> {
-  let service = runOwnerDeployControlServices.get(env);
-  if (!service) {
-    service = createRunOwnerDeployControlService(env);
-    runOwnerDeployControlServices.set(env, service);
-  }
-  return service;
+  return cachedServiceAttempt(runOwnerDeployControlServices, env, () =>
+    createRunOwnerDeployControlService(env),
+  );
 }

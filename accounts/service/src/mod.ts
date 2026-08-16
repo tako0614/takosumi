@@ -3,9 +3,11 @@ import {
   buildOidcDiscoveryDocument,
   type JsonWebKeySet,
   normalizeIssuer,
+  type TakosumiAccountsPatScope,
   TAKOSUMI_ACCOUNTS_ACCOUNT_TOKENS_PATH,
   TAKOSUMI_ACCOUNTS_CURRENT_PAT_AUTHORITY_PATH,
   TAKOSUMI_ACCOUNTS_PAT_INVENTORY_PATH,
+  TAKOSUMI_ACCOUNTS_PAT_SCOPE_CATALOG_PATH,
   TAKOSUMI_ACCOUNTS_AUTH_PROVIDERS_PATH,
   TAKOSUMI_ACCOUNTS_AUTHORIZE_PATH,
   TAKOSUMI_ACCOUNTS_INTROSPECT_PATH,
@@ -55,7 +57,9 @@ import {
   handleCreatePersonalAccessToken,
   handleListPersonalAccessTokens,
   handlePersonalAccessTokenInventory,
+  handlePersonalAccessTokenScopeCatalog,
   handleRevokePersonalAccessToken,
+  personalAccessTokenSelfServiceScopes,
   type PatWorkspaceMembershipReader,
 } from "./pat-routes.ts";
 import {
@@ -196,6 +200,8 @@ export interface AccountsHandlerOptions {
   >;
   /** Dedicated exact read port for PAT self-authority verification. */
   patWorkspaceMembershipReader?: PatWorkspaceMembershipReader;
+  /** Explicit extension-contributed scopes allowed on self-service PATs. */
+  personalAccessTokenSelfServiceScopes?: readonly TakosumiAccountsPatScope[];
   /** Canonical current-state check for short-lived Interface OAuth tokens. */
   interfaceOAuthActivityValidator?: InterfaceOAuthActivityValidator;
   /** Operator-owned hostname namespace used for managed Capsule endpoints. */
@@ -225,6 +231,8 @@ export interface EphemeralAccountsHandlerOptions {
     ControlPlaneOperations | undefined
   >;
   patWorkspaceMembershipReader?: PatWorkspaceMembershipReader;
+  /** Explicit extension-contributed scopes allowed on self-service PATs. */
+  personalAccessTokenSelfServiceScopes?: readonly TakosumiAccountsPatScope[];
   interfaceOAuthActivityValidator?: InterfaceOAuthActivityValidator;
   managedPublicBaseDomain?: string;
   loginEmailAllowlist?: LoginEmailAllowlist;
@@ -345,6 +353,8 @@ export async function createEphemeralAccountsHandler(
     controlPlaneOperations: options.controlPlaneOperations,
     resolveControlPlaneOperations: options.resolveControlPlaneOperations,
     patWorkspaceMembershipReader: options.patWorkspaceMembershipReader,
+    personalAccessTokenSelfServiceScopes:
+      options.personalAccessTokenSelfServiceScopes,
     interfaceOAuthActivityValidator: options.interfaceOAuthActivityValidator,
     ...(options.managedPublicBaseDomain
       ? { managedPublicBaseDomain: options.managedPublicBaseDomain }
@@ -498,6 +508,11 @@ export function createAccountsHandler(
             : false;
         }
       : undefined);
+  // Validate extension-contributed PAT authority once at composition time;
+  // request handlers still pass the raw declaration so they cannot widen it.
+  personalAccessTokenSelfServiceScopes(
+    options.personalAccessTokenSelfServiceScopes,
+  );
 
   // Per-isolate rate limiters. Each entry maps client IP to a sliding window
   // of recent request timestamps. These limiters guard the abuse-prone OIDC
@@ -644,9 +659,19 @@ export function createAccountsHandler(
           ...(resolveControlPlaneOperations
             ? { resolveOperations: resolveControlPlaneOperations }
             : {}),
+          extensionScopes: options.personalAccessTokenSelfServiceScopes,
         });
       }
       return methodNotAllowed("GET, POST");
+    }
+
+    if (url.pathname === TAKOSUMI_ACCOUNTS_PAT_SCOPE_CATALOG_PATH) {
+      if (request.method !== "GET") return methodNotAllowed("GET");
+      return await handlePersonalAccessTokenScopeCatalog({
+        request,
+        store,
+        extensionScopes: options.personalAccessTokenSelfServiceScopes,
+      });
     }
 
     if (url.pathname === TAKOSUMI_ACCOUNTS_CURRENT_PAT_AUTHORITY_PATH) {
@@ -1057,6 +1082,7 @@ function isLoginAllowlistBypassPath(pathname: string): boolean {
 function isPersonalAccessTokenRoutePath(pathname: string): boolean {
   return (
     pathname === TAKOSUMI_ACCOUNTS_ACCOUNT_TOKENS_PATH ||
+    pathname === TAKOSUMI_ACCOUNTS_PAT_SCOPE_CATALOG_PATH ||
     pathname === TAKOSUMI_ACCOUNTS_CURRENT_PAT_AUTHORITY_PATH ||
     pathname === TAKOSUMI_ACCOUNTS_PAT_INVENTORY_PATH ||
     matchAccountTokenRevokeRoute(pathname) !== null

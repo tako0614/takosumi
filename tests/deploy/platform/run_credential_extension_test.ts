@@ -80,6 +80,29 @@ describe("platform extension Run credential", () => {
     expect(session.subject).not.toBe(TOKEN_INPUT.subject);
   });
 
+  test("accepts a release-owned connection from live host composition without a durable connection row", async () => {
+    const issued = await createRunCredentialToken(TOKEN_INPUT);
+    const durable = ledger({ connection: null });
+    const liveConnection = await ledger().getConnection(
+      TOKEN_INPUT.connectionId,
+    );
+
+    const session = await verifyPlatformExtensionRunCredentialToken(
+      { TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: SIGNING_SECRET } as never,
+      issued.token,
+      ROUTE,
+      durable,
+      async (id) =>
+        id === TOKEN_INPUT.connectionId ? liveConnection : undefined,
+    );
+
+    expect(session).toMatchObject({
+      authenticated: true,
+      authKind: "run-credential",
+      runId: TOKEN_INPUT.runId,
+    });
+  });
+
   test("rejects absent route authority and wrong audience or scope", async () => {
     const issued = await createRunCredentialToken(TOKEN_INPUT);
     const env = {
@@ -238,6 +261,34 @@ describe("platform extension Run credential", () => {
     }
   });
 
+  test("accepts a destroy Plan credential for persisted partial-state recovery", async () => {
+    const issued = await createRunCredentialToken({
+      ...TOKEN_INPUT,
+      runId: "plan_1",
+      phase: "plan",
+      jti: "jti_destroy_plan_recovery",
+    });
+    const result = await verifyPlatformExtensionRunCredentialToken(
+      { TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: SIGNING_SECRET } as never,
+      issued.token,
+      ROUTE,
+      ledger({
+        plan: { operation: "destroy" },
+        safety: {
+          phase: "unknown",
+          runId: "apply_failed_partial",
+          runType: "apply",
+        },
+      }),
+    );
+
+    expect(result).toMatchObject({
+      authenticated: true,
+      runId: "plan_1",
+      phase: "plan",
+    });
+  });
+
   test("rechecks the exact live connection authority and zero stored material", async () => {
     const env = {
       TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: SIGNING_SECRET,
@@ -302,6 +353,31 @@ describe("platform Resource Form transition Run credential", () => {
       phase: "apply",
       audience: RUN_ISSUANCE.audience,
       scopes: RUN_ISSUANCE.scopes,
+    });
+  });
+
+  test("accepts a release-owned transition connection from live host composition without a durable row", async () => {
+    const issued = await createRunCredentialToken({
+      ...TOKEN_INPUT,
+      subject: TOKEN_INPUT.installingPrincipalId,
+    });
+    const durable = transitionLedger({ connection: null });
+    const liveConnection = await ledger().getConnection(
+      TOKEN_INPUT.connectionId,
+    );
+
+    const session = await verifyPlatformResourceFormTransitionRunCredential(
+      { TAKOSUMI_RUN_CREDENTIAL_TOKEN_SECRET: SIGNING_SECRET } as never,
+      issued.token,
+      durable,
+      async (id) =>
+        id === TOKEN_INPUT.connectionId ? liveConnection : undefined,
+    );
+
+    expect(session).toMatchObject({
+      authenticated: true,
+      authKind: "run-credential",
+      runId: TOKEN_INPUT.runId,
     });
   });
 

@@ -354,8 +354,11 @@ function collectProviders(
       readonly source: string;
       readonly localName: string;
       readonly aliases: Set<string>;
+      versionConstraintOccurrences: number;
+      versionConstraint?: string;
     }
   >();
+  const canonicalProviderOccurrences = new Map<string, number>();
   for (const file of files) {
     const terraformBlocks = matchBlocks(file.text, "terraform");
     for (const block of terraformBlocks) {
@@ -371,14 +374,31 @@ function collectProviders(
             stringAttribute(providerBlock.body, "source") ??
             `hashicorp/${providerBlock.name}`;
           const localName = providerBlock.name;
+          const canonicalSource = canonicalProviderSource(source);
+          canonicalProviderOccurrences.set(
+            canonicalSource,
+            (canonicalProviderOccurrences.get(canonicalSource) ?? 0) + 1,
+          );
           const aliases = aliasesAttribute(providerBlock.body, localName);
           const key = `${localName}\u0000${source}`;
           const entry = providers.get(key) ?? {
             source,
             localName,
             aliases: new Set<string>(),
+            versionConstraintOccurrences: 0,
           };
           for (const alias of aliases) entry.aliases.add(alias);
+          entry.versionConstraintOccurrences += 1;
+          const versionConstraint = stringAttributeValue(
+            providerBlock.body,
+            "version",
+          );
+          if (
+            entry.versionConstraintOccurrences === 1 &&
+            versionConstraint.kind === "literal"
+          ) {
+            entry.versionConstraint = versionConstraint.value;
+          }
           providers.set(key, entry);
         }
       }
@@ -434,16 +454,33 @@ function collectProviders(
     }
   }
   return Array.from(providers.values())
-    .map(({ source, localName, aliases }) => ({
-      source,
-      localName,
-      aliases: Array.from(aliases).sort(),
-      allowed: providerAllowed(source, allowedProviders),
-      ...(credentialRequiredProviders.has("*") ||
-      providerInSet(source, credentialRequiredProviders)
-        ? { credentialRequired: true }
-        : {}),
-    }))
+    .map(
+      ({
+        source,
+        localName,
+        aliases,
+        versionConstraintOccurrences,
+        versionConstraint,
+      }) => {
+        const provider = {
+          source,
+          localName,
+          ...(versionConstraintOccurrences === 1 &&
+          canonicalProviderOccurrences.get(canonicalProviderSource(source)) ===
+            1 &&
+          versionConstraint !== undefined
+            ? { versionConstraint }
+            : {}),
+          aliases: Array.from(aliases).sort(),
+          allowed: providerAllowed(source, allowedProviders),
+          ...(credentialRequiredProviders.has("*") ||
+          providerInSet(source, credentialRequiredProviders)
+            ? { credentialRequired: true }
+            : {}),
+        };
+        return provider;
+      },
+    )
     .sort(
       (a, b) =>
         a.localName.localeCompare(b.localName) ||
@@ -762,6 +799,12 @@ function providerAllowed(
   return allowlistContains(allowedProviders, source, providerInSet);
 }
 
+function canonicalProviderSource(source: string): string {
+  return source.startsWith("registry.opentofu.org/")
+    ? source.slice("registry.opentofu.org/".length)
+    : source;
+}
+
 function providerInSet(
   source: string,
   providers: ReadonlySet<string>,
@@ -855,6 +898,29 @@ function containsCredentialAttribute(body: string): boolean {
 function stringAttribute(body: string, name: string): string | undefined {
   const pattern = new RegExp(`(^|\\n)\\s*${name}\\s*=\\s*"([^"]+)"`, "m");
   return pattern.exec(body)?.[2];
+}
+
+type StringAttributeValue =
+  | { readonly kind: "missing" }
+  | { readonly kind: "literal"; readonly value: string }
+  | { readonly kind: "non_literal" };
+
+function stringAttributeValue(
+  body: string,
+  name: string,
+): StringAttributeValue {
+  const assignment = new RegExp(
+    `(^|\\n)\\s*${name}\\s*=\\s*(.*)$`,
+    "mu",
+  ).exec(body);
+  if (!assignment) return { kind: "missing" };
+  const expression = assignment[2]!.trim();
+  const literal = /^"((?:[^"\\]|\\.)*)"$/u.exec(expression);
+  if (!literal) return { kind: "non_literal" };
+  const value = literal[1]!;
+  return value.includes("${") || value.includes("%{")
+    ? { kind: "non_literal" }
+    : { kind: "literal", value };
 }
 
 function aliasesAttribute(body: string, localName: string): string[] {

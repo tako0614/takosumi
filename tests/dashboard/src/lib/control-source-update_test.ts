@@ -49,6 +49,68 @@ const NEW_SNAPSHOT = {
 } as const;
 
 describe("SourceSnapshot update pinning", () => {
+  test("compile preflight sends only the opaque deployment profile selection", async () => {
+    let compatibilityBody: unknown;
+    globalThis.fetch = (async (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ) => {
+      const url = String(input);
+      if (url === "/api/v1/sources/src_1/sync") {
+        return json({ run: { id: "ssr_new" } }, 201);
+      }
+      if (url === "/api/v1/runs/ssr_new") {
+        return json({
+          run: {
+            id: "ssr_new",
+            type: "source_sync",
+            status: "succeeded",
+            workspaceId: "workspace_1",
+            sourceSnapshotId: "snap_new",
+            createdAt: "2026-07-10T00:00:30.000Z",
+          },
+        });
+      }
+      if (url === "/api/v1/sources/src_1/snapshots") {
+        return json({ snapshots: [NEW_SNAPSHOT] });
+      }
+      if (url === "/api/v1/sources/src_1/compatibility-check") {
+        compatibilityBody =
+          typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
+        return json({
+          report: {
+            id: "caprep_new",
+            level: "ready",
+            findings: [],
+            providers: [],
+            resources: [],
+            rootModuleVariables: [],
+          },
+        }, 201);
+      }
+      throw new Error(`unexpected request: ${url}`);
+    }) as typeof fetch;
+
+    await checkCapsuleCompatibility({
+      workspaceId: "workspace_1",
+      sourceId: "src_1",
+      gitUrl: "https://example.test/app.git",
+      ref: "main",
+      path: "deploy/client-selected-path",
+      name: "app",
+      installConfigId: "client-selected-config",
+      compileInstallUx: true,
+      deploymentProfileKey: "byoc-v1",
+    });
+
+    expect(compatibilityBody).toEqual({
+      sourceSnapshotId: "snap_new",
+      compileInstallUx: true,
+      capsuleName: "app",
+      deploymentProfileKey: "byoc-v1",
+    });
+  });
+
   test("waits for the requested sync instead of accepting an older snapshot", async () => {
     let runReads = 0;
     globalThis.fetch = (async (input: RequestInfo | URL) => {
@@ -211,6 +273,69 @@ describe("SourceSnapshot update pinning", () => {
       "invalid_source_sync_response",
     );
     expect(calls).toEqual(["POST /api/v1/sources/src_1/sync"]);
+  });
+
+  test("bounds the final compatibility response instead of leaving install preparation pending", async () => {
+    let finalRequestSignal: AbortSignal | undefined;
+    globalThis.fetch = (async (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ) => {
+      const url = String(input);
+      if (url === "/api/v1/sources/src_1/sync") {
+        return json({ run: { id: "ssr_new" } }, 201);
+      }
+      if (url === "/api/v1/runs/ssr_new") {
+        return json({
+          run: {
+            id: "ssr_new",
+            type: "source_sync",
+            status: "succeeded",
+            workspaceId: "workspace_1",
+            sourceSnapshotId: "snap_new",
+            createdAt: "2026-07-10T00:00:30.000Z",
+          },
+        });
+      }
+      if (url === "/api/v1/sources/src_1/snapshots") {
+        return json({ snapshots: [NEW_SNAPSHOT] });
+      }
+      if (url === "/api/v1/sources/src_1/compatibility-check") {
+        finalRequestSignal = init?.signal ?? undefined;
+        return await new Promise<Response>((_resolve, reject) => {
+          finalRequestSignal?.addEventListener(
+            "abort",
+            () => reject(new DOMException("timed out", "AbortError")),
+            { once: true },
+          );
+        });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    }) as typeof fetch;
+
+    const outcome = await Promise.race([
+      checkCapsuleCompatibility({
+        workspaceId: "workspace_1",
+        sourceId: "src_1",
+        gitUrl: SOURCE_IDENTITY.url,
+        ref: "main",
+        path: ".",
+        name: "app",
+        timeoutMs: 10,
+      }).then(
+        () => ({ kind: "resolved" as const }),
+        (error: unknown) => ({ kind: "rejected" as const, error }),
+      ),
+      new Promise<{ readonly kind: "still_pending" }>((resolve) =>
+        setTimeout(() => resolve({ kind: "still_pending" }), 100),
+      ),
+    ]);
+
+    expect(outcome.kind).toBe("rejected");
+    expect(finalRequestSignal).toBeDefined();
+    expect(
+      outcome.kind === "rejected" ? outcome.error : undefined,
+    ).toMatchObject({ status: 0, code: "request_timeout" });
   });
 });
 

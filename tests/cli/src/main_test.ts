@@ -6073,7 +6073,7 @@ test("accounts migrate dry-run prints ordered migration plan", async () => {
     driver: "postgres",
     source: "--database-url",
   });
-  expect(plan.migrations.length).toEqual(36);
+  expect(plan.migrations.length).toEqual(39);
   expect(plan.migrations[0].name).toEqual("001_app_installation_ledger.sql");
   expect(plan.migrations[16].name).toEqual(
     "017_drop_binding_grant_runtime_binding.sql",
@@ -6101,6 +6101,15 @@ test("accounts migrate dry-run prints ordered migration plan", async () => {
   expect(plan.migrations[34].name).toEqual("035_account_picture.sql");
   expect(plan.migrations[35].name).toEqual(
     "036_refresh_chain_retention_indexes.sql",
+  );
+  expect(plan.migrations[36].name).toEqual(
+    "037_personal_access_tokens_resources_read_scope.sql",
+  );
+  expect(plan.migrations[37].name).toEqual(
+    "038_validate_personal_access_tokens_resources_read_scope.sql",
+  );
+  expect(plan.migrations[38].name).toEqual(
+    "039_drop_personal_access_tokens_legacy_scope_check.sql",
   );
   expect(plan.migrations[0].checksum.startsWith("sha256:")).toEqual(true);
   expect(stdout.join("\n").includes("accounts:secret")).toEqual(false);
@@ -6327,7 +6336,9 @@ test("accounts tokens create rejects invalid PAT scopes before fetch", async () 
     expect(code).toEqual(2);
     expect(stdout).toEqual([]);
     expect(fetchCalled).toEqual(false);
-    expect(stderr).toEqual(["--scope must contain only: read, write, admin"]);
+    expect(stderr).toEqual([
+      "--scope must contain only: read, write, admin, resources:read",
+    ]);
   } finally {
     globalThis.fetch = originalFetch;
   }

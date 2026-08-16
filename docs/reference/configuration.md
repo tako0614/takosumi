@@ -132,7 +132,7 @@ transition port 単体、legacy drain flag では有効になりません。詳�
 | `TAKOSUMI_DEFAULT_RUNNER_PROFILE_ID` | 任意 | `opentofu-default` | プロファイルを指定しない要求が使うプロファイル。上で有効にしたものに限ります |
 | `TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR` | 任意 | runner コンテナでは `/tmp/takosumi-provider-cache` | provider のバイナリを置いて Run 間で使い回すパス。認証情報、生成した root、plan、state はここに入りません |
 | `TAKOSUMI_SOURCE_BUILD_CACHE_DIR` | 任意 | なし | `sourceBuild` を走らせるときの依存パッケージのキャッシュ置き場。絶対パスで書きます。この下の `bun` / `npm` / `xdg` を Bun と npm に渡します |
-| `TAKOSUMI_RUNNER_KEEPALIVE_SECONDS` | 任意 | `0` | Run を終えたコンテナを何秒生かすか。上限は `900` です。runner の Durable Object は Run ごとなので、増やしても次の Run では使い回しません |
+| `TAKOSUMI_RUNNER_KEEPALIVE_SECONDS` | 任意 | `0` | legacy の activity-expiry grace。完了した non-indeterminate Run は値にかかわらず container を明示破棄し、Run-scoped container を次の Run へ使い回しません。互換入力として残しており、新規設定は `0` にします |
 | `TAKOSUMI_SOURCE_ARCHIVE_ZSTD_LEVEL` | 任意 | `3` | SourceSnapshot を固める zstd の圧縮レベル。`1` から `19` まで。低いほど書庫は大きく、初回の取り込みは速くなります |
 | `TAKOSUMI_SCHEDULED_SOURCE_POLL_BATCH` | 任意 | `5` | 定期ポーリング 1 回で拾う自動同期 Source の上限 |
 | `TAKOSUMI_COMPATIBILITY_CHECK_TIMEOUT_MS` | 任意 | `45000` | 互換チェックのソース展開をリクエスト経路で待つ上限 (ミリ秒) |

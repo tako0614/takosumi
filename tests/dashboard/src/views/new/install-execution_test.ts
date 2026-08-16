@@ -2,6 +2,8 @@ import { expect, mock, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
+import { installRunNeedsFallbackRead } from "../../../../../dashboard/src/views/new/install-run-polling.ts";
+
 const source = readFileSync(
   resolve(
     import.meta.dir,
@@ -95,4 +97,22 @@ test("boundedRead retries transient failures and stops at its finite budget", as
     ),
   ).rejects.toThrow("permanent");
   expect(permanentAttempts).toBe(3);
+});
+
+test("install Run keeps a fallback read until a terminal state", () => {
+  expect(installRunNeedsFallbackRead(undefined)).toBe(true);
+  expect(installRunNeedsFallbackRead({ status: "queued" } as never)).toBe(
+    true,
+  );
+  expect(installRunNeedsFallbackRead({ status: "running" } as never)).toBe(
+    true,
+  );
+  for (const status of [
+    "succeeded",
+    "failed",
+    "cancelled",
+    "expired",
+  ] as const) {
+    expect(installRunNeedsFallbackRead({ status } as never)).toBe(false);
+  }
 });

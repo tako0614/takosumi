@@ -59,6 +59,11 @@ For Store `compileInstallUx`, neither the client nor the Store sends a
 SourceSnapshot manifest, runs compatibility for that exact path, and persists
 the same path in the derived InstallConfig:
 
+Direct Git and repository-owned source options use the same `compileInstallUx`
+flow and may send their selected `modulePath`. The server validates that path
+as an exact `install.modules` key in the immutable SourceSnapshot manifest;
+Store metadata never selects executable behavior.
+
 1. If `modules` has one entry, select its only key.
 2. Multiple entries require `install.defaultModule` in `takosumi.com/v2.1`,
    `takosumi.com/v2.2`, or `takosumi.com/v2.3`.

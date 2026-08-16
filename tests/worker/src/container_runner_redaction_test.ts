@@ -245,7 +245,7 @@ test("container runner records active run and startup metrics", async () => {
   expect(startup[0]?.value).toBe(1.25);
 });
 
-test("container runner applies and destroys through the plan runner object for warm reuse", async () => {
+test("container runner isolates apply and destroy from the plan runner object", async () => {
   const runnerIds: string[] = [];
   const requests: { readonly id: string; readonly path: string }[] = [];
   const runner = new CloudflareContainerOpenTofuRunner({
@@ -282,10 +282,10 @@ test("container runner applies and destroys through the plan runner object for w
     },
   } as Parameters<CloudflareContainerOpenTofuRunner["destroy"]>[0]);
 
-  expect(runnerIds).toEqual(["plan_cache", "destroy_plan_cache"]);
+  expect(runnerIds).toEqual(["apply_cache", "destroy_cache"]);
   expect(requests).toEqual([
-    { id: "plan_cache", path: "/runs/plan_cache" },
-    { id: "destroy_plan_cache", path: "/runs/destroy_plan_cache" },
+    { id: "apply_cache", path: "/runs/plan_cache" },
+    { id: "destroy_cache", path: "/runs/destroy_plan_cache" },
   ]);
 });
 
@@ -350,6 +350,7 @@ test("container runner returns provider installation attestation from apply and 
   );
 
   const apply = await runner.apply({
+    applyRun: { id: "apply_provider" },
     planRun: { id: "apply_provider" },
     planArtifact: {
       kind: "runner-local",
@@ -358,6 +359,7 @@ test("container runner returns provider installation attestation from apply and 
     },
   } as Parameters<CloudflareContainerOpenTofuRunner["apply"]>[0]);
   const destroy = await runner.destroy({
+    applyRun: { id: "destroy_provider_apply" },
     planRun: { id: "destroy_provider" },
     planArtifact: {
       kind: "runner-local",
@@ -388,6 +390,7 @@ test("container runner redacts stderr before apply diagnostics are returned", as
   );
 
   const result = await runner.apply({
+    applyRun: { id: "apply_diag_attempt" },
     planRun: { id: "apply_diag" },
     planArtifact: {
       kind: "runner-local",
@@ -428,6 +431,7 @@ test("container runner surfaces non-2xx apply stderr instead of raw JSON envelop
   let error: unknown;
   try {
     await runner.apply({
+      applyRun: { id: "apply_failed_attempt" },
       planRun: { id: "apply_failed" },
       planArtifact: {
         kind: "runner-local",
@@ -450,6 +454,8 @@ test("container runner surfaces non-2xx apply stderr instead of raw JSON envelop
 
 test("container runner returns a typed failed apply with persisted partial state", async () => {
   const stateDigest = `sha256:${"e".repeat(64)}`;
+  const safeFailureDetail =
+    "Error: SQLiteMigrationSet rejected migration 7 after earlier resources were created";
   const runner = new CloudflareContainerOpenTofuRunner(
     envReturning(
       {
@@ -465,8 +471,7 @@ test("container runner returns a typed failed apply with persisted partial state
           must_not_publish: { sensitive: false, value: "stale" },
         },
         rawOutputRef: "must-not-publish",
-        stderr:
-          "password=partial-apply-secret provider rejected a later resource",
+        detail: `${safeFailureDetail}\npassword=partial-apply-secret`,
       },
       undefined,
       500,
@@ -494,7 +499,63 @@ test("container runner returns a typed failed apply with persisted partial state
   expect(JSON.stringify(result.diagnostics)).not.toContain(
     "partial-apply-secret",
   );
-  expect(result.diagnostics).toEqual([]);
+  expect(result.diagnostics).toEqual([
+    {
+      severity: "error",
+      code: "apply_failed",
+      message: "OpenTofu provider execution failed after dispatch",
+      detail: expect.stringContaining(safeFailureDetail),
+    },
+  ]);
+});
+
+test("container runner preserves the root provider error when warnings exceed the diagnostic bound", async () => {
+  const rootFailure =
+    "Error: SQLiteMigrationSet apply failed because host transition receipt was rejected";
+  const finalFailure = "Error: provider process exited with status 1";
+  const repeatedWarnings = Array.from(
+    { length: 180 },
+    (_, index) =>
+      `Warning ${index}: Takoform Host Support could not be read for resource shape`,
+  ).join("\n");
+  const runner = new CloudflareContainerOpenTofuRunner(
+    envReturning(
+      {
+        status: "failed",
+        exitCode: 1,
+        errorCode: "apply_failed",
+        providerExecutionFailure: {
+          kind: "provider_execution_failed",
+          statePersistence: "unavailable",
+        },
+        stderr: [
+          rootFailure,
+          "Authorization: Bearer must-not-survive",
+          repeatedWarnings,
+          finalFailure,
+        ].join("\n"),
+      },
+      undefined,
+      500,
+    ),
+  );
+
+  const result = await runner.apply({
+    applyRun: { id: "apply_long_failure" },
+    planRun: { id: "plan_long_failure" },
+    planArtifact: {
+      kind: "runner-local",
+      ref: "runner-local://plan_long_failure/tfplan",
+      digest: PLAN_DIGEST,
+    },
+  } as Parameters<CloudflareContainerOpenTofuRunner["apply"]>[0]);
+
+  const detail = result.diagnostics?.[0]?.detail ?? "";
+  expect(detail).toContain(rootFailure);
+  expect(detail).toContain(finalFailure);
+  expect(detail).toContain("diagnostics omitted");
+  expect(detail).not.toContain("must-not-survive");
+  expect(detail.length).toBeLessThanOrEqual(4_096);
 });
 
 test("container runner distinguishes failed provider execution without readable state", async () => {
@@ -617,8 +678,7 @@ test("container runner maps mutation ambiguity to a non-retryable typed executio
         errorCode: RUNNER_MUTATION_INDETERMINATE_CODE,
         retryable: false,
         outcome: "indeterminate",
-        detail:
-          "provider mutation may have occurred; token=adapter-raw-secret",
+        detail: "provider mutation may have occurred; token=adapter-raw-secret",
       },
       undefined,
       409,
@@ -648,6 +708,50 @@ test("container runner maps mutation ambiguity to a non-retryable typed executio
   expect((error as Error).message).not.toContain("adapter-raw-secret");
   expect((error as Error).message).toBe(
     `runner request failed (${RUNNER_MUTATION_INDETERMINATE_CODE})`,
+  );
+});
+
+test("container runner maps finite plan failures to non-retryable execution errors", async () => {
+  const runner = new CloudflareContainerOpenTofuRunner(
+    envReturning(
+      {
+        status: "failed",
+        errorCode: "provider_package_unavailable",
+        phase: "plan",
+        stderr:
+          "Error: provider request failed for token=must-not-escape at main.tf:42",
+      },
+      undefined,
+      500,
+    ),
+  );
+
+  let error: unknown;
+  try {
+    await runner.plan({
+      planRun: { id: "plan_provider_unavailable" },
+    } as Parameters<CloudflareContainerOpenTofuRunner["plan"]>[0]);
+  } catch (caught) {
+    error = caught;
+  }
+
+  expect(error).toBeInstanceOf(OpenTofuRunnerExecutionError);
+  expect(error).not.toBeInstanceOf(OpenTofuRunnerInfrastructureError);
+  expect((error as OpenTofuRunnerExecutionError).reason).toBe(
+    "provider_package_unavailable",
+  );
+  expect((error as Error).message).toBe(
+    "runner request failed (provider_package_unavailable)",
+  );
+  expect((error as Error).message).not.toContain("must-not-escape");
+  expect((error as OpenTofuRunnerExecutionError).detail).toContain(
+    "Error: provider request failed",
+  );
+  expect((error as OpenTofuRunnerExecutionError).detail).toContain(
+    "[redacted]",
+  );
+  expect((error as OpenTofuRunnerExecutionError).detail).not.toContain(
+    "must-not-escape",
   );
 });
 

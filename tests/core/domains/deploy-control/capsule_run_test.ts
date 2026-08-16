@@ -6957,8 +6957,11 @@ test("failed provider apply atomically retains partial state, consumes the Plan,
       providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
       diagnostics: [
         {
-          severity: "warning",
-          message: "password=partial-provider-secret apply failed",
+          severity: "error",
+          code: "apply_failed",
+          message: "OpenTofu provider execution failed after dispatch",
+          detail:
+            "Error: SQLiteMigrationSet rejected migration 7 after earlier resources were created password=partial-provider-secret",
         },
       ],
     });
@@ -6978,6 +6981,17 @@ test("failed provider apply atomically retains partial state, consumes the Plan,
   expect(failed.applyRun.outputId).toBeUndefined();
   expect(JSON.stringify(failed.applyRun)).not.toContain(
     "partial-provider-secret",
+  );
+  expect(failed.applyRun.diagnostics).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        severity: "error",
+        code: "apply_failed",
+        detail: expect.stringContaining(
+          "SQLiteMigrationSet rejected migration 7",
+        ),
+      }),
+    ]),
   );
   const partialState = await store.getStateVersion(
     failed.applyRun.stateVersionId!,

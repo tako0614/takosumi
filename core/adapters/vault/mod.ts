@@ -342,6 +342,8 @@ export type VaultFetch = CredentialDriverFetch;
 export interface StaticSecretConnectionVaultDependencies {
   readonly store: OpenTofuControlStore;
   readonly crypto: SecretBoundaryCrypto;
+  /** Immutable, release-owned credentialless connections; never persisted here. */
+  readonly operatorProviderConnections?: readonly ProviderConnection[];
   readonly fetch?: VaultFetch;
   readonly now?: () => Date;
   readonly newId?: () => string;
@@ -386,6 +388,10 @@ export class StaticSecretConnectionVault implements ConnectionVault {
   readonly #runCredentialIssuer?: CredentialRecipeRunCredentialIssuer;
   readonly #sourceCredentialDrivers: SourceCredentialDriverRegistry;
   readonly #allowedProviderConfigUrls: ReadonlySet<string>;
+  readonly #operatorProviderConnections: ReadonlyMap<
+    string,
+    ProviderConnection
+  >;
 
   constructor(deps: StaticSecretConnectionVaultDependencies) {
     this.#store = deps.store;
@@ -393,6 +399,9 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     this.#fetch = deps.fetch ?? ((input, init) => fetch(input, init));
     this.#now = deps.now ?? (() => new Date());
     this.#newId = deps.newId ?? defaultConnectionId;
+    this.#operatorProviderConnections = fixedOperatorConnectionMap(
+      deps.operatorProviderConnections ?? [],
+    );
     // An omitted catalog means no provider recipe is installed. The Vault must
     // never turn a bundled discovery asset into admission authority.
     this.#credentialRecipeResolver =
@@ -863,11 +872,20 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       verifiedAt: verifiedAtIso,
       updatedAt: verifiedAtIso,
     };
+    if (this.#operatorProviderConnections.has(connection.id)) {
+      return { status: "verified" };
+    }
     await this.#store.putConnection(verifiedConnection);
     return { status: "verified" };
   }
 
   async revoke(id: string): Promise<boolean> {
+    if (this.#operatorProviderConnections.has(id)) {
+      throw new ConnectionVaultError(
+        "failed_precondition",
+        `connection ${id} is owned by the running release and cannot be revoked through the runtime API`,
+      );
+    }
     const existed = await this.#store.getConnection(id);
     await this.#store.deleteSecretBlob(id);
     const deleted = await this.#store.deleteConnection(id);
@@ -951,7 +969,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       requireNonEmpty(entry.provider, "provider");
       requireNonEmpty(entry.connectionId, "connectionId");
       // Re-validate the id like #connectionPool: existence + Workspace ownership.
-      const connection = await this.#store.getConnection(entry.connectionId);
+      const connection = await this.#connectionById(entry.connectionId);
       if (!connection) {
         throw new ConnectionVaultError(
           "not_found",
@@ -1077,7 +1095,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
   ): Promise<readonly ProviderConnection[]> {
     const pool: ProviderConnection[] = [];
     for (const id of connectionIds) {
-      const connection = await this.#store.getConnection(id);
+      const connection = await this.#connectionById(id);
       if (!connection) {
         throw new ConnectionVaultError(
           "not_found",
@@ -1249,7 +1267,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
   }
 
   async #requireConnection(id: string): Promise<ProviderConnection> {
-    const connection = await this.#store.getConnection(id);
+    const connection = await this.#connectionById(id);
     if (!connection) {
       throw new ConnectionVaultError("not_found", `connection ${id} not found`);
     }
@@ -1258,6 +1276,12 @@ export class StaticSecretConnectionVault implements ConnectionVault {
 
   async #markConnectionExpired(connection: ProviderConnection): Promise<void> {
     if (connection.status === "expired") return;
+    if (this.#operatorProviderConnections.has(connection.id)) {
+      throw new ConnectionVaultError(
+        "failed_precondition",
+        `release-owned connection ${connection.id} cannot be mutated at runtime`,
+      );
+    }
     const nowIso = this.#now().toISOString();
     const expiredConnection: ProviderConnection = {
       ...connection,
@@ -1304,6 +1328,9 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       )
     ) {
       return await this.#openProviderSecretMaterial(connection);
+    }
+    if (this.#operatorProviderConnections.has(connection.id)) {
+      return { env: {}, files: [] };
     }
     const unexpected = await this.#store.getSecretBlob(connection.id);
     if (unexpected) {
@@ -1431,7 +1458,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     }
     return async (request) => {
       const exactRequest = exactRunCredentialIssueRequest(request);
-      const currentConnection = await this.#store.getConnection(connection.id);
+      const currentConnection = await this.#connectionById(connection.id);
       const canonicalBoundProvider = canonicalProviderSource(
         connection.provider,
       );
@@ -1464,7 +1491,9 @@ export class StaticSecretConnectionVault implements ConnectionVault {
           "credential_service_unavailable",
         );
       }
-      const unexpected = await this.#store.getSecretBlob(connection.id);
+      const unexpected = this.#operatorProviderConnections.has(connection.id)
+        ? undefined
+        : await this.#store.getSecretBlob(connection.id);
       if (unexpected) {
         throw new ConnectionVaultError(
           "failed_precondition",
@@ -1510,6 +1539,35 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       ? this.#credentialDrivers[credentialRecipeDriverKey(recipe)]
       : undefined;
   }
+
+  async #connectionById(
+    id: string,
+  ): Promise<ProviderConnection | undefined> {
+    return (
+      this.#operatorProviderConnections.get(id) ??
+      (await this.#store.getConnection(id))
+    );
+  }
+}
+
+function fixedOperatorConnectionMap(
+  connections: readonly ProviderConnection[],
+): ReadonlyMap<string, ProviderConnection> {
+  const result = new Map<string, ProviderConnection>();
+  for (const connection of connections) {
+    if (!isWorkspaceBindableOperatorConnection(connection)) {
+      throw new TypeError(
+        `operator Provider Connection ${connection.id} must be a verified workspace-bindable run-issued connection`,
+      );
+    }
+    if (result.has(connection.id)) {
+      throw new TypeError(
+        `operator Provider Connection id ${connection.id} must be unique`,
+      );
+    }
+    result.set(connection.id, Object.freeze({ ...connection }));
+  }
+  return result;
 }
 
 function mergeCredentialEnv(

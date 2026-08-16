@@ -1,5 +1,10 @@
 import { expect, test } from "bun:test";
-import { deployControlServiceOptions } from "../../../worker/src/deploy_control_seam.ts";
+import {
+  cachedDeployControlService,
+  cachedRunOwnerDeployControlService,
+  cachedServiceAttempt,
+  deployControlServiceOptions,
+} from "../../../worker/src/deploy_control_seam.ts";
 import {
   platformResourceCapsuleOwnerResolver,
   TAKOSUMI_INTERNAL_RESOURCE_CAPSULE_OWNER_HEADER,
@@ -9,6 +14,86 @@ import {
   createDefaultRunnerProfiles,
   type OpenTofuRunner,
 } from "../../../core/domains/deploy-control/mod.ts";
+
+test("actual deploy and RunOwner wrappers evict rejected composition attempts", async () => {
+  for (const create of [
+    cachedDeployControlService,
+    cachedRunOwnerDeployControlService,
+  ]) {
+    // Force the composition seam to reject before any D1/bootstrap side effect.
+    // Both wrappers still exercise their real per-environment cache and retry
+    // identity; the generic helper test below covers the underlying factory
+    // call count and stale-generation fence.
+    const env = {
+      TAKOSUMI_RESOURCE_FORM_TRANSITION_HOST: {},
+    } as Parameters<typeof create>[0];
+    const first = create(env);
+    expect(create(env)).toBe(first);
+    await expect(first).rejects.toThrow(
+      "Resource Form transition host and evidence ports must be composed together",
+    );
+
+    const retry = create(env);
+    expect(retry).not.toBe(first);
+    await expect(retry).rejects.toThrow(
+      "Resource Form transition host and evidence ports must be composed together",
+    );
+  }
+});
+
+test("deploy and RunOwner service caches evict rejected attempts but share pending ones", async () => {
+  for (const cacheKind of ["deploy", "run-owner"] as const) {
+    const cache = new WeakMap<object, Promise<{ readonly generation: number }>>();
+    const env = {};
+    let attempts = 0;
+    let rejectFirst: ((error: unknown) => void) | undefined;
+    const firstPending = new Promise<{ readonly generation: number }>(
+      (_, reject) => {
+        rejectFirst = reject;
+      },
+    );
+    const first = cachedServiceAttempt(cache, env, async () => {
+      attempts += 1;
+      return await firstPending;
+    });
+    expect(cachedServiceAttempt(cache, env, async () => ({ generation: 99 }))).toBe(
+      first,
+    );
+    await Promise.resolve();
+    expect(attempts).toBe(1);
+
+    rejectFirst!(new Error(`${cacheKind} bootstrap failed`));
+    await first.catch((error) => expect(error).toBeInstanceOf(Error));
+
+    const retry = cachedServiceAttempt(cache, env, async () => {
+      attempts += 1;
+      return { generation: 2 };
+    });
+    expect(retry).not.toBe(first);
+    expect(cachedServiceAttempt(cache, env, async () => ({ generation: 99 }))).toBe(
+      retry,
+    );
+    await expect(retry).resolves.toEqual({ generation: 2 });
+    expect(attempts).toBe(2);
+
+    // Simulate a future generation reset racing the stale rejection. The old
+    // attempt must not delete the newer cache entry.
+    const fencedEnv = {};
+    let rejectStale: ((error: unknown) => void) | undefined;
+    const stalePending = new Promise<{ readonly generation: number }>(
+      (_, reject) => {
+        rejectStale = reject;
+      },
+    );
+    const stale = cachedServiceAttempt(cache, fencedEnv, async () => stalePending);
+    await Promise.resolve();
+    const newer = Promise.resolve({ generation: 3 });
+    cache.set(fencedEnv, newer);
+    rejectStale!(new Error("stale generation"));
+    await stale.catch((error) => expect(error).toBeInstanceOf(Error));
+    expect(cache.get(fencedEnv)).toBe(newer);
+  }
+});
 
 test("Worker composition accepts explicit host RunnerProfiles and executors", () => {
   const reference = createDefaultRunnerProfiles(1)[0]!;

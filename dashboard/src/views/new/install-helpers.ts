@@ -8,8 +8,12 @@
  * store-input defaulting rules the one-tap install path relies on.
  */
 import {
+  compareInstallConfigDeploymentProfiles,
+  installConfigDeploymentProfileSetIsValid,
+  isInstallConfigDeploymentProfile,
   normalizeInstallConfigSourcePath,
   normalizeInstallConfigSourceUrl,
+  type InstallConfigDeploymentProfile,
   type JsonValue,
 } from "takosumi-contract";
 import {
@@ -57,6 +61,15 @@ interface EnvVariableRow {
 }
 
 type StoreMetadata = NonNullable<InstallConfig["store"]>;
+type StoreDeploymentProfile = InstallConfigDeploymentProfile;
+type StoreDeploymentProfileCatalog =
+  | { readonly status: "none" | "legacy"; readonly profiles: readonly [] }
+  | { readonly status: "invalid"; readonly profiles: readonly [] }
+  | {
+      readonly status: "ready";
+      readonly profiles: readonly StoreDeploymentProfile[];
+      readonly preselectedKey?: string;
+    };
 
 const DEFAULT_STORE_BADGE = {
   ja: "追加候補",
@@ -918,6 +931,39 @@ function storeInstallConfigsForSource(
 }
 
 /**
+ * Public-safe profile projection for one canonical product listing. The
+ * returned objects contain label/description and opaque ordering only; module,
+ * provider, environment, and InstallConfig identity stay outside the UI model.
+ */
+function storeDeploymentProfileCatalogForSource(
+  configs: readonly InstallConfig[],
+  url: string,
+): StoreDeploymentProfileCatalog {
+  const matches = storeInstallConfigsForSource(configs, url);
+  if (matches.length === 0) return { status: "none", profiles: [] };
+  const rawProfiles = matches.map(
+    (config) => config.store?.deploymentProfile as unknown,
+  );
+  const profiles = rawProfiles.filter(isInstallConfigDeploymentProfile);
+  if (profiles.length === 0 && matches.length === 1) {
+    return { status: "legacy", profiles: [] };
+  }
+  if (
+    profiles.length !== matches.length ||
+    !installConfigDeploymentProfileSetIsValid(profiles)
+  ) {
+    return { status: "invalid", profiles: [] };
+  }
+  const sorted = [...profiles].sort(compareInstallConfigDeploymentProfiles);
+  const preselectedKey = sorted.find((profile) => profile.recommended)?.key;
+  return {
+    status: "ready",
+    profiles: sorted,
+    ...(preselectedKey !== undefined ? { preselectedKey } : {}),
+  };
+}
+
+/**
  * Store navigation may resolve exactly one explicitly Store-eligible,
  * service-owned InstallConfig by repository URL. Direct Git imports keep their
  * independent URL/path selector; a Store listing may never choose that generic
@@ -1116,6 +1162,8 @@ export type {
   InputVariableRow,
   EnvVariableRow,
   StoreMetadata,
+  StoreDeploymentProfile,
+  StoreDeploymentProfileCatalog,
   StoreEntry,
   StoreInputField,
   StoreInstallFeature,
@@ -1193,6 +1241,7 @@ export {
   storeSourceMatchesListing,
   storeSourceMatchesCoordinate,
   storeInstallConfigsForSource,
+  storeDeploymentProfileCatalogForSource,
   uniqueStoreInstallConfigForSource,
   storeMetadataFromStoreListing,
   storeEntryIdFromStoreListing,

@@ -12,6 +12,7 @@
 import {
   Archive,
   Clock3,
+  CloudCog,
   History,
   LayoutGrid,
   Link2,
@@ -49,6 +50,12 @@ export type ManageDestination = ShellNavItem & {
  * old top-level nav — every capability stays reachable, none were removed.
  */
 export const MANAGE_DESTINATIONS: readonly ManageDestination[] = [
+  {
+    href: "/settings/manage/hosted-resources",
+    labelKey: "nav.hostedResources",
+    descriptionKey: "settings.manage.hostedResources",
+    icon: CloudCog,
+  },
   {
     href: "/workloads",
     labelKey: "nav.workloads",

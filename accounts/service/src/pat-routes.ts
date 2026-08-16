@@ -1,13 +1,17 @@
 import {
   TAKOSUMI_ACCOUNTS_CURRENT_PAT_AUTHORITY_KIND,
   TAKOSUMI_ACCOUNTS_PAT_INVENTORY_KIND,
+  TAKOSUMI_ACCOUNTS_PAT_SCOPE_CATALOG_KIND,
   TAKOSUMI_ACCOUNTS_PAT_SCOPES,
+  TAKOSUMI_ACCOUNTS_EXTENSION_SELF_SERVICE_PAT_SCOPES,
   TAKOSUMI_ACCOUNTS_SELF_SERVICE_PAT_SCOPES,
   type TakosumiAccountsCurrentPatAuthorityResponse,
   type TakosumiAccountsPatInventoryResponse,
   type TakosumiAccountsPatInventoryToken,
   type TakosumiAccountsPatMetadata,
   type TakosumiAccountsPatScope,
+  type TakosumiAccountsPatScopeCatalogEntry,
+  type TakosumiAccountsPatScopeCatalogResponse,
   type TakosumiAccountsWorkspaceRole,
   type TakosumiSubject,
 } from "@takosjp/takosumi-accounts-contract";
@@ -55,6 +59,102 @@ const PAT_INVENTORY_DEFAULT_LIMIT = 50;
 const PAT_INVENTORY_MAX_LIMIT = 100;
 const PAT_INVENTORY_CURSOR_KIND =
   "takosumi.account-pat-inventory-cursor@v1" as const;
+
+/**
+ * Return the effective account-session-grantable PAT scope set. Core
+ * read/write scopes are always present; extension scopes are accepted only
+ * after the composition root has validated their explicit metadata.
+ */
+export function personalAccessTokenSelfServiceScopes(
+  extensionScopes: readonly TakosumiAccountsPatScope[] = [],
+): readonly TakosumiAccountsPatScope[] {
+  assertExtensionSelfServicePatScopes(extensionScopes);
+  const requested = new Set<string>([
+    ...TAKOSUMI_ACCOUNTS_SELF_SERVICE_PAT_SCOPES,
+    ...extensionScopes,
+  ]);
+  return TAKOSUMI_ACCOUNTS_PAT_SCOPES.filter((scope) => requested.has(scope));
+}
+
+function assertExtensionSelfServicePatScopes(
+  scopes: readonly TakosumiAccountsPatScope[],
+): void {
+  const allowed = TAKOSUMI_ACCOUNTS_EXTENSION_SELF_SERVICE_PAT_SCOPES as readonly string[];
+  for (const scope of scopes) {
+    if (!allowed.includes(scope)) {
+      throw new TypeError(
+        `unsupported self-service PAT scope ${String(scope)}`,
+      );
+    }
+  }
+}
+
+const PERSONAL_ACCESS_TOKEN_SCOPE_CATALOG_METADATA: Readonly<
+  Record<
+    TakosumiAccountsPatScope,
+    Omit<TakosumiAccountsPatScopeCatalogEntry, "scope" | "selfService">
+  >
+> = {
+  read: {
+    label: { ja: "読み取り", en: "Read" },
+    description: {
+      ja: "読み取り専用の既存アカウント API にアクセスします。",
+      en: "Read-only access to legacy account APIs.",
+    },
+    workspaceBinding: "optional",
+  },
+  write: {
+    label: { ja: "書き込み", en: "Write" },
+    description: {
+      ja: "既存アカウント API の読み取りと書き込みにアクセスします。",
+      en: "Read and write access to legacy account APIs.",
+    },
+    workspaceBinding: "optional",
+  },
+  admin: {
+    label: { ja: "管理者", en: "Administrator" },
+    description: {
+      ja: "オペレーター発行の管理者権限です。セルフサービスでは付与できません。",
+      en: "Operator-issued administrator authority; unavailable to self-service PATs.",
+    },
+    workspaceBinding: "optional",
+  },
+  "resources:read": {
+    label: { ja: "ホストリソースの読み取り", en: "Hosted resource read" },
+    description: {
+      ja: "指定した Workspace のホストリソース一覧を読み取ります。",
+      en: "Read hosted-resource inventory for one bound Workspace.",
+    },
+    workspaceBinding: "required",
+  },
+};
+
+export function personalAccessTokenScopeCatalog(
+  extensionScopes: readonly TakosumiAccountsPatScope[] = [],
+): readonly TakosumiAccountsPatScopeCatalogEntry[] {
+  const selfService = new Set(
+    personalAccessTokenSelfServiceScopes(extensionScopes),
+  );
+  return TAKOSUMI_ACCOUNTS_PAT_SCOPES.map((scope) => ({
+    scope,
+    ...PERSONAL_ACCESS_TOKEN_SCOPE_CATALOG_METADATA[scope],
+    selfService: selfService.has(scope),
+  }));
+}
+
+export async function handlePersonalAccessTokenScopeCatalog(input: {
+  readonly request: Request;
+  readonly store: AccountsStore;
+  readonly extensionScopes?: readonly TakosumiAccountsPatScope[];
+}): Promise<Response> {
+  const session = await requireAccountSession(input);
+  if (!session.ok) return session.response;
+  const body: TakosumiAccountsPatScopeCatalogResponse = {
+    kind: TAKOSUMI_ACCOUNTS_PAT_SCOPE_CATALOG_KIND,
+    scopes: personalAccessTokenScopeCatalog(input.extensionScopes),
+  };
+  return json(body);
+}
 
 export async function handlePersonalAccessTokenInventory(input: {
   readonly request: Request;
@@ -613,6 +713,7 @@ export async function handleCreatePersonalAccessToken(input: {
   store: AccountsStore;
   operations?: ControlPlaneOperations;
   resolveOperations?: () => Promise<ControlPlaneOperations | undefined>;
+  extensionScopes?: readonly TakosumiAccountsPatScope[];
 }): Promise<Response> {
   const session = await requireAccountSession(input);
   if (!session.ok) return session.response;
@@ -639,7 +740,7 @@ export async function handleCreatePersonalAccessToken(input: {
   if (
     scopes.some(
       (scope) =>
-        !(TAKOSUMI_ACCOUNTS_SELF_SERVICE_PAT_SCOPES as readonly string[]).includes(
+        !personalAccessTokenSelfServiceScopes(input.extensionScopes).includes(
           scope,
         ),
     )
@@ -648,6 +749,13 @@ export async function handleCreatePersonalAccessToken(input: {
       "insufficient_scope",
       "admin scope cannot be granted by the self-service token endpoint",
       403,
+    );
+  }
+  if (scopes.includes("resources:read") && !workspaceId) {
+    return errorJson(
+      "invalid_request",
+      "resources:read personal access tokens require workspace_id",
+      400,
     );
   }
   if (workspaceId) {

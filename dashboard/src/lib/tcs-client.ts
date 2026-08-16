@@ -98,14 +98,10 @@ export interface TcsServerInfo {
 
 export interface TcsPageQuery {
   readonly sort?: TcsSort;
-  readonly q?: string;
   readonly cursor?: string;
   readonly limit?: number;
   readonly signal?: AbortSignal;
 }
-
-/** Thrown when a node does not implement search (501 not_implemented). */
-export class TcsNotSupportedError extends Error {}
 
 function joinBase(base: string, path: string): string {
   return `${base.replace(/\/+$/, "")}${path}`;
@@ -114,9 +110,9 @@ function joinBase(base: string, path: string): string {
 /**
  * TCS v2 is the canonical read surface. During the wire migration an older
  * node may expose only v1, so a missing v2 route gets one read-only fallback.
- * We intentionally do not fall back for a live v2 response (including 405),
- * a server error, or a 501 search result:
- * those statuses describe a live v2 endpoint and must retain their meaning.
+ * We intentionally do not fall back for a live v2 response (including 405)
+ * or a server error: those statuses describe a live v2 endpoint and must
+ * retain their meaning.
  */
 async function fetchTcsRead(
   base: string,
@@ -156,19 +152,15 @@ export async function fetchTcsListingsPage(
   }
   if (query.limit) params.set("limit", String(query.limit));
   if (query.cursor) params.set("cursor", query.cursor);
-  const path = query.q ? "/tcs/v2/listings/search" : "/tcs/v2/listings";
-  if (query.q) params.set("q", query.q);
   const queryString = params.toString();
   const res = await fetchTcsRead(
     base,
-    `${path}${queryString ? `?${queryString}` : ""}`,
+    `/tcs/v2/listings${queryString ? `?${queryString}` : ""}`,
     {
       headers: { accept: "application/json" },
       signal: query.signal,
     },
   );
-  if (res.status === 501)
-    throw new TcsNotSupportedError("search not supported");
   if (!res.ok) throw new Error(`listings ${res.status}`);
   return sanitizeTcsListingsPage((await res.json()) as TcsListingsPage);
 }

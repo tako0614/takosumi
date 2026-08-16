@@ -6,6 +6,7 @@ import {
   providerNameFromDiagnostic,
   isSafePlainEnvName,
   storeDefaultInputValue,
+  storeDeploymentProfileCatalogForSource,
   storeEntryFromStoreListing,
   storeMetadataFromStoreListing,
   storeInstallConfigsForSource,
@@ -130,6 +131,128 @@ describe("repository sourceBuild preview", () => {
 });
 
 describe("store install metadata", () => {
+  test("sorts opaque deployment profiles and fails closed on ambiguous groups", () => {
+    const profileConfig = (input: {
+      readonly id: string;
+      readonly key: string;
+      readonly order: number;
+      readonly recommended: boolean;
+    }) =>
+      installConfig({
+        id: input.id,
+        sourceSelector: {
+          url: "https://example.test/example.git",
+          path: ".",
+        },
+        modulePath: `deploy/${input.key}`,
+        store: {
+          source: {
+            url: "https://example.test/example.git",
+            path: ".",
+          },
+          order: 1,
+          surface: "service",
+          kind: "app",
+          provider: "must-not-be-projected",
+          suggestedName: "example",
+          badge: { ja: "追加", en: "Install" },
+          name: { ja: "Example", en: "Example" },
+          description: { ja: "Example", en: "Example" },
+          deploymentProfile: {
+            key: input.key,
+            label: { ja: input.key, en: input.key },
+            description: { ja: `${input.key} 説明`, en: `${input.key} detail` },
+            order: input.order,
+            recommended: input.recommended,
+          },
+        },
+      });
+    const managed = profileConfig({
+      id: "cfg-managed",
+      key: "managed-v1",
+      order: 20,
+      recommended: true,
+    });
+    const byoc = profileConfig({
+      id: "cfg-byoc",
+      key: "byoc-v1",
+      order: 10,
+      recommended: false,
+    });
+
+    expect(
+      storeDeploymentProfileCatalogForSource(
+        [byoc, managed],
+        "https://example.test/example.git",
+      ),
+    ).toEqual({
+      status: "ready",
+      preselectedKey: "managed-v1",
+      profiles: [
+        managed.store!.deploymentProfile,
+        byoc.store!.deploymentProfile,
+      ],
+    });
+    expect(
+      JSON.stringify(
+        storeDeploymentProfileCatalogForSource(
+          [byoc, managed],
+          "https://example.test/example.git",
+        ),
+      ),
+    ).not.toContain("must-not-be-projected");
+
+    expect(
+      storeDeploymentProfileCatalogForSource(
+        [managed, { ...byoc, store: { ...byoc.store!, deploymentProfile: {
+          ...byoc.store!.deploymentProfile!,
+          key: "managed-v1",
+        } } }],
+        "https://example.test/example.git",
+      ).status,
+    ).toBe("invalid");
+    expect(
+      storeDeploymentProfileCatalogForSource(
+        [
+          { ...managed, store: { ...managed.store!, deploymentProfile: {
+            ...managed.store!.deploymentProfile!,
+            recommended: false,
+          } } },
+          byoc,
+        ],
+        "https://example.test/example.git",
+      ).status,
+    ).toBe("invalid");
+  });
+
+  test("keeps an unprofiled single Store config on the legacy path", () => {
+    const legacy = installConfig({
+      id: "cfg-legacy",
+      sourceSelector: {
+        url: "https://example.test/example.git",
+        path: ".",
+      },
+      store: {
+        source: { url: "https://example.test/example.git", path: "." },
+        order: 1,
+        surface: "service",
+        kind: "app",
+        provider: "example",
+        suggestedName: "example",
+        badge: { ja: "追加", en: "Install" },
+        name: { ja: "Example", en: "Example" },
+        description: { ja: "Example", en: "Example" },
+      },
+    });
+
+    expect(
+      storeDeploymentProfileCatalogForSource(
+        [legacy],
+        "https://example.test/example.git",
+      ),
+    ).toEqual({ status: "legacy", profiles: [] });
+  });
+
   test("matches Store metadata by canonical repository URL only", () => {
     const listing: TcsListing = {
       id: "publisher/example",

@@ -9,6 +9,11 @@ the former commercial billing persistence after host extensions became its
 sole owner. Migration `035` persists the optional upstream profile image used
 by ordinary OAuth UserInfo responses. Migration `036` adds the
 timestamp-and-primary-key indexes used by bounded refresh-chain retention.
+Migration `037` adds a `NOT VALID` PAT scope admission check for the
+workspace-bound `resources:read` authority without rewriting stored rows.
+Migration `038` validates that check in its own transaction while the legacy
+check remains active. Migration `039` then removes the superseded check in a
+separate short transaction; the validated v2 constraint remains in place.
 
 - **Substrate**: Postgres (the `node-postgres` reference distribution and any
   compatible operator deployment).

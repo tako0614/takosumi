@@ -9,6 +9,10 @@ import {
   CloudflareD1OpenTofuControlStore,
   ensureD1OpenTofuLedgerSchema,
 } from "../../../worker/src/d1_opentofu_store.ts";
+import {
+  acquireControlD1MaintenanceFence,
+  releaseControlD1MaintenanceFence,
+} from "../../../worker/src/d1_schema_maintenance.ts";
 import { createWorkerServiceApp } from "../../../worker/src/worker_service.ts";
 import { SqliteFakeD1 } from "../../helpers/deploy-control/sqlite_fake_d1.ts";
 
@@ -73,6 +77,22 @@ test("cached Worker composition exposes WorkspaceViews with one fresh request ad
 test("predeployed schema proof completes at composition and stays outside cold and warm view reads", async () => {
   const raw = new SqliteFakeD1();
   await ensureD1OpenTofuLedgerSchema(raw);
+  const fence = await acquireControlD1MaintenanceFence(
+    raw,
+    {
+      sourceCommit: "a".repeat(40),
+      manifestDigest: `sha256:${"b".repeat(64)}`,
+      environment: "workspace-view-composition-test",
+      databaseRole: "in_place",
+      releasePolicy: "in_place",
+    },
+    "2026-08-05T00:00:00.000Z",
+  );
+  await releaseControlD1MaintenanceFence(
+    raw,
+    fence,
+    "2026-08-05T00:01:00.000Z",
+  );
   const seededStore = new CloudflareD1OpenTofuControlStore(raw);
   await seededStore.putWorkspace({
     id: "workspace_predeployed_view",
@@ -107,7 +127,10 @@ test("predeployed schema proof completes at composition and stays outside cold a
       page: { limit: 25 },
     });
     expect(schemaReadinessQueryCount(db.preparedQueries)).toBe(0);
-    expect(db.maintenanceReads).toBe(request + 1);
+    // Predeployed mode keeps both the request admission and the Workspace
+    // record in a co-read maintenance snapshot. Neither read reopens the
+    // schema proof after composition.
+    expect(db.maintenanceReads).toBe((request + 1) * 2);
   }
 });
 

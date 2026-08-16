@@ -451,12 +451,52 @@ describe("Vault run-issued credential recipe", () => {
       expect((error as Error).message).toMatch(/credential driver failed/);
     }
   });
+
+  test("mints a release-owned connection without a durable connection or secret row", async () => {
+    const fixed: ProviderConnection = {
+      id: "conn_release_owned",
+      provider: PROVIDER,
+      providerSource: PROVIDER,
+      scope: "operator",
+      status: "verified",
+      materialization: "run-issued",
+      envNames: ["RUN_CREDENTIAL_TOKEN"],
+      credentialRecipe: {
+        id: "run-issued",
+        authMode: "broker",
+        envNames: ["RUN_CREDENTIAL_TOKEN"],
+        fileEnvNames: [],
+        requiredEnvGroups: [],
+        preRunAction: "issue_run_credential",
+        runIssuance: RUN_ISSUANCE,
+      },
+      createdAt: "1970-01-01T00:00:00.000Z",
+      updatedAt: "1970-01-01T00:00:00.000Z",
+      verifiedAt: "1970-01-01T00:00:00.000Z",
+    };
+    const { store, vault } = fixture(validDriver(), {
+      operatorProviderConnections: [fixed],
+    });
+    await seedRunningPlan(store);
+
+    expect(await vault.test(fixed.id)).toEqual({ status: "verified" });
+    const bundle = await vault.mintForCapsuleProviderBindings(
+      "workspace_1",
+      [{ provider: PROVIDER, connectionId: fixed.id }],
+      { phase: "plan", capsuleId: "capsule_1", runId: "plan_1" },
+    );
+    expect(bundle.env).toEqual({ RUN_CREDENTIAL_TOKEN: "issued:plan_1" });
+    expect(await store.getConnection(fixed.id)).toBeUndefined();
+    expect(await store.getSecretBlob(fixed.id)).toBeUndefined();
+    await expect(vault.revoke(fixed.id)).rejects.toThrow(/running release/);
+  });
 });
 
 function fixture(
   driver: CredentialRecipeRuntimeDriver,
   options: {
     readonly runCredentialIssuer?: CredentialRecipeRunCredentialIssuer | null;
+    readonly operatorProviderConnections?: readonly ProviderConnection[];
   } = {},
 ): {
   readonly store: InMemoryOpenTofuControlStore;
@@ -489,6 +529,7 @@ function fixture(
       [credentialRecipeDriverKey({ id: "run-issued", authMode: "broker" })]:
         driver,
     },
+    operatorProviderConnections: options.operatorProviderConnections ?? [],
     ...(options.runCredentialIssuer !== null
       ? {
           runCredentialIssuer:

@@ -832,6 +832,98 @@ test("maintenance release accepts missing transport meta only with the exact dur
   });
 });
 
+test("predeployed exact Workspace reads readiness and data in one statement", async () => {
+  const db = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(db);
+  const initialFence = await acquireControlD1MaintenanceFence(
+    db,
+    {
+      sourceCommit: "a".repeat(40),
+      manifestDigest: `sha256:${"b".repeat(64)}`,
+      environment: "test",
+      databaseRole: "in_place",
+      releasePolicy: "in_place",
+    },
+    "2026-08-15T00:00:00.000Z",
+  );
+  await releaseControlD1MaintenanceFence(
+    db,
+    initialFence,
+    "2026-08-15T00:00:01.000Z",
+  );
+  const workspace = {
+    id: "ws_exact_batched",
+    handle: "exact-batched",
+    displayName: "Exact batched",
+    ownerUserId: "account_exact_batched",
+    createdAt: "2026-08-15T00:00:00.000Z",
+    updatedAt: "2026-08-15T00:00:00.000Z",
+  };
+  await db
+    .prepare(
+      `insert into workspaces
+         (id, handle, record_json, created_at, updated_at)
+       values (?, ?, ?, ?, ?)`,
+    )
+    .bind(
+      workspace.id,
+      workspace.handle,
+      JSON.stringify(workspace),
+      workspace.createdAt,
+      workspace.updatedAt,
+    )
+    .run();
+  let prepareCalls = 0;
+  let batchCalls = 0;
+  const queries: string[] = [];
+  const observed: D1Database = {
+    prepare(query) {
+      prepareCalls += 1;
+      queries.push(query);
+      return db.prepare(query);
+    },
+    async batch(statements) {
+      batchCalls += 1;
+      return await db.batch(statements);
+    },
+  };
+
+  const firstStore = createCloudflareD1OpenTofuControlStore(observed, {
+    schemaMode: "predeployed",
+  });
+  expect(await firstStore.getWorkspace(workspace.id)).toEqual(workspace);
+
+  const secondStore = createCloudflareD1OpenTofuControlStore(observed, {
+    schemaMode: "predeployed",
+  });
+  expect(await secondStore.getWorkspace(workspace.id)).toEqual(workspace);
+  expect(prepareCalls).toBe(2);
+  expect(batchCalls).toBe(0);
+  expect(queries[0]).toContain("pragma_table_info('schema_migrations')");
+  expect(queries[0]).toContain("FROM workspaces");
+  expect(queries[1]).not.toContain("pragma_table_info('schema_migrations')");
+
+  await acquireControlD1MaintenanceFence(
+    db,
+    {
+      sourceCommit: "a".repeat(40),
+      manifestDigest: `sha256:${"b".repeat(64)}`,
+      environment: "test",
+      databaseRole: "in_place",
+      releasePolicy: "in_place",
+    },
+    "2026-08-15T00:01:00.000Z",
+  );
+  const fencedStore = createCloudflareD1OpenTofuControlStore(observed, {
+    schemaMode: "predeployed",
+  });
+  await expect(fencedStore.getWorkspace(workspace.id)).rejects.toThrow(
+    "maintenance_fence_active",
+  );
+  expect(prepareCalls).toBe(3);
+  expect(batchCalls).toBe(0);
+});
+
 test("predeployed account Workspace page reads readiness, total, and data in one statement", async () => {
   const db = new SqliteFakeD1();
   await ensureD1OpenTofuLedgerSchema(db);

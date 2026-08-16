@@ -289,6 +289,11 @@ export interface CreateSourceCompatibilityCheckRequest {
    * validated result after the exact report succeeds.
    */
   readonly compileInstallUx?: boolean;
+  /**
+   * Opaque DB-owned deployment-profile equality key consumed only by the
+   * authenticated Accounts compiler. It is never forwarded to Core analysis.
+   */
+  readonly deploymentProfileKey?: string;
   readonly capsuleName?: string;
 }
 

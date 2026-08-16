@@ -67,6 +67,12 @@ function isImmutableSourceRevision(value: string): boolean {
   return IMMUTABLE_SOURCE_REVISION.test(value);
 }
 
+function shouldScheduleAutoSync(source: StoredSource): boolean {
+  if (source.status !== "active" || !source.autoSync) return false;
+  if (!isImmutableSourceRevision(source.defaultRef)) return true;
+  return !sameGitRef(source.defaultRef, source.lastSeenCommit);
+}
+
 function sameGitRef(left: unknown, right: unknown): boolean {
   return (
     typeof left === "string" &&
@@ -284,14 +290,16 @@ export class SourcesService {
 
   /**
    * Scheduler scan: active sources whose autoSync flag is set, capped at
-   * `limit`. Returns the public Source records (the scheduler only needs the id).
+   * `limit`. An exact commit remains eligible until one successful sync records
+   * that same commit; after that, polling could not discover a newer revision.
+   * Returns the public Source records (the scheduler only needs the id).
    */
   async listAutoSyncSources(limit: number): Promise<readonly Source[]> {
     const rows = await this.#store.listSources();
     const out: Source[] = [];
     for (const row of rows) {
       if (out.length >= limit) break;
-      if (row.status === "active" && row.autoSync) {
+      if (shouldScheduleAutoSync(row)) {
         out.push(toPublicSource(row));
       }
     }
@@ -306,7 +314,7 @@ export class SourcesService {
     const page = await this.#store.listAllSourcesPage(params);
     return {
       items: page.items
-        .filter((row) => row.status === "active" && row.autoSync)
+        .filter(shouldScheduleAutoSync)
         .map(toPublicSource),
       ...(page.nextCursor === undefined ? {} : { nextCursor: page.nextCursor }),
     };

@@ -2,7 +2,6 @@ import type {
   TakosumiAccountsPatScope,
   TakosumiSubject,
 } from "@takosjp/takosumi-accounts-contract";
-import { TAKOSUMI_ACCOUNTS_CAPSULE_OAUTH_SCOPES } from "@takosjp/takosumi-accounts-contract";
 import type { AccountsStore } from "./store.ts";
 import {
   errorJson,
@@ -20,7 +19,11 @@ import {
 
 export const TAKOSUMI_ACCOUNTS_SESSION_ME_PATH = "/v1/account/session/me";
 
-export type AccountsBearerRequiredScope = "read" | "write" | "admin";
+export type AccountsBearerRequiredScope =
+  | "read"
+  | "write"
+  | "admin"
+  | "resources:read";
 
 export type AccountsBearerSubject = {
   readonly subject: TakosumiSubject;
@@ -461,7 +464,8 @@ export async function requireAccountsBearer(input: {
 
 function oauthScopeForRequiredAccess(
   required: AccountsBearerRequiredScope,
-): (typeof TAKOSUMI_ACCOUNTS_CAPSULE_OAUTH_SCOPES)[number] {
+): string {
+  if (required === "resources:read") return "resources:read";
   return required === "read" ? "capsules:read" : "capsules:write";
 }
 
@@ -471,6 +475,7 @@ function oauthAccessTokenHasScope(
 ): boolean {
   if (required === "admin") return false;
   const scopes = new Set(scope.split(/\s+/u).filter(Boolean));
+  if (required === "resources:read") return scopes.has("resources:read");
   if (scopes.has("capsules:write")) return true;
   return required === "read" && scopes.has("capsules:read");
 }

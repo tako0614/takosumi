@@ -37,6 +37,52 @@ describe("single-screen install surface", () => {
     expect(view).not.toContain("checkingCompatibility() || !provider");
   });
 
+  test("preparation is bounded, names its current stage, and can be cancelled", () => {
+    const view = read("dashboard/src/views/new/InstallView.tsx");
+    expect(view).toContain("INSTALL_PREPARATION_TIMEOUT_MS");
+    expect(view).toContain("const preparationTimeout = setTimeout(");
+    expect(view).toContain("preparationTimedOut = true;");
+    expect(view).toContain("const preparationDeadlineAt =");
+    expect(view).toContain("timeoutMs: INSTALL_PREPARATION_TIMEOUT_MS");
+    expect(view).toContain("deadlineAt: preparationDeadlineAt");
+    expect(view).toContain("sourceAuthConnectionId().length > 0");
+    expect(view).toContain("includeSourceConnections");
+    expect(view).toContain("Promise.resolve([] as ProviderConnection[])");
+    expect(view).toContain("listConnectionsWithSignal(workspace, signal)");
+    expect(view).toContain(
+      "listReleaseOwnedProviderConnectionsWithSignal(workspace, signal)",
+    );
+    expect(view).toContain("...all.filter(isProviderConnectionCandidate)");
+    expect(view).toContain("...releaseOwnedProviders");
+    expect(view).toContain("onSourceSyncProgress:");
+    expect(view).toContain("onSourceSnapshot:");
+    expect(view).toContain("preparationStageHint()");
+    expect(view).toContain("activePreparationController?.abort()");
+    expect(view).toContain("clearTimeout(preparationTimeout)");
+    expect(view).toContain('t("common.cancel")');
+  });
+
+  test("does not claim no Source exists after an indeterminate Source create", () => {
+    const view = read("dashboard/src/views/new/InstallView.tsx");
+    expect(view).toContain("SourceCreateIndeterminateError");
+    expect(view).toContain("ControlApiIndeterminateError");
+    expect(view).toContain('cause.operation === "source_create"');
+    expect(view).toContain("setSourceCreateReconciliationToken(cause.reconciliationToken)");
+    expect(view).toContain("sourceCreateReconciliationToken:");
+    expect(view).toContain('t("installStore.sourceRegistrationUnconfirmed")');
+    expect(view).toContain('t("installStore.sourceBaselineUnavailable")');
+  });
+
+  test("public Git discovery never waits for the optional source credential inventory", () => {
+    const view = read("dashboard/src/views/new/InstallView.tsx");
+    expect(view).toContain(
+      "sourceAuthConnectionId().length > 0",
+    );
+    expect(view).not.toContain(
+      "listing() === null,\n      );",
+    );
+  });
+
   test("authoritative refs stay exact and prepared state is invalidated by edits", () => {
     const view = read("dashboard/src/views/new/InstallView.tsx");
     expect(view).not.toContain("refInputValue(");
@@ -45,6 +91,7 @@ describe("single-screen install surface", () => {
     expect(view).toContain("ref: gitRef().trim()");
     expect(view).toContain("setCapsuleId(undefined)");
     expect(view).toContain("setPlanRunId(undefined)");
+    expect(view).toContain("setSourceCreateReconciliationToken(undefined)");
     expect(view).toContain("resetPreparedSource();");
   });
 
@@ -55,7 +102,19 @@ describe("single-screen install surface", () => {
     expect(view).toContain('throw new Error(t("workspace.selectMessage"));');
     expect(view).not.toContain('phase() !== "configure" && connectionsLoaded()');
     expect(view).toContain("const prepareInstall = async () =>");
-    expect(view).toContain("const providers = await loadConnections(workspace);");
+    expect(view).toContain("const providersResult = loadConnections(");
+    expect(view).toContain("const providerResult = await providersResult;");
+  });
+
+  test("validates persisted Workspace selection before scoped connection reads", () => {
+    const view = read("dashboard/src/views/new/InstallView.tsx");
+    const ensureStart = view.indexOf("const ensureWorkspace = async");
+    const ensureEnd = view.indexOf("const loadConnections = async", ensureStart);
+    const ensureSource = view.slice(ensureStart, ensureEnd);
+    expect(ensureSource).toContain("const workspaces = await listWorkspacesCached()");
+    expect(ensureSource).toContain("selectAvailableWorkspaceId(");
+    expect(ensureSource).toContain("currentWorkspaceId(),");
+    expect(ensureSource).not.toContain("if (workspaceId()) {");
   });
 
   test("only ready compatibility can reach Capsule creation", () => {
@@ -63,11 +122,65 @@ describe("single-screen install surface", () => {
     expect(view).toContain('if (result.level !== "ready")');
     expect(view).toContain('if (checked.level !== "ready")');
     expect(view.indexOf('if (result.level !== "ready")')).toBeLessThan(
-      view.indexOf("const config = await getInstallConfig(configId)"),
+      view.indexOf("const config = await getInstallConfig(configId"),
     );
     expect(view.indexOf('if (checked.level !== "ready")')).toBeLessThan(
       view.indexOf("const capsule = await createCapsule"),
     );
+  });
+
+  test("aborted InstallConfig preparation returns to configure before mutations", () => {
+    const view = read("dashboard/src/views/new/InstallView.tsx");
+    const configRead =
+      'const config = await getInstallConfig(configId, {\n        signal: controller.signal,\n      });';
+    expect(view).toContain(configRead);
+    expect(view).toContain(
+      'preparationTimedOut ? t("installStore.preparingTimeout") : undefined',
+    );
+    expect(view.indexOf(configRead)).toBeLessThan(
+      view.indexOf("const capsule = await createCapsule"),
+    );
+    expect(view.indexOf(configRead)).toBeLessThan(
+      view.indexOf("const envelope = await planCapsule"),
+    );
+  });
+
+  test("repository install compilation is independent from Store discovery", () => {
+    const view = read("dashboard/src/views/new/InstallView.tsx");
+    expect(view).toContain("compileInstallUx: true");
+    expect(view).not.toContain("compileInstallUx: listing() !== null");
+    expect(view).not.toContain(
+      "!listing()\n          ? { installConfigId: DEFAULT_CAPSULE_INSTALL_CONFIG_ID }",
+    );
+  });
+
+  test("requires visible confirmation of the DB-owned deployment profile", () => {
+    const view = read("dashboard/src/views/new/InstallView.tsx");
+    expect(view).toContain("listInstallConfigs(undefined, { view: STORE_VIEW })");
+    expect(view).toContain("storeDeploymentProfileCatalogForSource");
+    expect(view).toContain("selectedDeploymentProfileKey");
+    expect(view).toContain("deploymentProfileConfirmed");
+    expect(view).toContain('t("installStore.deploymentProfileConfirm")');
+    expect(view).toContain("deploymentProfileKey:");
+    expect(view).not.toContain("profile.modulePath");
+    expect(view).not.toContain("profile.provider");
+  });
+
+  test("switching deployment profile clears every derived authority row", () => {
+    const view = read("dashboard/src/views/new/InstallView.tsx");
+    const switchStart = view.indexOf("const switchDeploymentProfile =");
+    const switchEnd = view.indexOf("const prepareInstall =", switchStart);
+    const switchSource = view.slice(switchStart, switchEnd);
+    expect(switchSource).toContain("resetPreparedSource();");
+    for (const reset of [
+      "setCompatibility(undefined)",
+      "setInstallConfig(undefined)",
+      "setProviderRows([])",
+      "setStoreValues({})",
+      "setStoreInputTouched({})",
+    ]) {
+      expect(view).toContain(reset);
+    }
   });
 
   test("discloses persisted sourceBuild before the Plan starts", () => {

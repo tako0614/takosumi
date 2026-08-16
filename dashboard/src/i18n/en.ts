@@ -22,6 +22,19 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.select": "Choose this",
   "installStore.configureHint":
     "Confirm the name and add. Repository analysis happens next.",
+  "installStore.deploymentProfileTitle": "Hosting option",
+  "installStore.deploymentProfileHint":
+    "Choose where this service runs, then confirm the selection.",
+  "installStore.deploymentProfileChoose": "Choose a hosting option",
+  "installStore.deploymentProfileRecommended": "Recommended",
+  "installStore.deploymentProfileConfirm":
+    "I confirm this hosting option",
+  "installStore.deploymentProfileRequired":
+    "Choose and confirm a hosting option before adding the service.",
+  "installStore.deploymentProfileLoading":
+    "Loading available hosting options.",
+  "installStore.deploymentProfileUnavailable":
+    "Takosumi could not safely determine this service's hosting options.",
   "installStore.name": "Service name",
   "installStore.sourceDetails": "Source details",
   "installStore.sourceUrl": "Git URL",
@@ -31,8 +44,19 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.publicSource": "Public repository",
   "installStore.add": "Add",
   "installStore.preparing": "Preparing your service",
-  "installStore.preparingHint":
-    "Checking the repository and gathering only the connections and changes it needs.",
+  "installStore.preparingWorkspace": "Confirming the selected workspace.",
+  "installStore.preparingConnections": "Reading available connections.",
+  "installStore.preparingSource": "Fetching the repository snapshot.",
+  "installStore.preparingCompatibility":
+    "Checking the repository against this environment.",
+  "installStore.preparingConfig": "Preparing the service setup fields.",
+  "installStore.preparingPlan": "Preparing the reviewable change plan.",
+  "installStore.preparingTimeout":
+    "Preparation took too long. Service deploy did not start, and Source registration could not be confirmed. Verify the Source before trying again.",
+  "installStore.sourceRegistrationUnconfirmed":
+    "Service deploy did not start. Source registration could not be confirmed. Retry Add only to reconcile this exact attempt; do not start a new Source.",
+  "installStore.sourceBaselineUnavailable":
+    "Service deploy did not start. The Source baseline could not be read, so registration could not begin. Try again after the Source list is available.",
   "installStore.compatibilityFailed":
     "This service cannot be added to the current environment.",
   "installStore.providerTitle": "A connection is needed",
@@ -140,6 +164,7 @@ export const en: Record<keyof typeof ja, string> = {
   "nav.notifications": "Notifications",
   "nav.workspaceSettings": "Workspace settings",
   "nav.account": "Account",
+  "nav.hostedResources": "Hosted resources",
   "nav.docs": "Docs",
   "nav.backToTakos": "Back to Takos",
   "nav.deployContext": "Service hosting",
@@ -181,6 +206,36 @@ export const en: Record<keyof typeof ja, string> = {
     "Access and sharing, keys, backups, and policy",
   "settings.manage.backups": "Create and restore restore points",
   "settings.manage.shares": "Manage values shared between services",
+  "settings.manage.hostedResources":
+    "Review resources managed by the hosted environment",
+
+  // --- hosted resources ----------------------------------------------------
+  "hostedResources.title": "Hosted resources",
+  "hostedResources.subtitle":
+    "Review resources managed for the selected workspace. Changes go through a workload plan.",
+  "hostedResources.unavailableTitle": "Hosted resources are unavailable",
+  "hostedResources.unavailableMessage":
+    "This Takosumi environment does not provide the hosted-resource inventory.",
+  "hostedResources.workspaceRequired": "Select a workspace",
+  "hostedResources.workspaceRequiredMessage":
+    "Choose a workspace before viewing its resources.",
+  "hostedResources.loadError":
+    "Hosted resources could not be loaded. Please try again in a moment.",
+  "hostedResources.emptyTitle": "No hosted resources",
+  "hostedResources.emptyMessage":
+    "This workspace does not have any hosted resources yet.",
+  "hostedResources.loadMore": "Load more",
+  "hostedResources.loading": "Loading hosted resources…",
+  "hostedResources.column.kind": "Kind",
+  "hostedResources.column.name": "Name",
+  "hostedResources.column.status": "Status",
+  "hostedResources.column.generation": "Generation",
+  "hostedResources.column.workload": "Workload",
+  "hostedResources.openWorkload": "Open workload",
+  "hostedResources.status.ready": "Ready",
+  "hostedResources.status.needsAttention": "Needs attention",
+  "hostedResources.status.pending": "In progress",
+  "hostedResources.status.unknown": "Status unavailable",
 
   // --- workspace switcher -------------------------------------------------------
   "workspace.label": "Your workspaces",
@@ -1146,11 +1201,16 @@ export const en: Record<keyof typeof ja, string> = {
   "account.apiKeys.expiresLabel": "Expires in",
   "account.apiKeys.expiresDays": "{days} days",
   "account.apiKeys.scopes": "Permissions",
-  "account.apiKeys.scope.read": "Read",
-  "account.apiKeys.scope.write": "Write",
-  "account.apiKeys.scope.admin": "Admin",
   "account.apiKeys.scopesHint":
     "Choose only what this key needs. Administrative access is operator-issued and cannot be created here.",
+  "account.apiKeys.scopeCatalog.loading": "Loading available permissions…",
+  "account.apiKeys.scopeCatalog.loadFailed":
+    "Available permissions could not be loaded. Key creation is disabled until they are available.",
+  "account.apiKeys.scopeCatalog.retry": "Retry permissions",
+  "account.apiKeys.scopeCatalog.empty":
+    "This environment does not advertise any permissions that can be granted here.",
+  "account.apiKeys.scopeCatalog.workspaceRequired":
+    "Select a workspace before creating a key with this permission.",
   "account.apiKeys.restrictWorkspace":
     "Restrict this key to the current Workspace",
   "account.apiKeys.create": "Create API key",
