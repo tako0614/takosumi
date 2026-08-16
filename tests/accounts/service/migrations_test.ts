@@ -156,6 +156,15 @@ test("PAT scope widening validates before removing the legacy check", async () =
   const drop = await readMigration(
     "039_drop_personal_access_tokens_legacy_scope_check.sql",
   );
+  const addAi = await readMigration(
+    "040_personal_access_tokens_ai_scopes.sql",
+  );
+  const validateAi = await readMigration(
+    "041_validate_personal_access_tokens_ai_scopes.sql",
+  );
+  const dropV2 = await readMigration(
+    "042_drop_personal_access_tokens_scopes_v2_check.sql",
+  );
 
   expect(add).toContain(
     "ADD CONSTRAINT personal_access_tokens_scopes_v2_check CHECK",
@@ -181,6 +190,23 @@ test("PAT scope widening validates before removing the legacy check", async () =
   );
   expect(drop).not.toContain("IF EXISTS");
   expect(drop).not.toContain("VALIDATE CONSTRAINT");
+
+  expect(addAi).toContain(
+    "ADD CONSTRAINT personal_access_tokens_scopes_v3_check CHECK",
+  );
+  for (const scope of ["ai.models.read", "ai.chat", "ai.embeddings"]) {
+    expect(addAi).toContain(scope);
+  }
+  expect(addAi).toContain(") NOT VALID;");
+  expect(addAi).not.toContain("DROP CONSTRAINT");
+  expect(validateAi).toContain(
+    "VALIDATE CONSTRAINT personal_access_tokens_scopes_v3_check",
+  );
+  expect(validateAi).not.toContain("DROP CONSTRAINT");
+  expect(dropV2).toContain(
+    "DROP CONSTRAINT personal_access_tokens_scopes_v2_check;",
+  );
+  expect(dropV2).not.toContain("IF EXISTS");
 });
 
 interface AppliedCatalogFixture {

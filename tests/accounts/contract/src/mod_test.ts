@@ -71,6 +71,9 @@ test("account token contract exposes the Accounts PAT route surface", () => {
     "write",
     "admin",
     "resources:read",
+    "ai.models.read",
+    "ai.chat",
+    "ai.embeddings",
   ]);
   expect(TAKOSUMI_ACCOUNTS_SELF_SERVICE_PAT_SCOPES).toEqual(["read", "write"]);
   expect(TAKOSUMI_ACCOUNTS_ACCOUNT_TOKENS_PATH).toEqual("/v1/account/tokens");

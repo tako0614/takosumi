@@ -32,6 +32,52 @@ test("extension self-service PAT scopes require explicit metadata", () => {
   ]);
 });
 
+test("AI request scopes are self-service only when the owning route declares them", () => {
+  const aiDescriptor = {
+    basePath: "/gateway/ai/v1",
+    handlerKey: "CLOUD_AI_GATEWAY",
+    requestScopeRules: [
+      {
+        path: "/models",
+        methods: ["GET"],
+        requiredScopes: ["ai.models.read"],
+      },
+      {
+        path: "/chat/completions",
+        methods: ["POST"],
+        requiredScopes: ["ai.chat"],
+      },
+      {
+        path: "/embeddings",
+        methods: ["POST"],
+        requiredScopes: ["ai.embeddings"],
+      },
+    ],
+  };
+  const implicit = platformExtensionRoutes({
+    TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([aiDescriptor]),
+  });
+  expect(platformExtensionSelfServicePatScopes(implicit)).toEqual([]);
+
+  const explicit = platformExtensionRoutes({
+    TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
+      {
+        ...aiDescriptor,
+        selfServicePatScopes: [
+          "ai.models.read",
+          "ai.chat",
+          "ai.embeddings",
+        ],
+      },
+    ]),
+  });
+  expect(platformExtensionSelfServicePatScopes(explicit)).toEqual([
+    "ai.models.read",
+    "ai.chat",
+    "ai.embeddings",
+  ]);
+});
+
 test("extension self-service PAT metadata rejects unsafe, unknown, unreferenced, and oversize scopes", () => {
   for (const scope of [
     "admin",

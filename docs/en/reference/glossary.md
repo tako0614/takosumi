@@ -69,7 +69,7 @@ docs use a different name, read it back through this table.
 | CredentialRecipe      | A setup aid that collects the environment-variable names and file names each provider needs.             |
 | Secret                | A secret value stored encrypted.                                                                         |
 | secret partition      | The token naming the encryption partition a secret is stored in. You give it when creating a Connection. |
-| personal access token | An API token issued by Accounts. It carries `read` / `write` / `admin` scopes.                           |
+| personal access token | An Accounts API token carrying core scopes or explicitly declared Workspace-bound extension scopes. `admin` remains operator-issued only. |
 
 ## Runtime connections
 

@@ -92,10 +92,17 @@ PAT の公開 Accounts surface は次のとおりです。これらの応答は�
 | メソッド | パス                                  | 認証                               | 説明                                |
 | -------- | ------------------------------------- | ---------------------------------- | ----------------------------------- |
 | GET      | `/v1/account/tokens`                  | account session                    | 互換用の対話的一覧                  |
+| GET      | `/v1/account/tokens/scopes`           | account session                    | 現在の self-service scope catalog   |
 | POST     | `/v1/account/tokens`                  | account session                    | PAT を作成する                      |
 | POST     | `/v1/account/tokens/{tokenId}/revoke` | account session                    | PAT を失効する                      |
 | GET      | `/v1/account/tokens/inventory.v1`     | account session                    | 完全な versioned metadata inventory |
 | GET      | `/v1/account/tokens/current`          | `Authorization: Bearer <PAT>` のみ | 提示した PAT 自身の現在の authority |
+
+scope catalog は core の `read` / `write` と、同じ owning route が
+`selfServicePatScopes` で明示した allowlist 済み extension scope だけを
+self-service として返します。Cloud AI の `ai.models.read` / `ai.chat` /
+`ai.embeddings` と `resources:read` は Workspace binding 必須です。`admin` や
+route が明示していない scope を request scope から推測して公開しません。
 
 `GET /v1/account/tokens/inventory.v1` は既存 dashboard 用一覧を置き換えません。既定
 `limit` は 50、最大は 100 で、`created_at`、次に `token_id` の昇順です。応答 kind は
