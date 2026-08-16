@@ -36,6 +36,8 @@ import {
 import {
   checkCapsuleCompatibility,
   ControlApiError,
+  ControlApiIndeterminateError,
+  SourceCreateIndeterminateError,
   createCapsule,
   createWorkspace,
   extractRunId,
@@ -51,6 +53,7 @@ import {
   type InstallConfig,
   type ProviderBindings,
   type ProviderConnection,
+  type SourceCreateReconciliationToken,
 } from "../../lib/control-api.ts";
 import {
   installConfigRequiresUiSurface,
@@ -254,6 +257,8 @@ function Inner(props: { readonly installingPrincipalId: string }) {
   const [workspaceId, setWorkspaceId] = createSignal(currentWorkspaceId());
   const [workspaceHandle, setWorkspaceHandle] = createSignal<string>();
   const [sourceId, setSourceId] = createSignal<string>();
+  const [sourceCreateReconciliationToken, setSourceCreateReconciliationToken] =
+    createSignal<SourceCreateReconciliationToken>();
   const [sourceAuthConnectionId, setSourceAuthConnectionId] = createSignal("");
   const [sourceConnections, setSourceConnections] = createSignal<
     readonly ProviderConnection[]
@@ -614,6 +619,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
 
   const resetPreparedSource = () => {
     setSourceId(undefined);
+    setSourceCreateReconciliationToken(undefined);
     setCompatibility(undefined);
     setInstallConfig(undefined);
     setStoreEntry(undefined);
@@ -699,6 +705,12 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     // the requested operation, never to the button's enabled state.
     activePreparationController?.abort();
     const controller = new AbortController();
+    // This absolute deadline belongs to the whole preparation operation. The
+    // compatibility client receives the same value so Source create can stop
+    // its mutation window early and retain the final five seconds for
+    // authoritative readback.
+    const preparationDeadlineAt =
+      Date.now() + INSTALL_PREPARATION_TIMEOUT_MS;
     let preparationTimedOut = false;
     const preparationTimeout = setTimeout(() => {
       preparationTimedOut = true;
@@ -749,10 +761,20 @@ function Inner(props: { readonly installingPrincipalId: string }) {
         compileInstallUx: true,
         signal: controller.signal,
         timeoutMs: INSTALL_PREPARATION_TIMEOUT_MS,
+        deadlineAt: preparationDeadlineAt,
+        ...(sourceCreateReconciliationToken()
+          ? {
+              sourceCreateReconciliationToken:
+                sourceCreateReconciliationToken(),
+            }
+          : {}),
         onSourceSyncProgress: () => setPreparationStage("source"),
         onSourceSnapshot: () => setPreparationStage("compatibility"),
         onSourceCreated: (createdSourceId) => {
-          if (workspaceIsCurrent(workspace)) setSourceId(createdSourceId);
+          if (workspaceIsCurrent(workspace)) {
+            setSourceId(createdSourceId);
+            setSourceCreateReconciliationToken(undefined);
+          }
         },
       });
       if (controller.signal.aborted || !workspaceIsCurrent(workspace)) {
@@ -848,7 +870,24 @@ function Inner(props: { readonly installingPrincipalId: string }) {
         await preparePlan(workspace, result, config, rows, undefined);
       }
     } catch (cause) {
-      if (controller.signal.aborted) {
+      if (cause instanceof SourceCreateIndeterminateError) {
+        setSourceCreateReconciliationToken(cause.reconciliationToken);
+        setError(t("installStore.sourceRegistrationUnconfirmed"));
+      } else if (
+        cause instanceof ControlApiError &&
+        cause.code === "source_create_baseline_unavailable"
+      ) {
+        setSourceCreateReconciliationToken(undefined);
+        setError(t("installStore.sourceBaselineUnavailable"));
+      } else if (
+        cause instanceof ControlApiIndeterminateError &&
+        cause.operation === "source_create"
+      ) {
+        // Keep compatibility with a future source-create implementation that
+        // can report indeterminate without this client's reconciliation token.
+        setSourceCreateReconciliationToken(undefined);
+        setError(t("installStore.sourceRegistrationUnconfirmed"));
+      } else if (controller.signal.aborted) {
         setError(
           preparationTimedOut ? t("installStore.preparingTimeout") : undefined,
         );
@@ -1118,6 +1157,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     setModulePath(".");
     setName("");
     setSourceId(undefined);
+    setSourceCreateReconciliationToken(undefined);
     setCompatibility(undefined);
     setInstallConfig(undefined);
     setStoreEntry(undefined);

@@ -39,7 +39,11 @@ export const en: Record<keyof typeof ja, string> = {
   "installStore.preparingConfig": "Preparing the service setup fields.",
   "installStore.preparingPlan": "Preparing the reviewable change plan.",
   "installStore.preparingTimeout":
-    "Preparation took too long. No service was created; try again.",
+    "Preparation took too long. Service deploy did not start, and Source registration could not be confirmed. Verify the Source before trying again.",
+  "installStore.sourceRegistrationUnconfirmed":
+    "Service deploy did not start. Source registration could not be confirmed. Retry Add only to reconcile this exact attempt; do not start a new Source.",
+  "installStore.sourceBaselineUnavailable":
+    "Service deploy did not start. The Source baseline could not be read, so registration could not begin. Try again after the Source list is available.",
   "installStore.compatibilityFailed":
     "This service cannot be added to the current environment.",
   "installStore.providerTitle": "A connection is needed",

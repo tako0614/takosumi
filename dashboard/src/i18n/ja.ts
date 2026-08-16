@@ -44,7 +44,11 @@ export const ja = {
   "installStore.preparingConfig": "サービスの設定項目を準備しています。",
   "installStore.preparingPlan": "確認用の変更内容を準備しています。",
   "installStore.preparingTimeout":
-    "準備に時間がかかりすぎました。サービスは作成されていません。もう一度お試しください。",
+    "準備に時間がかかりすぎました。サービスのデプロイは開始されておらず、Source の登録結果を確認できませんでした。Source を確認してから再試行してください。",
+  "installStore.sourceRegistrationUnconfirmed":
+    "サービスのデプロイは開始されていません。Source の登録結果を確認できませんでした。同じ試行を確認するために「追加」を再実行できますが、新しいSourceは作成しません。",
+  "installStore.sourceBaselineUnavailable":
+    "サービスのデプロイは開始されていません。Source の一覧を確認できなかったため、登録を開始できませんでした。Source 一覧が利用できるようになってから再試行してください。",
   "installStore.compatibilityFailed":
     "このサービスは現在の環境に追加できません。",
   "installStore.providerTitle": "接続が必要です",

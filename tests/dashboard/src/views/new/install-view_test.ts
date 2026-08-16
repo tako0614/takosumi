@@ -42,7 +42,9 @@ describe("single-screen install surface", () => {
     expect(view).toContain("INSTALL_PREPARATION_TIMEOUT_MS");
     expect(view).toContain("const preparationTimeout = setTimeout(");
     expect(view).toContain("preparationTimedOut = true;");
+    expect(view).toContain("const preparationDeadlineAt =");
     expect(view).toContain("timeoutMs: INSTALL_PREPARATION_TIMEOUT_MS");
+    expect(view).toContain("deadlineAt: preparationDeadlineAt");
     expect(view).toContain("sourceAuthConnectionId().length > 0");
     expect(view).toContain("includeSourceConnections");
     expect(view).toContain("Promise.resolve([] as ProviderConnection[])");
@@ -58,6 +60,17 @@ describe("single-screen install surface", () => {
     expect(view).toContain("activePreparationController?.abort()");
     expect(view).toContain("clearTimeout(preparationTimeout)");
     expect(view).toContain('t("common.cancel")');
+  });
+
+  test("does not claim no Source exists after an indeterminate Source create", () => {
+    const view = read("dashboard/src/views/new/InstallView.tsx");
+    expect(view).toContain("SourceCreateIndeterminateError");
+    expect(view).toContain("ControlApiIndeterminateError");
+    expect(view).toContain('cause.operation === "source_create"');
+    expect(view).toContain("setSourceCreateReconciliationToken(cause.reconciliationToken)");
+    expect(view).toContain("sourceCreateReconciliationToken:");
+    expect(view).toContain('t("installStore.sourceRegistrationUnconfirmed")');
+    expect(view).toContain('t("installStore.sourceBaselineUnavailable")');
   });
 
   test("public Git discovery never waits for the optional source credential inventory", () => {
@@ -78,6 +91,7 @@ describe("single-screen install surface", () => {
     expect(view).toContain("ref: gitRef().trim()");
     expect(view).toContain("setCapsuleId(undefined)");
     expect(view).toContain("setPlanRunId(undefined)");
+    expect(view).toContain("setSourceCreateReconciliationToken(undefined)");
     expect(view).toContain("resetPreparedSource();");
   });
 
