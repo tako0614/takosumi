@@ -1551,9 +1551,28 @@ export async function listInstallConfigs(
   );
 }
 
-export async function getInstallConfig(id: string): Promise<InstallConfig> {
+export type GetInstallConfigOptions = {
+  readonly signal?: AbortSignal;
+};
+
+export function getInstallConfig(
+  id: string,
+  options?: GetInstallConfigOptions,
+): Promise<InstallConfig>;
+export function getInstallConfig(
+  id: string,
+  options?: object,
+): Promise<InstallConfig>;
+export async function getInstallConfig(
+  id: string,
+  options?: object,
+): Promise<InstallConfig> {
+  const signal = isRecord(options)
+    ? (options.signal as AbortSignal | undefined)
+    : undefined;
   const body = await controlFetch<{ installConfig: InstallConfig }>(
     `${BASE}/capsule-configs/${encodeURIComponent(id)}`,
+    { signal },
   );
   return body.installConfig;
 }

@@ -806,7 +806,9 @@ function Inner(props: { readonly installingPrincipalId: string }) {
           ? result.repositoryInstallUx.installConfigId
           : (result.installConfigId ?? DEFAULT_CAPSULE_INSTALL_CONFIG_ID);
       setPreparationStage("config");
-      const config = await getInstallConfig(configId);
+      const config = await getInstallConfig(configId, {
+        signal: controller.signal,
+      });
       if (controller.signal.aborted || !workspaceIsCurrent(workspace)) {
         setPhase("configure");
         return;

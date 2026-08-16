@@ -122,10 +122,26 @@ describe("single-screen install surface", () => {
     expect(view).toContain('if (result.level !== "ready")');
     expect(view).toContain('if (checked.level !== "ready")');
     expect(view.indexOf('if (result.level !== "ready")')).toBeLessThan(
-      view.indexOf("const config = await getInstallConfig(configId)"),
+      view.indexOf("const config = await getInstallConfig(configId"),
     );
     expect(view.indexOf('if (checked.level !== "ready")')).toBeLessThan(
       view.indexOf("const capsule = await createCapsule"),
+    );
+  });
+
+  test("aborted InstallConfig preparation returns to configure before mutations", () => {
+    const view = read("dashboard/src/views/new/InstallView.tsx");
+    const configRead =
+      'const config = await getInstallConfig(configId, {\n        signal: controller.signal,\n      });';
+    expect(view).toContain(configRead);
+    expect(view).toContain(
+      'preparationTimedOut ? t("installStore.preparingTimeout") : undefined',
+    );
+    expect(view.indexOf(configRead)).toBeLessThan(
+      view.indexOf("const capsule = await createCapsule"),
+    );
+    expect(view.indexOf(configRead)).toBeLessThan(
+      view.indexOf("const envelope = await planCapsule"),
     );
   });
 
