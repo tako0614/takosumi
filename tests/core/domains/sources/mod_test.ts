@@ -418,6 +418,7 @@ test("listAutoSyncSources returns only active autoSync sources, capped", async (
     status: StoredSource["status"],
     autoSync: boolean,
     defaultRef = "main",
+    lastSeenCommit?: string,
   ) => {
     await store.putSource({
       id,
@@ -431,14 +432,18 @@ test("listAutoSyncSources returns only active autoSync sources, capped", async (
       updatedAt: "2026-06-06T00:00:00.000Z",
       hookSecretHash: "deadbeef",
       autoSync,
+      ...(lastSeenCommit ? { lastSeenCommit } : {}),
     });
   };
   await seed("src_a", "active", true);
   await seed("src_b", "active", false);
   await seed("src_c", "disabled", true);
   await seed("src_d", "active", true, "a".repeat(40));
+  await seed("src_e", "active", true, "b".repeat(40), "b".repeat(40));
+  await seed("src_f", "active", true, "C".repeat(40), "c".repeat(40));
+  await seed("src_g", "active", true, "d".repeat(40), "e".repeat(40));
   const scanned = await service.listAutoSyncSources(50);
-  expect(scanned.map((s) => s.id)).toEqual(["src_a"]);
+  expect(scanned.map((s) => s.id)).toEqual(["src_a", "src_d", "src_g"]);
   expect((await service.listAutoSyncSources(0)).length).toBe(0);
 });
 
@@ -450,6 +455,7 @@ test("listAutoSyncSourcesPage stays bounded while advancing across sparse rows",
     status: StoredSource["status"],
     autoSync: boolean,
     defaultRef = "main",
+    lastSeenCommit?: string,
   ) => {
     await store.putSource({
       id,
@@ -463,9 +469,17 @@ test("listAutoSyncSourcesPage stays bounded while advancing across sparse rows",
       updatedAt: "2026-06-06T00:00:00.000Z",
       hookSecretHash: "deadbeef",
       autoSync,
+      ...(lastSeenCommit ? { lastSeenCommit } : {}),
     });
   };
-  await seed("src_a1", "workspace_1", "active", true, "b".repeat(40));
+  await seed(
+    "src_a1",
+    "workspace_1",
+    "active",
+    true,
+    "b".repeat(40),
+    "b".repeat(40),
+  );
   await seed("src_a2", "workspace_1", "active", true);
   await seed("src_b3", "workspace_2", "disabled", true);
   await seed("src_b4", "workspace_2", "active", true);

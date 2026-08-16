@@ -68,9 +68,9 @@ function isImmutableSourceRevision(value: string): boolean {
 }
 
 function shouldScheduleAutoSync(source: StoredSource): boolean {
-  return source.status === "active" &&
-    source.autoSync &&
-    !isImmutableSourceRevision(source.defaultRef);
+  if (source.status !== "active" || !source.autoSync) return false;
+  if (!isImmutableSourceRevision(source.defaultRef)) return true;
+  return !sameGitRef(source.defaultRef, source.lastSeenCommit);
 }
 
 function sameGitRef(left: unknown, right: unknown): boolean {
