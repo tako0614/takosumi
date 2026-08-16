@@ -75,6 +75,7 @@ export const DASHBOARD_DOCUMENT_ROUTES = [
   "/settings/account",
   "/settings/billing",
   "/settings/manage",
+  "/settings/manage/hosted-resources",
   "/workloads",
   "/new",
   "/install",

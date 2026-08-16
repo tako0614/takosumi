@@ -120,3 +120,44 @@ test("Store icon metadata accepts only safe HTTPS or repository-relative paths",
     expect(store(invalid)).toBeUndefined();
   }
 });
+
+test("Store deployment profiles accept only the exact bounded public shape", () => {
+  const base = {
+    source: { url: "https://github.com/example/app.git", path: "." },
+    order: 1,
+    surface: "apps",
+    kind: "app",
+    provider: "Example",
+    suggestedName: "example",
+    badge: { ja: "例", en: "Example" },
+    name: { ja: "例", en: "Example" },
+    description: { ja: "説明", en: "Description" },
+  };
+  const deploymentProfile = {
+    key: "managed-v1",
+    label: { ja: "おまかせ", en: "Managed" },
+    description: { ja: "Takosumi Cloud", en: "Takosumi Cloud" },
+    order: 10,
+    recommended: true,
+  };
+
+  expect(
+    installConfigStoreValue({ ...base, deploymentProfile }),
+  ).toMatchObject({ deploymentProfile });
+
+  for (const invalid of [
+    { ...deploymentProfile, key: "" },
+    { ...deploymentProfile, key: "   " },
+    { ...deploymentProfile, key: "managed\u0000v1" },
+    { ...deploymentProfile, key: "x".repeat(129) },
+    { ...deploymentProfile, label: { ja: "おまかせ" } },
+    { ...deploymentProfile, description: { ja: "", en: "" } },
+    { ...deploymentProfile, order: Number.POSITIVE_INFINITY },
+    { ...deploymentProfile, recommended: "yes" },
+    { ...deploymentProfile, modulePath: "deploy/managed" },
+  ]) {
+    expect(
+      installConfigStoreValue({ ...base, deploymentProfile: invalid }),
+    ).toBeUndefined();
+  }
+});

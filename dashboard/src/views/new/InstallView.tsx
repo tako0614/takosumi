@@ -42,6 +42,7 @@ import {
   createWorkspace,
   extractRunId,
   getInstallConfig,
+  listInstallConfigs,
   listConnectionsWithSignal,
   listReleaseOwnedProviderConnectionsWithSignal,
   planCapsule,
@@ -49,6 +50,7 @@ import {
   readSourceSnapshotFile,
   readSourceSnapshotPresentationFile,
   resolveStableSourceTag,
+  STORE_VIEW,
   type CapsuleCompatibilityResult,
   type InstallConfig,
   type ProviderBindings,
@@ -108,6 +110,7 @@ import {
   setStoreJsonVariable,
   slugInputValue,
   storeDefaultInputValue,
+  storeDeploymentProfileCatalogForSource,
   storeEntryFromStoreListing,
   storeInputIsDerived,
   storeInputJsonValue,
@@ -127,6 +130,7 @@ import {
   sourceBuildPreview,
   type ProviderConnectionRow,
   type StoreEntry,
+  type StoreDeploymentProfileCatalog,
   type StoreInputField,
   type StoreInstallFeature,
 } from "./install-helpers.ts";
@@ -245,6 +249,17 @@ function Inner(props: { readonly installingPrincipalId: string }) {
         : "browse",
   );
   const [listing, setListing] = createSignal<TcsListing | null>(null);
+  const [deploymentProfileCatalog, setDeploymentProfileCatalog] =
+    createSignal<StoreDeploymentProfileCatalog>({
+      status: "none",
+      profiles: [],
+    });
+  const [selectedDeploymentProfileKey, setSelectedDeploymentProfileKey] =
+    createSignal("");
+  const [deploymentProfileConfirmed, setDeploymentProfileConfirmed] =
+    createSignal(false);
+  const [deploymentProfilesLoading, setDeploymentProfilesLoading] =
+    createSignal(false);
   const [gitUrl, setGitUrl] = createSignal(initial?.git ?? "");
   // Keep the authoritative ref exactly as supplied. Full commit refs are
   // immutable evidence; shortening them for an input display changes the
@@ -307,6 +322,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
   const [entryEvidence, setEntryEvidence] = createSignal<EntryEvidence>();
   const [interfaceUrl, setInterfaceUrl] = createSignal<string>();
   let completionAttempt = 0;
+  let deploymentProfileLoadAttempt = 0;
   let activePreparationController: AbortController | undefined;
   onCleanup(() => activePreparationController?.abort());
 
@@ -333,6 +349,11 @@ function Inner(props: { readonly installingPrincipalId: string }) {
       ? localizedStoreText(selected.name, selected.suggestedName)[locale()]
       : name() || capsuleNameFromUrl(gitUrl());
   });
+
+  const selectedDeploymentProfile = () =>
+    deploymentProfileCatalog().profiles.find(
+      (profile) => profile.key === selectedDeploymentProfileKey(),
+    );
 
   const sourceCandidates = () =>
     sourceConnections().filter(
@@ -614,6 +635,20 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     if (!CAPSULE_NAME_PATTERN.test(name().trim())) {
       return t("installStore.invalidName");
     }
+    if (listing() && deploymentProfilesLoading()) {
+      return t("installStore.deploymentProfileLoading");
+    }
+    const profiles = deploymentProfileCatalog();
+    if (listing() && profiles.status === "invalid") {
+      return t("installStore.deploymentProfileUnavailable");
+    }
+    if (
+      listing() &&
+      profiles.status === "ready" &&
+      (!selectedDeploymentProfileKey() || !deploymentProfileConfirmed())
+    ) {
+      return t("installStore.deploymentProfileRequired");
+    }
     return undefined;
   };
 
@@ -631,6 +666,41 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     setCapsuleId(undefined);
     setPlanRunId(undefined);
     setInterfaceUrl(undefined);
+  };
+
+  const loadDeploymentProfiles = async (selected: TcsListing) => {
+    const attempt = ++deploymentProfileLoadAttempt;
+    setDeploymentProfilesLoading(true);
+    setDeploymentProfileCatalog({ status: "none", profiles: [] });
+    setSelectedDeploymentProfileKey("");
+    setDeploymentProfileConfirmed(false);
+    try {
+      const configs = await listInstallConfigs(undefined, { view: STORE_VIEW });
+      if (attempt !== deploymentProfileLoadAttempt || listing() !== selected) {
+        return;
+      }
+      const catalog = storeDeploymentProfileCatalogForSource(
+        configs,
+        selected.source.url,
+      );
+      setDeploymentProfileCatalog(catalog);
+      setSelectedDeploymentProfileKey(
+        catalog.status === "ready" ? (catalog.preselectedKey ?? "") : "",
+      );
+      if (catalog.status === "invalid") {
+        setError(t("installStore.deploymentProfileUnavailable"));
+      }
+    } catch {
+      if (attempt !== deploymentProfileLoadAttempt || listing() !== selected) {
+        return;
+      }
+      setDeploymentProfileCatalog({ status: "invalid", profiles: [] });
+      setError(t("installStore.deploymentProfileUnavailable"));
+    } finally {
+      if (attempt === deploymentProfileLoadAttempt) {
+        setDeploymentProfilesLoading(false);
+      }
+    }
   };
 
   // Header workspace changes are reactive. Never let a previously prepared
@@ -663,6 +733,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
   });
 
   const chooseListing = (selected: TcsListing) => {
+    deploymentProfileLoadAttempt += 1;
     resetPreparedSource();
     setListing(selected);
     setGitUrl(selected.source.url);
@@ -673,6 +744,14 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     setEntryEvidence(undefined);
     setError(undefined);
     setPhase("configure");
+    void loadDeploymentProfiles(selected);
+  };
+
+  const switchDeploymentProfile = (key: string) => {
+    resetPreparedSource();
+    setSelectedDeploymentProfileKey(key);
+    setDeploymentProfileConfirmed(false);
+    setError(undefined);
   };
 
   const updateProviderRow = (
@@ -759,6 +838,9 @@ function Inner(props: { readonly installingPrincipalId: string }) {
         // snapshot gets the same repo-owned install compilation, including
         // direct Git and CapsuleSourceOptions handoffs.
         compileInstallUx: true,
+        ...(selectedDeploymentProfileKey()
+          ? { deploymentProfileKey: selectedDeploymentProfileKey() }
+          : {}),
         signal: controller.signal,
         timeoutMs: INSTALL_PREPARATION_TIMEOUT_MS,
         deadlineAt: preparationDeadlineAt,
@@ -1153,7 +1235,12 @@ function Inner(props: { readonly installingPrincipalId: string }) {
 
   const reset = () => {
     completionAttempt += 1;
+    deploymentProfileLoadAttempt += 1;
     setListing(null);
+    setDeploymentProfilesLoading(false);
+    setDeploymentProfileCatalog({ status: "none", profiles: [] });
+    setSelectedDeploymentProfileKey("");
+    setDeploymentProfileConfirmed(false);
     setGitUrl("");
     setGitRef("");
     setModulePath(".");
@@ -1525,6 +1612,67 @@ function Inner(props: { readonly installingPrincipalId: string }) {
               void prepareInstall();
             }}
           >
+            <Show when={listing() && deploymentProfilesLoading()}>
+              <aside class="iv-setup-note" role="status">
+                {t("installStore.deploymentProfileLoading")}
+              </aside>
+            </Show>
+            <Show when={listing() && deploymentProfileCatalog().status === "ready"}>
+              <section
+                class="iv-setup-note"
+                aria-labelledby="iv-deployment-profile-title"
+              >
+                <h3 id="iv-deployment-profile-title">
+                  {t("installStore.deploymentProfileTitle")}
+                </h3>
+                <p>{t("installStore.deploymentProfileHint")}</p>
+                <FormField
+                  label={t("installStore.deploymentProfileTitle")}
+                  required
+                >
+                  <Select
+                    value={selectedDeploymentProfileKey()}
+                    onChange={(event) =>
+                      switchDeploymentProfile(event.currentTarget.value)
+                    }
+                  >
+                    <option value="">
+                      {t("installStore.deploymentProfileChoose")}
+                    </option>
+                    <For each={deploymentProfileCatalog().profiles}>
+                      {(profile) => (
+                        <option value={profile.key}>
+                          {localizedStoreText(profile.label, profile.key)[locale()]}
+                          {profile.recommended
+                            ? ` — ${t("installStore.deploymentProfileRecommended")}`
+                            : ""}
+                        </option>
+                      )}
+                    </For>
+                  </Select>
+                </FormField>
+                <Show when={selectedDeploymentProfile()}>
+                  {(profile) => (
+                    <p>
+                      {
+                        localizedStoreText(
+                          profile().description,
+                          profile().key,
+                        )[locale()]
+                      }
+                    </p>
+                  )}
+                </Show>
+                <Checkbox
+                  checked={deploymentProfileConfirmed()}
+                  disabled={!selectedDeploymentProfileKey()}
+                  label={t("installStore.deploymentProfileConfirm")}
+                  onChange={(event) =>
+                    setDeploymentProfileConfirmed(event.currentTarget.checked)
+                  }
+                />
+              </section>
+            </Show>
             <FormField label={t("installStore.name")} required>
               <Input
                 value={name()}

@@ -1643,6 +1643,8 @@ export interface CheckCapsuleCompatibilityInput {
    * The repository document itself is never returned to this client.
    */
   readonly compileInstallUx?: boolean;
+  /** Opaque DB-owned profile choice; meaningful only with compileInstallUx. */
+  readonly deploymentProfileKey?: string;
   readonly signal?: AbortSignal;
   /**
    * Bounds the complete Source sync and compatibility response. The final
@@ -1724,6 +1726,14 @@ async function checkCapsuleCompatibilityRequest(
   signal: AbortSignal | undefined,
   deadlineAt?: number,
 ): Promise<CapsuleCompatibilityResult> {
+  if (
+    input.deploymentProfileKey !== undefined &&
+    input.compileInstallUx !== true
+  ) {
+    throw new TypeError(
+      "deploymentProfileKey requires repository install UX compilation",
+    );
+  }
   const sourceId =
     input.sourceId ??
     (
@@ -1798,13 +1808,22 @@ async function checkCapsuleCompatibilityRequest(
       // Gate the pre-install check against the selected InstallConfig's policy
       // when one is supplied (the install view passes the Workspace's resolved
       // profile), otherwise fall back to the instance-wide default policy.
-      ...(input.installConfigId
-        ? { installConfigId: input.installConfigId }
-        : {}),
       ...(input.compileInstallUx
-        ? { compileInstallUx: true, capsuleName: input.name }
-        : {}),
-      ...(input.path && input.path !== "." ? { modulePath: input.path } : {}),
+        ? {
+            compileInstallUx: true,
+            capsuleName: input.name,
+            ...(input.deploymentProfileKey !== undefined
+              ? { deploymentProfileKey: input.deploymentProfileKey }
+              : {}),
+          }
+        : {
+            ...(input.installConfigId
+              ? { installConfigId: input.installConfigId }
+              : {}),
+            ...(input.path && input.path !== "."
+              ? { modulePath: input.path }
+              : {}),
+          }),
     },
   });
   const diagnostics: CapsuleCompatibilityDiagnostic[] = (

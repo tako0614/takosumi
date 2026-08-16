@@ -7,6 +7,8 @@ import {
   TAKOSUMI_ACCOUNTS_CURRENT_PAT_AUTHORITY_PATH,
   TAKOSUMI_ACCOUNTS_PAT_INVENTORY_KIND,
   TAKOSUMI_ACCOUNTS_PAT_INVENTORY_PATH,
+  TAKOSUMI_ACCOUNTS_PAT_SCOPE_CATALOG_KIND,
+  TAKOSUMI_ACCOUNTS_PAT_SCOPE_CATALOG_PATH,
   TAKOSUMI_ACCOUNTS_ACCOUNT_TOKENS_PATH,
   TAKOSUMI_ACCOUNTS_PASSKEY_AUTHENTICATE_COMPLETE_PATH,
   TAKOSUMI_ACCOUNTS_PASSKEY_AUTHENTICATE_OPTIONS_PATH,
@@ -64,9 +66,20 @@ test("buildOidcDiscoveryDocument returns stable account endpoints", () => {
 });
 
 test("account token contract exposes the Accounts PAT route surface", () => {
-  expect(TAKOSUMI_ACCOUNTS_PAT_SCOPES).toEqual(["read", "write", "admin"]);
+  expect(TAKOSUMI_ACCOUNTS_PAT_SCOPES).toEqual([
+    "read",
+    "write",
+    "admin",
+    "resources:read",
+  ]);
   expect(TAKOSUMI_ACCOUNTS_SELF_SERVICE_PAT_SCOPES).toEqual(["read", "write"]);
   expect(TAKOSUMI_ACCOUNTS_ACCOUNT_TOKENS_PATH).toEqual("/v1/account/tokens");
+  expect(TAKOSUMI_ACCOUNTS_PAT_SCOPE_CATALOG_PATH).toEqual(
+    "/v1/account/tokens/scopes",
+  );
+  expect(TAKOSUMI_ACCOUNTS_PAT_SCOPE_CATALOG_KIND).toEqual(
+    "takosumi.account-pat-scope-catalog@v1",
+  );
   expect(TAKOSUMI_ACCOUNTS_CURRENT_PAT_AUTHORITY_PATH).toEqual(
     "/v1/account/tokens/current",
   );

@@ -51,6 +51,9 @@ const ShellLayout = lazy(
 const AppListView = lazy(() => import("./views/apps/AppListView.tsx"));
 const SettingsView = lazy(() => import("./views/settings/SettingsView.tsx"));
 const ManageView = lazy(() => import("./views/settings/ManageView.tsx"));
+const HostedResourcesView = lazy(
+  () => import("./views/settings/HostedResourcesView.tsx"),
+);
 const WorkloadListView = lazy(
   () => import("./views/apps/WorkloadListView.tsx"),
 );
@@ -175,6 +178,7 @@ function App() {
         <Route path="/settings/account" component={AccountView} />
         <Route path="/settings/billing" component={BillingView} />
         <Route path="/settings/manage" component={ManageView} />
+        <Route path="/settings/manage/hosted-resources" component={HostedResourcesView} />
         <Route path="/workloads" component={WorkloadListView} />
         <Route path="/new" component={InstallView} />
         <Route path="/install" component={InstallEntryRoute} />

@@ -10,7 +10,7 @@ test("Resource dashboard surface is no longer mounted or advertised", () => {
   const nav = source("views/account/components/shell/nav.ts");
   const settings = source("views/settings/SettingsView.tsx");
 
-  expect(index).not.toContain("ResourcesView");
+  expect(index).not.toContain('import("./views/resources/ResourcesView.tsx")');
   expect(index).not.toContain("ResourceDetailView");
   expect(index).not.toContain('path="/resources"');
   expect(index).not.toContain('path="/resources/:kind/:name"');

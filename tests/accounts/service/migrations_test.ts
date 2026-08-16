@@ -145,6 +145,44 @@ test("refresh-chain retention has timestamp and primary-key covering indexes", a
   );
 });
 
+test("PAT scope widening validates before removing the legacy check", async () => {
+  const initial = await readMigration("012_personal_access_tokens.sql");
+  const add = await readMigration(
+    "037_personal_access_tokens_resources_read_scope.sql",
+  );
+  const validate = await readMigration(
+    "038_validate_personal_access_tokens_resources_read_scope.sql",
+  );
+  const drop = await readMigration(
+    "039_drop_personal_access_tokens_legacy_scope_check.sql",
+  );
+
+  expect(add).toContain(
+    "ADD CONSTRAINT personal_access_tokens_scopes_v2_check CHECK",
+  );
+  expect(add).toContain("resources:read");
+  expect(add).toContain(") NOT VALID;");
+  expect(add).not.toContain("DROP CONSTRAINT");
+  expect(initial).toContain("personal_access_tokens");
+  expect(initial).toContain("ARRAY['read', 'write', 'admin']::text[]");
+
+  const validationOffset = validate.indexOf(
+    "VALIDATE CONSTRAINT personal_access_tokens_scopes_v2_check",
+  );
+  const dropOffset = drop.indexOf(
+    "DROP CONSTRAINT personal_access_tokens_scopes_check",
+  );
+  expect(validationOffset).toBeGreaterThanOrEqual(0);
+  expect(validate).not.toContain("DROP CONSTRAINT");
+  expect(validate).not.toContain("ADD CONSTRAINT");
+  expect(dropOffset).toBeGreaterThanOrEqual(0);
+  expect(drop).toContain(
+    "DROP CONSTRAINT personal_access_tokens_scopes_check;",
+  );
+  expect(drop).not.toContain("IF EXISTS");
+  expect(drop).not.toContain("VALIDATE CONSTRAINT");
+});
+
 interface AppliedCatalogFixture {
   readonly schemaVersion: number;
   readonly migrations: readonly {

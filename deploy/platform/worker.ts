@@ -33,7 +33,10 @@ import {
   type OidcClientRecord,
   type RefreshChainRetentionRunResult,
 } from "@takosjp/takosumi-accounts-service";
-import { normalizeIssuer } from "@takosjp/takosumi-accounts-contract";
+import {
+  normalizeIssuer,
+  type TakosumiAccountsPatScope,
+} from "@takosjp/takosumi-accounts-contract";
 import {
   measureServerTiming,
   type ServerTimingBucket,
@@ -165,6 +168,7 @@ import {
   matchPlatformExtensionRoute,
   pathIsUnderBase,
   platformExtensionRoutes,
+  platformExtensionSelfServicePatScopes,
   resolvePlatformExtensionRequestScopeRoute,
   type PlatformCompatibilityProfile,
   type PlatformExtensionAuthenticatedContext,
@@ -205,6 +209,7 @@ export {
   pathIsUnderBase,
   platformExtensionBasePathIsReserved,
   platformExtensionRoutes,
+  platformExtensionSelfServicePatScopes,
   resolvePlatformExtensionRequestScopeRoute,
 } from "./platform_extensions.ts";
 export type {
@@ -1230,6 +1235,25 @@ export async function repairPlatformInterfaceProjections(
   };
 }
 
+function platformExtensionSelfServicePatScopesForAccounts(
+  env: CloudflareWorkerEnv,
+): readonly TakosumiAccountsPatScope[] {
+  try {
+    const routes = platformExtensionRoutes(
+      env as unknown as { readonly [key: string]: unknown },
+    );
+    return platformExtensionSelfServicePatScopes(
+      routes.filter((route) => platformExtensionRouteConfigured(env, route)),
+    ).filter((scope): scope is TakosumiAccountsPatScope =>
+      scope === "resources:read",
+    );
+  } catch {
+    // The platform router fails closed on malformed extension configuration;
+    // do not let an invalid descriptor widen the account PAT authority.
+    return [];
+  }
+}
+
 const accountsWorker = createCloudflareWorker<CloudflareWorkerEnv>({
   // The session-authed `/api/v1/*` dashboard surface reads the canonical
   // in-process operations facade adapted to the `ControlPlaneOperations`
@@ -1239,6 +1263,8 @@ const accountsWorker = createCloudflareWorker<CloudflareWorkerEnv>({
   // not initialize the full deploy-control service or run schema/bootstrap.
   patWorkspaceMembershipReader: (env) =>
     createCloudflareD1PatWorkspaceMembershipReader(env.TAKOSUMI_CONTROL_DB),
+  personalAccessTokenSelfServiceScopes: (env) =>
+    platformExtensionSelfServicePatScopesForAccounts(env),
 });
 
 export default {
@@ -3494,6 +3520,7 @@ export interface PlatformExtensionCatalogItem {
   readonly compatibilityProfiles?: readonly PlatformCompatibilityProfile[];
   readonly authMode?: "platform" | "handler";
   readonly requiredScopes?: readonly string[];
+  readonly selfServicePatScopes?: readonly string[];
   readonly requestScopeRules?: PlatformExtensionRoute["requestScopeRules"];
   readonly workspaceContext?: "query-required" | "query-optional";
   readonly contributions?: readonly PlatformExtensionContribution[];
@@ -3528,6 +3555,9 @@ export function platformExtensionCatalog(
       : {}),
     ...(route.authMode ? { authMode: route.authMode } : {}),
     ...(route.requiredScopes ? { requiredScopes: route.requiredScopes } : {}),
+    ...(route.selfServicePatScopes
+      ? { selfServicePatScopes: route.selfServicePatScopes }
+      : {}),
     ...(route.requestScopeRules
       ? { requestScopeRules: route.requestScopeRules }
       : {}),

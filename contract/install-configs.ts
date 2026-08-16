@@ -316,6 +316,110 @@ export interface InstallConfigStoreText {
   readonly en: string;
 }
 
+export const INSTALL_CONFIG_DEPLOYMENT_PROFILE_KEY_MAX_LENGTH = 128;
+
+/**
+ * Public, DB-owned choice shown after a product listing has been selected.
+ * `key` is an opaque equality token; clients must not infer provider, module,
+ * or environment semantics from it.
+ */
+export interface InstallConfigDeploymentProfile {
+  readonly key: string;
+  readonly label: InstallConfigStoreText;
+  readonly description: InstallConfigStoreText;
+  readonly order: number;
+  readonly recommended: boolean;
+}
+
+/** Runtime guard shared by request parsing and public dashboard projections. */
+export function isInstallConfigDeploymentProfile(
+  value: unknown,
+): value is InstallConfigDeploymentProfile {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Readonly<Record<string, unknown>>;
+  if (!hasExactKeys(record, [
+    "key",
+    "label",
+    "description",
+    "order",
+    "recommended",
+  ])) {
+    return false;
+  }
+  return (
+    isInstallConfigDeploymentProfileKey(record.key) &&
+    isExactInstallConfigStoreText(record.label) &&
+    isExactInstallConfigStoreText(record.description) &&
+    typeof record.order === "number" &&
+    Number.isFinite(record.order) &&
+    typeof record.recommended === "boolean"
+  );
+}
+
+export function isInstallConfigDeploymentProfileKey(
+  value: unknown,
+): value is string {
+  return (
+    typeof value === "string" &&
+    value.trim().length > 0 &&
+    value.length <= INSTALL_CONFIG_DEPLOYMENT_PROFILE_KEY_MAX_LENGTH &&
+    !/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/u.test(value)
+  );
+}
+
+/** More than one profile is valid only with unique keys and one recommendation. */
+export function installConfigDeploymentProfileSetIsValid(
+  profiles: readonly InstallConfigDeploymentProfile[],
+): boolean {
+  if (!profiles.every(isInstallConfigDeploymentProfile)) return false;
+  if (new Set(profiles.map((profile) => profile.key)).size !== profiles.length) {
+    return false;
+  }
+  return (
+    profiles.length <= 1 ||
+    profiles.filter((profile) => profile.recommended).length === 1
+  );
+}
+
+export function compareInstallConfigDeploymentProfiles(
+  left: InstallConfigDeploymentProfile,
+  right: InstallConfigDeploymentProfile,
+): number {
+  if (left.recommended !== right.recommended) {
+    return left.recommended ? -1 : 1;
+  }
+  const order = left.order - right.order;
+  if (order !== 0) return order;
+  return left.key < right.key ? -1 : left.key > right.key ? 1 : 0;
+}
+
+function isExactInstallConfigStoreText(
+  value: unknown,
+): value is InstallConfigStoreText {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Readonly<Record<string, unknown>>;
+  return (
+    hasExactKeys(record, ["ja", "en"]) &&
+    typeof record.ja === "string" &&
+    record.ja.trim().length > 0 &&
+    record.ja.length <= 500 &&
+    typeof record.en === "string" &&
+    record.en.trim().length > 0 &&
+    record.en.length <= 500
+  );
+}
+
+function hasExactKeys(
+  record: Readonly<Record<string, unknown>>,
+  expected: readonly string[],
+): boolean {
+  const keys = Object.keys(record);
+  return (
+    keys.length === expected.length &&
+    expected.every((key) => Object.prototype.hasOwnProperty.call(record, key))
+  );
+}
+
 /**
  * Open presentation hint token. The bundled dashboard enhances known hints
  * and safely renders unknown operator-installed hints as a generic input;
@@ -502,6 +606,8 @@ export interface InstallConfigVariablePresentation {
  */
 export interface InstallConfigStoreMetadata {
   readonly source?: InstallConfigStoreSource;
+  /** DB-owned install choice under one canonical product listing. */
+  readonly deploymentProfile?: InstallConfigDeploymentProfile;
   readonly order: number;
   readonly surface: InstallConfigStoreSurface;
   readonly kind: InstallConfigStoreKind;

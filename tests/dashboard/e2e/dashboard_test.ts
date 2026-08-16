@@ -1380,6 +1380,79 @@ test.describe("Takosumi dashboard browser surface", () => {
         sourceState.sourceListReads.push(`${path}${url.search}`);
         return route.fulfill({ json: { sources: [] } });
       }
+      if (
+        path === "/api/v1/capsule-configs" &&
+        request.method() === "GET" &&
+        url.search === "?view=store"
+      ) {
+        const profileConfig = (input: {
+          readonly id: string;
+          readonly key: string;
+          readonly label: string;
+          readonly modulePath: string;
+          readonly order: number;
+          readonly recommended: boolean;
+        }) => ({
+          id: input.id,
+          name: input.key,
+          sourceSelector: {
+            url: "https://github.com/example/service.git",
+            path: ".",
+          },
+          modulePath: input.modulePath,
+          variableMapping: {},
+          outputAllowlist: {},
+          policy: {},
+          store: {
+            source: {
+              url: "https://github.com/example/service.git",
+              path: ".",
+            },
+            order: 1,
+            surface: "service",
+            kind: "application",
+            provider: "portable-e2e",
+            suggestedName: "example-service",
+            badge: { ja: "追加", en: "Add" },
+            name: { ja: "Example Service", en: "Example Service" },
+            description: { ja: "Example", en: "Example" },
+            deploymentProfile: {
+              key: input.key,
+              label: { ja: input.label, en: input.label },
+              description: {
+                ja: `${input.label} fixture`,
+                en: `${input.label} fixture`,
+              },
+              order: input.order,
+              recommended: input.recommended,
+            },
+          },
+          createdAt: now,
+          updatedAt: now,
+        });
+        return route.fulfill({
+          json: {
+            installConfigs: [
+              profileConfig({
+                id: "cfg_store_managed_e2e",
+                key: "managed-v1",
+                label: "Takosumi hosted",
+                modulePath: "deploy/managed",
+                order: 20,
+                recommended: true,
+              }),
+              profileConfig({
+                id: "cfg_store_byoc_e2e",
+                key: "byoc-v1",
+                label: "Bring your own cloud",
+                modulePath: "deploy/byoc",
+                order: 10,
+                recommended: false,
+              }),
+            ],
+          },
+        });
+      }
       if (path === "/api/v1/connections") {
         return route.fulfill({ json: { connections: [] } });
       }
@@ -1544,10 +1617,22 @@ test.describe("Takosumi dashboard browser surface", () => {
       tcsListing: "example/service",
     });
     await page.goto(`/new?${handoff}`, { waitUntil: "domcontentloaded" });
-    await page
-      .getByRole("button", { name: /追加|Add/u })
-      .last()
-      .click();
+    const hostingOption = page.getByRole("combobox", {
+      name: /デプロイ方法|Hosting option/u,
+    });
+    await expect(hostingOption).toBeVisible();
+    await expect(hostingOption).toHaveValue("managed-v1");
+    await expect(hostingOption).toContainText(
+      /Takosumi hosted.*おすすめ|Takosumi hosted.*Recommended/u,
+    );
+    await expect(page.getByText("Takosumi hosted fixture", { exact: true })).toBeVisible();
+    const hostingOptionConfirmation = page.getByRole("checkbox", {
+      name: /このデプロイ方法で追加することを確認しました|I confirm this hosting option/u,
+    });
+    await expect(hostingOptionConfirmation).toBeVisible();
+    await expect(hostingOptionConfirmation).not.toBeChecked();
+    await hostingOptionConfirmation.check();
+    await page.getByRole("button", { name: /追加|Add/u }).last().click();
     await expect(
       page.getByRole("heading", { name: /サービスを設定|Set up the service/u }),
     ).toBeVisible();

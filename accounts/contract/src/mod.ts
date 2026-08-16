@@ -13,6 +13,10 @@ export const TAKOSUMI_ACCOUNTS_USERINFO_PATH = "/oauth/userinfo";
 export const TAKOSUMI_ACCOUNTS_REVOKE_PATH = "/oauth/revoke";
 export const TAKOSUMI_ACCOUNTS_INTROSPECT_PATH = "/oauth/introspect";
 export const TAKOSUMI_ACCOUNTS_ACCOUNT_TOKENS_PATH = "/v1/account/tokens";
+export const TAKOSUMI_ACCOUNTS_PAT_SCOPE_CATALOG_PATH =
+  `${TAKOSUMI_ACCOUNTS_ACCOUNT_TOKENS_PATH}/scopes`;
+export const TAKOSUMI_ACCOUNTS_PAT_SCOPE_CATALOG_KIND =
+  "takosumi.account-pat-scope-catalog@v1" as const;
 export const TAKOSUMI_ACCOUNTS_CURRENT_PAT_AUTHORITY_PATH =
   `${TAKOSUMI_ACCOUNTS_ACCOUNT_TOKENS_PATH}/current`;
 export const TAKOSUMI_ACCOUNTS_CURRENT_PAT_AUTHORITY_KIND =
@@ -43,7 +47,12 @@ export const TAKOSUMI_ACCOUNTS_PASSKEY_AUTHENTICATE_OPTIONS_PATH =
   "/v1/auth/passkeys/authenticate/options";
 export const TAKOSUMI_ACCOUNTS_PASSKEY_AUTHENTICATE_COMPLETE_PATH =
   "/v1/auth/passkeys/authenticate/complete";
-export const TAKOSUMI_ACCOUNTS_PAT_SCOPES = ["read", "write", "admin"] as const;
+export const TAKOSUMI_ACCOUNTS_PAT_SCOPES = [
+  "read",
+  "write",
+  "admin",
+  "resources:read",
+] as const;
 /**
  * Scopes an authenticated account session may grant through the public
  * self-service PAT endpoint. `admin` remains a valid persisted/operator-issued
@@ -52,6 +61,15 @@ export const TAKOSUMI_ACCOUNTS_PAT_SCOPES = ["read", "write", "admin"] as const;
 export const TAKOSUMI_ACCOUNTS_SELF_SERVICE_PAT_SCOPES = [
   "read",
   "write",
+] as const;
+/**
+ * PAT scopes that an explicitly composed platform extension may add to the
+ * authenticated self-service creation/catalog seam. Core account scopes stay
+ * in `TAKOSUMI_ACCOUNTS_SELF_SERVICE_PAT_SCOPES`; this list is intentionally
+ * closed until each new authority has a matching route/storage contract.
+ */
+export const TAKOSUMI_ACCOUNTS_EXTENSION_SELF_SERVICE_PAT_SCOPES = [
+  "resources:read",
 ] as const;
 
 export const TAKOSUMI_ACCOUNTS_CAPSULE_OAUTH_SCOPES = [
@@ -90,6 +108,21 @@ export interface TakosumiAccountsPatMetadata {
   expires_at?: string;
   revoked_at?: string;
   last_used_at?: string;
+}
+
+/** Safe, non-secret PAT scope metadata returned to an authenticated account. */
+export interface TakosumiAccountsPatScopeCatalogEntry {
+  readonly scope: TakosumiAccountsPatScope;
+  readonly label: Readonly<{ ja: string; en: string }>;
+  readonly description: Readonly<{ ja: string; en: string }>;
+  readonly selfService: boolean;
+  readonly workspaceBinding: "optional" | "required";
+}
+
+/** Safe, non-secret PAT scope catalog returned to an authenticated account. */
+export interface TakosumiAccountsPatScopeCatalogResponse {
+  readonly kind: typeof TAKOSUMI_ACCOUNTS_PAT_SCOPE_CATALOG_KIND;
+  readonly scopes: readonly TakosumiAccountsPatScopeCatalogEntry[];
 }
 
 export interface TakosumiAccountsCreatePatRequest {

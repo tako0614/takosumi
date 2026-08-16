@@ -154,6 +154,35 @@ describe("single-screen install surface", () => {
     );
   });
 
+  test("requires visible confirmation of the DB-owned deployment profile", () => {
+    const view = read("dashboard/src/views/new/InstallView.tsx");
+    expect(view).toContain("listInstallConfigs(undefined, { view: STORE_VIEW })");
+    expect(view).toContain("storeDeploymentProfileCatalogForSource");
+    expect(view).toContain("selectedDeploymentProfileKey");
+    expect(view).toContain("deploymentProfileConfirmed");
+    expect(view).toContain('t("installStore.deploymentProfileConfirm")');
+    expect(view).toContain("deploymentProfileKey:");
+    expect(view).not.toContain("profile.modulePath");
+    expect(view).not.toContain("profile.provider");
+  });
+
+  test("switching deployment profile clears every derived authority row", () => {
+    const view = read("dashboard/src/views/new/InstallView.tsx");
+    const switchStart = view.indexOf("const switchDeploymentProfile =");
+    const switchEnd = view.indexOf("const prepareInstall =", switchStart);
+    const switchSource = view.slice(switchStart, switchEnd);
+    expect(switchSource).toContain("resetPreparedSource();");
+    for (const reset of [
+      "setCompatibility(undefined)",
+      "setInstallConfig(undefined)",
+      "setProviderRows([])",
+      "setStoreValues({})",
+      "setStoreInputTouched({})",
+    ]) {
+      expect(view).toContain(reset);
+    }
+  });
+
   test("discloses persisted sourceBuild before the Plan starts", () => {
     const view = read("dashboard/src/views/new/InstallView.tsx");
     expect(view).toContain("sourceBuildPreview(installConfig()?.sourceBuild)");

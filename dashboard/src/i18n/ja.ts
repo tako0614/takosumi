@@ -27,6 +27,19 @@ export const ja = {
   "installStore.select": "これを選ぶ",
   "installStore.configureHint":
     "名前を確認したら追加できます。リポジトリ解析はその後に行います。",
+  "installStore.deploymentProfileTitle": "デプロイ方法",
+  "installStore.deploymentProfileHint":
+    "このサービスをどこで動かすか選び、内容を確認してください。",
+  "installStore.deploymentProfileChoose": "デプロイ方法を選択",
+  "installStore.deploymentProfileRecommended": "おすすめ",
+  "installStore.deploymentProfileConfirm":
+    "このデプロイ方法で追加することを確認しました",
+  "installStore.deploymentProfileRequired":
+    "デプロイ方法を選び、確認してから追加してください。",
+  "installStore.deploymentProfileLoading":
+    "利用できるデプロイ方法を読み込んでいます。",
+  "installStore.deploymentProfileUnavailable":
+    "このサービスのデプロイ方法を安全に特定できませんでした。",
   "installStore.name": "サービス名",
   "installStore.sourceDetails": "取得元の詳細",
   "installStore.sourceUrl": "Git URL",
@@ -158,6 +171,7 @@ export const ja = {
   "nav.notifications": "通知",
   "nav.workspaceSettings": "ワークスペース設定",
   "nav.account": "アカウント",
+  "nav.hostedResources": "ホスト済みリソース",
   "nav.docs": "ドキュメント",
   "nav.backToTakos": "Takos に戻る",
   "nav.deployContext": "サービス運用",
@@ -198,6 +212,35 @@ export const ja = {
     "アクセスと共有、キー、バックアップ、ポリシー",
   "settings.manage.backups": "復元ポイントの作成と復元",
   "settings.manage.shares": "サービス間で共有する値の管理",
+  "settings.manage.hostedResources": "ホスト環境で管理されているリソースの確認",
+
+  // --- hosted resources ----------------------------------------------------
+  "hostedResources.title": "ホスト済みリソース",
+  "hostedResources.subtitle":
+    "選択中のワークスペースで管理されているリソースを確認します。変更はワークロードのPlanから行います。",
+  "hostedResources.unavailableTitle": "ホスト済みリソースは利用できません",
+  "hostedResources.unavailableMessage":
+    "このTakosumi環境はホスト済みリソースの読み取り機能を提供していません。",
+  "hostedResources.workspaceRequired": "ワークスペースを選択してください",
+  "hostedResources.workspaceRequiredMessage":
+    "リソースを表示するには、先にワークスペースを選択してください。",
+  "hostedResources.loadError":
+    "ホスト済みリソースを読み込めませんでした。時間をおいて再試行してください。",
+  "hostedResources.emptyTitle": "ホスト済みリソースはありません",
+  "hostedResources.emptyMessage":
+    "このワークスペースには、まだホスト済みリソースがありません。",
+  "hostedResources.loadMore": "さらに読み込む",
+  "hostedResources.loading": "ホスト済みリソースを読み込んでいます…",
+  "hostedResources.column.kind": "種類",
+  "hostedResources.column.name": "名前",
+  "hostedResources.column.status": "状態",
+  "hostedResources.column.generation": "世代",
+  "hostedResources.column.workload": "ワークロード",
+  "hostedResources.openWorkload": "ワークロードを開く",
+  "hostedResources.status.ready": "準備完了",
+  "hostedResources.status.needsAttention": "要確認",
+  "hostedResources.status.pending": "処理中",
+  "hostedResources.status.unknown": "状態を確認できません",
 
   // --- workspace switcher -------------------------------------------------------
   "workspace.label": "自分のワークスペース",
@@ -1170,11 +1213,16 @@ export const ja = {
   "account.apiKeys.expiresLabel": "有効期間",
   "account.apiKeys.expiresDays": "{days}日",
   "account.apiKeys.scopes": "権限",
-  "account.apiKeys.scope.read": "読み取り",
-  "account.apiKeys.scope.write": "変更",
-  "account.apiKeys.scope.admin": "管理",
   "account.apiKeys.scopesHint":
     "このキーに必要な権限だけを選択してください。管理権限は運用者のみが発行でき、この画面からは作成できません。",
+  "account.apiKeys.scopeCatalog.loading": "利用できる権限を読み込んでいます…",
+  "account.apiKeys.scopeCatalog.loadFailed":
+    "利用できる権限を読み込めませんでした。読み込みが完了するまでキーは作成できません。",
+  "account.apiKeys.scopeCatalog.retry": "権限を再読み込み",
+  "account.apiKeys.scopeCatalog.empty":
+    "この環境では、この画面から付与できる権限が公開されていません。",
+  "account.apiKeys.scopeCatalog.workspaceRequired":
+    "この権限を持つキーを作成するには、先にワークスペースを選択してください。",
   "account.apiKeys.restrictWorkspace":
     "現在のワークスペースだけで使用できるようにする",
   "account.apiKeys.create": "API キーを作成",

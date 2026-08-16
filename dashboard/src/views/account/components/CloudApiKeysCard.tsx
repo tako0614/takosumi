@@ -14,10 +14,10 @@ import {
   Trash2,
 } from "lucide-solid";
 import {
-  TAKOSUMI_ACCOUNTS_SELF_SERVICE_PAT_SCOPES,
   type TakosumiAccountsCreatePatResponse,
   type TakosumiAccountsPatMetadata,
   type TakosumiAccountsPatScope,
+  type TakosumiAccountsPatScopeCatalogEntry,
 } from "@takosjp/takosumi-accounts-contract";
 import {
   Badge,
@@ -33,29 +33,27 @@ import {
   Toast,
 } from "../../../components/ui/index.ts";
 import { friendlyError } from "../../../lib/error-copy.ts";
-import { formatDateTime, t } from "../../../i18n/index.ts";
+import { formatDateTime, locale, t } from "../../../i18n/index.ts";
 import {
   createCloudApiKey,
   listCloudApiKeys,
+  listCloudApiKeyScopeCatalog,
   revokeCloudApiKey,
 } from "../lib/tokens.ts";
 
 const EXPIRATION_DAYS = [30, 90, 365] as const;
-/*
- * Keep the full scope type for rendering operator-issued token metadata, but
- * only expose the contract's self-service subset in the creation form.
- */
-type SelfServicePatScope =
-  (typeof TAKOSUMI_ACCOUNTS_SELF_SERVICE_PAT_SCOPES)[number];
 
 export default function CloudApiKeysCard(props: {
   readonly workspaceId?: string;
 }) {
   const [keys, { refetch }] = createResource(listCloudApiKeys);
+  const [scopeCatalog, { refetch: refetchScopeCatalog }] = createResource(
+    listCloudApiKeyScopeCatalog,
+  );
   const [name, setName] = createSignal("");
   const [expirationDays, setExpirationDays] = createSignal(90);
   const [scopes, setScopes] =
-    createSignal<readonly SelfServicePatScope[]>(["read"]);
+    createSignal<readonly TakosumiAccountsPatScope[]>([]);
   const [restrictToWorkspace, setRestrictToWorkspace] = createSignal(true);
   const [created, setCreated] =
     createSignal<TakosumiAccountsCreatePatResponse>();
@@ -63,6 +61,20 @@ export default function CloudApiKeysCard(props: {
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal<string>();
   const [confirmingRevoke, setConfirmingRevoke] = createSignal<string>();
+  const scopeCatalogEntries = createMemo(
+    (): readonly TakosumiAccountsPatScopeCatalogEntry[] =>
+      scopeCatalog.error ? [] : (scopeCatalog.latest?.scopes ?? []),
+  );
+  const selfServiceScopes = createMemo(() =>
+    scopeCatalogEntries().filter((scope) => scope.selfService),
+  );
+  const selectedScopesRequireWorkspace = createMemo(() => {
+    const selected = new Set(scopes());
+    return selfServiceScopes().some(
+      (scope) =>
+        selected.has(scope.scope) && scope.workspaceBinding === "required",
+    );
+  });
 
   const columns = createMemo<
     readonly Column<TakosumiAccountsPatMetadata>[]
@@ -80,7 +92,11 @@ export default function CloudApiKeysCard(props: {
       header: t("account.apiKeys.access"),
       cell: (key) => (
         <div class="wc-api-key-access">
-          <span>{key.scopes.map(scopeLabel).join(" · ")}</span>
+          <span>
+            {key.scopes
+              .map((scope) => scopeLabel(scope, scopeCatalogEntries()))
+              .join(" · ")}
+          </span>
           <Show when={key.workspace_id}>
             <span>{t("account.apiKeys.workspaceBound")}</span>
           </Show>
@@ -155,10 +171,7 @@ export default function CloudApiKeysCard(props: {
     },
   ]);
 
-  const toggleScope = (
-    scope: SelfServicePatScope,
-    checked: boolean,
-  ) => {
+  const toggleScope = (scope: TakosumiAccountsPatScope, checked: boolean) => {
     setScopes((current) =>
       checked
         ? [...new Set([...current, scope])]
@@ -168,21 +181,37 @@ export default function CloudApiKeysCard(props: {
 
   const create = async () => {
     const normalizedName = name().trim();
-    if (!normalizedName || scopes().length === 0 || busy()) return;
+    if (
+      !normalizedName ||
+      scopes().length === 0 ||
+      busy() ||
+      scopeCatalog.loading ||
+      scopeCatalog.error
+    ) {
+      return;
+    }
+    if (selectedScopesRequireWorkspace() && !props.workspaceId) {
+      setError(t("account.apiKeys.scopeCatalog.workspaceRequired"));
+      return;
+    }
     setBusy(true);
     setError(undefined);
     setCopied(false);
     try {
-      const result = await createCloudApiKey({
-        name: normalizedName,
-        scopes: scopes(),
-        expires_at: new Date(
-          Date.now() + expirationDays() * 24 * 60 * 60 * 1_000,
-        ).toISOString(),
-        ...(restrictToWorkspace() && props.workspaceId
-          ? { workspace_id: props.workspaceId }
-          : {}),
-      });
+      const result = await createCloudApiKey(
+        {
+          name: normalizedName,
+          scopes: scopes(),
+          expires_at: new Date(
+            Date.now() + expirationDays() * 24 * 60 * 60 * 1_000,
+          ).toISOString(),
+          ...((restrictToWorkspace() || selectedScopesRequireWorkspace()) &&
+          props.workspaceId
+            ? { workspace_id: props.workspaceId }
+            : {}),
+        },
+        scopeCatalogEntries(),
+      );
       setCreated(result);
       setName("");
       await refetch();
@@ -307,35 +336,80 @@ export default function CloudApiKeysCard(props: {
           hint={t("account.apiKeys.scopesHint")}
           class="wc-api-key-scope-field"
         >
-          <div class="wc-api-key-scopes">
-            <For each={TAKOSUMI_ACCOUNTS_SELF_SERVICE_PAT_SCOPES}>
-              {(scope) => (
-                <Checkbox
-                  label={scopeLabel(scope)}
-                  checked={scopes().includes(scope)}
-                  onInput={(event) =>
-                    toggleScope(scope, event.currentTarget.checked)
-                  }
-                />
-              )}
-            </For>
-          </div>
+          <Show when={scopeCatalog.loading}>
+            <span class="muted">
+              {t("account.apiKeys.scopeCatalog.loading")}
+            </span>
+          </Show>
+          <Show when={scopeCatalog.error}>
+            <div class="wc-form-actions" role="alert">
+              <span>{t("account.apiKeys.scopeCatalog.loadFailed")}</span>
+              <Button
+                variant="secondary"
+                size="sm"
+                type="button"
+                onClick={() => void refetchScopeCatalog()}
+              >
+                {t("account.apiKeys.scopeCatalog.retry")}
+              </Button>
+            </div>
+          </Show>
+          <Show when={!scopeCatalog.loading && !scopeCatalog.error}>
+            <Show
+              when={selfServiceScopes().length > 0}
+              fallback={
+                <span class="muted">
+                  {t("account.apiKeys.scopeCatalog.empty")}
+                </span>
+              }
+            >
+              <div class="wc-api-key-scopes">
+                <For each={selfServiceScopes()}>
+                  {(scope) => (
+                    <Checkbox
+                      label={`${scope.label[locale()]} — ${scope.description[locale()]}`}
+                      checked={scopes().includes(scope.scope)}
+                      onInput={(event) =>
+                        toggleScope(scope.scope, event.currentTarget.checked)
+                      }
+                    />
+                  )}
+                </For>
+              </div>
+            </Show>
+          </Show>
         </FormField>
         <div class="wc-api-key-create-action">
           <Show when={props.workspaceId}>
             <Checkbox
               label={t("account.apiKeys.restrictWorkspace")}
-              checked={restrictToWorkspace()}
+              checked={
+                restrictToWorkspace() || selectedScopesRequireWorkspace()
+              }
+              disabled={selectedScopesRequireWorkspace()}
               onInput={(event) =>
                 setRestrictToWorkspace(event.currentTarget.checked)
               }
             />
           </Show>
+          <Show
+            when={selectedScopesRequireWorkspace() && !props.workspaceId}
+          >
+            <span class="wa-error" role="alert">
+              {t("account.apiKeys.scopeCatalog.workspaceRequired")}
+            </span>
+          </Show>
           <Button
             variant="primary"
             icon={<Plus size={15} />}
             busy={busy()}
-            disabled={name().trim() === "" || scopes().length === 0}
+            disabled={
+              name().trim() === "" ||
+              scopes().length === 0 ||
+              scopeCatalog.loading ||
+              Boolean(scopeCatalog.error) ||
+              (selectedScopesRequireWorkspace() && !props.workspaceId)
+            }
             onClick={() => void create()}
           >
             {t("account.apiKeys.create")}
@@ -355,15 +429,13 @@ export default function CloudApiKeysCard(props: {
   );
 }
 
-function scopeLabel(scope: TakosumiAccountsPatScope): string {
-  switch (scope) {
-    case "read":
-      return t("account.apiKeys.scope.read");
-    case "write":
-      return t("account.apiKeys.scope.write");
-    case "admin":
-      return t("account.apiKeys.scope.admin");
-  }
+function scopeLabel(
+  scope: TakosumiAccountsPatScope,
+  catalog: readonly TakosumiAccountsPatScopeCatalogEntry[],
+): string {
+  return (
+    catalog.find((entry) => entry.scope === scope)?.label[locale()] ?? scope
+  );
 }
 
 function isApiKeyActive(key: TakosumiAccountsPatMetadata): boolean {

@@ -6,6 +6,7 @@ import type { RepositoryManifestDocument } from "takosumi-contract/repository-ma
 import type { Source, SourceSnapshot } from "takosumi-contract/sources";
 import {
   adoptRepoOwnedInstallConfig,
+  resolveRepoOwnedDeploymentProfile,
   type RepoOwnedInstallConfigAdoptionInput,
 } from "../../../../accounts/service/src/control/repo-owned-install-config.ts";
 import type { ControlPlaneOperations } from "../../../../accounts/service/src/control-operations.ts";
@@ -294,6 +295,220 @@ describe("repository-owned default module selection", () => {
         message:
           "The repository install UX default module declaration is invalid; update the pinned repository metadata and sync the Source again.",
       },
+    });
+  });
+});
+
+describe("DB-owned deployment profile resolution", () => {
+  const profile = (input: {
+    readonly id: string;
+    readonly key: string;
+    readonly modulePath: string;
+    readonly recommended: boolean;
+  }): InstallConfig =>
+    baseConfig({
+      id: input.id,
+      sourceSelector: { url: source.url, path: "." },
+      modulePath: input.modulePath,
+      store: {
+        source: { url: source.url, path: "." },
+        order: 1,
+        surface: "service",
+        kind: "app",
+        provider: "opaque-to-selection",
+        suggestedName: "repo-interface",
+        badge: { ja: "追加", en: "Install" },
+        name: { ja: "App", en: "App" },
+        description: { ja: "App", en: "App" },
+        deploymentProfile: {
+          key: input.key,
+          label: { ja: input.key, en: input.key },
+          description: { ja: input.key, en: input.key },
+          order: 1,
+          recommended: input.recommended,
+        },
+      },
+    });
+
+  const profiledSnapshot = snapshotWithManifest({
+    status: "present",
+    digest: MANIFEST_DIGEST,
+    document: {
+      apiVersion: "takosumi.com/v2.1",
+      kind: "Repository",
+      install: {
+        defaultModule: ".",
+        modules: {
+          ".": { inputs: [] },
+          "deploy/managed": { inputs: [] },
+          "deploy/byoc": { inputs: [] },
+        },
+      },
+    },
+  });
+
+  test("selects only the exact key and proves its config module in the pinned manifest", () => {
+    const managed = profile({
+      id: "icfg-managed",
+      key: "managed-v1",
+      modulePath: "deploy/managed",
+      recommended: true,
+    });
+    const byoc = profile({
+      id: "icfg-byoc",
+      key: "byoc-v1",
+      modulePath: "deploy/byoc",
+      recommended: false,
+    });
+
+    expect(
+      resolveRepoOwnedDeploymentProfile({
+        source,
+        sourceSnapshot: profiledSnapshot,
+        candidates: [managed, byoc],
+        deploymentProfileKey: "byoc-v1",
+      }),
+    ).toEqual({
+      ok: true,
+      kind: "profile",
+      installConfig: byoc,
+      modulePath: "deploy/byoc",
+    });
+    expect(
+      resolveRepoOwnedDeploymentProfile({
+        source,
+        sourceSnapshot: profiledSnapshot,
+        candidates: [managed, { ...byoc, modulePath: "deploy/missing" }],
+        deploymentProfileKey: "byoc-v1",
+      }),
+    ).toMatchObject({
+      ok: false,
+      diagnostic: { code: "repository_install_ux_deployment_profile_module_invalid" },
+    });
+  });
+
+  test("blocks missing, duplicate, mixed, and recommendation-drifted profile groups", () => {
+    const managed = profile({
+      id: "icfg-managed",
+      key: "managed-v1",
+      modulePath: "deploy/managed",
+      recommended: true,
+    });
+    const byoc = profile({
+      id: "icfg-byoc",
+      key: "byoc-v1",
+      modulePath: "deploy/byoc",
+      recommended: false,
+    });
+    const legacy = baseConfig({
+      id: "icfg-legacy",
+      sourceSelector: { url: source.url, path: "." },
+      store: { ...managed.store!, deploymentProfile: undefined },
+    });
+
+    for (const input of [
+      { candidates: [managed, byoc], deploymentProfileKey: undefined },
+      {
+        candidates: [managed, byoc],
+        deploymentProfileKey: "missing-v1",
+      },
+      {
+        candidates: [managed, { ...byoc, store: { ...byoc.store!, deploymentProfile: {
+          ...byoc.store!.deploymentProfile!,
+          key: "managed-v1",
+        } } }],
+        deploymentProfileKey: "managed-v1",
+      },
+      {
+        candidates: [managed, { ...byoc, store: { ...byoc.store!, deploymentProfile: {
+          ...byoc.store!.deploymentProfile!,
+          recommended: true,
+        } } }],
+        deploymentProfileKey: "managed-v1",
+      },
+      {
+        candidates: [managed, legacy],
+        deploymentProfileKey: "managed-v1",
+      },
+    ]) {
+      expect(
+        resolveRepoOwnedDeploymentProfile({
+          source,
+          sourceSnapshot: profiledSnapshot,
+          candidates: input.candidates,
+          ...(input.deploymentProfileKey === undefined
+            ? {}
+            : { deploymentProfileKey: input.deploymentProfileKey }),
+        }).ok,
+      ).toBe(false);
+    }
+  });
+
+  test("preserves exactly one unprofiled legacy config for defaultModule selection", () => {
+    const legacy = baseConfig({
+      id: "icfg-legacy",
+      sourceSelector: { url: source.url, path: "." },
+      store: {
+        source: { url: source.url, path: "." },
+        order: 1,
+        surface: "service",
+        kind: "app",
+        provider: "legacy",
+        suggestedName: "legacy",
+        badge: { ja: "追加", en: "Install" },
+        name: { ja: "Legacy", en: "Legacy" },
+        description: { ja: "Legacy", en: "Legacy" },
+      },
+    });
+    expect(
+      resolveRepoOwnedDeploymentProfile({
+        source,
+        sourceSnapshot: profiledSnapshot,
+        candidates: [legacy],
+      }),
+    ).toEqual({ ok: true, kind: "legacy", installConfig: legacy });
+  });
+
+  test("ignores scoped, internal, and independently URL-mismatched rows", () => {
+    const selected = profile({
+      id: "icfg-selected",
+      key: "managed-v1",
+      modulePath: "deploy/managed",
+      recommended: true,
+    });
+    const candidates = [
+      { ...selected, workspaceId: "workspace_other" },
+      { ...selected, internal: { reason: "per_install_overrides" as const } },
+      {
+        ...selected,
+        sourceSelector: { url: "https://example.test/other.git", path: "." },
+      },
+      {
+        ...selected,
+        store: {
+          ...selected.store!,
+          source: { url: "https://example.test/other.git", path: "." },
+        },
+      },
+    ];
+
+    expect(
+      resolveRepoOwnedDeploymentProfile({
+        source,
+        sourceSnapshot: profiledSnapshot,
+        candidates,
+      }),
+    ).toEqual({ ok: true, kind: "none" });
+    expect(
+      resolveRepoOwnedDeploymentProfile({
+        source,
+        sourceSnapshot: profiledSnapshot,
+        candidates,
+        deploymentProfileKey: "managed-v1",
+      }),
+    ).toMatchObject({
+      ok: false,
+      diagnostic: { code: "repository_install_ux_deployment_profile_invalid" },
     });
   });
 });

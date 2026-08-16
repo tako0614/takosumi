@@ -1,6 +1,7 @@
 import {
   TAKOSUMI_ACCOUNTS_AUTH_PROVIDERS_PATH,
   type TakosumiSubject,
+  type TakosumiAccountsPatScope,
 } from "@takosjp/takosumi-accounts-contract";
 import {
   type AccountsHandler,
@@ -118,6 +119,10 @@ export interface CreateCloudflareWorkerOptions<
   readonly patWorkspaceMembershipReader?: (
     env: TEnv,
   ) => PatWorkspaceMembershipReader | undefined;
+  /** Explicit extension-contributed PAT scopes for self-service creation. */
+  readonly personalAccessTokenSelfServiceScopes?: (
+    env: TEnv,
+  ) => readonly TakosumiAccountsPatScope[];
 }
 
 interface CachedAccountsHandler {
@@ -555,6 +560,8 @@ async function buildAccountsHandler<TEnv extends CloudflareWorkerEnv>(
     store,
     patWorkspaceMembershipReader:
       options.patWorkspaceMembershipReader?.(env),
+    personalAccessTokenSelfServiceScopes:
+      options.personalAccessTokenSelfServiceScopes?.(env),
     upstreamOAuth: parseUpstreamOAuthFailClosed(env),
     passkeys: parsePasskeysFailClosed(env),
     loginEmailAllowlist: parseLoginEmailAllowlist(env, issuer),

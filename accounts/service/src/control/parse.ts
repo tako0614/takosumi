@@ -21,7 +21,10 @@ import type {
   PublicPlanRun,
   TestConnectionResponse,
 } from "@takosumi/internal/deploy-control-api";
-import { hasCredentialQueryParams } from "takosumi-contract";
+import {
+  hasCredentialQueryParams,
+  isInstallConfigDeploymentProfile,
+} from "takosumi-contract";
 import type {
   Source,
   CreateSourceRequest,
@@ -187,6 +190,12 @@ export function installConfigStoreValue(
     record.iconUrl === undefined
       ? undefined
       : storeIconUrlValue(record.iconUrl);
+  const deploymentProfile =
+    record.deploymentProfile === undefined
+      ? undefined
+      : isInstallConfigDeploymentProfile(record.deploymentProfile)
+        ? record.deploymentProfile
+        : undefined;
   if (
     order === undefined ||
     !surface ||
@@ -197,6 +206,8 @@ export function installConfigStoreValue(
     !name ||
     !description ||
     (record.iconUrl !== undefined && iconUrl === undefined) ||
+    (record.deploymentProfile !== undefined &&
+      deploymentProfile === undefined) ||
     record.inputs !== undefined ||
     record.installExperience !== undefined ||
     record.outputAllowlist !== undefined ||
@@ -209,6 +220,7 @@ export function installConfigStoreValue(
   if (record.source !== undefined && !source) return undefined;
   return {
     ...(source ? { source } : {}),
+    ...(deploymentProfile ? { deploymentProfile } : {}),
     order,
     surface,
     kind,

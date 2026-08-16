@@ -925,6 +925,97 @@
   color: var(--tg-fg-muted);
 }
 
+/* ===== hosted resources management ===== */
+.hosted-resources-view {
+  width: min(1100px, 100%);
+  margin: 0 auto;
+  padding: var(--tg-s-5) var(--tg-s-5) var(--tg-s-8);
+  display: flex;
+  flex-direction: column;
+  gap: var(--tg-s-5);
+}
+.hosted-resources-card {
+  overflow: hidden;
+}
+.hosted-resources-table {
+  min-width: 0;
+}
+.hosted-resources-cards {
+  display: none;
+}
+.hosted-resources-kind {
+  color: var(--tg-fg-muted);
+  font-family: var(--tg-font-mono);
+  font-size: var(--tg-fs-xs);
+}
+.hosted-resources-workload {
+  color: var(--tg-accent-text);
+  font-weight: 700;
+  text-decoration: none;
+}
+.hosted-resources-workload:hover {
+  text-decoration: underline;
+}
+.hosted-resources-loading {
+  padding: var(--tg-s-4) var(--tg-s-5) var(--tg-s-5);
+  color: var(--tg-fg-muted);
+}
+.hosted-resources-pagination {
+  display: flex;
+  justify-content: center;
+}
+.hosted-resource-card {
+  display: grid;
+  gap: var(--tg-s-4);
+  padding: var(--tg-s-4);
+  border: 1px solid var(--tg-line);
+  border-radius: var(--tg-r-md);
+  background: var(--tg-bg-elev);
+}
+.hosted-resource-card + .hosted-resource-card {
+  margin-top: var(--tg-s-3);
+}
+.hosted-resource-card-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--tg-s-3);
+}
+.hosted-resource-card-heading h2 {
+  margin: var(--tg-s-1) 0 0;
+  font-size: var(--tg-fs-md);
+}
+.hosted-resource-card-details {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--tg-s-3);
+  margin: 0;
+}
+.hosted-resource-card-details > div {
+  min-width: 0;
+}
+.hosted-resource-card-details dt {
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-xs);
+}
+.hosted-resource-card-details dd {
+  margin: var(--tg-s-1) 0 0;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 720px) {
+  .hosted-resources-view {
+    padding: var(--tg-s-4) var(--tg-s-3) var(--tg-s-7);
+  }
+  .hosted-resources-table {
+    display: none;
+  }
+  .hosted-resources-cards {
+    display: block;
+    padding: var(--tg-s-4);
+  }
+}
+
 /* ===== settings hub billing summary strip ===== */
 .settings-billing-summary {
   padding: var(--tg-s-4) var(--tg-s-5);

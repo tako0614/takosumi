@@ -1,7 +1,12 @@
 import { TAKOSUMI_ACCOUNTS_CAPSULE_DELEGATION_SCOPES } from "@takosjp/takosumi-accounts-contract";
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
 import type { Source, SourceSnapshot } from "takosumi-contract/sources";
-import type { InstallConfig } from "takosumi-contract/install-configs";
+import {
+  installConfigDeploymentProfileSetIsValid,
+  isInstallConfigDeploymentProfileKey,
+  normalizeInstallConfigSourceUrl,
+  type InstallConfig,
+} from "takosumi-contract/install-configs";
 import {
   isRepositoryManifestInterfaceCapableApiVersion,
   TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_1,
@@ -159,6 +164,148 @@ export async function latestSourceSnapshotForSource(
   } catch {
     return undefined;
   }
+}
+
+export type RepoOwnedDeploymentProfileResolution =
+  | { readonly ok: true; readonly kind: "none" }
+  | {
+      readonly ok: true;
+      readonly kind: "legacy";
+      readonly installConfig: InstallConfig;
+    }
+  | {
+      readonly ok: true;
+      readonly kind: "profile";
+      readonly installConfig: InstallConfig;
+      readonly modulePath: string;
+    }
+  | {
+      readonly ok: false;
+      readonly diagnostic: {
+        readonly code:
+          | "repository_install_ux_deployment_profile_invalid"
+          | "repository_install_ux_deployment_profile_ambiguous"
+          | "repository_install_ux_deployment_profile_module_invalid";
+        readonly message: string;
+      };
+    };
+
+/**
+ * Select one DB-owned deployment profile without trusting Store presentation
+ * fields as execution authority. Both the policy selector and Store listing
+ * URL must independently match the authenticated Source. A profiled config's
+ * exact module path must be an own key of the pinned manifest.
+ */
+export function resolveRepoOwnedDeploymentProfile(input: {
+  readonly source: Source;
+  readonly sourceSnapshot: SourceSnapshot | undefined;
+  readonly candidates: readonly InstallConfig[];
+  readonly deploymentProfileKey?: string;
+}): RepoOwnedDeploymentProfileResolution {
+  const sourceUrl = input.source.url.trim();
+  const canonicalSourceUrl = normalizeInstallConfigSourceUrl(sourceUrl);
+  const matches = input.candidates.filter((config) => {
+    const selectorUrl = config.sourceSelector?.url.trim();
+    const listingUrl = config.store?.source?.url.trim();
+    return Boolean(
+      sourceUrl &&
+        selectorUrl &&
+        listingUrl &&
+        config.workspaceId === undefined &&
+        config.internal === undefined &&
+        normalizeInstallConfigSourceUrl(selectorUrl) === canonicalSourceUrl &&
+        normalizeInstallConfigSourceUrl(listingUrl) === canonicalSourceUrl,
+    );
+  });
+  if (matches.length === 0) {
+    return input.deploymentProfileKey === undefined
+      ? { ok: true, kind: "none" }
+      : invalidDeploymentProfileResolution(
+          "repository_install_ux_deployment_profile_invalid",
+          "The selected deployment profile is unavailable for this Source.",
+        );
+  }
+
+  const profiles = matches.map((config) => config.store?.deploymentProfile);
+  const profileCount = profiles.filter((profile) => profile !== undefined).length;
+  if (profileCount === 0) {
+    if (matches.length === 1 && input.deploymentProfileKey === undefined) {
+      return { ok: true, kind: "legacy", installConfig: matches[0]! };
+    }
+    return invalidDeploymentProfileResolution(
+      "repository_install_ux_deployment_profile_ambiguous",
+      "Takosumi could not prove one legacy Store InstallConfig for this Source.",
+    );
+  }
+  if (profileCount !== matches.length) {
+    return invalidDeploymentProfileResolution(
+      "repository_install_ux_deployment_profile_ambiguous",
+      "Profiled and legacy Store InstallConfigs cannot be mixed for one Source.",
+    );
+  }
+  const exactProfiles = profiles.filter(
+    (profile): profile is NonNullable<typeof profile> => profile !== undefined,
+  );
+  if (!installConfigDeploymentProfileSetIsValid(exactProfiles)) {
+    return invalidDeploymentProfileResolution(
+      "repository_install_ux_deployment_profile_ambiguous",
+      "The deployment profile set is ambiguous.",
+    );
+  }
+  if (!isInstallConfigDeploymentProfileKey(input.deploymentProfileKey)) {
+    return invalidDeploymentProfileResolution(
+      "repository_install_ux_deployment_profile_invalid",
+      "Select and confirm an available deployment profile.",
+    );
+  }
+  const selected = matches.find(
+    (config) =>
+      config.store?.deploymentProfile?.key === input.deploymentProfileKey,
+  );
+  if (!selected) {
+    return invalidDeploymentProfileResolution(
+      "repository_install_ux_deployment_profile_invalid",
+      "The selected deployment profile is unavailable.",
+    );
+  }
+
+  const rawModulePath = selected.modulePath;
+  const parsedModulePath = modulePathValue(rawModulePath);
+  const canonicalModulePath =
+    parsedModulePath === "" ? "." : parsedModulePath;
+  const manifest = input.sourceSnapshot?.repositoryManifest;
+  if (
+    typeof rawModulePath !== "string" ||
+    canonicalModulePath === undefined ||
+    rawModulePath !== canonicalModulePath ||
+    !manifest ||
+    manifest.status !== "present" ||
+    !Object.prototype.hasOwnProperty.call(
+      manifest.document.install.modules,
+      canonicalModulePath,
+    )
+  ) {
+    return invalidDeploymentProfileResolution(
+      "repository_install_ux_deployment_profile_module_invalid",
+      "The selected deployment profile does not name an exact module in the pinned Source manifest.",
+    );
+  }
+  return {
+    ok: true,
+    kind: "profile",
+    installConfig: selected,
+    modulePath: canonicalModulePath,
+  };
+}
+
+function invalidDeploymentProfileResolution(
+  code: Extract<
+    RepoOwnedDeploymentProfileResolution,
+    { readonly ok: false }
+  >["diagnostic"]["code"],
+  message: string,
+): RepoOwnedDeploymentProfileResolution {
+  return { ok: false, diagnostic: { code, message } };
 }
 
 /**
@@ -448,8 +595,11 @@ export async function previewRepoOwnedInstallConfig(
 
   const now = new Date().toISOString();
   const selectedPath = adoption.modulePath;
-  const { modulePath: _baseModulePath, ...baseConfigWithoutModulePath } =
-    input.baseConfig;
+  const {
+    modulePath: _baseModulePath,
+    store: _baseStore,
+    ...baseConfigWithoutModulePath
+  } = input.baseConfig;
   const config = await input.operations.capsules.putInstallConfig({
     ...baseConfigWithoutModulePath,
     id,
