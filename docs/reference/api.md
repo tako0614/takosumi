@@ -143,7 +143,7 @@ Stack flow のエンドポイントはすべて `/api/v1` の下にあります�
 404 になります。
 
 正本は `accounts/service/src/control-route-inventory.ts` で、公開されているのは
-次の 80 件です。
+次の 81 件です。
 
 **Account views**
 
@@ -226,6 +226,7 @@ Run は必ず計画の作成から始まります。
 | PATCH    | `/api/v1/sources/{sourceId}`                     | Source のメタ情報を更新する |
 | POST     | `/api/v1/sources/{sourceId}/sync`                | 同期 Run を作る             |
 | GET      | `/api/v1/sources/{sourceId}/snapshots`           | SourceSnapshot を一覧する   |
+| GET      | `/api/v1/sources/{sourceId}/snapshots/{sourceSnapshotId}/deployment-profiles` | その Snapshot で実在を確認できた DB 所有のデプロイ方法だけを一覧する |
 | POST     | `/api/v1/sources/{sourceId}/compatibility-check` | 互換性レポートを作る        |
 | GET      | `/api/v1/compatibility-reports/{reportId}`       | 互換性レポートを読む        |
 

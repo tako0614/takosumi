@@ -149,7 +149,7 @@ Resource, Interface, Form, and capability control surface. Mixing the two
 prefixes produces a 404 even when authentication is valid.
 
 The authoritative session-route inventory is
-`accounts/service/src/control-route-inventory.ts`; it currently contains 80
+`accounts/service/src/control-route-inventory.ts`; it currently contains 81
 public route descriptors. Representative operations from that inventory are:
 
 ```http
@@ -165,6 +165,7 @@ GET   /api/v1/sources/{sourceId}
 PATCH /api/v1/sources/{sourceId}
 POST  /api/v1/sources/{sourceId}/sync
 GET   /api/v1/sources/{sourceId}/snapshots
+GET   /api/v1/sources/{sourceId}/snapshots/{sourceSnapshotId}/deployment-profiles
 
 POST  /api/v1/workspaces/{workspaceId}/capsules
 GET   /api/v1/capsules/{capsuleId}

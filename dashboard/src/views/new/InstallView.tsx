@@ -42,15 +42,15 @@ import {
   createWorkspace,
   extractRunId,
   getInstallConfig,
-  listInstallConfigs,
   listConnectionsWithSignal,
   listReleaseOwnedProviderConnectionsWithSignal,
+  listSourceSnapshotDeploymentProfiles,
   planCapsule,
+  prepareCapsuleSourceSnapshot,
   putCapsuleProviderBindingSet,
   readSourceSnapshotFile,
   readSourceSnapshotPresentationFile,
   resolveStableSourceTag,
-  STORE_VIEW,
   type CapsuleCompatibilityResult,
   type InstallConfig,
   type ProviderBindings,
@@ -110,7 +110,7 @@ import {
   setStoreJsonVariable,
   slugInputValue,
   storeDefaultInputValue,
-  storeDeploymentProfileCatalogForSource,
+  storeDeploymentProfileCatalogFromSnapshot,
   storeEntryFromStoreListing,
   storeInputIsDerived,
   storeInputJsonValue,
@@ -272,6 +272,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
   const [workspaceId, setWorkspaceId] = createSignal(currentWorkspaceId());
   const [workspaceHandle, setWorkspaceHandle] = createSignal<string>();
   const [sourceId, setSourceId] = createSignal<string>();
+  const [sourceSnapshotId, setSourceSnapshotId] = createSignal<string>();
   const [sourceCreateReconciliationToken, setSourceCreateReconciliationToken] =
     createSignal<SourceCreateReconciliationToken>();
   const [sourceAuthConnectionId, setSourceAuthConnectionId] = createSignal("");
@@ -322,7 +323,6 @@ function Inner(props: { readonly installingPrincipalId: string }) {
   const [entryEvidence, setEntryEvidence] = createSignal<EntryEvidence>();
   const [interfaceUrl, setInterfaceUrl] = createSignal<string>();
   let completionAttempt = 0;
-  let deploymentProfileLoadAttempt = 0;
   let activePreparationController: AbortController | undefined;
   onCleanup(() => activePreparationController?.abort());
 
@@ -652,9 +652,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     return undefined;
   };
 
-  const resetPreparedSource = () => {
-    setSourceId(undefined);
-    setSourceCreateReconciliationToken(undefined);
+  const resetCompiledPreparation = () => {
     setCompatibility(undefined);
     setInstallConfig(undefined);
     setStoreEntry(undefined);
@@ -668,39 +666,15 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     setInterfaceUrl(undefined);
   };
 
-  const loadDeploymentProfiles = async (selected: TcsListing) => {
-    const attempt = ++deploymentProfileLoadAttempt;
-    setDeploymentProfilesLoading(true);
+  const resetPreparedSource = () => {
+    setSourceId(undefined);
+    setSourceSnapshotId(undefined);
+    setSourceCreateReconciliationToken(undefined);
+    setDeploymentProfilesLoading(false);
     setDeploymentProfileCatalog({ status: "none", profiles: [] });
     setSelectedDeploymentProfileKey("");
     setDeploymentProfileConfirmed(false);
-    try {
-      const configs = await listInstallConfigs(undefined, { view: STORE_VIEW });
-      if (attempt !== deploymentProfileLoadAttempt || listing() !== selected) {
-        return;
-      }
-      const catalog = storeDeploymentProfileCatalogForSource(
-        configs,
-        selected.source.url,
-      );
-      setDeploymentProfileCatalog(catalog);
-      setSelectedDeploymentProfileKey(
-        catalog.status === "ready" ? (catalog.preselectedKey ?? "") : "",
-      );
-      if (catalog.status === "invalid") {
-        setError(t("installStore.deploymentProfileUnavailable"));
-      }
-    } catch {
-      if (attempt !== deploymentProfileLoadAttempt || listing() !== selected) {
-        return;
-      }
-      setDeploymentProfileCatalog({ status: "invalid", profiles: [] });
-      setError(t("installStore.deploymentProfileUnavailable"));
-    } finally {
-      if (attempt === deploymentProfileLoadAttempt) {
-        setDeploymentProfilesLoading(false);
-      }
-    }
+    resetCompiledPreparation();
   };
 
   // Header workspace changes are reactive. Never let a previously prepared
@@ -733,7 +707,6 @@ function Inner(props: { readonly installingPrincipalId: string }) {
   });
 
   const chooseListing = (selected: TcsListing) => {
-    deploymentProfileLoadAttempt += 1;
     resetPreparedSource();
     setListing(selected);
     setGitUrl(selected.source.url);
@@ -744,11 +717,10 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     setEntryEvidence(undefined);
     setError(undefined);
     setPhase("configure");
-    void loadDeploymentProfiles(selected);
   };
 
   const switchDeploymentProfile = (key: string) => {
-    resetPreparedSource();
+    resetCompiledPreparation();
     setSelectedDeploymentProfileKey(key);
     setDeploymentProfileConfirmed(false);
     setError(undefined);
@@ -824,9 +796,91 @@ function Inner(props: { readonly installingPrincipalId: string }) {
         (cause: unknown) => ({ ok: false as const, cause }),
       );
       setPreparationStage("source");
+      let preparedSourceId = sourceId();
+      let preparedSourceSnapshotId = sourceSnapshotId();
+      if (!preparedSourceId || !preparedSourceSnapshotId) {
+        const prepared = await prepareCapsuleSourceSnapshot({
+          workspaceId: workspace,
+          sourceId: preparedSourceId,
+          gitUrl: gitUrl().trim(),
+          ref: gitRef().trim(),
+          name: name().trim(),
+          ...(sourceAuthConnectionId()
+            ? { authConnectionId: sourceAuthConnectionId() }
+            : {}),
+          signal: controller.signal,
+          deadlineAt: preparationDeadlineAt,
+          ...(sourceCreateReconciliationToken()
+            ? {
+                sourceCreateReconciliationToken:
+                  sourceCreateReconciliationToken(),
+              }
+            : {}),
+          onSourceSyncProgress: () => setPreparationStage("source"),
+          onSourceCreated: (createdSourceId) => {
+            if (workspaceIsCurrent(workspace)) {
+              setSourceId(createdSourceId);
+              setSourceCreateReconciliationToken(undefined);
+            }
+          },
+        });
+        if (controller.signal.aborted || !workspaceIsCurrent(workspace)) {
+          setPhase("configure");
+          return;
+        }
+        preparedSourceId = prepared.sourceId;
+        preparedSourceSnapshotId = prepared.sourceSnapshotId;
+        setSourceId(prepared.sourceId);
+        setSourceSnapshotId(prepared.sourceSnapshotId);
+
+        if (listing()) {
+          setDeploymentProfilesLoading(true);
+          try {
+            const response = await listSourceSnapshotDeploymentProfiles(
+              prepared.sourceId,
+              prepared.sourceSnapshotId,
+              { signal: controller.signal },
+            );
+            if (
+              controller.signal.aborted ||
+              !workspaceIsCurrent(workspace)
+            ) {
+              setPhase("configure");
+              return;
+            }
+            const catalog = storeDeploymentProfileCatalogFromSnapshot(response);
+            // Discovery never confirms a hosting decision on the user's
+            // behalf, including when the DB marks one option recommended.
+            setSelectedDeploymentProfileKey("");
+            setDeploymentProfileCatalog(catalog);
+            setDeploymentProfileConfirmed(false);
+            if (catalog.status === "invalid") {
+              setError(t("installStore.deploymentProfileUnavailable"));
+              setPhase("configure");
+              return;
+            }
+            if (catalog.status === "ready") {
+              // Profile selection is a separate reviewed user action. Stop
+              // before compatibility or derived InstallConfig persistence.
+              setPhase("configure");
+              return;
+            }
+          } catch (cause) {
+            if (controller.signal.aborted) throw cause;
+            setDeploymentProfileCatalog({ status: "invalid", profiles: [] });
+            setError(t("installStore.deploymentProfileUnavailable"));
+            setPhase("configure");
+            return;
+          } finally {
+            setDeploymentProfilesLoading(false);
+          }
+        }
+      }
+      setPreparationStage("compatibility");
       const result = await checkCapsuleCompatibility({
         workspaceId: workspace,
-        sourceId: sourceId(),
+        sourceId: preparedSourceId,
+        sourceSnapshotId: preparedSourceSnapshotId,
         gitUrl: gitUrl().trim(),
         ref: gitRef().trim(),
         path: modulePath().trim() || ".",
@@ -850,14 +904,6 @@ function Inner(props: { readonly installingPrincipalId: string }) {
                 sourceCreateReconciliationToken(),
             }
           : {}),
-        onSourceSyncProgress: () => setPreparationStage("source"),
-        onSourceSnapshot: () => setPreparationStage("compatibility"),
-        onSourceCreated: (createdSourceId) => {
-          if (workspaceIsCurrent(workspace)) {
-            setSourceId(createdSourceId);
-            setSourceCreateReconciliationToken(undefined);
-          }
-        },
       });
       if (controller.signal.aborted || !workspaceIsCurrent(workspace)) {
         setPhase("configure");
@@ -1235,7 +1281,6 @@ function Inner(props: { readonly installingPrincipalId: string }) {
 
   const reset = () => {
     completionAttempt += 1;
-    deploymentProfileLoadAttempt += 1;
     setListing(null);
     setDeploymentProfilesLoading(false);
     setDeploymentProfileCatalog({ status: "none", profiles: [] });
@@ -1246,6 +1291,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     setModulePath(".");
     setName("");
     setSourceId(undefined);
+    setSourceSnapshotId(undefined);
     setSourceCreateReconciliationToken(undefined);
     setCompatibility(undefined);
     setInstallConfig(undefined);
@@ -1677,7 +1723,7 @@ function Inner(props: { readonly installingPrincipalId: string }) {
               <Input
                 value={name()}
                 onInput={(event) => {
-                  resetPreparedSource();
+                  resetCompiledPreparation();
                   setName(event.currentTarget.value);
                 }}
               />

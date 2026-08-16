@@ -2,10 +2,12 @@ import { TAKOSUMI_ACCOUNTS_CAPSULE_DELEGATION_SCOPES } from "@takosjp/takosumi-a
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
 import type { Source, SourceSnapshot } from "takosumi-contract/sources";
 import {
+  compareInstallConfigDeploymentProfiles,
   installConfigDeploymentProfileSetIsValid,
   isInstallConfigDeploymentProfileKey,
   normalizeInstallConfigSourceUrl,
   type InstallConfig,
+  type InstallConfigDeploymentProfile,
 } from "takosumi-contract/install-configs";
 import {
   isRepositoryManifestInterfaceCapableApiVersion,
@@ -190,21 +192,21 @@ export type RepoOwnedDeploymentProfileResolution =
       };
     };
 
-/**
- * Select one DB-owned deployment profile without trusting Store presentation
- * fields as execution authority. Both the policy selector and Store listing
- * URL must independently match the authenticated Source. A profiled config's
- * exact module path must be an own key of the pinned manifest.
- */
-export function resolveRepoOwnedDeploymentProfile(input: {
+export type RepoOwnedDeploymentProfileCatalog =
+  | { readonly status: "none" | "legacy"; readonly profiles: readonly [] }
+  | { readonly status: "invalid"; readonly profiles: readonly [] }
+  | {
+      readonly status: "ready";
+      readonly profiles: readonly InstallConfigDeploymentProfile[];
+    };
+
+function matchingRepoOwnedDeploymentProfileConfigs(input: {
   readonly source: Source;
-  readonly sourceSnapshot: SourceSnapshot | undefined;
   readonly candidates: readonly InstallConfig[];
-  readonly deploymentProfileKey?: string;
-}): RepoOwnedDeploymentProfileResolution {
+}): readonly InstallConfig[] {
   const sourceUrl = input.source.url.trim();
   const canonicalSourceUrl = normalizeInstallConfigSourceUrl(sourceUrl);
-  const matches = input.candidates.filter((config) => {
+  return input.candidates.filter((config) => {
     const selectorUrl = config.sourceSelector?.url.trim();
     const listingUrl = config.store?.source?.url.trim();
     return Boolean(
@@ -217,6 +219,72 @@ export function resolveRepoOwnedDeploymentProfile(input: {
         normalizeInstallConfigSourceUrl(listingUrl) === canonicalSourceUrl,
     );
   });
+}
+
+/**
+ * Project only DB-owned deployment profiles that the existing execution
+ * resolver can prove against this exact immutable SourceSnapshot. Invalid or
+ * missing module paths stay server-side and never become dashboard choices.
+ */
+export function repoOwnedDeploymentProfileCatalog(input: {
+  readonly source: Source;
+  readonly sourceSnapshot: SourceSnapshot;
+  readonly candidates: readonly InstallConfig[];
+}): RepoOwnedDeploymentProfileCatalog {
+  const matches = matchingRepoOwnedDeploymentProfileConfigs(input);
+  if (matches.length === 0) return { status: "none", profiles: [] };
+
+  const profiles = matches.map((config) => config.store?.deploymentProfile);
+  const profileCount = profiles.filter(
+    (profile): profile is InstallConfigDeploymentProfile =>
+      profile !== undefined,
+  ).length;
+  if (profileCount === 0) {
+    return matches.length === 1
+      ? { status: "legacy", profiles: [] }
+      : { status: "invalid", profiles: [] };
+  }
+  const exactProfiles = profiles.filter(
+    (profile): profile is InstallConfigDeploymentProfile =>
+      profile !== undefined,
+  );
+  if (
+    profileCount !== matches.length ||
+    !installConfigDeploymentProfileSetIsValid(exactProfiles)
+  ) {
+    return { status: "invalid", profiles: [] };
+  }
+
+  const available = exactProfiles.filter((profile) => {
+    const resolution = resolveRepoOwnedDeploymentProfile({
+      source: input.source,
+      sourceSnapshot: input.sourceSnapshot,
+      candidates: input.candidates,
+      deploymentProfileKey: profile.key,
+    });
+    return resolution.ok && resolution.kind === "profile";
+  });
+  return available.length > 0
+    ? {
+        status: "ready",
+        profiles: [...available].sort(compareInstallConfigDeploymentProfiles),
+      }
+    : { status: "invalid", profiles: [] };
+}
+
+/**
+ * Select one DB-owned deployment profile without trusting Store presentation
+ * fields as execution authority. Both the policy selector and Store listing
+ * URL must independently match the authenticated Source. A profiled config's
+ * exact module path must be an own key of the pinned manifest.
+ */
+export function resolveRepoOwnedDeploymentProfile(input: {
+  readonly source: Source;
+  readonly sourceSnapshot: SourceSnapshot | undefined;
+  readonly candidates: readonly InstallConfig[];
+  readonly deploymentProfileKey?: string;
+}): RepoOwnedDeploymentProfileResolution {
+  const matches = matchingRepoOwnedDeploymentProfileConfigs(input);
   if (matches.length === 0) {
     return input.deploymentProfileKey === undefined
       ? { ok: true, kind: "none" }
