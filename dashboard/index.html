@@ -28,10 +28,47 @@
         background: #0a0a0b;
         color: #f5f5f6;
       }
+
+      /* Capability discovery is intentionally complete before the SPA mounts,
+         so composed routes cannot freeze on the wrong product fallback. Keep
+         that boundary visible instead of leaving the document blank while it
+         is in flight. */
+      #dashboard-boot-loading {
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        gap: 0.75rem;
+        align-content: center;
+        font: 500 0.95rem/1.4 system-ui, sans-serif;
+        color: inherit;
+      }
+      #dashboard-boot-loading::before {
+        content: "";
+        width: 1.5rem;
+        height: 1.5rem;
+        border: 2px solid currentColor;
+        border-right-color: transparent;
+        border-radius: 50%;
+        animation: dashboard-boot-spin 0.8s linear infinite;
+      }
+      @keyframes dashboard-boot-spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        #dashboard-boot-loading::before {
+          animation: none;
+        }
+      }
     </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div id="dashboard-boot-loading" role="status" aria-live="polite">
+        読み込み中…
+      </div>
+    </div>
     <script type="module" src="/src/index.tsx"></script>
   </body>
 </html>
