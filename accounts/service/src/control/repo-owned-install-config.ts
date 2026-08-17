@@ -616,6 +616,15 @@ export async function previewRepoOwnedInstallConfig(
     url: input.source.url,
     path: input.source.defaultPath,
   };
+  const selectedProfileStore = input.baseConfig.store?.deploymentProfile
+    ? {
+        ...input.baseConfig.store,
+        // The derived row is Workspace-scoped and non-discoverable, but its
+        // selected opaque profile remains public audit evidence. Normalize the
+        // presentation pointer to the exact Source used for compilation.
+        source: sourceSelector,
+      }
+    : undefined;
 
   const digest = await stableJsonDigest({
     sourceSnapshotId: adoption.sourceSnapshotId,
@@ -625,6 +634,7 @@ export async function previewRepoOwnedInstallConfig(
     baseInstallConfigUpdatedAt: input.baseConfig.updatedAt,
     capsuleName: input.capsuleName,
     sourceSelector,
+    ...(selectedProfileStore ? { store: selectedProfileStore } : {}),
     variablePresentation: adoption.variablePresentation ?? [],
     installExperience: adoption.installExperience ?? {},
     hostRuntimeMaterialization: adoption.hostRuntimeMaterialization ?? null,
@@ -693,6 +703,7 @@ export async function previewRepoOwnedInstallConfig(
       ? { hostRuntimeMaterialization: adoption.hostRuntimeMaterialization }
       : {}),
     sourceSelector,
+    ...(selectedProfileStore ? { store: selectedProfileStore } : {}),
     modulePath: selectedPath,
     createdAt: now,
     updatedAt: now,

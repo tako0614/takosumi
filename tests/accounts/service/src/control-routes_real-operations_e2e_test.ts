@@ -1452,7 +1452,13 @@ test("Store deployment profiles are listed, selected by opaque key, and module-p
   expect(derived.modulePath).toBe("deploy/byoc");
   expect(derived.variableMapping).toMatchObject({ selected_profile: "byoc-v1" });
   expect(derived.policy).toEqual(byoc.policy);
-  expect(derived.store).toBeUndefined();
+  expect(derived.store).toEqual({
+    ...byoc.store,
+    source: {
+      url: seeded.source.url,
+      path: seeded.source.defaultPath,
+    },
+  });
 });
 
 test("repository compilation rejects client module authority while manual compatibility keeps it", async () => {
