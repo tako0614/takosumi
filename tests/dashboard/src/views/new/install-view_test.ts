@@ -190,6 +190,14 @@ describe("single-screen install surface", () => {
     );
   });
 
+  test("keeps managed hostname authority for direct Git installs", () => {
+    const view = read("dashboard/src/views/new/InstallView.tsx");
+    expect(view).toContain("config.managedPublicHostname");
+    expect(view).toContain(
+      "{ managedPublicHostname: config.managedPublicHostname }",
+    );
+  });
+
   test("switching deployment profile preserves the snapshot and clears compiled authority", () => {
     const view = read("dashboard/src/views/new/InstallView.tsx");
     const switchStart = view.indexOf("const switchDeploymentProfile =");

@@ -1099,9 +1099,11 @@ function Inner(props: { readonly installingPrincipalId: string }) {
           ...(Object.keys(config.outputAllowlist).length > 0
             ? { outputAllowlist: config.outputAllowlist }
             : {}),
-          ...(storeEntry() && storePublicEndpoint(storeEntry()!)
-            ? { managedPublicHostname: { mode: managedPublicHostnameMode() } }
-            : {}),
+          ...(config.managedPublicHostname
+            ? { managedPublicHostname: config.managedPublicHostname }
+            : storeEntry() && storePublicEndpoint(storeEntry()!)
+              ? { managedPublicHostname: { mode: managedPublicHostnameMode() } }
+              : {}),
         });
         if (!workspaceIsCurrent(workspace)) return;
         currentCapsuleId = capsule.id;
