@@ -297,6 +297,10 @@ function App() {
 function mountDashboard(): void {
   const root = document.getElementById("root");
   if (!root) throw new Error("dashboard mount target #root not found");
+  // The document shell owns the static boot status until capability discovery
+  // completes. Solid inserts rendered nodes before an existing first child, so
+  // clear that fallback before mounting or it remains visible below the SPA.
+  root.replaceChildren();
   render(
     () => (
       <ErrorBoundary>
