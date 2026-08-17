@@ -170,6 +170,26 @@ describe("single-screen install surface", () => {
     expect(view).not.toContain("profile.provider");
   });
 
+  test("discovers the snapshot-bound deployment profile for direct Git installs", () => {
+    const view = read("dashboard/src/views/new/InstallView.tsx");
+    const profileDiscoveryStart = view.indexOf(
+      "const response = await listSourceSnapshotDeploymentProfiles(",
+    );
+    const profileDiscoveryEnd = view.indexOf(
+      "setPreparationStage(\"compatibility\")",
+      profileDiscoveryStart,
+    );
+    const profileDiscovery = view.slice(profileDiscoveryStart, profileDiscoveryEnd);
+    expect(profileDiscoveryStart).toBeGreaterThanOrEqual(0);
+    expect(profileDiscovery).not.toContain("if (listing())");
+    expect(view).toContain(
+      "<Show when={deploymentProfileCatalog().status === \"ready\"}>",
+    );
+    expect(view).not.toContain(
+      "<Show when={listing() && deploymentProfileCatalog().status === \"ready\"}>",
+    );
+  });
+
   test("switching deployment profile preserves the snapshot and clears compiled authority", () => {
     const view = read("dashboard/src/views/new/InstallView.tsx");
     const switchStart = view.indexOf("const switchDeploymentProfile =");
