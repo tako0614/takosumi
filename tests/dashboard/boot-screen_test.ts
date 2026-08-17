@@ -13,3 +13,12 @@ test("dashboard shows an accessible boot status before capability discovery moun
   expect(root).toContain('aria-live="polite"');
   expect(root).toContain("読み込み中…");
 });
+
+test("dashboard replaces the static boot fallback before mounting the SPA", async () => {
+  const source = await readFile(
+    resolve(dashboardRoot, "src/index.tsx"),
+    "utf8",
+  );
+
+  expect(source).toContain("root.replaceChildren();");
+});
