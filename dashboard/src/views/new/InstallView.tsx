@@ -635,15 +635,14 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     if (!CAPSULE_NAME_PATTERN.test(name().trim())) {
       return t("installStore.invalidName");
     }
-    if (listing() && deploymentProfilesLoading()) {
+    if (deploymentProfilesLoading()) {
       return t("installStore.deploymentProfileLoading");
     }
     const profiles = deploymentProfileCatalog();
-    if (listing() && profiles.status === "invalid") {
+    if (profiles.status === "invalid") {
       return t("installStore.deploymentProfileUnavailable");
     }
     if (
-      listing() &&
       profiles.status === "ready" &&
       (!selectedDeploymentProfileKey() || !deploymentProfileConfirmed())
     ) {
@@ -833,47 +832,45 @@ function Inner(props: { readonly installingPrincipalId: string }) {
         setSourceId(prepared.sourceId);
         setSourceSnapshotId(prepared.sourceSnapshotId);
 
-        if (listing()) {
-          setDeploymentProfilesLoading(true);
-          try {
-            const response = await listSourceSnapshotDeploymentProfiles(
-              prepared.sourceId,
-              prepared.sourceSnapshotId,
-              { signal: controller.signal },
-            );
-            if (
-              controller.signal.aborted ||
-              !workspaceIsCurrent(workspace)
-            ) {
-              setPhase("configure");
-              return;
-            }
-            const catalog = storeDeploymentProfileCatalogFromSnapshot(response);
-            // Discovery never confirms a hosting decision on the user's
-            // behalf, including when the DB marks one option recommended.
-            setSelectedDeploymentProfileKey("");
-            setDeploymentProfileCatalog(catalog);
-            setDeploymentProfileConfirmed(false);
-            if (catalog.status === "invalid") {
-              setError(t("installStore.deploymentProfileUnavailable"));
-              setPhase("configure");
-              return;
-            }
-            if (catalog.status === "ready") {
-              // Profile selection is a separate reviewed user action. Stop
-              // before compatibility or derived InstallConfig persistence.
-              setPhase("configure");
-              return;
-            }
-          } catch (cause) {
-            if (controller.signal.aborted) throw cause;
-            setDeploymentProfileCatalog({ status: "invalid", profiles: [] });
+        setDeploymentProfilesLoading(true);
+        try {
+          const response = await listSourceSnapshotDeploymentProfiles(
+            prepared.sourceId,
+            prepared.sourceSnapshotId,
+            { signal: controller.signal },
+          );
+          if (
+            controller.signal.aborted ||
+            !workspaceIsCurrent(workspace)
+          ) {
+            setPhase("configure");
+            return;
+          }
+          const catalog = storeDeploymentProfileCatalogFromSnapshot(response);
+          // Discovery never confirms a hosting decision on the user's
+          // behalf, including when the DB marks one option recommended.
+          setSelectedDeploymentProfileKey("");
+          setDeploymentProfileCatalog(catalog);
+          setDeploymentProfileConfirmed(false);
+          if (catalog.status === "invalid") {
             setError(t("installStore.deploymentProfileUnavailable"));
             setPhase("configure");
             return;
-          } finally {
-            setDeploymentProfilesLoading(false);
           }
+          if (catalog.status === "ready") {
+            // Profile selection is a separate reviewed user action. Stop
+            // before compatibility or derived InstallConfig persistence.
+            setPhase("configure");
+            return;
+          }
+        } catch (cause) {
+          if (controller.signal.aborted) throw cause;
+          setDeploymentProfileCatalog({ status: "invalid", profiles: [] });
+          setError(t("installStore.deploymentProfileUnavailable"));
+          setPhase("configure");
+          return;
+        } finally {
+          setDeploymentProfilesLoading(false);
         }
       }
       setPreparationStage("compatibility");
@@ -1658,12 +1655,12 @@ function Inner(props: { readonly installingPrincipalId: string }) {
               void prepareInstall();
             }}
           >
-            <Show when={listing() && deploymentProfilesLoading()}>
+            <Show when={deploymentProfilesLoading()}>
               <aside class="iv-setup-note" role="status">
                 {t("installStore.deploymentProfileLoading")}
               </aside>
             </Show>
-            <Show when={listing() && deploymentProfileCatalog().status === "ready"}>
+            <Show when={deploymentProfileCatalog().status === "ready"}>
               <section
                 class="iv-setup-note"
                 aria-labelledby="iv-deployment-profile-title"

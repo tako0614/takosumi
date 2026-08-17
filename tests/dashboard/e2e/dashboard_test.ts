@@ -356,7 +356,19 @@ async function stubSourceOptionsRead(
 
 interface ProviderDestinationFixtureState extends SourceCreateFixtureState {
   readonly mutations: string[];
+  readonly compatibilityBodies: unknown[];
+  readonly profileDiscoveryRequests: string[];
   bindingBody?: { readonly bindings?: readonly Record<string, unknown>[] };
+}
+
+interface ProviderDestinationFixtureOptions {
+  readonly deploymentProfiles?: readonly {
+    readonly key: string;
+    readonly label: { readonly ja: string; readonly en: string };
+    readonly description: { readonly ja: string; readonly en: string };
+    readonly order: number;
+    readonly recommended: boolean;
+  }[];
 }
 
 /** Stub a complete manual source check while retaining mutation ordering. */
@@ -371,9 +383,12 @@ async function stubProviderDestinationFixture(
       credentialRequired: true,
     },
   ],
+  options: ProviderDestinationFixtureOptions = {},
 ): Promise<ProviderDestinationFixtureState> {
   const state: ProviderDestinationFixtureState = {
     mutations: [],
+    compatibilityBodies: [],
+    profileDiscoveryRequests: [],
     sourceListReads: [],
     sourcePosts: [],
   };
@@ -381,6 +396,8 @@ async function stubProviderDestinationFixture(
   const snapshotId = "snap_provider_destination_e2e";
   const syncRunId = "run_provider_source_sync_e2e";
   const planRunId = "run_provider_plan_e2e";
+  let sourceName = "cloudflare-service";
+  let sourceUrl = "https://github.com/example/cloudflare-service.git";
   await page.route("**/api/v1/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -414,6 +431,8 @@ async function stubProviderDestinationFixture(
         readonly autoSync?: boolean;
       };
       state.sourcePosts.push(path);
+      sourceName = body.name;
+      sourceUrl = body.url;
       return route.fulfill({
         json: {
           source: {
@@ -463,7 +482,7 @@ async function stubProviderDestinationFixture(
               origin: "git",
               workspaceId: "ws_alpha",
               sourceId,
-              url: "https://github.com/example/cloudflare-service.git",
+              url: sourceUrl,
               ref: PORTABLE_SOURCE_OPTIONS_COMMIT,
               resolvedCommit: PORTABLE_SOURCE_OPTIONS_COMMIT,
               path: ".",
@@ -477,7 +496,19 @@ async function stubProviderDestinationFixture(
         },
       });
     }
+    if (
+      options.deploymentProfiles &&
+      path ===
+        `/api/v1/sources/${sourceId}/snapshots/${snapshotId}/deployment-profiles` &&
+      request.method() === "GET"
+    ) {
+      state.profileDiscoveryRequests.push(path);
+      return route.fulfill({
+        json: { status: "ready", profiles: options.deploymentProfiles },
+      });
+    }
     if (path === `/api/v1/sources/${sourceId}/compatibility-check`) {
+      state.compatibilityBodies.push(request.postDataJSON());
       return route.fulfill({
         json: {
           report: {
@@ -516,8 +547,8 @@ async function stubProviderDestinationFixture(
           capsule: {
             id: "cap_provider_destination_e2e",
             workspaceId: "ws_alpha",
-            name: "cloudflare-service",
-            slug: "cloudflare-service",
+            name: sourceName,
+            slug: sourceName,
             environment: "production",
             sourceId,
             installConfigId: "cfg-default-opentofu-capsule",
@@ -1699,6 +1730,88 @@ test.describe("Takosumi dashboard browser surface", () => {
       )
       .toBe(true);
     expectSingleSourceCreate(sourceState);
+  });
+
+  test("direct Git installs discover and submit the snapshot-bound deployment profile", async ({
+    page,
+  }) => {
+    test.skip(
+      mode !== "portable",
+      "the deterministic direct Git install fixture is portable-only",
+    );
+    const errors = pageErrors(page);
+    const traffic = monitorDashboardTraffic(page, mode);
+    const state = await stubProviderDestinationFixture(
+      page,
+      [],
+      [],
+      {
+        deploymentProfiles: [
+          {
+            key: "takosumi-cloud",
+            label: { ja: "Takosumi Cloud", en: "Takosumi Cloud" },
+            description: {
+              ja: "Run on Takosumi Cloud",
+              en: "Run on Takosumi Cloud",
+            },
+            order: 10,
+            recommended: true,
+          },
+          {
+            key: "byoc",
+            label: { ja: "Bring your own cloud", en: "Bring your own cloud" },
+            description: {
+              ja: "Run in your own cloud",
+              en: "Run in your own cloud",
+            },
+            order: 20,
+            recommended: false,
+          },
+        ],
+      },
+    );
+    const query = new URLSearchParams({
+      git: "https://github.com/tako0614/yurucommu.git",
+      ref: PORTABLE_SOURCE_OPTIONS_COMMIT,
+      path: ".",
+      name: "yurucommu",
+    });
+    await page.goto(`/new?${query}`, { waitUntil: "domcontentloaded" });
+    const hostingOption = page.getByRole("combobox", {
+      name: /デプロイ方法|Hosting option/u,
+    });
+    await expect(hostingOption).toHaveCount(0);
+
+    await page.getByRole("button", { name: /追加|Add/u }).click();
+    await expect(hostingOption).toBeVisible();
+    expect(state.sourcePosts).toEqual(["/api/v1/sources"]);
+    expect(state.profileDiscoveryRequests).toEqual([
+      "/api/v1/sources/src_provider_destination_e2e/snapshots/snap_provider_destination_e2e/deployment-profiles",
+    ]);
+    expect(state.compatibilityBodies).toHaveLength(0);
+    await expect(hostingOption).toHaveValue("");
+
+    await hostingOption.selectOption("takosumi-cloud");
+    await expect(hostingOption).toHaveValue("takosumi-cloud");
+    await expect(
+      page.getByText("Run on Takosumi Cloud", { exact: true }),
+    ).toBeVisible();
+    const confirmation = page.getByRole("checkbox", {
+      name: /このデプロイ方法で追加することを確認しました|I confirm this hosting option/u,
+    });
+    await confirmation.check();
+    await page.getByRole("button", { name: /追加|Add/u }).click();
+    await expect
+      .poll(() => state.compatibilityBodies.length)
+      .toBe(1);
+    expect(state.compatibilityBodies[0]).toMatchObject({
+      compileInstallUx: true,
+      deploymentProfileKey: "takosumi-cloud",
+      sourceSnapshotId: "snap_provider_destination_e2e",
+    });
+    expect(state.sourcePosts).toEqual(["/api/v1/sources"]);
+    await assertNoPageErrors(errors);
+    traffic.assertNoFailures();
   });
 
   test("shows the repository-owned installed app and its launch URL", async ({
