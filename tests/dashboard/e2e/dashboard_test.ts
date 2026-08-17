@@ -497,14 +497,15 @@ async function stubProviderDestinationFixture(
       });
     }
     if (
-      options.deploymentProfiles &&
       path ===
         `/api/v1/sources/${sourceId}/snapshots/${snapshotId}/deployment-profiles` &&
       request.method() === "GET"
     ) {
       state.profileDiscoveryRequests.push(path);
       return route.fulfill({
-        json: { status: "ready", profiles: options.deploymentProfiles },
+        json: options.deploymentProfiles
+          ? { status: "ready", profiles: options.deploymentProfiles }
+          : { status: "none", profiles: [] },
       });
     }
     if (path === `/api/v1/sources/${sourceId}/compatibility-check`) {
