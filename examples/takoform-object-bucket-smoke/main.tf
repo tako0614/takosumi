@@ -3,8 +3,8 @@ terraform {
 
   required_providers {
     takoform = {
-      source  = "registry.opentofu.org/tako0614/takoform"
-      version = "= 1.0.2"
+      source  = "registry.terraform.io/tako0614/takoform"
+      version = "= 2.1.1"
     }
   }
 }
@@ -20,12 +20,11 @@ variable "bucket_name" {
   }
 }
 
-resource "takoform_object_bucket" "smoke" {
-  name          = var.bucket_name
-  storage_class = "standard"
+resource "takoform_edge_object_bucket" "smoke" {
+  name = var.bucket_name
 }
 
 output "object_bucket_id" {
-  description = "Canonical Takoform resource id for the object bucket."
-  value       = takoform_object_bucket.smoke.id
+  description = "Host-issued immutable Takoform UID for the object bucket."
+  value       = takoform_edge_object_bucket.smoke.uid
 }

@@ -9,6 +9,7 @@ import type {
   CapsuleRootModuleVariableDeclaration,
 } from "takosumi-contract/capsules";
 import type { PolicyConfig } from "takosumi-contract/install-configs";
+import { canonicalProviderSource } from "takosumi-contract/provider-env-rules";
 import type { SourceSnapshot } from "takosumi-contract/sources";
 
 export interface CapsuleSourceFile {
@@ -195,7 +196,7 @@ export function analyzeOpenTofuCapsuleFiles(
         code: "provider_not_allowed",
         message: `Provider ${provider.source} is not allowed by policy.`,
         suggestion:
-          "Use a fully qualified OpenTofu provider source such as namespace/name or registry.opentofu.org/namespace/name.",
+          "Use a qualified provider source such as namespace/name or registry-host/namespace/name.",
       });
     }
   }
@@ -799,30 +800,23 @@ function providerAllowed(
   return allowlistContains(allowedProviders, source, providerInSet);
 }
 
-function canonicalProviderSource(source: string): string {
-  return source.startsWith("registry.opentofu.org/")
-    ? source.slice("registry.opentofu.org/".length)
-    : source;
-}
-
 function providerInSet(
   source: string,
   providers: ReadonlySet<string>,
 ): boolean {
-  const normalized = source.startsWith("registry.opentofu.org/")
-    ? source
-    : `registry.opentofu.org/${source}`;
+  const normalized = canonicalProviderSource(source);
   return providers.has(source) || providers.has(normalized);
 }
 
 function isQualifiedProviderSource(source: string): boolean {
-  const body = source.startsWith("registry.opentofu.org/")
-    ? source.slice("registry.opentofu.org/".length)
-    : source;
-  const parts = body.split("/");
+  const parts = source.trim().split("/");
+  if (parts.length === 2) {
+    return parts.every((part) => /^[a-z0-9][a-z0-9_-]*$/i.test(part));
+  }
   return (
-    parts.length === 2 &&
-    parts.every((part) => /^[a-z0-9][a-z0-9_-]*$/i.test(part))
+    parts.length === 3 &&
+    /^[a-z0-9][a-z0-9.-]*$/i.test(parts[0] ?? "") &&
+    parts.slice(1).every((part) => /^[a-z0-9][a-z0-9_-]*$/i.test(part))
   );
 }
 
@@ -863,11 +857,7 @@ function allowedProviderSet(
       continue;
     }
     providers.add(provider);
-    providers.add(
-      provider.startsWith("registry.opentofu.org/")
-        ? provider
-        : `registry.opentofu.org/${provider}`,
-    );
+    providers.add(canonicalProviderSource(provider));
   }
   return providers;
 }
@@ -878,11 +868,7 @@ function explicitProviderSet(
   const providers = new Set<string>();
   for (const provider of configured ?? []) {
     providers.add(provider);
-    providers.add(
-      provider.startsWith("registry.opentofu.org/")
-        ? provider
-        : `registry.opentofu.org/${provider}`,
-    );
+    providers.add(canonicalProviderSource(provider));
   }
   return providers;
 }

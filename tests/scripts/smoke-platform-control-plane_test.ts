@@ -525,12 +525,12 @@ test("platform control-plane smoke binds an existing provider by its source", ()
   expect(
     smokeCapsuleProviderBindingsBody({
       providerConnectionId: "pcn_existing_takoform",
-      providerSource: "registry.opentofu.org/tako0614/takoform",
+      providerSource: "registry.terraform.io/tako0614/takoform",
     }),
   ).toEqual({
     bindings: [
       {
-        provider: "registry.opentofu.org/tako0614/takoform",
+        provider: "registry.terraform.io/tako0614/takoform",
         alias: "main",
         connectionId: "pcn_existing_takoform",
       },
