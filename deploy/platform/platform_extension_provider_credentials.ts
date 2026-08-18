@@ -57,6 +57,8 @@ export function platformExtensionProviderCredentialComposition(env: {
   > = {};
   for (const route of routes) {
     const broker = route.providerCredentialBroker!;
+    const issuance = route.runCredential!;
+    const handler = platformExtensionCredentialHandler(env, route.handlerKey);
     credentialRecipeDrivers[`${broker.recipeId}/${AUTH_MODE}`] = {
       evidenceIssuer: EVIDENCE_ISSUER,
       verify: async () => ({ ok: true }),
@@ -68,6 +70,9 @@ export function platformExtensionProviderCredentialComposition(env: {
           broker.exchangePath,
           broker.providerSource,
           broker.envNames,
+          issuance.audience,
+          issuance.requiredScopes,
+          handler,
         ),
     };
   }
@@ -98,8 +103,16 @@ async function mintPlatformExtensionProviderCredential(
   exchangePath: string,
   providerSource: string,
   envNames: readonly string[],
+  audience: string,
+  scopes: readonly string[],
+  handler: PlatformExtensionCredentialHandler | undefined,
 ) {
-  if (!context.run || !context.issueRunCredential || !context.runCredentialSettings) {
+  if (
+    !context.run ||
+    !context.issueRunCredential ||
+    !context.runCredentialSettings ||
+    !handler
+  ) {
     throw new Error("provider credential exchange requires a canonical Run and settings");
   }
   // Keep the platform credential wider than the downstream 300-second
@@ -108,19 +121,31 @@ async function mintPlatformExtensionProviderCredential(
   const issued = await context.issueRunCredential({ ttlSeconds: 600 });
   const url = new URL(`${basePath}${exchangePath}`, origin);
   url.searchParams.set("workspaceId", context.run.workspaceId);
-  const response = await context.fetch(url.href, {
-    method: "POST",
-    headers: {
-      accept: "application/json",
-      authorization: `Bearer ${issued.token}`,
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      kind: "takosumi.provider-run-credential-request@v1",
-      providerSource,
-      settings: context.runCredentialSettings,
+  const response = await handler.fetchAuthenticated(
+    new Request(url.href, {
+      method: "POST",
+      headers: {
+        accept: "application/json",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        kind: "takosumi.provider-run-credential-request@v1",
+        providerSource,
+        settings: context.runCredentialSettings,
+      }),
     }),
-  });
+    Object.freeze({
+      authKind: "run-credential" as const,
+      subject: context.run.installingPrincipalId,
+      workspaceId: context.run.workspaceId,
+      capsuleId: context.run.capsuleId,
+      runId: context.run.runId,
+      installingPrincipalId: context.run.installingPrincipalId,
+      audience,
+      scopes: Object.freeze([...scopes]),
+      phase: context.run.phase,
+    }),
+  );
   if (!response.ok) {
     // The vault intentionally collapses provider-driver failures into the
     // public `credential_service_unavailable` diagnostic. Preserve only the
@@ -199,6 +224,37 @@ async function mintPlatformExtensionProviderCredential(
       secretValueStored: false as const,
     }),
   };
+}
+
+interface PlatformExtensionCredentialHandler {
+  fetchAuthenticated(
+    request: Request,
+    context: {
+      readonly authKind: "run-credential";
+      readonly subject: string;
+      readonly workspaceId: string;
+      readonly capsuleId: string;
+      readonly runId: string;
+      readonly installingPrincipalId: string;
+      readonly audience: string;
+      readonly scopes: readonly string[];
+      readonly phase: "plan" | "apply" | "destroy";
+    },
+  ): Promise<Response>;
+}
+
+function platformExtensionCredentialHandler(
+  env: object,
+  handlerKey: string,
+): PlatformExtensionCredentialHandler | undefined {
+  const value = (env as Record<string, unknown>)[handlerKey];
+  return value &&
+      typeof value === "object" &&
+      !Array.isArray(value) &&
+      typeof (value as { fetchAuthenticated?: unknown }).fetchAuthenticated ===
+        "function"
+    ? (value as PlatformExtensionCredentialHandler)
+    : undefined;
 }
 
 function exactHttpsOrigin(value: unknown): string {
