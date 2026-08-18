@@ -232,6 +232,7 @@ test("broker failures log only a stable status boundary", async () => {
     const logged = String(warn.mock.calls[0]?.[0]);
     expect(JSON.parse(logged)).toEqual({
       event: "platform_extension_provider_credential_exchange_failed",
+      stage: "handler_response_failed",
       status: 401,
     });
     expect(logged).not.toContain("secret_marker");
