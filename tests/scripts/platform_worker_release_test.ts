@@ -1,7 +1,9 @@
 import { expect, test } from "bun:test";
 import {
+  bindingNames,
   parsePlatformWorkerReleaseArgs,
   parseServingVersion,
+  selectRecoveredVersion,
 } from "../../scripts/platform-worker-release.ts";
 
 test("platform release parser exposes only reviewed plan and execute actions", () => {
@@ -33,6 +35,25 @@ test("platform release parser exposes only reviewed plan and execute actions", (
       "sentinel",
     ]),
   ).toThrow("platform_worker_release_arguments_invalid");
+  expect(
+    parsePlatformWorkerReleaseArgs([
+      "recover",
+      "--plan",
+      "/private/plan.json",
+      "--confirm",
+      "sha256:confirmation",
+      "--review",
+      "operator:reviewer",
+      "--evidence",
+      "/private/recovered.json",
+    ]),
+  ).toEqual({
+    action: "recover",
+    plan: "/private/plan.json",
+    confirmation: "sha256:confirmation",
+    reviewer: "operator:reviewer",
+    evidence: "/private/recovered.json",
+  });
 });
 
 test("platform release selects exactly one 100 percent serving Version", () => {
@@ -60,4 +81,32 @@ test("platform release selects exactly one 100 percent serving Version", () => {
       ]),
     ),
   ).toThrow("platform_worker_release_serving_version_invalid");
+});
+
+test("lost acknowledgement recovery selects one post-plan Version and exact bindings", () => {
+  expect(
+    selectRecoveredVersion(
+      JSON.stringify([
+        {
+          id: "11111111-1111-4111-8111-111111111111",
+          metadata: { created_on: "2026-08-18T16:00:00Z" },
+        },
+        {
+          id: "22222222-2222-4222-8222-222222222222",
+          metadata: { created_on: "2026-08-18T16:30:00Z" },
+        },
+      ]),
+      "2026-08-18T16:29:00Z",
+    ),
+  ).toBe("22222222-2222-4222-8222-222222222222");
+  expect(
+    bindingNames(
+      JSON.stringify({
+        resources: [
+          { name: "ASSETS" },
+          { binding: "TAKOSUMI_HOSTED_MARKETPLACE" },
+        ],
+      }),
+    ),
+  ).toEqual(["ASSETS", "TAKOSUMI_HOSTED_MARKETPLACE"]);
 });
