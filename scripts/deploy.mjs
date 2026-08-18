@@ -8,6 +8,7 @@
 //
 //   bun run deploy -- takosumi-website
 //   bun run deploy -- takosumi-platform-staging plan ...
+//   bun run deploy -- takosumi-platform plan ...
 //
 // `--contract` は副作用なしで、この repo が publish できる surface と、それぞれの
 // trigger・義務の果たし方を印字します。takos-control の
@@ -37,32 +38,43 @@ const WEBSITE = {
 
 const PLATFORM_STAGING = {
   surface: "takosumi-platform-staging",
+  environment: "staging",
+  target: "cloudflare-worker:takosumi-staging",
 };
+
+const PLATFORM_PRODUCTION = {
+  surface: "takosumi-platform",
+  environment: "production",
+  target: "cloudflare-worker:takosumi",
+};
+
+const platformContract = ({ surface, target, environment }) => ({
+  surface,
+  target,
+  triggers: ["irreversible", "authority", "published-identity"],
+  obligations: {
+    provenance:
+      `plan binds one clean pushed OSS commit, the exact external realized ${environment} config digest, dashboard bytes, dry-run, and the exact 100 percent predecessor Version; execute rechecks all identities before upload`,
+    "post-conditions":
+      "execute requires the published Version at 100 percent and proves the public root and Takosumi discovery document are served by that exact Version; authenticated Hosted extension E2E is a separate required composition check",
+    reversal:
+      "the plan records the exact predecessor immutable Version and execute prints the one-Version restore command; deleted Durable Object storage is forward-only and cannot be restored by code rollback",
+    "failure-handling":
+      "stable private evidence distinguishes failed from indeterminate after mutation; execute never retries an upload and requires authoritative Version reconciliation before another attempt",
+    "pre-mutation-proof":
+      `plan runs the dashboard build and Wrangler dry-run against the exact realized ${environment} config, then seals their digests and predecessor Version`,
+    "independent-review":
+      "execute requires the exact plan confirmation and a named operator reviewer distinct from the source bytes",
+    "no-overwrite":
+      "Wrangler mints a new immutable Worker Version and the owner requires exact 100 percent readback before ready evidence",
+  },
+});
 
 const CONTRACT = {
   kind: "takos.deploy-contract@v2",
   surfaces: [
-    {
-      surface: PLATFORM_STAGING.surface,
-      target: "cloudflare-worker:takosumi-staging",
-      triggers: ["irreversible", "authority", "published-identity"],
-      obligations: {
-        provenance:
-          "plan binds one clean pushed OSS commit, the exact external realized config digest, dashboard bytes, dry-run, and the exact 100 percent predecessor Version; execute rechecks all identities before upload",
-        "post-conditions":
-          "execute requires the published Version at 100 percent and proves the public root and Takosumi discovery document are served by that exact Version; authenticated Hosted extension E2E is a separate required composition check",
-        reversal:
-          "the plan records the exact predecessor immutable Version and execute prints the one-Version restore command; deleted Durable Object storage is forward-only and cannot be restored by code rollback",
-        "failure-handling":
-          "stable private evidence distinguishes failed from indeterminate after mutation; execute never retries an upload and requires authoritative Version reconciliation before another attempt",
-        "pre-mutation-proof":
-          "plan runs the dashboard build and Wrangler dry-run against the exact realized staging config, then seals their digests and predecessor Version",
-        "independent-review":
-          "execute requires the exact plan confirmation and a named operator reviewer distinct from the source bytes",
-        "no-overwrite":
-          "Wrangler mints a new immutable Worker Version and the owner requires exact 100 percent readback before ready evidence",
-      },
-    },
+    platformContract(PLATFORM_STAGING),
+    platformContract(PLATFORM_PRODUCTION),
     {
       surface: WEBSITE.surface,
       target: `cloudflare-pages:${WEBSITE.project}`,
@@ -105,10 +117,17 @@ function die(message, detail = []) {
   process.exit(1);
 }
 
-if (selected === PLATFORM_STAGING.surface) {
+if (
+  selected === PLATFORM_STAGING.surface ||
+  selected === PLATFORM_PRODUCTION.surface
+) {
   const { runPlatformWorkerRelease } =
     await import("./platform-worker-release.ts");
-  await runPlatformWorkerRelease(process.argv.slice(3));
+  const environment =
+    selected === PLATFORM_STAGING.surface
+      ? PLATFORM_STAGING.environment
+      : PLATFORM_PRODUCTION.environment;
+  await runPlatformWorkerRelease(process.argv.slice(3), environment);
   process.exit(0);
 }
 

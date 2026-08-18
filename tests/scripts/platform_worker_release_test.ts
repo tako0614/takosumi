@@ -1,10 +1,56 @@
 import { expect, test } from "bun:test";
+import { resolve } from "node:path";
 import {
+  assertConfigTargetsSource,
   bindingNames,
   parsePlatformWorkerReleaseArgs,
   parseServingVersion,
+  platformTargetForEnvironment,
   selectRecoveredVersion,
 } from "../../scripts/platform-worker-release.ts";
+
+const root = resolve(import.meta.dir, "../..");
+
+test("platform release owns isolated staging and production targets", () => {
+  expect(platformTargetForEnvironment("staging")).toEqual({
+    origin: "https://app-staging.takosumi.com",
+    workerName: "takosumi-staging",
+    hostedService: "takosumi-hosted-marketplace",
+  });
+  expect(platformTargetForEnvironment("production")).toEqual({
+    origin: "https://app.takosumi.com",
+    workerName: "takosumi",
+    hostedService: "takosumi-hosted-marketplace-production",
+  });
+});
+
+test("production config must bind the isolated production Hosted service", () => {
+  const source = (service: string) => `
+name = "takosumi"
+main = "${resolve(root, "deploy/platform/worker.ts")}"
+[assets]
+directory = "${resolve(root, "dashboard/dist")}"
+[[services]]
+binding = "TAKOSUMI_HOSTED_MARKETPLACE"
+service = "${service}"
+[vars]
+TAKOSUMI_ENVIRONMENT = "production"
+`;
+  expect(() =>
+    assertConfigTargetsSource(
+      source("takosumi-hosted-marketplace-production"),
+      "/private/wrangler.toml",
+      "production",
+    ),
+  ).not.toThrow();
+  expect(() =>
+    assertConfigTargetsSource(
+      source("takosumi-hosted-marketplace"),
+      "/private/wrangler.toml",
+      "production",
+    ),
+  ).toThrow("platform_worker_release_config_source_invalid");
+});
 
 test("platform release parser exposes only reviewed plan and execute actions", () => {
   expect(
