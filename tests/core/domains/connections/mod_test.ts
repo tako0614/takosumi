@@ -215,6 +215,86 @@ test("operator mode resolves a verified workspace-bindable run-issued connection
   ]);
 });
 
+test("run-issued binding settings are canonical, digest-bound, and reject credential material", async () => {
+  const { store, model } = await setup();
+  const runIssued = connection({
+    id: "conn_operator_run_settings",
+    status: "verified",
+    materialization: "run-issued",
+    credentialRecipe: {
+      id: "operator-run-credential",
+      authMode: "broker",
+      runIssuance: {
+        context: "capsule-run.v1",
+        operatorConnection: "workspace-bindable",
+        storedMaterial: "none",
+        audience: "extension.example.v1",
+        scopes: ["extension:invoke"],
+      },
+    },
+  });
+  await store.putConnection(runIssued);
+  const service = new ConnectionsService({
+    store,
+    allowOperatorScopedProviderConnections: true,
+  });
+  await store.putProviderBindingSet({
+    id: "dp_operator_run_settings",
+    workspaceId: model.workspace.id,
+    capsuleId: model.capsule.id,
+    environment: model.capsule.environment,
+    bindings: [
+      {
+        provider: CLOUDFLARE,
+        connectionId: runIssued.id,
+        runCredentialSettings: {
+          resourceName: "bucket-main",
+          reservationId: "res_123",
+        },
+      },
+    ],
+    createdAt: NOW,
+    updatedAt: NOW,
+  });
+
+  const resolved = await service.resolveProviderBindings(model.capsule);
+  expect(resolved[0]?.runCredentialSettings).toEqual({
+    reservationId: "res_123",
+    resourceName: "bucket-main",
+  });
+  const digest = await resolvedProviderBindingsDigest(resolved);
+  expect(
+    await resolvedProviderBindingsDigest(
+      resolved.map((entry) => ({
+        ...entry,
+        runCredentialSettings: {
+          reservationId: "res_456",
+          resourceName: "bucket-main",
+        },
+      })),
+    ),
+  ).not.toBe(digest);
+
+  await store.putProviderBindingSet({
+    id: "dp_operator_run_settings",
+    workspaceId: model.workspace.id,
+    capsuleId: model.capsule.id,
+    environment: model.capsule.environment,
+    bindings: [
+      {
+        provider: CLOUDFLARE,
+        connectionId: runIssued.id,
+        runCredentialSettings: { authToken: "must-not-persist" },
+      },
+    ],
+    createdAt: NOW,
+    updatedAt: NOW,
+  });
+  await expect(service.resolveProviderBindings(model.capsule)).rejects.toThrow(
+    /credential-shaped|secret-like/,
+  );
+});
+
 test("providerConfig base_url alone never authorizes an operator managed connection", async () => {
   const { store, model } = await setup();
   await store.putConnection(

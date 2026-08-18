@@ -1630,6 +1630,7 @@ interface ProviderBindingRow {
   readonly childAlias: string;
   readonly rootAlias: string;
   readonly connectionId: string;
+  readonly runCredentialSettings?: ProviderBinding["runCredentialSettings"];
 }
 
 function providerBindingToRow(binding: ProviderBinding): ProviderBindingRow {
@@ -1639,6 +1640,9 @@ function providerBindingToRow(binding: ProviderBinding): ProviderBindingRow {
     childAlias: binding.childAlias ?? "",
     rootAlias: binding.rootAlias ?? binding.alias ?? "",
     connectionId: binding.connectionId,
+    ...(binding.runCredentialSettings
+      ? { runCredentialSettings: binding.runCredentialSettings }
+      : {}),
   };
 }
 
@@ -1717,10 +1721,14 @@ function buildProviderBindings(
       childAlias?: string;
       rootAlias?: string;
       connectionId: string;
+      runCredentialSettings?: ProviderBinding["runCredentialSettings"];
     } = {
       provider,
       moduleLocalName: row.moduleLocalName.trim() || providerTail(provider),
       connectionId: row.connectionId.trim(),
+      ...(row.runCredentialSettings
+        ? { runCredentialSettings: row.runCredentialSettings }
+        : {}),
     };
     const childAlias = row.childAlias.trim();
     const rootAlias = row.rootAlias.trim();

@@ -480,10 +480,20 @@ export async function resolveProviderBindings(
   }
   const resolved: ProviderBinding[] = [];
   for (const [index, binding] of bindings.entries()) {
-    if (!visibleById.has(binding.connectionId)) {
+    const connection = visibleById.get(binding.connectionId);
+    if (!connection) {
       return {
         ok: false,
         message: `bindings[${index}]: unknown provider connection`,
+      };
+    }
+    if (
+      binding.runCredentialSettings !== undefined &&
+      !isWorkspaceBindableOperatorConnection(connection)
+    ) {
+      return {
+        ok: false,
+        message: `bindings[${index}]: provider connection does not accept run credential settings`,
       };
     }
     resolved.push({
@@ -496,6 +506,9 @@ export async function resolveProviderBindings(
       ...(binding.alias ? { alias: binding.alias } : {}),
       connectionId: binding.connectionId,
       ...(binding.region ? { region: binding.region } : {}),
+      ...(binding.runCredentialSettings
+        ? { runCredentialSettings: binding.runCredentialSettings }
+        : {}),
     });
   }
   return { ok: true, bindings: resolved };

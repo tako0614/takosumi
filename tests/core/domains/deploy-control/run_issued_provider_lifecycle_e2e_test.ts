@@ -46,6 +46,10 @@ const TOKEN_SECRET = "0123456789abcdef0123456789abcdef";
 const NOW_MS = Date.parse("2026-08-09T00:00:00.000Z");
 const PLAN_DIGEST = `sha256:${"1".repeat(64)}`;
 const LOCK_DIGEST = `sha256:${"2".repeat(64)}`;
+const RUN_CREDENTIAL_SETTINGS = {
+  reservationId: "res_hosted_e2e",
+  resourceName: "bucket-main",
+} as const;
 
 const RUN_ISSUED_RECIPE = {
   id: "operator-run-credential",
@@ -103,6 +107,7 @@ test("generic run-issued credentials reach plan, apply, and destroy runner dispa
       if (!context.run || !context.issueRunCredential) {
         throw new Error("canonical Run issuer callback is required");
       }
+      expect(context.runCredentialSettings).toEqual(RUN_CREDENTIAL_SETTINGS);
       const issued = await context.issueRunCredential({ ttlSeconds: 600 });
       return {
         env: { [TOKEN_ENV]: issued.token },
@@ -178,7 +183,13 @@ test("generic run-issued credentials reach plan, apply, and destroy runner dispa
     workspaceId: WORKSPACE_ID,
     capsuleId: CAPSULE_ID,
     environment: "preview",
-    bindings: [{ provider: PROVIDER, connectionId: CONNECTION_ID }],
+    bindings: [
+      {
+        provider: PROVIDER,
+        connectionId: CONNECTION_ID,
+        runCredentialSettings: RUN_CREDENTIAL_SETTINGS,
+      },
+    ],
     createdAt: new Date(NOW_MS).toISOString(),
     updatedAt: new Date(NOW_MS).toISOString(),
   });

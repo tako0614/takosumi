@@ -13,6 +13,10 @@ test("ProviderBinding parsing keeps current routing fields and deprecated alias"
     alias: "legacy",
     connectionId: "conn_1",
     region: "us-east-1",
+    runCredentialSettings: {
+      resourceName: "bucket-main",
+      reservationId: "res_123",
+    },
   };
 
   expect(parseProviderBinding(binding)).toEqual({ ok: true, binding });
@@ -20,6 +24,16 @@ test("ProviderBinding parsing keeps current routing fields and deprecated alias"
     ok: true,
     bindings: [binding],
   });
+});
+
+test("ProviderBinding parsing rejects credential-shaped run settings", () => {
+  expect(
+    parseProviderBinding({
+      provider: "registry.terraform.io/tako0614/takoform",
+      connectionId: "conn_hosted",
+      runCredentialSettings: { authToken: "must-not-cross" },
+    }),
+  ).toMatchObject({ ok: false });
 });
 
 test("ProviderBinding parsing omits malformed optional strings", () => {

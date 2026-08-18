@@ -73,6 +73,7 @@ import type {
   ProviderBindingSet,
   ProviderConnection,
 } from "takosumi-contract/connections";
+import { canonicalRunCredentialSettings } from "takosumi-contract/connections";
 import type {
   ProviderResolution,
   PublicProviderResolution,
@@ -715,6 +716,7 @@ export function parseProviderBinding(value: unknown):
     alias?: string;
     connectionId: string;
     region?: string;
+    runCredentialSettings?: Readonly<Record<string, JsonValue>>;
   } = { provider, connectionId };
   const moduleLocalName = stringValue(input.moduleLocalName);
   if (moduleLocalName) binding.moduleLocalName = moduleLocalName;
@@ -726,6 +728,23 @@ export function parseProviderBinding(value: unknown):
   if (alias) binding.alias = alias;
   const region = stringValue(input.region);
   if (region) binding.region = region;
+  try {
+    const runCredentialSettings = canonicalRunCredentialSettings(
+      input.runCredentialSettings,
+      "runCredentialSettings",
+    );
+    if (runCredentialSettings) {
+      binding.runCredentialSettings = runCredentialSettings;
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      message:
+        error instanceof Error
+          ? error.message
+          : "runCredentialSettings is invalid",
+    };
+  }
   return { ok: true, binding };
 }
 

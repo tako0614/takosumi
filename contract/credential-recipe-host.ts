@@ -1,4 +1,4 @@
-import type { ProviderConnection } from "./connections.ts";
+import type { ProviderBinding, ProviderConnection } from "./connections.ts";
 import {
   isCapsuleRunCredentialIssuance,
 } from "./connections.ts";
@@ -38,6 +38,8 @@ export type CredentialRecipeIssueRunCredential = (
 
 interface CredentialRecipeDriverBaseContext {
   readonly connection: ProviderConnection;
+  /** Canonical non-secret parameters from this exact ProviderBinding. */
+  readonly runCredentialSettings?: ProviderBinding["runCredentialSettings"];
   readonly values: Readonly<Record<string, string>>;
   readonly files: readonly MintedFile[];
   readonly fetch: CredentialDriverFetch;
