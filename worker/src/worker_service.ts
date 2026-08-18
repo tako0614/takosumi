@@ -108,6 +108,9 @@ import {
   operatorControlMcpEnabled,
   operatorControlMcpResourceAuthorized,
 } from "../../deploy/operator-control-mcp.ts";
+import {
+  platformExtensionProviderCredentialComposition,
+} from "../../deploy/platform/platform_extension_provider_credentials.ts";
 
 const RESOURCE_SHAPE_RUN_WAIT_TIMEOUT_MS = 300_000;
 const RESOURCE_SHAPE_DELETE_TIMEOUT_MS =
@@ -301,8 +304,10 @@ export async function createWorkerServiceApp(
       : []);
   const formPackageHost = resolveFormPackageHostComposition(env, options);
   const offeringHostComposition = resolveOfferingHostComposition(env, options);
-  const envCredentialRecipeHost =
-    env.TAKOSUMI_CREDENTIAL_RECIPE_HOST_COMPOSITION;
+  const envCredentialRecipeHost = mergeCredentialRecipeHostContributions(
+    env.TAKOSUMI_CREDENTIAL_RECIPE_HOST_COMPOSITION,
+    platformExtensionProviderCredentialComposition(env),
+  );
   const credentialRecipeContribution =
     options.operatorProviderConnections === undefined
       ? envCredentialRecipeHost
@@ -470,6 +475,36 @@ export async function createWorkerServiceApp(
         }
       : {}),
   });
+}
+
+function mergeCredentialRecipeHostContributions(
+  left: import("takosumi-contract/credential-recipe-host").CredentialRecipeHostComposition | undefined,
+  right: import("takosumi-contract/credential-recipe-host").CredentialRecipeHostComposition | undefined,
+): import("takosumi-contract/credential-recipe-host").CredentialRecipeHostComposition | undefined {
+  if (!left) return right;
+  if (!right) return left;
+  const duplicateDriver = Object.keys(left.credentialRecipeDrivers).find((key) =>
+    Object.prototype.hasOwnProperty.call(right.credentialRecipeDrivers, key)
+  );
+  if (duplicateDriver) {
+    throw new TypeError(
+      `Credential Recipe driver ${duplicateDriver} must have one host owner`,
+    );
+  }
+  return {
+    credentialRecipes: [
+      ...left.credentialRecipes,
+      ...right.credentialRecipes,
+    ],
+    credentialRecipeDrivers: {
+      ...left.credentialRecipeDrivers,
+      ...right.credentialRecipeDrivers,
+    },
+    operatorProviderConnections: [
+      ...(left.operatorProviderConnections ?? []),
+      ...(right.operatorProviderConnections ?? []),
+    ],
+  };
 }
 
 /**

@@ -12,6 +12,11 @@ import {
 } from "takosumi-contract/capabilities";
 import type { WorkspaceRole } from "takosumi-contract/workspaces";
 import {
+  canonicalProviderSource,
+  isProviderEnvName,
+  isReservedProviderEnvName,
+} from "takosumi-contract/provider-env-rules";
+import {
   PLATFORM_EXTENSION_RESERVED_PREFIXES,
   pathIsUnderBase,
   platformExtensionBasePathIsReserved,
@@ -63,6 +68,12 @@ export interface PlatformExtensionRoute {
    * context seam, so their raw bearer is never delivered to a handler.
    */
   readonly runCredential?: PlatformExtensionRunCredential;
+  /**
+   * Optional generic provider bridge owned by this exact authenticated route.
+   * It contributes one fixed run-issued ProviderConnection without embedding
+   * provider behavior or credentials in OSS.
+   */
+  readonly providerCredentialBroker?: PlatformExtensionProviderCredentialBroker;
   /** Public capability tokens advertised by discovery. */
   readonly capabilities?: readonly string[];
   /**
@@ -78,6 +89,16 @@ export interface PlatformExtensionRoute {
 export interface PlatformExtensionRunCredential {
   readonly audience: string;
   readonly requiredScopes: readonly string[];
+}
+
+export interface PlatformExtensionProviderCredentialBroker {
+  readonly connectionId: string;
+  readonly recipeId: string;
+  readonly providerSource: string;
+  readonly displayName: string;
+  /** Relative path appended to this route's basePath. */
+  readonly exchangePath: `/${string}`;
+  readonly envNames: readonly string[];
 }
 
 /** Provider-neutral authenticated identity delivered across the platform seam. */
@@ -277,6 +298,10 @@ function platformExtensionRouteFromJson(
     );
   }
   const runCredential = optionalRunCredential(record.runCredential, label);
+  const providerCredentialBroker = optionalProviderCredentialBroker(
+    record.providerCredentialBroker,
+    label,
+  );
   const declaredCapabilities = optionalStringArray(
     record.capabilities,
     label,
@@ -294,6 +319,11 @@ function platformExtensionRouteFromJson(
   if (runCredential && authDelivery !== "context") {
     throw new TypeError(
       `${label}.runCredential requires authDelivery=context`,
+    );
+  }
+  if (providerCredentialBroker && !runCredential) {
+    throw new TypeError(
+      `${label}.providerCredentialBroker requires runCredential`,
     );
   }
   if (authDelivery === "context" && (compatibilityProfiles?.length ?? 0) > 0) {
@@ -345,10 +375,92 @@ function platformExtensionRouteFromJson(
     ...(selfServicePatScopes ? { selfServicePatScopes } : {}),
     ...(requestScopeRules ? { requestScopeRules } : {}),
     ...(runCredential ? { runCredential } : {}),
+    ...(providerCredentialBroker ? { providerCredentialBroker } : {}),
     ...(capabilities.length > 0 ? { capabilities } : {}),
     ...(compatibilityProfiles ? { compatibilityProfiles } : {}),
     ...(contributions ? { contributions } : {}),
   };
+}
+
+function optionalProviderCredentialBroker(
+  value: unknown,
+  label: string,
+): PlatformExtensionProviderCredentialBroker | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError(`${label}.providerCredentialBroker must be an object`);
+  }
+  const record = value as Record<string, unknown>;
+  const expectedKeys = [
+    "connectionId",
+    "displayName",
+    "envNames",
+    "exchangePath",
+    "providerSource",
+    "recipeId",
+  ];
+  if (
+    JSON.stringify(Object.keys(record).sort()) !==
+    JSON.stringify(expectedKeys)
+  ) {
+    throw new TypeError(`${label}.providerCredentialBroker has unknown or missing fields`);
+  }
+  const connectionId = nonEmptyString(record.connectionId);
+  const recipeId = nonEmptyString(record.recipeId);
+  const providerSource = nonEmptyString(record.providerSource);
+  const displayName = nonEmptyString(record.displayName);
+  const exchangePath = record.exchangePath;
+  if (!connectionId || !/^conn_[0-9A-Za-z]{8,64}$/u.test(connectionId)) {
+    throw new TypeError(`${label}.providerCredentialBroker.connectionId is invalid`);
+  }
+  if (!recipeId || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(recipeId)) {
+    throw new TypeError(`${label}.providerCredentialBroker.recipeId is invalid`);
+  }
+  if (
+    !providerSource ||
+    canonicalProviderSource(providerSource) !== providerSource ||
+    !/^[a-z0-9.-]+\/[a-z0-9_-]+\/[a-z0-9_-]+$/u.test(providerSource)
+  ) {
+    throw new TypeError(`${label}.providerCredentialBroker.providerSource must be canonical`);
+  }
+  if (
+    !displayName ||
+    displayName.length > 128 ||
+    /[\u0000-\u001f\u007f]/u.test(displayName)
+  ) {
+    throw new TypeError(`${label}.providerCredentialBroker.displayName is invalid`);
+  }
+  if (
+    typeof exchangePath !== "string" ||
+    exchangePath === "/" ||
+    !canonicalPlatformExtensionPath(exchangePath)
+  ) {
+    throw new TypeError(`${label}.providerCredentialBroker.exchangePath is invalid`);
+  }
+  if (!Array.isArray(record.envNames) || record.envNames.length === 0 || record.envNames.length > 16) {
+    throw new TypeError(`${label}.providerCredentialBroker.envNames is invalid`);
+  }
+  const envNames = record.envNames.map((entry) => {
+    if (
+      typeof entry !== "string" ||
+      !isProviderEnvName(entry) ||
+      isReservedProviderEnvName(entry)
+    ) {
+      throw new TypeError(`${label}.providerCredentialBroker.envNames contains an invalid name`);
+    }
+    return entry;
+  });
+  if (new Set(envNames).size !== envNames.length) {
+    throw new TypeError(`${label}.providerCredentialBroker.envNames contains duplicates`);
+  }
+  return Object.freeze({
+    connectionId,
+    recipeId,
+    providerSource,
+    displayName,
+    exchangePath: exchangePath as `/${string}`,
+    envNames: Object.freeze([...envNames]),
+  });
 }
 
 function platformExtensionMatchMode(
@@ -508,7 +620,11 @@ function mergePlatformExtensionRoutes(
           existing.selfServicePatScopes,
           route.selfServicePatScopes,
         ) ||
-        !sameRunCredential(existing.runCredential, route.runCredential))
+        !sameRunCredential(existing.runCredential, route.runCredential) ||
+        !sameProviderCredentialBroker(
+          existing.providerCredentialBroker,
+          route.providerCredentialBroker,
+        ))
     ) {
       throw new TypeError(
         `platform extension basePath ${route.basePath} has multiple owners`,
@@ -543,6 +659,20 @@ function mergePlatformExtensionRoutes(
     );
   }
   return [...merged.values()];
+}
+
+function sameProviderCredentialBroker(
+  left: PlatformExtensionProviderCredentialBroker | undefined,
+  right: PlatformExtensionProviderCredentialBroker | undefined,
+): boolean {
+  return (
+    left?.connectionId === right?.connectionId &&
+    left?.recipeId === right?.recipeId &&
+    left?.providerSource === right?.providerSource &&
+    left?.displayName === right?.displayName &&
+    left?.exchangePath === right?.exchangePath &&
+    sameStrings(left?.envNames, right?.envNames)
+  );
 }
 
 function sameRunCredential(

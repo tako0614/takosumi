@@ -16,6 +16,14 @@ test("generic extension descriptors accept localized UI contributions", () => {
           audience: "operator.example.provider.v1",
           requiredScopes: ["example.invoke"],
         },
+        providerCredentialBroker: {
+          connectionId: "conn_exampleProvider01",
+          recipeId: "example-provider-run",
+          providerSource: "registry.terraform.io/example/provider",
+          displayName: "Example Provider",
+          exchangePath: "/provider-credentials/example",
+          envNames: ["EXAMPLE_ENDPOINT", "EXAMPLE_TOKEN"],
+        },
         capabilities: ["example.v1"],
         contributions: [
           {
@@ -39,6 +47,14 @@ test("generic extension descriptors accept localized UI contributions", () => {
   expect(routes[0]?.runCredential).toEqual({
     audience: "operator.example.provider.v1",
     requiredScopes: ["example.invoke"],
+  });
+  expect(routes[0]?.providerCredentialBroker).toEqual({
+    connectionId: "conn_exampleProvider01",
+    recipeId: "example-provider-run",
+    providerSource: "registry.terraform.io/example/provider",
+    displayName: "Example Provider",
+    exchangePath: "/provider-credentials/example",
+    envNames: ["EXAMPLE_ENDPOINT", "EXAMPLE_TOKEN"],
   });
   expect(
     matchPlatformExtensionRoute("/extensions/example/settings", routes),
