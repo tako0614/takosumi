@@ -88,8 +88,8 @@ test("a configured extension contributes one exact run-issued provider broker", 
     },
     issueRunCredential: async () => ({
       token: "platform_run_token",
-      expiresAt: "2099-01-01T00:00:00.000Z",
-      ttlSeconds: 300,
+      expiresAt: "2026-08-18T00:10:00.000Z",
+      ttlSeconds: 600,
     }),
     fetch: async (input, init) => {
       calls.push({ input, init });
@@ -100,17 +100,16 @@ test("a configured extension contributes one exact run-issued provider broker", 
           TAKOFORM_SPACE: "tenant:tsh_opaque",
           TAKOFORM_TOKEN: "tfr_runner_only",
         },
-        expiresAt: "2099-01-01T00:00:00.000Z",
+        expiresAt: "2026-08-18T00:05:00.000Z",
       });
     },
     now: () => new Date("2026-08-18T00:00:00.000Z"),
     staticEvidence: () => ({
       connectionId: "conn_takosumiHostedTakoform01",
       provider: "registry.terraform.io/tako0614/takoform",
-      temporary: true,
-      ttlEnforced: true,
-      issuer: "platform_extension_provider_credential",
-      secretValueStored: false,
+      temporary: false,
+      ttlEnforced: false,
+      issuer: "static_secret",
     }),
   });
 
@@ -118,6 +117,16 @@ test("a configured extension contributes one exact run-issued provider broker", 
     TAKOFORM_ENDPOINT: "https://api.takoserver.com",
     TAKOFORM_SPACE: "tenant:tsh_opaque",
     TAKOFORM_TOKEN: "tfr_runner_only",
+  });
+  expect(minted.evidence).toEqual({
+    connectionId: "conn_takosumiHostedTakoform01",
+    provider: "registry.terraform.io/tako0614/takoform",
+    temporary: true,
+    ttlEnforced: true,
+    expiresAt: "2026-08-18T00:05:00.000Z",
+    ttlSeconds: 300,
+    issuer: "platform_extension_provider_credential",
+    secretValueStored: false,
   });
   expect(calls).toHaveLength(1);
   const call = calls[0] as { input: string; init: RequestInit };
