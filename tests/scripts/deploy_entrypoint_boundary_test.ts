@@ -27,6 +27,10 @@ test("OSS deploy entrypoint owns the official platform Worker without a Cloud wr
       target: "cloudflare-worker:takosumi-staging",
     }),
     expect.objectContaining({
+      surface: "takosumi-platform",
+      target: "cloudflare-worker:takosumi",
+    }),
+    expect.objectContaining({
       surface: "takosumi-website",
       target: "cloudflare-pages:takosumi-website",
     }),

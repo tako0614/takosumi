@@ -13,18 +13,38 @@ import { dirname, isAbsolute, relative, resolve } from "node:path";
 
 const ROOT = resolve(import.meta.dir, "..");
 const WRANGLER = resolve(ROOT, "node_modules/.bin/wrangler");
-const ORIGIN = "https://app-staging.takosumi.com";
-const WORKER_NAME = "takosumi-staging";
 const MAX_OUTPUT = 64 * 1024 * 1024;
 const COMMAND_TIMEOUT_MS = 180_000;
 const SHA256 = /^sha256:[0-9a-f]{64}$/u;
 const COMMIT = /^[0-9a-f]{40}$/u;
 const VERSION = /^[0-9a-f]{8}-[0-9a-f-]{27,}$/u;
 
+export type PlatformEnvironment = "staging" | "production";
+
+const TARGETS = {
+  staging: {
+    origin: "https://app-staging.takosumi.com",
+    workerName: "takosumi-staging",
+    hostedService: "takosumi-hosted-marketplace",
+  },
+  production: {
+    origin: "https://app.takosumi.com",
+    workerName: "takosumi",
+    hostedService: "takosumi-hosted-marketplace-production",
+  },
+} as const satisfies Record<
+  PlatformEnvironment,
+  { readonly origin: string; readonly workerName: string; readonly hostedService: string }
+>;
+
+export function platformTargetForEnvironment(environment: PlatformEnvironment) {
+  return TARGETS[environment];
+}
+
 interface PlatformReleasePlan {
   readonly kind: "takosumi.platform-worker-release-plan@v1";
   readonly createdAt: string;
-  readonly environment: "staging";
+  readonly environment: PlatformEnvironment;
   readonly sourceCommit: string;
   readonly configPath: string;
   readonly configSha256: string;
@@ -62,11 +82,12 @@ interface CommandResult {
 
 export async function runPlatformWorkerRelease(
   argv: readonly string[],
+  environment: PlatformEnvironment = "staging",
 ): Promise<void> {
   const options = parsePlatformWorkerReleaseArgs(argv);
-  if (options.action === "plan") await plan(options);
-  else if (options.action === "execute") await execute(options);
-  else await recover(options);
+  if (options.action === "plan") await plan(options, environment);
+  else if (options.action === "execute") await execute(options, environment);
+  else await recover(options, environment);
 }
 
 export function parsePlatformWorkerReleaseArgs(
@@ -122,6 +143,7 @@ export function parsePlatformWorkerReleaseArgs(
 
 async function plan(
   options: Extract<Options, { action: "plan" }>,
+  environment: PlatformEnvironment,
 ): Promise<void> {
   assertCleanAndPushed();
   assertReadableConfig(options.config);
@@ -130,6 +152,7 @@ async function plan(
   assertConfigTargetsSource(
     new TextDecoder("utf-8", { fatal: true }).decode(config),
     options.config,
+    environment,
   );
 
   await requiredCommand(
@@ -152,7 +175,7 @@ async function plan(
   const subject = {
     kind: "takosumi.platform-worker-release-plan@v1" as const,
     createdAt: new Date().toISOString(),
-    environment: "staging" as const,
+    environment,
     sourceCommit: git(["rev-parse", "HEAD"]).trim(),
     configPath: options.config,
     configSha256: digest(config),
@@ -174,6 +197,7 @@ async function plan(
 
 async function execute(
   options: Extract<Options, { action: "execute" }>,
+  environment: PlatformEnvironment,
 ): Promise<void> {
   assertCleanAndPushed();
   assertPrivateFile(options.plan);
@@ -181,7 +205,11 @@ async function execute(
   if (!/^operator:[A-Za-z0-9._@-]{3,128}$/u.test(options.reviewer)) {
     throw new Error("platform_worker_release_reviewer_invalid");
   }
-  const plan = parsePlan(readFileSync(options.plan), options.confirmation);
+  const plan = parsePlan(
+    readFileSync(options.plan),
+    options.confirmation,
+    environment,
+  );
   if (git(["rev-parse", "HEAD"]).trim() !== plan.sourceCommit) {
     throw new Error("platform_worker_release_source_drift");
   }
@@ -190,6 +218,7 @@ async function execute(
   assertConfigTargetsSource(
     new TextDecoder("utf-8", { fatal: true }).decode(config),
     plan.configPath,
+    plan.environment,
   );
   if (digest(config) !== plan.configSha256) {
     throw new Error("platform_worker_release_config_drift");
@@ -214,7 +243,7 @@ async function execute(
       plan.configPath,
       plan.predecessorVersionId,
     );
-    await verifyPublicReadback();
+    await verifyPublicReadback(plan.environment);
     const evidence = {
       kind: "takosumi.platform-worker-release-evidence@v1",
       status: "ready",
@@ -260,6 +289,7 @@ async function execute(
 
 async function recover(
   options: Extract<Options, { action: "recover" }>,
+  environment: PlatformEnvironment,
 ): Promise<void> {
   assertCleanAndPushed();
   assertPrivateFile(options.plan);
@@ -267,7 +297,11 @@ async function recover(
   if (!/^operator:[A-Za-z0-9._@-]{3,128}$/u.test(options.reviewer)) {
     throw new Error("platform_worker_release_reviewer_invalid");
   }
-  const plan = parsePlan(readFileSync(options.plan), options.confirmation);
+  const plan = parsePlan(
+    readFileSync(options.plan),
+    options.confirmation,
+    environment,
+  );
   const head = git(["rev-parse", "HEAD"]).trim();
   if (!isAncestor(plan.sourceCommit, head)) {
     throw new Error("platform_worker_release_recovery_source_invalid");
@@ -322,7 +356,7 @@ async function recover(
       throw new Error("platform_worker_release_recovery_binding_invalid");
     }
   }
-  await verifyPublicReadback();
+  await verifyPublicReadback(plan.environment);
   const evidence = {
     kind: "takosumi.platform-worker-release-evidence@v1",
     status: "ready",
@@ -351,6 +385,7 @@ async function recover(
 function parsePlan(
   bytes: Uint8Array,
   confirmation: string,
+  environment: PlatformEnvironment,
 ): PlatformReleasePlan {
   const value = JSON.parse(
     new TextDecoder("utf-8", { fatal: true }).decode(bytes),
@@ -359,7 +394,7 @@ function parsePlan(
   const { confirmation: recorded, ...subject } = value;
   if (
     value.kind !== "takosumi.platform-worker-release-plan@v1" ||
-    value.environment !== "staging" ||
+    value.environment !== environment ||
     typeof value.sourceCommit !== "string" ||
     !COMMIT.test(value.sourceCommit) ||
     typeof value.configPath !== "string" ||
@@ -462,18 +497,25 @@ async function waitForServingVersion(
   throw new Error("platform_worker_release_deployment_not_converged");
 }
 
-async function verifyPublicReadback(): Promise<void> {
+async function verifyPublicReadback(
+  environment: PlatformEnvironment,
+): Promise<void> {
+  const target = platformTargetForEnvironment(environment);
   for (const path of ["/", "/.well-known/takosumi"] as const) {
     let matched = false;
     for (let attempt = 1; attempt <= 8; attempt += 1) {
       try {
-        const response = await fetch(`${ORIGIN}${path}`, {
+        const response = await fetch(`${target.origin}${path}`, {
           headers: { "cache-control": "no-cache" },
           redirect: "manual",
         });
         if (response.status === 200) {
           if (path === "/") matched = true;
-          else matched = hasHostedDiscovery((await response.json()) as unknown);
+          else
+            matched = hasHostedDiscovery(
+              (await response.json()) as unknown,
+              target.origin,
+            );
         }
         if (matched) break;
       } catch {
@@ -486,7 +528,7 @@ async function verifyPublicReadback(): Promise<void> {
   }
 }
 
-function hasHostedDiscovery(value: unknown): boolean {
+function hasHostedDiscovery(value: unknown, origin: string): boolean {
   if (
     !record(value) ||
     !record(value.endpoints) ||
@@ -496,22 +538,40 @@ function hasHostedDiscovery(value: unknown): boolean {
   }
   const extensions = value.endpoints.extensions;
   return (
-    extensions["marketplace.hosted.v1"] === `${ORIGIN}/v1/hosted/marketplace` &&
+    extensions["marketplace.hosted.v1"] === `${origin}/v1/hosted/marketplace` &&
     extensions["resource-migration.hosted.v1"] ===
-      `${ORIGIN}/v1/hosted/marketplace` &&
+      `${origin}/v1/hosted/marketplace` &&
     extensions["object.s3.credentials.v1"] ===
-      `${ORIGIN}/v1/hosted/marketplace` &&
-    extensions["ai.openai-compatible.v1"] === `${ORIGIN}/v1/hosted/ai` &&
-    extensions["ai.prepaid-retail.v1"] === `${ORIGIN}/v1/hosted/ai`
+      `${origin}/v1/hosted/marketplace` &&
+    extensions["ai.openai-compatible.v1"] === `${origin}/v1/hosted/ai` &&
+    extensions["ai.prepaid-retail.v1"] === `${origin}/v1/hosted/ai`
   );
 }
 
-function assertConfigTargetsSource(source: string, path: string): void {
+export function assertConfigTargetsSource(
+  source: string,
+  path: string,
+  environment: PlatformEnvironment,
+): void {
+  const target = platformTargetForEnvironment(environment);
   const main = /^main\s*=\s*"([^"]+)"\s*$/mu.exec(source)?.[1];
   const assets = /^directory\s*=\s*"([^"]+)"\s*$/mu.exec(source)?.[1];
   const name = /^name\s*=\s*"([^"]+)"\s*$/mu.exec(source)?.[1];
+  const configuredEnvironment =
+    /^TAKOSUMI_ENVIRONMENT\s*=\s*"([^"]+)"\s*$/mu.exec(source)?.[1];
+  const services = [
+    ...source.matchAll(
+      /\[\[services\]\]\s+binding\s*=\s*"([^"]+)"\s+service\s*=\s*"([^"]+)"/gmu,
+    ),
+  ];
+  const hostedServices = services.filter(
+    (entry) => entry[1] === "TAKOSUMI_HOSTED_MARKETPLACE",
+  );
   if (
-    name !== WORKER_NAME ||
+    name !== target.workerName ||
+    configuredEnvironment !== environment ||
+    hostedServices.length !== 1 ||
+    hostedServices[0]?.[2] !== target.hostedService ||
     !main ||
     !assets ||
     resolve(dirname(path), main) !==
