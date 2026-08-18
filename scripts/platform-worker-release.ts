@@ -45,6 +45,13 @@ type Options =
       readonly confirmation: string;
       readonly reviewer: string;
       readonly evidence: string;
+    }
+  | {
+      readonly action: "recover";
+      readonly plan: string;
+      readonly confirmation: string;
+      readonly reviewer: string;
+      readonly evidence: string;
     };
 
 interface CommandResult {
@@ -58,14 +65,15 @@ export async function runPlatformWorkerRelease(
 ): Promise<void> {
   const options = parsePlatformWorkerReleaseArgs(argv);
   if (options.action === "plan") await plan(options);
-  else await execute(options);
+  else if (options.action === "execute") await execute(options);
+  else await recover(options);
 }
 
 export function parsePlatformWorkerReleaseArgs(
   argv: readonly string[],
 ): Options {
   const [action, ...rest] = argv;
-  if (action !== "plan" && action !== "execute") {
+  if (action !== "plan" && action !== "execute" && action !== "recover") {
     throw new Error("platform_worker_release_action_invalid");
   }
   const values = new Map<string, string>();
@@ -101,13 +109,15 @@ export function parsePlatformWorkerReleaseArgs(
       planOut: absolute(values.get("--plan-out")!),
     };
   }
-  return {
-    action,
+  const common = {
     plan: absolute(values.get("--plan")!),
     confirmation: values.get("--confirm")!,
     reviewer: values.get("--review")!,
     evidence: absolute(values.get("--evidence")!),
   };
+  return action === "execute"
+    ? { ...common, action: "execute" }
+    : { ...common, action: "recover" };
 }
 
 async function plan(
@@ -204,7 +214,7 @@ async function execute(
       plan.configPath,
       plan.predecessorVersionId,
     );
-    await verifyPublicReadback(deployedVersionId);
+    await verifyPublicReadback();
     const evidence = {
       kind: "takosumi.platform-worker-release-evidence@v1",
       status: "ready",
@@ -246,6 +256,96 @@ async function execute(
     );
     throw new Error("platform_worker_release_failed");
   }
+}
+
+async function recover(
+  options: Extract<Options, { action: "recover" }>,
+): Promise<void> {
+  assertCleanAndPushed();
+  assertPrivateFile(options.plan);
+  assertExternalAbsent(options.evidence);
+  if (!/^operator:[A-Za-z0-9._@-]{3,128}$/u.test(options.reviewer)) {
+    throw new Error("platform_worker_release_reviewer_invalid");
+  }
+  const plan = parsePlan(readFileSync(options.plan), options.confirmation);
+  const head = git(["rev-parse", "HEAD"]).trim();
+  if (!isAncestor(plan.sourceCommit, head)) {
+    throw new Error("platform_worker_release_recovery_source_invalid");
+  }
+  assertReadableConfig(plan.configPath);
+  const config = readFileSync(plan.configPath);
+  if (digest(config) !== plan.configSha256) {
+    throw new Error("platform_worker_release_config_drift");
+  }
+  if (
+    digest(readFileSync(resolve(ROOT, "dashboard/dist/index.html"))) !==
+    plan.dashboardIndexSha256
+  ) {
+    throw new Error("platform_worker_release_dashboard_drift");
+  }
+  const deployedVersionId = await readServingVersion(plan.configPath);
+  if (deployedVersionId === plan.predecessorVersionId) {
+    throw new Error("platform_worker_release_recovery_not_published");
+  }
+  const versions = await requiredCommand([
+    WRANGLER,
+    "versions",
+    "list",
+    "--config",
+    plan.configPath,
+    "--json",
+  ]);
+  if (
+    selectRecoveredVersion(versions.stdout, plan.createdAt) !==
+    deployedVersionId
+  ) {
+    throw new Error("platform_worker_release_recovery_version_invalid");
+  }
+  const version = await requiredCommand([
+    WRANGLER,
+    "versions",
+    "view",
+    deployedVersionId,
+    "--config",
+    plan.configPath,
+    "--json",
+  ]);
+  const bindings = bindingNames(version.stdout);
+  for (const required of [
+    "ASSETS",
+    "TAKOSUMI_ACCOUNTS_DB",
+    "TAKOSUMI_CONTROL_DB",
+    "TAKOSUMI_HOSTED_MARKETPLACE",
+    "TAKOSUMI_VERSION_METADATA",
+  ]) {
+    if (!bindings.includes(required)) {
+      throw new Error("platform_worker_release_recovery_binding_invalid");
+    }
+  }
+  await verifyPublicReadback();
+  const evidence = {
+    kind: "takosumi.platform-worker-release-evidence@v1",
+    status: "ready",
+    completedAt: new Date().toISOString(),
+    environment: plan.environment,
+    sourceCommit: plan.sourceCommit,
+    recoverySourceCommit: head,
+    configSha256: plan.configSha256,
+    dashboardIndexSha256: plan.dashboardIndexSha256,
+    predecessorVersionId: plan.predecessorVersionId,
+    deployedVersionId,
+    planConfirmation: plan.confirmation,
+    reviewer: options.reviewer,
+    lostAcknowledgement: true,
+    reversal: `wrangler versions deploy ${plan.predecessorVersionId}@100% --config ${plan.configPath}`,
+  };
+  writePrivate(
+    options.evidence,
+    new TextEncoder().encode(`${JSON.stringify(evidence, null, 2)}\n`),
+  );
+  process.stdout.write(
+    `${JSON.stringify({ kind: evidence.kind, status: evidence.status, deployedVersionId, lostAcknowledgement: true, evidence: options.evidence })}\n`,
+  );
 }
 
 function parsePlan(
@@ -293,6 +393,51 @@ export function parseServingVersion(stdout: string): string {
   return [...ids][0]!;
 }
 
+export function selectRecoveredVersion(
+  stdout: string,
+  planCreatedAt: string,
+): string {
+  const value = JSON.parse(stdout) as unknown;
+  if (!Array.isArray(value) || !Number.isFinite(Date.parse(planCreatedAt))) {
+    throw new Error("platform_worker_release_versions_invalid");
+  }
+  const ids = value.flatMap((entry) => {
+    if (!record(entry))
+      throw new Error("platform_worker_release_versions_invalid");
+    const metadata = entry.metadata;
+    if (!record(metadata)) return [];
+    const id = entry.id;
+    const createdOn = metadata.created_on;
+    if (
+      typeof id !== "string" ||
+      !VERSION.test(id) ||
+      typeof createdOn !== "string" ||
+      !Number.isFinite(Date.parse(createdOn))
+    ) {
+      throw new Error("platform_worker_release_versions_invalid");
+    }
+    return Date.parse(createdOn) >= Date.parse(planCreatedAt) ? [id] : [];
+  });
+  if (ids.length !== 1) {
+    throw new Error("platform_worker_release_recovery_version_ambiguous");
+  }
+  return ids[0]!;
+}
+
+export function bindingNames(stdout: string): readonly string[] {
+  const value = JSON.parse(stdout) as unknown;
+  if (!record(value))
+    throw new Error("platform_worker_release_version_invalid");
+  const names = new Set<string>();
+  visit(value, (entry) => {
+    for (const key of ["name", "binding"] as const) {
+      const candidate = entry[key];
+      if (typeof candidate === "string") names.add(candidate);
+    }
+  });
+  return [...names].sort((left, right) => left.localeCompare(right));
+}
+
 async function readServingVersion(config: string): Promise<string> {
   const result = await requiredCommand([
     WRANGLER,
@@ -317,7 +462,7 @@ async function waitForServingVersion(
   throw new Error("platform_worker_release_deployment_not_converged");
 }
 
-async function verifyPublicReadback(versionId: string): Promise<void> {
+async function verifyPublicReadback(): Promise<void> {
   for (const path of ["/", "/.well-known/takosumi"] as const) {
     let matched = false;
     for (let attempt = 1; attempt <= 8; attempt += 1) {
@@ -326,9 +471,10 @@ async function verifyPublicReadback(versionId: string): Promise<void> {
           headers: { "cache-control": "no-cache" },
           redirect: "manual",
         });
-        matched =
-          response.status === 200 &&
-          response.headers.get("x-takosumi-version-id") === versionId;
+        if (response.status === 200) {
+          if (path === "/") matched = true;
+          else matched = hasHostedDiscovery((await response.json()) as unknown);
+        }
         if (matched) break;
       } catch {
         // Readback retries only; the publication is never retried.
@@ -338,6 +484,26 @@ async function verifyPublicReadback(versionId: string): Promise<void> {
     if (!matched)
       throw new Error("platform_worker_release_public_readback_invalid");
   }
+}
+
+function hasHostedDiscovery(value: unknown): boolean {
+  if (
+    !record(value) ||
+    !record(value.endpoints) ||
+    !record(value.endpoints.extensions)
+  ) {
+    return false;
+  }
+  const extensions = value.endpoints.extensions;
+  return (
+    extensions["marketplace.hosted.v1"] === `${ORIGIN}/v1/hosted/marketplace` &&
+    extensions["resource-migration.hosted.v1"] ===
+      `${ORIGIN}/v1/hosted/marketplace` &&
+    extensions["object.s3.credentials.v1"] ===
+      `${ORIGIN}/v1/hosted/marketplace` &&
+    extensions["ai.openai-compatible.v1"] === `${ORIGIN}/v1/hosted/ai` &&
+    extensions["ai.prepaid-retail.v1"] === `${ORIGIN}/v1/hosted/ai`
+  );
 }
 
 function assertConfigTargetsSource(source: string, path: string): void {
@@ -491,6 +657,22 @@ function git(args: readonly string[]): string {
   if (result.exitCode !== 0)
     throw new Error("platform_worker_release_git_failed");
   return new TextDecoder("utf-8", { fatal: true }).decode(result.stdout);
+}
+
+function isAncestor(ancestor: string, descendant: string): boolean {
+  const result = Bun.spawnSync(
+    ["git", "merge-base", "--is-ancestor", ancestor, descendant],
+    {
+      cwd: ROOT,
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+      env: childEnvironment(),
+    },
+  );
+  if (result.exitCode === 0) return true;
+  if (result.exitCode === 1) return false;
+  throw new Error("platform_worker_release_git_failed");
 }
 
 function childEnvironment(): Record<string, string> {
