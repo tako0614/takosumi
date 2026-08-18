@@ -107,57 +107,64 @@ async function mintPlatformExtensionProviderCredential(
   scopes: readonly string[],
   handler: PlatformExtensionCredentialHandler | undefined,
 ) {
-  if (
-    !context.run ||
-    !context.issueRunCredential ||
-    !context.runCredentialSettings ||
-    !handler
-  ) {
+  if (!context.run || !context.issueRunCredential || !context.runCredentialSettings) {
+    logCredentialExchangeFailure("context_unavailable");
     throw new Error("provider credential exchange requires a canonical Run and settings");
+  }
+  if (!handler) {
+    logCredentialExchangeFailure("handler_unavailable");
+    throw new Error("provider credential exchange requires a bound handler");
   }
   // Keep the platform credential wider than the downstream 300-second
   // provider token so small cross-service clock/latency differences cannot
   // make a valid response appear to outlive its caller authority.
-  const issued = await context.issueRunCredential({ ttlSeconds: 600 });
+  let issued: Awaited<ReturnType<NonNullable<typeof context.issueRunCredential>>>;
+  try {
+    issued = await context.issueRunCredential({ ttlSeconds: 600 });
+  } catch {
+    logCredentialExchangeFailure("issuance_failed");
+    throw new Error("provider credential exchange issuance failed");
+  }
   const url = new URL(`${basePath}${exchangePath}`, origin);
   url.searchParams.set("workspaceId", context.run.workspaceId);
-  const response = await handler.fetchAuthenticated(
-    new Request(url.href, {
-      method: "POST",
-      headers: {
-        accept: "application/json",
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        kind: "takosumi.provider-run-credential-request@v1",
-        providerSource,
-        settings: context.runCredentialSettings,
+  let response: Response;
+  try {
+    response = await handler.fetchAuthenticated(
+      new Request(url.href, {
+        method: "POST",
+        headers: {
+          accept: "application/json",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          kind: "takosumi.provider-run-credential-request@v1",
+          providerSource,
+          settings: context.runCredentialSettings,
+        }),
       }),
-    }),
-    Object.freeze({
-      authKind: "run-credential" as const,
-      subject: context.run.installingPrincipalId,
-      workspaceId: context.run.workspaceId,
-      capsuleId: context.run.capsuleId,
-      runId: context.run.runId,
-      installingPrincipalId: context.run.installingPrincipalId,
-      audience,
-      scopes: Object.freeze([...scopes]),
-      phase: context.run.phase,
-    }),
-  );
+      Object.freeze({
+        authKind: "run-credential" as const,
+        subject: context.run.installingPrincipalId,
+        workspaceId: context.run.workspaceId,
+        capsuleId: context.run.capsuleId,
+        runId: context.run.runId,
+        installingPrincipalId: context.run.installingPrincipalId,
+        audience,
+        scopes: Object.freeze([...scopes]),
+        phase: context.run.phase,
+      }),
+    );
+  } catch {
+    logCredentialExchangeFailure("handler_rpc_failed");
+    throw new Error("provider credential exchange handler failed");
+  }
   if (!response.ok) {
     // The vault intentionally collapses provider-driver failures into the
     // public `credential_service_unavailable` diagnostic. Preserve only the
     // non-secret HTTP boundary here so an operator can distinguish platform
     // authentication, extension validation, and upstream availability
     // failures without logging the bearer, response body, Workspace, or Run.
-    console.warn(
-      JSON.stringify({
-        event: "platform_extension_provider_credential_exchange_failed",
-        status: response.status,
-      }),
-    );
+    logCredentialExchangeFailure("handler_response_failed", response.status);
     throw new Error("provider credential exchange failed");
   }
   const declaredLength = Number(response.headers.get("content-length") ?? "NaN");
@@ -224,6 +231,16 @@ async function mintPlatformExtensionProviderCredential(
       secretValueStored: false as const,
     }),
   };
+}
+
+function logCredentialExchangeFailure(stage: string, status?: number): void {
+  console.warn(
+    JSON.stringify({
+      event: "platform_extension_provider_credential_exchange_failed",
+      stage,
+      ...(status === undefined ? {} : { status }),
+    }),
+  );
 }
 
 interface PlatformExtensionCredentialHandler {
