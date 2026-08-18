@@ -1,14 +1,15 @@
 # Takosumi platform worker deployment
 
-This runbook covers the OSS Takosumi platform worker. Official Takosumi Cloud
-adds closed handlers and commercial ports in its own wrapper and maintains its
-deployment procedure in `takosumi-cloud/docs/operations/platform-worker.md`.
+This runbook covers the OSS Takosumi platform worker, including the official
+Takosumi service. The official composition runs this repository's ordinary
+worker and connects optional commercial products through the public
+`PlatformExtensionRoute` plus private service bindings. It does not use a
+Takosumi Cloud wrapper.
 
 This page documents the commands the platform worker deploy actually runs.
 A self-hoster applying them against infrastructure they own is exercising their
-own authority; deploying the hosted Takosumi Cloud service is a separate one,
-and its wrapper procedure lives in
-`takosumi-cloud/docs/operations/platform-worker.md`.
+own authority. The official operator uses the same owner entrypoint with
+realized config held outside this repository.
 
 The shared deploy rules — clean worktree, owner gate first, build from that
 worktree, prove it on production's own inputs before the irreversible step,
@@ -33,6 +34,38 @@ The worker does not install or host a Form Registry, FormActivation, or hosted
 Form. Any such closed Cloud Host is deployed and operated by its owning
 repository; the old package procedure is a superseded migration note.
 
+The official staging composition binds the independently deployed private
+`takosumi-hosted-marketplace` Worker under
+`TAKOSUMI_HOSTED_MARKETPLACE`. Takosumi authenticates the session and Workspace
+before forwarding. The target remains route-less and does not receive a browser
+cookie, bearer token, account id, or unverified Workspace context.
+
+## Official staging release
+
+The official staging target is a reviewed two-step owner surface. Plan is
+read-only: it requires a clean pushed source, builds the dashboard, validates
+that the external config points at that same worktree, reads the exact serving
+predecessor, and runs Wrangler's dry-run.
+
+```bash
+bun run deploy -- takosumi-platform-staging plan \
+  --config /absolute/operator-private/wrangler.staging.toml \
+  --plan-out /absolute/operator-private/release-plan.json
+
+bun run deploy -- takosumi-platform-staging execute \
+  --plan /absolute/operator-private/release-plan.json \
+  --confirm sha256:<reviewed-plan-digest> \
+  --review operator:<reviewer> \
+  --evidence /absolute/operator-private/release-evidence.json
+```
+
+Execute rechecks the source, config, dashboard bytes, and predecessor before
+the single upload. A touched target with missing post-conditions is
+`indeterminate`; reconcile the authoritative deployment before another
+attempt. Successful execute records the immutable predecessor and new serving
+Version. Authenticated Hosted marketplace and AI calls are a separate E2E
+post-condition after publication.
+
 ## Self-host build and deployment
 
 Build and verify the OSS target from the product root:
@@ -47,7 +80,7 @@ bun run docs:build
 The dashboard build resolves the Store tab's default store from
 `VITE_TAKOSUMI_TCS_STORE_URL`. Unset or empty means no default store for OSS
 and self-hosted builds. An operator may set its own TCS server explicitly; the
-official Takosumi Cloud build is likewise responsible for explicitly injecting
+official Takosumi build is likewise responsible for explicitly injecting
 `https://store.takosumi.com`. Users can still add store servers themselves.
 
 Before deploying code that requires a newer control-ledger D1 shape, run the

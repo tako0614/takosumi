@@ -1,0 +1,542 @@
+import { createHash } from "node:crypto";
+import {
+  closeSync,
+  constants,
+  fsyncSync,
+  lstatSync,
+  openSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, isAbsolute, relative, resolve } from "node:path";
+
+const ROOT = resolve(import.meta.dir, "..");
+const WRANGLER = resolve(ROOT, "node_modules/.bin/wrangler");
+const ORIGIN = "https://app-staging.takosumi.com";
+const WORKER_NAME = "takosumi-staging";
+const MAX_OUTPUT = 64 * 1024 * 1024;
+const COMMAND_TIMEOUT_MS = 180_000;
+const SHA256 = /^sha256:[0-9a-f]{64}$/u;
+const COMMIT = /^[0-9a-f]{40}$/u;
+const VERSION = /^[0-9a-f]{8}-[0-9a-f-]{27,}$/u;
+
+interface PlatformReleasePlan {
+  readonly kind: "takosumi.platform-worker-release-plan@v1";
+  readonly createdAt: string;
+  readonly environment: "staging";
+  readonly sourceCommit: string;
+  readonly configPath: string;
+  readonly configSha256: string;
+  readonly dashboardIndexSha256: string;
+  readonly predecessorVersionId: string;
+  readonly confirmation: string;
+}
+
+type Options =
+  | {
+      readonly action: "plan";
+      readonly config: string;
+      readonly planOut: string;
+    }
+  | {
+      readonly action: "execute";
+      readonly plan: string;
+      readonly confirmation: string;
+      readonly reviewer: string;
+      readonly evidence: string;
+    };
+
+interface CommandResult {
+  readonly exitCode: number;
+  readonly stdout: string;
+  readonly stderr: string;
+}
+
+export async function runPlatformWorkerRelease(
+  argv: readonly string[],
+): Promise<void> {
+  const options = parsePlatformWorkerReleaseArgs(argv);
+  if (options.action === "plan") await plan(options);
+  else await execute(options);
+}
+
+export function parsePlatformWorkerReleaseArgs(
+  argv: readonly string[],
+): Options {
+  const [action, ...rest] = argv;
+  if (action !== "plan" && action !== "execute") {
+    throw new Error("platform_worker_release_action_invalid");
+  }
+  const values = new Map<string, string>();
+  for (let index = 0; index < rest.length; index += 2) {
+    const key = rest[index];
+    const value = rest[index + 1];
+    if (
+      !key?.startsWith("--") ||
+      value === undefined ||
+      value.startsWith("--")
+    ) {
+      throw new Error("platform_worker_release_arguments_invalid");
+    }
+    if (values.has(key))
+      throw new Error("platform_worker_release_argument_duplicate");
+    values.set(key, value);
+  }
+  const allowed =
+    action === "plan"
+      ? ["--config", "--plan-out"]
+      : ["--plan", "--confirm", "--review", "--evidence"];
+  if (
+    values.size !== allowed.length ||
+    allowed.some((key) => !values.has(key)) ||
+    [...values.keys()].some((key) => !allowed.includes(key))
+  ) {
+    throw new Error("platform_worker_release_arguments_invalid");
+  }
+  if (action === "plan") {
+    return {
+      action,
+      config: absolute(values.get("--config")!),
+      planOut: absolute(values.get("--plan-out")!),
+    };
+  }
+  return {
+    action,
+    plan: absolute(values.get("--plan")!),
+    confirmation: values.get("--confirm")!,
+    reviewer: values.get("--review")!,
+    evidence: absolute(values.get("--evidence")!),
+  };
+}
+
+async function plan(
+  options: Extract<Options, { action: "plan" }>,
+): Promise<void> {
+  assertCleanAndPushed();
+  assertReadableConfig(options.config);
+  assertExternalAbsent(options.planOut);
+  const config = readFileSync(options.config);
+  assertConfigTargetsSource(
+    new TextDecoder("utf-8", { fatal: true }).decode(config),
+    options.config,
+  );
+
+  await requiredCommand(
+    ["bun", "run", "build"],
+    undefined,
+    resolve(ROOT, "dashboard"),
+  );
+  const dashboardIndex = readFileSync(
+    resolve(ROOT, "dashboard/dist/index.html"),
+  );
+  const predecessorVersionId = await readServingVersion(options.config);
+  await requiredCommand([
+    WRANGLER,
+    "deploy",
+    "--dry-run",
+    "--config",
+    options.config,
+  ]);
+
+  const subject = {
+    kind: "takosumi.platform-worker-release-plan@v1" as const,
+    createdAt: new Date().toISOString(),
+    environment: "staging" as const,
+    sourceCommit: git(["rev-parse", "HEAD"]).trim(),
+    configPath: options.config,
+    configSha256: digest(config),
+    dashboardIndexSha256: digest(dashboardIndex),
+    predecessorVersionId,
+  };
+  const releasePlan: PlatformReleasePlan = {
+    ...subject,
+    confirmation: digest(new TextEncoder().encode(JSON.stringify(subject))),
+  };
+  writePrivate(
+    options.planOut,
+    new TextEncoder().encode(`${JSON.stringify(releasePlan, null, 2)}\n`),
+  );
+  process.stdout.write(
+    `${JSON.stringify({ kind: releasePlan.kind, status: "planned", confirmation: releasePlan.confirmation, predecessorVersionId })}\n`,
+  );
+}
+
+async function execute(
+  options: Extract<Options, { action: "execute" }>,
+): Promise<void> {
+  assertCleanAndPushed();
+  assertPrivateFile(options.plan);
+  assertExternalAbsent(options.evidence);
+  if (!/^operator:[A-Za-z0-9._@-]{3,128}$/u.test(options.reviewer)) {
+    throw new Error("platform_worker_release_reviewer_invalid");
+  }
+  const plan = parsePlan(readFileSync(options.plan), options.confirmation);
+  if (git(["rev-parse", "HEAD"]).trim() !== plan.sourceCommit) {
+    throw new Error("platform_worker_release_source_drift");
+  }
+  assertReadableConfig(plan.configPath);
+  const config = readFileSync(plan.configPath);
+  assertConfigTargetsSource(
+    new TextDecoder("utf-8", { fatal: true }).decode(config),
+    plan.configPath,
+  );
+  if (digest(config) !== plan.configSha256) {
+    throw new Error("platform_worker_release_config_drift");
+  }
+  if (
+    digest(readFileSync(resolve(ROOT, "dashboard/dist/index.html"))) !==
+    plan.dashboardIndexSha256
+  ) {
+    throw new Error("platform_worker_release_dashboard_drift");
+  }
+  if (
+    (await readServingVersion(plan.configPath)) !== plan.predecessorVersionId
+  ) {
+    throw new Error("platform_worker_release_predecessor_drift");
+  }
+
+  let mutationStarted = false;
+  try {
+    mutationStarted = true;
+    await requiredCommand([WRANGLER, "deploy", "--config", plan.configPath]);
+    const deployedVersionId = await waitForServingVersion(
+      plan.configPath,
+      plan.predecessorVersionId,
+    );
+    await verifyPublicReadback(deployedVersionId);
+    const evidence = {
+      kind: "takosumi.platform-worker-release-evidence@v1",
+      status: "ready",
+      completedAt: new Date().toISOString(),
+      environment: plan.environment,
+      sourceCommit: plan.sourceCommit,
+      configSha256: plan.configSha256,
+      dashboardIndexSha256: plan.dashboardIndexSha256,
+      predecessorVersionId: plan.predecessorVersionId,
+      deployedVersionId,
+      planConfirmation: plan.confirmation,
+      reviewer: options.reviewer,
+      reversal: `wrangler versions deploy ${plan.predecessorVersionId}@100% --config ${plan.configPath}`,
+    };
+    writePrivate(
+      options.evidence,
+      new TextEncoder().encode(`${JSON.stringify(evidence, null, 2)}\n`),
+    );
+    process.stdout.write(
+      `${JSON.stringify({ kind: evidence.kind, status: evidence.status, deployedVersionId, evidence: options.evidence })}\n`,
+    );
+  } catch {
+    writePrivate(
+      options.evidence,
+      new TextEncoder().encode(
+        `${JSON.stringify(
+          {
+            kind: "takosumi.platform-worker-release-evidence@v1",
+            status: mutationStarted ? "indeterminate" : "failed",
+            sourceCommit: plan.sourceCommit,
+            planConfirmation: plan.confirmation,
+            predecessorVersionId: plan.predecessorVersionId,
+            failureCode: "platform_worker_release_failed",
+          },
+          null,
+          2,
+        )}\n`,
+      ),
+    );
+    throw new Error("platform_worker_release_failed");
+  }
+}
+
+function parsePlan(
+  bytes: Uint8Array,
+  confirmation: string,
+): PlatformReleasePlan {
+  const value = JSON.parse(
+    new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+  ) as unknown;
+  if (!record(value)) throw new Error("platform_worker_release_plan_invalid");
+  const { confirmation: recorded, ...subject } = value;
+  if (
+    value.kind !== "takosumi.platform-worker-release-plan@v1" ||
+    value.environment !== "staging" ||
+    typeof value.sourceCommit !== "string" ||
+    !COMMIT.test(value.sourceCommit) ||
+    typeof value.configPath !== "string" ||
+    !isAbsolute(value.configPath) ||
+    typeof value.configSha256 !== "string" ||
+    !SHA256.test(value.configSha256) ||
+    typeof value.dashboardIndexSha256 !== "string" ||
+    !SHA256.test(value.dashboardIndexSha256) ||
+    typeof value.predecessorVersionId !== "string" ||
+    !VERSION.test(value.predecessorVersionId) ||
+    typeof recorded !== "string" ||
+    !SHA256.test(recorded) ||
+    confirmation !== recorded ||
+    digest(new TextEncoder().encode(JSON.stringify(subject))) !== recorded
+  ) {
+    throw new Error("platform_worker_release_plan_invalid");
+  }
+  return value as unknown as PlatformReleasePlan;
+}
+
+export function parseServingVersion(stdout: string): string {
+  const value = JSON.parse(stdout) as unknown;
+  const ids = new Set<string>();
+  visit(value, (entry) => {
+    const id = entry.version_id ?? entry.versionId;
+    if (entry.percentage === 100 && typeof id === "string" && VERSION.test(id))
+      ids.add(id);
+  });
+  if (ids.size !== 1)
+    throw new Error("platform_worker_release_serving_version_invalid");
+  return [...ids][0]!;
+}
+
+async function readServingVersion(config: string): Promise<string> {
+  const result = await requiredCommand([
+    WRANGLER,
+    "deployments",
+    "status",
+    "--config",
+    config,
+    "--json",
+  ]);
+  return parseServingVersion(result.stdout);
+}
+
+async function waitForServingVersion(
+  config: string,
+  predecessor: string,
+): Promise<string> {
+  for (let attempt = 1; attempt <= 8; attempt += 1) {
+    const current = await readServingVersion(config);
+    if (current !== predecessor) return current;
+    if (attempt < 8) await Bun.sleep(attempt * 1_000);
+  }
+  throw new Error("platform_worker_release_deployment_not_converged");
+}
+
+async function verifyPublicReadback(versionId: string): Promise<void> {
+  for (const path of ["/", "/.well-known/takosumi"] as const) {
+    let matched = false;
+    for (let attempt = 1; attempt <= 8; attempt += 1) {
+      try {
+        const response = await fetch(`${ORIGIN}${path}`, {
+          headers: { "cache-control": "no-cache" },
+          redirect: "manual",
+        });
+        matched =
+          response.status === 200 &&
+          response.headers.get("x-takosumi-version-id") === versionId;
+        if (matched) break;
+      } catch {
+        // Readback retries only; the publication is never retried.
+      }
+      if (attempt < 8) await Bun.sleep(attempt * 1_000);
+    }
+    if (!matched)
+      throw new Error("platform_worker_release_public_readback_invalid");
+  }
+}
+
+function assertConfigTargetsSource(source: string, path: string): void {
+  const main = /^main\s*=\s*"([^"]+)"\s*$/mu.exec(source)?.[1];
+  const assets = /^directory\s*=\s*"([^"]+)"\s*$/mu.exec(source)?.[1];
+  const name = /^name\s*=\s*"([^"]+)"\s*$/mu.exec(source)?.[1];
+  if (
+    name !== WORKER_NAME ||
+    !main ||
+    !assets ||
+    resolve(dirname(path), main) !==
+      resolve(ROOT, "deploy/platform/worker.ts") ||
+    resolve(dirname(path), assets) !== resolve(ROOT, "dashboard/dist")
+  ) {
+    throw new Error("platform_worker_release_config_source_invalid");
+  }
+}
+
+function assertCleanAndPushed(): void {
+  if (git(["status", "--porcelain", "--untracked-files=all"]).trim() !== "") {
+    throw new Error("platform_worker_release_source_dirty");
+  }
+  if (
+    !git(["branch", "-r", "--contains", "HEAD"])
+      .split("\n")
+      .some((line) => line.trim().startsWith("origin/"))
+  ) {
+    throw new Error("platform_worker_release_source_not_pushed");
+  }
+}
+
+function assertReadableConfig(path: string): void {
+  const status = lstatSync(path);
+  if (
+    !status.isFile() ||
+    status.isSymbolicLink() ||
+    realpathSync(path) !== path
+  ) {
+    throw new Error("platform_worker_release_config_invalid");
+  }
+}
+
+function assertPrivateFile(path: string): void {
+  const status = lstatSync(path);
+  if (
+    !status.isFile() ||
+    status.isSymbolicLink() ||
+    status.nlink !== 1 ||
+    status.uid !== process.getuid?.() ||
+    (status.mode & 0o077) !== 0 ||
+    realpathSync(path) !== path
+  ) {
+    throw new Error("platform_worker_release_private_file_invalid");
+  }
+}
+
+function assertExternalAbsent(path: string): void {
+  if (insideRoot(path))
+    throw new Error("platform_worker_release_output_must_be_external");
+  const parent = dirname(path);
+  const status = lstatSync(parent);
+  if (
+    !status.isDirectory() ||
+    status.isSymbolicLink() ||
+    status.uid !== process.getuid?.() ||
+    (status.mode & 0o077) !== 0 ||
+    realpathSync(parent) !== parent
+  ) {
+    throw new Error("platform_worker_release_output_parent_invalid");
+  }
+  try {
+    lstatSync(path);
+    throw new Error("platform_worker_release_output_exists");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+}
+
+function writePrivate(path: string, bytes: Uint8Array): void {
+  const descriptor = openSync(
+    path,
+    constants.O_WRONLY |
+      constants.O_CREAT |
+      constants.O_EXCL |
+      constants.O_NOFOLLOW,
+    0o600,
+  );
+  try {
+    writeFileSync(descriptor, bytes);
+    fsyncSync(descriptor);
+  } finally {
+    closeSync(descriptor);
+  }
+  const parent = openSync(
+    dirname(path),
+    constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+  );
+  try {
+    fsyncSync(parent);
+  } finally {
+    closeSync(parent);
+  }
+}
+
+async function requiredCommand(
+  argv: readonly string[],
+  stdin?: Uint8Array,
+  cwd = ROOT,
+): Promise<CommandResult> {
+  const child = Bun.spawn([...argv], {
+    cwd,
+    stdin: stdin === undefined ? "ignore" : "pipe",
+    stdout: "pipe",
+    stderr: "pipe",
+    env: childEnvironment(),
+  });
+  if (stdin !== undefined) {
+    if (!child.stdin)
+      throw new Error("platform_worker_release_stdin_unavailable");
+    child.stdin.write(stdin);
+    child.stdin.end();
+  }
+  const timer = setTimeout(() => child.kill("SIGKILL"), COMMAND_TIMEOUT_MS);
+  const [exitCode, stdoutBytes, stderrBytes] = await Promise.all([
+    child.exited,
+    new Response(child.stdout).bytes(),
+    new Response(child.stderr).bytes(),
+  ]).finally(() => clearTimeout(timer));
+  if (
+    stdoutBytes.byteLength > MAX_OUTPUT ||
+    stderrBytes.byteLength > MAX_OUTPUT ||
+    exitCode !== 0
+  ) {
+    throw new Error("platform_worker_release_command_failed");
+  }
+  return {
+    exitCode,
+    stdout: new TextDecoder("utf-8", { fatal: true }).decode(stdoutBytes),
+    stderr: new TextDecoder("utf-8", { fatal: true }).decode(stderrBytes),
+  };
+}
+
+function git(args: readonly string[]): string {
+  const result = Bun.spawnSync(["git", ...args], {
+    cwd: ROOT,
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
+    env: childEnvironment(),
+  });
+  if (result.exitCode !== 0)
+    throw new Error("platform_worker_release_git_failed");
+  return new TextDecoder("utf-8", { fatal: true }).decode(result.stdout);
+}
+
+function childEnvironment(): Record<string, string> {
+  const environment: Record<string, string> = {
+    PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
+    HOME: process.env.HOME ?? "/root",
+    LANG: "C.UTF-8",
+    LC_ALL: "C.UTF-8",
+    CI: "true",
+  };
+  for (const key of ["CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID"]) {
+    const value = process.env[key];
+    if (value !== undefined) environment[key] = value;
+  }
+  return environment;
+}
+
+function absolute(value: string): string {
+  if (!isAbsolute(value) || resolve(value) !== value) {
+    throw new Error("platform_worker_release_path_invalid");
+  }
+  return value;
+}
+
+function insideRoot(path: string): boolean {
+  const child = relative(ROOT, path);
+  return child === "" || (!child.startsWith("..") && !isAbsolute(child));
+}
+
+function digest(bytes: Uint8Array): string {
+  return `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
+}
+
+function record(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function visit(
+  value: unknown,
+  callback: (entry: Record<string, unknown>) => void,
+): void {
+  if (Array.isArray(value)) {
+    for (const item of value) visit(item, callback);
+    return;
+  }
+  if (!record(value)) return;
+  callback(value);
+  for (const child of Object.values(value)) visit(child, callback);
+}

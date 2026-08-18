@@ -6,7 +6,8 @@
 // `engineering.policy.json` → `deploy` が正本です。この repo は複数の surface を
 // 持つので、surface 名を引数で選びます。
 //
-//   bun run deploy -- website
+//   bun run deploy -- takosumi-website
+//   bun run deploy -- takosumi-platform-staging plan ...
 //
 // `--contract` は副作用なしで、この repo が publish できる surface と、それぞれの
 // trigger・義務の果たし方を印字します。takos-control の
@@ -14,7 +15,7 @@
 // あること、前回の snapshot から答えが変わっていないことを確認します。
 //
 // OSS platform worker の self-host deploy は利用者/operator自身のauthorityです。
-// 公式hosted platformはtakosumi-cloudが所有し、このentrypointからはdeployしません。
+// 公式 Takosumi も同じ OSS entry を operator-private config で実行します。
 
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
@@ -34,9 +35,34 @@ const WEBSITE = {
   build: ["bash", "website/build.sh"],
 };
 
+const PLATFORM_STAGING = {
+  surface: "takosumi-platform-staging",
+};
+
 const CONTRACT = {
   kind: "takos.deploy-contract@v2",
   surfaces: [
+    {
+      surface: PLATFORM_STAGING.surface,
+      target: "cloudflare-worker:takosumi-staging",
+      triggers: ["irreversible", "authority", "published-identity"],
+      obligations: {
+        provenance:
+          "plan binds one clean pushed OSS commit, the exact external realized config digest, dashboard bytes, dry-run, and the exact 100 percent predecessor Version; execute rechecks all identities before upload",
+        "post-conditions":
+          "execute requires the published Version at 100 percent and proves the public root and Takosumi discovery document are served by that exact Version; authenticated Hosted extension E2E is a separate required composition check",
+        reversal:
+          "the plan records the exact predecessor immutable Version and execute prints the one-Version restore command; deleted Durable Object storage is forward-only and cannot be restored by code rollback",
+        "failure-handling":
+          "stable private evidence distinguishes failed from indeterminate after mutation; execute never retries an upload and requires authoritative Version reconciliation before another attempt",
+        "pre-mutation-proof":
+          "plan runs the dashboard build and Wrangler dry-run against the exact realized staging config, then seals their digests and predecessor Version",
+        "independent-review":
+          "execute requires the exact plan confirmation and a named operator reviewer distinct from the source bytes",
+        "no-overwrite":
+          "Wrangler mints a new immutable Worker Version and the owner requires exact 100 percent readback before ready evidence",
+      },
+    },
     {
       surface: WEBSITE.surface,
       target: `cloudflare-pages:${WEBSITE.project}`,
@@ -62,21 +88,28 @@ if (process.argv.includes("--contract")) {
   process.exit(0);
 }
 
-const requested = process.argv.slice(2).filter((arg) => !arg.startsWith("--"));
+const requested = process.argv[2];
 const known = CONTRACT.surfaces.map((entry) => entry.surface);
-if (requested.length !== 1 || !known.includes(requested[0])) {
+if (!requested || !known.includes(requested)) {
   process.stderr.write(
     `usage: bun run deploy -- <surface>\nknown surfaces: ${known.join(", ")}\n`,
   );
   process.exit(1);
 }
 
-const selected = requested[0];
+const selected = requested;
 
 function die(message, detail = []) {
   process.stderr.write(`deploy blocked: ${message}\n`);
   for (const line of detail) process.stderr.write(`- ${line}\n`);
   process.exit(1);
+}
+
+if (selected === PLATFORM_STAGING.surface) {
+  const { runPlatformWorkerRelease } =
+    await import("./platform-worker-release.ts");
+  await runPlatformWorkerRelease(process.argv.slice(3));
+  process.exit(0);
 }
 
 function git(...args) {
@@ -148,9 +181,13 @@ for (const path of published) {
     leaks.push(`${name}: credential-shaped file`);
     continue;
   }
-  if (/\.(?:png|jpe?g|webp|avif|gif|ico|woff2?|ttf|otf|mp4|pdf|wasm)$/u.test(name)) continue;
+  if (
+    /\.(?:png|jpe?g|webp|avif|gif|ico|woff2?|ttf|otf|mp4|pdf|wasm)$/u.test(name)
+  )
+    continue;
   for (const shape of CREDENTIAL_SHAPES) {
-    if (shape.test(readFileSync(path, "utf8"))) leaks.push(`${name}: matches ${shape}`);
+    if (shape.test(readFileSync(path, "utf8")))
+      leaks.push(`${name}: matches ${shape}`);
   }
 }
 if (leaks.length > 0) die("the built site contains credential material", leaks);
@@ -164,27 +201,43 @@ process.stdout.write(
 let previous = null;
 try {
   const listed = run("wrangler", [
-    "pages", "deployment", "list", "--project-name", WEBSITE.project,
+    "pages",
+    "deployment",
+    "list",
+    "--project-name",
+    WEBSITE.project,
   ]);
   previous =
-    listed.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/u)?.[1] ?? null;
+    listed.match(
+      /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/u,
+    )?.[1] ?? null;
 } catch (error) {
   die(`cannot read the current deployment list: ${error.message}`);
 }
 if (!previous) {
-  die("no previous production deployment was readable, so there is no revert point");
+  die(
+    "no previous production deployment was readable, so there is no revert point",
+  );
 }
 process.stdout.write(`previous production deployment ${previous}\n`);
 
-process.stdout.write(`\n==> publishing ${WEBSITE.outputDir} to ${WEBSITE.project}\n`);
+process.stdout.write(
+  `\n==> publishing ${WEBSITE.outputDir} to ${WEBSITE.project}\n`,
+);
 let output;
 try {
   output = run("wrangler", [
-    "pages", "deploy", WEBSITE.outputDir,
-    "--project-name", WEBSITE.project,
-    "--branch", WEBSITE.productionBranch,
-    "--commit-hash", commit,
-    "--commit-message", subject,
+    "pages",
+    "deploy",
+    WEBSITE.outputDir,
+    "--project-name",
+    WEBSITE.project,
+    "--branch",
+    WEBSITE.productionBranch,
+    "--commit-hash",
+    commit,
+    "--commit-message",
+    subject,
     "--commit-dirty=false",
   ]);
 } catch (error) {
@@ -225,7 +278,8 @@ async function waitFor(url, expected, attempts) {
     } catch (error) {
       last = `error: ${error.message}`;
     }
-    if (attempt < attempts) await new Promise((wake) => setTimeout(wake, 3000 * attempt));
+    if (attempt < attempts)
+      await new Promise((wake) => setTimeout(wake, 3000 * attempt));
   }
   process.stderr.write(`readback mismatch at ${url}: ${last}\n`);
   return false;

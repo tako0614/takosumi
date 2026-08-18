@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 
 const root = resolve(import.meta.dir, "../..");
 
-test("OSS deploy entrypoint cannot publish the official hosted platform Worker", async () => {
+test("OSS deploy entrypoint owns the official platform Worker without a Cloud wrapper", async () => {
   const child = Bun.spawn(["bun", "scripts/deploy.mjs", "--contract"], {
     cwd: root,
     stdout: "pipe",
@@ -23,13 +23,16 @@ test("OSS deploy entrypoint cannot publish the official hosted platform Worker",
   };
   expect(contract.surfaces).toEqual([
     expect.objectContaining({
+      surface: "takosumi-platform-staging",
+      target: "cloudflare-worker:takosumi-staging",
+    }),
+    expect.objectContaining({
       surface: "takosumi-website",
       target: "cloudflare-pages:takosumi-website",
     }),
   ]);
 
   const source = await Bun.file(resolve(root, "scripts/deploy.mjs")).text();
-  expect(source).not.toContain("TAKOSUMI_WRANGLER_CONFIG");
-  expect(source).not.toContain("takosumi-platform-worker");
-  expect(source).not.toMatch(/wrangler",\s*\["deploy"/u);
+  expect(source).not.toContain("takosumi-cloud");
+  expect(source).toContain('import("./platform-worker-release.ts")');
 });
