@@ -6,6 +6,7 @@ import { platformExtensionRoutes } from "./platform_extensions.ts";
 
 const AUTH_MODE = "broker";
 const MAX_RESPONSE_BYTES = 64 * 1024;
+const EVIDENCE_ISSUER = "platform_extension_provider_credential";
 
 /**
  * Compiles provider-neutral extension descriptors into one code-only
@@ -57,7 +58,7 @@ export function platformExtensionProviderCredentialComposition(env: {
   for (const route of routes) {
     const broker = route.providerCredentialBroker!;
     credentialRecipeDrivers[`${broker.recipeId}/${AUTH_MODE}`] = {
-      evidenceIssuer: "platform_extension_provider_credential",
+      evidenceIssuer: EVIDENCE_ISSUER,
       verify: async () => ({ ok: true }),
       mint: async (context) =>
         await mintPlatformExtensionProviderCredential(
@@ -163,18 +164,29 @@ async function mintPlatformExtensionProviderCredential(
   }
   const expiresAt = Date.parse(value.expiresAt);
   const issuerExpiresAt = Date.parse(issued.expiresAt);
+  const nowMs = context.now().getTime();
   if (
     !Number.isFinite(expiresAt) ||
     new Date(expiresAt).toISOString() !== value.expiresAt ||
-    expiresAt <= context.now().getTime() ||
+    expiresAt - nowMs < 1_000 ||
     !Number.isFinite(issuerExpiresAt) ||
     expiresAt > issuerExpiresAt
   ) {
     throw new Error("provider credential exchange expiry is invalid");
   }
+  const ttlSeconds = Math.floor((expiresAt - nowMs) / 1_000);
   return {
     env: Object.freeze(env),
-    evidence: context.staticEvidence(),
+    evidence: Object.freeze({
+      connectionId: context.connection.id,
+      provider: context.connection.provider,
+      temporary: true,
+      ttlEnforced: true,
+      expiresAt: value.expiresAt,
+      ttlSeconds,
+      issuer: EVIDENCE_ISSUER,
+      secretValueStored: false as const,
+    }),
   };
 }
 
