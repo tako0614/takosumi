@@ -573,6 +573,9 @@ function publicProviderBindingSet(
       connectionId: binding.connectionId,
       ...(binding.alias ? { alias: binding.alias } : {}),
       ...(binding.region ? { region: binding.region } : {}),
+      ...(binding.runCredentialSettings
+        ? { runCredentialSettings: binding.runCredentialSettings }
+        : {}),
     })),
     createdAt: profile.createdAt,
     updatedAt: profile.updatedAt,

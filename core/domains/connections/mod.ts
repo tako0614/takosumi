@@ -16,7 +16,10 @@ import type {
   ProviderBindings,
   ProviderConnectionMaterialization,
 } from "takosumi-contract/connections";
-import { isWorkspaceBindableOperatorConnection } from "takosumi-contract/connections";
+import {
+  canonicalRunCredentialSettings,
+  isWorkspaceBindableOperatorConnection,
+} from "takosumi-contract/connections";
 import { sameProviderSource } from "takosumi-contract/provider-env-rules";
 import { stableJsonDigest } from "../../adapters/source/digest.ts";
 import {
@@ -34,6 +37,7 @@ export interface ResolvedCapsuleProviderBinding {
   readonly rootAlias?: string;
   /** @deprecated Ambiguous pre-v1 alias retained for stored-row compatibility. */
   readonly alias?: string;
+  readonly runCredentialSettings?: ProviderBinding["runCredentialSettings"];
   readonly connection: ProviderConnection;
   readonly materialization: ProviderConnectionMaterialization;
 }
@@ -106,6 +110,20 @@ function validateCapsuleProviderBinding(
     value.region === undefined
       ? undefined
       : nonEmptyField(value.region, `${field}.region`);
+  let runCredentialSettings: ProviderBinding["runCredentialSettings"];
+  try {
+    runCredentialSettings = canonicalRunCredentialSettings(
+      value.runCredentialSettings,
+      `${field}.runCredentialSettings`,
+    );
+  } catch (error) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      error instanceof Error
+        ? error.message
+        : `${field}.runCredentialSettings is invalid`,
+    );
+  }
   return {
     provider,
     connectionId,
@@ -114,6 +132,7 @@ function validateCapsuleProviderBinding(
     ...(rootAlias ? { rootAlias } : {}),
     ...(alias ? { alias } : {}),
     ...(region ? { region } : {}),
+    ...(runCredentialSettings ? { runCredentialSettings } : {}),
   };
 }
 
@@ -164,6 +183,7 @@ export async function resolvedProviderBindingsDigest(
       connectionId: entry.connection.id,
       envNames: [...entry.connection.envNames].sort(),
       providerConfig: entry.connection.scopeHints?.providerConfig ?? null,
+      runCredentialSettings: entry.runCredentialSettings ?? null,
     }))
     .sort((a, b) => {
       const providerOrder = compareText(a.provider, b.provider);
@@ -404,6 +424,16 @@ export class ConnectionsService {
         { reason: PROVIDER_CONNECTION_NOT_READY_REASON },
       );
     }
+    if (
+      binding.runCredentialSettings !== undefined &&
+      !isWorkspaceBindableOperatorConnection(connection)
+    ) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `Provider Connection ${binding.connectionId} does not accept run credential settings`,
+        { reason: PROVIDER_CONNECTION_SETUP_REQUIRED_REASON },
+      );
+    }
     return {
       provider: binding.provider,
       ...(binding.moduleLocalName
@@ -412,6 +442,9 @@ export class ConnectionsService {
       ...(binding.childAlias ? { childAlias: binding.childAlias } : {}),
       ...(binding.rootAlias ? { rootAlias: binding.rootAlias } : {}),
       ...(binding.alias ? { alias: binding.alias } : {}),
+      ...(binding.runCredentialSettings
+        ? { runCredentialSettings: binding.runCredentialSettings }
+        : {}),
       connection,
       materialization: connection.materialization,
     };

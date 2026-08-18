@@ -429,6 +429,9 @@ function providerMintEntriesFromResolved(
         ? { alias: entry.rootAlias ?? entry.alias }
         : {}),
       connectionId: connection.id,
+      ...(entry.runCredentialSettings
+        ? { runCredentialSettings: entry.runCredentialSettings }
+        : {}),
     });
   }
   return entries;

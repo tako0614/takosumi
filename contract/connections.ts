@@ -1,4 +1,5 @@
 import type { JsonValue } from "./types.ts";
+import { containsSecretLikeString, isSecretKey } from "./redaction.ts";
 import type { CredentialRecipeRunIssuance } from "./credential-recipes.ts";
 import type { SourceGitConnectionKind } from "./sources.ts";
 import { INTERNAL_V1_PREFIX } from "./api-surface.ts";
@@ -311,6 +312,113 @@ export interface ProviderBinding {
   readonly alias?: string;
   readonly connectionId: string;
   readonly region?: string;
+  /**
+   * Canonical non-secret parameters consumed only by the selected run-issued
+   * Credential Recipe driver. Credential material is forbidden here.
+   */
+  readonly runCredentialSettings?: Readonly<Record<string, JsonValue>>;
+}
+
+const MAX_RUN_CREDENTIAL_SETTINGS_BYTES = 4_096;
+const MAX_RUN_CREDENTIAL_SETTINGS_DEPTH = 6;
+const MAX_RUN_CREDENTIAL_SETTINGS_ENTRIES = 64;
+const MAX_RUN_CREDENTIAL_SETTING_STRING = 1_024;
+
+/** Validates, sorts, bounds, and freezes non-secret per-binding driver input. */
+export function canonicalRunCredentialSettings(
+  value: unknown,
+  field = "runCredentialSettings",
+): Readonly<Record<string, JsonValue>> | undefined {
+  if (value === undefined) return undefined;
+  if (!isJsonObject(value)) {
+    throw new Error(`${field} must be a JSON object when provided`);
+  }
+  const canonical = canonicalRunCredentialObject(value, field, 0);
+  if (Object.keys(canonical).length === 0) return undefined;
+  if (
+    new TextEncoder().encode(JSON.stringify(canonical)).byteLength >
+    MAX_RUN_CREDENTIAL_SETTINGS_BYTES
+  ) {
+    throw new Error(`${field} exceeds ${MAX_RUN_CREDENTIAL_SETTINGS_BYTES} bytes`);
+  }
+  return canonical;
+}
+
+function canonicalRunCredentialObject(
+  value: Readonly<Record<string, unknown>>,
+  path: string,
+  depth: number,
+): Readonly<Record<string, JsonValue>> {
+  if (depth > MAX_RUN_CREDENTIAL_SETTINGS_DEPTH) {
+    throw new Error(`${path} exceeds the maximum nesting depth`);
+  }
+  const keys = Object.keys(value).sort();
+  if (keys.length > MAX_RUN_CREDENTIAL_SETTINGS_ENTRIES) {
+    throw new Error(`${path} has too many entries`);
+  }
+  const result: Record<string, JsonValue> = {};
+  for (const key of keys) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(key)) {
+      throw new Error(`${path}.${key} must be a valid identifier`);
+    }
+    if (isSecretKey(key)) {
+      throw new Error(`${path}.${key} is credential-shaped`);
+    }
+    result[key] = canonicalRunCredentialValue(
+      value[key],
+      `${path}.${key}`,
+      depth + 1,
+    );
+  }
+  return Object.freeze(result);
+}
+
+function canonicalRunCredentialValue(
+  value: unknown,
+  path: string,
+  depth: number,
+): JsonValue {
+  if (value === null || typeof value === "boolean") return value;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      throw new Error(`${path} must be a finite JSON number`);
+    }
+    return value;
+  }
+  if (typeof value === "string") {
+    if (value.length > MAX_RUN_CREDENTIAL_SETTING_STRING) {
+      throw new Error(
+        `${path} exceeds ${MAX_RUN_CREDENTIAL_SETTING_STRING} characters`,
+      );
+    }
+    if (containsSecretLikeString(value)) {
+      throw new Error(`${path} contains a secret-like value`);
+    }
+    return value;
+  }
+  if (Array.isArray(value)) {
+    if (depth > MAX_RUN_CREDENTIAL_SETTINGS_DEPTH) {
+      throw new Error(`${path} exceeds the maximum nesting depth`);
+    }
+    if (value.length > MAX_RUN_CREDENTIAL_SETTINGS_ENTRIES) {
+      throw new Error(`${path} has too many entries`);
+    }
+    return Object.freeze(
+      value.map((entry, index) =>
+        canonicalRunCredentialValue(entry, `${path}[${index}]`, depth + 1),
+      ),
+    ) as JsonValue[];
+  }
+  if (isJsonObject(value)) {
+    return canonicalRunCredentialObject(value, path, depth);
+  }
+  throw new Error(`${path} must be a JSON value`);
+}
+
+function isJsonObject(
+  value: unknown,
+): value is Readonly<Record<string, unknown>> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export type ProviderBindings = readonly ProviderBinding[];

@@ -34,6 +34,7 @@ import {
   sameProviderSource,
 } from "takosumi-contract/provider-env-rules";
 import {
+  canonicalRunCredentialSettings,
   hasLegacyManagedProviderScopeHints,
   isCapsuleRunCredentialIssuance,
   isWorkspaceBindableOperatorConnection,
@@ -211,6 +212,9 @@ export interface CapsuleProviderBindingMintEntry {
   readonly alias?: string;
   /** The ProviderConnection this provider env binding resolved to. */
   readonly connectionId: string;
+  readonly runCredentialSettings?: Readonly<
+    Record<string, import("takosumi-contract").JsonValue>
+  >;
 }
 
 export interface CapsuleProviderBindingMintOptions {
@@ -1018,9 +1022,32 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         );
       }
       assertConnectionVerified(connection);
-      const run = isCapsuleRunCredentialIssuance(
+      const runIssuance = isCapsuleRunCredentialIssuance(
         connection.credentialRecipe?.runIssuance,
-      )
+      );
+      let runCredentialSettings: CapsuleProviderBindingMintEntry["runCredentialSettings"];
+      try {
+        runCredentialSettings = canonicalRunCredentialSettings(
+          entry.runCredentialSettings,
+          "runCredentialSettings",
+        );
+      } catch (error) {
+        throw new ConnectionVaultError(
+          "invalid_argument",
+          error instanceof Error
+            ? error.message
+            : "runCredentialSettings is invalid",
+        );
+      }
+      if (runCredentialSettings !== undefined && !runIssuance) {
+        throw new ConnectionVaultError(
+          "failed_precondition",
+          `connection ${connection.id} does not accept run credential settings`,
+          undefined,
+          "credential_service_unavailable",
+        );
+      }
+      const run = runIssuance
         ? await this.#canonicalRunIssuanceContext(
             workspaceId,
             connection,
@@ -1028,7 +1055,11 @@ export class StaticSecretConnectionVault implements ConnectionVault {
             options,
           )
         : undefined;
-      const minted = await this.#mintProviderValues(connection, run);
+      const minted = await this.#mintProviderValues(
+        connection,
+        run,
+        runCredentialSettings,
+      );
       evidence.push(minted.evidence);
       mergeCredentialEnv(env, minted.values, entry);
       if (minted.files) files.push(...minted.files);
@@ -1353,6 +1384,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
   async #mintProviderValues(
     connection: ProviderConnection,
     run?: CredentialRecipeDriverRunContext,
+    runCredentialSettings?: CapsuleProviderBindingMintEntry["runCredentialSettings"],
   ): Promise<MintedProviderValues> {
     if (connectionIsExpired(connection, this.#now())) {
       await this.#markConnectionExpired(connection);
@@ -1392,6 +1424,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       const issuedSecretValues: string[] = [];
       const baseContext = {
         connection,
+        ...(runCredentialSettings ? { runCredentialSettings } : {}),
         values: material.env,
         files: material.files,
         fetch: this.#fetch,
