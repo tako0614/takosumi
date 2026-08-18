@@ -213,10 +213,16 @@ output "attachments_bucket" {
   expect(result.findings).toEqual([]);
 });
 
-test("preserves literal required provider version constraints", () => {
+test("preserves literal version constraints for a canonical Terraform Registry provider", () => {
   const result = analyzeOpenTofuCapsuleFiles({
     sourceId: "src_provider_version",
     sourceSnapshot: snapshot,
+    policy: {
+      allowedProviders: ["registry.terraform.io/tako0614/takoform"],
+      providerCredentials: {
+        requiredProviders: ["registry.terraform.io/tako0614/takoform"],
+      },
+    },
     files: [
       {
         path: "main.tf",
@@ -224,7 +230,7 @@ test("preserves literal required provider version constraints", () => {
 terraform {
   required_providers {
     takoform = {
-      source  = "registry.opentofu.org/tako0614/takoform"
+      source  = "registry.terraform.io/tako0614/takoform"
       version = "= 2.1.1"
     }
   }
@@ -241,14 +247,52 @@ output "ok" {
   expect(result.level).toBe("ready");
   expect(result.providers).toEqual([
     {
-      source: "registry.opentofu.org/tako0614/takoform",
+      source: "registry.terraform.io/tako0614/takoform",
       localName: "takoform",
       versionConstraint: "= 2.1.1",
       aliases: [],
       allowed: true,
+      credentialRequired: true,
     },
   ]);
   expect(result.findings).toEqual([]);
+});
+
+test("does not alias a Terraform Registry provider to the OpenTofu default registry", () => {
+  const result = analyzeOpenTofuCapsuleFiles({
+    sourceId: "src_provider_registry_mismatch",
+    sourceSnapshot: snapshot,
+    policy: {
+      allowedProviders: ["tako0614/takoform"],
+    },
+    files: [
+      {
+        path: "main.tf",
+        text: `
+terraform {
+  required_providers {
+    takoform = {
+      source = "registry.terraform.io/tako0614/takoform"
+    }
+  }
+}
+`,
+      },
+    ],
+  });
+
+  expect(result.level).toBe("unsupported");
+  expect(result.providers).toEqual([
+    {
+      source: "registry.terraform.io/tako0614/takoform",
+      localName: "takoform",
+      aliases: [],
+      allowed: false,
+    },
+  ]);
+  expect(result.findings.map(({ code }) => code)).toContain(
+    "provider_not_allowed",
+  );
 });
 
 test("omits a non-literal required provider version without downgrading compatibility", () => {

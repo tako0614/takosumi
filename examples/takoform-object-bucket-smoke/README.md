@@ -6,8 +6,15 @@ block: the Takosumi runner injects the selected connection's
 `TAKOFORM_ENDPOINT`, `TAKOFORM_SPACE`, and `TAKOFORM_TOKEN` values for the
 plan/apply/destroy phases.
 
-The `bucket_name` variable must be unique for the target Takoform host. The
-fixture exposes only `object_bucket_id`, the provider's canonical resource id;
+The required provider source is the canonical Terraform Registry address
+`registry.terraform.io/tako0614/takoform`, pinned here to `2.1.1`; provider
+credentials remain a generic-env connection concern rather than Capsule source
+state.
+
+The fixture uses the released provider's current Edge Platform ObjectBucket
+resource (`takoform_edge_object_bucket`) and therefore negotiates the Host API
+v1beta1 lane. The `bucket_name` variable must be unique for the target Takoform
+host. The fixture exposes only `object_bucket_id`, the host-issued immutable UID;
 it does not expose endpoint, space, token, or any other credential material.
 
 Example smoke source settings:
