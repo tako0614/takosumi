@@ -122,6 +122,17 @@ async function mintPlatformExtensionProviderCredential(
     }),
   });
   if (!response.ok) {
+    // The vault intentionally collapses provider-driver failures into the
+    // public `credential_service_unavailable` diagnostic. Preserve only the
+    // non-secret HTTP boundary here so an operator can distinguish platform
+    // authentication, extension validation, and upstream availability
+    // failures without logging the bearer, response body, Workspace, or Run.
+    console.warn(
+      JSON.stringify({
+        event: "platform_extension_provider_credential_exchange_failed",
+        status: response.status,
+      }),
+    );
     throw new Error("provider credential exchange failed");
   }
   const declaredLength = Number(response.headers.get("content-length") ?? "NaN");

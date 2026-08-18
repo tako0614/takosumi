@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import {
   platformExtensionProviderCredentialComposition,
 } from "../../../deploy/platform/platform_extension_provider_credentials.ts";
@@ -141,4 +141,82 @@ test("a configured extension contributes one exact run-issued provider broker", 
     providerSource: "registry.terraform.io/tako0614/takoform",
     settings: { reservationId: "rsv_hosted", resourceName: "media" },
   });
+});
+
+test("broker failures log only a stable status boundary", async () => {
+  const composition = platformExtensionProviderCredentialComposition({
+    TAKOSUMI_PLATFORM_EXTENSIONS: ROUTES,
+    TAKOSUMI_ACCOUNTS_ISSUER: "https://app-staging.takosumi.com",
+  });
+  const driver = composition?.credentialRecipeDrivers[
+    "takosumi-hosted-takoform-run/broker"
+  ];
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    await expect(
+      driver!.mint!({
+        connection: {
+          id: "conn_takosumiHostedTakoform01",
+          workspaceId: "operator",
+          provider: "registry.terraform.io/tako0614/takoform",
+          providerSource: "registry.terraform.io/tako0614/takoform",
+          scope: { kind: "operator" },
+          materialization: "run-issued",
+          status: "verified",
+          envNames: ["TAKOFORM_ENDPOINT", "TAKOFORM_SPACE", "TAKOFORM_TOKEN"],
+          requiredEnvGroups: [
+            ["TAKOFORM_ENDPOINT"],
+            ["TAKOFORM_SPACE"],
+            ["TAKOFORM_TOKEN"],
+          ],
+          credentialRecipe: {
+            id: "takosumi-hosted-takoform-run",
+            authMode: "broker",
+          },
+          createdAt: "2026-08-18T00:00:00.000Z",
+          updatedAt: "2026-08-18T00:00:00.000Z",
+        },
+        runCredentialSettings: {
+          reservationId: "rsv_secret_marker",
+          resourceName: "media",
+        },
+        values: {},
+        files: [],
+        run: {
+          workspaceId: "ws_secret_marker",
+          capsuleId: "cap_secret_marker",
+          runId: "run_secret_marker",
+          installingPrincipalId: "acct_secret_marker",
+          phase: "plan",
+        },
+        issueRunCredential: async () => ({
+          token: "platform_secret_marker",
+          expiresAt: "2026-08-18T00:10:00.000Z",
+          ttlSeconds: 600,
+        }),
+        fetch: async () =>
+          Response.json(
+            { error: "raw_response_secret_marker" },
+            { status: 401 },
+          ),
+        now: () => new Date("2026-08-18T00:00:00.000Z"),
+        staticEvidence: () => ({
+          connectionId: "conn_takosumiHostedTakoform01",
+          provider: "registry.terraform.io/tako0614/takoform",
+          temporary: false,
+          ttlEnforced: false,
+          issuer: "static_secret",
+        }),
+      }),
+    ).rejects.toThrow("provider credential exchange failed");
+    expect(warn).toHaveBeenCalledTimes(1);
+    const logged = String(warn.mock.calls[0]?.[0]);
+    expect(JSON.parse(logged)).toEqual({
+      event: "platform_extension_provider_credential_exchange_failed",
+      status: 401,
+    });
+    expect(logged).not.toContain("secret_marker");
+  } finally {
+    warn.mockRestore();
+  }
 });
