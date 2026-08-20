@@ -236,6 +236,7 @@ export const ja = {
   "hostedResources.column.status": "状態",
   "hostedResources.column.generation": "世代",
   "hostedResources.column.workload": "ワークロード",
+  "hostedResources.noWorkload": "関連するワークロードなし",
   "hostedResources.openWorkload": "ワークロードを開く",
   "hostedResources.status.ready": "準備完了",
   "hostedResources.status.needsAttention": "要確認",

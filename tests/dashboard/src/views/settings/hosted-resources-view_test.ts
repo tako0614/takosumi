@@ -30,7 +30,7 @@ test("hosted resources are a manage route backed by the native contribution", ()
   expect(router).not.toContain("import(\"./views/resources/");
 });
 
-test("hosted resource view uses the native contribution and Cloud inventory DTO", () => {
+test("hosted resource view uses the native contribution and provider-neutral inventory DTO", () => {
   const view = read("views/settings/HostedResourcesView.tsx");
   const client = read("lib/hosted-resources.ts");
 
@@ -41,7 +41,7 @@ test("hosted resource view uses the native contribution and Cloud inventory DTO"
   expect(view).toContain("contribution.latest");
   expect(view).toContain("HostedResourceInventory");
   expect(view).toContain("currentWorkspaceId");
-  expect(view).toContain('href={`/workloads/${encodeURIComponent(item.space)}`}');
+  expect(view).toContain('href={`/workloads/${encodeURIComponent(item.workloadId)}`}');
   expect(view).toContain('t("hostedResources.column.kind")');
   expect(view).toContain('t("hostedResources.column.name")');
   expect(view).toContain('t("hostedResources.column.status")');
@@ -53,7 +53,7 @@ test("hosted resource view uses the native contribution and Cloud inventory DTO"
   expect(view).not.toContain("delete");
   expect(view).not.toContain("update");
   expect(client).toContain(
-    '"takosumi.cloud-hosted-resource-inventory@v1"',
+    '"takosumi.hosted-resource-inventory@v1"',
   );
   expect(client).toContain("nextCursor");
   expect(client).toContain("workspaceId");
@@ -303,7 +303,6 @@ test("hosted resource UI has unavailable, loading, retry, empty, and pagination 
 
 test("hosted inventory parsing is strict about version, workspace, and shape", () => {
   const item = {
-    space: "capsule_1",
     apiVersion: "takosumi.dev/v1alpha1",
     kind: "EdgeWorker",
     name: "api",
@@ -381,7 +380,7 @@ test("hosted inventory parsing is strict about version, workspace, and shape", (
 test("hosted inventory requests preserve the contribution href and opaque cursor", async () => {
   let requested = "";
   const page = await listHostedResourceInventoryPage(
-    "/v1/cloud/resource-instances?view=compact",
+    "/v1/hosted/marketplace/resources?view=compact",
     "workspace_1",
     "opaque.cursor/2",
     async (input) => {
@@ -394,7 +393,7 @@ test("hosted inventory requests preserve the contribution href and opaque cursor
     },
   );
   const url = new URL(requested);
-  expect(url.pathname).toBe("/v1/cloud/resource-instances");
+  expect(url.pathname).toBe("/v1/hosted/marketplace/resources");
   expect(url.searchParams.get("view")).toBe("compact");
   expect(url.searchParams.get("workspaceId")).toBe("workspace_1");
   expect(url.searchParams.get("limit")).toBe("25");

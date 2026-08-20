@@ -255,7 +255,7 @@ function Inner(): JSX.Element {
               <DataTable
                 columns={columns()}
                 rows={items()}
-                rowKey={(item) => `${item.space}:${item.kind}:${item.name}`}
+                rowKey={(item) => item.uid}
                 loading={initialLoading() && items().length === 0}
                 skeletonRows={HOSTED_RESOURCE_INVENTORY_PAGE_SIZE}
               />
@@ -327,13 +327,16 @@ function HostedResourceCard(props: {
 }
 
 function workloadLink(item: HostedResourceInventoryItem): JSX.Element {
+  if (!item.workloadId) {
+    return <span aria-label={t("hostedResources.noWorkload")}>—</span>;
+  }
   return (
     <A
       class="hosted-resources-workload"
-      href={`/workloads/${encodeURIComponent(item.space)}`}
-      aria-label={`${t("hostedResources.openWorkload")}: ${item.space}`}
+      href={`/workloads/${encodeURIComponent(item.workloadId)}`}
+      aria-label={`${t("hostedResources.openWorkload")}: ${item.workloadId}`}
     >
-      {item.space}
+      {item.workloadId}
     </A>
   );
 }
