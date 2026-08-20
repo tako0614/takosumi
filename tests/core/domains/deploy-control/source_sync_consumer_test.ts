@@ -675,6 +675,102 @@ test("source_sync consumer fast-reuses a pinned commit SourceSnapshot without di
   expect(snapshots[0]?.resolvedCommit).toBe(pinnedCommit);
 });
 
+test("source_sync consumer refreshes invalid manifest metadata before pinned archive reuse", async () => {
+  const { store, sourcesService, runner, controller } = build();
+  const pinnedCommit = "ccee6dea39e0797148ec0061fc738a693073890d";
+  const { source: firstSource } = await sourcesService.createSource({
+    workspaceId: "workspace_1",
+    name: "repo-a",
+    url: "https://github.com/acme/repo.git",
+    defaultRef: pinnedCommit,
+  });
+  const { source: secondSource } = await sourcesService.createSource({
+    workspaceId: "workspace_1",
+    name: "repo-b",
+    url: "https://github.com/acme/repo.git",
+    defaultRef: pinnedCommit,
+  });
+  const previousArchiveKey =
+    "workspaces/workspace_1/sources/src_prev/snapshots/snap_prev/source.tar.zst";
+  const previousDigest = "sha256:" + "b".repeat(64);
+  await store.putSourceSnapshot({
+    id: "snap_prev",
+    origin: "git",
+    workspaceId: "workspace_1",
+    sourceId: firstSource.id,
+    url: firstSource.url,
+    defaultRef: pinnedCommit,
+    ref: pinnedCommit,
+    resolvedCommit: pinnedCommit,
+    path: ".",
+    archiveRef: previousArchiveKey,
+    archiveDigest: previousDigest,
+    archiveSizeBytes: 2048,
+    repositoryInstallMetadata: { status: "absent" },
+    repositoryManifest: {
+      status: "invalid",
+      reason: "invalid_document",
+      digest: "sha256:" + "c".repeat(64),
+    },
+    fetchedByRunId: "ssr_prev",
+    fetchedAt: "1970-01-01T00:00:00.000Z",
+  });
+  const freshManifest = {
+    status: "present" as const,
+    digest: "sha256:" + "d".repeat(64),
+    document: {
+      apiVersion: "takosumi.com/v2.3" as const,
+      kind: "Repository" as const,
+      install: {
+        modules: {
+          ".": {
+            inputs: [],
+            sourceBuild: {
+              commands: [{ argv: ["bun", "run", "build"] }],
+              outputs: ["dist"],
+            },
+          },
+        },
+      },
+    },
+  };
+  runner.onSourceSync = async (job) => {
+    expect(job.reuseSnapshot).toEqual({
+      id: "snap_prev",
+      resolvedCommit: pinnedCommit,
+      archiveRef: previousArchiveKey,
+      archiveDigest: previousDigest,
+      archiveSizeBytes: 2048,
+    });
+    runner.result = {
+      resolvedCommit: pinnedCommit,
+      archiveDigest: previousDigest,
+      archiveSizeBytes: 2048,
+      archiveRef: previousArchiveKey,
+      repositoryManifest: freshManifest,
+    };
+  };
+  const { run } = await controller.createSourceSync(secondSource.id);
+
+  await controller.dispatchQueuedRun({
+    action: "source_sync",
+    runId: run.id,
+    workspaceId: "workspace_1",
+  });
+
+  expect(runner.calls).toHaveLength(1);
+  const finished = await store.getSourceSyncRun(run.id);
+  expect(finished?.status).toBe("succeeded");
+  const snapshots = await store.listSourceSnapshots(secondSource.id);
+  expect(snapshots).toHaveLength(1);
+  expect(snapshots[0]?.archiveRef).toBe(previousArchiveKey);
+  expect(snapshots[0]?.archiveDigest).toBe(previousDigest);
+  expect(snapshots[0]?.repositoryInstallMetadata).toEqual({
+    status: "absent",
+  });
+  expect(snapshots[0]?.repositoryManifest).toEqual(freshManifest);
+});
+
 test("source_sync consumer does not reuse sibling Git archives across credential or Workspace boundaries", async () => {
   const { store, sourcesService, vault, runner, controller } = build();
   const conn = await vault.register({

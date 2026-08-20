@@ -684,6 +684,8 @@ function canReusePinnedSourceSnapshotWithoutRunner(
 ): boolean {
   return (
     sourceSnapshotMatchesRun(snapshot, running) &&
+    snapshot.repositoryInstallMetadata?.status !== "invalid" &&
+    snapshot.repositoryManifest?.status !== "invalid" &&
     isPinnedGitCommit(running.ref) &&
     normalizeGitObjectId(running.ref) ===
       normalizeGitObjectId(snapshot.resolvedCommit)
