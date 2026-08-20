@@ -44,7 +44,11 @@ export interface PlatformExtensionRoute {
   readonly authMode?: "platform" | "handler";
   /** `headers` is the default; `context` uses the typed authenticated seam. */
   readonly authDelivery?: "headers" | "context";
-  /** Reject any parent/child route overlap when this route owns its subtree. */
+  /**
+   * Reject parent/child route overlap when this route owns its subtree. One
+   * exact leaf owned by the same handler and authentication seam may narrow
+   * authorization without delegating any part of the subtree.
+   */
   readonly ownsPathSubtree?: boolean;
   /** Scopes required from platform token credentials. */
   readonly requiredScopes?: readonly string[];
@@ -565,7 +569,8 @@ function mergePlatformExtensionRoutes(
       if (
         overlaps &&
         ((left.ownsPathSubtree ?? false) ||
-          (right.ownsPathSubtree ?? false))
+          (right.ownsPathSubtree ?? false)) &&
+        !sameExtensionExactLeafPolicy(left, right)
       ) {
         throw new TypeError(
           `platform extension route subtree ownership overlaps ${left.basePath} and ${right.basePath}`,
@@ -659,6 +664,22 @@ function mergePlatformExtensionRoutes(
     );
   }
   return [...merged.values()];
+}
+
+function sameExtensionExactLeafPolicy(
+  left: PlatformExtensionRoute,
+  right: PlatformExtensionRoute,
+): boolean {
+  const leftMode = left.matchMode ?? "subtree";
+  const rightMode = right.matchMode ?? "subtree";
+  if (leftMode !== "exact" && rightMode !== "exact") return false;
+  return (
+    left.handlerKey === right.handlerKey &&
+    (left.authMode ?? "platform") === (right.authMode ?? "platform") &&
+    (left.authDelivery ?? "headers") ===
+      (right.authDelivery ?? "headers") &&
+    left.workspaceContext === right.workspaceContext
+  );
 }
 
 function sameProviderCredentialBroker(
