@@ -159,6 +159,8 @@ describe("single-screen install surface", () => {
     const view = read("dashboard/src/views/new/InstallView.tsx");
     expect(view).toContain("listSourceSnapshotDeploymentProfiles(");
     expect(view).toContain("storeDeploymentProfileCatalogFromSnapshot");
+    expect(view).toContain('catalog.status === "ready" ? (catalog.preselectedKey ?? "") : ""');
+    expect(view).toContain("selectedDeploymentProfile()?.management");
     expect(view.indexOf("await prepareCapsuleSourceSnapshot({")).toBeLessThan(
       view.indexOf("listSourceSnapshotDeploymentProfiles("),
     );

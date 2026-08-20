@@ -25,12 +25,12 @@ const TARGETS = {
   staging: {
     origin: "https://app-staging.takosumi.com",
     workerName: "takosumi-staging",
-    hostedService: "takosumi-hosted-marketplace",
+    hostedService: "takosumi-hosted-staging",
   },
   production: {
     origin: "https://app.takosumi.com",
     workerName: "takosumi",
-    hostedService: "takosumi-hosted-marketplace-production",
+    hostedService: "takosumi-hosted",
   },
 } as const satisfies Record<
   PlatformEnvironment,
@@ -349,7 +349,7 @@ async function recover(
     "ASSETS",
     "TAKOSUMI_ACCOUNTS_DB",
     "TAKOSUMI_CONTROL_DB",
-    "TAKOSUMI_HOSTED_MARKETPLACE",
+    "HOSTED",
     "TAKOSUMI_VERSION_METADATA",
   ]) {
     if (!bindings.includes(required)) {
@@ -538,13 +538,8 @@ function hasHostedDiscovery(value: unknown, origin: string): boolean {
   }
   const extensions = value.endpoints.extensions;
   return (
-    extensions["marketplace.hosted.v1"] === `${origin}/v1/hosted/marketplace` &&
-    extensions["resource-migration.hosted.v1"] ===
-      `${origin}/v1/hosted/marketplace` &&
-    extensions["object.s3.credentials.v1"] ===
-      `${origin}/v1/hosted/marketplace` &&
-    extensions["ai.openai-compatible.v1"] === `${origin}/v1/hosted/ai` &&
-    extensions["ai.prepaid-retail.v1"] === `${origin}/v1/hosted/ai`
+    extensions["takosumi.hosted.subscription.v1"] ===
+      `${origin}/v1/hosted/subscription`
   );
 }
 
@@ -565,13 +560,34 @@ export function assertConfigTargetsSource(
     ),
   ];
   const hostedServices = services.filter(
-    (entry) => entry[1] === "TAKOSUMI_HOSTED_MARKETPLACE",
+    (entry) => entry[1] === "HOSTED",
   );
+  let hostedRouteValid = false;
+  try {
+    const parsed = Bun.TOML.parse(source) as Record<string, unknown>;
+    const vars = parsed.vars as Record<string, unknown> | undefined;
+    const descriptors = JSON.parse(String(vars?.TAKOSUMI_PLATFORM_EXTENSIONS)) as unknown;
+    if (Array.isArray(descriptors)) {
+      const hosted = descriptors.filter(
+        (entry) =>
+          entry &&
+          typeof entry === "object" &&
+          !Array.isArray(entry) &&
+          (entry as Record<string, unknown>).handlerKey === "HOSTED",
+      );
+      hostedRouteValid =
+        hosted.length === 1 &&
+        matchesHostedSponsorshipRoute(hosted[0]);
+    }
+  } catch {
+    hostedRouteValid = false;
+  }
   if (
     name !== target.workerName ||
     configuredEnvironment !== environment ||
     hostedServices.length !== 1 ||
     hostedServices[0]?.[2] !== target.hostedService ||
+    !hostedRouteValid ||
     !main ||
     !assets ||
     resolve(dirname(path), main) !==
@@ -580,6 +596,37 @@ export function assertConfigTargetsSource(
   ) {
     throw new Error("platform_worker_release_config_source_invalid");
   }
+}
+
+function matchesHostedSponsorshipRoute(value: unknown): boolean {
+  if (!record(value)) return false;
+  const keys = Object.keys(value).sort();
+  return (
+    JSON.stringify(keys) ===
+      JSON.stringify(
+        [
+          "authDelivery",
+          "basePath",
+          "capabilities",
+          "handlerKey",
+          "id",
+          "ownsPathSubtree",
+          "requiredScopes",
+          "workspaceContext",
+        ].sort(),
+      ) &&
+    value.id === "takosumi-hosted-sponsorship" &&
+    value.basePath === "/v1/hosted/subscription" &&
+    value.handlerKey === "HOSTED" &&
+    value.authDelivery === "context" &&
+    value.ownsPathSubtree === true &&
+    value.workspaceContext === "query-required" &&
+    Array.isArray(value.requiredScopes) &&
+    value.requiredScopes.length === 0 &&
+    Array.isArray(value.capabilities) &&
+    value.capabilities.length === 1 &&
+    value.capabilities[0] === "takosumi.hosted.subscription.v1"
+  );
 }
 
 function assertCleanAndPushed(): void {

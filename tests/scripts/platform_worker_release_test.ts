@@ -15,12 +15,12 @@ test("platform release owns isolated staging and production targets", () => {
   expect(platformTargetForEnvironment("staging")).toEqual({
     origin: "https://app-staging.takosumi.com",
     workerName: "takosumi-staging",
-    hostedService: "takosumi-hosted-marketplace",
+    hostedService: "takosumi-hosted-staging",
   });
   expect(platformTargetForEnvironment("production")).toEqual({
     origin: "https://app.takosumi.com",
     workerName: "takosumi",
-    hostedService: "takosumi-hosted-marketplace-production",
+    hostedService: "takosumi-hosted",
   });
 });
 
@@ -31,21 +31,31 @@ main = "${resolve(root, "deploy/platform/worker.ts")}"
 [assets]
 directory = "${resolve(root, "dashboard/dist")}"
 [[services]]
-binding = "TAKOSUMI_HOSTED_MARKETPLACE"
+binding = "HOSTED"
 service = "${service}"
 [vars]
 TAKOSUMI_ENVIRONMENT = "production"
+TAKOSUMI_PLATFORM_EXTENSIONS = '${JSON.stringify([{
+    id: "takosumi-hosted-sponsorship",
+    basePath: "/v1/hosted/subscription",
+    handlerKey: "HOSTED",
+    authDelivery: "context",
+    ownsPathSubtree: true,
+    workspaceContext: "query-required",
+    requiredScopes: [],
+    capabilities: ["takosumi.hosted.subscription.v1"],
+  }])}'
 `;
   expect(() =>
     assertConfigTargetsSource(
-      source("takosumi-hosted-marketplace-production"),
+      source("takosumi-hosted"),
       "/private/wrangler.toml",
       "production",
     ),
   ).not.toThrow();
   expect(() =>
     assertConfigTargetsSource(
-      source("takosumi-hosted-marketplace"),
+      source("takosumi-hosted-staging"),
       "/private/wrangler.toml",
       "production",
     ),
@@ -150,9 +160,9 @@ test("lost acknowledgement recovery selects one post-plan Version and exact bind
       JSON.stringify({
         resources: [
           { name: "ASSETS" },
-          { binding: "TAKOSUMI_HOSTED_MARKETPLACE" },
+          { binding: "HOSTED" },
         ],
       }),
     ),
-  ).toEqual(["ASSETS", "TAKOSUMI_HOSTED_MARKETPLACE"]);
+  ).toEqual(["ASSETS", "HOSTED"]);
 });

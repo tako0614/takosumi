@@ -79,6 +79,7 @@ test("completeUpstreamOAuth keeps the saved return path when callback exchange f
   };
   storage.set("tg_oauth_state", "state_a");
   storage.set("tg_oauth_provider", "google");
+  storage.set("tg_oauth_pkce_verifier", "v".repeat(43));
   storage.set(
     "tg_oauth_return",
     "/new?git=https%3A%2F%2Fgithub.com%2Ftako0614%2Ftakos.git&path=deploy%2Fopentofu",
@@ -100,7 +101,7 @@ test("completeUpstreamOAuth keeps the saved return path when callback exchange f
   expect(storage.get("tg_oauth_provider")).toBe("google");
 });
 
-test("startUpstreamOAuth preserves return_to when legacy links reach /login", () => {
+test("startUpstreamOAuth preserves return_to and sends S256 PKCE", async () => {
   const storage = new Map<string, string>();
   globalThis.sessionStorage = {
     getItem: (key: string) => storage.get(key) ?? null,
@@ -121,6 +122,7 @@ test("startUpstreamOAuth preserves return_to when legacy links reach /login", ()
       new Uint8Array(array.buffer, array.byteOffset, array.byteLength).fill(7);
       return array;
     },
+    subtle: ORIGINAL_CRYPTO.subtle,
   } as Crypto;
   const assigned: string[] = [];
   const returnTo =
@@ -138,8 +140,14 @@ test("startUpstreamOAuth preserves return_to when legacy links reach /login", ()
     value: globalThis,
   });
 
-  startUpstreamOAuth("google");
+  await startUpstreamOAuth("google");
 
   expect(storage.get("tg_oauth_return")).toBe(returnTo);
+  expect(storage.get("tg_oauth_pkce_verifier")).toHaveLength(43);
   expect(assigned[0]).toContain("/v1/auth/upstream/authorize?");
+  const assignedUrl = new URL(assigned[0]!, "https://app.takosumi.com");
+  expect(assignedUrl.searchParams.get("code_challenge_method")).toBe("S256");
+  expect(assignedUrl.searchParams.get("code_challenge")).toMatch(
+    /^[A-Za-z0-9_-]{43}$/u,
+  );
 });

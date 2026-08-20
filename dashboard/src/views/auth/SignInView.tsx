@@ -108,7 +108,7 @@ export function SignInPanel() {
 
   const select = (p: Provider) => {
     if (!isEnabled(p)) return;
-    rpc.auth.startUpstreamOAuth(p);
+    void rpc.auth.startUpstreamOAuth(p);
   };
 
   const returnParam = () => params.return || params.return_to;

@@ -35,10 +35,12 @@ Form. Any such closed Cloud Host is deployed and operated by its owning
 repository; the old package procedure is a superseded migration note.
 
 The official staging composition binds the independently deployed private
-`takosumi-hosted-marketplace` Worker under
-`TAKOSUMI_HOSTED_MARKETPLACE`. Takosumi authenticates the session and Workspace
-before forwarding. The target remains route-less and does not receive a browser
-cookie, bearer token, account id, or unverified Workspace context.
+`takosumi-hosted-staging` Worker under `HOSTED`. The only mounted subtree is
+`/v1/hosted/subscription`; Marketplace, cloud Resource, wallet, migration, AI,
+and object-storage APIs belong to Takoserver and are not proxied by Hosted.
+Takosumi authenticates the session and Workspace before forwarding. The target
+remains route-less and does not receive a browser cookie, bearer token, account
+id, legal Organization id, or unverified Workspace context.
 
 ## Official staging release
 
@@ -63,8 +65,9 @@ Execute rechecks the source, config, dashboard bytes, and predecessor before
 the single upload. A touched target with missing post-conditions is
 `indeterminate`; reconcile the authoritative deployment before another
 attempt. Successful execute records the immutable predecessor and new serving
-Version. Authenticated Hosted marketplace and AI calls are a separate E2E
-post-condition after publication.
+Version. The authenticated Hosted subscription read is a separate E2E
+post-condition after publication; cloud-resource and AI E2E run against
+Takoserver's owning endpoints.
 
 ## Self-host build and deployment
 

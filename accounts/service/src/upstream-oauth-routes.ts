@@ -258,6 +258,16 @@ async function handleUpstreamCallbackRequestUncached(input: {
       400,
     );
   }
+  const codeVerifier = input.url.searchParams.get("code_verifier");
+  if (!codeVerifier || !/^[A-Za-z0-9._~-]{43,128}$/u.test(codeVerifier)) {
+    return json(
+      {
+        error: "invalid_request",
+        error_description: "code_verifier is required",
+      },
+      400,
+    );
+  }
   const cookieState = readUpstreamOAuthStateCookie(
     input.request.headers.get("cookie"),
   );
@@ -283,6 +293,7 @@ async function handleUpstreamCallbackRequestUncached(input: {
       clientSecret: resolved.client.clientSecret,
       redirectUri: resolved.client.redirectUri,
       code,
+      codeVerifier,
       subjectSecret: input.upstreamOAuth.subjectSecret,
       fetch: input.upstreamOAuth.fetch,
     });

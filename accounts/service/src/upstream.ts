@@ -37,6 +37,7 @@ export interface UpstreamAuthorizationCodeExchangeInput {
   clientSecret?: string;
   redirectUri: string;
   code: string;
+  codeVerifier?: string;
   subjectSecret: string | Uint8Array | CryptoKey;
   fetch?: typeof fetch;
 }
@@ -135,6 +136,7 @@ async function postTokenRequest(
     client_id: input.clientId,
     redirect_uri: input.redirectUri,
   });
+  if (input.codeVerifier) body.set("code_verifier", input.codeVerifier);
   if (input.clientSecret) body.set("client_secret", input.clientSecret);
 
   const response = await fetchImpl(input.provider.tokenEndpoint, {
