@@ -229,11 +229,11 @@ test("upstream OAuth authorize and session callback responses are uncacheable", 
 
   const callback = await handleUpstreamCallbackRequest({
     request: new Request(
-      `${issuer}/v1/auth/upstream/callback?provider=company&code=upstream-code&state=${encodeURIComponent(providerState)}`,
+      `${issuer}/v1/auth/upstream/callback?provider=company&code=upstream-code&state=${encodeURIComponent(providerState)}&code_verifier=${"v".repeat(43)}`,
       { headers: { cookie: stateCookie } },
     ),
     url: new URL(
-      `${issuer}/v1/auth/upstream/callback?provider=company&code=upstream-code&state=${encodeURIComponent(providerState)}`,
+      `${issuer}/v1/auth/upstream/callback?provider=company&code=upstream-code&state=${encodeURIComponent(providerState)}&code_verifier=${"v".repeat(43)}`,
     ),
     store: new InMemoryAccountsStore(),
     upstreamOAuth: upstreamOAuth(async (url) => {

@@ -847,9 +847,11 @@ function Inner(props: { readonly installingPrincipalId: string }) {
             return;
           }
           const catalog = storeDeploymentProfileCatalogFromSnapshot(response);
-          // Discovery never confirms a hosting decision on the user's
-          // behalf, including when the DB marks one option recommended.
-          setSelectedDeploymentProfileKey("");
+          // The operator-selected recommendation is the simple default. The
+          // separate confirmation remains false until the user reviews it.
+          setSelectedDeploymentProfileKey(
+            catalog.status === "ready" ? (catalog.preselectedKey ?? "") : "",
+          );
           setDeploymentProfileCatalog(catalog);
           setDeploymentProfileConfirmed(false);
           if (catalog.status === "invalid") {
@@ -2119,6 +2121,18 @@ function Inner(props: { readonly installingPrincipalId: string }) {
                   {appHandoff
                     ? `Open in ${appHandoffProductLabel(appHandoff.product)}`
                     : t("installStore.open")}
+                </Button>
+              )}
+            </Show>
+            <Show when={selectedDeploymentProfile()?.management}>
+              {(management) => (
+                <Button
+                  href={management().href}
+                  variant="secondary"
+                  target="_blank"
+                  rel="noreferrer noopener"
+                >
+                  {localizedStoreText(management().label, "Manage")[locale()]}
                 </Button>
               )}
             </Show>

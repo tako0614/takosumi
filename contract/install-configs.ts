@@ -329,6 +329,12 @@ export interface InstallConfigDeploymentProfile {
   readonly description: InstallConfigStoreText;
   readonly order: number;
   readonly recommended: boolean;
+  /** Product-owned management surface opened after the Takosumi Run completes. */
+  readonly management?: {
+    readonly kind: "external_console";
+    readonly href: string;
+    readonly label: InstallConfigStoreText;
+  };
 }
 
 /** Runtime guard shared by request parsing and public dashboard projections. */
@@ -337,13 +343,11 @@ export function isInstallConfigDeploymentProfile(
 ): value is InstallConfigDeploymentProfile {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const record = value as Readonly<Record<string, unknown>>;
-  if (!hasExactKeys(record, [
-    "key",
-    "label",
-    "description",
-    "order",
-    "recommended",
-  ])) {
+  const required = ["key", "label", "description", "order", "recommended"];
+  if (
+    !required.every((key) => Object.prototype.hasOwnProperty.call(record, key)) ||
+    Object.keys(record).some((key) => ![...required, "management"].includes(key))
+  ) {
     return false;
   }
   return (
@@ -352,8 +356,28 @@ export function isInstallConfigDeploymentProfile(
     isExactInstallConfigStoreText(record.description) &&
     typeof record.order === "number" &&
     Number.isFinite(record.order) &&
-    typeof record.recommended === "boolean"
+    typeof record.recommended === "boolean" &&
+    (record.management === undefined || isDeploymentProfileManagement(record.management))
   );
+}
+
+function isDeploymentProfileManagement(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Readonly<Record<string, unknown>>;
+  if (!hasExactKeys(record, ["kind", "href", "label"])) return false;
+  if (
+    record.kind !== "external_console" ||
+    typeof record.href !== "string" ||
+    !isExactInstallConfigStoreText(record.label)
+  ) {
+    return false;
+  }
+  try {
+    const href = new URL(record.href);
+    return href.protocol === "https:" && href.username === "" && href.password === "";
+  } catch {
+    return false;
+  }
 }
 
 export function isInstallConfigDeploymentProfileKey(

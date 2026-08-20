@@ -77,6 +77,7 @@ test("exchangeUpstreamAuthorizationCode exchanges token and derives stable subje
       expect(body.get("grant_type")).toEqual("authorization_code");
       expect(body.get("client_id")).toEqual("fixture-client");
       expect(body.get("client_secret")).toEqual("fixture-secret");
+      expect(body.get("code_verifier")).toEqual("v".repeat(43));
       return Response.json({ access_token: "fixture-access-token" });
     }
     if (request.url === "https://idp.example.test/oauth/userinfo") {
@@ -97,6 +98,7 @@ test("exchangeUpstreamAuthorizationCode exchanges token and derives stable subje
     clientSecret: "fixture-secret",
     redirectUri: "https://accounts.example.test/callback/fixture-oidc",
     code: "code-1",
+    codeVerifier: "v".repeat(43),
     subjectSecret: "subject-secret",
     fetch: fetchImpl,
   });

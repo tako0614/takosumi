@@ -10,6 +10,7 @@ import type { TakosumiAccountsAuthProvidersResponse } from "@takosjp/takosumi-ac
 const STATE_KEY = "tg_oauth_state";
 const RETURN_KEY = "tg_oauth_return";
 const PROVIDER_KEY = "tg_oauth_provider";
+const PKCE_VERIFIER_KEY = "tg_oauth_pkce_verifier";
 
 type Provider = string;
 
@@ -33,10 +34,13 @@ function randomState(): string {
   return Array.from(buf, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-export function startUpstreamOAuth(provider: Provider): void {
+export async function startUpstreamOAuth(provider: Provider): Promise<void> {
   if (typeof window === "undefined") return;
   const state = randomState();
+  const codeVerifier = randomCodeVerifier();
+  const codeChallenge = await pkceChallenge(codeVerifier);
   sessionStorage.setItem(STATE_KEY, state);
+  sessionStorage.setItem(PKCE_VERIFIER_KEY, codeVerifier);
   // Upstream OAuth providers don't echo back which provider was used in the
   // callback URL — stash it here so /sign-in/callback can recover it.
   sessionStorage.setItem(PROVIDER_KEY, provider);
@@ -56,6 +60,8 @@ export function startUpstreamOAuth(provider: Provider): void {
         provider,
         state,
         redirect_uri: location.origin + "/sign-in/callback",
+        code_challenge: codeChallenge,
+        code_challenge_method: "S256",
       }),
   );
 }
@@ -88,7 +94,8 @@ export async function completeUpstreamOAuth(
   provider: Provider,
 ): Promise<CallbackResult> {
   const expected = sessionStorage.getItem(STATE_KEY);
-  if (!expected) {
+  const codeVerifier = sessionStorage.getItem(PKCE_VERIFIER_KEY);
+  if (!expected || expected !== state || !codeVerifier) {
     throw new Error("oauth flow was not started in this tab");
   }
   const returnTo = recallOAuthReturnTo();
@@ -98,15 +105,40 @@ export async function completeUpstreamOAuth(
   // target). Calling via GET with code/state/provider in the URL keeps the
   // SPA out of the redirect chain while still using the documented contract.
   await apiFetch<CallbackResponse>(
-    paths.UPSTREAM_CALLBACK + qs({ code, state, provider }),
+    paths.UPSTREAM_CALLBACK +
+      qs({ code, state, provider, code_verifier: codeVerifier }),
     { method: "GET", auth: false },
   );
   sessionStorage.removeItem(STATE_KEY);
   sessionStorage.removeItem(PROVIDER_KEY);
+  sessionStorage.removeItem(PKCE_VERIFIER_KEY);
   sessionStorage.removeItem(RETURN_KEY);
   return {
     returnTo,
   };
+}
+
+function randomCodeVerifier(): string {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return base64Url(bytes);
+}
+
+async function pkceChallenge(verifier: string): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(verifier),
+  );
+  return base64Url(new Uint8Array(digest));
+}
+
+function base64Url(bytes: Uint8Array): string {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary)
+    .replace(/=/gu, "")
+    .replace(/\+/gu, "-")
+    .replace(/\//gu, "_");
 }
 
 export function safeOAuthReturnTo(value: string | null | undefined): string {

@@ -124,6 +124,11 @@ const installConfig: InstallConfig = {
       },
       order: 1,
       recommended: true,
+      management: {
+        kind: "external_console",
+        href: "https://console.takoserver.com/",
+        label: { ja: "Takoserverで管理", en: "Manage in Takoserver" },
+      },
     },
   },
   createdAt: NOW,

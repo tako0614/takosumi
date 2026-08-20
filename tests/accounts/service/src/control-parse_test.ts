@@ -139,6 +139,11 @@ test("Store deployment profiles accept only the exact bounded public shape", () 
     description: { ja: "Takosumi Cloud", en: "Takosumi Cloud" },
     order: 10,
     recommended: true,
+    management: {
+      kind: "external_console",
+      href: "https://console.takoserver.com/",
+      label: { ja: "管理", en: "Manage" },
+    },
   };
 
   expect(
@@ -154,6 +159,8 @@ test("Store deployment profiles accept only the exact bounded public shape", () 
     { ...deploymentProfile, description: { ja: "", en: "" } },
     { ...deploymentProfile, order: Number.POSITIVE_INFINITY },
     { ...deploymentProfile, recommended: "yes" },
+    { ...deploymentProfile, management: { ...deploymentProfile.management, href: "http://x" } },
+    { ...deploymentProfile, management: { ...deploymentProfile.management, kind: "inline" } },
     { ...deploymentProfile, modulePath: "deploy/managed" },
   ]) {
     expect(
