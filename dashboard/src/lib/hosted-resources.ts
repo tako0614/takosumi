@@ -14,7 +14,7 @@ export const HOSTED_RESOURCE_INVENTORY_CAPABILITY =
 export const HOSTED_RESOURCE_READ_SCOPE = "resources:read" as const;
 
 export const HOSTED_RESOURCE_INVENTORY_KIND =
-  "takosumi.cloud-hosted-resource-inventory@v1" as const;
+  "takosumi.hosted-resource-inventory@v1" as const;
 export const HOSTED_RESOURCE_INVENTORY_PAGE_SIZE = 25;
 export const HOSTED_RESOURCE_COUNTER_MAX_LENGTH = 128;
 
@@ -98,7 +98,6 @@ export interface HostedResourceFormRef {
 }
 
 export interface HostedResourceInventoryItem {
-  readonly space: string;
   readonly apiVersion: string;
   readonly kind: string;
   readonly name: string;
@@ -107,6 +106,8 @@ export interface HostedResourceInventoryItem {
   readonly generation: string;
   readonly revision: string;
   readonly conditions: readonly HostedResourceCondition[];
+  /** Present only when the host can prove a local Takosumi Workload relation. */
+  readonly workloadId?: string;
 }
 
 export interface HostedResourceInventory {
@@ -742,7 +743,6 @@ function browserOrigin(): string {
 function parseItem(value: unknown, index: number): HostedResourceInventoryItem {
   const record = object(value, `items[${index}]`);
   exactKeys(record, [
-    "space",
     "apiVersion",
     "kind",
     "name",
@@ -751,13 +751,12 @@ function parseItem(value: unknown, index: number): HostedResourceInventoryItem {
     "generation",
     "revision",
     "conditions",
-  ]);
+  ], ["workloadId"]);
   const formRef = parseFormRef(record.formRef, index);
   if (!Array.isArray(record.conditions)) {
     throw new HostedResourceInventoryError(502);
   }
   return {
-    space: stringField(record.space, `items[${index}].space`),
     apiVersion: stringField(record.apiVersion, `items[${index}].apiVersion`),
     kind: stringField(record.kind, `items[${index}].kind`),
     name: stringField(record.name, `items[${index}].name`),
@@ -771,6 +770,14 @@ function parseItem(value: unknown, index: number): HostedResourceInventoryItem {
     conditions: record.conditions.map((condition, conditionIndex) =>
       parseCondition(condition, index, conditionIndex),
     ),
+    ...(record.workloadId === undefined
+      ? {}
+      : {
+          workloadId: stringField(
+            record.workloadId,
+            `items[${index}].workloadId`,
+          ),
+        }),
   };
 }
 

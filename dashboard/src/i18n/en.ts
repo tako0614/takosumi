@@ -231,6 +231,7 @@ export const en: Record<keyof typeof ja, string> = {
   "hostedResources.column.status": "Status",
   "hostedResources.column.generation": "Generation",
   "hostedResources.column.workload": "Workload",
+  "hostedResources.noWorkload": "No related workload",
   "hostedResources.openWorkload": "Open workload",
   "hostedResources.status.ready": "Ready",
   "hostedResources.status.needsAttention": "Needs attention",
