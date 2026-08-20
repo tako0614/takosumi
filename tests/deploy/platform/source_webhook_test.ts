@@ -3632,6 +3632,88 @@ test("platform extension request scope rules select one permission per exact AI 
   expect(calls).toHaveLength(3);
 });
 
+test("an exact inventory leaf narrows PAT access without closing the Marketplace subtree", async () => {
+  const routes = platformExtensionRoutes({
+    TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
+      {
+        basePath: "/v1/hosted/marketplace",
+        handlerKey: "HOSTED",
+        ownsPathSubtree: true,
+        requiredScopes: ["hosted:marketplace"],
+      },
+      {
+        basePath: "/v1/hosted/marketplace/resources",
+        matchMode: "exact",
+        handlerKey: "HOSTED",
+        requiredScopes: ["resources:read"],
+      },
+    ]),
+  });
+  const env = {
+    HOSTED: {
+      fetch: async (request: Request) =>
+        Response.json({ path: new URL(request.url).pathname }),
+    },
+  } as never;
+  const sessionVerifier = async () => ({
+    authenticated: true as const,
+    authKind: "session" as const,
+    subject: "tsub",
+  });
+  const patVerifier = async () => ({
+    authenticated: true as const,
+    authKind: "personal-access-token" as const,
+    subject: "tsub",
+    scopes: ["resources:read"],
+  });
+
+  const walletRequest = new Request(
+    "https://app.takosumi.com/v1/hosted/marketplace/wallet",
+  );
+  const walletRoute = matchPlatformExtensionRoute(
+    new URL(walletRequest.url).pathname,
+    routes,
+  );
+  expect(walletRoute?.basePath).toBe("/v1/hosted/marketplace");
+  if (!walletRoute) throw new Error("wallet route missing");
+  expect(
+    await handlePlatformExtensionRouteRequest(
+      walletRequest,
+      env,
+      walletRoute,
+      sessionVerifier,
+    ),
+  ).toHaveProperty("status", 200);
+  expect(
+    await handlePlatformExtensionRouteRequest(
+      walletRequest,
+      env,
+      walletRoute,
+      patVerifier,
+    ),
+  ).toHaveProperty("status", 401);
+
+  const resourcesRequest = new Request(
+    "https://app.takosumi.com/v1/hosted/marketplace/resources",
+  );
+  const resourcesRoute = matchPlatformExtensionRoute(
+    new URL(resourcesRequest.url).pathname,
+    routes,
+  );
+  expect(resourcesRoute?.basePath).toBe(
+    "/v1/hosted/marketplace/resources",
+  );
+  if (!resourcesRoute) throw new Error("resources route missing");
+  expect(
+    await handlePlatformExtensionRouteRequest(
+      resourcesRequest,
+      env,
+      resourcesRoute,
+      patVerifier,
+    ),
+  ).toHaveProperty("status", 200);
+});
+
 test("platform session mutations require the exact configured issuer Origin", async () => {
   const binding = {
     TEST_AI_EXTENSION: { fetch: async () => Response.json({ ok: true }) },

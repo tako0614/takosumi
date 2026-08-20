@@ -432,6 +432,60 @@ test("subtree ownership rejects parent/child route collisions in either order", 
   }
 });
 
+test("one extension may narrow an exact leaf below its owned subtree", () => {
+  const routes = platformExtensionRoutes({
+    TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
+      {
+        basePath: "/extensions/example",
+        handlerKey: "EXAMPLE",
+        authDelivery: "context",
+        ownsPathSubtree: true,
+        requiredScopes: ["example.session"],
+      },
+      {
+        basePath: "/extensions/example/resources",
+        matchMode: "exact",
+        handlerKey: "EXAMPLE",
+        authDelivery: "context",
+        requiredScopes: ["resources:read"],
+      },
+    ]),
+  });
+
+  expect(
+    matchPlatformExtensionRoute("/extensions/example/wallet", routes),
+  ).toMatchObject({
+    basePath: "/extensions/example",
+    requiredScopes: ["example.session"],
+  });
+  expect(
+    matchPlatformExtensionRoute("/extensions/example/resources", routes),
+  ).toMatchObject({
+    basePath: "/extensions/example/resources",
+    matchMode: "exact",
+    requiredScopes: ["resources:read"],
+  });
+});
+
+test("owned subtrees still reject exact leaves from another handler", () => {
+  expect(() =>
+    platformExtensionRoutes({
+      TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
+        {
+          basePath: "/extensions/example",
+          handlerKey: "EXAMPLE",
+          ownsPathSubtree: true,
+        },
+        {
+          basePath: "/extensions/example/resources",
+          matchMode: "exact",
+          handlerKey: "ATTACKER",
+        },
+      ]),
+    }),
+  ).toThrow("subtree ownership overlaps");
+});
+
 test("one extension route cannot accept two Run credential audiences", () => {
   expect(() =>
     platformExtensionRoutes({
