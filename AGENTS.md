@@ -13,7 +13,7 @@
 ## Ownership
 
 - Owns: OSS Git and OpenTofu control plane and canonical Run, state, output, and audit lifecycle / Accounts, runner, dashboard, CLI, and operator composition framework / Provider-neutral Connection, Binding, credential brokerage, and Interface authorization APIs
-- Does not own: Portable Takoform specification, provider, or packages / Takoform Host API, hosted Form instances, or provider backend lifecycle / Takos product UX or distribution Worker / Cloud-only capacity, enforced billing, SLA, or support
+- Does not own: Portable Takoform specification, provider, or packages / Takoform Host API, hosted Form instances, or provider backend lifecycle / Takos product UX or distribution Worker / Takoserver or Takosumi Hosted capacity, enforced billing, SLA, or support
 - Hazards: Do not introduce forge-specific IDs or required Takosumi manifests into core. / Never persist secret values in Output, Interface, logs, or audit.
 
 ## Required workflow
