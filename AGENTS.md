@@ -4,7 +4,7 @@
 
 ## Repository
 
-- Scope: Takosumi OSS Git and OpenTofu orchestration plane, product-local Workspace sessions, runner, and operator framework.
+- Scope: Takosumi OSS Git and OpenTofu control plane, contracts, accounts plane, runner, and operator framework.
 - Repository kind: `product`
 - Direct sibling dependencies: `takosumi-store`
 - Repository gate: `bun run check`
@@ -12,8 +12,8 @@
 
 ## Ownership
 
-- Owns: OSS Git and OpenTofu control plane and canonical Resource and Run lifecycle / Product-local Workspaces and sessions, runner, dashboard, CLI, and operator composition framework / Optional Service Form host, Compatibility, Adapter, and Interface APIs
-- Does not own: Portable Takoform specification, provider, or packages / Takos product UX or distribution Worker / Person identity, legal Organizations, or reusable payment profiles / Cloud Resources, deployments, usage, billing, capacity, SLA, or support
+- Owns: OSS Git and OpenTofu control plane and canonical Run, state, output, and audit lifecycle / Accounts, runner, dashboard, CLI, and operator composition framework / Provider-neutral Connection, Binding, credential brokerage, and Interface authorization APIs
+- Does not own: Portable Takoform specification, provider, or packages / Takoform Host API, hosted Form instances, or provider backend lifecycle / Takos product UX or distribution Worker / Takoserver or Takosumi Hosted capacity, enforced billing, SLA, or support
 - Hazards: Do not introduce forge-specific IDs or required Takosumi manifests into core. / Never persist secret values in Output, Interface, logs, or audit.
 
 ## Required workflow
