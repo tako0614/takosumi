@@ -1457,15 +1457,16 @@ export default {
     }
     return accountsResponse;
   },
-  // Scheduled cron tick. Always runs source polling (Core Specification §6: scan
-  // active autoSync sources and enqueue a deduped source_sync). When the
+  // Scheduled cron tick. Source polling runs only on its exact hourly schedule;
+  // other maintenance crons must never fan out SourceSyncRun Durable Objects.
+  // When the
   // `TAKOSUMI_DRIFT_CHECK_ENABLED=1` flag is set (default OFF), ALSO runs the
   // current compatibility drift sweep for Workspaces with active Capsules.
   // Legacy Resource repair/observation run only inside the explicit drain
   // window. Observation uses waitUntil so slow runner-backed checks do not
   // serialize the rest of the cron tick.
   async scheduled(
-    _event: unknown,
+    event: unknown,
     env: CloudflareWorkerEnv,
     context?: PlatformExecutionContext,
   ): Promise<void> {
@@ -1473,7 +1474,13 @@ export default {
       runScheduledAccountsRefreshChainRetention(env),
       context,
     );
-    await runScheduledSourcePoll(env);
+    const cron =
+      typeof event === "object" && event !== null
+        ? Reflect.get(event, "cron")
+        : undefined;
+    if (scheduledSourcePollEnabledForCron(cron)) {
+      await runScheduledSourcePoll(env);
+    }
     await runScheduledOpenTofuRunRepair(env);
     // Never resume old direct Resource operations from cron. In particular,
     // preview/apply/import/refresh/create/update repair (including recoverApply)
@@ -6835,6 +6842,15 @@ function bearerFromAuthorization(header: string): string | undefined {
 
 // Capped batch so a single cron tick never enqueues an unbounded number of runs.
 const DEFAULT_SCHEDULED_SOURCE_POLL_BATCH = 5;
+const SCHEDULED_SOURCE_POLL_CRONS = new Set([
+  "0 * * * *",
+  "5 * * * *",
+]);
+
+/** Source polling is hourly; webhook delivery owns low-latency updates. */
+export function scheduledSourcePollEnabledForCron(cron: unknown): boolean {
+  return typeof cron === "string" && SCHEDULED_SOURCE_POLL_CRONS.has(cron);
+}
 
 export function scheduledSourcePollBatch(env: DeployControlEnv): number {
   return positiveInteger(

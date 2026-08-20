@@ -60,6 +60,7 @@ import {
   repairStaleOpenTofuRuns,
   resourceObservationEnabled,
   scheduledResourceObservationOptions,
+  scheduledSourcePollEnabledForCron,
   scheduledSourcePollBatch,
   schedulePlatformSideEffect,
   summarizePrometheusMetrics,
@@ -495,6 +496,16 @@ test("scheduled source poll batch is operator configurable with a small default"
       TAKOSUMI_SCHEDULED_SOURCE_POLL_BATCH: "not-a-number",
     } as never),
   ).toBe(5);
+});
+
+test("scheduled source polling runs only on the hourly source-poll cron", () => {
+  expect(scheduledSourcePollEnabledForCron("5 * * * *")).toBe(true);
+  expect(scheduledSourcePollEnabledForCron("0 * * * *")).toBe(true);
+  expect(scheduledSourcePollEnabledForCron("*/5 * * * *")).toBe(false);
+  expect(scheduledSourcePollEnabledForCron("* * * * *")).toBe(false);
+  expect(scheduledSourcePollEnabledForCron("3,18,33,48 * * * *")).toBe(
+    false,
+  );
 });
 
 test("stale Capsule auto-plan is opt-in", () => {
