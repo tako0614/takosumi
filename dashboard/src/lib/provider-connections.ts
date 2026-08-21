@@ -1,5 +1,6 @@
 import {
   isWorkspaceBindableOperatorConnection,
+  type PolicyConfig,
   type ProviderConnection,
 } from "takosumi-contract";
 
@@ -17,6 +18,28 @@ export function isProviderConnectionCandidate(
     isWorkspaceBindableOperatorConnection(connection) ||
     (connection.scope === "workspace" && connection.status === "verified")
   );
+}
+
+/**
+ * Applies the selected InstallConfig's exact destination boundary.
+ *
+ * Provider source equality alone is insufficient when one profile means the
+ * host-managed Takoserver destination and another means a Workspace-owned
+ * Takoform credential. The policy is authoritative on both the UI choice and
+ * the later mint-evidence gate.
+ */
+export function providerConnectionAllowedByInstallPolicy(
+  connection: Pick<ProviderConnection, "id">,
+  policy: PolicyConfig | undefined,
+): boolean {
+  const credentialPolicy = policy?.providerCredentials;
+  if (
+    credentialPolicy?.allowedConnectionIds !== undefined &&
+    !credentialPolicy.allowedConnectionIds.includes(connection.id)
+  ) {
+    return false;
+  }
+  return !credentialPolicy?.forbiddenConnectionIds?.includes(connection.id);
 }
 
 /**

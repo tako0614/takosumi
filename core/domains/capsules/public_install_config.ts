@@ -59,6 +59,12 @@ function publicPolicyConfig(
               requiredProviders: [...providerCredentials.requiredProviders],
             }
           : {}),
+        ...(providerCredentials.allowedConnectionIds
+          ? { allowedConnectionIds: [...providerCredentials.allowedConnectionIds] }
+          : {}),
+        ...(providerCredentials.forbiddenConnectionIds
+          ? { forbiddenConnectionIds: [...providerCredentials.forbiddenConnectionIds] }
+          : {}),
         ...(providerCredentials.requireTemporary === true
           ? { requireTemporary: true }
           : {}),

@@ -979,8 +979,20 @@ function mergeProviderCredentialPolicy(
       ...(local?.requiredProviders ?? []),
     ]),
   ).sort();
+  const allowedConnectionIds = intersectOptionalLists(
+    ceiling?.allowedConnectionIds,
+    local?.allowedConnectionIds,
+  );
+  const forbiddenConnectionIds = Array.from(
+    new Set([
+      ...(ceiling?.forbiddenConnectionIds ?? []),
+      ...(local?.forbiddenConnectionIds ?? []),
+    ]),
+  ).sort();
   return {
     ...(requiredProviders.length > 0 ? { requiredProviders } : {}),
+    ...(allowedConnectionIds !== undefined ? { allowedConnectionIds } : {}),
+    ...(forbiddenConnectionIds.length > 0 ? { forbiddenConnectionIds } : {}),
     requireTemporary:
       ceiling?.requireTemporary === true || local?.requireTemporary === true,
     requireTtlEnforced:

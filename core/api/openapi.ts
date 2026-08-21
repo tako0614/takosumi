@@ -1201,6 +1201,14 @@ function policySchemas(): Record<string, Record<string, unknown>> {
               type: "array",
               items: { type: "string" },
             },
+            allowedConnectionIds: {
+              type: "array",
+              items: { type: "string" },
+            },
+            forbiddenConnectionIds: {
+              type: "array",
+              items: { type: "string" },
+            },
             requireTemporary: { type: "boolean" },
             requireTtlEnforced: { type: "boolean" },
           },

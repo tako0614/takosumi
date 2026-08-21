@@ -247,6 +247,10 @@ export interface PolicyConfig {
      * brand inference or a provider execution allowlist.
      */
     readonly requiredProviders?: readonly string[];
+    /** Exact host-composed destinations this InstallConfig may use. */
+    readonly allowedConnectionIds?: readonly string[];
+    /** Destinations excluded by this profile (for example managed vs BYOC). */
+    readonly forbiddenConnectionIds?: readonly string[];
     /**
      * Require provider credential mint evidence to show provider-specific
      * temporary credentials. Static provider secrets are an explicit supported

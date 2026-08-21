@@ -88,6 +88,7 @@ import { clearCurrentStateVersionCache } from "../../lib/current-state-versions.
 import { clearDashboardOverviewCache } from "../../lib/dashboard-overview.ts";
 import {
   isProviderConnectionCandidate,
+  providerConnectionAllowedByInstallPolicy,
   providerConnectionMatchesProviderSource,
   preferredProviderConnection,
   providerConnectionDisplayName,
@@ -365,11 +366,18 @@ function Inner(props: { readonly installingPrincipalId: string }) {
     );
 
   const candidatesFor = (provider: string) =>
-    providerConnections().filter(
-      (connection) =>
-        isProviderConnectionCandidate(connection) &&
-        sameProviderSource(provider, connection.providerSource),
-    );
+    providerConnections().filter((connection) => {
+      if (
+        !isProviderConnectionCandidate(connection) ||
+        !sameProviderSource(provider, connection.providerSource)
+      ) {
+        return false;
+      }
+      return providerConnectionAllowedByInstallPolicy(
+        connection,
+        installConfig()?.policy,
+      );
+    });
 
   const providerRowsReady = () =>
     providerRows().every((row) =>
