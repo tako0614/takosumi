@@ -25,9 +25,13 @@ test("platform release owns isolated staging and production targets", () => {
 });
 
 test("production config must bind the isolated production Hosted service", () => {
-  const source = (service: string) => `
+  const source = (
+    service: string,
+    main = resolve(root, "deploy/platform/takoserver_hosted_worker.ts"),
+    includeBroker = true,
+  ) => `
 name = "takosumi"
-main = "${resolve(root, "deploy/platform/worker.ts")}"
+main = "${main}"
 [assets]
 directory = "${resolve(root, "dashboard/dist")}"
 [[services]]
@@ -44,6 +48,20 @@ TAKOSUMI_PLATFORM_EXTENSIONS = '${JSON.stringify([{
     workspaceContext: "query-required",
     requiredScopes: [],
     capabilities: ["takosumi.hosted.subscription.v1"],
+    ...(includeBroker ? {
+      runCredential: {
+        audience: "takosumi-hosted.takoserver.takoform.v1",
+        requiredScopes: ["takoform.run"],
+      },
+      providerCredentialBroker: {
+        connectionId: "conn_takoserver_takoform_v1",
+        recipeId: "takoserver-takoform-run-v1",
+        providerSource: "registry.terraform.io/tako0614/takoform",
+        displayName: "Takoserver",
+        exchangePath: "/provider-credentials/takoform",
+        envNames: ["TAKOFORM_ENDPOINT", "TAKOFORM_SPACE", "TAKOFORM_TOKEN"],
+      },
+    } : {}),
   }])}'
 `;
   expect(() =>
@@ -56,6 +74,27 @@ TAKOSUMI_PLATFORM_EXTENSIONS = '${JSON.stringify([{
   expect(() =>
     assertConfigTargetsSource(
       source("takosumi-hosted-staging"),
+      "/private/wrangler.toml",
+      "production",
+    ),
+  ).toThrow("platform_worker_release_config_source_invalid");
+  expect(() =>
+    assertConfigTargetsSource(
+      source(
+        "takosumi-hosted",
+        resolve(root, "deploy/platform/worker.ts"),
+      ),
+      "/private/wrangler.toml",
+      "production",
+    ),
+  ).toThrow("platform_worker_release_config_source_invalid");
+  expect(() =>
+    assertConfigTargetsSource(
+      source(
+        "takosumi-hosted",
+        resolve(root, "deploy/platform/takoserver_hosted_worker.ts"),
+        false,
+      ),
       "/private/wrangler.toml",
       "production",
     ),

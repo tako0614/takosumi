@@ -4,6 +4,7 @@ import {
   TAKOSERVER_TAKOFORM_CONNECTION_ID,
   TAKOSERVER_TAKOFORM_PROVIDER_SOURCE,
 } from "../../../deploy/platform/takoserver_hosted_install_configs.ts";
+import * as hostedWorker from "../../../deploy/platform/takoserver_hosted_worker.ts";
 
 test("Takosumi Hosted offers one explicit Takoserver or Takoform choice", () => {
   expect(TAKOSERVER_HOSTED_INSTALL_CONFIGS).toHaveLength(2);
@@ -39,4 +40,13 @@ test("Takosumi Hosted offers one explicit Takoserver or Takoform choice", () => 
   expect(byoc?.policy.providerCredentials).toMatchObject({
     forbiddenConnectionIds: [TAKOSERVER_TAKOFORM_CONNECTION_ID],
   });
+});
+
+test("Takoserver Hosted wrapper preserves every Worker Durable Object export", () => {
+  expect(typeof hostedWorker.CoordinationObject).toBe("function");
+  expect(typeof hostedWorker.LocalSubstrateOpenTofuRunnerProxyObject).toBe(
+    "function",
+  );
+  expect(typeof hostedWorker.OpenTofuRunOwnerObject).toBe("function");
+  expect(typeof hostedWorker.OpenTofuRunnerObject).toBe("function");
 });
