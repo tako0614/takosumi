@@ -156,6 +156,9 @@ export function operatorControlMcpResourceAuthorized(
 export interface OperatorControlMcpAuthority {
   readonly workspaceId: string;
   readonly dispatchPublicControl: (request: Request) => Promise<Response>;
+  readonly installPlanWorkspaceId: (
+    installPlanId: string,
+  ) => Promise<string | undefined>;
   readonly capsuleWorkspaceId: (
     capsuleId: string,
   ) => Promise<string | undefined>;
@@ -172,6 +175,100 @@ interface JsonRpcRequest {
 }
 
 const TOOLS = Object.freeze([
+  {
+    name: "takosumi_install_plan_create",
+    description:
+      "Create or replay a durable Git install plan in the bound Workspace. The plan stops at review and never approves or applies its Run.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        idempotencyKey: { type: "string", minLength: 1, maxLength: 256 },
+        source: {
+          type: "object",
+          properties: {
+            name: { type: "string", minLength: 1, maxLength: 128 },
+            url: { type: "string", minLength: 1, maxLength: 2048 },
+            ref: { type: "string", minLength: 1, maxLength: 256 },
+            path: { type: "string", minLength: 1, maxLength: 1024 },
+            authConnectionId: {
+              type: "string",
+              minLength: 1,
+              maxLength: 128,
+            },
+          },
+          required: ["name", "url"],
+          additionalProperties: false,
+        },
+        capsule: {
+          type: "object",
+          properties: {
+            name: { type: "string", minLength: 1, maxLength: 128 },
+            environment: { type: "string", minLength: 1, maxLength: 128 },
+          },
+          required: ["name", "environment"],
+          additionalProperties: false,
+        },
+        options: {
+          type: "object",
+          properties: {
+            deploymentProfileKey: {
+              type: "string",
+              minLength: 1,
+              maxLength: 256,
+            },
+            providerBindingConnectionIds: {
+              type: "object",
+              additionalProperties: {
+                type: "string",
+                minLength: 1,
+                maxLength: 128,
+              },
+            },
+          },
+          additionalProperties: false,
+        },
+      },
+      required: ["idempotencyKey", "source", "capsule"],
+      additionalProperties: false,
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+    },
+  },
+  {
+    name: "takosumi_install_plan_get",
+    description:
+      "Read one durable Git install plan from the bound Workspace without advancing it.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        installPlanId: { type: "string", minLength: 1, maxLength: 128 },
+      },
+      required: ["installPlanId"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false },
+  },
+  {
+    name: "takosumi_install_plan_reconcile",
+    description:
+      "Advance one durable Git install-plan phase in the bound Workspace. Repeat only when nextAction is reconcile.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        installPlanId: { type: "string", minLength: 1, maxLength: 128 },
+      },
+      required: ["installPlanId"],
+      additionalProperties: false,
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+    },
+  },
   {
     name: "takosumi_capsules_list",
     description:
@@ -380,6 +477,29 @@ async function publicControlRequest(
       { method: "GET" },
     );
   }
+  if (name === "takosumi_install_plan_create") {
+    const { idempotencyKey, body } = installPlanCreateArguments(args);
+    return jsonRequest(
+      `${origin}/api/v1/workspaces/${encodeURIComponent(authority.workspaceId)}/install-plans`,
+      body,
+      { "idempotency-key": idempotencyKey },
+    );
+  }
+  if (
+    name === "takosumi_install_plan_get" ||
+    name === "takosumi_install_plan_reconcile"
+  ) {
+    assertOnlyKeys(args, ["installPlanId"]);
+    const installPlanId = requiredId(args.installPlanId, "installPlanId");
+    await requireWorkspaceTarget(
+      await authority.installPlanWorkspaceId(installPlanId),
+      authority.workspaceId,
+    );
+    const path = `${origin}/api/v1/install-plans/${encodeURIComponent(installPlanId)}`;
+    return name === "takosumi_install_plan_get"
+      ? new Request(path, { method: "GET" })
+      : jsonRequest(`${path}/reconcile`, {});
+  }
   if (name === "takosumi_capsule_plan") {
     assertOnlyKeys(args, ["capsuleId", "runnerProfileId"]);
     const capsuleId = requiredId(args.capsuleId, "capsuleId");
@@ -422,12 +542,108 @@ async function publicControlRequest(
   );
 }
 
-function jsonRequest(url: string, body: unknown): Request {
+function jsonRequest(
+  url: string,
+  body: unknown,
+  headers: Readonly<Record<string, string>> = {},
+): Request {
   return new Request(url, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...headers },
     body: JSON.stringify(body),
   });
+}
+
+function installPlanCreateArguments(args: Record<string, unknown>): {
+  readonly idempotencyKey: string;
+  readonly body: Record<string, unknown>;
+} {
+  assertOnlyKeys(args, ["idempotencyKey", "source", "capsule", "options"]);
+  const idempotencyKey = requiredIdempotencyKey(args.idempotencyKey);
+  const source = requiredRecord(args.source, "source");
+  assertOnlyKeys(source, ["name", "url", "ref", "path", "authConnectionId"]);
+  const capsule = requiredRecord(args.capsule, "capsule");
+  assertOnlyKeys(capsule, ["name", "environment"]);
+  const normalizedSource = {
+    name: requiredText(source.name, "source.name", 128),
+    url: requiredText(source.url, "source.url", 2048),
+    ...(source.ref === undefined
+      ? {}
+      : { ref: requiredText(source.ref, "source.ref", 256) }),
+    ...(source.path === undefined
+      ? {}
+      : { path: requiredText(source.path, "source.path", 1024) }),
+    ...(source.authConnectionId === undefined
+      ? {}
+      : {
+          authConnectionId: requiredText(
+            source.authConnectionId,
+            "source.authConnectionId",
+            128,
+          ),
+        }),
+  };
+  const normalizedCapsule = {
+    name: requiredText(capsule.name, "capsule.name", 128),
+    environment: requiredText(
+      capsule.environment,
+      "capsule.environment",
+      128,
+    ),
+  };
+  let normalizedOptions: Record<string, unknown> | undefined;
+  if (args.options !== undefined) {
+    const options = requiredRecord(args.options, "options");
+    assertOnlyKeys(options, [
+      "deploymentProfileKey",
+      "providerBindingConnectionIds",
+    ]);
+    let providerBindingConnectionIds: Record<string, string> | undefined;
+    if (options.providerBindingConnectionIds !== undefined) {
+      const references = requiredRecord(
+        options.providerBindingConnectionIds,
+        "options.providerBindingConnectionIds",
+      );
+      if (Object.keys(references).length > 32) {
+        throw new TypeError(
+          "options.providerBindingConnectionIds exceeds 32 entries",
+        );
+      }
+      providerBindingConnectionIds = {};
+      for (const [provider, connectionId] of Object.entries(references)) {
+        if (!provider || provider.length > 256) {
+          throw new TypeError("provider binding name is invalid");
+        }
+        providerBindingConnectionIds[provider] = requiredText(
+          connectionId,
+          `options.providerBindingConnectionIds.${provider}`,
+          128,
+        );
+      }
+    }
+    normalizedOptions = {
+      ...(options.deploymentProfileKey === undefined
+        ? {}
+        : {
+            deploymentProfileKey: requiredText(
+              options.deploymentProfileKey,
+              "options.deploymentProfileKey",
+              256,
+            ),
+          }),
+      ...(providerBindingConnectionIds
+        ? { providerBindingConnectionIds }
+        : {}),
+    };
+  }
+  return {
+    idempotencyKey,
+    body: {
+      source: normalizedSource,
+      capsule: normalizedCapsule,
+      ...(normalizedOptions ? { options: normalizedOptions } : {}),
+    },
+  };
 }
 
 async function requireWorkspaceTarget(
@@ -489,6 +705,41 @@ function requiredId(value: unknown, field: string): string {
   const result = optionalText(value, field);
   if (!result) throw new TypeError(`${field} is required`);
   return result;
+}
+
+function requiredText(
+  value: unknown,
+  field: string,
+  maxLength: number,
+): string {
+  const result = optionalText(value, field, maxLength);
+  if (!result) throw new TypeError(`${field} is required`);
+  return result;
+}
+
+function requiredIdempotencyKey(value: unknown): string {
+  if (
+    typeof value !== "string" ||
+    value === "" ||
+    value.trim() !== value ||
+    /[\u0000-\u001f\u007f]/u.test(value) ||
+    new TextEncoder().encode(value).byteLength > 256
+  ) {
+    throw new TypeError(
+      "idempotencyKey must be an exact non-empty value of at most 256 bytes",
+    );
+  }
+  return value;
+}
+
+function requiredRecord(
+  value: unknown,
+  field: string,
+): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError(`${field} must be an object`);
+  }
+  return value as Record<string, unknown>;
 }
 
 function optionalText(

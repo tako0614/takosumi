@@ -1,8 +1,9 @@
 # Control Takosumi from MCP
 
 The Operator control MCP adapter lets Takos and other MCP clients work with
-Takosumi Capsules and Runs. It can list Capsules, start a plan, inspect a Run,
-approve it, and apply its saved plan.
+Takosumi Git install plans, Capsules, and Runs. It can prepare a reviewable Plan
+Run from a new Git Source, list Capsules, inspect a Run, approve it, and apply
+its saved plan.
 
 This adapter is optional. It does not add Takos-specific built-in tools.
 Instead, it publishes an ordinary `mcp.server` Interface at
@@ -65,15 +66,21 @@ not give the client an operator token or a module provider credential.
 
 ## Tools
 
-| Tool                     | Purpose                              |
-| ------------------------ | ------------------------------------ |
-| `takosumi_capsules_list` | List Capsules                        |
-| `takosumi_capsule_plan`  | Start a plan for a Capsule           |
-| `takosumi_run_get`       | Read Run status and the plan summary |
-| `takosumi_run_approve`   | Approve a reviewed Run               |
-| `takosumi_run_apply`     | Apply an approved saved plan         |
+| Tool                                | Purpose                                             |
+| ----------------------------------- | --------------------------------------------------- |
+| `takosumi_install_plan_create`      | Create or replay a durable plan from a Git Source   |
+| `takosumi_install_plan_get`         | Read an install plan without advancing it           |
+| `takosumi_install_plan_reconcile`   | Explicitly advance one install-plan phase           |
+| `takosumi_capsules_list`            | List Capsules                                       |
+| `takosumi_capsule_plan`             | Start a plan for an existing Capsule                |
+| `takosumi_run_get`                  | Read Run status and the plan summary                |
+| `takosumi_run_approve`              | Approve a reviewed Run                              |
+| `takosumi_run_apply`                | Apply an approved saved plan                        |
 
-`list` and `get` are read-only. `plan` creates a Run. `approve` and `apply`
+Install-plan creation requires an `idempotencyKey` that the client preserves
+across retries. Reconcile only while `nextAction` is `reconcile`; when it
+becomes `review_run`, review the returned Run. The install plan never approves
+or applies that Run. `list` and `get` are read-only. `approve` and `apply`
 change state, so an MCP client should ask the user before calling them.
 
 The adapter returns the current tool list and input schemas through
@@ -82,8 +89,13 @@ The adapter returns the current tool list and input schemas through
 ## Authentication and safety
 
 For every MCP request, Takosumi validates the OAuth token, Interface, Binding,
-Workspace, and `mcp.invoke` permission. A referenced Capsule or Run must belong
-to the same Workspace.
+Workspace, and `mcp.invoke` permission. A referenced install plan, Capsule, or
+Run must belong to the same Workspace.
+
+Install-plan tools forward only the bounded public `/api/v1` request. They do
+not accept variable values, credentials, provider tokens, or an arbitrary
+control-plane path. A private Git Source may reference a pre-existing
+`authConnectionId`; credential material never enters the tool arguments.
 
 The adapter passes only the verified Workspace and user authority to the
 existing Takosumi API handlers. It does not store the raw bearer token in Runs,

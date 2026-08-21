@@ -589,6 +589,7 @@ export async function handlePlatformOperatorControlMcpRequest(
       workspaceId: "disabled",
       dispatchPublicControl: async () =>
         Response.json({ error: "unavailable" }, { status: 503 }),
+      installPlanWorkspaceId: async () => undefined,
       capsuleWorkspaceId: async () => undefined,
       runWorkspaceId: async () => undefined,
     });
@@ -688,6 +689,13 @@ async function createPlatformOperatorControlMcpAuthority(
           : {}),
       });
       return response ?? Response.json({ error: "not found" }, { status: 404 });
+    },
+    installPlanWorkspaceId: async (installPlanId) => {
+      try {
+        return (await operations.gitInstallPlans.get(installPlanId))?.workspaceId;
+      } catch {
+        return undefined;
+      }
     },
     capsuleWorkspaceId: async (capsuleId) => {
       try {

@@ -1,8 +1,8 @@
 # MCP から Takosumi を操作する
 
 Operator control MCP adapter を使うと、Takos や別の MCP client から Takosumi の
-Capsule と Run を操作できます。できるのは Capsule の一覧、plan、Run の確認、承認、
-apply です。
+Git install-plan、Capsule、Run を操作できます。新しい Git Source から reviewable
+Plan Run まで準備し、Capsule の一覧、plan、Run の確認、承認、apply を行えます。
 
 この adapter は任意機能です。Takos 専用の tool を組み込むのではなく、通常の
 `mcp.server` Interface として `/mcp/operator-control/v1` に公開します。client は
@@ -63,16 +63,22 @@ module の provider credential は client へ渡しません。
 
 ## 提供する tool
 
-| Tool                     | 用途                                  |
-| ------------------------ | ------------------------------------- |
-| `takosumi_capsules_list` | Capsule の一覧を読む                  |
-| `takosumi_capsule_plan`  | Capsule の plan を開始する            |
-| `takosumi_run_get`       | Run の状態と plan の要約を読む        |
-| `takosumi_run_approve`   | 確認済みの Run を承認する             |
-| `takosumi_run_apply`     | 承認済みの保存済み plan を apply する |
+| Tool                                | 用途                                                 |
+| ----------------------------------- | ---------------------------------------------------- |
+| `takosumi_install_plan_create`      | Git Source から durable install-plan を作成・再生する |
+| `takosumi_install_plan_get`         | install-plan の現在状態を副作用なしで読む             |
+| `takosumi_install_plan_reconcile`   | install-plan を明示的に一段だけ進める                  |
+| `takosumi_capsules_list`            | Capsule の一覧を読む                                  |
+| `takosumi_capsule_plan`             | 既存 Capsule の plan を開始する                        |
+| `takosumi_run_get`                  | Run の状態と plan の要約を読む                         |
+| `takosumi_run_approve`              | 確認済みの Run を承認する                              |
+| `takosumi_run_apply`                | 承認済みの保存済み plan を apply する                  |
 
-`list` と `get` は読み取り専用です。`plan` は Run を作成します。`approve` と `apply`
-は変更を伴うため、MCP client は実行前に利用者へ確認する必要があります。
+install-plan create には client が再試行でも維持する `idempotencyKey` が必須です。
+`nextAction: reconcile` の間だけ reconcile を繰り返し、`review_run` になったら返された
+Run を確認します。install-plan 自体は approve/apply しません。`list` と `get` は
+読み取り専用です。`approve` と `apply` は変更を伴うため、MCP client は実行前に
+利用者へ確認する必要があります。
 
 tool の一覧と入力 schema は adapter が `tools/list` で返します。client 側に固定の
 Takosumi tool catalog を持たせないでください。
@@ -80,8 +86,12 @@ Takosumi tool catalog を持たせないでください。
 ## 認証と安全性
 
 各 MCP request では、Takosumi が OAuth token、Interface、Binding、Workspace、
-`mcp.invoke` permission を確認します。Capsule と Run も同じ Workspace に属している
-必要があります。
+`mcp.invoke` permission を確認します。install-plan、Capsule、Run も同じ Workspace に
+属している必要があります。
+
+install-plan tool は公開 `/api/v1` の bounded request だけを転送します。variable 値、
+credential、provider token、任意の control-plane path は受け付けません。Git credential
+が必要な場合は、事前に作成した `authConnectionId` だけを参照します。
 
 adapter は確認済みの Workspace と利用者情報だけを既存の Takosumi API handler に渡します。
 元の bearer token を Run、state、Output、audit、log へ保存しません。通常の Workspace

@@ -98,6 +98,7 @@ test("every MCP POST re-introspects exact Interface OAuth evidence and serves ad
   const authority: OperatorControlMcpAuthority = {
     workspaceId: "workspace_a",
     dispatchPublicControl: async () => Response.json({}),
+    installPlanWorkspaceId: async () => "workspace_a",
     capsuleWorkspaceId: async () => "workspace_a",
     runWorkspaceId: async () => "workspace_a",
   };
@@ -119,7 +120,7 @@ test("every MCP POST re-introspects exact Interface OAuth evidence and serves ad
   expect((await first?.json()).result.tools).toEqual(
     OPERATOR_CONTROL_MCP_TOOLS,
   );
-  expect((await second?.json()).result.tools).toHaveLength(5);
+  expect((await second?.json()).result.tools).toHaveLength(8);
   expect(
     OPERATOR_CONTROL_MCP_TOOLS.find(
       (tool) => tool.name === "takosumi_capsules_list",
@@ -130,12 +131,170 @@ test("every MCP POST re-introspects exact Interface OAuth evidence and serves ad
       (tool) => tool.name === "takosumi_capsule_plan",
     )?.annotations,
   ).toMatchObject({ readOnlyHint: false, destructiveHint: false });
+  for (const name of [
+    "takosumi_install_plan_create",
+    "takosumi_install_plan_reconcile",
+  ]) {
+    expect(
+      OPERATOR_CONTROL_MCP_TOOLS.find((tool) => tool.name === name)
+        ?.annotations,
+    ).toMatchObject({ readOnlyHint: false, destructiveHint: false });
+  }
   for (const name of ["takosumi_run_approve", "takosumi_run_apply"]) {
     expect(
       OPERATOR_CONTROL_MCP_TOOLS.find((tool) => tool.name === name)
         ?.annotations,
     ).toMatchObject({ readOnlyHint: false, destructiveHint: true });
   }
+});
+
+test("Git install-plan tools forward only the bounded public API contract and preserve idempotency", async () => {
+  const dispatched: Request[] = [];
+  const installPlanLookups: string[] = [];
+  const createAuthority = async (): Promise<OperatorControlMcpAuthority> => ({
+    workspaceId: "workspace_a",
+    capsuleWorkspaceId: async () => undefined,
+    runWorkspaceId: async () => undefined,
+    installPlanWorkspaceId: async (installPlanId) => {
+      installPlanLookups.push(installPlanId);
+      return "workspace_a";
+    },
+    dispatchPublicControl: async (controlRequest) => {
+      dispatched.push(controlRequest);
+      expect(controlRequest.headers.get("authorization")).toBeNull();
+      return Response.json({ nextAction: "reconcile" }, { status: 201 });
+    },
+  });
+
+  const created = await handlePlatformOperatorControlMcpRequest(
+    request("tools/call", {
+      name: "takosumi_install_plan_create",
+      arguments: {
+        idempotencyKey: "agent-run-1:yurucommu",
+        source: {
+          name: "yurucommu-source",
+          url: "https://github.com/tako0614/yurucommu.git",
+          ref: "main",
+          path: ".",
+        },
+        capsule: { name: "yurucommu", environment: "production" },
+        options: { deploymentProfileKey: "takoserver" },
+      },
+    }),
+    env(),
+    {
+      verifySession: async () => interfaceSession(),
+      createAuthority,
+    },
+  );
+  expect((await created?.json()).result.isError).toBe(false);
+  expect(dispatched).toHaveLength(1);
+  expect(new URL(dispatched[0]!.url).pathname).toBe(
+    "/api/v1/workspaces/workspace_a/install-plans",
+  );
+  expect(dispatched[0]!.headers.get("idempotency-key")).toBe(
+    "agent-run-1:yurucommu",
+  );
+  expect(await dispatched[0]!.json()).toEqual({
+    source: {
+      name: "yurucommu-source",
+      url: "https://github.com/tako0614/yurucommu.git",
+      ref: "main",
+      path: ".",
+    },
+    capsule: { name: "yurucommu", environment: "production" },
+    options: { deploymentProfileKey: "takoserver" },
+  });
+
+  const reconciled = await handlePlatformOperatorControlMcpRequest(
+    request("tools/call", {
+      name: "takosumi_install_plan_reconcile",
+      arguments: { installPlanId: "gip_12345678" },
+    }),
+    env(),
+    {
+      verifySession: async () => interfaceSession(),
+      createAuthority,
+    },
+  );
+  expect((await reconciled?.json()).result.isError).toBe(false);
+  expect(installPlanLookups).toEqual(["gip_12345678"]);
+  expect(new URL(dispatched[1]!.url).pathname).toBe(
+    "/api/v1/install-plans/gip_12345678/reconcile",
+  );
+});
+
+test("install-plan reads and reconciliation are fenced to the bound Workspace", async () => {
+  let dispatched = false;
+  const response = await handlePlatformOperatorControlMcpRequest(
+    request("tools/call", {
+      name: "takosumi_install_plan_get",
+      arguments: { installPlanId: "gip_other_workspace" },
+    }),
+    env(),
+    {
+      verifySession: async () => interfaceSession(),
+      createAuthority: async () => ({
+        workspaceId: "workspace_a",
+        capsuleWorkspaceId: async () => undefined,
+        runWorkspaceId: async () => undefined,
+        installPlanWorkspaceId: async () => "workspace_b",
+        dispatchPublicControl: async () => {
+          dispatched = true;
+          return Response.json({});
+        },
+      }),
+    },
+  );
+
+  expect(dispatched).toBe(false);
+  expect((await response?.json()).result).toMatchObject({
+    isError: true,
+    structuredContent: { status: 403 },
+  });
+});
+
+test("install-plan tools reject unstable idempotency keys and undeclared variable payloads before dispatch", async () => {
+  let dispatched = false;
+  for (const arguments_ of [
+    {
+      idempotencyKey: " leading-space",
+      source: { name: "source", url: "https://example.com/repo.git" },
+      capsule: { name: "capsule", environment: "production" },
+    },
+    {
+      idempotencyKey: "agent-run-1",
+      source: { name: "source", url: "https://example.com/repo.git" },
+      capsule: { name: "capsule", environment: "production" },
+      variables: { token: "must-not-cross" },
+    },
+  ]) {
+    const response = await handlePlatformOperatorControlMcpRequest(
+      request("tools/call", {
+        name: "takosumi_install_plan_create",
+        arguments: arguments_,
+      }),
+      env(),
+      {
+        verifySession: async () => interfaceSession(),
+        createAuthority: async () => ({
+          workspaceId: "workspace_a",
+          installPlanWorkspaceId: async () => undefined,
+          capsuleWorkspaceId: async () => undefined,
+          runWorkspaceId: async () => undefined,
+          dispatchPublicControl: async () => {
+            dispatched = true;
+            return Response.json({});
+          },
+        }),
+      },
+    );
+    expect((await response?.json()).result).toMatchObject({
+      isError: true,
+      structuredContent: { status: 403 },
+    });
+  }
+  expect(dispatched).toBe(false);
 });
 
 test("Interface OAuth subject and Workspace are forwarded to the public control authority without a broad token", async () => {
@@ -159,6 +318,7 @@ test("Interface OAuth subject and Workspace are forwarded to the public control 
         expect(session.interfaceResolvedRevision).toBe(7);
         return {
           workspaceId: session.workspaceId,
+          installPlanWorkspaceId: async () => undefined,
           capsuleWorkspaceId: async (capsuleId) => {
             targetLookups.push(capsuleId);
             return "workspace_a";
@@ -203,6 +363,7 @@ test("tool targets are fenced to the introspected Binding Workspace before publi
       verifySession: async () => interfaceSession(),
       createAuthority: async () => ({
         workspaceId: "workspace_a",
+        installPlanWorkspaceId: async () => undefined,
         capsuleWorkspaceId: async () => undefined,
         runWorkspaceId: async () => "workspace_b",
         dispatchPublicControl: async () => {
