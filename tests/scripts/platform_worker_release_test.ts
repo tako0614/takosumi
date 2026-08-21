@@ -39,31 +39,63 @@ binding = "HOSTED"
 service = "${service}"
 [vars]
 TAKOSUMI_ENVIRONMENT = "production"
-TAKOSUMI_PLATFORM_EXTENSIONS = '${JSON.stringify([{
-    id: "takosumi-hosted-sponsorship",
-    basePath: "/v1/hosted/subscription",
-    handlerKey: "HOSTED",
-    authDelivery: "context",
-    ownsPathSubtree: true,
-    workspaceContext: "query-required",
-    requiredScopes: [],
-    capabilities: ["takosumi.hosted.subscription.v1"],
-    ...(includeBroker ? {
-      runCredential: {
-        audience: "takosumi-hosted.takoserver.takoform.v1",
-        requiredScopes: ["takoform.run"],
-      },
-      providerCredentialBroker: {
-        connectionId: "conn_takoserverTakoform01",
-        recipeId: "takoserver-takoform-run-v1",
-        providerSource: "registry.terraform.io/tako0614/takoform",
-        displayName: "Takoserver",
-        exchangePath: "/provider-credentials/takoform",
-        envNames: ["TAKOFORM_ENDPOINT", "TAKOFORM_SPACE", "TAKOFORM_TOKEN"],
-        runCredentialSettings: { requiredAvailableMinor: 2300 },
-      },
-    } : {}),
-  }])}'
+TAKOSUMI_PLATFORM_EXTENSIONS = '${JSON.stringify([
+    {
+      id: "takosumi-hosted-sponsorship",
+      basePath: "/v1/hosted/subscription",
+      handlerKey: "HOSTED",
+      authDelivery: "context",
+      ownsPathSubtree: true,
+      workspaceContext: "query-required",
+      selfServicePatScopes: ["resources:read"],
+      requestScopeRules: [
+        {
+          path: "/resources",
+          methods: ["GET"],
+          requiredScopes: ["resources:read"],
+        },
+      ],
+      capabilities: [
+        "takosumi.hosted.subscription.v1",
+        "hosted-resource.inventory.v1",
+      ],
+      contributions: [
+        {
+          id: "takoserver-hosted-resources",
+          slot: "workspace.hosted-resources",
+          href: "/v1/hosted/subscription/resources",
+          presentation: "native",
+          label: "Hosted resources",
+          labels: { ja: "ホスト済みリソース" },
+          description: "Resources managed by Takoserver for this Workspace.",
+          descriptions: {
+            ja: "このワークスペースでTakoserverが管理するリソースです。",
+          },
+        },
+      ],
+      ...(includeBroker
+        ? {
+            runCredential: {
+              audience: "takosumi-hosted.takoserver.takoform.v1",
+              requiredScopes: ["takoform.run"],
+            },
+            providerCredentialBroker: {
+              connectionId: "conn_takoserverTakoform01",
+              recipeId: "takoserver-takoform-run-v1",
+              providerSource: "registry.terraform.io/tako0614/takoform",
+              displayName: "Takoserver",
+              exchangePath: "/provider-credentials/takoform",
+              envNames: [
+                "TAKOFORM_ENDPOINT",
+                "TAKOFORM_SPACE",
+                "TAKOFORM_TOKEN",
+              ],
+              runCredentialSettings: { requiredAvailableMinor: 2300 },
+            },
+          }
+        : {}),
+    },
+  ])}'
 `;
   expect(() =>
     assertConfigTargetsSource(
@@ -81,10 +113,7 @@ TAKOSUMI_PLATFORM_EXTENSIONS = '${JSON.stringify([{
   ).toThrow("platform_worker_release_config_source_invalid");
   expect(() =>
     assertConfigTargetsSource(
-      source(
-        "takosumi-hosted",
-        resolve(root, "deploy/platform/worker.ts"),
-      ),
+      source("takosumi-hosted", resolve(root, "deploy/platform/worker.ts")),
       "/private/wrangler.toml",
       "production",
     ),
@@ -198,10 +227,7 @@ test("lost acknowledgement recovery selects one post-plan Version and exact bind
   expect(
     bindingNames(
       JSON.stringify({
-        resources: [
-          { name: "ASSETS" },
-          { binding: "HOSTED" },
-        ],
+        resources: [{ name: "ASSETS" }, { binding: "HOSTED" }],
       }),
     ),
   ).toEqual(["ASSETS", "HOSTED"]);
