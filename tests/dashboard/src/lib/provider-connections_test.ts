@@ -238,7 +238,7 @@ describe("dashboard ProviderConnection candidates", () => {
   });
 
   test("keeps managed and BYOC destinations disjoint for one provider source", () => {
-    const managed = connection({ id: "conn_takoserver_takoform_v1" });
+    const managed = connection({ id: "conn_takoserverTakoform01" });
     const byoc = connection({ id: "conn_workspace_takoform" });
 
     expect(

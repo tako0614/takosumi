@@ -5,7 +5,7 @@ import {
 import { TAKOSUMI_REPOSITORY_MANIFEST_API_VERSION_V2_3 } from "takosumi-contract/repository-manifest";
 
 export const TAKOSERVER_TAKOFORM_CONNECTION_ID =
-  "conn_takoserver_takoform_v1" as const;
+  "conn_takoserverTakoform01" as const;
 export const TAKOSERVER_TAKOFORM_PROVIDER_SOURCE =
   "registry.terraform.io/tako0614/takoform" as const;
 

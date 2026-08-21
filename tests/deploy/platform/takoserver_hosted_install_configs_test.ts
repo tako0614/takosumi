@@ -50,3 +50,44 @@ test("Takoserver Hosted wrapper preserves every Worker Durable Object export", (
   expect(typeof hostedWorker.OpenTofuRunOwnerObject).toBe("function");
   expect(typeof hostedWorker.OpenTofuRunnerObject).toBe("function");
 });
+
+test("Takoserver Hosted connection descriptor is accepted and publicly discoverable", async () => {
+  const response = await hostedWorker.default.fetch(
+    new Request("https://app-staging.takosumi.com/.well-known/takosumi"),
+    {
+      TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
+        {
+          id: "takosumi-hosted-sponsorship",
+          basePath: "/v1/hosted/subscription",
+          handlerKey: "HOSTED",
+          authDelivery: "context",
+          ownsPathSubtree: true,
+          workspaceContext: "query-required",
+          requiredScopes: [],
+          capabilities: ["takosumi.hosted.subscription.v1"],
+          runCredential: {
+            audience: "takosumi-hosted.takoserver.takoform.v1",
+            requiredScopes: ["takoform.run"],
+          },
+          providerCredentialBroker: {
+            connectionId: TAKOSERVER_TAKOFORM_CONNECTION_ID,
+            recipeId: "takoserver-takoform-run-v1",
+            providerSource: TAKOSERVER_TAKOFORM_PROVIDER_SOURCE,
+            displayName: "Takoserver",
+            exchangePath: "/provider-credentials/takoform",
+            envNames: ["TAKOFORM_ENDPOINT", "TAKOFORM_SPACE", "TAKOFORM_TOKEN"],
+          },
+        },
+      ]),
+      HOSTED: {
+        fetchAuthenticated: async () => new Response("ok"),
+      },
+    } as never,
+  );
+
+  expect(response.status).toBe(200);
+  expect((await response.json()).endpoints.extensions).toEqual({
+    "takosumi.hosted.subscription.v1":
+      "https://app-staging.takosumi.com/v1/hosted/subscription",
+  });
+});

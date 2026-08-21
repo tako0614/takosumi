@@ -54,7 +54,7 @@ TAKOSUMI_PLATFORM_EXTENSIONS = '${JSON.stringify([{
         requiredScopes: ["takoform.run"],
       },
       providerCredentialBroker: {
-        connectionId: "conn_takoserver_takoform_v1",
+        connectionId: "conn_takoserverTakoform01",
         recipeId: "takoserver-takoform-run-v1",
         providerSource: "registry.terraform.io/tako0614/takoform",
         displayName: "Takoserver",
