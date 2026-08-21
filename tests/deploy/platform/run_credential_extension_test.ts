@@ -73,6 +73,7 @@ describe("platform extension Run credential", () => {
       runId: "apply_1",
       installingPrincipalId: "principal_installer",
       phase: "apply",
+      lifecycleIntent: "provision",
       audience: "extension.example.v1",
       scopes: ["extension:invoke"],
     });
@@ -286,6 +287,7 @@ describe("platform extension Run credential", () => {
       authenticated: true,
       runId: "plan_1",
       phase: "plan",
+      lifecycleIntent: "destroy",
     });
   });
 

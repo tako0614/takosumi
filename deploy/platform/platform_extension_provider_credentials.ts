@@ -156,6 +156,7 @@ async function mintPlatformExtensionProviderCredential(
         audience,
         scopes: Object.freeze([...scopes]),
         phase: context.run.phase,
+        lifecycleIntent: context.run.lifecycleIntent,
       }),
     );
   } catch {
@@ -260,6 +261,7 @@ interface PlatformExtensionCredentialHandler {
       readonly audience: string;
       readonly scopes: readonly string[];
       readonly phase: "plan" | "apply" | "destroy";
+      readonly lifecycleIntent: "provision" | "destroy";
     },
   ): Promise<Response>;
 }

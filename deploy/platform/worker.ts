@@ -4551,6 +4551,8 @@ export interface PlatformExtensionSessionContext {
   /** Installer provenance re-read from the canonical Capsule ledger. */
   readonly installingPrincipalId?: string;
   readonly phase?: "plan" | "apply" | "destroy";
+  /** Canonical lifecycle intent re-read from the Run's Plan operation. */
+  readonly lifecycleIntent?: "provision" | "destroy";
   readonly workspaceId?: string;
   /** Live Workspace role carried by token introspection or membership lookup. */
   readonly workspaceRole?: WorkspaceRole;
@@ -5638,6 +5640,14 @@ function platformExtensionAuthenticatedContext(
   ) {
     return undefined;
   }
+  const lifecycleIntent = session.lifecycleIntent;
+  if (
+    lifecycleIntent !== undefined &&
+    lifecycleIntent !== "provision" &&
+    lifecycleIntent !== "destroy"
+  ) {
+    return undefined;
+  }
   const audience = optionalSafePlatformExtensionText(session.audience, 2048);
   if (session.audience !== undefined && !audience) return undefined;
   const scopes = optionalSafePlatformExtensionScopes(session.scopes);
@@ -5659,6 +5669,7 @@ function platformExtensionAuthenticatedContext(
     ...(installingPrincipalId ? { installingPrincipalId } : {}),
     ...(audience ? { audience } : {}),
     ...(phase ? { phase } : {}),
+    ...(lifecycleIntent ? { lifecycleIntent } : {}),
   });
 }
 
@@ -6089,6 +6100,7 @@ export async function verifyPlatformExtensionRunCredentialToken(
     runId: canonical.context.runId,
     installingPrincipalId: canonical.context.installingPrincipalId,
     phase: canonical.context.phase,
+    lifecycleIntent: canonical.context.lifecycleIntent,
     audience: descriptor.audience,
     scopes,
   };
@@ -6198,6 +6210,7 @@ export async function verifyPlatformTakoformV1alpha1RunCredential(
     runId: canonical.context.runId,
     installingPrincipalId: canonical.context.installingPrincipalId,
     phase: canonical.context.phase,
+    lifecycleIntent: canonical.context.lifecycleIntent,
     audience: issuance.audience,
     scopes: [...issuance.scopes],
   };

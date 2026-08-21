@@ -119,6 +119,7 @@ describe("Vault run-issued credential recipe", () => {
       runId: "plan_1",
       installingPrincipalId: "principal_installer",
       phase: "plan",
+      lifecycleIntent: "provision",
     });
     expect(boundIssue).toEqual({
       connection: verified,

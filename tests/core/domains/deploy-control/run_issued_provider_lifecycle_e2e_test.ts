@@ -91,6 +91,7 @@ test("generic run-issued credentials reach plan, apply, and destroy runner dispa
   const issuedByRun = new Map<string, string>();
   const issuedRequests: Array<{
     readonly phase: "plan" | "apply" | "destroy";
+    readonly lifecycleIntent: "provision" | "destroy";
     readonly runId: string;
     readonly scopes: readonly string[];
   }> = [];
@@ -142,6 +143,7 @@ test("generic run-issued credentials reach plan, apply, and destroy runner dispa
     runCredentialIssuer: async ({ connection, run, request }) => {
       issuedRequests.push({
         phase: run.phase,
+        lifecycleIntent: run.lifecycleIntent,
         runId: run.runId,
         scopes: [...request.scopes],
       });
@@ -259,11 +261,33 @@ test("generic run-issued credentials reach plan, apply, and destroy runner dispa
       }),
     ).toMatchObject({ ok: true });
   }
-  expect(issuedRequests.map(({ phase, scopes }) => ({ phase, scopes }))).toEqual([
-    { phase: "plan", scopes: ["extension:invoke"] },
-    { phase: "apply", scopes: ["extension:invoke"] },
-    { phase: "plan", scopes: ["extension:invoke"] },
-    { phase: "destroy", scopes: ["extension:invoke"] },
+  expect(
+    issuedRequests.map(({ phase, lifecycleIntent, scopes }) => ({
+      phase,
+      lifecycleIntent,
+      scopes,
+    })),
+  ).toEqual([
+    {
+      phase: "plan",
+      lifecycleIntent: "provision",
+      scopes: ["extension:invoke"],
+    },
+    {
+      phase: "apply",
+      lifecycleIntent: "provision",
+      scopes: ["extension:invoke"],
+    },
+    {
+      phase: "plan",
+      lifecycleIntent: "destroy",
+      scopes: ["extension:invoke"],
+    },
+    {
+      phase: "destroy",
+      lifecycleIntent: "destroy",
+      scopes: ["extension:invoke"],
+    },
   ]);
 
   for (const token of issuedByRun.values()) {

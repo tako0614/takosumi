@@ -20,6 +20,8 @@ export interface CredentialRecipeDriverRunContext {
   readonly runId: string;
   readonly installingPrincipalId: string;
   readonly phase: "plan" | "apply" | "destroy";
+  /** Canonical lifecycle intent re-read from the Run ledger. */
+  readonly lifecycleIntent: "provision" | "destroy";
 }
 
 /** The only token property a trusted recipe driver may select. */

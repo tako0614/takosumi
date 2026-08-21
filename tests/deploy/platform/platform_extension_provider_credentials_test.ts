@@ -98,6 +98,7 @@ test("a configured extension contributes one exact run-issued provider broker", 
       runId: "run_1",
       installingPrincipalId: "acct_1",
       phase: "apply",
+      lifecycleIntent: "provision",
     },
     issueRunCredential: async () => ({
       token: "platform_run_token",
@@ -153,6 +154,7 @@ test("a configured extension contributes one exact run-issued provider broker", 
     audience: "takosumi-hosted.takoform.v1",
     scopes: ["takoform.run"],
     phase: "apply",
+    lifecycleIntent: "provision",
   });
 });
 
@@ -208,6 +210,7 @@ test("broker failures log only a stable status boundary", async () => {
           runId: "run_secret_marker",
           installingPrincipalId: "acct_secret_marker",
           phase: "plan",
+          lifecycleIntent: "provision",
         },
         issueRunCredential: async () => ({
           token: "platform_secret_marker",
