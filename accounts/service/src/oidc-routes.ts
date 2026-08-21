@@ -287,6 +287,7 @@ async function resolveOidcAuthorizationSubject(input: {
   flow: OidcAuthorizationCodeFlow;
   sessionSubject: TakosumiSubject;
   scope: string;
+  requestedWorkspaceId?: string;
   store: AccountsStore;
   operations?: ControlPlaneOperations;
 }): Promise<
@@ -317,6 +318,7 @@ async function resolveOidcAuthorizationSubject(input: {
     scope: input.scope,
     takosumiSubject: input.sessionSubject,
     capsuleId: input.client.capsuleId,
+    workspaceId: input.requestedWorkspaceId,
   });
   if (!liveGrant.ok) {
     return oidcAuthorizationGrantFailure(liveGrant.reason);
@@ -327,6 +329,10 @@ async function resolveOidcAuthorizationSubject(input: {
       record: {
         subject: input.sessionSubject,
         takosumiSubject: input.sessionSubject,
+        ...(liveGrant.workspaceId
+          ? { workspaceId: liveGrant.workspaceId }
+          : {}),
+        ...(liveGrant.role ? { role: liveGrant.role } : {}),
       },
     };
   }
@@ -597,16 +603,38 @@ async function handleAuthorizeUncached(input: {
     store: input.store,
   });
   if (!session.ok) return authorizeSignInRedirect(input.url);
+  const requestedWorkspaceValues = input.url.searchParams.getAll("workspace_id");
+  const requestedWorkspaceId =
+    requestedWorkspaceValues.length === 0
+      ? undefined
+      : requestedWorkspaceValues.length === 1
+        ? boundedAuthorizeWorkspaceId(requestedWorkspaceValues[0])
+        : undefined;
+  if (
+    requestedWorkspaceValues.length > 0 &&
+    requestedWorkspaceId === undefined
+  ) {
+    return json(
+      {
+        error: "invalid_request",
+        error_description:
+          "workspace_id must contain one valid Workspace identifier",
+      },
+      400,
+    );
+  }
   const operations = await operationsForLiveGrant({
     operations: input.operations,
     resolveOperations: input.resolveOperations,
-    required: client.capsuleId !== undefined,
+    required:
+      client.capsuleId !== undefined || requestedWorkspaceId !== undefined,
   });
   const subject = await resolveOidcAuthorizationSubject({
     client,
     flow: input.flow,
     sessionSubject: session.subject,
     scope,
+    requestedWorkspaceId,
     store: input.store,
     operations,
   });
@@ -641,6 +669,15 @@ async function handleAuthorizeUncached(input: {
   const state = input.url.searchParams.get("state");
   if (state) redirect.searchParams.set("state", state);
   return Response.redirect(redirect, 302);
+}
+
+function boundedAuthorizeWorkspaceId(value: string): string | undefined {
+  const trimmed = value.trim();
+  return trimmed.length > 0 &&
+    trimmed.length <= 256 &&
+    !/[\u0000-\u001f\u007f]/u.test(trimmed)
+    ? trimmed
+    : undefined;
 }
 
 function authorizeSignInRedirect(authorizeUrl: URL): Response {

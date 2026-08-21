@@ -27,6 +27,18 @@ const flow = {
   issueIdToken: async () => "test-id-token",
 };
 
+async function pkceChallenge(verifier: string): Promise<string> {
+  const digest = new Uint8Array(
+    await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier)),
+  );
+  let binary = "";
+  for (const byte of digest) binary += String.fromCharCode(byte);
+  return btoa(binary)
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replace(/=+$/u, "");
+}
+
 function liveGrantFixture() {
   const store = new InMemoryAccountsStore();
   const now = Date.now();
@@ -207,6 +219,109 @@ test("authorize materializes required Interfaces for the exact pairwise Principa
     .principalId;
   expect(principalId).not.toBe(accountSubject);
   expect(principalId.length).toBeGreaterThan(20);
+});
+
+test("composition OIDC client may request one live Workspace-bound Principal token", async () => {
+  const { store, operations } = liveGrantFixture();
+  const compositionClientId = "takosumi-platform-local";
+  const compositionRedirectUri =
+    "https://app.example.test/platform/callback";
+  const compositionSecret = "composition-secret";
+  const verifier = "composition-workspace-verifier";
+  const url = new URL(`${issuer}/oauth/authorize`);
+  url.search = new URLSearchParams({
+    response_type: "code",
+    client_id: compositionClientId,
+    redirect_uri: compositionRedirectUri,
+    scope: "openid capsules:read",
+    workspace_id: workspaceId,
+    code_challenge: await pkceChallenge(verifier),
+    code_challenge_method: "S256",
+  }).toString();
+  const clients = new Map([
+    [
+      compositionClientId,
+      {
+        clientId: compositionClientId,
+        redirectUris: [compositionRedirectUri],
+        clientSecret: compositionSecret,
+        tokenEndpointAuthMethod: "client_secret_post" as const,
+        allowedScopes: ["openid", "capsules:read"],
+      },
+    ],
+  ]);
+
+  const authorization = await handleAuthorize({
+    request: new Request(url, {
+      headers: { "x-takosumi-account-session": "sess_live_grant" },
+    }),
+    url,
+    flow,
+    clients,
+    store,
+    operations,
+  });
+  expect(authorization.status).toBe(302);
+  const code = new URL(authorization.headers.get("location")!).searchParams.get(
+    "code",
+  );
+  expect(code).toBeTruthy();
+
+  const tokenResponse = await handleToken({
+    issuer,
+    request: new Request(`${issuer}/oauth/token`, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "authorization_code",
+        code: code!,
+        redirect_uri: compositionRedirectUri,
+        client_id: compositionClientId,
+        client_secret: compositionSecret,
+        code_verifier: verifier,
+      }),
+    }),
+    store,
+    flow,
+    clients,
+    operations,
+  });
+  expect(tokenResponse.status).toBe(200);
+  const token = (await tokenResponse.json()) as { access_token: string };
+  expect(await store.findAccessToken(token.access_token)).toMatchObject({
+    clientId: compositionClientId,
+    subject: accountSubject,
+    takosumiSubject: accountSubject,
+    workspaceId,
+    role: "member",
+  });
+
+  const deniedUrl = new URL(url);
+  deniedUrl.searchParams.set("workspace_id", "ws_not_a_member");
+  const denied = await handleAuthorize({
+    request: new Request(deniedUrl, {
+      headers: { "x-takosumi-account-session": "sess_live_grant" },
+    }),
+    url: deniedUrl,
+    flow,
+    clients,
+    store,
+    operations: {
+      ...operations,
+      workspaces: {
+        ...operations.workspaces,
+        getWorkspace: async () => {
+          throw new Error("Workspace is unavailable to this account");
+        },
+      },
+      members: {
+        ...operations.members,
+        listMembers: async () => [],
+      },
+    },
+  });
+  expect(denied.status).toBe(403);
+  expect(await denied.json()).toMatchObject({ error: "access_denied" });
 });
 
 test("authorization-code denial logs only its closed diagnostic stage", async () => {

@@ -616,7 +616,7 @@ export async function handlePlatformOperatorControlMcpRequest(
     !Number.isSafeInteger(session.interfaceResolvedRevision) ||
     session.interfaceResolvedRevision <= 0 ||
     session.audience !==
-      platformExtensionRouteBaseUrl(request, OPERATOR_CONTROL_MCP_ROUTE) ||
+      platformExtensionRouteBaseUrl(request, OPERATOR_CONTROL_MCP_ROUTE, env) ||
     session.scopes?.length !== 1 ||
     session.scopes[0] !== MCP_SERVER_INVOKE_PERMISSION
   ) {
@@ -6122,7 +6122,7 @@ async function introspectPlatformExtensionToken(
           client_id: clientId,
           client_secret: clientSecret,
           ...(route
-            ? { resource: platformExtensionRouteBaseUrl(request, route) }
+            ? { resource: platformExtensionRouteBaseUrl(request, route, env) }
             : {}),
         }),
       }),
@@ -6160,6 +6160,7 @@ async function introspectPlatformExtensionToken(
     if (tokenUse === "interface_oauth") {
       return platformExtensionInterfaceOAuthSession(
         request,
+        env,
         record,
         subject,
         scopes,
@@ -6192,13 +6193,14 @@ function safePlatformExtensionSubject(
 
 function platformExtensionInterfaceOAuthSession(
   request: Request,
+  env: CloudflareWorkerEnv,
   record: Record<string, unknown>,
   subject: string,
   scopes: readonly string[],
   route: PlatformExtensionRoute | undefined,
 ): PlatformExtensionSessionContext {
   if (!route || route.authMode === "handler") return { authenticated: false };
-  const expectedAudience = platformExtensionRouteBaseUrl(request, route);
+  const expectedAudience = platformExtensionRouteBaseUrl(request, route, env);
   if (record.aud !== expectedAudience) return { authenticated: false };
   const requiredScopes = route.requiredScopes ?? [];
   if (
@@ -6322,8 +6324,32 @@ function platformExtensionRunCredentialToken(
 function platformExtensionRouteBaseUrl(
   request: Request,
   route: PlatformExtensionRoute,
+  env?: Pick<
+    CloudflareWorkerEnv,
+    "LOCAL_SUBSTRATE_TEST_BED" | "TAKOSUMI_ACCOUNTS_ISSUER"
+  >,
 ): string {
   const url = new URL(request.url);
+  if (env?.LOCAL_SUBSTRATE_TEST_BED === "1" && url.protocol !== "https:") {
+    try {
+      const issuer = new URL(env.TAKOSUMI_ACCOUNTS_ISSUER ?? "");
+      if (
+        issuer.protocol === "https:" &&
+        issuer.hostname === url.hostname &&
+        issuer.pathname === "/" &&
+        !issuer.username &&
+        !issuer.password &&
+        !issuer.search &&
+        !issuer.hash
+      ) {
+        url.protocol = issuer.protocol;
+        url.host = issuer.host;
+      }
+    } catch {
+      // Invalid local issuer configuration keeps the inbound audience. Token
+      // introspection then fails closed instead of trusting proxy headers.
+    }
+  }
   url.pathname = route.basePath;
   url.search = "";
   url.hash = "";

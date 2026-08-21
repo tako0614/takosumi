@@ -14,6 +14,7 @@ import {
   handlePlatformOperatorControlMcpRequest,
   type CloudflareWorkerEnv,
   type PlatformExtensionSessionContext,
+  verifyPlatformExtensionBearerToken,
 } from "../../../deploy/platform/worker.ts";
 
 const ORIGIN = "https://app.takosumi.test";
@@ -395,6 +396,52 @@ test("non-Interface, wrong-audience, and stale-scope sessions fail closed", asyn
     );
     expect(response?.status).toBe(401);
   }
+});
+
+test("local TLS termination introspects and verifies the canonical HTTPS MCP audience", async () => {
+  const resources: string[] = [];
+  const localEnv = {
+    ...env(),
+    LOCAL_SUBSTRATE_TEST_BED: "1",
+    TAKOSUMI_ACCOUNTS_CLIENT_ID: "local-platform-client",
+    TAKOSUMI_ACCOUNTS_CLIENT_SECRET: "local-platform-secret",
+  } as CloudflareWorkerEnv;
+  const session = await verifyPlatformExtensionBearerToken(
+    new Request(`http://app.takosumi.test${OPERATOR_CONTROL_MCP_PATH}`, {
+      method: "POST",
+    }),
+    localEnv,
+    "invocation-only-interface-token",
+    {
+      id: "operator-control-mcp.v1",
+      basePath: OPERATOR_CONTROL_MCP_PATH,
+      handlerKey: "builtin:operator-control-mcp.v1",
+      authMode: "platform",
+      requiredScopes: ["mcp.invoke"],
+      capabilities: ["mcp.operator-control.v1"],
+    },
+    async (introspectionRequest) => {
+      const body = new URLSearchParams(await introspectionRequest.text());
+      resources.push(body.get("resource") ?? "");
+      return Response.json({
+        active: true,
+        token_use: "interface_oauth",
+        scope: "mcp.invoke",
+        sub: "principal_a",
+        aud: RESOURCE,
+        takosumi: {
+          workspace_id: "workspace_a",
+          capsule_id: "capsule_adapter",
+          interface_id: "interface_control",
+          interface_binding_id: "binding_control",
+          interface_resolved_revision: 7,
+        },
+      });
+    },
+  );
+
+  expect(resources).toEqual([RESOURCE]);
+  expect(session).toEqual(interfaceSession());
 });
 
 test("blueprint owns the ordinary mcp.server spec while the module stays provider-independent", async () => {

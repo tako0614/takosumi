@@ -442,6 +442,13 @@ canonical Capsule ledger の参照と Interface 呼び出しでは、scope と W
 token の実体は利用側の secret store に暗号化して保存し、OpenTofu state や Output には
 保存しません。
 
+`GET /oauth/authorize` の任意の `workspace_id` は、複数 Workspace を持つ
+Principal が発行先を明示するための選択子です。Accounts は認可コードの発行直前に
+その Principal の live membership と、Capsule-owned client なら Capsule の owning
+Workspace も照合します。重複値、空値、制御文字、過長値、または権限のない
+Workspace は拒否され、発行された access token には検証済み Workspace と role だけが
+記録されます。
+
 ## Compatibility API
 
 Compatibility API は標準 protocol / API の scoped facade です。control-plane profile は

@@ -234,6 +234,7 @@ services:
       - sh
       - -c
       - |
+        set -e
         mkdir -p deploy/platform/.wrangler/dist
         bun build \
           --target browser \

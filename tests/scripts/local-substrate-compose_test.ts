@@ -157,6 +157,7 @@ test("local-substrate builds the single composed platform worker", () => {
   // mislabeled "accounts" bundle, both from worker/src/index.ts) is gone.
   expect(blocks.length).toBe(1);
   const [block] = blocks;
+  expect(block).toContain("set -e");
   expect(block).toContain("deploy/platform/worker.ts");
   expect(block).toContain(
     "deploy/platform/.wrangler/dist/takosumi-platform-worker.mjs",
@@ -264,6 +265,10 @@ test("local-substrate smoke defaults to the canonical workers profile", () => {
 
 test("workers smoke uses the private probe host without opening the public app seam", () => {
   expect(serviceWorkerEnv).toContain("TAKOSUMI_EXPOSE_INTERNAL_EDGE=1");
+  expect(serviceWorkerEnv).toContain(
+    "TAKOSUMI_OPERATOR_CONTROL_MCP_ENABLED=1",
+  );
+  expect(cloudEnv).not.toContain("TAKOSUMI_OPERATOR_CONTROL_MCP_ENABLED");
   expect(caddyfile).toContain("respond @private 404");
   expect(cliSmoke).toContain(
     'workers) DEFAULT_SERVICE_URL="https://service.takosumi.test"',
@@ -566,6 +571,7 @@ test("local-substrate ingress blocks private and retired control seams", () => {
     "@private path /internal/* /api/spaces /api/spaces/* /api/connections /api/connections/*",
   );
   expect(caddyfile).toContain("respond @private 404");
+  expect(caddyfile).toContain("/hooks/* /mcp/* /gateway/ai/v1*");
 });
 
 test("local-substrate ships no fixed dev session bearer and keeps ingress loopback by default", () => {
@@ -588,7 +594,10 @@ test("local-substrate ships no fixed dev session bearer and keeps ingress loopba
     expect(script).toContain("$(local_substrate_dev_session_id)");
   }
   expect(ingressCompose).toContain(
-    '"${TAKOSUMI_LOCAL_SUBSTRATE_INGRESS_HOST_BIND:-127.0.0.1}:443:443"',
+    '"${TAKOSUMI_LOCAL_SUBSTRATE_INGRESS_HOST_BIND:-127.0.0.1}:${TAKOSUMI_LOCAL_SUBSTRATE_INGRESS_HTTPS_PORT:-443}:443"',
+  );
+  expect(ingressCompose).toContain(
+    '"${TAKOSUMI_LOCAL_SUBSTRATE_INGRESS_HOST_BIND:-127.0.0.1}:${TAKOSUMI_LOCAL_SUBSTRATE_INGRESS_HTTP_PORT:-80}:80"',
   );
   expect(ingressCompose).not.toContain('- "443:443"');
   expect(upScript).toContain(

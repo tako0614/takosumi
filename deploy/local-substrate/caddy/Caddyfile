@@ -65,7 +65,7 @@ app.takosumi.test {
 	route {
 		@private path /internal/* /api/spaces /api/spaces/* /api/connections /api/connections/*
 		respond @private 404
-		@api path /api/* /v1/* /oauth/* /.well-known/* /hooks/* /gateway/ai/v1* /internal/* /healthz /readyz
+		@api path /api/* /v1/* /oauth/* /.well-known/* /hooks/* /mcp/* /gateway/ai/v1* /internal/* /healthz /readyz
 		handle @api {
 			reverse_proxy {$TAKOSUMI_LOCAL_APP_UPSTREAM}
 		}

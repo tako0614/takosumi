@@ -452,6 +452,14 @@ allowed to request `offline_access` may receive refresh tokens. Consumers must
 encrypt token material in their secret store and never place it in OpenTofu
 state or Outputs.
 
+The optional `workspace_id` selector on `GET /oauth/authorize` lets a Principal
+with multiple Workspaces choose the token's authority scope. Accounts
+revalidates live membership immediately before issuing the authorization code
+and, for a Capsule-owned client, also verifies the Capsule's owning Workspace.
+Duplicate, empty, control-character, oversized, or unauthorized values are
+rejected. The resulting access token records only the verified Workspace and
+role.
+
 ## Compatibility API
 
 Compatibility APIs preserve scoped standard protocol/API facades. Control-plane
