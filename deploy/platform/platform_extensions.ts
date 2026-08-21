@@ -129,6 +129,8 @@ export interface PlatformExtensionAuthenticatedContext {
   readonly installingPrincipalId?: string;
   readonly audience?: string;
   readonly phase?: "plan" | "apply" | "destroy";
+  /** Canonical Run lifecycle intent; present only for Run credentials. */
+  readonly lifecycleIntent?: "provision" | "destroy";
 }
 
 /** Handler contract for routes using `authDelivery: "context"`. */

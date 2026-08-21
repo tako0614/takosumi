@@ -50,6 +50,7 @@ describe("canonical Capsule Run credential context", () => {
         runId: "plan_1",
         installingPrincipalId: "principal_installer",
         phase: "plan",
+        lifecycleIntent: "provision",
       },
     });
   });
@@ -83,7 +84,10 @@ describe("canonical Capsule Run credential context", () => {
         runId: "apply_1",
         phase: "apply",
       }),
-    ).toMatchObject({ ok: true, context: { phase: "apply" } });
+    ).toMatchObject({
+      ok: true,
+      context: { phase: "apply", lifecycleIntent: "provision" },
+    });
 
     expect(
       await resolveCanonicalCapsuleRunCredentialContext(ledger(), {
@@ -213,7 +217,10 @@ describe("canonical Capsule Run credential context", () => {
           phase: "destroy",
         },
       ),
-    ).toMatchObject({ ok: true, context: { phase: "destroy" } });
+    ).toMatchObject({
+      ok: true,
+      context: { phase: "destroy", lifecycleIntent: "destroy" },
+    });
 
     expect(
       await resolveCanonicalCapsuleRunCredentialContext(
@@ -253,7 +260,10 @@ describe("canonical Capsule Run credential context", () => {
           phase: "plan",
         },
       ),
-    ).toMatchObject({ ok: true, context: { phase: "plan" } });
+    ).toMatchObject({
+      ok: true,
+      context: { phase: "plan", lifecycleIntent: "destroy" },
+    });
 
     expect(
       await resolveCanonicalCapsuleRunCredentialContext(

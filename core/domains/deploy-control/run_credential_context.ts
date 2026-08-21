@@ -1,6 +1,7 @@
 import type { OpenTofuControlStore } from "./store.ts";
 
 export type CapsuleRunCredentialPhase = "plan" | "apply" | "destroy";
+export type CapsuleRunCredentialLifecycleIntent = "provision" | "destroy";
 
 /**
  * Canonical, non-secret Run authority re-read from the durable control ledger.
@@ -13,6 +14,8 @@ export interface CanonicalCapsuleRunCredentialContext {
   readonly runId: string;
   readonly installingPrincipalId: string;
   readonly phase: CapsuleRunCredentialPhase;
+  /** Derived only from the canonical PlanRun operation, never caller input. */
+  readonly lifecycleIntent: CapsuleRunCredentialLifecycleIntent;
 }
 
 export type CanonicalCapsuleRunCredentialContextResult =
@@ -162,6 +165,7 @@ export async function resolveCanonicalCapsuleRunCredentialContext(
       runId,
       installingPrincipalId,
       phase: input.phase,
+      lifecycleIntent: planOperation === "destroy" ? "destroy" : "provision",
     },
   };
 }
