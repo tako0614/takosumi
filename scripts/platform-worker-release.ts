@@ -34,7 +34,11 @@ const TARGETS = {
   },
 } as const satisfies Record<
   PlatformEnvironment,
-  { readonly origin: string; readonly workerName: string; readonly hostedService: string }
+  {
+    readonly origin: string;
+    readonly workerName: string;
+    readonly hostedService: string;
+  }
 >;
 
 export function platformTargetForEnvironment(environment: PlatformEnvironment) {
@@ -539,7 +543,7 @@ function hasHostedDiscovery(value: unknown, origin: string): boolean {
   const extensions = value.endpoints.extensions;
   return (
     extensions["takosumi.hosted.subscription.v1"] ===
-      `${origin}/v1/hosted/subscription`
+    `${origin}/v1/hosted/subscription`
   );
 }
 
@@ -559,14 +563,14 @@ export function assertConfigTargetsSource(
       /\[\[services\]\]\s+binding\s*=\s*"([^"]+)"\s+service\s*=\s*"([^"]+)"/gmu,
     ),
   ];
-  const hostedServices = services.filter(
-    (entry) => entry[1] === "HOSTED",
-  );
+  const hostedServices = services.filter((entry) => entry[1] === "HOSTED");
   let hostedRouteValid = false;
   try {
     const parsed = Bun.TOML.parse(source) as Record<string, unknown>;
     const vars = parsed.vars as Record<string, unknown> | undefined;
-    const descriptors = JSON.parse(String(vars?.TAKOSUMI_PLATFORM_EXTENSIONS)) as unknown;
+    const descriptors = JSON.parse(
+      String(vars?.TAKOSUMI_PLATFORM_EXTENSIONS),
+    ) as unknown;
     if (Array.isArray(descriptors)) {
       const hosted = descriptors.filter(
         (entry) =>
@@ -576,8 +580,7 @@ export function assertConfigTargetsSource(
           (entry as Record<string, unknown>).handlerKey === "HOSTED",
       );
       hostedRouteValid =
-        hosted.length === 1 &&
-        matchesHostedSponsorshipRoute(hosted[0]);
+        hosted.length === 1 && matchesHostedSponsorshipRoute(hosted[0]);
     }
   } catch {
     hostedRouteValid = false;
@@ -611,9 +614,11 @@ function matchesHostedSponsorshipRoute(value: unknown): boolean {
           "handlerKey",
           "id",
           "ownsPathSubtree",
+          "contributions",
           "providerCredentialBroker",
-          "requiredScopes",
+          "requestScopeRules",
           "runCredential",
+          "selfServicePatScopes",
           "workspaceContext",
         ].sort(),
       ) &&
@@ -623,13 +628,70 @@ function matchesHostedSponsorshipRoute(value: unknown): boolean {
     value.authDelivery === "context" &&
     value.ownsPathSubtree === true &&
     value.workspaceContext === "query-required" &&
-    Array.isArray(value.requiredScopes) &&
-    value.requiredScopes.length === 0 &&
+    Array.isArray(value.selfServicePatScopes) &&
+    value.selfServicePatScopes.length === 1 &&
+    value.selfServicePatScopes[0] === "resources:read" &&
+    matchesHostedInventoryScopeRules(value.requestScopeRules) &&
     Array.isArray(value.capabilities) &&
-    value.capabilities.length === 1 &&
-    value.capabilities[0] === "takosumi.hosted.subscription.v1" &&
+    JSON.stringify(value.capabilities) ===
+      JSON.stringify([
+        "takosumi.hosted.subscription.v1",
+        "hosted-resource.inventory.v1",
+      ]) &&
+    matchesHostedInventoryContribution(value.contributions) &&
     matchesHostedRunCredential(value.runCredential) &&
     matchesHostedProviderCredentialBroker(value.providerCredentialBroker)
+  );
+}
+
+function matchesHostedInventoryScopeRules(value: unknown): boolean {
+  if (!Array.isArray(value) || value.length !== 1 || !record(value[0])) {
+    return false;
+  }
+  const rule = value[0];
+  return (
+    JSON.stringify(Object.keys(rule).sort()) ===
+      JSON.stringify(["methods", "path", "requiredScopes"]) &&
+    rule.path === "/resources" &&
+    JSON.stringify(rule.methods) === JSON.stringify(["GET"]) &&
+    JSON.stringify(rule.requiredScopes) === JSON.stringify(["resources:read"])
+  );
+}
+
+function matchesHostedInventoryContribution(value: unknown): boolean {
+  if (!Array.isArray(value) || value.length !== 1 || !record(value[0])) {
+    return false;
+  }
+  const contribution = value[0];
+  return (
+    JSON.stringify(Object.keys(contribution).sort()) ===
+      JSON.stringify(
+        [
+          "description",
+          "descriptions",
+          "href",
+          "id",
+          "label",
+          "labels",
+          "presentation",
+          "slot",
+        ].sort(),
+      ) &&
+    contribution.id === "takoserver-hosted-resources" &&
+    contribution.slot === "workspace.hosted-resources" &&
+    contribution.href === "/v1/hosted/subscription/resources" &&
+    contribution.presentation === "native" &&
+    contribution.label === "Hosted resources" &&
+    contribution.description ===
+      "Resources managed by Takoserver for this Workspace." &&
+    record(contribution.labels) &&
+    JSON.stringify(contribution.labels) ===
+      JSON.stringify({ ja: "ホスト済みリソース" }) &&
+    record(contribution.descriptions) &&
+    JSON.stringify(contribution.descriptions) ===
+      JSON.stringify({
+        ja: "このワークスペースでTakoserverが管理するリソースです。",
+      })
   );
 }
 
@@ -671,7 +733,8 @@ function matchesHostedProviderCredentialBroker(value: unknown): boolean {
     Array.isArray(value.envNames) &&
     value.envNames.length === 3 &&
     value.envNames.every(
-      (name) => typeof name === "string" && /^[A-Z][A-Z0-9_]{0,63}$/u.test(name),
+      (name) =>
+        typeof name === "string" && /^[A-Z][A-Z0-9_]{0,63}$/u.test(name),
     ) &&
     new Set(value.envNames).size === value.envNames.length
   );
