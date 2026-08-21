@@ -4,6 +4,13 @@ import platformWorker, {
 } from "./worker.ts";
 import { TAKOSERVER_HOSTED_INSTALL_CONFIGS } from "./takoserver_hosted_install_configs.ts";
 
+export {
+  CoordinationObject,
+  LocalSubstrateOpenTofuRunnerProxyObject,
+  OpenTofuRunOwnerObject,
+  OpenTofuRunnerObject,
+} from "./worker.ts";
+
 const composed = new WeakMap<object, CloudflareWorkerEnv>();
 
 function hostedEnv(env: CloudflareWorkerEnv): CloudflareWorkerEnv {

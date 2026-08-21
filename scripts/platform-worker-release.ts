@@ -591,7 +591,7 @@ export function assertConfigTargetsSource(
     !main ||
     !assets ||
     resolve(dirname(path), main) !==
-      resolve(ROOT, "deploy/platform/worker.ts") ||
+      resolve(ROOT, "deploy/platform/takoserver_hosted_worker.ts") ||
     resolve(dirname(path), assets) !== resolve(ROOT, "dashboard/dist")
   ) {
     throw new Error("platform_worker_release_config_source_invalid");
@@ -611,7 +611,9 @@ function matchesHostedSponsorshipRoute(value: unknown): boolean {
           "handlerKey",
           "id",
           "ownsPathSubtree",
+          "providerCredentialBroker",
           "requiredScopes",
+          "runCredential",
           "workspaceContext",
         ].sort(),
       ) &&
@@ -625,7 +627,49 @@ function matchesHostedSponsorshipRoute(value: unknown): boolean {
     value.requiredScopes.length === 0 &&
     Array.isArray(value.capabilities) &&
     value.capabilities.length === 1 &&
-    value.capabilities[0] === "takosumi.hosted.subscription.v1"
+    value.capabilities[0] === "takosumi.hosted.subscription.v1" &&
+    matchesHostedRunCredential(value.runCredential) &&
+    matchesHostedProviderCredentialBroker(value.providerCredentialBroker)
+  );
+}
+
+function matchesHostedRunCredential(value: unknown): boolean {
+  if (!record(value)) return false;
+  return (
+    JSON.stringify(Object.keys(value).sort()) ===
+      JSON.stringify(["audience", "requiredScopes"]) &&
+    value.audience === "takosumi-hosted.takoserver.takoform.v1" &&
+    Array.isArray(value.requiredScopes) &&
+    value.requiredScopes.length === 1 &&
+    value.requiredScopes[0] === "takoform.run"
+  );
+}
+
+function matchesHostedProviderCredentialBroker(value: unknown): boolean {
+  if (!record(value)) return false;
+  return (
+    JSON.stringify(Object.keys(value).sort()) ===
+      JSON.stringify(
+        [
+          "connectionId",
+          "displayName",
+          "envNames",
+          "exchangePath",
+          "providerSource",
+          "recipeId",
+        ].sort(),
+      ) &&
+    value.connectionId === "conn_takoserver_takoform_v1" &&
+    value.recipeId === "takoserver-takoform-run-v1" &&
+    value.providerSource === "registry.terraform.io/tako0614/takoform" &&
+    value.displayName === "Takoserver" &&
+    value.exchangePath === "/provider-credentials/takoform" &&
+    Array.isArray(value.envNames) &&
+    value.envNames.length === 3 &&
+    value.envNames.every(
+      (name) => typeof name === "string" && /^[A-Z][A-Z0-9_]{0,63}$/u.test(name),
+    ) &&
+    new Set(value.envNames).size === value.envNames.length
   );
 }
 
