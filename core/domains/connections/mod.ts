@@ -434,6 +434,16 @@ export class ConnectionsService {
         { reason: PROVIDER_CONNECTION_SETUP_REQUIRED_REASON },
       );
     }
+    // A release-owned run-issued connection is the current policy authority.
+    // Stored Capsule bindings may predate a newly required non-secret policy
+    // field, so resolving a Run must project the current declaration instead
+    // of replaying a stale copy. The resolved value is included in the Plan
+    // digest, preserving the Plan/Apply fence across release changes.
+    const runCredentialSettings =
+      isWorkspaceBindableOperatorConnection(connection) &&
+      connection.runCredentialSettings !== undefined
+        ? connection.runCredentialSettings
+        : binding.runCredentialSettings;
     return {
       provider: binding.provider,
       ...(binding.moduleLocalName
@@ -442,8 +452,8 @@ export class ConnectionsService {
       ...(binding.childAlias ? { childAlias: binding.childAlias } : {}),
       ...(binding.rootAlias ? { rootAlias: binding.rootAlias } : {}),
       ...(binding.alias ? { alias: binding.alias } : {}),
-      ...(binding.runCredentialSettings
-        ? { runCredentialSettings: binding.runCredentialSettings }
+      ...(runCredentialSettings
+        ? { runCredentialSettings }
         : {}),
       connection,
       materialization: connection.materialization,

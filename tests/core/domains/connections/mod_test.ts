@@ -23,6 +23,7 @@ function connection(input: {
   readonly materialization?: ProviderConnectionMaterialization;
   readonly scopeHints?: ProviderConnection["scopeHints"];
   readonly credentialRecipe?: ProviderConnection["credentialRecipe"];
+  readonly runCredentialSettings?: ProviderConnection["runCredentialSettings"];
 }): ProviderConnection {
   return {
     id: input.id,
@@ -36,6 +37,9 @@ function connection(input: {
     envNames: ["CLOUDFLARE_API_TOKEN"],
     ...(input.credentialRecipe
       ? { credentialRecipe: input.credentialRecipe }
+      : {}),
+    ...(input.runCredentialSettings
+      ? { runCredentialSettings: input.runCredentialSettings }
       : {}),
     ...(input.scopeHints ? { scopeHints: input.scopeHints } : {}),
     createdAt: NOW,
@@ -213,6 +217,61 @@ test("operator mode resolves a verified workspace-bindable run-issued connection
   expect(mintableConnectionIds(resolved)).toEqual([
     "conn_operator_run_issued",
   ]);
+});
+
+test("release-owned run settings replace a stale stored binding before the Run digest", async () => {
+  const { store, model } = await setup();
+  const fixed = connection({
+    id: "conn_operator_run_policy",
+    status: "verified",
+    materialization: "run-issued",
+    runCredentialSettings: { requiredAvailableMinor: 2300 },
+    credentialRecipe: {
+      id: "operator-run-credential",
+      authMode: "broker",
+      runIssuance: {
+        context: "capsule-run.v1",
+        operatorConnection: "workspace-bindable",
+        storedMaterial: "none",
+        audience: "extension.example.v1",
+        scopes: ["extension:invoke"],
+      },
+    },
+  });
+  await store.putProviderBindingSet({
+    id: "dp_operator_run_policy",
+    workspaceId: model.workspace.id,
+    capsuleId: model.capsule.id,
+    environment: model.capsule.environment,
+    bindings: [
+      {
+        provider: CLOUDFLARE,
+        connectionId: fixed.id,
+        runCredentialSettings: { requiredAvailableMinor: 100 },
+      },
+    ],
+    createdAt: NOW,
+    updatedAt: NOW,
+  });
+
+  const service = new ConnectionsService({
+    store,
+    operatorProviderConnections: [fixed],
+    allowOperatorScopedProviderConnections: true,
+  });
+  const resolved = await service.resolveProviderBindings(model.capsule);
+
+  expect(resolved[0]?.runCredentialSettings).toEqual({
+    requiredAvailableMinor: 2300,
+  });
+  expect(await resolvedProviderBindingsDigest(resolved)).not.toBe(
+    await resolvedProviderBindingsDigest(
+      resolved.map((entry) => ({
+        ...entry,
+        runCredentialSettings: { requiredAvailableMinor: 100 },
+      })),
+    ),
+  );
 });
 
 test("run-issued binding settings are canonical, digest-bound, and reject credential material", async () => {

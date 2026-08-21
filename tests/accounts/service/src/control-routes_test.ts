@@ -2932,6 +2932,72 @@ test("Capsule ProviderBindings accept only the canonical route and payload", asy
   ).toBeUndefined();
 });
 
+test("Capsule ProviderBindings project current release-owned run policy", async () => {
+  const fixture = operationsFixture();
+  const provider = "registry.terraform.io/tako0614/takoform";
+  fixture.operations.connections.listProviderConnections = async () => [
+    {
+      id: "conn_release_takoform_policy",
+      provider,
+      providerSource: provider,
+      kind: "generic",
+      scope: "operator",
+      status: "verified",
+      materialization: "run-issued",
+      envNames: ["TAKOFORM_ENDPOINT", "TAKOFORM_SPACE", "TAKOFORM_TOKEN"],
+      runCredentialSettings: { requiredAvailableMinor: 2300 },
+      credentialRecipe: {
+        id: "takoserver-takoform-run-v1",
+        authMode: "broker",
+        runIssuance: {
+          context: "capsule-run.v1",
+          operatorConnection: "workspace-bindable",
+          storedMaterial: "none",
+          audience: "takosumi-hosted.takoserver.takoform.v1",
+          scopes: ["takoform.run"],
+        },
+      },
+      createdAt: workspace.createdAt,
+      updatedAt: workspace.updatedAt,
+    },
+  ];
+  const request = new Request(
+    "https://app.example.test/api/v1/capsules/cap_1/provider-bindings",
+    {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        bindings: [
+          {
+            provider,
+            connectionId: "conn_release_takoform_policy",
+            runCredentialSettings: { requiredAvailableMinor: 100 },
+          },
+        ],
+      }),
+    },
+  );
+
+  const response = await handleCapsules(
+    context(fixture.operations, request),
+    ["capsules", "cap_1", "provider-bindings"],
+    "PUT",
+  );
+
+  expect(response?.status).toBe(200);
+  expect(await response?.json()).toMatchObject({
+    providerBindingSet: {
+      bindings: [
+        {
+          provider,
+          connectionId: "conn_release_takoform_policy",
+          runCredentialSettings: { requiredAvailableMinor: 2300 },
+        },
+      ],
+    },
+  });
+});
+
 test("a Workspace-restricted credential cannot reach another Workspace it is a member of", async () => {
   // A workspace-scoped PAT (or a Capsule OAuth access token, bound to its
   // Capsule's Workspace at issuance) may name only its own Workspace. Its

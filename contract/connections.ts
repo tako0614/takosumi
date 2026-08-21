@@ -263,6 +263,12 @@ export interface ProviderConnection {
   /** Canonical credential materialization authority for provider connections. */
   readonly credentialRecipe?: ProviderConnectionRecipeRef;
   /**
+   * Current bounded non-secret policy owned by a release-projected run-issued
+   * connection. Resolution copies it into each ProviderBinding and pins it in
+   * the Plan digest; it never contains credential material.
+   */
+  readonly runCredentialSettings?: Readonly<Record<string, JsonValue>>;
+  /**
    * Resolved opaque at-rest partition persisted with any sealed credential
    * material. New credential registrations require it; credentialless
    * metadata connections may omit it. Vault open fails closed when absent and
