@@ -95,7 +95,12 @@ export async function completeUpstreamOAuth(
 ): Promise<CallbackResult> {
   const expected = sessionStorage.getItem(STATE_KEY);
   const codeVerifier = sessionStorage.getItem(PKCE_VERIFIER_KEY);
-  if (!expected || expected !== state || !codeVerifier) {
+  // Accounts replaces the browser nonce with a server-minted upstream state
+  // and binds that value to its HttpOnly state cookie. The callback therefore
+  // cannot equal STATE_KEY. This tab only proves that it started the flow and
+  // still holds the PKCE verifier; the Accounts callback validates the exact
+  // returned state against the server-owned cookie before exchanging the code.
+  if (!expected || !codeVerifier) {
     throw new Error("oauth flow was not started in this tab");
   }
   const returnTo = recallOAuthReturnTo();
