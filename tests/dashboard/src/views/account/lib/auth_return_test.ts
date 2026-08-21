@@ -61,7 +61,7 @@ test("safeOAuthReturnTo rejects open-redirect values", () => {
   }
 });
 
-test("completeUpstreamOAuth keeps the saved return path when callback exchange fails", async () => {
+test("completeUpstreamOAuth forwards the server state and keeps the saved return path when callback exchange fails", async () => {
   const storage = new Map<string, string>();
   globalThis.sessionStorage = {
     getItem: (key: string) => storage.get(key) ?? null,
@@ -77,27 +77,34 @@ test("completeUpstreamOAuth keeps the saved return path when callback exchange f
       return storage.size;
     },
   };
-  storage.set("tg_oauth_state", "state_a");
+  storage.set("tg_oauth_state", "client_state");
   storage.set("tg_oauth_provider", "google");
   storage.set("tg_oauth_pkce_verifier", "v".repeat(43));
   storage.set(
     "tg_oauth_return",
     "/new?git=https%3A%2F%2Fgithub.com%2Ftako0614%2Ftakos.git&path=deploy%2Fopentofu",
   );
-  globalThis.fetch = async () =>
-    Response.json(
+  const fetched: string[] = [];
+  globalThis.fetch = async (input) => {
+    fetched.push(String(input));
+    return Response.json(
       { error: "temporarily_unavailable", error_description: "retry later" },
       { status: 503 },
     );
+  };
 
   await expect(
-    completeUpstreamOAuth("code_a", "state_a", "google"),
+    completeUpstreamOAuth("code_a", "server_state", "google"),
   ).rejects.toThrow("retry later");
+
+  const callback = new URL(fetched[0]!, "https://app.takosumi.com");
+  expect(callback.searchParams.get("state")).toBe("server_state");
+  expect(callback.searchParams.get("code_verifier")).toBe("v".repeat(43));
 
   expect(recallOAuthReturnTo()).toBe(
     "/new?git=https%3A%2F%2Fgithub.com%2Ftako0614%2Ftakos.git&path=deploy%2Fopentofu",
   );
-  expect(storage.get("tg_oauth_state")).toBe("state_a");
+  expect(storage.get("tg_oauth_state")).toBe("client_state");
   expect(storage.get("tg_oauth_provider")).toBe("google");
 });
 
