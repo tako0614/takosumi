@@ -16,6 +16,8 @@ import {
   isProviderEnvName,
   isReservedProviderEnvName,
 } from "takosumi-contract/provider-env-rules";
+import { canonicalRunCredentialSettings } from "takosumi-contract/connections";
+import type { JsonValue } from "takosumi-contract";
 import {
   PLATFORM_EXTENSION_RESERVED_PREFIXES,
   pathIsUnderBase,
@@ -103,6 +105,8 @@ export interface PlatformExtensionProviderCredentialBroker {
   /** Relative path appended to this route's basePath. */
   readonly exchangePath: `/${string}`;
   readonly envNames: readonly string[];
+  /** Bounded non-secret policy passed to this broker on every Run. */
+  readonly runCredentialSettings?: Readonly<Record<string, JsonValue>>;
 }
 
 /** Provider-neutral authenticated identity delivered across the platform seam. */
@@ -395,7 +399,7 @@ function optionalProviderCredentialBroker(
     throw new TypeError(`${label}.providerCredentialBroker must be an object`);
   }
   const record = value as Record<string, unknown>;
-  const expectedKeys = [
+  const requiredKeys = [
     "connectionId",
     "displayName",
     "envNames",
@@ -403,9 +407,10 @@ function optionalProviderCredentialBroker(
     "providerSource",
     "recipeId",
   ];
+  const actualKeys = Object.keys(record).sort();
   if (
-    JSON.stringify(Object.keys(record).sort()) !==
-    JSON.stringify(expectedKeys)
+    requiredKeys.some((key) => !actualKeys.includes(key)) ||
+    actualKeys.some((key) => ![...requiredKeys, "runCredentialSettings"].includes(key))
   ) {
     throw new TypeError(`${label}.providerCredentialBroker has unknown or missing fields`);
   }
@@ -457,6 +462,17 @@ function optionalProviderCredentialBroker(
   if (new Set(envNames).size !== envNames.length) {
     throw new TypeError(`${label}.providerCredentialBroker.envNames contains duplicates`);
   }
+  let runCredentialSettings: Readonly<Record<string, JsonValue>> | undefined;
+  try {
+    runCredentialSettings = canonicalRunCredentialSettings(
+      record.runCredentialSettings,
+      `${label}.providerCredentialBroker.runCredentialSettings`,
+    );
+  } catch {
+    throw new TypeError(
+      `${label}.providerCredentialBroker.runCredentialSettings is invalid`,
+    );
+  }
   return Object.freeze({
     connectionId,
     recipeId,
@@ -464,6 +480,7 @@ function optionalProviderCredentialBroker(
     displayName,
     exchangePath: exchangePath as `/${string}`,
     envNames: Object.freeze([...envNames]),
+    ...(runCredentialSettings ? { runCredentialSettings } : {}),
   });
 }
 

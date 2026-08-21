@@ -21,6 +21,7 @@ const ROUTES = JSON.stringify([
       displayName: "Takosumi Hosted",
       exchangePath: "/provider-credentials/takoform",
       envNames: ["TAKOFORM_ENDPOINT", "TAKOFORM_SPACE", "TAKOFORM_TOKEN"],
+      runCredentialSettings: { requiredAvailableMinor: 2300 },
     },
   },
 ]);
@@ -54,6 +55,7 @@ test("a configured extension contributes one exact run-issued provider broker", 
         id: "takosumi-hosted-takoform-run",
         authMode: "broker",
       },
+      runCredentialSettings: { requiredAvailableMinor: 2300 },
     },
   ]);
   const recipe = composition?.credentialRecipes[0];
@@ -87,6 +89,7 @@ test("a configured extension contributes one exact run-issued provider broker", 
       createdAt: "2026-08-18T00:00:00.000Z",
       updatedAt: "2026-08-18T00:00:00.000Z",
     },
+    runCredentialSettings: { requiredAvailableMinor: 2300 },
     values: {},
     files: [],
     run: {
@@ -138,7 +141,7 @@ test("a configured extension contributes one exact run-issued provider broker", 
   expect(await call.input.json()).toEqual({
     kind: "takosumi.provider-run-credential-request@v1",
     providerSource: "registry.terraform.io/tako0614/takoform",
-    settings: {},
+    settings: { requiredAvailableMinor: 2300 },
   });
   expect(call.context).toEqual({
     authKind: "run-credential",

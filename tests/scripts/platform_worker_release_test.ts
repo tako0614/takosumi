@@ -60,6 +60,7 @@ TAKOSUMI_PLATFORM_EXTENSIONS = '${JSON.stringify([{
         displayName: "Takoserver",
         exchangePath: "/provider-credentials/takoform",
         envNames: ["TAKOFORM_ENDPOINT", "TAKOFORM_SPACE", "TAKOFORM_TOKEN"],
+        runCredentialSettings: { requiredAvailableMinor: 2300 },
       },
     } : {}),
   }])}'

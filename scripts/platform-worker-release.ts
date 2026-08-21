@@ -657,6 +657,7 @@ function matchesHostedProviderCredentialBroker(value: unknown): boolean {
           "exchangePath",
           "providerSource",
           "recipeId",
+          "runCredentialSettings",
         ].sort(),
       ) &&
     value.connectionId === "conn_takoserverTakoform01" &&
@@ -664,6 +665,9 @@ function matchesHostedProviderCredentialBroker(value: unknown): boolean {
     value.providerSource === "registry.terraform.io/tako0614/takoform" &&
     value.displayName === "Takoserver" &&
     value.exchangePath === "/provider-credentials/takoform" &&
+    record(value.runCredentialSettings) &&
+    JSON.stringify(value.runCredentialSettings) ===
+      JSON.stringify({ requiredAvailableMinor: 2300 }) &&
     Array.isArray(value.envNames) &&
     value.envNames.length === 3 &&
     value.envNames.every(
