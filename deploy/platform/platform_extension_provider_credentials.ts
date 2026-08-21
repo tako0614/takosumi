@@ -90,6 +90,9 @@ export function platformExtensionProviderCredentialComposition(env: {
             id: broker.recipeId,
             authMode: AUTH_MODE,
           }),
+          ...(broker.runCredentialSettings
+            ? { runCredentialSettings: broker.runCredentialSettings }
+            : {}),
         });
       }),
     ),
