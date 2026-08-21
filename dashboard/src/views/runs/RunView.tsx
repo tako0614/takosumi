@@ -48,6 +48,7 @@ import {
   listRuns,
   destroyPlanCapsule,
   openRunStream,
+  planCapsule,
   planCapsuleUpdate,
   type ProviderConnection,
   type ProviderResolution,
@@ -1280,11 +1281,20 @@ function Inner() {
   const retryPlan = createAction(async () => {
     const instId = run.latest?.capsuleId;
     if (!instId) return;
+    const capsule = await getCapsule(instId);
     // Preserve the requested operation. A failed destroy must be retried as a
-    // destroy, while an ordinary plan retry syncs and pins the latest source.
+    // destroy. A first-install retry must preserve the exact reviewed
+    // SourceSnapshot/CompatibilityReport pair; refreshing only the report
+    // would mismatch the InstallConfig-pinned snapshot. Deployed updates still
+    // sync and pin the latest source.
     const envelope =
       run.latest?.type === "destroy_plan"
         ? await destroyPlanCapsule(instId)
+        : capsule.currentStateGeneration === 0 &&
+            run.latest?.compatibilityReportId
+          ? await planCapsule(instId, {
+              compatibilityReportId: run.latest.compatibilityReportId,
+            })
         : await planCapsuleUpdate(instId);
     const newRunId = extractRunId(envelope);
     if (newRunId) {
