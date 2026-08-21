@@ -496,6 +496,14 @@ export async function resolveProviderBindings(
         message: `bindings[${index}]: provider connection does not accept run credential settings`,
       };
     }
+    // Release-owned operator policy is code authority. Persist its current
+    // bounded settings even when the client submitted an older copy so newly
+    // written bindings and Run-time resolution agree.
+    const runCredentialSettings =
+      isWorkspaceBindableOperatorConnection(connection) &&
+      connection.runCredentialSettings !== undefined
+        ? connection.runCredentialSettings
+        : binding.runCredentialSettings;
     resolved.push({
       provider: binding.provider,
       ...(binding.moduleLocalName
@@ -506,8 +514,8 @@ export async function resolveProviderBindings(
       ...(binding.alias ? { alias: binding.alias } : {}),
       connectionId: binding.connectionId,
       ...(binding.region ? { region: binding.region } : {}),
-      ...(binding.runCredentialSettings
-        ? { runCredentialSettings: binding.runCredentialSettings }
+      ...(runCredentialSettings
+        ? { runCredentialSettings }
         : {}),
     });
   }
