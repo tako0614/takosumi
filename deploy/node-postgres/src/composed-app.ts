@@ -406,7 +406,7 @@ export async function buildComposedApp(
 function interfaceRequestAccess(request: Request): "read" | "write" {
   const isInterfaceTokenIssue =
     request.method === "POST" &&
-    /^\/v1\/interfaces\/[^/]+\/token$/u.test(new URL(request.url).pathname);
+    /^\/api\/v1\/interfaces\/[^/]+\/token$/u.test(new URL(request.url).pathname);
   return request.method === "GET" ||
     request.method === "HEAD" ||
     isInterfaceTokenIssue

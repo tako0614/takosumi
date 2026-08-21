@@ -23,19 +23,19 @@ export interface RegisterOfferingCatalogRoutesOptions {
 }
 
 export const OFFERING_CATALOG_ENDPOINTS: readonly ApiEndpoint[] = [
-  endpoint("POST", "/v1/offering-catalogs", "publishOfferingCatalog", {
+  endpoint("POST", "/internal/v1/offering-catalogs", "publishOfferingCatalog", {
     okStatus: "201",
     alternateOkStatuses: ["200"],
     okSchema: "OfferingCatalog",
     requestSchema: "OfferingCatalog",
   }),
-  endpoint("GET", "/v1/offering-catalogs", "listOfferingCatalogs", {
+  endpoint("GET", "/internal/v1/offering-catalogs", "listOfferingCatalogs", {
     okSchema: "ListOfferingCatalogsResponse",
     query: ["limit", "cursor"],
   }),
   endpoint(
     "GET",
-    "/v1/offering-catalogs/:catalogId/versions/:catalogVersion",
+    "/internal/v1/offering-catalogs/:catalogId/versions/:catalogVersion",
     "getOfferingCatalog",
     {
       okSchema: "OfferingCatalog",
@@ -44,7 +44,7 @@ export const OFFERING_CATALOG_ENDPOINTS: readonly ApiEndpoint[] = [
   ),
   endpoint(
     "POST",
-    "/v1/offering-availability/query",
+    "/internal/v1/offering-availability/query",
     "queryOfferingAvailability",
     {
       okSchema: "OfferingAvailabilityResponse",
@@ -53,7 +53,7 @@ export const OFFERING_CATALOG_ENDPOINTS: readonly ApiEndpoint[] = [
   ),
   endpoint(
     "POST",
-    "/v1/offering-selections/resolve",
+    "/internal/v1/offering-selections/resolve",
     "resolveOfferingSelection",
     {
       okSchema: "OfferingSelection",
@@ -66,7 +66,7 @@ export function registerOfferingCatalogRoutes(
   app: Hono,
   options: RegisterOfferingCatalogRoutesOptions,
 ): void {
-  app.post("/v1/offering-catalogs", async (c) => {
+  app.post("/internal/v1/offering-catalogs", async (c) => {
     const auth = await authorize(c, options);
     if (!auth.ok) return auth.response;
     return respond(c, async () => {
@@ -79,7 +79,7 @@ export function registerOfferingCatalogRoutes(
     });
   });
 
-  app.get("/v1/offering-catalogs", async (c) => {
+  app.get("/internal/v1/offering-catalogs", async (c) => {
     const auth = await authorize(c, options);
     if (!auth.ok) return auth.response;
     return respond(c, async () => {
@@ -99,7 +99,7 @@ export function registerOfferingCatalogRoutes(
   });
 
   app.get(
-    "/v1/offering-catalogs/:catalogId/versions/:catalogVersion",
+    "/internal/v1/offering-catalogs/:catalogId/versions/:catalogVersion",
     async (c) => {
       const auth = await authorize(c, options);
       if (!auth.ok) return auth.response;
@@ -115,7 +115,7 @@ export function registerOfferingCatalogRoutes(
     },
   );
 
-  app.post("/v1/offering-availability/query", async (c) => {
+  app.post("/internal/v1/offering-availability/query", async (c) => {
     const auth = await authorize(c, options);
     if (!auth.ok) return auth.response;
     return respond(c, async () => {
@@ -126,7 +126,7 @@ export function registerOfferingCatalogRoutes(
     });
   });
 
-  app.post("/v1/offering-selections/resolve", async (c) => {
+  app.post("/internal/v1/offering-selections/resolve", async (c) => {
     const auth = await authorize(c, options);
     if (!auth.ok) return auth.response;
     return respond(c, async () => {

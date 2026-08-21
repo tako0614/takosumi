@@ -29,7 +29,7 @@ activate it, create an Offering, or select a TargetPool.
 - Keep package/definition bytes and digests in operator-private evidence and
   prove an isolated backup/restore replay before touching production state.
 
-The legacy route is normally `404`. With
-`TAKOSUMI_LEGACY_RESOURCE_DRAIN_ENABLED=1`, authenticated list/read/events/
-observe/delete and TargetPool/SpacePolicy `GET`/`HEAD`/`DELETE` are available;
-discovery and all writes remain unavailable (`404`/`410`).
+The legacy `/v1` route family is unconditionally `404`, including with an
+operator bearer. There is no drain flag or CLI caller. Use typed in-process
+operations or the owning external Host for this migration custody instead;
+discovery and authoring remain unavailable.

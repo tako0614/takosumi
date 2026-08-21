@@ -52,7 +52,7 @@ async function list(args: string[], io: CliIo): Promise<number> {
   if (limit !== undefined) query.set("limit", String(limit));
   if (cursor) query.set("cursor", cursor);
   const response = await requestDeployControlApi({
-    path: `/v1/offering-catalogs${query.size > 0 ? `?${query}` : ""}`,
+    path: `/internal/v1/offering-catalogs${query.size > 0 ? `?${query}` : ""}`,
     options,
   });
   io.stdout(formatCatalogList(response, booleanOption(options, "json")));
@@ -75,7 +75,7 @@ async function get(args: string[], io: CliIo): Promise<number> {
 async function publish(args: string[], io: CliIo): Promise<number> {
   const options = parseOptions(args);
   const response = await requestDeployControlApi({
-    path: "/v1/offering-catalogs",
+    path: "/internal/v1/offering-catalogs",
     method: "POST",
     body: await readRequest(options),
     options,
@@ -87,7 +87,7 @@ async function publish(args: string[], io: CliIo): Promise<number> {
 async function availability(args: string[], io: CliIo): Promise<number> {
   const options = parseOptions(args);
   const response = await requestDeployControlApi({
-    path: "/v1/offering-availability/query",
+    path: "/internal/v1/offering-availability/query",
     method: "POST",
     body: await readRequest(options),
     options,
@@ -99,7 +99,7 @@ async function availability(args: string[], io: CliIo): Promise<number> {
 async function resolve(args: string[], io: CliIo): Promise<number> {
   const options = parseOptions(args);
   const response = await requestDeployControlApi({
-    path: "/v1/offering-selections/resolve",
+    path: "/internal/v1/offering-selections/resolve",
     method: "POST",
     body: await readRequest(options),
     options,
@@ -119,7 +119,7 @@ async function readRequest(options: Options): Promise<Record<string, unknown>> {
 }
 
 function catalogPath(catalogId: string, catalogVersion: string): string {
-  return `/v1/offering-catalogs/${encodeURIComponent(catalogId)}/versions/${encodeURIComponent(catalogVersion)}`;
+  return `/internal/v1/offering-catalogs/${encodeURIComponent(catalogId)}/versions/${encodeURIComponent(catalogVersion)}`;
 }
 
 function requireIdentity(

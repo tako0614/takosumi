@@ -166,7 +166,7 @@ describe("SignInView disabled OAuth guidance", () => {
     expect(runtimeCapabilitiesSource).toContain(
       "initializeTakosumiRuntimeCapabilities",
     );
-    expect(runtimeCapabilitiesSource).toContain("/v1/capabilities");
+    expect(runtimeCapabilitiesSource).toContain("/api/v1/capabilities");
     expect(runtimeCapabilitiesSource).not.toContain("VITE_TAKOSUMI_CLOUD");
     expect(runtimeCapabilitiesSource).not.toContain("app-staging.takosumi.com");
     expect(runtimeCapabilitiesSource).not.toContain(

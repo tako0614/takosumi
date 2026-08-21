@@ -100,7 +100,6 @@ test("retired Takoform Host root cannot be configured or dispatched", async () =
   const worker = (await import("../../../deploy/platform/worker.ts")).default;
   let dispatched = false;
   const env = {
-    TAKOSUMI_LEGACY_RESOURCE_DRAIN_ENABLED: "1",
     TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
       {
         basePath: "/.well-known/takoform",
@@ -135,7 +134,6 @@ test("retired Takoform Host API lanes cannot be configured, advertised, or dispa
   ]) {
     let dispatched = false;
     const env = {
-      TAKOSUMI_LEGACY_RESOURCE_DRAIN_ENABLED: "1",
       TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
         {
           basePath,
@@ -189,7 +187,7 @@ test("core well-known leaves and root remain unclaimable in either match mode", 
   }
 });
 
-test("platform worker dispatches an exact extension leaf before the retired host drain", async () => {
+test("platform worker dispatches an exact extension leaf beside the portable host", async () => {
   const worker = (await import("../../../deploy/platform/worker.ts")).default;
   const response = await worker.fetch(
     new Request("https://app.takosumi.com/.well-known/takoform/v1beta1"),

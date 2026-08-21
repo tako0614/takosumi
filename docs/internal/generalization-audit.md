@@ -58,22 +58,12 @@ authority. OSS may keep the bytes and metadata needed to observe, delete, or
 perform an exact operator migration; the retained rows do not give OSS control
 of a Form or its backend.
 
-The platform edge returns `404` for the legacy surface by default. An operator
-may enable the bounded drain with
-`TAKOSUMI_LEGACY_RESOURCE_DRAIN_ENABLED=1` together with the authenticated
-control-plane token and database. While the drain is enabled, the implemented
-legacy actions are limited to:
-
-| Legacy area | Allowed action |
-| --- | --- |
-| Resource collection and records | Authenticated `GET`/`HEAD` list/read/events, `POST` observe, and `DELETE` |
-| TargetPool and SpacePolicy records | Authenticated `GET`/`HEAD` (including list) and `DELETE` |
-
-Resource preview, apply, recover, import, and refresh; Resource/Form writes;
-Form Registry and FormActivation operations; discovery; and TargetPool or
-SpacePolicy writes remain unavailable. Unknown or disabled paths return `404`;
-recognized retired operations return `410` while the drain is on. The drain
-does not create a Form, select capacity, or change the supported Stack model.
+The platform edge returns unconditional `404` for the retired Resource/Form
+surface. There is no drain flag, CLI caller, or public descriptor that can
+restore `/v1/resources`, `/v1/target-pools`, `/v1/space-policies`, Form Host,
+or FormActivation routes. Resource schemas, stores, and typed operations stay
+available only for migration custody; they do not create a Form, select
+capacity, or change the supported Stack model.
 
 ## Review evidence
 

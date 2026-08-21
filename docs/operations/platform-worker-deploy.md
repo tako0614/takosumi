@@ -36,7 +36,7 @@ repository; the old package procedure is a superseded migration note.
 
 The official staging composition binds the independently deployed private
 `takosumi-hosted-staging` Worker under `HOSTED`. The only mounted subtree is
-`/v1/hosted/subscription`; Marketplace, cloud Resource, wallet, migration, AI,
+`/api/v1/hosted/subscription`; Marketplace, cloud Resource, wallet, migration, AI,
 and object-storage APIs belong to Takoserver and are not proxied by Hosted.
 Takosumi authenticates the session and Workspace before forwarding. The target
 remains route-less and does not receive a browser cookie, bearer token, account
@@ -110,15 +110,12 @@ Container image reuse, capacity, keepalive, cache, egress, and timeout settings
 are explicit operator policy. A class or binding rename requires a durable
 migration; never assume production state can be discarded.
 
-The platform worker does not advertise the retired Resource Shape API. The old
-`TAKOSUMI_RESOURCE_OBSERVATION_*` variables and five-minute cron are retained
-implementation vocabulary for migration custody only. The optional
-`TAKOSUMI_LEGACY_RESOURCE_DRAIN_ENABLED=1` lane permits only the exact
-deploy-control bearer to use bounded list/read/events/observe/delete and
-TargetPool/SpacePolicy `GET`/`HEAD`/`DELETE`; Workspace sessions, personal
-access tokens, and OAuth tokens are rejected. When explicitly enabled, the
-cron may run read-only observation, but it never invokes Resource operation
-repair or resumes preview/apply/import/refresh/create/update mutations.
+The platform worker does not advertise or dispatch the retired Resource Shape,
+TargetPool, SpacePolicy, Form Host, or FormActivation HTTP families. Their
+`/v1` paths are unconditional JSON `404`/reserved responses, including with a
+bearer; no drain flag, observation cron, or CLI caller restores them. Retained
+rows and schemas remain migration data for typed operations or an owning
+external Host.
 
 ## Authentication configuration
 
@@ -126,7 +123,7 @@ Upstream sign-in providers are configured by the generic non-secret descriptor
 array `TAKOSUMI_ACCOUNTS_UPSTREAM_PROVIDERS`. Each descriptor contains its
 issuer/endpoints/client id/redirect URI/scopes and names the runtime secret via
 `clientSecretEnv`. `label` and `protocol` are the non-secret presentation and
-protocol fields published by `GET /v1/auth/providers`; current workers also
+protocol fields published by `GET /api/v1/auth/providers`; current workers also
 provide safe `Single sign-on` / `oidc` defaults for older descriptor config.
 Malformed descriptors fail the public discovery request closed with a generic
 `503` and never expose endpoints or credential references. There is no
@@ -273,9 +270,9 @@ After deploy, verify:
   unconfigured Core exposes none;
 - Interface resolution and one exact InterfaceBinding authorization work
   without a reserved Output schema;
-- if the legacy drain is intentionally enabled, one authenticated retained
-  Resource can be listed/read, observed, and deleted without enabling writes;
-  otherwise all legacy Resource/Form paths return `404`;
+- retired Resource/Form, TargetPool, and SpacePolicy paths return JSON `404`
+  with or without a bearer; portable Takoform Host checks run against the
+  external Host's own endpoint and contract;
 - logs, audit events, state, Outputs, and diagnostics contain no credential.
 
 Record these proofs with the OSS

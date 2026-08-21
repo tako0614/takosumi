@@ -156,6 +156,7 @@ import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import { decodeCursor, pageSorted } from "takosumi-contract/pagination";
 import { base64UrlEncodeBytes } from "../encoding.ts";
 import { ensureTakosumiAccountsOidcForExistingCapsule } from "./capsule-oidc.ts";
+import { handleCapsuleRevisionPlans } from "./revision-plans.ts";
 
 export async function handleCapsules(
   ctx: ControlDispatchContext,
@@ -176,7 +177,12 @@ export async function handleCapsules(
     if (!auth.ok) return auth.response;
     if (segments.length === 2) {
       if (method === "GET") {
-        return json({ capsule: publicCapsule(capsule) });
+        return json({
+          capsule: await publicCapsuleWithAdoptedSourceRevision(
+            operations,
+            capsule,
+          ),
+        });
       }
       if (method === "PATCH") {
         return await patchCapsule(request, operations, capsuleId);
@@ -224,6 +230,9 @@ export async function handleCapsules(
         await publicPlanActionResponse(operations, response),
         201,
       );
+    }
+    if (leaf === "revision-plans" && segments.length === 3) {
+      return await handleCapsuleRevisionPlans(ctx, capsule, method);
     }
     if (leaf === "destroy-plan" && segments.length === 3) {
       if (method !== "POST") return methodNotAllowed("POST");
@@ -391,8 +400,24 @@ async function getCapsule(
 ): Promise<Response> {
   const capsule = await operations.capsules.getCapsule(capsuleId);
   return json({
-    capsule: publicCapsule(capsule),
+    capsule: await publicCapsuleWithAdoptedSourceRevision(
+      operations,
+      capsule,
+    ),
   });
+}
+
+async function publicCapsuleWithAdoptedSourceRevision(
+  operations: ControlPlaneOperations,
+  capsule: Capsule,
+): Promise<PublicCapsule> {
+  const projected = publicCapsule(capsule);
+  if (!capsule.currentStateVersionId) return projected;
+  const adoptedSourceRevision =
+    await operations.getCapsuleAdoptedSourceRevision(capsule.id);
+  return adoptedSourceRevision
+    ? { ...projected, adoptedSourceRevision }
+    : projected;
 }
 
 async function patchCapsule(

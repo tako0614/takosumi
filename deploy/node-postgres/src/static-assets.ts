@@ -14,8 +14,8 @@
  */
 
 import {
-  ACCOUNTS_IDENTITY_PREFIX,
   API_V1_PREFIX,
+  RETIRED_V1_PREFIX,
 } from "takosumi-contract/api-surface";
 
 // Mirror of deploy/accounts-cloudflare/src/routes.ts ACCOUNTS_API_PREFIXES.
@@ -28,7 +28,7 @@ import {
 // server-HTML dashboard has been removed from accounts-service.
 export const ACCOUNTS_API_PREFIXES = [
   API_V1_PREFIX,
-  ACCOUNTS_IDENTITY_PREFIX,
+  RETIRED_V1_PREFIX,
   "/oauth",
   "/.well-known",
   "/internal",

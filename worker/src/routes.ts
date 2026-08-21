@@ -29,8 +29,8 @@ export function isInternalControlPlanePath(pathname: string): boolean {
 
 export function isInterfaceApiPath(pathname: string): boolean {
   const normalized = normalizePathname(pathname);
-  return normalized === "/v1/interfaces" ||
-    normalized.startsWith("/v1/interfaces/");
+  return normalized === "/api/v1/interfaces" ||
+    normalized.startsWith("/api/v1/interfaces/");
 }
 
 export function createServiceWorkerRequest(request: Request): Request {

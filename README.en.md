@@ -40,7 +40,7 @@ bun core/index.ts
 In another terminal, ask the server which features it exposes.
 
 ```bash
-curl http://127.0.0.1:8788/v1/capabilities \
+curl http://127.0.0.1:8788/api/v1/capabilities \
   -H "authorization: Bearer dev-token"
 ```
 

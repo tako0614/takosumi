@@ -697,7 +697,7 @@ async function listBoundedSharedInstallConfigs(
   return { ok: true, candidates };
 }
 
-type StoreBaseInstallConfigResolution =
+export type StoreBaseInstallConfigResolution =
   | {
       readonly ok: true;
       readonly installConfig: InstallConfig;
@@ -723,7 +723,7 @@ type StoreBaseInstallConfigResolution =
  * row may still provide policy while the manifest default owns module choice;
  * no matching row falls back to the generic host policy.
  */
-async function resolveStoreBaseInstallConfig(
+export async function resolveStoreBaseInstallConfig(
   operations: ControlPlaneOperations,
   source: Source,
   sourceSnapshot: SourceSnapshot,

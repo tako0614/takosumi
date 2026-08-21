@@ -27,7 +27,8 @@ Cloudflare 固有の import/deploy compatibility profile は廃止済みです�
 
 ```http
 GET /.well-known/takosumi
-GET /v1/capabilities
+GET /api/v1/capabilities
+GET /openapi.json
 ```
 
 CLI、dashboard、Takoform client とその他の API client は、edition 名ではなく
@@ -55,15 +56,16 @@ capability を参照します。
     "interfaces": true
   },
   "endpoints": {
-    "api": "https://takosumi.example.com/api",
-    "capabilities": "https://takosumi.example.com/v1/capabilities",
+    "api": "https://takosumi.example.com/api/v1",
+    "capabilities": "https://takosumi.example.com/api/v1/capabilities",
+    "openapi": "https://takosumi.example.com/openapi.json",
     "oidc_issuer": "https://takosumi.example.com"
   }
 }
 ```
 
 field 名は snake_case です。`product` は常に `takosumi` で、client は最初にこれを
-確認します。`endpoints.api` は origin そのものではなく `<origin>/api` です。
+確認します。`endpoints.api` は origin そのものではなく `<origin>/api/v1` です。
 
 `features.compatibility_profiles` は文字列の配列です。その endpoint の operator が
 実際に有効化した互換プロファイルの token だけが並びます。既定値はなく、何も
@@ -91,12 +93,12 @@ PAT の公開 Accounts surface は次のとおりです。これらの応答は�
 
 | メソッド | パス                                  | 認証                               | 説明                                |
 | -------- | ------------------------------------- | ---------------------------------- | ----------------------------------- |
-| GET      | `/v1/account/tokens`                  | account session                    | 互換用の対話的一覧                  |
-| GET      | `/v1/account/tokens/scopes`           | account session                    | 現在の self-service scope catalog   |
-| POST     | `/v1/account/tokens`                  | account session                    | PAT を作成する                      |
-| POST     | `/v1/account/tokens/{tokenId}/revoke` | account session                    | PAT を失効する                      |
-| GET      | `/v1/account/tokens/inventory.v1`     | account session                    | 完全な versioned metadata inventory |
-| GET      | `/v1/account/tokens/current`          | `Authorization: Bearer <PAT>` のみ | 提示した PAT 自身の現在の authority |
+| GET      | `/api/v1/account/tokens`                  | account session                    | 対話的一覧                          |
+| GET      | `/api/v1/account/tokens/scopes`           | account session                    | 現在の self-service scope catalog   |
+| POST     | `/api/v1/account/tokens`                  | account session                    | PAT を作成する                      |
+| POST     | `/api/v1/account/tokens/{tokenId}/revoke` | account session                    | PAT を失効する                      |
+| GET      | `/api/v1/account/tokens/inventory.v1`     | account session                    | 完全な versioned metadata inventory |
+| GET      | `/api/v1/account/tokens/current`          | `Authorization: Bearer <PAT>` のみ | 提示した PAT 自身の現在の authority |
 
 scope catalog は core の `read` / `write` と、同じ owning route が
 `selfServicePatScopes` で明示した allowlist 済み extension scope だけを
@@ -104,7 +106,7 @@ self-service として返します。Cloud AI の `ai.models.read` / `ai.chat` /
 `ai.embeddings` と `resources:read` は Workspace binding 必須です。`admin` や
 route が明示していない scope を request scope から推測して公開しません。
 
-`GET /v1/account/tokens/inventory.v1` は既存 dashboard 用一覧を置き換えません。既定
+`GET /api/v1/account/tokens/inventory.v1` は既存 dashboard 用一覧を置き換えません。既定
 `limit` は 50、最大は 100 で、`created_at`、次に `token_id` の昇順です。応答 kind は
 `takosumi.account-pat-inventory@v1` で、閉じた envelope の field は `kind`、`tokens`、
 `total`、`returned`、`limit`、`truncated`、`next_cursor` です。`total` は cursor 適用前の
@@ -115,7 +117,7 @@ cursor anchor、`limit + 1` page を読みます。各 token は `token_id`、`s
 opaque で、malformed または subject に属する exact anchor が失われた cursor は 400
 `invalid_request` です。
 
-`GET /v1/account/tokens/current` は ambient cookie、
+`GET /api/v1/account/tokens/current` は ambient cookie、
 `x-takosumi-account-session`、query/body の token を使いません。提示された opaque bearer
 を account session、OAuth access token、PAT の全 store に照合し、衝突、non-PAT、失効、
 期限切れは 401 `invalid_token` です。成功 kind は
@@ -145,12 +147,12 @@ provider cache / mirror があれば `tofu init` はそれを利用し、なけ�
 OpenTofu registry 経路を利用します。mirror を必須にする場合は operator policy
 として明示します。
 
-Stack flow のエンドポイントはすべて `/api/v1` の下にあります。`/v1` は別物で、
-後述の Resource / Interface 制御面です。この 2 つを取り違えると認証は通っても
-404 になります。
+Takosumi の公開 JSON API はすべて `/api/v1` の下にあります。旧 `/v1` は公開 API
+ではなく、既知の旧 path は 404 で fail closed します。OIDC/OAuth、well-known、
+health/metrics、operator-only `/internal/v1` はそれぞれ独立した protocol/authority です。
 
 正本は `accounts/service/src/control-route-inventory.ts` で、公開されているのは
-次の 81 件です。
+次の 87 件です。
 
 **Account views**
 
@@ -236,6 +238,44 @@ Run は必ず計画の作成から始まります。
 | GET      | `/api/v1/sources/{sourceId}/snapshots/{sourceSnapshotId}/deployment-profiles` | その Snapshot で実在を確認できた DB 所有のデプロイ方法だけを一覧する |
 | POST     | `/api/v1/sources/{sourceId}/compatibility-check` | 互換性レポートを作る        |
 | GET      | `/api/v1/compatibility-reports/{reportId}`       | 互換性レポートを読む        |
+
+**Git install plan**
+
+| メソッド | パス                                                        | 説明                                       |
+| -------- | ----------------------------------------------------------- | ------------------------------------------ |
+| POST     | `/api/v1/workspaces/{workspaceId}/install-plans`            | Git から reviewable Plan Run まで準備する |
+| GET      | `/api/v1/install-plans/{installPlanId}`                      | coordinator の現在状態を読む              |
+| POST     | `/api/v1/install-plans/{installPlanId}/reconcile`            | 明示的に一段だけ進める                     |
+
+作成には `Idempotency-Key` が必須です。同じ Workspace・actor・key と同じ正規化 request
+は同じ record を返し、内容が異なれば 409 になります。coordinator が保持するのは Source、
+SourceSnapshot、InstallConfig、Capsule、Plan Run の参照と bounded diagnostic だけです。
+variable 値、credential、token、Output 値は受け付けません。`reviewable` になった後の
+承認と apply は `Run` API だけが所有し、install-plan 専用 apply route はありません。
+
+**Git revision plan**
+
+| メソッド | パス                                                        | 説明                                               |
+| -------- | ----------------------------------------------------------- | -------------------------------------------------- |
+| POST     | `/api/v1/capsules/{capsuleId}/revision-plans`               | 既存 Capsule の Git ref 更新 intent を作成・再生する |
+| GET      | `/api/v1/revision-plans/{revisionPlanId}`                   | coordinator の現在状態を副作用なしで読む          |
+| POST     | `/api/v1/revision-plans/{revisionPlanId}/reconcile`         | 明示的に一段だけ進める                             |
+
+作成 body は `{ "ref": "<git-ref>" }` だけを受け付け、`Idempotency-Key` が
+必須です。新規作成は 201、同じ key と同じ正規化 request の再生は 200、同じ key の
+別 request は 409 です。coordinator は既存 Capsule・Source・InstallConfig・state generation を
+固定し、Source の既定 ref/path を変更せず、対象 ref の deterministic SourceSyncRun /
+SourceSnapshot、互換性レポート、Plan Run を順に作ります。各 mutation は同じ ID で
+lost acknowledgement を回収し、未確認の mutation は 202 と `nextAction: "reconcile"` を
+返します。`reviewable` では `nextAction: "review_run"` で停止します。rollback は引き続き
+`POST /api/v1/state-versions/{stateVersionId}/rollback-plan` が所有します。
+
+revision plan の作成や reviewable 化だけでは Capsule の追跡先は変わりません。対象 Plan を
+通常の Run API で apply して新しい `currentStateVersionId` が採用された後だけ、その
+StateVersion が参照する Plan Run の SourceSnapshot が Capsule の追跡正本になります。
+`GET /api/v1/capsules/{capsuleId}` はこの非 secret な導出値を
+`adoptedSourceRevision: { sourceSnapshotId, ref, path, resolvedCommit }` として返します。
+初回 apply 前はこの field はありません。
 
 **Run と StateVersion**
 
@@ -349,10 +389,13 @@ Run には次を保存します。
 - audit evidence
 
 `Source.defaultRef` は branch / tag / commit を受け取ります。`Source.autoSync`
-を有効にすると、scheduler または source webhook が Git ref を同期します。解決された
-commit は `SourceSnapshot` として保存されます。active Capsule がその Source を追跡して
-いて、現在 apply 済みの SourceSnapshot と新しい commit が異なれば、Capsule は `stale`
-になります。そこからは既存の Workspace update / RunGroup が reviewable plan を作り、
+を有効にすると、scheduler または source webhook は Source の既定 ref/path に加え、
+その Source を使う各 Capsule が apply 済み StateVersion で採用した ref/path を同期します。
+解決された commit は `SourceSnapshot` として保存されます。同じ ref/path lane を採用している
+active Capsule の現在 snapshot と新しい commit が異なるときだけ、Capsule は `stale`
+になります。別 lane の更新で stale にしたり、Source の既定 ref を書き換えたりしません。
+通常の update plan も採用済み lane の最新 snapshot を使います。そこからは既存の
+Workspace update / RunGroup が reviewable plan を作り、
 apply は通常の Run approval に従います。app artifact をどこから取るかは、あくまで
 OpenTofu module の中で決まります。
 

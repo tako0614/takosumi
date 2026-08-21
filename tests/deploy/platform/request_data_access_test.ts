@@ -37,7 +37,7 @@ describe("classifyPlatformRequestDataAccess", () => {
     ).toEqual({ kind: "data-free", surface: "product-discovery" });
     expect(
       classifyPlatformRequestDataAccess(
-        request("/v1/capabilities", "HEAD"),
+        request("/api/v1/capabilities", "HEAD"),
         routingEnv(),
       ),
     ).toEqual({ kind: "data-free", surface: "product-discovery" });
@@ -49,8 +49,8 @@ describe("classifyPlatformRequestDataAccess", () => {
     for (const path of [
       "/.well-known/takosumi/",
       "/.well-known/takosumi/extra",
-      "/v1/capabilities/",
-      "/v1/capabilities/extra",
+      "/api/v1/capabilities/",
+      "/api/v1/capabilities/extra",
       "/livez",
     ]) {
       expect(
@@ -70,23 +70,23 @@ describe("classifyPlatformRequestDataAccess", () => {
     }
     expect(
       classifyPlatformRequestDataAccess(
-        request("/v1/auth/providers"),
+        request("/api/v1/auth/providers"),
         routingEnv(),
       ),
     ).toEqual({ kind: "data-free", surface: "identity-discovery" });
     expect(
       classifyPlatformRequestDataAccess(
-        request("/v1/account/session/me"),
+        request("/api/v1/account/session/me"),
         routingEnv(),
       ),
     ).toEqual({ kind: "stateful", targets: ["accounts"] });
     for (const path of [
       "/.well-known/openid-configuration/extra",
       "/oauth/jwks/extra",
-      "/v1/auth/providers/extra",
+      "/api/v1/auth/providers/extra",
       "/oauth/introspect",
       "/oauth/userinfo",
-      "/v1/account/session/me/extra",
+      "/api/v1/account/session/me/extra",
     ]) {
       expect(
         classifyPlatformRequestDataAccess(request(path), routingEnv()),
@@ -199,7 +199,7 @@ describe("classifyPlatformRequestDataAccess", () => {
     for (const input of [
       ["/", "POST"],
       ["/healthz", "POST"],
-      ["/v1/capabilities", "OPTIONS"],
+      ["/api/v1/capabilities", "OPTIONS"],
       ["/assets/index-%4AC1Lg-Vp.js", "GET"],
       ["/settings%2Fmanage", "GET"],
     ] as const) {

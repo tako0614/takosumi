@@ -22,18 +22,11 @@ export function helpText(): string {
       "  status <run-id>         Run の状態を表示",
       "  logs   <run-id>         Run のログを表示",
       "",
-      "Resource Shape:",
-      "  resources               Resource の preview / apply / import / drift 操作",
-      "  form-availability       exact FormRef の利用可否を確認",
-      "",
       "Operator:",
       "  connections             operator connection と internal resolver を管理",
       "  install-configs         versioned service-side config patch を適用",
-      "  form-activations        exact FormRef の公開ポリシーを管理",
       "  form-packages           信頼済み Form Package を install / reverify",
       "  offering-catalogs       汎用 Offering catalog と利用可否を管理",
-      "  target-pools            TargetPool 宣言を管理",
-      "  space-policies          SpacePolicy 宣言を管理",
       "",
       "Install link の例:",
       "  export TAKOSUMI_DEPLOY_CONTROL_URL=https://takosumi.example.com",
@@ -52,18 +45,11 @@ export function helpText(): string {
     "  status <run-id>         show a Run's status",
     "  logs   <run-id>         show a Run's logs",
     "",
-    "Resource Shape:",
-    "  resources               Preview and reconcile typed Resources",
-    "  form-availability       Inspect exact FormRef availability",
-    "",
     "Operator:",
     "  connections             Manage operator connections and internal resolvers",
     "  install-configs         Apply versioned service-side config patches",
-    "  form-activations        Manage exact FormRef audience policy",
     "  form-packages           Install or reverify trusted Form Packages",
     "  offering-catalogs       Manage generic Offering catalogs and availability",
-    "  target-pools            Manage TargetPool declarations",
-    "  space-policies          Manage SpacePolicy declarations",
     "",
     "Install link example:",
     "  export TAKOSUMI_DEPLOY_CONTROL_URL=https://takosumi.example.com",
@@ -113,54 +99,6 @@ export function installConfigsPatchHelpText(): string {
     "",
     "The file kind must be takosumi.install-config-patch@v1.",
     "--url <Takosumi origin> / --token <operator bearer> / --json",
-  ].join("\n");
-}
-
-export function formAvailabilityHelpText(): string {
-  if (isJapaneseCli()) {
-    return [
-      "takosumi form-availability list --space <id>",
-      "",
-      "principal に対する exact FormRef の known / installed / executable / activated / available 状態を表示します。",
-      "完全一致検索: --type --version --schema-digest --package-digest",
-      "共通オプション: --url、--token、--json、--limit、--cursor",
-    ].join("\n");
-  }
-  return [
-    "takosumi form-availability list --space <id>",
-    "",
-    "Shows known, installed, executable, activated, and principal availability for exact FormRefs.",
-    "Exact lookup: --type --version --schema-digest --package-digest",
-    "Common options: --url, --token, --json, --limit, --cursor",
-  ].join("\n");
-}
-
-export function formActivationsHelpText(): string {
-  if (isJapaneseCli()) {
-    return [
-      "takosumi form-activations <command>",
-      "",
-      "コマンド:",
-      "  list [--limit <n> --cursor <opaque>]",
-      "  get <id>",
-      "  create --file <activation.json>",
-      "  update <id> --file <activation-update.json>",
-      "",
-      "operator bearer のみが利用できます。価格、SKU、請求、容量、SLA は FormActivation に含めません。",
-      "共通オプション: --url、--token、--json",
-    ].join("\n");
-  }
-  return [
-    "takosumi form-activations <command>",
-    "",
-    "Commands:",
-    "  list [--limit <n> --cursor <opaque>]",
-    "  get <id>",
-    "  create --file <activation.json>",
-    "  update <id> --file <activation-update.json>",
-    "",
-    "Only the operator bearer may use this API. FormActivation contains no price, SKU, billing, capacity, or SLA.",
-    "Common options: --url, --token, --json",
   ].join("\n");
 }
 
@@ -220,117 +158,6 @@ export function formPackagesHelpText(): string {
     "",
     "Requires the host-internal deploy-control URL and an instance-wide operator bearer.",
     "Do not put package bytes, signing trust policy, or secrets in the request file.",
-    "Common options: --url, --token, --json",
-  ].join("\n");
-}
-
-export function resourcesHelpText(): string {
-  if (isJapaneseCli()) {
-    return [
-      "takosumi resources <command>",
-      "",
-      "コマンド:",
-      "  list --space <id> [--limit <n> --cursor <opaque>]",
-      "  get <kind> <name> --space <id>",
-      "  events <kind> <name> --space <id> [--limit <n> --cursor <opaque>]",
-      "  preview --file <resource.json>",
-      "  apply <kind> <name> --file <resource.json> [--yes]",
-      "  import <kind> <name> --file <resource-with-native-id.json>",
-      "  observe <kind> <name> --space <id>",
-      "  refresh <kind> <name> --space <id>",
-      "  delete <kind> <name> --space <id> [--managed-by <manager>] [--force]",
-      "",
-      "共通オプション:",
-      "  --url <deploy-control-url>",
-      "  --token <deploy-control-bearer>",
-      "  --json",
-      "  --yes  preview した plan と価格を承認して apply",
-      "",
-      "write request は non-secret JSON object として file から読みます。",
-      "--force は operator の break-glass 認可がある endpoint だけで成功します。",
-      "--managed-by を省略した delete は opentofu 所有 Resource だけを対象にします。",
-    ].join("\n");
-  }
-  return [
-    "takosumi resources <command>",
-    "",
-    "Commands:",
-    "  list --space <id> [--limit <n> --cursor <opaque>]",
-    "  get <kind> <name> --space <id>",
-    "  events <kind> <name> --space <id> [--limit <n> --cursor <opaque>]",
-    "  preview --file <resource.json>",
-    "  apply <kind> <name> --file <resource.json> [--yes]",
-    "  import <kind> <name> --file <resource-with-native-id.json>",
-    "  observe <kind> <name> --space <id>",
-    "  refresh <kind> <name> --space <id>",
-    "  delete <kind> <name> --space <id> [--managed-by <manager>] [--force]",
-    "",
-    "Common options:",
-    "  --url <deploy-control-url>",
-    "  --token <deploy-control-bearer>",
-    "  --json",
-    "  --yes  approve the previewed plan and price, then apply",
-    "",
-    "Write requests are read from non-secret JSON object files.",
-    "--force succeeds only when the endpoint grants operator break-glass access.",
-    "Without --managed-by, delete targets only Resources owned by opentofu.",
-  ].join("\n");
-}
-
-export function targetPoolsHelpText(): string {
-  if (isJapaneseCli()) {
-    return [
-      "takosumi target-pools <command>",
-      "",
-      "コマンド:",
-      "  list --space <id> [--limit <n> --cursor <opaque>]",
-      "  get <name> --space <id>",
-      "  put <name> --file <target-pool.json>",
-      "  delete <name> --space <id>",
-      "",
-      "put file は top-level の space と spec.targets を持つ non-secret JSON object です。",
-      "共通オプション: --url、--token、--json",
-    ].join("\n");
-  }
-  return [
-    "takosumi target-pools <command>",
-    "",
-    "Commands:",
-    "  list --space <id> [--limit <n> --cursor <opaque>]",
-    "  get <name> --space <id>",
-    "  put <name> --file <target-pool.json>",
-    "  delete <name> --space <id>",
-    "",
-    "The put file is a non-secret JSON object with top-level space and spec.targets.",
-    "Common options: --url, --token, --json",
-  ].join("\n");
-}
-
-export function spacePoliciesHelpText(): string {
-  if (isJapaneseCli()) {
-    return [
-      "takosumi space-policies <command>",
-      "",
-      "コマンド:",
-      "  list --space <id> [--limit <n> --cursor <opaque>]",
-      "  get <name> --space <id>",
-      "  put <name> --file <space-policy.json>",
-      "  delete <name> --space <id>",
-      "",
-      "put file は top-level の space と spec を持つ non-secret JSON object です。",
-      "共通オプション: --url、--token、--json",
-    ].join("\n");
-  }
-  return [
-    "takosumi space-policies <command>",
-    "",
-    "Commands:",
-    "  list --space <id> [--limit <n> --cursor <opaque>]",
-    "  get <name> --space <id>",
-    "  put <name> --file <space-policy.json>",
-    "  delete <name> --space <id>",
-    "",
-    "The put file is a non-secret JSON object with top-level space and spec.",
     "Common options: --url, --token, --json",
   ].join("\n");
 }

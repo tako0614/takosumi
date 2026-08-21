@@ -231,7 +231,7 @@ test("Capsule required Interface grants the exact pairwise Principal idempotentl
           value: "https://capsule.example.test/gateway/ai/v1",
         },
       },
-      access: { visibility: "workspace", resourceUriInput: "endpoint" },
+      access: { visibility: "private", resourceUriInput: "endpoint" },
     },
   });
   const requirement = {
@@ -280,6 +280,161 @@ test("Capsule required Interface grants the exact pairwise Principal idempotentl
       requirements: [requirement],
     }),
   ).rejects.toThrow("conflicting or revoked Principal grant");
+});
+
+test("Capsule required Interface resolves one workspace-visible Capsule provider", async () => {
+  const stores = createInMemoryInterfaceStores();
+  let id = 0;
+  const service = new InterfaceService({
+    stores,
+    now: () => NOW,
+    newId: (prefix) => `${prefix}_${++id}`,
+    oauth2ResourceAuthorizer: () => true,
+    credentialIssuer: {
+      issuePrincipalOAuth2Token: async () => ({
+        accessToken: "test-short-lived-token",
+        expiresAt: "2026-07-13T12:01:00.000Z",
+      }),
+    },
+  });
+  const iface = await service.create({
+    workspaceId: "workspace_1",
+    name: "capsule-mcp",
+    ownerRef: { kind: "Capsule", id: "capsule_provider" },
+    spec: {
+      type: "mcp.server",
+      version: "2025-11-25",
+      document: { transport: "streamable-http" },
+      inputs: {
+        endpoint: {
+          source: "literal",
+          value: "https://capsule.example.test/mcp",
+        },
+      },
+      access: { visibility: "workspace", resourceUriInput: "endpoint" },
+    },
+  });
+  const requirement = {
+    key: "tools",
+    interface: { type: "mcp.server", version: "2025-11-25" },
+    permissions: ["mcp.invoke"],
+    delivery: { type: "oauth2" },
+  } as const;
+
+  await service.ensureCapsuleRequiredInterfaces({
+    workspaceId: "workspace_1",
+    capsuleId: "capsule_consumer",
+    principalId: "pairwise_consumer",
+    requirements: [requirement],
+  });
+
+  expect(await service.listBindings(iface.metadata.id)).toMatchObject([
+    {
+      metadata: {
+        materializedFrom: {
+          source: "capsule_required_interface",
+          capsuleId: "capsule_consumer",
+          requirementKey: "tools",
+        },
+      },
+      spec: {
+        subjectRef: { kind: "Principal", id: "pairwise_consumer" },
+        permissions: ["mcp.invoke"],
+        delivery: { type: "oauth2" },
+      },
+      status: { phase: "Ready" },
+    },
+  ]);
+
+  const laterProvider = await service.create({
+    workspaceId: "workspace_1",
+    name: "capsule-mcp-later",
+    ownerRef: { kind: "Capsule", id: "capsule_provider_later" },
+    spec: {
+      type: "mcp.server",
+      version: "2025-11-25",
+      document: { transport: "streamable-http" },
+      inputs: {
+        endpoint: {
+          source: "literal",
+          value: "https://later.example.test/mcp",
+        },
+      },
+      access: { visibility: "workspace", resourceUriInput: "endpoint" },
+    },
+  });
+  await service.ensureCapsuleRequiredInterfaces({
+    workspaceId: "workspace_1",
+    capsuleId: "capsule_consumer",
+    principalId: "pairwise_consumer",
+    requirements: [requirement],
+  });
+  expect(await service.listBindings(laterProvider.metadata.id)).toEqual([]);
+
+  await service.retire(iface.metadata.id, iface.metadata.generation);
+  await expect(
+    service.ensureCapsuleRequiredInterfaces({
+      workspaceId: "workspace_1",
+      capsuleId: "capsule_consumer",
+      principalId: "pairwise_consumer",
+      requirements: [requirement],
+    }),
+  ).rejects.toThrow("pinned Interface is unavailable");
+  expect(await service.listBindings(laterProvider.metadata.id)).toEqual([]);
+});
+
+test("Capsule required Interface fails closed when workspace providers are ambiguous", async () => {
+  const stores = createInMemoryInterfaceStores();
+  let id = 0;
+  const service = new InterfaceService({
+    stores,
+    now: () => NOW,
+    newId: (prefix) => `${prefix}_${++id}`,
+    oauth2ResourceAuthorizer: () => true,
+  });
+  const providers = await Promise.all(
+    ["capsule_provider_a", "capsule_provider_b"].map((capsuleId) =>
+      service.create({
+        workspaceId: "workspace_1",
+        name: `${capsuleId}-mcp`,
+        ownerRef: { kind: "Capsule", id: capsuleId },
+        spec: {
+          type: "mcp.server",
+          version: "2025-11-25",
+          document: { transport: "streamable-http" },
+          inputs: {
+            endpoint: {
+              source: "literal",
+              value: `https://${capsuleId}.example.test/mcp`,
+            },
+          },
+          access: { visibility: "workspace", resourceUriInput: "endpoint" },
+        },
+      }),
+    ),
+  );
+
+  await expect(
+    service.ensureCapsuleRequiredInterfaces({
+      workspaceId: "workspace_1",
+      capsuleId: "capsule_consumer",
+      principalId: "pairwise_consumer",
+      requirements: [
+        {
+          key: "tools",
+          interface: { type: "mcp.server", version: "2025-11-25" },
+          permissions: ["mcp.invoke"],
+          delivery: { type: "oauth2" },
+        },
+      ],
+    }),
+  ).rejects.toThrow("is ambiguous");
+  const [firstProvider, secondProvider] = providers;
+  if (!firstProvider || !secondProvider) {
+    throw new Error("expected two provider fixtures");
+  }
+  expect(await service.listBindings(firstProvider.metadata.id)).toEqual([]);
+  expect(await service.listBindings(secondProvider.metadata.id)).toEqual([]);
 });
 
 test("Principal oauth2 delivery requires the host issuer and mints only from an exact Ready binding", async () => {

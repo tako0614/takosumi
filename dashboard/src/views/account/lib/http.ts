@@ -3,8 +3,8 @@
  *
  * A thin fetch wrapper that:
  *   - sends the HttpOnly `takosumi_session` cookie via `credentials: "include"`
- *     against the same-origin account plane (`/v1/*`, mounted in-process at the
- *     worker origin root). The cookie is the sole credential.
+ *     against the same-origin account API (`/api/v1/*`). The cookie is the
+ *     sole credential. Upstream OAuth broker redirects use `/oauth/upstream/*`.
  *   - on 401, clears the session and redirects to /sign-in.
  *   - parses JSON on success, throws {@link ApiError} on non-2xx with the
  *     server's {error, error_description} body when available.

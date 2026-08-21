@@ -19,11 +19,11 @@ describe("isAccountsApiPath", () => {
       "/oauth/authorize",
       "/oauth/token",
       "/oauth/jwks",
-      "/v1/account/session/me",
-      "/v1/account/tokens",
-      "/v1/auth/upstream/callback",
-      "/v1/auth/passkeys/register/options",
-      "/v1/privacy/requests",
+      "/api/v1/account/session/me",
+      "/api/v1/account/tokens",
+      "/oauth/upstream/callback",
+      "/api/v1/auth/passkeys/register/options",
+      "/api/v1/privacy/requests",
       "/internal/v1/run-callback",
     ];
     for (const path of apiPaths) {
@@ -50,6 +50,16 @@ describe("isAccountsApiPath", () => {
   test("matches a prefix exactly and as a path boundary, not as a substring", () => {
     expect(isAccountsApiPath("/v1")).toBe(true);
     expect(isAccountsApiPath("/v1/")).toBe(true);
+    for (const path of [
+      "/v1/account/session/me",
+      "/v1/account/tokens",
+      "/v1/auth/providers",
+      "/v1/auth/passkeys/register/options",
+      "/v1/privacy/requests",
+      "/v1/auth/upstream/callback",
+    ]) {
+      expect(isAccountsApiPath(path)).toBe(true);
+    }
     // A path that merely starts with the prefix string but is a different
     // segment must not match.
     expect(isAccountsApiPath("/v1foo")).toBe(false);

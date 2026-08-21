@@ -12,7 +12,7 @@ export const TAKOSUMI_ACCOUNTS_JWKS_PATH = "/oauth/jwks";
 export const TAKOSUMI_ACCOUNTS_USERINFO_PATH = "/oauth/userinfo";
 export const TAKOSUMI_ACCOUNTS_REVOKE_PATH = "/oauth/revoke";
 export const TAKOSUMI_ACCOUNTS_INTROSPECT_PATH = "/oauth/introspect";
-export const TAKOSUMI_ACCOUNTS_ACCOUNT_TOKENS_PATH = "/v1/account/tokens";
+export const TAKOSUMI_ACCOUNTS_ACCOUNT_TOKENS_PATH = "/api/v1/account/tokens";
 export const TAKOSUMI_ACCOUNTS_PAT_SCOPE_CATALOG_PATH =
   `${TAKOSUMI_ACCOUNTS_ACCOUNT_TOKENS_PATH}/scopes`;
 export const TAKOSUMI_ACCOUNTS_PAT_SCOPE_CATALOG_KIND =
@@ -25,11 +25,12 @@ export const TAKOSUMI_ACCOUNTS_PAT_INVENTORY_PATH =
   `${TAKOSUMI_ACCOUNTS_ACCOUNT_TOKENS_PATH}/inventory.v1`;
 export const TAKOSUMI_ACCOUNTS_PAT_INVENTORY_KIND =
   "takosumi.account-pat-inventory@v1" as const;
-export const TAKOSUMI_ACCOUNTS_PRIVACY_REQUESTS_PATH = "/v1/privacy/requests";
+export const TAKOSUMI_ACCOUNTS_PRIVACY_REQUESTS_PATH =
+  "/api/v1/privacy/requests";
 export const TAKOSUMI_ACCOUNTS_UPSTREAM_AUTHORIZE_PATH =
-  "/v1/auth/upstream/authorize";
+  "/oauth/upstream/authorize";
 export const TAKOSUMI_ACCOUNTS_UPSTREAM_CALLBACK_PATH =
-  "/v1/auth/upstream/callback";
+  "/oauth/upstream/callback";
 /**
  * Public, unauthenticated read of which sign-in methods the operator has
  * actually configured for this worker. The sign-in screen reads this so it can
@@ -38,15 +39,16 @@ export const TAKOSUMI_ACCOUNTS_UPSTREAM_CALLBACK_PATH =
  * upstream OAuth env vars). It exposes provider ids + enabled flags only — no
  * client ids, secrets, redirect URIs, or any other configuration value.
  */
-export const TAKOSUMI_ACCOUNTS_AUTH_PROVIDERS_PATH = "/v1/auth/providers";
+export const TAKOSUMI_ACCOUNTS_AUTH_PROVIDERS_PATH =
+  "/api/v1/auth/providers";
 export const TAKOSUMI_ACCOUNTS_PASSKEY_REGISTER_OPTIONS_PATH =
-  "/v1/auth/passkeys/register/options";
+  "/api/v1/auth/passkeys/register/options";
 export const TAKOSUMI_ACCOUNTS_PASSKEY_REGISTER_COMPLETE_PATH =
-  "/v1/auth/passkeys/register/complete";
+  "/api/v1/auth/passkeys/register/complete";
 export const TAKOSUMI_ACCOUNTS_PASSKEY_AUTHENTICATE_OPTIONS_PATH =
-  "/v1/auth/passkeys/authenticate/options";
+  "/api/v1/auth/passkeys/authenticate/options";
 export const TAKOSUMI_ACCOUNTS_PASSKEY_AUTHENTICATE_COMPLETE_PATH =
-  "/v1/auth/passkeys/authenticate/complete";
+  "/api/v1/auth/passkeys/authenticate/complete";
 export const TAKOSUMI_ACCOUNTS_PAT_SCOPES = [
   "read",
   "write",
@@ -160,7 +162,7 @@ export type TakosumiAccountsWorkspaceRole =
 
 /**
  * Closed, read-only projection of the authority carried by the PAT presented
- * to `GET /v1/account/tokens/current`.
+ * to `GET /api/v1/account/tokens/current`.
  */
 export interface TakosumiAccountsCurrentPatAuthorityResponse {
   readonly kind: typeof TAKOSUMI_ACCOUNTS_CURRENT_PAT_AUTHORITY_KIND;
@@ -276,7 +278,7 @@ export interface TakosumiAccountsConfig {
 }
 
 /**
- * A single sign-in method as reported by `GET /v1/auth/providers`. `id` is the
+ * A single sign-in method as reported by `GET /api/v1/auth/providers`. `id` is the
  * upstream provider id (for example `"company-oidc"`) or
  * `"passkey"`; `enabled` reflects whether the operator has configured it on
  * this worker. Current servers always publish `label` and `protocol`, so
@@ -292,7 +294,7 @@ export interface TakosumiAccountsAuthProvider {
   readonly protocol: string;
 }
 
-/** Body of `GET /v1/auth/providers`. */
+/** Body of `GET /api/v1/auth/providers`. */
 export interface TakosumiAccountsAuthProvidersResponse {
   readonly providers: readonly TakosumiAccountsAuthProvider[];
 }

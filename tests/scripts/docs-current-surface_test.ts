@@ -264,9 +264,9 @@ test("public docs explain generic OSS Offering selection without Cloud binding i
   }
   const api =
     docs.find((doc) => doc.path === "docs/en/reference/api.md")?.text ?? "";
-  assert.match(api, /POST \/v1\/offering-catalogs/);
-  assert.match(api, /POST \/v1\/offering-availability\/query/);
-  assert.match(api, /POST \/v1\/offering-selections\/resolve/);
+  assert.match(api, /POST \/internal\/v1\/offering-catalogs/);
+  assert.match(api, /POST \/internal\/v1\/offering-availability\/query/);
+  assert.match(api, /POST \/internal\/v1\/offering-selections\/resolve/);
 });
 
 test("self-hosted Takos keeps Takosumi control-plane services outside the product worker", async () => {
@@ -364,7 +364,7 @@ test("Takosumi internal authority docs stay outside the public docs surface", as
   );
   assert.match(finalPlan, /historical planning record|superseded/);
   assert.match(finalPlan, /present Takosumi OSS contract is \[Core Spec\]/);
-  assert.match(finalPlan, /TAKOSUMI_LEGACY_RESOURCE_DRAIN_ENABLED=1/);
+  assert.match(finalPlan, /legacy edge is unconditionally absent/);
   assert.doesNotMatch(finalPlan, /authoritative Takosumi product direction/);
   assert.doesNotMatch(finalPlan, /## 11\.|## 14\./);
 });
@@ -415,8 +415,8 @@ test("core spec names the final OSS model and excludes operator-provided capacit
   assert.match(coreSpec, /Takoform is an ordinary external provider/);
   assert.match(coreSpec, /does not host a Form Registry/);
   assert.match(coreSpec, /Takosumi Cloud or another external Host/);
-  assert.match(coreSpec, /TAKOSUMI_LEGACY_RESOURCE_DRAIN_ENABLED=1/);
-  assert.match(coreSpec, /recognized but retired operations return\s+`410`/);
+  assert.match(coreSpec, /old `Resource Shape`.*HTTP families are retired/s);
+  assert.match(coreSpec, /unconditional `404`/);
   assert.doesNotMatch(coreSpec, /Final Plan.*current direction|Final Plan.*authoritative/);
 });
 
@@ -446,7 +446,7 @@ test("Service Form migration docs keep portable identity separate from the old R
   assert.match(conformance, /No first-party provider source, release, custody, or public mirror lane exists/);
 });
 
-test("current docs keep the legacy drain bounded and externalize Form hosting", async () => {
+test("current docs keep retired Resource HTTP surfaces absent and externalize Form hosting", async () => {
   const paths = [
     "docs/internal/core-spec.md",
     "docs/reference/configuration.md",
@@ -460,12 +460,10 @@ test("current docs keep the legacy drain bounded and externalize Form hosting", 
   );
   const combined = docs.map(({ text }) => text).join("\n");
 
-  assert.match(combined, /TAKOSUMI_LEGACY_RESOURCE_DRAIN_ENABLED=1/);
-  assert.match(combined, /Resource.*list\/read.*events.*observe.*delete/s);
-  assert.match(combined, /TargetPool\/SpacePolicy.*GET.*HEAD.*DELETE/s);
-  assert.match(combined, /default(?:s)?[^\n]*`404`|`404`[^\n]*default/s);
-  assert.match(combined, /discovery[^\n]*(?:unavailable|remain unavailable)/i);
-  assert.match(combined, /writes[^\n]*(?:unavailable|remain unavailable|disabled)/i);
+  assert.doesNotMatch(combined, /TAKOSUMI_LEGACY_RESOURCE_DRAIN_ENABLED=1/);
+  assert.match(combined, /unconditionally retired.*`404`/s);
+  assert.match(combined, /discovery[^\n]*(?:unavailable|remain unavailable|retired)/i);
+  assert.match(combined, /writes[^\n]*(?:unavailable|remain unavailable|disabled|retired)/i);
   assert.match(combined, /Takosumi Cloud (?:or another external )?Host/i);
   assert.match(combined, /ordinary provider/i);
 

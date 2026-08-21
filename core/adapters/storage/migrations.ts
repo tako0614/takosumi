@@ -641,6 +641,29 @@ export const postgresStorageTableDefinitions: readonly StorageTableDefinition[] 
       indexes: [["space_id"], ["space_id", "created_at", "id"]],
     },
     {
+      name: "takosumi_git_install_plans",
+      domain: "deploy",
+      columns: [
+        "id",
+        "workspace_id",
+        "actor_subject",
+        "idempotency_key_hash",
+        "request_digest",
+        "phase",
+        "generation",
+        "record_json",
+        "reconcile_lease_token",
+        "reconcile_lease_expires_at",
+        "created_at",
+        "updated_at",
+      ],
+      primaryKey: ["id"],
+      uniqueConstraints: [
+        ["workspace_id", "actor_subject", "idempotency_key_hash"],
+      ],
+      indexes: [["workspace_id", "phase"]],
+    },
+    {
       name: "takosumi_capsules",
       domain: "deploy",
       columns: [
@@ -4666,5 +4689,33 @@ drop function if exists takosumi_bump_capsule_execution_authority_epoch();
 drop index if exists takosumi_capsules_execution_authority_exact_idx;
 alter table takosumi_capsules
   drop column if exists execution_authority_epoch;`,
+    },
+    {
+      id: "deploy.git_install_plans.create",
+      version: 109,
+      domain: "deploy",
+      description:
+        "Create the durable Git install-plan coordinator ledger with actor-scoped idempotency and CAS reconcile leases.",
+      sql: `create table if not exists takosumi_git_install_plans (
+  id                         text    primary key,
+  workspace_id               text    not null,
+  actor_subject              text    not null,
+  idempotency_key_hash       text    not null,
+  request_digest             text    not null,
+  phase                      text    not null,
+  generation                 integer not null check (generation >= 0),
+  record_json                jsonb   not null,
+  reconcile_lease_token      text,
+  reconcile_lease_expires_at text,
+  created_at                 text    not null,
+  updated_at                 text    not null
+);
+create unique index if not exists takosumi_git_install_plans_actor_key_unique
+  on takosumi_git_install_plans (
+    workspace_id, actor_subject, idempotency_key_hash
+  );
+create index if not exists takosumi_git_install_plans_workspace_phase_idx
+  on takosumi_git_install_plans (workspace_id, phase);`,
+      down: `drop table if exists takosumi_git_install_plans;`,
     },
   ]);

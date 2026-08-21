@@ -79,9 +79,11 @@ describe("Cloud API key management", () => {
     expect(client).toContain("TAKOSUMI_ACCOUNTS_PAT_SCOPE_CATALOG_PATH");
     expect(client).toContain("takosumiAccountsAccountTokenRevokePath");
     expect(client).toContain('method: "POST"');
+    // Keep this negative assertion: the view must consume the canonical
+    // Accounts contract instead of reintroducing a retired literal.
     expect(client).not.toContain('"/v1/account/tokens"');
     expect(TAKOSUMI_ACCOUNTS_PAT_SCOPE_CATALOG_PATH).toBe(
-      "/v1/account/tokens/scopes",
+      "/api/v1/account/tokens/scopes",
     );
   });
 

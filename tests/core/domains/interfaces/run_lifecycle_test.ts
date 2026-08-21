@@ -1,4 +1,9 @@
 import { expect, test } from "bun:test";
+
+import type {
+  ApplyRun,
+  PlanRun,
+} from "@takosumi/internal/deploy-control-api";
 import { createTakosumiService } from "../../../../core/bootstrap.ts";
 import {
   applyExpectedGuardFromPlanRun,
@@ -156,12 +161,70 @@ output "endpoint" {
 
 test("restore and queued-destroy lifecycles keep Interface delivery fail-closed", async () => {
   const store = new InMemoryOpenTofuControlStore();
-  const { capsule } = await seedCapsuleModel(store, {
+  const { capsule, source, snapshot } = await seedCapsuleModel(store, {
     workspaceId: "workspace_lifecycle",
     capsuleId: "capsule_lifecycle",
     name: "runtime-app",
   });
   await seedProviderConnections(store, capsule);
+  const initialPlan: PlanRun = {
+    id: "plan_lifecycle_1",
+    workspaceId: capsule.workspaceId,
+    capsuleId: capsule.id,
+    capsuleCurrentStateVersionId: null,
+    capsuleContext: {
+      workspaceId: capsule.workspaceId,
+      capsuleId: capsule.id,
+      environment: capsule.environment,
+    },
+    source: {
+      kind: "git",
+      url: source.url,
+      commit: snapshot.resolvedCommit,
+    },
+    sourceSnapshotId: snapshot.id,
+    sourceDigest: "sha256:source-lifecycle",
+    operation: "create",
+    runnerProfileId: "opentofu-default",
+    variablesDigest: "sha256:variables-lifecycle",
+    requiredProviders: [],
+    status: "succeeded",
+    policy: { status: "passed", reasons: [], checkedAt: 1 },
+    policyDecisionDigest: "sha256:policy-lifecycle",
+    planDigest: PLAN_DIGEST,
+    auditEvents: [],
+    createdAt: 1,
+    updatedAt: 1,
+    appliedApplyRunId: "apply_lifecycle_1",
+  };
+  const initialApply: ApplyRun = {
+    id: "apply_lifecycle_1",
+    planRunId: initialPlan.id,
+    workspaceId: capsule.workspaceId,
+    capsuleId: capsule.id,
+    stateVersionId: "state_lifecycle_1",
+    operation: initialPlan.operation,
+    runnerProfileId: initialPlan.runnerProfileId,
+    status: "succeeded",
+    expected: {
+      planRunId: initialPlan.id,
+      capsuleId: capsule.id,
+      currentStateVersionId: null,
+      runnerProfileId: initialPlan.runnerProfileId,
+      sourceDigest: initialPlan.sourceDigest,
+      variablesDigest: initialPlan.variablesDigest,
+      policyDecisionDigest: initialPlan.policyDecisionDigest,
+      planDigest: initialPlan.planDigest!,
+      planArtifactDigest: PLAN_DIGEST,
+    },
+    stateBackend: { kind: "operator-managed", ref: "state://test" },
+    stateLock: { status: "recorded", backendRef: "state://test" },
+    auditEvents: [],
+    createdAt: 1,
+    updatedAt: 1,
+  };
+  await store.putPlanRun(initialPlan);
+  await store.putApplyRun(initialApply);
   await store.putStateVersion({
     id: "state_lifecycle_1",
     workspaceId: capsule.workspaceId,
@@ -170,7 +233,7 @@ test("restore and queued-destroy lifecycles keep Interface delivery fail-closed"
     generation: 1,
     stateRef: "states/lifecycle/1.tfstate.enc",
     digest: LOCK_DIGEST,
-    createdByRunId: "apply_lifecycle_1",
+    createdByRunId: initialApply.id,
     createdAt: "2026-07-13T00:00:00.000Z",
   });
   await store.putOutput({

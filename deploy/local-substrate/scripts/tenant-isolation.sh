@@ -36,7 +36,7 @@ mint_oidc_cookie_session() {
 	local loc1
 	loc1=$(curl -sk "${CURL_TLS[@]}" -o /dev/null -w "%{redirect_url}" \
 		-c "$jar" -b "$jar" \
-		"$BASE/v1/auth/upstream/authorize?provider=local-oidc&state=$state")
+		"$BASE/oauth/upstream/authorize?provider=local-oidc&state=$state")
 	local loc2
 	loc2=$(curl -sk "${CURL_TLS[@]}" -o /dev/null -w "%{redirect_url}" \
 		-c "$jar" -b "$jar" "$loc1")
@@ -55,7 +55,7 @@ mint_oidc_cookie_session() {
 	local resp
 	resp=$(curl -sk "${CURL_TLS[@]}" \
 		-c "$jar" -b "$jar" \
-		"$BASE/v1/auth/upstream/callback?provider=local-oidc&code=$code&state=$callback_state")
+		"$BASE/oauth/upstream/callback?provider=local-oidc&code=$code&state=$callback_state")
 	local subject
 	subject=$(echo "$resp" | python3 -c "
 import json, sys
@@ -67,7 +67,7 @@ print(d.get('subject', ''))
 		exit 1
 	fi
 	local me
-	me=$(curl -sk "${CURL_TLS[@]}" -b "$jar" "$BASE/v1/account/session/me")
+	me=$(curl -sk "${CURL_TLS[@]}" -b "$jar" "$BASE/api/v1/account/session/me")
 	local me_subject
 	me_subject=$(echo "$me" | python3 -c "
 import json, sys
@@ -89,7 +89,7 @@ read -r SUB_A JAR_A <<<"$(mint_oidc_cookie_session)"
 
 DEV_ME=$(curl -sk "${CURL_TLS[@]}" \
 	-H "Authorization: Bearer $LOCAL_DEV_SESSION_ID" \
-	"$BASE/v1/account/session/me")
+	"$BASE/api/v1/account/session/me")
 SUB_B=$(echo "$DEV_ME" | python3 -c "
 import json, sys
 d = json.loads(sys.stdin.read())

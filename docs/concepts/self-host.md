@@ -216,7 +216,7 @@ curl -s https://takosumi.example.com/.well-known/openid-configuration
 
 ```bash
 curl -s https://takosumi.example.com/.well-known/takosumi
-curl -s https://takosumi.example.com/v1/capabilities
+curl -s https://takosumi.example.com/api/v1/capabilities
 ```
 
 ここまでが通ったら、実データを 1 回読みます。dashboard でサインインして

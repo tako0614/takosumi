@@ -15,7 +15,7 @@ authority. Historical Resource/Form rows are migration evidence only.
 | Interfaces | Generic provider-neutral Interface and InterfaceBinding authorization remain supported for Workspace/Capsule runtime use | Secret-free projection, binding authorization, and ordinary OpenTofu Output semantics are covered by Core/API tests |
 | Generic Offerings | Immutable generic catalog, availability, and exact OfferingSelection remain supported; no commercial fields or implicit provider choice | D1/Postgres catalog and operator routes are checked independently of any Form registry or hosted Form |
 | Form Host ownership | OSS does not host Form Registry, FormActivation, hosted Form instances, TargetPool, or SpacePolicy as a supported authoring surface | Takosumi Cloud or another external Host owns hosted lifecycle and managed capacity; retained code/docs are migration-only |
-| Legacy edge | Default `404`; with authenticated control-plane configuration plus `TAKOSUMI_LEGACY_RESOURCE_DRAIN_ENABLED=1`, only bounded list/read/events/observe/delete and TargetPool/SpacePolicy `GET`/`HEAD`/`DELETE` are available | Route tests assert no discovery and no writes; disallowed operations return `404`/`410` |
+| Legacy edge | Retired Resource/Form `/v1` families are unconditional `404` with no drain flag, CLI caller, or public descriptor | Route tests prove no mount with a bearer and no capability/OpenAPI advertisement; typed domain operations remain migration-only |
 | Release/deploy authority | The owning repository/operator deploys its own surface; this matrix does not authorize production mutation | Evidence must bind the reviewed commit, artifact, post-conditions, reversal, and failure handling |
 
 ## Historical compatibility posture

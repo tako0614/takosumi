@@ -72,6 +72,12 @@ export class SourceManagement {
     return await this.#require().createSync(sourceId, options);
   }
 
+  async createSourceReconciliationSyncs(
+    sourceId: string,
+  ): Promise<readonly CreateSourceSyncResponse[]> {
+    return await this.#require().createReconciliationSyncs(sourceId);
+  }
+
   async listSourceSnapshots(
     sourceId: string,
     params?: PageParams,

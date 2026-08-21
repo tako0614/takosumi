@@ -30,7 +30,7 @@ materialize_d1() {
 		curl -sk --max-time 5 --cacert "$SUBSTRATE_DIR/caddy/runtime/pebble-issuance-root.pem" \
 			--resolve "${host}:443:127.0.0.1" \
 			-o /dev/null \
-			"https://${host}/v1/capabilities" || true
+			"https://${host}/api/v1/capabilities" || true
 	done
 }
 

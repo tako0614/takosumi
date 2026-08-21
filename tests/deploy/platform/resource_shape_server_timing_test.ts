@@ -12,11 +12,10 @@ function platformEnv() {
     TAKOSUMI_DEV_MODE: "1",
     TAKOSUMI_ENVIRONMENT: "test",
     TAKOSUMI_RESOURCE_SHAPES: "ObjectBucket",
-    TAKOSUMI_LEGACY_RESOURCE_DRAIN_ENABLED: "1",
   } as never;
 }
 
-function drainRequest(path: string, token = "resource-token"): Request {
+function retiredRequest(path: string, token = "resource-token"): Request {
   return new Request(`https://app.takosumi.test${path}`, {
     headers: { authorization: `Bearer ${token}` },
   });
@@ -29,78 +28,20 @@ function timingNames(response: Response): string[] {
     .filter(Boolean);
 }
 
-test("bounded Resource reads expose honest platform phases", async () => {
-  const response = await handlePlatformResourceShapeApiRequest(
-    drainRequest("/v1/resources?space=workspace_a&limit=1"),
-    platformEnv(),
-  );
-
-  expect(response.status).toBe(200);
-  expect(await response.json()).toEqual({ resources: [] });
-  expect(timingNames(response)).toEqual(["resource-dispatch"]);
-  expect(response.headers.get("server-timing")).toMatch(
-    /resource-dispatch;dur=\d+(?:\.\d+)?/u,
-  );
-});
-
-test("bounded TargetPool and SpacePolicy reads use the same platform phases", async () => {
-  const reads = [
-    ["/v1/target-pools?space=workspace_a&limit=1", "targetPools"],
-    ["/v1/space-policies?space=workspace_a&limit=1", "spacePolicies"],
-  ] as const;
-
-  for (const [path, collection] of reads) {
+test("retired Resource Shape families are unconditional JSON 404s", async () => {
+  for (const path of [
+    "/v1/resources?space=workspace_a&limit=1",
+    "/v1/target-pools?space=workspace_a&limit=1",
+    "/v1/space-policies?space=workspace_a&limit=1",
+  ]) {
     const response = await handlePlatformResourceShapeApiRequest(
-      drainRequest(path),
+      retiredRequest(path),
       platformEnv(),
     );
-
-    expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ [collection]: [] });
-    expect(timingNames(response)).toEqual(["resource-dispatch"]);
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ error: "not found" });
+    expect(timingNames(response)).toEqual([]);
   }
-});
-
-test("a wrong operator bearer fails before dispatch without leaking timing", async () => {
-  const response = await handlePlatformResourceShapeApiRequest(
-    drainRequest("/v1/resources?space=workspace_a", "wrong-token"),
-    platformEnv(),
-  );
-
-  expect(response.status).toBe(401);
-  expect(await response.json()).toEqual({ error: "unauthenticated" });
-  expect(timingNames(response)).toEqual([]);
-});
-
-test("a missing operator bearer never invokes Workspace session auth", async () => {
-  let sessionVerified = false;
-  const response = await handlePlatformResourceShapeApiRequest(
-    new Request("https://app.takosumi.test/v1/resources?space=workspace_a"),
-    platformEnv(),
-    async () => {
-      sessionVerified = true;
-      return { authenticated: false as const };
-    },
-  );
-
-  expect(response.status).toBe(401);
-  expect(await response.json()).toEqual({ error: "unauthenticated" });
-  expect(sessionVerified).toBe(false);
-  expect(timingNames(response)).toEqual([]);
-});
-
-test("downstream Resource failures retain dispatch timing", async () => {
-  const response = await handlePlatformResourceShapeApiRequest(
-    new Request(
-      "https://app.takosumi.test/v1/resources?space=workspace_a&limit=invalid",
-      { headers: { authorization: "Bearer resource-token" } },
-    ),
-    platformEnv(),
-  );
-
-  expect(response.status).toBe(400);
-  expect((await response.json()).error.code).toBe("invalid_argument");
-  expect(timingNames(response)).toEqual(["resource-dispatch"]);
 });
 
 test("existing Server-Timing and response payload survive appending platform phases", async () => {

@@ -202,7 +202,7 @@ function upstreamOAuth(fetch: typeof globalThis.fetch): UpstreamOAuthOptions {
         providerId: "company",
         clientId: "company-client",
         clientSecret: "company-secret",
-        redirectUri: `${issuer}/v1/auth/upstream/callback`,
+        redirectUri: `${issuer}/oauth/upstream/callback`,
         provider: oidcOAuthProvider({
           id: "company",
           issuer: "https://idp.example.test",
@@ -217,7 +217,7 @@ function upstreamOAuth(fetch: typeof globalThis.fetch): UpstreamOAuthOptions {
 
 test("upstream OAuth authorize and session callback responses are uncacheable", async () => {
   const authorization = handleUpstreamAuthorizeRequest({
-    url: new URL(`${issuer}/v1/auth/upstream/authorize?provider=company&state=client-state`),
+    url: new URL(`${issuer}/oauth/upstream/authorize?provider=company&state=client-state`),
     upstreamOAuth: upstreamOAuth(fetch),
     secureCookie: false,
   });
@@ -229,11 +229,11 @@ test("upstream OAuth authorize and session callback responses are uncacheable", 
 
   const callback = await handleUpstreamCallbackRequest({
     request: new Request(
-      `${issuer}/v1/auth/upstream/callback?provider=company&code=upstream-code&state=${encodeURIComponent(providerState)}&code_verifier=${"v".repeat(43)}`,
+      `${issuer}/oauth/upstream/callback?provider=company&code=upstream-code&state=${encodeURIComponent(providerState)}&code_verifier=${"v".repeat(43)}`,
       { headers: { cookie: stateCookie } },
     ),
     url: new URL(
-      `${issuer}/v1/auth/upstream/callback?provider=company&code=upstream-code&state=${encodeURIComponent(providerState)}&code_verifier=${"v".repeat(43)}`,
+      `${issuer}/oauth/upstream/callback?provider=company&code=upstream-code&state=${encodeURIComponent(providerState)}&code_verifier=${"v".repeat(43)}`,
     ),
     store: new InMemoryAccountsStore(),
     upstreamOAuth: upstreamOAuth(async (url) => {
@@ -254,6 +254,9 @@ test("upstream OAuth authorize and session callback responses are uncacheable", 
   expectNoStore(callback);
   expect(callback.headers.get("set-cookie")).toContain("takosumi_oauth_state=");
   expect(callback.headers.get("set-cookie")).toContain("takosumi_session=");
+  expect(callback.headers.get("set-cookie")).toContain(
+    "Path=/oauth/upstream/callback",
+  );
 });
 
 test("workerd preserves both authorize redirect branches while adding no-store headers", async () => {

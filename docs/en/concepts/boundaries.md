@@ -48,7 +48,7 @@ Check an endpoint instead of guessing from an edition name.
 curl https://takosumi.example.com/.well-known/takosumi
 ```
 
-An authenticated client can also read `/v1/capabilities`.
+An authenticated client can also read `/api/v1/capabilities`.
 
 ## What Takosumi Cloud adds
 

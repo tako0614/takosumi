@@ -2,8 +2,8 @@
 
 > このページは supported product の使い方ではありません。Takosumi OSS は現在、Git
 > の OpenTofu / Terraform module を実行する 1 つの Stack flow を提供します。
-> Resource Shape、Form Host、TargetPool、SpacePolicy、旧 Resource endpoint は旧 surface
-> の保存データと API/schema を移行するために一時的に残る migration internals です。
+> Resource Shape、Form Host、TargetPool、SpacePolicy の schema と保存行は migration data
+> として保持します。旧 `/v1` HTTP と CLI surface は retired で、常に `404` です。
 
 ## 現在の authority
 

@@ -7,7 +7,7 @@
 この runbook は **self-host/operator-owned Takosumi environment** のDB migration
 手順と、registered release adapterが満たすべきstate-transition contractを定義します。
 対象は platform worker が所有する accounts plane と control-plane ledger
-(Workspace / Project / Capsule / Source / ProviderConnection / CredentialRecipe / ProviderBinding / Secret / Run /
+(Workspace / Project / Capsule / Source / GitInstallPlan / GitRevisionPlan / ProviderConnection / CredentialRecipe / ProviderBinding / Secret / Run /
 StateVersion / Output / Runner / AuditEvent / Operator settings / RunCost / UsageEvent) です。
 既存 ledgers に Space / Installation / StateSnapshot / OutputSnapshot / Deployment などの旧行が残る場合は、Final Plan
 model への migration 対象として扱います。host/distribution product の app-local DB migration は各 product docs の領域であり、
@@ -30,7 +30,7 @@ Takosumi Cloudへのraw migration authorityではありません。
 | Store                   | Contains                                                                                                                                                                                                                              | Migration owner                                                    |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
 | Accounts ledger         | users, sessions, Workspace membership, and OIDC issuer records                                                                                                                                                                        | Takosumi accounts plane                                            |
-| Control-plane ledger    | Workspace, Project, Capsule, Source, ProviderConnection, CredentialRecipe, ProviderBinding, Secret metadata, Run, StateVersion, Output, Runner, Artifact, RunCost, UsageEvent, Audit, plus legacy rows while migrations are in flight | Takosumi control plane                                             |
+| Control-plane ledger    | Workspace, Project, Capsule, Source, GitInstallPlan, GitRevisionPlan, ProviderConnection, CredentialRecipe, ProviderBinding, Secret metadata, Run, StateVersion, Output, Runner, Artifact, RunCost, UsageEvent, Audit, plus legacy rows while migrations are in flight | Takosumi control plane                                             |
 | Artifact-store metadata | opaque refs for source archives, artifacts, state, backups                                                                                                                                                                            | owning storage adapter; change only with matching ledger migration |
 
 realized config では accounts と control-plane を別 database / schema にしても

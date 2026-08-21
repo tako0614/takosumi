@@ -4,13 +4,13 @@ Passkey register + authenticate E2E against the local-substrate cloud worker.
 
 Walks:
   1. Mint a subject via the upstream OAuth flow (existing oauth-mock).
-  2. POST /v1/auth/passkeys/register/options {subject}  → challenge + rp+user
+  2. POST /api/v1/auth/passkeys/register/options {subject}  → challenge + rp+user
   3. Generate a fresh P-256 keypair (the 'authenticator').
-  4. POST /v1/auth/passkeys/register/complete {subject, credentialId, publicKeyJwk}
-  5. POST /v1/auth/passkeys/authenticate/options {subject}  → challenge
+  4. POST /api/v1/auth/passkeys/register/complete {subject, credentialId, publicKeyJwk}
+  5. POST /api/v1/auth/passkeys/authenticate/options {subject}  → challenge
   6. Build authenticatorData + clientDataJSON, sign with the private key.
-  7. POST /v1/auth/passkeys/authenticate/complete and assert the HttpOnly
-     session cookie resolves through /v1/account/session/me.
+  7. POST /api/v1/auth/passkeys/authenticate/complete and assert the HttpOnly
+     session cookie resolves through /api/v1/account/session/me.
 
 Run as: scripts/passkey-e2e.py
 """
@@ -128,7 +128,7 @@ class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
 def mint_subject_via_oauth() -> str:
     state = "passkey_e2e_" + secrets.token_hex(8)
     status, headers, _body = http_request(
-        "GET", f"/v1/auth/upstream/authorize?provider=local-oidc&state={state}",
+        "GET", f"/oauth/upstream/authorize?provider=local-oidc&state={state}",
     )
     if status != 302:
         sys.exit(f"oauth authorize did not 302 (got {status})")
@@ -142,7 +142,7 @@ def mint_subject_via_oauth() -> str:
     callback_state = callback_query["state"][0]
     status, _headers, body = http_request(
         "GET",
-        f"/v1/auth/upstream/callback?provider=local-oidc&code={code}&state={callback_state}",
+        f"/oauth/upstream/callback?provider=local-oidc&code={code}&state={callback_state}",
     )
     if status != 200:
         sys.exit(f"oauth callback failed: {status} {body}")
@@ -216,9 +216,9 @@ def main() -> None:
     _state["credential_id"] = credential_id
     print(f"      credentialId={credential_id[:20]}...")
 
-    print("[3/7] POST /v1/auth/passkeys/register/options...")
+    print("[3/7] POST /api/v1/auth/passkeys/register/options...")
     status, _h, body = http_request(
-        "POST", "/v1/auth/passkeys/register/options", {"subject": subject},
+        "POST", "/api/v1/auth/passkeys/register/options", {"subject": subject},
     )
     if status != 200:
         sys.exit(f"register/options failed: {status} {body}")
@@ -226,9 +226,9 @@ def main() -> None:
     registration_challenge = reg_opts.get("challenge", "")
     print(f"      challenge={registration_challenge[:24]}...")
 
-    print("[4/7] POST /v1/auth/passkeys/register/complete...")
+    print("[4/7] POST /api/v1/auth/passkeys/register/complete...")
     status, _h, body = http_request(
-        "POST", "/v1/auth/passkeys/register/complete",
+        "POST", "/api/v1/auth/passkeys/register/complete",
         {
             "subject": subject,
             "credentialId": credential_id,
@@ -248,9 +248,9 @@ def main() -> None:
         sys.exit(f"register/complete failed: {status} {body}")
     print(f"      registered: {json.loads(body)}")
 
-    print("[5/7] POST /v1/auth/passkeys/authenticate/options...")
+    print("[5/7] POST /api/v1/auth/passkeys/authenticate/options...")
     status, _h, body = http_request(
-        "POST", "/v1/auth/passkeys/authenticate/options",
+        "POST", "/api/v1/auth/passkeys/authenticate/options",
         {"subject": subject},
     )
     if status != 200:
@@ -271,9 +271,9 @@ def main() -> None:
     r, s = ec_utils.decode_dss_signature(der_sig)
     raw_sig = r.to_bytes(32, "big") + s.to_bytes(32, "big")
 
-    print("[7/7] POST /v1/auth/passkeys/authenticate/complete...")
+    print("[7/7] POST /api/v1/auth/passkeys/authenticate/complete...")
     status, _h, body = http_request(
-        "POST", "/v1/auth/passkeys/authenticate/complete",
+        "POST", "/api/v1/auth/passkeys/authenticate/complete",
         {
             "credentialId": credential_id,
             "expectedChallenge": challenge,
@@ -287,7 +287,7 @@ def main() -> None:
     auth_resp = json.loads(body)
     if not auth_resp.get("subject") or auth_resp.get("session_id"):
         sys.exit(f"authenticate/complete returned unexpected shape: {auth_resp}")
-    status, _h, body = http_request("GET", "/v1/account/session/me")
+    status, _h, body = http_request("GET", "/api/v1/account/session/me")
     if status != 200:
         sys.exit(f"session/me failed after passkey auth: {status} {body}")
     session_me = json.loads(body)

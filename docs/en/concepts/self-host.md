@@ -224,7 +224,7 @@ Product discovery tells you what this endpoint has enabled.
 
 ```bash
 curl -s https://takosumi.example.com/.well-known/takosumi
-curl -s https://takosumi.example.com/v1/capabilities
+curl -s https://takosumi.example.com/api/v1/capabilities
 ```
 
 With that much working, read real data once. Sign in to the dashboard, create a token by

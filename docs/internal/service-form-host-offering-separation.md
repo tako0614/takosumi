@@ -16,5 +16,6 @@ The current split is:
 | Hosted Form instances, Form Host lifecycle, target/capacity/backend management, commercial offerings, billing, SLA, and support | Takosumi Cloud (external Host) |
 
 Resource/Form rows and old route names remain only as migration custody. They do
-not make OSS a Form Host or a Resource authoring authority. See the current
-legacy drain contract in [Core Spec](./core-spec.md#legacy-resourceform-drain).
+not make OSS a Form Host or a Resource authoring authority. The old `/v1`
+families are unconditionally retired; use typed operations or the owning
+external Host for migration work.

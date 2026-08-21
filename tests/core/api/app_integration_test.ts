@@ -26,6 +26,11 @@ test("createApiApp exposes /openapi.json when enabled", async () => {
   assert.equal(body.openapi, "3.1.0");
   assert.equal(body.info.title, "Takosumi process route inventory");
   assert.ok(body.paths["/capabilities"]);
+  assert.ok(
+    body.components.schemas.TakosumiWellKnownEndpoints.required.includes(
+      "openapi",
+    ),
+  );
   // `/health` was removed in favor of worker-level `/healthz` liveness; the
   // in-process API app no longer exposes a process health route.
   assert.equal(body.paths["/health"], undefined);
@@ -86,6 +91,14 @@ test("createApiApp exposes product discovery without inventory auth", async () =
   assert.equal(
     body.endpoints.capabilities,
     `https://takosumi.example.test${TAKOSUMI_PRODUCT_CAPABILITIES_PATH}`,
+  );
+  assert.equal(
+    body.endpoints.api,
+    "https://takosumi.example.test/api/v1",
+  );
+  assert.equal(
+    body.endpoints.openapi,
+    "https://takosumi.example.test/openapi.json",
   );
 });
 

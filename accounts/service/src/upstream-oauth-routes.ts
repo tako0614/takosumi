@@ -46,7 +46,7 @@ export function upstreamOAuthNotConfigured(): Response {
 }
 
 /**
- * GET /v1/auth/providers — public, unauthenticated read of which sign-in
+ * GET /api/v1/auth/providers — public, unauthenticated read of which sign-in
  * methods the operator actually configured on this worker. The sign-in screen
  * reads this so it only offers methods the backend can honour. Every configured
  * upstream registration is represented by a generic non-secret descriptor;
@@ -383,7 +383,7 @@ function serializeUpstreamOAuthStateCookie(
     `${upstreamOAuthStateCookie}=${encodeURIComponent(
       `${providerId}:${state}`,
     )}`,
-    "Path=/v1/auth/upstream/callback",
+    "Path=/oauth/upstream/callback",
     "HttpOnly",
     "SameSite=Lax",
     `Max-Age=${upstreamOAuthStateCookieMaxAgeSeconds}`,
@@ -404,7 +404,7 @@ function mintUpstreamOAuthServerState(): string {
 function clearUpstreamOAuthStateCookie(secure: boolean): string {
   return [
     `${upstreamOAuthStateCookie}=`,
-    "Path=/v1/auth/upstream/callback",
+    "Path=/oauth/upstream/callback",
     "HttpOnly",
     "SameSite=Lax",
     "Max-Age=0",

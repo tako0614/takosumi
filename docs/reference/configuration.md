@@ -16,7 +16,7 @@ secret ストアから渡してください。
 | `PORT` | 任意 | `8788` | `bun core/index.ts` で起動したときの待ち受けポート |
 | `TAKOSUMI_DATABASE_URL` | `bun core/index.ts` で control plane を単体で動かすとき必須 | なし | control plane の PostgreSQL 接続先。`DATABASE_URL` も同じ用途で読みます。同梱の compose は control plane と accounts を 1 つの接続で動かすので、そちらでは `TAKOSUMI_ACCOUNTS_DATABASE_URL` だけを設定します |
 | `TAKOSUMI_DB_AUTO_MIGRATE` | 任意 | `false` | `bun core/index.ts` の起動時にマイグレーションを適用するか。既定では適用せず、読み取りだけで検証します。`staging` と `production` で `true` にすると起動が失敗します |
-| `TAKOSUMI_DEPLOY_CONTROL_TOKEN` | 実運用では必須・**秘密** | なし | operator 専用 API の bearer。CLI と operator client が使います。legacy Resource/Form drain を使わない構成では、旧 surface は非公開のままです |
+| `TAKOSUMI_DEPLOY_CONTROL_TOKEN` | 実運用では必須・**秘密** | なし | operator 専用 API の bearer。CLI と operator client が使います。旧 Resource/Form `/v1` surface には作用しません |
 | `TAKOSUMI_METRICS_SCRAPE_TOKEN` | 任意・**秘密** | なし | `/metrics` を読むための bearer。未設定のあいだ `/metrics` は `404` を返します |
 
 ```bash
@@ -85,44 +85,20 @@ export COMPANY_SSO_CLIENT_SECRET="<upstream client secret>"
 
 `providerId` は表示と識別のための名前で、挙動は選びません。何個でも並べられます。
 
-## Legacy Resource/Form drain (migration only)
+## Retired Resource/Form HTTP surfaces
 
-Takosumi OSS supports one Git/OpenTofu/Terraform Stack flow. It does not
-advertise Resource Shape authoring, a Form Host, Form Registry, FormActivation,
-TargetPool, or SpacePolicy as a supported surface. New users should configure
-ordinary providers through a Stack and the ProviderConnection /
-CredentialRecipe / ProviderBinding path.
+Takosumi OSS supports one Git/OpenTofu/Terraform Stack flow. The former
+Resource Shape, Form Host, Form Registry, FormActivation, TargetPool, and
+SpacePolicy `/v1` routes and CLI domains are retired and have no enable flag.
+They remain unconditional `404`, are absent from capabilities/OpenAPI, and are
+not restored by a bearer, a database, or retained rows.
 
-Legacy Resource/Form routes return `404` by default. For an authenticated,
-operator-controlled migration window, set the exact value below together with
-`TAKOSUMI_DEPLOY_CONTROL_TOKEN` and the control database:
-
-| 変数 | 必須 | 既定値 | 決めること |
-| --- | --- | --- | --- |
-| `TAKOSUMI_LEGACY_RESOURCE_DRAIN_ENABLED` | 任意 | 未設定 (旧 surface は非公開) | `1` のときだけ bounded drain を有効化します。retained Resource の inventory/read/events/observe/delete と旧 configuration record の read/delete だけが exact deploy-control bearer で利用できます |
-
-Drain を有効にしても discovery、FormActivation、Form Registry、preview/apply/
-recover/import/refresh、TargetPool/SpacePolicy の write、その他の旧操作は利用できません。
-認識済みでも廃止された操作は `410`、無効または未知の route は `404` です。
-この設定は新しい authoring flow を有効にしません。cron は停止途中の旧
-preview/apply/import/refresh/create/update を再開せず、drain 中の retained row に対する
-bounded observation だけを実行します。flag を外すと observation も停止します。
-
-`TAKOSUMI_RESOURCE_SHAPES`、`TAKOSUMI_RESOURCE_ADAPTERS`、
-`TAKOSUMI_RESOURCE_PROVIDER_BASE_URL_ALLOWLIST`、および
-`TAKOSUMI_RESOURCE_OBSERVATION_*` は旧実装・移行証跡向けです。drainが有効な
-期間だけ、retained rowの観測batch/concurrency/interval/leaseを制御します。
-これらでResource/Formのdiscoveryやwriteを公開する手順はありません。
-
-例外となる frozen v1alpha1 maintenance lane は environment variable ではありません。
-composing Host の code が
-`TAKOSUMI_TAKOFORM_V1ALPHA1_COMPATIBILITY_HOST`、
-`TAKOSUMI_RESOURCE_FORM_TRANSITION_HOST`、
-`TAKOSUMI_RESOURCE_FORM_TRANSITION_EVIDENCE` を runtime object として同時に注入し、
-Run credential secret、deploy-control token、current Capsule/ProviderBinding/Connection/
-CredentialRecipe ledger を構成した場合だけ mount されます。文字列/JSON の Worker var、
-transition port 単体、legacy drain flag では有効になりません。詳細は
-[Takoform provider integration](./takoform-host.md) を参照してください。
+Resource schemas, stores, migrations, and typed in-process operations remain
+available for migration custody. The portable Takoform protocol is a separate
+external contract (`/.well-known/takoform` and `/apis/forms...`) and must not
+be treated as a compatibility alias for the retired `/v1` family. New users
+should configure ordinary providers through a Stack and the
+ProviderConnection / CredentialRecipe / ProviderBinding path.
 
 ## Run と runner
 

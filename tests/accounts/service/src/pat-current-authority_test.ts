@@ -62,7 +62,7 @@ test("a generic PAT reads its closed current authority without mutating usage", 
   });
 
   const response = await handler(
-    new Request(`${ORIGIN}/v1/account/tokens/current`, {
+    new Request(`${ORIGIN}/api/v1/account/tokens/current`, {
       headers: { authorization: `Bearer ${token}` },
     }),
   );
@@ -106,13 +106,13 @@ test("the current authority accepts only the Authorization bearer and never fall
   };
 
   for (const request of [
-    new Request(`${ORIGIN}/v1/account/tokens/current?token=${token}`, {
+    new Request(`${ORIGIN}/api/v1/account/tokens/current?token=${token}`, {
       headers: ambientHeaders,
     }),
-    new Request(`${ORIGIN}/v1/account/tokens/current`, {
+    new Request(`${ORIGIN}/api/v1/account/tokens/current`, {
       headers: { ...ambientHeaders, authorization: `Basic ${token}` },
     }),
-    new Request(`${ORIGIN}/v1/account/tokens/current`, {
+    new Request(`${ORIGIN}/api/v1/account/tokens/current`, {
       headers: { ...ambientHeaders, authorization: `Bearer  ${token}` },
     }),
   ]) {
@@ -123,7 +123,7 @@ test("the current authority accepts only the Authorization bearer and never fall
   }
 
   const selected = await handler(
-    new Request(`${ORIGIN}/v1/account/tokens/current`, {
+    new Request(`${ORIGIN}/api/v1/account/tokens/current`, {
       headers: { ...ambientHeaders, authorization: `Bearer ${token}` },
     }),
   );
@@ -148,7 +148,7 @@ test("account-session and OAuth bearers are not PAT self authority", async () =>
 
   for (const token of [sessionToken, oauthToken]) {
     const response = await handler(
-      new Request(`${ORIGIN}/v1/account/tokens/current`, {
+      new Request(`${ORIGIN}/api/v1/account/tokens/current`, {
         headers: { authorization: `Bearer ${token}` },
       }),
     );
@@ -181,7 +181,7 @@ test("a cross-store opaque credential collision is rejected before PAT selection
   const handler = createAccountsHandler({ issuer: ORIGIN, store });
 
   const response = await handler(
-    new Request(`${ORIGIN}/v1/account/tokens/current`, {
+    new Request(`${ORIGIN}/api/v1/account/tokens/current`, {
       headers: { authorization: `Bearer ${token}` },
     }),
   );
@@ -229,7 +229,7 @@ test("revoked, expired, and malformed-scope PATs are invalid", async () => {
     "opaque.current.duplicate-scope",
   ]) {
     const response = await handler(
-      new Request(`${ORIGIN}/v1/account/tokens/current`, {
+      new Request(`${ORIGIN}/api/v1/account/tokens/current`, {
         headers: { authorization: `Bearer ${token}` },
       }),
     );
@@ -272,7 +272,7 @@ test("candidate lookup failures and malformed PAT records fail closed", async ()
     malformedCandidatesStore,
   ]) {
     const response = await createAccountsHandler({ issuer: ORIGIN, store })(
-      new Request(`${ORIGIN}/v1/account/tokens/current`, {
+      new Request(`${ORIGIN}/api/v1/account/tokens/current`, {
         headers: { authorization: "Bearer opaque.current.fail-closed" },
       }),
     );
@@ -321,7 +321,7 @@ test("a workspace PAT returns the one live canonical membership role", async () 
   });
 
   const response = await handler(
-    new Request(`${ORIGIN}/v1/account/tokens/current`, {
+    new Request(`${ORIGIN}/api/v1/account/tokens/current`, {
       headers: { authorization: `Bearer ${token}` },
     }),
   );
@@ -372,7 +372,7 @@ test("generic PAT authority never calls Workspace or generic Control readers", a
   expect(
     (
       await handler(
-        new Request(`${ORIGIN}/v1/account/tokens/current`, {
+        new Request(`${ORIGIN}/api/v1/account/tokens/current`, {
           headers: { authorization: `Bearer ${token}` },
         }),
       )
@@ -395,7 +395,7 @@ test("workspace verification distinguishes unavailable from inactive authority",
     createdAt: Date.now(),
   });
   const request = () =>
-    new Request(`${ORIGIN}/v1/account/tokens/current`, {
+    new Request(`${ORIGIN}/api/v1/account/tokens/current`, {
       headers: { authorization: `Bearer ${token}` },
     });
 
@@ -450,13 +450,13 @@ test("list, create, revoke, and current PAT responses disable private caching", 
   const authenticated = { authorization: `Bearer ${sessionId}` };
 
   const list = await handler(
-    new Request(`${ORIGIN}/v1/account/tokens`, { headers: authenticated }),
+    new Request(`${ORIGIN}/api/v1/account/tokens`, { headers: authenticated }),
   );
   expect(list.status).toBe(200);
   privateCacheIsDisabled(list);
 
   const create = await handler(
-    new Request(`${ORIGIN}/v1/account/tokens`, {
+    new Request(`${ORIGIN}/api/v1/account/tokens`, {
       method: "POST",
       headers: { ...authenticated, "content-type": "application/json" },
       body: JSON.stringify({ name: "Cache-safe token", scopes: ["read"] }),
@@ -469,7 +469,7 @@ test("list, create, revoke, and current PAT responses disable private caching", 
 
   const revoke = await handler(
     new Request(
-      `${ORIGIN}/v1/account/tokens/${created.token_record.id}/revoke`,
+      `${ORIGIN}/api/v1/account/tokens/${created.token_record.id}/revoke`,
       { method: "POST", headers: authenticated },
     ),
   );
@@ -477,17 +477,17 @@ test("list, create, revoke, and current PAT responses disable private caching", 
   privateCacheIsDisabled(revoke);
 
   for (const request of [
-    new Request(`${ORIGIN}/v1/account/tokens`),
-    new Request(`${ORIGIN}/v1/account/tokens`, {
+    new Request(`${ORIGIN}/api/v1/account/tokens`),
+    new Request(`${ORIGIN}/api/v1/account/tokens`, {
       method: "POST",
       headers: { origin: ORIGIN, "content-type": "application/json" },
       body: "{}",
     }),
-    new Request(`${ORIGIN}/v1/account/tokens/pat_unknown/revoke`, {
+    new Request(`${ORIGIN}/api/v1/account/tokens/pat_unknown/revoke`, {
       method: "POST",
       headers: { origin: ORIGIN },
     }),
-    new Request(`${ORIGIN}/v1/account/tokens/current`),
+    new Request(`${ORIGIN}/api/v1/account/tokens/current`),
   ]) {
     const response = await handler(request);
     expect(response.status).toBe(401);

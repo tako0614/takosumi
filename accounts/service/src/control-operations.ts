@@ -29,15 +29,18 @@ import type {
   CreateSourceRequest,
   CreateSourceResponse,
   CreateSourceSyncRequest,
+  CreateSourceSyncResponse,
   ListSourceSnapshotsResponse,
   ListSourcesResponse,
   PatchSourceRequest,
   SourceResponse,
   SourceSnapshot,
+  SourceSyncRun,
   StableSourceTagResolutionResponse,
   SourceSnapshotFileResponse,
 } from "takosumi-contract/sources";
 import type {
+  CapsuleAdoptedSourceRevision,
   CapsuleCompatibilityReportResponse,
   CreateSourceCompatibilityCheckRequest,
   PublicCapsuleCompatibilityReportResponse,
@@ -123,6 +126,7 @@ import type {
   ResourceResolutionStatus,
   ResourceShapeKind,
 } from "takosumi-contract";
+import type { GitInstallPlanStore } from "../../../core/domains/install-plans/store.ts";
 
 interface CapsuleListPageParams extends PageParams {
   readonly includeDestroyed?: boolean;
@@ -210,6 +214,8 @@ export interface WorkspaceViews {
  * convenience for the same-origin dashboard only.
  */
 export interface ControlPlaneOperations {
+  /** Durable, actor-scoped Git install/revision coordinator ledger. */
+  readonly gitInstallPlans: GitInstallPlanStore;
   /**
    * Exact OSS hostname-reservation authority used when this host assigns one
    * of its managed public names before the selected deployment target runs.
@@ -606,6 +612,12 @@ export interface ControlPlaneOperations {
     options?: {
       readonly compatibilityReportId?: string;
       readonly runnerProfileId?: string;
+      /** Server-only exact SourceSnapshot pin used by the install coordinator. */
+      readonly sourceSnapshotId?: string;
+      /** Server-only deterministic Run identity used for lost-ack recovery. */
+      readonly planRunId?: string;
+      /** Server-owned audit marker; never parsed from an HTTP request body. */
+      readonly actor?: string;
     },
   ): Promise<PlanRunResponse>;
   createCapsuleDestroyPlan(
@@ -615,6 +627,10 @@ export interface ControlPlaneOperations {
     },
   ): Promise<PlanRunResponse>;
   createCapsuleDriftCheck(capsuleId: string): Promise<PlanRunResponse>;
+  /** Derived from current StateVersion provenance; never Source.defaultRef. */
+  getCapsuleAdoptedSourceRevision(
+    capsuleId: string,
+  ): Promise<CapsuleAdoptedSourceRevision | undefined>;
   /**
    * Reads the internal PlanRun projection by id. The control surface uses it to
    * resolve a plan run's owning Workspace (for the apply Workspace-permission gate) and
@@ -694,7 +710,11 @@ export interface ControlPlaneOperations {
   createSourceSync(
     sourceId: string,
     options?: CreateSourceSyncRequest & { readonly dedupe?: boolean },
-  ): Promise<unknown>;
+  ): Promise<CreateSourceSyncResponse>;
+  createSourceReconciliationSyncs(
+    sourceId: string,
+  ): Promise<readonly CreateSourceSyncResponse[]>;
+  getSourceSyncRun(id: string): Promise<SourceSyncRun>;
   listSourceSnapshots(
     sourceId: string,
     params?: PageParams,

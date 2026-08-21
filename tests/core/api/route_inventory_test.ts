@@ -28,7 +28,6 @@ const ALL_MOUNTED: RouteFamilyMountedFlags = {
   deployControlInternalRoutesMounted: true,
   metricsRoutesMounted: true,
   resourceShapeRoutesMounted: true,
-  formActivationRoutesMounted: true,
   offeringCatalogRoutesMounted: true,
   interfaceRoutesMounted: true,
 };
@@ -70,6 +69,10 @@ test("all-mounted capabilities and openapi cover the same endpoint set", () => {
 });
 
 test("legacy Resource Shape and FormActivation paths are not published", () => {
+  assert.equal(
+    ROUTE_FAMILIES.some((family) => (family.id as string) === "form-activations"),
+    false,
+  );
   const openapi = createTakosumiOpenApiDocument(ALL_MOUNTED);
   for (const path of [
     "/v1/resources",
@@ -82,7 +85,8 @@ test("legacy Resource Shape and FormActivation paths are not published", () => {
   ]) {
     assert.equal(openapi.paths[path], undefined, path);
   }
-  assert.equal(openapi.paths["/v1/interfaces"]?.get !== undefined, true);
+  assert.equal(openapi.paths["/api/v1/interfaces"]?.get !== undefined, true);
+  assert.equal(openapi.paths["/v1/interfaces"], undefined);
 });
 
 test("legacy Resource Shape response schema is not published", () => {
@@ -163,35 +167,18 @@ test("FormActivation schemas and operator paths are hidden from discovery", () =
   );
 });
 
-test("Offering OpenAPI is generic, immutable, and commercially neutral", () => {
+test("operator Offering routes stay outside the public OpenAPI", () => {
   const openapi = createTakosumiOpenApiDocument(ALL_MOUNTED);
-  assert.ok(openapi.paths["/v1/offering-catalogs"]?.post);
-  assert.ok(openapi.paths["/v1/offering-catalogs"]?.get);
-  assert.ok(openapi.paths["/v1/offering-availability/query"]?.post);
-  assert.ok(openapi.paths["/v1/offering-selections/resolve"]?.post);
-  const offering = openapi.components.schemas.Offering;
-  const selection = openapi.components.schemas.OfferingSelection;
-  assert.ok(offering);
-  assert.ok(selection);
-  assert.deepEqual(offering.properties.subject.required, [
-    "type",
-    "ref",
-    "version",
-    "digest",
-  ]);
-  for (const field of [
-    "formRef",
-    "price",
-    "sku",
-    "billing",
-    "capacity",
-    "managerId",
-    "sla",
-    "support",
-  ]) {
-    assert.equal(offering.properties[field], undefined, field);
-    assert.equal(selection.properties[field], undefined, field);
-  }
+  assert.equal(openapi.paths["/internal/v1/offering-catalogs"], undefined);
+  assert.equal(
+    openapi.paths["/internal/v1/offering-availability/query"],
+    undefined,
+  );
+  assert.equal(
+    openapi.paths["/internal/v1/offering-selections/resolve"],
+    undefined,
+  );
+  assert.equal(openapi.paths["/v1/offering-catalogs"], undefined);
 });
 
 test("all-mounted inventories suppress internal seams and still publish process routes", () => {

@@ -5,7 +5,7 @@ import {
 
 const ROUTES = JSON.stringify([
   {
-    basePath: "/v1/hosted/marketplace",
+    basePath: "/extensions/hosted/marketplace",
     handlerKey: "HOSTED",
     authDelivery: "context",
     workspaceContext: "query-required",
@@ -136,7 +136,7 @@ test("a configured extension contributes one exact run-issued provider broker", 
   expect(calls).toHaveLength(1);
   const call = calls[0] as { input: Request; context: Record<string, unknown> };
   expect(call.input.url).toBe(
-    "https://app-staging.takosumi.com/v1/hosted/marketplace/provider-credentials/takoform?workspaceId=ws_1",
+    "https://app-staging.takosumi.com/extensions/hosted/marketplace/provider-credentials/takoform?workspaceId=ws_1",
   );
   expect(call.input.headers.get("authorization")).toBeNull();
   expect(await call.input.json()).toEqual({

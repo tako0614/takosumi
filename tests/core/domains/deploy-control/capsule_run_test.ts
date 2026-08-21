@@ -1871,6 +1871,68 @@ test("repository install UX pins the initial Plan snapshot, then applied lineage
   );
 });
 
+test("ordinary update plans follow the SourceSnapshot lane adopted by the current StateVersion", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner();
+  const seeded = await seedRunnableCapsuleModel(store, {
+    environment: "preview",
+  });
+  const releaseRef = "refs/heads/release/v2";
+  const releaseSnapshot = {
+    ...seeded.snapshot,
+    id: "snap_release_v2_applied",
+    ref: releaseRef,
+    resolvedCommit: "1111111111111111111111111111111111111111",
+    archiveRef:
+      "workspaces/ws_test001/sources/src_fixture/snapshots/snap_release_v2_applied/source.tar.zst",
+    fetchedByRunId: "run_release_v2_applied_sync",
+    fetchedAt: "2026-06-06T00:00:01.000Z",
+  };
+  const releaseNextSnapshot = {
+    ...releaseSnapshot,
+    id: "snap_release_v2_next",
+    resolvedCommit: "2222222222222222222222222222222222222222",
+    archiveRef:
+      "workspaces/ws_test001/sources/src_fixture/snapshots/snap_release_v2_next/source.tar.zst",
+    fetchedByRunId: "run_release_v2_next_sync",
+    fetchedAt: "2026-06-06T00:00:03.000Z",
+  };
+  await store.putSourceSnapshot(releaseSnapshot);
+
+  const controller = controllerWith(store, runner);
+  const initial = await controller.createCapsulePlan(seeded.capsule.id);
+  await controller.createApplyRun({
+    planRunId: initial.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(initial.planRun),
+  });
+  const revision = await controller.createCapsulePlan(
+    seeded.capsule.id,
+    {},
+    { sourceSnapshotId: releaseSnapshot.id },
+  );
+  await controller.createApplyRun({
+    planRunId: revision.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(revision.planRun),
+  });
+
+  // A newer snapshot on the shared Source default lane must not pull this
+  // Capsule back to `main`; only the lane adopted by the successful revision
+  // Apply is eligible for its next ordinary plan.
+  await store.putSourceSnapshot({
+    ...seeded.snapshot,
+    id: "snap_main_newest",
+    resolvedCommit: "3333333333333333333333333333333333333333",
+    archiveRef:
+      "workspaces/ws_test001/sources/src_fixture/snapshots/snap_main_newest/source.tar.zst",
+    fetchedByRunId: "run_main_newest_sync",
+    fetchedAt: "2026-06-06T00:00:04.000Z",
+  });
+  await store.putSourceSnapshot(releaseNextSnapshot);
+
+  const ordinaryUpdate = await controller.createCapsulePlan(seeded.capsule.id);
+  expect(ordinaryUpdate.planRun.sourceSnapshotId).toBe(releaseNextSnapshot.id);
+});
+
 test("repository install UX initial Plan fails closed when its snapshot pin is missing or mismatched", async () => {
   const missingStore = new InMemoryOpenTofuControlStore();
   const missing = await seedRunnableCapsuleModel(missingStore, {

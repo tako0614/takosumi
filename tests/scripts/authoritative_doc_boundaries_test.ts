@@ -170,7 +170,8 @@ test("current Core Spec owns the boundary and Final Plan is only historical", as
 
   expect(coreSpec).toMatch(/present Takosumi OSS contract/);
   expect(coreSpec).toMatch(/one supported\s+Git\/OpenTofu\/Terraform deployment flow/);
-  expect(coreSpec).toMatch(/TAKOSUMI_LEGACY_RESOURCE_DRAIN_ENABLED=1/);
+  expect(coreSpec).toMatch(/Retired Resource\/Form HTTP surfaces/);
+  expect(coreSpec).toMatch(/unconditional `404`/);
   expect(coreSpec).toMatch(/does not host a Form Registry/);
   expect(finalPlan).toMatch(/historical planning record|superseded/);
   expect(finalPlan).toMatch(/present Takosumi OSS contract is \[Core Spec\]/);

@@ -19,6 +19,7 @@ import {
 import { canonicalRunCredentialSettings } from "takosumi-contract/connections";
 import type { JsonValue } from "takosumi-contract";
 import {
+  PLATFORM_EXTENSION_ALLOWLISTED_BASE_PATHS,
   PLATFORM_EXTENSION_RESERVED_PREFIXES,
   pathIsUnderBase,
   platformExtensionBasePathIsReserved,
@@ -175,6 +176,7 @@ export interface PlatformExtensionContribution {
 // Re-exported so the platform module stays the single import site for route
 // composition; the reserved list itself is contract an extension host can read.
 export {
+  PLATFORM_EXTENSION_ALLOWLISTED_BASE_PATHS,
   PLATFORM_EXTENSION_RESERVED_PREFIXES,
   pathIsUnderBase,
   platformExtensionBasePathIsReserved,

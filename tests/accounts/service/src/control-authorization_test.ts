@@ -195,7 +195,7 @@ test("self-service PAT creation cannot grant the admin scope", async () => {
   });
 
   const response = await handler(
-    new Request(`${ORIGIN}/v1/account/tokens`, {
+    new Request(`${ORIGIN}/api/v1/account/tokens`, {
       method: "POST",
       headers: {
         authorization: `Bearer ${sessionId}`,

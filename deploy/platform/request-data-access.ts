@@ -1,8 +1,8 @@
 import {
-  isAccountsIdentityPath,
   isApiV1Path,
   isExternalStandardPath,
   isInternalV1Path,
+  isRetiredV1Path,
   TAKOSUMI_PRODUCT_CAPABILITIES_PATH,
   TAKOSUMI_WELL_KNOWN_PATH,
 } from "takosumi-contract/api-surface";
@@ -165,13 +165,13 @@ const DATA_FREE_PRODUCT_DISCOVERY_PATHS = new Set<string>([
 ]);
 
 const DATA_FREE_IDENTITY_DISCOVERY_PATHS = new Set<string>([
-  "/v1/auth/providers",
+  "/api/v1/auth/providers",
 ]);
 
 const ACCOUNTS_ONLY_READ_PATHS = new Set<string>([
   "/.well-known/openid-configuration",
   "/oauth/jwks",
-  "/v1/account/session/me",
+  "/api/v1/account/session/me",
 ]);
 
 const DATA_FREE_PRESENCE_PROBE_PATHS = new Set<string>(["/healthz", "/readyz"]);
@@ -321,7 +321,7 @@ function isReservedPlatformPath(pathname: string): boolean {
   // reserved prefixes below defend future/unknown siblings as well.
   if (
     isApiV1Path(pathname) ||
-    isAccountsIdentityPath(pathname) ||
+    isRetiredV1Path(pathname) ||
     isInternalV1Path(pathname) ||
     isExternalStandardPath(pathname)
   ) {

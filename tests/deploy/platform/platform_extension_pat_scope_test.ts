@@ -7,7 +7,7 @@ import {
 
 function descriptor(overrides: Record<string, unknown> = {}) {
   return {
-    basePath: "/v1/cloud/resource-instances",
+    basePath: "/extensions/cloud/resource-instances",
     handlerKey: "CLOUD_RESOURCE_INSTANCES",
     requiredScopes: ["resources:read"],
     ...overrides,

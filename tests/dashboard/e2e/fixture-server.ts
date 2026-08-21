@@ -58,7 +58,7 @@ async function apiResponse(request: Request, url: URL): Promise<Response> {
   if (!authenticated(request)) return unauthorized();
 
   const path = url.pathname;
-  if (path === "/v1/account/session/me") {
+  if (path === "/api/v1/account/session/me") {
     return json({
       subject: "sub_portable_e2e",
       expiresAt: Date.now() + 60 * 60 * 1000,
@@ -111,10 +111,16 @@ async function apiResponse(request: Request, url: URL): Promise<Response> {
   if (path === "/.well-known/takosumi") {
     return json({
       apiVersion: "takosumi.dev/v1alpha1",
-      endpoints: { capabilities: "/v1/capabilities" },
+      apiBaseUrl: `${url.origin}/api/v1`,
+      endpoints: {
+        api: `${url.origin}/api/v1`,
+        capabilities: `${url.origin}/api/v1/capabilities`,
+        openapi: `${url.origin}/openapi.json`,
+        oidc_issuer: url.origin,
+      },
     });
   }
-  if (path === "/v1/capabilities") {
+  if (path === "/api/v1/capabilities") {
     return json({
       apiVersion: "takosumi.dev/v1alpha1",
       resources: {},

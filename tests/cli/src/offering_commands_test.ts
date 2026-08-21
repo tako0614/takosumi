@@ -68,7 +68,7 @@ test("Offering CLI maps exact catalog and resolver operations to the operator AP
     const request = new Request(input, init);
     captured.push({ request, body: await request.clone().text() });
     const pathname = new URL(request.url).pathname;
-    if (pathname === "/v1/offering-availability/query") {
+    if (pathname === "/internal/v1/offering-availability/query") {
       return Response.json({
         availability: [
           {
@@ -82,7 +82,7 @@ test("Offering CLI maps exact catalog and resolver operations to the operator AP
         ],
       });
     }
-    if (pathname === "/v1/offering-selections/resolve") {
+    if (pathname === "/internal/v1/offering-selections/resolve") {
       return Response.json({
         reference: selectionQuery.reference,
         subject: catalog.offerings[0]!.subject,
@@ -96,7 +96,8 @@ test("Offering CLI maps exact catalog and resolver operations to the operator AP
       });
     }
     return Response.json(
-      request.method === "GET" && pathname === "/v1/offering-catalogs"
+      request.method === "GET" &&
+        pathname === "/internal/v1/offering-catalogs"
         ? { catalogs: [catalog], nextCursor: "next" }
         : catalog,
       { status: request.method === "POST" ? 201 : 200 },
@@ -163,11 +164,14 @@ test("Offering CLI maps exact catalog and resolver operations to the operator AP
         new URL(request.url).pathname,
       ]),
     ).toEqual([
-      ["GET", "/v1/offering-catalogs"],
-      ["GET", "/v1/offering-catalogs/public-services/versions/2026-07-20"],
-      ["POST", "/v1/offering-catalogs"],
-      ["POST", "/v1/offering-availability/query"],
-      ["POST", "/v1/offering-selections/resolve"],
+      ["GET", "/internal/v1/offering-catalogs"],
+      [
+        "GET",
+        "/internal/v1/offering-catalogs/public-services/versions/2026-07-20",
+      ],
+      ["POST", "/internal/v1/offering-catalogs"],
+      ["POST", "/internal/v1/offering-availability/query"],
+      ["POST", "/internal/v1/offering-selections/resolve"],
     ]);
     expect(captured[0]!.request.headers.get("authorization")).toBe(
       "Bearer operator-bearer",

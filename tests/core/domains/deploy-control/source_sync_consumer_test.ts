@@ -374,6 +374,103 @@ test("source_sync consumer marks active source Capsules stale when the resolved 
   );
 });
 
+test("source_sync does not stale a Capsule adopted on a different Git ref lane", async () => {
+  const { store, sourcesService, runner, controller } = build();
+  const { source } = await sourcesService.createSource({
+    workspaceId: "workspace_1",
+    name: "repo",
+    url: "https://github.com/acme/repo.git",
+    defaultRef: "main",
+  });
+  await seedActiveCapsuleOnSnapshot({
+    store,
+    sourceId: source.id,
+    snapshot: sourceSnapshot({
+      sourceId: source.id,
+      ref: "refs/heads/release/v2",
+      resolvedCommit: "release-old",
+    }),
+  });
+  runner.result = {
+    resolvedCommit: "main-new",
+    archiveDigest: "sha256:" + "c".repeat(64),
+    archiveSizeBytes: 2048,
+  };
+
+  const { run } = await controller.createSourceSync(source.id);
+  await controller.runQueuedSourceSync(run.id);
+
+  expect((await store.getCapsule("capsule_active"))?.status).toBe("active");
+  expect(await store.listActivityEvents("workspace_1", { limit: 10 })).toEqual(
+    [],
+  );
+});
+
+test("a non-default ref sync only stales Capsules on that adopted lane and does not rewrite Source default polling state", async () => {
+  const { store, sourcesService, runner, controller } = build();
+  const { source } = await sourcesService.createSource({
+    workspaceId: "workspace_1",
+    name: "repo",
+    url: "https://github.com/acme/repo.git",
+    defaultRef: "main",
+  });
+  const releaseRef = "refs/heads/release/v2";
+  await seedActiveCapsuleOnSnapshot({
+    store,
+    sourceId: source.id,
+    snapshot: sourceSnapshot({
+      sourceId: source.id,
+      ref: releaseRef,
+      resolvedCommit: "release-old",
+    }),
+  });
+  runner.result = {
+    resolvedCommit: "release-new",
+    archiveDigest: "sha256:" + "d".repeat(64),
+    archiveSizeBytes: 2048,
+  };
+
+  const { run } = await controller.createSourceSync(source.id, {
+    intent: "manual_plan",
+    coordinator: {
+      ref: releaseRef,
+      path: ".",
+      runId: "ssr_tracking01",
+      snapshotId: "snap_tracking01",
+    },
+  });
+  await controller.runQueuedSourceSync(run.id);
+
+  expect((await store.getCapsule("capsule_active"))?.status).toBe("stale");
+  expect((await store.getSource(source.id))?.lastSeenCommit).toBeUndefined();
+});
+
+test("Source reconciliation enqueues the shared default plus each adopted Capsule lane", async () => {
+  const { store, sourcesService, controller } = build();
+  const { source } = await sourcesService.createSource({
+    workspaceId: "workspace_1",
+    name: "repo",
+    url: "https://github.com/acme/repo.git",
+    defaultRef: "main",
+  });
+  await seedActiveCapsuleOnSnapshot({
+    store,
+    sourceId: source.id,
+    snapshot: sourceSnapshot({
+      sourceId: source.id,
+      ref: "refs/heads/release/v2",
+      resolvedCommit: "release-old",
+    }),
+  });
+
+  const runs = await controller.createSourceReconciliationSyncs(source.id);
+
+  expect(runs.map(({ run }) => [run.ref, run.path, run.intent])).toEqual([
+    ["main", ".", "observe"],
+    ["refs/heads/release/v2", ".", "observe"],
+  ]);
+});
+
 test("source_sync consumer does not mark Capsules stale when only the snapshot id changes for the same commit", async () => {
   const { store, sourcesService, runner, controller } = build();
   const { source } = await sourcesService.createSource({

@@ -99,13 +99,28 @@ export interface Capsule {
   readonly updatedAt: string;
 }
 
+/**
+ * Non-secret Git address adopted by the Capsule's current successful Apply.
+ * This is derived from current StateVersion provenance and is deliberately not
+ * the shared Source's `defaultRef` / `defaultPath`.
+ */
+export interface CapsuleAdoptedSourceRevision {
+  readonly sourceSnapshotId: string;
+  readonly ref: string;
+  readonly path: string;
+  readonly resolvedCommit: string;
+}
+
 /** Public Capsule projection returned by `/api` and dashboard session routes. */
 export type PublicCapsule = Omit<
   Capsule,
   | "currentOutputId"
   | "autoUpdateAttemptSourceSnapshotId"
   | "installingPrincipalId"
->;
+> & {
+  /** Absent before the first successful Apply. Derived; never stored on Capsule. */
+  readonly adoptedSourceRevision?: CapsuleAdoptedSourceRevision;
+};
 
 // ---------------------------------------------------------------------------
 // Capsule compatibility report

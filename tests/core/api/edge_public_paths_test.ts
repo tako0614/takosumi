@@ -10,7 +10,6 @@ import {
   type RegisterResourceShapeRoutesOptions,
 } from "../../../core/api/resource_routes.ts";
 import { registerInterfaceRoutes } from "../../../core/api/interface_routes.ts";
-import { registerFormActivationRoutes } from "../../../core/api/form_activation_routes.ts";
 import { ROUTE_FAMILIES } from "../../../core/api/route_families.ts";
 import {
   TAKOFORM_FORM_HOST_FORM_DEFINITIONS_PATH,
@@ -31,7 +30,6 @@ function mountedRouterPaths(): readonly string[] {
     interfaceDeclarations: stub,
   } as unknown as RegisterResourceShapeRoutesOptions);
   registerInterfaceRoutes(app, { service: stub } as never);
-  registerFormActivationRoutes(app, { service: stub } as never);
   return [...new Set(app.routes.map((route) => route.path))];
 }
 
@@ -75,9 +73,10 @@ test("legacy Flow-B paths stay off the default edge gate", () => {
     assert.equal(edgeApiPathExposure(path), undefined, path);
   }
   // The generic Interface API is not part of Flow-B and remains session-routed.
-  assert.equal(edgeApiPathExposure("/v1/interfaces"), "session");
+  assert.equal(edgeApiPathExposure("/api/v1/interfaces"), "session");
+  assert.equal(edgeApiPathExposure("/v1/interfaces"), undefined);
   assert.equal(
-    edgeApiPathExposure("/v1/interfaces/if_1/bindings"),
+    edgeApiPathExposure("/api/v1/interfaces/if_1/bindings"),
     "session",
   );
 });
@@ -101,10 +100,10 @@ test("the retained portable Form host facade stays out of edge discovery", () =>
     paths.includes(`${TAKOFORM_FORM_HOST_FORM_DEFINITIONS_PATH}/:kind`),
     true,
   );
-  assert.equal(paths.includes("/v1/form-availability"), true);
+  assert.equal(paths.includes("/v1/form-availability"), false);
   assert.equal(
     edgeExposureForEndpointPath(TAKOFORM_FORM_HOST_WELL_KNOWN_PATH),
     "off",
   );
-  assert.equal(edgeExposureForEndpointPath("/v1/form-availability"), "off");
+  assert.equal(edgeApiPathExposure("/v1/form-availability"), undefined);
 });

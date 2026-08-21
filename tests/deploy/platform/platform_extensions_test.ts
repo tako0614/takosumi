@@ -565,6 +565,7 @@ test("core route prefixes cannot be delegated to extensions", () => {
     "/v1/resources/preview",
     "/v1/form-activations",
     "/v1/form-activations/activation_1",
+    "/api/v1/capabilities",
     "/v1/capabilities",
     "/.well-known/takosumi",
     "/api/v1/workspaces",
@@ -584,6 +585,38 @@ test("core route prefixes cannot be delegated to extensions", () => {
     platformExtensionRoutes({
       TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
         { basePath: "/v1", handlerKey: "TOO_BROAD" },
+      ]),
+    }),
+  ).toThrow("overlaps a Takosumi core route prefix");
+  expect(() =>
+    platformExtensionRoutes({
+      TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
+        {
+          basePath: "/api/v1/unlisted",
+          handlerKey: "UNSAFE_EXTENSION",
+        },
+      ]),
+    }),
+  ).toThrow("overlaps a Takosumi core route prefix");
+});
+
+test("Hosted subscription keeps its exact optional route while retired /v1 is closed", () => {
+  const [hosted] = platformExtensionRoutes({
+    TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
+      {
+        basePath: "/api/v1/hosted/subscription",
+        handlerKey: "HOSTED",
+      },
+    ]),
+  });
+  expect(hosted?.basePath).toBe("/api/v1/hosted/subscription");
+  expect(() =>
+    platformExtensionRoutes({
+      TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
+        {
+          basePath: "/v1/hosted/subscription",
+          handlerKey: "HOSTED",
+        },
       ]),
     }),
   ).toThrow("overlaps a Takosumi core route prefix");

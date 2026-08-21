@@ -113,6 +113,41 @@ test("platform preserves Core inventory bearer semantics", async () => {
   }
 });
 
+test("platform routes canonical Interface API to Core and retires the old path", async () => {
+  const { env, assetRequests } = platformEnv();
+  const canonical = await worker.fetch(
+    new Request("https://app.takosumi.test/api/v1/interfaces"),
+    env,
+  );
+  expect(canonical.status).toBe(401);
+  expect(canonical.headers.get("content-type")).toMatch(/application\/json/u);
+
+  const legacy = await worker.fetch(
+    new Request("https://app.takosumi.test/v1/interfaces"),
+    env,
+  );
+  expect(legacy.status).toBe(404);
+  expect(await legacy.json()).toEqual({ error: "not found" });
+  const legacyCapabilities = await worker.fetch(
+    new Request("https://app.takosumi.test/v1/capabilities"),
+    env,
+  );
+  expect(legacyCapabilities.status).toBe(404);
+  expect(await legacyCapabilities.json()).toEqual({ error: "not found" });
+  for (const path of [
+    "/v1/hosted/subscription",
+    "/v1/unknown-extension",
+  ]) {
+    const retired = await worker.fetch(
+      new Request(`https://app.takosumi.test${path}`),
+      env,
+    );
+    expect(retired.status, path).toBe(404);
+    expect(await retired.json(), path).toEqual({ error: "not found" });
+  }
+  expect(assetRequests).toEqual([]);
+});
+
 test("platform reserves unknown livez descendants outside the SPA fallback", async () => {
   const { env, assetRequests } = platformEnv();
   for (const path of ["/livez/", "/livez/unknown"]) {

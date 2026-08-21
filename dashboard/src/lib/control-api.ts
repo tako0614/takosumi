@@ -1086,7 +1086,7 @@ export type ControlMembershipStatus = "active" | "invited" | "suspended";
 /**
  * Public projection of one Workspace membership (mirror of the deploy-control
  * `PublicWorkspaceMember`). `accountId` is the member's account subject — the same
- * value the session `/v1/account/session/me` returns for the signed-in caller —
+ * value the session `/api/v1/account/session/me` returns for the signed-in caller —
  * so the view can match the caller against the roster to decide which mutation
  * controls to show. Carries no credential / email / PII beyond the handle.
  */

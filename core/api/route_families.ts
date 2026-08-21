@@ -8,10 +8,8 @@ import { DEPLOY_CONTROL_INTERNAL_ENDPOINTS } from "./deploy_control_internal_rou
 import { READINESS_ENDPOINTS } from "./readiness_routes.ts";
 import { METRICS_ENDPOINTS } from "./metrics_routes.ts";
 import { OPENAPI_ENDPOINTS } from "./openapi_endpoint.ts";
-import { RESOURCE_SHAPE_ENDPOINTS } from "./resource_routes.ts";
 import { PORTABLE_FORM_HOST_ENDPOINTS } from "./form_host_routes.ts";
 import { INTERFACE_ENDPOINTS } from "./interface_routes.ts";
-import { FORM_ACTIVATION_ENDPOINTS } from "./form_activation_routes.ts";
 import { OFFERING_CATALOG_ENDPOINTS } from "./offering_catalog_routes.ts";
 
 /**
@@ -122,7 +120,6 @@ export type RouteFamilyId =
   | "deployControl-internal"
   | "metrics"
   | "resource-shape"
-  | "form-activations"
   | "offering-catalogs"
   | "interfaces";
 
@@ -132,7 +129,6 @@ export type RouteFamilyFlag =
   | "deployControlInternalRoutesMounted"
   | "metricsRoutesMounted"
   | "resourceShapeRoutesMounted"
-  | "formActivationRoutesMounted"
   | "offeringCatalogRoutesMounted"
   | "interfaceRoutesMounted";
 
@@ -219,18 +215,9 @@ export const ROUTE_FAMILIES: readonly RouteFamilyDescriptor[] = [
     openapiTags: ["resource-shape"],
     defaultMounted: ({ role, hasOptions }) =>
       role === "takosumi-api" && hasOptions,
-    // `registerResourceShapeRoutes` mounts the portable Form host facade too,
-    // so the inventory this family publishes has to include it or the derived
-    // edge routing (and any other derivation) is blind to those paths.
-    endpoints: [...PORTABLE_FORM_HOST_ENDPOINTS, ...RESOURCE_SHAPE_ENDPOINTS],
-  },
-  {
-    id: "form-activations",
-    flag: "formActivationRoutesMounted",
-    openapiTags: ["form-activations"],
-    defaultMounted: ({ role, hasOptions }) =>
-      role === "takosumi-api" && hasOptions,
-    endpoints: FORM_ACTIVATION_ENDPOINTS,
+    // The Resource Shape HTTP family is retired. Only the separately defined
+    // portable Takoform protocol remains in this composition boundary.
+    endpoints: PORTABLE_FORM_HOST_ENDPOINTS,
   },
   {
     id: "offering-catalogs",

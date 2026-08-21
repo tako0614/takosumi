@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Walks the full upstream OAuth flow end-to-end against the local oauth-mock:
 #
-#   1. Worker /v1/auth/upstream/authorize  -> 302 to oauth-mock /authorize
+#   1. Worker /oauth/upstream/authorize  -> 302 to oauth-mock /authorize
 #   2. Mock /authorize                     -> 302 to /sign-in/callback with code
-#   3. Worker /v1/auth/upstream/callback   -> 200 with {subject, ...}
+#   3. Worker /oauth/upstream/callback   -> 200 with {subject, ...}
 #      and an HttpOnly takosumi_session cookie.
-#   4. Worker /v1/account/session/me       -> 200 with the same subject via cookie.
+#   4. Worker /api/v1/account/session/me       -> 200 with the same subject via cookie.
 #
 # Run as: bash scripts/oauth-e2e.sh [local-oidc]
 set -euo pipefail
@@ -26,11 +26,11 @@ if [[ ! -f "$CA" ]]; then
 	echo "Pebble CA not found at $CA — run scripts/up.sh first" >&2
 	exit 1
 fi
-# 1. /v1/auth/upstream/authorize → 302 to mock /authorize
+# 1. /oauth/upstream/authorize → 302 to mock /authorize
 LOC1=$(curl -sk --cacert "$CA" -o /dev/null -w "%{redirect_url}" \
 	"${CURL_TLS[@]}" \
 	-c "$COOKIE_JAR" -b "$COOKIE_JAR" \
-	"${BASE}/v1/auth/upstream/authorize?provider=${PROVIDER}&state=${STATE}")
+	"${BASE}/oauth/upstream/authorize?provider=${PROVIDER}&state=${STATE}")
 [[ -n "$LOC1" ]] || { echo "FAIL: worker /authorize returned no redirect" >&2; exit 1; }
 
 # 2. Follow mock /authorize → 302 to /sign-in/callback with code
@@ -42,11 +42,11 @@ CALLBACK_STATE=$(echo "$LOC2" | sed -nE 's/.*[?&]state=([^&]*).*/\1/p')
 [[ -n "$CODE" ]] || { echo "FAIL: mock /authorize did not return a code (got: $LOC2)" >&2; exit 1; }
 [[ -n "$CALLBACK_STATE" ]] || { echo "FAIL: mock /authorize did not return state (got: $LOC2)" >&2; exit 1; }
 
-# 3. /v1/auth/upstream/callback with code+state+provider -> 200 with subject
+# 3. /oauth/upstream/callback with code+state+provider -> 200 with subject
 RESP=$(curl -sk --cacert "$CA" \
 	"${CURL_TLS[@]}" \
 	-c "$COOKIE_JAR" -b "$COOKIE_JAR" \
-	"${BASE}/v1/auth/upstream/callback?provider=${PROVIDER}&code=${CODE}&state=${CALLBACK_STATE}")
+	"${BASE}/oauth/upstream/callback?provider=${PROVIDER}&code=${CODE}&state=${CALLBACK_STATE}")
 SUBJECT=$(echo "$RESP" | python3 -c "import json,sys;d=json.loads(sys.stdin.read());print(d.get('subject') or '')")
 SESSION_ID_IN_BODY=$(echo "$RESP" | python3 -c "import json,sys;d=json.loads(sys.stdin.read());print(d.get('session_id') or '')")
 if [[ -z "$SUBJECT" ]]; then
@@ -63,7 +63,7 @@ fi
 ME=$(curl -sk --cacert "$CA" \
 	"${CURL_TLS[@]}" \
 	-b "$COOKIE_JAR" \
-	"${BASE}/v1/account/session/me")
+	"${BASE}/api/v1/account/session/me")
 ME_SUBJECT=$(echo "$ME" | python3 -c "import json,sys;d=json.loads(sys.stdin.read());print(d.get('subject') or '')")
 if [[ "$ME_SUBJECT" != "$SUBJECT" ]]; then
 	echo "FAIL: session/me subject mismatch (callback=$SUBJECT me=$ME)" >&2

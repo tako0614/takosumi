@@ -54,6 +54,8 @@ capacity is not an OSS Core responsibility.
 | Project | A service or infrastructure grouping |
 | Capsule | One OpenTofu/Terraform module execution unit, with concrete environments such as `production` and `preview` |
 | Source | Git URL/ref/commit/path for a plain module |
+| Adopted Source revision | SourceSnapshot ref/path/commit derived from a Capsule's current StateVersion apply provenance; never a mutable Capsule or Source field |
+| GitInstallPlan / GitRevisionPlan | Durable idempotent coordinator evidence that stops at one reviewable Plan Run |
 | ProviderConnection | Stored provider credential configuration |
 | CredentialRecipe | How a provider credential becomes a temporary env/file/pre-run value |
 | ProviderBinding | Mapping from provider name/alias to a ProviderConnection |
@@ -75,6 +77,15 @@ or advanced details. Concrete environments remain Capsule-scoped.
 
 StateVersion storage and locking are part of the canonical Run lifecycle; they
 are not a separate Resource/Form ledger.
+
+Per-Capsule Git tracking uses existing apply provenance:
+`Capsule.currentStateVersionId -> StateVersion.createdByRunId -> ApplyRun ->
+PlanRun.sourceSnapshotId`. Restore StateVersions follow their exact
+`restoredFromStateVersionId` edge. Normal plans and source observation use the
+derived SourceSnapshot ref/path lane after the first apply; only the initial
+plan uses its reviewed install pin or Source default. A revision plan cannot
+change tracking before apply, and no Capsule revision operation mutates the
+shared `Source.defaultRef` / `defaultPath`.
 
 Plan, Apply, Destroy, and Refresh are guarded Run operations, not separate
 ledgers. OpenTofu Outputs remain ordinary module values; an Interface may
@@ -142,11 +153,11 @@ requirements and audience; an installed subject resolver returns an exact
 resolution fingerprint; the result is an `OfferingSelection`.
 
 ```text
-POST /v1/offering-catalogs
-GET  /v1/offering-catalogs
-GET  /v1/offering-catalogs/:catalogId/versions/:catalogVersion
-POST /v1/offering-availability/query
-POST /v1/offering-selections/resolve
+POST /internal/v1/offering-catalogs
+GET  /internal/v1/offering-catalogs
+GET  /internal/v1/offering-catalogs/:catalogId/versions/:catalogVersion
+POST /internal/v1/offering-availability/query
+POST /internal/v1/offering-selections/resolve
 ```
 
 Catalogs are operator/deploy-control surfaces, not a customer Form installer.
@@ -182,47 +193,20 @@ registry, executable implementation, activation/audience policy, and backend
 lifecycle. OSS retains only the bytes and metadata needed to observe, delete,
 or migrate old rows safely.
 
-## Legacy Resource/Form drain
+## Retired Resource/Form HTTP surfaces
 
-The old `Resource Shape`, Form Host, and `/v1/resources` family are migration
-internals, not a supported OSS authoring flow. The platform edge defaults all
-legacy Resource/Form paths and discovery to `404`; no environment variable
-turns them into a new public product surface.
+The old `Resource Shape`, TargetPool, SpacePolicy, Form Registry, and
+FormActivation HTTP families are retired. Their authoring writes are retired;
+Core does not mount their `/v1` paths, CLI commands, or public
+capability/OpenAPI descriptors. Those paths remain unconditional `404` even
+when a bearer and retained rows are present.
 
-An operator may opt into the bounded drain by setting
-`TAKOSUMI_LEGACY_RESOURCE_DRAIN_ENABLED=1` together with the authenticated
-control-plane configuration (`TAKOSUMI_DEPLOY_CONTROL_TOKEN` and the control
-database). The drain still requires authenticated access and permits only:
-
-| Legacy area | Allowed while drain is enabled |
-| --- | --- |
-| Resource collection and records | authenticated `GET`/`HEAD` list/read/events, `POST` observe, and `DELETE` |
-| TargetPool and SpacePolicy records | authenticated `GET`/`HEAD` (including list) and `DELETE` |
-
-Resource preview/apply/recover/import/refresh, TargetPool/SpacePolicy writes,
-Form Registry operations, FormActivation operations, portable Form discovery,
-and all other legacy actions remain unavailable. Disabled/unknown paths return
-`404`; recognized but retired operations return `410` while the drain is on.
-The drain never enables discovery, creates a Form, selects a TargetPool, or
-changes the supported Stack/Interface/Offering model.
-
-The drain is distinct from the code-owned frozen v1alpha1 maintenance
-composition. A host may inject that complete, same-origin provider lane only
-with exact transition host/evidence and current Run-credential authority. It
-must expose discovery plus the provider's retained exact read/observe/preview/
-update/delete lifecycle; a transition-only advertisement is invalid. Its
-separate Form transition operation binds exact old/new installed identities,
-generation, revision/lock/native preconditions, desired spec digest, and
-product/module evidence. Normal Resource apply still rejects identity changes.
-The operation claims the canonical Resource before dispatch, invokes the host
-at most once, commits Form/spec/lock/native evidence atomically at `N + 1`, and
-uses exact host-ledger readback for indeterminate forward repair. It never
-infers a pair from semver or accepts owner/lock/credential claims from the body.
-
-During the explicit drain window the platform cron may resume incomplete old
-Resource operations and perform bounded read-only observation of retained rows.
-Those maintenance jobs are disabled with the drain and cannot accept new
-desired state.
+Resource schemas, stores, migrations, retained rows, and typed in-process
+operations remain available for migration custody and the portable Takoform
+protocol. The portable protocol owns its separate `/.well-known/takoform` and
+`/apis/forms...` paths and is not a compatibility alias for the retired `/v1`
+family. Operators must use typed operations or an owning external Host for
+any retained-row read, transition, or cleanup.
 
 ## Migration custody
 

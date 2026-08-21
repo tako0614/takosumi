@@ -186,13 +186,6 @@ TAKOSUMI_SOURCE_ARCHIVE_ZSTD_LEVEL = "1"
 # Keep scheduled source_sync from competing with user-facing plan/apply/destroy
 # runs for runner container capacity.
 TAKOSUMI_SCHEDULED_SOURCE_POLL_BATCH = "5"
-# Read-only Resource Shape observation follows TAKOSUMI_RESOURCE_SHAPES by
-# default. Set TAKOSUMI_RESOURCE_OBSERVATION_ENABLED="0" to pause it, or "1"
-# to keep observing existing Resources while public shape creation is disabled.
-TAKOSUMI_RESOURCE_OBSERVATION_BATCH = "8"
-TAKOSUMI_RESOURCE_OBSERVATION_CONCURRENCY = "4"
-TAKOSUMI_RESOURCE_OBSERVATION_INTERVAL_SECONDS = "3600"
-TAKOSUMI_RESOURCE_OBSERVATION_LEASE_SECONDS = "900"
 # Production hardening evidence gate. In observe mode the internal gate reports
 # missing/drifted evidence but does not return 503. Platform readiness access
 # is accepted only when this gate is "enforce" and the versioned

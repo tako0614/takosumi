@@ -65,14 +65,6 @@ import {
   driftSweep,
   type DriftSweepOperations,
 } from "../../worker/src/scheduled/drift.ts";
-import {
-  RESOURCE_OBSERVATION_DEFAULT_CONCURRENCY,
-  RESOURCE_OBSERVATION_DEFAULT_INTERVAL_MS,
-  RESOURCE_OBSERVATION_DEFAULT_LEASE_MS,
-  RESOURCE_OBSERVATION_DEFAULT_LIMIT,
-  resourceObservationSweep,
-  type ResourceObservationSweepOptions,
-} from "../../worker/src/scheduled/resource_observation.ts";
 import { constantTimeEqualsString } from "../../core/shared/constant_time.ts";
 import {
   CompatibilityRouteControlService,
@@ -101,6 +93,7 @@ import {
   TAKOSUMI_PRODUCT_CAPABILITIES_PATH,
   TAKOSUMI_WELL_KNOWN_PATH,
   isInternalV1Path,
+  isRetiredV1Path,
 } from "takosumi-contract/api-surface";
 import type {
   ActorContext,
@@ -187,14 +180,6 @@ import {
 } from "takosumi-contract/capabilities";
 import type { Capsule } from "takosumi-contract/capsules";
 import type { Run, RunStatus, RunType } from "takosumi-contract/runs";
-import {
-  configuredResourceShapeKinds,
-  resourceShapeHostContributionsFromEnv,
-} from "../../worker/src/resource_shape_composition.ts";
-import {
-  composeResourceShapeSchemaRegistries,
-  LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY,
-} from "../../core/domains/resource-shape/mod.ts";
 import { createDbOwnedHostRuntimeMaterializationResolver } from "../../core/domains/resource-shape/host_runtime_materialization.ts";
 import { evaluateProductionHardeningGates } from "./production_hardening.ts";
 import {
@@ -1307,6 +1292,21 @@ export default {
         ),
       );
     }
+    // The former product discovery and Interface paths are retired rather than
+    // delegated to Accounts or a configurable extension. This keeps the route
+    // cutover fail-closed and prevents an accidental compatibility alias.
+    if (
+      url.pathname === "/v1/capabilities" ||
+      isPlatformLegacyInterfaceApiPath(url.pathname)
+    ) {
+      return Response.json({ error: "not found" }, { status: 404 });
+    }
+    // The legacy `/v1` namespace is reserved wholesale. Fail closed before
+    // extension matching, Accounts fallback, or any historical handler can
+    // claim a path; only the canonical `/api/v1` surface is public.
+    if (isRetiredV1Path(url.pathname)) {
+      return Response.json({ error: "not found" }, { status: 404 });
+    }
     if (url.pathname === "/internal/platform/hardening-gates") {
       return handleHardeningGatesRequest(request, env);
     }
@@ -1328,8 +1328,8 @@ export default {
     if (isPlatformExtensionContributionsPath(url.pathname)) {
       return handlePlatformExtensionContributionsRequest(request, url, env);
     }
-    // Configured extension routes are composed before the retired Flow-B
-    // drain. This keeps an explicitly declared exact external-standard leaf
+    // Configured extension routes are composed before ordinary SPA fallback.
+    // This keeps an explicitly declared exact external-standard leaf
     // (for example `/.well-known/takoform/v1beta1`) on the same generic
     // handler/auth seam as every other extension, without a Takoform branch.
     // Malformed optional configuration remains unclaimed and cannot take a
@@ -1354,6 +1354,15 @@ export default {
         verifyPlatformExtensionSession,
       );
     }
+    // Keep the portable Takoform v1alpha1 compatibility protocol on its own
+    // exact matcher while reserving the retired host roots and later alpha
+    // lanes. Unknown host paths must not fall through to the Accounts SPA.
+    if (
+      isPlatformTakoformHostPath(url.pathname) &&
+      !isPlatformTakoformV1alpha1CompatibilityRequest(request, url)
+    ) {
+      return Response.json({ error: "not found" }, { status: 404 });
+    }
     if (isPlatformTakoformV1alpha1CompatibilityRequest(request, url)) {
       return await handlePlatformTakoformV1alpha1CompatibilityRequest(
         request,
@@ -1361,31 +1370,8 @@ export default {
         context,
       );
     }
-    // Legacy Flow-B paths are an explicit drain lane. Unknown/retired paths
-    // must not fall through to the Accounts SPA or another extension route.
-    if (isPlatformLegacyResourceShapePath(url.pathname)) {
-      if (!platformLegacyResourceDrainEnabled(env)) {
-        return legacyResourceNotFoundResponse();
-      }
-      // Portable Takoform discovery and the v1alpha1 host facade are retired;
-      // drain mode never re-advertises or re-routes them.
-      if (isPlatformTakoformHostPath(url.pathname)) {
-        return legacyResourceNotFoundResponse();
-      }
-      if (
-        !platformLegacyDrainRequestAllowed(request, url.pathname) ||
-        isPathOrSubpath(url.pathname, "/v1/form-activations")
-      ) {
-        return legacyResourceRetiredResponse();
-      }
-      // The retained drain is an operator custody lane, not a Workspace API.
-      // Only the exact deploy-control bearer may reach a retained operation;
-      // retired methods above stay an unconditional 410.
-      const drainAuth = requireDeployControlBearer(request, env);
-      if (drainAuth) return drainAuth;
-    }
     // Generic Interface/InterfaceBinding APIs remain a normal session edge
-    // surface even though the legacy Resource Shape family is drain-only.
+    // surface on the canonical `/api/v1` prefix.
     if (
       isPlatformInterfaceApiPath(url.pathname) ||
       isPlatformOfferingApiPath(url.pathname)
@@ -1400,7 +1386,7 @@ export default {
         )
       );
     }
-    // Core lifecycle and identity prefixes always win over extension routing.
+    // Portable Takoform host routes remain separately composed under `/apis`.
     // Descriptor validation rejects overlaps too; keeping the dispatch order
     // explicit prevents a future parser regression from shadowing authority.
     if (isPlatformResourceShapeApiPath(url.pathname)) {
@@ -1459,12 +1445,9 @@ export default {
   },
   // Scheduled cron tick. Source polling runs only on its exact hourly schedule;
   // other maintenance crons must never fan out SourceSyncRun Durable Objects.
-  // When the
-  // `TAKOSUMI_DRIFT_CHECK_ENABLED=1` flag is set (default OFF), ALSO runs the
-  // current compatibility drift sweep for Workspaces with active Capsules.
-  // Legacy Resource repair/observation run only inside the explicit drain
-  // window. Observation uses waitUntil so slow runner-backed checks do not
-  // serialize the rest of the cron tick.
+  // When the `TAKOSUMI_DRIFT_CHECK_ENABLED=1` flag is set (default OFF), ALSO
+  // runs the current compatibility drift sweep for Workspaces with active
+  // Capsules.
   async scheduled(
     event: unknown,
     env: CloudflareWorkerEnv,
@@ -1482,21 +1465,11 @@ export default {
       await runScheduledSourcePoll(env);
     }
     await runScheduledOpenTofuRunRepair(env);
-    // Never resume old direct Resource operations from cron. In particular,
-    // preview/apply/import/refresh/create/update repair (including recoverApply)
-    // remains disabled even while an operator has the legacy drain flag on.
-    // The only retained Resource scheduler below is bounded observation.
     if (autoPlanStaleCapsulesEnabled(env)) {
       await runScheduledStaleCapsuleAutoPlan(env);
     }
     if (driftCheckEnabled(env)) {
       await runScheduledDriftSweep(env);
-    }
-    if (resourceObservationEnabled(env)) {
-      await schedulePlatformSideEffect(
-        runScheduledResourceObservation(env),
-        context,
-      );
     }
   },
 };
@@ -1580,9 +1553,8 @@ function platformDiscoveryOptions(
 ): CreateTakosumiDiscoveryOptions {
   const extensionDiscovery = platformExtensionDiscovery(env);
   const operatorControlMcp = operatorControlMcpEnabled(env);
-  // Flow-B is a retained drain-only compatibility lane, never a product
-  // capability. Keep the normal Git/OpenTofu and Interface discovery truthful
-  // even when an operator temporarily enables the drain flag.
+  // Resource Shape capability bits are retained for migration/domain custody,
+  // but no retired `/v1` HTTP or CLI surface is advertised.
   const resources = platformResourceCapabilities(env, false);
   const resourceShapes = false;
   const adapters = platformAdapterCapabilities(env, resourceShapes);
@@ -1639,12 +1611,9 @@ function platformResourceCapabilities(
     RESOURCE_CAPABILITY_KEYS.map((key) => [key, false]),
   ) as MutablePartial<TakosumiResourceCapabilities>;
   if (!apiEnabled) return base;
-  for (const key of resourceShapeCapabilityTokens(
-    env.TAKOSUMI_RESOURCE_SHAPES,
-    platformResourceShapeSchemaRegistry(env),
-  )) {
-    base[key] = true;
-  }
+  // Retired Resource Shape HTTP families are never advertised by the public
+  // platform discovery document. Keep this helper fail-closed for any future
+  // caller instead of deriving capabilities from a deleted route family.
   return base;
 }
 
@@ -1661,21 +1630,6 @@ function platformAdapterCapabilities(
     base[key] = true;
   }
   return base;
-}
-
-function resourceCapabilitiesEnabled(
-  resources: Partial<TakosumiResourceCapabilities>,
-): boolean {
-  return Object.entries(resources).some(
-    ([key, enabled]) => key !== "Stack" && enabled === true,
-  );
-}
-
-function resourceShapeCapabilityTokens(
-  value: unknown,
-  schemaRegistry?: import("../../core/domains/resource-shape/mod.ts").ResourceShapeSchemaRegistry,
-): readonly string[] {
-  return configuredResourceShapeKinds(value, schemaRegistry);
 }
 
 function parseCapabilityTokens(raw: string): readonly string[] {
@@ -1718,55 +1672,32 @@ export function platformResourceShapeApiEnabled(
   return Boolean(env.TAKOSUMI_DEPLOY_CONTROL_TOKEN && env.TAKOSUMI_CONTROL_DB);
 }
 
-/**
- * Temporary, fail-closed retirement lane for retained Flow-B state. The
- * deployment token and control D1 are necessary but not sufficient: operators
- * must explicitly set the narrowly-scoped drain flag as well.
- */
-export function platformLegacyResourceDrainEnabled(
-  env: CloudflareWorkerEnv,
-): boolean {
-  return (
-    platformResourceShapeApiEnabled(env) &&
-    env.TAKOSUMI_LEGACY_RESOURCE_DRAIN_ENABLED === "1"
-  );
-}
-
 const PUBLIC_RESOURCE_API_MANAGED_BY = "takosumi.resource-api.v1";
 
 export function isPlatformResourceShapeApiPath(pathname: string): boolean {
   return (
-    isPathOrSubpath(pathname, "/v1/form-availability") ||
     pathname === TAKOFORM_FORM_HOST_API_PATH ||
-    pathname.startsWith(`${TAKOFORM_FORM_HOST_API_PATH}/`) ||
-    pathname === "/v1/resources" ||
-    pathname.startsWith("/v1/resources/") ||
-    pathname === "/v1/target-pools" ||
-    pathname.startsWith("/v1/target-pools/") ||
-    pathname === "/v1/space-policies" ||
-    pathname.startsWith("/v1/space-policies/")
+    pathname.startsWith(`${TAKOFORM_FORM_HOST_API_PATH}/`)
   );
 }
 
 /** Generic Interface/InterfaceBinding ingress; kept independent from Flow-B. */
 export function isPlatformInterfaceApiPath(pathname: string): boolean {
   return (
+    pathname === "/api/v1/interfaces" ||
+    pathname.startsWith("/api/v1/interfaces/")
+  );
+}
+
+function isPlatformLegacyInterfaceApiPath(pathname: string): boolean {
+  return (
     pathname === "/v1/interfaces" || pathname.startsWith("/v1/interfaces/")
   );
 }
 
-/** Operator-only generic Offering ingress; not part of the legacy drain. */
+/** Operator-only generic Offering ingress. */
 export function isPlatformOfferingApiPath(pathname: string): boolean {
   return isPlatformOfferingOperatorApiPath(pathname);
-}
-
-function isPlatformLegacyResourceShapePath(pathname: string): boolean {
-  return (
-    isPathOrSubpath(pathname, TAKOFORM_FORM_HOST_WELL_KNOWN_PATH) ||
-    isRetiredTakoformHostApiPath(pathname) ||
-    isPlatformResourceShapeApiPath(pathname) ||
-    isPathOrSubpath(pathname, "/v1/form-activations")
-  );
 }
 
 const RETIRED_TAKOFORM_HOST_API_PATHS = [
@@ -2005,65 +1936,23 @@ export async function handlePlatformTakoformV1alpha1CompatibilityRequest(
 export const handlePlatformResourceFormTransitionRequest =
   handlePlatformTakoformV1alpha1CompatibilityRequest;
 
-/**
- * Drain only existing Resource state. All desired-state, provider/target
- * configuration, Form availability, portable host, and activation operations
- * are retired rather than silently creating a new Flow-B authority.
- */
-function platformLegacyDrainRequestAllowed(
-  request: Request,
-  pathname: string,
-): boolean {
-  const method = request.method.toUpperCase();
-  if (pathname === "/v1/resources" && (method === "GET" || method === "HEAD")) {
-    return true;
-  }
-  // TargetPool and SpacePolicy are retained configuration records. Their
-  // existing-state inventory and destroy reads remain available to an
-  // authenticated drain, while PUT/create-style mutations stay retired.
-  if (/^\/v1\/(?:target-pools|space-policies)$/u.test(pathname)) {
-    return method === "GET" || method === "HEAD";
-  }
-  if (/^\/v1\/(?:target-pools|space-policies)\/[^/]+$/u.test(pathname)) {
-    return method === "GET" || method === "HEAD" || method === "DELETE";
-  }
-  const resourceMatch =
-    /^\/v1\/resources\/[^/]+\/[^/]+(?:\/([^/]+))?$/u.exec(pathname);
-  if (!resourceMatch) return false;
-  const action = resourceMatch[1];
-  if (!action) return method === "GET" || method === "HEAD" || method === "DELETE";
-  if (action === "events") return method === "GET" || method === "HEAD";
-  return action === "observe" && method === "POST";
-}
-
 function legacyResourceNotFoundResponse(): Response {
   return Response.json({ error: "not found" }, { status: 404 });
 }
 
-function legacyResourceRetiredResponse(): Response {
-  return Response.json(
-    {
-      error: "legacy_resource_shape_retired",
-      error_description:
-        "Flow-B Resource Shape routes are in authenticated drain-only mode; new desired state and configuration are disabled",
-    },
-    { status: 410, headers: { "cache-control": "no-store" } },
-  );
-}
-
 function isPlatformOfferingOperatorApiPath(pathname: string): boolean {
   return (
-    pathname === "/v1/offering-catalogs" ||
-    pathname.startsWith("/v1/offering-catalogs/") ||
-    pathname === "/v1/offering-availability/query" ||
-    pathname === "/v1/offering-selections/resolve"
+    pathname === "/internal/v1/offering-catalogs" ||
+    pathname.startsWith("/internal/v1/offering-catalogs/") ||
+    pathname === "/internal/v1/offering-availability/query" ||
+    pathname === "/internal/v1/offering-selections/resolve"
   );
 }
 
 function isPlatformInterfaceTokenIssueRequest(request: Request): boolean {
   return (
     request.method === "POST" &&
-    /^\/v1\/interfaces\/[^/]+\/token$/u.test(new URL(request.url).pathname)
+    /^\/api\/v1\/interfaces\/[^/]+\/token$/u.test(new URL(request.url).pathname)
   );
 }
 
@@ -2083,64 +1972,23 @@ export async function handlePlatformResourceShapeApiRequest(
   );
 }
 
-/**
- * Shared Resource/Interface dispatch. The only caller that may bypass the
- * public legacy-drain gate is the private canonical recovery authority below;
- * it has already validated an exact, authenticated GET read before entering
- * this function. Keeping the escape hatch private prevents direct exported
- * handler callers from re-enabling retired Flow-B writes or discovery.
- */
+/** Shared Interface/Offering dispatch. Retired Resource `/v1` paths fail closed. */
 async function handlePlatformResourceShapeApiRequestInternal(
   request: Request,
   env: CloudflareWorkerEnv,
   sessionVerifier: PlatformExtensionSessionVerifier = verifyPlatformExtensionSession,
   workspaceAccess: PlatformExtensionWorkspaceAccess = platformExtensionSessionCanAccessWorkspace,
   context?: PlatformExecutionContext,
-  allowInternalCanonicalRead = false,
 ): Promise<Response> {
   const pathname = new URL(request.url).pathname;
   const timings = platformResourceShapeServerTimingBucket(pathname);
-  const legacyPath =
-    isPlatformResourceShapeApiPath(pathname) ||
-    isPathOrSubpath(pathname, "/v1/form-activations");
-  const canonicalInternalRead =
-    allowInternalCanonicalRead &&
-    request.method === "GET" &&
-    /^\/v1\/resources\/[^/]+\/[^/]+$/u.test(pathname);
-  if (isPlatformTakoformHostPath(pathname)) {
+  if (isRetiredV1Path(pathname) || isPlatformTakoformHostPath(pathname)) {
     return appendPlatformResourceServerTiming(
       legacyResourceNotFoundResponse(),
       timings,
     );
   }
-  if (legacyPath && !canonicalInternalRead) {
-    if (
-      !platformLegacyResourceDrainEnabled(env) ||
-      isPlatformTakoformHostPath(pathname)
-    ) {
-      return appendPlatformResourceServerTiming(
-        legacyResourceNotFoundResponse(),
-        timings,
-      );
-    }
-    if (!platformLegacyDrainRequestAllowed(request, pathname)) {
-      return appendPlatformResourceServerTiming(
-        legacyResourceRetiredResponse(),
-        timings,
-      );
-    }
-    // Legacy Resource state is retained for operator custody only. Never
-    // reinterpret a Workspace session, personal token, or delegated OAuth
-    // credential as drain authority; the exact deploy-control bearer is the
-    // sole public ingress authority for this compatibility lane.
-    const drainAuth = requireDeployControlBearer(request, env);
-    if (drainAuth) {
-      return appendPlatformResourceServerTiming(drainAuth, timings);
-    }
-  }
-  const enabled = legacyPath
-    ? canonicalInternalRead || platformLegacyResourceDrainEnabled(env)
-    : platformResourceShapeApiEnabled(env);
+  const enabled = platformResourceShapeApiEnabled(env);
   if (!enabled) {
     return appendPlatformResourceServerTiming(
       legacyResourceNotFoundResponse(),
@@ -2502,7 +2350,7 @@ function platformResourceWorkspaceAccessMode(
   // Interface or its owner, so delegated read authority remains sufficient.
   if (
     request.method === "POST" &&
-    /^\/v1\/interfaces\/[^/]+\/token$/u.test(url.pathname)
+    /^\/api\/v1\/interfaces\/[^/]+\/token$/u.test(url.pathname)
   ) {
     return "read";
   }
@@ -3167,19 +3015,18 @@ export function isOidcMetricPath(pathname: string): boolean {
   if (
     pathname === "/.well-known/openid-configuration" ||
     pathname === "/oauth/jwks" ||
-    pathname === "/v1/auth/providers"
+    pathname === "/api/v1/auth/providers"
   ) {
     return false;
   }
   return (
     pathname === "/oauth" ||
-    pathname.startsWith("/oauth/") ||
-    pathname === "/v1/auth" ||
-    pathname.startsWith("/v1/auth/")
+    pathname.startsWith("/oauth/")
   );
 }
 
 export function oidcMetricRoute(pathname: string): string {
+  if (pathname.startsWith("/oauth/upstream")) return "/oauth/upstream/*";
   if (pathname === "/oauth" || pathname.startsWith("/oauth/authorize")) {
     return "/oauth/authorize";
   }
@@ -3188,7 +3035,6 @@ export function oidcMetricRoute(pathname: string): string {
   if (pathname.startsWith("/oauth/revoke")) return "/oauth/revoke";
   if (pathname.startsWith("/oauth/introspect")) return "/oauth/introspect";
   if (pathname.startsWith("/oauth/jwks")) return "/oauth/jwks";
-  if (pathname.startsWith("/v1/auth/upstream")) return "/v1/auth/upstream/*";
   return pathname;
 }
 
@@ -4883,15 +4729,16 @@ export function createPlatformCanonicalResourceReadAuthority(
       const requestedSpace = safePlatformExtensionContextId(
         url.searchParams.get("space"),
       );
+      const kind = isResourceShapeKind(resourceKind) ? resourceKind : undefined;
       const exactResourceRead =
         request.method === "GET" &&
         segments.length === 4 &&
         segments[0] === "v1" &&
         segments[1] === "resources" &&
-        isResourceShapeKind(resourceKind) &&
+        kind !== undefined &&
         Boolean(safePlatformCompatibilityResourceName(resourceName)) &&
         [...url.searchParams.keys()].every((key) => key === "space");
-      if (!exactResourceRead) {
+      if (!exactResourceRead || !kind) {
         return Response.json(
           {
             error: "invalid_resource_read",
@@ -4916,45 +4763,19 @@ export function createPlatformCanonicalResourceReadAuthority(
           { status: 403 },
         );
       }
-      if (!platformResourceShapeApiEnabled(env)) {
+      const operations = await takosumiOperationsFor(env);
+      const evidence = await operations.resourceCompatibility?.resolveReadyResource({
+        space: workspaceId,
+        kind,
+        name: resourceName,
+      });
+      if (!evidence || evidence.resource.status?.phase !== "Ready") {
         return Response.json({ error: "not found" }, { status: 404 });
       }
-      const headers = new Headers(request.headers);
-      for (const header of [
-        ...PLATFORM_EXTENSION_RAW_CREDENTIAL_HEADERS,
-        ...PLATFORM_EXTENSION_TRUSTED_CONTEXT_HEADERS,
-        TAKOSUMI_INTERNAL_ACTOR_HEADER,
-      ]) {
-        headers.delete(header);
-      }
-      headers.set(
-        "authorization",
-        `Bearer ${String(env.TAKOSUMI_DEPLOY_CONTROL_TOKEN)}`,
-      );
-      headers.set(
-        TAKOSUMI_INTERNAL_ACTOR_HEADER,
-        encodeActorContext(
-          platformResourceShapeActorContext(
-            {
-              authenticated: true,
-              authKind: "service-token",
-              workspaceId,
-              subject,
-              scopes: ["admin"],
-            },
-            workspaceId,
-          ),
-        ),
-      );
-      headers.delete(TAKOSUMI_INTERNAL_RESOURCE_MANAGED_BY_HEADER);
-      return await handlePlatformResourceShapeApiRequestInternal(
-        new Request(url, { method: "GET", headers }),
-        env,
-        undefined,
-        undefined,
-        undefined,
-        true,
-      );
+      return Response.json({
+        id: `tkrn:${workspaceId}:${kind}:${resourceName}`,
+        ...evidence.resource,
+      });
     },
   });
 }
@@ -6009,7 +5830,7 @@ export async function verifyPlatformExtensionSession(
   if (!headers) return { authenticated: false };
   try {
     const response = await accountsWorker.fetch(
-      new Request(new URL("/v1/account/session/me", request.url), {
+      new Request(new URL("/api/v1/account/session/me", request.url), {
         method: "GET",
         headers,
       }),
@@ -6742,10 +6563,9 @@ export interface SourceWebhookOperations {
     sourceId: string,
     presentedSecret: string,
   ): Promise<boolean>;
-  createSourceSync(
+  createSourceReconciliationSyncs(
     sourceId: string,
-    options?: { readonly dedupe?: boolean },
-  ): Promise<{ readonly run: { readonly id: string } }>;
+  ): Promise<readonly { readonly run: { readonly id: string } }[]>;
 }
 
 export interface SourcePollOperations extends SourceWebhookOperations {
@@ -6811,8 +6631,8 @@ async function handleSourceWebhook(
 /**
  * Per-source webhook seam (`POST /hooks/sources/:sourceId`). The bearer is the
  * per-source hook secret (compared against the stored hash by the source
- * service). The payload body is IGNORED (untrusted); a valid bearer triggers a
- * deduped source_sync for the source's default ref.
+ * service). The payload body is IGNORED (untrusted); a valid bearer triggers
+ * deduped source_sync runs for the Source default plus applied Capsule lanes.
  */
 export async function handleSourceWebhookRequest(
   request: Request,
@@ -6843,9 +6663,17 @@ export async function handleSourceWebhookRequest(
   if (!valid) {
     return Response.json({ error: "unauthenticated" }, { status: 401 });
   }
-  // Payload is untrusted and ignored; effect is a deduped re-resolution.
-  const { run } = await operations.createSourceSync(sourceId, { dedupe: true });
-  return Response.json({ accepted: true, runId: run.id }, { status: 202 });
+  // Payload is untrusted and ignored; addresses come only from durable Source
+  // defaults and current Capsule StateVersion provenance.
+  const runs = await operations.createSourceReconciliationSyncs(sourceId);
+  return Response.json(
+    {
+      accepted: true,
+      runId: runs[0]?.run.id,
+      runIds: runs.map(({ run }) => run.id),
+    },
+    { status: 202 },
+  );
 }
 
 function bearerFromAuthorization(header: string): string | undefined {
@@ -6879,10 +6707,11 @@ async function runScheduledSourcePoll(env: DeployControlEnv): Promise<void> {
 
 /**
  * Scheduled source polling seam. Scans active sources whose autoSync flag is set
- * and enqueues a deduped source_sync for each. The runner resolves the ref with
- * git ls-remote; when the ref still points at the latest SourceSnapshot commit,
- * it reuses that immutable archive object instead of cloning/archiving again.
- * Best-effort and capped.
+ * and enqueues deduped source_sync runs for the shared default address plus
+ * each distinct ref/path lane adopted by a current Capsule StateVersion. The
+ * runner resolves each ref with git ls-remote and reuses an unchanged immutable
+ * archive. Best-effort and capped by Source; each Source's lane set is bounded
+ * by its Capsule count.
  */
 export async function pollAutoSyncSources(
   operations: SourcePollOperations,
@@ -6891,7 +6720,7 @@ export async function pollAutoSyncSources(
   const sources = await operations.controller.listAutoSyncSources(batch);
   for (const source of sources) {
     try {
-      await operations.createSourceSync(source.id, { dedupe: true });
+      await operations.createSourceReconciliationSyncs(source.id);
     } catch {
       // Best-effort: one bad source must not abort the whole poll.
     }
@@ -7219,113 +7048,6 @@ function runTimestampMs(
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
-const RESOURCE_OBSERVATION_MAX_BATCH = 32;
-const RESOURCE_OBSERVATION_MAX_CONCURRENCY = 8;
-const RESOURCE_OBSERVATION_MIN_INTERVAL_SECONDS = 5 * 60;
-const RESOURCE_OBSERVATION_MAX_INTERVAL_SECONDS = 7 * 24 * 60 * 60;
-const RESOURCE_OBSERVATION_MIN_LEASE_SECONDS = 10 * 60;
-const RESOURCE_OBSERVATION_MAX_LEASE_SECONDS = 2 * 60 * 60;
-
-/**
- * Read-only legacy Resource observation is part of the explicit drain lane.
- * Within that lane it follows the retained shape set unless the operator
- * explicitly overrides it with `0` or `1`.
- */
-export function resourceObservationEnabled(env: CloudflareWorkerEnv): boolean {
-  if (!platformLegacyResourceDrainEnabled(env)) return false;
-  const configured = env.TAKOSUMI_RESOURCE_OBSERVATION_ENABLED;
-  if (configured !== undefined) {
-    return typeof configured === "string" && configured === "1";
-  }
-  return (
-    resourceShapeCapabilityTokens(
-      env.TAKOSUMI_RESOURCE_SHAPES,
-      platformResourceShapeSchemaRegistry(env),
-    ).length > 0
-  );
-}
-
-function platformResourceShapeSchemaRegistry(env: CloudflareWorkerEnv) {
-  return composeResourceShapeSchemaRegistries(
-    LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY,
-    resourceShapeHostContributionsFromEnv(env).schemaRegistry,
-  );
-}
-
-export function scheduledResourceObservationOptions(
-  env: CloudflareWorkerEnv,
-): Required<
-  Pick<
-    ResourceObservationSweepOptions,
-    "limit" | "concurrency" | "intervalMs" | "leaseMs"
-  >
-> {
-  const limit = boundedEnvInteger(
-    env.TAKOSUMI_RESOURCE_OBSERVATION_BATCH,
-    RESOURCE_OBSERVATION_DEFAULT_LIMIT,
-    1,
-    RESOURCE_OBSERVATION_MAX_BATCH,
-  );
-  const concurrency = Math.min(
-    limit,
-    boundedEnvInteger(
-      env.TAKOSUMI_RESOURCE_OBSERVATION_CONCURRENCY,
-      RESOURCE_OBSERVATION_DEFAULT_CONCURRENCY,
-      1,
-      RESOURCE_OBSERVATION_MAX_CONCURRENCY,
-    ),
-  );
-  const intervalSeconds = boundedEnvInteger(
-    env.TAKOSUMI_RESOURCE_OBSERVATION_INTERVAL_SECONDS,
-    RESOURCE_OBSERVATION_DEFAULT_INTERVAL_MS / 1000,
-    RESOURCE_OBSERVATION_MIN_INTERVAL_SECONDS,
-    RESOURCE_OBSERVATION_MAX_INTERVAL_SECONDS,
-  );
-  const leaseSeconds = boundedEnvInteger(
-    env.TAKOSUMI_RESOURCE_OBSERVATION_LEASE_SECONDS,
-    RESOURCE_OBSERVATION_DEFAULT_LEASE_MS / 1000,
-    RESOURCE_OBSERVATION_MIN_LEASE_SECONDS,
-    RESOURCE_OBSERVATION_MAX_LEASE_SECONDS,
-  );
-  return {
-    limit,
-    concurrency,
-    intervalMs: intervalSeconds * 1000,
-    leaseMs: leaseSeconds * 1000,
-  };
-}
-
-async function runScheduledResourceObservation(
-  env: CloudflareWorkerEnv,
-): Promise<void> {
-  const service = await cachedDeployControlService(env);
-  const operations = service.operations.resourceObservation;
-  if (!operations) return;
-  const result = await resourceObservationSweep(
-    operations,
-    scheduledResourceObservationOptions(env),
-  );
-  const counts = {
-    claimed: result.claimed,
-    observed: result.observed,
-    failed: result.failed,
-    lease_lost: result.leaseLost,
-    claim_error: result.claimErrors,
-  } as const;
-  await Promise.all(
-    Object.entries(counts).map(([outcome, value]) =>
-      recordWorkerMetric({
-        observability: service.context.adapters.observability,
-        env,
-        name: "takosumi_resource_observation_count",
-        kind: "counter",
-        value,
-        tags: { outcome },
-      }),
-    ),
-  );
-}
-
 async function runScheduledResourceOperationRepair(
   env: CloudflareWorkerEnv,
 ): Promise<void> {
@@ -7377,7 +7099,7 @@ export async function repairDirectResourceRuns(
     return { ...(await repair.repair({ limit })), failures: 0 };
   } catch {
     // A transient Run-ledger outage must not suppress source polling, drift,
-    // stale-plan handling, or Resource observation in the same cron tick.
+    // or stale-plan handling in the same cron tick.
     return {
       scanned: 0,
       recovered: 0,
@@ -7387,22 +7109,6 @@ export async function repairDirectResourceRuns(
       failures: 1,
     };
   }
-}
-
-function boundedEnvInteger(
-  value: unknown,
-  fallback: number,
-  minimum: number,
-  maximum: number,
-): number {
-  if (typeof value !== "string" || !/^\d+$/u.test(value.trim())) {
-    return fallback;
-  }
-  const parsed = Number(value.trim());
-  if (!Number.isSafeInteger(parsed) || parsed < minimum || parsed > maximum) {
-    return fallback;
-  }
-  return parsed;
 }
 
 // Cap so a single cron tick never creates an unbounded number of drift checks.

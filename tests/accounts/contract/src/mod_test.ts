@@ -76,30 +76,32 @@ test("account token contract exposes the Accounts PAT route surface", () => {
     "ai.embeddings",
   ]);
   expect(TAKOSUMI_ACCOUNTS_SELF_SERVICE_PAT_SCOPES).toEqual(["read", "write"]);
-  expect(TAKOSUMI_ACCOUNTS_ACCOUNT_TOKENS_PATH).toEqual("/v1/account/tokens");
+  expect(TAKOSUMI_ACCOUNTS_ACCOUNT_TOKENS_PATH).toEqual(
+    "/api/v1/account/tokens",
+  );
   expect(TAKOSUMI_ACCOUNTS_PAT_SCOPE_CATALOG_PATH).toEqual(
-    "/v1/account/tokens/scopes",
+    "/api/v1/account/tokens/scopes",
   );
   expect(TAKOSUMI_ACCOUNTS_PAT_SCOPE_CATALOG_KIND).toEqual(
     "takosumi.account-pat-scope-catalog@v1",
   );
   expect(TAKOSUMI_ACCOUNTS_CURRENT_PAT_AUTHORITY_PATH).toEqual(
-    "/v1/account/tokens/current",
+    "/api/v1/account/tokens/current",
   );
   expect(TAKOSUMI_ACCOUNTS_CURRENT_PAT_AUTHORITY_KIND).toEqual(
     "takosumi.account-pat-authority@v1",
   );
   expect(TAKOSUMI_ACCOUNTS_PAT_INVENTORY_PATH).toEqual(
-    "/v1/account/tokens/inventory.v1",
+    "/api/v1/account/tokens/inventory.v1",
   );
   expect(TAKOSUMI_ACCOUNTS_PAT_INVENTORY_KIND).toEqual(
     "takosumi.account-pat-inventory@v1",
   );
   expect(takosumiAccountsAccountTokenRevokePath("pat_1")).toEqual(
-    "/v1/account/tokens/pat_1/revoke",
+    "/api/v1/account/tokens/pat_1/revoke",
   );
   expect(takosumiAccountsAccountTokenRevokePath("pat/one")).toEqual(
-    "/v1/account/tokens/pat%2Fone/revoke",
+    "/api/v1/account/tokens/pat%2Fone/revoke",
   );
   assertThrows(
     () => takosumiAccountsAccountTokenRevokePath(""),
@@ -110,22 +112,24 @@ test("account token contract exposes the Accounts PAT route surface", () => {
 
 test("optional Accounts HTTP path constants are exported from the contract", () => {
   expect(TAKOSUMI_ACCOUNTS_UPSTREAM_AUTHORIZE_PATH).toEqual(
-    "/v1/auth/upstream/authorize",
+    "/oauth/upstream/authorize",
   );
   expect(TAKOSUMI_ACCOUNTS_UPSTREAM_CALLBACK_PATH).toEqual(
-    "/v1/auth/upstream/callback",
+    "/oauth/upstream/callback",
   );
-  expect(TAKOSUMI_ACCOUNTS_AUTH_PROVIDERS_PATH).toEqual("/v1/auth/providers");
+  expect(TAKOSUMI_ACCOUNTS_AUTH_PROVIDERS_PATH).toEqual(
+    "/api/v1/auth/providers",
+  );
   expect(TAKOSUMI_ACCOUNTS_PASSKEY_REGISTER_OPTIONS_PATH).toEqual(
-    "/v1/auth/passkeys/register/options",
+    "/api/v1/auth/passkeys/register/options",
   );
   expect(TAKOSUMI_ACCOUNTS_PASSKEY_REGISTER_COMPLETE_PATH).toEqual(
-    "/v1/auth/passkeys/register/complete",
+    "/api/v1/auth/passkeys/register/complete",
   );
   expect(TAKOSUMI_ACCOUNTS_PASSKEY_AUTHENTICATE_OPTIONS_PATH).toEqual(
-    "/v1/auth/passkeys/authenticate/options",
+    "/api/v1/auth/passkeys/authenticate/options",
   );
   expect(TAKOSUMI_ACCOUNTS_PASSKEY_AUTHENTICATE_COMPLETE_PATH).toEqual(
-    "/v1/auth/passkeys/authenticate/complete",
+    "/api/v1/auth/passkeys/authenticate/complete",
   );
 });

@@ -64,6 +64,8 @@ import {
   isAccountWorkspaceInventorySegments,
 } from "./control/account-workspace-views.ts";
 import { handleProjects } from "./control/projects.ts";
+import { handleInstallPlans } from "./control/install-plans.ts";
+import { handleRevisionPlans } from "./control/revision-plans.ts";
 import {
   appendServerTiming,
   measureServerTiming,
@@ -107,6 +109,8 @@ type ControlResourceHandler = (
 const RESOURCE_HANDLERS: Partial<Record<string, ControlResourceHandler>> = {
   workspaces: handleWorkspaces,
   projects: handleProjects,
+  "install-plans": handleInstallPlans,
+  "revision-plans": handleRevisionPlans,
   capsules: handleCapsules,
   "capsule-configs": handleInstallConfigs,
   "credential-recipes": handleCredentialRecipes,

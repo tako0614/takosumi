@@ -69,8 +69,6 @@ export interface CreateTakosumiOpenApiDocumentOptions {
    * the Prometheus exposition `/metrics` endpoint in the OpenAPI document.
    */
   readonly metricsRoutesMounted?: boolean;
-  /** Mounted when the operator FormActivation lifecycle API is configured. */
-  readonly formActivationRoutesMounted?: boolean;
   /** Mounted when immutable generic Offering catalog administration is configured. */
   readonly offeringCatalogRoutesMounted?: boolean;
   /**
@@ -345,14 +343,6 @@ function operation(input: {
             "409": errorResponse(),
             "413": errorResponse(),
             "502": errorResponse(),
-            "503": errorResponse(),
-          }
-        : {}),
-      ...(input.tag === "form-activations"
-        ? {
-            "400": errorResponse(),
-            "404": errorResponse(),
-            "409": errorResponse(),
             "503": errorResponse(),
           }
         : {}),
@@ -2590,10 +2580,11 @@ function processSchemas(): Record<string, Record<string, unknown>> {
     },
     TakosumiWellKnownEndpoints: {
       type: "object",
-      required: ["api", "capabilities", "oidc_issuer"],
+      required: ["api", "capabilities", "openapi", "oidc_issuer"],
       properties: {
         api: { type: "string", format: "uri" },
         capabilities: { type: "string", format: "uri" },
+        openapi: { type: "string", format: "uri" },
         oidc_issuer: { type: "string", format: "uri" },
         extensions: {
           type: "object",
@@ -2704,7 +2695,6 @@ function processSchemas(): Record<string, Record<string, unknown>> {
         "compatibilityProfiles",
         "identity",
         "operator",
-        "formAvailability",
         "extensions",
       ],
       properties: {
@@ -2715,37 +2705,6 @@ function processSchemas(): Record<string, Record<string, unknown>> {
         compatibilityProfiles: ref("TakosumiCompatibilityProfileCapabilities"),
         identity: ref("TakosumiIdentityCapabilities"),
         operator: ref("TakosumiOperatorCapabilities"),
-        formAvailability: {
-          type: "object",
-          required: [
-            "structured",
-            "endpoint",
-            "principalScoped",
-            "readScopesAnyOf",
-            "commercialFields",
-            "forms",
-          ],
-          properties: {
-            structured: { const: true },
-            endpoint: { const: "/v1/form-availability" },
-            principalScoped: { const: true },
-            readScopesAnyOf: {
-              type: "array",
-              prefixItems: [
-                { const: "forms:read" },
-                { const: "resources:read" },
-              ],
-              minItems: 2,
-              maxItems: 2,
-            },
-            commercialFields: { const: false },
-            forms: {
-              type: "array",
-              items: ref("FormAvailability"),
-            },
-          },
-          additionalProperties: false,
-        },
         extensions: { type: "array", items: { type: "string" } },
       },
       additionalProperties: false,

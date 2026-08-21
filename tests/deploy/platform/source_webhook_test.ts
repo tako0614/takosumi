@@ -49,7 +49,6 @@ import {
   resolvePlatformExtensionRequestScopeRoute,
   verifyPlatformExtensionSession,
   platformResourceShapeApiEnabled,
-  platformLegacyResourceDrainEnabled,
   isPlatformMetricsDashboardPath,
   isPlatformMetricsPath,
   oidcMetricRoute,
@@ -58,8 +57,6 @@ import {
   planStaleCapsuleUpdates,
   repairDirectResourceRuns,
   repairStaleOpenTofuRuns,
-  resourceObservationEnabled,
-  scheduledResourceObservationOptions,
   scheduledSourcePollEnabledForCron,
   scheduledSourcePollBatch,
   schedulePlatformSideEffect,
@@ -76,7 +73,6 @@ import {
 } from "../../../deploy/platform/worker.ts";
 import { platformResourceInterfaceWorkspaceResolver } from "../../../worker/src/deploy_control_seam.ts";
 import { createRunCredentialToken } from "../../../core/shared/run_credential_tokens.ts";
-import { sha256HexAsync } from "../../../core/shared/runtime/hash.ts";
 import {
   createInMemoryResourceShapeStores,
   MapResourceShapeSchemaRegistry,
@@ -377,9 +373,9 @@ function makeWebhookOps(
       if (overrides.throwOnVerify) return Promise.reject(new Error("boom"));
       return Promise.resolve(overrides.valid ?? true);
     },
-    createSourceSync: (sourceId, options) => {
-      syncCalls.push({ sourceId, dedupe: options?.dedupe });
-      return Promise.resolve({ run: { id: "ssr_1" } });
+    createSourceReconciliationSyncs: (sourceId) => {
+      syncCalls.push({ sourceId, dedupe: true });
+      return Promise.resolve([{ run: { id: "ssr_1" } }]);
     },
   };
   return { ops, syncCalls, verifyCalls };
@@ -466,9 +462,9 @@ test("scheduled poll enqueues a deduped sync per autoSync source, capped", async
   const syncCalls: string[] = [];
   const ops: SourcePollOperations = {
     verifySourceHookSecret: () => Promise.resolve(true),
-    createSourceSync: (sourceId) => {
+    createSourceReconciliationSyncs: (sourceId) => {
       syncCalls.push(sourceId);
-      return Promise.resolve({ run: { id: `ssr_${sourceId}` } });
+      return Promise.resolve([{ run: { id: `ssr_${sourceId}` } }]);
     },
     controller: {
       listAutoSyncSources: (limit) =>
@@ -802,79 +798,6 @@ test("drift sweep is OFF by default and only enabled by the =1 flag", () => {
   expect(
     driftCheckEnabled({ ...base, TAKOSUMI_DRIFT_CHECK_ENABLED: "1" } as never),
   ).toBe(true);
-});
-
-test("legacy Resource observation requires the explicit drain lane", () => {
-  const drain = {
-    TAKOSUMI_CONTROL_DB: {},
-    TAKOSUMI_DEPLOY_CONTROL_TOKEN: "resource-token",
-    TAKOSUMI_LEGACY_RESOURCE_DRAIN_ENABLED: "1",
-  } as const;
-  expect(resourceObservationEnabled({} as never)).toBe(false);
-  expect(
-    resourceObservationEnabled({
-      TAKOSUMI_RESOURCE_SHAPES: "EdgeWorker",
-    } as never),
-  ).toBe(false);
-  expect(
-    resourceObservationEnabled({
-      ...drain,
-      TAKOSUMI_RESOURCE_SHAPES: "EdgeWorker",
-    } as never),
-  ).toBe(true);
-  expect(
-    resourceObservationEnabled({
-      ...drain,
-      TAKOSUMI_RESOURCE_SHAPES: "EdgeWorker",
-      TAKOSUMI_RESOURCE_OBSERVATION_ENABLED: "0",
-    } as never),
-  ).toBe(false);
-  expect(
-    resourceObservationEnabled({
-      ...drain,
-      TAKOSUMI_RESOURCE_OBSERVATION_ENABLED: "1",
-    } as never),
-  ).toBe(true);
-  expect(
-    resourceObservationEnabled({
-      ...drain,
-      TAKOSUMI_RESOURCE_SHAPES: "EdgeWorker",
-      TAKOSUMI_RESOURCE_OBSERVATION_ENABLED: "true",
-    } as never),
-  ).toBe(false);
-
-  expect(scheduledResourceObservationOptions({} as never)).toEqual({
-    limit: 8,
-    concurrency: 4,
-    intervalMs: 60 * 60 * 1000,
-    leaseMs: 15 * 60 * 1000,
-  });
-  expect(
-    scheduledResourceObservationOptions({
-      TAKOSUMI_RESOURCE_OBSERVATION_BATCH: "3",
-      TAKOSUMI_RESOURCE_OBSERVATION_CONCURRENCY: "7",
-      TAKOSUMI_RESOURCE_OBSERVATION_INTERVAL_SECONDS: "300",
-      TAKOSUMI_RESOURCE_OBSERVATION_LEASE_SECONDS: "600",
-    } as never),
-  ).toEqual({
-    limit: 3,
-    concurrency: 3,
-    intervalMs: 300_000,
-    leaseMs: 600_000,
-  });
-  expect(
-    scheduledResourceObservationOptions({
-      TAKOSUMI_RESOURCE_OBSERVATION_BATCH: "0",
-      TAKOSUMI_RESOURCE_OBSERVATION_CONCURRENCY: "99",
-      TAKOSUMI_RESOURCE_OBSERVATION_INTERVAL_SECONDS: "1",
-      TAKOSUMI_RESOURCE_OBSERVATION_LEASE_SECONDS: "1",
-    } as never),
-  ).toEqual({
-    limit: 8,
-    concurrency: 4,
-    intervalMs: 60 * 60 * 1000,
-    leaseMs: 15 * 60 * 1000,
-  });
 });
 
 test("production hardening gates require platform opening evidence", () => {
@@ -1211,14 +1134,14 @@ test("platform metrics summary captures required metric and label coverage", () 
 test("platform OIDC metrics exclude public metadata and cover auth flows", () => {
   expect(isOidcMetricPath("/.well-known/openid-configuration")).toBe(false);
   expect(isOidcMetricPath("/oauth/jwks")).toBe(false);
-  expect(isOidcMetricPath("/v1/auth/providers")).toBe(false);
+  expect(isOidcMetricPath("/api/v1/auth/providers")).toBe(false);
   expect(isOidcMetricPath("/oauth/authorize")).toBe(true);
   expect(isOidcMetricPath("/oauth/token")).toBe(true);
-  expect(isOidcMetricPath("/v1/auth/upstream/google/start")).toBe(true);
+  expect(isOidcMetricPath("/oauth/upstream/google/start")).toBe(true);
   expect(isOidcMetricPath("/api/v1/capsules")).toBe(false);
   expect(oidcMetricRoute("/oauth/authorize")).toBe("/oauth/authorize");
-  expect(oidcMetricRoute("/v1/auth/upstream/google/callback")).toBe(
-    "/v1/auth/upstream/*",
+  expect(oidcMetricRoute("/oauth/upstream/google/callback")).toBe(
+    "/oauth/upstream/*",
   );
 });
 
@@ -1607,7 +1530,7 @@ test("platform discovery publishes commercial functions only as explicit extensi
       TAKOSUMI_COMMERCIAL_BILLING_HANDLER: { fetch() {} },
       TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
         {
-          basePath: "/v1/billing",
+          basePath: "/api/v1/billing",
           handlerKey: "TAKOSUMI_COMMERCIAL_BILLING_HANDLER",
           capabilities: ["billing.commercial.v1"],
         },
@@ -1750,7 +1673,6 @@ test("platform Resource Shape drain stays unadvertised despite deploy-control bi
 
   expect(platformResourceShapeApiEnabled({} as never)).toBe(false);
   expect(platformResourceShapeApiEnabled(env)).toBe(true);
-  expect(platformLegacyResourceDrainEnabled(env)).toBe(false);
 
   const capabilities = await worker.fetch(
     new Request(
@@ -1894,9 +1816,9 @@ test("platform Resource Shape API does not advertise shapes without an operator 
   expect((await discovery.json()).features.resource_shapes).toBe(false);
 });
 
-test("platform Resource Shape API routes are routed before accounts and bearer-gated", async () => {
-  expect(isPlatformResourceShapeApiPath("/v1/resources")).toBe(true);
-  expect(isPlatformResourceShapeApiPath("/v1/form-availability")).toBe(true);
+test("platform Resource Shape classifier only recognizes the portable host", async () => {
+  expect(isPlatformResourceShapeApiPath("/v1/resources")).toBe(false);
+  expect(isPlatformResourceShapeApiPath("/v1/form-availability")).toBe(false);
   expect(isPlatformResourceShapeApiPath("/v1/offering-catalogs")).toBe(false);
   expect(
     isPlatformResourceShapeApiPath("/v1/offering-catalogs/public/versions/v1"),
@@ -1907,9 +1829,12 @@ test("platform Resource Shape API routes are routed before accounts and bearer-g
   expect(
     isPlatformResourceShapeApiPath("/v1/offering-selections/resolve"),
   ).toBe(false);
-  expect(isPlatformOfferingApiPath("/v1/offering-catalogs")).toBe(true);
+  expect(isPlatformOfferingApiPath("/v1/offering-catalogs")).toBe(false);
   expect(
-    isPlatformOfferingApiPath("/v1/offering-selections/resolve"),
+    isPlatformOfferingApiPath("/internal/v1/offering-catalogs"),
+  ).toBe(true);
+  expect(
+    isPlatformOfferingApiPath("/internal/v1/offering-selections/resolve"),
   ).toBe(true);
   expect(isPlatformResourceShapeApiPath(TAKOFORM_FORM_HOST_API_PATH)).toBe(
     true,
@@ -1919,16 +1844,17 @@ test("platform Resource Shape API routes are routed before accounts and bearer-g
       `${TAKOFORM_FORM_HOST_API_PATH}/interfaces/mcp.server`,
     ),
   ).toBe(true);
-  expect(isPlatformResourceShapeApiPath("/v1/interfaces")).toBe(false);
-  expect(isPlatformInterfaceApiPath("/v1/interfaces")).toBe(true);
-  expect(isPlatformInterfaceApiPath("/v1/interfaces/if_1/bindings")).toBe(
+  expect(isPlatformResourceShapeApiPath("/api/v1/interfaces")).toBe(false);
+  expect(isPlatformInterfaceApiPath("/api/v1/interfaces")).toBe(true);
+  expect(isPlatformInterfaceApiPath("/api/v1/interfaces/if_1/bindings")).toBe(
     true,
   );
-  expect(isPlatformResourceShapeApiPath("/v1/target-pools/default")).toBe(true);
+  expect(isPlatformInterfaceApiPath("/v1/interfaces")).toBe(false);
+  expect(isPlatformResourceShapeApiPath("/v1/target-pools/default")).toBe(false);
   expect(isPlatformResourceShapeApiPath("/v1/space-policies/default")).toBe(
-    true,
+    false,
   );
-  expect(isPlatformResourceShapeApiPath("/v1/form-availability")).toBe(true);
+  expect(isPlatformResourceShapeApiPath("/v1/form-availability")).toBe(false);
   expect(isPlatformResourceShapeApiPath("/takoform/v0/forms")).toBe(false);
   expect(isPlatformResourceShapeApiPath("/v1/form-activations")).toBe(false);
   expect(isPlatformResourceShapeApiPath("/api/v1/workspaces")).toBe(false);
@@ -1987,13 +1913,13 @@ test("platform Resource Shape API routes are routed before accounts and bearer-g
         },
       }),
     }),
-    { ...env, TAKOSUMI_LEGACY_RESOURCE_DRAIN_ENABLED: "1" } as never,
+    env,
   );
-  expect(authorized.status).toBe(410);
+  expect(authorized.status).toBe(404);
 
   const sessionMustNotBecomeOfferingOperator =
     await handlePlatformResourceShapeApiRequest(
-      new Request("https://app.takosumi.com/v1/offering-catalogs"),
+      new Request("https://app.takosumi.com/internal/v1/offering-catalogs"),
       env,
       async () => ({
         authenticated: true,
@@ -2004,7 +1930,7 @@ test("platform Resource Shape API routes are routed before accounts and bearer-g
   expect(sessionMustNotBecomeOfferingOperator.status).toBe(401);
 
   const operatorCatalogs = await handlePlatformResourceShapeApiRequest(
-    new Request("https://app.takosumi.com/v1/offering-catalogs", {
+    new Request("https://app.takosumi.com/internal/v1/offering-catalogs", {
       headers: { authorization: "Bearer resource-token" },
     }),
     env,
@@ -2013,118 +1939,29 @@ test("platform Resource Shape API routes are routed before accounts and bearer-g
   expect(await operatorCatalogs.json()).toEqual({ catalogs: [] });
 });
 
-test("legacy Resource Shape direct handler is exact drain-only and never advertises the host", async () => {
-  const baseEnv = {
-    TAKOSUMI_CONTROL_DB: new SqliteFakeD1(),
-    TAKOSUMI_ENVIRONMENT: "test",
-    TAKOSUMI_DEV_MODE: "1",
-    TAKOSUMI_DEPLOY_CONTROL_TOKEN: "resource-token",
-  } as never;
-
-  const defaultRead = await handlePlatformResourceShapeApiRequest(
-    new Request("https://app.takosumi.com/v1/resources"),
-    baseEnv,
-  );
-  expect(defaultRead.status).toBe(404);
-
-  const drainEnv = {
-    ...baseEnv,
-    TAKOSUMI_LEGACY_RESOURCE_DRAIN_ENABLED: "1",
-  } as never;
-  const retiredWrite = await handlePlatformResourceShapeApiRequest(
-    new Request("https://app.takosumi.com/v1/resources/ObjectBucket/assets", {
-      method: "PUT",
-      headers: {
-        authorization: "Bearer resource-token",
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({ metadata: { space: "space_1" }, spec: {} }),
-    }),
-    drainEnv,
-  );
-  expect(retiredWrite.status).toBe(410);
-
-  const retiredFormActivations = await handlePlatformResourceShapeApiRequest(
-    new Request("https://app.takosumi.com/v1/form-activations"),
-    drainEnv,
-  );
-  expect(retiredFormActivations.status).toBe(410);
-
-  const hostDiscovery = await handlePlatformResourceShapeApiRequest(
-    new Request(
-      `https://app.takosumi.com${TAKOFORM_FORM_HOST_WELL_KNOWN_PATH}`,
-    ),
-    drainEnv,
-  );
-  expect(hostDiscovery.status).toBe(404);
-});
-
-test("legacy drain delete never accepts Workspace session, PAT, or OAuth authority", async () => {
+test("retired Resource Shape paths stay unconditional 404 even with bearer", async () => {
   const env = {
     TAKOSUMI_CONTROL_DB: new SqliteFakeD1(),
     TAKOSUMI_ENVIRONMENT: "test",
     TAKOSUMI_DEV_MODE: "1",
     TAKOSUMI_DEPLOY_CONTROL_TOKEN: "resource-token",
-    TAKOSUMI_LEGACY_RESOURCE_DRAIN_ENABLED: "1",
   } as never;
-  let verifierCalls = 0;
-  const verify = async () => {
-    verifierCalls += 1;
-    return {
-      authenticated: true as const,
-      authKind: "session" as const,
-      subject: "workspace-member",
-      workspaceId: "space_1",
-      workspaceRole: "admin" as const,
-      scopes: ["admin"],
-    };
-  };
-  const path =
-    "https://app.takosumi.com/v1/resources/ObjectBucket/assets?space=space_1";
-
-  const session = await handlePlatformResourceShapeApiRequest(
-    new Request(path),
-    env,
-    verify,
-  );
-  expect(session.status).toBe(401);
-
-  const personalAccessToken = await handlePlatformResourceShapeApiRequest(
-    new Request(path, {
-      headers: { authorization: "Bearer pat_workspace" },
-    }),
-    env,
-    async () => ({
-      authenticated: true as const,
-      authKind: "personal-access-token" as const,
-      subject: "workspace-member",
-      workspaceId: "space_1",
-      workspaceRole: "admin" as const,
-      scopes: ["admin"],
-    }),
-  );
-  expect(personalAccessToken.status).toBe(401);
-
-  const oauth = await handlePlatformResourceShapeApiRequest(
-    new Request(path, {
-      headers: { authorization: "Bearer oauth_workspace" },
-    }),
-    env,
-    async () => ({
-      authenticated: true as const,
-      authKind: "oauth-access-token" as const,
-      subject: "workspace-member",
-      workspaceId: "space_1",
-      workspaceRole: "admin" as const,
-      scopes: ["admin"],
-    }),
-  );
-  expect(oauth.status).toBe(401);
-  expect(verifierCalls).toBe(0);
-
-  const worker = (await import("../../../deploy/platform/worker.ts")).default;
-  const edgeSession = await worker.fetch(new Request(path), env);
-  expect(edgeSession.status).toBe(401);
+  for (const path of [
+    "/v1/resources",
+    "/v1/resources/ObjectBucket/assets",
+    "/v1/target-pools/default",
+    "/v1/space-policies/default",
+    "/v1/form-activations",
+    "/v1/form-availability",
+  ]) {
+    const response = await handlePlatformResourceShapeApiRequest(
+      new Request(`https://app.takosumi.com${path}`, {
+        headers: { authorization: "Bearer resource-token" },
+      }),
+      env,
+    );
+    expect(response.status).toBe(404);
+  }
 });
 
 test("platform scheduled handler has no direct Resource operation repair hook", async () => {
@@ -2459,20 +2296,38 @@ test("canonical operator recovery reads retained resources across old managers",
     },
     phase: "Ready",
     generation: 1,
+    revision: 1,
     observedGeneration: 1,
+    lastOperationRunId: `run_resource_${name}`,
     createdAt: createdAt as ResourceShapeRecord["createdAt"],
     updatedAt: createdAt as ResourceShapeRecord["updatedAt"],
   });
-  await stores.resources.upsert(
+  const lock = (resource: ResourceShapeRecord): ResolutionLockRecord => ({
+    resourceId: resource.id,
+    selectedImplementation: "cloudflare_workers",
+    target: "cloudflare-main",
+    locked: true,
+    reason: ["retained migration evidence"],
+    nativeResources: [
+      {
+        type: "cloudflare_workers_script",
+        id: `backend-${resource.spaceId}-${resource.name}`,
+      },
+    ],
+    lockedAt: resource.createdAt,
+    updatedAt: resource.updatedAt,
+  });
+  for (const resource of [
     record(
       "public-api",
       "takosumi.resource-api.v1",
       "2026-07-15T00:00:00.000Z",
     ),
-  );
-  await stores.resources.upsert(
     record("compat-api", "compat.example.v1", "2026-07-15T00:00:01.000Z"),
-  );
+  ]) {
+    await stores.resources.upsert(resource);
+    await stores.locks.put(lock(resource));
+  }
   const env = {
     TAKOSUMI_CONTROL_DB: database,
     TAKOSUMI_ENVIRONMENT: "test",
@@ -2480,8 +2335,8 @@ test("canonical operator recovery reads retained resources across old managers",
     TAKOSUMI_DEPLOY_CONTROL_TOKEN: "resource-token",
     TAKOSUMI_RESOURCE_SHAPES: "EdgeWorker",
   } as never;
-  // Canonical internal recovery reads retain their generic service binding
-  // authority even when the public Flow-B drain flag is absent.
+  // Canonical internal recovery reads use typed compatibility operations; the
+  // retired public `/v1` route is not part of this authority.
   const recovery = createPlatformCanonicalResourceReadAuthority(env);
   for (const name of ["public-api", "compat-api"]) {
     const response = await recovery.fetch(
@@ -3647,13 +3502,13 @@ test("an exact inventory leaf narrows PAT access without closing the Marketplace
   const routes = platformExtensionRoutes({
     TAKOSUMI_PLATFORM_EXTENSIONS: JSON.stringify([
       {
-        basePath: "/v1/hosted/marketplace",
+        basePath: "/extensions/hosted/marketplace",
         handlerKey: "HOSTED",
         ownsPathSubtree: true,
         requiredScopes: ["hosted:marketplace"],
       },
       {
-        basePath: "/v1/hosted/marketplace/resources",
+        basePath: "/extensions/hosted/marketplace/resources",
         matchMode: "exact",
         handlerKey: "HOSTED",
         requiredScopes: ["resources:read"],
@@ -3679,13 +3534,13 @@ test("an exact inventory leaf narrows PAT access without closing the Marketplace
   });
 
   const walletRequest = new Request(
-    "https://app.takosumi.com/v1/hosted/marketplace/wallet",
+    "https://app.takosumi.com/extensions/hosted/marketplace/wallet",
   );
   const walletRoute = matchPlatformExtensionRoute(
     new URL(walletRequest.url).pathname,
     routes,
   );
-  expect(walletRoute?.basePath).toBe("/v1/hosted/marketplace");
+  expect(walletRoute?.basePath).toBe("/extensions/hosted/marketplace");
   if (!walletRoute) throw new Error("wallet route missing");
   expect(
     await handlePlatformExtensionRouteRequest(
@@ -3705,14 +3560,14 @@ test("an exact inventory leaf narrows PAT access without closing the Marketplace
   ).toHaveProperty("status", 401);
 
   const resourcesRequest = new Request(
-    "https://app.takosumi.com/v1/hosted/marketplace/resources",
+    "https://app.takosumi.com/extensions/hosted/marketplace/resources",
   );
   const resourcesRoute = matchPlatformExtensionRoute(
     new URL(resourcesRequest.url).pathname,
     routes,
   );
   expect(resourcesRoute?.basePath).toBe(
-    "/v1/hosted/marketplace/resources",
+    "/extensions/hosted/marketplace/resources",
   );
   if (!resourcesRoute) throw new Error("resources route missing");
   expect(
@@ -3833,7 +3688,7 @@ test("platform extension derives personal access identity from introspection cla
 test("platform extension authenticates delegated OAuth access claims without prefix routing", async () => {
   const context = await verifyPlatformExtensionBearerToken(
     new Request(
-      "https://app.takosumi.com/v1/interfaces?workspaceId=space_oauth",
+      "https://app.takosumi.com/api/v1/interfaces?workspaceId=space_oauth",
       {
         headers: { authorization: "Bearer opaque-delegated-credential" },
       },
@@ -3873,7 +3728,7 @@ test("platform Interface API enforces delegated OAuth Capsule scopes", async () 
   } as never;
   const request = () =>
     new Request(
-      "https://app.takosumi.com/v1/interfaces?workspaceId=space_oauth&permission=mcp.invoke",
+      "https://app.takosumi.com/api/v1/interfaces?workspaceId=space_oauth&permission=mcp.invoke",
       { headers: { authorization: "Bearer takat_runtime" } },
     );
 
@@ -3907,7 +3762,7 @@ test("platform Interface API enforces delegated OAuth Capsule scopes", async () 
   expect(await allowed.json()).toEqual({ interfaces: [] });
 
   const mutationDenied = await handlePlatformResourceShapeApiRequest(
-    new Request("https://app.takosumi.com/v1/interfaces", {
+    new Request("https://app.takosumi.com/api/v1/interfaces", {
       method: "POST",
       headers: {
         authorization: "Bearer takat_runtime",
@@ -3929,7 +3784,7 @@ test("platform Interface API enforces delegated OAuth Capsule scopes", async () 
 
   const tokenIssueReachedRuntimeBoundary =
     await handlePlatformResourceShapeApiRequest(
-      new Request("https://app.takosumi.com/v1/interfaces/if_missing/token", {
+      new Request("https://app.takosumi.com/api/v1/interfaces/if_missing/token", {
         method: "POST",
         headers: {
           authorization: "Bearer takat_runtime",
@@ -3961,7 +3816,7 @@ test("platform Interface ingress rejects oversized control bodies before JSON pa
     TAKOSUMI_DEPLOY_CONTROL_TOKEN: "resource-token",
   } as never;
   const response = await handlePlatformResourceShapeApiRequest(
-    new Request("https://app.takosumi.com/v1/interfaces", {
+    new Request("https://app.takosumi.com/api/v1/interfaces", {
       method: "POST",
       headers: {
         cookie: "takosumi_session=test",
@@ -3991,7 +3846,6 @@ test("platform legacy Resource artifact ingress is retired before body parsing",
     TAKOSUMI_DEV_MODE: "1",
     TAKOSUMI_DEPLOY_CONTROL_TOKEN: "resource-token",
     TAKOSUMI_RESOURCE_SHAPES: "EdgeWorker",
-    TAKOSUMI_LEGACY_RESOURCE_DRAIN_ENABLED: "1",
     TAKOSUMI_RESOURCE_ARTIFACT_WRITER: {
       prepare: () => ({ maxBytes: 2 * 1024 * 1024 }),
       write: async (input: {
@@ -4010,8 +3864,6 @@ test("platform legacy Resource artifact ingress is retired before body parsing",
       },
     },
   } as never;
-  const bytes = new Uint8Array(1_048_576 + 17).fill(0x5a);
-  const digest = `sha256:${await sha256HexAsync(bytes)}`;
   const response = await handlePlatformResourceShapeApiRequest(
     new Request(
       "https://app.takosumi.com/v1/resources/EdgeWorker/takos/artifacts?space=workspace_artifact",
@@ -4019,12 +3871,9 @@ test("platform legacy Resource artifact ingress is retired before body parsing",
         method: "POST",
         headers: {
           authorization: "Bearer takpat_write",
-          "content-type": "application/gzip",
-          "idempotency-key": "platform-artifact-key-0001",
-          "x-takosumi-artifact-purpose": "worker_release",
-          "x-takosumi-artifact-sha256": digest,
+          "content-type": "application/json",
         },
-        body: bytes,
+        body: JSON.stringify({ payload: "retired" }),
       },
     ),
     env,
@@ -4037,7 +3886,7 @@ test("platform legacy Resource artifact ingress is retired before body parsing",
       scopes: ["write"],
     }),
   );
-  expect(response.status).toBe(410);
+  expect(response.status).toBe(404);
   expect(writes).toHaveLength(0);
 });
 
@@ -4081,7 +3930,7 @@ test("platform Interface API binds delegated OAuth requests to their Workspace",
   });
 
   const crossCreate = await handlePlatformResourceShapeApiRequest(
-    new Request("https://app.takosumi.com/v1/interfaces", {
+    new Request("https://app.takosumi.com/api/v1/interfaces", {
       method: "POST",
       headers: {
         authorization: "Bearer takat_runtime",
@@ -4109,7 +3958,7 @@ test("platform Interface API binds delegated OAuth requests to their Workspace",
   });
 
   const seeded = await handlePlatformResourceShapeApiRequest(
-    new Request("https://app.takosumi.com/v1/interfaces", {
+    new Request("https://app.takosumi.com/api/v1/interfaces", {
       method: "POST",
       headers: {
         authorization: "Bearer resource-token",
@@ -4124,7 +3973,7 @@ test("platform Interface API binds delegated OAuth requests to their Workspace",
 
   const crossRead = await handlePlatformResourceShapeApiRequest(
     new Request(
-      `https://app.takosumi.com/v1/interfaces/${seededId}?permission=mcp.invoke`,
+      `https://app.takosumi.com/api/v1/interfaces/${seededId}?permission=mcp.invoke`,
       {
         headers: { authorization: "Bearer takat_runtime" },
       },
@@ -4145,7 +3994,7 @@ test("platform Interface ingress separates control and runtime credentials", asy
     TAKOSUMI_DEPLOY_CONTROL_TOKEN: "resource-token",
   } as never;
   const url =
-    "https://app.takosumi.com/v1/interfaces?workspaceId=workspace_auth";
+    "https://app.takosumi.com/api/v1/interfaces?workspaceId=workspace_auth";
   const readOnlyPatSession = async () => ({
     authenticated: true as const,
     authKind: "personal-access-token" as const,
@@ -4156,17 +4005,17 @@ test("platform Interface ingress separates control and runtime credentials", asy
   });
 
   for (const mutation of [
-    { method: "POST", path: "/v1/interfaces", body: "{}" },
-    { method: "PATCH", path: "/v1/interfaces/if_auth", body: "{}" },
-    { method: "DELETE", path: "/v1/interfaces/if_auth" },
+    { method: "POST", path: "/api/v1/interfaces", body: "{}" },
+    { method: "PATCH", path: "/api/v1/interfaces/if_auth", body: "{}" },
+    { method: "DELETE", path: "/api/v1/interfaces/if_auth" },
     {
       method: "POST",
-      path: "/v1/interfaces/if_auth/bindings",
+      path: "/api/v1/interfaces/if_auth/bindings",
       body: "{}",
     },
     {
       method: "DELETE",
-      path: "/v1/interfaces/if_auth/bindings/binding_auth",
+      path: "/api/v1/interfaces/if_auth/bindings/binding_auth",
     },
   ]) {
     const readOnlyPatWrite = await handlePlatformResourceShapeApiRequest(
@@ -4236,7 +4085,7 @@ test("platform Interface ingress rejects generic Run credentials without an exte
     scopes: ["admin", "write"],
   });
   const response = await handlePlatformResourceShapeApiRequest(
-    new Request("https://app.takosumi.com/v1/interfaces", {
+    new Request("https://app.takosumi.com/api/v1/interfaces", {
       method: "POST",
       headers: {
         authorization: `Bearer ${issued.token}`,
@@ -4559,10 +4408,10 @@ test("scheduled poll continues past a failing source", async () => {
   const syncCalls: string[] = [];
   const ops: SourcePollOperations = {
     verifySourceHookSecret: () => Promise.resolve(true),
-    createSourceSync: (sourceId) => {
+    createSourceReconciliationSyncs: (sourceId) => {
       syncCalls.push(sourceId);
       if (sourceId === "src_a") return Promise.reject(new Error("nope"));
-      return Promise.resolve({ run: { id: "ssr" } });
+      return Promise.resolve([{ run: { id: "ssr" } }]);
     },
     controller: {
       listAutoSyncSources: () =>

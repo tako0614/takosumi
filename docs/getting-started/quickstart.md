@@ -21,7 +21,7 @@ bun core/index.ts
 別のターミナルで確認します。
 
 ```bash
-curl http://127.0.0.1:8788/v1/capabilities \
+curl http://127.0.0.1:8788/api/v1/capabilities \
   -H "authorization: Bearer dev-token"
 ```
 

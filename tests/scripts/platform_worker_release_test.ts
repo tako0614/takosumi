@@ -29,6 +29,7 @@ test("production config must bind the isolated production Hosted service", () =>
     service: string,
     main = resolve(root, "deploy/platform/takoserver_hosted_worker.ts"),
     includeBroker = true,
+    basePath = "/api/v1/hosted/subscription",
   ) => `
 name = "takosumi"
 main = "${main}"
@@ -42,7 +43,7 @@ TAKOSUMI_ENVIRONMENT = "production"
 TAKOSUMI_PLATFORM_EXTENSIONS = '${JSON.stringify([
     {
       id: "takosumi-hosted-sponsorship",
-      basePath: "/v1/hosted/subscription",
+      basePath,
       handlerKey: "HOSTED",
       authDelivery: "context",
       ownsPathSubtree: true,
@@ -63,7 +64,7 @@ TAKOSUMI_PLATFORM_EXTENSIONS = '${JSON.stringify([
         {
           id: "takoserver-hosted-resources",
           slot: "workspace.hosted-resources",
-          href: "/v1/hosted/subscription/resources",
+          href: "/api/v1/hosted/subscription/resources",
           presentation: "native",
           label: "Hosted resources",
           labels: { ja: "ホスト済みリソース" },
@@ -124,6 +125,18 @@ TAKOSUMI_PLATFORM_EXTENSIONS = '${JSON.stringify([
         "takosumi-hosted",
         resolve(root, "deploy/platform/takoserver_hosted_worker.ts"),
         false,
+      ),
+      "/private/wrangler.toml",
+      "production",
+    ),
+  ).toThrow("platform_worker_release_config_source_invalid");
+  expect(() =>
+    assertConfigTargetsSource(
+      source(
+        "takosumi-hosted",
+        resolve(root, "deploy/platform/takoserver_hosted_worker.ts"),
+        true,
+        "/v1/hosted/subscription",
       ),
       "/private/wrangler.toml",
       "production",

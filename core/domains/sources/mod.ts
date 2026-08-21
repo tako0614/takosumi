@@ -22,6 +22,7 @@ import type {
   SourceSyncRun,
 } from "takosumi-contract/sources";
 import type {
+  Capsule,
   CapsuleCompatibilityReport,
   CapsuleProviderRequirement,
   CapsuleCompatibilityReportResponse,
@@ -31,7 +32,11 @@ import { normalizeCompatibilityReportModulePath } from "takosumi-contract/capsul
 import type { PolicyConfig } from "takosumi-contract/install-configs";
 import { normalizeScopeBoundaryPolicy } from "takosumi-contract";
 import { timingSafeEqualHex } from "takosumi-contract/internal/crypto";
-import type { Page, PageParams } from "takosumi-contract/pagination";
+import {
+  MAX_PAGE_LIMIT,
+  type Page,
+  type PageParams,
+} from "takosumi-contract/pagination";
 import type { SourceSnapshot } from "takosumi-contract/sources";
 import { sha256HexOfStringAsync } from "../../shared/runtime/hash.ts";
 import {
@@ -53,6 +58,7 @@ import {
 import { evaluateSourceUrl } from "./url-policy.ts";
 import { canonicalProviderAddress } from "../deploy-control/provider_policy.ts";
 import type { ArtifactReferenceAllocator } from "../../adapters/storage/artifact-references.ts";
+import { getCapsuleAdoptedSourceSnapshot } from "../deploy-control/capsule_source_revision.ts";
 
 // Git already has a provider-neutral spelling for the remote's configured
 // default branch. Do not guess `main`/`master`: an omitted ref means HEAD,
@@ -62,6 +68,7 @@ const DEFAULT_PATH = ".";
 const REPOSITORY_INSTALL_METADATA_PATH = ".well-known/tcs.json";
 const SOURCE_SYNC_REQUEUE_STALE_MS = 10 * 60 * 1000;
 const IMMUTABLE_SOURCE_REVISION = /^[0-9a-f]{40}$/iu;
+const MAX_SOURCE_RECONCILIATION_CAPSULES = 1_000;
 
 function isImmutableSourceRevision(value: string): boolean {
   return IMMUTABLE_SOURCE_REVISION.test(value);
@@ -99,6 +106,23 @@ export type ReadCapsuleSourceFiles = (
   snapshot: SourceSnapshot,
   options?: { readonly modulePath?: string; readonly runId?: string },
 ) => Promise<readonly CapsuleSourceFile[]>;
+
+/**
+ * In-process identity supplied only by a durable Git lifecycle coordinator.
+ * The Accounts HTTP parser never forwards these fields. Both ids are derived
+ * from the exact coordinator/request/source/snapshot/base/module digest so a
+ * lost acknowledgement can recover one canonical read-only analysis.
+ */
+export interface InstallPlanCompatibilityIdentity {
+  readonly runId: string;
+  readonly reportId: string;
+  readonly createdBy: string;
+}
+
+export type InstallPlanCompatibilityCheckRequest =
+  CreateSourceCompatibilityCheckRequest & {
+    readonly installPlanIdentity: InstallPlanCompatibilityIdentity;
+  };
 
 export interface SourcesServiceDependencies {
   readonly store: OpenTofuControlStore;
@@ -330,6 +354,97 @@ export class SourcesService {
     sourceId: string,
     options: CreateSourceSyncRequest & { readonly dedupe?: boolean } = {},
   ): Promise<CreateSourceSyncResponse> {
+    return await this.#createSync(sourceId, options);
+  }
+
+  /**
+   * Enqueues observation runs for the shared Source default and every distinct
+   * Git ref/path lane currently adopted by one of its Capsules. The addresses
+   * are derived from applied StateVersion provenance; this never rewrites the
+   * Source defaults and is intentionally not exposed as caller-controlled HTTP
+   * input.
+   */
+  async createReconciliationSyncs(
+    sourceId: string,
+  ): Promise<readonly CreateSourceSyncResponse[]> {
+    const stored = await this.#requireSource(sourceId);
+    const addresses = new Map<string, { readonly ref: string; readonly path: string }>();
+    const addAddress = (ref: string, path: string) => {
+      addresses.set(JSON.stringify([ref, path]), { ref, path });
+    };
+    addAddress(stored.defaultRef, stored.defaultPath);
+
+    const capsules = await this.#listReconciliationCapsules(
+      stored.workspaceId,
+    );
+    for (const capsule of capsules) {
+      if (
+        capsule.sourceId !== stored.id ||
+        capsule.status === "destroyed" ||
+        capsule.status === "disabled" ||
+        !capsule.currentStateVersionId
+      ) {
+        continue;
+      }
+      const adopted = await getCapsuleAdoptedSourceSnapshot(
+        this.#store,
+        capsule,
+      );
+      if (!adopted) continue;
+      // An exact commit cannot advance. Its already-adopted immutable snapshot
+      // remains sufficient until the Capsule deliberately changes lane.
+      if (
+        isImmutableSourceRevision(adopted.ref) &&
+        sameGitRef(adopted.ref, adopted.resolvedCommit)
+      ) {
+        continue;
+      }
+      addAddress(adopted.ref, adopted.path);
+    }
+
+    const runs: CreateSourceSyncResponse[] = [];
+    for (const address of addresses.values()) {
+      runs.push(
+        await this.#createSync(
+          sourceId,
+          { intent: "observe", dedupe: true },
+          address,
+        ),
+      );
+    }
+    return runs;
+  }
+
+  async #listReconciliationCapsules(
+    workspaceId: string,
+  ): Promise<readonly Capsule[]> {
+    const capsules: Capsule[] = [];
+    let cursor: string | undefined;
+    for (;;) {
+      const remaining = MAX_SOURCE_RECONCILIATION_CAPSULES - capsules.length;
+      const page = await this.#store.listCapsulesPage(workspaceId, {
+        limit: Math.min(MAX_PAGE_LIMIT, remaining),
+        ...(cursor ? { cursor } : {}),
+        includeDestroyed: false,
+      });
+      capsules.push(...page.items);
+      if (!page.nextCursor) return capsules;
+      if (capsules.length >= MAX_SOURCE_RECONCILIATION_CAPSULES) {
+        throw new OpenTofuControllerError(
+          "resource_exhausted",
+          `Source reconciliation exceeds ${MAX_SOURCE_RECONCILIATION_CAPSULES} Capsules in one Workspace`,
+          { reason: "source_reconciliation_capsule_limit" },
+        );
+      }
+      cursor = page.nextCursor;
+    }
+  }
+
+  async #createSync(
+    sourceId: string,
+    options: CreateSourceSyncRequest & { readonly dedupe?: boolean },
+    trackedAddress?: { readonly ref: string; readonly path: string },
+  ): Promise<CreateSourceSyncResponse> {
     const stored = await this.#requireSource(sourceId);
     const intent = options.intent ?? "observe";
     if (intent !== "observe" && intent !== "manual_plan") {
@@ -366,9 +481,57 @@ export class SourcesService {
         { reason: "source_revision_mismatch" },
       );
     }
-    const runRef = expectedRef ?? stored.defaultRef;
-    if (options.dedupe) {
-      const existing = await this.#activeSyncRun(sourceId, intent, runRef);
+    const coordinator = parseSourceSyncCoordinator(options.coordinator);
+    const tracked = trackedAddress
+      ? parseTrackedSourceAddress(trackedAddress)
+      : undefined;
+    if (
+      (options.coordinator !== undefined && !coordinator) ||
+      (coordinator !== undefined && intent !== "manual_plan") ||
+      (coordinator !== undefined && expectedRef !== undefined) ||
+      (trackedAddress !== undefined && !tracked) ||
+      (tracked !== undefined &&
+        (intent !== "observe" ||
+          coordinator !== undefined ||
+          expectedRef !== undefined))
+    ) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        "coordinator must contain one safe manual-plan Git address and deterministic identities and cannot be combined with expectedRef",
+        { reason: "invalid_source_revision" },
+      );
+    }
+    const runRef =
+      tracked?.ref ?? coordinator?.ref ?? expectedRef ?? stored.defaultRef;
+    const runPath = tracked?.path ?? coordinator?.path ?? stored.defaultPath;
+    if (coordinator) {
+      const existing = await this.#store.getSourceSyncRun(coordinator.runId);
+      if (existing) {
+        if (!sourceSyncMatchesCoordinator(existing, stored, coordinator)) {
+          throw new OpenTofuControllerError(
+            "failed_precondition",
+            "source-sync coordinator identity is already bound to different evidence",
+            { reason: "source_sync_identity_conflict" },
+          );
+        }
+        if (existing.status === "queued") {
+          await this.#enqueue({
+            action: "source_sync",
+            runId: existing.id,
+            workspaceId: existing.workspaceId,
+            sourceId: existing.sourceId,
+          });
+        }
+        return { run: existing };
+      }
+    }
+    if (options.dedupe && !coordinator) {
+      const existing = await this.#activeSyncRun(
+        sourceId,
+        intent,
+        runRef,
+        runPath,
+      );
       if (existing) {
         if (existing.status === "queued") {
           await this.#enqueue({
@@ -386,6 +549,7 @@ export class SourcesService {
               sourceId,
               intent,
               runRef,
+              runPath,
             );
             return { run: current ?? existing };
           }
@@ -397,8 +561,8 @@ export class SourcesService {
         }
       }
     }
-    const runId = this.#newId("ssr");
-    const snapshotId = this.#newId("snap");
+    const runId = coordinator?.runId ?? this.#newId("ssr");
+    const snapshotId = coordinator?.snapshotId ?? this.#newId("snap");
     if (!this.#artifactReferenceAllocator) {
       throw new OpenTofuControllerError(
         "not_implemented",
@@ -420,7 +584,7 @@ export class SourcesService {
       sourceId,
       url: stored.url,
       ref: runRef,
-      path: stored.defaultPath,
+      path: runPath,
       archiveRef,
       intent,
       status: "queued",
@@ -442,6 +606,7 @@ export class SourcesService {
     sourceId: string,
     request: CreateSourceCompatibilityCheckRequest = {},
   ): Promise<CapsuleCompatibilityReportResponse> {
+    const installPlanIdentity = installPlanCompatibilityIdentity(request);
     const stored = await this.#requireSource(sourceId);
     const capsuleId = request.capsuleId;
     const snapshot = await this.#resolveCompatibilitySnapshot(
@@ -473,6 +638,7 @@ export class SourcesService {
       ...(capsuleId ? { capsuleId } : {}),
       ...(modulePath ? { modulePath } : {}),
       ...(context.policy ? { policy: context.policy } : {}),
+      ...(installPlanIdentity ? { installPlanIdentity } : {}),
     });
   }
 
@@ -484,22 +650,41 @@ export class SourcesService {
     readonly capsuleId?: string;
     readonly modulePath?: string;
     readonly policy?: PolicyConfig;
+    readonly installPlanIdentity?: InstallPlanCompatibilityIdentity;
   }): Promise<CapsuleCompatibilityReportResponse> {
     const { snapshot, workspaceId } = input;
-    const runId = this.#newId("ccr");
+    const runId = input.installPlanIdentity?.runId ?? this.#newId("ccr");
+    const reportId = input.installPlanIdentity?.reportId ?? this.#newId("caprep");
+    const recovered = input.installPlanIdentity
+      ? await this.#recoverInstallPlanCompatibilityEvidence({
+          ...input,
+          runId,
+          reportId,
+          createdBy: input.installPlanIdentity.createdBy,
+        })
+      : undefined;
+    if (recovered) return recovered;
+
     const nowIso = this.#now().toISOString();
     const runningRun: Run = {
       id: runId,
       workspaceId,
       sourceId: input.sourceId,
+      ...(input.capsuleId ? { capsuleId: input.capsuleId } : {}),
       type: "compatibility_check",
       status: "running",
       sourceSnapshotId: snapshot.id,
-      createdBy: "system",
+      createdBy: input.installPlanIdentity?.createdBy ?? "system",
       createdAt: nowIso,
       startedAt: nowIso,
     };
-    await this.#store.putCompatibilityCheckRun(runningRun);
+    const existingRunningRun = input.installPlanIdentity
+      ? await this.#store.getCompatibilityCheckRun(runId)
+      : undefined;
+    if (!existingRunningRun) {
+      await this.#store.putCompatibilityCheckRun(runningRun);
+    }
+    const activeRun = existingRunningRun ?? runningRun;
     const analysisAttempt =
       await this.#compatibilityAnalysisOrUnsupportedReport(
         snapshot,
@@ -514,9 +699,8 @@ export class SourcesService {
           }),
       );
     const analysis = analysisAttempt.analysis;
-    const id = this.#newId("caprep");
     const report: CapsuleCompatibilityReport = {
-      id,
+      id: reportId,
       sourceId: input.sourceId,
       ...(input.capsuleId ? { capsuleId: input.capsuleId } : {}),
       sourceSnapshotId: snapshot.id,
@@ -537,7 +721,7 @@ export class SourcesService {
     };
     await this.#store.putCapsuleCompatibilityReport(report);
     const succeededRun: Run = {
-      ...runningRun,
+      ...activeRun,
       status: analysisAttempt.errorCode ? "failed" : "succeeded",
       compatibilityReportId: report.id,
       ...(analysisAttempt.errorCode
@@ -547,6 +731,61 @@ export class SourcesService {
     };
     await this.#store.putCompatibilityCheckRun(succeededRun);
     return { report, run: succeededRun };
+  }
+
+  async #recoverInstallPlanCompatibilityEvidence(input: {
+    readonly snapshot: SourceSnapshot;
+    readonly workspaceId: string;
+    readonly sourceId: string;
+    readonly capsuleId?: string;
+    readonly modulePath?: string;
+    readonly runId: string;
+    readonly reportId: string;
+    readonly createdBy: string;
+  }): Promise<CapsuleCompatibilityReportResponse | undefined> {
+    const [run, report] = await Promise.all([
+      this.#store.getCompatibilityCheckRun(input.runId),
+      this.#store.getCapsuleCompatibilityReport(input.reportId),
+    ]);
+    if (!run && !report) return undefined;
+    if (
+      (run && !compatibilityRunMatchesInstallPlanIdentity(run, input)) ||
+      (report && !compatibilityReportMatchesInstallPlanIdentity(report, input))
+    ) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        "install-plan compatibility identity is already bound to different evidence",
+        { reason: "compatibility_evidence_identity_conflict" },
+      );
+    }
+    if (!run || !report) {
+      if (report || run?.status !== "running") {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          "install-plan compatibility evidence is incomplete",
+          { reason: "compatibility_evidence_incomplete" },
+        );
+      }
+      // A running exact record may be resumed. Analysis is read-only and writes
+      // back to the same deterministic ids; no second evidence row is created.
+      return undefined;
+    }
+    if (run.status === "running") {
+      // The report write may have committed before the terminal Run update.
+      // Re-analysis is safe and converges on these same exact identities.
+      return undefined;
+    }
+    if (
+      (run.status !== "succeeded" && run.status !== "failed") ||
+      run.compatibilityReportId !== report.id
+    ) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "install-plan compatibility evidence is not terminal and exact",
+        { reason: "compatibility_evidence_incomplete" },
+      );
+    }
+    return { report, run };
   }
 
   async #compatibilityAnalysisOrUnsupportedReport(
@@ -807,13 +1046,15 @@ export class SourcesService {
     sourceId: string,
     intent: SourceSyncIntent,
     ref: string,
+    path: string,
   ): Promise<SourceSyncRun | undefined> {
     const runs = await this.#store.listSourceSyncRuns(sourceId);
     return runs.find(
       (run) =>
         (run.status === "queued" || run.status === "running") &&
         (run.intent ?? "observe") === intent &&
-        sameGitRef(run.ref, ref),
+        sameGitRef(run.ref, ref) &&
+        run.path === path,
     );
   }
 
@@ -907,6 +1148,174 @@ function nonEmpty(value: string | undefined): string | undefined {
   return typeof value === "string" && value.trim().length > 0
     ? value.trim()
     : undefined;
+}
+
+function boundedRequestedGitRef(value: string | undefined): string | undefined {
+  const ref = nonEmpty(value);
+  return ref &&
+      new TextEncoder().encode(ref).byteLength <= 256 &&
+      !/[\u0000-\u001f\u007f]/u.test(ref)
+    ? ref
+    : undefined;
+}
+
+function safeRequestedSourcePath(
+  value: string | undefined,
+): string | undefined {
+  const path = nonEmpty(value);
+  if (!path || path.length > 1_024 || /[\u0000-\u001f\u007f]/u.test(path)) {
+    return undefined;
+  }
+  const normalized = path
+    .replace(/\\/g, "/")
+    .replace(/^\.\/+/, "")
+    .replace(/\/+$/g, "");
+  if (
+    path.startsWith("/") ||
+    /^[A-Za-z]:[\\/]/u.test(path) ||
+    normalized === ".." ||
+    normalized.startsWith("../") ||
+    normalized.includes("/../")
+  ) {
+    return undefined;
+  }
+  return normalized && normalized !== "." ? normalized : ".";
+}
+
+type SourceSyncCoordinator = NonNullable<CreateSourceSyncRequest["coordinator"]>;
+
+function parseTrackedSourceAddress(value: {
+  readonly ref: string;
+  readonly path: string;
+}): { readonly ref: string; readonly path: string } | undefined {
+  const ref = boundedRequestedGitRef(value.ref);
+  const path = safeRequestedSourcePath(value.path);
+  return ref && path ? { ref, path } : undefined;
+}
+
+function parseSourceSyncCoordinator(
+  value: CreateSourceSyncRequest["coordinator"],
+): SourceSyncCoordinator | undefined {
+  if (!value) return undefined;
+  const ref = boundedRequestedGitRef(value.ref);
+  const path = safeRequestedSourcePath(value.path);
+  if (
+    !ref ||
+    !path ||
+    !/^ssr_[0-9A-Za-z]{8,64}$/u.test(value.runId) ||
+    !/^snap_[0-9A-Za-z]{8,64}$/u.test(value.snapshotId)
+  ) {
+    return undefined;
+  }
+  return { ref, path, runId: value.runId, snapshotId: value.snapshotId };
+}
+
+function sourceSyncMatchesCoordinator(
+  run: SourceSyncRun,
+  source: StoredSource,
+  coordinator: SourceSyncCoordinator,
+): boolean {
+  return (
+    run.id === coordinator.runId &&
+    run.snapshotId === coordinator.snapshotId &&
+    run.workspaceId === source.workspaceId &&
+    run.sourceId === source.id &&
+    run.url === source.url &&
+    run.ref === coordinator.ref &&
+    run.path === coordinator.path &&
+    run.intent === "manual_plan"
+  );
+}
+
+interface InstallPlanCompatibilityScope {
+  readonly snapshot: SourceSnapshot;
+  readonly workspaceId: string;
+  readonly sourceId: string;
+  readonly capsuleId?: string;
+  readonly modulePath?: string;
+  readonly runId: string;
+  readonly reportId: string;
+  readonly createdBy: string;
+}
+
+function installPlanCompatibilityIdentity(
+  request: CreateSourceCompatibilityCheckRequest,
+): InstallPlanCompatibilityIdentity | undefined {
+  const raw = (
+    request as CreateSourceCompatibilityCheckRequest & {
+      readonly installPlanIdentity?: unknown;
+    }
+  ).installPlanIdentity;
+  if (raw === undefined) return undefined;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      "invalid install-plan compatibility identity",
+    );
+  }
+  const value = raw as Record<string, unknown>;
+  const runId = value.runId;
+  const reportId = value.reportId;
+  const createdBy = value.createdBy;
+  const runSuffix =
+    typeof runId === "string" ? /^ccr_([0-9a-f]{16})$/u.exec(runId)?.[1] : undefined;
+  const reportSuffix =
+    typeof reportId === "string"
+      ? /^caprep_([0-9a-f]{16})$/u.exec(reportId)?.[1]
+      : undefined;
+  const actorSuffix =
+    typeof createdBy === "string"
+      ? /^(?:git-install-plan:gip_[0-9a-f]{16}|git-revision-plan:grp_[0-9a-f]{16}):([0-9a-f]{16})$/u.exec(
+          createdBy,
+        )?.[1]
+      : undefined;
+  if (
+    Object.keys(value).length !== 3 ||
+    !runSuffix ||
+    runSuffix !== reportSuffix ||
+    runSuffix !== actorSuffix
+  ) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      "invalid install-plan compatibility identity",
+    );
+  }
+  return {
+    runId: runId as string,
+    reportId: reportId as string,
+    createdBy: createdBy as string,
+  };
+}
+
+function compatibilityRunMatchesInstallPlanIdentity(
+  run: Run,
+  expected: InstallPlanCompatibilityScope,
+): boolean {
+  return (
+    run.id === expected.runId &&
+    run.workspaceId === expected.workspaceId &&
+    run.sourceId === expected.sourceId &&
+    (run.capsuleId ?? undefined) === (expected.capsuleId ?? undefined) &&
+    run.type === "compatibility_check" &&
+    run.sourceSnapshotId === expected.snapshot.id &&
+    run.createdBy === expected.createdBy &&
+    (run.compatibilityReportId === undefined ||
+      run.compatibilityReportId === expected.reportId)
+  );
+}
+
+function compatibilityReportMatchesInstallPlanIdentity(
+  report: CapsuleCompatibilityReport,
+  expected: InstallPlanCompatibilityScope,
+): boolean {
+  return (
+    report.id === expected.reportId &&
+    report.sourceId === expected.sourceId &&
+    report.sourceSnapshotId === expected.snapshot.id &&
+    normalizeCompatibilityReportModulePath(report.modulePath) ===
+      normalizeCompatibilityReportModulePath(expected.modulePath) &&
+    (report.capsuleId ?? undefined) === (expected.capsuleId ?? undefined)
+  );
 }
 
 function defaultId(prefix: string): string {

@@ -41,12 +41,12 @@ export interface RegisterInterfaceRoutesOptions {
 }
 
 export const INTERFACE_ENDPOINTS: readonly ApiEndpoint[] = [
-  endpoint("POST", "/v1/interfaces", "createInterface", {
+  endpoint("POST", "/api/v1/interfaces", "createInterface", {
     okStatus: "201",
     okSchema: "Interface",
     requestSchema: "CreateInterfaceRequest",
   }),
-  endpoint("GET", "/v1/interfaces", "listInterfaces", {
+  endpoint("GET", "/api/v1/interfaces", "listInterfaces", {
     okSchema: "ListInterfacesResponse",
     query: [
       "workspaceId",
@@ -59,44 +59,44 @@ export const INTERFACE_ENDPOINTS: readonly ApiEndpoint[] = [
       "permission",
     ],
   }),
-  endpoint("GET", "/v1/interfaces/:id", "getInterface", {
+  endpoint("GET", "/api/v1/interfaces/:id", "getInterface", {
     okSchema: "Interface",
     pathParams: ["id"],
     query: ["permission"],
   }),
-  endpoint("POST", "/v1/interfaces/:id/token", "issueInterfaceToken", {
+  endpoint("POST", "/api/v1/interfaces/:id/token", "issueInterfaceToken", {
     okSchema: "IssueInterfaceTokenResponse",
     requestSchema: "IssueInterfaceTokenRequest",
     pathParams: ["id"],
   }),
-  endpoint("PATCH", "/v1/interfaces/:id", "updateInterface", {
+  endpoint("PATCH", "/api/v1/interfaces/:id", "updateInterface", {
     okSchema: "Interface",
     requestSchema: "UpdateInterfaceRequest",
     pathParams: ["id"],
   }),
-  endpoint("POST", "/v1/interfaces/:id/status", "reportInterfaceStatus", {
+  endpoint("POST", "/api/v1/interfaces/:id/status", "reportInterfaceStatus", {
     okSchema: "Interface",
     requestSchema: "ReportInterfaceStatusRequest",
     pathParams: ["id"],
   }),
-  endpoint("DELETE", "/v1/interfaces/:id", "retireInterface", {
+  endpoint("DELETE", "/api/v1/interfaces/:id", "retireInterface", {
     okSchema: "Interface",
     pathParams: ["id"],
   }),
-  endpoint("POST", "/v1/interfaces/:id/bindings", "createInterfaceBinding", {
+  endpoint("POST", "/api/v1/interfaces/:id/bindings", "createInterfaceBinding", {
     okStatus: "201",
     okSchema: "InterfaceBinding",
     requestSchema: "CreateInterfaceBindingRequest",
     pathParams: ["id"],
   }),
-  endpoint("GET", "/v1/interfaces/:id/bindings", "listInterfaceBindings", {
+  endpoint("GET", "/api/v1/interfaces/:id/bindings", "listInterfaceBindings", {
     okSchema: "ListInterfaceBindingsResponse",
     pathParams: ["id"],
     query: ["permission"],
   }),
   endpoint(
     "GET",
-    "/v1/interfaces/:id/bindings/:bindingId",
+    "/api/v1/interfaces/:id/bindings/:bindingId",
     "getInterfaceBinding",
     {
       okSchema: "InterfaceBinding",
@@ -106,7 +106,7 @@ export const INTERFACE_ENDPOINTS: readonly ApiEndpoint[] = [
   ),
   endpoint(
     "DELETE",
-    "/v1/interfaces/:id/bindings/:bindingId",
+    "/api/v1/interfaces/:id/bindings/:bindingId",
     "revokeInterfaceBinding",
     {
       okSchema: "InterfaceBinding",
@@ -119,7 +119,7 @@ export function registerInterfaceRoutes(
   app: Hono,
   options: RegisterInterfaceRoutesOptions,
 ): void {
-  app.post("/v1/interfaces", async (c) => {
+  app.post("/api/v1/interfaces", async (c) => {
     const auth = await authorize(c, options);
     if (!auth.ok) return auth.response;
     const controlDenied = enforceControlActor(c, auth.actor);
@@ -141,7 +141,7 @@ export function registerInterfaceRoutes(
     });
   });
 
-  app.get("/v1/interfaces", async (c) => {
+  app.get("/api/v1/interfaces", async (c) => {
     const auth = await authorize(c, options);
     if (!auth.ok) return auth.response;
     return respond(c, async () => {
@@ -182,7 +182,7 @@ export function registerInterfaceRoutes(
     });
   });
 
-  app.get("/v1/interfaces/:id", async (c) => {
+  app.get("/api/v1/interfaces/:id", async (c) => {
     const auth = await authorize(c, options);
     if (!auth.ok) return auth.response;
     return respond(c, async () => {
@@ -204,7 +204,7 @@ export function registerInterfaceRoutes(
     });
   });
 
-  app.post("/v1/interfaces/:id/token", async (c) => {
+  app.post("/api/v1/interfaces/:id/token", async (c) => {
     const auth = await authorize(c, options);
     if (!auth.ok) return auth.response;
     const runtimeActor = isRuntimePrincipal(auth.actor)
@@ -241,7 +241,7 @@ export function registerInterfaceRoutes(
     });
   });
 
-  app.patch("/v1/interfaces/:id", async (c) => {
+  app.patch("/api/v1/interfaces/:id", async (c) => {
     const auth = await authorize(c, options);
     if (!auth.ok) return auth.response;
     const controlDenied = enforceControlActor(c, auth.actor);
@@ -268,7 +268,7 @@ export function registerInterfaceRoutes(
     });
   });
 
-  app.delete("/v1/interfaces/:id", async (c) => {
+  app.delete("/api/v1/interfaces/:id", async (c) => {
     const auth = await authorize(c, options);
     if (!auth.ok) return auth.response;
     const controlDenied = enforceControlActor(c, auth.actor);
@@ -293,7 +293,7 @@ export function registerInterfaceRoutes(
     });
   });
 
-  app.post("/v1/interfaces/:id/status", async (c) => {
+  app.post("/api/v1/interfaces/:id/status", async (c) => {
     const auth = await authorize(c, options);
     if (!auth.ok) return auth.response;
     // Status self-report is a control-plane operation. Runtime principals stay
@@ -321,7 +321,7 @@ export function registerInterfaceRoutes(
     });
   });
 
-  app.post("/v1/interfaces/:id/bindings", async (c) => {
+  app.post("/api/v1/interfaces/:id/bindings", async (c) => {
     const auth = await authorize(c, options);
     if (!auth.ok) return auth.response;
     const controlDenied = enforceControlActor(c, auth.actor);
@@ -345,7 +345,7 @@ export function registerInterfaceRoutes(
     });
   });
 
-  app.get("/v1/interfaces/:id/bindings", async (c) => {
+  app.get("/api/v1/interfaces/:id/bindings", async (c) => {
     const auth = await authorize(c, options);
     if (!auth.ok) return auth.response;
     return respond(c, async () => {
@@ -378,7 +378,7 @@ export function registerInterfaceRoutes(
     });
   });
 
-  app.get("/v1/interfaces/:id/bindings/:bindingId", async (c) => {
+  app.get("/api/v1/interfaces/:id/bindings/:bindingId", async (c) => {
     const auth = await authorize(c, options);
     if (!auth.ok) return auth.response;
     return respond(c, async () => {
@@ -422,7 +422,7 @@ export function registerInterfaceRoutes(
     });
   });
 
-  app.delete("/v1/interfaces/:id/bindings/:bindingId", async (c) => {
+  app.delete("/api/v1/interfaces/:id/bindings/:bindingId", async (c) => {
     const auth = await authorize(c, options);
     if (!auth.ok) return auth.response;
     const controlDenied = enforceControlActor(c, auth.actor);

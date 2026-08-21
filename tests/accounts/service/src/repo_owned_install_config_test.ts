@@ -6,10 +6,12 @@ import type { RepositoryManifestDocument } from "takosumi-contract/repository-ma
 import type { Source, SourceSnapshot } from "takosumi-contract/sources";
 import {
   adoptRepoOwnedInstallConfig,
+  previewRepoOwnedInstallConfig,
   resolveRepoOwnedDeploymentProfile,
   type RepoOwnedInstallConfigAdoptionInput,
 } from "../../../../accounts/service/src/control/repo-owned-install-config.ts";
 import type { ControlPlaneOperations } from "../../../../accounts/service/src/control-operations.ts";
+import { OpenTofuControllerError } from "../../../../core/domains/deploy-control/errors.ts";
 
 const NOW = "2026-08-02T00:00:00.000Z";
 const MANIFEST_DIGEST = `sha256:${"d".repeat(64)}`;
@@ -192,6 +194,49 @@ function reportForModule(modulePath: string): CapsuleCompatibilityReport {
     rootModuleOutputs: [],
   };
 }
+
+test("repository install preview recovers only its full deterministic config identity", async () => {
+  let stored: InstallConfig | undefined;
+  const operations = {
+    capsules: {
+      getInstallConfig: async (id: string) => {
+        if (!stored || stored.id !== id) {
+          throw new OpenTofuControllerError("not_found", "missing");
+        }
+        return stored;
+      },
+      putInstallConfig: async (config: InstallConfig) => {
+        stored = config;
+        return config;
+      },
+    },
+  } as unknown as ControlPlaneOperations;
+  const input = {
+    operations,
+    source,
+    sourceSnapshot,
+    baseConfig: baseConfig(),
+    modulePath: ".",
+    capsuleName: "repo-interface",
+    workspaceId: source.workspaceId,
+    installingPrincipalId: "tsub_installer",
+    compatibilityReport,
+  } as const;
+
+  const first = await previewRepoOwnedInstallConfig(input);
+  expect(first.status).toBe("accepted");
+  if (first.status !== "accepted") throw new Error("preview was not accepted");
+  expect(stored).toEqual(first.installConfig);
+
+  stored = { ...first.installConfig, modulePath: "different/module" };
+  const conflicted = await previewRepoOwnedInstallConfig(input);
+  expect(conflicted).toMatchObject({
+    status: "invalid",
+    diagnostic: {
+      code: "repository_install_ux_compatibility_report_mismatch",
+    },
+  });
+});
 
 describe("repository-owned default module selection", () => {
   test("infers the only declared module without consulting Source or base InstallConfig paths", async () => {

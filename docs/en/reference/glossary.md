@@ -37,6 +37,8 @@ docs use a different name, read it back through this table.
 | Compatibility report | The result of analyzing a registered module read-only, showing the variables and providers it needs.                       |
 | Dependency           | A relation that connects Capsules so one can read another's Output. Across Workspaces it goes through an OutputShare.      |
 | InstallConfig        | The settings Takosumi keeps for how a Capsule runs, such as variable mapping and which Outputs are published.              |
+| Git revision plan    | A durable coordinator record that advances an existing Capsule's Source ref through a pinned snapshot and compatibility check to a reviewable Plan Run. |
+| Adopted Source revision | The SourceSnapshot ref/path/commit derived from the Capsule's current StateVersion and its applied Plan Run; it is distinct from the Source default. |
 | App Handoff          | The URL convention that sends a user from an outside app into the creation screen.                                         |
 | Store                | The listing used to find and browse services you can add.                                                                  |
 
@@ -127,7 +129,7 @@ OpenTofu providers.
 | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | capability             | A token for what is enabled on an endpoint. Read this rather than an edition name.                                                                           |
 | profile                | A named bundle of settings with a decided scope. Examples are `compat.s3.v1` on the compatibility API, and the `profiles` an EdgeWorker asks of its runtime. |
-| surface                | A group of entry points usable from outside. `/api/v1` and `/v1` are separate surfaces.                                                                      |
+| surface                | A group of entry points. Takosumi public JSON APIs use `/api/v1`, operator APIs use `/internal/v1`, and the retired `/v1` namespace is not a public surface. |
 | digest                 | A SHA-256 fingerprint computed from content. The same content always gives the same value.                                                                   |
 | fail closed            | Stopping rather than letting something through when the decision is unclear.                                                                                 |
 | lease                  | A mechanism that reserves ownership with an expiry so the same target is not processed in two places at once.                                                |

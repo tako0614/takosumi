@@ -596,18 +596,6 @@ export async function previewRepoOwnedInstallConfig(
     requireReviewedValues: false,
   });
   if (adoption.status !== "accepted") return adoption;
-  const repositoryInterfaceDigestFields =
-    isRepositoryManifestInterfaceCapableApiVersion(
-      adoption.repositoryManifestApiVersion,
-    )
-      ? {
-          interfaceBlueprints: adoption.interfaceBlueprints ?? [],
-          ...(adoption.requiredInterfaces
-            ? { requiredInterfaces: adoption.requiredInterfaces }
-            : {}),
-          outputAllowlist: adoption.outputAllowlist,
-        }
-      : {};
   // The Store base config is only a policy ceiling. Its legacy presentation
   // paths must not leak into the workspace-scoped config or choose the
   // executable module. Bind the derived config to the exact synced Source;
@@ -617,60 +605,24 @@ export async function previewRepoOwnedInstallConfig(
     path: input.source.defaultPath,
   };
 
-  const digest = await stableJsonDigest({
-    sourceSnapshotId: adoption.sourceSnapshotId,
-    repositoryInstallUxDigest: adoption.digest,
-    modulePath: adoption.modulePath,
-    baseInstallConfigId: input.baseConfig.id,
-    baseInstallConfigUpdatedAt: input.baseConfig.updatedAt,
-    capsuleName: input.capsuleName,
-    sourceSelector,
-    variablePresentation: adoption.variablePresentation ?? [],
-    installExperience: adoption.installExperience ?? {},
-    hostRuntimeMaterialization: adoption.hostRuntimeMaterialization ?? null,
-    variableMapping: adoption.variableMapping,
-    ...(adoption.sourceBuild ? { sourceBuild: adoption.sourceBuild } : {}),
-    ...repositoryInterfaceDigestFields,
-    policy: input.baseConfig.policy,
-  });
-  const id = `icfg_${digest.replace(/^sha256:/u, "").slice(0, 16)}`;
-  try {
-    const existing = await input.operations.capsules.getInstallConfig(id);
-    if (
-      existing.internal?.sourceSnapshotId !== adoption.sourceSnapshotId ||
-      existing.internal?.repositoryInstallUxDigest !== adoption.digest
-    ) {
-      return {
-        status: "invalid",
-        diagnostic: {
-          code: "repository_install_ux_compatibility_report_mismatch",
-          message:
-            "The deterministic repository install UX preview identity conflicts with another configuration.",
-        },
-      };
-    }
-    return { status: "accepted", installConfig: existing };
-  } catch (error) {
-    if (
-      !(error instanceof OpenTofuControllerError) ||
-      error.code !== "not_found"
-    ) {
-      throw error;
-    }
-    // Missing is the ordinary first compilation. The deterministic id makes a
-    // concurrent retry converge through the InstallConfig store upsert.
-  }
-
-  const now = new Date().toISOString();
   const selectedPath = adoption.modulePath;
   const {
+    id: _baseId,
+    name: _baseName,
+    workspaceId: _baseWorkspaceId,
+    internal: _baseInternal,
     modulePath: _baseModulePath,
+    sourceSelector: _baseSourceSelector,
     store: _baseStore,
-    ...baseConfigWithoutModulePath
+    createdAt: _baseCreatedAt,
+    updatedAt: _baseUpdatedAt,
+    ...baseConfigMaterial
   } = input.baseConfig;
-  const config = await input.operations.capsules.putInstallConfig({
-    ...baseConfigWithoutModulePath,
-    id,
+  const installConfigMaterial: Omit<
+    InstallConfig,
+    "id" | "createdAt" | "updatedAt"
+  > = {
+    ...baseConfigMaterial,
     workspaceId: input.workspaceId,
     name: `${input.capsuleName}-repository-install`,
     internal: {
@@ -694,10 +646,73 @@ export async function previewRepoOwnedInstallConfig(
       : {}),
     sourceSelector,
     modulePath: selectedPath,
+  };
+  const digest = await stableJsonDigest({
+    baseInstallConfigId: input.baseConfig.id,
+    installConfig: installConfigMaterial,
+  });
+  const id = `icfg_${digest.replace(/^sha256:/u, "").slice(0, 16)}`;
+  const now = new Date().toISOString();
+  const expected: InstallConfig = {
+    id,
+    ...installConfigMaterial,
     createdAt: now,
     updatedAt: now,
-  });
+  };
+  try {
+    const existing = await input.operations.capsules.getInstallConfig(id);
+    if (!(await installConfigIdentityEqual(existing, expected))) {
+      return {
+        status: "invalid",
+        diagnostic: {
+          code: "repository_install_ux_compatibility_report_mismatch",
+          message:
+            "The deterministic repository install UX preview identity conflicts with another configuration.",
+        },
+      };
+    }
+    return { status: "accepted", installConfig: existing };
+  } catch (error) {
+    if (
+      !(error instanceof OpenTofuControllerError) ||
+      error.code !== "not_found"
+    ) {
+      throw error;
+    }
+    // Missing is the ordinary first compilation. The deterministic id makes a
+    // concurrent retry converge through the InstallConfig store upsert.
+  }
+
+  const config = await input.operations.capsules.putInstallConfig(expected);
+  if (!(await installConfigIdentityEqual(config, expected))) {
+    return {
+      status: "invalid",
+      diagnostic: {
+        code: "repository_install_ux_compatibility_report_mismatch",
+        message:
+          "The deterministic repository install UX preview did not persist its exact configuration identity.",
+      },
+    };
+  }
   return { status: "accepted", installConfig: config };
+}
+
+async function installConfigIdentityEqual(
+  left: InstallConfig,
+  right: InstallConfig,
+): Promise<boolean> {
+  const identity = (config: InstallConfig) => {
+    const {
+      createdAt: _createdAt,
+      updatedAt: _updatedAt,
+      ...material
+    } = config;
+    return material;
+  };
+  return (
+    (await stableJsonDigest(identity(left))) ===
+    (await stableJsonDigest(identity(right)))
+  );
 }
 
 type DeclarationMergeResult<T> =

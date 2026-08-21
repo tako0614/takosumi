@@ -8,7 +8,7 @@ import { InMemoryAccountsStore } from "../../../../accounts/service/src/store.ts
 test("privacy requests persist the operator-configured opaque retention policy", async () => {
   const store = new InMemoryAccountsStore();
   const response = await handleCreatePrivacyRequest({
-    request: new Request("https://accounts.example.test/v1/account/privacy-requests", {
+    request: new Request("https://accounts.example.test/api/v1/privacy/requests", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ kind: "export" }),
@@ -30,7 +30,7 @@ test("privacy requests persist the operator-configured opaque retention policy",
 test("privacy request creation fails closed without a host retention policy", async () => {
   const store = new InMemoryAccountsStore();
   const response = await handleCreatePrivacyRequest({
-    request: new Request("https://accounts.example.test/v1/account/privacy-requests", {
+    request: new Request("https://accounts.example.test/api/v1/privacy/requests", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ kind: "delete" }),

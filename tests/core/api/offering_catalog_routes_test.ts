@@ -14,22 +14,24 @@ const SUBJECT_FINGERPRINT = `sha256:${"b".repeat(64)}`;
 describe("generic Offering operator API", () => {
   test("publishes immutable catalogs and rejects commercial/private fields", async () => {
     const app = fixture();
-    expect((await app.request("/v1/offering-catalogs")).status).toBe(401);
+    expect(
+      (await app.request("/internal/v1/offering-catalogs")).status,
+    ).toBe(401);
 
-    const created = await request(app, "/v1/offering-catalogs", {
+    const created = await request(app, "/internal/v1/offering-catalogs", {
       method: "POST",
       body: JSON.stringify(catalog()),
     });
     expect(created.status).toBe(201);
     expect(await created.json()).toEqual(catalog());
 
-    const idempotent = await request(app, "/v1/offering-catalogs", {
+    const idempotent = await request(app, "/internal/v1/offering-catalogs", {
       method: "POST",
       body: JSON.stringify(catalog()),
     });
     expect(idempotent.status).toBe(200);
 
-    const conflict = await request(app, "/v1/offering-catalogs", {
+    const conflict = await request(app, "/internal/v1/offering-catalogs", {
       method: "POST",
       body: JSON.stringify({
         ...catalog(),
@@ -48,7 +50,7 @@ describe("generic Offering operator API", () => {
       ...commercial.offerings[0]!,
       price: 100,
     };
-    const rejected = await request(app, "/v1/offering-catalogs", {
+    const rejected = await request(app, "/internal/v1/offering-catalogs", {
       method: "POST",
       body: JSON.stringify({ ...commercial, version: "commercial" }),
     });
@@ -58,12 +60,15 @@ describe("generic Offering operator API", () => {
 
   test("lists, reads, evaluates, and resolves exact non-Form offerings", async () => {
     const app = fixture();
-    await request(app, "/v1/offering-catalogs", {
+    await request(app, "/internal/v1/offering-catalogs", {
       method: "POST",
       body: JSON.stringify(catalog()),
     });
 
-    const list = await request(app, "/v1/offering-catalogs?limit=1");
+    const list = await request(
+      app,
+      "/internal/v1/offering-catalogs?limit=1",
+    );
     expect(list.status).toBe(200);
     expect(
       (
@@ -73,14 +78,14 @@ describe("generic Offering operator API", () => {
 
     const read = await request(
       app,
-      "/v1/offering-catalogs/public-services/versions/2026-07-20",
+      "/internal/v1/offering-catalogs/public-services/versions/2026-07-20",
     );
     expect(read.status).toBe(200);
     expect(
       ((await read.json()) as OfferingCatalog).offerings[0]?.subject.type,
     ).toBe("services.example.test/v1/Endpoint");
 
-    const availability = await request(app, "/v1/offering-availability/query", {
+    const availability = await request(app, "/internal/v1/offering-availability/query", {
       method: "POST",
       body: JSON.stringify({
         catalogId: "public-services",
@@ -96,7 +101,7 @@ describe("generic Offering operator API", () => {
       ).availability[0]?.availableToPrincipal,
     ).toBe(true);
 
-    const selection = await request(app, "/v1/offering-selections/resolve", {
+    const selection = await request(app, "/internal/v1/offering-selections/resolve", {
       method: "POST",
       body: JSON.stringify({
         reference: {

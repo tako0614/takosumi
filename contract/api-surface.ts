@@ -15,9 +15,11 @@
  * - {@link INTERNAL_V1_PREFIX} ONE internal seam: the in-process deploy-control
  *                             ledger contract and OpenTofu Runner callbacks.
  *                             Never edge-public.
- * - {@link ACCOUNTS_IDENTITY_PREFIX} accounts identity/billing (OIDC issuer
- *                             session surface): `/v1/account`, `/v1/auth`,
- *                             `/v1/billing`, passkeys. Sibling to `/oauth`.
+ * - {@link RETIRED_V1_PREFIX} the retired `/v1` namespace. It remains an
+ *                             explicit fail-closed boundary for legacy
+ *                             Resource/Form drains, operator routes, and old
+ *                             Accounts paths; no public Accounts alias is
+ *                             mounted there.
  * - {@link EXTERNAL_STANDARD_PREFIXES} external / standards-compliant surfaces
  *                             that MUST stay stable (OIDC, install link, webhooks).
  * - {@link HEALTH_PATHS}      process liveness/readiness probes.
@@ -29,8 +31,8 @@ export const API_V1_PREFIX = "/api/v1" as const;
 /** The single internal seam prefix (in-process + container callbacks). */
 export const INTERNAL_V1_PREFIX = "/internal/v1" as const;
 
-/** Accounts identity/billing surface (OIDC issuer session API). */
-export const ACCOUNTS_IDENTITY_PREFIX = "/v1" as const;
+/** Retired namespace kept only to fail closed before any SPA fallback. */
+export const RETIRED_V1_PREFIX = "/v1" as const;
 
 /**
  * External / standards-compliant prefixes that must not be renamed: the OIDC
@@ -49,7 +51,7 @@ export const TAKOSUMI_WELL_KNOWN_PATH = "/.well-known/takosumi" as const;
 
 /** Public product capability document, distinct from process route inventory. */
 export const TAKOSUMI_PRODUCT_CAPABILITIES_PATH =
-  "/v1/capabilities" as const;
+  "/api/v1/capabilities" as const;
 
 /** Process health/readiness/liveness probe paths (k8s/LB convention). */
 export const HEALTH_PATHS = ["/healthz", "/readyz", "/livez"] as const;
@@ -89,13 +91,9 @@ export function isInternalV1Path(pathname: string): boolean {
   return matchesPrefix(pathname, INTERNAL_V1_PREFIX);
 }
 
-/**
- * True for the accounts identity/billing surface. Note `/v1/account` etc. is a
- * strict subset of `/v1`; callers that also handle `/api/v1` must test that
- * first (it is NOT under `/v1`).
- */
-export function isAccountsIdentityPath(pathname: string): boolean {
-  return matchesPrefix(pathname, ACCOUNTS_IDENTITY_PREFIX);
+/** True for the retired `/v1` namespace, which must fail closed. */
+export function isRetiredV1Path(pathname: string): boolean {
+  return matchesPrefix(pathname, RETIRED_V1_PREFIX);
 }
 
 /** True for an external/standard prefix (OIDC, install link, webhooks). */

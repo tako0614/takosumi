@@ -33,10 +33,13 @@ the diagnostic and fails closed instead of silently choosing another backend.
 
 ## Cloud catalog
 
-Authenticated `GET /v1/cloud/catalog` returns hosted services, prices,
-protocols, and availability for the current Workspace. The catalog is for
-discovery and presentation. It is not the authority for OpenTofu state or the
-provider graph.
+The authenticated Cloud catalog, provided by the hosted Cloud owner as an
+external surface, reports hosted services, prices, protocols, and availability
+for the current Workspace. The catalog is for discovery and presentation. It is
+not the authority for OpenTofu state or the provider graph. The Takosumi OSS
+platform worker does not mount the legacy `/v1/cloud/catalog` path and does not
+define an `/api/v1/cloud/catalog` alias; obtain the actual catalog endpoint from
+the hosted Cloud owner's contract.
 
 These facts are checked independently:
 

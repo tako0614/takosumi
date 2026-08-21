@@ -33,7 +33,8 @@ Every Takosumi endpoint exposes discovery.
 
 ```http
 GET /.well-known/takosumi
-GET /v1/capabilities
+GET /api/v1/capabilities
+GET /openapi.json
 ```
 
 The CLI, dashboard, and portable clients branch on capabilities, not edition names.
@@ -60,14 +61,15 @@ Example:
     "interfaces": true
   },
   "endpoints": {
-    "api": "https://takosumi.example.com/api",
-    "capabilities": "https://takosumi.example.com/v1/capabilities",
+    "api": "https://takosumi.example.com/api/v1",
+    "capabilities": "https://takosumi.example.com/api/v1/capabilities",
+    "openapi": "https://takosumi.example.com/openapi.json",
     "oidc_issuer": "https://takosumi.example.com"
   }
 }
 ```
 
-Field names are case-sensitive. `endpoints.api` is `<origin>/api`, while
+Field names are case-sensitive. `endpoints.api` is `<origin>/api/v1`, while
 `apiBaseUrl` is `<origin>/api/v1`.
 
 ## Authentication
@@ -91,12 +93,12 @@ authentication and input errors, carries `Cache-Control: no-store` and
 
 | Method | Path                                  | Authentication                     | Purpose                               |
 | ------ | ------------------------------------- | ---------------------------------- | ------------------------------------- |
-| GET    | `/v1/account/tokens`                  | account session                    | compatibility interactive list        |
-| GET    | `/v1/account/tokens/scopes`           | account session                    | current self-service scope catalog     |
-| POST   | `/v1/account/tokens`                  | account session                    | create a PAT                          |
-| POST   | `/v1/account/tokens/{tokenId}/revoke` | account session                    | revoke a PAT                          |
-| GET    | `/v1/account/tokens/inventory.v1`     | account session                    | complete versioned metadata inventory |
-| GET    | `/v1/account/tokens/current`          | `Authorization: Bearer <PAT>` only | current authority of the presented PAT |
+| GET    | `/api/v1/account/tokens`                  | account session                    | interactive list                       |
+| GET    | `/api/v1/account/tokens/scopes`           | account session                    | current self-service scope catalog     |
+| POST   | `/api/v1/account/tokens`                  | account session                    | create a PAT                           |
+| POST   | `/api/v1/account/tokens/{tokenId}/revoke` | account session                    | revoke a PAT                           |
+| GET    | `/api/v1/account/tokens/inventory.v1`     | account session                    | complete versioned metadata inventory  |
+| GET    | `/api/v1/account/tokens/current`          | `Authorization: Bearer <PAT>` only | current authority of the presented PAT |
 
 The scope catalog marks only core `read` / `write` and allowlisted extension
 scopes explicitly declared by the same owning route through
@@ -105,7 +107,7 @@ and `ai.embeddings`, plus `resources:read`, require a Workspace binding.
 Accounts never infers self-service authority from request scopes and never
 exposes `admin` or an undeclared scope for self-service issuance.
 
-`GET /v1/account/tokens/inventory.v1` does not replace the existing Dashboard
+`GET /api/v1/account/tokens/inventory.v1` does not replace the existing Dashboard
 list. Its default `limit` is 50 and its hard maximum is 100. Rows are ordered
 by `created_at`, then `token_id`, ascending. The response kind is
 `takosumi.account-pat-inventory@v1`; its closed envelope contains only `kind`,
@@ -118,7 +120,7 @@ and `last_used_at`; optional metadata is `null`, and the secret is never
 returned. The cursor is opaque. A malformed cursor or one whose exact
 subject-owned anchor is gone returns 400 `invalid_request`.
 
-`GET /v1/account/tokens/current` ignores ambient cookies,
+`GET /api/v1/account/tokens/current` ignores ambient cookies,
 `x-takosumi-account-session`, and query/body tokens. Accounts resolves the
 presented opaque bearer across the account-session, OAuth access-token, and PAT
 stores before selecting a kind. A collision, non-PAT, revoked PAT, or expired
@@ -152,12 +154,13 @@ documentation. Non-secret `providerConfig` and `moduleInputDefaults` may carry
 endpoint, region, or ordinary module defaults; credential-shaped fields are
 rejected and secret values must use ProviderConnection values/files.
 
-Every Stack route is under `/api/v1`. The `/v1` routes are the separate
-Resource, Interface, Form, and capability control surface. Mixing the two
-prefixes produces a 404 even when authentication is valid.
+Every public Takosumi JSON route is under `/api/v1`. The old `/v1` namespace is
+not a public API and known retired paths fail closed with 404. OIDC/OAuth,
+well-known, health/metrics, and operator-only `/internal/v1` remain separate
+protocol and authority surfaces.
 
 The authoritative session-route inventory is
-`accounts/service/src/control-route-inventory.ts`; it currently contains 81
+`accounts/service/src/control-route-inventory.ts`; it currently contains 87
 public route descriptors. Representative operations from that inventory are:
 
 ```http
@@ -180,6 +183,14 @@ GET   /api/v1/capsules/{capsuleId}
 PATCH /api/v1/capsules/{capsuleId}
 POST  /api/v1/capsules/{capsuleId}/plan
 
+POST /api/v1/workspaces/{workspaceId}/install-plans
+GET  /api/v1/install-plans/{installPlanId}
+POST /api/v1/install-plans/{installPlanId}/reconcile
+
+POST /api/v1/capsules/{capsuleId}/revision-plans
+GET  /api/v1/revision-plans/{revisionPlanId}
+POST /api/v1/revision-plans/{revisionPlanId}/reconcile
+
 GET  /api/v1/connections
 POST /api/v1/connections
 POST /api/v1/connections/{connectionId}/test
@@ -195,6 +206,34 @@ GET /api/v1/capsules/{capsuleId}/state-versions
 GET /api/v1/capsules/{capsuleId}/outputs
 GET /api/v1/workspaces/{workspaceId}/activity
 ```
+
+Creating a Git install plan requires `Idempotency-Key`. Replaying the same
+normalized request in the same Workspace and actor scope returns the same
+record; reusing the key for different input returns 409. The coordinator stores
+only bounded references to the Source, immutable SourceSnapshot, DB-owned
+InstallConfig, Capsule, and canonical Plan Run. It rejects variable values,
+credentials, tokens, and Output values. Reconciliation stops at a reviewable
+Plan Run; approval and apply remain exclusively on the Run API, with no
+install-plan apply route.
+
+Creating a Git revision plan also requires `Idempotency-Key` and accepts only
+`{ "ref": "<git-ref>" }`. Creation returns 201, replaying the same normalized
+request under the same key returns 200, and reusing the key for different input
+returns 409. It fences the existing Capsule, Source,
+InstallConfig, and state generation; it does not patch the Source default ref or
+path. Reconciliation creates deterministic SourceSyncRun, SourceSnapshot,
+compatibility, and Plan Run evidence so a lost acknowledgement adopts the same
+canonical mutation. An unconfirmed mutation returns 202 with
+`nextAction: "reconcile"`; a reviewable Run returns `nextAction: "review_run"`
+and stops. State rollback remains the
+separate `POST /api/v1/state-versions/{stateVersionId}/rollback-plan` flow.
+
+Creating or reconciling a revision plan does not change what the Capsule
+tracks. Only a successful apply that advances `currentStateVersionId` adopts
+the Plan Run's SourceSnapshot as the Capsule's tracking authority.
+`GET /api/v1/capsules/{capsuleId}` exposes that non-secret derived value as
+`adoptedSourceRevision: { sourceSnapshotId, ref, path, resolvedCommit }`; it is
+absent before the first successful apply.
 
 Interactive clients such as the Dashboard read Workspaces through bounded
 pages. `limit` is capped at 100, `cursor` is the opaque token returned by the
@@ -323,10 +362,13 @@ audit evidence
 ```
 
 `Source.defaultRef` accepts a branch, tag, or commit. When `Source.autoSync` is
-enabled, the scheduler or source webhook syncs the Git ref and stores the
-resolved commit as a `SourceSnapshot`. If an active Capsule tracks that Source
-and its currently applied SourceSnapshot differs from the newly resolved commit,
-the Capsule becomes `stale`. From there, the existing Workspace update /
+enabled, the scheduler or source webhook syncs both the Source default address
+and each ref/path lane adopted by a current Capsule StateVersion. The resolved
+commit is stored as a `SourceSnapshot`. An active Capsule becomes `stale` only
+when the new snapshot is on its adopted ref/path lane and differs from its
+currently applied snapshot. Another lane never stales it or rewrites the Source
+default. Ordinary update plans also select the latest snapshot on the adopted
+lane. From there, the existing Workspace update /
 RunGroup flow creates a reviewable plan, and apply follows the normal Run
 approval path. Takosumi does not choose or fetch application artifacts outside
 the OpenTofu module.
@@ -351,15 +393,16 @@ its `sourceSnapshotId` is present in the Source snapshot list.
 
 ## Generic Offering catalog, availability, and selection API
 
-An OSS operator can publish an exact noncommercial Offering catalog. A principal
-can query availability and resolve an exact selection:
+An OSS operator can publish an exact noncommercial Offering catalog and query
+availability for a subject or resolve an exact selection. These deploy-control
+operations are intentionally outside the public session API:
 
 ```http
-POST /v1/offering-catalogs
-GET  /v1/offering-catalogs?limit={n}&cursor={opaque}
-GET  /v1/offering-catalogs/{catalogId}/versions/{catalogVersion}
-POST /v1/offering-availability/query
-POST /v1/offering-selections/resolve
+POST /internal/v1/offering-catalogs
+GET  /internal/v1/offering-catalogs?limit={n}&cursor={opaque}
+GET  /internal/v1/offering-catalogs/{catalogId}/versions/{catalogVersion}
+POST /internal/v1/offering-availability/query
+POST /internal/v1/offering-selections/resolve
 ```
 
 Each Offering pins an exact `catalog id/version + offering id/version`, an open

@@ -26,11 +26,11 @@ Git/OpenTofu flow never depends on an Offering.
 The deploy-control bearer protects the generic catalog and selection routes:
 
 ```text
-POST /v1/offering-catalogs
-GET  /v1/offering-catalogs
-GET  /v1/offering-catalogs/:catalogId/versions/:catalogVersion
-POST /v1/offering-availability/query
-POST /v1/offering-selections/resolve
+POST /internal/v1/offering-catalogs
+GET  /internal/v1/offering-catalogs
+GET  /internal/v1/offering-catalogs/:catalogId/versions/:catalogVersion
+POST /internal/v1/offering-availability/query
+POST /internal/v1/offering-selections/resolve
 ```
 
 These routes carry generic namespaced subjects. They do not install Forms,

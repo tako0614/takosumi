@@ -90,6 +90,7 @@ import {
 } from "../../sources/capsule_compatibility.ts";
 import type { ObservabilitySink } from "../../observability/mod.ts";
 import { CapsuleQuery, requireCapsule } from "../capsule_query.ts";
+import { getCapsuleAdoptedSourceSnapshot } from "../capsule_source_revision.ts";
 import {
   isRunnerInfrastructureRequeueError,
   OpenTofuControllerError,
@@ -1533,7 +1534,10 @@ export class RunEngine {
           capsulePlan?.managedPublicBaseDomain,
         );
     }
-    const planRunId = this.#newId("plan");
+    if (internal.planRunId !== undefined) {
+      requireNonEmptyString(internal.planRunId, "planRunId");
+    }
+    const planRunId = internal.planRunId ?? this.#newId("plan");
     const sourceSnapshotId =
       resourceContext || legacySourcelessDestroyRecovery
         ? undefined
@@ -1940,6 +1944,16 @@ export class RunEngine {
         "repository_install_ux_snapshot_mismatch: an initial Plan cannot replace the reviewed SourceSnapshot pin",
       );
     }
+    const adoptedSnapshot =
+      !destroy &&
+      !internal.sourceSnapshotId &&
+      !repositoryInstallUxSnapshotId &&
+      capsule.currentStateVersionId
+        ? await planCreationStage(
+            "source_snapshot_adopted",
+            getCapsuleAdoptedSourceSnapshot(this.#store, capsule),
+          )
+        : undefined;
     const resolved = internal.sourceSnapshotId
       ? await planCreationStage(
           "source_snapshot_pin",
@@ -1961,6 +1975,15 @@ export class RunEngine {
                 repositoryInstallUxSnapshotId,
               ),
             )
+          : adoptedSnapshot
+            ? await planCreationStage(
+                "source_snapshot_tracked_latest",
+                this.#resolveLatestSnapshot(
+                  stored.id,
+                  adoptedSnapshot.ref,
+                  adoptedSnapshot.path,
+                ),
+              )
           : await planCreationStage(
               "source_snapshot_latest",
               this.#resolveLatestSnapshot(
@@ -1970,10 +1993,12 @@ export class RunEngine {
               ),
             );
     if (!resolved) {
+      const ref = adoptedSnapshot?.ref ?? stored.defaultRef;
+      const path = adoptedSnapshot?.path ?? stored.defaultPath;
       throw sourceSyncRequiredError(
         `source_sync_required: Capsule ${capsuleId} has no ` +
-          `SourceSnapshot for source ${stored.id} ref ${stored.defaultRef} ` +
-          `path ${stored.defaultPath}; run a source sync first`,
+          `SourceSnapshot for source ${stored.id} ref ${ref} ` +
+          `path ${path}; run a source sync first`,
       );
     }
     const snapshot: SourceSnapshot = resolved;
@@ -2093,6 +2118,7 @@ export class RunEngine {
       this.createPlanRun(injectedRequest, context, {
         capsuleContext,
         sourceSnapshotId: snapshot.id,
+        ...(internal.planRunId ? { planRunId: internal.planRunId } : {}),
         baseStateGeneration,
         ...(compatibilityReport
           ? { compatibilityReportId: compatibilityReport.id }

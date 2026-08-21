@@ -148,9 +148,9 @@ export async function runOpenTofuOutputProof(
     outputEnvelope,
     outputsDigest: digestBytes(outputBytes),
   });
-  // A plan/apply targets an existing Capsule. Attach a prior state pointer so
-  // the apply guard (`capsuleCurrentStateVersionId`) is satisfiable for this
-  // single-shot proof.
+  // This is the Capsule's first Apply. The fixture must not invent a current
+  // StateVersion pointer without its canonical ApplyRun/PlanRun/SourceSnapshot
+  // lineage.
   const store = new InMemoryOpenTofuControlStore();
   const seeded = await seedCapsuleModel(store, {
     workspaceId: input.workspaceId,
@@ -170,11 +170,6 @@ export async function runOpenTofuOutputProof(
   });
   await seedProviderConnections(store, seeded.capsule, {
     requiredProviders: input.requiredProviders,
-  });
-  const previousStateVersionId = ids.next("state");
-  await store.putCapsule({
-    ...seeded.capsule,
-    currentStateVersionId: previousStateVersionId,
   });
   const controller = new OpenTofuController({
     store,

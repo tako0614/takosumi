@@ -33,9 +33,12 @@ fail closed します。
 
 ## Cloud catalog
 
-認証済み `GET /v1/cloud/catalog` は、現在の Workspace で利用できる hosted service、価格、
-protocol、availability を返します。catalog は discovery と表示のための情報で、OpenTofu
-state や provider graph の authority ではありません。
+認証済み Cloud catalog（hosted Cloud owner が提供する外部 surface）は、現在の Workspace で
+利用できる hosted service、価格、protocol、availability を返します。catalog は discovery と
+表示のための情報で、OpenTofu state や provider graph の authority ではありません。
+Takosumi OSS platform worker は legacy `/v1/cloud/catalog` を mount せず、
+`/api/v1/cloud/catalog` という新しい alias も定義しません。実際の catalog endpoint は
+hosted Cloud owner の契約から取得してください。
 
 次は別々に判定されます。
 

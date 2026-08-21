@@ -280,7 +280,7 @@ test("login allowlist and upstream discovery stay provider-neutral", () => {
 
 test("Cloudflare auth discovery exposes the current Google, OIDC, and passkey contract", async () => {
   const response = await createCloudflareWorker().fetch(
-    new Request("https://app.example.test/v1/auth/providers"),
+    new Request("https://app.example.test/api/v1/auth/providers"),
     env({
       TAKOSUMI_ACCOUNTS_SUBJECT_SECRET: "subject-secret",
       TAKOSUMI_ACCOUNTS_UPSTREAM_PROVIDERS: JSON.stringify([
@@ -346,9 +346,34 @@ test("Cloudflare auth discovery exposes the current Google, OIDC, and passkey co
   expect(text).not.toContain("sign-in/callback");
 });
 
+test("retired Accounts /v1 paths bypass Cloudflare SPA assets and return JSON 404", async () => {
+  const response = await createCloudflareWorker().fetch(
+    new Request("http://app.example.test/v1/account/session/me"),
+    env({
+      ASSETS: {
+        fetch: () =>
+          Promise.resolve(
+            new Response("<!doctype html><html>spa</html>", {
+              headers: { "content-type": "text/html; charset=utf-8" },
+            }),
+          ),
+      },
+      TAKOSUMI_ACCOUNTS_DB: await versionedAccountsDb(),
+      TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE: "predeployed",
+      TAKOSUMI_ACCOUNTS_ISSUER: "http://app.example.test",
+      TAKOSUMI_ACCOUNT_SESSION_HASH_SALT: "retired-v1-route-test-salt",
+    }),
+  );
+  expect(response.status).toBe(404);
+  expect(response.headers.get("content-type")).toContain("application/json");
+  expect(await response.json()).toMatchObject({
+    error: { code: "not_found" },
+  });
+});
+
 test("Cloudflare auth discovery rejects malformed config without leaking it", async () => {
   const response = await createCloudflareWorker().fetch(
-    new Request("https://app.example.test/v1/auth/providers"),
+    new Request("https://app.example.test/api/v1/auth/providers"),
     env({
       TAKOSUMI_ACCOUNTS_SUBJECT_SECRET: "subject-secret",
       TAKOSUMI_ACCOUNTS_UPSTREAM_PROVIDERS: JSON.stringify([
@@ -502,7 +527,7 @@ test("Cloudflare PAT self authority uses only the dedicated membership reader", 
   });
 
   const response = await worker.fetch(
-    new Request("http://app.example.test/v1/account/tokens/current", {
+    new Request("http://app.example.test/api/v1/account/tokens/current", {
       headers: { authorization: `Bearer ${rawToken}` },
     }),
     env({
@@ -857,7 +882,7 @@ test("predeployed accounts routes perform multiple document operations with zero
     TAKOSUMI_ACCOUNT_SESSION_HASH_SALT: sessionSalt,
   });
   const sessionRequest = (method = "GET") =>
-    new Request("http://localhost:8787/v1/account/session/me", {
+    new Request("http://localhost:8787/api/v1/account/session/me", {
       method,
       headers: {
         origin: "http://localhost:8787",
@@ -887,7 +912,7 @@ test("predeployed accounts schema mode fails closed when schema is absent", asyn
   const db = new SqliteFakeD1();
   const predeployedDb = new NoDdlD1Database(db);
   const response = await createCloudflareWorker().fetch(
-    new Request("https://app.example.test/v1/account/session/me"),
+    new Request("https://app.example.test/api/v1/account/session/me"),
     env({
       TAKOSUMI_ACCOUNTS_DB: predeployedDb,
       TAKOSUMI_ACCOUNTS_D1_SCHEMA_MODE: "predeployed",

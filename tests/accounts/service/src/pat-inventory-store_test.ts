@@ -204,7 +204,7 @@ test("Postgres serves canonical pages for reverse-lexical microsecond timestamps
   const handler = createAccountsHandler({ issuer: ORIGIN, store: routeStore });
 
   const firstResponse = await handler(
-    new Request(`${ORIGIN}/v1/account/tokens/inventory.v1?limit=1`, {
+    new Request(`${ORIGIN}/api/v1/account/tokens/inventory.v1?limit=1`, {
       headers: { authorization: `Bearer ${MICROSECOND_SESSION_ID}` },
     }),
   );
@@ -220,7 +220,7 @@ test("Postgres serves canonical pages for reverse-lexical microsecond timestamps
 
   const secondResponse = await handler(
     new Request(
-      `${ORIGIN}/v1/account/tokens/inventory.v1?limit=1&cursor=${
+      `${ORIGIN}/api/v1/account/tokens/inventory.v1?limit=1&cursor=${
         encodeURIComponent(first.next_cursor)
       }`,
       { headers: { authorization: `Bearer ${MICROSECOND_SESSION_ID}` } },

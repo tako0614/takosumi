@@ -102,9 +102,9 @@ DEPLOY_CONTROL_TOKEN="${TAKOSUMI_DEPLOY_CONTROL_TOKEN:-local-substrate-deploy-co
 
 SERVICE_API_STATUS=$(curl -sk --cacert "$CA" --resolve "${SERVICE_HOST}:443:127.0.0.1" \
 	-H "Authorization: Bearer $DEPLOY_CONTROL_TOKEN" \
-	-o /dev/null -w "%{http_code}" "https://${SERVICE_HOST}/v1/capabilities")
+	-o /dev/null -w "%{http_code}" "https://${SERVICE_HOST}/api/v1/capabilities")
 [[ "$SERVICE_API_STATUS" == "200" ]] || {
-	echo "FAIL: $SERVICE_HOST /v1/capabilities returned $SERVICE_API_STATUS (expected 200)" >&2
+	echo "FAIL: $SERVICE_HOST /api/v1/capabilities returned $SERVICE_API_STATUS (expected 200)" >&2
 	exit 1
 }
 

@@ -1,11 +1,11 @@
 /**
  * Account-plane session state mirror. Source of truth is the
  * `takosumi_session` HttpOnly cookie set by the in-process account plane
- * (mounted at the worker origin root: `/v1/account/session/me`) on passkey
+ * (`/api/v1/account/session/me`) on passkey
  * complete / OAuth callback.
  *
  * The cookie is `HttpOnly` so JavaScript cannot read or write it; we
- * therefore mirror it through fetch(`/v1/account/session/me`) which
+ * therefore mirror it through fetch(`/api/v1/account/session/me`) which
  * returns the session subject when the cookie is valid, or
  * `{ session: null }` when it's missing / expired. Callers use the cached
  * value via `readSession()` and react to changes via `onSessionChange()`.
@@ -31,6 +31,7 @@ import {
   dashboardResponseErrorDetails,
   type DashboardBootstrapResponse,
 } from "../../../lib/dashboard-bootstrap.ts";
+import { SESSION_ME } from "./paths.ts";
 
 export interface SessionRecord {
   readonly subject: string;
@@ -70,7 +71,7 @@ export type SessionState =
   | { readonly kind: "maintenance"; readonly error: SessionError }
   | { readonly kind: "error"; readonly error: SessionError };
 
-const SESSION_ME_PATH = "/v1/account/session/me";
+const SESSION_ME_PATH = SESSION_ME;
 const CACHE_TTL_MS = 30_000;
 
 const listeners = new Set<(s: SessionRecord | null) => void>();
@@ -107,7 +108,7 @@ interface SessionMeResponse {
 }
 
 function pickResponseRecord(data: SessionMeResponse): SessionRecord | null {
-  // `/v1/account/session/me` uses the top-level shape, while the dashboard
+  // `/api/v1/account/session/me` uses the top-level shape, while the dashboard
   // bootstrap intentionally nests the same canonical fields under `session`.
   if (typeof data?.subject === "string" && data.subject.length > 0) {
     return {

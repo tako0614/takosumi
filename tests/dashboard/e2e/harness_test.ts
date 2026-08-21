@@ -278,7 +278,7 @@ test("public-live binds every official-origin response to the exact Version", ()
     shouldRecordControlPlaneMutation(
       "public-live",
       origin,
-      `${origin}/v1/auth/upstream/callback?code=one&state=two`,
+      `${origin}/oauth/upstream/callback?code=one&state=two`,
       "GET",
     ),
   ).toBe(true);

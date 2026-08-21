@@ -3,7 +3,7 @@
  * AccountMiscViews port, i18n-ed.
  *
  * Which providers are clickable is resolved at runtime from
- * `GET /v1/auth/providers` (operator config) and fails closed, so a button
+ * `GET /api/v1/auth/providers` (operator config) and fails closed, so a button
  * whose backend would answer 503 is never enabled. The permanently-disabled
  * passkey placeholder of the old screen is intentionally NOT carried over:
  * the dashboard ships no WebAuthn client yet, and a control that can never

@@ -10,11 +10,10 @@ Read the endpoint URL, audience, and required permission from Run outputs or an
 authorized Interface. Do not guess a base URL or tenant hostname.
 
 The authenticated Cloud catalog reports currently available protocol families.
-
-```bash
-curl https://app.takosumi.com/v1/cloud/catalog \
-  -H "authorization: Bearer $TAKOSUMI_CLOUD_API_KEY"
-```
+The hosted Cloud owner defines this external catalog surface. The Takosumi OSS
+platform worker does not mount the retired `/v1/cloud/catalog` path and does not
+provide an `/api/v1/cloud/catalog` compatibility alias. Obtain the actual URL
+from the hosted Cloud owner's contract or an authorized Interface.
 
 A normal Cloud API key, an S3 access key, and a runtime Interface credential
 are separate authorities and are not interchangeable.

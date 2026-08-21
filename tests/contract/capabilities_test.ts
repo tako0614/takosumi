@@ -24,10 +24,14 @@ test("Takosumi discovery document exposes v1alpha1 endpoint metadata", () => {
   assert.equal(document.features.compat_framework, true);
   assert.deepEqual(document.features.compatibility_profiles, []);
   assert.equal(document.features.interfaces, false);
-  assert.equal(document.endpoints.api, "https://takosumi.example.com/api");
+  assert.equal(document.endpoints.api, "https://takosumi.example.com/api/v1");
   assert.equal(
     document.endpoints.capabilities,
-    "https://takosumi.example.com/v1/capabilities",
+    "https://takosumi.example.com/api/v1/capabilities",
+  );
+  assert.equal(
+    document.endpoints.openapi,
+    "https://takosumi.example.com/openapi.json",
   );
   assert.equal(document.endpoints.oidc_issuer, "https://takosumi.example.com");
 });
@@ -67,14 +71,7 @@ test("Takosumi product capabilities separate framework from enabled profiles", (
   assert.equal(capabilities.operator.runner_pools, false);
   assert.equal(capabilities.operator.target_catalog, false);
   assert.equal(capabilities.identity.external_oidc_login, false);
-  assert.deepEqual(capabilities.formAvailability, {
-    structured: true,
-    endpoint: "/v1/form-availability",
-    principalScoped: true,
-    readScopesAnyOf: ["forms:read", "resources:read"],
-    commercialFields: false,
-    forms: [],
-  });
+  assert.equal("formAvailability" in capabilities, false);
   assert.deepEqual(capabilities.extensions, [TAKOSUMI_INTERFACES_CAPABILITY]);
 });
 

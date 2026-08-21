@@ -36,6 +36,8 @@ dashboard は内部の用語をそのまま出さず、次の言葉を使いま�
 | 互換性レポート                   | 登録した module を読み取り専用で解析し、必要な変数と provider を示した結果です。                                        | [Source と Capsule](../concepts/sources.md)    |
 | 依存 (Dependency)                | Capsule どうしをつなぎ、相手の Output を参照できるようにする関係です。Workspace をまたぐ場合は OutputShare を通します。 | [状態と出力](../concepts/state-and-outputs.md) |
 | Capsule 作成設定 (InstallConfig) | 変数の対応づけや公開する Output など、Capsule の実行のしかたを Takosumi 側に持つ設定です。                              | [API](./api.md)                                |
+| Git revision plan                | 既存 Capsule の Source ref 更新を、固定した snapshot と互換性確認を経て reviewable な Plan Run まで進める耐久 coordinator の記録です。 | [API](./api.md)                                |
+| 採用済み Source revision         | Capsule の現在の StateVersion が参照する Plan Run から導出した SourceSnapshot の ref/path/commit です。Source の既定 ref とは別です。 | [API](./api.md)                                |
 | App Handoff                      | 外部のアプリから利用者を作成画面へ送るための URL の決まりです。                                                         | [App Handoff](./app-handoff.md)                |
 | Store                            | 追加できるサービスを探して並べるための一覧です。                                                                        | [App Handoff](./app-handoff.md)                |
 
@@ -125,7 +127,7 @@ dashboard は内部の用語をそのまま出さず、次の言葉を使いま�
 | ---------------------- | -------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- |
 | capability             | その endpoint で何が有効かを表す token です。edition の名前ではなくこれを見ます。                                          | [製品の境界](../concepts/boundaries.md) |
 | profile                | 範囲を決めて名前を付けた設定の束です。互換 API の `compat.s3.v1` や、EdgeWorker が実行環境に求める `profiles` があります。 | [API](./api.md)                         |
-| surface                | 外から使える入口のまとまりです。`/api/v1` と `/v1` は別の surface です。                                                   | [API](./api.md)                         |
+| surface                | 外から使える入口のまとまりです。Takosumi の公開 JSON API は `/api/v1`、operator API は `/internal/v1` です。旧 `/v1` は公開 surface ではありません。 | [API](./api.md)                         |
 | digest                 | 内容から計算した SHA-256 の指紋です。同じ内容なら必ず同じ値になります。                                                    | [API](./api.md)                         |
 | fail closed            | 判断がつかないときに、通さずに止める動き方です。                                                                           | [Interface](../concepts/interfaces.md)  |
 | lease                  | 同じ対象を 2 か所で同時に処理しないよう、担当を期限つきで確保する仕組みです。                                              | [API](./api.md)                         |

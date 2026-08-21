@@ -170,7 +170,7 @@ describe("dashboard session bootstrap", () => {
       if (path === "/api/v1/dashboard/bootstrap?includeWorkspaces=false") {
         return new Response(null, { status: 401 });
       }
-      if (path === "/v1/account/session/me") {
+      if (path === "/api/v1/account/session/me") {
         return new Response(null, { status: 401 });
       }
       throw new Error(`unexpected fetch: ${path}`);
@@ -180,7 +180,7 @@ describe("dashboard session bootstrap", () => {
     expect(readSessionState()).toEqual({ kind: "unauthenticated" });
     expect(calls).toEqual([
       "/api/v1/dashboard/bootstrap?includeWorkspaces=false",
-      "/v1/account/session/me",
+      "/api/v1/account/session/me",
     ]);
   });
 
@@ -192,7 +192,7 @@ describe("dashboard session bootstrap", () => {
       if (path === "/api/v1/dashboard/bootstrap?includeWorkspaces=false") {
         return new Response(null, { status: 401 });
       }
-      if (path === "/v1/account/session/me") {
+      if (path === "/api/v1/account/session/me") {
         return new Response(JSON.stringify({ session: null }), {
           status: 200,
           headers: { "content-type": "application/json" },
@@ -205,7 +205,7 @@ describe("dashboard session bootstrap", () => {
     expect(readSessionState()).toEqual({ kind: "unauthenticated" });
     expect(calls).toEqual([
       "/api/v1/dashboard/bootstrap?includeWorkspaces=false",
-      "/v1/account/session/me",
+      "/api/v1/account/session/me",
     ]);
   });
 
@@ -238,7 +238,7 @@ describe("dashboard session bootstrap", () => {
       if (path === "/api/v1/dashboard/bootstrap?includeWorkspaces=false") {
         return new Response(null, { status: 401 });
       }
-      if (path === "/v1/account/session/me" && phase === "signed-out") {
+      if (path === "/api/v1/account/session/me" && phase === "signed-out") {
         return new Response(JSON.stringify({ session: null }), {
           status: 200,
           headers: { "content-type": "application/json" },
@@ -260,7 +260,7 @@ describe("dashboard session bootstrap", () => {
     expect(calls).toEqual([
       workspaceBootstrapPath,
       "/api/v1/dashboard/bootstrap?includeWorkspaces=false",
-      "/v1/account/session/me",
+      "/api/v1/account/session/me",
       workspaceBootstrapPath,
     ]);
   });
@@ -273,7 +273,7 @@ describe("dashboard session bootstrap", () => {
       if (path === "/api/v1/dashboard/bootstrap?includeWorkspaces=false") {
         return new Response(null, { status: 401 });
       }
-      if (path === "/v1/account/session/me") {
+      if (path === "/api/v1/account/session/me") {
         return new Response(JSON.stringify({}), {
           status: 200,
           headers: { "content-type": "application/json" },
@@ -295,7 +295,7 @@ describe("dashboard session bootstrap", () => {
     expect(readSessionState()).toMatchObject({ kind: "error" });
     expect(calls).toEqual([
       "/api/v1/dashboard/bootstrap?includeWorkspaces=false",
-      "/v1/account/session/me",
+      "/api/v1/account/session/me",
     ]);
   });
 

@@ -109,7 +109,7 @@ test("commercial billing keeps configuration when the summary endpoint fails", a
   }) as typeof fetch;
   try {
     const snapshot = await loadCommercialBilling({
-      basePath: "/v1/billing",
+      basePath: "/api/v1/billing",
       workspaceId: "workspace_1",
     });
     expect(snapshot.configuration?.credits.purchaseOptionsUsdMicros).toEqual([
@@ -124,7 +124,7 @@ test("commercial billing keeps configuration when the summary endpoint fails", a
     expect(summaryError?.cause).toBeInstanceOf(CommercialBillingRequestError);
     expect(
       (summaryError?.cause as CommercialBillingRequestError).url,
-    ).toContain("/v1/billing/summary?");
+    ).toContain("/api/v1/billing/summary?");
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -157,7 +157,7 @@ test("commercial billing never fabricates a summary for an invalid response", as
   }) as typeof fetch;
   try {
     const snapshot = await loadCommercialBilling({
-      basePath: "/v1/billing",
+      basePath: "/api/v1/billing",
       workspaceId: "workspace_1",
     });
     expect(snapshot.configuration).toBeDefined();
@@ -571,13 +571,13 @@ test("commercial transaction client requests a bounded keyset page", async () =>
   }) as typeof fetch;
   try {
     const page = await loadCommercialBillingTransactions({
-      basePath: "/v1/billing",
+      basePath: "/api/v1/billing",
       workspaceId: "workspace_1",
       limit: 999,
       cursor: "cursor_2",
     });
     expect(page).toEqual({ items: [] });
-    expect(requested?.url).toContain("/v1/billing/transactions?");
+    expect(requested?.url).toContain("/api/v1/billing/transactions?");
     expect(new URL(requested!.url).searchParams.get("workspaceId")).toBe(
       "workspace_1",
     );

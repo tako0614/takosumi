@@ -117,7 +117,8 @@ URL を作ります。
 
 ```http
 GET /.well-known/takosumi
-GET /v1/capabilities
+GET /api/v1/capabilities
+GET /openapi.json
 ```
 
 製品固有の metadata が必要なクライアントは、さらに次を読みます。

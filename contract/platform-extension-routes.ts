@@ -8,9 +8,11 @@
  * where that extension happens to be configured. Publishing the list as
  * contract lets a host assert its own descriptors before shipping them.
  *
- * Deliberately narrower than all of `/v1`: operator extensions such as
- * `/v1/billing` and `/v1/cloud` are valid, while concrete Takosumi/Accounts
- * authorities are not. The `/.well-known` namespace is handled separately:
+ * The retired `/v1` namespace is reserved wholesale and cannot be reclaimed
+ * by an extension. Optional features are allowlisted at their exact
+ * `/api/v1/...` roots; currently billing and Hosted subscription are the only
+ * such roots. Concrete Takosumi/Accounts authorities are not delegated.
+ * The `/.well-known` namespace is handled separately:
  * the root, the two core leaves, and the retired Takoform v1alpha1/v1alpha2/
  * v1alpha3 leaves stay reserved, while an explicitly exact descriptor may
  * claim an unknown sibling without claiming the namespace.
@@ -28,22 +30,26 @@ export const PLATFORM_EXTENSION_RESERVED_PREFIXES = [
   "/metrics",
   "/capabilities",
   "/openapi.json",
-  "/v1/account",
-  "/v1/auth",
-  "/v1/privacy",
-  "/v1/capabilities",
-  "/v1/form-activations",
-  "/v1/form-availability",
-  "/v1/offering-catalogs",
-  "/v1/offering-availability",
-  "/v1/offering-selections",
-  "/v1/interfaces",
-  "/v1/resources",
-  "/v1/target-pools",
-  "/v1/space-policies",
+  // The former public JSON namespace is retired wholesale. Keeping this as a
+  // single prefix prevents an unlisted legacy sibling from becoming an
+  // extension compatibility alias.
+  "/v1",
+  "/api/v1/account",
+  "/api/v1/auth",
+  "/api/v1/privacy",
+  // Retired Accounts identity paths remain unavailable to extensions; they
+  // must reach the Accounts handler's JSON 404 rather than be reclaimed.
+  "/api/v1/capabilities",
+  "/api/v1/interfaces",
   "/apis/forms.takoform.com/v1alpha1",
   "/apis/forms.takoform.com/v1alpha2",
   "/apis/forms.takoform.com/v1alpha3",
+] as const;
+
+/** Exact optional extension roots permitted inside the otherwise reserved `/api`. */
+export const PLATFORM_EXTENSION_ALLOWLISTED_BASE_PATHS = [
+  "/api/v1/billing",
+  "/api/v1/hosted/subscription",
 ] as const;
 
 /** Exact well-known routes owned by Takosumi/Accounts or held unavailable. */
@@ -87,6 +93,13 @@ export function platformExtensionBasePathIsReserved(
   basePath: string,
   matchMode: PlatformExtensionMatchMode = "subtree",
 ): boolean {
+  if (
+    (PLATFORM_EXTENSION_ALLOWLISTED_BASE_PATHS as readonly string[]).includes(
+      basePath,
+    )
+  ) {
+    return false;
+  }
   if (
     PLATFORM_EXTENSION_RESERVED_PREFIXES.some(
       (prefix) =>

@@ -191,6 +191,35 @@ export const installConfigs = pgTable(
   ],
 );
 
+export const gitInstallPlans = pgTable(
+  names.gitInstallPlans,
+  {
+    id: text("id").primaryKey(),
+    workspaceId: text("workspace_id").notNull(),
+    actorSubject: text("actor_subject").notNull(),
+    idempotencyKeyHash: text("idempotency_key_hash").notNull(),
+    requestDigest: text("request_digest").notNull(),
+    phase: text("phase").notNull(),
+    generation: integer("generation").notNull(),
+    recordJson: json("record_json").notNull(),
+    reconcileLeaseToken: text("reconcile_lease_token"),
+    reconcileLeaseExpiresAt: text("reconcile_lease_expires_at"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("takosumi_git_install_plans_actor_key_unique").on(
+      table.workspaceId,
+      table.actorSubject,
+      table.idempotencyKeyHash,
+    ),
+    index("takosumi_git_install_plans_workspace_phase_idx").on(
+      table.workspaceId,
+      table.phase,
+    ),
+  ],
+);
+
 export const capsules = pgTable(
   names.capsules,
   {

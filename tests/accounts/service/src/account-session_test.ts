@@ -121,8 +121,10 @@ test("rotateAccountSession with no prior session just mints a new one", async ()
   );
 });
 
-test("TAKOSUMI_ACCOUNTS_SESSION_ME_PATH is /v1/account/session/me", () => {
-  expect(TAKOSUMI_ACCOUNTS_SESSION_ME_PATH).toEqual("/v1/account/session/me");
+test("TAKOSUMI_ACCOUNTS_SESSION_ME_PATH is /api/v1/account/session/me", () => {
+  expect(TAKOSUMI_ACCOUNTS_SESSION_ME_PATH).toEqual(
+    "/api/v1/account/session/me",
+  );
 });
 
 test("handleAccountSessionMeGet returns subject+session times for a valid cookie", async () => {
@@ -141,7 +143,7 @@ test("handleAccountSessionMeGet returns subject+session times for a valid cookie
     expiresAt: now + 60_000,
   });
   const request = new Request(
-    "https://accounts.example.test/v1/account/session/me",
+    "https://accounts.example.test/api/v1/account/session/me",
     {
       headers: { cookie: `${ACCOUNT_SESSION_COOKIE_NAME}=${sessionId}` },
     },
@@ -163,7 +165,7 @@ test("handleAccountSessionMeGet returns subject+session times for a valid cookie
 test("handleAccountSessionMeGet returns null session for missing cookie", async () => {
   const store = new InMemoryAccountsStore();
   const request = new Request(
-    "https://accounts.example.test/v1/account/session/me",
+    "https://accounts.example.test/api/v1/account/session/me",
   );
   const response = await handleAccountSessionMeGet({ request, store });
   expect(response.status).toEqual(200);
@@ -186,7 +188,7 @@ test("handleAccountSessionMeGet returns null session for expired cookie", async 
     expiresAt: past + 1, // already expired
   });
   const request = new Request(
-    "https://accounts.example.test/v1/account/session/me",
+    "https://accounts.example.test/api/v1/account/session/me",
     {
       headers: { cookie: `${ACCOUNT_SESSION_COOKIE_NAME}=${sessionId}` },
     },
@@ -212,7 +214,7 @@ test("handleAccountSessionMeGet surfaces primaryAccountId when resolver returns 
     expiresAt: now + 60_000,
   });
   const request = new Request(
-    "https://accounts.example.test/v1/account/session/me",
+    "https://accounts.example.test/api/v1/account/session/me",
     {
       headers: { cookie: `${ACCOUNT_SESSION_COOKIE_NAME}=${sessionId}` },
     },
@@ -249,7 +251,7 @@ test("handleAccountSessionMeDelete revokes session and emits clear cookie", asyn
     expiresAt: now + 60_000,
   });
   const request = new Request(
-    "https://accounts.example.test/v1/account/session/me",
+    "https://accounts.example.test/api/v1/account/session/me",
     {
       method: "DELETE",
       headers: { cookie: `${ACCOUNT_SESSION_COOKIE_NAME}=${sessionId}` },
@@ -272,7 +274,7 @@ test("handleAccountSessionMeDelete revokes session and emits clear cookie", asyn
 test("handleAccountSessionMeDelete is idempotent when no session is presented", async () => {
   const store = new InMemoryAccountsStore();
   const request = new Request(
-    "https://accounts.example.test/v1/account/session/me",
+    "https://accounts.example.test/api/v1/account/session/me",
     { method: "DELETE" },
   );
   const response = await handleAccountSessionMeDelete({
@@ -307,7 +309,7 @@ test("handleAccountSessionMeDelete fails closed when durable revocation fails", 
   });
 
   const response = await handleAccountSessionMeDelete({
-    request: new Request("https://accounts.example.test/v1/account/session/me", {
+    request: new Request("https://accounts.example.test/api/v1/account/session/me", {
       method: "DELETE",
       headers: { authorization: "Bearer sess_logout_failure" },
     }),

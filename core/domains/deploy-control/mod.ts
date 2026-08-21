@@ -62,7 +62,11 @@ import type {
   RunStatus,
   TestConnectionResponse,
 } from "@takosumi/internal/deploy-control-api";
-import type { Capsule, PublicCapsule } from "takosumi-contract/capsules";
+import type {
+  Capsule,
+  CapsuleAdoptedSourceRevision,
+  PublicCapsule,
+} from "takosumi-contract/capsules";
 import type { CapsuleOwnedResourceFence } from "../capsules/mod.ts";
 import type {
   CredentialRecipe,
@@ -172,6 +176,7 @@ import type { StateVersion } from "takosumi-contract/state-versions";
 import type {
   CapsuleCurrentResourceInventoryResponse,
 } from "takosumi-contract/current-resource-inventory";
+import { getCapsuleAdoptedSourceSnapshot } from "./capsule_source_revision.ts";
 import type { ArtifactReferenceAllocator } from "../../adapters/storage/artifact-references.ts";
 import type { SensitiveOutputResolver } from "../output-shares/mod.ts";
 import type {
@@ -1040,6 +1045,12 @@ export interface PlanRunInternalContext {
    */
   readonly legacySourcelessDestroyRecovery?: true;
   readonly sourceSnapshotId?: string;
+  /**
+   * Server-reserved exact Plan Run identity for a durable coordinator. Public
+   * request bodies never control this value; it lets a retry probe the same
+   * canonical row after a lost acknowledgement instead of minting another Run.
+   */
+  readonly planRunId?: string;
   readonly compatibilityReportId?: string;
   readonly lifecycleActions?: InstallConfig["lifecycleActions"];
   /** The Capsule's current state generation (its latest StateVersion, or 0). */
@@ -1140,6 +1151,8 @@ export interface CreateCapsulePlanInternal {
    * complete cleanup. The snapshot must belong to the Capsule's Source.
    */
   readonly sourceSnapshotId?: string;
+  /** Server-only exact Plan Run id used for lost-ack idempotency. */
+  readonly planRunId?: string;
   /**
    * Server-side auto-continue (auto-update pipeline): the RunOwner dispatcher
    * creates the apply run itself when the completed plan is CLEAN
@@ -1695,6 +1708,32 @@ export class OpenTofuController {
     return await this.#capsules.getCapsule(id);
   }
 
+  /**
+   * Read-only projection of the Git revision adopted by the current applied
+   * StateVersion. It never falls back to or mutates Source.defaultRef.
+   */
+  async getCapsuleAdoptedSourceRevision(
+    id: string,
+  ): Promise<CapsuleAdoptedSourceRevision | undefined> {
+    requireNonEmptyString(id, "capsuleId");
+    const capsule = await this.#store.getCapsule(id);
+    if (!capsule) {
+      throw new OpenTofuControllerError("not_found", `Capsule ${id} not found`);
+    }
+    const snapshot = await getCapsuleAdoptedSourceSnapshot(
+      this.#store,
+      capsule,
+    );
+    return snapshot
+      ? {
+          sourceSnapshotId: snapshot.id,
+          ref: snapshot.ref,
+          path: snapshot.path,
+          resolvedCommit: snapshot.resolvedCommit,
+        }
+      : undefined;
+  }
+
   async getCurrentOutput(capsuleId: string): Promise<OutputResponse> {
     return await this.#capsules.getCurrentOutput(capsuleId);
   }
@@ -1928,6 +1967,12 @@ export class OpenTofuController {
     options: CreateSourceSyncRequest & { readonly dedupe?: boolean } = {},
   ): Promise<CreateSourceSyncResponse> {
     return await this.#sources.createSourceSync(sourceId, options);
+  }
+
+  async createSourceReconciliationSyncs(
+    sourceId: string,
+  ): Promise<readonly CreateSourceSyncResponse[]> {
+    return await this.#sources.createSourceReconciliationSyncs(sourceId);
   }
 
   async listSourceSnapshots(

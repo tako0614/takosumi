@@ -53,7 +53,7 @@ function browserJsonRequest(path: string, body: unknown, origin = issuer) {
 test("passkey registration options require a live session and derive the subject from it", async () => {
   const { handler } = seededHandler();
   const missingSession = await handler(
-    new Request(`${issuer}/v1/auth/passkeys/register/options`, {
+    new Request(`${issuer}/api/v1/auth/passkeys/register/options`, {
       method: "POST",
       headers: { origin: issuer, "content-type": "application/json" },
       body: JSON.stringify({ subject: "tsub_member" }),
@@ -62,7 +62,7 @@ test("passkey registration options require a live session and derive the subject
   expect(missingSession.status).toBe(401);
 
   const response = await handler(
-    browserJsonRequest("/v1/auth/passkeys/register/options", {
+    browserJsonRequest("/api/v1/auth/passkeys/register/options", {
       subject: "tsub_attacker_selected",
       userName: "chosen-name",
     }),
@@ -84,14 +84,14 @@ test("passkey authentication options do not reveal whether an account exists", a
     updatedAt: Date.now(),
   });
   const unknown = await handler(
-    new Request(`${issuer}/v1/auth/passkeys/authenticate/options`, {
+    new Request(`${issuer}/api/v1/auth/passkeys/authenticate/options`, {
       method: "POST",
       headers: { origin: issuer, "content-type": "application/json" },
       body: JSON.stringify({ subject: "tsub_unknown" }),
     }),
   );
   const registered = await handler(
-    new Request(`${issuer}/v1/auth/passkeys/authenticate/options`, {
+    new Request(`${issuer}/api/v1/auth/passkeys/authenticate/options`, {
       method: "POST",
       headers: { origin: issuer, "content-type": "application/json" },
       body: JSON.stringify({ subject: "tsub_member" }),
@@ -106,10 +106,10 @@ test("passkey authentication options do not reveal whether an account exists", a
 test("parallel passkey challenges use distinct store keys instead of clobbering", async () => {
   const { handler, store } = seededHandler();
   const first = await handler(
-    browserJsonRequest("/v1/auth/passkeys/register/options", {}),
+    browserJsonRequest("/api/v1/auth/passkeys/register/options", {}),
   );
   const second = await handler(
-    browserJsonRequest("/v1/auth/passkeys/register/options", {}),
+    browserJsonRequest("/api/v1/auth/passkeys/register/options", {}),
   );
   const firstBody = (await first.json()) as { challenge: string };
   const secondBody = (await second.json()) as { challenge: string };
@@ -140,7 +140,7 @@ test("parallel passkey challenges use distinct store keys instead of clobbering"
 test("cookie mutations require exact issuer Origin and route Content-Type", async () => {
   const { handler, store } = seededHandler();
   const noOrigin = await handler(
-    new Request(`${issuer}/v1/account/session/me`, {
+    new Request(`${issuer}/api/v1/account/session/me`, {
       method: "DELETE",
       headers: { cookie: `${ACCOUNT_SESSION_COOKIE_NAME}=sess_member` },
     }),
@@ -149,7 +149,7 @@ test("cookie mutations require exact issuer Origin and route Content-Type", asyn
   expect(store.findAccountSession("sess_member")).toBeDefined();
 
   const wrongType = await handler(
-    new Request(`${issuer}/v1/auth/passkeys/register/options`, {
+    new Request(`${issuer}/api/v1/auth/passkeys/register/options`, {
       method: "POST",
       headers: {
         cookie: `${ACCOUNT_SESSION_COOKIE_NAME}=sess_member`,
@@ -162,7 +162,7 @@ test("cookie mutations require exact issuer Origin and route Content-Type", asyn
   expect(wrongType.status).toBe(415);
 
   const explicitBearer = await handler(
-    new Request(`${issuer}/v1/auth/passkeys/register/options`, {
+    new Request(`${issuer}/api/v1/auth/passkeys/register/options`, {
       method: "POST",
       headers: {
         authorization: "Bearer sess_member",
@@ -174,7 +174,7 @@ test("cookie mutations require exact issuer Origin and route Content-Type", asyn
   expect(explicitBearer.status).toBe(200);
 
   const exactOrigin = await handler(
-    new Request(`${issuer}/v1/account/session/me`, {
+    new Request(`${issuer}/api/v1/account/session/me`, {
       method: "DELETE",
       headers: {
         cookie: `${ACCOUNT_SESSION_COOKIE_NAME}=sess_member`,
@@ -189,7 +189,7 @@ test("cookie mutations require exact issuer Origin and route Content-Type", asyn
 test("bodyless cookie mutations tolerate Cloudflare empty body streams", async () => {
   const { handler, store } = seededHandler();
   const response = await handler(
-    new Request(`${issuer}/v1/account/session/me`, {
+    new Request(`${issuer}/api/v1/account/session/me`, {
       method: "DELETE",
       headers: {
         cookie: `${ACCOUNT_SESSION_COOKIE_NAME}=sess_member`,
@@ -207,7 +207,7 @@ test("bodyless cookie mutations tolerate Cloudflare empty body streams", async (
 test("Accounts JSON reader rejects streamed bytes beyond the route cap", async () => {
   const { handler } = seededHandler();
   const response = await handler(
-    new Request(`${issuer}/v1/auth/passkeys/register/options`, {
+    new Request(`${issuer}/api/v1/auth/passkeys/register/options`, {
       method: "POST",
       headers: {
         cookie: `${ACCOUNT_SESSION_COOKIE_NAME}=sess_member`,

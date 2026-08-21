@@ -66,6 +66,32 @@ test("Accounts preserves exact 404 versus 405/Allow route boundaries", async () 
   });
 });
 
+test("retired Accounts /v1 paths never alias the /api/v1 or /oauth routes", async () => {
+  const handler = handlerFor(HTTP_ISSUER, {
+    passkeys: {
+      rpId: "accounts.example.test",
+      rpName: "Takosumi",
+      origin: HTTP_ISSUER,
+    },
+  });
+  for (const path of [
+    "/v1/account/session/me",
+    "/v1/account/tokens",
+    "/v1/privacy/requests",
+    "/v1/auth/providers",
+    "/v1/auth/passkeys/register/options",
+    "/v1/auth/upstream/authorize",
+    "/v1/auth/upstream/callback",
+  ]) {
+    const response = await handler(request(HTTP_ISSUER, path));
+    expect(response.status).toBe(404);
+    expect(response.headers.get("content-type")).toContain("application/json");
+    expect(await response.json()).toMatchObject({
+      error: { code: "not_found" },
+    });
+  }
+});
+
 test("Accounts keeps HEAD support limited to the current GET/HEAD routes", async () => {
   const handler = handlerFor();
 
@@ -82,7 +108,7 @@ test("Accounts keeps HEAD support limited to the current GET/HEAD routes", async
   }
 
   const getOnly = await handler(
-    request(HTTP_ISSUER, "/v1/auth/providers", { method: "HEAD" }),
+    request(HTTP_ISSUER, "/api/v1/auth/providers", { method: "HEAD" }),
   );
   expect(getOnly.status).toBe(405);
   expect(getOnly.headers.get("allow")).toBe("GET");
@@ -96,7 +122,7 @@ test("Accounts preserves malformed path, body, UTF-8, and media-type responses",
       origin: HTTP_ISSUER,
     },
   });
-  const path = "/v1/auth/passkeys/authenticate/options";
+  const path = "/api/v1/auth/passkeys/authenticate/options";
   const headers = {
     origin: HTTP_ISSUER,
     "content-type": "application/json",
@@ -167,7 +193,7 @@ test("Accounts requires the issuer Origin for cookie mutations", async () => {
   const cookie = `${ACCOUNT_SESSION_COOKIE_NAME}=sess_origin`;
 
   const crossSite = await handler(
-    request(HTTP_ISSUER, "/v1/account/session/me", {
+    request(HTTP_ISSUER, "/api/v1/account/session/me", {
       method: "DELETE",
       headers: { cookie, origin: "https://evil.example.test" },
     }),
@@ -179,7 +205,7 @@ test("Accounts requires the issuer Origin for cookie mutations", async () => {
   expect(store.findAccountSession("sess_origin")).toBeDefined();
 
   const sameOrigin = await handler(
-    request(HTTP_ISSUER, "/v1/account/session/me", {
+    request(HTTP_ISSUER, "/api/v1/account/session/me", {
       method: "DELETE",
       headers: { cookie, origin: HTTP_ISSUER },
     }),
@@ -212,7 +238,7 @@ test("the OAuth callback exception applies only to the exact GET path", async ()
   const cookie = `${ACCOUNT_SESSION_COOKIE_NAME}=sess_callback`;
 
   const exactGet = await handler(
-    request(HTTPS_ISSUER, "/v1/auth/upstream/callback?provider=google", {
+    request(HTTPS_ISSUER, "/oauth/upstream/callback?provider=google", {
       headers: { cookie },
     }),
   );
@@ -225,7 +251,7 @@ test("the OAuth callback exception applies only to the exact GET path", async ()
   expect(store.findAccountSession("sess_callback")).toBeDefined();
 
   const trailingPath = await handler(
-    request(HTTPS_ISSUER, "/v1/auth/upstream/callback/?provider=google", {
+    request(HTTPS_ISSUER, "/oauth/upstream/callback/?provider=google", {
       headers: { cookie },
     }),
   );
@@ -236,7 +262,7 @@ test("the OAuth callback exception applies only to the exact GET path", async ()
   expect(store.findAccountSession("sess_callback")).toBeUndefined();
 
   const crossSitePost = await handler(
-    request(HTTPS_ISSUER, "/v1/auth/upstream/callback?provider=google", {
+    request(HTTPS_ISSUER, "/oauth/upstream/callback?provider=google", {
       method: "POST",
       headers: {
         origin: "https://evil.example.test",

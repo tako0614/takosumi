@@ -15,9 +15,8 @@ registry, executable implementation, activation/audience policy, targets,
 backend lifecycle, and commercial offering. Portable maturity or historical
 package evidence does not grant runtime support.
 
-For retained Resource rows, use the bounded legacy drain documented in
-[Core Spec](../internal/core-spec.md#legacy-resourceform-drain): it is disabled
-by default (`404`), and an authenticated operator may opt into list/read,
-events/observe/delete plus TargetPool/SpacePolicy `GET`/`HEAD`/`DELETE` only.
-Discovery and writes remain unavailable (`404`/`410`). Do not treat a drain
-response as current Host Support or Offering availability.
+Retained Resource rows are migration data only. The former `/v1` Resource,
+TargetPool, and SpacePolicy HTTP families are unconditionally retired (`404`)
+with no drain flag or CLI caller. Use typed in-process operations or the
+owning external Host for any migration; do not treat an HTTP response as
+current Host Support or Offering availability.

@@ -665,7 +665,11 @@ export class InterfaceService {
 
   /**
    * Authorize one Capsule's pairwise OIDC Principal to consume the exact
-   * Workspace Interface contracts compiled into its InstallConfig.
+   * Workspace-visible Interface contracts compiled into its InstallConfig.
+   *
+   * Visibility only admits an Interface to this bounded directory lookup. It
+   * never grants invocation: the exact Principal binding created below remains
+   * the authority for discovery and token exchange.
    */
   async ensureCapsuleRequiredInterfaces(input: {
     readonly workspaceId: string;
@@ -681,10 +685,7 @@ export class InterfaceService {
       const candidates = await this.list({
         workspaceId,
         type: requirement.interface.type,
-        phase: "Resolved",
-        ownerKind: "Workspace",
-        ownerId: workspaceId,
-        includeRetired: false,
+        includeRetired: true,
         limit: 65,
       });
       if (candidates.length === 65) {
@@ -693,21 +694,60 @@ export class InterfaceService {
           `required Interface ${requirement.interface.type}@${requirement.interface.version} exceeds bounded resolution`,
         );
       }
-      const matches = candidates.filter(
+      const exactVersion = candidates.filter(
         (iface) => iface.spec.version === requirement.interface.version,
       );
-      if (matches.length !== 1) {
+      const candidateHistory = await Promise.all(
+        exactVersion.map(async (iface) => ({
+          iface,
+          history: await this.#stores.bindings.listByInterface(
+            iface.metadata.id,
+          ),
+        })),
+      );
+      const pinned = candidateHistory.filter(({ history }) =>
+        history.some((binding) => {
+          const source = binding.metadata.materializedFrom;
+          return (
+            source?.source === "capsule_required_interface" &&
+            source.capsuleId === capsuleId &&
+            source.requirementKey === requirement.key &&
+            source.interfaceType === requirement.interface.type &&
+            source.interfaceVersion === requirement.interface.version
+          );
+        }),
+      );
+      if (pinned.length > 1) {
         throw new InterfaceServiceError(
           "failed_precondition",
-          matches.length === 0
+          `required Interface ${requirement.key} has conflicting prior bindings`,
+        );
+      }
+      const available = candidateHistory.filter(({ iface }) =>
+        iface.status.phase === "Resolved" &&
+        (iface.metadata.ownerRef.kind === "Workspace"
+          ? iface.metadata.ownerRef.id === workspaceId
+          : iface.spec.access.visibility !== "private"),
+      );
+      const pinnedSelection = pinned[0];
+      const selected =
+        pinnedSelection ??
+        (available.length === 1 ? available[0] : undefined);
+      if (pinnedSelection && !available.includes(pinnedSelection)) {
+        throw new InterfaceServiceError(
+          "failed_precondition",
+          `required Interface ${requirement.key} pinned Interface is unavailable`,
+        );
+      }
+      if (!selected) {
+        throw new InterfaceServiceError(
+          "failed_precondition",
+          available.length === 0
             ? `required Interface ${requirement.interface.type}@${requirement.interface.version} is unavailable`
             : `required Interface ${requirement.interface.type}@${requirement.interface.version} is ambiguous`,
         );
       }
-      const iface = matches[0]!;
-      const history = await this.#stores.bindings.listByInterface(
-        iface.metadata.id,
-      );
+      const { iface, history } = selected;
       const existing = history.find(
         (binding) =>
           binding.spec.subjectRef.kind === "Principal" &&

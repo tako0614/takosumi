@@ -543,7 +543,7 @@ function hasHostedDiscovery(value: unknown, origin: string): boolean {
   const extensions = value.endpoints.extensions;
   return (
     extensions["takosumi.hosted.subscription.v1"] ===
-    `${origin}/v1/hosted/subscription`
+    `${origin}/api/v1/hosted/subscription`
   );
 }
 
@@ -623,7 +623,7 @@ function matchesHostedSponsorshipRoute(value: unknown): boolean {
         ].sort(),
       ) &&
     value.id === "takosumi-hosted-sponsorship" &&
-    value.basePath === "/v1/hosted/subscription" &&
+    value.basePath === "/api/v1/hosted/subscription" &&
     value.handlerKey === "HOSTED" &&
     value.authDelivery === "context" &&
     value.ownsPathSubtree === true &&
@@ -679,7 +679,7 @@ function matchesHostedInventoryContribution(value: unknown): boolean {
       ) &&
     contribution.id === "takoserver-hosted-resources" &&
     contribution.slot === "workspace.hosted-resources" &&
-    contribution.href === "/v1/hosted/subscription/resources" &&
+    contribution.href === "/api/v1/hosted/subscription/resources" &&
     contribution.presentation === "native" &&
     contribution.label === "Hosted resources" &&
     contribution.description ===

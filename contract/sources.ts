@@ -339,6 +339,19 @@ export type SourceSyncIntent = "observe" | "manual_plan";
 export interface CreateSourceSyncRequest {
   readonly intent?: SourceSyncIntent;
   readonly expectedRef?: string;
+  /**
+   * Server-owned revision coordinator pin. Unlike `expectedRef`, this does not
+   * rewrite or reinterpret the Source default; it creates one manual-plan sync
+   * for the exact requested Git address. Public Source-sync handlers do not
+   * forward these fields from caller JSON.
+   */
+  readonly coordinator?: {
+    readonly ref: string;
+    readonly path: string;
+    /** Deterministic identities used to recover a committed lost acknowledgement. */
+    readonly runId: string;
+    readonly snapshotId: string;
+  };
 }
 
 export interface SourceSyncPhaseTiming {

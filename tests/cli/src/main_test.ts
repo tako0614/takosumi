@@ -6184,7 +6184,7 @@ test("accounts tokens list calls the Accounts PAT endpoint", async () => {
 
     expect(code).toEqual(0);
     expect(stderr).toEqual([]);
-    expect(requests[0]?.url).toEqual("http://accounts.local/v1/account/tokens");
+    expect(requests[0]?.url).toEqual("http://accounts.local/api/v1/account/tokens");
     expect(requests[0]?.method).toEqual("GET");
     expect(requests[0]?.headers.get("authorization")).toEqual(
       "Bearer sess_owner",
@@ -6247,7 +6247,7 @@ test("accounts tokens create posts name scopes and expiry", async () => {
     expect(code).toEqual(0);
     expect(stderr).toEqual([]);
     expect(requests[0]?.request.url).toEqual(
-      "http://accounts.local/v1/account/tokens",
+      "http://accounts.local/api/v1/account/tokens",
     );
     expect(requests[0]?.request.method).toEqual("POST");
     expect(requests[0]?.request.headers.get("authorization")).toEqual(
@@ -6308,7 +6308,7 @@ test("accounts tokens revoke posts the target token id", async () => {
     expect(code).toEqual(0);
     expect(stderr).toEqual([]);
     expect(requests[0]?.url).toEqual(
-      "http://accounts.local/v1/account/tokens/pat_2/revoke",
+      "http://accounts.local/api/v1/account/tokens/pat_2/revoke",
     );
     expect(requests[0]?.method).toEqual("POST");
     expect(stdout.join("\n")).toEqual(
@@ -6990,6 +6990,8 @@ test("root help shows only the stable operator CLI surface", async () => {
   expect(code).toEqual(0);
   expect(stderr).toEqual([]);
   expect(stdout.join("\n")).toContain("connections");
+  expect(stdout.join("\n")).not.toContain("form-availability");
+  expect(stdout.join("\n")).not.toContain("form-activations");
   expect(stdout.join("\n")).not.toContain("Worker secrets");
   expect(stdout.join("\n")).not.toContain("accounts seed");
 });

@@ -38,8 +38,9 @@ test("dashboard loads feature truth from same-origin Takosumi discovery", async 
         api_versions: ["takosumi.dev/v1alpha1"],
         features: {},
         endpoints: {
-          api: "https://operator.example/api",
+          api: "https://operator.example/api/v1",
           capabilities: "https://operator.example/custom/capabilities",
+          openapi: "https://operator.example/openapi.json",
           oidc_issuer: "https://operator.example",
         },
       });
@@ -65,8 +66,9 @@ test("dashboard rejects cross-origin capability endpoints", async () => {
       api_versions: ["takosumi.dev/v1alpha1"],
       features: {},
       endpoints: {
-        api: "https://operator.example/api",
-        capabilities: "https://untrusted.example/v1/capabilities",
+        api: "https://operator.example/api/v1",
+        capabilities: "https://untrusted.example/api/v1/capabilities",
+        openapi: "https://operator.example/openapi.json",
         oidc_issuer: "https://operator.example",
       },
     });
@@ -83,8 +85,9 @@ test("dashboard rejects capability documents without typed compatibility authori
         api_versions: ["takosumi.dev/v1alpha1"],
         features: {},
         endpoints: {
-          api: "https://operator.example/api",
-          capabilities: "https://operator.example/v1/capabilities",
+          api: "https://operator.example/api/v1",
+          capabilities: "https://operator.example/api/v1/capabilities",
+          openapi: "https://operator.example/openapi.json",
           oidc_issuer: "https://operator.example",
         },
       });

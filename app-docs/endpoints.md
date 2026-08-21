@@ -9,12 +9,10 @@ repository の OpenTofu provider graph で行います。
 endpoint URL、audience、必要な permission は Run の Output または authorized Interface
 から取得します。base URL や tenant hostname を推測しないでください。
 
-認証済み Cloud catalog は現在利用できる protocol family を返します。
-
-```bash
-curl https://app.takosumi.com/v1/cloud/catalog \
-  -H "authorization: Bearer $TAKOSUMI_CLOUD_API_KEY"
-```
+認証済み Cloud catalog は現在利用できる protocol family を返します。この catalog endpoint は
+hosted Cloud owner が定義する外部 surface です。Takosumi OSS platform worker は retired
+`/v1/cloud/catalog` を mount せず、`/api/v1/cloud/catalog` という互換 alias も提供しません。
+実際の URL は hosted Cloud owner の契約または authorized Interface から取得してください。
 
 通常の Cloud API key、S3 access key、runtime Interface credential は別の authority です。
 相互に使い回しません。

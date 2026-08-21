@@ -4978,6 +4978,29 @@ const D1_RESOURCE_IDENTITY_FENCE_OWNER_RECEIPT_STATEMENTS = [
   `alter table resource_identity_fences add column retired_owner_json text`,
 ] as const;
 
+const D1_GIT_INSTALL_PLAN_STATEMENTS = [
+  `create table if not exists git_install_plans (
+    id text primary key,
+    workspace_id text not null,
+    actor_subject text not null,
+    idempotency_key_hash text not null,
+    request_digest text not null,
+    phase text not null,
+    generation integer not null check (generation >= 0),
+    record_json text not null,
+    reconcile_lease_token text,
+    reconcile_lease_expires_at text,
+    created_at text not null,
+    updated_at text not null
+  )`,
+  `create unique index if not exists git_install_plans_actor_key_unique
+    on git_install_plans (
+      workspace_id, actor_subject, idempotency_key_hash
+    )`,
+  `create index if not exists git_install_plans_workspace_phase_idx
+    on git_install_plans (workspace_id, phase)`,
+] as const;
+
 async function d1ResourceIdentityFenceOwnerReceiptStatements(
   db: D1Database,
 ): Promise<readonly string[]> {
@@ -7795,6 +7818,23 @@ Workspace visibility and membership changes never advance Capsule execution auth
         db,
         await d1CapsuleExecutionAuthorityEpochStatements(db),
       );
+    },
+  },
+  {
+    version: 65,
+    name: "d1_git_install_plans",
+    checksumSource: () => `
+Git install plans persist only the secret-free normalized request and canonical Source Snapshot InstallConfig Capsule and Plan Run references
+idempotency is exact within Workspace Actor and hashed Idempotency-Key scope
+reconcile claims are CAS generation fenced and recover after a bounded lease
+request handling performs data statements only and never creates schema
+${D1_GIT_INSTALL_PLAN_STATEMENTS.join("\n---\n")}
+`,
+    async atomicStatements() {
+      return D1_GIT_INSTALL_PLAN_STATEMENTS;
+    },
+    async apply(db) {
+      await runD1AtomicSql(db, D1_GIT_INSTALL_PLAN_STATEMENTS);
     },
   },
 ] as const satisfies readonly D1OpenTofuSchemaMigration[];

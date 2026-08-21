@@ -180,6 +180,11 @@ import {
   defaultCapsuleInstallConfig,
 } from "./domains/capsules/default_install_config.ts";
 import { withHostInstallConfigs } from "./domains/capsules/host_install_config_store.ts";
+import {
+  InMemoryGitInstallPlanStore,
+  type GitInstallPlanStore,
+} from "./domains/install-plans/store.ts";
+import { SqlGitInstallPlanStore } from "./domains/install-plans/sql_store.ts";
 import type {
   CreateSourceRequest,
   CreateSourceResponse,
@@ -193,6 +198,7 @@ import type {
   SourceSnapshot,
 } from "takosumi-contract/sources";
 import type {
+  CapsuleAdoptedSourceRevision,
   CapsuleCompatibilityReportResponse,
   CreateSourceCompatibilityCheckRequest,
 } from "takosumi-contract/capsules";
@@ -379,37 +385,6 @@ function assertDurableDeployControlStoreOrWarn(input: {
   });
 }
 
-function assertResourceShapeApiAuthOrWarn(input: {
-  readonly environment?: string;
-  readonly exposed: boolean;
-  readonly bearerTokenPresent: boolean;
-  readonly scopedAuthorizerPresent: boolean;
-}): void {
-  if (
-    !input.exposed ||
-    input.bearerTokenPresent ||
-    input.scopedAuthorizerPresent
-  ) {
-    return;
-  }
-  const strict =
-    input.environment === "production" || input.environment === "staging";
-  if (strict) {
-    throw new Error(
-      `${input.environment} runtime exposes the Resource Shape API but no ` +
-        `TAKOSUMI_DEPLOY_CONTROL_TOKEN or scoped Resource Shape actor resolver ` +
-        `is configured; /v1/resources would be unauthenticated.`,
-    );
-  }
-  log.warn("service.resourceShape.unauthenticated_routes", {
-    environment: input.environment ?? "unknown",
-    hint:
-      "Resource Shape API routes are exposed without a bearer token. Set " +
-      "TAKOSUMI_DEPLOY_CONTROL_TOKEN or inject resolveResourceShapeActor " +
-      "before exposing this host.",
-  });
-}
-
 function assertInterfaceApiAuthOrWarn(input: {
   readonly environment?: string;
   readonly exposed: boolean;
@@ -428,7 +403,7 @@ function assertInterfaceApiAuthOrWarn(input: {
     throw new Error(
       `${input.environment} runtime exposes the Interface API but no ` +
         `TAKOSUMI_DEPLOY_CONTROL_TOKEN or scoped Interface authorizer is ` +
-        `configured; /v1/interfaces would be unauthenticated.`,
+        `configured; /api/v1/interfaces would be unauthenticated.`,
     );
   }
   log.warn("service.interface.unauthenticated_routes", {
@@ -512,6 +487,30 @@ function assertDurableOfferingCatalogStoreOrWarn(input: {
   });
 }
 
+function assertDurableGitInstallPlanStoreOrWarn(input: {
+  readonly environment?: string;
+  readonly durable: boolean;
+}): void {
+  if (input.durable) return;
+  const strict =
+    input.environment === "production" || input.environment === "staging";
+  if (strict) {
+    throw new Error(
+      `${input.environment} runtime exposes the Git install-plan coordinator ` +
+        `but no durable GitInstallPlan store is configured; idempotency and ` +
+        `reconciliation evidence would be lost on restart. Inject a durable ` +
+        `gitInstallPlanStore (or a sqlClient).`,
+    );
+  }
+  log.warn("service.git_install_plan.in_memory_store", {
+    environment: input.environment ?? "unknown",
+    hint:
+      "Git install-plan idempotency and reconciliation records will not " +
+      "persist across restart. Inject a durable gitInstallPlanStore (or a " +
+      "sqlClient) for production/staging.",
+  });
+}
+
 export interface ResourceShapeAdapterFactoryDeps {
   readonly controller: OpenTofuController;
   readonly capsules: CapsulesService;
@@ -567,6 +566,11 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
   readonly sourceCredentialDrivers?: SourceCredentialDriverRegistry;
   /** Optional SQL client used by the durable OpenTofu and Resource APIs. */
   readonly sqlClient?: SqlClient;
+  /**
+   * Host-selected durable Git install-plan ledger. Postgres compositions derive
+   * one from sqlClient; D1 hosts inject their raw-SQL realization explicitly.
+   */
+  readonly gitInstallPlanStore?: GitInstallPlanStore;
   /**
    * Host-local exact FormRef/package/activation registry. When omitted,
    * `sqlClient` supplies the durable Postgres implementation; a zero-form host
@@ -906,6 +910,8 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
 export interface TakosumiOperations {
   /** The wired OpenTofu deployment controller. */
   readonly controller: OpenTofuController;
+  /** Durable actor/idempotency-scoped Git install coordinator records. */
+  readonly gitInstallPlans: GitInstallPlanStore;
   /** Optional zero-form-capable portable Service Form host registry. */
   readonly forms?: FormRegistryService;
   /**
@@ -1173,6 +1179,9 @@ export interface TakosumiOperations {
     options?: {
       readonly compatibilityReportId?: string;
       readonly runnerProfileId?: string;
+      readonly sourceSnapshotId?: string;
+      readonly planRunId?: string;
+      readonly actor?: string;
     },
   ): Promise<PlanRunResponse>;
   /** Capsule-driven destroy-plan: always lands waiting_approval (spec §23). */
@@ -1192,6 +1201,9 @@ export interface TakosumiOperations {
   createApplyRun(request: CreateApplyRunRequest): Promise<ApplyRunResponse>;
   getApplyRun(id: string): Promise<ApplyRunResponse>;
   getCapsule(id: string): Promise<GetCapsuleResponse>;
+  getCapsuleAdoptedSourceRevision(
+    capsuleId: string,
+  ): Promise<CapsuleAdoptedSourceRevision | undefined>;
   listStateVersions(
     capsuleId: string,
     params?: PageParams,
@@ -1304,6 +1316,9 @@ export interface TakosumiOperations {
     sourceId: string,
     options?: CreateSourceSyncRequest & { readonly dedupe?: boolean },
   ): Promise<CreateSourceSyncResponse>;
+  createSourceReconciliationSyncs(
+    sourceId: string,
+  ): Promise<readonly CreateSourceSyncResponse[]>;
   createSourceCompatibilityCheck(
     sourceId: string,
     request?: CreateSourceCompatibilityCheckRequest,
@@ -1400,6 +1415,15 @@ export async function createTakosumiService(
       (config) => config.id !== DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
     ),
   ]);
+  const gitInstallPlanStore =
+    options.gitInstallPlanStore ??
+    (options.sqlClient
+      ? new SqlGitInstallPlanStore(options.sqlClient)
+      : new InMemoryGitInstallPlanStore());
+  assertDurableGitInstallPlanStoreOrWarn({
+    environment: runtimeConfig.environment,
+    durable: gitInstallPlanStore.durable,
+  });
   const formRegistryStore =
     options.formRegistryStore ??
     (options.sqlClient
@@ -2776,12 +2800,6 @@ export async function createTakosumiService(
         : "OpenTofu restore failed",
     );
   });
-  assertResourceShapeApiAuthOrWarn({
-    environment: runtimeConfig.environment,
-    exposed: resourceShapeService !== undefined,
-    bearerTokenPresent: Boolean(deployControlToken),
-    scopedAuthorizerPresent: Boolean(options.resolveResourceShapeActor),
-  });
   assertDurableResourceShapeStoresOrWarn({
     environment: runtimeConfig.environment,
     exposed: resourceShapeService !== undefined,
@@ -2843,10 +2861,6 @@ export async function createTakosumiService(
       role === "takosumi-api" && Boolean(metricsScrapeToken),
     registerResourceShapeRoutes:
       role === "takosumi-api" && resourceShapeService !== undefined,
-    registerFormActivationRoutes:
-      role === "takosumi-api" &&
-      formRegistryService !== undefined &&
-      Boolean(deployControlToken),
     registerOfferingCatalogRoutes:
       role === "takosumi-api" && Boolean(deployControlToken),
     registerInterfaceRoutes: role === "takosumi-api",
@@ -3003,13 +3017,6 @@ export async function createTakosumiService(
             : {}),
         }
       : undefined,
-    formActivationRouteOptions:
-      formRegistryService && deployControlToken
-        ? {
-            service: formRegistryService,
-            getBearerToken: () => deployControlToken,
-          }
-        : undefined,
     offeringCatalogRouteOptions: deployControlToken
       ? {
           catalogs: offeringCatalogAdminService,
@@ -3111,6 +3118,7 @@ export async function createTakosumiService(
   };
   const operations: TakosumiOperations = {
     controller: opentofuController,
+    gitInstallPlans: gitInstallPlanStore,
     ...(formRegistryService ? { forms: formRegistryService } : {}),
     offerings: offeringService,
     offeringCatalogs: offeringCatalogAdminService,
@@ -3690,14 +3698,23 @@ export async function createTakosumiService(
     createCapsulePlan: (capsuleId, options) =>
       opentofuController.createCapsulePlan(
         capsuleId,
-        {},
-        options?.compatibilityReportId || options?.runnerProfileId
+        options?.actor ? { actor: options.actor } : {},
+        options?.compatibilityReportId ||
+        options?.runnerProfileId ||
+        options?.sourceSnapshotId ||
+        options?.planRunId
           ? {
               ...(options?.compatibilityReportId
                 ? { compatibilityReportId: options.compatibilityReportId }
                 : {}),
               ...(options?.runnerProfileId
                 ? { runnerProfileId: options.runnerProfileId }
+                : {}),
+              ...(options?.sourceSnapshotId
+                ? { sourceSnapshotId: options.sourceSnapshotId }
+                : {}),
+              ...(options?.planRunId
+                ? { planRunId: options.planRunId }
                 : {}),
             }
           : {},
@@ -3716,6 +3733,8 @@ export async function createTakosumiService(
     createApplyRun: (request) => opentofuController.createApplyRun(request),
     getApplyRun: (id) => opentofuController.getApplyRun(id),
     getCapsule: (id) => opentofuController.getCapsule(id),
+    getCapsuleAdoptedSourceRevision: (capsuleId) =>
+      opentofuController.getCapsuleAdoptedSourceRevision(capsuleId),
     listStateVersions: (capsuleId, params) =>
       opentofuController.listStateVersions(capsuleId, params),
     listStateVersionsByIds: (ids) =>
@@ -3826,6 +3845,8 @@ export async function createTakosumiService(
     patchSource: (id, patch) => opentofuController.patchSource(id, patch),
     createSourceSync: (sourceId, opts) =>
       opentofuController.createSourceSync(sourceId, opts ?? {}),
+    createSourceReconciliationSyncs: (sourceId) =>
+      opentofuController.createSourceReconciliationSyncs(sourceId),
     createSourceCompatibilityCheck: (sourceId, request) =>
       opentofuController.createSourceCompatibilityCheck(sourceId, request),
     getCompatibilityReport: (reportId) =>

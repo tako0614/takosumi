@@ -9,15 +9,8 @@ import {
   runAccountsTokens,
 } from "./cli-accounts-commands.ts";
 import { runConnections } from "./cli-connections-commands.ts";
-import { runFormActivations } from "./cli-form-activation-commands.ts";
 import { runFormPackages } from "./cli-form-package-commands.ts";
-import { runFormAvailability } from "./cli-form-availability-commands.ts";
 import { runOfferingCatalogs } from "./cli-offering-commands.ts";
-import {
-  runResources,
-  runSpacePolicies,
-  runTargetPools,
-} from "./cli-resource-shape-commands.ts";
 import {
   runLaunchReadinessMigrateFinalModel,
   runLaunchReadinessOidcAccountSecurityEvidence,
@@ -104,26 +97,11 @@ export async function main(
   if (domain === "install-configs") {
     return await runInstallConfigs([command, ...rest].filter(Boolean), io);
   }
-  if (domain === "form-activations") {
-    return await runFormActivations([command, ...rest].filter(Boolean), io);
-  }
   if (domain === "form-packages") {
     return await runFormPackages([command, ...rest].filter(Boolean), io);
   }
-  if (domain === "form-availability") {
-    return await runFormAvailability([command, ...rest].filter(Boolean), io);
-  }
   if (domain === "offering-catalogs") {
     return await runOfferingCatalogs([command, ...rest].filter(Boolean), io);
-  }
-  if (domain === "resources") {
-    return await runResources([command, ...rest].filter(Boolean), io);
-  }
-  if (domain === "target-pools") {
-    return await runTargetPools([command, ...rest].filter(Boolean), io);
-  }
-  if (domain === "space-policies") {
-    return await runSpacePolicies([command, ...rest].filter(Boolean), io);
   }
   if (domain === "launch-readiness" && command === "validate") {
     return await runLaunchReadinessValidate(rest, io);

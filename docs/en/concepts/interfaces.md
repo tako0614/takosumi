@@ -20,7 +20,7 @@ blueprint, or projected by an external Host from a Form descriptor, converge on 
 records. The external Host owns the Form descriptor's definition and realization authority.
 
 ```http
-POST /v1/interfaces
+POST /api/v1/interfaces
 Authorization: Bearer <control token>
 Content-Type: application/json
 ```
@@ -117,10 +117,10 @@ module uses Cloudflare, AWS, Takoform, or another provider directly.
 ## Reading state and authorization
 
 ```bash
-curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/v1/interfaces/if_example" \
+curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/interfaces/if_example" \
   -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
 
-curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/v1/interfaces/if_example/bindings" \
+curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/interfaces/if_example/bindings" \
   -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
 ```
 
@@ -131,7 +131,7 @@ for one is the OAuth access token handed to the runtime that calls the Interface
 the control plane token from the examples above returns `403`.
 
 ```bash
-curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/v1/interfaces/if_example/token" \
+curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/interfaces/if_example/token" \
   -H "authorization: Bearer $TAKOSUMI_RUNTIME_ACCESS_TOKEN" \
   -H 'content-type: application/json' \
   -d '{ "permission": "example.invoke" }'

@@ -151,7 +151,7 @@ test("startUpstreamOAuth preserves return_to and sends S256 PKCE", async () => {
 
   expect(storage.get("tg_oauth_return")).toBe(returnTo);
   expect(storage.get("tg_oauth_pkce_verifier")).toHaveLength(43);
-  expect(assigned[0]).toContain("/v1/auth/upstream/authorize?");
+  expect(assigned[0]).toContain("/oauth/upstream/authorize?");
   const assignedUrl = new URL(assigned[0]!, "https://app.takosumi.com");
   expect(assignedUrl.searchParams.get("code_challenge_method")).toBe("S256");
   expect(assignedUrl.searchParams.get("code_challenge")).toMatch(

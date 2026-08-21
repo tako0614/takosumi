@@ -4,15 +4,16 @@
 > This page records the remaining provider/Host boundary; it is not a supported
 > Resource authoring guide.
 
-Takosumi OSS の platform edge は既定では Takoform Host を mount せず、旧 route は
-`404` のままです。Takoform は Cloudflare、AWS、その他の OpenTofu provider と同じく、
-repository の module が選ぶ外部 provider の一つです。
+Takosumi OSS の platform edge は Takoform Host を mount せず、旧 Resource/Form `/v1`
+route は bearer の有無にかかわらず `404` のままです。Takoform は Cloudflare、AWS、
+その他の OpenTofu provider と同じく、repository の module が選ぶ外部 provider の一つ
+です。Portable Host protocol は選択した external Host の endpoint が所有します。
 
-OSS は、既存の exact v1alpha1 Resource を安全に移行するための generic な
-in-process compatibility composition だけを保持します。これは host code が明示的に
-完全な maintenance lane を注入した場合に限って mount され、通常の OSS edge や text
-environment flag から有効にはできません。実際の Host、backend、許可する transition
-pair、Form の install/retain は Takosumi Cloud または別の external Host が所有します。
+OSS は Resource/Form Host、Form Registry、FormActivation、TargetPool、SpacePolicy の
+supported authoring surface を提供しません。retained Resource/Form rows と typed
+operations は migration custody のためだけに残り、実際の Host、backend、許可する
+transition pair、Form の install/retain は Takosumi Cloud または別の external Host が
+所有します。
 
 ## 実行経路
 
@@ -48,11 +49,10 @@ provider と接続先 Host の discovery/contract を確認してください。
 production capability として広告しません。
 
 旧 Takosumi Resource Shape/Form Host の endpoint と provider 設定は supported product
-flow ではありません。既存データの operator-only drain は非公開 runbook と
-[configuration reference](./configuration.md) に限定します。上記の明示的な frozen
-compatibility composition はこの一般 drain とは別で、同一 origin に discovery、exact
-Form availability、旧 exact read/observe/preview/update/delete、下記 transition を一式で
-提供しなければなりません。transition だけを広告する構成は不正です。
+flow ではありません。retained rows の読み取り、transition、cleanup は typed
+in-process operations または owning external Host の migration custody で行います。
+以下の transition は external Host が提供する portable protocol の一般契約であり、
+Takosumi OSS の `/v1` route や compatibility alias を復活させるものではありません。
 
 ## Exact Resource Form transition
 

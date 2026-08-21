@@ -18,7 +18,7 @@ materialize する場合も、外部 Host が Form descriptor を投影する場
 同じ台帳へ収束します。Form descriptor の定義・実体化の authority は外部 Host 側です。
 
 ```http
-POST /v1/interfaces
+POST /api/v1/interfaces
 Authorization: Bearer <control token>
 Content-Type: application/json
 ```
@@ -116,10 +116,10 @@ provider を直接使う経路を置き換えません。
 ## 状態と認可を読む
 
 ```bash
-curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/v1/interfaces/if_example" \
+curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/interfaces/if_example" \
   -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
 
-curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/v1/interfaces/if_example/bindings" \
+curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/interfaces/if_example/bindings" \
   -H "authorization: Bearer $TAKOSUMI_DEPLOY_CONTROL_TOKEN"
 ```
 
@@ -130,7 +130,7 @@ curl -s "$TAKOSUMI_DEPLOY_CONTROL_URL/v1/interfaces/if_example/bindings" \
 使ってきた control plane のトークンで叩くと `403` が返ります。
 
 ```bash
-curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/v1/interfaces/if_example/token" \
+curl -X POST "$TAKOSUMI_DEPLOY_CONTROL_URL/api/v1/interfaces/if_example/token" \
   -H "authorization: Bearer $TAKOSUMI_RUNTIME_ACCESS_TOKEN" \
   -H 'content-type: application/json' \
   -d '{ "permission": "example.invoke" }'

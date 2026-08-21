@@ -289,6 +289,80 @@ test("createSync binds manual-plan dedupe to the expected immutable ref", async 
   expect(second.run.ref).toBe(revision);
 });
 
+test("createSync pins a coordinator-requested Git ref without mutating Source defaults", async () => {
+  const { service } = makeService();
+  const { source } = await service.createSource({
+    workspaceId: "workspace_1",
+    name: "a",
+    url: "https://github.com/a/b",
+    defaultRef: "main",
+    defaultPath: "deploy/app",
+  });
+
+  const first = await service.createSync(source.id, {
+    dedupe: true,
+    intent: "manual_plan",
+    coordinator: {
+      ref: "release/v2",
+      path: "deploy/app",
+      runId: "ssr_revisionexact",
+      snapshotId: "snap_revisionexact",
+    },
+  });
+  const replay = await service.createSync(source.id, {
+    dedupe: true,
+    intent: "manual_plan",
+    coordinator: {
+      ref: "release/v2",
+      path: "deploy/app",
+      runId: "ssr_revisionexact",
+      snapshotId: "snap_revisionexact",
+    },
+  });
+
+  expect(first.run).toMatchObject({
+    sourceId: source.id,
+    ref: "release/v2",
+    path: "deploy/app",
+    intent: "manual_plan",
+  });
+  expect(replay.run.id).toBe(first.run.id);
+  expect((await service.getSource(source.id)).source).toMatchObject({
+    defaultRef: "main",
+    defaultPath: "deploy/app",
+  });
+});
+
+test("createSync never adopts a semantically similar run for a coordinator identity", async () => {
+  const { service } = makeService();
+  const { source } = await service.createSource({
+    workspaceId: "workspace_1",
+    name: "a",
+    url: "https://github.com/a/b",
+    defaultRef: "main",
+    defaultPath: "deploy/app",
+  });
+  const ordinary = await service.createSync(source.id, {
+    dedupe: true,
+    intent: "manual_plan",
+  });
+
+  const coordinated = await service.createSync(source.id, {
+    dedupe: true,
+    intent: "manual_plan",
+    coordinator: {
+      ref: "main",
+      path: "deploy/app",
+      runId: "ssr_revisionseparate",
+      snapshotId: "snap_revisionseparate",
+    },
+  });
+
+  expect(coordinated.run.id).toBe("ssr_revisionseparate");
+  expect(coordinated.run.snapshotId).toBe("snap_revisionseparate");
+  expect(coordinated.run.id).not.toBe(ordinary.run.id);
+});
+
 test("createSync rejects a raced Source revision before creating a run", async () => {
   const { service } = makeService();
   const { source } = await service.createSource({

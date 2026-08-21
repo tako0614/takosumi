@@ -33,8 +33,6 @@ import {
   type RegisterMetricsRoutesOptions,
 } from "./metrics_routes.ts";
 import {
-  authorizeResourceShapeRequest,
-  hasFormAvailabilityReadScope,
   type RegisterResourceShapeRoutesOptions,
   registerResourceShapeRoutes,
 } from "./resource_routes.ts";
@@ -42,10 +40,6 @@ import {
   type RegisterInterfaceRoutesOptions,
   registerInterfaceRoutes,
 } from "./interface_routes.ts";
-import {
-  type RegisterFormActivationRoutesOptions,
-  registerFormActivationRoutes,
-} from "./form_activation_routes.ts";
 import {
   type RegisterOfferingCatalogRoutesOptions,
   registerOfferingCatalogRoutes,
@@ -73,12 +67,9 @@ export interface CreateApiAppOptions {
   readonly deployControlInternalRouteOptions?: DeployControlInternalRouteDependencies;
   readonly registerMetricsRoutes?: boolean;
   readonly metricsRouteOptions?: RegisterMetricsRoutesOptions;
-  /** When set, mounts the `/v1/resources` Resource Shape API (Flow B). */
+  /** When set, composes the retained portable Takoform host protocol. */
   readonly registerResourceShapeRoutes?: boolean;
   readonly resourceShapeRouteOptions?: RegisterResourceShapeRoutesOptions;
-  /** Operator-only generic noncommercial FormActivation lifecycle API. */
-  readonly registerFormActivationRoutes?: boolean;
-  readonly formActivationRouteOptions?: RegisterFormActivationRoutesOptions;
   /** Operator-only immutable generic noncommercial Offering catalog API. */
   readonly registerOfferingCatalogRoutes?: boolean;
   readonly offeringCatalogRouteOptions?: RegisterOfferingCatalogRoutesOptions;
@@ -114,7 +105,6 @@ export async function createApiApp(
     mounted.deployControlInternalRoutesMounted;
   const metricsRoutesMounted = mounted.metricsRoutesMounted;
   const resourceShapeRoutesMounted = mounted.resourceShapeRoutesMounted;
-  const formActivationRoutesMounted = mounted.formActivationRoutesMounted;
   const offeringCatalogRoutesMounted = mounted.offeringCatalogRoutesMounted;
   const interfaceRoutesMounted = mounted.interfaceRoutesMounted;
 
@@ -140,33 +130,7 @@ export async function createApiApp(
     );
   });
 
-  app.get(TAKOSUMI_PRODUCT_CAPABILITIES_PATH, async (c) => {
-    let formAvailability;
-    const space = c.req.query("space")?.trim();
-    if (space && options.resourceShapeRouteOptions) {
-      const auth = await authorizeResourceShapeRequest(
-        c,
-        options.resourceShapeRouteOptions,
-      );
-      if (!auth.ok) return auth.response;
-      if (!hasFormAvailabilityReadScope(auth.actor)) {
-        return c.json(
-          apiError(
-            "permission_denied",
-            "form availability requires forms:read or resources:read scope",
-            undefined,
-            requestIdFromContext(c),
-          ),
-          403,
-        );
-      }
-      formAvailability = (
-        await options.resourceShapeRouteOptions.service.listFormAvailability({
-          actor: auth.actor,
-          space,
-        })
-      ).items;
-    }
+  app.get(TAKOSUMI_PRODUCT_CAPABILITIES_PATH, (c) => {
     return c.json(
       createTakosumiProductCapabilities(
         createProductDiscoveryOptions({
@@ -177,7 +141,6 @@ export async function createApiApp(
             options.resourceShapeRouteOptions?.enabledResourceShapeKinds,
           adapterCapabilities: options.adapterCapabilities,
           operatorCapabilities: options.operatorCapabilities,
-          formAvailability,
         }),
       ),
     );
@@ -208,16 +171,6 @@ export async function createApiApp(
       );
     }
     registerResourceShapeRoutes(app, options.resourceShapeRouteOptions);
-  }
-
-  if (formActivationRoutesMounted) {
-    if (!options.formActivationRouteOptions) {
-      throw new Error(
-        "registerFormActivationRoutes was requested but " +
-          "formActivationRouteOptions (with service and operator bearer) was not supplied",
-      );
-    }
-    registerFormActivationRoutes(app, options.formActivationRouteOptions);
   }
 
   if (offeringCatalogRoutesMounted) {
@@ -326,10 +279,6 @@ function routeFamilyMountInputs(
       override: options.registerResourceShapeRoutes,
       hasOptions: options.resourceShapeRouteOptions !== undefined,
     },
-    formActivationRoutesMounted: {
-      override: options.registerFormActivationRoutes,
-      hasOptions: options.formActivationRouteOptions !== undefined,
-    },
     offeringCatalogRoutesMounted: {
       override: options.registerOfferingCatalogRoutes,
       hasOptions: options.offeringCatalogRouteOptions !== undefined,
@@ -367,7 +316,6 @@ function createProductDiscoveryOptions(input: {
   readonly enabledResourceShapeKinds?: readonly string[];
   readonly adapterCapabilities?: Partial<TakosumiAdapterCapabilities>;
   readonly operatorCapabilities?: Partial<TakosumiOperatorCapabilities>;
-  readonly formAvailability?: readonly import("takosumi-contract").FormAvailability[];
 }): CreateTakosumiDiscoveryOptions {
   const resourceShapes = input.mounted.resourceShapeRoutesMounted;
   const stacks = input.mounted.deployControlInternalRoutesMounted;
@@ -397,9 +345,6 @@ function createProductDiscoveryOptions(input: {
         ? resourceShapes
         : resourceShapeCapabilitiesEnabled(resources),
     interfacesEnabled: input.mounted.interfaceRoutesMounted,
-    ...(input.formAvailability !== undefined
-      ? { formAvailability: input.formAvailability }
-      : {}),
   };
 }
 

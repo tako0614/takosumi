@@ -71,7 +71,7 @@ test("session/me stays read-only even when deploy-control operations are availab
   });
 
   const response = await handler(
-    new Request("https://app.example.test/v1/account/session/me", {
+    new Request("https://app.example.test/api/v1/account/session/me", {
       headers: {
         cookie: `${ACCOUNT_SESSION_COOKIE_NAME}=sess_session_probe`,
       },

@@ -27,7 +27,6 @@
 
 import type { RunStatus } from "@takosumi/internal/deploy-control-api";
 import type { Capsule } from "takosumi-contract/capsules";
-import type { StateVersion } from "takosumi-contract/state-versions";
 import type {
   MintResponse,
   SourceSnapshot,
@@ -37,6 +36,7 @@ import type { ConnectionVault } from "../../adapters/vault/mod.ts";
 import type { SourcesService } from "../sources/mod.ts";
 import type { OpenTofuControlStore, StoredSource } from "./store.ts";
 import type { OpenTofuRunner, OpenTofuSourceSyncResult } from "./mod.ts";
+import { getCapsuleAdoptedSourceSnapshot } from "./capsule_source_revision.ts";
 import { mapVaultError, OpenTofuControllerError } from "./errors.ts";
 import { errorMessage } from "./projection.ts";
 
@@ -362,10 +362,14 @@ export class SourceLifecycleService {
       return terminal.run;
     }
     await this.#store.putSourceSnapshot(snapshot);
-    // Record lastSeenCommit on the Source so the scheduler can skip an unchanged
-    // ref. Read-modify-write through the store (internal field, never projected).
+    // `lastSeenCommit` is the cursor for the shared Source default address only.
+    // A per-Capsule tracked-lane sync must never rewrite that cursor.
     const stored = await this.#store.getSource(running.sourceId);
-    if (stored) {
+    if (
+      stored &&
+      stored.defaultRef === running.ref &&
+      stored.defaultPath === running.path
+    ) {
       await this.#store.putSource({
         ...stored,
         lastSeenCommit: result.resolvedCommit,
@@ -389,25 +393,33 @@ export class SourceLifecycleService {
     for (const capsule of capsules) {
       if (
         capsule.sourceId !== input.running.sourceId ||
-        capsule.status !== "active"
+        (capsule.status !== "active" && capsule.status !== "stale")
       ) {
         continue;
       }
       const currentStateVersionId = capsule.currentStateVersionId;
       if (!currentStateVersionId) continue;
-      const stateVersion = await this.#store.getStateVersion(
-        currentStateVersionId,
-      );
-      if (!stateVersion) continue;
-      const deployedSourceSnapshotId =
-        await this.#sourceSnapshotIdForStateVersion(stateVersion, new Set());
-      if (!deployedSourceSnapshotId) continue;
-      if (deployedSourceSnapshotId === input.snapshot.id) continue;
-      const deployedSnapshot = await this.#store.getSourceSnapshot(
-        deployedSourceSnapshotId,
-      );
+      let deployedSnapshot: SourceSnapshot | undefined;
+      try {
+        deployedSnapshot = await getCapsuleAdoptedSourceSnapshot(
+          this.#store,
+          capsule,
+        );
+      } catch {
+        // A broken current-state lineage cannot authorize a status transition.
+        // The ordinary plan path surfaces the typed fail-closed error.
+        continue;
+      }
+      if (!deployedSnapshot) continue;
       if (
-        deployedSnapshot &&
+        deployedSnapshot.ref !== input.snapshot.ref ||
+        deployedSnapshot.path !== input.snapshot.path
+      ) {
+        continue;
+      }
+      const deployedSourceSnapshotId = deployedSnapshot.id;
+      if (deployedSourceSnapshotId === input.snapshot.id) continue;
+      if (
         sourceSnapshotsRepresentSameGitCommit(deployedSnapshot, input.snapshot)
       ) {
         continue;
@@ -443,34 +455,6 @@ export class SourceLifecycleService {
         });
       }
     }
-  }
-
-  async #sourceSnapshotIdForStateVersion(
-    stateVersion: StateVersion,
-    seen: Set<string>,
-  ): Promise<string | undefined> {
-    if (seen.has(stateVersion.id)) return undefined;
-    seen.add(stateVersion.id);
-    const applyRun = await this.#store.getApplyRun(stateVersion.createdByRunId);
-    if (applyRun) {
-      return (await this.#store.getPlanRun(applyRun.planRunId))
-        ?.sourceSnapshotId;
-    }
-    const restoreRun = await this.#store.getBackupRun(
-      stateVersion.createdByRunId,
-    );
-    if (
-      restoreRun?.type !== "restore" ||
-      !restoreRun.restoredFromStateVersionId
-    ) {
-      return undefined;
-    }
-    const restored = await this.#store.getStateVersion(
-      restoreRun.restoredFromStateVersionId,
-    );
-    return restored
-      ? await this.#sourceSnapshotIdForStateVersion(restored, seen)
-      : undefined;
   }
 
   #verifiedSourceArchiveRef(

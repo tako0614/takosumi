@@ -45,7 +45,7 @@ Form の定義、provider、package、hosted instance は Takoform または Tak
 curl https://takosumi.example.com/.well-known/takosumi
 ```
 
-または、認証済みの API から `/v1/capabilities` を取得します。
+または、認証済みの API から `/api/v1/capabilities` を取得します。
 
 ## Takosumi Cloud が追加するもの
 

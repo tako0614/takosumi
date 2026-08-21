@@ -36,21 +36,14 @@ StateVersion を選んだだけでは state は変わりません。作られた
 存在しない、Workspace / Capsule が一致しない、または plan に意図しない破壊的変更がある
 場合は停止し、operator と provider の復旧計画を見直します。
 
-## Retained legacy drain
+## Retained Resource data
 
-旧 Resource/Form 行を調査・削除する必要がある場合だけ、[Core Spec の legacy
-drain](../internal/core-spec.md#legacy-resourceform-drain) を確認してください。drain は
-既定で無効 (`404`) で、認証済み operator が明示的に有効化したときも、実装されているのは
-次の限定操作だけです。
-
-- Resource collection/record の list/read/events、observe、delete
-- TargetPool/SpacePolicy record の `GET`/`HEAD`/list、delete
-
-drain は Form を作成・activate・discover せず、Resource の desired state を受け取りません。
-旧 Resource の preview/apply/recover/import/refresh や、Form Registry、FormActivation、
-TargetPool/SpacePolicy の write を復活させる設定ではありません。対象が単なる旧行の
-観察・削除を越える場合は、この OSS 文書から手順を推測せず、該当する外部 Host または
-provider の owner に移行計画を確認してください。
+Retained Resource/Form rows are migration data only. The former `/v1`
+Resource, TargetPool, and SpacePolicy HTTP families are unconditionally
+retired (`404`) and have no drain flag or CLI caller. Use typed in-process
+operations, a controlled database migration, or the owning external Host for
+any inspection or transition; do not infer an HTTP compatibility alias from
+this runbook.
 
 ## 関連
 

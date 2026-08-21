@@ -214,6 +214,105 @@ test("composed app still serves an embedded service process route", async () => 
   assert.equal(spy.calls.length, 0);
 });
 
+test("composed app 404s retired Form HTTP paths even with the operator bearer", async () => {
+  const { buildComposedApp } =
+    await import("../../../../deploy/node-postgres/src/composed-app.ts");
+  const created = await buildComposedApp({
+    config: testConfig(),
+    store: new PostgresAccountsStore(stubQueryClient()),
+    // The real Accounts handler returns the same JSON 404 for unknown paths.
+    // Keep that fallback here so a mounted legacy service route cannot be
+    // mistaken for an Accounts response.
+    accountsHandler: async () =>
+      new Response(JSON.stringify({ error: "not found" }), {
+        status: 404,
+        headers: { "content-type": "application/json" },
+      }),
+    runtimeEnv: {
+      TAKOSUMI_DEPLOY_CONTROL_TOKEN: TEST_DEPLOY_CONTROL_TOKEN,
+    },
+  });
+
+  for (const retired of [
+    { method: "GET", path: "/v1/form-activations" },
+    {
+      method: "POST",
+      path: "/v1/form-activations",
+      body: "{}",
+    },
+    {
+      method: "PATCH",
+      path: "/v1/form-activations/activation_1",
+      body: "{}",
+    },
+    { method: "GET", path: "/v1/form-availability?space=space_1" },
+    { method: "GET", path: "/v1/resources?space=space_1" },
+    { method: "POST", path: "/v1/resources/preview", body: "{}" },
+    { method: "GET", path: "/v1/resources/EdgeWorker/api?space=space_1" },
+    { method: "GET", path: "/v1/target-pools?space=space_1" },
+    { method: "GET", path: "/v1/target-pools/default?space=space_1" },
+    { method: "GET", path: "/v1/space-policies?space=space_1" },
+    { method: "GET", path: "/v1/space-policies/default?space=space_1" },
+  ]) {
+    const response = await created.app.fetch(
+      new Request(`http://localhost${retired.path}`, {
+        method: retired.method,
+        headers: {
+          authorization: `Bearer ${TEST_DEPLOY_CONTROL_TOKEN}`,
+          ...(retired.body ? { "content-type": "application/json" } : {}),
+        },
+        ...(retired.body ? { body: retired.body } : {}),
+      }),
+    );
+    assert.equal(response.status, 404, retired.path);
+  }
+
+  const inventoryHeaders = {
+    authorization: `Bearer ${TEST_DEPLOY_CONTROL_TOKEN}`,
+  };
+  const capabilities = await created.app.fetch(
+    new Request("http://localhost/capabilities", {
+      headers: inventoryHeaders,
+    }),
+  );
+  assert.equal(capabilities.status, 200);
+  const capabilityPaths = (await capabilities.json()).endpoints.map(
+    (endpoint: { path: string }) => endpoint.path,
+  );
+  assert.equal(capabilityPaths.includes("/v1/form-availability"), false);
+  assert.equal(capabilityPaths.includes("/v1/form-activations"), false);
+  for (const path of [
+    "/v1/resources",
+    "/v1/resources/:kind/:name",
+    "/v1/target-pools",
+    "/v1/target-pools/:name",
+    "/v1/space-policies",
+    "/v1/space-policies/:name",
+  ]) {
+    assert.equal(capabilityPaths.includes(path), false, path);
+  }
+
+  const openapi = await created.app.fetch(
+    new Request("http://localhost/openapi.json", {
+      headers: inventoryHeaders,
+    }),
+  );
+  assert.equal(openapi.status, 200);
+  const openapiPaths = Object.keys((await openapi.json()).paths);
+  assert.equal(openapiPaths.includes("/v1/form-availability"), false);
+  assert.equal(openapiPaths.includes("/v1/form-activations"), false);
+  for (const path of [
+    "/v1/resources",
+    "/v1/resources/{kind}/{name}",
+    "/v1/target-pools",
+    "/v1/target-pools/{name}",
+    "/v1/space-policies",
+    "/v1/space-policies/{name}",
+  ]) {
+    assert.equal(openapiPaths.includes(path), false, path);
+  }
+});
+
 test("composed Interface API scopes sessions and PATs to current Workspace ownership", async () => {
   const now = Date.now();
   const store = new InMemoryAccountsStore();
@@ -286,7 +385,7 @@ test("composed Interface API scopes sessions and PATs to current Workspace owner
   };
 
   const foreignSeed = await app.fetch(
-    new Request("http://localhost/v1/interfaces", {
+    new Request("http://localhost/api/v1/interfaces", {
       method: "POST",
       headers: internal,
       body: interfaceBody(workspaceB.id, "foreign-seed"),
@@ -296,7 +395,7 @@ test("composed Interface API scopes sessions and PATs to current Workspace owner
   const foreignInterfaceId = (await foreignSeed.json()).metadata.id as string;
 
   const crossCreate = await app.fetch(
-    new Request("http://localhost/v1/interfaces", {
+    new Request("http://localhost/api/v1/interfaces", {
       method: "POST",
       headers: session,
       body: interfaceBody(workspaceB.id, "cross-create"),
@@ -304,14 +403,14 @@ test("composed Interface API scopes sessions and PATs to current Workspace owner
   );
   assert.equal(crossCreate.status, 403);
   const crossList = await app.fetch(
-    new Request(`http://localhost/v1/interfaces?workspaceId=${workspaceB.id}`, {
+    new Request(`http://localhost/api/v1/interfaces?workspaceId=${workspaceB.id}`, {
       headers: pat,
     }),
   );
   assert.equal(crossList.status, 403);
   const crossBinding = await app.fetch(
     new Request(
-      `http://localhost/v1/interfaces/${foreignInterfaceId}/bindings`,
+      `http://localhost/api/v1/interfaces/${foreignInterfaceId}/bindings`,
       {
         method: "POST",
         headers: pat,
@@ -326,7 +425,7 @@ test("composed Interface API scopes sessions and PATs to current Workspace owner
   assert.equal(crossBinding.status, 403);
 
   const ownedCreate = await app.fetch(
-    new Request("http://localhost/v1/interfaces", {
+    new Request("http://localhost/api/v1/interfaces", {
       method: "POST",
       headers: session,
       body: interfaceBody(workspaceA.id, "owned"),
@@ -335,13 +434,13 @@ test("composed Interface API scopes sessions and PATs to current Workspace owner
   assert.equal(ownedCreate.status, 201);
   const ownedInterfaceId = (await ownedCreate.json()).metadata.id as string;
   const ownedList = await app.fetch(
-    new Request(`http://localhost/v1/interfaces?workspaceId=${workspaceA.id}`, {
+    new Request(`http://localhost/api/v1/interfaces?workspaceId=${workspaceA.id}`, {
       headers: pat,
     }),
   );
   assert.equal(ownedList.status, 200);
   const ownedBinding = await app.fetch(
-    new Request(`http://localhost/v1/interfaces/${ownedInterfaceId}/bindings`, {
+    new Request(`http://localhost/api/v1/interfaces/${ownedInterfaceId}/bindings`, {
       method: "POST",
       headers: pat,
       body: JSON.stringify({
@@ -432,14 +531,14 @@ test("composed Interface API refuses Interface writes from read-only Workspace m
 
   // A read-only member keeps read authority over the Workspace.
   const viewerList = await app.fetch(
-    new Request(`http://localhost/v1/interfaces?workspaceId=${workspace.id}`, {
+    new Request(`http://localhost/api/v1/interfaces?workspaceId=${workspace.id}`, {
       headers: headersFor("tsub_ws_viewer"),
     }),
   );
   assert.equal(viewerList.status, 200);
 
   const viewerCreate = await app.fetch(
-    new Request("http://localhost/v1/interfaces", {
+    new Request("http://localhost/api/v1/interfaces", {
       method: "POST",
       headers: headersFor("tsub_ws_viewer"),
       body: interfaceBody("viewer-create"),
@@ -449,7 +548,7 @@ test("composed Interface API refuses Interface writes from read-only Workspace m
 
   // A non-viewer member keeps Interface write authority.
   const memberCreate = await app.fetch(
-    new Request("http://localhost/v1/interfaces", {
+    new Request("http://localhost/api/v1/interfaces", {
       method: "POST",
       headers: headersFor("tsub_ws_member"),
       body: interfaceBody("member-create"),
@@ -458,7 +557,7 @@ test("composed Interface API refuses Interface writes from read-only Workspace m
   assert.equal(memberCreate.status, 201);
   const interfaceId = (await memberCreate.json()).metadata.id as string;
   const memberBinding = await app.fetch(
-    new Request(`http://localhost/v1/interfaces/${interfaceId}/bindings`, {
+    new Request(`http://localhost/api/v1/interfaces/${interfaceId}/bindings`, {
       method: "POST",
       headers: headersFor("tsub_ws_member"),
       body: bindingBody,
@@ -469,7 +568,7 @@ test("composed Interface API refuses Interface writes from read-only Workspace m
 
   // The read-only member can neither mint nor revoke bindings.
   const viewerBinding = await app.fetch(
-    new Request(`http://localhost/v1/interfaces/${interfaceId}/bindings`, {
+    new Request(`http://localhost/api/v1/interfaces/${interfaceId}/bindings`, {
       method: "POST",
       headers: headersFor("tsub_ws_viewer"),
       body: bindingBody,
@@ -478,7 +577,7 @@ test("composed Interface API refuses Interface writes from read-only Workspace m
   assert.equal(viewerBinding.status, 403);
   const viewerRevoke = await app.fetch(
     new Request(
-      `http://localhost/v1/interfaces/${interfaceId}/bindings/${bindingId}`,
+      `http://localhost/api/v1/interfaces/${interfaceId}/bindings/${bindingId}`,
       { method: "DELETE", headers: headersFor("tsub_ws_viewer") },
     ),
   );
@@ -585,7 +684,7 @@ test("composed Capsule Interface OAuth uses canonical Capsule authority without 
 
   const tokenResponse = await created.app.fetch(
     new Request(
-      `http://localhost/v1/interfaces/${encodeURIComponent(iface.metadata.id)}/token`,
+      `http://localhost/api/v1/interfaces/${encodeURIComponent(iface.metadata.id)}/token`,
       {
         method: "POST",
         headers: {
@@ -649,11 +748,11 @@ test("composed app owns Takosumi product discovery before account fallback", asy
   const wellKnownBody = await wellKnown.json();
   assert.equal(
     wellKnownBody.endpoints.capabilities,
-    "https://app.takosumi.test/v1/capabilities",
+    "https://app.takosumi.test/api/v1/capabilities",
   );
 
   const capabilities = await app.fetch(
-    new Request("https://app.takosumi.test/v1/capabilities"),
+    new Request("https://app.takosumi.test/api/v1/capabilities"),
   );
   assert.equal(capabilities.status, 200);
   assert.equal(capabilities.headers.get("x-handled-by"), null);
@@ -676,10 +775,10 @@ test("composed app product discovery uses forwarded public origin", async () => 
   );
   assert.equal(res.status, 200);
   const body = await res.json();
-  assert.equal(body.endpoints.api, "https://app.takosumi.test/api");
+  assert.equal(body.endpoints.api, "https://app.takosumi.test/api/v1");
   assert.equal(
     body.endpoints.capabilities,
-    "https://app.takosumi.test/v1/capabilities",
+    "https://app.takosumi.test/api/v1/capabilities",
   );
   assert.equal(body.endpoints.oidc_issuer, "https://app.takosumi.test");
   assert.equal(spy.calls.length, 0);

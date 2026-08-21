@@ -1,6 +1,6 @@
 import {
-  ACCOUNTS_IDENTITY_PREFIX,
   API_V1_PREFIX,
+  RETIRED_V1_PREFIX,
 } from "takosumi-contract/api-surface";
 
 export function isWorkerLocalPath(pathname: string): boolean {
@@ -23,9 +23,9 @@ export function isWorkerReadinessPath(pathname: string): boolean {
 //   - `API_V1_PREFIX` ("/api/v1") — the edge-public deploy-control surface.
 //     NOTE it is NOT under `/v1`, so it needs its own entry or the SPA
 //     `not_found_handling = single-page-application` fallback would shadow it.
-//   - `ACCOUNTS_IDENTITY_PREFIX` ("/v1") — covers /v1/account, /v1/auth,
-//     and /v1/billing. (Connections are served under
-//     `/api/v1/connections`, the control surface — there is no /v1/connections.)
+//   - `RETIRED_V1_PREFIX` ("/v1") — explicit fail-closed coverage for retired
+//     Accounts paths and retained legacy Resource/Form/operator routes. It is
+//     never an Accounts compatibility alias.
 //   - the OIDC issuer surfaces (/oauth, /.well-known). `/hooks` stays
 //     platform-worker-owned and is intentionally excluded here. (`/install` is
 //     a plain SPA route — the external install link is client-handled.)
@@ -36,7 +36,7 @@ export function isWorkerReadinessPath(pathname: string): boolean {
 // or the SPA fallback would shadow it with index.html.
 export const ACCOUNTS_API_PREFIXES = [
   API_V1_PREFIX,
-  ACCOUNTS_IDENTITY_PREFIX,
+  RETIRED_V1_PREFIX,
   "/oauth",
   "/.well-known",
   "/internal",

@@ -61,12 +61,16 @@ describe("createStaticAssetResponder", () => {
   });
 
   // The critical-risk guard: every API namespace the accounts/service handler
-  // owns must fall through (undefined) so the SPA fallback never shadows it.
+  // owns, including retired `/v1` paths, must fall through (undefined) so the
+  // SPA fallback never shadows the handler's JSON 404.
   test("falls through for every API namespace", async () => {
     const dir = await buildFixture();
     try {
       const serve = createStaticAssetResponder(dir);
       const apiPaths = [
+        "/api/v1/account/session/me",
+        "/api/v1/privacy/requests",
+        "/oauth/upstream/callback",
         "/v1/account/session/me",
         "/v1/privacy/requests",
         "/v1/auth/upstream/callback",

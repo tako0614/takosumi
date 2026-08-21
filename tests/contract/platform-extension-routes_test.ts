@@ -69,17 +69,77 @@ test("exact leaves cannot be nested below core well-known leaves", () => {
   }
 });
 
-test("retired Form activation routes remain core-owned in every match mode", () => {
-  for (const matchMode of ["subtree", "exact"] as const) {
-    expect(
-      platformExtensionBasePathIsReserved("/v1/form-activations", matchMode),
-    ).toBe(true);
-    expect(
-      platformExtensionBasePathIsReserved(
-        "/v1/form-activations/activation_1",
-        matchMode,
-      ),
-    ).toBe(true);
+test("retired /v1 families stay reserved without route-specific descriptors", () => {
+  expect(PLATFORM_EXTENSION_RESERVED_PREFIXES).toContain("/v1");
+  expect(
+    PLATFORM_EXTENSION_RESERVED_PREFIXES.filter((prefix) =>
+      prefix.startsWith("/v1/"),
+    ),
+  ).toEqual([]);
+
+  for (const path of [
+    "/v1/form-activations",
+    "/v1/form-availability",
+    "/v1/resources",
+    "/v1/target-pools",
+    "/v1/space-policies",
+  ]) {
+    for (const matchMode of ["subtree", "exact"] as const) {
+      expect(platformExtensionBasePathIsReserved(path, matchMode)).toBe(true);
+      expect(
+        platformExtensionBasePathIsReserved(`${path}/child`, matchMode),
+      ).toBe(true);
+    }
+  }
+});
+
+test("optional billing belongs to /api/v1 and cannot reclaim retired /v1", () => {
+  expect(
+    platformExtensionBasePathIsReserved("/api/v1/billing", "subtree"),
+  ).toBe(false);
+  expect(
+    platformExtensionBasePathIsReserved("/api/v1/billing", "exact"),
+  ).toBe(false);
+  expect(
+    platformExtensionBasePathIsReserved("/v1/billing", "subtree"),
+  ).toBe(true);
+  expect(
+    platformExtensionBasePathIsReserved("/v1/billing", "exact"),
+  ).toBe(true);
+  expect(
+    platformExtensionBasePathIsReserved("/api/v1/account", "subtree"),
+  ).toBe(true);
+  expect(
+    platformExtensionBasePathIsReserved("/api/v1/cloud", "subtree"),
+  ).toBe(true);
+  expect(
+    platformExtensionBasePathIsReserved(
+      "/api/v1/hosted/subscription",
+      "subtree",
+    ),
+  ).toBe(false);
+  expect(
+    platformExtensionBasePathIsReserved(
+      "/api/v1/hosted/subscription",
+      "exact",
+    ),
+  ).toBe(false);
+  expect(
+    platformExtensionBasePathIsReserved("/api/v1/hosted", "subtree"),
+  ).toBe(true);
+  expect(
+    platformExtensionBasePathIsReserved("/api/v1/unlisted", "subtree"),
+  ).toBe(true);
+  for (const path of [
+    "/v1",
+    "/v1/account",
+    "/v1/auth",
+    "/v1/privacy",
+    "/v1/billing",
+    "/v1/cloud",
+    "/v1/hosted/subscription",
+  ]) {
+    expect(platformExtensionBasePathIsReserved(path, "subtree")).toBe(true);
   }
 });
 

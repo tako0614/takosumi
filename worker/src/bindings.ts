@@ -78,7 +78,7 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
    * Optional host-code admission port for Resource deployment quotes and
    * reserve/capture/release settlement. OSS contributes no pricing policy and
    * therefore leaves this unset; an operator composition may inject a durable
-   * implementation without changing the canonical `/v1/resources` lifecycle.
+   * implementation without changing the canonical typed Resource lifecycle.
    */
   readonly TAKOSUMI_RESOURCE_DEPLOYMENT_ADMISSION?: import("takosumi-contract/resource-deployment").ResourceDeploymentAdmission;
   /**
@@ -160,19 +160,6 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
    */
   readonly TAKOSUMI_SCHEDULED_SOURCE_POLL_BATCH?: string;
   /**
-   * Read-only scheduled Resource observation. When omitted it follows whether
-   * this host enables any Resource Shape kinds; `0` disables and `1` enables.
-   */
-  readonly TAKOSUMI_RESOURCE_OBSERVATION_ENABLED?: string;
-  /** Maximum due Resources claimed by one cron tick. */
-  readonly TAKOSUMI_RESOURCE_OBSERVATION_BATCH?: string;
-  /** Maximum backend observations running concurrently. */
-  readonly TAKOSUMI_RESOURCE_OBSERVATION_CONCURRENCY?: string;
-  /** Minimum seconds between completed attempts for one Resource. */
-  readonly TAKOSUMI_RESOURCE_OBSERVATION_INTERVAL_SECONDS?: string;
-  /** Seconds before another isolate may reclaim an abandoned claim. */
-  readonly TAKOSUMI_RESOURCE_OBSERVATION_LEASE_SECONDS?: string;
-  /**
    * Local/private probe ingress opt-in for the `/internal/v1/*` HTTP seam.
    * Production edge deployments omit this so generic internal APIs stay 404.
    */
@@ -243,17 +230,8 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
    * validator. Check-specific private documents stay outside the Worker.
    */
   readonly TAKOSUMI_PLATFORM_HARDENING_EVIDENCE?: string;
-  /**
-   * Operator allowlist for Resource Shape kinds exposed by `/v1/resources`.
-   * CSV/whitespace list or `all`; unset means no public shape kinds.
-   */
+  /** Operator allowlist for retained Resource Shape compatibility kinds. */
   readonly TAKOSUMI_RESOURCE_SHAPES?: string;
-  /**
-   * Explicit, temporary legacy Resource Shape drain lane. The value must be
-   * exactly `1`; omission keeps all Flow-B routes unmounted at the platform
-   * edge. Drain mode never enables discovery or new Resource/Form mutations.
-   */
-  readonly TAKOSUMI_LEGACY_RESOURCE_DRAIN_ENABLED?: string;
   /**
    * Host-code contribution for operator-defined Resource Shape validation.
    * This is a runtime object supplied by a composing Worker, not a text var or
@@ -267,12 +245,12 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
   readonly TAKOSUMI_RESOURCE_SHAPE_MODULE_REGISTRY?: import("../../core/domains/resource-shape/mod.ts").ResourceShapeModuleRegistry;
   /**
    * Operator-installed Resource Shape adapter capability tokens advertised
-   * through `/v1/capabilities`. CSV/whitespace list or JSON string array.
+   * through `/api/v1/capabilities`. CSV/whitespace list or JSON string array.
    */
   readonly TAKOSUMI_RESOURCE_ADAPTERS?: string;
   /**
    * Operator-only operational capabilities advertised through
-   * `/v1/capabilities`. CSV/whitespace list, JSON string array, or `all`.
+   * `/api/v1/capabilities`. CSV/whitespace list, JSON string array, or `all`.
    * This is for DB-backed config / CLI / API / runbook operations, not an
    * operator admin UI switch.
    */

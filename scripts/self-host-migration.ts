@@ -224,7 +224,7 @@ class Api {
 }
 
 async function session(api: Api): Promise<Session> {
-  const body = await api.get("/v1/account/session/me");
+  const body = await api.get("/api/v1/account/session/me");
   if (body.session === null) fail("target session is not authenticated");
   return {
     subject: string(body.subject, "session.subject"),
@@ -1108,7 +1108,7 @@ async function selfTest() {
         ?.replace("Bearer ", "");
       const target = token === "target-token" || token === "post-target-token";
       const path = url.pathname;
-      if (path === "/v1/account/session/me") {
+      if (path === "/api/v1/account/session/me") {
         return response({
           subject: target ? "acct_target" : "acct_source",
           primaryAccountId: target ? "acct_target" : "acct_source",

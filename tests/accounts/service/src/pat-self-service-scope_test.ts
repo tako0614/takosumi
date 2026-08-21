@@ -27,7 +27,7 @@ function seededStore(): InMemoryAccountsStore {
 }
 
 function createRequest(body: Record<string, unknown>): Request {
-  return new Request(`${ORIGIN}/v1/account/tokens`, {
+  return new Request(`${ORIGIN}/api/v1/account/tokens`, {
     method: "POST",
     headers: {
       authorization: `Bearer ${SESSION}`,
@@ -134,7 +134,7 @@ test("Cloud AI PAT scopes are explicit, workspace-bound, and cataloged", async (
   });
 
   const catalog = await handler(
-    new Request(`${ORIGIN}/v1/account/tokens/scopes`, {
+    new Request(`${ORIGIN}/api/v1/account/tokens/scopes`, {
       headers: { authorization: `Bearer ${SESSION}` },
     }),
   );
@@ -181,7 +181,7 @@ test("self-service PAT scope catalog is authenticated, safe, and session-only", 
     personalAccessTokenSelfServiceScopes: ["resources:read"],
   });
   const response = await handler(
-    new Request(`${ORIGIN}/v1/account/tokens/scopes`, {
+    new Request(`${ORIGIN}/api/v1/account/tokens/scopes`, {
       headers: { authorization: `Bearer ${SESSION}` },
     }),
   );
@@ -265,7 +265,7 @@ test("self-service PAT scope catalog is authenticated, safe, and session-only", 
   expect(store.findAccountSession(SESSION)?.subject).toBe(SUBJECT);
 
   const anonymous = await handler(
-    new Request(`${ORIGIN}/v1/account/tokens/scopes`),
+    new Request(`${ORIGIN}/api/v1/account/tokens/scopes`),
   );
   expect(anonymous.status).toBe(401);
 });
@@ -285,7 +285,7 @@ test("scope catalog does not leak or admit admin", async () => {
   );
   expect(response.status).toBe(403);
   const catalog = await handler(
-    new Request(`${ORIGIN}/v1/account/tokens/scopes`, {
+    new Request(`${ORIGIN}/api/v1/account/tokens/scopes`, {
       headers: { authorization: `Bearer ${SESSION}` },
     }),
   );

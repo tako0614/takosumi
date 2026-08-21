@@ -4,7 +4,6 @@ import { ActivityService } from "../../../core/domains/activity/mod.ts";
 import { InMemoryOpenTofuControlStore } from "../../../core/domains/deploy-control/store.ts";
 import {
   createInMemoryResourceShapeStores,
-  formatResourceShapeId,
   LEGACY_RESOURCE_SHAPE_COMPATIBILITY_SCHEMA_REGISTRY,
   ResourceArtifactService,
   ResourceShapeService,
@@ -90,135 +89,19 @@ async function fixture(
   return { app, ledger, writer, resourceStores };
 }
 
-test("Resource artifact route authenticates, scopes, and tenant-binds raw bytes", async () => {
-  const bytes = new TextEncoder().encode("worker artifact");
-  const digest = await digestOf(bytes);
-  const noAuth = await fixture();
-  expect(
-    (await noAuth.app.request(artifactRequest(bytes, digest))).status,
-  ).toBe(401);
-
-  const readOnly = await fixture(actorFor("workspace_1", ["resources:read"]));
-  expect(
-    (await readOnly.app.request(artifactRequest(bytes, digest, TOKEN))).status,
-  ).toBe(403);
-
-  const otherTenant = await fixture(
-    actorFor("workspace_other", ["resources:write"]),
-  );
-  expect(
-    (await otherTenant.app.request(artifactRequest(bytes, digest, TOKEN)))
-      .status,
-  ).toBe(403);
-  expect(otherTenant.writer.writes).toHaveLength(0);
-
-  const invalidHeaders = await fixture();
-  const invalid = artifactRequest(bytes, digest, TOKEN);
-  invalid.headers.set("x-takosumi-artifact-purpose", "invalid purpose");
-  expect((await invalidHeaders.app.request(invalid)).status).toBe(400);
-  expect(invalidHeaders.writer.writes).toHaveLength(0);
-});
-
-test("Resource artifact staging persists one canonical Run and replays without rewriting bytes", async () => {
-  const { app, ledger, writer, resourceStores } = await fixture();
-  const bytes = new TextEncoder().encode("immutable worker archive");
-  const digest = await digestOf(bytes);
-  const first = await app.request(artifactRequest(bytes, digest, TOKEN));
-  expect(first.status).toBe(200);
-  const firstBody = (await first.json()) as {
-    artifact: ResourceArtifactPointer;
-    run: Record<string, unknown>;
-    replayed: boolean;
-  };
-  expect(firstBody.replayed).toBe(false);
-  expect(firstBody.artifact.digest).toBe(digest);
-  expect(firstBody.run).toMatchObject({
-    type: "artifact",
-    status: "succeeded",
-    resourceOperation: "artifact",
-    workspaceId: "workspace_1",
-  });
-  expect(firstBody.run).not.toHaveProperty("resourceOperationKey");
-  expect(firstBody.run).not.toHaveProperty("resourceOperationResult");
-  expect(writer.writes).toHaveLength(1);
-
-  const runId = String(firstBody.run.id);
-  expect(await ledger.listArtifactRecordsForRun(runId)).toEqual([
-    {
-      id: `artifact_${runId.slice("run_".length)}`,
-      runId,
-      kind: "worker_release",
-      ref: firstBody.artifact.ref,
-      digest,
-      sizeBytes: bytes.byteLength,
-      createdAt: CREATED_AT,
-    },
-  ]);
-  expect(
-    await resourceStores.resources.get(
-      formatResourceShapeId("workspace_1", "EdgeWorker", "takos"),
-    ),
-  ).toBeUndefined();
-
-  const replay = await app.request(artifactRequest(bytes, digest, TOKEN));
-  expect(replay.status).toBe(200);
-  expect(await replay.json()).toMatchObject({
-    artifact: firstBody.artifact,
-    run: { id: runId, status: "succeeded" },
-    replayed: true,
-  });
-  expect(writer.writes).toHaveLength(1);
-});
-
-test("Resource artifact staging rejects digest mismatch, oversize, and key substitution", async () => {
-  const { app, writer } = await fixture();
-  const bytes = new TextEncoder().encode("first artifact");
+test("retired Resource artifact route stays unavailable with and without a bearer", async () => {
+  const { app, ledger, writer } = await fixture();
+  const bytes = new TextEncoder().encode("retired worker artifact");
   const digest = await digestOf(bytes);
 
-  const mismatch = await app.request(
-    artifactRequest(bytes, `sha256:${"0".repeat(64)}`, TOKEN),
-  );
-  expect(mismatch.status).toBe(400);
+  for (const token of [undefined, TOKEN]) {
+    const response = await app.request(artifactRequest(bytes, digest, token));
+    expect(response.status).toBe(404);
+  }
+
   expect(writer.writes).toHaveLength(0);
-
-  writer.maxBytes = bytes.byteLength - 1;
-  const oversize = await app.request(artifactRequest(bytes, digest, TOKEN));
-  expect(oversize.status).toBe(413);
-  expect(writer.writes).toHaveLength(0);
-
-  writer.maxBytes = 1024;
-  expect(
-    (await app.request(artifactRequest(bytes, digest, TOKEN))).status,
-  ).toBe(200);
-  const changed = new TextEncoder().encode("different artifact");
-  const conflict = await app.request(
-    artifactRequest(changed, await digestOf(changed), TOKEN),
-  );
-  expect(conflict.status).toBe(409);
-  expect(writer.writes).toHaveLength(1);
-});
-
-test("Resource artifact staging leaves a retryable Run on host failure and rejects substituted evidence", async () => {
-  const { app, writer } = await fixture();
-  const bytes = new TextEncoder().encode("retryable artifact");
-  const digest = await digestOf(bytes);
-  writer.throwOnWrite = true;
-  const unavailable = await app.request(artifactRequest(bytes, digest, TOKEN));
-  expect(unavailable.status).toBe(503);
-
-  writer.throwOnWrite = false;
-  const retried = await app.request(artifactRequest(bytes, digest, TOKEN));
-  expect(retried.status).toBe(200);
-  expect((await retried.json()) as { replayed: boolean }).toMatchObject({
-    replayed: true,
-  });
-
-  const second = await fixture();
-  second.writer.substituteDigest = true;
-  const invalid = await second.app.request(
-    artifactRequest(bytes, digest, TOKEN, "artifact-key-0002"),
-  );
-  expect(invalid.status).toBe(502);
+  expect(await ledger.listRunsByWorkspace("workspace_1")).toEqual([]);
+  expect(await ledger.listActivityEvents("workspace_1")).toEqual([]);
 });
 
 function actorFor(workspaceId: string, scopes: string[]): ActorContext {

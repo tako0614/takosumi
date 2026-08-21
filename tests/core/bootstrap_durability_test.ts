@@ -3,6 +3,10 @@ import { expect, test } from "bun:test";
 import { createInMemoryAppContext } from "../../core/app_context.ts";
 import { createTakosumiService } from "../../core/bootstrap.ts";
 import { InMemoryOpenTofuControlStore } from "../../core/domains/deploy-control/store.ts";
+import {
+  InMemoryGitInstallPlanStore,
+  type GitInstallPlanStore,
+} from "../../core/domains/install-plans/store.ts";
 import { createInMemoryInterfaceStores } from "../../core/domains/interfaces/mod.ts";
 import { InMemoryOfferingCatalogReader } from "../../core/domains/offerings/mod.ts";
 import { StubResourceShapeAdapter } from "../../core/domains/resource-shape/mod.ts";
@@ -13,6 +17,17 @@ function localContext() {
   return createInMemoryAppContext({
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
   });
+}
+
+function declaredDurableTestGitInstallPlanStore(): GitInstallPlanStore {
+  const store = new InMemoryGitInstallPlanStore();
+  return {
+    durable: true,
+    create: (plan) => store.create(plan),
+    get: (id) => store.get(id),
+    claimReconcile: (input) => store.claimReconcile(input),
+    completeReconcile: (input) => store.completeReconcile(input),
+  };
 }
 
 test("production deploy ledger rejects ephemeral storage even when dev mode is requested", async () => {
@@ -35,6 +50,41 @@ test("production deploy ledger rejects ephemeral storage even when dev mode is r
   );
 });
 
+test("production Git install-plan coordinator rejects its implicit in-memory fallback", async () => {
+  await expect(
+    createTakosumiService({
+      role: "takosumi-api",
+      runtimeConfig: {
+        environment: "production",
+        allowUnsafeProductionDefaults: true,
+      },
+      runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
+      context: localContext(),
+      opentofuControlStore: declaredDurableTestOpenTofuStore(),
+    }),
+  ).rejects.toThrow(
+    "production runtime exposes the Git install-plan coordinator but no durable GitInstallPlan store is configured",
+  );
+});
+
+test("production Git install-plan coordinator rejects an injected in-memory store", async () => {
+  await expect(
+    createTakosumiService({
+      role: "takosumi-api",
+      runtimeConfig: {
+        environment: "production",
+        allowUnsafeProductionDefaults: true,
+      },
+      runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
+      context: localContext(),
+      opentofuControlStore: declaredDurableTestOpenTofuStore(),
+      gitInstallPlanStore: new InMemoryGitInstallPlanStore(),
+    }),
+  ).rejects.toThrow(
+    "production runtime exposes the Git install-plan coordinator but no durable GitInstallPlan store is configured",
+  );
+});
+
 test("production Resource Shape API requires its own durable stores", async () => {
   await expect(
     createTakosumiService({
@@ -49,6 +99,7 @@ test("production Resource Shape API requires its own durable stores", async () =
       },
       context: localContext(),
       opentofuControlStore: declaredDurableTestOpenTofuStore(),
+      gitInstallPlanStore: declaredDurableTestGitInstallPlanStore(),
       resourceShapeAdapter: new StubResourceShapeAdapter(),
     }),
   ).rejects.toThrow(
@@ -70,6 +121,7 @@ test("production Offering catalog API requires durable catalog authority", async
       },
       context: localContext(),
       opentofuControlStore: declaredDurableTestOpenTofuStore(),
+      gitInstallPlanStore: declaredDurableTestGitInstallPlanStore(),
       interfaceStores: {
         ...createInMemoryInterfaceStores(),
         persistence: "durable",
@@ -94,6 +146,7 @@ test("production Offering catalog API rejects an explicitly injected in-memory s
       },
       context: localContext(),
       opentofuControlStore: declaredDurableTestOpenTofuStore(),
+      gitInstallPlanStore: declaredDurableTestGitInstallPlanStore(),
       interfaceStores: {
         ...createInMemoryInterfaceStores(),
         persistence: "durable",

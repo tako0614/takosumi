@@ -2,7 +2,7 @@
  * Lazy personal-Workspace bootstrap (spec §4: "初回ログイン時に個人 Workspace を自動
  * 作成する") owned by the canonical Workspace list route.
  *
- * Identity reads such as `GET /v1/account/session/me` must remain read-only.
+ * Identity reads such as `GET /api/v1/account/session/me` must remain read-only.
  * The Workspace list route already owns the deploy-control facade, so it can
  * await the domain's idempotent ensure before returning the first page. This
  * keeps every D1 operation inside the guarded request lifetime and avoids a

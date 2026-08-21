@@ -17,7 +17,7 @@ import {
   validateActiveAccessTokenRecord,
 } from "./access-token-activity.ts";
 
-export const TAKOSUMI_ACCOUNTS_SESSION_ME_PATH = "/v1/account/session/me";
+export const TAKOSUMI_ACCOUNTS_SESSION_ME_PATH = "/api/v1/account/session/me";
 
 export type AccountsBearerRequiredScope = TakosumiAccountsPatScope;
 
@@ -208,7 +208,7 @@ export interface AccountSessionMeResponse {
 }
 
 /**
- * GET /v1/account/session/me — return the session subject for the
+ * GET /api/v1/account/session/me — return the session subject for the
  * cookie/bearer-presenting browser. Used by the dashboard SPA to
  * mirror the HttpOnly session cookie into its local cache without
  * exposing the raw session id to JavaScript.
@@ -260,7 +260,7 @@ export async function handleAccountSessionMeGet(input: {
 }
 
 /**
- * DELETE /v1/account/session/me — clear the HttpOnly session cookie
+ * DELETE /api/v1/account/session/me — clear the HttpOnly session cookie
  * and revoke the server-side session record. Returns 204 on success.
  *
  * Idempotent: if no session is presented, we still emit the

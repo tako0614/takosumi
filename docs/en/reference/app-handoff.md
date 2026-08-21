@@ -124,7 +124,8 @@ The client then discovers the host through:
 
 ```text
 GET /.well-known/takosumi
-GET /v1/capabilities
+GET /api/v1/capabilities
+GET /openapi.json
 ```
 
 If the client needs product-specific metadata, it may also read:

@@ -7,6 +7,21 @@ import {
   createInMemoryInterfaceStores,
   InterfaceService,
 } from "../../../core/domains/interfaces/mod.ts";
+import {
+  InMemoryGitInstallPlanStore,
+  type GitInstallPlanStore,
+} from "../../../core/domains/install-plans/store.ts";
+
+function declaredDurableGitInstallPlanStore(): GitInstallPlanStore {
+  const store = new InMemoryGitInstallPlanStore();
+  return {
+    durable: true,
+    create: (plan) => store.create(plan),
+    get: (id) => store.get(id),
+    claimReconcile: (input) => store.claimReconcile(input),
+    completeReconcile: (input) => store.completeReconcile(input),
+  };
+}
 
 async function app() {
   let id = 0;
@@ -35,11 +50,14 @@ const headers = {
 
 test("Interface CRUD is bearer protected and desired writes use ETag", async () => {
   const api = await app();
-  expect((await api.request("/v1/interfaces?workspaceId=ws_1")).status).toBe(
+  expect((await api.request("/api/v1/interfaces?workspaceId=ws_1")).status).toBe(
     401,
   );
+  expect((await api.request("/v1/interfaces?workspaceId=ws_1")).status).toBe(
+    404,
+  );
 
-  const created = await api.request("/v1/interfaces", {
+  const created = await api.request("/api/v1/interfaces", {
     method: "POST",
     headers,
     body: JSON.stringify({
@@ -65,14 +83,14 @@ test("Interface CRUD is bearer protected and desired writes use ETag", async () 
   const etag = created.headers.get("etag");
   expect(etag).toBe('"if-1-1"');
 
-  const stale = await api.request(`/v1/interfaces/${record.metadata.id}`, {
+  const stale = await api.request(`/api/v1/interfaces/${record.metadata.id}`, {
     method: "PATCH",
     headers: { ...headers, "if-match": '"if-0-0"' },
     body: JSON.stringify({ labels: { protocol: "mcp" } }),
   });
   expect(stale.status).toBe(412);
 
-  const updated = await api.request(`/v1/interfaces/${record.metadata.id}`, {
+  const updated = await api.request(`/api/v1/interfaces/${record.metadata.id}`, {
     method: "PATCH",
     headers: { ...headers, "if-match": etag! },
     body: JSON.stringify({ labels: { protocol: "mcp" } }),
@@ -81,7 +99,7 @@ test("Interface CRUD is bearer protected and desired writes use ETag", async () 
   expect(updated.headers.get("etag")).toBe('"if-2-2"');
 
   const listed = await api.request(
-    "/v1/interfaces?workspaceId=ws_1&type=mcp.server&phase=Resolved",
+    "/api/v1/interfaces?workspaceId=ws_1&type=mcp.server&phase=Resolved",
     { headers },
   );
   expect(listed.status).toBe(200);
@@ -111,7 +129,7 @@ test("Interface API rejects malformed records as 400 instead of throwing", async
       },
     },
   ]) {
-    const response = await api.request("/v1/interfaces", {
+    const response = await api.request("/api/v1/interfaces", {
       method: "POST",
       headers,
       body: JSON.stringify(body),
@@ -144,7 +162,7 @@ test("Interface API scoped bearer cannot cross Workspace boundaries", async () =
     },
     requestCorrelation: false,
   });
-  const response = await api.request("/v1/interfaces", {
+  const response = await api.request("/api/v1/interfaces", {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -227,7 +245,7 @@ test("unscoped Interface actors require current Workspace authorization", async 
 
   expect(
     (
-      await api.request("/v1/interfaces", {
+      await api.request("/api/v1/interfaces", {
         method: "POST",
         headers: deniedHeaders,
         body: createBody,
@@ -236,14 +254,14 @@ test("unscoped Interface actors require current Workspace authorization", async 
   ).toBe(403);
   expect(
     (
-      await api.request("/v1/interfaces?workspaceId=workspace_a", {
+      await api.request("/api/v1/interfaces?workspaceId=workspace_a", {
         headers: deniedHeaders,
       })
     ).status,
   ).toBe(403);
   expect(
     (
-      await api.request(`/v1/interfaces/${seeded.metadata.id}/bindings`, {
+      await api.request(`/api/v1/interfaces/${seeded.metadata.id}/bindings`, {
         method: "POST",
         headers: deniedHeaders,
         body: JSON.stringify({
@@ -257,7 +275,7 @@ test("unscoped Interface actors require current Workspace authorization", async 
 
   expect(
     (
-      await api.request("/v1/interfaces", {
+      await api.request("/api/v1/interfaces", {
         method: "POST",
         headers: ownerHeaders,
         body: createBody,
@@ -266,14 +284,14 @@ test("unscoped Interface actors require current Workspace authorization", async 
   ).toBe(201);
   expect(
     (
-      await api.request("/v1/interfaces?workspaceId=workspace_a", {
+      await api.request("/api/v1/interfaces?workspaceId=workspace_a", {
         headers: ownerHeaders,
       })
     ).status,
   ).toBe(200);
   expect(
     (
-      await api.request(`/v1/interfaces/${seeded.metadata.id}/bindings`, {
+      await api.request(`/api/v1/interfaces/${seeded.metadata.id}/bindings`, {
         method: "POST",
         headers: ownerHeaders,
         body: JSON.stringify({
@@ -298,7 +316,7 @@ test("unscoped Interface actors require current Workspace authorization", async 
   });
   expect(
     (
-      await failClosed.request("/v1/interfaces?workspaceId=workspace_a", {
+      await failClosed.request("/api/v1/interfaces?workspaceId=workspace_a", {
         headers: ownerHeaders,
       })
     ).status,
@@ -366,13 +384,13 @@ test("runtime OAuth principals only discover currently bound Interfaces", async 
   const runtimeHeaders = { authorization: "Bearer runtime-a" };
 
   const missingPermission = await api.request(
-    "/v1/interfaces?workspaceId=workspace_a&type=mcp.server",
+    "/api/v1/interfaces?workspaceId=workspace_a&type=mcp.server",
     { headers: runtimeHeaders },
   );
   expect(missingPermission.status).toBe(400);
 
   const listed = await api.request(
-    "/v1/interfaces?workspaceId=workspace_a&type=mcp.server&permission=mcp.invoke",
+    "/api/v1/interfaces?workspaceId=workspace_a&type=mcp.server&permission=mcp.invoke",
     { headers: runtimeHeaders },
   );
   expect(listed.status).toBe(200);
@@ -383,19 +401,19 @@ test("runtime OAuth principals only discover currently bound Interfaces", async 
   ).toEqual([allowed.metadata.id]);
 
   const hiddenRead = await api.request(
-    `/v1/interfaces/${hidden.metadata.id}?permission=mcp.invoke`,
+    `/api/v1/interfaces/${hidden.metadata.id}?permission=mcp.invoke`,
     { headers: runtimeHeaders },
   );
   expect(hiddenRead.status).toBe(404);
 
   const bindings = await api.request(
-    `/v1/interfaces/${allowed.metadata.id}/bindings?permission=mcp.invoke`,
+    `/api/v1/interfaces/${allowed.metadata.id}/bindings?permission=mcp.invoke`,
     { headers: runtimeHeaders },
   );
   expect(bindings.status).toBe(200);
   expect((await bindings.json()).bindings).toHaveLength(1);
 
-  const mutation = await api.request("/v1/interfaces", {
+  const mutation = await api.request("/api/v1/interfaces", {
     method: "POST",
     headers: { ...runtimeHeaders, "content-type": "application/json" },
     body: "{}",
@@ -487,7 +505,7 @@ test("runtime Principal can exchange an exact oauth2 InterfaceBinding for a no-s
     requestCorrelation: false,
   });
   const post = (token: string, body: Record<string, unknown>) =>
-    api.request(`/v1/interfaces/${iface.metadata.id}/token`, {
+    api.request(`/api/v1/interfaces/${iface.metadata.id}/token`, {
       method: "POST",
       headers: {
         authorization: `Bearer ${token}`,
@@ -550,6 +568,7 @@ test("strict bootstrap refuses to expose Interface API without auth", async () =
       role: "takosumi-api",
       runtimeConfig: { environment: "production" },
       context,
+      gitInstallPlanStore: declaredDurableGitInstallPlanStore(),
     }),
   ).rejects.toThrow(
     "production runtime exposes the Interface API but no TAKOSUMI_DEPLOY_CONTROL_TOKEN or scoped Interface authorizer is configured",
@@ -567,6 +586,7 @@ test("strict bootstrap refuses an ephemeral Interface store", async () => {
       runtimeEnv: { TAKOSUMI_DEPLOY_CONTROL_TOKEN: "control-token" },
       context,
       opentofuControlStore: declaredDurableTestOpenTofuStore(),
+      gitInstallPlanStore: declaredDurableGitInstallPlanStore(),
     }),
   ).rejects.toThrow(
     "production runtime exposes the Interface API but no durable Interface/InterfaceBinding store is configured",

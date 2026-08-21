@@ -52,7 +52,7 @@ export async function loadTakosumiRuntimeCapabilities(
   const wellKnown =
     (await wellKnownResponse.json()) as TakosumiWellKnownDocument;
   const capabilitiesUrl = new URL(
-    wellKnown.endpoints?.capabilities || "/v1/capabilities",
+    wellKnown.endpoints?.capabilities || "/api/v1/capabilities",
     wellKnownUrl,
   );
   if (capabilitiesUrl.origin !== wellKnownUrl.origin) {

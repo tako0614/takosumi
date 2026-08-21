@@ -21,14 +21,11 @@ The present Takosumi OSS contract is [Core Spec](./core-spec.md). In brief:
 
 ## Retained migration note
 
-Old Resource/Form wire, state, and audit rows may remain readable while an
-operator migrates them. The legacy edge is normally absent (`404`). An
-operator may set `TAKOSUMI_LEGACY_RESOURCE_DRAIN_ENABLED=1` together with the
-authenticated control-plane configuration to expose only the bounded drain:
-authenticated Resource list/read/events/observe/delete and TargetPool or
-SpacePolicy `GET`/`HEAD`/`DELETE`. Discovery, FormActivation, writes, preview,
-import, refresh, and all other legacy operations remain unavailable (`404` or
-`410`); enabling the drain never creates a supported authoring flow.
+Old Resource/Form wire, state, and audit rows may remain as migration data.
+The legacy edge is unconditionally absent (`404`), with no drain flag, CLI
+caller, or public descriptor for the retired Resource/Form families. Use typed
+operations or the owning external Host for any retained-row migration; this
+does not create a supported authoring flow.
 
 For current contracts, use Core Spec and the product reference docs. For
 historical package or exact-FormRef evidence, use the explicitly superseded

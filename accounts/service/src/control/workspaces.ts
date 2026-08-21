@@ -185,6 +185,7 @@ import {
 import { handleWorkspaceProjects } from "./projects.ts";
 import { maybeEnsurePersonalWorkspaceForSubject } from "../control-personal-workspace.ts";
 import { handleWorkspaceResourcesView } from "./workspace-views.ts";
+import { handleWorkspaceInstallPlans } from "./install-plans.ts";
 
 function sourceWorkspaceId(
   source: Readonly<{ workspaceId?: string }>,
@@ -308,6 +309,9 @@ export async function handleWorkspaces(
     }
     if (leaf === "projects" && segments.length === 3) {
       return await handleWorkspaceProjects(ctx, workspaceId, method);
+    }
+    if (leaf === "install-plans" && segments.length === 3) {
+      return await handleWorkspaceInstallPlans(ctx, workspaceId, method);
     }
     if (leaf === "ui-surfaces" && segments.length === 3) {
       if (method !== "GET") return methodNotAllowed("GET");
@@ -1155,8 +1159,19 @@ async function listWorkspaceCapsules(
       includeDestroyed: includeDestroyed.includeDestroyed,
     },
   );
+  const capsules = await Promise.all(
+    items.map(async (capsule): Promise<PublicCapsule> => {
+      const projected = publicCapsule(capsule);
+      if (!capsule.currentStateVersionId) return projected;
+      const adoptedSourceRevision =
+        await operations.getCapsuleAdoptedSourceRevision(capsule.id);
+      return adoptedSourceRevision
+        ? { ...projected, adoptedSourceRevision }
+        : projected;
+    }),
+  );
   return json({
-    capsules: items.map(publicCapsule),
+    capsules,
     ...(nextCursor !== undefined ? { nextCursor } : {}),
   });
 }

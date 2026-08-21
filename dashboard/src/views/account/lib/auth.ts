@@ -105,7 +105,7 @@ export async function completeUpstreamOAuth(
   }
   const returnTo = recallOAuthReturnTo();
 
-  // The worker's /v1/auth/upstream/callback handler only accepts GET with
+  // The worker's /oauth/upstream/callback handler only accepts GET with
   // query params (it was originally designed as the direct upstream redirect
   // target). Calling via GET with code/state/provider in the URL keeps the
   // SPA out of the redirect chain while still using the documented contract.

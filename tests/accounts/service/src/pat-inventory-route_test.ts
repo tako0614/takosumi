@@ -9,7 +9,7 @@ import { ACCOUNT_SESSION_COOKIE_NAME } from "../../../../accounts/service/src/ac
 import { base64UrlEncodeJson } from "../../../../accounts/service/src/encoding.ts";
 
 const ORIGIN = "https://accounts.example.test";
-const INVENTORY_PATH = "/v1/account/tokens/inventory.v1";
+const INVENTORY_PATH = "/api/v1/account/tokens/inventory.v1";
 const SUBJECT = "tsub_inventory_route" as const;
 const SESSION_ID = "sess_inventory_route";
 

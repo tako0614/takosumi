@@ -30,7 +30,7 @@ type AuthState = Exclude<SessionState["kind"], "loading"> | "loading";
  * Wraps an account screen that requires a signed-in account-plane session.
  * While the session is being read on mount we render a small spinner (NOT
  * redirect, NOT render children) so the cookie roundtrip has a chance to
- * resolve. Only after the /v1/account/session/me probe resolves with `null`
+ * resolve. Only after the /api/v1/account/session/me probe resolves with `null`
  * do we redirect to /sign-in with the intended return path preserved in
  * `?return=`.
  *

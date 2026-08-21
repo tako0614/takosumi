@@ -6,9 +6,9 @@ const PUBLIC_LIVE_READ_PATHS = new Set([
   "/.well-known/openid-configuration",
   "/oauth/jwks",
   "/api/v1/dashboard/bootstrap",
-  "/v1/account/session/me",
-  "/v1/auth/providers",
-  "/v1/capabilities",
+  "/api/v1/account/session/me",
+  "/api/v1/auth/providers",
+  "/api/v1/capabilities",
 ]);
 
 function parseHttpUrl(value: string): URL | undefined {

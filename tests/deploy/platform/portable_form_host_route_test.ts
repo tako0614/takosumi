@@ -18,7 +18,6 @@ function platformEnv() {
     TAKOSUMI_DEPLOY_CONTROL_TOKEN: "resource-token",
     TAKOSUMI_DEV_MODE: "1",
     TAKOSUMI_RESOURCE_SHAPES: "ObjectBucket",
-    TAKOSUMI_LEGACY_RESOURCE_DRAIN_ENABLED: "1",
   } as never;
 }
 

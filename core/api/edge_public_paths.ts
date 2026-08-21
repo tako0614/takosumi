@@ -6,9 +6,8 @@
  * router. It therefore needs a *static* answer — and the previous static answer
  * was a hand-written prefix list living in the worker, four entries long, with
  * no link to the route modules. Every route added since then
- * (`/v1/form-availability`, the whole `forms.takoform.com/v1alpha1` facade)
- * was mounted, advertised by discovery, called by the dashboard and the CLI,
- * and answered by the account plane's 404 or by the SPA's index.html.
+ * (including the retired Resource/Form `/v1` families) was once mounted and
+ * could drift into the account plane's 404 or the SPA's index.html.
  *
  * So the answer is derived here, from the same {@link ROUTE_FAMILIES}
  * inventory the routes are mounted from:
@@ -45,23 +44,17 @@ const EDGE_EXPOSURE_BY_FAMILY: Record<RouteFamilyId, EdgeExposure> = {
   // `/internal/v1/*` by construction; the host reaches it in process.
   "deployControl-internal": "off",
   metrics: "off",
-  // Flow-B Resource Shape and the portable Form host facade are retained only
-  // for an explicit, operator-controlled drain lane. They are not part of the
-  // normal public edge, so a missing drain opt-in cannot accidentally route
-  // them through the session ingress.
+  // Resource Shape `/v1` is retired. The portable Form host is a separate
+  // external protocol and is not routed by the normal public edge.
   "resource-shape": "off",
-  // Operator-bearer surface; deliberately not reachable through the public
-  // session seam, which injects the deploy-control bearer.
-  "form-activations": "off",
   // Operator-bearer publication/evaluation surface; never session-routed.
   "offering-catalogs": "off",
   interfaces: "session",
 };
 
 const EDGE_EXPOSURE_OVERRIDES: Readonly<Record<string, EdgeExposure>> = {
-  // No legacy Takoform discovery override. The host document is retained in
-  // code for inventory/drain work, but it is never edge-routed or advertised
-  // by the OSS platform.
+  // No legacy Takoform discovery override; the portable host remains outside
+  // the OSS platform edge gate.
 };
 
 interface EdgePathRule {

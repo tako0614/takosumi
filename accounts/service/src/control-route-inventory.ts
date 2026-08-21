@@ -65,6 +65,42 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
       auth: "account-session",
     },
     {
+      method: "POST",
+      path: "/api/v1/workspaces/{workspaceId}/install-plans",
+      summary: "Create or replay an idempotent Git install plan",
+      auth: "account-session",
+    },
+    {
+      method: "POST",
+      path: "/api/v1/capsules/{capsuleId}/revision-plans",
+      summary: "Create or replay an idempotent Git revision plan",
+      auth: "account-session",
+    },
+    {
+      method: "GET",
+      path: "/api/v1/revision-plans/{revisionPlanId}",
+      summary: "Read a Git revision plan without advancing it",
+      auth: "account-session",
+    },
+    {
+      method: "POST",
+      path: "/api/v1/revision-plans/{revisionPlanId}/reconcile",
+      summary: "Advance a Git revision plan toward a reviewable Run",
+      auth: "account-session",
+    },
+    {
+      method: "GET",
+      path: "/api/v1/install-plans/{installPlanId}",
+      summary: "Read an install plan without advancing it",
+      auth: "account-session",
+    },
+    {
+      method: "POST",
+      path: "/api/v1/install-plans/{installPlanId}/reconcile",
+      summary: "Explicitly advance an install plan toward a reviewable Run",
+      auth: "account-session",
+    },
+    {
       method: "GET",
       path: "/api/v1/workspaces/{workspaceId}/members",
       summary: "List Workspace members",

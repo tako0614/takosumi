@@ -380,7 +380,7 @@ test("hosted inventory parsing is strict about version, workspace, and shape", (
 test("hosted inventory requests preserve the contribution href and opaque cursor", async () => {
   let requested = "";
   const page = await listHostedResourceInventoryPage(
-    "/v1/hosted/marketplace/resources?view=compact",
+    "/extensions/hosted/marketplace/resources?view=compact",
     "workspace_1",
     "opaque.cursor/2",
     async (input) => {
@@ -393,7 +393,7 @@ test("hosted inventory requests preserve the contribution href and opaque cursor
     },
   );
   const url = new URL(requested);
-  expect(url.pathname).toBe("/v1/hosted/marketplace/resources");
+  expect(url.pathname).toBe("/extensions/hosted/marketplace/resources");
   expect(url.searchParams.get("view")).toBe("compact");
   expect(url.searchParams.get("workspaceId")).toBe("workspace_1");
   expect(url.searchParams.get("limit")).toBe("25");

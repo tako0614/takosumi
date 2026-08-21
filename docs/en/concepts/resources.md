@@ -2,8 +2,8 @@
 
 > This page is not a supported product guide. Takosumi OSS currently exposes
 > one Git-based OpenTofu/Terraform Stack flow. Resource Shape, Form Host,
-> TargetPool, SpacePolicy, and `/v1/resources` are retained temporarily as
-> migration internals for old persistence and API/schema compatibility.
+> TargetPool, and SpacePolicy schemas and retained rows are migration data only;
+> their former `/v1` HTTP and CLI surfaces are retired.
 
 ## Current authority
 
@@ -26,7 +26,7 @@ They remain only as far as needed for reads and safe migration. The following
 old API/CLI documents are internal material for investigating wire and stored
 data, not contracts for starting new user-facing authoring:
 
-- the old `/v1/resources` Deploy / Resource lifecycle endpoints
+- the old Deploy / Resource lifecycle HTTP endpoints
 - the `takosumi resources ...` CLI
 - Form Registry / FormActivation / Form Host discovery
 - the old TargetPool / SpacePolicy / Resolver / Adapter administration

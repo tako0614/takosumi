@@ -57,9 +57,8 @@ export async function runLiveOpenTofuPlanApplyProof(
     await cp(resolve(FIXTURE_SOURCE), workdir, { recursive: true });
     const runnerProfile = liveLocalRunnerProfile(Date.now());
     const ids = deterministicIds();
-    // Capsule-first model: seed the Workspace-owned Capsule
-    // and attach a prior current StateVersion pointer so this single-shot proof's
-    // apply passes the `capsuleCurrentStateVersionId` guard.
+    // Capsule-first model: seed the Workspace-owned Capsule. This is its first
+    // Apply, so there is no current StateVersion lineage yet.
     const store = new InMemoryOpenTofuControlStore();
     const seeded = await seedCapsuleModel(store, {
       workspaceId: "ws_live_local",
@@ -72,10 +71,6 @@ export async function runLiveOpenTofuPlanApplyProof(
           },
         },
       },
-    });
-    await store.putCapsule({
-      ...seeded.capsule,
-      currentStateVersionId: ids.next("state"),
     });
     const controller = new OpenTofuController({
       store,

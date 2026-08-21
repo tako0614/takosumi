@@ -82,9 +82,9 @@ export interface PortableFormHostConformanceReport {
 }
 
 /**
- * Black-box host runner. It exercises the neutral facade and then reads the
- * existing Takosumi compatibility projection solely to prove both facades
- * converge on the same canonical Resource and audit rows.
+ * Black-box host runner. It exercises only the portable Takoform facade. The
+ * former `/v1/resources` compatibility projection is retired and is not used
+ * as an HTTP alias or a conformance dependency.
  */
 export async function runPortableFormHostConformance(
   input: PortableFormHostConformanceInput,
@@ -205,27 +205,6 @@ export async function runPortableFormHostConformance(
     throw new Error("portable read identity changed");
   checks.push("read");
 
-  const compatibility = await jsonRequest(
-    fetcher,
-    `${endpoint}/v1/resources/${encodeURIComponent(compatibilityKind(input.identity.type))}/${encodeURIComponent(input.name)}?space=${encodeURIComponent(input.space)}`,
-    { headers },
-  );
-  if (
-    compatibility.id !==
-      `tkrn:${input.space}:${compatibilityKind(input.identity.type)}:${input.name}` ||
-    compatibility.kind !== compatibilityKind(input.identity.type) ||
-    !isRecord(compatibility.metadata) ||
-    compatibility.metadata.name !== input.name ||
-    installedFormReferenceKey(
-      compatibility.form as unknown as InstalledFormReference,
-    ) !== installedFormReferenceKey(input.identity)
-  ) {
-    throw new Error(
-      "compatibility facade does not project the canonical Resource row",
-    );
-  }
-  checks.push("canonical-resource-parity");
-
   const substituted = {
     ...input.identity,
     schemaDigest: `sha256:${"f".repeat(64)}`,
@@ -327,7 +306,7 @@ export async function runPortableFormHostConformance(
 
   const events = await jsonRequest(
     fetcher,
-    `${endpoint}/v1/resources/${encodeURIComponent(compatibilityKind(input.identity.type))}/${encodeURIComponent(input.name)}/events?space=${encodeURIComponent(input.space)}`,
+    `${resourcePath}/events?space=${encodeURIComponent(input.space)}&${exact}`,
     { headers },
   );
   const actions = new Set(
@@ -344,7 +323,7 @@ export async function runPortableFormHostConformance(
     if (!actions.has(required))
       throw new Error(`canonical audit lacks ${required}`);
   }
-  checks.push("canonical-audit-parity");
+  checks.push("portable-audit");
 
   if (input.importNativeId) {
     await runImportConformance(
