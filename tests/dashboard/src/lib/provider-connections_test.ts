@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { ProviderConnection } from "takosumi-contract";
 import {
   isProviderConnectionCandidate,
+  providerConnectionAllowedByInstallPolicy,
   providerConnectionMatchesProviderSource,
   preferredProviderConnection,
   providerConnectionDisplayName,
@@ -234,5 +235,31 @@ describe("dashboard ProviderConnection candidates", () => {
     ).toBe(true);
     expect(providerConnectionDisplayName(v01)).toBe("Takosumi Cloud");
     expect(providerConnectionDisplayName(v02)).toBe("Takosumi Cloud");
+  });
+
+  test("keeps managed and BYOC destinations disjoint for one provider source", () => {
+    const managed = connection({ id: "conn_takoserver_takoform_v1" });
+    const byoc = connection({ id: "conn_workspace_takoform" });
+
+    expect(
+      providerConnectionAllowedByInstallPolicy(managed, {
+        providerCredentials: { allowedConnectionIds: [managed.id] },
+      }),
+    ).toBe(true);
+    expect(
+      providerConnectionAllowedByInstallPolicy(byoc, {
+        providerCredentials: { allowedConnectionIds: [managed.id] },
+      }),
+    ).toBe(false);
+    expect(
+      providerConnectionAllowedByInstallPolicy(managed, {
+        providerCredentials: { forbiddenConnectionIds: [managed.id] },
+      }),
+    ).toBe(false);
+    expect(
+      providerConnectionAllowedByInstallPolicy(byoc, {
+        providerCredentials: { forbiddenConnectionIds: [managed.id] },
+      }),
+    ).toBe(true);
   });
 });

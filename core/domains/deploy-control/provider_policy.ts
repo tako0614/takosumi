@@ -293,8 +293,20 @@ function mergeProviderCredentialPolicy(
       ...(local?.requiredProviders ?? []),
     ]),
   ).sort();
+  const allowedConnectionIds = intersectOptionalLists(
+    ceiling?.allowedConnectionIds,
+    local?.allowedConnectionIds,
+  );
+  const forbiddenConnectionIds = Array.from(
+    new Set([
+      ...(ceiling?.forbiddenConnectionIds ?? []),
+      ...(local?.forbiddenConnectionIds ?? []),
+    ]),
+  ).sort();
   return {
     ...(requiredProviders.length > 0 ? { requiredProviders } : {}),
+    ...(allowedConnectionIds !== undefined ? { allowedConnectionIds } : {}),
+    ...(forbiddenConnectionIds.length > 0 ? { forbiddenConnectionIds } : {}),
     requireTemporary:
       ceiling?.requireTemporary === true || local?.requireTemporary === true,
     requireTtlEnforced:
@@ -329,6 +341,30 @@ export function evaluateProviderCredentialMintPolicy(
   const credentialPolicy = policy?.providerCredentials;
   if (!credentialPolicy) return { reasons: [] };
   const reasons: string[] = [];
+  if (credentialPolicy.allowedConnectionIds !== undefined) {
+    const allowed = new Set(credentialPolicy.allowedConnectionIds);
+    const disallowed = evidence
+      .filter((row) => !allowed.has(row.connectionId))
+      .map((row) => row.connectionId)
+      .sort();
+    if (disallowed.length > 0) {
+      reasons.push(
+        `provider credential policy rejects unselected connections: ${[...new Set(disallowed)].join(", ")}`,
+      );
+    }
+  }
+  if (credentialPolicy.forbiddenConnectionIds !== undefined) {
+    const forbidden = new Set(credentialPolicy.forbiddenConnectionIds);
+    const selected = evidence
+      .filter((row) => forbidden.has(row.connectionId))
+      .map((row) => row.connectionId)
+      .sort();
+    if (selected.length > 0) {
+      reasons.push(
+        `provider credential policy rejects forbidden connections: ${[...new Set(selected)].join(", ")}`,
+      );
+    }
+  }
   if (
     expectedCredentialEvidenceCount > 0 &&
     evidence.length < expectedCredentialEvidenceCount
