@@ -75,6 +75,9 @@
       "takosumi-contract/backups": ["./contract/backups.ts"],
       "takosumi-contract/billing": ["./contract/billing.ts"],
       "takosumi-contract/security": ["./contract/security.ts"],
+      "takosumi-contract/sqlite-logical-content": [
+        "./contract/sqlite-logical-content.ts"
+      ],
       "takosumi-contract/credential-recipes": [
         "./contract/credential-recipes.ts"
       ],
