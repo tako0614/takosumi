@@ -1,5 +1,6 @@
 import type { ProviderConnection } from "@takosumi/internal/deploy-control-api";
 import {
+  canonicalRunCredentialSettings,
   isCapsuleRunCredentialIssuance,
   isWorkspaceBindableOperatorConnection,
   type FixedOperatorProviderConnectionDeclaration,
@@ -105,6 +106,10 @@ export function resolveTargetConnection(
   timestamp: string,
 ): ProviderConnection {
   validateDescriptor(descriptor);
+  const runCredentialSettings = canonicalRunCredentialSettings(
+    descriptor.runCredentialSettings,
+    "operator Provider Connection declaration runCredentialSettings",
+  );
   const recipe = credentialRecipeResolver(descriptor.credentialRecipe.id);
   const mode = recipe?.authModes[descriptor.credentialRecipe.authMode];
   const driver = credentialDrivers[
@@ -174,6 +179,7 @@ export function resolveTargetConnection(
     ...(descriptor.displayName !== undefined
       ? { displayName: descriptor.displayName }
       : {}),
+    ...(runCredentialSettings ? { runCredentialSettings } : {}),
     status: "verified",
     materialization: "run-issued",
     envNames,
@@ -199,9 +205,26 @@ function validateDescriptor(
   }
   exactKeys(
     descriptor,
-    ["id", "providerSource", "displayName", "credentialRecipe"],
+    [
+      "id",
+      "providerSource",
+      "displayName",
+      "runCredentialSettings",
+      "credentialRecipe",
+    ],
     "operator Provider Connection declaration",
   );
+  try {
+    canonicalRunCredentialSettings(
+      descriptor.runCredentialSettings,
+      "operator Provider Connection declaration runCredentialSettings",
+    );
+  } catch {
+    throw reconcileError(
+      "invalid_descriptor",
+      "operator Provider Connection declaration runCredentialSettings is invalid",
+    );
+  }
   if (!/^conn_[0-9A-Za-z]{8,64}$/u.test(descriptor.id)) {
     throw reconcileError(
       "invalid_descriptor",

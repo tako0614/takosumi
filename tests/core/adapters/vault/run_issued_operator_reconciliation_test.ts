@@ -28,6 +28,7 @@ describe("fixed-id run-issued operator Connection reconciliation", () => {
       scope: "operator",
       status: "verified",
       materialization: "run-issued",
+      runCredentialSettings: { requiredAvailableMinor: 2300 },
       envNames: ["EXTENSION_ENDPOINT", "EXTENSION_RUN_TOKEN"],
       credentialRecipe: {
         id: RECIPE_ID,
@@ -214,6 +215,7 @@ function fixture(options: {
         id: FIXED_ID,
         providerSource: PROVIDER,
         displayName: "Operator extension",
+        runCredentialSettings: { requiredAvailableMinor: 2300 },
         credentialRecipe: { id: RECIPE_ID, authMode: AUTH_MODE },
       },
       credentialRecipeResolver: (id) => (id === RECIPE_ID ? recipe : undefined),
