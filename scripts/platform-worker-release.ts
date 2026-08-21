@@ -659,7 +659,7 @@ function matchesHostedProviderCredentialBroker(value: unknown): boolean {
           "recipeId",
         ].sort(),
       ) &&
-    value.connectionId === "conn_takoserver_takoform_v1" &&
+    value.connectionId === "conn_takoserverTakoform01" &&
     value.recipeId === "takoserver-takoform-run-v1" &&
     value.providerSource === "registry.terraform.io/tako0614/takoform" &&
     value.displayName === "Takoserver" &&
