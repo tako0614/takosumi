@@ -107,10 +107,11 @@ async function mintPlatformExtensionProviderCredential(
   scopes: readonly string[],
   handler: PlatformExtensionCredentialHandler | undefined,
 ) {
-  if (!context.run || !context.issueRunCredential || !context.runCredentialSettings) {
+  if (!context.run || !context.issueRunCredential) {
     logCredentialExchangeFailure("context_unavailable");
-    throw new Error("provider credential exchange requires a canonical Run and settings");
+    throw new Error("provider credential exchange requires a canonical Run");
   }
+  const runCredentialSettings = context.runCredentialSettings ?? Object.freeze({});
   if (!handler) {
     logCredentialExchangeFailure("handler_unavailable");
     throw new Error("provider credential exchange requires a bound handler");
@@ -139,7 +140,7 @@ async function mintPlatformExtensionProviderCredential(
         body: JSON.stringify({
           kind: "takosumi.provider-run-credential-request@v1",
           providerSource,
-          settings: context.runCredentialSettings,
+          settings: runCredentialSettings,
         }),
       }),
       Object.freeze({

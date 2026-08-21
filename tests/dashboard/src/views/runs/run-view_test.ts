@@ -106,11 +106,13 @@ describe("RunView", () => {
   });
 
   test("プランを再実行 re-plans the FRESH snapshot via planCapsuleUpdate", () => {
-    // Plain planCapsule would re-plan the same pinned (broken) contents after
-    // a repo-side fix; planCapsuleUpdate syncs → pins the new snapshot →
-    // compat-checks → plans.
+    // A deployed update refreshes the Source, but an incomplete first install
+    // must preserve its reviewed snapshot/report pair. Refreshing only the
+    // report makes the next plan fail closed on a snapshot mismatch.
+    expect(source).toContain("capsule.currentStateGeneration === 0");
+    expect(source).toContain("await planCapsule(instId, {");
+    expect(source).toContain("compatibilityReportId: run.latest.compatibilityReportId");
     expect(source).toContain("planCapsuleUpdate(instId)");
-    expect(source).not.toMatch(/await planCapsule\(/);
   });
 
   test("destroy retry preserves the destroy operation", () => {

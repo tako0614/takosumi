@@ -87,10 +87,6 @@ test("a configured extension contributes one exact run-issued provider broker", 
       createdAt: "2026-08-18T00:00:00.000Z",
       updatedAt: "2026-08-18T00:00:00.000Z",
     },
-    runCredentialSettings: {
-      reservationId: "rsv_hosted",
-      resourceName: "media",
-    },
     values: {},
     files: [],
     run: {
@@ -142,7 +138,7 @@ test("a configured extension contributes one exact run-issued provider broker", 
   expect(await call.input.json()).toEqual({
     kind: "takosumi.provider-run-credential-request@v1",
     providerSource: "registry.terraform.io/tako0614/takoform",
-    settings: { reservationId: "rsv_hosted", resourceName: "media" },
+    settings: {},
   });
   expect(call.context).toEqual({
     authKind: "run-credential",
