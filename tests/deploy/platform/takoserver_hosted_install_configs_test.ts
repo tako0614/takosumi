@@ -5,6 +5,7 @@ import {
   TAKOSERVER_TAKOFORM_PROVIDER_SOURCE,
 } from "../../../deploy/platform/takoserver_hosted_install_configs.ts";
 import * as hostedWorker from "../../../deploy/platform/takoserver_hosted_worker.ts";
+import { composeTakoserverHostedWorkerEnv } from "../../../deploy/platform/takoserver_hosted_worker.ts";
 
 test("Takosumi Hosted offers one explicit Takoserver or Takoform choice", () => {
   expect(TAKOSERVER_HOSTED_INSTALL_CONFIGS).toHaveLength(2);
@@ -49,6 +50,28 @@ test("Takoserver Hosted wrapper preserves every Worker Durable Object export", (
   );
   expect(typeof hostedWorker.OpenTofuRunOwnerObject).toBe("function");
   expect(typeof hostedWorker.OpenTofuRunnerObject).toBe("function");
+});
+
+test("Takoserver Hosted wrapper keeps Worker variables enumerable for runtime composition", () => {
+  const controlDb = Object.freeze({ binding: "control" });
+  const env = {
+    TAKOSUMI_CONTROL_DB: controlDb,
+    TAKOSUMI_SECRET_BOUNDARY_KEY: "sealed-runtime-key",
+    TAKOSUMI_CONTROL_D1_SCHEMA_MODE: "predeployed",
+  } as never;
+
+  const composed = composeTakoserverHostedWorkerEnv(env);
+
+  expect(composed).not.toBe(env);
+  expect(Object.entries(composed)).toContainEqual([
+    "TAKOSUMI_SECRET_BOUNDARY_KEY",
+    "sealed-runtime-key",
+  ]);
+  expect(composed.TAKOSUMI_CONTROL_DB).toBe(controlDb);
+  expect(composed.TAKOSUMI_INSTALL_CONFIG_COMPOSITION).toBe(
+    TAKOSERVER_HOSTED_INSTALL_CONFIGS,
+  );
+  expect(composeTakoserverHostedWorkerEnv(env)).toBe(composed);
 });
 
 test("Takoserver Hosted connection descriptor is accepted and publicly discoverable", async () => {
