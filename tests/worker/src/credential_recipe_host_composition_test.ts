@@ -66,6 +66,7 @@ function contribution(): CredentialRecipeHostComposition {
         id: "conn_operatorRun01",
         providerSource: "registry.example/operator/extension",
         displayName: "Operator run credential",
+        runCredentialSettings: { requiredAvailableMinor: 2300 },
         credentialRecipe: {
           id: "operator-run-credential",
           authMode: "broker",
@@ -93,6 +94,7 @@ describe("Credential Recipe host composition", () => {
         id: "conn_operatorRun01",
         providerSource: "registry.example/operator/extension",
         displayName: "Operator run credential",
+        runCredentialSettings: { requiredAvailableMinor: 2300 },
         credentialRecipe: {
           id: "operator-run-credential",
           authMode: "broker",
@@ -241,6 +243,24 @@ describe("Credential Recipe host composition", () => {
         BASE,
       ),
     ).toThrow(/unknown fields/);
+  });
+
+  test("rejects credential-shaped fixed operator run settings", () => {
+    const valid = contribution();
+    expect(() =>
+      resolveCredentialRecipeHostComposition(
+        {
+          ...valid,
+          operatorProviderConnections: [
+            {
+              ...valid.operatorProviderConnections![0]!,
+              runCredentialSettings: { authToken: "must-not-cross" },
+            },
+          ],
+        },
+        BASE,
+      ),
+    ).toThrow(/runCredentialSettings is invalid/);
   });
 
   test("requires a bounded control-free driver evidence issuer", () => {

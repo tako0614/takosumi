@@ -1,5 +1,6 @@
 import type { ProviderBinding, ProviderConnection } from "./connections.ts";
 import {
+  canonicalRunCredentialSettings,
   isCapsuleRunCredentialIssuance,
 } from "./connections.ts";
 import type { CredentialRecipe } from "./credential-recipes.ts";
@@ -92,6 +93,8 @@ export interface FixedOperatorProviderConnectionDeclaration {
   readonly id: string;
   readonly providerSource: string;
   readonly displayName?: string;
+  /** Bounded non-secret settings copied to every binding of this connection. */
+  readonly runCredentialSettings?: ProviderBinding["runCredentialSettings"];
   readonly credentialRecipe: {
     readonly id: string;
     readonly authMode: string;
@@ -248,9 +251,25 @@ export function validateFixedOperatorProviderConnectionDeclaration(
   }
   exactKeys(
     declaration,
-    ["id", "providerSource", "displayName", "credentialRecipe"],
+    [
+      "id",
+      "providerSource",
+      "displayName",
+      "runCredentialSettings",
+      "credentialRecipe",
+    ],
     "operator Provider Connection declaration",
   );
+  try {
+    canonicalRunCredentialSettings(
+      declaration.runCredentialSettings,
+      "operator Provider Connection declaration runCredentialSettings",
+    );
+  } catch {
+    throw new TypeError(
+      "operator Provider Connection declaration runCredentialSettings is invalid",
+    );
+  }
   if (!/^conn_[0-9A-Za-z]{8,64}$/u.test(declaration.id)) {
     throw new TypeError(
       "operator Provider Connection declaration id must be a canonical conn_ id",
