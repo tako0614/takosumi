@@ -772,7 +772,7 @@ function interfaceCredentialIssuerFromAccountsStore(
   };
 }
 
-function workerInterfaceOAuth2ResourceAuthorizer(
+export function workerInterfaceOAuth2ResourceAuthorizer(
   env: CloudflareWorkerEnv,
   store: Pick<OpenTofuControlStore, "getPublicHostReservation">,
   additional?: CreateTakosumiServiceOptions["interfaceOAuth2ResourceAuthorizer"],
@@ -780,21 +780,24 @@ function workerInterfaceOAuth2ResourceAuthorizer(
   CreateTakosumiServiceOptions["interfaceOAuth2ResourceAuthorizer"]
 > {
   return async (input) => {
-    if (additional && (await additional(input))) return true;
     if (operatorControlMcpResourceAuthorized(env, input)) {
       // The host proves only its own enabled, versioned adapter route. The
       // Capsule still cannot grant a Binding; an operator/installer owns that
       // separate service-side authorization.
       return true;
     }
-    if (input.ownerRef.kind !== "Capsule") return false;
-    const hostname = new URL(input.resource).hostname.toLowerCase();
-    const reservation = await store.getPublicHostReservation(hostname);
-    return (
-      reservation?.status === "reserved" &&
-      reservation.workspaceId === input.workspaceId &&
-      reservation.capsuleId === input.ownerRef.id
-    );
+    if (input.ownerRef.kind === "Capsule") {
+      const hostname = new URL(input.resource).hostname.toLowerCase();
+      const reservation = await store.getPublicHostReservation(hostname);
+      if (
+        reservation?.status === "reserved" &&
+        reservation.workspaceId === input.workspaceId &&
+        reservation.capsuleId === input.ownerRef.id
+      ) {
+        return true;
+      }
+    }
+    return additional ? await additional(input) : false;
   };
 }
 
