@@ -6,6 +6,7 @@ import {
 } from "../../../deploy/platform/takoserver_hosted_install_configs.ts";
 import * as hostedWorker from "../../../deploy/platform/takoserver_hosted_worker.ts";
 import { composeTakoserverHostedWorkerEnv } from "../../../deploy/platform/takoserver_hosted_worker.ts";
+import { OPERATOR_CONTROL_MCP_INSTALL_CONFIG } from "../../../deploy/operator-control-mcp.ts";
 
 test("Takosumi Hosted offers one explicit Takoserver or Takoform choice", () => {
   expect(TAKOSERVER_HOSTED_INSTALL_CONFIGS).toHaveLength(2);
@@ -72,6 +73,17 @@ test("Takoserver Hosted wrapper keeps Worker variables enumerable for runtime co
     TAKOSERVER_HOSTED_INSTALL_CONFIGS,
   );
   expect(composeTakoserverHostedWorkerEnv(env)).toBe(composed);
+});
+
+test("Takoserver Hosted composes the optional operator MCP InstallConfig when its route is enabled", () => {
+  const composed = composeTakoserverHostedWorkerEnv({
+    TAKOSUMI_OPERATOR_CONTROL_MCP_ENABLED: "1",
+  } as never);
+
+  expect(composed.TAKOSUMI_INSTALL_CONFIG_COMPOSITION).toEqual([
+    ...TAKOSERVER_HOSTED_INSTALL_CONFIGS,
+    OPERATOR_CONTROL_MCP_INSTALL_CONFIG,
+  ]);
 });
 
 test("Takoserver Hosted connection descriptor is accepted and publicly discoverable", async () => {

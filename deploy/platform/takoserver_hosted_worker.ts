@@ -2,6 +2,10 @@ import platformWorker, {
   type CloudflareWorkerEnv,
   type PlatformExecutionContext,
 } from "./worker.ts";
+import {
+  OPERATOR_CONTROL_MCP_INSTALL_CONFIG,
+  operatorControlMcpEnabled,
+} from "../operator-control-mcp.ts";
 import { TAKOSERVER_HOSTED_INSTALL_CONFIGS } from "./takoserver_hosted_install_configs.ts";
 
 export {
@@ -25,10 +29,16 @@ export function composeTakoserverHostedWorkerEnv(
   // Copy the Worker bindings/variables as own enumerable properties and add
   // only the code-owned install composition.
   const value = { ...env } as CloudflareWorkerEnv;
+  const installConfigs = operatorControlMcpEnabled(env)
+    ? [
+        ...TAKOSERVER_HOSTED_INSTALL_CONFIGS,
+        OPERATOR_CONTROL_MCP_INSTALL_CONFIG,
+      ]
+    : TAKOSERVER_HOSTED_INSTALL_CONFIGS;
   Object.defineProperty(value, "TAKOSUMI_INSTALL_CONFIG_COMPOSITION", {
     configurable: false,
     enumerable: true,
-    value: TAKOSERVER_HOSTED_INSTALL_CONFIGS,
+    value: installConfigs,
     writable: false,
   });
   composed.set(env, value);
