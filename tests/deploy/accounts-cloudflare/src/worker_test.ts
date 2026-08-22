@@ -676,6 +676,45 @@ test("Cloudflare config preserves a host-specific public mobile OIDC client", ()
   ).toEqual([mobileClient]);
 });
 
+test("Cloudflare multi-client config injects one confidential secret by exact client id", () => {
+  const publicClient = {
+    clientId: "takos-mobile-host-example",
+    redirectUris: ["takos://oauth/callback"],
+    tokenEndpointAuthMethod: "none",
+  } as const;
+  const introspectionClient = {
+    clientId: "takosumi-cloud-extensions",
+    redirectUris: ["https://app.example.test/__takosumi/callback"],
+    tokenEndpointAuthMethod: "client_secret_post",
+  } as const;
+
+  expect(
+    parseConfiguredOidcClients(
+      env({
+        TAKOSUMI_ACCOUNTS_CLIENTS: JSON.stringify([
+          publicClient,
+          introspectionClient,
+        ]),
+        TAKOSUMI_ACCOUNTS_CLIENT_ID: introspectionClient.clientId,
+        TAKOSUMI_ACCOUNTS_CLIENT_SECRET: "operator-secret",
+      }),
+    ),
+  ).toEqual([
+    publicClient,
+    { ...introspectionClient, clientSecret: "operator-secret" },
+  ]);
+
+  expect(() =>
+    parseConfiguredOidcClients(
+      env({
+        TAKOSUMI_ACCOUNTS_CLIENTS: JSON.stringify([publicClient]),
+        TAKOSUMI_ACCOUNTS_CLIENT_ID: introspectionClient.clientId,
+        TAKOSUMI_ACCOUNTS_CLIENT_SECRET: "operator-secret",
+      }),
+    ),
+  ).toThrow("must name an exact TAKOSUMI_ACCOUNTS_CLIENTS entry");
+});
+
 test("Cloudflare identity handler lazily revalidates Interface OAuth against Core", async () => {
   const db = new SqliteFakeD1();
   const store = new D1AccountsStore(db);

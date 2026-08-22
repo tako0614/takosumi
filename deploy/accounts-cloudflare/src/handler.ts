@@ -872,7 +872,47 @@ export function parseConfiguredOidcClients(
     if (!Array.isArray(value)) {
       throw new TypeError("TAKOSUMI_ACCOUNTS_CLIENTS must be a JSON array");
     }
-    return value.map(parseClientRecord);
+    const clients = value.map(parseClientRecord);
+    const confidentialClientId = optionalString(
+      env.TAKOSUMI_ACCOUNTS_CLIENT_ID,
+    );
+    const confidentialClientSecret = optionalString(
+      env.TAKOSUMI_ACCOUNTS_CLIENT_SECRET,
+    );
+    const confidentialAuthMethod = parseClientAuthMethod(
+      env.TAKOSUMI_ACCOUNTS_CLIENT_AUTH_METHOD,
+    );
+    if (
+      confidentialClientId === undefined &&
+      (confidentialClientSecret !== undefined ||
+        confidentialAuthMethod !== undefined)
+    ) {
+      throw new TypeError(
+        "TAKOSUMI_ACCOUNTS_CLIENT_ID must select the multi-client entry receiving the confidential client secret",
+      );
+    }
+    if (confidentialClientId === undefined) return clients;
+    const selected = clients.find(
+      (client) => client.clientId === confidentialClientId,
+    );
+    if (!selected) {
+      throw new TypeError(
+        "TAKOSUMI_ACCOUNTS_CLIENT_ID must name an exact TAKOSUMI_ACCOUNTS_CLIENTS entry",
+      );
+    }
+    return clients.map((client) =>
+      client.clientId === confidentialClientId
+        ? {
+            ...client,
+            ...(confidentialClientSecret !== undefined
+              ? { clientSecret: confidentialClientSecret }
+              : {}),
+            ...(confidentialAuthMethod !== undefined
+              ? { tokenEndpointAuthMethod: confidentialAuthMethod }
+              : {}),
+          }
+        : client,
+    );
   }
 
   const clientId = optionalString(env.TAKOSUMI_ACCOUNTS_CLIENT_ID);
