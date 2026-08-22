@@ -51,6 +51,44 @@ export function composeTakoserverHostedWorkerEnv(
     value: installConfigs,
     writable: false,
   });
+  const hosted = (env as CloudflareWorkerEnv & {
+    readonly HOSTED?: {
+      authorizeInterfaceOAuth2Resource?(input: {
+        readonly workspaceId: string;
+        readonly capsuleId: string;
+        readonly resource: string;
+      }): Promise<boolean>;
+    };
+  }).HOSTED;
+  if (typeof hosted?.authorizeInterfaceOAuth2Resource === "function") {
+    Object.defineProperty(
+      value,
+      "TAKOSUMI_INTERFACE_OAUTH2_RESOURCE_AUTHORIZER",
+      {
+        configurable: false,
+        enumerable: true,
+        value: async (input: {
+          readonly workspaceId: string;
+          readonly ownerRef: { readonly kind: string; readonly id: string };
+          readonly resource: string;
+        }): Promise<boolean> => {
+          if (input.ownerRef.kind !== "Capsule") return false;
+          try {
+            return (
+              (await hosted.authorizeInterfaceOAuth2Resource?.({
+                workspaceId: input.workspaceId,
+                capsuleId: input.ownerRef.id,
+                resource: input.resource,
+              })) === true
+            );
+          } catch {
+            return false;
+          }
+        },
+        writable: false,
+      },
+    );
+  }
   composed.set(env, value);
   return value;
 }

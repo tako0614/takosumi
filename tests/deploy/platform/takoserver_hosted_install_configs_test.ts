@@ -75,6 +75,43 @@ test("Takoserver Hosted wrapper keeps Worker variables enumerable for runtime co
   expect(composeTakoserverHostedWorkerEnv(env)).toBe(composed);
 });
 
+test("Takoserver Hosted proves only the exact Capsule-scoped OAuth resource", async () => {
+  const calls: unknown[] = [];
+  const composed = composeTakoserverHostedWorkerEnv({
+    HOSTED: {
+      async authorizeInterfaceOAuth2Resource(input: unknown) {
+        calls.push(input);
+        return true;
+      },
+    },
+  } as never);
+
+  await expect(
+    composed.TAKOSUMI_INTERFACE_OAUTH2_RESOURCE_AUTHORIZER?.({
+      workspaceId: "workspace_1",
+      interfaceId: "interface_1",
+      ownerRef: { kind: "Capsule", id: "capsule_1" },
+      resource: "https://storage.example.test/mcp",
+    }),
+  ).resolves.toBe(true);
+  expect(calls).toEqual([
+    {
+      workspaceId: "workspace_1",
+      capsuleId: "capsule_1",
+      resource: "https://storage.example.test/mcp",
+    },
+  ]);
+  await expect(
+    composed.TAKOSUMI_INTERFACE_OAUTH2_RESOURCE_AUTHORIZER?.({
+      workspaceId: "workspace_1",
+      interfaceId: "interface_2",
+      ownerRef: { kind: "Workspace", id: "workspace_1" },
+      resource: "https://storage.example.test/mcp",
+    }),
+  ).resolves.toBe(false);
+  expect(calls).toHaveLength(1);
+});
+
 test("Takoserver Hosted composes the optional operator MCP InstallConfig when its route is enabled", () => {
   const composed = composeTakoserverHostedWorkerEnv({
     TAKOSUMI_OPERATOR_CONTROL_MCP_ENABLED: "1",
