@@ -36,3 +36,12 @@ test("platform response decoration never reconstructs a WebSocket response", () 
   });
   expect(withPlatformWorkerVersion(response, { id: VERSION })).toBe(response);
 });
+
+test("platform response decoration treats the runtime null WebSocket as HTTP", () => {
+  const response = Object.assign(new Response("ok"), { webSocket: null });
+  expect(
+    withPlatformWorkerVersion(response, { id: VERSION }).headers.get(
+      "x-takosumi-version-id",
+    ),
+  ).toBe(VERSION);
+});

@@ -317,6 +317,35 @@ test("ready evidence requires exact bindings and the Named RPC export", () => {
     ),
   ).not.toThrow();
   expect(() =>
+    assertPublishedVersion(
+      JSON.stringify({
+        resources: {
+          script: {
+            handlers: ["fetch", "scheduled"],
+            named_handlers: [
+              { name: "TakosumiHostRuntimeMaterializerEntrypoint" },
+            ],
+          },
+          bindings: [
+            { name: "ASSETS", type: "assets" },
+            { name: "TAKOSUMI_ACCOUNTS_DB", type: "d1" },
+            { name: "TAKOSUMI_CONTROL_DB", type: "d1" },
+            {
+              name: "HOSTED",
+              type: "service",
+              service: "takosumi-hosted",
+            },
+            {
+              name: "TAKOSUMI_VERSION_METADATA",
+              type: "version_metadata",
+            },
+          ],
+        },
+      }),
+      "takosumi-hosted",
+    ),
+  ).not.toThrow();
+  expect(() =>
     assertPublishedVersion(version(["fetch"]), "takosumi-hosted"),
   ).toThrow(
     "platform_worker_release_materializer_entrypoint_missing",

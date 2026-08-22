@@ -16,15 +16,14 @@ export function withPlatformWorkerVersion(
   metadata: PlatformWorkerVersionMetadata | undefined,
 ): Response {
   const versionId = metadata?.id;
-  if (typeof versionId !== "string" || !WORKER_VERSION_ID.test(versionId)) {
-    return response;
-  }
-
   const runtimeResponse = response as Response & {
     readonly cf?: unknown;
     readonly webSocket?: unknown;
   };
-  if (response.status === 101 || runtimeResponse.webSocket !== undefined) {
+  if (response.status === 101 || runtimeResponse.webSocket != null) {
+    return response;
+  }
+  if (typeof versionId !== "string" || !WORKER_VERSION_ID.test(versionId)) {
     return response;
   }
 

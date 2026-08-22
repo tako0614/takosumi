@@ -544,7 +544,20 @@ export function assertPublishedVersion(
       throw new Error("platform_worker_release_binding_invalid");
     }
   }
-  const handlers = new Set(value.resources.script.handlers as readonly string[]);
+  const rawNamedHandlers = value.resources.script.named_handlers;
+  if (rawNamedHandlers !== undefined && !Array.isArray(rawNamedHandlers)) {
+    throw new Error("platform_worker_release_version_invalid");
+  }
+  const namedHandlers = (rawNamedHandlers ?? []).map((handler) => {
+    if (!record(handler) || typeof handler.name !== "string") {
+      throw new Error("platform_worker_release_version_invalid");
+    }
+    return handler.name;
+  });
+  const handlers = new Set([
+    ...(value.resources.script.handlers as readonly string[]),
+    ...namedHandlers,
+  ]);
   if (!handlers.has(MATERIALIZER_ENTRYPOINT)) {
     throw new Error("platform_worker_release_materializer_entrypoint_missing");
   }
