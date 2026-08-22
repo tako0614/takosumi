@@ -135,6 +135,28 @@
             }
           }
         ]
+      },
+      "opentofu-modules/operator-control-mcp": {
+        "inputs": [
+          {
+            "name": "takosumi_origin",
+            "source": {
+              "kind": "user"
+            },
+            "type": "string",
+            "format": "url",
+            "required": true,
+            "label": {
+              "ja": "Takosumiオリジン",
+              "en": "Takosumi origin"
+            },
+            "helper": {
+              "ja": "operator-control MCPを公開しているTakosumiのHTTPSオリジンです。",
+              "en": "The HTTPS origin of the Takosumi instance exposing operator-control MCP."
+            },
+            "advanced": true
+          }
+        ]
       }
     }
   }
