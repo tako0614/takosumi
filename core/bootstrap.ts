@@ -2702,6 +2702,52 @@ export async function createTakosumiService(
       run.id,
     );
   });
+  const reconcileCapsuleInterfacesAfterApply = async (
+    workspaceId: string,
+    capsuleId: string,
+  ): Promise<void> => {
+    let interfaces = await interfaceService.reconcileCapsule(
+      workspaceId,
+      capsuleId,
+    );
+    for (const delayMs of [250, 750, 2_000] as const) {
+      const bindings = await Promise.all(
+        interfaces.map(async (iface) => ({
+          iface,
+          bindings: await interfaceService.listBindings(iface.metadata.id),
+        })),
+      );
+      const authorityMayFollowApply = bindings.some(({ iface, bindings }) => {
+        const resourceInputName = iface.spec.access.resourceUriInput;
+        const resourceInput = resourceInputName
+          ? iface.spec.inputs?.[resourceInputName]
+          : undefined;
+        if (
+          resourceInput?.source !== "capsule_output" ||
+          resourceInput.capsuleId !== capsuleId
+        ) {
+          return false;
+        }
+        return bindings.some(
+          (binding) =>
+            binding.status.phase === "NotReady" &&
+            binding.status.conditions?.some(
+              (condition) =>
+                condition.type === "Ready" &&
+                condition.reason === "OAuthResourceUnauthorized",
+            ),
+        );
+      });
+      if (!authorityMayFollowApply) return;
+      await new Promise<void>((resolvePromise) =>
+        setTimeout(resolvePromise, delayMs),
+      );
+      interfaces = await interfaceService.reconcileCapsule(
+        workspaceId,
+        capsuleId,
+      );
+    }
+  };
   opentofuController.setTerminalRunObserver(async (run) => {
     if (!run.capsuleId) return;
     if (!("planRunId" in run)) {
@@ -2749,7 +2795,10 @@ export async function createTakosumiService(
             blueprints: config.interfaceBlueprints,
           });
         }
-        await interfaceService.reconcileCapsule(run.workspaceId, run.capsuleId);
+        await reconcileCapsuleInterfacesAfterApply(
+          run.workspaceId,
+          run.capsuleId,
+        );
       }
       return;
     }
