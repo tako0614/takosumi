@@ -59,6 +59,7 @@ const PAT_INVENTORY_DEFAULT_LIMIT = 50;
 const PAT_INVENTORY_MAX_LIMIT = 100;
 const PAT_INVENTORY_CURSOR_KIND =
   "takosumi.account-pat-inventory-cursor@v1" as const;
+const PAT_WORKSPACE_AUTHORITY_TIMEOUT_MS = 5_000;
 
 /**
  * Return the effective account-session-grantable PAT scope set. Core
@@ -738,6 +739,8 @@ export async function handleCreatePersonalAccessToken(input: {
   operations?: ControlPlaneOperations;
   resolveOperations?: () => Promise<ControlPlaneOperations | undefined>;
   extensionScopes?: readonly TakosumiAccountsPatScope[];
+  /** Test-only override; production always uses the bounded default. */
+  workspaceAuthorityTimeoutMs?: number;
 }): Promise<Response> {
   const session = await requireAccountSession(input);
   if (!session.ok) return session.response;
@@ -790,14 +793,25 @@ export async function handleCreatePersonalAccessToken(input: {
     );
   }
   if (workspaceId) {
-    const operations =
-      input.operations ?? (await input.resolveOperations?.());
-    const ownsWorkspace = await subjectOwnsWorkspace({
-      operations,
+    const ownership = await resolveWorkspaceOwnership({
+      operations: input.operations,
+      resolveOperations: input.resolveOperations,
       subject: session.subject,
       workspaceId,
+      timeoutMs:
+        input.workspaceAuthorityTimeoutMs ??
+        PAT_WORKSPACE_AUTHORITY_TIMEOUT_MS,
     });
-    if (!ownsWorkspace) {
+    if (ownership === "unavailable") {
+      return errorJson(
+        "workspace_authority_unavailable",
+        "Workspace authority is temporarily unavailable.",
+        503,
+        input.request,
+        { "retry-after": "1" },
+      );
+    }
+    if (ownership === "not_found") {
       return errorJson("workspace_not_found", "workspace not found", 404);
     }
   }
@@ -823,23 +837,54 @@ export async function handleCreatePersonalAccessToken(input: {
   );
 }
 
-async function subjectOwnsWorkspace(input: {
+async function resolveWorkspaceOwnership(input: {
   readonly operations?: ControlPlaneOperations;
+  readonly resolveOperations?: () => Promise<ControlPlaneOperations | undefined>;
+  readonly subject: TakosumiSubject;
+  readonly workspaceId: string;
+  readonly timeoutMs: number;
+}): Promise<"owned" | "not_found" | "unavailable"> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const timeoutMs = Math.max(1, Math.floor(input.timeoutMs));
+  try {
+    return await Promise.race([
+      (async () => {
+        const operations =
+          input.operations ?? (await input.resolveOperations?.());
+        if (!operations) return "not_found" as const;
+        return (await subjectOwnsWorkspace({
+          operations,
+          subject: input.subject,
+          workspaceId: input.workspaceId,
+        }))
+          ? ("owned" as const)
+          : ("not_found" as const);
+      })(),
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error("Workspace authority timed out")),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } catch {
+    return "unavailable";
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+  }
+}
+
+async function subjectOwnsWorkspace(input: {
+  readonly operations: ControlPlaneOperations;
   readonly subject: TakosumiSubject;
   readonly workspaceId: string;
 }): Promise<boolean> {
-  const operations = input.operations;
-  if (!operations) return false;
-  try {
-    return Boolean(
-      await operations.workspaces.getWorkspaceForAccount(
-        input.subject,
-        input.workspaceId,
-      ),
-    );
-  } catch {
-    return false;
-  }
+  return Boolean(
+    await input.operations.workspaces.getWorkspaceForAccount(
+      input.subject,
+      input.workspaceId,
+    ),
+  );
 }
 
 export async function handleRevokePersonalAccessToken(input: {

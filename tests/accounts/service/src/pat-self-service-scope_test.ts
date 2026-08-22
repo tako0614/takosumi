@@ -8,6 +8,7 @@ import {
   type AccountsStore,
 } from "../../../../accounts/service/src/mod.ts";
 import { bearerWorkspaceAllows } from "../../../../accounts/service/src/account-session.ts";
+import { handleCreatePersonalAccessToken } from "../../../../accounts/service/src/pat-routes.ts";
 
 const ORIGIN = "https://accounts.example.test";
 const SUBJECT = "tsub_scope_catalog" as const;
@@ -98,6 +99,27 @@ test("resources:read PAT creation rejects a workspace outside the account fence"
     }),
   );
   expect(response.status).toBe(404);
+  expect(store.listPersonalAccessTokensForSubject(SUBJECT)).toHaveLength(0);
+});
+
+test("workspace PAT creation times out before minting when Control authority stalls", async () => {
+  const store = seededStore();
+  const response = await handleCreatePersonalAccessToken({
+    request: createRequest({
+      name: "Agent runtime",
+      scopes: ["read", "write"],
+      workspace_id: "ws_inventory",
+    }),
+    store,
+    resolveOperations: () => new Promise(() => undefined),
+    workspaceAuthorityTimeoutMs: 10,
+  });
+
+  expect(response.status).toBe(503);
+  expect(response.headers.get("retry-after")).toBe("1");
+  expect(await response.json()).toMatchObject({
+    error: { code: "workspace_authority_unavailable" },
+  });
   expect(store.listPersonalAccessTokensForSubject(SUBJECT)).toHaveLength(0);
 });
 
