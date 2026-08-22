@@ -1136,6 +1136,13 @@ export class InterfaceService {
     },
     actor?: ActorContext,
   ): Promise<IssueInterfaceTokenResponse> {
+	const debugStartedAt = Date.now();
+	const debugTokenPhase = (phase: string): void => {
+	  console.log(
+	    `[DEBUG-task0034-interface-token] ${JSON.stringify({ phase, interfaceId, elapsedMs: Date.now() - debugStartedAt })}`,
+	  );
+	};
+	debugTokenPhase("start");
     const permission = normalizeIssueTokenRequest(request);
     const workspaceId = requireText(principal.workspaceId, "workspaceId");
     const subjectId = requireText(principal.subjectId, "subjectId");
@@ -1151,6 +1158,7 @@ export class InterfaceService {
     const iface = await this.reconcile(interfaceId, {
       allowSafetyRecovery: true,
     });
+	debugTokenPhase("reconciled");
     if (iface.metadata.workspaceId !== workspaceId) {
       throw new InterfaceServiceError("not_found", "Interface not found");
     }
@@ -1169,6 +1177,7 @@ export class InterfaceService {
         "Interface token grant not found",
       );
     }
+	debugTokenPhase("binding_ready");
     const resource = resolvedOAuth2Resource(iface);
     if (!resource) {
       throw new InterfaceServiceError(
@@ -1190,12 +1199,14 @@ export class InterfaceService {
         "Interface owner is not authoritative for the OAuth2 resource",
       );
     }
+	debugTokenPhase("resource_authorized");
     if ((await this.#claimOAuth2Resource(iface, resource)) !== "claimed") {
       throw new InterfaceServiceError(
         "failed_precondition",
         "Interface OAuth2 resource is already claimed by another Interface",
       );
     }
+	debugTokenPhase("resource_claimed");
 
     const issuedAt = this.#now();
     const issuedAtMillis = Date.parse(issuedAt);
@@ -1218,6 +1229,7 @@ export class InterfaceService {
       permission,
       resource,
     });
+	debugTokenPhase("credential_issued");
     if (
       typeof issued.accessToken !== "string" ||
       issued.accessToken.length === 0 ||
