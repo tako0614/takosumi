@@ -656,6 +656,9 @@ export function createAccountsHandler(
           request,
           store,
           operations: options.controlPlaneOperations,
+          ...(options.patWorkspaceMembershipReader
+            ? { membershipReader: options.patWorkspaceMembershipReader }
+            : {}),
           ...(resolveControlPlaneOperations
             ? { resolveOperations: resolveControlPlaneOperations }
             : {}),

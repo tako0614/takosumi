@@ -738,6 +738,7 @@ export async function handleCreatePersonalAccessToken(input: {
   store: AccountsStore;
   operations?: ControlPlaneOperations;
   resolveOperations?: () => Promise<ControlPlaneOperations | undefined>;
+  membershipReader?: PatWorkspaceMembershipReader;
   extensionScopes?: readonly TakosumiAccountsPatScope[];
   /** Test-only override; production always uses the bounded default. */
   workspaceAuthorityTimeoutMs?: number;
@@ -796,6 +797,7 @@ export async function handleCreatePersonalAccessToken(input: {
     const ownership = await resolveWorkspaceOwnership({
       operations: input.operations,
       resolveOperations: input.resolveOperations,
+      membershipReader: input.membershipReader,
       subject: session.subject,
       workspaceId,
       timeoutMs:
@@ -840,6 +842,7 @@ export async function handleCreatePersonalAccessToken(input: {
 async function resolveWorkspaceOwnership(input: {
   readonly operations?: ControlPlaneOperations;
   readonly resolveOperations?: () => Promise<ControlPlaneOperations | undefined>;
+  readonly membershipReader?: PatWorkspaceMembershipReader;
   readonly subject: TakosumiSubject;
   readonly workspaceId: string;
   readonly timeoutMs: number;
@@ -849,6 +852,22 @@ async function resolveWorkspaceOwnership(input: {
   try {
     return await Promise.race([
       (async () => {
+        if (input.membershipReader) {
+          const member = await input.membershipReader.getMember(
+            input.workspaceId,
+            input.subject,
+          );
+          if (member !== undefined && !patWorkspaceMembershipIsWellFormed(member)) {
+            throw new TypeError("Workspace membership evidence is invalid");
+          }
+          return currentPatWorkspaceRole(
+            member,
+            input.workspaceId,
+            input.subject,
+          )
+            ? ("owned" as const)
+            : ("not_found" as const);
+        }
         const operations =
           input.operations ?? (await input.resolveOperations?.());
         if (!operations) return "not_found" as const;

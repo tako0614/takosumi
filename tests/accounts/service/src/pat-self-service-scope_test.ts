@@ -123,6 +123,39 @@ test("workspace PAT creation times out before minting when Control authority sta
   expect(store.listPersonalAccessTokensForSubject(SUBJECT)).toHaveLength(0);
 });
 
+test("workspace PAT creation uses the bounded membership reader without initializing Control", async () => {
+  const store = seededStore();
+  let controlInitializations = 0;
+  const handler = createAccountsHandler({
+    issuer: ORIGIN,
+    store,
+    resolveControlPlaneOperations: async () => {
+      controlInitializations += 1;
+      return await new Promise(() => undefined);
+    },
+    patWorkspaceMembershipReader: {
+      getMember: async (workspaceId, subject) => ({
+        workspaceId,
+        accountId: subject,
+        roles: ["owner"],
+        status: "active",
+      }),
+    },
+  });
+
+  const response = await handler(
+    createRequest({
+      name: "Agent runtime",
+      scopes: ["read", "write"],
+      workspace_id: "ws_inventory",
+    }),
+  );
+
+  expect(response.status).toBe(201);
+  expect(controlInitializations).toBe(0);
+  expect(store.listPersonalAccessTokensForSubject(SUBJECT)).toHaveLength(1);
+});
+
 test("Cloud AI PAT scopes are explicit, workspace-bound, and cataloged", async () => {
   const store = seededStore();
   const aiScopes = ["ai.models.read", "ai.chat", "ai.embeddings"] as const;
