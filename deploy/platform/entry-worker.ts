@@ -16,6 +16,7 @@ import {
   type PlatformWorkerVersionMetadata,
   withPlatformWorkerVersion,
 } from "./version_metadata_response.ts";
+import { composeTakoserverHostedWorkerEnv } from "./takoserver_hosted_worker.ts";
 
 export {
   CoordinationObject,
@@ -54,8 +55,9 @@ export default {
     env: VersionedPlatformEnv,
     context?: PlatformExecutionContext,
   ): Promise<Response> {
+    const composed = composeTakoserverHostedWorkerEnv(env);
     return withPlatformWorkerVersion(
-      await platformWorker.fetch(request, env, context),
+      await platformWorker.fetch(request, composed, context),
       env.TAKOSUMI_VERSION_METADATA,
     );
   },
@@ -64,6 +66,10 @@ export default {
     env: VersionedPlatformEnv,
     context?: PlatformExecutionContext,
   ): Promise<void> {
-    return platformWorker.scheduled(event, env, context);
+    return platformWorker.scheduled(
+      event,
+      composeTakoserverHostedWorkerEnv(env),
+      context,
+    );
   },
 };
