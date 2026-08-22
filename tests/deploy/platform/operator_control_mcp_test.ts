@@ -522,6 +522,10 @@ test("blueprint owns the ordinary mcp.server spec while the module stays provide
   expect(OPERATOR_CONTROL_MCP_INSTALL_CONFIG.interfaceBlueprints).toEqual([
     OPERATOR_CONTROL_MCP_INTERFACE_BLUEPRINT,
   ]);
+  expect(OPERATOR_CONTROL_MCP_INSTALL_CONFIG.sourceSelector).toEqual({
+    url: "https://github.com/tako0614/takosumi",
+    path: ".",
+  });
   expect(OPERATOR_CONTROL_MCP_INTERFACE_BLUEPRINT.bindings?.[0]).toMatchObject({
     subject: { source: "installing_principal" },
     permissions: ["mcp.invoke"],

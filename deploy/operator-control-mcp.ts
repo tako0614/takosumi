@@ -63,6 +63,10 @@ export const OPERATOR_CONTROL_MCP_INTERFACE_BLUEPRINT = Object.freeze({
 export const OPERATOR_CONTROL_MCP_INSTALL_CONFIG = Object.freeze({
   id: OPERATOR_CONTROL_MCP_INSTALL_CONFIG_ID,
   name: "takosumi-operator-control-mcp",
+  sourceSelector: {
+    url: "https://github.com/tako0614/takosumi",
+    path: ".",
+  },
   modulePath: "opentofu-modules/operator-control-mcp",
   variableMapping: {},
   variablePresentation: [

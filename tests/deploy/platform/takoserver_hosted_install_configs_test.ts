@@ -78,11 +78,15 @@ test("Takoserver Hosted wrapper keeps Worker variables enumerable for runtime co
 test("Takoserver Hosted composes the optional operator MCP InstallConfig when its route is enabled", () => {
   const composed = composeTakoserverHostedWorkerEnv({
     TAKOSUMI_OPERATOR_CONTROL_MCP_ENABLED: "1",
+    TAKOSUMI_ACCOUNTS_ISSUER: "https://app.takosumi.test",
   } as never);
 
   expect(composed.TAKOSUMI_INSTALL_CONFIG_COMPOSITION).toEqual([
     ...TAKOSERVER_HOSTED_INSTALL_CONFIGS,
-    OPERATOR_CONTROL_MCP_INSTALL_CONFIG,
+    {
+      ...OPERATOR_CONTROL_MCP_INSTALL_CONFIG,
+      variableMapping: { takosumi_origin: "https://app.takosumi.test" },
+    },
   ]);
 });
 

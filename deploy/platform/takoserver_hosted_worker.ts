@@ -29,10 +29,20 @@ export function composeTakoserverHostedWorkerEnv(
   // Copy the Worker bindings/variables as own enumerable properties and add
   // only the code-owned install composition.
   const value = { ...env } as CloudflareWorkerEnv;
+  const operatorOrigin =
+    typeof env.TAKOSUMI_ACCOUNTS_ISSUER === "string"
+      ? new URL(env.TAKOSUMI_ACCOUNTS_ISSUER).origin
+      : undefined;
+  const operatorInstallConfig = operatorOrigin
+    ? {
+        ...OPERATOR_CONTROL_MCP_INSTALL_CONFIG,
+        variableMapping: { takosumi_origin: operatorOrigin },
+      }
+    : OPERATOR_CONTROL_MCP_INSTALL_CONFIG;
   const installConfigs = operatorControlMcpEnabled(env)
     ? [
         ...TAKOSERVER_HOSTED_INSTALL_CONFIGS,
-        OPERATOR_CONTROL_MCP_INSTALL_CONFIG,
+        operatorInstallConfig,
       ]
     : TAKOSERVER_HOSTED_INSTALL_CONFIGS;
   Object.defineProperty(value, "TAKOSUMI_INSTALL_CONFIG_COMPOSITION", {
