@@ -1234,6 +1234,27 @@ function policySchemas(): Record<string, Record<string, unknown>> {
               uniqueItems: true,
               items: { type: "string", minLength: 1, maxLength: 128 },
             },
+            allowedInterfaceBindingProfiles: {
+              type: "array",
+              items: {
+                type: "object",
+                required: ["permissions", "deliveryType"],
+                properties: {
+                  permissions: {
+                    type: "array",
+                    minItems: 1,
+                    uniqueItems: true,
+                    items: { type: "string", minLength: 1, maxLength: 256 },
+                  },
+                  deliveryType: {
+                    type: "string",
+                    minLength: 1,
+                    maxLength: 128,
+                  },
+                },
+                additionalProperties: false,
+              },
+            },
             requiredManifestApiVersion: {
               enum: [
                 "takosumi.com/v2",

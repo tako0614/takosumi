@@ -17,7 +17,7 @@ test("platform worker wrangler wires D1/R2 and the OpenTofu runner container", a
   assert.doesNotMatch(wrangler, /TAKOS_SERVICE_CONTAINER/);
   // The single composed worker: accounts ledger + control-plane ledger.
   assert.match(wrangler, /name = "takosumi-platform"/);
-  assert.match(wrangler, /main = "worker\.ts"/);
+  assert.match(wrangler, /main = "entry-worker\.ts"/);
   assert.match(wrangler, /binding = "TAKOSUMI_ACCOUNTS_DB"/);
   assert.match(wrangler, /binding = "TAKOSUMI_CONTROL_DB"/);
   assert.match(wrangler, /binding = "R2_ARTIFACTS"/);

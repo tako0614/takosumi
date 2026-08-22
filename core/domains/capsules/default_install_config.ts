@@ -3,7 +3,10 @@ import type {
   InstallConfig,
   OutputAllowlistEntry,
 } from "takosumi-contract/install-configs";
-import { UI_SURFACE_OPEN_PERMISSION } from "takosumi-contract";
+import {
+  MCP_SERVER_INVOKE_PERMISSION,
+  UI_SURFACE_OPEN_PERMISSION,
+} from "takosumi-contract";
 
 export const DEFAULT_CAPSULE_INSTALL_CONFIG_ID = "cfg-default-opentofu-capsule";
 
@@ -29,7 +32,21 @@ export function defaultCapsuleInstallConfig(
     outputAllowlist: defaultCapsuleOutputAllowlist(),
     policy: {
       repositoryInstallUx: {
-        allowedInterfacePermissions: [UI_SURFACE_OPEN_PERMISSION],
+        // A repository may propose an installer-scoped launcher or MCP binding,
+        // but the proposal is still compiled into the reviewed InstallConfig;
+        // it never grants a Workspace-wide or operator credential.
+        allowedInterfacePermissions: [
+          UI_SURFACE_OPEN_PERMISSION,
+          MCP_SERVER_INVOKE_PERMISSION,
+        ],
+        allowedInterfaceDeliveryTypes: ["none", "oauth2"],
+        allowedInterfaceBindingProfiles: [
+          { permissions: [UI_SURFACE_OPEN_PERMISSION], deliveryType: "none" },
+          {
+            permissions: [MCP_SERVER_INVOKE_PERMISSION],
+            deliveryType: "oauth2",
+          },
+        ],
       },
     },
     createdAt: timestamp,

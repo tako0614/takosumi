@@ -201,6 +201,12 @@ closed object です。
   は1〜16件、delivery は `{ "type": token }` だけです。operator の明示的な
   permission/delivery allowlist が無い場合は拒否されます。
 
+generic default InstallConfig が許可するのは、installer本人に対する
+`ui.open` + `none` と `mcp.invoke` + `oauth2` だけです。これはinstall-planの
+reviewを通った一回限りのBinding proposalであり、Workspace全体やoperator権限を
+付与しません。その他のpermission/deliveryはoperator-owned InstallConfigで明示的に
+許可する必要があります。
+
 採用された proposal は既存の `InstallConfig.interfaceBlueprints` と
 `outputAllowlist` に stable key で merge されます。conflict は上書きせず失敗します。
 exact installing Principal の解決と Interface/Binding materialization は既存 host

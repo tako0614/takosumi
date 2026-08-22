@@ -56,13 +56,13 @@ const platformContract = ({ surface, target, environment }) => ({
     provenance:
       `plan binds one clean pushed OSS commit, the exact external realized ${environment} config digest, dashboard bytes, dry-run, and the exact 100 percent predecessor Version; execute rechecks all identities before upload`,
     "post-conditions":
-      "execute requires the published Version at 100 percent and proves the public root and Takosumi discovery document are served by that exact Version; authenticated Hosted extension E2E is a separate required composition check",
+      "execute requires the published Version at 100 percent, reads that immutable Version back with the exact required bindings and TakosumiHostRuntimeMaterializerEntrypoint export, and proves the public root and Takosumi discovery document are served; authenticated Hosted extension E2E is a separate required composition check",
     reversal:
       "the plan records the exact predecessor immutable Version and execute prints the one-Version restore command; deleted Durable Object storage is forward-only and cannot be restored by code rollback",
     "failure-handling":
       "stable private evidence distinguishes failed from indeterminate after mutation; execute never retries an upload and requires authoritative Version reconciliation before another attempt",
     "pre-mutation-proof":
-      `plan runs the dashboard build and Wrangler dry-run against the exact realized ${environment} config, then seals their digests and predecessor Version`,
+      `plan requires the host runtime derivation secret in Cloudflare's metadata-only secret list, runs the dashboard build and Wrangler dry-run against the exact realized ${environment} config, then seals the secret-name-set, config, dashboard, source, and predecessor Version digests`,
     "independent-review":
       "execute requires the exact plan confirmation and a named operator reviewer distinct from the source bytes",
     "no-overwrite":

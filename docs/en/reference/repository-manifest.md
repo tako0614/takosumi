@@ -216,6 +216,12 @@ public JSON `document`, optional `inputs`, and `access`.
   `{ "type": token }`. Missing operator permission/delivery allowlists reject
   the request.
 
+The generic default InstallConfig permits only `ui.open` with `none` and
+`mcp.invoke` with `oauth2`, both scoped to the installing Principal. These are
+one-shot binding proposals compiled through the reviewed install plan; they do
+not grant Workspace-wide or operator authority. Any other permission or
+delivery type requires an explicit operator-owned InstallConfig policy.
+
 Accepted proposals merge by stable key into existing
 `InstallConfig.interfaceBlueprints` and `outputAllowlist`; conflicts fail
 instead of overwriting. Existing host lifecycle resolves the exact installing

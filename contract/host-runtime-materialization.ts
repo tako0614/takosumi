@@ -237,6 +237,14 @@ export function parseInstallConfigHostRuntimeMaterialization(
     }
     throw new TypeError(`host runtime requirement ${index} kind is invalid`);
   });
+  if (
+    requirements.filter((requirement) => requirement.kind === "public_oidc")
+      .length > 1
+  ) {
+    throw new TypeError(
+      "host runtime materialization supports one public OIDC identity per installation",
+    );
+  }
   const backgroundActivations =
     document.backgroundActivations === undefined
       ? undefined

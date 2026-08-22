@@ -188,7 +188,12 @@ export async function handleCapsules(
         return await patchCapsule(request, operations, capsuleId);
       }
       if (method === "DELETE") {
-        return await deleteCapsule(operations, capsule, capsuleId);
+        return await deleteCapsule(
+          operations,
+          capsule,
+          capsuleId,
+          ctx.session.subject,
+        );
       }
       return methodNotAllowed("GET, PATCH, DELETE");
     }
@@ -246,7 +251,10 @@ export async function handleCapsules(
             : undefined;
       const response = await operations.createCapsuleDestroyPlan(
         capsuleId,
-        runnerProfileId ? { runnerProfileId } : undefined,
+        {
+          ...(runnerProfileId ? { runnerProfileId } : {}),
+          actor: ctx.session.subject,
+        },
       );
       return jsonStatus(
         await publicPlanActionResponse(operations, response),
@@ -461,6 +469,7 @@ async function deleteCapsule(
   operations: ControlPlaneOperations,
   capsule: Capsule,
   capsuleId: string,
+  actor: string,
 ): Promise<Response> {
   if (capsule.status === "destroyed") {
     return jsonStatus(
@@ -478,7 +487,9 @@ async function deleteCapsule(
       reason: "delete requested before first successful apply",
     });
   }
-  const response = await operations.createCapsuleDestroyPlan(capsuleId);
+  const response = await operations.createCapsuleDestroyPlan(capsuleId, {
+    actor,
+  });
   return jsonStatus(await publicPlanActionResponse(operations, response), 202);
 }
 

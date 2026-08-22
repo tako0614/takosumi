@@ -121,7 +121,7 @@ test("every MCP POST re-introspects exact Interface OAuth evidence and serves ad
   expect((await first?.json()).result.tools).toEqual(
     OPERATOR_CONTROL_MCP_TOOLS,
   );
-  expect((await second?.json()).result.tools).toHaveLength(8);
+  expect((await second?.json()).result.tools).toHaveLength(9);
   expect(
     OPERATOR_CONTROL_MCP_TOOLS.find(
       (tool) => tool.name === "takosumi_capsules_list",
@@ -135,6 +135,7 @@ test("every MCP POST re-introspects exact Interface OAuth evidence and serves ad
   for (const name of [
     "takosumi_install_plan_create",
     "takosumi_install_plan_reconcile",
+    "takosumi_capsule_destroy_plan",
   ]) {
     expect(
       OPERATOR_CONTROL_MCP_TOOLS.find((tool) => tool.name === name)
@@ -350,6 +351,62 @@ test("Interface OAuth subject and Workspace are forwarded to the public control 
   const result = await response?.json();
   expect(result.result.isError).toBe(false);
   expect(result.result.structuredContent.status).toBe(201);
+});
+
+test("Capsule destroy-plan tool stops at a reviewable Run without approving or applying", async () => {
+  const dispatched: Request[] = [];
+  const capsuleLookups: string[] = [];
+  const response = await handlePlatformOperatorControlMcpRequest(
+    request("tools/call", {
+      name: "takosumi_capsule_destroy_plan",
+      arguments: { capsuleId: "capsule_target" },
+    }),
+    env(),
+    {
+      verifySession: async () => interfaceSession(),
+      createAuthority: async () => ({
+        workspaceId: "workspace_a",
+        installPlanWorkspaceId: async () => undefined,
+        capsuleWorkspaceId: async (capsuleId) => {
+          capsuleLookups.push(capsuleId);
+          return "workspace_a";
+        },
+        runWorkspaceId: async () => undefined,
+        dispatchPublicControl: async (controlRequest) => {
+          dispatched.push(controlRequest);
+          return Response.json(
+            {
+              run: {
+                id: "run_destroy_plan",
+                workspaceId: "workspace_a",
+                capsuleId: "capsule_target",
+                type: "destroy_plan",
+                status: "waiting_approval",
+              },
+            },
+            { status: 201 },
+          );
+        },
+      }),
+    },
+  );
+
+  expect(capsuleLookups).toEqual(["capsule_target"]);
+  expect(dispatched).toHaveLength(1);
+  expect(dispatched[0]!.method).toBe("POST");
+  expect(new URL(dispatched[0]!.url).pathname).toBe(
+    "/api/v1/capsules/capsule_target/destroy-plan",
+  );
+  expect(await dispatched[0]!.json()).toEqual({});
+  expect((await response?.json()).result).toMatchObject({
+    isError: false,
+    structuredContent: {
+      status: 201,
+      body: {
+        run: { type: "destroy_plan", status: "waiting_approval" },
+      },
+    },
+  });
 });
 
 test("tool targets are fenced to the introspected Binding Workspace before public dispatch", async () => {

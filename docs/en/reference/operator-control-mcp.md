@@ -73,6 +73,7 @@ not give the client an operator token or a module provider credential.
 | `takosumi_install_plan_reconcile`   | Explicitly advance one install-plan phase           |
 | `takosumi_capsules_list`            | List Capsules                                       |
 | `takosumi_capsule_plan`             | Start a plan for an existing Capsule                |
+| `takosumi_capsule_destroy_plan`     | Create a destroy plan and stop for review           |
 | `takosumi_run_get`                  | Read Run status and the plan summary                |
 | `takosumi_run_approve`              | Approve a reviewed Run                              |
 | `takosumi_run_apply`                | Apply an approved saved plan                        |
@@ -80,7 +81,8 @@ not give the client an operator token or a module provider credential.
 Install-plan creation requires an `idempotencyKey` that the client preserves
 across retries. Reconcile only while `nextAction` is `reconcile`; when it
 becomes `review_run`, review the returned Run. The install plan never approves
-or applies that Run. `list` and `get` are read-only. `approve` and `apply`
+or applies that Run. The destroy-plan tool also only creates a reviewable Run;
+it never approves or applies it. `list` and `get` are read-only. `approve` and `apply`
 change state, so an MCP client should ask the user before calling them.
 
 The adapter returns the current tool list and input schemas through

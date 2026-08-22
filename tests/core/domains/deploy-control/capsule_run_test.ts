@@ -811,6 +811,19 @@ test("capsule plan dispatch carries sourceArchive + stateScope at the current ge
   expect(run.baseStateGeneration).toEqual(0);
 });
 
+test("Capsule Plan preserves the server-owned actor in the durable and public Run", async () => {
+  const { controller } = await seededController();
+  const actor = "git-install-plan:gip_actor_fence";
+  const { planRun } = await controller.createCapsulePlan(
+    "cap_fixture1",
+    { actor },
+    { planRunId: "plan_actor_fence" },
+  );
+
+  expect(planRun.createdBy).toBe(actor);
+  expect((await controller.getRun(planRun.id)).createdBy).toBe(actor);
+});
+
 test("explicit source build is sealed with the plan and replayed for apply", async () => {
   const sourceBuild = {
     commands: [
@@ -7786,6 +7799,69 @@ test("capsule destroy-plan apply tears down state at base+1 after approval and m
       (stateVersion) => stateVersion.generation,
     ),
   ).toEqual([1, 2]);
+});
+
+test("Capsule destroy fails closed before provider dispatch when host runtime authority cannot retire", async () => {
+  const { store, runner, controller } = await seededController({}, {
+    capsuleHostRuntimeRetirement: async ({ capsuleId }) => {
+      expect(capsuleId).toBe("cap_fixture1");
+      throw new Error("host runtime authority unavailable");
+    },
+  });
+  const create = await controller.createCapsulePlan("cap_fixture1");
+  await controller.createApplyRun({
+    planRunId: create.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(create.planRun),
+  });
+
+  const destroy = await controller.createCapsuleDestroyPlan("cap_fixture1");
+  await controller.approveRun(destroy.planRun.id);
+  const response = await controller.createApplyRun({
+    planRunId: destroy.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(destroy.planRun),
+  });
+
+  expect(response.applyRun.status).toBe("failed");
+  expect(runner.destroyJobs).toHaveLength(0);
+  expect(response.capsule?.status).toBe("active");
+  expect(response.capsule?.currentStateGeneration).toBe(1);
+  expect(
+    (await store.getLatestStateVersion("cap_fixture1", "preview"))?.generation,
+  ).toBe(1);
+});
+
+test("Capsule destroy retires host runtime authority before provider teardown", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const runner = recordingRunner();
+  const events: string[] = [];
+  const destroy = runner.destroy!.bind(runner);
+  runner.destroy = async (job) => {
+    events.push("provider_destroy");
+    return await destroy(job);
+  };
+  await seedRunnableCapsuleModel(store, { environment: "preview" });
+  const controller = controllerWith(store, runner, {
+    capsuleHostRuntimeRetirement: async ({ capsuleId }) => {
+      expect(capsuleId).toBe("cap_fixture1");
+      events.push("host_runtime_retire");
+    },
+  });
+  const create = await controller.createCapsulePlan("cap_fixture1");
+  await controller.createApplyRun({
+    planRunId: create.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(create.planRun),
+  });
+
+  const destroyPlan = await controller.createCapsuleDestroyPlan("cap_fixture1");
+  await controller.approveRun(destroyPlan.planRun.id);
+  const response = await controller.createApplyRun({
+    planRunId: destroyPlan.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(destroyPlan.planRun),
+  });
+
+  expect(response.applyRun.status).toBe("succeeded");
+  expect(events).toEqual(["host_runtime_retire", "provider_destroy"]);
+  expect((await store.getCapsule("cap_fixture1"))?.status).toBe("destroyed");
 });
 
 test("Capsule destroy Apply lets provider teardown retire owned Resources before terminalization", async () => {

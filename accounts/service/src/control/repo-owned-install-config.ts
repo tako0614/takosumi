@@ -489,6 +489,14 @@ export async function adoptRepoOwnedInstallConfig(
                 .allowedInterfaceDeliveryTypes,
           }
         : {}),
+      ...(input.baseConfig.policy?.repositoryInstallUx
+        ?.allowedInterfaceBindingProfiles
+        ? {
+            allowedInterfaceBindingProfiles:
+              input.baseConfig.policy.repositoryInstallUx
+                .allowedInterfaceBindingProfiles,
+          }
+        : {}),
     },
   });
   if (!compiled.ok) {

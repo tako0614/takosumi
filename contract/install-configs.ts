@@ -278,6 +278,15 @@ export interface PolicyConfig {
     /** Delivery mechanisms repository-owned Interface requests may use. */
     readonly allowedInterfaceDeliveryTypes?: readonly string[];
     /**
+     * Optional exact permission-set and delivery pairs. When present, a
+     * repository binding must match one whole profile; independently allowed
+     * permissions and delivery mechanisms cannot be recombined.
+     */
+    readonly allowedInterfaceBindingProfiles?: readonly {
+      readonly permissions: readonly string[];
+      readonly deliveryType: string;
+    }[];
+    /**
      * Optional operator gate for repository-owned install UX. When set, a
      * SourceSnapshot without this exact manifest API version cannot be used
      * for preview or Capsule creation.

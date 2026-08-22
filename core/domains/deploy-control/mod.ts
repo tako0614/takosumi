@@ -873,6 +873,17 @@ export interface DependencyValueSealer {
   ): Promise<Readonly<Record<string, JsonValue>>>;
 }
 
+/**
+ * Host-owned retirement of Capsule-scoped runtime authority that is not part
+ * of OpenTofu state. The Run engine supplies only the canonical Capsule id and
+ * invokes this immediately before provider destroy. Implementations must be
+ * idempotent because a process may lose the acknowledgement after retirement
+ * and re-enter the same still-undispatched destroy Run.
+ */
+export type CapsuleHostRuntimeRetirement = (input: {
+  readonly capsuleId: string;
+}) => Promise<void>;
+
 export interface OpenTofuControllerDependencies {
   readonly store?: OpenTofuControlStore;
   /**
@@ -979,6 +990,11 @@ export interface OpenTofuControllerDependencies {
    * filtered before either path.
    */
   readonly releaseActivator?: ReleaseActivator;
+  /**
+   * Host-owned Capsule runtime authority retirement. Failure prevents provider
+   * destroy; omission means the host has no out-of-state authority to retire.
+   */
+  readonly capsuleHostRuntimeRetirement?: CapsuleHostRuntimeRetirement;
   readonly observability?: Pick<ObservabilitySink, "recordMetric">;
   readonly metricTags?: Record<string, string>;
   /**
@@ -1435,6 +1451,8 @@ export class OpenTofuController {
       activity: this.#activity,
       dependencyValueSealer: this.#dependencyValueSealer,
       releaseActivator: this.#releaseActivator,
+      capsuleHostRuntimeRetirement:
+        dependencies.capsuleHostRuntimeRetirement,
       observability: this.#observability,
       metricTags: this.#metricTags,
       allowOperatorScopedProviderConnections:

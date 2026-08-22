@@ -82,6 +82,7 @@ test("generic run-issued credentials reach plan, apply, and destroy runner dispa
     workspaceId: WORKSPACE_ID,
     capsuleId: CAPSULE_ID,
     environment: "preview",
+    installConfig: { workspaceId: WORKSPACE_ID },
   });
   await store.putCapsule({
     ...seeded.capsule,

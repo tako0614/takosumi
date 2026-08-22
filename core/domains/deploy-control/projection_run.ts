@@ -145,7 +145,7 @@ function policyStatusFor(status: "passed" | "blocked"): "pass" | "deny" {
   return status === "passed" ? "pass" : "deny";
 }
 
-/** §19 Run.createdBy is required; default when the internal record has none. */
+/** §19 Run.createdBy is required; legacy internal rows default to system. */
 const DEFAULT_CREATED_BY = "system";
 
 export interface ProjectPlanRunOptions {
@@ -233,7 +233,7 @@ export function projectPlanRun(
       ? { requiresApproval: true }
       : {}),
     ...(errorCode ? { errorCode } : {}),
-    createdBy: DEFAULT_CREATED_BY,
+    createdBy: planRun.createdBy ?? DEFAULT_CREATED_BY,
     createdAt: new Date(planRun.createdAt).toISOString(),
     ...(iso(planRun.startedAt) ? { startedAt: iso(planRun.startedAt)! } : {}),
     ...(iso(planRun.finishedAt)

@@ -6,6 +6,13 @@ worker and connects optional commercial products through the public
 `PlatformExtensionRoute` plus private service bindings. It does not use a
 Takosumi Cloud wrapper.
 
+The official Worker entry is `deploy/platform/entry-worker.ts`. Besides the
+default HTTP handler it exports
+`TakosumiHostRuntimeMaterializerEntrypoint`; Takoserver reaches that named RPC
+only through its reviewed service binding. A release is not ready merely
+because Wrangler uploaded bytes: the owner reads the immutable Version back and
+requires that exact export and binding closure.
+
 This page documents the commands the platform worker deploy actually runs.
 A self-hoster applying them against infrastructure they own is exercising their
 own authority. The official operator uses the same owner entrypoint with
@@ -20,7 +27,8 @@ readback plus one real authenticated request, never blind-retry — are in
 
 ## Composition
 
-The OSS entry is `deploy/platform/worker.ts`. One operator-managed platform
+The OSS HTTP implementation is `deploy/platform/worker.ts`; the deployable
+module entry is `deploy/platform/entry-worker.ts`. One operator-managed platform
 worker composes Accounts, the Git/OpenTofu control plane, dashboard assets,
 runner dispatch, and the Interface/InterfaceBinding API. Canonical resources
 include the Accounts/control databases, source/artifact/state/backup stores,
@@ -65,9 +73,25 @@ Execute rechecks the source, config, dashboard bytes, and predecessor before
 the single upload. A touched target with missing post-conditions is
 `indeterminate`; reconcile the authoritative deployment before another
 attempt. Successful execute records the immutable predecessor and new serving
-Version. The authenticated Hosted subscription read is a separate E2E
-post-condition after publication; cloud-resource and AI E2E run against
-Takoserver's owning endpoints.
+Version. The immutable Version readback requires one exact required binding of
+each expected type, the configured Hosted service, and the private host-runtime
+materializer entrypoint. The public root and discovery document must then emit
+that exact Version id as `x-takosumi-version-id`; a cache hit or another serving
+Version cannot satisfy the release evidence. Plan and execute both read
+Cloudflare's metadata-only secret list and require
+`TAKOSUMI_HOST_RUNTIME_SECRET_DERIVATION_KEY`; the value never enters a plan,
+command line, log, or evidence file. The authenticated Hosted subscription read
+is a separate E2E post-condition after publication; cloud-resource and AI E2E
+run against Takoserver's owning endpoints.
+
+Host runtime materialization accepts at most one repository-declared public
+OIDC identity per installation. Generated values are derived before Accounts
+is mutated. If public-client registration changes, the private materializer
+returns an authenticated opaque rollback receipt; a failed immutable Worker
+Version upload must return that receipt to the same entrypoint and confirm the
+exact Accounts compare-and-swap rollback. The provider never receives the
+receipt payload or any materialized value in state, Output, audit, or an agent
+response.
 
 ## Self-host build and deployment
 

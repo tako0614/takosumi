@@ -2173,7 +2173,10 @@ function sameRunCredentialContext(
     left.capsuleId === right.capsuleId &&
     left.runId === right.runId &&
     left.installingPrincipalId === right.installingPrincipalId &&
-    left.phase === right.phase
+    left.phase === right.phase &&
+    left.lifecycleIntent === right.lifecycleIntent &&
+    JSON.stringify(left.hostRuntimeMaterialization ?? null) ===
+      JSON.stringify(right.hostRuntimeMaterialization ?? null)
   );
 }
 

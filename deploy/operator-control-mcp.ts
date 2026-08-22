@@ -300,6 +300,24 @@ const TOOLS = Object.freeze([
     },
   },
   {
+    name: "takosumi_capsule_destroy_plan",
+    description:
+      "Create a policy-checked destroy Plan for one Capsule in the bound Workspace. The Run stops at review and is never approved or applied by this tool.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        capsuleId: { type: "string", minLength: 1 },
+      },
+      required: ["capsuleId"],
+      additionalProperties: false,
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+    },
+  },
+  {
     name: "takosumi_run_get",
     description:
       "Read one Run from the Workspace authorized by the current InterfaceBinding.",
@@ -514,6 +532,18 @@ async function publicControlRequest(
     return jsonRequest(
       `${origin}/api/v1/capsules/${encodeURIComponent(capsuleId)}/plan`,
       runnerProfileId ? { runnerProfileId } : {},
+    );
+  }
+  if (name === "takosumi_capsule_destroy_plan") {
+    assertOnlyKeys(args, ["capsuleId"]);
+    const capsuleId = requiredId(args.capsuleId, "capsuleId");
+    await requireWorkspaceTarget(
+      await authority.capsuleWorkspaceId(capsuleId),
+      authority.workspaceId,
+    );
+    return jsonRequest(
+      `${origin}/api/v1/capsules/${encodeURIComponent(capsuleId)}/destroy-plan`,
+      {},
     );
   }
   const runId = requiredId(args.runId, "runId");

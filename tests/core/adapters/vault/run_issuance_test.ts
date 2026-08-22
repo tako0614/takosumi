@@ -591,6 +591,7 @@ async function seedRunningPlan(
   const { capsule } = await seedCapsuleModel(store, {
     workspaceId: "workspace_1",
     capsuleId: "capsule_1",
+    installConfig: { workspaceId: "workspace_1" },
   });
   await store.putCapsule({
     ...capsule,

@@ -2,11 +2,14 @@ import { expect, test } from "bun:test";
 import { resolve } from "node:path";
 import {
   assertConfigTargetsSource,
+  assertPublishedVersion,
+  assertRequiredSecretNames,
   bindingNames,
   parsePlatformWorkerReleaseArgs,
   parseServingVersion,
   platformTargetForEnvironment,
   selectRecoveredVersion,
+  secretNames,
 } from "../../scripts/platform-worker-release.ts";
 
 const root = resolve(import.meta.dir, "../..");
@@ -27,14 +30,16 @@ test("platform release owns isolated staging and production targets", () => {
 test("production config must bind the isolated production Hosted service", () => {
   const source = (
     service: string,
-    main = resolve(root, "deploy/platform/takoserver_hosted_worker.ts"),
+    main = resolve(root, "deploy/platform/entry-worker.ts"),
     includeBroker = true,
     basePath = "/api/v1/hosted/subscription",
+    includeVersionMetadata = true,
   ) => `
 name = "takosumi"
 main = "${main}"
 [assets]
 directory = "${resolve(root, "dashboard/dist")}"
+${includeVersionMetadata ? '[version_metadata]\nbinding = "TAKOSUMI_VERSION_METADATA"' : ""}
 [[services]]
 binding = "HOSTED"
 service = "${service}"
@@ -123,7 +128,7 @@ TAKOSUMI_PLATFORM_EXTENSIONS = '${JSON.stringify([
     assertConfigTargetsSource(
       source(
         "takosumi-hosted",
-        resolve(root, "deploy/platform/takoserver_hosted_worker.ts"),
+        resolve(root, "deploy/platform/entry-worker.ts"),
         false,
       ),
       "/private/wrangler.toml",
@@ -134,9 +139,22 @@ TAKOSUMI_PLATFORM_EXTENSIONS = '${JSON.stringify([
     assertConfigTargetsSource(
       source(
         "takosumi-hosted",
-        resolve(root, "deploy/platform/takoserver_hosted_worker.ts"),
+        resolve(root, "deploy/platform/entry-worker.ts"),
         true,
         "/v1/hosted/subscription",
+      ),
+      "/private/wrangler.toml",
+      "production",
+    ),
+  ).toThrow("platform_worker_release_config_source_invalid");
+  expect(() =>
+    assertConfigTargetsSource(
+      source(
+        "takosumi-hosted",
+        resolve(root, "deploy/platform/entry-worker.ts"),
+        true,
+        "/api/v1/hosted/subscription",
+        false,
       ),
       "/private/wrangler.toml",
       "production",
@@ -240,8 +258,101 @@ test("lost acknowledgement recovery selects one post-plan Version and exact bind
   expect(
     bindingNames(
       JSON.stringify({
-        resources: [{ name: "ASSETS" }, { binding: "HOSTED" }],
+        resources: {
+          bindings: [{ name: "ASSETS" }, { binding: "HOSTED" }],
+        },
       }),
     ),
   ).toEqual(["ASSETS", "HOSTED"]);
+});
+
+test("platform release requires the host runtime derivation secret by name only", () => {
+  expect(
+    secretNames(
+      JSON.stringify([
+        { name: "OTHER_SECRET", type: "secret_text" },
+        {
+          name: "TAKOSUMI_HOST_RUNTIME_SECRET_DERIVATION_KEY",
+          type: "secret_text",
+        },
+      ]),
+    ),
+  ).toEqual([
+    "OTHER_SECRET",
+    "TAKOSUMI_HOST_RUNTIME_SECRET_DERIVATION_KEY",
+  ]);
+  expect(() => assertRequiredSecretNames(["OTHER_SECRET"])).toThrow(
+    "platform_worker_release_required_secret_missing",
+  );
+  expect(() => secretNames('[{"name":"DUP"},{"name":"DUP"}]')).toThrow(
+    "platform_worker_release_secret_list_invalid",
+  );
+});
+
+test("ready evidence requires exact bindings and the Named RPC export", () => {
+  const version = (
+    handlers: readonly string[],
+    hostedService = "takosumi-hosted",
+  ) =>
+    JSON.stringify({
+      resources: {
+        script: { handlers },
+        bindings: [
+          { name: "ASSETS", type: "assets" },
+          { name: "TAKOSUMI_ACCOUNTS_DB", type: "d1" },
+          { name: "TAKOSUMI_CONTROL_DB", type: "d1" },
+          {
+            name: "HOSTED",
+            type: "service",
+            service: hostedService,
+          },
+          { name: "TAKOSUMI_VERSION_METADATA", type: "version_metadata" },
+        ],
+      },
+    });
+  expect(() =>
+    assertPublishedVersion(
+      version(["fetch", "TakosumiHostRuntimeMaterializerEntrypoint"]),
+      "takosumi-hosted",
+    ),
+  ).not.toThrow();
+  expect(() =>
+    assertPublishedVersion(version(["fetch"]), "takosumi-hosted"),
+  ).toThrow(
+    "platform_worker_release_materializer_entrypoint_missing",
+  );
+  expect(() =>
+    assertPublishedVersion(
+      version(
+        ["fetch", "TakosumiHostRuntimeMaterializerEntrypoint"],
+        "unreviewed-hosted-service",
+      ),
+      "takosumi-hosted",
+    ),
+  ).toThrow("platform_worker_release_binding_invalid");
+  expect(() =>
+    assertPublishedVersion(
+      JSON.stringify({
+        resources: {
+          script: {
+            handlers: ["TakosumiHostRuntimeMaterializerEntrypoint"],
+          },
+          bindings: [{ name: "ASSETS" }],
+        },
+      }),
+      "takosumi-hosted",
+    ),
+  ).toThrow("platform_worker_release_binding_invalid");
+  expect(() =>
+    assertPublishedVersion(
+      JSON.stringify({
+        resources: {
+          script: {
+            handlers: ["TakosumiHostRuntimeMaterializerEntrypoint"],
+          },
+        },
+      }),
+      "takosumi-hosted",
+    ),
+  ).toThrow("platform_worker_release_version_invalid");
 });

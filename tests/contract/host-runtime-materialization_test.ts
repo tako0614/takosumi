@@ -86,6 +86,26 @@ test("host runtime declaration rejects plaintext-shaped refs, duplicate bindings
     "binding must be unique",
   );
 
+  const multipleOidc = structuredClone(declaration());
+  const secondOidc = structuredClone(multipleOidc.requirements[2]!);
+  secondOidc.id = "identity-secondary";
+  secondOidc.bindings.issuerUrl.binding = "SECONDARY_OIDC_ISSUER";
+  secondOidc.bindings.issuerUrl.capabilityRef =
+    "capability:oidc-secondary/issuer";
+  secondOidc.bindings.clientId.binding = "SECONDARY_OIDC_CLIENT_ID";
+  secondOidc.bindings.clientId.capabilityRef =
+    "capability:oidc-secondary/client-id";
+  secondOidc.bindings.ownerSubject.binding = "SECONDARY_OIDC_OWNER_SUB";
+  secondOidc.bindings.ownerSubject.capabilityRef =
+    "capability:oidc-secondary/owner-subject";
+  secondOidc.bindings.redirectUri.binding = "SECONDARY_OIDC_REDIRECT_URI";
+  secondOidc.bindings.redirectUri.capabilityRef =
+    "capability:oidc-secondary/redirect-uri";
+  multipleOidc.requirements.push(secondOidc);
+  expect(() => parseInstallConfigHostRuntimeMaterialization(multipleOidc)).toThrow(
+    "one public OIDC identity",
+  );
+
   const retry = structuredClone(declaration());
   retry.backgroundActivations[0]!.retry.onExhausted = "dead_letter";
   delete retry.backgroundActivations[0]!.deadLetterConnectionAlias;

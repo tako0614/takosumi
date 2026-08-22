@@ -226,6 +226,8 @@ export interface DeployControlAuditEvent {
 export interface PlanRun {
   readonly id: string;
   readonly workspaceId: string;
+  /** Exact server-owned actor that created this PlanRun. */
+  readonly createdBy?: string;
   readonly capsuleId?: string;
   readonly capsuleCurrentStateVersionId?: string | null;
   readonly source: OpenTofuExecutionSource;

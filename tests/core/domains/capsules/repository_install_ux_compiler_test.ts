@@ -321,6 +321,52 @@ describe("repository install UX compiler", () => {
     ]);
   });
 
+  test("does not recombine independently allowed Interface permissions and delivery types", () => {
+    const document = {
+      apiVersion: "takosumi.com/v2.2",
+      kind: "Repository",
+      install: {
+        defaultModule: ".",
+        modules: {
+          ".": {
+            inputs: [],
+            requires: [
+              {
+                kind: "interface.consume",
+                key: "control",
+                interface: { type: "mcp.server", version: "2025-11-25" },
+                permissions: ["mcp.invoke"],
+                delivery: { type: "none" },
+              },
+            ],
+          },
+        },
+      },
+    } satisfies RepositoryManifestDocument;
+    const result = compile({
+      document,
+      compatibilityReport: report({
+        rootModuleVariables: [],
+        rootModuleVariableDeclarations: [],
+      }),
+      policy: {
+        allowedInterfacePermissions: ["ui.open", "mcp.invoke"],
+        allowedInterfaceDeliveryTypes: ["none", "oauth2"],
+        allowedInterfaceBindingProfiles: [
+          { permissions: ["ui.open"], deliveryType: "none" },
+          { permissions: ["mcp.invoke"], deliveryType: "oauth2" },
+        ],
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.diagnostic.code).toBe(
+        "repository_install_ux_interface_binding_profile_disallowed",
+      );
+    }
+  });
+
   test("requires an exact snapshot and module compatibility report", () => {
     const snapshotMismatch = compile({ sourceSnapshotId: "snap_other" });
     expect(snapshotMismatch).toEqual({

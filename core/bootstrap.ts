@@ -31,6 +31,7 @@ import type { ArtifactReferenceAllocator } from "./adapters/storage/artifact-ref
 import { currentRuntime } from "./shared/runtime/index.ts";
 import { createRoleReadinessProbes } from "./bootstrap/readiness.ts";
 import {
+  type CapsuleHostRuntimeRetirement,
   type DependencyValueSealer,
   type EnqueueRun,
   OpenTofuControllerError,
@@ -868,6 +869,11 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
    * returns terminal `succeeded`; a missing executor is never deferred work.
    */
   readonly releaseActivator?: ReleaseActivator;
+  /**
+   * Required host cleanup for Capsule-scoped runtime authority outside
+   * OpenTofu state. A failure prevents provider destroy.
+   */
+  readonly capsuleHostRuntimeRetirement?: CapsuleHostRuntimeRetirement;
   /** Explicit host showback price policy; omitted leaves measurements unrated. */
   readonly showbackRater?: ShowbackRater;
   /**
@@ -1189,6 +1195,7 @@ export interface TakosumiOperations {
     capsuleId: string,
     options?: {
       readonly runnerProfileId?: string;
+      readonly actor?: string;
     },
   ): Promise<PlanRunResponse>;
   /**
@@ -1619,6 +1626,12 @@ export async function createTakosumiService(
       : {}),
     ...(options.releaseActivator
       ? { releaseActivator: options.releaseActivator }
+      : {}),
+    ...(options.capsuleHostRuntimeRetirement
+      ? {
+          capsuleHostRuntimeRetirement:
+            options.capsuleHostRuntimeRetirement,
+        }
       : {}),
     ...(showbackRater ? { showbackRater } : {}),
     ...(billingEnforcement ? { billingEnforcement } : {}),
@@ -3722,7 +3735,7 @@ export async function createTakosumiService(
     createCapsuleDestroyPlan: (capsuleId, options) =>
       opentofuController.createCapsuleDestroyPlan(
         capsuleId,
-        {},
+        options?.actor ? { actor: options.actor } : {},
         options?.runnerProfileId
           ? { runnerProfileId: options.runnerProfileId }
           : {},

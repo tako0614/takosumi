@@ -70,13 +70,15 @@ module の provider credential は client へ渡しません。
 | `takosumi_install_plan_reconcile`   | install-plan を明示的に一段だけ進める                  |
 | `takosumi_capsules_list`            | Capsule の一覧を読む                                  |
 | `takosumi_capsule_plan`             | 既存 Capsule の plan を開始する                        |
+| `takosumi_capsule_destroy_plan`     | 既存 Capsule の destroy plan を作り review で停止する  |
 | `takosumi_run_get`                  | Run の状態と plan の要約を読む                         |
 | `takosumi_run_approve`              | 確認済みの Run を承認する                              |
 | `takosumi_run_apply`                | 承認済みの保存済み plan を apply する                  |
 
 install-plan create には client が再試行でも維持する `idempotencyKey` が必須です。
 `nextAction: reconcile` の間だけ reconcile を繰り返し、`review_run` になったら返された
-Run を確認します。install-plan 自体は approve/apply しません。`list` と `get` は
+Run を確認します。install-plan 自体は approve/apply しません。destroy-plan tool も
+review 待ち Run を作るだけで、approve/apply は行いません。`list` と `get` は
 読み取り専用です。`approve` と `apply` は変更を伴うため、MCP client は実行前に
 利用者へ確認する必要があります。
 

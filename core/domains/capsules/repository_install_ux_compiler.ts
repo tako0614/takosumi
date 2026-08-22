@@ -107,6 +107,7 @@ export type RepositoryInstallUxDiagnosticCode =
   | "repository_install_ux_interface_output_secrecy_unknown"
   | "repository_install_ux_interface_output_type_conflict"
   | "repository_install_ux_interface_binding_invalid"
+  | "repository_install_ux_interface_binding_profile_disallowed"
   | "repository_install_ux_interface_permission_disallowed"
   | "repository_install_ux_interface_delivery_disallowed"
   | "repository_install_ux_source_build_version_unsupported"
@@ -125,6 +126,11 @@ export interface RepositoryInstallUxCompilerPolicy {
   readonly allowedInterfacePermissions?: readonly string[];
   /** Delivery tokens accepted from repository-owned binding requests. */
   readonly allowedInterfaceDeliveryTypes?: readonly string[];
+  /** Exact permission-set and delivery pairs accepted from the repository. */
+  readonly allowedInterfaceBindingProfiles?: readonly {
+    readonly permissions: readonly string[];
+    readonly deliveryType: string;
+  }[];
 }
 
 export interface CompileRepositoryInstallUxInput {
@@ -285,6 +291,7 @@ export function compileRepositoryInstallUx(
       input.policy?.allowedOidcScopes,
       input.policy?.allowedInterfacePermissions,
       input.policy?.allowedInterfaceDeliveryTypes,
+      input.policy?.allowedInterfaceBindingProfiles,
     );
     if (validation) return validation;
   }
@@ -774,6 +781,18 @@ function compileInterfaceBindingRequests(
         `Interface binding ${boundedIdentifier(request.key)} requests a delivery type outside operator policy.`,
       );
     }
+    if (
+      !bindingProfileAllowed(
+        [...permissions],
+        deliveryType,
+        policy?.allowedInterfaceBindingProfiles,
+      )
+    ) {
+      return invalid(
+        "repository_install_ux_interface_binding_profile_disallowed",
+        `Interface binding ${boundedIdentifier(request.key)} does not match an exact operator-approved permission and delivery profile.`,
+      );
+    }
     // The manifest type intentionally has no credentialRef/options fields. The
     // runtime check keeps manually constructed documents fail-closed too.
     if (Object.keys(request.delivery ?? {}).some((key) => key !== "type")) {
@@ -791,6 +810,22 @@ function compileInterfaceBindingRequests(
   }
   normalized.sort((left, right) => left.key.localeCompare(right.key));
   return { ok: true, bindings: normalized };
+}
+
+function bindingProfileAllowed(
+  permissions: readonly string[],
+  deliveryType: string,
+  profiles:
+    | RepositoryInstallUxCompilerPolicy["allowedInterfaceBindingProfiles"]
+    | undefined,
+): boolean {
+  if (profiles === undefined) return true;
+  const requested = [...new Set(permissions)].sort().join("\u0000");
+  return profiles.some(
+    (profile) =>
+      profile.deliveryType === deliveryType &&
+      [...new Set(profile.permissions)].sort().join("\u0000") === requested,
+  );
 }
 
 function validateInputDeclaration(
@@ -862,6 +897,9 @@ function validateRequirement(
   allowedOidcScopes: readonly string[] | undefined,
   allowedInterfacePermissions: readonly string[] | undefined,
   allowedInterfaceDeliveryTypes: readonly string[] | undefined,
+  allowedInterfaceBindingProfiles:
+    | RepositoryInstallUxCompilerPolicy["allowedInterfaceBindingProfiles"]
+    | undefined,
 ): CompileRepositoryInstallUxResult | undefined {
   if (!allowedKinds.has(requirement.kind)) {
     return invalid(
@@ -893,6 +931,18 @@ function validateRequirement(
       return invalid(
         "repository_install_ux_interface_delivery_disallowed",
         `Consumed Interface ${boundedIdentifier(requirement.key)} requests a delivery type outside operator policy.`,
+      );
+    }
+    if (
+      !bindingProfileAllowed(
+        requirement.permissions,
+        requirement.delivery.type,
+        allowedInterfaceBindingProfiles,
+      )
+    ) {
+      return invalid(
+        "repository_install_ux_interface_binding_profile_disallowed",
+        `Consumed Interface ${boundedIdentifier(requirement.key)} does not match an exact operator-approved permission and delivery profile.`,
       );
     }
     return undefined;

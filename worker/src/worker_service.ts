@@ -7,6 +7,7 @@ import type { AppAdapters } from "../../core/app_context.ts";
 import { selectSecretBoundaryCrypto } from "../../core/adapters/secret-store/memory.ts";
 import { ObjectKeyArtifactReferenceAllocator } from "../../core/adapters/storage/artifact-references.ts";
 import type {
+  CapsuleHostRuntimeRetirement,
   EnqueueRun,
   OpenTofuRunnerExecutorRegistry,
   ReleaseActivator,
@@ -81,6 +82,7 @@ import {
   issueInterfaceOAuthAccessToken,
   resolveD1AccountsSchemaMode,
 } from "@takosjp/takosumi-accounts-service";
+import { retireCapsulePublicOidcIdentity } from "./capsule_public_oidc_retirement.ts";
 import {
   connectionOAuthDescriptorsFromEnv,
   REFERENCE_CREDENTIAL_RECIPE_COMPOSITION,
@@ -174,6 +176,8 @@ export async function createWorkerServiceApp(
     readonly resolveResourceCapsuleOwner?: CreateTakosumiServiceOptions["resolveResourceCapsuleOwner"];
     /** Cloud-hosted sealed material activation/retirement lifecycle. */
     readonly hostRuntimeResourceLifecycle?: CreateTakosumiServiceOptions["hostRuntimeResourceLifecycle"];
+    /** Capsule-scoped Accounts/runtime authority cleanup before destroy. */
+    readonly capsuleHostRuntimeRetirement?: CreateTakosumiServiceOptions["capsuleHostRuntimeRetirement"];
     /** Exact same-native Form transition ports; both or neither must be set. */
     readonly resourceFormTransitionHost?: CreateTakosumiServiceOptions["resourceFormTransitionHost"];
     readonly resourceFormTransitionEvidence?: CreateTakosumiServiceOptions["resourceFormTransitionEvidence"];
@@ -279,13 +283,27 @@ export async function createWorkerServiceApp(
   const resolveFormInterfaceResourceUri =
     options.resolveFormInterfaceResourceUri ??
     formInterfaceResourceUriResolverFromEnv(env);
-  const interfaceCredentialIssuer = env.TAKOSUMI_ACCOUNTS_DB
-    ? interfaceCredentialIssuerFromAccountsStore(
-        new D1AccountsStore(env.TAKOSUMI_ACCOUNTS_DB, {
-          schemaMode: accountsD1SchemaMode,
-        }),
-      )
+  const accountsStore = env.TAKOSUMI_ACCOUNTS_DB
+    ? new D1AccountsStore(env.TAKOSUMI_ACCOUNTS_DB, {
+        schemaMode: accountsD1SchemaMode,
+      })
     : undefined;
+  const interfaceCredentialIssuer = accountsStore
+    ? interfaceCredentialIssuerFromAccountsStore(accountsStore)
+    : undefined;
+  const capsuleHostRuntimeRetirement: CapsuleHostRuntimeRetirement | undefined =
+    options.capsuleHostRuntimeRetirement ??
+    (accountsStore
+      ? async ({ capsuleId }) => {
+          if (accountsD1SchemaMode !== "predeployed") {
+            await accountsStore.initialize();
+          }
+          await retireCapsulePublicOidcIdentity({
+            store: accountsStore,
+            capsuleId,
+          });
+        }
+      : undefined);
   const interfaceOAuth2ResourceAuthorizer =
     workerInterfaceOAuth2ResourceAuthorizer(
       env,
@@ -406,6 +424,9 @@ export async function createWorkerServiceApp(
       : {}),
     ...(options.hostRuntimeResourceLifecycle
       ? { hostRuntimeResourceLifecycle: options.hostRuntimeResourceLifecycle }
+      : {}),
+    ...(capsuleHostRuntimeRetirement
+      ? { capsuleHostRuntimeRetirement }
       : {}),
     ...(options.resourceFormTransitionHost
       ? { resourceFormTransitionHost: options.resourceFormTransitionHost }

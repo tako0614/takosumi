@@ -15,7 +15,7 @@
 # (takosumi/deploy/platform/).
 
 name = "takosumi-platform"
-main = "worker.ts"
+main = "entry-worker.ts"
 compatibility_date = "2026-04-01"
 compatibility_flags = ["nodejs_compat"]
 
@@ -32,6 +32,9 @@ directory = "../../dashboard/dist"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
 run_worker_first = true
+
+[version_metadata]
+binding = "TAKOSUMI_VERSION_METADATA"
 
 [observability]
 enabled = true
@@ -204,6 +207,7 @@ TAKOSUMI_PRODUCTION_HARDENING_GATE = "observe"
 #   TAKOSUMI_ACCOUNTS_ES256_PREVIOUS_PUBLIC_JWKS   optional public-only JWKS for signing-key rotation overlap
 #   TAKOSUMI_SECRET_STORE_PASSPHRASE               sealed SecretBlob/vault passphrase
 #   TAKOSUMI_ACCOUNTS_OIDC_PAIRWISE_SUBJECT_SECRET pairwise OIDC subject secret
+#   TAKOSUMI_HOST_RUNTIME_SECRET_DERIVATION_KEY     deterministic Capsule runtime secret root
 #   TAKOSUMI_ACCOUNT_SESSION_HASH_SALT             account session hash-at-rest salt
 #   TAKOSUMI_ACCOUNTS_SUBJECT_SECRET               upstream OAuth subject mapping secret
 #   TAKOSUMI_ACCOUNTS_PRIVACY_OPERATIONS_TOKEN     operator token for privacy request completion

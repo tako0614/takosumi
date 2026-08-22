@@ -217,6 +217,7 @@ import type { ArtifactReferenceAllocator } from "../../../adapters/storage/artif
 import type {
   CreateCapsulePlanInternal,
   ApplyRunInternalContext,
+  CapsuleHostRuntimeRetirement,
   DependencyValueSealer,
   DeployControlActorContext,
   EnqueueRun,
@@ -1096,6 +1097,7 @@ export interface RunEngineDependencies {
   readonly activity: ActivityRecorder;
   readonly dependencyValueSealer?: DependencyValueSealer;
   readonly releaseActivator?: ReleaseActivator;
+  readonly capsuleHostRuntimeRetirement?: CapsuleHostRuntimeRetirement;
   readonly observability?: Pick<ObservabilitySink, "recordMetric">;
   readonly metricTags: Record<string, string>;
   readonly allowOperatorScopedProviderConnections: boolean;
@@ -1132,6 +1134,7 @@ export class RunEngine {
   readonly #activity: ActivityRecorder;
   readonly #dependencyValueSealer?: DependencyValueSealer;
   readonly #releaseActivator?: ReleaseActivator;
+  readonly #capsuleHostRuntimeRetirement?: CapsuleHostRuntimeRetirement;
   readonly #observability?: Pick<ObservabilitySink, "recordMetric">;
   readonly #metricTags: Record<string, string>;
   readonly #allowOperatorScopedProviderConnections: boolean;
@@ -1175,6 +1178,7 @@ export class RunEngine {
     this.#activity = deps.activity;
     this.#dependencyValueSealer = deps.dependencyValueSealer;
     this.#releaseActivator = deps.releaseActivator;
+    this.#capsuleHostRuntimeRetirement = deps.capsuleHostRuntimeRetirement;
     this.#observability = deps.observability;
     this.#metricTags = deps.metricTags;
     this.#allowOperatorScopedProviderConnections =
@@ -1548,6 +1552,7 @@ export class RunEngine {
     let planRun: PlanRun = {
       id: planRunId,
       workspaceId,
+      createdBy: context.actor ?? "system",
       ...(requestCapsuleId ? { capsuleId: requestCapsuleId } : {}),
       ...(capsule
         ? {
@@ -8756,6 +8761,25 @@ export class RunEngine {
           }
           effectiveRunning = persistedLifecycle.run as ApplyRun;
         }
+      }
+      if (this.#capsuleHostRuntimeRetirement) {
+        // Host-owned identity/credential authority is outside OpenTofu state,
+        // so the provider cannot retire it. Remove it under the same Run and
+        // Capsule lease immediately before provider destroy. Failure stays
+        // pre-dispatch and leaves the deployed runtime and Capsule active.
+        // A lost acknowledgement may re-enter this call; the host contract is
+        // therefore explicitly idempotent and must confirm current absence.
+        await this.#withRunRenewal(
+          "apply",
+          effectiveRunning,
+          leaseToken,
+          lease,
+          async () => {
+            await this.#capsuleHostRuntimeRetirement!({
+              capsuleId: capsule.id,
+            });
+          },
+        );
       }
       runnerDispatched = true;
       const destroyFn = runner.destroy;

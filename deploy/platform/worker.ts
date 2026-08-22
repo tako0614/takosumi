@@ -54,6 +54,7 @@ import {
   cachedDeployControlService,
   TAKOSUMI_INTERNAL_RESOURCE_CAPSULE_OWNER_HEADER,
 } from "../../worker/src/deploy_control_seam.ts";
+import { retireCapsulePublicOidcIdentity } from "../../worker/src/capsule_public_oidc_retirement.ts";
 import { createCloudflareD1OpenTofuControlStore } from "../../worker/src/d1_opentofu_store.ts";
 import { createCloudflareD1PatWorkspaceMembershipReader } from "./pat-workspace-membership-reader.ts";
 import type {
@@ -875,6 +876,45 @@ export interface PlatformCapsulePublicOidcMutation {
   readonly changed: boolean;
 }
 
+type PlatformCapsulePublicOidcRollback = Pick<
+  PlatformCapsulePublicOidcMutation,
+  "capsuleId" | "clientId" | "expectedUpdatedAt" | "previous"
+>;
+
+export interface PlatformHostRuntimeBindingMaterializationInput {
+  readonly request: HostRuntimeMaterializationRequest;
+  readonly resourceName: string;
+  readonly scriptName: string;
+  readonly publicOrigin: string;
+  readonly bindings: readonly string[];
+}
+
+export interface PlatformHostRuntimeBindingMaterializationResult {
+  readonly values: Readonly<Record<string, string>>;
+  /** Opaque, authenticated receipt returned only for a host mutation. */
+  readonly rollbackReceipt?: string;
+}
+
+export type PlatformHostRuntimeMaterializerEnv = CloudflareWorkerEnv & {
+  /** Separate root key for deterministic Capsule runtime secrets. */
+  readonly TAKOSUMI_HOST_RUNTIME_SECRET_DERIVATION_KEY?: string;
+};
+
+interface PlatformHostRuntimeBindingMaterializationDependencies {
+  readonly resolveRequest?: (
+    env: CloudflareWorkerEnv,
+    input: { readonly workspaceId: string; readonly capsuleId: string },
+  ) => Promise<HostRuntimeMaterializationRequest | undefined>;
+  readonly ensurePublicOidc?: typeof ensurePlatformCapsulePublicOidcIdentity;
+  readonly rollbackPublicOidc?: typeof rollbackPlatformCapsulePublicOidcIdentity;
+  readonly deriveSecret?: (input: {
+    readonly request: HostRuntimeMaterializationRequest;
+    readonly secretRef: string;
+    readonly bytes: number;
+    readonly encoding: "hex" | "base64url";
+  }) => Promise<string>;
+}
+
 interface PlatformCapsulePublicOidcDependencies {
   readonly operationsForEnv?: (
     env: PlatformEnv,
@@ -966,6 +1006,11 @@ export async function ensurePlatformCapsulePublicOidcIdentity(
   if (!Number.isSafeInteger(now) || now <= 0) {
     throw new Error("Capsule public OIDC identity clock is invalid");
   }
+  if (previous && !isRollbackSafePublicOidcClient(previous)) {
+    throw new Error(
+      "Capsule public OIDC identity cannot replace a confidential or foreign client",
+    );
+  }
   const desired: OidcClientRecord = {
     clientId,
     capsuleId,
@@ -987,6 +1032,13 @@ export async function ensurePlatformCapsulePublicOidcIdentity(
         ? previous.updatedAt
         : now,
   };
+  const ownerSubject = await (
+    dependencies.deriveSubject ?? derivePairwiseSubject
+  )({
+    secret: pairwiseSubjectSecret,
+    takosumiSubject: installingPrincipalId as `tsub_${string}`,
+    clientId: `${capsule.name}:${capsule.id}:${clientId}`,
+  });
   const changed = !previous || desired.updatedAt !== previous.updatedAt;
   if (changed) {
     await store.saveOidcClient(desired);
@@ -997,13 +1049,6 @@ export async function ensurePlatformCapsulePublicOidcIdentity(
       );
     }
   }
-  const ownerSubject = await (
-    dependencies.deriveSubject ?? derivePairwiseSubject
-  )({
-    secret: pairwiseSubjectSecret,
-    takosumiSubject: installingPrincipalId as `tsub_${string}`,
-    clientId: `${capsule.name}:${capsule.id}:${clientId}`,
-  });
   return {
     capsuleId,
     clientId,
@@ -1015,15 +1060,351 @@ export async function ensurePlatformCapsulePublicOidcIdentity(
 }
 
 /**
+ * Materializes only the exact bindings declared by one DB-owned Capsule
+ * InstallConfig. The caller is a private Worker RPC hop: it supplies the
+ * provider-observed public origin, while this authority re-reads the canonical
+ * Capsule declaration, registers the public OIDC client, and derives stable
+ * secret bytes without persisting or returning them through control-plane
+ * state, Output, audit, or an agent-visible response.
+ */
+export async function materializePlatformCapsuleRuntimeBindings(
+  env: PlatformHostRuntimeMaterializerEnv,
+  input: PlatformHostRuntimeBindingMaterializationInput,
+  dependencies: PlatformHostRuntimeBindingMaterializationDependencies = {},
+): Promise<PlatformHostRuntimeBindingMaterializationResult> {
+  requiredPlatformIdentity(input.resourceName, "runtime Resource name");
+  requiredPlatformIdentity(input.scriptName, "runtime script name");
+  const publicOrigin = exactHttpsOrigin(input.publicOrigin);
+  const request = input.request;
+  const canonical = await (
+    dependencies.resolveRequest ?? platformCapsuleHostRuntimeMaterialization
+  )(
+    env,
+    { workspaceId: request.workspaceId, capsuleId: request.capsuleId },
+  );
+  if (!canonical || JSON.stringify(canonical) !== JSON.stringify(request)) {
+    throw new Error(
+      "host runtime materialization request does not match the canonical Capsule",
+    );
+  }
+
+  const expected = hostRuntimeValueBindingNames(canonical);
+  if (!sameExactStringSet(input.bindings, expected)) {
+    throw new Error("host runtime materialization bindings do not match");
+  }
+  if (
+    canonical.requirements.filter((requirement) => requirement.kind === "public_oidc")
+      .length > 1
+  ) {
+    throw new Error(
+      "host runtime materialization supports one public OIDC identity per Capsule",
+    );
+  }
+
+  const values: Record<string, string> = {};
+  for (const requirement of canonical.requirements) {
+    if (requirement.kind !== "generated_secret") continue;
+    values[requirement.binding] = await (
+      dependencies.deriveSecret ??
+      ((secretInput) => derivePlatformHostRuntimeSecret(env, secretInput))
+    )({
+      request: canonical,
+      secretRef: requirement.secretRef,
+      bytes: requirement.bytes,
+      encoding: requirement.encoding,
+    });
+  }
+  const oidcRequirement = canonical.requirements.find(
+    (requirement) => requirement.kind === "public_oidc",
+  );
+  const oidcMutation = oidcRequirement
+    ? await (
+      dependencies.ensurePublicOidc ?? ensurePlatformCapsulePublicOidcIdentity
+    )(
+      {
+        capsuleId: canonical.capsuleId,
+        workspaceId: canonical.workspaceId,
+        installingPrincipalId: canonical.installingPrincipalId,
+        appOrigin: publicOrigin,
+        callbackPath: oidcRequirement.callbackPath,
+        scopes: oidcRequirement.scopes,
+      },
+      env,
+    )
+    : undefined;
+  if (oidcRequirement && oidcMutation) {
+    values[oidcRequirement.bindings.issuerUrl.binding] =
+      oidcMutation.identity.issuerUrl;
+    values[oidcRequirement.bindings.clientId.binding] =
+      oidcMutation.identity.clientId;
+    values[oidcRequirement.bindings.ownerSubject.binding] =
+      oidcMutation.identity.ownerSubject;
+    values[oidcRequirement.bindings.redirectUri.binding] =
+      oidcMutation.identity.redirectUri;
+  }
+  if (
+    !sameExactStringSet(Object.keys(values), expected) ||
+    Object.values(values).some(
+      (value) =>
+        value.length < 1 ||
+        value.length > 4_096 ||
+        /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(value),
+    )
+  ) {
+    throw new Error("host runtime materialization values do not match");
+  }
+  const rollbackReceipt =
+    oidcMutation?.changed === true
+      ? await sealPlatformHostRuntimeRollback(env, oidcMutation)
+      : undefined;
+  return Object.freeze({
+    values: Object.freeze({ ...values }),
+    ...(rollbackReceipt ? { rollbackReceipt } : {}),
+  });
+}
+
+/**
+ * Reverses only the exact public OIDC mutation represented by a receipt from
+ * `materializePlatformCapsuleRuntimeBindings`. The signed receipt is opaque to
+ * the provider and the canonical Capsule declaration is re-read before the
+ * compare-and-swap rollback runs.
+ */
+export async function rollbackPlatformCapsuleRuntimeBindings(
+  env: PlatformHostRuntimeMaterializerEnv,
+  input: {
+    readonly request: HostRuntimeMaterializationRequest;
+    readonly rollbackReceipt: string;
+  },
+  dependencies: PlatformHostRuntimeBindingMaterializationDependencies = {},
+): Promise<void> {
+  const canonical = await (
+    dependencies.resolveRequest ?? platformCapsuleHostRuntimeMaterialization
+  )(
+    env,
+    {
+      workspaceId: input.request.workspaceId,
+      capsuleId: input.request.capsuleId,
+    },
+  );
+  if (!canonical || JSON.stringify(canonical) !== JSON.stringify(input.request)) {
+    throw new Error(
+      "host runtime rollback request does not match the canonical Capsule",
+    );
+  }
+  const mutation = await openPlatformHostRuntimeRollback(
+    env,
+    input.rollbackReceipt,
+  );
+  if (mutation.capsuleId !== canonical.capsuleId) {
+    throw new Error("host runtime rollback does not belong to the canonical Capsule");
+  }
+  await (
+    dependencies.rollbackPublicOidc ??
+    rollbackPlatformCapsulePublicOidcIdentity
+  )(mutation, env);
+}
+
+async function derivePlatformHostRuntimeSecret(
+  env: PlatformHostRuntimeMaterializerEnv,
+  input: {
+    readonly request: HostRuntimeMaterializationRequest;
+    readonly secretRef: string;
+    readonly bytes: number;
+    readonly encoding: "hex" | "base64url";
+  },
+): Promise<string> {
+  const key = await platformHostRuntimeHmacKey(env, ["sign"]);
+  const context = [
+    "takosumi-host-runtime-generated-secret-v1",
+    input.request.workspaceId,
+    input.request.capsuleId,
+    input.request.installConfigId,
+    input.secretRef,
+    String(input.bytes),
+    input.encoding,
+  ].join("\0");
+  const output = new Uint8Array(input.bytes);
+  let offset = 0;
+  for (let counter = 1; offset < output.byteLength; counter += 1) {
+    const block = new Uint8Array(
+      await crypto.subtle.sign(
+        "HMAC",
+        key,
+        new TextEncoder().encode(`${context}\0${counter}`),
+      ),
+    );
+    const length = Math.min(block.byteLength, output.byteLength - offset);
+    output.set(block.subarray(0, length), offset);
+    offset += length;
+  }
+  if (input.encoding === "hex") {
+    return [...output]
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("");
+  }
+  return base64UrlBytes(output);
+}
+
+async function sealPlatformHostRuntimeRollback(
+  env: PlatformHostRuntimeMaterializerEnv,
+  mutation: PlatformCapsulePublicOidcMutation,
+): Promise<string> {
+  const payload = new TextEncoder().encode(
+    JSON.stringify({
+      version: 1,
+      capsuleId: mutation.capsuleId,
+      clientId: mutation.clientId,
+      expectedUpdatedAt: mutation.expectedUpdatedAt,
+      previous: mutation.previous ?? null,
+    }),
+  );
+  const payloadPart = base64UrlBytes(payload);
+  const key = await platformHostRuntimeHmacKey(env, ["sign"]);
+  const signature = new Uint8Array(
+    await crypto.subtle.sign(
+      "HMAC",
+      key,
+      new TextEncoder().encode(`takosumi-host-runtime-rollback-v1.${payloadPart}`),
+    ),
+  );
+  return `${payloadPart}.${base64UrlBytes(signature)}`;
+}
+
+async function openPlatformHostRuntimeRollback(
+  env: PlatformHostRuntimeMaterializerEnv,
+  token: string,
+): Promise<PlatformCapsulePublicOidcRollback> {
+  if (token.length < 1 || token.length > 16_384) {
+    throw new Error("host runtime rollback receipt is invalid");
+  }
+  const parts = token.split(".");
+  if (parts.length !== 2 || !parts[0] || !parts[1]) {
+    throw new Error("host runtime rollback receipt is invalid");
+  }
+  const [payloadPart, signaturePart] = parts as [string, string];
+  const key = await platformHostRuntimeHmacKey(env, ["verify"]);
+  const verified = await crypto.subtle
+    .verify(
+      "HMAC",
+      key,
+      base64UrlDecode(signaturePart) as unknown as BufferSource,
+      new TextEncoder().encode(`takosumi-host-runtime-rollback-v1.${payloadPart}`),
+    )
+    .catch(() => false);
+  if (!verified) throw new Error("host runtime rollback receipt is invalid");
+  let value: unknown;
+  try {
+    value = JSON.parse(new TextDecoder().decode(base64UrlDecode(payloadPart)));
+  } catch {
+    throw new Error("host runtime rollback receipt is invalid");
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("host runtime rollback receipt is invalid");
+  }
+  const row = value as Record<string, unknown>;
+  if (
+    Object.keys(row).some(
+      (field) =>
+        !["version", "capsuleId", "clientId", "expectedUpdatedAt", "previous"].includes(
+          field,
+        ),
+    ) ||
+    row.version !== 1 ||
+    !Number.isSafeInteger(row.expectedUpdatedAt) ||
+    (row.expectedUpdatedAt as number) <= 0
+  ) {
+    throw new Error("host runtime rollback receipt is invalid");
+  }
+  const capsuleId = requiredPlatformIdentity(row.capsuleId, "rollback Capsule id");
+  const clientId = requiredPlatformIdentity(row.clientId, "rollback OIDC client id");
+  const previous = parseRollbackSafePublicOidcClient(row.previous, capsuleId);
+  return {
+    capsuleId,
+    clientId,
+    expectedUpdatedAt: row.expectedUpdatedAt as number,
+    ...(previous ? { previous } : {}),
+  };
+}
+
+async function platformHostRuntimeHmacKey(
+  env: PlatformHostRuntimeMaterializerEnv,
+  usages: readonly ("sign" | "verify")[],
+): Promise<CryptoKey> {
+  const secret = requiredPlatformSecret(
+    env.TAKOSUMI_HOST_RUNTIME_SECRET_DERIVATION_KEY,
+    "Takosumi host runtime secret derivation key",
+  );
+  return await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    [...usages],
+  );
+}
+
+function base64UrlDecode(value: string): Uint8Array {
+  if (!/^[A-Za-z0-9_-]+$/u.test(value)) {
+    throw new Error("host runtime rollback receipt is invalid");
+  }
+  const padded = `${value.replace(/-/gu, "+").replace(/_/gu, "/")}${"=".repeat(
+    (4 - (value.length % 4)) % 4,
+  )}`;
+  const binary = atob(padded);
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+}
+
+function hostRuntimeValueBindingNames(
+  request: HostRuntimeMaterializationRequest,
+): readonly string[] {
+  const names: string[] = [];
+  for (const requirement of request.requirements) {
+    if (requirement.kind === "generated_secret") {
+      names.push(requirement.binding);
+    } else if (requirement.kind === "public_oidc") {
+      names.push(
+        requirement.bindings.issuerUrl.binding,
+        requirement.bindings.clientId.binding,
+        requirement.bindings.ownerSubject.binding,
+        requirement.bindings.redirectUri.binding,
+      );
+    }
+  }
+  if (names.length === 0 || new Set(names).size !== names.length) {
+    throw new Error("host runtime materialization has no exact value bindings");
+  }
+  return Object.freeze(names);
+}
+
+function sameExactStringSet(
+  left: readonly string[],
+  right: readonly string[],
+): boolean {
+  return (
+    left.length === right.length &&
+    new Set(left).size === left.length &&
+    left.every((value) => right.includes(value))
+  );
+}
+
+function base64UrlBytes(bytes: Uint8Array): string {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary)
+    .replace(/\+/gu, "-")
+    .replace(/\//gu, "_")
+    .replace(/=+$/u, "");
+}
+
+/**
  * Reverses only the exact OIDC mutation returned by the ensure call. A newer
  * registration wins and is never overwritten by a stale apply failure.
  */
 export async function rollbackPlatformCapsulePublicOidcIdentity(
-  mutation: PlatformCapsulePublicOidcMutation,
+  mutation: PlatformCapsulePublicOidcRollback,
   env: object,
   dependencies: PlatformCapsulePublicOidcDependencies = {},
 ): Promise<void> {
-  if (!mutation.changed) return;
   const store = await (
     dependencies.storeForEnv ?? platformCapsuleOidcStoreForEnv
   )(env as PlatformEnv);
@@ -1053,21 +1434,16 @@ export async function revokePlatformCapsulePublicOidcIdentity(
   env: object,
   dependencies: PlatformCapsulePublicOidcDependencies = {},
 ): Promise<void> {
-  const capsuleId = requiredPlatformIdentity(input.capsuleId, "Capsule id");
   const store = await (
     dependencies.storeForEnv ?? platformCapsuleOidcStoreForEnv
   )(env as PlatformEnv);
-  const current = await store.findOidcClientForCapsule(capsuleId);
-  if (!current) return;
-  if (
-    input.expectedClientId !== undefined &&
-    current.clientId !== input.expectedClientId
-  ) {
-    throw new Error(
-      "Capsule public OIDC client changed before revocation; refusing stale destroy",
-    );
-  }
-  await store.revokeOidcClient(current.clientId);
+  await retireCapsulePublicOidcIdentity({
+    store,
+    capsuleId: input.capsuleId,
+    ...(input.expectedClientId
+      ? { expectedClientId: input.expectedClientId }
+      : {}),
+  });
 }
 
 async function platformCapsuleOidcStoreForEnv(
@@ -1186,6 +1562,96 @@ function oidcClientMatches(
     client.tokenEndpointAuthMethod === "none" &&
     client.clientSecretHash === undefined
   );
+}
+
+function isRollbackSafePublicOidcClient(client: OidcClientRecord): boolean {
+  if (
+    client.namespacePath !== "identity.oidc" ||
+    client.subjectMode !== "pairwise" ||
+    client.tokenEndpointAuthMethod !== "none" ||
+    client.clientSecretHash !== undefined ||
+    client.redirectUris.length !== 1 ||
+    client.allowedScopes.length < 1 ||
+    !Number.isSafeInteger(client.createdAt) ||
+    client.createdAt <= 0 ||
+    !Number.isSafeInteger(client.updatedAt) ||
+    client.updatedAt <= 0
+  ) {
+    return false;
+  }
+  try {
+    if (normalizeIssuer(client.issuerUrl) !== client.issuerUrl) return false;
+    const redirect = new URL(client.redirectUris[0]!);
+    if (
+      redirect.protocol !== "https:" ||
+      redirect.username ||
+      redirect.password ||
+      redirect.hash ||
+      redirect.search
+    ) {
+      return false;
+    }
+    const scopes = exactOidcScopes(client.allowedScopes);
+    return (
+      scopes.length === client.allowedScopes.length &&
+      scopes.every((scope, index) => scope === client.allowedScopes[index])
+    );
+  } catch {
+    return false;
+  }
+}
+
+function parseRollbackSafePublicOidcClient(
+  value: unknown,
+  capsuleId: string,
+): OidcClientRecord | undefined {
+  if (value === null) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("host runtime rollback receipt is invalid");
+  }
+  const row = value as Record<string, unknown>;
+  const fields = [
+    "clientId",
+    "capsuleId",
+    "namespacePath",
+    "issuerUrl",
+    "redirectUris",
+    "allowedScopes",
+    "subjectMode",
+    "tokenEndpointAuthMethod",
+    "createdAt",
+    "updatedAt",
+  ];
+  if (
+    Object.keys(row).length !== fields.length ||
+    Object.keys(row).some((field) => !fields.includes(field)) ||
+    row.capsuleId !== capsuleId ||
+    !Array.isArray(row.redirectUris) ||
+    !row.redirectUris.every((entry) => typeof entry === "string") ||
+    !Array.isArray(row.allowedScopes) ||
+    !row.allowedScopes.every((entry) => typeof entry === "string")
+  ) {
+    throw new Error("host runtime rollback receipt is invalid");
+  }
+  const client: OidcClientRecord = {
+    clientId: requiredPlatformIdentity(row.clientId, "rollback OIDC client id"),
+    capsuleId,
+    namespacePath: requiredPlatformIdentity(
+      row.namespacePath,
+      "rollback OIDC namespace",
+    ),
+    issuerUrl: requiredPlatformIdentity(row.issuerUrl, "rollback OIDC issuer"),
+    redirectUris: row.redirectUris as string[],
+    allowedScopes: row.allowedScopes as string[],
+    subjectMode: row.subjectMode as "pairwise",
+    tokenEndpointAuthMethod: row.tokenEndpointAuthMethod as "none",
+    createdAt: row.createdAt as number,
+    updatedAt: row.updatedAt as number,
+  };
+  if (!isRollbackSafePublicOidcClient(client)) {
+    throw new Error("host runtime rollback receipt is invalid");
+  }
+  return client;
 }
 
 function sameOidcClient(

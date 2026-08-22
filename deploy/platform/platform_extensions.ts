@@ -18,6 +18,7 @@ import {
 } from "takosumi-contract/provider-env-rules";
 import { canonicalRunCredentialSettings } from "takosumi-contract/connections";
 import type { JsonValue } from "takosumi-contract";
+import type { HostRuntimeMaterializationRequest } from "takosumi-contract";
 import {
   PLATFORM_EXTENSION_ALLOWLISTED_BASE_PATHS,
   PLATFORM_EXTENSION_RESERVED_PREFIXES,
@@ -132,6 +133,8 @@ export interface PlatformExtensionAuthenticatedContext {
   readonly phase?: "plan" | "apply" | "destroy";
   /** Canonical Run lifecycle intent; present only for Run credentials. */
   readonly lifecycleIntent?: "provision" | "destroy";
+  /** Opaque DB-owned requirements, present only on exact Run credential RPC. */
+  readonly hostRuntimeMaterialization?: HostRuntimeMaterializationRequest;
 }
 
 /** Handler contract for routes using `authDelivery: "context"`. */

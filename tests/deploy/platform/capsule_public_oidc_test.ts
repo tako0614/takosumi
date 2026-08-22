@@ -130,3 +130,78 @@ test("Capsule public OIDC destroy is fenced to the expected client", async () =>
   );
   expect(await store.findOidcClientForCapsule(capsule.id)).toBeUndefined();
 });
+
+test("Capsule public OIDC destroy fails when Accounts retains the client", async () => {
+  const store = new InMemoryAccountsStore();
+  const dependencies = {
+    operationsForEnv: async () =>
+      ({
+        capsules: {
+          getCapsule: async () => capsule,
+        },
+      }) as unknown as Pick<TakosumiOperations, "capsules">,
+    storeForEnv: async () => ({
+      findOidcClient: (clientId: string) => store.findOidcClient(clientId),
+      findOidcClientForCapsule: (capsuleId: string) =>
+        store.findOidcClientForCapsule(capsuleId),
+      saveOidcClient: store.saveOidcClient.bind(store),
+      revokeOidcClient: () => Promise.resolve(),
+    }),
+    deriveSubject: async () => "tsub_pairwise_owner" as const,
+    now: () => 100,
+  };
+  const mutation = await ensurePlatformCapsulePublicOidcIdentity(
+    {
+      capsuleId: capsule.id,
+      workspaceId: capsule.workspaceId,
+      installingPrincipalId: capsule.installingPrincipalId!,
+      appOrigin: "https://social.example.test",
+      callbackPath: "/callback",
+      scopes: ["openid"],
+    },
+    env,
+    dependencies,
+  );
+
+  await expect(
+    revokePlatformCapsulePublicOidcIdentity(
+      { capsuleId: capsule.id, expectedClientId: mutation.clientId },
+      env,
+      dependencies,
+    ),
+  ).rejects.toThrow("retained its public OIDC client");
+  expect(await store.findOidcClientForCapsule(capsule.id)).toBeDefined();
+});
+
+test("Capsule public OIDC computes the pairwise subject before mutating registration", async () => {
+  const store = new InMemoryAccountsStore();
+  const dependencies = {
+    operationsForEnv: async () =>
+      ({
+        capsules: {
+          getCapsule: async () => capsule,
+        },
+      }) as unknown as Pick<TakosumiOperations, "capsules">,
+    storeForEnv: async () => store,
+    deriveSubject: async () => {
+      throw new Error("subject derivation unavailable");
+    },
+    now: () => 100,
+  };
+
+  await expect(
+    ensurePlatformCapsulePublicOidcIdentity(
+      {
+        capsuleId: capsule.id,
+        workspaceId: capsule.workspaceId,
+        installingPrincipalId: capsule.installingPrincipalId!,
+        appOrigin: "https://social.example.test",
+        callbackPath: "/callback",
+        scopes: ["openid"],
+      },
+      env,
+      dependencies,
+    ),
+  ).rejects.toThrow("subject derivation unavailable");
+  expect(await store.findOidcClientForCapsule(capsule.id)).toBeUndefined();
+});

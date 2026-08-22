@@ -624,6 +624,8 @@ export interface ControlPlaneOperations {
     capsuleId: string,
     options?: {
       readonly runnerProfileId?: string;
+      /** Server-owned authenticated caller; never accepted from request JSON. */
+      readonly actor?: string;
     },
   ): Promise<PlanRunResponse>;
   createCapsuleDriftCheck(capsuleId: string): Promise<PlanRunResponse>;
