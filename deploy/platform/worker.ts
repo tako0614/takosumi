@@ -2800,7 +2800,11 @@ async function platformResourceShapeAuthorizedRequest(
       headers.set(
         TAKOSUMI_INTERNAL_ACTOR_HEADER,
         encodeActorContext(
-          platformResourceShapeActorContext(verified.session, workspaceId),
+          platformResourceShapeActorContext(
+            verified.session,
+            workspaceId,
+            request,
+          ),
         ),
       );
       headers.set(
@@ -3297,8 +3301,13 @@ function platformResourceShapeRequestedSpaces(
 function platformResourceShapeActorContext(
   session: PlatformExtensionSessionContext,
   workspaceId: string,
+  request?: Request,
 ): ActorContext {
-  const runtimePrincipal = session.authKind === "oauth-access-token";
+  const runtimePrincipal =
+    session.authKind === "oauth-access-token" ||
+    (session.authKind === "personal-access-token" &&
+      request !== undefined &&
+      isPlatformInterfaceTokenIssueRequest(request));
   return {
     actorAccountId:
       safePlatformExtensionContextId(session.subject) ??

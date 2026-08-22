@@ -3808,6 +3808,37 @@ test("platform Interface API enforces delegated OAuth Capsule scopes", async () 
   expect(tokenIssueReachedRuntimeBoundary.status).toBe(404);
 });
 
+test("platform Interface token issuance treats an exact Workspace PAT as a runtime Principal", async () => {
+  const env = {
+    TAKOSUMI_CONTROL_DB: new SqliteFakeD1(),
+    TAKOSUMI_ENVIRONMENT: "test",
+    TAKOSUMI_DEV_MODE: "1",
+    TAKOSUMI_DEPLOY_CONTROL_TOKEN: "resource-token",
+  } as never;
+  const response = await handlePlatformResourceShapeApiRequest(
+    new Request("https://app.takosumi.com/api/v1/interfaces/if_missing/token", {
+      method: "POST",
+      headers: {
+        authorization: "Bearer takpat_runtime",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ permission: "mcp.invoke" }),
+    }),
+    env,
+    async () => ({
+      authenticated: true,
+      authKind: "personal-access-token",
+      subject: "tsub_runtime",
+      workspaceId: "space_pat",
+      workspaceRole: "member",
+      scopes: ["read", "write"],
+    }),
+  );
+  // Core's non-enumerating 404 proves the PAT reached the runtime-only token
+  // boundary. Other Interface mutations retain the PAT control actor role.
+  expect(response.status).toBe(404);
+});
+
 test("platform Interface ingress rejects oversized control bodies before JSON parsing", async () => {
   const env = {
     TAKOSUMI_CONTROL_DB: new SqliteFakeD1(),
