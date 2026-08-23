@@ -2,9 +2,11 @@
 /* Hallmark · genre: modern-minimal · macrostructure: Catalogue · design-system: design.md · anchor: existing tg accent · contrast: pass (40–41) · nav: existing shell · footer: none · slop: pass (42–45) · honest: pass (46) · chrome: pass (47) · tokens: pass (48) · responsive: pass (49) · icons: pass (30) · mobile: pass (34, 49, 50–57) */
 
 .iv-page { width: min(100%, 72rem); margin-inline: auto; padding: var(--tg-s-6) var(--tg-s-4) var(--tg-s-10); overflow-x: clip; }
-.iv-hero { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--tg-s-4); margin-bottom: var(--tg-s-7); }
+.iv-hero { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--tg-s-4); margin-bottom: var(--tg-s-6); }
 .iv-hero h1, .iv-section-head h2, .iv-workbench h2, .iv-entry-card h3 { min-width: 0; margin: 0; overflow-wrap: anywhere; letter-spacing: -0.025em; }
-.iv-hero h1 { font-size: clamp(2rem, 7vw, 3.75rem); line-height: 0.96; }
+/* アプリ内のページ見出し。ランディングの hero ではないので、ホームの
+   .av-section-head h1 と同じ尺度に揃える（従来は最大 3.75rem あった）。 */
+.iv-hero h1 { font-size: var(--tg-fs-2xl); line-height: 1.25; letter-spacing: -0.01em; }
 .iv-hero p, .iv-section-head p, .iv-app-summary p, .iv-entry-card p, .iv-status span, .iv-review-head p, .iv-review-warning p, .iv-error p, .iv-centered p { margin: var(--tg-s-2) 0 0; color: var(--tg-fg-muted); }
 .iv-kicker { display: block; margin-bottom: var(--tg-s-3); color: var(--tg-fg-muted); font-family: var(--tg-font-mono); font-size: var(--tg-fs-xs); letter-spacing: 0.12em; }
 .iv-catalogue, .iv-workbench { border: 1px solid var(--tg-line); border-radius: var(--tg-r-lg); background: var(--tg-bg-elev); box-shadow: var(--tg-shadow-sm); }
