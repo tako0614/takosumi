@@ -1787,6 +1787,31 @@ test("platform keeps retired Takoform paths ahead of the SPA fallback", async ()
   expect(assetRequests).toEqual(["/workspaces/not-a-core-route"]);
 });
 
+test("platform keeps the retired Hosted API subtree behind an unconditional tombstone", async () => {
+  const worker = (await import("../../../deploy/platform/worker.ts")).default;
+  const assetRequests: string[] = [];
+  const env = {
+    ASSETS: {
+      fetch: async (request: Request) => {
+        assetRequests.push(new URL(request.url).pathname);
+        return new Response("<html>dashboard fallback</html>");
+      },
+    },
+  } as never;
+
+  for (const headers of [undefined, { authorization: "Bearer stale-token" }]) {
+    const response = await worker.fetch(
+      new Request("https://app.takosumi.com/api/v1/hosted/subscription", {
+        ...(headers ? { headers } : {}),
+      }),
+      env,
+    );
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ error: "not found" });
+  }
+  expect(assetRequests).toEqual([]);
+});
+
 test("platform Resource Shape API does not advertise shapes without an operator list", async () => {
   const worker = (await import("../../../deploy/platform/worker.ts")).default;
   const env = {

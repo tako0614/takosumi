@@ -1781,6 +1781,16 @@ export default {
     if (isRetiredV1Path(url.pathname)) {
       return Response.json({ error: "not found" }, { status: 404 });
     }
+    // The former hosted-service facade is retired, not an Accounts resource.
+    // Keep its whole canonical-looking subtree behind a tombstone before
+    // extension auth and Accounts fallback so anonymous and stale bearer
+    // callers observe the same 404 and cannot infer a compatibility surface.
+    if (
+      url.pathname === "/api/v1/hosted" ||
+      url.pathname.startsWith("/api/v1/hosted/")
+    ) {
+      return Response.json({ error: "not found" }, { status: 404 });
+    }
     if (url.pathname === "/internal/platform/hardening-gates") {
       return handleHardeningGatesRequest(request, env);
     }
