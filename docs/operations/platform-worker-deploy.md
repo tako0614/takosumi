@@ -43,12 +43,14 @@ Form. Any such closed Cloud Host is deployed and operated by its owning
 repository; the old package procedure is a superseded migration note.
 
 The official staging composition binds the independently deployed private
-`takosumi-hosted-staging` Worker under `HOSTED`. The only mounted subtree is
-`/api/v1/hosted/subscription`; Marketplace, cloud Resource, wallet, migration, AI,
-and object-storage APIs belong to Takoserver and are not proxied by Hosted.
-Takosumi authenticates the session and Workspace before forwarding. The target
-remains route-less and does not receive a browser cookie, bearer token, account
-id, legal Organization id, or unverified Workspace context.
+`takosumi-hosted-staging` Worker under `HOSTED`. It mounts the account service at
+`/api/v1/account/subscription` and the authenticated AI data plane at
+`/api/v1/ai`; Marketplace, cloud Resource, wallet, migration, and object-storage
+APIs remain Takoserver-owned and are not exposed as separate Takosumi APIs.
+Takosumi authenticates the Principal and Workspace before forwarding. The
+route-less Hosted target receives only verified context, never a browser cookie,
+the original bearer, an account id, a legal Organization id, or an unverified
+Workspace context.
 
 ## Official staging release
 
